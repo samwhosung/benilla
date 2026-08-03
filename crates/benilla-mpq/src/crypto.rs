@@ -32,6 +32,31 @@ const fn encryption_table() -> [u32; 0x500] {
 
 static TABLE: [u32; 0x500] = encryption_table();
 
+/// Statically-built 256-element lookup table for character normalization.
+/// Maps every `u8` byte to its normalized `u32` value (converting `/` to `\` and lowercase ASCII to uppercase).
+const fn build_normalization_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let b = i as u8;
+        let ch = match b {
+            b'/' => b'\\',
+            other => {
+                if other >= b'a' && other <= b'z' {
+                    other - 32
+                } else {
+                    other
+                }
+            }
+        };
+        table[i] = ch as u32;
+        i += 1;
+    }
+    table
+}
+
+static NORMALIZATION_TABLE: [u32; 256] = build_normalization_table();
+
 /// Hash-type selectors (the table-quadrant offsets the client uses).
 pub mod hash_type {
     /// Hash-table slot index.
@@ -46,14 +71,12 @@ pub mod hash_type {
 
 /// Blizzard's string hash. Normalizes `/`→`\` and ASCII-uppercases (matching the client's
 /// `AsciiToUpper` table, which only folds `a`–`z`), then runs the seed mix.
+/// Optimized using a pre-computed normalization lookup table to bypass branching.
 pub fn hash_string(name: &str, kind: u32) -> u32 {
     let mut seed1: u32 = 0x7FED_7FED;
     let mut seed2: u32 = 0xEEEE_EEEE;
     for &b in name.as_bytes() {
-        let ch = match b {
-            b'/' => b'\\',
-            other => other.to_ascii_uppercase(),
-        } as u32;
+        let ch = NORMALIZATION_TABLE[b as usize];
         seed1 = TABLE[(kind.wrapping_add(ch)) as usize] ^ seed1.wrapping_add(seed2);
         seed2 = ch
             .wrapping_add(seed1)
