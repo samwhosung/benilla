@@ -106,8 +106,8 @@
         QUEST_FADING_DISABLE = "1"
         RegisterForSave("QUEST_FADING_DISABLE")
 
-        -- One quest-item row (kind = "choice"/"reward"/"required", 1-based `index`) — unchanged from
-        -- before this pass; every panel's rows share it via `GetQuestItemInfo`.
+        -- One quest-item row (kind = "choice"/"reward"/"required", 1-based `index`). Only reward
+        -- rows use `usable`; required quest items keep the normal tint.
         function BenillaQuestItem_Set(button, kind, index)
             local name, texture, count, quality, usable, itemId = GetQuestItemInfo(kind, index)
             button.kind = kind
@@ -127,6 +127,13 @@
             local r, g, b = 1, 1, 1
             if quality and BenillaTooltip_QualityColor then r, g, b = BenillaTooltip_QualityColor(quality) end
             button.name:SetTextColor(r, g, b)
+            if kind ~= "required" and not usable then
+                button.icon:SetVertexColor(0.9, 0, 0)
+                getglobal(button:GetName() .. "NameFrame"):SetVertexColor(0.9, 0, 0)
+            else
+                button.icon:SetVertexColor(1, 1, 1)
+                getglobal(button:GetName() .. "NameFrame"):SetVertexColor(1, 1, 1)
+            end
             button:Show()
         end
 

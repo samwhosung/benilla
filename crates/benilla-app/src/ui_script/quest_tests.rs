@@ -253,6 +253,103 @@ fn detail_panel_reward_grid_follows_the_refs_two_per_row_layout() {
     );
 }
 
+/// Stock 1.12 reds the icon and name-frame behind unusable reward rows. The quality-colored name
+/// stays unchanged, and reused rows must restore both texture tints.
+#[test]
+fn questgiver_reward_rows_tint_unusable_items_and_reset_reused_rows() {
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    load_xml(&s, "Fonts.xml");
+    load_xml(&s, "MoneyFrame.xml");
+    load_xml(&s, "UiPanels.xml");
+    load_xml(&s, "MerchantFrame.xml");
+    load_xml(&s, "ScrollTemplates.xml");
+    load_xml(&s, "QuestFrame.xml");
+
+    let item = |name: &str, usable| benilla_ui::script::QuestItemView {
+        name: Some(name.into()),
+        quality: 1,
+        usable,
+        ..Default::default()
+    };
+    let state = |panel, choice_usable, reward_usable| QuestState {
+        panel,
+        choices: vec![item("Militia Warhammer", choice_usable)],
+        rewards: vec![item("Militia Hammer", reward_usable)],
+        ..QuestState::default()
+    };
+
+    s.set_quest(Some(state(QuestPanel::Detail, false, false)));
+    s.fire_event(
+        "QUEST_DETAIL",
+        vec![ScriptValue::Str("Marshal McBride".into())],
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestDetailChoice1IconTexture:GetVertexColor()}")
+            .unwrap(),
+        vec![0.9, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestDetailChoice1NameFrame:GetVertexColor()}")
+            .unwrap(),
+        vec![0.9, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        s.eval::<(f32, f32, f32)>(
+            "local r, g, b = QuestDetailChoice1Name:GetTextColor() return r, g, b"
+        )
+        .unwrap(),
+        (1.0, 1.0, 1.0),
+        "usability must not replace the item-quality text color"
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestDetailReward1IconTexture:GetVertexColor()}")
+            .unwrap(),
+        vec![0.9, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestDetailReward1NameFrame:GetVertexColor()}")
+            .unwrap(),
+        vec![0.9, 0.0, 0.0, 1.0]
+    );
+
+    s.set_quest(Some(state(QuestPanel::Detail, true, true)));
+    s.fire_event("QUEST_ITEM_UPDATE", vec![]);
+    for region in [
+        "QuestDetailChoice1IconTexture",
+        "QuestDetailChoice1NameFrame",
+        "QuestDetailReward1IconTexture",
+        "QuestDetailReward1NameFrame",
+    ] {
+        assert_eq!(
+            s.eval::<Vec<f32>>(&format!("return {{{region}:GetVertexColor()}}"))
+                .unwrap(),
+            vec![1.0, 1.0, 1.0, 1.0],
+            "a reused detail row must clear its old red tint"
+        );
+    }
+
+    s.set_quest(Some(state(QuestPanel::Reward, false, false)));
+    s.fire_event(
+        "QUEST_COMPLETE",
+        vec![ScriptValue::Str("Marshal McBride".into())],
+    );
+    for region in [
+        "QuestRewardChoice1IconTexture",
+        "QuestRewardChoice1NameFrame",
+        "QuestRewardReward1IconTexture",
+        "QuestRewardReward1NameFrame",
+    ] {
+        assert_eq!(
+            s.eval::<Vec<f32>>(&format!("return {{{region}:GetVertexColor()}}"))
+                .unwrap(),
+            vec![0.9, 0.0, 0.0, 1.0],
+            "the reward panel must tint unusable rows"
+        );
+    }
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// The reward panel's choice rows ARE selectable (ref `QuestRewardItem_OnClick`) — clicking one moves
 /// the highlight and arms `GetQuestReward`'s 1-based→0-based conversion.
 #[test]

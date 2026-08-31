@@ -56,8 +56,7 @@ pub struct QuestItemView {
     /// wire row hasn't resolved. A benilla extension: the era 5-tuple never carried it (tooltip
     /// content was C++'s alone), so it rides as a TRAILING 6th return, invisible to era callers.
     pub item_id: u32,
-    /// Whether the reward is usable by the player's class/race — v1 always `true` (soft gray only,
-    /// the server stays authoritative).
+    /// Whether the current Character can use a reward or choice. Required quest items stay `true`.
     pub usable: bool,
     /// The full escaped `|cff…|Hitem:…|h[Name]|h|r` link (`GetQuestItemLink` /
     /// `GetQuestLogItemLink` serve it) — the ctrl/shift click arms' payload (decisions 1059/1060).

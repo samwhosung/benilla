@@ -27,9 +27,12 @@ use benilla_ui::script::{
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
-use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
-use crate::ui_action::{ui_error_text, MsgSurface, UiError};
+use crate::net::{
+    ClientCommand, Guid, NetCommands, ObjectStore, Proficiencies, Reputations, SelfPlayer,
+};
+use crate::ui_action::{ui_error_text, MsgSurface, PlayerActions, Spells, UiError};
 use crate::ui_chat::{ChatEvent, ChatEventKind, ChatLog};
+use crate::ui_items::feed::{item_usable_for_player, player_req_state};
 use crate::ui_script::UiInput;
 use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
 
@@ -293,18 +296,21 @@ pub(crate) fn row_is_one_click(icon: u32) -> bool {
 /// because the AVAILABLE arm needs it a second time, for [`row_is_one_click`].
 type Pool = Vec<(u32, u32)>;
 
-/// Resolve one wire reward/required triple into a Lua-facing [`QuestItemView`]: icon from the wire
-/// display id (immediate), name + quality from the ask-once item-template cache (`None`/white while
-/// in flight — the row shows a placeholder and fills in, exactly like a bag slot / vendor row).
+/// Resolve one wire reward/required triple into a Lua-facing [`QuestItemView`]. The progress
+/// snapshot passes no requirement state, so required quest items keep the normal appearance.
 fn resolve_item(
     it: &QuestRewardItem,
     items: &mut Items,
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
+    player_req: Option<&benilla_ui::script::PlayerReqState>,
+    actions: &PlayerActions,
 ) -> QuestItemView {
     let template = items.template(it.item_id, 0, commands);
     let name = template.map(|t| t.name.clone());
     let quality = template.map(|t| t.quality).unwrap_or(1);
+    let usable = template
+        .is_none_or(|item| player_req.is_none_or(|req| item_usable_for_player(item, req, actions)));
     let texture = icons
         .and_then(|i| i.catalog.get(it.display_id))
         .and_then(|d| d.icon.clone());
@@ -320,7 +326,7 @@ fn resolve_item(
         count: it.count,
         quality,
         item_id: it.item_id,
-        usable: true, // v1: soft gray only, server authoritative (decision 0088)
+        usable,
         link,
     }
 }
@@ -330,9 +336,11 @@ fn resolve_items(
     items: &mut Items,
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
+    player_req: Option<&benilla_ui::script::PlayerReqState>,
+    actions: &PlayerActions,
 ) -> Vec<QuestItemView> {
     src.iter()
-        .map(|it| resolve_item(it, items, icons, commands))
+        .map(|it| resolve_item(it, items, icons, commands, player_req, actions))
         .collect()
 }
 
@@ -345,6 +353,8 @@ fn snapshot(
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
     macros: &crate::npc_text::MacroContext,
+    player_req: Option<&benilla_ui::script::PlayerReqState>,
+    actions: &PlayerActions,
 ) -> Option<QuestState> {
     let sub = |t: &str| crate::npc_text::substitute(t, macros);
     Some(match giver.view.as_ref()? {
@@ -371,8 +381,8 @@ fn snapshot(
             title: sub(&d.title),
             body: sub(&d.details),
             objectives: sub(&d.objectives),
-            choices: resolve_items(&d.choices, items, icons, commands),
-            rewards: resolve_items(&d.rewards, items, icons, commands),
+            choices: resolve_items(&d.choices, items, icons, commands, player_req, actions),
+            rewards: resolve_items(&d.rewards, items, icons, commands, player_req, actions),
             reward_money: d.money.max(0) as u32,
             ..Default::default()
         },
@@ -380,7 +390,7 @@ fn snapshot(
             panel: QuestPanel::Progress,
             title: sub(&p.title),
             body: sub(&p.request_text),
-            required: resolve_items(&p.required_items, items, icons, commands),
+            required: resolve_items(&p.required_items, items, icons, commands, None, actions),
             required_money: p.required_money,
             completable: p.is_complete,
             ..Default::default()
@@ -389,8 +399,8 @@ fn snapshot(
             panel: QuestPanel::Reward,
             title: sub(&o.title),
             body: sub(&o.offer_text),
-            choices: resolve_items(&o.choices, items, icons, commands),
-            rewards: resolve_items(&o.rewards, items, icons, commands),
+            choices: resolve_items(&o.choices, items, icons, commands, player_req, actions),
+            rewards: resolve_items(&o.rewards, items, icons, commands, player_req, actions),
             reward_money: o.money.max(0) as u32,
             ..Default::default()
         },
@@ -407,6 +417,17 @@ fn panel_event(panel: QuestPanel) -> &'static str {
     }
 }
 
+/// The requirement inputs the questgiver feed uses to resolve reward usability. Grouped to keep
+/// the feed below Bevy's 16-parameter limit.
+#[derive(bevy::ecs::system::SystemParam)]
+struct PlayerRequirementInputs<'w> {
+    proficiencies: Res<'w, Proficiencies>,
+    reputations: Res<'w, Reputations>,
+    factions: Option<Res<'w, crate::target::Factions>>,
+    actions: Res<'w, PlayerActions>,
+    spells: Option<Res<'w, Spells>>,
+}
+
 /// Push the current quest view into the VM and fire the FrameXML events on a transition (panel
 /// change → the panel's open event; same panel, content changed → `QUEST_ITEM_UPDATE`; closed →
 /// `QUEST_FINISHED`). Diffed against a `Local`, exactly like the gossip/merchant feeds. The NPC
@@ -421,6 +442,7 @@ fn feed_quest(
     mut names: ResMut<NameCache>,
     states: Res<crate::world_state::WorldStates>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
+    req_inputs: PlayerRequirementInputs,
     mut chat: ResMut<ChatLog>,
     mut last: Local<crate::ui_script::VmMemo<Option<QuestState>>>,
     mut last_name: Local<crate::ui_script::VmMemo<Option<String>>>,
@@ -463,6 +485,16 @@ fn feed_quest(
         }
     }
     let player = crate::npc_text::player_identity(&self_q, &mut names, &commands);
+    let player_req = self_q.iter().next().map(|(store, _)| {
+        player_req_state(
+            store,
+            &req_inputs.proficiencies,
+            &req_inputs.reputations,
+            req_inputs.factions.as_deref(),
+            &req_inputs.actions,
+            req_inputs.spells.as_deref(),
+        )
+    });
     let fresh = snapshot(
         &giver,
         &mut items,
@@ -472,6 +504,8 @@ fn feed_quest(
             subject: player.as_ref(),
             states: &states,
         },
+        player_req.as_ref(),
+        &req_inputs.actions,
     );
     let npc_name = giver
         .npc
@@ -612,7 +646,9 @@ fn drain_quest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::test_template;
     use benilla_protocol::messages::dialog_status;
+    use benilla_ui::script::PlayerReqState;
 
     fn triple(id: u32) -> QuestRewardItem {
         QuestRewardItem {
@@ -620,6 +656,74 @@ mod tests {
             count: 1,
             display_id: 100 + id,
         }
+    }
+
+    #[test]
+    fn resolve_item_marks_a_known_reward_without_its_weapon_proficiency_unusable() {
+        let mut items = Items::default();
+        let mut hammer = test_template("Militia Warhammer");
+        hammer.class = 2;
+        hammer.subclass = 5;
+        items.insert_template(5579, Some(hammer));
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let item = resolve_item(
+            &triple(5579),
+            &mut items,
+            None,
+            &NetCommands(tx),
+            Some(&PlayerReqState {
+                level: 10,
+                class_id: 1,
+                race_id: 1,
+                proficiency: [(2, 1 << 4)].into_iter().collect(),
+                ..Default::default()
+            }),
+            &PlayerActions::default(),
+        );
+
+        assert!(!item.usable);
+    }
+
+    #[test]
+    fn resolve_item_keeps_an_unresolved_reward_usable() {
+        let mut items = Items::default();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let item = resolve_item(
+            &triple(5579),
+            &mut items,
+            None,
+            &NetCommands(tx),
+            Some(&PlayerReqState {
+                level: 10,
+                class_id: 1,
+                race_id: 1,
+                ..Default::default()
+            }),
+            &PlayerActions::default(),
+        );
+
+        assert!(item.usable);
+        assert!(item.name.is_none());
+    }
+
+    #[test]
+    fn resolve_item_keeps_required_items_usable() {
+        let mut items = Items::default();
+        let mut hammer = test_template("Militia Warhammer");
+        hammer.class = 2;
+        hammer.subclass = 5;
+        items.insert_template(5579, Some(hammer));
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let item = resolve_item(
+            &triple(5579),
+            &mut items,
+            None,
+            &NetCommands(tx),
+            None,
+            &PlayerActions::default(),
+        );
+
+        assert!(item.usable);
     }
 
     /// The greeting split is the reference's flat two-way test on the WIRE ICON — `{3,4}` ACTIVE,
@@ -732,6 +836,8 @@ mod tests {
                 subject: Some(&player),
                 states: &crate::world_state::WorldStates::default(),
             },
+            None,
+            &PlayerActions::default(),
         )
         .expect("open");
         assert_eq!(snap.panel, QuestPanel::Detail);
@@ -776,6 +882,8 @@ mod tests {
                 subject: None,
                 states: &crate::world_state::WorldStates::default(),
             },
+            None,
+            &PlayerActions::default(),
         )
         .unwrap();
         assert_eq!(snap.panel, QuestPanel::Progress);
