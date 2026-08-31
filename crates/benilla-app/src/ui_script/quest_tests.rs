@@ -313,8 +313,32 @@ fn questgiver_reward_rows_tint_unusable_items_and_reset_reused_rows() {
         vec![0.9, 0.0, 0.0, 1.0]
     );
 
+    s.set_quest(Some(QuestState {
+        panel: QuestPanel::Progress,
+        required: vec![item("Militia Warhammer", false)],
+        ..QuestState::default()
+    }));
+    s.fire_event(
+        "QUEST_PROGRESS",
+        vec![ScriptValue::Str("Marshal McBride".into())],
+    );
+    for region in [
+        "QuestProgressRequired1IconTexture",
+        "QuestProgressRequired1NameFrame",
+    ] {
+        assert_eq!(
+            s.eval::<Vec<f32>>(&format!("return {{{region}:GetVertexColor()}}"))
+                .unwrap(),
+            vec![1.0, 1.0, 1.0, 1.0],
+            "required quest items keep their normal tint"
+        );
+    }
+
     s.set_quest(Some(state(QuestPanel::Detail, true, true)));
-    s.fire_event("QUEST_ITEM_UPDATE", vec![]);
+    s.fire_event(
+        "QUEST_DETAIL",
+        vec![ScriptValue::Str("Marshal McBride".into())],
+    );
     for region in [
         "QuestDetailChoice1IconTexture",
         "QuestDetailChoice1NameFrame",

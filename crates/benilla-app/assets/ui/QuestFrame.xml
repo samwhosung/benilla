@@ -49,10 +49,10 @@
         v1 dressing follow-up"); the budget only means the scroll RANGE is generous, never that content
         is cut off — everything still resolves, scrolls, and clips correctly at whatever size it is.
 
-        Item row visuals (`QuestItemTemplate`) are UNCHANGED from before this pass — they were
-        already a capture-verified port of the quest log's own item row shape (ring-slot art), not the
-        ref's plainer inline `QuestItemTemplate` (`QuestFrameTemplates.xml` l.85-166) — kept for visual
-        consistency across the quest windows, not a fidelity regression introduced here.
+        Item rows retain the quest log's ring-slot shape rather than the reference's plainer inline
+        `QuestItemTemplate` (`QuestFrameTemplates.xml` l.85-166). A reward or choice the Character
+        cannot use tints its icon and name plate red. Its name keeps the item-quality color. Required
+        quest items keep their normal tint.
 
         Docks the left UIPanel slot (`pushable=0`, `UiPanels.xml`) exactly as before — untouched by this
         pass. The window-sound convention (decision 0090/0095/0096) and the Lua seam
@@ -70,8 +70,7 @@
             — this engine has no such Lua surface; the corner art below is the ref's Parchment skin only
             (already true of every window in this codebase).
           - Reward-spell rows out of scope (`GetRewardSpell()` returns `nil`, decision 0088).
-          - Greeting active/available split is quest-log membership derived (`ui_quest.rs`'s
-            `is_active_quest`), not the wire icon — resolved already, unaffected by this pass.
+          - Greeting active/available split uses the wire icon (`ui_quest.rs`'s `row_is_active`).
     -->
     <Script><![CDATA[
         BENILLA_QUEST_MAX_ITEMS = 6      -- reward/choice/required rows per section (ref MAX_NUM_ITEMS
@@ -129,10 +128,10 @@
             button.name:SetTextColor(r, g, b)
             if kind ~= "required" and not usable then
                 button.icon:SetVertexColor(0.9, 0, 0)
-                getglobal(button:GetName() .. "NameFrame"):SetVertexColor(0.9, 0, 0)
+                button.nameFrame:SetVertexColor(0.9, 0, 0)
             else
                 button.icon:SetVertexColor(1, 1, 1)
-                getglobal(button:GetName() .. "NameFrame"):SetVertexColor(1, 1, 1)
+                button.nameFrame:SetVertexColor(1, 1, 1)
             end
             button:Show()
         end
@@ -775,6 +774,7 @@
             <OnLoad>
                 local n = self:GetName()
                 self.icon = getglobal(n .. "IconTexture")
+                self.nameFrame = getglobal(n .. "NameFrame")
                 self.name = getglobal(n .. "Name")
                 self.count = getglobal(n .. "Count")
             </OnLoad>
