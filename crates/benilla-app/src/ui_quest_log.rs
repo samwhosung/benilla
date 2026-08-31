@@ -51,7 +51,11 @@ use benilla_ui::script::{
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
-use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{
+    ClientCommand, Guid, NetCommands, ObjectStore, Proficiencies, Reputations, SelfPlayer,
+};
+use crate::ui_action::{PlayerActions, Spells};
+use crate::ui_items::feed::{item_usable_for_player, player_req_state};
 use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
 
@@ -243,10 +247,15 @@ fn resolve_template_item(
     items: &mut Items,
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
+    player_req: &benilla_ui::script::PlayerReqState,
+    actions: &PlayerActions,
 ) -> QuestItemView {
     let template = items.template(entry, 0, commands).cloned();
     let name = template.as_ref().map(|t| t.name.clone());
     let quality = template.as_ref().map(|t| t.quality).unwrap_or(1);
+    let usable = template
+        .as_ref()
+        .is_none_or(|t| item_usable_for_player(t, player_req, actions));
     let texture = template.as_ref().and_then(|t| {
         icons
             .and_then(|i| i.catalog.get(t.display_info_id))
@@ -263,7 +272,7 @@ fn resolve_template_item(
         count,
         quality,
         item_id: entry,
-        usable: true, // v1: soft-gray only, server authoritative (mirrors ui_quest.rs's resolve_item)
+        usable,
         link,
     }
 }
@@ -327,19 +336,25 @@ fn build_detail(
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
     macros: &crate::npc_text::MacroContext,
+    player_req: &benilla_ui::script::PlayerReqState,
+    actions: &PlayerActions,
 ) -> QuestLogDetail {
     let (required_money, reward_money) = money_split(template.money);
     let rewards = template
         .rewards
         .iter()
         .filter(|&&(id, _)| id != 0)
-        .map(|&(id, count)| resolve_template_item(id, count, items, icons, commands))
+        .map(|&(id, count)| {
+            resolve_template_item(id, count, items, icons, commands, player_req, actions)
+        })
         .collect();
     let choices = template
         .choices
         .iter()
         .filter(|&&(id, _)| id != 0)
-        .map(|&(id, count)| resolve_template_item(id, count, items, icons, commands))
+        .map(|&(id, count)| {
+            resolve_template_item(id, count, items, icons, commands, player_req, actions)
+        })
         .collect();
 
     QuestLogDetail {
@@ -420,6 +435,11 @@ fn feed_quest_log(
     mut items: ResMut<Items>,
     icons: Option<Res<ItemDisplays>>,
     commands: Res<NetCommands>,
+    proficiencies: Res<Proficiencies>,
+    reputations: Res<Reputations>,
+    factions: Option<Res<crate::target::Factions>>,
+    actions: Res<PlayerActions>,
+    spells: Option<Res<Spells>>,
     header_names: Option<Res<QuestHeaderNamesRes>>,
     states: Res<crate::world_state::WorldStates>,
     mut last: Local<crate::ui_script::VmMemo<QuestLogState>>,
@@ -435,6 +455,14 @@ fn feed_quest_log(
         // this is a no-op rather than a repeated empty push.
         return;
     };
+    let player_req = player_req_state(
+        store,
+        &proficiencies,
+        &reputations,
+        factions.as_deref(),
+        &actions,
+        spells.as_deref(),
+    );
 
     let mut rows = Vec::new();
     for slot in 0..PLAYER_QUEST_LOG_SLOTS {
@@ -571,9 +599,17 @@ fn feed_quest_log(
         .filter(|e| !e.is_header)
         .map(|e| e.quest_id)
         .and_then(|quest_id| {
-            quest_log
-                .template(quest_id, &commands)
-                .map(|t| build_detail(t, &mut items, icons.as_deref(), &commands, &macros))
+            quest_log.template(quest_id, &commands).map(|t| {
+                build_detail(
+                    t,
+                    &mut items,
+                    icons.as_deref(),
+                    &commands,
+                    &macros,
+                    &player_req,
+                    &actions,
+                )
+            })
         });
 
     let fresh = QuestLogState {
@@ -803,6 +839,9 @@ fn drain_quest_log_abandons(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::test_template;
+    use crate::ui_action::PlayerActions;
+    use benilla_ui::script::PlayerReqState;
 
     // ── remap_selection ─────────────────────────────────────────────────────────────────────────
 
@@ -999,6 +1038,58 @@ mod tests {
             end_text: String::new(),
             objectives,
         }
+    }
+
+    #[test]
+    fn resolve_template_item_uses_the_shared_item_usable_rule() {
+        let mut items = Items::default();
+        let mut hammer = test_template("Militia Warhammer");
+        hammer.class = 2;
+        hammer.subclass = 5;
+        items.insert_template(5579, Some(hammer));
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let row = resolve_template_item(
+            5579,
+            1,
+            &mut items,
+            None,
+            &NetCommands(tx),
+            &PlayerReqState {
+                level: 10,
+                class_id: 1,
+                race_id: 1,
+                proficiency: [(2, 1 << 4)].into_iter().collect(),
+                ..Default::default()
+            },
+            &PlayerActions::default(),
+        );
+        assert!(
+            !row.usable,
+            "a missing weapon proficiency must mark the quest-log row unusable"
+        );
+    }
+
+    #[test]
+    fn resolve_template_item_keeps_an_unresolved_template_usable() {
+        let mut items = Items::default();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let row = resolve_template_item(
+            5579,
+            1,
+            &mut items,
+            None,
+            &NetCommands(tx),
+            &PlayerReqState {
+                level: 10,
+                class_id: 1,
+                race_id: 1,
+                ..Default::default()
+            },
+            &PlayerActions::default(),
+        );
+
+        assert!(row.usable);
+        assert!(row.name.is_none());
     }
 
     #[test]

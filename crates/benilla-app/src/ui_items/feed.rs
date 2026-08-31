@@ -7,7 +7,10 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 use benilla_protocol::ItemInfo;
-use benilla_ui::script::{ContainerSlot, ContainerState, ScriptValue, UiScript};
+use benilla_ui::script::{
+    item_usable, ContainerSlot, ContainerState, ItemTemplateView, PlayerReqState, ScriptValue,
+    UiScript,
+};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -470,6 +473,29 @@ pub(super) fn feed_player_req(
     let Some(store) = self_q.iter().next() else {
         return;
     };
+    let state = player_req_state(
+        store,
+        &proficiencies,
+        &reputations,
+        factions.as_deref(),
+        &actions,
+        spells.as_deref(),
+    );
+    if last.as_ref() != Some(&state) {
+        gate.audit("feed_player_req", "the player-requirement state");
+        *last = Some(state.clone());
+        script.set_player_req_state(state);
+    }
+}
+
+pub(crate) fn player_req_state(
+    store: &ObjectStore,
+    proficiencies: &crate::net::Proficiencies,
+    reputations: &crate::net::Reputations,
+    factions: Option<&crate::target::Factions>,
+    actions: &crate::ui_action::PlayerActions,
+    spells: Option<&crate::ui_action::Spells>,
+) -> PlayerReqState {
     let mut skills = std::collections::HashMap::new();
     for slot in 0..benilla_protocol::messages::PLAYER_SKILL_SLOTS {
         let Some(s) = store.0.player_skill(slot) else {
@@ -489,7 +515,7 @@ pub(super) fn feed_player_req(
     let race = store.0.unit_race().unwrap_or(0);
     let class = store.0.unit_class().unwrap_or(0);
     let mut rep_ranks = std::collections::HashMap::new();
-    if let Some(cat) = factions.as_deref().map(|f| f.catalog()) {
+    if let Some(cat) = factions.map(|f| f.catalog()) {
         for (id, info) in cat.reputation_factions() {
             let standing = usize::try_from(info.rep_index)
                 .ok()
@@ -503,14 +529,14 @@ pub(super) fn feed_player_req(
         }
     }
     // The client's `0xc4d770`: set when a spell whose Effect[0] is 40 (SPELL_EFFECT_DUAL_WIELD)
-    // is learned, cleared on its unlearn — mirrored as a spellbook scan.
-    let can_dual_wield = spells.as_deref().is_some_and(|s| {
+    // is learned, cleared on its unlearn, mirrored as a spellbook scan.
+    let can_dual_wield = spells.is_some_and(|s| {
         actions
             .spells
             .iter()
             .any(|&id| s.catalog.get(id).is_some_and(|sd| sd.effects[0] == 40))
     });
-    let state = benilla_ui::script::PlayerReqState {
+    PlayerReqState {
         level: store.0.unit_level().unwrap_or(0),
         class_id: u32::from(class),
         race_id: u32::from(race),
@@ -519,12 +545,33 @@ pub(super) fn feed_player_req(
         rep_ranks,
         can_dual_wield,
         honor_rank: store.0.player_honor_rank().unwrap_or(0),
-    };
-    if last.as_ref() != Some(&state) {
-        gate.audit("feed_player_req", "the player-requirement state");
-        *last = Some(state.clone());
-        script.set_player_req_state(state);
     }
+}
+
+pub(crate) fn item_usable_for_player(
+    item: &ItemInfo,
+    req: &PlayerReqState,
+    actions: &crate::ui_action::PlayerActions,
+) -> bool {
+    item_usable(
+        &ItemTemplateView {
+            class: item.class,
+            subclass: item.subclass,
+            required_level: item.required_level,
+            allowable_class: item.allowable_class,
+            allowable_race: item.allowable_race,
+            required_skill: item.required_skill,
+            required_skill_rank: item.required_skill_rank,
+            required_spell: item.required_spell,
+            required_honor_rank: item.required_honor_rank,
+            required_city_rank: item.required_city_rank,
+            required_rep_faction: item.required_rep_faction,
+            required_rep_rank: item.required_rep_rank,
+            ..Default::default()
+        },
+        req,
+        |id| actions.spells.contains(&id),
+    )
 }
 
 /// One bag slot from its item guid: the instance (store) + template (cache, ask-once) + icon

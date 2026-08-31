@@ -715,6 +715,98 @@ fn reward_rows_follow_the_refs_two_per_row_layout() {
     );
 }
 
+/// Stock 1.12 leaves the quality-colored FontString alone and reds the two textures behind it.
+/// Both legs reset because the fixed row widgets are reused when the selected quest changes.
+#[test]
+fn reward_rows_tint_unusable_items_and_reset_reused_rows() {
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    load_xml(&s, "Fonts.xml");
+    load_xml(&s, "MoneyFrame.xml");
+    load_xml(&s, "UiPanels.xml");
+    load_xml(&s, "MerchantFrame.xml");
+    load_xml(&s, "QuestLogFrame.xml");
+
+    let detail = |choice_usable, reward_usable| QuestLogDetail {
+        description: String::new(),
+        objectives_text: String::new(),
+        required_money: 0,
+        reward_money: 0,
+        choices: vec![QuestItemView {
+            name: Some("Militia Warhammer".into()),
+            quality: 1,
+            usable: choice_usable,
+            ..Default::default()
+        }],
+        rewards: vec![QuestItemView {
+            name: Some("Militia Hammer".into()),
+            quality: 1,
+            usable: reward_usable,
+            ..Default::default()
+        }],
+    };
+    let mut state = eight_entries();
+    state.detail = Some(detail(false, true));
+    s.set_quest_log(state.clone());
+    s.run("ToggleQuestLog()").unwrap();
+
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestLogChoice1IconTexture:GetVertexColor()}")
+            .unwrap(),
+        vec![0.9, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestLogChoice1NameFrame:GetVertexColor()}")
+            .unwrap(),
+        vec![0.9, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        s.eval::<(f32, f32, f32)>(
+            "local r, g, b = QuestLogChoice1Name:GetTextColor() return r, g, b"
+        )
+        .unwrap(),
+        (1.0, 1.0, 1.0),
+        "usability must not replace the item-quality text color"
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestLogReward1IconTexture:GetVertexColor()}")
+            .unwrap(),
+        vec![1.0, 1.0, 1.0, 1.0]
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestLogReward1NameFrame:GetVertexColor()}")
+            .unwrap(),
+        vec![1.0, 1.0, 1.0, 1.0]
+    );
+
+    state.detail = Some(detail(true, false));
+    s.set_quest_log(state);
+    s.fire_event("QUEST_LOG_UPDATE", vec![]);
+
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestLogChoice1IconTexture:GetVertexColor()}")
+            .unwrap(),
+        vec![1.0, 1.0, 1.0, 1.0],
+        "a reused choice row must clear its old red tint"
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestLogChoice1NameFrame:GetVertexColor()}")
+            .unwrap(),
+        vec![1.0, 1.0, 1.0, 1.0]
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestLogReward1IconTexture:GetVertexColor()}")
+            .unwrap(),
+        vec![0.9, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        s.eval::<Vec<f32>>("return {QuestLogReward1NameFrame:GetVertexColor()}")
+            .unwrap(),
+        vec![0.9, 0.0, 0.0, 1.0]
+    );
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// One entry whose selected detail overflows the 261px-tall `QuestLogDetailScroll`: 10
 /// objective lines (each a FIXED 12px slot, `QuestLogObjective1`'s own XML comment) plus a
 /// long description and a reward row push the child's summed height (`BenillaQuestLogDetail_
