@@ -29,7 +29,8 @@ comment naming the reference fact and why we differ. Anything else is a fork.
 5. **Prove the run before reading the result.** A live result is evidence once the run is valid
    from numbers: preflight banner clean, camera and body where intended, the subject in frame,
    the window long enough. A negative from an unproven run is not evidence.
-6. **Commit small and often.** Atomic units, explicit paths; main only advances by fast-forward.
+6. **Commit small and often; land by pull request.** Atomic commits, explicit paths, on a
+   branch; main moves only by a squash-merged pull request, one commit per piece of work.
    No "done" and no commit without saying what was verified and how the result was judged.
 
 ## Hard rules
