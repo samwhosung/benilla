@@ -1,0 +1,25 @@
+name: Bug report
+description: Something benilla gets wrong, or does differently from 1.12.1.
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Screenshots or a clip help a lot; drag them in here.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What 1.12.1 does instead
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to see it
+      placeholder: Where you were and what you did.
+  - type: input
+    id: build
+    attributes:
+      label: Build and setup
+      description: The `benilla build` line from the start of the terminal output, your OS, and the server you play on.
+      placeholder: "benilla build 64cca13 · 2026-09-24 · release, macOS 15, vmangos"
