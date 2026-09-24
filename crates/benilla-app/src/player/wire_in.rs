@@ -697,7 +697,7 @@ fn apply_self_move(
 /// controller driving nothing, which is the shape of the free camera this arc is about.
 ///
 /// **Everything on this resource belonged to the mover that just ended, so all of it dies here**
-/// (decision 1542, B306 — reported and diagnosed by Liho). It used to clear a hand-picked six
+/// (decision 1542). It used to clear a hand-picked six
 /// fields, and the field it did not name was `modes`: `/logout` has vmangos root us for the
 /// countdown (`MiscHandler.cpp` `SetRooted(true)`), we ack the grant, and the next session never
 /// hears an unroot — the fresh server-side `Player` was never rooted, so there is nothing for it
@@ -773,7 +773,7 @@ mod session_end_tests {
         p.wedged = true;
     }
 
-    /// **B306, at its own edge** (decision 1542; reported and diagnosed by Liho). `/logout` has
+    /// **B306, at its own edge** (decision 1542). `/logout` has
     /// vmangos root the player for the countdown (`MiscHandler.cpp:329 SetRooted(true)`), which
     /// reaches us as the ack'd `SMSG_FORCE_MOVE_ROOT` above; the next login gets no unroot, because
     /// server-side the fresh `Player` was never rooted (`SendInitialPacketsBeforeAddToMap` re-sends

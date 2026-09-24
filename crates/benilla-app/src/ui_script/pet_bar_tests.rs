@@ -670,7 +670,7 @@ fn the_keybind_pair_pushes_and_casts_without_the_clicks_forks() {
 
 /// A hunter bar hovered through the REAL gesture, with the real binding registry and the real CVar
 /// table behind it — `mouse_move` runs the shipped `<OnEnter>` with `this` bound, which is the only
-/// way this fork gets exercised the way nazriel exercised it.
+/// way this fork gets exercised the way a player's hover exercises it.
 ///
 /// Buttons are 30 px chained +8 from the bar's own origin: button 1 spans x[72,102] y[56,86] ⇒
 /// centre (87,71), button 4's left = 72 + 3·38 ⇒ centre (201,71) — the geometry
@@ -701,8 +701,7 @@ fn tooltip_line1(s: &UiScript) -> String {
 
 /// **B230 — Attack/Follow/Stay name their keybinding; the pet's own spells do not.**
 ///
-/// nazriel: *"On 1.12 when you hover over Attack, Follow, Stay pet action buttons they show the
-/// keybinding - which is not the case with Benilla"*. The reference agrees with him and is
+/// On 1.12, hovering Attack, Follow or Stay shows the button's keybinding in its tooltip. That is
 /// narrower than "the pet bar": `PetActionButton_OnEnter` (PetActionBarFrame.lua l.285-305) forks
 /// on `isToken or UberTooltips == "0"`, and only THAT branch concatenates
 /// `NORMAL_FONT_COLOR_CODE.." ("..GetBindingText(GetBindingKey("BONUSACTIONBUTTON"..id), "KEY_")..")"`.

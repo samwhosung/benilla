@@ -753,7 +753,7 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
     // An item model is not just meshes, and for a while this loop treated it as if it were — it kept
     // the batches with no billboard flag and dropped everything else on the floor, so at character
     // select a worn item's own **effects** (its emitters, its camera-facing batches) simply did not
-    // exist. That is `#bugs` B118 as nazriel filed it: the R14 PVP shoulders' sparkle is the item
+    // exist. The R14 PVP shoulders' sparkle is the item
     // model's own emitters (decision 0813), and no part of it reached the booth. So each want
     // contributes up to four things at one seat: plain meshes ([`PreviewRider`]), camera-facing
     // batches ([`PreviewBillboard`]), its emitters ([`PreviewEffects`]), and — held weapons only —
@@ -803,7 +803,7 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
                 }
             }
             // The item model's OWN particle emitters — the R14 PVP pauldron's `SPARKLE` twinkle
-            // (`#bugs` B118, decision 0813), the held torch's flame. 95 `Item\` models hang one on a
+            // (decision 0813), the held torch's flame. 95 `Item\` models hang one on a
             // billboard bone alone; the booth spawns them off a host at the attach point, each
             // billboard-chain emitter through a booth-camera frame.
             if !item.emitters.is_empty() {

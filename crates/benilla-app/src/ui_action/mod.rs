@@ -206,8 +206,7 @@ impl Spells {
 ///
 /// The world cursor's skin leg then reads `[0xb700e4 + 4×isPlayerTarget]` as a hard precondition
 /// (`0x482589`): **a corpse flagged `UNIT_FLAG_SKINNABLE` shows no skin cursor at all to a player
-/// who never learned Skinning.** Without it the ladder offers the knife to everyone, which is
-/// what the channel reported.
+/// who never learned Skinning.** Without it the ladder offers the knife to everyone.
 #[derive(Resource, Default)]
 pub(crate) struct LearnedAbilities {
     /// `[0xb700e4]` — our known `SPELL_EFFECT_SKINNING` spell (creature skinning), `None` if we

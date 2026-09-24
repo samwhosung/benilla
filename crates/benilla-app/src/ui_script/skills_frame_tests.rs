@@ -507,8 +507,8 @@ fn the_expand_tab_fits_its_label_at_load() {
     assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
 }
 
-/// **B370 — the list reaches its last rows.** MarcusAga's Skills tab stopped three rows short of
-/// the end: the knob mid-track, Maces the last row shown. The reference's own
+/// **B370 — the list reaches its last rows.** The symptom: the Skills tab stops three rows short
+/// of the end, the knob mid-track, Maces the last row shown. The reference's own
 /// `FauxScrollFrame_Update` sizes the bar to `(n − 12) × 15` and the scroll child to `n × 15`, and
 /// `SkillListScrollFrame` is 220 tall (stock `SkillFrame.xml` l.468) against twelve rows of
 /// fifteen — so the child's overflow past the frame, `n × 15 − 220`, is forty pixels short of

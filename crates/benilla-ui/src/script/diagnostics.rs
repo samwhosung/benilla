@@ -5,11 +5,8 @@
 //! 1305 gave script errors a *screen*: the engine dispatches every caught error to
 //! `geterrorhandler()`, and FrameXML's `_ERRORMESSAGE` puts the red `ScriptErrors` dialog up. That
 //! is the reference's behaviour and it stays exactly as it is. It is also, on its own, not enough,
-//! and the reporters said so within a day of it shipping — Goudy, *minutes after screenshotting
-//! that very dialog working*: *"some kind of lua error frame probably needs to be implemented, as
-//! there are a lot of addons that still doesn't work"*; nazriel_0, two days later: *"probably we
-//! should start using something like Bug Grabber to report those stack traces better"* (ledger
-//! B293, split from B271).
+//! and it leaves two asks: a Lua error frame that says which addons still fail, and a
+//! BugGrabber-style collector that keeps their stack traces for a bug report.
 //!
 //! Both asks are the same three gaps, and all three are about *memory*:
 //!
@@ -19,8 +16,7 @@
 //! 2. **An addon can fail to load without ever raising**, and those failures had no channel at all
 //!    — a manifest entry the package does not ship, a document that will not parse, a dependency
 //!    cycle, a missing hard dependency, a broken `Bindings.xml`. They logged to the terminal and
-//!    stopped; the addon simply was not there and the client said nothing. That is the literal
-//!    content of *"a lot of addons that still doesn't work"*.
+//!    stopped; the addon simply was not there and the client said nothing.
 //! 3. **Nothing retained anything.** [`super::UiScript::take_errors`] drains to the host log every
 //!    frame, so once a frame passed, the terminal held the only copy. A player cannot read a
 //!    terminal, and a bug report written from one is what B271 was debugged off.

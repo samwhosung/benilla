@@ -89,7 +89,7 @@ fn fire_particle_census(
     // included — has already been discarded by the wall. Before 0678 it was routinely non-zero,
     // because `doodad_fade_alpha` admits any owner over `NEVER_FADE_RADIUS` at *every* distance
     // and nothing else bounded depth; that is precisely "all effects render at unlimited
-    // distance", and precisely the reporter's "the terrain is not even rendered that far".
+    // distance", out past the point where the terrain itself stops drawing.
     // It must now be **0**: past the wall the gate hides the emitter and freezes its pool.
     //
     // `beyond_wall` (verdict ignored) stays as the denominator — emitters *exist* out there and

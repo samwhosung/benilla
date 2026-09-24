@@ -723,7 +723,7 @@ pub(super) fn seed_ui_fixture(
             // Raised through the real registry entry, not a hand-built frame: the text comes from
             // the chain's own `INVITATION` GlobalString and the two buttons from ACCEPT/DECLINE,
             // so the capture exercises the same Show path a real invite takes.
-            if let Err(e) = script.run(r#"StaticPopup_Show("PARTY_INVITE", "Thalyn")"#) {
+            if let Err(e) = script.run(r#"StaticPopup_Show("PARTY_INVITE", "Brisca")"#) {
                 warn!("capture: ui-partyinvite seed failed to raise the dialog: {e}");
             }
         }

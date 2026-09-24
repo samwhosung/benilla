@@ -1,7 +1,7 @@
 //! The mount transition's law: **nothing on the rider is destroyed by mounting**.
 //!
-//! B199 (Frostshake, 08-03) is the report these pin: "mounting removes Ice Barrier's shield visual
-//! from the character — and dismounting does not bring it back". The old transition
+//! The case these pin: Ice Barrier's shield visual stays on the character through a mount, and is
+//! still there after the dismount. The old transition
 //! `despawn_related::<Children>()`'d the whole rider; the aura's persistent kit instance died with
 //! it and, because `FxAttached` lives on the *unit* and kept a dangling root while the aura never
 //! left its slot, nothing ever noticed. So these fixtures hang the two things that matter off a

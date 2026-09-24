@@ -1,4 +1,4 @@
-//! The cold-breath puff, pinned against the shipped assets (`#bugs` B233, decision 1149).
+//! The cold-breath puff, pinned against the shipped assets (decision 1149).
 //!
 //! B233 was reported as a **player character in Dun Morogh** with no visible breath, and the fix
 //! rests on three asset facts that a mechanism note alone cannot establish — the trap decision

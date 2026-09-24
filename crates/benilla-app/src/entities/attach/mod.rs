@@ -215,7 +215,7 @@ fn arm_sequence_clock(
     // callers, so no M2 instance in the client ever exists with nothing armed. For a door/chest
     // the object-layer arm (`0x5f3930`) lands *after* it and overrides it; seeding first is what
     // stops the one-frame BIND POSE our state GOs used to render on their first displayed frame,
-    // before `go_anim` had a chance to run — the "explodes for a split second" report. The seed
+    // before `go_anim` had a chance to run, which reads as a one-frame explosion. The seed
     // is played THROUGH the transitions object so that first arm cleanly fades out of it;
     // playing it bare on the player would leave two clips live at once.
     let mut player = AnimationPlayer::default();

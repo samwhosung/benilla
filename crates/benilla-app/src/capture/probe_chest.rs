@@ -1,8 +1,8 @@
 //! The chest live probe (`WOW_PROBE_CHEST=1`) — **B84's instrument**: does the player kneel at an
 //! open chest?
 //!
-//! Reported on Discord, 2026-07-26: *"No looting/opening animation when using a
-//! chest"*, with a benilla/reference pair at the same Mirror Lake Orchard chest — the reference
+//! The symptom: no looting animation when opening a chest. At the same Mirror Lake Orchard chest,
+//! benilla and the reference side by side show the reference
 //! gnome kneeling over the open loot window, ours standing bolt upright. Decision 0515 had shipped
 //! the kneel keyed to the `CMSG_LOOT` send alone and recorded a chest's silence as *correct*; 1471
 //! is the correction (the real client also arms the latch in `OnLootResponse 0x5eb900`, and a chest

@@ -1,4 +1,4 @@
-//! Every book in the world opened and closed constantly (`#bugs` B36) — because the loader-idle
+//! Every book in the world opened and closed constantly — because the loader-idle
 //! seed armed the model's **file-order-first** sequence, and on a book that sequence is the *Close
 //! motion*, not the closed pose.
 //!

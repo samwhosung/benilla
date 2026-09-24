@@ -746,8 +746,8 @@ fn instance_tail_creator_and_readable() {
 }
 
 /// **The bind line's Soulbound override** — the bind line reads the INSTANCE, not only the template
-/// (B310, Frostshake: an equipped Maiden's Circle still said *Binds when equipped*, and B309's
-/// own shot showed *Binds when picked up* on the equipped pants).
+/// (an equipped Maiden's Circle reads *Soulbound*, not *Binds when equipped*; equipped pants
+/// likewise, not *Binds when picked up*).
 ///
 /// The reference's rule: Bonding `[record+0x194]` ∈ {1..5}
 /// decides whether a line prints at all; a **runtime-bound instance** (`0x5da2c0` — soulbound

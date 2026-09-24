@@ -2376,7 +2376,7 @@ mod tests {
         );
     }
 
-    /// **B364** (MarcusAga): right-clicking a row of the Who list swung the camera round to
+    /// Right-clicking a row of the Who list must not swing the camera round to
     /// behind the character — over ~180°, on a body that never turned. The click itself was the
     /// UI's (1816's no-fall-through hit test opened the dropdown); only the camera's command word
     /// saw it, because the word's two mouse bits were built from `ButtonInput` with no UI term.

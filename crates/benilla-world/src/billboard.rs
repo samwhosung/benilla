@@ -923,7 +923,7 @@ mod tests {
     }
 
     /// **The billboard FRAME an equipped item's emitter rides** (decision 0813), with the real
-    /// numbers of nazriel's B118 item (`LShoulder_Mail_PVPAlliance_C_01`: billboard bone 1 pivot
+    /// numbers of the R14 PVP shoulder (`LShoulder_Mail_PVPAlliance_C_01`: billboard bone 1 pivot
     /// `(-0.012, 0.162, -0.060)`, sparkle emitter position `(-0.252, 0.178, -0.046)`, both raw WoW
     /// model space — pinned in `benilla_formats`' `real_pvp_shoulder_emitters_ride_a_billboard_bone`).
     ///

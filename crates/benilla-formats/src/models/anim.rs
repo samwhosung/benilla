@@ -1371,8 +1371,8 @@ mod tests {
     }
 
     /// **The billboard host of a particle emitter's bone chain** (decision 0813), on the two real
-    /// assets that opened it. `Field Marshal's Chain Spaulders` (display 32092 — nazriel's B118
-    /// item) authors a 4-bone chain whose only billboard bone is bone **1** (flags `0x08`,
+    /// assets that opened it. `Field Marshal's Chain Spaulders` (display 32092)
+    /// authors a 4-bone chain whose only billboard bone is bone **1** (flags `0x08`,
     /// spherical), with the two sparkle emitters hanging off its children 2 and 3. Neither emitter
     /// bone carries the flag, so a consumer that asks only about the emitter's OWN bone sees an
     /// ordinary rest-pose frame and puts the sparkle ~0.24 yd from where the reference draws it.
@@ -1460,8 +1460,8 @@ mod tests {
     /// (flags `0x08`), **zero** particle emitters and zero ribbons — the whole model is a single
     /// additive quad that faces the camera. `ItemVisuals` 28 hangs it on slot 4, and 10 of the 29604
     /// `ItemDisplayInfo` rows carry that visual, so a preview path that drops billboard batches and
-    /// keeps only emitters renders *nothing whatsoever* for those items (the select-screen half of
-    /// `#bugs` B118). Pinned here because the mistake is invisible in code that reads correct.
+    /// keeps only emitters renders *nothing whatsoever* for those items at character select.
+    /// Pinned here because the mistake is invisible in code that reads correct.
     #[test]
     fn a_real_item_glow_model_is_pure_billboard_geometry_with_no_emitters() {
         let data = crate::wow_data_or_skip!();

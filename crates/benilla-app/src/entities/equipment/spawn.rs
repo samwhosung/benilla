@@ -746,7 +746,7 @@ fn spawn_slot(
     // The booth mirror for those same emitters (decision 0822): they spawn as FREE entities
     // below (the owner contract), never unit descendants, so a booth that mirrors the dressed
     // tree cannot see them — which is why the R14 pauldron's sparkle was absent from the paper
-    // doll exactly as it was from the select screen (`#bugs` B118). One marker per item, on
+    // doll exactly as it was from the select screen. One marker per item, on
     // the root that already reaps with it.
     if !dm.emitters.is_empty() {
         commands
@@ -1407,7 +1407,7 @@ mod tests {
         );
     }
 
-    /// **What a booth can see of an equipped item** (decision 0822, `#bugs` B118's paper-doll half).
+    /// **What a booth can see of an equipped item** (decision 0822, the paper-doll half).
     /// An item model's camera-facing batch spawns as a world-ROOT card and its emitters as free
     /// owner-followed entities — neither is a unit descendant, so the portrait / paper-doll booths,
     /// which mirror the dressed tree, could not see either one and a worn item's effects were absent

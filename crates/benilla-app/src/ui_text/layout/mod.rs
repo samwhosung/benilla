@@ -908,7 +908,7 @@ mod ellipsis_cost {
     use std::time::Instant;
 
     /// The reported page verbatim — vmangos `page_text` 2676, the *Alliance Military Ranks* plaque
-    /// in Stormwind's Old Town (`GameObject` 3011, the object in Goudy's screenshots). 647 bytes.
+    /// in Stormwind's Old Town (`GameObject` 3011). 647 bytes.
     const PAGE: &str = concat!(
         "<HTML>\n",
         "<BODY>\n",
@@ -934,8 +934,8 @@ mod ellipsis_cost {
     );
 
     /// The longest body vmangos actually ships (`page_text` 2880, a Hearthglen letter, 928 bytes)
-    /// — **plain prose, no markup at all**. It is here because the report's framing ("html text")
-    /// names the loudest case, not the boundary: the seam is armed by OVERFLOW, and the longest
+    /// — **plain prose, no markup at all**. It is here because HTML is the loudest case, not
+    /// the boundary: the seam is armed by OVERFLOW, and the longest
     /// pages in the world are plain. `$b` arrives expanded (`npc_text::substitute`, the feed).
     const PLAIN: &str = concat!(
         "Reuben,\n\nI write this letter knowing you may never see it; I simply can't remain idle, ",

@@ -1,7 +1,7 @@
 //! **The re-shape a `bevy_ui` text root loses when its LAST span is despawned** — an upstream
 //! change-detection hole, netted here because falling into it is a hard crash whose panic names
-//! none of our code (decision 2212; bug B383, Goudy: *"if you enter world in window mode and then
-//! maximize window on linux, the client will crash"*).
+//! none of our code (decision 2212). The way in: enter the world in window mode, then maximize the
+//! window on Linux.
 //!
 //! ## The hole
 //!
@@ -291,7 +291,7 @@ mod tests {
         );
     }
 
-    /// **The crash itself.** The same sequence with the net taken out is the client Goudy ran:
+    /// **The crash itself.** The same sequence with the net taken out:
     /// the resize frame re-lays-out the stale buffer and `bevy_text` indexes `glyph_info[1]` of a
     /// one-entry list. Pinned as a `should_panic` because it is the whole justification for the
     /// net — when a bevy release closes the hole this fails, and the net (and this test, and the

@@ -1288,7 +1288,7 @@ fn register_wmo(placements: &mut Placements, asset_server: &AssetServer, w: &Wmo
 /// One body, two triggers, because they are the same event seen from different sides: a cross-map
 /// teleport ends the world you were in, and so does leaving for character select. The material
 /// dedup goes with the placements it deduped for — its strong handles are what kept every
-/// previous map's materials (and their textures) resident forever (the #bugs teleport leak), so it
+/// previous map's materials (and their textures) resident forever (the teleport leak), so it
 /// is cleared *here*, sharing the exact trigger of the teardown it belongs to, rather than hanging
 /// off `world_map::MapChange`.
 fn drop_streamed_world(

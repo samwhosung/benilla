@@ -1564,13 +1564,13 @@ mod tests {
     ///
     /// Two things this pins, and both were wrong before it. The bars come off the record at all
     /// (they used to read the wire-only snapshot and map an absent field to `0`, which is the
-    /// blanked frame Goudy reported); and the power pair is **divided** by the raw→display scale
+    /// blanked frame); and the power pair is **divided** by the raw→display scale
     /// on this leg exactly as on the live one — a warrior's rage rides the wire ×10, so without
     /// the divide an out-of-range warrior reads ten times an in-range one.
     #[test]
     fn an_out_of_range_member_reads_the_record_and_divides_its_rage() {
         let m = GroupMemberEntry {
-            name: "Thalyn".into(),
+            name: "Brisca".into(),
             guid: 0x1234,
             status: member_status::ONLINE,
             flags: 0,
@@ -1618,7 +1618,7 @@ mod tests {
     #[test]
     fn an_out_of_range_members_dead_and_ghost_come_off_the_record() {
         let m = GroupMemberEntry {
-            name: "Thalyn".into(),
+            name: "Brisca".into(),
             guid: 0x1234,
             // The stale roster echo: online, alive.
             status: member_status::ONLINE,

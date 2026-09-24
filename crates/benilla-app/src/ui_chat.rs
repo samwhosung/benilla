@@ -174,7 +174,7 @@ impl Plugin for UiChatPlugin {
             // call drains the queue. `SMSG_GUILD_EVENT` 0x02 has no such latch: it fires
             // `GUILD_MOTD` synchronously in its own handler (`0x5e7288`). So the reference paints
             // the guild line FIRST and the realm's welcome lines after it, inverting the wire
-            // order — and that is what the report asked for ("before server messages").
+            // order.
             //
             // Our held `ChatLog` queue IS that latch: the early return above `mem::take` is what
             // keeps the login burst waiting. This says when it drains. Without these two edges

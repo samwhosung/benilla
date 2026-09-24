@@ -260,7 +260,7 @@ pub(super) fn render_view(
         // pick 1→picked up · 2→equipped · 3→used · 4/5→Quest Item.
         //
         // Before this arm an equipped Binds-when-equipped piece kept saying *Binds when equipped*
-        // forever (B310, Frostshake): the template's `bonding` never changes when the item binds —
+        // forever: the template's `bonding` never changes when the item binds —
         // the instance's flag is the only thing that does.
         match v.bonding {
             4 | 5 => keyed("ITEM_BIND_QUEST", &[], WHITE, false)?,

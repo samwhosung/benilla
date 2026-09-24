@@ -277,11 +277,10 @@ fn render_spell(
         }
     }
     // The duration-remaining line (`SetPlayerBuff` only) is GOLD `0xffffd200` — the same gold as
-    // the aura title it sits under, NOT the description's white. Measured off the reporter's own
-    // 1.12.1 reference shot for B62 (`media/1530672450247856148`, Ice Armor in Wetlands): the
+    // the aura title it sits under, NOT the description's white. Measured off a 1.12.1 reference
+    // shot of Ice Armor in Wetlands: the
     // "29 minutes remaining" glyphs read exactly `(255, 210, 0)`, pixel-identical to that shot's
-    // "Ice Armor" / "Magic" title row, while its description rows read `(255, 255, 255)`. Ours
-    // rendered it white (`media/1530672304877469696`, `(255, 255, 255)`) — that white *is* B62.
+    // "Ice Armor" / "Magic" title row, while its description rows read `(255, 255, 255)`.
     if let Some(rem) = remaining {
         append_line(lua, this, (rem, GOLD), None, false)?;
     }

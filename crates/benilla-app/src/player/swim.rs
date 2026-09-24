@@ -447,9 +447,9 @@ pub(super) fn swim_step(
     // `Some(own feet Y)` at the caller, never `None`). 0644 added this second arm *after* 0726 and
     // read the liquid straight from `surface_at` instead, so the exemption covered the cap and not
     // the settle: flying over a lake, `excess` is the entire altitude, the down-cast through open
-    // air hits nothing, and one frame teleports the avatar onto the waterline. That is both
-    // reporters' wording exactly — "from any height", and "*when moving* from land to water", the
-    // `input_vel != ZERO` gate right here.
+    // air hits nothing, and one frame teleports the avatar onto the waterline. That is the symptom
+    // exactly: from any height, and only when moving from land to water, the `input_vel != ZERO`
+    // gate right here.
     if surface_y.is_some() && input_vel != Vec3::ZERO {
         if let Some(surface_now) = surface_at(c - half_h) {
             let excess = settle_to_rest(c.y - half_h.y, surface_now, player.collision_height.0);

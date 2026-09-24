@@ -938,8 +938,7 @@ fn the_login_one_shots_wait_for_the_in_game_ui() {
 /// ship — used to `warn!` to the terminal and vanish. Nothing raised, so 1305's dialog could not
 /// fire; the walk's failure list was dropped on the floor at `load_ingame_ui_on_world_entry`; and
 /// the per-frame drain kept no history. From the player's chair the addon simply was not there and
-/// the client said nothing, which is the literal content of *"there are a lot of addons that still
-/// doesn't work"*.
+/// the client said nothing.
 ///
 /// Three claims, and the third is the one that makes the first two reachable: the failure is
 /// **retained**, it is **readable from Lua** (so the window is a view of it, not a second copy),
@@ -1121,9 +1120,9 @@ fn a_repeating_error_is_one_row_with_a_count_not_a_flood() {
 
 // ── B353 · the layout cache is a resident of the shutdown tail ───────────────────────────────
 //
-// st1rk, 2026-09-01: *"Unlock a chat window (right-click tab → Unlock Window), resize or drag it,
-// `/logout` or `/reload`, log back in. It's back at the original size. `benilla-config/layout/`
-// isnt created."* The engine seam and the file round trip were already proven by
+// The symptom: an unlocked chat window, resized or dragged, comes back at its original size after
+// a `/reload` or a relog, and `benilla-config/layout/` is never created. The engine seam and the
+// file round trip were already proven by
 // [`crate::ui_script::chat_resize_tests::the_geometry_round_trips_through_the_save_file`]; what
 // was wrong is which edge writes. [`crate::ui_layout`] hung its saver off `OnExit(InWorld)`, and a
 // `/reload` never leaves `InWorld` — [`super::run_pending_reload`] calls the shutdown and the
@@ -1278,7 +1277,7 @@ fn window_geometry(world: &World) -> (f32, f32, String, f32, f32) {
         .expect("read the probe window back")
 }
 
-/// **The whole loop, on the root that reported it** — st1rk's retest, in one test: place a window,
+/// **The whole loop, on the root that reported it**, in one test: place a window,
 /// `/reload`, meet a fresh tree that has it on its authored anchors, and let the loader seat the
 /// saved geometry back over the top.
 ///

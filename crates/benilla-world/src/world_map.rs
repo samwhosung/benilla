@@ -42,7 +42,7 @@ pub struct CurrentMap(pub u32);
 
 /// A cross-map transition, observed as a [`CurrentMap`] flip — the **world-scope teardown
 /// signal**. Every module that dedups map-scoped assets behind a strong-handle cache reads this
-/// and clears its own cache (the #bugs teleport leak: those caches pinned every map ever visited,
+/// and clears its own cache (the teleport leak: those caches pinned every map ever visited,
 /// and each retained uv/tint-animated material re-uploaded per frame, forever). A clear is always
 /// safe mid-session — live users hold handle clones, so it only drops the *dedup*; the assets die
 /// when their last user despawns, and the next spawn rebuilds under the loading screen. Carries

@@ -537,11 +537,11 @@ fn clicking_a_bar_opens_the_detail_popup_on_that_faction() {
 /// gates its hide-old step on the new state having a texture, so the `UI-CheckBox-Up` box stays up
 /// and the row reads "a greyed **At War** beside an empty box". Ours resolved the shown texture as
 /// a pure function of the state, hid it, and left a bare grey label with nothing beside it — which
-/// is what MarcusAga photographed on Ironforge.
+/// is how the Ironforge row drew.
 ///
 /// Three rows, because the tick is the half that made the report confusing: a peace-forced faction
 /// that is NOT at war shows the empty box (the shot), a peace-forced faction that IS at war shows
-/// the box plus its grey `DisabledCheckedTexture` (*"the tick renders, however"*), and a
+/// the box plus its grey `DisabledCheckedTexture` (the tick still draws), and a
 /// toggleable one is the control that must not move.
 #[test]
 fn the_at_war_box_keeps_its_art_while_it_is_disabled() {

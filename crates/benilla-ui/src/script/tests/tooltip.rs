@@ -530,7 +530,7 @@ fn the_duration_ladder_ceils_every_arm_but_seconds() {
 /// Live, that is the item tooltip's SET block: `ClearLines` keeps the cache (the hover re-enter
 /// loop depends on it), so the two blank gold spacers land on cells that carried real text on an
 /// earlier hover. Each drew an uncounted row and the set bonuses hung below the backdrop —
-/// Frostshake's Field Marshal's Raiment shot, two blanks, two rows.
+/// on Field Marshal's Raiment, two blanks, two rows.
 #[test]
 fn an_emptied_pooled_line_drops_its_stale_box_and_the_plate_still_contains_the_chain() {
     let mut s = script();

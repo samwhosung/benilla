@@ -782,8 +782,8 @@ fn set_lua_music(
 /// this way they can be asserted without standing up a device.
 ///
 /// **It does not touch the zone track.** `[0xb06cc4]`'s only mentions in the reference's function
-/// sit *past* the NULL branch, which is exactly what the reporter said from the outside: *"not
-/// used to stop normal music played by being in a zone"*.
+/// sit *past* the NULL branch, so `StopMusic` ends a `PlayMusic` track and never the zone's own
+/// music.
 fn take_lua_music_slot(zone: &mut ZoneAudio, now: f64) {
     if let Some(mut h) = zone.lua_music.take() {
         h.stop(mixer::fade(MUSIC_FADE_OUT_MS));
@@ -1300,9 +1300,8 @@ mod tests {
     ///   ahead of the NULL branch — so a stop from **cold** still moves the clock, and pushes out
     ///   a start that was already due.
     /// * **The zone track is not what it stops.** `[0xb06cc4]` is mentioned only past that
-    ///   branch. This is the reporter's own sentence from the outside — *"not used to stop normal
-    ///   music played by being in a zone"* — and it is the half a "stop the music" verb would
-    ///   most naturally get wrong.
+    ///   branch: the zone's own music plays on through a `StopMusic`, which is the half a
+    ///   "stop the music" verb would most naturally get wrong.
     #[test]
     fn the_lua_music_verb_rearms_the_zone_pump_at_six_seconds_even_from_cold() {
         // Its own number, and neither of the two it sits between: not the cinematic's 3.000 s,

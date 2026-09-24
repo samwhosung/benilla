@@ -807,7 +807,7 @@ impl Plugin for EntitiesPlugin {
         .add_message::<live_display::DisplaySwapped>()
         .add_systems(Startup, setup_entities.after(AssetSet::Open))
         // The map-scope teardown (`world_map::MapChange`): drop every display/material dedup
-        // so a map's assets actually die with it — the #bugs teleport leak.
+        // so a map's assets actually die with it — the teleport leak.
         .add_systems(Update, (evict_display_caches, scope_entity_art))
         // Every streamed unit's collision height, the frame after `apply_net_updates` spawns it
         // (that stage's Commands are what create the entity, so this cannot be earlier). Its

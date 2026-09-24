@@ -1,9 +1,8 @@
 //! The world-book live probe (`WOW_PROBE_BOOK=1`) — B240's instrument: what does having the item-
 //! text reader open actually cost per frame, on the real object the report names?
 //!
-//! Reported on Discord, 2026-08-09: *"page text with html text absolutely
-//! annihilates performance"* — ~50% fps drop (62 → 36 fps, 16.0 → 28.0 ms) while the *Alliance
-//! Military Ranks* plaque's reader is up, recovering the moment it closes. That is a **frame-cost
+//! The symptom: a ~50% fps drop (62 → 36 fps, 16.0 → 28.0 ms) while the *Alliance Military Ranks*
+//! plaque's HTML page is up in the reader, recovering the moment it closes. That is a **frame-cost
 //! A/B**, and eyeballing an fps counter is exactly the way not to settle one (docs/METHOD.md's
 //! "timing and feel are measured, never eyeballed"). So this probe teleports to the plaque, samples
 //! the UI pass's own per-phase meter ([`crate::ui_script::UiFrameCost`]) with the reader CLOSED,
@@ -13,7 +12,7 @@
 //!
 //! The object: `GameObject` 3011 (`gameobject_template` entry 2857, `GAMEOBJECT_TYPE_TEXT` = 9)
 //! in Stormwind's Old Town, whose `data[0]` is `page_text` 2676 — a 647-byte HTML body. The
-//! `.go xyz` below is Goudy's own reported position (his debug panel: `-8760.2 402.3 103.9`).
+//! `.go xyz` below is the reported standing position, off the debug panel: `-8760.2 402.3 103.9`.
 //!
 //! ## The run recipe
 //!
@@ -146,7 +145,7 @@ fn drawn_strings(script: &UiScript) -> Vec<String> {
 }
 
 /// **B240's render half, checked where it was reported.** The page body is HTML; if the parse ever
-/// falls back, the reader draws the markup itself — which is what Goudy photographed. So: no drawn
+/// falls back, the reader draws the markup itself — the reported symptom. So: no drawn
 /// string may contain a tag, and the page's own lines must each be there as their own block.
 fn report_render(script: &UiScript) -> u32 {
     let drawn = drawn_strings(script);

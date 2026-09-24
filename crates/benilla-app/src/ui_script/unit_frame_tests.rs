@@ -1364,7 +1364,7 @@ fn a_feigning_target_paints_empty_bars_and_the_dead_text() {
         Some(UnitState {
             exists: true,
             is_connected: true, // CheckDead's second term — a feign is not a link-drop
-            name: Some("Nazriel".into()),
+            name: Some("Corvane".into()),
             health,
             max_health: 1500,
             level: 60,
@@ -1991,7 +1991,7 @@ fn the_player_frame_wears_the_leader_and_master_looter_icons() {
         "player",
         Some(UnitState {
             exists: true,
-            name: Some("Frostshake".into()),
+            name: Some("Aldwyn".into()),
             health: 100,
             max_health: 100,
             level: 60,
@@ -2013,7 +2013,7 @@ fn the_player_frame_wears_the_leader_and_master_looter_icons() {
 
     let party = |leader_index: u32, master_looter: Option<u32>, method: &str| PartyState {
         members: vec![PartyMemberInfo {
-            name: "Thalyn".into(),
+            name: "Brisca".into(),
             guid: 0x7A17,
         }],
         leader_index,

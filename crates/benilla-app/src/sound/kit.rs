@@ -1292,7 +1292,7 @@ fn stop_all_channels(mut out: NonSendMut<SoundOutput>) {
 
 /// Drop the decoded-SFX cache on a cross-map transition (`world_map::MapChange` — see its doc):
 /// kit variations are decoded on demand, so a new map's soundscape rebuilds its own working set
-/// while the old map's decodes stop occupying RAM forever (the #bugs teleport leak). Playing
+/// while the old map's decodes stop occupying RAM forever (the teleport leak). Playing
 /// channels own their frames (`StaticSoundData` clones share them), so nothing audible cuts.
 fn evict_kit_cache(
     mut changes: MessageReader<benilla_world::world_map::MapChange>,

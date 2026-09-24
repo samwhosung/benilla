@@ -2,8 +2,8 @@
 //! the body saying what the wire asked for, what we resolved, and what is actually hanging off the
 //! skeleton right now.
 //!
-//! It exists because those are three different things and a screenshot conflates all three. B123 —
-//! *"show helm and cloak preferences are not taken into account"* — is exactly a gap between the
+//! It exists because those are three different things and a screenshot conflates all three. A
+//! helm or cloak the player chose to hide, drawn anyway, is exactly a gap between the
 //! first and the third: the descriptor carried `PLAYER_FLAGS_HIDE_HELM`, the resolver ignored it,
 //! and a helm model hung off the head. Nothing in a picture separates that from "this character
 //! simply has a helm equipped", which is why the report needed a reader rather than an eye.

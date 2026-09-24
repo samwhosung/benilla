@@ -416,7 +416,7 @@ fn the_page_text_body_renders_the_block_list_a_reader_would_draw() {
 
 /// **The exact string the reader builds**, on the exact body B240 reports — `ItemTextFrame.xml`'s
 /// READY handler pads an authorless page as `"\n" .. ItemTextGetText() .. "\n"`, and that padding
-/// is the one thing standing between a formatted page and the raw markup Goudy photographed.
+/// is the one thing standing between a formatted page and its raw markup.
 /// Whitespace before and after the root element is legal XML, so this must take the MARKUP path;
 /// if it ever takes the fallback, every book in the world silently renders as its own source.
 ///
@@ -542,9 +542,8 @@ fn an_unfloated_image_reserves_height_without_becoming_the_anchor() {
     );
 }
 
-/// **B342, at the engine.** Goudy, 2026-08-27 (`#bugs` `1542371921486811236`): *"html images in
-/// books are not scaled correctly"* — the Alliance crest on *A Treatise on Military Ranks* drawn
-/// several times the reference's size, with the page's text over the top of it.
+/// **B342, at the engine.** The symptom: the Alliance crest on *A Treatise on Military Ranks*
+/// draws several times the reference's size, with the page's text over the top of it.
 ///
 /// The body is `page_text` 2654 and its `<IMG>` carries **no `width=` and no `height=`**, so the
 /// block is sized `0 × 0`. In the reference that is not "no size": the resolver's size call is

@@ -302,7 +302,7 @@ fn a_region_resolves_even_when_its_owner_frame_has_no_rect() {
 /// a wrong position — and a template whose textures chain off each other turns it into real,
 /// visible geometry a few links down.
 ///
-/// Reported as B264 (carni, 2026-08-13): opening the social pane drew a stray dropdown capsule at
+/// The symptom: opening the social pane draws a stray dropdown capsule at
 /// the bottom of the screen next to the action bar. `FriendsDropDown` carries no anchors —
 /// *exactly* as the reference's own `FriendsDropDown` does (`FriendsFrame.xml` l.598), and the
 /// reference draws nothing — so every texture of `UIDropDownMenuTemplate` hung off a phantom rect

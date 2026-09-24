@@ -289,10 +289,9 @@ fn player_buff_hover_is_the_aura_variant() {
     });
     assert!(gold_name, "aura name is gold, not white");
     // …and so is the DURATION-REMAINING line — the same `0xffffd200`, not the description's
-    // white. Report B62: measured on the reporter's own 1.12.1 reference shot
-    // (`media/1530672450247856148`), the "29 minutes remaining" glyphs are exactly
+    // white. On a 1.12.1 reference shot the "29 minutes remaining" glyphs are exactly
     // `(255, 210, 0)`, the same pixels as that shot's title row, while its description rows are
-    // `(255, 255, 255)`. Ours drew the line white, which is the whole report.
+    // `(255, 255, 255)`.
     let gold_remaining = quads.iter().any(|q| {
         matches!(&q.content, QuadContent::Text { text: Some(t), color: Some(c), .. }
             if t == "<2 mm>" && *c == [1.0, 210.0 / 255.0, 0.0, 1.0])

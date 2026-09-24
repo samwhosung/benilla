@@ -222,7 +222,7 @@ impl BoothBillboard {
 ///
 /// The two lanes that feed it are the two lanes that mirror a dressed look — a live unit's
 /// [`crate::portrait::PortraitEffects`] markers, and the glue bake's [`super::PreviewEffects`] —
-/// and both mean the same two things: an equipped item's own emitters (decision 0813, `#bugs` B118)
+/// and both mean the same two things: an equipped item's own emitters (decision 0813)
 /// and the `ItemVisuals` glow a held weapon hangs on its own attachment points (decision 0805).
 pub(super) struct BoothEffects {
     pub(super) bone: u16,
@@ -1300,7 +1300,7 @@ mod tests {
     }
 
     /// **The booth twin of the equipped-item emitter's billboard frame** (decision 0813, carried to
-    /// the select screen for `#bugs` B118). Same real numbers as
+    /// the select screen). Same real numbers as
     /// `billboard::tests::an_item_emitters_billboard_frame_puts_it_behind_the_pivot`
     /// (`LShoulder_Mail_PVPAlliance_C_01`: billboard bone 1 pivot `(-0.012, 0.162, -0.060)`, sparkle
     /// emitter `(-0.252, 0.178, -0.046)`, raw WoW model space), but through THIS system — and here the

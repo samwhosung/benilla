@@ -781,8 +781,8 @@ mod tests {
         );
     }
 
-    /// A revisit (record cached) opens immediately with no query — the half of B292 the reporter
-    /// saw as "never seen this before": the empty frame is a first-visit-only state.
+    /// A revisit (record cached) opens immediately with no query: the empty frame is a
+    /// first-visit-only state.
     #[test]
     fn revisit_opens_immediately_from_the_cache() {
         let mut state = GossipState::default();

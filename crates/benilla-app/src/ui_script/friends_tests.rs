@@ -784,8 +784,8 @@ fn selecting_a_row_reads_back_in_the_same_tick() {
         .contains(&SocialRequest::SelectFriend(2)));
 }
 
-/// **B363 — the who list reaches its last rows.** Liho's `/who` found 49, showed 17, and the knob
-/// travelled while the rows stayed. On the stock window the mechanism is a one-row loss:
+/// **B363 — the who list reaches its last rows.** The symptom: a `/who` of 49 shows 17, and the
+/// knob travels while the rows stay. On the stock window the mechanism is a one-row loss:
 /// `WhoListScrollFrame` is 287 tall (stock `FriendsFrame.xml` l.1661) against seventeen rows of
 /// sixteen, so the child's overflow past the frame, `n × 16 − 287`, sits fifteen pixels under the
 /// bar's `(n − 17) × 16`, and an engine that clamped `SetVerticalScroll` into that overflow

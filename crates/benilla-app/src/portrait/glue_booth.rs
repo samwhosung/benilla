@@ -559,7 +559,7 @@ pub(crate) struct PreviewBillboard {
 /// Two sources produce these, and the booth treats them identically:
 ///
 /// - **An equipped item's own emitters** — the R14 PVP pauldron's `SPARKLE` twinkle, the held
-///   torch's flame (decision 0813; `#bugs` B118 is *this* case, and the select screen showed
+///   torch's flame (decision 0813; the select screen showed
 ///   nothing at all until it was carried here). Seat = the body's attach point for that slot.
 /// - **An item glow** (decision 0805) — the `Spells\Enchantments\*.mdx` effect a held weapon's
 ///   `ItemVisuals` id hangs on the weapon's own attachment point; all but three of the 35 shipped
@@ -1608,7 +1608,7 @@ pub(super) fn sync_glue_booth(
             },
         );
         // The worn items' effects: an equipped item model's OWN emitters (decision 0813 — the R14
-        // pauldron's sparkle, the torch's flame; `#bugs` B118) and the held weapons' `ItemVisuals`
+        // pauldron's sparkle, the torch's flame) and the held weapons' `ItemVisuals`
         // glows (decision 0805). One host per effect model at its seat, emitters owned by it — the
         // scene-brazier recipe (0539 §5), so they draw against THIS camera and fog on the scene's own
         // light. Children of the booth root through their joint, so the next re-bake's

@@ -440,7 +440,7 @@ mod tests {
             &mut quest,
             0,
             0,
-            vec![member(leader, "Frostshake"), member(far, "Thalyn")],
+            vec![member(leader, "Aldwyn"), member(far, "Brisca")],
             leader,
             None,
             &names,
@@ -462,14 +462,14 @@ mod tests {
         );
 
         // The answer lands for one of them; the re-sent roster asks for neither.
-        names.insert_player(leader, "Frostshake".into(), Some((1, 4, 1)));
+        names.insert_player(leader, "Aldwyn".into(), Some((1, 4, 1)));
         list(
             &mut group,
             &mut errors,
             &mut quest,
             0,
             0,
-            vec![member(leader, "Frostshake"), member(far, "Thalyn")],
+            vec![member(leader, "Aldwyn"), member(far, "Brisca")],
             leader,
             None,
             &names,
@@ -523,7 +523,7 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         let net = NetCommands(tx);
         let guid = 0x1234;
-        let mut group = grouped(&[member(guid, "Thalyn"), member(0x99, "Frostshake")]);
+        let mut group = grouped(&[member(guid, "Brisca"), member(0x99, "Aldwyn")]);
         let _ = asked(&rx); // the roster's own seat-time asks (they are unstreamed here)
 
         // A warrior: rage rides the wire ×10, and the record stores it raw exactly as the
@@ -565,7 +565,7 @@ mod tests {
     fn a_despawn_that_is_not_a_party_member_asks_nothing() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let net = NetCommands(tx);
-        let mut group = grouped(&[member(0x1234, "Thalyn")]);
+        let mut group = grouped(&[member(0x1234, "Brisca")]);
         let _ = asked(&rx);
         // A live object, so only the roster gate can stop it.
         let store = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[(
@@ -602,7 +602,7 @@ mod tests {
         let mut world = bevy::ecs::world::World::new();
         index.0.insert(near, world.spawn_empty().id());
 
-        let roster = vec![member(near, "Frostshake"), member(far, "Thalyn")];
+        let roster = vec![member(near, "Aldwyn"), member(far, "Brisca")];
         let mut send = |group: &mut GroupState, members: Vec<GroupMemberEntry>| {
             list(
                 group,

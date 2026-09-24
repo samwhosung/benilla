@@ -26,7 +26,7 @@ impl Plugin for AssetPlugin {
 
 /// Drop the world-art dedup on a cross-map transition (`world_map::MapChange` — see its doc for
 /// why a clear is always safe): `textures` + `model_materials` pin every map's world art forever
-/// otherwise (the #bugs teleport leak). The UI sprite caches (`sprites`/`tiled_sprites`/
+/// otherwise (the teleport leak). The UI sprite caches (`sprites`/`tiled_sprites`/
 /// `portraits`/`masks`) stay — they are game-global UI scope, and their negative entries exist
 /// precisely to stop per-frame re-walks of the chain.
 fn evict_world_art(

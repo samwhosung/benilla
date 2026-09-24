@@ -37,9 +37,8 @@
 //! **Two deliberate divergences, both recorded in 1487:**
 //!
 //! 1 · **PNG, where the reference writes TGA.** An uncompressed 32-bit Targa of a modern window is
-//!     ~8 MB and no ordinary tool on a 2026 desktop previews one. This is the "mandatory unfaithful
-//!     change" the report came in with; the mechanism, the folder and the naming are otherwise the
-//!     reference's.
+//!     ~8 MB and no ordinary tool on a 2026 desktop previews one. The mechanism, the folder and the
+//!     naming are otherwise the reference's.
 //! 2 · **`benilla-config/Screenshots/`, not `<install>/Screenshots/`** — decision 1486's rule:
 //!     benilla reads a WoW install and never writes to one. Same folder name, different parent.
 //!

@@ -384,8 +384,8 @@ impl PortraitSeat {
 }
 
 /// Stamped on an **effect-bearing model** riding a unit — the equipped item whose own emitters are
-/// its whole look (the R14 PVP pauldron's `SPARKLE` twinkle, the held torch's flame — decision 0813,
-/// `#bugs` B118) and the `ItemVisuals` glow a held weapon hangs on its own attachment points
+/// its whole look (the R14 PVP pauldron's `SPARKLE` twinkle, the held torch's flame — decision
+/// 0813) and the `ItemVisuals` glow a held weapon hangs on its own attachment points
 /// (decision 0805). The world emitters are *free* entities the owner contract walks
 /// ([`benilla_world::particles::spawn_emitter`]), never unit descendants, so — like [`PortraitBillboard`] —
 /// this marker is how a booth learns they exist at all: the mirror carries the emitter records plus
@@ -706,8 +706,8 @@ struct Booth {
     /// **skipped** — silently, with no error and no missing asset ([`PipeWatch::compiling`] has
     /// the byte references). A live view redraws it a few frames later and nobody ever sees it.
     /// A one-shot portrait bake does not: [`BOOTH_SETTLE_FRAMES`] elapse, the camera sleeps, and
-    /// the still keeps the hole for the rest of the session — which is exactly the report
-    /// ("*sometimes hair missing, sometimes face, totally random*"): hair is the alpha-key
+    /// the still keeps the hole for the rest of the session — which is exactly the symptom (the
+    /// hair missing one time, the face the next, at random): hair is the alpha-key
     /// pipeline, the body the opaque one, the eye-glow card the additive one, and which of the
     /// three had landed by the fourth frame is a race. It is invisible on macOS, where the same
     /// compile `block_on`s the render thread instead: the whole class exists on the reporters'
@@ -874,7 +874,7 @@ fn log_bake(
 ) {
     if booth_log() {
         // The **attach ids** the bake is dressed at, sorted and de-duplicated. Counts alone could
-        // not answer the question `#bugs` B324 asked — *what is hanging on this doll?* — and the
+        // not answer the question — *what is hanging on this doll?* — and the
         // answer is one line: a hunter mid-shot read `at=[2,35]` (bow at HandLeft, arrow at
         // HandArrow) where the reference can only ever show `[2]`. It is also the retest readout
         // for the reference's attach reset ([`attach_reset`]): no id in the cut family may appear.
@@ -909,7 +909,7 @@ fn log_bake(
 /// Both bake sites used to paper over that with `unwrap_or(PortraitAnchors { .., pivot_height: 0.0,
 /// .. })`. That is not a neutral default: the retired body fit floored the head signal at `0.1` for
 /// "a hypothetical bounds-less display", so zero anchors aimed the camera at a 0.1-unit-tall
-/// subject — the paper doll "zoomed into the max" and the wrong-size portrait of `#bugs` B106. (1089
+/// subject — the paper doll zoomed all the way in, and a portrait at the wrong size. (1089
 /// retired that fit, and zero anchors are no longer a *zoom* — but they are still the wrong camera:
 /// an unbuilt display has no `cameras[1]` to read, so the pane would latch the fixed fallback rig
 /// aimed at a zero bbox centre.) And it latches: the camera is aimed once per bake, and the parts
@@ -1323,8 +1323,8 @@ pub(crate) fn new_target_image_sized(width: u32, height: u32) -> Image {
         // FLOAT, not `Rgba8Unorm`, is B126 (decision 0804). Quantizing *un-encoded* values to 8 bits
         // is a precision collapse exactly where the eye is most sensitive: the only display levels
         // reachable below display byte 100 are `srgb(k/255)` = 0, 13, 22, 28, 34, 38, … — ~25 steps
-        // where the 8-bit gamma backbuffer this feeds has 100. That is the reported "colors are 16
-        // bit instead of 32" banding on the glue screens' trees and skybox, measured on the
+        // where the 8-bit gamma backbuffer this feeds has 100. That is the banding that reads as
+        // 16-bit colour on the glue screens' trees and skybox, measured on the
         // histogram of a char-select capture (15 of 16 predicted ladder values hit). The pipeline's
         // *semantics* are unchanged by this — same values, same single encode downstream, just not
         // rounded to a 256-step linear grid on the way through.
@@ -1604,7 +1604,6 @@ fn test_mode(cached: &mut Option<bool>) -> bool {
 ///   one Lua round-trip later. Every *snap* sheath change — the combat auto-draw, the stand-state
 ///   stow, the descriptor apply — takes `bInstant != 0` and reaches the queue only through the
 ///   enchant-gated `0x5eed50`, which is why drawing a bow on a mob does **not** move the doll.
-///   That split is `#bugs` B324.
 /// - **An item's glow instances landing** — ours, not the reference's. Its widget duplicates a
 ///   model the world had already finished building; our `ItemVisuals` models stream in, and a key
 ///   blind to their arrival would leave a permanently-glowing weapon glowing nothing in the
@@ -1642,7 +1641,7 @@ fn bump_model_revision(
 /// re-attaches), and so does a melee weapon whose `SheatheType` is 0. The worn
 /// quiver rides `0x1a` on the same gate.
 ///
-/// [`SnapKey`] is blind to every one of them, which is the whole mechanism of `#bugs` B324: a
+/// [`SnapKey`] is blind to every one of them, which is the whole mechanism: a
 /// widget's duplicate must not notice that the world drew a weapon.
 fn sheath_lane(attach: Option<u16>) -> bool {
     matches!(attach, Some(0..=2 | 26..=28 | 30..=33))
@@ -1765,7 +1764,7 @@ impl SnapKey {
 /// breath, the two nameplates, Base, Head, the two spell hands, Special1–3, Chest — and
 /// **HandArrow (`0x23`)**, the nocked arrow. Equipment survives; effects do not.
 ///
-/// `0x23` is the one that shows up in a bug report (`#bugs` B324): our booths mirrored the
+/// `0x23` is the one that shows up in a bug report: our booths mirrored the
 /// nocked arrow onto the character-window doll, where the reference can never draw one.
 fn attach_reset(attach: Option<u16>) -> bool {
     matches!(attach, Some(0xf..=0x19 | 0x1d | 0x22 | 0x23))
@@ -2244,7 +2243,7 @@ fn sync_portraits(
 /// The key is **not** the mirrored geometry. A `<PlayerModel>` duplicates the unit's model once and
 /// renders a copy the world can no longer reach, and it re-takes that copy on four things — the
 /// pane showing, a change of dress, an explicit model event, a resize. Mirroring live put a bow
-/// drawn in combat straight onto the character sheet (`#bugs` B324); [`SnapKey`] carries the whole
+/// drawn in combat straight onto the character sheet; [`SnapKey`] carries the whole
 /// law and its byte provenance.
 fn sync_paperdoll(
     mut commands: Commands,
@@ -2617,7 +2616,7 @@ fn sync_body_booth(
         .map_or(1.0, |a| framing::pane_root_scale(a, display_aspect));
     // A changed pane aspect re-runs the same path: the camera's projection depends on it, and it
     // only ever moves once — the first frame the window is drawn.
-    // **The snapshot compare** — the whole of `#bugs` B324. This used to be `LookKey`, the
+    // **The snapshot compare.** This used to be `LookKey`, the
     // mirrored geometry, which moved the instant the world drew a weapon. It is now the
     // reference's own re-`SetUnit` set, and a draw is not in it.
     let parts_changed = booth.snap.as_ref() != Some(&key);
@@ -2667,8 +2666,8 @@ fn sync_body_booth(
                 twins: BoothTwins::default(),
             })
             .collect();
-        // The worn items' effects (decision 0822) — an equipped item's own emitters (0813, `#bugs`
-        // B118) and a held weapon's `ItemVisuals` glow (0805). Collected BEFORE the teardown for the
+        // The worn items' effects (decision 0822) — an equipped item's own emitters (0813) and a
+        // held weapon's `ItemVisuals` glow (0805). Collected BEFORE the teardown for the
         // same reason as everything else here; spawned after the model, which is what hands us the
         // joints they seat on.
         let booth_effects: Vec<BoothEffects> = effects
@@ -3356,7 +3355,7 @@ mod tests {
         )
     }
 
-    /// **`#bugs` B324, the half that removes the bow.** In combat the auto-draw is a *snap*
+    /// **The half that removes the bow.** In combat the auto-draw is a *snap*
     /// (`SetSheatheState(…, bInstant != 0)`), which reaches `UNIT_MODEL_CHANGED`'s one fire site
     /// only through the enchant-gated `0x5eed50` — so the reference's doll never hears about it.
     /// Ours re-baked on the mirrored geometry, and a drawn bow IS mirrored geometry.
@@ -3449,7 +3448,7 @@ mod tests {
         assert!(bare != helmed);
     }
 
-    /// **`#bugs` B324 — the nocked arrow reached the character-window doll.** A hunter shooting in
+    /// **The nocked arrow never reaches the character-window doll.** A hunter shooting in
     /// combat has a bow at HandLeft(2) and an arrow at HandArrow(0x23); our booths mirrored both,
     /// and the reference's doll can never draw the arrow: every model widget duplicates the unit's
     /// attachment tree and then detaches `0x23` with fourteen other transient ids
@@ -3601,8 +3600,8 @@ mod tests {
     }
 
     /// **A still is never committed while the render world is still building pipelines** —
-    /// report B331, the player's own portrait baking with the face (or the hair, or the shoulder)
-    /// simply absent, "totally random", on the reporter's Windows machine.
+    /// the symptom: the player's own portrait baking with the face (or the hair, or the shoulder)
+    /// simply absent, at random, on Windows.
     ///
     /// The mechanism is not a missing asset and never shows up as one: off macOS Bevy builds each
     /// pipeline variant on the async pool, and `SetItemPipeline` answers a not-yet-built variant

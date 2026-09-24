@@ -98,7 +98,7 @@ pub(super) struct BoothLight {
 /// Reap the booth twins whose world source material died (`AssetEvent::Removed` — e.g. the
 /// map-scope teardown, `world_map::MapChange`). A twin is its own asset pinned only by this
 /// cache, so without the reap every world material ever baked through a booth would survive
-/// the teardown forever (the #bugs teleport leak, multiplied per rig). A live bake keeps its
+/// the teardown forever (the teleport leak, multiplied per rig). A live bake keeps its
 /// twin through its own `MeshMaterial3d` clone; only the dedup entry drops.
 pub(super) fn reap_dead_variants(
     mut events: MessageReader<AssetEvent<WowModelMaterial>>,

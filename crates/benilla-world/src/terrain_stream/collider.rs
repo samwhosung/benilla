@@ -501,14 +501,14 @@ mod tests {
     }
 
     /// B129 end to end, on the shipped bytes and through the real cast: a body walking east from
-    /// Goudy's pin (`.go xyz -6601.98 -531.87 335.60 0`) is stopped where 1.12.1 stops it, at the
+    /// the pin (`.go xyz -6601.98 -531.87 335.60 0`) is stopped where 1.12.1 stops it, at the
     /// chunk boundary 1.46 yd away — and the SAME world built without the walls carries it straight
     /// through, which is the report. Both halves matter: the second is the symptom reproduced, the
     /// first is it gone, and a wall built at the wrong offset would satisfy neither. Skips without
     /// client data.
     #[test]
     fn a_body_walking_east_from_the_b129_pin_is_stopped_at_the_wall() {
-        /// Goudy's pin, and the MCNK boundary the flagged chunk starts at (WoW y; east is −y).
+        /// The reported pin, and the MCNK boundary the flagged chunk starts at (WoW y; east is −y).
         const PIN: [f32; 3] = [-6601.98, -531.87, 335.60];
         const WALL_Y: f32 = 32.0 * benilla_formats::TILE_SIZE - 528.0 * CHUNK_SIZE;
         const R: f32 = 0.5;

@@ -1264,8 +1264,8 @@ fn a_kit_with_a_chain_char_proc_asks_for_a_beam_from_both_dispatcher_sites() {
 
 // ── The real-chain shooter pin (bug B307) ────────────────────────────────────────────────────
 //
-// Reported 2026-08-22: "characters don't use reload anim when using autoshot with any ranged
-// weapons (bows/crossbows/guns)" — the shooter fires from a still pose. Every link above this
+// The symptom: on Auto Shot, with any ranged weapon (bow, crossbow, gun), a shooter plays no
+// reload animation and fires from a still pose. Every link above this
 // point is tested on SYNTHETIC tables, and every router test spawns a bare unit with no
 // `NetEntity`/`ObjectStore` — so [`super::WeaponVisualSrc::caster`], the one lookup that turns a
 // PLAYER's equipped ranged weapon into the substitute visual the whole merge hangs on, returns
@@ -1485,8 +1485,8 @@ fn a_real_gun_or_crossbow_shooters_auto_shot_go_plays_attackrifle() {
     }
 }
 
-/// The START arm of the same chain — the **pull**, which is what the report calls the "reload
-/// anim": `SMSG_SPELL_START` for Auto Shot arms `CastHold { anim_id: 105 }` (LoadBow) on a bow
+/// The START arm of the same chain — the **pull**, the reload animation itself:
+/// `SMSG_SPELL_START` for Auto Shot arms `CastHold { anim_id: 105 }` (LoadBow) on a bow
 /// shooter, plus the ranged-slot marks the driver reads ([`RangedHold`], the sheath snap). One
 /// START per auto-repeat activation, so this is the clip that opens a volley.
 #[test]

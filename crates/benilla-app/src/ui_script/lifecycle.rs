@@ -633,8 +633,8 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
     });
     // **Say it out loud when an addon didn't load** (decision 1495). Every failure the walk found
     // is retained now, but a log nobody knows to open does not fix silence — and silence is the
-    // actual defect B293 reports: *"there are a lot of addons that still doesn't work"*, with
-    // nothing on screen to say which or why. Counted off the retained log rather than the walk's
+    // actual defect: addons that do not load, with nothing on screen to say which or why. Counted
+    // off the retained log rather than the walk's
     // `failures` vec so the number matches what `/errors` will show: the log deduplicates, and one
     // broken addon that fails four files should not read as four broken addons. The VM is fresh
     // per world entry, so every `Load` row here is this load's.

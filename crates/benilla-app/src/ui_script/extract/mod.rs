@@ -2579,7 +2579,7 @@ mod extract_gate_tests {
     /// half that can silently rot: the shader's `select(a, k, premultiplied)` is only correct if
     /// exactly the render-target quads carry the flag. Drop it and every additive effect the pane
     /// draws over EMPTY space is multiplied by its own zero alpha again — the R14 pauldrons' fire
-    /// gone, a weapon glow chopped at the model's silhouette (Goudy, `#bugs` 2026-07-27).
+    /// gone, a weapon glow chopped at the model's silhouette.
     #[test]
     fn a_booth_bake_quad_is_flagged_premultiplied_and_a_plain_one_is_not() {
         let mut app = app_with_marker();

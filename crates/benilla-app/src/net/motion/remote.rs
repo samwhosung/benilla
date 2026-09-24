@@ -599,8 +599,8 @@ pub(in crate::net) fn extrapolate_remote_units(
         // open-loop for a remote, which has no fall election at all. So the resolve walked a
         // watched player through the floor at 1/36 yd a frame — 1.67 yd/s at 60 fps, 3.3 at 120 —
         // onto the terrain below, where the (now deleted) settled memo froze them for the session.
-        // A standing player sends no packets, so nothing ever re-seated them: B197's fourth site,
-        // and nazriel_0's "until I move around, then it pops up back to normal".
+        // A standing player sends no packets, so nothing ever re-seated them: they stayed sunk
+        // until they moved, and then popped back up.
         //
         // Deleting the memo with the gate is the point, not a side effect: it existed only to skip
         // this resolve for a flag-still mover whose answer was proven identical (1473 §3), and the

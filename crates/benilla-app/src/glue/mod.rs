@@ -203,11 +203,11 @@ pub(crate) fn screen_scale(window: Option<&Window>) -> f32 {
 /// 1619): past the aspect its art can fill, the booth camera renders into a centred box with black
 /// bars either side, and a chrome node anchored `right: 0` against the *window* lands out in the
 /// bar — the logo, the version line, Realmlist/Quit, the character list and Delete/Back all did, at
-/// 21:9 (Henhouse's 3440×1440 report). 1619 wrote that residue down and left it; this is the
+/// 21:9 (3440×1440). 1619 wrote that residue down and left it; this is the
 /// answer. Anchor the chrome to the **box** — the window's height, the box's width — and the glue
 /// canvas is exactly what a reference client of the box's own aspect would lay out on, which is
-/// what the reporter's own 1.12 shots are: a 16:9 client, centred by the monitor, everything
-/// inside it.
+/// what a 1.12 client on a 21:9 monitor looks like: a 16:9 client, centred by the monitor,
+/// everything inside it.
 ///
 /// The screen's root stays full-window: the black bars are the booth camera's own *output* clear
 /// inside a window-sized render target (1619 §3), so the full-bleed scene pane that samples that
