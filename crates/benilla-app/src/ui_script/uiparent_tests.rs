@@ -297,7 +297,7 @@ fn the_font_path_globals_are_the_references_own_four() {
 /// `MouseIsOver` divides the cursor by the frame's effective scale, as the reference does
 /// (UIParent.lua l.1389-1390): a frame scaled to 0.5 whose screen footprint holds the cursor
 /// answers 1 — with the division written out (the old "the scale is the constant 1" note) it
-/// answered nil under the very cursor that had just entered it (decision 1985).
+/// answered nil under the very cursor that had just entered it.
 #[test]
 fn mouse_is_over_reads_a_scaled_frame_in_its_own_units() {
     benilla_formats::wow_data_or_skip!();

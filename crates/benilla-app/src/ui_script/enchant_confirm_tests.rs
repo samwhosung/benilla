@@ -1,4 +1,4 @@
-//! The two enchant-apply confirms (decision 0928, EnchantConfirm.xml): the Lua wiring between the
+//! The two enchant-apply confirms (EnchantConfirm.xml): the Lua wiring between the
 //! events `spell::targeting`'s item-bind gate fires and the shared StaticPopup engine, driven
 //! exactly as that gate drives it.
 //!

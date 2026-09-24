@@ -29,7 +29,7 @@
 //!   `0x7705b0` fixes the winding TL/BL/TR/BR). The product is `HSV(H, S, v)` at every row — so
 //!   `V` moves no strip pixel either. We compute the same product the other way round, one static
 //!   greyscale ramp times the hue tint, which is exact because **this pass composites in gamma
-//!   bytes** (decision 0254): the quad's `color × texel` multiply *is* the client's.
+//!   bytes**: the quad's `color × texel` multiply *is* the client's.
 
 use benilla_ui::widget::ColorSelectState;
 
@@ -236,7 +236,7 @@ mod tests {
 
     /// The ramp times its tint reproduces `hsv_to_rgb` at that row's `V` — the identity the whole
     /// two-static-images design rests on, and the reason this can be one image instead of one per
-    /// hue. Checked in the gamma space both sides live in (decision 0254).
+    /// hue. Checked in the gamma space both sides live in.
     #[test]
     fn the_ramp_times_its_tint_is_the_colour_at_that_brightness() {
         let (_, h, rgba) = ramp_pixels();

@@ -1,5 +1,5 @@
 //! The shipped `assets/ui/OptionsFrame.xml` — the era-shaped, 1.12-skinned options window
-//! (0950: the shell; 0957: the Audio page; 0959: the Graphics page; 0978: the 1.12-native
+//! (the shell; 0957: the Audio page; 0959: the Graphics page; 0978: the 1.12-native
 //! skin — no era extraction, every texture from the MPQ chain; 0981: the 1.14 System-window
 //! dialog chrome — translucent dark ground, outline boxes, hairline dividers; 0984: the 1.14
 //! select/hover wash mechanism, the working era search; 0985: the provenance split those
@@ -49,7 +49,7 @@ fn harness_on(mut s: UiScript) -> UiScript {
     for file in [
         "Interface\\FrameXML\\Fonts.xml",
         // Every panel window declares `parent="UIParent"`, resolved at LOAD — so UIParent has to
-        // exist by the time they are read, exactly as it does in the manifest (decision 1734).
+        // exist by the time they are read, exactly as it does in the manifest.
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
@@ -219,7 +219,7 @@ fn the_close_button_hides_the_window() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The row wash (0984: the 1.14 OptionsListButtonTemplate mechanism, verbatim — ONE
+/// The row wash (the 1.14 OptionsListButtonTemplate mechanism, verbatim — ONE
 /// UI-QuestLogTitleHighlight quad in ADD blend, two tints): the selected row's wash draws
 /// additive in the LOCKED GOLD (1,1,0) at the era plate seat (187x21 — sized once in
 /// OptionsCategoryRow_OnLoad); a moved selection reseats the single gold quad lower; and
@@ -403,7 +403,7 @@ fn the_ground_dim_draws_over_the_tile_and_clear_of_the_rope() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Search (0984: the era SettingsPanel mechanism transcribed): typing reflows the LIVE
+/// Search (the era SettingsPanel mechanism transcribed): typing reflows the LIVE
 /// matching rows under a clickable category head — a matched CHILD pulls its parent volume
 /// row in above it (the era parentInitializer rule) — the title reads "Search Results" and
 /// Defaults hides; clearing the box lands every row back on its authored XML chain exactly
@@ -587,7 +587,7 @@ fn a_head_click_ends_the_search_and_a_miss_shows_no_results() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The bar IS the control (0989: steppers cut by the director's call; the engine's
+/// The bar IS the control (steppers cut by the director's call; the engine's
 /// track-press law): a LeftButton press on the slider's track — off the thumb — seats the
 /// thumb under the cursor (the value jumps, the CVar write queues), the SAME press keeps
 /// dragging (0250 §5's capture began), and the stepper buttons no longer exist.
@@ -719,7 +719,7 @@ fn audio_harness() -> UiScript {
     s
 }
 
-/// The Combat page's harness (decision 1134, 1964): the family's defaults are the window's own
+/// The Combat page's harness: the family's defaults are the window's own
 /// file-scope block (the reference's UIOptionsFrame.lua l.135-152), and the addon they drive is
 /// `Blizzard_CombatText` off the chain, loaded on demand by the master row's apply.
 fn combat_harness() -> UiScript {
@@ -748,7 +748,7 @@ fn load_definers(s: &UiScript, files: &[&str]) {
     }
 }
 
-/// The Interface page's harness (decision 1136), the same posture as `combat_harness` above: the
+/// The Interface page's harness, the same posture as `combat_harness` above: the
 /// **real** definers ahead of the window, in the manifest's own order, so each row captures the
 /// same file-scope value it captures in the client. `SHOW_NEWBIE_TIPS` is set by our own
 /// `assets/ui/OptionsFrame.xml` (it lived in our `GameTooltip.xml` until the tooltip went stock,
@@ -833,7 +833,7 @@ fn interface_harness() -> UiScript {
     harness_on(s)
 }
 
-/// The Chat page's harness (decision 1589), the same posture as `combat_harness`: the **real**
+/// The Chat page's harness, the same posture as `combat_harness`: the **real**
 /// `ChatFrame.xml` ahead of the window, so the *Remove Chat Hover Delay* row captures the same
 /// file-scope `REMOVE_CHAT_DELAY = "0"` and the same `ChatFrame_ApplyMouseOverDelay` it captures in
 /// the client. Its own chain is the manifest's: `UIParent.xml` for the managed bottom stack the
@@ -1067,7 +1067,7 @@ fn the_checkbox_rows_write_flags_and_the_master_greys_ambience() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The background-sound row (decision 1847): the one Audio row 1.12 has no checkbox for. It
+/// The background-sound row: the one Audio row 1.12 has no checkbox for. It
 /// boots UNCHECKED — the reference's own behaviour, which is to go quiet in the background — and
 /// its click writes the era CVar. It rides OUTSIDE the master's dependency rule, which names
 /// exactly two rows in `SoundOptionsFrame_UpdateDependencies` and never grew a third.
@@ -1151,7 +1151,7 @@ fn defaults_resets_the_audio_page_to_registered_defaults() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Selecting Graphics shows ITS page body (0959) with both 1.12 sliders reading the table:
+/// Selecting Graphics shows ITS page body with both 1.12 sliders reading the table:
 /// uiScale on the 0.64..1.0 panel range with the percent readout, farclip (Terrain Distance —
 /// retired 0961, back 1513) on 177..777 with the raw-yards readout. The swap works both ways —
 /// Audio's body takes over when clicked.
@@ -1347,7 +1347,7 @@ fn the_vertical_sync_row_reads_and_writes_the_present_mode_cvar() {
 /// Environment Detail is the reference's own slider (1649): 0..2 step 1 over `WorldDetail`, with
 /// 0992's Low/Medium/High names kept in the readout seat — a groove whose readout says "1" tells a
 /// player nothing. Dragging writes the CVar; a value from outside the range shows the nearest stop
-/// **The Brightness slider actually writes** (decision 2182, and the bug that shipped with it).
+/// **The Brightness slider actually writes** (and the bug that shipped with it).
 ///
 /// This row is the kit's first slider whose store is an engine PAIR rather than a CVar or a
 /// saved-variable global — 1.12's own arrangement for its slider 6 — and
@@ -1496,10 +1496,10 @@ fn the_world_detail_slider_writes_the_cvar_and_the_readout_names_its_stop() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The Nameplates page (0992 — live at last): the three 1.12 UnitName* checkbox rows read the
+/// The Nameplates page (live at last): the three 1.12 UnitName* checkbox rows read the
 /// table on select and write their flags on the interface panel's own click kit (checked →
 /// CheckBoxOn; these rows carry no soundQuirk).
-/// **A world entry must leave the saved nameplate setting alone** (decision 2132) — the report,
+/// **A world entry must leave the saved nameplate setting alone** — the report,
 /// on the real manifest with a real CVar table, which is the one combination no test had.
 ///
 /// `UIParent_OnEvent` calls `UpdateNameplates()` twice per entry — `UIParent.lua` l.234
@@ -1676,7 +1676,7 @@ fn the_nameplates_page_toggles_the_unit_name_cvars() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The uiScale row DEFERS (0961, era CommitFlag.Apply transcribed): moves snap to the 1.12
+/// The uiScale row DEFERS (era CommitFlag.Apply transcribed): moves snap to the 1.12
 /// 0.01 grid and update the readout, but the CVar does not move — the Apply button appears
 /// instead, commits the pending value on click, and disappears. Dragging back onto the
 /// committed value clears the pending without a commit (era's IsModified).
@@ -1719,7 +1719,7 @@ fn the_ui_scale_slider_defers_to_the_apply_button() {
         .eval::<bool>("return BenillaOptionsFrameApplyButton:IsEnabled() ~= 0")
         .unwrap());
 
-    // A second move re-stages the pending value — still nothing queues (0989: the steppers
+    // A second move re-stages the pending value — still nothing queues (the steppers
     // are gone; a drag's SetValue is the remaining move).
     s.run("BenillaOptionsFrameContainerBodyGraphicsRowUiScaleControlSlider:SetValue(0.8)")
         .unwrap();
@@ -1753,7 +1753,7 @@ fn the_ui_scale_slider_defers_to_the_apply_button() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Render Scale** (decision 1639) — benilla's own Graphics row, and since 1648 the page's ONLY
+/// **Render Scale** — benilla's own Graphics row, and since 1648 the page's ONLY
 /// antialiasing control: the reference's own Multisampling row was pulled on the director's call,
 /// leaving `gxMultisample` reachable as a CVar and `$WOW_MSAA` but off the page.
 ///
@@ -2375,7 +2375,7 @@ fn the_page_scroll_bar_wears_the_trough_with_its_arrows_in_the_sockets() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-// ── B223 · the row tooltips (decision 1054) ─────────────────────────────────────────────────────
+// ── B223 · the row tooltips ─────────────────────────────────────────────────────
 
 /// Hover the middle of a named row's LABEL half (left of the control column) — the surface the
 /// reporter's cursor was on when the row lit and said nothing. Callers pin `ERA_WINDOW_SCALE = 1`
@@ -2391,7 +2391,7 @@ fn hover_label(s: &mut UiScript, frame: &str) {
 }
 
 /// Bring `frame` inside the page's scroll rect, if the page scrolls at all. A page longer than
-/// its area clips everything past the fold (B217), so a row down there cannot be hovered where its
+/// its area clips everything past the fold, so a row down there cannot be hovered where its
 /// rect says it is — the cursor lands outside the scroll frame and hits nothing. Nine of the
 /// Controls page's sixteen rows and the last of Combat's seventeen live there since 2180.
 fn scroll_into_view(s: &mut UiScript, frame: &str) {
@@ -2776,7 +2776,7 @@ fn every_flavor_of_row_raises_its_plate_from_the_page_it_lives_on() {
     assert_eq!(raised, 78, "every row but Auto Loot raises a description");
 }
 
-/// The **Combat page** (decision 1134) — the first rows in this window whose store is a
+/// The **Combat page** — the first rows in this window whose store is a
 /// saved-variable GLOBAL rather than a CVar, and so the first thing that can change any of the
 /// stock globals 1128 ported. The page is 1.12's AdvancedOptionsCombatText box: it reads the
 /// globals on select, a click writes the global (and *nothing* reaches the CVar table), and each
@@ -3072,7 +3072,7 @@ fn what_the_combat_page_writes_survives_a_restart() {
     );
 }
 
-/// The **Action Bars page**'s lock row (decision 1136) — the one global on that group whose store
+/// The **Action Bars page**'s lock row — the one global on that group whose store
 /// is a uvar. It is also the page whose setting had to be BUILT first: 1134 §3 listed
 /// `LOCK_ACTIONBAR` as "not defined, and no guard exists". The five switches above it are 1500's
 /// and have their own test below.
@@ -3138,7 +3138,7 @@ fn the_action_bars_page_locks_the_real_bar() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **Interface page** (decision 1136) — the second store's second page, and the three globals
+/// The **Interface page** — the second store's second page, and the three globals
 /// 1134 §3 named as ready: already defined, already consumed, needing only a row. Each box reads
 /// its definer's own file-scope assignment, and a click writes the global and touches nothing else.
 ///
@@ -3210,7 +3210,7 @@ fn the_interface_page_writes_the_three_stock_globals() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **target-of-target pair** (decision 1576) — the Interface page's first dependent rows and
+/// The **target-of-target pair** — the Interface page's first dependent rows and
 /// the window's first `uvar` DROPDOWN. Three things here belong to no other row:
 ///
 /// * the picker is dead while the switch is off, which is 1.12's own rule for exactly this pair
@@ -3317,7 +3317,7 @@ fn the_target_of_target_rows_gate_each_other_and_write_their_globals() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **equipment-display rows** — Show Cloak and Show Helm (decision 1472, B123). They are the
+/// The **equipment-display rows** — Show Cloak and Show Helm. They are the
 /// window's third kind of row and the only one with no store at all: the preference is a bit of the
 /// character's own server-side `PLAYER_FLAGS`, so the row reads an engine getter and writes an
 /// engine setter, 1.12's own `func`/`setFunc` pair for exactly these two entries.
@@ -3399,7 +3399,7 @@ fn the_equipment_display_rows_read_and_write_through_the_api_not_a_store() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Show Tutorials** (decision 2077) — the fourth `func` row, and the one 1.12's own table hides:
+/// **Show Tutorials** — the fourth `func` row, and the one 1.12's own table hides:
 /// its `UIOptionsFrameCheckButtons` entry is a bare `{ index = 28 }`, so a reading of the table
 /// alone (decision 1140's census) files it as unbound. The store is the three special-case arms —
 /// `TutorialsEnabled()` reads it, `ResetTutorials()`/`ClearTutorials()` write it — which is what
@@ -3653,7 +3653,7 @@ fn a_saved_switch_with_a_side_effect_is_applied_when_the_variables_land() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **Buff Durations** row (decision 1139) — the first setting in this window whose value has a
+/// The **Buff Durations** row — the first setting in this window whose value has a
 /// consequence nothing re-derives on its own, and so the first to carry an `applyFunc`. The timer
 /// text needs no hook (the bar re-decides it every frame), but the ROW PITCH is stated once: with
 /// timers the buff bar's three rows sit 45px apart, without them 35px — the reference's own two
@@ -3727,12 +3727,12 @@ fn the_buff_durations_row_repitches_the_bar_and_the_pitch_survives_a_restart() {
     );
 }
 
-/// **Every category in this window now leads somewhere** (decision 1139). Chat — which was called
+/// **Every category in this window now leads somewhere**. Chat — which was called
 /// `Social` until 1589 — was the last one
 /// that opened onto an empty page, and the arc that started at 1134 — rows over the second store —
 /// closes here: Controls, Interface, Action Bars, Combat, Chat, Nameplates, Graphics and Audio
 /// all carry rows, and Keybindings runs its own machinery. A category added without a page fails
-/// this, which is the point: the honest tree (0950) is now a property the test holds, not a
+/// this, which is the point: the honest tree is now a property the test holds, not a
 /// promise the reader has to check.
 ///
 /// The Defaults guard is keyed on ROWS, not on the category being real, so it is pinned directly
@@ -3781,7 +3781,7 @@ fn the_defaults_button_is_armed_by_rows_not_by_a_category() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **Chat page**'s two bubble switches (decision 1139; the page was `Social` until 1589 grew
+/// The **Chat page**'s two bubble switches (the page was `Social` until 1589 grew
 /// it into 1.12's own `CHAT_LABEL` box) — and the last category in
 /// this window to stop opening onto nothing. Both are CVar rows: `chat_bubble.rs` transcribed the
 /// client's `ChatBubbles`/`ChatBubblesParty` spawn gate faithfully in 0598 and then froze it at a
@@ -3790,7 +3790,7 @@ fn the_defaults_button_is_armed_by_rows_not_by_a_category() {
 /// click queues the flag the host drains onto `BubbleConfig`, and the two are independent (the
 /// client gates party lines on their own CVar, which is why party bubbles survive turning
 /// say/yell bubbles off).
-/// **Disable Spam Filter** (decision 2077) — the reference's own *inverted* row, and the one shape
+/// **Disable Spam Filter** — the reference's own *inverted* row, and the one shape
 /// on this page that would read backwards if it were wired like its neighbours.
 ///
 /// `spamFilter` registers `"1"` (the filter ON), and the label says *Disable*: 1.12 checks the box
@@ -3834,7 +3834,7 @@ fn the_disable_spam_filter_row_is_inverted() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Profanity Filter** (decision 2077) — an ordinary CVar row, asserted because its *seat* is the
+/// **Profanity Filter** — an ordinary CVar row, asserted because its *seat* is the
 /// surprising part: 1.12 files it under Basic Options' **Display** box (CheckButton5 anchors under
 /// CheckButton66), not with the chat settings its name suggests, so it closes the Interface page's
 /// column-C chain rather than joining the Chat page.
@@ -3916,7 +3916,7 @@ fn the_chat_page_toggles_the_chat_bubble_cvars() {
         .unwrap());
 
     // Defaults walks the page back to the registered pair, which is the binary's own since 1804:
-    // `ChatBubbles` "1", `ChatBubblesParty` "0" (the party half was the director's /p ask, 0598).
+    // `ChatBubbles` "1", `ChatBubblesParty` "0" (the party half was the director's /p ask).
     // The party row was clicked ON above, so this is a real walk-back, not a no-op.
     s.run("BenillaOptionsFrameContainerDefaults:Click()")
         .unwrap();
@@ -3931,7 +3931,7 @@ fn the_chat_page_toggles_the_chat_bubble_cvars() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **Chat page**'s two new rows (decision 1589 — B246, "no chat section in options"), the two
+/// The **Chat page**'s two new rows (B246, "no chat section in options"), the two
 /// that make it 1.12's `CHAT_LABEL` box rather than a two-row bubble page.
 ///
 /// They are deliberately over *different stores*, and that is what this pins: **Remove Chat Hover
@@ -4047,7 +4047,7 @@ fn a_saved_hover_delay_is_applied_when_the_variables_land() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Status Bar Text** (decision 1140) — the row that finally reaches `TextStatusBar.xml`. That
+/// **Status Bar Text** — the row that finally reaches `TextStatusBar.xml`. That
 /// file has been transcribed whole since 1082, with a `CVAR_UPDATE` watcher and a `statusBarText`
 /// read on every repaint, and nothing in the client could move the variable: `GetCVar` answered nil
 /// for a key the host never registered, which reads as off. So the numerals were hover-only, with
@@ -4109,7 +4109,7 @@ fn the_status_bar_text_row_pins_the_numerals_the_moment_it_is_clicked() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Mouse Sensitivity** (decision 1140) — the Controls page's first slider, and the third frozen
+/// **Mouse Sensitivity** — the Controls page's first slider, and the third frozen
 /// constant this arc has unfrozen: the camera's radians-per-pixel rate was a `const` with no way
 /// to reach it. 1.12's own row (`UIOptionsFrameSliders`' MOUSE_SENSITIVITY): 0.5 … 1.5 by 0.05,
 /// a multiplier, so the registered default 1 is the shipped feel and the percent readout reads it
@@ -4165,7 +4165,7 @@ fn the_mouse_sensitivity_slider_snaps_to_the_reference_step() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Max Camera Distance** (decision 1140) — the fourth frozen constant, and the one with a wrinkle
+/// **Max Camera Distance** — the fourth frozen constant, and the one with a wrinkle
 /// worth pinning: 1.12 stores a FACTOR over `cameraDistanceMax`'s 15 yd base, so the value that
 /// persists is `1.0 … 2.0` while the thing the player is choosing is a distance. The readout shows
 /// the distance; the CVar carries the factor.
@@ -4245,7 +4245,7 @@ fn the_max_camera_distance_slider_stores_a_factor_and_reads_out_yards() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Camera Following Style** (decisions 1493/1502) — 1.12's `cameraSmoothStyle`, worn as a
+/// **Camera Following Style** — 1.12's `cameraSmoothStyle`, worn as a
 /// Controls-page dropdown, and the setting that decides whether the camera returns to behind the
 /// character at all. What is pinned here is the trap: the reference's own dropdown writes `1/2/3`,
 /// but the ENGINE's tables are indexed `0 = Never · 1 = Smart · 2 = Always`, and `3` is not a style
@@ -4371,7 +4371,7 @@ fn the_camera_following_style_dropdown_carries_the_engine_enum_and_plate() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **Action Bars page's five switches** (decision 1500) — the four bar toggles and the grid
+/// The **Action Bars page's five switches** — the four bar toggles and the grid
 /// option, on ONE page over TWO different stores, which is the whole point of the test.
 ///
 /// The four bar rows are API (`func`) rows: there is nothing local to save, because the preference
@@ -4536,7 +4536,7 @@ fn the_action_bars_page_toggles_the_real_bars() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-// ── The window tabs (decision 2028) ─────────────────────────────────────────────────────────────
+// ── The window tabs ─────────────────────────────────────────────────────────────
 
 /// A measurer that models the one property `FixedWidthFont` throws away: **glyph advances step to
 /// whole physical pixels**, so a label is not proportionally the same width at two scales. Six
@@ -4649,7 +4649,7 @@ fn without_a_seated_measurer_the_same_fit_reads_zero() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-// ── The reference table's CVar census (decision 2077) ────────────────────────────────────────────
+// ── The reference table's CVar census ────────────────────────────────────────────
 //
 // `UIOptionsFrameCheckButtons` in `OptionsFrame.xml` is a transcription of the reference's own
 // table (`UIOptionsFrame.lua` l.4-84), and every entry names its store. Twenty-eight of them name a
@@ -4704,7 +4704,7 @@ const UNBACKED_REFERENCE_CVARS: &[(&str, &str)] = &[
 ];
 
 /// **Every CVar the reference's own options table names is registered here, or listed above with
-/// the feature it waits on** (decision 2077) — the check that turns 1140 §4's prose census into
+/// the feature it waits on** — the check that turns 1140 §4's prose census into
 /// something that cannot rot, in both directions.
 ///
 /// This is the instrument for the whole class: a table entry that names a CVar benilla does not
@@ -4784,7 +4784,7 @@ fn every_cvar_the_reference_table_names_is_registered_or_listed_with_its_blocker
 }
 
 /// **Nothing the reference lets a player change, and this client backs, is out of reach**
-/// (decision 2180) — the other half of the census above, and the half that was missing.
+/// — the other half of the census above, and the half that was missing.
 ///
 /// The test above asks the ENGINE's question: is the CVar registered? It was green the entire time
 /// the four camera toggles had no box on any window a player can open. 2149 built their

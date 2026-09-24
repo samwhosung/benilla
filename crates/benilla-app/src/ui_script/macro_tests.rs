@@ -20,7 +20,7 @@ use benilla_ui::script::{CursorPayload, UiScript};
 /// `MacroFrame_Update`, and that function merely *highlights* whichever macro is already selected —
 /// it never assigns `MacroFrame.selectedMacro`. Our retired file added a benilla-only
 /// `BenillaMacroFrame_EnsureSelection` that picked the first one, and every test here leaned on it
-/// without saying so (decision 1848). A player clicks; so do these.
+/// without saying so. A player clicks; so do these.
 fn select_first(s: &UiScript) {
     s.run("MacroButton1:Click()").unwrap();
 }
@@ -29,7 +29,7 @@ fn select_first(s: &UiScript) {
 ///
 /// The character tab's label is built in its own `OnLoad` — `format(CHARACTER_SPECIFIC_MACROS,
 /// UnitName("player"))` — so the name has to be in place BEFORE the load, not after it. That is
-/// also why the name is how a test chooses the label's width (decision 1848).
+/// also why the name is how a test chooses the label's width.
 fn harness_named(player: &str) -> UiScript {
     harness_with(player)
 }
@@ -71,7 +71,7 @@ fn harness_with(player: &str) -> UiScript {
     // host font engine is installed — which `ui_script::extract` does (`AtlasMeasurer`). Without
     // one the measure is pending, the width reads 0, and the stock file never re-runs TabResize
     // because the reference's own measure is synchronous. This harness used to model the async
-    // round trip and lean on our retired file's OnUpdate re-check (decision 1848).
+    // round trip and lean on our retired file's OnUpdate re-check.
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
 
     // `CHARACTER_SPECIFIC_MACROS` is a `%s` template the character tab formats
@@ -86,7 +86,7 @@ fn harness_with(player: &str) -> UiScript {
         }),
     );
     // Through the shared loader, because the window is off the chain now and a private disk-only
-    // reader cannot name it (decision 1848).
+    // reader cannot name it.
     for file in [
         r"Interface\FrameXML\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
@@ -200,7 +200,7 @@ fn typing_a_body_and_closing_the_window_commits_it() {
     s.run(r#"MacroFrameText:SetText("/cast Ambush\n/say pew")"#)
         .unwrap();
     // The window's dirty flag comes from the box's `OnTextChanged`, which the drain owes until the
-    // next frame (decision 1831).
+    // next frame.
     s.tick(0.0);
     no_errors(&s, "type");
     assert!(
@@ -329,8 +329,8 @@ fn dragging_a_macro_button_loads_the_cursor_with_the_macro_payload() {
     select_first(&s);
 
     // A REAL drag gesture — press, then move — the way `bag_tests` drives one. Calling
-    // `GetScript("OnDragStart")(button)` leaves `this` nil, and the stock handler reads it
-    // (decision 1848); our retired file's took the button as an argument.
+    // `GetScript("OnDragStart")(button)` leaves `this` nil, and the stock handler reads it;
+    // our retired file's took the button as an argument.
     s.resolve();
     let (bx, by): (f32, f32) = s.eval("return MacroButton1:GetCenter()").unwrap();
     s.mouse_button(bx, by, "LeftButton", true);
@@ -400,7 +400,7 @@ fn the_icon_chooser_shows_the_pushed_list_and_hides_its_tail() {
 /// so has no width anyone can know when the window is written. The reference's answer is the −15
 /// padding on both and a 150 cap on tab 2; this pins both arms, including the cap actually engaging.
 ///
-/// **Driven through a SYNCHRONOUS measurer, and that is a correction** (decision 1848). This used
+/// **Driven through a SYNCHRONOUS measurer, and that is a correction**. This used
 /// to feed widths through the async round trip and lean on our retired file's OnUpdate re-check.
 /// The stock window has no such re-check: its tabs call `PanelTemplates_TabResize` once, in their
 /// own OnLoad, and the reference's measure is inline — so a client whose measure is pending at that
@@ -513,7 +513,7 @@ fn the_icon_choosers_scroll_bar_sits_on_the_popup_plate() {
 // `pump_measures` stood here: it answered the measure round-trip every frame so a fit that
 // OSCILLATED would show. Nothing oscillates now and nothing can — this harness installs a
 // synchronous measurer, because the app does (`AtlasMeasurer`), and the stock tabs size themselves
-// once in their own OnLoad with no re-check to converge. Decision 1848.
+// once in their own OnLoad with no re-check to converge.
 
 /// **The tab row is stable and inside the window, frame after frame** — the director's repro
 /// (2026-08-05: a 9-character character name, "tab is still slightly overlapping"), and the check
@@ -528,7 +528,7 @@ fn the_icon_choosers_scroll_bar_sits_on_the_popup_plate() {
 fn the_tab_row_settles_and_stays_inside_the_window() {
     let _data = benilla_formats::wow_data_or_skip!();
     // The name is chosen at construction, because the stock tab builds its label in its own
-    // OnLoad; and there is no measure round trip to pump any more (decision 1848). The loop stays:
+    // OnLoad; and there is no measure round trip to pump any more. The loop stays:
     // "it does not change every frame" is still the property, it is just satisfied on the first
     // pass now rather than after a convergence.
     let mut s = harness_named("Onehunter");
@@ -622,7 +622,7 @@ fn the_tab_highlight_is_exactly_its_tab() {
     // hold the same property.
     for name in ["Ai", "Onehunter", &"W".repeat(40)] {
         // The name is chosen at construction (the stock tab labels itself in its own OnLoad) and
-        // there is no measure round trip to pump — decision 1848. The frame loop stays: the
+        // there is no measure round trip to pump. The frame loop stays: the
         // highlight tracking its tab on EVERY frame is the property, not just on the first.
         let mut s = harness_named(name);
         s.run("ShowMacroFrame()").unwrap();
@@ -655,7 +655,7 @@ fn the_tab_highlight_is_exactly_its_tab() {
                 // run, and the reference uses it deliberately: `FriendsFrame.xml:610`/`:899` copy
                 // both template lines while `:626`/`:881` declare none — a controlled pair in one
                 // file. Our retired transcription made the two tabs agree; the migration reverts
-                // that (decision 1848).
+                // that.
                 let label: f64 = s
                     .eval(&format!("return {tab}Text:GetStringWidth()"))
                     .unwrap();
@@ -674,7 +674,7 @@ fn the_tab_highlight_is_exactly_its_tab() {
                 // …and seated where the reference seats it: `TabButtonTemplate` anchors the
                 // highlight `BOTTOM` with a `(2, -8)` offset, so it is **CENTRED** on the tab and
                 // nudged 2 right — not left-aligned at `tl + 2`, which is what this asserted while
-                // the template was ours (decision 1848). With the overhang above, centring is what
+                // the template was ours. With the overhang above, centring is what
                 // keeps the extra 14 units split evenly rather than all trailing off one end.
                 assert_eq!(
                     (hl + hr) / 2.0,
@@ -694,7 +694,7 @@ fn the_tab_highlight_is_exactly_its_tab() {
 /// `ClassTrainerFrameTemplates.xml` while the shipped manifest did not. The window worked here and
 /// was broken in the client. What catches THAT is
 /// `every_template_the_manifest_inherits_is_declared_by_the_manifest`, plus the end-to-end drive in
-/// `shipped_xml_tests`. Decision 1862.
+/// `shipped_xml_tests`.
 ///
 /// The raise it reproduced:
 ///

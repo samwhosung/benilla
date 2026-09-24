@@ -174,7 +174,7 @@ fn the_poi_pool_grows_and_parks_its_tail() {
 /// Hovering a POI names it in the map's area label; the description line beneath carries the
 /// landmark's status only when it has one — the guard's directions never do, a battleground
 /// node's "In Conflict" would — and is blanked otherwise (stock `WorldMapPOI_OnEnter`), which
-/// reads back as **nil**, not `""` (decision 2110).
+/// reads back as **nil**, not `""`.
 #[test]
 fn hovering_a_poi_names_it_and_adds_a_status_line_only_when_there_is_one() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -511,7 +511,7 @@ fn the_maps_own_furniture_survives_the_hide_that_showing_it_performs() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -576,7 +576,7 @@ fn the_maps_own_furniture_survives_the_hide_that_showing_it_performs() {
 /// tooltip). On a window narrower than 4:3 the stock `SetupFullscreenScale` scales the map
 /// under 1 (0.802 here); `WorldMapUnit_OnEnter` then asks `MouseIsOver(WorldMapPlayer)` for the
 /// text, which read the cursor against the blip's own-unit edges without the reference's scale
-/// division and answered nil — a tooltip with no lines (decision 1985).
+/// division and answered nil — a tooltip with no lines.
 #[test]
 fn hovering_the_player_blip_on_a_scaled_map_names_the_player() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -630,7 +630,7 @@ fn hovering_the_player_blip_on_a_scaled_map_names_the_player() {
 /// The stock file creates those overlays as `WorldMapDetailFrame:CreateTexture(…, "ARTWORK")`
 /// (`WorldMapFrame.lua:108`) and the arrow as a `Model` child of `WorldMapFrame`
 /// (`WorldMapFrame.lua:15`) — two frames at the SAME level, and inside one `(strata, level)`
-/// bucket the draw layer outranks the frame (decision 0884). A frame's own slot is layer 0, so
+/// bucket the draw layer outranks the frame. A frame's own slot is layer 0, so
 /// the arrow lost to every one of those ARTWORK textures. Reproduced here with the reference's own
 /// call, and asserted as the render list's order rather than a z-key's internals.
 #[test]
@@ -831,7 +831,7 @@ fn the_real_feralas_catalog_names_dire_maul_under_the_cursor() {
 /// The reference gates both ends on `movable|resizable` as well (`0x490e97 test ah,0x3` at the
 /// writer; `0x490600 test ah,0x1` / `0x490689 test ah,0x2` at the two arms of the apply), and
 /// stock `WorldMapFrame` carries neither flag — so the stale row is inert the first session the
-/// addon does not load, and falls out of the file at that logout. Decision 2193.
+/// addon does not load, and falls out of the file at that logout.
 #[test]
 fn a_stale_layout_row_cannot_seat_a_stock_frame() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -926,7 +926,7 @@ fn the_fullscreen_quads_follow_a_resize() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1600.0, 900.0);
-    // A player exists by the time the manifest loads (decision 1848; see the test above).
+    // A player exists by the time the manifest loads (see the test above).
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {

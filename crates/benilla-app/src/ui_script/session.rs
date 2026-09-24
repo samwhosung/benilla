@@ -1,7 +1,7 @@
 //! **What the host remembers about the VM, and how it forgets.**
 //!
 //! The UI VM does not live for the process — it is built at world entry and destroyed at the
-//! character screen, once per login (decision 1290, the reference's `0x48fbf0` ↔ `0x490bd0`). That
+//! character screen, once per login (the reference's `0x48fbf0` ↔ `0x490bd0`). That
 //! makes every host-side "I already told the VM about this" a claim with an expiry date, and there
 //! are two kinds of them:
 //!
@@ -70,7 +70,7 @@ impl<T: Default> VmMemo<T> {
     }
 
     /// [`VmMemo::get`], also reporting whether the memory RESET on this read — i.e. this is the
-    /// first read against a new VM. A gated feed (decision 1439) keys its "must run" on exactly
+    /// first read against a new VM. A gated feed keys its "must run" on exactly
     /// this: with every input unchanged, a fresh VM still needs the full re-push, and the reset is
     /// the only signal that says so. The flag is true at most once per session per memo, so a gate
     /// that ORs it in costs nothing on the steady frames it exists to skip.
@@ -221,7 +221,7 @@ mod tests {
         // a reused allocation, not memory: nothing in it survives the call it was filled in, so
         // a new VM has nothing to stale.
         ("vplates.rs", "bucket"),
-        // The window's `scale_factor` beside it (decision 1342) — the other term a measure is
+        // The window's `scale_factor` beside it — the other term a measure is
         // only correct under, since a logical height becomes an integer DEVICE-pixel raster size.
         // A fact about the window, not about the VM; it gates the same re-seat `last_seam` does,
         // and a fresh VM re-seats on `!has_text_measurer()` regardless.

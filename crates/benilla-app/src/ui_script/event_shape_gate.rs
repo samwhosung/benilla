@@ -1,5 +1,5 @@
 //! **The event ARGUMENT-shape gate** — `reference/1.12-events.tsv` against what benilla actually
-//! pushes at each fire site (decision 2140).
+//! pushes at each fire site.
 //!
 //! Two gates already guard the event seam by NAME. [`super::reference_ui`]'s
 //! `every_event_a_chain_file_registers_has_a_producer` asks whether something fires what a stock

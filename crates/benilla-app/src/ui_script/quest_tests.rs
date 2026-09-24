@@ -1,13 +1,13 @@
 //! The shipped **questgiver window** open/close sound, driven engine-only (no Bevy): the real
 //! `Interface\FrameXML\QuestFrame.xml` loaded behind `UIParent.xml` and shown/hidden through the
-//! wire events. The window-sound convention's machine check for the quest arc (decision 0090), the
+//! wire events. The window-sound convention's machine check for the quest arc, the
 //! sibling of the merchant/gossip/bag/loot sound tests.
 
 use benilla_ui::script::{QuestPanel, QuestState, ScriptValue, SoundRequest, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The questgiver window's open/close kits — the window-sound convention (decision 0090). The real
+/// The questgiver window's open/close kits — the window-sound convention. The real
 /// QuestFrame.lua plays igQuestListOpen in QuestFrame_OnShow (l.285) and igQuestListClose in
 /// QuestFrame_OnHide (l.294), wired via the frame OnShow/OnHide (QuestFrame.xml l.1012/1015). A
 /// questgiver event (QUEST_DETAIL here) → ShowUIPanel → Show() fires OnShow; QUEST_FINISHED →
@@ -273,7 +273,7 @@ fn detail_panel_reward_grid_follows_the_refs_two_per_row_layout() {
 
     // The detail panel's choice rows are informational only (ref: only the REWARD panel's rows
     // select). They DO carry an OnClick now (`QuestItem_OnClick`, the ref's own
-    // QuestItemTemplate script — the ctrl/shift fork, decisions 1059/1060), but it has no select
+    // QuestItemTemplate script — the ctrl/shift fork), but it has no select
     // arm at all: an unmodified click must not raise and must not set an itemChoice.
     s.run("QuestDetailItem1:Click()").ok();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -815,7 +815,7 @@ fn greeting_panel_title_rows_grow_to_their_wrapped_titles() {
     );
 }
 
-/// The questgiver rows' modifier fork (decisions 1059/1060), on the panel where it can do the most
+/// The questgiver rows' modifier fork, on the panel where it can do the most
 /// damage: the REWARD panel, whose choice rows are also the quest's reward *selection*. Ref
 /// `QuestRewardItem_OnClick` (QuestFrame.lua:127-141) — ctrl previews, shift posts the link, and the
 /// choice SELECT is the third arm, so neither modified click may also pick the reward. The fixed

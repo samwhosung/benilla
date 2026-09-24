@@ -475,7 +475,7 @@ fn solo_target_inspect_click_reaches_inspect_unit() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-// ── The PET menu (decision 1066; report B219) ───────────────────────────────────────────────────
+// ── The PET menu (report B219) ───────────────────────────────────────────────────
 
 /// The pet menu's own prefix. What joins the popup prefix is `StaticPopup.xml` — the StaticPopup
 /// engine, because two of the four rows go behind a dialog, and since 1953 where the pet arc's
@@ -801,7 +801,7 @@ fn renaming_a_pet_reads_the_name_back_before_sending_it() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The paperdoll row reaches the pet paper doll panel (decision 1057) — the fifth build the menu
+/// The paperdoll row reaches the pet paper doll panel — the fifth build the menu
 /// was blocked on, and the only row here that opens a window rather than a wire verb.
 #[test]
 fn the_pet_details_row_opens_the_pet_paper_doll() {

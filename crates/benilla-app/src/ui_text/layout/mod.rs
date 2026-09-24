@@ -103,7 +103,7 @@ pub(crate) struct FontSpec<'a> {
 /// look-defining — it is why real client text reads wider/denser than the raw font metrics.
 ///
 /// **Answered in PHYSICAL device pixels** (the ppem the face is actually rasterized at); the caller
-/// divides back to logical **once**, at the end of the line (decision 1644) — because that is where
+/// divides back to logical **once**, at the end of the line — because that is where
 /// the real client's law lives: `FT_advance >> 6` floors the device-pixel advance and the `+1`/`+1`
 /// biases are whole *device* pixels. Flooring in logical px
 /// instead (the pre-fix shortcut) over-tracks on any window where `dpi ≠ 1`: at retina a
@@ -150,8 +150,8 @@ fn snap_block_top_law(y: f32) -> f32 {
 }
 
 /// The director's seat nudge: every UI FontString's text block sits one px LOWER than the byte
-/// law's row. A deliberate **taste deviation** (decision 0351 — the 0104/0235 precedent: the
-/// director's eye outranks the byte reading): the law is triple-confirmed (0338/0346), yet UI text
+/// law's row. A deliberate **taste deviation** (the 0104/0235 precedent: the
+/// director's eye outranks the byte reading): the law is triple-confirmed, yet UI text
 /// consistently reads high on the director's display; this is their call, applied at the one seat
 /// every UI FontString shares ([`snap_block_top`] — world text's degenerate rects skip it, keeping
 /// nameplates/combat text on their own approved seats). Rendering only — measures, wrap, and the
@@ -258,7 +258,7 @@ fn layout_text_quads_inner(
     let e = &*e;
     let dpi = e.dpi();
     let sheet = e.sheet_image();
-    // **The line rounds ONCE, and the glyphs are integer device offsets from it** (decision 1644).
+    // **The line rounds ONCE, and the glyphs are integer device offsets from it**.
     //
     // Glyph edges must land on device pixels — the same integer-device-pixel placement the real
     // client does — or the cell is resampled instead of blitted. Everything a glyph contributes to
@@ -280,7 +280,7 @@ fn layout_text_quads_inner(
     // position by a non-integer factor, giving every letter its own sub-pixel phase.)
 
     // The render lays the same lines the measure counted, or a MIDDLE-justified block seats
-    // against a height it does not have ([`fontstring_lines`], decision 1343).
+    // against a height it does not have ([`fontstring_lines`]).
     let lines = fontstring_lines(text, base_color);
     // The THICK ink rise: the client's THICK quad shift (−2, `0x5cd0e1`) against its blit's baked
     // seat nets the INK **1 row above** the plain baseline law; NORMAL cancels exactly
@@ -508,7 +508,7 @@ mod seat_tests {
 
     #[test]
     fn the_seat_is_the_law_plus_the_directors_nudge() {
-        // The drawn seat = the byte law + the 1px taste nudge (decision 0351, director's call).
+        // The drawn seat = the byte law + the 1px taste nudge (director's call).
         assert_eq!(snap_block_top(10.5), snap_block_top_law(10.5) + 1.0);
         assert_eq!(snap_block_top(0.0), 1.0);
     }
@@ -745,7 +745,7 @@ mod measure_fits_render {
 
     /// **One line is ONE baseline — at every DPI, size and seat.**
     ///
-    /// The emit pass's whole claim (decision 1342) is that a line is flat *by construction*: one
+    /// The emit pass's whole claim is that a line is flat *by construction*: one
     /// `pen_y`, an integer physical `bearing_top` per glyph, so every letter rounds by the same
     /// residual. That is true in exact arithmetic and it was NOT true in `f32` — `snap(pen_y −
     /// bt/dpi)` rounds a per-glyph sum, and at a **fractional** scale factor (Windows 150 %,

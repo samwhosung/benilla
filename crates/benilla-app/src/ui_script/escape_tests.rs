@@ -195,7 +195,7 @@ fn escape_is_consumed_by_a_focused_editbox_and_leaves_windows_open() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The options rung (decision 0950; the ref's own `elseif OptionsFrame:IsVisible()` at
+/// The options rung (the ref's own `elseif OptionsFrame:IsVisible()` at
 /// UIParent.lua l.1483-1484, BETWEEN the popup rung and the menu rung): ESC with the options
 /// window up closes it — hide, not cancel-click: benilla applies changes live — and eats the
 /// press, so the menu does NOT open on the same stroke. Only the NEXT press, with nothing left
@@ -340,7 +340,7 @@ fn escape_closes_an_open_stack_split_frame() {
 }
 
 /// The ESC ladder end-to-end (the ref's `ToggleGameMenu` order, `UIParent.lua:1482-1496`, one
-/// eater per press — the director's two-press report, decision 0449): mid-cast with a menu
+/// eater per press — the director's two-press report): mid-cast with a menu
 /// open, a bag open and a target, the press closes the MENU first (`CloseMenus`, `l.1488` —
 /// the cast survives), the next only cancels the cast (`SpellStopCasting`, `l.1489`), the next
 /// only closes the windows (`CloseAllWindows`, `l.1491`), and only then — nothing left to
@@ -440,7 +440,7 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
     );
 
     // Press 4 — no target either: the chain runs out. In a full UI this press opens the game menu
-    // (decision 0674, `game_menu_tests`); this harness deliberately loads no GameMenuFrame.xml, so
+    // (`game_menu_tests`); this harness deliberately loads no GameMenuFrame.xml, so
     // what it pins is the rung BELOW it — ClearTarget answering nil rather than eating the press.
     s.set_unit("target", None);
     s.run("ToggleGameMenu()").unwrap();
@@ -451,7 +451,7 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The SpellStopTargeting rung (`UIParent.lua:1490`, decision 0792): ESC with the ground-target
+/// The SpellStopTargeting rung (`UIParent.lua:1490`): ESC with the ground-target
 /// cursor up cancels the targeting and ONLY the targeting — after the cast rung (the artifact's
 /// order), before the window close. The 1/nil returns are load-bearing exactly like the cast
 /// rung's: an idle press must fall straight through both.
@@ -515,7 +515,7 @@ fn escape_ladder_targeting_rung_after_cast_before_windows() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **`UISpecialFrames` — an addon's own ESC list** (decision 1206).
+/// **`UISpecialFrames` — an addon's own ESC list**.
 ///
 /// `tinsert(UISpecialFrames, "MyFrame")` is *the* 1.12 idiom for "ESC should close my window", and
 /// 34 corpus call sites use it. With the table absent that line was

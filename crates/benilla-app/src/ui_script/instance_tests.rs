@@ -1,4 +1,4 @@
-//! The instance-lockout **Era surface** (decision 1748): the three engine bindings, and the one
+//! The instance-lockout **Era surface**: the three engine bindings, and the one
 //! place in the shipped UI that reads them — the SELF menu's "Reset all instances" row and the
 //! `CONFIRM_RESET_INSTANCES` dialog behind it.
 //!

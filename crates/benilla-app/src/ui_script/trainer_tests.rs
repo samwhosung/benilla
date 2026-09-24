@@ -1,6 +1,6 @@
 //! The shipped **trainer window** driven end-to-end, engine-only (no Bevy): the real
 //! The reference's own `Blizzard_TrainerUI` addon — a client-sorted, collapsible **skill-line
-//! tree** with a **dropdown** state filter and a draggable **scroll bar** (decisions 0247/0251) —
+//! tree** with a **dropdown** state filter and a draggable **scroll bar** —
 //! loaded behind its deps (`UiPanels.xml` + `UIDropDownMenu.xml` + `ScrollTemplates.xml` +
 //! `MerchantFrame.xml` for the the stock money frames) and fed a synthetic service list. Covers
 //! what only a runtime load exercises: the Lua parses and every referenced global resolves, the
@@ -18,7 +18,7 @@ use super::test_ui::load_ui as load_xml;
 /// Load the trainer window + all its deps into a fresh script, screen sized, with every state filter
 /// ON (the XML defaults "Already Known" off — the tests want the full tree, deterministic indices).
 ///
-/// The filter's source of truth is the three **saved globals** (decision 1128), which the window
+/// The filter's source of truth is the three **saved globals**, which the window
 /// pushes into the engine on every show — so a test that wants the full tree sets those, not the
 /// engine's own `SetTrainerServiceTypeFilter`, which the next `TRAINER_SHOW` would overwrite.
 fn trainer_script() -> UiScript {
@@ -595,8 +595,7 @@ fn wheel_over_a_row_scrolls_the_list() {
 /// (which whitens only the subtext)". The ref whitens the subtext *by hand* precisely BECAUSE the
 /// subtext is a child FontString the lock cannot reach; the name it leaves to the lock. Ours could
 /// not, because the name was a child FontString too and the engine's highlighted label fell back to
-/// the normal state's colour — so the white was hand-painted here and absent on hover entirely
-/// (decision 1605).
+/// the normal state's colour — so the white was hand-painted here and absent on hover entirely.
 #[test]
 fn a_selected_or_hovered_service_row_paints_its_name_white() {
     benilla_formats::wow_data_or_skip!();
@@ -746,7 +745,7 @@ fn the_scrollbar_arrows_step_the_list_the_way_they_point() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The filter is remembered across a restart** (decision 1128) — the whole persistence path, in
+/// **The filter is remembered across a restart** — the whole persistence path, in
 /// The reference's own restart, through its own mechanism (1957): the addon is a LoadOnDemand
 /// registry row read off the chain; `LoadAddOn` runs its files (file-scope defaults), then its
 /// per-addon saved file over them, then fires ADDON_LOADED — whose arm pushes the three filter
@@ -845,7 +844,7 @@ fn the_state_filter_survives_a_restart_through_the_saved_variables_file() {
 
 /// A **new list packet resets the engine's filter mask** to the builder's own default — mask 3 at a
 /// class/tradeskill/pet trainer, mask 5 (available|used) at a mount trainer — and clears the collapse
-/// set, byte-verified (decision 1128). This is the engine half of the pair above: the reset is why
+/// set, byte-verified. This is the engine half of the pair above: the reset is why
 /// the window re-pushes its saved globals on every show.
 #[test]
 fn a_new_list_packet_resets_the_filter_mask_and_the_collapse_set() {
@@ -1036,7 +1035,7 @@ fn a_long_row_name_stays_on_one_line_and_carries_its_rank_along() {
 /// Lua.
 ///
 /// The reference cannot produce this bug because it never gets a list packet with the window open —
-/// it repaints a purchase from a client-side state re-derivation (`0x4d7d40`, decision 1128 §4.2).
+/// it repaints a purchase from a client-side state re-derivation (`0x4d7d40`).
 /// benilla re-asks the server instead, so the reference's per-packet mask reset (`0x4d75d9`) was
 /// riding in on a packet the reference never sends, and taking the player's choice — and their
 /// collapsed groups, which 1128 recorded as "a collapse does not survive a purchase" — with it.
@@ -1262,7 +1261,7 @@ fn learning_a_spell_takes_the_detail_pane_with_it_instead_of_stranding_the_last_
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The filter click has to repaint the LIST, not just the engine** (decision 2244) — the
+/// **The filter click has to repaint the LIST, not just the engine** — the
 /// director's "filter no longer work", with the dropdown showing Available only and red rows still
 /// under it.
 ///

@@ -1,4 +1,4 @@
-//! The delete-item confirm popup driver (decision 0216 §3, UiPanels.xml's
+//! The delete-item confirm popup driver (UiPanels.xml's
 //! `BenillaDeleteItemConfirmDriver`) — Lua wiring the Rust-side cursor tests can't reach: the
 //! world-drop's `DELETE_ITEM_CONFIRM` showing the ref's `DELETE_ITEM` StaticPopup entry (decision
 //! 0308 §3's engine) with the real `DELETE_ITEM`/`YES`/`NO` GlobalStrings, its Yes/No/ESC routing
@@ -75,7 +75,7 @@ fn setup() -> UiScript {
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     load_xml(&s, r"Interface\FrameXML\FloatingChatFrame.xml"); // declares ChatFrameEditBox
 
-    // **The world frame, because the world drop is what raises this popup** (B380, decision
+    // **The world frame, because the world drop is what raises this popup** (decision
     // 2089). Every test here used to click at `(-50, -50)` — off-screen, over nothing — which is
     // a world click only in a house where no `WorldFrame` is loaded. The real client's is
     // full-screen and mouse-enabled, and it swallowed every one of these clicks for three days
@@ -205,7 +205,7 @@ fn delete_item_confirm_no_clears_without_destroying() {
 
     // Count repaints from here — the No-click path must trigger one via the event, not a click.
     // 5.0's vararg spelling: the implicit `arg` table forwarded with `unpack`, because `...` as a
-    // VALUE is not in this VM's grammar — it is not in the 1.12 client's (decision 2101).
+    // VALUE is not in this VM's grammar — it is not in the 1.12 client's.
     s.run(
         "repaints = 0\n\
          local real = ContainerFrame_Update\n\
@@ -363,7 +363,7 @@ fn typing_the_confirm_word_enables_okay_and_untyping_it_disables_again() {
     drop_in_world(&mut s, 871, "Flurry Axe", 4);
 
     // OKAY is enabled by the box's `OnTextChanged`, and that fire is deferred to the drain
-    // (decision 1831) — so what this answers is the button state the LAST DRAINED text produced,
+    // — so what this answers is the button state the LAST DRAINED text produced,
     // which is the state a player ever sees. Ticking here rather than after each write keeps the
     // test reading as the sequence of edits it is about.
     let enabled = |s: &mut UiScript| {
@@ -532,7 +532,7 @@ fn the_plain_arm_shows_no_edit_box() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The world drop, under the WHOLE shipped interface** — B380's own test (decision 2089).
+/// **The world drop, under the WHOLE shipped interface** — B380's own test.
 ///
 /// The nine above build a fixture out of the files the popup needs, which is what let B380 hide:
 /// a fixture is a subset of the manifest, and the file that broke this one was a file no fixture

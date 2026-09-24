@@ -1,4 +1,4 @@
-//! The duel UI (decision 0633, DuelFrame.xml): the challenge popup's show/accept/decline, the
+//! The duel UI (DuelFrame.xml): the challenge popup's show/accept/decline, the
 //! out-of-bounds warning's countdown text and its in-bounds dismissal, and the DUEL_FINISHED
 //! sweep — the Lua wiring between the four engine events `ui_duel`'s feed fires and the shared
 //! StaticPopup engine, driven exactly as that feed drives it.

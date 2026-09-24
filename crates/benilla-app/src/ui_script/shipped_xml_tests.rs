@@ -55,7 +55,7 @@ fn the_whole_shipped_manifest_loads_without_errors() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -72,7 +72,7 @@ fn the_whole_shipped_manifest_loads_without_errors() {
 }
 
 /// **Loading the UI makes no sound.** Materializing the shipped manifest is bookkeeping — nothing
-/// has opened, so nothing may be heard (decision 1033).
+/// has opened, so nothing may be heard.
 ///
 /// The defect this pins: a dropdown's `OnLoad` calls `UIDropDownMenu_Initialize`, which —
 /// faithfully, ref `UIDropDownMenu.lua` l.49-52 — *calls the init function immediately*. For the
@@ -85,7 +85,7 @@ fn the_whole_shipped_manifest_loads_without_errors() {
 ///
 /// Deliberately asserted over the WHOLE manifest rather than the popup: any future window that
 /// plays a sound from a load-time handler is the same bug, and this is where it gets caught. Sound
-/// is on by default now (decision 1026), so a load-time sound is something the director hears on
+/// is on by default now, so a load-time sound is something the director hears on
 /// every single launch.
 #[test]
 fn loading_the_shipped_ui_queues_no_sounds() {
@@ -95,7 +95,7 @@ fn loading_the_shipped_ui_queues_no_sounds() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -247,7 +247,7 @@ fn the_autocast_brackets_reach_each_buttons_corners() {
 /// its ratio is why that button reads as a rim: the rim square is 1.024x its viewport, so it runs
 /// ON the edge and the tile's cell — the widget's own scissor — halves every star (1387/1391).
 ///
-/// The spell book is **one deliberate deviation** (decision 1392). The reference writes
+/// The spell book is **one deliberate deviation**. The reference writes
 /// `scale="1.22"` into a 36-unit viewport — a 0.87x rim that floats clear of the edge, is never
 /// clipped, and washes the icon; the real 1.12 client looks the same way (director-checked), so
 /// this is taste, not fidelity. We re-seat the stock Model to 1.48 on a 37-unit rim (1393's
@@ -301,7 +301,7 @@ fn every_shipped_texture_path_resolves_in_the_client_archives() {
         // `sprite_candidates` and it cannot draw a white quad, because this engine renders no
         // FrameXML models at all. The one shipped case is the reference's `CooldownFrameTemplate`,
         // transcribed with its own attributes so an addon's `inherits=` resolves, while the sweep
-        // it drives lives in our native `<Cooldown>` widget instead (decision 0263).
+        // it drives lives in our native `<Cooldown>` widget instead.
         if el.tag.eq_ignore_ascii_case("Model") {
             return;
         }
@@ -579,7 +579,7 @@ fn every_archive_path_a_shipped_lua_chunk_names_survives_its_own_escaping() {
 }
 
 /// **Every `text=` in the shipped UI is answerable against the REAL `GlobalStrings.lua`** — the
-/// tripwire for the defect that put "CREATE_MACROS" across the macro window's title bar (0991).
+/// tripwire for the defect that put "CREATE_MACROS" across the macro window's title bar.
 ///
 /// `text=` is a global-string LOOKUP, not a literal (`FrameScript_GetText 0x703bf0`). The loader
 /// didn't do the lookup at all, so **23 key-shaped values across six windows** were rendering as
@@ -790,7 +790,7 @@ fn every_texture_frame_outranks_its_status_bars() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -935,7 +935,7 @@ fn the_font_registry_alone_covers_the_whole_bake_plan() {
             // The in-game UI materializes on world entry (1051), so a player always exists by the time the
             // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
             // into its label inside its own OnLoad. A manifest load with no player is a state the client
-            // never reaches (decision 1848).
+            // never reaches.
             s.set_unit(
                 "player",
                 Some(benilla_ui::script::UnitState {
@@ -976,7 +976,7 @@ fn the_font_registry_alone_covers_the_whole_bake_plan() {
     );
 }
 
-/// The whole shipped UI survives `VARIABLES_LOADED` (decision 1128) — the event the saved-variables
+/// The whole shipped UI survives `VARIABLES_LOADED` — the event the saved-variables
 /// load fires at every launch, and which nothing fired before this arc existed.
 ///
 /// Today no shipped file registers it, so this asserts a clean no-op; the moment one does (the
@@ -990,7 +990,7 @@ fn the_shipped_ui_takes_variables_loaded_without_a_script_error() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -1031,7 +1031,7 @@ fn every_shipped_font_object_is_published_as_a_lua_global() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -1121,7 +1121,7 @@ fn the_inheritable_reference_templates_confer_their_shape() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -1186,7 +1186,7 @@ fn the_inspect_cursor_pair_takes_both_arms() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -1263,7 +1263,7 @@ fn a_cinematic_leaves_nothing_of_the_interface_on_screen() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -1369,7 +1369,7 @@ fn every_declared_parent_really_attaches() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -1489,8 +1489,8 @@ pub(super) fn shipped_frame_names() -> Vec<String> {
 /// The distinction is the whole point. `macro_tests` stands this window up from its own file list
 /// and passed throughout, because a harness names the dependencies it needs; the manifest had not
 /// listed `ClassTrainerFrameTemplates.xml`, so in the client `MacroPopupScrollFrame` inherited a
-/// template nothing had loaded, came up bare, and `MacroPopupFrame_Update` multiplied a nil offset
-/// (decision 1862). A window is only as loaded as the manifest says.
+/// template nothing had loaded, came up bare, and `MacroPopupFrame_Update` multiplied a nil offset.
+/// A window is only as loaded as the manifest says.
 #[test]
 fn the_shipped_manifest_opens_the_macro_icon_picker() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1544,7 +1544,7 @@ fn the_shipped_manifest_opens_the_macro_icon_picker() {
 }
 
 /// **The reference's own Interface Options window is on the manifest, and it stays HIDDEN**
-/// (decision 2115) — the whole shape of that record, asserted in one place.
+/// — the whole shape of that record, asserted in one place.
 ///
 /// Four claims, and each one has a way to fail that nothing else here would catch:
 ///
@@ -1790,7 +1790,7 @@ fn the_stock_sound_options_window_loads_hidden_and_the_alias_is_gone() {
 }
 
 /// **The reference's own VIDEO options window is on the manifest, HIDDEN, it owns the
-/// `OptionsFrame` name again, and ours is still the player's** (decision 2177).
+/// `OptionsFrame` name again, and ours is still the player's**.
 ///
 /// The last of the reference's three options windows, and the only one whose arrival took a name
 /// off a file of ours — which is what makes this test different from its two siblings above.
@@ -2085,7 +2085,7 @@ fn the_stock_video_options_window_loads_hidden_and_owns_its_own_name() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The display-brightness pair** (decision 2182) — `GetGamma`/`SetGamma` and the Graphics page
+/// **The display-brightness pair** — `GetGamma`/`SetGamma` and the Graphics page
 /// row that drives them, held to the reference's own behaviour.
 ///
 /// The claim that needs an assertion rather than a comment is the **unit**: `0x4891d0` is FSUBR,
@@ -2195,7 +2195,7 @@ fn the_display_brightness_pair_speaks_the_reference_slider_unit() {
     );
 }
 
-/// **The ten names the video window's slider walk must NOT find** (decision 2177).
+/// **The ten names the video window's slider walk must NOT find**.
 ///
 /// `OptionsFrame_Load:110` and `_Save:208-209` do `getglobal("Get"..value.func)` /
 /// `("Set"..value.func)` over the nine `OptionsFrameSliders` rows and **branch on the result**: a
@@ -2249,8 +2249,7 @@ fn the_video_windows_ten_composed_names_stay_nil() {
     );
 }
 
-/// **pfUI's `UIOptionsFrame_Save()` path runs clean, and `_Load()` stops at exactly one thing**
-/// (decision 2115).
+/// **pfUI's `UIOptionsFrame_Save()` path runs clean, and `_Load()` stops at exactly one thing**.
 ///
 /// pfUI's `modules/gui.lua` l.146-148 wraps a GVAR checkbox's write in
 /// `UIOptionsFrame_Load()` … `UIOptionsFrame_Save()`, so both are reached at runtime by a real

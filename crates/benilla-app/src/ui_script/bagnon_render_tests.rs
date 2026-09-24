@@ -31,7 +31,7 @@ use benilla_ui::toc::Toc;
 
 /// The corpus **and** a client install — for the tests whose subject is a global that comes from
 /// the reference file this client SOURCES off the player's own patch chain rather than shipping
-/// ([`super::reference_ui`], decision 1234).
+/// ([`super::reference_ui`]).
 ///
 /// `corpus_or_skip!` alone is the wrong precondition for them. With the corpus present but no
 /// install, `ContainerFrameItemButton_OnEnter`/`_OnClick` are *legitimately* nil — that is the
@@ -58,7 +58,7 @@ fn read_toc(root: &Path, name: &str) -> Toc {
 }
 
 /// One addon's `.toc` files through the same two arms the real loader uses — `.lua` as a chunk,
-/// anything else as FrameXML — with the AddOns root as the provider's path space (decision 1186).
+/// anything else as FrameXML — with the AddOns root as the provider's path space.
 fn load_addon_files(script: &UiScript, root: &Path, name: &str) -> Vec<String> {
     let toc = read_toc(root, name);
     let provider = |req: &str| -> Option<Vec<u8>> { std::fs::read(root.join(req)).ok() };
@@ -457,7 +457,7 @@ fn the_item_button_helpers_paint_a_slots_icon_and_count() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -539,7 +539,7 @@ fn the_item_button_helpers_paint_a_slots_icon_and_count() {
 fn the_roster_seat_names_the_character_the_addons_will_meet() {
     let seat = super::seat_from_roster(&roster()).expect("a pending pick seats a player");
     assert_eq!(seat.name.as_deref(), Some("Harness"));
-    // **0, not 60 — the reference's answer, byte-verified** (decision 2263). `UnitLevel 0x517fc0`
+    // **0, not 60 — the reference's answer, byte-verified**. `UnitLevel 0x517fc0`
     // carries no `"player"` fast path at all: it resolves the token, misses (no object, no roster
     // record for a zero GUID) and reaches `0x51813e push 0; push 0` — the NUMBER 0, one return.
     // The roster's real level arrives with the descriptor, within the second.
@@ -969,7 +969,7 @@ fn the_whole_bagnon_window_survives_being_used() {
     // `script/cursor/bag_verbs.rs` bound all three; and money on
     // the cursor (`OpenCoinPickupFrame`, `Frame.lua:537-543`) when the money kit went stock and
     // the reference's own `CoinPickupFrame.xml` joined the manifest with the money cursor under
-    // it (decision 1962). With nothing on the list, "unexplained" is every error, which is the
+    // it. With nothing on the list, "unexplained" is every error, which is the
     // assertion this test was always reaching for.
     const KNOWN_GAPS: &[(&str, &str)] = &[];
 
@@ -1155,7 +1155,7 @@ fn a_texture_gradient_tints_the_art_it_sits_on() {
 /// The fix is the engine's font measurer answering inside the Lua call that asked
 /// (`benilla_ui`'s `script::measure`): `GetStringWidth` returns a real number in the tick that set
 /// the text. A digits-only stand-in — a per-digit advance feed pushed ahead from the app — shipped
-/// first and was retired by the general answer (decision 1285).
+/// first and was retired by the general answer.
 ///
 /// The assertion is the FIRST open, which is the half that was broken.
 #[test]

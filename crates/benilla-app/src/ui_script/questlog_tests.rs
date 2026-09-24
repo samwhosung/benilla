@@ -41,7 +41,7 @@ thread_local! {
                 count: 1,
                 quality: 1,
                 usable: true,
-                // The reward row's ctrl/shift payload (`GetQuestLogItemLink`, decisions 1059/1060)
+                // The reward row's ctrl/shift payload (`GetQuestLogItemLink`)
                 // — `ui_quest_log.rs` builds it through `ui_items::item_link` once the template
                 // lands, so the fixture carries that exact shape.
                 link: Some(HAMMER_LINK.into()),
@@ -265,7 +265,7 @@ fn shipped_questlog_frame_drives_end_to_end() {
     assert_eq!(s.eval::<i64>("return GetQuestLogSelection()").unwrap(), 1);
 
     // Abandon, No path: marks the selection, shows the registry's ABANDON_QUEST entry on the
-    // shared StaticPopup engine (decision 0308 §3), but No drains nothing and hides it.
+    // shared StaticPopup engine, but No drains nothing and hides it.
     s.run("QuestLogFrameAbandonButton:Click()").unwrap();
     assert!(s.eval::<bool>("return StaticPopup1:IsShown()").unwrap());
     assert_eq!(
@@ -668,7 +668,7 @@ fn progress_auto_watches_for_five_minutes() {
 }
 
 /// The flag that gates the above is the **reference's** uvar under the reference's name and value
-/// shape (decision 1136 — it was `BENILLA_AUTO_QUEST_WATCH`, a boolean, while nothing could change
+/// shape (it was `BENILLA_AUTO_QUEST_WATCH`, a boolean, while nothing could change
 /// it): `AUTO_QUEST_WATCH`, a `"1"`/`"0"` string, which is what the Interface page's row writes.
 /// Off, progress no longer watches anything; back on, it does again.
 ///
@@ -781,7 +781,7 @@ fn the_row_tag_is_its_own_right_flush_string_and_the_state_word_wins() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
     // `Option`: an untagged row's string is blank, and a blank FontString reads back **nil** —
-    // `FontString:GetText 0x79d690` substitutes nil for an empty string (decision 2110).
+    // `FontString:GetText 0x79d690` substitutes nil for an empty string.
     let tag = |s: &mut UiScript, i: u32| {
         s.eval::<Option<String>>(&format!("return QuestLogTitle{i}Tag:GetText()"))
             .unwrap()
@@ -860,7 +860,7 @@ fn empty_quest_log_hides_rows_and_disables_abandon() {
 
     // The empty log says the reference's QUESTLOG_NO_QUESTS_TEXT (GlobalStrings.lua:3225) through
     // stock QuestLogNoQuestsText; "Your quest log is empty." was ours (1944). Regions carry the
-    // real `Show`/`Hide`/`IsShown`/`IsVisible` (0138), so the label's visibility is assertable
+    // real `Show`/`Hide`/`IsShown`/`IsVisible`, so the label's visibility is assertable
     // too — and nothing ever hides this one: `QuestLogFrame.xml:427` is its only mention in the
     // whole chain, so it stands behind the rows whether or not the log is empty.
     assert_eq!(
@@ -1096,7 +1096,7 @@ fn overflowing_entry() -> QuestLogState {
     }
 }
 
-/// The ScrollFrame clip (decision 0112 §4): every quad in the moved detail chain's subtree —
+/// The ScrollFrame clip: every quad in the moved detail chain's subtree —
 /// `QuestLogDetailScrollChildFrame` and its descendants (here, a reward row's icon-slot texture) —
 /// carries `QuestLogDetailScrollFrame`'s own resolved rect as its clip, so content that overflows
 /// the pane never draws past its bottom edge; a sibling entirely outside the scroll child (the
@@ -1173,7 +1173,7 @@ fn overflowing_detail_content_clips_to_the_scrollframe_rect() {
 }
 
 /// Wheeling over the detail pane changes `GetVerticalScroll()` — the ScrollFrame is
-/// mouse-wheel-interactive by construction (decision 0112), and it is the only frame in this
+/// mouse-wheel-interactive by construction, and it is the only frame in this
 /// window's bucket covering the detail rect, so the spin lands on it outright.
 #[test]
 fn wheel_over_the_detail_pane_changes_vertical_scroll() {
@@ -1207,7 +1207,7 @@ fn wheel_over_the_detail_pane_changes_vertical_scroll() {
     s.set_quest_log(overflowing_entry());
     s.run("ToggleQuestLog()").unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    // The detail pane's scroll range is the union of its measured content (0128): the layout's
+    // The detail pane's scroll range is the union of its measured content: the layout's
     // measure round-trip has to be answered, as the app's resolve pass answers it every frame.
     s.resolve();
     answer_measures(&mut s);
@@ -1271,7 +1271,7 @@ fn selection_change_resets_detail_scroll_but_a_quest_log_update_refresh_does_not
     s.set_quest_log(overflowing_entry());
     s.run("ToggleQuestLog()").unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    // The detail pane's scroll range is the union of its measured content (0128): the layout's
+    // The detail pane's scroll range is the union of its measured content: the layout's
     // measure round-trip has to be answered, as the app's resolve pass answers it every frame.
     s.resolve();
     answer_measures(&mut s);
@@ -1653,7 +1653,7 @@ fn shift_click_on_a_title_posts_the_quest_name_with_chat_open_and_watches_with_i
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-// ── The Share Quest button (decision 1733) ───────────────────────────────────────────────────────
+// ── The Share Quest button ───────────────────────────────────────────────────────
 
 /// A party of `n` others; `GetNumPartyMembers` is that list's length.
 fn party(n: usize) -> PartyState {
@@ -1716,7 +1716,7 @@ fn share_quest_needs_both_a_sharable_selection_and_a_party() {
     s.run("ToggleQuestLog()").unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert_eq!(s.eval::<i64>("return GetQuestLogSelection()").unwrap(), 1);
-    // `1`/nil, never true/false (decision 1738) — compared the way the reference's own predicate
+    // `1`/nil, never true/false — compared the way the reference's own predicate
     // does, which is why the button below reads the same either way.
     assert!(
         s.eval::<bool>("return GetQuestLogPushable() ~= nil")

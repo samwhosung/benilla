@@ -1,5 +1,5 @@
 //! **The VERB-FIRED event gate** — `reference/1.12-verb-events.tsv` against the module that
-//! registers each verb (decision 2251).
+//! registers each verb.
 //!
 //! ## The third question on the event seam
 //!

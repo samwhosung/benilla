@@ -227,7 +227,7 @@ fn a_single_rank_line_paints_gray_with_no_rank_text() {
     assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
 }
 
-/// **The director's reference screenshot, reproduced row for row** (decision 1091). A real
+/// **The director's reference screenshot, reproduced row for row**. A real
 /// level-60 tauren hunter's `PLAYER_SKILL_INFO` block — read straight out of the live vmangos
 /// `character_skills` rows the A/B was taken on — fed through the app's own display predicate
 /// ([`crate::ui_char::skills_row`]) and the engine's grouping, against the REAL shipped DBCs.
@@ -330,7 +330,7 @@ fn a_real_hunters_block_lists_exactly_what_the_reference_client_lists() {
     );
 }
 
-/// The page's own **CLOSE** button (decision 1496). `SkillFrameCancelButton` is live in the
+/// The page's own **CLOSE** button. `SkillFrameCancelButton` is live in the
 /// reference — the XML comment that swallows its `SkillFrameAcceptButton` neighbour closes one
 /// line above it (ref `SkillFrame.xml` l.337/339) — and the director's screenshot of an empty
 /// bottom-right seat is what that misread cost. Pins the button's existence, the ref's own seat
@@ -412,7 +412,7 @@ fn the_pages_close_button_sits_where_the_reference_seats_it_and_closes_the_windo
     assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
 }
 
-/// The **ALL** fold's face and seat (decision 1496). Both halves of the director's report: the
+/// The **ALL** fold's face and seat. Both halves of the director's report: the
 /// label is the row font — `GameFontHighlight`, WHITE at 12 — not `GameFontNormalSmall`'s yellow
 /// 10, and the button rides 3px BELOW the tab cap's centre (the ref's own `(-3,-3)` off the left
 /// cap), not 3px above it, which is where the offset copied from `TrainerFrame.xml` put it.
@@ -513,7 +513,7 @@ fn the_expand_tab_fits_its_label_at_load() {
 /// `SkillListScrollFrame` is 220 tall (stock `SkillFrame.xml` l.468) against twelve rows of
 /// fifteen — so the child's overflow past the frame, `n × 15 − 220`, is forty pixels short of
 /// where the bar goes. An engine that clamped `SetVerticalScroll` into that overflow stopped the
-/// row offset at `n − 15`; the reference stores the bar's value as given (decision 2017).
+/// row offset at `n − 15`; the reference stores the bar's value as given.
 ///
 /// Drives the bar to its end and reads the twelfth row: the block's last line. The control is the
 /// pre-fix mechanism itself — the overflow really is shorter than the bar's range.

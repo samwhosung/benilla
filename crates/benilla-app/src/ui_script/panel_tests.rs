@@ -32,11 +32,11 @@ fn frame_rect(quads: &[ExtractedQuad], w: f32, h: f32) -> benilla_ui::layout::Re
 
 /// Load the stock `Interface\FrameXML\GossipFrame.xml` behind `UIParent.xml`
 /// into a bare engine and drive it with a synthetic gossip menu — the whole phase-3 chain minus
-/// Bevy (decision 0081), now over the UIPanel slot manager (decision 0084): the hidden→shown
+/// Bevy, now over the UIPanel slot manager: the hidden→shown
 /// lifecycle on GOSSIP_SHOW goes through ShowUIPanel (landing the window at the left slot,
 /// TOPLEFT UIParent 0,-104 — pin §4's rect assertion), the greeting + option rows rendering, a
 /// coded row disabled, a row click queuing the right select intent, and a close through
-/// HideUIPanel vacating the left slot. Quest-row rendering (decision 0088 §3, the shared row pool)
+/// HideUIPanel vacating the left slot. Quest-row rendering (the shared row pool)
 /// gets its own dedicated test below (`shipped_gossip_frame_renders_quest_rows_above_options`).
 #[test]
 fn shipped_gossip_frame_drives_end_to_end() {
@@ -532,7 +532,7 @@ fn shipped_gossip_rows_grow_to_their_wrapped_labels() {
 /// gossip then merchant closes gossip purely through panel replacement (both register
 /// pushable=0, so the second `ShowUIPanel` replaces the left occupant — UIParent.lua l.729-732) —
 /// never a server-side CloseGossip. Merchant's own close then vacates the slot.
-/// The gossip window's open/close kits — the window-sound convention (decision 0090). The real
+/// The gossip window's open/close kits — the window-sound convention. The real
 /// GossipFrame.xml frame Scripts play igQuestListOpen on OnShow (l.445) and igQuestListClose on OnHide
 /// (l.454); GOSSIP_SHOW → ShowUIPanel → Show() fires OnShow, GOSSIP_CLOSED → HideUIPanel → Hide() fires
 /// OnHide. Nothing queues at load (the frame is authored hidden="true").
@@ -642,7 +642,7 @@ fn shipped_panel_slot_replaces_gossip_with_merchant() {
             item_id: 159,
             stats: None,
             // Not this test's subject (the slot manager is) — a row with no template answer yet
-            // carries no link (decision 1059).
+            // carries no link.
             link: None,
             max_stack: Some(1),
         }],
@@ -678,7 +678,7 @@ fn shipped_panel_slot_replaces_gossip_with_merchant() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The cross-window session-clear (decision 0095): when one NPC window displaces another at the left
+/// The cross-window session-clear: when one NPC window displaces another at the left
 /// panel slot, the displaced window's OnHide fires its `CloseX()`, queuing the client-side clear
 /// intent the app drains to end that session's resource. Without it the displaced session stayed
 /// "open" in its resource, and the window would not reopen until the range-guard reset it — the
@@ -798,7 +798,7 @@ fn shipped_panel_slot_pushable_promotes_to_center() {
             item_id: 159,
             stats: None,
             // Not this test's subject (the slot manager is) — a row with no template answer yet
-            // carries no link (decision 1059).
+            // carries no link.
             link: None,
             max_stack: Some(1),
         }],
@@ -1175,7 +1175,7 @@ fn an_addons_own_frame_registered_in_uipanelwindows_takes_the_left_slot() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-// ── the registry pinned to the bytes (decision 1507) ──────────────────────────────────────────
+// ── the registry pinned to the bytes ──────────────────────────────────────────
 
 /// **The 1507 rows read exactly as the reference wrote them.** The registry is DATA — a different
 /// number is a different window order — and 1507 exists because one row drifted unnoticed for

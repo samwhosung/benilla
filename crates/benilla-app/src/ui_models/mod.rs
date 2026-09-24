@@ -1,4 +1,4 @@
-//! **UI model tiles** (decision 2008) — the renderer for a `<Model>` widget's M2: the cooldown
+//! **UI model tiles** — the renderer for a `<Model>` widget's M2: the cooldown
 //! sweep, the autocast shine, the minimap and world-map pings, the item-push card, the map's
 //! arrow, and whatever an addon parks in a `CreateFrame("Model")`.
 //!
@@ -36,7 +36,7 @@
 //! reference clears its depth, the 2-D layers under it stay under it, and the ones over it stay
 //! over it. Cells never overlap, so one depth buffer serves every tile.
 //!
-//! **The composite is this renderer's per-frame output, never the extract's** (decision 2023).
+//! **The composite is this renderer's per-frame output, never the extract's**.
 //! The extract's `ModelPane` arm publishes the request — the pane's rect, paint key, alpha and
 //! clip beside the unit ladder — and pushes no quad; the quad is appended in the
 //! [`UiQuadAppend`] lane (the minimap fill's lane) from THIS frame's cells. The first shape had
@@ -50,7 +50,7 @@
 //! `FfxGlow::UI_PANE` decode, the same material twin with only the light storage swapped, the
 //! same collapsed rig lane and palette mirror, the same effect lane. What is new is the
 //! orthographic preset, the atlas packing, and the clock: a tile samples the file at the play
-//! head the ENGINE holds (decision 2007 — `UiScript::visible_model_panes`, read once per frame),
+//! head the ENGINE holds (`UiScript::visible_model_panes`, read once per frame),
 //! so the `AnimationPlayer` is paused and seeked rather than advanced, and every per-sequence
 //! material track is sampled off that same cursor.
 //!
@@ -80,7 +80,7 @@
 //! to do its own work). Nothing in the shipped interface arms either, so the pool normally holds
 //! exactly the one buffer the tiles have always had.
 //!
-//! ## Texture transforms (decision 2019)
+//! ## Texture transforms
 //!
 //! A batch whose texture transform animates gets a material of its own per tile — a clone of
 //! the twin with two mat-anim rows: the translation delta (the world's lane, `anim_slots.x`)
@@ -89,7 +89,7 @@
 //! The shader composes them as the reference does — `uv' = R((uv + t − p) ⊙ s) + p` — which is
 //! how the cooldown indicator's four quadrant quads turn their mask into the clockwise sweep.
 //!
-//! ## What a pane that stops drawing costs: nothing (decision 2046)
+//! ## What a pane that stops drawing costs: nothing
 //!
 //! A pane that leaves the engine's paint list keeps its tile for [`TILE_LINGER_FRAMES`] so a
 //! cooldown that re-arms every few seconds, a ping, or a bag that reopens keeps its tree — but
@@ -188,7 +188,7 @@ pub(crate) struct TileRequest {
     pub facing: f32,
     /// `SetPosition`, layout units.
     pub position: Vec3,
-    /// The **perspective** leg's root scale (decision 2027): `s = G48 · (5/3) · modelScale ·
+    /// The **perspective** leg's root scale: `s = G48 · (5/3) · modelScale ·
     /// layoutScale`, a pure number — that leg has no pixels-per-unit, because its projection is
     /// the file's own camera and its viewport is the cell. Both this and [`Self::root_pos`]
     /// cancel for framing (the camera is carried through the same matrix) and bite only on the
@@ -214,7 +214,7 @@ pub(crate) struct TileRequest {
     pub z_key: u64,
     /// The frame's OWN alpha (`0x76d120`): the composite draws at it.
     pub alpha: f32,
-    /// The enclosing ScrollFrame clip, if any (decision 0112), in the quad pass's space.
+    /// The enclosing ScrollFrame clip, if any, in the quad pass's space.
     pub clip: Option<Rect>,
 }
 
@@ -417,7 +417,7 @@ struct AlphaPart {
 
 /// One batch whose texture transform animates: the tile's OWN clone of the batch's material
 /// (two panes on one file must not share a row — two cooldowns at different fractions), with
-/// the table rows it writes per frame off the pane's play head (decision 2019).
+/// the table rows it writes per frame off the pane's play head.
 struct UvPart {
     /// Held so the clone outlives its parts' handles by exactly the tile's lifetime.
     #[allow(dead_code)]
@@ -512,7 +512,7 @@ struct Tile {
     /// Which id the player is currently arming (to re-arm only on change).
     armed: Option<u16>,
     /// The mat-anim row this tile's materials read their **cell clip** from
-    /// (`anim_slots.w`, decision 2093): `[min.x, min.y, max.x, max.y]` in atlas texels, written
+    /// (`anim_slots.w`): `[min.x, min.y, max.x, max.y]` in atlas texels, written
     /// every frame from the cell. `None` only when the table was full at build — the tile then
     /// draws unclipped, which is the pre-2093 picture rather than a missing widget.
     clip_slot: Option<u16>,
@@ -557,7 +557,7 @@ const TILE_CAMERA_ORDER: isize = -10;
 
 /// The renderer's per-frame state that is not the bridge.
 ///
-/// **Most of this is about a VM, and the VM does not live for the process** (decision 1290): it
+/// **Most of this is about a VM, and the VM does not live for the process**: it
 /// is built at world entry and destroyed at the character screen, and `ReloadUI()` is both edges
 /// back to back. [`TileState::session`] is what keeps that honest — see [`TileState::adopt_vm`]
 /// and [`TileState::answer_facts`].
@@ -689,7 +689,7 @@ fn setup_tiles(
     // rather than lazily because every shipped pane wants it and nothing else ever does.
     //
     // Tile rigs skin from a light buffer's palette region (decision 0720's mirror law), and the
-    // tiles' animated materials read their mat-anim rows from it too (decision 2023): a twin
+    // tiles' animated materials read their mat-anim rows from it too: a twin
     // binds ITS buffer, not the world's, so every buffer the pool creates joins both mirror
     // lists or the rows the tiles write every frame reach a buffer nothing in a tile samples.
     rig.slot_for(
@@ -707,7 +707,7 @@ fn setup_tiles(
             order: TILE_CAMERA_ORDER,
             // The reference clears DEPTH for the widget's rect and leaves colour to the 2-D
             // pass; a tile composites over the 2-D pass instead, so its colour clears to
-            // nothing — the premultiplied transparent the booth panes use (decision 1083).
+            // nothing — the premultiplied transparent the booth panes use.
             clear_color: ClearColorConfig::Custom(Color::NONE),
             is_active: false,
             ..default()
@@ -756,8 +756,8 @@ fn setup_tiles(
     let _ = light_buf;
 }
 
-/// pipe_warm's **orthographic twin camera** (decision 2262) — the ortho leg's view key space, the
-/// way [`crate::portrait::spawn_warm_booth`] is the custom-projection one (0958).
+/// pipe_warm's **orthographic twin camera** — the ortho leg's view key space, the
+/// way [`crate::portrait::spawn_warm_booth`] is the custom-projection one.
 ///
 /// bevy_pbr folds the view's projection **class** into `MeshPipelineKey` (`bevy_pbr-0.18.1`
 /// `render/mesh.rs:397` — `Perspective | Orthographic | Custom`, emitted as the
@@ -1441,10 +1441,10 @@ fn sync_tiles(
         } else {
             req.star_px_per_unit
         };
-        // …and the CELL the cloud may draw in (decision 2093). A tile's particles are quads in
+        // …and the CELL the cloud may draw in. A tile's particles are quads in
         // the ATLAS's own space, so without this a cloud that reaches past its cell lands in the
-        // cell the shelf packed beside it — which the composite hands to a different widget
-        // (B379). `Cell::origin` is already in atlas texels, top-left origin, which is exactly
+        // cell the shelf packed beside it — which the composite hands to a different widget.
+        // `Cell::origin` is already in atlas texels, top-left origin, which is exactly
         // the framebuffer coordinate the fragment tests.
         let clip = Vec4::new(
             cell.origin.x as f32,
@@ -1619,7 +1619,7 @@ fn tile_layer(rig: &TileRig, cam_slot: Option<usize>) -> RenderLayers {
 /// a measurement of the icon underneath it plus a sub-pixel alignment guess. The atlas cell is the
 /// widget ALONE, on transparent, at exactly the size the pane asked for — and the trace's
 /// `cell=(x,y WxH)` says where each pane's is. Together they answer "what did this widget
-/// actually paint", which nothing else here can (B379: the cooldown's sweep read as a filmstrip,
+/// actually paint", which nothing else here can (the cooldown's sweep read as a filmstrip,
 /// one cell per phase).
 ///
 /// The camera needs no waking, unlike the booths' twin (`portrait::test_bake::dump_booth_target`):
@@ -1702,7 +1702,7 @@ pub(crate) fn compose_tiles(bridge: Res<UiModelTiles>, mut quads: ResMut<UiQuads
 }
 
 /// **Does this tile draw this frame?** — which is the park verdict inverted, and deliberately
-/// ONE function beside [`composite_quads`] so the two cannot drift apart (decision 2046).
+/// ONE function beside [`composite_quads`] so the two cannot drift apart.
 ///
 /// The answer is "the bridge holds a cell for it", and that is exact rather than approximate:
 /// [`composite_quads`] draws precisely the `cells ∩ requests` pairs, and [`sync_tiles`] fills
@@ -1860,7 +1860,7 @@ fn build_tile(
     let built = forms.slices(handle);
     let (stat_forms, skin_forms) = (built.stat, built.skin.unwrap_or(&[]));
 
-    // The tile's **cell clip** row (decision 2093): one row per tile, `anim_slots.w` on every
+    // The tile's **cell clip** row: one row per tile, `anim_slots.w` on every
     // one of its materials, the cell rect written into it each frame. It is why a tile's batches
     // are all its OWN clones rather than the shared twins — the twin is per (material, light),
     // and the clip is per PANE.
@@ -1895,7 +1895,7 @@ fn build_tile(
         )?;
         // A batch whose texture transform animates draws through a clone of its own, with its
         // own table rows — the rows are written off THIS pane's play head, so two panes on one
-        // file cannot share them (decision 2019).
+        // file cannot share them.
         let animated = sub.uv_anim.is_some()
             || sub.uv_seq.is_some()
             || sub.uv_rot_seq.is_some()
@@ -2089,7 +2089,7 @@ mod tests {
         assert_eq!(atlas, UVec2::splat(ATLAS_MAX));
     }
 
-    /// The composite is a function of the bridge alone (decision 2023): a request with no cell
+    /// The composite is a function of the bridge alone: a request with no cell
     /// draws nothing, a cell draws its request's rect at the request's key and alpha with the
     /// cell's texel window, and a cell whose request is gone draws nothing — no extract in the
     /// loop.
@@ -2156,7 +2156,7 @@ mod tests {
         assert!((br[0] - 130.0 / 512.0).abs() < 1e-6 && (br[1] - 65.0 / 512.0).abs() < 1e-6);
     }
 
-    /// **The park verdict and the composite are the same question** (decision 2046). A tile
+    /// **The park verdict and the composite are the same question**. A tile
     /// parks exactly when it pushed no quad, and `sync_tiles` reads both off `bridge.cells` in one
     /// pass — so neither an atlas repack nor an atlas too full for one more pane can freeze a
     /// cloud on a frame its pane is visibly drawing. This pins the two sides to each other: what

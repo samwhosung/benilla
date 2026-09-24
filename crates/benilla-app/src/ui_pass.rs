@@ -1,4 +1,4 @@
-//! The player-UI quad pass (decision 0068 §2): a custom sorted-quad renderer for the WoW-engine UI,
+//! The player-UI quad pass: a custom sorted-quad renderer for the WoW-engine UI,
 //! **not** `bevy_ui`'s flexbox/hierarchy z-model — probe B (2026-07-02) measured `bevy_ui` fighting the
 //! WoW `(stratum, level, layer, sublayer, decl)` total order and chose a dedicated pass instead. This
 //! module is the render **substrate** only: [`UiQuad`]/[`UiQuads`] is the data contract the future
@@ -7,7 +7,7 @@
 //! `(stratum, level, layer, sublayer, decl)` tuple packs into one `u64` losslessly) and this pass just
 //! draws the resulting flat list back-to-front.
 //!
-//! ## Camera / compositing order (decision 0025)
+//! ## Camera / compositing order
 //! Three cameras share the window, ordered low→high: the 3D world camera (order 0, untouched) → this
 //! module's [`PlayerUiCamera`] (order 1) → the egui dev-overlay camera (bumped from 1 to 2 in
 //! `debug_panel::spawn_egui_camera` — the one sanctioned edit outside this file). 0025 established
@@ -16,11 +16,11 @@
 //! **dev overlays stay on top of the player UI, which stays on top of the world.** The camera renders
 //! nothing from the 3D world (its own [`RenderLayers`] layer, disjoint from the world camera's default
 //! layer 0); the world reaches it as the first DRAW of its main pass — the FFXGlow combine,
-//! `benilla_world::ffx_glow::FfxBackdrop` ([`crate::world_backdrop`], decision 2234) — and its
+//! `benilla_world::ffx_glow::FfxBackdrop` ([`crate::world_backdrop`]) — and its
 //! finished frame reaches the swapchain through [`crate::ui_gamma`]'s decode directly — output
-//! mode `Skip`, no blit (decision 2206).
+//! mode `Skip`, no blit.
 //!
-//! ## Colour space: the UI gamma composite lane (decision 0254)
+//! ## Colour space: the UI gamma composite lane
 //! The reference draws its whole UI through the fixed-function device into an 8-bit backbuffer, so
 //! every UI multiply and every UI blend is arithmetic on **gamma bytes**, clamped at each write.
 //! This pass reproduces that: [`UiQuad::color`] rides through unconverted, `ui_quad.wgsl` puts its
@@ -56,7 +56,7 @@
 //!
 //! ## Explicitly out of scope (v1)
 //! - **Real scissor rects.** [`UiQuad::clip`] is a CPU stand-in (rebuild-time geometry clip); a
-//!   `ScrollFrame`-driven GPU scissor rect (per 0068 §2, "per-ScrollFrame scissor rects") is a later
+//!   `ScrollFrame`-driven GPU scissor rect ("per-ScrollFrame scissor rects") is a later
 //!   render-pass change, not a data-contract change — `clip` can stay as an escape hatch for the rare
 //!   non-rectangular-region case even after real scissor lands.
 //! - **Text.** `FontString`s render through `cosmic-text` per 0068 §2; nothing here rasterizes glyphs.
@@ -145,7 +145,7 @@ pub(crate) struct UiQuad {
     pub uv: UvRect,
     /// Straight-alpha (non-premultiplied) vertex color, multiplied against the sampled texel.
     /// **Client-space sRGB** — the raw FrameXML/Lua value (the client's FFP wrote these straight to
-    /// its 8-bit backbuffer). It reaches the shader UNCONVERTED (decision 0254): the quad pass
+    /// its 8-bit backbuffer). It reaches the shader UNCONVERTED: the quad pass
     /// composites in gamma bytes, so this multiply *is* the client's gamma-space `tint × texel`.
     /// Producers never pre-convert.
     pub color: [f32; 4],
@@ -158,7 +158,7 @@ pub(crate) struct UiQuad {
     /// render-target texture is unique to it, so no batching is actually lost.
     pub circular: bool,
     /// Draw the sampled texel as its **luminance** — `Texture:SetDesaturated(1)`, the greyed-out
-    /// icon every disabled affordance in the reference wears (decision 1327). Folded in the
+    /// icon every disabled affordance in the reference wears. Folded in the
     /// client's GAMMA byte space and applied BEFORE the vertex-colour multiply, so the reference's
     /// own `SetItemButtonDesaturated(button, 1, 0.65, 0.65, 0.65)` lands as greyscale *and* dim.
     /// Splits the run like `additive`/`circular`.
@@ -168,7 +168,7 @@ pub(crate) struct UiQuad {
     /// nothing else.
     ///
     /// A booth that clears **transparent** (the `<PlayerModel>` body panes and the dressing room,
-    /// which composite over the page's own art — decision 1083) builds its target the way any
+    /// which composite over the page's own art) builds its target the way any
     /// render-to-texture does: opaque geometry writes `a = 1`, alpha batches blend over it, and an
     /// **additive particle adds light while contributing no coverage** (`wow_effect.wgsl`'s
     /// `(rgb·a, 0)` under a premultiplied state). That buffer is premultiplied by construction —
@@ -209,7 +209,7 @@ pub(crate) struct UiQuad {
     /// the batch run.
     pub alpha_test: Option<f32>,
     /// **The UV window this quad may sample**, already inset by half a texel — `None` = the
-    /// sampler's own `ClampToEdge` is the whole story (decision 1608).
+    /// sampler's own `ClampToEdge` is the whole story.
     ///
     /// A `SetTexCoord` crop into an ATLAS is not a texture: `CLAMP_TO_EDGE` clamps at the
     /// image's edge, not the cell's, so a magnified cell's outermost row of destination pixels
@@ -230,7 +230,7 @@ pub(crate) struct UiQuad {
     /// CPU-clip stand-in for a real scissor rect (see the module doc). `None` = unclipped.
     pub clip: Option<Rect>,
     /// Rotate the quad's corners by this many radians **clockwise on screen** about the rect's
-    /// center, applied at mesh build (the minimap player arrow's facing — decision 0203). The UVs
+    /// center, applied at mesh build (the minimap player arrow's facing). The UVs
     /// ride their corners, so the art rotates with the geometry. Composes with `clip` by clipping
     /// FIRST in the unrotated frame (no current producer sets both; the arrow is never clipped).
     pub rotation: f32,
@@ -317,7 +317,7 @@ pub(crate) struct UiQuads {
 /// integer, that arithmetic was three private conventions with nothing naming the shared law:
 /// combat text at 0, the bubble's four pieces at 0..=3 *on top of it*, the plates at 4..=8. The
 /// bands below make the split explicit and, more to the point, give the middle band **room** —
-/// a chat bubble is one frame per speaker with its own frame level (decision 1504), which a
+/// a chat bubble is one frame per speaker with its own frame level, which a
 /// four-key allocation cannot express. Everything here stays far below the scripted UI's keys
 /// (a `ZKey` region carries its is-region bit at `1 << 20`), so the whole lane still paints
 /// under the player UI.
@@ -449,7 +449,7 @@ fn tint_tag(color: [f32; 4]) -> u32 {
 }
 
 impl UiQuadMaterial {
-    /// The **WMO-interior minimap tile** material (decision 1466): the texture, an alpha TEST at
+    /// The **WMO-interior minimap tile** material: the texture, an alpha TEST at
     /// `alpha_ref`, and nothing else — no tint, no mask, no circle, no desaturate. It is built here
     /// rather than through the quad stream because these tiles do not draw at the screen at all:
     /// they draw into the minimap's own 256² composite target on its own camera
@@ -478,7 +478,7 @@ impl UiQuadMaterial {
 }
 
 /// The mesh every `UiQuadMaterial` quad that is **not** part of the HUD batch stream draws with:
-/// a 1×1 rectangle at the origin, scaled and placed by its own Transform (decision 1466 — a
+/// a 1×1 rectangle at the origin, scaled and placed by its own Transform (a
 /// panning composite never rewrites a vertex buffer).
 ///
 /// It has ONE author because a `Material2d` pipeline is keyed on `(view key, MESH LAYOUT)`, and
@@ -516,7 +516,7 @@ impl Material2d for UiQuadMaterial {
     ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
         if let Some(fragment) = descriptor.fragment.as_mut() {
             if let Some(target) = fragment.targets.first_mut().and_then(|t| t.as_mut()) {
-                // `(One, OneMinusSrcAlpha)` over GAMMA values (decision 0254): the shader hands us
+                // `(One, OneMinusSrcAlpha)` over GAMMA values: the shader hands us
                 // `(rgb·a, a)` for BLEND and `(rgb·a, 0)` for ADD, so this one state reproduces
                 // EGxBlend 2 and EGxBlend 3 exactly, clamped at each write like the reference's
                 // 8-bit backbuffer.
@@ -641,21 +641,21 @@ fn spawn_ui_camera(mut commands: Commands) {
         // pass draws that finished image straight in first ([`crate::world_backdrop`]), so this
         // camera's samples would only re-average a picture whose own MSAA is long since done. What
         // it draws itself is
-        // axis-aligned rects, and the Bevy UI trees riding this camera (decision 0541) antialias
+        // axis-aligned rects, and the Bevy UI trees riding this camera antialias
         // their own edges analytically in-shader. What it *costs* is a full-window 4× sampled
         // colour texture, a full-window 4× multisampled Core2d depth texture (Bevy sizes that one
         // at `msaa.samples()` unconditionally — `core_2d::prepare_core_2d_depth_textures` — even
         // though `AlphaMode2d::Blend` puts every quad in `Transparent2d`, which never writes it),
-        // 4× the fill on every quad, and a resolve. Decision 1628.
+        // 4× the fill on every quad, and a resolve.
         bevy::render::view::Msaa::Off,
-        // The gamma composite lane's mandatory decode (decision 0254) — without it the UI presents
+        // The gamma composite lane's mandatory decode — without it the UI presents
         // ~2.2× bright, since the quad pass leaves gamma values in the target.
         crate::ui_gamma::UiGammaLane::default(),
-        // The world is the first draw of this camera's main pass (decision 2234): the FFXGlow
+        // The world is the first draw of this camera's main pass: the FFXGlow
         // combine of the world camera [`crate::world_backdrop`] points it at, rendered into this
         // target ahead of the quads. `source` is `None` until a world camera draws.
         benilla_world::ffx_glow::FfxBackdrop::default(),
-        // Every Bevy UI tree renders HERE (decision 0541) — the glue screens and the loading screen.
+        // Every Bevy UI tree renders HERE — the glue screens and the loading screen.
         // Without the marker, Bevy UI picks the highest-order camera targeting the window, which is
         // the egui dev overlay (order 2): the glue screens rode the dev camera, outside the gamma
         // lane, and composited in linear — the washed-out login boxes the director caught. Bevy UI
@@ -664,7 +664,7 @@ fn spawn_ui_camera(mut commands: Commands) {
         ui_render_layers(),
         Camera {
             order: UI_CAMERA_ORDER,
-            // **No output blit at all** (decision 2206, [`benilla_world::final_pass`]): the
+            // **No output blit at all** ([`benilla_world::final_pass`]): the
             // lane's final pass — [`crate::ui_gamma`]'s decode — renders straight into the
             // swapchain, so bevy's `upscaling` copy of the finished frame is skipped.
             //
@@ -897,18 +897,18 @@ fn count_material_events(
 /// and materials are cached by their full identity key (same texture/blend/mask ⇒ the same
 /// material asset forever, so `prepare_assets` re-prepares nothing on a steady frame). Before
 /// this, every rebuild despawned every batch and allocated fresh meshes + materials — ~9 ms/frame
-/// of render-side churn in a live city (0365).
+/// of render-side churn in a live city.
 #[derive(Default)]
 struct BatchPools {
     entities: Vec<Entity>,
     meshes: Vec<Handle<Mesh>>,
     /// Each slot's last-written MESH content (base positions, before [`Self::offsets`]) — the
-    /// per-run skip gate (decision 1361): a slot whose run is bit-identical to what its pooled
+    /// per-run skip gate: a slot whose run is bit-identical to what its pooled
     /// mesh already holds is not rewritten, so one animating quad no longer drags every batch
     /// through the GPU mesh allocator.
     stored: Vec<StoredRun>,
     /// Each slot's current XY translation from its stored base, carried by the batch entity's
-    /// `Transform` instead of the mesh (decision 1463): a run that only *panned* — the minimap
+    /// `Transform` instead of the mesh: a run that only *panned* — the minimap
     /// tile was ~74% of all moving-regime rebuild triggers — moves without an `Assets<Mesh>`
     /// write, because ONE Modified event per frame arms `AssetChanged` probes over every
     /// `Mesh3d` row in the scene (1370's all-or-nothing fast path, ~0.8 ms/frame at 1461's
@@ -1010,7 +1010,7 @@ fn retire_batches(pools: &mut BatchPools, commands: &mut Commands) {
     for entity in pools.entities.drain(..) {
         commands.entity(entity).despawn();
     }
-    // The skip gate must forget with them (decision 1361): a retired slot's entity is gone, so
+    // The skip gate must forget with them: a retired slot's entity is gone, so
     // "content unchanged" must not skip the respawn when the UI returns. The pan gate's
     // offsets ride the same lifecycle (they index the same slots).
     pools.stored.clear();
@@ -1073,7 +1073,7 @@ pub(crate) struct UiMeshCost {
     /// How many pooled batch meshes were REWRITTEN this rebuild, rather than left alone or moved
     /// by a translation-only nudge (1361's skip gate). This is the number that reaches Bevy: each
     /// rewrite re-extracts in `RenderExtractApp`, which is where a hover's real cost turned out to
-    /// live (decision 1634). `rewrites == runs` every frame means the gate is being defeated for
+    /// live. `rewrites == runs` every frame means the gate is being defeated for
     /// every batch at once, which is what a z coupled to the run count did.
     pub(crate) rewrites: usize,
 }
@@ -1100,7 +1100,7 @@ fn rebuild_ui_mesh(
     // texture behind a bind group Bevy never re-prepares. So an entry keyed on a retired asset
     // pins that texture for as long as the cache holds the key. The producer that taught this was
     // the world backdrop — a full-window `Rgba16Float` image (46 MB at 3200×1800) retired on every
-    // resize, once a frame while a window is being dragged (decision 1647); since 2234 no quad
+    // resize, once a frame while a window is being dragged; since 2234 no quad
     // samples the world's target at all, and the hygiene stays for every other image a quad names
     // and then loses.
     //
@@ -1141,7 +1141,7 @@ fn rebuild_ui_mesh(
     // back exactly as it was (see [`crate::ui_hide::UiHidden`]).
     //
     // **It hides the two LANES, and the world is in neither.** The world reaches the screen as
-    // the first draw of this camera's main pass ([`crate::world_backdrop`], decision 2234), not
+    // the first draw of this camera's main pass ([`crate::world_backdrop`]), not
     // as a batch, so
     // retiring every batch while hidden leaves exactly what the binding's stated point is: "the
     // world and nothing else". (Between 1603 and 2234 the world was this pass's first QUAD, and
@@ -1323,7 +1323,7 @@ fn rebuild_ui_mesh(
     // Spread runs across a z window comfortably inside the camera's default near/far (±1000) regardless
     // of run count, so this never depends on how many runs a given frame happens to produce.
     //
-    // NB (decision 1634): this z DOES move when the run count moves, and `translation_from` bails on
+    // NB: this z DOES move when the run count moves, and `translation_from` bails on
     // `z_bits` first — so it looks like a hover (which adds a run: the ButtonHilight is additive with
     // its own texture and can never merge) would defeat 1361's skip gate for every batch at once.
     // It was tried, with a constant denominator, and MEASURED: no change to the hover cost, because
@@ -1380,7 +1380,7 @@ fn rebuild_ui_mesh(
             mask_rect.to_array().map(f32::to_bits),
             uv_clamp.to_array().map(f32::to_bits),
         );
-        // The per-slot skip gate (decision 1361). A rebuild fires for the WHOLE quad stream the
+        // The per-slot skip gate. A rebuild fires for the WHOLE quad stream the
         // moment anything differs — and one continuously-animating quad (the resting blink on
         // the player frame, in every city) fires it every frame. The run that quad lives in is
         // the only one whose bytes moved; the other ~90 slots are bit-identical to what their
@@ -1682,7 +1682,7 @@ mod tests {
         );
     }
 
-    /// **A removed image takes its cached material with it** (decision 1647).
+    /// **A removed image takes its cached material with it**.
     ///
     /// The cache holds a strong `Handle<Image>` per entry and its prepared form holds the whole GPU
     /// texture behind a bind group Bevy never re-prepares — so an entry keyed on an asset that no
@@ -1795,7 +1795,7 @@ mod tests {
         );
     }
 
-    /// **The desaturation flag reaches the MATERIAL, and splits the run** (decision 1327).
+    /// **The desaturation flag reaches the MATERIAL, and splits the run**.
     ///
     /// Everything upstream of here can be right — the Lua sets it, extract carries it, the quad
     /// holds it — and the screen still not change, because the greyscale lives in a shader uniform

@@ -1,5 +1,5 @@
 //! **The reference FrameXML this client EXECUTES off the player's own patch chain**, rather than
-//! shipping a copy of it — the mechanism half of decision 1751.
+//! shipping a copy of it — the mechanism half of.
 //!
 //! ## The rule
 //!
@@ -9,7 +9,7 @@
 //! by construction — the reference's text cannot drift from itself, and every frame name, id,
 //! template and stratum an addon reaches for is right because it **is** the reference's.
 //!
-//! What stays ours permanently: the glue screens (0068 §8 — GlueXML is a separate engine surface
+//! What stays ours permanently: the glue screens (GlueXML is a separate engine surface
 //! even in the real client), dev-only frames, and adapter shims only while a genuine engine
 //! difference forces one.
 //!
@@ -157,7 +157,7 @@ mod tests {
     use benilla_ui::script::UiScript;
 
     /// **Every saved UI global we declare defaults to what the reference's own file declares**
-    /// (decision 1804) — the FrameXML half of the "a default is the reference's" standard that
+    /// — the FrameXML half of the "a default is the reference's" standard that
     /// `cvars::REGISTERED`'s [`crate::cvars::Reference`] column holds for the CVar half.
     ///
     /// Two stores carry a player's settings in this client and the standard has to cover both.
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return NUM_CONTAINER_FRAMES").unwrap(), 12);
         // `PaperDollFrame.lua` used to be a manifest line of its own, sourced far above everything
         // for exactly this family. It arrives through stock `PaperDollFrame.xml`'s own
-        // `<Script file=>` now, at the character window's position (decision 1751) — so this
+        // `<Script file=>` now, at the character window's position — so this
         // assertion also proves a chain `.xml` really brings its `.lua`.
         assert!(s
             .eval::<bool>("return type(PaperDollItemSlotButton_OnLoad) == \"function\"")
@@ -1169,7 +1169,7 @@ mod tests {
         // quietly: `TextStatusBar_Initialize()` takes no argument in 1.12 and acts on `this`, ours
         // took an optional bar, and `UnitFrames.xml` calls it with one. Swapping that file stopped
         // initialising the unit-frame bars with no error and no missing global — the numerals
-        // simply never appeared (decision 1793).
+        // simply never appeared.
         //
         // **Both directions are silent, and that is the point.** Lua drops extra arguments without
         // complaint, so neither an over- nor an under-supplied call raises; they differ only in
@@ -1948,7 +1948,7 @@ mod tests {
     /// came up with no `<OnLoad>`, `ScrollFrame_OnLoad` never ran, `this.offset` was never seeded,
     /// and the reference's `FauxScrollFrame_GetOffset` — `return frame.offset`, with no `or 0`
     /// fallback of the kind our deleted copy had — handed `MacroPopupFrame_Update` a nil to
-    /// multiply. Clicking "Change Name/Icon" raised. Decision 1862.
+    /// multiply. Clicking "Change Name/Icon" raised.
     ///
     /// Static rather than a load probe: it needs no VM, no client state and no player, so it
     /// answers for every entry including the ones a running load would never reach.
@@ -2152,7 +2152,7 @@ mod tests {
     /// loads clean, shows its bar, moves its thumb, and never scrolls its list. Nothing errors.
     ///
     /// A gate rather than a test per window, because what makes it silent is structural: a list
-    /// only scrolls when something drives it, and most window tests never do. Decision 1868.
+    /// only scrolls when something drives it, and most window tests never do.
     #[test]
     fn every_faux_scroll_frame_declares_its_own_on_vertical_scroll() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
@@ -2259,7 +2259,7 @@ mod tests {
         // the site that constructs it — an entry here is a promise that something fires it.
         const CONSTRUCTED: &[&str] = &[
             // `ui_unit.rs`: `format!("UNIT_{}", power_token(ty))` and its `UNIT_MAX…` twin, over
-            // `power_token`'s five resources (`unit/mod.rs`). Decision 1819.
+            // `power_token`'s five resources (`unit/mod.rs`).
             "UNIT_MANA",
             "UNIT_RAGE",
             "UNIT_FOCUS",
@@ -2557,7 +2557,7 @@ mod tests {
     /// The in-game UI materializes on world entry (1051), so a player always exists by the time
     /// the manifest loads, and the stock macro window's character tab formats `UnitName("player")`
     /// into its label inside its own `OnLoad`. A manifest load with no player is a state the
-    /// client never reaches (decision 1848) — and one a probe reaches by default, where it raises
+    /// client never reaches — and one a probe reaches by default, where it raises
     /// `bad argument #2 to 'format'` and looks exactly like a load failure.
     ///
     /// This was five identical copies of the same six-line comment and the same seven-line seed,
@@ -2585,7 +2585,7 @@ mod tests {
     /// That is exactly how `UNIT_POWER_UPDATE` (1819) survived, and how the three this test found
     /// on its first run did: `BAG_UPDATE_DELAYED` (Era-only; 1.12 has `BAG_UPDATE` alone),
     /// `LOOT_UPDATE` and `UPDATE_LOOT_ROLL` (both invented here), each fired into a room with
-    /// nobody in it. Decision 1883.
+    /// nobody in it.
     ///
     /// **The oracle is the reference binary's own string table.** An event the client can
     /// dispatch is a NUL-terminated string in `WoW.exe`; a name that is not there is a name the

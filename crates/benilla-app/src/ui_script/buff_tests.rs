@@ -1,4 +1,4 @@
-//! The player buff bar (stock `Interface\FrameXML\BuffFrame.xml`, decisions 0255/0257) against its
+//! The player buff bar (stock `Interface\FrameXML\BuffFrame.xml`) against its
 //! reference behaviour. The XML/Lua is the unit under test; the app-side feed (`crate::ui_aura`) is
 //! stubbed by pushing an [`AuraState`] list straight through [`UiScript::set_auras`] and firing
 //! `PLAYER_AURAS_CHANGED`, so these exercise the *button* handlers — the row/filter wiring, the
@@ -447,7 +447,7 @@ fn a_refreshed_duration_reaches_the_bar_with_no_aura_event() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **`SHOW_BUFF_DURATIONS`** (decision 1139) — 0255 shipped the durations-shown geometry with no
+/// **`SHOW_BUFF_DURATIONS`** — 0255 shipped the durations-shown geometry with no
 /// switch because there was no panel to hang one on, and said the other branch was already there
 /// waiting. This is it: the global — the reference's "0" since 1804, planted "1" by this file's
 /// harness — hides the timer text and closes the 15px gutter each row leaves for it, down to the
@@ -917,7 +917,7 @@ fn an_idle_enchant_row_rewrites_the_bar_as_the_reference_does() {
 /// one frame, and that is what is pinned.
 ///
 /// **The poll itself was never the divergence** (`GetPlayerBuffTimeLeft` every frame is
-/// load-bearing, decision 0846) and the controls below are unchanged, because they are the part
+/// load-bearing) and the controls below are unchanged, because they are the part
 /// that describes the WINDOW rather than our implementation of it: the minute rollover drops "5 m"
 /// to "4 m", the warning band turns the number white, and inside the last 31s the pulse ramps the
 /// alpha. Those three are the reference's behaviour and they still hold.

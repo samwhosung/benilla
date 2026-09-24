@@ -1225,7 +1225,7 @@ fn the_shipped_setter_passes_exactly_four_arguments() {
     load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
 
     // 5.0's `arg.n`, not `select("#", ...)`: `...` as a value is not in this VM's grammar, because
-    // it is not in the 1.12 client's (decision 2101).
+    // it is not in the 1.12 client's.
     s.run(
         r#"
         BENILLA_TEST_TOGGLE_ARGC = nil
@@ -1321,7 +1321,7 @@ fn the_stance_bar_sits_where_the_pass_puts_it() {
 /// multibar the strips would draw across whatever is underneath, so all three hide and the rings
 /// drop to 50.
 ///
-/// This was dead code until 1500. With the bottom bars always on (0270) only the raised branch was
+/// This was dead code until 1500. With the bottom bars always on only the raised branch was
 /// reachable; now the unraised bar is what every form class sees on a fresh character, which makes
 /// the missing border the DEFAULT look rather than an edge case.
 ///
@@ -1741,7 +1741,7 @@ fn the_middle_strip_tiles_along_its_length_only() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The director's picture (2026-09-05, decision 2009)**: a three-stance warrior with the
+/// **The director's picture (2026-09-05)**: a three-stance warrior with the
 /// bottom-left bar up, and a silver plate around Defensive Stance — `ShapeshiftBarMiddle` drawn
 /// alone, both end caps down.
 ///

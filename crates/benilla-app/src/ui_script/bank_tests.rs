@@ -437,7 +437,7 @@ fn purchase_flow_shows_popup_queues_the_intent_and_the_row_hides_when_full() {
     assert!(!s.take_bank_purchase(), "drained");
 
     // Six purchased: full -> the whole row hides (PLAYERBANKBAGSLOTS_CHANGED is the no-packet
-    // buy's own repaint trigger, decision 0604).
+    // buy's own repaint trigger).
     s.set_bank(Some(BankState {
         num_purchased: 6,
         next_cost: 999_999_999,
@@ -451,7 +451,7 @@ fn purchase_flow_shows_popup_queues_the_intent_and_the_row_hides_when_full() {
     );
 }
 
-/// The bank's bag buttons take BOTH mouse buttons (decision 0908): the ref's
+/// The bank's bag buttons take BOTH mouse buttons: the ref's
 /// `BankItemButtonBagTemplate` OnLoad runs `BankFrameBagButton_OnLoad` →
 /// `BankFrameBaseButton_OnLoad`, which registers `("LeftButtonUp","RightButtonUp")`
 /// (BankFrame.lua:12), and `BankFrameItemButtonBag_OnClick` reads no button. Ours registered

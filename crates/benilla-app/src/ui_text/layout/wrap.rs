@@ -42,7 +42,7 @@ fn same_link(a: &Link, b: &Link) -> bool {
 /// link membership. Latching a single color per word (the pre-1075 model, taken from the run the
 /// word's FIRST char sat in) painted the whole unit in that run's color and inside its clickable
 /// span — every character typed straight after a chat link came out in the item's quality colour
-/// (director, 2026-08-06; decision 1075).
+/// (director, 2026-08-06).
 pub(super) struct WrapWord {
     /// The word's styled pieces, in source order — one for the common case, more across an interior
     /// color/link boundary. Never empty, and never holds an empty piece.
@@ -418,7 +418,7 @@ mod wrap_tests {
         assert_eq!(runs[1].color, RED);
     }
 
-    /// The director's report (2026-08-06, decision 1075): a chat item link with text typed straight
+    /// The director's report (2026-08-06): a chat item link with text typed straight
     /// after it, no space between. `Bearer]` and the typed text are ONE word — one break unit — and
     /// the wrap must keep them two differently-styled pieces. Before 1075 the word latched the color
     /// AND the link of the run its first char sat in, so everything typed after a link came out in

@@ -1,4 +1,4 @@
-//! The social window's fourth tab — the raid pane (decision 1549, `RaidFrame.xml`): the tab, the
+//! The social window's fourth tab — the raid pane (`RaidFrame.xml`): the tab, the
 //! two states the pane has, the 8x5 grid's seating and colouring, the drag's three landings, the
 //! row menu, the ready-check popup and the saved-instance panel.
 //!
@@ -923,7 +923,7 @@ fn the_ready_check_popup_opens_and_answers() {
 // the reference's by construction rather than by assertion.
 
 /// **A drag the cursor carries off the window edge ENDS — it does not glue the row to the mouse
-/// for the rest of the session** (B310).
+/// for the rest of the session**.
 ///
 /// The defect this pins is not in this file at all; it is the engine's, and the raid grid is
 /// simply where it bites hardest. No release is fed once the OS pointer is outside the window, so

@@ -1,4 +1,4 @@
-//! The shipped **pet paper doll** driven end-to-end, engine-only (decision 1057) — and since
+//! The shipped **pet paper doll** driven end-to-end, engine-only — and since
 //! decision 1751's character swap, "shipped" is the reference's own
 //! `Interface\FrameXML\PetPaperDollFrame.xml`, read off the player's patch chain behind the
 //! reference's `CharacterFrame.xml` and `PaperDollFrame.xml`. Our
@@ -65,7 +65,7 @@ fn pet_unit() -> UnitState {
 
 /// A hunter pet's stat block — `hunter_pet` is `HasPetUI`'s SECOND return, the one that gates the
 /// training-point line and the diet icon. The family pair is the shipped `CreatureFamily.dbc` row
-/// for a Boar (id 5, food mask 63) resolved through `ItemPetFood.dbc` (decision 1062).
+/// for a Boar (id 5, food mask 63) resolved through `ItemPetFood.dbc`.
 fn hunter_pet_stats() -> PetStats {
     PetStats {
         icon: None,
@@ -84,7 +84,7 @@ fn hunter_pet_stats() -> PetStats {
 }
 
 /// Numbers a pet's descriptor really carries: stats and resistances, no PLAYER-block buff split
-/// (a creature has none — decision 1057), so every pos/neg stays zero.
+/// (a creature has none), so every pos/neg stays zero.
 fn pet_combat_stats() -> UnitCombatStats {
     UnitCombatStats {
         stats: [123, 88, 210, 20, 45],
@@ -125,7 +125,7 @@ fn give_pet(s: &mut UiScript) {
     s.fire_event("PET_BAR_UPDATE", vec![]);
 }
 
-/// Take it away again — the dismiss/death path: `UNIT_PET` names the OWNER, not the pet (0990).
+/// Take it away again — the dismiss/death path: `UNIT_PET` names the OWNER, not the pet.
 fn take_pet(s: &mut UiScript) {
     s.set_unit("pet", None);
     s.set_pet_stats(false, PetStats::default());
@@ -346,7 +346,7 @@ fn a_minion_gets_the_page_without_the_hunter_furniture() {
     assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
 }
 
-/// **The level line, both ways** (decision 1062). The reference guards its whole `SetText` on
+/// **The level line, both ways**. The reference guards its whole `SetText` on
 /// `UnitCreatureFamily("pet")` (stock `PetPaperDollFrame.lua:68-70`), so the family is not
 /// decoration on an existing line — it is the *condition* for the line existing at all. With a
 /// family the row reads "Level 58 Imp"; without one nothing about the pet reaches the line, which
@@ -414,7 +414,7 @@ fn the_level_line_names_the_family_and_is_untouched_without_one() {
     );
 }
 
-/// **The diet tooltip** (decision 1062): the happiness-art icon under the rotate buttons is the
+/// **The diet tooltip**: the happiness-art icon under the rotate buttons is the
 /// pet's DIET affordance, and its hover runs the reference's own
 /// `format(PET_DIET_TEMPLATE, BuildListString(GetPetFoodTypes()))` (stock
 /// `PetPaperDollFrame.xml:267-270`) — the vararg binding feeding the `UIParent.lua` joiner.
@@ -455,8 +455,8 @@ fn hovering_the_diet_icon_lists_what_the_pet_eats() {
     );
     // …and it draws ON TOP of the model pane it sits inside — the actual regression. The pane is
     // opaque and the icon's rect is wholly within it, so being in the render list is not the same
-    // as being seen. The pane rides BACKGROUND for exactly this reason (decision 1070): at ARTWORK
-    // the draw layer, which is bucket-wide and outranks the frame (0884), buried the icon no
+    // as being seen. The pane rides BACKGROUND for exactly this reason: at ARTWORK
+    // the draw layer, which is bucket-wide and outranks the frame, buried the icon no
     // matter which frame was declared later.
     //
     // The pane is found by NAME rather than by "a texture quad with an empty path", which is what
@@ -517,7 +517,7 @@ fn hovering_the_diet_icon_lists_what_the_pet_eats() {
     assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
 }
 
-/// `BuildListString`'s own edges, on the shipped `UIParent.xml` (decision 1062). The reference's is
+/// `BuildListString`'s own edges, on the shipped `UIParent.xml`. The reference's is
 /// a bare comma join with **no** "and" and **no** localization string, and it answers **nil** for
 /// zero arguments — the shape `format("%s", …)` would error on, which is exactly why the diet icon
 /// is hunter-gated. Quietly returning `""` here would hide that coupling.

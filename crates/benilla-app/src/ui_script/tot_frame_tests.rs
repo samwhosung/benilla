@@ -1,4 +1,4 @@
-//! The target-of-target frame, driven end to end (decision 1576) — the **reference's own**
+//! The target-of-target frame, driven end to end — the **reference's own**
 //! `TargetofTargetFrame`, declared in `Interface\FrameXML\TargetFrame.xml` (l.515-680) and
 //! driven by `TargetFrame.lua`, off the player's patch chain. Decision 1751 retired our
 //! `assets/ui/UnitFrames.xml` transcription, so what is under test here is the stock file over

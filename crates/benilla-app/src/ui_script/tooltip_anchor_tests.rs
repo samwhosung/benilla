@@ -97,7 +97,7 @@ fn world_hover_seats_the_default_corner() {
 /// GameTooltip_SetDefaultAnchor, not an owner anchor).
 ///
 /// Leave drops the plate AT ONCE, not on the fade ramp: `UnitFrame_OnLeave` l.84-88 branches on
-/// `SHOW_NEWBIE_TIPS`, and 1.12's default is on (0661/0663) — `FadeOut` is the tips-off arm. The
+/// `SHOW_NEWBIE_TIPS`, and 1.12's default is on — `FadeOut` is the tips-off arm. The
 /// world mouseover keeps the ramp; this is the unit *frame*.
 #[test]
 fn unit_frame_hover_takes_the_default_corner_and_drops_on_leave() {
@@ -164,7 +164,7 @@ fn unit_frame_hover_takes_the_default_corner_and_drops_on_leave() {
 /// shipped files: `UNKNOWNOBJECT` as `GlobalStrings.lua` defines it on the PLAYER'S OWN CHAIN.
 /// Read out of the VM at the assert rather than written as a literal, because that is the whole
 /// point of the resolver's `0x703bf0` read — a translated GlobalStrings translates the
-/// placeholder too (decision 2040, closing 2002's residue).
+/// placeholder too (closing 2002's residue).
 ///
 /// The engine half (the miss legs, the empty-global fallback, the `"player"` case) is
 /// `benilla_ui`'s own `tooltip_unit` suite; what this adds is the chain: the string really is
@@ -526,7 +526,7 @@ fn buff_hover_hangs_below_left_of_the_button() {
 
 /// **The cursor-seated GameObject plate carries an OWNER** — the store the reference's publisher
 /// makes through the SetOwner core (`0x492a01 → 0x52ffe0(owner, 6, 0, 0)`, whose `0x53000c`
-/// writes `+0x314`), and the one arm of ours that used to skip it (decision 2255).
+/// writes `+0x314`), and the one arm of ours that used to skip it.
 ///
 /// Every other world plate reached an owner by accident, through Lua: the corner arm and the unit
 /// flow both fire `OnTooltipSetDefaultAnchor`, and the stock handler calls
@@ -547,7 +547,7 @@ fn a_cursor_seated_gameobject_plate_is_owned() {
 }
 
 /// **An addon's `OnShow` hook must not hide the plate the world hover just built** — the
-/// director's signpost with no tooltip (decision 2255).
+/// director's signpost with no tooltip.
 ///
 /// `!Questie` installs an `OnShow` on GameTooltip at PLAYER_LOGIN (`Questie:hookTooltip` — it
 /// installs one precisely *because* the stock plate has none) whose handler ends in
@@ -576,7 +576,7 @@ fn a_cursor_seated_gameobject_plate_survives_an_addons_on_show_hook() {
     );
 }
 
-/// **The CORNER arm must end up owned too — the other half of the existence gate** (decision 2259).
+/// **The CORNER arm must end up owned too — the other half of the existence gate**.
 ///
 /// The reference's corner arm (`0x492a42`) writes no owner itself; the owner is restored purely by
 /// the `+0x444` handler, `OnTooltipSetDefaultAnchor` → `GameTooltip_SetDefaultAnchor(this,

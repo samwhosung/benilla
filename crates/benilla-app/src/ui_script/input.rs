@@ -20,7 +20,7 @@ use crate::textinput::{self, keymap, HostClipboard};
 /// [`bevy::ecs::system::SystemParam`] (the argument ceiling): the UI hover + click-consumed
 /// outputs, the world pick inputs (LAST frame's hovered unit/GameObject + the occlusion ray —
 /// the target chain runs after this pass; a frame's staleness is within the pick's own
-/// tolerance) that route the world-click payload legs (decisions 0571 + 0574), and the
+/// tolerance) that route the world-click payload legs, and the
 /// payload-held mirror.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct PointerFeed<'w> {
@@ -92,7 +92,7 @@ fn feed_wheel(
 pub(super) fn feed_ui_input(
     script: Option<NonSendMut<UiScript>>,
     // The window's raw handle rides along with it: on Wayland it carries the `wl_display` the
-    // clipboard backend is built from (decision 0702). `Option`, because it only appears once
+    // clipboard backend is built from. `Option`, because it only appears once
     // winit has actually created the surface.
     window: Query<(&Window, Option<&bevy::window::RawHandleWrapper>), With<PrimaryWindow>>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -100,19 +100,19 @@ pub(super) fn feed_ui_input(
     // ([`feed_wheel`]) — one param for clippy's argument ceiling.
     (scroll, mut notches): (Res<AccumulatedMouseScroll>, ResMut<WheelNotches>),
     // One [`PointerFeed`] (clippy's argument ceiling): the hover + click-consumed outputs this
-    // pass writes, the world pick that routes the world-click payload legs (decision 0571), and
+    // pass writes, the world pick that routes the world-click payload legs, and
     // the payload-held mirror written for the Send-side world-click consumers.
     mut pointer: PointerFeed,
     // Bundled into one param (clippy's argument ceiling): this frame's key messages, the modifier
     // mirror, the capture gate the keyboard feed writes, and the held OS pasteboard the three
-    // clipboard chords resolve against (decision 0702).
+    // clipboard chords resolve against.
     mut kbd: (
         MessageReader<KeyboardInput>,
         Res<ButtonInput<KeyCode>>,
         ResMut<UiKeyboardCapture>,
         NonSendMut<HostClipboard>,
     ),
-    // The uiScale dial folded into the seam scale (decision 0584).
+    // The uiScale dial folded into the seam scale.
     ui_scale: Res<super::UiScaleCvar>,
 ) {
     let (keyboard, keys, capture, clipboard) = (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3);
@@ -148,7 +148,7 @@ pub(super) fn feed_ui_input(
     };
     // `Some` only on a Wayland session — the signal the clipboard backend picks itself by.
     let wl_display = textinput::wayland_display(raw_handle);
-    // The engine's world-drop routing (decisions 0571 + 0574): an object pick keeps every
+    // The engine's world-drop routing: an object pick keeps every
     // payload (the reference's object leg dispatches SELECT with the item still held), terrain
     // drops items only, nothing drops any arm.
     script.set_world_pick(world_pick);
@@ -190,7 +190,7 @@ pub(super) fn feed_ui_input(
             *HIT_COST.get_or_init(|| std::env::var("WOW_HIT_COST").as_deref() == Ok("1"));
         let t0 = metering.then(std::time::Instant::now);
         // The world frame is mouse-enabled by construction and so a legitimate hover target for
-        // an addon's handlers, but its hit is the WORLD's (decision 1983): camera look, world
+        // an addon's handlers, but its hit is the WORLD's: camera look, world
         // clicks and hover targeting stay live over it.
         hover.0 = script
             .mouse_move(x, y)
@@ -226,7 +226,7 @@ pub(super) fn feed_ui_input(
                 // byte-verified trigger — but the press is when the world click-pick and
                 // camera orbit-start would act, so they must yield now, exactly as for a
                 // hovered click). "Would drop" mirrors `world_drop_click`'s pick routing
-                // (decisions 0571 + 0574, amended by 0843): ANY payload over terrain/nothing
+                // (amended by 0843): ANY payload over terrain/nothing
                 // drops (the item's popup, the spell/action's silent dismiss). Only a payload
                 // over an OBJECT is not consumed — the reference runs SELECT with the payload
                 // still held, so that click must reach the world.
@@ -304,7 +304,7 @@ pub(super) fn feed_ui_input(
         // route law decides; unfocused they return unconsumed, and the camera/turn keys that
         // read arrows after UiInput see them exactly as before).
         let chord = keymap::chord(ev.key_code, mods, mac);
-        // A KEYBOARD FRAME gets these by NAME before their chord runs (decision 1319). They are
+        // A KEYBOARD FRAME gets these by NAME before their chord runs. They are
         // the keys a focused EditBox receives as a semantic `EditAction` instead of a name, so
         // they never reached `key_input` at all — and a dialog you type into needs its BACKSPACE.
         // `frame_key_input` walks in the engine's own order and declines at a focused box, so the
@@ -360,11 +360,11 @@ pub(super) fn feed_ui_input(
             // The three box-event keys. An unconsumed press is not acted on here: every GAME
             // action of a key — ESCAPE's close/cancel ladder (TOGGLEGAMEMENU), TAB's targeting,
             // ENTER's chat open, the number row's action buttons — now lives in the binding
-            // dispatch (decision 0997, `crate::bindings`), which runs right after this pass and
+            // dispatch (`crate::bindings`), which runs right after this pass and
             // reads the capture gate written above, so a key a focused box consumed this frame
             // never also fires its binding — the real client's ESC precedence, table-wide.
             // Consumption suppresses this key's binding — a keyboard FRAME that took the key
-            // counts as the focused box does for *that key* (decision 1319; `capture.typing` above
+            // counts as the focused box does for *that key* (`capture.typing` above
             // covers the box, which takes every key for as long as it holds focus, and this adds
             // the frame's one-key case).
             if script.key_input(name) {
@@ -418,7 +418,7 @@ pub(super) fn feed_ui_input(
             if let Some(text) = &ev.text {
                 // Same suppression as the named keys, and this is the case that bites: the number
                 // row IS a binding (the action buttons), so a digit typed into a keyboard frame —
-                // the stack-split spinner — must not also fire action button 3 (decision 1319).
+                // the stack-split spinner — must not also fire action button 3.
                 if script.char_input(text) {
                     capture.consumed.push(ev.key_code);
                 }

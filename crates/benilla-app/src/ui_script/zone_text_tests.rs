@@ -1,5 +1,5 @@
 //! The reference's own `ZoneText.xml` — executed off the player's chain since 1751's eighth
-//! window — driven engine-only (decision 0287): the zone splash shows on the
+//! window — driven engine-only: the zone splash shows on the
 //! right events with the right strings/colors, fades on the reference 0.5/1.0/2.0 timeline, and
 //! honors the subtle law — a plain `ZONE_CHANGED` re-caches the zone name *silently*, so a later
 //! `ZONE_CHANGED_NEW_AREA` that lands on the already-cached name never re-splashes.
@@ -336,7 +336,7 @@ fn subzone_seat_hangs_under_the_territory_line_on_new_area() {
 }
 
 /// `AutoFollowStatus` — the third frame in `ZoneText.xml`, and the only thing `ref-ZoneText.lua`
-/// actually contains (decision 0893). The app fires `AUTOFOLLOW_BEGIN` with the followee's name and
+/// actually contains. The app fires `AUTOFOLLOW_BEGIN` with the followee's name and
 /// `AUTOFOLLOW_END` with nothing; the frame does the rest.
 ///
 /// The load-bearing assertion is that **END reuses the name BEGIN latched**. That is why the app

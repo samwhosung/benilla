@@ -1,4 +1,4 @@
-//! **The shipped UI's files, compiled into the binary** (decision 1175 §2).
+//! **The shipped UI's files, compiled into the binary**.
 //!
 //! One question, one answer: *give me the text of `ui/<name>.xml`*. [`load_ui_files`] and the
 //! `provider` closure it hands the loader (for `<Include>` / `<Script file=>` references) both ask

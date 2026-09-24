@@ -42,7 +42,7 @@ fn frame_rect(quads: &[ExtractedQuad], w: f32, h: f32) -> benilla_ui::layout::Re
 
 /// Load the stock `Interface\FrameXML\MerchantFrame.xml` behind `UIParent.xml`
 /// into a bare engine and drive it with a synthetic 2-item stock + a purse — the whole phase-4
-/// chain minus Bevy (decision 0081), now over the UIPanel slot manager (decision 0084): the
+/// chain minus Bevy, now over the UIPanel slot manager: the
 /// hidden→shown lifecycle on MERCHANT_SHOW goes through ShowUIPanel (landing at the left slot),
 /// both rows' icons + a price + the money line rendering, a row click queuing the right buy
 /// intent, and MERCHANT_CLOSED hiding it through HideUIPanel, vacating the left slot.
@@ -333,7 +333,7 @@ fn shipped_merchant_frame_drives_end_to_end() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The vendor window's open/close kits — the window-sound convention (decision 0090). The real
+/// The vendor window's open/close kits — the window-sound convention. The real
 /// MerchantFrame.xml frame Scripts play igCharacterInfoOpen on OnShow (l.721) and igCharacterInfoClose
 /// on OnHide (l.714); MERCHANT_SHOW → ShowUIPanel → Show() fires OnShow, MERCHANT_CLOSED → HideUIPanel
 /// → Hide() fires OnHide. Nothing queues at load (the frame is authored hidden="true").
@@ -477,7 +477,7 @@ fn vendor_leaves_an_already_open_backpack_alone() {
     );
 }
 
-/// The all-bags divergence (decision 0561, director's call): the vendor opens EVERY equipped bag
+/// The all-bags divergence (director's call): the vendor opens EVERY equipped bag
 /// with it — not only the backpack like the ref's OpenBackpack — and closes every bag it opened.
 /// Backpack + one equipped bag in slot 2 (bags 1/3/4 unequipped → no window): MERCHANT_SHOW opens
 /// both windows, MERCHANT_CLOSED closes both.
@@ -524,7 +524,7 @@ fn vendor_opens_and_closes_all_equipped_bags() {
 
 /// Switching vendors (right-click vendor B while vendor A's window is open) is a real close+open —
 /// the client's ShowUIPanel early-returns when the frame is visible, so the open kit only re-plays
-/// after a hide (decision 0096). The feed fires MERCHANT_CLOSED then MERCHANT_SHOW; this drives that
+/// after a hide. The feed fires MERCHANT_CLOSED then MERCHANT_SHOW; this drives that
 /// exact sequence over the shipped XML and asserts BOTH the close-then-open kit order AND that the
 /// MERCHANT_CLOSED's OnHide queued a close intent — the intent the feed then consumes so the drain
 /// doesn't clear the vendor it just re-opened to.
@@ -951,7 +951,7 @@ fn merchant_tabs_drive_buyback_page_and_repair_pair() {
 /// too wide, and the −16 overlap lost its nestle gap.
 ///
 /// **Driven through a SYNCHRONOUS measurer, with no round trip to pump** — the same correction 1848
-/// made to the macro harness, arriving here with the template (decision 1993). This used to feed
+/// made to the macro harness, arriving here with the template. This used to feed
 /// two widths through `set_measured_text_unwrapped` and then tick, because our own template re-fit
 /// from `OnUpdate` until the measure settled. The reference's file fits once, in `OnShow`; a client
 /// whose measure is still pending at that moment could never size its tabs at all, and the app is
@@ -1145,8 +1145,8 @@ fn trade_recipient_money_renders_the_digit_not_ellipsis() {
 }
 
 /// The vendor row's LEFT-button modifier fork (ref `MerchantItemButton_OnClick`,
-/// MerchantFrame.lua l.301-306): CTRL previews the item in the dressing room (decision 1060), SHIFT
-/// posts its link into an open chat edit box (decision 1059) — both over `GetMerchantItemLink`, the
+/// MerchantFrame.lua l.301-306): CTRL previews the item in the dressing room, SHIFT
+/// posts its link into an open chat edit box — both over `GetMerchantItemLink`, the
 /// binding this arc added. Neither may buy: this window's click *is* a purchase, so a modified click
 /// that fell through would spend the player's money.
 ///

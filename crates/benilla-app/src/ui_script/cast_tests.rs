@@ -206,7 +206,7 @@ fn channel_counts_down_not_up() {
     // apart by draining instead of filling, and by its label. **Classic Era's channel bar IS
     // green** (`CastingBarType.Channel`'s `classicFillColor = CASTBAR_CLASSIC_GREEN`) — a real
     // behaviour of a different client, which is why this is a gate and not a comment: if we ever
-    // take Era's colour it is a deliberate deviation that has to come here first (decision 2284).
+    // take Era's colour it is a deliberate deviation that has to come here first.
     let (r, g, b) = bar_color(&s);
     assert!(
         (r - 1.0).abs() < 1e-6 && (g - 0.7).abs() < 1e-6 && b.abs() < 1e-6,
@@ -462,11 +462,11 @@ fn bottom(s: &UiScript, name: &str) -> f64 {
         .unwrap()
 }
 
-/// The managed bottom-stack positions (decision 0272): the ref's UIParent.lua re-anchors the
+/// The managed bottom-stack positions: the ref's UIParent.lua re-anchors the
 /// cast bar and the chat window over whatever bottom bars are showing — the XML anchors
 /// (55 / 85) are only pre-manage defaults. The bar visibilities are the mechanism's only
 /// inputs, so plain Lua stubs exercising IsShown() stand in for the real always-on multibars
-/// (0270) and the stance bar; the arithmetic asserted is the ref table's own
+/// and the stance bar; the arithmetic asserted is the ref table's own
 /// (base + bottomEither/bottomLeft + pet, and chat's bottomLeft-and-pet +23 extra).
 #[test]
 fn managed_positions_track_the_bottom_bar_stack() {
@@ -500,7 +500,7 @@ fn managed_positions_track_the_bottom_bar_stack() {
     );
     assert_eq!(bottom(&s, "ChatFrame1"), 85.0, "chat baseY");
 
-    // The always-on bottom multibars appear (0270): bottomEither for the bar, bottomLeft for chat.
+    // The always-on bottom multibars appear: bottomEither for the bar, bottomLeft for chat.
     // The bar stubs carry a no-op SetPoint: `MultiBarBottomLeft` and `ShapeshiftBarFrame` are
     // themselves rows in UIPARENT_MANAGED_FRAME_POSITIONS, so since those frames wear their
     // reference names the pass positions them as well as reading their visibility.

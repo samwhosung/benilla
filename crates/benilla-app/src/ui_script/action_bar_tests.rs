@@ -132,7 +132,7 @@ fn shipped_action_bar_drives_end_to_end() {
 
     // The keybinding entry (the app's key feed runs `ActionButtonDown/Up(i)` on the two
     // key edges — the ref's ACTIONBUTTONn binding, ActionButton.lua:15-45): UP fires UseAction
-    // directly with no checkCursor (a keybind never places, decision 0216 §7) — but ONLY from
+    // directly with no checkCursor (a keybind never places) — but ONLY from
     // the PUSHED state a DOWN set, so a stray release with no press is the ref's own no-op.
     s.run("ActionButtonUp(2)").unwrap();
     assert!(
@@ -256,7 +256,7 @@ fn state_feedback_drives_cooldown_checked_and_usable_through_the_xml() {
         }),
     );
     s.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
-    // The stock machine (decision 2019): `CooldownFrame_SetTimer` arms sequence 0 and shows the
+    // The stock machine: `CooldownFrame_SetTimer` arms sequence 0 and shows the
     // pane; the next paint's `OnUpdateModel` scrubs it to `(GetTime() − start) / duration`.
     super::test_ui::cooldown_facts(&mut s);
     s.tick(0.0);
@@ -346,7 +346,7 @@ fn state_feedback_drives_cooldown_checked_and_usable_through_the_xml() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Why a restarted `GetTime` clock reads on the bar as "no cooldown at all"** (decision 2116),
+/// **Why a restarted `GetTime` clock reads on the bar as "no cooldown at all"**,
 /// through the shipped `Cooldown.lua`: `CooldownFrame_SetTimer`'s only gate is
 /// `start > 0 and duration > 0 and enable > 0`, and its `else` branch is `this:Hide()`. So the
 /// SAME running cooldown draws or vanishes purely on which clock its start was converted against.
@@ -607,8 +607,8 @@ const COOLDOWN_COUNT_HOOK: &str = r#"
     end
 "#;
 
-/// **On the bonus bar the countdown draws over the sweep, as it does on every other bar**
-/// (decision 2189). It came in as "the cooldown counter on action bar 1 is hidden behind the pie";
+/// **On the bonus bar the countdown draws over the sweep, as it does on every other bar**.
+/// It came in as "the cooldown counter on action bar 1 is hidden behind the pie";
 /// a warrior in a stance — a druid in a form, a rogue in stealth — sees the bonus bar there.
 ///
 /// Stock `BonusActionButtonTemplate`'s `OnLoad` raises the button `+2` and then its cooldown `+2`
@@ -684,7 +684,7 @@ fn a_cooldown_count_draws_over_the_bonus_bars_sweep() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// An action button is a TWO-button button (decision 0908; director's report B200: "I can't right
+/// An action button is a TWO-button button (director's report B200: "I can't right
 /// click food on my bar to eat it or right click spells"). The ref's `ActionButton_OnLoad`
 /// registers `("LeftButtonUp", "RightButtonUp")` (ActionButton.lua:109) and its OnClick body reads
 /// no `arg1` — so either button runs the same fork and right-click USES the action. The widget
@@ -797,7 +797,7 @@ fn shift_click_picks_up_not_uses() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Lock ActionBars** (decision 1136) — the `LOCK_ACTIONBAR` uvar the Options window's Action Bars
+/// **Lock ActionBars** — the `LOCK_ACTIONBAR` uvar the Options window's Action Bars
 /// row and the `TOGGLEACTIONBARLOCK` binding both write, guarding the two drag ends the way the
 /// reference does (ActionBarFrame.xml:23-38).
 ///
@@ -879,7 +879,7 @@ fn the_action_bar_lock_stops_the_drag_and_leaves_shift_click_alone() {
 
 /// A physical drag from button 1 onto OCCUPIED button 2: the byte-verified action-bar hop (0218
 /// §4) — the displaced action lands on the cursor, TWO independent `action_sets` entries across
-/// the one gesture (0218 §4: "a drag-swap is two sends, never atomic").
+/// the one gesture ("a drag-swap is two sends, never atomic").
 #[test]
 fn drag_drop_onto_another_button_hops_the_displaced_action() {
     benilla_formats::wow_data_or_skip!();
@@ -947,7 +947,7 @@ fn drag_drop_onto_another_button_hops_the_displaced_action() {
 /// false and the ref paints nothing at all. It repaints on `ACTIONBAR_SLOT_CHANGED` alongside the
 /// icon (the same event the identity resolve fires).
 ///
-/// **The gate rides the SLOT, not the state map** (decision 1301). It used to be pushed through
+/// **The gate rides the SLOT, not the state map**. It used to be pushed through
 /// `set_action_state`, and this test set that up *before* the repaint — the opposite of the
 /// runtime order, where the identity feed fires `ACTIONBAR_SLOT_CHANGED` a whole system before the
 /// state feed writes anything. That inversion is why a passing test sat over a fresh character
@@ -1053,7 +1053,7 @@ fn count_fontstring_follows_is_consumable_action_not_the_bag_count() {
 /// The macro-name line (ref `ActionButton_Update:236-238`, "Update Macro Text") through the REAL
 /// shipped XML: a MACRO slot's button reads its macro's name under the icon, a SPELL slot's reads
 /// nothing, and a macro slot that empties loses the name through the same unconditional write.
-/// B340 (decision 1636): the template declared `$parentName` and nothing ever set it, so every
+/// B340: the template declared `$parentName` and nothing ever set it, so every
 /// macro on the bar was nameless.
 #[test]
 fn macro_name_line_follows_get_action_text_through_the_xml() {
@@ -1393,7 +1393,7 @@ fn state_events_leave_empty_wells_untinted() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The white-buttons regression (director-reported 2026-08-07, decision 1108): a slot that was
+/// The white-buttons regression (director-reported 2026-08-07): a slot that was
 /// OCCUPIED — UpdateUsable painted its icon's 1/1/1 usable tint — then goes EMPTY (the feed's
 /// character-switch diff: `set_action(None)` + `ACTIONBAR_SLOT_CHANGED`) kept the tint on the
 /// now-artless icon region and drew it as a solid WHITE square. Two laws close it, both asserted
@@ -1845,7 +1845,7 @@ fn the_main_bar_pages_and_a_bonus_page_still_outranks_it() {
     );
 }
 
-/// The form/stance/stealth swap transition (decision 1524; ref BonusActionBarFrame.lua:1-98).
+/// The form/stance/stealth swap transition (ref BonusActionBarFrame.lua:1-98).
 /// Entering a form slides the BonusActionBarFrame replica up over 0.15s — the main bar keeps
 /// painting the OLD page underneath until the landing, which is also the one moment the sound
 /// (igBonusBarOpen) plays. The overlay then STAYS shown while the form holds (the ref-visible

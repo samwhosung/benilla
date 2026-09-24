@@ -283,7 +283,7 @@ fn quitting_from_the_character_screen_does_not_blank_the_session_it_wrote() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// **The login arms the world latch, and the logout spends it** (decision 2239) — the chain that
+/// **The login arms the world latch, and the logout spends it** — the chain that
 /// makes `PLAYER_LEAVING_WORLD` fire on the commonest root of all.
 ///
 /// This is the regression the latch design could most easily have caused, so it is pinned rather
@@ -328,7 +328,7 @@ fn the_login_arms_the_world_latch_and_the_logout_spends_it() {
 }
 
 /// **A quit from the character screen fires `PLAYER_LOGOUT` and NOT `PLAYER_LEAVING_WORLD`** —
-/// the reference's one guard inside the shutdown tail (decision 2238).
+/// the reference's one guard inside the shutdown tail.
 ///
 /// `0x490bd0` tests the object manager's active-player GUID pair (`0x490bee call 0x468550` /
 /// `0x490bf3 or eax,edx` / `0x490bf5 je 0x490c25`) and the taken side skips exactly one
@@ -441,7 +441,7 @@ fn logging_out_leaves_no_in_game_frames_behind() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-// ───────────────────────────────── ReloadUI (decision 1291) ─────────────────────────────────
+// ───────────────────────────────── ReloadUI ─────────────────────────────────
 
 /// **`ReloadUI()` is a real login run in place** — the reference's teardown/rebuild pair
 /// (`0x495664`/`0x495669`), which for us is the same two edge functions the logout/login cycle
@@ -612,7 +612,7 @@ fn reload_outside_the_world_is_dropped() {
 
 /// **B271, the error half.** An addon that raises at file scope while entering world must not
 /// take the client with it: the walk reports it, the sibling addon still loads, and the player
-/// sees the reference's red ScriptErrors dialog (decision 1305) — the report was debugged
+/// sees the reference's red ScriptErrors dialog — the report was debugged
 /// entirely off terminal WARN lines because the client showed nothing.
 #[test]
 fn an_addon_error_while_entering_world_reports_on_screen_and_the_sibling_loads() {
@@ -662,7 +662,7 @@ fn an_addon_error_while_entering_world_reports_on_screen_and_the_sibling_loads()
 }
 
 /// **B271, the freeze half.** An addon that never returns cannot freeze world entry: the load
-/// bound (decision 1306) fails it with the distinctive budget message, the sibling addon still
+/// bound fails it with the distinctive budget message, the sibling addon still
 /// loads, and this test FINISHING is the claim — before 1306 it would hang here forever.
 #[test]
 fn a_looping_addon_cannot_freeze_world_entry() {
@@ -823,7 +823,7 @@ fn leaving_inside_the_deferral_window_drops_the_load_and_writes_nothing() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-// ───────────── The login one-shots wait for the in-game UI (decision 1348) ─────────────
+// ───────────── The login one-shots wait for the in-game UI ─────────────
 
 /// **The director's white XP bar, from the side that causes it.**
 ///
@@ -892,7 +892,7 @@ fn the_login_one_shots_wait_for_the_in_game_ui() {
             .expect("probe global")
     };
 
-    // **The frame the latch cannot see** (B376): the descriptor above came off the same drain as
+    // **The frame the latch cannot see**: the descriptor above came off the same drain as
     // `Connected`, so the wire is in-world while the state still says glue and no load is armed
     // yet — `OnEnter(InWorld)` runs next frame. A feed gated only on the latch runs here.
     app.insert_resource(State::new(crate::char_select::ClientState::CharSelect));
@@ -933,7 +933,7 @@ fn the_login_one_shots_wait_for_the_in_game_ui() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// **B293's headline, at the edge that produces it** (decision 1495). An addon that fails to load
+/// **B293's headline, at the edge that produces it**. An addon that fails to load
 /// *without raising* — the commonest shape by far, a `.toc` naming a file the package does not
 /// ship — used to `warn!` to the terminal and vanish. Nothing raised, so 1305's dialog could not
 /// fire; the walk's failure list was dropped on the floor at `load_ingame_ui_on_world_entry`; and
@@ -1134,7 +1134,7 @@ fn a_repeating_error_is_one_row_with_a_count_not_a_flood() {
 /// Parentless, so its anchor is the screen root — the file's `-` target — which is what lets this
 /// need no FrameXML and no install.
 /// **Both flags, deliberately**: the layout cache's apply is gated per arm — position behind
-/// `movable`, size behind `resizable` (decision 2193) — so a probe standing in for a window the
+/// `movable`, size behind `resizable` — so a probe standing in for a window the
 /// player both moved and resized has to carry both, or half its geometry is correctly left behind.
 fn place_a_window(world: &mut World) {
     world
@@ -1251,7 +1251,7 @@ fn each_character_gets_its_own_layout_cache() {
 ///
 /// It carries the same `movable`/`resizable` pair, because those are the window's **authored**
 /// state — XML attributes on a real resizable window, rebuilt with it — and the layout cache's
-/// apply reads them off the live frame to decide which arm runs (decision 2193).
+/// apply reads them off the live frame to decide which arm runs.
 fn author_a_window(world: &mut World) {
     world
         .get_non_send_resource_mut::<benilla_ui::script::UiScript>()
@@ -1352,7 +1352,7 @@ fn a_clean_world_entry_raises_only_the_warnings_we_have_named() {
     // `SCRIPT_KINDS`' rule is that a name we cannot fire stays out. The refusal is the honest
     // answer; the row is the price of saying it out loud.
     //
-    // **`gxRefresh` stays out permanently too** (decision 2177). The stock VIDEO options window
+    // **`gxRefresh` stays out permanently too**. The stock VIDEO options window
     // reads it in `OptionsFrameRefreshDropDown_OnLoad` — one of the two `<OnLoad>` paths that run
     // on the spot when that file loads — and benilla does not register it, because a refresh rate
     // is only selectable through an exclusive mode-set and this client ships none on any target
@@ -1375,7 +1375,7 @@ fn a_clean_world_entry_raises_only_the_warnings_we_have_named() {
     );
 }
 
-// ─────────────────── The predicate every in-world feed runs on (B376) ───────────────────
+// ─────────────────── The predicate every in-world feed runs on ───────────────────
 
 /// **`not(ingame_ui_pending)` was only half the gate**, and the missing half is a whole frame
 /// wide.
@@ -1430,7 +1430,7 @@ fn run_ingame_ui_up(world: &mut World) -> bool {
         .expect("the condition runs")
 }
 
-/// **The map catalog is in the VM before the first addon file runs** (decision 2240) — Questie's
+/// **The map catalog is in the VM before the first addon file runs** — Questie's
 /// `Astrolabe.lua:62: attempt to index local 'zoneData' (a nil value)`, from the side that causes
 /// it.
 ///
@@ -1501,7 +1501,7 @@ MapProbeZones = table.getn({ GetMapZones(1) })
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// **The keybinding table is in the VM before the first addon file runs** (decision 2241).
+/// **The keybinding table is in the VM before the first addon file runs**.
 ///
 /// Stock `ActionButton_OnLoad` paints its hotkey corner from `GetBindingText(GetBindingKey(action))`
 /// at OnLoad, and an addon that rebinds a stock command needs that command to exist. Seeded from an
@@ -1553,7 +1553,7 @@ BindProbeSet = SetBinding(\"J\", \"TOGGLEWORLDMAP\")
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// **The zone-channel catalog is in the VM before the first addon file runs** (decision 2241) —
+/// **The zone-channel catalog is in the VM before the first addon file runs** —
 /// and this one puts a packet on the wire when it is not.
 ///
 /// An empty catalog is not "no zone yet" to `JoinChannelByName`: it is *"no such built-in
@@ -1605,7 +1605,7 @@ JoinProbe.lua
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// **The screen size is in the VM before the first `<OnLoad>` runs** (decision 2242) — the
+/// **The screen size is in the VM before the first `<OnLoad>` runs** — the
 /// director's "the map is missing the bg again", from the side that causes it.
 ///
 /// A fresh `Model` starts at 1024×768 and only `tick_script` (an `Update` system) corrects it, so
@@ -1662,7 +1662,7 @@ ScreenProbeHeight = GetScreenHeight()
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// **The entry load seeds the player record, not just the snapshot** (decisions 2261/2263).
+/// **The entry load seeds the player record, not just the snapshot**.
 ///
 /// [`super::seat_from_roster`]'s `"player"` push is the descriptor's stand-in and is *replaced*
 /// the moment the real one streams in — which is how decision 2260's nameless push reached

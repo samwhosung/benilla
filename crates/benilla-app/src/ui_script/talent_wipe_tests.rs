@@ -1,4 +1,4 @@
-//! The class trainer's respec confirm (decision 1580, TalentWipeConfirm.xml): the dialog
+//! The class trainer's respec confirm (TalentWipeConfirm.xml): the dialog
 //! `ui_talent_wipe`'s feed raises, the money frame that carries the cost, its Accept, and the range
 //! poll that takes it away — driven exactly as that feed and the app's NPC-session guard drive it.
 

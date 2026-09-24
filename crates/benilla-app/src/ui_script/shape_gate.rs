@@ -1,5 +1,5 @@
 //! **The return-shape gate** — `reference/1.12-shapes.tsv` against what this client actually
-//! answers (decision 1842).
+//! answers.
 //!
 //! `reference_surface` compares `_G` to `_G`, so a wrong *name* cannot land. Nothing compared
 //! *shapes*, and that gap produced six decisions in two days — 1818, 1819, 1830, 1834, 1836 and
@@ -13,7 +13,7 @@
 //! in the table is `(nil) | (number)`, because the client pushes `1` and `nil`, never `true` and
 //! `false`. An addon writing `if IsShiftKeyDown() == 1` — and 87 corpus addons compare returns to
 //! `1` — reads a `true` as "not held". So the kinds column is gated as well, wherever the table
-//! says it is trustworthy (decision 2118).
+//! says it is trustworthy.
 //!
 //! The table is a harvest of the reference binary, vendored: 1722 rows over all 82 registrar
 //! tables, one per registered binding, generated and differentially tested against a second
@@ -280,7 +280,7 @@ fn every_query_binding_answers_the_reference_s_return_arity() {
     );
 }
 
-/// **The base-library arm of the gate** (decision 2136) — the 36 entries at `0x811e28`, which the
+/// **The base-library arm of the gate** — the 36 entries at `0x811e28`, which the
 /// other three arms never looked at.
 ///
 /// [`rows`] filters to `table_kind = global`, so every `baselib` row in the vendored table sat
@@ -515,7 +515,7 @@ const REGION_PROBES: &[(&str, &str)] = &[
     ("0x87c7c8", "CreateFont('PGFontObject')"),
 ];
 
-/// **The widget half of the gate** (decision 1843) — the half that would have caught 1840's
+/// **The widget half of the gate** — the half that would have caught 1840's
 /// `GetTexCoord` without a byte read.
 ///
 /// Same rule as the global half: `arity_conf = exact` only, query verbs only, a call that raises is
@@ -668,7 +668,7 @@ const KIND_HELPER: &str = "function PGKinds(...) \
      return table.concat(o, ',') end";
 
 /// Every registered global whose return *kinds* the reference states trustworthily, answered by
-/// this client (decision 2118).
+/// this client.
 ///
 /// Same three narrowings as the arity gate, for the same reasons: query verbs only, a call that
 /// raises is skipped, and a name registered from two tables is read at its non-glue row. A fourth
@@ -907,7 +907,7 @@ const ARG_LADDER: &[&str] = &["", "\"player\"", "1", "1, 1", "\"player\", 1"];
 ///
 /// The distinction is invisible to `if x then` and decisive to everything else: `x == 1`,
 /// `tostring(x)`, a value stored in a saved variable, arithmetic, a table key. `ColorPickerPlus`
-/// writes `if IsShiftKeyDown() == 1 then` (decision 2118), and no gate we had could see it.
+/// writes `if IsShiftKeyDown() == 1 then`, and no gate we had could see it.
 #[test]
 fn no_query_binding_answers_a_lua_boolean() {
     // The reference's own two, by name — the list may only shrink.

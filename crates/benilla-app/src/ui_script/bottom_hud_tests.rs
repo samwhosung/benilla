@@ -1,4 +1,4 @@
-//! **The bottom-of-screen clearance law, enforced** (decision 1499).
+//! **The bottom-of-screen clearance law, enforced**.
 //!
 //! The bottom band of the screen is shared: the main bar sits on it, the extra action bars, the
 //! stance/pet bar and the reputation watch bar stack above it, and the bag windows, the cast bar,
@@ -315,7 +315,7 @@ fn no_bottom_band_frame_overlaps_a_raised_bar() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -464,7 +464,7 @@ fn the_item_push_card_shares_the_band_with_a_raised_bar_exactly_as_the_reference
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {

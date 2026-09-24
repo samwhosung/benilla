@@ -1,17 +1,17 @@
 //! **The in-game interface** — its manifest, and the boot split that loads it in two phases.
 //!
 //! The *how* of loading any interface lives in [`super::addons`]: an [`Addon`] is a name, a parsed
-//! `.toc`, and a source its files come from (decision 1184). What is specific to the default UI,
+//! `.toc`, and a source its files come from. What is specific to the default UI,
 //! and therefore still here, is the **seam at index 0** — see [`load_default_ui`] — and the
 //! **two sources one manifest names**, see [`load_manifest`].
 //!
 //! The manifest itself is not here either. It is [`MANIFEST`] — `assets/ui/benilla.toc`, an
 //! ordinary addon manifest read by the ordinary `.toc` parser ([`benilla_ui::toc`]), exactly as a
-//! third-party addon's is (decision 1178). Until then it was a hand-ordered `&[&str]` in this file,
+//! third-party addon's is. Until then it was a hand-ordered `&[&str]` in this file,
 //! which meant our own interface loaded by a private door and the addon path was untested by
 //! construction.
 //!
-//! ## One ordered list, two stores (decision 1751)
+//! ## One ordered list, two stores
 //!
 //! The end state for this interface is the stock 1.12 FrameXML run off the player's own install;
 //! `assets/ui` is scaffolding that retires file by file ([`super::reference_ui`], whose header is
@@ -81,7 +81,7 @@ fn bootstrap_positions(script: &UiScript) -> Vec<String> {
     Vec::new()
 }
 
-/// **A stated repair of a reference defect, installed rather than edited in** (decision 1998):
+/// **A stated repair of a reference defect, installed rather than edited in**:
 /// the chat plate's hover fade must survive a quick exit and re-entry.
 ///
 /// The stock `FCF_OnUpdate` (FloatingChatFrame.lua l.809-987) keeps per-window state across
@@ -154,7 +154,7 @@ pub(super) fn apply_buff_durations(script: &UiScript) -> Result<(), String> {
 /// frame [`UiScript::set_screen_size`] reports a change on. Anchors follow the new screen rect by
 /// themselves; what does not is a size or seat somebody COMPUTED from the old one.
 ///
-/// The bottom-stack manage pass (decision 1499): the open-bag stack starts a fresh column when
+/// The bottom-stack manage pass: the open-bag stack starts a fresh column when
 /// the current one would run off the top, and that decision is made from `GetScreenHeight()` at
 /// layout time. Without this, dragging the window smaller leaves the bag columns wrapped for the
 /// old height until the next bag opens. Existence-guarded: the pass is defined by `UIParent.xml`,
@@ -279,7 +279,7 @@ pub(super) fn silenced_ui_load<S: std::borrow::Borrow<UiScript>, R>(
 
 /// Load benilla's own default UI — every file [`MANIFEST`] names — through the engine-free loader.
 /// This is our content (MIT/Apache), committed and **compiled into the binary**
-/// ([`super::content`], decision 1175); a dev build still prefers the copy on disk, so editing a
+/// ([`super::content`]); a dev build still prefers the copy on disk, so editing a
 /// FrameXML file costs no recompile. Textures (`Interface\…`) still resolve at render through the
 /// MPQ `sprite_texture` path; the loader only needs the XML/Lua text.
 ///
@@ -332,7 +332,7 @@ pub(crate) fn load_default_ui(script: &UiScript) -> Vec<String> {
     failures
 }
 
-/// Load a slice of [`MANIFEST`] entries, **each from its own store** (decision 1751).
+/// Load a slice of [`MANIFEST`] entries, **each from its own store**.
 ///
 /// A bare filename is a file we ship and comes from [`Addon::builtin`]; a path is the reference's
 /// own file and comes off the player's installed chain ([`reference_ui`]). The dispatch is
@@ -374,7 +374,7 @@ pub(crate) fn load_font_registry(script: &UiScript) -> Vec<String> {
 }
 
 /// The in-game UI — everything after the font registry — loaded on entering the world, and then
-/// **every third-party addon** ([`super::addons`], decision 1184).
+/// **every third-party addon** ([`super::addons`]).
 ///
 /// The reference does the same at `CGGameUI::Initialize 0x48fbf0`, reached only from world entry
 /// (`0x401570` ← `0x46c236`), and loads its addons from that same function (`0x4900a3` →
@@ -387,13 +387,13 @@ pub(crate) fn load_font_registry(script: &UiScript) -> Vec<String> {
 ///
 /// `identity` is `(realm, character)`, which names this character's AddOn enable-state file — the
 /// reference keys `AddOns.txt` per character too — and `roster` is every character on that realm's
-/// list, which is the enable store's node set (decision 2311: an addon this character has no row
+/// list, which is the enable store's node set (an addon this character has no row
 /// for is resolved from what the *other* characters said, never from a bare "enabled"). `None`
 /// with an empty roster is the no-pick case: every addon falls to its own `## DefaultState`.
 ///
 /// `version_check` is the persisted `checkAddonVersion` — the *Load out of date AddOns* toggle,
 /// inverted — resolved by the caller because at load time this VM's own CVar table does not
-/// exist yet (registration is a per-VM `Update` seed, decision 1291); the persisted value is the
+/// exist yet (registration is a per-VM `Update` seed); the persisted value is the
 /// truth the reference's live read would land on, since the session edge folds the dying VM's
 /// table into it before any rebuild reads it.
 pub(crate) fn load_ingame_ui(
@@ -402,7 +402,7 @@ pub(crate) fn load_ingame_ui(
     roster: &[String],
     version_check: bool,
 ) -> Vec<String> {
-    // The whole load edge runs bounded (decision 1306): the reference files sourced off the
+    // The whole load edge runs bounded: the reference files sourced off the
     // player's own chain, our builtin, and every addon (which re-arms per addon in
     // `load_third_party`). A chunk that never returns fails as a load error instead of freezing
     // the client on the loading screen; the caller disarms once the edge is done
@@ -517,7 +517,7 @@ mod tests {
     /// ours had the stance bar (a runner, through `ShapeshiftBar_OnLoad` → `Show` → `OnShow`)
     /// three hundred lines above `ReputationFrame.xml` (a read), so every login raised at
     /// `UIParent.lua:1618` and the shelf was never seated — the director's sliver above Defensive
-    /// Stance (decision 2001). The pairs below are the reference's own dependency, read off the
+    /// Stance. The pairs below are the reference's own dependency, read off the
     /// pass's body; a new runner or a new read joins the table, not a comment.
     #[test]
     fn every_load_time_runner_of_the_managed_pass_follows_what_it_reads() {

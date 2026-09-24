@@ -10,8 +10,8 @@
 //!
 //! That rescale is gone, and with it the ladder. It had to be, because `k` was never a rendering
 //! detail — it was a second, parallel definition of where text sits, and every seam that forgot to
-//! apply it produced a measure/render disagreement: a caret 28 % past its own text (0989), an
-//! ellipsis eating a word that fits (B209), a tooltip past its border (B231), a Main Menu label
+//! apply it produced a measure/render disagreement: a caret 28 % past its own text, an
+//! ellipsis eating a word that fits, a tooltip past its border, a Main Menu label
 //! losing its last letter (1339). And one that names the mechanism better than any of them:
 //! **letters that do not share a baseline.** That is what a rescale *is*. The emit pass rounds each
 //! glyph onto the device-pixel grid — uniformly, so the line is flat — and the rescale then
@@ -22,7 +22,7 @@
 //!
 //! ## What the real client does
 //!
-//! In the reference (decision 1342), a `CGxFont` exists per (face, flags, **exact pixel size**),
+//! In the reference, a `CGxFont` exists per (face, flags, **exact pixel size**),
 //! the size being `min(32, round(H · max(reqSize, 2/H)))` (`0x5ca030` → `[CGxFont+0x24c]`) —
 //! integer device pixels, always. Glyphs are rasterized **on demand** by `NewCodeDesc` (`0x5cabd0`)
 //! into a per-font `TSHashTable<codepoint → CharCodeDesc>` (`+0x30/+0x38`) and land in a
@@ -213,7 +213,7 @@ struct CacheStats {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The two stores a font path can come from — the same pair, in the same order, that
-/// [`benilla_assets::WorldAssets`]'s sprite decoder walks (decision 1322, generalised by 2103).
+/// [`benilla_assets::WorldAssets`]'s sprite decoder walks (generalised by 2103).
 ///
 /// Chain first: no MPQ holds an `Interface\AddOns\` path, so the order is unobservable and every
 /// client path stays on exactly the code it always ran.
@@ -233,7 +233,7 @@ pub(crate) struct TextEngine {
     /// grown on demand by [`Self::face_for`] — an addon's own TTF is a path like any other.
     path_to_face: HashMap<String, usize>,
     /// Where a face the map does not carry is read from: the patch chain, then the one AddOns
-    /// folder for `Interface\AddOns\…` paths ([`FontSource`], decision 2103). `None` in a VM
+    /// folder for `Interface\AddOns\…` paths ([`FontSource`]). `None` in a VM
     /// with no install, which is the only state in which a font path cannot resolve at all.
     source: Option<FontSource>,
     /// Paths that failed to load, so a miss costs one read and one WARN rather than one per
@@ -278,11 +278,11 @@ pub(crate) struct TextEngine {
 /// draw the character (`system.rs:326-369`), so a family the query cannot match — or a single
 /// character the client face happens to lack — is answered by whatever the machine has. It is
 /// invisible by construction: the text draws, at the right size, in a face nobody asked for.
-/// Measured on this machine (decision 2123): the reference's own `Fonts\ARIALN.TTF` was being
+/// Measured on this machine: the reference's own `Fonts\ARIALN.TTF` was being
 /// shaped by macOS's Arial Narrow, and Friz Quadrata by `.SFNS-Regular`, the system UI font.
 ///
 /// So the pool holds exactly what a 1.12 client has: the four TTFs out of `fonts.MPQ`, plus
-/// whatever faces an addon ships (decision 2103). A character none of them carries draws nothing
+/// whatever faces an addon ships. A character none of them carries draws nothing
 /// and warns once — which is both what the reference does and what our own width law already
 /// says ("a character no face can shape contributes 0"): with a system fallback in the pool the
 /// shaper-less measure and the shaped draw silently disagreed about that character's width.
@@ -364,8 +364,8 @@ impl TextEngine {
 
     /// The face a font path resolves to, loading it on first use, or the fallback.
     ///
-    /// **The four client TTFs are the ones we know the names of, not the ones that exist**
-    /// (decision 2103). `SetFont`/`<FontString font=>`/`CreateFont` take an arbitrary path, and an
+    /// **The four client TTFs are the ones we know the names of, not the ones that exist**.
+    /// `SetFont`/`<FontString font=>`/`CreateFont` take an arbitrary path, and an
     /// addon that ships its own faces — Mik's Scrolling Battle Text ships thirty-one — names them
     /// `Interface\Addons\<Addon>\Fonts\<x>.ttf`. Before this, every one of those silently
     /// resolved to Friz Quadrata: the text drew, in the wrong face, with nothing anywhere saying
@@ -605,7 +605,7 @@ impl TextEngine {
                 }
             }
         }
-        // **The shaper's answer is checked against the ask** (decision 2123). Naming a face to
+        // **The shaper's answer is checked against the ask**. Naming a face to
         // `cosmic-text` is a *query*, not a selection: it walks every registered face and takes
         // the first that can draw the character, so a family it cannot match is answered by some
         // other face — correct-looking text in the wrong one, which is exactly the silent failure
@@ -814,7 +814,7 @@ impl UiFontAtlas {
     ///
     /// Stable for the life of the process, which is new: under the size ladder every re-bake
     /// published a fresh `Handle<Image>`, and a cache that kept the old one drew the new bake's
-    /// UVs through the old bake's texture (B272, decision 1339). Cells are written into this
+    /// UVs through the old bake's texture. Cells are written into this
     /// texture in place now, so there is no successor to go stale against.
     pub(crate) fn image(&self) -> Handle<Image> {
         self.lock().sheet_image()
@@ -1237,7 +1237,7 @@ mod ppem_tests {
         }
         false
     }
-    /// **The font pool is the CLIENT's faces and nothing else** (decision 2123).
+    /// **The font pool is the CLIENT's faces and nothing else**.
     ///
     /// `cosmic-text`'s two convenience constructors both call `load_system_fonts()`, and its
     /// shaper does not *select* a face — it orders every face in the database and takes the first
@@ -1258,7 +1258,7 @@ mod ppem_tests {
         );
     }
 
-    /// **A face the client names is the face that shapes — including a BOLD one** (decision 2123).
+    /// **A face the client names is the face that shapes — including a BOLD one**.
     ///
     /// The report was MSBT drawing in a plain sans instead of its own Porky. Porky declares
     /// `OS/2.usWeightClass = 700`; the attrs we handed the shaper were `Attrs::new()`, i.e. weight
@@ -1304,7 +1304,7 @@ mod ppem_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// **An addon-shipped TTF loads out of the ONE AddOns root** (decision 2103) — the leg the bug
+    /// **An addon-shipped TTF loads out of the ONE AddOns root** — the leg the bug
     /// was: MSBT ships thirty-one faces and names them `Interface\\Addons\\…\\Fonts\\<x>.ttf`,
     /// a shape no MPQ carries, and every one of them silently drew as Friz Quadrata.
     ///
@@ -1353,7 +1353,7 @@ mod ppem_tests {
     }
 
     /// **An addon-shipped face wears an OUTLINE like any other** — the two halves of the MSBT
-    /// look, together, which nothing pinned (decision 2112). 2103 pins that the face LOADS;
+    /// look, together, which nothing pinned. 2103 pins that the face LOADS;
     /// [`super::outline`]'s own tests pin the composite recipe on a synthetic bitmap; the cell
     /// arithmetic was only ever exercised on the fallback face. This runs a face read out of the
     /// AddOns root through the outline path and asserts the composite cell it produces: the same

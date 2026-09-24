@@ -1,6 +1,6 @@
 //! The stock `Interface\FrameXML\MainMenuBarMicroButtons.xml` — the eight micro buttons in the
 //! main bar's right-hand recess — off the player's chain behind the stock bar (their anchor
-//! target `MainMenuBarArtFrame`) into a bare engine (decision 1987).
+//! target `MainMenuBarArtFrame`) into a bare engine.
 //!
 //! What these guard, in order: the row's geometry (29×58 at art-frame BOTTOMLEFT +(552,2), a
 //! 26 px stride, and the reference's own 1 px nudge once the talent gate has run); the
@@ -243,7 +243,7 @@ fn the_talent_button_appears_at_level_ten_and_the_row_closes_up_below_it() {
 /// is the reference's TWO-line `GameTooltip_AddNewbieTip` — the label, then that button's own
 /// `NEWBIE_TOOLTIP_*` explanation in gold. 1.12 ships detailed tips ON (`SHOW_NEWBIE_TIPS = "1"`,
 /// `UIOptionsFrame.lua:100`; ours sits in OptionsFrame.xml's uvar block), so the paragraph is the
-/// DEFAULT hover (decision 0661). Through the engine's own hover, because the stock OnEnter reads
+/// DEFAULT hover. Through the engine's own hover, because the stock OnEnter reads
 /// the firing frame off `this`. For the bound ones the label carries the key the way the
 /// reference prints it — `GetBindingKey`'s raw token in `NORMAL_FONT_COLOR_CODE` parentheses
 /// (`MicroButtonTooltipText`, l.11-18) — re-read on `UPDATE_BINDINGS`, which is the event

@@ -1,4 +1,4 @@
-//! The shared StaticPopup engine (decision 0308 §3 — the ref's registry + Show + OnUpdate
+//! The shared StaticPopup engine (the ref's registry + Show + OnUpdate
 //! machinery, stock `Interface\FrameXML\StaticPopup.xml` since 1988): the
 //! countdown/StartDelay/cancels/ESC laws the death arc's dialogs ride. Entries here are inline test
 //! dialogs — the real entries (DELETE_ITEM, ABANDON_QUEST, the death family) are covered by their features' own tests.
@@ -204,7 +204,7 @@ fn the_death_countdown_text_rerenders_each_tick() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **`StaticPopup_Hide`'s and `StaticPopup_FindVisible`'s second argument** (decisions 1793).
+/// **`StaticPopup_Hide`'s and `StaticPopup_FindVisible`'s second argument**.
 ///
 /// Both took `which` alone until the arity scan found the drift. The reference takes `(which,
 /// data)`, and the difference is invisible without a test: Lua discards a surplus argument without
@@ -270,7 +270,7 @@ fn hide_and_find_address_one_instance_by_data_only_for_a_multiple_dialog() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The dialog engine's verbs (decision 1963): the five UIParent arms the feeds behind them now
+/// The dialog engine's verbs: the five UIParent arms the feeds behind them now
 /// reach — each verbatim from UIParent.lua, each raising a stock dialog whose Accept calls a
 /// binding this engine answers.
 #[test]

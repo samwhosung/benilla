@@ -223,7 +223,7 @@ const KNOWN: &[Known] = &[
     // ── parent ─────────────────────────────────────────────────────────────────────────────────
     //
     // Empty since 1970. The rows that lived here were seats inside the SAME tree the reference
-    // seats them in — the question this flag exists to ask (decision 1757): a frame whose seat
+    // seats them in — the question this flag exists to ask: a frame whose seat
     // crosses the boundary between UIParent's tree and the top level is a defect, because
     // `SetFullScreenFrame` hides `UIParent` and everything below it; a frame seated one rung
     // along inside that tree is not. The last two were our mail transcription's flat body panes,
@@ -454,7 +454,7 @@ fn the_shipped_frames_carry_the_references_flags() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {

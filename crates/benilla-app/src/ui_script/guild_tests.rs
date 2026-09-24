@@ -1,4 +1,4 @@
-//! The four guild windows (decision 1257, `FriendsFrame.xml` l.1719-3438 of the reference): the
+//! The four guild windows (`FriendsFrame.xml` l.1719-3438 of the reference): the
 //! roster pane and its two views, the rank editor, the guild-information notice board, and the
 //! member detail card.
 //!

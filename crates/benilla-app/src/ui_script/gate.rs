@@ -1,4 +1,4 @@
-//! The **feed gate** (decision 1439): the input-side early-out for a per-frame UI feed.
+//! The **feed gate**: the input-side early-out for a per-frame UI feed.
 //!
 //! Every VM feed is a rebuild-to-diff: build the fresh snapshot, compare against what was last
 //! pushed, push only the difference. The diff half was always cheap; the REBUILD half runs every

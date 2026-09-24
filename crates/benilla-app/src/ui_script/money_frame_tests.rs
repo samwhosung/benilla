@@ -1,5 +1,5 @@
 //! The stock `Interface\FrameXML\MoneyFrame.xml` — the reference's `MoneyFrameTemplate` /
-//! `SmallMoneyFrameTemplate` kit and the `MoneyTypeInfo` table behind it (decision 1190: a name the
+//! `SmallMoneyFrameTemplate` kit and the `MoneyTypeInfo` table behind it (a name the
 //! shipped 1.12 UI defines is a name we publish too — under our own implementation of it, 1260).
 //!
 //! Eight shipped windows consume this file (1937 converged the coin cluster onto it; 1962 put the

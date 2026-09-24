@@ -1,4 +1,4 @@
-//! The stock `TutorialFrame.xml` (decision 1976) driven engine-only: an alert button per
+//! The stock `TutorialFrame.xml` driven engine-only: an alert button per
 //! `TUTORIAL_TRIGGER`, the window a click opens over the published id's strings, the
 //! `FlagTutorial` it makes, the unticked checkbox's `ClearTutorials` on hide, and
 //! `CINEMATIC_STOP` clicking the Welcome alert.

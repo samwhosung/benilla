@@ -1,7 +1,7 @@
 //! The shipped **inspect window** driven end-to-end, engine-only (no Bevy): the real
 //! The reference's own `Blizzard_InspectUI` addon loaded behind
 //! `Fonts.xml`/`UIParent.xml`/`GameTooltip.xml` and fed a synthetic target snapshot + a foreign
-//! equipment view (decision 0631). `character_tests.rs`'s harness, turned onto the other paper doll.
+//! equipment view. `character_tests.rs`'s harness, turned onto the other paper doll.
 //!
 //! What these are here to falsify, in order of how quietly it could have shipped broken:
 //!
@@ -128,15 +128,15 @@ fn armed() -> UiScript {
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     // `InspectUnit` lives here now — the reference's own home for that name, and no longer in the
-    // window's own file (decision 1832). The manifest's order, and 49 other harnesses'.
+    // window's own file. The manifest's order, and 49 other harnesses'.
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
     // Before InspectFrame.xml, and required rather than tidy: this window's honor page inherits
     // HonorFrame.xml's five row templates and `inherits=` resolves at LOAD, so without it the
-    // twelve honor rows materialize bare (decision 1512; the manifest states the same order).
+    // twelve honor rows materialize bare (the manifest states the same order).
     // The stock slot buttons inherit `ItemButtonTemplate` — where their `$parentIconTexture`
     // comes from, which `InspectPaperDollItemSlotButton_OnLoad` indexes unconditionally. Our own
     // slot template declared its icon inline and needed no such file; the manifest has carried
-    // this entry far above the inspect window all along (decision 1832).
+    // this entry far above the inspect window all along.
     load_xml(&s, "Interface\\FrameXML\\ItemButtonTemplate.xml");
     load_xml(&s, "Interface\\FrameXML\\HonorFrame.xml");
     // The window is a LoadOnDemand addon, reached the way the app reaches it: seated off the
@@ -173,15 +173,15 @@ fn shipped_inspect_frame_loads_clean() {
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     // `InspectUnit` lives here now — the reference's own home for that name, and no longer in the
-    // window's own file (decision 1832). The manifest's order, and 49 other harnesses'.
+    // window's own file. The manifest's order, and 49 other harnesses'.
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
     // Before InspectFrame.xml, and required rather than tidy: this window's honor page inherits
     // HonorFrame.xml's five row templates and `inherits=` resolves at LOAD, so without it the
-    // twelve honor rows materialize bare (decision 1512; the manifest states the same order).
+    // twelve honor rows materialize bare (the manifest states the same order).
     // The stock slot buttons inherit `ItemButtonTemplate` — where their `$parentIconTexture`
     // comes from, which `InspectPaperDollItemSlotButton_OnLoad` indexes unconditionally. Our own
     // slot template declared its icon inline and needed no such file; the manifest has carried
-    // this entry far above the inspect window all along (decision 1832).
+    // this entry far above the inspect window all along.
     load_xml(&s, "Interface\\FrameXML\\ItemButtonTemplate.xml");
     load_xml(&s, "Interface\\FrameXML\\HonorFrame.xml");
     // The window is a LoadOnDemand addon, reached the way the app reaches it: seated off the

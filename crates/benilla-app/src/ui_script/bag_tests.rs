@@ -801,7 +801,7 @@ fn readable_letter_hover_shows_the_inspect_magnifier() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The drag trio (decision 0216 §3): a real press-drag-release across two slot buttons routes
+/// The drag trio: a real press-drag-release across two slot buttons routes
 /// through the SAME `ContainerFrameItemButton_OnClick("LeftButton")` path a two-click pickup/place
 /// does —
 /// unlike every other bag test here, which calls the Lua click handler directly, this one drives
@@ -1233,7 +1233,7 @@ fn the_split_frame_raises_over_a_same_stratum_window() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Typed-digit entry in the split spinner (decision 1319) — the director's ask, and the deferral
+/// Typed-digit entry in the split spinner — the director's ask, and the deferral
 /// this file's header carried since 0216. Pins the whole chain in one go: the dialog is in the
 /// keyboard walk (`enableKeyboard`), a digit reaches its `OnChar`, the first digit REPLACES the
 /// seeded 1 while later digits append, an over-max entry clamps instead of being rejected,
@@ -1409,7 +1409,7 @@ fn bag_slot_cooldown_sweeps_through_the_xml() {
     s.set_container(0, Some(backpack(Some((52_000, 60_000, true)))));
     s.run("OpenAllBags()").unwrap();
     s.fire_event("BAG_UPDATE", vec![benilla_ui::script::ScriptValue::Int(0)]);
-    // The stock machine (decision 2019): the slot's cooldown pane, sequence 0 scrubbed by the
+    // The stock machine: the slot's cooldown pane, sequence 0 scrubbed by the
     // next paint's `OnUpdateModel` to the elapsed fraction.
     super::test_ui::cooldown_facts(&mut s);
     s.tick(0.0);
@@ -1556,7 +1556,7 @@ fn keyring(size: u32, occupied: bool) -> ContainerState {
 
 /// Seat a player at `level`. **The keyring's size is the REFERENCE's own level ladder now** —
 /// `GetKeyRingSize` (ContainerFrame.lua l.773-786: 4, then 8 at 40, 12 at 50, 16 above 60) reads
-/// `UnitLevel("player")`, where ours read the container's fed `num_slots` back (decision 0765).
+/// `UnitLevel("player")`, where ours read the container's fed `num_slots` back.
 /// Both derive from the same ladder the server enforces (`Player::GetMaxKeyringSize`), so this is
 /// the swap becoming FAITHFUL rather than a behaviour change — but the level is now the input, and
 /// a fixture that leaves it 0 gets a 4-slot ring.
@@ -1594,7 +1594,7 @@ fn keyring_surface(s: &UiScript) {
     load_xml(s, "Interface\\FrameXML\\UIErrorsFrame.xml");
 }
 
-/// **The gate** (decision 0765): no key ⇒ no keyring anywhere on the bar — the button is hidden and
+/// **The gate**: no key ⇒ no keyring anywhere on the bar — the button is hidden and
 /// the bar's two right-hand strips wear the ordinary dwarf plate. The first key flips all of it:
 /// the button appears, both strips swap to the keyring plate with the reference's own TexCoords,
 /// and the performance meter slides from −227 to −235 to clear the new socket
@@ -1847,7 +1847,7 @@ fn a_key_dropped_on_the_button_files_itself() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The item-push drop animation is the reference's own `<Model>` now (decisions 2013/2015):
+/// The item-push drop animation is the reference's own `<Model>` now:
 /// `ITEM_PUSH(container, icon)` reaches the stock `ItemAnim_OnEvent`, which puts the icon on the
 /// pane whose parent button owns that inventory slot (`ReplaceIconTexture`), arms sequence 0 at
 /// 0 and shows it; the pane's clock runs the file's 1000 ms clamp; `ItemAnim_OnAnimFinished`

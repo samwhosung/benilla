@@ -1,4 +1,4 @@
-//! The GM help window (decision 1673, HelpFrame.xml): the category list the DBC feeds it, the two
+//! The GM help window (HelpFrame.xml): the category list the DBC feeds it, the two
 //! faces of `UPDATE_TICKET`, the queue gate, the ticket toast, and the three dialogs.
 //!
 //! Written as the **falsification** pass over the transcription rather than a demonstration of it:

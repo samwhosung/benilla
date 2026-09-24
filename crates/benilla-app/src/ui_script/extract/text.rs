@@ -47,7 +47,7 @@ pub(super) struct TextHost<'a> {
     /// by [`EditBoxTextUi::target`].
     pub ebox: Option<&'a EditBoxTextUi>,
     pub screen_h: f32,
-    /// The 768-virtual scale `s = windowH/768` (decision 0582): rects arrive pre-scaled (px);
+    /// The 768-virtual scale `s = windowH/768`: rects arrive pre-scaled (px);
     /// this converts the remaining unit-space inputs — font heights, shadow offsets, the
     /// engine's editbox caret/selection x-offsets — into the same px space.
     pub scale: f32,
@@ -74,7 +74,7 @@ pub(super) fn emit(
     link_spans: &mut Vec<(FrameHandle, benilla_ui::layout::Rect, String, String)>,
 ) {
     let base_color = style.color.unwrap_or([1.0, 1.0, 1.0, 1.0]);
-    // Which pixel grid this block's top may land on (decision 2172): the interface's, or none —
+    // Which pixel grid this block's top may land on: the interface's, or none —
     // the WorldFrame overlays carry their own device-pixel seat and their text has to be rigid
     // to it. The shadow pass below inherits it, like every other layout input.
     let seat = if style.world_seat {
@@ -85,7 +85,7 @@ pub(super) fn emit(
     let spec = crate::ui_text::FontSpec {
         path: style.font.as_deref(),
         // The drawn px under the two size regimes × the 768-virtual scale × the owner's frame
-        // scale (`drawn_px`, decision 0582): one-to-one text unit-caps at 32 (a frame-LOCAL cap,
+        // scale (`drawn_px`): one-to-one text unit-caps at 32 (a frame-LOCAL cap,
         // like the seam scale it precedes) then scales; a SetTextHeight override scales uncapped.
         // The shadow twin below inherits the spec (`..spec`).
         height: crate::ui_text::drawn_px(
@@ -123,7 +123,7 @@ pub(super) fn emit(
     // by construction and can never overflow there — the scissor's real job is the OTHER end, the
     // half-fitting scrollback line at the frame's top, and that edge is untouched. What the bottom
     // edge did cut was ink the renderer had deliberately placed below the band: the seat nudge
-    // (0351) lowers every UI text block one px, and the drop shadow sits one further px under the
+    // lowers every UI text block one px, and the drop shadow sits one further px under the
     // fill. Two of our own dials against a scissor that predates them — and the newest chat line
     // lost the tails of its descenders and the feet of its brackets (director, 2026-07-26).
     if matches!(host.target, ZTarget::Frame(_)) {
@@ -206,7 +206,7 @@ pub(super) fn emit(
         // For the focused edit box, also the two numbers that must agree: where the engine puts the
         // caret (`caret=`, advance-table-derived) and how wide the text this pass actually draws is
         // (`ink=`). They diverge by the width of the markup when the advance table is measured over
-        // the raw buffer — the caret-out-in-space report (decision 1075) as a pair of numbers.
+        // the raw buffer — the caret-out-in-space report as a pair of numbers.
         let ebox_geom = ebox.map(|ui| {
             let ink = crate::ui_text::measure_text(&mut atlas.lock(), draw_text, None, spec).0;
             format!(" caret={:.1} ink={ink:.1}", ui.caret_x * host.scale)
@@ -216,7 +216,7 @@ pub(super) fn emit(
         // looks wrong" report actually asks — *which face, at what size, with what outline, did
         // this quad draw* — could not be answered from the probe at all; it took a live
         // `SetFont` probe, a control plate and a screenshot to establish for MSBT what these
-        // four fields say directly (decisions 2103, 2112). `px` is the DRAWN logical height
+        // four fields say directly. `px` is the DRAWN logical height
         // (`drawn_px`: the requested one through the cap, the 768 seam and the frame scale),
         // which is the number that disagrees with `h` whenever a size looks wrong.
         info!(
@@ -326,7 +326,7 @@ pub(super) fn emit(
     };
     for q in &mut glyphs {
         q.color[3] *= host.alpha;
-        // Every glyph quad inherits the Text quad's ScrollFrame clip (decision 0112) —
+        // Every glyph quad inherits the Text quad's ScrollFrame clip —
         // `ui_pass`'s CPU clip already applies uniformly to any `UiQuad`, glyph or not.
         q.clip = text_clip;
     }

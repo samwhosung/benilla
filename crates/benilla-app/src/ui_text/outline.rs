@@ -10,7 +10,7 @@
 //! Under the size ladder these variants had to be **planned**: a census walked the shipped
 //! `Fonts.xml` registry for every `(face, size, radius)` triple anything could ask for, baked those,
 //! and left any unplanned runtime combination to a legacy stamped-halo fallback. On demand
-//! (decision 1342) there is nothing to plan and no fallback to keep: a radius that is asked for is a
+//! there is nothing to plan and no fallback to keep: a radius that is asked for is a
 //! radius that is rasterized, so the composite cell is now the only outline path there is.
 
 /// The cell radius for a font's outline flag: the ring reach in **logical** px (`r=1` NORMAL,

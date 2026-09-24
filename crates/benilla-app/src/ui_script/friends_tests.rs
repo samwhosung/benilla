@@ -1,4 +1,4 @@
-//! The social window (decision 0668, `FriendsFrame.xml`): the tab strip, the two list tabs and
+//! The social window (`FriendsFrame.xml`): the tab strip, the two list tabs and
 //! their toggle pair, the who list's columns, and the verbs each button queues — driven exactly
 //! as `ui_social`'s feed drives it (a pushed [`SocialState`] snapshot, then the list event).
 //!
@@ -457,7 +457,7 @@ fn the_who_dropdown_switches_the_variable_column() {
 
 /// **B365's retest, pinned.** The Who list's column headers sort, the same header clicked twice
 /// REVERSES, and the earlier click survives as a tie-breaker — the reference's seven-slot chain
-/// (`SortWho 0x5ad890`, decision 2030).
+/// (`SortWho 0x5ad890`).
 ///
 /// What makes this the *window's* test rather than the chain's: every assertion reads the painted
 /// row straight after `Click()`, with **no feed tick in between**. That can only pass if

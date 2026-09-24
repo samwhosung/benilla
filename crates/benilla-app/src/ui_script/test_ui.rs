@@ -1,4 +1,4 @@
-//! **The tests' interface loader — one copy, both stores** (decision 1751).
+//! **The tests' interface loader — one copy, both stores**.
 //!
 //! Half a dozen test files carried an identical private `load_xml` that read
 //! `assets/ui/<name>` off disk, parsed it, and asserted the loader reported no errors — each with
@@ -38,7 +38,7 @@ pub(super) const COOLDOWN_MODEL: &str = r"Interface\Cooldown\UI-Cooldown-Indicat
 /// The cooldown indicator's file facts (`benilla-extract m2seq`): sequence 0 = id 0, 1000 ms,
 /// clamp — the sweep `CooldownFrame_OnUpdateModel` scrubs; sequence 1 = id 1, 1000 ms, clamp —
 /// the finish flash, whose completion hides the frame. Handed to the engine the way the app does
-/// once the asset lands (decisions 2007/2019); every pane holding the file arms its Stand.
+/// once the asset lands; every pane holding the file arms its Stand.
 pub(super) fn cooldown_facts(s: &mut UiScript) {
     use benilla_ui::widget::{ModelFileFacts, SequenceFacts};
     let seq = |anim_id, duration_ms| SequenceFacts {
@@ -119,7 +119,7 @@ pub(super) fn load_ui_no_warnings(s: &UiScript, entry: &str) -> usize {
 }
 
 fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bool) -> usize {
-    // **A kit's VM is the client's VM, and that includes the CVar table** (decision 2115). The app
+    // **A kit's VM is the client's VM, and that includes the CVar table**. The app
     // registers `crate::cvars::REGISTERED` at startup, before any interface file loads;
     // `UiScript::new()` carries only `benilla-ui`'s own. The stock `UIOptionsFrame.xml` reads two
     // camera CVars inside its dropdowns' `OnLoad` and raises on a nil, so a kit that skips this is
@@ -138,7 +138,7 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
     let provider = |req: &str| -> Option<Vec<u8>> { read(req) };
     // Seated BEFORE the load, not after it like the two below: `MultiActionBarFrame_OnLoad`
     // indexes `UIOptionsFrameCheckButtons` from inside this very load walk, where the micro row's
-    // and UIParent's callees only run later (decision 2115).
+    // and UIParent's callees only run later.
     if path
         .rsplit('/')
         .next()
@@ -147,8 +147,8 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
         s.run(MULTI_ACTION_BAR_STAND_INS)
             .expect("the multibar stand-ins");
     }
-    // **Our options window's Graphics rows read the REFERENCE's slider table, at OnLoad**
-    // (decision 2177): `OptionsFrameSliders[1..3]` are the bounds those three rows are built with,
+    // **Our options window's Graphics rows read the REFERENCE's slider table, at OnLoad**:
+    // `OptionsFrameSliders[1..3]` are the bounds those three rows are built with,
     // and they come from `Interface\FrameXML\OptionsFrame.lua` — which the shipped manifest loads
     // as part of the stock VIDEO window, one seat above ours. A kit that seats our file alone has
     // to bring it too, and brings the reference's own file rather than a transcription of the
@@ -223,7 +223,7 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
 /// `UIOptionsFrame` stand-in is the same move for the chat files. Seated here rather than at the
 /// kits' seventy-odd consumers because the dependency is the row's, not any one window's — and
 /// the shipped manifest never needs it. `tests/common/mod.rs` carries the same chunk for the
-/// integration tests, which cannot reach this module (decision 1987).
+/// integration tests, which cannot reach this module.
 /// **What a kit owes the stock `UIParent.xml`.** Its `<OnUpdate>` calls `FCF_OnUpdate`,
 /// `UnitPopup_OnUpdate` and `BattlefieldFrame_OnUpdate` unguarded (the chat, unit-menu and
 /// battlefield files, far below it in the manifest), `UIParent_OnEvent`'s `PLAYER_ENTERING_WORLD`
@@ -231,7 +231,7 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
 /// A kit that stops short of those files would raise on its first tick or first shown panel, so
 /// [`load_entry`] seats a no-op stand-in under each name the moment the stock file loads. Unlike
 /// the micro row's frames these are FUNCTIONS: a later chunk's `function X()` overwrites a global
-/// outright, so seating at load is safe and the kit's order does not matter (decision 1988).
+/// outright, so seating at load is safe and the kit's order does not matter.
 pub(super) const UIPARENT_STAND_INS: &str = r#"
     -- Callees of the stock UIParent.xml's <OnUpdate> and of UIParent_OnEvent's arms that live in
     -- files a kit may stop short of, plus the bag verbs the stock ShowUIPanel calls and the two
@@ -337,7 +337,7 @@ pub(super) const UIPARENT_STAND_INS: &str = r#"
 /// (`MultiActionBars.lua:10`, under the reference's own comment *"Hack to get around load order
 /// dependencies"*) writes five rows into `UIOptionsFrameCheckButtons` — a table whose home is
 /// `UIOptionsFrame.xml`, which the reference's toc seats at l.21, eighteen rows above this one.
-/// The shipped manifest has that order (decision 2115) and needs nothing here; a KIT is a prefix
+/// The shipped manifest has that order and needs nothing here; a KIT is a prefix
 /// of the manifest and dozens of them load the bars without any options window.
 ///
 /// `or {}` rather than a fresh table, and seated at load rather than on first use, for the reason
@@ -527,7 +527,7 @@ pub(super) const LOOT_UI: &[&str] = &[
 
 /// What the **character window** needs before `Interface\FrameXML\CharacterFrame.xml`,
 /// `PaperDollFrame.xml` and `PetPaperDollFrame.xml` will load and behave — the same shape as
-/// [`BAG_UI`] / [`LOOT_UI`] / [`MERCHANT_UI`], and grown the same way (decision 1751).
+/// [`BAG_UI`] / [`LOOT_UI`] / [`MERCHANT_UI`], and grown the same way.
 ///
 /// This one is the longest of the four, and the reason is `CharacterFrame_OnLoad`: it is the only
 /// migrated window whose LOAD-time body reaches outside its own file, and it reaches into four
@@ -748,7 +748,7 @@ pub(super) const BAG_UI: &[&str] = &[
     //
     // The whole paper-doll file, because that is where the reference declares both — our
     // `ItemSlotButtonTemplates.xml` held a transcribed copy of the template only because our own
-    // character window loaded too late to declare it, and it is deleted (decision 1751). Its
+    // character window loaded too late to declare it, and it is deleted. Its
     // companion `Interface\\FrameXML\\CharacterFrame.xml` is deliberately NOT here: this list is
     // the bags, `PaperDollFrame` only names `CharacterFrame` in `parent=` (a missing parent is a
     // loader warning, not an error), and `CharacterFrame_OnLoad` would drag in the unit frames,
@@ -875,7 +875,7 @@ pub(super) fn load_world_frame(s: &UiScript) {
 
 /// A completed left CLICK on the game world, at a point the loaded `WorldFrame` actually owns.
 ///
-/// **The point is searched, not assumed, and that is the whole lesson of B380** (decision 2089).
+/// **The point is searched, not assumed, and that is the whole lesson of B380**.
 /// Every world-drop fixture in the house used to click `(-50, -50)` — off-screen, where the hit
 /// test answers nothing at all — which is a world click only in a house with no `WorldFrame`
 /// loaded. The stock file's frame is full-screen and mouse-enabled, so from the day it joined the

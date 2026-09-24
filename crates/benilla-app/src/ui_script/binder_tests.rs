@@ -1,4 +1,4 @@
-//! The innkeeper bind confirm (decision 1331, BinderConfirm.xml): the dialog `ui_binder`'s feed
+//! The innkeeper bind confirm (BinderConfirm.xml): the dialog `ui_binder`'s feed
 //! raises, its Accept, and the range poll that takes it away — driven exactly as that feed and the
 //! app's NPC-session guard drive it.
 
@@ -27,7 +27,7 @@ fn setup() -> UiScript {
 
 /// `CONFIRM_BINDER(area)` raises the dialog with the area name filled in, and Accept queues the
 /// one `ConfirmBinder()` that becomes `CMSG_BINDER_ACTIVATE`. The whole point of the arc: before
-/// this wiring the click produced no dialog and no packet at all (B249).
+/// this wiring the click produced no dialog and no packet at all.
 #[test]
 fn the_confirm_shows_the_area_and_accept_queues_the_bind() {
     benilla_formats::wow_data_or_skip!();

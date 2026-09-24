@@ -1,4 +1,4 @@
-//! The escort-quest confirm (decision 1733, `QuestShareFrame.xml`): the Lua wiring between the
+//! The escort-quest confirm (`QuestShareFrame.xml`): the Lua wiring between the
 //! `QUEST_ACCEPT_CONFIRM` event `ui_quest_share`'s feed fires and the shared StaticPopup engine,
 //! driven exactly as that feed drives it.
 //!

@@ -74,7 +74,7 @@ pub(super) fn resolve(e: &mut TextEngine, font: &FontSpec) -> Resolved {
 /// than shaped, because this half is deliberately `&`-only.
 pub(super) fn measure_line_width(e: &TextEngine, r: Resolved, step_extra: f32, text: &str) -> f32 {
     // Summed in DEVICE px and divided once, because that is exactly what the render pen does
-    // (decision 1644 — it walks in device px so the line's origin can round once). A sum of
+    // (it walks in device px so the line's origin can round once). A sum of
     // quotients and a quotient of sums are not the same `f32`, and "measure == render, to the bit"
     // is a property this module is asked to keep, not one it gets to approximate.
     let steps: f32 = text
@@ -274,7 +274,7 @@ pub(super) fn wrapped_rows_capped_for_test(
 ///
 /// **The box is the box.** Under the ladder this had to divide the rect by the draw's rescale
 /// before comparing it against unscaled glyphs, and getting that backwards is what truncated text
-/// that fits (B209, decision 0989's named residual). There is no rescale now, so there is no
+/// that fits (decision 0989's named residual). There is no rescale now, so there is no
 /// conversion here and none to get backwards.
 pub(crate) fn ellipsize_to_fit(
     atlas: &mut UiFontAtlas,
@@ -290,7 +290,7 @@ pub(crate) fn ellipsize_to_fit(
     // The remembered answer, under exactly these inputs ([`super::super::EllipsisMemo`] — the
     // client's `CGxString+0xf8`). The paint pass runs every frame; this seam is what the client
     // rebuilds only on invalidation, and it is the most expensive thing in the pass by an order of
-    // magnitude (B240, decision 1332).
+    // magnitude.
     if let Some(hit) = atlas.ellipsis.get(region, text, box_w, box_h, &font) {
         return hit.clone();
     }
@@ -363,7 +363,7 @@ pub(crate) fn line_origin(
 /// its END boundary and its interior (continuation) bytes holding the lead's value, so a mid-char
 /// index degrades to the char's start and char-boundary lookups are exact.
 ///
-/// **Indexed by the box's RAW byte, measured over what is DRAWN** (decision 1075). The box stores
+/// **Indexed by the box's RAW byte, measured over what is DRAWN**. The box stores
 /// the escaped string and draws only the visible one, so every `|c…`/`|r`/`|H…|h`/`|T…|t` byte
 /// costs zero width: [`crate::ui_text::markup::visible_map`] carries each drawn byte back to its
 /// raw offset, and the forward-fill below hands every escape byte the previous boundary's width.
@@ -422,7 +422,7 @@ pub(crate) fn line_advances(e: &mut TextEngine, text: &str, font: FontSpec) -> V
 /// reconstructed by walking the source string past each wrapped row's verbatim text and the
 /// separator the break swallowed (wrap keeps inter-word whitespace verbatim and drops only the
 /// trailing separator, so the walk is exact) — in DRAWN bytes, mapped back to RAW ones, since the
-/// rows index the same raw buffer [`line_advances`] does (decision 1075). Never empty (`[0]` for
+/// rows index the same raw buffer [`line_advances`] does. Never empty (`[0]` for
 /// empty text).
 pub(crate) fn line_rows(
     e: &mut TextEngine,
@@ -467,7 +467,7 @@ fn segment_row_starts(seg: &str, sub: &[Vec<ColorRun>], base: usize, rows: &mut 
     }
     // A wrapped row is made of DRAWN text (the markup is gone by then) while a row start must be a
     // RAW byte — the offset space the box's cursor and [`line_advances`] both live in. So the walk
-    // runs in drawn bytes and maps each start back (decision 1075).
+    // runs in drawn bytes and maps each start back.
     let (drawn, bounds) = crate::ui_text::markup::visible_map(seg);
     let mut p = 0usize; // byte cursor within `drawn`
     for (j, line) in sub.iter().enumerate() {

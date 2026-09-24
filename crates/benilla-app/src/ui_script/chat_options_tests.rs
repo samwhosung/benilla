@@ -1,4 +1,4 @@
-//! The chat tab's **options menu**, end to end (decision 1589, fixing **B246**: *"no chat options
+//! The chat tab's **options menu**, end to end (fixing **B246**: *"no chat options
 //! at all — background transparency has no home, and chat can be hard to read"*).
 //!
 //! These drive the shipped `ChatFrame.xml` through the shipped dropdown kit and the shipped colour

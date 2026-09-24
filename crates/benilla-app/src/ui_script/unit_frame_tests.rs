@@ -21,7 +21,7 @@ fn load_unit_frames(s: &UiScript) {
     load_xml(s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(s, r"Interface\FrameXML\UIParent.xml");
-    // The bars' numerals machinery (decision 1082), which the manifest loads immediately ahead of
+    // The bars' numerals machinery, which the manifest loads immediately ahead of
     // UnitFrames.xml and which every bar's OnLoad wires into since 1143.
     load_xml(s, "Interface\\FrameXML\\TextStatusBar.lua");
     load_xml(s, "Interface\\FrameXML\\TextStatusBar.xml");
@@ -300,7 +300,7 @@ fn extracted_text_height(s: &mut UiScript, text: &str) -> Option<f32> {
     })?
 }
 
-/// The portrait hit indicator (decision 0576): `UNIT_COMBAT` over `"player"` drives the
+/// The portrait hit indicator: `UNIT_COMBAT` over `"player"` drives the
 /// transcribed CombatFeedback — a physical wound paints the amount white at the base height 30,
 /// a spell crit paints yellow at ×1.5, a full absorb paints the word at ×0.75 — and the fade
 /// envelope (0.2 s in, 0.7 s hold, 0.3 s out) ends in a Hide. A `"target"`-token event never
@@ -835,7 +835,7 @@ fn shipped_target_frame_runs_the_level_law() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The PvP flag icon on the player and target frames (decision 0646 §4): the reference's
+/// The PvP flag icon on the player and target frames: the reference's
 /// three-branch law, driven through the real shipped XML. FFA outranks the faction flag; the
 /// faction leg needs BOTH a side and the flag; and the player's `igPVPUpdate` sounds on the
 /// UNIT_FACTION edge, not on every repaint.
@@ -946,7 +946,7 @@ fn pvp_icon_follows_the_three_branch_law() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The target name plate's two middle legs, unblocked by the PvP wire (decision 0646 §4): a
+/// The target name plate's two middle legs, unblocked by the PvP wire: a
 /// friendly player who is PvP-flagged reads GREEN, an unflagged one stays blue. Before the wire
 /// both collapsed into blue.
 #[test]
@@ -1003,7 +1003,7 @@ fn flagged_friendly_player_plate_is_green() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The classification border law (decision 0782, ref-TargetFrame.lua l.205-218) end to end: the
+/// The classification border law (ref-TargetFrame.lua l.205-218) end to end: the
 /// gated rank on the snapshot → `UnitClassification` → which of the three shipped border textures
 /// actually reaches the draw list. Asserting the *extracted quad* rather than a Lua getter is the
 /// point — it is the pixels, and it catches a swap that sets the path on the wrong region.
@@ -1348,7 +1348,7 @@ fn the_party_art_paints_over_the_bars() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **What a feigning hunter looks like on the frames** (decision 1022) — the end of the chain the
+/// **What a feigning hunter looks like on the frames** — the end of the chain the
 /// snapshot starts: `UNIT_DYNFLAG_DEAD` zeroes `UnitHealth`/`UnitMana` while the maxima stay real
 /// (`UnitHealth 0x5174d0` gates, `UnitHealthMax 0x5175b0` does not), so both bars run **empty over
 /// a full-size track** rather than collapsing to a 0/0 nothing, and the target frame's DEAD text
@@ -1450,7 +1450,7 @@ fn a_feigning_target_paints_empty_bars_and_the_dead_text() {
     assert!(up, "the feign ends and the frame reads live again");
 }
 
-/// The resting status flash (decision 1082, ref `PlayerFrame_UpdateStatus` + `_OnUpdate`): while
+/// The resting status flash (ref `PlayerFrame_UpdateStatus` + `_OnUpdate`): while
 /// resting the player frame wears the gold status ring, the zzz state icon and its glow, all
 /// pulsing on a 0.5 s alpha wave; auto-attack (PLAYER_ENTER_COMBAT) swaps them for the red
 /// ring/swords/disc — resting still wins when both hold — and leaving both states clears the lot.
@@ -1551,7 +1551,7 @@ fn the_player_frame_flashes_zzz_while_resting() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The zzz badge paints OVER the level number (decision 1093): the ref keeps the number in the
+/// The zzz badge paints OVER the level number: the ref keeps the number in the
 /// texture frame's BACKGROUND layer and the state icons up in OVERLAY, so the opaque badge covers
 /// it while resting. The layer split is the only mechanism that CAN hide it — a fontstring never
 /// ducks under a texture of its own layer (0884's bucket-wide quads-then-text law) — which is
@@ -1608,7 +1608,7 @@ fn the_rest_badge_covers_the_level_number() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The on-bar numerals** (decision 1143) — the half 1140 promised and did not deliver. The Status
+/// **The on-bar numerals** — the half 1140 promised and did not deliver. The Status
 /// Bar Text switch landed with only the XP bar wired to it, so turning it on changed nothing on the
 /// frames people actually watch (director report). Now the player's health and power bars carry
 /// "value / max", and the switch pins them.
@@ -1784,7 +1784,7 @@ fn status_bar_text_paints_the_player_numerals_but_not_the_targets() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The numerals do not collide** (decision 1147) — the pin for a bug the director caught on
+/// **The numerals do not collide** — the pin for a bug the director caught on
 /// screen: the pet frame's two numeral strings overlapped each other and its name.
 ///
 /// The cause was a bad transcription, not a bad seat. 1.12's pet bars are 70×8 at `(47,-22)` and
@@ -2059,7 +2059,7 @@ fn the_player_frame_wears_the_leader_and_master_looter_icons() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Every unit-frame global the reference declares** — the whole block, per decision 1718.
+/// **Every unit-frame global the reference declares** — the whole block, per.
 ///
 /// benilla named the player's and target's power bar `…PowerBar`, which is the LATER client's
 /// vocabulary: 1.12 has no `*PowerBar` anywhere. Every one is `ManaBar` — `PlayerFrameManaBar`,
@@ -2200,7 +2200,7 @@ fn the_unit_frames_publish_every_name_the_reference_declares() {
 /// **The reported symptom, on the stock file that has it: the target's leader crown went stale.**
 ///
 /// `PLAYER_FLAGS_CHANGED` was one of the events a migrated window registered and nothing here
-/// produced (decision 2078). `TargetFrame.lua:88-95` is its only 1.12 consumer and it re-runs the
+/// produced. `TargetFrame.lua:88-95` is its only 1.12 consumer and it re-runs the
 /// **party-leader icon** — *not* an AFK/DND badge, which 1.12 has nowhere on a unit frame and has
 /// no `UnitIsAFK`/`UnitIsDND` binding to draw from. With no producer, `TargetFrame_Update` was the
 /// crown's only writer, so it moved on a re-target and at no other moment: leadership passing to

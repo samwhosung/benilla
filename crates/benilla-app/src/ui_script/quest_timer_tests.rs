@@ -1,4 +1,4 @@
-//! The timed-quest countdown window against the transcribed reference behaviour (decision 1150,
+//! The timed-quest countdown window against the transcribed reference behaviour (
 //! closing B234): the extracted 1.12 `QuestTimerFrame.lua` is the spec — one `SecondsToTime` line
 //! per timed quest, the frame's height `45 + 16·n`, hidden entirely at zero timers, and every row
 //! mapping back to its quest for the click and the hover.
@@ -111,7 +111,7 @@ fn the_window_follows_the_timed_quests() {
     assert!(shown(&s, "QuestTimer1") && shown(&s, "QuestTimer2"));
     assert!(!shown(&s, "QuestTimer3"), "only two timers are live");
     // SecondsToTime's shipped spelling, plural rule and trailing space, all of it (ref
-    // UIParent.lua:1004-1031) — over the reference's own `−1` (decision 1154), so a 860-second
+    // UIParent.lua:1004-1031) — over the reference's own `−1`, so a 860-second
     // gap reads 859 and a 45-second one 44.
     assert_eq!(row_text(&s, 1), "14 Mins 19 Secs ");
     assert_eq!(row_text(&s, 2), "44 Secs ");

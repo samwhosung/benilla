@@ -1,5 +1,5 @@
 //! The pet action bar (the reference's `PetActionBarFrame.xml`, 1953) driven end to end through the REAL shipped XML
-//! (decision 0982) — the `multibar_stance_tests` pattern: a self-contained loader, then the
+//! — the `multibar_stance_tests` pattern: a self-contained loader, then the
 //! whole chain from a pushed slot list to the quads it actually paints.
 
 use benilla_ui::script::{PetActionView, QuadContent, UiScript};
@@ -63,7 +63,7 @@ pub(super) fn declare_token_strings(s: &UiScript) {
 }
 
 /// The words the drag moves — `ACT_COMMAND`/Attack and `ACT_ENABLED`/Claw as the server packs
-/// them. Carried on the views because the drag is word arithmetic (decision 1010).
+/// them. Carried on the views because the drag is word arithmetic.
 const ATTACK_WORD: u32 = 0x0700_0002;
 const CLAW_WORD: u32 = 0xC100_0BC2;
 
@@ -195,7 +195,7 @@ fn the_shipped_pet_bar_drives_end_to_end() {
 
     // Autocast: the static ring on the one slot that allows it, and the stock shine MODEL on the
     // one slot where it is running — `$parentAutoCast`, `UI-AutoCastButton.mdx` over the whole
-    // button at `scale="1.2"`, rendered as a tile (decisions 2013/2014). A hidden pane is not
+    // button at `scale="1.2"`, rendered as a tile. A hidden pane is not
     // extracted, so one pane is exactly one running shine.
     assert_eq!(
         textures(&quads, "Interface\\Buttons\\UI-AutoCastableOverlay"),
@@ -422,7 +422,7 @@ fn pet_bar_row(with_multibar: bool) -> (usize, f32) {
     (shelf, attack_top)
 }
 
-/// **The row the pet bar shares with the bottom-left multibar** (decision 0988, director-caught:
+/// **The row the pet bar shares with the bottom-left multibar** (director-caught:
 /// the bar drew straight across a live row of spells, border and all).
 ///
 /// Two rules, both the reference's, both applied by `UIParent_ManageFramePositions`: with that bar
@@ -450,7 +450,7 @@ fn the_pet_bar_rises_and_sheds_its_shelf_over_the_bottom_left_bar() {
     );
 }
 
-/// **The drag, through the shipped XML** (decision 1010). One verb serves both ends — the button's
+/// **The drag, through the shipped XML**. One verb serves both ends — the button's
 /// `OnDragStart` and its `OnReceiveDrag` both call `PickupPetAction` — so what makes this a move
 /// rather than two pick-ups is the binding's own fork on whether the cursor is already carrying.
 ///
@@ -507,7 +507,7 @@ fn dragging_a_pet_spell_between_slots_moves_it_through_the_shipped_handlers() {
     assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
 }
 
-/// The pet bar honours **Lock ActionBars** too (decision 1136) — the reference's second consumer of
+/// The pet bar honours **Lock ActionBars** too — the reference's second consumer of
 /// the same uvar (`PetActionBarFrame.lua:270/278`), reading the global `ActionBar.xml` declares.
 /// Both drag ends refuse while locked; the shift-click pick-up above stays live, exactly as the
 /// reference leaves it (l.253-255).
@@ -589,7 +589,7 @@ fn shift_clicking_a_pet_button_picks_it_up_rather_than_casting() {
     );
 }
 
-/// **The keybind pair** (decision 1052) — what a bound `BONUSACTIONBUTTONn` runs. The ref's
+/// **The keybind pair** — what a bound `BONUSACTIONBUTTONn` runs. The ref's
 /// binding body calls `BonusActionButtonDown/Up`, one-liners onto `PetActionButtonDown/Up`
 /// (l.218-231), so the whole lane is these two functions: press shows the pushed art, release
 /// fires the slot.

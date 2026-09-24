@@ -1,7 +1,7 @@
 //! The **reference's own** faux-scroll kit — `Interface\FrameXML\UIPanelTemplates`, off the
 //! player's chain since 1837, our transcription deleted by 1860 — under its own
 //! names — `FauxScrollFrame_Update` / `_GetOffset` / `_SetOffset` / `_OnVerticalScroll` and
-//! `ScrollFrame_OnLoad` (decision 1190: a name the shipped 1.12 UI defines is FrameXML's).
+//! `ScrollFrame_OnLoad` (a name the shipped 1.12 UI defines is FrameXML's).
 //!
 //! These drive the kit the way an addon does — a bare instance of `FauxScrollFrameTemplate` with
 //! rows of its own — rather than through one of our six owner windows, because the API is now a
@@ -16,7 +16,7 @@
 //! inheritance now (`framexml.rs merge` clones the base's children) — which is why the fixture
 //! here must be a `<ScrollFrame>`: `merge` takes the OVERRIDING node's tag, and a `<Frame>` would
 //! skip the loader's ScrollChild pass and leave `$parentScrollChildFrame` nil for the reference's
-//! `FauxScrollFrame_Update`, which touches it unguarded (decision 1860).
+//! `FauxScrollFrame_Update`, which touches it unguarded.
 
 use benilla_ui::script::UiScript;
 
@@ -356,7 +356,7 @@ fn dragging_the_bar_steps_the_offset_by_rows_and_repaints() {
 /// The `SetScrollChild` line predates 1205 (the loader's `<ScrollChild>`) and stays as the
 /// addon-shaped way of seating a child by hand; the range it asserts is that child's overflow
 /// (1338). The offset itself never depended on the range — the engine stores what the bar hands it
-/// (decision 2017) — so what this drives is bar value → `SetVerticalScroll` → `<OnVerticalScroll>`
+/// — so what this drives is bar value → `SetVerticalScroll` → `<OnVerticalScroll>`
 /// → `FauxScrollFrame_OnVerticalScroll`'s `floor(v / step + 0.5)`, the reference's path end to end.
 #[test]
 fn the_reference_on_vertical_scroll_path_runs_once_a_scroll_child_exists() {

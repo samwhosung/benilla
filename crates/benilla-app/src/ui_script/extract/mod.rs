@@ -43,7 +43,7 @@ fn ui_diff_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("WOW_UI_DIFF").is_some())
 }
 
-/// `WOW_UI_SPLICE_VERIFY=1` — the splice's own adversary (decision 1638). Read once, off by
+/// `WOW_UI_SPLICE_VERIFY=1` — the splice's own adversary. Read once, off by
 /// default, and *expensive by design*: it makes every spliced frame also pay the full conversion.
 fn splice_verify_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -127,7 +127,7 @@ fn content_kind(c: &QuadContent) -> &'static str {
 /// Which axes of a texture region's UV mapping run PAST the texture — the reference's tiling idiom
 /// (`SetTexCoord(0, n, 0, 1)` repeats the art n times along u) — and so must sample with `Repeat`.
 /// Per axis, because the two answers are independent and the wrong one on the bounded axis is a
-/// visible bleed (decision 2000): with both axes on `Repeat`, a strip that spans exactly `[0, 1]`
+/// visible bleed: with both axes on `Repeat`, a strip that spans exactly `[0, 1]`
 /// in v has its top pixel row filtered against the texture's LAST row. The stance shelf's middle
 /// piece keeps an opaque grey row there, and drew it as a hairline along its own top edge at
 /// every four-form bar. The same tolerance [`uv_clamp_window`] uses to tell a tiling axis from a
@@ -141,8 +141,8 @@ pub(crate) fn tiling_axes(uv: &UvRect) -> (bool, bool) {
     (past(0), past(1))
 }
 
-/// The half-texel-inset UV window a **cropped** quad may sample — [`UiQuad::uv_clamp`]'s producer
-/// (decision 1608), `None` when neither axis needs one.
+/// The half-texel-inset UV window a **cropped** quad may sample — [`UiQuad::uv_clamp`]'s producer,
+/// `None` when neither axis needs one.
 ///
 /// `CLAMP_TO_EDGE` clamps at the IMAGE's edge; a `SetTexCoord` crop into an ATLAS has no such
 /// guard, so a magnified cell's outermost destination pixels sample half a texel past the crop and
@@ -205,7 +205,7 @@ fn report_gate_miss(
     if !generation_eq {
         // Named, because it is the one miss with no visible cause at all: the glyph sheet filled
         // and was repacked from empty, so every held quad's UV moved. It should be very rare —
-        // `WOW_GLYPH_CACHE=1` reports the occupancy that led here (decision 1342).
+        // `WOW_GLYPH_CACHE=1` reports the occupancy that led here.
         eprintln!("[ui-gate] miss: the glyph sheet reset");
         return;
     }
@@ -246,7 +246,7 @@ fn report_gate_miss(
     }
 }
 
-/// Last frame's extract-gate inputs (decision 0740), held together as one `Local` — the gate
+/// Last frame's extract-gate inputs, held together as one `Local` — the gate
 /// compares all of them or none, and a Bevy system has a hard param budget this was eating.
 #[derive(Default)]
 pub(super) struct GateInputs {
@@ -255,7 +255,7 @@ pub(super) struct GateInputs {
     dims: Option<(u32, u32, u32, u32)>,
     portraits: std::collections::HashMap<String, crate::portrait::PortraitSource>,
     /// The `UiFontAtlas::generation` the held quads' glyph UVs came from — see the gate's own
-    /// note below. Moves only when the glyph sheet resets (decisions 1339, 1342).
+    /// note below. Moves only when the glyph sheet resets.
     generation: Option<u64>,
     /// Per-entry prefix ends into the conversion's output: entry `i`'s quads occupy
     /// `spans[i-1]..spans[i]` of `UiQuads::quads` (0 for `i = 0`). Recorded by the full
@@ -288,7 +288,7 @@ struct Alignment {
 /// inserted or removed. A positional compare cannot see that: hovering one item slot inserts a
 /// single highlight entry at index 359 of 520 and shifts the 160 entries behind it, every one of
 /// which then compares unequal by index and equal by `z`. Before this, that frame took the full
-/// conversion — 86 % of all hover frames did (decision 1638).
+/// conversion — 86 % of all hover frames did.
 ///
 /// **The merge FINDS the alignment; it is never trusted.** Quads are reused only for a pair that
 /// compares fully equal, and [`convert_entry`] is a pure function of the entry plus the raster
@@ -351,7 +351,7 @@ fn splice_simple(eq: &benilla_ui::script::ExtractedQuad) -> bool {
     match &eq.content {
         QuadContent::Frame
         | QuadContent::Backdrop { .. }
-        // A model pane writes at most one quad and one idempotent tile request (decision 2008)
+        // A model pane writes at most one quad and one idempotent tile request
         // — and the map's arrow changes facing on every turn while the map is open.
         | QuadContent::ModelPane { .. }
         // Both colour-picker arms write one quad and nothing else — and they change on every
@@ -380,8 +380,8 @@ fn splice_simple(eq: &benilla_ui::script::ExtractedQuad) -> bool {
 /// This is the check the splice's whole argument rests on, made by machine instead of by
 /// reasoning. It is what turns "an equal entry converts to equal quads" from a claim about
 /// [`convert_entry`] into a measurement over a real interface: a live client with ~520 entries, a
-/// tooltip re-filling every frame, and a hover highlight inserting and removing itself under it
-/// (decision 1638). A mismatch names the quad, the entry that owns it, and that entry's owner.
+/// tooltip re-filling every frame, and a hover highlight inserting and removing itself under it.
+/// A mismatch names the quad, the entry that owns it, and that entry's owner.
 ///
 /// The side channels are collected into throwaway buffers and dropped — the point is the quads.
 /// `booths.panes` is the one exception, because [`convert_entry`] writes it through the shared
@@ -496,7 +496,7 @@ fn quad_summary(q: Option<&UiQuad>) -> String {
 /// under one seam does not answer for another, which is why both callers re-seat rather than
 /// check first.
 ///
-/// Two callers, and the second one is the point (decision 2028): this pass, at the seam edge and
+/// Two callers, and the second one is the point: this pass, at the seam edge and
 /// on the first frame the atlas exists — and [`super::lifecycle::load_ingame_ui_on_world_entry`],
 /// **before the manifest loads**, because that is where every `<OnLoad>` in the in-game UI runs.
 /// Seated only from here, a VM born and loaded inside one exclusive system — which is exactly
@@ -512,7 +512,7 @@ pub(crate) fn seat_text_measurer(script: &mut UiScript, atlas: &UiFontAtlas, sea
 /// round-trip -> `resolve`. Script errors drain to the log (throttled by being drained, each fires
 /// once). The quads are the second half's ([`paint_script`]).
 ///
-/// **The pass is two systems because a widget can be anchored to the world** (decision 2168). The
+/// **The pass is two systems because a widget can be anchored to the world**. The
 /// hit test has to run before `WorldStage::Input` (`PlayerUiHover` feeds `PointerOverUi`, which the
 /// camera reads), so this half stays there. Building the quads there too made every world-anchored
 /// widget a frame stale, and since 2148 the nameplates ARE widgets — real `WorldFrame` children
@@ -548,9 +548,9 @@ pub(super) fn tick_script(
     // catches that on its own test (`!script.has_text_measurer()`).
     mut last_seam: Local<f32>,
     // The `scale_factor` this pass last answered measures under — the other half of the same
-    // staleness edge (decision 1342). `0.0` until the first frame, which is also a real edge.
+    // staleness edge. `0.0` until the first frame, which is also a real edge.
     mut last_dpi: Local<f32>,
-    // The uiScale dial folded into the seam scale (decision 0584).
+    // The uiScale dial folded into the seam scale.
     ui_scale: Res<super::UiScaleCvar>,
     // This frame's phase split, published for whoever asked (the `[ui-cost]` line, `hover_log`).
     mut ui_cost: ResMut<super::UiFrameCost>,
@@ -573,7 +573,7 @@ pub(super) fn tick_script(
         return;
     };
     let (w, h) = (window.width(), window.height());
-    // The 768-virtual UI space (decision 0582 — byte law: the client's FrameXML space is ALWAYS
+    // The 768-virtual UI space (byte law: the client's FrameXML space is ALWAYS
     // 768 units tall, every aspect, mapped to the window; the converter identity `f(screenH) = 768`
     // (`0x41ad10`) + the caret `H_px/192` law (`0x77b8c0`)), times the uiScale dial (decision 0584
     // — the VM's screen is `768/uiScale` units tall, so a dial below 1 shrinks everything). The VM
@@ -589,13 +589,13 @@ pub(super) fn tick_script(
     // eats fitting text: the director's "Contr..." rows, reproduced by `WOW_RESIZE`). Declare the
     // staleness at the seam and let every round-trip re-answer under the new `s`.
     //
-    // **The DPI is the other half of the same edge** (decision 1342). A logical height becomes an
+    // **The DPI is the other half of the same edge**. A logical height becomes an
     // integer DEVICE-pixel raster size, so a monitor hop at an unchanged window size leaves `s`
     // exactly where it was and still moves every measured width. (1296/1339 caught this through
     // the atlas's bake generation, which followed the same two terms; with nothing to re-bake, the
     // honest thing to watch is the term itself.)
     let dpi = window.scale_factor();
-    // The tile renderer sizes its cells in device pixels off this (decision 2008).
+    // The tile renderer sizes its cells in device pixels off this.
     booths.tiles.dpi = dpi;
     let seam_moved = *last_seam != s || *last_dpi != dpi;
     if seam_moved {
@@ -732,7 +732,7 @@ pub(super) fn tick_script(
     }
     drop(measure_span);
     let us_measure = lap();
-    // The player's half of the error contract before the host's (decision 1305): every caught
+    // The player's half of the error contract before the host's: every caught
     // script error goes to the Lua error handler — `_ERRORMESSAGE` → the ScriptErrors dialog
     // since BasicControls installs it, an addon's own handler if it chose one — and then the
     // same errors drain to the log as always. Dispatch first so a handler that itself fails
@@ -763,7 +763,7 @@ pub(super) fn tick_script(
 /// **The UI pass, second half: the quads** — a second (incremental) measure + `resolve`, the tree
 /// walk, and the conversion into [`UiQuads`].
 ///
-/// Split out of [`tick_script`] (decision 2168) and scheduled **after the camera and after the
+/// Split out of [`tick_script`] and scheduled **after the camera and after the
 /// plate driver**, which is the whole point: a widget positioned from this frame's camera has to be
 /// walked after that camera exists. The re-resolve is what makes the plates' fresh anchors real —
 /// it is the layout ledger's incremental pass, so on a frame where nothing but the plates moved it
@@ -777,11 +777,11 @@ pub(super) fn paint_script(
     mut font_atlas: Option<ResMut<UiFontAtlas>>,
     // Both directions of the booth seam: the token -> off-screen-baked-face bridge a
     // `SetPortraitTexture`-bound region samples, and the pane geometry this pass publishes back
-    // for the booths' projection aspect + render gate (decision 1069).
+    // for the booths' projection aspect + render gate.
     mut booths: crate::portrait::BoothBridge,
     // Two facts about the RUN, tupled to stay inside Bevy's 16-element system-param limit (the
     // same squeeze `player::control` and `GateInputs` above record):
-    // · the held-cursor icon quad (decision 0216 §5) is CAPTURE-ONLY, the same presence check
+    // · the held-cursor icon quad is CAPTURE-ONLY, the same presence check
     //   every other capture-only system uses (`ui_script::capture_ui_active`'s sibling pattern);
     // · whether anything wants this pass's phase split at all ([`super::UiCostWanted`]).
     run: (
@@ -792,7 +792,7 @@ pub(super) fn paint_script(
     // slot (`minimap::emit_minimap` fills it with tile/arrow quads — decision 0203 phase 1). (The
     // autocast shine's sites used to ride beside it; the shine is a model tile since 2014.)
     mut parked_minimap: ResMut<crate::minimap::MinimapWidget>,
-    // ── The extract gate's memory (decision 0740): last frame's conversion inputs ─────────────
+    // ── The extract gate's memory: last frame's conversion inputs ─────────────
     // The conversion loop below is a pure function of (extracted, text_ui, the RASTER
     // ENVIRONMENT, the portrait token map, the glyph-sheet generation) — the sprite caches are
     // monotone path→handle, so equal inputs reproduce the same `UiQuads` the diff would then
@@ -813,7 +813,7 @@ pub(super) fn paint_script(
     //
     // A [`crate::ui_script::VmMemo`] because a skip is not only a quad-conversion skip: it also skips
     // `set_link_spans` and the minimap-slot / booth-pane refills, which are pushes INTO the VM. The
-    // VM lives for one login (decision 1290), so a fresh VM must never be gated on what the previous
+    // VM lives for one login, so a fresh VM must never be gated on what the previous
     // one extracted — its first frame is always a real conversion.
     mut prev: Local<crate::ui_script::VmMemo<GateInputs>>,
     // This frame's phase split, published for whoever asked (the `[ui-cost]` line, `hover_log`).
@@ -931,7 +931,7 @@ pub(super) fn paint_script(
     let extracted = script.extract();
     let us_exm = lap();
     let n_extracted = extracted.len();
-    // ── The extract gate (decision 0740) ──────────────────────────────────────────────────────
+    // ── The extract gate ──────────────────────────────────────────────────────
     // Every input the conversion below reads, compared against last frame's. Equal inputs make
     // the loop a pure re-derivation of `UiQuads` the diff at the bottom would discard — at the
     // LBRS pin that was every single settled frame, ~0.3 ms/frame of glyph re-rasterization for
@@ -1030,7 +1030,7 @@ pub(super) fn paint_script(
         }
         // The focused edit box carries the caret BLINK — wall-clock state that appears in no
         // entry, and the one time-dependent input the Text arm reads. It is what makes text
-        // splice-safe at all (decision 1638): everything else the conversion reads is either in
+        // splice-safe at all: everything else the conversion reads is either in
         // the entry or pinned by a guard above.
         if text_ui != prev.text_ui {
             no_splice!("focused editbox text-ui moved");
@@ -1240,7 +1240,7 @@ pub(super) fn paint_script(
     prev.text_ui = text_ui.clone();
     prev.portraits = booths.images.0.clone();
     prev.extracted = extracted.clone();
-    // This frame's booth panes, refilled by the loop below (decision 1069). Cleared only HERE, on
+    // This frame's booth panes, refilled by the loop below. Cleared only HERE, on
     // the un-skipped path: a settled frame draws exactly what the last one did, so the map it left
     // is still this frame's truth — clearing it above the gate would make every quiet frame put the
     // body panes' cameras to sleep and freeze their animation.
@@ -1267,7 +1267,7 @@ pub(super) fn paint_script(
     }
     prev.spans = spans;
     // The payload held on the cursor draws last (a 32×32 icon at the mouse, over the whole UI) —
-    // but ONLY in capture mode (decision 0216 §5): a normal run shows it as the hardware cursor
+    // but ONLY in capture mode: a normal run shows it as the hardware cursor
     // instead (`crate::cursor`), which can't appear in a screenshot's pixels, so the quad is the
     // capture harness's stand-in. Any arm, matching the hardware cursor's own `payload_icon`
     // (item/spell/action alike — the item-only read here predated the spell/action producers).
@@ -1367,7 +1367,7 @@ pub(super) fn paint_script(
 
 /// One extracted entry converted to its screen quads, pushed onto `out` — with the side channels
 /// some arms carry: chat link spans (Text), the minimap widget slot (Minimap), the booth pane
-/// aspects (portrait-bound Texture), the model tile requests (ModelPane, decision 2013). The ONE
+/// aspects (portrait-bound Texture), the model tile requests (ModelPane). The ONE
 /// conversion body: the full pass and the per-entry
 /// splice both call this, which is what makes the splice's output equal the full path's by
 /// construction. An arm is splice-eligible only if it writes nothing but `out` — keep
@@ -1377,7 +1377,7 @@ fn convert_entry(
     s: f32,
     // The window, logical px. `h` flips y-up WoW space into the y-down quad pass; `w` is here for
     // the one producer whose law needs the SCREEN's shape — a model tile's layout unit and
-    // particle unit run on the screen diagonal (decision 2013).
+    // particle unit run on the screen diagonal.
     w: f32,
     h: f32,
     // The window's DEVICE scale, for the one arm that resamples its art to physical pixels: the
@@ -1405,7 +1405,7 @@ fn convert_entry(
     if let Some((at, r)) = ui_pick_point() {
         report_ui_pick(&eq, rect, at, r);
     }
-    // The ScrollFrame clip (decision 0112), through the same conversion as `rect` —
+    // The ScrollFrame clip, through the same conversion as `rect` —
     // `UiQuad::clip` is the CPU-clip stand-in `ui_pass` already applies uniformly to
     // every quad (texture, backdrop, and glyph alike), so this is the entire app-side plumb.
     let clip = eq
@@ -1453,12 +1453,12 @@ fn convert_entry(
             fog,
         } => {
             use crate::portrait::PortraitSource;
-            // A FILE pane (decision 2008): publish what the tile renderer needs — the pane's
+            // A FILE pane: publish what the tile renderer needs — the pane's
             // device-pixel size, the reference's unit ladder off it, and where the composite
             // goes (its rect, paint key, alpha and clip). The request is idempotent, so the
             // memoized conversion may re-publish it freely; which panes draw is the engine's
             // paint list, and the quad itself is the renderer's per-frame output
-            // (`ui_models::compose_tiles`, decision 2023) — NOT pushed here, because a cell
+            // (`ui_models::compose_tiles`) — NOT pushed here, because a cell
             // packed after this conversion would wait on a re-conversion nothing triggers.
             if let Some(path) = model.as_deref() {
                 let tiles = &mut booths.tiles;
@@ -1484,7 +1484,7 @@ fn convert_entry(
                         star_px_per_unit: 768.0 * diag * s * dpi,
                         facing,
                         position: Vec3::new(position.0, position.1, position.2),
-                        // The PERSPECTIVE leg's root (decision 2027), which is in model units,
+                        // The PERSPECTIVE leg's root, which is in model units,
                         // not pixels: `T(pos · layoutScale) · R(facing) · S(s)` with
                         // `s = G48·(5/3)·modelScale·layoutScale` — and `G48·(5/3)` is exactly
                         // `√((4/3)²+1)/√(a²+1)`, the 4:3 renormalizer (`0x80655c`). The
@@ -1525,7 +1525,7 @@ fn convert_entry(
                 return;
             };
             // The aspect the bake must render at, and the fact that it is on screen at all
-            // (decision 1069) — published before the readiness check below for the same reason the
+            // — published before the readiness check below for the same reason the
             // `portrait_unit` arm does it there: a pane whose bake has not landed yet is still a
             // pane being drawn, and gating the publish on the image would be a standoff.
             if rect.height() > 0.0 {
@@ -1574,7 +1574,7 @@ fn convert_entry(
             if let Some(token) = &portrait_unit {
                 use crate::portrait::PortraitSource;
                 // Publish the rect's aspect so a booth can bake at the shape it will be
-                // stretched into, and know it is on screen at all (decision 1069). Recorded
+                // stretched into, and know it is on screen at all. Recorded
                 // before the readiness `continue` below — a pane whose bake hasn't landed yet is
                 // still a pane being drawn, which is also what keeps the gate below from being a
                 // chicken-and-egg (nothing drawn → no bake → nothing drawn). The region's rect is
@@ -1627,7 +1627,7 @@ fn convert_entry(
                     // The binding's mask flag: `SetPortraitTexture` regions cut the inscribed
                     // circle (the ref stamps the same shape into its 64² bake's alpha — and
                     // rounds the square stand-in art the same way); `BenillaSetBoothTexture`
-                    // (the paper-doll model pane, decision 0208 §5) samples the bake square.
+                    // (the paper-doll model pane) samples the bake square.
                     circular,
                     premultiplied,
                     clip,
@@ -1641,7 +1641,7 @@ fn convert_entry(
                 return;
             }
             // A portrait region samples the circular-masked variant so the square icon/model
-            // doesn't poke past the frame ring's thin band (SetPortraitToTexture, decision 0084).
+            // doesn't poke past the frame ring's thin band (SetPortraitToTexture).
             //
             // A path the archives don't have draws **nothing** — never a white slab. This arm
             // used to fall through to `color.unwrap_or(WHITE)` with a `None` texture, which
@@ -1677,7 +1677,7 @@ fn convert_entry(
             // (stock `ShapeshiftBar_Update`). Clamp-sampled it smears the last column
             // across the extra width instead. Clamp/repeat bake into the `Image`, so this picks
             // a wrapped GPU image + cache entry — wrapped on the tiling axis ALONE
-            // (`tiling_axes`, decision 2000): the other axis spans the whole texture, and a
+            // (`tiling_axes`): the other axis spans the whole texture, and a
             // `Repeat` sampler there is a bleed, not a tile — bilinear at `v = 0` weighs in the
             // texture's last row, which on `ShapeshiftBarMiddle` is opaque grey, so every
             // four-form stance bar drew a one-px grey hairline along the top of its middle
@@ -1708,7 +1708,7 @@ fn convert_entry(
                             );
                         }
                         // The V-plate's frame art, resampled to the quad's exact PHYSICAL size
-                        // with the sharp kernel instead of GPU-magnified (0188 — the director's
+                        // with the sharp kernel instead of GPU-magnified (the director's
                         // "sharpen the same frame", carried across decision 2148's move of the
                         // plate into the frame system). Keyed by that size, so it re-rasterises on
                         // a resize and is a cache hit on every frame in between. An addon that
@@ -1737,7 +1737,7 @@ fn convert_entry(
                 }
                 _ => None,
             };
-            // The atlas-cell guard (decision 1608): a `SetTexCoord` crop is a cell of a sheet,
+            // The atlas-cell guard: a `SetTexCoord` crop is a cell of a sheet,
             // and bilinear magnification reaches past it into the neighbour unless the fragment
             // is told where the cell ends. The world map's zone POIs are the case that forced it
             // — `POIIcons` cell 15 is fully transparent and the cell above it is a coffin whose
@@ -1945,7 +1945,7 @@ fn measure_fontstrings(
 /// The held-cursor icon quad (CAPTURE-ONLY — see the module doc): a 32×32 icon TOP-LEFT anchored
 /// at the mouse (`pos`, y-down logical px — the same space as the extracted quad rects and the
 /// hardware cursor's own coordinate origin), `[pos, pos + 32]` — matching the hardware cursor's
-/// `(0, 0)` hotspot (decision 0216 §5): the pointer sits at the icon's top-left corner and the
+/// `(0, 0)` hotspot: the pointer sits at the icon's top-left corner and the
 /// icon hangs down-right, the reference look, rather than centering on the mouse. Seated above the
 /// whole UI (`z_key = u64::MAX` sorts last → drawn on top). Pure geometry so it's
 /// machine-checkable without a live mouse.
@@ -1959,7 +1959,7 @@ fn cursor_icon_quad(pos: Vec2, texture: Handle<Image>) -> UiQuad {
     }
 }
 
-/// The atlas-cell guard's law (decision 1608) — see [`uv_clamp_window`]. Each case is a shape the
+/// The atlas-cell guard's law — see [`uv_clamp_window`]. Each case is a shape the
 /// shipped UI actually draws, and the three that return `None` are the three ways a crop is not a
 /// cell.
 #[cfg(test)]
@@ -1989,7 +1989,7 @@ mod uv_clamp_tests {
 
     /// The stance shelf's middle strip past two forms: `SetTexCoord(0, n-2, 0, 1)` tiles along u
     /// and spans the whole texture in v — only u wraps. Both axes `Repeat` was the four-form
-    /// bar's hairline (decision 2000).
+    /// bar's hairline.
     #[test]
     fn a_one_axis_strip_wraps_that_axis_only() {
         assert_eq!(
@@ -2087,7 +2087,7 @@ mod cursor_quad_tests {
     }
 }
 
-/// The app-side half of the ScrollFrame clip plumb (decision 0112): does a [`UiQuad`] built from a
+/// The app-side half of the ScrollFrame clip plumb: does a [`UiQuad`] built from a
 /// clipped [`QuadContent::Texture`] actually carry `clip` through the UI pass? Drives the real
 /// systems in a minimal headless `App` (no `DefaultPlugins` — just the resources the pass
 /// reads), rather than re-deriving the y-up→y-down flip by hand: that flip is exactly the seam this
@@ -2106,7 +2106,7 @@ mod clip_plumb_tests {
     /// A headless app with exactly the resources/entities the UI pass reads: a `NonSend` VM
     /// carrying a ScrollFrame + scrolled-out child + a colored (pathless) Texture region marker, a
     /// 1024×768 primary window (the 768-virtual design height — s = 1, so the WoW-space rects are
-    /// known by hand; decision 0582), and every other resource
+    /// known by hand), and every other resource
     /// left at its default (`WorldAssets`/`UiFontAtlas` absent — no BLP/font pipeline needed to prove
     /// the clip carries through a plain colored quad).
     fn app_with_scrolled_marker() -> App {
@@ -2143,7 +2143,7 @@ mod clip_plumb_tests {
         app.init_resource::<Time<Real>>();
         app.init_resource::<crate::ui_script::UiClock>();
         // The uiScale dial at its identity Default (1.0) — tests pin the byte-identity base;
-        // the shipped app inserts the taste default instead (decision 0584).
+        // the shipped app inserts the taste default instead.
         app.init_resource::<crate::ui_script::UiScaleCvar>();
         app.world_mut().spawn((
             Window {
@@ -2178,7 +2178,7 @@ mod clip_plumb_tests {
         );
     }
 
-    /// The uiScale dial (decision 0584) through the same plumb, by hand: at dial 0.5 on the same
+    /// The uiScale dial through the same plumb, by hand: at dial 0.5 on the same
     /// 1024×768 window, s = 0.5 and the VM sees a 2048×1536 virtual screen — the TOPLEFT-anchored
     /// frame hangs from virtual top 1536, and every window-px rect halves.
     #[test]
@@ -2255,7 +2255,7 @@ mod clip_plumb_tests {
     }
 }
 
-/// The extract gate (decision 0740): a settled frame skips the whole conversion loop, and — the
+/// The extract gate: a settled frame skips the whole conversion loop, and — the
 /// dangerous direction — any extract-visible change must reopen it, INCLUDING paint-only writes
 /// that never dirty the layout gate. Uses the same minimal headless app as `clip_plumb_tests`.
 /// The alignment merge ([`align_entries`]) — the half of the splice that sees through a shift.
@@ -2324,7 +2324,7 @@ mod align_tests {
         }
     }
 
-    /// **The case a positional compare cannot see** (decision 1638): one entry appears in the
+    /// **The case a positional compare cannot see**: one entry appears in the
     /// middle and every entry behind it shifts by one. All of them must keep their quads —
     /// before this, index `j` was compared against a stranger and the whole list re-converted.
     #[test]
@@ -2508,8 +2508,7 @@ mod extract_gate_tests {
         );
     }
 
-    /// **A `<PlayerModel>` pane draws its window's booth, and an unclaimed one draws nothing**
-    /// (decision 1810).
+    /// **A `<PlayerModel>` pane draws its window's booth, and an unclaimed one draws nothing**.
     ///
     /// The engine verb the stock character sheet needed. `PaperDollFrame.xml` declares a bare
     /// `<PlayerModel name="CharacterModelFrame">` with no texture in it at all — our own deleted
@@ -2560,7 +2559,7 @@ mod extract_gate_tests {
             "a render-target bake carries premultiplied colour"
         );
         // …and the pane published its aspect, which is what lets the booth render at the shape it
-        // will be stretched into (decision 1069) and what tells it it is on screen at all.
+        // will be stretched into and what tells it it is on screen at all.
         let aspect = app
             .world()
             .resource::<crate::portrait::BoothPanes>()
@@ -2574,8 +2573,8 @@ mod extract_gate_tests {
         );
     }
 
-    /// **A booth bake reaches the quad pass flagged PREMULTIPLIED, an ordinary region does not**
-    /// (decision 1347). This is the wiring half of the paper-doll/dressing-room fix, and it is the
+    /// **A booth bake reaches the quad pass flagged PREMULTIPLIED, an ordinary region does not**.
+    /// This is the wiring half of the paper-doll/dressing-room fix, and it is the
     /// half that can silently rot: the shader's `select(a, k, premultiplied)` is only correct if
     /// exactly the render-target quads carry the flag. Drop it and every additive effect the pane
     /// draws over EMPTY space is multiplied by its own zero alpha again — the R14 pauldrons' fire
@@ -2722,8 +2721,8 @@ mod extract_gate_tests {
         );
     }
 
-    /// **A frame appearing shifts every entry behind it, and the splice sees through that**
-    /// (decision 1638). Showing a hidden sibling inserts its entries into the MIDDLE of the
+    /// **A frame appearing shifts every entry behind it, and the splice sees through that**.
+    /// Showing a hidden sibling inserts its entries into the MIDDLE of the
     /// render list, so every entry after them lands at a new index. Compared index-wise they all
     /// looked changed and the frame took the full conversion — which is what 86 % of hover frames
     /// were doing. Both directions, and both must equal the full conversion of the same model.

@@ -1,4 +1,4 @@
-//! Text rendering for `QuadContent::Text` (decision 0068 §2): an on-demand glyph cache over the
+//! Text rendering for `QuadContent::Text`: an on-demand glyph cache over the
 //! client's own TTFs, shaped through `cosmic-text` 0.16, emitted as [`crate::ui_pass::UiQuad`]s the
 //! quad pass draws with no special case.
 //!
@@ -9,12 +9,12 @@
 //!   ellipsis seam.
 //! - [`measurer`] — the same engine, as the script VM holds it for a synchronous `GetStringWidth`.
 //!
-//! ## Font objects (decision 0084) and remaining v1 simplifications
+//! ## Font objects and remaining v1 simplifications
 //!
 //! - **Per-`FontString` size + face.** [`QuadContent::Text`] now carries the resolved `{ font, height }`
 //!   from the engine's font registry (`Fonts.xml`'s named virtual `<Font>` objects). A `FontString`
 //!   with no font object falls back to Friz Quadrata at [`DEFAULT_FONT_SIZE`] (the pre-0084 behavior).
-//! - **One exact raster size, on demand** (decision 1342). A logical height becomes the integer
+//! - **One exact raster size, on demand**. A logical height becomes the integer
 //!   device-pixel size it will be drawn at (`round(height × scale_factor)` — the client's own
 //!   `0x5ca030` law), and the glyphs for that size are rasterized the first time anything asks for
 //!   them. There is no size ladder, no snapping, and no rescale of finished quads: the size a
@@ -111,7 +111,7 @@ pub(crate) fn fontstring_em(height: Option<f32>) -> Option<f32> {
 }
 
 /// The DRAWN pixel height of a UI FontString under the client's two size regimes (the size getter
-/// `0x7727b0`), times the seam scale `s = windowH/768 × uiScale` (decisions 0582 + 0584,
+/// `0x7727b0`), times the seam scale `s = windowH/768 × uiScale` (
 /// `crate::ui_script::seam_scale`; `s = 1` at the design height with the dial at 1, where this is
 /// byte-identical to the pre-scaling law):
 ///
@@ -169,10 +169,10 @@ mod cap_tests {
 /// setter cost zero.**
 ///
 /// We had the opposite: the paint pass recomputed the seam every frame for every overflowing
-/// FontString, and the extract gate (decision 0740) is all-or-nothing over the whole render list,
+/// FontString, and the extract gate is all-or-nothing over the whole render list,
 /// so one flashing frame (`PlayerStatusGlow`, which never stops while you are resting) kept
 /// it open — measured live at the reported plaque, 0 of 240 frames skipped. That is what turned a
-/// one-time 5.6 ms into +5.4 ms *per frame* and halved the framerate (B240, decision 1332).
+/// one-time 5.6 ms into +5.4 ms *per frame* and halved the framerate.
 ///
 /// This is the same invalidation set, expressed as a comparison of the inputs rather than a dirty
 /// flag — which cannot go stale by construction, because the answer is a pure function of exactly

@@ -85,7 +85,7 @@ fn state() -> ReputationState {
 /// by name, unguarded) and `ActionBar.xml` (the watch bar, and the show/hide pair's
 /// `ShowWatchedReputationBarText`). This page adds nothing of its own.
 ///
-/// It was a hand-copied manifest prefix until the window became the reference's (decision 1751):
+/// It was a hand-copied manifest prefix until the window became the reference's:
 /// stock `CharacterFrame_OnLoad` reaches into four other files before it does anything else, so the
 /// list stopped being short enough for a per-module copy to stay honest.
 fn load_page(s: &UiScript) {

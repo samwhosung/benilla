@@ -24,7 +24,7 @@ pub(super) struct ColorRun {
 }
 
 /// Resolve `input`'s inline markup into lines of [`ColorRun`]s — the render side of the grammar
-/// [`benilla_ui::markup`] owns (decision 1077).
+/// [`benilla_ui::markup`] owns.
 ///
 /// The grammar itself is **not** this module's: `benilla-ui` holds it because the EditBox's cursor
 /// model needs the identical token boundaries, and two copies of an escape grammar is a drift bug
@@ -112,7 +112,7 @@ pub(super) fn parse_markup(input: &str, base_color: [f32; 4]) -> Vec<Vec<ColorRu
 /// break — which is every `<BR/>` block SimpleHTML builds (`"\n"`: one blank line in the client,
 /// two under a split) and every page body the item-text reader pads. B240's reader drew its
 /// section gaps at double height until this existed (the director, 08-15, against his own 1.12.1
-/// shot); decision 1343.
+/// shot).
 ///
 /// **Not the EditBox's law.** A multiline box that ends in a newline really does show the empty
 /// row its caret sits on, and it reaches its rows through `line_rows`/`0x77da80`, not this kernel
@@ -162,7 +162,7 @@ fn flush(
 /// with the RAW byte offset of every boundary in it: `bounds.len() == drawn.len() + 1`, and
 /// `bounds[k]` is the raw offset of the boundary *before* drawn byte `k`.
 ///
-/// This is the raw↔drawn map the EditBox metrics ride on (decision 1075). The box **stores and
+/// This is the raw↔drawn map the EditBox metrics ride on. The box **stores and
 /// edits** the raw string (`|cffa335ee|Hitem:11684:0:0:0|h[Ironfoe]|h|r`) and **draws** only
 /// `[Ironfoe]`, so an advance table indexed by raw byte has to charge every escape byte zero width.
 /// Measuring the raw string instead put the caret 180 px — twice the drawn text's own width — to the

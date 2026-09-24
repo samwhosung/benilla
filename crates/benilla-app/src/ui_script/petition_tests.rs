@@ -1,4 +1,4 @@
-//! The two guild-charter windows (decision 1672): the guild registrar's two panels, and the
+//! The two guild-charter windows: the guild registrar's two panels, and the
 //! charter itself with its two faces.
 //!
 //! What these guard that the Rust-side unit tests structurally cannot: the windows are Lua over an
@@ -79,7 +79,7 @@ function RenamePetition(name) record("RenamePetition:" .. name) end
 /// The windows' manifest slice, in `benilla.toc` order, with the fixture seated first.
 ///
 /// `MoneyFrame.xml` is load-bearing rather than incidental: `GuildRegistrarMoneyFrame` declares
-/// `inherits="MoneyFrameTemplate"`, which resolves at LOAD (decision 1580), so without it the
+/// `inherits="MoneyFrameTemplate"`, which resolves at LOAD, so without it the
 /// registrar's price row would be a bare frame and the unknown-template guard above would fire.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
@@ -478,7 +478,7 @@ fn reopening_the_registrar_returns_to_the_services_list() {
 }
 
 /// Both windows are registered UIPanels — without a row, `ShowUIPanel` degrades to a bare `Show()`
-/// in no slot and two left-slot windows paint over each other (B288's shape, decision 1507).
+/// in no slot and two left-slot windows paint over each other (B288's shape).
 #[test]
 fn both_charter_windows_are_registered_left_slot_panels() {
     let _data = benilla_formats::wow_data_or_skip!();

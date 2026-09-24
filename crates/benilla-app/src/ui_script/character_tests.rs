@@ -345,7 +345,7 @@ fn shipped_character_frame_drives_end_to_end() {
     // plays the rotate kit. The pane's own rotate button calls `Model_RotateRight(this:GetParent())`
     // (stock `PaperDollFrame.xml:265`), the reference's shared turntable out of `UIParent.lua:1421`,
     // declared in our `UIParent.xml` — our `BenillaPaperDollModel_*` pair is gone with the file
-    // that used it (decision 1751).
+    // that used it.
     s.run("Model_RotateRight(CharacterModelFrame)").unwrap();
     assert!(
         (s.model_pane_facing("CharacterModelFrame") - 0.64).abs() < 0.001,
@@ -433,7 +433,7 @@ fn close_button_draws_above_the_paper_doll_page() {
 /// It is also **unreachable in the app**, which is why nothing replaces the guard rather than the
 /// expectation moving to "it raises": `ui_unit::feed_units` pushes `set_unit("player", …)` earlier
 /// in the same system than it fires `PLAYER_ENTERING_WORLD`, and that fire is gated on our avatar's
-/// descriptor existing (decisions 1087/1094) — while the window can only be opened in-world at all.
+/// descriptor existing — while the window can only be opened in-world at all.
 /// So the state under test is the one below: a snapshot is always there first.
 #[test]
 fn level_line_reads_the_snapshot_and_repaints_on_unit_level() {
@@ -1182,8 +1182,7 @@ fn a_keybind_page_switch_moves_the_tab_row_with_it() {
 }
 
 /// **The five tabs fit their labels on the first show, from the reference's own `<OnShow>`** —
-/// the whole point of retiring benilla's own copy of `CharacterFrameTabButtonTemplate`
-/// (decision 1993).
+/// the whole point of retiring benilla's own copy of `CharacterFrameTabButtonTemplate`.
 ///
 /// The reference fits a tab once, in the template's `<OnShow>`: `PanelTemplates_TabResize(0)`, so
 /// `tab = tabText:GetWidth() + 2 * $parentLeft:GetWidth()`. That needs a `GetStringWidth` that

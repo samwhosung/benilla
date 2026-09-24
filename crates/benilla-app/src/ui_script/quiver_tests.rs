@@ -70,7 +70,7 @@ fn read_toc(root: &Path, name: &str) -> Toc {
     ))
 }
 
-/// One addon's `.toc` files through the same two arms the real loader uses (decision 1186).
+/// One addon's `.toc` files through the same two arms the real loader uses.
 fn load_addon_files(script: &UiScript, root: &Path, name: &str) -> Vec<String> {
     let toc = read_toc(root, name);
     let provider = |req: &str| -> Option<Vec<u8>> { std::fs::read(root.join(req)).ok() };
@@ -176,7 +176,7 @@ fn seat_a_hunter(root: &Path) -> UiScript {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -519,7 +519,7 @@ fn the_hawk_reminder_is_suppressed_only_once_frames_are_locked() {
 ///
 /// This is the test that would have caught the bug in the first place. The A/B above proves the
 /// addon reacts to `ITEM_LOCK_CHANGED`; this proves **we actually send one when an arrow is
-/// spent**, which is the half that was missing (decision 1509).
+/// spent**, which is the half that was missing.
 #[test]
 fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
     benilla_formats::wow_data_or_skip!();

@@ -553,7 +553,7 @@ fn a_row_without_the_flag_has_no_swatch() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// The wheel (decision 1592) — the shipped window's generated art, end to end
+// The wheel — the shipped window's generated art, end to end
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The four elements the reference declares are installed on the SHIPPED window, at the
@@ -666,7 +666,7 @@ fn a_click_on_the_wheel_reaches_the_callers_func() {
 /// changes their pixels and nothing more: the disc carries **no colour at all** (it is drawn at a
 /// literal `V = 1`), and the strip carries hue and saturation but **not value**. Anything more
 /// would churn these quads on every step of a drag for no pixel — the extract gate is only honest
-/// if the content is (decision 1592 §4).
+/// if the content is.
 #[test]
 fn the_generated_art_reaches_the_renderer_carrying_only_what_moves_a_pixel() {
     let _data = benilla_formats::wow_data_or_skip!();

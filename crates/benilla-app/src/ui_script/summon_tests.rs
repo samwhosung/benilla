@@ -1,4 +1,4 @@
-//! The summon confirm (decision 1747, ConfirmSummon.xml): the dialog `ui_summon`'s feed raises,
+//! The summon confirm (ConfirmSummon.xml): the dialog `ui_summon`'s feed raises,
 //! the countdown line the popup engine composes from the four engine globals, the combat lock on
 //! its Accept, and the one call that becomes `CMSG_SUMMON_RESPONSE`.
 //!

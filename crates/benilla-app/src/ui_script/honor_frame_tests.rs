@@ -1,6 +1,6 @@
 //! The shipped **Honor tab** (`Interface\\FrameXML\\HonorFrame.xml`, the reference's own) driven
 //! end-to-end, engine-only (no Bevy) — the per-window test module the skills/reputation files
-//! establish (decision 1512).
+//! establish.
 //!
 //! What it pins is the PAINT law, the half `benilla-ui`'s own `script::pvp::tests` structurally
 //! cannot reach: that module drives the thirteen globals and asserts their tuples, and stops at the
@@ -73,7 +73,7 @@ const RANK_GLOBALS: &str = r#"
 /// `Interface\\FrameXML\\HonorFrame.xml` itself, which the shared list carries because
 /// `PaperDollFrame_SetLevel` writes `HonorLevelText` on every show
 /// (`PaperDollFrame.lua:103`, and `_SetGuild` writes `HonorGuildText` at `:123`) — is
-/// [`super::test_ui::CHARACTER_UI`]; this page adds nothing of its own. It was a hand-copied list until the window became the reference's (decision 1751), which
+/// [`super::test_ui::CHARACTER_UI`]; this page adds nothing of its own. It was a hand-copied list until the window became the reference's, which
 /// is when the list stopped being short enough for a copy to stay honest.
 fn load_page(s: &UiScript) {
     for file in super::test_ui::CHARACTER_UI {
@@ -157,7 +157,7 @@ fn every_figure_lands_in_its_own_row() {
 }
 
 /// The rank block: the title is keyed by the INTERNAL rank and the badge by the VISUAL one, which
-/// differ by four. This is the arc's central conflation trap (decision 1512) and the assertion that
+/// differ by four. This is the arc's central conflation trap and the assertion that
 /// makes it impossible to ship.
 #[test]
 fn the_title_is_the_internal_rank_and_the_badge_is_the_visual_one() {

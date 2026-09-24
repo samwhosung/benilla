@@ -1,4 +1,4 @@
-//! Shipped end-to-end tests for the chat window + input (decision 0084, the chat arc): the real
+//! Shipped end-to-end tests for the chat window + input (the chat arc): the real
 //! `Interface\FrameXML\ChatFrame.xml` loaded through the engine loader, driven exactly as the app
 //! drives it — `add_chat_message` → `resolve`/`extract` (lines render in the pinned colors), the
 //! wheel → the Lua `OnMouseWheel` handler → `ScrollUp` (which freezes the fade), and the input
@@ -739,7 +739,7 @@ fn fcf_select_dock_frame_selects_by_frame_and_leaves_an_undocked_one_alone() {
     );
 }
 
-/// **The idle dock writes nothing** (decision 1396). `FCF_OnUpdate`'s apply block used to run
+/// **The idle dock writes nothing**. `FCF_OnUpdate`'s apply block used to run
 /// unconditionally — ~24 `getglobal`s, two table builds and ~20 `SetAlpha` calls every frame of
 /// every session, writing the values that were already there, at 36 µs/frame (1395 measured it as
 /// the largest single handler in the client).
@@ -869,7 +869,7 @@ fn a_chat_view_at_the_bottom_stops_rewriting_the_flash() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Selecting the Combat Log must not stop the dock.** The falsification for decision 1588.
+/// **Selecting the Combat Log must not stop the dock.** The falsification for.
 ///
 /// `FCF_OnUpdate` is the dock's whole driver — the hover reveal, both tabs' alphas, the label
 /// settle, the whisper blink — and it used to ride `ChatFrame1`'s own `OnUpdate`.
@@ -1006,7 +1006,7 @@ fn the_combat_log_window_runs_its_own_bottom_button_blink() {
 ///
 /// Ours kept the reference's ten names in `ChatFrame.xml`, which loads at manifest 939 against the
 /// chain's 194, so our copies overwrote the chain's from the day that entry landed — the reverse of
-/// 1855's direction, and nothing drove this menu in a test, so nothing said so. Decision 1869.
+/// 1855's direction, and nothing drove this menu in a test, so nothing said so.
 #[test]
 fn the_chat_menu_builds_its_rows_on_the_references_kit() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1216,7 +1216,7 @@ fn a_glass_windows_plate_fades_in_on_every_hover_under_the_full_manifest() {
     }
 }
 
-/// **The plate comes back after a quick exit and re-entry** (decision 1998 — the director's
+/// **The plate comes back after a quick exit and re-entry** (the director's
 /// report: an existing window shows tabs but no plate on hover; a new one shows the plate; the
 /// tab menu's opacity slider, used once, makes the hover work again).
 ///
@@ -1330,7 +1330,7 @@ fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
 /// `ChatEdit_ParseText` → `SlashCmdList["CHAT_AFK"](msg)` → `SendChatMessage(msg, "AFK")` →
 /// `SendType::from_token`, which answered `None` because a doc comment there asserted AFK/DND
 /// "set a flag rather than sending a line". They do not: they are `CMSG_MESSAGECHAT` `0x14`/`0x15`
-/// and the SERVER toggles the bit. Decision 2082.
+/// and the SERVER toggles the bit.
 ///
 /// So the assertion runs the two halves in series: the stock file really does emit the token, and
 /// the token really does resolve to a wire kind. Testing either alone passes while the seam is

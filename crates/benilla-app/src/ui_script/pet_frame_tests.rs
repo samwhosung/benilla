@@ -1,4 +1,4 @@
-//! The shipped pet frame, driven end to end (decision 0990) — `UnitFrames.xml`'s
+//! The shipped pet frame, driven end to end — `UnitFrames.xml`'s
 //! `PetFrame` over synthetic `"pet"` snapshots and the events the app's feed fires.
 //!
 //! The frame's whole job is to be right about **which unit an event names**, and that is what most
@@ -388,7 +388,7 @@ fn left_clicking_the_pet_frame_targets_it() {
 }
 
 /// **All three legs of `PetFrame_OnClick` survive the click** — B208's "dropping food from the bag
-/// onto the pet doesn't feed" (decision 1055).
+/// onto the pet doesn't feed".
 ///
 /// The handler transcribed the reference's three legs correctly from the day it shipped, but two of
 /// the globals it calls — `DropItemOnUnit` and `SpellTargetUnit` — were never registered, so the
@@ -483,13 +483,13 @@ fn stats(
         training_points: (170, 130),
         experience: (4200, 8000),
         // The unit frame draws neither the family word (the paper doll's level line) nor the diet
-        // (its tooltip) — decision 1062. Left at their defaults on purpose: the happiness icon
+        // (its tooltip). Left at their defaults on purpose: the happiness icon
         // these tests drive must not start depending on them.
         ..benilla_ui::script::PetStats::default()
     }
 }
 
-/// The happiness icon end to end through the real XML (decision 1005): shown for a hunter pet,
+/// The happiness icon end to end through the real XML: shown for a hunter pet,
 /// re-cut per bucket, hidden for anything that is not one.
 ///
 /// The tooltip key is the assertion rather than the texcoords because it is what proves **which
@@ -593,7 +593,7 @@ fn unit_happiness_repaints_only_the_icon() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The layering law (decision 0884), the pet frame's copy of the player/target/party tests: the
+/// The layering law, the pet frame's copy of the player/target/party tests: the
 /// frame art must draw OVER the bar fills, which only the frame LEVEL can hold — the draw layer is
 /// bucket-wide. A "simplification" back to declaration order puts the bars on top as pasted slabs.
 ///

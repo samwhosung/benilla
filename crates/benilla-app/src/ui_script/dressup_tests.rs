@@ -367,7 +367,7 @@ fn the_paper_doll_slots_preview_and_post_what_you_wear() {
 /// (`PaperDollFrame.lua:653`). Shift-clicking such a slot must post nothing and raise nothing.
 ///
 /// That is now the ENGINE's promise rather than a transcription's guard: `EditBox:Insert(nil)` is a
-/// no-op because the reference reads the argument through `lua_tostring` (decision 1800), and this
+/// no-op because the reference reads the argument through `lua_tostring`, and this
 /// test is what holds the stock line above harmless over an in-flight item.
 #[test]
 fn shift_clicking_an_unresolved_slot_posts_nothing_and_never_raises() {
@@ -410,7 +410,7 @@ fn shift_clicking_an_unresolved_slot_posts_nothing_and_never_raises() {
 
 /// The window's own controls: Reset re-dresses (and clicks), closing it empties the booth, and the
 /// rotate buttons move the pane's yaw by the reference's own ±0.03 per OnClick — which fires on
-/// BOTH mouse edges, so one tap is 0.06 (decision 0638 §3).
+/// BOTH mouse edges, so one tap is 0.06.
 #[test]
 fn reset_re_dresses_close_empties_and_the_arrows_spin_the_pane() {
     benilla_formats::wow_data_or_skip!();

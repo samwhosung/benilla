@@ -1,5 +1,5 @@
 //! The shipped `assets/ui/KeyBindingsPage.xml` + OptionsFrame.xml's Keybindings body — the
-//! Options window's Keybindings category over the engine's binding table (decision 1008,
+//! Options window's Keybindings category over the engine's binding table (
 //! superseding 0997's standalone window; the provenance block in the XML).
 //!
 //! What these guard: the module + the options window load clean together; the page is an
@@ -249,7 +249,7 @@ fn the_capture_flow_binds_steals_and_refuses_like_112() {
             .contains(&victim),
         "the newly-bare victim is named"
     );
-    // **The wheel binds like any other key** (B265, decision 1295) — including onto MOVEFORWARD,
+    // **The wheel binds like any other key** — including onto MOVEFORWARD,
     // which has press+release state. This block used to assert the opposite; `0x4b7490` never
     // reads a command node, so the refusal it asserted is not in the client.
     s.run(&format!("{ROW}3Key1Button:Click()")).unwrap();
@@ -539,7 +539,7 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
         .eval::<bool>(&format!("return {SF}ScrollBar:IsVisible()"))
         .unwrap());
     s.resolve();
-    // The page area's OWN scroll (B217) stays out of it: this page fills the body exactly, so the
+    // The page area's OWN scroll stays out of it: this page fills the body exactly, so the
     // outer range is 0 and its bar never joins this one in the gutter the two share.
     for _ in 0..4 {
         s.tick(0.016);
@@ -551,7 +551,7 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
     // to `numItems * valueStep` (~5275px with every section open), our old template had none, and
     // the range is measured by unioning the scroll child's whole SUBTREE — the reference's own
     // `0x786f80` recursion, which re-enters itself for each shown child frame with no clip or
-    // ScrollFrame exception (decision 1338). The reference would measure
+    // ScrollFrame exception. The reference would measure
     // the same; it simply never nests a faux list inside a real-scroll page, which our options
     // window is alone in doing.
     //
@@ -582,7 +582,7 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
     );
     // …wearing its TROUGH: the recessed channel (the shared kit's, shown and hidden with the bar),
     // which seats ITSELF on the bar — 31 wide against the bar's 16, hung 8 units left, and
-    // overhanging it 21/20 so each arrow drops into the 16-tall socket the art carries (B224; the
+    // overhanging it 21/20 so each arrow drops into the 16-tall socket the art carries (the
     // law and its ref citation are in BenillaScrollTrough_Seat). Asserted off the ARROWS here,
     // which is the half the eye judges: 5 units of cap above the up arrow, 4 below the down arrow.
     const TROUGH: &str = "BenillaOptionsFrameContainerBodyKeybindingsScrollFrameScrollBarTrough";
@@ -691,7 +691,7 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The pet lane reaches the page** (B218 / decision 1052). 1008 registered the two multibars
+/// **The pet lane reaches the page**. 1008 registered the two multibars
 /// and stopped; 1.12's `BONUSACTIONBUTTON1-10` — "Secondary Action Button" in its own window —
 /// never joined, so the pet bar was the one visible bar with no way to bind it.
 ///

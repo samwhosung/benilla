@@ -1,4 +1,4 @@
-//! The stock `BattlefieldFrame.xml` and `Minimap.xml`'s queue icon (decision 1974), driven
+//! The stock `BattlefieldFrame.xml` and `Minimap.xml`'s queue icon, driven
 //! engine-only over the queue family's pushes: the icon and its tooltip across
 //! `UPDATE_BATTLEFIELD_STATUS`, the confirm dialog, the list window across `BATTLEFIELDS_SHOW`
 //! / `_CLOSED`, and the join button's request.

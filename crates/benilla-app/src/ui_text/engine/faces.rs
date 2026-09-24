@@ -44,7 +44,7 @@ pub(super) fn hhea_ascent_ratio(bytes: &[u8]) -> Option<f32> {
 /// What a registered face answers to when a caller has to name it to the shaper: its id, the
 /// family string, and the three CSS axes `cosmic-text` matches on.
 ///
-/// **The axes are not decoration** (decision 2123). `Attrs::matches` in cosmic-text 0.16 filters
+/// **The axes are not decoration**. `Attrs::matches` in cosmic-text 0.16 filters
 /// the candidate set on `style` and `stretch`, and `fontdb::Database::query` then does CSS
 /// matching over `weight` as well — so an `Attrs::new().family(…)` built with the *defaults*
 /// asks for a NORMAL-weight, NORMAL-style face and quietly gets somebody else when the face it

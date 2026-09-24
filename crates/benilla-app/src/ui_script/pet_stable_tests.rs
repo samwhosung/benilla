@@ -8,7 +8,7 @@
 //! `UnitExists("pet")` is true, and the pet's name is the one name the client never has at that
 //! moment: it does not ride the descriptor, it is answered by `CMSG_PET_NAME_QUERY` a round-trip
 //! later. The reference reads `UNKNOWNOBJECT` there; a verb answering nil raises
-//! `attempt to concatenate a nil value` in a window nobody opened (decision 2002).
+//! `attempt to concatenate a nil value` in a window nobody opened.
 
 use benilla_ui::script::{PetStats, ScriptValue, UiScript, UnitState};
 

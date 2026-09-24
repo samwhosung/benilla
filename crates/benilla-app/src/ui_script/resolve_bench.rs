@@ -52,7 +52,7 @@ fn settled_default_ui() -> UiScript {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -85,7 +85,7 @@ fn app_frame(s: &mut UiScript) {
 /// [`app_frame`] deliberately models only the measure/resolve half, and the tooltip benches stand
 /// in for the handler by calling it themselves. That is fine when the test IS the driver — but a
 /// test asking "is anything in the shipped UI writing layout on its own?" has to let the shipped
-/// UI actually run, or it answers a question nobody asked (decision 1385).
+/// UI actually run, or it answers a question nobody asked.
 fn app_frame_ticked(s: &mut UiScript, dt: f32) {
     s.tick(dt);
     answer_measures(s);
@@ -177,7 +177,7 @@ fn a_tooltip_content_change_costs_exactly_one_layout_solve() {
         "10 content changes must cost 10 solves — one each. Two per change means the measure \
          round-trip is running AFTER the resolve again (extract::tick_script's order)."
     );
-    // …and none of those ten may DERIVE the graph (decision 1388). This is the second shape of
+    // …and none of those ten may DERIVE the graph. This is the second shape of
     // the same law `a_region_moving_every_frame_costs_no_graph_derivation_on_the_shipped_ui`
     // guards, and it is worth asserting separately because it arrives by a different road: a
     // hover sweep churns tooltip CONTENT, so its per-frame writes are measure answers and
@@ -200,7 +200,7 @@ fn a_tooltip_content_change_costs_exactly_one_layout_solve() {
     );
 }
 
-/// **The idle law** (decision 1385): the settled shipped UI, with nothing happening, must cost
+/// **The idle law**: the settled shipped UI, with nothing happening, must cost
 /// **zero** gate walks per frame — not one cheap one, zero.
 ///
 /// The other guards in this file pin what the ENGINE charges for a change. This one pins that
@@ -253,7 +253,7 @@ fn the_settled_shipped_ui_costs_no_gate_walk_on_a_quiet_frame() {
     );
 }
 
-/// **The castbar law** (decision 1385, ledger B283), on the full shipped UI: a region that moves
+/// **The castbar law** (ledger B283), on the full shipped UI: a region that moves
 /// every frame must cost **one** whole-roster gate walk per frame.
 ///
 /// This is the guard for the bug class 1383 named and the castbar then hit. `CastingBar.xml`'s
@@ -329,7 +329,7 @@ fn a_region_moving_every_frame_costs_one_gate_walk_on_the_shipped_ui() {
     );
 }
 
-/// **The castbar law, part two** (decision 1388): those ten gate walks must cost **zero**
+/// **The castbar law, part two**: those ten gate walks must cost **zero**
 /// derivations of the layout graph.
 ///
 /// 1385 got the moving spark from three whole-roster walks per frame down to one, and the test
@@ -451,7 +451,7 @@ fn a_tooltip_content_change_solves_a_tooltip_sized_scope() {
     }
 }
 
-/// The scoped resolve's falsifier (decision 1350): on the shipped UI, mid-sweep, a solve that
+/// The scoped resolve's falsifier: on the shipped UI, mid-sweep, a solve that
 /// touched only the dirty closure must produce **exactly** the rects a from-scratch whole-graph
 /// solve produces.
 ///
@@ -514,7 +514,7 @@ fn measure_sweep_steady_state_cost() {
     );
 }
 
-/// **The hover-shape law** (decision 1388, ledger B06): a tooltip line that changes ROLE between
+/// **The hover-shape law** (ledger B06): a tooltip line that changes ROLE between
 /// WRAPPED and PLAIN must cost **zero** derivations of the layout graph.
 ///
 /// `a_tooltip_content_change_costs_exactly_one_layout_solve` above asserts the same zero and could
@@ -589,7 +589,7 @@ fn a_tooltip_line_flipping_wrapped_to_plain_costs_no_graph_derivation() {
     );
 }
 
-/// **The hover-sweep law** (decision 1625, ledger B06): sweeping the cursor across a bag grid or a
+/// **The hover-sweep law** (ledger B06): sweeping the cursor across a bag grid or a
 /// spellbook page — a NEW tooltip OWNER on every step — must cost **zero** derivations of the
 /// layout graph.
 ///
@@ -665,7 +665,7 @@ fn a_hover_sweep_across_owners_costs_no_graph_derivation() {
     );
 }
 
-/// **The action-bar hover law** (decision 1630, ledger B06): sweeping the cursor across ACTION BAR
+/// **The action-bar hover law** (ledger B06): sweeping the cursor across ACTION BAR
 /// buttons must cost **zero** derivations of the layout graph.
 ///
 /// The two guards above drive `SetOwner(button, "ANCHOR_RIGHT")` — the bag slot's idiom. The bars
@@ -739,7 +739,7 @@ fn an_action_bar_hover_sweep_costs_no_graph_derivation() {
     );
 }
 
-/// **The bag-addon hover law** (decision 2114, ledger B06's third idiom): a hover that owns the
+/// **The bag-addon hover law** (ledger B06's third idiom): a hover that owns the
 /// tooltip WITH an anchor and then re-points it by hand must cost **zero** derivations.
 ///
 /// The guard above drives `SetOwner(owner, "ANCHOR_NONE")` + `ClearAllPoints()`, and it has always

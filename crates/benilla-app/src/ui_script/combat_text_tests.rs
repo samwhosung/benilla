@@ -1,4 +1,4 @@
-//! The center-screen scrolling combat text (decision 0578) — the Blizzard_CombatText
+//! The center-screen scrolling combat text — the Blizzard_CombatText
 //! transcription driven end-to-end through the real loader: the COMBAT_TEXT_UPDATE pipeline,
 //! the scroll/fade/crit-pop envelope, the option gating, and the Lua-side low-health trigger.
 
@@ -171,7 +171,7 @@ fn combat_text_crit_pops_and_parks() {
 }
 
 /// The drawn height via the engine extract (the SetTextHeight override on the matching Text
-/// quad) — the two-regime split (decision 0582): the font object stays 25, the override is the
+/// quad) — the two-regime split: the font object stays 25, the override is the
 /// drawn size, uncapped.
 fn extracted_text_height(s: &mut UiScript, text: &str) -> Option<f32> {
     s.resolve();
@@ -252,7 +252,7 @@ fn combat_text_state_and_low_health_triggers() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The crit pop's PEAK reaches a true 60 (decision 0582: SetTextHeight sizes are uncapped —
+/// The crit pop's PEAK reaches a true 60 (SetTextHeight sizes are uncapped —
 /// the pre-split renderer clamped them to the 32-unit one-to-one cap, so crits never popped
 /// past 32). The VM's screen is the 768-virtual space by construction (the app seam feeds it),
 /// so the ref constants stand verbatim.
@@ -330,7 +330,7 @@ fn combat_text_master_toggle_unregisters() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **`DAMAGE_TEXT_FONT` is a Lua global the engine reads, not a hardcoded face** (decision 2156).
+/// **`DAMAGE_TEXT_FONT` is a Lua global the engine reads, not a hardcoded face**.
 ///
 /// `0x6c847c` is the only instruction in `WoW.exe` that reads it, through `FrameScript_GetText`'s
 /// fast arm into a plain `lua_gettable(LUA_GLOBALSINDEX)` — so whatever is in the global when the

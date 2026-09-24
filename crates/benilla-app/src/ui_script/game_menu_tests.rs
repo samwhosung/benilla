@@ -1,4 +1,4 @@
-//! The shipped `assets/ui/GameMenuFrame.xml` — the frame ESC opens (decision 0674).
+//! The shipped `assets/ui/GameMenuFrame.xml` — the frame ESC opens.
 //!
 //! What these guard, in order: the ladder geometry (the ERA menu shape minus its AddOns rung —
 //! 200×267, seven rungs in three 20-gapped sections, the era layout engine's own numbers
@@ -39,7 +39,7 @@ fn harness_with(extra: &[&str]) -> UiScript {
     let files: Vec<&str> = [
         "Interface\\FrameXML\\Fonts.xml",
         // `GameMenuFrame` and the panels it opens declare `parent="UIParent"`, resolved at LOAD
-        // (decision 1734) — UIParent must already be there, as it is in the manifest.
+        // — UIParent must already be there, as it is in the manifest.
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
@@ -775,7 +775,7 @@ fn the_bag_row_greys_under_the_menu_without_any_of_it_disappearing() {
         );
     }
     // The backpack icon specifically: still its own art, and carrying SetDesaturation's greyscale
-    // flag to the renderer (decision 1327 — before it, the grey was the ref's no-shader 0.5 tint).
+    // flag to the renderer (before it, the grey was the ref's no-shader 0.5 tint).
     let toggle = art(&s, "MainMenuBarBackpackButton");
     assert!(
         toggle

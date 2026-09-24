@@ -1,4 +1,4 @@
-//! The overflow law — the pure side of the FontString's three overflow regimes (decision 0292):
+//! The overflow law — the pure side of the FontString's three overflow regimes:
 //! the height-limit line stack (regime 2's vertical half, `CGxString+0x40`) and the height-gated
 //! ellipsis-truncate (regime 3, `CSimpleFontString 0x771ec0`). Pure (no atlas, no shaping) — the
 //! parent binds the row-count closure ([`super::ellipsize_to_fit`]), mirroring how [`super::wrap`]
@@ -21,7 +21,7 @@ const HEIGHT_EPS: f32 = 0.25;
 /// + the outlined-cell pad; spacing 0 for all shipped UI).
 ///
 /// **This is the RENDER law, and it is not the fit law** — see [`lines_fitting`]. Using it for both
-/// is what let a four-line item name overflow a three-line box (decision 0597).
+/// is what let a four-line item name overflow a three-line box.
 pub(super) fn lines_allowed(box_h: f32, pitch: f32) -> usize {
     (((box_h - HEIGHT_EPS) / pitch).ceil() as usize).max(1)
 }
@@ -49,7 +49,7 @@ pub(super) fn lines_allowed(box_h: f32, pitch: f32) -> usize {
 /// the sub-one-line call this 0 describes never happens in the client. [`ellipsize_in_box`]
 /// mirrors the clamp. Decision 0597's "0 lines → the loop backs off to the bare ellipsis" reading
 /// missed it and turned every sub-one-line fixed box into three dots — money purses, hotkeys,
-/// everywhere (decision 0605). The epsilon is [`HEIGHT_EPS`] rather than the client's `2⁻²⁰` for
+/// everywhere. The epsilon is [`HEIGHT_EPS`] rather than the client's `2⁻²⁰` for
 /// the same reason it is on the render law — our `box_h` is the anchor graph's arithmetic, not the
 /// client's, and an exact multiple arriving as `12.0 - 1e-6` must not read as zero lines.
 pub(super) fn lines_fitting(box_h: f32, pitch: f32) -> usize {
@@ -69,7 +69,7 @@ pub(super) fn lines_fitting(box_h: f32, pitch: f32) -> usize {
 /// floor is exactly `pitch`). The first line is therefore always admitted, even into a box shorter
 /// than one line — the stock client renders the 36×10 HotKey under its 12px font and benilla's
 /// 20×13 money numbers under 14px, and 0597's unclamped floor turned them all into bare `"..."`
-/// (decision 0605; `sub_one_line_boxes_render_their_single_line` pins the exact geometries). The
+/// (`sub_one_line_boxes_render_their_single_line` pins the exact geometries). The
 /// clamp is a no-op for any box a full line fits in, so the ≥1-line floor law — 0597's loot fix —
 /// is untouched. The render clamp ([`lines_allowed`], floored at one) draws the admitted line.
 pub(super) fn ellipsize_in_box<F: FnMut(&str) -> usize>(
@@ -88,7 +88,7 @@ pub(super) fn ellipsize_in_box<F: FnMut(&str) -> usize>(
 /// the bare `"..."` ships regardless (the client's loop floor). `None` = the text fits untouched
 /// (the raw string draws; the common case, decided by one `rows` call).
 ///
-/// The caller owns the GATE (`boxW > 0 && boxH > 0`; `maxLines` unmodeled — decision 0292): an
+/// The caller owns the GATE (`boxW > 0 && boxH > 0`; `maxLines` unmodeled): an
 /// auto-height FontString's rect height IS its wrapped block, so it always fits here and never
 /// truncates — the byte law's intrinsic-height escape, geometrically.
 pub(super) fn ellipsize<F: FnMut(&str) -> usize>(
@@ -145,7 +145,7 @@ mod overflow_tests {
         }
 
         // A box shorter than one line: the raw floor honestly says 0, the render law floors at 1.
-        // The ellipsis seam does NOT act on the 0 — ellipsize_in_box clamps to one (0605); see
+        // The ellipsis seam does NOT act on the 0 — ellipsize_in_box clamps to one; see
         // sub_one_line_boxes_render_their_single_line.
         assert_eq!(lines_fitting(6.0, 12.0), 0);
         assert_eq!(lines_allowed(6.0, 12.0), 1);

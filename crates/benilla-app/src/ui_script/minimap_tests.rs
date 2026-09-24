@@ -23,7 +23,7 @@ fn minimap_zoom_buttons_resync_when_switching_inside_and_outside() {
     s.run("function PlaySound() end").unwrap();
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     // The shipped load order provides GameTooltip before the cluster; Minimap_Update's tooltip
-    // half (the PVP tint slice, decision 0287) touches it from OnLoad on.
+    // half (the PVP tint slice) touches it from OnLoad on.
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
@@ -249,7 +249,7 @@ fn hovering_the_indicator_shows_and_live_updates_the_game_time_tooltip() {
     );
 }
 
-/// **The ping's click path, driven by a real mouse event** (decision 1596).
+/// **The ping's click path, driven by a real mouse event**.
 ///
 /// The point of the test is the *path*, not the arithmetic: `Minimap_OnClick` is only reached if
 /// the widget is mouse-enabled, hit-tests, and its `OnMouseUp` fires — and what it parks has to be
@@ -346,7 +346,7 @@ fn get_ping_position_answers_two_numbers_always() {
 
     // The stock lifetime, end to end: MINIMAP_PING shows the model frame and starts the 5 s
     // timer; OnUpdate re-seats it from GetPingPosition every frame; past 5 s it "fades" and
-    // hides. The frame's own file draws in it (`crate::ui_models`, decision 2008).
+    // hides. The frame's own file draws in it (`crate::ui_models`).
     assert!(
         !s.eval::<bool>("return MiniMapPing:IsVisible()").unwrap(),
         "hidden until a ping"
@@ -446,12 +446,12 @@ fn the_meeting_stone_icon_follows_the_queue_across_meetingstone_changed() {
     assert!(!vis(&s), "area 0 hides it again");
 }
 
-/// **The ping's pixels are the stock `<Model>`'s own file** (decision 2008): shown by
+/// **The ping's pixels are the stock `<Model>`'s own file**: shown by
 /// `MINIMAP_PING` with the file's facts landed, the extract publishes ONE tile request for the
 /// pane — at its device size, the reference's unit ladder, and the composite's rect/key/alpha
 /// — and pushes no quad of its own. Once the renderer has handed back a cell, the cell draws as
 /// one premultiplied quad over the pane's rect **on the very next frame, with nothing else in
-/// the interface moving** (decision 2023): the composite is the renderer's per-frame output in
+/// the interface moving**: the composite is the renderer's per-frame output in
 /// the overlay lane, never a product of the memoized conversion — which is exactly what the
 /// first shape got wrong, and why this test used to re-ping to "move the pane" before asking
 /// for the quad. Drives the real UI pass in the headless harness the clip-plumb tests

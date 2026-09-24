@@ -1,4 +1,4 @@
-//! The death-arc UI (decisions 0308/1746, DeathFrame.xml): the DEATH release popup's
+//! The death-arc UI (DeathFrame.xml): the DEATH release popup's
 //! show/countdown/release flow, its self-resurrect button, the resurrect-offer popup pick, and
 //! the spirit-healer XP_LOSS two-step — the Lua wiring between the engine's death events and the
 //! StaticPopup engine, driven exactly as `death.rs`'s feed does it (set_death → fire_event).
@@ -76,7 +76,7 @@ fn death_popup_counts_down_and_release_queues_repop() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The self-resurrect leg (decision 1746): with `PLAYER_SELF_RES_SPELL` naming a spell, the DEATH
+/// The self-resurrect leg: with `PLAYER_SELF_RES_SPELL` naming a spell, the DEATH
 /// popup grows its second button, the button wears the SPELL's name rather than the registry's
 /// "Reincarnate" default, and clicking it queues `UseSoulstone` — while button1 still releases.
 #[test]
@@ -319,7 +319,7 @@ fn xp_loss_two_step_confirm_then_range_hide() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// A cancelled confirm comes back on the next ask (decision 1068, B80): every CONFIRM_XP_LOSS
+/// A cancelled confirm comes back on the next ask: every CONFIRM_XP_LOSS
 /// fire re-shows the dialog — the feed fires per SMSG, and this guards the Lua half of that
 /// contract. And the XP_LOSS dialogs carry the ref's alert dress (StaticPopup.lua l.1579-1589):
 /// width 420 with the AlertIcon shown, reset to 320/hidden for a non-alert entry on the same
@@ -377,7 +377,7 @@ fn xp_loss_cancel_then_reconfirm_reshows_with_the_alert_dress() {
 }
 
 /// UnitIsGhost/UnitIsDeadOrGhost — the trio's ghost legs (a ghost has health 1, so UnitIsDead is
-/// false for it; decision 0308 §1).
+/// false for it).
 #[test]
 fn the_ghost_predicates() {
     benilla_formats::wow_data_or_skip!();
@@ -393,7 +393,7 @@ fn the_ghost_predicates() {
             ..Default::default()
         }),
     );
-    // The trio's shape is 1/nil, never a boolean (decision 2043), so these read the value rather
+    // The trio's shape is 1/nil, never a boolean, so these read the value rather
     // than its truthiness — `== nil` is the comparison a boolean would invert.
     assert!(s
         .eval::<bool>("return UnitIsDead(\"player\") == nil")
@@ -407,7 +407,7 @@ fn the_ghost_predicates() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The corpse-run range events (decision 0308 §5): CORPSE_IN_RANGE shows RECOVER_CORPSE with its
+/// The corpse-run range events: CORPSE_IN_RANGE shows RECOVER_CORPSE with its
 /// StartDelay countdown gating Accept, Accept queues the reclaim intent (and keeps the dialog —
 /// the server's descriptor deltas close the loop), CORPSE_OUT_OF_RANGE hides it; the instance
 /// variant is the buttonless notice.

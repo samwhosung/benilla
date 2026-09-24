@@ -83,7 +83,7 @@ fn coin_and_two_items() -> LootState {
     }
 }
 
-/// The whole loot chain minus Bevy (decision 0084): LOOT_OPENED lands the window at the left slot,
+/// The whole loot chain minus Bevy: LOOT_OPENED lands the window at the left slot,
 /// the coin row (first) + two item rows render with quality-coloured text + a stack count, a coin
 /// click and an item click each queue the right 1-based row pick, a LOOT_UPDATE with the coin row
 /// looted hides ITS button in place (the items keep their rows — the fixed slot layout), and the
@@ -320,7 +320,7 @@ fn loot_empty_roll_plays_the_empty_open_kit() {
     );
 }
 
-/// The fishing fork (LootFrame.lua LootFrame_OnShow l.137-140; decision 1086): a fishing loot open
+/// The fishing fork (LootFrame.lua LootFrame_OnShow l.137-140): a fishing loot open
 /// plays "FISHING REEL IN" (SoundEntries "Fishing Reel in", kit 3407 — the name lookup is
 /// case-insensitive on both sides) and swaps the portrait ring's skull for the FishingLoot-Icon;
 /// the next ordinary open resets the skull (the ref re-stamps TargetDead at every show, l.133).
@@ -598,8 +598,8 @@ fn the_loot_window_draws_over_the_party_frames() {
 }
 
 /// The row click's modifier fork (ref `LootFrameItem_OnClick`, LootFrame.lua l.147-154): CTRL
-/// previews the row's item in the dressing room (decision 1060), SHIFT posts its link into an open
-/// chat edit box (decision 1059) — and **neither loots**.
+/// previews the row's item in the dressing room, SHIFT posts its link into an open
+/// chat edit box — and **neither loots**.
 ///
 /// That last clause is the whole point of the test, and it is the WIDGET's to get right: the loot
 /// itself is the `LootButton` kind's click behaviour (`benilla-ui` `script/button.rs`, decision
@@ -714,7 +714,7 @@ fn ctrl_and_shift_on_a_loot_row_preview_and_post_without_looting() {
         "a shift-click on the coin row must not loot the money either"
     );
 
-    // ALT → nothing at all, and in particular NOT a loot (decision 1067). No FrameXML file binds
+    // ALT → nothing at all, and in particular NOT a loot. No FrameXML file binds
     // alt on a loot row; the suppression is the C `CLootButton::OnClick`'s own third gate
     // (`0x41f8f0(2)` @ `0x4c1841`, VERIFIED at the bytes), which our Lua-side take has to
     // reproduce. This is the arm nothing else in the suite would catch: before 1067, alt looted.
@@ -746,7 +746,7 @@ fn ctrl_and_shift_on_a_loot_row_preview_and_post_without_looting() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Master loot, end to end through the shipped XML** (decision 1675).
+/// **Master loot, end to end through the shipped XML**.
 ///
 /// The whole interaction in one pass: a row click stashes the four `LootFrame.selected*` fields
 /// the dropdown reads, `OPEN_MASTER_LOOT_LIST` raises the menu anchored on that row, a candidate
@@ -889,7 +889,7 @@ fn shipped_loot_frame_hands_a_master_row_to_a_candidate() {
     );
 }
 
-/// **The raid arm of the master-loot menu** (decision 1675).
+/// **The raid arm of the master-loot menu**.
 ///
 /// In a raid the candidate array is not the wire order: the client files each candidate into its
 /// own subgroup's five-slot block, leaving holes. `GroupLootDropDown_Initialize` reads those holes
@@ -975,7 +975,7 @@ fn the_master_loot_menu_groups_raid_candidates_by_subgroup() {
     );
 }
 
-/// **The soulbind confirm's Lua half** (decision 1744, ref `StaticPopup.lua:601-611` +
+/// **The soulbind confirm's Lua half** (ref `StaticPopup.lua:601-611` +
 /// `UIParent.lua:317-323` + `LootFrame.lua:53-54`). `LOOT_BIND_CONFIRM` raises `LOOT_BIND` with the
 /// real `LOOT_NO_DROP` text and Okay/Cancel; the row rides on `dialog.data`, and Okay hands it back
 /// through `LootSlot` — the continuation verb, which is the only thing that can complete a deferred
@@ -1067,7 +1067,7 @@ fn the_loot_bind_confirm_raises_the_dialog_and_okay_calls_loot_slot() {
 
 /// The row click is `BenillaTakeLootSlot`, not `LootSlot` — a real mouse click on a row must land
 /// in the TAKE queue, or every loot would be a continuation nothing is pending for and the window
-/// would sit there doing nothing (decision 1744).
+/// would sit there doing nothing.
 #[test]
 fn a_row_click_takes_rather_than_continues() {
     benilla_formats::wow_data_or_skip!();
@@ -1093,7 +1093,7 @@ fn a_row_click_takes_rather_than_continues() {
 }
 
 /// **The state every loot on a cold item cache opens in** — the rows are on the wire, the item
-/// templates are not back yet — driven through the STOCK `LootFrame.lua`. Decision 1805.
+/// templates are not back yet — driven through the STOCK `LootFrame.lua`.
 ///
 /// The hole this closes: every loot fixture in this file (and in `benilla-ui`'s own) handed the
 /// window fully-resolved rows, so nothing in the suite ever ran `LootFrame_Update` over a row whose

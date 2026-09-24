@@ -1,5 +1,5 @@
 //! The XP bar's own tests — the hover plate, the rested/exhaustion-tick system and the
-//! on-bar numerals (decision 1082) — split from `action_bar_tests.rs`, which keeps the
+//! on-bar numerals — split from `action_bar_tests.rs`, which keeps the
 //! action-button machinery. Same file, two concerns: the strip along the bar's top is the
 //! player-progress readout; the buttons are the input surface.
 
@@ -100,7 +100,7 @@ fn the_xp_bar_takes_the_mouse_and_explains_itself() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The exhaustion tick (decision 1082, ref `ExhaustionTick_Update`): with 1000/10000 XP and a
+/// The exhaustion tick (ref `ExhaustionTick_Update`): with 1000/10000 XP and a
 /// rested pool of 700 base-XP, the doubled span is 1400 bar-XP, so the tick parks at
 /// (1000+1400)/10000 of the strip's width and the pale fill stretches exactly to it; the bar
 /// paints rested blue. Draining the pool (normal state) hides both and returns the purple; a
@@ -116,7 +116,7 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
     s.resolve();
 
     // The binding trio underneath (the app-feed shape the XML consumes) — the reference's
-    // contract (`0x48d350`, `0x48d3f0`, `0x516ea0`; decision 1087).
+    // contract (`0x48d350`, `0x48d3f0`, `0x516ea0`).
     let (id, name, mult) = s
         .eval::<(i64, String, f64)>("return GetRestState()")
         .unwrap();
@@ -166,7 +166,7 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
         .unwrap();
     assert!(ok, "a dry pool hides the tick and returns the purple bar");
 
-    // The nil law is the BYTE's, not the pool's (0x48d3f0's `dec/jne`, decision 1087): a normal-
+    // The nil law is the BYTE's, not the pool's (0x48d3f0's `dec/jne`): a normal-
     // state player with a nonzero pool — vmangos's 0 < bonus ≤ 10 hysteresis window — still reads
     // nil, and a rested player with a drained pool reads the NUMBER 0 (the tick then parks at the
     // bar's current fill). An unmapped byte (0 here) is the binary's nil-triple fail path.
@@ -214,7 +214,7 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The max-level rail (decision 1094, ref `ReputationWatchBar_Update`'s no-watched-faction arm):
+/// The max-level rail (ref `ReputationWatchBar_Update`'s no-watched-faction arm):
 /// at MAX_PLAYER_LEVEL the XP strip and its tick give way to the flat brass rail; below it the
 /// strip is back. Walked over a live ding — 59 → 60 via `PLAYER_LEVEL_UP`'s arg1, the value the
 /// ref reads (not the level field, which may not have landed yet). The tick's own handler runs
@@ -306,7 +306,7 @@ fn the_gryphons_outrank_the_bars_across_hide_show_cycles() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The hover numerals (decision 1082, ref TextStatusBar.lua over `MainMenuBarExpText`): entering
+/// The hover numerals (ref TextStatusBar.lua over `MainMenuBarExpText`): entering
 /// the strip shows "curr / max" centered on the bar, leaving hides it (the lockShow refcount's
 /// 0↔1 edge — the `statusBarText` cvar that pins it on permanently reads OFF here).
 #[test]
@@ -341,7 +341,7 @@ fn the_xp_bar_numerals_show_on_hover() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The rest-state tooltip line (decision 1082, ref `ExhaustionToolTipText`'s newbie-tips branch):
+/// The rest-state tooltip line (ref `ExhaustionToolTipText`'s newbie-tips branch):
 /// hovering the BAR arms a 1 s timer and the canAddRestStateLine handshake; when the timer runs
 /// out on the bar's OnUpdate, the "Rested / 200% of normal experience" line is APPENDED to the
 /// held-open newbie tip, once (the handshake is consumed).
@@ -353,7 +353,7 @@ fn the_rest_state_line_joins_the_held_open_tooltip() {
     s.set_rest_state(1, 700, true);
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
 
-    // 1.12's default posture (0661): detailed newbie tips ON.
+    // 1.12's default posture: detailed newbie tips ON.
     s.run("SHOW_NEWBIE_TIPS = \"1\"").unwrap();
     s.run("this = MainMenuExpBar MainMenuExpBar:GetScript(\"OnEnter\")()")
         .unwrap();

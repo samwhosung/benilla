@@ -1,4 +1,4 @@
-//! The chat window's **move, resize and lock**, end to end (decision 1594).
+//! The chat window's **move, resize and lock**, end to end.
 //!
 //! Like `chat_options_tests` next door, these drive the shipped `ChatFrame.xml` from the mouse
 //! event inward — a press on the real grip button, a drag of the real window body, a click on the

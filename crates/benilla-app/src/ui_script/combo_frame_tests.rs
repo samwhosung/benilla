@@ -1,4 +1,4 @@
-//! The combo-point dots (decisions 0869, 0875) — the reference's own `ComboFrame.xml`/`.lua`,
+//! The combo-point dots — the reference's own `ComboFrame.xml`/`.lua`,
 //! executed off the player's chain since 1751's tenth window, driven through the real loader: the show/hide edges, the per-point highlight/shine fade chain, the
 //! "only newly-earned points flare" rule that `COMBO_FRAME_LAST_NUM_POINTS` exists to enforce, and
 //! the two gates that live in `GetComboPoints` rather than in this Lua — rogue-or-druid only, and

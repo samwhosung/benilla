@@ -1,5 +1,5 @@
 //! The target frame's aura rows — the **reference's own** `Interface\FrameXML\TargetFrame.xml`
-//! off the player's patch chain (decision 1751, which retired our `assets/ui/UnitFrames.xml`
+//! off the player's patch chain (which retired our `assets/ui/UnitFrames.xml`
 //! transcription) — against its `TargetDebuffButton_Update` law (ref TargetFrame.lua l.263-387).
 //! The stock XML/Lua is the unit under test; the app-side feed (`crate::ui_aura`'s target half) is
 //! stubbed by pushing an [`AuraState`] list through [`UiScript::set_auras`] and firing the events

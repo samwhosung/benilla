@@ -10,7 +10,7 @@
 //! to call `RunBinding("SCREENSHOT")` **by hand** to get one key back. It would not need to if
 //! unhandled keys fell through to their bindings.
 //!
-//! benilla had the walk (decision 1319) but fed it only ten key names, so ESCAPE was consumed and
+//! benilla had the walk but fed it only ten key names, so ESCAPE was consumed and
 //! `W` was not — and the player could walk around underneath their own intro cinematic.
 
 use benilla_ui::script::UiScript;
@@ -245,7 +245,7 @@ fn the_screenshot_confirmation_shows_during_a_cinematic() {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {

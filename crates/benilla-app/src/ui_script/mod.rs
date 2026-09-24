@@ -5,7 +5,7 @@
 //! below it is Bevy.
 //!
 //! Coordinates: the script/layout side is WoW UI space — **y-up**, origin bottom-left, in the
-//! client's 768-virtual units (decision 0582): `set_screen_size` feeds a screen `768/uiScale`
+//! client's 768-virtual units: `set_screen_size` feeds a screen `768/uiScale`
 //! units tall every frame, and [`seam_scale`] carries quads ×s out / mouse ÷s in. The quad pass
 //! wants y-down window px, so extraction also flips through the window height.
 //!
@@ -17,7 +17,7 @@
 //! server-less (no real game state), `WOW_CAPTURE_UI=1` also feeds synthetic `"player"`/`"target"`
 //! snapshots ([`demo_unit_feed`]) so the frames populate on screen. `FontString` regions draw
 //! through [`crate::ui_text::layout_text_quads`] against the glyph atlas
-//! [`crate::ui_text::UiFontAtlas`] builds at startup (decision 0068 §2).
+//! [`crate::ui_text::UiFontAtlas`] builds at startup.
 
 use bevy::prelude::*;
 
@@ -27,7 +27,7 @@ use crate::ui_unit::UnitFeed;
 use benilla_world::schedule::WorldStage;
 
 /// The addon folder: discovery, manifests, the enable file, and the load walk. `pub(crate)`
-/// because the AddOns screens read the same folder without a VM (decision 1196).
+/// because the AddOns screens read the same folder without a VM.
 pub(crate) mod addons;
 mod content;
 pub(crate) mod extract;
@@ -39,10 +39,10 @@ mod manifest;
 mod reference_ui;
 
 /// What the host remembers about the VM, and how it forgets — the one mechanism that stops a seed
-/// or a change-memo outliving the VM it was written against (decision 1290).
+/// or a change-memo outliving the VM it was written against.
 mod session;
 
-/// The feed gate (decision 1439): the input-side early-out for a per-frame UI feed, its
+/// The feed gate: the input-side early-out for a per-frame UI feed, its
 /// [`gate::Watch`] counter memory, and the `WOW_FEED_GATE_CHECK=1` audit that catches a gate
 /// missing an input.
 pub(crate) mod gate;
@@ -52,7 +52,7 @@ pub(crate) use session::VmMemo;
 // The manifest's loaders read as `ui_script::…` at every call site, including the tests' `super::`.
 // `load_default_ui` is no longer test-only: the addon harness (1188 phase 6) loads the whole
 // shipped interface under each surveyed addon, because roughly half of what an addon calls is
-// FrameXML's Lua rather than the engine's (decision 1190).
+// FrameXML's Lua rather than the engine's.
 pub(crate) use manifest::load_default_ui;
 pub(crate) use manifest::{load_font_registry, load_ingame_ui};
 
@@ -61,7 +61,7 @@ pub(crate) use manifest::{load_font_registry, load_ingame_ui};
 /// combined by [`arbitrate_pointer_over_ui`] from both contributors (dev overlay =
 /// [`EguiPointerOver`]; player UI = [`PlayerUiHover`]). Gameplay reads it so
 /// a drag doesn't start mouse-look; the inspector reads it so a pick doesn't fire behind an
-/// overlaid frame. Owned HERE, not by the dev plugin (decision 0026): gameplay's read must
+/// overlaid frame. Owned HERE, not by the dev plugin: gameplay's read must
 /// survive a build without the dev overlays, so the combiner treats the egui half as optional.
 #[derive(Resource, Default)]
 pub(crate) struct PointerOverUi(pub(crate) bool);
@@ -127,7 +127,7 @@ pub(crate) struct InspectMode {
 }
 
 /// One frame's UI-pass phase split, in μs — written by [`extract::tick_script`] and [`extract::paint_script`] under the same
-/// marks the `[ui-cost]` line prints. **Owned by the producer** (decision 1174): the split is a
+/// marks the `[ui-cost]` line prints. **Owned by the producer**: the split is a
 /// fact this pass publishes about itself, so it must exist whether or not the recorder that reads
 /// it (`hover_log`) is compiled in. Its consumers are instruments; its writer is not.
 #[derive(Resource, Default, Clone)]
@@ -147,8 +147,7 @@ pub(crate) struct UiFrameCost {
     /// How many times this frame's resolve DERIVED the layout graph from scratch (decision 1388's
     /// `layout_derivations`). The law is zero, and it is here because it was not: the recorder was
     /// built for the hover-cost symptom and reported `solves` — the cheap term — while a
-    /// derivation, ~30× more expensive and paid on the same frames, was invisible to it
-    /// (decision 1625).
+    /// derivation, ~30× more expensive and paid on the same frames, was invisible to it.
     pub(crate) derives: u64,
     pub(crate) skipped: bool,
     /// How many entries the per-entry splice re-converted this frame — `0` on a settled or
@@ -157,7 +156,7 @@ pub(crate) struct UiFrameCost {
     pub(crate) spliced: usize,
     /// How many entries the splice *dropped* — drew last frame and does not draw now. A frame
     /// that only closes something has `spliced == 0` and still rode the splice, so this is the
-    /// other half of "did the splice path fire" (decision 1638). Not a CSV column: the recorder's
+    /// other half of "did the splice path fire". Not a CSV column: the recorder's
     /// row is the phase timings, and `[ui-cost] dropped=` already carries it inline.
     pub(crate) dropped: usize,
 }
@@ -167,7 +166,7 @@ pub(crate) struct UiFrameCost {
 ///
 /// `WOW_UI_COST=1` (this module's own `[ui-cost]` line) arms it inline; the hover recorder arms it
 /// by setting this — the direction that keeps the pass free of the instrument's name, and the
-/// reason the flag is a resource rather than an env read here (decision 1174). Default `false` is
+/// reason the flag is a resource rather than an env read here. Default `false` is
 /// the player answer.
 #[derive(Resource, Default)]
 pub(crate) struct UiCostWanted(pub(crate) bool);
@@ -219,7 +218,7 @@ pub(crate) struct UiKeyboardCapture {
 }
 
 /// Set each frame by [`feed_ui_input`]: true for a LEFT press this frame that hit no frame but was
-/// consumed by the UI — the world-drop of a held cursor payload over EMPTY world (0216 §3,
+/// consumed by the UI — the world-drop of a held cursor payload over EMPTY world (
 /// narrowed by decision 0571: over a world object the reference keeps an item payload and runs
 /// SELECT, so the press is NOT consumed there): world click-pick and camera orbit-start must
 /// yield exactly as they do for a hovered click.
@@ -231,12 +230,12 @@ pub(crate) struct PlayerUiClickConsumed(pub(crate) bool);
 /// mirror for world-click consumers that shouldn't take the `NonSend` VM just to ask. Read by
 /// [`crate::target`]'s select router: a click on NOTHING (sky) with a payload held never
 /// deselects (the reference's nothing-leg `SetSelection(0,0)` is no-payload-gated — `0x492d30`'s
-/// local flag test; the terrain leg is not — decisions 0571 + 0574).
+/// local flag test; the terrain leg is not).
 #[derive(Resource, Default)]
 pub(crate) struct CursorPayloadHeld(pub(crate) bool);
 
 /// What [`extract::tick_script`] hands [`extract::paint_script`] — the UI pass is two systems, and
-/// this is the frame they agree on (decision 2168).
+/// this is the frame they agree on.
 ///
 /// `live` is the load-bearing field: the tick half returns early with no VM or no window, and the
 /// paint half must then do nothing at all rather than re-derive a seam for a frame the VM never
@@ -246,7 +245,7 @@ pub(crate) struct CursorPayloadHeld(pub(crate) bool);
 pub(crate) struct UiPassState {
     /// The tick half ran to completion this frame.
     pub(crate) live: bool,
-    /// The 768-virtual seam scale (decision 0582/0584) this frame was ticked under.
+    /// The 768-virtual seam scale this frame was ticked under.
     pub(crate) seam: f32,
     /// The window's device scale factor.
     pub(crate) dpi: f32,
@@ -267,7 +266,7 @@ pub(crate) struct UiPassState {
 /// player is working in the interface, keep the world's hands off the mouse" have to say so:
 ///
 /// - the camera's world-mouse latch — a right-drag that starts on a plate must still turn the view
-///   (decision 2159 §2, which argued it from the reference's own `0x60f830`);
+///   (which argued it from the reference's own `0x60f830`);
 /// - the WHEEL — scrolling with the cursor on a plate must still zoom.
 ///
 /// Both were regressions of the day a plate became a widget, and both are the same mistake, so
@@ -283,7 +282,7 @@ pub(crate) struct PointerOverUiPanel(pub(crate) bool);
 
 /// The player-UI FEED phase — every push into the VM that this frame's tick must see: the
 /// snapshot feeds, the one-shot drains that `fire_event`, the per-VM seeds. Chained
-/// `UiFeed` → [`UiInput`] → [`UiPaint`] and ordered after [`WorldStage::Net`] (decision 2304), so
+/// `UiFeed` → [`UiInput`] → [`UiPaint`] and ordered after [`WorldStage::Net`], so
 /// a feed reads what this frame's packets did, and a handler its event fires reads what every
 /// other feed pushed — the reference's own frame, where packet dispatch precedes every
 /// `FrameScript_SignalEvent` and both precede `OnUpdate`. The failure the order closes was found
@@ -298,7 +297,7 @@ pub(crate) struct PointerOverUiPanel(pub(crate) bool);
 pub(crate) struct UiFeed;
 
 /// The player-UI PAINT pass — the quad walk ([`extract::paint_script`]), ordered after the world's
-/// camera update so that world-anchored widgets are drawn from this frame's camera (decision 2168).
+/// camera update so that world-anchored widgets are drawn from this frame's camera.
 /// The last of the three UI phases (see [`UiFeed`]).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UiPaint;
@@ -322,7 +321,7 @@ pub(crate) struct UiInput;
 /// that jitter (±12 ms observed live), turning every running cooldown into a per-frame "changed"
 /// triple — the diff churn 0375 existed to kill.
 ///
-/// **Both legs run on the PROCESS's clock and neither restarts with the VM** (decision 2116). A
+/// **Both legs run on the PROCESS's clock and neither restarts with the VM**. A
 /// rebuilt VM (any logout/login, any `ReloadUI`) is handed the running clock by
 /// [`lifecycle::seed_vm_clock`], which writes this pair in the same breath — the reference's
 /// `GetTime` is `KERNEL32!GetTickCount`, an OS clock, and stock `Cooldown.lua` gates on
@@ -364,7 +363,7 @@ pub(crate) fn run_or_warn(script: &benilla_ui::script::UiScript, chunk: &str) {
     }
 }
 
-/// The reference's `uiScale` cvar — the user dial on TOP of the 768-virtual base (decision 0584):
+/// The reference's `uiScale` cvar — the user dial on TOP of the 768-virtual base:
 /// px-per-UI-unit multiplies by it, so the VM's virtual screen is `768/uiScale` units tall — the
 /// same law that makes the reference's `uiScale = 768/screenH` its known pixel-perfect setting.
 /// Folded into the one seam scale by [`seam_scale`]; at `1.0` (this `Default`, what every test
@@ -421,7 +420,7 @@ pub(crate) fn seam_scale(window_h: f32, ui_scale: f32) -> f32 {
 /// tick → resolve → extract pipeline into [`UiQuads`], plus the input pass ([`feed_ui_input`]).
 pub(crate) struct UiScriptPlugin;
 
-/// `uiScale`'s change callback (decision 2303): the dial's own `[0.5, 1.5]` clamp.
+/// `uiScale`'s change callback: the dial's own `[0.5, 1.5]` clamp.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut scale: ResMut<UiScaleCvar>) {
     if ev.is("uiScale") {
         scale.0 = ev.num().clamp(0.5, 1.5);
@@ -429,7 +428,7 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut scale: ResMut<UiSca
 }
 
 /// `/console reloadUI` — the reference's own console command, and the same deferred rebuild
-/// `ReloadUI()` and `/reload` queue (decision 1291): through the session seam, run by
+/// `ReloadUI()` and `/reload` queue: through the session seam, run by
 /// [`run_pending_reload`] at the top of the next frame.
 fn console_reload_ui(world: &mut World, _args: &str) -> Vec<String> {
     match world.get_non_send_resource_mut::<UiScript>() {
@@ -446,7 +445,7 @@ impl Plugin for UiScriptPlugin {
         use crate::console::ConsoleCommandApp;
         app.add_observer(on_cvar);
         app.console_command("reloadUI", "Reload the interface.", console_reload_ui);
-        // **The quit root of the shutdown tail, on the exit edge** (decision 1528). It was
+        // **The quit root of the shutdown tail, on the exit edge**. It was
         // `.add_systems(Update, shutdown_on_exit)` below, which cannot see the `AppExit` a player
         // produces — the close button's is written in `PostUpdate` — so quitting from in-world
         // wrote no saved variables, no per-addon files and no `AddOns.txt` at all. `Last` is after
@@ -476,7 +475,7 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<AddOnIdentity>()
             // After `AssetSet::Open` so the patch chain exists at boot: the VM's first load is
             // the real `GlobalStrings.lua` (the reference's own FrameXML order), which the
-            // cast-fail display (0427) resolves its messages from.
+            // cast-fail display resolves its messages from.
             .add_systems(Startup, setup_script.after(benilla_assets::AssetSet::Open))
             // The in-game UI materializes on entering the world, not at boot (1051) — the
             // reference's own seam; only the font registry loads at `Startup`. The entry edge
@@ -516,7 +515,7 @@ impl Plugin for UiScriptPlugin {
                 PreUpdate,
                 (run_pending_reload, lifecycle::run_pending_entry_load).chain(),
             )
-            // **The three UI phases, in order** (decision 2304): every push after the net
+            // **The three UI phases, in order**: every push after the net
             // drain, then the tick, then the paint. `UiFeed`'s own doc has the why; `UiInput`
             // sits before the world's input stage so the hover it produces reaches the pointer
             // arbiter in time (its doc).
@@ -529,12 +528,12 @@ impl Plugin for UiScriptPlugin {
                 )
                     .chain(),
             )
-            // `GetFramerate()`'s host half (decision 1195), in the feed phase so an `OnUpdate`
+            // `GetFramerate()`'s host half, in the feed phase so an `OnUpdate`
             // handler reads this frame's number rather than the previous one's.
             .add_systems(Update, feed_framerate.in_set(UiFeed))
             // `tick_script` resolves layout; `feed_ui_input` hit-tests against those rects, so they
             // chain (also required because both take the single `NonSend` VM). The input pass is
-            // in-world only (decision 0193): the character-select glue screen owns the pointer +
+            // in-world only: the character-select glue screen owns the pointer +
             // keyboard there (its exit edge resets the latches this pass normally drives).
             .init_resource::<UiPassState>()
             .init_resource::<PointerOverUiPanel>()
@@ -546,12 +545,12 @@ impl Plugin for UiScriptPlugin {
                 )
                     .chain()
                     .in_set(UiInput)
-                    // The binding dispatch (0997) runs in this same set, after the feed: it
+                    // The binding dispatch runs in this same set, after the feed: it
                     // reads the capture gate the feed just wrote, so a key a focused box
                     // consumed this frame never also fires a binding.
                     .before(crate::bindings::BindingSet),
             )
-            // **The paint half, after the camera** (decision 2168): the quad walk runs once the
+            // **The paint half, after the camera**: the quad walk runs once the
             // world's own update has happened, so a widget anchored to the world — the nameplates,
             // which since 2148 are real `WorldFrame` children seated by `vplates::drive_vplates`
             // out of THIS frame's camera — is drawn where it belongs instead of a frame behind.
@@ -596,7 +595,7 @@ fn capture_ui_active(capture: Option<Res<crate::run_mode::CaptureMode>>) -> bool
     capture.is_some() && crate::run_mode::capture_ui_opted_in()
 }
 
-/// The pointer arbiter (decision 0026): `PointerOverUi = egui dev overlay ∨ player-UI hover`. Runs
+/// The pointer arbiter: `PointerOverUi = egui dev overlay ∨ player-UI hover`. Runs
 /// regardless of whether the UI VM exists (if it's absent, [`PlayerUiHover`] stays `None` and this is
 /// just the egui bit) — and regardless of the DEV overlays existing (their half is `Option`, so a
 /// player build without the debug-panel plugin arbitrates on the player UI alone).
@@ -608,7 +607,7 @@ fn arbitrate_pointer_over_ui(
     mut panel: ResMut<PointerOverUiPanel>,
 ) {
     // A cinematic used to need a third term here, and no longer does — the deletion is the point
-    // of decision 1734. `CinematicFrame` is `setAllPoints` + `enableMouse="true"`, so while it is
+    // of. `CinematicFrame` is `setAllPoints` + `enableMouse="true"`, so while it is
     // up it is the only mouse target the hit test can reach, because `UIParent:Hide()` has taken
     // every other frame out of it. The hit test now arrives at that on its own, so
     // [`PlayerUiHover`] carries it and the special case is gone.
@@ -636,8 +635,7 @@ pub(crate) use lifecycle::{
     finish_ui_load, is_emote_token_line, seat_from_roster, shutdown_ui_state,
 };
 
-/// `GetFramerate()`'s host half: push a **smoothed** frames-per-second into the VM each frame
-/// (decision 1195).
+/// `GetFramerate()`'s host half: push a **smoothed** frames-per-second into the VM each frame.
 ///
 /// Smoothed, not `1.0 / delta`, for the reason the reference smooths it too: 71 corpus addons put
 /// this number on a panel, and a raw per-frame reciprocal reads as a flickering three-digit mess
@@ -737,8 +735,8 @@ fn demo_unit_feed(script: Option<NonSendMut<UiScript>>, mut fired: Local<VmMemo<
             // "Level 3 Beast" in captures.
             creature_type_name: Some("Beast".into()),
             // A real guid: the combo seed below banks its points against exactly this unit, and
-            // `GetComboPoints` refuses to report points banked on anything but the CURRENT target
-            // (decision 0875). Also stops the demo player and target reading as the same unit,
+            // `GetComboPoints` refuses to report points banked on anything but the CURRENT target.
+            // Also stops the demo player and target reading as the same unit,
             // which two default zeros would.
             guid: DEMO_TARGET_GUID,
             ..Default::default()
@@ -762,7 +760,7 @@ fn demo_unit_feed(script: Option<NonSendMut<UiScript>>, mut fired: Local<VmMemo<
         // A few synthetic bar slots so captures show the action bar populated (battle-stance
         // page: actions 73.. — the page a real warrior login lands on). Spread across the 12 wells
         // (buttons 1,2,3,8,12) so the ui-actionbar capture shows icons seated left-to-right. Slot
-        // 80 is an ITEM-kind action (decision 0216 §7) with a synthetic count of 5, so the capture
+        // 80 is an ITEM-kind action with a synthetic count of 5, so the capture
         // also proves the Count fontstring wires up (`GetActionCount` reads the engine's own
         // pushed count directly — no live server template needed in a capture). It must also seed
         // the `IsConsumableAction` GATE, or the count paints nothing: 0926 put a gate in front of
@@ -770,8 +768,8 @@ fn demo_unit_feed(script: Option<NonSendMut<UiScript>>, mut fired: Local<VmMemo<
         // prove (found while fixing decision 1301).
         script.set_bonus_bar_offset(1);
         // One MACRO slot too (button 4): a GM-style macro that casts nothing, so the capture
-        // shows the macro-name line under the icon and the icon full-colour — B340's shape
-        // (decision 1636). The table is seeded here because a capture has no character identity
+        // shows the macro-name line under the icon and the icon full-colour — B340's shape.
+        // The table is seeded here because a capture has no character identity
         // for `ui_macro::load_macros` to read a file for; nothing overwrites it.
         script.set_macros(benilla_ui::script::MacroState {
             account: vec![benilla_ui::script::MacroView {
@@ -960,7 +958,7 @@ pub(crate) fn fire_chat_login(s: &mut benilla_ui::script::UiScript) {
     }
 }
 
-/// The `benilla_formats::TokenContext::text` seam (decision 2045): resolve a `GlobalStrings` key
+/// The `benilla_formats::TokenContext::text` seam: resolve a `GlobalStrings` key
 /// out of the VM and fill its `%d` holes through the one shared filler.
 ///
 /// The split it implements is deliberate. `benilla-formats` walks the spell's columns and knows
@@ -1061,18 +1059,18 @@ mod faux_scroll_tests;
 #[cfg(test)]
 mod panel_template_tests;
 
-/// The RETURN-SHAPE gate (decision 1842): `reference/1.12-shapes.tsv` against what this client
+/// The RETURN-SHAPE gate: `reference/1.12-shapes.tsv` against what this client
 /// actually answers. `reference_surface` gates names; nothing gated shapes, and that gap produced
 /// six decisions in two days.
 #[cfg(test)]
 mod shape_gate;
 
-/// The event ARGUMENT-shape gate (decision 2140) — the same question one API over: the two event
+/// The event ARGUMENT-shape gate — the same question one API over: the two event
 /// gates in `reference_ui` compare names, and nothing compared what a fire site pushes.
 #[cfg(test)]
 mod event_shape_gate;
 
-/// The VERB-FIRED event gate (decision 2251) — the third question on the same seam: 1883/1889
+/// The VERB-FIRED event gate — the third question on the same seam: 1883/1889
 /// compare names and 2140 compares arguments; this asks WHO fires it, because a stock file that
 /// calls a verb for its side effect of an event repaints nothing when the verb fires nothing.
 #[cfg(test)]
@@ -1109,12 +1107,12 @@ mod group_loot_tests;
 #[cfg(test)]
 mod chat_tests;
 
-/// The chat bubble's `UIMenu` kit driven as a menu — the rows' label/shortcut anchoring
-/// (decision 1996), kept apart from `chat_tests` because it is the kit under test, not the window.
+/// The chat bubble's `UIMenu` kit driven as a menu — the rows' label/shortcut anchoring,
+/// kept apart from `chat_tests` because it is the kit under test, not the window.
 #[cfg(test)]
 mod ui_menu_tests;
 
-/// The chat tab's options menu, end to end (decision 1589 / B246) — its own file because it needs
+/// The chat tab's options menu, end to end — its own file because it needs
 /// the whole dropdown + colour-picker stack under `ChatFrame.xml`, where `chat_tests` deliberately
 /// runs on the window alone.
 #[cfg(test)]
@@ -1179,7 +1177,7 @@ mod duel_tests;
 #[cfg(test)]
 mod enchant_confirm_tests;
 
-/// Its FLAG twin (decision 1739): the whole-tree sweep for `toplevel`/mouse/`id` against the
+/// Its FLAG twin: the whole-tree sweep for `toplevel`/mouse/`id` against the
 /// reference, read off the loaded engine rather than off our XML.
 #[cfg(test)]
 mod frame_flag_gate;
@@ -1193,19 +1191,19 @@ mod friends_tests;
 #[cfg(test)]
 mod guild_tests;
 
-/// The GM help window and its ticket toast (decision 1673). Its own module because every test in
+/// The GM help window and its ticket toast. Its own module because every test in
 /// it pushes a `GMTicketCategory.dbc` catalog and drives the ticket wire's own event vocabulary,
 /// which none of the neighbouring windows share.
 #[cfg(test)]
 mod help_frame_tests;
 
-/// The two guild-charter windows — the registrar and the petition sheet (decision 1672). Its own
+/// The two guild-charter windows — the registrar and the petition sheet. Its own
 /// module for `guild_tests`' reason: it stands the charter engine API in for in Lua before the XML
 /// loads, so what is under test is the window and not `script::petition`'s plumbing.
 #[cfg(test)]
 mod petition_tests;
 
-/// The social window's fourth tab — the raid pane and its grid (decision 1549). Its own module for
+/// The social window's fourth tab — the raid pane and its grid. Its own module for
 /// `guild_tests`' reason: every test in it pushes a RAID roster first, which a file about the
 /// friends list must not be in the business of.
 #[cfg(test)]
@@ -1298,11 +1296,11 @@ mod bagnon_render_tests;
 mod quiver_tests;
 
 /// The UI's per-world-entry lifecycle: teardown at the character screen, a genuine second load at
-/// the next login (decision 1290).
+/// the next login.
 #[cfg(test)]
 mod world_entry_tests;
 
-/// The guild tabard designer — the stock `TabardFrame.xml` off the chain (decision 1977).
+/// The guild tabard designer — the stock `TabardFrame.xml` off the chain.
 #[cfg(test)]
 mod tabard_tests;
 /// The world map's POI pool — the guard's directions marker today, the AreaPOI landmarks later.

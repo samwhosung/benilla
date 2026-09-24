@@ -436,10 +436,10 @@ fn the_options_check_button_resolves_its_whole_inheritance_chain() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-// **RETIRED with its subject (decision 2115).** `every_template_these_files_declare_is_a_real_1_12_name`
+// **RETIRED with its subject.** `every_template_these_files_declare_is_a_real_1_12_name`
 // swept the `virtual="true"` templates of the files we shipped under a reference name and required
 // each to be a real 1.12 global (`reference/1.12-globals.tsv`) — the guard against inventing a
-// plausible-but-absent template name that no addon could ever reach for (decision 1841). 1846 took
+// plausible-but-absent template name that no addon could ever reach for. 1846 took
 // `UIPanelTemplates.xml` to the chain and left it one subject, `OptionsFrameTemplates.xml`'s single
 // `UIOptionsCheckButtonTemplate`; 2115 took that one too, by loading the reference's own
 // `UIOptionsFrame.xml`. Nothing under `assets/ui` now declares a template under a reference name —
@@ -456,7 +456,7 @@ fn the_options_check_button_resolves_its_whole_inheritance_chain() {
 /// threw — and nothing in our tree noticed, because every caller we wrote passed a tab explicitly.
 /// The stock files do not: `Blizzard_MacroUI.xml`'s two tabs each call
 /// `PanelTemplates_TabResize(0)` from their own `OnLoad` and nothing else, so both threw at load
-/// and the window came up with unsized tabs. Decision 1835.
+/// and the window came up with unsized tabs.
 ///
 /// Driven through a real `OnLoad` rather than a direct call, because `this` is exactly what is
 /// under test: a plain function call would not set it.
@@ -488,7 +488,7 @@ fn tab_resize_falls_back_to_this_when_no_tab_is_passed() {
 }
 
 /// **The reference's own window tab fits its text in `<OnShow>`, on the first show, with no
-/// settle** — the property that let benilla's own copy of this template retire (decision 1993).
+/// settle** — the property that let benilla's own copy of this template retire.
 ///
 /// The reference fits a tab exactly once, from the template's `<OnShow>`
 /// (`CharacterFrameTemplates.xml:77-80`): `PanelTemplates_TabResize(0)`, whose `width` is
@@ -516,7 +516,7 @@ fn the_stock_tab_fits_its_text_on_the_first_show() {
     let mut s = harness();
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
     // The highlight authors NO `<Size>`, so its height is content-derived off the art's texel
-    // extent (decisions 1349/1664) — `UI-Character-Tab-Highlight.blp` is 128x32. Without a probe
+    // extent — `UI-Character-Tab-Highlight.blp` is 128x32. Without a probe
     // the Y axis never resolves and the region has no rect at all, which is a property of an
     // engine-less VM, not of the template.
     s.set_texture_size_probe(Box::new(|_| Some((128, 32))));

@@ -1,7 +1,7 @@
 //! The shipped **spellbook window** driven end-to-end, engine-only (no Bevy): the real
 //! `Interface\FrameXML\SpellBookFrame.xml` loaded behind
 //! `Fonts.xml`/`UIParent.xml`/`GameTooltip.xml` (plus `ActionBar.xml` for the cross-window place
-//! test) and fed a small synthetic book — mirroring `character_tests.rs`'s/`action_bar_tests.rs`'s harness (decision 0216 §8, slice 5).
+//! test) and fed a small synthetic book — mirroring `character_tests.rs`'s/`action_bar_tests.rs`'s harness (slice 5).
 
 use benilla_ui::script::{SpellBookState, SpellSlotView, SpellTabView, UiScript};
 
@@ -271,7 +271,7 @@ fn shipped_spellbook_shows_the_cooldown_pie() {
     b.slots[0].cooldown = Some((6_000, 10_000, true));
     s.set_spellbook(b);
     s.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
-    // The stock machine (decision 2019): sequence 0 armed by `CooldownFrame_SetTimer`, scrubbed
+    // The stock machine: sequence 0 armed by `CooldownFrame_SetTimer`, scrubbed
     // by the next paint's `OnUpdateModel`.
     super::test_ui::cooldown_facts(&mut s);
     s.tick(0.0);
@@ -437,7 +437,7 @@ fn pet_book() -> benilla_ui::script::PetBookState {
     }
 }
 
-/// **The pet tab, end to end through the shipped XML** (decision 1032): the toggle row appears
+/// **The pet tab, end to end through the shipped XML**: the toggle row appears
 /// only once there are pet spells, clicking the pet tab switches the book, the page renders the
 /// pet's own spells with their autocast overlay, the skill-line strip goes away, the title becomes
 /// the class token's label, and a right-click flips autocast instead of casting.
@@ -606,7 +606,7 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
         "a right-click on the pet page must not also cast"
     );
 
-    // ── The two reference QUIRKS, asserted on purpose (decisions 1030/1032) ───────────────────
+    // ── The two reference QUIRKS, asserted on purpose ───────────────────
     // The pet page ignores its page number: `SpellBook_GetSpellID`'s pet arm is a bare `return id`.
     assert_eq!(s.eval::<i64>("return SpellBook_GetSpellID(1)").unwrap(), 1);
     s.run(r#"SPELLBOOK_PAGENUMBERS["pet"] = 2"#).unwrap();
@@ -661,7 +661,7 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
 ///     popup has the body box hidden;
 ///   * with the editor hidden the shift-click is a **pickup** again.
 ///
-/// DO NOT "FIX" the `/cast` prefix away (the standing rule, decision 1030): B248 reported it as
+/// DO NOT "FIX" the `/cast` prefix away (the standing rule): B248 reported it as
 /// wrong, and the install says it is what 1.12.1 does.
 #[test]
 fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
@@ -688,7 +688,7 @@ fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
     )
     .unwrap();
     // The stock macro window's character tab formats `UnitName("player")` into its label in its
-    // own OnLoad, so the player exists before the load (decision 1848).
+    // own OnLoad, so the player exists before the load.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -774,7 +774,7 @@ fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
     s.run("ShowMacroFrame()").unwrap();
     // The reference selects NOTHING on open — `MacroFrame_Update` only highlights an existing
     // selection, it never assigns one — so the details pane stays down until a macro is clicked.
-    // Our retired file auto-selected the first (decision 1848).
+    // Our retired file auto-selected the first.
     s.run("MacroButton1:Click()").unwrap();
     s.run("ToggleSpellBook(BOOKTYPE_SPELL)").unwrap();
     assert!(s.errors().is_empty(), "open errors: {:?}", s.errors());
@@ -828,7 +828,7 @@ fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
         "with the editor open a shift-click writes instead of picking up"
     );
     // The dirty flag is set by the box's own `OnTextChanged`, which is deferred to the drain — the
-    // write landed in the buffer synchronously, the notification did not (decision 1831).
+    // write landed in the buffer synchronously, the notification did not.
     s.tick(0.0);
     assert!(
         s.eval::<bool>("return MacroFrame.textChanged == 1")
