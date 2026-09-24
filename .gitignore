@@ -32,13 +32,10 @@ trace-*.json
 .DS_Store
 *.swp
 /.idea/
-# Claude Code: share the project hooks + settings + slash commands + skills, ignore per-machine state.
+# Claude Code: the skills are shared procedures (AGENTS.md names them); every other file under
+# .claude/ is its owner's own settings.
 /.claude/*
-!/.claude/settings.json
-!/.claude/hooks/
-!/.claude/commands/
 !/.claude/skills/
-/.claude/settings.local.json
 
 # Python bytecode from the `scripts/` tooling.
 __pycache__/

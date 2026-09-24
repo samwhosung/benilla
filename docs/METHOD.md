@@ -40,8 +40,7 @@ comment naming the reference fact and why we differ. Anything else is a fork.
   interface code: FrameXML and GlueXML run off the player's own patch chain, and our own
   counterparts under `assets/ui` stay until they retire.
 - **The install is read-only.** benilla never writes into the WoW folder: no screenshot, log,
-  cache or scratch file. A hook blocks such a write at the tool call, and `scripts/smoke.sh`
-  fails a run that leaves the install changed.
+  cache or scratch file. `scripts/smoke.sh` fails a run that leaves the install changed.
 - **Local state lives in one folder**, `benilla-config/` beside the binary, and every path to
   it resolves through `crate::local_state`. Player settings are CVars persisted as a diff in
   `benilla-config/config.toml`.
@@ -85,7 +84,6 @@ comment naming the reference fact and why we differ. Anything else is a fork.
 - **Platform seams**: a `cfg(target_os)`, a `[target.'cfg(…)']` dependency, a `#[link]` or an
   `extern "system"` is invisible to the gates of the platform you are on. Say in the commit
   which platforms you built.
-- One hook: no writes into the install. Everything else is a gate or discipline.
 
 ## The local server
 

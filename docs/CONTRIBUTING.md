@@ -39,7 +39,7 @@ fork, and forks are welcome.
 - **The toolchain.** Stable Rust (`rust-toolchain.toml` adds clippy and rustfmt) and a C
   compiler, because the client's Lua is vendored and built from source. On macOS the Xcode
   command line tools, which also supply libclang for the audio bindings; on Linux the ALSA and
-  udev development packages and pkg-config. `python3` runs two of the gates, and `jq` the hooks.
+  udev development packages and pkg-config. `python3` runs two of the gates.
 - **A 1.12.1 install of your own.** `WOW_DATA=<its Data folder>`, or a `WoW` link at the repo
   root, which only a dev build sees: the player build looks for `Data/` or `WoW/Data/` beside
   the binary. benilla reads the install and never writes into it. `WOW_DATA=` (set, empty)
