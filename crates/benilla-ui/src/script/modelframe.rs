@@ -10,7 +10,7 @@
 //!
 //! 1.12 registers **four** model-pane types, and each has its own Lua method table that **never
 //! repeats its base's entries**; a derived pane reaches its base's verbs through the miss leg of
-//! `vtable+0x8` (wow-re `ui/scratch/model-pane-method-tables.md`, byte-enumerated 2026-08-30):
+//! `vtable+0x8` (`__index` meta `0x7020b0`):
 //!
 //! ```text
 //! CSimpleFrame 0x778590
@@ -51,22 +51,18 @@
 //! single pooled string `0x84f22c` is referenced by **two** method-table entries in two different
 //! tables (`PlayerModel 0x84f1fc[0]` and `GameTooltip 0x854290`). All three are `PlayerModel`'s.
 //!
-//! The question a `strings` hit *does* settle, and the reason it was reached for: wow-re's
-//! registrar-dump tool silently missed six of the 23 widget tables — including this whole family —
-//! so the "not in wow-re's scan" half of the old header was a tooling defect, not a fidelity fact.
-//! The enumeration recipe that replaces both is §5.1 of the note above: census `(call|jmp)
-//! 0x701d80`, read the count from the registering `mov edx`, read the pairs at
-//! `base + 8*i`, and settle "which table owns method M" by counting image-wide dword references to
-//! M's name VA.
+//! Ownership is settled by the enumeration recipe, not a `strings` hit: census `(call|jmp)
+//! 0x701d80`, read the count from the registering `mov edx`, read the pairs at `base + 8*i`, and
+//! settle "which table owns method M" by counting image-wide dword references to M's name VA.
 //!
 //! ## The clock is the engine's; the pixels are the host's (decision 2007)
 //!
 //! A pane's animation state is not "a sequence index the host interprets": the reference widget
 //! owns a private `CM2Scene` whose clock its own `OnUpdate` advances, arms sequences through
 //! `0x7121a0` with an anchor the sampler re-reads, fires `OnUpdateModel` at the top of every
-//! paint and `OnAnimFinished` from the completion callback (wow-re
-//! `ui/scratch/modelframe-render-law.md` §4). All of that is Lua-observable — the shipped
-//! cooldown is nothing but those two handlers scrubbing `SetSequenceTime` — so it lives here:
+//! paint (`0x76d1bc`) and `OnAnimFinished` from the completion callback (`0x76cdc0`). All of that
+//! is Lua-observable — the shipped cooldown is nothing but those two handlers scrubbing
+//! `SetSequenceTime` — so it lives here:
 //! [`ModelState::clock_ms`] / [`ModelState::armed`], the tick's model pass, and the bindings
 //! below. What the engine does NOT have is the file: which ids it owns, how long each sequence
 //! runs, whether it loops. Those are the file's **facts** ([`crate::widget::ModelFileFacts`]),
@@ -75,7 +71,7 @@
 //!
 //! ## What is deliberately NOT here
 //!
-//! Nothing of `Model`'s own 23 — the fog near/far/clear set was the last hold-out and 2027 carved
+//! Nothing of `Model`'s own 23 — the fog near/far/clear set was the last hold-out and 2027 closed
 //! it (`ClearFog 0x76f540` is `76f5c5 and [edi+0x3a4],-2`, bit 0 and nothing else, so the guess
 //! that kept it out is gone; see the install below).
 //!
@@ -97,7 +93,7 @@ use crate::widget::{model_key, FrameHandle, KindState, ModelFileFacts, ModelLigh
 
 impl Model {
     /// FrameXML units per **layout unit** — `768 · √(a²+1)` for the screen's aspect `a`
-    /// (render law §3; the `G48 = 1/√(a²+1)` root scale against the `768`-tall FrameXML
+    /// (`G48` [`0x832a48`] = `1/√(a²+1)`, the root scale against the `768`-tall FrameXML
     /// space). `SetPosition`'s space, and the unit a size-less pane's implicit rect is measured
     /// in. `4/3` before a screen exists.
     pub(crate) fn layout_unit(&self) -> f32 {
@@ -262,7 +258,7 @@ enum SetLight {
     Set(ModelLight),
 }
 
-/// `Model:SetLight` `0x76e1e0`'s argument walk (render law §5.3), over the arguments **after
+/// `Model:SetLight` `0x76e1e0`'s argument walk, over the arguments **after
 /// `self`** — so `a[0]` is the reference's Lua index 2.
 ///
 /// The binding builds a **local** `CGLight` from `0x71b4a0` — type 1, every colour ZERO, which is
@@ -416,7 +412,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // with `ms = 0` (`0x76dec0` → `0x76cf50`), `SetSequenceTime` with the caller's `ms`
     // (`0x76dfc0` → `0x76cf80`). The arm interrupts whatever plays, resolves the id through the
     // file's `animationLookup`, and bakes the anchor `cursor_lo = sceneClock − trunc(ms)` that
-    // the sampler re-reads every frame (render law §4.2). The id is an `AnimationData` id, not a
+    // the sampler re-reads every frame (`0x71273d`). The id is an `AnimationData` id, not a
     // file slot; one the file does not own stops the playing track and arms nothing.
     m.set(
         "SetSequence",
@@ -491,8 +487,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // ── The scene: light and fog ────────────────────────────────────────────────────────────
     //
-    // Typed since decision 2027, off the render law's §5.1-§5.4: the widget's embedded `CGLight`
-    // and the four fog fields, with `SetLight`'s argument walk and both of its traps.
+    // Typed since decision 2027, after the reference: the widget's embedded `CGLight` and the four
+    // fog fields, with `SetLight`'s argument walk (`0x76e1e0`) and both of its traps.
     m.set(
         "SetLight",
         lua.create_function(|lua, args: MultiValue| {
@@ -687,7 +683,8 @@ fn playermodel_install(lua: &Lua) -> mlua::Result<()> {
         "RefreshUnit",
         lua.create_function(|lua, this: Table| {
             with_model(lua, &this, |_| ())?;
-            super::dressup::redress_if_dressup(lua, &this) // the same worker as SetUnit's (§1)
+            // the same worker as SetUnit's (`0x505b50`)
+            super::dressup::redress_if_dressup(lua, &this)
         })?,
     )?;
 
@@ -699,8 +696,8 @@ fn playermodel_install(lua: &Lua) -> mlua::Result<()> {
     // What `0x505bb0` does BESIDES the yaw write is deliberately not modeled, and is worth naming
     // because it is real: it picks a turn animation from the sign of the change (`0xc`
     // ShuffleRight when the current facing is **<** the argument, `0xb` ShuffleLeft when **>**,
-    // `0` Stand on equality or NaN — the mapping wow-re CORRECTED on 2026-08-23 after publishing
-    // it inverted), plays it unless that id is already armed on bone slot 0, and then
+    // `0` Stand on equality or NaN), plays it unless that id is already armed on bone slot 0,
+    // and then
     // UNCONDITIONALLY sets `[+0x3e8] = 1` and `[+0x3ec] = now_ms + 100` — a 100 ms turn hold that
     // the per-paint `0x505c50` expires. Every one of those is invisible to Lua (no getter reads
     // them). The app's `<Model>` renderer (`benilla-app` `ui_models`, 2013/2019/2027) draws its

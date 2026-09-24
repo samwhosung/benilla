@@ -7,7 +7,7 @@
 //! frames. Until this module it was parsed and thrown away with a warn-once, so a benilla dialog
 //! opened behind another one stayed behind it.
 //!
-//! ## The law (wow-re `system/ui/scratch/toplevel-raise.md`, §5 fan-out 2026-07-21 — VERIFIED)
+//! ## The law
 //!
 //! The flag is **`[frame+0xb4]` bit `0x1`**, written by the same pure bit-setter `0x76a3c0` as
 //! `movable` (`0x100`) and `resizable` (`0x200`): `if (v) flags |= mask; else flags &= ~mask;`, no
@@ -23,11 +23,11 @@
 //!    *ancestor* of the one that was clicked or shown.
 //! 2. **`force != 0` ⇒ recompute the OVERLAPPED bit** (`0x76513e..0x765290`): resolve the frame's
 //!    pending layout, then scan its stratum bucket from **its own level upward** for a frame that is
-//!    not itself, is not one of its descendants (`is_descendant 0x767010`), and whose screen rect
+//!    not itself, is not one of its descendants (`0x767010`), and whose screen rect
 //!    intersects non-emptily. The answer is stored as `+0xb4` bit `0x10`.
-//! 3. **The raise, gated on that bit** (`0x7651ac..0x7651e7`): `level_compact 0x764eb0` squeezes the
-//!    free levels out of the stratum — over **every live frame of it, hidden included**
-//!    (`ui/scratch/level-compact-law.md`) — then `set_frame_level(bucket->count, propagate = 1)`.
+//! 3. **The raise, gated on that bit** (`0x7651ac..0x7651e7`): level compaction (`0x764eb0`)
+//!    squeezes the free levels out of the stratum — over **every live frame of it, hidden
+//!    included** — then `set_frame_level(bucket->count, propagate = 1)`.
 //!
 //! Three consequences the tests pin: a raise is **`level := top occupied level + 1`**, not a list
 //! reshuffle; it is **occlusion-gated** — `Raise()` on a frame that overlaps nothing changes nothing
@@ -51,10 +51,10 @@
 //!   term *above* the link stamp in our key, so a bump lifts the frame over every same-strata frame
 //!   regardless of when each was last shown. The arithmetic is pinned in
 //!   `tests/toplevel.rs::a_raise_is_top_occupied_level_plus_one_after_compaction`.
-//! - **`level_compact`** is [`crate::widget::WidgetArena::compact_levels`] — an order-preserving
+//! - **Level compaction** is [`crate::widget::WidgetArena::compact_levels`] — an order-preserving
 //!   renumber of **every frame** in one stratum, hidden ones included: `0x764eb0` walks the client's
 //!   master frame list filtering on strata and level alone, and never reads `+0xd4`
-//!   (`ui/scratch/level-compact-law.md`, decision 2104). It changes no draw order by itself; it is
+//!   (decision 2104). It changes no draw order by itself; it is
 //!   what keeps `level := max + 1` from ratcheting upward for the length of a session. Renumbering
 //!   only the *bucket* (the visible half) is the one shape it may not have: the raise's `propagate`
 //!   delta is computed in the new numbering and applied to levels that are still in the old one, so
@@ -84,12 +84,12 @@
 //!
 //! ## Triggers — the census, and which ones benilla wires
 //!
-//! wow-re's complete rel32 + absolute-dword census finds six call sites. Ours:
+//! A complete rel32 + absolute-dword census finds six call sites. Ours:
 //!
 //! | site | what it is | benilla |
 //! |---|---|---|
 //! | `0x775b0a` (Lua `Frame:Raise()`) | the explicit script call | [`install`] |
-//! | `0x76aeec` in `effective_visible_show 0x76ae10` | **the Show trigger** | [`raise_on_show`], run from [`crate::script::event::fire_visibility_changes`] |
+//! | `0x76aeec` in `0x76ae10` | **the Show trigger** | [`raise_on_show`], run from [`crate::script::event::fire_visibility_changes`] |
 //! | `0x7652d7` in begin-move `0x7652b0` | drag start | [`super::movable`]'s `start_moving` |
 //! | `0x766392` in the mouse-down handler `0x7662c0` | **the click trigger** | [`crate::script::UiScript::mouse_button`]'s down arm, first thing — capture-else-hover, unguarded, ahead of the title-region swallow |
 //! | `0x764a4c` (`force = 0`) | re-applies an already-computed bit `0x10` | no counterpart (see the OVERLAPPED note above) |
@@ -185,7 +185,7 @@ pub(in crate::script) fn raise(model: &mut Model, frame: FrameHandle) -> bool {
     true
 }
 
-/// The Show trigger — `effective_visible_show 0x76ae10` @`0x76aee0`: on a genuine `+0xd4`
+/// The Show trigger — `0x76ae10` @`0x76aee0`: on a genuine `+0xd4`
 /// false→true transition, **test the frame's own toplevel bit** and raise if it is set.
 ///
 /// The own-bit test is load-bearing and is why this is not just [`raise`]: the worker would walk up
@@ -228,7 +228,7 @@ fn nearest_toplevel(model: &Model, frame: FrameHandle) -> Option<FrameHandle> {
 /// Every clause matters, and each is a separate test:
 /// - **`level >= t.level` only.** A toplevel frame that overlaps solely something *below* it is
 ///   already on top of it, so there is nothing to raise over.
-/// - **`is_descendant 0x767010` exclusion.** A window overlaps its own children by construction;
+/// - **Excludes descendants (`0x767010`).** A window overlaps its own children by construction;
 ///   without this every toplevel frame with content would raise on every trigger.
 /// - **non-empty intersection.** Frames that merely share an edge do not overlap — the intersection
 ///   has to have positive width *and* height, so a zero-area touch is not an occlusion.

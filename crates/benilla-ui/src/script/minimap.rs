@@ -1,9 +1,9 @@
 //! The `Minimap` method surface — the zoom API the FrameXML zoom buttons drive
 //! (`MinimapZoomIn`/`MinimapZoomOut` → `Minimap:SetZoom(Minimap:GetZoom() ± 1)`).
 //!
-//! Grounded in wow-re's byte-verified minimap node: `get_zoom_levels` (`0x6da9a0`) returns the
-//! constant 6, `set_zoom` clamps at 5 and marks the tile grid dirty, and the zoom index feeds the
-//! `zoom_to_scale` tables (`0x6da9b0`). The engine core carries only the index
+//! `get_zoom_levels` (`0x6da9a0`) returns the constant 6, `set_zoom` clamps at 5 and marks the tile
+//! grid dirty, and the zoom index feeds the zoom-to-scale tables (`0x6da9b0`). The engine core
+//! carries only the index
 //! ([`MinimapState`]); the app renderer maps it to a world radius and draws the tiles
 //! (decision 0203). The two model attrs (`minimapArrowModel=`/`minimapPlayerModel=`) are modeled
 //! only as far as the Lua surface can see them: [`apply_model_attrs`] names the nine engine
@@ -182,7 +182,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         // the value MOVE, which is the whole point: the ping is pinned to the world, not to the
         // map.
         //
-        // **Two numbers, always** (`0x4eefd0`, wow-re `minimap-ping-law.md`): the reference
+        // **Two numbers, always** (`0x4eefd0`): the reference
         // recomputes from statics nothing ever clears, and the stock `Minimap_OnUpdate` feeds the
         // answer straight into `x * Minimap:GetWidth()` for the whole of its 5 s timer — a nil
         // here is a Lua error on every frame of that window (1974).

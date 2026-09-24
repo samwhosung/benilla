@@ -14,20 +14,20 @@
 //! ```
 //!
 //! and that layering is the reference's own: `RegisterForDrag 0x776d60` + the threshold-gated
-//! `OnDragStart`/`OnDragStop` pair (wow-re `cursor-dragdrop-payload.md` §9, our decision 0216 §3 —
+//! `OnDragStart`/`OnDragStop` pair (`0x76bf70`/`0x76c040`, our decision 0216 §3 —
 //! [`crate::script::cursor`], dispatched from [`crate::script::pointer`]) are a **separate**
 //! system from the engine move below. The gesture decides *when* the handlers run; this module
 //! owns only what happens between `StartMoving` and `StopMovingOrSizing`.
 //!
-//! ## The mechanism (wow-re `system/ui`, VERIFIED unless said otherwise)
+//! ## The mechanism
 //!
 //! The three flags are bits of the frame's flag word `[frame+0xb4]`, all written by the one
 //! generic setter `0x76a3c0` (`if (v) flags |= mask; else flags &= ~mask;` — no calls, no side
 //! effects): **movable `0x100`** (`SetMovable 0x776420` / `IsMovable 0x7764d0`), **resizable
 //! `0x200`** (`SetResizable 0x776590` / `IsResizable 0x776640`), **userPlaced `0x1000`**
 //! (`SetUserPlaced 0x776a50` / `IsUserPlaced 0x776b40`). The XML attributes land on the same
-//! setter (`movable="true"` → `0x76a3c0(0x100)`, `resizable="true"` → `0x200` — wow-re
-//! `rf24-framexml-loader.md`), which is why the loader now *calls* these instead of warning.
+//! setter (`movable="true"` → `0x76a3c0(0x100)`, `resizable="true"` → `0x200`), which is why the
+//! loader now *calls* these instead of warning.
 //!
 //! `StartMoving 0x776700` tests the movable bit and raises when it is clear, then enters the drag
 //! at `0x7652b0`, which `Raise()`s the frame, **sets the userPlaced bit itself**, and records the
@@ -40,10 +40,10 @@
 //! Movement is a **pump**, run from the mouse-move handler: `0x7655b0` (a diffed-bit-exact
 //! PRIMITIVE) takes `dx = x − root+0xd08`, `dy = y − root+0xd0c`, and — only if either is
 //! non-zero — applies them and re-centers the sample. The application (`0x76a660` → the 9-case
-//! `geo_768710`, also a diffed-bit-exact PRIMITIVE) selects on the 3×3 region the drag grabbed:
+//! `0x768710`, also a diffed-bit-exact PRIMITIVE) selects on the 3×3 region the drag grabbed:
 //! the eight edge/corner cases resize, and **case 4, the plain move, accumulates the scaled delta
 //! straight into the anchor's offsets in place** — `xOffset += dx/scale`, `yOffset += dy/scale`
-//! (`CAnchor+0x4`/`+0x8`, wow-re `frame-model.md`) — then invalidates the layout (`0x7680e0`).
+//! (`CAnchor+0x4`/`+0x8`) — then invalidates the layout (`0x7680e0`).
 //!
 //! Two consequences worth stating, because both are easy to get wrong:
 //!
@@ -59,13 +59,13 @@
 //!
 //! ## What benilla does NOT take from that, and why
 //!
-//! - **All anchors translate, not just one.** wow-re's note reads the case-4 accumulate as hitting
-//!   a single anchor record; it is their composition of verified pieces, not a recorded finding,
-//!   and a one-anchor translation would *deform* a frame stretched between two anchors instead of
-//!   moving it. Every movable frame in practice carries exactly one anchor, where the two readings
-//!   are identical, so translating the whole set is the same behaviour everywhere it is observable
-//!   and the sane behaviour where it is not.
-//! - **No clamp rebate.** `geo_768710` rebates the residual delta when the clamp pushes back
+//! - **All anchors translate, not just one.** The case-4 accumulate could be read as hitting a
+//!   single anchor record; that reading is a composition of verified pieces, not a recorded
+//!   finding, and a one-anchor translation would *deform* a frame stretched between two anchors
+//!   instead of moving it. Every movable frame in practice carries exactly one anchor, where the
+//!   two readings are identical, so translating the whole set is the same behaviour everywhere it
+//!   is observable and the sane behaviour where it is not.
+//! - **No clamp rebate.** `0x768710` rebates the residual delta when the clamp pushes back
 //!   (`SetClampedToScreen`); we do not, so dragging a clamped frame into the screen edge and back
 //!   out can lag the cursor. Named, not hidden — the rebate is one of the two halves of that
 //!   primitive we have not transcribed (the other is the eight resize cases).
@@ -105,8 +105,8 @@ pub(crate) struct FrameMove {
     ///
     /// **The reference's drag MODE, reduced to the one bit that is observable from Lua.** The
     /// mouse-up handler `0x766420` auto-cancels modes 1 (modifier-drag) and 2 (title region) and
-    /// leaves mode 3 (`StartMoving`) running until `StopMovingOrSizing`
-    /// (wow-re `widget-api-batch-benilla.md` Q6). So a title drag ends on release while a scripted
+    /// leaves mode 3 (`StartMoving`) running until `StopMovingOrSizing`. So a title drag ends on
+    /// release while a scripted
     /// one outlives the button — which is exactly the distinction this module's own doc already
     /// records for the drag/move split.
     pub(crate) auto_stop: bool,
@@ -129,7 +129,7 @@ pub(crate) struct FrameSizing {
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // SetMovable(flag) / IsMovable() — flag word bit 0x100 (`0x776420`/`0x7764d0` through the
     // generic setter `0x76a3c0`). A pure flag write: it moves nothing, and clearing it mid-drag
-    // stops nothing either (the setter has no side effects — wow-re ledger `0x76a3c0`); it is the
+    // stops nothing either (the setter has no side effects — `0x76a3c0`); it is the
     // guard `StartMoving` tests, and the XML `movable="true"` attribute writes the same bit.
     // mlua's bool conversion is Lua truthiness, so the corpus's `SetMovable(1)` reads as true —
     // matching the reference binding's own `toboolean` marshal.
@@ -158,9 +158,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // ── The resize-bounds quad — `Set/GetMinResize`, `Set/GetMaxResize` ────────────────────────
     //
     // Frame method table `0x878ec0`: `GetMinResize 0x775f20` · `SetMinResize 0x776020` ·
-    // `GetMaxResize 0x7761a0` · `SetMaxResize 0x7762a0`. Byte-carved end to end by wow-re
-    // (`system/ui/scratch/resize-bounds-and-button-fontstring.md` §2), and every clause below is
-    // from that read rather than from the shape of the name:
+    // `GetMaxResize 0x7761a0` · `SetMaxResize 0x7762a0`. Every clause below is from the bytes,
+    // not from the shape of the name:
     //
     //  · **The argument gate is `lua_isnumber`, not a strict number** (`0x6f34d0` on BOTH slots 2
     //    and 3), so a numeric STRING passes and is coerced — while a missing argument, an explicit
@@ -289,17 +288,17 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             start_moving(&mut model, h)
         })?,
     )?;
-    // StartSizing(point) — begin a resize drag from a named grip (`0x776830`, verified in wow-re's
-    // ledger; the reference's own caller is `FloatingChatFrame.lua:600`,
+    // StartSizing(point) — begin a resize drag from a named grip (`0x776830`; the reference's own
+    // caller is `FloatingChatFrame.lua:600`,
     // `this:GetParent():StartSizing(anchorPoint)`).
     //
     // **What is verified and what is read, kept apart on purpose.** Verified: the verb exists, it
     // takes the grip name, it returns nothing, and `StopMovingOrSizing` ends it (the same slot
-    // clear as a move). NOT recorded anywhere in wow-re — the ledger has it as ORCHESTRATION with
-    // no inline math — is WHICH EDGES a given grip moves. Taken here as the plain meaning of an
-    // anchor point, which is how the reference's own caller uses it (its resize grips pass the
-    // corner they sit in): the named edges follow the cursor and the opposite ones stay put. If an
-    // RE pass ever contradicts that, this comment is where to correct it.
+    // clear as a move). Not settled anywhere — the verb only orchestrates, with no inline math — is
+    // WHICH EDGES a given grip moves. Taken here as the plain meaning of an anchor point, which is
+    // how the reference's own caller uses it (its resize grips pass the corner they sit in): the
+    // named edges follow the cursor and the opposite ones stay put. If the bytes ever contradict
+    // that, this comment is where to correct it.
     //
     // Four corpus addons reach it through ONE line — `FuBar_Panel.lua:980`, replicated into
     // FuBar_CorkFu, FuBar_FuXPFu, FuBar_SpellStatusFu and oRA2 — which is 1207's rule and why the
@@ -329,7 +328,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // caller error. The pump's switch is on the anchor point-id, and case 4 (CENTER) is the
             // one arm that never touches width or height: it shifts the frame's anchor offsets and
             // returns before the clamp is ever reached, so a CENTER grip is unbounded by
-            // construction (wow-re `resize-bounds-and-button-fontstring.md` §3.6). This file used
+            // construction (`0x768bfb`). This file used
             // to say *"a grip naming no edge would resize nothing; the reference has no such call
             // and we refuse rather than invent one"* — the bytes have since answered that, and the
             // answer is the translate below, which is exactly what [`advance_move`] already does.
@@ -421,8 +420,8 @@ fn get_flag(lua: &Lua, this: &Table, which: Flag) -> mlua::Result<Value> {
 /// The family's refusal, named frame and all — the reference's own shape (it formats the frame's
 /// `GetName()`, substituting a literal when the frame is anonymous).
 ///
-/// **The text is OURS.** wow-re records the guards and the three `.rdata` addresses
-/// (`0x879810` StartMoving, `0x879828` StartSizing, `0x879844` SetUserPlaced) but not the strings
+/// **The text is OURS.** The three `.rdata` addresses are known (`0x879810` StartMoving,
+/// `0x879828` StartSizing, `0x879844` SetUserPlaced) but not the strings
 /// at them — only the truncated IDA symbol stubs `aFrameSIsNotMov` / `aFrameSIsNotRes` /
 /// `aFrameSIsNotM_0`, which is what this wording is shaped after. Nothing should match on it.
 fn not_flagged(model: &Model, h: FrameHandle, want: &str) -> mlua::Error {
@@ -463,13 +462,13 @@ fn start_moving(model: &mut Model, h: FrameHandle) -> mlua::Result<()> {
 }
 
 /// Begin a **title-region** move — mode 2, the drag a mouse-down inside `frame:GetTitleRegion()`
-/// starts (wow-re Q6, `0x7662c0` → `0x765320(frame, mode=2, …)` → `0x7652b0`).
+/// starts (`0x7662c0` → `0x765320(frame, mode=2, …)` → `0x7652b0`).
 ///
-/// [`start_moving`]'s body **minus the movable gate**, and that omission is the carved part rather
-/// than a shortcut: the movable bit is `frame+0xb4 & 0x100`, tested by `StartMoving` (`0x77678b`,
-/// else `"Frame %s is not movable"`) and by the modifier-drag path — and **not read anywhere** on
-/// `0x7662c0`→`0x765320`→`0x7652b0`→`0x768430`. Q6 marks the no-gate reading VERIFIED and the
-/// observable claim INFERRED, because both FrameXML users happen to be `movable="true"`; a title
+/// [`start_moving`]'s body **minus the movable gate**, and that omission is the settled part
+/// rather than a shortcut: the movable bit is `frame+0xb4 & 0x100`, tested by `StartMoving`
+/// (`0x77678b`, else `"Frame %s is not movable"`) and by the modifier-drag path — and **not read
+/// anywhere** on `0x7662c0`→`0x765320`→`0x7652b0`→`0x768430`. The no-gate reading is settled; the
+/// observable claim is INFERRED, because both FrameXML users happen to be `movable="true"`; a title
 /// region on a non-movable frame is the case that would tell them apart, and it drags here.
 ///
 /// Returns whether a move actually started — `false` when one was already in flight, which is
@@ -515,10 +514,9 @@ fn mark_user_placed_change(model: &mut Model, h: FrameHandle) {
 
 /// Apply a frame's `SetMinResize`/`SetMaxResize` bounds to a proposed size, per axis.
 ///
-/// The reference's predicate, transcribed (decision 1505; wow-re
-/// `system/ui/scratch/resize-bounds-and-button-fontstring.md` §3.5 — decoded from `geo_768710`'s
-/// **emitted** `jcc`, not from the FPU status mask, and deliberately not from the dead `geo_768550`
-/// copy whose operand order differs):
+/// The reference's predicate, transcribed (decision 1505 — decoded from `0x768710`'s **emitted**
+/// `jcc`, not from the FPU status mask, and deliberately not from the dead `0x768550` copy whose
+/// operand order differs):
 ///
 /// ```text
 /// if (min != 0.0) and (v < min):  v = min
@@ -594,8 +592,8 @@ pub(crate) fn advance_size(model: &mut Model, pos: (f32, f32)) {
         return;
     };
     // The frame's own `SetMinResize`/`SetMaxResize` bounds — read before the mutable borrow, and
-    // the only path in the client that consults them at all (`clamp_resize`, and wow-re's §3.1
-    // reachability census behind it).
+    // the only path in the client that consults them at all (`clamp_resize`, reached only through
+    // `0x76a660`).
     let (new_w, new_h) = clamp_resize(model, sz.frame, w0 + dw, h0 + dh);
     // **The rebate.** A saturated clamp is not a bare `max`/`min` in the reference: the residual
     // it swallowed is subtracted back out of the drag delta before the delta reaches the anchors
@@ -609,7 +607,7 @@ pub(crate) fn advance_size(model: &mut Model, pos: (f32, f32)) {
     // rule. The sign follows the grip: a growing edge (`dw = +dx`) adds the residual, a shrinking
     // one (`dw = -dx`) subtracts it, so the delta always agrees with the size the clamp allowed.
     // An axis nobody gripped is left alone rather than rebated against a bound the frame was
-    // already outside of — that frame stays put until a drag touches its axis, which is §3.8.
+    // already outside of — that frame stays put until a drag touches its axis.
     let rebate = |d: f32, want: f32, got: f32, grew: bool, gripped: bool| {
         if !gripped {
             return d;
@@ -632,11 +630,11 @@ pub(crate) fn advance_size(model: &mut Model, pos: (f32, f32)) {
     // The planted edge: a frame anchored by its LEFT that is gripped on the LEFT has to move too,
     // or the resize would push the right edge instead. Only the gripped axis shifts.
     //
-    // **Which edges travel is OURS, and the byte carve does not settle it** — stated rather than
+    // **Which edges travel is OURS, and the bytes do not settle it** — stated rather than
     // quietly aligned. The reference collapses the frame to a single planted TOPLEFT anchor at
     // `StartSizing` (`0x768430`), so *its* travelling edges are necessarily LEFT and TOP; we keep
     // the authored anchor set intact and shift every anchor's offsets, which is a different model
-    // with a different answer. The rebate above is the part the carve does settle, and it applies
+    // with a different answer. The rebate above is the part the bytes do settle, and it applies
     // either way.
     if !input.anchors.is_empty() && (sz.left || sz.bottom) {
         for a in &mut input.anchors {
@@ -686,7 +684,7 @@ pub(crate) fn advance_move(model: &mut Model, pos: (f32, f32)) {
     }
     // Offsets are LOCAL units — the resolver multiplies them by the frame's own layoutScale
     // (`anchor_resolve_x`), so the cursor's screen delta divides by it on the way in, exactly the
-    // `dx/scale` of `geo_768710`'s case 4.
+    // `dx/scale` of `0x768710`'s case 4.
     let inv = 1.0 / eff_scale(model, mv.frame);
     let (dx, dy) = (dx * inv, dy * inv);
     if let Some(input) = model.layout_inputs.get_mut(&mv.frame) {

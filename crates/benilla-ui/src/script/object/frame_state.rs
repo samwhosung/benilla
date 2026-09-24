@@ -85,7 +85,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // ── GetObjectType / IsObjectType, frame side (wow-re `widget-type-identity.md` §6) ──────────
+    // ── GetObjectType / IsObjectType, frame side (`0x7a11d0`/`0x7a1290`) ─────────────────────────
     //
     // The region side landed first because a FontString found it; `_Nameplates` is why this half
     // exists too — `_Nameplates.lua:164` tests `Nameplate:GetObjectType() ~= "Button"` and `:191`
@@ -125,7 +125,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             FrameKind::Model => &["Model", "Frame", "Region"],
             // 4 deep: `PlayerModel` derives from `Model`, and `DressUpModel` (1969) and
             // `TabardModel` (1977) derive from it in turn, for the roster's maximum depth of 5
-            // (wow-re `ui/scratch/widget-type-identity.md` §6).
+            // (the reference's full 23-class roster).
             FrameKind::PlayerModel => &["PlayerModel", "Model", "Frame", "Region"],
             FrameKind::DressUpModel => &["DressUpModel", "PlayerModel", "Model", "Frame", "Region"],
             FrameKind::TabardModel => &["TabardModel", "PlayerModel", "Model", "Frame", "Region"],
@@ -191,9 +191,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // 1.12 registers the type-identity pair **twice, under two names**. The Region script
     // (`CScriptRegion`) publishes `GetObjectType`/`IsObjectType` — that is the pair above, and its
     // `IsObjectType` binding is `0x7a1290`. The *frame* script (`CSimpleFrameScript.cpp`,
-    // `__FILE__` `0x879504`) publishes `GetFrameType 0x773640` and `IsFrameType 0x773700` as well,
-    // and wow-5875-re carved both (`system/ui/scratch/item17-frameapi-batch1.md`, 76-entry
-    // registrar table verified at the bytes). `GetObjectType`/`IsObjectType` are what LATER
+    // `__FILE__` `0x879504`) publishes `GetFrameType 0x773640` and `IsFrameType 0x773700` as well.
+    // `GetObjectType`/`IsObjectType` are what LATER
     // clients kept; `GetFrameType`/`IsFrameType` are 1.12's own, and we shipped only the first
     // pair. That is 1189's superset argument inverted — not an extra name we invented, a real one
     // we were missing — and it cost the world map:
@@ -212,12 +211,12 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // `[eax+0x18]`, the same case-insensitive whole-string compare, and answers the NUMBER 1 or
     // nil.
     //
-    // **One edge is INFERRED and named rather than guessed silently:** wow-re's note glosses
-    // `IsFrameType`'s *absent-argument* branch as "pushes the frame's own typename (`call [eax+4]`
-    // GetName)", which is self-contradictory — a typename and a name are different slots — so the
-    // branch is not settled. We take the sibling's behaviour (the `Usage:` raise) pending a byte
-    // read. No caller in the 219-addon corpus, the director's AddOns, or the shipped FrameXML ever
-    // omits the argument: `JIM_toolbox/Config2/Pulse_Config.lua:118` is the corpus's only
+    // **One edge is INFERRED and named rather than guessed silently:** the one description of
+    // `IsFrameType`'s *absent-argument* branch reads "pushes the frame's own typename (`call
+    // [eax+4]` GetName)", which is self-contradictory — a typename and a name are different slots —
+    // so the branch is not settled. We take the sibling's behaviour (the `Usage:` raise) pending a
+    // byte read. No caller in the 219-addon corpus, the director's AddOns, or the shipped FrameXML
+    // ever omits the argument: `JIM_toolbox/Config2/Pulse_Config.lua:118` is the corpus's only
     // `IsFrameType` site and it passes `"Slider"`.
     m.set(
         "GetFrameType",
@@ -272,8 +271,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // ── The four structure queries: GetChildren / GetNumChildren / GetRegions / GetNumRegions ──
     //
     // Registered bindings in 1.12 (`GetNumRegions 0x773e60`, `GetRegions 0x773f60`,
-    // `GetNumChildren 0x774080`, `GetChildren 0x774180` — wow-re `ui/ledger.tsv`, classified
-    // ORCHESTRATION: each marshals and delegates, with no fidelity math of its own).
+    // `GetNumChildren 0x774080`, `GetChildren 0x774180`): each marshals and delegates, with no
+    // fidelity math of its own).
     //
     // **Why these four are worth more than their size.** They are how an addon walks a frame it did
     // not build, which is the whole basis of the "reskin the default UI" genre — and that genre is
@@ -295,23 +294,21 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // **A detached region is not in the list.** `Region:SetParent(nil)` sets `Region::detached`
     // rather than removing the entry, because the owner's `Vec` is what `WidgetArena::destroy`
     // frees from — but the client's re-link virtual `0x77fd10` with a null parent genuinely
-    // **unlinks from the old parent's draw layer and region list** (wow-re
-    // `widget-api-batch-benilla.md` Q7, VERIFIED), so a detached region must be invisible to both
-    // region verbs. Our flag is a representation choice; the list these report is the client's.
+    // **unlinks from the old parent's draw layer and region list**, so a detached region must be
+    // invisible to both region verbs. Our flag is a representation choice; the list these
+    // report is the client's.
     //
     // **The count and the list come from ONE function** ([`regions_of`] / [`children_of`]), never
     // two walks with the same filter written twice. `GetNumRegions` disagreeing with
     // `#{GetRegions()}` is a bug an addon would hit as an off-by-one deep inside a loop it did not
     // write, and the only way to make it impossible is to have one of them BE the other.
     //
-    // **Settled by a wow-re §5 quartet** (`ui/scratch/widget-list-bindings.md`), which confirmed two
-    // of these choices and corrected a third:
+    // **The order and inclusion rules below — one of them a correction:**
     //
     //  · **The order is link order, oldest first, and no reversal.** `CSimpleFrame` embeds a punned
     //    `TSList` header whose ctor sets `tail = &header`, `head = (&header)|1`, and BOTH linkers
     //    append at the TAIL (`0x76a750` for regions, `0x76aa20` for children — one caller each).
-    //    Our insertion-order `Vec` is the same order. (wow-re's own `draw-order-law.md` said
-    //    "tail→head"; that was a direction mislabel and was corrected in the same round.)
+    //    Our insertion-order `Vec` is the same order.
     //  · **Hidden children and regions are returned and counted** — a VERIFIED negative: the
     //    counting loops never load the visibility word at all.
     //  · **The TITLE REGION IS NOT RETURNED**, and that one corrected us. Both creation paths
@@ -327,7 +324,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     //    empty, never nil.
     //
     // The one thing still out of reach is not these bindings': Questie reads
-    // `({Minimap:GetChildren()})[9]` for the player arrow, and the §5 found why that index works —
+    // `({Minimap:GetChildren()})[9]` for the player arrow; here is why that index works —
     // `CMinimap`'s ctor `0x4edbc0` builds NINE engine-owned `Model` children before the XML
     // `<Frames>` descent, the ninth (`[Minimap+0x338]`) being the arrow `SetPlayerFacing 0x4eb8e0`
     // writes. We create none of them, so index 9 is nil here until the minimap grows its engine
@@ -364,8 +361,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "GetNumRegions",
         lua.create_function(|lua, this: Table| Ok(regions_of(lua, &this)?.len()))?,
     )?;
-    // SetParent — the runtime reparent, per the byte-verified law (wow-re
-    // `ui/scratch/setparent-runtime-strata-level.md`; decision 1323). The binding half
+    // SetParent — the runtime reparent (decision 1323). The binding half
     // (`0x7a1550`): the parent argument is a frame table, a NAME string (`0x76c760`), or an
     // explicit nil — an ABSENT argument is NOT the nil path (`0x6f3400` returns −1) and raises
     // like an unresolvable name; the cycle guard is the binding's own inline ancestor walk and
@@ -518,7 +514,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             let lvl = level.clamp(0, i64::from(u16::MAX)) as u16;
             // **A script level change carries no children** — the binding `0x774560` calls
-            // `set_frame_level 0x76a4f0` with `propagate=0` (wow-re `ui/ui.md`, default levels).
+            // `set_frame_level 0x76a4f0` with `propagate=0`.
             // Only the toplevel raise shifts a subtree. Stock `BonusActionButtonTemplate` is written
             // for this: it raises the button +2 and then its cooldown +2 by hand, landing the sweep
             // one level over the button — carrying the children made it three, over the
@@ -586,9 +582,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             Ok(model.arena.frame(h).map(|f| f.alpha).unwrap_or(1.0))
         })?,
     )?;
-    // Backdrop (backdrop-mechanism.md): SetBackdrop(table|nil) installs (or, with nil, tears down)
-    // the frame's tiled bg + 8-piece border plate. The two color setters tint the bg / all 8 border
-    // pieces (never the reverse — spec §4). The Lua-table SetBackdrop defaults both colors to WHITE
+    // Backdrop (`0x7776e0` → `0x76a5d0`): SetBackdrop(table|nil) installs (or, with nil, tears
+    // down) the frame's tiled bg + 8-piece border plate. The two color setters tint the bg / all 8
+    // border pieces (never the reverse — `0x77f410`/`0x77f440`). The Lua-table SetBackdrop defaults
+    // both colors to WHITE
     // (the ctor), so a caller must SetBackdropColor after to tint (the tooltip's OnLoad does).
     m.set(
         "SetBackdrop",
@@ -616,7 +613,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // `GetBackdrop()` (`0x777370`; wow-re `ui/scratch/widget-api-batch-benilla.md` Q5) — five things
+    // `GetBackdrop()` (`0x777370`) — five things
     // a plausible implementation gets wrong, so each is spelled out with its reason:
     //
     // 1. It is a **reconstruction from the struct**, never the caller's table. The reference stores
@@ -770,8 +767,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             ))
         })?,
     )?;
-    // EnableKeyboard(flag) / IsKeyboardEnabled() — `0x776f90` / `0x776ff0`, real Frame entries in
-    // wow-re's frame-API carve, beside the mouse pair above.
+    // EnableKeyboard(flag) / IsKeyboardEnabled() — `0x776f90` / `0x776ff0`, real Frame entries,
+    // beside the mouse pair above.
     //
     // 8 corpus addons call this and were RAISING on it (`ColorPickerPlus:258`,
     // `Dewdrop-2.0.lua:2021-2022` — which is in ~65 addons — `AckisRecipeList/ARLFrame.lua:1650`).
@@ -782,9 +779,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // three times (1203/1205/1211): the majority of the corpus calls pass **false**, and for those
     // our behaviour is already the reference's — we deliver no keys to arbitrary frames either. The
     // `true` callers want delivery we do not do, but they did not get it before this landed; they
-    // got a raise that killed the enclosing function. And per
-    // `frame-key-script-delivery.md` §3.2 being enabled genuinely is separable from having a
-    // handler, so the flag is a real piece of the model, not a placeholder for one.
+    // got a raise that killed the enclosing function. And being enabled genuinely is separable
+    // from having a handler (`0x76af00` never touches the handler slots), so the flag is a real
+    // piece of the model, not a placeholder for one.
     m.set(
         "EnableKeyboard",
         lua.create_function(|lua, (this, enable): (Table, bool)| {
@@ -874,7 +871,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             ))
         })?,
     )?;
-    // Clamp-to-screen (`0x776c00`/`0x776cb0`, geometry flags bit4 — layout.md): the layout resolve
+    // Clamp-to-screen (`0x776c00`/`0x776cb0`, geometry flags bit4): the layout resolve
     // keeps the frame's assembled rect inside the window, size preserved. GameTooltip frames
     // default true by construction (widget::Frame::clamped_to_screen — decision 0352).
     m.set(
@@ -929,7 +926,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Parse a Lua `SetBackdrop` table into a [`Backdrop`] (backdrop-mechanism.md §1). The keys read —
+/// Parse a Lua `SetBackdrop` table into a [`Backdrop`] (`0x7776e0`'s key reads). The keys read —
 /// exactly the compiled reader's set — are `bgFile`/`edgeFile` (strings), `tile` (boolean, default
 /// false), `tileSize`/`edgeSize` (numbers; a missing number leaves the ctor default: tileSize 0,
 /// edgeSize 32), and `insets{left,right,top,bottom}` (numbers, each default 0). A non-string file or
@@ -1015,8 +1012,7 @@ fn children_of(lua: &Lua, this: &Table) -> mlua::Result<Vec<u32>> {
 /// This frame's live regions as stable ids, in creation order — **the title region and detached
 /// ones excluded** — the one walk `GetRegions` and `GetNumRegions` share.
 ///
-/// Both exclusions are the client's list, not tidiness, and both are VERIFIED (wow-re
-/// `ui/scratch/widget-list-bindings.md`, §5 quartet):
+/// Both exclusions are the client's list, not tidiness:
 ///
 /// - **Detached.** `SetParent(nil)` reaches `0x77fd55` → the removal virtual `0x76a7f0`, which
 ///   unlinks the node and frees it, and then skips every re-link. We keep the entry only so the
@@ -1051,8 +1047,7 @@ fn regions_of(lua: &Lua, this: &Table) -> mlua::Result<Vec<u32>> {
 }
 
 /// One backdrop colour channel, the reference's own conversion (`SetBackdropColor 0x777d30` /
-/// `SetBackdropBorderColor 0x7780d0` — instruction-identical bar the delegate; wow-re
-/// `scratch/numeric-arg-coercion-law.md` Q4, VERIFIED).
+/// `SetBackdropBorderColor 0x7780d0` — instruction-identical bar the delegate).
 ///
 /// **r/g/b are UNGATED and alpha is not**, and that asymmetry is the whole of this function:
 ///
@@ -1066,7 +1061,8 @@ fn regions_of(lua: &Lua, this: &Table) -> mlua::Result<Vec<u32>> {
 ///
 /// Then the reference clamps to `[0,1]` with **NaN landing on 1.0** (the compare's unordered arm
 /// takes the high clamp), and quantizes `×255 + 0.5` through `__ftol` — round-half-up, not the
-/// bare truncate `chat-window-record.md`'s colour path uses. The field is a packed `0xAARRGGBB`
+/// bare truncate `SetChatWindowColor 0x4a14f0`'s colour path uses. The field is a packed
+/// `0xAARRGGBB`
 /// byte quad, so nothing finer survives the store and we quantize on the way in rather than
 /// pretend to a precision `GetBackdropColor` could not read back.
 fn backdrop_channel(lua: &Lua, v: Option<Value>, gated: bool) -> f32 {

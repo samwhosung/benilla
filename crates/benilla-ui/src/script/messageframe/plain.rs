@@ -1,9 +1,8 @@
 //! The `MessageFrame` method surface — `CSimpleMessageFrame` (ctor `0x785640`), the class
 //! `UIErrorsFrame` is and the one `CreateFrame("MessageFrame")` makes.
 //!
-//! Grounded in wow-re's byte-verified reads (msgframe-runtime.md's §5 pair, re-confirmed at the
-//! registrar tables in `widget-api-batch-benilla.md` Q4). Three facts decide this whole file, and
-//! each is one an implementation would otherwise get wrong in a way nothing would catch:
+//! Three facts decide this whole file, and each is one an implementation would otherwise get wrong
+//! in a way nothing would catch:
 //!
 //! 1. **`AddMessage(text [, r, g, b [, a]])` — the fifth argument is ALPHA and there is no sixth.**
 //!    Three corpus addons pass six (`EasyCopy.lua:12`, `QuestHistory.lua:1678`, `QuestItem.lua:300`,
@@ -161,8 +160,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             with_mf(lua, &this, |mf| mf.fading_enabled = on)
         })?,
     )?;
-    // 1/nil, the reference's predicate shape — `binding-shapes.tsv` has this row as
-    // `(nil) | (number)`, like every other 1.12 predicate (decision 2118).
+    // 1/nil, the reference's predicate shape (`0x795170`): `(nil) | (number)`, like every other
+    // 1.12 predicate (decision 2118).
     m.set(
         "GetFading",
         lua.create_function(|lua, this: Table| {
@@ -195,11 +194,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ── the shared font block ───────────────────────────────────────────────────────────────
     //
     // `Set/GetFontObject · Set/GetFont · Set/GetTextColor · Set/GetShadowColor ·
-    // Set/GetShadowOffset` are real entries on this class's table, not a courtesy. wow-re's
-    // registrar carve is explicit about the membership — *"Exposed on: FontString, Font object,
-    // EditBox, MessageFrame, ScrollingMessageFrame, SimpleHTML. NOT on Button"* — and names this
-    // class's own shims calling the shared implementations (`GetShadowColor 0x794810`). All six
-    // carry the block now — `SimpleHTML`'s is its own copy rather than `font_block::install`'s
+    // Set/GetShadowOffset` are real entries on this class's table, not a courtesy. The
+    // registrar map is explicit about the membership — *"Exposed on: FontString, Font object,
+    // EditBox, MessageFrame, ScrollingMessageFrame, SimpleHTML. NOT on Button"* (table
+    // `0x879d00` has none) — and names this class's own shims calling the shared
+    // implementations (`GetShadowColor 0x794810`). All six carry the block now —
+    // `SimpleHTML`'s is its own copy rather than `font_block::install`'s
     // (`script/simplehtml/mod.rs`), because that class computes its own inter-block step.
     //
     // Demand is observed, not counted: `BigWigs/Plugins/Messages.lua:212` is
@@ -505,8 +505,8 @@ mod tests {
         assert_eq!(num_messages(&s, "MF"), 0);
     }
 
-    /// The ctor defaults, straight off msgframe-runtime.md's shared-defaults section, plus the
-    /// setters' round trip.
+    /// The ctor defaults (`0x81cc2c`/`0x81cc30`: timeVisible, fadeDuration), plus the setters'
+    /// round trip.
     #[test]
     fn ctor_defaults_and_the_fade_accessors() {
         let s = UiScript::new().unwrap();

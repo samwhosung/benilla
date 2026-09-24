@@ -1,6 +1,5 @@
 //! **The nameplate widgets** — `CGNamePlateFrame` as the frame-system object it actually is
-//! (decision 2148; wow-re `system/ui/scratch/nameplate-lua-surface.md`, §5 eight-worker round +
-//! orchestrator byte arbitration 2026-09-09, benilla dispatch).
+//! (decision 2148).
 //!
 //! benilla drew V-plates for a year as quads pushed straight into the UI pass, which made them
 //! invisible to Lua: a live run's `WorldFrame:GetChildren()` returned the two named FrameXML
@@ -36,9 +35,7 @@
 //!   level 0**. Since the draw walk's layer loop is *outer* and its frame walk *inner* (`0x765920`:
 //!   layer counter `0x76593c`, frame walk `0x7659d0`–`0x7659f8`, `cmp eax,5` at `0x765a63`), the
 //!   whole bar frame drains before any plate layer — which is why the border's bevels cap the
-//!   fill's ends. The director pinned that look off a reference crop while `nameplate-vkey.md` §7
-//!   recorded the opposite order; the §5 round settled it in the director's favour and corrected
-//!   the note.
+//!   fill's ends.
 //! - **Layers** (`GetDrawLayer 0x79a6c0`, table `0x811a80`): Border ARTWORK, Glow **HIGHLIGHT**,
 //!   Name/Level/Skull OVERLAY (the ctor re-layers Name and Level off ARTWORK at `0x7cb438`/
 //!   `0x7cb4ea`), RaidIcon ARTWORK, BarFill ARTWORK on the bar. **No sub-level exists in 5875**;
@@ -150,7 +147,7 @@ pub struct PlateState {
     /// which is why the pool is keyed by this rather than indexed by the driver's sort order.
     pub key: u64,
     /// Where the plate's **TOP-CENTRE** lands, in FrameXML units from the screen's bottom-left —
-    /// the reference's own seat (`nameplate-vkey.md` §8.5: the plate hangs below the point).
+    /// the reference's own seat (`0x509ec0`: the plate hangs below the point).
     pub top_centre: (f32, f32),
     /// `UNIT_FIELD_HEALTH` and `UNIT_FIELD_MAXHEALTH`, **raw**: `healthbar:GetValue()` is
     /// `[bar+0x320]` (`0x78f5d0`), not a fraction, and `GetMinMaxValues()` answers `(0, max)`.
@@ -353,7 +350,7 @@ impl UiScript {
     /// The reference's predicate is `IsTargeting() && TargetingWantsLocation(flag & 0x60) &&
     /// !0x6e6180()`. The caller supplies the first two verbatim — benilla's `TargetingWants::
     /// Location` **is** that `& 0x60` mask. The third is another mask predicate over the same
-    /// pending-spell word (`& 0x878e`, per wow-re `item-target-cursor-and-dropitemonunit.md`) whose
+    /// pending-spell word (`& 0x878e`) whose
     /// meaning is not settled; a word that reaches our targeting cursor with location bits is a
     /// pure ground target (the resolver binds or refuses a unit word before then), so it is left
     /// unmodelled rather than guessed at.
@@ -515,10 +512,9 @@ impl Plate {
                 .collect();
         }
 
-        // The blend modes are the ctor's own, one `0x7703f0` call per texture (wow-re
-        // `nameplate-vkey.md` §8.1, byte-arbitrated): everything is BLEND(2) except the **glow,
-        // which is ADD(3)** (`push 3` at `0x7cb36a` → `0x7cb374`). Getting that one wrong is not a
-        // subtlety — see [`is_unpainted_glow`].
+        // The blend modes are the ctor's own, one `0x7703f0` call per texture: everything is
+        // BLEND(2) except the **glow, which is ADD(3)** (`push 3` at `0x7cb36a` → `0x7cb374`).
+        // Getting that one wrong is not a subtlety — see [`is_unpainted_glow`].
         let border = texture(
             model,
             frame,
@@ -562,7 +558,7 @@ impl Plate {
         let fill_data = model.region_data.entry(fill).or_default();
         fill_data.texture = Some(BAR_FILL_TEXTURE.to_string());
         // Not overridden by the ctor — the `CSimpleTexture` ctor's own `[+0xd0] = 2` stands
-        // (`0x76fc40`; vkey §8.1). Written explicitly because the default is a FACT here, not an
+        // (`0x76fc40`). Written explicitly because the default is a FACT here, not an
         // omission.
         fill_data.blend = BlendMode::Blend;
         if let Some(KindState::StatusBar(sb)) =
@@ -933,10 +929,9 @@ pub(super) fn is_world_seated(model: &Model, frame: FrameHandle) -> bool {
 /// 20-26 that only reads as a glow when it is *added*. Blitted with straight `BLEND` it is
 /// `dst·(1−1) + black·1` — **an opaque black rectangle over the whole plate**, which is precisely
 /// what shipped when the widget port left the mode at the ctor default (director report,
-/// 2026-09-10; wow-re `nameplate-vkey.md` §8.1 had already named this exact bug and its cause in
-/// July). So `GetBlendMode()` answers `"ADD"` truthfully, an addon that re-textures the region
-/// gets its own art painted normally, and only the reference's own glow art on an ADD region is
-/// the one thing this engine declines to draw.
+/// 2026-09-10). So `GetBlendMode()` answers `"ADD"` truthfully, an addon that re-textures the
+/// region gets its own art painted normally, and only the reference's own glow art on an ADD
+/// region is the one thing this engine declines to draw.
 pub(super) fn is_unpainted_glow(data: &RegionData) -> bool {
     data.blend == BlendMode::Add && data.texture.as_deref() == Some(GLOW_TEXTURE)
 }

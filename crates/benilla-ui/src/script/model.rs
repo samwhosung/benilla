@@ -66,8 +66,7 @@ pub(crate) struct Model {
     pub(crate) addons: Vec<super::addon::AddOnInfo>,
     /// **The Lua index space** — positions into [`Self::addons`], `## Title`-sorted and
     /// hidden-filtered (decision 2175). NOT the registry: the reference keeps two structures and
-    /// they are different permutations of different sets (wow-re
-    /// `system/ui/scratch/addon-registry-scan-and-order.md` §7).
+    /// they are different permutations of different sets (`0x51da70` rebuilds this one).
     pub(crate) addon_index: Vec<usize>,
     /// The lowercased names `SMSG_ADDON_INFO` marked `status = 2`, or **`None` when no reply has
     /// arrived this session** — and `None` is why [`Self::addon_index`] can be legitimately empty
@@ -87,8 +86,8 @@ pub(crate) struct Model {
     pub(crate) measurer: Option<Box<dyn super::TextMeasure>>,
     /// The host's texture-path oracle ([`super::UiScript::set_texture_probe`]): does this sprite
     /// reference resolve to a file — patch chain or loose addon folder? What lets the path form of
-    /// `SetTexture` return the reference's **1 | nil** load verdict inline (wow-re
-    /// `widget-api-batch-benilla.md` Q1 — Atlas branches on it to pick its map art). `None` in an
+    /// `SetTexture` return the reference's **1 | nil** load verdict inline (`0x79bb40` — Atlas
+    /// branches on it to pick its map art). `None` in an
     /// engine-less VM (tests, the addon harness), where the path form keeps answering nil: no
     /// backend, nothing loads — which is also exactly what those tests always saw.
     pub(crate) texture_probe: Option<TextureProbe>,
@@ -99,8 +98,8 @@ pub(crate) struct Model {
     /// CONTENT, the way the real client's size getters do — `CSimpleTexture::GetWidth 0x770720` /
     /// `GetHeight 0x770790` return the authored value only when it is not `0.0`, and otherwise read
     /// the loaded texture's `[tex+0x144]`/`[tex+0x148]` through the same converter `<AbsDimension>`
-    /// uses, so **one texel is one FrameXML unit** (wow-re `region-size-fallback.md` §2, decision
-    /// 1349). The host answers off the same candidate walk the renderer decodes with and memoises,
+    /// uses, so **one texel is one FrameXML unit** (decision 1349). The host answers off the same
+    /// candidate walk the renderer decodes with and memoises,
     /// so the size layout resolves with is the size the screen shows.
     ///
     /// `None` in an engine-less VM (tests, the addon harness), where a zero-size texture keeps the
@@ -108,8 +107,8 @@ pub(crate) struct Model {
     pub(crate) texture_size_probe: Option<TextureSizeProbe>,
     /// The host's font-path oracle ([`super::UiScript::set_font_probe`]): does this font reference
     /// load — patch chain or loose addon folder? What lets `SetFont`'s path form answer the
-    /// reference's **1 | nil**, whose nil is a *load failure* and not an argument error (wow-re
-    /// `system/ui/ui.md`: `0x79f345`/`0x79f361`, originating at `0x5c1ae0` under the `0x44d040`
+    /// reference's **1 | nil**, whose nil is a *load failure* and not an argument error
+    /// (`0x79f345`/`0x79f361`, originating at `0x5c1ae0` under the `0x44d040`
     /// font-factory cache) — `!OmniCC/main.lua:41`'s `if not Font:SetFont(saved, size) then
     /// revert end` is exactly that probe.
     ///
@@ -125,7 +124,7 @@ pub(crate) struct Model {
     pub(crate) addons_saved_account: Option<std::path::PathBuf>,
     pub(crate) addons_saved_character: Option<std::path::PathBuf>,
     /// The FrameXML **template registry**, persisted across [`crate::loader::load`] calls — the
-    /// client's template table is global (`0x6ee500`, rf24), so a file may `inherits=` a template
+    /// client's template table is global (`0x6ee500`), so a file may `inherits=` a template
     /// an *earlier file* registered (the real MerchantFrame.xml inherits
     /// CharacterFrameTemplates.xml's tab template). Register-before-use in load order, exactly
     /// the client's rule; a per-document registry silently dropped every cross-file inherit.
@@ -321,7 +320,7 @@ pub(crate) struct Model {
     /// The named `<Font>` objects, **keyed by the ASCII-LOWERCASED name**.
     ///
     /// 1.12's font registry hashes the name and compares keys with `SStrCmpI` — case-INSENSITIVE
-    /// (`0x783870`/`0x7838c7`, wow-re `system/ui/scratch/font-object-lua-surface.md`: *"Font names
+    /// (`0x783870`/`0x7838c7`: *"Font names
     /// are matched case-insensitively"*), and a name string handed to `SetFontObject` folds the
     /// same way. `Recap/RecapOptions.xml:32` inherits `GameFontHighLightSmall` — the shipped font
     /// is `GameFontHighlightSmall`, one letter's case apart — and on the real client that resolves.
@@ -412,7 +411,7 @@ pub(crate) struct Model {
     pub(crate) all_event_frames: Vec<FrameHandle>,
 
     /// The EditBox that currently owns keyboard focus — the engine's twin of the client's
-    /// class-owned focus global `DAT_00cf4dc8` (`CSimpleEditBox* E`, 0 = none; RF-0082 §1). A focused
+    /// class-owned focus global `DAT_00cf4dc8` (`CSimpleEditBox* E`, 0 = none). A focused
     /// box consumes every key/char; `None` lets an `autoFocus` box self-acquire on the first event.
     /// Gated on effective-visibility at read time (a box hidden while focused stops taking input).
     pub(crate) focused_editbox: Option<FrameHandle>,
@@ -425,8 +424,7 @@ pub(crate) struct Model {
     /// be the topmost under the cursor. The reference keeps exactly this flag on the frame
     /// manager (`[root+0x1100]`) and its per-tick pump re-runs the hover walk at the **saved**
     /// cursor position, explicitly bypassing the didn't-move coalesce — so the newly exposed
-    /// frame gets `OnEnter` with no physical mouse move (wow-re
-    /// `ui/scratch/hover-hide-and-tooltip-owner-law.md`: writers `0x764cbb`/`0x764b8d`, pump
+    /// frame gets `OnEnter` with no physical mouse move (writers `0x764cbb`/`0x764b8d`, pump
     /// tail `0x7657a1` → `0x7660d0` self-alias). [`UiScript::tick`] drains it the same way.
     pub(crate) hover_repick: bool,
     /// Per-button, the frame a mouse-down last captured (`button name → frame`), for the `OnClick`
@@ -445,7 +443,7 @@ pub(crate) struct Model {
     pub(crate) mouse_capture: Option<FrameHandle>,
     /// Per **frame**, the [`UiScript::now`] second at which its last single `OnClick` fired — the
     /// double-click detector's entire state, and the faithful stand-in for the client's per-widget
-    /// timestamp `[CButton+0x334]` (wow-re `ui/scratch/button-doubleclick-law.md`).
+    /// timestamp `[CButton+0x334]`.
     ///
     /// Three properties of that field are load-bearing, and are why this is keyed the way it is.
     /// It lives on the **widget**, so two frames can never pair with each other. It carries **no
@@ -502,8 +500,7 @@ pub(crate) struct Model {
     ///
     /// Read it through [`Model::unit`], never directly: that is where the fold lives. The field was
     /// called `units` until the fold landed, and it was renamed precisely so that every existing
-    /// reader had to come through here rather than be trusted to remember (wow-re
-    /// `system/ui/scratch/unit-token-grammar.md`).
+    /// reader had to come through here rather than be trusted to remember.
     pub(crate) units_by_lower: HashMap<String, UnitState>,
     /// Per-unit-token aura list, **in display order**, pushed by the app's aura feed each frame and
     /// read by the `UnitAura` family ([`super::aura`]). The order is the app's decision, not the
@@ -583,7 +580,7 @@ pub(crate) struct Model {
     pub(crate) social_requests: Vec<social::SocialRequest>,
     /// The client's three LFG slot words (`[0xbc70a0]`) and its comment (`[0xbc6e98]`, a
     /// 0x80-byte buffer), the BSS `SetLookingForGroup` writes and `GetLookingForGroup` reads
-    /// back — never the server's (wow-re `lfg-set-get-law.md`, 1961). The slots are always zero
+    /// back — never the server's (1961). The slots are always zero
     /// in the reference: see [`social`].
     pub(crate) lfg_slots: [u32; 3],
     pub(crate) lfg_comment: String,
@@ -644,8 +641,8 @@ pub(crate) struct Model {
     /// `GetGuildRecruitmentMode` returns and `SetGuildRecruitmentMode` writes (decision 2115).
     ///
     /// `0` = STANDARD, `1` = AUTO, and those two words are literally what the per-character chat
-    /// cache stores it as (`OPTION_GUILD_RECRUITMENT_CHANNEL STANDARD|AUTO`; wow-re
-    /// `system/ui/scratch/chat-cache-grammar.md` — the reader maps `STANDARD` to 0 and anything
+    /// cache stores it as (`OPTION_GUILD_RECRUITMENT_CHANNEL STANDARD|AUTO`; `0x49ea70` maps
+    /// `STANDARD` to 0 and anything
     /// else, `AUTO` included, to 1). It boots at **1**: every one of the 33 `chat-cache.txt` files
     /// the reference client itself wrote in this repo's install says `AUTO`, on characters that
     /// never opened the option.
@@ -740,7 +737,7 @@ pub(crate) struct Model {
     pub(crate) worn_display_toggles: Vec<super::worn_display::WornDisplay>,
 
     /// The server's `PLAYER_FIELD_BYTES` **byte 2** — which of the four extra action bars are on
-    /// ([`action_bar_toggles`], wow-re `system/ui/scratch/action-bar-toggles.md`). `None` until the
+    /// ([`action_bar_toggles`], descriptor `+0x102a`). `None` until the
     /// app pushes it ([`super::UiScript::set_action_bar_toggles`]), which is the ONLY thing that
     /// moves it: the real client never writes this cell, so `SetActionBarToggles` deliberately
     /// leaves it alone and the value lags the setter by a round trip. That is the opposite
@@ -906,8 +903,8 @@ pub(crate) struct Model {
     /// spell rather than the pet bar's slot ([`Self::pet_autocast_toggles`] is the bar's).
     pub(crate) pet_spell_autocasts: Vec<u32>,
     /// Whether the app's own cast lifecycle holds something `SpellStopCasting()` can stop — a
-    /// running auto-repeat or an in-flight cast; a channel is NOT stoppable there (wow-re
-    /// `esc-stopcasting.md`; pushed each frame by the app's cast feed,
+    /// running auto-repeat or an in-flight cast; a channel is NOT stoppable there (`0x6e6e80`;
+    /// pushed each frame by the app's cast feed,
     /// [`super::UiScript::set_casting`]). The 1/nil return is load-bearing:
     /// `ToggleGameMenu`'s ESC chain (`UIParent.lua:1489`) only falls through to
     /// `CloseAllWindows()` on nil.
@@ -950,7 +947,7 @@ pub(crate) struct Model {
     /// from OnUpdate and hides itself when it goes false; the binder question's twin, and the same
     /// range gate stands behind both (decision 1580).
     pub(crate) talent_master_pending: bool,
-    // ── The dialog engine's verbs (decision 1963; wow-re `staticpopup-dialog-bindings.md`) ──
+    // ── The dialog engine's verbs (decision 1963; `0x48dca0` is the first below) ──
     /// `ConfirmPetUnlearn()` calls since the app's last drain — the pet trainer's twin of
     /// [`Self::talent_wipe_confirms`]; the app holds the latched trainer and the money gate.
     pub(crate) pet_unlearn_confirms: u32,
@@ -1035,7 +1032,7 @@ pub(crate) struct Model {
     pub(crate) pet_orders: Vec<u32>,
     /// `HasFullControl`'s flag — the reference's `[0xb4b3e4]`, written by
     /// `SMSG_CLIENT_CONTROL_UPDATE` naming the local player and read as "if zero, refuse" by
-    /// every cast, item and cursor gate (wow-re `control-loss-and-restore.md`). Boot value 1.
+    /// every cast, item and cursor gate. Boot value 1.
     pub(crate) player_control: bool,
     /// Pet bar writes queued by the drag ([`cursor::pet`], decision 1010) — **one entry per
     /// `CMSG_PET_SET_ACTION`**, each holding the one or two `(0-based position, packed word)` pairs
@@ -1082,8 +1079,7 @@ pub(crate) struct Model {
     /// The **pet** payload arm is excluded (decision 1010): `PlaceAction` refuses it, so lighting
     /// the action bar's empty slots for a payload that cannot land there would be an invitation to
     /// a no-op. It drives [`Self::pet_grid_shown`] instead. So is the **vendor row** (mode 5): its
-    /// grab setter `0x4950f0` fires `ACTIONBAR_SHOWGRID` for mode 7 alone (wow-re
-    /// `merchant-cursor-law.md` §5).
+    /// grab setter `0x4950f0` fires `ACTIONBAR_SHOWGRID` for mode 7 alone.
     pub(crate) cursor_grid_shown: bool,
     /// The same mirror for the PET bar's grid — `PET_BAR_SHOWGRID`/`PET_BAR_HIDEGRID`, which the
     /// reference fires from inside the pet-action pickup builder itself (`0x494f28`) rather than
@@ -1269,32 +1265,32 @@ pub(crate) struct Model {
     /// [`super::UiScript::take_trade_skill_close`] drain.
     pub(crate) trade_skill_close: bool,
     /// The recipe groups the player has collapsed, by group key `(ItemClass, ItemSubClass)`
-    /// (wow-re `tradeskill` TU-B) — a group's recipes hide, its header stays (the
+    /// (`0x55ba30` resolves the key) — a group's recipes hide, its header stays (the
     /// trainer/skills-pane precedent, [`Model::trainer_collapsed`]/[`Model::skills_collapsed`]).
     /// Survives a `set_trade_skill` content re-push (pruned to the groups the fresh recipes still
-    /// produce) AND a same-profession close→reopen (wow-re `tradeskill` TU-G §6 — the collapse
+    /// produce) AND a same-profession close→reopen (the collapse
     /// mask `0x84dd68` round-trips the rebuild by header key); reset on a profession switch
     /// ([`Model::trade_skill_last_line`]).
     pub(crate) trade_skill_collapsed: HashSet<(u32, u32)>,
     /// Group keys the SubClass filter dropdown has hidden (empty = "All Subclasses"). Keyed like
     /// [`Model::trade_skill_collapsed`] — the real client's per-header shown flag (`header+0xc`)
     /// survives a rebuild by exactly this `(ItemClass, ItemSubClass)` key match (`0x4fca20`'s
-    /// save→restore loop; the position mask `0x84dd60` is the derived form — wow-re `tradeskill`
-    /// TU-G). Persists across a same-profession close/reopen; reset on a profession switch
+    /// save→restore loop; the position mask `0x84dd60` is the derived form). Persists across a
+    /// same-profession close/reopen; reset on a profession switch
     /// ([`Model::trade_skill_last_line`]).
     pub(crate) trade_skill_subclass_hidden: HashSet<(u32, u32)>,
-    /// The InvSlot filter mask (`0x84dd64`, wow-re `tradeskill` TU-G): **bit set = slot shown**,
+    /// The InvSlot filter mask (`0x84dd64`): **bit set = slot shown**,
     /// all-ones = "All Slots". The real client's build never touches this static — it is NOT
     /// pruned on a re-push, and an exclusive pick therefore keeps every OTHER bit clear even for
     /// slots that appear later. Reset (all-ones) only on a profession switch.
     pub(crate) trade_skill_invslot_mask: u32,
-    /// The skill line the tradeskill state was last built for (`0xbde064`, wow-re TU-G's cache
+    /// The skill line the tradeskill state was last built for (`0xbde064`, the cache
     /// key): a `set_trade_skill` push for a DIFFERENT line resets the two filters, the collapse
     /// set, and the selection; the same line (including a close→reopen round trip) keeps them.
     pub(crate) trade_skill_last_line: u32,
     /// The selected recipe's SPELL ID (`0xbde044` — the real client stores the selection by spell
     /// id, not index), shadowing [`Model::trade_skill_selection`]'s flat position so the selection
-    /// survives a same-profession close→reopen (TU-G: untouched on that path) and remaps across a
+    /// survives a same-profession close→reopen (untouched on that path) and remaps across a
     /// re-push.
     pub(crate) trade_skill_selected_spell: u32,
     /// Set by the engine-side mutators the real client answers with a `TRADE_SKILL_UPDATE` event
@@ -1385,14 +1381,14 @@ pub(crate) struct Model {
     pub(crate) mail_stationery: u32,
     /// `HasNewMail()` — login-scoped (survives the mailbox window closing, unlike [`Self::mail`]
     /// above): the app's `MSG_QUERY_NEXT_MAIL_TIME`/`SMSG_RECEIVED_MAIL`-fed countdown reduced to
-    /// one flag (decision 0544 P3, wow-re §5 `mail-interaction.md`). The reference minimap icon
+    /// one flag (decision 0544 P3, `0x4afea0`). The reference minimap icon
     /// (`MiniMapMailFrame`) reads this on `UPDATE_PENDING_MAIL`.
     pub(crate) has_new_mail: bool,
 
     /// The open auction house's snapshot the app pushes (`None` = no auctioneer session) and the
     /// intents the app drains — the auction seam ([`auction`], decision 1511). `auction_selected`
     /// is engine-local per list ([`auction::LIST`]/`BIDDER`/`OWNER`) and holds the selected
-    /// **auction id**, not a row position (wow-re §5 TU-5): an id follows its row through a
+    /// **auction id**, not a row position (`0x4cfda0`/`0x4cfec0`): an id follows its row through a
     /// re-sort, where an index would quietly come to mean the auction that took its place. `0` =
     /// nothing selected. It is engine-local because the reference reads the selection back
     /// synchronously inside the same handler that sets it, so it cannot be a round trip. `auction_can_query` is the app's 5 s browse
@@ -1469,8 +1465,8 @@ pub(crate) struct Model {
     /// Item ids the renderer asked for that the store lacks — drained by the app
     /// ([`UiScript::take_item_stat_asks`]), answered via [`UiScript::set_item_template`].
     pub(crate) item_stat_asks: HashSet<u32>,
-    /// The item-set store (`set id → §22 SET-block view`) + its ask-once misses — the same
-    /// push/ask flow as the templates ([`item_stats`] module doc).
+    /// The item-set store (`set id → SET-block view`, the block `0x854b1c` heads) + its ask-once
+    /// misses — the same push/ask flow as the templates ([`item_stats`] module doc).
     pub(crate) item_sets: HashMap<u32, super::ItemSetView>,
     pub(crate) item_set_asks: HashSet<u32>,
     /// The **random-suffix roll** store (`ItemRandomProperties` id → its resolved view) — pushed
@@ -1479,7 +1475,7 @@ pub(crate) struct Model {
     /// loop to repaint on a late answer), so the ask-once shape the template store uses would
     /// leave a first click showing an item with no lines. This mirrors the reference exactly: the
     /// builder resolves its `+0x424` against the loaded DBC store `0xc0dbd4` at draw time, and
-    /// every source supplies only the id (wow-re `tooltip-content-law.md` §1-ENCHANT §E5).
+    /// every source supplies only the id (the ENCHANT family, `0x52c991`).
     pub(crate) random_properties: HashMap<u32, super::RandomPropertyView>,
     /// The red-line law's player state (level/class/race/skills — [`item_stats`] module doc).
     pub(crate) player_req: PlayerReqState,
@@ -1575,7 +1571,7 @@ pub(crate) struct Model {
     pub(crate) in_cinematic: bool,
     /// Exhaustion.dbc as the rest bindings consume it — rest-state byte → (localized name,
     /// factor), the table `GetRestState` indexes directly and whose row 1 scales
-    /// `GetXPExhaustion` (wow-re rested-xp-bindings.md; decision 1087). Seeded with the shipped
+    /// `GetXPExhaustion` (`0x48d3f0`; decision 1087). Seeded with the shipped
     /// 5875 enUS rows so the engine tests and a failed DBC read behave like the shipped client
     /// (the GlobalStrings-fallback posture); the app overwrites it with the install's real —
     /// localized — rows at startup ([`UiScript::set_exhaustion_rows`]).
@@ -1714,8 +1710,8 @@ pub(crate) struct Model {
     /// side, x right / y up — the `MINIMAP_PING` event's arg2/arg3 space), republished by the app
     /// every frame from the stored world point against the player's live position. Behind
     /// `Minimap:GetPingPosition()`, which answers **two numbers always** — the reference
-    /// recomputes them per call from a pair of statics nothing ever clears (wow-re
-    /// `minimap-ping-law.md`), and the stock `Minimap_OnUpdate` multiplies the answer without a
+    /// recomputes them per call from a pair of statics nothing ever clears (`0x4eefd0`), and the
+    /// stock `Minimap_OnUpdate` multiplies the answer without a
     /// nil test for the whole of its 5 s timer (1974; 1596's nil answer stood until then). There
     /// is exactly one ping, so it lives here rather than on each Minimap widget's
     /// [`KindState`](crate::widget::KindState) — one write, one read, no arena walk.

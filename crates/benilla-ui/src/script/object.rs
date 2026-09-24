@@ -1,13 +1,14 @@
-//! The FrameScript object model, frame side (RF-0023) — `CreateFrame`, the frame metatable +
+//! The FrameScript object model, frame side — `CreateFrame`, the frame metatable +
 //! wrapper cache, and the shared frame method surface (decision 0068 v1). The region side lives in
 //! [`super::region`]; per-kind frame methods in their own modules ([`super::statusbar`], …),
 //! dispatched by [`kind_method_registries`] before the shared table.
 //!
 //! A frame's Lua value is a table `T` with `T[0] = lightuserdata(id)` (the id encoding stands in for
-//! RF-0023's `CScriptObject*`; see the module docs on ids) and one **shared** metatable whose
-//! `__index` is a Rust function that dispatches a method name to its implementation. Wrappers are
-//! cached in a Lua-side registry table keyed by id, so `GetParent()` (etc.) returns the *same* table
-//! every time (stable identity). Named frames auto-publish to `_G`, non-overwriting (RF-0023). Region
+//! the client's `CScriptObject*`; `0x701bd0` writes `T[0] = lightuserdata(this)` — see the module
+//! docs on ids) and one **shared** metatable whose `__index` is a Rust function that dispatches a
+//! method name to its implementation. Wrappers are cached in a Lua-side registry table keyed by id,
+//! so `GetParent()` (etc.) returns the *same* table every time (stable identity). Named frames
+//! auto-publish to `_G`, non-overwriting (`0x701bd0`). Region
 //! leaves (`Texture`/`FontString`) use the same `T[0]` scheme but a *distinct* metatable (the "tag"
 //! that separates their method surface from frames').
 //!
@@ -44,7 +45,7 @@ pub(super) fn id_to_lud(id: u32) -> LightUserData {
     LightUserData(id as usize as *mut c_void)
 }
 
-/// Read the id out of a wrapper table's `T[0]` lightuserdata (RF-0023).
+/// Read the id out of a wrapper table's `T[0]` lightuserdata (`0x701bd0` writes it).
 pub(crate) fn decode_id(this: &Table) -> mlua::Result<u32> {
     match this.raw_get::<Value>(0)? {
         Value::LightUserData(l) => Ok(l.0 as usize as u32),
@@ -66,7 +67,7 @@ pub(super) fn frame_handle_of(lua: &Lua, this: &Table) -> mlua::Result<FrameHand
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// Wrapper cache (RF-0023: lazy bind + named _G publish, non-overwriting)
+// Wrapper cache (`0x701bd0`: lazy bind + named _G publish, non-overwriting)
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// Get-or-create the wrapper table for a frame id, caching it and (if the frame is named and `_G`
@@ -101,7 +102,7 @@ pub(super) fn frame_wrapper(lua: &Lua, id: u32) -> mlua::Result<Table> {
     Ok(t)
 }
 
-/// Publish a wrapper to `_G[name]`, non-overwriting (RF-0023).
+/// Publish a wrapper to `_G[name]`, non-overwriting (`0x701bd0`).
 pub(super) fn publish_global(lua: &Lua, name: &str, wrapper: &Table) -> mlua::Result<()> {
     let g = lua.globals();
     if g.get::<Value>(name)?.is_nil() {
@@ -122,8 +123,7 @@ pub(super) fn publish_global(lua: &Lua, name: &str, wrapper: &Table) -> mlua::Re
 /// expands a leading `$parent` (`0x76c5b0`) and then calls `0x76c760`. There is no engine-side
 /// name→frame map behind either: for frames and regions a name's only effects are the copy into
 /// `[widget+0x98]` and that `_G` publish. (`CSimpleFont` names are the one exception — they key a
-/// Storm hash at `0xcf4e78` — and fonts are not anchor targets.) `wow-5875-re`
-/// `system/ui/scratch/name-string-widget-resolution.md`; `system/ui/ledger.tsv` rows
+/// Storm hash at `0xcf4e78` — and fonts are not anchor targets.) Full addresses:
 /// `0x76c5b0`/`0x76c700`/`0x76c760`/`0x7a2540`.
 ///
 /// So the name is not a *frame name* — it is a **global**, and a frame's published name is only the
@@ -194,7 +194,7 @@ pub(crate) fn resolve_named_target(model: &Model, target: &NamedTarget) -> Optio
 
 /// The name a leading `$parent` expands to: the first widget at or above `start` with a non-empty
 /// name (`0x76c5b0`'s `+0x9c` walk, skipping an empty `GetName`), and
-/// [`crate::framexml::DEFAULT_PARENT_NAME`] (`"Top"`) when there is none (rf27 rules 3/5).
+/// [`crate::framexml::DEFAULT_PARENT_NAME`] (`"Top"`) when there is none (`0x76c5dd`).
 ///
 /// `start` is the anchoring widget's **parent**: a frame's own anchors say `$parent` of its
 /// enclosing frame, and a region's say `$parent` of its owner — which is that region's `+0x9c`.
@@ -266,7 +266,7 @@ fn enum_token(s: &str) -> String {
 
 /// The reference's strata NAME table (`0x8119f8`) has eight rows, `BACKGROUND`..`TOOLTIP`; stratum
 /// 0 (`WORLD`) has no name and no XML or Lua can put a frame there — the WorldFrame's constructor
-/// is its only writer (decision 1984, wow-re `worldframe-widget.md` §4).
+/// is its only writer (decision 1984, `0x481aff`).
 pub(crate) fn strata_from_str(s: &str) -> Option<Strata> {
     Some(match enum_token(s).as_str() {
         "BACKGROUND" => Strata::Background,
@@ -322,8 +322,8 @@ pub fn frame_kind_from_tag(s: &str) -> Option<FrameKind> {
 ///
 /// One function because the two doors disagree only in what a MISS does, never in what a miss is
 /// (decision 2191): the Lua binding raises ([`create_frame`]), the XML loader logs
-/// `"Unknown frame type: %s"` and skips the node (`crate::loader`), and wow-re's
-/// `taxiroute-widget-type.md`/`lootbutton-widget-type.md` verify both legs off the same `0x6ee280`.
+/// `"Unknown frame type: %s"` and skips the node (`crate::loader`) — both legs off the same
+/// `0x6ee280`.
 pub(crate) fn registered_frame_kind(lua: &Lua, kind: &str) -> Option<FrameKind> {
     let frame_kind = frame_kind_from_str(kind)?;
     let one_shot_spent = frame_kind == FrameKind::WorldFrame
@@ -341,8 +341,8 @@ fn frame_kind_from_str(s: &str) -> Option<FrameKind> {
         // batch, the one row passing `1` as its third argument).
         "WORLDFRAME" => FrameKind::WorldFrame,
         // `TaxiRouteFrame` — a registered `CreateFrame` type that is a `CSimpleFrame` and NOTHING
-        // else, so it maps to `Frame` rather than earning a kind (decision 1828; wow-re
-        // `ui/scratch/taxiroute-widget-type.md`). Factory `0x495ba0` allocates `0x314`, the same
+        // else, so it maps to `Frame` rather than earning a kind (decision 1828). Factory
+        // `0x495ba0` allocates `0x314`, the same
         // size the plain-`<Frame>` factory `0x6eec10` allocates for the same base ctor `0x769090`,
         // and the ctor `0x506950` adds no field. Its vtables are the base's length exactly (36 + 11
         // slots), so it declares no new virtual; it overrides four slots, of which two are lifetime
@@ -430,10 +430,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.set_named_registry_value(REG_KIND_METAS, lua.create_table()?)?;
     let frame_meta = frame_meta_for(lua, None)?;
     lua.set_named_registry_value(REG_FRAME_META, frame_meta.clone())?;
-    // RF-0023 publishes the shared metatable as _G["__framescript_meta"].
+    // FrameScript init (`0x7039f7`) publishes the shared metatable as _G["__framescript_meta"].
     lua.globals().set("__framescript_meta", frame_meta)?;
 
-    // CreateFrame(kind, name?, parent?, inherits?) — a global (RF-0024's factory is the loader's;
+    // CreateFrame(kind, name?, parent?, inherits?) — a global (the loader's factory is `0x6ee280`;
     // this is the runtime one). `inherits` (4th) applies a registered template to the frame this
     // call just made, through `crate::loader::apply_template`.
     let create_frame = lua.create_function(create_frame)?;
@@ -457,8 +457,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SetupFullscreenScale(frame) — the registered binding `0x48c270` the stock WorldMapFrame.xml,
-    // CinematicFrame.xml and UIOptionsFrame.xml call from OnShow (decision 1980; wow-re
-    // `system/ui/scratch/setup-fullscreen-scale.md`, VERIFIED at the bytes): the frame's scale
+    // CinematicFrame.xml and UIOptionsFrame.xml call from OnShow (decision 1980): the frame's scale
     // becomes `min(0.75 · a, 1.0)` for the CONFIGURED aspect `a` — the `gxResolution` width over
     // height (the `widescreen` CVar's default of 1 selects it; at 0 the aspect is 4:3 and the
     // scale 1) — and nothing else is written: no anchor, size or position, and `UIParent`'s
@@ -585,8 +584,8 @@ fn frame_meta_for(lua: &Lua, kind: Option<FrameKind>) -> mlua::Result<Table> {
 }
 
 /// The registry keys of a frame's kind-specific method tables, **in resolution order** — the
-/// client's own class chain (CheckButton resolves through Button's map, RF-28). Empty for a plain
-/// kind, and for a wrapper whose frame is not live.
+/// client's own class chain (CheckButton's lookup `0x79a5d0` tail-calls Button's). Empty for a
+/// plain kind, and for a wrapper whose frame is not live.
 ///
 /// Every chain here is *its own table followed by its base's whole chain*, which is what lets
 /// [`frame_meta_for`] realize it as a metatable chain instead of a search: `CheckButton`'s table
@@ -679,8 +678,7 @@ pub(super) fn create_frame(
         .ok_or_else(|| mlua::Error::runtime(format!("CreateFrame: unknown frame type '{kind}'")))?;
     // **`name` and `inherits` are `lua_tostring` positions, and a NUMBER is a string to it.**
     // `0x7060b0` reads both through `0x6f3690` with no type guard at all, so `CreateFrame("Frame",
-    // 5)` names the frame `"5"` — a `Value::String`-only match drops it (wow-re
-    // `ui/scratch/xml-template-name-lookup.md` §5.2).
+    // 5)` names the frame `"5"` — a `Value::String`-only match drops it.
     //
     // The fourth argument's quirk, which is real and reads like a bug in the client: `lua_tostring`
     // runs at `0x70613f` **before** the `cmp 4` gate, and `0x6f7cb1 mov dword ptr [esi],0x4`
@@ -696,10 +694,10 @@ pub(super) fn create_frame(
     //
     // **The name-string arm is OURS, and the reference RAISES on it** — `0x7060b0` asks
     // `lua_type` three times and `cmp eax,5`: a table is the parent, nil/absent means no parent,
-    // and a string takes the error leg (`xml-template-name-lookup.md` §5.2's per-position table).
+    // and a string takes the error leg.
     //
-    // It is **parked, not pruned**, on the same footing as `TEXTURE_ONLY_METHODS`' tail three: the
-    // §5 established *that* it raises but did not quote the message, and inventing the text of a
+    // It is **parked, not pruned**, on the same footing as `TEXTURE_ONLY_METHODS`' tail three: it
+    // is known to raise, but the exact message was never quoted, and inventing the text of a
     // client error is exactly what decision 1721 was written about — a plausible string in the
     // voice of a finding. Measured meanwhile: **zero** call sites pass a string parent, in the
     // 109-folder corpus or in our own FrameXML, so the superset is unreachable in practice and
@@ -747,7 +745,7 @@ pub(super) fn create_frame(
     // addon then runs on a frame with none of the art, regions or scripts it asked for and fails
     // later, somewhere unrelated.
     //
-    // Ordering is the carved part, not a detail: the miss branch precedes the synthetic-node build
+    // Ordering is the pinned part, not a detail: the miss branch precedes the synthetic-node build
     // (`0x706208`) and the `name` store (`0x70622d`), so a miss leaves no partial widget and no
     // orphan global behind. Doing this after construction would leave both.
     if let Some(t) = template.as_deref().filter(|t| !t.is_empty()) {
@@ -769,8 +767,7 @@ pub(super) fn create_frame(
     // (`0x706225 push 0x838090 "name"` → `0x70622d` SetAttribute) alongside `parent=` and
     // `inherits=`, and hands it to the XML frame builder `0x6ee280` with the parent object in
     // `edx` — so the name reaches `CScriptRegion::SetName 0x76c650` by exactly the route an XML
-    // `name=` does, and `0x76c691` is one of the expander's two call sites (wow-re
-    // `name-string-widget-resolution.md` §5/§6).
+    // `name=` does, and `0x76c691` is one of the expander's two call sites.
     //
     // The base is the frame's **parent's** first named ancestor — the same walk `$parent` in a
     // `relativeTo` takes, one link higher than the anchoring frame's own.

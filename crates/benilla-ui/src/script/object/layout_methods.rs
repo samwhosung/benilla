@@ -115,7 +115,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             .map_or(0, |i| i.anchors.len() as i64))
     })?;
     // SetAllPoints([relativeTo]) — pin TOPLEFT+BOTTOMRIGHT to the target (default: the parent),
-    // the XML `setAllPoints="true"` behavior as a method (rf24 `0x767800`'s SetAllPoints path).
+    // the XML `setAllPoints="true"` behavior as a method (`0x767800`'s SetAllPoints path).
     set_shared(
         lua,
         m,

@@ -180,8 +180,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // (CustomNameplates:437, a four-argument later-client form). Accepted rather than skipped
     // because dropping it silently is the very class this fixes, and one real site is still a site.
     m.set(
-        // **The three argument positions are NOT one rule, and the fourth is the odd one.** Verified
-        // together in wow-re `ui/scratch/xml-template-name-lookup.md` §5.2:
+        // **The three argument positions are NOT one rule, and the fourth is the odd one:**
         //
         //  · `name` and `layer` go through `0x6f3510` (is-number-**or**-string) then `0x6f3690`, and
         //    **the result is never tested** — so a table is simply absent (unnamed / the pre-staged
@@ -211,8 +210,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     // ── The title region: Frame:CreateTitleRegion() / GetTitleRegion() ──────────────────────────
     //
-    // wow-re `system/ui/scratch/widget-api-batch-benilla.md` Q6 (`0x773910` / `0x773820`). Four
-    // details, each one a coin-flip a reimplementation loses:
+    // The byte read (`0x773910` / `0x773820`). Four details, each one a coin-flip a
+    // reimplementation loses:
     //
     //  · **It reads NO argument at all** — nothing in `0x773910`-`0x773a1f` touches Lua index 2. So
     //    `CustomNameplates/options.lua:73`'s `CreateTitleRegion(optionsFrame)` is harmless and
@@ -224,10 +223,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     //  · **A fresh one has NO anchors** and does nothing until `SetPoint`/`SetAllPoints`. Both
     //    corpus consumers immediately call `SetAllPoints`, which is the whole-window drag idiom.
     //  · **`GetTitleRegion` answers 1 value (nil)** when there is none — note the asymmetry with
-    //    `GetBackdrop`, which answers 0 values. Q6 flags it explicitly; both converged
-    //    independently there, so both are reproduced here.
-    // **ONE NAMED DIVERGENCE, because it is a superset and 1189 is what a superset costs.** Q6 says
-    // the object answers *exactly* the 19 Region methods — no Show/Hide, no scripts, no textures.
+    //    `GetBackdrop`, which answers 0 values; both are reproduced here.
+    // **ONE NAMED DIVERGENCE, because it is a superset and 1189 is what a superset costs.** The
+    // object answers *exactly* the 19 Region methods (`0x7a2ea0`, no own table) — no Show/Hide, no
+    // scripts, no textures.
     // Ours answers the whole shared region table, because Texture/FontString/Title use one
     // metatable here, so `titleRegion:SetTexture(…)` is accepted where the reference would raise
     // `attempt to call method`. It is inert rather than wrong — a title region never draws (the
@@ -299,7 +298,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // Ignoring it is 1203's class exactly: the addon asks for a font, we accept the call, and the
     // string comes out in whatever the default is with no failure anywhere.
     //
-    // The resolution order is carved (`0x773c30`): the FONT-object registry FIRST (`0x773d39`,
+    // The resolution order is fixed (`0x773c30`): the FONT-object registry FIRST (`0x773d39`,
     // create=0), and only on a font miss the template registry (`0x773d47`). This routes through
     // the `SetFontObject` binding rather than reaching into the model, which is the same call the
     // XML `<FontString inherits=>` path makes — one implementation of "apply a font object", not
@@ -333,9 +332,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 /// the exact call. So the rule for this list is one line long: **a name is accepted only once
 /// something fires it.**
 ///
-/// The 1.12 script set is fully carved (wow-re `system/ui/scratch/rf28-typed-widget-loadxml.md`
-/// l.10-18 for the base map `0x76a0d0`, the per-type sections for each widget's additions;
-/// `system/ui/ui.md` l.544-556 summarises it), so what is missing here is never a mystery — it is a
+/// The 1.12 script set is fully mapped (the base table `0x76a0d0`, plus each widget's own
+/// per-type additions), so what is missing here is never a mystery — it is a
 /// deliberate not-yet. What the corpus actually asks for, and why each answer is what it is:
 ///
 /// * **`OnKeyDown` / `OnKeyUp` / `OnChar`** (14 + 1 + 4 corpus sites over 13 addons) — **accepted**
@@ -345,7 +343,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 ///   above let them in the moment something fired them.
 /// * **`OnCursorChanged`** (4 sites over 3 addons, plus two in the SHIPPED FrameXML — all of them
 ///   the `ScrollingEdit_OnCursorChanged` auto-scroll idiom) — **accepted since decision 2141**,
-///   which built the edge this entry said was missing. The EditBox's own slot (RF-28 `+0x428`),
+///   which built the edge this entry said was missing. The EditBox's own slot (`+0x428`),
 ///   fired by the caret flush `0x77da80` with four float caret-position args in UI units;
 ///   `editbox::drain_cursor_changed` is our counterpart, on the tick, gated on the caret having
 ///   actually moved. The stock `MailFrame.xml` and `HelpFrame.xml` declare it, so until 2141 the
@@ -440,7 +438,7 @@ fn get_script(lua: &Lua, this: &Table, name: &str) -> mlua::Result<Value> {
     }
 }
 
-/// `CreateTexture`/`CreateFontString`'s third argument — `inheritsFrom` — in the carved order.
+/// `CreateTexture`/`CreateFontString`'s third argument — `inheritsFrom` — in the fixed order.
 ///
 /// **Font-object registry first, template registry second** (`0x773d39` then `0x773d47`). That
 /// order is not cosmetic: `inherits=` is one attribute over two namespaces, and every corpus caller
@@ -524,9 +522,8 @@ fn create_region(
         // 0x773a20` and `CreateFontString 0x773c30` build a synthetic node carrying
         // `name=<the Lua string>` and read it back through the same `GetAttribute(node, "name")` →
         // `CScriptRegion::SetName 0x76c650` the XML path uses, and `0x76c691` is one of that
-        // expander's two call sites (wow-re `name-string-widget-resolution.md` §5/§6, whose
-        // `name=` reader census names `0x773ba1` and `0x773dc4` — the addresses *inside* these two
-        // bindings). A region's `$parent` is its OWNER frame, so the walk starts there.
+        // expander's two call sites — `0x773ba1` and `0x773dc4` are the addresses *inside* these
+        // two bindings. A region's `$parent` is its OWNER frame, so the walk starts there.
         //
         // `pfQuest/browser.lua:723` is `pfBrowser.input:CreateTexture("$parentSearchIcon",
         // "OVERLAY")`, and every named widget FonzAppraiser builds is this idiom.

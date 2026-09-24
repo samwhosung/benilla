@@ -2,9 +2,8 @@
 //!
 //! The two bindings are `CScriptRegion` methods registered **once**, at `.data 0x87ca38` and
 //! `0x87ca40` inside the 19-record table `[0x87c9b8, 0x87ca50)` whose registrar `0x7a2e70` supplies
-//! base and count — so Frame, Texture, FontString and Model all run the *same* function (wow-re
-//! `system/ui/ui.md` §(b2), `scratch/name-string-widget-resolution.md` §3-4, ledger rows
-//! `0x7a2540`/`0x7a2940`). This module is that single function's argument half; what each caller
+//! base and count — so Frame, Texture, FontString and Model all run the *same* function
+//! (`0x7a2540`/`0x7a2940`). This module is that single function's argument half; what each caller
 //! keeps for itself is only the thing the reference reads off the receiver — the layout parent's
 //! default id, and where the anchor is stored.
 //!

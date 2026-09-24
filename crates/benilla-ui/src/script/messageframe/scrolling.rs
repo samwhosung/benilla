@@ -1,12 +1,12 @@
 //! The `ScrollingMessageFrame` method surface — the chat window's per-kind widget behavior
 //! (`CSimpleMessageScrollFrame`, ctor `0x787670`).
 //!
-//! Grounded in wow-re's byte-verified runtime model (msgframe-runtime.md, §5 pair): a **true ring**
-//! of `maxLines` (drop-oldest, `SetMaxLines` destructive), `AddMessage(text[,r,g,b[,id]])` with the
-//! `trunc(x*255+0.5)` color quantization + forced-opaque alpha, per-line fade snapshots ticked only
-//! while **AtBottom** (scrolled up freezes every alpha), 1-slot scrollback, and — the other half of
-//! that fade, `msgframe-fade-rearm-law.md` — **every scroll entry re-arming the displayed lines**,
-//! which is what brings a faded-out chat back. The heavy lifting
+//! A **true ring** of `maxLines` (drop-oldest, `SetMaxLines` destructive),
+//! `AddMessage(text[,r,g,b[,id]])` with the `trunc(x*255+0.5)` color quantization + forced-opaque
+//! alpha, per-line fade snapshots ticked only while **AtBottom** (scrolled up freezes every alpha),
+//! 1-slot scrollback, and — the other half of that fade — **every scroll entry re-arming the
+//! displayed lines** (`0x788b80` direct when the scroll is refused at an end, `0x788af0` via the
+//! relayout when it moves), which is what brings a faded-out chat back. The heavy lifting
 //! (the ring, the fade phases, the scroll clamps) lives on [`ScrollingMessageState`]
 //! (`crate::widget`), unit-tested there; this module is the thin Lua binding over it, plus the
 //! host-facing [`UiScript::add_chat_message`]/fade advance the app drives.
@@ -107,7 +107,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // quantizes round-half-up and forces the line opaque, then the fade drives its alpha.
     //
     // **The rgb gate is three separate `lua_isnumber` calls on indices 3/4/5, and the id's index
-    // is LEG-DEPENDENT** (decision 2125; wow-re `login-chat-colour-pipeline.md`): 6 when rgb are
+    // is LEG-DEPENDENT** (decision 2125): 6 when rgb are
     // present (`0x792b13 mov edx,6`), **3** when they are absent (`0x792b48 mov edx,3`) — which is
     // what makes the documented `AddMessage(text, id)` shorthand work. So `AceConsole-2.0`'s
     // `AddMessage(text, nil, nil, nil, nil, 5)` fails the R gate at index 3, takes the absent leg,
@@ -214,7 +214,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| with_smf(lua, &this, |smf| smf.at_bottom()))?,
     )?;
 
-    // SetMaxLines is destructive (msgframe-runtime.md) — the state handles the wipe.
+    // SetMaxLines is destructive (`0x7938a0`) — the state handles the wipe.
     m.set(
         "SetMaxLines",
         lua.create_function(|lua, (this, n): (Table, i64)| {
@@ -237,8 +237,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             with_smf(lua, &this, |smf| smf.fading_enabled = on)
         })?,
     )?;
-    // 1/nil, the reference's predicate shape — `binding-shapes.tsv` has this row as
-    // `(nil) | (number)`, like every other 1.12 predicate (decision 2118).
+    // 1/nil, the reference's predicate shape (`0x793a40`): `(nil) | (number)`, like every other
+    // 1.12 predicate (decision 2118).
     m.set(
         "GetFading",
         lua.create_function(|lua, this: Table| {
@@ -248,7 +248,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // The XML attr is `displayDuration`; the Lua accessors call the same field `TimeVisible`
-    // (msgframe-runtime.md).
+    // (`0x788090`).
     m.set(
         "SetTimeVisible",
         lua.create_function(|lua, (this, s): (Table, f32)| {
@@ -273,11 +273,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ── the shared font block ───────────────────────────────────────────────────────────────
     //
     // `Set/GetFontObject · Set/GetFont · Set/GetTextColor · Set/GetShadowColor ·
-    // Set/GetShadowOffset` are real entries on this class's table, not a courtesy. wow-re's
-    // registrar carve is explicit about the membership — *"Exposed on: FontString, Font object,
-    // EditBox, MessageFrame, ScrollingMessageFrame, SimpleHTML. NOT on Button"* — and names this
-    // class's own shims calling the shared implementations (`GetShadowColor 0x792240`). All six
-    // carry the block now — `SimpleHTML`'s is its own copy rather than `font_block::install`'s
+    // Set/GetShadowOffset` are real entries on this class's table, not a courtesy. The
+    // registrar map is explicit about the membership — *"Exposed on: FontString, Font object,
+    // EditBox, MessageFrame, ScrollingMessageFrame, SimpleHTML. NOT on Button"* (table
+    // `0x879d00` has none) — and names this class's own shims calling the shared
+    // implementations (`GetShadowColor 0x792240`). All six carry the block now —
+    // `SimpleHTML`'s is its own copy rather than `font_block::install`'s
     // (`script/simplehtml/mod.rs`), because that class computes its own inter-block step.
     //
     // Demand is observed, not counted: `BigWigs/Plugins/Messages.lua:212` is

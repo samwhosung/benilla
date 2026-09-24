@@ -1,10 +1,10 @@
 //! `GetNetStats()` — the connection-telemetry read the main bar's performance ("ping") meter polls.
 //!
-//! One global over one pushed number. The reference binding (`0x48b8b0`, wow-re
-//! `system/ui/scratch/bindings.md`) returns `bandwidthIn, bandwidthOut, latency`; its latency is
-//! **not** the last round trip but the average over the connection's RTT ring — wow-re net W1
-//! records `HandlePong 0x537d60` as "RTT into ring, head/tail wrap 16" feeding
-//! `0x537f20 throughput/avg-RTT math (host telemetry; no wire bytes)". The app owns that ring
+//! One global over one pushed number. The reference binding (`0x48b8b0`) returns `bandwidthIn,
+//! bandwidthOut, latency`; its latency is **not** the last round trip but the average over the
+//! connection's RTT ring — `HandlePong 0x537d60` puts the RTT into that ring (head/tail wrap 16),
+//! feeding `0x537f20`'s throughput/avg-RTT math (host telemetry; no wire bytes). The app owns
+//! that ring
 //! ([`crate`]'s consumer keeps it beside its ping clock) and pushes the average here; the engine
 //! stays free of ECS/net reach (decision 0068 §3), exactly as [`super::unit`]'s `GetMoney` does.
 //!

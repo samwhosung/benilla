@@ -6,11 +6,11 @@
 //!
 //! ## Ground truth
 //!
-//! - **RF-0023** (`wow-5875-re/system/ui/ui.md` §"The Lua frame object model"): a frame's Lua value
+//! - **The frame object model** (`0x701bd0`/`0x7020b0`): a frame's Lua value
 //!   is a table `T` with `T[0] = lightuserdata(handle)`, one *shared* metatable
 //!   `__framescript_meta` whose `__index` dispatches by method name; named frames auto-publish to
 //!   `_G` non-overwriting. See [`object`].
-//! - **RF-0025** (`ui.md` §"FrameScript handler-firing context"): a handler is fired via `pcall`
+//! - **The handler-firing context** (`0x704d50`): a handler is fired via `pcall`
 //!   with `this`/`event`/`arg1..argN` set as **globals**, saved-then-restored around the call
 //!   (nesting-safe). We also pass the *modern* `(self, event, ...)` arguments the Era addons expect
 //!   (the transition-era client did both). See [`event`].
@@ -29,12 +29,13 @@
 //!
 //! ## Identity: ids, not handle bits
 //!
-//! RF-0023 stores the `CScriptObject*` in the lightuserdata. Benilla's [`crate::widget::FrameHandle`]
-//! is an opaque generational handle with private fields (no bit accessor), so we mint a stable `u32`
-//! **id** per handle and store *that* in the lightuserdata (`id as *mut c_void`); [`Model`] owns the
-//! `id ↔ handle` bijection. The id doubles as the [`crate::layout::Handle`] used by the layout graph
-//! (frames only; the screen root is the reserved id [`SCREEN`]). This is faithful to RF-0023's intent
-//! (an opaque identity in a lightuserdata) — only the *encoding* differs.
+//! `0x701bd0` stores the `CScriptObject*` in the lightuserdata. Benilla's
+//! [`crate::widget::FrameHandle`] is an opaque generational handle with private fields (no bit
+//! accessor), so we mint a stable `u32` **id** per handle and store *that* in the lightuserdata
+//! (`id as *mut c_void`); [`Model`] owns the `id ↔ handle` bijection. The id doubles as the
+//! [`crate::layout::Handle`] used by the layout graph (frames only; the screen root is the reserved
+//! id [`SCREEN`]). This is faithful to the reference's intent (an opaque identity in a
+//! lightuserdata) — only the *encoding* differs.
 
 mod action;
 mod action_bar_toggles;
@@ -322,14 +323,14 @@ const REG_FONTSTRING_META: &str = "__benilla_fontstring_meta";
 const REG_DEFAULT_ERRORHANDLER: &str = "__benilla_default_errorhandler";
 
 /// The **Region method map** (`0xcf54b4`) — the 19 names every region leaf reaches through its own
-/// lookup's fallback, carved in wow-re `system/ui/scratch/font-object-lua-surface.md` and asserted
-/// as a SET by `tests::reference_surface`. Named here because two things need the same list: that
-/// test, and the title region's narrower method table (1250 §5).
-/// Names on **both** region leaves — and each leaf registers its own copy, so these are NOT on the
-/// Region map and must not be hoisted into it (wow-re
-/// `system/ui/scratch/texture-fontstring-method-split.md`, stated there as a trap in as many words).
+/// lookup's fallback, fixed and asserted as a SET by `tests::reference_surface`. Named here because
+/// two things need the same list: that test, and the title region's narrower method table (1250
+/// §5).
+/// Names on **both** region leaves — and each leaf registers its own copy (Texture's own
+/// `SetAlpha` `0x79b580`, FontString's `0x79cb70`), so these are NOT on the Region map and must
+/// not be hoisted into it.
 /// `GetDrawLayer` is the setter's pair on both leaves (Texture `0x79a6c0`, FontString `0x79c660`)
-/// and is here now — it was carved as absent, which was true and was a gap, not a decision; pfUI's
+/// and is here now — it was found absent, which was true and was a gap, not a decision; pfUI's
 /// `GetNoNameObject` reads it off every child of a frame it reskins.
 pub(crate) const REGION_LEAF_SHARED: [&str; 9] = [
     "SetDrawLayer",
@@ -344,7 +345,7 @@ pub(crate) const REGION_LEAF_SHARED: [&str; 9] = [
 ];
 
 /// **Texture-only.** Note `GetVertexColor` sits here while `SetVertexColor` is shared — an asymmetry
-/// no reasonable partition invents, and the carve calls it out. Also note the client's Texture map
+/// no reasonable partition invents, and the bytes call it out. Also note the client's Texture map
 /// has `SetGradientAlpha` where FontString has `SetAlphaGradient`: a near-miss pair, and we install
 /// only the FontString one.
 ///
@@ -441,17 +442,18 @@ pub const SCREEN: crate::layout::Handle = 0;
 /// six mouse handlers are driven by the hit-testing API in [`pointer`] ([`UiScript::mouse_move`] /
 /// [`mouse_button`](UiScript::mouse_button) / [`mouse_wheel`](UiScript::mouse_wheel)) — the app-side
 /// event feed (net/window → these calls) is the Bevy side's job (decision 0068). `OnValueChanged`
-/// is shared by the StatusBar (RF-28 `+0x32c`) and the Slider (`+0x330`; decision 0250) — one name,
+/// is shared by the StatusBar (`+0x32c`) and the Slider (`+0x330`; decision 0250) — one name,
 /// each kind dispatching to its own value-changed slot. The eight
-/// `On*Pressed`/text/focus slots are the EditBox's specialized scripts (RF-0082 §2): a focused EditBox
-/// fires ONLY these, never generic `OnKeyDown`/`OnChar` (its C++ override replaces those slots).
+/// `On*Pressed`/text/focus slots are the EditBox's specialized scripts (vtable `0x81c910`): a
+/// focused EditBox fires ONLY these, never generic `OnKeyDown`/`OnChar` (its C++ override replaces
+/// those slots).
 /// `OnHorizontalScroll`/`OnVerticalScroll`/`OnScrollRangeChanged` are the ScrollFrame's own slots
 /// (decision 0112; the reference's `[+0x32c]`/`[+0x334]`/`[+0x33c]`, script-name map `0x786c40`).
 /// `OnHorizontalScroll` joined the other two with the horizontal offset pair — it is fired by
 /// `SetHorizontalScroll`, which is what earns it the row below.
 /// `OnDragStart`/`OnDragStop`/`OnReceiveDrag` are the drag trio (decision 0216 §3) — driven by
 /// `RegisterForDrag` + the same mouse path as the six mouse handlers above, not a separate one.
-/// `OnColorSelect` is the ColorSelect's own slot (RF-28 `+0x338`), fired by its `SetColorRGB`.
+/// `OnColorSelect` is the ColorSelect's own slot (`+0x338`), fired by its `SetColorRGB`.
 ///
 /// **Every name here is FIRED by something.** A kind that the engine can accept but never raise is
 /// strictly worse than the `SetScript: unsupported script` error it replaces — the addon's handler
@@ -460,7 +462,7 @@ pub const SCREEN: crate::layout::Handle = 0;
 /// names the reference has that we do NOT fire stay OUT, with the reason recorded at
 /// [`crate::script::object::events_regions::set_script`].
 ///
-/// **This list is FLAT; the reference's set is per widget type** (RF-0028's script-name→slot
+/// **This list is FLAT; the reference's set is per widget type** (script-name→slot
 /// resolvers: base map `0x76a0d0` + the type's own additions — a `<Frame>` has no `OnClick`). That
 /// divergence is deliberate and measured, and the 1751 migration has been shrinking the debt it
 /// covers. Our own FrameXML used to rely on it in 9 places; seven of them were
@@ -518,14 +520,13 @@ const SCRIPT_KINDS: [&str; 39] = [
     "OnTooltipAddMoney",
     "OnTooltipCleared",
     "OnTooltipSetDefaultAnchor",
-    // The ColorSelect's own slot (RF-28 `0x78b4f0` script-map, `+0x338`): `OnColorSelect(r, g, b)`
+    // The ColorSelect's own slot (`0x78b4f0` script-map, `+0x338`): `OnColorSelect(r, g, b)`
     // — how the colour picker paints its preview swatch, and how TipBuddy's two private
     // `<ColorSelect>` frames learn a colour changed.
     "OnColorSelect",
-    // The Button/CheckButton double click (RF-28 script-map `0x778c50`, `+0x4d4`) —
+    // The Button/CheckButton double click (script-map `0x778c50`, `+0x4d4`) —
     // `OnDoubleClick(self, button)`, fired by [`pointer`]'s release-edge detector *instead of* the
-    // second `OnClick`, 300 ms (wow-re `ui/scratch/button-doubleclick-law.md`, a §5 cross-check
-    // dispatched from this work). **The corpus's
+    // second `OnClick`, 300 ms (`0x77937b`). **The corpus's
     // single biggest script gap**: 250 call sites across 85 addons, and the *only* thing behind the
     // harness's entire `SetScript: unsupported script` blocker row — 8 addons, 5 dying at load and
     // 3 at session start, every one of them a FuBar plugin or a Titan panel button
@@ -535,8 +536,8 @@ const SCRIPT_KINDS: [&str; 39] = [
     // [`crate::layout::size_changed`]'s byte-verified epsilon test — see
     // [`UiScript::resolve_layout`]. `OnSizeChanged(self, width, height)`.
     "OnSizeChanged",
-    // The three KEY channels, unblocked by [`keyboard`]'s walk (wow-re
-    // `scratch/frame-key-script-delivery.md`, VERIFIED). They were the standing exception in
+    // The three KEY channels, unblocked by [`keyboard`]'s walk (`0x765f10`). They were the
+    // standing exception in
     // [`object::events_regions`]'s note — accepted only once something fired them, which is that
     // module's whole rule. `OnKeyUp` rides in with the other two deliberately: it is *gated* today
     // (a frame carrying only an OnKeyUp consumes every key-down and runs nothing — the reference's
@@ -951,8 +952,8 @@ impl UiScript {
 
     /// Seed every Minimap widget's two zoom indices from the persisted levels — the client's
     /// minimap reset path copying each CVar object's parsed int into its live index
-    /// (`[0x86f698] ← [[0xb4b410]+0x28]`, `[0x86f69c] ← [[0xb4d90c]+0x28]`; wow-re
-    /// `wmo-interior-minimap.md`, VERIFIED). Called **once**, when the in-game UI materializes and
+    /// (`[0x86f698] ← [[0xb4b410]+0x28]`, `[0x86f69c] ← [[0xb4d90c]+0x28]`). Called **once**, when
+    /// the in-game UI materializes and
     /// the widget exists — not per frame: from then on the widget's index is the live truth and
     /// `Minimap:SetZoom` keeps the CVar following it, so a repeated push would fight the +/- buttons.
     /// Both indices clamp into `[0, MINIMAP_ZOOM_LEVELS)` exactly like `set_zoom`, so a hand-edited
@@ -975,8 +976,8 @@ impl UiScript {
 
     /// [`UiScript::run`] over a chunk that came off disk, which is **bytes** (decision 1193).
     ///
-    /// The reference slurps the file and hands the buffer to `luaL_loadbuffer` with no conversion
-    /// (wow-5875-re `system/ui/ui.md`), and Lua 5.0 strings are byte strings — so a cp1252 locale
+    /// The reference slurps the file (`0x704bc0`) and hands the buffer to `luaL_loadbuffer`
+    /// (`0x6f5690`) with no conversion, and Lua 5.0 strings are byte strings — so a cp1252 locale
     /// file runs there and its literals carry the raw bytes. Reading such a file as `String` is
     /// what made 76 of a real corpus's `.lua` files read as *absent* rather than as text with an
     /// odd glyph. The two front-door transforms the reference's own compiler applies — the UTF-8
@@ -1117,11 +1118,12 @@ impl UiScript {
         }
     }
 
-    /// Invoke a compiled handler `func` under the RF-0025 frame-globals convention (`this`/`self` =
-    /// `wrapper`), the same set/restore path registry handlers use. For the [`crate::loader`], which
-    /// holds the `OnLoad` `Function` directly (to fire it bottom-up) rather than through the registry:
-    /// this keeps the convention in one home instead of duplicating it. Errors are returned so the
-    /// caller routes them (the loader records them in its own report).
+    /// Invoke a compiled handler `func` under the `0x704d50` frame-globals convention
+    /// (`this`/`self` = `wrapper`), the same set/restore path registry handlers use. For the
+    /// [`crate::loader`], which holds the `OnLoad` `Function` directly (to fire it bottom-up)
+    /// rather than through the registry: this keeps the convention in one home instead of
+    /// duplicating it. Errors are returned so the caller routes them (the loader records them in
+    /// its own report).
     /// Whether the frame with this global name is effectively visible — shown, with every ancestor
     /// shown (`IsVisible()`'s answer, read host-side). `false` for a name no live frame carries.
     /// The read side of a window for a host that keeps state per window: the dressing-room feed
@@ -1323,14 +1325,13 @@ impl UiScript {
         // list, and the binary says otherwise: `[CButton+0x334]` has exactly three writers
         // image-wide (the ctor, the fired-double zero, the fired-single stamp) and none of them is
         // a hide, a disable, or a mouse-leave — so a half-finished double click really does survive
-        // the cursor leaving the window and coming back inside the 300 ms (wow-re
-        // `ui/scratch/button-doubleclick-law.md`, "state hygiene").
+        // the cursor leaving the window and coming back inside the 300 ms.
         // A thumb drag in progress when the pointer leaves is abandoned too (decision 0250 §5) —
         // the release that would end it is never fed, same leak as the drag gesture above.
         model.slider_drag = None;
     }
 
-    // ── Keyboard entry (RF-0082 §1/§2: the EditBox focus + key/char routing) ─────────────────────
+    // ── Keyboard entry (the EditBox focus + key/char routing law below) ──────────────────────────
     //
     // benilla speaks *key names*, not scancodes — the host maps its window keycodes to these. The
     // routing is the client's exactly: if a box is focused it processes and CONSUMES every event; if
@@ -1340,9 +1341,9 @@ impl UiScript {
     // `autoFocus` box focusing itself on SHOW, which we do not implement yet (the flag's own doc
     // carries the correction and what it waits on).
 
-    /// A typed character (may be multi-byte UTF-8) arriving from the host. Routes per §1/§2 and, on a
-    /// focused box, inserts it (numeric/cap/password rules apply) or — for the Ctrl+A control code —
-    /// selects all. Returns `true` if consumed (a focused box consumes every char).
+    /// A typed character (may be multi-byte UTF-8) arriving from the host. Routes per that law and,
+    /// on a focused box, inserts it (numeric/cap/password rules apply) or — for the Ctrl+A control
+    /// code — selects all. Returns `true` if consumed (a focused box consumes every char).
     pub fn char_input(&mut self, text: &str) -> bool {
         // The frame walk first ([`keyboard`]): the focused box is a PARTICIPANT in it, at its own
         // strata/level, so this is not "frames before boxes" — it is the reference's one dispatcher
@@ -1362,7 +1363,7 @@ impl UiScript {
     /// A non-character key press arriving from the host, by name — the three *box-event* keys
     /// (`"ENTER"`, `"ESCAPE"`, `"TAB"`) fire their FrameXML scripts; editing keys arrive as
     /// semantic [`EditAction`]s via [`Self::editbox_action`] instead (the host's per-OS keymap
-    /// owns which chord means what). Routes per §1/§2; a focused box consumes the key even when
+    /// owns which chord means what). Routes per that law; a focused box consumes the key even when
     /// it does nothing with it. Returns `true` if consumed.
     pub fn key_input(&mut self, key: &str) -> bool {
         // Same two-stage shape as `char_input` — see its note.
@@ -1373,7 +1374,7 @@ impl UiScript {
     /// (BACKSPACE, DELETE, the arrows, HOME, END), offered to the **keyboard frames** first.
     ///
     /// Returns `true` if a frame consumed it, in which case the caller must NOT also dispatch the
-    /// chord — and the key's binding must not fire either (consumption suppresses it, wow-re §3).
+    /// chord — and the key's binding must not fire either (consumption suppresses it, `0x76b7d0`).
     /// A `false` means either nothing wanted it or the focused box owns it; the caller proceeds
     /// exactly as it did before this entry point existed. See [`keyboard::frame_key_input`] for
     /// why declining at the box is the faithful answer rather than skipping it.
@@ -1412,7 +1413,7 @@ impl UiScript {
     }
 
     /// Whether an EditBox currently holds keyboard focus (and is effectively visible) — the app gates
-    /// world/player key input on this, matching the client's `DAT_00cf4dc8 != 0` test (RF-0082 §1).
+    /// world/player key input on this, matching the client's `DAT_00cf4dc8 != 0` test.
     pub fn has_keyboard_focus(&self) -> bool {
         let model = self.model_ref();
         model
@@ -1559,8 +1560,8 @@ impl UiScript {
         model.arena.region(h).map(|r| match r.kind {
             crate::widget::RegionKind::Texture => "Texture",
             crate::widget::RegionKind::FontString => "FontString",
-            // A title region is a plain Region and says so (Q6) — and it is unreachable by name
-            // anyway: `CreateTitleRegion` takes no name argument at all.
+            // A title region is a plain Region and says so (`0x76c440`) — and it is unreachable by
+            // name anyway: `CreateTitleRegion` takes no name argument at all.
             crate::widget::RegionKind::Title => "Region",
         })
     }
@@ -1607,7 +1608,7 @@ impl UiScript {
     }
 
     /// Hand every queued script error to the Lua-side error handler — the reference's own shape:
-    /// `seterrorhandler`/`geterrorhandler` are engine globals (wow-re `scratch/lua-dialect.md`,
+    /// `seterrorhandler`/`geterrorhandler` are engine globals (`0x702900`/`0x702950`,
     /// the captured `_G`), the engine invokes the registered handler on a caught script error
     /// (that is the pair's contract — a handler nothing invokes would be two dead globals), and
     /// FrameXML answers with `_ERRORMESSAGE` → the red ScriptErrors dialog (decision 1305).
