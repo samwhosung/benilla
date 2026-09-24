@@ -1,6 +1,5 @@
 //! **Cold breath** — the visible vapour a unit puffs from its mouth in a cold zone (B233,
-//! decision 1149; wow-re `object-layer/scratch/cold-breath-law.md`, §5 two independent pairs +
-//! byte arbitration).
+//! decision 1149).
 //!
 //! The client hangs three mutually-exclusive puffs off one animation event, and they are the
 //! `$BTH` family: cold vapour, underwater bubbles, and the drunk's bubbles. This module owns the
@@ -41,7 +40,7 @@
 //! ## Stated divergences
 //!
 //! - **The underwater rung is not modelled** — but it is now fully specified rather than open:
-//!   what is missing is the work, not the law (`cold-breath-law.md` §4b). The test is
+//!   what is missing is the work, not the law (`0x607710`'s liquid arm). The test is
 //!
 //!   ```text
 //!   underwater ⟺ 5.0 + SCALE_X · boxHeight < liquidSurfaceZ − unitZ

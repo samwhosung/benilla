@@ -34,7 +34,7 @@ pub(crate) struct AnimSoundEvent {
     /// event.position)`, resolved here at the fire and carried by value exactly as the M2 event
     /// kernel `0x719370` snapshots it into the deferred callback record that every dispatcher
     /// (`0x5ffbd0` units, `0x5f3e20` GameObjects, `0x6951e0` placed models) then reads (decision
-    /// 1904; wow-re `spell/scratch/camera-shake-producers.md` §5).
+    /// 1904).
     ///
     /// It is emphatically not the object's origin: corpus-wide 149 of 244 `$DSL` records sit off
     /// it, out to **67.6 yd** on `Maraudon_Waterfall01.m2`, and the six `$CSD` records every
@@ -69,8 +69,7 @@ impl EventFrame<'_> {
 }
 
 /// A footfall is **two independent channels**, and a tag belongs to exactly one of them — the
-/// client's event dispatcher `0x5ffbd0` routes them to two different handlers (wow-re
-/// `footprint-decals.md` §1, §5 4-agent round, byte-arbitrated):
+/// client's event dispatcher `0x5ffbd0` routes them to two different handlers:
 ///
 /// - **`$FSD` → `0x623390`: the footstep SOUND**, and nothing else — it never reaches the decal
 ///   path ([`is_footstep_sound`]).
@@ -95,8 +94,7 @@ pub(crate) fn is_footstep_sound(ident: &[u8; 4]) -> bool {
 /// origin (decision 1856).
 ///
 /// **Measured from the CAMERA EYE, not the local player.** `FUN_004818f0()` returns
-/// `[[0xb4b2bc]+0x65b8]` — the *active camera* — and its `+0x8/+0xc/+0x10` is the eye; wow-re
-/// corrected that mislabel in `dist2-gate.md` (2026-08-22, with the camera-dtor proof).
+/// `[[0xb4b2bc]+0x65b8]` — the *active camera* — and its `+0x8/+0xc/+0x10` is the eye.
 ///
 /// **Unconditional** — the local player's own feet are gated like anyone else's. The reference's
 /// `GUID == local player` compare (`0x5fc042`–`0x5fc06b`) is the decal call's fifth argument, the
@@ -117,8 +115,7 @@ const FOOTFALL_RADIUS_SQ: f32 = 2500.0;
 /// bit product is exact, and the sum of three ≤50-bit values is exact — which also makes the
 /// reference's `(dz² + dy²) + dx²` summation order unobservable here, so this does not pretend to
 /// map its axis names onto ours. Round once on the way out and the f32 handed to the compare is
-/// bit-identical (wow-re `dist2-gate.md`, the shared kernel + its `fstp`-round-trip exception
-/// list; `footfall-camera-distance-gate.md` for this call site).
+/// bit-identical.
 ///
 /// The compare is **strict** — bail iff `> FOOTFALL_RADIUS_SQ`, so exactly 50 yd passes, and so
 /// does a NaN: `test ah,0x41; je` reads ZF and takes the unordered result as "keep", which Rust's
@@ -171,7 +168,7 @@ pub(crate) type TrackMemory = bevy::ecs::entity::EntityHashMap<TrackSeek>;
 /// [`super::driver::drive_animations`] so the clip/seek state is this frame's. Per unit we
 /// remember the playing node and its seek ([`TrackSeek`]); a loop wrap fires the tail
 /// `(prev, duration]` then the head `[0, cur]` — a `t = 0` key really does re-fire on every wrap,
-/// in the reference too (wow-re `m2-event-track-walker.md` §2), which is why a held turn-in-place
+/// in the reference too (the walker `0x719370`), which is why a held turn-in-place
 /// lays a footprint pair twice a second there as well.
 ///
 /// Arming is [`advance_track`]'s: an arm frame fires nothing, the frame after it opens the clip's
@@ -535,8 +532,8 @@ mod tests {
 
     /// The turn-in-place cadence, which this change deliberately leaves alone: HumanMale's
     /// ShuffleLeft (anim 11) is a **0.500 s loop** whose only keys are `$SL0` and `$SR0`, both at
-    /// `t = 0.000`, and the reference re-fires a `t = 0` key on **every wrap** (wow-re
-    /// `m2-event-track-walker.md` §2, byte-traced) — so a held turn lays a print pair twice a
+    /// `t = 0.000`, and the reference re-fires a `t = 0` key on **every wrap** (the walker
+    /// `0x719370`) — so a held turn lays a print pair twice a
     /// second in the real client too.
     #[test]
     fn a_loop_wrap_refires_the_head_keys() {

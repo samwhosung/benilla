@@ -91,8 +91,8 @@ pub(super) fn run(
         Mode::Entering(sp) => {
             // The swim re-latch does NOT cut the hop's kick: JumpStart PLAYS OUT over the
             // re-latch and the swim gait resumes only at its end (decision 0517 —
-            // director-corrected against the ref; the §5's static cut-at-relatch law could
-            // not reproduce the screen and is flagged wow-re-side for a live capture).
+            // director-corrected against the ref; the static byte reading, a cut where the freeze
+            // gate `0x5fd8e8` releases, could not reproduce the screen and is unconfirmed live).
             // Only the swim re-latch holds — a ground landing, a water exit, or a new
             // Special still cuts (0503's snapshot-freeze).
             let swim_relatch_hold = sp == select::Special::Jump
@@ -266,10 +266,10 @@ pub(super) fn run(
             } else if matches!(under, Some(select::Special::Jump | select::Special::Fall)) {
                 // The airborne-freeze (`0x5fd8e8` keep-current): mid-arc nothing re-picks
                 // bone 0 — a finished clip clamps and holds its last frame for the rest of
-                // the arc (the §6 clamp path), and a mid-air flag change is a keep-current
+                // the arc (the clamp at `0x7145db`), and a mid-air flag change is a keep-current
                 // no-op. The only exits are the edges above: the FALLINGFAR latch's Fall
                 // and the land pick at touchdown. This holds over Fall too: 0864's per-tick
-                // Fall(40) re-assert was §5-REFUTED (decision 0868 — Fall plays ONCE, at the
+                // Fall(40) re-assert was refuted (decision 0868 — Fall plays ONCE, at the
                 // latch edge `0x61a820@0x61a9eb`; `0x5ff030` is a wire-apply path, not a
                 // tick), so a clip that takes bone 0 after the latch holds until landing.
             } else if let Some(sp) = under {
@@ -293,10 +293,9 @@ pub(super) fn run(
                 }
             } else if oneshot_finished(player, anims, id, catalog) || mv.flags != drv.gait_flags {
                 // A finished one-shot recomputes the base — the ranged FIRE clips included
-                // (decision 1544, superseding 0994 §1). 0994 held them out on
-                // `shooter-stop-law.md` §J4's claim that the completion dispatcher `0x5fc3f0`
-                // is never reached for a bow id; wow-re's §5 refuted that as an absence proof
-                // whose census could not see its second fire site — the natural-completion path
+                // (decision 1544, superseding 0994 §1). 0994 held them out on the claim that
+                // the completion dispatcher `0x5fc3f0` is never reached for a bow id; it is,
+                // through a second fire site — the natural-completion path
                 // enqueues the callback as a plain ARGUMENT (`0x7194f5` pushes mode 0) and
                 // `0x7074b0` invokes it later as `call [esi+4]`, so a scan for
                 // `call dword ptr [reg+0x70]` misses it by construction. 46/49/107 land on the
@@ -367,7 +366,7 @@ pub(super) fn run(
                 );
                 drv.gait = None;
             } else if airborne_frozen && drv.gait.is_some_and(|g| g != DEATH) {
-                // The airborne-freeze on the STEP-OFF arc — the exact §5-verified gate
+                // The airborne-freeze on the STEP-OFF arc — the exact gate
                 // (`0x5fd8e8`: `FALLING && (FALLINGFAR || vz ≠ 0)`, decisions 0864/0868;
                 // the selector chain's leg right after death): mid-air the selector never
                 // re-picks, so the takeoff-frozen gait keeps rolling mid-cycle AND the live
@@ -461,7 +460,7 @@ pub(super) fn run(
                 // (self: the latch; remote: the flag — the `looting` predicate above) on a
                 // stationary, unmounted unit, the gait slot holds Loot 50 — over the cast
                 // pin, the Ready/ranged idles, the chair loops and the state-emote idle
-                // alike (the `0x5fd8b0` chain order, §5-verified: locomotion → LOOT →
+                // alike (the `0x5fd8b0` chain order: locomotion → LOOT →
                 // standState → combat/channel). The trigger dropping cross-fades back to
                 // whatever the slot picks next.
                 let loot_cands;
@@ -492,7 +491,7 @@ pub(super) fn run(
                 };
                 let target = cands[0];
                 // **The turn-shuffle is released by its own clip window, not by the turn ending**
-                // (decision 1655, wow-re `object-layer/scratch/turn-shuffle-lifecycle.md`).
+                // (decision 1655).
                 //
                 // The client's only per-frame poll of a standing unit's base animation is
                 // `0x607ed0`'s tail, and it *refuses* this exact transition: with the shuffle
@@ -519,7 +518,7 @@ pub(super) fn run(
                     }
                     _ => target,
                 };
-                // Each RF-0057 candidate, in priority order, resolved through the model's own
+                // Each `0x5fd8b0` candidate, in priority order, resolved through the model's own
                 // baked fallback (decision 0082) before moving to the next candidate — a model
                 // missing the exact id still plays its baked substitute rather than stepping
                 // down the selector's own list early. The state-emote idle's id (above) resolves
@@ -537,8 +536,8 @@ pub(super) fn run(
                     // sweeping every node of the id. A completed ranged Load simply clamps at
                     // full draw and stays there; nothing promotes it (0994).
                 } else if let Some(c) = clip {
-                    // **The two bypasses the reference keeps** (wow-re
-                    // `base-anim-lock-knockdown.md` §6/§7.6): the death poses and the mount attach
+                    // **The two bypasses the reference keeps** (`0x5fc563`,
+                    // `0x607b44`): the death poses and the mount attach
                     // write the arm primitive directly and are not gated by the base-anim lock. In
                     // benilla both arrive as ordinary gait targets, so they say so here — a body
                     // knocked flat and then killed must still fall dead, and mounting during a
@@ -557,8 +556,8 @@ pub(super) fn run(
                     } else {
                         // A looping base arm rolls its variation when relaxed (decision 0123 —
                         // the client's base-arm `variationIdx = −1`; a combat/cast arm keeps the
-                        // deterministic head) AND its replay budget (decision 0516 §7d — the
-                        // watchdog window). A re-armed Stand landing on its rare look-around
+                        // deterministic head) AND its replay budget (decision 0516, `0x712784`
+                        // — the watchdog window). A re-armed Stand landing on its rare look-around
                         // variations IS the idle fidget.
                         let (c, budget) = roll_loop(anims, c, relaxed, rng);
                         if traced && benilla_assets::trace::enabled() {
@@ -618,7 +617,7 @@ pub(super) fn run(
 }
 
 /// Has the base slot's armed looping clip finished its **replay window** — the client's
-/// `windowHi = windowLo + span·R` (decision 0516 §7d, wow-re `loop-replay-fidget.md` §7a)?
+/// `windowHi = windowLo + span·R` (`0x712784`, decision 0516)?
 ///
 /// `true` when there is no window to wait on at all: a slot with nothing armed, or one whose
 /// window a newer arm superseded, is not something to hold a shuffle against. The driver's own

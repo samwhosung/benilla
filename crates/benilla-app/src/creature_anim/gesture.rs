@@ -11,8 +11,6 @@
 //!
 //! The same dispatcher has a second caller — the **NPC-interact** path, always with code 0 (talk) —
 //! which is why [`crate::target::click`] pushes through here too instead of writing a raw AnimID.
-//!
-//! Byte-exact spec: wow-re `object-layer/scratch/chat-talk-gesture.md`.
 
 use bevy::prelude::*;
 

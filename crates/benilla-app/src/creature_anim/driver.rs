@@ -59,7 +59,7 @@ use wound::{wound_evict, wound_trigger, wound_upkeep, WoundEdge};
 /// value as the per-arm sheath ceremony's overlay weight.
 const ONESHOT_OVERLAY_WEIGHT: f32 = 8.0;
 
-/// The key-bone **fade-to-rest** window (decision 0878 — wow-re `oneshot-lifecycle.md` §5.4): a
+/// The key-bone **fade-to-rest** window (decision 0878): a
 /// finished upper-body one-shot is never stopped. The client's per-frame advance latches the
 /// completion (`0x719370`), the deferred event reaches `CGUnit::OnAnimationFinished 0x5fc920` the
 /// same frame, and that calls op4 with `param_3 = -1` (`0x5fcacb`) — which snapshots the clip's
@@ -83,7 +83,7 @@ enum OneShotReq {
 }
 
 /// The currently-armed one-shot the combat fast-path tests — the client's key-bone-else-bone-0
-/// current-id read (`0x5fe422`, wow-re `combat-anim-fastpath.md` §1): the masked overlay while
+/// current-id read (`0x5fe422`): the masked overlay while
 /// its node still plays, else the full-body [`Mode::Swing`] clip while unfinished. Gait and
 /// Special clips are never returned; their ids aren't combat, so nothing is lost at the
 /// classifier gate.
@@ -194,8 +194,7 @@ fn overlay_fade_upkeep(drv: &mut AnimDriver, player: &mut AnimationPlayer, dt: f
     }
 }
 
-/// The **TRANSPLANT** (`0x5fe919` — wow-re `oneshot-lifecycle.md` §3a, the half
-/// `anim-composition-model.md` §2 was missing; decision 0878). A base **locomotion** clip
+/// The **TRANSPLANT** (`0x5fe919`, decision 0878). A base **locomotion** clip
 /// requested while bone 0 still plays a live **CAST** or **COMBAT** one-shot does not replace it:
 /// the client copies the bone-0 descriptor — its id, its rate, and `+0x08` the clip's **live
 /// elapsed position** — onto the key-bone with `blendFlag = 0`, then hands bone 0 the request. The
@@ -319,8 +318,8 @@ pub(super) fn drive_animations(
         // …and the host's granted modes, for the same reason `unify` reads them on the rider.
         Option<&crate::net::UnitMoveModes>,
         // …and the rider's own `OBJECT_FIELD_SCALE_X`: a mount child's transform carries only its
-        // `CreatureDisplayInfo` column, and the mount renders at the PRODUCT of the two (the
-        // byte-verified mount composition, wow-re `0x613ef0`). The rate divisor wants that product
+        // `CreatureDisplayInfo` column, and the mount renders at the PRODUCT of the two
+        // (`0x613ef0`). The rate divisor wants that product
         // — the mount model's world scale — not the child's local column (decision 0903).
         &Transform,
         // …and whether the rider is US, which only the debug trace reads (decision 0906).
@@ -564,7 +563,7 @@ pub(super) fn drive_animations(
         if movement.is_none() {
             mv.stand_state = store.map_or(0, |s| s.0.unit_stand_state());
         }
-        // Mounted forces stand-state 0 on every recompute (`0x5fdf80`, wow-re sheath-policy §3):
+        // Mounted forces stand-state 0 on every recompute (`0x5fdf80`):
         // no sit/sleep/kneel pose can hold in the saddle.
         if mounted {
             mv.stand_state = 0;
@@ -578,7 +577,7 @@ pub(super) fn drive_animations(
         // mounts are mutually exclusive anyway.
         mv.stealthed = store.is_some_and(|s| s.0.unit_is_stealthed());
         let moving = mv.flags & move_flags::ANY_MOVE != 0;
-        // The airborne arc's bookkeeping (wow-re land-anim-height-gate + rf57b §2): on the arc's
+        // The airborne arc's bookkeeping (jump `0x60e480`, land `0x602c60`): on the arc's
         // FIRST airborne frame, its launch vertical speed splits a **jump** (upward — the client's
         // JumpStart/Jump bracket rides the MSG_MOVE_JUMP event) from a **step-off fall** (level or
         // downward — no bracket; the gait freezes until FALLINGFAR latches Fall 40, and an
@@ -629,7 +628,7 @@ pub(super) fn drive_animations(
         if falling && (!was_falling || launched) {
             drv.jump_arc = mv.vertical_speed > JUMP_ARC_MIN_UP;
         }
-        // The airborne-freeze's exact gate (`0x5fd8e8`, §5-arbitrated — decision 0868):
+        // The airborne-freeze's exact gate (`0x5fd8e8`, decision 0868):
         // keep-current iff `FALLING && (FALLINGFAR || vz ≠ 0)`. The vz clause pins every real
         // arc (ballistics make vz ≠ 0 from the first integrated substep); the one uncovered
         // case is a fresh walk-off's vz == 0 substep, where the client genuinely may re-pick.
@@ -638,7 +637,7 @@ pub(super) fn drive_animations(
         let airborne_frozen =
             falling && (mv.flags & move_flags::FALLING_FAR != 0 || mv.vertical_speed != 0.0);
         // The idle re-face turn-shuffle (decision 0123 — the client's facing-delta latch
-        // `0x607ed0`, wow-re `loop-replay-fidget.md` §5b): a stationary creature easing its yaw
+        // `0x607ed0`): a stationary creature easing its yaw
         // toward its target reads as *turning* to the anim layer, so the gait picks
         // ShuffleLeft/Right and each Shuffle→Stand return re-arms (and, relaxed, re-rolls) Stand
         // — the fidget's recurring trigger. Gated like the client's can-fidget gate (`0x5fce30`:
@@ -709,8 +708,7 @@ pub(super) fn drive_animations(
             continue;
         }
 
-        // **The mount transition's own bone-0 arm** (wow-re `mount-cast-anim-disposition.md` §1 +
-        // `mount-composition.md` Q4, §5 2026-08-03). Both legs of the `UNIT_FIELD_MOUNTDISPLAYID`
+        // **The mount transition's own bone-0 arm**. Both legs of the `UNIT_FIELD_MOUNTDISPLAYID`
         // watcher arm the BODY's bone 0 through op4 `0x7121a0` on the PRIMARY slot: the build
         // `0x607b44` plays **91 `Mount`** with a cross-fade, the teardown `0x607ce0` plays seq
         // **0 `Stand`** with the cross-fade **off** (decision 0931 — the two legs are the same
@@ -780,9 +778,8 @@ pub(super) fn drive_animations(
             drv.deferred = None; // a normal arm clears the fast-path cache (`0x5fe48e`)
         }
 
-        // The loot kneel's trigger (see [`select::LOOT`]; byte-verified, wow-re
-        // `loot-anim-leg.md` §5/§8 — decisions 0515 / 1471 / 1477): the leg needs **two**
-        // predicates, and both SPLIT on IsActivePlayer.
+        // The loot kneel's trigger (see [`select::LOOT`]; decisions 0515 / 1471 / 1477): the
+        // leg needs **two** predicates, and both SPLIT on IsActivePlayer.
         //
         // **Self.** Predicate A (`0x6126b0`) is "a loot session is open" — the client-local
         // loot-target latch. Predicate B (`0x612710`) is the per-object-CLASS filter: which
@@ -818,9 +815,9 @@ pub(super) fn drive_animations(
         } else {
             current_special(&mv, drv.jump_arc)
         };
-        // The loot leg outranks the standState pose resolver (the rf57 chain calls loot before
-        // standState): a looting unit kneels at the loot, never into a sit/sleep bracket. The
-        // airborne Specials keep their precedence (the chain's airborne freeze runs first).
+        // The loot leg outranks the standState pose resolver (the `0x5fd8b0` chain calls loot
+        // before standState): a looting unit kneels at the loot, never into a sit/sleep bracket.
+        // The airborne Specials keep their precedence (the chain's airborne freeze runs first).
         let special = special.filter(|s| !(looting && matches!(s, select::Special::Pose(_))));
 
         // ── Sheath state (decision 0080). The unit's rendered sheath is the **client-side
@@ -829,9 +826,9 @@ pub(super) fn drive_animations(
         // *changes* (the `0x604c70` field-apply — a remote unit's own client volunteered the
         // change; our own echo arrives already-committed and adopts as a no-op), and written by
         // the one-setter requests here + the per-animation reconcile below. Every transition
-        // **snaps by default** — byte-verified across all 24 SetSheatheState call sites (wow-re
-        // `sheath-policy.md`): only the manual toggle's request carries the ceremony, and the
-        // draw/stow sound rides the ceremony playback (no clip → no sound).
+        // **snaps by default** — across all 24 call sites of SetSheatheState `0x611cf0`: only the
+        // manual toggle's request carries the ceremony, and the draw/stow sound rides the ceremony
+        // playback (no clip → no sound).
         let sheath_frame_start = drv.sheath_cur;
         let sheath_byte = store.and_then(|s| s.0.unit_sheath_state()).unwrap_or(0);
         if drv.sheath_cur.is_none() || drv.sheath_byte != Some(sheath_byte) {
@@ -849,7 +846,7 @@ pub(super) fn drive_animations(
         // stow point). A ceremony without playable clips degrades to the snap.
         if let Some(req) = pending_sheath.get(&entity) {
             let cur = drv.sheath_cur.unwrap_or(0);
-            // Mounted is a persistent DRAW-BLOCK (wow-re `sheath-policy.md` §3: the client's
+            // Mounted is a persistent DRAW-BLOCK (the client's
             // recompute `0x5fdf80` tests the mount model FIRST and forces stowed on every
             // PlayAnimation — nothing can stay drawn on a mount). The client's composite
             // recomputes constantly (the mount's own gait plays); our rider track goes silent
@@ -917,8 +914,8 @@ pub(super) fn drive_animations(
         // (op4 `blendFlag≠0` copies the outgoing pose over `+0xc4..`). So this frame's plays are
         // tracked — full-body plays (bone 0: the base track) evict a full-body wound; masked-slot
         // plays (the key-bone) evict a masked wound. A play on the *other* bone leaves the wound
-        // decaying (the §5's inherited-swing case). Mode/gait changes proxy the mode machine's own
-        // base plays; the flags catch the same-id re-plays the proxy can't see.
+        // decaying (the kernel `0x714260`'s inherited-swing case). Mode/gait changes proxy the
+        // mode machine's own base plays; the flags catch the same-id re-plays the proxy can't see.
         // ── The **base-animation lock**'s clearer, keyed on the FINISHED id and run before
         // anything re-picks the base this frame — the reference clears at `0x5fc9c6`, above
         // `OnAnimationFinished`'s own reason branch, so completion and pre-emption both release it
@@ -947,7 +944,7 @@ pub(super) fn drive_animations(
                 return None;
             }
             // `DO_NOT_PLAY_WOUND_ANIM` takes the **parry** with the flinch (`0x60ec1f`, the bit's
-            // second and last consumer — wow-re `wound-parry-gate-and-injury-vocal.md` Q1/Q6).
+            // second and last consumer).
             // The gate is inside `0x60ec00`, which the `$CPP` ladder enters only on
             // victimState 3: DODGE/DEFLECT (30) and BLOCK (24) go straight to PlayAnimation from
             // `0x624a90`/`0x624a74` and are NOT gated — a flagged creature still dodges and still
@@ -1012,7 +1009,7 @@ pub(super) fn drive_animations(
         // hit re-parks its own request — both what the client's `0x5fe48e`/`0x5fe480` do).
         // NEVER mid-air: the read (`0x5fd392`, inside the `0x5fd360` recompute arm) sits
         // downstream of the airborne-freeze, so a park made mid-arc waits — and dies at the
-        // landing play's clear (§5-verified, decision 0868).
+        // landing play's clear (decision 0868).
         if requests.is_empty()
             && drv.deferred.is_some()
             && !airborne_frozen
@@ -1028,7 +1025,7 @@ pub(super) fn drive_animations(
             if drv.base_lock.refuses() {
                 continue;
             }
-            // The COMBAT FAST-PATH (`0x5fe43c`–`0x5fe48b`, wow-re `combat-anim-fastpath.md`,
+            // The COMBAT FAST-PATH (`0x5fe43c`–`0x5fe48b`,
             // decision 0406): a combat clip requested while another combat clip is playing is
             // NOT armed — the CURRENT clip's rate doubles (op6 2.0f re-times its remainder,
             // pose-continuous) and the request parks in the `+0xd60` cache to play afterwards.
@@ -1075,7 +1072,7 @@ pub(super) fn drive_animations(
                 }
                 continue;
             }
-            // Mounted forces the masked route (byte-verified, wow-re mount-composition B1:
+            // Mounted forces the masked route (`0x5fe2f0`'s mounted branch:
             // upper-body one-shots route to the key-bone while mounted, and the 91-force would
             // reclaim bone 0 on the next play anyway): a full-body /wave would replace the seat
             // pose with a standing wave floating over the saddle.
@@ -1097,7 +1094,7 @@ pub(super) fn drive_animations(
                 // swaps the torso in one frame. Note the full-body branch below deliberately does
                 // NOT touch the overlay: on that route the client's key-bone slot keeps its current
                 // descriptor (a dedup no-op), so a standing emote over a still-running masked swing
-                // plays legs-only underneath it (`0x5fe930`; wow-re claim 6 CONFIRMED).
+                // plays legs-only underneath it (`0x5fe930`).
                 retire_overlay(
                     &mut drv,
                     &mut player,
@@ -1119,7 +1116,7 @@ pub(super) fn drive_animations(
                 // Full-body route (standing idle / airborne non-combat), or the split-boneless
                 // masked fallback (the client's −1 key-bone sentinel arms bone 0 too): the clip
                 // replaces the base on bone 0 — **even over a Special**. The client never drops a
-                // play: one slot, last-writer-wins (decisions 0083/0087; the wow-re §3 route puts
+                // play: one slot, last-writer-wins (decisions 0083/0087; the route `0x5fe6c8` puts
                 // a jump-in-place cast/emote on bone 0, replacing the hang — decision 0864 is the
                 // ref's mid-air cast). Cutting an airborne clip freezes the outgoing node first —
                 // the pose-snapshot decay of the client's op4 blend, scoped exactly like
@@ -1186,7 +1183,7 @@ pub(super) fn drive_animations(
         if special_edge {
             drv.deferred = None;
         }
-        // The looping-variation ADVANCE (decision 0516 — wow-re `loop-replay-fidget.md` §7/§7d,
+        // The looping-variation ADVANCE (decision 0516 —
         // the per-frame watchdog `0x719370`): every looping arm installed a window `R`
         // clip-lengths wide; when the armed node — still the MAIN animation (the client checks
         // the armed block: any newer arm superseded the window) — completes its `R` passes, the
@@ -1341,7 +1338,7 @@ pub(super) fn drive_animations(
             if done {
                 // Freeze the held frame, then retire it: the client's snapshot copies an already
                 // *expired* window, so the secondary clamps to `seq.end` and the fade runs from
-                // the clip's final pose (`oneshot-lifecycle.md` §5.4).
+                // the clip's final pose (`0x7123af`).
                 if let Some(a) = player.animation_mut(ov.node) {
                     a.set_speed(0.0);
                 }
@@ -1480,18 +1477,18 @@ pub(super) fn drive_animations(
             // 1. `0x60ea9f` → `0x6125f0`: the victim's cached creature template carries
             //    `type_flags` bit `0x8`, **DO_NOT_PLAY_WOUND_ANIM** — a skeleton, a ghost, a
             //    bone golem has no flesh to recoil, and the reference refuses every flinch it
-            //    would ever take, melee and spell alike (decision 2068; wow-re
-            //    `melee-blood-spurt-suppression.md` §6). It gates the ANIMATION only: the blood
-            //    spurt is a separate system reading [`SwingImpact`] itself, and wow-re §8 Q1 is
-            //    explicit that nothing keyed on creature type suppresses it — a skeleton bleeds.
+            //    would ever take, melee and spell alike (decision 2068). It gates the ANIMATION
+            //    only: the blood spurt is a separate system reading [`SwingImpact`] itself, and
+            //    nothing keyed on creature type suppresses it (`0x624530` → `0x625010`) — a
+            //    skeleton bleeds.
             //    A record we have not received yet reads as NOT flagged, which is `0x6125f0`'s
             //    own null-record leg (`return record ? … : false`), so a creature whose query is
             //    still in flight flinches there too.
-            // 2. `0x60eaac`–`0x60eac8` (wow-re `charproc-rate-override-wound-gate.md`, decision
-            //    2063): a CharProc-11 rate-override node on the unit's effect list — the freeze
-            //    auras' node, Freezing Trap / Ice Block / petrify / web wrap — refuses EVERY
-            //    flinch for as long as it lives. The gate is the node's presence, not its rate
-            //    (kit 3071's 1.0 gates too), so it reads the node list, not the pause it applies.
+            // 2. `0x60eaac`–`0x60eac8` (decision 2063): a CharProc-11 rate-override node on the
+            //    unit's effect list — the freeze auras' node, Freezing Trap / Ice Block /
+            //    petrify / web wrap — refuses EVERY flinch for as long as it lives. The gate is
+            //    the node's presence, not its rate (kit 3071's 1.0 gates too), so it reads the
+            //    node list, not the pause it applies.
             //
             // `no_wound_anim` is read once above, where the parry pick — the flag's other
             // consumer — needs the same answer.
@@ -1535,15 +1532,15 @@ pub(super) fn drive_animations(
         // (gossip, loot, mounts) inherit the policy with zero new sheath wiring.
         // The reconcile tests the **requested** id, not the model-resolved substitute (decision
         // 0125, director-eyes falsification of 0082's resolved-id reading): the client's arm
-        // descriptor carries the id that was ASKED FOR (the cast-override §2.1 writes the kit's
-        // own anim id even on a model lacking the sequence), and `0x5fdb50` reads that
+        // descriptor carries the id that was ASKED FOR (the cast-override `0x5fde80` writes the
+        // kit's own anim id even on a model lacking the sequence), and `0x5fdb50` reads that
         // descriptor. The two differ only when a model lacks the requested clip — the ground
         // truth is GnollCaster.m2: no ReadySpellDirected(51) at all, its hold falls back to a
         // flags-less Stand for *playback*, yet the ref still stows the staff for the whole
         // windup — only 51's own `&4` row can do that. (0082's chicken rationale collapses under
         // the same lens: requested Attack2H's 0x20 vs resolved AttackUnarmed's 0x10 is
-        // unobservable on a weaponless chicken.) Byte arbitration of `0x5fdb50`'s miss path is
-        // dispatched to wow-re; the director's eyes outrank the old reading meanwhile.
+        // unobservable on a weaponless chicken.) The byte reading of `0x5fdb50`'s miss path is
+        // open; the director's eyes outrank the old reading meanwhile.
         // The reconcile must see **every play** (decision 0087 (d)): the client's `0x5fdf80` runs
         // inside `PlayAnimation` itself, so a *masked* one-shot — which never touched `mode`, so
         // `active_anim()` still reports the base gait — is reconciled all the same. A masked emote
@@ -1577,9 +1574,8 @@ pub(super) fn drive_animations(
             if let Some(forced) =
                 select::reconcile_sheath(cur, anim, flags, engaged, is_self, sheath_byte, mounted)
             {
-                // The ranged wind-up **bracket** (wow-re `ranged-sheath-exempt-autorepeat.md`,
-                // Q1's ordering law): the client surrounds every ranged kit play with ranged
-                // snaps — `0x60f34c` before the play, the outer send/START `SetSheatheState
+                // The ranged wind-up **bracket**: the client surrounds every ranged kit play with
+                // ranged snaps — `0x60f34c` before the play, the outer send/START `SetSheatheState
                 // (2,1,1)` after — so ReadyThrown 108's genuine force-stow (NOT in the `0x5fe180`
                 // exempt set) exists but never renders: the snap always wins the frame. Our
                 // frame-spread ECS can't reproduce the call-stack order, so the bracket is
@@ -1607,7 +1603,7 @@ pub(super) fn drive_animations(
             }
         }
         // Leaving the ranged sheath stance un-nocks (the client's `0x60fc72` un-nock, gated
-        // `[+0xd40] != 2`; wow-re `nocked-ammo-cancel.md`): however the state left 2 this frame
+        // `[+0xd40] != 2`): however the state left 2 this frame
         // — a stow/melee request, the reconcile, the server byte — the ammo model drops.
         // Re-drawing shows no ammo until the next `SMSG_SPELL_START` re-affirms it.
         if sheath_frame_start == Some(2) && drv.sheath_cur != Some(2) {
@@ -1617,8 +1613,7 @@ pub(super) fn drive_animations(
         }
         // …and **TRANSLATING** un-nocks too — the arrow leaves the hand and the string relaxes,
         // while the cached ammo display survives for the next pull and the weapon stays DRAWN.
-        // Byte-verified (wow-re `shooter-stop-law.md` §J1.1, which refuted our recorded "nothing
-        // in the client un-nocks on movement"): `0x60e480` is a movement-OPCODE dispatcher whose
+        // `0x60e480` is a movement-OPCODE dispatcher whose
         // jump-table arm 0 runs `0x60e4ac call 0x60f530` (un-nock) + `RecomputeBaseAnim(-1)`, and
         // arm 0 is reached by exactly MSG_MOVE_START_{FORWARD, BACKWARD, STRAFE_LEFT,
         // STRAFE_RIGHT, SWIM} (181/182/184/185/202). **Turning and stopping do NOT un-nock** —
@@ -1628,8 +1623,8 @@ pub(super) fn drive_animations(
         //
         // The reference's trigger is the START opcode (an edge); a level test is equivalent here
         // because the only thing that can re-latch is `$BWP`, authored solely in the Load clips —
-        // which a translating unit never plays. Sheath is untouched (§J1's claim-4 split: REFUTED
-        // for un-nock, CONFIRMED for stow — `[+0xd40]` has no movement-path writer).
+        // which a translating unit never plays. Sheath is untouched (`[+0xd40]` has no
+        // movement-path writer: only the ctor's `0x5fafa0` and `0x611cf0` write it).
         if mv.flags & (move_flags::ANY_MOVE | move_flags::SWIMMING) != 0 && nock_latched {
             commands.entity(entity).remove::<super::NockLatch>();
         }

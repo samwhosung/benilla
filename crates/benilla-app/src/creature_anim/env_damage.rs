@@ -1,6 +1,5 @@
-//! Environmental-damage feedback — the fall-landing dust puff and pain grunt (decision 0412,
-//! byte-verified wow-re `object-layer/scratch/smsg-environmentaldamage.md`). Two independent
-//! sources fire it, matching the reference's own double-fire:
+//! Environmental-damage feedback — the fall-landing dust puff and pain grunt (decision 0412).
+//! Two independent sources fire it, matching the reference's own double-fire:
 //!
 //! 1. **The wire arm** (`net/apply`): `SMSG_ENVIRONMENTALDAMAGELOG` → [`EnvDamageTable`] maps the
 //!    damage type (0 exhausted · 1 drowning · 2 fall · 3 lava · 4 slime · 5 fire) to a

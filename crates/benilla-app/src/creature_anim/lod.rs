@@ -5,7 +5,7 @@
 //! sampling off-view).
 //!
 //! 0448 shipped this as a modernization against a reference that "has NO view cull on unit
-//! skeletons" — a verdict wow-re REFUTED on 2026-08-13 (`outdoor-object-pass-election.md`: every
+//! skeletons" — a verdict that is wrong (`0x683dd0`: every
 //! scene object, units included, is frustum/horizon/room-elected each frame, and a pass-2 unit
 //! is neither drawn, nor animated, nor event-ticked — except creatures flagged `MORE_AUDIBLE`,
 //! re-linked for tick only). So this gate turned out to be the *faithful* direction, not a
@@ -393,9 +393,9 @@ mod tests {
 
     /// The gate laws in one flow (0448, events re-lawed by 1482): an off-frustum rig parks
     /// (joints repointed at the park entity, bones frozen) while its seek clock keeps advancing —
-    /// and its event keyframes FALL SILENT, because the reference's pass-2 walk never ticks an
-    /// unflagged model (the 0448 "off-screen swings must not go silent" law rested on the verdict
-    /// wow-re refuted on 2026-08-13; the flagged exception is the next test's). A woken rig and a
+    /// and its event keyframes FALL SILENT, because the reference's pass-2 walk (`0x683dd0`) never
+    /// ticks an unflagged model (the 0448 "off-screen swings must not go silent" law rested on the
+    /// wrong "no view cull" verdict; the flagged exception is the next test's). A woken rig and a
     /// never-parked twin sample the SAME pose — the absolute-clock snap, not resume-from-freeze.
     #[test]
     fn parked_rig_keeps_its_clock_falls_silent_and_wakes_to_the_absolute_pose() {

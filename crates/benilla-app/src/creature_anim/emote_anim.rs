@@ -17,10 +17,10 @@
 //! `SMSG_EMOTE` at all — so they never reach this consumer; they're the state-emote idle in the
 //! gait layer instead ([`super::select::is_bare_stand`]).
 //!
-//! **The receive-side gate is `EmoteFlags`-BLIND** (wow-re `object-layer/scratch/emote-posture-
-//! gate.md`, commit `f9584b45`, §2): the real client's `SMSG_EMOTE` handler (`0x5e66b0`) never
-//! reads the `Emotes.dbc` record at all — it suppresses only on the performer's own state, **stand-
-//! state == 3 (SLEEP)** or the **swim move-flag**, and nothing else (no sit check, no flags check).
+//! **The receive-side gate is `EmoteFlags`-BLIND**: the real client's `SMSG_EMOTE` handler
+//! (`0x5e66b0`) never reads the `Emotes.dbc` record at all — it suppresses only on the performer's
+//! own state, **stand-state == 3 (SLEEP)** or the **swim move-flag**, and nothing else (no sit
+//! check, no flags check).
 //! This is why a *seated* `/clap` still plays for observers though a seated `/bow` never even sent
 //! the packet (the send-side gate in `crate::ui_chat` stopped it there): the two gates are different
 //! and independent. [`receive_eligible`] mirrors exactly this predicate — do not add an EmoteFlags
@@ -95,12 +95,13 @@ pub(super) fn receive_eligible(stand_state: u8, swimming: bool) -> bool {
 }
 
 /// The **shared player's** half of the gate — the client's `0x5fcd20`, the single function both
-/// emote producers tail into (wow-re `chat-talk-gesture.md` §4.2/§8, gates 10 and 12). Beyond the
-/// posture pair it refuses to play while the unit is **channeling** or **in combat**.
+/// emote producers tail into. Beyond the posture pair it refuses to play while the unit is
+/// **channeling** (`0x5fcd83`) or **in combat** (`0x5fcd9d`).
 ///
 /// Two of `0x5fcd20`'s own tests are not repeated here because benilla already enforces them
-/// downstream or cannot see them: the *already-armed* test (gate 9) is the anim driver's same-id
-/// dedup, and `[+0xd58] & 0x400` (gate 11) is an internal anim-state bit with no benilla equivalent.
+/// downstream or cannot see them: the *already-armed* test (`0x5fcd5d`) is the anim driver's
+/// same-id dedup, and `[+0xd58] & 0x400` (`0x5fcd8e`) is an internal anim-state bit with no
+/// benilla equivalent.
 fn player_eligible(channeling: bool, in_combat: bool) -> bool {
     !channeling && !in_combat
 }
@@ -176,7 +177,7 @@ mod tests {
     }
 
     /// The shared player refuses while channeling or in combat — the two `0x5fcd20` tests benilla
-    /// was missing on BOTH producers, not just the new one (wow-re `chat-talk-gesture.md` §9 claim 2).
+    /// was missing on BOTH producers, not just the new one.
     #[test]
     fn channeling_or_combat_suppresses_the_play() {
         assert!(

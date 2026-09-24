@@ -259,8 +259,7 @@ fn ai_reaction(
 /// anim starts NOW; the victim feedback (blood/flinch/text/impact sounds) defers to the swing
 /// clip's attack-hit keyframe (`creature_anim::impact`, the client's `0x6247d0` router) — EXCEPT
 /// the center combat text, which the client fires **synchronously at packet parse**
-/// (`0x6255b0 → 0x629d30 → 0x703f50`, one call stack — §5-verified, wow-re
-/// `combat-text-update-emission-law.md`; decision 0580's fold-back).
+/// (`0x6255b0 → 0x629d30 → 0x703f50`, one call stack; decision 0580's fold-back).
 fn attacker_state(
     mut s: AttackerState,
     index: &GuidIndex,
@@ -330,7 +329,7 @@ fn attacker_state(
         // The **observed attacker auto-draws melee** — the ref's SECOND melee draw, independent
         // of the attack-start one, and the reason a swing is never delivered in the wrong stance:
         // `0x625829 cmp [attacker+0xd40],1; jne` → `SetSheatheState(1, bInstant=1, bFireEvent=1)`
-        // at `0x62583a`, byte-read here, tabulated in wow-re `sheath-policy.md` §1. It sits
+        // at `0x62583a`, byte-read here. It sits
         // immediately after the attacker resolve and **before** any hit-info handling, so even a
         // swing whose animation is suppressed (`HitInfo & 0x10000`) still draws. Nothing else in
         // the policy can do this job: the per-animation reconcile's melee force is gated to
@@ -421,12 +420,11 @@ fn play_spell_visual(
     }
 }
 
-/// `SMSG_ENVIRONMENTALDAMAGELOG`'s consequence (wow-re `sound/scratch/uisound-tables.md`: reader
+/// `SMSG_ENVIRONMENTALDAMAGELOG`'s consequence (reader
 /// `0x624fcc` inside `0x624f30`): the EnvironmentalDamage.dbc 6-slot table picks the damage type's
 /// SpellVisualKit — fall's is the DustCloud_Land puff — played on the victim through the ordinary
 /// discrete kit play (`0x60edf0`), the same leg the kit-push opcode rides. The pain vocal's exact
-/// trigger is a dispatched wow-re §5 (in flight) — it folds in as its own edge when the verdict
-/// lands.
+/// trigger is open — it folds in as its own edge once pinned.
 fn environmental_damage_log(
     e: EnvironmentalDamageLog,
     index: &GuidIndex,

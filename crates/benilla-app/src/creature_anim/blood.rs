@@ -1,5 +1,5 @@
 //! The melee **blood spurt** (decision 0137 phase 3) — the fourth element of the victim-feedback
-//! set (wow-re `melee-blood-spurt.md`, byte-verified `0x624530 → 0x625010`): a landed melee blow
+//! set (`0x624530 → 0x625010`): a landed melee blow
 //! hangs a small particle-emitter model (`Particles\BloodSpurts\*.mdx`) on the victim, front or
 //! back by where the attacker stands, sized by the crushing bit, colored by the creature's blood
 //! type. Independent of the wound flinch and the floating text; rides the 0122 kit-effect spawn
@@ -30,7 +30,7 @@ use super::{SpellKitFx, SwingImpact, SwingMessage};
 /// `cvars::REGISTERED` takes one row per knob a settings page actually wires (0137 phase 3).
 const VIOLENCE_LEVEL: usize = 2;
 
-/// The victim-model M2 attachment ids the spurt hangs on (`melee-blood-spurt.md`: CEffect at
+/// The victim-model M2 attachment ids the spurt hangs on (`0x625010`: CEffect at
 /// attach tag 0xf front / 0x10 back — present on every character and creature model checked).
 const ATTACH_FRONT: u16 = 15;
 const ATTACH_BACK: u16 = 16;

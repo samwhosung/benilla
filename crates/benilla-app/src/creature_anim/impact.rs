@@ -1,6 +1,5 @@
-//! The melee **impact-frame deferral** — the client's swing-hit timing, §5-verified end to end
-//! (wow-re `object-layer/scratch/melee-impact-timing.md`, f86e665a; the victim-consequence table
-//! `smsg-attackerstate-consequences.md`, ffd0b016): at SMSG receive, a locally resolved attacker
+//! The melee **impact-frame deferral** — the client's swing-hit timing: at SMSG receive, a locally
+//! resolved attacker
 //! caches the swing record (`attacker+0xd70`), plays the swing clip (rate 1.0, `0x5fe2f0`), and
 //! does **not** dispatch the victim. When the clip's playhead crosses an authored **`$AH0–3` or
 //! `$CAH`** event keyframe (rel ~300–670 ms in every shipped attack clip; the `$AH` digit picks a
@@ -41,8 +40,7 @@ use super::SwingMessage;
 use crate::net::ObjectStore;
 
 /// **The LOOTABLE front gate on the victim dispatcher** (`0x624552 test byte
-/// [[victim+0x110]+0x224],1` / `0x62455a jne 0x624689` — `UNIT_DYNAMIC_FLAGS` bit `0x1`; wow-re
-/// `melee-impact-timing.md`, byte-census landed 2026-09-07).
+/// [[victim+0x110]+0x224],1` / `0x62455a jne 0x624689` — `UNIT_DYNAMIC_FLAGS` bit `0x1`).
 ///
 /// `0x624530` bails **before every consequence it owns** — blood, wound flinch, impact sounds and
 /// the floating damage number alike (`0x624689` is the bare epilogue, and the number's call at
@@ -75,13 +73,13 @@ pub(crate) struct SwingImpact {
     pub(crate) text_only: bool,
     /// The `$AH0`–`$AH3` digit when a creature natural-weapon tag fired this dispatch — it
     /// selects the attacker's `CreatureSoundData.CustomAttack` sound column and latches
-    /// `SWINGNOHITSOUND`, replacing the generic weapon-impact sound (`0x6247d0` §f, decision
+    /// `SWINGNOHITSOUND`, replacing the generic weapon-impact sound (`0x6247d0`, decision
     /// 0525). `None` for `$CAH` (character attack-hit), the receive-time unresolved-attacker
     /// fallback, and flushes.
     pub(crate) natural: Option<u8>,
     /// **The world point of the tag that fired this dispatch** — the reference's `edi =
     /// [ebx+0x10]`, carried from `0x624862` through both weapon-sound legs and pushed at
-    /// `0x6248ef`/`0x624950` (wow-re `anim-event-position-law.md` §3). `None` for a flush and for
+    /// `0x6248ef`/`0x624950`. `None` for a flush and for
     /// the receive-time fallback, where no tag fired at all and the reference has only the unit.
     pub(crate) pos: Option<Vec3>,
 }

@@ -14,8 +14,7 @@ use super::super::{find_resolved, AnimDriver};
 use super::select::{self, jump_land_pick, Mode, Special};
 
 /// The **base-animation lock** — the reference's `[unit+0xd58]` bits `0xc0000`, which are the whole
-/// reason a Lashed player visibly falls over (VERIFIED, wow-re `base-anim-lock-knockdown.md`;
-/// decision 2096, correcting 2085's §3).
+/// reason a Lashed player visibly falls over (decision 2096, correcting 2085's §3).
 ///
 /// `CGUnit::PlayAnimation 0x5fe2f0` opens with a guard that returns having done nothing at all:
 ///
@@ -51,7 +50,7 @@ impl BaseAnimLock {
     }
 
     /// The guard: is a play refused right now? An **unconditional early return**, not a priority
-    /// comparison and not a dedup (`base-anim-lock-knockdown.md` §7.3).
+    /// comparison and not a dedup (`0x5fe3a1`).
     pub(super) fn refuses(self) -> bool {
         self.0.is_some()
     }
@@ -66,7 +65,7 @@ impl BaseAnimLock {
     /// The clearer, keyed on the **finished** id. Called once a frame before anything re-picks the
     /// base, so completion and pre-emption both release it: an overridden clip's node still reports
     /// finished at the end of its own span, which is exactly the reference's "the base stays locked
-    /// for the rest of the clip's window" when a mount arms over a knockdown (§7.6).
+    /// for the rest of the clip's window" when a mount arms over a knockdown (`0x607b44`).
     pub(super) fn release_finished(
         &mut self,
         player: &AnimationPlayer,
@@ -80,12 +79,13 @@ impl BaseAnimLock {
         }
     }
 
-    /// Drop the lock outright — the reference's other two clearing sites (§7.5/§7.6).
+    /// Drop the lock outright — the reference's other two clearing sites.
     ///
     /// A **model rebuild** needs no call here: benilla's rebuild removes [`AnimDriver`] itself
     /// (`entities::live_display`), so the lock goes with it and the unit comes back with the base
     /// unheld — which is the reference's own outcome at `0x60adee`, reached differently. What does
-    /// call it is the pair of arms the reference never gates: the death pose and the mount attach.
+    /// call it is the pair of arms the reference never gates: the death pose (`0x5fc563`) and the
+    /// mount attach (`0x607b44`).
     pub(super) fn release(&mut self) {
         self.0 = None;
     }
@@ -191,7 +191,7 @@ pub(super) fn roll_oneshot<'a>(
 }
 
 /// Pick a looping arm's **variation** (decision 0123 — the client's base-arm `variationIdx = −1`,
-/// wow-re `loop-replay-fidget.md` §5b): a **relaxed** arm makes the weighted `_rand` walk (the
+/// `0x5fe697`): a **relaxed** arm makes the weighted `_rand` walk (the
 /// same roll as a one-shot's — this is where a re-armed Stand lands on its rare look-around
 /// variations, the fidget); a combat/cast arm is forced to the deterministic head
 /// ([`select::arm_forces_head`] decides which, at the call site). The kernel itself never
@@ -213,8 +213,8 @@ pub(super) fn pick_loop_variation<'a>(
 }
 
 /// The looping arm's two rolls in op4's order (variation `0x71249a`, then the replay budget
-/// `0x712692..` — the same two `_rand` sites as a one-shot's; decision 0516, wow-re
-/// `loop-replay-fidget.md` §7d): the budget is live for **loops** too — not as a repeat cap but
+/// `0x712692..` — the same two `_rand` sites as a one-shot's; decision 0516): the budget is live
+/// for **loops** too — not as a repeat cap but
 /// as the watchdog **window**, `R` clip-lengths wide (`windowHi = arm + span·R`). Returns the
 /// armed clip + `R` = total passes before the watchdog re-arms (`R ∈ [min, max−1]` floored to 1
 /// — `replayMax` is exclusive, and `(0,0)`/`(0,1)` both play exactly once, visibly).

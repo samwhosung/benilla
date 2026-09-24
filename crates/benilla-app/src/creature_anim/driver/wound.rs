@@ -65,7 +65,8 @@ pub(super) fn wound_upkeep(entity: Entity, drv: &mut AnimDriver, player: &mut An
 /// the slot). So this frame's full-body plays (bone 0: a swing on the base, a gait/mode
 /// change) evict a FULL-BODY wound, and masked-slot plays (the key-bone: a masked swing,
 /// the cast-hold retake) evict a MASKED wound — while the *other* bone's plays leave the
-/// wound decaying (§3's inherited-swing case: a full-body swing under a masked wound).
+/// wound decaying (the kernel `0x714260`'s inherited-swing case: a full-body swing under a
+/// masked wound).
 /// This is exactly why the real client's flinch never smothers the next attack: the swing
 /// reclaims the slot the instant it starts. Mode/gait changes proxy the mode machine's
 /// plays — a change with no play (Land's re-pick) merely evicts one frame before the play
@@ -99,12 +100,12 @@ pub(super) fn wound_evict(
     }
 }
 
-/// The victim wound flinch (decision 0111 — the §5 verdict, rebuilt from bytes after
+/// The victim wound flinch (decision 0111 — rebuilt from bytes after
 /// the first routing was director-falsified): a landed hit lays the wound clip into this
 /// unit's **secondary slot** (`0x60ea70` → op4 `linkFlag=0`) — a decaying 0.75-amplitude
 /// blend overlay over whatever plays. It never touches the base track or the one-shot
 /// slot: the victim's own in-flight swing keeps running underneath (there is NO mid-swing
-/// gate — both §5 trigger agents refuted that hypothesis), and the upkeep above blends it
+/// gate), and the upkeep above blends it
 /// out and self-releases — until a same-bone re-arm evicts it (the block above; a wound
 /// triggered here is this frame's *last* write, matching the client's packet order).
 /// The trigger's own entry gates live in the caller ([`super::drive_animations`]): the victim's

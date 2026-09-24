@@ -246,7 +246,7 @@ fn stationary_cast_hold_stows_an_engaged_casters_weapon() {
 
 /// The committed-move route: the hold loops masked on the torso over the gait, and its stow must
 /// HOLD between plays — the reconcile is edge-triggered like the client's (`0x5fdf80` runs only
-/// inside `PlayAnimation`, wow-re `sheath-policy.md`), so the base track's flags-less Run never
+/// inside `PlayAnimation`), so the base track's flags-less Run never
 /// re-draws mid-hold on the frames where nothing plays. This was the caster staff bug's shape:
 /// the per-frame base-track re-assert yanked the weapon back out one frame after the retake.
 #[test]
@@ -380,7 +380,7 @@ fn spawn_fidgeter(app: &mut App) -> (Entity, Vec<AnimationNodeIndex>) {
     (unit, nodes)
 }
 
-/// The emergent idle fidget (decision 0123 — wow-re `loop-replay-fidget.md` §5b): a RELAXED base
+/// The emergent idle fidget (decision 0123): a RELAXED base
 /// arm rolls its variation (the client's `variationIdx = −1`), an engaged one is forced to the
 /// deterministic head, and the idle re-face turn-shuffle ([`crate::net::FacingStep`]) drives the
 /// Shuffle↔Stand churn whose every return to Stand re-rolls.
@@ -644,8 +644,8 @@ fn spell_flinch_picks_the_wound_by_engagement() {
     assert_eq!(node(idle), Some(2), "unengaged: StandWound(8)");
 }
 
-/// The wound trigger's fourth entry gate (`0x60eaac`–`0x60eac8`, wow-re
-/// `charproc-rate-override-wound-gate.md`; decision 2063): a CharProc-11 rate-override node on
+/// The wound trigger's fourth entry gate (`0x60eaac`–`0x60eac8`; decision 2063): a CharProc-11
+/// rate-override node on
 /// the unit — what a freeze aura (Ice Block, Freezing Trap, petrify, web wrap) leaves attached —
 /// refuses every flinch for its life. The gate is the node's *presence*: kit 3071's rate of 1.0
 /// (no freeze at all) closes it exactly like the family's 0.0. A unit without the node flinches.
@@ -801,7 +801,7 @@ fn whiff_slowdown_spares_a_non_swing_oneshot() {
 }
 
 /// A same-frame swing/kit-anim collision runs the client's COMBAT FAST-PATH (decision 0406,
-/// wow-re `combat-anim-fastpath.md`): the requests replay in [`PlaySeq`] wire order, the FIRST
+/// `0x5fe43c`–`0x5fe48b`): the requests replay in [`PlaySeq`] wire order, the FIRST
 /// arms, and the second — combat over combat — does NOT overwrite it: the armed clip doubles
 /// to 2× and the second parks in the deferred cache. Both wire orders keep the first arrival on
 /// the body. The director's ref ground truth this pins: the Eviscerate spin survives the
@@ -1058,8 +1058,8 @@ fn a_movement_flag_change_cuts_a_full_body_oneshot_immediately() {
 
 /// A stationary caster mouselook-turning: the chase-step TURN flag flickers at mouse-event
 /// cadence (set on delta frames, clear on quiet ones — `drive_body_heading`'s fold), but the
-/// client's cast pin tests `[9e8] & 0x20000f` — translation + swim, NEVER the turn bits (wow-re
-/// `spell-visual-apply.md` §2.1, `move_flags::CAST_PIN_MOVE`) — so the full-body hold stays
+/// client's cast pin tests `[9e8] & 0x20000f` — translation + swim, NEVER the turn bits
+/// (`0x5fde80`, `move_flags::CAST_PIN_MOVE`) — so the full-body hold stays
 /// pinned through the flap. Routing this through the one-shot mask (`0x20003f`) instead churned
 /// the gait hold↔Shuffle on every mouse-delta frame — the frostbolt right-drag jitter
 /// (decision 0491).
@@ -1415,7 +1415,7 @@ fn the_creep_vis_flag_prowls_the_body() {
     assert_eq!(gait(&app), Some(5), "broken stealth runs again");
 }
 
-/// The looping-variation ADVANCE (decision 0516 — wow-re `loop-replay-fidget.md` §7/§7d, the
+/// The looping-variation ADVANCE (decision 0516 — the
 /// watchdog `0x719370`): a relaxed looping base arm installs a replay window (here `(1,1)` → one
 /// pass exactly); each completed window re-arms the id through the weighted, MEMORYLESS variation
 /// walk. Over a dozen windows both authored Stand variations must take the main slot — the
@@ -1574,9 +1574,9 @@ fn a_jump_out_of_a_micro_detachment_still_enters_the_jump_bracket() {
 }
 
 /// The control on the launch rule: a step-off fall must stay a step-off fall for its whole arc.
-/// The gait freeze is the §5-verified behaviour (decision 0868) and the new edge must not reach
-/// into it — only a rise *past* the threshold is a launch, and a fall only ever accelerates
-/// downward.
+/// The gait freeze (`0x5fd8e8`) is the reference's behaviour (decision 0868) and the new edge
+/// must not reach into it — only a rise *past* the threshold is a launch, and a fall only ever
+/// accelerates downward.
 #[test]
 fn a_deepening_step_off_fall_never_becomes_a_jump() {
     let mut app = app();
@@ -1691,7 +1691,7 @@ fn landing_mid_cast_plays_the_land_pick() {
 
 /// The FALLINGFAR latch mid-one-shot is an edge (`Jump → Fall`): the client plays Fall(40)
 /// ONCE, on the substep it latches (`0x61a820` — the 0864-era per-tick re-assert was
-/// §5-refuted, decision 0868), replacing the clip. A fresh cast armed AFTER the latch then
+/// refuted, decision 0868), replacing the clip. A fresh cast armed AFTER the latch then
 /// holds bone 0 like any other airborne one-shot, until the landing pick cuts it.
 #[test]
 fn a_cast_over_the_fall_loop_holds_until_landing() {
@@ -2061,8 +2061,8 @@ fn the_step_off_arc_freezes_the_gait_against_live_pins() {
     app.update(); // settle: Stand
     let gait = |app: &App| app.world().entity(unit).get::<AnimDriver>().unwrap().gait;
     assert_eq!(gait(&app), Some(0));
-    // Step off a ledge (downward launch: no jump arc, no Special; vz ≠ 0 — the §5-verified
-    // freeze gate `FALLING && (FALLINGFAR || vz ≠ 0)`, decision 0868) …
+    // Step off a ledge (downward launch: no jump arc, no Special; vz ≠ 0 — the freeze gate
+    // `0x5fd8e8`, `FALLING && (FALLINGFAR || vz ≠ 0)`, decision 0868) …
     app.world_mut().entity_mut(unit).insert(MovementState {
         flags: move_flags::FALLING,
         vertical_speed: -3.0,
@@ -2149,7 +2149,7 @@ fn a_midair_deferred_park_survives_the_level_and_dies_at_the_landing_play() {
 }
 
 /// The deferred cache's consuming read sits DOWNSTREAM of the airborne-freeze (`0x5fd392`
-/// inside the `0x5fd360` recompute arm; §5-verified, decision 0868): a park made mid-arc is
+/// inside the `0x5fd360` recompute arm; decision 0868): a park made mid-arc is
 /// never consumed mid-air, even with the body free — it waits, and the landing edge's play
 /// clears it.
 #[test]
@@ -2194,8 +2194,8 @@ fn a_midair_park_is_not_consumed_before_landing() {
     );
 }
 
-/// **The ranged→melee handoff at every landed swing** (`0x625829`, wow-re `sheath-policy.md` §1's
-/// `0x6255b0` row) — the director's report: a bow drawn by a shot that never fired, then a melee
+/// **The ranged→melee handoff at every landed swing** (`0x625829` in
+/// `0x6255b0`) — the director's report: a bow drawn by a shot that never fired, then a melee
 /// attack, and the swings keep coming out of the bow. The reconcile provably cannot fix it, and
 /// this pins both halves: the CONTROL (a sword swing while ranged-drawn leaves the stance at 2 —
 /// the client's melee force is gated `CUR != 2`, `0x5fe0f9`/`0x5fe13b`, so the ranged stance is
@@ -2637,7 +2637,7 @@ fn a_scaled_creatures_walk_cycles_slower_than_an_unscaled_ones() {
 
 /// The mounted half of the same law: the client's divisor reads the MOUNT model
 /// (`[unit+0xdc] ?: [unit+0xd8]`), whose rendered scale is the rider's `OBJECT_FIELD_SCALE_X`
-/// times the mount's own `CreatureDisplayInfo` column (wow-re `0x613ef0`). Our mount child carries
+/// times the mount's own `CreatureDisplayInfo` column (`0x613ef0`). Our mount child carries
 /// only that column on its transform, so the driver must compose the host's in — a 1.5× sabre
 /// under a 2.0× rider divides by 3.0, not 1.5.
 #[test]
@@ -3075,11 +3075,11 @@ fn the_weapon_visual_hold_alone_never_puts_a_shooter_in_the_drawn_idle() {
 /// The mid-volley half of the same report ("when it's on and I'm running it keeps repeating the
 /// aim animation weirdly") — **re-derived, and inverted, by decision 1544.**
 ///
-/// 0994 read `shooter-stop-law.md` §J4 as: the completion dispatcher `0x5fc3f0` is never reached
-/// for a bow id, so a finished AttackBow recomputes nothing and clamps on its tail. wow-re's §5
-/// refuted that absence proof — the dispatcher has a SECOND, deferred fire site (`0x719370`
+/// 0994 read the reference as: the completion dispatcher `0x5fc3f0` is never reached for a bow
+/// id, so a finished AttackBow recomputes nothing and clamps on its tail. That absence proof is
+/// wrong — the dispatcher has a SECOND, deferred fire site (`0x719370`
 /// enqueues the callback as a plain argument with mode 0; `0x7074b0` invokes it later as
-/// `call [esi+4]`, which an instruction-encoding census cannot see) — and decoded its jump table:
+/// `call [esi+4]`, which an instruction-encoding census cannot see); its jump table:
 /// 46/49/107 land on slot 22, a bare `RecomputeBaseAnim(-1)`, and a finished Load lands on slot
 /// 11/12/15, which arms the Hold **unconditionally**.
 ///
@@ -3732,7 +3732,7 @@ fn a_disarmed_attacker_swings_and_stands_unarmed() {
 
 /// The other rung of the ladder: with **no weapon in the main hand** the disarm falls to the off
 /// hand, and that — not the dual-wield case — is what reaches AttackUnarmedOff(117) (decision
-/// 1863; wow-re `disarm-weapon-gate-law.md` §7's table).
+/// 1863; the swing selector `0x6246a0`).
 #[test]
 fn an_off_hand_only_fighter_is_the_case_that_punches_off_hand() {
     let mut app = app();
@@ -3970,9 +3970,8 @@ fn a_no_wound_creature_takes_no_flinch() {
 }
 
 /// The flag's **second** consumer: `DO_NOT_PLAY_WOUND_ANIM` takes the victim's **parry** with its
-/// flinch (`0x60ec1f` inside the parry pick `0x60ec00`, wow-re
-/// `wound-parry-gate-and-injury-vocal.md` Q1/Q6 — the bit has exactly two callers and this is the
-/// other one). The `$CPP` ladder enters `0x60ec00` only on victimState 3, so DODGE and BLOCK
+/// flinch (`0x60ec1f` inside the parry pick `0x60ec00` — the bit has exactly two callers and this
+/// is the other one). The `$CPP` ladder enters `0x60ec00` only on victimState 3, so DODGE and BLOCK
 /// reach `PlayAnimation` directly and are **not** gated: a flagged creature still dodges, it just
 /// never parries. Both halves are asserted here — the gate without its control is the bug this
 /// whole record is about.
@@ -4074,9 +4073,8 @@ fn the_no_wound_flag_takes_the_parry_but_not_the_dodge() {
 /// `0x602c60` → `0x5fd9e0` → `0x5fd8b0` → `0x5fd100`, and no locomotion id is in the combat set
 /// that takes its no-latch fast path — so a unit that simply starts running consumes the pending
 /// arm. That is what starts Charge's trail: kit 44's anim id is `-1`, `0x60f366 jl` skips the play
-/// block entirely, and the arm waits for the charge's own run (wow-re
-/// `charproc8-trail-draw-state.md` §11.5/§11.6). A one-shot-only edge would leave 38 Charge spells
-/// with no trail at all.
+/// block entirely, and the arm waits for the charge's own run. A one-shot-only edge would leave 38
+/// Charge spells with no trail at all.
 ///
 /// The other half matters as much: there is **no per-frame animation recompute** in the reference
 /// (`0x5fd8b0` has one caller and `0x5fd9e0`'s 38 sites are all event-driven), so a unit standing
@@ -4127,8 +4125,7 @@ fn a_gait_change_raises_the_anim_edge_and_a_steady_frame_does_not() {
     assert!(edge(&app), "and so does a one-shot");
 }
 
-/// **The combat fast path must NOT raise the anim edge** (decision 2076, wow-re
-/// `format7-lighting-term.md`'s second question).
+/// **The combat fast path must NOT raise the anim edge** (decision 2076).
 ///
 /// `0x5fe43c` returns at `0x5fe48b` — *before* `0x5fe48e`, the weapon-trail latch's only read —
 /// when the unit is already playing a combat animation and requests another one. So a pending
@@ -4192,7 +4189,7 @@ fn a_combat_over_combat_fast_path_does_not_raise_the_anim_edge() {
     );
 }
 
-/// The **base-animation lock** (decision 2096, VERIFIED wow-re `base-anim-lock-knockdown.md`) —
+/// The **base-animation lock** (decision 2096) —
 /// the reason a Lashed player visibly falls over, and the correction to 2085's reading.
 ///
 /// A stun's root recomputes the base unconditionally and the selector resolves `Stand(0)`; what
