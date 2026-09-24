@@ -10,7 +10,7 @@
 //! config constant and fits in a flag bit. This module is its modulate sibling, which needs a real
 //! per-instance RGB.
 //!
-//! **Where it lands in the draw (VERIFIED, wow-re `models/models.md`).** The animate kernel
+//! **Where it lands in the draw.** The animate kernel
 //! `0x714260` derives `[ebx+0x1a0..0x1a8] = tint × inputColorA` per frame (per-channel `fmul` at
 //! `0x7142cc`/`0x7142de`/`0x7142ed`); the batcher `0x70c3a9`–`0x70c4d3` clamps it to [0,1],
 //! byte-packs `0xAARRGGBB` and issues gx **SetState(1, modulatedColor)** at `0x70c8ad`, which drives
@@ -20,10 +20,6 @@
 //! `wow_model.wgsl`, which is where the shader multiplies it. An UNLIT batch's program adds the
 //! tint·M2Color term and the highlight inside one clamp (`c28 + c29`), so the fullbright path takes
 //! the tint and the highlight both.
-//!
-//! (wow-re's `ghost-death-visuals.md` §4 still flags this combine as its one INFERRED hop and asks
-//! for a models-node follow-up; `models.md` is that follow-up, and it is VERIFIED — two independent
-//! traces plus gx's applicator-arm enumeration. We build on the verified note.)
 //!
 //! **The channel: no new `MeshTag` bits.** `MeshTag` bits 19..=29 already carry the instance's rig
 //! slot ([`crate::rig_palette`]) — allocated per unit, written into every skinned part's tag at
@@ -91,7 +87,7 @@ pub fn pack(rgb: [u8; 3]) -> u32 {
 /// colour `(1,1,1)` and alpha `1.0` (`0x70ea60`-`0x70ea89`/`0x70eaca`), and `0x525261 call 0x47a230`
 /// then sets those very two fields *again* — so a ghost's portrait shows the pre-death, untinted,
 /// fully-opaque face, and "a client that tints the portrait when the ghost flags are set diverges
-/// from 1.12.1" (wow-re `ghost-death-visuals.md` §6, VERIFIED; benilla report B49, decision 1481).
+/// from 1.12.1" (benilla report B49, decision 1481).
 /// Our round portraits mirror the world entity's own children, so they carry the WORLD unit's rig
 /// slot — pushing this region into their buffer would tint them with it. Their buffer keeps the
 /// zero-initialised (identity) region instead, which is the reference's fresh-instance behaviour
@@ -204,7 +200,7 @@ mod tests {
     /// keeps `0` free as the identity sentinel — including for the one kit that authors black.
     #[test]
     fn packing_matches_the_reference_and_never_collides_with_identity() {
-        // The ghost aura's node value, byte-for-byte (wow-re: `round(9222653) | 0xff000000`).
+        // The ghost aura's node value, byte-for-byte (`round(9222653) | 0xff000000`).
         assert_eq!(pack([0x8c, 0xb9, 0xfd]), 0xff8c_b9fd);
         // Spell 27200 Defile authors param0 = 0 — a real black body tint, not an absent one.
         assert_eq!(pack([0, 0, 0]), 0xff00_0000);

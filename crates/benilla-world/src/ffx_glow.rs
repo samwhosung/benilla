@@ -2,8 +2,8 @@
 //! (`FFXEffects.cpp` / `FFXGlow.bls`), replacing the Bevy-`Bloom` approximation and its two
 //! eye-tuned constants.
 //!
-//! Pipeline (all byte-grounded — the shipped ARB programs + wow-re's `ffxeffects` T3 node):
-//! scene → ½ → ¼ downsample (dims floored at 8, `ffx_compute_rt_dims`) → separable Gauss4
+//! Pipeline (all byte-grounded — the shipped ARB programs):
+//! scene → ½ → ¼ downsample (dims floored at 8, `0x6cdb40`) → separable Gauss4
 //! (weights ⅛ ⅜ ⅜ ⅛, shipped constants) → `out = screen + w·blur²` in gamma bytes, `w` = the
 //! per-zone `LightParams.glow` weight (authored data; the ONLY input, no knobs). The gamma-space
 //! byte math and the square-law are in `shaders/ffx_glow.wgsl`.
@@ -65,8 +65,8 @@ pub struct FfxGlow {
     ///
     /// **The law, and why it is ONE field.** The reference runs its FFX pass inside the
     /// WorldFrame's own paint — a BEGIN/END pair, `0x6cd890`/`0x6cda70`, bracketed at
-    /// `0x48350e`/`0x48379d` inside the one paint method `0x483460` (wow-re `death-pass.md` §5,
-    /// VERIFIED). It **cannot reach a bake**, for reasons that need no frame ordering: the pass's
+    /// `0x48350e`/`0x48379d` inside the one paint method `0x483460`. It **cannot reach a bake**,
+    /// for reasons that need no frame ordering: the pass's
     /// render targets come from three module globals (`0xce8b5c` full, `0xce8ae8` quarter,
     /// `0xce8b98` backbuffer) and it never observes the ambient binding — while the reference's
     /// own portrait bake `0x524f60` binds no target at all and *copies* the framebuffer corner
@@ -93,8 +93,7 @@ pub struct FfxGlow {
 ///   `[0xb4b39c]`, built at `0x481c46`; selected by `0x5de9c0` off `PLAYER_FLAGS_GHOST`;
 /// - the **glue** pair — `[0xb414c4]` glow / `[0xb41468]` death, built at CGlueMgr init
 ///   `0x46a723`/`0x46a752`; selected by the select build's tail `0x472fd9 test dh,0x20` off the
-///   selected roster record's `CHARSELECT+0xfc & 0x2000` (wow-re `death-pass.md` §4(c) +
-///   `glue-select-model.md` §A2, both VERIFIED).
+///   selected roster record's `CHARSELECT+0xfc & 0x2000`.
 ///
 /// benilla's views coexist where the reference's screens take turns, so what the reference
 /// expresses as one global slot written by whoever paints, we express as a property of the view.
@@ -145,7 +144,7 @@ impl FfxGlow {
     };
     /// **Decode only, no glow** — for a bake that stands in for a 1.12 *UI model widget*. The
     /// reference applies its FFX pass inside the WorldFrame's own paint (the `0x6cd890`/`0x6cda70`
-    /// BEGIN/END bracket at `0x48350e`/`0x48379d`, wow-re `death-pass.md` §5); every UI frame
+    /// BEGIN/END bracket at `0x48350e`/`0x48379d`); every UI frame
     /// paints afterwards, at its own strata, so a `<PlayerModel>` pane is composited over an
     /// already-glowed world and never glows itself. (The give-away in-game: the reference's chat
     /// text and buttons don't bloom.)
@@ -197,8 +196,9 @@ pub struct FfxBackdrop {
 #[derive(Resource, Clone, ExtractResource)]
 pub struct FfxGlowGain(pub f32);
 
-/// The FFXDeath gate (decision 0308 §7, byte-VERIFIED wow-re death-pass.md): `1.0` while the
-/// player is a released ghost — the combine swaps to the FFXDeath program whole — else `0.0`.
+/// The FFXDeath gate (decision 0308 §7): `1.0` while the
+/// player is a released ghost (`0x5de9c0`) — the combine swaps to the FFXDeath program whole —
+/// else `0.0`.
 /// INSTANT on both edges (the client has no time ramp; the ghost tint is a shader constant).
 /// Driven by `benilla-app`'s death arc off `PLAYER_FLAGS_GHOST`; uploaded as the combine
 /// uniform's `y`, scaled per view by [`FfxGlow::state_scale`] — it is a **player-state** pass and
@@ -207,7 +207,7 @@ pub struct FfxGlowGain(pub f32);
 pub struct FfxDeathFade(pub f32);
 
 /// **The glue screens' FFX state** — the two things the select build's tail writes, and nothing
-/// else (`0x472fba`–`0x473007`, byte-read from wow-re's own disassembly; the fork is
+/// else (`0x472fba`–`0x473007`; the fork is
 /// `472fd9 test dh,0x20` on the selected record's `CHARSELECT+0xfc`):
 ///
 /// ```text
@@ -219,7 +219,7 @@ pub struct FfxDeathFade(pub f32);
 ///
 /// `[esi+0x110]` is the DN/lighting singleton's `LightParams.glow` (`esi` = `0x6d48b0()` =
 /// `&0xce9b60`) — the same scalar `0x6cb930` reads for the death combine's **alpha byte**
-/// (`glow × 255`, `death-pass.md` §3) and the glow combine reads for its blur² weight. So on a glue
+/// (`glow × 255`) and the glow combine reads for its blur² weight. So on a glue
 /// screen the glow weight is not a zone value at all: it is one of two constants, chosen by the
 /// same bit that chooses the pass.
 ///
@@ -287,8 +287,8 @@ impl GlueFfx {
 
 /// The haze mix `z` — the combine's screen-toward-blur cross-fade
 /// (`out = lerp(screen, blur, z) + w·blur²`, the shipped FFXGlow.bls). The reference's glow
-/// render packs it per frame from the **active player's** state (`0x6cb134`/`0x6cb599`, wow-re
-/// `ffxeffects/scratch/drunk-blur-z.md`, decision 1009 §A):
+/// render packs it per frame from the **active player's** state (`0x6cb134`/`0x6cb599`,
+/// decision 1009 §A):
 /// `z = max(min(drunkByte,100)/100, submerged ? 84/255 : 0)` — fully blurred at 100 inebriation,
 /// and a fixed ≈0.329 floor whenever the **camera eye** is in any liquid (the vanilla underwater
 /// blur; `0x672470`'s eye-liquid probe, `0xf` = dry). Synced by [`sync_haze`]; uploaded as the
@@ -320,14 +320,12 @@ fn sync_haze(
     }
 }
 
-/// **The GlowWave lane** — the underwater screen warp's two inputs (wow-re
-/// `ffxeffects/scratch/glow-wave-underwater.md`, §5 cross-checked; decision 1824).
+/// **The GlowWave lane** — the underwater screen warp's two inputs (decision 1824).
 ///
 /// Underwater the reference swaps its whole post-process pass list: `CFFXGlow::Render 0x6cc630`
 /// walks a second list whose third pass is **FFXGlowWave** (`0x6cb1f0`, render `0x6cb310`) rather
-/// than FFXGlow, and that pass displaces the combine's two samples through a sine bump map. wow-re's
-/// note had carried the swap as an undecided "GlowWave, *or* a duplicate Glow" for months; the round
-/// that answered it found the arms mutually exclusive and the plain-Glow arm unreachable on both
+/// than FFXGlow, and that pass displaces the combine's two samples through a sine bump map. The two
+/// arms are mutually exclusive and the plain-Glow arm is unreachable on both
 /// backends, so a submerged frame is ALWAYS the wave.
 ///
 /// **No liquid-type discrimination.** `[0xc7f288] ∈ {0xf dry, 0 water, 1 ocean, 2 magma, 3 slime}`
@@ -437,8 +435,8 @@ fn wave_armed(state: FfxState, wave: FfxWave, death: f32) -> bool {
 }
 
 /// Sync the gain from the live zone lighting (the same source `sync_bloom` used). Off-world there
-/// is no `Light.dbc` zone — the reference runs its `LightParams` **default 0.5** (wow-re
-/// death-pass.md: "the zone/time-of-day ambient glow scalar, default 0.5"): the glue screens'
+/// is no `Light.dbc` zone — the reference runs its `LightParams` **default 0.5** (the
+/// zone/time-of-day ambient glow scalar's own default): the glue screens'
 /// soft glow. (Before this, the glue rendered with the derive-default 0.0 — no glow at all.)
 fn sync_gain(
     lighting: Option<Res<crate::lighting::WowLighting>>,
@@ -509,8 +507,7 @@ struct FfxGlowPipelines {
     /// REPEAT is load-bearing, not a default. The wave texcoord's scale runs to `W/128` — ten full
     /// cycles across a 1280-wide screen — so under CLAMP every cycle but the first would pin to the
     /// edge texel and the warp would vanish over ~90% of the frame. It is byte-closed to
-    /// `D3DTADDRESS_WRAP` (`0x5a2646`/`0x5a266a` through the table `0x80a254 = {CLAMP, WRAP}`), and
-    /// misreading it was the costliest near-miss of the round that derived this.
+    /// `D3DTADDRESS_WRAP` (`0x5a2646`/`0x5a266a` through the table `0x80a254 = {CLAMP, WRAP}`).
     wave_view: TextureView,
     wave_sampler: Sampler,
     downsample: CachedRenderPipelineId,
@@ -723,8 +720,8 @@ fn init_pipelines(
     });
 }
 
-/// The two ¼-res ping-pong targets (the reference downsamples full→¼ in ONE Box4 pass —
-/// wow-re blur-geometry.md; a ½ intermediate would be one downsample too many), plus the
+/// The two ¼-res ping-pong targets (the reference downsamples full→¼ in ONE Box4 pass,
+/// `0x6ca9d0`; a ½ intermediate would be one downsample too many), plus the
 /// GPU objects derived from them, so the node does not recreate them per frame.
 #[derive(Component)]
 struct FfxGlowTextures {
@@ -854,7 +851,7 @@ fn prepare_textures(
         // frame costs that lookup and nothing else.
         let own = specializer.pair(FinalPassTarget::format(&camera.output_mode, target));
         let combine = (!claims.0.contains(&entity)).then_some(own);
-        // The reference's RT-dim chain: ½ and ¼, floored (clamp ≥8 — `ffx_compute_rt_dims`).
+        // The reference's RT-dim chain: ½ and ¼, floored (clamp ≥8 — `0x6cdb40`).
         let mut tex = |label: &'static str, w: u32, h: u32| {
             texture_cache.get(
                 &render_device,
@@ -995,7 +992,7 @@ impl FfxPassState {
 
     /// The **glue** pair's live state. Death only, and the constructor is where that is enforced:
     /// the reference's haze is `primary.z` of the *WorldFrame* glow combine `0x6cb020`, packed from
-    /// the active player's inebriation and the camera-eye liquid probe (`drunk-blur-z.md`) — a glue
+    /// the active player's inebriation and the camera-eye liquid probe — a glue
     /// screen has neither, and CGlueMgr's pair has no lane to read them into. Passing a haze here
     /// should be impossible rather than merely wrong.
     fn glue(death: f32) -> Self {
@@ -1772,8 +1769,8 @@ mod tests {
     }
 
     /// GOLDEN — the three writers of the glue screens' `LightParams.glow`, and the alpha byte the
-    /// death combine quantizes the ghost one into. Every number byte-VERIFIED (wow-re
-    /// `glue-select-ghost-treatment.md`); each constant has exactly one reference image-wide.
+    /// death combine quantizes the ghost one into. Each constant has exactly one reference
+    /// image-wide.
     ///
     /// The default is a shown-but-unselected glue screen — login, create, and an empty account —
     /// which is the state the login screen renders in and which is NOT either select arm.

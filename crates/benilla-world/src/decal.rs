@@ -1,6 +1,6 @@
 //! The shared world-surface **decal projector** — the reference's own ground-decal mechanism
-//! (wow-re selection-circle RE §2 + unit-blob-shadow RE, the `0x6d7330` → `0x6d6fa0` matrices →
-//! `0x6d7480` emit chain): gather the triangles of every [`GroundDecalSurface`] collider (terrain
+//! (the `0x6d7330` → `0x6d6fa0` matrices → `0x6d7480` emit chain): gather the triangles of every
+//! [`GroundDecalSurface`] collider (terrain
 //! tiles + WMO faces — **never** doodads/GameObjects) whose BVH overlaps a projection box, clip
 //! each to the box ([`clip_to_frame`]), and emit them with planar top-down UVs. Because the
 //! emitted triangles are exact sub-pieces of the drawn surfaces, a decal is pixel-coplanar with

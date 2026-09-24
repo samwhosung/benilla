@@ -2,8 +2,8 @@
 //! markers). The real 1.12 client re-orients the bone to the camera every frame; benilla otherwise
 //! renders M2 geometry in its static bind pose, single-sided.
 //!
-//! **The re-orientation law is byte-pinned** (wow-re `animation/scratch/billboard-bone-law.md`,
-//! §5): the M2 bone palette is computed in **VIEW space**, and a billboard bone's matrix rows are
+//! **The re-orientation law is byte-pinned**: the M2 bone palette is computed in **VIEW space**,
+//! and a billboard bone's matrix rows are
 //! REPLACED with the camera basis — spherical (`0x08`) takes the whole fixed basis (bone X toward
 //! the viewer, Y screen-right, Z screen-up: the identity rows `{(0,0,−1),(1,0,0),(0,1,0)}` at
 //! `0x714463`); the lock arms (`0x10`/`0x20`/`0x40` = keep X/Y/Z) keep their authored axis and
@@ -66,7 +66,7 @@ pub struct BillboardCard {
     arm_neg_ms: u32,
     /// The gseq [`Self::scale_anim`]'s ATTACH anchor (ms): `None` until the first placement pass
     /// stamps it — the reference snapshots the scene clock once per model instance at attach
-    /// (`CM2Model+0x68`, wow-re `gseq-anchor.md`; decision 0856), so a row of lampposts streamed
+    /// (`CM2Model+0x68`; decision 0856), so a row of lampposts streamed
     /// in on different frames breathes at per-instance phases, while same-frame spawns share
     /// one. Distinct from [`Self::arm_neg_ms`]: the gseq anchor is stamped once per instance,
     /// the sequence cursor re-arms per play. (An earlier position-hash de-sync here emulated
@@ -146,7 +146,7 @@ impl BillboardCard {
     /// emitter lane (`entities::equipment::spawn`): an item model spawns no rig, so nothing else
     /// would apply the replacement to a particle emitter hanging under a billboard bone — and the
     /// reference folds the emitter's record position through exactly this matrix
-    /// (wow-re `part-anchoring-live-bone.md` §1 row 3).
+    /// (`0x7190a9`–`0x71910c`).
     ///
     /// It is the same mechanism as a card and deliberately not a second one (decision 0153's rule):
     /// same basis, same pivot law, same follow/despawn contract, one system. A card without a
@@ -211,8 +211,8 @@ impl BillboardCard {
 }
 
 /// A bone's rewritten **effective parent matrix** — the `flags & 0x7` arm the reference takes at
-/// `m2_animate` `0x71496d`–`0x714d0c`, before the billboard selector and before the bone's own TRS
-/// composes onto it (wow-re `billboard-bone-law.md` §9.1/§9.5, byte-verified). This is not an
+/// `0x71496d`–`0x714d0c`, before the billboard selector and before the bone's own TRS
+/// composes onto it. This is not an
 /// escape hatch from the billboard: it changes the input the billboard law is applied to, and the
 /// `&0x78` switch runs afterwards exactly as before.
 ///
@@ -333,8 +333,8 @@ pub fn billboard_basis(
 /// A rigged host whose skeleton authors billboard bones (component beside the rig's
 /// `AnimationPlayer`): the joint entities in bone order, each bone's parent, and which joints
 /// billboard. [`billboard_joint_palette`] rewrites those joints' propagated world rotations to
-/// the camera basis every frame — the byte law operates on the BONE PALETTE
-/// (`finalBoneWorld … children multiply onto this`, wow-re `billboard-bone-law.md`), so geometry
+/// the camera basis every frame — the byte law operates on the BONE PALETTE, where children
+/// multiply onto the replaced parent matrix (`0x7151ba`), so geometry
 /// skinned to a billboard bone's CHILDREN inherits the facing. The per-batch card split can
 /// never catch that case: the frost-armor sheets skin every vertex to the scale-in CHILD of the
 /// lock-Z bone, which is exactly why they rendered glued to the character.
@@ -348,7 +348,7 @@ pub struct BillboardJointRig {
     kinds: Vec<Option<BillboardKind>>,
     /// Bone flags `0x1/0x2/0x4` per joint ([`parent_arm_matrix`]) — the HandArrow/Bullet attach
     /// helpers (the nocked arrow lies flat along the facing instead of twisting with the draw
-    /// hand, wow-re `nocked-ammo-cancel.md` §E4) and every vanilla mount's rider seat.
+    /// hand) and every vanilla mount's rider seat.
     arms: Vec<Option<benilla_formats::ParentArm>>,
     /// Each bone's BIND local translation — the pivot the arm preserves. `locals` carry the
     /// ANIMATED translation, which the byte law rotates by the *new* basis, so the two are not
@@ -467,7 +467,7 @@ pub fn billboard_joint_palette(
             };
             let mut g = match (arm, parent_world) {
                 // `flags & 0x7`: rewrite the parent matrix, then compose this bone's own TRS onto
-                // it — and fall through to the billboard switch, which still runs (§9.1).
+                // it — and fall through to the billboard switch, which still runs.
                 (Some(a), Some(pw)) => GlobalTransform::from(parent_arm_matrix(
                     a,
                     pw.affine(),
@@ -709,9 +709,9 @@ mod tests {
     /// were real, this test is where it would show up as a direction that moves with the camera.
     ///
     /// The `kept_rot` argument is swept too: the spherical arm discards the pre-billboard rotation
-    /// outright (wow-re `billboard-bone-law.md` §1), so the wearer's shoulder yaw must not reach
+    /// outright (`0x7152f8`), so the wearer's shoulder yaw must not reach
     /// the result — which is *also* why the spike stops following the shoulder, the real visible
-    /// difference the arm makes (§6.3).
+    /// difference the arm makes.
     #[test]
     fn a_spike_along_its_bone_axis_points_screen_down_from_every_angle() {
         // Bevy local −Y is the pauldron spike's run axis (WoW −Z through coords.rs' X→−Z, Y→−X,
@@ -1202,7 +1202,7 @@ mod tests {
     }
 
     /// The four `flags & 0x6` legs of [`parent_arm_matrix`], each against its byte definition
-    /// (wow-re `billboard-bone-law.md` §9.5), plus the pivot-preserving tail that is the whole
+    /// (`0x71496d`–`0x714d0c`), plus the pivot-preserving tail that is the whole
     /// reason a galloping mount carries its rider without rocking them.
     ///
     /// The parent here is rotated 90° about X and scaled non-uniformly; the root is a plain 90°
@@ -1282,8 +1282,8 @@ mod tests {
         assert!((Vec3::from(moved.translation) - Vec3::new(0.0, 5.0, 0.0)).length() < 1e-5);
     }
 
-    /// The ignore-parent-rotation joint (bone flag 0x04 — the HandArrow/Bullet attach helpers,
-    /// wow-re `nocked-ammo-cancel.md` §E4): its pivot rides the parent's full matrix, its
+    /// The ignore-parent-rotation joint (bone flag 0x04 — the HandArrow/Bullet attach helpers):
+    /// its pivot rides the parent's full matrix, its
     /// ROTATION resets to the host root's frame — and a rigid child (the nocked arrow) hanging
     /// under it re-composes onto the replaced frame instead of keeping the twisted propagated one.
     #[test]
@@ -1498,7 +1498,7 @@ mod tests {
             // The spherical basis at this camera, through the WoW→Bevy axis fold
             // (`billboard_basis`'s `from_cols(-by, bz, -bx)`): Bevy-local −Z toward the viewer
             // (WoW X), Bevy-local +Y screen-up (WoW Z) — the (π,0) ray ring's camera-born plane
-            // (wow-re part-billboard-ring-emulated.md).
+            // (`0x71547c`).
             assert!(
                 (rj * -Vec3::Z).dot(Vec3::Z) > 0.999,
                 "the nested billboard faces the camera (nested_first={nested_first})"

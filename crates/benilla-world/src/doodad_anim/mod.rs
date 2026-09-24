@@ -1,9 +1,9 @@
 //! The doodad animation host (decision 0130, phase 1) — world-placed M2 doodads (ADT MDDF + WMO MODD
 //! props) animate: flags wave, windmills turn, flame bones jiggle.
 //!
-//! Byte ground (wow-5875-re `system/animation/scratch/doodad-anim-host.md`, VERIFIED): a doodad's M2
+//! Byte ground: a doodad's M2
 //! instance is armed at load — bone 0, animation id 0, `linkFlag=1` — and then **re-arms itself every
-//! play-window, for ever**, rolling a fresh frequency-weighted variation each time (§5, decision
+//! play-window, for ever**, rolling a fresh frequency-weighted variation each time (decision
 //! 0768: the watchdog `0x719370` fires on `now ≥ windowHi`, enqueues the doodad-only completion
 //! callback `0x6951b0` that `0x695100` installed at `[model+0x70]`, and that callback re-runs op4
 //! with `variationIdx = -1`, which writes the next `windowHi` and clears the latch — self-sustaining).
@@ -67,7 +67,8 @@ pub enum DoodadAnimTier<'a> {
 /// (a positioned one-shot), `$DSE` (the stop token that releases a `$DSL` — `data` is 0 on all 16
 /// shipped models) and the generic `$SND`. Routed by `benilla_app::sound::anim_events`; listed here
 /// because their presence is what earns a bind-posed model a clock it would otherwise be denied
-/// (see [`arms_for_sound`]). Byte law: wow-re `sound/scratch/doodad-sound-emitters.md`.
+/// (see [`arms_for_sound`]). Byte law: the model's animation-event callback `0x6951e0` routes on
+/// these marker FourCCs.
 pub(crate) const SOUND_EVENT_TAGS: [&[u8; 4]; 4] = [b"$DSL", b"$DSO", b"$DSE", b"$SND"];
 
 /// Does this model's **arm chain** — the loader-idle seed and its variations, the only sequences a
@@ -76,7 +77,7 @@ pub(crate) const SOUND_EVENT_TAGS: [&[u8; 4]; 4] = [b"$DSL", b"$DSO", b"$DSE", b
 /// This is deliberately NOT part of [`classify`]: the tier answers "what does this model *render*",
 /// and 0130's whole point is that a bind-posed sequence renders as the static mesh. That stays true.
 /// What it never meant is that the sequence does not *run* — the reference arms every placed doodad
-/// it creates (`0x695100` → `0x7121a0`, module docs §1/§4a) and cycles it whenever the doodad is in
+/// it creates (`0x695100` → `0x7121a0`) and cycles it whenever the doodad is in
 /// the frame's animate set, and the event track rides that clock. A humming
 /// lamp is the proof: `KalidarStreetLamp01.m2` is one looping 3.333 s Stand that keys no bone at all
 /// and carries exactly one event, `$DSL` → `NightElfStreetLampLoop`. Gating its clock on the *rig*
@@ -196,8 +197,7 @@ pub fn wants_rig(m: &M2Model) -> bool {
 /// entities; consumer anchors are minted on demand and cascade with the root),
 /// and — per tier — an `AnimationPlayer` looping the **loader-idle seed's** clip (the client's
 /// one-time load arm at `0x70ebd0`: `0x7121a0(bone 0, animation id 0 resolved through the model's
-/// own `playableAnimationLookup`, linkFlag=1)` once — wow-re `gameobject-anim-arm.md` §1, which
-/// CORRECTED `doodad-anim-host.md` §1's prose reading of `animations[0].id`; decision 0637) and/or
+/// own `playableAnimationLookup`, linkFlag=1)` once — decision 0637) and/or
 /// the free-running [`GlobalSeqDrive`] (bone-index targets, the collapsed lane). `None` ⇒ the
 /// model is static and the caller keeps today's path untouched.
 pub fn spawn_anim_host(
@@ -252,7 +252,7 @@ pub fn spawn_anim_host(
         // (the rigged arm — player + graph + variation chain)
         // The **loader's** seed only — `0x70ebd0`'s var-0 arm on the head of the chain. The real
         // pick is the holder setup's second op4 call (`0x695100`, `variationIdx = -1`), which lands
-        // *after* it and is the effective arm (wow-re §4a); here that second arm is
+        // *after* it and is the effective arm; here that second arm is
         // [`reroll_doodad_variation`]'s first pass, which fires the same frame because the host is
         // born with an already-expired window. Splitting it that way is not a convenience: it is
         // the one code path the reference has, since every later re-arm is byte-identical to the
@@ -354,10 +354,9 @@ impl DoodadAnimHost {
     /// can give: a clock-only host has no player to read at all, and a rigged one's resume seeks
     /// the player to exactly this value, so the two never disagree while the host is drawn.
     ///
-    /// It is **not** a claim that the cycle runs while the host is parked. This doc used to say the
-    /// reference gates the cycle on "linkage — residency, not the draw", and that read
-    /// `doodad-anim-host.md` §5b's *linkage* as "loaded": the note means spliced into the per-frame
-    /// scene worklist `[CM2Scene+0x20]`, which **is** the drawn/faded set — "a doodad culled out of
+    /// It is **not** a claim that the cycle runs while the host is parked. *Linkage* means spliced
+    /// into the per-frame scene worklist `[CM2Scene+0x20]`, which **is** the drawn/faded set — "a
+    /// doodad culled out of
     /// the drain stops advancing and resumes on re-link". Consumers that must honour that read
     /// [`DoodadAnimHost::active`] beside this clock; the placed-doodad sound scanner
     /// (`benilla_app::doodad_events`) does, and decision 2059 is what it cost not to.
@@ -373,7 +372,7 @@ impl DoodadAnimHost {
     }
 }
 
-/// The doodad's self-sustaining re-arm (decision 0768, wow-re `doodad-anim-host.md` §5): when the
+/// The doodad's self-sustaining re-arm (decision 0768): when the
 /// armed play-window ends, roll a fresh frequency-weighted variation of the same animation id, snap
 /// to it, and write the next window. This is the whole of bug B63's residual — the Blasted Lands
 /// lightning keys its entire burst in a 5.0 %-weighted variation (`frequency` 1638 of 32767), so
@@ -388,8 +387,7 @@ impl DoodadAnimHost {
 ///   exactly the models spliced into `[CM2Scene+0x20]`, and the doodad drain splices only what
 ///   survived frustum + occlusion + the radius-tiered fade cutoff — so in the real client a doodad
 ///   behind you *stops* advancing and, on re-link, finds `now ≥ windowHi` and re-arms at once
-///   (wow-re `animation/scratch/doodad-anim-host.md` §5b,
-///   `terrain/scratch/doodad-emitter-drawset-gate.md` §1c/§2b). Gating this here would therefore be
+///   (`0x7074b0`/`0x683f80`). Gating this here would therefore be
 ///   the faithful shape, and it is left ungated on purpose: it would freeze the whole field while
 ///   you looked away and re-roll all 31 of the Tainted Scar's placements on the frame you turned
 ///   back, and that burst is an approved *look* to weigh with the director rather than a silent
@@ -411,7 +409,7 @@ fn reroll_doodad_variation(
     let now = time.elapsed_secs();
     for (mut host, anims, player) in &mut hosts {
         let Some(anim_id) = host.anim_id else {
-            continue; // gseq-only: free-clock loops, never armed (§1)
+            continue; // gseq-only: free-clock loops, never armed
         };
         if now < host.window_hi {
             continue;
@@ -619,7 +617,7 @@ impl Plugin for DoodadAnimPlugin {
         // The client's ONE `rand()` stream (`benilla_assets::AnimRng`), seeded here because this
         // is where the engine boots and where `deterministic_run` is knowable — the reference's
         // own `srand(GetTickCount())` runs once per process from CRT static init, pre-`WinMain`
-        // (wow-re `net/scratch/crt-rand-stream-seeding.md`; decision 2301). A capture keeps the
+        // (`0x5d1c70`; decision 2301). A capture keeps the
         // CRT's pre-`srand` value, so golden frames stay reproducible.
         app.init_resource::<benilla_assets::AnimRng>();
         let deterministic = crate::dev_state::deterministic_run();
@@ -988,7 +986,7 @@ mod tests {
     }
 
     /// The gseq-only tier has no arm, so it has no play-window and nothing to re-roll: its channels
-    /// are free-clock loops the reference drives with zero arming (§1).
+    /// are free-clock loops the reference drives with zero arming.
     #[test]
     fn a_gseq_only_host_never_rerolls() {
         let mut app = reroll_app();

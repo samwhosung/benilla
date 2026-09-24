@@ -2,8 +2,9 @@
 //! placement). At tile-load each chunk's tufts are **scattered** (MCSH/normal-baked) into a per-chunk
 //! [`ClutterChunk`]; [`stream_chunk_clutter`] then **builds** its merged meshes lazily only while the
 //! chunk is within the ~70 yd detail-doodad horizon and tears them down past it — the reference's
-//! per-chunk `CDetailDoodadInst` lifecycle (`ground-effects.md` §7), which bounds live grass to a bubble
-//! and spreads the build across frames. [`ClutterPlugin`] owns the catalog + the lazy build lifecycle
+//! per-chunk `CDetailDoodadInst` lifecycle (build/unlink at the 70 yd `[0x867958]`), which bounds
+//! live grass to a bubble and spreads the build across frames. [`ClutterPlugin`] owns the
+//! catalog + the lazy build lifecycle
 //! independently of the terrain streamer; whichever streamer is active does the per-tile *scatter* (it
 //! has the tile's chunks) into the `ClutterChunk`s this builds — so the streamer can be swapped.
 
@@ -235,7 +236,8 @@ pub(crate) struct ClutterGeometry(
 );
 
 /// One MCNK chunk's ground clutter as a **lazily-built** unit — the faithful per-chunk `CDetailDoodadInst`
-/// lifecycle (`ground-effects.md` §7): scattered + MCSH/normal-baked at tile-load, but its meshes are
+/// lifecycle (build/unlink at the 70 yd `[0x867958]`): scattered + MCSH/normal-baked at
+/// tile-load, but its meshes are
 /// built only while the chunk is within the detail-doodad horizon and torn down past it. This bounds live
 /// grass to a ~70 yd bubble (vs every loaded tile) and spreads the mesh-build over frames instead of one
 /// per-tile hitch. Owned by its tile (despawned on unload, which cascades to `built`).
@@ -674,7 +676,7 @@ mod tests {
         ((254.0 - 256.0 * u) / 255.0).clamp(0.0, 252.0 / 255.0)
     }
 
-    /// wow-re `terrain/scratch/detail-doodad-distance-fade.md`: a 64-texel CLAMP/LINEAR ramp whose
+    /// The 64-texel CLAMP/LINEAR ramp (`0x6b235b` fills it, `[0x867958] = 70.0` anchors it): its
     /// texel centres give `alpha = (254 − 256u)/255`, capped at texel 0's `252/255`. So the plateau
     /// runs to 52.63672 yd (not 52.5), the ramp hits zero at 69.86328 yd (not 70), the slope is
     /// −0.0573670 per yard, and the 128/255 detail-doodad cutout erases a fully-opaque texel at

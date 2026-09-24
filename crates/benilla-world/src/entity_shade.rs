@@ -1,6 +1,5 @@
 //! Entity ground-shade (decision 0173): units, players, and GameObjects sample the terrain MCSH under
-//! them **dynamically** and dim their sun term when standing in baked ground shadow — the fold-back of
-//! wow-re's byte-verified §8a/§9 verdict (`models/scratch/m2-interior-doodad-base-light`): a spawned
+//! them **dynamically** and dim their sun term when standing in baked ground shadow: a spawned
 //! unit/player/GameObject carries the SAME 2.5-lit / 0.5-MCSH-shadowed chain as an ADT doodad, driven by
 //! a per-frame MCSH sample at the object's node position and a linear intensity ramp (`0x69e770`, the
 //! step constant `[0x810808] = 3.3333`/s), not a static spawn-time bake.
@@ -18,12 +17,12 @@
 //!
 //! **We model REGISTERED, because that is the steady state of anything we draw.** Every unit benilla
 //! renders has had its display model applied — which is exactly the node-present model-set that
-//! registers it — so unregistered is the pre-display transient, not the resting state. wow-re's own
-//! two frames bracket this and disagree with each other: a standing Stormwind player commits **×2.5**
-//! (registered, MCSH-lit) while a running Northshire player commits ×1.0
-//! (`unit-mcsh-shadow-target.md` §4). Their note marks the discriminant **Open** and hands it to us as
-//! a benilla-side observable — so a single hardwired value cannot be read off it in either direction,
-//! and 0809 read off the ×1.0 half. The director's eye settles the tie the way the ×2.5 frame does: a
+//! registers it — so unregistered is the pre-display transient, not the resting state. Two
+//! reference frames bracket this and disagree with each other: a standing Stormwind player
+//! commits **×2.5** (registered, MCSH-lit) while a running Northshire player commits ×1.0.
+//! Which discriminant governs is open, a benilla-side observable — so a single hardwired value
+//! cannot be read off it in either direction, and 0809 read off the ×1.0 half. The director's eye
+//! settles the tie the way the ×2.5 frame does: a
 //! character standing in shade reads visibly dimmer than one in sun, and flattening that was wrong.
 //!
 //! The null fallback is therefore real, verified, and **deliberately not modelled** — see 0814. If we
@@ -77,7 +76,7 @@ const SHADE_RAMP_PER_SEC: f32 = 3.3333 / 2.0;
 const RESAMPLE_DIST_SQ: f32 = 0.25;
 
 /// The ambient word's ramp rate — the binary's `[0x810804] = 2.0` colour-units/s (`0x69e770`'s
-/// FIRST chase, `[+0x9c]` → `[+0xf4]`; wow-re `unit-light-combine-storm.md` c3 — the intensity
+/// FIRST chase, `[+0x9c]` → `[+0xf4]` — the intensity
 /// chase runs at its own 3.3333).
 const AMBIENT_RAMP_PER_SEC: f32 = 2.0;
 
@@ -132,7 +131,7 @@ pub struct GroundShade {
     /// Standing on an outdoor-class WMO surface (street/deck/porch — `MOGI & 0x48`), published by
     /// the classifier: the MCSH verdict of the terrain BENEATH the building is overridden by the
     /// lit target ([`LIT_T`]; the reference's own value here is intensity 2.5) — byte-verified
-    /// (0477/0480, wow-re `unit-wmo-mcsh-gate.md`):
+    /// (0477/0480):
     /// the down-ray attach's WMO branch sets the skip-shadow bit `[node+0xd]|=0x2` (`0x6a8bc7`,
     /// every node subclass), the terrain branch clears it (`0x6a8bed`), and the exterior intensity
     /// leg commits the constant 2.5 whenever it's set (`0x69e483`→`0x69e4ad` — the MCSH sample
@@ -183,7 +182,7 @@ impl GroundShade {
     /// verdict; on an outdoor-class WMO surface the LIT point overrides (`self.target` keeps the raw
     /// sample, so a root stepping back onto terrain resumes from it); otherwise the MCSH verdict
     /// stands, for a unit exactly as for a GameObject — the target law is byte-shared and single-site
-    /// (`69e4ad`/`69e496`, wow-re `unit-mcsh-shadow-target.md` §1) and we model the registered
+    /// (`69e4ad`/`69e496`) and we model the registered
     /// delivery that consumes it (0814).
     fn effective_target(&self) -> f32 {
         if self.indoor {
@@ -218,8 +217,7 @@ impl GroundShade {
 /// WMO doodad prop spawned onto a streamed GameObject (a transport's deck cargo and its cabin
 /// furniture, `entities::wmo_props`). This file's walk must pass it by whichever payload it is on.
 ///
-/// **The reference proves the node cannot reach it** (wow-re
-/// `models/scratch/transport-wmo-doodad-light.md`, 2026-09-06, VERIFIED at the bytes): a
+/// **The reference proves the node cannot reach it**: a
 /// transport's WMO is linked into the SAME global `TSExplicitList<CMapObjDef>` (`0xca7d98`) the
 /// WMO scene walk iterates — there is no separate GameObject WMO band — so its MODD entries are
 /// ordinary doodad defs. And `[def+0xa4]`, the sun scale this file's byte models, has exactly

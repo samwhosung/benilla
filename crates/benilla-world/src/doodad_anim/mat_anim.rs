@@ -13,7 +13,7 @@ use benilla_assets::ModelAnimations;
 /// colour-alpha/weight loops + how this instance clocks them. [`sample_mat_anim`] keeps
 /// [`Self::current`] fresh; the model-`Visibility` authority multiplies it into the render-alpha
 /// `MeshTag` it already owns (a composed *input*, not an extra tag writer — the 0066 protocol) and
-/// hides the batch at combined 0 (the verified `A ≤ 0` cull, wow-re `m2-alpha-combine-cull`).
+/// hides the batch at combined 0 (the `A ≤ 0` cull, `0x707b3a`–`0x707b5c`).
 ///
 /// The loops are baked **per sequence** (`benilla_formats::AlphaAnim`), so an instance also has to
 /// say *which* sequence it is playing — see [`Self::host`].
@@ -24,7 +24,7 @@ pub struct MatAnim {
     /// frame — the **unit lane**, where the played sequence changes constantly and the batch's
     /// authored visibility changes with it (a voidwalker's upper armour is weight 0 in Stand and 1
     /// only in Death). `None` for an instance pinned to one sequence for its life: a placed doodad
-    /// (armed once at load with `animations[0]`, wow-re `doodad-anim-host.md`) or a spell effect —
+    /// (armed once at load with `animations[0]`, `0x70ebd0`/`0x7121a0`) or a spell effect —
     /// both then read [`Self::seq`] on the spawn clock, which is the pre-per-sequence behaviour.
     host: Option<Entity>,
     /// The sequence **file slot** to read: fixed at spawn for the pinned lanes, and the last one
@@ -54,7 +54,7 @@ pub struct MatAnim {
     unit_lane: bool,
     /// The gseq factors' ATTACH anchor (secs on the shared clock): `None` until the first
     /// [`sample_mat_anim`] pass stamps it — the reference snapshots the scene clock once per
-    /// model instance at attach (`CM2Model+0x68`, wow-re `gseq-anchor.md`; decisions 0856/0858).
+    /// model instance at attach (`CM2Model+0x68`; decisions 0856/0858).
     gseq_attach: Option<f64>,
     /// The last sampled combined factor (colour-alpha × weight), read by the visibility authority.
     pub current: f32,
@@ -100,8 +100,8 @@ impl MatAnim {
 
     /// Read the sequence (and its clock) from `host`'s live `AnimationPlayer` each frame instead of
     /// staying pinned to the slot this instance opened on — for a spell-effect instance that
-    /// **advances** through its authored lifecycle (`Stand` → `Hold` → `Decay`, wow-re
-    /// `ceffect-anim-lifecycle.md`), because each leg has its own authored alpha loops: Ice
+    /// **advances** through its authored lifecycle (`Stand` → `Hold` → `Decay`, `0x5ff170` arms
+    /// Hold, `0x5ff270` the terminal Decay), because each leg has its own authored alpha loops: Ice
     /// Barrier's pulse is as much the `Hold` band's oscillating transparency weights as its bone
     /// scale. `None` leaves the instance pinned (a lane with no rig has no player to ask).
     ///
@@ -151,7 +151,7 @@ impl MatAnim {
 /// ceremony, the finger grip) run on their own graph nodes and are deliberately skipped — they
 /// pose bones, they don't reselect the sequence the material tracks read. During a cross-fade two
 /// base clips are live and the heavier one wins; the reference instead blends the two sampled
-/// scalars by λ (wow-re `eval.md` FN 0x71af20's blend leg), a sub-blend-time difference on tracks
+/// scalars by λ (`0x71af20`'s blend leg), a sub-blend-time difference on tracks
 /// the corpus authors as 0/1 steps — recorded, not modelled.
 ///
 /// A player with **nothing armed** is not "no sequence" — the reference arms the loader-idle clip on
@@ -181,7 +181,7 @@ pub fn playing_seq(player: &AnimationPlayer, anims: &ModelAnimations) -> Option<
 /// skip-while-Hidden held `current` at the 0 that caused the hide — the invisible pala-heal flash).
 /// Sampling is a pure function of the clock, so an instance hidden for any *other* reason (draw
 /// gate, far-clip) still lands right on re-appear, and the reference animation-evaluates the tracks
-/// every frame regardless of the cull (wow-re `m2-alpha-combine-cull`). Runs before the visibility
+/// every frame regardless of the cull (`0x707b3a`–`0x707b5c`). Runs before the visibility
 /// authority so the tag it composes is this frame's value.
 pub fn sample_mat_anim(
     time: Res<Time>,
@@ -219,13 +219,13 @@ pub fn sample_mat_anim(
     }
 }
 
-/// The **UV-animated materials** registry (decision 0130 phase 3, wow-re `m2-texanim-uv`): each
-/// batch material carrying a texture-transform translation loop, keyed by material asset id.
+/// The **UV-animated materials** registry (decision 0130 phase 3, `0x716216`'s translation gate):
+/// each batch material carrying a texture-transform translation loop, keyed by material asset id.
 /// [`tick_anim_materials`] re-samples a *drawn* entry's offset into the material's `sun_scale.zw`
 /// each frame — one shared uniform per material, so every instance of a model batch scrolls in
 /// phase. A recorded, invisible divergence for BOTH clock laws (0856): the reference phases a
 /// seq-band loop per play (arm cursor) and a gseq loop per instance (attach anchor,
-/// `gseq-anchor.md`), but one uniform per material cannot phase per instance — meaningless for a
+/// `CM2Model+0x68`), but one uniform per material cannot phase per instance — meaningless for a
 /// seamless scroll either way. Entries drop when the material asset does.
 /// The scan marker (1375): a part whose material can ever be a [`UvAnimMaterials`]/
 /// [`TintAnimMaterials`] key — inserted at spawn, beside the registration itself, and only for a
@@ -1324,9 +1324,9 @@ mod delta_tests {
         // Half-way through the turn, and the row is `[cos − 1, sin, sx − 1, sy − 1]` of the
         // **raw, unnormalised** lerped quaternion — which is the reference's own arithmetic, not
         // an oversight: `0x713ea0` lerps each component and `0x7bddb0` consumes the result as is,
-        // so between two keys `|q| < 1` and the 2×2 is a rotation with a slight shrink (wow-re
-        // `modelframe-texanim-and-sequence-law.md` §3.4: *"a re-implementation that slerps, or
-        // normalises before building the matrix, diverges from the reference between keys"*).
+        // so between two keys `|q| < 1` and the 2×2 is a rotation with a slight shrink — a
+        // re-implementation that slerps, or normalises before building the matrix, diverges from
+        // the reference between keys.
         // Here `q = (0, 0, 0.35355, 0.85355)`, so `c = 1 − 2z² = 0.75` and `s = 2zw = 0.60355` —
         // NOT the 0.7071/0.7071 a normalised 45° would give. Asserted exactly so a future
         // "obvious fix" to normalise fails here.

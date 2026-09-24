@@ -1,5 +1,5 @@
 //! The frozen cloud noise tables — dumped from the binary or rebuilt by its exact one-time
-//! builders (wow-re `scratch/cloud-coverage-pipeline.md` §1b/§1d).
+//! builders.
 
 /// The static permutation table (`0x86f2d0`, `.rdata`) — 256 bytes, a permutation of 0..255,
 /// always indexed `& 0xff` (no doubled-512 layout). Dumped verbatim from the binary.
@@ -23,10 +23,10 @@ pub(crate) const PERM: [u8; 256] = [
     137, 214, 145,  93,  92, 100, 245,   0, 216, 186,  60,  83, 105,  97, 204,  52,
 ];
 
-/// The tone curve (`0xce91d8`) — built once at init by `dn_tone_curve 0x6d0900` (gamma 0.96,
+/// The tone curve (`0xce91d8`) — built once at init by `0x6d0900` (gamma 0.96,
 /// init threshold 101: `curve[i] = ftol(255 − 255·0.96^(i·0.6015625))`) and fixed thereafter.
 /// Frozen to the reference's exact bytes rather than recomputed through libm `pow`
-/// (cross-platform determinism; wow-re pipeline §1d).
+/// (cross-platform determinism).
 #[rustfmt::skip]
 pub(crate) const CURVE: [u8; 256] = [
       0,   6,  12,  18,  23,  29,  34,  40,  45,  50,  55,  60,  65,  69,  74,  78,

@@ -1,13 +1,11 @@
 //! The visible cloud layer — the reference's celestial-pass cloud dome (`0x6d0530` mesh,
-//! `0x6cfb00` coloring, `0x58ac70` per-regen texture upload; wow-re
-//! `scratch/cloud-coverage-pipeline.md` §3).
+//! `0x6cfb00` coloring, `0x58ac70` per-regen texture upload).
 //!
 //! The reference draws a 12-ring hemisphere strip (pole → the 45° rim, ring co-latitudes bunched
 //! toward the rim, per-ring vertex alpha fading the rim out) textured by an image generated from
 //! the coverage byte tile every regen, as the **last draw of its sky pass** — one squashed depth
-//! slice `[0.975, 0.98]` shared by stars/discs/gradient/clouds, depth-write off, painter's order
-//! (wow-re `celestial-frame-anatomy`; the earlier "discs at `[0.995, 1.0]`" note here
-//! misattributed the GLARE + occlusion-probe band to the discs) — so terrain occludes the clouds
+//! slice `[0.975, 0.98]` shared by stars/discs/gradient/clouds, depth-write off, painter's order —
+//! so terrain occludes the clouds
 //! and the clouds blend over a setting sun. We reproduce the layering with real depth: every
 //! vertex is pushed to **uniform radius** along its recentred direction (the reference's squashed
 //! cap relies on the depth-range remap; at real depth its apex would sit at `0.29·r` — inside the
@@ -51,7 +49,7 @@ pub type CloudMaterial = ExtendedMaterial<StandardMaterial, CloudExt>;
 #[derive(Asset, AsBindGroup, Clone, TypePath)]
 pub struct CloudExt {
     /// The live colored tile (RGBA8, 128², alpha = coverage), re-uploaded on regen — the
-    /// reference's `0x58ac70` zero-copy bind of the `0x6cfb00` color buffer (Addendum A §3).
+    /// reference's `0x58ac70` zero-copy bind of the `0x6cfb00` color buffer.
     #[texture(100)]
     #[sampler(101)]
     pub(crate) texels: Handle<Image>,
@@ -207,8 +205,7 @@ pub(super) fn setup_cloud_layer(
 /// crossfade the clouds keep drawing and the painted sky alpha-blends over them.
 ///
 /// A **submerged eye** hides them the same way: the scene driver's `0x6812a4` submerged test skips
-/// the whole `CSky::Render` call (byte-VERIFIED, wow-re terrain "the liquid render state") — from
-/// under the surface there is no sky, only the murk.
+/// the whole `CSky::Render` call — from under the surface there is no sky, only the murk.
 pub(super) fn apply_cloud_visibility(
     debug: Res<DebugState>,
     skybox: Res<crate::skybox::SkyboxWeight>,

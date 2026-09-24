@@ -8,7 +8,7 @@
 //! from its back is discarded before any distance is computed, and this is not a wall-slide special
 //! case: the 16 callers of `0x632ba0 earliest_contact` span falling, walking, step-up, ground-settle,
 //! transports and the water-surface arm — "the surface you stand on is filtered exactly like the wall
-//! you slide along" (decision 0967, wow-re `collision/scratch/wmo-movement-group-gate.md`; confirmed
+//! you slide along" (decision 0967; confirmed
 //! at B86's exact pin in decision 0968). parry's trimesh is two-sided by construction, which is why
 //! benilla stood on CoT's inward-wound shell where 1.12.1 falls through it.
 //!
@@ -65,8 +65,8 @@ const FACING_EPS: f32 = f32::from_bits(0xb727_c5ac);
 const DOT_EPSILON: f32 = 0.005;
 
 /// The reference's **backface band**: `[0x7ff9c8]` = `1/36` yd. A candidate face the mover has
-/// already passed by more than this is not a hit — `0x632830`'s clip (wow-re
-/// `resolve_clip.rs::polygon_toi`) rejects a face **every vertex of which** sits further than the
+/// already passed by more than this is not a hit — `0x632830`'s clip
+/// rejects a face **every vertex of which** sits further than the
 /// band behind the prism's leading plane along the motion, and keeps one with any vertex nearer
 /// than that as a hit at `t = 0`. It is what makes the resolver a *sweep* and not a solver: a body
 /// the server placed inside a hull (a seated player at a chair's origin, a caged creature) meets
@@ -496,7 +496,7 @@ fn for_each_contact(
 
 /// Has the mover already passed this triangle by more than the [`BACKFACE_BAND`]? The reference's
 /// own measure: every vertex of the face against the mover's **leading extent along the motion**
-/// (`0x632830`'s per-vertex `ray_plane_t` against the prism's leading plane). The leading extent is
+/// (`0x632830`'s per-vertex plane test against the prism's leading plane). The leading extent is
 /// the shape's support point along `dir` — for the capsule, the far segment end plus the radius.
 /// A shape with no support map (none on the movement audience) is never behind: the hit stands.
 fn behind_the_band(tri: &Triangle, shape_pose: &Pose3, shape: &Collider, dir: Vec3) -> bool {

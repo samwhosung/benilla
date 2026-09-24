@@ -1,4 +1,4 @@
-//! Clouds — the procedural sky cloud subsystem (wow-re `scratch/cloud-coverage-pipeline.md`).
+//! Clouds — the procedural sky cloud subsystem.
 //!
 //! One coverage field serves every consumer, exactly like the reference: the [`kernel`] maintains
 //! the scrolling 128² byte tile (4-octave toroidal value noise, thresholded by the authored
@@ -104,7 +104,7 @@ impl Plugin for CloudsPlugin {
 /// Advance the coverage field — a full rebuild the first frame, then the reference's ~10 Hz
 /// incremental 32-row band scroll (or the frozen capture clock) — and re-upload the colored
 /// RGBA texels when they changed (the reference's per-regen `0x58ac70` upload of the `0x6cfb00`
-/// color buffer, Addendum A §3).
+/// color buffer).
 fn tick_clouds(
     mut cov: ResMut<CloudCoverage>,
     light: Res<WowLighting>,
@@ -116,8 +116,7 @@ fn tick_clouds(
     mut was_submerged: Local<bool>,
 ) {
     // The surfacing edge — the reference's wet→dry detector `0x680ac3` fires `0x6d2210(1)`, the
-    // FULL-rebuild selector (`bl!=0` → `0x6cff90`), the frame the eye leaves the liquid
-    // (byte-VERIFIED, wow-re `water-frame-straddle.md` §4b + `cloud-coverage-pipeline.md` §0).
+    // FULL-rebuild selector (`bl!=0` → `0x6cff90`), the frame the eye leaves the liquid.
     // Without it the incremental 32-row scroll restores the field band-by-band over ~0.4 s+ —
     // the sky pass returns instantly (0902's gate) but the clouds creep back in behind it,
     // the "delayed pop-in" the director sighted. Dry→wet takes no edge, exactly like the

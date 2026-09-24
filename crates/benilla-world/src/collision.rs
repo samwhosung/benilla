@@ -1,8 +1,8 @@
 //! Physics **collision layers** — the two collision *audiences* the world geometry is queried by.
 //!
-//! The player body and the third-person camera collide against *different* sets of WMO faces (a
-//! binary-VERIFIED 1.12.1 fact; see `benilla_formats`'s MOPY mask doc and wow-5875-re
-//! `system/collision/collision.md`): the **walking** gather drops DETAIL faces (`0x04`), the
+//! The player body and the third-person camera collide against *different* sets of WMO faces (see
+//! `benilla_formats`'s MOPY mask doc: the walking leaf `0x6bca50` and the camera/LOS leaf
+//! `0x6bc700`): the **walking** gather drops DETAIL faces (`0x04`), the
 //! **camera/LOS** gather instead drops NOCAMCOLLIDE faces (`0x02`) — so the camera collides with
 //! visible decals/overhangs (forge pipes, low beams) the player walks *under*, and passes through
 //! NOCAMCOLLIDE faces the player still stands on. avian can't filter a single trimesh per-face, so
@@ -45,10 +45,9 @@ pub(crate) enum CollisionLayer {
     /// ocean, `0x40000` magma, `0x80000` slime). A per-trace mask is exactly a `SpatialQueryFilter`,
     /// which is why this is a layer and not a component the camera looks for.
     ///
-    /// wow-re `ui/scratch/water-band-discontinuity.md`. It **refutes** that tree's own
-    /// `camera-arm-liquid-blind.md` §2, a VERIFIED NEGATIVE that stood from June: the census was
-    /// correct and controlled, but a capability requested through an argument flag is invisible to
-    /// any census of call sites. Decision 2149 rested benilla on that verdict and built the wrong
+    /// An earlier reading judged this capability unreachable, and the verdict stood for months —
+    /// wrongly: a capability requested through an argument flag is invisible to a plain call-site
+    /// search. Decision 2149 rested benilla on that verdict and built the wrong
     /// half of the feature; 2165 took it out.
     Liquid,
 }
@@ -138,7 +137,8 @@ pub(crate) fn track_collider_removals(
 }
 
 /// Marks a static trimesh collider whose triangles **receive ground decals** (the selection ring).
-/// The reference's decal collector is byte-verified (wow-re selection-circle RE, §5-cross-checked):
+/// The reference's decal collector is byte-verified (the box-query dispatch `0x6ad2c0` calls only
+/// its WMO and terrain collectors, `0x6ad330`/`0x6ad4e0`):
 /// its box query gathers **terrain triangles + WMO group faces** — M2 doodads/GameObjects/units are
 /// *never* collected (no collector exists for them; the ring draws under barrels, not onto them) —
 /// with the decal draw sites passing flags `0x200122` (terrain on, WMO on, liquid off). The WMO side
@@ -151,8 +151,8 @@ pub(crate) fn track_collider_removals(
 pub struct GroundDecalSurface;
 
 /// Marks a static collider that **occludes the mouse pick** — the reference's scene trace also
-/// traces the world and discards the object hit iff the world hit is *strictly nearer* (wow-re
-/// selection-circle RE PART 3, §5-cross-checked 2026-07-20: `0x480df0` @ `0x480eb4`,
+/// traces the world and discards the object hit iff the world hit is *strictly nearer*
+/// (`0x480df0` @ `0x480eb4`,
 /// `CWorld::Intersect 0x672170` mask `0x1000114`), so a unit/GameObject behind a wall is not
 /// hoverable. The byte-decoded occluder set, and what carries the mark: **terrain** tiles (DDA
 /// `0x69c920`), **WMO group faces** with MOPY reject-mask `0x84` — the **walk** bake (reject
@@ -230,8 +230,7 @@ impl WorldCollision<'_, '_> {
     /// `cameraWaterCollision` is a trace mask (`0x50e5ec` ORs `0xf0000` into the word the solver
     /// hands its three collision queries), and the query that word rides is a **line segment**:
     /// `0x672170` takes `(start, end, out, frac, flags)` and carries no radius at all, bottoming
-    /// out in the Möller–Trumbore ray/triangle test at `0x7c2c40` (wow-re
-    /// `camera-water-atomicity.md` §145, `camera-cvar-kernels.md` §276). The reference's whole
+    /// out in the Möller–Trumbore ray/triangle test at `0x7c2c40`. The reference's whole
     /// camera trace is that ray; benilla's is a [`CAMERA_PROBE_RADIUS`] sphere, which is **our own
     /// construction** — the margin that keeps the near plane out of a wall — and it stays, because
     /// walls are what it is for.
@@ -279,7 +278,7 @@ impl WorldCollision<'_, '_> {
     ///
     /// It exists for one caller and one reason: the reference's world trace carries a per-trace
     /// mask, and a GHOST's mask drops DOOR GameObjects from the gather — a ghost walks through
-    /// closed doors (wow-re `collision/scratch/ghost-door-tracemask.md`). That is a property of
+    /// closed doors (the GameObject collision-candidacy virtual `0x5f85f0`). That is a property of
     /// *this mover's trace*, not of the door, so it cannot be expressed by re-laning the collider:
     /// [`body_filter`](Self::body_filter) is shared with the particle snap, the precipitation
     /// probe, the mouse pick and the creature conform, none of which may lose a door because the
@@ -397,8 +396,7 @@ impl WorldCollision<'_, '_> {
     /// `0x8000` when the body it is driving is a player **in ghost form** (`0x631658`); the
     /// GameObject collision-candidacy virtual `0x5f85f0` reads that bit and drops every
     /// `GAMEOBJECT_TYPE_ID == 0` (DOOR) object from the gather. So a ghost walks through closed
-    /// doors, and nothing else about its collision differs (wow-re
-    /// `collision/scratch/ghost-door-tracemask.md`).
+    /// doors, and nothing else about its collision differs.
     ///
     /// **Why the exclusion rides the trace and not the collider.** It is tempting to drop the
     /// door's collider, or re-lane it — both are wrong, because the fact is about *whose trace this

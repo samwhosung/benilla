@@ -3,8 +3,7 @@
 //! Standing inside a WMO interior, the reference does not draw the outdoor world at large — it draws
 //! it once per *portal window* left over by the interior portal flood, with the view frustum narrowed
 //! to that window. We drew it unconditionally, which is why a hillside tree 200 yd outside Stratholme
-//! showed through the city's walls (the director's report; wow-re
-//! `system/terrain/scratch/interior-exterior-scene-cull.md`, decision 0774).
+//! showed through the city's walls (the director's report; decision 0774).
 //!
 //! ## The carved law
 //!
@@ -243,8 +242,7 @@ pub(crate) fn window_frustum(rect: Rect, clip_from_world: &Mat4) -> Frustum {
 /// non-strict, and a window under it draws no terrain, no ADT doodads, no world WMO placement, no
 /// liquid, no far band and no outdoor unit at all.
 ///
-/// **The gate is the walk's, not the volume's** (RE 2026-09-02, `wow-5875-re`
-/// `models/scratch/wmo-pass2-window-reseed.md`): a compare-class census over the whole of
+/// **The gate is the walk's, not the volume's**: a compare-class census over the whole of
 /// `0x682930` — the builder both consumers share — returns **zero** compares, and Pass 2's own body
 /// `[0x6b3c73, 0x6b3d6f)` has seven, none of them on the rect. Decision 1826 read the reject as
 /// part of the shared construction and applied it to both, which silently culled the containing
@@ -837,7 +835,8 @@ mod tests {
     /// leg is one full-screen window through the same frustum-testing walk, so a body behind the
     /// camera is elected pass 2: not drawn (decision 1475). This test asserted the opposite under
     /// 1270 ("`Unrestricted` is a stand-down… the arm that must never narrow") — that law was
-    /// built before wow-re's election correction and is deliberately superseded here (1473).
+    /// built before the outside-leg election was corrected and is deliberately superseded here
+    /// (1473).
     #[test]
     fn outdoors_the_full_screen_window_elects_the_bodies() {
         let (vis, verdict) = run_bodies(

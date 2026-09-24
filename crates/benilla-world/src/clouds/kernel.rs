@@ -1,13 +1,13 @@
 //! The cloud coverage kernel — a faithful port of the reference's procedural cloud field.
 //!
 //! The real client maintains a scrolling 128×128 byte tile of cloud coverage (the SkyManager
-//! working-set `0xce98e8`), regenerated in 32-row bands at ~10 Hz by `cloud_coverage_noise`
-//! (`WoW.exe 0x6cffc0`, transcribed bit-exact in wow-re `crates/lighting/src/clouds.rs`): 4-octave
+//! working-set `0xce98e8`), regenerated in 32-row bands at ~10 Hz by the coverage-noise kernel
+//! (`WoW.exe 0x6cffc0`): 4-octave
 //! toroidal value noise (lacunarity 2, persistence 0.5) → `rawByte`, thresholded by the authored
 //! Light.dbc cloud density `C` (`T = trunc((1−C)·255)`, `0x6d0970`) and shaped through a fixed
 //! 256-byte tone curve (`0x6d0900`, gamma 0.96 — frozen here as [`CURVE`]). One field serves every
 //! consumer: the glare occlusion `occ1` samples the same tile the visible layer renders from
-//! (wow-re `scratch/cloud-coverage-pipeline.md`, §5-verified).
+//! (`0x6cfa90`).
 //!
 //! The noise lattice is keyed by three axes: tile row (`row_key`, advancing `freq` per row), tile
 //! column (`col_key`, advancing `freq` per column), and time (the u16 `phase`, bumped once per full
@@ -18,18 +18,18 @@
 //! only *moves* when the phase advances or the authored density changes — exactly the reference's
 //! slow cloud drift.
 //!
-//! Each regen fire ends with the **color pass** (`0x6cfb00`, wow-re `dn_sky_vtx.rs` — diffed
+//! Each regen fire ends with the **color pass** (`0x6cfb00` — diffed
 //! bit-exact): the coverage bytes become RGBA texels (gradient + sun-aligned glow, alpha = the
 //! coverage byte), and *that image* is what the dome uploads — the reference binds its color
-//! buffer zero-copy to the gx texture (Addendum A §3). The glow's per-cell surface normal comes
-//! from the octave-2 derivative leg (`[cfg+0x68]`, Addendum A §4).
+//! buffer zero-copy to the gx texture (`0x58ac70`). The glow's per-cell surface normal comes
+//! from the octave-2 derivative leg (`[cfg+0x68]`, written by `0x6cffc0`, read by `0x6cfb00`).
 //!
 //! Deviations from the bytes, all in never-hit or non-visual domains (recorded in the decision
 //! record): the `acos` argument is clamped to ±1 (the reference NaNs above ~70° elevation, a
 //! domain its sun/moon never reach); LUT reads wrap toroidally instead of running off the flat
 //! heap at the measure-zero `u == 1.0` edge; the gradient table uses the reference's MSVC-LCG
 //! *formula* with a fixed seed (the reference seed is process-random and not visually
-//! load-bearing — any 256 uniform values in [−1, 1] are equivalent, wow-re pipeline note §1b);
+//! load-bearing — any 256 uniform values in [−1, 1] are equivalent, `0x6d0c90`);
 //! and the color buffer seeds alpha-0 instead of `0xFFFFFFFF` (no white flash before the first
 //! build).
 
@@ -38,7 +38,7 @@ use bevy::math::Vec3;
 use super::tables::{fade_table, gradient_table, CURVE, PERM};
 
 /// Tile side at `SkyCloudLOD 0` (`cols = 128 << LOD`; the CVar clamps to [0,1] and defaults to 0 —
-/// wow-re pipeline §3d). We implement LOD 0.
+/// `0x6d1d60`). We implement LOD 0.
 pub const COLS: usize = 128;
 /// `log2(COLS)` — the row-pitch shift the sampler uses (`[cfg+0x20]`).
 pub const SHIFT: u32 = 7;
@@ -95,13 +95,12 @@ pub struct CloudKernel {
     accum: Vec<f32>,
     /// The per-cell shape derivative pairs (`[cfg+0x68]`, 2 f32/cell) — written by the octave-2
     /// leg, consumed by the color pass as the glow surface normal `S = (dx, dy, 1)`
-    /// (Addendum A §4).
+    /// (`0x6cffc0` writes it, `0x6cfb00` reads it).
     deriv: Vec<[f32; 2]>,
     /// The previous-row scratch (`[cfg+0x5c]`, `COLS` f32) feeding the row derivative.
     prevrow: Vec<f32>,
     /// The colored RGBA texels (`[cfg+0x38]`, 4 B/cell: gradient+glow RGB, alpha = the coverage
-    /// byte) — **this is what the reference uploads** (`0x58ac70` binds `[cfg+0x38]` zero-copy;
-    /// Addendum A §3 — corrects the earlier "coverage bytes uploaded" reading).
+    /// byte) — **this is what the reference uploads** (`0x58ac70` binds `[cfg+0x38]` zero-copy).
     rgba: Vec<[u8; 4]>,
     /// Scroll position — the tile row the next band starts at (`[cfg+0x18]`).
     scroll: usize,
@@ -184,7 +183,7 @@ impl CloudKernel {
 
     /// One regeneration fire: `rows` tile rows starting at `self.scroll` (noise + quantize +
     /// the color pass, the reference's `0x6cffc0` → `0x6cfb00` order), then the scroll/phase
-    /// advance. The body is the `0x6cffc0` transcription (wow-re `clouds.rs`) in named-field form.
+    /// advance. The body is the `0x6cffc0` transcription in named-field form.
     fn regen(&mut self, density: f32, rows: usize, frame: &CloudFrame) {
         // Threshold refresh (`0x6d0970`, called at the top of every fire): T = trunc((1−C)·255).
         // The reference does not clamp C; authored bands stay in [0,1] and we clamp for safety.
@@ -314,8 +313,8 @@ impl CloudKernel {
         }
     }
 
-    /// The color pass — the exact `0x6cfb00` per-cell algorithm (wow-re `dn_sky_vtx.rs`, diffed
-    /// bit-exact; Addendum A §1): per cell `t` = the coverage byte — `t == 0` copies the previous
+    /// The color pass — the exact `0x6cfb00` per-cell algorithm (diffed
+    /// bit-exact): per cell `t` = the coverage byte — `t == 0` copies the previous
     /// cell's RGB with alpha 0 (the filtering-friendly hole fill); else the gradient
     /// `slope·p + gbase` with `p = (((255−t)>>1) + 64)/255`, plus the sun-aligned glow
     /// `sun·(cosθ·intensity)` where `cosθ` aligns the cell→body vector (tile-cell units, z =
@@ -388,7 +387,7 @@ impl CloudKernel {
         f32::from(self.tile[cell]) / 255.0
     }
 
-    /// The colored RGBA texels for the visible-layer texture upload (Addendum A §3).
+    /// The colored RGBA texels for the visible-layer texture upload (`0x58ac70`'s zero-copy bind).
     pub fn rgba(&self) -> &[[u8; 4]] {
         &self.rgba
     }
@@ -437,7 +436,7 @@ fn project_cells(d: Vec3) -> Option<(f32, f32)> {
 }
 
 /// The glow body's tile cell (`0x6cfb00` setup, steps 1–2): intersect the camera→body ray with
-/// the unit sky dome (`sky_dome_ray_point 0x6cf9c0` — the `−cos(π/4)`-shifted sphere, larger
+/// the unit sky dome (`0x6cf9c0` — the `−cos(π/4)`-shifted sphere, larger
 /// quadratic root) and project the hit point onto the tile. `None` on the degenerate no-root /
 /// zero-direction case.
 fn body_cells(dir: Vec3) -> Option<(f32, f32)> {
@@ -532,7 +531,7 @@ mod tests {
     }
 
     /// Clear sky (C=0 ⇒ T=255): every cell quantizes below the threshold ⇒ R = 0 everywhere ⇒
-    /// occ1_sun = 1 (full flare), occ1_moon = 0 (no halo) — wow-re pipeline §1d. The colored
+    /// occ1_sun = 1 (full flare), occ1_moon = 0 (no halo). The colored
     /// texels are all alpha 0 (the t==0 hole fill).
     #[test]
     fn clear_sky_is_empty_coverage() {
