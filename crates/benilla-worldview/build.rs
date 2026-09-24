@@ -1,4 +1,4 @@
-//! Stamps the commit this binary was built from — see `benilla-buildstamp`, which owns the rule.
+//! Stamps the commit this binary was built from.
 
 fn main() {
     benilla_buildstamp::emit();

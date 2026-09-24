@@ -1,11 +1,9 @@
 use super::*;
 
-// The field walk in `parse_m2` reads M2Arrays up through the event table (the last read, at
-// header offset 0x114) and stops there — the fixture header covers exactly that walk.
+// The header through the event table at 0x114, as far as `parse_m2` walks.
 const HEADER_LEN: usize = 284;
 
-// Byte offsets of the M2Arrays this parser reads, matching the field walk in `parse_m2` for a
-// v256 (pre-Wrath) header.
+// v256 header offsets of the M2Arrays under test.
 const OFS_PLAYABLE_ANIM_LOOKUP: usize = 44;
 const OFS_TEX_ANIM: usize = 0x74;
 const OFS_TEX_UNIT_LOOKUP: usize = 0x9c;
@@ -17,8 +15,7 @@ const OFS_VIEWS: usize = 76;
 const OFS_ATTACHMENTS: usize = 260;
 const OFS_EVENTS: usize = 276;
 
-/// A minimal v256 MD20 header: the magic + version, every M2Array zeroed (count 0, offset 0).
-/// Callers patch specific arrays with [`set_arr`] and append payload bytes after `HEADER_LEN`.
+/// A v256 MD20 header with every M2Array empty; tests patch arrays with [`set_arr`].
 fn header() -> Vec<u8> {
     let mut b = vec![0u8; HEADER_LEN];
     b[0..4].copy_from_slice(b"MD20");
@@ -69,12 +66,8 @@ fn m2track(interp: u16, gseq: u16, ts: (u32, u32), vals: (u32, u32)) -> Vec<u8> 
     t
 }
 
-/// **A fix16 key is SIGNED.** Real art authors "hide me" as `0x8001` — `−32767`, i.e. `−1.0` —
-/// which read unsigned decodes to `+1.00006` and sails through the reference's `A ≤ 0` batch cull.
-/// `TanarisTrollGate.m2` switches between its intact gate and its burnt twin with exactly these
-/// ±1 keys, so reading them unsigned drew both copies at once. Both records
-/// that carry a fix16 track — the M2Color **alpha** (header `0x54`, stride `0x38`, track @ `+0x1c`)
-/// and the M2TextureWeight (header `0x64`, stride `0x1c`) — share the decode, so both are checked.
+/// `TanarisTrollGate.m2` swaps its intact and burnt gates with these ±1 keys. Both fix16 records
+/// are checked: the M2Color alpha (header `0x54`, track @ `+0x1c`) and the M2TextureWeight.
 #[test]
 fn a_negative_fix16_key_decodes_signed() {
     let mut b = header();
@@ -82,14 +75,14 @@ fn a_negative_fix16_key_decodes_signed() {
     b.extend(0u32.to_le_bytes());
     b.extend(333u32.to_le_bytes());
     let val_ofs = b.len() as u32;
-    b.extend(0x7fffu16.to_le_bytes()); // +1.0 — "draw me"
-    b.extend(0x8001u16.to_le_bytes()); // −1.0 — "hide me"
-                                       // One M2Color: a keyless RGB track @ +0x00, then the 2-key alpha track @ +0x1c.
+    b.extend(0x7fffu16.to_le_bytes()); // +1.0, drawn
+    b.extend(0x8001u16.to_le_bytes()); // −1.0, hidden
+                                       // One M2Color: a keyless RGB track, then the alpha track.
     let color_ofs = b.len() as u32;
     b.extend(m2track(0, 0xffff, (0, 0), (0, 0)));
     b.extend(m2track(1, 0xffff, (2, ts_ofs), (2, val_ofs)));
     set_arr(&mut b, 0x54, 1, color_ofs);
-    // One M2TextureWeight: the same keys again, so the weight side is covered too.
+    // One M2TextureWeight with the same keys.
     let weight_ofs = b.len() as u32;
     b.extend(m2track(1, 0xffff, (2, ts_ofs), (2, val_ofs)));
     set_arr(&mut b, 0x64, 1, weight_ofs);
@@ -128,8 +121,7 @@ fn texture_transform_translation_track_decodes() {
             b.extend(c.to_le_bytes());
         }
     }
-    // One M2TextureTransform record (stride 0x54): a 2-key gseq-0 translation track, then keyless
-    // rotation + scaling tracks.
+    // One M2TextureTransform: a 2-key gseq-0 translation, then keyless rotation and scaling.
     let rec_ofs = b.len() as u32;
     b.extend(m2track(1, 0, (2, ts_ofs), (2, val_ofs)));
     b.extend(m2track(0, 0xffff, (0, 0), (0, 0)));
@@ -156,11 +148,7 @@ fn texture_transform_translation_track_decodes() {
     assert!(t.scaling.keys.is_empty());
 }
 
-/// The three adjacent u16 lookup slots must not be confused: texUnitLookup@0x9c ·
-/// transLookup@0xa4 · texAnimLookup@0xac (the reference's header walk `0x71cdf0`, not one slot
-/// early). Shaped like the real StormwindMagePortal01 header — [0] at
-/// 0x9c, the identity [0,1,2,3] at 0xa4, [0xffff] at 0xac — where reading 0x9c as the transparency
-/// lookup silently dropped the combo-1..3 weight tracks.
+/// Shaped like StormwindMagePortal01's header: [0] at 0x9c, [0,1,2,3] at 0xa4, [0xffff] at 0xac.
 #[test]
 fn transparency_lookup_reads_0xa4_not_the_texture_unit_lookup_at_0x9c() {
     let mut b = header();
@@ -186,8 +174,7 @@ fn transparency_lookup_reads_0xa4_not_the_texture_unit_lookup_at_0x9c() {
 fn playable_animation_lookup_decodes_low16_high16() {
     let mut b = header();
     let pal_ofs = b.len() as u32;
-    // Row 0: identity, no dir flags. Row 1: HumanMale's real example, read off the shipped asset
-    // (`playableAnimationLookup[6] = 0x00030001`) — resolved id 1, dir-flags code 3.
+    // Row 1 is HumanMale's `playableAnimationLookup[6] = 0x00030001`: id 1, code 3.
     b.extend(0u32.to_le_bytes());
     b.extend(0x0003_0001u32.to_le_bytes());
     set_arr(&mut b, OFS_PLAYABLE_ANIM_LOOKUP, 2, pal_ofs);
@@ -210,7 +197,7 @@ fn bone_record(pivot: [f32; 3]) -> Vec<u8> {
 }
 
 fn attachment_record(id: u32, bone: u32, position: [f32; 3]) -> Vec<u8> {
-    let mut b = vec![0u8; 48]; // id+bone+position (20 bytes) + the skipped 28-byte visibility track
+    let mut b = vec![0u8; 48]; // id, bone, position (20 bytes), the skipped 28-byte track
     b[0..4].copy_from_slice(&id.to_le_bytes());
     b[4..8].copy_from_slice(&bone.to_le_bytes());
     b[8..12].copy_from_slice(&position[0].to_le_bytes());
@@ -222,7 +209,7 @@ fn attachment_record(id: u32, bone: u32, position: [f32; 3]) -> Vec<u8> {
 #[test]
 fn attachments_parse_and_skip_out_of_range_records() {
     let mut b = header();
-    // Two bones, so a valid attachment bone index is 0 or 1.
+    // Two bones, so a valid bone index is 0 or 1.
     let bones_ofs = b.len() as u32;
     b.extend(bone_record([0.0, 0.0, 0.0]));
     b.extend(bone_record([1.0, 1.0, 1.0]));
@@ -243,7 +230,7 @@ fn attachments_parse_and_skip_out_of_range_records() {
 }
 
 fn event_record(ident: &[u8; 4], bone: u32, position: [f32; 3]) -> Vec<u8> {
-    let mut b = vec![0u8; 44]; // ident+data+bone+position (24 bytes) + the skipped 20-byte track
+    let mut b = vec![0u8; 44]; // ident, data, bone, position (24 bytes), the skipped 20-byte track
     b[0..4].copy_from_slice(ident);
     b[8..12].copy_from_slice(&bone.to_le_bytes());
     b[12..16].copy_from_slice(&position[0].to_le_bytes());
@@ -300,11 +287,7 @@ fn one_vertex_decodes_all_fields() {
 
 #[test]
 fn hostile_vertex_count_errs_cleanly_not_oom() {
-    // The bug this migration fixes: `vertices.0` is read straight off the file with no relation
-    // to the buffer's actual size. Pre-0064, `Vec::with_capacity(vertices.0 as usize)` tried to
-    // reserve `u32::MAX * 48` bytes up front and aborted the process. Post-0064 the reservation
-    // is capped by the remaining input (here: zero bytes after the header), so this returns an
-    // ordinary `Err` from the first bounds-checked read instead.
+    // `u32::MAX` vertices must fail at the first read, not reserve `u32::MAX * 48` bytes.
     let mut b = header();
     set_arr(&mut b, OFS_VERTICES, u32::MAX, HEADER_LEN as u32);
     assert!(matches!(parse(&b), Err(Error::Truncated)));
@@ -312,10 +295,7 @@ fn hostile_vertex_count_errs_cleanly_not_oom() {
 
 #[test]
 fn hostile_attachment_count_errs_cleanly_not_oom() {
-    // The vertex case's sibling one block later: the per-record index vector `emitted_at` was
-    // sized from the raw attachment count (u32::MAX → an 8 GiB non-zero fill that touches every
-    // page) while the reservation beside it was capped. The table is now refused up front when
-    // the file cannot hold it — the verdict the loop's bounds-checked read reached one line later.
+    // `emitted_at` is sized from the count, so a table the file cannot hold is refused first.
     let mut b = header();
     set_arr(&mut b, OFS_ATTACHMENTS, u32::MAX, HEADER_LEN as u32);
     assert!(matches!(parse(&b), Err(Error::Truncated)));
@@ -323,10 +303,8 @@ fn hostile_attachment_count_errs_cleanly_not_oom() {
 
 #[test]
 fn hostile_track_record_counts_walk_only_what_the_file_holds() {
-    // The colour (0x54), transparency (0x64) and texture-transform (0x74) readers are lenient by
-    // design — an out-of-range track is "no keys" — so a raw count of u32::MAX used to mean four
-    // billion empty tracks pushed one per iteration until the OS killed the process. The loop
-    // bound is now the number of whole records the file holds past the block's offset.
+    // The colour (0x54), weight (0x64) and texture-transform (0x74) readers never fail, so the
+    // file bounds their loops, not the count.
     let mut b = header();
     set_arr(&mut b, 0x54, u32::MAX, HEADER_LEN as u32);
     set_arr(&mut b, 0x64, u32::MAX, HEADER_LEN as u32);
@@ -358,20 +336,18 @@ fn truncated_vertex_record_errs_cleanly() {
 fn hostile_shapes_do_not_panic() {
     assert!(matches!(parse(&[]), Err(Error::NotMd20)));
     assert!(matches!(parse(&[0u8; 7]), Err(Error::NotMd20)));
-    // A recognizable magic with an unsupported version.
     let mut b = vec![0u8; HEADER_LEN];
     b[0..4].copy_from_slice(b"MD20");
     b[4..8].copy_from_slice(&999u32.to_le_bytes());
     assert!(matches!(parse(&b), Err(Error::UnsupportedVersion(999))));
-    // A header truncated mid-array.
     assert!(matches!(
         parse(&header()[..HEADER_LEN - 4]),
         Err(Error::Truncated)
     ));
 }
 
-/// Build a full synthetic MD20 file with one embedded skin profile (one index, one triangle, one
-/// submesh, one batch) so `parse_embedded_skin` has something real to decode.
+/// An MD20 file with one embedded skin profile: three indices, three triangle indices, one
+/// submesh, one batch.
 fn model_with_one_skin() -> Vec<u8> {
     let mut b = header();
     let vp = HEADER_LEN as u32; // M2View header right after the fixed header
@@ -436,7 +412,7 @@ fn embedded_skin_out_of_range_index_errs() {
 
 #[test]
 fn hostile_submesh_count_errs_cleanly_not_oom() {
-    // Same OOM-abort shape as the vertex case, but inside `parse_embedded_skin`'s M2View arrays.
+    // The vertex case, in `parse_embedded_skin`'s M2View arrays.
     let mut b = model_with_one_skin();
     let vp = HEADER_LEN; // M2View header offset (see `model_with_one_skin`)
     let end = b.len() as u32;
@@ -450,8 +426,7 @@ fn hostile_submesh_count_errs_cleanly_not_oom() {
 
 // --- cameras (header 0x124/0x128) + the cubic samplers ---------------------------------------
 
-/// The camera array sits past [`HEADER_LEN`], so camera fixtures carry a header long enough to
-/// hold `cameras`@`0x124` and `cameraLookup`@`0x12c`.
+/// A header long enough for `cameras`@`0x124` and `cameraLookup`@`0x12c`, past [`HEADER_LEN`].
 const CAM_HEADER_LEN: usize = 0x134;
 const OFS_CAMERAS: usize = 0x124;
 const OFS_CAMERA_LOOKUP: usize = 0x12c;
@@ -465,8 +440,7 @@ fn cam_header() -> Vec<u8> {
 /// One fixture key: `(ms, value, in_tan, out_tan)`.
 type SplineKeyFixture = (u32, [f32; 3], [f32; 3], [f32; 3]);
 
-/// Append a cubic `C3Vector` track's payload and return the 28 track bytes pointing at it, laid
-/// out `{value, inTan, outTan}` per the 0x24 key.
+/// Append a cubic `C3Vector` track's `{value, inTan, outTan}` keys and return the track's 28 bytes.
 fn spline_vec3_track(b: &mut Vec<u8>, interp: u16, keys: &[SplineKeyFixture]) -> Vec<u8> {
     let times_ofs = b.len() as u32;
     for (ms, ..) in keys {
@@ -492,9 +466,8 @@ fn spline_vec3_track(b: &mut Vec<u8>, interp: u16, keys: &[SplineKeyFixture]) ->
     t
 }
 
-/// A one-camera model whose position track carries the two keys `interp` will be sampled between:
-/// `value 0 → 3` on X with tangents `out[k0] = 1`, `in[k1] = 2` — four numbers chosen so the four
-/// interpolation legs land on four *different* answers.
+/// A one-camera model whose position track runs X from 0 to 3 over 1000 ms, with
+/// `outTan[k0] = 1` and `inTan[k1] = 2`.
 fn model_with_one_camera(interp: u16) -> Vec<u8> {
     let mut b = cam_header();
     let rec = b.len() as u32;
@@ -549,8 +522,7 @@ fn camera_record_fields_and_lookup_parse() {
 
 #[test]
 fn cubic_sampler_takes_all_four_interp_legs() {
-    // Between `value 0` and `value 3`, with `outTan[k0] = 1` and `inTan[k1] = 2`, at the exact
-    // midpoint. Hand-computed from the bases in `M2Track::sample_ms`:
+    // At the midpoint, hand-computed from the bases in `M2Track::sample_ms`:
     //   step   → value[k0]                                              = 0
     //   linear → 0 + (3−0)·0.5                                          = 1.5
     //   Bézier → 0.125·0 + 0.375·1 + 0.375·2 + 0.125·3                  = 1.5

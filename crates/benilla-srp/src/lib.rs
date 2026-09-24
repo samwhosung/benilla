@@ -1,40 +1,19 @@
-//! SRP6 client + vanilla world-header crypto for **WoW 1.12.1 (build 5875)** — in-repo, replacing
-//! `wow_srp`.
-//!
-//! WoW uses a lightly customised SRP6 for logon: a fixed 32-byte safe prime `N`, generator `g = 7`,
-//! multiplier `k = 3`, and a bespoke "interleave" that folds the shared secret `S` into the 40-byte
-//! session key. We implement only the **client** side (the realmd handshake) plus the world server's
-//! header obfuscation — the only pieces benilla needs.
-//!
-//! All byte arrays are **little endian** on the wire (as the client sends them).
-//!
-//! Proven by a full SRP6 round-trip against `wow_srp`'s server + a byte-exact header-cipher diff
-//! during the decision-0021 migration (oracle test in git history); ongoing regression coverage is
-//! the oracle-free known-answer + golden tests in this crate.
+//! SRP6 client and world-header crypto for 1.12.1 (build 5875): the client side of the realmd
+//! handshake and the world server's header obfuscation. Every byte array is little endian, as on
+//! the wire.
 //!
 //! # Encoding-unambiguous handshakes
 //!
-//! The values the handshake feeds to SHA-1 (`A`, `B`, `K`, the salt, `M1`) are *numbers*, and the two
-//! implementations in the wild serialize a number differently:
+//! The 1.12.1 client hashes `A`, `B`, `K`, the salt and `M1` at their declared widths, zero-padded
+//! (`0x5d3650`); vmangos (`SHA1::Generator::UpdateData(BigNumber const&)`) and cmangos
+//! (`Sha1Hash::UpdateBigNumbers`) drop high-order zero bytes, so a value with one hashes
+//! differently and realmd answers `WOW_FAIL_UNKNOWN_ACCOUNT` (0x04) to a correct password. The low
+//! end of `S` has the same split ([`calculate_interleaved`]).
 //!
-//! - The **1.12.1 client** writes each at its declared width, zero-padded in the high bytes — `A`/`B`
-//!   32, `K` 40, `M1` 20 (byte-exact from `WoW.exe` `0x5d3650`).
-//! - The **mangos family** (vmangos `SHA1::Generator::UpdateData(BigNumber const&)`, cmangos
-//!   `Sha1Hash::UpdateBigNumbers`) writes `BigNumber::AsByteArray()` with no minimum — **high-order
-//!   zero bytes dropped**.
-//!
-//! They agree only while no value happens to have a high-order zero byte, and disagree silently when
-//! one does: realmd answers `WOW_FAIL_UNKNOWN_ACCOUNT` (0x04) to a perfectly correct password. There
-//! is a matching disagreement at the other end of `S` (see [`calculate_interleaved`]). Measured
-//! against a live vmangos, a client that picks a side loses ~1 handshake in 45 — see
-//! `benilla-protocol`'s `srp_encoding_probe` example, which forces each case and prints the verdict.
-//!
-//! benilla picks **neither side**. `a` is ours to draw, and every ambiguous value is downstream of
-//! it, so [`SrpClientChallenge::new`] simply redraws until the handshake it is about to send is one
-//! both conventions serialize identically — see [`is_width_stable`]. What we send is then bit-for-bit
-//! the real client's arithmetic *and* accepted by a mangos-family server, with no branch on which
-//! kind of server we are talking to. The one value we cannot draw is the server's `B`; `benilla-
-//! protocol`'s `logon` redials for a fresh challenge when that one lands ambiguous.
+//! Deviation: [`SrpClientChallenge::new`] redraws `a` until every value it sends serializes the
+//! same both ways ([`is_width_stable`]), and `benilla-protocol`'s `logon` redials when the server's
+//! `B` lands ambiguous, because a client that picks either serialization fails about 1 handshake
+//! in 45 against vmangos. The arithmetic stays the client's; only an ambiguous draw is declined.
 
 use num_bigint::BigInt;
 use rand::{thread_rng, RngCore};
@@ -44,25 +23,24 @@ pub mod vanilla_header;
 
 pub use vanilla_header::{DecrypterHalf, EncrypterHalf, HeaderCrypto, ProofSeed};
 
-/// Session-key length in bytes — always 40 (two concatenated SHA-1 hashes).
+/// Session-key length in bytes: two interleaved SHA-1 digests.
 pub const SESSION_KEY_LENGTH: usize = 40;
-/// Proof (`M1`/`M2`) length in bytes — a SHA-1 hash.
+/// Proof (`M1`, `M2`) length in bytes: one SHA-1 digest.
 pub const PROOF_LENGTH: usize = 20;
 /// Public-key (`A`/`B`) length in bytes.
 pub const PUBLIC_KEY_LENGTH: usize = 32;
-/// Salt length in bytes.
 pub const SALT_LENGTH: usize = 32;
-/// Generator `g` — statically 7 for WoW.
+/// The generator `g`.
 pub const GENERATOR: u8 = 7;
-/// The WoW safe prime `N`, little endian (as sent in `CMD_AUTH_LOGON_CHALLENGE_Server`).
+/// The safe prime `N`, little endian, as `CMD_AUTH_LOGON_CHALLENGE_Server` sends it.
 pub const LARGE_SAFE_PRIME_LITTLE_ENDIAN: [u8; 32] = [
     0xb7, 0x9b, 0x3e, 0x2a, 0x87, 0x82, 0x3c, 0xab, 0x8f, 0x5e, 0xbf, 0xbf, 0x8e, 0xb1, 0x1, 0x8,
     0x53, 0x50, 0x6, 0x29, 0x8b, 0x5b, 0xad, 0xbd, 0x5b, 0x53, 0xe1, 0x89, 0x5e, 0x64, 0x4b, 0x89,
 ];
-/// The SRP multiplier `k` — statically 3 in this (pre-SRP6a) flavour.
+/// The SRP multiplier `k`, fixed at 3 (SRP6, not 6a).
 const K_VALUE: u8 = 3;
 
-// --- bigint helpers (little-endian, unsigned magnitude) -------------------------------------------
+// --- bigint helpers (little-endian, unsigned magnitude) ------------------------------------------
 
 fn from_le(bytes: &[u8]) -> BigInt {
     BigInt::from_bytes_le(num_bigint::Sign::Plus, bytes)
@@ -84,19 +62,16 @@ fn sha1(parts: &[&[u8]]) -> [u8; 20] {
     h.finalize().into()
 }
 
-/// Does this little-endian value hash the same whichever serialization the peer uses — its declared
-/// width (the 1.12.1 client) or its minimal length (the mangos family)? True exactly when the
-/// high-order byte is non-zero, since minimal encoding differs from padded only by dropping those.
-/// See the crate docs, "Encoding-unambiguous handshakes".
+/// Whether a little-endian value hashes the same at its declared width and at minimal length:
+/// exactly when its high-order byte is non-zero.
 fn is_width_stable(little_endian: &[u8]) -> bool {
     matches!(little_endian.last(), Some(&b) if b != 0)
 }
 
-// --- normalized string ----------------------------------------------------------------------------
+// --- normalized string ---------------------------------------------------------------------------
 
-/// A username/password normalised the way the 1.12 client does it: ASCII only (no control chars),
-/// uppercased, 1..=16 bytes. The SRP6 hashes are computed over this form, and the uppercased account
-/// name is what's sent on the wire.
+/// A username or password as the 1.12 client normalises it: ASCII without control characters,
+/// uppercased, 1..=16 bytes. SRP6 hashes this form, and the account name goes on the wire in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedString {
     s: String,
@@ -122,7 +97,6 @@ impl std::fmt::Display for NormalizedStringError {
 impl std::error::Error for NormalizedStringError {}
 
 impl NormalizedString {
-    /// Validate + uppercase `s`. See [`NormalizedString`].
     pub fn new(s: impl AsRef<str>) -> Result<Self, NormalizedStringError> {
         let s = s.as_ref();
         if s.is_empty() || s.len() > 16 {
@@ -145,7 +119,7 @@ impl AsRef<str> for NormalizedString {
     }
 }
 
-// --- public key -----------------------------------------------------------------------------------
+// --- public key ----------------------------------------------------------------------------------
 
 /// A validated SRP public key (`A` or `B`), stored little endian. Rejected if it is exactly zero or
 /// exactly the safe prime `N` (the only 32-byte values that are `0 mod N`).
@@ -157,7 +131,6 @@ pub struct PublicKey {
 /// Error from [`PublicKey::from_le_bytes`].
 #[derive(Debug)]
 pub enum InvalidPublicKeyError {
-    /// The key is all zeros.
     IsZero,
     /// The key is `0 mod N` (equal to the safe prime).
     ModLargeSafePrimeIsZero,
@@ -174,10 +147,8 @@ impl std::fmt::Display for InvalidPublicKeyError {
 impl std::error::Error for InvalidPublicKeyError {}
 
 impl PublicKey {
-    /// Build from little-endian bytes, validating the key (see [`PublicKey`]).
     pub fn from_le_bytes(key: [u8; 32]) -> Result<Self, InvalidPublicKeyError> {
-        // Valid unless every byte is either 0 or matches N[i] — i.e. the key is exactly 0 or exactly
-        // N. (A multiple of N ≥ 2N needs 33 bytes, so those are the only two zero residues.)
+        // A byte-wise test for 0 and `N`, the only 32-byte multiples of `N` (`2N` needs 33 bytes).
         let only_zero_or_prime = key
             .iter()
             .zip(LARGE_SAFE_PRIME_LITTLE_ENDIAN.iter())
@@ -192,14 +163,12 @@ impl PublicKey {
         Ok(Self { key })
     }
 
-    /// The key as little-endian bytes.
     pub const fn as_le_bytes(&self) -> &[u8; 32] {
         &self.key
     }
 
-    /// Whether this key hashes identically under both serialization conventions (crate docs,
-    /// "Encoding-unambiguous handshakes"). [`SrpClientChallenge::new`] guarantees it for the `A` it
-    /// draws; for the server's `B` it is luck, and the caller's cue to redial for a fresh challenge.
+    /// Whether this key hashes the same under both conventions; for the server's `B`, false is the
+    /// cue to redial for a fresh challenge.
     pub const fn is_width_stable(&self) -> bool {
         self.key[31] != 0
     }
@@ -209,10 +178,9 @@ impl PublicKey {
     }
 }
 
-// --- SRP6 client ----------------------------------------------------------------------------------
+// --- SRP6 client ---------------------------------------------------------------------------------
 
-/// `H( SHA1(N) XOR SHA1(g) )` — folded into the client proof `M1`. Computed from the server-supplied
-/// `g`/`N` (they're fixed for WoW, but we don't assume it).
+/// `SHA1(N) XOR SHA1(g)`, the head of `M1`, from the `g` and `N` the server sent.
 fn xor_hash(generator: u8, large_safe_prime: &[u8; 32]) -> [u8; 20] {
     let n_hash = sha1(&[large_safe_prime]);
     let g_hash = sha1(&[&[generator]]);
@@ -245,19 +213,12 @@ fn calculate_u(client_public_key: &PublicKey, server_public_key: &PublicKey) -> 
     ])
 }
 
-/// Fold the shared secret `S` (32 LE bytes) into the 40-byte session key: split the even / odd bytes,
-/// SHA-1 each half, then interleave the two digests. This is WoW's specific `SHA1_Interleave`.
+/// Fold `S` (32 LE bytes) into the 40-byte session key: SHA-1 the even and the odd bytes apart and
+/// interleave the two digests (WoW's `SHA1_Interleave`).
 ///
-/// This is the crate-doc encoding split again, at the *low* end of `S`. The SRP-6 RFC strips leading
-/// zero bytes before the split and the real client does too (from `WoW.exe` `0x5d3360`, bit-exact)
-/// — leading in its little-endian `S` meaning the **low** bytes. vmangos does not: it hashes all 32
-/// unconditionally (`SRP6::HashSessionKey`, `S.AsByteArray(32)`). A trim would derive a different
-/// `K`, hence a different `M1`, for the ~1-in-256 `S` ending in a zero low byte — an intermittent
-/// `WOW_FAIL_UNKNOWN_ACCOUNT` (0x04) on a correct password.
-///
-/// We hash all 32 bytes, and [`SrpClientChallenge::new`] only keeps an `S` whose low byte is
-/// non-zero — which makes the strip a no-op, so this `K` is simultaneously the real client's and
-/// vmangos'. Neither convention is chosen; the ambiguous inputs are simply never presented.
+/// The client strips leading zero bytes first, the low bytes of a little-endian `S` (`0x5d3360`);
+/// vmangos hashes all 32 (`SRP6::HashSessionKey`, `S.AsByteArray(32)`). This hashes all 32, and
+/// [`SrpClientChallenge::new`] never keeps an `S` with a zero low byte, so this `K` is both.
 fn calculate_interleaved(s: &[u8; 32]) -> [u8; 40] {
     let mut e = [0u8; 16];
     for (i, b) in s.iter().step_by(2).enumerate() {
@@ -279,7 +240,7 @@ fn calculate_interleaved(s: &[u8; 32]) -> [u8; 40] {
     out
 }
 
-/// `M2 = SHA1( A | M1 | K )` — what the server proves back and we verify.
+/// `M2 = SHA1( A | M1 | K )`, the server's proof back.
 fn calculate_server_proof(
     client_public_key: &PublicKey,
     client_proof: &[u8; 20],
@@ -288,9 +249,8 @@ fn calculate_server_proof(
     sha1(&[client_public_key.as_le_bytes(), client_proof, session_key])
 }
 
-/// First step of the client logon: given the server's challenge values, computes our public key `A`,
-/// the proof `M1`, and the session key. Send `A` + `M1` in `CMD_AUTH_LOGON_PROOF_Client`, then call
-/// [`SrpClientChallenge::verify_server_proof`] with the server's `M2`.
+/// The client's side of the logon proof: `A` and `M1` go in `CMD_AUTH_LOGON_PROOF_Client`, and the
+/// server's `M2` is checked with [`SrpClientChallenge::verify_server_proof`].
 #[derive(Debug, Clone)]
 pub struct SrpClientChallenge {
     username: NormalizedString,
@@ -299,22 +259,17 @@ pub struct SrpClientChallenge {
     session_key: [u8; 40],
 }
 
-/// How many ephemerals [`SrpClientChallenge::new`] will draw looking for an encoding-unambiguous
-/// handshake. Each draw succeeds ~97.4% of the time, so the loop all but always ends on the first;
-/// the bound only exists so a degenerate `N`/`g` from a hostile server cannot spin forever. On
-/// exhaustion we send the last draw anyway — the same handshake we would have sent before this
-/// guarantee existed, i.e. it can fail the logon but cannot corrupt one.
+/// The cap on ephemerals [`SrpClientChallenge::new`] draws, so a hostile `N`/`g` cannot spin it
+/// forever. Each passes about 97.4% of the time; the last is sent regardless, which can fail the
+/// logon but never corrupt it.
 const MAX_EPHEMERAL_DRAWS: u32 = 512;
 
 impl SrpClientChallenge {
-    /// Compute `A`, `M1`, and the session key from the server challenge. Mirrors the real client:
-    /// random 32-byte private key `a`, `A = g^a mod N`, `S = (B - k·g^x)^(a + u·x) mod N`, session
-    /// key = interleave(S), `M1 = SHA1( H(N)^H(g) | SHA1(user) | salt | A | B | K )`.
-    ///
-    /// `a` is redrawn until every value the handshake serializes is one both conventions in the wild
-    /// encode identically (crate docs, "Encoding-unambiguous handshakes"): `A`, `K` and `M1` with no
-    /// high-order zero byte, and `S` with no low-order one. The arithmetic is untouched — this only
-    /// declines to *use* an ephemeral whose handshake would be read two ways.
+    /// Compute `A`, `M1` and the session key as the client does: a random 32-byte `a`,
+    /// `A = g^a mod N`, `S = (B - k·g^x)^(a + u·x) mod N`, `K = interleave(S)` and
+    /// `M1 = SHA1( H(N)^H(g) | SHA1(user) | salt | A | B | K )`. Deviation: `a` is redrawn until
+    /// `A`, `K` and `M1` have no high-order zero byte and `S` no low-order one, because the client
+    /// and vmangos hash those values differently.
     pub fn new(
         username: NormalizedString,
         password: NormalizedString,
@@ -334,10 +289,7 @@ impl SrpClientChallenge {
         )
     }
 
-    /// [`Self::new`] with the ephemeral's draw source injected. `new` hands it `thread_rng`; the
-    /// tests hand it a scripted one, so each guard in the loop below is exercised on purpose —
-    /// a draw known to trip it, then a clean one — rather than by the ~1-in-137 chance a random
-    /// sweep gives each.
+    /// [`Self::new`] with the draw source injected, so a test can script a draw that trips a guard.
     fn new_with_rng<R: RngCore>(
         rng: &mut R,
         username: NormalizedString,
@@ -351,7 +303,6 @@ impl SrpClientChallenge {
         let g = BigInt::from(generator);
         let k = BigInt::from(K_VALUE);
 
-        // Everything the draw does not move, hoisted out of the loop.
         let x = from_le(&calculate_x(&username, &password, &salt));
         let s_base = server_public_key.as_bigint() - &k * g.modpow(&x, &n);
         let xor = xor_hash(generator, &large_safe_prime);
@@ -364,7 +315,6 @@ impl SrpClientChallenge {
             rng.fill_bytes(&mut private_key);
             let a = from_le(&private_key);
 
-            // A = g^a mod N
             let client_public_key = to_padded_32_le(&g.modpow(&a, &n));
             if !is_width_stable(&client_public_key) && !last {
                 continue;
@@ -376,8 +326,7 @@ impl SrpClientChallenge {
 
             // S = (B - k·(g^x mod N))^(a + u·x) mod N
             let s = to_padded_32_le(&s_base.modpow(&(&a + &u * &x), &n));
-            // A zero low byte is the one the real client's interleave would strip (see
-            // `calculate_interleaved`) — decline it so our K is both implementations' K.
+            // The client's interleave strips a zero low byte: decline it, so `K` is both sides'.
             if s[0] == 0 && !last {
                 continue;
             }
@@ -387,7 +336,6 @@ impl SrpClientChallenge {
                 continue;
             }
 
-            // M1 = SHA1( xor_hash | SHA1(username) | salt | A | B | K )
             let client_proof = sha1(&[
                 &xor,
                 &username_hash,
@@ -396,8 +344,7 @@ impl SrpClientChallenge {
                 server_public_key.as_le_bytes(),
                 &session_key,
             ]);
-            // M1 is itself hashed back into the server's M2, so it needs the guarantee too — this is
-            // the case realmd *accepts* while the M2 it replies with fails our check.
+            // M1 feeds the server's M2: an ambiguous one passes realmd but fails our M2 check.
             if !is_width_stable(&client_proof) && !last {
                 continue;
             }
@@ -412,18 +359,17 @@ impl SrpClientChallenge {
         unreachable!("the final draw is accepted unconditionally")
     }
 
-    /// Our proof `M1` (little endian) — send in `CMD_AUTH_LOGON_PROOF_Client`.
+    /// Our proof `M1`, little endian.
     pub const fn client_proof(&self) -> &[u8; 20] {
         &self.client_proof
     }
 
-    /// Our public key `A` (little endian) — send in `CMD_AUTH_LOGON_PROOF_Client`.
+    /// Our public key `A`, little endian.
     pub const fn client_public_key(&self) -> &[u8; 32] {
         &self.client_public_key
     }
 
-    /// Verify the server's proof `M2`. On success the SRP handshake is complete and the session key
-    /// is held in the returned [`SrpClient`].
+    /// Verify the server's proof `M2`; the returned [`SrpClient`] holds the session key.
     pub fn verify_server_proof(
         self,
         server_proof: [u8; 20],
@@ -450,9 +396,7 @@ impl SrpClientChallenge {
 /// The server's proof `M2` did not match what we computed (usually a wrong password).
 #[derive(Debug)]
 pub struct MatchProofsError {
-    /// The proof the server sent.
     pub server_proof: [u8; 20],
-    /// The proof we expected.
     pub expected: [u8; 20],
 }
 impl std::fmt::Display for MatchProofsError {
@@ -477,11 +421,9 @@ impl SrpClient {
     }
 }
 
-// --- account creation (server-side verifier) ------------------------------------------------------
+// --- account creation (server-side verifier) -----------------------------------------------------
 
-/// The SRP6 **password verifier** `v = g^x mod N` (little endian) for a given salt — the value a
-/// server stores alongside the salt so it never holds the raw password. Deterministic in
-/// `(username, password, salt)`. See [`generate_account`] for the new-account path.
+/// The SRP6 password verifier `v = g^x mod N`, little endian: what a server stores beside the salt.
 pub fn password_verifier(
     username: &NormalizedString,
     password: &NormalizedString,
@@ -493,14 +435,9 @@ pub fn password_verifier(
     to_padded_32_le(&g.modpow(&x, &n))
 }
 
-/// Generate a fresh random salt and the matching [`password_verifier`] for a new account. Returns
-/// `(salt, verifier)`, both little endian.
-///
-/// The salt's top bit is forced, exactly as vmangos' own account creation does it
-/// (`BigNumber::SetRand(256)` → `BN_rand(_bn, 256, 0, 1)`, whose `top = 0` sets the MSB). The salt is
-/// the one hashed value fixed for the life of the account rather than redrawn per handshake, so a
-/// high-order zero byte there is not a 1-in-256 *login* failure but a permanently unloggable account
-/// (crate docs, "Encoding-unambiguous handshakes").
+/// A fresh random salt and its [`password_verifier`] for a new account, both little endian. The
+/// salt's top bit is set, as vmangos's `BigNumber::SetRand(256)` does (`BN_rand(_bn, 256, 0, 1)`):
+/// a salt lives as long as its account, so an ambiguous one would never log in.
 pub fn generate_account(
     username: &NormalizedString,
     password: &NormalizedString,
@@ -514,10 +451,8 @@ pub fn generate_account(
 
 #[cfg(test)]
 mod tests {
-    //! Oracle-free regression tests. The SRP6 *interleave* and `x` derivation are pinned to published
-    //! WoW SRP6 test vectors (the gtker/wow_srp corpus, MIT — the same values used to byte-validate
-    //! this crate against `wow_srp` during the decision-0021 migration). The header cipher + password
-    //! verifier are pinned to golden outputs captured from that validated implementation.
+    //! The interleave and `x` are pinned to the published WoW SRP6 vectors (the `wow_srp` crate's
+    //! MIT corpus); the header cipher and password verifier to goldens from that implementation.
     use super::*;
 
     fn hx(s: &str) -> Vec<u8> {
@@ -550,11 +485,6 @@ mod tests {
         }
     }
 
-    /// A low-order zero byte in `S` must *not* shorten the split: we hash all 32 bytes, so `S` and
-    /// `S` with its low byte zeroed differ only in that byte, never in length. (Trimming is the
-    /// SRP-6 RFC's — and the real client's — behaviour, and against vmangos it is what made ~1 login
-    /// in 256 come back as "wrong password"; `SrpClientChallenge::new` keeps the two identical by
-    /// never drawing an `S` with a zero low byte at all.)
     #[test]
     fn interleave_does_not_trim_low_order_zero_bytes() {
         let mut s = [0u8; 32];
@@ -565,8 +495,7 @@ mod tests {
         zeroed[0] = 0;
         zeroed[1] = 0;
 
-        // Even halves: byte 0 is the only difference; odd halves: byte 1. Both must change, and the
-        // trimming implementation would instead have re-split the remaining 30 bytes wholesale.
+        // The untrimmed split, built by hand; a trim would re-split the remaining 30 bytes.
         let mut expect_even = [0u8; 16];
         let mut expect_odd = [0u8; 16];
         for i in 0..16 {
@@ -587,8 +516,7 @@ mod tests {
 
     #[test]
     fn calculate_x_known_answer() {
-        // Fixed salt (big-endian in the corpus); user/pass → x (big-endian in the corpus). We store
-        // both little-endian, so reverse the corpus hex.
+        // The corpus writes the salt and `x` big-endian; we store both little-endian.
         let salt: [u8; 32] = rev(hx(
             "CAC94AF32D817BA64B13F18FDEDEF92AD4ED7EF7AB0E19E9F2AE13C828AEAF57",
         ))
@@ -623,12 +551,6 @@ mod tests {
         assert!(!is_width_stable(&[]));
     }
 
-    /// The crate's guarantee as a property: every handshake we hand out is one both serialization
-    /// conventions read identically, so no value carries a high-order zero byte. Seeded (2331), so
-    /// the 128 server keys and every ephemeral drawn against them are the same on every machine —
-    /// a red run reproduces. The per-guard proof is `each_encoding_guard_rejects_the_draw_it_exists_for`;
-    /// the live gate is `benilla-protocol`'s `srp_encoding_probe`, which forces each case against
-    /// a real realmd.
     #[test]
     fn every_drawn_handshake_is_encoding_unambiguous() {
         use rand::{rngs::StdRng, SeedableRng};
@@ -685,9 +607,8 @@ mod tests {
         }
     }
 
-    /// The server side of the fixture the guard vectors were found against: a fixed `B` (with the
-    /// high bit `logon` keeps) and a fixed salt. Change either and the vectors below stop meaning
-    /// anything — the test says so.
+    /// The `B` (high bit set, as `logon` keeps) and salt the guard vectors were found against;
+    /// change either and the vectors mean nothing.
     const FIXTURE_B: [u8; 32] = [
         5, 42, 79, 116, 153, 190, 227, 8, 45, 82, 119, 156, 193, 230, 11, 48, 85, 122, 159, 196,
         233, 14, 51, 88, 125, 162, 199, 236, 17, 54, 91, 128,
@@ -696,11 +617,9 @@ mod tests {
         3, 14, 25, 36, 47, 58, 69, 80, 91, 102, 113, 124, 135, 146, 157, 168, 179, 190, 201, 212,
         223, 234, 245, 0, 11, 22, 33, 44, 55, 66, 77, 88,
     ];
-    /// Private keys that, against [`FIXTURE_B`]/[`FIXTURE_SALT`], trip exactly one guard each —
-    /// found once by a seeded search (`StdRng::seed_from_u64(2331)`, first hit per guard) and
-    /// pinned. `TRIPS_A`: `A` gets a high-order zero byte. `TRIPS_S`: `S` gets a low-order zero
-    /// byte. `TRIPS_K`: the interleaved key gets a high-order zero. `TRIPS_M1`: the proof does.
-    /// `CLEAN` passes all four.
+    /// Private keys that each trip one guard against the fixture: `TRIPS_A` gives `A` a high-order
+    /// zero byte, `TRIPS_S` gives `S` a low-order one, `TRIPS_K` and `TRIPS_M1` give the key and
+    /// the proof a high-order one; `CLEAN` trips none.
     const TRIPS_A: [u8; 32] = [
         237, 250, 2, 239, 106, 197, 124, 117, 132, 5, 226, 189, 212, 217, 169, 146, 39, 212, 214,
         11, 198, 57, 225, 84, 17, 219, 168, 107, 118, 105, 11, 95,
@@ -728,10 +647,7 @@ mod tests {
         to_padded_32_le(&BigInt::from(GENERATOR).modpow(&from_le(private_key), &n))
     }
 
-    /// The crate's guarantee, exercised on purpose: each guard in the draw loop is
-    /// handed a private key KNOWN to trip it, then a clean one, and the handshake that comes back
-    /// must be the clean draw's. A dropped guard fails its case outright — the old random sweep
-    /// caught a dropped guard with "~97 %" probability, which is a 3 % escape by design.
+    /// Each guard gets a key known to trip it, then a clean one, and must return the clean draw.
     #[test]
     fn each_encoding_guard_rejects_the_draw_it_exists_for() {
         let user = NormalizedString::new("alice").unwrap();
@@ -791,8 +707,6 @@ mod tests {
         assert_eq!(rng.0.len(), 1, "a clean first draw is the handshake");
     }
 
-    /// A salt is fixed for the life of an account rather than redrawn per handshake, so an ambiguous
-    /// one is not a flaky login but an account that can never log in.
     #[test]
     fn generated_salts_are_encoding_unambiguous() {
         let user = NormalizedString::new("alice").unwrap();

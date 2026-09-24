@@ -1,24 +1,16 @@
-//! Vanilla (1.12) world-packet **header obfuscation**.
-//!
-//! After `CMSG_AUTH_SESSION`, every world-packet *header* (not the body) is run through a stateful
-//! byte cipher keyed by the SRP session key. It is not a real cipher — each byte is XORed with a
-//! rotating session-key byte and chained against the previous ciphertext byte:
+//! The 1.12 world-packet header obfuscation. After `CMSG_AUTH_SESSION` every header, not the body,
+//! runs through a byte cipher keyed by the 40-byte session key, `i` cycling over the key and
+//! `last_c` the previous ciphertext byte, both starting at 0:
 //!
 //! ```text
 //! encrypt: c = (p ^ key[i]) + last_c ;  decrypt: p = (c - last_c) ^ key[i]
 //! ```
 //!
-//! with `i` cycling over the 40-byte key and `last_c` the previous ciphertext byte (both start 0).
-//! Client headers are 6 bytes (a `u16` BE size and `u32` LE opcode); server headers are **always 4**
-//! (a `u16` BE size and `u16` LE opcode). There is no wider-size variant in 1.12: vmangos writes
-//! every outgoing header as `ServerPktHeader { uint16 size; uint16 cmd; }` (WorldSocket.cpp — a
-//! larger body is *truncated* into the u16, never given a wider field) and routes big object
-//! updates through `SMSG_COMPRESSED_UPDATE_OBJECT` instead. The 3-byte large-packet size is a
-//! later-expansion convention; nothing in this stack handles it, by design.
-//!
-//! The handshake: the server's `SMSG_AUTH_CHALLENGE` carries a random seed; the client picks its own
-//! seed (a [`ProofSeed`]), proves it knows the session key via
-//! [`ProofSeed::into_client_header_crypto`], and from then on encrypts/decrypts headers.
+//! Client headers are 6 bytes (`u16` BE size, `u32` LE opcode); server headers are always 4
+//! (`u16` BE size, `u16` LE opcode). vmangos writes every header as
+//! `ServerPktHeader { uint16 size; uint16 cmd; }`, truncating a larger size (`WorldSocket.cpp`),
+//! and sends big object updates as `SMSG_COMPRESSED_UPDATE_OBJECT`; the 3-byte large-packet size
+//! is a later expansion's.
 
 use std::io::{Read, Write};
 
@@ -48,7 +40,7 @@ fn world_server_proof(
     h.finalize().into()
 }
 
-/// Encryption half of the header cipher — kept with the write half of a split connection.
+/// The header cipher's encrypting half, for the write side of a split connection.
 #[derive(Debug, Clone)]
 pub struct EncrypterHalf {
     session_key: [u8; SESSION_KEY_LENGTH],
@@ -77,7 +69,6 @@ impl EncrypterHalf {
         header
     }
 
-    /// Write an encrypted client header to `w`.
     pub fn write_encrypted_client_header<W: Write>(
         &mut self,
         mut w: W,
@@ -89,7 +80,7 @@ impl EncrypterHalf {
     }
 }
 
-/// Decryption half of the header cipher — kept with the read half of a split connection.
+/// The header cipher's decrypting half, for the read side of a split connection.
 #[derive(Debug, Clone)]
 pub struct DecrypterHalf {
     session_key: [u8; SESSION_KEY_LENGTH],
@@ -110,8 +101,7 @@ impl DecrypterHalf {
         }
     }
 
-    /// Decrypt a 4-byte server header into `(size, opcode)`. (1.12 server headers are always 4
-    /// bytes — see the module doc; there is no wider-size variant to handle.)
+    /// Decrypt a 4-byte server header; 1.12 has no wider-size variant.
     pub fn decrypt_server_header(&mut self, mut data: [u8; SERVER_HEADER_LENGTH]) -> ServerHeader {
         self.decrypt(&mut data);
         ServerHeader {
@@ -120,7 +110,6 @@ impl DecrypterHalf {
         }
     }
 
-    /// Read + decrypt a 4-byte server header from `r`.
     pub fn read_and_decrypt_server_header<R: Read>(
         &mut self,
         mut r: R,
@@ -134,13 +123,12 @@ impl DecrypterHalf {
 /// A decrypted server-packet header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServerHeader {
-    /// Body size in bytes, *including* the opcode field but not the size field.
+    /// Body size in bytes, counting the opcode field but not the size field.
     pub size: u16,
-    /// Server opcode.
     pub opcode: u16,
 }
 
-/// Both halves of the header cipher. Split with [`Self::split`] for separate read/write paths.
+/// Both halves of the header cipher.
 #[derive(Debug, Clone)]
 pub struct HeaderCrypto {
     encrypt: EncrypterHalf,
@@ -148,26 +136,21 @@ pub struct HeaderCrypto {
 }
 
 impl HeaderCrypto {
-    /// Mutable access to the decryption half.
     pub fn decrypter(&mut self) -> &mut DecrypterHalf {
         &mut self.decrypt
     }
 
-    /// Mutable access to the encryption half.
     pub fn encrypter(&mut self) -> &mut EncrypterHalf {
         &mut self.encrypt
     }
 
-    /// Split into independent encrypt / decrypt halves (one per direction of a split socket).
+    /// Split into halves, one per direction of a split socket.
     pub fn split(self) -> (EncrypterHalf, DecrypterHalf) {
         (self.encrypt, self.decrypt)
     }
 
-    /// The cipher built straight from a session key, skipping the proof step — the *peer* side of
-    /// [`ProofSeed::into_client_header_crypto`]. Both ends run the same state machine with inverse
-    /// operations from (index 0, previous 0), so a server's [`EncrypterHalf`] is exactly what a
-    /// client's [`DecrypterHalf`] inverts. Lets a test harness stand up a fake world server that
-    /// speaks real encrypted headers.
+    /// The cipher from a session key alone, skipping the proof: a server's [`EncrypterHalf`] is
+    /// what a client's [`DecrypterHalf`] inverts, so a fake world server speaks real headers.
     pub fn from_session_key(session_key: [u8; SESSION_KEY_LENGTH]) -> Self {
         Self::new(session_key)
     }
@@ -188,15 +171,13 @@ impl HeaderCrypto {
     }
 }
 
-/// The client's random seed for the world handshake. Created before `CMSG_AUTH_SESSION`; turned into
-/// the proof + [`HeaderCrypto`] once we know the server's seed.
+/// The client's random seed for the world handshake.
 #[derive(Debug, Clone, Copy)]
 pub struct ProofSeed {
     seed: u32,
 }
 
 impl ProofSeed {
-    /// A new random client seed.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
@@ -209,8 +190,7 @@ impl ProofSeed {
         self.seed
     }
 
-    /// Compute the client proof (binds the session key to both seeds) and the [`HeaderCrypto`] used
-    /// for all subsequent headers. Valid once the server replies with a successful `SMSG_AUTH_RESPONSE`.
+    /// The client proof, binding the session key to both seeds, and the header cipher.
     pub fn into_client_header_crypto(
         self,
         username: &NormalizedString,

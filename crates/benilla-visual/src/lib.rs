@@ -1,45 +1,31 @@
-//! Perceptual image-diff metrics for the Phase-5 visual A/B render harness.
-//!
-//! The harness captures deterministic screenshots of benilla (`$WOW_CAPTURE`, see the `capture` module
-//! in the `benilla` crate) and diffs them. This crate is the pure-math half: given two equally-sized
-//! images it reports how far they diverge ([`Metrics`]) and renders a heatmap of *where* ([`diff_image`]).
-//!
-//! Three uses, one tool: (1) **self-regression** — capture baselines on the current pipeline, then diff
-//! every linear-HDR rework step against them so a machine catches a regression before the director's
-//! eye; (2) **determinism check** — diffing two captures of the same scenario must come out ≈0, which is
-//! what makes (1) trustworthy; (3) **flicker** ([`envelope`]) — the same arithmetic over *time* instead
-//! of over versions: a burst of adjacent frames from a parked camera (`WOW_LIVE_SHOT_COUNT`), collapsed
-//! to where the picture would not hold still.
+//! Image-diff metrics for the capture harness (`WOW_CAPTURE`, the `capture` module in
+//! `benilla-app`): how far two equal-size images diverge ([`Metrics`]) and where ([`diff_image`]),
+//! and over a burst of frames, which pixels would not hold still ([`envelope`], [`toggles`]).
 
 pub mod relight;
 
 use image::RgbImage;
 
-/// A pixel counts as "changed" for [`Metrics::pct_over`] if any channel differs by more than this many
-/// byte units. 8/255 ≈ 3% — above dithering/rounding noise, below a real visual shift.
+/// A pixel counts toward [`Metrics::pct_over`] when a channel differs by more than this (8/255,
+/// about 3%): above dithering noise, below a real visual shift.
 pub const OVER_THRESHOLD: u8 = 8;
 
-/// Per-image difference metrics. Channel deltas are in 0..255 byte units; `pct_over` is a fraction 0..1.
+/// Per-image difference metrics: channel deltas in 0..255 byte units, fractions in 0..1.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Metrics {
-    /// Mean absolute per-channel difference (0..255). The headline "how different" number.
+    /// Mean absolute per-channel difference (0..255).
     pub mae: f64,
-    /// Root-mean-square per-channel difference (0..255) — weights large local deltas more than `mae`.
+    /// Root-mean-square per-channel difference (0..255), weighting large local deltas.
     pub rmse: f64,
     /// Largest single-channel difference anywhere (0..255).
     pub max_delta: u8,
     /// Fraction of pixels (0..1) whose largest channel delta exceeds [`OVER_THRESHOLD`].
     pub pct_over: f64,
-    /// How many pixels differ **at all** (any channel, by any amount).
-    ///
-    /// The number that separates "a render changed" from "a silhouette pixel landed on the other
-    /// side of an MSAA tie": both read as a scary `max_delta` and an `mae` of 0.000, and only the
-    /// count tells them apart. A handful of pixels in a 5.76 M-pixel frame is a tie flipping with
-    /// the binary; a region is a regression. Answering that used to take a hand-rolled PNG
-    /// decoder in a scratchpad, every time.
+    /// Pixels that differ at all: a handful is an MSAA tie flipping, a region a regression, though
+    /// both show a large `max_delta` and an `mae` of 0.000.
     pub changed: u64,
-    /// Where the largest delta is, `(x, y)` — `(0, 0)` when nothing differs. A tie flip recurs at
-    /// the *same* coordinate build after build, which is most of the evidence that it is one.
+    /// Where the largest delta is, `(0, 0)` when nothing differs; a tie flip recurs at the same
+    /// spot build after build.
     pub worst_at: (u32, u32),
 }
 
@@ -90,9 +76,7 @@ pub fn compare(a: &RgbImage, b: &RgbImage) -> anyhow::Result<Metrics> {
     })
 }
 
-/// Render an amplified per-channel abs-difference image: each output channel is `|a-b| * amplify`,
-/// clamped to 255. This colourises both *where* and *in which channel* the images diverge (a red shift
-/// shows red), so the diff is readable at a glance. Errors on a size mismatch.
+/// The per-channel difference `|a - b| * amplify`, clamped to 255, so a red shift shows red.
 pub fn diff_image(a: &RgbImage, b: &RgbImage, amplify: u32) -> anyhow::Result<RgbImage> {
     if a.dimensions() != b.dimensions() {
         anyhow::bail!(
@@ -114,12 +98,12 @@ pub fn diff_image(a: &RgbImage, b: &RgbImage, amplify: u32) -> anyhow::Result<Rg
     Ok(out)
 }
 
-/// How far a burst of frames moved, and where — the output of [`envelope`].
+/// How far a burst of frames moved, and where: [`envelope`]'s output.
 #[derive(Debug, Clone)]
 pub struct Envelope {
-    /// Per-channel `(max − min)` across the stack, amplified — the picture of *where* it flickers.
+    /// Per-channel `max - min` across the stack, amplified.
     pub image: RgbImage,
-    /// Largest single-channel swing anywhere (0..255). The headline "does it flicker at all".
+    /// Largest single-channel swing anywhere (0..255).
     pub max_swing: u8,
     /// Mean per-channel swing (0..255) over the whole frame.
     pub mean_swing: f64,
@@ -127,14 +111,9 @@ pub struct Envelope {
     pub pct_unstable: f64,
 }
 
-/// Collapse a burst of equally-sized frames to their per-pixel **envelope** — `max − min` per channel
-/// across the whole stack. This is the flicker instrument: a still image cannot show a temporal
-/// artefact, but the envelope of adjacent frames from a *parked* camera can, and it localises the
-/// unstable pixels in one picture instead of `n−1` pairwise diffs.
-///
-/// A pixel that holds still contributes 0 whatever its colour, so a scene that is merely *wrong* comes
-/// out black — only what refuses to settle lights up. Errors on fewer than two frames or a size
-/// mismatch.
+/// A burst's per-pixel envelope, `max - min` per channel across the whole stack: from a parked
+/// camera only what refuses to settle lights up, however wrong a still pixel is. Errors on fewer
+/// than two frames or a size mismatch.
 pub fn envelope(frames: &[RgbImage], amplify: u32) -> anyhow::Result<Envelope> {
     let (w, h) = burst_dimensions(frames, 2)?;
     let mut image = RgbImage::new(w, h);
@@ -169,38 +148,26 @@ pub fn envelope(frames: &[RgbImage], amplify: u32) -> anyhow::Result<Envelope> {
     })
 }
 
-/// How often a burst *reversed direction*, and where — the output of [`toggles`].
+/// How often a burst reversed direction, and where: [`toggles`]'s output.
 #[derive(Debug, Clone)]
 pub struct Toggles {
-    /// Per-channel reversal count across the stack, amplified — the picture of *where* it toggles.
+    /// Per-channel reversal count across the stack, amplified.
     pub image: RgbImage,
-    /// Most reversals any one channel made (0..frames−2).
+    /// Most reversals any one channel made (0..frames-2).
     pub max_reversals: u32,
     /// Fraction of pixels (0..1) that reversed at least [`TOGGLE_MIN_REVERSALS`] times.
     pub pct_toggling: f64,
-    /// Row-major `width × height` flags: did this pixel toggle? Carried out of the scan because
-    /// *where* the toggling pixels sit relative to each other is a separate reading ([`shape`]) and
-    /// re-thresholding the amplified image would only recover it approximately.
+    /// Row-major per-pixel toggle flags for [`shape`], exact where re-thresholding `image` is not.
     pub mask: Vec<bool>,
 }
 
-/// A pixel counts as "toggling" for [`Toggles::pct_toggling`] at this many direction reversals. Two
-/// is the smallest count that cannot be a single overshoot, and it already needs a four-frame
-/// up-down-up run — which smooth motion across an edge does not produce.
+/// Direction reversals that make a pixel toggle: two cannot be a single overshoot, and smooth
+/// motion across an edge never makes the up-down-up run they need.
 pub const TOGGLE_MIN_REVERSALS: u32 = 2;
 
-/// Count, per pixel and channel, how many times the value **reversed direction** across the burst,
-/// ignoring steps smaller than `min_delta`.
-///
-/// This is [`envelope`]'s companion for the case the envelope cannot serve: **a moving camera**.
-/// When the view is panning, every edge in the frame sweeps across pixels and `max − min` lights up
-/// the whole picture, so it says nothing. But smooth motion is *monotone* — a pixel being crossed by
-/// an edge goes one way and stays going that way — while z-fighting and an unstable draw order
-/// **alternate**, A/B/A/B, however the camera moves. Counting reversals separates the two.
-///
-/// The director's report is what forced this: the Far Watch Post tower "mostly only flickers while
-/// moving the cam, not while still" — the one condition under which a parked burst is blind by
-/// construction (decision 0653's blind spot, named in 0656).
+/// Count, per pixel and channel, the direction reversals across the burst, ignoring steps under
+/// `min_delta`: the flicker reading for a moving camera. Smooth motion is monotone; z-fighting and
+/// an unstable draw order alternate however the camera moves.
 pub fn toggles(frames: &[RgbImage], min_delta: u8, amplify: u32) -> anyhow::Result<Toggles> {
     let (w, h) = burst_dimensions(frames, 3)?;
     let mut image = RgbImage::new(w, h);
@@ -210,8 +177,7 @@ pub fn toggles(frames: &[RgbImage], min_delta: u8, amplify: u32) -> anyhow::Resu
     for (x, y, out) in image.enumerate_pixels_mut() {
         let mut pixel_max = 0u32;
         for c in 0..3 {
-            // `dir` is the sign of the last step big enough to count; a run of sub-threshold steps
-            // neither reverses nor resets it, so dithering noise cannot manufacture a toggle.
+            // `dir` is the last counted step's sign; smaller steps neither reverse nor reset it.
             let (mut dir, mut reversals) = (0i8, 0u32);
             for pair in frames.windows(2) {
                 let (a, b) = (
@@ -246,7 +212,7 @@ pub fn toggles(frames: &[RgbImage], min_delta: u8, amplify: u32) -> anyhow::Resu
     })
 }
 
-/// A rectangle of the frame, in pixels — `x1`/`y1` exclusive.
+/// A rectangle of the frame in pixels, `x1` and `y1` exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
     pub x0: u32,
@@ -279,10 +245,7 @@ pub struct Region {
     pub bounds: Rect,
     /// Toggling pixels in the run (≤ the bounds' area).
     pub pixels: u64,
-    /// Up to [`REGION_SAMPLES`] pixels spread evenly through the run, in scan order — coordinates
-    /// Every pixel in the run, in scan order. Kept whole because the run's *own* time series
-    /// ([`Region::steps`]) is the reading that follows, and it has to be over the run, not over a
-    /// bounding box that also contains whatever else was passing through.
+    /// Every pixel in the run, in scan order; [`Region::steps`] reads these, not the bounding box.
     pub members: Vec<(u32, u32)>,
 }
 
@@ -292,33 +255,25 @@ pub const REGION_SAMPLES: usize = 8;
 /// One frame-to-frame step of a run, from [`Region::steps`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Step {
-    /// The run's mean luma (0..255) in the earlier frame. The *level*, not just the change: a
-    /// two-state flip's ratio is what identifies the multiplier behind it, and a delta alone hides it.
+    /// The run's mean luma (0..255) in the earlier frame.
     pub mean_from: f64,
-    /// The run's mean R/G/B (0..255) in the earlier frame. Whether a two-state flip preserves the
-    /// channel ratios says what kind of flip it is: a pure **intensity** scale (one light term
-    /// switching on or off) keeps the hue, while swapping to a differently-coloured lighting lane
-    /// does not — and luma alone cannot tell those apart.
+    /// The run's mean R, G and B (0..255) in the earlier frame.
     pub mean_rgb_from: [f64; 3],
     /// Change in the run's mean luma (0..255 units) from this frame to the next.
     pub mean_delta: f64,
-    /// Fraction of the run's pixels (0..1) that moved the **same way** as the mean did. Near 1 = the
-    /// whole surface changed together; near 0.5 = as many pixels went up as down.
+    /// Fraction of the run's pixels (0..1) that moved the same way as the mean: near 1 the surface
+    /// changed together, near 0.5 as many went up as down.
     pub agreement: f64,
 }
 
 impl Region {
-    /// How much of its own bounding box the run actually fills, 0..1. A solid surface approaches 1;
-    /// a scattering of speckles inside a wide box is near 0.
+    /// How much of its bounding box the run fills, 0..1: a solid surface nears 1, speckle 0.
     pub fn fill(&self) -> f64 {
         let area = u64::from(self.bounds.width()) * u64::from(self.bounds.height());
         self.pixels as f64 / area.max(1) as f64
     }
 
-    /// Up to [`REGION_SAMPLES`] pixels spread evenly through the run — coordinates that are
-    /// *provably* in it, to hand to the in-game ray pick (`WOW_PICK`). Reading them off a heatmap by
-    /// eye lands next to the run as often as in it, and then the pick names the wrong surface with
-    /// total confidence.
+    /// Up to [`REGION_SAMPLES`] pixels spread through the run, for the ray pick (`WOW_PICK`).
     pub fn samples(&self) -> Vec<(u32, u32)> {
         let step = (self.members.len() / REGION_SAMPLES).max(1);
         self.members
@@ -329,14 +284,9 @@ impl Region {
             .collect()
     }
 
-    /// The run's own frame-to-frame time series — the reading that separates a surface being
-    /// **re-shaded** from one whose **edges are moving**.
-    ///
-    /// [`shape`] says the toggling pixels form one coherent surface; it cannot say what the surface
-    /// is doing. If the whole run brightens and dims together (`agreement` near 1, `mean_delta`
-    /// swinging), it is being lit differently frame to frame — a shading defect. If half its pixels
-    /// go up while the other half go down (`agreement` near 0.5, `mean_delta` near 0), nothing is
-    /// being re-lit: a boundary is sweeping across it, and the run is an edge, not a surface.
+    /// The run's frame-to-frame series: the whole run brightening and dimming together (`agreement`
+    /// near 1) is a surface re-shaded; half up and half down (`agreement` near 0.5, `mean_delta`
+    /// near 0) is an edge sweeping across it.
     pub fn steps(&self, frames: &[RgbImage]) -> Vec<Step> {
         frames
             .windows(2)
@@ -358,8 +308,7 @@ impl Region {
                     .collect();
                 let n = deltas.len().max(1) as f64;
                 let mean_delta = deltas.iter().sum::<f64>() / n;
-                // A pixel that did not move is counted as disagreeing: it is evidence against "the
-                // whole surface moved together", which is exactly the claim under test.
+                // A pixel that did not move counts against the surface moving together.
                 let same = deltas
                     .iter()
                     .filter(|d| **d != 0.0 && d.is_sign_positive() == mean_delta.is_sign_positive())
@@ -375,33 +324,26 @@ impl Region {
     }
 }
 
-/// Rec. 601 luma — one number per pixel for "how bright", so a colour shift and a brightness shift
-/// are not confused with each other.
+/// Rec. 601 luma.
 fn luma(p: &image::Rgb<u8>) -> f64 {
     0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2])
 }
 
-/// The **spatial** structure of a toggle map — the reading that separates two defects the toggle
-/// percentage alone cannot tell apart.
-///
-/// Both z-fighting and a visibility flip make pixels alternate, so both score the same on
-/// [`Toggles::pct_toggling`]. They differ in *shape*: z-fighting resolves per fragment, so it lands
-/// as moiré banding or speckle — many small runs, low neighbour agreement. A whole surface blinking
-/// in and out (a culling, portal-visibility or draw-submission flip) lands as **one large solid run**
-/// with the surface's own silhouette — few runs, high fill, high coherence. That distinction decides
-/// which subsystem is at fault, so it is measured rather than eyeballed off a heatmap.
+/// The spatial structure of a toggle map. Z-fighting resolves per fragment, landing as many small
+/// runs of low coherence; a whole surface blinking (a culling, portal-visibility or draw-submission
+/// flip) lands as one large solid run. Both score the same on [`Toggles::pct_toggling`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Shape {
     /// Connected runs of at least [`MIN_REGION_PIXELS`], largest first.
     pub regions: Vec<Region>,
     /// Toggling pixels that fell in runs too small to list.
     pub scattered: u64,
-    /// Mean fraction of the 4-neighbours of a toggling pixel that also toggle, 0..1. Near 1 = solid
-    /// areas; near 0 = isolated pixels. A one-pixel-wide moiré band sits near 0.5.
+    /// Mean fraction of a toggling pixel's 4-neighbours that also toggle, 0..1: solid areas near 1,
+    /// isolated pixels near 0, a one-pixel moiré band near 0.5.
     pub coherence: f64,
 }
 
-/// A connected run smaller than this is noise, not a surface — counted in [`Shape::scattered`].
+/// A run smaller than this is noise, counted in [`Shape::scattered`].
 pub const MIN_REGION_PIXELS: u64 = 16;
 
 /// Group a toggle mask into connected runs (4-connectivity) and measure their coherence.
@@ -418,8 +360,7 @@ pub fn shape(t: &Toggles) -> Shape {
                 continue;
             }
             toggling += 1;
-            // Off-frame neighbours count as non-toggling: an edge pixel is genuinely less enclosed,
-            // and pretending otherwise would inflate the coherence of anything touching the border.
+            // Off-frame neighbours count as non-toggling, so a run on the border is not inflated.
             let n = u64::from(x > 0 && t.mask[idx(x - 1, y)])
                 + u64::from(x + 1 < wu && t.mask[idx(x + 1, y)])
                 + u64::from(y > 0 && t.mask[idx(x, y - 1)])
@@ -428,7 +369,7 @@ pub fn shape(t: &Toggles) -> Shape {
         }
     }
 
-    // Iterative flood fill — a recursive one blows the stack on a full-screen region.
+    // Iterative: a recursive flood fill overflows the stack on a full-screen region.
     let mut seen = vec![false; wu * hu];
     let mut regions: Vec<Region> = Vec::new();
     let mut scattered = 0u64;
@@ -477,8 +418,7 @@ pub fn shape(t: &Toggles) -> Shape {
                 }
             }
             if pixels >= MIN_REGION_PIXELS {
-                // The flood fill visits in stack order, so sort to scan order — otherwise
-                // `Region::samples` spreads its picks through the traversal, not through the run.
+                // Scan order, so `Region::samples` spreads through the run, not the traversal.
                 members.sort_unstable_by_key(|&(x, y)| (y, x));
                 regions.push(Region {
                     bounds: b,
@@ -510,11 +450,8 @@ pub fn crop(img: &RgbImage, rect: Rect) -> RgbImage {
     })
 }
 
-/// Magnify by an integer factor, nearest-neighbour — every output pixel is a source pixel verbatim.
-/// This is the only scaling the `crop` subcommand offers on purpose: a resampler blends neighbours,
-/// and a blended edge has already minted a false finding once (a `sips` downscale's "magenta
-/// fringe" read as a render defect). Zoom may enlarge, never shrink: measurements happen at source
-/// resolution or not at all.
+/// Magnify by an integer factor, nearest-neighbour, so every output pixel is a source pixel: a
+/// resampler's blended edge reads as a render defect. It never shrinks.
 pub fn zoom(img: &RgbImage, factor: u32) -> RgbImage {
     let s = factor.max(1);
     RgbImage::from_fn(img.width() * s, img.height() * s, |x, y| {
@@ -522,8 +459,7 @@ pub fn zoom(img: &RgbImage, factor: u32) -> RgbImage {
     })
 }
 
-/// Lay tiles out left-to-right, top-to-bottom in a `cols`-wide grid on a mid-grey mat, so a burst's
-/// crops read as one contact sheet. Tiles of different sizes are placed at their own size.
+/// Lay tiles out in a `cols`-wide grid on a dark grey mat, one contact sheet; each keeps its size.
 pub fn contact_strip(tiles: &[RgbImage], cols: u32, gap: u32) -> RgbImage {
     let cols = cols.max(1);
     let (tw, th) = tiles
@@ -545,7 +481,6 @@ pub fn contact_strip(tiles: &[RgbImage], cols: u32, gap: u32) -> RgbImage {
     out
 }
 
-/// The common size of a burst, erroring unless it has at least `min` equally-sized frames.
 fn burst_dimensions(frames: &[RgbImage], min: usize) -> anyhow::Result<(u32, u32)> {
     if frames.len() < min {
         anyhow::bail!("needs at least {min} frames, got {}", frames.len());
@@ -563,9 +498,7 @@ fn burst_dimensions(frames: &[RgbImage], min: usize) -> anyhow::Result<(u32, u32
     Ok((w, h))
 }
 
-/// Stitch two images side by side (`left | right`) with a `gap`-px dark separator, for at-a-glance A/B
-/// comparison (e.g. the faithful vs modern render). Heights may differ; the output is the max height
-/// with each image top-aligned.
+/// Stitch two images side by side with a `gap`-px dark separator, top-aligned at the taller height.
 pub fn compose_side_by_side(left: &RgbImage, right: &RgbImage, gap: u32) -> RgbImage {
     let h = left.height().max(right.height());
     let w = left.width() + gap + right.width();
@@ -596,9 +529,6 @@ mod tests {
         assert_eq!(m.worst_at, (0, 0));
     }
 
-    /// The single-pixel case this exists for: one silhouette pixel on the wrong side of an MSAA
-    /// tie. `mae` rounds to 0.000 and `pct_over` to 0.00% in a frame this size, so the *only*
-    /// signals that separate it from a real render change are the count and the coordinate.
     #[test]
     fn one_flipped_pixel_is_counted_and_located() {
         let a = solid(100, 80, [40, 40, 40]);
@@ -613,8 +543,7 @@ mod tests {
 
     #[test]
     fn constant_offset_matches_offset() {
-        // Every channel of `b` is 10 below `a`, so mae == rmse == max_delta == 10, and (10 > 8) so
-        // every pixel is "over" → pct_over == 1.
+        // `b` is 10 below `a`: mae == rmse == max_delta == 10, and 10 > 8 puts every pixel over.
         let a = solid(8, 5, [100, 100, 100]);
         let b = solid(8, 5, [90, 90, 90]);
         let m = compare(&a, &b).unwrap();
@@ -626,7 +555,6 @@ mod tests {
 
     #[test]
     fn small_offset_is_under_threshold() {
-        // A 5-byte shift is below OVER_THRESHOLD (8), so no pixel counts as changed even though mae>0.
         let a = solid(8, 5, [100, 100, 100]);
         let b = solid(8, 5, [95, 95, 95]);
         let m = compare(&a, &b).unwrap();
@@ -650,8 +578,6 @@ mod tests {
 
     #[test]
     fn zoom_is_pixel_verbatim() {
-        // A 2x1 two-colour image zoomed ×3: every output pixel must be one of the two source
-        // values, block-aligned — any third colour would mean a resampler blended an edge.
         let mut img = solid(2, 1, [10, 20, 30]);
         img.put_pixel(1, 0, Rgb([200, 100, 50]));
         let z = zoom(&img, 3);
@@ -687,8 +613,6 @@ mod tests {
 
     #[test]
     fn a_still_burst_has_no_envelope() {
-        // The point of max−min: a scene that never moves comes out black however bright it is, so a
-        // merely *wrong* render cannot masquerade as a flickering one.
         let img = solid(4, 4, [200, 30, 90]);
         let e = envelope(&[img.clone(), img.clone(), img], 8).unwrap();
         assert_eq!(e.max_swing, 0);
@@ -699,9 +623,7 @@ mod tests {
 
     #[test]
     fn envelope_spans_the_whole_stack_not_just_neighbours() {
-        // 10 → 60 → 10: consecutive pairs each swing 50, and so does the envelope. But a value that
-        // drifts monotonically (10 → 35 → 60) swings only 25 per pair while the envelope still says
-        // 50 — which is the reason this is a stack operation and not a chain of pairwise diffs.
+        // 10, 60, 10 swings 50 per pair; 10, 35, 60 only 25 per pair, yet both envelopes are 50.
         let base = solid(2, 1, [10, 10, 10]);
         let alternating = {
             let mut m = base.clone();
@@ -760,9 +682,6 @@ mod tests {
 
     #[test]
     fn a_monotone_sweep_never_toggles_however_far_it_moves() {
-        // The whole point: this is what a moving camera does to a pixel an edge sweeps across —
-        // a huge envelope (0 → 240) and zero reversals. `envelope` calls it maximally unstable;
-        // `toggles` correctly says it is not flickering.
         let sweep = ramp(&[0, 60, 120, 180, 240]);
         assert_eq!(envelope(&sweep, 1).unwrap().max_swing, 240);
         let t = toggles(&sweep, 4, 60).unwrap();
@@ -772,7 +691,7 @@ mod tests {
 
     #[test]
     fn an_alternating_pixel_toggles_every_step() {
-        // A/B/A/B/A — z-fighting's signature. Four steps, three of them reversals.
+        // A/B/A/B/A, z-fighting's signature: four steps, three of them reversals.
         let t = toggles(&ramp(&[10, 90, 10, 90, 10]), 4, 60).unwrap();
         assert_eq!(t.max_reversals, 3);
         assert_eq!(t.pct_toggling, 1.0);
@@ -781,19 +700,16 @@ mod tests {
 
     #[test]
     fn sub_threshold_noise_neither_toggles_nor_forgets_the_direction() {
-        // ±1 dither must not manufacture reversals …
+        // ±1 dither makes no reversals,
         let t = toggles(&ramp(&[50, 51, 50, 51, 50, 51]), 4, 60).unwrap();
         assert_eq!(t.max_reversals, 0);
-        // … and a run of it in the middle of a real climb must not reset the direction either,
-        // or every noisy edge would read as one reversal per crossing.
+        // nor does it reset the direction in the middle of a real climb.
         let t = toggles(&ramp(&[0, 40, 41, 40, 41, 80]), 4, 60).unwrap();
         assert_eq!(t.max_reversals, 0);
     }
 
     #[test]
     fn a_single_overshoot_is_one_reversal_and_below_the_toggle_bar() {
-        // Down-then-up once: real, but not a flicker — `TOGGLE_MIN_REVERSALS` is what draws that
-        // line, so a lone direction change must not be counted as a toggling pixel.
         let t = toggles(&ramp(&[10, 90, 40]), 4, 60).unwrap();
         assert_eq!(t.max_reversals, 1);
         assert_eq!(t.pct_toggling, 0.0);
@@ -818,8 +734,7 @@ mod tests {
         assert_eq!(out.get_pixel(4, 0), &Rgb([40, 50, 60])); // right image
     }
 
-    /// A burst in which exactly the pixels selected by `flips` alternate 0/200 and everything else
-    /// holds still — the shape tests differ only in *which* pixels those are.
+    /// A burst where the pixels `flips` selects alternate 0/200 and the rest hold still.
     fn alternating(
         w: u32,
         h: u32,
@@ -838,7 +753,6 @@ mod tests {
 
     #[test]
     fn one_solid_block_reads_as_a_single_filled_run() {
-        // A whole surface blinking: one run, filling its own box, every interior pixel enclosed.
         let frames = alternating(20, 20, 6, |x, y| {
             (4..12).contains(&x) && (4..12).contains(&y)
         });
@@ -866,8 +780,6 @@ mod tests {
 
     #[test]
     fn a_checkerboard_covers_the_same_area_with_none_of_the_shape() {
-        // Z-fighting resolving per fragment. Same region of the frame, ~half the pixels toggling,
-        // but no pixel touches another — the reading that separates it from the block above.
         let frames = alternating(20, 20, 6, |x, y| {
             (4..12).contains(&x) && (4..12).contains(&y) && (x + y) % 2 == 0
         });
@@ -879,11 +791,10 @@ mod tests {
 
     #[test]
     fn runs_come_back_largest_first_and_short_ones_are_scattered() {
-        // Two blocks plus a speck: the big one leads, the speck falls below MIN_REGION_PIXELS.
         let frames = alternating(40, 20, 6, |x, y| {
             let big = (2..12).contains(&x) && (2..12).contains(&y); // 100 px
             let small = (20..25).contains(&x) && (2..7).contains(&y); // 25 px
-            let speck = (30..33).contains(&x) && y == 10; // 3 px — noise
+            let speck = (30..33).contains(&x) && y == 10; // 3 px, noise
             big || small || speck
         });
         let s = shape(&toggles(&frames, 4, 60).unwrap());
@@ -900,7 +811,7 @@ mod tests {
         let s = shape(&toggles(&frames, 4, 60).unwrap());
         assert!(s.regions.is_empty());
         assert_eq!(s.scattered, 0);
-        assert_eq!(s.coherence, 0.0); // no toggling pixels — not a divide-by-zero
+        assert_eq!(s.coherence, 0.0); // no toggling pixels, and no divide-by-zero
     }
 
     #[test]

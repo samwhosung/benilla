@@ -1,7 +1,6 @@
-//! Session probe: dump an M2's attachment table (+ each attach bone's parent/pivot) —
-//! `cargo run -p benilla-m2 --example dump_attach <file.m2>`. Extract the file first via
-//! `mpqx` (benilla-mpq). Built for the nocked-ammo investigation (decision 2273 follow-up), kept
-//! because "which attach ids does this model actually have" keeps coming up.
+//! Dump an M2's attachments and event markers with their bone's parent:
+//! `cargo run -p benilla-m2 --example dump_attach <file.m2>`, extracted first with `mpqx`
+//! (benilla-formats).
 
 use std::io::Cursor;
 

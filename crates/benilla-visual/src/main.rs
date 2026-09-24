@@ -1,19 +1,6 @@
-//! `benilla-visual` — diff captures from the Phase-5 visual A/B harness.
-//!
-//! Usage:
-//!   benilla-visual diff     <a.png> <b.png>   [--out <diff.png>] [--fail <mae>] [--amplify <n>]
-//!   benilla-visual diff-dir <dir_a> <dir_b>   [--out <diff_dir>] [--fail <mae>] [--amplify <n>]
-//!   benilla-visual flicker  <burst_dir>       [--out <envelope.png>] [--fail <mae>] [--amplify <n>]
-//!   benilla-visual stat     <img.png>         [--rect <x>,<y>,<w>,<h>]
-//!
-//! `diff` compares two images; `diff-dir` compares every `*.png` present in *both* directories by name.
-//! Prints the metrics; writes amplified heatmap(s) when `--out` is given; exits non-zero if any image's
-//! MAE exceeds `--fail` (when given). Typical loop: capture baselines, change the renderer, re-capture,
-//! `diff-dir baseline candidate --out diff --fail 1.5`.
-//!
-//! `flicker` is the same arithmetic over *time*: point it at a `WOW_LIVE_SHOT_COUNT` burst (adjacent
-//! frames, parked camera) and it prints the frame-to-frame table and the whole-stack envelope, and
-//! writes the envelope heatmap — the picture of which pixels would not hold still.
+//! `benilla-visual`: diff captures, and read flicker and motion out of a burst of frames; `--help`
+//! lists the subcommands. The regression loop: capture baselines, change the renderer, re-capture,
+//! then `diff-dir baseline candidate --out diff --fail 1.5`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -24,32 +11,24 @@ use benilla_visual::{
     Metrics, Rect, OVER_THRESHOLD,
 };
 
-/// A frame-to-frame step must move a channel by this much to count as a direction change (override
-/// with `--toggle-delta`). Above PNG/dither noise, below any real surface swap.
-///
-/// **The pan rate matters more than this number.** A moving camera sweeps texture detail across
-/// every pixel, and detail is not monotone — at 8°/s (≈15 px/frame at 3200 px) the map saturates at
-/// 93% and says nothing. Keep the sweep **sub-pixel per frame** (≈0.2°/s) so ordinary surfaces
-/// barely move while a depth-comparison flip still swaps whole surfaces at full amplitude.
+/// The smallest step that counts as a direction change (`--toggle-delta`): above PNG and dither
+/// noise, below a surface swap. The pan rate matters more: keep a sweep sub-pixel per frame (about
+/// 0.2°/s), since at 8°/s texture detail saturates the map.
 const TOGGLE_MIN_DELTA: u8 = 4;
 
-/// Reversal counts are small integers, so the toggle map needs its own (much larger) gain than the
-/// 0..255 swings the envelope amplifies: at 60, three reversals saturate.
+/// The toggle map's gain: reversal counts are small, and at 60 three of them saturate.
 const TOGGLE_AMPLIFY: u32 = 60;
 
 /// Gap (px) between the two halves of a side-by-side compose.
 const COMPOSE_GAP: u32 = 6;
 
-/// Tiles per row on a `hotspot` contact sheet — wide enough that a 24-frame burst reads as a few
-/// rows of adjacent frames rather than one unscannable ribbon.
+/// Tiles per row on a `hotspot` contact sheet.
 const STRIP_COLS: u32 = 6;
 
-/// Pixels of context kept around a hotspot crop (override with `--pad`). Enough to see what the
-/// toggling region borders — which is usually the whole point.
+/// Pixels of context around a hotspot crop (`--pad`), enough to see what the run borders.
 const DEFAULT_PAD: u32 = 24;
 
-/// How many runs `hotspot` reports a time series for. Enough to see whether the top runs flip on the
-/// same frames (one cause) or independently (several), narrow enough to stay one screen.
+/// Runs `hotspot` prints a series for: enough to see whether the top runs flip together.
 const SERIES_RUNS: usize = 4;
 
 /// Default amplification for the heatmap output (per-channel abs-diff ×N, clamped).
@@ -147,8 +126,7 @@ fn main() -> Result<()> {
                 opts.out.as_deref(),
                 opts.amplify,
             )?;
-            // Under `--fail` this is a gate, and a shot that never landed must sink it — see the
-            // note in `diff_dir`.
+            // Under `--fail` this is a gate, and a missing shot fails it.
             if opts.fail.is_some() && !unpaired.is_empty() {
                 bail!(
                     "{} unpaired image(s) — a shot is missing from one side, so this comparison is \
@@ -240,17 +218,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// What one named pixel *did*, frame by frame — the colour counterpart to the client's `WOW_DEPTH`.
-///
-/// The aggregate readings (`flicker`, `hotspot`) answer "which pixels would not hold still" over a
-/// whole region, which is the right question when you are looking for a defect and the wrong one once
-/// you have found it. Correlating a renderer-side probe against the pixels needs the opposite: *this*
-/// pixel, *these* frames, no averaging. Run `WOW_DEPTH` and `--at` on the same coordinates and the two
-/// logs line up frame for frame — "the colour changed here but the depth did not" is a fact you cannot
-/// get from a region mean, because a run mean over 19 000 pixels hides which of them moved.
-///
-/// It also guards the trap this exists inside: a burst that happens to contain **no** flip reads as a
-/// clean negative. The per-frame Δ makes an absent phenomenon obvious instead of invisible.
+/// One named pixel's colour frame by frame, to line up against the client's `WOW_DEPTH` log at the
+/// same coordinates; the per-frame delta shows a burst that caught no flip at all.
 fn series(dir: &Path, at: &str) -> Result<()> {
     let pixels = parse_at(at)?;
     let names = pngs(dir)?;
@@ -284,17 +253,8 @@ fn series(dir: &Path, at: &str) -> Result<()> {
     Ok(())
 }
 
-/// Cut a window out of a capture, magnify it, and report what was actually cut — the vetted
-/// replacement for the ad-hoc `sips`/`ffmpeg` crop pipelines that kept minting false findings
-/// (`sips --cropOffset` takes (y, x) and silently ignores what it can't parse; a guessed ffmpeg
-/// window read "no eyes" off a frame the model had left). Three honesty rules: a rect that misses
-/// the frame entirely is an ERROR, never an edge-clamped guess; a rect that only partially fits is
-/// clamped *out loud*; and every pixel sample prints in SOURCE coordinates at source resolution, so
-/// nothing downstream does coordinate math on a zoomed image.
-/// Per-channel min / mean / max over a rect (or the whole frame) — the "is this region flat?"
-/// instrument. A frame edge that shows the render target's clear colour instead of art reads as
-/// `min == max` on every channel (the glue framing's void check); a region of art
-/// never does. Printed, not judged: the caller compares two rects or two captures.
+/// Per-channel min, mean and max over a rect or the whole frame: an edge showing the clear colour
+/// instead of art reads `min == max` on every channel, which a region of art never does.
 fn stat_cmd(path: &Path, rect: Option<&str>) -> Result<()> {
     let img = load(path)?;
     let (w, h) = img.dimensions();
@@ -389,7 +349,7 @@ fn crop_cmd(path: &Path, rect: &str, at: Option<&str>, scale: u32, out: &Path) -
         zoomed.width(),
         zoomed.height(),
     );
-    // Samples: the rect's centre always, plus any --at points — all in source coordinates.
+    // Samples: the rect's centre and any `--at` points, in source coordinates.
     let mut samples = vec![((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2)];
     if let Some(at) = at {
         samples.extend(parse_at(at)?);
@@ -414,8 +374,7 @@ fn crop_cmd(path: &Path, rect: &str, at: Option<&str>, scale: u32, out: &Path) -
     Ok(())
 }
 
-/// `"x,y,w,h"` → the rect it names. Strict for the same reason as [`parse_at`]: a half-parsed
-/// window silently crops the wrong place, and a wrong crop reads as a finding.
+/// `"x,y,w,h"` → the rect it names; strict, since a half-parsed window crops the wrong place.
 fn parse_rect(spec: &str) -> Result<Rect> {
     let parts: Vec<&str> = spec.split(',').map(str::trim).collect();
     let [x, y, w, h] = parts.as_slice() else {
@@ -437,7 +396,7 @@ fn parse_rect(spec: &str) -> Result<Rect> {
     })
 }
 
-/// `"x,y;x,y"` → pixels. Strict: a typo here would silently report the wrong pixel's history.
+/// `"x,y;x,y"` → pixels; strict, since a typo would report the wrong pixel's history.
 fn parse_at(spec: &str) -> Result<Vec<(u32, u32)>> {
     spec.split(';')
         .filter(|s| !s.trim().is_empty())
@@ -455,27 +414,11 @@ fn parse_at(spec: &str) -> Result<Vec<(u32, u32)>> {
         .collect()
 }
 
-/// Stitch every `*.png` present in both dirs into `left | right` side-by-side images under `out`.
-/// **The sub-pixel motion ruler** (`flow <burst_dir> [--rect "<x>,<y>,<w>,<h>"]`).
-///
-/// `flicker` and `series` answer *how much* a pixel changed. Neither can answer the question a
-/// "the animation ticks" report actually asks — is the thing in front of the pixel advancing
-/// **evenly**? — and the obvious way to ask it is a trap: recover one silhouette edge's sub-pixel
-/// position frame by frame, and the ruler is built out of 8-bit pixels, so it carries its own
-/// 1/255 quantisation and a 0.2 px step cannot be separated from the tool's noise floor. That
-/// ambiguity is exactly what left the first staircase reading unattributed.
-///
-/// So estimate the whole window's displacement at once, by least squares over every pixel in it
-/// (Lucas–Kanade, the standard first-order flow solve): thousands of gradients vote on one
-/// `(dx, dy)`, the 8-bit floor averages down by `√N`, and the estimate lands two orders of
-/// magnitude under a pixel. A breathing body is not a rigid translation and does not need to be —
-/// what is read off the series is whether the aggregate advances smoothly, and a staircase in the
-/// RENDER shows up as a staircase here whatever the body underneath is doing.
-///
-/// Columns are the per-frame displacement, its magnitude, and the **second difference** — the
-/// curvature-per-frame discriminator the world-space jitter meter uses, on this side of the glass.
-/// The summary counts **stalled** frames (under a fifth of the median step): a smooth pan has
-/// none, a staircase is mostly them.
+/// The sub-pixel motion ruler: one least-squares (Lucas-Kanade) displacement per frame pair over
+/// the whole window, so thousands of gradients average the 8-bit floor away and a render that
+/// advances in steps reads as steps. Columns are the displacement, its magnitude and the second
+/// difference; a stalled frame moves under a fifth of the median step. It assumes constant
+/// brightness: for a shaded, deforming body use `edge`.
 fn flow(dir: &Path, rect: Option<&str>) -> Result<()> {
     let names = pngs(dir)?;
     if names.len() < 3 {
@@ -487,8 +430,7 @@ fn flow(dir: &Path, rect: Option<&str>) -> Result<()> {
     }
     let first = load(&dir.join(names.iter().next().expect("non-empty")))?;
     let (w, h) = first.dimensions();
-    // The default window is the whole frame minus the one-pixel border the central differences
-    // need. A named rect is clamped out loud, never silently (the `crop` honesty rule).
+    // A named rect is clamped out loud, never silently; the solve skips the one-pixel border.
     let win = match rect {
         Some(spec) => {
             let want = parse_rect(spec)?;
@@ -581,8 +523,7 @@ fn flow(dir: &Path, rect: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// One frame's luma over `win`, row-major — the flow solve's input (f32 is exact for 8-bit sums
-/// and halves the working set against a 3200x1800 f64 buffer).
+/// One frame's luma over `win`, row-major; `f32` halves the working set of a 3200x1800 frame.
 fn luma_window(img: &image::RgbImage, win: &Rect) -> Vec<f32> {
     let mut out = Vec::with_capacity(((win.x1 - win.x0) * (win.y1 - win.y0)) as usize);
     for y in win.y0..win.y1 {
@@ -596,10 +537,8 @@ fn luma_window(img: &image::RgbImage, win: &Rect) -> Vec<f32> {
     out
 }
 
-/// Least-squares first-order optical flow between two luma windows: the `(dx, dy)` that best
-/// explains `b` as `a` shifted, solved once over every interior pixel. `None` when the window
-/// carries no usable gradient structure (a flat sky — the normal matrix is singular and any
-/// answer would be invented).
+/// The `(dx, dy)` that best explains `b` as `a` shifted, over every interior pixel; `None` when
+/// the normal matrix is singular, as over a flat sky.
 fn lucas_kanade(a: &[f32], b: &[f32], w: usize, h: usize) -> Option<(f64, f64)> {
     let (mut sxx, mut sxy, mut syy, mut sxt, mut syt) = (0.0f64, 0.0, 0.0, 0.0, 0.0);
     for y in 1..h - 1 {
@@ -616,8 +555,7 @@ fn lucas_kanade(a: &[f32], b: &[f32], w: usize, h: usize) -> Option<(f64, f64)> 
         }
     }
     let det = sxx * syy - sxy * sxy;
-    // Scale-relative: the normal matrix grows with the window, so an absolute epsilon would call
-    // a big flat window solvable and a small textured one singular.
+    // Relative, since the normal matrix grows with the window.
     if det <= 1e-12 * (sxx * syy).max(f64::MIN_POSITIVE) {
         return None;
     }
@@ -646,11 +584,10 @@ fn compose_dir(da: &Path, db: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Report how far a burst of adjacent frames moved: the frame-to-frame table, then the whole-stack
-/// envelope. Returns the worst consecutive-pair metrics (the `--fail` subject) — the envelope is a
-/// *stack* number and can exceed any single pair, so failing on the pair is the conservative gate.
+/// Print a burst's frame-to-frame table, envelope and toggles; the worst pair's metrics are the
+/// `--fail` subject, since the envelope can exceed any single pair.
 fn flicker(dir: &Path, out: Option<&Path>, amplify: u32, toggle_delta: u8) -> Result<Metrics> {
-    let names: Vec<String> = pngs(dir)?.into_iter().collect(); // BTreeSet — already shot order
+    let names: Vec<String> = pngs(dir)?.into_iter().collect(); // a BTreeSet: already shot order
     if names.len() < 2 {
         bail!(
             "{} holds {} *.png — a flicker burst needs at least 2 (WOW_LIVE_SHOT_COUNT=<n>)",
@@ -691,8 +628,7 @@ fn flicker(dir: &Path, out: Option<&Path>, amplify: u32, toggle_delta: u8) -> Re
         e.mean_swing,
         e.pct_unstable * 100.0
     );
-    // The moving-camera reading. Printed always, because which of the two numbers is meaningful
-    // depends on whether the camera was parked — and a burst does not carry that fact.
+    // Printed always: a burst does not record whether the camera was parked.
     let t = toggles(&frames, toggle_delta, TOGGLE_AMPLIFY)?;
     println!(
         "toggles  of {} frames (delta {toggle_delta}): max reversals {:>3}  toggling pixels {:>6.2}%  \
@@ -718,12 +654,8 @@ fn flicker(dir: &Path, out: Option<&Path>, amplify: u32, toggle_delta: u8) -> Re
     Ok(worst)
 }
 
-/// Follow the toggle map to the thing it found: measure the toggling pixels' **shape**, then crop
-/// the largest run out of every frame into one contact sheet.
-///
-/// The map says *where*; this says *what kind*, and shows the frames that prove it. A run that fills
-/// its box and holds together is one surface blinking (visibility/culling); many thin runs are
-/// z-fighting resolving per fragment. Both read identically on the toggle percentage.
+/// Measure the toggling pixels' shape, print the top runs' series and relight fits, and crop the
+/// largest run out of every frame into one contact sheet.
 fn hotspot(dir: &Path, out: &Path, toggle_delta: u8, pad: u32) -> Result<()> {
     let names: Vec<String> = pngs(dir)?.into_iter().collect();
     let frames: Vec<image::RgbImage> = names
@@ -751,8 +683,7 @@ fn hotspot(dir: &Path, out: &Path, toggle_delta: u8, pad: u32) -> Result<()> {
             r.bounds.x0,
             r.bounds.y0,
         );
-        // Pasteable straight into the in-game ray pick, which is the next question every time:
-        // WOW_PICK="<this>" names the surfaces at these exact pixels, front to back.
+        // For the ray pick: `WOW_PICK` names the surfaces at these pixels, front to back.
         let pick = r
             .samples()
             .iter()
@@ -767,9 +698,7 @@ fn hotspot(dir: &Path, out: &Path, toggle_delta: u8, pad: u32) -> Result<()> {
             benilla_visual::MIN_REGION_PIXELS
         );
     };
-    // What the top runs are actually *doing*, frame by frame: re-shaded together, or edges moving.
-    // Side by side, because whether they flip on the SAME steps is the difference between one global
-    // cause and several local ones — and that is invisible in any single run's series.
+    // The top runs side by side: flipping on the same steps means one cause, not several.
     let series: Vec<Vec<benilla_visual::Step>> = s
         .regions
         .iter()
@@ -789,11 +718,8 @@ fn hotspot(dir: &Path, out: &Path, toggle_delta: u8, pad: u32) -> Result<()> {
             .collect();
         println!("    {:>2} -> {:<2}  {}", i, i + 1, cols.join("  "));
     }
-    // The two extremes of run #0, per channel — the *levels*, which is all this line is. Read the
-    // ratios as description, never as a diagnosis: equal ratios rule out a scalar multiply and
-    // nothing else, since an ADDED light moves the three channels by different factors too. The
-    // reading that actually separates "one surface, re-lit" from "two surfaces" is the per-pixel
-    // affine fit printed below it (`benilla_visual::relight`).
+    // Run #0's extremes per channel, a description only: equal ratios rule out a scalar multiply
+    // and nothing else. The relight fit below is the diagnosis.
     let s0 = &series[0];
     let lo = s0
         .iter()
@@ -812,10 +738,7 @@ fn hotspot(dir: &Path, out: &Path, toggle_delta: u8, pad: u32) -> Result<()> {
         hi.mean_rgb_from[0], hi.mean_rgb_from[1], hi.mean_rgb_from[2],
         ratio.join(" / "),
     );
-    // Same surface re-lit, or a different surface? Fit each run's pixels across its own biggest
-    // frame-to-frame step. High R² = the pattern survived the flip and only its gain/offset moved,
-    // so it is one surface being shaded differently; low R² = the two frames show different
-    // surfaces, whatever the means do.
+    // Each run fitted across its biggest step: high R² is one surface re-lit, low R² two surfaces.
     println!(
         "  across each run's biggest step — is it one surface re-lit? (R² near 1 = yes), \
          against its quietest step as the control:"
@@ -837,8 +760,7 @@ fn hotspot(dir: &Path, out: &Path, toggle_delta: u8, pad: u32) -> Result<()> {
                 )
             })
             .collect();
-        // The control is what licenses the verdict: a low R² on the flip only means "different
-        // surfaces" if the same pixels under the same pan fit tightly when they did NOT flip.
+        // A low R² on the flip means two surfaces only if the quiet step fits tightly.
         let verdict = if ctl.worst_r2() < 0.9 {
             "no control — the pan alone decorrelates these pixels; fit says nothing"
         } else if fit.worst_r2() > 0.9 {
@@ -860,8 +782,7 @@ fn hotspot(dir: &Path, out: &Path, toggle_delta: u8, pad: u32) -> Result<()> {
         );
     }
     let rect = biggest.bounds.padded(pad, w, h);
-    // The toggle map goes in as the first tile, so the sheet carries its own legend: this is the
-    // region, and here is what the frames did inside it.
+    // The toggle map is the first tile, the sheet's own legend.
     let mut tiles = vec![crop(&t.image, rect)];
     tiles.extend(frames.iter().map(|f| crop(f, rect)));
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -882,9 +803,7 @@ fn hotspot(dir: &Path, out: &Path, toggle_delta: u8, pad: u32) -> Result<()> {
     Ok(())
 }
 
-/// `foo.png` + `-toggle` → `foo-toggle.png`. The two maps answer the same question under opposite
-/// camera conditions, so they are written as a pair rather than behind a second flag nobody would
-/// remember to pass.
+/// `foo.png` + `-toggle` → `foo-toggle.png`.
 fn sibling(out: &Path, suffix: &str) -> PathBuf {
     let ext = out.extension().and_then(|e| e.to_str()).unwrap_or("png");
     let stem = out.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
@@ -915,15 +834,9 @@ fn over_fail(m: &Metrics, fail: Option<f64>) -> bool {
     fail.is_some_and(|t| m.mae > t)
 }
 
-/// Load an image as RGB (dropping any alpha — capture windows are opaque).
-/// One silhouette's sub-pixel position along a scanline, per frame — the shading-independent
-/// answer to "did the rendered geometry MOVE smoothly?".
-///
-/// Per frame and per scanline: take the row's own darkest and brightest samples, put the
-/// threshold halfway between them, and linearly interpolate the crossing. Renormalising to the
-/// row's own ends every frame is the whole point — a uniform brightness change (the body turning
-/// into the light) moves `lo` and `hi` together and leaves the crossing where it was, while a
-/// geometric shift moves it. That is the property [`flow`] lacks.
+/// One silhouette's sub-pixel position along a scanline, per frame: where the row crosses the
+/// midpoint of its own darkest and brightest samples, so a uniform brightness change leaves it in
+/// place and only a geometric shift moves it.
 fn edge(dir: &Path, at: &str) -> Result<()> {
     let names = pngs(dir)?;
     if names.len() < 3 {
@@ -972,7 +885,7 @@ fn edge(dir: &Path, at: &str) -> Result<()> {
                 .collect();
             let lo = row.iter().copied().fold(f64::INFINITY, f64::min);
             let hi = row.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            // Too little contrast to call an edge — report it rather than invent a position.
+            // Too little contrast to call an edge: report it, never invent a position.
             if hi - lo < 12.0 {
                 pos.push(f64::NAN);
                 continue;
@@ -1051,11 +964,10 @@ fn diff_one(a: &Path, b: &Path, out: Option<&Path>, amplify: u32) -> Result<Metr
     Ok(m)
 }
 
-/// Compare every `*.png` present in both dirs (by file name). Returns the worst (highest-MAE) result.
-/// What one `diff-dir` run found: the worst pair by MAE, and every image present on only ONE side.
+/// What one `diff-dir` run found: the worst pair by MAE, and every image on only one side.
 struct DirDiff {
     worst: Option<(String, Metrics)>,
-    /// Files with no counterpart, so not diffed at all — see the note in [`diff_dir`].
+    /// Files with no counterpart, so not diffed.
     unpaired: Vec<String>,
 }
 
@@ -1069,11 +981,8 @@ fn diff_dir(da: &Path, db: &Path, out: Option<&Path>, amplify: u32) -> Result<Di
             db.display()
         );
     }
-    // UNPAIRED shots are ANNOUNCED, never skipped in silence. Pairing on the intersection alone is
-    // how a sweep reports all-green with a shot missing: on 2026-07-28 one `water-night` capture
-    // exited 0 without writing its PNG, and `selfcheck` diffed the other eight and passed clean. A
-    // gate that quietly narrows its own scope is worse than no gate. Reported always; fatal to the
-    // CALLER when `--fail` is in force, i.e. whenever this is being used as a gate.
+    // Unpaired shots are announced, never skipped in silence, so a capture that wrote no PNG
+    // cannot let the rest pass clean; the caller fails on them under `--fail`.
     let unpaired: Vec<String> = a
         .difference(&b)
         .map(|n| format!("{}/{n}", da.display()))
@@ -1117,9 +1026,8 @@ fn pngs(dir: &Path) -> Result<BTreeSet<String>> {
 }
 
 fn fmt_metrics(m: &Metrics) -> String {
-    // `px` and the worst pixel's coordinate are what tell a render change from an MSAA tie: both
-    // show `MAE 0.000` with an alarming `max`, and only the count and the location separate them
-    // (a handful of pixels, at the same coordinate every build, is a tie).
+    // `px` and the worst pixel's coordinate tell an MSAA tie from a render change: a handful of
+    // pixels at the same spot every build is a tie.
     let where_ = if m.changed == 0 {
         String::new()
     } else {
@@ -1187,7 +1095,6 @@ mod tests {
 
     #[test]
     fn rect_spec_is_strict() {
-        // "x,y,w,h" and nothing else — a half-parsed window crops the wrong place silently.
         let r = parse_rect("10, 20, 30, 40").unwrap();
         assert_eq!((r.x0, r.y0, r.x1, r.y1), (10, 20, 40, 60));
         assert!(parse_rect("10,20,30").is_err());

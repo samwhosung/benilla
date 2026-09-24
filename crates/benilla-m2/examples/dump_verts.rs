@@ -1,6 +1,5 @@
-//! Session probe: dump an M2's vertices (position / UV / bone binding) plus bone table —
-//! `cargo run -p benilla-m2 --example dump_verts <file.m2>`. Built for the bowstring round:
-//! find which triangles form the string and how they're textured/bound.
+//! Dump an M2's bones and vertices (position, UV, bone binding):
+//! `cargo run -p benilla-m2 --example dump_verts <file.m2>`.
 
 use std::io::Cursor;
 

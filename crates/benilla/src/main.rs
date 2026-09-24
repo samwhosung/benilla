@@ -1,9 +1,5 @@
-//! The `benilla` launcher — a shim whose whole job is to carry `build.rs`'s git stamp.
-//!
-//! Everything real lives in `benilla-app`; this package exists so the build-id stamp — whose
-//! watched git paths make cargo re-dirty the package on **every** commit, rebase, and checkout
-//! (see `build.rs`'s header) — invalidates these few lines and a relink instead of the whole app
-//! crate, its clippy pass, and its integration-test links. Decision 0993 has the measurements.
+//! The `benilla` launcher: a shim that carries the build stamp, so a new commit recompiles these
+//! few lines and relinks instead of rebuilding `benilla-app`.
 
 use benilla_app::BuildId;
 

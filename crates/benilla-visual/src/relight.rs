@@ -1,26 +1,11 @@
-//! **Is it the same surface lit differently, or a different surface?** — the reading that separates
-//! the two explanations a two-state flip always admits.
+//! Tells one surface lit differently from two different surfaces. Equal channel ratios rule out
+//! only a scalar multiply, since an added coloured light changes the ratios too; the spatial
+//! pattern tells them apart. Re-lighting is an affine map per pixel, `bright ≈ gain·dim + offset`,
+//! so the fit is tight, while two surfaces fit loosely however well their means line up. This fits
+//! one frame's pixels onto the other's per channel and reports R².
 //!
-//! [`Region::steps`] measures that a run alternates between two levels and that its pixels move
-//! together. That is where the evidence used to stop, and the gap mattered: B38's tent was read off
-//! the per-channel *ratios* as "two materials trading places", on the argument that one light term
-//! switching would scale all three channels equally. **That argument is wrong.** Equal ratios rule
-//! out a scalar multiply and nothing else — an *additive* term (a coloured light arriving or
-//! leaving) changes the ratios freely. Measured there: dim `(77, 42, 32)` → bright `(192, 79, 35)`
-//! is "×2.50 / ×1.89 / ×1.12", which reads as two materials, and is *also* exactly the dim state
-//! plus a warm `(115, 37, 3)`. The ratios cannot tell those apart, so they were never evidence.
-//!
-//! What does tell them apart is the **spatial pattern**, which the means throw away. Re-lighting a
-//! surface is an affine map on its pixels — every pixel keeps its place in the pattern, so
-//! `bright ≈ gain·dim + offset` holds *per pixel* and the fit is tight. Two different surfaces have
-//! unrelated patterns (canvas weave vs plank grain), and no affine map relates them: the fit is
-//! loose however well the means happen to line up. So: least-squares fit one frame's pixels onto the
-//! other's, per channel, and report R². That is a number, not an inference from a number.
-//!
-//! Fit across the run's **largest single frame-to-frame step**, never across the whole burst: the
-//! camera pans during a capture, and a pixel only names the same bit of world for as long as the
-//! image holds still under it. Adjacent frames at the sub-pixel-per-frame pan the toggle map needs
-//! are the same view; frames twenty apart are not.
+//! The fit spans the run's largest single frame-to-frame step, never the whole burst: the camera
+//! pans, and a pixel names the same bit of world only while the image holds still under it.
 
 use image::RgbImage;
 
@@ -29,26 +14,20 @@ use crate::Region;
 /// A per-channel affine fit of one frame's pixels onto another's, over a [`Region`]'s own pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Relight {
-    /// Per channel, the `a` in `to ≈ a·from + b`. Near 1 with a non-zero [`Relight::offset`] is a
-    /// light being *added*; well above 1 with an offset near 0 is one being *scaled*.
+    /// Per channel, the `a` in `to ≈ a·from + b`: near 1 with an offset is a light added, well
+    /// above 1 with none a light scaled.
     pub gain: [f64; 3],
     /// Per channel, the `b` in `to ≈ a·from + b`, in 0..255 units.
     pub offset: [f64; 3],
-    /// Per channel coefficient of determination, 0..1 — how much of the target frame's variation
-    /// across the run the fit explains. **This is the reading.** Near 1: one surface, re-lit (the
-    /// pattern survived, only its scale and offset moved). Low: the two frames show *different*
-    /// surfaces, and no amount of re-lighting maps one to the other.
+    /// Per channel R², 0..1: near 1 is one surface re-lit, low is two different surfaces.
     pub r2: [f64; 3],
-    /// Did this channel vary across the run at all? A flat channel (uniform, or clipped to 0/255)
-    /// has nothing for a fit to explain, so its R² is 0 for a reason that is **not** evidence of
-    /// different surfaces — and without this flag that 0 would outvote the channels that do carry
-    /// evidence, turning a plain re-light into a false "different surfaces".
+    /// Whether the channel varied across the run: a flat or clipped channel's R² of 0 is no
+    /// evidence, and must not outvote the others.
     pub determinate: [bool; 3],
 }
 
 impl Relight {
-    /// The weakest **determinate** channel's R² — the honest summary, since "one surface, re-lit"
-    /// has to hold in every channel that carries evidence. 0 when no channel does.
+    /// The weakest determinate channel's R², or 0 when no channel is determinate.
     pub fn worst_r2(&self) -> f64 {
         (0..3)
             .filter(|&c| self.determinate[c])
@@ -58,11 +37,8 @@ impl Relight {
     }
 }
 
-/// Least-squares fit of `to`'s pixels onto `from`'s, per channel, over `region`'s own pixels.
-///
-/// A channel with no variation across the run (a flat, saturated, or clipped channel) has nothing
-/// for a fit to explain; its R² is reported as 0 rather than dividing by zero, which reads as
-/// "this channel is not evidence" — the conservative direction.
+/// Least-squares fit of `to`'s pixels onto `from`'s per channel, over `region`'s own pixels; a flat
+/// channel reports R² 0 and is not determinate.
 pub fn relight(region: &Region, from: &RgbImage, to: &RgbImage) -> Relight {
     let mut out = Relight {
         gain: [0.0; 3],
@@ -106,20 +82,13 @@ pub fn relight(region: &Region, from: &RgbImage, to: &RgbImage) -> Relight {
     out
 }
 
-/// The index of the frame-to-frame step where the run's mean luma moved most — the flip itself,
-/// and the pair [`relight`] should be fitted across. `None` for a burst with fewer than two frames.
+/// The step where the run's mean luma moved most: the flip, and the pair [`relight`] fits across.
 pub fn biggest_step(region: &Region, frames: &[RgbImage]) -> Option<usize> {
     extreme_step(region, frames, true)
 }
 
-/// The step where the run's mean luma moved **least** — the **control**, and the reason a low R² on
-/// the biggest step can be believed at all.
-///
-/// The capture pans, so consecutive frames are never quite the same image, and a textured surface
-/// sliding a fraction of a pixel decorrelates on its own. That means a low R² is only evidence of
-/// *different surfaces* if a step where the run did **not** flip scores high across the same pixels
-/// under the same motion. Quiet step near 1 and flip step near 0 is a real reading; both low means
-/// the fit is measuring the pan and nothing else.
+/// The step where the run's mean luma moved least: the control. The pan alone decorrelates a
+/// textured surface, so a low R² on the flip means two surfaces only if this step fits tightly.
 pub fn quietest_step(region: &Region, frames: &[RgbImage]) -> Option<usize> {
     extreme_step(region, frames, false)
 }
@@ -161,7 +130,7 @@ mod tests {
         }
     }
 
-    /// A textured surface: a pattern with real variation for a fit to have to explain.
+    /// A patterned surface, with variation for a fit to explain.
     fn textured(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 3]) -> RgbImage {
         RgbImage::from_fn(w, h, |x, y| Rgb(f(x, y)))
     }
@@ -169,7 +138,7 @@ mod tests {
     #[test]
     fn the_same_surface_plus_a_warm_light_fits_as_gain_one_and_an_offset() {
         let dim = textured(16, 16, |x, y| [(x * 8) as u8, (y * 6) as u8, (x + y) as u8]);
-        // Exactly the B38 shape: add a warm constant, leave the pattern alone.
+        // A warm constant added, the pattern untouched.
         let bright = textured(16, 16, |x, y| {
             [(x * 8 + 115) as u8, (y * 6 + 37) as u8, (x + y + 3) as u8]
         });
@@ -200,8 +169,6 @@ mod tests {
         assert!(r.offset[0].abs() < 1e-6, "{r:?}");
     }
 
-    /// The discrimination the module exists for: two surfaces whose *means* differ exactly as a
-    /// re-light would, but whose patterns are unrelated. The means cannot tell them apart; R² can.
     #[test]
     fn two_different_surfaces_do_not_fit_however_well_their_means_line_up() {
         // Vertical stripes vs horizontal stripes: same mean, same spread, no affine relation.
@@ -221,9 +188,6 @@ mod tests {
         assert!((r.offset[0] - 90.0).abs() < 1e-9, "{r:?}");
     }
 
-    /// The flat-channel rule has to be a *skip*, not a zero vote: a surface whose blue is clipped
-    /// flat but whose red and green track perfectly is one surface being re-lit, and reporting the
-    /// dead channel's 0 as the verdict would call it two.
     #[test]
     fn a_flat_channel_does_not_outvote_the_ones_carrying_evidence() {
         let dim = textured(16, 16, |x, y| [(x * 8) as u8, (y * 6) as u8, 255]);

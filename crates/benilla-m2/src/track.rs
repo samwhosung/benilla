@@ -1,34 +1,21 @@
-//! M2Track readers: the typed [`M2Track`] (with the [`M2ScalarTrack`] / [`M2Vec3Track`] /
-//! [`M2QuatTrack`] aliases) plus the track-parsing helpers the header walk (`crate::parse_m2`)
-//! calls for the M2Color, M2TextureWeight, and M2TextureTransform tracks.
+//! M2Track readers and the cubic track sampler.
 
 use benilla_bytes::ByteExt;
 
-/// One typed `M2Track`, fully read: the interpolation type, the global-sequence tag, the
-/// per-sequence key **ranges**, and the keys as **absolute global-timeline milliseconds** paired
-/// with values. The v256 track (stride `0x1c`): `interp`@0, `global_seq`@2, interpolation_ranges
-/// `M2Array`@`0x04/0x08`, timestamps `M2Array`@`0x0c/0x10` (u32 ms), values `M2Array`@`0x14/0x18`.
-/// A sequence-timeline track (`gseq == 0xffff`) keys inside each sequence's absolute time band; a
-/// global-sequence track loops on `global_sequences[gseq]`'s own clock (`0x713d50`). Key count is
-/// `min(timestamps, values)` — vanilla art occasionally pads one array.
+/// One `M2Track` (v256, `0x1c` bytes): `interp`@0, `gseq`@2, then ranges, timestamps (u32 ms) and
+/// values as `(count, offset)` pairs @`0x04`, `0x0c`, `0x14`. Keys are absolute timeline ms: a
+/// sequence track keys inside each sequence's band, a `gseq` track loops on its global sequence
+/// (`0x713d50`). The key count is `min(timestamps, values)`, as vanilla art pads one array.
 #[derive(Clone, Debug)]
 pub struct M2Track<V> {
-    /// Interpolation type: `0` = step (nearest-previous key), nonzero = linear (the scalar sampler
-    /// `0x71af20`'s `cmp word[track],0` two-way dispatch).
+    /// `0` step (the previous key), nonzero linear: the scalar sampler's two-way test (`0x71af20`).
     pub interp: u16,
     /// Global-sequence index, `0xffff` = an ordinary sequence-timeline track.
     pub gseq: u16,
-    /// The per-sequence **key-index window** `(lo, hi)`, one entry per sequence in file order —
-    /// the array the reference's key search indexes by the playing sequence's slot before it ever
-    /// looks at a timestamp (`0x713d50`: `[track+8][idx*8+{0,4}]`; an empty array is the
-    /// `[track+4]==0` fallback, "search the whole key list").
-    ///
-    /// These are **brackets**, not the playable key set: `hi` routinely points at a key in a LATER
-    /// sequence's band, which is why selecting in-clip keys through this window instead of by
-    /// timestamp froze creatures at a garbage pose (benilla decision 0133). Its load-bearing use is
-    /// the other one — a band that keys nothing resolves to `keys[lo]` (`lo >= hi` ⇒ the degenerate
-    /// `{lo, lo, 0}` result), so this array says *exactly* what the reference holds there instead
-    /// of leaving it to a nearest-key approximation.
+    /// The per-sequence key-index window `(lo, hi)`, one per sequence in file order, which the
+    /// reference's key search reads before any timestamp (`0x713d50`; empty means search all
+    /// keys). Brackets, not the clip's keys: `hi` often lands in a later sequence's band. A band
+    /// with no keys resolves to `keys[lo]`.
     pub ranges: Vec<(u32, u32)>,
     /// `(absolute ms, value)` keys, file order (time-ascending within a band).
     pub keys: Vec<(u32, V)>,
@@ -45,25 +32,23 @@ impl<V> Default for M2Track<V> {
     }
 }
 
-/// A scalar (`fix16`, `0..=1`) track — the M2Color **alpha** and M2TextureWeight **weight** tracks.
+/// A scalar track: the M2Color alpha and the M2TextureWeight weight.
 pub type M2ScalarTrack = M2Track<f32>;
-/// A `C3Vector` track — the M2TextureTransform **translation** / **scaling** tracks.
+/// A `C3Vector` track: the M2Color RGB and the texture-transform translation and scaling.
 pub type M2Vec3Track = M2Track<[f32; 3]>;
-/// A quaternion (4×f32, raw v256 floats) track — the M2TextureTransform **rotation** track.
+/// A quaternion track (4×f32): the texture-transform rotation.
 pub type M2QuatTrack = M2Track<[f32; 4]>;
 
 impl<V: Copy + PartialEq> M2Track<V> {
-    /// All key values equal (or a single key): the track is a constant — `Some(value)`; `None` for a
-    /// keyless or genuinely time-varying track.
+    /// The track's value when every key holds the same one.
     pub fn constant(&self) -> Option<V> {
         let (_, first) = *self.keys.first()?;
         self.keys.iter().all(|&(_, v)| v == first).then_some(first)
     }
 }
 
-/// Read one `M2Track<V>` (see [`M2Track`]): the shared `interp`/`gseq`/timestamp walk with a
-/// per-value reader. Out-of-range reads yield an empty key list (= "no keys", the factor/transform
-/// does not apply) — real art relies on that tolerance.
+/// Read one `M2Track<V>` with a per-value reader. An out-of-range track reads as no keys, a
+/// tolerance real art needs.
 fn track_read<V>(
     b: &[u8],
     track_ofs: usize,
@@ -85,9 +70,8 @@ fn track_read<V>(
     let keys = (0..n)
         .map_while(|i| b.u32_at(to + i * 4).zip(read_val(b, vo + i * val_size)))
         .collect();
-    // The per-sequence `(lo, hi)` key-index windows (`M2Array`@0x04/0x08, 8-byte entries) — see
-    // [`M2Track::ranges`]. A short/absent array reads as empty, which is the reference's own
-    // `[track+4] == 0` "no ranges" fallback.
+    // The `(lo, hi)` windows, 8 bytes each; an unreadable array is empty, the reference's
+    // no-ranges case.
     let ranges = match b.u32_at(track_ofs + 0x04).zip(b.u32_at(track_ofs + 0x08)) {
         Some((rn, ro)) => (0..rn as usize)
             .map_while(|i| {
@@ -109,32 +93,22 @@ fn rd_vec3(b: &[u8], o: usize) -> Option<[f32; 3]> {
     Some([b.f32_at(o)?, b.f32_at(o + 4)?, b.f32_at(o + 8)?])
 }
 
-/// Read a scalar `fix16` track (**`int16`**/32767 values). Used for the colour-**alpha** and
-/// transparency-**weight** tracks that gate batch visibility and drive the animated material combine.
-///
-/// **The key is SIGNED** — `movsx`, not `movzx` (`dest = (f32)(int16 P[k0]) * (1/0x7fff)`, bytes
-/// `movsx edx,word[P+k0*2]; fild; fmul [0x811610]; fstp dest` at `0x715b2f`–`0x715b46`, dispatched
-/// at the M2Color-alpha site `0x715b21` (`colors[]` stride 0x38, track @ +0x1c) and the
-/// transparency-weight site `0x715ce2`). Read unsigned, the authored "hide me" key `0x8001` decodes
-/// as `+1.00006` instead of `−1.0`, so a batch the reference culls (`A ≤ 0`, `0x707b3a`–`0x707b5c`)
-/// draws at full alpha instead: that is how Zul'Farrak's troll gate drew its BURNT twin on top
-/// of its intact self and z-fought. Values outside `[0, 1]` are the
-/// artist's own encoding, not a data quirk — the combine consumes them as signed floats and the
-/// cull tests `≤ 0`.
+/// Read a `fix16` scalar track, `int16 / 32767`. The key is signed (`movsx`, then `fmul` by the
+/// `1/0x7fff` at `0x811610`, `0x715b2f`–`0x715b46`; from the colour alpha `0x715b21` and the weight
+/// `0x715ce2`): art authors `0x8001` (−1.0) to hide a batch, which the cull (`A ≤ 0`,
+/// `0x707b3a`–`0x707b5c`) drops. Values outside `[0, 1]` are authored, not noise.
 pub(crate) fn track_fix16(b: &[u8], track_ofs: usize) -> M2ScalarTrack {
     track_read(b, track_ofs, 2, |b, o| {
         b.u16_at(o).map(|v| f32::from(v as i16) / 32767.0)
     })
 }
 
-/// Read a timed `C3Vector` (3×f32) track — the texture-transform **translation**/**scaling**
-/// tracks and the M2Color **RGB** track.
+/// Read a `C3Vector` (3×f32) track.
 pub(crate) fn track_vec3_timed(b: &[u8], track_ofs: usize) -> M2Vec3Track {
     track_read(b, track_ofs, 12, rd_vec3)
 }
 
-/// Read a timed quaternion (4×f32, raw v256 floats — vanilla does not compress quat keys) track —
-/// the texture-transform **rotation** track.
+/// Read a quaternion track: 4×f32, as vanilla does not compress quaternion keys.
 pub(crate) fn track_quat(b: &[u8], track_ofs: usize) -> M2QuatTrack {
     track_read(b, track_ofs, 16, |b, o| {
         Some([
@@ -146,16 +120,10 @@ pub(crate) fn track_quat(b: &[u8], track_ofs: usize) -> M2QuatTrack {
     })
 }
 
-/// One key of a **cubic** M2 track — the reference's `M2SplineKey<T>`: the value plus its in/out
-/// tangents, `{value@+0, in_tan@+1·sizeof(T), out_tan@+2·sizeof(T)}` (the vec3 key is stride
-/// `0x24` `{value@+0, inTan@+0xc, outTan@+0x18}`, the scalar-float key stride `0xc`
-/// `{value@+0, inTan@+4, outTan@+8}`).
-///
-/// **The wide key is the stride whatever `interp` says.** The reference's cubic element loops
-/// address every key as `payload + k*0x24` (`0x716b51`) / `payload + k*0xc` (`0x7173cc`) *before*
-/// the four-way interp dispatch, and the STEP/LINEAR legs then read the `value` sub-field of that
-/// same wide key. Real art relies on it: `Cameras\FlyByDwarf.m2`'s roll track is authored
-/// `interp = 0` and still carries a 12-byte key.
+/// One key of a cubic track: the value, then the in and out tangents, each `sizeof(T)` apart. The
+/// wide key is the stride whatever `interp` says: the reference addresses keys as `k*0x24`
+/// (`0x716b51`) or `k*0xc` (`0x7173cc`) before dispatching, and step and linear read its `value`
+/// (`Cameras\FlyByDwarf.m2`'s roll track is `interp = 0` with 12-byte keys).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct M2SplineKey<V> {
     pub value: V,
@@ -163,18 +131,17 @@ pub struct M2SplineKey<V> {
     pub out_tan: V,
 }
 
-/// A cubic `C3Vector` track — the M2Camera **position**/**target** tracks.
+/// A cubic `C3Vector` track: the M2Camera position and target.
 pub type M2Vec3SplineTrack = M2Track<M2SplineKey<[f32; 3]>>;
-/// A cubic scalar-float track — the M2Camera **roll** track.
+/// A cubic scalar track: the M2Camera roll.
 pub type M2ScalarSplineTrack = M2Track<M2SplineKey<f32>>;
 
-/// A value a cubic track can hold: the four basis weights are scalars, so the leaf only has to
-/// know how to build `Σ wᵢ·Pᵢ` componentwise.
+/// A value a cubic track can hold.
 pub trait CubicValue: Copy {
     /// `w0·p0 + w1·p1 + w2·p2 + w3·p3`.
     fn combine(w: [f32; 4], p: [Self; 4]) -> Self;
-    /// The LINEAR leg, in the reference's own form `a + (b − a)·t` (`0x716cf1`) — not the
-    /// algebraically equal `(1−t)·a + t·b`, which rounds differently in f32.
+    /// The linear leg in the reference's form `a + (b − a)·t` (`0x716cf1`), which rounds
+    /// differently in f32 from `(1−t)·a + t·b`.
     fn lerp(a: Self, b: Self, t: f32) -> Self;
 }
 
@@ -197,24 +164,16 @@ impl CubicValue for [f32; 3] {
 }
 
 impl<V: CubicValue> M2Track<M2SplineKey<V>> {
-    /// Sample this cubic track at absolute global-timeline `ms`, **end-clamped** at both ends.
+    /// Sample at absolute timeline `ms`, clamped at both ends, by the cubic loops' four-way
+    /// `interp` dispatch (the bone loops have only two):
     ///
-    /// The four-way `interp` dispatch is the reference's own, and it is the *cubic element loops'*
-    /// dispatch — not the two-way `cmp word[track],0; jne <linear>` the bone/TRS loops collapse to
-    /// (the switch is per-loop, by track type). The bases, with `t` the key-interval fraction:
+    /// - `0` step: `value[k0]` (`0x716b5f`).
+    /// - `1` linear (`0x716cf1`).
+    /// - `2` Bézier over `{value[k0], outTan[k0], inTan[k1], value[k1]}` (`0x716c41`), what every
+    ///   `Cameras\*.m2` fly-by authors for position and target.
+    /// - `3` Hermite over `value[k0]`, `outTan[k0]`, `value[k1]`, `inTan[k1]` (`0x716b9e`).
     ///
-    /// - `0` **STEP** — `value[k0]`, no tangent read (`0x716b5f`).
-    /// - `1` **LINEAR** — `value[k0] + (value[k1] − value[k0])·t` (`0x716cf1`).
-    /// - `2` **BÉZIER** — the cubic Bernstein basis over control points
-    ///   `{value[k0], outTan[k0], inTan[k1], value[k1]}`: `B0 = (1−t)³`, `B1 = 3t(1−t)²`,
-    ///   `B2 = 3t²(1−t)`, `B3 = t³` (`0x716c41`). This is what every shipped `Cameras\*.m2`
-    ///   fly-by authors on its position and target tracks.
-    /// - `3` **HERMITE** — `h00·value[k0] + h10·outTan[k0] + h01·value[k1] + h11·inTan[k1]` with
-    ///   `h00 = 2t³−3t²+1`, `h10 = t³−2t²+t`, `h01 = 3t²−2t³`, `h11 = t³−t²` (`0x716b9e`).
-    ///
-    /// Note which tangent each control point comes from: the **outgoing** tangent of the key
-    /// being left and the **incoming** tangent of the key being entered. Swapping them looks
-    /// almost right and drifts wrong exactly where the path curves hardest.
+    /// A span takes the out tangent of the key it leaves and the in tangent of the key it enters.
     pub fn sample_ms(&self, ms: u32) -> Option<V> {
         let first = self.keys.first()?;
         let last = self.keys.last()?;
@@ -272,12 +231,12 @@ fn rd_spline<V>(
     })
 }
 
-/// Read a cubic `C3Vector` track (key stride `0x24`) — the M2Camera position/target tracks.
+/// Read a cubic `C3Vector` track (key stride `0x24`).
 pub(crate) fn track_spline_vec3(b: &[u8], track_ofs: usize) -> M2Vec3SplineTrack {
     track_read(b, track_ofs, 0x24, |b, o| rd_spline(b, o, 12, rd_vec3))
 }
 
-/// Read a cubic scalar-float track (key stride `0xc`) — the M2Camera roll track.
+/// Read a cubic scalar track (key stride `0xc`).
 pub(crate) fn track_spline_f32(b: &[u8], track_ofs: usize) -> M2ScalarSplineTrack {
     track_read(b, track_ofs, 0xc, |b, o| {
         rd_spline(b, o, 4, |b, o| b.f32_at(o))

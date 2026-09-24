@@ -1,27 +1,6 @@
-//! An M2 (MD20) model reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing the `wow-m2` fork,
-//! scoped to the **render path** the renderer consumes.
-//!
-//! Vanilla `.m2` files are MD20 version **256/257**: a fixed header of `M2Array`s (each a `count` +
-//! file `offset`), then the referenced arrays, with the **skin profile(s) embedded** in the same file.
-//! We read only what the mesh builder needs — vertices, textures, materials (render flags), bones
-//! (pivot + flags), the texture-lookup table, and skin profile 0 (indices / triangles / submeshes /
-//! batches) — and deliberately **skip the cosmetic chunks** (particle emitters, lights, texture
-//! animations). That sidesteps exactly what the `wow-m2` fork patched: those chunks can be malformed
-//! in Classic art and abort a full parse; benilla-formats parses lights/particles itself from raw
-//! bytes, so we never touch them here.
-//!
-//! Proven against `wow-m2` over real models during the decision-0021 migration (oracle test in git
-//! history); the creature/GameObject mesh + cosmetic-chunk-model golden tests in benilla-formats pin
-//! it end-to-end on every run.
-//!
-//! Byte access goes through `benilla-bytes`: every read is bounds-checked and a
-//! truncated array/record is a typed [`Error::Truncated`], never a panic; header-driven `Vec`
-//! reservations are capped by what the input could actually hold, so a corrupt count can no longer
-//! OOM-abort the process before the first bounds-checked read ever runs.
-//!
-//! Split by concern: this file keeps the public re-export surface and the top-level [`parse_m2`]
-//! entry + MD20 header walk; `model` holds the plain parsed-record types, `track` the M2Track
-//! scalar/vector readers, `skin` the embedded skin-profile decoder, and `error` the parse error type.
+//! An M2 (MD20) model reader for WoW 1.12.1. Vanilla models are MD20 version 256 or 257: a header
+//! of `M2Array`s (`count`, file `offset`), the arrays they name, and the embedded skin profiles.
+//! Particle emitters and lights are not read here; benilla-formats reads them from the raw bytes.
 
 mod error;
 mod model;
@@ -48,8 +27,7 @@ use benilla_bytes::{capped, ByteExt};
 use error::Result;
 use track::{track_fix16, track_quat, track_spline_f32, track_spline_vec3, track_vec3_timed};
 
-/// Read a `C3Vector` (3×f32) at `o`, bounds-checked. `None` iff any of the three reads would run
-/// past the end — callers map that to their own [`Error::Truncated`].
+/// A `C3Vector` (3×f32) at `o`.
 fn rd_c3(b: &[u8], o: usize) -> Option<C3> {
     Some(C3 {
         x: b.f32_at(o)?,
@@ -58,7 +36,7 @@ fn rd_c3(b: &[u8], o: usize) -> Option<C3> {
     })
 }
 
-/// Parse an MD20 model (v256/257). `cursor` position is ignored; the file starts at the header.
+/// Parse an MD20 model; the cursor's position is ignored.
 pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     let b: &[u8] = cursor.get_ref();
     if b.len() < 8 || &b[0..4] != b"MD20" {
@@ -69,8 +47,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         return Err(Error::UnsupportedVersion(version));
     }
 
-    // Walk the header reading the M2Array `(count, offset)` pairs we need (8 bytes each), applying the
-    // pre-Wrath version conditionals. Layout order per wowdev ADT/M2 + the reference.
+    // Walk the header's `(count, offset)` M2Arrays, 8 bytes each, pre-Wrath layout.
     let arr = |p: usize| -> Result<(u32, u32)> {
         Ok((
             b.u32_at(p).ok_or(Error::Truncated)?,
@@ -85,15 +62,10 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     p += 8;
     let _anim = arr(p)?;
     p += 8;
-    // AnimationLookup (header `+0x24`/`+0x28`): `AnimationData.dbc` id → this model's first sequence
-    // slot for it, `0xffff` where the model doesn't author it. The reference's "does this model own
-    // animation id X" predicate (`0x711960`) is exactly a bounds-checked read of this table, so it is
-    // parsed rather than inferred from the sequence list — see [`M2Model::owns_animation`].
+    // AnimationLookup (`+0x24`), which the reference's ownership test `0x711960` reads.
     let animation_lookup_arr = arr(p)?;
     p += 8;
-    // PlayableAnimationLookup (header `+0x2c`/`+0x30`, pre-Wrath only — dropped past
-    // version 263, which `parse_m2`'s own top guard already excludes, so this is unconditional on any
-    // version that reaches here; the `if` stays for documentation).
+    // PlayableAnimationLookup (`+0x2c`): pre-Wrath only, as is every version admitted above.
     let playable_animation_lookup_arr = if (256..=263).contains(&version) {
         let v = arr(p)?;
         p += 8;
@@ -134,23 +106,16 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     p += 8;
     let texture_lookup_table = arr(p)?;
     p += 8;
-    // header 0x9c: texture_unit_lookup — the **env-vs-UV mapping table**. `texUnit.texture_coord_combo_index`
-    // (+0x12) indexes it; a value `< 3` names a UV channel, `>= 3` (real art: `0xffff`) is a
-    // *generated* environment coordinate (`0x70b8bd`).
-    //
-    // The three lookup slots here follow the reference's header walk `0x71cdf0` (renderFlags pinned
-    // at 0x84 ⇒ texLookup 0x94 · texUnitLookup 0x9c · transLookup 0xa4 · texAnimLookup 0xac), NOT
-    // one slot early. Byte-proof on real art:
-    // ElwynnTallWaterfall01 (2 transforms, batch combos 0/1) has [0,1] at 0xac, and
-    // StormwindMagePortal01 (4 weight tracks) has the identity [0,1,2,3] at 0xa4 with [0] at 0x9c
-    // — reading 0x9c as the transparency lookup silently dropped the portal's combo-1..3 tracks.
+    // header 0x9c: texture_unit_lookup, a stage's UV channel or environment coordinate. These
+    // three lookups sit where the reference's header walk `0x71cdf0` puts them, not a slot
+    // earlier: StormwindMagePortal01 has [0] at 0x9c and its weight lookup [0,1,2,3] at 0xa4.
     let texture_unit_lookup_arr = arr(p)?;
     p += 8;
-    // header 0xa4: transparency_lookup (u16) — `weight_combo_index` indexes it to reach a weight track.
+    // header 0xa4: transparency_lookup (u16), `weight_combo_index` to a weight track.
     let transparency_lookup_arr = arr(p)?;
     p += 8;
-    // header 0xac: texture_animation_lookup (u16) — `texture_transform_combo_index` (texUnit
-    // +0x16) indexes it to reach a texture transform (`0x70b897`); 0xffff = none.
+    // header 0xac: texture_animation_lookup (u16), `texture_transform_combo_index` to a texture
+    // transform (`0x70b897`); 0xffff is none.
     let tex_anim_lookup_arr = arr(p)?;
     p += 8;
     // Authored bounds: AABB (min C3, max C3) then sphere radius.
@@ -167,7 +132,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     p += 12;
     let bounding_sphere_radius = b.f32_at(p).ok_or(Error::Truncated)?;
     p += 4;
-    // The collision box (min C3 + max C3) + collision sphere radius — the tight collision hull (28 bytes).
+    // The collision box and sphere radius: the tight hull.
     let collision_box_min = read_box(p)?;
     p += 12;
     let collision_box_max = read_box(p)?;
@@ -178,18 +143,15 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     p += 8;
     let bounding_vertices = arr(p)?;
     p += 8;
-    // Continue the header to the attachments block: boundingNormals, then attachments + attachLookup.
     let _bounding_normals = arr(p)?;
     p += 8;
     let attachments = arr(p)?;
     p += 8;
     let attach_lookup = arr(p)?;
     p += 8;
-    // header 0x114: the animation-event table (the `$CSL`/`$BWR`/`$SND`… records) — the positional
-    // markers are kept below; the per-sequence fire keys are `benilla-formats`' concern.
+    // header 0x114: the animation events (`$CSL`, `$BWR`, `$SND`…); only their positions are read.
     let events = arr(p)?;
-    // The follow-camera pivot height source (`0x50cbc0`): attachment **id 17**'s
-    // model-space Z. `None` if the model has no slot-17 attachment (caller falls back to the vertex box).
+    // The follow camera's pivot height (`0x50cbc0`): attachment id 17's model-space Z.
     let pivot_attach_z = attachment_z(b, 17, attachments, attach_lookup);
 
     // --- read the arrays we keep ---
@@ -197,11 +159,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         b.bytes_at(start, len).ok_or(Error::Truncated)
     };
 
-    // Vertices: 48 bytes each. The reservation is capped by what the file could actually hold
-    // (`benilla_bytes::capped`): a corrupt/hostile `vertices.0` count can then at
-    // worst reserve the input's own size, never OOM-abort the process before the loop reaches its
-    // first bounds-checked read. The loop below still walks the *real* declared count — a short
-    // file fails cleanly at `get(..)?` instead.
+    // Vertices: 48 bytes each. The reservation is capped by the file; a short file fails at `get`.
     let vert_avail = b.len().saturating_sub(vertices.1 as usize);
     let mut verts = Vec::with_capacity(capped(vertices.0 as usize, 48, vert_avail));
     for i in 0..vertices.0 as usize {
@@ -224,13 +182,8 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     for i in 0..textures.0 as usize {
         let t = get(textures.1 as usize + i * 16, 16)?;
         let ttype = M2TextureType::from_u32(t.u32_at(0).ok_or(Error::Truncated)?);
-        // `+0x04` — the ADDRESS MODE, and it decides silhouettes, not just tiling. Bit 0 = repeat U,
-        // bit 1 = repeat V; clear = clamp to edge. Content authors a cutout card's UVs *outside*
-        // `0..1` deliberately, so the border clamps to the texture's transparent edge and the card
-        // fades out to nothing — sampled with repeat instead, those margins wrap around into the
-        // opaque middle of the sheet and draw as solid geometry, with a hard seam where u crosses
-        // the wrap. This field was documented in this very comment and read by nobody until B52
-        // (the Dun Morogh snow-firs) was traced to it.
+        // `+0x04`, the address mode: bit 0 repeats U, bit 1 V, clear clamps to edge. Cutout cards
+        // put UVs outside `0..1` to clamp to their transparent edge; repeated, they draw solid.
         let tflags = t.u32_at(4).ok_or(Error::Truncated)?;
         let (fcount, fofs) = (
             t.u32_at(8).ok_or(Error::Truncated)? as usize,
@@ -258,9 +211,8 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         });
     }
 
-    // Bones: 108 bytes each in v256 — header 12 (id i32, flags u32, parent i16, submesh u16; vanilla
-    // has NO boneNameCRC field, unlike TBC+), then 3×28 pre-Wrath tracks, then pivot C3. flags @4,
-    // pivot @96. The reference zeroes NaN pivot components (a corruption guard); mirror it.
+    // Bones: 108 bytes in v256: key bone i32, flags u32, parent i16, submesh u16 (no boneNameCRC in
+    // vanilla), three 28-byte tracks, pivot C3 @96. The reference zeroes a NaN pivot component.
     let bones_avail = b.len().saturating_sub(bones.1 as usize);
     let mut bone_list = Vec::with_capacity(capped(bones.0 as usize, 108, bones_avail));
     for i in 0..bones.0 as usize {
@@ -283,22 +235,16 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         });
     }
 
-    // Attachments: 48 bytes each (id u32 @0, bone u32 @4, position C3 @8; a 28-byte visibility
-    // M2Track follows and is skipped — see [`M2Attachment`]). `id`/`bone` are narrowed to `u16`; a
-    // record whose id/bone doesn't fit, or whose bone indexes past `bone_list` (now fully parsed
-    // above), is dropped rather than kept malformed — real attachment ids run ≤ 36, so this never
-    // drops legitimate data.
+    // Attachments: 48 bytes (id, bone, position C3 @8, a skipped track). A record whose id or bone
+    // overflows `u16`, or whose bone is out of range, is dropped; real ids stop at 36.
     let att_count = attachments.0 as usize;
     let att_avail = b.len().saturating_sub(attachments.1 as usize);
-    // The whole table must fit the file before it is walked — the loop's `get(..)?` reaches that
-    // verdict anyway, but the per-record index vector below is sized from the count, and a raw
-    // u32::MAX there was an 8 GiB non-zero fill before the first bounds-checked read.
+    // The table must fit the file first: `emitted_at` below is sized from the raw count.
     if capped(att_count, 48, att_avail) < att_count {
         return Err(Error::Truncated);
     }
     let mut attachment_list = Vec::with_capacity(att_count);
-    // A dropped record shifts the emitted indices, and the AttachLookup below indexes the FILE's
-    // records — so the translation is carried here rather than reconstructed later.
+    // AttachLookup indexes the file's records; a dropped one shifts ours, so map file to emitted.
     let mut emitted_at = vec![0xffffu16; att_count]; // proven to fit above
     for (i, emitted) in emitted_at.iter_mut().enumerate() {
         let a = get(attachments.1 as usize + i * 48, 48)?;
@@ -319,12 +265,9 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         });
     }
 
-    // AttachLookup (header `+0x10c`): attachment **id** → the one record it resolves to. This is
-    // the reference's only id→record map (`0x710310`: `id >= count` ⇒ the `0xffff` sentinel, else
-    // `lookup[id]`) and it is emphatically NOT a scan of the table — shipped weapons author
-    // several records under one id (`Stave_2H_Long_D_05`: eight records, ids 0-3 twice, one at
-    // each end of the staff) and the lookup names exactly one, leaving the other unreachable.
-    // Stored translated into emitted-list indices, `0xffff` where the id resolves to nothing.
+    // AttachLookup (`+0x10c`): attachment id to its one record, the reference's only id map
+    // (`0x710310`). Shipped weapons repeat ids (`Stave_2H_Long_D_05`: 0-3 twice) and the lookup
+    // names one. Stored as emitted indices, `0xffff` for none.
     let lk_avail = b.len().saturating_sub(attach_lookup.1 as usize);
     let mut attach_lookup_list = Vec::with_capacity(capped(attach_lookup.0 as usize, 2, lk_avail));
     for i in 0..attach_lookup.0 as usize {
@@ -334,9 +277,8 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         attach_lookup_list.push(emitted_at.get(raw as usize).copied().unwrap_or(0xffff));
     }
 
-    // Event markers: 44 bytes each (identifier 4CC @0, data u32 @4, bone u32 @8, position C3 @12;
-    // a 20-byte enabled M2TrackBase follows and is skipped). Same bone-range discipline as the
-    // attachments above; kept in file order (queries take the first ident match).
+    // Event markers: 44 bytes (4CC, data u32, bone u32 @8, position C3 @12, a skipped 20-byte
+    // track), dropped like attachments, kept in file order.
     let ev_avail = b.len().saturating_sub(events.1 as usize);
     let mut event_markers = Vec::with_capacity(capped(events.0 as usize, 44, ev_avail));
     for i in 0..events.0 as usize {
@@ -357,7 +299,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         });
     }
 
-    // AnimationLookup: one u16 each — the id → sequence-slot table `owns_animation` reads.
+    // AnimationLookup: one u16 each.
     let al_avail = b.len().saturating_sub(animation_lookup_arr.1 as usize);
     let mut animation_lookup =
         Vec::with_capacity(capped(animation_lookup_arr.0 as usize, 2, al_avail));
@@ -399,15 +341,9 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         );
     }
 
-    // Each M2Color (stride 0x38) is an RGB **colour** track @ +0x00 (C3Vector keys) + an **alpha**
-    // track @ +0x1c (fix16); each M2TextureWeight (stride 0x1c) is a single **weight** track. The
-    // alpha/weight values gate batch visibility (a constant 0 hides the batch — the zero-alpha
-    // cull `0x707b3a`–`0x707b5c`); the RGB is the per-batch tint multiplied into the vertex colour.
-    // `track_fix16`/`track_vec3_timed` bounds-check internally and return an empty key list for
-    // an out-of-range track (kept exactly — real art relies on that "no keys" tolerance). That
-    // same tolerance is why the *outer* loops run over the whole records the file holds past the
-    // block's offset, never the raw count: a reader that cannot fail would otherwise push one
-    // empty track per claimed record, and a corrupt count claims billions.
+    // M2Color (stride 0x38): an RGB track @ +0x00 and a fix16 alpha track @ +0x1c. M2TextureWeight
+    // (stride 0x1c): one weight track. An out-of-range track reads as no keys, so these loops run
+    // over the records the file holds, never the raw count.
     let colors_avail = b.len().saturating_sub(colors_arr.1 as usize);
     let colors_cap = capped(colors_arr.0 as usize, 0x38, colors_avail);
     let mut color_alpha_tracks = Vec::with_capacity(colors_cap);
@@ -446,10 +382,8 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         );
     }
 
-    // Each M2TextureTransform (header 0x74, stride 0x54) is 3 back-to-back M2Tracks — translation
-    // (C3Vector) @+0x00, rotation (quaternion) @+0x1c, scaling (C3Vector) @+0x38 (the M2 load
-    // `0x70ebd0`). Same "no keys" tolerance as the colour/weight tracks above, and the same
-    // file-bounded loop for the same reason.
+    // M2TextureTransform (stride 0x54): translation @+0x00, rotation @+0x1c, scaling @+0x38
+    // (`0x70ebd0`), bounded by the file like the colour tracks.
     let ttf_avail = b.len().saturating_sub(tex_anim_arr.1 as usize);
     let ttf_cap = capped(tex_anim_arr.0 as usize, 0x54, ttf_avail);
     let mut texture_transforms = Vec::with_capacity(ttf_cap);
@@ -472,9 +406,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         );
     }
 
-    // Global-sequence durations (header `0x14` count / `0x18` offset, u32 ms each): the free-running
-    // loop clocks a `gseq`-tagged track wraps on (`t mod global_sequences[gseq]`). Bounds-tolerant
-    // like the tracks: a truncated table yields what fits.
+    // Global-sequence durations (`0x14`, u32 ms): the clocks `gseq` tracks wrap on.
     let gseq_arr = (
         b.u32_at(0x14).ok_or(Error::Truncated)?,
         b.u32_at(0x18).ok_or(Error::Truncated)?,
@@ -488,9 +420,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         global_sequences.push(ms);
     }
 
-    // Collision hull: raw bytes (triangles = count×2 u16, vertices = count×12 C3Vector). Many props
-    // carry none (count 0) → empty. `get(..)` is already bounds-checked before the `to_vec()`, so a
-    // corrupt count fails at the checked slice, never at an unbounded allocation.
+    // The collision hull, raw: triangle indices (u16) and vertices (C3Vector).
     let bt_bytes = get(
         bounding_triangles.1 as usize,
         bounding_triangles.0 as usize * 2,
@@ -543,17 +473,8 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     })
 }
 
-/// Parse the MD20 **camera** array — header `count@0x124` / `offset@0x128`, stride `0x7c` (see
-/// [`M2Camera`] for the byte-verified field map).
-///
-/// **The one reader for those offsets.** [`parse_m2`] fills [`M2Model::cameras`] with it, and
-/// callers that want a camera *without* paying for a whole model parse (the portrait/pane framing
-/// on the asset-load path, the cinematic fly-bys) call it directly — so the record layout is
-/// written down once. The header offsets are absolute rather than walked because every version
-/// [`parse_m2`] accepts (256–263) carries the identical array order up to this point.
-///
-/// Bounds-tolerant throughout: a truncated table yields the records that fit, and a model with no
-/// camera array yields an empty `Vec` (the overwhelmingly common case).
+/// Parse the MD20 camera array (header `0x124`, stride `0x7c`) alone; the offset is absolute, as
+/// versions 256–263 agree up to it. A truncated table yields the records that fit.
 pub fn parse_cameras(b: &[u8]) -> Vec<M2Camera> {
     let (Some(count), Some(ofs)) = (b.u32_at(0x124), b.u32_at(0x128)) else {
         return Vec::new();
@@ -562,8 +483,7 @@ pub fn parse_cameras(b: &[u8]) -> Vec<M2Camera> {
     let mut out = Vec::with_capacity(capped(count as usize, 0x7c, avail));
     for i in 0..count as usize {
         let rec = ofs as usize + i * 0x7c;
-        // A record is read whole or not at all — a file whose camera array is cut short yields the
-        // records that fit, never a half-read one with default tracks standing in for the tail.
+        // A record is read whole or not at all.
         if rec.checked_add(0x7c).is_none_or(|end| end > b.len()) {
             break;
         }
@@ -575,8 +495,6 @@ pub fn parse_cameras(b: &[u8]) -> Vec<M2Camera> {
         ) else {
             break;
         };
-        // The bases are plain `[f32; 3]` (not `C3`) so they add to their track's sampled value
-        // componentwise, the way the reference's publish pass composes them.
         let (Some(position_base), Some(target_base)) = (
             rd_c3(b, rec + 0x2c).map(|c| [c.x, c.y, c.z]),
             rd_c3(b, rec + 0x54).map(|c| [c.x, c.y, c.z]),
@@ -598,8 +516,7 @@ pub fn parse_cameras(b: &[u8]) -> Vec<M2Camera> {
     out
 }
 
-/// Parse the MD20 **CameraLookup** table — header `count@0x12c` / `offset@0x130`, `u16` entries.
-/// See [`M2Model::camera_lookup`] for what it selects.
+/// Parse the MD20 CameraLookup (header `0x12c`, `u16` each); see [`M2Model::camera_lookup`].
 pub fn parse_camera_lookup(b: &[u8]) -> Vec<u16> {
     let (Some(count), Some(ofs)) = (b.u32_at(0x12c), b.u32_at(0x130)) else {
         return Vec::new();
@@ -615,11 +532,7 @@ pub fn parse_camera_lookup(b: &[u8]) -> Vec<u16> {
     out
 }
 
-/// The model-space **Z** of an M2 attachment selected by **attachment id** (not array index) — the
-/// follow-camera pivot reads id 17 this way. `attachments`/`lookup` are the header `(count, offset)`
-/// pairs; the id → array-index map (`lookup`, `u16` each) picks the record, whose `position` C3 sits at
-/// `+8` (vanilla stride 48: `id u32 · bone u32 · position C3 · animate M2Track`). `None` when the id has
-/// no lookup slot or the record/bytes are out of range.
+/// Attachment `id`'s model-space Z through the lookup, from the file's `(count, offset)` pairs.
 fn attachment_z(b: &[u8], id: usize, attachments: (u32, u32), lookup: (u32, u32)) -> Option<f32> {
     if id >= lookup.0 as usize {
         return None;
@@ -630,7 +543,7 @@ fn attachment_z(b: &[u8], id: usize, attachments: (u32, u32), lookup: (u32, u32)
         return None;
     }
     let rec = attachments.1 as usize + idx * 48;
-    // position C3 at rec+8 → its Z is rec+16.
+    // `position` is at +8 of the 48-byte record, so its Z is at +16.
     b.f32_at(rec + 16)
 }
 

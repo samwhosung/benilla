@@ -1,13 +1,11 @@
-//! MCAL → one 64×64 RGBA alpha map (R/G/B = the opacity of texture layers 1/2/3; A = 255). Ported
-//! from wow-adt's `CombinedAlphaMap`: layers are ingested in MCLY order (skipping the opaque base),
-//! each decoded into the next channel; encodings are 4-bit packed (×17 — `n / 15`, what the
-//! reference's RGBA4444 texel reads as; wow-adt's ×16 topped out at 240), 8-bit raw, or Blizzard RLE (token bit 7 = fill, else copy; low 7 bits = count). `fix_alpha`
-//! reconstructs a 64×64 plane from 63×63 source by duplicating the previous pixel at the last row/col.
+//! MCAL to one 64×64 RGBA alpha map, ported from wow-adt's `CombinedAlphaMap`: R, G, B are the
+//! opacity of texture layers 1, 2, 3 and A is 255. Layers go in MCLY order after the opaque base. A
+//! layer is 4-bit packed (×17: the reference packs it into an RGBA4444 texel, read as `n / 15`),
+//! 8-bit raw, or RLE (token bit 7 fill, else copy; the low 7 bits are the count).
 
 use crate::McnkChunk;
 
-/// Assembles the per-layer MCAL alpha maps into one 64×64 RGBA buffer (`y`-major, then `x`, then
-/// channel R,G,B,A).
+/// The combined 64×64 RGBA alpha map, `y`-major.
 pub struct CombinedAlphaMap {
     map: Vec<u8>, // 64*64*4, [y][x][rgba]
     x: usize,
@@ -20,12 +18,13 @@ pub struct CombinedAlphaMap {
 const W: usize = 64;
 
 impl CombinedAlphaMap {
-    /// Construct and ingest `chunk`'s alpha layers. `has_big_alpha`/`fix_alpha` select the uncompressed
-    /// encoding width and the 63→64 edge fix (vanilla: `false`, `true`).
+    /// Decode `chunk`'s alpha layers. `has_big_alpha` makes uncompressed layers 8-bit, and
+    /// `fix_alpha` fills the last row and column from their neighbours (a 63×63 source); vanilla
+    /// is `false`, `true`.
     pub fn new(chunk: &McnkChunk, has_big_alpha: bool, fix_alpha: bool) -> Self {
         let mut map = vec![0u8; W * W * 4];
         for px in map.as_chunks_mut::<4>().0 {
-            px[3] = 255; // A unused, set opaque for tool visibility (matches wow-adt)
+            px[3] = 255; // A is unused; opaque, so a dump shows the channels
         }
         let mut s = Self {
             map,
@@ -187,10 +186,8 @@ mod tests {
         }
     }
 
-    /// The reference packs a 4-bit layer weight into an RGBA4444 texel (the 64×64 and 32×32
-    /// packers `0x6b03d0`/`0x6b08d0`), and a 4-bit unorm channel reads as `n / 15` — so a fully
-    /// painted nibble is full coverage. `n × 16` stopped at 240: every "fully painted" road or rock
-    /// let 6% of the layer beneath show through.
+    /// The reference packs a 4-bit weight into an RGBA4444 texel (64×64 `0x6b03d0`, 32×32
+    /// `0x6b08d0`), read as `n / 15`, so nibble 15 is full coverage.
     #[test]
     fn four_bit_alpha_reads_as_n_over_15() {
         let mut m = blank();

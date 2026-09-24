@@ -1,7 +1,5 @@
-//! One-off inspection helper (session tool, not shipped): `blpx <in.blp> <out.ppm>` writes mip 0
-//! as P6 PPM, alpha composited over magenta so cutout regions read at a glance (pipe through
-//! `sips -s format png` for a viewable PNG). An `<out>` ending in `.rgba` instead dumps mip 0 as
-//! raw RGBA8 bytes (width×height×4, row-major) for scripted analysis of the real alpha channel.
+//! `blpx <in.blp> <out.ppm>`: mip 0 as a P6 PPM, alpha composited over magenta so cutouts show; an
+//! `<out>` ending in `.rgba` gets raw RGBA8 instead (width×height×4, row-major).
 
 fn main() {
     let mut args = std::env::args().skip(1);

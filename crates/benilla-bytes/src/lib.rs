@@ -1,21 +1,7 @@
-//! Bounds-checked byte readers + IFF chunk iteration shared by the format parsers.
-//! Three primitives, nothing else:
-//!
-//! - [`ByteExt`] — fallible little-endian accessors on `[u8]`. There is deliberately **no**
-//!   panicking variant: parsers map `None` to their own truncation error with `?`, so an unguarded
-//!   offset is a compile-shape impossibility, not a convention.
-//! - [`chunks`] — the IFF `(magic, payload)` iterator every chunked WoW format walks. **Lenient by
-//!   documented property**: iteration stops cleanly at a truncated 8-byte header, and a payload
-//!   whose declared size overruns the buffer is clamped to the buffer end (real 1.12 art needs the
-//!   tolerance — e.g. the trailing-junk chunks some Classic files carry).
-//! - [`capped`] — the allocation guard for count-driven `Vec::with_capacity`: reserve at most what
-//!   the remaining input could possibly hold, so a corrupt header count can never reserve more
-//!   than the file's own size.
-//!
-//! Magic bytes are yielded exactly as stored (WoW writes IFF magics reversed on disk, so callers
-//! match `b"DHOM"` for MOHD — same as the pre-0064 per-crate iterators).
+//! Bounds-checked byte readers and IFF chunk iteration for the format parsers.
 
-/// Fallible little-endian reads at an offset. `None` iff the read would run past the end.
+/// Little-endian reads at an offset, `None` past the end. There is no panicking variant on
+/// purpose: a parser maps `None` to its own truncation error.
 pub trait ByteExt {
     fn u8_at(&self, o: usize) -> Option<u8>;
     fn u16_at(&self, o: usize) -> Option<u16>;
@@ -57,8 +43,9 @@ impl ByteExt for [u8] {
     }
 }
 
-/// Iterate IFF chunks as `(magic-as-stored, payload)`. See the module doc for the (deliberate)
-/// leniency: truncated header → clean stop; over-declared payload → clamped to the buffer end.
+/// Iterate IFF chunks as `(magic, payload)`, the magic as stored: reversed on disk, so MOHD is
+/// `b"DHOM"`. A truncated header ends iteration and an overrunning payload is clamped to the
+/// buffer end, a tolerance real 1.12 art needs.
 pub fn chunks(b: &[u8]) -> impl Iterator<Item = ([u8; 4], &[u8])> {
     let mut pos = 0usize;
     std::iter::from_fn(move || {
@@ -68,19 +55,16 @@ pub fn chunks(b: &[u8]) -> impl Iterator<Item = ([u8; 4], &[u8])> {
         let magic = [b[pos], b[pos + 1], b[pos + 2], b[pos + 3]];
         let size = b.u32_at(pos + 4)? as usize;
         let start = pos + 8;
-        // `start <= b.len()` (checked above) and `size` came from a u32, so on 64-bit targets the
-        // sum cannot wrap; saturate anyway so the invariant doesn't depend on pointer width.
+        // Saturating, so a 32-bit target cannot wrap either.
         let end = start.saturating_add(size).min(b.len());
         pos = end;
         Some((magic, &b[start..end]))
     })
 }
 
-/// Cap a count-driven reservation by what `avail` remaining bytes could possibly hold, so a corrupt
-/// header can at worst reserve the input's own size. `elem_size` of 0 is a caller bug; treat it as 1
-/// rather than divide by zero. The *count* used for iteration stays the caller's — only the
-/// up-front reservation is capped (a short file then fails at the bounds-checked read, not in the
-/// allocator).
+/// Cap a count-driven reservation at what `avail` bytes could hold, so a corrupt count reserves at
+/// most the input's size; the caller still iterates its own count and fails at the checked read.
+/// An `elem_size` of 0 counts as 1.
 pub fn capped(count: usize, elem_size: usize, avail: usize) -> usize {
     count.min(avail / elem_size.max(1))
 }

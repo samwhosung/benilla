@@ -1,19 +1,5 @@
-//! A WDBC (client DBC) reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing `wow-cdbc`.
-//!
-//! A DBC is dead simple: a 20-byte `WDBC` header (record count, field count, record size, string-block
-//! size), then `record_count × record_size` bytes of fixed-width **4-byte** fields, then a string
-//! block. The file carries no column *types*, so the caller supplies a [`Schema`] (its expanded field
-//! count must equal the header's `field_count`); each field is read as `u32`/`i32`/`f32`, or as a
-//! [`StringRef`] offset into the string block. Layouts are validated clean-room against build 5875.
-//!
-//! Proven against `wow-cdbc` over real DBCs during the decision-0021 migration (oracle test in git
-//! history); the catalog loaders in `benilla-formats` (Map/Light/Creature/GameObject/…) pin exact
-//! decoded values end-to-end on every run.
-//!
-//! Byte access goes through `benilla-bytes`: header reads are bounds-checked, the
-//! `record_count × record_size + string_block_size` size arithmetic is overflow-checked (a corrupt
-//! header used to wrap past the parse-time guard and panic on the later re-slice), and record
-//! reservations are capped by what the body could actually hold.
+//! A WDBC reader for WoW 1.12.1: a 20-byte header, `record_count × record_size` bytes of 4-byte
+//! fields, then a string block. The file has no column types; the caller supplies a [`Schema`].
 
 use std::io::{Cursor, Write};
 
@@ -29,8 +15,7 @@ pub enum FieldType {
     String,
 }
 
-/// One schema field: a name, a type, and a repeat `count` (1 for a scalar; N for an inline array, which
-/// occupies N consecutive 4-byte slots).
+/// One schema field; a `count` above 1 is an inline array of that many 4-byte slots.
 #[derive(Debug, Clone)]
 pub struct SchemaField {
     pub name: String,
@@ -81,7 +66,7 @@ impl Schema {
         self.key_field = Some(name.into());
     }
 
-    /// Total 4-byte slots this schema covers (arrays expanded) — must equal the header `field_count`.
+    /// The 4-byte slots covered, arrays expanded; the header's `field_count` must match.
     fn expanded_len(&self) -> usize {
         self.fields.iter().map(|f| f.count).sum()
     }
@@ -133,8 +118,7 @@ pub enum Error {
         file: u32,
     },
     BadStringRef(u32),
-    /// `record_count × record_size + string_block_size` overflows `usize` — a corrupt header, not a
-    /// real file (this used to wrap silently and panic on the later re-slice).
+    /// `record_count × record_size + string_block_size` overflows `usize`: a corrupt header.
     SizeOverflow,
 }
 
@@ -161,12 +145,7 @@ impl std::error::Error for Error {}
 
 type Result<T> = std::result::Result<T, Error>;
 
-/// Read a little-endian u32, zero-extending any bytes past the end of `b` (a record whose
-/// `record_size` is shorter than `field_count × 4` — see the parse loop). This deliberately differs
-/// from [`ByteExt::u32_at`], which is all-or-nothing (`None` on any out-of-range byte): a short tail
-/// here is a legitimate, previously-observed record shape, not truncation, so it zero-pads instead of
-/// failing. Built on the same bounds-checked primitive (`u8_at`) byte-by-byte so there is no raw
-/// indexing left to panic.
+/// A little-endian u32 whose bytes past the end of `b` read as zero, unlike [`ByteExt::u32_at`].
 fn rd_u32_at(b: &[u8], o: usize) -> u32 {
     let mut bytes = [0u8; 4];
     for (k, slot) in bytes.iter_mut().enumerate() {
@@ -177,12 +156,7 @@ fn rd_u32_at(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes(bytes)
 }
 
-/// The shared `record_count × record_size (+ string_block_size)` layout arithmetic, checked —
-/// [`Header::record_count`]/`record_size`/`string_block_size` are attacker-controlled `u32`s, and a
-/// corrupt combination must error, never silently wrap past a size guard onto a later panicking
-/// re-slice (this is the verified bug the migration fixes). Both `parse` and
-/// `parse_records` call this one function so the two can never disagree even if the code drifts
-/// later. Returns `(record_bytes_len, record_bytes_len + string_block_size)`.
+/// `(record bytes, record bytes + string block)`, checked: the header's counts are unvalidated.
 fn checked_body_layout(
     record_count: usize,
     record_size: usize,
@@ -193,17 +167,16 @@ fn checked_body_layout(
     Some((record_bytes_len, total))
 }
 
-/// A DBC opened for reading: header parsed, body+strings located, schema optional until applied.
+/// A DBC opened for reading; a [`Schema`] is attached before decoding records.
 pub struct DbcParser<'a> {
     header: Header,
-    /// Everything after the 20-byte header: `record_count × record_size` record bytes + string block.
+    /// Everything after the 20-byte header: the record bytes, then the string block.
     body: &'a [u8],
     schema: Option<Schema>,
 }
 
 impl<'a> DbcParser<'a> {
-    /// Parse the header from a cursor over the whole DBC bytes (position is ignored; the file starts
-    /// with the header). Kept cursor-shaped to match the call sites.
+    /// Parse the header of a whole DBC; the cursor's position is ignored.
     pub fn parse(cursor: &mut Cursor<&'a [u8]>) -> Result<Self> {
         let all: &'a [u8] = cursor.get_ref();
         if all.len() < 20 || &all[0..4] != b"WDBC" {
@@ -255,8 +228,6 @@ impl<'a> DbcParser<'a> {
         let rc = self.header.record_count as usize;
         let rs = self.header.record_size as usize;
         let fc = self.header.field_count as usize;
-        // Same checked arithmetic `parse` used to size-check the header — recomputed here (not
-        // assumed) so the two can never disagree even if the code drifts later.
         let (record_bytes_len, strings_end) =
             checked_body_layout(rc, rs, self.header.string_block_size as usize)
                 .ok_or(Error::SizeOverflow)?;
@@ -270,7 +241,7 @@ impl<'a> DbcParser<'a> {
             .ok_or(Error::Truncated("string block"))?
             .to_vec();
 
-        // Expand the schema into a per-slot type list (arrays → repeated type) + per-slot column names.
+        // One type and one column name per 4-byte slot, arrays expanded.
         let mut types = Vec::with_capacity(fc);
         let mut names = Vec::with_capacity(fc);
         for field in &schema.fields {
@@ -284,11 +255,8 @@ impl<'a> DbcParser<'a> {
             }
         }
 
-        // `rc` comes straight from the header, and `record_size == 0` lets any `rc` pass the size
-        // guard (0 × anything fits) — while `rd_u32_at` zero-extends rather than fails, so nothing
-        // below would stop a loop over the header's count from pushing every one of those records
-        // as zeros. A zero-byte record holds no field: a header that claims records at that size
-        // is refused, and the loop runs over what the record bytes hold, never the header's count.
+        // A `record_size` of 0 passes the size guard for any count and `rd_u32_at` never fails, so
+        // records claimed at size 0 are refused and the loop runs over what the bytes hold.
         if rs == 0 && rc > 0 {
             return Err(Error::Truncated("records claimed at record_size 0"));
         }
@@ -344,8 +312,7 @@ impl RecordSet {
     }
 }
 
-/// Write a record set as CSV (header row of column names, then one row per record; string refs
-/// resolved). Used by the `benilla-extract` CLI. Minimal RFC-4180 quoting.
+/// Write a record set as RFC-4180 CSV: column names, then one row per record, strings resolved.
 pub fn export_to_csv<W: Write>(rs: &RecordSet, mut w: W) -> std::io::Result<()> {
     writeln!(w, "{}", rs.field_names.join(","))?;
     for record in &rs.records {
@@ -376,7 +343,7 @@ fn csv_quote(s: &str) -> String {
 mod tests {
     use super::*;
 
-    /// A minimal WDBC: 20-byte header + record bytes + string block.
+    /// A WDBC: the 20-byte header, the record bytes, the string block.
     fn build_wdbc(
         record_count: u32,
         field_count: u32,
@@ -395,7 +362,6 @@ mod tests {
         b
     }
 
-    /// Two fields per record: `id` (UInt32), `name` (a string-block offset).
     fn id_name_schema() -> Schema {
         let mut s = Schema::new("Test");
         s.add_field(SchemaField::new("id", FieldType::UInt32));
@@ -441,8 +407,6 @@ mod tests {
 
     #[test]
     fn rd_u32_at_zero_extends_short_tail() {
-        // Preserves the pre-0064 semantics exactly: a read that runs past the end zero-pads the
-        // missing bytes rather than failing, unlike `ByteExt::u32_at` (all-or-nothing).
         let b = [0xAA, 0xBB];
         assert_eq!(rd_u32_at(&b, 0), 0x0000_BBAA);
         assert_eq!(rd_u32_at(&b, 1), 0x0000_00BB);
@@ -452,26 +416,20 @@ mod tests {
 
     #[test]
     fn header_size_arithmetic_overflow_errors_cleanly_not_panic() {
-        // Header fields are u32, so on a 64-bit host record_count*record_size+string_block_size can
-        // never actually overflow a 64-bit usize (u32::MAX^2 + u32::MAX < usize::MAX) — the real
-        // trigger is a 32-bit target wrapping in release, which is exactly what decision 0064 flags.
-        // Exercise the shared checked arithmetic directly with usize inputs a real u32 header could
-        // never produce on this host, to pin that it errors instead of silently wrapping.
+        // u32 header fields overflow only a 32-bit usize, so the arithmetic is driven directly.
         assert_eq!(checked_body_layout(usize::MAX, 2, 0), None);
         assert_eq!(checked_body_layout(4, 4, usize::MAX), None);
         assert_eq!(checked_body_layout(usize::MAX, 1, 1), None);
         assert_eq!(checked_body_layout(10, 4, 6), Some((40, 46)));
 
-        // And through the public API: a header whose declared size can't be satisfied by the (valid,
-        // in-bounds) body still errors cleanly rather than panicking on a later re-slice.
+        // Through the public API, an all-zero header parses.
         let bytes = build_wdbc(0, 0, 0, &[], &[]);
         assert!(DbcParser::parse(&mut Cursor::new(bytes.as_slice())).is_ok());
     }
 
     #[test]
     fn truncated_body_errors_cleanly_not_panic() {
-        // Header claims 2 records of 8 bytes + a 10-byte string block, but the body holds only one
-        // record's worth of bytes and no string block at all.
+        // The header claims 2 records of 8 bytes; the body holds one.
         let bytes = build_wdbc(2, 2, 8, &[0u8; 8], &[]);
         let err = DbcParser::parse(&mut Cursor::new(bytes.as_slice()))
             .err()
@@ -499,7 +457,6 @@ mod tests {
 
     #[test]
     fn schema_field_count_must_match_header() {
-        // Header declares 2 fields; a 3-slot schema is rejected before any record is touched.
         let bytes = build_wdbc(1, 2, 8, &[0u8; 8], &[]);
         let parser = DbcParser::parse(&mut Cursor::new(bytes.as_slice())).unwrap();
         let mut wide = Schema::new("Wide");
@@ -514,7 +471,6 @@ mod tests {
 
     #[test]
     fn array_field_expands_to_consecutive_slots() {
-        // One record: a scalar `id` then a 3-wide `coords` array = 4 field slots.
         let mut records = Vec::new();
         records.extend_from_slice(&7u32.to_le_bytes()); // id
         records.extend_from_slice(&10u32.to_le_bytes()); // coords[0]
@@ -532,7 +488,6 @@ mod tests {
             .unwrap()
             .parse_records()
             .unwrap();
-        // Array occupies slots 1..=3, and the expanded column names carry the `[k]` index.
         assert_eq!(
             rs.field_names,
             ["id", "coords[0]", "coords[1]", "coords[2]"]
@@ -568,7 +523,6 @@ mod tests {
 
     #[test]
     fn get_string_handles_bad_ref_and_unterminated_tail() {
-        // A one-field record whose string ref we vary by hand.
         let strings = b"hi\0tail"; // "tail" has no trailing NUL
         let bytes = build_wdbc(1, 1, 4, &0u32.to_le_bytes(), strings);
         let rs = {
@@ -582,9 +536,8 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(rs.get_string(StringRef(0)).unwrap(), "hi");
-        // An offset into an un-terminated run reads to the end of the block.
         assert_eq!(rs.get_string(StringRef(3)).unwrap(), "tail");
-        // Offset == len is the empty string at the very end (in bounds); past len errors.
+        // An offset equal to the length is the empty string; past it errors.
         assert_eq!(rs.get_string(StringRef(strings.len() as u32)).unwrap(), "");
         assert!(matches!(
             rs.get_string(StringRef(strings.len() as u32 + 1)),
@@ -594,8 +547,6 @@ mod tests {
 
     #[test]
     fn csv_export_resolves_strings_and_quotes_per_rfc4180() {
-        // A row with a comma, a quote, and a newline must be wrapped and its quotes doubled; a plain
-        // row stays bare. Two fields: an id and a name that references the string block.
         let strings = b"plain\0a,b\0he said \"hi\"\0line1\nline2\0";
         // offsets: plain@0, "a,b"@6, 'he said "hi"'@10, "line1\nline2"@23
         let mut records = Vec::new();
@@ -622,10 +573,7 @@ mod tests {
         assert_eq!(csv, expected);
     }
 
-    /// `record_size = 0` with a record count passes the size guard (0 × anything fits) and used
-    /// to run the record loop `record_count` times: `rd_u32_at` zero-extends rather than fails,
-    /// so a 20-byte file claiming `0xFFFFFFFF` records was 4 G pushes and an OOM kill — never
-    /// the error the old comment said the bounds-checked read would raise.
+    /// A 20-byte file claiming `u32::MAX` records of size 0 must not run the loop that many times.
     #[test]
     fn zero_record_size_with_records_is_refused_not_iterated() {
         let bytes = build_wdbc(u32::MAX, 2, 0, &[], &[]);
@@ -634,7 +582,7 @@ mod tests {
             .with_schema(id_name_schema())
             .expect("schema matches");
         assert!(matches!(parser.parse_records(), Err(Error::Truncated(_))));
-        // The honest empty file — no records, nothing to hold them — still decodes to nothing.
+        // No records at size 0 still decodes, to nothing.
         let bytes = build_wdbc(0, 2, 0, &[], &[]);
         let rs = DbcParser::parse(&mut Cursor::new(bytes.as_slice()))
             .unwrap()

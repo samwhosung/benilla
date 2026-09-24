@@ -1,7 +1,6 @@
-//! Session probe: dump an M2's skin-0 sections/batches with material + texture resolution —
-//! `cargo run -p benilla-m2 --example dump_skin <file.m2>`. Extract the file first via `mpqx`
-//! (benilla-mpq). Built for the bowstring round (decision 2273 follow-up), kept because "why is
-//! this submesh (not) rendering" keeps coming up.
+//! Dump an M2's textures, materials and skin-0 sections and batches:
+//! `cargo run -p benilla-m2 --example dump_skin <file.m2>`, extracted first with `mpqx`
+//! (benilla-formats).
 
 use std::io::Cursor;
 

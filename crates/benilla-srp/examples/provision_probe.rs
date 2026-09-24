@@ -1,18 +1,13 @@
-//! Provision a probe account for the local vmangos `realmd` DB (a scripted run
-//! logs in as `probeN`/`pprobeN`/`Probe<N-spelled>`, one account per checkout that runs probes).
-//! A new checkout means provisioning its account first; this is that recipe as one command
-//! (a checkout once went without it, and had no working identity).
+//! Provision a probe account (`probeN`, password `pprobeN`, character `Probe<N spelled>`) in the
+//! local vmangos `realmd` DB, one per checkout that runs probes. It touches no DB: it prints the
+//! SQL and the character-create line to run.
 //!
-//! No DB access here — it prints the SQL and the char-create probe line; run those yourself.
-//!
-//! Validate the stored-hex convention against an existing row first (0450's discipline):
+//! Check the hex convention against an existing row first, then emit the new slot's row:
 //!   cargo run -p benilla-srp --example provision_probe -- check <USER> <PASS> <s-hex> <v-hex>
-//! then emit the new slot's row:
 //!   cargo run -p benilla-srp --example provision_probe -- emit <N>
 //!
-//! Hex convention (validated against PROBE0's stored row, matching vmangos `BigNumber`): the DB
-//! stores `v`/`s` as big-endian hex of the number; the salt bytes fed to SHA1 are that number's
-//! little-endian bytes.
+//! The DB stores `v` and `s` as the big-endian hex of the number, as vmangos `BigNumber` writes it;
+//! SRP hashes the salt as that number's little-endian bytes.
 
 use benilla_srp::{generate_account, password_verifier, NormalizedString};
 
