@@ -83,10 +83,10 @@ fn load_ui(script: &UiScript) {
 /// The page body as the reader actually DRAWS it, one string per block.
 ///
 /// `ItemTextPageText` is a `SimpleHTML` since decisions 1337/1338, and 5875's SimpleHTML has no
-/// `GetText` — its Lua table is 19 entries and none of them is a text getter (wow-re
-/// `simplehtml-markup-engine.md` §5.1; later clients grew one, this one has not). So the page is
-/// read the way it is seen: off the render list. A plain body is one block through the engine's
-/// raw-text fallback, which is what every letter here is.
+/// `GetText` — its Lua table is 19 entries and none of them is a text getter (`0x87ba80`; later
+/// clients grew one, this one has not). So the page is read the way it is seen: off the render
+/// list. A plain body is one block through the engine's raw-text fallback, which is what every
+/// letter here is.
 fn page_blocks(s: &UiScript) -> Vec<String> {
     use benilla_ui::script::QuadContent;
     s.extract()
@@ -322,8 +322,8 @@ fn the_reported_html_page_draws_as_blocks_not_as_its_own_markup() {
 /// The body is `page_text` 2654, quoted verbatim below, and its one `<IMG>` carries **no `width=`
 /// and no `height=`**. In the reference that is the CONTENT-derived span: the resolver's size call
 /// is virtual, and `CSimpleTexture`'s override answers an authored `0.0` with the loaded texture's
-/// texel extent, one texel to one FrameXML unit (wow-re `region-size-fallback.md` §2, decision
-/// 1349). `Interface\PvPRankBadges\PvPRankAlliance` is a 128×128 BLP, so the crest is a 128-unit
+/// texel extent, one texel to one FrameXML unit (`0x770720`, decision 1349).
+/// `Interface\PvPRankBadges\PvPRankAlliance` is a 128×128 BLP, so the crest is a 128-unit
 /// square inside a 270-wide page.
 ///
 /// The engine half is pinned in `benilla-ui`'s own `simplehtml` tests against a stub oracle; what

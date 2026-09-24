@@ -3,10 +3,10 @@
 //!
 //! `cargo run -p benilla-formats --example batch_lit -- 'Interface\Glues\Models\UI_Tauren\UI_Tauren.m2'`
 //!
-//! Built for B121: wow-re's glue backdrop finding is that a glue scene's ground is a multi-layer
-//! stack whose overlay layers are authored **UNLIT** (drawn fullbright, `colour = c28[0]·E_SH +
-//! c28[1]` with `c28[0] = 0`), which is why UI_Tauren can author no ambient-fill light and still
-//! show a lit ground in the reference. The question this answers is the one a grep cannot: whether
+//! Built for B121: a glue scene's ground is a multi-layer stack whose overlay layers are authored
+//! **UNLIT** (drawn fullbright, `colour = c28[0]·E_SH + c28[1]` with `c28[0] = 0`, `0x70c190`),
+//! which is why UI_Tauren can author no ambient-fill light and still show a lit ground in the
+//! reference. The question this answers is the one a grep cannot: whether
 //! the flag survives *our* batch reader's render-flag indexing to the `RenderSubmesh` the material
 //! builder consumes. A batch printed `LIT` here that the asset authors UNLIT is a reader bug; the
 //! asset's own flag table is a separate read (the render-flag array at header 0x84).

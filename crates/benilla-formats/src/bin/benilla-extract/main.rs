@@ -237,8 +237,8 @@ enum Command {
     /// keys, then the combined per-batch factor for EVERY sequence band — the "which batches does
     /// the reference hide, and in which animation" instrument. A `HIDE` cell is a batch the real
     /// client skips outright in that sequence (`A <= 0` culls before the blend mode is read,
-    /// wow-re `m2-alpha-combine-cull.md`). Pair with `m2batch` (the batch -> track wiring) and
-    /// `m2seq` (the bands).
+    /// `0x707b3a`–`0x707b5c`). Pair with `m2batch` (the batch -> track wiring) and `m2seq` (the
+    /// bands).
     M2alpha {
         /// Internal path to the `.m2` (forward or back slashes accepted).
         internal_path: String,
@@ -347,14 +347,14 @@ enum Command {
     },
     /// Sweep every model named by **GameObjectDisplayInfo.dbc** and resolve what the reference's
     /// GameObject animation arm plays in each reachable `GAMEOBJECT_STATE` × `GAMEOBJECT_ANIMPROGRESS`
-    /// substate (wow-re `gameobject-anim-arm.md` §2b/§2c: the substate table, the `0x8607e4` LUT, the
-    /// four-way missing-sequence remap) — beside the generic loader seed the same model gets at build
-    /// (§1, animation id 0 through `playableAnimationLookup`). The population instrument for "which
+    /// substate (the substate table `0x5f3c30`, the `0x8607e4` LUT, the four-way missing-sequence
+    /// remap `0x5f3972`) — beside the generic loader seed the same model gets at build (`0x710153`,
+    /// animation id 0 through `playableAnimationLookup`). The population instrument for "which
     /// GameObjects can the wire state actually be SEEN on": a model whose every substate lands on the
     /// seed's own sequence is state-blind, so skipping the arm on its GO type costs nothing, while a
     /// STATE-SENSITIVE model renders in the wrong pose the moment its type is left off the machine.
-    /// Also counts the models whose pose depends on the §2c remap (benilla plays nothing there today,
-    /// i.e. bind pose) and the ones reaching a rate-0 freeze leg.
+    /// Also counts the models whose pose depends on the missing-sequence remap (benilla plays
+    /// nothing there today, i.e. bind pose) and the ones reaching a rate-0 freeze leg.
     Goanimscan,
     /// Sweep every `.m2` and census the **event table's positional half**: the `bone` and
     /// `position` every `M2Event` record carries beside its 4CC. The reference's event dispatchers
@@ -369,12 +369,12 @@ enum Command {
     /// Census the **GameObject display sound slots** (`GameObjectDisplayInfo.Sound[0..9]`) against
     /// the only thing that can reach them. Exactly one function in the reference reads those
     /// columns (`0x5f4010`) and it is called only from the GO M2 anim-event dispatcher
-    /// (`0x5f3e20`): `$GO0..5` -> slots 0..5, `$GC0..3` -> slots 6..9 (wow-re
-    /// `go-display-sound-events.md` §1/§3). So a filled column is audible only when the display's
-    /// own model authors the matching event tag AND that tag sits on a sequence the GameObject
-    /// animation arm can actually play. Reports, per slot: columns filled, of those how many are
-    /// tagged, how many of those are on an armable sequence, and how many name a LOOPING (0x200)
-    /// kit — the flag that selects `0x5f4010`'s emitter-pool lane over its one-shot lane.
+    /// (`0x5f3e20`): `$GO0..5` -> slots 0..5, `$GC0..3` -> slots 6..9. So a filled column is
+    /// audible only when the display's own model authors the matching event tag AND that tag sits
+    /// on a sequence the GameObject animation arm can actually play. Reports, per slot: columns
+    /// filled, of those how many are tagged, how many of those are on an armable sequence, and how
+    /// many name a LOOPING (0x200) kit — the flag that selects `0x5f4010`'s emitter-pool lane over
+    /// its one-shot lane.
     Goslotscan,
     /// Sweep every `.m2` (optionally under a path prefix) and census the models whose batch
     /// visibility is PER SEQUENCE — geometry the reference draws in one animation and skips in
@@ -677,8 +677,8 @@ enum Command {
         prefix: Option<String>,
     },
     /// Sweep every `.m2` (optionally under a path prefix) and report which models author M2
-    /// dynamic LIGHT blocks — the population instrument for the mechanism (decision 0016 / wow-re
-    /// `system/models/scratch/m2-dynamic-lights.md`). Per model: its point (`type==1`, the GL
+    /// dynamic LIGHT blocks — the population instrument for the mechanism (decision 0016,
+    /// `0x718960`). Per model: its point (`type==1`, the GL
     /// hot-spot caster) vs directional (ambient-feed) light counts, then per point light its
     /// bone/position/diffuse colour×intensity/attenuation/visibility-gate. The closing summary —
     /// totals, a breakdown by top-level content family (Creature/Item.ObjectComponents/
@@ -694,7 +694,8 @@ enum Command {
     /// **MOSB** skybox model against its groups' `0x40000` flag. `0x40000` is undocumented, so this
     /// is what *identifies* it — across all 815 roots the bit never appears without a MOSB. Note
     /// what that does and does NOT buy: it establishes `flag => MOSB`, never which group the
-    /// renderer tests (the carved law is the flood-VISITED group, decision 0773 correcting 0767).
+    /// renderer tests (the reference's law is the flood-VISITED group, `0x6b42e0`; decision 0773
+    /// correcting 0767).
     /// Also the population instrument: which 1.12 buildings replace the `Light.dbc` gradient dome
     /// with an authored sky (Stratholme's burning city is the only one reachable), and how much
     Skyboxscan,

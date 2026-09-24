@@ -45,9 +45,9 @@ pub struct AreaTableRow {
     /// `ExplorationLevel` (col 10, the binary's `AreaTable+0x28`) — **signed**, and read only as
     /// `>= 0` vs `< 0`. It is the world-map landmark builder's exploration gate: a landmark whose
     /// `AreaID` lands on a row with `>= 0` here stays hidden until the player has explored that
-    /// area ([`Self::explore_flag`]'s bit); `-1` exempts it (wow-re `gossip-poi-marker.md` §8.2,
-    /// `0x4a6890`–`0x4a68f3`). The 5875 table is `-1` on exactly one row and `>= 0` on the other
-    /// 1080, so in practice the gate applies wherever an `AreaID` resolves at all.
+    /// area ([`Self::explore_flag`]'s bit); `-1` exempts it (`0x4a6890`–`0x4a68f3`). The 5875 table
+    /// is `-1` on exactly one row and `>= 0` on the other 1080, so in practice the gate applies
+    /// wherever an `AreaID` resolves at all.
     pub exploration_level: i32,
     /// The localized display name ("Elwynn Forest").
     pub name: String,
@@ -94,7 +94,7 @@ impl AreaTableCatalog {
 
     /// Is `area_id` **cold** — does a unit standing here puff visible breath?
     ///
-    /// The client's `0x67e9c0` (wow-re `object-layer/scratch/cold-breath-law.md` Q2), byte-exact:
+    /// The client's `0x67e9c0`, byte-exact:
     ///
     /// ```text
     /// cold ⟺ ((leaf.Flags & 0x2) || no valid parent ? leaf.Flags : parent.Flags) & 0x1

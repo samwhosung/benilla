@@ -2,8 +2,8 @@
 //! constant-depth billboard survives `LEQUAL` against its own model's z-writing batches, from a
 //! given camera direction. No client, no camera, no capture: pure geometry over *our* parse.
 //!
-//! This exists to hold benilla's asset side against wow-re's measured table
-//! (`system/models/scratch/part-flush-emitter-depth.md` §4 — Voidwalker bone 60, half 0.0833:
+//! This exists to hold benilla's asset side against the table measured for the reference's quad
+//! writer (`0x7b2a50` — Voidwalker bone 60, half 0.0833:
 //! front 43.4 %, 30° above 38.8 %, 60° left 43.3 %). Agreement means our mesh, our bone pivots and
 //! our quad model are faithful and any missing glow is the *renderer's*; disagreement localises the
 //! bug to the asset side, where it can be fixed without ever launching the game.

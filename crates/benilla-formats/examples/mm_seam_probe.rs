@@ -418,10 +418,10 @@ fn main() -> anyhow::Result<()> {
                 // runs along model +X with u_global = 0 at the group's bbox X-MIN, column index
                 // advancing with +X; image v runs along model Y INVERTED, the grid anchored at its
                 // BOTTOM so the last row's last texel sits at the group's Y anchor.
-                // The verified rect: cells stride `tw` and share their interior edges, and a cell
-                // on the grid's boundary is grown 1.0 yd on that side alone (wow-re
-                // `wmo-interior-no-adt-underlay.md` §8). `MM_NOBLEED` drops the bleed, which is
-                // what B141 was: without it two groups' art abuts instead of overlapping by 2 yd.
+                // The client's rect: cells stride `tw` and share their interior edges, and a cell
+                // on the grid's boundary is grown 1.0 yd on that side alone (`0x6a5270`).
+                // `MM_NOBLEED` drops the bleed, which is what B141 was: without it two groups' art
+                // abuts instead of overlapping by 2 yd.
                 let bleed = if std::env::var("MM_NOBLEED").is_ok() {
                     0.0
                 } else {

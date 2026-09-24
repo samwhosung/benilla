@@ -16,8 +16,7 @@
 //! Raw matters because `$<n>e` reads the table at the *negated* key — `$2077e` looks up
 //! `0xFFFFF7E3`, which only resolves if nothing re-interpreted the id on the way in.
 //!
-//! **An init CLEARS the table first** — carved 2026-08-25 (wow-re
-//! `system/ui/scratch/worldstate-ui-law.md`), correcting the assumption this module shipped with.
+//! **An init CLEARS the table first**, correcting the assumption this module shipped with.
 //! `0x4c5650(ecx = map, edx = area)`, the function `SMSG_INIT_WORLD_STATES`' two leading dwords go
 //! to before the pair loop runs, does four things in order: it drains every entry (the all-entries
 //! list, then every bucket), stores the pair as the **display filter** `[0xb71e84]`/`[0xb71ea8]`,
@@ -45,7 +44,7 @@ impl WorldStates {
     ///
     /// This is the reference's own trigger shape, not a cache trick bolted on: the bulk
     /// world-state handler re-runs the world-map landmark builder from *inside itself*
-    /// (`0x48fa0d` → `0x4a67a0`, wow-re `gossip-poi-marker.md` §8.2), so a landmark list is
+    /// (`0x48fa0d` → `0x4a67a0`), so a landmark list is
     /// rebuilt **because a world state arrived**, never once a frame. Counted per `write` rather
     /// than per changed value for the same reason: the handler re-runs the builder once for the
     /// whole packet, not once per pair.

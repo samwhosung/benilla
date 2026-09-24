@@ -1,6 +1,6 @@
-//! **V-key nameplates** — `CGNamePlateFrame` (wow-re `object-layer/scratch/nameplate-vkey.md`,
-//! §5-verified 2026-07-06): the toggled health-bar plates over units' heads, a **2-D overlay**
-//! distinct from the world-pass overhead *names* (`crate::nameplates`) they replace.
+//! **V-key nameplates** — `CGNamePlateFrame` (ctor `0x7cb250`): the toggled health-bar plates
+//! over units' heads, a **2-D overlay** distinct from the world-pass overhead *names*
+//! (`crate::nameplates`) they replace.
 //!
 //! The pinned law, transcribed:
 //! - **Master toggles** (`[0xc4da34]` bit 0 enemy / bit 3 friendly; real-client boot default
@@ -9,28 +9,27 @@
 //!   bound to **V / Shift-V** by FrameXML `Bindings.xml` (asset-sourced default, like TAB).
 //! - **Gate**: never the own unit; never `NOT_SELECTABLE` (UNIT_FIELD_FLAGS bit 25); the
 //!   enemy/friendly split is **`CanAttack(localPlayer → unit)`**, NOT a reaction threshold
-//!   ([`crate::target::ring::plate_is_friendly`], wow-re `nameplate-category-gate.md` §2/§3,
-//!   §5-VERIFIED 2026-08-22 — this file shipped `rank >= 4` for a year and 1530 corrects it) —
+//!   ([`crate::target::ring::plate_is_friendly`], `0x606980` — this file shipped `rank >= 4` for
+//!   a year and 1530 corrects it) —
 //!   and a **player** subject must additionally pass `CanCooperate`, which is nothing but the two
 //!   `FactionTemplate` faction-group masks being equal, so a player whose row carries neither
 //!   side's mask (a vmangos `.gm on` character is template 35, mask 0) is enemy-category no matter
 //!   how friendly they read; **max 20 yd**, hardcoded; **no
 //!   occlusion** (a 2-D overlay — plates draw through walls); snap, no smoothing. Anti-overlap
 //!   there *is*, since 0367 found the shared solver ([`crate::smart_rect`]) — this file's older
-//!   "no anti-overlap" was the census that missed it. And the sphere is bounded by the frustum:
+//!   "no anti-overlap" missed it. And the sphere is bounded by the frustum:
 //!   the unit must be **in view** ([`crate::ui_pass::project_overlay`]) or the reference
-//!   **destroys** the plate outright (`0x60f600`, before the 20-yard cull — wow-re
-//!   `nameplate-offscreen-cull.md`, §5-VERIFIED 2026-08-15); it is never clamped in from
-//!   off-screen, which is what ours did (1341/1344).
+//!   **destroys** the plate outright (`0x60f600`, before the 20-yard cull); it is never clamped
+//!   in from off-screen, which is what ours did (1341/1344).
 //!   (The friendly-totem exclusion waits on totems existing.)
 //! - **Anchor**: the same overhead head point (`0x608640`, [`overhead_anchor`]) **+ 2/3 yd**
 //!   (`[0x80abfc]`), projected per frame (`0x483ee0`); the plate's **TOP-CENTER** lands on the
-//!   point (it hangs below — §8 Q5) and is edge-clamped half a plate inside the screen;
+//!   point (it hangs below — `0x509ec0`) and is edge-clamped half a plate inside the screen;
 //!   **constant screen size**: the geometry globals `[0x87d9cc]=0.1` × `[0x87d9d0]=0.025` in gx
-//!   screencoord units, where one unit = the screen **diagonal** `√(W²+H²)` (§8 Q4 — and never
+//!   screencoord units, where one unit = the screen **diagonal** `√(W²+H²)` (`0x41ad10` — and never
 //!   uiScale: plates live outside the UIParent cascade). **Our basis is growth-damped** past
 //!   [`PLATE_DIAG_KNEE`] — a director-pinned deviation (0185/0186): the real client grows
-//!   plates diagonal-linear without limit (§9, byte-closed) and the director rejected that
+//!   plates diagonal-linear without limit (`0x7705b0`) and the director rejected that
 //!   look; past 1024×768 the plate grows at half the real rate (midway between faithful and
 //!   the native size).
 //! - **Anatomy — not here any more.** The plate's six regions, its health-bar child, their
@@ -54,13 +53,12 @@
 //! - **Mutually exclusive with the overhead name** (ShouldShowName): a unit with a live plate
 //!   never also draws its floating name — [`VPlates`] is that verdict, read by the name driver.
 //!   (The questgiver marker raises for a live plate too — a director-pinned DEVIATION: the
-//!   reference really does sit low under a plate (byte-verified, wow-re `questgiver-marker.md`
-//!   Q4a) and the director rejected that overlap; rationale on `quest_markers::pose_markers`,
-//!   2274/2275.)
+//!   reference really does sit low under a plate (`0x6076c0` arms anim 0) and the director
+//!   rejected that overlap; rationale on `quest_markers::pose_markers`, 2274/2275.)
 //!
 //! (The skull's trivial-gray leg is the shared grey check, [`benilla_ui::script::unit_is_grey`]
-//! — `0x5f0700`, §5-VERIFIED 2026-07-17, the same one the tooltip/quest-range APIs read; it is
-//! vacuous on a ≥ +10 hostile and kept for transcription fidelity.)
+//! — `0x5f0700`, the same one the tooltip/quest-range APIs read; it is vacuous on a ≥ +10
+//! hostile and kept for transcription fidelity.)
 
 use bevy::ecs::entity::EntityHashSet;
 use bevy::ecs::system::SystemParam;
@@ -90,8 +88,8 @@ pub(crate) mod border;
 /// [`CVAR_FRIENDS`] pair, [`crate::cvars`]). That mirrors the reference's own two-store shape: the
 /// engine bitmask is what the gate reads, and FrameXML keeps `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON`
 /// beside it for saving (`RegisterForSave`, UIOptionsFrame.lua) — pushing changes back through
-/// `ShowNameplates()`/`HideNameplates()`. 1.12 registers **no** nameplate CVar (wow-re, VERIFIED:
-/// no such string exists in the binary), so the names are the LATER-era engine's, the same posture
+/// `ShowNameplates()`/`HideNameplates()`. 1.12 registers **no** nameplate CVar (no such string
+/// exists in the binary), so the names are the LATER-era engine's, the same posture
 /// as `autoLootDefault` — benilla's persistence lives in the CVar store (0954), and a setting with
 /// no 1.12 CVar takes the era name rather than inventing one.
 ///
@@ -145,7 +143,7 @@ pub(crate) struct PlateClicks {
 }
 
 /// The plate frame, gx screen-height units (`[0x87d9cc]`/`[0x87d9d0]`): 0.1 × 0.025. The border
-/// SetAllPoints-fills it; everything else anchors inside it (§7, byte-verified offsets).
+/// SetAllPoints-fills it; everything else anchors inside it (offsets: `0x7cb250`, `0x7cb6d0`).
 const PLATE_W: f32 = 0.1;
 const PLATE_H: f32 = 0.025;
 /// The health bar: BOTTOMLEFT ← plate BOTTOMLEFT + (0.0031, 0.003125), sized 0.0804 × 0.007025.
@@ -159,14 +157,14 @@ const BAR_H: f32 = 0.007025;
 ///
 /// `LEVEL_H` is a **director-pinned deviation** (2026-07-07) from the byte 0.009: one em smaller
 /// across the window range (em 11 vs 12 at the reference, −1 up through 1440p). TEXT ems compose
-/// through the same damped gx basis as the frame geometry ([`text_px`] — the client-side chain is
-/// byte-closed end to end, wow-re §9 Q3: live re-raster on resize, no fixed UI space, no staleness).
+/// through the same damped gx basis as the frame geometry ([`text_px`] — the client-side chain:
+/// live re-raster on resize (`0x5c2b50`), no fixed UI space, no staleness).
 const NAME_H: f32 = 0.01;
 const LEVEL_H: f32 = 0.0086;
 const LEVEL_OFF_X: f32 = 0.0092;
 const LEVEL_OFF_Y: f32 = 0.0071;
 const SKULL_SIZE: f32 = 0.01;
-/// The raid-target icon (vkey §7, VERIFIED): 0.02 × 0.02, RIGHT ← border.LEFT (0,0) — it hangs
+/// The raid-target icon (`0x7cb250`): 0.02 × 0.02, RIGHT ← border.LEFT (0,0) — it hangs
 /// off the plate's left edge, vertically centered; the 4-column atlas cell is 0.25.
 const RAID_ICON_SIZE: f32 = 0.02;
 /// The plate's world lift above the overhead anchor: 2/3 yd (`[0x80abfc]`).
@@ -186,7 +184,7 @@ const PLATE_NEUTRAL: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
 const PLATE_FRIENDLY: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 const PLATE_PLAYER: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
-/// The plate palette selector — `0x7cbaa0`'s exact test order (§7, VERIFIED dwords): hostile
+/// The plate palette selector — `0x7cbaa0`'s exact test order: hostile
 /// (reaction ≤ 1) red, else a player pure blue, else friendly (≥ 4) green, else — reaction 2–3,
 /// unfriendly AND neutral — yellow. (Rank 2 is yellow, not red: an earlier transcription here
 /// painted it hostile.) The bar fill (and its lit brighten) tints through this.
@@ -202,7 +200,7 @@ fn plate_tint(rank: u8, is_player: bool) -> [f32; 4] {
     }
 }
 
-/// The level con palette — the client's EXACT dwords (§7; the softened WoW colors, not the
+/// The level con palette — the client's EXACT dwords (`0x7cbd50`; the softened WoW colors, not the
 /// FrameXML QuestDifficultyColor approximations we shipped first): red `0xFFFF1919`, orange
 /// `0xFFFF7F3F`, yellow `0xFFFFFF00`, green `0xFF3FB23F`, gray `0xFF7F7F7F`.
 const CON_RED: [f32; 4] = [1.0, 25.0 / 255.0, 25.0 / 255.0, 1.0];
@@ -211,7 +209,7 @@ const CON_YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
 const CON_GREEN: [f32; 4] = [63.0 / 255.0, 178.0 / 255.0, 63.0 / 255.0, 1.0];
 const CON_GRAY: [f32; 4] = [127.0 / 255.0, 127.0 / 255.0, 127.0 / 255.0, 1.0];
 
-/// The client's own con-color law (§7, byte-verified — thresholds AND the grayband table
+/// The client's own con-color law (`0x7cbd50` — thresholds AND the grayband table
 /// `[0x81dda8]`, indexed `playerLevel/5`; it agrees with vmangos' formula at every probed level
 /// but the table is the client's own): `diff = unit − player`; ≥ +5 red, +3/+4 orange,
 /// −2..+2 yellow, lower → green while within `grayband` levels below, gray past it. The
@@ -259,8 +257,8 @@ pub(crate) fn device_snap(v: f32, scale: f32) -> f32 {
 }
 
 /// The knee of the plate's gx basis — **a director-pinned DEVIATION from the byte law**
-/// (0185/0186). The real client's plates grow diagonal-linear without limit (wow-re §9,
-/// byte-closed: ~294 px plate + em-29 name at 2560×1440, bilinear-softened) — the director
+/// (0185/0186). The real client's plates grow diagonal-linear without limit (`0x7705b0`:
+/// ~294 px plate + em-29 name at 2560×1440, bilinear-softened) — the director
 /// rejected that look as too big/thick/soft, and a hard cap at native (0185) as too small.
 /// 1280 is the diagonal where the 0.1 × 0.025 frame is EXACTLY the border art's native
 /// 128 × 32 px; past it the basis grows at [`PLATE_GROWTH_DAMP`] of the real rate — at every
@@ -271,9 +269,10 @@ const PLATE_DIAG_KNEE: f32 = 1280.0;
 /// 1 the faithful law.
 const PLATE_GROWTH_DAMP: f32 = 0.5;
 
-/// One gx screencoord unit = the screen **DIAGONAL** `√(W²+H²)` (§8 Q4 — the device space spans
-/// `[0,G44]×[0,G48]`, the live aspect basis; uiScale never enters: plates anchor WorldFrame-side,
-/// outside the UIParent cascade) — growth damped past [`PLATE_DIAG_KNEE`] (the director's pin).
+/// One gx screencoord unit = the screen **DIAGONAL** `√(W²+H²)` (`0x41ad10` — the device space
+/// spans `[0,G44]×[0,G48]`, the live aspect basis; uiScale never enters: plates anchor
+/// WorldFrame-side, outside the UIParent cascade) — growth damped past [`PLATE_DIAG_KNEE`] (the
+/// director's pin).
 /// Shared with the chat bubble ([`crate::chat_bubble`]) — the sibling outside-UIParent overlay,
 /// same basis law so bubble text and plate text hold the same em at every window.
 pub(crate) fn plate_basis(viewport: Vec2) -> f32 {
@@ -292,10 +291,9 @@ pub(crate) fn gx_px(v: f32, basis: f32) -> f32 {
 }
 
 /// Plate FontString height → the FreeType em: `min(32, round(h · basis))`. The real client's
-/// law is **byte-closed end to end** (wow-re `25cfa33e` + §9 Q3: the FontObject bridge
-/// `0x44d040` divides the gx height by G48 before `GxuFontCreate`, the raster `0x5ca030`
-/// multiplies by the viewport height — netting `h·√(W²+H²)`, re-rasterized live on resize,
-/// 32-capped at the atlas cell); our `basis` is that diagonal under the director's
+/// law (the FontObject bridge `0x44d040` divides the gx height by G48 before `GxuFontCreate`,
+/// the raster `0x5ca030` multiplies by the viewport height — netting `h·√(W²+H²)`, re-rasterized
+/// live on resize, 32-capped at the atlas cell); our `basis` is that diagonal under the director's
 /// [`PLATE_DIAG_KNEE`] damping. Reference-pinned at its 1152×648 window: name em 13, level 12.
 /// Shared with the chat bubble (`NAMEPLATE_FONT` at the same 0.01 gx), like [`plate_basis`].
 pub(crate) fn text_px(h: f32, basis: f32) -> f32 {
@@ -569,8 +567,7 @@ fn drive_vplates(
         // (`vtable+0x38` = `0x607ed0`). So the flag arriving on a plated unit takes its plate away
         // on the next tick, which falls out of this per-frame gate for free.
         //
-        // **This suppression is load-bearing, not cosmetic** (wow-re
-        // `object-layer/scratch/not-selectable-mouse-refusal.md`, decision 2060): a plate hover
+        // **This suppression is load-bearing, not cosmetic** (decision 2060): a plate hover
         // publishes the mouseover *directly* — `0x7cb850 OnEnter` → `0x7cb869 call 0x492890`, with
         // none of the `IsSelectable` grading the world hover gets at `0x482982`. If a flagged unit
         // ever kept its plate, hovering that plate would hand it a name tooltip the reference never
@@ -579,17 +576,16 @@ fn drive_vplates(
             continue;
         }
         // A DEAD unit shows no plate — the per-tick gate `0x60f600`'s FIRST, unconditional
-        // test (§8 Q2, byte-confirmed): signed `UNIT_FIELD_HEALTH ≤ 0`, absent = 0 (the
+        // test: signed `UNIT_FIELD_HEALTH ≤ 0`, absent = 0 (the
         // zero-init descriptor). A poll, not a death callback; the lootable bit is never
         // consulted. Feign death keeps health > 0, so it clears THIS leg — the gate that takes a
         // feigning body's plate away is the hostile-only one below (decision 1022).
         if store.is_none_or(|s| s.0.unit_health().unwrap_or(0) == 0) {
             continue;
         }
-        // …and the SAME per-tick gate's second leg (`0x60f62e`, byte-VERIFIED wow-re
-        // ghost-death-visuals.md — corrects this file's older "ghost stays plated" note):
-        // `bytes_1 byte3 & 3` (ghost | creep) denies the plate — a released ghost (health 1)
-        // carries none.
+        // …and the SAME per-tick gate's second leg (`0x60f62e` — corrects this file's older
+        // "ghost stays plated" note): `bytes_1 byte3 & 3` (ghost | creep) denies the plate — a
+        // released ghost (health 1) carries none.
         if store.is_some_and(|s| s.0.unit_is_ghost_visual()) {
             continue;
         }
@@ -645,7 +641,7 @@ fn drive_vplates(
         // honour the projector's ACCEPT verdict ([`crate::ui_pass::project_overlay`]): behind the
         // camera or outside the viewport, there is no plate. That is the reference's own law, and
         // a hard one — `0x60f600` **destroys** the plate frame on a false verdict, before it ever
-        // reaches the seat (wow-re `nameplate-offscreen-cull.md`, §5-VERIFIED 2026-08-15).
+        // reaches the seat.
         //
         // Ours instead ran an off-screen point into the seat, whose clamp translates a rect from
         // anywhere bodily onto the screen: **30% of every drawn plate** was a unit nobody could
@@ -688,7 +684,7 @@ fn drive_vplates(
         };
         // The bar tint: the NAMEPLATE palette in `0x7cbaa0`'s exact order.
         let tint = plate_tint(rank, is_player);
-        // The frame SEAT (§8 Q5, byte-confirmed): the plate's TOP-CENTER lands on the projected
+        // The frame SEAT (`0x509ec0`): the plate's TOP-CENTER lands on the projected
         // point — the plate HANGS BELOW head + 2/3 yd — and the point is edge-clamped half a
         // plate inside every screen border (`SetPoint(TOP ← root.BOTTOMLEFT, clampedX/Y)`).
         // The highlight is a 2-D hover over THIS rect (the frame's OnEnter — yellow name). `pw`/`ph`
@@ -703,7 +699,7 @@ fn drive_vplates(
         // (the plate hangs below head + 2/3 yd), then the bucket-0 seat law — normalize, SOLVE
         // off the plates already claimed this frame, clamp the resolved center-X/top half a
         // plate inside every border, rebuild ([`crate::smart_rect`]). The old bare edge-clamp
-        // was this law minus the solve (nameplate-vkey §8.5, now corrected by the solver note).
+        // was this law minus the solve.
         let desired = Rect::new(
             screen.x - pw * 0.5,
             screen.y,
@@ -805,8 +801,8 @@ fn drive_vplates(
             key: guid.0,
             top_centre: (x_units, y_units),
             // RAW health and its max — `healthbar:GetValue()` is `[bar+0x320]`, not a fraction
-            // (`nameplate-lua-surface.md` Q5, which corrected wow-re's own note). pfUI and
-            // CustomNameplates both divide, and a fraction here would read as full health.
+            // (`0x78f5d0`). pfUI and CustomNameplates both divide, and a fraction here would read
+            // as full health.
             health: store.and_then(|s| s.0.unit_health()).unwrap_or(0) as f32,
             max_health: store
                 .and_then(|s| s.0.unit_max_health())
@@ -817,7 +813,7 @@ fn drive_vplates(
                 .resolve_unit(guid.0, store, &net_commands)
                 .map(str::to_owned)
                 .unwrap_or_default(),
-            // The skull's two legs (`0x7cbb40`, §7-VERIFIED): a WORLD BOSS — creature-
+            // The skull's two legs (`0x7cbb40`): a WORLD BOSS — creature-
             // classification rank 3, through the client's own getter (`gated_rank`, decision
             // 0782, which is why a MIND-CONTROLLED boss shows its number) — unconditionally; or a
             // hostile ≥ 10 levels up that isn't trivial-grey (`0x5f0700`, the shared check,
@@ -939,9 +935,9 @@ impl Plugin for VPlatesPlugin {
 mod tests {
     use super::*;
 
-    /// The client's own con law (§7): thresholds at level 30 (grayband[6] = 7 → green down to
-    /// 23, gray at 22), the exact softened dwords, and the low-level edge (grayband[0] = 4, so
-    /// a level-1 never grays anything).
+    /// The client's own con law (`0x7cbd50`): thresholds at level 30 (grayband[6] = 7 → green
+    /// down to 23, gray at 22), the exact softened dwords, and the low-level edge (grayband[0] =
+    /// 4, so a level-1 never grays anything).
     #[test]
     fn con_color_matches_the_byte_table() {
         assert_eq!(con_color(30, 35), CON_RED);
@@ -1138,7 +1134,8 @@ mod tests {
     /// [`PLATE_DIAG_KNEE`]: at 1024×768 (diag exactly 1280) the 0.1 × 0.025 frame = 128 × 32 px
     /// — the border texture's native size, the bar ≈ 103 × 9 px. Past the knee the frame lands
     /// midway between the byte law and native (1080p: byte law 220, native 128 → ours 174).
-    /// Below the knee the diagonal rules unchanged (a smaller window shrinks the plate, §8 Q4).
+    /// Below the knee the diagonal rules unchanged (a smaller window shrinks the plate,
+    /// `0x41ad10`).
     #[test]
     fn plate_geometry_damps_past_the_native_knee() {
         let ref43 = plate_basis(Vec2::new(1024.0, 768.0));

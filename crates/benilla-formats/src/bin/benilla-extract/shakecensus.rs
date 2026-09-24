@@ -223,7 +223,7 @@ pub fn shakecensus(chain: &mut Chain) -> Result<()> {
     //
     // The DynamicObject side is easy to get wrong and this census got it wrong once: the anchor's
     // area model is `SpellVisual` **field 12**, gated by field 11 ([`VisualStages::area_effect`] /
-    // `area_gate` — wow-re `dynobject-visual-machine.md`, benilla's `entities::dest_fx`). Judging
+    // `area_gate` — `0x5d57c0`, benilla's `entities::dest_fx`). Judging
     // the `Spells\*` carriers by "no display table names it" reported six presets dead that are
     // not: Warlock **Inferno** (SpellVisual 4859 → effect 2362 `Infernal_Impact_Base`) and
     // Ragnaros's **Meteor** (7479 → 3007 `Meteor_Impact_Base`) both plant one, and both models

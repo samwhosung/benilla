@@ -14,7 +14,7 @@ use benilla_formats::Chain;
 /// Sweep every `.m2` (under `prefix`, if given) and classify every BILLBOARD batch by which way its
 /// geometry faces — see the `Bbfacescan` command doc for why the sign decides visibility.
 ///
-/// A billboard bone puts the model's **+X** toward the viewer (`billboard-bone-law`, spherical arm),
+/// A billboard bone puts the model's **+X** toward the viewer (the spherical arm, `0x71547c`),
 /// so a batch whose winding normal is +X faces the camera and a −X one faces away. Single-sided
 /// (`two_sided` false, i.e. no material `0x04`), the away-facing ones are backface-culled by the
 /// reference from every angle — they are authored placeholders the author never saw.
@@ -141,8 +141,7 @@ fn scale_spread<T>(keys: &[(T, [f32; 3])]) -> f32 {
 /// descends from one — the joint-palette path, decision 0205), then the same question for the
 /// model's **particle emitters and ribbons** (`fx[…]`) — the population behind decision 0813: an
 /// emitter on (or under) a billboard bone has a camera-dependent origin, because the reference
-/// folds the record position through the *replaced* palette matrix
-/// (wow-re `part-anchoring-live-bone.md` §1 row 3 · `m2emitspine::particle_bone_xform`).
+/// folds the record position through the *replaced* palette matrix (`0x7190a9`–`0x71910c`).
 ///
 /// The `NONUNIF[…]` column is the third population: billboard bones whose SCALE is animated
 /// **non-uniformly** (in any sequence band, or on a global-sequence loop), listed as
@@ -701,7 +700,7 @@ pub fn animboundscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 ///
 /// The shipped corpus authors them, and the reference draws those surfaces lit: its `Model2.bls`
 /// vertex program consumes the normal as the zero vector, so the order-2 SH quadratic form
-/// collapses to its DC term (wow-re `models/scratch/model2-bls-vertex-sh.md` §2). A renderer that
+/// collapses to its DC term. A renderer that
 /// `normalize()`s the same datum gets NaN, `clamp(NaN, 0, 1)` floors the lighting factor to 0, and
 /// the batch renders **pure black over its correct texture** — bug B134's Qiraji Brainwasher
 /// sleeves and Ironaya skirt, and the reason the shader's normalize is guarded (decision 1268).

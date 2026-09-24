@@ -347,7 +347,7 @@ fn an_unavailable_talent_reaches_the_renderer_desaturated() {
     );
     // The reference's own `(1, 0.65, 0.65, 0.65)` still SETS that tint, and on shader-capable
     // hardware it has no effect on colour — the desaturated fragment discards the vertex RGB
-    // entirely (wow-re `texture-desaturate-law.md` §6.2; decision 1330 corrected 1327 here). It is
+    // entirely (`Shaders\Pixel\Desaturate.bls`; decision 1330 corrected 1327 here). It is
     // pinned anyway because the value must keep reaching the quad: it is what the no-shader arm
     // would have drawn with, and its ALPHA is read on both paths.
     assert!(

@@ -113,12 +113,12 @@ fn main() -> anyhow::Result<()> {
     // number the whole look turns on: the shipped Elwynn/Westfall/AeriePeaks atlases carry a binary
     // alpha pyramid, and a fragment can only hold full alpha — and so die at the same depth as
     // every other fragment of its leaf — inside a 2x2 all-opaque texel neighbourhood. Those run out
-    // between mip 2 and mip 3 (wow-re counts 179/56/10/0/0/0 for levels 0-5 on the dominant Elwynn
+    // between mip 2 and mip 3 (179/56/10/0/0/0 for levels 0-5, counted on the dominant Elwynn
     // cell), so sampling past ~3 erodes continuously and sampling below it takes leaves whole.
     //
     // The reference's `+0.25` stage-0 LOD bias buys a quarter of a mip toward that cliff — but the
     // sample LOD falls as the viewport grows, so the SAME bias lands differently on a bigger
-    // window. wow-re measured the reference itself at lambda 2.9-3.3 in a 1152x648 capture and
+    // window. The reference itself was measured at lambda 2.9-3.3 in a 1152x648 capture and
     // lambda ~2.45 at 1920x1080, i.e. the reference pops leaf-by-leaf at a modern resolution too.
     const DENSITY: f32 = 100.0; // texels per yard, the median from `clutter_state`
     println!("\nsampled mip at the {CROSSING:.1} yd crossing (median {DENSITY:.0} texels/yd art):");

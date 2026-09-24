@@ -151,17 +151,18 @@ impl RawBoneTrack {
         })
     }
 
-    /// The reference's sample at absolute time `t_ms` for sequence file slot `slot` — FN1
-    /// (`0x713d50`) verbatim, then the sampler's own lerp/step leg (wow-re `eval.md` FN1/FN2/FN6).
+    /// The reference's sample at absolute time `t_ms` for sequence file slot `slot` — `0x713d50`
+    /// verbatim, then the sampler's own lerp/step leg (`0x713ea0`, `0x71af20`).
     fn reference(&self, slot: usize, t_ms: u32) -> Option<[f32; 4]> {
         let last = self.ts.len().checked_sub(1)?;
-        // FN1 §1: the window is `ranges[slot]` when the array is present, else the whole key list.
+        // `0x713d59`: the window is `ranges[slot]` when the array is present, else the whole
+        // key list.
         let (lo, hi) = match self.ranges.get(slot) {
             Some(&(lo, hi)) => (lo as usize, hi as usize),
             None => (0, last),
         };
         let (lo, hi) = (lo.min(last), hi.min(last));
-        // FN1 §2: a collapsed window resolves to `keys[lo]` outright.
+        // `0x713d7b`: a collapsed window resolves to `keys[lo]` outright.
         if lo >= hi {
             return Some(self.vals[lo]);
         }
@@ -173,7 +174,7 @@ impl RawBoneTrack {
                 break;
             }
         }
-        // FN1 §5: `k1 = k0+1`, bounded by the TOTAL key count — never by the window's `hi`.
+        // `0x713e45`: `k1 = k0+1`, bounded by the TOTAL key count — never by the window's `hi`.
         if self.interp == 0 || k0 + 1 > last {
             return Some(self.vals[k0]);
         }
@@ -250,14 +251,14 @@ impl RawBoneTrack {
 /// instrument behind benilla decision 0133's named residual ("an empty band clamps to the nearest
 /// authored key … a named approximation of the mid-gap lerp").
 ///
-/// Three separately-reported disagreements, each a distinct mechanism (wow-re `eval.md`):
+/// Three separately-reported disagreements, each a distinct mechanism:
 ///
 /// - **EMPTY bands** — a band with no keys of its own. We hold the nearest authored key; the
 ///   reference holds `keys[ranges[slot].lo]`, or lerps across the bracket when the window spans two
 ///   keys. The 0133 residual proper.
 /// - **HELD edges** — a keyed band whose first key is late / last key is early. Bevy holds the edge
 ///   key; the reference keeps interpolating toward the neighbouring **out-of-band** key, because
-///   FN1's `k1 = k0+1` is bounded by the total key count and not by the window.
+///   `0x713d50`'s `k1 = k0+1` is bounded by the total key count and not by the window.
 /// - **STEP tracks** — `interpolation_type == 0`. The reference's samplers branch on it and copy
 ///   `keys[k0]` with no interpolation; our bone parse emits keys and lets Bevy interpolate, so a
 ///   snap becomes a glide.
@@ -367,7 +368,7 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 // lane, which needs a non-zero `globalSequences[gseq]` period. A multi-key channel
                 // on a ZERO-period global sequence falls between the two and is sampled by
                 // neither — census that gap, and the shape of the `ranges` window the reference
-                // would still apply here (FN1 selects the window BEFORE it resolves the gseq
+                // would still apply here (`0x713d50` selects the window BEFORE it resolves the gseq
                 // clock, so a restrictive window would clip the loop).
                 if tr.gseq != 0xffff {
                     gseq_tracks += 1;

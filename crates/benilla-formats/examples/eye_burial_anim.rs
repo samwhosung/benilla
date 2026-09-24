@@ -12,7 +12,7 @@
 //!
 //! - `gap` — the distance from the animated eye-bone pivot (where our particles are born, verified
 //!   `birth == joint`) to the **nearest skinned vertex** of the depth-writing batches. At bind this
-//!   is 0.0162 for bone 60 (wow-re `part-flush-emitter-depth.md` §0). If our animation swings the
+//!   is 0.0162 for bone 60 (measured on the shipped `Voidwalker.m2`). If our animation swings the
 //!   skin centimetres past the bone, this grows — and that growth *is* the bug.
 //! - `pass%` — the constant-depth quad's surviving area against the animated shell, front view.
 //!

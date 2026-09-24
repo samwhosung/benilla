@@ -580,8 +580,8 @@ pub fn cellscan(chain: &mut Chain) -> Result<()> {
 /// dead while another slot is alive** — the shape that makes a pinned-slot-0 consumer silently
 /// render nothing (decision 0760, found on `BlastedLandsLightningbolt01.m2`, B63).
 ///
-/// The reference samples the **playing** sequence's rate window every frame (wow-re
-/// `part-emission-rate-animated.md` §2); a consumer that pins slot 0 instead is only correct while
+/// The reference samples the **playing** sequence's rate window every frame (`0x71850d`); a
+/// consumer that pins slot 0 instead is only correct while
 /// slot 0 carries the emitter's whole story. When an author keys the burst in a *later* variation —
 /// a lightning strike that fires on 5 % of arms, an ambient prop with a rare flourish — slot 0 is a
 /// flat zero and the pinned consumer emits nothing, for ever, on every placement. That is invisible

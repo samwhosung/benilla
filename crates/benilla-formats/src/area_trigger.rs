@@ -11,8 +11,8 @@
 //! BoxHeight(8), BoxYaw(9)`. Positions are WoW world space (the space `bevy_to_wow` produces),
 //! yaw in radians.
 //!
-//! The containment law is [`AreaTriggerRow::contains`] — read from the reference's `0x5e22d0`
-//! (wow-5875-re `object-layer/scratch/w2b1-decomp.c`), which is the only place this math lives.
+//! The containment law is [`AreaTriggerRow::contains`] — read from the reference's `0x5e22d0`,
+//! which is the only place this math lives.
 
 use std::collections::HashMap;
 
@@ -46,9 +46,8 @@ pub struct AreaTriggerRow {
 impl AreaTriggerRow {
     /// Is `p` (WoW world space) inside this volume?
     ///
-    /// **VERIFIED** against the reference's containment predicate `0x5e22d0` (wow-5875-re
-    /// `object-layer/scratch/w2b1-decomp.c`; the ledger classes it ORCHESTRATION over gx's matrix
-    /// ops, and the comparison it owns is what this reproduces):
+    /// The reference's containment predicate `0x5e22d0`, an orchestration over gx's matrix ops —
+    /// the comparison it owns is what this reproduces:
     ///
     /// - **`radius != 0` ⇒ sphere**, tested in **3D** and **inclusively**: the reference computes
     ///   `Σ(centre − p)²` and returns "inside" on `radius² >= dist²`.

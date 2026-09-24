@@ -379,11 +379,10 @@ fn only_the_bids_pane_gets_its_page_without_being_opened() {
 /// The show cascade, against the reference's own order — the mechanism the Bids pane's `page`
 /// rests on, checked rather than assumed. **Every outcome matches; the order does not** (2317).
 ///
-/// wow-re (`system/ui/scratch/propagation.md`, "The show/hide visibility cascade") reads
-/// `0x76ae10` as **post-order**: a frame marks itself visible (`0x76ae7b`), walks its children, and
-/// fires its **own** `OnShow` last (`0x76aef5`, past both child loops), with no snapshot anywhere —
-/// each loop re-reads the live links, so a `Hide()` issued from a sibling's handler suppresses a
-/// later sibling by clearing its shown flag before the walk reaches it.
+/// The reference's `0x76ae10` is **post-order**: a frame marks itself visible (`0x76ae7b`), walks
+/// its children, and fires its **own** `OnShow` last (`0x76aef5`, past both child loops), with no
+/// snapshot anywhere — each loop re-reads the live links, so a `Hide()` issued from a sibling's
+/// handler suppresses a later sibling by clearing its shown flag before the walk reaches it.
 ///
 /// benilla fires the parent's own handler **first** and still notifies the descendant the parent's
 /// handler just hid. For this window the two routes land on the same state, which is why the

@@ -24,7 +24,7 @@ const MAP_CENTER: f32 = 32.0 * TILE_SIZE;
 
 /// Global chunk index of a world coordinate on either axis — row from x (grows south), column from
 /// y (grows east). The same falling-from-`MAP_CENTER` addressing the client's per-chunk lookups use
-/// (wow-re's MCSH texel law, `0x69b350`).
+/// (the MCSH texel law, `0x69b350`).
 fn chunk_index(coord: f32) -> i32 {
     ((MAP_CENTER - coord) / CHUNK_SIZE).floor() as i32
 }

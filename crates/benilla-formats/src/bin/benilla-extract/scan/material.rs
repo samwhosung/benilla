@@ -60,8 +60,7 @@ pub fn blendscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 
 /// Sweep every `.m2` (under `prefix`, if given) and census the models whose batch visibility is
 /// **per sequence** — geometry the reference draws in one animation and skips in another, via the
-/// verified alpha combine (`A = colourAlpha × weight`, `A ≤ 0` culls; wow-re
-/// `m2-alpha-combine-cull.md`).
+/// alpha combine (`A = colourAlpha × weight`, `A ≤ 0` culls; `0x707680`).
 ///
 /// This is the population instrument for the class of bug where a client bakes the material tracks
 /// once and draws the result forever: every model listed here has at least one batch whose authored
@@ -2108,7 +2107,7 @@ fn entity_corpus(chain: &mut Chain) -> Result<EntityCorpus> {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum UvClock {
     /// Every live loop is clocked on a **global sequence**: a free-running per-scene ms clock the
-    /// reference anchors once per instance at attach (`gseq-anchor.md`, `CM2Model+0x68`). One
+    /// reference anchors once per instance at attach (`0x70eae1`, `CM2Model+0x68`). One
     /// shared uniform on a free-running clock is faithful here — 0136's lane, unchanged.
     Gseq,
     /// Every live loop is clocked on its **sequence band**: the host's own playing-clip time, so

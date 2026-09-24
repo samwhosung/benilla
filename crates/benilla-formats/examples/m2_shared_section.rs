@@ -5,7 +5,7 @@
 //! batches name the SAME section they rasterize the SAME triangles — a base layer and a shine /
 //! reflect layer authored on top of it (`ARMORREFLECT3`, `BALISTASHINE02`). The reference draws
 //! both from one vertex array under depth-write + LEQUAL, so the second always wins the tie
-//! exactly (wow-re `m2-depth-blend-state`).
+//! exactly (`0x70b3f6`, `0x70c190`).
 //!
 //! We only match that if both batches take the SAME vertex-transform path. They do not when a
 //! consolidator (`static_gx`, `terrain_stream::merge`) admits one and refuses the other: the

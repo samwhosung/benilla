@@ -1,5 +1,5 @@
 //! The weapon **swing trail** — `SpellVisualKit` CharProc type **8**, the ribbon a melee ability
-//! smears behind its blade (wow-re `charproc8-weapon-trail.md`, §5-verified end to end).
+//! smears behind its blade.
 //!
 //! For **16 of the 27 trail kits a live spell reaches, this is the entire visual**: kit 324
 //! (Heroic Strike / Overpower / Mortal Strike / Bloodthirst / Rend — 218 spells), 506
@@ -32,8 +32,7 @@
 //!
 //! The callback turns lighting **on** (EGxRs `0x0e = 1` at `0x6c6847`) over a vertex format that
 //! carries **no normal** (format 7 is position + colour, stride 16). That combination is not a
-//! contradiction and it is not a no-op — it selects a specific, reduced term, derived at the bytes
-//! in wow-re `format7-lighting-term.md`:
+//! contradiction and it is not a no-op — it selects a specific, reduced term:
 //!
 //! ```text
 //! out = (Σ enabled lights' Ambient) × authoredColour  +  inherited material Emissive
@@ -56,18 +55,17 @@
 //! scene it darkens with is its **wearer's**, not the world's. The draw runs inside the weapon
 //! model's own per-frame callback during the wearer's model draw, so the enabled lights it
 //! inherits are the ones the M2 collector committed for that unit; the held weapon's light node is
-//! the wearer's own by aliasing (`[item+0x3b8] = [wearer+0x3b8]`, `0x718960`). Both halves are
-//! four-way byte-derived (wow-re `format7-lighting-term.md`, `part-lit-normal-space.md` §6):
+//! the wearer's own by aliasing (`[item+0x3b8] = [wearer+0x3b8]`, `0x718960`):
 //!
-//! - **outdoors** a unit's committed ambient IS the day/night ambient, so
+//! - **outdoors** a unit's committed ambient IS the day/night ambient (`0x69e770`), so
 //!   [`benilla_world::lighting::WowLighting`] is exact, not an approximation;
-//! - **indoors** it is the light node's own ramped word, chasing `cap96(MOCV)` — the room's light,
-//!   never the sky's ([`benilla_world::interior::NodeAmbient`], the ambient half of the same
-//!   committed words [`benilla_world::interior::ParticleLight`] folds whole). Its absence is the
-//!   exterior lane, which is why the fallback above is the right one and not a guess.
+//! - **indoors** it is the light node's own ramped word, chasing `cap96(MOCV)` (`0x69e4c0`) — the
+//!   room's light, never the sky's ([`benilla_world::interior::NodeAmbient`], the ambient half of
+//!   the same committed words [`benilla_world::interior::ParticleLight`] folds whole). Its absence
+//!   is the exterior lane, which is why the fallback above is the right one and not a guess.
 //!
 //! One named approximation is left: the **emissive** term is not modelled. It is inherited
-//! material state whose value that round did not pin, and `EMISSIVEMATERIALSOURCE` is set nowhere,
+//! material state whose value is not pinned, and `EMISSIVEMATERIALSOURCE` is set nowhere,
 //! so it is a constant we would be inventing rather than reproducing.
 //!
 //! The fold happens on the CPU, into the vertex colours, and the draw declares
@@ -106,9 +104,9 @@ const RING_SLOTS: u32 = 0x80;
 
 /// The **reader's** modulus, and it is not [`RING_SLOTS`]: `0x6c64e5`/`0x6c64ea`
 /// (`mov ecx,0x7f; idiv ecx`) takes `i % 127` where the writer stored at `i & 127`. The two
-/// genuinely disagree in build 5875 — both of wow-re's independent derivations found it — so once
-/// the write counter passes 127 the reader picks up a neighbouring sample instead of the one it
-/// wants. See [`Swing::read`] for what that looks like and which kits reach it.
+/// genuinely disagree in build 5875, so once the write counter passes 127 the reader picks up a
+/// neighbouring sample instead of the one it wants. See [`Swing::read`] for what that looks like
+/// and which kits reach it.
 const READ_MODULUS: u32 = 0x7f;
 
 /// `0x811278` in `.rdata` — `0x3b5a740e`, the nearest f32 to `1/300`, and the per-millisecond fade
@@ -219,7 +217,7 @@ struct Swing {
     /// `+0x610`.
     start_ms: u32,
     /// `+0x614` — the previous evaluation's timestamp. The step's first factor is the delta
-    /// against this, **not** the elapsed time (wow-re §7a: feeding elapsed makes `fadeStep`
+    /// against this, **not** the elapsed time (`0x6c65c1`: feeding elapsed makes `fadeStep`
     /// explode and kills the trail after one or two frames).
     last_ms: u32,
 }
@@ -293,8 +291,7 @@ impl Swing {
         }
         // `0x6c64d0`, tail → head. The alpha is decremented once per PAIR (`test bl,1`) BEFORE
         // that pair's colour is stored, so the oldest retained pair is the opaque end and the
-        // pair at the weapon lands at ≈ 0. Counter-intuitive, and wow-re reached it twice
-        // independently from opposite ends of the function — do not invert it.
+        // pair at the weapon lands at ≈ 0. Counter-intuitive but byte-exact: do not invert it.
         let mut alpha = i32::from(self.alpha);
         let mut strip = Vec::with_capacity((live as usize).div_ceil(2));
         let mut i = self.tail;
@@ -328,7 +325,7 @@ fn fade_step(dt_ms: u32, alpha: u8) -> u32 {
     // `fild dt` → `fmul dword [0x811278]` → `fimul dword [alpha]` → `_ftol`. The constant is the
     // nearest f32 to 1/300 and the x87 evaluates at PC_53 with it widened, so the product runs in
     // **f64 with an f32 constant** — `dt · alpha / 300.0` is different arithmetic and is not what
-    // the binary does (wow-re `charproc8-trail-draw-state.md` §10).
+    // the binary does.
     let raw = (f64::from(dt_ms) * f64::from(FADE_PER_MS) * f64::from(alpha)).trunc() as i64 as u32;
     if raw & 0xff >= 1 {
         raw
@@ -464,9 +461,9 @@ fn draw_weapon_trails(
             let (b, t, _) = strip[strip.len() - 1];
             (b + t) * 0.5
         };
-        // The six render states the callback writes, byte for byte (wow-re
-        // `charproc8-trail-draw-state.md` §1) — three of which contradict what a spell ribbon
-        // looks like it should be, and every one of the three is visible:
+        // The six render states the callback writes, byte for byte (`0x6c6825`–`0x6c686e`) —
+        // three of which contradict what a spell ribbon looks like it should be, and every one of
+        // the three is visible:
         //
         // | EGxRs | value | |
         // |---|---|---|

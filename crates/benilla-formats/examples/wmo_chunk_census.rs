@@ -1,9 +1,9 @@
 //! Chunk-integrity census over WMO files: walk the top-level chunk list the way the loader's
 //! [`find_wmo_chunk`] walk does and report every file whose chunk stream does not tile exactly — a
-//! chunk whose declared size overruns EOF. The reference **clamps** such a chunk (wow-re
-//! `models.md` "WMO chunk-structure contract": *"reads chunks while the 8-byte header is in-bounds
-//! and clamps the last chunk to EOF … e.g. `Undercity_144.wmo`'s MOGP runs 1 B past EOF,
-//! tolerated"*), so an overrun here must cost us nothing; a file listed as losing a chunk is a bug.
+//! chunk whose declared size overruns EOF. The reference **clamps** such a chunk (`0x6c3a60` /
+//! `0x6c3f80` read chunks while the 8-byte header is in-bounds and clamp the last chunk to EOF —
+//! e.g. `Undercity_144.wmo`'s MOGP runs 1 B past EOF, tolerated), so an overrun here must cost us
+//! nothing; a file listed as losing a chunk is a bug.
 //!
 //! ```text
 //! cargo run -p benilla-formats --example wmo_chunk_census -- <root.wmo>   # one building

@@ -5,10 +5,10 @@
 //!
 //! The reference never brute-forces a WMO's triangles. Every collision query descends the group's
 //! **MOBN** BSP and tests only the faces its leaves list in **MOBR**, then applies the per-face MOPY
-//! reject mask (wow-re `collision.md` § "The WMO per-face MOPY collision mask": leaf `0x6bc700`,
-//! *"a BSP-leaf face is skipped iff `(MOPY.flags & rejectMask) != 0`"* — walking `0x84`, camera
-//! `0x82`). We parse no BSP at all: `accumulate_wmo_group_faces` walks **every** MOPY-passing
-//! triangle. So the two agree only where MOBR happens to reference everything the mask keeps.
+//! reject mask (leaf `0x6bc700`: a BSP-leaf face is skipped iff `(MOPY.flags & rejectMask) != 0`
+//! — walking `0x84`, camera `0x82`). We parse no BSP at all: `accumulate_wmo_group_faces` walks
+//! **every** MOPY-passing triangle. So the two agree only where MOBR happens to reference
+//! everything the mask keeps.
 //!
 //! This tool measures that gap per group — how many faces we collide that the reference's BSP cannot
 //! reach, and where they are — which would be the difference between "solid wall" and "walk straight
@@ -28,8 +28,8 @@ use std::collections::HashSet;
 
 use benilla_wmo::{parse_wmo, ParsedWmo};
 
-/// The walking gather's persistent MOPY reject bit (DETAIL/decal) — wow-re mask `0x84` minus the
-/// transient `0x80` visited bit.
+/// The walking gather's persistent MOPY reject bit (DETAIL/decal) — mask `0x84` (`0x6315f0`) minus
+/// the transient `0x80` visited bit.
 const MOPY_DETAIL: u8 = 0x04;
 
 fn main() -> anyhow::Result<()> {
@@ -221,10 +221,10 @@ fn face_centroid(group: &benilla_wmo::WmoGroup, f: usize) -> Option<[f32; 3]> {
 /// Walk the MOBN tree from node 0 and return the set of MOBR **face indices the descent can
 /// actually reach**, plus a count of malformed references (out-of-range children or face spans).
 ///
-/// Node layout (wowdev, stride `0x10` — the stride itself is VERIFIED in wow-re
-/// `models/scratch/re-pass.md`): `u16 flags · i16 negChild · i16 posChild · u16 nFaces ·
-/// u32 faceStart · f32 planeDist`. `flags & 0x4` = leaf. The `bad` counter is the falsifier: read
-/// the layout wrong and children/spans go out of range immediately rather than quietly.
+/// Node layout (wowdev, stride `0x10` — the stride itself is the client's, `0x692f20`):
+/// `u16 flags · i16 negChild · i16 posChild · u16 nFaces · u32 faceStart · f32 planeDist`.
+/// `flags & 0x4` = leaf. The `bad` counter is the falsifier: read the layout wrong and
+/// children/spans go out of range immediately rather than quietly.
 fn descend(nodes: &[u8], mobr: &[u16]) -> (HashSet<u16>, usize) {
     let n = nodes.len() / 0x10;
     let (mut seen, mut reach, mut bad) = (vec![false; n], HashSet::new(), 0usize);

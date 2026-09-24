@@ -539,7 +539,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// that region out of whichever buffer the draw binds. Uploading a region to the buffers that
 /// carry it is machinery. *Which* off-world buffers carry it is policy, and it has to be: a
 /// portrait bake must NOT (the reference builds a fresh CM2 with colour `(1,1,1)`, so a ghost's
-/// portrait shows the living face — wow-re `ghost-death-visuals.md` §6, report B49, decision 1481)
+/// portrait shows the living face — `0x524f60`, report B49, decision 1481)
 /// while the glue scene MUST (it is the screen itself, and its character component is the very
 /// instance the reference tints). The engine cannot tell those two render targets apart — both are
 /// a camera writing to an image — and encoding "a bake standing in for a UI model widget" inside

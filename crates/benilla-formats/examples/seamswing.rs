@@ -12,7 +12,7 @@
 //! Only an offset spread across the axes sweeps. Magnitude alone cannot tell those apart, and
 //! reading a 0.29 yd radius as a 0.29 yd arc is exactly how decision 0847 withdrew a correct change
 //! — the spikes it measured run **along** their bone (worst vertex 12° off axis), so the sweep it
-//! described never existed (wow-re `billboard-bone-law.md` §6.3, and this tool's own output).
+//! described never existed (the spherical basis `0x71547c`, and this tool's own output).
 //!
 //! Usage: `cargo run -p benilla-formats --example seamswing -- <WoW/Data> <internal\path.m2>`
 

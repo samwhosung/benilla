@@ -5,8 +5,7 @@
 //! which world states are *displayed*, where, and with what label; [`crate::world_state`] holds
 //! what the server actually sent; this module joins them and pushes the result.
 //!
-//! Everything below is the reference's, carved 2026-08-25 (wow-re
-//! `system/ui/scratch/worldstate-ui-law.md`).
+//! Everything below is the reference's.
 //!
 //! ## The list builder (`0x4c56e0`)
 //!

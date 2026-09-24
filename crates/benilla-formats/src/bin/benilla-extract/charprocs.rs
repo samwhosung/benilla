@@ -161,9 +161,8 @@ pub fn run(chain: &mut Chain) -> Result<()> {
         let [r, g, b] = trail.rgb();
         let spells = reach.get(kit_id);
         // `CharParamOne` is printed even though the type-8 arm never reads it (`0x60d80a`'s three
-        // `_ftol`s take Zero/Two/Three only). wow-re's note states every shipped row carries
-        // `20.0` there; a census that hides the column cannot catch that being wrong, and it is —
-        // Sinister Strike's kit 399 carries 15.0.
+        // `_ftol`s take Zero/Two/Three only). Not every shipped row carries `20.0` there, and a
+        // census that hides the column cannot catch that — Sinister Strike's kit 399 carries 15.0.
         let unread = kit
             .and_then(|k| {
                 k.char_procs()

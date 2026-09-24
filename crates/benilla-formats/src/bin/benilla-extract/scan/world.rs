@@ -13,8 +13,8 @@ use crate::{model_key, yn};
 
 /// Dump a WMO root's placed-prop tables: every MODD doodad with its MODS set membership and its
 /// OWNING group(s) read from the group files' MODR lists — the relation the reference instantiates
-/// from (`0x695aa0` loops a *visible* group's own refs, wow-re `m2-interior-doodad-base-light.md`
-/// §453). A prop referenced by NO group is never created by the real client at all — the
+/// from (`0x695aa0` loops a *visible* group's own refs). A prop referenced by NO group is never
+/// created by the real client at all — the
 /// divergence decision 0689 names and benilla still spawns. This answers "which props exist here,
 /// who owns them, and which would the reference even draw" in one read (the B30/B32 question).
 pub fn wmodoodads(chain: &mut Chain, raw_path: &str, filter: Option<&str>) -> Result<()> {
@@ -167,7 +167,7 @@ fn mods_set_names(bytes: &[u8]) -> Vec<String> {
 /// re-checkable in one command rather than trusted from a decision record.
 ///
 /// **It does not, and cannot, say which group the RENDERER tests** — and reading it as if it did is
-/// the mistake decision 0767 made (superseded by 0773). The carved law is that `0x40000` is tested
+/// the mistake decision 0767 made (superseded by 0773). The law is that `0x40000` is tested
 /// inside the portal flood (`0x6b42e0` in `0x6b41c0`) on the group being *visited*, so the predicate
 /// is "any flood-reached group carries the bit". A census over static asset bytes has no way to see
 /// that distinction; only the binary did.
@@ -480,8 +480,8 @@ pub fn doodadscan(
         );
     }
 
-    // Moving-seq0 models with a variation chain, by NAME (the wow-re §4a random-variation
-    // arm correction): the exact placed models where variationIdx −1 vs 0 is visible at all.
+    // Moving-seq0 models with a variation chain, by NAME (the random-variation arm `0x695100`):
+    // the exact placed models where variationIdx −1 vs 0 is visible at all.
     println!();
     println!("=== moving-seq0 multi-variation models ===");
     let mut varied: Vec<(&String, &u32)> = m2_instances

@@ -2,7 +2,7 @@
 //! what**.
 //!
 //! The instrument the two "outfit texture" reports needed and nobody had. A dressed character's
-//! body is one 256² atlas of ten fixed tiles (the RF-0062 bbox table), and every visible defect in
+//! body is one 256² atlas of ten fixed tiles (bbox table `0xb42450`), and every visible defect in
 //! that class — a garment that stops early, a boot repainting a robe's hem, a bare band below the
 //! knee — is one tile receiving the wrong contribution. Reading that off a screenshot means
 //! guessing; reading it off the atlas means measuring.

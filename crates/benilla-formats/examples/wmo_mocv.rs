@@ -5,7 +5,7 @@
 //! An interior WMO surface takes no exterior light in the reference: an INT-class batch draws
 //! `tex × MOCV` and a TRANS-class batch lerps to it by `MOCV.a`, so the *only* thing between a black
 //! floor and a lit one is the bake in the file — plus the runtime portal fixup the client applies
-//! over it (`FixColorVertexAlpha`, wow-re `wmo-group-lighting.md §4`, which brightens interior verts
+//! over it (`FixColorVertexAlpha` `0x6c43d0`, which brightens interior verts
 //! toward white within 6.67 yd of an exterior-neighbour portal). A "dark floor here" report therefore
 //! has exactly two shapes, told apart by numbers rather than by looking: either the file bakes it
 //! dark (and the fixup is what lights it), or our reader/classifier mislabels the batch. This prints

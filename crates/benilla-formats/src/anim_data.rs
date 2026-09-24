@@ -6,10 +6,10 @@
 //! _col5(5), Fallback(6)`.
 //!
 //! - **WeaponFlags (col 2)** — the sheath-reconcile bits the client tests on every `PlayAnimation`
-//!   (`0x5fdf80`). The identification is **byte-verified** (wow-re `sheath-policy.md` §6a, §5
-//!   cross-checked): the reconcile indexes the `WowClientDB<AnimationData>` cache (`0xc0e070`,
-//!   loader-asserted 7 columns × 28 B against `DBFilesClient\AnimationData.dbc`) by the current
-//!   sequence's AnimationData id, and all three flag tests read row offset `+0x8` = column 2.
+//!   (`0x5fdf80`). The identification is the binary's: the reconcile indexes the
+//!   `WowClientDB<AnimationData>` cache (`0xc0e070`, loader-asserted 7 columns × 28 B against
+//!   `DBFilesClient\AnimationData.dbc`) by the current sequence's AnimationData id, and all three
+//!   flag tests read row offset `+0x8` = column 2.
 //!   The bits: `4` force-stow (casts, Swim 42–45, Mount 91,
 //!   SitChair 102–104, Loot 50), `0x10` force-stow (every Emote, AttackUnarmed 16/117,
 //!   SitGround 96–98, Kneel 114–116, AttackBow/Rifle/Thrown), `0x20` force-draw-melee (armed

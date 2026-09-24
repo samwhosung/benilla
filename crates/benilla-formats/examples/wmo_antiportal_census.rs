@@ -3,8 +3,8 @@
 //!
 //! Later WoW documentation (wowdev.wiki `SMOGroupFlags`) names a high MOGP `flags` bit
 //! `ANTIPORTAL`: a group with **no render batches at all**, kept only for its bounding box, which
-//! the portal flood uses as an occluder rather than something it ever draws. Nothing in benilla or
-//! `wow-5875-re` has verified that bit for build 5875 — the portal flood
+//! the portal flood uses as an occluder rather than something it ever draws. Nothing confirms that
+//! bit for build 5875 — the portal flood
 //! ([`benilla_world::wmo_portal`]) only ever branches on `flags & 0x48` (EXTERIOR / EXTERIOR_LIT)
 //! and never treats any group as occlusion-only. So the question is purely empirical: does the
 //! shipped 5875 data contain such a group at all, and which bit(s) does it carry?
@@ -36,7 +36,7 @@
 //! 5875 does not flag them with a dedicated ANTIPORTAL bit the way later clients' `SMOGroupFlags`
 //! documentation describes. That is a fact about the *data*, not yet about the *engine*: whether
 //! `WoW.exe` 5875's occluder pass (if it has one) singles these 15 out by shape rather than by flag
-//! is a `wow-5875-re` question this census doesn't answer.
+//! is a question about the binary this census doesn't answer.
 //!
 //! Only three MOGP bits are named anywhere in benilla's own code today (verified by grep over
 //! `benilla-world/src/wmo_portal`, `benilla-assets/src/wmo.rs`, and
@@ -311,7 +311,7 @@ cross-tab below for which flag bit(s) the data implicates.",
     // Not an antiportal question — a *consumer* one, and the reason it sits in this census rather
     // than in a throwaway script. The reference draws a building's EXTERIOR groups only through the
     // deferred portal windows the interior flood leaves behind, each group tested against its own
-    // window's sub-frustum (`wow-5875-re` `wmo-insideleg-phase3.md` Pass 2; benilla decision 1826).
+    // window's sub-frustum (`0x6b3c73`–`0x6b3d6f`; benilla decision 1826).
     // A building with ONE exterior group cannot show that law at work: a single whole-envelope shell
     // has a box wide enough to intersect any window, so it draws from everywhere and looks identical
     // either way — which is exactly why Stormwind (306 groups, one `0x8`) is the wrong subject to

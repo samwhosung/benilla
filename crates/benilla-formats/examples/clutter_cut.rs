@@ -28,8 +28,8 @@
 
 use std::collections::BTreeSet;
 
-/// The reference's ramp (wow-re `terrain/scratch/detail-doodad-distance-fade.md`): a 64-texel
-/// CLAMP/LINEAR table read at texel centres, capped at texel 0's `252/255`.
+/// The reference's ramp (`0x6b1b6e`): a 64-texel CLAMP/LINEAR table read at texel centres, capped
+/// at texel 0's `252/255`.
 fn ramp(view_depth: f32, far: f32) -> f32 {
     let near = far * 0.75;
     let u = (view_depth - near) / (far - near);

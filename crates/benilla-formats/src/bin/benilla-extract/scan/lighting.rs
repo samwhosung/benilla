@@ -16,8 +16,8 @@ use crate::model_key;
 /// INTERIOR lighting lane commits **literal black**.
 ///
 /// The interior lane's whole base light is the MODD entry's own baked colour field: ambient =
-/// `cap96(colour)`, diffuse = `floor112(colour)` (`0x694e90` create → `0x6a77e0`; wow-re
-/// `trace-forensics-abbey-interior-d3d` §1.1). The floor leg *raises* a dim colour to max 112 — but
+/// `cap96(colour)`, diffuse = `floor112(colour)` (`0x694e90` create → `0x6a77e0`). The floor leg
+/// *raises* a dim colour to max 112 — but
 /// it is a hue-preserving scale by `112/max`, so a colour of exactly `#000000` has nothing to raise
 /// and both words come out zero. Such a prop is lit by nothing but its owning group's MOLR fixture
 /// lights, and a group carrying none (or none within its authored attenuation disk) leaves it a
@@ -183,14 +183,14 @@ struct FamilyStats {
 }
 
 /// Sweep every `.m2` (optionally under a path prefix) and report which models author M2 dynamic
-/// LIGHT blocks — the population instrument for the mechanism (decision 0016 / wow-re
-/// `system/models/scratch/m2-dynamic-lights.md`). Per model (only models with ≥1 light, printed
+/// LIGHT blocks — the population instrument for the mechanism (decision 0016, `0x718960`). Per
+/// model (only models with ≥1 light, printed
 /// sorted by path): its `type==1` point-light count vs directional (`type==0`, ambient-feed, not
 /// a discrete GL light) count, then per POINT light: bone, model-space position, `diffuse_color ×
 /// diffuse_intensity` (raw colour, intensity, and the product), authored attenuation start/end,
 /// and an `OFF` tag when [`M2Light::visibility_off`] — the one shape (a static `0` visibility
-/// key) that keeps a light dark (§9.4). The closing summary is the real deliverable: totals, a
-/// breakdown by top-level content family ([`super::family_of`]) — benilla only spawns these
+/// key) that keeps a light dark (`0x71646d`). The closing summary is the real deliverable: totals,
+/// a breakdown by top-level content family ([`super::family_of`]) — benilla only spawns these
 /// lights for ADT-placed doodads and WMO props today, so this answers how much of the entity path
 /// (creatures, held items, GameObjects) is actually missing them — and a cheap diffuse
 /// colour×intensity tally ([`hue_tag`]).
