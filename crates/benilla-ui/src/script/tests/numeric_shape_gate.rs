@@ -3,9 +3,10 @@
 //! `lua_tonumber 0x6f3620` and no `lua_isnumber` gate at all.
 //!
 //! This is one test and not six because which shape a given argument takes is per binding, not a
-//! global law: the reference's 408 widget-registrar positions (110 gated, 64 ungated) are a table
-//! a re-implementation is checked against, not an instinct. Our half of that table had drifted: 1973 closed `SetTextColor` and left every sibling
-//! strict, so mlua's converter went on being the gate for five more years' worth of call sites.
+//! global law: the reference's 408 widget-registrar positions (110 gated, 64 ungated) are a table a
+//! re-implementation is checked against, not an instinct. Our half of that table had drifted: 1973
+//! closed `SetTextColor` and left every sibling strict, so mlua's converter went on being the gate
+//! for five more years' worth of call sites.
 //!
 //! The live symptom that forced the audit: stock `QuestLogFrame.lua:337` does
 //! `QuestLogSkillHighlight:SetVertexColor(titleButton.r, titleButton.g, titleButton.b)`, and those
