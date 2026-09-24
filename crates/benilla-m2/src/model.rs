@@ -95,7 +95,7 @@ impl M2BoneFlags {
 
 /// One M2 bone. The render path reads billboard flags + pivot; the skeletal-animation path also needs
 /// the **parent index** (`-1` = root) to compose bone matrices up the tree and to build the joint
-/// hierarchy + inverse bind poses (decision 0019). Vanilla bone record is stride 108: keyBoneId i32
+/// hierarchy + inverse bind poses. Vanilla bone record is stride 108: keyBoneId i32
 /// @+0x00, flags @+0x04, parent i16 @+0x08, pivot C3 @+0x60 (no boneNameCRC, unlike TBC+).
 pub struct M2Bone {
     /// The bone's `KeyBoneID` (`-1` = none): the semantic anchor table — 0/1 arms L/R, 2/3
@@ -116,7 +116,7 @@ impl M2Bone {
 
 /// One M2 vertex (48 bytes on disk). Layout: position C3 @0, bone_weights [u8;4] @0x0c,
 /// bone_indices [u8;4] @0x10, normal C3 @0x14, tex_coords C2 @0x20 (a second UV @0x28 we skip). The
-/// weights + indices are the 4-bone skin binding the skeletal-animation path uploads (decision 0019);
+/// weights + indices are the 4-bone skin binding the skeletal-animation path uploads;
 /// the static render path uses only `bone_indices[0]` (billboard glow-card pivot).
 pub struct M2Vertex {
     pub position: C3,
@@ -154,7 +154,7 @@ pub struct M2Header {
     pub collision_sphere_radius: f32,
 }
 
-/// One row of the M2's baked **PlayableAnimationLookup** table (decision 0082, `0x711bf0`): the
+/// One row of the M2's baked **PlayableAnimationLookup** table (`0x711bf0`): the
 /// model's own precomputed answer to "if the game requests `AnimationData.dbc` id X, which id do I
 /// actually play, and in which direction/variant". Header `count@+0x2c`/`offset@+0x30` (pre-Wrath
 /// M2 only — the array is dropped past version 263), stride 4 (one dword per row): low16 = the
@@ -337,7 +337,7 @@ pub struct M2Model {
     /// Note the table is *short*: a model's `nAnimationLookup` stops just past the highest id it
     /// authors, so an id beyond the end reads as the out-of-bounds sentinel, i.e. **not owned**.
     pub animation_lookup: Vec<u16>,
-    /// The model's baked **PlayableAnimationLookup** (decision 0082 — see [`M2PlayableAnim`]): row `i`
+    /// The model's baked **PlayableAnimationLookup** (see [`M2PlayableAnim`]): row `i`
     /// is the model's own precomputed substitute for requested `AnimationData.dbc` id `i`. Empty for a
     /// version past 263 (the array is dropped) or a model whose header couldn't be read that far — the
     /// resolver degrades to identity in that case.

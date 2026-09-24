@@ -1,4 +1,4 @@
-//! Perceptual image-diff metrics for the Phase-5 visual A/B render harness (decision 0008).
+//! Perceptual image-diff metrics for the Phase-5 visual A/B render harness.
 //!
 //! The harness captures deterministic screenshots of benilla (`$WOW_CAPTURE`, see the `capture` module
 //! in the `benilla` crate) and diffs them. This crate is the pure-math half: given two equally-sized

@@ -1,5 +1,5 @@
 //! SRP6 client + vanilla world-header crypto for **WoW 1.12.1 (build 5875)** — in-repo, replacing
-//! `wow_srp` (decision 0021).
+//! `wow_srp`.
 //!
 //! WoW uses a lightly customised SRP6 for logon: a fixed 32-byte safe prime `N`, generator `g = 7`,
 //! multiplier `k = 3`, and a bespoke "interleave" that folds the shared secret `S` into the 40-byte
@@ -337,7 +337,7 @@ impl SrpClientChallenge {
     /// [`Self::new`] with the ephemeral's draw source injected. `new` hands it `thread_rng`; the
     /// tests hand it a scripted one, so each guard in the loop below is exercised on purpose —
     /// a draw known to trip it, then a clean one — rather than by the ~1-in-137 chance a random
-    /// sweep gives each (decision 2331).
+    /// sweep gives each.
     fn new_with_rng<R: RngCore>(
         rng: &mut R,
         username: NormalizedString,
@@ -728,7 +728,7 @@ mod tests {
         to_padded_32_le(&BigInt::from(GENERATOR).modpow(&from_le(private_key), &n))
     }
 
-    /// The crate's guarantee, exercised on purpose (decision 2331): each guard in the draw loop is
+    /// The crate's guarantee, exercised on purpose: each guard in the draw loop is
     /// handed a private key KNOWN to trip it, then a clean one, and the handshake that comes back
     /// must be the clean draw's. A dropped guard fails its case outright — the old random sweep
     /// caught a dropped guard with "~97 %" probability, which is a 3 % escape by design.

@@ -1,5 +1,5 @@
-//! Bounds-checked byte readers + IFF chunk iteration shared by the format parsers
-//! (decision 0064). Three primitives, nothing else:
+//! Bounds-checked byte readers + IFF chunk iteration shared by the format parsers.
+//! Three primitives, nothing else:
 //!
 //! - [`ByteExt`] — fallible little-endian accessors on `[u8]`. There is deliberately **no**
 //!   panicking variant: parsers map `None` to their own truncation error with `?`, so an unguarded

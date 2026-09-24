@@ -1,6 +1,6 @@
 //! The **build-id stamp emitter** — the `build.rs` body both launcher shims share.
 //!
-//! Two binaries carry the stamp now (`benilla` and `benilla-worldview`, decision 1160), and a
+//! Two binaries carry the stamp now (`benilla` and `benilla-worldview`), and a
 //! copy-pasted build script is exactly the thing that rots: one shim gets a fix, the other keeps
 //! reporting a sha by a rule that changed. So the script is a function and each shim's `build.rs`
 //! is one line that calls it.

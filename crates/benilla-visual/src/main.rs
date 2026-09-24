@@ -1,4 +1,4 @@
-//! `benilla-visual` — diff captures from the Phase-5 visual A/B harness (decision 0008).
+//! `benilla-visual` — diff captures from the Phase-5 visual A/B harness.
 //!
 //! Usage:
 //!   benilla-visual diff     <a.png> <b.png>   [--out <diff.png>] [--fail <mae>] [--amplify <n>]
@@ -148,7 +148,7 @@ fn main() -> Result<()> {
                 opts.amplify,
             )?;
             // Under `--fail` this is a gate, and a shot that never landed must sink it — see the
-            // note in `diff_dir` (decision 0743).
+            // note in `diff_dir`.
             if opts.fail.is_some() && !unpaired.is_empty() {
                 bail!(
                     "{} unpaired image(s) — a shot is missing from one side, so this comparison is \
@@ -293,7 +293,7 @@ fn series(dir: &Path, at: &str) -> Result<()> {
 /// nothing downstream does coordinate math on a zoomed image.
 /// Per-channel min / mean / max over a rect (or the whole frame) — the "is this region flat?"
 /// instrument. A frame edge that shows the render target's clear colour instead of art reads as
-/// `min == max` on every channel (decision 1619, the glue framing's void check); a region of art
+/// `min == max` on every channel (the glue framing's void check); a region of art
 /// never does. Printed, not judged: the caller compares two rects or two captures.
 fn stat_cmd(path: &Path, rect: Option<&str>) -> Result<()> {
     let img = load(path)?;
@@ -1073,7 +1073,7 @@ fn diff_dir(da: &Path, db: &Path, out: Option<&Path>, amplify: u32) -> Result<Di
     // how a sweep reports all-green with a shot missing: on 2026-07-28 one `water-night` capture
     // exited 0 without writing its PNG, and `selfcheck` diffed the other eight and passed clean. A
     // gate that quietly narrows its own scope is worse than no gate. Reported always; fatal to the
-    // CALLER when `--fail` is in force, i.e. whenever this is being used as a gate (decision 0743).
+    // CALLER when `--fail` is in force, i.e. whenever this is being used as a gate.
     let unpaired: Vec<String> = a
         .difference(&b)
         .map(|n| format!("{}/{n}", da.display()))

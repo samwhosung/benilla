@@ -1,5 +1,4 @@
-//! A read-only MPQ archive reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing `wow-mpq`
-//! (decision 0021).
+//! A read-only MPQ archive reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing `wow-mpq`.
 //!
 //! Deliberately narrow to what the real `Data/` chain actually is (verified by probing every archive):
 //! format **V1/V2**, every file `COMPRESS`-flagged and **sectored**, **no encrypted files**, **no
@@ -25,10 +24,10 @@
 //! Opening the handle is a cheap syscall; the expensive table parse happens once, in [`Archive::open`].
 //!
 //! Correctness was proven by a differential pass against `wow-mpq` over real archives — 37,971 reads
-//! byte-identical across all 13 (decision 0021; the throwaway oracle test is in git history). The
+//! byte-identical across all 13 (the throwaway oracle test is in git history). The
 //! `benilla-formats` loaders now exercise this reader end-to-end against real data on every run.
 //!
-//! Byte access goes through `benilla-bytes` (decision 0064), migrated minimally: the local rd_u16/
+//! Byte access goes through `benilla-bytes`, migrated minimally: the local rd_u16/
 //! rd_u32 are gone in favor of `ByteExt`, and every allocation sized from a header/block-table count
 //! or a sector length — all attacker-controllable in a hostile archive — is capped by what the
 //! archive file could actually hold (`capped`), so a lying header fails with [`Error::Corrupt`]
@@ -55,7 +54,7 @@ const FLAG_COMPRESS: u32 = 0x0000_0200;
 const FLAG_ENCRYPTED: u32 = 0x0001_0000;
 const FLAG_SINGLE_UNIT: u32 = 0x0100_0000;
 /// A patch-archive tombstone: the path is deleted from the composite chain (size 0). Recognised so a
-/// tombstone reads as [`Error::NotFound`], not an empty buffer (decision 0246).
+/// tombstone reads as [`Error::NotFound`], not an empty buffer.
 const FLAG_DELETE_MARKER: u32 = 0x0200_0000;
 const FLAG_EXISTS: u32 = 0x8000_0000;
 
@@ -111,7 +110,7 @@ pub enum Error {
     Unsupported(String),
     Decompress(String),
     /// A header/block-table count or sector length claims more than the archive file could possibly
-    /// hold. Caught by the capped reservations (decision 0064) before the allocator would; a corrupt
+    /// hold. Caught by the capped reservations before the allocator would; a corrupt
     /// or truncated archive, not a coding bug.
     Corrupt(String),
 }
@@ -149,7 +148,7 @@ fn to_u32s(bytes: &[u8]) -> Vec<u32> {
 }
 
 /// Bytes actually available in the archive file from `pos` to EOF, clamped into `usize`. Table counts
-/// and sector lengths are attacker-controllable header/block-table values (decision 0064); every
+/// and sector lengths are attacker-controllable header/block-table values; every
 /// reservation sized from one of them is capped against this, so a lying value reserves at most the
 /// archive's own size and the mismatch surfaces as a clean [`Error::Corrupt`], never an allocator abort.
 fn avail_from(file_len: u64, pos: u64) -> usize {
@@ -229,8 +228,8 @@ impl Archive {
 
     /// Whether `name`'s entry is a **delete-marker** (a patch tombstone) rather than a readable file.
     /// [`Archive::contains`] is still `true` for one (the hash entry exists); the chain walker calls
-    /// this to tell "the client deleted this path" (stop, don't fall through) from "readable file"
-    /// (decision 0246). No I/O.
+    /// this to tell "the client deleted this path" (stop, don't fall through) from "readable file".
+    /// No I/O.
     pub fn is_delete_marker(&self, name: &str) -> bool {
         self.index
             .find(name)
@@ -273,7 +272,7 @@ impl Archive {
 
         // `file_size` (hence `sector_count`) and each sector's `comp_len` all come from the
         // block-table entry / on-disk offset table — the same attacker-controllable-header shape as
-        // the hash/block tables (decision 0064). Cap every reservation below by what the archive file
+        // the hash/block tables. Cap every reservation below by what the archive file
         // could actually hold from `file_pos` on, so a corrupt entry fails cleanly instead of the
         // allocator aborting.
         let file_len = file.metadata()?.len();
@@ -423,7 +422,7 @@ fn read_hash_table(
     count: usize,
     file_len: u64,
 ) -> Result<Vec<HashEntry>> {
-    // `count` is a header u32 (decision 0064): cap the reservation by what the archive could actually
+    // `count` is a header u32: cap the reservation by what the archive could actually
     // hold from `pos` on, so a lying header can at worst reserve the file's own size. If the capped
     // reservation had to shrink below `count`, the header is lying (or the file is truncated) — fail
     // cleanly here rather than let the entry-building loop below index past a short `words`.
@@ -659,7 +658,7 @@ mod tests {
 
     /// A delete-marker (`EXISTS | DELETE_MARKER`, size 0) is a tombstone, not an empty file: it is
     /// still `contains`ed (the hash entry exists) and flagged `is_delete_marker`, but `read_file`
-    /// refuses it with `NotFound` rather than handing back an empty buffer (decision 0246 — the silent
+    /// refuses it with `NotFound` rather than handing back an empty buffer (the silent
     /// mislead that made the trainer arc quote a stale, deleted stock file).
     #[test]
     fn delete_marker_is_not_a_readable_empty_file() {

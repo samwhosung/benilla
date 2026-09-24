@@ -20,7 +20,7 @@
 //! Fit across the run's **largest single frame-to-frame step**, never across the whole burst: the
 //! camera pans during a capture, and a pixel only names the same bit of world for as long as the
 //! image holds still under it. Adjacent frames at the sub-pixel-per-frame pan the toggle map needs
-//! (decision 0656) are the same view; frames twenty apart are not.
+//! are the same view; frames twenty apart are not.
 
 use image::RgbImage;
 

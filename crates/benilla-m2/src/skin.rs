@@ -104,7 +104,7 @@ impl M2Model {
         // M2SkinSection: 32 bytes pre-Wrath (v<260), 48 with the later centre-bounds; indexStart @8,
         // indexCount @10 are the triangle range either way.
         let sec = if self.version < 260 { 32 } else { 48 };
-        // Reservations capped (decision 0064): `n_sub`/`n_bat` come straight from the M2View header,
+        // Reservations capped: `n_sub`/`n_bat` come straight from the M2View header,
         // unvalidated, and the loops below check bounds only per-element — same shape as the header
         // arrays above, so the same guard applies.
         let sub_avail = bytes.len().saturating_sub(o_sub);

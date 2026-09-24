@@ -118,7 +118,7 @@ fn rd_vec3(b: &[u8], o: usize) -> Option<[f32; 3]> {
 /// transparency-weight site `0x715ce2`). Read unsigned, the authored "hide me" key `0x8001` decodes
 /// as `+1.00006` instead of `−1.0`, so a batch the reference culls (`A ≤ 0`, `0x707b3a`–`0x707b5c`)
 /// draws at full alpha instead: that is how Zul'Farrak's troll gate drew its BURNT twin on top
-/// of its intact self and z-fought (B138, decision 1460). Values outside `[0, 1]` are the
+/// of its intact self and z-fought. Values outside `[0, 1]` are the
 /// artist's own encoding, not a data quirk — the combine consumes them as signed floats and the
 /// cull tests `≤ 0`.
 pub(crate) fn track_fix16(b: &[u8], track_ofs: usize) -> M2ScalarTrack {

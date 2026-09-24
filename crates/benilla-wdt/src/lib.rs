@@ -1,5 +1,5 @@
 //! WDT (map tile table) reader + tile↔world coords for **WoW 1.12.1 (build 5875)** — in-repo,
-//! replacing `wow-wdt` (decision 0021).
+//! replacing `wow-wdt`.
 //!
 //! A vanilla `.wdt` is a tiny chunked file (`MVER`, `MPHD`, `MAIN`, and — on a **WMO-only map** —
 //! `MWMO` + one `MODF`). Two things in it matter to the streamer:
@@ -9,8 +9,7 @@
 //! - **The global WMO** — `MPHD` dword0 bit 0 marks a map with **no terrain at all**, whose whole
 //!   world is one building placed by the single `MODF` entry after `MWMO`. 20 of the 43 shipped
 //!   maps are built this way (every WMO dungeon: the Blackrock pair, Gnomeregan, Dire Maul, the
-//!   Stockade…); on those maps `MAIN` is entirely empty and this placement *is* the map
-//!   (decision 0688).
+//!   Stockade…); on those maps `MAIN` is entirely empty and this placement *is* the map.
 //!
 //! The coord helpers map a world `(x, y)` to its `(tile_x, tile_y)` and back, on the 64-tile,
 //! 533⅓-yd grid.
@@ -85,7 +84,7 @@ pub struct TileInfo {
 }
 
 /// The single building that **is** a WMO-only map — the `MWMO` path plus the one `MODF` entry that
-/// follows it (decision 0688). Position/rotation are already in the same convention as an ADT's own
+/// follows it. Position/rotation are already in the same convention as an ADT's own
 /// MODF placements (`benilla_formats::WmoInstance`), so the streamer places it through the exact
 /// path it places any other building with.
 #[derive(Debug, Clone)]
@@ -97,7 +96,7 @@ pub struct GlobalWmo {
     /// Taken **raw** from the MODF, without the `32·533⅓ − v` corner-origin remap an ADT's
     /// placements get: this entry is authored in world coords already. Every shipped WMO-only map
     /// stores `(0, 0, 0)` here, and the remap would put the whole dungeon 24 km from its own
-    /// entrance — falsified against all 26 of the server's real entry points (decision 0688).
+    /// entrance — falsified against all 26 of the server's real entry points.
     pub position: [f32; 3],
     /// Euler rotation in **degrees** (X, Y, Z); Y is the heading about the up axis. Live data, not
     /// always identity: Dire Maul is authored at `ry = 180°` while the other 19 maps sit at 0.

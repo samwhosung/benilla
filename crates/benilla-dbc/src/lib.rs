@@ -1,5 +1,4 @@
-//! A WDBC (client DBC) reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing `wow-cdbc`
-//! (decision 0021).
+//! A WDBC (client DBC) reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing `wow-cdbc`.
 //!
 //! A DBC is dead simple: a 20-byte `WDBC` header (record count, field count, record size, string-block
 //! size), then `record_count × record_size` bytes of fixed-width **4-byte** fields, then a string
@@ -11,7 +10,7 @@
 //! history); the catalog loaders in `benilla-formats` (Map/Light/Creature/GameObject/…) pin exact
 //! decoded values end-to-end on every run.
 //!
-//! Byte access goes through `benilla-bytes` (decision 0064): header reads are bounds-checked, the
+//! Byte access goes through `benilla-bytes`: header reads are bounds-checked, the
 //! `record_count × record_size + string_block_size` size arithmetic is overflow-checked (a corrupt
 //! header used to wrap past the parse-time guard and panic on the later re-slice), and record
 //! reservations are capped by what the body could actually hold.
@@ -135,7 +134,7 @@ pub enum Error {
     },
     BadStringRef(u32),
     /// `record_count × record_size + string_block_size` overflows `usize` — a corrupt header, not a
-    /// real file (see decision 0064: this used to wrap silently and panic on the later re-slice).
+    /// real file (this used to wrap silently and panic on the later re-slice).
     SizeOverflow,
 }
 
@@ -181,7 +180,7 @@ fn rd_u32_at(b: &[u8], o: usize) -> u32 {
 /// The shared `record_count × record_size (+ string_block_size)` layout arithmetic, checked —
 /// [`Header::record_count`]/`record_size`/`string_block_size` are attacker-controlled `u32`s, and a
 /// corrupt combination must error, never silently wrap past a size guard onto a later panicking
-/// re-slice (decision 0064: this is the verified bug the migration fixes). Both `parse` and
+/// re-slice (this is the verified bug the migration fixes). Both `parse` and
 /// `parse_records` call this one function so the two can never disagree even if the code drifts
 /// later. Returns `(record_bytes_len, record_bytes_len + string_block_size)`.
 fn checked_body_layout(

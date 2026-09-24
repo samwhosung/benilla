@@ -1,5 +1,5 @@
-//! An M2 (MD20) model reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing the `wow-m2` fork
-//! (decision 0021), scoped to the **render path** the renderer consumes.
+//! An M2 (MD20) model reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing the `wow-m2` fork,
+//! scoped to the **render path** the renderer consumes.
 //!
 //! Vanilla `.m2` files are MD20 version **256/257**: a fixed header of `M2Array`s (each a `count` +
 //! file `offset`), then the referenced arrays, with the **skin profile(s) embedded** in the same file.
@@ -14,7 +14,7 @@
 //! history); the creature/GameObject mesh + cosmetic-chunk-model golden tests in benilla-formats pin
 //! it end-to-end on every run.
 //!
-//! Byte access goes through `benilla-bytes` (decision 0064): every read is bounds-checked and a
+//! Byte access goes through `benilla-bytes`: every read is bounds-checked and a
 //! truncated array/record is a typed [`Error::Truncated`], never a panic; header-driven `Vec`
 //! reservations are capped by what the input could actually hold, so a corrupt count can no longer
 //! OOM-abort the process before the first bounds-checked read ever runs.
@@ -91,7 +91,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     // parsed rather than inferred from the sequence list — see [`M2Model::owns_animation`].
     let animation_lookup_arr = arr(p)?;
     p += 8;
-    // PlayableAnimationLookup (decision 0082, header `+0x2c`/`+0x30`, pre-Wrath only — dropped past
+    // PlayableAnimationLookup (header `+0x2c`/`+0x30`, pre-Wrath only — dropped past
     // version 263, which `parse_m2`'s own top guard already excludes, so this is unconditional on any
     // version that reaches here; the `if` stays for documentation).
     let playable_animation_lookup_arr = if (256..=263).contains(&version) {
@@ -198,7 +198,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     };
 
     // Vertices: 48 bytes each. The reservation is capped by what the file could actually hold
-    // (decision 0064, `benilla_bytes::capped`): a corrupt/hostile `vertices.0` count can then at
+    // (`benilla_bytes::capped`): a corrupt/hostile `vertices.0` count can then at
     // worst reserve the input's own size, never OOM-abort the process before the loop reaches its
     // first bounds-checked read. The loop below still walks the *real* declared count — a short
     // file fails cleanly at `get(..)?` instead.
@@ -230,7 +230,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         // fades out to nothing — sampled with repeat instead, those margins wrap around into the
         // opaque middle of the sheet and draw as solid geometry, with a hard seam where u crosses
         // the wrap. This field was documented in this very comment and read by nobody until B52
-        // (the Dun Morogh snow-firs) was traced to it; decision 0763.
+        // (the Dun Morogh snow-firs) was traced to it.
         let tflags = t.u32_at(4).ok_or(Error::Truncated)?;
         let (fcount, fofs) = (
             t.u32_at(8).ok_or(Error::Truncated)? as usize,
@@ -369,7 +369,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
         );
     }
 
-    // PlayableAnimationLookup (decision 0082): one dword each, low16 resolved id / high16 dir flags.
+    // PlayableAnimationLookup: one dword each, low16 resolved id / high16 dir flags.
     let pal_avail = b
         .len()
         .saturating_sub(playable_animation_lookup_arr.1 as usize);

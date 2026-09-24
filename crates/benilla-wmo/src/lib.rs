@@ -1,12 +1,12 @@
-//! A WMO (World Map Object) reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing `wow-wmo`
-//! (decision 0021), scoped to what the renderer consumes.
+//! A WMO (World Map Object) reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing `wow-wmo`,
+//! scoped to what the renderer consumes.
 //!
 //! A WMO is split across a **root** file (`MOHD` header, `MOTX` texture blob, `MOMT` materials, group
 //! info, doodads, lights) and one **group** file per group (`MOGP` super-chunk wrapping `MOVT`/`MONR`/
 //! `MOTV`/`MOVI`/`MOBA`/`MOCV`). [`parse_wmo`] returns whichever the bytes are. Chunks are IFF-style:
 //! a 4-char magic stored **reversed** on disk, a `u32` size, then payload.
 //!
-//! Byte access goes through `benilla-bytes` (decision 0064): every read is bounds-checked and a
+//! Byte access goes through `benilla-bytes`: every read is bounds-checked and a
 //! truncated chunk is a typed [`Error::Truncated`], never a panic or a silently-empty struct.
 //!
 //! Only the render path lives here; benilla-formats hand-parses MOLT/MOGI/MODS/MOPY itself. Proven
@@ -165,7 +165,7 @@ pub struct WmoLiquid {
     /// Per-tile flag bytes, row-major `j·xtiles + i`, `xtiles·ytiles` long. Low nibble = liquid type;
     /// `0xf` = hole (skip the tile); `0x80` shared (the strip-builder gate). `0x40` ("fishable") is
     /// carried but deliberately unread: the reference's WMO-side reader `0x6b9e50` is only reached
-    /// from the zero-caller `0x69b5d0` island — fishability is the server's verdict. Decision 1825.
+    /// from the zero-caller `0x69b5d0` island — fishability is the server's verdict.
     pub tile_flags: Vec<u8>,
 }
 

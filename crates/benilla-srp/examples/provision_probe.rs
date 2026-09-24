@@ -1,7 +1,7 @@
-//! Provision a probe account for the local vmangos `realmd` DB (decision 0450: a scripted run
+//! Provision a probe account for the local vmangos `realmd` DB (a scripted run
 //! logs in as `probeN`/`pprobeN`/`Probe<N-spelled>`, one account per checkout that runs probes).
 //! A new checkout means provisioning its account first; this is that recipe as one command
-//! (decision 0530 — a checkout once went without it, and had no working identity).
+//! (a checkout once went without it, and had no working identity).
 //!
 //! No DB access here — it prints the SQL and the char-create probe line; run those yourself.
 //!

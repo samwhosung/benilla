@@ -1,5 +1,4 @@
-//! An ADT terrain-tile reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing `wow-adt`
-//! (decision 0021).
+//! An ADT terrain-tile reader for **WoW 1.12.1 (build 5875)** — in-repo, replacing `wow-adt`.
 //!
 //! Vanilla ADTs are monolithic, chunked (`IFF`-style: a 4-char magic — stored **reversed** on disk —
 //! plus a `u32` size, then payload). The root file holds `MTEX` (textures), `MMDX`/`MMID` (M2 paths),
@@ -14,7 +13,7 @@
 //! migration (oracle test in git history); the `benilla-formats` terrain golden tests pin the meshing
 //! end-to-end on every run.
 //!
-//! Byte access goes through `benilla-bytes` (decision 0064): every read is bounds-checked and a
+//! Byte access goes through `benilla-bytes`: every read is bounds-checked and a
 //! truncated chunk/record is a typed [`Error::Truncated`], never a panic.
 
 use std::io::Cursor;
@@ -159,7 +158,7 @@ pub struct MclqChunk {
     /// Per-cell flags, row-major 8×8. Low nibble = liquid type (`0xf` = dry/hole); `0x80` shared.
     /// `0x40` ("fishable") is carried but deliberately unread: its only compiled reader, the
     /// reference's fishable query `0x69b5d0`, is a zero-caller dead island — fishability is the
-    /// server's verdict (`SPELL_FAILED_NOT_FISHABLE` passthru). Decision 1825.
+    /// server's verdict (`SPELL_FAILED_NOT_FISHABLE` passthru).
     pub tile_flags: [u8; 64],
 }
 
@@ -179,7 +178,7 @@ pub struct McnkHeader {
     pub index_x: u32,
     pub index_y: u32,
     /// `AreaTable.dbc` id of this chunk (header +0x34) — the zone/subzone the player is standing
-    /// in; drives zone music/ambience/reverb selection (decision 0070).
+    /// in; drives zone music/ambience/reverb selection.
     pub area_id: u32,
     pub holes_low_res: u16,
     pub pred_tex: [u8; 8],

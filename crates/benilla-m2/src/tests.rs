@@ -72,7 +72,7 @@ fn m2track(interp: u16, gseq: u16, ts: (u32, u32), vals: (u32, u32)) -> Vec<u8> 
 /// **A fix16 key is SIGNED.** Real art authors "hide me" as `0x8001` — `−32767`, i.e. `−1.0` —
 /// which read unsigned decodes to `+1.00006` and sails through the reference's `A ≤ 0` batch cull.
 /// `TanarisTrollGate.m2` switches between its intact gate and its burnt twin with exactly these
-/// ±1 keys, so reading them unsigned drew both copies at once (B138, decision 1460). Both records
+/// ±1 keys, so reading them unsigned drew both copies at once. Both records
 /// that carry a fix16 track — the M2Color **alpha** (header `0x54`, stride `0x38`, track @ `+0x1c`)
 /// and the M2TextureWeight (header `0x64`, stride `0x1c`) — share the decode, so both are checked.
 #[test]

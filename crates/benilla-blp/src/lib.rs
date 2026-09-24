@@ -23,7 +23,7 @@
 //! Proven byte-for-byte against `wow-blp` over the real corpus during the decision-0021 migration
 //! (oracle test in git history); the `benilla-formats` texture loaders exercise it on every run.
 //!
-//! Byte access goes through `benilla-bytes` (decision 0064): every header read is bounds-checked,
+//! Byte access goes through `benilla-bytes`: every header read is bounds-checked,
 //! and `width`/`height` are capped at [`MAX_DIM`] so a corrupt header can't turn into a
 //! multi-gigabyte allocation in [`decode_dxt`].
 
@@ -224,7 +224,7 @@ fn parse_header(bytes: &[u8]) -> Result<Header<'_>> {
     }
     // content @4 (u32; 1 = Direct — we only handle direct, the only kind 1.12 ships).
     // These reads are already covered by the `HEADER_SIZE` length check above; routed through
-    // `ByteExt` anyway for uniformity (decision 0064) — no future reader should have to ask
+    // `ByteExt` anyway for uniformity — no future reader should have to ask
     // "is this offset guarded?".
     let compression = bytes.u8_at(8).ok_or(Error::Truncated("header"))?;
     let alpha_bits = bytes.u8_at(9).ok_or(Error::Truncated("header"))? as u32;
@@ -293,11 +293,11 @@ impl Header<'_> {
     /// OpenGL arm it hands the upload that same pointer (`0x5a8555`, no copy) and `0x59f270` sizes
     /// the read from the format alone, `bpp · max(4, wL) · max(4, hL) / 8` (`0x59f4e6`–`0x59f515`).
     /// Either way the GPU gets the full block grid from the level's offset, so a short level is
-    /// completed with the bytes that FOLLOW it in the file: the next levels' own authored blocks
-    /// (decisions 2020/2024). Padding the difference with
+    /// completed with the bytes that FOLLOW it in the file: the next levels' own authored blocks.
+    /// Padding the difference with
     /// zeros instead (an all-zero BC block = colour black, alpha 0) is what turned the far rain
     /// black: `RainDrop01.blp`'s levels 3 and 4 came out three-quarters and half black, and its
-    /// Mod2x lane reads no alpha (decision 2020, B358/B225). Only a level the FILE itself ends
+    /// Mod2x lane reads no alpha. Only a level the FILE itself ends
     /// inside is left short here, for [`pad_to`] to zero-fill — the reference reads past the file
     /// into whatever its shared read buffer held before, which is nothing to be faithful to.
     fn dxt_level_span<'b>(
@@ -442,7 +442,7 @@ pub fn decode_level(texels: BlpTexels, width: u32, height: u32, bytes: &[u8]) ->
 /// After `Header::dxt_level_span` this only ever pads a level the FILE ends inside (a truncated
 /// archive) — the sub-block tail the encoder under-stores is completed from the following levels
 /// first, the way the reference does. Zero here is a BC block that decodes to black at alpha 0,
-/// which is why the span comes first (decision 2020).
+/// which is why the span comes first.
 fn pad_to(data: &[u8], need: usize) -> Vec<u8> {
     let mut out = vec![0u8; need];
     let n = data.len().min(need);
