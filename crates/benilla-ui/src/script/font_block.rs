@@ -4,10 +4,9 @@
 //!
 //! ## Why this is a module and not a base class
 //!
-//! **There is no `FontInstance` class in the 1.12.1 Lua chain.** wow-re's registrar map
-//! (`system/ui/scratch/widget-api-batch-benilla.md`, and the per-table carve in
-//! `font-object-lua-surface.md` §2) shows 23 flat `{const char* name, void* fn}` `.data` tables and
-//! a per-class `vtable[+0x8]` lookup that tail-calls **exactly one** base class's lookup on a miss.
+//! **There is no `FontInstance` class in the 1.12.1 Lua chain.** The registrar map shows 23 flat
+//! `{const char* name, void* fn}` `.data` tables and a per-class `vtable[+0x8]` lookup
+//! (`0x7020b0`'s dispatch) that tail-calls **exactly one** base class's lookup on a miss.
 //! The six text-bearing types each *re-declare* the same font names in their own flat table; the
 //! sharing happens one level **down**, in C++, where every binding is a thin type-guard shim that
 //! tail-calls one shared implementation (`0x79f210` SetFont · `0x79f3b0` GetFont · `0x79f4d0` /
@@ -49,10 +48,9 @@
 //! through. It is the number `1`, not `true`, and not zero values.
 //!
 //! The table above was read off the PE `.data` section directly (with Font's 22-entry table as a
-//! positive control) and **independently re-derived by a wow-re §5 trio**, which agrees on all 48
-//! names, all 48 binding addresses and all 16 arities —
-//! `system/ui/scratch/editbox-font-surface.md`. Its own control for the "nothing is discarded"
-//! claim is `SetMultiLine`'s binding, which *does* emit `xor eax,eax` (`0x797e9d`) and returns 0.
+//! positive control), covering all 48 names, all 48 binding addresses and all 16 arities. The
+//! control for the "nothing is discarded" claim is `SetMultiLine`'s binding, which *does*
+//! emit `xor eax,eax` (`0x797e9d`) and returns 0.
 //! Entry 47 ends at `0x87bce8`, the first byte of the string `"GetAltArrowKeyMode"` — the table
 //! abuts its own string pool, which pins the count at 48 a second way.
 //!
@@ -72,8 +70,8 @@
 //!
 //! Each shim loads **`[this+0x324]`** and hands it to the shared implementation as the target. On a
 //! `CSimpleEditBox` that offset is the box's implicit FontString — the same field
-//! [`EditBoxState::text_region`](crate::widget::EditBoxState::text_region) models (RF-0082, and it is
-//! the EditBox's analogue of `ButtonText`). So `editBox:SetFontObject(ChatFontNormal)` really does
+//! [`EditBoxState::text_region`](crate::widget::EditBoxState::text_region) models (the EditBox's
+//! analogue of `ButtonText`). So `editBox:SetFontObject(ChatFontNormal)` really does
 //! paint *the box's font string*, which is exactly what this module writes: resolve the widget to
 //! the region its glyphs come from, then set the same [`RegionData`](super::RegionData) fields a
 //! `FontString` sets for itself.
@@ -195,7 +193,7 @@ pub(super) fn install(
             };
             let d = model.region_data.entry(rh).or_default();
             d.font_object = Some(name);
-            // The severance mask is deliberately NOT reset. §5-verified: the real "stop inheriting
+            // The severance mask is deliberately NOT reset. The real "stop inheriting
             // this property" signal is a CLEARED bit in the inheritMask (`FONTINSTANCE+0x2c`),
             // cleared by each local setter and never restored — so a property the widget set for
             // itself stays severed across a later `SetFontObject`.
@@ -274,14 +272,13 @@ pub(super) fn install(
     // is `""` when there are none — built into a zeroed static buffer at `0xceea60` — never nil.
     //
     // **The HEIGHT slot is a number even on a FontString that was never given a font**, and that is
-    // not the obvious reading: §9.3 records that the FontString reads back *through* its resolved
-    // `CGxFont`, so it looks as though a NULL one should nil all three. It does not. `0x7727b0`'s
-    // fifth instruction is an *unconditional* `fld [esi+0xe4]`, and its `+0xe0` test sits behind a
-    // branch `GetFont` never takes (`0x79d499 push 0`) — so slot 2 never touches the `CGxFont` at
-    // all and always pushes a double (wow-re `font-object-lua-surface.md` §9.3a, §5-cross-checked).
-    // We answer 0 there: `+0xe4` has **no constructor writer** in the reference, so its value on
-    // this path is a recycled float that nothing can reproduce, and 0 is what the Font object's own
-    // ctor-determined `+0x48` gives (decision 2129).
+    // not the obvious reading: the FontString reads back *through* its resolved `CGxFont`, so it
+    // looks as though a NULL one should nil all three. It does not. `0x7727b0`'s fifth instruction
+    // is an *unconditional* `fld [esi+0xe4]`, and its `+0xe0` test sits behind a branch `GetFont`
+    // never takes (`0x79d499 push 0`) — so slot 2 never touches the `CGxFont` at all and always
+    // pushes a double. We answer 0 there: `+0xe4` has **no constructor writer** in the reference,
+    // so its value on this path is a recycled float that nothing can reproduce, and 0 is what the
+    // Font object's own ctor-determined `+0x48` gives (decision 2129).
     //
     // A nil here is not a cosmetic difference. `aux-addon/tabs/search/frame.lua:481` computes
     // `aux.select(2, child:GetFont()) + arg1*2` in its font-resize wheel handler — `aux.select`,
@@ -307,7 +304,7 @@ pub(super) fn install(
     // SetTextColor(r, g, b [, a]) → 0 values; alpha defaults to 1.0 (`lua_isnumber(L,5)`-gated,
     // `0x3f800000`). A FontString has no texel of its own, so its vertex colour IS the colour it
     // draws — the same `+0xb8` slot `SetVertexColor` writes. The three channels are SHAPE C
-    // (`FontString:SetTextColor 0x79d9c0`, `2=C 3=C 4=C 5=B`, wow-re `numeric-arg-coercion-law.md`):
+    // (`FontString:SetTextColor 0x79d9c0`, `2=C 3=C 4=C 5=B`):
     // a bare `lua_tonumber`, so a nil or a non-number is 0.0 and the call never raises — the stock
     // trainer/trade-skill rows' OnLeave hands it `this.r, this.g, this.b` before anything set them
     // (1973).

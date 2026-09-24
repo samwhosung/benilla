@@ -55,8 +55,7 @@ pub(super) const REG_LOOTBUTTON_METHODS: &str = "__benilla_lootbutton_methods";
 
 /// The **item-cache miss** quality `GetLootSlotInfo` answers for a row whose item template has not
 /// landed yet — the reference's own sentinel, and emphatically **not** a nil. `0x4c23a0` reads the
-/// item-cache record's `[rec+0x1c]` and hands back `-1` when the cache has no record for the id
-/// (wow-re `system/ui/scratch/loot-slot-record.md` §4, a §5 trio round).
+/// item-cache record's `[rec+0x1c]` and hands back `-1` when the cache has no record for the id.
 ///
 /// It is why stock `UIParent.lua` builds `ITEM_QUALITY_COLORS` over **`for i = -1, 6`** (l.66):
 /// index `-1` exists *for this value*. `LootFrame_Update` indexes the table with the raw return and
@@ -129,8 +128,7 @@ pub struct LootRow {
     /// The client keeps exactly this, at `+0x14` of its own 0x1c-byte loot record, and
     /// `SetLootItem 0x533470` copies it into the tooltip's `+0x424` — a loot slot is **not** an
     /// item object (that leg passes an all-zero item guid), so the roll is the only enchant source
-    /// a loot hover can have (wow-re `loot-slot-record.md`, `tooltip-content-law.md` §E6-LOOT).
-    /// [`Self::name`] already carries the suffix the same id joins on.
+    /// a loot hover can have. [`Self::name`] already carries the suffix the same id joins on.
     pub random_property_id: u32,
 }
 

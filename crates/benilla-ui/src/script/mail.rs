@@ -107,8 +107,8 @@ pub struct MailInboxRow {
 /// One auction mail's invoice — what `GetInboxInvoiceInfo(index)` hands back, already parsed.
 ///
 /// The invoice is **TEXT**, not wire data: the auction house writes the numbers into the mail's
-/// subject and body and the client `sscanf`s them back out (wow-re `ui/scratch/auction-house.md`
-/// §11.1a). The app owns that parse; this is its result.
+/// subject and body and the client `sscanf`s them back out (`GetInboxInvoiceInfo 0x4af360`).
+/// The app owns that parse; this is its result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MailInvoice {
     /// `true` → the literal token `"seller"` (your auction sold), `false` → `"buyer"` (you won).
@@ -246,8 +246,7 @@ impl super::UiScript {
     /// **`0x4acdc0(1)` — the client's compose-tab reset**, whole. Zeroes the send tab's attachment
     /// (`0xb6ef90/94`), money (`0xb6efa4`) and COD (`0xb6efa8`) globals and then **tail-fires its
     /// three events**, in this order: `SEND_MAIL_MONEY_CHANGED`, `SEND_MAIL_COD_CHANGED`,
-    /// `MAIL_SEND_SUCCESS` (`@0x4ace14/1e/28` — wow-re `system/ui/scratch/mail-interaction.md`
-    /// §1/§4).
+    /// `MAIL_SEND_SUCCESS` (`@0x4ace14/1e/28`).
     ///
     /// **The fire belongs to the reset, and that is the whole point of this shape.** Both call
     /// sites used to fire `MAIL_SEND_SUCCESS` themselves, and the send-result one fired it
@@ -258,7 +257,7 @@ impl super::UiScript {
     /// left its subject and its icon sitting in the form (director's report, decision 2145).
     ///
     /// `MAIL_SEND_SUCCESS` is **overloaded** — it means "the compose form is now clean", not "a
-    /// mail was sent" (the anomaly wow-re verified twice: opening a mailbox fires it too).
+    /// mail was sent" — opening a mailbox fires it too.
     pub fn reset_compose_tab(&mut self) {
         {
             let mut model = self.model_mut();
@@ -423,9 +422,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetInboxInvoiceInfo(index) → invoiceType, itemName, playerName, bid, buyout, deposit,
-    // consignment (MailFrame.lua l.302). **SEVEN values, always** — the reference's own
-    // `mov eax,7`, with the miss tail `nil, nil, nil, 0, 0, 0, 0`: three nils then four zeros
-    // (wow-re `ui/scratch/auction-house.md` §11.1a). MailFrame.lua guards on the third
+    // consignment (MailFrame.lua l.302). **SEVEN values, always** — the reference's own `mov eax,7`
+    // (`0x4af5a1`), with the miss tail `nil, nil, nil, 0, 0, 0, 0` (`0x4af559`): three nils then
+    // four zeros. MailFrame.lua guards on the third
     // (`if playerName then`), so the shape of the miss is what keeps the invoice pane hidden —
     // returning one bare nil instead would leave the four numeric destructures nil and the pane's
     // arithmetic would run on them.
@@ -478,8 +477,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 (row, usable)
             };
             // **Five values on every path**, and the empty leg is `(nil, nil, 0, 0, nil)` —
-            // `GetInboxItem 0x4af5d0`, the sibling of the `GetSendMailItem` block above (wow-re
-            // `mail-interaction.md` §5.1; decision 2129). This answered ONE value, which a caller
+            // `GetInboxItem 0x4af5d0`, the sibling of the `GetSendMailItem` block above (decision
+            // 2129). This answered ONE value, which a caller
             // destructuring five reads as four nils — and the reference's own row
             // (`(nil,nil,number,number,nil) | …`) has no one-value alternative at all.
             let Some(r) = row.filter(|r| r.item_id != 0) else {
@@ -680,9 +679,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // **The empty leg is `(nil, nil, 0, 0)`** — four values, and slots 3 and 4 are NUMBERS. Read at
     // `0x4ae590`: `0x4ae6d3`/`0x4ae6da` push nil, then two `push 0; push 0; lua_pushnumber` pairs
-    // at `0x4ae6df`/`0x4ae6ea`, `eax = 4` (wow-re `mail-interaction.md` §5.1, §5-cross-checked;
-    // decision 2129). All three of the reference's failure guards share that one block, so "nothing
-    // attached" and "the item template has not loaded yet" are indistinguishable to a script.
+    // at `0x4ae6df`/`0x4ae6ea`, `eax = 4` (decision 2129). All three of the reference's failure
+    // guards share that one block, so "nothing attached" and "the item template has not loaded
+    // yet" are indistinguishable to a script.
     //
     // The `1` this used to push in slot 3 was borrowed from the wrong binding: it is
     // `GetAuctionSellItemInfo 0x4ce590`'s empty leg (`1.0`/`-1.0`), not this one's.
@@ -750,7 +749,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ── The stationery family (wow-re `ui/scratch/stationery-bindings.md`, 1970) ──
+    // ── The stationery family (1970) ──
     // The list is the app's (`Stationery.dbc` × the player's bags × the template cache); the
     // client rebuilds it from `GetNumStationeries` (`0x4ae202` → `0x4ad970`), on world enter and
     // on the last item-query answer — the app's per-frame recompute covers all three moments.
@@ -1296,7 +1295,8 @@ mod stationery_tests {
         s
     }
 
-    /// The four verbs, shape by shape (wow-re `stationery-bindings.md`): the count; the info
+    /// The four verbs, shape by shape (`GetNumStationeries 0x4ae1f0`, `GetStationeryInfo 0x4ae230`,
+    /// `SelectStationery 0x4ae380`, `GetSelectedStationeryTexture 0x4ae3f0`): the count; the info
     /// triple with a nil cost for a carried paper and three nils past the end; a numeric string
     /// passes the number gate and a non-number raises the Usage; the selection stores the DBC id,
     /// out of range deselects, and the texture is the bare basename or nil.

@@ -36,8 +36,8 @@ use super::Model;
 const PASS: u8 = 0;
 
 /// What `GetLootRollItemInfo` answers for `count` and `quality` when the item-template cache has no
-/// record — the reference's own shared miss tail `nil, nil, 1.0, 1.0, nil` at `0x4c31a3` (wow-re
-/// `system/object-layer/scratch/lootroll-chat-and-lifecycle.md` §5). `count` is a literal `1.0` on
+/// record — the reference's own shared miss tail `nil, nil, 1.0, 1.0, nil` at `0x4c31a3`.
+/// `count` is a literal `1.0` on
 /// the hit path too (`0x4c3160` — a group roll is always one stack), so only the quality is really a
 /// sentinel, and it is **`1` (Common), not `GetLootSlotInfo`'s `-1`**: each accessor carries its own,
 /// and copying one to the other would be a guess.

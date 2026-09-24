@@ -313,9 +313,9 @@ impl UiScript {
                             state_justify = justify;
                         }
                     }
-                    // A TITLE REGION NEVER DRAWS. It is a hit rectangle, not a visual: wow-re
-                    // carves it as a plain Region with no textures at all
-                    // (`widget-api-batch-benilla.md` Q6). Falling through here would emit the
+                    // A TITLE REGION NEVER DRAWS. It is a hit rectangle, not a visual:
+                    // `CreateTitleRegion 0x773910` builds it as a plain Region with no textures at
+                    // all. Falling through here would emit the
                     // texture quad the `else` branch below builds — invisible on screen, but the
                     // render report counts quads, so every addon that makes one would read as
                     // "drew something" (1246's lesson about what an instrument is told).
@@ -341,9 +341,10 @@ impl UiScript {
                         continue;
                     }
                     let mut data = data_ref.cloned().unwrap_or_default();
-                    // The single-hop draw multiply (`propagation.md`): the region's own alpha times
-                    // its immediate owner's — never a product up the tree, because the owner's own
-                    // `effective_alpha` was already overwritten by any ancestor's SetAlpha.
+                    // The single-hop draw multiply (region-combine `0x772180`): the region's own
+                    // alpha times its immediate owner's — never a product up the tree, because the
+                    // owner's own `effective_alpha` was already overwritten by any ancestor's
+                    // `SetAlpha 0x76a690`.
                     let alpha = owner_frame.map(|f| f.effective_alpha).unwrap_or(1.0)
                         * data.alpha.unwrap_or(1.0);
                     if let Some(fo) = state_font {
@@ -376,7 +377,7 @@ impl UiScript {
                             data.outline = fo.outline;
                         }
                         // Test the severance MASK, which is what the sentence above claims and what
-                        // wow-re pinned, not `vertex_color.is_none()`. The nil-check was an
+                        // the reference pins, not `vertex_color.is_none()`. The nil-check was an
                         // equivalent proxy for exactly as long as an explicit `SetTextColor` was the
                         // only way a button label's colour could be populated at all; the moment
                         // `SetTextFontObject` began linking the label to its font object (so
@@ -407,10 +408,10 @@ impl UiScript {
                     }
                     // `Button:SetFont` sits BETWEEN the two: it is a local set on the button's own
                     // embedded font, so it outranks the font object that font inherits (a locally
-                    // set axis severs inheritance and is never restored — wow-re
-                    // `font-object-lua-surface.md`), but it loses to a face the label FontString
-                    // set for *itself*, which severs one level further down. That is what
-                    // `font_explicit` is, so it is the gate here too.
+                    // set axis clears the font's `inheritMask` bit, `CSimpleFontString+0xD4`, and
+                    // is never restored), but it loses to a face the label FontString set for
+                    // *itself*, which severs one level further down. That is what `font_explicit`
+                    // is, so it is the gate here too.
                     if let Some(bf) = button_font {
                         if !data.font_explicit.face {
                             data.font_path = Some(bf.path.clone());
@@ -436,11 +437,12 @@ impl UiScript {
                     // the reference draws it nowhere. The bar-fill/thumb regions keep their own
                     // fraction geometry (computed off the owner rect above) — they never carry
                     // anchors and skip the resolver entirely, like the reference's own bar path.
-                    // The bar-fill CROPS its texture (wow-re `nameplate-vkey.md`, VERIFIED): every
-                    // `SetValue` rewrites the region's 4-corner UV block with `u1 = fraction` and
-                    // recomputes the quad as `right = left + frac·width`. So the art is sliced, never
-                    // squeezed — a bar texture with a horizontal ramp (`UI-StatusBar` brightens 124→166
-                    // left-to-right) keeps its true gradient at every fill level.
+                    // The bar-fill CROPS its texture (`SetValue 0x7cc450`→`0x7833c0` drives
+                    // `0x770410`): every `SetValue` rewrites the region's 4-corner UV block with
+                    // `u1 = fraction` and recomputes the quad as `right = left + frac·width`. So
+                    // the art is sliced, never squeezed — a bar texture with a horizontal ramp
+                    // (`UI-StatusBar` brightens 124→166 left-to-right) keeps its true gradient at
+                    // every fill level.
                     if let Some(sb) = bar_fill {
                         data.tex_coords = Some(bar_fill_uv(data.tex_coords, sb));
                     }
@@ -480,7 +482,7 @@ impl UiScript {
                         }
                     } else {
                         // The draw gate is the TEXTURE slot, never the colour (`0x7706e0`: `+0xcc`
-                        // empty -> emit NOTHING — `texture-color-composition.md` §4, VERIFIED). A
+                        // empty -> emit NOTHING). A
                         // vertex colour is a tint on whatever texture exists; alone it is not
                         // drawable content — it survives `SetTexture(nil)` by design ("a tint
                         // outlives the art it was tinting") and used to leak out of here as a
@@ -520,21 +522,22 @@ impl UiScript {
                         }
                     };
                     // A region draws at its owner's scale — same single hop as alpha (a region
-                    // has no scale of its own; `propagation.md`'s product lives on frames).
+                    // has no scale of its own; the `effective_scale 0x76ac90` product lives on
+                    // frames).
                     let scale = owner_frame.map(|f| f.effective_scale).unwrap_or(1.0);
                     (rect, alpha, content, clip, scale)
                 }
             };
-            // **A `Model` frame's scene draws out of its bucket's ARTWORK batch, last** — wow-re
-            // `ui/scratch/model-frame-draw-order.md` (2026-09-04): the batch object carries a
-            // third sub-array beside the quads and the text, a render-callback list, and
-            // `0x76fb00` drains the three in that order; `0x76d160` registers the model's callback
-            // only for `layer == 2` (`0x76d17f cmp ebx,2`). So a model is neither a separate pass
-            // nor the frame's own layer-0 slot — it is ARTWORK content, after that layer's quads.
+            // **A `Model` frame's scene draws out of its bucket's ARTWORK batch, last:** the batch
+            // object carries a third sub-array beside the quads and the text, a render-callback
+            // list, and `0x76fb00` drains the three in that order; `0x76d160` registers the model's
+            // callback only for `layer == 2` (`0x76d17f cmp ebx,2`). So a model is neither a
+            // separate pass nor the frame's own layer-0 slot — it is ARTWORK content, after that
+            // layer's quads.
             // This is what puts the world map's player arrow over the zone overlays: both frames
             // sit at `WorldMapFrame.level + 1`, the overlays are ARTWORK quads there, and the
-            // arrow's callback drains after them (the director's report, and the case the carve
-            // was dispatched on). A model's own OVERLAY/HIGHLIGHT regions still draw over it. The
+            // arrow's callback drains after them (the director's report). A model's own
+            // OVERLAY/HIGHLIGHT regions still draw over it. The
             // CALLBACK rank (1995) is what puts the scene after that layer's font strings too,
             // whatever their link stamps — the content key alone sat at the text rank.
             let z = match &content {
@@ -580,15 +583,14 @@ impl UiScript {
 }
 
 /// The single colour a Texture region draws with: **`texel × vertexColour`**, per channel and
-/// **alpha included** (wow-re `system/ui/scratch/texture-color-composition.md`, VERIFIED — the
-/// stage-0 combine's `MODULATE(TEXTURE, DIFFUSE)` for both colour and alpha).
+/// **alpha included** (the stage-0 combine preset live at submit, `.data 0x85c250` index 1:
+/// `MODULATE(TEXTURE, DIFFUSE)` for both colour and alpha).
 ///
-/// **That law is scoped to a region with no pixel shader bound** (`+0x128 == 0` — wow-re
-/// `texture-desaturate-law.md` §6.1's correction to that note). A DESATURATED region takes the
-/// fragment program instead, which supersedes the whole stage chain and reads the vertex colour's
-/// ALPHA only; its RGB never reaches the pixel. The colour computed here still travels — the
-/// renderer needs the alpha, and the RGB is simply unread on that branch (`ui_quad.wgsl`) — so
-/// nothing changes here, but the note this cites no longer says what it used to.
+/// **That law is scoped to a region with no pixel shader bound** (`+0x128 == 0`). A DESATURATED
+/// region takes the fragment program instead, which supersedes the whole stage chain and reads
+/// the vertex colour's ALPHA only; its RGB never reaches the pixel. The colour computed here
+/// still travels — the renderer needs the alpha, and the RGB is simply unread on that branch
+/// (`ui_quad.wgsl`) — so nothing changes here.
 ///
 /// `fill` is the region's own solid-colour texture ([`RegionData::fill`] — the client generates a
 /// real 8×8 texel block from it), so where it is set it IS the texel and the product is the drawn
@@ -622,7 +624,7 @@ fn bar_fill_rect(r: Rect, sb: &crate::widget::StatusBarState) -> Rect {
 /// sliced to the value fraction along the fill axis — `[left, right, top, bottom]`, 0..1, top-left
 /// origin.
 ///
-/// The client CROPS rather than scales (wow-re `nameplate-vkey.md`, VERIFIED): `SetValue`
+/// The client CROPS rather than scales: `SetValue`
 /// (`0x7cc450`→`0x7833c0`) drives `0x770410`, which writes the 4-corner UV block (`+0x104..+0x120`)
 /// with `u1 = GetValue()` and recomputes `right = left + frac·width`. Horizontal is the verified
 /// case; VERTICAL mirrors it up the `v` axis (bottom-up fill ⇒ the *bottom* edge of the art is

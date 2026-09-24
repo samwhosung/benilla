@@ -181,8 +181,7 @@ fn region_node_hash(data: &RegionData) -> u64 {
 }
 
 /// A region's **content-derived span**, in FrameXML units — the client's virtual size getters,
-/// which the resolver calls instead of reading a stored width/height (wow-re
-/// `region-size-fallback.md` §1/§2, decision 1349).
+/// which the resolver calls instead of reading a stored width/height (decision 1349).
 ///
 /// `CSimpleTexture::GetWidth 0x770720` returns the authored value only when it is **not exactly
 /// `0.0`**; on `0.0` with a texture loaded it returns the texture's own texel extent, through
@@ -211,7 +210,7 @@ pub(super) fn content_span(
 
 /// [`content_span`]'s texture arm, for a caller holding a path rather than a region — the
 /// SimpleHTML flow reservation, which asks the reference's `GetHeight` override the same way
-/// (`simplehtml-markup-engine.md` §7 step 6).
+/// (`0x770790`).
 pub(super) fn texel_span(
     probe: Option<&crate::script::TextureSizeProbe>,
     path: &str,
@@ -227,7 +226,7 @@ const SOLID_TEXTURE_TEXELS: f32 = 8.0;
 /// The floor under a **FontString's** derived span, in FrameXML units —
 /// `CSimpleFontString::GetWidth 0x772930` / `GetHeight 0x772a60` end
 /// `fld 1-unit; fcomp candidate; test ah,0x5; jp` and return the floor when the candidate is
-/// smaller (wow-re `region-size-fallback.md` §3, `tooltip-blank-line-height.md` §3). One unit,
+/// smaller. One unit,
 /// not one line: the reference's own blank tooltip spacer is `" \n"` — a real one-line string —
 /// and this floor is what a *genuinely* empty string reads back as, never `0.0`.
 pub(super) const FONTSTRING_MIN_SPAN: f32 = 1.0;
@@ -1153,9 +1152,9 @@ impl UiScript {
                 //
                 // That forever-stale box is B309. Tooltip line cells are POOLED and reused across
                 // hovers (`clear_content` keeps `measured` deliberately, for the hover re-enter
-                // loop), so the item tooltip's two blank gold SET spacers (`render.rs` §22) landed
-                // on cells that had carried real text on an earlier hover: each drew a full row
-                // out of the dead measure while the plate counted it as zero
+                // loop), so the item tooltip's two blank gold SET spacers (`render.rs`, `0x854b2c`)
+                // landed on cells that had carried real text on an earlier hover: each drew a full
+                // row out of the dead measure while the plate counted it as zero
                 // (`tooltip::cell` calls empty text `(0,0)`), and the set bonuses hung two rows
                 // below the backdrop. The Lua-visible getters never disagreed — they key-check
                 // (`region::measured_wh`) — which is why only the drawn geometry was wrong.
@@ -1176,9 +1175,9 @@ impl UiScript {
                 // authored value when it is not exactly `0.0` and the measured extent otherwise,
                 // then returns `max(candidate, ONE FrameXML unit)` — the floor sits past the
                 // `jp 0x772957` that skips the measure, so it applies to BOTH legs. `0x772a60` is
-                // the identical body for height. **A FontString's span is therefore never `0.0`**
-                // (wow-re `region-size-fallback.md` §3), which is what makes a single-anchored
-                // FontString always resolve — and what retires the zero-span collapse this sweep
+                // the identical body for height. **A FontString's span is therefore never `0.0`**,
+                // which is what makes a single-anchored FontString always resolve — and what
+                // retires the zero-span collapse this sweep
                 // used to apply in the `axis` closure below.
                 if is_fontstring {
                     width = width.max(FONTSTRING_MIN_SPAN);
@@ -1222,11 +1221,10 @@ impl UiScript {
                     // on a performance fix.
                     (id != SCREEN).then(|| solver.rect(id)).flatten()
                 });
-                // **An axis resolves, or the region does not** — there is no owner-edge
-                // fallback and no zero-span collapse (decision 1664, from wow-re's byte-verified
-                // `region-size-fallback.md` §7). A complete memory-operand enumeration of the real
-                // resolver core `[0x7671a0, 0x76761f)` finds no parent or owner pointer in it at
-                // all: the only fallbacks are the object's own nine anchor slots and
+                // **An axis resolves, or the region does not** — there is no owner-edge fallback
+                // and no zero-span collapse (decision 1664). A complete memory-operand enumeration
+                // of the real resolver core `[0x7671a0, 0x76761f)` finds no parent or owner pointer
+                // in it at all: the only fallbacks are the object's own nine anchor slots and
                 // `combineEdge`/`combineCenter` over its own opposite edge/centre ± its own size.
                 // `assemble 0x767a20` returns 0 the moment any edge is still UNSET, and
                 // `0x768d20` latches the region unresolvable.
@@ -1243,7 +1241,7 @@ impl UiScript {
                 // * **A pinned edge with a zero span.** The span is content-derived on both region
                 //   classes — the texture's texel extent above, the FontString's measured extent
                 //   floored at one unit — so `combineEdge`'s zero-span leg is nearly unreachable
-                //   for a region at all (`region-size-fallback.md` §4). What is left is a texture
+                //   for a region at all (`0x767440`). What is left is a texture
                 //   with no art whatever, which the reference resolves to nothing and draws as a
                 //   degenerate all-zero quad.
                 let axis = |lo: Option<f32>, hi: Option<f32>| -> Option<(f32, f32)> {

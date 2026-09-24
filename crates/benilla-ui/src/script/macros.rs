@@ -23,10 +23,10 @@
 //! ## What the engine does NOT know
 //!
 //! A macro's **bound spell** — the spell whose cooldown/usability/range a macro action-bar slot
-//! reports (byte-verified: `0x4e5a50`'s macro arm returns `[rec+0x564]`, wow-re
-//! `action-spell-icon-apis.md` §2) — is the app's derivation, because resolving a name to a spell
-//! id needs the catalog and the player's book. The engine stores the body; `benilla::ui_macro`
-//! parses it. Same split as everywhere else in this crate: data and layout here, game knowledge
+//! reports (`0x4e5a50`'s macro arm returns `[rec+0x564]`) — is the app's derivation, because
+//! resolving a name to a spell id needs the catalog and the player's book. The engine stores the
+//! body; `benilla::ui_macro` parses it. Same split as everywhere else in this crate: data and
+//! layout here, game knowledge
 //! there.
 
 use mlua::{Lua, MultiValue, Value};
@@ -297,8 +297,8 @@ fn delete_macro(model: &mut Model, index: usize) -> bool {
 
 /// `PickupMacro(index)` — the macro button's `OnDragStart` and the selected-macro button's
 /// `OnClick` (both in the shipped `Blizzard_MacroUI.xml`). Loads the cursor with the macro
-/// payload (the client's mode **8**, `[0xb4e2fc]` — wow-re `cursor-dragdrop-payload.md` §1), which
-/// `PlaceAction` then packs as `macroId | 0x40000000` (`action-item-slot.md`'s payload table).
+/// payload (the client's mode **8**, `[0xb4e2fc]`), which `PlaceAction 0x4e62e0` then packs as
+/// `macroId | 0x40000000`.
 ///
 /// Refuses while the cursor already holds something, matching `PickupSpell`'s precedent: a macro
 /// button is a SOURCE, never a fit-checked drop target, so silently discarding the held payload

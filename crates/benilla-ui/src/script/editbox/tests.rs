@@ -1,4 +1,4 @@
-//! Rust-driven tests of the EditBox runtime (RF-0082): focus acquisition + routing, text/cursor/
+//! Rust-driven tests of the EditBox runtime: focus acquisition + routing, text/cursor/
 //! selection editing, the specialized script fires, caps, numeric/password, and text-region sync.
 //! Frames are built programmatically via `CreateFrame("EditBox", …)` and driven through the public
 //! keyboard API (`char_input`/`key_input`/`editbox_action`/`has_keyboard_focus`) and the Lua
@@ -18,7 +18,7 @@ fn text_quad(s: &UiScript) -> Option<String> {
     })
 }
 
-// ── §1/§2 focus acquisition + routing ───────────────────────────────────────────────────────
+// ── focus acquisition + routing ─────────────────────────────────────────────────────────────
 
 /// **The self-acquire path**, path 2 of the two: a box that has had no show TRANSITION (created
 /// already visible, so `visibility_focus` never runs for it) still takes the keyboard on the first
@@ -45,9 +45,8 @@ fn an_autofocus_box_self_acquires_on_the_first_event() {
 }
 
 /// **An `autoFocus` box takes the keyboard when it is shown** — the OnShow vtable override
-/// (`0x81c910` slot +0x30, `0x77a750`), missing here until decision 1686 because wow-re's own
-/// "verified by absence" negative came from a `call`-only census that could not see its tail-`jmp`.
-/// Gated on nothing else holding focus, and the gate is the whole of it — no topmost/best choice.
+/// (`0x81c910` slot +0x30, `0x77a750`), missing here until decision 1686. Gated on nothing else
+/// holding focus, and the gate is the whole of it — no topmost/best choice.
 #[test]
 fn an_autofocus_box_takes_the_keyboard_when_it_is_shown() {
     let s = script();
@@ -225,7 +224,7 @@ fn click_focuses_regardless_of_autofocus_and_transition_order_is_lost_then_gaine
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-// ── §3 text buffer + editing + OnTextChanged/OnTextSet ───────────────────────────────────────
+// ── text buffer + editing + OnTextChanged/OnTextSet ─────────────────────────────────────────
 
 /// **`OnTextChanged` is deferred and coalesced** (decision 1831). An edit only raises the
 /// `textChanged` dirty bit; the fire belongs to the drain (`0x77d3e0`) that the box's own OnUpdate
@@ -325,7 +324,7 @@ fn max_letters_trims_from_the_end() {
     assert_eq!(s.eval::<i64>("return E:GetNumLetters()").unwrap(), 3);
 }
 
-// ── §4 selection / highlight / keys ──────────────────────────────────────────────────────────
+// ── selection / highlight / keys ────────────────────────────────────────────────────────────
 
 #[test]
 fn highlight_all_then_typing_replaces_the_selection() {
@@ -509,7 +508,7 @@ fn multiline_enter_inserts_a_newline_without_onspacepressed() {
 
 /// **Alt-arrow mode: the two real verbs, and the flag they share with the XML attribute.**
 ///
-/// The §5 (`ignorearrows-alt-arrow-gate.md`) settled four things this pins:
+/// The reference settles four things this pins:
 ///
 ///  · 5875 has **no `SetIgnoreArrows`** — the 48-entry EditBox method table
 ///    `[0x87bb68, 0x87bce8)` carries `SetAltArrowKeyMode`/`GetAltArrowKeyMode` at 46/47 and no
@@ -646,16 +645,15 @@ fn get_number_parses_the_text() {
     assert_eq!(s.eval::<f64>("return E:GetNumber()").unwrap(), 0.0);
 }
 
-// ── the EditBox override never fires generic OnChar/OnKeyDown (§2) ────────────────────────────
+// ── the EditBox override never fires generic OnChar/OnKeyDown ─────────────────────────────────
 
 #[test]
 fn typing_fires_the_generic_on_char_with_what_was_inserted() {
-    // **The half of the old law that was wrong** (wow-re, corrected 2026-08-29; decision 1686).
+    // **The half of the old law that was wrong** (corrected 2026-08-29; decision 1686).
     // `CSimpleEditBox` has its own input vtable which does not chain to the base — but Insert
     // itself fires the generic `OnChar` slot (`+0x180`) at `0x77c13c`, through the **varargs**
-    // firer `0x7026f0` with fmt `"%s"` and the spliced string as the argument. The published
-    // negative came from censusing only the fixed-arity firer `0x702690`: one member of a
-    // two-member family.
+    // firer `0x7026f0` with fmt `"%s"` and the spliced string as the argument; the family's
+    // other member is the fixed-arity firer `0x702690`.
     let mut s = script();
     s.run(
         r#"
@@ -687,10 +685,10 @@ fn typing_fires_the_generic_on_char_with_what_was_inserted() {
 
 #[test]
 fn key_paths_never_fire_the_generic_on_key_down() {
-    // The surviving half (wow-re `frame-key-script-delivery.md` §1): the box's own key-down
-    // vtable (`0x77b160`) handles the event and never chains to the base, so a focused box's
-    // typing does not also run a generic `OnKeyDown` bound on that same box. Only the `OnChar`
-    // half of the original claim was corrected — this one was re-censused and stands.
+    // The surviving half: the box's own key-down vtable (`0x77b160`) handles the event and never
+    // chains to the base, so a focused box's typing does not also run a generic `OnKeyDown` bound
+    // on that same box. Only the `OnChar` half of the original claim was corrected — this one
+    // stands.
     let mut s = script();
     s.run(
         r#"
@@ -827,7 +825,7 @@ fn history_off_by_default_and_up_is_still_consumed() {
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetText("t"); E:SetFocus()"#)
         .unwrap();
     // No historyLines: AddHistoryLine is a no-op, UP consumed but inert (a focused box eats every
-    // key — RF-0082 §2).
+    // key — both handlers `return 1` past the guard, `0x77a900`/`0x77b160`).
     s.run(r#"E:AddHistoryLine("x")"#).unwrap();
     assert!(s.editbox_action(EditAction::HistoryPrev));
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "t");
@@ -1068,7 +1066,7 @@ fn ctrl_arrows_jump_words() {
 }
 
 /// Copy needs a selection; cut copies then deletes; the password box yields the mask run, never
-/// the real text (RF-0082 §4's placeholder law, mask stand-in).
+/// the real text (the client's fixed placeholder `0x882748`, mask stand-in).
 #[test]
 fn copy_cut_and_the_password_placeholder() {
     let mut s = script();
@@ -1213,7 +1211,7 @@ fn caret_blinks_on_tick_and_resets_on_edit() {
     assert!(s.focused_editbox_text_ui().unwrap().caret_on);
 }
 
-// ── A hyperlink is ONE keypress (RF-0087 §6, decision 1077) ──────────────────────────────────
+// ── A hyperlink is ONE keypress (`AdvanceTokens 0x77bb30`, decision 1077) ─────────────────────
 //
 // The engine-level law lives in `markup`; these drive it the way a player does — through the
 // focused box's public keyboard API — because that is the level the reported defect lived at:
@@ -1361,9 +1359,8 @@ fn creating_a_box_does_not_focus_it_the_way_showing_one_does() {
 }
 
 /// **`SetMaxLetters` gates the COUNT and not the type** — one of four widget bindings in the whole
-/// registrar that calls `lua_gettop`, and its gate is exact (`cmp eax,2`), while the value goes
-/// through a bare `lua_tonumber` with no `isnumber` guard (wow-re `numeric-arg-coercion-law.md`
-/// Q1/Q3, VERIFIED).
+/// registrar that calls `lua_gettop` (`0x6f3070`), and its gate is exact (`cmp eax,2`), while the
+/// value goes through a bare `lua_tonumber` (`0x6f3620`) with no `isnumber` guard.
 ///
 /// That pairing is the opposite of the usual one, which is why it earns a test: benilla typed the
 /// argument `i64` and so raised on `SetMaxLetters(nil)` — aux-addon's `gui/core.lua:288` writes
@@ -1410,12 +1407,11 @@ fn set_max_letters_gates_the_argument_count_and_coerces_the_value() {
 }
 
 /// **A `CSimpleEditBox` is born with FIVE regions, and `GetRegions` hands them to Lua before any
-/// authored one.** wow-re `scratch/rf85-editbox-caret.md` §1: the ctor builds the text FontString
-/// (`E+0x328`, `0x779bee`), three selection-highlight `CSimpleTexture`s (`E+0x350/0x354/0x358`,
-/// loop `0x779c41`–`0x779c72`) and the caret (`E+0x368`, `0x779c86`) — in that order. `GetRegions
-/// 0x773f60` walks `[frame+0x1b8]`, one flat creation-ordered list, oldest first, no filter
-/// (`scratch/widget-list-bindings.md`), and insertion is at the TAIL. So the authored `<Layers>`
-/// regions start at index 6.
+/// authored one.** The ctor builds the text FontString (`E+0x328`, `0x779bee`), three
+/// selection-highlight `CSimpleTexture`s (`E+0x350/0x354/0x358`, loop `0x779c41`–`0x779c72`) and
+/// the caret (`E+0x368`, `0x779c86`) — in that order. `GetRegions 0x773f60` walks
+/// `[frame+0x1b8]`, one flat creation-ordered list, oldest first, no filter, and insertion is at
+/// the TAIL. So the authored `<Layers>` regions start at index 6.
 ///
 /// The report is pfUI's `skins/blizzard/friends.lua` l.379 —
 /// `local _,_,_,_,_,left,right = GuildControlPopupFrameEditBox:GetRegions()` — which skips exactly
@@ -1444,7 +1440,8 @@ fn an_editbox_is_born_with_the_ctors_five_regions_ahead_of_its_authored_ones() {
     assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
 
     // Five engine regions, then the two authored textures — and NOT a sixth from the embedded
-    // `<FontString>`, which declares the ctor's object rather than adding one (RF-0028).
+    // `<FontString>`, which declares the ctor's object rather than adding one (the reference's
+    // EditBox LoadXML, `0x779fb0`).
     assert_eq!(
         s.eval::<i64>("return Box:GetNumRegions()").unwrap(),
         7,
@@ -1592,7 +1589,7 @@ fn set_max_bytes_caps_the_buffer_in_bytes_with_minus_one_unlimited() {
 /// `MailFrame.xml` and `HelpFrame.xml` wire `ScrollingEdit_OnCursorChanged` to, and the reason a
 /// multiline box follows its caret as you type past the bottom (decision 2141).
 ///
-/// The four args are the reference's (wow-re's RF-0085 caret law, VERIFIED): `x` the caret's
+/// The four args are the reference's (`0x77dd5f`, each scaled by `f`): `x` the caret's
 /// advance along its line, `y` **negative-downward** by row (which is what
 /// `ScrollingEdit_OnCursorChanged`'s `cursorOffset = y` then `-this.cursorOffset` reads back as a
 /// positive distance), `w` the constant `4.0`, `h` the line height.

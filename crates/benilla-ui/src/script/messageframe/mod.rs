@@ -1,8 +1,7 @@
 //! The two message-frame widget classes, and the display machinery they share.
 //!
-//! 1.12 ships **two** of them, and msgframe-runtime.md is emphatic that they are *siblings, not
-//! parent and child* (different ctors, different vtables, different Lua type tags, offsets that do
-//! not transfer):
+//! 1.12 ships **two** of them, and they are *siblings, not parent and child* (different ctors,
+//! different vtables, different Lua type tags, offsets that do not transfer):
 //!
 //! - [`scrolling`] — `CSimpleMessageScrollFrame` (ctor `0x787670`), the chat window's class: a true
 //!   ring of `maxLines`, a scrollback cursor, `AddMessage(text[,r,g,b[,id]])` with alpha forced
@@ -36,9 +35,8 @@ pub(super) use plain::REG_MESSAGEFRAME_METHODS;
 pub(super) use scrolling::REG_SCROLLINGMESSAGEFRAME_METHODS;
 
 /// Install both classes' method tables (and the chat input globals the scrolling one carries).
-/// **`AddMessage`'s text argument, and the three ways it silently swallows the whole call**
-/// (wow-5875-re `system/ui/scratch/addmessage-text-gate-silent-skip.md`, 4-worker cross-check
-/// 2026-08-31). `None` means *do nothing at all* — no line, no record, no error.
+/// **`AddMessage`'s text argument, and the three ways it silently swallows the whole call.**
+/// `None` means *do nothing at all* — no line, no record, no error.
 ///
 /// `CSimpleMessageFrame::AddMessage 0x795590` fetches Lua index 2 through `lua_isstring 0x6f3510`
 /// and then `lua_tostring 0x6f3690`, and **three** results jump to the function's own epilogue at
@@ -430,9 +428,9 @@ impl UiScript {
     /// height. The pitch is the **font height itself** — the client's own line-step law
     /// (`LayoutLines` 0x5cdc20: step = px(size) + spacing, spacing 0), the same law the app's text
     /// renderer lays wrapped rows at, so band grid and glyph rows coincide by construction. (The
-    /// msgframe's own relayout `0x788750/0x788c00` is only partially read in wow-re — if the look
-    /// pass ever shows the ref spacing chat lines wider than the font height, that residual is the
-    /// place to pin.)
+    /// msgframe's own relayout `0x788750/0x788c00` is not fully traced — if the look pass ever
+    /// shows the ref spacing chat lines wider than the font height, that residual is the place to
+    /// pin.)
     ///
     /// **Which edge the stack grows from is the one place the two classes diverge visibly.** A
     /// ScrollingMessageFrame always stacks bottom-up with `scroll_offset` picking which message
@@ -440,8 +438,8 @@ impl UiScript {
     /// BOTTOM (the ctor default) is the same bottom-up stack, TOP hangs the newest message off the
     /// frame's top edge with older ones stepping *down* — the shape `UIErrorsFrame.xml:4` asks for,
     /// and the one every corpus `SetInsertMode` caller asks for. The growth *anchor* per mode is
-    /// wow-re's own named residual (it lives in the unwalked wrap/layout pass), so this is the
-    /// INFERRED half: it is the reading that reproduces both shipped usages, and the place to
+    /// not settled at the bytes, so this is the INFERRED half: it is the reading that reproduces
+    /// both shipped usages, and the place to
     /// re-pin if a reference A/B ever disagrees.
     ///
     /// A message that only partially fits at the far edge still draws — clipped to the frame rect,

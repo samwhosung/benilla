@@ -342,9 +342,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // PickupMerchantItem(index) — **two verbs behind one name** (`0x4fb760`, wow-re
-    // `system/ui/scratch/merchant-cursor-law.md`). `0x4fb787` calls `GetCursorItem 0x494c60`,
-    // which answers for **mode 1 only**, and the result forks the whole function:
+    // PickupMerchantItem(index) — **two verbs behind one name** (`0x4fb760`). `0x4fb787` calls
+    // `GetCursorItem 0x494c60`, which answers for **mode 1 only**, and the result forks the whole
+    // function:
     //
     //   * cursor holds a real bag item  → **SELL it** (`CMSG_SELL_ITEM 0x1a0`), then clear the
     //     cursor. The index is IGNORED on this arm and there is no merchant-open gate on it. This
@@ -384,7 +384,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // From here every leg clears the cursor and answers nothing. Holding a mode-5 payload
             // and calling this again is the toggle-off, which is the same clear. It is the REAL
             // `ClearCursor(1,1)` (`0x4fb82d`/`0x4fb83f` on a refusal, `0x49510b` inside the grab
-            // setter — wow-re `merchant-cursor-law.md` §4/§5), not a bare payload drop: a spell
+            // setter), not a bare payload drop: a spell
             // or action dropped on the vendor window fires `CURSOR_UPDATE` and hides the bar's
             // grid, and an armed gift wrap is cancelled (`0x5edf10`, `ClearCursor`'s opening act).
             let held = match &model.cursor {
@@ -451,7 +451,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetBuybackItemInfo(index) → name, texture, price, quantity, numAvailable, isUsable (the
-    // same 6-tuple; 0x4fb310, wow-re ui/scratch/buyback-data-path.md). `index` is 1-based
+    // same 6-tuple; 0x4fb310). `index` is 1-based
     // oldest-first; an invalid index answers the fixed tuple (nil, nil, 0, 1, 0, 1). isUsable is
     // the same 0x5ea930 gate over the sold item's template (0x4fb4f7) — yes, even a just-sold
     // item reds if the seller can't use it (a mule selling a wrong-class drop).
@@ -605,8 +605,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ShowMerchantSellCursor(index) (5875 `0x4fbab0`, "buying from vendor") and
-    // ShowBuybackSellCursor(index) (`0x4fbbb0`, "re-buying") — the vendor-item hover cursor
-    // (wow-re cursor-system.md §7). Despite the "Sell" in the names, these arm the BUY cursor with
+    // ShowBuybackSellCursor(index) (`0x4fbbb0`, "re-buying") — the vendor-item hover cursor.
+    // Despite the "Sell" in the names, these arm the BUY cursor with
     // an affordability gate: player coin vs the row's price → Buy(3) if `coin >= price`, else the
     // grayed UnableBuy(23). The merchant frame's OnUpdate re-arms this every frame while an item is
     // hovered (Ctrl-hover swaps to `ShowInspectCursor` instead); OnLeave `ResetCursor`s it. An
@@ -638,11 +638,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 /// if the player can afford it, UnableBuy(23) otherwise. Shared by `ShowMerchantSellCursor` and
 /// `ShowBuybackSellCursor` (which differ only in which price list they read). A `None` price (no
 /// vendor open, or the 1-based index out of range) leaves the cursor untouched — the binary bails
-/// without a `CursorSetMode` (wow-re cursor-system.md §7).
+/// without a `CursorSetMode` (`0x4fbab0`/`0x4fbbb0`).
 fn arm_vendor_cursor(lua: &Lua, price_of: impl FnOnce(&MerchantState) -> Option<u32>) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    // The sell-cursor family bails on `IsTargeting` at its first instruction (wow-re
-    // `item-target-cursor-and-dropitemonunit.md`) — an armed spell keeps its cast cursor.
+    // The sell-cursor family bails on `IsTargeting` at its first instruction (`0x6e48a0`) — an
+    // armed spell keeps its cast cursor.
     if model.spell_targeting {
         return;
     }
@@ -1013,7 +1013,7 @@ mod tests {
         assert_eq!(s.ui_cursor(), Some(UiCursorMode::Buy));
     }
     /// `PickupMerchantItem` is TWO verbs, and which one runs is decided by the cursor, never by
-    /// the caller — stock FrameXML never guards it (wow-re `merchant-cursor-law.md`).
+    /// the caller — stock FrameXML never guards it (`0x4fb760`).
     #[test]
     fn pickup_merchant_item_grabs_a_row_as_mode_5() {
         let mut s = UiScript::new().unwrap();
@@ -1187,8 +1187,8 @@ mod tests {
         (n("updates"), n("shows"), n("hides"))
     }
 
-    /// The grab writes through the real cursor setter (`0x4950f0`, wow-re `merchant-cursor-law.md`
-    /// §5): `CURSOR_UPDATE` at `0x495159`, and — mode 5 not being mode 7 — **no**
+    /// The grab writes through the real cursor setter (`0x4950f0`): `CURSOR_UPDATE` at
+    /// `0x495159`, and — mode 5 not being mode 7 — **no**
     /// `ACTIONBAR_SHOWGRID`: a vendor row cannot land on the bar, so its empty slots stay dark.
     #[test]
     fn a_vendor_grab_fires_cursor_update_but_not_the_bar_grid() {
@@ -1207,7 +1207,7 @@ mod tests {
     }
 
     /// Every non-sell leg opens with `ClearCursor(1,1)` (`0x4fb82d`/`0x4fb83f` on a refusal,
-    /// `0x49510b` inside the grab — `merchant-cursor-law.md` §4/§5), so a spell held over the
+    /// `0x49510b` inside the grab), so a spell held over the
     /// vendor window and dropped there — stock `MerchantFrame.xml`'s `OnMouseUp`,
     /// `PickupMerchantItem(0)` — is a real clear: the bar's grid hides and `CURSOR_UPDATE` fires.
     #[test]

@@ -1,9 +1,9 @@
 //! The `EditBox` runtime — keyboard focus, the text buffer + cursor + selection, editing, and the
 //! key/char dispatch (`CSimpleEditBox`, factory `0x6eec70`).
 //!
-//! Grounded in wow-5875-re's byte-verified RF-0082 (`rf82-editbox-runtime.md`):
+//! Byte-verified against the reference client:
 //!
-//! - **Focus (§1):** a single class-owned focus owner ([`Model::focused_editbox`], the client's
+//! - **Focus:** a single class-owned focus owner ([`Model::focused_editbox`], the client's
 //!   `DAT_00cf4dc8`). `SetFocus` gates on effective-visibility, is a no-op if already focused, and
 //!   fires `OnEditFocusLost` on the old box then `OnEditFocusGained` on the new. A LeftButton click
 //!   focuses UNCONDITIONALLY — and **collapses the selection to the clicked byte index** on its way
@@ -12,17 +12,17 @@
 //!   field, and `0x77e3f6` is the only instruction image-wide that gives a box focus — so *every*
 //!   focus gain, whatever triggers it, is selection-neutral.
 //!
-//!   **`autoFocus` DOES focus on show** (corrected 2026-08-29, wow-re `editbox-selection-focus-law.md`
-//!   §6): the OnShow override tail-jumps `SetFocus` when nothing else holds focus, and the OnHide
+//!   **`autoFocus` DOES focus on show** (corrected 2026-08-29, `0x81c910` slot +0x30 `0x77a750`):
+//!   the OnShow override tail-jumps `SetFocus` when nothing else holds focus, and the OnHide
 //!   mirror tail-jumps `ClearFocus`. The old "verified by absence" negative came from a `call`-only
 //!   census that could not see a tail-`jmp`. Both overrides are [`visibility_focus`] here, and the
 //!   construction default is `true` off the bytes (see
 //!   [`EditBoxState::auto_focus`](crate::widget::EditBoxState::auto_focus)). The
 //!   self-acquire-on-first-key half stands beside it.
-//! - **Routing (§2):** a focused box processes and CONSUMES every key/char (`return 1` past the
+//! - **Routing:** a focused box processes and CONSUMES every key/char (`return 1` past the
 //!   guard); an unfocused non-autoFocus box ignores input. The override fires ONLY the specialized
 //!   scripts (Enter/Escape/Space/Tab/TextChanged/TextSet/focus), never generic `OnKeyDown`/`OnChar`.
-//! - **Text/editing (§3/§4):** every insert replaces the selection first; `numeric` aborts an insert
+//! - **Text/editing:** every insert replaces the selection first; `numeric` aborts an insert
 //!   wholesale on any non-digit; caps trim from the end (`maxBytes` then `maxLetters`); `SetText`
 //!   short-circuits when unchanged; `HighlightText(0,-1)` selects all with the client's clamp.
 //!
@@ -62,9 +62,9 @@ pub(super) const REG_EDITBOX_METHODS: &str = "__benilla_editbox_methods";
 // Public entry points (called from UiScript::char_input / key_input / mouse_button)
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// A typed character. Routes per §1/§2; on a focused box, Ctrl+A (delivered as the SOH control char)
-/// selects all, other C0 control chars are consumed-but-inert, and printable text is inserted. Always
-/// consumes when a box is (or becomes) focused.
+/// A typed character. Routed per the focus/routing rules above; on a focused box, Ctrl+A
+/// (delivered as the SOH control char) selects all, other C0 control chars are consumed-but-inert,
+/// and printable text is inserted. Always consumes when a box is (or becomes) focused.
 pub(super) fn char_input(lua: &Lua, text: &str) -> bool {
     let Some(h) = route(lua) else {
         return false;
@@ -86,7 +86,7 @@ pub(super) fn char_input(lua: &Lua, text: &str) -> bool {
 }
 
 /// Paste an OS-clipboard string into the focused box. The engine-free runtime can't reach the OS
-/// clipboard itself (RF-0082's stated gap), so the host reads it and hands the text here. Sanitized
+/// clipboard itself, so the host reads it and hands the text here. Sanitized
 /// the same way a typed char is gated — every C0 control char is dropped, except a newline in a
 /// `multiLine` box — then inserted as one edit (selection-replace + numeric/caps rules via [`insert`],
 /// no `OnSpacePressed` fire: a paste is not a typed space). Always consumes when a box is focused.
@@ -104,8 +104,8 @@ pub(super) fn paste(lua: &Lua, text: &str) -> bool {
 }
 
 /// A non-character key by name — only the three *box-event* keys act (their FrameXML scripts);
-/// every editing key reaches the box as a semantic [`EditAction`] via [`action`] instead. Routes
-/// per §1/§2; a focused box consumes the key even when it does nothing with it.
+/// every editing key reaches the box as a semantic [`EditAction`] via [`action`] instead. Follows
+/// the same focus/routing rules; a focused box consumes the key even when it does nothing with it.
 pub(super) fn key_input(lua: &Lua, key: &str) -> bool {
     let Some(h) = route(lua) else {
         return false;
@@ -130,8 +130,8 @@ pub(super) fn key_input(lua: &Lua, key: &str) -> bool {
 }
 
 /// One semantic editing operation — the host's per-OS keymap output (decision 0301). Same
-/// routing/consumption law as [`key_input`]: the focused (or self-acquiring per §2) box processes
-/// it; no box → not consumed.
+/// routing/consumption law as [`key_input`]: the focused (or self-acquiring if needed) box
+/// processes it; no box → not consumed.
 pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
     let Some(h) = route(lua) else {
         return false;
@@ -143,8 +143,8 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
             // Anything reaching this arm was Alt-held or was not an arrow, and the reference moves
             // the caret for both.
             EditUnit::Char => move_horizontal(lua, h, !back, extend),
-            // Ctrl/Option picks the word-granular cursor helper (RF-0082 §4: "char- vs
-            // word-granular by the Ctrl check").
+            // Ctrl/Option picks the word-granular cursor helper (the client's Ctrl check,
+            // `0x41f8f0(1)`).
             EditUnit::Word => interact::move_word(lua, h, !back, extend),
             EditUnit::Edge => move_to_edge(lua, h, !back, extend),
         },
@@ -157,12 +157,12 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
         // History recall (the chat box's `historyLines`): prev = older, next = newer, live draft
         // restored past the newest. Single-line only (benilla's multiLine box has no vertical
         // caret nav — survey gap — a multiLine box consumes the step inert). The recall chords
-        // are the host keymap's plain Up/Down (rf82's history controller is untraced; decision
-        // 0301). The alt-arrow gate DOES cover them, upstream: UP and DOWN are two of the four
-        // codes it declines, so on a flagged box — which the reference's own chat box is —
-        // history recall is **Alt**+Up/Down and a plain Up/Down turns the camera. This file used
-        // to say the opposite ("`ignoreArrows` does not gate them"), which followed from reading
-        // the flag as consume-but-inert; the §5 corrected both halves.
+        // are the host keymap's plain Up/Down (the reference's own history controller is
+        // untraced; decision 0301). The alt-arrow gate DOES cover them, upstream: UP and DOWN are
+        // two of the four codes it declines, so on a flagged box — which the reference's own chat
+        // box is — history recall is **Alt**+Up/Down and a plain Up/Down turns the camera. This
+        // file used to say the opposite ("`ignoreArrows` does not gate them"), which followed
+        // from reading the flag as consume-but-inert; both halves above are now corrected.
         EditAction::HistoryPrev | EditAction::HistoryNext => {
             if !with_eb(lua, h, |eb| eb.multi_line).unwrap_or(false) {
                 history_step_key(lua, h, a == EditAction::HistoryPrev);
@@ -173,8 +173,8 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
 }
 
 // The mouse/selection interaction law (click→index, drag-select, clipboard, blink) — a child
-// module over this file's focus/editing primitives (RF-0082 §1/§4 + the diffed mouse leaves) —
-// and the host-facing seam (`impl UiScript`: the advance round trip + text-UI geometry).
+// module over this file's focus/editing primitives — and the host-facing seam (`impl UiScript`:
+// the advance round trip + text-UI geometry).
 mod interact;
 mod seam;
 pub(super) use interact::{
@@ -182,10 +182,10 @@ pub(super) use interact::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// Focus model (RF-0082 §1)
+// Focus model
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// Resolve the box that should process this key/char event, self-acquiring per §2 if needed.
+/// Resolve the box that should process this key/char event, self-acquiring if needed.
 ///
 /// - A live, effectively-visible focused box → process it.
 /// - A focused box that is hidden (still alive) → `None`: the client's guard returns 0 and the focus
@@ -268,9 +268,7 @@ fn set_focus_handle(lua: &Lua, h: FrameHandle) {
 /// - **Hide** (`0x77a780`): tail-jumps `ClearFocus`, whose own guard makes it per-box — hiding a
 ///   box that does not hold the keyboard writes nothing and fires nothing.
 ///
-/// Both were missing until 2026-08-29 (decision 1686). wow-re had published "autoFocus does NOT
-/// focus on show — VERIFIED by enumerating callers" off a census written over `call` alone, which
-/// cannot see the override's tail-`jmp`; benilla had transcribed the negative.
+/// Both were missing until 2026-08-29 (decision 1686).
 pub(super) fn visibility_focus(lua: &Lua, h: FrameHandle, visible: bool) {
     if !visible {
         // The guard lives in `clear_focus_handle`, exactly as it does in `0x77e410` — so this is
@@ -308,7 +306,7 @@ fn clear_focus_handle(lua: &Lua, h: FrameHandle) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// Editing primitives (RF-0082 §3/§4) — mutate state under one borrow, then sync + fire
+// Editing primitives — mutate state under one borrow, then sync + fire
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// Insert `ins` at the cursor (`0x77bee0`): replace any selection first; `numeric` aborts wholesale on
@@ -325,12 +323,12 @@ fn insert(lua: &Lua, h: FrameHandle, ins: &str, fire_space: bool) {
     let id = frame_id_of(lua, h);
     // **The EditBox DOES fire generic `OnChar`** — with the spliced string as `arg1`, from inside
     // Insert itself (`0x77c13c`, the varargs firer `0x7026f0` with fmt `"%s"`), before the dirty
-    // flush gets round to `OnTextChanged`. RF-0082's "never generic `OnKeyDown`/`OnChar`" was
-    // scoped to one member of a two-member fire family and missed the varargs half; the
-    // `OnKeyDown` (`+0x188`) half of that claim stands (wow-re, corrected 2026-08-29). It rides
-    // the one choke point every insert path goes through — typed char, the `|`→`||` escape, the
-    // multiLine Enter newline, the Lua `Insert` — and so is absent from `SetText`, which is where
-    // the reference has it absent too.
+    // flush gets round to `OnTextChanged`. The "never generic `OnKeyDown`/`OnChar`" rule holds
+    // only for `OnKeyDown` (`+0x188`, corrected 2026-08-29) — it missed `OnChar`'s varargs-firer
+    // path, distinct from the sibling fixed-arity firer `0x702690`. It rides the one choke point
+    // every insert path goes through — typed char, the `|`→`||` escape, the multiLine Enter
+    // newline, the Lua `Insert` — and so is absent from `SetText`, which is where the reference
+    // has it absent too.
     let on_char = lua
         .create_string(ins)
         .and_then(|s| event::fire_widget_handler(lua, id, "OnChar", vec![mlua::Value::String(s)]));
@@ -413,7 +411,7 @@ fn highlight_text(lua: &Lua, h: FrameHandle, start: i64, end: i64) {
     with_eb(lua, h, |eb| eb.highlight_text(start, end));
 }
 
-// ── text-region sync (the '*' mask lives here, RF-0082 §3) ───────────────────────────────────
+// ── text-region sync (the '*' mask lives here) ────────────────────────────────────────────────
 
 /// Write the *display* string into the text region's [`RegionData::text`], creating the region lazily
 /// (the implicit FontString) if none exists. `password` shows one `'*'` per **character** (the mask,
@@ -475,11 +473,12 @@ fn write_inset_anchors(lua: &Lua, h: FrameHandle, rh: RegionHandle, [l, r, t, b]
 /// The wrapper for an EditBox's **embedded** text FontString — the region its ctor built at
 /// `0x779bee` (`Arena::build_editbox_engine_regions`). `None` when `frame` is not a live EditBox.
 ///
-/// The loader's special-`<FontString>` pass uses this instead of `CreateFontString`: RF-0028 lists
-/// `<FontString>` as the EditBox's *embedded* font string (its `bytes` attr writes the box's own
-/// `maxBytes`), so the element DECLARES the ctor's object rather than adding a region. Creating a
-/// second one would leave an orphan on the frame and push the authored `<Layers>` regions one place
-/// down the creation-ordered list `GetRegions` walks.
+/// The loader's special-`<FontString>` pass uses this instead of `CreateFontString`: the
+/// reference's EditBox LoadXML (`0x779fb0`) treats `<FontString>` as the box's *embedded* font
+/// string (its `bytes` attr writes the box's own `maxBytes`), so the element DECLARES the ctor's
+/// object rather than adding a region. Creating a second one would leave an orphan on the frame
+/// and push the authored `<Layers>` regions one place down the creation-ordered list `GetRegions`
+/// walks.
 pub(crate) fn editbox_text_region_wrapper(lua: &Lua, frame: &Table) -> Option<Table> {
     let h = frame_handle_of(lua, frame).ok()?;
     let rh = ensure_text_region(lua, h)?;
@@ -569,8 +568,8 @@ pub(super) fn refresh_text_region_justify(lua: &Lua, this: &Table) -> mlua::Resu
 
 /// The EditBox text-anchoring law: the box's text region lays out LEFT-justified (the client's
 /// editbox draw `0x77da80` is left-anchored at the insets rect regardless of the font string's
-/// declared justification — RF-0082's windowed draw, focused or not), from the TOP for a
-/// multiline box, vertically centered for a single-line one. Without this, a bare
+/// declared justification — focused or not), from the TOP for a multiline box, vertically
+/// centered for a single-line one. Without this, a bare
 /// `<FontString inherits="ChatFontNormal"/>` inherits the FontString CENTER/MIDDLE defaults and
 /// an empty focused box parks its caret mid-box (the mail send tab's original sin).
 fn apply_text_region_justify(data: &mut RegionData, multi_line: bool) {
@@ -612,8 +611,7 @@ fn fire_script(lua: &Lua, id: u32, name: &str) {
 /// **The caret flush's fire — `OnCursorChanged(x, y, w, h)`** (`0x77da80`).
 ///
 /// The reference recomputes the caret's anchor inside `0x77da80` and, having done so, fires this
-/// with four floats *"each value scaled by `f`, so all four are in FrameXML UI units"* (wow-re
-/// `system/ui/ui.md`, the RF-0085 caret law, VERIFIED):
+/// with four floats, each scaled by `f` so all four are in FrameXML UI units (`0x77dd5f`):
 ///
 /// * `x` — the caret's advance from its line's start, the same number the paint anchors by
 ///   ([`EditBoxState::caret_row_x`]).
@@ -691,7 +689,7 @@ pub(in crate::script) fn drain_cursor_changed(lua: &Lua) {
 }
 
 /// The caret's width as `OnCursorChanged` reports it — **a constant in the reference**, not a
-/// measurement (wow-re: `w ≡ 4.0`).
+/// measurement: `w ≡ 4.0` (`+0x1c` in the layout vtable).
 const CARET_WIDTH: f32 = 4.0;
 
 // The Lua method surface (SetText/GetText/HighlightText/SetFocus/…, consulted before the shared
@@ -729,7 +727,7 @@ pub(super) fn mark_text_changed(lua: &Lua, h: FrameHandle) {
 ///
 /// A box that is **not effectively visible stays pending**: `Hide`
 /// splices it out of the chain the update walk follows, so its fire waits for a `Show` (verified
-/// chain mechanics; the "hidden ⇒ no OnUpdate" step is the RE's own stated inference).
+/// chain mechanics; the "hidden ⇒ no OnUpdate" step is inferred, not confirmed in the binary).
 ///
 /// A handler may itself write to a box — including this one — so the list is taken before any Lua
 /// runs and anything re-marked during the sweep lands on the NEXT drain rather than extending this

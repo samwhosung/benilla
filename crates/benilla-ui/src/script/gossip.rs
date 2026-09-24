@@ -20,7 +20,7 @@
 //! pushes nothing and fires nothing — the VM keeps its last menu (or none), exactly as the
 //! reference's frame keeps its last paint (its handler returns on a cache miss without an event,
 //! and its greeting write and `GOSSIP_SHOW` are adjacent and unconditional on one success path —
-//! wow-re `gossip-npctext-law.md` §1/§4; B292, benilla decisions 1508/1994), which is why
+//! `0x4e2010`, `0x4e22b0`; B292, benilla decisions 1508/1994), which is why
 //! [`GossipMenu::greeting`] is a plain `String`.
 
 use mlua::{Lua, MultiValue, Value};

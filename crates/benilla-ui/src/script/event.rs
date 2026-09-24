@@ -1,13 +1,14 @@
-//! Handler firing — the FrameScript calling convention (RF-0025), for events, ticks, and
+//! Handler firing — the FrameScript calling convention, for events, ticks, and
 //! show/hide transitions.
 //!
 //! Every handler is invoked through the *same* protected path, which reproduces both calling
 //! conventions the transition-era client supported (decision 0068):
 //!
-//! - **Legacy globals (RF-0025, byte-verified):** `this` = the firing frame's wrapper, `event` = the
-//!   event name (OnEvent only), `arg1..argN` = the args — each **set then restored** around the call
-//!   (`luaL_ref` saves the prior value; restored after), so nested fires are safe. The handler reads
-//!   its inputs as globals; the client `pcall`s with **nargs = 0**.
+//! - **Legacy globals (byte-verified):** `this` (`0x872e64`) = the firing frame's wrapper, `event`
+//!   (`0x84b648`) = the event name (OnEvent only), `arg1..argN` (`0x8722dc`) = the args — each
+//!   **set then restored** around the call (`luaL_ref` saves the prior value; restored after), so
+//!   nested fires are safe. The handler reads its inputs as globals; the client `pcall`s with
+//!   **nargs = 0**.
 //! - **Modern args:** the same values are *also* passed positionally as `(self, event, ...)` for
 //!   OnEvent (`(self, elapsed)` for OnUpdate, `(self)` for OnShow/OnHide/OnLoad) — the form Era
 //!   addons are written against.
@@ -89,7 +90,7 @@ pub(super) fn fire_event_handler(
     fire(lua, id, "OnEvent", Some(event), extra)
 }
 
-/// Fire a frame's `OnUpdate` (RF-0025: `this` + `arg1 = elapsed`; modern `(self, elapsed)`).
+/// Fire a frame's `OnUpdate` (`this` + `arg1 = elapsed`; modern `(self, elapsed)`).
 pub(super) fn fire_update_handler(lua: &Lua, id: u32, elapsed: f32) -> mlua::Result<()> {
     fire(
         lua,
@@ -155,10 +156,10 @@ pub(super) fn fire_size_changes(lua: &Lua) {
 /// [`crate::widget::WidgetArena::set_shown`]/`set_parent`'s changed-list). Errors are recorded in
 /// [`Model::errors`] rather than propagated — a handler error must not abort the `Show()` call.
 ///
-/// **This is also where the `toplevel` raise fires** (`effective_visible_show 0x76ae10` @`0x76aee0`,
-/// wow-re `ui/scratch/toplevel-raise.md`): the binary tests the toplevel bit and raises *after* the
-/// subtree's visibility has propagated and *before* that node's OnShow notify — which is exactly
-/// this seam, since the arena has finished propagating by the time it hands back the changed list.
+/// **This is also where the `toplevel` raise fires** (the Show trigger `0x76ae10` @`0x76aee0`):
+/// the binary tests the toplevel bit and raises *after* the subtree's visibility has propagated
+/// and *before* that node's OnShow notify — which is exactly this seam, since the arena has
+/// finished propagating by the time it hands back the changed list.
 /// Per node and in list order, so a handler reading `GetFrameLevel()` sees the raised value the way
 /// it would in the reference. It lives here rather than at the Lua `Show` binding because *every*
 /// visibility transition this engine performs runs `0x76ae10` — an arena-level show from the
@@ -175,10 +176,9 @@ pub(super) fn fire_visibility_changes(lua: &Lua, changed: Vec<FrameHandle>) {
             })
             .collect()
     };
-    // **The hover-hide law** (wow-re `ui/scratch/hover-hide-and-tooltip-owner-law.md`, §5-
-    // arbitrated): hiding the hovered frame — directly or through an ancestor's cascade — fires
-    // its `OnLeave` SYNCHRONOUSLY, inside the hide and **before that frame's `OnHide`**
-    // (`0x764ba0`'s kind-2 tail runs mid-`effective_visible_hide`, the leave at `0x764cce`; the
+    // **The hover-hide law**: hiding the hovered frame — directly or through an ancestor's
+    // cascade — fires its `OnLeave` SYNCHRONOUSLY, inside the hide and **before that frame's
+    // `OnHide`** (`0x764ba0`'s kind-2 tail runs mid-`0x76ad50`, the leave at `0x764cce`; the
     // only silent case is destruction). It clears the hover cache and the drag-arm on that frame
     // (`+0x100/+0x104`, the arg-1 flavor), and schedules the re-pick — the pump re-hovers
     // whatever is now topmost at the unchanged cursor next tick ([`Model::hover_repick`]).
@@ -223,8 +223,8 @@ pub(super) fn fire_visibility_changes(lua: &Lua, changed: Vec<FrameHandle>) {
         } else {
             // **The button's HIDE edge** — `CSimpleButton` overrides the hide notify (`+0x34`,
             // `0x7791e0`) to un-press itself before tail-jumping the base, so a button hidden
-            // while held does not come back up wearing its pushed art (wow-re
-            // `scratch/button-state-edge-set.md`; the guard is `state != DISABLED && locked == 0`).
+            // while held does not come back up wearing its pushed art (the guard is
+            // `state != DISABLED && locked == 0`).
             //
             // It hangs off the VISIBILITY transition, not off the hover, which is what it is in
             // the reference — a button hidden nowhere near the cursor un-presses too, and one
@@ -313,7 +313,7 @@ fn arg_name(i: usize) -> Cow<'static, str> {
     }
 }
 
-/// The RF-0025 calling convention itself — the single home for it, shared by [`fire`] (registry
+/// The calling convention itself — the single home for it, shared by [`fire`] (registry
 /// handlers: events, OnUpdate, OnShow/OnHide) and the loader's bottom-up `OnLoad` (which holds the
 /// compiled `Function` directly). Sets the legacy `this`/`event`/`arg1..argN` globals and passes the
 /// modern `(self[, event], extra…)` positionals, saving and restoring the globals around the call

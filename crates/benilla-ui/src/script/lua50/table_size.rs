@@ -6,8 +6,8 @@
 //! anything walking the table. `luaL_getn` (`0x6f5050`) reads `t.n`, then `sizes[t]`, then counts
 //! `rawgeti` from 1 until the first nil.
 //!
-//! **And the size is not private to `getn`/`setn` — the whole table library rides it.** wow-re's
-//! exhaustive rel32 census (`system/ui/scratch/lua-dialect.md` §4) lists every call site:
+//! **And the size is not private to `getn`/`setn` — the whole table library rides it.** A
+//! whole-image call-site census lists every one:
 //! `luaL_getn` is called by `table.getn`, `table.insert`, `table.remove`, `table.concat`,
 //! `table.sort`, `table.foreachi` and **base `unpack`**; `luaL_setn` by `table.setn`,
 //! `table.insert` and `table.remove`. So `insert`/`remove` **update** the remembered size and the
@@ -429,7 +429,7 @@ mod tests {
     }
 
     /// The four readers take the remembered size, not the border: `concat`, `sort`, `foreachi`,
-    /// and base `unpack` (wow-re's call-site census, this module's header).
+    /// and base `unpack` (the call-site census in this module's header).
     #[test]
     fn concat_sort_foreachi_and_unpack_all_read_the_remembered_size() {
         let s = UiScript::new().unwrap();

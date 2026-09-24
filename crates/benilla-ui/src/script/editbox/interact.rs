@@ -1,7 +1,7 @@
 //! The EditBox mouse/selection interaction law — click→char-index, drag-select, the clipboard
 //! pair, and the caret blink — a child module over the mother's focus/editing primitives.
 //!
-//! Byte law (RF-0082 §1/§4 + the diffed leaves quoted in wow-re's `rf82-editbox-runtime.md`):
+//! Byte law:
 //!
 //! - **Click `0x77b800`**: on a hit — blink reset, click→index (`0x77d0d0`) places the cursor and
 //!   collapses the selection, the drag flag raises (`E+0x364 = 1`), then `SetFocus`
@@ -10,7 +10,7 @@
 //! - **Drag `0x77a860`** (mouse move while `+0x364`): map x→index, extend the selection there via
 //!   the same helper Shift+arrow uses (`0x77cd10`), cursor following.
 //! - **Release** (`0x77afc0` case 1): `+0x364 = 0`.
-//! - **Clipboard** (§4): Ctrl+C/X act only with a non-empty selection (`0x77e1d0`); X then
+//! - **Clipboard**: Ctrl+C/X act only with a non-empty selection (`0x77e1d0`); X then
 //!   deletes = cut. A password box copies a FIXED placeholder (`0x882748`, runtime literal
 //!   unresolved — flagged live-capture), never the real text; benilla stands in the mask run.
 //! - **Blink `0x77a790`**: the focused box's accumulator (`E+0x374`) advances by dt; crossing the
@@ -88,9 +88,9 @@ pub(in crate::script) fn drag_end(lua: &Lua) {
     }
 }
 
-/// Ctrl+LEFT/RIGHT — the word-granular cursor move (§4's Ctrl branch; the client walks its
-/// per-byte class array, benilla's alnum-run approximation is INFERRED): `shift` extends the
-/// selection from the fixed anchor like the char move; else the caret collapses there.
+/// Ctrl+LEFT/RIGHT — the word-granular cursor move (the client walks its per-byte class array on
+/// the Ctrl branch, `0x41f8f0(1)`; benilla's alnum-run approximation is INFERRED): `shift` extends
+/// the selection from the fixed anchor like the char move; else the caret collapses there.
 pub(in crate::script) fn move_word(lua: &Lua, h: FrameHandle, right: bool, shift: bool) {
     with_eb(lua, h, |eb| eb.move_by_word(right, shift));
 }

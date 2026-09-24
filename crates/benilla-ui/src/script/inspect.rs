@@ -43,16 +43,14 @@ use super::char_stats::InventorySlots;
 use super::Model;
 
 /// The `CheckInteractDistance` threshold table — `{10², 11.1111², 10², 30²}` for the live API's
-/// `type ∈ 1..4`, read straight out of the binary (wow-re §5-VERIFIED
-/// `PRIMITIVE:check_interact_dist2` @ `0x48ba00`, built from the static `.rdata` at
+/// `type ∈ 1..4`, read straight out of the binary (`0x48ba00`, built from the static `.rdata` at
 /// `0x804498`/`0x804490`/`0x80448c`/`0x8044a4`). Type 1 is the *inspect* row's distance, and shares
 /// its 100.0 with [`super::inspect`]'s own `CanInspect` threshold.
 pub const INTERACT_DIST_SQ: [f64; 4] = [100.0, 123.45678, 100.0, 900.0];
 
-/// The `CanInspect` threshold, **squared** — `DAT_00b4d918`, which the client's own writer builds by
-/// squaring the static `.rdata` `10.0` at `0x804498` (wow-re §5-VERIFIED
-/// `PRIMITIVE:caninspect_dist2` @ `0x48a1b0`, `ledger.tsv:823`). vmangos enforces the same 10 yards
-/// as `INSPECT_DISTANCE` (`ObjectDefines.h:26`), so client and server agree exactly.
+/// The `CanInspect` threshold, **squared** — `DAT_00b4d918`, which the client's own writer builds
+/// by squaring the static `.rdata` `10.0` at `0x804498` (`0x48a1b0`). vmangos enforces the same 10
+/// yards as `INSPECT_DISTANCE` (`ObjectDefines.h:26`), so client and server agree exactly.
 pub const CAN_INSPECT_DIST_SQ: f64 = 100.0;
 
 /// What the app resolved about one unit token's unit this frame — the input both range predicates
@@ -115,11 +113,11 @@ impl super::UiScript {
     /// frame. This map is re-pushed wholesale instead, and nothing keys an event off it.
     ///
     /// A token absent from the map is a token the object manager holds **no unit for**, and both
-    /// predicates answer `nil` there — the reference's own null-object arm (wow-re
-    /// `system/ui/scratch/dist2-null-unit-arm.md`, VERIFIED: `0x48babe test ecx,ecx; je` →
-    /// `lua_pushnil`). It used to read as *in range*, on the reasoning that missing data must not
-    /// gray a row; the binary says the opposite, and that default was report B316 — every distance
-    /// row lit up for exactly the party member who was too far away to have an object at all.
+    /// predicates answer `nil` there — the reference's own null-object arm
+    /// (`0x48babe test ecx,ecx; je` → `lua_pushnil`). It used to read as *in range*, on the
+    /// reasoning that missing data must not gray a row; the binary says the opposite, and that
+    /// default was report B316 — every distance row lit up for exactly the party member who was
+    /// too far away to have an object at all.
     ///
     /// **Keys are lowercase** — the resolver folds case (`_strnicmp`, 1247), so the lookup does
     /// too, exactly as `Model::unit` does for the snapshots.
@@ -169,8 +167,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // CanInspect(unit) → 1/nil: the gate the ref's `InspectFrame_Show` opens on
-    // (`Blizzard_InspectUI.lua:8`). The real client's `0x48a1b0` is a d² range test — wow-re
-    // §5-VERIFIED `PRIMITIVE:caninspect_dist2`: **out of range iff `threshold < d²`**, where
+    // (`Blizzard_InspectUI.lua:8`). The real client's `0x48a1b0` is a d² range test: **out of range
+    // iff `threshold < d²`**, where
     // `threshold = DAT_00b4d918 = 100.0` (10 yards, the same number vmangos enforces as
     // `INSPECT_DISTANCE`). The operator is theirs too: `test ah,0x41; jne` skips the out-of-range
     // action on `C0|C3` — Less, Equal, *or unordered* — so the three in-range arms below are that
@@ -199,13 +197,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CheckInteractDistance(unit, type) → 1/nil, `type ∈ 1..4` (wow-re §5-VERIFIED
-    // `PRIMITIVE:check_interact_dist2` @ `0x48ba00`): **in range iff `d² < table[type-1]`** —
+    // CheckInteractDistance(unit, type) → 1/nil, `type ∈ 1..4` (`0x48ba00`): **in range iff
+    // `d² < table[type-1]`** —
     // note the STRICT `<` here against `CanInspect`'s non-strict gate above, which is the
     // binary's own asymmetry (`test ah,0x5; jp` takes the out path unless `d² < thr` ordered), not
     // a transcription slip. The UnitPopup rows' `dist` field indexes it.
     //
-    // The three degenerate arms are the binary's too (`dist2-null-unit-arm.md`, VERIFIED), and
+    // The three degenerate arms are the binary's too, and
     // they are three DIFFERENT answers rather than one permissive default:
     //
     // - **No live unit for the token** → `nil` (`0x48babe test ecx,ecx; je`). This is the party

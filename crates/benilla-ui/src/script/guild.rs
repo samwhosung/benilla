@@ -241,8 +241,7 @@ pub struct GuildState {
     /// **This is an advisory loop bound, not the addressable range.** In the real client the three
     /// index-taking bindings all bound against the *full* member count (`[0xb73118]`) and never
     /// read the show-offline flag at all, while `GetNumGuildMembers` answers a different number
-    /// entirely — so **indices past it are valid and return real offline members** (wow-re
-    /// `system/ui/scratch/guild-api-carve.md`, correcting our claim A4).
+    /// entirely — so **indices past it are valid and return real offline members**.
     ///
     /// Collapsing the two — filtering the vector and reporting its length — is the natural design
     /// and it is wrong: it would make a selection that survives a show-offline toggle address a
@@ -457,7 +456,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // through the GENERAL unit-token resolver `0x515940`, so an *unrecognised* token raises via the
     // L-less `luaL_error 0x7040e0` at `0x515c1a` — but "a recognised-but-unresolvable token, a
     // non-player, a guildless player and a not-yet-arrived cache record ALL return (nil, nil, 0)"
-    // (wow-re `system/ui` ledger, `0x4c9330`, VERIFIED, `scratch/guild-api-carve.md`).
+    // (`0x4c9330`).
     //
     // Ours raised on any token the model held no unit for, which includes `"player"` before the
     // app has pushed the first snapshot. Stock `PaperDollFrame_SetGuild` calls
@@ -951,9 +950,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use super::*;
 
-    /// **`GetGuildInfo` splits three ways, not two** — wow-re `0x4c9330` (VERIFIED,
-    /// `scratch/guild-api-carve.md`): only an *unrecognised* token raises; a **recognised**
-    /// token that resolves to nothing answers `(nil, nil, 0)` like a guildless player does.
+    /// **`GetGuildInfo` splits three ways, not two** — `0x4c9330`: only an *unrecognised* token
+    /// raises; a **recognised** token that resolves to nothing answers `(nil, nil, 0)` like a
+    /// guildless player does.
     ///
     /// The distinction is not academic. Stock `PaperDollFrame_SetGuild` calls
     /// `GetGuildInfo("player")` unguarded from `PaperDollFrame_OnShow`, so before this split

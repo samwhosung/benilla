@@ -103,8 +103,8 @@ impl UiScript {
         }
     }
 
-    /// The focused EditBox's text-UI geometry for this frame (RF-0082 leaves caret/highlight
-    /// geometry to the host): which Text quad is the box's (`target`), the scroll window to draw
+    /// The focused EditBox's text-UI geometry for this frame (caret/highlight geometry is left to
+    /// the host): which Text quad is the box's (`target`), the scroll window to draw
     /// (`display_from`), and the caret/selection x-spans within it — all advance-table-derived.
     /// Clamps the scroll window against the text region's resolved width first (the
     /// scroll-into-view invariant, `0x77da80`). `None` when nothing is focused, the box is
@@ -198,7 +198,8 @@ impl UiScript {
     }
 
     /// Ctrl/Cmd+C for the focused EditBox: the selected substring for the OS clipboard (`None` =
-    /// no selection; a password box yields its mask run, never the real text — RF-0082 §4).
+    /// no selection; a password box yields its mask run, never the real text — the client's fixed
+    /// placeholder `0x882748`).
     pub fn editbox_copy(&mut self) -> Option<String> {
         super::copy_selection(self.lua())
     }

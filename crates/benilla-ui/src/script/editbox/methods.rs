@@ -168,9 +168,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         // `GetMaxLetters 0x79929f` — the read half, which we were missing. Not published off the
         // `strings` hit alone (that is what put `SetUnit` on the wrong widget earlier today):
-        // wow-re's numeric-arg round identified `0x79929f` as the GETTER of `[widget+0x340]`,
-        // the same field the setter below writes, which is table-level evidence rather than a
-        // name that happens to be in the image.
+        // `0x79929f` is the GETTER of `[widget+0x340]`, the same field the setter below writes,
+        // which is table-level evidence rather than a name that happens to be in the image.
         //
         "GetMaxLetters",
         lua.create_function(|lua, this: Table| {
@@ -182,9 +181,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         // the same EXACT count gate (`0x798fbc cmp eax,2`, the second of the four `lua_gettop`
         // callers), the same raw coerce of the value, and a field of its own at `+0x33c` whose
         // no-limit value is **-1** where `maxLetters`'s is 0 (`0x799012 jle` → `0x799022`; the
-        // ctor writes -1 at `0x7799df`) — wow-re `numeric-arg-coercion-law.md` and `ui.md`'s
-        // CSimpleEditBox layout. So a non-positive argument is unlimited, a positive one caps
-        // the buffer's BYTES. The stock StaticPopup_Show calls it for any entry carrying
+        // ctor writes -1 at `0x7799df`). So a non-positive argument is unlimited, a positive one
+        // caps the buffer's BYTES. The stock StaticPopup_Show calls it for any entry carrying
         // `maxBytes` — none of the reference's own 76 does, so the reach is an addon's (1960).
         "SetMaxBytes",
         lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
@@ -210,9 +208,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         // `SetMaxLetters 0x799110` — one of only FOUR widget bindings in the whole registrar that
-        // calls `lua_gettop` (wow-re `numeric-arg-coercion-law.md` Q3), and its gate is EXACT:
-        // `cmp eax,2`. So the count is checked and the type is not, which is the opposite of the
-        // usual pairing and the reason this needs its own body:
+        // calls `lua_gettop` (`0x6f3070`), and its gate is EXACT: `cmp eax,2` (`0x79919c`). So the
+        // count is checked and the type is not, which is the opposite of the usual pairing and the
+        // reason this needs its own body:
         //
         //   SetMaxLetters()           -> RAISES `Usage:` (too few)
         //   SetMaxLetters(50, 60)     -> RAISES `Usage:` (too MANY — an exact gate, not a minimum)

@@ -6,7 +6,7 @@
 //! never fires is the silent-drop class 1203/1205/1211 each recorded. This is the machinery that
 //! note was waiting on, so those three names are now accepted there.
 //!
-//! ## The law (wow-re `system/ui/scratch/frame-key-script-delivery.md`, §5 trio — VERIFIED)
+//! ## The law
 //!
 //! An OS key event reaches **one dispatcher per channel**, and the dispatcher — not the frame — is
 //! what walks: `0x765f10` (key-down, kind-1 buckets, vtable `+0x60`) and `0x765df0` (char, kind-0
@@ -16,7 +16,7 @@
 //! until one returns nonzero; that one **consumes** and both loops stop. So several frames may be
 //! called, at most one consumes.
 //!
-//! **The consumption gate is EXISTENCE, not handling** (`0x76b7d0`/`0x76bba0`/`0x76b760`, §3):
+//! **The consumption gate is EXISTENCE, not handling** (`0x76b7d0`/`0x76bba0`/`0x76b760`):
 //!
 //! | slot state | key-down returns | fires |
 //! |---|---|---|
@@ -27,9 +27,10 @@
 //! That asymmetry is real and is transcribed below: a frame carrying only an `OnKeyUp` swallows
 //! every key-down and runs no script. `OnChar` gates on its own slot alone; `OnKeyUp` on `+0x190`
 //! alone (no `OnKeyDown` fallback). **A 1.12 handler cannot signal "handled"** — the fire's return
-//! is discarded at all three call sites (§3.1) — so a Lua handler never influences consumption.
+//! is discarded at all three call sites (`0x7026f0`) — so a Lua handler never influences
+//! consumption.
 //!
-//! **Bucket membership is the keyboard-enabled flag**, never the presence of a script (§3.2):
+//! **Bucket membership is the keyboard-enabled flag**, never the presence of a script (`0x76af00`):
 //! `EnableKeyboard(true)` on a script-less frame puts it *in* the walk, where it is called and
 //! declines. XML `enableKeyboard` enables both kinds; an XML `<Scripts>` block auto-enables per
 //! handler; **Lua `SetScript` auto-enables nothing**, so a runtime-created frame needs an explicit
@@ -42,8 +43,8 @@
 //! the base. Modelling it as a stage before or after the walk would get the order wrong whenever a
 //! keyboard frame and the focused box are in different strata — a TOOLTIP-strata frame really does
 //! pre-empt a focused HIGH-strata box, and a WORLD-strata one really does not. So [`walk`] visits
-//! the focused box **at its own strata/level**, handing it to the RF-0082 routing this crate
-//! already had ([`super::editbox`]) and taking a `true` as consumption.
+//! the focused box **at its own strata/level**, handing it to the routing this crate already had
+//! ([`super::editbox`]) and taking a `true` as consumption.
 //!
 //! What is deliberately NOT re-derived here: the box's own focus acquisition (`autoFocus`
 //! self-acquire, click-to-focus, `SetFocus`) stays entirely in `editbox`, and an event no frame
@@ -51,7 +52,7 @@
 //!
 //! ## Not modelled, named
 //!
-//! The **sticky per-key-code key-up slot** (§2.1: `0x765fd0` routes key-up to `[root+code*4+0x84]`,
+//! The **sticky per-key-code key-up slot** (`0x765fd0` routes key-up to `[root+code*4+0x84]`,
 //! the last frame that consumed *some* down for that code, and does **not** clear it on delivery)
 //! is not built: this engine's host feeds no key-up at all today. `OnKeyUp` is therefore accepted,
 //! stored, gated in the table above — and never fired. That is stated rather than hidden, because
@@ -71,8 +72,8 @@ enum Channel {
     KeyDown,
 }
 
-/// The walk order (§2): every keyboard-enabled, effectively-visible frame, **strata descending,
-/// then level descending, then oldest registration first**.
+/// The walk order (`0x765f10`): every keyboard-enabled, effectively-visible frame, **strata
+/// descending, then level descending, then oldest registration first**.
 ///
 /// Built as a sorted `Vec` per dispatch rather than kept as nine live buckets. The reference
 /// maintains the buckets incrementally because it is walking them on every key at 1.12 frame
@@ -107,9 +108,9 @@ fn has_script(lua: &Lua, id: u32, name: &str) -> bool {
 /// **A box in the walk is asked about FOCUS, never about a script slot.** Its ctor (`0x779ce8`)
 /// registers it in the kind-0 *and* kind-1 buckets, and its vtable `0x81c910` **replaces** the base
 /// input slots — `+0x5c` → `0x77a900` (char), `+0x60` → `0x77b160` (key-down) — and never chains to
-/// them. wow-re `system/ui/scratch/frame-key-script-delivery.md` §3, at the bytes: *"There is no
-/// `call 0x76b760` anywhere in it, so the generic `OnChar` slot `+0x180` is unreachable on an
-/// editbox."* The override's own tail is the decline this predicate exists to reach:
+/// them: there is no `call 0x76b760` anywhere in it, so the generic `OnChar` slot `+0x180` is
+/// unreachable on an editbox. The override's own tail is the decline this predicate exists to
+/// reach:
 /// `0x77a952 cmp esi,eax` — I am the focus owner → insert and consume — else
 /// `0x77a956 xor eax,eax`, **return 0, and the walk continues past me**. `0x77b160` has the same
 /// shape at `0x77b1c7`/`0x77b21e`.
@@ -131,7 +132,7 @@ fn is_editbox(lua: &Lua, h: FrameHandle) -> bool {
 ///
 /// Returns whether the event was **consumed**, which is what the caller must use to suppress the
 /// keybinding system: consumption is decided by the C++ existence gate alone, never by what the
-/// Lua handler did or returned (§3.1).
+/// Lua handler did or returned (`0x7026f0`).
 fn walk(lua: &Lua, channel: Channel, arg: &str) -> bool {
     let order = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -208,14 +209,15 @@ fn fire(lua: &Lua, id: u32, script: &str, arg: &str) {
     }
 }
 
-/// The char channel (`0x765df0`) — `arg1` is the literal character, UTF-8 (§4.1: the code is
-/// UTF-8-encoded with no range guard, so a multi-byte codepoint arrives whole).
+/// The char channel (`0x765df0`) — `arg1` is the literal character, UTF-8 (`0x41abb0` encodes the
+/// code with no range guard, so a multi-byte codepoint arrives whole).
 pub(super) fn char_input(lua: &Lua, text: &str) -> bool {
     walk(lua, Channel::Char, text)
 }
 
 /// The key-down channel (`0x765f10`) — `arg1` is the key NAME, with no modifier prefix, from the
-/// same table the keybinding chord uses (§4.2). The host speaks those names already
+/// same table the keybinding chord uses (`0x76b7d0`, byte-identical to the chord's own
+/// `0x4b66b0`). The host speaks those names already
 /// (`crate::script::UiScript::key_input`'s contract), so no decode happens here.
 pub(super) fn key_input(lua: &Lua, key: &str) -> bool {
     walk(lua, Channel::KeyDown, key)

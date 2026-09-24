@@ -252,7 +252,7 @@ impl KeybindState {
     /// (neither the target's nor the incumbent's), and its one reachable falsey return is the
     /// validator at `0x4b762c`. `"runOnUp"` has exactly one reader image-wide — `0x4b7bf1`, in
     /// `RunCommand`, gating the up half. So 1.12 binds the wheel to an action button happily, and
-    /// B265 was ours. wow-re `system/ui/scratch/setbinding-refusal-law.md`.
+    /// B265 was ours.
     fn set_binding(&mut self, key: &str, command: Option<&str>) -> bool {
         let Some(key) = normalize_binding_key(key) else {
             return false;

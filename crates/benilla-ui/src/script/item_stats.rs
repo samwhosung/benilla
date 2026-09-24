@@ -1,7 +1,7 @@
 //! The **shared item-template store** — one `item id → ItemTemplateView` table every item hover
 //! renders through (decision 0274 P1). In the real client every item tooltip is the same C++
-//! renderer (`0x52b650`, behind 8 of the 9 `Set*Item` bindings — wow-re
-//! `ui/scratch/tooltip-money.md`) over the same item-template cache; benilla mirrors that with
+//! renderer (`0x52b650`, behind 8 of the 9 `Set*Item` bindings) over the same item-template cache;
+//! benilla mirrors that with
 //! one engine store the app feeds from its ask-once `ITEM_QUERY` template cache, and one engine
 //! renderer ([`super::tooltip_item`]).
 //!
@@ -150,8 +150,8 @@ pub struct ItemTemplateView {
     pub icon: Option<String>,
     /// `RandomProperty` (template `+0x1b8`) — the item CAN roll a "… of the Bear" suffix. Its one
     /// consumer is the enchant family's third arm: with no instance to read a roll from, the
-    /// tooltip prints the `<Random enchantment>` placeholder instead of any per-slot line (wow-re
-    /// §1-ENCHANT §E5). Decision 0920.
+    /// tooltip prints the `<Random enchantment>` placeholder instead of any per-slot line
+    /// (`0x52cc33`). Decision 0920.
     pub random_property: u32,
 }
 
@@ -201,10 +201,9 @@ pub(super) fn item_usable_by_id(model: &super::Model, item_id: u32) -> bool {
             })
         })
 }
-/// The client's item-usable predicate `0x5ea930(player; itemCacheRecord, &err)` — byte-read from
-/// wow-re's `ui/scratch/disasm-full.txt`. Both merchant getters call it (`GetMerchantItemInfo`
-/// `0x4fb2a3`, `GetBuybackItemInfo` `0x4fb4f7`) and push `1`/`nil` as `isUsable`; the FrameXML
-/// reds the row on `nil`. The legs, in the binary's order:
+/// The client's item-usable predicate `0x5ea930(player; itemCacheRecord, &err)`. Both merchant
+/// getters call it (`GetMerchantItemInfo` `0x4fb2a3`, `GetBuybackItemInfo` `0x4fb4f7`) and push
+/// `1`/`nil` as `isUsable`; the FrameXML reds the row on `nil`. The legs, in the binary's order:
 ///
 /// 1. `requiredLevel > player level` → unusable.
 /// 2. class mask: `allowableClass & 1<<(classId−1)` clear → unusable (−1 = every bit set).
@@ -280,7 +279,7 @@ pub fn item_usable(
     true
 }
 
-/// An item set's tooltip view (the §22 SET block), app-resolved: the ItemSet.dbc row with
+/// An item set's tooltip view (`0x854b1c`'s SET block), app-resolved: the ItemSet.dbc row with
 /// member item NAMES joined from the template cache (a `None` name = the member's template is
 /// still in flight — its line waits; the app re-pushes as answers land) and the threshold
 /// bonuses' TEXT ($-substituted spell descriptions). The engine supplies the live half: the
@@ -358,9 +357,8 @@ impl super::UiScript {
 /// Register the shared item-stats global (the P0 Lua stat-head read — still the merchant
 /// sell-cursor's source and the compat surface while call sites finish moving to the engine
 /// renderer; the tooltip itself no longer routes through it).
-/// The 1.12 item-quality palette, **byte-verified** — wow-5875-re RF-0055
-/// (`scratch/rf55-quality-color-table.md`): the seven ARGB literals the static init `0x5291d0`
-/// writes into the BGRA array at `0xc0d3c8`, and the parallel escape strings at `0x854124`.
+/// The 1.12 item-quality palette: the seven ARGB literals the static init `0x5291d0` writes into
+/// the BGRA array at `0xc0d3c8`, and the parallel escape strings at `0x854124`.
 ///
 /// `Script::GetItemQualityColor 0x48dfb0` reads `[quality*4 + 0xc0d3c8]`, takes `[+2]=R`,
 /// `[+1]=G`, `[+0]=B`, multiplies each by `1/255`, and returns them with the escape string.
@@ -375,7 +373,7 @@ const QUALITY_COLORS: [(u8, u8, u8, &str); 7] = [
 ];
 
 /// The client's item-link builder `0x52adb0` as the trade-skill and craft link verbs call it
-/// (wow-re `tradeskill/scratch/tradeskill-craft-item-links.md`, 1973): `|c<rrggbb>|Hitem:<id>:0:0:0|h[<name>]|h|r`
+/// (1973): `|c<rrggbb>|Hitem:<id>:0:0:0|h[<name>]|h|r`
 /// — the three tokens literal zeros at those call sites, the colour from `0x52ad90`'s table where
 /// `cmp ecx,7; jb` is UNSIGNED, so a quality of 7 or more, or a negative one, selects index 1
 /// (white): a fixed fallback, not a clamp. The `""`-suffix arm is dead, so every link ends `|h|r`.
@@ -538,8 +536,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (grey). There is no out-of-bounds read: the unsigned compare catches it first. The value
     // stopped being academic when the loot window went to the chain — `-1` is what
     // `GetLootSlotInfo` answers for a row whose item template is not cached, and that row's text
-    // colour is this table's `-1` row (wow-re `system/ui/scratch/loot-slot-record.md` §10,
-    // decision 1805).
+    // colour is this table's `-1` row (`0x4c2435`, decision 1805).
     lua.globals().set(
         "GetItemQualityColor",
         lua.create_function(|lua, quality: i64| {
@@ -563,8 +560,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //   itemName, itemLink, itemQuality, itemMinLevel, itemType, itemSubType,
     //   itemStackCount, itemEquipLoc, itemTexture
     //
-    // **Nine values, and every one of them byte-verified** against the registered binding
-    // `0x48e070` (wow-5875-re `system/ui/ledger.tsv:891`), which ends `mov eax,0x9; ret`. The
+    // **Nine values, and every one of them confirmed** against the registered binding
+    // `0x48e070`, which ends `mov eax,0x9; ret`. The
     // signature is the whole point of the verb (decision 1199): a later client inserts `itemLevel`
     // at position 4 and pushes the required level to 5, and 36 corpus addons destructure this one
     // positionally — `Informant/Informant.lua:268` reads all nine and stores position 4 as
@@ -582,8 +579,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //                  (that is `GetContainerItemLink`'s shape and stays there). Auctioneer's
     //                  `getItemInfoFromBlizzard` names the return `itemString` and feeds it
     //                  straight back in, which only works because both ends are this shape.
-    //  3 `itemQuality` `fild [record+0x1c]` — the same dword wow-re pinned through this function
-    //                  for the drag payload (`scratch/cursor-dragdrop-payload.md:223`).
+    //  3 `itemQuality` `fild [record+0x1c]` — the same dword `0x495300` reads for the drag
+    //                  payload.
     //  4 `itemMinLevel` `fild [record+0x3c]` — the **required** level. `ItemLevel` lives one dword
     //                  earlier at `+0x38` and is never pushed here. This is the trap.
     //  5 `itemType`    ItemClass.dbc's localized class name, or `""` (`0x48e236`).
@@ -1094,8 +1091,8 @@ mod get_item_info_tests {
 mod quality_color_tests {
     use crate::script::UiScript;
 
-    /// The seven colours, byte-verified against wow-5875-re RF-0055's own table — and the two
-    /// edges, which are where every reimplementation of this goes wrong.
+    /// The seven colours, confirmed against the reference's own table (`0x5291d0`) — and the
+    /// two edges, which are where every reimplementation of this goes wrong.
     ///
     /// The escape string matters as much as the floats: the reference returns it as the fourth
     /// value and addons splice it straight into a link (`ITEM_QUALITY_COLORS[q].hex .. name`), so
