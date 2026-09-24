@@ -6,8 +6,7 @@
 //! 0x6006e0`), which the input applier `0x514640` resolves at the top of every tick and *skips the
 //! whole tick* when it does not resolve. The three are genuinely independent stores there — the
 //! camera never consults the mover to pick its anchor, and neither of them touches "the active
-//! player" (`ds:0xb41414`), which is invariant under both far sight and possession (VERIFIED,
-//! wow-re `object-layer/scratch/farsight-and-client-control.md` §9).
+//! player" (`ds:0xb41414`), which is invariant under both far sight and possession.
 //!
 //! So benilla splits the *markers*, not the identity. [`SelfPlayer`] keeps meaning **my character**
 //! — bags, auras, quest log, paper doll, the name over the head — and never moves. [`Embodied`]
@@ -22,8 +21,8 @@
 //! - **Attached is not allowed to move** (decision 1281). A control update that forbids a body does
 //!   not detach us from it: [`Embodied`] stays and only [`ActiveMover`] comes off. That is the
 //!   reference's own shape — `0x5fa600` zeroes the mover globals and never touches the camera
-//!   anchor, so the camera goes on following your feared body, merely smoothed (wow-re
-//!   `object-layer/scratch/control-loss-and-restore.md` §2/§3). Collapsing the two cost more than
+//!   anchor, so the camera goes on following your feared body, merely smoothed (`0x50d810`).
+//!   Collapsing the two cost more than
 //!   the camera: the self-spline ride hangs off attachment, and with it the
 //!   `CMSG_MOVE_SPLINE_DONE` vmangos arms a wait for at every spline launch for a
 //!   player-or-player-possessed unit (`MoveSplineInit::Launch`), dropping **every** movement packet

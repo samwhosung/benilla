@@ -5,8 +5,8 @@
 //! seam that pushes NPC text into the VM runs it — as the reference does, routing all fourteen of
 //! its call sites through the one expander.
 //!
-//! The grammar is the reference's, carved at the bytes (wow-re `QuestTextParser.cpp`, driver
-//! `0x506f70` → token handler `0x5070a0`):
+//! The grammar is the reference's (`QuestTextParser.cpp`, driver `0x506f70` → token handler
+//! `0x5070a0`):
 //!
 //! - the accepted set is **exactly** `B C E G N R T W`, in either case. Anything else re-emits the
 //!   `$` and lets the letter fall through as ordinary literal text;
@@ -224,7 +224,7 @@ pub(crate) fn player_identity(
 /// A macro [`Subject`] for an **arbitrary** guid — the chat feed's subject, where every other seam
 /// passes the local player.
 ///
-/// This is the reference's own two-step (`questtext-macro-expander.md` §1): look the guid up in the
+/// This is the reference's own two-step (`0x506f70`): look the guid up in the
 /// object manager first and read the unit's descriptors, and only when it isn't streamed fall back
 /// to the **name-cache** record. `None` means the subject could not be resolved at all — the
 /// reference's no-subject case, which fails every person-token and re-emits a literal `$`; that is
@@ -251,7 +251,7 @@ pub(crate) fn subject_for_guid(
     }
     // Not streamed: the name answer's own race/class/gender. A creature guid has no such record and
     // lands on zeros — which is right, because the reference's non-player arm never reads a
-    // race/class for `$R`/`$C` either; it emits the unit's name instead (§3, orchestrator ruling).
+    // race/class for `$R`/`$C` either; it emits the unit's name instead (`0x50716b`/`0x5071f7`).
     let (race, class, gender) = names.player_traits(guid).unwrap_or((0, 0, 0));
     Some(Subject {
         name,

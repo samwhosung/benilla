@@ -60,7 +60,7 @@ pub(crate) struct RemoteMotion {
     pub(crate) fall_start_z: Option<f32>,
     /// Not-yet-due relayed moves, fire-time ascending — the reference's per-unit move-event queue
     /// (`CMovement+0x150`): a remote's packet is **scheduled**, not applied at arrival (decision
-    /// 0601; wow-re `remote-apply-timing.md`). [`drain_pending_moves`] applies each head when the
+    /// 0601). [`drain_pending_moves`] applies each head when the
     /// clock reaches its [`PendingMove::fire_ms`]; until then the dead-reckon covers the mover's
     /// own timeline, so the residual at apply time is structurally small.
     pub(crate) pending: std::collections::VecDeque<PendingMove>,
@@ -196,7 +196,7 @@ const REMOTE_TRACE_MS: f64 = 500.0;
 /// The pair is the whole point. A reported pitch with a zero tilt is the gate refusing (idle or
 /// strafe-only swim, or not swimming at all); a zero on *both* is a mover whose client never sent
 /// a pitch. Before this, neither number appeared anywhere — the observed-swimmer tilt landed in
-/// July 2026 (decision 0464 TU-A) with no trace and no test, so "do other swimmers tilt?" was a
+/// July 2026 (decision 0464) with no trace and no test, so "do other swimmers tilt?" was a
 /// question only the director's eye could answer.
 fn rendered_pitch(rm: &RemoteMotion) -> f32 {
     let (_, x, _) = crate::creature_anim::swim_body_rotation(0.0, rm.flags, rm.pitch)
@@ -291,7 +291,7 @@ fn idle_gate_disabled() -> bool {
 
 /// The reconcile-arm tolerance (squared yards): predicted-vs-event disagreement below this needs
 /// no correction. The reference's `0x80c744` = 7.716e-4 ≈ (0.0278 yd)², compared in 2D — Z joins
-/// only while SWIMMING (`0x619090`, wow-re `spec-driver-A.md`).
+/// only while SWIMMING (`0x619090`).
 const RECONCILE_TOL_SQ: f32 = 7.716e-4;
 
 /// One frame of the pre-fire reconcile (the reference's `0x619090` arm + `0x6191c0` lerp): if
@@ -330,8 +330,8 @@ const FACING_DEAD_ZONE: f32 = 9.5367e-7;
 
 /// One frame of the pre-fire facing interp — the reference's remote facing smoothing
 /// (`0x618f80` shortest-arc ω into `+0x144`, integrated by `0x7c4f30`: the **only** smoothed
-/// facing path a remote unit has — wow-re `body-facing-pipeline.md` §4; every other facing write
-/// is a snap). Rotate `orientation` along the shortest arc toward the queued event's `target`,
+/// facing path a remote unit has; every other facing write is a snap).
+/// Rotate `orientation` along the shortest arc toward the queued event's `target`,
 /// linear in time so it lands exactly as the clock reaches the fire-time; the apply then snaps
 /// the (structurally zero) remainder and clears the interp, as `0x617e90` zeroes `+0x148`. The
 /// ±π fold picks the short way around; the dead-zone skips a negligible turn.
@@ -586,9 +586,8 @@ pub(in crate::net) fn extrapolate_remote_units(
         let afloat = rm.flags & move_flags::SWIMMING != 0;
         // …and **a flag-still mover is not integrated at all** (decision 1545) — the reference's
         // own gate, [`move_flags::INTEGRATED`] = `0x20ff`: `CMovement::Update`'s substep loop
-        // (`0x616e20`) and the manager's per-mover tick (`0x6166f5`) both bail on it, and wow-re
-        // records that such a unit "is not even in the mover list". Its pose is the last packet's,
-        // verbatim.
+        // (`0x616e20`) and the manager's per-mover tick (`0x6166f5`) both bail on it: such a unit
+        // is not even in the mover list. Its pose is the last packet's, verbatim.
         //
         // That is not merely faithful, it is the only safe answer, because **our world can be
         // missing a floor the server has**: the WMO's collider attaches structurally later than the
@@ -641,7 +640,7 @@ pub(in crate::net) fn extrapolate_remote_units(
                 // ours has to be handed because liquid is queried rather than swept.
                 //
                 // `swimming` is read off the same word — the water plane is **not** floor while
-                // swimming (`moveflag-family.md` §2.2: the arm is taken only when the swim bit is
+                // swimming (`0x631617`: the arm is taken only when the swim bit is
                 // clear), which is what keeps a water-walker who is already in deep water from
                 // being popped onto the surface. The pitch gate the local mover applies is the
                 // *aim* pitch of a diving player and has no meaning for an observed one, so it is
@@ -786,7 +785,7 @@ pub(in crate::net) fn extrapolate_remote_units(
         // offset space (a left↔right flip swings around the front, never the 180°-tie back path),
         // with the SpineLow/Head counter-twist walking the upper body back onto its aim.
         // SWIMMING snaps the display facing to the aim instead — no strafe offset, no ease (the
-        // client's facing SNAP list: dead or swimming, wow-re `body-facing-pipeline.md`
+        // client's facing SNAP list: dead or swimming, `0x607ed0`'s
         // `mov [esi+0xc94],[esi+0xc98]`) — same gate the local controller applies.
         let swimming = rm.flags & move_flags::SWIMMING != 0;
         let offset = if swimming {
@@ -800,8 +799,9 @@ pub(in crate::net) fn extrapolate_remote_units(
             orientation
         };
         // The swim body pitch — [`crate::creature_anim::swim_body_rotation`], the same law our own
-        // avatar's pose owner calls, on the pitch this mover reported. TU-A is explicit that the
-        // observed mover takes the *reported* pitch here, exactly as the local one takes its own.
+        // avatar's pose owner calls, on the pitch this mover reported. The reference's render law
+        // (`0x60a110`) takes the observed mover's *reported* pitch here, exactly as the local one
+        // takes its own.
         let rotation = crate::creature_anim::swim_body_rotation(yaw, rm.flags, rm.pitch);
         if t.rotation != rotation {
             t.rotation = rotation;

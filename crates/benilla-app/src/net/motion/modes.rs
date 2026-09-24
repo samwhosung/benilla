@@ -18,14 +18,14 @@ use crate::creature_anim::move_flags;
 ///
 /// **One word per unit is the reference's own shape**, not a convenience: `CMovement` is embedded at
 /// `CGUnit+0x9a8` and its `+0x40` MOVEMENTFLAGS dword is *the* per-unit movement state, written by
-/// the relay merge, the create block, the spline installer and this opcode family alike (wow-re
-/// `collision/scratch/moveflag-family.md` §5.2). We keep the granted-mode half separate from
+/// the relay merge, the create block, the spline installer and this opcode family alike. We keep
+/// the granted-mode half separate from
 /// [`super::RemoteMotion::flags`] for one reason: the relay merge re-authors that word wholesale
 /// from every pose, and a creature has no poses to be re-authored from.
 ///
 /// Absent component ⇒ no modes granted, which is the overwhelming majority of units; it is inserted
 /// on the first `SMSG_SPLINE_MOVE_*` that names the unit and lives as long as the entity, exactly as
-/// the reference's word lives as long as the `CGUnit` (`walk-mode-law.md` §1: `CMovement` is
+/// the reference's word lives as long as the `CGUnit` (`0x7c4850`: `CMovement` is
 /// constructed once per unit and nothing else clears it).
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct UnitMoveModes(pub(crate) u32);
@@ -42,8 +42,8 @@ impl UnitMoveModes {
     }
 
     /// Rooted (`MOVEFLAG_ROOT`) — this unit **cannot be splined**: the reference's server-position
-    /// apply `0x6187a0` refuses outright while the bit is set (`0x6187c2 test ah,0x10`; wow-re
-    /// `moveflag-family.md` §5.3/§5.4, *"cannot translate, cannot jump, cannot be splined"*).
+    /// apply `0x6187a0` refuses outright while the bit is set (`0x6187c2 test ah,0x10`). A rooted
+    /// unit cannot translate, cannot jump, cannot be splined.
     pub(crate) fn rooted(self) -> bool {
         self.0 & move_flags::ROOT != 0
     }
@@ -70,8 +70,7 @@ impl UnitMoveModes {
 
 /// **What `SetRoot 0x7c7340` wipes from the flags word at apply**, as a mask to AND with: the four
 /// direction bits, the two keyboard turn bits and the two pitch bits (`0xff`), the `0x8000` latch,
-/// and the five deferred-input latches (`0x1f0000`) — `and dword ptr [esi+0x40], 0xffe07f00`,
-/// read byte-for-byte in wow-re `moveflag-family.md` §1.
+/// and the five deferred-input latches (`0x1f0000`) — `and dword ptr [esi+0x40], 0xffe07f00`.
 ///
 /// It is a **one-shot wipe at apply**, not a standing gate, and it is the whole reason a rooted
 /// mover stops rather than coasting: with the direction bits gone the unit fails the client's

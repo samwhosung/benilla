@@ -60,9 +60,8 @@ pub(super) fn wire_yaw(orientation: f32) -> Quat {
 ///
 /// The reference builds a GO's render matrix from that quaternion — `0x5f7910` (the every-frame
 /// slot-13 Animate) composes `GetPosition` → gx-rotate by the 4 floats at GO-fields `+0x10` →
-/// gx-scale, and the same 4×4 (`obj+0x218`) is what its collision reads (wow-re
-/// `object-layer/scratch/w2c1.md` §Q2/§Q3). `GAMEOBJECT_FACING` is a *separate* accessor
-/// (`0x5f9fb0`) that the placement never consults.
+/// gx-scale, and the same 4×4 (`obj+0x218`) is what its collision reads. `GAMEOBJECT_FACING` is a
+/// *separate* accessor (`0x5f9fb0`) that the placement never consults.
 ///
 /// A yaw is the special case here, not a simplification of it: vmangos copies `rotation0/1` from the
 /// spawn row verbatim and fills `rotation2/3` from the facing when the row leaves them zero

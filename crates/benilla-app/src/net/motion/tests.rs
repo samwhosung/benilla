@@ -67,9 +67,9 @@ fn motion(flags: u32, orientation: f32) -> RemoteMotion {
     }
 }
 
-/// **The observed swimmer's body actually tilts** — the render half of TU-A (decision 0464 §1),
-/// which shipped in July 2026 with no test of its own and no trace field, so the only instrument
-/// that could contradict it was the director's eye.
+/// **The observed swimmer's body actually tilts** — the swim body-pitch render law (`0x60a110`,
+/// decision 0464 §1), which shipped in July 2026 with no test of its own and no trace field, so the
+/// only instrument that could contradict it was the director's eye.
 ///
 /// The law is [`crate::creature_anim::swim_body_rotation`] and it is now *one* function: this
 /// asserts the observed lane end to end — a relayed `MSG_MOVE_*` carrying `SWIMMING | FORWARD`
@@ -295,7 +295,7 @@ fn a_walking_remote_backpedals_at_walk_speed_not_run_back() {
 
 #[test]
 fn remote_motion_swim_backpedal_takes_min_of_the_swim_pair() {
-    // The byte law (`0x7c4c90`'s backward arms, swim-feel §5 TU-H): backward speed is
+    // The byte law (`0x7c4c90`'s backward arms): backward speed is
     // `min(back, forward)` for both pairs — the plain back speed whenever it's the slower
     // (always, at vanilla values), clamped if a server force-sets it above the forward speed.
     let mut s = speeds();
@@ -1092,7 +1092,7 @@ fn a_gameobject_without_a_usable_quaternion_falls_back_to_its_facing() {
 /// **A flag-still remote is not integrated at all** (decision 1545) — the reference's own gate,
 /// `0x20ff` ([`move_flags::INTEGRATED`]): `CMovement::Update`'s substep loop (`0x616e20`) and the
 /// manager's per-mover tick (`0x6166f5`) both bail on a mover with no move/jump/fall bit, and
-/// wow-re records that such a unit "is not even in the mover list". So its pose is the last
+/// such a unit is not even in the mover list. So its pose is the last
 /// packet's, verbatim — and the per-frame depenetration + down-cast the settled memo used to claw
 /// back (1490 item 2 / 1473 §3) does not run at all, for a stated reason rather than a proof that
 /// its answer was identical.

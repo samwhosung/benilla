@@ -36,7 +36,7 @@ pub(crate) struct Spline {
     /// `0x7c6a50` feeds this bit to `CMovement::SetRunMode 0x7c71c0` (`0x7c6ac2 and edi,0x100`;
     /// `0x7c6acb call`), whose argument is *run*, so **a spline without RUNMODE sets
     /// `MOVEFLAG_WALK_MODE` on the unit it moves.** Every incoming spline re-authors the bit
-    /// (wow-re `collision/scratch/walk-mode-law.md` §5.2; decision 1758).
+    /// (decision 1758).
     ///
     /// Only the body **we drive** reads it ([`crate::player::server_ride`]) — a creature's own
     /// gait is derived from [`Spline::speed`], the path's arc length over its duration, so its
@@ -104,16 +104,14 @@ impl Spline {
     /// swimming-creature body pitch (its consumer gates on [`CreatureSwimming`], so a ground
     /// walker's slope never tilts it).
     ///
-    /// A **ground** path evaluates each segment as a straight lerp (the byte-verified
-    /// `linear_pos_diff` follow — wow-re curvemath RF-0048). A **flying** path (`!grounded` — the
-    /// wire's `Flying`/`Mask_CatmullRom` bit) evaluates a uniform **Catmull-Rom** through the same
-    /// waypoints, neighbours phantom-duplicated at the ends per the client's CCurve commit
-    /// (RF-0052) — smooth arcs, no corners on a taxi flight. **Byte-VERIFIED** (decision 0496
-    /// folds back 0484 I3): the flying commit writes curve mode 1 (`0x7c6a50` →
-    /// `[movInfo+0x54]`), and the point-at-t evaluator `0x4541b0` is itself the mode dispatcher —
-    /// mode 1 calls the Horner-basis Catmull-Rom cubic (`0x453580`), mode 0 the 2-point lerp
-    /// (wow-re `system/curvemath/scratch/taxi-flying-curve-mode.md`). Segment *location* stays
-    /// chord-length parameterised in both modes (RF-0052 fills per-segment chord + total
+    /// A **ground** path evaluates each segment as a straight lerp. A **flying** path (`!grounded`
+    /// — the wire's `Flying`/`Mask_CatmullRom` bit) evaluates a uniform **Catmull-Rom** through the
+    /// same waypoints, neighbours phantom-duplicated at the ends per the client's CCurve commit
+    /// (`0x601d30`/`0x601e66`) — smooth arcs, no corners on a taxi flight. Decision 0496 folds back
+    /// 0484 I3: the flying commit writes curve mode 1 (`0x7c6a50` → `[movInfo+0x54]`), and the
+    /// point-at-t evaluator `0x4541b0` is itself the mode dispatcher — mode 1 calls the
+    /// Horner-basis Catmull-Rom cubic (`0x453580`), mode 0 the 2-point lerp. Segment *location*
+    /// stays chord-length parameterised in both modes (`0x4532e0` fills per-segment chord + total
     /// arc-length).
     pub(crate) fn sample(&self, now: Instant) -> ([f32; 3], Option<f32>, f32) {
         let pts = self.points.as_slice();
@@ -167,9 +165,8 @@ impl Spline {
         (*pts.last().unwrap(), None, 0.0)
     }
 
-    /// The **flying attitude** `(pitch, bank)` in radians — the byte law (wow-re `taxi-system.md`
-    /// §TU-4, `0x7c5490`'s flying branch decomposed at §5 grade; decision 0516, correcting 0501's
-    /// INTERIM look-ahead *pitch*):
+    /// The **flying attitude** `(pitch, bank)` in radians — the byte law (`0x7c5490`'s flying
+    /// branch; decision 0516, correcting 0501's INTERIM look-ahead *pitch*):
     ///
     /// - **Pitch** is the instantaneous tangent's own climb — [`Spline::sample`]'s travel pitch,
     ///   `asin(t̂z)` — not a look-ahead difference: the client orients the mover's forward along
@@ -213,10 +210,10 @@ impl Spline {
 
 /// Uniform Catmull-Rom position + travel direction on the polyline segment `pts[i] → pts[i+1]` at
 /// local parameter `u ∈ [0,1]`, with the neighbour control points phantom-duplicated at the path
-/// ends — the real client's CCurve commit stores `[first, first, …, last, last]` (wow-re curvemath
-/// RF-0052), which makes the curve pass through every waypoint and start/end tangent to the end
-/// segments. Returns `(position, d/du tangent)`; the tangent's scale is meaningless to callers
-/// (they normalize or `atan2` it), only its direction matters.
+/// ends — the real client's CCurve commit stores `[first, first, …, last, last]`
+/// (`0x601d30`/`0x601e66`), which makes the curve pass through every waypoint and start/end
+/// tangent to the end segments. Returns `(position, d/du tangent)`; the tangent's scale is
+/// meaningless to callers (they normalize or `atan2` it), only its direction matters.
 fn catmull_rom(pts: &[[f32; 3]], i: usize, u: f32) -> ([f32; 3], [f32; 3]) {
     let p0 = pts[i.saturating_sub(1)];
     let p1 = pts[i];
@@ -240,8 +237,8 @@ fn catmull_rom(pts: &[[f32; 3]], i: usize, u: f32) -> ([f32; 3], [f32; 3]) {
 /// Build the [`Spline`] implied by one `SMSG_MONSTER_MOVE`: the unit rides `path` — the full travel-order
 /// polyline `[start, …waypoints…, endpoint]` the protocol decoded — at constant (arc-length) speed over
 /// `duration_ms`. [`Spline::sample`] interpolates a ground path piecewise-linearly, which is faithful: the
-/// real client's ground creature-follow evaluates the path with `linear_pos_diff` (a segment lerp),
-/// arc-length parameterised, through every waypoint (wow-re curvemath RF-0048/RF-0052); a **flying** path
+/// real client's ground creature-follow evaluates the path with a segment lerp (`0x4541b0`),
+/// arc-length parameterised, through every waypoint; a **flying** path
 /// takes the Catmull-Rom family instead (the taxi/flight look — see [`Spline::sample`]'s INTERIM note).
 /// Returns `None` — "stationary, clear any path" — for a `Stop`, a zero duration, or a path with fewer
 /// than two points (nothing to travel along).
@@ -462,7 +459,7 @@ pub(in crate::net) fn sample_splines(
         let was = tick.then(|| bevy_to_wow(t.translation));
         t.translation = wow_to_bevy(wow_pos);
         if let Some(f) = facing {
-            // The swim body pitch (TU-A's render law, applied to the spline movers): a swimming
+            // The swim body pitch (render law `0x60a110`, applied to the spline movers): a swimming
             // creature moving along its path renders its root pitched to the segment's travel
             // pitch, nose-up positive about the body's local X; ground walkers render level. A
             // FLYING spline (the taxi) takes the full attitude — the tangent's climb plus the
@@ -545,14 +542,12 @@ fn trace_ride(guid: u64, spline: &Spline, pos: [f32; 3], was: [f32; 3], now: Ins
 /// Both used to ask `kind == Unit`, and **kind is the wrong question**. The reference has no such
 /// test: `SMSG_MONSTER_MOVE`'s apply `0x6187a0` splices *whatever unit the packet named* into the
 /// movement manager's list (`0x618801` installs the spline, `0x618808 call 0x619ca0` links it; its
-/// only early-out is `6187bf test ah,0x10`, ROOT — wow-re `remote-swim-decision.md` §1.2, VERIFIED),
-/// the per-frame walk `0x615b10 → 0x616620` then runs **once per frame for every registered
-/// CMovement** (§1.1), and the vertical-zero gate inside it reads only that CMovement's own flag
-/// word — `MI.flags & 0x4`, `MI.flags & 0x200` (the spline's FLYING bit), `[CMovement+0x40] &
-/// 0x200800`, else `Δz := 0` (`0x616cec`-`0x616d03`, wow-re `collision/scratch/spec-driver-B.md`
-/// K3). Not one of those bytes asks what kind of object it is holding: `mover-is-a-creature.md`
-/// says it in one line — *"nothing in the movement system is 'the player's' any more … every
-/// scalar, every flag, every packet is the MOVER's"*.
+/// only early-out is `6187bf test ah,0x10`, ROOT), the per-frame walk `0x615b10 → 0x616620` then
+/// runs **once per frame for every registered CMovement**, and the vertical-zero gate inside it
+/// reads only that CMovement's own flag word — `MI.flags & 0x4`, `MI.flags & 0x200` (the spline's
+/// FLYING bit), `[CMovement+0x40] & 0x200800`, else `Δz := 0` (`0x616cec`-`0x616d03`). Not one of
+/// those bytes asks what kind of object it is holding: nothing in the movement system is the
+/// player's — every scalar, every flag, every packet is the mover's.
 ///
 /// So a **Player the server moves along a ground spline has its Z re-derived from the terrain
 /// exactly like a creature's**. cmangos's Playerbots drives its bots that way — they are Player
@@ -566,8 +561,8 @@ fn trace_ride(guid: u64, spline: &Spline, pos: [f32; 3], was: [f32; 3], now: Ins
 ///   what `splined || derived_before` says: a bot enters on its first path and never leaves (it
 ///   sends no `MSG_MOVE_*`, so nothing ever hands it back), while a remote player yanked by a
 ///   Charge, a knockback or a fear is derived for the ride and returns to [`RemoteMotion`] on their
-///   next packet. Sticky is the *reference's* shape too — `0x619ca0` splices, and nothing in the
-///   recorded notes unlinks — and it is what keeps a bot grounded in the frames between paths,
+///   next packet. Sticky is the *reference's* shape too — `0x619ca0` splices, and no unlink of it
+///   is known — and it is what keeps a bot grounded in the frames between paths,
 ///   including the one where [`sample_splines`] has just dropped the finished [`Spline`].
 /// - **Never the body we steer** ([`crate::net::Embodied`]) — *whatever kind it is*, which is the
 ///   half decision 1927 corrected. Our own avatar is a Player and was already out; a **possessed
@@ -607,7 +602,7 @@ pub(crate) fn ground_derived(
 }
 
 /// How far **above the seat** an idle unit's settle probe starts (yd): the reference's own
-/// backface band. The swept-prism TOI (`0x632830`, wow-re `resolve_clip.rs::polygon_toi`) still
+/// backface band. The swept-prism TOI (`0x632830`) still
 /// counts a face the prism has already passed as a hit at `t = 0` when it is within `1/36` yd
 /// (`[0x7ff9c8]`) behind the probe, so a floor a hair above the feet supports the body; anything
 /// further above is simply not there. **Not** a lift: this clamp once started 2.5 yd above the seat
@@ -833,8 +828,8 @@ pub(in crate::net) fn ground_clamp_creatures(
             }
         }
         // The water-walker's floor, and **only** for a creature the swim mark already let through:
-        // the reference takes this arm only when the swim bit is clear (wow-re
-        // `moveflag-family.md` §2.2), and a swimming creature `continue`d above. The plane is the
+        // the reference takes this arm only when the swim bit is clear (`0x631617`), and a
+        // swimming creature `continue`d above. The plane is the
         // liquid surface in Bevy Y, which both answers below read the same way.
         //
         // The reference's second, rate-limited hover pass (`0x636fa1`, climbing back toward the
@@ -1136,8 +1131,8 @@ const CREATURE_SWIM_EXIT_BAND: f32 = 1.0 / 36.0;
 /// nothing arrives for it, and it is derived here for the same reason (B357, decision 1921). The
 /// gate below admits it: bit 3 PLAYER_CONTROLLED is set on every player object, so
 /// [`crate::player::may_swim`] is true. The real client runs its own depth decision `0x6030c0` on **remote
-/// units and creatures too**, not only on the body it steers — VERIFIED, wow-re
-/// `collision/scratch/remote-swim-decision.md` §1. `0x6030c0` has exactly one caller and it reaches
+/// units and creatures too**, not only on the body it steers.
+/// `0x6030c0` has exactly one caller and it reaches
 /// per-unit three ways: a **per-frame registry walk** (`0x616800`, a registered frame callback →
 /// `0x615b10` over the movement manager's intrusive CMovement list → `0x616620` per node, whose own
 /// active-mover GUID compare gates only the `0xee` heartbeat), the inbound move-message apply
@@ -1234,7 +1229,7 @@ impl GroundClamped {
 
 /// The reference's `0x6030c0` decision for one creature, as a pure function of everything it
 /// reads — [`CreatureSwimming`]'s law in one place, so both asymmetries are assertable without a
-/// world. Byte-VERIFIED whole (wow-re `collision/scratch/remote-swim-decision.md` §2/§3):
+/// world:
 ///
 /// ```text
 /// enter iff  flags ∧ depth >  0.75·h              (0x603106 test ah,0x41 + jne — a ZF test, STRICT)

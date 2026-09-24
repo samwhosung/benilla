@@ -82,11 +82,11 @@ pub(super) fn this_frame(
     let landed;
     if let Some((swim_fwd, swim_side)) = swim {
         // Swimming: `MOVEFLAG_SWIMMING` (the swim-pitch tail rides with it) plus the travel-direction
-        // bits the swim gait selector cascades on (TU-E: turn→41, strafe→43/44, back→45, fwd→42,
-        // idle→41). The bits mirror the NET swim amounts that actually drive the mover — one
-        // source, so a rooted or key-cancelled swimmer can't stream a phantom direction
+        // bits the swim gait selector cascades on (`0x5fd100`: turn→41, strafe→43/44, back→45,
+        // fwd→42, idle→41). The bits mirror the NET swim amounts that actually drive the mover —
+        // one source, so a rooted or key-cancelled swimmer can't stream a phantom direction
         // (decision 0056). Space sets nothing here — its whole swim role is the jump-exit,
-        // which runs the breach arm (TU-F). No FALLING, no airborne bookkeeping: the
+        // which runs the breach arm (`0x7c6230`). No FALLING, no airborne bookkeeping: the
         // arc state is cleared so leaving the water starts a clean walk/fall from rest.
         move_flags_now |= move_flags::SWIMMING;
         if swim_fwd < 0.0 {
@@ -204,7 +204,7 @@ pub(super) fn this_frame(
 
     // The animation/body-pose view of the flags: airborne it keeps the TAKEOFF-FROZEN direction
     // bits — the reference's anim layer plays the step-off gait off the takeoff-frozen
-    // flags/speed until FALLINGFAR latches or the unit lands (wow-re `land-anim-height-gate.md`),
+    // flags/speed until FALLINGFAR latches (`0x602c40`) or the unit lands,
     // and a mid-air Q press must not twist the body or animate a strafe. The *wire* flags above
     // stay live (the sniff-verified send law); only the pose reads the freeze.
     let pose_flags = if airborne {

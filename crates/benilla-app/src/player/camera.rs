@@ -21,16 +21,15 @@ use benilla_world::model_fade::{
 };
 
 /// The reference's up-edge click predicate, in **camera degrees and milliseconds** — the whole
-/// orbit-vs-select law (decision 1122; wow-re `world-click-drag-arbitration.md`, §5 fan-out
-/// 2026-08-08). Verbatim, from `0x514ae0`, which returns 1 = suppress / 0 = dispatch:
+/// orbit-vs-select law (decision 1122). Verbatim, from `0x514ae0`, which returns
+/// 1 = suppress / 0 = dispatch:
 ///
 /// ```text
 /// isClick = elapsed < 200ms
 ///        || (elapsed < 800ms && yaw_travel < 2.25° && pitch_travel < 2.0°)
 /// ```
 ///
-/// **The `ms` on those two numbers is now VERIFIED, where 1122 could only infer it** (wow-re
-/// `ui/scratch/button-doubleclick-law.md`, 2026-08-11, a side effect of the `OnDoubleClick` §5):
+/// **The `ms` on those two numbers is now settled, where 1122 could only infer it**:
 /// the clock both constants are compared against is `0x42c010` → `0x42b790`, whose counter is the
 /// `KERNEL32!GetTickCount` import at `[0x7ff310]` and whose scale is stored as `1.0/freq × 1000.0`
 /// — milliseconds in either counter mode. Nothing here changes; the units simply stopped being a
@@ -93,8 +92,8 @@ impl PressGesture {
     }
 }
 
-/// Third-person orbit-distance limits (yards). **VERIFIED from `WoW.exe` 5875** (`FUN_005112d0` +
-/// the camera CVars, wow-re `follow-camera`): max orbit = `cameraDistanceMax × cameraDistanceMaxFactor`,
+/// Third-person orbit-distance limits (yards), from `FUN_005112d0` + the camera CVars:
+/// max orbit = `cameraDistanceMax × cameraDistanceMaxFactor`,
 /// **hard-capped at 50**; the low clamp is **0** — zoom-to-first-person (at distance 0 the eye sits at
 /// the framing pivot, inside the head, and the avatar fades to invisible — see
 /// [`benilla_world::model_fade::self_model_fade_alpha`]). The out-of-box max is **15** (`15 × 1`) —
@@ -102,8 +101,8 @@ impl PressGesture {
 /// the day it was written — a taste call ("a wider view") that nobody had weighed against the
 /// client it imitates. The slider is still there and still reaches 30; it just is not where a
 /// fresh install starts. Our starting zoom
-/// is 15 — the reference's own shipped `cameraDistance` is 5.55 (wow-re
-/// `camera-settings-persistence.md` §2), a divergence this file has always carried in its own words
+/// is 15 — the reference's own shipped `cameraDistance` is 5.55 (`0x84f488`), a divergence
+/// this file has always carried in its own words
 /// ("pulled back a bit further than vanilla's own default for a wider view") and one 1804 leaves
 /// alone: it is the camera's *initial state*, not a settings row, and it is the director's look.
 pub(super) const CAM_DIST_MIN: f32 = 0.0;
@@ -122,8 +121,8 @@ pub(super) const CAM_DIST_DEFAULT: f32 = 15.0;
 /// The max-orbit knob (decision 1140) — 1.12's `cameraDistanceMaxFactor` over the base above.
 /// A fourth frozen constant made reachable: [`CAM_DIST_MAX`] was the only zoom ceiling there was.
 ///
-/// **The default is the reference's 1.0** — `15 yd`, byte-pinned (wow-re
-/// `ui/scratch/follow-camera.md`: "cameraDistanceMax 15.0, cameraDistanceMaxFactor 1.0"). It was
+/// **The default is the reference's 1.0** — `15 yd` (`cameraDistanceMax` defaults to `"15.0"`,
+/// `0x84fbd0`, and `cameraDistanceMaxFactor` to `"1.0"`, `0x82e92c`). It was
 /// 2.0 from 1140 until 1804, which is the whole reason that record exists: the raised factor was a
 /// reasonable taste call on its day and it was never weighed as a *default*, so benilla shipped a
 /// camera that started 15 yd further out than the client it imitates. Raising the slider re-clamps
@@ -225,7 +224,7 @@ pub(crate) fn on_cvar(
 
 /// **The mouse-look rate law, and the one place benilla's units are not the reference's.**
 ///
-/// The reference's own law is byte-VERIFIED (wow-re `world-click-drag-arbitration.md` §3.3):
+/// The reference's own law (`0x50fee0`):
 ///
 /// ```text
 ///   Δyaw_deg   = cameraYawMoveSpeed   × Δx / 800
@@ -237,8 +236,8 @@ pub(crate) fn on_cvar(
 /// full screen height is horizon-to-zenith. That is what makes the two divisors and the two
 /// defaults one design rather than four constants.
 ///
-/// **What does NOT transfer is the unit.** The reference has *no DirectInput import at all*
-/// (wow-re `idle-timer-input-stamp-law.md`): it integrates `WM_MOUSEMOVE`, so its `Δ` is a
+/// **What does NOT transfer is the unit.** The reference has *no DirectInput import at all*: it
+/// integrates `WM_MOUSEMOVE` (`0x42d31c`), so its `Δ` is a
 /// **screen pixel after Windows pointer acceleration** — which is exactly why its `mousespeed`
 /// slider works by calling `SPI_SETMOUSESPEED` on the OS rather than scaling anything in-engine.
 /// benilla's `Δ` is `AccumulatedMouseMotion`, i.e. winit's `DeviceEvent::MouseMotion`: **raw,
@@ -341,8 +340,8 @@ const FOLLOW_EPS: f32 = 1.0e-3;
 /// orbit offset simply persisted, a director's call) — this is the setting that gives it back, at
 /// the reference's own default: **Smart**.
 ///
-/// **The enum is the ENGINE's, `0 = Never · 1 = Smart · 2 = Always`** — byte-verified twice over
-/// (wow-re `ui/scratch/camera-smooth-style.md` §2: the registration loop walks
+/// **The enum is the ENGINE's, `0 = Never · 1 = Smart · 2 = Always`** — twice over (the
+/// registration loop in `0x50b6f0` walks
 /// `{"Never","Smart","Always"}` filling three blocks in order, and both consumers index by
 /// `style × stride`). 1.12's own *dropdown* writes `1/2/3` instead (`UIOptionsFrameCameraDropDown`
 /// — Smart 1, Always 2, Never **3**), and 3 is not a style at all: the validator accepts it
@@ -391,8 +390,8 @@ impl FollowStyle {
         }
     }
 
-    /// The `cameraSmooth<Style><State>{Delay,Factor}` row — family A at `[0xbe0e70]`, dumped at
-    /// its defaults in wow-re `camera-smooth-style.md` §3. Factor `0` means *cancel*: the armed
+    /// The `cameraSmooth<Style><State>{Delay,Factor}` row — family A at `[0xbe0e70]`, at its
+    /// defaults. Factor `0` means *cancel*: the armed
     /// transition is dropped and the camera keeps the offset it has.
     ///
     /// Family B (`cameraSmoothViewData<Style>Yaw{Delay,Factor}`) multiplies in: its Yaw factor is
@@ -416,8 +415,8 @@ impl FollowStyle {
     }
 }
 
-/// The seven arming states of 1.12's auto-return classifier (`0x510960`, wow-re
-/// `camera-smooth-style.md` §6.2), **in the reference's own priority order — highest first**. The
+/// The seven arming states of 1.12's auto-return classifier (`0x510960`),
+/// **in the reference's own priority order — highest first**. The
 /// winner is the highest-priority bit set, and the states are read off the *camera's* input
 /// command word, not off the character's velocity: right-mouse alone is a `Turn`, a turn key
 /// under right-mouse is a `Strafe`, and both mouse buttons are a `Move`.
@@ -438,8 +437,8 @@ pub(super) enum FollowState {
     Idle,
 }
 
-/// The camera's input command word — 1.12's `[InputControl+0x4]` bit for bit (wow-re
-/// `camera-smooth-style.md` §6.1), because the state classifier and the *edge* that arms a
+/// The camera's input command word — 1.12's `[InputControl+0x4]` bit for bit,
+/// because the state classifier and the *edge* that arms a
 /// transition are both defined on it. benilla has no PitchUp/PitchDown bindings, so those two bits
 /// are simply never set.
 pub(super) mod follow_cmd {
@@ -572,8 +571,8 @@ pub(super) struct FollowRig {
 impl FollowRig {
     /// Run the auto-follow for a frame and return the camera yaw it wants, if it wants one.
     ///
-    /// The shape is the reference's, and the shape is the point (wow-re `camera-smooth-style.md`
-    /// §6/§8): a transition is **armed on an input edge**, from a snapshot taken at that instant,
+    /// The shape is the reference's, and the shape is the point (`0x510960`, `0x50f160`): a
+    /// transition is **armed on an input edge**, from a snapshot taken at that instant,
     /// and then plays out unattended — it is *not* a per-frame chase of a moving target. That is
     /// why "drag the camera aside, then press W" swings you back over one smooth arc, while
     /// holding W changes nothing at all.
@@ -674,8 +673,8 @@ impl FollowRig {
     }
 }
 
-/// Camera pitch clamp (radians) — **VERIFIED ±89.00°** (`WoW.exe` `0x8089d8`/`0x8089dc` =
-/// 1.5533430576 rad; the pitch integrate `FUN_00510120`, wow-re `follow-camera`). A single uniform
+/// Camera pitch clamp (radians) — **±89.00°** (`WoW.exe` `0x8089d8`/`0x8089dc` =
+/// 1.5533430576 rad; the pitch integrate `FUN_00510120`). A single uniform
 /// clamp at every zoom level — the reference has **no** distinct first-person look-down limit.
 pub(super) const CAM_PITCH_LIMIT: f32 = 89.0 * std::f32::consts::PI / 180.0;
 /// How fast the camera glides back out to the player's chosen zoom once an obstruction clears (1/s).
@@ -683,9 +682,9 @@ pub(super) const CAM_PITCH_LIMIT: f32 = 89.0 * std::f32::consts::PI / 180.0;
 /// push-*out* eases — the vanilla feel of the camera snapping close past an obstacle and easing back.
 const CAM_RETURN_RATE: f32 = 6.0;
 /// The camera framing pivot — the point the boom looks at + seats behind, and the first-person eye at
-/// zoom 0 — sits at `feet + H` where **H is model-derived** (not a fixed height): VERIFIED
-/// `H = (attach17.z + 0.0972) × scale` from **M2 attachment id 17** (`WoW.exe` `0x50cbc0`, wow-re
-/// `follow-camera`) — ~neck height on every character (1.90 human / 0.88 gnome), with a `0.9 × vertex-box`
+/// zoom 0 — sits at `feet + H` where **H is model-derived** (not a fixed height):
+/// `H = (attach17.z + 0.0972) × scale` from **M2 attachment id 17** (`WoW.exe` `0x50cbc0`) —
+/// ~neck height on every character (1.90 human / 0.88 gnome), with a `0.9 × vertex-box`
 /// fallback only for models lacking that attachment. Floored at [`CAM_PIVOT_FLOOR`]. The per-model
 /// pre-scale height rides on [`CameraPivot`], stamped at attach; `control` multiplies the live scale and
 /// floors. The collision sweep still starts from the *head* (not the pivot), so a jump in a low room
@@ -737,10 +736,10 @@ pub(super) fn model_pivot_height(pivot: &CameraPivot, scale: f32, swimming: bool
 /// World head height above a modeled unit's feet — [`model_pivot_height`], or the neck-height
 /// [`CAM_PIVOT_FALLBACK`] when the body has no model yet. The single definition shared by the things
 /// that sit at the character's head: the framing-pivot *target*, the far-sight subject's pivot, and
-/// the 3D-audio listener (the client's `SoundListenerAtCharacter=1` default, wow-re benilla-pins B14).
+/// the 3D-audio listener (the client's `SoundListenerAtCharacter=1` default, `0x457890`).
 ///
-/// **Which `scale` to pass is a fidelity question with a verified answer** (wow-re
-/// `pivot-height-glide.md`, C3): the reference's pivot preset multiplies the **raw**
+/// **Which `scale` to pass is a fidelity question with a verified answer**: the reference's pivot
+/// preset multiplies the **raw**
 /// `OBJECT_FIELD_SCALE_X` descriptor (vtable slot 7 = `0x469f10`, `fld [descriptors+0x10]`), *not*
 /// the 2 s-eased render scale — the two are deliberately split in the binary (`0x4833d3` folds the
 /// eased one in for a selection-ring consumer, and only there). So the camera passes
@@ -767,10 +766,9 @@ const CAM_PIVOT_SMOOTH_SPEED: f32 = 1.2;
 /// the model-derived target with a cosine smoothstep instead of taking it raw.
 ///
 /// The reference's live `cam+0xfc` chasing target `cam+0x1c8`: armed by `0x5126b0` → `0x512790`,
-/// stepped by `0x50f160`'s `[0x50f36a, 0x50f417)` block (wow-re `pivot-height-glide.md`, §5 round)
-/// — the **fourth instantiation** of the channel template [`SmoothChannel`] holds (wow-re
-/// `camera-cvar-gates.md` §8), which is why nothing of the tween lives here any more. What is left
-/// is the two things this instantiation does that its three siblings do not.
+/// stepped by `0x50f160`'s `[0x50f36a, 0x50f417)` block — the **fourth instantiation** of the
+/// channel template [`SmoothChannel`] holds, which is why nothing of the tween lives here any more.
+/// What is left is the two things this instantiation does that its three siblings do not.
 /// **This is why a druid shapeshift does not snap the reference's camera**, and it glides in *both*
 /// directions: the solver's `max(target, live)` (`0x50e5a9`) is only the collision-corridor seed, and
 /// the far chain clamps the result back down to the live value (`0x50e767`), so an unobstructed pivot
@@ -906,7 +904,7 @@ impl CameraControl {
 
     /// The self-avatar's render alpha this frame (`1.0` third-person → `0.0` first-person). The
     /// blob shadow multiplies it in for the self unit — the reference's shadow diffuse rides the
-    /// same model fade slot the body does (`[model+0x180]`, wow-re unit-blob-shadow RE).
+    /// same model fade slot the body does (`[model+0x180]`).
     pub(crate) fn self_fade(&self) -> f32 {
         self.self_fade_alpha
     }
@@ -1003,8 +1001,8 @@ pub(super) fn latch_world_mouse(
     //
     // 2159 read it the other way and excepted plates here, on an inference from the other end:
     // entering freelook disables plate mouse input (`0x60f830`, from `0x483e80`), "a toggle that
-    // would have nothing to do if a press on a plate could not reach freelook". The wow-re round
-    // this session dispatched refuted that: `0x60f830` has plenty to do for a press that starts on
+    // would have nothing to do if a press on a plate could not reach freelook". The reference
+    // refutes that: `0x60f830` has plenty to do for a press that starts on
     // the **world** and then drags the pointer across a plate mid-turn. The press itself never gets
     // there. `0x7662c0` delivers a mouse-down to exactly ONE frame — `[root+0x80]` else
     // `[root+0x7c]` — sets the capture at `0x7663e9`, calls `[vt+0x68]`, and returns 0, stopping
@@ -1058,7 +1056,7 @@ impl FlyCam {
 
 /// The per-model camera-pivot height in **model-local yards, pre-scale** — `attach17.z + 0.0972` (M2
 /// attachment id 17) for a character, else `0.9 × vertex-box Z-extent`; the reference's camera-target
-/// height (`0x50cbc0`, wow-re `follow-camera`). Stamped on every modeled unit at attach
+/// height (`0x50cbc0`). Stamped on every modeled unit at attach
 /// ([`crate::entities`]); `control` reads it off the [`Embodied`], multiplies that body's live scale,
 /// and floors at [`CAM_PIVOT_FLOOR`] to get the world pivot the third-person camera looks at (and the
 /// first-person eye). `0.0` for a bounds-less display (→ floor).
@@ -1314,8 +1312,8 @@ pub(super) fn seat_on_subject(
     };
     // The framing height is the **channel's**, not this frame's target: it eases there over
     // `|Δh| / 1.2` s with a cosine profile, so a shapeshift, a mount, a growth aura or a far-sight
-    // switch move the camera smoothly instead of teleporting it ([`PivotGlide`]; wow-re
-    // `pivot-height-glide.md`). A far-sight subject supplies the target the same way the body
+    // switch move the camera smoothly instead of teleporting it ([`PivotGlide`], `0x50f160`). A
+    // far-sight subject supplies the target the same way the body
     // does — one channel, whatever it is looking at.
     let live_pivot = rig
         .pivot
@@ -1325,8 +1323,8 @@ pub(super) fn seat_on_subject(
     // the why; this is only the wiring.
     //
     // Classified against the channel's **target** (`[cam+0x1c8]`), never its live value — the
-    // polarity three of wow-re's seven cold workers inverted, arbitrated at the bytes. Banding
-    // against a continuously-eased quantity chatters on its own, independently of the corridor.
+    // polarity is easy to invert, and byte-exact. Banding against a continuously-eased quantity
+    // chatters on its own, independently of the corridor.
     //
     // `headroom` is `1.0`: the reference scales the reach by the hit fraction of a vertical
     // head-room probe at `0x50e6bd` that this client has never had. Absent and named, not stubbed
@@ -1402,7 +1400,7 @@ pub(super) fn seat_on_subject(
         &dynamics.options,
         dt,
     );
-    // **The mouse-look hand-off** (`0x50d500` push / `0x50d520` pop; wow-re's §5 re-audit, Q-C).
+    // **The mouse-look hand-off** (`0x50d500` push / `0x50d520` pop).
     // Run after the channel has stepped, so an edge hands off the value this frame is about to
     // compose. The reference fires it from the input handler instead; the two differ by at most one
     // frame of channel motion, which at `cameraGroundSmoothSpeed` is a fortieth of a degree.
@@ -1471,9 +1469,9 @@ pub(super) fn seat_camera(
     // for the same reason — a held drag owns the camera, hand on it. It is NOT a per-frame chase:
     // an input edge arms a cosine-smoothstep return to directly-behind and that transition then
     // plays out unattended ([`FollowRig::advance`]). It writes an absolute yaw because our camera
-    // stores one; the reference stores the *offset* and re-adds the facing at render time, which
-    // is the same picture and a different mechanism (wow-re `camera-smooth-style.md` §10 — and
-    // the reason Never must not, and here does not, touch the rigid carry above).
+    // stores one; the reference stores the *offset* and re-adds the facing at render time
+    // (`0x50f7f2`), which is the same picture and a different mechanism (and the reason Never
+    // must not, and here does not, touch the rigid carry above).
     let look_held = rig.look.is_some();
     if !look_held {
         cam.yaw += turn_delta;
@@ -1503,13 +1501,13 @@ pub(super) fn seat_camera(
     // **The ground tilt IS part of the arm's pitch**, unlike the bias: `0x50f710` composes
     // `[cam+0xf4] + [cam+0x108]` and clamps the SUM to ±89° before the basis is built, and the eye
     // is then seated from that basis. So a followed terrain moves the camera; a smart pivot does
-    // not (wow-re `camera-cvar-kernels.md` §1).
+    // not.
     let arm_pitch = (cam.pitch + rig.terrain_tilt.pitch()).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
     let arm_rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, arm_pitch, 0.0);
     // **The composite is deliberately NOT re-clamped to ±89°.** The reference's clamp at
     // `0x50f710` binds `[cam+0xf4] + [cam+0x108]` — the pitch channel plus the ground tilt — and
-    // the bias is composed **after** it, at `0x50ee58`, so the rendered pitch is not bounded by it
-    // (wow-re `camera-cvar-kernels.md` §1). The bound that does apply to the bias is the one-sided
+    // the bias is composed **after** it, at `0x50ee58`, so the rendered pitch is not bounded by it.
+    // The bound that does apply to the bias is the one-sided
     // one on its own accumulate ([`SmartPivot::route_pitch`]), and the ±89° on the body hand-off
     // (`0x5103e0`), which is where `mover_pitch` takes it.
     let rotation = if bias == 0.0 {
@@ -1577,8 +1575,8 @@ pub(super) fn seat_camera(
         }
     }
     // No waterline handling here — deliberately. The reference NEVER moves the eye for liquid
-    // (verified negative, wow-re `water-frame-straddle` §4a: zero liquid-height queries in the
-    // camera TU); the no-straddle experience is the *submersion probe's* — the frame flips
+    // (zero liquid-height queries in the camera TU `[0x7ac640, 0x7ae010)`); the no-straddle
+    // experience is the *submersion probe's* — the frame flips
     // submerged the moment the lowest near-plane corner reaches the surface
     // (`liquid::detect_submersion`, the corner-min probe), and with the near plane at the
     // `nearclip` CVar's registered 0.1 the whole crossing band is a few inches tall (2163 — it
@@ -1991,8 +1989,7 @@ mod tests {
     /// *glides* the camera to the new body's height; ours snapped there and then drifted. The
     /// channel's whole job is that this is one smooth move, in **both** directions — the solver's
     /// `max(target, live)` is only a collision seed, and the far chain clamps back to the live
-    /// value (`0x50e767`), so nothing about a *rising* target arrives early (wow-re
-    /// `pivot-height-glide.md`, C2).
+    /// value (`0x50e767`), so nothing about a *rising* target arrives early.
     #[test]
     fn a_shapeshift_glides_the_pivot_both_ways_and_never_snaps() {
         // Tauren → cat: the heights measured off a live probe run.
@@ -2081,9 +2078,8 @@ mod tests {
 
     /// **The swim preset** — the reference's `cam+0x124`, selected by `0x50f880` on
     /// MOVEFLAG_SWIMMING and built at `0x50ccf6` as the standing height less
-    /// `StandSeq.max.z − SwimSeq.max.z`. The numbers are the shipped Human Male's, as wow-re
-    /// measured them off the binary (`water-band-discontinuity.md` §7): standing 1.9002692,
-    /// swimming 1.5120120.
+    /// `StandSeq.max.z − SwimSeq.max.z`. The numbers are the shipped Human Male's, measured off
+    /// the binary: standing 1.9002692, swimming 1.5120120.
     #[test]
     fn swimming_takes_the_lower_pivot_preset() {
         let human = CameraPivot {
@@ -2221,7 +2217,7 @@ mod tests {
 
     /// **The auto-follow** (decisions 1493/1502) — 1.12's `cameraSmoothStyle`, the setting benilla
     /// spent its whole life behaving as "Never". The properties that a re-derivation gets wrong,
-    /// and that the byte-verified mechanism (wow-re `camera-smooth-style.md`) turns on:
+    /// and that the reference's mechanism (`0x510960`, `0x50f160`) turns on:
     /// it is armed by an input **edge** and then plays out unattended (not a per-frame chase of a
     /// moving target), the profile is a **cosine** smoothstep, the duration is `|Δ| / rate ×
     /// factor` **clamped to [0.1 s, 2.0 s]**, and Smart's `Idle`/`Stop` rows are a *cancel* — which
@@ -2483,7 +2479,7 @@ mod tests {
         assert!(!rig.world_mouse.held(LookButton::Left));
     }
 
-    /// The state classifier's three vanilla input rules (wow-re `camera-smooth-style.md` §6.2) —
+    /// The state classifier's three vanilla input rules (`0x510960`) —
     /// the ones a client that keys off character *velocity* cannot reproduce, because they are
     /// read off the camera's own command word: right-mouse alone is a `Turn`, a turn key held
     /// **under** right-mouse is a `Strafe`, and both mouse buttons together are a `Move`. Plus the

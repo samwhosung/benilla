@@ -568,9 +568,8 @@ fn teleport(
 ///
 /// The guid guard is the same one every self-addressed movement edge here carries. The reference
 /// registers this opcode for the **controller** only; the observer's knockback arrives on a
-/// different opcode with a different handler (`MSG_MOVE_KNOCK_BACK`, wow-re
-/// `system/collision/scratch/knockback-law.md`), so a knockback naming somebody else is not ours to
-/// fly.
+/// different opcode with a different handler (`MSG_MOVE_KNOCK_BACK`, `0x603bb0` rather than
+/// `0x603f90`), so a knockback naming somebody else is not ours to fly.
 fn knock_back(
     guid: u64,
     counter: u32,
@@ -702,7 +701,7 @@ fn reputations(standings: Vec<(u8, i32)>, reputations: &mut Reputations) {
 /// growing the store for a list id past the login snapshot (flags default 0 — the delta carries
 /// none), and **auto-reveal** each one.
 ///
-/// The auto-reveal is the client's own (wow-5875-re `reputation-panel-law.md`, the `0x124` handler):
+/// The auto-reveal is the client's own (the `0x124` handler `0x4d5760`):
 /// gaining reputation with a faction makes it visible, unless the slot carries `HIDDEN` — which is
 /// exactly what that bit is for, and is why it is not a list gate. The server pushes an
 /// `SMSG_SET_FACTION_VISIBLE` for the same slot in most cases (vmangos `SetOneFactionReputation`

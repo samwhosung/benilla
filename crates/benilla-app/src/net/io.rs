@@ -114,16 +114,16 @@ pub(super) struct Parks {
 /// beat rather than the screen.
 const REALM_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The keepalive cadence — the real client's 30 000 ms ping timer (VERIFIED wow-re net W1,
-/// `0x537ff0`: the connection drain arms the next ping 30 s out). vmangos *kicks* a player socket
+/// The keepalive cadence — the real client's 30 000 ms ping timer (`0x537ff0`: the connection
+/// drain arms the next ping 30 s out). vmangos *kicks* a player socket
 /// whose pings repeat faster than 27 s apart more than twice (`WorldSocket::_HandlePing`), so this
 /// must never shrink below that.
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 
 /// How many round trips [`PingClock`] keeps — **fifteen**, which is the reference's *usable*
-/// depth even though its array holds sixteen (VERIFIED, wow-re `system/net`, 4-agent §5).
+/// depth even though its array holds sixteen.
 ///
-/// `conn+0x1a6c` is 16 u32 slots, and W1's shorthand "head/tail wrap 16" is about that array. But
+/// `conn+0x1a6c` is 16 u32 slots, and its head/tail indices wrap at 16. But
 /// the averager treats `read == write` as its **empty** sentinel (`0x537fa8`), so `HandlePong`'s
 /// conditional read-index advance (`0x537de8`) makes the full state unreachable: the 16th sample
 /// pushes the oldest out of view as it lands, and every reading from then on is over 15. Our
@@ -133,7 +133,7 @@ const RTT_RING: usize = 15;
 
 /// **The connection's ping/RTT stats** — the reference's own per-connection stats block
 /// (`conn+0x1a6c` ring, `+0x1aac/+0x1ab0` head/tail, `+0x1a64` send stamp, `+0x1a68` expected
-/// sequence; wow-re net W1), behind the same one lock it guards them with (`conn+0x1ac0`'s
+/// sequence), behind the same one lock it guards them with (`conn+0x1ac0`'s
 /// critical section, taken by both `HandlePong 0x537d60` and the `GetNetStats` math at
 /// `0x537f20`).
 ///
@@ -1025,8 +1025,8 @@ fn writer_loop(
 ) {
     let mut writer: Option<WorldWriter> = None;
     let mut warned = 0u32;
-    // **Armed by the connection, re-armed by each send — never free-running** (wow-re net,
-    // `0x537ff0`: `now - lastSent - 30000 >= 0`, evaluated at the connection's own drain tail,
+    // **Armed by the connection, re-armed by each send — never free-running** (`0x537ff0`:
+    // `now - lastSent - 30000 >= 0`, evaluated at the connection's own drain tail,
     // and `0x537bcf` stamps `lastSent` with the current tick at connect). It was a process-
     // lifetime `tick`, which is a different clock in two ways that both showed: the first ping of
     // a session landed anywhere in the 30 s after entering the world rather than at the end of it

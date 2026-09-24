@@ -45,8 +45,8 @@ mod net;
 // Writing the frame onto the body we drive — pose, MovementState, the counter-twist gap.
 mod body_pose;
 pub(crate) mod camera;
-// The one smoothed-scalar channel the reference instantiates four times (wow-re
-// `camera-cvar-gates.md` §8) — pitch, pitch-bias, ground tilt and the pivot height, one template.
+// The one smoothed-scalar channel the reference instantiates four times (all stepped by
+// `0x50f160`) — pitch, pitch-bias, ground tilt and the pivot height, one template.
 mod camera_channel;
 // The four 1.12 camera option toggles and the mechanisms behind them (decision 2149).
 pub(crate) mod camera_dynamics;
@@ -158,10 +158,8 @@ pub(crate) use view_subject::ViewSubject;
 /// the gate: re-read at the bytes, those two addresses are inside **`ToggleSheath 0x5eb480`** and
 /// **`CanLootNow 0x5ec110`**, and **no site in the whole `0x40000` census touches animation
 /// selection**. What stops the idle twitch under a stun is the animation clock being stopped
-/// (0889's proc-11 freeze), not this flag. The claim came in quoted verbatim from wow-re
-/// `object-layer/scratch/unit-flags-movement-gates.md` §2/§3, which is being corrected there too —
-/// a stale line in one repo re-entering the other is exactly the failure mode both contracts warn
-/// about, and it survived here for a fortnight because a doc comment is not a gate.
+/// (0889's proc-11 freeze), not this flag. The claim survived here for a fortnight because a doc
+/// comment is not a gate.
 ///
 /// The census's other movement-relevant consumers are real and stay: the two relayed
 /// `MSG_MOVE_*` wrappers that refuse outright (`0x602b20` StartTurn, `0x602b80` StartPitch — the
@@ -172,8 +170,7 @@ pub(crate) const UNIT_FLAG_STUNNED: u32 = 0x0004_0000;
 /// **`IsSelfControlled`** — the reference's `0x5fa550` (`5fa566 a9 04 00 c0 00 test eax, 0xc00004`):
 /// is this unit acting under its *own* control? False while `DISABLE_MOVE` (`0x4`), `CONFUSED`
 /// (`0x400000`) or `FLEEING` (`0x800000`) — and note what is **absent**: `UNIT_FLAG_STUNNED` is
-/// not in the mask (it has its own, separate gate), and neither is the taxi bit. wow-re
-/// `object-layer/scratch/unit-flags-movement-gates.md` §4.
+/// not in the mask (it has its own, separate gate), and neither is the taxi bit.
 ///
 /// Its consumers in the reference are the movement/collision layer and `DoEmote` — and the
 /// polarity is the trap: it returns **1 for an ordinary player**, so a gate written on it fires
@@ -198,15 +195,15 @@ pub(crate) fn self_controlled(unit_flags: u32) -> bool {
 /// constant lives here beside its neighbour rather than being declared a fourth time: three
 /// private copies of one bit is how a mask silently drifts.
 ///
-/// **There is no player-specific combat latch to pair it with.** wow-re censused the
-/// `shr reg,0x13` + `test rl,1` idiom image-wide (7 hits, 6 on this field+bit) and found the two
-/// hardcoded *local-player* readers going through this same flag; `UnitAffectingCombat("player")`
-/// takes a GUID fast path and lands on the identical word.
+/// **There is no player-specific combat latch to pair it with.** A census of the
+/// `shr reg,0x13` + `test rl,1` idiom image-wide (7 hits, 6 on this field+bit) finds the two
+/// hardcoded *local-player* readers (`0x482f70`, `0x4d6038`) going through this same flag;
+/// `UnitAffectingCombat("player")` takes a GUID fast path and lands on the identical word.
 pub(crate) const UNIT_FLAG_IN_COMBAT: u32 = 0x0008_0000;
 
 /// `UNIT_FLAG_TAXI_FLIGHT` — the same `UNIT_FIELD_FLAGS` word, **bit 20** (vmangos
-/// `UnitDefines.h:511`; the client reads it as `shr reg,0x14; test rl,1` — wow-re counted 20
-/// independent sites of that idiom with no shared gate, `unit-flags-movement-gates.md` §4).
+/// `UnitDefines.h:511`; the client reads it as `shr reg,0x14; test rl,1` — 20 independent sites
+/// of that idiom with no shared gate).
 ///
 /// Beside its neighbour for the same reason that one is here: readers that have nothing to do with
 /// each other — `SetStandState`'s own guard #3, the idle handler's auto-AFK gate and `UnitOnTaxi`
@@ -220,8 +217,8 @@ pub(crate) const UNIT_FLAG_TAXI_FLIGHT: u32 = 0x0010_0000;
 ///
 /// Two senders today: the `X` key reads the toggle inline in [`posture`], and the **posture emotes**
 /// (`/sit`, `/sleep`, `/kneel`, `/stand`, `/lay`) send this — `DoEmote`'s `EmoteSpecProc == 1`
-/// branch calls the same `0x5ed430` the key does (wow-re `object-layer/scratch/emote-posture-
-/// gate.md` §1, decision 0881). Routing them here is what makes `/sit` sit at all: the *server*
+/// branch calls the same `0x5ed430` the key does (decision 0881).
+/// Routing them here is what makes `/sit` sit at all: the *server*
 /// does nothing for a STATE text emote (vmangos `HandleTextEmoteOpcode` breaks out of the switch
 /// for SIT/SLEEP/KNEEL), so the posture is the client's own to set.
 ///

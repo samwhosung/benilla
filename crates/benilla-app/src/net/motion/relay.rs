@@ -3,7 +3,7 @@
 //!
 //! A remote's inbound `MSG_MOVE_*` is not applied at arrival: it is given a client **fire-time** and
 //! waits in the unit's queue until the clock reaches it, the dead-reckon covering the mover's own
-//! timeline in between (decision 0601, wow-re `remote-apply-timing.md`). The law that picks that
+//! timeline in between (decision 0601). The law that picks that
 //! fire-time lives in `0x618c30` + its window helper `0x618b50`, and it is **per unit** — five cells
 //! on the unit's own CMovement, no manager cursor:
 //!

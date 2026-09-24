@@ -2,9 +2,9 @@
 //!
 //! The server streams a drunk value in `PLAYER_BYTES_3` byte 1
 //! ([`benilla_protocol::messages::ObjectFields::player_drunk_byte`]); the reference client turns
-//! it into a fraction `min(byte, 100) × 0.01` (`0x5e2a90`, wow-re PRIMITIVE
-//! `drunk_fraction_5e2a90`) and, per frame for the **active player while moving**
-//! (`flags & 0xf`, the caller band `0x60a984–0x60ab14`), staggers the walk by a wobble angle:
+//! it into a fraction `min(byte, 100) × 0.01` (`0x5e2a90`) and, per frame for the **active
+//! player while moving** (`flags & 0xf`, the caller band `0x60a984–0x60ab14`), staggers the walk
+//! by a wobble angle:
 //!
 //! - **facing** `+= pulse(now, fraction)` every frame, 2π-wrapped, committed through the normal
 //!   facing pipeline (`0x60de30`) — the sign of the pulse oscillates slowly, so the character
@@ -13,8 +13,8 @@
 //! - **swim pitch** `+= pulse × 4.0` (`_DAT_0080306c`), clamped, while the swim flag is up
 //!   (`0x200000`) — a drunk swimmer porpoises.
 //!
-//! The pulse itself (`0x60ab20`, wow-re PRIMITIVE `cosine_pulse`, diffed bit-exact against the
-//! binary) is a 3-harmonic cosine blend whose **amplitude and frequencies both scale with the
+//! The pulse itself (`0x60ab20`) is a 3-harmonic cosine blend whose **amplitude and frequencies
+//! both scale with the
 //! fraction**: `p = now_ms·(π/180)·f`, `pulse = mean(cos(p·0.093), cos(p·0.154), cos(p·0.195))
 //! · (π/240)·f`. At full drunk (fraction 1.0) that is a veer rate peaking near ±0.75°/frame with
 //! beat periods of a few seconds; tipsy values scale both the swing and how fast it meanders.
@@ -52,9 +52,8 @@ pub(super) fn fraction(byte: u8) -> f32 {
 }
 
 /// The per-frame wobble angle (radians): the reference's 3-harmonic cosine pulse `0x60ab20`
-/// with `n` = the frame's time in milliseconds and `t` = the drunk fraction. Port of wow-re's
-/// bit-exact `cosine_pulse` transcription (`crates/object-layer/src/unit_fp.rs`) — see the
-/// module doc for the formula and the x87 rounding subtlety.
+/// with `n` = the frame's time in milliseconds and `t` = the drunk fraction. Port of the
+/// reference's pulse — see the module doc for the formula and the x87 rounding subtlety.
 pub(super) fn wobble(now_ms: u32, fraction: f32) -> f32 {
     if fraction == 0.0 {
         return 0.0;
@@ -72,14 +71,14 @@ pub(super) fn wobble(now_ms: u32, fraction: f32) -> f32 {
 }
 
 // The binary also holds a drunk FOV lane (camera channel `+0x10c`, setter `0x511250`, target
-// `(179° − 90°)·fraction` into the projection — wow-re `drunk-camera-fov.md`), which benilla
+// `(179° − 90°)·fraction` into the projection), which benilla
 // briefly shipped as a fisheye. The director's ref observation — the real client shows NO fov
 // change at any drunk value in normal play — held: the lane's ease rate is the CVar
 // `cameraFoVSmoothSpeed` (default 0.5°/s → a 178 s full swing whose zero-slope cosine onset
-// restarts on every drunk-byte tick, creeping <1° before each reset — §5-verified, wow-re
-// drunk-camera-fov.md §5). Effectively invisible in ordinary play, so benilla renders none
-// (decision 1018). The one visible corner — entering world already drunk SNAPs the full
-// fisheye instantly (camera-acquisition path) — is recorded there, deliberately unbuilt.
+// restarts on every drunk-byte tick, creeping <1° before each reset). Effectively invisible in
+// ordinary play, so benilla renders none (decision 1018). The one visible corner — entering
+// world already drunk SNAPs the full fisheye instantly (camera-acquisition path, `0x50d0f0`) —
+// is deliberately unbuilt.
 
 #[cfg(test)]
 mod tests {

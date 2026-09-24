@@ -1,5 +1,5 @@
 //! The rendered **body heading** + the animation's view of the flags — the client's display-facing
-//! pose (wow-re `body-facing-pipeline.md` §3, the `0x607ed0` tail; supersedes 0051's
+//! pose (the `0x607ed0` tail; supersedes 0051's
 //! ease-toward-velocity), beside its concern like `mover`/`swim`/`arc`. [`super::control`] calls
 //! [`drive_body_heading`] once per controlled frame, after this frame's move flags are final.
 
@@ -17,7 +17,7 @@ use super::{Player, STATIONARY_CHASE_RATE};
 ///    body back so the head keeps looking at the aim.
 ///  · **moving fwd/back or airborne** — snap to the aim (the client's `flags & 0x2003` snap;
 ///    a backpedal keeps facing forward and plays WalkBackwards).
-///  · **standing** — the FROZEN chase (byte rule, wow-re `b947e5aa`): while the aim is being
+///  · **standing** — the FROZEN chase (`0x6081bf`): while the aim is being
 ///    steered (A/D turn keys or mouse-look) the catch-up is off and only the 90° ceiling
 ///    applies — the camera/aim and the head-twist lead while the body holds, then the body
 ///    follows the turn lagging exactly 90°; once the steering stops it sweeps back onto the
@@ -25,7 +25,7 @@ use super::{Player, STATIONARY_CHASE_RATE};
 ///    rate — the client stamps its chase clock every non-steering frame.
 ///  · **swimming** ignores the ground display-facing pose (no strafe body-offset, no standing
 ///    chase): the body SNAPs to the aim (the client's facing snap list — dead or swimming) and
-///    the swim *pitch* tilts it in `control`'s transform write (TU-A's render law).
+///    the swim *pitch* tilts it in `control`'s transform write (the render law `0x60a110`).
 ///
 /// The turn-in-place foot-shuffle rides the BODY's actual rotation (the client's chase-step bits
 /// `0x800/0x1000`, cleared each frame after the anim layer reads them) — NOT the turn keys: while

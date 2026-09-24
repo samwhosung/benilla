@@ -305,7 +305,7 @@ pub(super) fn control(
     // **resolved** subject and not the raw `PLAYER_FARSIGHT` field, because `0x5ee290` sets the
     // latch only on its post-resolve ENGAGE leg; the active-player half is `foreign_mover.is_none()`,
     // and it is what keeps Mind Control working — possession sets the very same field, so without
-    // it the victim would be frozen (wow-re §6.2 and `farsight-and-client-control.md` §2.1).
+    // it the victim would be frozen.
     let mover = state::MoverInput {
         dead,
         view_is_out: state::view_is_out(
@@ -396,7 +396,7 @@ pub(super) fn control(
     // further down, `0x5151b0` (yaw) and `0x515250` (pitch), carry their own health tests as well,
     // and a closed census of all nine call sites of the facing setters `0x60de30`/`0x60de70` finds
     // every route health-gated. So the mouse and the keys do NOT share `0x514755`; they share
-    // `0x5144e0`, and `may_turn` is where that term lives on our side (wow-re §6.4).
+    // `0x5144e0`, and `may_turn` is where that term lives on our side.
     //
     // That is the line this file was missing: benilla modelled the server's root on death (0308),
     // and a root deliberately leaves turning live (0872), so a right-drag went on spinning the body
@@ -677,9 +677,8 @@ pub(super) fn control(
         // the same way) — one of the movement inputs that stands a seated avatar back up.
         //
         // **A mouse turn is deliberately not in this set** (decision 1766). It was, on the strength
-        // of a director observation that a right-drag stands you, which wow-re could not reproduce
-        // statically and carried as an open anomaly for weeks. The round that closed it found the
-        // observation right and the attribution wrong: the body-facing commit is refused for a
+        // of a director observation that a right-drag stands you. The observation is right and the
+        // attribution wrong: the body-facing commit is refused for a
         // seated player by two independent gates (`0x5145e0` @`0x51460c` on the prediction cache,
         // `0x5151b0` @`0x51520a` on the raw descriptor byte), and `0x514f50` skips its stand arm
         // outright while the RMB bit is held (`0x514f6d test al,1; jne`). What stands you is the
@@ -759,7 +758,7 @@ pub(super) fn control(
         // what 1753 first shipped on the reading that `0x513cee`'s `test ch,0x12` was the whole
         // gate. `Jump 0x513bd0` inlines *both* `0x5144e0` and `0x514560`: a health test at
         // `0x513cbc` (`jle 0x513d43`), a second at `0x513cde`, the root mask, and stand state
-        // `!= 7` at `0x513cf3` — which is `may_translate`, term for term (wow-re §6.7).
+        // `!= 7` at `0x513cf3` — which is `may_translate`, term for term.
         let mut want_jump = binds.fired(crate::bindings::cmd::JUMP) && may_translate;
 
         // Swim vs walk: the water over our feet decides. Hysteresis-latched (`update_swimming`,
@@ -776,9 +775,9 @@ pub(super) fn control(
         // Space while swimming = the ref's Jump routing (decision 0487, superseding 0479),
         // fired on the PRESS EDGE only — one hop per press, a held key does not re-fire
         // (decision 0498, director-verified on the ref; 0487's held-chaining was our
-        // over-extension of TU-F, and near the surface its re-latch→re-fire loop bounced the
-        // avatar under the waterline — the "invisible wall"). VERIFIED TU-F/TU-G (`0x7c6230`):
-        // the routing has no depth gate and no swim re-route — at the surface the press
+        // over-extension of the swim Jump routing, and near the surface its re-latch→re-fire loop
+        // bounced the avatar under the waterline — the "invisible wall"). The routing
+        // (`0x7c6230`) has no depth gate and no swim re-route — at the surface the press
         // breaches out; submerged it's the ~1.6-yd dolphin-hop, re-latching into swim once the
         // launch velocity halves (`0x7c5de0`). The smooth way UP is aiming up in mouselook and
         // swimming forward (the 0492 pitch law). The breach exits the water mode INSIDE this
@@ -788,8 +787,8 @@ pub(super) fn control(
         // HOVER refuses the breach too: `0x7c623a`'s test sits AHEAD of the SWIMMING take-off
         // select (`0x7c6261` only picks the seed velocity, it gates nothing), and hover does not
         // suppress swim entry — `0x6030c0` tests only LEVITATING (`0x400`) — so a hovering
-        // swimmer is a real state and their Space does nothing at all (wow-re
-        // `fall-steep-response.md` §10). The land leg's refusal lives in [`mover::step`],
+        // swimmer is a real state and their Space does nothing at all. The land leg's refusal
+        // lives in [`mover::step`],
         // the same handler's grounded arm.
         // **The wire's jump** — the `Jump(force = 0)` a `SetHover(true)` owes
         // ([`Player::hover_launch`], decision 1620). It differs from Space in exactly one gate and
@@ -830,8 +829,8 @@ pub(super) fn control(
             (0.0, 0.0)
         };
 
-        // The mounted space-bar flourish (decision 0441 P2). The gate is byte-VERIFIED — the
-        // client's jump-key handler `0x60dea0` (wow-re `mount-composition.md` Q3): mounted +
+        // The mounted space-bar flourish (decision 0441 P2). The gate is the
+        // client's jump-key handler `0x60dea0`: mounted +
         // no translational move + not turning + grounded → play MountSpecial(94) locally FIRST,
         // then send `CMSG_MOUNTSPECIAL_ANIM` (the receive side self-suppresses the echo, see
         // `net/apply.rs`); translational move → a real jump, the unmounted path; **turn-only
@@ -840,7 +839,7 @@ pub(super) fn control(
         // our airborne arc stands in — an airborne press falls through and the mover ignores
         // it, the same net silence). Swim disposition is INFERRED-moot (you can't be mounted
         // while swimming in 1.12); a swimming Space is the jump-exit above — and only that
-        // (TU-F: Space is the Jump command; it is NOT a pitch or ascend input) — and never
+        // (Space is the Jump command `0x513bd0`; it is NOT a pitch or ascend input) — and never
         // reaches this walk-side gate.
         if want_jump && !moving && !swimming && player.airborne_since.is_none() {
             if let Ok((e, .., store, _, _, _, _, _)) = body.single() {
@@ -860,10 +859,9 @@ pub(super) fn control(
         // source — the pose and the stream can't disagree); the tail only serializes with the
         // SWIMMING flag, so the walking value is inert.
         // **The mover pitch, set — in every mode, not just the swim one** ([`Player::mover_pitch`]
-        // = `CMovement+0x20`). HELD when unsteered (VERIFIED TU-B(c) — an idle floater keeps its
-        // pitch, never auto-levels), and steered by mouselook as a DIRECT set of the camera aim —
-        // **VERIFIED** (the camera-pitch §5, wow-re `swim-camera-pitch.md`, decision 0492, closing
-        // 0488's INTERIM and refuting the earlier no-camera-coupling census): the ref's mouse-move
+        // = `CMovement+0x20`). HELD when unsteered (`0x7c4f80` — an idle floater keeps its
+        // pitch, never auto-levels), and steered by mouselook as a DIRECT set of the camera aim
+        // (decision 0492, closing 0488's INTERIM): the ref's mouse-move
         // chain ends in `SetPitch 0x7c6f70`, an unconditional store — no integrator, no rate limit
         // — clamped ±89° ([`MOUSELOOK_PITCH_CLAMP`], the byte constant; the ±π/2 clamp belongs to
         // the unbound pitch-KEY integrator), with the velocity basis rebuilt in-call: the aim
@@ -875,8 +873,7 @@ pub(super) fn control(
         // It lived inside the swimming branch until decision 1616 (B322). Nothing on the ref's
         // write path is swim-gated — not the mouse handler `0x514400`, not the applier `0x5103e0`,
         // not the relay `0x515330`, not the enqueuer `0x6198a0`, and not `SetPitch`'s own store at
-        // `0x7c6f91`, which precedes the `test [esi+0x40],0x200000` that splits the two arms
-        // (`swim-camera-pitch.md` §7: "the mouse-look pitch push is swim-agnostic … on land too").
+        // `0x7c6f91`, which precedes the `test [esi+0x40],0x200000` that splits the two arms.
         // Swimming gates only the *readers* — the travel basis, the body pose, the wire tail — and
         // on land the field has two more, both water walking's: the trace-mask arm's third gate
         // below, and `SetPitch`'s own dive-through complement.
@@ -909,8 +906,8 @@ pub(super) fn control(
             air_nudged,
             ground,
         } = if breach {
-            // Jump while swimming (**VERIFIED**, wow-re `swim-mechanism.md` TU-B(f)+TU-F,
-            // `0x7c6230`): clears SWIMMING and enters the FALLING lifecycle *unconditionally* —
+            // Jump while swimming (`0x7c6230`): clears SWIMMING and enters the FALLING lifecycle
+            // *unconditionally* —
             // no swim re-route, no surface-proximity gate — seeding a take-off ~14% over a land
             // jump. At the surface this is the jump-out hop (the leap clears the water and can
             // carry onto a low bank); deep, it's the ~1.6-yd dolphin-hop — swim re-latches once
@@ -1135,8 +1132,8 @@ pub(super) fn control(
         // The cast bar's local self-cancel trigger (`spell::local_self_cancel`): a fresh
         // *directional* start (the same wire-axis edge the stream below turns into a
         // MSG_MOVE_START_*; diffed against the pre-stream `player.move_flags`) or a jump launch.
-        // Turn-in-place and pitch deliberately absent — VERIFIED (wow-re `move-selfcancel.md`,
-        // 0445): the client's interrupt mask `0x10f0` is {fwd, back, strafe L/R, autorun};
+        // Turn-in-place and pitch deliberately absent (0445): the client's interrupt mask `0x10f0`
+        // (`0x5150ce`) is {fwd, back, strafe L/R, autorun};
         // turn/pitch flags sit outside it and never cancel.
         // `autorun_armed` is 0445's dormant fifth mask member waking up — the `0x1000` bit IS in the
         // verified `0x10f0` interrupt mask, but **only on the ON edge**: `ToggleAutoRun` computes its
@@ -1144,8 +1141,8 @@ pub(super) fn control(
         // clear edge (`0x5150c8`) *before* the mask is tested. So arming autorun kills a cast;
         // disarming it does not. It needs its own term because the flag-delta test above can't see it —
         // toggling autorun on with W already held raises no new direction bit (VERIFIED wire-silence),
-        // yet the reference still cancels. (0445's row says "YES" unqualified; wow-re RF-0079 §5
-        // corrects it to the ON edge.)
+        // yet the reference still cancels. (0445's row says "YES" unqualified; only the ON edge
+        // cancels.)
         //
         // **And it is a fact about our own character, not about whatever we are steering**
         // (decision 1281). The whole point of Mind Control is walking the victim around while the

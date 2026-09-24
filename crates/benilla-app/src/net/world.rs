@@ -61,8 +61,8 @@ fn weather(
 /// as the reference's own handler does.
 ///
 /// An **init clears the table first** and records its `(map, zone)` as the world-state UI's display
-/// filter — the reference's `0x4c5650`, which runs before the pair loop (wow-re
-/// `system/ui/scratch/worldstate-ui-law.md`; rationale on [`crate::world_state`]). The order below
+/// filter — the reference's `0x4c5650`, which runs before the pair loop (rationale on
+/// [`crate::world_state`]). The order below
 /// is that handler's: clear + scope, then the packet's pairs.
 fn world_states(
     scope: Option<(u32, u32)>,

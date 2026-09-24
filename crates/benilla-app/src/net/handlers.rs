@@ -2,7 +2,7 @@
 //! arrival side, and the cut 2265 §A1 asked for between the net bridge and the game windows.
 //!
 //! The real client keeps an opcode → handler table inside `NetClient` (`+0x74`, 828 slots; 387
-//! registrations by 37 subsystem clusters — wow-re `net.md`) and its dispatcher `0x537aa0` knows
+//! registrations by 37 subsystem clusters) and its dispatcher `0x537aa0` knows
 //! none of them: it looks the opcode up and calls what it finds, **in packet order**, discarding an
 //! unregistered opcode in silence. Here the table is [`NetHandlers`]: a [`SessionEventKind`] →
 //! handlers map that every subsystem fills for itself through [`NetHandlerApp::net_handler`], and

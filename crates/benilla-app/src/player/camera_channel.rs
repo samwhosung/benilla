@@ -1,7 +1,7 @@
 //! **The camera's smoothed-scalar channel** — the one template the reference instantiates four
 //! times, in one place instead of four.
 //!
-//! wow-re `ui/scratch/camera-cvar-gates.md` §8 is the finding this module exists to honour: the
+//! The finding this module exists to honour: the
 //! camera's pitch, pitch-bias and ground-tilt channels (`0x512830`/`0x512980`,
 //! `0x512a50`/`0x512ba0`, `0x512490`/`0x5125e0`) are **one compiler-emitted template** at three
 //! sets of field offsets, and `0x5126b0`/`0x512790` — the pivot **height** channel this client

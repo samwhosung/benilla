@@ -126,7 +126,7 @@ impl PendingItemOps {
     /// resolve-as-ITEM (typemask 2) finds nothing to clear for a non-item. The loot close is the
     /// caller that needs it: an opened lockbox/clam is locked at the `CMSG_OPEN_ITEM` send (0916)
     /// and, closed with loot left, never changes its slot — so neither [`Self::resolve`] nor a
-    /// failure ever clears it (wow-re `ui/ledger.tsv` `0x48f200` @ `48f299`). Returns the
+    /// failure ever clears it (`0x48f200` @ `48f299`). Returns the
     /// deduplicated `(bag, slot)` pairs that unlocked.
     pub(crate) fn clear_by_guid(&mut self, item_guid: u64) -> Vec<(i64, u32)> {
         let mut unlocked = Vec::new();

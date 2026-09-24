@@ -3,8 +3,7 @@
 //! its `+0xc98` box filter — with the [`FacingStep`] latch the anim layer's turn-shuffle reads
 //! (decision 0123).
 //!
-//! **A unit has two facings and only one of them is the wire's** (wow-re
-//! `object-layer/scratch/interaction-facing.md`, `body-facing-pipeline.md`'s 2026-07-04 CORRECTION).
+//! **A unit has two facings and only one of them is the wire's**.
 //! The raw movement facing `CMovement+0x1c` is what the server put there; the *rendered character
 //! body root* is the smoothed display facing `CGUnit+0xc94`, and the client turns that one
 //! client-side, every frame, toward a goal it picks from an ordered chain. Two of that chain's goals
@@ -60,8 +59,8 @@ const UNIT_FLAG_STUNNED: u32 = 0x0004_0000;
 
 /// The `Emotes.dbc` `EmoteFlags` bit that **permits** the target/interaction facing while a looping
 /// state emote is active (`600d95`/`600d98 test ch,0x20`). A valid emote-state record *without* this
-/// bit suppresses the whole chain and pins the unit to its raw facing; the bit's *name* is INFERRED
-/// (wow-re `interaction-facing.md` §2) — the byte fact is the condition tested.
+/// bit suppresses the whole chain and pins the unit to its raw facing; the bit's *name* is
+/// inferred — the byte fact is the condition tested.
 const EMOTE_PERMITS_FACING: u32 = 0x2000;
 
 /// A stationary unit's display-facing state — the client's `CGUnit+0xc98` goal plus its
@@ -80,8 +79,8 @@ pub(crate) struct DisplayFacing {
 
 /// A stationary unit's display facing **moved this frame**: the signed yaw the pump applied (WoW
 /// yaw, positive = counterclockwise = turning left). The anim layer folds it into the unit's turn
-/// view — the client's facing-delta shuffle latch (`0x607ed0` bits `0x800`/`0x1000`, wow-re
-/// `loop-replay-fidget.md` §5b; decision 0123) — so a squaring-up creature foot-shuffles instead of
+/// view — the client's facing-delta shuffle latch (`0x607ed0` bits `0x800`/`0x1000`;
+/// decision 0123) — so a squaring-up creature foot-shuffles instead of
 /// pivoting frozen, and each shuffle's return to Stand re-rolls the idle variation.
 ///
 /// **The applied step, not the remaining gap** (decision 1655): the client's latch reads
@@ -199,8 +198,7 @@ fn filter_step(cur: f32, goal: f32, hist: &mut [f32; 4]) -> f32 {
 /// Turn every **stationary, client-governed** unit toward the goal the client's `0x600cd0` chain
 /// picks for it, through the one smoother that chain feeds ([`filter_step`]).
 ///
-/// The chain, in the client's exact branch order (wow-re `interaction-facing.md` §2) — the ordering
-/// *is* the behaviour:
+/// The chain, in the client's exact branch order — the ordering *is* the behaviour:
 ///
 /// | row | test | goal |
 /// |---|---|---|

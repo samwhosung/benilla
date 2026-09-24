@@ -31,8 +31,8 @@
 //! *release* never does, and neither does the follow's own synthesized input.
 //!
 //! The mechanism sits two layers below the keybinding stubs, which is why reading the handlers
-//! answers "nothing cancels follow" and is wrong about the behaviour — the same failure mode
-//! wow-re's RF-0079 hit on autorun. Every movement START emitter calls **`0x60e990`**, which
+//! answers "nothing cancels follow" and is wrong about the behaviour. Every movement START
+//! emitter calls **`0x60e990`**, which
 //! cancels at `0x60e9b5` unless the re-entrancy bracket `ds:0xc4da48` **bit 0** is set — and
 //! follow's own four emitters (`0x60e790`, `0x60e7f0`, `0x60e8a0`, `0x60e940`) set that bracket
 //! around their calls. A real key press never sets it. **That asymmetry is the entire mechanism.**
@@ -298,8 +298,8 @@ impl FollowInput<'_, '_> {
     /// follow and fires `AUTOFOLLOW_END` ([`super::state::MoverInput::torn_down`])? Not an input, but the
     /// member of the cancel set that is a *state*, and the one benilla had wrong in both directions.
     ///
-    /// `rf86-autofollow-cancel-set.md` §5 named the mechanism as the health test at `0x5144f8`, and
-    /// this file passed the **root** instead. wow-re's §6.3 sharpens it: `0x5146d6 call 0x60fb60`
+    /// The mechanism runs through the health test at `0x5144f8`, and this file passed the **root**
+    /// instead. More exactly, `0x5146d6 call 0x60fb60`
     /// is reached only when *both* predicates are down (`0x5146c3` and `0x5146ce` both not taken),
     /// so a pure ROOT — which benilla cancelled on — does **not** end a follow in the reference, and
     /// death — which benilla did not cancel on, so a follow taken into death kept steering the
@@ -359,8 +359,8 @@ pub(super) fn steer_follow(
         input.rig.look == Some(LookButton::Right),
         // The input tick on its teardown leg, or the body handed to a server spline. The ride term
         // is benilla's own and predates this: it is not one of `0x5144e0`'s conjuncts (conjunct 4 is
-        // the Knockdown lockout, not a taxi test — wow-re §6.2), and nothing in this round bears on
-        // it either way, so it is left exactly as it stood.
+        // the Knockdown lockout, not a taxi test), and nothing known bears on it either way, so it
+        // is left exactly as it stood.
         input.input_torn_down(player.modes.rooted, player.foreign_mover.is_none())
             || player.server_riding(),
     ) {

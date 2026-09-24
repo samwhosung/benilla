@@ -3,12 +3,10 @@
 //!
 //! Each is a CVar the reference registers and this client ticked at nothing: the census in
 //! `ui_script::options_tests` had all four on its unbacked list with a byte-level spec and no
-//! feature. wow-re's `ui/scratch/camera-cvar-gates.md` (the §5 nine-worker round this work
-//! dispatched, 2026-09-09) carries the gates; `camera-smooth-style.md` §9 and `camera-shake-law.md`
-//! carry the kernels they gate.
+//! feature.
 //!
 //! **The sign convention is the one thing to keep straight.** The reference's pitch is positive
-//! **downward** (`follow-camera.md` Q3: `row 0 = (cos y·cos p, sin y·cos p, −sin p)`, `eye =
+//! **downward** (`0x511f40`: `row 0 = (cos y·cos p, sin y·cos p, −sin p)`, `0x50de00`: `eye =
 //! pivot − dist·forward`, so `+89°` is the eye above the target looking down). benilla's
 //! [`super::camera::FlyCam::pitch`] is a Bevy `EulerRot::YXZ` X-rotation with `forward = rot ·
 //! −Z`, so **positive is upward** — the exact negation. Every reference predicate below is
@@ -155,7 +153,7 @@ impl Default for CameraOptions {
 pub(super) struct DynamicsInput {
     pub(super) options: CameraOptions,
     /// `cameraSmoothStyle` **raw** — the terrain-tilt matrix indexes the un-remapped value
-    /// (`camera-smooth-style.md` §2b), so this is the knob and not the auto-follow's own
+    /// (`0x50dbc0`), so this is the knob and not the auto-follow's own
     /// far-sight-adjusted copy.
     pub(super) smooth_style: super::camera::FollowStyle,
     /// `cameraSmoothTrackingStyle` — read by exactly one thing here, [`SmartPivot::advance`]'s
@@ -229,16 +227,14 @@ use crate::creature_anim::move_flags as mf;
 /// **`cameraPivot` — "smart pivot"**: the camera the collision solver has pinned against geometry
 /// tilts its *view* instead of swinging its *arm*.
 ///
-/// The whole feature is one extra pitch channel, `[cam+0x104]`, and where it is applied. wow-re
-/// `camera-cvar-gates.md` §3, VERIFIED:
+/// The whole feature is one extra pitch channel, `[cam+0x104]`, and where it is applied:
 ///
 /// - **The gate `0x510690`** is `obj != 0 ∧ typemask bit 0x8 ∧ cameraPivot ∧ ¬translating ∧
 ///   [cam+0xf4] ≤ 0`, returning the solver's own clip flags `[cam+0x90] & 0x30000` — which nothing
 ///   but `0x50e570` writes (it builds them from its two sweep hits and the driver ORs the return
 ///   in at `0x50ed6a`). So **the verdict is nonzero only in a frame the camera was actually
 ///   clipped**, which is what makes this "smart": an unobstructed camera never pivots.
-///   `[cam+0xf4] ≤ 0` is the eye at or below the target looking level-or-**up** — the direction
-///   word `pivot-height-glide.md` §1 had inverted, corrected by the same round.
+///   `[cam+0xf4] ≤ 0` is the eye at or below the target looking level-or-**up**.
 /// - **The routing `0x50fee0`.** A true verdict *plus* a mostly-vertical drag
 ///   (`|dPitch| > cameraPivotDYMin ∧ |dYaw| < cameraPivotDXMax`) — or a bias already displaced
 ///   past `0.001` with the ease not armed — accumulates the pitch delta into `+0x104` instead of
@@ -384,8 +380,7 @@ impl SmartPivot {
 /// Registered `"0"`, so this one is OFF out of the box — building it changes nothing until a player
 /// ticks the box, which is exactly why it could sit unbuilt with a full byte-level spec.
 ///
-/// Three pieces, all VERIFIED (wow-re `camera-cvar-kernels.md` §2 + `camera-smooth-style.md` §9,
-/// the two rounds this work dispatched and the one that preceded it):
+/// Three pieces:
 ///
 /// **The probe (`0x50d900`), which does not look under the character at all.** It samples the
 /// ground **ahead**: a horizontal ray `10/3` yd along the unit's facing from `feet + 5/3` up, its
@@ -416,7 +411,7 @@ impl SmartPivot {
 /// suspension.
 ///
 /// The sink is the third additive pitch: `0x50f810` folds `+0x108` into the view pitch, and unlike
-/// the pivot bias it sits INSIDE the ±89° clamp (`camera-cvar-kernels.md` §1).
+/// the pivot bias it sits INSIDE the ±89° clamp.
 pub(super) struct TerrainTilt {
     /// The ground channel `+0x108` — angular, rate `cameraGroundSmoothSpeed`.
     ground: SmoothChannel,
@@ -448,8 +443,8 @@ impl Default for TerrainTilt {
 /// **A code table, not ninety CVar rows**, following exactly what 1502 did for its sibling family
 /// `cameraSmooth<Style><State>{Delay,Factor}` ([`super::camera::FollowStyle::row`]): the reference
 /// registers these through a loop nest that a per-name row here would only obscure, and the matrix
-/// is a *law*, not a setting anybody tunes. The values are the full byte-read dump in wow-re
-/// `camera-smooth-style.md` §3C.
+/// is a *law*, not a setting anybody tunes. The values are the full byte-read dump of its
+/// default-string table `0x84f620`.
 type TiltRow = (f32, f32, f32);
 
 /// The ten movement states `0x50dbc0` classifies into, in the reference's own index order (the
@@ -457,7 +452,7 @@ type TiltRow = (f32, f32, f32);
 ///
 /// **`Jump` (3) is unreachable in the reference** and is unreachable here: `0x50dc28` and
 /// `0x50dc35` test the same bit of the same reloaded dword, so the second `je` is unconditional and
-/// the block that would emit state 3 is dead (bytes verified, `camera-smooth-style.md` §2). Its row
+/// the block that would emit state 3 is dead. Its row
 /// carries the disable sentinel at every style anyway, so nothing observable rides on it — it is
 /// kept in the enum because the *matrix* keeps it, and dropping it would silently re-index the
 /// other nine.
@@ -546,8 +541,8 @@ impl TerrainTilt {
     /// So crossing a slope change mid-drag leaves a step of exactly the difference between the
     /// lean at press and at release. That is the reference's behaviour, not a defect of this
     /// transcription: the reference eases that step through the pitch channel at
-    /// `cameraPitchSmoothSpeed`, and benilla's pitch is an immediate write (the §5 verdict on
-    /// `0x510120`), so here it lands in one frame. Named, not smoothed over.
+    /// `cameraPitchSmoothSpeed`, and benilla's pitch is an immediate write (`0x510120`), so here
+    /// it lands in one frame. Named, not smoothed over.
     pub(super) fn hand_off(&mut self, freelook: bool) -> f32 {
         if freelook == self.handed_off {
             return 0.0;
@@ -647,12 +642,11 @@ pub(super) const PROBE_DROP: f32 = 64.0 / 9.0;
 /// **`cameraBobbing` — head bob**: the eye's small figure-of-eight while you walk, in first person
 /// only.
 ///
-/// Registered `"0"`, so this ships OFF like Follow Terrain. wow-re `camera-cvar-kernels.md` §4 and
-/// `camera-cvar-gates.md` §2 (the two rounds this work dispatched), VERIFIED:
+/// Registered `"0"`, so this ships OFF like Follow Terrain.
 ///
 /// **The gate `0x5105e0` has ten conjuncts, and the first one is the surprise.** `[cam+0xec] <= 1/6`
-/// is a compare on the **zoom distance**, inclusive — so head bob is *first person only*, which
-/// nothing before that round had said. The rest: a non-null UNIT-or-PLAYER subject, not the
+/// is a compare on the **zoom distance**, inclusive — so head bob is *first person only*.
+/// The rest: a non-null UNIT-or-PLAYER subject, not the
 /// aura-76 FOV lock, `cameraBobbing`, not SWIMMING, not FALLING, `MOUNTDISPLAYID <= 0`, not on a
 /// taxi — and, as its tenth, the **return mask itself**: `0x510675 and eax,0x200`, so the whole
 /// predicate is false unless a bobbing *session* is armed. (`0x51063d`–`0x510653` is dead code — a
@@ -1530,7 +1524,7 @@ mod tests {
         assert_bounded_step((3.9, 6.0), DT, amplitude * 0.5, &mut step);
     }
 
-    /// **The mouse-look hand-off** (`0x50d500` push / `0x50d520` pop; wow-re's §5 re-audit Q-C).
+    /// **The mouse-look hand-off** (`0x50d500` push / `0x50d520` pop).
     ///
     /// The lean moves *into* the pitch for the duration of a drag and comes back out on release,
     /// so the view does not move at either edge — and a slope change crossed mid-drag leaves
