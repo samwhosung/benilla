@@ -65,8 +65,8 @@ pub(crate) struct LiquidAssets {
 /// reference decides fog per *pass*, not per liquid type, and a WMO group's own pool is drawn by the
 /// WMO liquid pass, which re-submits the smoothed interior fog block (`0x6b6323`–`0x6b6342`) under
 /// the same `[0xca7f00]` gate as the WMO *geometry* pass — so a pool and the walls around it always
-/// fog alike, while ADT liquid submits no fog and draws under the once-a-frame scene block. (VERIFIED
-/// wow-re `fog-env-state` §5's 6-site submit census + `liquid-render-state-sided` §5; decision 0691.)
+/// fog alike, while ADT liquid submits no fog and draws under the once-a-frame scene block
+/// (decision 0691).
 /// `WmoInterior` is exactly the old `interior == true`, so [`Self::interior_fog`] is the whole of
 /// what that flag used to say — with the renderer identity now carried alongside it rather than
 /// inferred from it.
@@ -131,9 +131,9 @@ struct LiquidKey {
 
 /// Does this surface take the reference's animated stage-0 texture matrix — the lava/slime scroll?
 ///
-/// **Only WMO MLIQ surfaces whose type nibble is 6 or 7** (VERIFIED wow-re `liquid-uv-scroll-law.md`:
-/// the WMO magma/slime kernel `0x6b68f0` gates on `and esi,0xc; cmp esi,4` over the `0x6ba970`
-/// nibble, and builds a matrix that is identity except element 13 = the v-translate). Three
+/// **Only WMO MLIQ surfaces whose type nibble is 6 or 7** (the WMO magma/slime kernel `0x6b68f0`
+/// gates on `and esi,0xc; cmp esi,4` over the `0x6ba970` nibble, and builds a matrix that is
+/// identity except element 13 = the v-translate). Three
 /// consequences that are easy to get wrong, all of them load-bearing:
 ///
 /// * **Nibbles 2 and 3 do NOT scroll**, though they reach the same kernel and draw the same
@@ -211,9 +211,9 @@ pub(super) fn hide_liquid_surfaces(mut surfaces: Query<&mut Visibility, With<Liq
     }
 }
 
-/// What the **above-water ambient-loop system** needs beyond the surface's geometry (wow-re
-/// `liquid-ambience-loop.md`, decision 0506): the sound-class nibble the driver resolves through
-/// `SoundWaterType.dbc`. Attached to **every** liquid surface, the fullbright kinds included (the
+/// What the **above-water ambient-loop system** needs beyond the surface's geometry (decision
+/// 0506): the sound-class nibble the driver resolves through `SoundWaterType.dbc` (`0x54e0a0`).
+/// Attached to **every** liquid surface, the fullbright kinds included (the
 /// Ironforge lava rumble, Undercity slime).
 ///
 /// It used to carry its own copy of the footprint — bounds + a surface height — because when 0506
@@ -244,7 +244,7 @@ pub(crate) fn spawn_liquids<'a>(
     };
     for lq in liquids {
         // ADT liquid always takes the SCENE fog: the ADT liquid passes submit no fog block of their
-        // own, so they draw under the once-a-frame scene submit (wow-re `fog-env-state` §5).
+        // own, so they draw under the once-a-frame scene submit (`0x66ff20`).
         //
         // And it NEVER scrolls — `scroll: false` here is not a default, it is the finding. Shipped
         // ADT magma is nibble 6 throughout, the very nibble that scrolls on the WMO path, but the
@@ -494,8 +494,8 @@ const FRAME_SETS: &[(LiquidKind, &str, &str, u32)] = &[
     (LiquidKind::Rapids, "river", "fast_a", 16),
     (LiquidKind::Ocean, "ocean", "ocean_h", 30),
     // The fullbright kinds: opaque + unlit + fogged, the animated texture IS the body colour, there
-    // being no vertex colour or depth LUT to modulate it by (VERIFIED wow-re
-    // `liquid-render-state-sided` §5). **Magma reaches here from BOTH liquid systems** — the WMO
+    // being no vertex colour or depth LUT to modulate it by (`0x6b68f0`). **Magma reaches here from
+    // BOTH liquid systems** — the WMO
     // MLIQ pools *and* the ADT MCLQ magma queue (B21: the 128 open-world lava chunks, Burning
     // Steppes/Searing Gorge/Un'Goro); only slime is WMO-only, the reference having no ADT queue for
     // it at all. See [`benilla_formats::LiquidKind`].
@@ -524,9 +524,9 @@ pub(super) fn setup_liquid(
             warn!("liquid: no frames for {stem} — {kind:?} water will not render");
             continue;
         };
-        // Blend state is per KIND, and this is where it is decided (VERIFIED wow-re
-        // `liquid-render-state-sided` — the device render-state *defaults* at `0x593bf0` are the baseline
-        // a liquid batch draws under, because every setter in the reference is Push/Pop-scoped):
+        // Blend state is per KIND, and this is where it is decided (the device render-state
+        // *defaults* at `0x593bf0` are the baseline a liquid batch draws under, because every
+        // setter in the reference is Push/Pop-scoped):
         //
         //   * water / ocean — the reference sets EGxBlend 2 (SRC_ALPHA / INV_SRC_ALPHA) and depth-write
         //     OFF, which is exactly Bevy's `AlphaMode::Blend` transparent pass. Unchanged. (Both are
@@ -539,7 +539,7 @@ pub(super) fn setup_liquid(
         //     it. Foam already carries `depth_bias: 1.0` for the coplanar tie, so it still wins.
         //
         // Two-sided is universal — all four liquid passes force GL_CULL_FACE off at entry against a
-        // cull-ON baseline, and `glFrontFace` is never imported, so winding is moot (§6).
+        // cull-ON baseline (`0x59d7d8`), and `glFrontFace` is never imported, so winding is moot.
         let alpha_mode = if kind.is_fullbright() {
             AlphaMode::Opaque
         } else {

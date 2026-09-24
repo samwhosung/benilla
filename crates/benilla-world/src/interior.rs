@@ -1,7 +1,6 @@
 //! Interior lighting classification for ENTITIES: which unit/GameObject M2s stand inside a WMO room.
 //!
-//! ONE law lights every indoor entity M2 (wow-re `unit-m2-shader-light.md`, the Goldshire-inn
-//! capture's byte-arbitrated trio — superseding `wmo-lit-selector.md` §3.3's class split):
+//! ONE law lights every indoor entity M2 (the Goldshire-inn capture):
 //!
 //! - **Every entity M2** — unit, player, GameObject, held item — is registered with the same
 //!   entity-node fill (`Node::SetModel 0x6716f0` ← the model setters, dispatched `0x672a20`): its
@@ -36,9 +35,8 @@
 //! [`InteriorLit::anchor`] — a body's parts must never split across light laws (group bounding
 //! boxes did exactly that at floor level; director-caught, 2026-07-12), and a held/equipped item
 //! M2 anchors at its WEARER's root, never its own carried position: the reference aliases the
-//! wearer's light collector into each item by pointer (`[item+0x3b8]=[wearer+0x3b8]`, `0x718960` —
-//! `unit-light-combine-storm.md`; a hand-anchored shield split from its body, director-caught,
-//! 2026-07-13).
+//! wearer's light collector into each item by pointer (`[item+0x3b8]=[wearer+0x3b8]`, `0x718960`;
+//! a hand-anchored shield split from its body, director-caught, 2026-07-13).
 
 use std::collections::HashSet;
 
@@ -60,7 +58,7 @@ use benilla_assets::materials::WowModelMaterial;
 
 /// Squared distance (yd²) an entity must move before it's re-tested: an epsilon — the reference
 /// runs the classify + footprint chain EVERY frame for units (the node is unlinked, so the
-/// WorldFrame ramp tail reaches `0x69e280` per tick; wow-re `unit-light-combine-storm.md` c1), so
+/// WorldFrame ramp tail reaches `0x69e280` per tick), so
 /// a moving entity re-samples per frame and the continuous MOCV field never quantizes into steps
 /// (the 0.5-yd gate here was the forge's per-step light flash). A standing entity still costs one
 /// position compare and nothing else.
@@ -118,7 +116,7 @@ pub(crate) enum InteriorKind {
 /// out entirely (a WMO-display part, which has no interior variant to swap to).
 ///
 /// **Every batch of a model goes through this, cards included.** The reference has one light node
-/// per object and every batch shades through the same node fill (wow-re `unit-m2-shader-light.md`);
+/// per object and every batch shades through the same node fill (`0x7192b0`);
 /// a billboard BONE re-orients geometry, it does not re-route light. Our billboard batches spawn as
 /// world ROOTS so the facing system can own their transform (0153) — an implementation detail that
 /// must not reach the light, and which did while this policy was written out longhand at each spawn
@@ -165,8 +163,8 @@ enum AppliedLaw {
 /// The unit's own body-model bake centre (M2 vertex-box centre, model-local) on the net entity
 /// ROOT — the interior fold's MOLR reference point for EVERY part that shares the root's verdict,
 /// held items included. The reference has exactly one light node per unit; an equipped item M2
-/// aliases the wearer's collector by pointer (`[item+0x3b8]=[wearer+0x3b8]`, `0x718960` — wow-re
-/// `unit-light-combine-storm.md`), so an item never folds from its own carried position.
+/// aliases the wearer's collector by pointer (`[item+0x3b8]=[wearer+0x3b8]`, `0x718960`), so an
+/// item never folds from its own carried position.
 ///
 /// For a [`ContainmentAttach`] anchor it is also the **attach anchor** — the reference's
 /// `[node+0x5c]`, the same world point (decision 0776).
@@ -207,8 +205,8 @@ pub struct LitParts(Vec<Entity>);
 /// reference creates the node from the object's TYPEID — `0x613e10` → `0x670db0` → `0x7134b0` for
 /// every UNIT/PLAYER/GAMEOBJECT/DYNAMICOBJECT/CORPSE — never from what its batches happen to do,
 /// and a particle draw commits that node's light through the same per-batch state producer a
-/// submesh does (the reference has no particle material: it synthesizes an `M2Material` from the
-/// emitter's file record every draw). wow-re `part-lit-normal-space.md` §6.2/§6.7.
+/// submesh does (`0x70baf0`) — the reference has no particle material: it synthesizes an
+/// `M2Material` from the emitter's file record every draw (`0x70d8b0`).
 ///
 /// Onyxia's lava trap is the case that proves the split: all five of `ONYZIASLAIRLAVATRAP.M2`'s
 /// mesh batches are UNLIT (`m2batch`: flags 0x13) while emitters #0/#1/#2 are lit, so the object
@@ -227,7 +225,7 @@ pub struct LitEmitters(Vec<Entity>);
 
 /// The constant RGB a LIT particle of this anchor's model is multiplied by — the anchor's own
 /// committed light evaluated along the **world up axis**, which is the only normal a particle quad
-/// ever carries (one constant per draw, wow-re `part-lit-normal-space.md` §2/§3; decision 1696).
+/// ever carries (one constant per draw, `0x7b3fd0`, `0x58b0b0`; decision 1696).
 ///
 /// Present only while the anchor is on the [`AppliedLaw::Bake`] law. Its ABSENCE is the exterior
 /// lane and means "take the scene's light", which the effect shader applies by itself — so an
@@ -241,8 +239,8 @@ pub struct ParticleLight(pub [f32; 3]);
 /// [`ParticleLight`] is the whole fixed-function term (`ambient + 0.9·diffuse + Σ lamps`) because
 /// that is what a lit particle quad receives. One consumer needs strictly less: a **vertex format
 /// with no normal** disables the normal array outright, so its draw evaluates only the ambient
-/// product — `out = (Σ enabled lights' Ambient) × authoredColour` (wow-re
-/// `gx/scratch/format7-lighting-term.md`). The weapon swing trail is that draw, and it inherits
+/// product — `out = (Σ enabled lights' Ambient) × authoredColour` (`0x592a60`). The weapon swing
+/// trail is that draw, and it inherits
 /// the *wearer's* committed light, four-way byte-derived through
 /// `0x70d982 → 0x70ca50 → 0x70baf0` plus the held-weapon `[+0x3b8]` alias.
 ///
@@ -1225,9 +1223,8 @@ mod tests {
     /// part lists, so it never visited one. Onyxia's 104 lava traps are exactly that shape
     /// (`m2batch`: all five batches flags 0x13) with three LIT emitters each, and they stood in a
     /// WMO interior taking the day/night sun. The reference builds the node from the object's
-    /// TYPEID and fills it every frame regardless of what its batches do (wow-re
-    /// `part-lit-normal-space.md` §6.2), so a lit EMITTER is a consumer of it exactly as a lit
-    /// batch is.
+    /// TYPEID and fills it every frame regardless of what its batches do (`0x613e10`, `0x7192b0`),
+    /// so a lit EMITTER is a consumer of it exactly as a lit batch is.
     ///
     /// The control is the second anchor: an object with emitters but none of them lit registers
     /// no edge, is not visited, and costs the walk nothing.

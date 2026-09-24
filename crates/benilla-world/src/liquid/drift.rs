@@ -1,9 +1,7 @@
 //! The underwater **drift cloud** — the 4000-mote field the reference draws while the camera eye
 //! is inside a liquid (decision 1814).
 //!
-//! Ground truth: wow-re `system/lighting/scratch/drift-cloud-emission-law.md`, a §5 six-worker
-//! round commissioned for this build, plus the difftested kernel transcription in wow-re
-//! `crates/lighting/src/drift.rs`. The object is `World.cpp`'s own — `0xfa40` bytes from
+//! The object is `World.cpp`'s own — `0xfa40` bytes from
 //! `0x66f971`, ctor `0x68e5a0`, held by the pointer `[0xc63180]` — and it is **not** part of the
 //! weather manager `[0xc6326c]`: the two share no state and no code (verified by complete
 //! enumeration; 12 references to the cloud, none in the CMapWeather band).
@@ -91,11 +89,11 @@ const GUST_AMP_UNIT: f32 = 0.005;
 /// The vertical squash on a freshly rolled gust direction (`[0x8029b0]`), applied **before**
 /// normalising.
 ///
-/// It is a bias, **not a bound** — a correction to the RE note's first reading, checked at the
-/// difftested transcription and by Monte Carlo. `|z|/|xy| = 0.25·|cot a|` with `a` uniform on
-/// `[−π, π)`, so `atan(0.25) = 14.04°` is the **median** elevation (quartiles 5.9°/31.1°): about
-/// 15.6% of rolls are steeper than 45° and the limit as `a → 0` is straight up. The one hard
-/// constraint is the `fchs` at `0x68e27d`, which forces `z ≥ 0` — the gust never blows downward.
+/// It is a bias, **not a bound** — checked against the function's bytes and by Monte Carlo.
+/// `|z|/|xy| = 0.25·|cot a|` with `a` uniform on `[−π, π)`, so `atan(0.25) = 14.04°` is the
+/// **median** elevation (quartiles 5.9°/31.1°): about 15.6% of rolls are steeper than 45° and the
+/// limit as `a → 0` is straight up. The one hard constraint is the `fchs` at `0x68e27d`, which
+/// forces `z ≥ 0` — the gust never blows downward.
 const GUST_RISE: f32 = 0.25;
 
 /// Magma's motion is not a gust at all: a true velocity of `0.02` yd/s **downward**
@@ -105,14 +103,13 @@ const MAGMA_SINK: f32 = -0.02;
 /// The frame rate the water gust is denominated in — **our deviation, and the whole of it.**
 ///
 /// `0x68e4f0`'s `mode <= 1` leg writes `out = sin(term·2π)·amp·dir` and the advect adds it to the
-/// position **with no `dt` factor** (the RE round flagged this as load-bearing; only magma's leg
-/// multiplies by `dt`). So the reference's mote drift is frame-rate dependent: at **peak** of the
-/// half-sine, ~0.3 yd/s at 30 fps, ~0.6 at 60, and ~1.2 on the 120 Hz panel this is being built on
-/// — a gust's *mean* is `2/π` of that, so ~0.19–0.38 yd/s at 60. (Peak and mean are labelled here
-/// because the RE's own table shipped one as the other for a day; the ratio, which is what this
-/// constant is about, is the same either way.) There is no single faithful speed to port — the
-/// binary's own answer spans 2× across the era's hardware — so reproducing the literal per-frame
-/// step would not be "the reference's speed", it would be *this machine's*.
+/// position **with no `dt` factor** (this is load-bearing; only magma's leg multiplies by `dt`). So
+/// the reference's mote drift is frame-rate dependent: at **peak** of the half-sine, ~0.3 yd/s at
+/// 30 fps, ~0.6 at 60, and ~1.2 on the 120 Hz panel this is being built on — a gust's *mean* is
+/// `2/π` of that, so ~0.19–0.38 yd/s at 60. (Peak and mean are labelled here; the ratio, which is
+/// what this constant is about, is the same either way.) There is no single faithful speed to port
+/// — the binary's own answer spans 2× across the era's hardware — so reproducing the literal
+/// per-frame step would not be "the reference's speed", it would be *this machine's*.
 ///
 /// We take the top of the era's range, 60 Hz, and scale by `dt·60`. This is the same move as the
 /// snow flake's [`SNOW_PX_REF_HEIGHT`](crate::weather::precip): denominate the reference's
@@ -741,10 +738,10 @@ mod tests {
         elev.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let median = elev[elev.len() / 2];
         let steep = elev.iter().filter(|e| **e > 45.0).count() as f32 / elev.len() as f32;
-        // `atan(0.25)` is the MEDIAN elevation, not a bound — the RE note's first reading said
-        // "always within 14.04° of horizontal", which the formula does not support and this test
-        // exists to keep anyone from re-introducing as a clamp. Closed forms: median
-        // `atan(0.25) = 14.036°`, and `P(elev > 45°) = (2/π)·atan(0.25) = 0.156`.
+        // `atan(0.25)` is the MEDIAN elevation, not a bound — "always within 14.04° of horizontal"
+        // is a reading the formula does not support, and this test exists to keep anyone from
+        // re-introducing it as a clamp. Closed forms: median `atan(0.25) = 14.036°`, and `P(elev >
+        // 45°) = (2/π)·atan(0.25) = 0.156`.
         assert!(
             (median - 0.25f32.atan().to_degrees()).abs() < 1.0,
             "median elevation {median} is not atan(0.25)"

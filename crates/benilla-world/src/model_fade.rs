@@ -116,7 +116,7 @@ pub fn fade_band(radius: f32) -> Option<(f32, f32)> {
     Some((start + radius, start + radius + range))
 }
 
-/// The faithful per-object **appear / spawn fade** (`wow-5875-re` object-layer/`appear-fade`): a CGObject
+/// The faithful per-object **appear / spawn fade**: a CGObject
 /// — every streamed unit, GameObject, and player — ramps its render alpha `α = t³` over **2 s wall-clock**
 /// when it first becomes visible, then latches opaque. This is the *temporal* sibling of [`DoodadFade`]'s
 /// *distance* fade: both drive the **same** per-instance render-alpha channel (the `MeshTag` the shader
@@ -178,8 +178,8 @@ impl RenderFade {
     }
 }
 
-/// The reference's appear-fade duration — `FadeTo(1.0, 2000 ms)` (`wow-5875-re` object-layer/`appear-fade`:
-/// byte `0x7d0`, wall-clock via `OsGetAsyncTimeMs`, framerate-independent).
+/// The reference's appear-fade duration — `FadeTo(1.0, 2000 ms)` (byte `0x7d0`, wall-clock via
+/// `OsGetAsyncTimeMs`, framerate-independent).
 pub const APPEAR_FADE_SECS: f32 = 2.0;
 
 impl RenderFade {
@@ -203,8 +203,7 @@ pub fn fade_alpha(from: f32, to: f32, t: f32) -> f32 {
     from + (to - from) * t * t * t
 }
 
-/// The reference's **teardown** render-alpha — the `SWModelFadeout` pump `0x672ef0`
-/// (`doodad_despawn_fade`, wow-re models PRIMITIVE, diffed bit-exact against the x87), which is
+/// The reference's **teardown** render-alpha — the `SWModelFadeout` pump `0x672ef0`, which is
 /// what drives a model handed to the scheduler `0x672df0` by the base OnDeactivate `0x6145e0`
 /// (decision 2203):
 ///
@@ -231,9 +230,9 @@ pub fn teardown_fade_alpha(start_alpha: f32, t_frac: f32) -> f32 {
 pub const TEARDOWN_MIN_ALPHA: f32 = 0.01;
 
 /// One model instance's live **render alpha** — the reference's `CM2Model+0x19c`, and the single
-/// slot every fade in the client writes through (wow-re object-layer/`appear-fade` §"the alpha
-/// slot"): `+0x19c = argAlpha · +0x180`, with `+0x180 = obj+0x100 (master) · obj+0xf4 (the appear
-/// ramp)` for a CGObject and the distance fade for a map doodad.
+/// slot every fade in the client writes through: `+0x19c = argAlpha · +0x180`, with `+0x180 =
+/// obj+0x100 (master) · obj+0xf4 (the appear ramp)` for a CGObject and the distance fade for a
+/// map doodad.
 ///
 /// benilla keeps that alpha on the MESH side in the per-part `MeshTag` (the appear/despawn ramp,
 /// the self-avatar feather, the doodad fade — three writers, one channel). This component is the
@@ -243,7 +242,7 @@ pub const TEARDOWN_MIN_ALPHA: f32 = 0.01;
 ///
 /// An **attached** model inherits its parent's, which is why an item's effects read their WEARER's
 /// (the `0x714000` recursion: a child model with `[model+0x1cc] ≠ 0` composes onto the parent's
-/// computed colours and alpha — wow-re `selection-circle.md` §scope, `0x714260`'s `[ebp+0x14]`).
+/// computed colours and alpha — `0x714260`'s `[ebp+0x14]`).
 /// That inheritance is [`ParentModel`] + [`ModelAlphas`], never a spawn site pointing at the top
 /// of the chain by hand (decision 0833).
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -619,16 +618,16 @@ pub(crate) fn publish_model_alpha(
 }
 
 /// The camera-to-target span (yd) over which the **player's own** avatar fades from hidden (camera near)
-/// to opaque (camera out) as you zoom into first-person. VERIFIED from `WoW.exe` 5875 (`0x8089b0`; the
-/// self-model transparency setter `0x5b7bb0`, recorded in wow-re `system/ui/scratch/follow-camera.md`).
+/// to opaque (camera out) as you zoom into first-person. From `WoW.exe` 5875 (`0x8089b0`; the
+/// self-model transparency setter `0x5b7bb0`).
 pub const SELF_FADE_WINDOW: f32 = 1.8315;
 /// Distance-above-nearclip below which the avatar **hard-hides** (fully invisible — true first-person).
 /// VERIFIED `0x5b7bb0`: `D ≤ 0.00278` ⇒ α 0 + first-person, else the cosine ramp.
 pub const SELF_FADE_HIDE: f32 = 0.00278;
 
 /// The faithful **self-avatar transparency** as the camera nears its target — the fade that turns your
-/// own character translucent while zooming in, then fully invisible in first-person. VERIFIED from
-/// `WoW.exe` 5875 (`0x5b7bb0`, wow-re `follow-camera`): a cosine smoothstep on the camera-to-target
+/// own character translucent while zooming in, then fully invisible in first-person. From
+/// `WoW.exe` 5875 (`0x5b7bb0`): a cosine smoothstep on the camera-to-target
 /// distance, `α = (1 − cos(π·D/F))/2` over `D = dist − nearclip ∈ (SELF_FADE_HIDE, window]`. Below
 /// [`SELF_FADE_HIDE`] above the near clip the model hard-hides (`0.0`); at/after `window` it's opaque
 /// (`1.0`). `nearclip` is the camera's near-plane distance — the fade completes exactly as the near
@@ -688,7 +687,7 @@ pub fn apply_render_fade(
         };
         // The fade owns the alpha field while it lives, so it is also where the batch's animated
         // material factor multiplies in — the reference's combine is literally a product,
-        // `A = instanceAlpha × colourAlpha × weight` (wow-re `m2-alpha-combine-cull.md`), and the
+        // `A = instanceAlpha × colourAlpha × weight` (`0x707b0b`, `0x707b33`), and the
         // fade ramp IS this instance's alpha. Without this a unit appearing mid-Death would flash
         // its death-only geometry opaque for the length of the ramp.
         let alpha = fade.alpha_at(t) * anim.map_or(1.0, |a| a.current);
@@ -887,7 +886,7 @@ pub struct FadeMaterials {
     /// exterior twin's lit-outdoor intensity (0355). `None` for parts without a bake variant.
     pub bake_blend: Option<Handle<WowModelMaterial>>,
     /// The depth-prime twin material ([`crate::model_render::zfill_material`] — the reference's
-    /// `M2UseZFill` clone, wow-re `m2-blend-promotion-zfill.md` §4, decision 0831). While this
+    /// `M2UseZFill` clone, `0x707f7d`, decision 0831). While this
     /// part's instance alpha sits in `(0, 1)`, [`sync_zfill_twins`] keeps a colour-masked,
     /// z-writing child mesh alive on it, drawn before the model's colour parts — one blended layer
     /// everywhere, no self-overlap darkening. `None` for a batch whose material disables
@@ -1028,8 +1027,7 @@ impl PartFade {
 /// leading-block check `0x4651e1`) — invokes the object's vtable
 /// slot 1, whose base `0x6145e0` unbinds the scene handle and hands the model to the
 /// **`SWModelFadeout` scheduler `0x672df0`**: the model outlives the object and its alpha is
-/// ramped to zero by the per-frame pump `0x672ef0` (wow-re `models/models.md` §"Doodad despawn
-/// fade", `object-layer/scratch/w2d2-decomp.c` `FUN_006145e0`). So the object *is* freed on the
+/// ramped to zero by the per-frame pump `0x672ef0`. So the object *is* freed on the
 /// spot — the paragraph this supersedes was right about that — and the thing you watch fade is
 /// its orphaned model. One arm covers both wire routes, which is why one component does here.
 ///
@@ -1118,7 +1116,7 @@ pub(crate) fn apply_despawn_fade(
 }
 
 /// Arm one fadeable entity's teardown ramp, **from the alpha it is actually showing**. The
-/// scheduler is handed `obj+0xf4`, the object's live transition alpha (wow-re, decision 2203), so a
+/// scheduler is handed `obj+0xf4`, the object's live transition alpha (decision 2203), so a
 /// model torn down mid-appear-fade ramps down from where it stood — where a hardcoded `1.0` would
 /// snap it opaque first and then fade, a visible pop in the one case the fade exists to avoid.
 /// Ours lives in the part's `MeshTag`, which is the same channel the ramp is about to write.

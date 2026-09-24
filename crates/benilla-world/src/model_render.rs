@@ -27,8 +27,8 @@ pub use batch::{BatchVariants, EntityUvLane, M2BatchMaterials, ModelMaterials, S
 /// whatever order the queue happens to iterate — in a churning scene (a city) the coplanar layers
 /// swap draw order frame to frame and the composite strobes (Mod2x-then-Blend ≠ Blend-then-Mod2x).
 /// The reference cannot express the bug: it ties every draw command of one instance to a single
-/// sort key and keeps the *authored command order* inside the tie (wow-re
-/// `m2-blend-promotion-zfill.md` §4/§6; MOBA file order for WMO). This epsilon reproduces that
+/// sort key and keeps the *authored command order* inside the tie (`0x707db1`; MOBA file order for
+/// WMO). This epsilon reproduces that
 /// order through bevy's sort. Sized well under [`benilla_formats::owner_last_rung`]'s 1-yd floor
 /// (an effect still draws after every batch of its owner) and far over f32 noise on a ~500 yd
 /// sort distance (~4e-5).
@@ -95,8 +95,8 @@ pub struct MatKey {
     shade: ShadeSel,
     /// Authored batch index + 1 (0 = a legacy/unordered caller). Every ordered batch (M2 and WMO)
     /// folds it into the material's transparent SORT bias ([`BATCH_ORDER_SORT_EPS`]); WMO batches
-    /// additionally ride it into the vertex-stage clip-z nudge (the byte-verified MOBA draw-order
-    /// determinism, wow-5875-re models/scratch/wmo-batch-blend-depth-state.md).
+    /// additionally ride it into the vertex-stage clip-z nudge (the MOBA draw order is strict file
+    /// order, no sort — `0x6b4f10`/`0x6b5190`).
     batch_order: u16,
     /// The batch's UV-animation identity (decision 0130 phase 3): the `Arc<UvAnim>` pointer, so
     /// batches scrolling on different loops never share a material (their `sun_scale.zw` offsets
@@ -117,7 +117,7 @@ pub struct MatKey {
     /// The WMO MOMT WINDOW flag — an interior-group batch on the brighter midpoint light.
     window: bool,
     /// This material is a **depth-prime twin** ([`zfill_material`] — the reference's `M2UseZFill`
-    /// clone command, wow-re `m2-blend-promotion-zfill.md` §4): colour writes masked off, blend off,
+    /// clone command, `0x707f7d`): colour writes masked off, blend off,
     /// z-write on, drawn before its model's colour batches. Its own key axis so a twin can never
     /// dedupe onto a colour material.
     zfill: bool,
@@ -146,8 +146,8 @@ pub struct MatKey {
 /// The per-material static terrain-shade **selector** baked into `sun_scale.x` — NOT an intensity
 /// itself. `wow_model.wgsl` thresholds the selector (≥0.85 / ≥0.5) into the byte-true INTENSITY
 /// family (decision 0354: 2.5 lit / 1.0 day-night / 0.5 MCSH-shadowed — `[node+0xa4]`) scaling the
-/// global SH eval. It is the static half of the verified per-category matrix (wow-re
-/// `m2-interior-doodad-base-light` §6/§8/§9, decision 0173) — dynamic entities
+/// global SH eval. It is the static half of the verified per-category matrix (`0x69e280`,
+/// decision 0173) — dynamic entities
 /// (units/players/GameObjects) are always [`ShadeSel::Lit`] here and mix toward the shaded
 /// intensity per instance via the `MeshTag` shade byte ([`crate::entity_shade`]).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -215,9 +215,9 @@ pub type MaterialCache = benilla_assets::SpatialCache<MatKey, Handle<WowModelMat
 ///
 /// A twin builder passes the **SOURCE batch's blend mode** (never `ModelBlend::Blend`): the twin
 /// always blends — the reference's promotion is transparent-pass membership, not a per-mode state
-/// (`m2-blend-promotion-zfill.md` §1) — but the alpha TEST under promotion keys on the *stored*
-/// blend mode (§2): AlphaKey keeps its 224/255 cutout while blending, Opaque runs with no alpha
-/// test at all. The source blend is what sets [`TWIN_CUTOUT_MARKER`] right (decision 0842: a twin
+/// (`0x70c1fd`) — but the alpha TEST under promotion keys on the *stored* blend mode (`0x70c237`):
+/// AlphaKey keeps its 224/255 cutout while blending, Opaque runs with no alpha test at all. The
+/// source blend is what sets [`TWIN_CUTOUT_MARKER`] right (decision 0842: a twin
 /// built as `Blend` cut every texel under 224/255 out of a stealthed Opaque batch, which erased
 /// Gressil's blade body and left only its high-alpha rune pattern).
 pub fn model_material(
@@ -303,7 +303,7 @@ pub fn model_material(
     let source_cutout = blend == ModelBlend::AlphaTest && !alphatest_disabled();
     let alpha_mode = if is_additive || fade_variant {
         // A fade twin blends whatever its source blend is — the reference's promotion is
-        // transparent-pass membership (`m2-blend-promotion-zfill.md` §1); the source blend the
+        // transparent-pass membership (`0x70c1fd`); the source blend the
         // caller passed decides only the cutout marker below.
         AlphaMode::Blend
     } else {
@@ -357,9 +357,9 @@ pub fn model_material(
         },
         // No resolved texture → the reference DISABLES the texture stage and draws the batch in
         // its flat vertex/material colour — i.e. WHITE modulate, byte-verified for the no-source
-        // runtime-texture case (wow-re m2-runtime-texture-null-bind.md, their 914a1abd: slot 0 →
-        // glDisable, no default texture, alpha test passes everywhere — the Westfall lamppost's
-        // "bulb on" pane). The old muted-brown debug tint was unfaithful. Blend/cull state still
+        // runtime-texture case (`0x59baa0`: slot 0 → glDisable, no default texture, alpha test
+        // passes everywhere — the Westfall lamppost's "bulb on" pane). The old muted-brown debug
+        // tint was unfaithful. Blend/cull state still
         // honoured — an untextured fade twin must keep its per-instance alpha path.
         None => StandardMaterial {
             base_color: Color::WHITE,
@@ -388,8 +388,8 @@ pub fn model_material(
                     // (opaque WMO/M2 draws intermittently bound with blending enabled when an extra
                     // camera exists, bleeding the garbage BLP alpha channel — the "pale film on
                     // buildings" regression; full measured chain in the fix commit).
-                    // Bits 4-6 = the per-batch FOG POLICY (`FogPolicy` discriminant, wow-re
-                    // rf-weather-emission-timeline ROUND 4): 0 = scene so clutter/water materials —
+                    // Bits 4-6 = the per-batch FOG POLICY (`FogPolicy` discriminant, `0x70baf0`):
+                    // 0 = scene so clutter/water materials —
                     // which leave the byte's high bits 0 (see `WorldAssets::model_material`,
                     // `water_fx`) — keep ordinary scene fog; 1/2/3 = the additive/Mod/Mod2x BLACK/
                     // WHITE/GREY fog colours; 4 = fog disabled outright (render flag 0x02).
@@ -400,7 +400,7 @@ pub fn model_material(
                     // so the shader re-applies the hard 224/255 cutout on the unfaded alpha (the
                     // reference's promoted-AlphaKey ALPHAREF = A×224 — the same fixed silhouette). An
                     // Opaque source sets no bit: the reference disables its alpha test outright, steady
-                    // and promoted alike (`m2-blend-promotion-zfill.md` §2 keys ALPHAREF on the STORED
+                    // and promoted alike (`0x70c237` keys ALPHAREF on the STORED
                     // blend mode, mode 0 → ref 0).
                     f32::from(
                         u16::from(no_depth_write)
@@ -423,16 +423,15 @@ pub fn model_material(
                 // x = WMO (FFP N·L × MOCV, not the M2 SH probe); y = distance-fade blend variant; z = WMO
                 // interior group (sun off, baked MOCV carries the room); w = **unlit fullbright** (>0.5 ⇒
                 // bypass lighting in wow_model.wgsl): the M2 UNLIT (0x01) flag, or WMO UNLIT on an
-                // exterior-group batch (the interior drawer ignores it — section law, `wmo-lit-selector`).
-                // Additive is NOT fullbright: the real client *lights* additive batches unless 0x01 is set
-                // (wow-re `m2-no-envmap-texgen`'s lighting section — `DAT_00811fa8[4] = 1`), so an
-                // un-flagged additive (e.g. ArmorReflect shine) is lit. **That note's headline is
-                // otherwise wrong and this cite reaches only its lighting table** (decision 0971): the
-                // M2 path DOES generate env-map texcoords — in the vertex program, which the note's
-                // `SetRenderState` sweep could not see. See [`ENV_MAP_MARKER`].
+                // exterior-group batch (`0x6b4f10`; interior drawer `0x6b5190` ignores it, section
+                // law only). Additive is NOT fullbright: the real client *lights* additive batches
+                // unless 0x01 is set (`DAT_00811fa8[4] = 1`), so an
+                // un-flagged additive (e.g. ArmorReflect shine) is lit. The M2 path DOES generate
+                // env-map texcoords — in the vertex program, invisible to a SetRenderState-only
+                // sweep (decision 0971). See [`ENV_MAP_MARKER`].
                 // M2 Mod/Mod2x ARE fullbright regardless of 0x01 — the lighting table
-                // `DAT_00811fa8 = {1,1,1,1,1,0,0}` clears GL_LIGHTING for modes 5/6 (wow-re
-                // `m2-depth-blend-state`); WMO lighting stays flag-driven only (decision 0528).
+                // `DAT_00811fa8 = {1,1,1,1,1,0,0}` clears GL_LIGHTING for modes 5/6; WMO lighting
+                // stays flag-driven only (decision 0528).
                 model_flags: Vec4::new(
                     if is_wmo { 1.0 } else { 0.0 },
                     if fade_variant { 1.0 } else { 0.0 },
@@ -455,8 +454,8 @@ pub fn model_material(
                 // as a `WowModelKey` axis driving a fixed-function depth bias it made every batch index
                 // its own PIPELINE, and a first city sight compiled ~3000 of them synchronously on the
                 // render thread (decision 0837). `WOW_WMO_BIAS=0` (B38's A/B diagnostic) zeroes it here.
-                // zw = the batch's live **UV-animation offset** (decision 0130 phase 3, wow-re
-                // `m2-texanim-uv`: the real client adds the sampled translation to the stage UVs —
+                // zw = the batch's live **UV-animation offset** (decision 0130 phase 3, `0x714260`:
+                // the real client adds the sampled translation to the stage UVs —
                 // translation is un-pivoted, and no placed doodad uses rotation/scaling). Seeded at
                 // t = 0 here; `doodad_anim::tick_anim_materials` re-samples it per drawn frame on the
                 // shared clock (frozen in captures).
@@ -476,10 +475,9 @@ pub fn model_material(
                 // constant tint rides the vertex colours instead). A lane that never re-samples this
                 // shows exactly the old static bake; the effect lane clones + ticks it per instance.
                 // `w` = the WMO interior batch-class lane: an interior group's INT batches draw UNLIT
-                // (pure tex × MOCV) and its TRANS batches lerp lit↔bake by the MOCV alpha (wow-re
-                // `trace-forensics-abbey-interior-d3d` §2 — observed on the abbey at close range, the
-                // northshire "lit interior batch" datum having been a mis-identified unit). Exterior
-                // groups' batches (and every M2) ride 0 = the exterior law.
+                // (pure tex × MOCV) and its TRANS batches lerp lit↔bake by the MOCV alpha
+                // (`0x6b5190`, observed on the abbey at close range). Exterior groups' batches (and
+                // every M2) ride 0 = the exterior law.
                 tint: {
                     let t0 = rgb_anim.map_or([1.0, 1.0, 1.0], |a| a.sample(0.0));
                     let class_lane = match (is_interior && is_wmo, wmo_class) {
@@ -519,7 +517,7 @@ pub(crate) const ZFILL_MARKER: u16 = 1 << 9;
 /// the hard 224/255 cutout while blending (`wow_model.wgsl`). Set from the source blend mode by
 /// [`model_material`] (fade twins) and [`zfill_material`] (depth-prime twins); never on an
 /// Opaque-source twin — the reference runs mode 0 with the alpha test disabled, steady and
-/// promoted alike (`m2-blend-promotion-zfill.md` §2; decision 0842).
+/// promoted alike (`0x70c237`; decision 0842).
 pub(crate) const TWIN_CUTOUT_MARKER: u16 = 1 << 10;
 
 /// `clutter_fade.z` marker bit 12: this batch's texture coordinates are **generated**, so
@@ -567,7 +565,7 @@ fn skybox_sort_bias(batch_order: u16) -> f32 {
 /// `sky_order`'s module doc). It must clear the spread of one model's part AABB centres, so **all**
 /// of a fading model's twins draw before **any** of its colour parts — the reference achieves the
 /// same by tying every command of one instance to a single sort key (`cmd+0x14 = model+0x84`) and
-/// putting twins first inside the tie (`m2-blend-promotion-zfill.md` §4/§6). 8 yd covers every
+/// putting twins first inside the tie (`0x707db1`, `0x70ae10`). 8 yd covers every
 /// humanoid and mount; the residue (a model taller than 8 yd may keep a little self-overlap
 /// darkening at its extremities, and transparent scene content sorting within 8 yd behind a fading
 /// body draws after the prime and is depth-clipped where the body covers it) is recorded in
@@ -577,7 +575,7 @@ fn skybox_sort_bias(batch_order: u16) -> f32 {
 pub(crate) const ZFILL_SORT_BIAS: f32 = -8.0;
 
 /// Build (or fetch) the **depth-prime twin** material for one fadeable entity batch — the
-/// reference's `M2UseZFill` clone (wow-re `m2-blend-promotion-zfill.md` §4, VERIFIED): while a
+/// reference's `M2UseZFill` clone (`0x707f7d`): while a
 /// model draws translucent (`0 < A < 1`), a colour-masked, blend-off, z-writing copy of each of its
 /// depth-writing batches draws first, so every colour fragment behind the model's own nearest
 /// surface fails the depth test — one blended layer everywhere, no self-overlap darkening.
@@ -586,7 +584,7 @@ pub(crate) const ZFILL_SORT_BIAS: f32 = -8.0;
 /// discards, and must keep mirroring it: a twin that writes depth where the colour pass discards
 /// leaves an invisible depth wall inside the cutout holes. Only an AlphaKey source rides the fade
 /// twin's hard 224/255 cutout ([`TWIN_CUTOUT_MARKER`]); Opaque sources never alpha-test
-/// (`m2-blend-promotion-zfill.md` §2/§4 — the reference's twin keeps mode 1's test, mode 0 has
+/// (`0x70c237`/`0x707f7d` — the reference's twin keeps mode 1's test, mode 0 has
 /// none; decision 0842) and authored-Blend sources discard nothing either.
 ///
 /// Everything that shapes only the *colour* (lighting lane, shade, fog, tint) is canonicalized so
@@ -783,9 +781,9 @@ pub fn far_resolved<'a>(
 pub struct FarSideOfWater;
 
 /// Classify every transparent M2 batch against the water plane and swap it onto (or off) its
-/// far-side twin — the MESH half of the water-plane interleave (byte-VERIFIED, wow-re
-/// `water-frame-straddle.md`: the reference splits CM2Scene transparents into above/below-water
-/// lists per model and draws the eye's far side *before* the water pass; 0911 shipped the effect
+/// far-side twin — the MESH half of the water-plane interleave (`0x707680`: the reference splits
+/// CM2Scene transparents into above/below-water lists per model and draws the eye's far side
+/// *before* the water pass; 0911 shipped the effect
 /// half and named this one — the sighting it predicted arrived as "the sword reads crisp through
 /// the surface": the blade's Mod2x sheen and glow overlays drew after the water, untinted).
 ///

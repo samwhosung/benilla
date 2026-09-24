@@ -9,14 +9,13 @@
 //! one texture stage, no depth ramp, alpha from a per-vertex authored byte), and magma/slime. The
 //! `wmo_liquid_arms` census sizes them: 30 exterior water groups (Stormwind's canals) against 134
 //! interior (every dungeon pool, Blackfathom's included). Neither is what this file implements.
-//! Recorded in wow-re `terrain/scratch/water-shading-law.md`.
 //!
 //! Faithful ADT model — the combiner is an **asset**, extracted from `patch.MPQ` and read, not
 //! inferred: `Shaders\Pixel\ocean0_s.bls` is `rgb = primary·colorTex.rgb + detailTex.rgb +
 //! (secondary+0.25)·detailTex.a`, `alpha = colorTex.a`, with `0.25` its own scalar `PARAM`. The
 //! formula this module has always carried is right verbatim; its **provenance was not** — the
 //! citation here used to name an "apitrace WoW.17 program 159" and a `docs/knowledge/terrain.md`,
-//! neither of which exists, and wow-re had the program attributed to a character draw. The body
+//! neither of which exists. The body
 //! colour is **`primary · waterTint`**, where:
 //! - **`waterTint`** is a **64-row byte-space ramp** between the zone's dedicated `Light.dbc` water
 //!   rows, RAW (no ×0.711): IntBand rows 16/17 (river/lake) or 14/15 (ocean), shallow→deep, by the
@@ -32,7 +31,7 @@
 //!   clock. (The earlier "reflected sky × 0.711 via `FUN_0068c250`" model fingered the WRONG builder —
 //!   a separate grey edge texture never bound on the water unit; and `byte/255` was the wrong LUT →
 //!   river never went teal. The `FUN_0068a830` attribution this line used to carry was also wrong:
-//!   wow-re reads `0x68a830` as a sky-band row fill.)
+//!   `0x68a830` is a sky-band row fill.)
 //! - **`primary`** is the lit vertex colour `clamp(ambient + N·L·sun)`.
 //! - the animated `lake_a`/`ocean_h` frame is the **`detailTex`** (near-black RGB + ripple alpha): a
 //!   faint flat lift + an achromatic shimmer on crests — NOT the body colour. Mipped + 16× aniso so the
@@ -47,7 +46,7 @@
 //!   inside a branch proven **dead** (`[0xc800ec]` is BSS whose only writer stores 0 and which is
 //!   never a `0x58b2b0` out-param target, so both arms are controlled). It is the sky/overlay glare
 //!   falloff, not a liquid opacity curve. The swatch's alpha column is the same endpoint lerp its RGB
-//!   is (`0x68a830`). VERIFIED, wow-re's §5 ocean round — `terrain/scratch/ocean-depth-ramp-law.md`.
+//!   is (`0x68a830`).
 //!
 //! **Each kind reads its own depth LUT, and both are verified** — `FUN_0068c4c0` builds them side by
 //! side and the two vert-fills read them the same way, `tc0 = (0.5, ramp[depthByte])`: river/lake

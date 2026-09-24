@@ -145,8 +145,8 @@
 pub struct InteriorProbePayload;
 
 /// Bit 31 of the `MeshTag`: the hover/target **model-brighten** flag (the real client's
-/// per-model highlight emissive — `SetHighlight 0x614550` writing the config RGB into the CM2;
-/// wow-re `object-layer/scratch/selection-circle.md` PART 2). The shader adds the emissive lift
+/// per-model highlight emissive — `SetHighlight 0x614550` writing the config RGB into the CM2).
+/// The shader adds the emissive lift
 /// to the lighting sum when set and masks the bit off before decoding the payload.
 pub const HIGHLIGHT_BIT: u32 = 0x8000_0000;
 
@@ -159,8 +159,9 @@ pub const HIGHLIGHT_BIT: u32 = 0x8000_0000;
 /// bit cannot diverge the fog unless the camera is inside a fogged WMO. That is why it took until
 /// B335 to matter — and why the chain conjunct is the rest of the story: with the camera inside a
 /// building, "inside the same building" is *not* the same room-complex, and a unit two courtyards
-/// away wore 95 %-saturated MFOG while the walls behind it wore none (wow-re
-/// `m2-unit-interior-fog.md`; decisions 1787, 1792).
+/// away wore 95 %-saturated MFOG while the walls behind it wore none (the unit's lane pick
+/// `0x6c31e0` carries no room test, unlike the wall drawer's per-group-scoped `0x6b5190`;
+/// decisions 1787, 1792).
 pub(crate) const INTERIOR_FOG_BIT: u32 = 0x4000_0000;
 
 /// Bits 0..=5 of BOTH payload modes: the fade alpha as a 6-bit fraction (`63` = opaque).

@@ -185,8 +185,8 @@ mod tests {
     }
 
     /// A point light lands as the table's two interleaved rows, colour committed RAW —
-    /// over-gamut preserved (wow-re `trace-forensics-overgamut-point-commit-d3d`) — and the
-    /// header's count follows it. Negative channels are the one thing the commit floors.
+    /// over-gamut preserved (`0x71ca80` → `0x593040`) — and the header's count follows it.
+    /// Negative channels are the one thing the commit floors.
     #[test]
     fn a_point_light_commits_raw_and_counts_itself() {
         let b = LightBlob::model([0.0; 3], [0.0; 3], Vec3::NEG_Y).point(

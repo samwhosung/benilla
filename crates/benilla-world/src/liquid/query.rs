@@ -91,11 +91,10 @@ pub struct Underwater(pub(crate) benilla_formats::Submersion);
 /// **delegation + scope key** for [`liquid_at`].
 ///
 /// The reference's liquid query is context-aware: terrain's `0x69b6d0` **delegates the WMO case out**
-/// via `0x69b520` (wow-re `terrain/scratch/class-batch3.md`), which transforms the query point into
+/// via `0x69b520`, which transforms the query point into
 /// each placed map-object's own space before any MLIQ is sampled; and the per-frame camera
 /// environment probe `0x6809c0` samples the **current WMO group's** MLIQ (`0x6b9f10`) when
-/// `[0xc7b748]` names a containing map-object, else the ADT query `0x6723d0 → 0x69b6d0`
-/// (wow-re `terrain/scratch/fog-env-state.md` §1, `models/scratch/wmo-lit-selector.md` §3.4).
+/// `[0xc7b748]` names a containing map-object, else the ADT query `0x6723d0 → 0x69b6d0`.
 ///
 /// Without the source split, a tunnel bored under a lake inherits the lake: an ADT footprint is a
 /// flat XY rectangle with no floor, so every position beneath it reads as submerged — the "swim in
@@ -116,7 +115,7 @@ pub enum LiquidSource {
 ///
 /// Both fields exist to bound a footprint that has none of its own. `owner` bounds it sideways, to
 /// one placement (0696). `floor` bounds it *downwards*, to one storey — the piece 0696 named as
-/// still open and deferred to wow-re, now measured against the shipped files: Undercity's upper
+/// still open, now measured against the shipped files: Undercity's upper
 /// slime channels (groups 7 and 10, world z ≈ 52) were submerging the Rogues'-Quarter-level rooms
 /// **115 yd below them**, in the same placement, so owner scoping alone could not reject them.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -201,8 +200,7 @@ pub enum LiquidClaim {
         /// `FLT_MAX` as the height, **no Z compare and no MLIQ test at all**. So it rides on the
         /// claim rather than on a [`WaterChunkInfo`] — because there is no chunk. All 13 groups in
         /// the archive that set it carry no `MLIQ` whatsoever, which is the entire point of the
-        /// mechanism (wow-re `models/scratch/wmo-liquid-scoping.md` §5; census reproduced with our
-        /// own reader).
+        /// mechanism (census reproduced with our own reader).
         ///
         /// This is what makes an underwater cave or a flooded tunnel wet. Five are placed and can
         /// be stood in: the Deeprun Tram's two submerged sections, the Prison Oubliette, the MD
@@ -330,10 +328,8 @@ impl LiquidGrid {
     /// The liquid surface height (WoW Z) at an in-cell position — the **bilinear** over the cell's
     /// four corner heights.
     ///
-    /// This is the reference's own rule: `0x6b7500` `liquid_height_sample` locates the cell, then
-    /// lerps along one axis and then the other over exactly these four heights (wow-re
-    /// `system/terrain/terrain.md` — transcribed there and difftested bit-exact against `WoW.exe`).
-    /// Same shape here, over the same corners.
+    /// This is the reference's own rule: `0x6b7500` locates the cell, then lerps along one axis and
+    /// then the other over exactly these four heights. Same shape here, over the same corners.
     fn height_in_cell(&self, i: usize, j: usize, fx: f32, fy: f32) -> f32 {
         let z = |i: usize, j: usize| self.positions[j * self.cols + i][2];
         let t1 = z(i, j) + (z(i + 1, j) - z(i, j)) * fx;
@@ -828,11 +824,10 @@ fn submersion_of(kind: LiquidKind) -> benilla_formats::Submersion {
 /// **The candidate set is the camera's own room, not the world.** The reference's per-frame
 /// environment probe `0x6809c0` reads the render eye `[0xc7cf20/24/28]` and then queries **one**
 /// source: the current WMO group's MLIQ (`0x6b9f10`) when `[0xc7b748]` names a containing
-/// map-object, otherwise the ADT liquid (`0x6723d0 → 0x69b6d0`) — VERIFIED, wow-re
-/// `terrain/scratch/fog-env-state.md` §1 (the two `[0xc7f288]` writers) and
-/// `ui/scratch/camera-arm-liquid-blind.md` §2's band census, which names both call sites inside
-/// `[0x6809c0, 0x680b90)`. We take the eye's claim from [`CameraInteriorClaim`], which
-/// `wmo_portal::compute_wmo_pvs` publishes off the very down-ray that writes `[0xc7b748]`.
+/// map-object, otherwise the ADT liquid (`0x6723d0 → 0x69b6d0`) — the whole probe spans
+/// `[0x6809c0, 0x680b90)` and publishes its result to `[0xc7f288]`. We take the eye's claim from
+/// [`CameraInteriorClaim`], which `wmo_portal::compute_wmo_pvs` publishes off the very down-ray
+/// that writes `[0xc7b748]`.
 ///
 /// This probe used to consult **every** loaded surface with no delegation at all, while the player's
 /// query had delegated since 0634 — so the two disagreed by construction, and the screen took the
@@ -950,7 +945,7 @@ pub struct SubmergedEye {
 ///
 /// The corners sit `near` ahead of the eye, `±tan(fov/2)·near` up/down and that times the aspect
 /// ratio sideways, in CAMERA space (Bevy: forward = −Z) — the same four points the reference
-/// builds from NDC z = −1 (`0x5c43b0`; wow-re `water-frame-straddle.md` §4c).
+/// builds from NDC z = −1 (`0x5c43b0`).
 pub(super) fn lowest_near_corner_drop(rotation: Quat, fov: f32, aspect: f32, near: f32) -> f32 {
     let half_h = (fov * 0.5).tan() * near;
     let half_w = half_h * aspect;
@@ -982,12 +977,15 @@ pub(super) fn detect_submersion(
     let eye = bevy_to_wow(cam.translation); // [x, y, z] WoW yards
                                             // The probe HEIGHT is not the eye's — it is the lowest point of the NEAR RECTANGLE (or the
                                             // eye itself if every corner sits above it): the reference's `0x6809c0` tests X,Y = the
-                                            // eye's, Z = `min(eye.z, corner[0..3].z)` over the frustum corners built at NDC z = −1 —
-                                            // VERIFIED, wow-re `water-frame-straddle.md` §4c. This is the whole no-straddle mechanism
-                                            // (§4d): the frame flips submerged the moment the visible rectangle's leading corner reaches
-                                            // the surface, before any under-surface viewpoint can render dry — so the crossing needs no
-                                            // camera constraint at all (the 0905 eye snap this replaces), and with the reference's 1/9
-                                            // near plane the band it owns is a few inches tall.
+                                            // eye's, Z = `min(eye.z, corner[0..3].z)` over the
+                                            // frustum corners built at NDC z = −1. This is the
+                                            // whole no-straddle mechanism: the frame flips
+                                            // submerged the moment the visible rectangle's leading
+                                            // corner reaches the surface, before any under-surface
+                                            // viewpoint can render dry — so the crossing needs no
+                                            // camera constraint at all (the 0905 eye snap this
+                                            // replaces), and with the reference's 1/9 near plane
+                                            // the band it owns is a few inches tall.
     let probe_z = match proj {
         Projection::Perspective(p) => {
             eye[2] + lowest_near_corner_drop(cam.rotation, p.fov, p.aspect_ratio, p.near)

@@ -41,7 +41,8 @@ use crate::view::WorldCamera;
 ///      sun's isotropic SH DC term at intensity 1 (the exterior M2 lane scales it per instance) ·
 ///   18 wmo_fog_color · 19 wmo_fog_params (x=start y=end) — the INTERIOR fog triple (the 4 s
 ///      camera-in-WMO MFOG crossfade; == the scene fog outdoors). Read only by `wow_model.wgsl`'s
-///      interior lanes (round-6 Q-I consumer map); terrain mirrors the rows for layout only ·
+///      interior lanes (`0x71c110` stages it into the model's own light collector); terrain
+///      mirrors the rows for layout only ·
 ///   20 point_count (x = live entries) · 21+ the point-light table, TWO rows per light:
 ///      `[pos.xyz, range]`, `[rgb, 0]` (decision 0278 — the Gouraud point term reads this in the
 ///      VERTEX stage; bevy's own clusterable buffer is fragment-only in the view bind-group layout,
@@ -72,11 +73,10 @@ pub const LIGHT_HEADER_ROWS: usize = 21;
 /// (free) / row 17 `.x` (SIDN) — untouched.
 ///
 /// The sun's bands are the `Model2.bls` closed form — the SAME [`sh::prop_probe_coeffs`] fold the
-/// interior lane runs, per the disassembly of the shipped ARB program (wow-re
-/// `system/models/scratch/model2-bls-vertex-sh.md`): `E(n) = D·(3 + 16μ + 15μ²)/34`, μ = n·u
-/// toward-light, EVERY band linear in the committed colour `D` — there is no separate amplitude
-/// scalar, and the per-instance intensity lives entirely in that colour (a consumer multiplies
-/// ALL sun terms by I; packed here at I = 1). The peak (μ=1) equals the FFP walls' `D·(N·L)`
+/// interior lane runs, read off the shipped ARB vertex program: `E(n) = D·(3 + 16μ + 15μ²)/34`, μ =
+/// n·u toward-light, EVERY band linear in the committed colour `D` — there is no separate amplitude
+/// scalar, and the per-instance intensity lives entirely in that colour (a consumer multiplies ALL
+/// sun terms by I; packed here at I = 1). The peak (μ=1) equals the FFP walls' `D·(N·L)`
 /// peak by construction (the 16/17 accumulate scale exists for exactly that), and the closed form
 /// never goes meaningfully negative — the old trace-fit's ~¼-strength lobe with a negative back
 /// side (shadow-side characters turned blue as the warm channels floored at 0) is superseded.
@@ -125,9 +125,8 @@ pub fn pack_model_core_rows(
 }
 
 /// The reference's committed point-light diffuse is the **RAW** `colour × intensity × modelFade`
-/// — over-gamut values included (VERIFIED at the bytes + OBSERVED live, wow-re
-/// `models/scratch/trace-forensics-overgamut-point-commit-d3d.md`; compose arithmetic
-/// `m2-light-emitter-instances.md` §6b, animate leg `716a67`–`716aa6`).
+/// — over-gamut values included (`0x71ca80` → `0x593040`; compose arithmetic, animate leg
+/// `716a67`–`716aa6`).
 ///
 /// `0x71ca80` — which two prior rounds read as a clamp01 and then as a peak-normalize — is
 /// actually a lossy **RGBE-style encoder**: it stores a peak-normalized byte colour at
@@ -160,11 +159,11 @@ const POINT_PACK_RADIUS: f32 = 300.0;
 /// The fourth rider of decision 0689's law, after the prop's mesh, its particle clouds and its
 /// ribbon trails. The reference never needs it: a WMO's furniture is instantiated out of each
 /// **visible** group's MODR list, so a torch in a culled room does not exist and registers no
-/// light. Its light-register walk really does have no visibility term of its own — byte-verified,
-/// wow-re `m2-light-emitter-instances.md` §4: the gate for a model entering the register walk is
-/// the scene update-list activation flag `[model+0x10]`, "not visibility, not distance, not LOD",
-/// and the ≤4 cap is purely receiver-side. So the faithful fix is NOT a visibility test bolted onto
-/// the gather; it is that the SOURCE should not be there at all, which is what this component says.
+/// light. Its light-register walk really does have no visibility term of its own — the gate for a
+/// model entering the register walk is the scene update-list activation flag `[model+0x10]`, "not
+/// visibility, not distance, not LOD", and the ≤4 cap is purely receiver-side. So the faithful fix
+/// is NOT a visibility test bolted onto the gather; it is that the SOURCE should not be there at
+/// all, which is what this component says.
 /// [`build_light_data`] drops the light while its rooms are culled, exactly as the model-visibility
 /// authority drops the prop's own submeshes.
 ///
@@ -514,8 +513,8 @@ mod tests {
     /// channel or row swap in the shader is caught by eye against this, not by this test.
     #[test]
     fn the_sh_response_lane_matches_the_closed_form_at_every_intensity() {
-        // Stormwind, minute ≈1185 — the bands wow-re independently recovered from the reference's
-        // own uploaded shader constants (0796 §1), so the test is anchored on a real committed pair.
+        // Stormwind, minute ≈1185 — the bands were independently recovered from the reference's own
+        // uploaded shader constants (0796 §1), so the test is anchored on a real committed pair.
         let ambient = [102.0 / 255.0, 97.0 / 255.0, 123.0 / 255.0];
         let diffuse = [255.0 / 255.0, 112.0 / 255.0, 0.0];
         let sun_dir = Vec3::new(0.31, -0.82, 0.48).normalize(); // travel dir; to-light = −this
@@ -586,9 +585,9 @@ mod tests {
         );
     }
 
-    /// GOLDEN — the **commit clamp** (wow-re `m2-light-emitter-instances.md` §6a: `0x71ca80` with
-    /// `w = 1.0` degenerates to clamp01), driven end to end through the real packer so removing the
-    /// clamp from the pack expression fails here rather than in the director's eye.
+    /// GOLDEN — the **commit clamp** (`0x71ca80` with `w = 1.0` degenerates to clamp01), driven end
+    /// to end through the real packer so removing the clamp from the pack expression fails here
+    /// rather than in the director's eye.
     ///
     /// The held torch is the case that made it visible: authored `(0.467, 0.290, 0.133) × 3.0`, i.e.
     /// a red channel 40% past white. Unclamped it saturated the MCVT grid far wider than the

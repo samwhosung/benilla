@@ -245,8 +245,8 @@ pub fn cast_pick_ray(
         .collect()
 }
 
-/// [`cast_pick_ray`]'s **generous second pass** (decision 1071 — wow-re object-layer mouse-pick,
-/// resolve `0x7089c0` pass 2, mouse-pick only): every vertex displaced by its **authored normal,
+/// [`cast_pick_ray`]'s **generous second pass** (decision 1071 — resolve `0x7089c0` pass 2,
+/// mouse-pick only): every vertex displaced by its **authored normal,
 /// added raw** — 1 model-unit (× the part's world scale) outward, the same halo the unit picker
 /// builds from skinned normals. A part without authored normals cannot build the halo and stays
 /// exact-only, like the unit path. A [`PickBox`] inflates its cuboid by the same 1 model-unit —

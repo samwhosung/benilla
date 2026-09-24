@@ -1,7 +1,6 @@
 //! The world-map projection laws (decision 0203 phase 2) — world position ↔ normalized map UV,
-//! transcribed from the byte-verified primitives in wow-re's `ui` node (`scratch/geometry.md` +
-//! `geo-decomp.c`; provenance there: two §5 pairs, op-order diffed bit-exact, for
-//! `0x4a7100` / `0x4a72b0` / `0x4a7360` / `0x4a6ec0`).
+//! transcribed from the byte-verified primitives for `0x4a7100` / `0x4a72b0` / `0x4a7360` /
+//! `0x4a6ec0`.
 //!
 //! Frames: **world** is wow coords (wx +north, wy +west, yards); **UV** is [0,1]² over the map
 //! art, u rightward (east), v downward (south) — exactly what `GetPlayerMapPosition` returns and
@@ -22,7 +21,7 @@
 //! NOT here: the 128×128 area-bitmap cell law (`0x4a6ec0`) — its consumers (`ProcessMapClick`/
 //! `UpdateMapHighlight`) execute inside the engine's Lua bindings, so the transcription lives
 //! with them in benilla-ui's `script/worldmap.rs` (the grid data is pushed in the catalog; the
-//! source file is `Interface\WorldMap\<Continent>.zmp` — wow-re Q1 verdict, 2026-07-07).
+//! source file is `Interface\WorldMap\<Continent>.zmp`).
 
 /// Yards per ADT tile (the binary's 0x80654c).
 const TILE_YARDS: f32 = 533.333_3;
@@ -71,12 +70,9 @@ pub fn world_uv(proj: WorldProj, wx: f32, wy: f32) -> (f32, f32) {
 /// Then the combined range check zeroes both outputs if either leaves [0,1] — the `(0,0)` the
 /// reference FrameXML reads as "not on this map, hide the blip".
 ///
-/// **That range check was contested and is now settled** (2026-08-25): wow-re's
-/// `scratch/gossip-poi-marker.md` §8.3 had recorded that neither axis is clamped and that "a
-/// re-implementation that clamps diverges", against `geometry.md`'s diffed reading. The re-carve
-/// found §8.3's window stopped **two bytes short** of the clamp, which lives at
+/// **That range check was contested and is now settled** (2026-08-25): the clamp lives at
 /// `[0x4a74d6, 0x4a7533)` — four `fcomp`s against `0.0` (`0x7ffd74`) and `1.0` (`0x7ff9d8`), any
-/// failure zeroing *both* outputs. §8.3 is corrected; this function was already right, and it is
+/// failure zeroing *both* outputs. This function was already right, and it is
 /// what makes the world map's landmark pass show a zone only its own POIs rather than scattering
 /// the continent's off-art.
 ///
@@ -119,9 +115,9 @@ pub fn zone_world(rect: ZoneRect, t: f32) -> (f32, f32) {
 }
 
 /// UV → world at the world level (`0x4a7100` world-mode, verbatim). Returns (wx, wy). This IS
-/// the client's world-level click→world law (wow-re Q2/Q3 verdict).
+/// the client's world-level click→world law.
 ///
-/// ANOMALY, CONFIRMED REAL (wow-re Q2 verdict, 2026-07-07): NOT the algebraic inverse of
+/// ANOMALY, CONFIRMED REAL (2026-07-07): NOT the algebraic inverse of
 /// [`world_uv`] when scale ≠ 1 — the true inverse needs `offset·533.33/scale` but this uses the
 /// unscaled offset; with the 5875 scale of 0.75 that's a real ~1.33× offset discrepancy. The two
 /// functions genuinely disagree at the world level; each is reproduced as-is, and a round-trip
@@ -134,7 +130,7 @@ pub(crate) fn world_click_world(proj: WorldProj, u: f32, v: f32) -> (f32, f32) {
 }
 
 /// The continent's rect on the world sheet, normalized UV — the `0x4a5d00` builder kernel,
-/// verbatim (wow-re Q2 verdict: X edges `(f2·f8 + xoff)/62.625` and `((f3+1)·f8 + xoff)/62.625`
+/// verbatim (X edges `(f2·f8 + xoff)/62.625` and `((f3+1)·f8 + xoff)/62.625`
 /// with `xoff = (31.3125 − f8·32) + f6`; Y likewise over 41.75 with `yoff = (20.875 − f8·32) +
 /// f7`), from the WorldMapContinent ADT tile bounds f2..f5. This rect is the world-level click's
 /// AABB test (`0x4a7100`'s containment walk). Returns (u0, v0, u1, v1). The 5875 rects are

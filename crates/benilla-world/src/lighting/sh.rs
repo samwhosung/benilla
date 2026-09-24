@@ -1,7 +1,7 @@
 //! Model SH light-probe coefficient math — pure functions, no Bevy systems. Owns the order-2
 //! spherical-harmonic fold the reference runs in `Model2.bls` ([`prop_probe_coeffs`] — ONE closed
-//! form for the interior-prop probes AND the exterior scene-sun rows, per the disassembly of the
-//! shipped ARB program: wow-re `system/models/scratch/model2-bls-vertex-sh.md`), evaluated
+//! form for the interior-prop probes AND the exterior scene-sun rows, read off the shipped ARB
+//! program), evaluated
 //! per-fragment in `wow_model.wgsl`. The old trace-fit builder (`model_sh_coeffs`, the 0.722
 //! amplitude factorization + `SUN_DC`) is retired: the disassembly showed its directional response
 //! was ~¼ of the real curve with a negative back lobe (the blue shadow-side characters), and that
@@ -10,10 +10,10 @@
 use bevy::math::{Vec3, Vec4};
 
 /// Fold one interior M2 prop's committed light into the 7-row order-2 SH probe — the EXACT closed
-/// form of the reference's CPU accumulators (wow-re `trace-forensics-abbey-interior-d3d` §1: the
-/// byte-verified ambient ×2√π into L00 and directional ×16π/17 on the 9-term basis reduce, with band
-/// factors (1, 2/3, 1/4), to `E += C·(4/17)·(0.375 + 2μ + 1.875μ²)` per directional lobe, μ = n·u —
-/// decoded off the live abbey stand draws to float precision, residuals ~1e-7). Expanding μ² over
+/// form of the reference's CPU accumulators (ambient ×2√π into L00 (`0x71bc70`) and directional
+/// ×16π/17 on the 9-term basis (`0x71bce0`) reduce, with band factors (1, 2/3, 1/4), to
+/// `E += C·(4/17)·(0.375 + 2μ + 1.875μ²)` per directional lobe, μ = n·u — decoded off the live
+/// abbey stand draws to float precision, residuals ~1e-7). Expanding μ² over
 /// the shader basis `(n, 1, n.xy, n.yz, n.z², n.xz, n.x²−n.y²)` gives, per lobe (colour C,
 /// toward-light unit u):
 ///
@@ -28,8 +28,8 @@ use bevy::math::{Vec3, Vec4};
 /// dir, colour)` — for an interior prop the fixed interior axis + the group-MOLR point lobes, all
 /// pre-gained; for the exterior scene rows the sun (to-light, storm-blended diffuse), packed at
 /// intensity 1 by `global_light::pack_model_core_rows`. This is the SAME curve the shipped
-/// `Model2.bls` vertex program evaluates for BOTH lanes (wow-re `model2-bls-vertex-sh.md`: all 450
-/// lit permutations carry the identical lighting block; every constant is byte-anchored —
+/// `Model2.bls` vertex program evaluates for BOTH lanes (all 450 lit permutations carry the
+/// identical lighting block; every constant is byte-anchored —
 /// `16π/17` accumulate scale on the standard real-SH basis, band ratios exactly 1 : 2/3 : 1/4,
 /// linear coefficient exactly 8/17; the SH peak at μ=1 equals the FFP `D·(N·L)` peak by
 /// construction). Evaluated per fragment in `wow_model.wgsl`; note the SH lobe is SOFTER than a

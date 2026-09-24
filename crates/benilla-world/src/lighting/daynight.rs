@@ -208,8 +208,8 @@ pub(super) fn star_alpha(minute: f32) -> f32 {
 }
 
 /// Sun lens-flare **day/night envelope** curve — the per-body inline 4-key dnCurve table at
-/// `[glare+0x70]` (sun `0xce9818`, built by `0x6d1e30`; VERIFIED, wow-re celestial-bodies Addendum
-/// #5, decision 0508). A factor of the flare-intensity slew target in `sun::follow`: the sun's
+/// `[glare+0x70]` (sun `0xce9818`, built by `0x6d1e30`; decision 0508). A factor of the
+/// flare-intensity slew target in `sun::follow`: the sun's
 /// flare exists only by day — 0 until 06:30, full 07:30→19:30, gone by 21:00. Dusk (21:00→22:45)
 /// and dawn (03:15→06:30) are flare dead-bands for BOTH bodies.
 const SUN_FLARE_DN_CURVE: [(f32, f32); 4] = [
@@ -242,8 +242,8 @@ pub(super) fn moon_flare_dn(minute: f32) -> f32 {
 }
 
 /// The **SIDN night fraction** curve — the runtime-built 4-key track at `0xce9a34` (keys + the
-/// constants `0x811518`/`0x8115bc`, builder `0x6ce670`; VERIFIED, wow-re `wmo-interior-night-light`
-/// §3). Sampled per frame into `DNState+0x1ac`; the WMO material updater `0x6b4090` multiplies every
+/// constants `0x811518`/`0x8115bc`, builder `0x6ce670`). Sampled per frame into `DNState+0x1ac`;
+/// the WMO material updater `0x6b4090` multiplies every
 /// SIDN material's authored emissive colour by it — windows glow **1.0 all night (21:30→06:00)**,
 /// ramp OFF over 06:00→07:00, stay **0 through the day**, and ramp ON over 20:30→21:30.
 const SIDN_NIGHT_CURVE: [(f32, f32); 4] = [
@@ -266,8 +266,8 @@ pub(super) fn sidn_night_fraction(minute: f32) -> f32 {
 /// array is stored NON-MONOTONIC (keys 6/7 sit before key 5 in time) — byte-verified as-is; the
 /// array-order scan makes them structurally unreachable and wraps `t > 0.9236` back to 1.0. We
 /// keep the keys in the stored order so [`interp_daynight`] (the same kernel) reproduces exactly
-/// that behavior (wow-re `cloud-coverage-pipeline.md` Addendum A §2 — the *intent* is flagged
-/// INFERRED there; the mechanism is verified).
+/// that behavior (`0x6cf6c0`) — whether the non-monotonic layout is intentional or a data quirk
+/// is inferred, not settled from the binary.
 pub(super) fn cloud_glow_track(minute: f32) -> f32 {
     const CLOUD_GLOW_CURVE: [(f32, f32); 8] = [
         (0.16667, 1.0), // 04:00 — full
@@ -318,8 +318,8 @@ fn interp_daynight(table: &[(f32, f32)], dp: f32) -> f32 {
 mod tests {
     use super::*;
 
-    /// The cloud glow envelope (Addendum A §2): full across the day, zero at the twilight
-    /// notches, and the verified seam wrap past 22:10 back to 1.0 (the non-monotonic stored
+    /// The cloud glow envelope (`0x6cf6c0`): full across the day, zero at the twilight
+    /// notches, and the seam wrap past 22:10 back to 1.0 (the non-monotonic stored
     /// keys are unreachable under the array-order scan).
     #[test]
     fn cloud_glow_track_matches_the_client_envelope() {
@@ -355,7 +355,7 @@ mod tests {
         assert!((interp_daynight(&PHI, 0.125) - 2.0682153).abs() < 1e-4);
     }
 
-    // The SIDN night-glow schedule (wow-re `wmo-interior-night-light` §3, track `0xce9a34`):
+    // The SIDN night-glow schedule (track `0xce9a34`):
     // 1.0 overnight, 0.0 all day, linear ramps 20:30→21:30 and 06:00→07:00 — pinned so a curve
     // edit can't silently shift when windows light up.
     #[test]

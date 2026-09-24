@@ -102,7 +102,7 @@ pub struct WorldRightClick;
 /// test even starts, whenever the press belongs to the world (in the viewport off the UI, or any
 /// press while a look session already owns the hidden cursor). The reference's
 /// `CGWorldFrame::OnMouseDown 0x483c40` analogue: ground-targeting's right-click cancel hangs off
-/// this edge (`0x492c20`, wow-re `world-click-targeting.md` Q3), which fires whether the press
+/// this edge (`0x492c20`), which fires whether the press
 /// becomes a click OR a turn-drag, and consumes nothing (the ref handler returns 0, so the
 /// BUTTON2 turn and the release's context click still run).
 #[derive(Message, Clone, Copy)]

@@ -16,7 +16,7 @@ use benilla_formats::{Atmosphere, LightCatalog};
 
 use super::{daynight, quantize_glow, ClockSource, GameClock, LightSampler, WowLighting};
 
-/// The scene-fog stage (`dn_scene_fog 0x6cee30`, wow-re `rf-weather-fog-veil.md`): resolve the
+/// The scene-fog stage (`dn_scene_fog 0x6cee30`): resolve the
 /// **pushed** `(start, end)` fog pair from the blended bands. `end = min(zone_end, farclip)` — the
 /// zone ends in yards (Elwynn 500 clear / 278 storm, decision 0324) exceed only a lowered farclip,
 /// so the wall sits at the zone value and pulls in when the view-distance slider drops below it.
@@ -28,15 +28,15 @@ fn scene_fog(fog_end_raw: f32, fog_start_frac: f32, farclip: f32) -> (f32, f32) 
 }
 
 /// The camera-in-WMO fog crossfade rate — `[0x8115b0] = 0.25`/s, a **4-second** fade both in and
-/// out (`0x6cefcb–0x6cf051`, wow-re `rf-weather-emission-timeline` ROUND 5).
+/// out (`0x6cefcb–0x6cf051`).
 const WMO_FOG_RAMP_PER_SEC: f32 = 0.25;
 
 /// The camera-in-WMO **interior crossfade** — the reference's `[0xce9bdc]` (+ the staging
 /// `0x6cef43–62`), ONE number with exactly two consumers: while the camera stands in a WMO
 /// interior, the scene fog — storm veil included — crossfades toward the building's own MFOG fog
 /// over 4 s and back out over 4 s on leaving, **and the same `t` is the WMO skybox's slot alpha**
-/// ("the skybox alpha and the interior fog blend are the same number" — wow-re `wmo-skybox.md` §3,
-/// VERIFIED; `crate::skybox` reads it through [`Self::t`], never a ramp of its own). This is why
+/// ("the skybox alpha and the interior fog blend are the same number"; `crate::skybox` reads it
+/// through [`Self::t`], never a ramp of its own). This is why
 /// the reference's Goldshire inn keeps its warm authored haze while a storm rages outside (the
 /// storm's negative-start veil never reaches the room), and why Stratholme's painted sky fades in
 /// at exactly the rate its streets shed the scene fog. The staged triple LATCHES while the camera
@@ -258,7 +258,7 @@ pub(super) fn update_time_lighting(
     // Sample the area-light blend at the CAMERA EYE, resampled every frame — VERIFIED: the real
     // client feeds the render camera's world eye into the `Light.dbc` sphere-containment blend
     // (`dn_light_select 0x6d2d00` samples `DNState+0x18`, stamped each frame from the active
-    // `CCamera`'s eye in `WorldFrame::Render 0x482ea0`; wow-re `system/lighting` + benilla-pins B14).
+    // `CCamera`'s eye in `WorldFrame::Render 0x482ea0`).
     // It is the camera, NOT the character: in third-person the eye is offset from the avatar by the
     // orbit/zoom/pitch, and that offset is intended (sampling `player.pos`, as we used to, was wrong).
     // No bucketing and no temporal lerp — smoothness is purely spatial (the `blendAlpha` falloff
@@ -280,12 +280,12 @@ pub(super) fn update_time_lighting(
     // existing consumer (terrain/model/water/WDL fog + the clear colour) becomes underwater for free
     // (VERIFIED apitrace WoW.18: the reference just switches the active param; no overlay quad).
     let submerged = eye_liquid.submersion();
-    // The ghost-world atmosphere (decision 0308 §7, byte-VERIFIED death-light.md): while
-    // PLAYER_FLAGS_GHOST is up the active LightParams slot is 4 — the death profile — applied
-    // instantly (the client rebuilds its color tables per frame off the single active slot).
+    // The ghost-world atmosphere (decision 0308 §7): while PLAYER_FLAGS_GHOST is up the active
+    // LightParams slot is 4 — the death profile (`[0xce9bb0]`) — applied instantly (the client
+    // rebuilds its color tables per frame off the single active slot).
     let ghost = viewer.ghost;
     // The storm light-blend (the weather arc): weather's slow sky-density channel becomes
-    // `bcc = min(1, density·4)` (`cloud_density_clamp 0x6d4500`), and the STORM LightParams
+    // `bcc = min(1, density·4)` (`0x6d4500`), and the STORM LightParams
     // record is lerped over the clear one by that weight — every band at once (ambient, diffuse,
     // sky stops, fog color *and distances*). That one blend is the reference's overcast
     // darkening + fog draw-in. Zones without a storm param fall back to their clear param
@@ -321,8 +321,8 @@ pub(super) fn update_time_lighting(
     // negative start = the near veil; the short storm end whites out the middle distance.
     let (fog_start, fog_end) = scene_fog(atmo.fog_end, atmo.fog_start_frac, view.farclip);
     // The camera-in-WMO interior-fog crossfade (see [`WmoCrossfade`]) — computed as its OWN triple;
-    // the scene fog above stays untouched (the round-5 global-overwrite washed the outside view
-    // golden through the door — director-caught, corrected per the round-6 Q-I lane map).
+    // the scene fog above stays untouched (an earlier global-overwrite washed the outside view
+    // golden through the door — director-caught, corrected).
     // Submerged, the submerged Light param owns everything — the MFOG record's own underwater
     // block (`+0x24`, gated record flags 0x100/0x10) is a recorded, deferred lane. Bypassing the ramp
     // rather than blending through it is also what the reference does for the fullbright liquids
@@ -342,9 +342,9 @@ pub(super) fn update_time_lighting(
         )
     };
     let moon02 = daynight::moon02_state(day_f);
-    // **The ocean depth ramp** (decision 1829, wow-re `submerged-atmosphere.md` §3). Ocean alone
-    // runs it, and it darkens the two committed light triples — the first (`DNState+0x178`) by
-    // `fac1` down to 0.5, the second (`+0x174`) by `fac2` down to 0.75, over the first 30 yards.
+    // **The ocean depth ramp** (decision 1829). Ocean alone runs it, and it darkens the two
+    // committed light triples — the first (`DNState+0x178`) by `fac1` down to 0.5 (`0x6d28e0`),
+    // the second (`+0x174`) by `fac2` down to 0.75 (`0x6d28fe`), over the first 30 yards.
     // Every other submersion state, ocean's own fog colour included, is untouched: the fog-colour
     // commit in the same block is dead code, overwritten from the bands immediately after.
     let (fac1, fac2) = submerged
@@ -365,7 +365,7 @@ pub(super) fn update_time_lighting(
         sky: atmo.sky,
         // The water swatch rides the SAME area blend as every other band — byte-VERIFIED, decision
         // 1104: the gather record's 18 colour slots (rows 14–17 at `+0x34..+0x40`) are all merged by
-        // `dn_record_overblend 0x6d30e0`, so there is no single-sphere pick anywhere in the client's
+        // `0x6d30e0`, so there is no single-sphere pick anywhere in the client's
         // water path. Resolving it off `pick_light` made the tint DISCONTINUOUS — it snapped whenever
         // a tighter sphere's outer radius was crossed, i.e. at exactly the point where that sphere's
         // own weight is zero (Tirisfal → Silverpine: green water to near-black brown in one step).

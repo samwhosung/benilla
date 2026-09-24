@@ -48,15 +48,15 @@ pub struct WowLighting {
     /// the gamma invariant.
     pub fog_color: [f32; 3],
     /// The **pushed** GL fog pair from [`resolve::scene_fog`] — `end = min(raw band end, farclip)`,
-    /// `start = frac × end` **unclamped**: negative under storm (Elwynn frac −0.5), which is the
-    /// reference's constant ~33% near veil in rain (wow-re `rf-weather-fog-veil.md`).
+    /// `start = frac × end` **unclamped** (`0x6cee61`): negative under storm (Elwynn frac −0.5),
+    /// which is the reference's constant ~33% near veil in rain.
     pub(crate) fog_start: f32,
     pub(crate) fog_end: f32,
     /// The **interior** fog triple (DNState+0x80/84/88): `lerp(scene fog → the claimed WMO's MFOG
     /// fog, t)` on the 4 s camera-in-WMO ramp ([`WmoCrossfade`]) — equal to the scene triple while
-    /// the camera is outside. Consumed ONLY by the interior lanes (round-6 Q-I consumer map): the
-    /// interior WMO-group surfaces and THAT group's doodads (`0x6b5190` / the group-doodad drawer
-    /// `0x6b62e0`) — `wow_model.wgsl` selects it by the material interior flag. Terrain, liquid,
+    /// the camera is outside. Consumed ONLY by the interior lanes: the interior WMO-group surfaces
+    /// and THAT group's doodads (`0x6b5190` / the group-doodad drawer `0x6b62e0`) —
+    /// `wow_model.wgsl` selects it by the material interior flag. Terrain, liquid,
     /// sky, exterior groups, and world units keep the scene fog — the storm stays grey through the
     /// inn's open door (director ref-shot, 2026-07-13).
     pub(crate) wmo_fog_color: [f32; 3],
@@ -68,7 +68,7 @@ pub struct WowLighting {
     /// **Per-kind water-surface tint** `[shallow, deep]` — `Atmosphere.water_river` (IntBand rows
     /// 16/17) and `.water_ocean` (rows 14/15), RAW, resolved from the **area-light blend**, exactly
     /// like every other band: the client's gather record carries all 18 colour rows and
-    /// `dn_record_overblend 0x6d30e0` merges all 18 per light (rows 14–17 are its `+0x34..+0x40`
+    /// `0x6d30e0` merges all 18 per light (rows 14–17 are its `+0x34..+0x40`
     /// step-9 loop) — there is no single-sphere pick in the water path (decision 1104, superseding
     /// the `pick_light` split whose discontinuity snapped the tint at Tirisfal→Silverpine). The
     /// from-above depth swatch is a 2-endpoint linear lerp of these by the per-vertex depth `V`
@@ -100,8 +100,8 @@ pub struct WowLighting {
     pub(crate) sun_disc_scale: f32,
     /// **Sun lens-flare day/night envelope** — the per-body dnCurve table (`0xce9818`): `1.0` across
     /// the day (07:30→19:30), `0.0` all night with dawn/dusk dead-bands (off by 21:00, back at
-    /// 06:30→07:30). A factor of the flare intensity's slew target in `sun::follow` (wow-re
-    /// celestial-bodies Addendum #5, decision 0508). See [`daynight::sun_flare_dn`].
+    /// 06:30→07:30). A factor of the flare intensity's slew target in `sun::follow`
+    /// (decision 0508). See [`daynight::sun_flare_dn`].
     pub(crate) sun_flare_dn: f32,
     /// **Visible moon direction** (Bevy camera→moon) — the white moon at azimuth 45° (the sun's
     /// bearing), up at night and below the horizon by day (`daynight::moon_direction`). The engine's
@@ -114,8 +114,8 @@ pub struct WowLighting {
     pub(crate) moon_disc_scale: f32,
     /// **Moon lens-flare night envelope** — the moon's dnCurve table (`0xce9768`): flat `0.0` from
     /// 03:15 all the way to 22:45 (the whole day + early evening), ramping in 22:45→24:00, full
-    /// 00:00→02:00. The moon's halo simply does not exist at a 22:30 moonrise (wow-re Addendum #5,
-    /// decision 0508). See [`daynight::moon_flare_dn`].
+    /// 00:00→02:00. The moon's halo simply does not exist at a 22:30 moonrise (decision 0508).
+    /// See [`daynight::moon_flare_dn`].
     pub(crate) moon_flare_dn: f32,
     /// **moon02 direction** (Bevy camera→body) — the engine's third disc, drawn vertex-BLACK on its
     /// phase-precessed 1.7-day clock ([`daynight::moon02_state`]; decision 0485). Never a visible
@@ -144,16 +144,16 @@ pub struct WowLighting {
     pub(crate) celestial_tint: [f32; 3],
     /// **Authored cloud density `C`** — Light.dbc FloatBand sub-3, weather/area blends included.
     /// Drives the coverage-field threshold (`clouds`): 0 = cloudless, 1 = full overcast potential
-    /// (wow-re `cloud-coverage-pipeline.md` §4).
+    /// (`[0xce9c64]`).
     pub(crate) cloud_density: f32,
     /// **Cloud palette** `[sun-glow, slope, gbase]` — IntBand sub-10/11/12, the visible cloud
-    /// dome's colors (wow-re `cloud-coverage-pipeline.md` §3c).
+    /// dome's colors (`0x6d64d0`).
     pub(crate) cloud_colors: [[f32; 3]; 3],
-    /// **Storm blend `bcc`** = `min(1, weather_density·4)` (`cloud_density_clamp 0x6d4500`) — the
+    /// **Storm blend `bcc`** = `min(1, weather_density·4)` (`0x6d4500`) — the
     /// weight already lerping the storm LightParams over the clear one, published for the
     /// celestial-alpha seed (`floor(255·(1−bcc))` on the five body alphas, Addendum #6) and the
-    /// cloud sun-glow dimming (`1 − 0.75·bcc`). Purely weather-driven — authored `C` never feeds
-    /// it (wow-re `cloud-coverage-pipeline.md` §4).
+    /// cloud sun-glow dimming (`1 − 0.75·bcc`). Purely weather-driven — authored `C` (`[0xce9c64]`)
+    /// never feeds it; `bcc` reads the separate weather-density global `[0xce9ba0]`.
     pub(crate) storm_bcc: f32,
     /// **Cloud glow body direction** (Bevy, camera→body) — the sun while the day fraction sits in
     /// ≈04:50–22:10, the moon otherwise (`0x6cfb00` setup; [`daynight::cloud_glow_is_sun`]). The
