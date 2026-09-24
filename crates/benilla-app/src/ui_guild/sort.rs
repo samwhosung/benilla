@@ -1,5 +1,4 @@
-//! The guild roster's **view** — sorted, never filtered (wow-re
-//! `system/ui/scratch/guild-api-carve.md` §3).
+//! The guild roster's **view** — sorted, never filtered (the comparator `0x4d0d50`).
 //!
 //! Two things about it are the opposite of the obvious design, and both are verified at the bytes:
 //!

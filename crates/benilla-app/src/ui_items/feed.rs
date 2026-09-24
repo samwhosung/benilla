@@ -139,7 +139,7 @@ fn charges_count(spells: &[benilla_protocol::messages::ItemSpellEntry]) -> i32 {
 ///
 /// Keys rather than an eight-string table (decision 2045): the bare tokens, not the `_FEMALE`
 /// twins, which is the spelling the reference itself uses wherever it builds a standing label
-/// (`FACTION_STANDING_LABEL%d` `0x84b5dc`, wow-re `ui/scratch/quest-leaderboard-law.md` §5).
+/// (`FACTION_STANDING_LABEL%d` `0x84b5dc`).
 /// `None` for an install that does not carry the row — the line then names no standing.
 fn standing_label(rank: u32, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     get(&format!("FACTION_STANDING_LABEL{}", rank.min(7) + 1))
@@ -230,8 +230,7 @@ fn template_view(
         required_honor_rank: t.required_honor_rank,
         required_city_rank: t.required_city_rank,
         // `ITEM_REQ_REPUTATION` ("%s - %s" after its own "Requires ") — `0x854b8c`, the key the
-        // reference's own item tooltip builds this line with (wow-re
-        // `ui/scratch/tooltip-content-law.md` §"required-spell / honor-rank"). Both holes are
+        // reference's own item tooltip builds this line with. Both holes are
         // filled in the template's order; an install missing either key shows no line.
         required_rep_line: (t.required_rep_faction != 0)
             .then(|| {
@@ -264,7 +263,7 @@ fn template_view(
     }
 }
 
-/// The §22 SET-block feed: answer the engine's ask-once set ids from ItemSet.dbc, joining
+/// The item SET-block feed: answer the engine's ask-once set ids from ItemSet.dbc, joining
 /// member NAMES from the template cache (each miss fires its own `CMSG_ITEM_QUERY` through
 /// [`Items::template`], like the real client querying set members) and bonus TEXT from the
 /// spell catalog's `$`-engine. A set with members still in flight stays pending and re-pushes
@@ -660,7 +659,7 @@ fn resolve_slot(
                     .and_then(|g| names.resolve(g, commands).map(str::to_string)),
                 // `ITEM_FIELD_FLAGS` — the tooltip's UNLOCKED (0x4) / WRAPPED (0x8) sub-gates.
                 fields.item_flags().unwrap_or(0),
-                // `0x5da2c0` — soulbound, or carrying a binding enchant: the §6 Soulbound
+                // `0x5da2c0` — soulbound, or carrying a binding enchant: the Soulbound
                 // override (B310). Read off the raw descriptor, not off the enchant LINES below.
                 crate::items::already_bound(fields, rolls.enchants),
                 // `ITEM_FIELD_RANDOM_PROPERTIES_ID` — the roll behind the NAME's "of the Bear"
@@ -778,7 +777,7 @@ fn resolve_slot(
 /// than naming the quiver's own type (`benilla_formats::itembagfamily`, and the DBC read there).
 ///
 /// The bank-bag leg (63..=68) is ours by symmetry rather than byte-pinned: the reference bounds
-/// this on `[player+0x1d38]`, whose value wow-re did not resolve, so whether a bank bag reaches
+/// this on `[player+0x1d38]`, whose value is unresolved, so whether a bank bag reaches
 /// the substitution or falls to the generic line is unverified. Both outcomes are ordinary
 /// sentences; resolving it is the strictly more useful one, and it is flagged here rather than
 /// silently assumed.
@@ -1425,12 +1424,11 @@ fn diff_and_push(
     fresh: HashMap<i64, ContainerState>,
     guids: SlotGuids,
 ) -> bool {
-    // **`BAG_CLOSED` — the only thing in the image that hides an open bag window** (CARVED, wow-re
-    // `system/ui/scratch/equipped-bag-slot-events.md`: one fire site, `0x4f92b5`, and
-    // `ContainerFrame_OnEvent`'s `this:Hide()` is its one consumer; `CloseBag`/`CloseAllBags` are
-    // not even strings in `WoW.exe`). Its condition is **not** "the bag went away" — it is
-    // `new != old && old != 0` (`0x4f923d je` unchanged, `0x4f9247 je` old-was-empty), so a bag
-    // SWAPPED for another fires `BAG_CLOSED(n)` and then `BAG_UPDATE(n)`.
+    // **`BAG_CLOSED` — the only thing in the image that hides an open bag window** (one fire site,
+    // `0x4f92b5`, and `ContainerFrame_OnEvent`'s `this:Hide()` is its one consumer;
+    // `CloseBag`/`CloseAllBags` are not even strings in `WoW.exe`). Its condition is **not** "the
+    // bag went away" — it is `new != old && old != 0` (`0x4f923d je` unchanged, `0x4f9247 je`
+    // old-was-empty), so a bag SWAPPED for another fires `BAG_CLOSED(n)` and then `BAG_UPDATE(n)`.
     //
     // Diffed on the BAG's own guid rather than on the pushed `ContainerState` below, because it is
     // a fact about the bag and not about its contents: two identical empty bags exchanged between
@@ -1445,7 +1443,7 @@ fn diff_and_push(
         })
         .collect();
     // The other half of the same branch: a bag REMOVED fires `BAG_CLOSED` and no `BAG_UPDATE`
-    // (the unequip row of the carve's event table). Every other transition still announces.
+    // (`0x4f92cc`). Every other transition still announces.
     let emptied: Vec<i64> = closed
         .iter()
         .copied()
@@ -1456,9 +1454,8 @@ fn diff_and_push(
         script.fire_event("BAG_CLOSED", vec![ScriptValue::Int(*id)]);
     }
     // **`PLAYERBANKSLOTS_CHANGED` has TWO producers in the reference, and they carry different
-    // arguments** (CARVED — wow-re `system/object-layer/scratch/bank-slot-event-law.md` §3/§4;
-    // decision 2140). benilla had one fire for both, so half of them were argless where the
-    // reference pushes a string:
+    // arguments** (decision 2140). benilla had one fire for both, so half of them were argless
+    // where the reference pushes a string:
     //
     // * **P1, the player-descriptor path** — `0x5ddcf0`'s watcher sees the slot's own GUID field
     //   change and fires `0x5ddd6e`, `FrameScript_SignalEvent 0x703e50`, `__fastcall(ecx = id)`
@@ -1559,12 +1556,12 @@ fn diff_and_push(
         );
         for &bag in &changed {
             // The vault fires the reference's own event, once per changed slot and **with no
-            // arguments** (CARVED — `0x5ddd6e` calls `FrameScript_SignalEvent 0x703e50`, an
-            // `__fastcall(ecx = id)` with a plain `ret` and no vararg push; wow-re
-            // `system/object-layer/scratch/bank-slot-event-law.md`). It is a broadcast: every bank
-            // button repaints from its own `GetInventorySlot()`, which is why no slot id is needed
-            // and why the bank BAG band's copy of this event — fired by `ui_char::feed_char`, the
-            // feed that owns that band — is indistinguishable from this one.
+            // arguments** (`0x5ddd6e` calls `FrameScript_SignalEvent 0x703e50`, an
+            // `__fastcall(ecx = id)` with a plain `ret` and no vararg push). It is a broadcast:
+            // every bank button repaints from its own `GetInventorySlot()`, which is why no slot id
+            // is needed and why the bank BAG band's copy of this event — fired by
+            // `ui_char::feed_char`, the feed that owns that band — is indistinguishable from this
+            // one.
             //
             // Everything else — backpack, equipped bags, AND bank bags (ordinary container frames
             // in the reference) — fires BAG_UPDATE(bagID). The vault is the one band that fires
@@ -1608,11 +1605,11 @@ mod tests {
     };
 
     /// **`PLAYERBANKSLOTS_CHANGED` has two producers and they carry different arguments**
-    /// (decision 2140; CARVED, wow-re `object-layer/scratch/bank-slot-event-law.md` §3/§4).
+    /// (decision 2140).
     ///
     /// benilla fired the argless one for every transition, which is right for half of them and
     /// wrong for the other half — and the half it got wrong is the one a view diff cannot even
-    /// see. The three arms below are the three the carve distinguishes:
+    /// see. The three arms below are the three the reference distinguishes:
     ///
     ///  · a slot's item GUID changes (arrive / leave / exchange) → `0x5ddd6e`, **no arguments**;
     ///  · the same item's own fields change (a restack) → `0x4c728d`, **`arg1 = "player"`**;
@@ -1791,7 +1788,7 @@ mod tests {
     }
 
     /// **`BAG_CLOSED`, the only thing that hides an open bag window** — and the three ways to get
-    /// its condition wrong (CARVED, wow-re `system/ui/scratch/equipped-bag-slot-events.md`).
+    /// its condition wrong (`0x4f92b5`).
     ///
     /// benilla never fired this event at all, so a `ContainerFrame` outlived the bag it belonged
     /// to: `ContainerFrame_OnEvent`'s `this:Hide()` arm is its one consumer in all of FrameXML,

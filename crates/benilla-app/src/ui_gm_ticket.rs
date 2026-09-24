@@ -97,8 +97,8 @@ pub(crate) struct GmTicketState {
     /// The last queue status the server reported, and its own answer counter — same idiom, because
     /// `GetGMStatus()` is asked on every window open and the answer is usually unchanged.
     ///
-    /// **`i32`, not `u32`, and that is byte-verified rather than a preference** (wow-re §5, this
-    /// session): the reference copies the field off the wire verbatim at `0x418e95` with no
+    /// **`i32`, not `u32`, and that is byte-exact rather than a preference**: the reference
+    /// copies the field off the wire verbatim at `0x418e95` with no
     /// extension, pushes it unmodified at `0x5e467b`, and hands it to Lua through
     /// `0x704fa6 fild dword` — a **signed** load, with no `cmp`, `test`, clamp or mapping anywhere
     /// between the wire and the event. So `HelpFrame`'s `arg1 == -1` arm is reachable exactly when
@@ -120,11 +120,11 @@ impl GmTicketState {
     /// **The client re-asks for its own ticket whenever a write lands** — the mechanism that makes
     /// the shipped UI's total silence on the three response opcodes correct rather than a gap.
     ///
-    /// Byte-verified in wow-re (§5, this session): `CMSG_GMTICKET_GETTICKET` (`0x211`) has three
-    /// callers, and two of them are *engine* legs reacting to a server push — the `0x206`/`0x208`
-    /// arm on response codes 2 (create-ok) and 4 (update-ok) at `0x5e4479`, and the `0x328` handler
-    /// on body value 1 at `0x5e7932`. **Neither carries an idempotence guard**, so it is one resend
-    /// per qualifying push, which is what this counter models.
+    /// `CMSG_GMTICKET_GETTICKET` (`0x211`) has three callers, and two of them are *engine* legs
+    /// reacting to a server push — the `0x206`/`0x208` arm on response codes 2 (create-ok) and 4
+    /// (update-ok) at `0x5e4479`, and the `0x328` handler on body value 1 at `0x5e7932`. **Neither
+    /// carries an idempotence guard**, so it is one resend per qualifying push, which is what this
+    /// counter models.
     ///
     /// Without it the window would not learn its own ticket exists until the 10-minute poll came
     /// round: file a ticket, and the toast stays dark and the form stays a form for up to ten

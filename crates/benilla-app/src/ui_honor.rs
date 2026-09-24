@@ -16,8 +16,8 @@
 //! ## 2 · The two events are a field diff, and the reference watches **exactly three fields**
 //!
 //! The pane repaints on `PLAYER_PVP_KILLS_CHANGED` and `PLAYER_PVP_RANK_CHANGED`, which the real
-//! engine fires from field watches. wow-re carved the watch table (`0x467e70`, callback
-//! `0x5de4b0` carrying the event id) and there are **three registrations and no more**:
+//! engine fires from field watches. In the watch table (`0x467e70`, callback
+//! `0x5de4b0` carrying the event id) there are **three registrations and no more**:
 //!
 //! | watched | fires |
 //! |---|---|
@@ -29,7 +29,7 @@
 //! nothing watches `+0x102b` (the highest-lifetime rank).** That is not an omission in the client;
 //! it is *why* `HonorFrame.lua` refreshes those rows on `PLAYER_ENTERING_WORLD` alone. The two
 //! facts are one fact, and a feed that fired `KILLS_CHANGED` on a lifetime total — which this one
-//! did until the verdict landed — would be firing an event the real client has no source for.
+//! once did — would be firing an event the real client has no source for.
 //!
 //! One divergence, stated: the reference watches the **whole `PLAYER_BYTES_3` dword**, so a
 //! drunkenness change fires `PLAYER_PVP_RANK_CHANGED` there too. We watch byte 3 alone. The
@@ -126,11 +126,11 @@ impl Plugin for UiHonorPlugin {
 /// flaw in it.** This doc used to say the reference "paints a player whose fields have not arrived
 /// as blank, not as zero". It does not: `0x51a4b0`–`0x51a7c0`'s "absent → 0.0" tails are about the
 /// absent player OBJECT, and once the object exists every one of those bindings reads a
-/// descriptor array that is allocated and zeroed, so a field the server never sent reads `0`
-/// (wow-re `honor-panel-law.md` §3.1–3.5). Our bindings answer the same zeros —
-/// `honor(lua).unwrap_or_default()` — so what the gate actually decides is only *when the first
-/// snapshot is pushed*, and with it when `PLAYER_PVP_KILLS_CHANGED`/`PLAYER_PVP_RANK_CHANGED`
-/// first fire. It cannot make a row differ from the reference.
+/// descriptor array that is allocated and zeroed, so a field the server never sent reads `0`.
+/// Our bindings answer the same zeros — `honor(lua).unwrap_or_default()` — so what the gate
+/// actually decides is only *when the first snapshot is pushed*, and with it when
+/// `PLAYER_PVP_KILLS_CHANGED`/`PLAYER_PVP_RANK_CHANGED` first fire. It cannot make a row differ
+/// from the reference.
 ///
 /// That is worth stating because this gate was the other candidate cause of report B378, and it
 /// is ruled out by exactly this: a missing snapshot and a zeroed one paint the same pane. The
@@ -175,7 +175,7 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
 /// **Most of `HonorState` fires nothing at all.** The weekly figures, the two lifetime totals and
 /// the highest-lifetime rank are unwatched in the real client, so they ride the pane's world-entry
 /// repaint and move here in silence. Listing the watched fields positively — rather than
-/// "everything that is not a rank byte", which is what this did before the RE verdict — is what
+/// "everything that is not a rank byte", which is what this did before — is what
 /// keeps a field added later from inventing an event for itself.
 fn events_for(before: Option<&HonorState>, after: &HonorState) -> (bool, bool) {
     let Some(b) = before else {
@@ -229,8 +229,8 @@ fn feed_honor(
     // data and inspecting a SECOND player repaints the FIRST one's kills, with no request ever
     // sent and nothing on screen to say so.
     //
-    // **The real client's latch is invalidated by exactly one thing, and it is not this one**
-    // (wow-re `honor-panel-law.md`): the slot is a single un-keyed store, and `0x4c6f70` — reached
+    // **The real client's latch is invalidated by exactly one thing, and it is not this one**:
+    // the slot is a single un-keyed store, and `0x4c6f70` — reached
     // from `NotifyInspect` — is its only GUID writer *and* its only invalidator. A `NotifyInspect`
     // naming a different player zeroes both flags; the same player is a no-op; there is no timeout;
     // and `ClearInspectPlayer` (the stock `InspectFrame_OnHide`) clears it outright.
@@ -346,9 +346,9 @@ mod tests {
         assert_eq!(events_for(Some(&base), &barred), (false, true));
 
         // The unwatched half: a weekly figure, a lifetime total and the highest-lifetime rank all
-        // move in silence, because the real client registers no watch on any of them (wow-re's
-        // carve of `0x467e70` — the module doc's table). This is the assertion the pre-verdict
-        // implementation failed: it fired `KILLS_CHANGED` for all three.
+        // move in silence, because the real client registers no watch on any of them (`0x467e70` —
+        // the module doc's table). This is the assertion the earlier implementation failed: it
+        // fired `KILLS_CHANGED` for all three.
         for mutate in [
             (|h: &mut HonorState| h.last_week_standing = 42) as fn(&mut HonorState),
             |h: &mut HonorState| h.lifetime_hk = 5_000,

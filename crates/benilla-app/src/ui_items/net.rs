@@ -51,8 +51,7 @@ fn on_open_container(
     }
 }
 
-/// The reference's `BAG_OPEN` raiser `0x4f9410`, transcribed (wow-re
-/// `object-layer/scratch/open-container-inspect-standstate-handlers.md`): our own guid names the
+/// The reference's `BAG_OPEN` raiser `0x4f9410`, transcribed: our own guid names the
 /// backpack, container **0**; otherwise the guid is looked up in the ten bag slots — the four
 /// equipped bags (`PLAYER_FIELD_INV_SLOT_HEAD` 19..22 → containers **1..4**) and the six bank
 /// bags (→ **5..10**), the same numbering `BAG_CLOSED` uses — and a guid in none of them fires
@@ -130,7 +129,7 @@ fn inventory_failure(
         bag_slot,
     });
     lock_cleared.0.extend(pending.clear_by_failure(item_guid));
-    // The sixth loot-latch clear (`0x5e3a84`, wow-re `loot-anim-leg.md` §5; decision 1477): when
+    // The sixth loot-latch clear (`0x5e3a84`, decision 1477): when
     // the packet's **first item guid** is the object we are looting, the session ends here. It is
     // how an item-container loot (a lockbox) closes when the move out of it fails — the one clear
     // the 1471 census was missing. Guid-matched, as the bytes are.

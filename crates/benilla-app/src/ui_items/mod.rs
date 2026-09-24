@@ -65,7 +65,7 @@ use feed::{
 /// The backpack's fixed capacity (`PLAYER_FIELD_PACK_SLOT_1..` — 16 slots on the 1.12 wire).
 pub(super) const PACK_SLOTS: u8 = 16;
 /// The worn-equipment slots (`INV_SLOT` 0..18 — head through tabard, vmangos `PlayerSlots`), the
-/// first region of the reference's inventory walk (wow-re `action-item-slot.md` §8.2).
+/// first region of the reference's inventory walk (the walker `0x622420`).
 pub(super) const EQUIPMENT_SLOTS: u8 = 19;
 /// The first equipped-bag inventory slot (`INV_SLOT` 19..22 hold bags 1..4).
 pub(super) const BAG_SLOT_FIRST: u8 = 19;
@@ -264,11 +264,10 @@ pub(crate) fn slot_guid_count(
 /// [`ItemDisplays`] catalog the equipment feed already loads).
 ///
 /// This is the **one** thing the client's spell-icon surfaces genuinely share. The *laws* do not:
-/// wow-re's `system/ui/scratch/spell-icon-substitution-law.md` settled that there is no shared
-/// spell-icon resolver at all — six Lua getters, six laws inlined per binding, disagreeing even
-/// between the TradeSkill and Craft windows. But every arm that ends at an item ends *here*, at the
-/// same `ItemTemplate+0x18 → 0x5d88b0 → rec+0x14` chain (§5 of that note). So the join lives once,
-/// and each window keeps its own law above it.
+/// the reference has no shared spell-icon resolver at all — six Lua getters, six laws inlined per
+/// binding, disagreeing even between the TradeSkill and Craft windows. But every arm that ends at
+/// an item ends *here*, at the same `ItemTemplate+0x18 → 0x5d88b0 → rec+0x14` chain. So the join
+/// lives once, and each window keeps its own law above it.
 pub(crate) fn item_icon(
     icons: Option<&crate::entities::ItemDisplays>,
     display_info_id: u32,
@@ -279,11 +278,10 @@ pub(crate) fn item_icon(
 }
 
 /// Which sections of the player's flat slot array a walk visits — the reference walker's own
-/// **section mask** (`0x622420`'s `ebx`; wow-re `ui/scratch/quest-leaderboard-law.md` §3.1 and
-/// `action-item-slot.md` §8.2). The reference has ONE walker over one contiguous 113-guid slot
-/// space (`PLAYER_FIELD_INV_SLOT_HEAD` through the end of the keyring) and parameterises it here;
-/// benilla had grown two hand-rolled walks that had already drifted apart, which is what decision
-/// 1158 collapsed back into [`walk_inventory`].
+/// **section mask** (`0x622420`'s `ebx`). The reference has ONE walker over one contiguous 113-guid
+/// slot space (`PLAYER_FIELD_INV_SLOT_HEAD` through the end of the keyring) and parameterises it
+/// here; benilla had grown two hand-rolled walks that had already drifted apart, which is what
+/// decision 1158 collapsed back into [`walk_inventory`].
 ///
 /// A container met in an ENABLED section is always recursed into — the reference gates sections
 /// only at the player's own root descriptor ("inside a recursed container every slot is visited
@@ -325,11 +323,10 @@ impl InventoryScope {
         keyring: false,
     };
     /// `0x4F` — [`Self::DEFAULT`] **plus the bank**, the mask the quest surfaces pass (`8`, which
-    /// the rewrite turns into `0x4F`). wow-re's call-site census of `0x622130` finds six such
-    /// sites and every one is a quest surface: `GetQuestLogLeaderBoard` (`0x4e0579`/`0x4e0592`),
-    /// the ADD_ITEM toast (`0x5dd0f5`), the whole-quest turn-in predicate (`0x4df778`), and
-    /// `GetAbandonQuestItems` (`0x4dfc8a`). **Quest item objectives count banked copies; nothing
-    /// else does.**
+    /// the rewrite turns into `0x4F`). `0x622130` has six such call sites and every one is a quest
+    /// surface: `GetQuestLogLeaderBoard` (`0x4e0579`/`0x4e0592`), the ADD_ITEM toast (`0x5dd0f5`),
+    /// the whole-quest turn-in predicate (`0x4df778`), and `GetAbandonQuestItems` (`0x4dfc8a`).
+    /// **Quest item objectives count banked copies; nothing else does.**
     pub(crate) const QUEST_ITEMS: Self = Self {
         bank: true,
         ..Self::DEFAULT
@@ -501,7 +498,7 @@ pub(crate) fn carried_counts(
 }
 
 /// How far [`find_item`] looks, and which copies count — the two mode bits the reference's own
-/// callers pass into the inventory walker `0x622420` (wow-re `action-item-slot.md` §8.2).
+/// callers pass into the inventory walker `0x622420`.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ItemSearch {
     /// Mode `1` alone: the **equipment slots only** (0–18), no expansion. The equip-vs-use fork's
@@ -515,10 +512,10 @@ pub(crate) struct ItemSearch {
 
 /// Where a copy of item `entry` is: the wire `(bag_index, 0-based slot)` pair ([`wire_pos`]'s own
 /// output shape) plus the **instance guid** that occupies it, since the use fork needs it
-/// ([`item_use_command`]). This is the reference's inventory search, byte-verified (wow-re
-/// `action-item-slot.md` §8.2: the walker `0x622420` over `PLAYER_FIELD_INV_SLOT_HEAD`, predicate
-/// `OBJECT_FIELD_ENTRY` equality) — the first hit of [`walk_inventory`], whose doc carries the
-/// order and why it is load-bearing (decision 0666; bank and buyback are not in this scope).
+/// ([`item_use_command`]). This is the reference's inventory search (the walker `0x622420` over
+/// `PLAYER_FIELD_INV_SLOT_HEAD`, predicate `OBJECT_FIELD_ENTRY` equality) — the first hit of
+/// [`walk_inventory`], whose doc carries the order and why it is load-bearing (decision 0666; bank
+/// and buyback are not in this scope).
 pub(crate) fn find_item(
     store: &ObjectFields,
     objects: &Objects,
@@ -750,12 +747,12 @@ pub(crate) enum ItemUseRoute {
     /// `CMSG_PETITION_SHOW_SIGNATURES` for the instance, not `CMSG_USE_ITEM`.
     ///
     /// **VERIFIED** (2026-09-03, correcting 1672's INFERRED reading — which reasoned it out and
-    /// got the opcode, the payload and the gate right, but placed the arm wrongly). wow-re HAD
-    /// carved this branch; the note simply was not found. Two records carry it:
+    /// got the opcode, the payload and the gate right, but placed the arm wrongly). Two addresses
+    /// carry it:
     ///
-    /// - `ui/scratch/right-click-open.md` §3 row **#9**: gate `0x5d8f95 test ah,0x20` on the
+    /// - `CGItem::Use`'s rung **#9**: gate `0x5d8f95 test ah,0x20` on the
     ///   template's `Flags & 0x2000` (SIGNABLE / petition) → `0x5eef40`.
-    /// - `object-layer/ledger.tsv`'s row for `0x5eef40`: the **`CMSG_PETITION_SHOW_SIGNATURES`
+    /// - `0x5eef40`: the **`CMSG_PETITION_SHOW_SIGNATURES`
     ///   (`0x1BE`)** sender, `ret 8` — `Put32(0x1BE)` @ `0x5eef79`, `Put64(guid)` @ `0x5eef83`,
     ///   send @ `0x5eef8e`, and **that is the whole packet: one uint64**. It returns immediately
     ///   if both guid dwords are zero, and its **sole caller image-wide is `0x5d8fa6`** — this
@@ -769,11 +766,11 @@ pub(crate) enum ItemUseRoute {
     /// what changes is that this is now read rather than reasoned, and a reader is not sent
     /// looking for a byte read that already exists.
     ShowPetition { item: u64 },
-    /// **The disarmed refusal** — `CGItem::Use`'s rung **15 of 20** (decision 1903; wow-re
-    /// `disarm-followups-law.md` §2, byte-verified): using the very weapon a disarm has taken
-    /// raises `ERR_CANT_USE_DISARMED` (`0x16b` = 363) at `0x5d926d call 0x496720` and sends
-    /// **nothing**. This is the client refusing on its own — unlike `ERR_NOT_WHILE_DISARMED`
-    /// (61), which is a server `SMSG_INVENTORY_CHANGE_FAILURE` reason we only render.
+    /// **The disarmed refusal** — `CGItem::Use`'s rung **15 of 20** (decision 1903): using the very
+    /// weapon a disarm has taken raises `ERR_CANT_USE_DISARMED` (`0x16b` = 363) at
+    /// `0x5d926d call 0x496720` and sends **nothing**. This is the client refusing on its own —
+    /// unlike `ERR_NOT_WHILE_DISARMED` (61), which is a server `SMSG_INVENTORY_CHANGE_FAILURE`
+    /// reason we only render.
     ///
     /// The condition is narrow, and none of it is about the clicked item's own class: the item
     /// must be **worn in equipment slot 15 or 16**, the flag must be up, and *that hand* must be
@@ -839,8 +836,7 @@ pub(crate) fn item_use_route(
 /// commit `SendCast 0x6e54f0` then picks the opcode from it (`0x6e57d8 push 0xab`). So an item
 /// use takes the whole ladder — cooldown, GCD, in-flight, mounted, moving, form, reagents, target
 /// bind, range — and [`crate::spell::CastLadder::send`] is where all of that lives (decision
-/// 0914; verified at the bytes in wow-re's `system/ui/scratch/disasm-full.txt`, corroborated by
-/// its `action-item-slot.md` §8 and `cursor-system.md` §8.4a).
+/// 0914).
 ///
 /// Decision 0908 put only the in-flight rung here — the fix for the director's B200, where
 /// double-clicking a mount shipped a second `CMSG_USE_ITEM`, vmangos answered it
@@ -866,8 +862,8 @@ pub(crate) fn item_use_route(
 ///
 /// It is the identical predicate to `0x4e55f0` — [`crate::ui_action::toggle::active_action_toggle`]
 /// — just reached with the *item's* spell instead of the slot's, so the one predicate serves both
-/// (wow-re `shapeshift-plaincast-toggle.md`'s own `0x6e7040` call-site census lists `0x5d9237`
-/// under `0x5d8d00` as "action button, container-**item** branch").
+/// (`0x6e7040`'s call site `0x5d9237` sits under `0x5d8d00`, on the action button's
+/// container-**item** branch).
 ///
 /// Returns whether anything left for the server — `false` for the reference's silent no-op.
 pub(crate) fn send_item_use(
@@ -944,7 +940,7 @@ pub(crate) fn send_item_use(
         // id < 0, `5d916e` id past the table, `5d917a` no Spell.dbc row, `5d9184` no ActiveIconID);
         // the reference asks the bind question even when the item has no usable on-use spell at
         // all. Gating this on `Cast(spell)` alone — which is where it was first written — would be
-        // narrower than the reference, and wow-re said so in as many words.
+        // narrower than the reference.
         ItemUseRoute::Nothing | ItemUseRoute::Cast(_)
             if !suppress
                 && it.guid.is_some_and(|g| {
@@ -1941,7 +1937,7 @@ mod count_of_tests {
     }
 
     /// The headline: bank the quest's items and a quest objective still counts them. This is the
-    /// whole of the mask-`8` finding (wow-re `ui/scratch/quest-leaderboard-law.md` §3.1 — `8` is
+    /// whole of the mask-`8` finding (`0x622420` — `8` is
     /// exactly the bit that *adds the bank*, and every one of the six mask-`8` call sites in the
     /// reference is a quest surface).
     #[test]

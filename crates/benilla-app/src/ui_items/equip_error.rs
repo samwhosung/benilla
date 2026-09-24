@@ -12,8 +12,7 @@
 //! shapeshifted mount press answers 59 **and** `SPELL_FAILED_NO_ITEMS_WHILE_SHAPESHIFTED` — so
 //! anything printed for it doubles the refusal (director's report B198).
 //!
-//! The reference silences it **through the data, not through control flow** (wow-re
-//! `system/ui/scratch/inventory-change-failure-display.md`, §5 trio, dde90376). Handler
+//! The reference silences it **through the data, not through control flow**. Handler
 //! `0x5e3991` maps the reason through the 67-wide errorId jump table `0x622794` into the error
 //! registry `0xb4b498` and calls `CGGameUI::DisplayError 0x496720` unconditionally. 59's slot is
 //! populated and non-null — errorId 362, key `ERR_CANT_BE_DISENCHANTED` — but that key is simply
@@ -28,8 +27,8 @@
 /// own loaded `GlobalStrings.lua` at the drain. **Total** — every reason has a key, because the
 /// reference's own lookup is (see the module doc); a key with no string displays nothing.
 ///
-/// The FULL build-5875 set, VERIFIED key-by-key against the binary's errorId table `0x622794`
-/// (wow-re, above) — which agreed with the vmangos `ItemDefines.h` tag comments on 66 of 67
+/// The FULL build-5875 set, read key by key off the binary's errorId table `0x622794` — which
+/// agreed with the vmangos `ItemDefines.h` tag comments on 66 of 67
 /// entries. Positions come from that enum (sequential with every `#if` band ≤ 5875 included:
 /// stunned=37, dead=38, INVENTORY_FULL=50; an earlier table had the TBC-era 39/40 for
 /// stunned/dead — on this wire those are CANT_DO_RIGHT_NOW / INT_BAG_ERROR). Reason 1's string

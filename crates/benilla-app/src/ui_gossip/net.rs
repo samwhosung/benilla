@@ -75,7 +75,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut gossip: ResMut<GossipState>) {
 }
 
 /// A streamed unit's gender (`UNIT_FIELD_BYTES_0` byte 2) by guid — the gossip greeting's column
-/// selector (wow-re `gossip-npctext-law.md`: tested `== 1` for female, so genderless `2` reads as
+/// selector (`0x4e20c1`: tested `== 1` for female, so genderless `2` reads as
 /// male). `0` when the guid isn't streamed in or carries no descriptor yet, which is the same
 /// column the reference takes for a gossip target that isn't a unit at all.
 fn npc_gender(guid: u64, index: &GuidIndex, stores: &Query<&ObjectStore>) -> u8 {

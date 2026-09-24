@@ -27,9 +27,8 @@
 //! passing a message record. A route with no record has no `kind` and no sound to read, so it is
 //! resolved where the VM is — [`super::feed`] — rather than queued as a message.
 //!
-//! The id → key mapping is **wow-re `system/ui/scratch/guild-api-carve.md` §5's own table**, §5
-//! cross-checked with the case-arm bytes quoted per row (`0x5e720a`→0x59 … `0x5e745a`→0x69), and
-//! the keys are matched against benilla's generated catalog rather than by name.
+//! The id → key mapping is **the handler's own case arms** (`0x5e720a`→0x59 … `0x5e745a`→0x69),
+//! and the keys are matched against benilla's generated catalog rather than by name.
 
 use benilla_protocol::messages::{
     guild_command, guild_command_error, guild_event, GuildCommandResult, GuildEventNotice,
@@ -39,8 +38,8 @@ use crate::ui_action::UiError;
 
 /// The strings `SMSG_GUILD_EVENT`'s shared emitter tail passes to `0x496720`.
 ///
-/// **`strCount == 0` and `strCount >= 4` both pass ZERO strings** (`0x5e745f`, wow-re
-/// `guild-api-carve.md` §5) — the tail has three arms for 1, 2 and 3 and no other. That is not the
+/// **`strCount == 0` and `strCount >= 4` both pass ZERO strings** (`0x5e745f`) — the tail has
+/// three arms for 1, 2 and 3 and no other. That is not the
 /// same as padding the missing slots with empties, which is what this module did before: a template
 /// whose specifier runs out of arguments has the specifier **copied through verbatim**
 /// (`SStrPrintf`, and [`benilla_ui::strings::fill`] implements it), so a two-string promotion reads
@@ -64,13 +63,13 @@ fn emitted_params(notice: &GuildEventNotice) -> Vec<&str> {
 /// the pair is the only place in this table with a condition at all, and that the guid those two
 /// arms carry exists to answer it.
 ///
-/// **This argument used to be `ignored`, and that was a mislabel** (corrected 1589, from a wow-re
-/// §5 dispatched for exactly this): `0x5ae810` is `FriendList::FindFriendSlot`, a **friends-list**
+/// **This argument used to be `ignored`, and that was a mislabel** (corrected 1589):
+/// `0x5ae810` is `FriendList::FindFriendSlot`, a **friends-list**
 /// membership test — base `this+8`, stride `0x20`, bound `0x32` — not the ignore-list check at
 /// `this+0x650`. Reading it as "ignore" got the behaviour backwards on both sides: an *ignored*
 /// guildmate was silenced where the reference announces them, and a guildmate who is also a
 /// *friend* was announced twice, because `SMSG_FRIEND_STATUS` says the same thing with no gate of
-/// its own. The repo's own `system/net` ledger had `0x5ae810` right the whole time.
+/// its own. `0x5ae810` has exactly two callers image-wide, these two arms.
 pub(super) fn event_line(notice: &GuildEventNotice, announce_signon: bool) -> Option<UiError> {
     let args = emitted_params(notice);
     let shared = |key: &'static str| Some(UiError::strings(key, &args));
@@ -109,8 +108,8 @@ pub(super) fn event_line(notice: &GuildEventNotice, announce_signon: bool) -> Op
         guild_event::SIGNED_ON | guild_event::SIGNED_OFF => None,
         // **`0x09` and everything past `0x0d` fall to the SAME arm**, and it is not silence:
         // `0x5e745a` pushes `0x69` = `ERR_GUILD_INTERNAL` and jumps into the shared tail like the
-        // rest (guild-api-carve.md §5). This module used to return `None` here under a comment
-        // saying the key "is not settled" — it is settled, in wow-re's table and in benilla's own
+        // rest. This module used to return `None` here under a comment
+        // saying the key "is not settled" — it is settled, in the reference and in benilla's own
         // generated catalog, and `TABARD_CHANGE` was silent for the same reason.
         _ => shared("ERR_GUILD_INTERNAL"),
     }
@@ -123,7 +122,7 @@ pub(super) fn event_line(notice: &GuildEventNotice, announce_signon: bool) -> Op
 /// except for `0x08`, whose two meanings are told apart by that same tag.
 ///
 /// **Every `_S` key here is called with the name and every other with nothing** — the reference's
-/// `add esp,8` / `add esp,4` split, 22 of 22 (guild-api-carve.md §5's own internal control). That
+/// `add esp,8` / `add esp,4` split, 22 of 22 (`0x5e7520`). That
 /// is a property a test can check against the key names, and one does.
 pub(super) fn command_line(result: &GuildCommandResult) -> Option<UiError> {
     let name = result.name.as_str();
@@ -331,7 +330,7 @@ mod tests {
     }
 
     /// **The `_S` arity control, 22 of 22** — the reference's `add esp,8` at every `_S` key and
-    /// `add esp,4` at every other (guild-api-carve.md §5). It is checkable here because the key
+    /// `add esp,4` at every other (`0x5e7520`). It is checkable here because the key
     /// name carries the arity, and it is the one thing about this table that a wrong key cannot
     /// pass silently.
     #[test]

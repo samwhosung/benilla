@@ -15,14 +15,13 @@
 //! to a text id keeps the frame exactly as it was for the query round trip: hidden if it was
 //! hidden (never options over an empty page — B292, decision 1508), and **still painted with the
 //! previous menu if it was open** (a sub-menu's first visit repaints in place when its text lands,
-//! never hides and re-shows the window — decision 1994). Both are the reference's own law,
-//! VERIFIED at the bytes (wow-re `gossip-npctext-law.md` §1/§4): on a cache miss `0x4e2010` sets
-//! its select latch and returns — no greeting write, no event — and its greeting write and
-//! `GOSSIP_SHOW` are adjacent and unconditional on the one success path, so "gossip frame open
-//! with a blank greeting" is not a reachable state, and neither is "gossip frame hidden by a
-//! pending reply". [`GossipState::text_pending`] is the latch; [`feed_gossip`] fires nothing
-//! while it holds; [`GossipState::open_menu`]/[`GossipState::text_arrived`] are the two wire
-//! edges that set and resolve it.
+//! never hides and re-shows the window — decision 1994). Both are the reference's own law: on a
+//! cache miss `0x4e2010` sets its select latch and returns — no greeting write, no event — and its
+//! greeting write and `GOSSIP_SHOW` are adjacent and unconditional on the one success path, so
+//! "gossip frame open with a blank greeting" is not a reachable state, and neither is "gossip frame
+//! hidden by a pending reply". [`GossipState::text_pending`] is the latch; [`feed_gossip`] fires
+//! nothing while it holds; [`GossipState::open_menu`]/[`GossipState::text_arrived`] are the two
+//! wire edges that set and resolve it.
 
 use std::collections::HashMap;
 
@@ -92,7 +91,7 @@ impl GossipState {
         select_greeting(blocks, npc_gender, greeting_roll()).map(str::to_string)
     }
 
-    /// The reference's text-pending latch (`[0xbbb670]`, wow-re `gossip-npctext-law.md` §1): a
+    /// The reference's text-pending latch (`[0xbbb670]`): a
     /// session is latched but its greeting has not resolved — its `CMSG_NPC_TEXT_QUERY` is in
     /// flight, or (`text_id == 0`) was never sent. While it holds, [`feed_gossip`] fires nothing
     /// and both drains refuse every select (decisions 1508, 1994).
@@ -147,7 +146,7 @@ impl GossipState {
     /// Draw the open menu's greeting from its (present) record — or, when the record names no
     /// line for this NPC's gender column, end the interaction: the reference's `missing` path
     /// logs "Missing gossip text!" and fires `GOSSIP_CLOSED` instead of ever opening the frame
-    /// (wow-re `gossip-npctext-law.md` §2). Ours never opened either, so the clear is the whole
+    /// (`0x4e216e`). Ours never opened either, so the clear is the whole
     /// close.
     fn resolve_greeting(&mut self, npc_gender: u8) {
         match self.draw_greeting(self.text_id, npc_gender) {
@@ -229,8 +228,7 @@ impl NpcSession for GossipState {
 /// the XML resolves to a `Interface\GossipFrame\<Type>GossipIcon` texture.
 ///
 /// **The byte is a bare index into [`GOSSIP_ICON_TYPES`], with no bounds check anywhere on the
-/// client's path** — VERIFIED at the bytes (wow-re `system/ui/scratch/gossip-icon-and-binder-flow.md`,
-/// decision 1335): `GetGossipOptions 0x4e28d0` reads the stored byte and does
+/// client's path** (decision 1335): `GetGossipOptions 0x4e28d0` reads the stored byte and does
 /// `mov edx,[eax*4 + 0x84b7ac]` straight into a 14-entry pointer table, then `lua_pushstring`s it.
 ///
 /// The old map read the byte through **vmangos's `GossipDef.h` enum *names*** (`INTERACT_1`,
@@ -239,7 +237,7 @@ impl NpcSession for GossipState {
 /// entry at all and fell through to the chat bubble, which is the icon half of B249 (decision 1331).
 ///
 /// Two of the reference's out-of-range behaviours we deliberately do **not** reproduce, because
-/// both are its missing guard rather than its design (wow-re's note says so in as many words):
+/// both are its missing guard rather than its design:
 /// index **14** is a NULL in the table, so the reference pushes `nil` as the option's type and the
 /// row draws whatever the XML's own fallback gives it — the chat bubble, which is what we return
 /// directly. Index **≥15** walks off the end into the gossip Lua *binding* table, pushing API-name
@@ -341,7 +339,7 @@ fn feed_gossip(
         .and_then(|g| names.resolve(g, &commands).map(str::to_string));
     // **The hold fires nothing** (decision 1994). While the greeting query is in flight the
     // reference's handler has set its select latch and RETURNED — no greeting write, no event
-    // (wow-re `gossip-npctext-law.md` §1/§4) — so its frame keeps whatever it last painted:
+    // (`0x4e2010`, exit `0x4e2068`) — so its frame keeps whatever it last painted:
     // hidden if it was hidden, the previous menu if it was open, clicks refused (`drain_gossip`).
     // A pending menu is therefore NOT a closed one: the VM keeps its last snapshot, `last` keeps
     // its memory, and the text landing is a plain in-place `GOSSIP_SHOW` below. Reading the hold
@@ -413,8 +411,7 @@ fn drain_gossip(
         let Some(npc) = state.npc else { continue };
         // While the greeting query is in flight — the frame may still show the previous menu
         // (1994) — refuse the select, as the reference does: its `SelectGossipOption` (`0x4e2320`)
-        // is silently refused while the text-pending latch `0xbbb670` is set (wow-re
-        // `gossip-npctext-law.md` §1).
+        // is silently refused while the text-pending latch `0xbbb670` is set.
         if state.text_pending() {
             debug!(
                 "ui_gossip: SelectGossipOption({pos}) while the text query is in flight — refused"
@@ -503,7 +500,7 @@ mod tests {
 
     /// B292's hold: a first visit (record not cached) keeps the menu CLOSED for the query round
     /// trip — options never render over an empty page — and the text arriving opens it complete.
-    /// The reference's law, from the bytes (wow-re `gossip-npctext-law.md` §4): the greeting write
+    /// The reference's law (`0x4e229a`/`0x4e22b0`): the greeting write
     /// and `GOSSIP_SHOW` are adjacent and unconditional on one success path; every other exit
     /// fires no event.
     #[test]
@@ -621,7 +618,7 @@ mod tests {
     /// the feed read that as a close) and the landing fired `GOSSIP_SHOW`: `HideUIPanel` then
     /// `ShowUIPanel` across a server round trip — the flash. First click only, because the record
     /// cache serves the second visit with no hold. The reference fires nothing at the pending
-    /// step (wow-re `gossip-npctext-law.md` §1/§4): its frame keeps the previous menu painted,
+    /// step (`0x4e2010`, exit `0x4e2068`): its frame keeps the previous menu painted,
     /// selects refused, until the text answers — then one in-place repaint.
     #[test]
     fn the_hold_fires_nothing_a_pending_submenu_keeps_the_frame_painted() {

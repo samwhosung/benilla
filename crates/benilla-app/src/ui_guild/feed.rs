@@ -148,7 +148,7 @@ pub(super) fn feed_guild(
     // 1.12's FrameXML has — `InGuildCheck` and the paper doll both read `GetGuildInfo("player")`
     // and ignore the argument. The per-token broadcast for OTHER units is deliberately not built:
     // it has no consumer here, and the broadcaster's per-token walk is the one part of that path
-    // wow-re flags INFERRED, so it is not something to build on yet.
+    // that is inferred, unconfirmed in the binary, so it is not something to build on yet.
     if id_changed {
         script.fire_event(
             "PLAYER_GUILD_UPDATE",

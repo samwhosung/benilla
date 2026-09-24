@@ -41,12 +41,12 @@ use crate::ui_unit::UnitFeed;
 // NOTE on the admission filter below: Craft recipes (enchants, the rod crafts) do NOT carry
 // `SPELL_ATTR_IS_TRADESKILL` — they carry **`castUI != 0`** instead (pinned on the live 5875 data:
 // 7418/7421 castUI=3, attributes bare 0x10000; exactly the spellbook add-gate's third exclusion
-// leg). INTERIM admission pending a wow-re detail pass: a known spell joins the craft list when its
+// leg). INTERIM admission, unconfirmed in the binary: a known spell joins the craft list when its
 // SLA line matches AND (`castUI != 0` OR the tradeskill bit) and it is not an opener.
 
 /// The open Craft window: the skill line whose recipes it lists (`None` = closed) and the **craft
-/// type** that opened it. Routed here by the opener's `EffectMiscValue[0] != 0` (byte-VERIFIED —
-/// wow-re `tradeskill` TU-A); that same misc value *is* the craft type (1 Beast Training ·
+/// type** that opened it. Routed here by the opener's `EffectMiscValue[0] != 0`
+/// (`Spell_C::TryCast 0x6e4b60`); that same misc value *is* the craft type (1 Beast Training ·
 /// 3 Enchanting), which the client keeps at `ds:0xbdcfb8` and reads for both the window's admission
 /// filter and its row comparator (decision 1124). Client-local state, no wire. Cleared by the Lua
 /// close and by the session end ([`on_session_end`]) — a logout's fresh VM never runs the old one's
@@ -76,8 +76,8 @@ fn on_session_end(In(_): In<SessionEvent>, mut open: ResMut<CraftOpen>) {
 }
 
 /// The line's `(rank, max, bonus)` off the skill block — the Craft window bands difficulty on
-/// the EFFECTIVE skill (rank + bonuses), byte-VERIFIED unlike the TradeSkill window's raw rank
-/// (wow-re `tradeskill` TU-C).
+/// the EFFECTIVE skill (rank + bonuses, `0x5ea520` in the Craft build `0x4f60c0`), unlike the
+/// TradeSkill window's raw rank.
 fn skill_rank(store: &ObjectStore, skill_id: u32) -> (u32, u32, i32) {
     for i in 0..PLAYER_SKILL_SLOTS {
         if let Some(s) = store.0.player_skill(i) {
@@ -93,9 +93,8 @@ fn skill_rank(store: &ObjectStore, skill_id: u32) -> (u32, u32, i32) {
     (0, 0, 0)
 }
 
-/// **Law D** — the Craft window's row icon, transcribing `GetCraftIcon 0x4f7160` (byte-VERIFIED;
-/// wow-re `ui/scratch/spell-icon-substitution-law.md` §2, folded back by decision 1107): **always**
-/// this recipe's own `SpellIconID`, straight off `Spell.dbc`.
+/// **Law D** — the Craft window's row icon, transcribing `GetCraftIcon 0x4f7160` (decision 1107):
+/// **always** this recipe's own `SpellIconID`, straight off `Spell.dbc`.
 ///
 /// The one-liner is the point, and it is not an oversight to be "improved". The Craft window and
 /// the TradeSkill window are two translation units of the *same* node, and their icon laws are
@@ -108,10 +107,9 @@ fn craft_icon(d: &benilla_formats::SpellDisplay) -> Option<String> {
     d.icon.clone()
 }
 
-/// The Craft window's **tooltip law** — `SetCraftSpell 0x533e90`, byte-verified in wow-re
-/// (`ui/scratch/trainer-service-tooltip-law.md` §4.1). Like the trainer's, the binding is a
-/// selector into the two shared builders and emits no line of its own; unlike the trainer's, it
-/// reads the **recipe's own** effect columns:
+/// The Craft window's **tooltip law** — `SetCraftSpell 0x533e90`. Like the trainer's, the binding
+/// is a selector into the two shared builders and emits no line of its own; unlike the trainer's,
+/// it reads the **recipe's own** effect columns:
 ///
 /// ```text
 /// for i in 0..3:
@@ -205,7 +203,7 @@ fn feed_craft(
                 for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
                     let have = count_of(&store.0, &objects, entry, InventoryScope::CARRIED);
                     // A reagent is an ITEM row, so it terminates in the one genuinely shared chain
-                    // (wow-re §5): ItemTemplate → ItemDisplayInfo → icon. Unlike the *recipe* icon
+                    // (`0x5d88b0`): ItemTemplate → ItemDisplayInfo → icon. Unlike the *recipe* icon
                     // above, there is nothing per-binding about this one.
                     let (name, icon) = match items.template(entry, 0, &commands) {
                         Some(t) => (
@@ -227,10 +225,9 @@ fn feed_craft(
                     num_available = 0;
                 }
                 // **Focus first, then the totems** — `0x4ff980`'s own push order, and
-                // `GetCraftSpellFocus 0x4f78b0` returns the very same pair list despite its name
-                // (wow-re `tradeskill-tools-and-spell-focus.md`). The focus's flag is the literal
-                // `1.0` with no predicate: the reference never reddens it. See
-                // [`crate::ui_tradeskill`]'s twin, where the law is written out.
+                // `GetCraftSpellFocus 0x4f78b0` returns the very same pair list despite its name.
+                // The focus's flag is the literal `1.0` with no predicate: the reference never
+                // reddens it. See [`crate::ui_tradeskill`]'s twin, where the law is written out.
                 let mut tools = Vec::new();
                 if d.requires_spell_focus != 0 {
                     if let Some(n) = focus

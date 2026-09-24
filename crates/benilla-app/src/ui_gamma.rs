@@ -4,8 +4,8 @@
 //! [`ui_quad.wgsl`](shaders/ui_quad.wgsl) composites the UI in gamma bytes, the way the
 //! reference's fixed-function device composites into its 8-bit backbuffer: every tint is a gamma
 //! multiply, every blend is gamma arithmetic clamped at each write, and `alphaMode="ADD"` is the
-//! byte add `dst + texel·α` (EGxBlend 3 = `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`; wow-re
-//! `system/gx/gx.md`, factor tables `0x85c1f8`/`0x85c224`). This node converts that finished gamma
+//! byte add `dst + texel·α` (EGxBlend 3 = `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`;
+//! factor tables `0x85c1f8`/`0x85c224`). This node converts that finished gamma
 //! image to linear ONCE, rendering straight into the swapchain — the camera's output mode is
 //! `Skip`, so there is no output blit (decision 2206, [`benilla_world::final_pass`]) — whose sRGB
 //! write re-encodes it to the exact client byte.
@@ -64,8 +64,7 @@ impl Default for UiGammaLane {
 ///
 /// The reference applies it as an OS **hardware gamma ramp**: its change callback `0x4034d0`
 /// builds `ramp[i] = __ftol(pow(i · 1/255, gamma) · 65535)` at `0x591680` and hands the 3×256 words
-/// to `GDI32!SetDeviceGammaRamp` (wow-re `ffxeffects/scratch/whole-frame-grade-verdict.md` §(a);
-/// the same note proves there is no other whole-frame grade in the client, and that
+/// to `GDI32!SetDeviceGammaRamp` (there is no other whole-frame grade in the client, and
 /// `Brightness`/`Contrast` CVars do not exist in the binary at all). That upload is **skipped
 /// windowed** — `byte[dev+0x20b]` is `CGxFormat +0x07`, which is `gxWindow` — and windowed is every
 /// mode benilla has (1627), so copying the mechanism byte for byte would ship a slider that never
@@ -84,7 +83,7 @@ pub(crate) struct DisplayGamma(pub(crate) f32);
 pub(crate) const DEFAULT_GAMMA: f32 = 1.0;
 
 /// **The clamp is ours, and the reference has none** — `SetGamma(5)` writes `gamma = "-4.000000"`
-/// there with no arm anywhere to catch it (wow-re `ui/scratch/video-options-verbs.md` §3, with
+/// there with no arm anywhere to catch it (`SetGamma 0x4891f0`, with
 /// `baseMip`'s validating callback `0x689090` as the positive control). The reference can afford
 /// that because its ramp is a fullscreen-only OS call a player can escape by alt-tabbing; ours is
 /// the image itself, and `pow(x, 12)` is a black screen with the panel that undoes it somewhere

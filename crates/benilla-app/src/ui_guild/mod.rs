@@ -4,8 +4,7 @@
 //! [`GuildState`] mirrors the wire the way [`crate::ui_social`]'s `SocialState` does: the seven
 //! server packets replace it or patch it, and the feed ([`feed`]) turns it into the display-ready
 //! snapshot `benilla_ui::script::guild` reads. The laws below are the ones that are *not* what the
-//! obvious design would do, each verified at the reference's bytes (wow-re
-//! `system/ui/scratch/guild-api-carve.md`, `guild-roster-wire.md`, RF-0077):
+//! obvious design would do, each as the reference does it:
 //!
 //! - **Identity and roster are two caches with two lifetimes.** `SMSG_GUILD_ROSTER` carries the
 //!   MOTD, the info text, the rank *rights* and the members; it carries neither the guild's name
@@ -142,8 +141,8 @@ impl RosterUpdate {
 /// GuildState is cleared on disconnect, and a CVar must not be.
 ///
 /// **Off by default, and that is byte-read, not a guess**: the register site `0x5e24c7` pushes
-/// `0x82e570` = `"0"` (§5, wow-re `system/object-layer/scratch/guild-signon-cvar-gate.md`). A
-/// stock 1.12 client prints nothing when a guildmate logs in, and neither do we.
+/// `0x82e570` = `"0"`. A stock 1.12 client prints nothing when a guildmate logs in, and
+/// neither do we.
 #[derive(Resource, Default)]
 pub(crate) struct GuildMemberNotify(pub(crate) bool);
 
@@ -362,8 +361,8 @@ impl GuildState {
         self.motd = roster.motd;
         self.info_text = roster.info;
         // The reference's own rank-rights loop has no bound check and overruns its ten-slot array
-        // into the member array's control block on a hostile `rankCount >= 12` (wow-re
-        // `guild-api-carve.md` §2). We clamp: a memory-safety divergence, deliberately.
+        // into the member array's control block on a hostile `rankCount >= 12` (`0x4d0bb0`). We
+        // clamp: a memory-safety divergence, deliberately.
         self.rank_rights = roster.rank_rights;
         self.rank_rights.truncate(GUILD_RANKS_MAX_COUNT);
         self.members = roster.members;
@@ -577,7 +576,7 @@ pub(crate) fn unit_guild(
 /// `0x860f9c`), which the reference resolves through the very same guild-identity cache this
 /// serves `GetGuildInfo` from: `0x609085` tests the render mask's bit `0x10`
 /// (`UnitNamePlayerGuild`) and then reads `0x5e09f0` off the unit's own `[CGUnit+0xe68]+0x8/0xc`
-/// guild GUID (wow-re `object-layer/scratch/overhead-name.md` Q4 point 3).
+/// guild GUID.
 ///
 /// [`unit_guild`] without the rank — and, deliberately, **without its two `String` clones**: this
 /// is read once per shown player per frame by [`crate::nameplates::drive_nameplates`], whose whole
@@ -601,8 +600,7 @@ pub(crate) fn unit_guild_name<'a>(
 /// it, exactly like [`unit_guild`].
 ///
 /// `None` — no crest painted, so a Guild Tabard keeps its own `Tabard_A_05Default` art — covers
-/// **four** cases, and the reference reaches the same nil on all four (wow-re
-/// `rf89-guild-tabard-emblem-install.md` §Q1/§Q6):
+/// **four** cases, and the reference reaches the same nil on all four:
 ///
 /// 1. a guildless wearer — `0x560e30` returns NULL at `0x560e3f` before it even queries;
 /// 2. a creature, which has no player block at all;
@@ -628,7 +626,7 @@ pub(crate) fn unit_guild_emblem(
 /// The same crest for a **corpse**, whose guild id is its own snapshot
 /// ([`ObjectFields::corpse_guild`]) rather than the living `PLAYER_GUILDID` — the reference reads
 /// `CORPSE_FIELD_GUILD` at `0x5d6edf` and runs the identical name-cache lookup before installing
-/// the emblem (`0x5d6ec0`; wow-re `corpse-decal-and-loot-sparkle.md` §6b). All four `None` cases
+/// the emblem (`0x5d6ec0`). All four `None` cases
 /// above hold unchanged: a guildless owner, a query still in flight, an undesigned crest.
 pub(crate) fn corpse_guild_emblem(
     fields: &ObjectFields,
@@ -776,9 +774,7 @@ pub(crate) mod net {
     /// `SMSG_GUILD_EVENT`. The trailing guid rides only on the sign-on/sign-off pair, and it is
     /// there to answer that pair's **display condition** — which the reference builds out of
     /// **four conjuncts**, all of them in the handler's `0x0c`/`0x0d` arms, each branching to the
-    /// same silent exit `0x5e74c9` (wow-re `system/object-layer/scratch/guild-signon-cvar-gate.md`,
-    /// the §5 dispatched for decision 1589; it corrects `guild-api-carve.md` §5, which recorded
-    /// these arms with only one of the four):
+    /// same silent exit `0x5e74c9` (decision 1589):
     ///
     /// 1. **there is a local player object.** Ours is "we know our own guid" — the same fact, and
     ///    it is what conjunct 3 needs anyway.
@@ -945,8 +941,8 @@ mod tests {
         }
     }
 
-    /// The sign-on/sign-off line's **four-conjunct** display condition (decision 1589, from the
-    /// wow-re §5 dispatched for it). Every conjunct gets its own case, because the two that were
+    /// The sign-on/sign-off line's **four-conjunct** display condition (decision 1589). Every
+    /// conjunct gets its own case, because the two that were
     /// wrong were wrong in *opposite* directions and a single happy-path assertion would have
     /// caught neither.
     #[test]

@@ -48,7 +48,7 @@ const LOOK_SLOTS: [u8; 14] = [0, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 16, 17, 18];
 const HELD_SLOTS: [usize; 3] = [15, 16, 17];
 
 /// **The dress-up widget has two held lanes, and a ranged weapon takes one of them** (decision
-/// 1076; wow-re `ui/scratch/dressup-model-equipment.md`).
+/// 1076).
 ///
 /// `DressUpModel::TryOn 0x504d90` installs into lane `0x0f` (→ HandRight) or lane `0x10` (→
 /// HandLeft, or the Shield point for a shield) — never a third. `INVTYPE_RANGED` (15, bows) lands
@@ -126,7 +126,7 @@ fn held_lanes(equipment: &mut [CharEnumItem; 19], room: &DressUpRoom) {
 /// evicts.
 ///
 /// **The dual-wield arm is taken as permitted, and that is a stated assumption.** The binary gates
-/// it on a global (`0xc4d770`) whose source wow-re could not identify, and we have no dual-wield
+/// it on a global (`0xc4d770`) whose source is unidentified, and we have no dual-wield
 /// capability streamed to read. Permitted is the conservative direction here: it evicts strictly
 /// less than the alternative, so it can only ever leave the pre-1076 behaviour in place for a
 /// melee pair — while the ranged evictions this record is actually about are unconditional in the
@@ -143,7 +143,7 @@ pub(crate) struct DressUpRoom {
     open: bool,
     /// `Undress()` has stripped the body: the player's own worn pieces are not part of the look
     /// until the next `Dress`. The hands are untouched — the widget clears components bodyslots
-    /// `0..0xb` and no hand lane (wow-re `dressup-model-equipment.md` §5).
+    /// `0..0xb` (`0x504490`) and no hand lane.
     bare: bool,
     /// Resolved substitutions by equipment slot — `(display id, inventory type)`, the same pair the
     /// enum-shaped array carries.
@@ -320,8 +320,7 @@ fn player_look(
         // hidden in the dressing room.** A TRY-ON gates on nothing and previews the helm or cloak
         // regardless — which is the branch above, and the reason this test sits *below* it — and
         // `Dress()` (the Reset button) drops the substitutions and so re-clones back to hidden.
-        // (wow-re `object-layer/scratch/helm-cloak-hide.md` §8, byte-verified; this replaced an
-        // INFERRED guess that the mannequin was unconditional.)
+        // (This replaced an INFERRED guess that the mannequin was unconditional.)
         if (idx == 0 && s.player_hides_helm()) || (idx == 14 && s.player_hides_cloak()) {
             continue;
         }
@@ -470,7 +469,7 @@ mod tests {
     }
 
     /// `DressUpModel:Undress()` strips every worn piece — the player's own and a tried-on one —
-    /// and no hand lane (bodyslots `0..0xb` only, wow-re §5); a later try-on lands on the bare
+    /// and no hand lane (bodyslots `0..0xb` only, `0x504490`); a later try-on lands on the bare
     /// body, and `Dress()` puts the player's own gear back.
     #[test]
     fn undress_strips_the_body_but_not_the_hands_and_a_try_on_lands_on_the_bare_body() {
@@ -727,10 +726,10 @@ mod tests {
     }
 
     /// **The dressing room inherits the equipment-display preferences, and a try-on overrides
-    /// them** (decision 1472; wow-re `object-layer/scratch/helm-cloak-hide.md` §8, byte-verified
-    /// off `DressUpModel::SetUnit 0x476cb0`'s verbatim clone of the live player's display
-    /// pointers). Hidden helm + hidden cloak, so the player's own two pieces are absent from the
-    /// look — and then a tried-on helm shows anyway, because previewing it is the whole feature.
+    /// them** (decision 1472; `DressUpModel::SetUnit 0x476cb0`'s verbatim clone of the live
+    /// player's display pointers). Hidden helm + hidden cloak, so the player's own two pieces are
+    /// absent from the look — and then a tried-on helm shows anyway, because previewing it is the
+    /// whole feature.
     #[test]
     fn a_hidden_helm_stays_hidden_on_the_mannequin_until_one_is_tried_on() {
         let (cmds, _rx) = commands();

@@ -141,8 +141,8 @@ fn inspect_slot_view(
         // not the instance's bound state.
         already_bound: false,
         // All 7 slots, exactly as the reference's own inspect leg copies and renders them
-        // (§E7) — a 1.12 server happens to fill only PERM and TEMP. No item object here, so no
-        // charges and no `SMSG_ITEM_ENCHANT_TIME_UPDATE` countdown: the reference's inspect
+        // (`0x533354`) — a 1.12 server happens to fill only PERM and TEMP. No item object here, so
+        // no charges and no `SMSG_ITEM_ENCHANT_TIME_UPDATE` countdown: the reference's inspect
         // tooltip has neither either.
         enchants: crate::items::enchant_lines(
             (0..7).map(|j| {
