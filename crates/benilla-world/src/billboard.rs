@@ -279,12 +279,12 @@ pub(crate) fn parent_arm_matrix(
     }
 }
 
-/// The rebuilt orientation for a billboard of `kind` — the byte law (module doc), one function
-/// for both consumers: the CARD path (`kept_rot` = the placement/owner rotation) and the JOINT
-/// palette pass below (`kept_rot` = the joint's fully-composed pre-billboard world rotation, the
-/// law's `normalize(rK)`). `bx/by/bz` are the bone's WoW-frame X/Y/Z axes as world directions
-/// after the replacement; the returned quat maps the mesh's model-local Bevy frame onto them
-/// (WoW axes sit in that frame as X→−Z, Y→−X, Z→+Y — coords.rs — so local X→−by, Y→bz, Z→−bx).
+/// The rebuilt orientation for a billboard of `kind` — the byte law (module doc), one function for
+/// both consumers: the CARD path (`kept_rot` = the placement/owner rotation) and the JOINT palette
+/// pass below (`kept_rot` = the joint's fully-composed pre-billboard world rotation). `bx/by/bz`
+/// are the bone's WoW-frame X/Y/Z axes as world directions after the replacement; the returned quat
+/// maps the mesh's model-local Bevy frame onto them (WoW axes sit in that frame as X→−Z, Y→−X, Z→+Y
+/// — coords.rs — so local X→−by, Y→bz, Z→−bx).
 pub fn billboard_basis(
     kind: BillboardKind,
     kept_rot: Quat,
@@ -394,18 +394,17 @@ impl BillboardJointRig {
 }
 
 /// The palette half of the billboard law: for each rigged host, replace every billboard joint's
-/// world rotation with the camera basis (scale and pivot translation preserved — the law's
-/// `lenK`/`finalTranslation`, which in our rig identity is simply "keep the joint's global
+/// world rotation with the camera basis (scale and pivot translation preserved — the reference's
+/// default tail `0x715868`, which in our rig identity is simply "keep the joint's global
 /// scale/translation"), then re-compose every descendant joint from its local TRS so skinned
-/// geometry — and emitters/ribbons riding those joints — inherit the facing. Runs after
-/// propagation and writes `GlobalTransform` directly (the same exactness argument as
-/// [`face_billboards`], which must run after this so following-joint cards read the replaced
-/// frames). **Every palette consumer must read AFTER this system, same frame**: avian's physics
-/// sync re-propagates the hierarchy from locals inside the fixed loop, so an Update-time read
-/// gets the UN-billboarded pose — the Demon Skin flames followed the character's yaw instead of
-/// the camera until the particle/ribbon sims moved behind this pass. Bone order is parent-sorted
-/// in every real M2 (the format guarantees parent < child); a malformed child whose parent
-/// follows it just keeps its propagated pose.
+/// geometry — and emitters/ribbons riding those joints — inherit the facing. Runs after propagation
+/// and writes `GlobalTransform` directly (the same exactness argument as [`face_billboards`], which
+/// must run after this so following-joint cards read the replaced frames). **Every palette consumer
+/// must read AFTER this system, same frame**: avian's physics sync re-propagates the hierarchy from
+/// locals inside the fixed loop, so an Update-time read gets the UN-billboarded pose — the Demon
+/// Skin flames followed the character's yaw instead of the camera until the particle/ribbon sims
+/// moved behind this pass. Bone order is parent-sorted in every real M2 (the format guarantees
+/// parent < child); a malformed child whose parent follows it just keeps its propagated pose.
 ///
 /// A rigged model can hang under ANOTHER rig's joint — a spell-effect instance on a unit's
 /// attach-helper bone, a rigged held item in a hand. One ownership law keeps the passes from

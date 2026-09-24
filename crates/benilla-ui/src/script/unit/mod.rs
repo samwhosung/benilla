@@ -271,11 +271,11 @@ pub struct UnitState {
     /// The event is id **137**, and the id is not arbitrary: the reference's generic bridge
     /// `0x51bbb0` registers one watch per unit-window field whose name-table slot is non-NULL, and
     /// the id it dispatches is that field's own window index — `137 + 6 = 143`, this field.
-    /// Byte-verified here rather than taken from the note: `0xbe1198 + 137*4 = 0xbe13bc` has
-    /// exactly one writer image-wide (`0x51ad8b`), and the pointer it stores resolves to
-    /// `"UNIT_DYNAMIC_FLAGS"`. The watch **length** is 4 — selector byte `[0x51bc98 + 137] = 4`,
-    /// jump-table entry `0x51bbf9 mov eax,4` — so the gate is a `repe cmpsb` over exactly this one
-    /// dword against the object's shadow copy (`0x4655bb`), and **any** bit moving fires it.
+    /// Byte-verified: `0xbe1198 + 137*4 = 0xbe13bc` has exactly one writer image-wide (`0x51ad8b`),
+    /// and the pointer it stores resolves to `"UNIT_DYNAMIC_FLAGS"`. The watch **length** is 4 —
+    /// selector byte `[0x51bc98 + 137] = 4`, jump-table entry `0x51bbf9 mov eax,4` — so the gate is
+    /// a `repe cmpsb` over exactly this one dword against the object's shadow copy (`0x4655bb`),
+    /// and **any** bit moving fires it.
     ///
     /// Raw for the same reason [`Self::player_flags`] is, and the cost of getting it wrong is
     /// larger here: this struct decodes four of its bits ([`Self::tapped`],
