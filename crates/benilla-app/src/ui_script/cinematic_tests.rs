@@ -2,9 +2,9 @@
 //!
 //! `CinematicFrame` is fullscreen, keyboard-enabled, and carries an `OnKeyDown` that answers
 //! ESCAPE. In the reference that is enough to swallow **every** key while it is up, because the
-//! key-down walk's gate is EXISTENCE, not handling (wow-re `ui/scratch/frame-key-script-delivery.md`
-//! §3, VERIFIED): a shown keyboard frame with the slot set consumes the key whatever its script
-//! does with it, and a 1.12 handler has no way to signal "not handled" (§3.1).
+//! key-down walk's gate is EXISTENCE, not handling (`0x76b7d0`): a shown keyboard frame with the
+//! slot set consumes the key whatever its script does with it, and a 1.12 handler has no way to
+//! signal "not handled" (`0x76ba25`).
 //!
 //! The reference's own Lua is the proof, and it is why these tests exist: that same `OnKeyDown` has
 //! to call `RunBinding("SCREENSHOT")` **by hand** to get one key back. It would not need to if

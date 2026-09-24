@@ -115,8 +115,8 @@ fn armor_guy_shows_red_broken_yellow_damaged_and_hides_clean() {
     );
     assert_eq!(cell_color(&mut s, WEAPON_CELL), Some(RED), "broken → red");
 
-    // Damaged legs (3 points left — the byte law's ABSOLUTE 1..=5, wow-re inventory-alert-law
-    // `cmp [D+0xa0],5`): every body piece shows, legs yellow, the un-alerted head the faded
+    // Damaged legs (3 points left — the byte law's ABSOLUTE 1..=5, `cmp [D+0xa0],5` at
+    // `0x4c8012`): every body piece shows, legs yellow, the un-alerted head the faded
     // white(0.5); the weapon glyph (repaired now) hides.
     let mut inv: InventorySlots = Default::default();
     inv[7] = slot(39, Some((3, 25)));
@@ -162,7 +162,7 @@ fn armor_guy_shows_red_broken_yellow_damaged_and_hides_clean() {
     assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
 }
 
-/// The FLAGS bits (wow-re inventory-alert-law): `0x10` forces red regardless of durability;
+/// The FLAGS bits (`0x4c7faa`, `0x4c7fc8`): `0x10` forces red regardless of durability;
 /// `0x08` (wrapped gift) silences the region entirely. And the client's 12th region — low ammo
 /// (carried count <= 20 → 3) — answers through `GetInventoryAlertStatus(12)` even though the
 /// 1.12 FrameXML never reads it.

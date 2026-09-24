@@ -1,6 +1,6 @@
 //! The app-side **quest-log state + feed** — decision 0088's deferred second slice (the giver-panel
 //! decision named the log window, `SMSG_QUEST_QUERY_RESPONSE`, and the `PLAYER_QUEST_LOG` field
-//! accessors as a follow-up; the wire is now pinned in `quest-log-wire-pin.md`, and this is the app
+//! accessors as a follow-up; the wire is now pinned, and this is the app
 //! layer over it). The inward half of the seam around [`benilla_ui::script::quest_log`], the log's
 //! twin of [`crate::ui_quest`]'s questgiver-panel feed.
 //!
@@ -19,7 +19,7 @@
 //! per quest whose objectives moved ([`quests_with_progressed_objectives`]), the progress-toast
 //! `UI_INFO_MESSAGE`s (each moved leaderboard line's fresh text — the yellow top-center popup —
 //! and the COMPLETE flip's "%s (Complete)"), the native `QUEST_WATCH_UPDATE(watchIndex)` (the
-//! §5-verified byte arg), and `BENILLA_QUEST_PROGRESS(logIndex)` (the auto-watch's feed — the
+//! byte arg, `0x4df880`), and `BENILLA_QUEST_PROGRESS(logIndex)` (the auto-watch's feed — the
 //! divergence note at the fire site / decision 0340) — diffed against a `Local`, exactly like
 //! every other feed in this crate.
 //!
@@ -194,7 +194,7 @@ impl Plugin for UiQuestLogPlugin {
 }
 
 /// The name a still-in-flight cache miss wears. The reference's miss reads `" "` (a single space,
-/// `0x82ee00`, wow-re `ui/scratch/quest-leaderboard-law.md` §5); ours reads this, a longer-standing
+/// `0x82ee00`); ours reads this, a longer-standing
 /// divergence that says "still in flight" rather than looking like a nameless objective.
 const NAME_PLACEHOLDER: &str = "...";
 
@@ -205,9 +205,9 @@ const NAME_PLACEHOLDER: &str = "...";
 /// sentence, and `QUEST_OBJECTS_FOUND`/`QUEST_ITEMS_NEEDED`/`ERR_QUEST_ADD_FOUND_SII`/
 /// `ERR_QUEST_ADD_ITEM_SII` are the same four). `GetQuestLogLeaderBoard 0x4e0000` resolves
 /// `QUEST_MONSTERS_KILLED` `0x84b61c` (creature, no override), `QUEST_OBJECTS_FOUND` `0x84b634`
-/// (the override leg AND both GameObject legs) and `QUEST_ITEMS_NEEDED` `0x84b5f8` (item) — §5's
-/// table, address by address. Only the toast handler `0x5e5ad0` names the `ERR_*` twins, and it
-/// names them because they are *message-catalog* rows; these three are not.
+/// (the override leg AND both GameObject legs) and `QUEST_ITEMS_NEEDED` `0x84b5f8` (item). Only
+/// the toast handler `0x5e5ad0` names the `ERR_*` twins, and it names them because they are
+/// *message-catalog* rows; these three are not.
 ///
 /// A key the install does not carry renders the line with **empty text rather than no line**: the
 /// reference's `FrameScript_GetText` hands back its pre-seeded empty string and the leaderboard
@@ -234,9 +234,9 @@ fn leaderboard_text(
 /// descriptor slot's 6-bit counter for this array index.
 ///
 /// The custom `text` field, when non-empty, REPLACES the auto-generated name in the line but keeps
-/// the "cur/req" suffix (wow-re §5: a creature objective carrying `ObjectiveText[i]` formats with
+/// the "cur/req" suffix (`0x4e03da`: a creature objective carrying `ObjectiveText[i]` formats with
 /// `QUEST_OBJECTS_FOUND`, not the "slain" key, and that text IS the name — while `type` still
-/// answers `"monster"`, read from a fresh sign test of the id).
+/// answers `"monster"`, read from a fresh sign test of the id, `0x4e04ca`).
 fn creature_line(
     obj: &QuestObjective,
     counter: u8,
@@ -249,7 +249,7 @@ fn creature_line(
     let req = obj.required_count;
     let is_go = obj.creature_or_go & GO_OBJECTIVE_BIT != 0;
     let cur = u32::from(counter).min(req);
-    // §5's fork, in its own order: a non-empty override IS the name and takes
+    // The reference's fork, in its own order: a non-empty override IS the name and takes
     // `QUEST_OBJECTS_FOUND` on either kind; a GameObject takes that key on both its legs (the
     // binding fetches it once, above its cache test, at `0x4e031e`); only a plain creature reaches
     // `QUEST_MONSTERS_KILLED`. No gameobject-name cache yet — a later CMSG_GAMEOBJECT_QUERY slice
@@ -280,9 +280,9 @@ fn creature_line(
 /// client counts bags itself.
 ///
 /// **The name comes from the item cache alone.** The per-objective override buffer
-/// (`template+0x14dc + i*0x100`) is read only by the creature and GameObject branches (§5), and
-/// on a quad that carries both kinds that buffer belongs to the *creature* objective — reading it
-/// here would label the item with the creature's text.
+/// (`template+0x14dc + i*0x100`) is read only by the creature and GameObject branches
+/// (`0x4e033f`, `0x4e03c9`), and on a quad that carries both kinds that buffer belongs to the
+/// *creature* objective — reading it here would label the item with the creature's text.
 fn item_line(
     obj: &QuestObjective,
     src_item_id: u32,
@@ -363,8 +363,8 @@ fn resolve_template_item(
 ///
 /// **The passes are independent walks of the whole array, not one walk of merged quads** — the
 /// reference enumerates `event`, then creature/GO over `ReqCreatureOrGOId[0..3]`, then item over
-/// `ReqItemId[0..3]`, then reputation (wow-re `ui/scratch/quest-leaderboard-law.md` §4, VERIFIED;
-/// decision 1156 §5 named the ORDER half of this and its worse half went unnoticed). Our merged
+/// `ReqItemId[0..3]`, then reputation (`0x4e0000`/`0x4e0110`; decision 1156 §5 named the ORDER
+/// half of this and its worse half went unnoticed). Our merged
 /// walk emitted at most ONE line per index, so an objective quad carrying BOTH kinds lost its item
 /// line outright: quest 358 "Graverobbers" (creature 1941 ×8 and item 2834 ×8, both at index 0)
 /// showed 2 lines where the reference shows 3, and `GetNumQuestLeaderBoards` under-counted with it.
@@ -515,9 +515,8 @@ fn feed_server_clock(
 
 /// The header literal the reference paints for a header whose id is exactly `0` (`0x84b4ec`, its
 /// only reference image-wide). It is a **designer-data tell, not a transient**: the only value that
-/// can become a header id is a CACHED template's `zoneOrSort`, so it cannot appear while a template
-/// is in flight — which is what makes it safe to render at all (wow-re
-/// `ui/scratch/questlog-list-rebuild.md`, B5).
+/// can become a header id is a CACHED template's `zoneOrSort` (`0x4de6f6`), so it cannot appear
+/// while a template is in flight — which is what makes it safe to render at all.
 const MISSING_HEADER: &str = "Missing header! (quest designers)";
 
 /// One row's grouping/ordering inputs — everything [`order_groups`] needs, and nothing else, so
@@ -533,9 +532,9 @@ struct GroupRow {
     slot: u8,
 }
 
-/// **The quest log's display order** — §5-verified (wow-re `ui/scratch/questlog-list-rebuild.md`;
-/// rebuild `0x4de510`, group sort `0x4de751`/`0x4de8f0`, row comparator `0x4deac0`). Returns the
-/// header groups in order, each with its rows' indices in order.
+/// **The quest log's display order** (rebuild `0x4de510`, group sort `0x4de751`/`0x4de8f0`, row
+/// comparator `0x4deac0`). Returns the header groups in order, each with its rows' indices in
+/// order.
 ///
 /// - **Groups**: one per distinct `ZoneOrSort`, and `id == 0` is forced **FIRST**, before any name
 ///   lookup (`0x4de913`). An id that names no row collates as `""` and lands next. The rest go by
@@ -660,12 +659,11 @@ fn feed_quest_log(
     //
     // So `GetNumQuestLogEntries()` answers `(visible rows, CACHED quest count)`, and `0, 0` is the
     // all-cold extreme rather than the general law. Skipping the whole log on any miss — what this
-    // did, on a note that read the cold case as the rule — blanked the entire window for a round
+    // did, reading the cold case as the rule — blanked the entire window for a round
     // trip every time a quest whose template we had never seen entered the log. That took the
     // engine selection with it (`remap_selection` reads an empty list as "your quest is gone"), so
     // the detail pane jumped to row 1 on every single pickup, and addons reading the log across
-    // the blank saw a log that briefly held nothing. Settled at the bytes by wow-re, whose
-    // `scratch/questlog-list-rebuild.md` §1.1 now carries the partial case (decision 2256).
+    // the blank saw a log that briefly held nothing (decision 2256).
     //
     // `template()` is called for EVERY row before any filtering, because the miss is what SENDS
     // the query (our `pending` set is the reference's once-per-id dedupe) — short-circuiting would
@@ -735,7 +733,7 @@ fn feed_quest_log(
     let mut header_keys: Vec<Option<String>> = Vec::new();
     // The quests folded under a collapsed header: out of the visible list, still in the log. The
     // engine's watch prune counts them, as the reference's does (`0x4de7a7`–`0x4de80f` scans the
-    // whole row array, hidden rows included — wow-re `questlog-list-rebuild.md` §7/§8); leaving
+    // whole row array, hidden rows included); leaving
     // them out made every collapse drop its quests' watches for good.
     let mut hidden_quest_ids: Vec<u32> = Vec::new();
     for (_, name, row_idxs) in &groups {
@@ -805,7 +803,7 @@ fn feed_quest_log(
                     ),
                     // Unreachable: the in-flight gate above emptied `rows` unless EVERY template is
                     // cached, which is the reference's own all-or-nothing rebuild. This arm used to
-                    // paint a `"..."` placeholder row — the behaviour the §5 refuted.
+                    // paint a `"..."` placeholder row, which the reference never does (`0x4de67e`).
                     None => unreachable!("the in-flight gate leaves only cached rows"),
                 };
             let complete = if r.log_slot.state & quest_slot_state::COMPLETE != 0 {
@@ -854,8 +852,7 @@ fn feed_quest_log(
     if fresh == *last {
         return;
     }
-    // The objective-progress announces (the quest-update handler law — wow-re
-    // `object-layer/scratch/quest-update-ui-feedback-law.md`, §5 trio 2026-07-12, handler
+    // The objective-progress announces (the quest-update handler
     // `0x5e5ad0`), all fired AFTER the log push so a handler reading the log sees the fresh
     // state. Per progressed quest ([`quests_with_progressed_objectives`] — present in BOTH
     // states; a fresh accept or a turn-in is not "achieved a quest objective"):
@@ -889,10 +886,10 @@ fn feed_quest_log(
                 script.fire_event("UI_INFO_MESSAGE", vec![ScriptValue::Str(line)]);
             }
             if quest.completed {
-                // The verified 0x198 pair — msgId `0xf8` `ERR_QUEST_OBJECTIVE_COMPLETE_S` when
+                // The 0x198 pair — msgId `0xf8` `ERR_QUEST_OBJECTIVE_COMPLETE_S` when
                 // the handler has the objective text, `0xf9` `ERR_QUEST_UNKNOWN_COMPLETE` when it
-                // does not (wow-re `object-layer/scratch/quest-update-ui-feedback-law.md` §5's
-                // table; never `ERR_QUEST_COMPLETE_S`, which is the turn-in's own call site).
+                // does not (`0x5e5d12`; never `ERR_QUEST_COMPLETE_S`, which is the turn-in's own
+                // call site).
                 // Both are catalog rows, so the surface and the sound come from there rather than
                 // from a hand-picked `fire_event` here (decisions 1770/1815).
                 let line = if quest.title.is_empty() {
@@ -923,7 +920,7 @@ fn feed_quest_log(
 /// Did one objective **advance** between two log states — the announce predicate, and the whole of
 /// decision 1152's fix for B237.
 ///
-/// The verified law (wow-re `object-layer/scratch/quest-update-ui-feedback-law.md`, handler
+/// The reference's law (handler
 /// `0x5e5ad0`) is that the progress toast fires from the server's *additive* announcements alone —
 /// `SMSG_QUESTUPDATE_ADD_KILL` (`ERR_QUEST_ADD_KILL_SII`) and `_ADD_ITEM`
 /// (`ERR_QUEST_ADD_ITEM_SII`, via `0x5dd060`). There is no removal opcode and no client-side
@@ -1113,7 +1110,7 @@ fn drain_quest_log_abandons(
 mod tests {
     use super::*;
 
-    // ── order_groups — the §5-verified display order ────────────────────────────────────────────
+    // ── order_groups — the reference's display order ────────────────────────────────────────────
 
     fn grow(zos: i32, header: &str, level: u32, title: &str, slot: u8) -> GroupRow {
         GroupRow {
@@ -1355,7 +1352,7 @@ mod tests {
         assert_eq!(line.text, "<NEEDED ... 2 of 5>");
     }
 
-    /// **The key fork §5 pins**, and the one an English assertion could never see: a creature
+    /// **The key fork**, and the one an English assertion could never see: a creature
     /// objective carrying `ObjectiveText[i]` stops being "slain" — the override IS the name and
     /// the format becomes `QUEST_OBJECTS_FOUND` (`mov ecx,0x84b634` @`0x4e03e1`) — while `type`
     /// still answers `"monster"`, because that is read from a fresh sign test of
@@ -1402,8 +1399,8 @@ mod tests {
     /// Decision 1158, correcting 0109: a line's `finished` is `cur >= req` and **nothing else**.
     /// The reference reads the whole-quest COMPLETE bit exactly once in `GetQuestLogLeaderBoard`
     /// (`0x4e02a2`), in the `event` branch, where it is that line's only predicate — it is never
-    /// or-ed into a counted line's verdict (wow-re `ui/scratch/quest-leaderboard-law.md` §7). Only
-    /// the whole-quest turn-in predicate `0x4df580` reads the bit and the counts together.
+    /// or-ed into a counted line's verdict. Only the whole-quest turn-in predicate `0x4df580` reads
+    /// the bit and the counts together.
     #[test]
     fn a_complete_quest_does_not_mark_a_short_objective_finished() {
         let o = obj(100, 10, 0, 0, "");
@@ -1499,11 +1496,10 @@ mod tests {
         assert_eq!(objectives[1].kind, "item");
     }
 
-    /// **The bug this split exists for** (director, 2026-09-15; wow-re
-    /// `ui/scratch/quest-leaderboard-law.md` §4): the reference walks `ReqCreatureOrGOId[0..3]` and
-    /// `ReqItemId[0..3]` as two INDEPENDENT passes, so one objective quad carrying both kinds
-    /// produces two lines. Merging them per quad returned on the creature branch and dropped the
-    /// item outright.
+    /// **The bug this split exists for** (director, 2026-09-15): the reference walks
+    /// `ReqCreatureOrGOId[0..3]` (`0x4e02d7`) and `ReqItemId[0..3]` (`0x4e04f4`) as two
+    /// INDEPENDENT passes, so one objective quad carrying both kinds produces two lines. Merging
+    /// them per quad returned on the creature branch and dropped the item outright.
     ///
     /// The fixture is quest 358 "Graverobbers"' own shape — `ReqCreatureOrGOId1` 1941 ×8 and
     /// `ReqItemId1` 2834 ×8 both at index 0, plus a second creature at index 1 — which showed 2
@@ -1551,9 +1547,9 @@ mod tests {
         assert_eq!(objectives[2].kind, "item");
     }
 
-    /// The override buffer belongs to the CREATURE branch (§5) — on a shared quad it must not leak
-    /// into the item line, which takes its name from the item cache alone. The split made this
-    /// reachable for the first time, so it is asserted rather than assumed.
+    /// The override buffer belongs to the CREATURE branch (`0x4e03da`) — on a shared quad it must
+    /// not leak into the item line, which takes its name from the item cache alone. The split made
+    /// this reachable for the first time, so it is asserted rather than assumed.
     #[test]
     fn a_shared_quads_objective_text_names_the_creature_not_the_item() {
         let template = quest_template([
@@ -1588,7 +1584,8 @@ mod tests {
             &probe_strings,
         );
         assert_eq!(objectives.len(), 2);
-        // The override IS the creature's name, and flips its key to QUEST_OBJECTS_FOUND (§5).
+        // The override IS the creature's name, and flips its key to QUEST_OBJECTS_FOUND
+        // (`0x4e03e1`).
         assert_eq!(objectives[0].text, "<FOUND Graverobbers routed 8 of 8>");
         // The item line wears the in-flight placeholder, never the creature's text.
         assert_eq!(objectives[1].text, "<NEEDED ... 0 of 8>");
@@ -1635,7 +1632,7 @@ mod tests {
 
     /// The 0109-era behaviour this inverts: a COMPLETE slot state used to mark every line
     /// finished. Decision 1158 — the reference's per-line verdict never reads that bit
-    /// (`0x4e0110` §7); only the whole-quest turn-in predicate (`0x4df580`) combines the two.
+    /// (`0x4e0110`); only the whole-quest turn-in predicate (`0x4df580`) combines the two.
     #[test]
     fn a_complete_slot_state_does_not_finish_a_short_line() {
         let template = quest_template([

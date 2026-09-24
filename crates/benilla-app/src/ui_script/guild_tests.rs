@@ -884,9 +884,9 @@ fn the_column_headers_sort_by_their_own_keys() {
 
 /// **The Show Offline Members checkbox EXISTS.** The reference declares it `virtual="true"` inside
 /// a `<Frames>` block, which reads like "this is a template, do not build it" — and is not: the
-/// `virtual` attribute is only consulted by the top-level file loader (wow-5875-re rf24,
-/// `0x6ede10`), while a `<Frames>` child goes straight to the instantiator via `LoadChildFrames`
-/// (rf26). So the box is a real frame in the reference and must be one here.
+/// `virtual` attribute is only consulted by the top-level file loader (`0x6ede10`), while a
+/// `<Frames>` child goes straight to the instantiator via `LoadChildFrames 0x76a060`. So the box
+/// is a real frame in the reference and must be one here.
 ///
 /// Its click also DROPS THE SELECTION before re-filtering: the roster is about to be re-ordered,
 /// so index 7 will not be the member index 7 was.

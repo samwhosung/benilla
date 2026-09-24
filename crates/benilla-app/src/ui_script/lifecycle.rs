@@ -46,8 +46,7 @@ pub(crate) fn setup_script(world: &mut World) {
 /// with `_G`, and the native `CSimpleFont` registry with the frame-script owner (`0x7839c0`, torn
 /// down at `0x490c97`). Because [`end_ui_session`] routes every login through here, every session's
 /// VM gets the registry and every `inherits="GameFontNormal"` in FrameXML resolves. A design that
-/// dropped the VM and skipped index 0 on the in-game load would fail exactly there — verified in
-/// wow-re's §5 for this change (2277).
+/// dropped the VM and skipped index 0 on the in-game load would fail exactly there (2277).
 fn install_boot_vm(world: &mut World) {
     let mut script = match UiScript::new() {
         Ok(s) => s,
@@ -73,7 +72,7 @@ fn install_boot_vm(world: &mut World) {
 /// it where the process already is, and [`UiClock`] is re-anchored to match in the same breath.
 ///
 /// The reference's `GetTime` (`0x515ea0`) reads `KERNEL32!GetTickCount` and scales by 0.001 (the
-/// thunk `0x42c010` → `0x42b790`, wow-re's `core` boundary row): an OS clock, with no relationship
+/// thunk `0x42c010` → `0x42b790`): an OS clock, with no relationship
 /// to the Lua VM, that cannot restart. Ours is a Lua global the VM owns, and since 1290/1291 the VM
 /// is destroyed and rebuilt at every logout/login and every `ReloadUI` — so without this seed the
 /// clock went back to zero on each of those, and every host value already converted onto it
@@ -277,8 +276,7 @@ fn unpark_boot_vm(world: &mut World) {
 /// 2226). It said `UI_Init 0x48fbf0` fires the world-enter cascade from inside itself, so a UI-less
 /// client never sees a unit event; that is 1348's reading and the bytes refute it, because the
 /// cascade call at `0x490168` is gated on an active-player GUID that is still 0/0 on a fresh login
-/// (see [`finish_ui_init`]). The conclusion survives, on four independent structural grounds, all
-/// re-verified in wow-5875-re:
+/// (see [`finish_ui_init`]). The conclusion survives, on four independent structural grounds:
 ///
 /// - World entry is a **category-5** callee (`0x420d63`), dispatched after the same iteration's
 ///   **category-6** inbound drain (`0x420d55`) has already returned.
@@ -775,8 +773,7 @@ pub(crate) fn seat_from_roster(
         // lua_pushnil`. `UnitLevel 0x517fc0` likewise carries no `"player"` compare at all and
         // reaches its total-miss arm `0x51813e push 0; push 0` — the **number 0**, not nil. The
         // two misses are deliberately asymmetric and a client that modelled "no data" uniformly
-        // would be wrong on one of them (wow-re `ui/scratch/unit-verbs-before-player-object.md`
-        // §2-§3; it also corrected that repo's own `main`, which had published the opposite).
+        // would be wrong on one of them.
         //
         // This seat is no longer what makes the player *answerable* — the record above is — so it
         // no longer has to claim a unit exists in order to deliver a name. What it still carries
@@ -866,20 +863,17 @@ pub(crate) fn arm_leaving_world_on_self_create(
     }
 }
 
-/// **The UI shutdown, in the reference's own order** — `0x490bd0`, whose ordered tail wow-5875-re
-/// carves as (`system/ui/ui.md`):
+/// **The UI shutdown, in the reference's own order** — `0x490bd0`, whose ordered tail is:
 ///
 /// > `PLAYER_LEAVING_WORLD` (273) → **`PLAYER_LOGOUT`** (271, `0x490c2a`) → `layout-cache.txt` →
 /// > **the flat saved file** (`0x490c7e`) → **the per-addon files** (`0x490c83`) → `AddOns.txt`
 /// > (`0x490c88`) → destroy the frame-script owner (`0x490c97`) → nil all 216 C bindings out of
 /// > `_G` (`0x490cba` → `0x490ce0`)
 ///
-/// **The last step is not "destroy the Lua state"** — which is what three of wow-re's own notes
-/// said, until this client's teardown made the question load-bearing and a §5 cross-check settled
-/// it (`system/ui/scratch/lua-state-lifecycle.md`; 2277). `0x490c97` is the frame-script owner's
+/// **The last step is not "destroy the Lua state"** (2277). `0x490c97` is the frame-script owner's
 /// scalar-deleting destructor — the widget tree and the native virtual-font registry — and the Lua
 /// state outlives it. The state is closed and re-opened at `0x703b80`, which reaches `InitLua` by a
-/// **tail-`jmp`** (`0x703b8e`) rather than a call, which is exactly why a call-census missed it.
+/// **tail-`jmp`** (`0x703b8e`) rather than a call, which is exactly why a call-census misses it.
 /// Its three callers are `UI_Init 0x48fbf0` (at its *head*), `ShutdownGame 0x491180`, and the glue
 /// builder `0x46a7b0` — so a logout/login cycle runs through four distinct states, and the glue
 /// screen gets its own.
@@ -1090,9 +1084,7 @@ pub(crate) fn shutdown_on_exit(
 /// The UI-init sequence's ordered tail, once every file — ours and every addon's — has loaded:
 /// the saved-variables chunk and `VARIABLES_LOADED`, then `PLAYER_LOGIN`.
 ///
-/// **The order is the reference's**, byte-verified in wow-5875-re (`system/ui/ui.md`, and the
-/// cascade in `system/ui/scratch/mail-pending-countdown.md`). Inside `UI_Init 0x48fbf0`, in
-/// straight-line address order:
+/// **The order is the reference's**. Inside `UI_Init 0x48fbf0`, in straight-line address order:
 ///
 /// | | |
 /// |---|---|
@@ -1106,7 +1098,7 @@ pub(crate) fn shutdown_on_exit(
 /// and a window that waits on `PLAYER_LOGIN` expects both — so it is worth being able to assert.
 ///
 /// **The third row does not run on a fresh login, and this doc used to say it did** (corrected
-/// 2226; the claim came from 1348 and was re-checked in wow-5875-re against the bytes). The call
+/// 2226; the claim came from 1348 and was re-checked against the bytes). The call
 /// at `0x490168` is gated three instructions earlier:
 ///
 /// ```text
@@ -1126,8 +1118,8 @@ pub(crate) fn shutdown_on_exit(
 /// resolved.** Our `finish_ui_init` fires the cascade inside the load, which matches the reload
 /// case and not the fresh-login one; whether to split those is its own change with its own
 /// measurements, and 2226 (which was about the VM's identity, not the cascade's timing) is not it.
-/// wow-re's own `DEFERRED:` entry — which of `0x4908c0`'s two data-dependent entries fires first on
-/// a real login — is still open, so the target shape is not yet known.
+/// Which of `0x4908c0`'s two data-dependent entries fires first on a real login is still open, so
+/// the target shape is not yet known.
 ///
 /// **`PLAYER_LOGIN` is the conditional one; `PLAYER_ENTERING_WORLD` is not.** The cascade fires
 /// the former only when `[0xb4e260]` is set, and only the FrameXML-loader path sets it, clearing
@@ -1150,8 +1142,7 @@ pub(crate) fn finish_ui_load(script: &mut UiScript) {
 /// The reference's login is `FrameXML → addons + ADDON_LOADED (0x4900a3) → VARIABLES_LOADED
 /// (0x4900b2) → the chat-cache reader's burst (0x4900d6, firing synchronously through the
 /// register-or-fire-now trampoline 0x498a20) → PLAYER_LOGIN (0x490959) → PLAYER_ENTERING_WORLD
-/// (0x49096a)` — byte-derived in wow-re `system/ui/scratch/login-chat-colour-pipeline.md`, §5
-/// cross-checked. 2119 put the restore ahead of `VARIABLES_LOADED`, which is one step too early:
+/// (0x49096a)`. 2119 put the restore ahead of `VARIABLES_LOADED`, which is one step too early:
 /// an addon reading its chat colours out of a `VARIABLES_LOADED` handler would see the file's
 /// values where the reference shows it the boot ones.
 ///

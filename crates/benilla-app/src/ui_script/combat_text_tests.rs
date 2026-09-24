@@ -336,8 +336,7 @@ fn combat_text_master_toggle_unregisters() {
 /// fast arm into a plain `lua_gettable(LUA_GLOBALSINDEX)` — so whatever is in the global when the
 /// world-entry load edge closes is what the numbers draw in. Stock `Fonts.xml` puts Friz there;
 /// MikScrollingBattleText and pfUI put their own face there at `ADDON_LOADED`, which the reference
-/// reads because `0x6c8470` runs *after* the addon load, not at CRT init as three wow-re notes
-/// had it.
+/// reads because `0x6c8470` runs *after* the addon load, not at CRT init.
 ///
 /// Skips without client data.
 #[test]

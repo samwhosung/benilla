@@ -332,7 +332,7 @@ pub(super) fn emit(
     }
     // The probe's seat line: the drawn INK rows (glyph-quad union, logical px, relative to the
     // rect top) — the measurable half of the vertical-seat law
-    // (`fontstring-vertical-placement.md`): compare `ink` against the law's `d + ascender` seat
+    // (`0x5d1360`): compare `ink` against the law's `d + ascender` seat
     // when hunting a vertical offset. Fill quads only (the shadow pass above would smear the
     // bounds one px down-right).
     let vpl = style.world_seat && benilla_assets::trace::enabled_for("vpl");
@@ -382,7 +382,7 @@ pub(super) fn emit(
             #[allow(clippy::cast_precision_loss)]
             let top = top + ui.caret_row as f32 * cell_h;
             // caret_x is engine UI units (÷scale advances); the 1-px bar width stays device-thin
-            // (the client's 4-unit caret is a named residual, ui.md's caret law).
+            // (the client's 4-unit caret, `0x77b8c0`, is a named residual).
             let cx = x0 + ui.caret_x * host.scale;
             out.push(UiQuad {
                 rect: Rect::new(cx, top, cx + 1.0, top + cell_h),

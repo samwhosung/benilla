@@ -126,7 +126,7 @@ fn newest_line_sits_at_the_bottom() {
 
 /// The whole fade round trip as it reaches a real chat window: a line ramps down, a scroll brings
 /// it back to full, the scrolled-up view then holds it there, and returning to the bottom lets it
-/// ramp again. The re-arm half is `msgframe-fade-rearm-law.md` — every scroll entry reaches
+/// ramp again. The re-arm half: every scroll entry reaches
 /// `0x788b80` or the relayout's `0x788af0`; before it, a faded-out chat could not be recovered by
 /// any input the client offers (director-reported, 2026-08-29).
 #[test]
@@ -387,8 +387,8 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
 
 /// `ChatTypeInfo` carries the shipped default chat colors twice: once in
 /// `Interface\FrameXML\ChatFrame.xml` for addons to read, and once in
-/// [`crate::ui_chat::default_color`] for our own feed to render. Both are the same wow-re byte
-/// table (`chat-color-table.md`, the static registry at `.rdata 0x804710`) — so this is the gate
+/// [`crate::ui_chat::default_color`] for our own feed to render. Both are the same reference byte
+/// table (the static registry at `.rdata 0x804710`) — so this is the gate
 /// that makes the duplication safe: every kind we model must agree to the byte, and the table's shape (`sticky`/`id`) must be the reference's.
 #[test]
 fn chat_type_info_matches_the_host_color_table() {

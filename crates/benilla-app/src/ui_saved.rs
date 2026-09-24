@@ -4,11 +4,10 @@
 //!
 //! **Load** — one chunk, executed straight into the VM immediately after the in-game UI's XML has
 //! loaded and before anything runs against it, then `VARIABLES_LOADED`. That ordering is the whole
-//! mechanism, byte-verified in wow-re (`system/ui/scratch/savedvariables-protocol.md`): the
-//! reference's `AddOn_Load 0x51f240` runs the addon's own files (step 2 — where the file-scope
-//! `TRAINER_FILTER_* = 1` defaults are assigned), *then* executes the saved file over the top
-//! (step 4), *then* fires the load event (step 6). Defaults first, saved values second, consumers
-//! third — reverse any two and the saved value can never win.
+//! mechanism: the reference's `AddOn_Load 0x51f240` runs the addon's own files (step 2 — where
+//! the file-scope `TRAINER_FILTER_* = 1` defaults are assigned), *then* executes the saved file
+//! over the top (step 4), *then* fires the load event (step 6). Defaults first, saved values
+//! second, consumers third — reverse any two and the saved value can never win.
 //!
 //! **Write** — `OnExit(InWorld)` (a `/logout` or a disconnect) and `AppExit`, the two edges our
 //! session has. The reference writes from exactly one place, the UI shutdown `0x490bd0`, reached

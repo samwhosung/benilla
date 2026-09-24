@@ -889,7 +889,7 @@ fn shipped_loot_frame_hands_a_master_row_to_a_candidate() {
     );
 }
 
-/// **The raid arm of the master-loot menu** (decision 1675) — the half the wow-re §5 corrected.
+/// **The raid arm of the master-loot menu** (decision 1675).
 ///
 /// In a raid the candidate array is not the wire order: the client files each candidate into its
 /// own subgroup's five-slot block, leaving holes. `GroupLootDropDown_Initialize` reads those holes
@@ -1185,7 +1185,7 @@ fn loot_row_awaiting_its_template_opens_clean() {
     // It is a REOPEN and not a repaint on purpose. The app fires `LOOT_UPDATE` when an open
     // window's content changes, and `LOOT_UPDATE` is not a 1.12 event — it appears nowhere in the
     // reference's FrameXML and `LootFrame_OnLoad` does not register it — so nothing in the stock
-    // file listens. What the real client does when a template arrives mid-window is out at wow-re
+    // file listens. What the real client does when a template arrives mid-window is still open
     // (the arrival callback `0x4c2ac0` is recorded as clearing the pending flag and nothing else);
     // this test deliberately asserts only what is settled.
     s.fire_event("LOOT_CLOSED", vec![]);
@@ -1221,8 +1221,7 @@ fn loot_row_awaiting_its_template_opens_clean() {
 /// `<PushedTexture>` and no `<HighlightTexture>` at all: no Quickslot border on the icons, and
 /// nothing to light under the mouse. The gate is wrong about the reference: `CLootButton`'s
 /// geometry vtable differs from `CSimpleButton`'s in exactly one slot — the destructor thunk — and
-/// `LoadXML` is not it, so `0x7788c0` parses a `<LootButton>` element verbatim (wow-re
-/// `ui/scratch/lootbutton-widget-type.md` §4).
+/// `LoadXML` is not it, so `0x7788c0` parses a `<LootButton>` element verbatim.
 ///
 /// Asserted through the ENGINE's hover path rather than off the state: what a player sees is the
 /// emitted quad, and the quad is what was missing.

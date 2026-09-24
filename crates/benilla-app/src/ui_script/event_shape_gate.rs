@@ -19,7 +19,8 @@
 //!
 //! ## What is compared, and what the table can and cannot say
 //!
-//! The oracle is wow-re's two byte-level censuses, vendored by `scripts/gen-reference-events.py`.
+//! The oracle is two byte-level censuses of the reference, vendored by
+//! `scripts/gen-reference-events.py`.
 //! Its `conf` column carries the gate rule per row, exactly as `1.12-shapes.tsv` does:
 //!
 //! * `exact` — every producer that reaches the event has a known shape. **This is the column this

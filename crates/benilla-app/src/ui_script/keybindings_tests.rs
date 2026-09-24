@@ -550,8 +550,8 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
     // `FauxScrollFrameTemplate` carries a real `<ScrollChild>` which `FauxScrollFrame_Update` sizes
     // to `numItems * valueStep` (~5275px with every section open), our old template had none, and
     // the range is measured by unioning the scroll child's whole SUBTREE — the reference's own
-    // `0x786f80` recursion, which "re-enters itself for each shown child frame" with no clip or
-    // ScrollFrame exception (wow-re `system/ui/ui.md`, decision 1338). The reference would measure
+    // `0x786f80` recursion, which re-enters itself for each shown child frame with no clip or
+    // ScrollFrame exception (decision 1338). The reference would measure
     // the same; it simply never nests a faux list inside a real-scroll page, which our options
     // window is alone in doing.
     //

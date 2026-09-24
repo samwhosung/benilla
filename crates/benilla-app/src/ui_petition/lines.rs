@@ -3,10 +3,8 @@
 //!
 //! The split is the part a re-implementation cannot guess, and we did guess it wrong first: by the
 //! key names, `ERR_PETITION_SIGNED_S` and `ERR_PETITION_ALREADY_SIGNED` look like the same kind of
-//! thing. They are not. wow-re
-//! `system/object-layer/scratch/petition-wire-law.md` §4 read the message catalog at `0xb4b498`
-//! (stride `0x14`, field `+4` = kind, routed through the four-entry table at `0x496888`) and swept
-//! every row:
+//! thing. They are not. A sweep of every row of the message catalog at `0xb4b498` (stride `0x14`,
+//! field `+4` = kind, routed through the four-entry table at `0x496888`) gives:
 //!
 //! - the **four** `_S`/success ids `0x141`-`0x144` carry kind `0` → the shared chat chokepoint
 //!   `0x49a870` with the row's own `+0x10` chat type, which is `0xa` → **`CHAT_MSG_SYSTEM`**, the
@@ -132,7 +130,7 @@ pub(super) fn name_refused_line(key: &str) -> Line {
         "ERR_GUILD_NAME_INVALID_SPACE" => "ERR_GUILD_NAME_INVALID_SPACE",
         "ERR_GUILD_NAME_NAME_CONSECUTIVE_SPACES" => "ERR_GUILD_NAME_NAME_CONSECUTIVE_SPACES",
         "ERR_GUILD_NAME_TOO_SHORT" => "ERR_GUILD_NAME_TOO_SHORT",
-        // The validator can name a key `0x6c9b70` has not been carved for. Re-keying it to the
+        // The validator can name a key `0x6c9b70` is not known to produce. Re-keying it to the
         // generic invalid-name row is what keeps a raw key off the screen; the match above is
         // what makes that a re-key rather than a pass-through.
         _ => "ERR_GUILD_NAME_INVALID",

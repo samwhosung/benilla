@@ -6,10 +6,10 @@
 //! **`PETITION_SHOW` is DEFERRED, and that is the load-bearing behaviour of this file.** The real
 //! client fires it only when *no signer name is still resolving* **and** *the petition record has
 //! arrived* (`0x4f419b`-`0x4f41ad`), and it fires exactly once however many names were outstanding
-//! (`0x4f4320` decrements the pending counter and fires only on the transition to zero). wow-re's
-//! note puts it flatly: *"A client that fires `PETITION_SHOW` straight off the packet paints a
-//! window with blank signer names."* That is precisely what this file did before the carve — it
-//! opened immediately and repainted as each lookup landed, which is a visibly different window.
+//! (`0x4f4320` decrements the pending counter and fires only on the transition to zero). A client
+//! that fires `PETITION_SHOW` straight off the packet paints a window with blank signer names.
+//! That is precisely what this file once did — it opened immediately and repainted as each lookup
+//! landed, which is a visibly different window.
 //!
 //! Two things follow, and they are why the deferral is a simplification rather than a cost:
 //!

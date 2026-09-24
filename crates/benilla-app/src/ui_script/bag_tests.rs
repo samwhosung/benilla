@@ -590,9 +590,9 @@ fn hovered_bag_tooltip_fills_itself_when_the_stats_land() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// At a vendor, a bag hover shows the engine-truth sell-price money row (SellPrice × stack, wow-re
-/// tooltip-money.md 0x52b650@0x52e376) — or the ITEM_UNSELLABLE "No sell price" line — and arms
-/// the pouch cursor (ShowContainerSellCursor → Buy over a Point base, cursor-system.md §7);
+/// At a vendor, a bag hover shows the engine-truth sell-price money row (SellPrice × stack,
+/// 0x52b650@0x52e376) — or the ITEM_UNSELLABLE "No sell price" line — and arms
+/// the pouch cursor (ShowContainerSellCursor 0x4fa460 → Buy over a Point base);
 /// leaving resets it.
 #[test]
 fn vendor_bag_hover_shows_sell_price_and_arms_the_pouch_cursor() {
@@ -1839,10 +1839,9 @@ fn a_key_dropped_on_the_button_files_itself() {
     );
     // And it does not RAISE either, which is the half this test could not assert until the bytes
     // came back. `AddMessage`'s text is fetched through `lua_isstring 0x6f3510` whose failure edge
-    // is a silent jump to the function's own epilogue — no line, no error (wow-5875-re
-    // `addmessage-text-gate-silent-skip.md`, 4-worker cross-check). Ours took an mlua `String` and
-    // raised, which put a script-error dialog on an ordinary player gesture; the fix is in
-    // `messageframe/mod.rs::message_text` and its own test carries the full law.
+    // is a silent jump to the function's own epilogue (`0x79562c`) — no line, no error. Ours took
+    // an mlua `String` and raised, which put a script-error dialog on an ordinary player gesture;
+    // the fix is in `messageframe/mod.rs::message_text` and its own test carries the full law.
     //
     // So a full keyring is a DEAD CLICK on a real 1.12 client, and now here.
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

@@ -767,8 +767,8 @@ fn the_backpack_button_still_hovers_with_bagnon_holding_its_script() {
 }
 
 /// **Bug 3.** `Bagnon_Forever/database/ui.lua:61` sizes its character dropdown from
-/// `button:GetTextWidth()` on a **CheckButton** — a real 1.12 Button method (wow-re
-/// `widget-api-batch-benilla.md` Q8 lists it present, and `GetStringWidth` absent, on Button).
+/// `button:GetTextWidth()` on a **CheckButton** — a real 1.12 Button method (`0x782290`, and
+/// `GetStringWidth` is absent on Button).
 #[test]
 fn a_button_reports_its_own_label_width() {
     benilla_formats::wow_data_or_skip!();
@@ -966,7 +966,7 @@ fn the_whole_bagnon_window_survives_being_used() {
     // **Empty, and that is the list's best state, not a reason to delete it.** Four rows sat here
     // when it was written, and each retired the way the rule above says: the bag-BUTTON cursor
     // trio (`PutItemInBackpack`, `PutItemInBag`, `PickupBagFromSlot` — `Bag.lua:199-215`) once
-    // wow-5875-re's verdict landed and `script/cursor/bag_verbs.rs` bound all three; and money on
+    // `script/cursor/bag_verbs.rs` bound all three; and money on
     // the cursor (`OpenCoinPickupFrame`, `Frame.lua:537-543`) when the money kit went stock and
     // the reference's own `CoinPickupFrame.xml` joined the manifest with the money cursor under
     // it (decision 1962). With nothing on the list, "unexplained" is every error, which is the
@@ -1105,8 +1105,8 @@ fn a_stack_count_wears_the_font_object_its_font_attr_names() {
 /// `<Gradient>`, and dropped it in silence, so the white art rendered untinted.
 ///
 /// `<Gradient>` survives beside a `file=` where `<Color>` does not, and that asymmetry is the
-/// point: they land in different fields (vertex colours `+0xb8` vs the texture `+0xcc` —
-/// wow-re `texture-color-composition.md` §1-2).
+/// point: they land in different fields (vertex colours `+0xb8`, written by `0x77f910`, vs the
+/// texture `+0xcc`, written by `0x770360`).
 #[test]
 fn a_texture_gradient_tints_the_art_it_sits_on() {
     benilla_formats::wow_data_or_skip!();
@@ -1366,7 +1366,7 @@ fn bagnon_forevers_records_survive_the_logout_boundary() {
     // `GetInventoryItemCount("player", ContainerIDToInventoryID(0))`, and `ContainerIDToInventoryID`
     // has no backpack arm (`0x4f94e0`: `id - 1 < 4` → `+20`), so bag 0 asks inventory slot 19 —
     // the tabard slot. `GetInventoryItemCount 0x4c8680` pushes **1** for an empty slot
-    // (`0x4c8797`; wow-re `inventory-item-count-law.md` §3, carved at 5a377f4bb), and 1 for a
+    // (`0x4c8797`), and 1 for a
     // worn tabard's stack count too, so the real client writes this row as `16,1,` either way.
     let record = "local r = BagnonForeverData[GetRealmName()][UnitName('player')] \
                   return tostring(r[0] and r[0].s), tostring(r[0] and r[0][1])";
@@ -1542,8 +1542,8 @@ fn a_bag_slot_click_toggles_bagnon_not_the_native_window() {
 
 /// **Bug 7 — the director's unlit backpack button — and where it stands since the bag bar went
 /// stock.** Bagnon lights `MainMenuBarBackpackButton` from its window's OnShow/OnHide
-/// (`Bagnon.lua:33/39` — `SetChecked(1/0)`), and OnShow dispatch is synchronous (wow-re
-/// `onshow-onhide-dispatch-order.md`), so whoever writes checked AFTER the toggle wins. On the
+/// (`Bagnon.lua:33/39` — `SetChecked(1/0)`), and OnShow dispatch is synchronous
+/// (`0x775750` → `0x76ae10`), so whoever writes checked AFTER the toggle wins. On the
 /// reference's own click path the stock `BackpackButton_OnClick` tail
 /// (`MainMenuBarBagButtons.lua:55-69`) runs last: it re-derives checked by scanning the NATIVE
 /// container frames, finds none for bag 0 while an addon holds the bags, and writes 0 — so the

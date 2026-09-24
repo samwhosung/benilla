@@ -124,7 +124,7 @@ fn the_window_opens_on_friends_with_the_guild_tab_disabled() {
 /// `FriendsFrameTab1..4` inherit `FriendsFrameTabTemplate`, which inherits
 /// `CharacterFrameTabButtonTemplate` (the reference's own file, on the chain since 1993). The
 /// middle template declares an `<OnClick>` and nothing else, and handler replacement is **per
-/// handler name** (wow-re `template-onload-replacement-law.md`) — so the base template's
+/// handler name** (`0x76a0d0`) — so the base template's
 /// `<OnShow>` fit still runs, two hops down. That is the arrangement this pins: a row of tabs
 /// still wearing the base template's authored 115 would mean the OnShow was lost on the way.
 #[test]

@@ -305,7 +305,7 @@ fn a_click_on_the_minimap_parks_a_centre_relative_ping_request() {
 }
 
 /// `Minimap:GetPingPosition()` answers **two numbers always** (the reference recomputes them
-/// from statics nothing clears — wow-re `minimap-ping-law.md`), and the stock
+/// from statics nothing clears — `0x4eefd0`), and the stock
 /// `Minimap_OnUpdate` leans on exactly that: while its 5 s timer runs it multiplies the answer
 /// with no nil test. The pair is the app's last publish, `(0, 0)` before any.
 #[test]
@@ -448,7 +448,7 @@ fn the_meeting_stone_icon_follows_the_queue_across_meetingstone_changed() {
 
 /// **The ping's pixels are the stock `<Model>`'s own file** (decision 2008): shown by
 /// `MINIMAP_PING` with the file's facts landed, the extract publishes ONE tile request for the
-/// pane — at its device size, the render law's unit ladder, and the composite's rect/key/alpha
+/// pane — at its device size, the reference's unit ladder, and the composite's rect/key/alpha
 /// — and pushes no quad of its own. Once the renderer has handed back a cell, the cell draws as
 /// one premultiplied quad over the pane's rect **on the very next frame, with nothing else in
 /// the interface moving** (decision 2023): the composite is the renderer's per-frame output in

@@ -27,14 +27,13 @@
 //!
 //! ## The load order is the reference's, not a topological sort
 //!
-//! `AddOn_Load 0x51f240` is **recursive**, and wow-5875-re has it byte-verified
-//! (`system/ui/ui.md`, the SavedVariables §5 quad): for each addon, in order —
+//! `AddOn_Load 0x51f240` is **recursive**: for each addon, in order —
 //! **OptionalDeps first (failures ignored)** → **RequiredDeps (a failure ABORTS this addon's
 //! load)** → **its own `.toc`-listed files, in listed order**. We match that shape, because a
 //! pre-sorted flat list cannot express "a missing hard dependency drops exactly this addon and
 //! nothing else".
 //!
-//! **Our own interface is not an addon for lifecycle purposes.** The same source records that
+//! **Our own interface is not an addon for lifecycle purposes.** In the reference,
 //! *FrameXML does not go through `AddOn_Load`, so it gets no `ADDON_LOADED`* — and `benilla.toc`
 //! is excluded exactly as FrameXML is. Structurally, not by a filter: it loads through
 //! [`super::manifest::load_ingame_ui`], while [`Walk`] only ever walks what [`discover`] found.
@@ -187,11 +186,10 @@ impl Addon {
     ///
     /// `path` is the entry already resolved into the install's path space, which is the only thing
     /// the client names a file chunk after: `"@%s"` (`0x8716e0`) over the resolved path, built by
-    /// `0x704bc0` for every `.lua` the loader touches (wow-re
-    /// `ui/scratch/include-lua-dispatch.md` §7). So an addon's file is `Interface\AddOns\<Folder>
-    /// \<File>` and a chain file is `Interface\FrameXML\…` — the second being both what the real
-    /// client names it and what keeps FrameXML *out* of the `\AddOns\` pattern the Ace2 family
-    /// matches against, because FrameXML is not an addon.
+    /// `0x704bc0` for every `.lua` the loader touches. So an addon's file is
+    /// `Interface\AddOns\<Folder>\<File>` and a chain file is `Interface\FrameXML\…` — the second
+    /// being both what the real client names it and what keeps FrameXML *out* of the `\AddOns\`
+    /// pattern the Ace2 family matches against, because FrameXML is not an addon.
     ///
     /// **One rule for both doors, which is the point** (decision 2155). `Loader::run` names a
     /// `<Script file=>` chunk by exactly this rule over exactly this space, so a manifest entry and
@@ -297,10 +295,10 @@ impl Addon {
             let report = benilla_ui::loader::load_in(script, &doc, &path, &provider);
             // `FrameXML_Debug`'s trace lines, if the player turned it on (2160). Log-only, and
             // never retained: the reference files them into the same per-document record as the
-            // errors, but at severity 0 and *where that record surfaces is an open question in
-            // wow-re* (`framexml-debug-trace-flag.md`, and `xml-template-name-lookup.md` §9 for
-            // severity 1). So they go where a trace can go without claiming a surface we have not
-            // derived — and the switch that produces them is off unless an addon asks.
+            // errors, but at severity 0 (`0x6ee2bc`), and *where that record surfaces is an open
+            // question*, for severity 1 as well. So they go where a trace can go without claiming a
+            // surface we have not derived — and the switch that produces them is off unless an
+            // addon asks.
             for t in &report.traces {
                 info!("ui_script({}/{file}): {t}", self.name);
             }
@@ -387,16 +385,15 @@ fn read_under(root: &Path, rel: &str) -> Option<Vec<u8>> {
 /// an addon's file, `Interface/FrameXML/…` for one that walked out of the AddOns tree. The
 /// reference has exactly one such space — `0x647e60` answers a name from a hash index of the
 /// install tree keyed by **install-root-relative path**, and then, attempt #4, from the MPQ chain
-/// (wow-re `ui/scratch/include-lua-dispatch.md` §4.1, VERIFIED; loose *before* archive, which is
-/// the order below). Two spaces is what this client had, and it cost three separate things:
+/// (loose *before* archive, which is the order below). Two spaces is what this client had, and it
+/// cost three separate things:
 ///
 /// - `..\Blizzard_AuctionUI\Blizzard_AuctionUITemplates.xml`, a `.toc` line in `Auctioneer` and
 ///   in `BeanCounter`, collapses to `Interface/AddOns/Blizzard_AuctionUI/…` — a folder that is a
 ///   `.pub` decoy on disk with the real files inside `patch.MPQ`. Only the chain leg has it.
 /// - `..\..\FrameXML\Fonts.xml`, a `.toc` line in `JIM_toolbox` and in `SpecialTalentUI`,
 ///   collapses out of the AddOns tree entirely, to `Interface/FrameXML/Fonts.xml`. Same leg.
-///   (wow-re records both by name as **RESOLVING** on the real client —
-///   `ui/scratch/xml-toc-path-resolution.md` §5 cases 1 and 2.)
+///   (Both **RESOLVE** on the real client: `0x6ede10` collapses the `..` before the open.)
 /// - and the one that was invisible: with the addon space rooted at the AddOns folder, a
 ///   `<Script file=>` chunk was NAMED after that space — `@AtlasLoot\Core\AtlasLoot.lua` — while
 ///   a `.toc`-listed one was named `@Interface\AddOns\AtlasLoot\…`. See [`Addon::chunk_name`].
@@ -504,13 +501,13 @@ fn chain_addons() -> Vec<Addon> {
 /// Every registered addon, in the reference's own **registration order**: the archive pass first,
 /// then the loose folders (decision 2175).
 ///
-/// **Two passes, archive before loose, and the first pass wins a duplicate.** Byte-read in wow-re
-/// `system/ui/scratch/addon-registry-scan-and-order.md` §1–§5: `AddOn_ScanAddOnDir 0x51c760` runs
+/// **Two passes, archive before loose, and the first pass wins a duplicate.**
+/// `AddOn_ScanAddOnDir 0x51c760` runs
 /// `0x401470` over each mounted archive's `(listfile)` (`0x648fb0`, textual line order) and only
 /// then `0x42ad10`'s `FindFirstFileW` walk of the loose directories; both funnel into
 /// `0x51c9b0`, which probes the name hash and **returns immediately on a hit** (`0x51ca10`), and
 /// links each new record at the TAIL (`0x521ad0` mode 2 — a tail insert with no comparison of any
-/// kind, so registry order *is* registration order). §10 measures the consequence on a stock
+/// kind, so registry order *is* registration order). Measured on a stock
 /// install: the twelve `Blizzard_*` `.toc`s are the only ones in any archive, so Blizzard occupies
 /// registry positions 1..12 and third-party always follows.
 ///
@@ -521,11 +518,12 @@ fn chain_addons() -> Vec<Addon> {
 ///
 /// The load walk barely notices (all twelve are `## LoadOnDemand: 1`, so `0x51f600` skips them),
 /// but the registry order is what the Lua index space is built from, and it is what decides which
-/// addon's copy of a shared global wins — the last writer, per §9.
+/// addon's copy of a shared global wins — the last writer, in the one shared Lua state
+/// (`0x7040d0`).
 fn discover() -> Vec<Addon> {
     // PASS 1 — the archive. `BLIZZARD_ADDONS` is in ascending name order, which is also the order
-    // the shipped `patch.MPQ` listfile happens to carry those twelve lines in (§10, measured). The
-    // note is explicit that a re-implementation may NOT rely on a listfile being sorted, so this is
+    // the shipped `patch.MPQ` listfile happens to carry those twelve lines in (measured). A
+    // re-implementation may NOT rely on a listfile being sorted, so this is
     // our deterministic choice for a set we enumerate ourselves, not a claim about the format.
     let mut found = chain_addons();
     // PASS 2 — the loose folders, minus anything the archive already registered.
@@ -541,11 +539,10 @@ fn discover() -> Vec<Addon> {
 /// **The reference's directory-listing order, as a sort key** — the one thing 2166 §7 left open.
 ///
 /// The reference's loose-folder pass is `0x42ad10`'s kernel32 `FindFirstFileW`/`FindNextFileW`
-/// walk (wow-re `system/ui/scratch/addon-registry-scan-and-order.md`), and that walk **imposes no
-/// ordering of its own**: the client never sorts, so its walk order is whatever the host
-/// filesystem hands back. wow-re states the consequence outright — *"a re-implementation cannot be
+/// walk, and that walk **imposes no ordering of its own**: the client never sorts, so its walk
+/// order is whatever the host filesystem hands back. So a re-implementation cannot be
 /// order-identical to the reference, because the reference's order is not a property of the
-/// reference."*
+/// reference.
 ///
 /// So there is no order to copy, and exactly one order worth choosing: **NTFS's**. It is the order
 /// every 1.12 install actually walked in, because that is the filesystem the client shipped on, and
@@ -564,8 +561,8 @@ fn discover() -> Vec<Addon> {
 /// positions move** — `Fubar_*` interleaves with `FuBar_*` instead of following it wholesale,
 /// `oRA2` climbs 31 places, `zBar` overtakes `Zorlen`, and `_LazyPig`/`_Nameplates` fall from the
 /// middle to dead last. Since the client runs every addon in one Lua state and adds no versioning
-/// (wow-re §9: *which provider of a shared library wins is exactly "whichever addon's files run
-/// last"*), that reshuffle decides which copy of `Tablet-2.0` a corpus of seventy providers ends up
+/// (`0x7040d0`: which provider of a shared library wins is exactly whichever addon's files run
+/// last), that reshuffle decides which copy of `Tablet-2.0` a corpus of seventy providers ends up
 /// with.
 ///
 /// The corpus corroborates the mechanism from the other side: the `!`-prefix convention
@@ -773,9 +770,8 @@ pub(crate) struct InstalledAddOn {
     pub(crate) url: Option<String>,
     pub(crate) dependencies: Vec<String>,
     /// `## Interface` as the version gate reads it (decision 1292): the leading integer, `0`
-    /// when absent — and now ENFORCED by the load walk when `checkAddonVersion` is on,
-    /// superseding 1191 §6's report-only interim (the RE answer it was waiting for landed:
-    /// wow-re `addon-version-gate.md`).
+    /// when absent — and now ENFORCED by the load walk when `checkAddonVersion` is on
+    /// (`0x51e876`), superseding 1191 §6's report-only interim.
     pub(crate) interface: u32,
     /// `## LoadOnDemand: 1` — shown as a status hint rather than a checkbox state, because a
     /// LoadOnDemand addon is not "off", it is waiting for a `LoadAddOn` call (1191 §6).
@@ -853,12 +849,11 @@ pub(crate) fn installed_rows() -> Vec<InstalledAddOn> {
 /// **One node per character on the realm's character list, each holding the explicit rows that
 /// character's `AddOns.txt` carried** — the reference's `ADDONSTATELIST` (anchor `0xbe1bd0`, head
 /// `ds:0xbe1bd8`), which `AddOnList_LoadCharacter 0x51ebe0` fills one node per character at
-/// char-list population (wow-5875-re `system/ui/scratch/addon-enable-store.md` §1/§5).
+/// char-list population.
 ///
-/// That the node set is the **char-list, in wire order, rebuilt whole** is verified rather than
-/// assumed (wow-re `addon-defaultstate-and-node-set.md`, decision 2316): the per-record callback
-/// `0x472300` is handed to an enumerator that walks every `SMSG_CHAR_ENUM` record with no filter
-/// and no early-out, and its driver destroys every existing node first (`0x51f0b0(NULL)`).
+/// The node set is the **char-list, in wire order, rebuilt whole** (decision 2316): the per-record
+/// callback `0x472300` is handed to an enumerator that walks every `SMSG_CHAR_ENUM` record with no
+/// filter and no early-out, and its driver destroys every existing node first (`0x51f0b0(NULL)`).
 ///
 /// **A node with no file is EMPTY, not absent**, and the difference is the whole point: an empty
 /// node contributes no opinion to the aggregate, but it is still a character whose enable bit has
@@ -888,7 +883,7 @@ impl EnableStore {
                     .unwrap_or_default();
                 let hash = rows
                     .into_iter()
-                    // Last line wins, like the reference's hash insert (§5's duplicate law).
+                    // Last line wins, like the reference's hash insert (`0x51eeef`).
                     .map(|(name, on)| (name.to_ascii_lowercase(), on))
                     .collect();
                 (character.clone(), hash)
@@ -982,10 +977,10 @@ fn store_nodes(identity: Option<&(String, String)>, roster: &[String]) -> Vec<St
 /// **Merges rather than replaces, because that is what the reference's writer structurally IS.**
 /// `0x51ef20` walks the in-memory enable **hash** and emits one `"%s: %s\r\n"` line per entry
 /// (`0x853968`), and that hash is built by the reader `0x51ebe0` from `AddOns.txt` itself — which
-/// "creates entries for every line, both states", strdup'ing each name as written. So a row for an
+/// creates entries for every line, both states, strdup'ing each name as written. So a row for an
 /// addon that is not installed right now was loaded, is never removed, and is written straight back
 /// out; and the spelling that survives is the FILE's, not any folder's, because the folder list
-/// never enters the hash at all (wow-5875-re `system/ui/scratch/addon-enable-store.md` §5/§6).
+/// never enters the hash at all.
 ///
 /// Both halves matter and both were divergent on the logout path, which used to rebuild the file
 /// from `addon_enable_states()` — the installed-folder registry. One logout erased
@@ -1206,7 +1201,7 @@ impl Walk {
     /// Load one addon by name, its dependencies first. `Err` means "this addon did not load", and
     /// is what a hard dependency's failure propagates.
     ///
-    /// The order inside is `AddOn_Load 0x51f240`'s, byte-verified in wow-5875-re (`system/ui/ui.md`):
+    /// The order inside is `AddOn_Load 0x51f240`'s:
     ///
     /// > OptionalDeps (failures ignored) → RequiredDeps (a failure aborts) → **this addon's own
     /// > `.toc`-listed files, in listed order** (`0x51f3fa`) → `Bindings.xml` (`0x51f400`) → the
@@ -1340,8 +1335,8 @@ impl Walk {
 mod tests {
     /// **The walk order is NTFS's, not byte order** — the fact 2166 §7 left open, pinned here.
     ///
-    /// The reference's loose pass is `FindFirstFileW` and sorts nothing (wow-re
-    /// `addon-registry-scan-and-order.md`), so its order is the host filesystem's; NTFS's `$I30`
+    /// The reference's loose pass is `FindFirstFileW` and sorts nothing
+    /// (`0x42ad10`), so its order is the host filesystem's; NTFS's `$I30`
     /// collation is the one we adopt, because it is the order the entire vanilla corpus was
     /// written against. Two rules distinguish it from `str`'s own `Ord`, and this asserts both:
     /// **case folds away** (so a lowercase-initial name sorts among its letter's block rather
@@ -1731,10 +1726,10 @@ mod tests {
     /// `IsAddOnLoadOnDemand(nil)` and AtlasLoot's AceDB keyed itself on a raw traceback. 80 of the
     /// 219-addon corpus ship at least one `<Script file=>`.
     ///
-    /// The reference names both the same way and the note says why: a `.toc` line resolves against
-    /// `Interface\AddOns\<Addon>\` and a bare `<Script file=X>` against `dirname(referrer)` —
-    /// the same directory — and the chunk name is `"@%s"` over the resolved path in both cases
-    /// (wow-re `ui/scratch/xml-toc-path-resolution.md` §1, `include-lua-dispatch.md` §7).
+    /// The reference names both the same way: a `.toc` line resolves against
+    /// `Interface\AddOns\<Addon>\` and a bare `<Script file=X>` against `dirname(referrer)`
+    /// (`0x6ee07b`) — the same directory — and the chunk name is `"@%s"` over the resolved path in
+    /// both cases (`0x704bc0`).
     #[test]
     fn an_xml_referenced_lua_is_named_like_a_toc_listed_one() {
         let tmp =
@@ -2144,8 +2139,8 @@ mod tests {
 
     /// **`benilla` never appears in an `ADDON_LOADED`.**
     ///
-    /// FrameXML does not go through `AddOn_Load` and gets no such event (wow-5875-re
-    /// `system/ui/ui.md`), and our own interface is FrameXML's counterpart. An addon that watches
+    /// In the reference, FrameXML does not go through `AddOn_Load` and gets no such event, and
+    /// our own interface is FrameXML's counterpart. An addon that watches
     /// `ADDON_LOADED` to detect *another* addon would otherwise see a name no reference client
     /// ever sends.
     ///
@@ -2499,8 +2494,7 @@ mod tests {
     /// **The client registers `GetAddOnInfo` twice, as two different functions**, and this test
     /// used to assert the wrong one. It was written off `Interface\GlueXML\AddonList.lua`, which
     /// describes glue's `0x46d460`: eight values, `url` at slot 4, `newVersion` at 8. The in-game
-    /// binding `0x48e390` answers seven, with **`enabled`** at slot 4 and no `url` at all
-    /// (wow-re `system/ui/scratch/addon-version-gate.md`).
+    /// binding `0x48e390` answers seven, with **`enabled`** at slot 4 and no `url` at all.
     ///
     /// Its own doc comment named the failure it then failed to catch — *"a row that shifts by one
     /// puts an addon's notes in its URL field, which nothing would notice"*. The row was shifted at
@@ -2815,8 +2809,8 @@ mod tests {
     /// **A `.toc` line naming a file the package does not ship does not stop a demand load**
     /// (decision 2107) — 1450's rule, applied by `LoadAddOn` and not only by the startup walk.
     ///
-    /// The reference logs `Couldn't open %s` and carries on (wow-re
-    /// `xml-toc-path-resolution.md` §4). Ours sent the miss to the **script-error** channel
+    /// The reference logs `Couldn't open %s` and carries on
+    /// (`0x6edaa0`). Ours sent the miss to the **script-error** channel
     /// instead, and the corpus paid for it the moment `LoadAddOn` became reachable at scale:
     /// FuBar's `LoadLoadOnDemandPlugins` demand-loads 55 plugins whose `.toc`s each list an
     /// `AmmoFuLocale-koKR.lua` none of them ships, and every one of them scored a session
@@ -2929,7 +2923,7 @@ mod tests {
     /// then loaded them anyway, so the load walk resolves through the same [`EnableStore`]: the
     /// reference's `AddOn_CanLoad` check 3 is `0x51e470(name, character, useDefault = 1)`, which
     /// for a character with no explicit entry takes the explicit-only aggregate over the realm's
-    /// other characters (wow-5875-re `addon-enable-store.md` §4).
+    /// other characters.
     ///
     /// The control is the second addon: one character left it on, so the roster does **not** agree
     /// about it, and the newcomer gets its manifest's `## DefaultState` instead — enabled. Without
@@ -3184,8 +3178,8 @@ mod tests {
     /// `0x7043f0`/`0x704480`): `NAME = value`, bracketed keys, TAB indent, a trailing comma on
     /// every entry, and the file split by scope. `["t"]`'s `[1] = 1,` is the reference's shape for
     /// a list too — its writer emits a bracketed key for every table shape and never a bare
-    /// positional entry (wow-re `system/ui/scratch/lua-table-storage-and-next-order.md` §Q5) —
-    /// and it reloads in index order because of what 1.12's *parser* does with it (decision 2111).
+    /// positional entry — and it reloads in index order because of what 1.12's *parser* does
+    /// with it (decision 2111).
     ///
     /// Asserted as bytes rather than by re-reading, because "it round-trips through our own
     /// loader" is exactly the check that passes for a private format. The reference's own client

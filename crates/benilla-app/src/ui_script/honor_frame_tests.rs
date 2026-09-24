@@ -281,7 +281,7 @@ fn the_bar_takes_the_fraction_and_the_faction_colour() {
     let _data = benilla_formats::wow_data_or_skip!();
     let s = shown_honor_page();
     // Against the binding's own arithmetic, not against `191/255`. The client MULTIPLIES by the
-    // f32 nearest 1/255 (`0x3B808081`, wow-re `honor-panel-law.md` `0x51aace`) rather than
+    // f32 nearest 1/255 (`0x3B808081`, `0x51aace`) rather than
     // dividing, and the two answers differ in the eighth decimal — a tolerance loose enough to
     // accept both would stop pinning the correction the moment it was made.
     let want = 191.0 * f64::from(f32::from_bits(0x3B80_8081));

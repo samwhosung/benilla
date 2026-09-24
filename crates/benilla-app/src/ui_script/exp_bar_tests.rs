@@ -115,8 +115,8 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.resolve();
 
-    // The binding trio underneath (the app-feed shape the XML consumes) — the byte-verified
-    // contract (wow-re rested-xp-bindings.md, decision 1087).
+    // The binding trio underneath (the app-feed shape the XML consumes) — the reference's
+    // contract (`0x48d350`, `0x48d3f0`, `0x516ea0`; decision 1087).
     let (id, name, mult) = s
         .eval::<(i64, String, f64)>("return GetRestState()")
         .unwrap();

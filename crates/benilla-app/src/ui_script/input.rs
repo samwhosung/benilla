@@ -262,7 +262,7 @@ pub(super) fn feed_ui_input(
     capture.typing = script.has_keyboard_focus();
     // The per-key half is this frame's alone (a frame's existence gate ate THIS key).
     capture.consumed.clear();
-    // ── The alt-arrow exemption (wow-re `ignorearrows-alt-arrow-gate.md`, §5 VERIFIED) ─────────
+    // ── The alt-arrow exemption ────────────────────────────────────────────────────────────────
     // A focused EditBox in alt-arrow mode (`ignoreArrows` in XML, `SetAltArrowKeyMode` in Lua)
     // does NOT consume LEFT/UP/RIGHT/DOWN unless ALT is held: the reference's handler returns 0
     // at `0x77b1c4` and the strata walk carries the key down to `CGWorldFrame`, which runs its
@@ -310,7 +310,7 @@ pub(super) fn feed_ui_input(
         // `frame_key_input` walks in the engine's own order and declines at a focused box, so the
         // box's editing keys can never be stolen by a frame below it; a `true` here means a frame
         // consumed the key, which suppresses BOTH the chord below and the key's binding (the
-        // reference's existence gate, wow-re `frame-key-script-delivery.md` §3).
+        // reference's existence gate, `0x76b7d0`).
         let frame_named = match ev.key_code {
             KeyCode::Backspace => Some("BACKSPACE"),
             KeyCode::Delete => Some("DELETE"),
@@ -333,12 +333,12 @@ pub(super) fn feed_ui_input(
         }
         // EVERY OTHER KEY reaches a keyboard frame by name too. The reference's key-down walk
         // carries the whole key table — its `arg1` comes from the *same* table the keybinding
-        // chord uses (wow-re `frame-key-script-delivery.md` §4.2), which is [`chord::key_token`]
-        // here — and the frame's gate is EXISTENCE, not handling: a shown keyboard frame with an
-        // `OnKeyDown` swallows the key whatever its script does with it (§3, §3.1). This host used
-        // to feed only the ten names above, so `CinematicFrame` — fullscreen, keyboard-enabled, an
-        // `OnKeyDown` that answers ESCAPE — consumed ESC and let W straight through, and the player
-        // walked around underneath their own intro cinematic.
+        // chord uses (`0x4b66b0`), which is [`chord::key_token`] here — and the frame's gate is
+        // EXISTENCE, not handling: a shown keyboard frame with an `OnKeyDown` swallows the key
+        // whatever its script does with it (`0x76b7d0`, `0x76ba25`). This host used to feed only
+        // the ten names above, so `CinematicFrame` — fullscreen, keyboard-enabled, an `OnKeyDown`
+        // that answers ESCAPE — consumed ESC and let W straight through, and the player walked
+        // around underneath their own intro cinematic.
         //
         // The reference's own Lua is the proof this is the law and not an over-reading: that
         // handler has to call `RunBinding("SCREENSHOT")` **by hand** to get one key back. It would
@@ -391,8 +391,8 @@ pub(super) fn feed_ui_input(
                 // because `arrows_fall_through` exempts exactly these four from the typing gate.
                 keymap::Chord::Edit(_) => {}
                 // The clipboard trio needs the OS pasteboard, so it resolves here against the held
-                // [`HostClipboard`]: copy/cut pull the selection out of the box (RF-0082 §4
-                // `0x77e1d0` — selection required; a password box yields its mask run, never the
+                // [`HostClipboard`]: copy/cut pull the selection out of the box
+                // (`0x77e1d0` — selection required; a password box yields its mask run, never the
                 // real text), paste sanitizes+inserts.
                 keymap::Chord::Copy => {
                     if let Some(text) = script.editbox_copy() {

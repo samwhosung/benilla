@@ -40,7 +40,7 @@ pub(super) fn register(app: &mut App) {
 
 /// The world-enter reset `0x500af0` (sole caller `0x49099c`, inside the enter-world cascade
 /// `0x4908c0` that runs on a fresh login and on every worldport) zeroes the `0xbe0824` latch —
-/// its only clear (wow-re ledger `0x500af0`). A second listener on each kind, after the bridge's.
+/// its only clear (`0x500af0`). A second listener on each kind, after the bridge's.
 fn on_login(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
     if let SessionEvent::Connected { .. } = ev {
         world_enter_reset(&mut quest);
@@ -162,11 +162,11 @@ fn on_session_end(In(_): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
 /// [`crate::messages::dialog_status`] value, stored per guid for the marker layer and the minimap
 /// quest dot.
 ///
-/// **A GameObject's answer is DROPPED, and that is the reference's own behaviour** (decision 1872,
-/// wow-re `questgiver-marker.md` §W14.1): the handler `0x5dc9f0` resolves the packet's GUID with
-/// `0x5dca22 mov ecx,8` — typemask `TYPEMASK_UNIT` — and `0x468460` is a bitmask AND against
-/// `OBJECT_FIELD_TYPE`, so a GameObject's `0x21` misses bit 3, returns NULL, and the handler exits
-/// at `0x5dca2f` without ever reaching the `UNIT_NPC_FLAGS` test, let alone the marker.
+/// **A GameObject's answer is DROPPED, and that is the reference's own behaviour** (decision
+/// 1872): the handler `0x5dc9f0` resolves the packet's GUID with `0x5dca22 mov ecx,8` — typemask
+/// `TYPEMASK_UNIT` — and `0x468460` is a bitmask AND against `OBJECT_FIELD_TYPE`, so a
+/// GameObject's `0x21` misses bit 3, returns NULL, and the handler exits at `0x5dca2f` without
+/// ever reaching the `UNIT_NPC_FLAGS` test, let alone the marker.
 ///
 /// This is not a hypothetical branch here: benilla now *sends* the query for quest-flagged
 /// GameObjects, exactly as the reference does ([`crate::quest_markers`]), and **vmangos answers
@@ -280,8 +280,8 @@ fn quest_complete(c: QuestComplete, quest: &mut QuestGiver) {
 /// same descriptor/template/bag state the SMSG announces (the wire's item tick carries only the
 /// ADDED count — the "cur/req" is client-computed either way, the wire pin's finding). The old
 /// chat-line stopgap here is retired: the reference shows no chat echo for objective progress
-/// (INFERRED from ref screenshots; the dispatched §5 adjudicates, and this fn is the fold-back
-/// seat if the real handler does more — a sound, a distinct format).
+/// (inferred from reference screenshots, unconfirmed in the binary; if the real handler does
+/// more, a sound or a distinct format, it goes here).
 fn quest_objective_kill(entry: u32, count: u32, required: u32, quest: &mut QuestGiver) {
     debug!("net: quest kill/use objective {entry:#x} at {count}/{required}");
     quest.bump_reask();
@@ -311,8 +311,7 @@ fn quest_objectives_complete(quest_id: u32, quest: &mut QuestGiver) {
 ///
 /// **An uncached template is SILENT, and that is the handler's own gate rather than a fallback.**
 /// `0x5e5ad0`'s FAILED arm reads the questId, then *bails* if the template is not in the cache (or
-/// if the per-slot flag `byte[slot+7]&2` is set) — it never reaches `0x496720` (wow-re
-/// `object-layer/scratch/quest-update-ui-feedback-law.md` §"Per-opcode behaviour"). This used to
+/// if the per-slot flag `byte[slot+7]&2` is set) — it never reaches `0x496720`. This used to
 /// compose `"Quest failed."` there, a sentence 1.12 has no string for and never says (decision
 /// 2045 named it as one of two remaining inventions).
 ///
@@ -401,8 +400,8 @@ fn quest_giver_failed(
 mod tests {
     use super::*;
 
-    /// **The typemask-8 refusal** (decision 1872, wow-re `questgiver-marker.md` §W14.1). benilla
-    /// now sends `CMSG_QUESTGIVER_STATUS_QUERY` for quest-flagged GameObjects because the reference
+    /// **The typemask-8 refusal** (decision 1872). benilla now sends
+    /// `CMSG_QUESTGIVER_STATUS_QUERY` for quest-flagged GameObjects because the reference
     /// does — and vmangos, unlike the real 1.12 service, *answers*. The reference's handler drops
     /// that answer at the lookup (`0x5dca22 mov ecx,8`), so we must too: otherwise a wanted poster
     /// would wear a gold `!` the reference client never puts there.

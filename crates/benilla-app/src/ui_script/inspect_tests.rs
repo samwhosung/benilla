@@ -244,8 +244,8 @@ fn inspect_unit_refuses_out_of_range() {
 /// The two verified thresholds and their **different operators** — `CanInspect` refuses only on a
 /// strict `100.0 < d²` (so exactly 100.0 is IN range), while `CheckInteractDistance` admits only on
 /// a strict `d² < table[type-1]` (so exactly 100.0 is OUT). That asymmetry is the binary's own
-/// (wow-re §5: `test ah,0x41; jne` vs `test ah,0x5; jp`), and it is the kind of detail a rewrite
-/// silently normalizes — hence a test on the boundary itself.
+/// (`test ah,0x41; jne` at `0x48a28b` vs `test ah,0x5; jp` at `0x48bb0a`), and it is the kind of
+/// detail a rewrite silently normalizes — hence a test on the boundary itself.
 #[test]
 fn range_predicates_transcribe_the_verified_thresholds() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -280,7 +280,7 @@ fn range_predicates_transcribe_the_verified_thresholds() {
         "the same distance is out of range for the 10-yard type"
     );
     // **A token the object manager holds no unit for answers nil — the null-object arm** (report
-    // B316, wow-re `dist2-null-unit-arm.md` VERIFIED). This is the party member outside the local
+    // B316, `0x48babe`). This is the party member outside the local
     // area: the roster wire gives them a GUID, so the token resolves, and the object lookup then
     // misses silently. It used to answer 1, which lit every distance row for exactly the member
     // who was furthest away.
@@ -533,7 +533,7 @@ fn the_active_tab_is_inert_and_toggle_inspect_closes() {
 /// reference's own behaviour** (decision 1834 settled what 1832 had to leave open).
 ///
 /// `InspectFrame_OnHide` sets `this.unit = nil`, so a re-open runs `InspectFrame_OnShow` with no
-/// token. wow-re censused the whole binding table: `SetPortraitTexture 0x519ef0` gates its unit
+/// token. In the reference, `SetPortraitTexture 0x519ef0` gates its unit
 /// argument at `0x519fb4` with `lua_isstring` and raises `Usage: SetPortraitTexture(texture,
 /// "unit")`, and `luaL_error` does not return — so the reference raises here too, on its own
 /// shipped code. The widget clear sits six instructions PAST the gate, so the portrait is not even
@@ -544,7 +544,7 @@ fn the_active_tab_is_inert_and_toggle_inspect_closes() {
 /// abandons the handler the same way. So: the window shows, the portrait and name do not update,
 /// and there is exactly one error — which is what this now asserts.
 ///
-/// One correction from that census worth keeping: stock 1.12 ships **no** inspect keybind (0 of 234
+/// One correction worth keeping: stock 1.12 ships **no** inspect keybind (0 of 234
 /// `Binding name=` entries) and no caller of `ToggleInspect` outside the addon's own tab buttons,
 /// which are children of the hidden `InspectFrame`. So on the stock UI's own paths this is
 /// unreachable — only an addon or a macro gets here. It is still ours to reproduce.

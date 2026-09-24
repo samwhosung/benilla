@@ -44,9 +44,10 @@ fn picker() -> UiScript {
 ///
 /// It is emphatically **not** the identity, and not a simple quantize either: `SetColorRGB` rounds
 /// half-up into bytes and stores HSV floats, while every read path floors, so 9.75 % of colours come
-/// back a step low on one channel (wow-re `system/ui/scratch/colorselect-color-law.md`, exhaustive
-/// over all 256³). `benilla_ui::script::colorselect`'s own tests pin that law against wow-re's
-/// measured witnesses; these tests use it as a given so they stay about the Dewdrop plumbing.
+/// back a step low on one channel (`SetColorRGB 0x78eae0`, the read-back floor `0x7bbec0`;
+/// measured exhaustively over all 256³). `benilla_ui::script::colorselect`'s own tests pin that law
+/// against the reference's measured witnesses; these tests use it as a given so they stay about the
+/// Dewdrop plumbing.
 fn after_round_trip(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
     let mut cs = benilla_ui::widget::ColorSelectState::default();
     cs.set_rgb(r, g, b);

@@ -139,9 +139,8 @@ fn escape_closes_bag_and_panel_releases_loot_and_clears_cursor() {
     );
     // **ESC does NOT drop the cursor's item.** Our retired ladder opened with
     // `if CursorHasItem() then ClearCursor() end`; the reference's `ToggleGameMenu`
-    // (`UIParent.lua:1465-1497`) has no such arm, and wow-re's cursor carve places the
-    // ESC→ClearCursor wiring in FrameXML rather than the engine
-    // (`ui/scratch/cursor-dragdrop-payload.md`) — so in 1.12 the held item survives the key
+    // (`UIParent.lua:1465-1497`) has no such arm, and the ESC→ClearCursor wiring is inferred to
+    // live in FrameXML rather than the engine — so in 1.12 the held item survives the key
     // (1988).
     assert!(
         s.cursor_item().is_some(),

@@ -256,8 +256,7 @@ end
 /// Bindings.xml, the AddOns, the saved variables and the world-enter cascade it calls at
 /// `0x490168` (`PLAYER_LOGIN`), so both of its callers (login `0x48f681` and `/reloadui`
 /// `0x495669`) load without a sound. The only reader of that depth is `PlaySoundByName
-/// 0x458030`, which drops the call outright (wow-re
-/// `system/ui/scratch/framexml-load-sound-suppression.md`).
+/// 0x458030`, which drops the call outright.
 ///
 /// This is the mechanism, not a workaround for one noisy handler: stock `TargetFrame_OnHide`
 /// really does fire at load (the frame ships shown and its OnLoad hides it) and really does call
@@ -380,7 +379,7 @@ pub(crate) fn load_font_registry(script: &UiScript) -> Vec<String> {
 /// The reference does the same at `CGGameUI::Initialize 0x48fbf0`, reached only from world entry
 /// (`0x401570` ← `0x46c236`), and loads its addons from that same function (`0x4900a3` →
 /// `0x51f600`); its glue screens run GlueXML with their own `GlueFonts.xml` registry, which is why
-/// the reference has no equivalent of our shared-atlas coupling (wow-5875-re, 1051).
+/// the reference has no equivalent of our shared-atlas coupling (1051).
 ///
 /// Addons load **after** the built-in interface, not interleaved with it: an addon may reference
 /// our templates and globals (that is the point of 1178's seam), and nothing of ours may depend on

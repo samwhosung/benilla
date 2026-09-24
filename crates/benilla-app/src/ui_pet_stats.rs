@@ -1,6 +1,5 @@
 //! The hunter pet's **paper-doll stat block** — `GetPetHappiness`, `GetPetLoyalty`,
-//! `GetPetTrainingPoints`, `GetPetExperience` and `HasPetUI` (decision 1005; wow-re
-//! `ui/scratch/pet-action-bar-api.md` §11b + §6).
+//! `GetPetTrainingPoints`, `GetPetExperience` and `HasPetUI` (decision 1005).
 //!
 //! Its own module rather than more of [`crate::ui_pet`] because it is a different concern on a
 //! different clock: the action bar's contents arrive whole in `SMSG_PET_SPELLS` and change when
@@ -12,7 +11,7 @@
 //! its `UNIT_FIELD_PETNUMBER`, requires its owner to be us, and finishes
 //! `cmp byte [player.fields + 0x79], 3; sete al` — `UNIT_FIELD_BYTES_0` byte 1, the class, against
 //! **Hunter**. (The enum is pinned by the combo-point gate's own class test on the same byte:
-//! `== 4 || == 0xB` is Rogue and Druid, wow-re `combo-point-gate.md`.) A warlock's imp therefore
+//! `== 4 || == 0xB` is Rogue and Druid, `GetComboPoints 0x51a190`.) A warlock's imp therefore
 //! resolves perfectly and still answers nothing — happiness, loyalty and training points are
 //! hunter machinery — and each binding says "nothing" in its own way ([`benilla_ui::script::PetStats`]).
 //!
@@ -38,7 +37,7 @@ use crate::ui_unit::UnitFeed;
 
 /// `UNIT_FIELD_BYTES_0` byte 1 == 3 — **Hunter**, the class the four stat bindings gate on
 /// (`0x611752`). Pinned rather than assumed: the same byte's `4`/`0xB` are Rogue and Druid in the
-/// already-carved combo-point gate, which fixes the enum this value sits in.
+/// combo-point gate (`GetComboPoints 0x51a190`), which fixes the enum this value sits in.
 const CLASS_HUNTER: u8 = 3;
 
 /// `UNIT_FIELD_BYTES_0` byte 3 == 4 — the **happiness** power, the field `GetPetHappiness`
@@ -179,15 +178,15 @@ fn stats_for(
         && self_store.map(|s| ((s.0.unit_bytes_0().unwrap_or(0) >> 8) & 0xff) as u8)
             == Some(CLASS_HUNTER);
     if !hunter {
-        // **The family WORD rides past the gate; the DIET does not** — and the split is carved,
-        // not chosen. `UnitCreatureFamily 0x51a310` has no class test at all (its only nil paths
-        // are "no record / id 0 / out of range / a null row"), so a warlock's minion shows "Imp"
-        // on the page's level line. `GetPetFoodTypes 0x4bea10` is gated on `0x6116e0(pet)` — the
-        // same owner-is-me + class-is-Hunter gate as the four stat bindings — so it answers
-        // *nothing* for a minion even though the word is there. The shipped data hides the
-        // difference for warlocks (every minion family ships food mask 0), but not for a
-        // **charmed beast under a non-hunter**: a mind-controlled boar has family 5 and mask 63,
-        // and the reference still answers an empty diet for it. (wow-re, 2026-08-06.)
+        // **The family WORD rides past the gate; the DIET does not** — and the split is the
+        // reference's, not chosen. `UnitCreatureFamily 0x51a310` has no class test at all (its
+        // only nil paths are "no record / id 0 / out of range / a null row"), so a warlock's
+        // minion shows "Imp" on the page's level line. `GetPetFoodTypes 0x4bea10` is gated on
+        // `0x6116e0(pet)` — the same owner-is-me + class-is-Hunter gate as the four stat
+        // bindings — so it answers *nothing* for a minion even though the word is there. The
+        // shipped data hides the difference for warlocks (every minion family ships food mask
+        // 0), but not for a **charmed beast under a non-hunter**: a mind-controlled boar has
+        // family 5 and mask 63, and the reference still answers an empty diet for it.
         return (
             has_ui,
             PetStats {
@@ -290,7 +289,8 @@ fn feed_pet_stats(
     // for it, `UNIT_CLASSIFICATION_CHANGED` (the reference's own "a creature query landed" wire,
     // decision 0782) is neither registered by the page nor even edge-able for a pet, whose gated
     // rank is pinned at 0. Inventing a fire site — `PET_UI_UPDATE`, or `UNIT_LEVEL` because the
-    // family shares the level's line — would be asserting a mechanism nobody has carved.
+    // family shares the level's line — would be asserting a mechanism nobody has found in the
+    // reference.
     //
     // What makes it *survivable* rather than broken: the query goes out the frame the pet's
     // descriptor arrives, thousands of frames before a human can open the character window, so
@@ -648,9 +648,9 @@ mod tests {
         assert_eq!(family_for(Some(&boar()), &names, &cmds, None), no_family());
     }
 
-    /// **The family WORD survives the hunter gate; the DIET does not** — the carved split
-    /// (wow-re, 2026-08-06: `UnitCreatureFamily 0x51a310` has no class test, `GetPetFoodTypes
-    /// 0x4bea10` shares `0x6116e0` with the four stats).
+    /// **The family WORD survives the hunter gate; the DIET does not** — the reference's split
+    /// (`UnitCreatureFamily 0x51a310` has no class test, `GetPetFoodTypes 0x4bea10` shares
+    /// `0x6116e0` with the four stats).
     ///
     /// The pet here is deliberately a **boar under a non-hunter** — a charmed beast, family 5,
     /// food mask 63 — because that is the one case where the gate is observable at all: a warlock

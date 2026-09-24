@@ -180,7 +180,7 @@ pub(crate) struct PlayerUiHover(pub(crate) Option<u32>);
 
 /// **Who owns this frame's keys** — written by [`feed_ui_input`], read by the binding dispatch and the
 /// dev keyboard readers, all of which are ordered after `UiInput` so they see this frame's value and
-/// not last frame's. The app-side twin of the client's `DAT_00cf4dc8 != 0` gate (RF-0082 §1).
+/// not last frame's. The app-side twin of the client's `DAT_00cf4dc8 != 0` gate.
 ///
 /// **Two fields because the reference has two mechanisms, and collapsing them into one boolean was
 /// bug 2196.** A focused EditBox swallows *every* key for as long as it holds focus
@@ -189,7 +189,7 @@ pub(crate) struct PlayerUiHover(pub(crate) Option<u32>);
 /// and nothing more. Neither releases anything already held: the only things that clear the
 /// reference's direction bits are the OS **window deactivate** (`0x514490`, whose sole caller
 /// `0x493058` hangs off the WM_ACTIVATE callback slot) and the world-enter cascade (`0x5144c0`).
-/// A UI focus change clears nothing — wow-re `rf79-autorun-cancel-set.md`, and the reason holding
+/// A UI focus change clears nothing — the reason holding
 /// W keeps you running while you type or read the map. See `decisions/2196`.
 #[derive(Resource, Default)]
 pub(crate) struct UiKeyboardCapture {
@@ -197,7 +197,7 @@ pub(crate) struct UiKeyboardCapture {
     /// the alt-arrow one below). Whole-frame, because there is at most one focused box.
     pub(crate) typing: bool,
     /// The keys a shown keyboard-enabled **frame** consumed this frame (decision 1319's existence
-    /// gate, wow-re `frame-key-script-delivery.md` §3) — `WorldMapFrame`'s fullscreen `OnKeyDown`,
+    /// gate, `0x76b7d0`) — `WorldMapFrame`'s fullscreen `OnKeyDown`,
     /// `CinematicFrame`, the stack-split spinner. **Per key, not per frame**: the map eating its
     /// own `M` must not also suppress an unrelated binding, and — the bug this list exists for —
     /// must not be mistaken for a text box taking focus.
@@ -209,7 +209,7 @@ pub(crate) struct UiKeyboardCapture {
     /// (`ignoreArrows` / `SetAltArrowKeyMode`) and ALT is not held, so the reference's own key
     /// handler declines LEFT/UP/RIGHT/DOWN at `0x77b1c4` and the strata walk carries them down to
     /// `CGWorldFrame`, which runs their bindings. That is what lets you turn while the chat box
-    /// has focus (wow-re `ignorearrows-alt-arrow-gate.md`, §5 VERIFIED).
+    /// has focus.
     ///
     /// It is a whole-frame flag rather than a per-key one because both of its terms are:
     /// there is at most one focused box, and ALT is read off the same modifier mirror. Only the
@@ -384,8 +384,8 @@ impl Default for UiScaleCvar {
 /// director's eye — the taste call this dial exists for).
 ///
 /// **It also happens to be what the reference itself lands on above ~853 px tall**, which we did
-/// not know when it was chosen (wow-re `system/ui/scratch/modelframe-uiscale-law.md`, out of the
-/// autocast-shine thread): `0x492f70` computes `max((H > 768) ? 768/H : 1.0, 0.9)` and is called
+/// not know when it was chosen: `0x492f70` computes
+/// `max((H > 768) ? 768/H : 1.0, 0.9)` and is called
 /// **both** on a mode set and from the `useUiScale`-OFF leg (`0x4908ad`) — and OFF is the shipped
 /// default (`0x8430c0` = `"0"`). So the reference is 1.0 at 768 and below, 0.96 at 1280×800, and
 /// **0.9 at 1080p and 1440p**. Our flat 0.9 therefore agrees with it on every modern window and
@@ -933,7 +933,7 @@ impl benilla_ui::script::TextMeasure for FixedWidthFont {
 #[cfg(test)]
 pub(crate) mod test_ui;
 
-/// The chat loader's two login events (wow-re chat-cache-grammar.md §8; `ui_chat::settings`):
+/// The chat loader's two login events (`0x498a60`; `ui_chat::settings`):
 /// `UPDATE_CHAT_WINDOWS` once, then `UPDATE_CHAT_COLOR` for every registry entry. The reference's
 /// `FloatingChatFrame_Update` docks, hides and colours the windows on the first and
 /// `ChatFrame_OnEvent` fills `ChatTypeInfo` from the second, so a test VM that loads the

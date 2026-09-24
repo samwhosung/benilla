@@ -59,8 +59,7 @@ pub(crate) struct QuestGiver {
     /// the open view: `SMSG_QUESTGIVER_QUEST_DETAILS`' trailing `u32` (publisher `0x500ef0`,
     /// `0x50101a`), `SMSG_QUESTGIVER_OFFER_REWARD`'s `u32` after the reward text (the same
     /// publisher), and `SMSG_QUESTGIVER_REQUEST_ITEMS`' `closeOnCancel` (`0x501070`, `0x50111a`);
-    /// zeroed only by the world-enter reset `0x500af0` (wow-re `quest-share-flow.md` §5,
-    /// `quest-material-reward-spell-bindings.md` §3.2). The greeting packet leaves it alone. Its
+    /// zeroed only by the world-enter reset `0x500af0`. The greeting packet leaves it alone. Its
     /// one reader is `DeclineQuest`'s fork ([`decline_leg`]), where non-zero diverts a plain
     /// unit's decline from the giver re-open to the silent teardown — how the server says "this
     /// panel was not reached through a menu, there is nothing to go back to" (vmangos sends 1 on
@@ -333,8 +332,7 @@ impl NpcSession for QuestGiver {
 /// The greeting panel's active-vs-available split — decision 0088's deferred item, now resolved by
 /// the **wire icon**, which is the reference's own and only predicate.
 ///
-/// VERIFIED at the bytes (wow-re `system/ui/scratch/questgiver-quest-pool.md`, dispatched for this;
-/// the split is `0x5dbbfe-0x5dbc08`): `icon == 3 || icon == 4` → ACTIVE, and **every other `u32`** →
+/// The split is `0x5dbbfe-0x5dbc08`: `icon == 3 || icon == 4` → ACTIVE, and **every other `u32`** →
 /// AVAILABLE. A flat two-way `cmp`/`je`, no range test and no third arm — and the client never
 /// consults its own quest log on this path. The values are vmangos's `__QuestGiverStatus`
 /// (`QuestDef.h:118-130`): 3 = `DIALOG_STATUS_INCOMPLETE` (held, unfinished), 4 =
@@ -361,7 +359,7 @@ pub(crate) fn row_is_active(icon: u32) -> bool {
 /// ACTIVE pool's `+0x48` is written literal `0` and read nowhere in the binary — `SelectActiveQuest`
 /// always sends `0x18a`.)
 ///
-/// wow-re flags exactly one thing here as open: whether a real 1.12 server ever emitted `icon == 0`
+/// Exactly one thing here is open: whether a real 1.12 server ever emitted `icon == 0`
 /// on this packet at all — vmangos emits only 2..=5, and its `DIALOG_STATUS_NONE` belongs to the
 /// separate `SMSG_QUESTGIVER_STATUS` path. The arm is byte-verified and correctly wired; only its
 /// live *reachability* is unknown, and the client predicate is total over `u32`, so implementing it
@@ -435,9 +433,8 @@ pub(crate) fn reward_spell_view(
         spell_id,
         name: d.map(|d| d.name.clone()),
         texture: d.and_then(|d| d.icon.clone()),
-        // `isTradeskillSpell` is `Spell.dbc` col 6 `Attributes` bit 5 (`0x20`) — `0x501e59`,
-        // wow-re quest-material-reward-spell-bindings.md §3 (1161 of 22357 rows set; craft-cast
-        // spells set, `Pattern:` teaching spells clear).
+        // `isTradeskillSpell` is `Spell.dbc` col 6 `Attributes` bit 5 (`0x20`) — `0x501e59`
+        // (1161 of 22357 rows set; craft-cast spells set, `Pattern:` teaching spells clear).
         tradeskill: d.is_some_and(|d| d.attributes & 0x20 != 0),
     })
 }
@@ -572,8 +569,8 @@ fn feed_quest(
         spells.as_deref(),
     );
     // The panel's background material is the SOURCE object's — an item's page material, a
-    // GameObject's template data — never a creature's, and never on the wire (1946; wow-re
-    // quest-material-reward-spell-bindings.md §1). Resolved the way the reader window resolves its
+    // GameObject's template data — never a creature's, and never on the wire (1946;
+    // `GetQuestBackgroundMaterial 0x502230`). Resolved the way the reader window resolves its
     // own, since the two bindings share a body.
     let fresh = fresh.map(|mut st| {
         st.background_material = giver.npc.and_then(|source| {
@@ -632,12 +629,12 @@ fn feed_quest(
     *last_npc = giver.npc;
 }
 
-/// `CloseQuest()` — the teardown `0x501130(0,1)` its binding `0x501a10` calls and nothing else
-/// (wow-re `system/ui/scratch/quest-share-flow.md` §4.1): a PLAYER source — a party member whose
-/// shared quest we are walking away from — is answered `MSG_QUEST_PUSH_RESULT{DECLINE_QUEST}`;
-/// every other source is closed **network-silently**. There is no giver re-open here: that lives
-/// only in `DeclineQuest`'s fork ([`decline_leg`]). 1738 put the two verbs on one routine and so
-/// re-opened an NPC's list on ESC, which is the reason a multi-quest greeting could not be closed.
+/// `CloseQuest()` — the teardown `0x501130(0,1)` its binding `0x501a10` calls and nothing else:
+/// a PLAYER source — a party member whose shared quest we are walking away from — is answered
+/// `MSG_QUEST_PUSH_RESULT{DECLINE_QUEST}`; every other source is closed **network-silently**.
+/// There is no giver re-open here: that lives only in `DeclineQuest`'s fork ([`decline_leg`]).
+/// 1738 put the two verbs on one routine and so re-opened an NPC's list on ESC, which is the
+/// reason a multi-quest greeting could not be closed.
 ///
 /// The PLAYER test is the guid's shape, as in [`QuestGiver::walk_away_send`]; the reference's
 /// `0x468460(typemask 0x10)` also requires the sharer to resolve, which a sharer out of view does
@@ -667,7 +664,7 @@ enum DeclineLeg {
 }
 
 /// **`DeclineQuest`'s fork** — its binding `0x501d30` calls `0x5013f0`, the one routine that
-/// re-opens a giver (wow-re `quest-share-flow.md` §6, read at the bytes `0x5013f0`-`0x501553`),
+/// re-opens a giver (`0x5013f0`-`0x501553`),
 /// tested in this order:
 ///
 /// 1. the already-acted latch `0xbe0844` set, or the source unresolvable → nothing;
@@ -679,8 +676,8 @@ enum DeclineLeg {
 /// 5. any other unit → `CMSG_QUESTGIVER_HELLO`, which re-opens the quest list.
 ///
 /// Legs 2, 4 and 5 set `0xbe0844` and do NOT tear the window down: the server's answer replaces
-/// the panel. **Leg 4 is modelled as the teardown**: wow-re pinned the call site as the generic
-/// interact virtual but not `CGGameObject_C`'s override (its §9), so what goes on the wire is
+/// the panel. **Leg 4 is modelled as the teardown**: the call site is the generic interact
+/// virtual, but `CGGameObject_C`'s override of it is not identified, so what goes on the wire is
 /// unknown; a silent close is the one outcome that cannot leave a dead window up.
 ///
 /// `npc_flags` is the giver's live `UNIT_NPC_FLAGS`, `None` when it does not resolve to a streamed
@@ -1258,7 +1255,7 @@ mod tests {
     }
 
     /// The `0xbe0824` latch **suppresses** a plain unit's re-open when non-zero — the field
-    /// benilla parsed and ignored until the §5 found its one reader. Ignoring it meant a
+    /// benilla parsed and ignored until its one reader (`0x5014a2`) was found. Ignoring it meant a
     /// suppressed giver was re-opened anyway.
     #[test]
     fn a_non_zero_latch_suppresses_a_plain_units_reopen() {

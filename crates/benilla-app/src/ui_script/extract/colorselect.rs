@@ -11,10 +11,7 @@
 //! (`hsv_to_rgb` scales all three outputs by `v` and by nothing else, so `rgb(h, s, v)` really is
 //! `v · rgb(h, s, 1)`).
 //!
-//! Everything below is byte-verified in wow-re's `system/ui/scratch/colorselect-drawn-appearance.md`
-//! (a §5 cross-check dispatched from this repo for exactly this window: six workers in three pairs,
-//! one of each briefed cold, plus the orchestrator's own contiguous derivation). What it settled,
-//! and what each fact cost to get wrong:
+//! The reference's drawn appearance, and what each fact cost to get wrong:
 //!
 //! * **The disc is a 128×128 generated ARGB texture** (`0x78b580`, 16384 dwords into a
 //!   function-local static, uploaded once per process), drawn unmodulated — not a vertex-coloured
@@ -25,7 +22,7 @@
 //! * **The texel lattice is integers**, `X, Y ∈ [−64, 63]`, drawn iff `X² + Y² ≤ 0x1000` —
 //!   boundary *inclusive* — and outside is `0x00000000`, a hard alpha cut with no mask and no
 //!   feathering. `S = √(X²+Y²)/64`; `H = (atan2(Y, X) + π)·180/π`, the exact inverse of the pick
-//!   law (`colorselect-color-law.md` §5), which is what makes clicking a texel select the colour
+//!   law (`0x78bd80`), which is what makes clicking a texel select the colour
 //!   that texel shows. Row 0 is `Y = +63`: the top.
 //! * **The strip is an 8×8 solid texture of `HSV(H, S, 1)` times a vertical vertex gradient**,
 //!   black at the bottom and white at the top (`0x78b8a0` + `0x78b92a call 0x77f910`, and
@@ -140,8 +137,8 @@ mod tests {
     }
 
     /// The one property the disc must have: the colour a texel *shows* is the colour a click on
-    /// that texel *selects*. The right-hand side here is the pick law from wow-re
-    /// `colorselect-color-law.md` §5, which `benilla-ui`'s own `wheel_hs` transcribes — if the two
+    /// that texel *selects*. The right-hand side here is the reference's pick law
+    /// (`0x78bd80`), which `benilla-ui`'s own `wheel_hs` transcribes — if the two
     /// ever part company, one of these sides moves and this fails.
     #[test]
     fn every_texel_shows_the_colour_a_click_on_it_would_pick() {
@@ -170,8 +167,9 @@ mod tests {
     }
 
     /// The disc's cardinal points, spelled out — this is what pins the *orientation* of the whole
-    /// image, and it is the half a sign error would silently mirror. wow-re read it off the fill
-    /// loop: **red LEFT, chartreuse BOTTOM, cyan RIGHT, violet TOP**, hue rising counter-clockwise.
+    /// image, and it is the half a sign error would silently mirror. Off the reference's fill loop
+    /// (`0x78b580`): **red LEFT, chartreuse BOTTOM, cyan RIGHT, violet TOP**, hue rising
+    /// counter-clockwise.
     #[test]
     fn the_discs_cardinal_hues_are_the_pick_laws() {
         let (w, h, rgba) = wheel_pixels();

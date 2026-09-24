@@ -12,11 +12,10 @@
 //!   server pushes when the "How do I form a guild?" gossip row is selected — vmangos
 //!   `Player.cpp:12428-12431` closes the gossip menu and calls `SendPetitionShowList`), it knows a
 //!   price and an NPC guid, and it closes when the player walks away like every other NPC window
-//!   ([`crate::ui_session`]). wow-re corroborates the shape rather than merely permitting it: the
-//!   function that fires `GUILD_REGISTRAR_SHOW` (`0x4f4fb0`, firing at `0x4f4fff`) is one of the
-//!   fourteen callers of `CGGameUI::SetInteractNPC 0x4930d0`
-//!   (`system/object-layer/scratch/interaction-facing.md:177-178`), which is the *same* latch every
-//!   other NPC window arms.
+//!   ([`crate::ui_session`]). The reference corroborates the shape rather than merely permitting
+//!   it: the function that fires `GUILD_REGISTRAR_SHOW` (`0x4f4fb0`, firing at `0x4f4fff`) is one
+//!   of the fourteen callers of `CGGameUI::SetInteractNPC 0x4930d0`, which is the *same* latch
+//!   every other NPC window arms.
 //! - [`PetitionState`] is the item half: it opens on `SMSG_PETITION_SHOW_SIGNATURES`, is bound to a
 //!   charter **item guid**, and has no NPC at all. Walking away from the registrar must not close
 //!   it, which is why the two are separate resources rather than one with a half-meaning `close()`.
@@ -62,12 +61,9 @@
 //!
 //! ## What is INFERRED, and what would settle it
 //!
-//! wow-re had **not carved a single one of this subsystem's contracts** when this landed — it holds
-//! the eight binding addresses (`system/ui/scratch/bindings.md:455-462`, all classified
-//! ORCHESTRATION: located, contract never derived) and the four event ids
-//! (`guild-api-carve.md:603-624`), and nothing about the wire or the handlers. Every claim below is
-//! read off the *demand* side (the shipped `PetitionFrame.lua` / `GuildRegistrarFrame.lua`) plus
-//! vmangos, and is named here so none of it is mistaken for byte law:
+//! Every claim below is read off the *demand* side (the shipped `PetitionFrame.lua` /
+//! `GuildRegistrarFrame.lua`) plus vmangos, and is named here so none of it is mistaken for byte
+//! law:
 //!
 //! 1. **`SMSG_PETITION_SHOWLIST` → `GUILD_REGISTRAR_SHOW`** (no args). The firer `0x4f4fb0` sits in
 //!    the petition band with `0x5eeb80` as its sole caller; the byte read of that handler settles
@@ -75,8 +71,8 @@
 //! 2. **`SMSG_PETITION_SHOW_SIGNATURES` → `PETITION_SHOW`** (no args), everything painted from
 //!    getters. The reference's own OnEvent uses no `arg1`, which makes this weak-but-consistent.
 //! 3. **`ClosePetition()` / `CloseGuildRegistrar()` send nothing.** Chosen because inventing
-//!    traffic 1.12 never sends is the worse failure, and because wow-re already recorded exactly
-//!    that verdict for the neighbouring `CloseGuildRoster` (`xor eax,eax; ret`).
+//!    traffic 1.12 never sends is the worse failure, and because the neighbouring
+//!    `CloseGuildRoster 0x4d2350` sends nothing either (`xor eax,eax; ret`).
 //! 4. **Re-requesting the signature list on an `OK` sign result** (above).
 //! 5. **`ERR_GUILD_FOUNDER_S` on a successful turn-in.** vmangos declares `GUILD_FOUNDER_S = 0x0E`
 //!    and **never sends it** — `Guild::Create` broadcasts no event at all on the founding path
@@ -141,7 +137,7 @@ impl GuildRegistrarState {
     /// `npc_flags` is the NPC's live `UNIT_NPC_FLAGS`, or `None` when the guid does not resolve to a
     /// streamed unit — which fails the gate, as the client's own `0x5eec1a` resolve does.
     ///
-    /// The three gates, from `system/object-layer/scratch/petition-wire-law.md` §2:
+    /// The three gates, in the showlist handler `0x5eeb80`:
     /// 1. the NPC resolves as a unit and carries [`REGISTRAR_NPC_FLAGS`];
     /// 2. **entry\[0\]**'s `entryFlags & 1` is set (`0x5eec42`, and it is entry\[0\]'s fifth dword
     ///    specifically — no other entry's flags are tested anywhere on this path);

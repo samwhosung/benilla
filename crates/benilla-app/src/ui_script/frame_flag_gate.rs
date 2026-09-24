@@ -14,8 +14,8 @@
 //! **Our side is read from the ENGINE, never from our XML.** An attribute-vs-attribute diff is
 //! precisely what let the class hide, twice over: benilla renames templates (`ChatFrameTemplate` →
 //! `BenillaChatFrameTemplate`), so a name-keyed text diff reports a gap of zero on a window that is
-//! entirely missing the flag; and the `<Scripts>` **auto-enable** law (wow-re
-//! `ui/scratch/scripts-auto-enable.md` §1, VERIFIED — an `<OnEnter>`/`<OnLeave>`/`<OnMouseDown>`/
+//! entirely missing the flag; and the `<Scripts>` **auto-enable** law (an
+//! `<OnEnter>`/`<OnLeave>`/`<OnMouseDown>`/
 //! `<OnMouseUp>`/`<OnDragStart>` reaches the same enable primitive `0x76af00(2,-1)` the attribute
 //! does) makes `enableMouse=` a poor proxy for whether the frame actually takes the mouse. Asking
 //! the loaded engine — `IsToplevel()`, `IsMouseEnabled()`, `GetID()`, `GetParent()` — is immune to
@@ -103,7 +103,7 @@ const FRAME_TAGS: &[&str] = &[
 ];
 
 /// The five `<Scripts>` handler names that auto-enable the MOUSE kind, and only those five
-/// (wow-re `ui/scratch/scripts-auto-enable.md` §1's kind-2 OR-chain, `0x769fb7`..`0x76a022`).
+/// (the kind-2 OR-chain, `0x769fb7`..`0x76a022`).
 /// `OnDragStop`/`OnReceiveDrag` bind a slot and trip no enable — they are deliberately absent.
 const MOUSE_HANDLERS: &[&str] = &[
     "OnEnter",
@@ -399,7 +399,7 @@ fn declares_handler(
 }
 
 /// Whether the reference's frame of this name **takes the mouse** once loaded — the three ways
-/// `0x76af00(2, -1)` is reached, per `scripts-auto-enable.md` §1.3: the widget's own ctor, the
+/// `0x76af00(2, -1)` is reached: the widget's own ctor, the
 /// `enableMouse` attribute, or an auto-enabling `<Scripts>` handler.
 fn reference_takes_mouse(name: &str, frames: &HashMap<String, Element>) -> bool {
     let Some(el) = frames.get(name) else {

@@ -723,8 +723,8 @@ fn the_temporary_enchant_row_shows_a_weapon_enchant_and_moves_the_top_row_aside(
     // The direct probe, and its exact shape is the point. `BuffButtonTempEnchant` inherits
     // `BuffButtonTemplate` and blanks its three aura handlers with `<OnLoad>`↵`</OnLoad>` — a
     // WHITESPACE body, which 1.12 compiles into a valid empty function rather than storing nil
-    // (`SetScript 0x7025c0` tests `text[0]`, and nothing trims — wow-5875-re
-    // `xml-script-empty-element.md`). So each handler is still a FUNCTION here, and it is the
+    // (`SetScript 0x7025c0` tests `text[0]`, and nothing trims). So each handler is still a
+    // FUNCTION here, and it is the
     // reference's own no-op rather than `BuffButton_OnLoad`.
     //
     // Asserting `== nil` instead would be asserting a bug: an addon reading
@@ -1009,11 +1009,11 @@ fn a_settled_buff_button_rewrites_alpha_and_duration_as_the_reference_does() {
 /// The duration line against the **real shipped strings**, end to end — the leg the engine's own
 /// synthetic-template tests cannot reach.
 ///
-/// The engine formats through `tooltip::duration_text` (`0x52fa50`'s ladder, wow-re
-/// §3-BUFF-TIME-FORMAT) over whatever `GlobalStrings.lua` the player's install carries; this runs
+/// The engine formats through `tooltip::duration_text` (`0x52fa50`'s ladder) over whatever
+/// `GlobalStrings.lua` the player's install carries; this runs
 /// that file into a real VM exactly as the boot's `load_global_strings` does, then asserts the
 /// wording that comes back. Every expectation below is a reading the PREVIOUS two-arm formatter got
-/// wrong, so this is the carve's whole delta in one place. Skips without client data.
+/// wrong, so this is the whole delta in one place. Skips without client data.
 #[test]
 fn the_duration_line_reads_the_real_global_strings() {
     let data = benilla_formats::wow_data_or_skip!();

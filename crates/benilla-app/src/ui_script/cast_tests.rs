@@ -420,7 +420,7 @@ fn the_fill_draws_beneath_the_border_art() {
     );
 }
 
-/// A StatusBar fill CROPs its texture — it never squeezes it (wow-re `nameplate-vkey.md`). At a
+/// A StatusBar fill CROPs its texture — it never squeezes it (`0x770410`). At a
 /// fraction f the quad is f·width wide AND samples u ∈ [0, f], so `UI-StatusBar`'s left-to-right
 /// ramp keeps its true gradient at every fill level.
 #[test]

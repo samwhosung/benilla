@@ -641,8 +641,8 @@ fn the_tab_highlight_is_exactly_its_tab() {
                 // **The two tabs carry DIFFERENT highlight widths, and that is the reference's,
                 // not a loader bug.** Exactly one `<OnLoad>` runs — the most-derived one; the
                 // template's is installed and then *destroyed*, because `SetScript` releases the
-                // slot's single ref before it even looks at the new body (wow-re
-                // `template-onload-replacement-law.md`). So a tab gets whichever formula ITS OWN
+                // slot's single ref before it even looks at the new body (`0x7025ec`). So a tab
+                // gets whichever formula ITS OWN
                 // body ends with:
                 //
                 //   * tab 2's body is just `PanelTemplates_TabResize(-15, nil, nil, 150)`, whose
