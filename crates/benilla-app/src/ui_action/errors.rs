@@ -531,7 +531,7 @@ pub(crate) fn attack_actor_refusal(
 
 /// The same ladder **without the message** — which condition blocks the swing, or `None`.
 ///
-/// It exists because `0x612df0` is not on every attack-start path, and 1851's §5 pinned which:
+/// It exists because `0x612df0` is not on every attack-start path, and decision 1851 pinned which:
 /// its three callers image-wide are the pet-attack command (`0x4bd40d`), the Attack
 /// action/keybind (`0x6131aa`) and TryCast (`0x6e4efb`) — and **not** the world right-click.
 /// That click runs `0x60bea0` → `0x60c247 call 0x5ecb70`, whose whole extent

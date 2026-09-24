@@ -1847,7 +1847,7 @@ mod tests {
             .expect("spell 2584 in Spell.dbc");
         assert!(
             !cancel_gate_could_apply(ex),
-            "spell 2584 AttributesEx = {ex:#x}: the gate's third leg would decide, and it is uncarved"
+            "spell 2584 AttributesEx = {ex:#x}: the gate's third leg would decide, and it is open"
         );
     }
 

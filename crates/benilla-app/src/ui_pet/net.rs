@@ -283,8 +283,8 @@ fn pet_tame_failure(reason: u8, failures: &mut PetTameFailures) {
 ///
 /// The packet carries nothing at all, so the opcode IS the message — which is exactly what the
 /// reference's arm does (`0x5e3e33`: `push 0xf7; call 0x496720`, no body read). Decision 1066
-/// recorded the opposite ("a refused rename silently does nothing") from a carve that had
-/// attributed `SMSG_PET_BROKEN`'s handler to this opcode; the two are different functions.
+/// recorded the opposite ("a refused rename silently does nothing"), attributing
+/// `SMSG_PET_BROKEN`'s handler to this opcode; the two are different functions.
 ///
 /// Nothing else moves: the rename was optimistic-free by design (1066), so there is no local name
 /// to roll back, and the popup has already closed.

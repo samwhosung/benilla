@@ -643,7 +643,8 @@ pub struct TerrainExtension {
 }
 
 impl MaterialExtension for TerrainExtension {
-    // Custom VERTEX shader too (not just fragment): the sun specular is computed per-vertex (Q14), and
+    // Custom VERTEX shader too (not just fragment): the sun specular is computed per-vertex (the
+    // reference's fixed-function light flush, `0x59c820`, keeps slot 0's specular live), and
     // Bevy's `VertexOutput` has no slot to carry the interpolated result.
     fn vertex_shader() -> ShaderRef {
         "embedded://benilla_assets/shaders/terrain.wgsl".into()

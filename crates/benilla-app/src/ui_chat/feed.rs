@@ -487,7 +487,7 @@ fn keyed(
 /// reference does not keep in GlobalStrings: 1.12 ships no `EXHAUSTION_STATE*` key, so it comes
 /// out of the client's own table and stays a literal here, with the same INTERIM it always had.
 /// "Rested" is the only state the live server produces (the beta tired/exhausted penalties are
-/// dead data); the client's table is the in-flight 0304 §5's to pin.
+/// dead data); the client's table is the in-flight 0304's to pin.
 pub(super) fn xp_gain_line(
     victim: Option<&str>,
     total: u32,

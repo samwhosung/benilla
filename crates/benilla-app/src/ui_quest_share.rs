@@ -33,7 +33,7 @@
 //! address a party member by guid and display a *name*, so both go through the [`NameCache`]'s
 //! ask-once resolve. The reference does not: it reads the object-name cache `0xc0e228` through
 //! `0x55f080` with a **null callback**, so a miss returns 0 and the message is **silently dropped**
-//! — no query, no defer, no line (decision 1738's §5). That is a quirk of a synchronous object
+//! — no query, no defer, no line (decision 1738). That is a quirk of a synchronous object
 //! manager that always has its party members to hand, not a behaviour worth reproducing: benilla's
 //! cache may genuinely not hold a member yet, and losing "Thrall has declined your quest" because a
 //! name query was in flight is strictly worse than showing it a frame later. So a verdict whose
@@ -109,12 +109,12 @@ impl QuestShare {
 /// from. `None` for an unmapped byte is the reference's data-suppression face, not a gap: an
 /// unknown verdict shows nothing rather than an English guess.
 ///
-/// **Both columns are now VERIFIED at the bytes** (decision 1738's fold-back of the §5 dispatched
-/// with 1733). The inbound `0x276` arm at `0x5e4781` maps `msg 0..8` onto message ids `0x181`-`0x189`
-/// — contiguous, in exactly this order — and all nine records carry **`kind 0`** (the nine
-/// `push 0x0` at `0x487dc9`-`0x487e69`), which `CGGameUI::DisplayError` dispatches to the chat
-/// window as `CHAT_MSG_SYSTEM`. Not one of them reaches `UIErrorsFrame`, which is what 1733
-/// guessed and is why the guess is recorded as having been a guess.
+/// **Both columns are now VERIFIED at the bytes** (decision 1738's fold-back). The inbound `0x276`
+/// arm at `0x5e4781` maps `msg 0..8` onto message ids `0x181`-`0x189` — contiguous, in exactly this
+/// order — and all nine records carry **`kind 0`** (the nine `push 0x0` at `0x487dc9`-`0x487e69`),
+/// which `CGGameUI::DisplayError` dispatches to the chat window as `CHAT_MSG_SYSTEM`. Not one of
+/// them reaches `UIErrorsFrame`, which is what 1733 guessed and is why the guess is recorded as
+/// having been a guess.
 fn verdict_message(msg: QuestShareMsg) -> Option<&'static str> {
     let key = match msg {
         QuestShareMsg::SHARING_QUEST => "ERR_QUEST_PUSH_SUCCESS_S",

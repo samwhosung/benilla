@@ -657,8 +657,8 @@ mod tests {
     }
 
     /// **A travelling spell's outcome word is DEFERRED, and it is GOLD** (decision 2229) — the
-    /// arrival half of the miss text, and the case the whole round came from: a resisted Fireball
-    /// reads "Resist" in spell gold when the ball lands, not white at GO.
+    /// arrival half of the miss text: a resisted Fireball reads "Resist" in spell gold when the
+    /// ball lands, not white at GO.
     ///
     /// Four legs, each an independent branch of the law `0x607140` runs for every one of its
     /// callers:

@@ -304,7 +304,7 @@ fn real_spell_visual_chain_resolves_fireball() {
     );
 
     // The engine-spawned hardcoded set resolves by the client's own baked names — the ding
-    // (row 21, byte-verified `0x61f5b0`/`0x8618e0`, decision 0304's §5 fold-back).
+    // (row 21, byte-verified `0x61f5b0`/`0x8618e0`, decision 0304's fold-back).
     assert_eq!(
         cat.hardcoded_effect("HARDCODED Unit Level Up"),
         Some((21, "Spells\\LevelUp\\LevelUp.mdl")),

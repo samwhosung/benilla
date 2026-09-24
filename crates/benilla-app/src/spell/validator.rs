@@ -76,8 +76,8 @@ const PREVENTION_PACIFY: u32 = 2;
 /// while stunned, silenced or pacified: it refuses on the press. (Fear, confuse and charm *are*
 /// greyed, by a second copy of the same helpers inside `0x6e3d60`; that copy is not built here.)
 ///
-/// Its byte-shape was nearly missed by a census twice: SILENCED's read is `f6 c4 20 test ah,0x20`,
-/// a sub-register byte-lane form with no dword immediate, invisible to an immediate scan.
+/// Its byte-shape is a trap for a binary scan: SILENCED's read is `f6 c4 20 test ah,0x20`, a
+/// sub-register byte-lane form with no dword immediate, invisible to an immediate scan.
 ///
 /// **The exemption scan is built** (decision 1946, closing 1925's deferral): each arm first asks
 /// whether any of the caster's own auras grants immunity to what is blocking it — a scan of

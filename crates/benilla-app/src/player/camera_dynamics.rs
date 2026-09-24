@@ -1199,8 +1199,8 @@ mod tests {
     }
 
     /// The ten conjuncts, one removed at a time from a case that otherwise bobs — including the
-    /// first-person one, which is the round's own finding and the easiest to get wrong (it is the
-    /// ZOOM distance, inclusive at 1/6).
+    /// first-person one, which is the easiest to get wrong (it is the ZOOM distance, inclusive at
+    /// 1/6).
     #[test]
     fn head_bob_is_first_person_only_and_every_conjunct_can_stop_it() {
         use super::super::camera::follow_cmd as c;

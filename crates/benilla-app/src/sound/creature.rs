@@ -7,7 +7,7 @@
 //! natural-weapon impact, not free-standing anim vocals); the
 //! aggro/alert flares land here ([`ai_reaction_vocals`], decision 0280), and so does the ambient
 //! body loop ([`creature_body_loops`] — the `loop_sound` column, `0x623800`'s alive-gate). Still
-//! untriggered — data in the catalog, triggers INFERRED (0280's §5): stun/jump_start/jump_end
+//! untriggered — data in the catalog, triggers INFERRED (0280): stun/jump_start/jump_end
 //! (offsets verified, live triggers likely M2 tags — unpinned).
 
 use bevy::ecs::entity::EntityHashMap;

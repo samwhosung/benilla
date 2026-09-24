@@ -96,9 +96,9 @@ pub(super) enum WaterBand {
 /// An invalid or null liquid object makes `0x511ad0` return `+0.0` with both bits cleared — hence
 /// `surface_y: None` mapping to [`WaterBand::Clear`] and `d = 0.0`, not to a panic or a probe.
 ///
-/// **The comparison is against the pivot TARGET, not its live value** — the asymmetry that three of
-/// seven cold workers inverted and that was arbitrated at the bytes: `[cam+0x1c8]` is the target and
-/// `[cam+0xfc]` the live value (the only directional store is `0x50f3e7 call 0x5b7bb0 →
+/// **The comparison is against the pivot TARGET, not its live value** — an asymmetry that's easy
+/// to invert, but byte-exact: `[cam+0x1c8]` is the target and `[cam+0xfc]` the live value (the
+/// only directional store is `0x50f3e7 call 0x5b7bb0 →
 /// 0x50f3ec fstp [esi+0xfc]`; `0x50f3ff`'s `[0x1c8] := [0xfc]` is a settle guarded by
 /// `|Δ| < 2⁻²²`). The classifier reads the target; the corridor seeds its cap from the live value.
 /// Getting this backwards bands against a continuously-eased quantity and chatters on its own,

@@ -524,7 +524,7 @@ fn real_spell_catalog_reads_usable_walk_columns() {
         assert_eq!(
             (op.caster_aura_state, op.target_aura_state),
             (0, 0),
-            "Overpower {rank} has no aura-state gate — leg 5 is all that holds it"
+            "Overpower {rank} has no aura-state gate — the combo-point gate is all that holds it"
         );
     }
     for finisher in [

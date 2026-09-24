@@ -168,8 +168,8 @@ fn setup_shadow_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 /// Keep one shadow record per eligible unit: spawn for new Player/Unit entities whose model has
 /// built (an animated model — [`ModelAnimations`] arrives with it), despawn orphans (owner
-/// destroyed / streamed out). The registration *policy* is the open RE item; this is the v1 set
-/// (see module docs).
+/// destroyed / streamed out). The registration *policy* is still open; this is the v1 set (see
+/// module docs).
 #[allow(clippy::type_complexity)] // the filtered spawn-gate query, commented inline
 fn sync_shadows(
     mut commands: Commands,
@@ -459,8 +459,9 @@ fn update_shadows(
                 .map(|v| format!("({:.3},{:.3})", v.uv[0], v.uv[1]))
                 .collect();
             debug!("self shadow uvs: {}", uvs.join(" "));
-            // And the box/rect numbers: the oracle says HumanFemale's footprint is 0.77x0.74 yd
-            // nearly centred; a bigger or offset rect indicts the box math, not the projector.
+            // And the box/rect numbers: measured on the reference client, HumanFemale's
+            // footprint is 0.77x0.74 yd nearly centred; a bigger or offset rect indicts the box
+            // math, not the projector.
             debug!(
                 "self shadow box: bmin {:?} bmax {:?} rect x [{:.3}, {:.3}] z [{:.3}, {:.3}] \
                  (extent {:.3}x{:.3}, centre offset ({:.3}, {:.3}))",

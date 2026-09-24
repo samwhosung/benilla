@@ -658,7 +658,7 @@ pub(crate) fn grounded_y(
 /// doesn't trust the wire Z for a walking unit: the grounded fork zeroes the spline Z-delta and the
 /// WALK resolver reads Z off the world trace (byte-verified, decision 0059); an idle unit reads
 /// grounded against the reference too (the exact idle path isn't byte-pinned yet — 0059's open
-/// follow-up, dispatched again under decision 2018).
+/// follow-up, reopened in decision 2018).
 ///
 /// **The probe geometry is the reference's, and it starts at the body** (decision 2018). A walker
 /// continuing its path runs the shared swept step ([`crate::player::mover::grounded_step`]) from

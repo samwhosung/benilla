@@ -98,8 +98,8 @@ impl TaxiState {
 
 /// A flight master's answered node status (`SMSG_TAXINODE_STATUS`, upserted by the net bridge):
 /// `known = false` (an undiscovered nearest node) shows the green `TalkToMeGreen` overhead icon —
-/// the client's `0x5ecdd0` handler → `0x607480` marker swap (resource table `0xc4d9d8` index 4),
-/// byte-verified in the 0497 §5.
+/// the client's `0x5ecdd0` handler → `0x607480` marker swap (resource table `0xc4d9d8` index 4,
+/// decision 0497).
 ///
 /// **The query and the teardown are [`crate::quest_markers::query`]'s, not this module's**
 /// (decision 1918). `0x5eb170` — the only `CMSG_TAXINODE_STATUS_QUERY` sender in the image — has

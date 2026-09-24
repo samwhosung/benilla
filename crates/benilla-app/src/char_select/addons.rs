@@ -692,7 +692,7 @@ pub(super) fn drive_addons_panel(
         }
     }
 
-    // The live `checkAddonVersion` mirror (1293 §5): read per frame like the gate's own per-query
+    // The live `checkAddonVersion` mirror (1293): read per frame like the gate's own per-query
     // read (1292 §2.2), so the ForceLoad click above — or any other writer — repaints the
     // statuses this same frame with nothing rescanned. Absent VM or table = the registrar
     // default: check ON.

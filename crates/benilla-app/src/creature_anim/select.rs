@@ -923,7 +923,7 @@ pub(super) fn arm_forces_head(engaged: bool, casting: bool, outgoing: u16) -> bo
     engaged || casting || matches!(outgoing, 16..=19 | 25..=29 | 51..=54)
 }
 
-/// The victim wound-flinch id (`0x60ea70`, decision 0111 §5.3 — byte-verified): decided **solely**
+/// The victim wound-flinch id (`0x60ea70`, decision 0111 — byte-verified): decided **solely**
 /// by `(severity, engaged)`. Crit (`HitInfo & 0x80`) → CombatCritical; the victim engaged in
 /// melee (its auto-attack-target GUID set, `[unit+0xc48]`) → CombatWound; else StandWound.
 pub(super) fn wound_anim(hit_info: u32, engaged: bool) -> u16 {
@@ -938,7 +938,7 @@ pub(super) fn wound_anim(hit_info: u32, engaged: bool) -> u16 {
 
 /// Whether the wound overlay covers the **full body** (the client forces op4's key-bone to `-1` =
 /// bone 0) or stays **masked** to the upper-body subtree — the two byte-decoded mechanisms
-/// (decision 0111 §5.2, `0x60eae8` / `0x60eb9a`):
+/// (decision 0111, `0x60eae8` / `0x60eb9a`):
 ///
 /// - **(A), all ids:** the victim's current bone-0 pose is a combat-ready stance {25–29} — a
 ///   weapon-drawn victim standing between its own swings flinches full-body. `base_anim` is the
@@ -946,9 +946,9 @@ pub(super) fn wound_anim(hit_info: u32, engaged: bool) -> u16 {
 ///   `[block0+0xf8]`), so mid-swing the base is the swing — not ready — and the flinch masks.
 /// - **(B), StandWound(8) only:** genuinely stationary — the client's `[+0x118]+0x40 & 0x20200f`
 ///   (move/jump/swim; note the keyboard-turn bits `0x30` are **not** in the mask) — **and not
-///   mounted** (the secondary-blend note's `[unit+0xdc]==0` companion clause; a mounted rider's
-///   flinch never replaces the seat pose, decision 0441). The transport-substate companion is
-///   still a state benilla doesn't model.
+///   mounted** (`[unit+0xdc]==0`, `0x60eb9a`→`0x60ebea`; a mounted rider's flinch never replaces
+///   the seat pose, decision 0441). The transport-substate companion is still a state benilla
+///   doesn't model.
 ///
 /// Everything else is masked: the legs keep the base animation untouched.
 pub(super) fn wound_full_body(id: u16, base_anim: u16, flags: u32, mounted: bool) -> bool {

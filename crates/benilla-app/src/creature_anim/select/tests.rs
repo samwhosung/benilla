@@ -466,7 +466,7 @@ fn a_degenerate_model_scale_falls_through_to_unit_rate() {
 }
 
 /// The SIGN of `moveSpeed` is load-bearing, and the `abs()` belongs to the scale ALONE (decision
-/// 0912, §5-verified). A backwards gait is authored negative — `RidingKodo.m2` seq 14 is
+/// 0912). A backwards gait is authored negative — `RidingKodo.m2` seq 14 is
 /// WalkBackwards at **−2.5**, byte-read here with `benilla-extract m2seq` — and Guard A is a strict
 /// `divisor > 0`, so the reference leaves that clip at a flat 1×. A model authoring NO
 /// WalkBackwards falls back to forward Walk (+2.5) and *is* speed-scaled. Pinned because
@@ -789,7 +789,7 @@ fn base_arm_head_force_is_the_combat_carveout() {
 
 #[test]
 fn wound_id_by_severity_then_engagement() {
-    // Decision 0111 §5.3: crit outranks engagement; engagement decides 9 vs 8.
+    // Decision 0111: crit outranks engagement; engagement decides 9 vs 8.
     assert_eq!(wound_anim(0x2 | 0x80, false), 10);
     assert_eq!(wound_anim(0x2 | 0x80, true), 10);
     assert_eq!(wound_anim(0x2, true), 9);

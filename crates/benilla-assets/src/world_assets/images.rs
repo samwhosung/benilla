@@ -121,8 +121,8 @@ fn dc_normalization_enabled() -> bool {
 /// a per-frame brightness swing is the intended pulse, so the caller passes `false` for the
 /// fullbright kinds and their DC is left alone.
 ///
-/// **This is a deliberate divergence from the shipped art**, pending the RE round on whether the
-/// reference shows the same breathing (it uploads the same authored, same-quantised mips, so it
+/// **This is a deliberate divergence from the shipped art**, pending whether the reference shows
+/// the same breathing (it uploads the same authored, same-quantised mips, so it
 /// plausibly does). `WOW_LIQUID_DC=raw` restores the frames verbatim for the A/B.
 fn flatten_frame_dc(data: &mut [u8], spans: &[Vec<(usize, usize)>], levels: usize) {
     for level in 0..levels {

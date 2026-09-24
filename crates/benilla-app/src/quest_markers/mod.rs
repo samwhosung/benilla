@@ -195,7 +195,7 @@ fn despawn_marker(commands: &mut Commands, roots: &Query<&QuestMarkerRoot>, root
 
 /// Reconcile the marker set with the per-guid statuses: spawn/swap/despawn marker roots. Two
 /// sources feed the one overhead slot: the questgiver dialog status (this module's own wire),
-/// and the flight-master node status ([`crate::ui_taxi::FlightMasterStatus`], the 0497 §5 —
+/// and the flight-master node status ([`crate::ui_taxi::FlightMasterStatus`], decision 0497 —
 /// `known = false` shows `TalkToMeGreen`, the client's `0x607480` with resource index 4). The
 /// client's two handlers race last-write-wins on the same attach slot; we compose
 /// deterministically instead — a quest marker, when the status yields one, outranks the green

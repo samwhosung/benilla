@@ -37,7 +37,7 @@ const PULSE_F2: f32 = f32::from_bits(0x3e1d_b22d); // 0.154
 /// See [`PULSE_F1`].
 const PULSE_F3: f32 = f32::from_bits(0x3e47_ae14); // 0.195
 /// `_DAT_0080c5d4` — 1/3 (bits `0x3eaaaa9f`): the pulse mean. (Not exactly 1.0/3.0 — the
-/// binary's constant is one ULP low, and the difftest is bit-exact against *it*.)
+/// binary's constant is one ULP low, and this is that exact bit pattern.)
 const PULSE_MEAN: f32 = f32::from_bits(0x3eaa_aa9f);
 /// `_DAT_0080c4bc` — π/240 (bits `0x3c567750`): the pulse amplitude-vs-fraction scale.
 const PULSE_AMP: f32 = f32::from_bits(0x3c56_7750);

@@ -1,6 +1,6 @@
 //! The taxi domain logic split out of [`super`] purely for size (the ui_taxi module doc): the
 //! static DBC catalogs, the byte-verified map projection and geo-distance route search (decision
-//! 0496 — the 0484 §5 fold-back), and the node list they build together. Pure/testable — no Bevy
+//! 0496 — the 0484 fold-back), and the node list they build together. Pure/testable — no Bevy
 //! system runs here except the catalog loader, which only reaches out for the patch chain.
 
 use std::cmp::Reverse;
@@ -103,8 +103,8 @@ pub(crate) fn project(cont: &WorldMapContinent, world_x: f32, world_y: f32) -> (
 type Edge = (u32, u32);
 
 /// Shortest route from `from` to `to` over a directed graph, expansion restricted to nodes `known`
-/// marks discovered — **the byte-verified metric** (decision 0496 folds back 0484 §5 TU-3,
-/// superseding INTERIM I2's fare-Dijkstra): the client's route relaxation (`0x4dbce0`, metric
+/// marks discovered — **the byte-verified metric** (decision 0496 folds back 0484, superseding
+/// INTERIM I2's fare-Dijkstra): the client's route relaxation (`0x4dbce0`, metric
 /// `0x4dbbd0`) minimizes **summed geographic distance**, carrying the money fare and the hop
 /// count *alongside* the optimization, not in it. `edges(node)` returns `node`'s outgoing
 /// `(to, fare)` pairs; `dist(a, b)` is the geographic metric between two node ids (production:

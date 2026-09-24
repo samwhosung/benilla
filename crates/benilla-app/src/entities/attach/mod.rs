@@ -560,8 +560,8 @@ pub(super) fn attach_entity_visuals(
             // mesh did). Truly static props keep the static mesh. `skin` is `Some((joints,
             // inverse_bindposes, palette_slot))` when instanced (decision 0720; slot 0 = palette
             // full, parts fall back to the static mesh).
-            // Does this entity run the GameObject open/close state machine (the byte-verified
-            // TYPE_ID census)? Read once — it picks both the rig flavour below and the clock's
+            // Does this entity run the GameObject open/close state machine (the type dispatch at
+            // `0x5f76cc`)? Read once — it picks both the rig flavour below and the clock's
             // driver, and those two must never disagree about the same object.
             let go_state_machine = net.kind == EntityKind::GameObject
                 && stores
