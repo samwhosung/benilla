@@ -1,5 +1,4 @@
-//! The loading screen's **tip of the day** (decision 2077; wow-re
-//! `system/loadingscreen/scratch/game-tip-of-the-day.md`).
+//! The loading screen's **tip of the day** (decision 2077).
 //!
 //! `showGameTips`' only mention in 1.12's FrameXML is its options row and the tooltip string
 //! "Uncheck this to hide the tip of the day in the load screens", so the whole feature is

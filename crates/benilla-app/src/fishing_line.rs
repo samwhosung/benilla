@@ -1,5 +1,4 @@
-//! The engine-drawn **fishing line** (wow-re `object-layer/scratch/fishing-line.md`, §5
-//! byte-verified, their `aed458c7`): rod tip → bobber while a unit channels Fishing.
+//! The engine-drawn **fishing line**: rod tip → bobber while a unit channels Fishing.
 //!
 //! The reference draws this as a per-UNIT effect, not a GO one — one line object per unit
 //! (`[unit+0xb4c]`, ctor `0x61f490`), created when the unit's `UNIT_FIELD_CHANNEL_OBJECT`
@@ -9,7 +8,7 @@
 //! line. Benilla draws it immediate-mode per frame from exactly those conditions, so the
 //! reference's create/watcher/teardown lifecycle falls out as the condition holding or not.
 //!
-//! The geometry (`0x61f780`, bit-proven `PRIMITIVE:effect_beam_trail`): **65 vertices**, straight
+//! The geometry (`0x61f780`): **65 vertices**, straight
 //! lerp near → far, then a fixed half-sine sag — `z −= 0.5 × sin(π·t)`, 0.5 world-units at the
 //! midpoint, not length- or physics-scaled. Near = the pole M2's `$CCH` event marker (the bobber
 //! authors one too and the reference NEVER reads it — its far end is the bobber's position with

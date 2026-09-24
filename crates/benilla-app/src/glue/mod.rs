@@ -88,11 +88,11 @@ impl GlueClicks {
 /// The glue layer's click law: a button fires on the **release**, and only when the release lands
 /// back on the button that took the press.
 ///
-/// VERIFIED against the real 1.12.1 client (wow-re `ui.md`, the `OnDoubleClick`/`RegisterForClicks`
-/// byte law): `CSimpleButton`'s ctor default click mask `[+0x330] = 0x100` is **`LeftButtonUp`
-/// alone**, so a stock `<Button>` — every glue button is one — is dispatched from the mouse-**up**
-/// dispatcher `0x7792d0`; the mouse-**down** dispatcher `0x779210` fires nothing a glue screen
-/// registers. Two more predicates ride the release: the button must be in state `[+0x328] == 2`
+/// In the real 1.12.1 client, `CSimpleButton`'s ctor default click mask `[+0x330] = 0x100`
+/// (`0x7786d0`) is **`LeftButtonUp` alone**, so a stock `<Button>` — every glue button is one — is
+/// dispatched from the mouse-**up** dispatcher `0x7792d0`; the mouse-**down** dispatcher
+/// `0x779210` fires nothing a glue screen registers. Two more predicates ride the release: the
+/// button must be in state `[+0x328] == 2`
 /// (PUSHED — it took the press), and the release must **hit-test inside the frame** (`0x76b020`).
 /// So press-and-slide-off cancels, and press-off-slide-on does nothing — which is what a player
 /// expects of every button they have ever used. Our own in-game FrameXML path already implements
@@ -161,8 +161,8 @@ pub(crate) const ROTATION_PER_UI_UNIT: f32 = 0.6 * std::f32::consts::PI / 180.0;
 /// `CHARACTER_ROTATION_CONSTANT` is per UI unit, not per pixel: `GetCursorPosition` (`0x46dad0`)
 /// answers on the glue engine's `aspect·768 × 768` virtual canvas, so the same physical drag turns
 /// the character *less* on a taller display — 0.6°/px only at a 768-line window, 0.427°/px at 1080p
-/// (wow-re `glue/scratch/glue-preview-facing-law.md`, 1533). Feeding it the raw pixel delta ran the
-/// drag ~40 % fast at 1080p and made it scale with the window instead of with the canvas.
+/// (1533). Feeding it the raw pixel delta ran the drag ~40 % fast at 1080p and made it scale with
+/// the window instead of with the canvas.
 ///
 /// The divisor is the true `height / 768`, not [`screen_scale`]: that one is clamped at 2.2 so the
 /// *layout* stops growing on a very tall window, and the cursor's canvas has no such clamp.

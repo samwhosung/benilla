@@ -13,7 +13,7 @@
 //!
 //! **The lifecycle is event-raised, readiness-cleared (decision 0737)** — and the reference's is
 //! too, which 0737 assumed it was not. This header claimed for months that the reference *blocks*
-//! on its world load and so covers "by construction"; the wow-re round behind decision 1990 says
+//! on its world load and so covers "by construction"; decision 1990 says
 //! half of that is wrong. The reference runs ordinary frames with **one** blocking stretch inside
 //! them (`SMSG_NEW_WORLD`'s `0x401b00` defers `0x401bc0` onto the deadline heap, which drains at
 //! `0x420d0c` and runs to completion in that one iteration, `Sleep(1)` residency spins and all) —
@@ -329,7 +329,7 @@ impl LoadingScreen {
     /// wait a raise armed, and it does **nothing else**: not the art, not the tip, not the bar.
     ///
     /// The two are one [`crate::net::WorldportMessage`] here and two handlers in the reference
-    /// (`0x401b00` and `0x401de0`, `re/net/opcode-handlers.tsv`), and *neither touches the screen*:
+    /// (`0x401b00` and `0x401de0`), and *neither touches the screen*:
     /// the raise `0x406800` has three call sites and all three are inside the `LoadingScreen.cpp`
     /// TU, so nothing on the wire can re-raise or re-point a screen that is already up. Treating
     /// the snap as a fresh load is what swapped the backdrop mid-load ([`Self::map`]), restarted

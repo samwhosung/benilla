@@ -5,11 +5,11 @@
 //! exactly the reference's own shape (baked once at spawn over collector-gathered ground
 //! triangles; the per-frame draw `0x69a3e0` only re-copies with the current alpha).
 //!
-//! **The mechanism — wow-re §5 cross-checked** (`footprint-decals.md`, folded back in 1012):
+//! **The mechanism** (decision 1012):
 //! - **Surface gate**: `TerrainType.Flags & 1` (`0x699eb6`) — set on exactly **Snow** and
 //!   **Sand** — on the surface [`benilla_world::surface`] resolves under the unit, the *same* value the
 //!   footstep sound uses. The reference resolves it once per unit into `CGUnit+0xc60` and the
-//!   decal, the spray and `$FSD` all read that one dword (wow-re `wmo-footstep-surface.md` F3), so
+//!   decal, the spray and `$FSD` all read that one dword (`0x5fc06e`, `0x5fc20f`, `0x62341d`), so
 //!   indoors the gate reads the building's own floor: a tavern's floorboards take no prints while
 //!   the snow outside its door does (decision 1161).
 //! - **Trigger**: each per-foot animation event tag (`$xL*`/`$xR*`; the same [`AnimSoundEvent`]
@@ -24,8 +24,7 @@
 //!   stream) at the RIDER's scale. **The texture is authored as the LEFT foot** — right-foot
 //!   prints mirror (`0x5fc07f`, scale(−1,1,1) before the yaw).
 //! - **Fade**: lifetime **6000 ms**, `t = 1 − age/6000`, `alpha = min(127, ⌊255·t⌋)` — ≈3.0 s
-//!   hold at ~50 % opacity then a ≈3.0 s linear fade, no fade-in ([`fade`], byte-diffed
-//!   `PRIMITIVE:footprint_alpha` @`0x69a3e0`).
+//!   hold at ~50 % opacity then a ≈3.0 s linear fade, no fade-in ([`fade`], `0x69a3e0`).
 //! - **Caps**: ring pools of **64 local-player + 512 everyone-else** slots, unconditional
 //!   rotation (ring-select = GUID == local player, `0xca05f0`).
 //! - **Suppressions**: hover (`MOVEFLAG 0x4000_0000`) · stealth (`BYTES_1` byte 3 bit 0x2 —
@@ -39,9 +38,9 @@
 //!   are always-on until a settings page wires the knob (the cvar-policy line, like the blob
 //!   shadow's `shadowLOD`).
 //!
-//! Draw state per the RE: src-alpha blend, depth-write off, unlit, white vertex RGB with the
-//! fade in vertex alpha — the ink darkness lives in the texture. Still open there (none
-//! load-bearing, note §13): the forward-axis sign convention inside the shared UV basis, the
+//! Draw state per the reference: src-alpha blend, depth-write off, unlit, white vertex RGB with the
+//! fade in vertex alpha — the ink darkness lives in the texture. Still open (none
+//! load-bearing): the forward-axis sign convention inside the shared UV basis, the
 //! uv1 64×8 edge-fade ramp's combine mode (not modeled here — prints are small; the blob
 //! shadow's vertical trapezoid is that ramp's other consumer), and the frame order vs the blob
 //! shadow (our rung 2048 under its 4096 is a deterministic stand-in).
@@ -63,8 +62,8 @@ use benilla_world::particles::buffer::{begin_effect_frame, EffectVertex};
 use benilla_world::schedule::WorldStage;
 use benilla_world::view::WorldCamera;
 
-/// Print lifetime, spawn to gone — the reference's 6000 ms (byte-verified, wow-re
-/// `footprint-decals.md`: `t = 1 − age/6000`, die at `t < 0`).
+/// Print lifetime, spawn to gone — the reference's 6000 ms (`0x69a3e0`: `t = 1 − age/6000`, die
+/// at `t < 0`).
 const LIFETIME: f32 = 6.0;
 /// The local player's own ring pool: 64 slots (the reserved head of the reference's 576-slot
 /// table @`0xca05f0`), unconditional rotation.
@@ -166,7 +165,7 @@ fn spawn_footprints(
     // are the MOUNT child's tags, whose local Transform is the seat-relative ~origin.
     units: Query<(&NetEntity, &GlobalTransform)>,
     // The spawner's ROOT (the rider for a mount child): the pool select, the print scale (the
-    // rider's SCALE_X — RE-corrected), and the state gates all read the root.
+    // rider's SCALE_X, `0x469f10`), and the state gates all read the root.
     parents: Query<&ChildOf>,
     roots: Query<RootState>,
     camera: Query<&GlobalTransform, With<WorldCamera>>,
@@ -200,7 +199,8 @@ fn spawn_footprints(
             continue;
         };
         // The ink + dims come from the EVENT's model (the mount for a mounted composite); the
-        // scale and every state gate from the ROOT unit (the rider) — the RE's split.
+        // scale and every state gate from the ROOT unit (the rider) — the reference's split
+        // (`0x607920`).
         let Some(params) = net.display_id.and_then(|d| creatures.footprint(d)) else {
             continue;
         };
@@ -236,7 +236,7 @@ fn spawn_footprints(
         }
         // The surface gate, on the SAME terrain type the footstep sound used: the reference
         // resolves it once per unit (`CGUnit+0xc60`) and the decal, the spray and `$FSD` all read
-        // that one dword (wow-re `wmo-footstep-surface.md` F3). So this reads the UNIT's surface,
+        // that one dword (`0x5fc06e`, `0x5fc20f`, `0x62341d`). So this reads the UNIT's surface,
         // not a per-foot sample of the ground — indoors that is the building's own floor, which is
         // why a tavern's floorboards take no prints while the snow outside its door does.
         let terrain = world.terrain_type(
@@ -249,15 +249,15 @@ fn spawn_footprints(
         }
         // Print frame: length along the unit's facing, width across, yawed to the facing.
         // With `(sin, cos) = (sin θ, cos θ)` the facing maps to the frame's −z′ axis, so v = 0
-        // is the toe end (the absolute sign convention is the RE's open §13 item — a
-        // backwards-pointing print flips one sign here).
+        // is the toe end (the absolute sign convention is still open — a backwards-pointing
+        // print flips one sign here).
         let yaw = transform
             .to_scale_rotation_translation()
             .1
             .to_euler(EulerRot::YXZ)
             .0;
-        // The rider's wire SCALE_X for a mounted composite, the unit's own otherwise (RE: the
-        // print scale is SCALE_X alone — display scales never multiply in).
+        // The rider's wire SCALE_X for a mounted composite, the unit's own otherwise (`0x469f10`:
+        // the print scale is SCALE_X alone — display scales never multiply in).
         let scale = root_net.unwrap_or(net).scale.max(0.0);
         let (half_len, half_wid) = (params.length * scale * 0.5, params.width * scale * 0.5);
         if half_len <= 0.0 || half_wid <= 0.0 {
@@ -320,7 +320,7 @@ fn spawn_footprints(
     }
 }
 
-/// The reference's fade at age seconds (byte-diffed `PRIMITIVE:footprint_alpha` @`0x69a3e0`):
+/// The reference's fade at age seconds (`0x69a3e0`):
 /// `t = 1 − age/6 s`, `alpha_byte = min(127, ⌊255·t⌋)` — ≈3.0 s hold at 127/255 (~50 %
 /// opacity), then linear to 0; no fade-in; dead past [`LIFETIME`].
 fn fade(age: f32) -> f32 {

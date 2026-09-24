@@ -65,8 +65,8 @@ pub(crate) fn spawn_item(
 }
 
 /// The item's enchantment slots — `ITEM_FIELD_ENCHANTMENT`'s 21 dwords, three per slot, and the
-/// reference's seven enchant deadline cells `[obj + 0x324 + slot*4]` (wow-re
-/// `tooltip-content-law.md` §E3), which end where the next member begins at `+0x340`.
+/// reference's seven enchant deadline cells `[obj + 0x324 + slot*4]` (`0x5d9d00`), which end where
+/// the next member begins at `+0x340`.
 pub(crate) const ENCHANT_SLOTS: usize = 7;
 
 /// **An item's countdowns** — the reference's per-object deadline cells on `CGItem_C` (decision
@@ -153,10 +153,9 @@ impl Countdowns {
     ///
     /// `GetWeaponEnchantInfo` needs the two apart where the tooltip does not. Its expiration return
     /// is `max(0, deadline − now)` from the client-local deadline array (`0x5d9d00`, subtract on
-    /// read — VERIFIED wow-re `system/ui/scratch/weapon-enchant-info.md`), so an enchant whose
-    /// timer has elapsed answers the NUMBER 0, and `BuffFrame_Enchant_OnUpdate` then draws "0 s"
-    /// and pulses the icon. Collapsing that to nil would silently hide a expiring enchant's last
-    /// state.
+    /// read), so an enchant whose timer has elapsed answers the NUMBER 0, and
+    /// `BuffFrame_Enchant_OnUpdate` then draws "0 s" and pulses the icon. Collapsing that to nil
+    /// would silently hide a expiring enchant's last state.
     pub(crate) fn enchant_deadline_ms(&self, slot: u32) -> Option<u64> {
         left(self.enchant(slot)).map(|l| l.as_millis() as u64)
     }
@@ -272,17 +271,16 @@ pub(crate) struct Enchants(pub(crate) benilla_formats::EnchantCatalog);
 
 /// One enchant SLOT's contribution, as the app resolved it — `(slot index, id, charges,
 /// remaining ms)`. The id is **signed**, because its sign is load-bearing downstream: it picks the
-/// line's colour and nothing else (wow-re §E3 — `abs(id)` names the DBC row either way).
+/// line's colour and nothing else (`0x52c9f9` — `abs(id)` names the DBC row either way).
 pub(crate) type EnchantSlot = (u8, i32, u32, Option<u64>);
 
 /// The tooltip lines an item instance's enchant slots contribute — the one place the app turns
 /// enchant *ids* into text (decisions 0915/0920). Every tooltip surface feeds through here, so a
 /// bag hover, a paper-doll hover and an inspect hover can never disagree.
 ///
-/// The per-slot gate is the reference's, byte-verified (wow-re
-/// `ui/scratch/tooltip-content-law.md` §E3): `id != 0`, then `abs(id)` must name a real
-/// `SpellItemEnchantment` row — **the sign never changes which row**, only the colour the engine
-/// paints. An id that names no row contributes nothing rather than a placeholder.
+/// The per-slot gate is the reference's (`0x52c9f9`–`0x52ca23`): `id != 0`, then `abs(id)` must
+/// name a real `SpellItemEnchantment` row — **the sign never changes which row**, only the colour
+/// the engine paints. An id that names no row contributes nothing rather than a placeholder.
 ///
 /// `slots` is the caller's source, and it differs by surface for a reason the wire fixes: our own
 /// items stream as OBJECTS, so all 7 `ITEM_FIELD_ENCHANTMENT` slots (plus charges, plus the
@@ -314,7 +312,7 @@ pub(crate) fn enchant_lines(
 ///
 /// One predicate, two consumers — the enchant cursor's bind question
 /// ([`crate::ui_action`]'s `ClickedItem::already_bound`, the `0x495d60` gate) and the item
-/// tooltip's §6 **Soulbound** override (B310). They must agree: an item the cursor considers
+/// tooltip's **Soulbound** override (B310). They must agree: an item the cursor considers
 /// already bound is exactly an item whose tooltip says *Soulbound*.
 ///
 /// Read off the RAW descriptor, never off the rendered [`enchant_lines`] list. That list is a
@@ -334,7 +332,7 @@ pub(crate) fn already_bound(fields: &ObjectFields, cat: Option<&Enchants>) -> bo
 /// `testl %eax,%eax` after the table load). Anything else is "no enchant here".
 ///
 /// NB this is the *bind-question* reading, not the *line* reading — the line law names its row
-/// off `abs(id)` and keeps the sign only for the colour ([`enchant_lines`], wow-re §E3).
+/// off `abs(id)` and keeps the sign only for the colour ([`enchant_lines`], `0x52c9f9`).
 pub(crate) fn live_enchant(fields: &ObjectFields, slot: u8, cat: Option<&Enchants>) -> Option<u32> {
     let id = u32::try_from(fields.item_enchant(slot)?).ok()?;
     cat.is_some_and(|c| c.0.has_row(id)).then_some(id)
@@ -385,7 +383,7 @@ fn enchant_lines_quiet(
 /// `ItemRandomProperties.dbc` — the **random-suffix roll**: the "of the Monkey" a drop rolled, and
 /// the enchants that roll grants (decision 1547). One table, two consumers, exactly as in the
 /// reference: the display NAME ([`item_display_name`], its `0x5d8b00`) and the tooltip's enchant
-/// slots 2..6 ([`random_property_lines`], its §E5 suffix-row copy).
+/// slots 2..6 ([`random_property_lines`], its `0x52b7e0` suffix-row copy).
 ///
 /// Optional like every DBC-backed resource: absent, names stay unsuffixed and a rolled item shows
 /// no suffix lines — the behaviour benilla had before this arc.
@@ -416,11 +414,11 @@ pub(crate) fn item_display_name(
 /// The tooltip lines a random-property **roll** contributes, for a source that has no item object
 /// to read `ITEM_FIELD_ENCHANTMENT` from — a loot slot, a chat link, an auction or mail row.
 ///
-/// This is the reference's §E5 mechanism, one for one: the tooltip resolves its `+0x424`
-/// randomPropertyId against `ItemRandomProperties.dbc` and copies the row's five enchant ids into
-/// session slots **2..6**, which the enchant family then prints exactly like an object's own slots
-/// (white, since only slots 0/1 ever colour). So the same [`enchant_lines`] gate runs over them —
-/// one law for both id sources, which is the point of routing them through it.
+/// This is the reference's mechanism (`0x52b7bf`–`0x52b7fb`), one for one: the tooltip resolves
+/// its `+0x424` randomPropertyId against `ItemRandomProperties.dbc` and copies the row's five
+/// enchant ids into session slots **2..6**, which the enchant family then prints exactly like an
+/// object's own slots (white, since only slots 0/1 ever colour). So the same [`enchant_lines`] gate
+/// runs over them — one law for both id sources, which is the point of routing them through it.
 ///
 /// An item OBJECT needs none of this: the server writes the rolled ids into its own enchant slots,
 /// and the object path already reads them.
@@ -1184,8 +1182,8 @@ mod tests {
 
     /// The id → row join (decisions 0915/0920): slot order is preserved, a `0` slot and an id with
     /// no `SpellItemEnchantment` name are both silently absent (never a placeholder line), and with
-    /// no catalog at all nothing renders. Plus the carve's sign rule — **`abs(id)` names the row,
-    /// the sign only travels** (wow-re §E3), which is why a negative id resolves at all.
+    /// no catalog at all nothing renders. Plus the reference's sign rule — **`abs(id)` names the
+    /// row, the sign only travels** (`0x52c9f9`), which is why a negative id resolves at all.
     #[test]
     fn enchant_lines_join_named_ids_in_slot_order() {
         let cat = Enchants(benilla_formats::EnchantCatalog::from_rows(

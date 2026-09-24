@@ -1,5 +1,5 @@
-//! WoW `Backdrop`s, at the geometry the client itself uses (wow-re `backdrop-mechanism.md`,
-//! byte-verified; decision 0543): the `edgeFile` strip split into its eight upright pieces
+//! WoW `Backdrop`s, at the geometry the client itself uses (`0x77e8d0`, `0x77f0c0`;
+//! decision 0543): the `edgeFile` strip split into its eight upright pieces
 //! ([`split_backdrop_edges`] — the un-rotation law), the eight-piece border rig
 //! ([`backdrop_border`]) seated to its frame's laid-out size by [`fit_backdrop_borders`], and the
 //! tiled backdrop bg ([`tiled_bg_node`]). Split out of [`super::art`] (which loads the pieces and
@@ -29,8 +29,8 @@ pub(crate) struct BackdropEdges {
 
 /// Split a WoW `edgeFile` strip into its eight upright `e`×`e` pieces, in the returned order
 /// LEFT, RIGHT, TOP, BOTTOM, TOPLEFT, TOPRIGHT, BOTTOMLEFT, BOTTOMRIGHT — the strip's own order
-/// (wow-re `backdrop-mechanism.md` §3, byte-verified from the client's UV constants; independently
-/// confirmed here by reading the shapes out of `Glue-Tooltip-Border`'s pixels).
+/// (read from the client's UV constants in `0x77e8d0`/`0x77f0c0`; independently confirmed here
+/// by reading the shapes out of `Glue-Tooltip-Border`'s pixels).
 ///
 /// TOP and BOTTOM are stored **rotated 90°** in the strip — the client maps atlas-u to screen-Y
 /// and atlas-v to screen-X reversed — so they are un-rotated here and every piece draws with plain
@@ -90,10 +90,10 @@ pub(super) fn backdrop_edges(
     })
 }
 
-/// A `Backdrop`'s border, at the geometry the client itself uses (wow-re `backdrop-mechanism.md`
-/// §2, byte-verified): the border sits **inside** the frame rect, flush with its edges — corner
-/// squares of exactly `e`×`e` at the four corners, edge strips spanning between them and **tiling**
-/// at period `e` (the run math `side/e − 2` has no upper clamp, so edges never stretch). Eight
+/// A `Backdrop`'s border, at the geometry the client itself uses (`0x77e8d0`): the border sits
+/// **inside** the frame rect, flush with its edges — corner squares of exactly `e`×`e` at the
+/// four corners, edge strips spanning between them and **tiling** at period `e` (the run math
+/// `side/e − 2` has no upper clamp, so edges never stretch). Eight
 /// pieces on a full-bleed rig child of the frame node, one per authored piece — the client's own
 /// eight `CSimpleTexture`s — seated to the frame's **laid-out** size by [`fit_backdrop_borders`],
 /// so content-sized frames and window rescales stay correct without a spawn-time size.
@@ -259,7 +259,7 @@ pub(crate) fn tiled_bg_node(sheet: Handle<Image>, period: f32, s: f32, color: Co
 mod tests {
     use super::*;
 
-    // The split against the backdrop UV law (wow-re `backdrop-mechanism.md` §3): an e=2 strip with
+    // The split against the backdrop UV law (`0x77f0c0`): an e=2 strip with
     // pixel (x,y) = (x, y) in the r/g channels, so every copied texel is assertable by coordinates.
     #[test]
     fn backdrop_split_follows_the_edgefile_law() {

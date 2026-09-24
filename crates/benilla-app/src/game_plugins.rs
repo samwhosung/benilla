@@ -135,7 +135,7 @@ impl PluginGroup for GamePlugins {
             .add(crate::combat_log::CombatLogPlugin)
             .add(CreatureAnimPlugin)
             // The unit blob shadow: the dark ground oval under every unit, sized from the playing
-            // animation's box (the byte-verified law — wow-re unit-blob-shadow RE), on the same
+            // animation's box (`0x6d7920`), on the same
             // surface-decal projector as the selection ring.
             .add(BlobShadowPlugin)
             // Footprint decals (B212, decision 1006): the prints a walking unit leaves on snow/sand,
@@ -347,10 +347,11 @@ impl PluginGroup for GamePlugins {
             // unlearns anything. Beside UiTalentPlugin for the subject, but it is UiBinderPlugin's twin
             // in shape — a guid-carrying question over an already-closed gossip menu.
             .add(UiTalentWipePlugin)
-            // The stance/shapeshift bar feed (wow-re shapeshift-bar-api.md): builds the form list from
-            // PlayerActions.spells per the byte-verified admission/order, drives the stock shapeshift bar through
-            // the engine's shapeshift seam, and drains its clicks (cancel-if-active else cast). After
-            // UiActionPlugin (shares `Spells`) and SpellPlugin (the `usable` walk, the cast tail).
+            // The stance/shapeshift bar feed: builds the form list from PlayerActions.spells per
+            // the reference's admission and order (`0x4b25b0`, `0x4b2bb0`), drives the stock
+            // shapeshift bar through the engine's shapeshift seam, and drains its clicks
+            // (cancel-if-active else cast). After UiActionPlugin (shares `Spells`) and SpellPlugin
+            // (the `usable` walk, the cast tail).
             .add(UiShapeshiftPlugin)
             // The pet action bar (decision 0982) — the stance bar's mirror image: server-authoritative,
             // so this renders the ten packed words the last `SMSG_PET_SPELLS` delivered and sends

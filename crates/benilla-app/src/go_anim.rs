@@ -1,11 +1,11 @@
 //! GameObject open/close animation (decision 0242; chest lid folded in by 2271) — a **client-side**
 //! `GAMEOBJECT_STATE` drives a skeletal M2 sequence, so a **door** swings, a **button** depresses, and a
-//! **chest lid** opens/closes on its §243 state machine.
+//! **chest lid** opens/closes on its state machine.
 //!
-//! **The model (2271, §5-VERIFIED):** the real client keeps *one* stored state per GameObject (the
-//! binary's `go+0x27c`) and *one* `SetGoState` that all callers funnel through; a change of that state
-//! plays the §243 transition. benilla mirrors that exactly — [`GoAnim::state`] is the single source of
-//! truth, written by the **three callers** the RE census pinned:
+//! **The model (2271):** the real client keeps *one* stored state per GameObject (the binary's
+//! `go+0x27c`) and *one* `SetGoState` (`0x5f8bd0`) that all callers funnel through; a change of
+//! that state plays the transition. benilla mirrors that exactly — [`GoAnim::state`] is the single
+//! source of truth, written by the **three callers** of that setter:
 //!
 //! 1. **the wire** ([`sync_wire_go_state`]) — a `GAMEOBJECT_STATE` UpdateField change. This is the
 //!    door/button driver (the server flips their state over the wire) and the first-sight rest-pose seed.
@@ -17,15 +17,15 @@
 //!    state to READY, closing the lid, with no server round-trip (the client's loot-frame close handler).
 //!
 //! This supersedes 0244's "chests aren't animated": 0244 was right that the *wire* state never changes on
-//! loot, but wrong to conclude the chest is off the machine — it runs §243 identically, just fed from
+//! loot, but wrong to conclude the chest is off the machine — it runs identically, just fed from
 //! loot events instead of the wire. Wiring a chest to the *wire* watch alone gave it a state that never
 //! changed — the "instant open" glitch; feeding it from the loot events is the fix.
 //!
-//! The mechanism (wow-re `object-layer.md` §243 + `scratch/go-anim-state-machine.md`, §5-VERIFIED): the
+//! The mechanism (`0x5f3c30`, `0x5f3cb0`): the
 //! `GAMEOBJECT_STATE` value maps — **with no inversion**, the same polarity the sound path uses — to a
 //! held rest pose, and a *change* of state plays a one-shot transition motion that settles onto the new
 //! rest pose. The client keys the played sequence by its **AnimationData.dbc id** (the door-machine's
-//! internal index and the debug state-name strings at `0x860850` are both stale/off-by-one — the RE's
+//! internal index and the debug state-name strings at `0x860850` are both stale/off-by-one — the
 //! central trap; we key by id):
 //!
 //! | wire state | rest pose (held)      | entered by motion (one-shot) |
@@ -40,8 +40,8 @@
 //! Clips are keyed by AnimationData.dbc id, so a resolved id becomes a clip by a scan of
 //! [`ModelAnimations::clips`], exactly as `creature_anim` does.
 //!
-//! **A transition motion is a TRANSIENT substate, and the settle is explicit** (decision 1151,
-//! wow-re `gameobject-anim-arm.md` §2d/§3). The kernel's `flags` bit 0 says nothing about how long
+//! **A transition motion is a TRANSIENT substate, and the settle is explicit** (decision 1151).
+//! The kernel's `flags` bit 0 (`0x714585`) says nothing about how long
 //! a transition lasts: bit 0 clear means the *pose* wraps its band for ever, and the whole
 //! door family (`G_Crate01`, every `World\Goober\` prop, the books) authors Close/Open/Destroy
 //! that way. What ends a swing is the **object layer**: the model's completion callback fires once
@@ -54,14 +54,15 @@
 //! instead is a chest lid that springs open and slams shut ~1.5×/s for ever, which is the report
 //! this record closes.
 //!
-//! The §243 **missing-sequence fallback** is no longer deferred: [`remap_missing`] implements the
-//! four-way remap, including the two legs that freeze a *motion* clip at frame 0 to stand in for an
-//! absent rest pose. It is not a corner case — the Ahn'Qiraj gate's roots (`AHN_QIRAJ_DOORROOTS`,
-//! Stand + Open only) took the "play nothing" path and rendered its 42-bone tangle at bind pose.
+//! The **missing-sequence fallback** (`0x5f3930`) is no longer deferred: [`remap_missing`]
+//! implements the four-way remap, including the two legs that freeze a *motion* clip at frame 0 to
+//! stand in for an absent rest pose. It is not a corner case — the Ahn'Qiraj gate's roots
+//! (`AHN_QIRAJ_DOORROOTS`, Stand + Open only) took the "play nothing" path and rendered its 42-bone
+//! tangle at bind pose.
 //!
 //! Still deferred (noted, not this slice): the **ANIMPROGRESS** half — the field selects the *motion*
 //! substate rather than the rest one at spawn, and seeks the clip to `duration × progress / 100`
-//! (wow-re `gameobject-anim-arm.md` §2b, `go-anim-state-machine.md`'s seek section); benilla reads
+//! (`0x5f3c30`, `0x5f3ac5`); benilla reads
 //! only `GAMEOBJECT_STATE` and always plays from frame 0. And the mid-flight **reverse blend**
 //! (interrupting a half-open door).
 
@@ -83,7 +84,7 @@ const GO_STATE_ACTIVE: u32 = 0;
 const GO_STATE_READY: u32 = 1;
 
 /// `AnimationData.dbc` **157 Despawn** — the id the one-shot channel's code 6 resolves to
-/// (wow-re `gameobject-anim-arm.md` §2c: `0x80b0e0[6]` = substate 12, `0x8607e4[12]` = 157). The
+/// (`0x80b0e0[6]` = substate 12, `0x8607e4[12]` = 157). The
 /// object plays this once and *then* goes away; see [`DespawnAnimAnnounced`].
 const ANIM_DESPAWN: u16 = 157;
 
@@ -93,7 +94,7 @@ const ANIM_DESPAWN: u16 = 157;
 #[derive(Component, Default)]
 pub(crate) struct GoAnim {
     /// Client-authoritative `GAMEOBJECT_STATE` (the binary's stored `go+0x27c`) — the single source of
-    /// truth for the §243 animation + collision. Written by the three "SetGoState callers": the wire
+    /// truth for the animation + collision. Written by the three "SetGoState callers": the wire
     /// sync, the open-lock spell-go, and the loot-release. `None` until first sight.
     state: Option<u32>,
     /// The state we last *animated* to — resolves which transition motion to play next. Distinct from
@@ -102,7 +103,7 @@ pub(crate) struct GoAnim {
     /// must not replay its swing).
     shown: Option<u32>,
     /// A pending **one-shot** play, as an `AnimationData.dbc` id — the second, disjoint arm
-    /// channel of wow-re `gameobject-anim-arm.md` §2c, never the §243 lid family. The reference
+    /// channel, never the lid family. The reference
     /// has ONE such slot fed by ONE entry point (`0x5f8c50(GO, code)` → slot 15), whose 7-entry
     /// code table `0x80b0e0` is the whole channel:
     ///
@@ -115,25 +116,25 @@ pub(crate) struct GoAnim {
     /// Written by [`queue_custom_anim`] / [`arm_despawn_anim`], consumed by [`drive_go_anim`]
     /// AFTER the state arm, so the bobber's same-frame pair (the forced `READY → ACTIVE` flip +
     /// the splash) resolves with the splash on top (decision 1086). Slot 15 pre-gates on the model
-    /// OWNING the resolved id, so this channel takes no §2c remap (decisions 1086/1404).
+    /// OWNING the resolved id, so this channel takes no remap (decisions 1086/1404).
     one_shot: Option<u16>,
     /// The clip armed for the current **TRANSIENT substate**, if any — the completion-retire's
-    /// watch (decisions 1100/1151, wow-re `gameobject-anim-arm.md` §2d + `go-display-sound-events.md`
-    /// §6-8). The reference keeps exactly one current substate in `[handler+0x10]`, and its
+    /// watch (decisions 1100/1151). The reference keeps exactly one current substate in
+    /// `[handler+0x10]`, and its
     /// per-model completion callback fires ONCE at the arm's baked window end (span × replay, the
     /// loop bit ignored); slot 14 `0x5f4120` then advances a transient substate onto its rest one
     /// and arms that pose over the transient clip. **Two families reach it, and they share this
-    /// one slot exactly as the reference's does**: the §243 transition motions (2 Open / 4 Close /
+    /// one slot exactly as the reference's does**: the transition motions (2 Open / 4 Close /
     /// 5 Destroy / 7 Rebuild) and the Custom0..3 block (8..11). [`retire_transient_anim`] models
     /// the advance for both; without it a bit-0-clear clip runs for ever — the bobber's splash
     /// looping ~1.3 s (1100's 2-3 audible splashes) and the crate lid never settling shut (1151).
     transient: Option<Transient>,
     /// The **rest** pose's armed clip node, when that pose is on the re-arm cycle below. Distinct
     /// from [`Self::transient`], which is the reference's ONE transient-substate slot
-    /// (`[handler+0x10]`) and drives the §2d *advance*: a rest pose never advances, it re-arms
+    /// (`[handler+0x10]`) and drives the *advance*: a rest pose never advances, it re-arms
     /// **itself**. `None` while a transient owns the model, on the rate-0 frozen leg (which never
-    /// completes), and once the §2c already-playing check has refused the re-arm and the pose has
-    /// settled for good.
+    /// completes), and once the already-playing check (`0x5f39fa`) has refused the re-arm and the
+    /// pose has settled for good.
     rest_window: Option<AnimationNodeIndex>,
     /// The state the machine last **dispatched** — the reference's `0x5f3cb0(old, new)` entry,
     /// distinct from [`Self::shown`] because the completion retire clears `shown` to force a
@@ -144,7 +145,7 @@ pub(crate) struct GoAnim {
     /// display-sound loop registration ([`GoStateDispatch`]).
     dispatched: Option<u32>,
     /// The **requested** animation id currently armed — the reference's `[block0+0xf8]`, written by
-    /// op4 (`0x71252f`) and read back by `0x712090(model, -1)`. The §2c *remap* legs consult it
+    /// op4 (`0x71252f`) and read back by `0x712090(model, -1)`. The *remap* legs consult it
     /// (`0x5f39fa: cmp esi,eax; je 0x5f3b32`) and refuse an arm that would request what is already
     /// playing; the model-owns-it leg (`0x5f396c jne`) and the collapse-to-Stand leg
     /// (`0x5f3a54 jmp 0x5f3a0b`, past the check) do not. That asymmetry is the whole difference
@@ -154,7 +155,7 @@ pub(crate) struct GoAnim {
 
 /// The GameObject **state-machine dispatch** ran on this entity — the reference's `0x5f3cb0`,
 /// whose first act is `0x5f3cc8 call 0x5f40c0`: **release whatever display-sound loop the object
-/// holds** (wow-re `go-display-sound-events.md` §2/§6c). Consumed by
+/// holds**. Consumed by
 /// [`crate::sound::gameobject`], which owns that registration; the animation half of the dispatch
 /// is [`drive_go_anim`]'s own work and needs no message.
 ///
@@ -192,7 +193,7 @@ struct Transient {
 }
 
 /// The GameObject's **stored** state — the binary's `go+0x27c`, which is what every consumer reads
-/// (the §243 animation, `usable`'s state pre-gate, and the lock chain's per-slot Action gate,
+/// (the animation, `usable`'s state pre-gate, and the lock chain's per-slot Action gate,
 /// decision 0752). [`GoAnim::state`] when the object is on the animation machine (it carries the
 /// client-side predictions the wire never sends — a chest's lid), else the wire field, else the
 /// wire default `0` = ACTIVE for a field vmangos omitted because it was zero.
@@ -202,10 +203,10 @@ pub(crate) fn go_state(anim: Option<&GoAnim>, store: &ObjectStore) -> u32 {
         .unwrap_or(GO_STATE_ACTIVE)
 }
 
-/// The inspector's GameObject **animation** readout (decision 1151): which sequence the §243 arm
+/// The inspector's GameObject **animation** readout (decision 1151): which sequence the state arm
 /// is actually playing on the object under the cursor — its `AnimationData` id, whether it is the
 /// state's held **rest** pose or a **transient** one (a transition motion, or a Custom block, which
-/// [`retire_transient_anim`]'s §2d advance ends at its window end), and the repeat the player is
+/// [`retire_transient_anim`]'s advance ends at its window end), and the repeat the player is
 /// running it under. `None` when the object renders as a static mesh, or nothing is armed yet.
 ///
 /// The line that closes the loop on this whole class of report. "The crate is stuck open/closing"
@@ -233,8 +234,8 @@ pub(crate) fn armed_anim(
     ))
 }
 
-/// Which GameObject types get the state-driven **animated** instance (skinned lid/door + §243
-/// sequences) — **the byte-verified type census**, not a guess (wow-re `gameobject-anim-arm.md` §2f).
+/// Which GameObject types get the state-driven **animated** instance (skinned lid/door + state
+/// sequences) — **read off the binary's type dispatch**, not a guess.
 ///
 /// `CGGameObject::LoadBaseObject` dispatches on the wire TYPE_ID through the 31-entry jump table at
 /// `0x5f76cc` (`cmp ecx,0x1e` + *unsigned* `ja`, so 0..30) and allocates a per-type strategy handler
@@ -242,7 +243,7 @@ pub(crate) fn armed_anim(
 /// **allocation size**: every type whose handler is `0x1c` bytes gets a 36-slot vtable carrying the
 /// real `0x5f3c30`/`0x5f3b50` arm; every other size gets a 34-slot vtable whose corresponding slots
 /// are the abstract base's do-nothing bodies — and whose `+0x88` doesn't even exist (reading it walks
-/// into the next vtable, which is what made an earlier census report plausible nonsense).
+/// into the next vtable, which is what makes a naive census of `+0x88` report plausible nonsense).
 ///
 /// So the machine is **20 of the 31 types**, not the three we had:
 ///
@@ -336,10 +337,9 @@ impl Play {
     }
 }
 
-/// The §2c **missing-sequence remap** — what the arm actually requests when the model doesn't author
-/// the state's animation id. Byte-verified twice over (wow-re `gameobject-anim-arm.md` §2c's
-/// `0x5f3972` jump table `0x5f3b40`, and `go-anim-state-machine.md`'s independent read of the same
-/// switch), it is a four-way table keyed on the id, consulted only after the ownership test
+/// The **missing-sequence remap** — what the arm actually requests when the model doesn't author
+/// the state's animation id. Read off `0x5f3972`'s jump table `0x5f3b40`, it is a four-way table
+/// keyed on the id, consulted only after the ownership test
 /// [`ModelAnimations::owns`] (the reference's `0x711960`) says no:
 ///
 /// | missing    | condition         | requests instead           |
@@ -386,7 +386,8 @@ fn remap_missing(anims: &ModelAnimations, id: u16) -> (u16, bool) {
     }
 }
 
-/// The held rest-pose animation-id for a wire `GAMEOBJECT_STATE` (§243). `None` for an unmapped state.
+/// The held rest-pose animation-id for a wire `GAMEOBJECT_STATE` (`0x5f3c30`). `None` for an
+/// unmapped state.
 fn rest_anim(state: u32) -> Option<u16> {
     match state {
         0 => Some(0x95), // ACTIVE  → Opened (held open)
@@ -396,10 +397,10 @@ fn rest_anim(state: u32) -> Option<u16> {
     }
 }
 
-/// The transition-motion animation-id for a `prev → cur` state change (§243), i.e. the swing. `None`
+/// The transition-motion animation-id for a `prev → cur` state change, i.e. the swing. `None`
 /// when the pair has no distinct motion (falls back to snapping the rest pose).
 ///
-/// The reference (`0x5f3cb0`, byte-verified in wow-re `go-anim-state-machine.md`) dispatches on the
+/// The reference (`0x5f3cb0`) dispatches on the
 /// **NEW** state and lets OLD pick transient-vs-rest: NEW 0 takes the Open motion from OLD 1 (else
 /// rests Opened), NEW 1 takes Close from OLD 0 / Rebuild from OLD 2 (else rests Closed), NEW 2 takes
 /// Destroy from OLD 1 (else rests Destroyed). Our `(_, 2)` wildcard got that last row wrong: an
@@ -430,7 +431,8 @@ fn resolve(prev: Option<u32>, cur: u32) -> Option<Play> {
     }
 }
 
-/// Caller 1 (the wire, §243): track each animated GO's `GAMEOBJECT_STATE` from the wire, acting only on a
+/// Caller 1 (the wire, `0x5f89e0`): track each animated GO's `GAMEOBJECT_STATE` from the wire,
+/// acting only on a
 /// *genuine* wire change. This is the door/button driver (the server flips their state over the wire) and
 /// the first-sight rest-pose seed for every animated GO (a chest streams in closed). Two inputs, both
 /// exact (decision 2297): the seed (`Added<GoAnim>`, when attach tags the entity — read off the store),
@@ -495,7 +497,7 @@ fn open_go_lid(
 }
 
 /// Caller 4 (the custom-anim opcode, decision 1086): queue the one-shot Custom play. This is the
-/// **disjoint** arm channel of wow-re `gameobject-anim-arm.md` §step 8 — it never touches
+/// **disjoint** arm channel (`0x5f8c50`) — it never touches
 /// [`GoAnim::state`] (the lid family), rejects `anim_id >= 4` exactly as the reference handler
 /// does, and maps the index to its AnimationData id (`153 + n`, Custom0..3). Ownership is judged
 /// at play time by [`drive_go_anim`] (the model components live there); a guid with no [`GoAnim`]
@@ -508,7 +510,7 @@ fn queue_custom_anim(
 ) {
     for GoCustomAnim { go_guid, anim_id } in plays.read().copied() {
         let Some(id) = custom_anim_id(anim_id) else {
-            continue; // the reference handler's own reject (step 8)
+            continue; // the reference handler's own reject (`0x5f8971`)
         };
         let Some(&e) = index.0.get(&go_guid) else {
             continue;
@@ -520,8 +522,8 @@ fn queue_custom_anim(
 }
 
 /// The wire Custom index → its AnimationData id (`153 + n`, Custom0..3), or `None` for the
-/// reference handler's reject (`anim_id >= 4` — wow-re `gameobject-anim-arm.md` step 8's
-/// "opcode `0xb3` byte `b` (reject `b >= 4`), substate `8+b`").
+/// reference handler's reject (`anim_id >= 4` — `0x5f8971`: opcode `0xb3` byte `b`, reject
+/// `b >= 4`, substate `8+b`).
 fn custom_anim_id(anim_id: u32) -> Option<u16> {
     (anim_id < 4).then(|| 153 + anim_id as u16)
 }
@@ -541,8 +543,8 @@ fn custom_anim_id(anim_id: u32) -> Option<u16> {
 pub(crate) struct DespawnAnimAnnounced;
 
 /// The reference's **pending-destroy mark** — `[GO+0xe4]` bit `0x10`, set by the object-manager
-/// destroy `0x464920` when it finds the object still pinned (wow-re
-/// `go-display-sound-events.md` §6d, §5-VERIFIED). The arm takes the pin whenever the armed
+/// destroy `0x464920` when it finds the object still pinned.
+/// The arm takes the pin whenever the armed
 /// substate is not a resting one (`0x5f3b27 call 0x4683e0` → refcount `[obj+0xe8]`), slot 14's
 /// footer releases it at the window end (`0x468410`), and only then does the deferred destroy run
 /// (`0x46844a call 0x464920`) — which is how an object gets to finish its own despawn animation
@@ -641,9 +643,9 @@ fn close_go_lid(
     *last_source = current;
 }
 
-/// The **completion-driven retire** of the current TRANSIENT substate — the §2d advance
-/// (decisions 1100/1151; wow-re `gameobject-anim-arm.md` §2d/§3 + `go-display-sound-events.md`
-/// §6-8, §5-verified). The reference registers a per-model completion callback at GO model attach
+/// The **completion-driven retire** of the current TRANSIENT substate — the substate advance
+/// (decisions 1100/1151).
+/// The reference registers a per-model completion callback at GO model attach
 /// (`0x5f7d43` → `[M2+0x70]`) which the driver `0x719370` fires ONCE when the armed sequence
 /// reaches its baked window end — span × replay-count, the **loop bit ignored** — and slot 14
 /// `0x5f4120` dispatches on the current substate:
@@ -667,12 +669,10 @@ fn close_go_lid(
 /// **The last row is not "nothing", and 1151 read it as such.** `0x5f4167` is byte-for-byte slot
 /// 34's own selection and calls `0x5f3930` **directly**, bypassing slot 34's change guard on an
 /// unchanged `[handler+0x10]` — so a resting substate re-issues its own op4, and with it a fresh
-/// `variationIdx = -1` roll, every `span × R` ms for ever (wow-re `gameobject-anim-arm.md` §6c/§6d,
-/// §5-arbitrated). The completion that drives it ignores the loop bit (`0x719503` tests it only
-/// after the notify block), so a bit-0-CLEAR pose completes too. That is why Onyxia's lava traps
-/// spurt *continuously* rather than once at stream-in, and it is the same law `loop-replay-fidget.md`
-/// §7 and `doodad-anim-host.md` §5 already carried for units and placed doodads — the GameObject
-/// note was the outlier.
+/// `variationIdx = -1` roll, every `span × R` ms for ever. The completion that drives it ignores
+/// the loop bit (`0x719503` tests it only after the notify block), so a bit-0-CLEAR pose completes
+/// too. That is why Onyxia's lava traps spurt *continuously* rather than once at stream-in, and it
+/// is the same law units and placed doodads follow.
 ///
 /// Benilla therefore arms EVERY clip `Never`-repeat (one window, the same endpoint), so "the
 /// window ended" is the player's finished flag; the retire then clears `shown`, which makes the
@@ -724,7 +724,7 @@ fn retire_transient_anim(
 }
 
 /// **The GameObject arm's instrument** (`WOW_MOVE_TRACE_TAGS=goa`) — one line per arm, carrying
-/// everything the roll decided: the requested `AnimationData.dbc` id, what the §2c remap turned it
+/// everything the roll decided: the requested `AnimationData.dbc` id, what the remap turned it
 /// into, the `_rand` draw itself, and the **file sequence slot** the weighted walk landed on.
 ///
 /// That last column is the one this exists for. A GameObject's variation chain is not cosmetic:
@@ -760,7 +760,7 @@ fn trace_arm(
     );
 }
 
-/// Play the §243 sequence for a change of the client-side [`GoAnim::state`] (written by any of the three
+/// Play the sequence for a change of the client-side [`GoAnim::state`] (written by any of the three
 /// callers). Mirrors the state-transition detection of [`crate::sound::gameobject`] (first sight silent),
 /// but points it at the model instead of the mixer — one system owns the visual, the other the audio.
 fn drive_go_anim(
@@ -775,12 +775,12 @@ fn drive_go_anim(
         Changed<GoAnim>,
     >,
     mut dispatch: MessageWriter<GoStateDispatch>,
-    // The client's single `_rand` stream (wow-re `rf36-rand-stub.md`), as `creature_anim` keeps
+    // The client's single `_rand` stream (`0x7400e5`), as `creature_anim` keeps
     // one: op4's variation roll draws from it on every GameObject arm below.
     mut rng: ResMut<benilla_assets::AnimRng>,
 ) {
     for (entity, mut go, mut player, mut tr, anims) in &mut gos {
-        // ── The §243 state arm ─────────────────────────────────────────────────────────────────
+        // ── The state arm ──────────────────────────────────────────────────────────────────────
         if let Some(state) = go.state {
             if go.shown != Some(state) {
                 let prev = go.shown;
@@ -800,11 +800,11 @@ fn drive_go_anim(
                 go.rest_window = None;
                 if let Some(play) = resolve(prev, state) {
                     // Resolve the id to this model's clip (keyed by AnimationData.dbc id, as
-                    // `creature_anim` does), through the §2c remap for a model that doesn't author
+                    // `creature_anim` does), through the remap for a model that doesn't author
                     // it — that is what keeps a lidless model on a real pose instead of bind.
                     let (want, frozen) = remap_missing(anims, play.anim_id());
-                    // **`variationIdx = -1` — the arm ROLLS a variation** (wow-re
-                    // `gameobject-anim-arm.md` §2c, `0x5f3aee: push -1`), unlike the §1 loader seed
+                    // **`variationIdx = -1` — the arm ROLLS a variation** (`0x5f3aee: push -1`),
+                    // unlike the loader seed
                     // beneath it, which passes an explicit `0` (`0x710189`). Where a model authors
                     // one sequence per id the two are the same clip and nothing changes; where it
                     // authors a chain they are not, and taking the head is a whole authored
@@ -814,7 +814,7 @@ fn drive_go_anim(
                     // the 300/s `LAVALUMP2` burst, the lava spurting out of the floor. Every one of
                     // the 208 trap GameObjects in the lair took the head, so the chamber's whole
                     // ember field was missing.
-                    // **The §2c already-playing skip, and it decides settle-vs-cycle.** Three
+                    // **The already-playing skip, and it decides settle-vs-cycle.** Three
                     // edges reach the arm (`0x5f3a0b`): the model OWNS the table id
                     // (`0x5f396c jne`), the model is not live, and the 147-absent collapse to
                     // Stand (`0x5f3a52 xor esi,esi; 0x5f3a54 jmp 0x5f3a0b` — a backwards jump
@@ -854,8 +854,7 @@ fn drive_go_anim(
                             // parked at rate 0 (the same Open clip serves both) would stay stuck.
                             active.set_speed(1.0);
                             // **ONE baked window, rest pose included** (decision 1151 for the
-                            // motions; wow-re
-                            // `gameobject-anim-arm.md` §6, correcting 1151's "nothing advances off
+                            // motions; correcting 1151's "nothing advances off
                             // a held pose"). The completion notification `0x719370` fires at
                             // `span × R` **without consulting the loop bit** (`0x719503` tests it
                             // only afterwards), so a bit-0-CLEAR rest clip completes too — and
@@ -868,10 +867,9 @@ fn drive_go_anim(
                             // a 10 % weight, and with a 5 s ember life that leaves **47 % of them
                             // holding a live plume at any instant** (measured, `WOW_PARTICLE_CENSUS`
                             // in the lair: 49 of 104), instead of one flurry at stream-in. The
-                            // period, the re-roll and `R = 1` from a `(0,0)` replay pair are all
-                            // byte-converged across two independent §5 rounds; what is *not*
-                            // settled is which per-frame advance list a GameObject's model rides
-                            // (wow-re `gameobject-anim-arm.md` §6's named residual).
+                            // period (`0x7126d8`), the re-roll and `R = 1` from a `(0,0)` replay
+                            // pair (`0x7126c3`) are all settled in the binary; what is *not*
+                            // settled is which per-frame advance list a GameObject's model rides.
                             active.set_repeat(RepeatAnimation::Never);
                             match play {
                                 Play::Motion(_) => {
@@ -886,9 +884,9 @@ fn drive_go_anim(
                 }
             }
         }
-        // ── The one-shot Custom channel (step 8, decision 1086) — AFTER the state arm, so the
+        // ── The one-shot Custom channel (`0x5f8c50`, decision 1086) — AFTER the state arm, so the
         // bobber's same-frame pair (forced READY→ACTIVE flip + splash) lands splash-on-top.
-        // Gated on the model OWNING the id; no §2c remap on this channel — an unowned Custom
+        // Gated on the model OWNING the id; no remap on this channel — an unowned Custom
         // plays nothing. Armed for ONE window regardless of the sequence's loop flag (decision
         // 1099, correcting 1090's loop-forever): the kernel does loop a bit0-clear clip and
         // re-fires its events per pass, but the reference's COMPLETION callback fires at window
@@ -901,8 +899,8 @@ fn drive_go_anim(
         if go.one_shot.is_some() {
             let id = go.one_shot.take().expect("checked is_some");
             if anims.owns(id) {
-                // Slot 15 funnels through the same slot-34 → `0x5f3930` arm as the state channel
-                // (§2c), so it rolls a variation for the same reason — a Custom0 with two authored
+                // Slot 15 funnels through the same slot-34 → `0x5f3930` arm as the state channel,
+                // so it rolls a variation for the same reason — a Custom0 with two authored
                 // takes alternates them.
                 let roll = rng.draw();
                 if let Some(clip) = anims.pick_variation(id, roll) {
@@ -983,8 +981,8 @@ fn drive_go_collision(
 /// registrar pair. The consumer is a single instruction, `0x5f85f6 test ah,ah` inside `0x5f85f0` —
 /// `CGGameObject_C`'s collision-candidacy virtual at primary-vtable slot `+0x50` — which reads the
 /// bit through the sign flag and answers *no candidate* for a GameObject whose
-/// `GAMEOBJECT_TYPE_ID` is `0`, DOOR. Nothing else about a ghost's collision differs (wow-re
-/// `collision/scratch/ghost-door-tracemask.md`, decision 1767).
+/// `GAMEOBJECT_TYPE_ID` is `0`, DOOR. Nothing else about a ghost's collision differs
+/// (decision 1767).
 ///
 /// **Off the MOVER's descriptor, not ours.** The producer tests the object being traced, so a
 /// possessed creature is not a player and never sets the bit; `player_is_ghost` reading a field a
@@ -1042,8 +1040,8 @@ type ScannedGo = (
 );
 
 /// Fire the event keyframes an animated GameObject's playing clip crossed this frame — the GO
-/// half of the M2 event-kernel surface (wow-re `go-display-sound-events.md`, the 1086 fold-back
-/// record): the reference registers an event callback per **family-A** GO at create
+/// half of the M2 event-kernel surface (decision 1086): the reference registers an event callback
+/// per **family-A** GO at create
 /// (`0x5f7d1f` → vtable `+0x30` → dispatcher `0x5f3e20`), which is exactly the [`GoAnim`]
 /// population — a loader-idle family-B GO has no dispatcher and stays silent. The events flow
 /// into the same [`AnimSoundEvent`] stream the creature scanner feeds: the generic `$SND`/`$DSO`/
@@ -1203,7 +1201,7 @@ mod tests {
         assert!(matches!(resolve(Some(2), 1), Some(Play::Motion(0x98))));
     }
 
-    /// The custom-anim channel's wire mapping (step 8, decision 1086): indices 0..3 arm
+    /// The custom-anim channel's wire mapping (`0x5f8930`, decision 1086): indices 0..3 arm
     /// Custom0..3 (AnimationData 153..156); anything else is the reference handler's reject.
     /// The fishing bobber's bite is index 0 → 153 — exactly the second sequence
     /// `G_FishingBobber.m2` authors.
@@ -1386,7 +1384,7 @@ mod tests {
     ///
     /// The whole door family is `flags` bit 0 clear, so a driver that arms a transition by the
     /// clip's loop bit arms Close on `Forever`: the lid jumps back to 75° every 667 ms. What ends
-    /// a transition in the reference is the object layer's §2d advance (slot 14 `0x5f4120`:
+    /// a transition in the reference is the object layer's advance (slot 14 `0x5f4120`:
     /// substate 4 Close → 1 Closed), driven by the completion callback at the arm's baked window
     /// — the loop bit ignored. This runs the whole click-to-settle cycle through the real systems
     /// and real clips, and then keeps running: two seconds past the swing, three Close windows
@@ -1405,7 +1403,7 @@ mod tests {
         // Streamed in closed: the rest pose, snapped. It is ONE baked window like everything else
         // — `0x5f4167` re-arms a resting substate through `0x5f3930` at its own completion, so the
         // pose repeats by re-arming (and re-rolling its variation), not by the kernel's loop bit
-        // (wow-re `gameobject-anim-arm.md` §6; this corrects 1151's "nothing advances off a held
+        // (this corrects 1151's "nothing advances off a held
         // pose"). What must hold across those windows is the armed ID, asserted below.
         app.update();
         assert_eq!(armed(&app, go), Some((0x93, RepeatAnimation::Never)));
@@ -1454,8 +1452,8 @@ mod tests {
         }
     }
 
-    /// **The arm rolls a VARIATION** — `variationIdx = -1` (wow-re `gameobject-anim-arm.md` §2c,
-    /// `0x5f3aee: push -1`), not the id's head. The §1 loader seed under it takes an explicit
+    /// **The arm rolls a VARIATION** — `variationIdx = -1` (`0x5f3aee: push -1`), not the id's
+    /// head. The loader seed under it takes an explicit
     /// variation 0 (`0x710189`), so a model's second and later takes are reachable ONLY through
     /// this arm; resolving the id with `find()` made them unreachable everywhere.
     ///
@@ -1527,7 +1525,7 @@ mod tests {
     }
 
     /// **A rest pose is ONE window, and its completion re-arms it — with a FRESH roll, for ever**
-    /// (wow-re `gameobject-anim-arm.md` §6c/§6d, correcting 1151's "nothing advances off a held
+    /// (correcting 1151's "nothing advances off a held
     /// pose"). `0x719370` fires the completion at `span × R` without consulting the loop bit
     /// (`0x719503` tests it only afterwards), and slot 14's resting row `0x5f4167` calls
     /// `0x5f3930` directly — past slot 34's change guard — on an unchanged substate.
@@ -1566,12 +1564,12 @@ mod tests {
             "over 300 windows the pose showed takes {seen:?} — a rest pose that never re-armed \
              would show exactly one, and Onyxia's floor would spurt once and go quiet"
         );
-        // The pose itself never wanders off Closed: re-arming is not the §2d substate advance.
+        // The pose itself never wanders off Closed: re-arming is not the substate advance.
         assert!(matches!(armed(&app, go), Some((0x93, _))));
     }
 
-    /// **The state dispatch is an EDGE, and a rest pose re-arming itself is not one** (wow-re
-    /// `go-display-sound-events.md` §6c: slot 14 sends a resting substate to `0x5f4167`, which
+    /// **The state dispatch is an EDGE, and a rest pose re-arming itself is not one** (slot 14
+    /// sends a resting substate to `0x5f4167`, which
     /// calls `0x5f3930` directly and never re-enters `0x5f3cb0`). That is the whole reason a
     /// brazier's `TorchLoop` — a looping display-slot kit registered by a `$GO2` on the Opened
     /// rest pose — hums continuously instead of being released and restarted every band pass,

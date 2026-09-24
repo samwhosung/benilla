@@ -67,8 +67,8 @@ pub(crate) struct ArtSwap {
 /// DEVICE pixel by [`super::seat_outline_copies`].
 ///
 /// The reference's `outline="NORMAL"` is not string geometry at all: the ring is **baked into the
-/// glyph atlas cell by one 8-neighbour dilation pass at rasterization** (wow-re
-/// `font/scratch/outline-bake-tint.md` §3, byte-verified) — and the glyph rasterizes at final
+/// glyph atlas cell by one 8-neighbour dilation pass at rasterization** (`0x5ce440`/`0x5cea30`) —
+/// and the glyph rasterizes at final
 /// device-pixel size, so the ring is one device pixel hugging the glyph at every resolution
 /// (vanilla's famously thin outlines at high res). Offsetting copies by an authored *unit*
 /// instead put the ring 2–3 device px out at fullscreen scales, where it read as a separate
@@ -186,7 +186,7 @@ pub(crate) fn outlined_text_centered<W: Bundle, T: Bundle>(
 }
 
 /// Split a glue string into its coloured spans — WoW's `|cAARRGGBB…|r` inline markup, decoded by
-/// the byte-verified grammar ([`benilla_ui::markup`], RF-0087) instead of drawn literally.
+/// the reference's grammar ([`benilla_ui::markup`]) instead of drawn literally.
 ///
 /// **This lives in the primitive on purpose.** It used to be one call site's private helper (the
 /// AddOns row title), which is exactly how the same `|cff0055FF…|r` came out coloured in a list
@@ -554,11 +554,11 @@ const EDIT_LINE_HEIGHT: f32 = 1.2;
 /// The edit caret's colour: the reference's caret re-applies **`FONTINSTANCE.textColor`** whenever
 /// the font changes (`0x77e2a0`, mask bit 2) — the ctor's `0xFFFFFFFF` is only the pre-font default.
 /// So it is the box's text colour by law, not white by coincidence; both the line and the bar take
-/// it from here (wow-re `system/ui/scratch/rf85-editbox-caret.md`).
+/// it from here.
 const EDIT_TEXT_COLOR: Color = Color::WHITE;
 /// The edit caret is a drawn **bar**, not a character — a `CSimpleTexture` at `E+0x368`, allocated
-/// with a different allocator/tag/ctor than the `CSimpleFontString` beside it (wow-re
-/// `rf85-editbox-caret.md`, §5-verified; the cursor flush `0x77da80` fires `OnCursorChanged` with
+/// with a different allocator/tag/ctor than the `CSimpleFontString` beside it (`0x779c86` vs
+/// `0x779bee`; the cursor flush `0x77da80` fires `OnCursorChanged` with
 /// four float caret-*position* args). benilla used to append a `"|"` glyph (login) or a static `"_"`
 /// (create), which put a font's shape on a font's baseline and re-laid the text out every blink.
 ///
@@ -587,8 +587,8 @@ const CARET_W: f32 = 4.0;
 ///
 /// This is also what the client does, and the two facts are the same fact: the caret is a
 /// `CSimpleTexture` quad at `drawLayer 3`, anchored LEFT-to-LEFT on the FontString with
-/// `x = W(lineStart → cursor)` — the measured advance of the text before the cursor (wow-re
-/// `rf85-editbox-caret.md` §1, §8, both §5-VERIFIED). A quad anchored *over* the line cannot
+/// `x = W(lineStart → cursor)` — the measured advance of the text before the cursor (`0x779c86`,
+/// `0x77da80`). A quad anchored *over* the line cannot
 /// displace it, and its left edge sits exactly on the seam flex puts us on. `drawLayer 3` is above
 /// the FontString's `2`, which is the [`ZIndex`] here.
 pub(crate) fn caret_bar<C: Bundle>(
@@ -670,8 +670,7 @@ pub(crate) fn paint_glue_field<'a>(
     // (`0x77da80`) explicitly hides when `E != [0xcf4dc8]`, while the selection flush (`0x77d950`)
     // and its geometry worker (`0x77de70`) contain no read of the focus global anywhere, and the
     // per-frame update calls the flush BEFORE its own focus test. The quads show iff
-    // `start < end` — focus never enters it (wow-re `editbox-selection-focus-law.md` §1-§3,
-    // §5-VERIFIED, asked because this asymmetry looked wrong). An unfocused box that still holds a
+    // `start < end` — focus never enters it. An unfocused box that still holds a
     // selection paints it, and that is correct; the login screen simply never leaves one behind
     // (`LoginForm::focus` collapses the box it leaves).
     let display = field.display();

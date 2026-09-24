@@ -74,8 +74,7 @@ pub(crate) struct GoTemplate {
     pub(crate) text_page: Option<TextPage>,
     /// The `PageTextMaterial.dbc` id `GetQuestBackgroundMaterial` answers for a quest sourced from
     /// this object — by `GAMEOBJECT_TYPE_ID`: QUESTGIVER (2) and GOOBER (9) read `data[2]`, CHEST
-    /// (10) reads `data[9]`, every other type answers none (`0x5f5950`, wow-re
-    /// quest-material-reward-spell-bindings.md §1).
+    /// (10) reads `data[9]`, every other type answers none (`0x5f5950`).
     pub(crate) quest_material: Option<u32>,
 }
 
@@ -241,8 +240,7 @@ mod tests {
     }
 
     /// The quest-giver material arm — by type: QUESTGIVER (2) and GOOBER (9) read `data[2]`,
-    /// CHEST (10) reads `data[9]`, anything else none (`0x5f5950`, wow-re
-    /// quest-material-reward-spell-bindings.md §1).
+    /// CHEST (10) reads `data[9]`, anything else none (`0x5f5950`).
     #[test]
     fn insert_captures_the_quest_material_by_type() {
         let mut t = GameObjectTemplates::default();

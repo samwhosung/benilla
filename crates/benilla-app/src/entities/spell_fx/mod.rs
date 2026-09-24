@@ -9,8 +9,8 @@
 //! the render side: a path-keyed [`DisplayModel`] cache (the held-items pattern — entries created
 //! here, parts built by `super::update_display_models` once the M2 loads), and per-unit effect
 //! instances spawned under the unit's [`BoneAttach`] joints so they ride the animating bone —
-//! exactly the client's `CEffect` bone attach, re-resolved per frame off the live bone matrix
-//! (wow-re `spell-visual-apply.md` §1.5/§5; riding the joint entity gives us the same for free).
+//! exactly the client's `CEffect` bone attach (`0x620be0`), re-resolved per frame off the live
+//! bone matrix (riding the joint entity gives us the same for free).
 //!
 //! Lifetime is the client's stage policy (decision 0107 verdict 2): a **persistent** instance
 //! (precast/channel) lives until its spell-id-keyed [`SpellKitFx::Reap`] (the client's
@@ -26,10 +26,8 @@
 //!
 //! **The attach cascade below is mis-attributed and is a known divergence** (named in 2057, not
 //! yet fixed): `tag → 0xf → 0x13 → the unit's base` is `CMissile`'s (`0x61ceb0`,
-//! `Missile_C.cpp`), not `AddEffect`'s. wow-re corrected this on 2026-09-02
-//! (`spell-visual-apply.md`, from `melee-blood-spurt-suppression.md` §1/§7): `0x61fdd0` has no
-//! attachment test at all, so on a model lacking the tag the reference drops the effect
-//! permanently and invisibly where we relocate it.
+//! `Missile_C.cpp`), not `AddEffect`'s: `0x61fdd0` has no attachment test at all, so on a model
+//! lacking the tag the reference drops the effect permanently and invisibly where we relocate it.
 //!
 //! Effect models run their **bone rigs** ([`arm_effect_rig`] — the birth clip + global sequences
 //! pose the joints that meshes skin to and emitters/ribbons/cards ride), advance them through the
@@ -81,9 +79,8 @@ use super::{BoneAttach, DisplayModel, EntityPart, ModelHandle};
 pub(super) use lifecycle::advance_fx_anim;
 use lifecycle::{decay_span, FxAnimLife, FxDecay};
 
-/// The client's attach fallback cascade when a model lacks the requested point (wow-re
-/// `spell-visual-apply.md` §5, `0x61ceb0`/`0x61fae0`): retry `0xf`, then `0x13`, then the unit's
-/// base position.
+/// The client's attach fallback cascade when a model lacks the requested point
+/// (`0x61ceb0`/`0x61fae0`): retry `0xf`, then `0x13`, then the unit's base position.
 const ATTACH_FALLBACKS: [u16; 2] = [0xf, 0x13];
 
 /// The self-termination span when an effect model has no sequence table at all (the cube
@@ -520,10 +517,11 @@ pub(crate) fn attach_effect_visuals(
             },
             // The emitters' rate/enabled windows ride the played sequence: a `CEffect` ADVANCES
             // (`Stand` → `Hold` → `Decay`), so it reads the live one off its own player like a
-            // unit's do — the reference's `m2_animate` phase samples the CURRENT sequence record
-            // either way. A lane that never advances (a missile, whose InFlight is not the model's
-            // Stand) keeps its slot pinned on the spawn clock. gseq loops ride the instance's own
-            // spawn age in both (0856/0858 — an effect instance is fresh per play).
+            // unit's do — the phase in the reference's animate kernel `0x714260` samples the
+            // CURRENT sequence record either way. A lane that never advances (a missile, whose
+            // InFlight is not the model's Stand) keeps its slot pinned on the spawn clock. gseq
+            // loops ride the instance's own spawn age in both (0856/0858 — an effect instance is
+            // fresh per play).
             match seq_host {
                 Some(h) => particles::EmitClock::Host(h),
                 None => particles::EmitClock::Effect(played_seq),
@@ -659,8 +657,8 @@ struct FxInstance {
     /// The self-termination deadline (`time.elapsed_secs()` clock), set at spawn for a
     /// non-persistent instance — and, for a reaped persistent one, the end of its `Decay` span.
     expires: Option<f32>,
-    /// Reaped, and playing its `Decay` out (wow-re `ceffect-anim-lifecycle.md` §8: the node is not
-    /// torn down synchronously — it keeps rendering for that sequence's authored duration). Such an
+    /// Reaped, and playing its `Decay` out (`0x614150`/`0x6141f0`: the node is not torn down
+    /// synchronously — it keeps rendering for that sequence's authored duration). Such an
     /// instance is already dying, so it no longer answers a reap or a replacing `Begin`: the
     /// reference's walk can't reach it either, having moved it to the pending-destroy list.
     decaying: bool,
@@ -674,10 +672,10 @@ pub(super) struct FxAttached {
 
 /// A **world-planted** kit instance root (the field-12 slot, decisions 0848/0850): a free world
 /// entity, NOT a scene child of its owner — so [`tend_world_plants`] owns the two jobs the tree
-/// would otherwise do. Byte law (wow-re `kit30-effect-slot.md`): planted once at the owner's
-/// position × yaw × scale; a **root-aura** spell's plant (`EffectApplyAuraName` 26 anywhere in
-/// the spell — the client's flag 0x4000) re-plants when the owner is displaced (knockback,
-/// blink), re-baking facing and scale.
+/// would otherwise do. The reference plants it once at the owner's position × yaw × scale
+/// (`0x620a90`); a **root-aura** spell's plant (`EffectApplyAuraName` 26 anywhere in the spell —
+/// the client's flag 0x4000) re-plants when the owner is displaced (knockback, blink;
+/// `0x620580`), re-baking facing and scale.
 #[derive(Component)]
 pub(super) struct WorldPlantFx {
     /// The unit the instance belongs to — despawn tracking (the client's node dies with its
@@ -705,8 +703,8 @@ fn world_plant_transform(owner: &GlobalTransform) -> Transform {
 }
 
 /// Whether any of the spell's three `EffectApplyAuraName` slots is `SPELL_AURA_MOD_ROOT` (26) —
-/// the client's `spellRec+0x16c[0..2] == 0x1a` scan that arms the re-plant flag 0x4000 (wow-re
-/// `kit30-effect-slot.md`; the column *name* is INFERRED there, the byte behaviour VERIFIED).
+/// the client's `spellRec+0x16c[0..2] == 0x1a` scan that arms the re-plant flag 0x4000
+/// (`0x60f081`; only the column *name* is inferred).
 /// Exactly the field-12 state family: Frost Nova, Net, Web, Entangling Roots, Frostbite.
 fn spell_has_root_aura(spells: Option<&crate::ui_action::Spells>, spell_id: u32) -> bool {
     const SPELL_AURA_MOD_ROOT: u32 = 26;
@@ -845,8 +843,7 @@ pub(super) fn resolve_spell_fx(
 }
 
 /// **Hand an ending instance's emitters to the drain** — the half of the reference's teardown
-/// `0x6203e0` that is not a despawn (wow-re `ceffect-particle-drain.md`, §4a byte-settled
-/// 2026-09-07).
+/// `0x6203e0` that is not a despawn.
 ///
 /// An ending `CEffect` is *hidden*, not freed: emission stops, the already-emitted particles keep
 /// drawing and age out one at a time, and the node is released only on the frame the last one dies
@@ -873,11 +870,10 @@ fn drain_instance_emitters(
     }
 }
 
-/// **The same-slot replace walk** (`0x6208e0`, VERIFIED `[0x6208e0, 0x62092c]` — wow-re
-/// `kit30-effect-slot.md` §4; decision 2057): every `CEffect::AddEffect` (`0x61fdd0`) opens by
-/// walking the owner's `+0xb4` list and **destroying** (`0x6203e0`) each node carrying the same
-/// `SpellVisualEffectName` record at the same attach tag, so a re-play *replaces* a still-live
-/// same-model-same-slot emitter instead of stacking on it.
+/// **The same-slot replace walk** (`0x6208e0`, `[0x6208e0, 0x62092c]`; decision 2057): every
+/// `CEffect::AddEffect` (`0x61fdd0`) opens by walking the owner's `+0xb4` list and **destroying**
+/// (`0x6203e0`) each node carrying the same `SpellVisualEffectName` record at the same attach tag,
+/// so a re-play *replaces* a still-live same-model-same-slot emitter instead of stacking on it.
 ///
 /// This is the whole reason a busy fight does not brighten without bound in the reference: five
 /// mobs' blood spurts on one flank of one body are one instance there, not five, and the count is
@@ -905,8 +901,8 @@ fn replace_same_slot(
         }
         if let Some(root) = i.root {
             // The replaced node's particles finish — the replace bounds the number of EMITTING
-            // nodes, not the number of live particles (`ceffect-particle-drain.md` §1's note on
-            // the shared teardown).
+            // nodes, not the number of live particles (it ends the node through the shared
+            // teardown `0x6203e0`).
             drain_instance_emitters(emitters, root);
             commands.entity(root).despawn();
         }
@@ -1019,8 +1015,7 @@ pub(super) fn attach_spell_fx(
             // dangling entity, and this gate's `root.is_some()` then means it is never rebuilt.
             // The reference's rebuild `0x60abe0` DRAINS the whole `+0xb4` list unconditionally
             // and then RE-CREATES what must persist — the aura-state re-arm `0x5ff130`, the
-            // channel re-arm `0x612a30` (wow-re `shapeshift-morph-cloud.md`, which REFUTED the
-            // earlier survives-the-rebuild reading). Our edge-driven aura watcher cannot notice
+            // channel re-arm `0x612a30`. Our edge-driven aura watcher cannot notice
             // (the aura never left the slots), so re-arming the PERSISTENT instance here IS that
             // re-create leg, in the one place that sees the drain. A one-shot goes, exactly as
             // the reference's drained Mount Poof does — the shapeshift cloud is NOT survival:
@@ -1078,7 +1073,7 @@ pub(super) fn attach_spell_fx(
             // to the unit root, ground-anchored, and a persistent instance is never re-seated
             // after that: an Ice Barrier or a Power Word: Shield sat decaled at the feet for the
             // aura's whole life. The reference re-arms the persistent kits after the rebuild has
-            // set the new model (`0x60abe0` → `0x5ff130`, wow-re `shapeshift-morph-cloud.md`);
+            // set the new model (`0x60abe0` → `0x5ff130`);
             // `VisualAttached` is that "the model is set" — the cube fallback carries it too, so
             // a unit whose model never loads still gets its effect at the root.
             if !planted && !body_built {
@@ -1318,8 +1313,8 @@ mod tests {
             .collect()
     }
 
-    /// **The drain-then-recreate law** (0835's named-open item closed; the reference byte-read
-    /// in wow-re `shapeshift-morph-cloud.md`): the rebuild drains EVERY effect node and then
+    /// **The drain-then-recreate law** (0835's named-open item closed; the reference's rebuild
+    /// `0x60abe0`): the rebuild drains EVERY effect node and then
     /// re-creates what must persist. A teardown of the unit's visual leaves each instance
     /// holding a dangling root; the persistent instance re-arms (our re-create leg — the
     /// edge-driven aura watcher cannot notice, the aura never left the slots), the one-shot
