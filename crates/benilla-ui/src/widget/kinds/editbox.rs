@@ -13,8 +13,8 @@ pub enum EditUnit {
 
 /// One semantic text-editing operation on an edit box — fed to [`EditBoxState::apply`]. The host's
 /// per-OS keymap (which physical chord means which action: Ctrl+Left on Windows, Option+Left on
-/// macOS, …) translates key events into these; the *effect* of each action is the byte-verified box
-/// law (RF-0082: selection anchoring, selection-first deletes, word classes). Clipboard operations
+/// macOS, …) translates key events into these; the *effect* of each action is the reference's own
+/// edit-box law (selection anchoring, selection-first deletes, word classes). Clipboard operations
 /// are deliberately absent: they need the OS pasteboard, so they stay host-side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditAction {
@@ -38,9 +38,9 @@ pub enum EditAction {
     HistoryNext,
 }
 
-/// A `CSimpleEditBox`'s runtime state — the byte-verified text/cursor/selection/flags model of
-/// RF-0082 (`rf82-editbox-runtime.md`). Offsets below are the client's **E-base** (the CScriptObject
-/// `this`), the base the runtime input/text handlers address the object through.
+/// A `CSimpleEditBox`'s runtime state — the text/cursor/selection/flags model.
+/// Offsets below are the client's **E-base** (the CScriptObject `this`), the base the runtime
+/// input/text handlers address the object through.
 ///
 /// The client stores text as a NUL-terminated `char*` with a parallel per-byte class array; benilla
 /// holds it as a Rust `String` and keeps every byte offset ([`cursor`](Self::cursor)/
@@ -49,7 +49,7 @@ pub enum EditAction {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditBoxState {
     /// The real text buffer (`E+0x32c`, `char*`). `GetText`/`GetNumber` read this; `password` masks
-    /// only the *display*, never this buffer (RF-0082 §3).
+    /// only the *display* (`E+0x334`, rebuilt by `0x77d4d0`), never this buffer.
     pub text: String,
     /// The insertion caret as a byte offset into [`text`](Self::text) (`E+0x36c`; sole setter
     /// clamps to `[0, len]`). Always on a char boundary.
@@ -58,7 +58,7 @@ pub struct EditBoxState {
     /// text is selected. Byte offset, char-boundary-snapped.
     pub sel_start: usize,
     /// Selection end (`E+0x360`). A non-empty selection is `sel_start != sel_end`; every insert
-    /// replaces it first (RF-0082 §3).
+    /// replaces it first (`0x77cd70`).
     pub sel_end: usize,
     /// `autoFocus` (`flags@E+0x318` bit0). Two acquisition paths, and both are built:
     ///
@@ -71,11 +71,8 @@ pub struct EditBoxState {
     /// 2. **On the first key/char event** while nothing is focused — the self-acquire guard; the box
     ///    grabs focus and processes that same event.
     ///
-    /// **Both corrections landed together, decision 1686 (2026-08-29).** wow-re's own
-    /// `ui.md`/RF-0082 had published "autoFocus does NOT focus on show, verified by absence" off a
-    /// census written over `call` alone, which cannot see a tail-`jmp`; a `(call|jmp)` census finds
-    /// the eleventh site (`editbox-selection-focus-law.md` §6). The construction default came with
-    /// it and is byte-read, not chosen — see [`Default`]'s `flags = 1` note below. Every
+    /// **Both corrections landed together, decision 1686 (2026-08-29).** The construction default
+    /// came with it and is byte-read, not chosen — see [`Default`]'s `flags = 1` note below. Every
     /// `autoFocus` in the shipped 1.12.1 chain is `="false"`, ten opt-outs and no opt-ins, which is
     /// the authoring signature of exactly that default.
     pub auto_focus: bool,
@@ -83,7 +80,7 @@ pub struct EditBoxState {
     /// accepted into the buffer.
     pub multi_line: bool,
     /// `numeric` (bit2): an insert containing ANY char outside `'0'..='9'` is aborted wholesale
-    /// (not per-char filtered) — RF-0082 §3.
+    /// (not per-char filtered) — the char filter `0x77bf41`.
     pub numeric: bool,
     /// `password` (bit3): the display string is one `'*'` per *character* (the mask, `E+0x334`); the
     /// real text is untouched.
@@ -92,7 +89,7 @@ pub struct EditBoxState {
     /// spells it `SetAltArrowKeyMode`/`GetAltArrowKeyMode` (`0x7996e0`/`0x799790`), and there is
     /// exactly one flag behind both names. `SetIgnoreArrows` does **not** exist in 5875: the
     /// 48-entry EditBox method table `[0x87bb68, 0x87bce8)` carries the Alt pair at 46/47 and no
-    /// entry whose name contains "Ignore" (wow-re `ignorearrows-alt-arrow-gate.md`, §5 VERIFIED).
+    /// entry whose name contains "Ignore".
     ///
     /// **What it does, and it is not what "ignore" suggests.** With the flag set, the four arrow
     /// keys (`0x204` LEFT / `0x205` UP / `0x206` RIGHT / `0x207` DOWN) are **not consumed by the
@@ -105,11 +102,10 @@ pub struct EditBoxState {
     /// returns 1), so these four keys are the only ones it ever lets past.
     ///
     /// benilla read this as "consumed but inert, unless Ctrl" for two rounds — the modifier was
-    /// wrong (a wow-re note said `0x41f8f0(2)` was Ctrl; it is ALT, and five other notes already
-    /// said so) and so was the consumption. Both corrected by the §5.
+    /// wrong (`0x41f8f0(2)` is ALT, not Ctrl) and so was the consumption. Both are corrected above.
     pub alt_arrow_key_mode: bool,
     /// `maxLetters` (`E+0x340`, 0 = unlimited): after each insert, trim from the end while the
-    /// *letter* (char) count exceeds this (RF-0082 §3).
+    /// *letter* (char) count exceeds this (`0x77c02d`).
     pub max_letters: usize,
     /// `maxBytes` (`E+0x33c`; the client's `-1` sentinel = unlimited → `None` here): trim from the
     /// end while the byte length exceeds this, applied before `maxLetters`.
@@ -117,10 +113,9 @@ pub struct EditBoxState {
     /// The implicit FontString the text renders through (`E+0x328`, the EditBox's analogue of
     /// ButtonText). **Built by the ctor**, not lazily: `0x779bee` constructs it from allocator
     /// `0xcf4d10` with tag `0x846544` = `".?AVCSimpleFontString@@"` via `0x770d30(E, 2, 1)`, and
-    /// that is the FIRST of the five regions a `CSimpleEditBox` is born with (wow-re
-    /// `system/ui/scratch/rf85-editbox-caret.md` §1). Creation order is what `GetRegions` hands
-    /// Lua — one flat creation-ordered list off `[frame+0x1b8]`, oldest first, no filter
-    /// (`scratch/widget-list-bindings.md`) — so these five precede every `<Layers>` region.
+    /// that is the FIRST of the five regions a `CSimpleEditBox` is born with. Creation order is
+    /// what `GetRegions 0x773f60` hands Lua — one flat creation-ordered list off `[frame+0x1b8]`,
+    /// oldest first, no filter — so these five precede every `<Layers>` region.
     ///
     /// **DEFERRED, and named rather than silently taken:** the ctor's draw layer is 2 sub 1
     /// (ARTWORK), while this region is still created at OVERLAY sub 0 — what ships today and what
@@ -129,7 +124,7 @@ pub struct EditBoxState {
     pub text_region: Option<RegionHandle>,
     /// The **three selection-highlight quads** (`E+0x350`/`0x354`/`0x358`), built by the ctor loop
     /// `0x779c41–0x779c72` as `CSimpleTexture`s via `0x76fc40(E, 2, 0)` — allocator `0xcf4ce0`, tag
-    /// `0x846588` = `".?AVCSimpleTexture@@"`, class-identical to the caret (RF-0085 §1). They are
+    /// `0x846588` = `".?AVCSimpleTexture@@"`, class-identical to the caret. They are
     /// members of the frame's region list like any other region (`0x76fc40`→`0x77f640`→`0x77fd10`,
     /// the single linker into `[frame+0x1b8]`), which is why they are built here.
     ///
@@ -141,17 +136,17 @@ pub struct EditBoxState {
     pub selection_regions: [Option<RegionHandle>; 3],
     /// The **caret** (`E+0x368`), the ctor's fifth and last region: a `CSimpleTexture` built at
     /// `0x779c86–0x779cac` via `0x76fc40(E, 3, 1)` — a solid vertex-coloured quad, never a glyph
-    /// (no texture path is ever assigned to `E+0x368`, band-wide census; RF-0085 §1). Layer 3 over
+    /// (no texture path is ever assigned to `E+0x368`, band-wide census). Layer 3 over
     /// the text's 2 is why the caret draws above the text and the selection quads below it.
     ///
     /// Same standing as [`selection_regions`](Self::selection_regions): the region is real and in
     /// the list, the *painting* is still host-side off [`caret_shown`](Self::caret_shown).
     pub caret_region: Option<RegionHandle>,
     /// The submitted-line history (`AddHistoryLine`; the XML `historyLines` cap) — oldest first,
-    /// newest last; UP recalls older from the end, DOWN newer. The exact recall keys + draft
-    /// model are INFERRED (wow-re's rf82 flags the 1.12 history controller as an untraced
-    /// observer, `0x77b730`) — plain UP/DOWN with the in-progress line restored past the newest
-    /// entry; on the chat-arc wow-re dispatch list (decision 0288).
+    /// newest last; UP recalls older from the end, DOWN newer. The exact recall keys + draft model
+    /// are inferred: the 1.12 history controller is an untraced observer (`0x77b730`) — plain
+    /// UP/DOWN with the in-progress line restored past the newest entry; still open on the chat arc
+    /// (decision 0288).
     pub history: Vec<String>,
     /// `historyLines` — max entries kept (drop-oldest on add). `0` = history off (the widget
     /// default; ChatFrame's edit box declares 32).
@@ -225,9 +220,8 @@ pub struct EditBoxState {
     /// *overrides* the horizontal axis immediately after linking its font instance —
     /// `0x779bcd mov ecx,[edi+0x54]; and eax,~6; or eax,1; 0x779be4 mov [edi+0x54],eax` — so
     /// `GetJustifyH()` on a fresh box answers **`"LEFT"`**. Bit `0x200` falls outside both axis
-    /// masks and neither accessor reads it, so only `0x11` is modelled. (wow-re
-    /// `system/ui/scratch/editbox-font-surface.md` §6.2; this **corrected** our first cut, which
-    /// took the generic `0x212` and answered `"CENTER"`.)
+    /// masks and neither accessor reads it, so only `0x11` is modelled. (This **corrected** our
+    /// first cut, which took the generic `0x212` and answered `"CENTER"`.)
     ///
     /// **Kept on the box, not on its text region.** Each font binding's shim hands the shared
     /// implementation `[this+0x324]` — the box's implicit FontString, i.e. [`Self::text_region`] —
@@ -236,8 +230,8 @@ pub struct EditBoxState {
     /// one LEFT, and writing the region here would fight that law *and* be clobbered by the next
     /// `SetMultiLine`.
     ///
-    /// **The vertical half of that is now VERIFIED to be exactly right, and for a reason worth
-    /// keeping** (§6 of the note above). `CSimpleFontString+0x124` is a per-bit *inherit* mask over
+    /// **The vertical half of that is now confirmed exactly right, and for a reason worth
+    /// keeping.** `CSimpleFontString+0x124` is a per-bit *inherit* mask over
     /// `+0x120`, and `SetMultiLine 0x77a4a0` clears the whole vertical group `0x38` from it on
     /// **both** legs while writing the V bits locally (multi-line → TOP, single-line → MIDDLE) —
     /// and the EditBox ctor calls `SetMultiLine` unconditionally at birth (`0x779c2f`, with the
@@ -251,7 +245,8 @@ pub struct EditBoxState {
     /// **The horizontal half stays open, and is deliberately not guessed.** `SetMultiLine` never
     /// clears the `0x7` bits, so `SetJustifyH`'s value *does* reach the FontString's `+0x120` —
     /// but whether the editbox's own draw `0x77da80` reads it for placement, rather than
-    /// left-anchoring at the insets rect the way rf82's windowed draw describes, is untraced.
+    /// left-anchoring at the insets rect the way the reference's windowed draw describes, is
+    /// untraced.
     /// Verifying that the value propagates is not verifying that the draw honours it, so the
     /// reading that changes no pixels is the one taken and the question is named. It is the whole
     /// visible difference for `AceGUIWidget-Slider.lua:210`'s `editbox:SetJustifyH("CENTER")`
@@ -383,7 +378,7 @@ impl EditBoxState {
         self.history_draft = None;
     }
 
-    // ── selection / geometry law (RF-0082 §4 + the diffed mouse/caret leaves) ────────────────
+    // ── selection / geometry law ─────────────────────────────────────────────────────────────
 
     /// The DISPLAY string — what the box draws, what the advance table indexes, and what
     /// hit-tests run against: the text itself, or one `'*'` per character under `password`
@@ -604,7 +599,7 @@ impl EditBoxState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// The editing law (RF-0082 §3/§4) — pure over the state, no Lua, no widget tree
+// The editing law — pure over the state, no Lua, no widget tree
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 //
 // These used to live in `script::editbox` welded to the Lua layer, which meant the *only* way to
@@ -676,8 +671,8 @@ impl EditBoxState {
     }
 
     /// Insert `ins` at the cursor (`0x77bee0`): replace any selection first; `numeric` aborts the
-    /// insert **wholesale** on any non-digit (not per-char filtering — RF-0082 §3); splice, advance
-    /// the caret, enforce the caps.
+    /// insert **wholesale** on any non-digit (not per-char filtering — the char filter `0x77bf41`);
+    /// splice, advance the caret, enforce the caps.
     pub fn insert(&mut self, ins: &str) -> EditOutcome {
         if self.numeric && !ins.chars().all(|c| c.is_ascii_digit()) {
             return EditOutcome::default();
@@ -934,8 +929,8 @@ impl EditBoxState {
         self.collapse();
     }
 
-    /// Collapse the selection onto the caret — the client's own `0x77ccf0` (RF-0082 §4), which
-    /// every delete path runs and which a screen losing the keyboard runs on the box it is leaving.
+    /// Collapse the selection onto the caret — the client's own `0x77ccf0`, which every delete
+    /// path runs and which a screen losing the keyboard runs on the box it is leaving.
     pub fn collapse(&mut self) {
         self.sel_start = self.cursor;
         self.sel_end = self.cursor;

@@ -13,9 +13,9 @@ impl WidgetArena {
     // ── Visibility (effective_visible_show/_hide) ────────────────────────────────────────────────
 
     /// Set a frame's own `shown` bit and propagate effective visibility through its subtree, after
-    /// `effective_visible_show 0x76ae10` / `_hide 0x76ad50` (`propagation.md`). Returns, in
-    /// pre-order (a node before its descendants), **every frame whose `effective_visible` actually
-    /// changed** — the caller fires `OnShow`/`OnHide` for those, in order.
+    /// show `0x76ae10` / hide `0x76ad50`. Returns, in pre-order (a node before its descendants),
+    /// **every frame whose `effective_visible` actually changed** — the caller fires
+    /// `OnShow`/`OnHide` for those, in order.
     ///
     /// **Two recorded deviations from `0x76ae10`, both in this signature** (decision 2317). The
     /// reference is **post-order** — it marks itself visible, recurses into its children, and fires
@@ -71,10 +71,10 @@ impl WidgetArena {
 
     // ── Strata (set_frame_strata) ────────────────────────────────────────────────────────────────
 
-    /// Force `h` and its **whole subtree** to `strata`, per `set_frame_strata 0x76a470`
-    /// (`propagation.md`): set the frame's strata, then recursively set every child frame to the
-    /// same value. The client's visible-gated bucket remove/add (its live draw-list maintenance)
-    /// is mirrored by re-sequencing a visible frame to its new bucket's tail
+    /// Force `h` and its **whole subtree** to `strata`, per `set_frame_strata 0x76a470`: set the
+    /// frame's strata, then recursively set every child frame to the same value. The client's
+    /// visible-gated bucket remove/add (its live draw-list maintenance) is mirrored by
+    /// re-sequencing a visible frame to its new bucket's tail
     /// ([`WidgetArena::resequence_to_tail`]); [`crate::order::traversal`] recomputes the buckets
     /// from the fields.
     pub fn set_frame_strata(&mut self, h: FrameHandle, strata: Strata) {
@@ -100,7 +100,7 @@ impl WidgetArena {
 
     /// Set `h`'s level. When `propagate`, **same-strata** child frames shift by the same delta
     /// (relative offsets preserved); cross-strata children are untouched — per `set_frame_level
-    /// 0x76a4f0` (`propagation.md`). Level is unsigned here, so the client's `if (level < 0) level =
+    /// 0x76a4f0`. Level is unsigned here, so the client's `if (level < 0) level =
     /// 0` clamp is subsumed by the type (a Lua binding saturates on conversion); a propagated shift
     /// that would go negative saturates to 0, and an overflow saturates to `u16::MAX`.
     pub fn set_frame_level(&mut self, h: FrameHandle, level: u16, propagate: bool) {
@@ -134,10 +134,9 @@ impl WidgetArena {
         }
     }
 
-    /// Squeeze the free levels out of `strata` and return the level counter — `level_compact
-    /// 0x764eb0`, the step `CSimpleTop::Raise 0x7650f0` runs immediately before it sets the raised
-    /// frame's level to `bucket->count(+0x8)` (wow-re `ui/scratch/level-compact-law.md`, a §5 trio
-    /// dispatched from here; `ui/scratch/toplevel-raise.md` for the raise it serves).
+    /// Squeeze the free levels out of `strata` and return the level counter — level compaction
+    /// (`0x764eb0`), the step `CSimpleTop::Raise 0x7650f0` runs immediately before it sets the
+    /// raised frame's level to `bucket->count(+0x8)`.
     ///
     /// **EVERY frame of the stratum is renumbered — hidden ones included, and that is the byte
     /// law, not a benilla choice** (decision 2104). `0x764eb0`'s occupancy test is a two-part OR: a
@@ -225,10 +224,10 @@ impl WidgetArena {
         self.frame(h).is_some_and(|f| f.toplevel)
     }
 
-    // ── Scale (effective_scale) ──────────────────────────────────────────────────────────────────
+    // ── Scale ────────────────────────────────────────────────────────────────────────────────────
 
     /// Set `h`'s own scale and recompute effective scale down the subtree, ε-gated, per
-    /// `effective_scale 0x76ac90` (`propagation.md`): `effectiveScale = parentScale * ownScale`; a
+    /// `0x76ac90`: `effectiveScale = parentScale * ownScale`; a
     /// node whose new effective scale is within [`SCALE_EPS`] of its current one is skipped along
     /// with its subtree (its children's parent-scale did not move).
     pub fn set_scale(&mut self, h: FrameHandle, scale: f32) {
@@ -264,11 +263,10 @@ impl WidgetArena {
     // ── Alpha ────────────────────────────────────────────────────────────────────────────────────
 
     /// Set `h`'s alpha and **overwrite every descendant frame's** with the same raw value — the
-    /// byte-verified 1.12 mechanism (`SetAlpha 0x76a690` writes `[this+0xc8]` then recurses the
-    /// child-frame list pushing the SAME value; wow-re `propagation.md`, CORRECTED section). An
-    /// eager set-time flatten, structurally the strata subtree-force — never a draw-time ancestor
-    /// product, so `effective_alpha` (what a renderer's one-hop region composition reads) always
-    /// equals `alpha`.
+    /// 1.12 mechanism (`SetAlpha 0x76a690` writes `[this+0xc8]` then recurses the child-frame list
+    /// pushing the SAME value). An eager set-time flatten, structurally the strata subtree-force —
+    /// never a draw-time ancestor product, so `effective_alpha` (what a renderer's one-hop region
+    /// composition reads) always equals `alpha`.
     pub fn set_alpha(&mut self, h: FrameHandle, alpha: f32) {
         let Some(f) = self.frame_mut(h) else { return };
         f.alpha = alpha;
@@ -282,8 +280,7 @@ impl WidgetArena {
     // ── Reparenting (reparent_begin / reparent_finish) ───────────────────────────────────────────
 
     /// The runtime reparent, phase 1 of 2 — the guards and the **hide half** of
-    /// `CSimpleFrame::SetParent 0x76ab10`'s byte-verified sequence (wow-re
-    /// `ui/scratch/setparent-runtime-strata-level.md` §2; decision 1323, which corrects this
+    /// `CSimpleFrame::SetParent 0x76ab10`'s sequence (decision 1323, which corrects this
     /// module's previous "strata/level are NOT changed by reparenting" — refuted at `0x76ab65`).
     ///
     /// Returns `None` for the byte-verified TOTAL no-op — `newParent == currentParent` (`0x76ab20`
@@ -327,12 +324,12 @@ impl WidgetArena {
     /// re-inherit, then the **show half**. Returns the frames whose effective visibility came back
     /// (fire `OnShow` for those, in order).
     ///
-    /// Load-bearing consequences, each verified in the note:
+    /// Load-bearing consequences:
     ///
-    /// - **Existing children keep their absolute levels** (`propagate = 0`; `level_compact
-    ///   0x764eb0`'s one caller is the toplevel Raise, unreachable from here). A child created when
-    ///   the parent sat lower can land BELOW its own parent — the client ships that and nothing
-    ///   repairs it but the child's own `SetFrameLevel` (which is exactly what AtlasLoot's
+    /// - **Existing children keep their absolute levels** (`propagate = 0`; level compaction
+    ///   `0x764eb0`'s one caller is the toplevel Raise, unreachable from here). A child created
+    ///   when the parent sat lower can land BELOW its own parent — the client ships that and
+    ///   nothing repairs it but the child's own `SetFrameLevel` (which is exactly what AtlasLoot's
     ///   button templates do in `OnShow`, and why its browse panel works on the reference).
     /// - **The show half is gated on `was_visible`** (`0x76abfd`: `ebx && (parent==0 ||
     ///   parent->+0xd4)`) — the `+0xd4` cascade only runs inside `0x76ae10`, so a reparent of a
@@ -418,7 +415,7 @@ impl WidgetArena {
     /// but a Texture or FontString gets `0x7733d0` → `0x77fd10`, a **full re-link** — remove from
     /// the old parent's draw layer (`0x77fc60`) and region list (`vtbl+0x2c`), store the new
     /// parent, insert into its region list (`0x76a750`) and re-register in its draw layer
-    /// (`0x77fcb0`), **preserving layer and sub-level** (wow-re `widget-api-batch-benilla.md` Q7).
+    /// (`0x77fcb0`), **preserving layer and sub-level**.
     /// So the layer/sub-level fields are deliberately untouched here and only the membership moves;
     /// the fresh `decl_seq` is the "insert into the new parent's region list" half, which lands the
     /// region at the tail of that frame's list exactly as the client's insert does.
@@ -556,7 +553,7 @@ impl WidgetArena {
     // ── Small helpers ────────────────────────────────────────────────────────────────────────────
 
     /// Is `maybe_ancestor` on the parent chain of `node` (walking up, loop-guarded)? — the client's
-    /// `is_descendant 0x767010`, read the other way round.
+    /// `0x767010`, read the other way round.
     ///
     /// Two callers, and they are the two the binary has: [`WidgetArena::set_parent`]'s cycle guard,
     /// and the raise's overlap scan, which excludes the raised frame's own subtree from the frames

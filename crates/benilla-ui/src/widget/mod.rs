@@ -1,15 +1,15 @@
 //! The widget object model — the frame arena and the show/hide/strata/level/scale/alpha
-//! mutations, transcribed from wow-5875-re's binary-verified propagation cluster (decision 0068).
+//! mutations, transcribed from the reference's binary-verified propagation cluster (decision 0068).
 //!
 //! This crate owns the *model*, not the runtime: the arena stores frames and their region leaves and
 //! implements the propagation math, but it does **not** run Lua or fire `OnShow`/`OnHide` — the
 //! mutations that cause visibility transitions *return the set of frames that changed* so the
 //! Lua-embedding layer (the app) can fire the handlers in order.
 //!
-//! ## Ground truth (wow-5875-re `system/ui/scratch/`, binary-verified against `WoW.exe`)
+//! ## Ground truth (binary-verified against `WoW.exe`)
 //!
-//! - **Effective visibility** (`effective_visible_show 0x76ae10` / `_hide 0x76ad50`,
-//!   `propagation.md`): `effectiveVisible = shown AND (parent == null OR parent.effectiveVisible)`.
+//! - **Effective visibility** (show `0x76ae10` / hide `0x76ad50`): `effectiveVisible = shown AND
+//!   (parent == null OR parent.effectiveVisible)`.
 //!   A transition recurses into child frames — **a hidden mid-tree frame blocks its whole subtree** —
 //!   and fires `OnShow`/`OnHide`. The recursion is *transition-gated*: a node whose effective
 //!   visibility does not change stops the walk (its subtree cannot have changed).
@@ -18,10 +18,10 @@
 //! - **Level** (`set_frame_level 0x76a4f0`): clamp `>= 0`; `delta = new - old`; **same-strata**
 //!   children shift by the same `delta` (relative offsets preserved); cross-strata children are
 //!   untouched.
-//! - **Effective scale** (`effective_scale 0x76ac90`): `effectiveScale = parentScale * ownScale`,
+//! - **Effective scale** (`0x76ac90`): `effectiveScale = parentScale * ownScale`,
 //!   written to `layoutScale`, **ε-gated** (skip the write + recursion if `|new - cur| < 2.384e-7`,
 //!   the `_DAT_008029d4` constant — [`SCALE_EPS`]); recurse to child frames.
-//! - **Alpha** (`SetAlpha 0x76a690`, byte-verified — wow-re `propagation.md`, CORRECTED section):
+//! - **Alpha** (`SetAlpha 0x76a690`):
 //!   an eager set-time **overwrite-cascade** — SetAlpha writes the raw value to the frame and
 //!   recurses over its child frames pushing the SAME value (a flatten, like the strata subtree-
 //!   force; never a draw-time ancestor product). At draw a region multiplies its own alpha by its
@@ -33,7 +33,7 @@
 //! ## Alpha: the settled model (the old 1.12-vs-Era tension is resolved)
 //!
 //! An earlier INFERRED reading ("1.12 alpha is not tree-propagated") kept a dormant Era-style
-//! propagation flag here as a hedge. The §5 cross-check on `SetAlpha 0x76a690` settled it: 1.12
+//! propagation flag here as a hedge. `SetAlpha 0x76a690` settled it: 1.12
 //! DOES reach the subtree, but by set-time overwrite (the same raw byte pushed to every
 //! descendant frame's `+0xc8`), not by a live parent×child product — Era's `ignoreParentAlpha`
 //! belongs to the later multiplicative model and has no 1.12 counterpart (there is no
@@ -47,10 +47,10 @@ use std::collections::HashMap;
 
 use crate::order::{DrawLayer, Strata};
 
-/// The scale-propagation ε — `_DAT_008029d4` = `0x34800000` ≈ 2.384e-7 (`propagation.md`,
-/// `effective_scale 0x76ac90`): a recomputed effective scale within ε of the current one is skipped
-/// (no write, no recursion). This is the *same* binary constant the layout resolver uses for its
-/// `OnSizeChanged` gate, so we reuse it rather than restate the value.
+/// The scale-propagation ε — `_DAT_008029d4` = `0x34800000` ≈ 2.384e-7 (`0x76ac90`): a
+/// recomputed effective scale within ε of the current one is skipped (no write, no recursion).
+/// This is the *same* binary constant the layout resolver uses for its `OnSizeChanged`
+/// gate, so we reuse it rather than restate the value.
 pub const SCALE_EPS: f64 = crate::layout::SIZE_EPS;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -187,7 +187,7 @@ pub use kinds::{
 // Frame + Region nodes
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// A frame node in the arena — the modeled subset of `CSimpleFrame` (`frame-model.md`).
+/// A frame node in the arena — the modeled subset of `CSimpleFrame`.
 ///
 /// The invariant-bearing fields (`effective_visible`, `effective_scale`, `effective_alpha`) and the
 /// structural fields (`parent`, `children`, `regions`) are maintained by the [`WidgetArena`]
@@ -201,10 +201,10 @@ pub struct Frame {
     pub kind: FrameKind,
     /// Draw layers switched OFF on this frame — bit `n` = [`DrawLayer::index`] `n`.
     ///
-    /// `Frame:EnableDrawLayer(layer)` / `DisableDrawLayer(layer)`, VERIFIED present on the Frame
+    /// `Frame:EnableDrawLayer(layer)` / `DisableDrawLayer(layer)`, present on the Frame
     /// method table `0x878ec0` at `0x7755b0` / `0x775680`, sitting between `IsToplevel` and `Show`.
-    /// (Read off the `{const char*, void*}` pair bytes; the same walk reproduces wow-re's recorded
-    /// Button table at `0x879d00` exactly.)
+    /// (Read off the `{const char*, void*}` pair bytes; the same walk reproduces the Button table
+    /// at `0x879d00` exactly.)
     ///
     /// A disabled layer hides every region the frame owns in it, and the region's own `Show`/`Hide`
     /// is untouched underneath — re-enabling the layer brings back exactly what was showing before,
@@ -228,7 +228,7 @@ pub struct Frame {
     ///
     /// **One per frame**, which is what makes `CreateTitleRegion` idempotent: a second call returns
     /// the SAME object after clearing its anchors, so calling it on an XML-declared title region
-    /// silently wipes them (wow-re `widget-api-batch-benilla.md` Q6). It is also in
+    /// silently wipes them (`0x767ed0`→`0x767620`, ClearAllPoints). It is also in
     /// [`Frame::regions`], so the arena still frees it.
     pub title_region: Option<RegionHandle>,
     /// The draw stratum (`frameStrata +0xc0`, default MEDIUM).
@@ -266,14 +266,13 @@ pub struct Frame {
     /// Default **false**, the client's own default. **This is the field key delivery gates on**:
     /// [`crate::script::keyboard`]'s walk builds its candidate set from
     /// `effective_visible && keyboard_enabled`, then orders it strata 8→0 / level high→low /
-    /// oldest-registration-first (built 2026-08-14, decision 1319). wow-re's
-    /// `scratch/frame-key-script-delivery.md` §3.2 is explicit that the flag and a handler are
-    /// separable: `EnableKeyboard(true)` on a script-less frame "puts it in the walk where it is
-    /// called and declines — transparent to everything downstream", so **being enabled is not
-    /// being a handler**.
+    /// oldest-registration-first (built 2026-08-14, decision 1319). `0x76af00` never touches the
+    /// handler slots, so the flag and a handler are separable: `EnableKeyboard(true)` on a
+    /// script-less frame "puts it in the walk where it is called and declines — transparent to
+    /// everything downstream", so **being enabled is not being a handler**.
     pub keyboard_enabled: bool,
     /// Clamp-to-screen (`SetClampedToScreen` / XML `clampedToScreen` — the client's geometry
-    /// flags **bit4**, applied inside rect assembly `0x767a20`, wow-re `layout.md`): the layout
+    /// flags **bit4**, applied inside rect assembly `0x767a20`): the layout
     /// resolve shifts this frame's assembled rect back inside the screen, size preserved.
     /// Default **true for GameTooltip frames**, false otherwise: the reference tooltip observably
     /// clamps (the minimap zone-text hover's ANCHOR_LEFT plate hangs down from the screen top
@@ -306,8 +305,7 @@ pub struct Frame {
     /// flag, not a negative, not a `None`: the `CLayoutFrame` ctor `0x767680` zeroes all four, the
     /// getters hand back two plain numbers (`0, 0` on a frame nobody bounded, never `nil`), and
     /// the clamp's first test on every axis is `bound == 0.0 → skip`. A **negative** bound is
-    /// therefore live and clamps normally. Byte-verified: wow-re
-    /// `system/ui/scratch/resize-bounds-and-button-fontstring.md` §1–2.
+    /// therefore live and clamps normally (`0x768710`).
     ///
     /// The values are lengths in the same space as the explicit width/height, so they compare
     /// directly against [`crate::layout::LayoutInput`]'s — the binding runs the byte-identical
@@ -336,7 +334,7 @@ pub struct Frame {
     pub user_placed: bool,
     /// `SetToplevel` / XML `toplevel` — flag word `[frame+0xb4]` **bit `0x1`**, the same word as
     /// [`Frame::movable`] (`0x100`) and [`Frame::resizable`] (`0x200`), written by the same pure
-    /// bit-setter `0x76a3c0` (wow-re `ui/scratch/toplevel-raise.md`). Default false.
+    /// bit-setter `0x76a3c0`. Default false.
     ///
     /// The flag only **marks**: setting it performs no raise (`SetToplevel 0x775440` is
     /// arg-marshal + `0x76a3c0` and returns). What reads it is the raise worker
@@ -371,7 +369,7 @@ pub struct Frame {
     next_decl: u32,
 }
 
-/// A region leaf — a texture or fontstring belonging to one frame (`frame-model.md`).
+/// A region leaf — a texture or fontstring belonging to one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Region {
     /// Texture or fontstring.
@@ -385,9 +383,9 @@ pub struct Region {
     pub sub_level: i8,
     /// Declaration index within the owner frame — the final within-layer draw tiebreak.
     pub decl_seq: u32,
-    /// `Region:SetParent(nil)` — the region is **orphaned and unrendered, not destroyed** (wow-re
-    /// `widget-api-batch-benilla.md` Q7: the re-link virtual `0x77fd10` with a null parent unlinks
-    /// from the old parent's draw layer and region list and stores nothing in their place).
+    /// `Region:SetParent(nil)` — the region is **orphaned and unrendered, not destroyed** (the
+    /// re-link virtual `0x77fd10` with a null parent unlinks from the old parent's draw layer and
+    /// region list and stores nothing in their place).
     ///
     /// Modelled as a flag rather than as an owner-less region: [`Frame::regions`] keeps the entry
     /// so [`WidgetArena::destroy`] still frees the slab slot, and
@@ -410,9 +408,9 @@ pub struct Region {
 /// **Link-stamp / draw order.** Each frame gets a monotonic `insertion_seq` at creation, used as the
 /// draw-order tiebreak **below the draw layer** within a `(strata, level)` bucket (decision 0884 —
 /// the layer outranks the frame; see [`crate::order`]). Like the client, a frame is re-stamped to
-/// its bucket's **tail** whenever it *becomes visible* (`effective_visible_show 0x76ae10` re-ADDS to
-/// the intrusive level list) or a visible frame changes strata/level (both setters remove-then-add;
-/// `propagation.md`). Show order IS draw order within a bucket — how the reference's late-shown
+/// its bucket's **tail** whenever it *becomes visible* (show `0x76ae10` re-ADDS to the intrusive
+/// level list) or a visible frame changes strata/level (both setters remove-then-add). Show order
+/// IS draw order within a bucket — how the reference's late-shown
 /// `MiniMapTrackingFrame` draws over the earlier-declared `MinimapBackdrop` ring despite the XML
 /// declaring it first (decision 0557; the mutators live in [`propagation`]).
 ///
@@ -469,9 +467,9 @@ impl Default for WidgetArena {
 /// and it drifted silently the first time this one was edited. A wrong entry should be wrong in
 /// one place.
 ///
-/// **Read off the client's ctors** (wow-re `ui/scratch/mouse-enable-law.md` `774f7eb6`, and the
-/// follow-up `68987021`). `[frame+0xcc]` is a four-bit input mask — char, keyboard, MOUSE, wheel —
-/// zeroed by the base `CSimpleFrame` ctor `0x769090` and set by exactly five subclass ctors:
+/// **Read off the client's ctors.** `[frame+0xcc]` is a four-bit input mask — char, keyboard,
+/// MOUSE, wheel — zeroed by the base `CSimpleFrame` ctor `0x769090` and set by exactly five
+/// subclass ctors:
 /// Button `0x778771`, CheckButton (through Button), Slider `0x789467`, ColorSelect `0x78b2b5`,
 /// and EditBox `0x779ced`, which takes char+keyboard+mouse together because it must take a click
 /// to focus. `Minimap` is an engine frame born `0x4` (`0x4edc38`), and ours is a `FrameKind`.
@@ -491,8 +489,8 @@ pub fn mouse_enabled_by_ctor(kind: FrameKind) -> bool {
         FrameKind::Button
             | FrameKind::CheckButton
             | FrameKind::EditBox
-            // `CGWorldFrame`'s ctor enables key + mouse + wheel (`0x481b09`/`0x481b14`/`0x481b1f`,
-            // wow-re `mouse-enable-law.md`); the hit is the world's, not the UI's (decision 1983).
+            // `CGWorldFrame`'s ctor enables key + mouse + wheel (`0x481b09`/`0x481b14`/`0x481b1f`);
+            // the hit is the world's, not the UI's (decision 1983).
             | FrameKind::WorldFrame
             // A Slider's thumb must be draggable: every scrollbar is a UIPanelScrollBarTemplate
             // Slider that declares no `enableMouse` yet is draggable in-game (decision 0250).
@@ -581,8 +579,8 @@ impl WidgetArena {
     }
 
     /// Move `h` to the **tail** of its `(strata, level)` draw bucket — the client's own live-list
-    /// maintenance (`propagation.md`): `effective_visible_show 0x76ae10` re-ADDS a frame to its
-    /// level's intrusive list on the hidden→visible transition, and `set_frame_strata 0x76a470` /
+    /// maintenance: show `0x76ae10` re-ADDS a frame to its level's intrusive list on the
+    /// hidden→visible transition, and `set_frame_strata 0x76a470` /
     /// `set_frame_level 0x76a4f0` remove-then-add a visible frame — an intrusive-list add appends.
     /// Called by the [`propagation`] mutators on exactly those transitions (module doc).
     pub(crate) fn resequence_to_tail(&mut self, h: FrameHandle) {
@@ -610,7 +608,7 @@ impl WidgetArena {
     /// Resolve a name to the frame that published it, or `None`. Publishing is **non-overwriting**:
     /// the first frame created with a given name owns it; a later duplicate keeps its own `name`
     /// field but does not become the lookup target (matching the client's auto-publish rule,
-    /// `propagation.md`/decision 0068).
+    /// `0x701bd0`; decision 0068).
     pub fn lookup(&self, name: &str) -> Option<FrameHandle> {
         self.names.get(name).copied()
     }
@@ -623,8 +621,8 @@ impl WidgetArena {
     /// from the parent immediately. If `name` is given and not already published, it is published.
     ///
     /// (Strata/level inheritance from the parent at create time is a *loader/CreateFrame* concern,
-    /// not the ctor's — the client's ctor writes MEDIUM/0 unconditionally, `frame-model.md`; we match
-    /// that and leave inheritance to the layer above.)
+    /// not the ctor's — the client's ctor `0x769090` writes MEDIUM/0 unconditionally; we match that
+    /// and leave inheritance to the layer above.)
     pub fn create(
         &mut self,
         kind: FrameKind,
@@ -676,7 +674,7 @@ impl WidgetArena {
                 FrameKind::ScrollingMessageFrame | FrameKind::ScrollFrame | FrameKind::WorldFrame
             ),
             // Nothing is keyboard-enabled by construction: `0x76af00` is only ever reached from the
-            // XML attribute or an explicit call, never a ctor (`scripts-auto-enable.md` §1-2).
+            // XML attribute or an explicit call, never a ctor.
             keyboard_enabled: false,
             // A tooltip clamps to the screen by construction (its XML never sets the attribute,
             // yet the reference plate observably never leaves the window — the class supplies
@@ -784,7 +782,7 @@ impl WidgetArena {
     /// client builds them in `CSimpleEditBox`'s ctor, so a `CreateFrame("EditBox")` with no XML
     /// behind it has them too, before its OnLoad runs.
     ///
-    /// wow-re `system/ui/scratch/rf85-editbox-caret.md` §1, all VERIFIED off bytes:
+    /// All five, byte-verified:
     ///
     /// | # | region | ctor site | built by |
     /// |---|---|---|---|
@@ -794,7 +792,7 @@ impl WidgetArena {
     ///
     /// **Why the ORDER is the whole point.** `GetRegions 0x773f60` walks `[frame+0x1b8]` — one flat
     /// creation-ordered list, oldest first, with **no filter** (hidden regions are returned and
-    /// counted), and insertion is at the TAIL (`scratch/widget-list-bindings.md`). All five reach
+    /// counted), and insertion is at the TAIL. All five reach
     /// that list through `0x77fd10`, the single linker. So on a real client the authored `<Layers>`
     /// regions start at index **6**, and an addon may index them there.
     ///
@@ -907,9 +905,9 @@ impl WidgetArena {
     ///
     /// There is no `Region:Destroy` in the widget API and none is wanted: this exists for the one
     /// engine-owned lifetime in the client, `CSimpleHTML::SetText`, which pool-frees the blocks of
-    /// the previous parse before building the new ones (`simplehtml-markup-engine.md` §10 step 1 —
-    /// the pool allocate at `0x78adc6` has a matching free, and the CONTENTNODE list at `+0x340` is
-    /// what names the objects to free). Without it a second `SetText` leaves the first parse's
+    /// the previous parse before building the new ones (the pool allocate at `0x78adc6` has a
+    /// matching free, and the CONTENTNODE list at `+0x340` is what names the objects to free).
+    /// Without it a second `SetText` leaves the first parse's
     /// FontStrings on screen, stacked behind the new ones.
     ///
     /// **The caller owns the rest of the region's identity.** The arena holds only structure;

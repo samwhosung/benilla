@@ -2,9 +2,9 @@ use std::collections::VecDeque;
 
 /// One line held in a [`ScrollingMessageState`] ring — its text, its already-quantized color, its
 /// live fade state (a per-line snapshot of the frame's `timeVisible`/`fadeDuration` at insert,
-/// msgframe-runtime.md: MessageData `+0xc`/`+0x10`), and its host-measured wrapped row count (the
-/// message-line half of the measure round-trip — a long chat line occupies as many display rows as
-/// it wraps into, so the bands above it shift up by real content height).
+/// MessageData `+0xc`/`+0x10`), and its host-measured wrapped row count (the message-line half of
+/// the measure round-trip — a long chat line occupies as many display rows as it wraps into, so the
+/// bands above it shift up by real content height).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MessageLine {
     /// The line text (already formatted app-side: `[Name]: text`, `Name yells: text`, …).
@@ -41,21 +41,21 @@ pub struct MessageLine {
     pub rows_key: u64,
 }
 
-/// A `CSimpleMessageScrollFrame`'s runtime state (msgframe-runtime.md, byte-verified §5 pair): a true
-/// ring of `max_lines` (drop-oldest, independent of how many display), each line carrying its own
-/// fade snapshot; a scrollback cursor counted **up from the bottom** (`0` = newest = AtBottom); and
-/// the frame-level fade config the per-line snapshots copy at insert.
+/// A `CSimpleMessageScrollFrame`'s runtime state (ctor `0x787670`): a true ring of `max_lines`
+/// (drop-oldest, independent of how many display), each line carrying its own fade snapshot; a
+/// scrollback cursor counted **up from the bottom** (`0` = newest = AtBottom); and the frame-level
+/// fade config the per-line snapshots copy at insert.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollingMessageState {
     /// The frame's OWN justification, set by `SetJustifyH`/`SetJustifyV` — `None` until one of
     /// them is called.
     ///
-    /// VERIFIED present on both classes: the ScrollingMessageFrame method table `0x87b5c0`
-    /// (the one whose `AddMessage` is `0x792900`, msgframe-runtime.md's scrolling family) carries
+    /// Present on both classes: the ScrollingMessageFrame method table `0x87b5c0`
+    /// (the one whose `AddMessage` is `0x792900`) carries
     /// `SetJustifyH 0x792600`/`GetJustifyH`/`SetJustifyV`/`GetJustifyV`, and the MessageFrame table
     /// `0x87b960` (`AddMessage 0x795590`, the `SetInsertMode` sibling) carries the same four. Read
     /// off the `{const char*, void*}` pair bytes; the same walk reproduces the Button table at
-    /// `0x879d00` exactly as wow-re records it, and confirms Button has no `SetJustifyH` — which is
+    /// `0x879d00` exactly, and confirms Button has no `SetJustifyH` — which is
     /// why the family cannot be inferred and had to be read.
     ///
     /// **`Option`, and the reason is ours not the client's.** The real object keeps ONE justify
@@ -72,7 +72,7 @@ pub struct ScrollingMessageState {
     /// The line ring, newest at the back. Capacity is enforced by drop-oldest in [`Self::add`].
     pub lines: VecDeque<MessageLine>,
     /// The ring capacity (`maxLines`; ctor default 8, ChatFrame.xml sets 128). `SetMaxLines` is
-    /// **destructive** (msgframe-runtime.md).
+    /// **destructive** (`0x787dd0`).
     pub max_lines: usize,
     /// `timeVisible`/`displayDuration` — phase-1 duration a new line holds full alpha (ctor 10.0s;
     /// ChatFrame 120.0s).
@@ -98,8 +98,8 @@ pub struct ScrollingMessageState {
 
 impl Default for ScrollingMessageState {
     fn default() -> ScrollingMessageState {
-        // The shared CSimpleMessageScrollFrame ctor defaults (msgframe-runtime.md §"Shared ctor
-        // defaults": fadingEnabled=1, timeVisible=10.0, fadeDuration=3.0; SMF maxLines=8).
+        // The shared CSimpleMessageScrollFrame ctor (`0x787670`) defaults: fadingEnabled=1,
+        // timeVisible=10.0, fadeDuration=3.0; SMF maxLines=8.
         ScrollingMessageState {
             justify: None,
             lines: VecDeque::new(),
@@ -114,7 +114,7 @@ impl Default for ScrollingMessageState {
 }
 
 /// Byte-quantize a `0..1` color/alpha component the way `AddMessage` does (`clamp[0,1]`, `*255`,
-/// `+0.5`, truncate — round-half-up; msgframe-runtime.md AddMessage `0x788150`).
+/// `+0.5`, truncate — round-half-up; `AddMessage 0x788150`).
 pub fn quantize_u8(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0 + 0.5).trunc() as u8
 }
@@ -123,13 +123,13 @@ impl ScrollingMessageState {
     /// `AddMessage(text, r, g, b)` (`0x788150`): quantize the color, snapshot the current
     /// `timeVisible`/`fadeDuration` onto the new line, and push it at the ring's newest slot,
     /// dropping the oldest when over `max_lines`. A view scrolled up stays anchored on the same
-    /// content (the ring cursor is a slot, not an offset — msgframe-runtime.md).
+    /// content (the ring cursor is a slot, not an offset).
     /// `ScrollingMessageFrame:UpdateColorByID(id, r, g, b)` (`0x7932b0` → `0x788250`) — every line
     /// tagged `id` takes the new colour, quantised the way `AddMessage` quantised the old one.
     /// Returns how many lines moved; a recolour bumps the generation so a settled frame redraws.
     ///
     /// **`id == 0` matches nothing, and that is a guard the reference opens with, not a
-    /// consequence** (decision 2125; wow-re `system/ui/scratch/login-chat-colour-pipeline.md`).
+    /// consequence** (decision 2125).
     /// `0x788250` is `mov edi,[ebp+8]; test edi,edi; je 0x7882a4` → `ret 8`: zero never reaches a
     /// comparison and the record walk is not entered at all.
     ///
@@ -269,7 +269,7 @@ impl ScrollingMessageState {
     // ── The scroll entries ──────────────────────────────────────────────────────────────────
     //
     // **Every one of them re-arms the displayed lines' fade**, by one of two engine routes that
-    // between them leave no gap (wow-re `msgframe-fade-rearm-law.md`):
+    // between them leave no gap:
     //
     // - the cursor does NOT move (a scroll that is already at the boundary, or a no-op jump) — the
     //   binding calls `0x788b80` directly: `ScrollUp` at AtTop (`0x788626`), `ScrollDown` at
@@ -279,12 +279,11 @@ impl ScrollingMessageState {
     //   `arg3` is the relayout's own 0→1 AtBottom edge flag (`0x7887a3`). Land off the bottom and
     //   the second term fires; land back ON the bottom and the edge flag does.
     //
-    // So the re-arm is unconditional at this level and the two routes collapse into one call after
-    // the cursor has moved — which is also the right order, since the displayed set the engine
-    // walks is the one the new cursor selects. **Correction (2026-08-29):** benilla previously had
-    // scrolling merely *freeze* the countdown, on the strength of msgframe-runtime.md's "nothing
-    // un-fades" — that note described the tick's gate, not the scroll bindings, which had not been
-    // walked. Faded chat could never be brought back; the director reported it.
+    // So the re-arm is unconditional at this level and the two routes collapse into one call
+    // after the cursor has moved — which is also the right order, since the displayed set the
+    // engine walks is the one the new cursor selects. **Correction (2026-08-29):** benilla
+    // previously had scrolling merely *freeze* the countdown. Faded chat could never be brought
+    // back; the director reported it.
 
     /// `ScrollUp` (`0x788610`) — one line older (no cursor move at the top), then re-arm.
     pub fn scroll_up(&mut self, viewport_rows: usize) {
@@ -334,7 +333,7 @@ impl ScrollingMessageState {
     }
 
     /// `PageUp` — the client pages by `numLinesDisplayed` scroll steps then one back
-    /// (msgframe-runtime.md: net page = displayed − 1, one line of overlap).
+    /// (`0x7885b0`: net page = displayed − 1, one line of overlap).
     pub fn page_up(&mut self, viewport_rows: usize) {
         let page = self.displayed_count(viewport_rows).saturating_sub(1).max(1);
         self.scroll_offset = (self.scroll_offset + page).min(self.max_scroll());
@@ -409,8 +408,7 @@ fn quantize_fade_wide(x: f64) -> u8 {
 /// attribute (`0x87a618`) and the `SetInsertMode`/`GetInsertMode` pair (`0x794ed0`/`0x794ff0`).
 ///
 /// **MessageFrame only**, which is why it lives here and not on [`ScrollingMessageState`]: the
-/// scrolling class has neither binding and no such XML attribute (msgframe-runtime.md's
-/// binding-family table; wow-re `widget-api-batch-benilla.md` Q4, byte-verified).
+/// scrolling class has neither binding and no such XML attribute.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InsertMode {
     /// `"TOP"` (the client's `0`): the newest message takes the frame's **top** line and older ones
@@ -423,10 +421,10 @@ pub enum InsertMode {
     Bottom,
 }
 
-/// A `CSimpleMessageFrame`'s runtime state (ctor `0x785640`; msgframe-runtime.md, byte-verified §5
-/// pair) — the class `UIErrorsFrame` is, and [`ScrollingMessageState`]'s **sibling, never its
-/// base**. The two come from different ctors and their `AddMessage` bindings are different
-/// functions with different tails, so nothing is shared here beyond the line record itself:
+/// A `CSimpleMessageFrame`'s runtime state (ctor `0x785640`) — the class `UIErrorsFrame` is, and
+/// [`ScrollingMessageState`]'s **sibling, never its base**. The two come from different ctors and
+/// their `AddMessage` bindings are different functions with different tails, so nothing is shared
+/// here beyond the line record itself:
 ///
 /// | | MessageFrame (this) | ScrollingMessageFrame |
 /// |---|---|---|
@@ -447,12 +445,12 @@ pub struct MessageFrameState {
     /// The frame's OWN justification, set by `SetJustifyH`/`SetJustifyV` — `None` until one of
     /// them is called.
     ///
-    /// VERIFIED present on both classes: the ScrollingMessageFrame method table `0x87b5c0`
-    /// (the one whose `AddMessage` is `0x792900`, msgframe-runtime.md's scrolling family) carries
+    /// Present on both classes: the ScrollingMessageFrame method table `0x87b5c0`
+    /// (the one whose `AddMessage` is `0x792900`) carries
     /// `SetJustifyH 0x792600`/`GetJustifyH`/`SetJustifyV`/`GetJustifyV`, and the MessageFrame table
     /// `0x87b960` (`AddMessage 0x795590`, the `SetInsertMode` sibling) carries the same four. Read
     /// off the `{const char*, void*}` pair bytes; the same walk reproduces the Button table at
-    /// `0x879d00` exactly as wow-re records it, and confirms Button has no `SetJustifyH` — which is
+    /// `0x879d00` exactly, and confirms Button has no `SetJustifyH` — which is
     /// why the family cannot be inferred and had to be read.
     ///
     /// **`Option`, and the reason is ours not the client's.** The real object keeps ONE justify
@@ -488,9 +486,9 @@ pub struct MessageFrameState {
 
 impl Default for MessageFrameState {
     fn default() -> MessageFrameState {
-        // The CSimpleMessageFrame ctor defaults (msgframe-runtime.md §"Shared ctor defaults":
-        // fadingEnabled=1, timeVisible=10.0, fadeDuration=3.0; insertMode 1 = BOTTOM). Note the
-        // fade pair is shared with the scrolling class but `maxLines` has no counterpart here.
+        // The CSimpleMessageFrame ctor (`0x785640`) defaults: fadingEnabled=1,
+        // timeVisible=10.0, fadeDuration=3.0; insertMode 1 = BOTTOM. Note the fade pair is
+        // shared with the scrolling class but `maxLines` has no counterpart here.
         MessageFrameState {
             justify: None,
             lines: VecDeque::new(),

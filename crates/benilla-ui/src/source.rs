@@ -1,13 +1,11 @@
 //! **UI source bytes** — what a `.lua`, `.xml` or `.toc` file *is*, before any parser sees it.
 //!
-//! One rule, and it is the reference's: **a UI source file is bytes, not text.** wow-5875-re has
-//! the whole path byte-verified (`system/ui/scratch/lua-chunk-load-encoding.md`, a §5 trio run for
-//! this decision): `0x704bc0` slurps the file (`0x648620`) with `pad = 0`, so there is not even a
-//! trailing NUL, the handle is opened **binary** on every leg of `0x647db0`, and `0x704ae0` hands
-//! the pointer and length straight to `luaL_loadbuffer 0x6f5690`. No transcoding, no codepage
-//! conversion; the only `WideCharToMultiByte` on the path converts the *path*. Lua 5.0 strings
-//! *are* byte strings, so a cp1252 German locale file loads there and its literals carry the raw
-//! bytes.
+//! One rule, and it is the reference's: **a UI source file is bytes, not text.** `0x704bc0` slurps
+//! the file (`0x648620`) with `pad = 0`, so there is not even a trailing NUL, the handle is opened
+//! **binary** on every leg of `0x647db0`, and `0x704ae0` hands the pointer and length straight to
+//! `luaL_loadbuffer 0x6f5690`. No transcoding, no codepage conversion; the only
+//! `WideCharToMultiByte` on the path converts the *path*. Lua 5.0 strings *are* byte strings, so a
+//! cp1252 German locale file loads there and its literals carry the raw bytes.
 //!
 //! Two things the compiler's front door does do, and we do them too because they are the
 //! reference's own code rather than Lua's: it **strips a UTF-8 BOM** ([`strip_bom`] — ten
@@ -46,13 +44,13 @@ const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 ///
 /// **This is fidelity, not a modernisation** — and that is a correction to this module's first
 /// draft, which reasoned that stock Lua 5.0's lexer meets `0xEF` and stops, so a BOM'd file must
-/// have failed on the real client too, so stripping it was us being kinder than the original. An
-/// RE dispatch into wow-5875-re read the bytes instead of the manual: **Blizzard patched the strip
-/// into `luaL_loadbuffer 0x6f5690` themselves.** Ten instructions stock Lua does not have
-/// (`0x6f5699`–`0x6f56b4`): a `size >= 3` guard, three byte compares against `EF BB BF`, then
-/// `add edx,3` / `sub eax,3` — all before the `LoadS` fill and `lua_load 0x6f4320`. That is the
-/// only live door into the compiler, so addon files, FrameXML, XML script bodies and `loadstring`
-/// all get it. The `.toc` reader has its own separate skip at `0x6edc71`.
+/// have failed on the real client too, so stripping it was us being kinder than the original.
+/// Reading the disassembly instead of the manual shows it: **Blizzard patched the strip into
+/// `luaL_loadbuffer 0x6f5690` themselves.** Ten instructions stock Lua does not have
+/// (`0x6f5699`–`0x6f56b4`): a `size >= 3` guard, three byte compares against `EF BB BF`, then `add
+/// edx,3` / `sub eax,3` — all before the `LoadS` fill and `lua_load 0x6f4320`. That is the only
+/// live door into the compiler, so addon files, FrameXML, XML script bodies and `loadstring` all
+/// get it. The `.toc` reader has its own separate skip at `0x6edc71`.
 ///
 /// The lexer reasoning was right and the conclusion drawn from it was wrong: `luaX_lex 0x6ff610`
 /// *would* reject `0xEF`, which is precisely why the patch has to exist. A verified mechanism
@@ -74,7 +72,7 @@ pub fn strip_bom(bytes: &[u8]) -> &[u8] {
 /// through: a source file whose first character is `#` loses its whole first line, including one
 /// handed to `loadstring`. **Lua 5.1 moved it out** into `luaL_loadfile`, which mlua's
 /// `Lua::load` does not call — so a 5.1-family VM silently keeps the line and then fails to
-/// compile it. Verified in the binary by the same RE dispatch that corrected [`strip_bom`].
+/// compile it.
 ///
 /// Applied after the BOM strip, because that is the order the reference applies them in: the mark
 /// is removed inside `luaL_loadbuffer`, and the lexer sees the shortened buffer.

@@ -84,13 +84,12 @@ impl Toc {
             .unwrap_or_default()
     }
 
-    /// `## Interface:` **as the 1.12 client reads it** (decision 1292): the leading integer of
-    /// the value, and a manifest with no `## Interface` line (or a non-numeric one) is `0`.
-    /// Byte-verified (wow-re `addon-version-gate.md` §2.2): `Toc_Parse 0x51c9b0` stores
-    /// `SStrToInt` of the value at `[rec+0x1c]`, the record ctor leaves it `0`, and the version
-    /// gate compares that single dword — so an Era manifest's `11507, 11508` reads as `11507`,
-    /// exactly as the reference would read it. [`Toc::interface_versions`] stays for display;
-    /// the GATE runs on this.
+    /// `## Interface:` **as the 1.12 client reads it** (decision 1292): the leading integer of the
+    /// value, and a manifest with no `## Interface` line (or a non-numeric one) is `0`.
+    /// `Toc_Parse 0x51c9b0` stores `SStrToInt` of the value at `[rec+0x1c]`, the record ctor
+    /// leaves it `0`, and the version gate compares that single dword — so an Era manifest's
+    /// `11507, 11508` reads as `11507`, exactly as the reference would read it.
+    /// [`Toc::interface_versions`] stays for display; the GATE runs on this.
     pub fn interface_version(&self) -> u32 {
         self.directive("Interface")
             .map(|v| {
@@ -106,10 +105,10 @@ impl Toc {
     /// **Two departures from the obvious read, both byte-derived, both of which were losing real
     /// data** (decision 2126):
     ///
-    /// * **A repeated directive APPENDS.** The reference `strdup`s each item into a `0x40`-granular
-    ///   array at `[rec+0x80]` with a running count at `[rec+0x7c]` (wow-re
-    ///   `savedvariables-protocol.md` §4), so a second `## SavedVariables:` line continues the
-    ///   first rather than being ignored. Reading only the first line cost `CT_RaidAssist` 18 of
+    /// * **A repeated directive APPENDS.** The reference `strdup`s each item (`0x64a620`) into a
+    ///   `0x40`-granular array at `[rec+0x80]` with a running count at `[rec+0x7c]`, so a second
+    ///   `## SavedVariables:` line continues the first rather than being ignored. Reading only the
+    ///   first line cost `CT_RaidAssist` 18 of
     ///   its 25 saved globals — it declares them across four lines and got seven, so raid
     ///   positions, menu state, boss timers, debuff templates, the loot method and the squelch
     ///   list were never written and never restored.
@@ -160,7 +159,7 @@ impl Toc {
     ///
     /// The long form `## OptionalDependencies:` — which 4 corpus addons write — used to be
     /// refused here, on the reasoning that it was "verified for the required half and merely
-    /// plausible for this one, queued as an RE question". The premise was wrong: the reference
+    /// plausible for this one, left open". The premise was wrong: the reference
     /// matches all three dependency keys by the same colon-less prefix, so the long form was never
     /// a separate question.
     pub fn optional_dependencies(&self) -> Vec<&str> {
@@ -174,8 +173,7 @@ impl Toc {
 
     /// `## DefaultState:` — what this addon's enable state is for a character who has never
     /// expressed one. The reference's `[rec+0x2b]`, stored by `Toc_Parse` at `0x51d204` from the
-    /// two literals `"enabled"` (`0x853764`) → `1` and `"disabled"` (`0x853758`) → `0`
-    /// (wow-5875-re `savedvariables-protocol.md`, the directive table).
+    /// two literals `"enabled"` (`0x853764`) → `1` and `"disabled"` (`0x853758`) → `0`.
     ///
     /// It is load-bearing well beyond a manifest that writes it: the enable query `0x51e470`
     /// falls back to this byte whenever the characters disagree, and whenever *none* of them has
@@ -183,16 +181,14 @@ impl Toc {
     ///
     /// **A manifest that does not write the line is enabled** — which is what makes a folder
     /// dropped into `AddOns/` just work, and is the record's initial byte, read at the bytes and
-    /// not inferred from the two literals' fall-through (wow-re
-    /// `addon-defaultstate-and-node-set.md`, decision 2316). The ctor `0x520550` seeds this one
-    /// field to 1 explicitly — `0x5205b9 mov [esi+0x2b],al` with `eax = 1`, where its five
+    /// not inferred from the two literals' fall-through (decision 2316). The ctor `0x520550` seeds
+    /// this one field to 1 explicitly — `0x5205b9 mov [esi+0x2b],al` with `eax = 1`, where its five
     /// neighbours take `bl = 0` — over an allocation that does zero-fill, which is exactly what
     /// made "the ctor zeroes it" read as true.
     ///
-    /// Two consequences this function depends on, both verified there: a value matching **neither**
-    /// literal leaves the 1 (`0x51d21a jne`, no store — there is no "unrecognised means
-    /// disabled"), and a duplicated directive is **last-wins**, which is [`Self::directive`]'s own
-    /// rule.
+    /// Two consequences this function depends on, both verified: a value matching **neither**
+    /// literal leaves the 1 (`0x51d21a jne`, no store — there is no "unrecognised means disabled"),
+    /// and a duplicated directive is **last-wins**, which is [`Self::directive`]'s own rule.
     pub fn default_state(&self) -> bool {
         !self
             .directive("DefaultState")
@@ -232,10 +228,9 @@ mod tests {
         assert_eq!(toc.directives.len(), 4);
     }
 
-    /// **`## DefaultState:` and its three non-obvious answers**, all byte-verified (wow-re
-    /// `addon-defaultstate-and-node-set.md`): an absent line is *enabled* because the record's
-    /// ctor seeds `[rec+0x2b]` to 1, a value matching neither literal leaves that 1 rather than
-    /// meaning disabled, and a duplicated line is last-wins.
+    /// **`## DefaultState:` and its three non-obvious answers**: an absent line is *enabled*
+    /// because the record's ctor seeds `[rec+0x2b]` to 1, a value matching neither literal leaves
+    /// that 1 rather than meaning disabled, and a duplicated line is last-wins.
     ///
     /// Only `disabled` disables, in other words — which is the same asymmetry `AddOns.txt`'s own
     /// value grammar has, and worth a falsifier because "unrecognised means off" is the reading
