@@ -14,7 +14,7 @@
 //! inferred: `Shaders\Pixel\ocean0_s.bls` is `rgb = primary·colorTex.rgb + detailTex.rgb +
 //! (secondary+0.25)·detailTex.a`, `alpha = colorTex.a`, with `0.25` its own scalar `PARAM`. The
 //! formula this module has always carried is right verbatim; its **provenance was not** — the
-//! citation here used to name an "apitrace WoW.17 program 159" and a `docs/knowledge/terrain.md`,
+//! citation here used to name an "apitrace WoW.17 program 159" and a terrain knowledge doc,
 //! neither of which exists. The body
 //! colour is **`primary · waterTint`**, where:
 //! - **`waterTint`** is a **64-row byte-space ramp** between the zone's dedicated `Light.dbc` water

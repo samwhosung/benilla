@@ -41,7 +41,7 @@ const CENSUS_NEAR: f32 = 15.0;
 /// identical code. Two census lines are only comparable at equal `frames` — measured, the field
 /// tracks `fps/60` and nothing else: 1542/2115 = 72.9% and 1598/2134 = 74.9% against frame-rate
 /// ratios of 71.8% and 73.0%. (An earlier revision of this line claimed 48%, which was an
-/// arithmetic slip on my part; it read as an unexplained anomaly and cost a wasted RE question.)
+/// arithmetic slip on my part.)
 pub(super) fn census(
     drops: &[Drop],
     cam: Vec3,

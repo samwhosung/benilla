@@ -435,7 +435,7 @@ impl TargetScan<'_, '_> {
     /// deliberate divergence, because the reference's enumeration walks ClntObjMgr table #1 —
     /// which holds the player's own object — and no self-compare has been derived on the mode-2
     /// path. Self sits at dist² 0 dead-centre, so a faithful `TargetNearestFriend` would appear to
-    /// always self-target; we refuse to ship that on an underived gate. RE dispatched.
+    /// always self-target; we refuse to ship that on an underived gate.
     fn build(&self, side: ScanSide) -> Vec<Candidate> {
         let Ok((self_tf, self_store, self_guid)) = self.self_q.single() else {
             return Vec::new();
