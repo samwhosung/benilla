@@ -1,11 +1,11 @@
 //! The camera-in-interior **WMO fog** resolve — which MFOG record's fog the room wants this frame.
 //!
-//! The byte law (wow-re `rf-weather-emission-timeline` ROUND 5, selector `0x69de20`, sole caller
-//! the scene-fog orchestrator `0x6cee30`): when the camera stands in a WMO, the scene fog crossfades
-//! toward the building's **own** MFOG fog — this is why a storm's veil never fogs the Goldshire
-//! inn's tavern. Selection: **seed = record 0** (the WMO default fog), then walk the camera group's
-//! MOGP fog-index byte list (≤4 slots): a record is a candidate iff the WMO-local camera is within
-//! its `largerRadius` and `!(flags & 1)`; candidates blend over the seed by weight
+//! The byte law (selector `0x69de20`, sole caller the scene-fog orchestrator `0x6cee30`): when the
+//! camera stands in a WMO, the scene fog crossfades toward the building's **own** MFOG fog — this
+//! is why a storm's veil never fogs the Goldshire inn's tavern. Selection: **seed = record 0**
+//! (the WMO default fog), then walk the camera group's MOGP fog-index byte list (≤4 slots): a
+//! record is a candidate iff the WMO-local camera is within its `largerRadius` and
+//! `!(flags & 1)`; candidates blend over the seed by weight
 //! `1 − (d − smallerRadius)/(largerRadius − smallerRadius)`, nearest last. The selector's
 //! `count == 1` bail means **no interior fog engages — the room keeps the SCENE fog, storm veil
 //! included**. Settled EMPIRICALLY by two director ref-shots (2026-07-13): the forge (one "null
@@ -13,19 +13,19 @@
 //! negative-start floor), while the inn (two authored records) is warm and clear. A brief
 //! interim reading ("record 0 still engages") made one-record rooms too crisp — the thing that
 //! had made the veil look wrong before it was the mist volume filling the room (a separate,
-//! since-fixed bug), not the veil itself. QG-6 (wow-re board, recast): byte-confirm the staging
-//! slots simply hold scene values at count == 1.
+//! since-fixed bug), not the veil itself. Open: byte-confirm the staging slots simply hold scene
+//! values at count == 1.
 //!
 //! This module only picks the **target** triple ([`CameraWmoFog`], written by the PVS pass — the
 //! camera's group falls out of the portal flood's down-ray seed for free). The 4-second crossfade
 //! ramp and the actual scene-fog lerp live in `crate::lighting` (`update_time_lighting`), the
 //! benilla twin of `0x6cee30` — and the ramp value it publishes (`WmoCrossfade`) is ALSO the WMO
 //! skybox's slot alpha: "the skybox alpha and the interior fog blend are the same number"
-//! (wow-re `wmo-skybox.md` §3; `crate::skybox`).
+//! (the shared weight, `0xce9bdc`; `crate::skybox`).
 //!
 //! One explicitly-chosen reading remains: portal-less props never run the flood (all-visible fast
 //! path), so they never engage — no shipped prop is an enterable room. (The claim mask itself is
-//! carved: bit 0x8 alone, round-6 Q-H(c).)
+//! bit 0x8 alone, `0x6be451`.)
 
 use benilla_formats::WmoFog;
 use bevy::prelude::*;

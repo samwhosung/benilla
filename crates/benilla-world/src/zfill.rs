@@ -1,6 +1,5 @@
 //! **The depth-prime twin** — the reference's `M2UseZFill` ("z-fill transparent objects", default
-//! ON) reproduced for fading/stealthed entities (decision 0831; wow-re
-//! `m2-blend-promotion-zfill.md` §4, VERIFIED at the bytes).
+//! ON, `0x82e748`) reproduced for fading/stealthed entities (decision 0831).
 //!
 //! The mechanism it reproduces: when a model instance draws translucent (`0 < A < 1` — stealth's
 //! CharProc 0.3, the appear/despawn ramps, the self-avatar zoom feather), the reference's collector

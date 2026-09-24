@@ -1,13 +1,13 @@
 //! The current-group **down-ray** — which room is the camera in, and which flood roots follow.
 //!
-//! The faithful port of the client's per-frame probe (`FUN_006821f0` → `FUN_006be250` → `0x6a3f80`;
-//! `wow-5875-re` `system/models/scratch/wmo-current-group.md` + `wmo-portal-audit.md` Q2/Q3/Q4/Q5):
-//! a vertical ray from the eye down `1760` yd races two legs, nearest crossing wins —
+//! The faithful port of the client's per-frame probe
+//! (`FUN_006821f0` → `FUN_006be250` → `0x6a3f80`): a vertical ray from the eye down `1760` yd races
+//! two legs, nearest crossing wins —
 //!
 //! - **Leg A — walking-collision faces** (the client's collision BSP, MOPY mask `0x84`): every
 //!   non-DETAIL face, **no orientation filter** — stair treads, risers, ledges, sloped trim all count.
 //!   A render-face `|n.z|` floor heuristic here is exactly what mis-seeded doorways (the straddle) and
-//!   slab edges: the real face set tracks the room boundary to sub-yard, the proxy lagged it (Q4/Q5).
+//!   slab edges: the real face set tracks the room boundary to sub-yard, the proxy lagged it.
 //! - **Leg B — portal crossings** (`0x6a3f80`): where the ray crosses a portal polygon, the group is
 //!   picked by the eye's **side of the portal plane** (`group_a iff (signed_dist ≥ 0) == (side > 0)`,
 //!   else the neighbour) — the vertically-stacked tie-break (a stairwell's floor-hole portal flips the
@@ -16,9 +16,10 @@
 //!   window of its plane (`0x7c22b0`'s parallel branch). A crossing within `~1e-4` of the nearest face
 //!   hit still wins (`0x80c4f4`) — a floor-hole portal coincident with the slab's faces flips the room.
 //!
-//! The verdict is a **set**, not a single group: the in-group plus (for a portal win) the across-group,
-//! both appended to the client's visible-group set `0xc7cd88` and each flooded as an independent root
-//! (Q2). An exterior winner or no crossing within the ray ⇒ outside (empty set, the outside leg).
+//! The verdict is a **set**, not a single group: the in-group plus (for a portal win) the
+//! across-group, both appended to the client's visible-group set `0xc7cd88` and each flooded as an
+//! independent root (`0x6b3bd4`–`0x6b3c10`). An exterior winner or no crossing within the ray ⇒
+//! outside (empty set, the outside leg).
 //!
 //! - **The terrain race** (`terrain_z`): the same down-segment is cast against the **terrain** — the
 //!   client runs both probes and drops the WMO hit when the ground is *strictly* nearer
@@ -241,13 +242,13 @@ pub(crate) fn down_ray_pick(
     }
 }
 
-/// The ZONE-TEXT down-ray length: the client's `[0x8022cc] = 1000.0` (wow-re
-/// `zonetext-indoor-bit.md` (b)) — shorter than the render current-group probe's 1760.
+/// The ZONE-TEXT down-ray length: the client's `[0x8022cc] = 1000.0` — shorter than the render
+/// current-group probe's 1760.
 const ZONE_RAY_LEN: f32 = 1000.0;
 
-/// The position-cast indoor predicate's ray — **faces only, no portal leg** (wow-re
-/// `zonetext-indoor-bit.md`, VERIFIED): the CGLight node's down-ray attach `0x6a8a20` casts the
-/// position straight down [`ZONE_RAY_LEN`] and races {terrain hit, WMO face hit} — WMO wins ties
+/// The position-cast indoor predicate's ray — **faces only, no portal leg**: the CGLight node's
+/// down-ray attach `0x6a8a20` casts the position straight down [`ZONE_RAY_LEN`] and races
+/// {terrain hit, WMO face hit} — WMO wins ties
 /// (`t_wmo <= t_terr`, `0x6a8b15`) — then classifies by the winning group's MOGP flags against
 /// `outdoor_mask`: a masked flag → outdoors, else indoors. The classify `0x6a87f0` has TWO sinks
 /// with DIFFERENT masks, so the caller picks its law:
@@ -329,8 +330,7 @@ pub(crate) fn down_ray_claim(
 ///
 /// **The reference's own anchor is underground too**, and it recovers with a `+1000`-yd upward
 /// retry on the face ray — `6a908d fld [ebp-0x38]` / `6a9093 fadd ds:0x8022cc`, inside the
-/// containment body `0x6a8ed0` — which finds the floor from beneath it. wow-re
-/// `gobj-light-probe-points.md`.
+/// containment body `0x6a8ed0` — which finds the floor from beneath it.
 ///
 /// [`footprint_sample_above`](super::interior::footprint_sample_above) is the SAME retry one stage
 /// later, and benilla had that half and not this one: 104 of Onyxia's lava traps never reached the
@@ -363,8 +363,8 @@ fn ray_claim(
     outdoor_mask: u32,
     up: bool,
 ) -> Option<DownRayClaim> {
-    // Candidate selection is per FACE — the client's query is bbox-free (`zonetext-indoor-bit.md`
-    // (b): "No bbox, no portals, no camera"; the column containment lives inside `floor_z_at`).
+    // Candidate selection is per FACE — the client's query is bbox-free (`0x6a8a20`: no bbox, no
+    // portals, no camera; the column containment lives inside `floor_z_at`).
     // An AUTHORED group-box pre-cull once lived here, and it broke exactly where a MOGI box
     // understates its geometry: NSabbey group 3's box bottom (z 1.84) floats above its own floor
     // polys (z ≈ 0.3), so a probe at feet+0.1 dipped under the box, culled the whole group's
@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn face_leg_is_orientation_agnostic() {
         // A steep ramp face (nearly a wall — |n.z|/|n| ≈ 0.1, well under the old 0.3 floor filter)
-        // still owns the column: the walking-collision leg has no normal filter (audit Q3).
+        // still owns the column: the walking-collision leg has no normal filter (`0x6bc700`).
         let g = nav(0, [-10.0, -10.0, 0.0], [10.0, 10.0, 120.0], 0, 0);
         let steep = vec![[[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 20.0]]];
         assert_eq!(faces_only(&[steep], &[g], [0.0, 0.0, 30.0]), Some(0));
@@ -755,7 +755,7 @@ mod tests {
         // Eye 0.3 past the plane: beyond the snap window — the doorway is NOT crossed (the client's
         // parallel branch returns no hit) and the face under the column decides: still room A's mesh
         // at x=0.3, so the seed is room A. The real client is protected here by the collision mesh
-        // tracking the boundary to sub-yard — the mechanism, not a doorway tolerance (audit Q5).
+        // tracking the boundary to sub-yard — the mechanism, not a doorway tolerance (`0x6b92b0`).
         assert_eq!(
             no_terrain(&tris, &groups, &verts, &infos, &refs, [0.3, 0.0, 1.7]),
             DownRaySeeds {

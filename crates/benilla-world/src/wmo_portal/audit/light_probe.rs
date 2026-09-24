@@ -316,7 +316,7 @@ fn inn_corridor_light_probe() {
             };
             // The exterior-leg intensity discriminator: the terrain MCSH bit BENEATH the point
             // (the reference samples it WMO-obliviously even on a porch floor — a building's baked
-            // ground shadow dims a porch character to 0.5; `unit-light-combine-storm.md` a4) — and
+            // ground shadow dims a porch character to 0.5) — and
             // the world WoW coords, so a live `.go` probe can stand exactly here.
             let (mcsh, world) = match subject.placed.as_ref() {
                 Some(p) => {

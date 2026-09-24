@@ -284,15 +284,15 @@ impl WorldPoint<'_, '_> {
     }
 
     /// The player's **zone-text** interior claim, which is deliberately not the same question: a
-    /// doorway portal under the eye seeds the render flood without making you indoors
-    /// (wow-re `zonetext-indoor-bit.md`).
+    /// doorway portal under the eye seeds the render flood without making you indoors — that bit
+    /// comes from a down-ray under the player alone (`0x6a87f0`).
     pub fn area_interior(&self) -> Option<crate::wmo_portal::WmoInteriorKeys> {
         self.area_interior.0
     }
 
     /// The nearest wet point to `wow` within `radius`, one per liquid **sound class**, indexed by
     /// class (`nibble & 3`) — the scan behind the ambient liquid loops (`0x462b50`'s
-    /// `nearest_liquid` walk). The class split and the AABB-clamp nearest point are the world's;
+    /// nearest-liquid walk). The class split and the AABB-clamp nearest point are the world's;
     /// the priority order, the voice cap and the slew are the sound system's.
     pub fn nearest_liquid_per_class(
         &self,

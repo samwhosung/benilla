@@ -112,8 +112,9 @@ const UNDERCITY: Site = Site {
 /// (one portal, p114→g91); a camera over a grate/bed column seeds that group and the scene draws,
 /// while a column with nothing walkable below (the shaft-mouth sliver, the moat's bed gaps) reads
 /// "outside" and blanks the interior — which decision 1096 pins as the CLIENT'S OWN behaviour
-/// (wow-re `wmo-downray-liquid-audit.md`: no liquid leg, no fallback; the asset's patchy beds are
-/// the only thing keeping retail drawn over lava). The 2026-08-07 pins: `WOW_PIN_EYE=-4990,-960,470`
+/// (the down-ray's liquid raycast is a dead edge here, `0x6be345`, and a miss retries nothing,
+/// `0x682207`; the asset's patchy beds are the only thing keeping retail drawn over lava). The
+/// 2026-08-07 pins: `WOW_PIN_EYE=-4990,-960,470`
 /// reproduces a faithful blank column; `WOW_PIN_EYE=-4830,-1090,480` seeds g91 and draws; the
 /// still-open half of B65 (partial grate loss from seeded rim poses) is 1096's "NOT settled" leaf.
 #[allow(dead_code)] // pinned for `WOW_PIN_*` runs: the B65 repro coordinates live here

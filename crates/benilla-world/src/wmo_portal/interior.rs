@@ -4,7 +4,7 @@
 //!   [`super::seed::down_ray_seeds`]): what room the flood seeds from; consumed by the
 //!   interior-audio resolver (`sound::interior`) and the minimap inside-zoom.
 //! - [`CurrentAreaInterior`] — the ZONE-TEXT/AREA claim (faces only, [`super::seed::area_down_ray`];
-//!   wow-re `zonetext-indoor-bit.md`, the CGLight node's `+0x90` bit 0): drives the leaf-area
+//!   the CGLight node's `+0x90` bit 0, set by `0x6a87f0`): drives the leaf-area
 //!   override (`terrain_stream`) and the `ZONE_CHANGED` family's indoor election + naming
 //!   (`area`). The legs differ exactly where the abbey-yard bug lived — a doorway portal under
 //!   the eye seeds the render flood without making you indoors.
@@ -119,7 +119,7 @@ pub struct WmoInteriorKeys {
 
 /// The probe height above the player's feet (yd) for the RENDER/AUDIO seed's down-ray
 /// ([`down_ray_seeds`] — chest/head-ish, the listener). The faces-only AREA/light legs do NOT use
-/// it: the client casts those from the position itself (`zonetext-indoor-bit.md` (b)), and lifting
+/// it: the client casts those from the position itself (`0x6a8a20`), and lifting
 /// the origin breaks the terrain race exactly where a hillside is buried ABOVE an interior floor —
 /// NSabbey's NW room sits cut into the hill (buried terrain local z ≈ 2.0 vs floor 0.3), so a
 /// feet+1.7 origin saw the buried terrain as the nearest surface and read the room as outdoors
@@ -131,8 +131,8 @@ pub const INTERIOR_PROBE_HEIGHT: f32 = 1.7;
 /// hair. Far below any buried-terrain scale — semantically still "cast from the position".
 pub(crate) const POSITION_PROBE_LIFT: f32 = 0.1;
 
-/// The **zone-text/area** indoor claim — the player's CGLight-node twin (wow-re
-/// `zonetext-indoor-bit.md`, `[node+0x90]` bit 0): the WMOAreaTable keys of the group owning the
+/// The **zone-text/area** indoor claim — the player's CGLight-node twin (`[node+0x90]` bit 0,
+/// `0x6a87f0`): the WMOAreaTable keys of the group owning the
 /// nearest **face** under the player, faces-only ([`area_down_ray`] — no portal leg, EXTERIOR
 /// groups excluded, terrain race, 1000 yd), or `None` = outdoors. This — not the render/audio
 /// seed [`CurrentWmoInterior`] — drives the leaf-area override (`terrain_stream`) and the
@@ -154,8 +154,8 @@ pub(super) fn track_area_interior(
     adt_tiles: Res<Assets<AdtTile>>,
     mut current: ResMut<CurrentAreaInterior>,
 ) {
-    // Cast from the POSITION (float-safety lift only) — the client's recipe (`zonetext-indoor-bit`
-    // (b)); a lifted origin sees hillside buried ABOVE an interior floor and misreads outdoors
+    // Cast from the POSITION (float-safety lift only) — the client's recipe (`0x6a8a20`); a lifted
+    // origin sees hillside buried ABOVE an interior floor and misreads outdoors
     // (see [`POSITION_PROBE_LIFT`]).
     let eye_world = if let Some(body) = viewer.at {
         body + Vec3::Y * POSITION_PROBE_LIFT
@@ -206,8 +206,8 @@ pub(super) fn track_area_interior(
 
 /// Track which WMO interior the **player** is in: run every placed building's down-ray and
 /// publish the first interior claim. The probe is the player's position, not the camera — the
-/// client's audio listener sits at the character (`SoundListenerAtCharacter` default "1", wow-re
-/// `benilla-pins.md` B10) and the interior identity is character state (the minimap zone name),
+/// client's audio listener sits at the character (`SoundListenerAtCharacter` default "1",
+/// `0x457890`) and the interior identity is character state (the minimap zone name),
 /// so a camera swinging through a wall must not flap the chapel's ambience (director-caught
 /// flicker, 2026-07-03). The camera is the fallback before login / detached free-fly.
 /// Independent of the PVS compute (which early-outs on portal-less models — a portal-less hut
@@ -279,10 +279,10 @@ const UNIT_ROOM_RESAMPLE_DIST_SQ: f32 = 0.25 * 0.25;
 /// raced) cast from the unit's own position.
 ///
 /// The leg is the **position-cast faces** one, not the render seed's lifted eye + portal race: the
-/// client casts its position legs from the position itself (`zonetext-indoor-bit.md` (b)), and a unit
+/// client casts its position legs from the position itself (`0x6a8a20`), and a unit
 /// is a position, not a camera. Which leg the reference's *own* per-unit liquid depth uses — and
-/// whether it scopes to the containing GROUP rather than the placement — is the open half of the
-/// wow-re dispatch 0696 re-asked; this is the claim that makes the query *scoped at all*, and it is
+/// whether it scopes to the containing GROUP rather than the placement — is the open half of
+/// decision 0696, re-asked; this is the claim that makes the query *scoped at all*, and it is
 /// re-pointable at one call site when that lands.
 pub(super) fn track_unit_interiors(
     mut commands: Commands,
@@ -430,10 +430,10 @@ fn room_cast(
 /// whose flags carry neither EXTERIOR (`0x8`) nor EXTERIOR_LIT (`0x40`) ([`area_down_ray`], faces
 /// only, terrain-raced). This is the ENTITY light classifier's predicate (`crate::interior`): the
 /// client's classify `0x6a87f0` forks the node's LIGHTING class on `MOGI & 0x48` — both bits →
-/// the exterior leg (`or [node+0xc],0x4`: sun diffuse, MCSH 2.5/0.5 intensity, scene fog; wow-re
-/// `m2-interior-doodad-base-light.md`, `unit-m2-shader-light.md`) — which DIVERGES from the
-/// zone-text indoor bit (`0x8` alone) exactly on the `0x40`-only city street groups: Stormwind's
-/// pavement and Orgrimmar's valleys are "indoors" for area naming yet sunlit (decision 0475; keying
+/// the exterior leg (`or [node+0xc],0x4`: sun diffuse, MCSH 2.5/0.5 intensity, scene fog) — which
+/// DIVERGES from the zone-text indoor bit (`0x8` alone) exactly on the `0x40`-only city street
+/// groups: Stormwind's pavement and Orgrimmar's valleys are "indoors" for area naming yet sunlit
+/// (decision 0475; keying
 /// the light off the zone-text bit flat-lit every unit in those cities). The face geometry is
 /// robust exactly where group BOUNDING BOXES are not — a room's box bottom can float above its own
 /// walkable floor when the floor polys belong to a neighbouring group (NSabbey group 3: box min z
@@ -487,19 +487,18 @@ pub enum IndoorVerdict {
     /// No WMO face claim under the position — standing on/over open terrain: the exterior law
     /// with the MCSH-driven 2.5/0.5 intensity.
     Outdoors,
-    /// The nearest claim is an outdoor-class WMO face (`MOGI & 0x48` — a street, deck, porch):
-    /// the exterior law at the FORCED-LIT 2.5 target — the terrain MCSH beneath the building is
-    /// NOT sampled. Byte-verified (0477 interim → 0480 confirmed; wow-re `unit-wmo-mcsh-gate.md`,
-    /// the §5 that CORRECTED `unit-light-combine-storm.md` a4): the shared down-ray attach
+    /// The nearest claim is an outdoor-class WMO face (`MOGI & 0x48` — a street, deck, porch): the
+    /// exterior law at the FORCED-LIT 2.5 target — the terrain MCSH beneath the building is NOT
+    /// sampled. Byte-verified (0477 interim → 0480 confirmed): the shared down-ray attach
     /// `0x6a8a20` sets skip-shadow `[node+0xd]|=0x2` on its WMO branch for EVERY node subclass
-    /// (`0x6a8bc7` — a4's "doodad-only" reading was wrong) and clears it on the terrain branch;
-    /// the exterior intensity leg then commits constant 2.5 when set, samples MCSH only when
-    /// clear. The director's Booty Bay A/B (deck NPCs sunlit over shadowed buried terrain) was
+    /// (`0x6a8bc7` — an earlier "doodad-only" reading was wrong) and clears it on the terrain
+    /// branch; the exterior intensity leg then commits constant 2.5 when set, samples MCSH only
+    /// when clear. The director's Booty Bay A/B (deck NPCs sunlit over shadowed buried terrain) was
     /// this gate, not a decode error.
     OutdoorsOnWmo,
     /// Indoors, but the footprint lane yields the day/night pair instead of a bake: the render-mesh
     /// ray missed every MOCV face, or the hit face's MOPY bit 0x1 selects the exterior colours
-    /// (wow-re `m2-interior-doodad-base-light` §11's binary selector). The plain matte variant.
+    /// (`0x6a8410`). The plain matte variant.
     DayNight,
     /// Indoors over baked floor: the hit's barycentric MOCV bytes (the floor-168/cap-96 inputs)
     /// plus the hit group's MOLR lobes in world (Bevy) space, colour × intensity.
@@ -516,8 +515,8 @@ pub enum IndoorVerdict {
 /// the verdict regardless of instance iteration order). An outdoor-class winner is
 /// [`IndoorVerdict::OutdoorsOnWmo`]; an interior winner runs the FOOTPRINT ray on the same
 /// placement's render mesh + baked MOCV (the entity node's env-update attach `0x6717d0` →
-/// `0x69e4c0` — wow-re `wmo-lit-selector.md`, trace-decisive on the abbey INNBENCH draws). The
-/// MOLR gate is the FOOTPRINT hit's group — the group whose bake the sample took (the byte
+/// `0x69e4c0` — trace-decisive on the abbey INNBENCH draws). The MOLR gate is the FOOTPRINT
+/// hit's group — the group whose bake the sample took (the byte
 /// plumbing between the two rays is OPEN; the abbey benches satisfy both readings).
 ///
 /// `anchor_world` is **the attach's own anchor**, not "the position": the node position for
@@ -644,9 +643,9 @@ pub fn indoor_verdict_at<'a, K: Copy>(
 /// bytes: the reference's `0x6a77e0` consumes a byte colour), and whether the face's MOPY bit 0x1
 /// selects the day/night lane. The candidate set is pre-filtered at parse (COLLISION/VISITED faces
 /// rejected, the client's BSP-walk mask 0x88 — `wmo_group_footprint_tris`); an exact-distance tie
-/// keeps the LATER face, the client's inclusive `test ah,0x41; jp` compare (wow-re
-/// `unit-light-combine-storm.md` — its BSP traversal order is not modelled here, so which face is
-/// "later" can differ; after the 0x88 filter no observed floor still carries coplanar ties).
+/// keeps the LATER face, the client's inclusive `test ah,0x41; jp` compare (`0x6bc780` — its BSP
+/// traversal order is not modelled here, so which face is "later" can differ; after the 0x88 filter
+/// no observed floor still carries coplanar ties).
 pub(super) fn footprint_sample(
     model: &WmoModel,
     probe_local: [f32; 3],
