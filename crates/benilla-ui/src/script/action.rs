@@ -222,8 +222,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetActionText(slot) → the MACRO's own name, or nil. 1-based (`0x4e7072 dec eax`).
     //
-    // **The classification is binary, not four-way** (`0x4e7050`, wow-re
-    // `bag-language-combat-action-bindings.md` §4, §5-cross-checked). The binding tests exactly
+    // **The classification is binary, not four-way** (`0x4e7050`). The binding tests exactly
     // one thing — top nibble `raw & 0xf0000000 == 0x40000000` — and **spell, item and empty all
     // collapse to the identical nil arm**. It settles nothing about how spells or items are
     // tagged, because it never asks.
@@ -330,7 +329,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `ChangeActionBarPage()` — four instructions in the reference (`0x4e7650`: `mov ecx,0xd4;
-    // call FrameScript_SignalEvent; xor eax,eax; ret` — wow-re `action-bar-toggles.md` §6, `ui.md`):
+    // call FrameScript_SignalEvent; xor eax,eax; ret`):
     // it fires `ACTIONBAR_PAGE_CHANGED` and does NOTHING else. The page is FrameXML state
     // (`CURRENT_ACTIONBAR_PAGE`, which `ActionBar_PageUp/Down` and the SHIFT-n bindings write before
     // calling this), the buttons repaint from `ActionButton_OnEvent`, and the up-arrow's OnEvent
@@ -584,7 +583,7 @@ mod tests {
         assert_eq!(uses(&mut s), vec![(10, false)]);
     }
 
-    // ── `GetActionText` (wow-re `bag-language-combat-action-bindings.md` §4) ────────────────────
+    // ── `GetActionText` (`0x4e7050`) ────────────────────────────────────────────────────────────
 
     /// The classification is **binary**: macro or not. A SPELL slot and an ITEM slot answer the
     /// identical `nil` an empty slot does — the binding tests one nibble and asks nothing else.

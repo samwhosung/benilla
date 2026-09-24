@@ -1,6 +1,5 @@
-//! The frame `Backdrop` mechanism — byte-faithful to `wow-5875-re`'s
-//! `system/ui/scratch/backdrop-mechanism.md` (the RE derivation; every constant below cites its
-//! section). A backdrop is the tiled bg + 8-piece border a `<Backdrop>` element or Lua `SetBackdrop`
+//! The frame `Backdrop` mechanism — byte-faithful to the 1.12.1 client. A backdrop is the tiled
+//! bg + 8-piece border a `<Backdrop>` element or Lua `SetBackdrop`
 //! installs on a frame (the tooltip/dialog/panel plate). This module owns the **data** ([`Backdrop`])
 //! and the **geometry** ([`pieces`]); the Lua verbs live in [`super::object`] and the XML parse in
 //! [`crate::loader`]. The renderer is the app's job — [`pieces`] hands it screen-space quads with
@@ -9,12 +8,12 @@
 use crate::layout::Rect;
 
 /// The default `edgeSize`, **logical** px: the ctor writes device `DAT_0081c9b0 = 0.025`, which is
-/// logical 32 through the ×1/1024·0.8 logical→device transform (spec §Backdrop-object, `+0x48`, and
+/// logical 32 through the ×1/1024·0.8 logical→device transform (`+0x48`, and
 /// the usage string `edgeSize = 32`). Our layout is already in logical px, so we carry 32 directly.
 pub const DEFAULT_EDGE_SIZE: f32 = 32.0;
 
 /// The `BackgroundInsets` — the bg texture is the frame rect inset by these (the border is *not*
-/// inset; it sits flush inside the frame rect). Default all 0 (spec §1). Field order matches the
+/// inset; it sits flush inside the frame rect). Default all 0 (`0x77e5f0`). Field order matches the
 /// struct offsets `+0x50 top / +0x54 bottom / +0x58 left / +0x5c right`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Insets {
@@ -24,9 +23,10 @@ pub struct Insets {
     pub bottom: f32,
 }
 
-/// A frame's installed backdrop (spec §Backdrop-object: the 0x68-byte struct at `frame+0x1ac`). The
+/// A frame's installed backdrop (the 0x68-byte struct at `frame+0x1ac`). The
 /// field set is *exactly* what the compiled reader accepts — `bgFile, edgeFile, tile, tileSize,
-/// edgeSize, insets` — plus the two colors (spec §1 "Field-set summary"). Colors default to opaque
+/// edgeSize, insets` — plus the two colors; no other keys exist in the compiled reader
+/// (`0x7776e0`). Colors default to opaque
 /// **white** (the ctor `+0x60/+0x64 = 0xffffffff`); the XML `<Color>`/`<BorderColor>` *parser*
 /// separately defaults a *present-but-partial* element to black, which the loader applies.
 #[derive(Clone, Debug, PartialEq)]
@@ -37,7 +37,8 @@ pub struct Backdrop {
     pub edge_file: Option<String>,
     /// `tile` (`+0x40`): tile the bg (else stretch it). Default false.
     pub tile: bool,
-    /// `tileSize` (`+0x4c`), logical px; `0.0` ⇒ use `edge_size` as the tile period (spec §3). Default 0.
+    /// `tileSize` (`+0x4c`), logical px; `0.0` ⇒ use `edge_size` as the tile period (`0x77f0c0`).
+    /// Default 0.
     pub tile_size: f32,
     /// `edgeSize` (`+0x48`), logical px — the border piece size and the edge tiling period. Default 32.
     pub edge_size: f32,
@@ -51,7 +52,7 @@ pub struct Backdrop {
 
 impl Default for Backdrop {
     fn default() -> Self {
-        // The ctor (spec §Backdrop-object, 0x77e5f0): files empty, tile 0, tileSize 0,
+        // The ctor (`0x77e5f0`): files empty, tile 0, tileSize 0,
         // edgeSize logical 32, insets 0, both colors 0xffffffff.
         Self {
             bg_file: None,
@@ -77,7 +78,7 @@ impl Backdrop {
 
 /// One drawable backdrop piece (the bg, or one of the 8 border pieces). Carries four explicit corner
 /// **positions** (not a rect) so the shipped BR-inset bug's slant is representable, plus four explicit
-/// per-corner **UVs** (the TOP/BOTTOM edges are rotated 90°, spec §3). Both arrays are in
+/// per-corner **UVs** (the TOP/BOTTOM edges are rotated 90°, `0x77f0c0`). Both arrays are in
 /// `[top-left, top-right, bottom-right, bottom-left]` screen order (y-up, the layout convention).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BackdropPiece {
@@ -87,7 +88,7 @@ pub struct BackdropPiece {
     pub uvs: [[f32; 2]; 4],
     /// The texture needs REPEAT (wrap) addressing — the edge strips run UVs `[0..N]` and a tiled bg
     /// `[0..w/period]`. The corners' UVs stay in `[0,1]` but share the edge texture, so they carry
-    /// `true` too (one texture identity ⇒ the 9 pieces batch, spec §2's shared edge texture).
+    /// `true` too (one texture identity ⇒ the 9 pieces batch, `0x77e8d0`'s shared edge texture).
     pub tile: bool,
     /// The bg piece (`true`) draws with [`Backdrop::bg_file`]/`bg_color`; a border piece (`false`)
     /// with `edge_file`/`border_color`. The app resolves the path + tint from the [`Backdrop`].
@@ -155,13 +156,13 @@ fn aa_corners(x0: f32, x1: f32, y_bottom: f32, y_top: f32) -> [[f32; 2]; 4] {
 
 /// Compute the backdrop's drawable pieces for a frame whose resolved rect is `frame` (y-up), in the
 /// client's paint order: the bg (layer BACKGROUND) first, then the 8 border pieces (layer BORDER) —
-/// spec §2. Empty when neither file is set. All geometry is spec §2; all UVs spec §3.
+/// `0x77e8d0`. Empty when neither file is set. All geometry is `0x77e8d0`; all UVs `0x77f0c0`.
 pub fn pieces(frame: Rect, bd: &Backdrop) -> Vec<BackdropPiece> {
     let mut out = Vec::with_capacity(9);
     let e = bd.edge_size;
     let (l, r, b, t) = (frame.left, frame.right, frame.bottom, frame.top);
 
-    // ── The background piece (spec §2 bg row) ──────────────────────────────────────────────────
+    // ── The background piece (`0x77e8d0`, the bg anchor row) ───────────────────────────────────
     if bd.has_bg() {
         let (il, ir, it, ib) = (
             bd.insets.left,
@@ -169,8 +170,8 @@ pub fn pieces(frame: Rect, bd: &Backdrop) -> Vec<BackdropPiece> {
             bd.insets.top,
             bd.insets.bottom,
         );
-        // The four SetPoint anchors, y-up (spec §2 bg row). **⚠ BR uses the TOP inset**, not bottom
-        // — the shipped 1.12.1 bug (spec §2 "The BR-inset quirk", bytes `8b 46 50` @ 0x77e9ae:
+        // The four SetPoint anchors, y-up. **⚠ BR uses the TOP inset**, not bottom
+        // — the shipped 1.12.1 bug ("the BR-inset quirk", bytes `8b 46 50` @ 0x77e9ae:
         // `SetPoint(8, frame+0x24, 8, −right, +top, 0)` loads `+0x50` = top, not `+0x54` = bottom).
         // Invisible whenever top==bottom (every shipping backdrop); reproduced for fidelity.
         let corners = [
@@ -179,7 +180,7 @@ pub fn pieces(frame: Rect, bd: &Backdrop) -> Vec<BackdropPiece> {
             [r - ir, b + it], // BR ← frame BR (−right, +top)  ⚠ bug: top inset
             [l + il, b + ib], // BL ← frame BL (+left, +bottom)
         ];
-        // Tiled bg UVs (spec §3 bg row): period = tileSize, or edgeSize when tileSize==0. When not
+        // Tiled bg UVs (`0x77f0c0`): period = tileSize, or edgeSize when tileSize==0. When not
         // tiled, no SetTexCoord runs and the bg keeps [0,1] (stretch).
         let uvs = if bd.tile {
             let period = if bd.tile_size != 0.0 { bd.tile_size } else { e };
@@ -198,10 +199,10 @@ pub fn pieces(frame: Rect, bd: &Backdrop) -> Vec<BackdropPiece> {
         });
     }
 
-    // ── The 8 border pieces (spec §2 edge rows + §3 UV rows) ───────────────────────────────────
+    // ── The 8 border pieces (`0x77e8d0` edge rows + `0x77f0c0` UV rows) ────────────────────────
     if bd.has_border() {
-        // Run lengths (spec §3): the edge strips tile `run` periods between the two corner squares
-        // (no upper clamp — they TILE, never stretch); clamped to 0 below 2·edgeSize.
+        // Run lengths (`0x77f0c0`): the edge strips tile `run` periods between the two corner
+        // squares (no upper clamp — they TILE, never stretch); clamped to 0 below 2·edgeSize.
         let w_run = ((r - l) / e - 2.0).max(0.0);
         let h_run = ((t - b) / e - 2.0).max(0.0);
 
@@ -408,7 +409,7 @@ mod tests {
         assert_eq!(br.uvs[2], [1.0, 1.0]);
     }
 
-    // The BR-inset quirk (spec §2 ⚠, bytes 8b 46 50 @ 0x77e9ae): with top != bottom the bg's
+    // The BR-inset quirk (bytes 8b 46 50 @ 0x77e9ae): with top != bottom the bg's
     // BOTTOMRIGHT corner rides the TOP inset, not the bottom. Asymmetric insets make it assertable.
     #[test]
     fn bg_bottomright_rides_top_inset_bug() {
@@ -433,7 +434,8 @@ mod tests {
     }
 
     // Run clamp at tiny sizes: a frame narrower/shorter than 2·edgeSize clamps both runs to 0 (no
-    // negative tiling), so the edge strips carry a zero-length run (spec §3, "clamped to 0 if < 0").
+    // negative tiling), so the edge strips carry a zero-length run (`0x77f0c0`, clamped to 0 if
+    // < 0).
     #[test]
     fn run_clamps_to_zero_below_two_edges() {
         // 20×20 frame, edgeSize 16 ⇒ width/16 - 2 = -0.75 → 0.

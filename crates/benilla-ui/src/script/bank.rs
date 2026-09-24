@@ -131,8 +131,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // BankButtonIDToInvSlotID(id, isBag) — the pure button→live-slot map (module doc).
     //
-    // CARVED (`0x4f8530`, 118 bytes; wow-re `system/ui/scratch/bank-button-invslot-law.md`, §5
-    // trio + orchestrator byte arbitration 2026-08-31). Three findings, and two of them corrected
+    // `0x4f8530` (118 bytes). Three findings, and two of them corrected
     // this binding:
     //
     // 1 · **The arithmetic is `+59` / `+39`, and the bag arm takes the CONTAINER id 5..10** — not
@@ -352,8 +351,8 @@ mod tests {
     /// 39..62, bank bags 63..68).
     ///
     /// The bag arm's numbering is checked here because getting it wrong reads six slots off the
-    /// end of the band and draws an empty bag row — which is what this binding did until the
-    /// `0x4f8530` carve.
+    /// end of the band and draws an empty bag row — which is what this binding did before
+    /// `0x4f8530` was read.
     #[test]
     fn bank_button_to_inv_slot() {
         let s = UiScript::new().unwrap();
@@ -390,8 +389,7 @@ mod tests {
         }
     }
 
-    /// The three things the `0x4f8530` carve corrected, each of which this binding had wrong or
-    /// invented (wow-re `scratch/bank-button-invslot-law.md`).
+    /// The three things `0x4f8530` corrected, each of which this binding had wrong or invented.
     #[test]
     fn bank_button_to_inv_slot_follows_the_carved_abi() {
         let s = UiScript::new().unwrap();

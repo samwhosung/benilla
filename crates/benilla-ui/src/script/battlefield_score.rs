@@ -1,18 +1,17 @@
-//! The battleground **scoreboard** family (decision 1972; wow-re
-//! `system/ui/scratch/battlefield-verb-family.md` §2.3, §3.7–3.9, §5.1, §5.3, §6): the eleven
+//! The battleground **scoreboard** family (decision 1972): the eleven
 //! verbs the stock `WorldStateFrame.lua` score frame calls, over a board the app pushes.
 //!
 //! ## What is the app's and what is the VM's
 //!
 //! The wire (`MSG_PVP_LOG_DATA`) carries rows in wire order with GUIDs; the reference resolves
-//! every name through its name cache first (§6.1 — the board is not rebuilt, and the event not
-//! fired, until the last name arrives) and derives each row's **team** from the resolved race
-//! (§6.2: `0` Horde, `1` Alliance, `-1` neither). That resolution is the app's — it owns the name
+//! every name through its name cache first (`0x4aa580` — the board is not rebuilt, and the event
+//! not fired, until the last name arrives) and derives each row's **team** from the resolved race
+//! (`0` Horde, `1` Alliance, `-1` neither). That resolution is the app's — it owns the name
 //! cache and the race tables — so the app pushes [`BattlefieldScores`] with names, teams, race and
 //! class strings already in place. The VM owns what the reference's `0x4aa200` rebuild owns: the
 //! faction filter, the sort, the filtered count, and the getters' shapes.
 //!
-//! ## The sort, and the filter that is a sort (§6.2.1, §6.3)
+//! ## The sort, and the filter that is a sort (`0x4aa350`, `0x4aa200`)
 //!
 //! Rows are ordered by: the filter's team first (only when a filter is set), then killing blows
 //! descending, deaths ascending, honor gained descending, name ascending. `GetNumBattlefieldScores`
@@ -20,7 +19,7 @@
 //! by the **wire** count — an index past the filtered count still answers a real row of the other
 //! team, exactly as the reference does, because the filter sorts rather than compacts.
 //!
-//! Every raise is the reference's own `Usage:` (§3.1); `SetBattlefieldScoreFaction` never raises.
+//! Every raise is the reference's own `Usage:`; `SetBattlefieldScoreFaction` never raises.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -75,13 +74,13 @@ pub(crate) struct ScoreBoard {
     /// `SetBattlefieldScoreFaction`'s store: `-1` every team (the reset value), `0`, `1`.
     pub(crate) filter: i32,
     pub(crate) order: Vec<usize>,
-    /// The filtered count (§6.3) — the rows whose team equals the filter, or all with `-1`.
+    /// The filtered count (`0xb6ebc4`) — the rows whose team equals the filter, or all with `-1`.
     pub(crate) filtered: usize,
 }
 
 impl Default for ScoreBoard {
     /// The filter starts at `-1`, every team — the value the status-3 arm resets it to
-    /// (`or ecx,-1; call 0x4aa5a0`, §4.2).
+    /// (`or ecx,-1; call 0x4aa5a0`).
     fn default() -> Self {
         Self {
             scores: BattlefieldScores::default(),
@@ -93,7 +92,7 @@ impl Default for ScoreBoard {
 }
 
 impl ScoreBoard {
-    /// `0x4aa200`'s recount and sort (§6.2/§6.2.1), over the pushed rows.
+    /// `0x4aa200`'s recount and sort, over the pushed rows.
     fn rebuild(&mut self) {
         let rows = &self.scores.rows;
         let filter = self.filter;
@@ -120,7 +119,7 @@ impl ScoreBoard {
 
     fn row(&self, index_1based: i32) -> Option<&BattlefieldScoreRow> {
         let i = usize::try_from(index_1based).ok()?.checked_sub(1)?;
-        // Bounded by the WIRE count, over the sorted order (§6.3).
+        // Bounded by the WIRE count (`0xb6ebc0`), over the sorted order.
         self.order.get(i).map(|&r| &self.scores.rows[r])
     }
 }
@@ -128,7 +127,7 @@ impl ScoreBoard {
 impl super::UiScript {
     /// Push the resolved board. The filter is the VM's and survives a push; the order is rebuilt.
     /// The app fires `UPDATE_BATTLEFIELD_SCORE` itself after this, so the reference's ordering
-    /// against `UPDATE_BATTLEFIELD_STATUS` on the status-3 message holds (§4.2).
+    /// against `UPDATE_BATTLEFIELD_STATUS` on the status-3 message holds (`0x4aaa5a`/`0x4aab05`).
     pub fn set_battlefield_scores(&mut self, scores: BattlefieldScores) {
         let mut model = self.model_mut();
         model.battlefield_board.scores = scores;
@@ -180,7 +179,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetBattlefieldScore(index)` — nine values on every leg (§3.7): name, killingBlows,
+    // `GetBattlefieldScore(index)` — nine values on every leg (`0x4ab9d0`): name, killingBlows,
     // honorableKills, deaths, honorGained, faction, rank, race, class; the fail leg is
     // `nil, 0,0,0,0,0,0, nil, nil`. Bounded by the wire count over the sorted order.
     g.set(
@@ -237,7 +236,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // `SetBattlefieldScoreFaction([faction])` — never raises: a non-number means -1; only
     // {-1, 0, 1} store, and a stored value recounts, re-sorts and fires UPDATE_BATTLEFIELD_SCORE
-    // (§3.8) — here on the deferred lane, the next dispatch.
+    // (`0x4abc90`) — here on the deferred lane, the next dispatch.
     g.set(
         "SetBattlefieldScoreFaction",
         lua.create_function(|lua, faction: Option<Value>| {
@@ -293,7 +292,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // `GetBattlefieldStatData(playerIndex, statIndex)` — both required numbers; one number on
     // every leg: the row's stat, or 0 for a bad row or a stat index outside 1..=8 (the reference
-    // admits 9 and reads one dword past its block, §3.9's anomaly — ours answers 0 there).
+    // (`0x4abdc0`) admits 9 and reads one dword past its block — ours answers 0 there).
     g.set(
         "GetBattlefieldStatData",
         lua.create_function(|lua, (player, stat): (Value, Value)| {
@@ -312,7 +311,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `RequestBattlefieldScoreData()` — 0 args, 0 returns; the app sends `MSG_PVP_LOG_DATA` empty
-    // under the client's 5000 ms throttle (§5.1).
+    // under the client's 5000 ms throttle (`0x4aa170`).
     g.set(
         "RequestBattlefieldScoreData",
         lua.create_function(|lua, ()| {
@@ -322,7 +321,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `LeaveBattlefield()` — a gate, then a payload (§5.3): nothing at all until the scoreboard's
+    // `LeaveBattlefield()` — a gate, then a payload (`0x4abe66`): nothing at all until the
+    // scoreboard's
     // "ended" byte has arrived; then `CMSG_LEAVE_BATTLEFIELD` with the active slot's map (the
     // app's, which holds the queue).
     g.set(
@@ -389,8 +389,9 @@ mod tests {
         s
     }
 
-    /// The sort law (§6.2.1): killing blows descending, deaths ascending, honor descending, name;
-    /// a filter puts its team first and shrinks the count without compacting the array (§6.3).
+    /// The sort law (`0x4aa350`): killing blows descending, deaths ascending, honor descending,
+    /// name; a filter puts its team first and shrinks the count without compacting the array
+    /// (`0xb6ebc4`/`0xb6ebc0`).
     #[test]
     fn the_board_sorts_like_the_client_and_the_filter_is_a_sort() {
         let s = board();

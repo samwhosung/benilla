@@ -30,7 +30,7 @@
 //! anything. [`super::UiScript::take_auction_sorts`] hands the click to the app, which owns the
 //! stacks and pushes both the reordered rows and the stack back. The selection rides through all
 //! of it untouched, because it is stored as an auction **id** and only resolved to a row position
-//! when something asks (wow-re §5 TU-5).
+//! when something asks (`0x4cfda0`/`0x4cfec0`).
 //!
 //! ## The deposit is computed here, and it is the *client's* arithmetic
 //!
@@ -53,7 +53,8 @@ pub const BIDDER: usize = 1;
 pub const OWNER: usize = 2;
 
 /// The eight sort keys the reference's headers pass. Order here is the API's, not the comparator's
-/// (decision 1511's INTERIM: the comparator's own mode order is pinned to the in-flight wow-re §5).
+/// (decision 1511's INTERIM: the comparator's own mode order is pinned to an in-flight
+/// investigation).
 pub const SORT_KEYS: [&str; 8] = [
     "level", "quality", "bid", "duration", "buyout", "status", "name", "seller",
 ];
@@ -239,7 +240,7 @@ impl super::UiScript {
         let mut model = self.model_mut();
         // Only opening or closing the session drops the selection. A new PAGE does not, and
         // neither does a re-sort: the selection is an auction **id**, so it survives the row
-        // moving and simply stops resolving if the auction leaves the page (wow-re §5 TU-5).
+        // moving and simply stops resolving if the auction leaves the page (`0x4cfda0`/`0x4cfec0`).
         if model.auction.is_none() || state.is_none() {
             model.auction_selected = [0; 3];
         }
@@ -390,7 +391,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(r) = row else {
                 // The null tail is TWELVE values, not a lone nil — an unknown type string, an
                 // out-of-range index and an item-cache miss all share it, with a hard `count = 1`
-                // and `quality = -1` (wow-re §5 TU-3, one shared exit at `0x4cf1ec`). Callers
+                // and `quality = -1` (one shared exit at `0x4cf1ec`). Callers
                 // destructure all twelve unguarded, so a short return throws.
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,         // name
@@ -461,7 +462,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row_at(&model, &kind, index).and_then(|r| r.link)
             };
-            // A miss returns NO values at all — not nil (wow-re §5 TU-3). `DressUpItemLink(nil)`
+            // A miss returns NO values at all — not nil (`0x4cf45b`). `DressUpItemLink(nil)`
             // and `nil` reaching a chat insert behave differently from an empty argument list.
             Ok(match link {
                 Some(l) => MultiValue::from_vec(vec![Value::String(lua.create_string(&l)?)]),
@@ -472,7 +473,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetSelectedAuctionItem(type) → the 1-based selected row, or 0 for none.
     //
-    // Stored as the **auction id**, resolved to a row position on the way out (wow-re §5 TU-5).
+    // Stored as the **auction id**, resolved to a row position on the way out
+    // (`0x4cfda0`/`0x4cfec0`).
     // That indirection is the whole reason a re-sort cannot silently move the selection onto a
     // different auction: the id follows the row wherever the comparator puts it, and an auction
     // that has left the page simply stops resolving instead of pointing at its neighbour.
@@ -613,7 +615,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `0x4cfab0`: no class (index out of range, or its `0x807060` flag 0) → nothing; a FOUND
     // subclass offers the list only with `ItemSubClass.Flags & 0x200` (pushed as
     // `has_inv_types`); and a subclass index the scan runs off the end of skips that gate and
-    // offers all fourteen (wow-re auction-house §9.3 — the exhaust edge lands past the test).
+    // offers all fourteen (the exhaust edge at `0x4cfb61` lands past the gate at `0x4cfb63`).
     g.set(
         "GetAuctionInvTypes",
         lua.create_function(|lua, (class_index, sub_index): (usize, usize)| {
@@ -1137,7 +1139,8 @@ mod tests {
 
     /// `0x4cf9c0` / `0x4cfab0` return nothing for a class whose `0x807060` flag is 0, and
     /// `0x4cfab0` gates a FOUND subclass on `ItemSubClass.Flags & 0x200` but pushes all fourteen
-    /// when the scan runs off the end (wow-re auction-house §9.1, §9.3).
+    /// when the scan runs off the end (the exhaust edge at `0x4cfb61` lands past the gate at
+    /// `0x4cfb63`).
     #[test]
     fn subclass_and_inv_type_menus_follow_the_reference_gates() {
         let mut s = UiScript::new().unwrap();

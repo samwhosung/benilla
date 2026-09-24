@@ -1,5 +1,5 @@
-//! The battleground **position** family (decision 1980; wow-re
-//! `system/ui/scratch/worldmap-arrow-and-positions.md` §3): the six verbs the stock
+//! The battleground **position** family (decision 1980; fed by the wire handler `0x4aad40` for
+//! opcode `0x2E9`): the six verbs the stock
 //! `WorldMapFrame.lua` and `Blizzard_BattlefieldMinimap.lua` poll to place teammates and the
 //! flag carrier on the map.
 //!

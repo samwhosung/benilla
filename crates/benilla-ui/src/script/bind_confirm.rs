@@ -24,8 +24,7 @@
 //! it — declining simply drops the question.
 //!
 //! All three decisions are **client-local**: the client reads the cached item template's `bonding`
-//! and defers its own send. No packet raises any of them (VERIFIED, wow-re
-//! `system/object-layer/scratch/bind-confirm-law.md`).
+//! and defers its own send. No packet raises any of them.
 //!
 //! The app owns the pending records, so this module holds only the intents.
 

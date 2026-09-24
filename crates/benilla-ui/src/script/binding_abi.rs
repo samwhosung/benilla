@@ -1,7 +1,6 @@
 //! The **registered-binding argument/error ABI** — the marshalling contract every one of build
 //! 5875's ~700 registered Lua C-bindings opens with, in one place because getting it wrong is
-//! wrong 700 times (wow-re `ui/scratch/binding-arg-error-contract.md`, §5-cross-checked with
-//! orchestrator byte-arbitration).
+//! wrong 700 times.
 //!
 //! ## The three helpers the reference uses, and what they accept
 //!
@@ -20,8 +19,7 @@
 //! `0x6f4940` is `luaL_error`, and it **does not return**: `luaL_where` + `lua_pushvfstring` +
 //! `lua_concat` + `lua_error`, whose own chain (`0x6f4440` → `0x6fc780` → `0x6f5d80`) ends in a
 //! CRT `longjmp` or `exit(1)` on both legs. The `xor eax,eax; ret` that MSVC emits after every
-//! such call inside a binding is **unreachable boilerplate**, not a "returns zero values" arm — a
-//! reading five committed wow-re notes had inverted, corrected at the bytes on 2026-08-11.
+//! such call inside a binding is **unreachable boilerplate**, not a "returns zero values" arm.
 //!
 //! So a binding's bad-argument path **abandons the caller's statement** and unwinds to the
 //! enclosing protected call. It returns neither `nil` nor zero values, and a client that answers
@@ -75,8 +73,7 @@ pub(crate) fn number_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Resu
 /// a negative and NaN are false, and `1`, `0.5` and `"1"` are true.
 ///
 /// The distinction from [`number_arg`] is the whole point: shape A *raises* `Usage:` on a
-/// non-number, shape D shrugs. Which shape an argument takes is per binding — wow-re
-/// `ui/scratch/tooltip-nameonly-p4-census.md` §3 for this one.
+/// non-number, shape D shrugs. Which shape an argument takes is per binding.
 pub(crate) fn positive_number_flag(lua: &Lua, v: Value) -> mlua::Result<bool> {
     Ok(lua.coerce_number(v)?.is_some_and(|n| n > 0.0))
 }
@@ -86,9 +83,9 @@ pub(crate) fn positive_number_flag(lua: &Lua, v: Value) -> mlua::Result<bool> {
 /// unparseable string all land on **`0.0`** and the binding completes.
 ///
 /// This is the counterpart to [`number_arg`] (shape A, which raises `Usage:`), and which shape a
-/// given argument takes is **per binding, not a global law** — wow-re
-/// `scratch/numeric-arg-coercion-law.md`, which censused all 408 widget-registrar entries and
-/// found 110 gated positions against 64 ungated ones. The clustering is the useful part: C is the
+/// given argument takes is **per binding, not a global law** — a census of all 408
+/// widget-registrar entries found 110 gated positions against 64 ungated ones. The clustering is
+/// the useful part: C is the
 /// colour/coordinate tuples (`Set*Color`'s r/g/b, `SetTexCoord`, `SetPosition`), A is the single
 /// scalar setters (`SetAlpha`, `SetWidth`, `SetValue`, `SetID`). Do not reach for this one because
 /// an argument "looks optional" — check the census.
@@ -122,7 +119,7 @@ pub(crate) fn string_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Resu
 ///
 /// The pair is 1717's rule applied to string positions — *which* shape a position takes is settled
 /// per binding, never generalised — and the model-pane and region constructors are the two ends of
-/// it, verified together (wow-re `ui/scratch/xml-template-name-lookup.md` §5.2):
+/// it, verified together:
 ///
 /// | position | fetch | a table there |
 /// |---|---|---|
@@ -131,8 +128,7 @@ pub(crate) fn string_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Resu
 /// | `CreateFrame` `name`, `inherits` | `0x6f3690` **unguarded** | absent — this fn |
 ///
 /// **The discriminator is not the argument's type; it is whether the binding TESTS its parser's
-/// return.** That is the sentence `numeric-arg-coercion-law.md` §6 had wrong ("an unrecognised
-/// string argument raises"), refuted by this round.
+/// return.**
 ///
 /// A **number** is accepted and stringified, exactly as `lua_tostring` coerces it — so
 /// `CreateFrame("Frame", 5)` names the frame `"5"`. Callers that must *not* coerce a number (the
@@ -168,7 +164,7 @@ pub(crate) fn optional_string(lua: &Lua, v: &Value) -> Option<String> {
 /// This is `Option<String>`'s conversion with exactly one arm changed: a **string** becomes its
 /// lossy text. Every other type behaves as before — absent and `nil` are `None`, a number
 /// coerces, a table or a function raises mlua's own conversion error — so the raise/absent split
-/// each binding already had (§ [`optional_string`]'s table) is untouched.
+/// each binding already had ([`optional_string`]'s table) is untouched.
 pub(crate) fn text_arg(lua: &Lua, v: Option<Value>) -> mlua::Result<Option<String>> {
     match v {
         None | Some(Value::Nil) => Ok(None),
@@ -178,10 +174,8 @@ pub(crate) fn text_arg(lua: &Lua, v: Option<Value>) -> mlua::Result<Option<Strin
 }
 
 /// `GetBoolOrDefault` (`0x6f1c10`) — the reference's **boolean argument** coercion, which is *not*
-/// Lua truthiness and gets three arms backwards from the obvious reading. Byte-VERIFIED: wow-re
-/// `system/ui/scratch/action-bar-toggles.md` §2.1 re-derives the whole jump table at `0x6f1ce8`
-/// (`ui.md`, `tooltip-content-law.md` and `object-layer/scratch/helm-cloak-hide.md` cite the same
-/// helper).
+/// Lua truthiness and gets three arms backwards from the obvious reading. The whole jump table
+/// sits at `0x6f1ce8`.
 ///
 /// `v` is `None` for an **absent** argument (`LUA_TNONE` = −1, unsigned-compares above the table's
 /// bound and takes the default arm). mlua collapses "missing" into `Value::Nil` for a plain

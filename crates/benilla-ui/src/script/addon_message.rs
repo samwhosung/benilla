@@ -15,8 +15,7 @@
 //! `language` field to `LANG_ADDON` (`0xFFFFFFFF`). That sentinel is the *only* thing separating
 //! addon data from speech, on both sides of the wire.
 //!
-//! VERIFIED in `WoW.exe` (5875) — wow-re `system/ui/scratch/addon-chat-law.md` §5, a §5 trio
-//! (three independent derivations, orchestrator-arbitrated). The binding is `0x49f920`, body
+//! VERIFIED in `WoW.exe` (5875). The binding is `0x49f920`, body
 //! `[0x49f920, 0x49fb2a)`:
 //!
 //! ```text
@@ -44,8 +43,8 @@
 //! Three consequences the shape forces, and each is a thing an implementation gets wrong:
 //!
 //! - **The prefix is not a wire field.** It is glued to the message with a literal TAB and the
-//!   pair rides as one C-string. The receiver splits on the FIRST tab (`0x49a8d0`, the same note
-//!   §3). Nothing on the wire knows a prefix exists.
+//!   pair rides as one C-string. The receiver splits on the FIRST tab (`0x49a8d0`). Nothing on
+//!   the wire knows a prefix exists.
 //! - **There is no `target` argument.** The body fetches Lua indices `1`, `2` and `3` and no
 //!   other — there is no arg-4 fetch anywhere in its 522 bytes. 1.12 has no whispered addon
 //!   message; the modern 4-argument `SendAddonMessage(prefix, msg, "WHISPER", target)` does not
@@ -201,8 +200,8 @@ impl AddonDistribution {
     /// roster at `0xb712a8`, and the binding `GetNumRaidMembers` (`0x4bb530`, `Ui\RaidInfo.cpp`)
     /// returns that cell verbatim. So the reference's test `[0xb713e0] == 0` *is*
     /// `GetNumRaidMembers() == 0`, and reading our own `GetNumRaidMembers` backing is the
-    /// mechanism rather than a stand-in for it. (1235 recorded this identity as corroborated-not-
-    /// carved and hedged accordingly; the RE it dispatched carved it, and the hedge is retired.)
+    /// mechanism rather than a stand-in for it. (1235 recorded this identity as corroborated but
+    /// hedged; the hedge is now retired.)
     pub fn effective(self, in_raid: bool) -> Self {
         match self {
             Self::Raid if !in_raid => Self::Party,

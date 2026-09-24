@@ -23,8 +23,8 @@
 //! ships with it: the *keys* are `GlobalStrings.lua` identifiers (interface code, decision 1602)
 //! and the text itself is still read at runtime out of the player's own install.
 //!
-//! It is **generated**, never hand-edited — `scripts/gen-message-catalog.py` from wow-5875-re's
-//! `re/ui/message-catalog.tsv`, whose extractor decodes the CRT static initializer
+//! It is **generated**, never hand-edited — `scripts/gen-message-catalog.py` from the vendored
+//! `reference/1.12-message-catalog.tsv`, extracted by decoding the CRT static initializer
 //! `[0x484ca0, 0x488408)` that fills the table.
 //!
 //! **What the sweep settles that guessing could not:** the split does not follow the key names.

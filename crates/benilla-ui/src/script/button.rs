@@ -1,7 +1,7 @@
 //! The `Button`/`CheckButton` method surface — per-kind behavior over the frame arena
 //! (`CSimpleButton` `0x6eeab0` / `CSimpleCheckbox` `0x6eeb30`).
 //!
-//! Grounded in wow-re's byte-verified LoadXML tables (RF-28): the four state textures
+//! Grounded in the client's LoadXML table (`0x7788c0`): the four state textures
 //! (`Normal/Pushed/Disabled/Highlight`), the `ButtonText` fontstring + `text` attribute, the
 //! `OnClick` script slot (`+0x4cc`); CheckButton runs Button's loader first and adds
 //! `CheckedTexture`/`DisabledCheckedTexture` + the `checked` bool (`+0x4dc`). Which texture *shows*
@@ -111,8 +111,7 @@ fn normal_font_justify(model: &Model, bs: &ButtonState) -> Justify {
 /// (`SetFontString`): anchor it to the button **only if it has no anchor of its own** and **by the
 /// NORMAL font's justify word** (`[button+0x390]`: LEFT→LEFT, RIGHT→RIGHT, else CENTER — never
 /// the string's own `+0x120`, which on a fresh string is the ctor's CENTER), then apply the
-/// button's per-state font to it on the spot (`0x779810`). wow-re
-/// `system/ui/scratch/resize-bounds-and-button-fontstring.md` §5.2, every clause VERIFIED.
+/// button's per-state font to it on the spot (`0x779810`).
 ///
 /// The word's source is the whole bug this fixes (decision 1996): a `UIMenuButtonTemplate` row
 /// has no `<ButtonText>` — its label is born from the reference's `UIMenu_AddButton` →
@@ -159,8 +158,8 @@ fn adopt_label(model: &mut Model, owner: FrameHandle, rh: RegionHandle) {
 /// label reports that state's font and ours still reports the normal one. The paint is unaffected
 /// either way, and no corpus site reads a label's font mid-state.
 ///
-/// `font::repaint` honours the severance mask, so a `<FontHeight>` or `SetTextColor` the label set
-/// for itself survives the link (the rule wow-re pinned in `font-object-lua-surface.md`), and the
+/// `font::repaint` honours the severance mask (`CSimpleFontString+0xd4`), so a `<FontHeight>` or
+/// `SetTextColor` the label set for itself survives the link, and the
 /// local justify goes behind the same mask.
 fn apply_normal_font(model: &mut Model, owner: FrameHandle) {
     let (rh, name, local_justify) = {
@@ -276,8 +275,7 @@ fn with_button<T>(
 ///
 /// **The restore is NOT symmetric, and this comment used to claim it was** — *"one array and one
 /// writer, so an addon's `DisableDrawLayer("HIGHLIGHT")` is undone by the next `Enable()`"*. Both
-/// halves are false (wow-re `scratch/button-disabled-state-texture-law.md` §7, sharpened
-/// 2026-09-09 off `0x779160` read contiguously for exactly this question). The indexed form
+/// halves are false (`0x779160`). The indexed form
 /// `[reg + 4*reg + 0x198]` has **three** sites image-wide — `0x76a717` (=1), `0x76a737` (=0) and
 /// `DrawLayer 0x76b3a6`'s read — so there are **two** writers; and the enable arm calls
 /// *neither* helper. It reaches the ON one only one hop away and only when the button is the
@@ -328,8 +326,8 @@ fn set_enabled(lua: &Lua, this: &Table, on: bool) -> mlua::Result<()> {
 
 /// Run one of the engine's own state edges over frame `h`, if it is a live Button.
 ///
-/// The reference's edge set is exactly seven `SetButtonState` call sites and **six of them are
-/// engine-side** (wow-re `scratch/button-state-edge-set.md`, VERIFIED): Enable, Disable, the hide
+/// The reference's edge set is exactly seven `SetButtonState 0x779790` call sites and **six of
+/// them are engine-side**: Enable, Disable, the hide
 /// notify, mouse-down, mouse-up and the drag-threshold crossing. There is **no enter or leave
 /// edge** — which is why the pointer path no longer calls anything here when the cursor crosses a
 /// button's boundary (decision 2134).
@@ -357,8 +355,8 @@ pub(super) fn edge(model: &mut Model, h: FrameHandle, f: impl FnOnce(&mut Button
 /// ```
 ///
 /// — so **a DISABLED Button runs neither script**, and `0x7794b0`'s hover sound is the only thing
-/// past the branch (wow-re `scratch/button-state-edge-set.md` §3.1, VERIFIED; the base pair's
-/// script slots `+0x140`/`+0x148` are `ledger.tsv:7944/7945`). Every path that delivers a hover
+/// past the branch; the base pair's
+/// script slots are `+0x140`/`+0x148`. Every path that delivers a hover
 /// edge dispatches through the object's own vtable, so there is no way around the guard: the hover
 /// walk (`0x766218`–`0x76623c`, `[vt+0x50]` then `[vt+0x4c]`), `SetMouseFocus 0x764dc0`
 /// (`0x764ddd push 0`), and the hide/removal tail (`0x764cce mov edx,[edi]; push 1;
@@ -370,7 +368,7 @@ pub(super) fn edge(model: &mut Model, h: FrameHandle, f: impl FnOnce(&mut Button
 /// notify — so `GetMouseFocus()` answers a disabled button; it is the scripts alone that stay
 /// quiet. This is what makes AtlasLoot's unset QuickLook buttons safe on the reference: their
 /// `<OnEnter>` guards with `if this:IsEnabled() then`, which is a NUMBER `1`/`0` and therefore
-/// always truthy (`scratch/button-enabled-state.md`), so the body would index a nil
+/// always truthy (`IsEnabled 0x7800b0`), so the body would index a nil
 /// `QuickLooks[n]` — the reference never runs it at all.
 ///
 /// `None` (the cursor over no frame) and every non-Button kind notify normally.
@@ -498,8 +496,8 @@ fn free_outgoing(lua: &Lua, outgoing: Option<RegionHandle>, incoming: RegionHand
 
 /// The shared body of `Set<State>Texture(texture | "path" | nil)` / `(r, g, b [, a])`.
 ///
-/// The reference forks on `lua_type(L, 2)` into four legs (`0x781970`, carved instruction by
-/// instruction in wow-re `button-state-texture-path-setter.md` §1). **Two of them never touch the
+/// The reference forks on `lua_type(L, 2)` into four legs (`0x781970`).
+/// **Two of them never touch the
 /// slot's own region at all**, so they are resolved *before* [`ensure_slot`] — which would
 /// otherwise lazily build a region for a call whose entire purpose is to replace or drop one.
 fn set_slot_texture(lua: &Lua, this: &Table, slot: Slot, args: &MultiValue) -> mlua::Result<()> {
@@ -618,13 +616,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     texture_pair(lua, &m, "Disabled", Slot::Disabled)?;
     texture_pair(lua, &m, "Highlight", Slot::Highlight)?;
 
-    // SetText/GetText target the ButtonText fontstring (RF-28: the `text` attr routes there).
+    // SetText/GetText target the ButtonText fontstring (`0x778dc0`: the `text` attr routes there).
     m.set(
         "SetText",
         lua.create_function(|lua, (this, text): (Table, Option<Value>)| {
             let text = super::binding_abi::text_arg(lua, text)?;
-            // `CSimpleButton::SetText 0x778dc0` opens `if (!text) return;` (`0x778dcc`, wow-re
-            // `button-label-build-and-anchor-order.md`) — a nil never reaches the label at all, so
+            // `CSimpleButton::SetText 0x778dc0` opens `if (!text) return;` (`0x778dcc`) — a nil
+            // never reaches the label at all, so
             // it neither clears the text nor lazily creates the FontString. That guard is the
             // BUTTON's own: a `FontString:SetText(nil)` is not a no-op, it truncates the cell
             // (`0x771d80`, decision 2110). Below the guard the button is a pass-through to
@@ -665,11 +663,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // SetFontString(fontString) — ADOPT a caller-made FontString as this Button's label.
     //
-    // Byte-carved end to end by wow-re (decision 1505,
-    // `system/ui/scratch/resize-bounds-and-button-fontstring.md`
-    // §5): the binding `0x780a60` is gates + a delegate to `CSimpleButton::SetFontString
-    // 0x778d20`, which is the SAME function `SetText`'s lazy creation path funnels through — so
-    // adopting and creating share their whole tail, and only the allocation differs.
+    // End to end (decision 1505): the binding `0x780a60` is gates + a delegate to
+    // `CSimpleButton::SetFontString 0x778d20`, which is the SAME function `SetText`'s lazy creation
+    // path funnels through — so adopting and creating share their whole tail, and only the
+    // allocation differs.
     //
     // The idiom it exists for: build the label yourself so you can style and place it, then hand
     // it to the button so `SetText` and the per-state font machinery drive it. Quiver's
@@ -787,10 +784,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTextWidth / GetTextHeight — the Button's OWN text-extent readers (`0x782290` / `0x782390`,
-    // wow-re `system/ui/scratch/item9-firing34-merge.md` l.36 and the Button method carve in
-    // `widget-api-batch-benilla.md` Q8, which lists both present on Button and `GetStringWidth`
-    // absent). Both are thin forwards onto the label FontString's own extent vtable slots
+    // GetTextWidth / GetTextHeight — the Button's OWN text-extent readers (`0x782290` /
+    // `0x782390`); both are present on Button's own method table, `GetStringWidth` is not.
+    // Both are thin forwards onto the label FontString's own extent vtable slots
     // (`0x1c` / `0x20`), which is exactly what this delegation is.
     //
     // **Who asks.** `Bagnon_Forever/database/ui.lua:61` sizes its character-switch dropdown from
@@ -866,8 +862,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetFont(file, height [, flags]) / GetFont() — the Button's own font, `0x780880`/`0x79f3b0`
-    // (wow-re `system/ui/scratch/widget-api-batch-benilla.md` Q8, §5-verified).
+    // SetFont(file, height [, flags]) / GetFont() — the Button's own font, `0x780880`/`0x79f3b0`.
     // `_LazyPig/LazyPigMenu.lua:214` calls it straight on a `CreateFrame("Button", …)`, and it is
     // that addon's only blocker.
     //
@@ -1069,8 +1064,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     // IsEnabled() → the NUMBER 1 or the NUMBER 0 — never a boolean, and never nil.
     //
-    // wow-re `ui/scratch/button-enabled-state.md`, VERIFIED off the Button method table at
-    // `0x879d10`: `IsEnabled 0x7800b0` reads the three-valued STATE at `[obj+0x328]`
+    // The Button method table at
+    // `0x879d10` gives `IsEnabled 0x7800b0`, which reads the three-valued STATE at `[obj+0x328]`
     // (0 DISABLED / 1 NORMAL / 2 PUSHED), does `setne cl` for "not disabled", and pushes that as a
     // NUMBER. So the reference's own `IsEnabled() == 0` and `== 1` tests (FriendsFrame.lua l.404,
     // StaticPopup.lua l.713) are live code.
@@ -1114,7 +1109,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // **`SetButtonState(state[, lock]) 0x780270` — TWO arguments**, and the second is not
-    // cosmetic (wow-re `scratch/binding-shape-arity-law.md` §3, VERIFIED). It reads three stack
+    // cosmetic. It reads three stack
     // indices and returns none; the state maps case-insensitively over exactly
     // `{"DISABLED", "NORMAL", "PUSHED"}` (`0x780390`, `SStrCmpI`) and an unrecognised string
     // raises `Usage: %s:SetButtonState("state", lock)`; the flag is `GetBoolOrDefault` with
@@ -1190,8 +1185,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     c.set(
         "SetChecked",
         lua.create_function(|lua, (this, v): (Table, Value)| {
-            // Numeric coercion, NOT Lua truthiness — byte-verified (decision 0227; wow-re
-            // `system/ui/scratch/button-check-and-state-texture.md`, `SetChecked 0x799bf0` →
+            // Numeric coercion, NOT Lua truthiness (decision 0227; `SetChecked 0x799bf0` →
             // `0x6f1c10`): a number goes through `lua_tonumber` then a truncate-to-int (`fistp`,
             // round-toward-zero, `0x40a2b0`) and the C++ setter tests `!= 0`. So `SetChecked(0)`
             // UNchecks (0 is Lua-truthy — only a numeric read gets this right) and `SetChecked(1)`

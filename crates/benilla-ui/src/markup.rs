@@ -7,17 +7,16 @@
 //!
 //! ## Ground truth
 //!
-//! wow-5875-re `system/ui/scratch/rf87-editbox-markup.md` (RF-0087, a §5 trio arbitrated against the
-//! bytes). Two client mechanisms are transcribed here, and every claim below carries its address:
+//! Two client mechanisms are transcribed here, and every claim below carries its address:
 //!
-//! - **`0x5c2810`** (`font`'s diffed `decode_quoted_code`) — the token decoder. Given a pointer it
+//! - **`0x5c2810`** — the token decoder. Given a pointer it
 //!   returns a class 0..6 and the token's byte length, dispatching off a byte remap at `0x5c2b10`
 //!   into the 7-arm jump table at `0x5c2af4`. That is [`token_at`] / [`tokens`].
 //! - **`0x77ba90`** — the edit box's per-byte class array `E+0x330`, rebuilt in full after every
 //!   mutation, plus the five primitives that read it (`0x77bd10`, `0x77bd30`, `0x77bc80`,
 //!   `0x77bb30`, `0x77c510`, `0x77bee0`). That is [`ClassMap`].
 //!
-//! ## The seven classes (§1.1) — the client's own numbering
+//! ## The seven classes — the client's own numbering
 //!
 //! - **0** `|cAARRGGBB` — 10 bytes. The `AA` is parsed and then *discarded*: `0x5c2ab2–0x5c2ace`
 //!   builds `0xFF << 24 | RR << 16 | GG << 8 | BB`. See [`Rgba`].
@@ -34,7 +33,7 @@
 //! ordinary-character arm, so `|TInterface\Icons\Foo:16:16|t` draws literally, pipe and all. Inline
 //! textures are a later-expansion feature; this module must not invent one.
 //!
-//! ## What the parse gates do *not* do (§1.3)
+//! ## What the parse gates do *not* do
 //!
 //! `0x5c2810` takes a flags word `K` that can disable classes, and `0x44d670` translates the
 //! FontString's `F` into it. An origination census over the whole image found **no writer anywhere**
@@ -43,14 +42,15 @@
 //! set on a single-line edit box by `SetMultiLine` `0x77a5e2`) — and `0x77ba90` builds the class map
 //! with `K = 0` regardless, so the *cursor* model always sees `|n` as one token. This module
 //! therefore takes no flags word: the one live gate belongs to the renderer's line breaker, not to
-//! the grammar (the resulting caret drift in a single-line box carrying `|n` is the note's §7
-//! anomaly 1, and is the renderer's to reproduce or to fix).
+//! the grammar (the resulting caret drift in a single-line box carrying `|n` is inferred from the
+//! verified byte mechanism, not confirmed live, and is the renderer's to reproduce or to fix).
 //!
 //! ## The law this module exists to hold
 //!
-//! **The reachable cursor set is "a token boundary with every adjacent zero-width escape absorbed" —
-//! after any trailing `|r`/`|h`, before any leading `|c`/`|H`** (§6.1). No index inside an escape is
-//! representable as an output of [`ClassMap::advance`], at either atomicity, in either direction;
+//! **The reachable cursor set is "a token boundary with every adjacent zero-width escape absorbed"
+//! — after any trailing `|r`/`|h`, before any leading `|c`/`|H`** (`0x77bb30`). No index inside an
+//! escape is representable as an output of [`ClassMap::advance`], at either atomicity, in either
+//! direction;
 //! atomicity adds exactly one thing, that the visible text between `|H…|h` and its closing `|h`
 //! becomes uncrossable in a single step. Every index taken or returned by anything here is a byte
 //! offset into the original string, and every one lands on a UTF-8 character boundary.
@@ -60,8 +60,9 @@
 //! Flagged here as well as at each site, because the note is explicit about what it proved:
 //!
 //! - **`|H` opens and `|h` closes, discriminated by case.** The remap sends both to one arm and the
-//!   note does not disassemble the case test; §1.1's table (class 4 is the whole `|H<payload>|h`,
-//!   class 5 is `|h`) plus the empty-visible-text guard comparing against lowercase `0x68`
+//!   case test itself was not disassembled; the class table above (class 4 is the whole
+//!   `|H<payload>|h`, class 5 is `|h`) plus the empty-visible-text guard comparing against
+//!   lowercase `0x68`
 //!   (`80 7e 01 68` @`0x5c2992`) is the whole basis.
 //! - **The delimiter search is a plain forward byte scan for `|h`** that does not skip `||`. The
 //!   emitter's own scan (`0x5ccdc8`, against the literal at `0x84453c`) is described the same way;
@@ -70,7 +71,8 @@
 //!   signature and the byte-budget shape of its sibling kernel `0x5c6940`.
 //! - **The end-of-buffer guard on [`ClassMap::advance`] is ours.** The note's excerpt of `0x77bb30`
 //!   shows no bound, and its class-0/class-4 "keep skipping" arms would spin on the zero terminator.
-//! - **The worked example (§6.5) is itself INFERRED in the note**, from the verified mechanism.
+//! - **The worked example is itself inferred, not independently verified** — it follows from the
+//!   verified mechanism above.
 
 use std::ops::Range;
 
@@ -81,7 +83,7 @@ use std::ops::Range;
 /// The colour decoded from `|cAARRGGBB`, packed exactly as the client packs it —
 /// `0xFF << 24 | RR << 16 | GG << 8 | BB` (`0x5c2ab2–0x5c2ace`).
 ///
-/// **The `AA` nibbles are parsed and then thrown away** (§7 anomaly 4): there is no way to spell a
+/// **The `AA` nibbles are parsed and then thrown away**: there is no way to spell a
 /// translucent colour in 1.12.1 markup. A type that cannot carry alpha is how this module refuses to
 /// invent one — `|c00ff0000` and `|cffff0000` are the same opaque red.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -122,9 +124,9 @@ impl Rgba {
     ///
     /// The decoder forcing `0xff` is only half the law: the emitter then patches the FontString's
     /// alpha byte over it (`mov cl,[edi+0x2f]; mov [ebp-0x39],cl` @`0x5cceb0`/`0x5cceb6`, written
-    /// into the outColor slot *before* `mov edx,[ebp-0x3c]` reads it — RF-0087 §7, corrected under
-    /// an emulation oracle). So a `|c` span fades with the string it sits in; drawing it opaque
-    /// would leave a chat link burning at full alpha while its own line faded out.
+    /// into the outColor slot *before* `mov edx,[ebp-0x3c]` reads it). So a `|c` span fades with
+    /// the string it sits in; drawing it opaque would leave a chat link burning at full alpha while
+    /// its own line faded out.
     ///
     /// Taking `alpha` as an argument rather than storing one keeps both halves true: the *escape*
     /// still cannot carry alpha (`|c00ff0000` and `|cffff0000` are the same colour), and the alpha
@@ -143,8 +145,8 @@ impl Rgba {
 // Layer 1 — the token decoder (`0x5c2810`)
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// The token class, with the client's own numbering (§1.1) as the discriminant, so a `class` in the
-/// RE note greps straight to a variant here. Returned by `0x5c2810` in `eax`, and stored in bits
+/// The token class, with the client's own numbering as the discriminant. Returned by `0x5c2810` in
+/// `eax`, and stored in bits
 /// 16..23 of every class-map entry.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -366,7 +368,7 @@ impl<'a> Iterator for Tokens<'a> {
 // Layer 2 — the per-byte class map (`E+0x330`, built by `0x77ba90`)
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// One entry of the class map — the client's packed dword (§2.1), unpacked:
+/// One entry of the class map — the client's packed dword, unpacked:
 ///
 /// - bits 0..15, the token's **byte length**, non-zero only at the token's *first* byte;
 /// - bits 16..23, the token class;
@@ -437,8 +439,7 @@ impl ClassMap {
     /// Build the map for `text` — `0x77ba90`.
     ///
     /// The client passes `K = 0` here (`push 0` @`0x77bad9`), so the cursor model always parses
-    /// *every* class, `|n` included, whatever the FontString's flags say (§2.1, and §7 anomaly 1 for
-    /// the consequence).
+    /// *every* class, `|n` included, whatever the FontString's flags say.
     pub fn new(text: &str) -> ClassMap {
         let mut entries = vec![Entry::CONTINUATION; text.len() + 1];
         // The sticky link bit: raised BEFORE the store on a class-4 open (`or [ebp-4],0x80000000`
@@ -500,7 +501,7 @@ impl ClassMap {
     /// INFERRED: that the second argument is a byte budget (the note gives only the `(start, count)`
     /// signature; the sibling kernel `0x5c6940` consumes bytes the same way). A token straddling the
     /// end of the budget is counted whole and ends the walk — deliberately *not* the sibling
-    /// kernel's run-to-the-NUL behaviour (§7 anomaly 3), which is a latent trap with no upside here.
+    /// kernel's run-to-the-NUL behaviour, which is a latent trap with no upside here.
     pub fn letters(&self, start: usize, byte_count: usize) -> usize {
         let end = start.saturating_add(byte_count).min(self.text_len());
         let mut at = start;
@@ -524,11 +525,11 @@ impl ClassMap {
         self.letters(0, self.text_len())
     }
 
-    /// Move the cursor `steps` token-steps from `from` — `0x77bb30`, the heart of the cursor model
-    /// (§6.1). Negative `steps` walk backward. Returns the resulting byte offset (the client returns
+    /// Move the cursor `steps` token-steps from `from` — `0x77bb30`, the heart of the cursor model.
+    /// Negative `steps` walk backward. Returns the resulting byte offset (the client returns
     /// the *magnitude* of the delta and its caller `0x77c6b0` signs it; same thing, one fewer trap).
     ///
-    /// `atomic_links` is the whole of the difference between the keyboard and the mouse (§6.2): every
+    /// `atomic_links` is the whole of the difference between the keyboard and the mouse: every
     /// arrow, word-jump, HOME/END, BACKSPACE and DELETE path passes 1 and crosses a whole
     /// `|H…|h[text]|h` in one step, while click, drag, UP/DOWN, the scroll-window sizing and the IME
     /// span all pass 0 and stop on each visible character. Neither ever stops *inside* an escape.
@@ -537,7 +538,7 @@ impl ClassMap {
     /// skip loop re-enters at `0x77bb60`, past the zero guard at `0x77bb56`, and the terminator slot
     /// decodes as class 0 with length 0 — a class the loop skips unconditionally — so a walk still
     /// skipping at the end of the buffer spins forever consuming no bytes. Confirmed by executing
-    /// `0x77bb30` under an emulation oracle (RF-0087 §10). It is reachable: a trailing `|c` hangs in
+    /// `0x77bb30` under an emulation oracle. It is reachable: a trailing `|c` hangs in
     /// both modes and an unclosed link hangs at `atomic_links = true`, so `SetText("|cffffffff")`
     /// plus one RIGHT freezes 1.12.1. A user cannot type it (`|` becomes `||`) but any script can
     /// set it. We bound the loop by the buffer and land the step on the far end instead —
@@ -619,7 +620,7 @@ impl ClassMap {
         at
     }
 
-    /// Widen a half-open deletion range so it cannot cut a hyperlink in half — `0x77c510` (§6.3),
+    /// Widen a half-open deletion range so it cannot cut a hyperlink in half — `0x77c510`,
     /// called by BACKSPACE/DELETE (`0x77c280`), by delete-selection (`0x77cd70`) and by Clear
     /// (`0x77c500`).
     ///
@@ -677,15 +678,16 @@ impl ClassMap {
         lo..hi
     }
 
-    /// May text be inserted at `at`? — the opening guard of `0x77bee0` (§6.4).
+    /// May text be inserted at `at`? — the opening guard of `0x77bee0`.
     ///
     /// Refused exactly when the entry at the cursor carries bit 31 **and** the previous token's entry
     /// carries it too (`79 16` @`0x77befb`, `0f 88 …` @`0x77bf0d`). That second test is what still
     /// permits an insert *at* a link's leading edge, where the `|H` entry has the bit but its
     /// predecessor — the `|c`, or whatever precedes it — does not.
     ///
-    /// A strictly-interior cursor is reachable only by mouse (§5, `atomic_links = 0`), and the client
-    /// then silently swallows the typing; INFERRED in the note, from the verified guard.
+    /// A strictly-interior cursor is reachable only by mouse (`0x77d0d0`, `atomic_links = 0`), and
+    /// the client then silently swallows the typing — inferred from the verified guard, not
+    /// independently confirmed.
     pub fn insert_allowed(&self, at: usize) -> bool {
         if !self.entry(at).in_link() {
             return true;
@@ -702,7 +704,7 @@ impl ClassMap {
 mod tests {
     use super::*;
 
-    /// The note's §6.5 buffer: an epic item link exactly as `0x52adb0` formats one.
+    /// An epic item link exactly as `0x52adb0` formats one.
     ///
     /// ```text
     ///  0        10                  30            44  46
@@ -959,18 +961,19 @@ mod tests {
 
     // ── The cursor law ───────────────────────────────────────────────────────────────────────
 
-    /// The note's §6.5, spelled out: cursor 0, one RIGHT, and the whole link is behind you.
-    /// **The oracle cross-check.** wow-re answered RF-0087 §10 by *executing* the real `0x77bb30`
-    /// under Unicorn on this exact buffer and reporting the reachable index sets. These are its
-    /// numbers, verbatim — the strongest evidence this module can carry, because they came from the
-    /// binary running rather than from anyone reading it.
+    /// Cursor 0, one RIGHT, and the whole link is behind you.
+    /// **The oracle cross-check.** The real `0x77bb30` was *executed* under Unicorn on this exact
+    /// buffer, reporting the reachable index sets below verbatim — the strongest evidence this
+    /// module can carry, because they came from the binary running rather than from anyone reading
+    /// it.
     ///
-    /// Three things they pin that a reading could plausibly have got backwards: index **0 is**
-    /// reachable (the leading `|c`+`|H…|h` absorb into the first *step*, not off the origin); index
-    /// **30 is reachable in neither mode** — classes 0 and 4 are skipped unconditionally, so a step
-    /// arriving from the left consumes the `[` in the same step, and the cursor can never sit
-    /// between `|h` and `[`; and after the name the stop is **43 in both modes**, never 39 or 41,
-    /// because the trailing `|h|r` absorb **forward** rather than backward onto the `]`.
+    /// Three things the cross-check pins that a reading could plausibly have got backwards: index
+    /// **0 is** reachable (the leading `|c`+`|H…|h` absorb into the first *step*, not off the
+    /// origin); index **30 is reachable in neither mode** — classes 0 and 4 are skipped
+    /// unconditionally, so a step arriving from the left consumes the `[` in the same step, and the
+    /// cursor can never sit between `|h` and `[`; and after the name the stop is **43 in both
+    /// modes**, never 39 or 41, because the trailing `|h|r` absorb **forward** rather than backward
+    /// onto the `]`.
     #[test]
     fn the_reachable_sets_match_the_emulation_oracle() {
         // `[` at 30, `]` at 38, the `d` of the typed text at 43; 51 bytes.
@@ -1018,10 +1021,11 @@ mod tests {
         assert_eq!(refused, (30..=39).collect::<Vec<_>>());
     }
 
-    /// The client freezes where we stop (RF-0087 §10): its inner skip loop re-enters past the zero
-    /// guard, and the terminator decodes as a skip class, so a buffer whose last token is `|c` — or
-    /// an unclosed link, when atomic — spins forever. `SetText("|cffffffff")` plus one RIGHT hangs
-    /// 1.12.1. We land on the far end instead; reproducing a freeze is not fidelity.
+    /// The client freezes where we stop: its inner skip loop re-enters at `0x77bb60`, past the zero
+    /// guard at `0x77bb56`, and the terminator decodes as a skip class, so a buffer whose last
+    /// token is `|c` — or an unclosed link, when atomic — spins forever. `SetText("|cffffffff")`
+    /// plus one RIGHT hangs 1.12.1. We land on the far end instead; reproducing a freeze is not
+    /// fidelity.
     #[test]
     fn a_trailing_escape_lands_on_the_end_where_the_client_would_hang() {
         // Each entry is (buffer, the offset where only skip-class tokens remain, whether the
@@ -1107,8 +1111,8 @@ mod tests {
         }
     }
 
-    /// The canonical reachable set of §6.1: **a token boundary with every adjacent zero-width escape
-    /// absorbed — after any trailing `|r`/`|h`, before any leading `|c`/`|H`.**
+    /// The canonical reachable set (`0x77bb30`): **a token boundary with every adjacent zero-width
+    /// escape absorbed — after any trailing `|r`/`|h`, before any leading `|c`/`|H`.**
     fn reachable_set(text: &str) -> Vec<usize> {
         let map = ClassMap::new(text);
         (0..=map.text_len())

@@ -28,13 +28,13 @@
 //! ## The load law lives next door
 //!
 //! Every "can this load, and why not" answer comes from [`super::addon_gate`] — the reference's
-//! `AddOn_CanLoad 0x51e780` as one pure function (decision 1292). The RE answer 1191 §6 was
-//! missing has landed (wow-re `addon-version-gate.md`, §5-verified): the version gate is an
+//! `AddOn_CanLoad 0x51e780` as one pure function (decision 1292). What 1191 §6 was missing has
+//! now landed: the version gate is an
 //! exact `== 11200` whose refusal the `checkAddonVersion` CVar suppresses by **actively
 //! resetting** the reason — so `INTERFACE_VERSION` is now enforced here exactly as the client
 //! enforces it, with the *Load out of date AddOns* toggle as the player's escape, instead of
-//! 1191's report-but-never-act interim. The CVar is read live per query (§2.2), which is why a
-//! checkbox click needs nothing but a list repaint.
+//! 1191's report-but-never-act interim. The CVar is read live per query (`0x51e780`), which is
+//! why a checkbox click needs nothing but a list repaint.
 
 use std::path::PathBuf;
 
@@ -99,8 +99,7 @@ pub struct AddOnInfo {
     ///
     /// The reply covers exactly the `## Secure:` addons, in the order the client sent them, and
     /// the 2006 retail capture answers `status = 2` for all twelve — which is why the stock
-    /// AddOns list shows the player's addons and none of Blizzard's (wow-re
-    /// `system/net/scratch/cmsg-auth-session-addon-block.md` §6).
+    /// AddOns list shows the player's addons and none of Blizzard's.
     pub hidden: bool,
     /// The addon's files sit in the player's patch chain, not the AddOns folder — Blizzard's own
     /// LoadOnDemand addons (`Blizzard_TrainerUI` and its eleven siblings), which the reference
@@ -196,7 +195,7 @@ fn addon_key(lua: &Lua, model: &Model, key: &Value, usage: &'static str) -> mlua
 
 /// **Rebuild the Lua index space** — the tail block `[0x51dc30, 0x51dcdf)` of
 /// `AddOn_ReadAddonInfoReply 0x51da70`, and the only place that array is ever built
-/// (decision 2175, wow-re `system/ui/scratch/addon-registry-scan-and-order.md` §7).
+/// (decision 2175).
 ///
 /// Three properties, all byte-read, all easy to get wrong:
 ///
@@ -267,7 +266,7 @@ fn gate_rows(model: &Model) -> Vec<GateRow<'_>> {
 }
 
 /// The live `checkAddonVersion` read — the gate's CVar half, re-read per query like the
-/// reference's (`IsAddonVersionCheckEnabled 0x51f180` inside `AddOn_CanLoad`, §2.2). An absent
+/// reference's (`IsAddonVersionCheckEnabled 0x51f180` inside `AddOn_CanLoad`). An absent
 /// table (a bare test VM, or a query before the host's seed) answers the registrar default:
 /// check ON, `"1"`.
 fn version_check(model: &Model) -> bool {
@@ -319,9 +318,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // **`enabled`**, not `url`.
     //
     // **The client registers `GetAddOnInfo` TWICE, as two different functions**, and this is the
-    // in-game one. wow-re `system/ui/scratch/addon-version-gate.md`: glue `0x46d460` returns EIGHT
-    // with `url` at slot 4 and `newVersion` at 8; in-game `0x48e390` returns SEVEN with `enabled`
-    // at slot 4 and no `url` at all. They differ in behaviour too — the in-game one passes `dl=1`,
+    // in-game one. Glue `0x46d460` returns EIGHT with `url` at slot 4 and `newVersion` at 8;
+    // in-game `0x48e390` returns SEVEN with `enabled` at slot 4 and no `url` at all. They differ in
+    // behaviour too — the in-game one passes `dl=1`,
     // so `NOT_DEMAND_LOADED` is reachable here and never from glue, and it short-circuits an
     // already-loaded addon to `1, nil` before the gate.
     //
@@ -354,7 +353,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     // The STRING form is not existence-checked: it answers seven placeholders, two
                     // of which are not nil — and **slot 1 is the caller's own string echoed back**
                     // (`0x48e401`, non-NULL by `lua_isstring`). We used to answer the literal
-                    // `"NoSuchAddon"`, which is the wow-re note's *example call*, not a constant
+                    // `"NoSuchAddon"`, which was an illustrative example, not a constant
                     // the image contains. Slot 4 is `enabled` in-game (the glue table's fourth is
                     // `url`, and its eighth is an appended `newVersion` — nothing shifts).
                     None => {
@@ -458,10 +457,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // **One argument, index or name — the `(character, index)` form is GLUE-ONLY** (byte-carved,
-    // wow-re `addon-enable-store.md`: in-game `0x48e690`/`0x48e760` read arg1 alone and key the
-    // store on `0x5abdc0()`, the logged-in character; the two-argument shape belongs to the glue
-    // registrars `0x46d7b0`/`0x46d8a0`, and our glue screen is native — no caller exists).
+    // **One argument, index or name — the `(character, index)` form is GLUE-ONLY** (in-game
+    // `0x48e690`/`0x48e760` read arg1 alone and key the store on `0x5abdc0()`, the logged-in
+    // character; the two-argument shape belongs to the glue registrars `0x46d7b0`/`0x46d8a0`, and
+    // our glue screen is native — no caller exists).
     // A numeric index out of range is a **Lua error** in the reference (`luaL_error` via
     // `0x51df00`); an unknown NAME is where we diverge, disclosed: the reference creates a
     // phantom enable-hash entry for the typo, we no-op — the safer direction, and `resolve`'s
@@ -498,9 +497,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // `ResetDisabledAddOns 0x48e830` — **revert-to-last-saved**, byte-carved (wow-re
-    // `addon-enable-store.md`): the reference destroys the current character's enable hash and
-    // reloads it from the on-disk `AddOns.txt` — so unsaved toggles of BOTH polarities revert,
+    // `ResetDisabledAddOns 0x48e830` — **revert-to-last-saved**: the reference destroys the
+    // current character's enable hash and reloads it from the on-disk `AddOns.txt` — so unsaved
+    // toggles of BOTH polarities revert,
     // and a disable already on disk stays disabled. Within one session the current character's
     // file is immutable until the shutdown tail writes it (the glue can only edit it with no
     // session up), so the registration-time `enabled` — read from that very file — IS the
@@ -573,7 +572,7 @@ fn load_addon(lua: &Lua, i: usize) -> Result<(), String> {
     // The one arbiter (decision 1292): the reference's own shape — `LoadAddOn 0x48e980` refuses
     // through `AddOn_CanLoad` (via `AddOn_Load`'s step 3) and re-derives the reason from the
     // same gate on failure. The version gate is in here now: an out-of-date addon demand-loads
-    // only under force-load, exactly as `0x48ea8c`'s carve records.
+    // only under force-load, exactly as `0x48ea8c` records.
     {
         let model = lua.app_data_ref::<Model>().expect("model");
         if let refused @ Verdict::Refused { .. } = verdict(&model, i) {
@@ -618,7 +617,7 @@ fn load_addon(lua: &Lua, i: usize) -> Result<(), String> {
     // **The consequence is real and is the reference's own**: inside a cycle an addon is flagged
     // loaded before its own files run, so `IsAddOnLoaded("A")` answers 1 for the whole of B's
     // execution, and `ADDON_LOADED` fires B before A. That is not a wart we are copying blindly —
-    // it is what makes the recursion finite, and wow-re executed it against the real bytes.
+    // it is what makes the recursion finite.
     {
         let mut model = lua.app_data_mut::<Model>().expect("model");
         model.addons[i].loaded = true;
@@ -644,7 +643,9 @@ fn load_addon(lua: &Lua, i: usize) -> Result<(), String> {
                 if !loaded {
                     load_addon(lua, d).map_err(|r| {
                         if r.starts_with("DEP_") {
-                            r // §2.3: the prefix applies exactly once at any nesting depth
+                            // The prefix applies exactly once at any nesting depth
+                            // (`0x51e8ce`/`0x51e8cf`).
+                            r
                         } else {
                             format!("DEP_{r}")
                         }
@@ -909,7 +910,7 @@ impl super::UiScript {
     ///
     /// The reply carries no count and no names: it is one record per `## Secure:` addon, in the
     /// order the client itself sent them in `CMSG_AUTH_SESSION`, so the caller does the pairing
-    /// and hands us the names (wow-re `system/net/scratch/cmsg-auth-session-addon-block.md` §6).
+    /// and hands us the names (`0x51da70`).
     /// Calling this with an empty slice is meaningful and different from never calling it: it
     /// records that a reply arrived and hid nothing.
     pub fn note_addon_info_reply(&mut self, hidden: &[String]) {

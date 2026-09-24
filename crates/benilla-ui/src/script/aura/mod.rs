@@ -34,7 +34,7 @@
 //! reference's `0xbc6040` insertion-ordered cache (`benilla::ui_aura`), a cache position is simply a
 //! 0-based index into `model.auras["player"]`. No second structure exists, and none is needed.
 //!
-//! # Byte-verified signatures (the 1.12.1 binary, wow-5875-re `system/ui/ledger.tsv`)
+//! # Byte-verified signatures (the 1.12.1 binary)
 //!
 //! Read off the disassembly, not off a wiki — a later client changed every one of these shapes, and a
 //! wrong shape fails *silently*.
@@ -133,7 +133,7 @@ pub struct AuraState {
 /// The player's active tracking aura — the engine mirror of the reference's tracking global
 /// (`DAT_00bc6378`): during the aura-cache rebuild the client *excludes* a tracking-effect spell
 /// (Find Minerals, Track Beasts, …) from the display cache and records it here instead;
-/// `GetTrackingTexture` is the one reader (wow-re `aura-display-pipeline.md` §3 — the
+/// `GetTrackingTexture` is the one reader (`0x4e4a20`, the
 /// `{0x2c,0x2d,0x97}` effect test). Pushed by the app's aura feed via [`UiScript::set_tracking`];
 /// `None` = no tracking active (the minimap frame hides).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -202,8 +202,8 @@ pub(super) fn cancel_authorized(a: &AuraState) -> bool {
 /// rather than a fabricated value.
 /// The **1.12** return tuple, which is a different shape and not a prefix of the Era one: the first
 /// value is the TEXTURE, not the name. `UnitBuff` returns `(texture, applications)` (`0x519500`) and
-/// `UnitDebuff` returns `(texture, applications, dispelType)` (`0x5198f0`) — both `verified` in
-/// wow-re's ledger, and both are what the reference's own FrameXML reads
+/// `UnitDebuff` returns `(texture, applications, dispelType)` (`0x5198f0`) — both are what the
+/// reference's own FrameXML reads
 /// (`TargetFrame.lua:287-290` binds `debuff, debuffStack, debuffType` and then
 /// `SetTexture(debuff)`). Decision 1818, which also records why the Era shape was serving nobody.
 fn returns_1121(lua: &Lua, a: &AuraState, with_dispel_type: bool) -> mlua::Result<MultiValue> {
@@ -588,7 +588,7 @@ mod tests {
 
     /// The **1.12** shape, which is not a prefix of the Era one: `UnitBuff` → `(texture,
     /// applications)`, `UnitDebuff` → `(texture, applications, dispelType)`, and the FIRST value is
-    /// the texture. Decision 1818; `0x519500`/`0x5198f0`, both `verified` in wow-re's ledger. The
+    /// the texture. Decision 1818; `0x519500`/`0x5198f0`. The
     /// reference's own FrameXML reads exactly this (`TargetFrame.lua:287-290`), and so does every
     /// one of the 184 call sites in the addon corpus.
     #[test]

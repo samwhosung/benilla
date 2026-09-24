@@ -1,18 +1,16 @@
 //! `GetActionBarToggles` / `SetActionBarToggles` — the four extra action bars' visibility, as one
-//! server-owned nibble. Byte-VERIFIED against the 1.12.1 binary: wow-re
-//! `system/ui/scratch/action-bar-toggles.md` (a §5 trio cross-check, `417c2d31`), whose section
-//! numbers the comments below cite.
+//! server-owned nibble, byte-verified against the 1.12.1 binary.
 //!
 //! ## The shape, and why it is not the shape it looks like
 //!
 //! Four booleans in, four booleans out — but **the getter and the setter do not talk to each
 //! other**. `SetActionBarToggles 0x4e76e0` packs its four arguments into a stack byte, posts
 //! `CMSG_SET_ACTIONBAR_TOGGLES` and returns zero values; every store in its body is into its own
-//! `ebp` frame (§4.1). `GetActionBarToggles 0x4e7660` reads the live descriptor at
-//! `[[player+0xe68]+0x102a]` — `PLAYER_FIELD_BYTES` byte 2 — on every call, with no cache (§5). The
+//! `ebp` frame. `GetActionBarToggles 0x4e7660` reads the live descriptor at
+//! `[[player+0xe68]+0x102a]` — `PLAYER_FIELD_BYTES` byte 2 — on every call, with no cache. The
 //! only writer of that cell in the whole image is the generic `SMSG_UPDATE_OBJECT` value-apply
-//! (`apply_update_fields 0x466590`), and **nothing is notified when it lands**: all 49 field-change
-//! registrations at `0x468070` were enumerated and none sits at an offset ≥ `0x1000` (§4.2).
+//! (`0x466590`), and **nothing is notified when it lands**: all 49 field-change
+//! registrations at `0x468070` were enumerated and none sits at an offset ≥ `0x1000`.
 //!
 //! So `SetActionBarToggles(1)` followed immediately by `GetActionBarToggles()` returns the **old**
 //! value, for a whole round trip. That is not a bug to paper over — it is the mechanism, and it is
@@ -22,22 +20,23 @@
 //!
 //! The reference UI does not feel the lag because it never asks: it keeps `SHOW_MULTI_ACTIONBAR_1..4`
 //! as Lua globals, updates them on the checkbox click, and reads the binding exactly once — in
-//! `UIParent.lua`'s `PLAYER_ENTERING_WORLD` handler (§7). Our Lua layer copies that split.
+//! `UIParent.lua`'s `PLAYER_ENTERING_WORLD` handler. Our Lua layer copies that split.
 //!
 //! ## Four bits, and only four
 //!
 //! The setter's loop runs `i = 0..3` (`0x4e770e cmp esi,4`) and ORs `1 << i` for argument `i + 1`;
 //! the accumulator is written by exactly two instructions image-wide — the `mov BYTE [ebp-0x4],0`
-//! that zeroes it and the loop's `or` (§2). Two consequences we reproduce exactly:
+//! that zeroes it (`0x4e76eb`) and the loop's `or` (`0x4e7709`). Two consequences we reproduce
+//! exactly:
 //!
 //! - A **fifth argument is silently dropped**. The shipped `UIOptionsFrame_Save` passes
 //!   `ALWAYS_SHOW_MULTIBARS` as a fifth; the binding never fetches it, so it never reaches the byte
 //!   or the wire (and, consistently, it is the one option of the five that FrameXML saves locally).
 //! - A `Set` **destroys the high nibble**. It starts from zero, so whatever `0x10..0x80` the server
 //!   happened to hold is overwritten with 0 by the next post. The getter never tests those bits
-//!   either (§5), so the client's view of this field is genuinely 4-bit.
+//!   either, so the client's view of this field is genuinely 4-bit.
 //!
-//! The bit→bar meaning is a FrameXML convention, not the binary's (§7) — the engine stores four
+//! The bit→bar meaning is a FrameXML convention, not the binary's — the engine stores four
 //! unnamed bits and the names live in the UI layer.
 
 use mlua::{Lua, MultiValue, Value};
@@ -61,7 +60,7 @@ impl super::UiScript {
     /// What the VM last had pushed into it, or `None` if nothing ever has — the app's own read,
     /// and the tests'. `None` and `Some(0)` are indistinguishable to Lua by design: with no local
     /// player the reference's chain fails soft and the getter returns four `nil`s, which is exactly
-    /// what a zero byte returns (§5).
+    /// what a zero byte returns (`0x4e7660`).
     pub fn action_bar_toggles(&self) -> Option<u8> {
         self.model_ref().action_bar_toggles
     }
@@ -105,7 +104,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SetActionBarToggles(a, b, c, d) -> nothing. Four argument slots, no more: a fifth is never
-    // fetched (§2), which matters because the shipped Options panel passes one.
+    // fetched (`0x4e76e0`), which matters because the shipped Options panel passes one.
     //
     // The arguments are read through `0x6f1c10`, NOT Lua truthiness ([`bool_or_default`]) — the
     // panel that calls this hands option bindings the strings "0"/"1", and `"0"` is truthy in Lua.
@@ -240,7 +239,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
 
         // Nothing pushed: four nils, and no error. Indistinguishable from a zero byte, exactly as
-        // "no local player" is in the reference (§5).
+        // "no local player" is in the reference (`0x4e7660`).
         assert!(s
             .eval::<bool>(
                 "local a,b,c,d = GetActionBarToggles() \
@@ -274,7 +273,8 @@ mod tests {
 
     /// Round trip: what the setter packs is what the getter reads back — but only once the value
     /// has travelled through the app's push, because the setter deliberately does not touch the
-    /// local copy. The stale read in the middle is the mechanism, not an oversight (§4.1).
+    /// local copy. The stale read in the middle is the mechanism, not an oversight (`0x466590`,
+    /// the only writer).
     #[test]
     fn the_setter_does_not_touch_the_local_copy_so_the_read_lags_a_round_trip() {
         let mut s = UiScript::new().unwrap();

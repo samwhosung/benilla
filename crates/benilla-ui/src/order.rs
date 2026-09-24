@@ -2,11 +2,11 @@
 //! (`ZKey`), plus the visible-tree [`traversal`] that realizes the client's painter order
 //! (decision 0068).
 //!
-//! ## Ground truth (wow-5875-re, binary-verified)
+//! ## Ground truth
 //!
 //! The 1.12.1 client draws in a **flat painter's order**, *not* a hierarchical walk: every visible
 //! frame — children included — is an independent entry in a per-`(strata, level)` bucket
-//! (`propagation.md`, `propagation-anchors.md`). A child frame with a *lower* strata/level than its
+//! (`root+0xcd4`). A child frame with a *lower* strata/level than its
 //! parent therefore draws *before* the parent — the order is global, keyed on the tuple below, not
 //! on the tree shape.
 //!
@@ -16,9 +16,7 @@
 //! BACKGROUND, then every frame's BORDER, and so on — regions are *not* grouped behind their owning
 //! frame. Within one layer the same is true of kind: the batch holds a quad sub-array and a text
 //! sub-array, and `0x76fb00` drains all quads before any text, so **all** textures of a
-//! `(strata, level, layer)` precede **all** its font strings. (Decision 0884, wow-re
-//! `ui/scratch/draw-order-law.md`. This supersedes the earlier recorded key, which had no layer
-//! term at all and read the last term backwards.)
+//! `(strata, level, layer)` precede **all** its font strings (decision 0884).
 //!
 //! ## The total order (most- to least-significant)
 //!
@@ -45,11 +43,10 @@
 //! - **`BLIZZARD` stratum** — the modern engine adds exactly one stratum *above* `TOOLTIP`
 //!   (decision 0068 §"strict superset"; the 1.12 `UI.xsd`↔Era diff). It is the last [`Strata`]
 //!   variant; 1.12 content never selects it.
-//! - **`textureSubLevel`** — an i8 ordering knob *within* a draw layer, first-class in Era. 0884's
-//!   §5 found **no sub-level in 5875 at all** (`0x76a860` takes only `(region, layer)` and
-//!   head-inserts with no comparator; the per-layer header is a plain 0xc-byte triple with nowhere
-//!   to keep a sort key), correcting the earlier note that placed one in the 1.12 region lists. The
-//!   `sub_level` field stays as the Era delta and is inert for 1.12 content.
+//! - **`textureSubLevel`** — an i8 ordering knob *within* a draw layer, first-class in Era. There
+//!   is **no sub-level in 5875 at all** (`0x76a860` takes only `(region, layer)` and head-inserts
+//!   with no comparator; the per-layer header is a plain 0xc-byte triple with nowhere to keep a
+//!   sort key). The `sub_level` field stays as the Era delta and is inert for 1.12 content.
 
 use crate::widget::{FrameHandle, RegionHandle, RegionKind, WidgetArena};
 
@@ -58,7 +55,7 @@ use crate::widget::{FrameHandle, RegionHandle, RegionKind, WidgetArena};
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The frame strata, in draw order (low → high). Variants 0..=8 are the client's nine
-/// buckets, byte-verified in the `CSimpleTop` ctor's 9-loop (`propagation.md`): WORLD, BACKGROUND,
+/// buckets, byte-verified in the `CSimpleTop` ctor's 9-loop (`0x764180`): WORLD, BACKGROUND,
 /// LOW, MEDIUM (the default, id 3), HIGH, DIALOG, FULLSCREEN, FULLSCREEN_DIALOG, TOOLTIP. `BLIZZARD`
 /// (id 9) is the one stratum the modern engine adds *above* TOOLTIP (decision 0068) — an
 /// extension point, never selected by 1.12 content.
@@ -71,7 +68,7 @@ pub enum Strata {
     Background = 1,
     /// id 2.
     Low = 2,
-    /// id 3 — the client default (`frameStrata` ctor value `3`, `frame-model.md`).
+    /// id 3 — the client default (`frameStrata` ctor value `3` at `0x7690c2`).
     Medium = 3,
     /// id 4.
     High = 4,
@@ -110,7 +107,7 @@ impl Strata {
 }
 
 impl Default for Strata {
-    /// `MEDIUM` — the client's default `frameStrata` (ctor writes `3`, `frame-model.md`).
+    /// `MEDIUM` — the client's default `frameStrata` (ctor writes `3` at `0x7690c2`).
     fn default() -> Strata {
         Strata::Medium
     }
@@ -120,8 +117,8 @@ impl Default for Strata {
 // Draw layers — the within-frame region order
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// The five draw layers a region sits in, in draw order (`frame-model.md`, the frame's five
-/// region lists ~`0x1c0`): BACKGROUND, BORDER, ARTWORK, OVERLAY, HIGHLIGHT.
+/// The five draw layers a region sits in, in draw order (the reference's five region lists
+/// ~`0x1c0`): BACKGROUND, BORDER, ARTWORK, OVERLAY, HIGHLIGHT.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DrawLayer {
@@ -199,14 +196,11 @@ impl Default for DrawLayer {
 // a texture or don't overlap (the common case). **No content may depend on the relative order of
 // two overlapping textures within one layer** — that is not a fidelity invariant.
 //
-// wow-re's own previously-recorded key — `(strata, level, insertion order)` — is superseded by the
-// same §5: it carried no layer term at all.
-//
 // A frame's own entry zeroes the layer and everything below `is-region`, so it precedes its own
 // BACKGROUND regions. That slot is benilla's backdrop/scissor hook, not the client's — in the
 // binary a frame has no drawable of its own — so it sits *below* the layer key, never above it.
 //
-// **`sub-level` is inert on 1.12**: §5 found no sub-level in 5875 at all (`0x76a860` takes only
+// **`sub-level` is inert on 1.12**: there is no sub-level in 5875 at all (`0x76a860` takes only
 // `(region, layer)`, head-inserts with no comparator, and the per-layer header is a plain 0xc-byte
 // triple with nowhere to keep a sort key). The field stays as the modeled Era delta; no 1.12
 // content sets it, so it is always the `0` bias.
@@ -216,7 +210,7 @@ const LEVEL_SHIFT: u32 = 44;
 const LAYER_SHIFT: u32 = 41;
 /// The batch RANK within a `(strata, level, layer)`: the three sub-arrays a layer batch carries and
 /// the order `0x76fb00` drains them — its quads (`+0x10`), its string batch (`+0x18`), then its
-/// render-callback list (`+0x1c`; wow-re `ui/scratch/model-frame-draw-order.md`, decision 1995).
+/// render-callback list (`+0x1c`; decision 1995).
 /// Two bits at 39..40, where the one font-string bit used to be; the link stamp below lost a bit
 /// for it (18, from 19 — the arena renumbers at the cap either way).
 const RANK_SHIFT: u32 = 39;
@@ -232,8 +226,7 @@ const DECL_BITS: u32 = 12;
 /// them. The client keeps them as three arrays on one batch object (ctor `0x772e80`: quads at
 /// `+0x10`, the `CGxStringBatch` at `+0x18`, a `RENDERCALLBACKNODE` list at `+0x1c`) and empties
 /// them in this order, so within one `(strata, level, layer)` every texture precedes every font
-/// string, and every font string precedes every model scene (wow-re
-/// `ui/scratch/model-frame-draw-order.md`; decision 1995).
+/// string, and every font string precedes every model scene (decision 1995).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum BatchRank {
@@ -465,13 +458,14 @@ fn walk(arena: &WidgetArena, mut f: impl FnMut(ZTarget, ZKey)) {
     }
 }
 
-/// Produce the render list in the client's exact `render_traverse_order 0x765650` order.
+/// Produce the render list in the client's exact `0x765650` order.
 ///
 /// Only **effective-visible** frames contribute: because `effective_visible` is maintained across
-/// the whole subtree by the arena's propagation (`set_shown`/`set_parent`), filtering on the flag is
-/// equivalent to the client's "recurse to child frames, a hidden mid-tree frame blocks its subtree"
-/// (`propagation.md`) — a child of a hidden frame already carries `effective_visible == false` and is
-/// skipped here. Each visible frame emits its own [`ZTarget::Frame`] entry followed by one
+/// the whole subtree by the arena's propagation (`set_shown`/`set_parent`), filtering on the flag
+/// is equivalent to the client's "recurse to child frames, a hidden mid-tree frame blocks its
+/// subtree" (`0x76ae10`/`0x76ad50`) — a child of a hidden frame already carries
+/// `effective_visible == false` and is skipped here. Each visible frame emits its own
+/// [`ZTarget::Frame`] entry followed by one
 /// [`ZTarget::Region`] per owned region; the returned vec is sorted ascending by [`ZKey`], which *is*
 /// the total draw order (strata → frame level → **draw layer** → texture<fontstring → frame
 /// link-stamp → is-region → sub-level → decl; the layer outranks the frame — see the `ZKey`
@@ -481,8 +475,8 @@ fn walk(arena: &WidgetArena, mut f: impl FnMut(ZTarget, ZKey)) {
 /// Ordering only: this emits an entry for *every* region of a visible frame. Region-level
 /// `Show`/`Hide` (the VisibleRegion bit, `region+0xc4`) is applied one layer up, where paint lives —
 /// [`UiScript::extract`](crate::script::UiScript::extract) drops hidden regions before they become
-/// quads. (The 1.12 region-draw cluster that would pin the *draw-time* skip is still flagged unread
-/// in wow-re's findings; the flag itself and its setter `0x77fcb0` are recorded.)
+/// quads. (The 1.12 region-draw cluster that would pin the *draw-time* skip remains unread; the
+/// flag itself and its setter `0x77fcb0` are recorded.)
 ///
 /// Cached against its own inputs (decision 1979): the list
 /// is a pure function of every visible frame's `(strata, level, insertion)` and every attached
@@ -524,8 +518,7 @@ pub fn traversal(arena: &WidgetArena) -> DrawList {
 // Hit-testing — the mouse-focus capture walk
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// Find the frame the cursor captures — the reference's flat hit-test index, **byte-carved**
-/// (wow-re `system/ui/scratch/hittest-no-fallthrough-law.md`).
+/// Find the frame the cursor captures — the reference's flat hit-test index.
 ///
 /// The sweep `0x7660d0` walks the mouse plane strata high→low and, within a stratum, the index from
 /// 0 upward, ending the ENTIRE sweep on the first probe that returns non-zero. There is **no
@@ -545,15 +538,15 @@ pub fn traversal(arena: &WidgetArena) -> DrawList {
 ///
 /// That is the whole reason `TargetFrame_OnLoad`'s `SetFrameLevel(textureFrame-1)` on the two bars
 /// works: the bars land at exactly `TargetFrame`'s own level, and the tie goes to the frame that
-/// registered first. Walking the draw order in reverse — which is what this did until the carve —
-/// inverts it and hands the click to the child, so right-clicking a unit frame opened nothing.
+/// registered first. Walking the draw order in reverse inverts it and hands the click to the
+/// child, so right-clicking a unit frame opened nothing.
 ///
 /// **The SIBLING case is the one that bites hardest, and it is why this is not a local fix**
 /// (decision 1816). All children of one parent share `parent.level + 1`, so every sibling set is one
 /// big tie, resolved purely by declaration order — and under the true law the FIRST-declared sibling
 /// wins, not the last. A full-area mouse-enabled overlay declared at the top of a `<Frames>` list
 /// therefore swallows its whole window. Five of our own windows shipped exactly that (the
-/// `*WheelCatcher` `<Button>`s), correct only under the inverted order and removed with this carve;
+/// `*WheelCatcher` `<Button>`s), correct only under the inverted order and now removed;
 /// `SkillFrame.xml` had already recorded one shipped bug from the same shape. Note that
 /// `<Button>` is mouse-enabled by its *constructor* (decision 1795), so such an overlay needs no
 /// `enableMouse` to compete — the wheel is a separate index and needs no mouse hit target at all.
@@ -755,7 +748,7 @@ mod tests {
         );
     }
 
-    /// The client's bucket re-add on show (`effective_visible_show 0x76ae10`, propagation.md):
+    /// The client's bucket re-add on show (`0x76ae10`):
     /// within one (strata, level) bucket, a frame shown LATER draws over one declared later but
     /// never hidden — the exact minimap case (MiniMapTrackingFrame is declared before
     /// MinimapBackdrop, hidden at load, and its runtime Show must lift it over the backdrop's
