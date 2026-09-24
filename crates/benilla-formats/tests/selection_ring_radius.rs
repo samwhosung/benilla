@@ -8,9 +8,9 @@
 //! ```
 //!
 //! where `dx,dy` are the horizontal (X,Y) extents of the unit's **Stand** animation bounding box (the M2
-//! `M2Sequence` CAaBox), Stand being animation **id 0** via `animationLookup[0]`. This was byte-traced
-//! *and* Unicorn-emulated in wow-re (`system/object-layer/scratch/selection-ring-scale.md`) and
-//! reproduces the reference apitrace's measured ring radii to ~1 mm. It is NOT the render bounding sphere
+//! `M2Sequence` CAaBox), Stand being animation **id 0** via `animationLookup[0]`. This formula
+//! reproduces the reference apitrace's measured ring radii to ~1 mm. It is NOT the render
+//! bounding sphere
 //! (`0xCC`) — that (`0x5d6fe0`, `[unit+0x2b0]`) is the *corpse* decal; the render sphere over-sized tall
 //! humans and under-sized the squat chicken because it folds in height, whereas the nested-sqrt footprint
 //! compresses range.
@@ -56,8 +56,8 @@ fn ring_footprint_matches_reference_pixels() {
 /// The sizer's **other** branch: a box whose X and Y extents are both exactly zero takes the
 /// literal 1.2 (`0x60af4f..0x60af67`, `0x3f99999a`) and never reaches the formula.
 ///
-/// wow-re recorded this branch as one that "never fires for real creatures" — true of the four
-/// life-size units it measured, false of the whole trigger-creature family. `InvisibleStalker`
+/// This branch reads as one that "never fires for real creatures" — true of the four
+/// life-size units measured, false of the whole trigger-creature family. `InvisibleStalker`
 /// authors **all 135** of its sequence boxes at zero, so 1.2 is its ring, and the Naxxramas weapon
 /// mobs (an `InvisibleStalker` body holding a visible axe, display 15294 at scale 2.25 ⇒ a 2.7 yd
 /// ring) are exactly where a player meets it. We computed `sqrt(0.5·sqrt(0))` = 0 and drew a ring

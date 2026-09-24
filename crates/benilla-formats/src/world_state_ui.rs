@@ -18,8 +18,7 @@
 //! <unread>(22), StateVariable(23), Type(24), DynamicIcon(25, a path string),
 //! DynamicTooltip_lang(26-34), ExtendedUI(35, a token string), ExtendedUIStateVariable[3](36-38)`.
 //!
-//! Those names are the **binary's**, confirmed 2026-08-25 by wow-re's carve of the loader and the
-//! two bindings (`system/ui/scratch/worldstate-ui-law.md`): the loader's own dimension asserts
+//! Those names are the **binary's**, confirmed 2026-08-25: the loader's own dimension asserts
 //! (`0x553a9e cmp eax,0x27`, `0x553ad6 cmp eax,0x9c`) fix 39 columns of 156 bytes, and
 //! `GetWorldStateUIInfo 0x4c5a70` reads exactly `+0x0c` Icon, `+0x10` Text, `+0x34` Tooltip,
 //! `+0x5c` StateVariable, `+0x64` DynamicIcon, `+0x68` DynamicTooltip, `+0x8c` ExtendedUI,

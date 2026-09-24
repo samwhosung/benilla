@@ -5,12 +5,12 @@
 //! `G_BookOpenMediumBrown.m2` is the model that makes this unmissable. Its four sequences are the
 //! whole door family — Close(146) / Closed(147) / Open(148) / Opened(149) — authored in **that**
 //! order, so file-order-0 is a 0.333 s motion that sweeps bone 0 from the open angle to the closed
-//! one. Every one of the four carries `flags` bit 0 clear, i.e. the kernel loops it forever (wow-re
-//! `gameobject-anim-arm.md` §3, `0x714585`). Looping the Close motion is therefore a book that snaps
+//! one. Every one of the four carries `flags` bit 0 clear, i.e. the kernel loops it forever
+//! (`0x714585`). Looping the Close motion is therefore a book that snaps
 //! open and swings shut three times a second, for ever — exactly what was reported.
 //!
 //! The reference arms **animation id 0 (Stand)** resolved through the model's own
-//! `playableAnimationLookup` (§1, byte-verified `0x71019b`), and this book's table sends id 0 to
+//! `playableAnimationLookup` (`0x71019b`), and this book's table sends id 0 to
 //! **147 Closed** — a two-key band whose keys are both identity, i.e. a still, shut book.
 //!
 //! The DuelingFlag test next door pins the same seed law on a model whose first sequence is a

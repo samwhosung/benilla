@@ -1,5 +1,5 @@
 //! WMO MFOG + group fog-index parse — byte check against the Goldshire inn (the interior-fog
-//! fold's reference building, wow-re `rf-weather-emission-timeline` ROUND 5). Pins the MFOG
+//! fold's reference building). Pins the MFOG
 //! record decode AND the MOGP fog-index disk offset (`0x30` — an earlier from-memory `0x40`
 //! guess read zeros there; the `uniqueID @0x38` / no-liquid `@0x34` neighbours self-validate
 //! the layout). Skips when the client isn't present.

@@ -30,9 +30,9 @@
 //! **Timing-mode calibration is the point of this module.** vmangos's own computed periods do
 //! **not** match the real client's — the server DB-overrides them (`transports` table,
 //! `TransportMgr.cpp:63-79`, "load period override from db since our algorithm is not perfect").
-//! The client's per-span arc-length time is transcribed bit-exact in `wow-5875-re`
-//! (`crates/object-layer/src/taxi_spline.rs`: `arc_time_ms`, closed-form constant-acceleration
-//! kinematics with `round_ftol` — ×1000, round-half-away-from-zero, truncate). [`TimeMode`] (private —
+//! The client's per-span arc-length time is transcribed bit-exact from the reference client's
+//! `0x5f9120` — closed-form constant-acceleration kinematics, ×1000, round-half-away-from-zero,
+//! truncate. [`TimeMode`] (private —
 //! not public API) selects between vmangos's own f32-seconds accumulation (`Mode::Vmangos`,
 //! transcribing `TransportMgr.cpp:297-325` exactly) and a client-closed-form per-span accumulation
 //! (`Mode::ClientForms`); the arc-length chord-sampling density (`STEPS_PER_SEGMENT` — vmangos uses
@@ -42,7 +42,7 @@
 //!
 //! **The cycle length itself is past calibration:** [`TransportTimetable::build`] pins its period
 //! to the real client's own bookkeeping, transcribed in [`crate::transport_period`] and gold-gated
-//! bit-exact against all nine server-sniff values (the 2026-07-17 wow-re §5 verdict). The sample
+//! bit-exact against all nine server-sniff values. The sample
 //! table between the pins stays vmangos-mode (internally consistent windows + easing); porting the
 //! client's true per-leg tick evaluation is the recorded follow-on.
 
@@ -256,7 +256,7 @@ enum TimeMode {
     /// to ms once per keyframe. **The sample-table default** — windows and easing from one
     /// accumulation (see [`TransportTimetable::build`]).
     Vmangos,
-    /// The real client's constant-acceleration closed form (`wow-5875-re`'s `taxi_spline`),
+    /// The real client's constant-acceleration closed form (client fn `0x5f9120`),
     /// applied once per stop-to-stop span and rounded with `round_ftol`, accumulated as integer
     /// ms. Interior timestamps are distance-linear — a period-calibration device (the golden
     /// sweep), NOT a sampling table; constructed only by the calibration tests.
@@ -264,9 +264,8 @@ enum TimeMode {
     ClientForms,
 }
 
-/// `·1000.0` then round-half-away-from-zero then truncate — `wow-5875-re`'s
-/// `object_layer::taxi_spline::round_ftol` (the client's own `__ftol` rounding idiom, `fcom
-/// 0.0;test ah,0x41` → `±0.5`), transcribed exactly.
+/// `·1000.0` then round-half-away-from-zero then truncate — the client's own `__ftol` (`0x40a2b0`)
+/// rounding idiom (`fcom 0.0;test ah,0x41` → `±0.5`), transcribed exactly.
 fn round_ftol(t: f64) -> i32 {
     let scaled = t * 1000.0;
     let adj = if scaled > 0.0 {
@@ -278,10 +277,10 @@ fn round_ftol(t: f64) -> i32 {
 }
 
 /// The client's "both ramps present" closed form for a stop-to-stop span of distance `d_span`
-/// (`wow-5875-re::object_layer::taxi_spline::arc_time_ms`'s `!first` branch: `if 2B < D { (D −
+/// (the reference client's `0x5f9120`, `!first` branch: `if 2B < D { (D −
 /// 2B)/v + 2A } else { 2·√(D/a) }`, `A = v/a` stored `f32`, `B = ½·v·A` kept live `f64` for the
-/// branch compare but stored `f32` for the arithmetic — the exact f32/f64 mixing `taxi_spline.rs`
-/// diffs), rounded to ms via [`round_ftol`].
+/// branch compare but stored `f32` for the arithmetic — the exact f32/f64 mixing is bit-exact),
+/// rounded to ms via [`round_ftol`].
 fn span_time_ms(d_span: f32, speed: f32, accel: f32) -> u32 {
     if accel <= 0.0 {
         return 0;
@@ -494,8 +493,8 @@ impl TransportTimetable {
         let mut tt =
             Self::build_with_variant(nodes, move_speed, accel_rate, TimeMode::Vmangos, 20)?;
         // The cycle LENGTH self-pins to the real client's own bookkeeping (`transport_period`,
-        // gold-gated bit-exact against all nine server-sniff periods — the 2026-07-17 wow-re §5
-        // verdict). The wire anchor is a raw server-uptime-scale clock, so `% period` amplifies
+        // gold-gated bit-exact against all nine server-sniff periods). The wire anchor is a raw
+        // server-uptime-scale clock, so `% period` amplifies
         // any Δms by the whole cycle count; vmangos pins its DB periods to sniffs of the same
         // client computation, so this IS the server's period — no consumer-side table needed.
         if let Some(period) =
@@ -592,7 +591,7 @@ impl TransportTimetable {
                     map_id: node.map_id,
                     pos: node.pos,
                     // The CLIENT tests the stop flag as a bitmask (`test byte[row+0x1c], 0x2`
-                    // @0x5f4e37 — the 2026-07-17 wow-re §5); vmangos's `IsStopFrame` uses exact
+                    // @0x5f4e37); vmangos's `IsStopFrame` uses exact
                     // `== 2`. Identical on the live data (flags ∈ {0, 2}) — we follow the client.
                     is_stop: node.flags & 2 != 0,
                     delay_secs: node.delay as f32,
@@ -764,7 +763,7 @@ impl TransportTimetable {
     /// (`TransportMgr.cpp:63-79`: vmangos overrides its computed `pathTime` with the DB-sniffed
     /// per-build client value, stretching the final keyframe's departure), mirrored here.
     /// [`Self::build`] applies it with the client-transcribed period ([`crate::transport_period`],
-    /// bit-exact against all nine server-sniff values — the 2026-07-17 wow-re §5 verdict): the
+    /// bit-exact against all nine server-sniff values): the
     /// wire anchor is a *raw* server-uptime-scale clock, so a Δms period error is amplified by
     /// the whole `floor(progress/period)` cycle count at every `% period` — days of uptime turn
     /// a 20 ms mismatch into minutes of phase error.

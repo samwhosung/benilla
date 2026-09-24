@@ -1,9 +1,8 @@
 //! **The last chunk clamps to EOF.** A WMO's chunk stream is not guaranteed to tile its file
-//! exactly, and the reference tolerates the slop: its walk "reads chunks while the 8-byte header is
-//! in-bounds and clamps the last chunk to EOF (never requires exact tiling)" — wow-re `models.md`,
-//! "WMO chunk-structure contract" (VERIFIED, with a 6332-file corpus oracle), whose own worked
-//! example is the single file in the game that needs the rule: `Undercity_144.wmo`'s MOGP declares
-//! one byte more than the file holds.
+//! exactly, and the reference tolerates the slop: its walk (`0x6c3a60`) "reads chunks while the
+//! 8-byte header is in-bounds and clamps the last chunk to EOF (never requires exact tiling)",
+//! measured over the whole shipped corpus; the single file in the game that needs the rule is
+//! `Undercity_144.wmo`, whose MOGP declares one byte more than the file holds.
 //!
 //! We used to `break` there and hand the caller nothing. That cost g144 its whole MOGP — flags,
 //! portal-ref span, area id, fog, doodad and light refs — and since the portal flood reaches a

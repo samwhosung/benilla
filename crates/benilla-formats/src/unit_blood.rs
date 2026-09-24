@@ -1,6 +1,6 @@
 //! **UnitBlood.dbc / UnitBloodLevels.dbc** — the melee blood-spurt tables (decision 0137 phase 3).
 //!
-//! The byte-verified chain (wow-re `melee-blood-spurt.md`, `0x624530 → 0x625010`): a melee hit with
+//! The chain (`0x624530 → 0x625010`): a melee hit with
 //! `HitInfo & 0x2`, nonzero damage, and victimState ∈ {1,4} resolves the victim's blood id
 //! ([`BloodCatalog::level_key`]: the `CreatureDisplayInfo.BloodLevel` override, else
 //! `CreatureModelData.BloodID`, else **UnitBloodLevels' file row 0** — the tier-3 fallback 1850
@@ -14,8 +14,8 @@
 //! (not crit — crit `0x80` belongs to the wound flinch).
 //!
 //! **Fields 5–9 are the row's ground-splat decal textures, and they are DEAD in 1.12.1**
-//! (`textures\BloodSplats\…`, [`BloodCatalog::splats`]; wow-re `ground-blood-splat-dead.md`,
-//! decision 1850). Not "unimplemented" — *absent*: no instruction in the image reads
+//! (`textures\BloodSplats\…`, [`BloodCatalog::splats`]; decision 1850).
+//! Not "unimplemented" — *absent*: no instruction in the image reads
 //! `UnitBloodRecord + 0x14 … +0x24`, and the string `"BloodSplat"` occurs nowhere in `WoW.exe`,
 //! though all twelve `.blp` ship in `texture.MPQ` and the DBC resolves them. Data shipped, art
 //! shipped, code gone. The only ground decal in 1.12.1 that takes a DBC string column is the
@@ -62,8 +62,7 @@ struct BloodRow {
 impl BloodCatalog {
     /// The victim's **UnitBloodLevels key**, by the reference's three-tier fallback — the display
     /// resolve `0x60afb0`, which stores the resulting row pointer at `[unit+0xb48]` and is the only
-    /// place blood ids are turned into a row (wow-re `melee-blood-spurt.md` §c,
-    /// `ground-blood-splat-dead.md` §Q9):
+    /// place blood ids are turned into a row:
     ///
     /// 1. `CreatureDisplayInfo.BloodLevel` (`display_blood`), else
     /// 2. `CreatureModelData.BloodID` (`model_blood`), else

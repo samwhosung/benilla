@@ -64,7 +64,7 @@ fn a_modelless_head_display_is_not_a_worn_helm() {
         .count();
     assert_eq!((masked, masked_modelless), (1314, 12));
 
-    // 5. The gate is `ModelName[0]` alone (wow-re RF-0085, `0x4799c1`), not "either slot". 41 rows
+    // 5. The gate is `ModelName[0]` alone (`0x4799c1`), not "either slot". 41 rows
     //    fill only the RIGHT slot; none of them carries a vis pair, so the two readings coincide on
     //    the shipped table — assert that rather than assume it, because the day one diverges the
     //    reference's answer is the left slot's.

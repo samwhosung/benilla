@@ -1,6 +1,5 @@
 //! **FixColorVertexAlpha** — the bright-doorway portal fade, pinned to the reference's own live
-//! capture (wow-re `trace-forensics-abbey-interior-d3d.md` §2) and to the building the fade is
-//! load-bearing for (Dire Maul's entrance corridors).
+//! capture and to the building the fade is load-bearing for (Dire Maul's entrance corridors).
 //!
 //! The capture is an unusually exact oracle. It read the abbey's uploaded MOCV vertex buffers back
 //! off the D3D stream and diffed them against the file: **678/678 vertices byte-identical in group 1,

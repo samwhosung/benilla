@@ -1,8 +1,8 @@
 //! The **burst gate**, pinned against a shipped asset whose gate never opens.
 //!
 //! A burst emitter fires on the rising edge of `enabled != 0 && sampledRate > 0`, both tracks
-//! sampled from the same clock in the same frame (wow-re `part-emission-burst-flag.md` §1,
-//! `0x718ed2`–`0x718ef6`). `Spells\Strike_Impact_Chest.m2` — the gold flare every warrior ability
+//! sampled from the same clock in the same frame (`0x718ed2`–`0x718ef6`).
+//! `Spells\Strike_Impact_Chest.m2` — the gold flare every warrior ability
 //! impact plays (kit 437 → `SpellVisualEffectName` 416, attached at the target's chest `0x22`) —
 //! carries two burst emitters, and **only one of them ever emits**:
 //!

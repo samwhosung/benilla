@@ -423,14 +423,14 @@ fn terrain_chunks_carry_unit_upward_mcnr_normals() {
 ///    geometric-normal Z is the sign of its XY-projected signed area — independent of the authored
 ///    heights. (The reference builds its vertices the same way: `0x6b0e50` writes X and Y from the
 ///    grid indices and only Z from MCVT.) No shipped triangle may violate this.
-/// 2. **Near-total.** wow-re's coordinate-system-free statement of the same convention: the emitted
+/// 2. **Near-total.** A coordinate-system-free statement of the same convention: the emitted
 ///    winding is the one whose right-hand-rule normal agrees with the vertex's own MCNR normal.
 ///    Worth keeping because it survives a change of frame — but it is *not* exact on shipped data
-///    and must not be asserted as if it were: wow-re derived it against flat ground, where MCNR is
-///    exactly `(0,0,1)`, and on this Elwynn tile 4 of 196368 triangle-vertex pairs disagree (worst
-///    cos −0.48, on a hillside). Those are authored outliers, not a decode fault — a decode fault
-///    would be systematic, not 4-in-200k. A genuine winding flip turns ~every pair negative, which
-///    the 0.01% ceiling below still catches loudly.
+///    and must not be asserted as if it were: it holds exactly only against flat ground, where
+///    MCNR is exactly `(0,0,1)`, and on this Elwynn tile 4 of 196368 triangle-vertex pairs
+///    disagree (worst cos −0.48, on a hillside). Those are authored outliers, not a decode fault
+///    — a decode fault would be systematic, not 4-in-200k. A genuine winding flip turns ~every
+///    pair negative, which the 0.01% ceiling below still catches loudly.
 #[test]
 fn terrain_fans_wind_ccw_seen_from_above() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -760,7 +760,7 @@ fn filters_wmo_collidable_triangles_by_mopy() {
     let mut chain = open_chain(&data).expect("open vanilla patch chain");
 
     // Golden vector: the binary-verified client filter (collide iff `!(flags & 0x04 DETAIL)`,
-    // WoW.exe 5875 — collision.md §F) selects exactly 5114 collidable tris from the Goldshire Inn. (On
+    // `0x6a37b0` -> `0x6bc700`) selects exactly 5114 collidable tris from the Goldshire Inn. (On
     // this fixture that equals the old `COLLISION||(RENDER&&!DETAIL)` count — every non-DETAIL face here
     // is also COLLISION-or-RENDER; the rules diverge only on flags-0x00/0x40-only faces, absent here.)
     // Pins both the filter clause and the wow-wmo group decode.
@@ -801,8 +801,9 @@ fn derives_the_wmo_window_glass_law_from_momt() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = open_chain(&data).expect("open vanilla patch chain");
 
-    // Golden vectors for the three MOMT window/glass mechanisms (wow-re `wmo-lit-selector` §1,
-    // `wmo-interior-night-light` §2/§4). The Goldshire Inn authors both window kinds:
+    // Golden vectors for the three MOMT window/glass mechanisms (the exterior UNLIT drawer
+    // `0x6b4f10`, the interior WINDOW drawer `0x6b5190`, the SIDN night-ramp `0x6b4090`). The
+    // Goldshire Inn authors both window kinds:
     //   mat 5  MM_ELWYNN_WND_EXT__01, flags 0x11 (UNLIT|SIDN), exterior groups only → the unlit
     //          fullbright pane (SIDN inert under lighting-off), sidn colour still carried;
     //   mat 21 MM_ELWYNN_WND_INT__01, flags 0x28 (WINDOW), interior groups' EXT section → lit by
@@ -871,7 +872,7 @@ fn reads_authentic_atmosphere_from_light_dbc() {
     // Northshire (Human start) on Azeroth resolves to the continent's global daytime light.
     let a = cat.sample_noon(0, [-8949.95, -132.49, 83.5]);
 
-    // Fog bands are RAW (no /36 — that scale is positions-only; wow-re `rf-weather-fog-veil.md`):
+    // Fog bands are RAW (no /36 — that scale is positions-only, per the reference):
     // the client pushes `min(raw, farclip)`, so these huge land values resolve to the view distance.
     // Must have read real bands, not fallen back to the default.
     assert_ne!(
@@ -928,10 +929,10 @@ fn reads_authentic_atmosphere_from_light_dbc() {
     );
 }
 
-/// Elwynn's STORM param (k2 = LightParams 10) at midday — the §5-verified endpoints from wow-re's
-/// `rf-weather-fog-veil.md` (decoded off the real DBCs and byte-traced through the blend). The
-/// load-bearing pin is the **negative fog-start fraction**: −0.5, UNCLAMPED — the mechanism behind
-/// the reference's constant ~33% near veil under rain. A clamp regression here silently kills the veil.
+/// Elwynn's STORM param (k2 = LightParams 10) at midday — decoded off the real DBCs and
+/// byte-traced through the blend. The load-bearing pin is the **negative fog-start fraction**:
+/// −0.5, UNCLAMPED (`0x6cee6d`) — the mechanism behind the reference's constant ~33% near veil
+/// under rain. A clamp regression here silently kills the veil.
 #[test]
 fn reads_elwynn_storm_fog_endpoints() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -1217,9 +1218,7 @@ fn the_wdl_window_contains_the_cameras_own_tile() {
 /// if it were current, looking entirely healthy while rendering a model the reference never draws.
 /// Until now the property was held by a comment in `Chain::read` and nothing else.
 ///
-/// Found by comparing our corpus census against wow-re's: their chain over-enumerated by exactly
-/// these 26, because `list` took the winning listfile entry whatever its flags. Ours already
-/// filtered — the point of this test is that it stays that way.
+/// This chain already filters them out — the point of this test is that it stays that way.
 ///
 /// Non-vacuous by construction: each name is first read straight out of the base archive that still
 /// holds it, so the test fails loudly if the pairing ever stops being a real tombstone-over-content
@@ -1422,9 +1421,9 @@ fn wmo_ground_type_is_a_terrain_type_id() {
 /// indexes was never loaded at all.
 ///
 /// The reference reaches this table only through the ghost override (`0x6d26cb`, gated on
-/// `[0xce9bb0] != -1`; wow-re `lighting/scratch/wmo-skybox.md` §3 + `death-light.md`), and the
-/// shipped data matches that gate exactly: 5 of 426 `LightParams` rows carry a non-zero id, all of
-/// them 3 = `DeathClouds.mdx`, reached from param slot **4** of every one of the 374 `Light` rows.
+/// `[0xce9bb0] != -1`), and the shipped data matches that gate exactly: 5 of 426 `LightParams`
+/// rows carry a non-zero id, all of them 3 = `DeathClouds.mdx`, reached from param slot **4** of
+/// every one of the 374 `Light` rows.
 /// So the answer is the same everywhere, which is what the spread of positions below asserts —
 /// including Deeprun Tram, the shipped map with no `Light` row of its own (it must still find the
 /// sky through the zero-match fallback row, not come back bare).

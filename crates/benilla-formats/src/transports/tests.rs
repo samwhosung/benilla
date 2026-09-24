@@ -197,8 +197,7 @@ fn nine_period_calibration_report() {
 /// The bit-exactness gate for the client-transcribed period (`transport_period`): all nine
 /// live transports must reproduce their server-sniff golden **exactly** — this is what lets
 /// [`TransportTimetable::build`] self-pin its cycle length instead of consulting a hardcoded
-/// server table (the 2026-07-17 wow-re §5 gold validation, decision 0438 §3's exactness
-/// requirement).
+/// server table (decision 0438 §3's exactness requirement).
 #[test]
 fn client_period_bit_exact() {
     let data = crate::wow_data_or_skip!();

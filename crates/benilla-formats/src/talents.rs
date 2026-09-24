@@ -13,7 +13,7 @@
 //! spell taught per rank; 0 = the talent has fewer ranks; columns 9–12 are the enum's unused
 //! rank slots) · **`prereqTalent` = column 13** (14–15 unused prereq slots) · **`prereqRank` =
 //! column 16** (0-based; 17–18 unused) · **flags = column 19** (bit 0 = the Lua API's
-//! `isExceptional` — the client's `TalentRec+0x4c` bit0 read, wow-re `ui/scratch/talent-api.md`)
+//! `isExceptional` — the client's `TalentRec+0x4c` bit0 read)
 //! · **`requiredSpell` = column 20**.
 //!
 //! `TalentTab.dbc` — `TalentTabEntryfmt = "nxxxxxxxxxxxiix"` (15 fields, 60 B/record):
@@ -24,7 +24,7 @@
 //! verified) · **`backgroundFile` = column 14** (a string: the
 //! `Interface\TalentFrame\<base>-{TopLeft,TopRight,BottomLeft,BottomRight}` art base).
 //!
-//! **Order is the law here** (byte-verified — the 0305 fold-back, wow-re `talent-api.md`):
+//! **Order is the law here** (the 0305 fold-back):
 //! `GetTalentInfo(tab, index)` indexes the tab's talents by **native DBC row order**
 //! (`TalentTabInfo[+0xC] + (index−1)*0x54`, a contiguous per-tab block — never a (tier, column)
 //! re-sort), and a class's tabs come in **raw file order** among rows matching BOTH raceMask and

@@ -4,7 +4,7 @@
 //!
 //! `BlackrockStatueLavaBubble.m2` is placed 15 times inside `Blackrock.wmo`. It authors two
 //! sequences, both animation id 0 with frequencies 16384/16383 — so the reference re-rolls between
-//! them every play-window (wow-re `doodad-anim-host.md` §5, decision 0768) and two placements are
+//! them every play-window (`0x6951b0`, decision 0768) and two placements are
 //! on different slots at the same instant. Slot 0 is a dead hold: its bone-scale window is two
 //! identity keys and its texture-transform window is two zero keys. Slot 1 is the whole animation:
 //! the bubbles swell 1.0 → 2.785 while the sprite's V offset flips by 0.605.

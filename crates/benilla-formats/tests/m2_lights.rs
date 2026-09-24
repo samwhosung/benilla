@@ -59,7 +59,7 @@ fn held_torch_casts_one_warm_point_light_up_the_shaft() {
     );
 }
 
-/// The **dark** shape (wow-re `m2-dynamic-lights.md` §9.4): a `type==1` light whose visibility track
+/// The **dark** shape (`0x716413`): a `type==1` light whose visibility track
 /// ships a static `0` key never casts. 11 of the corpus's 85 point lights are this — mostly spell
 /// impact VFX — so the gate is not academic; before it, every one of them lit the world.
 #[test]

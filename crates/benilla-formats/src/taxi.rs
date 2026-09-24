@@ -40,8 +40,8 @@ pub struct TaxiPathNode {
     /// World position `(x, y, z)` on `map_id`.
     pub pos: [f32; 3],
     /// Raw `actionFlag`. Bit `1` (`flags & 2`) marks a station stop — the client tests it as a
-    /// bitmask (`0x5f4e37`, wow-re §5 2026-07-17; vmangos's `IsStopFrame` uses `== 2`, identical
-    /// on the live data); bit `0` (`flags & 1`) marks a map-change/teleport trigger in the
+    /// bitmask (`0x5f4e37`; vmangos's `IsStopFrame` uses `== 2`, identical on the live data);
+    /// bit `0` (`flags & 1`) marks a map-change/teleport trigger in the
     /// transport timetable builder.
     pub flags: u32,
     /// Stop delay in whole seconds — only meaningful when `flags == 2`; `0` otherwise.

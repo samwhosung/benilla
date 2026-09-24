@@ -1,5 +1,5 @@
 //! `ChatProfanity.dbc` + `SpamMessages.dbc` — the two shipped pattern lists behind 1.12's
-//! `profanityFilter` and `spamFilter` (decision 2077; wow-re `system/ui/scratch/text-filter-law.md`).
+//! `profanityFilter` and `spamFilter` (decision 2077).
 //!
 //! **They are regular expressions, not word lists.** The reference compiles every row with PCRE
 //! (`0x71fba0` → `pcre_compile 0x720250`, options `0x2801` = CASELESS | UTF8 | NO_UTF8_CHECK) at
@@ -87,9 +87,9 @@ pub fn load_spam_messages(chain: &mut Chain) -> Result<Vec<FilterPattern>> {
 mod tests {
     use super::*;
 
-    /// The shipped lists, measured — the row counts wow-re's oracle run compiled the binary's own
-    /// PCRE over, and the proof that the priority walk picked the right archive (the `dbc.MPQ`
-    /// copies are 1512 rows and *absent* respectively). Skips without client data.
+    /// The shipped lists, measured on the reference client — the row counts its own PCRE
+    /// compiled over, and the proof that the priority walk picked the right archive (the
+    /// `dbc.MPQ` copies are 1512 rows and *absent* respectively). Skips without client data.
     #[test]
     fn the_lists_come_off_the_priority_walk_at_their_patched_sizes() {
         let data = crate::wow_data_or_skip!();

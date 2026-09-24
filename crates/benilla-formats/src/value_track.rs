@@ -84,8 +84,7 @@ impl<V: TrackValue> ValueTrack<V> {
     /// before the first, the last **held** past the end. This is the interp-0 leg of the
     /// reference sampler ([`Self::sampled_ms`] dispatches here) — a Feint plume keyed
     /// `{0:0, 67:30}` interp 0 is *silent* until 67 ms, then 30, exactly what arms its burst
-    /// count. (The old "the rate sampler never lerps" reading died with
-    /// `part-emission-rate-animated.md`: interp≠0 tracks lerp, and the corpus authors its
+    /// count. (interp≠0 tracks lerp (`0x71af76`), and the corpus authors its
     /// continuous ramps that way.)
     pub fn step_ms(&self, ms: f32) -> V {
         let mut v = self.keys.first().map_or(V::ZERO, |&(_, v)| v);
@@ -99,8 +98,8 @@ impl<V: TrackValue> ValueTrack<V> {
         v
     }
 
-    /// Sample as the reference's per-frame track sampler does (`0x71af20` → `0x713d50`, wow-re
-    /// `part-emission-rate-animated.md` §2/§4, VERIFIED + emulated): STEP (`values[k0]`) when the
+    /// Sample as the reference's per-frame track sampler does (`0x71af20` → `0x713d50`): STEP
+    /// (`values[k0]`) when the
     /// track's [`Self::interp`] word is 0, else LINEAR between the bracketing keys — **held** at
     /// the last key past the end, and extrapolated **backward** (negative fraction) below the
     /// first key (the sampler does not clamp there). Raw file values — a rate track may go

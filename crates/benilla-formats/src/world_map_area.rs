@@ -44,8 +44,8 @@ pub struct WorldMapArea {
 
 /// `WorldMapArea.dbc` rows keyed by `ID` — the id `WorldMapOverlay.worldMapAreaId` joins against.
 /// File order is preserved ([`WorldMapAreaCatalog::iter`]): the client's continent index IS the
-/// on-disk order of the areaId==0 rows (Kalimdor before Azeroth in 5875 — wow-re Q1(d) verdict,
-/// the builder `0x4a5d00` walks rows in file order).
+/// on-disk order of the areaId==0 rows (Kalimdor before Azeroth in 5875; the builder `0x4a5d00`
+/// walks rows in file order).
 pub struct WorldMapAreaCatalog {
     by_id: HashMap<u32, WorldMapArea>,
     /// Row ids in on-disk record order.

@@ -1,6 +1,6 @@
 //! Pins the per-sequence bounds-sphere parse (`M2Sequence` CAaBox @+0x24/+0x30, radius @+0x3c) on
 //! real build-5875 unit models. This sphere is the mouse-pick **broad phase** for the model's
-//! current animation (wow-re pick-volume RE `bd630be`, `0x7089c0` — §5-verified): if it parsed as
+//! current animation (`0x7089c0`): if it parsed as
 //! zero or a sliver, the faithful pick would reject clicks the reference accepts. Skips when the
 //! gitignored client data isn't present.
 

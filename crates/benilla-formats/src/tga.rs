@@ -9,8 +9,8 @@
 //!
 //! **The reference's own dispatch is the spec, and ours used to be its mirror image.** `0x5a3a30`
 //! forks on `imageType` as `{1/9 → 0x5a39d0 (colour-mapped, raw or RLE, expanded through the
-//! palette at 0x5a3820); 2 → 0x5a3c80; 10 → 0x5a3d70; 3/11 → unsupported}` (wow-re
-//! `image/scratch/re-wave1.md`). This decoder refused 1/9 — on a doc comment asserting *"none have
+//! palette at 0x5a3820); 2 → 0x5a3c80; 10 → 0x5a3d70; 3/11 → unsupported}`.
+//! This decoder refused 1/9 — on a doc comment asserting *"none have
 //! surfaced in the corpus"*, which was false — and accepted the two the client refuses.
 //!
 //! Three colour-mapped TGAs are in the 219-addon corpus, all 8-bit indices into a 256-entry

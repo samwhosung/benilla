@@ -1,19 +1,16 @@
 //! The real client's own MO_TRANSPORT cycle-period bookkeeping (`WoW.exe` `0x5f4cc0` + its
-//! arc-time solver `0x5f9120`), transcribed step-for-step from `wow-5875-re`'s byte-verified
-//! findings — the 2026-07-17 §5 gold validation reproduced **all nine** live transport paths'
-//! server-sniff periods bit-exact by emulating this exact recipe natively
-//! (`wow-5875-re` `system/object-layer/scratch/transport-anchor-timetable.md` §TU-B(5),
-//! `tests/difftest/transport_period.rs`). The wire anchor is a raw server-uptime-scale clock, so
-//! the `% period` amplifies any Δms by the whole cycle count — the period must be *exact*, not
-//! close (decision 0438 §3). vmangos pins its DB periods to sniffs of THIS computation, so
-//! matching the client is matching the server.
+//! arc-time solver `0x5f9120`), transcribed step-for-step: this recipe reproduces **all nine**
+//! live transport paths' server-sniff periods bit-exact. The wire anchor is a raw
+//! server-uptime-scale clock, so the `% period` amplifies any Δms by the whole cycle count — the
+//! period must be *exact*, not close (decision 0438 §3). vmangos pins its DB periods to sniffs of
+//! THIS computation, so matching the client is matching the server.
 //!
-//! Layout facts this transcription rests on (all byte-cited in wow-re):
+//! Layout facts this transcription rests on:
 //! - Legs split when the row's map changes OR the previous row has `Flags & 1`; **every** row of
 //!   the path lands in a leg — the leg's first and last points are Catmull-Rom guard points the
 //!   travel never lands on (curve eval samples segment `seg` over `P[seg..seg+4]`, interpolating
-//!   `P[seg+1] → P[seg+2]`; `n_seg = count − 3`, built only when `count > 3` — wow-re
-//!   `rf52-curve-construction.md`).
+//!   `P[seg+1] → P[seg+2]` (`0x453580`); `n_seg = count − 3`, built only when `count > 3`
+//!   (`0x4532e0`).
 //! - Per-segment arc length = 20 sub-chords of the cubic eval, **f32-narrowing accumulate**, the
 //!   sample parameter itself an f32 stepped by 0.05 (`0x453760`); cumulative distance = f64 sum
 //!   of the f32 segment lengths (`0x453300`); the cached leg total narrows to f32 (`0x4532e0`'s
@@ -31,7 +28,7 @@ use crate::taxi::TaxiPathNode;
 
 /// The client's position-basis matrix `0xb05e10` — the uniform Catmull-Rom (tension 0.5) basis,
 /// rows as Horner coefficients highest-degree-first (row `i` weights control point `P[seg+i]`).
-/// Decoded from the static-init immediates at `0x453fa0` (wow-re §TU-B(3)).
+/// Decoded from the static-init immediates at `0x453fa0`.
 const CR_BASIS: [[f32; 4]; 4] = [
     [-0.5, 1.0, -0.5, 0.0],
     [1.5, -2.5, 0.0, 1.0],
@@ -53,7 +50,7 @@ fn basis_weight(coeff: &[f32; 4], t: f32) -> f64 {
 /// `0x453580` cubic point evaluator: `out = Σ wᵢ·Pᵢ` over 4 consecutive control points, with the
 /// **asymmetric** per-component narrowing the bytes show — the x product stays f64 into its add,
 /// the y/z products narrow to f32 first (`fstp dword` temp), and every component's accumulator
-/// re-narrows to f32 each step (wow-re `curvemath/src/spline.rs::eval_point_body`).
+/// re-narrows to f32 each step.
 fn eval_point_cubic(cps: &[[f32; 3]], t: f32) -> [f32; 3] {
     let mut out = [0.0f32; 3];
     for (i, p) in cps.iter().take(4).enumerate() {
@@ -98,7 +95,7 @@ fn knot_sum(seg_len: &[f32], idx: usize) -> f64 {
 }
 
 /// `·1000` then round-half-away-from-zero then truncate — the client's `__ftol` rounding idiom
-/// (wow-re `object_layer/taxi_spline.rs::round_ftol`, diffed bit-exact).
+/// (`0x40a2b0`).
 fn round_ftol(t: f64) -> i32 {
     let scaled = t * 1000.0;
     let adj = if scaled > 0.0 {
@@ -109,9 +106,9 @@ fn round_ftol(t: f64) -> i32 {
     adj.trunc() as i32
 }
 
-/// `0x5f9120` per-span arc time (wow-re `taxi_spline.rs::arc_time_ms`, diffed bit-exact): the
-/// constant-acceleration solve over the span's distance `d = p − l`, with the client's own
-/// f32/f64 mixing (`A` and `B` stored f32, the discriminant compare on the *live* f64 `B`).
+/// `0x5f9120` per-span arc time: the constant-acceleration solve over the span's distance
+/// `d = p − l`, with the client's own f32/f64 mixing (`A` and `B` stored f32, the discriminant
+/// compare on the *live* f64 `B`).
 /// `first` = the leg's first span (one ramp: leg start is mid-cruise); otherwise two ramps.
 fn arc_time_ms(p: f64, l: f32, speed: f32, accel: f32, first: bool) -> i32 {
     let d = p - f64::from(l);
@@ -132,7 +129,7 @@ fn arc_time_ms(p: f64, l: f32, speed: f32, accel: f32, first: bool) -> i32 {
     round_ftol(t)
 }
 
-/// `0x5f9120` block 2, the leg's final span (`taxi_spline.rs::arc_time_ms_final`): with no stop
+/// `0x5f9120` block 2, the leg's final span: with no stop
 /// processed the whole leg is pure cruise `d/v` (no ramps — both ends are mid-cruise); after a
 /// stop it's the one-ramp form (the accel out of the last stop).
 fn arc_time_ms_final(p: f32, l: f32, speed: f32, accel: f32, first: bool) -> i32 {

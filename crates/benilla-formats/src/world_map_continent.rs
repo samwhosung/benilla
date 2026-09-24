@@ -3,8 +3,7 @@
 //! coordinate space, and the taxi-map's own bounding rect (decision 0203 phase 2's continent view).
 //!
 //! **Client-only: vmangos carries no struct for this table** (never loaded server-side). Layout
-//! **VERIFIED against the 5875 binary** (wow-re Q2 verdict, 2026-07-07, recorded in
-//! `system/ui/scratch/geometry.md` "Worldmap data model"): **2 × 13 × 52 B** —
+//! **VERIFIED against the 5875 binary** (2026-07-07): **2 × 13 × 52 B** —
 //! `ID(0), MapID(1)`; fields 2-5 = ADT tile bounds (ints; the world-map builder `0x4a5d00`
 //! converts them to each continent's normalized-UV sheet rect — the world-level click AABB;
 //! `map_proj::continent_sheet_rect` transcribes the kernel); fields 6/7 = the per-axis

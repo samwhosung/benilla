@@ -6,8 +6,8 @@
 //! geometry is modelled in the air: the bind pose sits at z ≈ +8.9…+14.7, and bone 0's translation
 //! track is what plants it (`t=700 → −9.124`, held to `t=5333`). So arming file-order-0 and looping
 //! it flies the flag 9 yards up every 3.3 s, while arming Stand holds it planted — which is what
-//! the reference does (wow-re `gameobject-anim-arm.md` §1, byte-verified `0x71019b`: the loader
-//! arms animation id 0 resolved through the model's own `playableAnimationLookup`).
+//! the reference does (`0x71019b`: the loader arms animation id 0 resolved through the model's
+//! own `playableAnimationLookup`).
 //!
 //! This test pins the three facts the fix rests on, straight off the shipped file. Skips (passes)
 //! when the client isn't present at `<repo>/WoW/Data`.
@@ -73,8 +73,8 @@ fn the_duel_flag_idle_resolves_to_stand_and_sits_planted() {
     // 4. Stand's AUTHORED bounds describe the planted flag — ground to tip — and emphatically NOT
     //    the bind pose (z +8.9..+14.7). This is the mouseover picker's volume for the armed idle
     //    (entity M2 parts carry `NoFrustumCulling` — the view cull is the body ROOT's per-object
-    //    election, never a per-part box; the "≈1e7 entity render bounds" reading behind 0648 was
-    //    refuted by wow-re's `outdoor-object-pass-election.md` — decision 1473).
+    //    election, never a per-part box; the "≈1e7 entity render bounds" reading behind 0648
+    //    misread the node's position cache (`0x670db0`) as bounds — decision 1473).
     //    The bind-pose `Aabb` Bevy would derive sits a whole model-height ABOVE the geometry that
     //    draws — as a cull box it hid the planted flag from every ground-level camera, and as a
     //    pick box it would put the hover target in the sky.

@@ -313,9 +313,9 @@ fn chunk_at(chunks: &[ChunkMesh], wow: [f32; 3]) -> Option<&ChunkMesh> {
 /// different tile. Returning `None` rather than defaulting to lit is load-bearing: an MDDF doodad that
 /// straddles a tile edge is listed in *every* tile it touches, but only the tile that CONTAINS its origin
 /// can answer; the caller must take the `Some` from that tile and never let a straddle-tile miss
-/// masquerade as "lit". (The real client sidesteps this with a global world→chunk MCSH lookup, `0x69b350`
-/// — `models/scratch/m2-interior-doodad-base-light.md §6`.) Feeds the model lobe's `sun_scale` (the
-/// faithful per-instance terrain-shade, 2.5 sunlit / 0.5 shaded — wow-re byte-verified).
+/// masquerade as "lit". (The real client sidesteps this with a global world→chunk MCSH lookup,
+/// `0x69b350`.) Feeds the model lobe's `sun_scale` (the faithful per-instance terrain-shade, 2.5
+/// sunlit / 0.5 shaded, per the reference).
 pub fn mcsh_shadowed_at(chunks: &[ChunkMesh], wow: [f32; 3]) -> Option<bool> {
     match chunk_at(chunks, wow) {
         Some(c) => c.mcsh_shadowed_at(wow),

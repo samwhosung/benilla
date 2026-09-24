@@ -32,8 +32,8 @@ fn ratchet_booty_bay_speed_profile() {
     let nodes = load_taxi_path_nodes(&mut chain).expect("taxi nodes");
     let path = nodes.path(241).expect("path 241 (Ratchet–Booty Bay)");
     let tt = TransportTimetable::build(path, 30.0, 1.0).expect("timetable");
-    // The build self-pins its period to the client-transcribed bookkeeping (bit-exact, wow-re
-    // §5 2026-07-17); this cross-checks the pin landed for the path under measurement.
+    // The build self-pins its period to the client-transcribed bookkeeping (bit-exact); this
+    // cross-checks the pin landed for the path under measurement.
     assert_eq!(tt.period_ms, 350_818, "path 241's self-pinned period");
 
     let step_ms = 16u32; // ~60 Hz
@@ -107,7 +107,7 @@ fn ratchet_booty_bay_speed_profile() {
     // The structural assertion: a window/easing inconsistency reads as a position jump traversed
     // in one 16 ms step — hundreds to thousands of yd/s (the pre-fix table measured 15,009).
     // Healthy motion peaks ~51 yd/s (the Catmull-Rom parameter-vs-arc-length artifact through one
-    // sharp bend, ~1.5 s per cycle — a known, bounded residual pending the wow-re per-point-table
+    // sharp bend, ~1.5 s per cycle — a known, bounded residual pending the per-point-table
     // verdict, decision 0439).
     assert!(
         max_speed < 100.0,

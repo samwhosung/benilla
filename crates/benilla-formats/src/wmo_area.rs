@@ -27,9 +27,9 @@ use crate::Chain;
 /// One WMO area row — the audio fields (all 0 = none/inherit).
 #[derive(Clone)]
 pub struct WmoArea {
-    /// The DBC row ID (col 0) — the client's indoor **dedup key** (`[0x86860c]`,
-    /// wow-re `zonetext-indoor-bit.md` (d)): while the player stays in a WMO area with the same
-    /// row id, the zone-text updater is skipped entirely.
+    /// The DBC row ID (col 0) — the client's indoor **dedup key** (`[0x86860c]`): while the
+    /// player stays in a WMO area with the same row id, the zone-text updater is skipped
+    /// entirely.
     pub id: u32,
     /// `SoundProviderPreferences` FKs, `[dry, underwater]`.
     pub sound_provider: [u32; 2],
@@ -40,7 +40,7 @@ pub struct WmoArea {
     /// `ZoneIntroMusicTable.dbc` FK — the entry fanfare (the abbey's monk chant).
     pub intro_sound: u32,
     /// `AreaTable.dbc` FK — the WORLD area this WMO group counts as (0 = none). The client's
-    /// GetAreaID resolver (wow-re 0x670250) reads this when the down-ray keeps the WMO over the
+    /// GetAreaID resolver (`0x670250`) reads this when the down-ray keeps the WMO over the
     /// terrain chunk, so an indoor city (Ironforge/Undercity) reports its own area, not the
     /// enclosing zone's. Feeds the minimap/world-map zone and interior sound.
     pub area_table_id: u32,
@@ -58,7 +58,7 @@ pub struct WmoAreaCatalog {
 
 impl WmoAreaCatalog {
     /// The hit group's OWN row, **exact key** — the zone-text chain's **query B** (`0x69d8f0` →
-    /// bsearch `0x7ccd30`, wow-re `zonetext-indoor-bit.md` (d)/(d-ii): a single exact
+    /// bsearch `0x7ccd30`: a single exact
     /// `(WMOID, NameSetID, WMOGroupID)` search, **no NameSetID retry, no default fallback, no
     /// overlay**): its name re-populates the subzone slot (an unnamed/missing row leaves the
     /// slot as the override set it).

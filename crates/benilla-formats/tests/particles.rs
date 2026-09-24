@@ -162,9 +162,9 @@ fn campfire_emitters_match_real_bytes() {
     );
 }
 
-/// The flipbook **cell ramp**, against the reference's own emulated output (wow-re
-/// `part-cell-flipbook-ramp.md` §5 — `emu.call(0x7b9da0)` to build the record, `emu.call(0x7b9b10)`
-/// to sample it). Two properties, and the second is the one that crashed us (decision 0685):
+/// The flipbook **cell ramp**, against the reference's own emulated output (`0x7b9da0` builds the
+/// record, `0x7b9b10` samples it). Two properties, and the second is the one that crashed us
+/// (decision 0685):
 ///
 /// 1. **The endpoint law** — `cell(0) == begin` and `cell(1) == end`, EXACTLY, in both directions.
 ///    That is what the `±1` in the build arms and the evaluator's `0.99·t + 0.005` inset exist to
@@ -176,7 +176,7 @@ fn campfire_emitters_match_real_bytes() {
 fn cell_ramp_matches_the_reference_including_backwards() {
     let at = |begin: u16, end: u16| {
         let r = CellRamp::new(begin, end);
-        // The sample points the wow-re oracle tabulates, through the same inset the evaluator
+        // The sample points, through the same inset the evaluator
         // applies (u = 0, ¼, ½, ¾, 1 of the segment).
         [0.0_f32, 0.25, 0.5, 0.75, 1.0]
             .map(|t| r.sample(t * 0.99 + 0.005))
@@ -225,8 +225,8 @@ fn cell_ramp_matches_the_reference_including_backwards() {
 }
 
 /// Colour and size ride the **same inset** as the cells — `0x7b9b10` computes `t·0.99 + 0.005`
-/// once, into its own `age` slot, and all four colour channels and the size reload that slot
-/// (wow-re `part-cell-flipbook-ramp.md` §3a). So a particle never sits exactly on an authored key:
+/// once, into its own `age` slot, and all four colour channels and the size reload that slot.
+/// So a particle never sits exactly on an authored key:
 /// it starts 0.5 % into the ramp and ends 0.5 % short. Lerping on a raw `t` is wrong at both ends
 /// of both segments — a small error, but a systematic one, and free to get right.
 #[test]
@@ -321,8 +321,8 @@ fn repeat_count_cycles_the_flipbook() {
     );
 }
 
-/// The record-tail **twinkle** fields (wow-re `part-simspace-fields.md`, their `ac915a7d`):
-/// file +0x188/+0x18c are twinkleScale **{min, max}** — a GATED per-frame size flicker, skipped
+/// The record-tail **twinkle** fields (`0x7b2a50`): file +0x188/+0x18c are twinkleScale
+/// **{min, max}** — a GATED per-frame size flicker, skipped
 /// when the range is degenerate — NOT a spawn-time size multiplier. The discriminating real-data
 /// case is the kobold candle: it authors `{0, 0}` and burns in the reference client, which the old
 /// `base + rand·variation` reading collapsed to size zero (the director's "candles not burning").
@@ -366,8 +366,8 @@ fn twinkle_fields_gate_not_scale() {
     assert!(glow.twinkle_percent.is_finite() && glow.twinkle_speed.is_finite());
 }
 
-/// The file→runtime flag remap (wow-re `part-simspace-fields.md` corrections `1f40db0b`, loader
-/// block `0x70faf8–0x70fc44`): the space switch is FILE bit 0x10 (→ rt 0x100), the size-by-scale
+/// The file→runtime flag remap (`0x70faf8`–`0x70fc44`): the space switch is FILE bit 0x10
+/// (→ rt 0x100), the size-by-scale
 /// enable FILE 0x20 (→ rt 0x200) — pinned on real content whose behavior the reference shows:
 /// the kobold candle (0x01) is carried with no trail and un-flagged for both; the swinging
 /// chandelier's candle flames (0x11/0x15) are model-space (they rigidly ride the swing); the

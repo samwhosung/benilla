@@ -1,5 +1,5 @@
 //! Pins the unit blob shadow's box source against real build-5875 assets: the shadow sizes from
-//! the **current animation's** `M2Sequence` CAaBox (wow-re `unit-blob-shadow.md`, `0x711a20` — the
+//! the **current animation's** `M2Sequence` CAaBox (`0x711a20` — the
 //! same sequence-record box the pick volume and the ring's Stand-footprint read), so
 //! `ModelAnimation::bounds_min/max` must round-trip the raw record. The Stand-box horizontal
 //! extents of the four reference-traced creatures are already pinned by
@@ -14,8 +14,8 @@ fn stand_box_extents_match_reference() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = open_chain(&data).expect("open chain");
 
-    // (model, Stand-box horizontal extents (dx, dy) — the wow-re selection-ring RE's measured
-    // table, read straight off the real sequence records).
+    // (model, Stand-box horizontal extents (dx, dy) — measured straight off the real sequence
+    // records).
     let cases = [
         ("Creature\\Chicken\\Chicken.m2", 0.532_f32, 0.382_f32),
         ("Character\\Human\\Male\\HumanMale.m2", 0.913, 1.080),

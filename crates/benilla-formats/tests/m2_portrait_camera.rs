@@ -1,7 +1,7 @@
 //! M2 portrait-camera parse — byte-level check against real character/creature models. Pins the
-//! vanilla camera record stride (`0x7c`) + the `cameraLookup[0]` selection (wow-re
-//! `system/ui/scratch/portrait-render.md` §4: the unit-frame portrait renders through exactly this
-//! authored camera). Skips when the client isn't present.
+//! vanilla camera record stride (`0x7c`, built at `0x70f270`) + the `cameraLookup[0]` selection
+//! (`0x713540`): the unit-frame portrait renders through exactly this authored camera. Skips when
+//! the client isn't present.
 
 use benilla_formats::{parse_m2_portrait_camera, Chain};
 
@@ -70,12 +70,12 @@ fn too_short_yields_no_camera() {
 }
 
 /// **The model-frame pane camera** — raw `cameras[1]`, the rig a 1.12 `<PlayerModel>` widget renders
-/// through (wow-re `system/ui/scratch/modelframe-camera-law.md`: `0x505b30` → the chooser `0x505890`
-/// takes a literal index 1, NOT `cameraLookup`; decision 1089).
+/// through (`0x505b30` → the chooser `0x505890` takes a literal index 1, NOT `cameraLookup`;
+/// decision 1089).
 ///
-/// Byte-level regression pin against the numbers the RE reports, read here independently through our
-/// own parser — the two agreeing is the cross-check. The universal clips (`near = 8/36`,
-/// `far = 1000/36`) come along because a wrong stride would land on neither.
+/// Byte-level regression pin against the shipped records, read here independently through our
+/// own parser — matching the reference's own read is the cross-check. The universal clips
+/// (`near = 8/36`, `far = 1000/36`) come along because a wrong stride would land on neither.
 #[test]
 fn pane_cameras_match_the_authored_records() {
     let data = benilla_formats::wow_data_or_skip!();

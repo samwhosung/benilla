@@ -4,8 +4,7 @@
 //! cursor cell to a zone through it (`0x4a6ec0`; the loader `0x4a5d00` remaps cells to
 //! WorldMapArea ids at load — benilla's remap lives with the catalog build, `ui_world_map`).
 //!
-//! Mechanism VERIFIED by wow-re (Q1 §5 cross-check, 2026-07-07, recorded in
-//! `system/ui/scratch/geometry.md` "Worldmap data model"): path format string @0x845374
+//! Mechanism VERIFIED against the 5875 binary (2026-07-07): path format string @0x845374
 //! (`Interface\WorldMap\%s.zmp`, `%s` = the continent WorldMapArea row's AreaName), 0x10000 bytes
 //! read raw into the record. Corroborated against the shipped file this session: Azeroth.zmp's
 //! cell at the recorded index law for Goldshire's world position holds 12 = Elwynn Forest.

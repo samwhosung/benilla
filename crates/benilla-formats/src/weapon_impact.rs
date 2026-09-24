@@ -21,7 +21,7 @@
 //! | 8 | stone creature (`CreatureImpactType` 1) |
 //! | 9 | ethereal creature (`CreatureImpactType` 3) |
 //!
-//! The runtime mirror is the client's `AUIMPACTSOUNDARRAY` (wow-re sound node: 10 per-row slots,
+//! The runtime mirror is the client's `AUIMPACTSOUNDARRAY` (10 per-row slots, reader `0x587450`;
 //! well-known kits like `Combat_Miss_1H` cached separately at `0x4575b0`).
 
 use std::collections::HashMap;

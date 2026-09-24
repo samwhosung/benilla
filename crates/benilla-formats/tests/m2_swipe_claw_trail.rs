@@ -23,7 +23,7 @@ use benilla_formats::{open_chain, parse_m2_render_submeshes, uv_transform};
 const SWIPE: &str = "Spells\\SwipeCaster.m2";
 
 /// The u extent the batch's authored UVs cover once the loop's offset at `t` is folded in, by the
-/// verified law (wow-re `m2-texanim-uv` §1: `uv' = R·S·((uv + t) − p) + p`, and with no rotation
+/// verified law (`0x714260`: `uv' = R·S·((uv + t) − p) + p`, and with no rotation
 /// or scaling authored here that is a pure `uv + t`).
 fn u_span_at(uvs: &[[f32; 2]], offset: [f32; 2]) -> (f32, f32) {
     uvs.iter()

@@ -4,14 +4,14 @@
 //! and vmangos spends the charge, casts the whelp-spawner, and — because the spawn rows carry
 //! `animprogress = 100` — sends `SMSG_GAMEOBJECT_DESPAWN_ANIM` (`GameObject.cpp:654-656` →
 //! `WorldObject::SendObjectDeSpawnAnim`) immediately followed by `SMSG_DESTROY_OBJECT`. The real
-//! client arms substate 12 off that packet (wow-re `gameobject-anim-arm.md` §2c: code table
-//! `0x80b0e0[6]` = 12, LUT `0x8607e4[12]` = **157 Despawn**) and *pins* the object so the destroy
-//! waits for the play (`go-display-sound-events.md` §6d).
+//! client arms substate 12 off that packet (code table `0x80b0e0[6]` = 12, LUT `0x8607e4[12]` =
+//! **157 Despawn**) and *pins* the object (`0x4683e0`) so the destroy waits for the play.
 //!
 //! This file pins the two asset facts that whole law rests on, because both are the kind of thing a
 //! plausible reading gets wrong:
 //!
-//! 1. **The hatch is 157 Despawn, and it is unreachable from the §243 state machine.** The model
+//! 1. **The hatch is 157 Despawn, and it is unreachable from the `SetGoState` state machine
+//!    (`0x5f8bd0`).** The model
 //!    authors the door family (146..149) too — so a reader that only ever consults
 //!    `GAMEOBJECT_STATE` finds sequences, arms one, and looks correct while never playing the
 //!    animation anyone reported. Substate 1 (`state = 1`, `animprogress = 100`) resolves to 147
@@ -46,8 +46,8 @@ fn the_rookery_egg_keys_its_hatch_in_despawn_not_in_the_state_family() {
     };
 
     // 1. The model OWNS 157 — slot 15 pre-gates the one-shot channel on exactly this
-    //    (`0x5f423d`/`0x711960`), and takes no §2c remap, so an unowned id would simply play
-    //    nothing. This is the check that says the packet has somewhere to land.
+    //    (`0x5f423d`/`0x711960`), and takes no `0x80b0e0`/`0x8607e4` remap, so an unowned id
+    //    would simply play nothing. This is the check that says the packet has somewhere to land.
     let lookup = parse_m2_animation_lookup(&bytes).expect("animation lookup");
     assert!(
         lookup.get(DESPAWN as usize).is_some_and(|&s| s != 0xffff),
@@ -84,9 +84,9 @@ fn the_rookery_egg_keys_its_hatch_in_despawn_not_in_the_state_family() {
         keys(CLOSED),
     );
 
-    // 4. One pass. `R = max(1, min + roll)` with an empty replay range rolls to 1 (wow-re
-    //    `loop-replay-fidget.md`), so the completion — and the pin's release — lands at one band
-    //    length, which is what `release_despawn_pin` models.
+    // 4. One pass. `R = max(1, min + roll)` with an empty replay range rolls to 1 (`0x7126be`),
+    //    so the completion — and the pin's release — lands at one band length, which is what
+    //    `release_despawn_pin` models.
     assert_eq!(
         (hatch.min_replay, hatch.max_replay),
         (0, 0),

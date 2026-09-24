@@ -5,8 +5,7 @@
 //! `dn_light_array_build 0x6d6170`: the per-map filter (`0x6d61a9 cmp [row+4], mapId`) matches
 //! nothing, and the tail (`0x6d62b2`–`0x6d62c9`) writes `idMap[1]` — the record whose **ID column**
 //! is 1, not row-index 1 — into slot 0. `dn_light_select 0x6d2d00` then no-ops (count ≤ 1 ⇒ empty
-//! blend heap) and the colour table commits that record whole. (wow-re
-//! `system/lighting/scratch/no-light-row-fallback.md`.)
+//! blend heap) and the colour table commits that record whole.
 //!
 //! Row 1 is the Azeroth global → LightParams **12**, whose bands are an ordinary six-key day curve.
 //! Before this was wired, benilla substituted a hardcoded bright noon (fog `[140,183,234]` at

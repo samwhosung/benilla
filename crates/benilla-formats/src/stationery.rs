@@ -8,9 +8,9 @@
 //! The 5875 schema was read byte-level from the real `patch.MPQ` file (VERIFIED at decision time):
 //! WDBC header `record_count = 5`, `field_count = 4`, `record_size = 16`, string block 62 bytes —
 //! four 4-byte fields, the third a string ref: `{ID, ItemID, Texture, Flags}`. Fields 1 and 3
-//! were filler until wow-re carved the send side (`ui/scratch/stationery-bindings.md`, 1970):
-//! `ItemID` is the stationery ITEM the player buys or carries to use the paper, and `Flags & 1`
-//! marks the one always available (`41 Default Stationery`, BuyPrice 0). The client's usable list
+//! are not filler (decision 1970): `ItemID` (`0x4aca1c`) is the stationery ITEM the player buys
+//! or carries to use the paper, and `Flags & 1` (`0x4aca2a`) marks the one always available
+//! (`41 Default Stationery`, BuyPrice 0). The client's usable list
 //! is `(Flags & 1 || the player carries ItemID) && the item's template is cached`, sorted by
 //! BuyPrice ascending — the `GetNumStationeries`/`GetStationeryInfo` surface. The verified rows:
 //! `1/41 → STATIONERYTEST`, `61 → GMSTATIONERY`, `62 → AUCTIONSTATIONERY`, `64 → STATIONERY_VAL`

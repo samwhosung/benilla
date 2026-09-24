@@ -1,5 +1,5 @@
-//! Difftest the vanilla M2 ribbon-emitter parser against real trail-carrying models (wow-5875-re
-//! `ribbon-emitter-spec.md` field map). Skips (passes) when the client isn't present.
+//! Difftest the vanilla M2 ribbon-emitter parser against real trail-carrying models, per the
+//! reference's field map. Skips (passes) when the client isn't present.
 
 use benilla_formats::{open_chain, parse_m2_ribbon_emitters};
 

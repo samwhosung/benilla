@@ -19,8 +19,8 @@
 //! 50ccf6  fsubr [esi+0x124]               ; +0x124 -= S * (Stand.max.z - Swim.max.z)
 //! ```
 //!
-//! byte-decoded and VERIFIED in wow-re `ui/scratch/water-band-discontinuity.md` §7, which measured
-//! the shipped Human Male at scale 1 as `+0x11c = +0x120 = 1.9002692` and `+0x124 = 1.5120120`.
+//! Measured off the shipped Human Male at scale 1: `+0x11c = +0x120 = 1.9002692` and
+//! `+0x124 = 1.5120120`.
 //! That pair — and only that pair — is a number read off the binary; everything else below is
 //! measured off the shipped M2s, pinned so the id-42 lookup cannot quietly stop resolving.
 //!

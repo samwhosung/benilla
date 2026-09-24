@@ -47,8 +47,8 @@ fn the_birds_authored_box_covers_a_flight_path_its_bind_pose_never_hints_at() {
 
     // 2. The premise: the AUTHORED header box is that flight path, not the bird. Its half-diagonal
     //    is the reference's own cull radius (`rec+0x68` = `bounding_sphere_radius × scale`,
-    //    wow-5875-re `terrain/scratch/doodad-emitter-drawset-gate.md` §1c) — so a ~35 yd sphere
-    //    around a 0.6 yd body is what the real client tests, and it never blinks.
+    //    tested at `0x682ef0` -> `0x686b80`) — so a ~35 yd sphere around a 0.6 yd body is what
+    //    the real client tests, and it never blinks.
     let b = parse_m2_bounds(&bytes).expect("Bird01 bounds");
     let box_x = b.bbox_max[0] - b.bbox_min[0];
     assert!(

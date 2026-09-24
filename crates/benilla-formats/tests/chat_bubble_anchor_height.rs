@@ -7,9 +7,9 @@
 //! worldZ = unit.z + (StandBox.max.z − StandBox.min.z) × modelScale + 0.7
 //! ```
 //!
-//! where the extent comes from `0x4b0e38 call 0x711a20` — which wow-re's anchor cross-check
-//! (2026-08-17) followed into the model layer and found reading the **MD20 header image**: file
-//! bytes, no bone matrix anywhere in the call tree, returning that CAaBox's Z. The scaled product
+//! where the extent comes from `0x4b0e38 call 0x711a20`, traced into the model layer: it reads
+//! the **MD20 header image** — file bytes, no bone matrix anywhere in the call tree — returning
+//! that CAaBox's Z. The scaled product
 //! is latched at `bubble+0x354` behind a parity guard, so it is queried once per chat line.
 //!
 //! Benilla shipped the bubble on the **posed PlayerName attachment** instead (the `0x608640`

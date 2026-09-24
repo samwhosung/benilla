@@ -1,13 +1,12 @@
 //! **The water swatch rides the area blend, and the blend applies spheres farthest-first.**
 //!
-//! Two halves of one law, byte-VERIFIED in wow-re (`system/lighting/scratch/ctb.md` §`0x6d2d00`
-//! + `scratch/merge.md`, the latter's drain reading corrected by an emulator difftest oracle):
+//! Two halves of one law (`0x6d2d00`):
 //!
 //! 1. `dn_light_select 0x6d2d00` pushes every `Light.dbc` row with `dist ≤ outer` into a **max-heap
 //!    keyed on DISTANCE** and drains it root-first — so the farthest light merges first and the
 //!    **nearest lands last and dominates**. A point inside the tightest sphere's inner radius
 //!    therefore resolves that sphere's `LightParams` **exactly**, whatever else overlaps it.
-//! 2. `dn_record_overblend 0x6d30e0` merges **all 18 colour slots** of the gather record per light —
+//! 2. `0x6d30e0` merges **all 18 colour slots** of the gather record per light —
 //!    its step-9 loop `+0x34..+0x40` is precisely IntBand rows 14–17, the ocean/river swatch. The
 //!    water tint is an ordinary band; the client has no single-sphere pick anywhere in that path.
 //!

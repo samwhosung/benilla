@@ -26,7 +26,7 @@ fn quest_tag_names_are_the_whole_5875_vocabulary() {
     // path to **patch-2.MPQ**; the base `dbc.MPQ` copy has only FOUR rows (PvP, Life, Elite,
     // Raid, unordered, maxId 62), so a chain that stopped short of the patch would answer `None`
     // for exactly Dungeon / World Event / Legendary and look perfectly correct on everything
-    // else (wow-re `ui/scratch/questlog-title-tag.md`).
+    // else.
     assert_eq!(tags.len(), want.len(), "QuestInfo.dbc row count");
     for (id, name) in want {
         assert_eq!(tags.resolve(id), Some(name), "QuestInfo id {id}");

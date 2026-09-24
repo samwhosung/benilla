@@ -123,7 +123,7 @@ fn shapeshift_bonus_bars_match_the_verified_table() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = benilla_formats::open_chain(&data).expect("open vanilla patch chain");
     let forms = benilla_formats::load_shapeshift_forms(&mut chain).expect("load shapeshift rows");
-    // The complete 5875 non-zero BonusActionBar set (wow-re byte-verified: SpellShapeshiftForm
+    // The complete 5875 non-zero BonusActionBar set (`0x4e4fc0`: SpellShapeshiftForm
     // field 1, the exact lookup GetBonusBarOffset's cached global is filled from).
     let expect = [(1, 1), (5, 3), (8, 3), (17, 1), (18, 2), (19, 3), (30, 1)];
     let nonzero = forms.values().filter(|f| f.bonus_bar != 0).count();
@@ -141,7 +141,7 @@ fn shapeshift_bonus_bars_match_the_verified_table() {
         assert!(forms.get(&stance).unwrap().is_stance(), "form {stance}");
     }
     assert!(!forms.get(&1).unwrap().is_stance(), "cat is a shapeshift");
-    // flags1 bit 0x2 (the stance bar's toggle-cancel BLOCK, wow-re shapeshift-bar-api.md): the
+    // flags1 bit 0x2 (the stance bar's toggle-cancel BLOCK, `0x4b4963`): the
     // three warrior stances carry it (0x7 — clicking the active stance is a silent no-op); the
     // cancelable forms don't (Cat 0x70, Bear/DireBear 0x50, Ghost Wolf 0x40, Shadowform 0x9,
     // Stealth 0x1, Moonkin 0x41 — probed on the extracted file).
@@ -159,9 +159,10 @@ fn shapeshift_bonus_bars_match_the_verified_table() {
     }
 }
 
-/// The stance-bar Spell.dbc columns (wow-re shapeshift-bar-api.md; column pins probed on the
-/// extracted 5875 file, decision 0270): the MOD_SHAPESHIFT form id, the signed StanceBarOrder
-/// (Stealth's −1 sorts last), and the druid forms' ActiveIconID. Skips without client data.
+/// The stance-bar Spell.dbc columns (`0x4b2bb0` orders by StanceBarOrder, `0x4b45c0` reads
+/// ActiveIconID; column pins probed on the extracted 5875 file, decision 0270): the
+/// MOD_SHAPESHIFT form id, the signed StanceBarOrder (Stealth's −1 sorts last), and the druid
+/// forms' ActiveIconID. Skips without client data.
 #[test]
 fn stance_bar_spell_columns_match_the_probed_values() {
     let data = benilla_formats::wow_data_or_skip!();

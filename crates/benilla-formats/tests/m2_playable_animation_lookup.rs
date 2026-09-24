@@ -1,7 +1,7 @@
 //! Pins the M2 **PlayableAnimationLookup** table parse (decision 0082 — missing-animation-clip
-//! resolution) against a real build-5875 model. `nPlayableAnimationLookup` is byte-verified (wow-re
-//! `anim-id-resolution.md`) to be a fixed 203 across the entire retail 1.12.1 M2 corpus; row 6 is the
-//! note's own decisive example (`playableAnimationLookup[6] = 0x00030001`). Skips when the gitignored
+//! resolution) against a real build-5875 model. `nPlayableAnimationLookup` is a fixed 203 across
+//! the entire retail 1.12.1 M2 corpus, measured; row 6 is HumanMale's decisive example
+//! (`playableAnimationLookup[6] = 0x00030001`). Skips when the gitignored
 //! client data isn't present.
 
 use benilla_formats::{open_chain, parse_m2_playable_animation_lookup};
@@ -15,8 +15,8 @@ fn humanmale_playable_animation_lookup_matches_the_byte_verified_shape() {
         .expect("read m2");
     let pal = parse_m2_playable_animation_lookup(&bytes).expect("parse playable animation lookup");
 
-    // `nPlayableAnimationLookup` is a fixed 203 across the retail corpus (wow-re empirical
-    // cross-check) — the array is sized to `AnimationData.dbc`'s playable set, identically for every
+    // `nPlayableAnimationLookup` is a fixed 203 across the retail corpus, measured — the array is
+    // sized to `AnimationData.dbc`'s playable set, identically for every
     // model regardless of its own sequence count.
     assert_eq!(pal.len(), 203);
 
@@ -28,10 +28,10 @@ fn humanmale_playable_animation_lookup_matches_the_byte_verified_shape() {
         assert_eq!(row.dir_flags, 0, "row {id} should carry no dir-flags code");
     }
 
-    // The RE note's own decisive empirical proof (`anim-id-resolution.md` §4, "the DECISIVE
-    // empirical fact"): row 6 packs `0x00030001` — resolved id 1 (Death), dir-flags code 3 — computed
-    // by hand-replaying the DBC Fallback walk (row 6: Fallback=1, Flags=0x28) and shown bit-for-bit
-    // identical to this baked entry. The single strongest real-asset anchor for the whole mechanism.
+    // PATH 2's DBC Fallback-column walk (`0x711bf0`): row 6 packs `0x00030001` — resolved id 1
+    // (Death), dir-flags code 3 — computed by hand-replaying the DBC Fallback walk (row 6:
+    // Fallback=1, Flags=0x28) and shown bit-for-bit identical to this baked entry. The single
+    // strongest real-asset anchor for the whole mechanism.
     assert_eq!(pal[6].resolved_id, 1, "row 6 -> Death, the DBC-walk proof");
     assert_eq!(pal[6].dir_flags, 3, "row 6's direction/variant code");
 
@@ -42,7 +42,7 @@ fn humanmale_playable_animation_lookup_matches_the_byte_verified_shape() {
 }
 
 /// The **prowl clips** the stealth gait branch asks for (`creature_anim::select`'s `STEALTH_WALK` /
-/// `STEALTH_STAND`, RF-0057's `[[110]+0x213]&2` branches): a player model authors both, and a
+/// `STEALTH_STAND`, `[[110]+0x213]&2` branches): a player model authors both, and a
 /// creature model may author NEITHER — in which case the same baked lookup the real client indexes
 /// steps 119 down to Walk and 120 to Stand. That asymmetry is why the selector's stealth branch needs
 /// no model-capability check of its own, and why a prowling druid cat shows its ordinary walk on the
