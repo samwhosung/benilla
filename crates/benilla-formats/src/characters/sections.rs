@@ -110,7 +110,7 @@ const EQUIP_LAYER_COLUMN: [[i8; 8]; 8] = [
     [-1, -1, -1, -1, -1, -1, 2, 0],  // boots
     [-1, 2, -1, -1, -1, -1, -1, -1], // wrist
     [-1, 3, 0, -1, -1, -1, -1, -1],  // gloves
-    [-1, -1, -1, 4, 4, -1, -1, -1], // tabard (TorsoUpper is cell 4, not 3 — 0074 mis-read it)
+    [-1, -1, -1, 4, 4, -1, -1, -1],  // tabard (TorsoUpper is cell 4, not 3 — 0074 mis-read it)
 ];
 
 /// The worn-slot indices the two overruling choosers name, in `equipment` order (bodyslot − 2).
