@@ -2,8 +2,8 @@
 //! (decision 0068 slice 1): a spell id resolves to its name and its icon's BLP path.
 //!
 //! Layout — VERIFIED against build 5875 (empirical column derivation on the extracted files,
-//! 2026-07-02): `Spell.dbc` is 22357 records × **173 fields** (692 B — matches wow-re's
-//! byte-verified container fact, `system/dbc`). The two columns this catalog reads were pinned
+//! 2026-07-02): `Spell.dbc` is 22357 records × **173 fields** (692 B — matches the loader's own
+//! header checks, `0x55007e`/`0x5500bb`). The two columns this catalog reads were pinned
 //! by resolving known spells against the data: **SpellIconID = column 117** (78 "Heroic Strike" →
 //! icon 856 `Ability_Rogue_Ambush`, 6673 "Battle Shout" → icon 456 `Ability_Warrior_BattleShout`;
 //! both hit column 117 uniquely) and **SpellName enUS = column 120** (all probe spells resolve
@@ -17,7 +17,7 @@
 //! `Spell.dbc`: for every nonzero `spellVisual1` in `spell_template` (1309 rows sampled, ids
 //! 1..2000), column 115 is the **only** u32 column that matches, and for every nonzero `speed`
 //! (61 rows), column 37 is the only f32 column that matches — both unique across all 173 columns.
-//! Column 37 also matches wow-re's `SpellRec+0x94` lead bit-for-bit (`0x94 / 4 == 37`); the
+//! Column 37 also matches the `+0x94` Speed read at `0x6e814b` bit-for-bit (`0x94 / 4 == 37`); the
 //! `+0x1e0` visual-id lead does **not** hold raw (`0x1e0 / 4 == 120`, already pinned above as the
 //! name string), confirming the in-memory record isn't a raw row copy for that field — column 115
 //! is the empirical column, not a translated offset. Spot-check (Fireball, entry 133):
@@ -30,7 +30,7 @@
 //! gate) — pinned the same way, 2026-07-05: over every `spell_template` row with a nonzero
 //! attribute word (2700 spells, ids ≤ 4000, each at its `MAX(build) ≤ 5875` row), column 6 is the
 //! **only** column matching `attributes` (runner-up 49/2700) and column 8 the only one matching
-//! `attributesEx2` — and both agree with wow-re's byte-verified in-memory reads (`SpellRec+0x18` /
+//! `attributesEx2` — and both agree with the reads at `0x6e5922`/`0x6e591c` (`SpellRec+0x18` /
 //! `+0x20`: `0x18/4 == 6`, `0x20/4 == 8`; the record layout is raw this early, before the
 //! translated tail that broke the `+0x1e0` lead above). Only two bits are consumed — the client's
 //! ranged gate, [`SpellDisplay::ranged_attack`]; `Attributes` bit `0x40` — `SPELL_ATTR_PASSIVE`
@@ -38,8 +38,8 @@
 //! spellbook **add-gate** [`SpellDisplay::in_spellbook`] (decision 0227) — `Attributes` bit `0x80`
 //! (`SPELL_ATTR_DO_NOT_DISPLAY`), bit `0x20` (`SPELL_ATTR_IS_TRADESKILL`), and **castUI = column
 //! 3** (`SpellRec+0xc`, `0xc/4 == 3` — raw this early like columns 6/8). castUI was pinned by the
-//! same wow-re byte read that pinned the gate (`system/ui/scratch/spellbook-book-build.md`, the
-//! 2026-07-08 §5), not an empirical column derivation; it reads 0 for every ordinary player spell
+//! same byte read that pinned the gate (`0x4b29bf`, in the classify+append `0x4b25b0`), not an
+//! empirical column derivation; it reads 0 for every ordinary player spell
 //! (Fireball 133), so it is exercised only as a gate that never trips on the shown set.
 //!
 //! **SpellNameSubtext enUS = column 129** (decision 0216 §8) — pinned empirically the same way as
@@ -76,15 +76,13 @@
 //! 100%. End-to-end confirmation through the new [`crate::SpellCastTimeCatalog`]/
 //! [`crate::SpellDurationCatalog`]: Fireball 133 → CastingTimeIndex 16 → `SpellCastTimes.dbc` row
 //! 16 → 1500 ms; Frost Armor 168 → DurationIndex 30 → `SpellDuration.dbc` row 30 → 1,800,000 ms
-//! (30 min) — both match this arc's own independently-stated expectation. This pin surfaced a
-//! conflict with wow-re's then-current `wave-cooldown.md`, which labeled `[rec+0x48]` (== column
-//! 18) *DurationIndex*; the dispatched wow-re §5 cross-check (2026-07-10, wow-re commit
-//! `f2c563c9`) **byte-confirmed this module and corrected the note** — the mislabel ran deeper
-//! than one offset: `Spell_C::GetCastTime` is `0x6e3340` (`6e336e: mov eax,[edi+0x48]` —
+//! (30 min) — both match this arc's own independently-stated expectation. `[rec+0x48]` (== column
+//! 18) is CastingTimeIndex, not *DurationIndex*: `Spell_C::GetCastTime` is `0x6e3340`
+//! (`6e336e: mov eax,[edi+0x48]` —
 //! CastingTimeIndex → `SpellCastTimes` recordsById `[0xc0d878]`, spell-mod op `0xa` =
 //! SPELLMOD_CASTING_TIME), the real `Spell_C::GetDuration` is `0x6ea000` (`6ea016: mov
 //! eax,[edi+0x78]` — DurationIndex → `SpellDuration` recordsById `[0xc0d828]`, spell-mod op `1` =
-//! SPELLMOD_DURATION), and `0x6e31b0` — the note's old "GetCastTime" — is `GetPowerCost`. The
+//! SPELLMOD_DURATION), and `0x6e31b0` is `GetPowerCost`, not "GetCastTime". The
 //! in-memory SpellRec is a direct on-disk row image this deep (offset = column×4, anchored by
 //! the verified neighbours `+0x4c`/col19 and `+0x90`/col36), so the byte reads and this
 //! empirical map agree exactly: `0x48/4 == 18`, `0x78/4 == 30`.
@@ -153,8 +151,8 @@ const COL_CATEGORY: usize = 2;
 const COL_CAST_UI: usize = 3;
 /// `RecoveryTime` (`SpellRec+0x4c`, `0x4c/4 == 19`) / `CategoryRecoveryTime` (`+0x50`, 20) — the
 /// spell's own cooldown ms and its category's shared cooldown ms, the two inputs of the client's
-/// `StartCooldown 0x6e2c60` + the `SMSG_SPELL_COOLDOWN` handler `0x6e9460` (wow-re
-/// `wave-cooldown.md`/`wave-handlers.md`, VERIFIED). Same 12-spell empirical pin as
+/// `StartCooldown 0x6e2c60` + the `SMSG_SPELL_COOLDOWN` handler `0x6e9460`.
+/// Same 12-spell empirical pin as
 /// [`COL_CATEGORY`] (Feign Death 30000 rec, Charge 15000 catRec, Lay on Hands 3600000 catRec).
 const COL_RECOVERY_TIME: usize = 19;
 const COL_CATEGORY_RECOVERY_TIME: usize = 20;
@@ -186,8 +184,8 @@ const COL_MANA_COST_PCT: usize = 156;
 /// unparsed. (1074)
 const COL_MANA_COST_PER_LEVEL: usize = 33;
 const COL_MANA_PER_SECOND: usize = 34;
-/// `rangeIndex` (`SpellRec+0x90`, `0x90/4 == 36`) — the `SpellRange.dbc` row the byte-verified
-/// `GetMinMaxRange 0x6e3480` resolves (wow-re `wave-cooldown.md`). Same empirical pin (Auto
+/// `rangeIndex` (`SpellRec+0x90`, `0x90/4 == 36`) — the `SpellRange.dbc` row
+/// `GetMinMaxRange 0x6e3480` resolves. Same empirical pin (Auto
 /// Shot/Aimed Shot 114, Throw 74, Charge 95, Fireball 35).
 const COL_RANGE_INDEX: usize = 36;
 /// `modalNextSpell` — `Spell.dbc` **column 38** (`SpellRec + 0x98`): a spell the client casts **by
@@ -195,15 +193,15 @@ const COL_RANGE_INDEX: usize = 36;
 /// [`SpellDisplay::modal_next_spell`] for the whole law and the shipped-file census.
 ///
 /// The column's position is chain-locked the same way the interrupt trio's is (offset = column×4,
-/// between the verified `+0x90` = 36 rangeIndex and `+0xf4` = 61 Effect[0]); the name is wow-re's
-/// (`modalnext-chain-cast.md` §3/§11) and the community's. This repo's own reason to trust it is
+/// between the verified `+0x90` = 36 rangeIndex and `+0xf4` = 61 Effect[0]); the name is the
+/// community's. This repo's own reason to trust it is
 /// the distribution: non-zero on 57 of 22357 rows, and 52 of those 57 name spell **75, Auto Shot**,
 /// every one of them a hunter shot. A column that fell where this one falls by accident could not
 /// look like that.
 const COL_MODAL_NEXT_SPELL: usize = 38;
 /// `StartRecoveryCategory` (`SpellRec+0x274`, `0x274/4 == 157`) / `StartRecoveryTime` (`+0x278`,
 /// 158) — the **global-cooldown** pair `StartGlobalCooldown 0x6e2de0` reads at the local
-/// cast-send (`0x6e58fb`, wow-re `wave-cast.md`, VERIFIED). Category 133 / 1500 ms for ordinary
+/// cast-send (`0x6e58fb`). Category 133 / 1500 ms for ordinary
 /// spells; 0/0 for the GCD-free (Attack, Auto Shot, wand Shoot). Same 12-spell empirical pin.
 const COL_START_RECOVERY_CATEGORY: usize = 157;
 const COL_START_RECOVERY_TIME: usize = 158;
@@ -212,14 +210,14 @@ const COL_START_RECOVERY_TIME: usize = 158;
 const COL_PREVENTION_TYPE: usize = 165;
 /// `SpellFamilyName` (`SpellRec+0x280`, `0x280/4 == 160`) / `SpellFamilyFlags` low+high
 /// (`+0x284`/`+0x288`, 161/162) — the talent spell-modifier gate and its row selector, read by
-/// `GetSpellModifiers 0x6e6b30` at `6e6b38`/`6e6b46` and `6e6b83` (wow-re
-/// `system/spell/scratch/spellmod-table-law.md` §5). See [`SpellDisplay::spell_family`] and
+/// `GetSpellModifiers 0x6e6b30` at `6e6b38`/`6e6b46` and `6e6b83`.
+/// See [`SpellDisplay::spell_family`] and
 /// [`SpellDisplay::spell_family_flags`]; the shipped-file anchors are in
 /// [`catalog_tests`].
 const COL_SPELL_FAMILY_NAME: usize = 160;
 const COL_SPELL_FAMILY_FLAGS_LOW: usize = 161;
 /// `Targets` (`SpellRec+0x34`, `0x34/4 == 13`) — the wire `TARGET_FLAG_*` seed mask the cast-arm
-/// loads into its targeting flag_word (`0x6e525a`, wow-re `wave-cast.md`, VERIFIED). Empirical
+/// loads into its targeting flag_word (`0x6e525a`). Empirical
 /// pin against the binder's bit semantics: Resurrection 2006 = `0x8000` (corpse-ally bit 15),
 /// Skinning 8613 = `0x402` (unit bit 1 + requires-explicit-selection bit 10), ground AoEs carry
 /// `0x40` (dest location), enchant/poison rows `0x10` (item). `0` for ordinary casts.
@@ -235,8 +233,7 @@ const COL_IMPLICIT_TARGET_A1: usize = 82;
 /// Empirical pin: Frost Nova 122 carries A = 22 (caster coordinates) and B = 15 (src-area enemy)
 /// — harmful through B alone.
 const COL_IMPLICIT_TARGET_B1: usize = 85;
-/// The usable-walk columns (`IsSpellUsableNow 0x6e3d60`'s §2a gate table, wow-re
-/// `action-button-state-api.md`, byte-verified 2026-07-10; column = SpellRec-offset/4).
+/// The usable-walk columns (`IsSpellUsableNow 0x6e3d60`'s gate table; column = SpellRec-offset/4).
 /// Empirical pins on the real 5875 data: Claw 1082 Stances `0x1` (cat = form 1), Ambush 8676
 /// Stances `0x20000000` (stealth = form 30) + EquippedItemClass 2 / SubClassMask `0x8000`
 /// (dagger), Execute 5308 TargetAuraState 2 (healthless-20%) + Stances `0x50000`
@@ -281,9 +278,8 @@ const COL_ATTRIBUTES_EX3: usize = 9;
 const COL_SPEED: usize = 37;
 /// `Effect[0]` (`SpellRec+0xf4`, `0xf4/4 == 61` — raw this early, like columns 6/8/37): the
 /// spell's first effect type. The action bar / spellbook auto-attack icon substitution keys on it
-/// (decision 0231): `Effect[0] == SPELL_EFFECT_ATTACK (78)` is the melee auto-attack, verified at
-/// the bytes in wow-re (`system/ui/scratch/attack-icon-substitution.md`, resolvers `0x4b3f8a` /
-/// `0x4e59de` both `cmp [SpellRec+0xf4], 0x4e`).
+/// (decision 0231): `Effect[0] == SPELL_EFFECT_ATTACK (78)` is the melee auto-attack (resolvers
+/// `0x4b3f8a` / `0x4e59de` both `cmp [SpellRec+0xf4], 0x4e`).
 const COL_EFFECT_1: usize = 61;
 /// `EffectMiscValue[0]` (column 106). The Spell.dbc effect block is 15 parallel `[3]` arrays from
 /// `Effect@61`; `EffectMiscValue` is the 16th, at `61 + 15×3 = 106` — cross-checked by `SpellVisual`
@@ -300,7 +296,7 @@ const COL_EFFECT_TRIGGER_1: usize = 109;
 pub const SPELL_EFFECT_LEARN_SPELL: u32 = 36;
 
 /// One of a spell's three effect slots, as the trainer's state re-evaluator reads them
-/// (`0x4d7d40`, wow-re `trainer-service-suppression.md` §5; decision 2333): the three effect
+/// (`0x4d7d40`; decision 2333): the three effect
 /// types that decide whether a service is already "known". Any other effect type is not a learn
 /// effect and is skipped. Slot order is kept — the reference walks `+0xf4/+0xf8/+0xfc` in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,9 +313,8 @@ pub enum LearnEffect {
     PetSpell(u32),
 }
 /// `SpellEffects` value `57` — `SPELL_EFFECT_LEARN_PET_SPELL`, the learn wrapper's pet twin. The
-/// trainer's **icon** law accepts either in its three-slot wrapper scan (byte-verified: the paired
-/// `cmp ecx,0x24` / `cmp ecx,0x39` at `0x4d8ff5`/`0x4d8ffa`, wow-re
-/// `system/ui/scratch/spell-icon-substitution-law.md` §1). [`SpellCatalog::learned_spell`]'s
+/// trainer's **icon** law accepts either in its three-slot wrapper scan (the paired
+/// `cmp ecx,0x24` / `cmp ecx,0x39` at `0x4d8ff5`/`0x4d8ffa`). [`SpellCatalog::learned_spell`]'s
 /// **display** hop deliberately stays 36-only — that is decision 0247's verified grouping hop, and
 /// widening it is a separate question nothing has asked.
 pub const SPELL_EFFECT_LEARN_PET_SPELL: u32 = 57;
@@ -331,20 +326,20 @@ pub const SPELL_EFFECT_LEARN_PET_SPELL: u32 = 57;
 pub const SPELL_EFFECT_SKILL_STEP: u32 = 44;
 
 /// `SpellEffects` value `SPELL_EFFECT_OPEN_LOCK` — the lock-opening effect the GameObject
-/// interact-cast matches (decision 0239; RE `cursor-system.md` §8, the client's
+/// interact-cast matches (decision 0239; `0x5f84a1`, the client's
 /// `cmp [SpellRec+0xf4], 0x21`). A spell carrying it opens the `LockType` its `EffectMiscValue` names.
 const SPELL_EFFECT_OPEN_LOCK: u32 = 0x21;
 /// `baseLevel` — column 28 (`SpellRec+0x70`), the level term the effect-value walk subtracts at
 /// `0x6e3826`/`0x6e3854` and the cast-time scaling's base (`0x6e3340`). **Not** the DBC's
 /// `spellLevel` (column 29, `+0x74`) — nothing here reads that one; the field carried that name
-/// for a while (wow-re `openlock-spell-store-order.md` §4a pinned the split at the bytes).
+/// for a while.
 /// Pinned by value on the extracted 5875 file: Pick Lock 1804 and Fireball rank 1 read `1`, the
 /// professions' openers `0`.
 const COL_BASE_LEVEL: usize = 28;
 /// `maxLevel` — column 27 (`SpellRec+0x6c`), the cap on the skill-derived level term in an
 /// opener's value: the player's skill is clamped to `maxLevel × 5` at `0x5ea6e3` before the
-/// `/5` (`0x6e3195`); `0` = uncapped (the professions' openers read 0 here, and their §4a table
-/// rows would compute 0 under an unconditional clamp). Same wow-re record.
+/// `/5` (`0x6e3195`); `0` = uncapped (the professions' openers read 0 here, and their values
+/// would compute 0 under an unconditional clamp).
 const COL_MAX_LEVEL: usize = 27;
 /// `spellLevel` — column 29 (`SpellRec+0x74`), the DBC's actual spellLevel. Parsed for the ONE
 /// consumer whose recorded law names `+0x74` (the Beast Training rank comparator,
@@ -354,18 +349,18 @@ const COL_SPELL_LEVEL: usize = 29;
 /// `EffectApplyAuraName[0]` (column 91, `61 + 10×3` — tenth of the effect-`[3]` blocks; pinned on
 /// the extracted 5875 file: every form spell — Battle Stance 2457, Bear 5487, Cat 768, Stealth
 /// 1784, Moonkin 24858 — carries `36` here, and columns 94-96 don't). The stance bar's
-/// admission key (wow-re `shapeshift-bar-api.md`, VERIFIED): `== SPELL_AURA_MOD_SHAPESHIFT`.
+/// admission key (`0x4b2810`): `== SPELL_AURA_MOD_SHAPESHIFT`.
 const COL_EFFECT_APPLY_AURA_1: usize = 91;
 /// `AuraType` value `36` — `SPELL_AURA_MOD_SHAPESHIFT` (vmangos `SpellAuraDefines.h`): the aura
 /// that changes the form byte; its `EffectMiscValue` is the `SpellShapeshiftForm.dbc` form id.
 const SPELL_AURA_MOD_SHAPESHIFT: u32 = 36;
 const COL_ICON_ID: usize = 117;
-/// `ActiveIconID` (column 118, `SpellRec+0x1d8` — right after `SpellIconID`, wow-re
-/// `shapeshift-bar-api.md` VERIFIED): the icon shown while the spell's form is ACTIVE, when
+/// `ActiveIconID` (column 118, `SpellRec+0x1d8` — right after `SpellIconID`, read at
+/// `0x4b4754`): the icon shown while the spell's form is ACTIVE, when
 /// nonzero (druid forms carry icon 122, the "dismiss form" paw; warrior stances carry 0).
 const COL_ACTIVE_ICON_ID: usize = 118;
-/// `StanceBarOrder` (column 166, `SpellRec+0x298`, SIGNED — wow-re `shapeshift-bar-api.md`
-/// VERIFIED: the stance-bar sort comparator `0x4b2bb0` orders ascending by it, `-1` last, spell
+/// `StanceBarOrder` (column 166, `SpellRec+0x298`, SIGNED — the stance-bar sort comparator
+/// `0x4b2bb0` orders ascending by it, `-1` last, spell
 /// id as the tiebreak). Pinned on the extracted file: Battle 0 / Defensive 1 / Berserker 2,
 /// Bear 0 / Aquatic 1 / Cat 2 / Travel 3 / Moonkin 4, Stealth −1.
 const COL_STANCE_BAR_ORDER: usize = 166;
@@ -377,11 +372,11 @@ const COL_DESCRIPTION_ENUS: usize = 138;
 /// `AuraDescription` enUS (module docs).
 const COL_AURA_DESCRIPTION_ENUS: usize = 147;
 
-/// `DurationIndex` (`SpellRec+0x78`, `0x78/4 == 30` — byte-confirmed by the wow-re §5, module
+/// `DurationIndex` (`SpellRec+0x78`, `0x78/4 == 30` — module
 /// docs: `Spell_C::GetDuration 0x6ea000`'s own read). `0` = no row (an instant-hit spell with no
 /// periodic/aura tail — Fire Blast 2136).
 const COL_DURATION_INDEX: usize = 30;
-/// `CastingTimeIndex` (`SpellRec+0x48`, `0x48/4 == 18` — byte-confirmed by the wow-re §5, module
+/// `CastingTimeIndex` (`SpellRec+0x48`, `0x48/4 == 18` — module
 /// docs: `Spell_C::GetCastTime 0x6e3340`'s own read).
 const COL_CASTING_TIME_INDEX: usize = 18;
 /// `ProcChance` (module docs) — percent, `101` is vmangos's own "always proc, no roll" convention
@@ -417,7 +412,7 @@ const COL_EFFECT_ITEM_TYPE_1: usize = 103;
 // hops; the tooltip arc exposes the full `[3]` array off the same columns instead of re-deriving.
 
 /// `AttributesEx3` bit `0x8000` — damage renders melee-white (`SPELL_ATTR3_NORMAL_RANGED_ATTACK`;
-/// the combat-text emitter's `B`-bit flip, wow-re `combattext-color-law.md`).
+/// the combat-text emitter `0x6128b0`'s `B`-bit flip).
 const ATTR_EX3_NORMAL_RANGED_ATTACK: u32 = 0x8000;
 /// `AttributesEx3` bit `0x4` — **the cast bar shows no name for this spell**
 /// (`SPELL_ATTR_EX3_NO_CASTING_BAR_TEXT`, vmangos `Spells/SpellDefines.h:907`). Decision 1312.
@@ -500,34 +495,34 @@ const SPELL_EFFECT_ATTACK: u32 = 78;
 
 /// The three **tracking** aura types (`EffectApplyAuraName` values, vmangos `SpellAuraDefines.h`):
 /// `SPELL_AURA_TRACK_CREATURES` 44, `SPELL_AURA_TRACK_RESOURCES` 45, `SPELL_AURA_TRACK_STEALTHED`
-/// 151 — byte-verified as the client's own set `{0x2c,0x2d,0x97}`, tested against the three
+/// 151 — the client's own set `{0x2c,0x2d,0x97}`, tested against the three
 /// `EffectApplyAuraName` dwords at `SpellRec+0x16c..+0x174` in BOTH aura display filters: the
 /// player-cache rebuild's Pass 2 (`0x4e42xx`, which also records the matching spell for
 /// `GetTrackingTexture`) and the shared `IsAuraDisplayable 0x519860` (`0x5198c2`–`0x5198d3`)
-/// the `UnitBuff`/`UnitDebuff` walks call (wow-re `ui/scratch/aura-display-pipeline.md` §3/§9a).
+/// the `UnitBuff`/`UnitDebuff` walks call.
 /// See [`SpellDisplay::tracking_aura`].
 const TRACKING_AURA_TYPES: [u32; 3] = [44, 45, 151];
 
 /// `Attributes` bits `0x4` + `0x400` — the two ON_NEXT_SWING attributes (vmangos
 /// `SPELL_ATTR_ON_NEXT_SWING_NO_DAMAGE` / `SPELL_ATTR_ON_NEXT_SWING`). The client always tests
 /// them as ONE mask (`SpellRec+0x18 & 0x404` — the already-casting exemption `6e4d97`, the
-/// self-cast range short-circuit `0x6e34fb`, the attribute predicate `0x6e5200`; wow-re
-/// `wave-cast.md`): a spell of this class doesn't cast — it queues on the server's melee slot
+/// self-cast range short-circuit `0x6e34fb`, the attribute predicate `0x6e5200`):
+/// a spell of this class doesn't cast — it queues on the server's melee slot
 /// and fires on the caster's next swing (Heroic Strike 78 carries `0x4`, Raptor Strike 2973
 /// `0x404`, Cleave 845 `0x4`). See [`SpellDisplay::on_next_swing`].
 const ATTR_ON_NEXT_SWING: u32 = 0x404;
 /// `AttributesEx` bit `0x200` — vmangos `SPELL_ATTR_EX_INITIATES_COMBAT` ("Enables Auto-Attack").
 /// The server only reads it for pet AI (vmangos `Spell.cpp:4377`); the player-facing "casting
 /// this starts my auto-attack" is client-side (one leg of predicate `0x6e5200`, read by
-/// `TryCast`'s post-send tail `6e51b5` → the attack entry `0x6131a0`; byte-verified §5, wow-re
-/// `combat-feel-law.md` @ c445713b). Rend/Sunder Armor/Slam/Sinister Strike carry it; Heroic
+/// `TryCast`'s post-send tail `6e51b5` → the attack entry `0x6131a0`).
+/// Rend/Sunder Armor/Slam/Sinister Strike carry it; Heroic
 /// Strike and Charge do not.
 const ATTR_EX_INITIATES_COMBAT: u32 = 0x200;
 /// `AttributesEx` bits 0x4|0x40 — the two CHANNELED variants, tested as one mask by the tooltip's
 /// cast cell (`0x52ec27`: `test [rec+0x1c],0x44` → "Channeled"; 1074).
 const ATTR_EX_CHANNELED: u32 = 0x44;
 /// `AttributesEx2` bit `0x100000` — vmangos `SPELL_ATTR_EX2_INITIATE_COMBAT_POST_CAST` ("Client
-/// will send CMSG_ATTACK_SWING after SMSG_SPELL_GO"). The §5-verified send-tail predicate
+/// will send CMSG_ATTACK_SWING after SMSG_SPELL_GO"). The send-tail predicate
 /// EXCLUDES it (`[ebp-2] = 0x6e5200 && Ex2-bit20 CLEAR`): a bit20 spell defers its attack-start
 /// to the `SMSG_SPELL_GO` handler (`0x6e83c0`) instead of starting at send. Both halves are
 /// built — [`SpellDisplay::initiates_auto_attack`] is the send-time one, and
@@ -544,17 +539,17 @@ const ATTR_EX2_INITIATE_COMBAT_POST_CAST: u32 = 0x0010_0000;
 /// `Attributes` bit 25 (`0x0200_0000`) — `SPELL_ATTR_COOLDOWN_ON_EVENT` (vmangos; "disabled while
 /// active"). The client's cooldown machinery stores such a spell's record **on hold** — timers
 /// parked until `SMSG_COOLDOWN_EVENT` starts them (the `bl = (SpellRec+0x18 >> 0x19) & 1` read in
-/// the `SMSG_SPELL_COOLDOWN` handler `0x6e9460`, wow-re `wave-handlers.md`, VERIFIED). Stealth,
+/// the `SMSG_SPELL_COOLDOWN` handler `0x6e9460`). Stealth,
 /// Shield Wall — the "cooldown begins when the effect ends" family.
 const ATTR_COOLDOWN_ON_EVENT: u32 = 0x0200_0000;
 
-/// The usable-walk attribute gates (§2a legs 1/6/7/8; names = vmangos `SpellDefines.h`,
-/// bit positions = the byte-verified reads in `IsSpellUsableNow 0x6e3d60`):
-/// bit 23 — castable while dead (leg 1's waiver);
+/// The usable-walk attribute gates (names = vmangos `SpellDefines.h`,
+/// bit positions = the reads in `IsSpellUsableNow 0x6e3d60`):
+/// bit 23 — castable while dead (the dead/ghost gate's waiver, `0x6e3dbd`);
 /// bit 17 — only while stealthed, tested against `UNIT_FIELD_BYTES_1` byte 3's CREEP flag
-/// (leg 7's `[+0x110]+0x213 & 2`; vmangos `UNIT_VIS_FLAGS_CREEP`, set by the stealth aura);
+/// (`[+0x110]+0x213 & 2` at `0x6e3ee3`; vmangos `UNIT_VIS_FLAGS_CREEP`, set by the stealth aura);
 /// bit 16 — not while shapeshifted (a form-gate input, [`SpellDisplay::usable_in_form`]);
-/// bit 28 — only out of combat, tested against `UNIT_FLAG_IN_COMBAT` (leg 8's unit-flag b19).
+/// bit 28 — only out of combat, tested against `UNIT_FLAG_IN_COMBAT` (unit-flag b19, `0x6e3f01`).
 pub const ATTR_CASTABLE_WHILE_DEAD: u32 = 0x0080_0000;
 pub const ATTR_ONLY_STEALTHED: u32 = 0x0002_0000;
 const ATTR_NOT_SHAPESHIFT: u32 = 0x0001_0000;
@@ -564,8 +559,8 @@ pub const ATTR_NOT_IN_COMBAT: u32 = 0x1000_0000;
 const ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x0008_0000;
 /// The **combo-point consumers** — `AttributesEx` bits 20 and 22 (vmangos
 /// `SPELL_ATTR_EX_FINISHING_MOVE_DAMAGE` / `_DURATION`, both commented "Uses combo points"; the
-/// pair `SpellEntry::NeedsComboPoints` tests). The usable walk's leg 5 reads exactly this pair
-/// (wow-re §2a: "AttributesEx b20/b22") before consulting the caster's combo-point byte —
+/// pair `SpellEntry::NeedsComboPoints` tests). The usable walk's combo-point gate reads exactly
+/// this pair (`0x6e3e7a`) before consulting the caster's combo-point byte —
 /// [`SpellDisplay::needs_combo_points`], decision 0869. In 5875 the set is the six rogue/druid
 /// finishers (Eviscerate, Expose Armor, Ferocious Bite, Kidney Shot, Rip, Rupture, Slice and
 /// Dice) **plus Overpower**, whose own `AttributesEx` bit 30 vmangos names `COMBO_ON_BLOCK` and
@@ -574,7 +569,7 @@ const ATTR_EX_FINISHING_MOVE: u32 = 0x0050_0000;
 /// `SpellEffects` value `47` — `SPELL_EFFECT_TRADE_SKILL`: the usable walk's early-out
 /// (`0x6e3d99`, `Effect[0]==0x2f` ⇒ usable, skipping every gate). Also the crafting book's open
 /// key (0437): `Spell_C::TryCast 0x6e4b60` branches on `Effect[0]==0x2f` and opens the window
-/// client-side, never sending the cast (wow-re `wave-cast.md`, VERIFIED).
+/// client-side, never sending the cast.
 pub const SPELL_EFFECT_TRADE_SKILL: u32 = 47;
 /// `SpellEffects` value `24` — `SPELL_EFFECT_CREATE_ITEM` (vmangos `SharedDefines.h`): a recipe's
 /// product effect; its `EffectItemType` slot is the created item entry (0437).
@@ -704,8 +699,8 @@ impl SpellCatalog {
     /// This is the direction the reference works in, and the direction matters. `0x4b25b0` runs on
     /// **spell add** and stores `[0xb700ac][EffectMiscValue_1] = spellId`, so the client's
     /// language→spell table only ever holds languages *this character has learned*, and a later
-    /// learn overwrites an earlier one on the same language id (wow-re
-    /// `system/ui/scratch/chat-language-scramble.md` §8). Exposing spell→language lets the caller
+    /// learn overwrites an earlier one on the same language id.
+    /// Exposing spell→language lets the caller
     /// fold that table over its own known-spell set and get the reference's answer; exposing
     /// language→spell over the whole DBC would not, and the shipped data is why:
     ///
@@ -789,7 +784,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
     let dispel_types = load_spell_dispel_types(chain)?;
     // The SpellCategory "matches every query" wildcard set (`GetCooldownInfo 0x6e13e0`'s category
     // leg, `6e1563`/`6e1567`: a category row whose Flags carry bit `0x2` contributes to ANY
-    // queried spell — wow-re `gcd-power-gate.md` §2). In the 5875 data exactly one row carries
+    // queried spell). In the 5875 data exactly one row carries
     // it: category 351, wand Shoot's — the whole-bar wand-swing sweep (pinned in catalog_tests).
     let wildcard_categories: std::collections::HashSet<u32> = {
         let bytes = chain
@@ -855,7 +850,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
         if !effects.is_empty() {
             learn_effects.insert(id, effects);
         }
-        // The language declaration (wow-re `chat-language-scramble.md` §8). **Effect slot 0 only**
+        // The language declaration (`0x4b2656`). **Effect slot 0 only**
         // — the reference dispatches on `Effect_1` alone (`[SpellRec+0xf4]`) and reads
         // `EffectMiscValue_1` (`+0x1a8`); it does not scan the other two slots the way the learn
         // hop above does.
@@ -921,7 +916,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
                 category: u32_at(r, COL_CATEGORY).unwrap_or(0),
                 // The category row's flags-bit-0x2 "matches every query" mark (only wand Shoot's
                 // 351 in the 5875 data) — resolved at load so the cooldown store's category leg
-                // reads it off the record it armed (`gcd-power-gate.md` §2).
+                // reads it off the record it armed (`0x6e1563`).
                 category_wildcard: u32_at(r, COL_CATEGORY)
                     .is_some_and(|c| wildcard_categories.contains(&c)),
                 recovery_ms: u32_at(r, COL_RECOVERY_TIME).unwrap_or(0),
@@ -963,8 +958,8 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
                 equipped_item_inventory_type_mask: u32_at(r, COL_EQUIPPED_ITEM_INVENTORY_TYPE_MASK)
                     .unwrap_or(0),
                 requires_spell_focus: u32_at(r, COL_REQUIRES_SPELL_FOCUS).unwrap_or(0),
-                // The stance-bar keys (wow-re shapeshift-bar-api.md): the first MOD_SHAPESHIFT
-                // effect's MiscValue is the form id; order/active-icon read raw.
+                // The stance-bar keys: the first MOD_SHAPESHIFT effect's MiscValue is the form id
+                // (`0x4b4690`); order/active-icon read raw.
                 shapeshift_form: (0..3).find_map(|i| {
                     (effect_apply_aura[i] == SPELL_AURA_MOD_SHAPESHIFT)
                         .then(|| u32_at(r, COL_EFFECT_MISC_1 + i).unwrap_or(0))

@@ -172,7 +172,7 @@ fn real_spell_catalog_reads_rank_and_passive() {
     );
 }
 
-/// The spellbook add-gate on the real build-5875 `Spell.dbc` (decision 0227; the wow-re §5's
+/// The spellbook add-gate on the real build-5875 `Spell.dbc` (decision 0227; the reference's
 /// own concrete probe spells): displayable player spells pass, and the three hidden classes —
 /// a language, an armor proficiency, a weapon proficiency (all `Attributes 0xC0`) — fail. A
 /// column slip on castUI (3) or the gate bits fails loudly. Skips without client data.
@@ -341,12 +341,12 @@ fn real_spell_catalog_pins_the_skin_latch_effects() {
 }
 
 /// The **skill an opener provides** on the real Spell.dbc — the left-hand side of the client's lock
-/// satisfaction test (`0x5f850f`; decision 0752, level term corrected by wow-re
-/// `openlock-spell-store-order.md` §4a). This walk decides whether a right-click opens a lock at
+/// satisfaction test (`0x5f850f`; decision 0752; the level term is the player's skill,
+/// `0x5ea690`). This walk decides whether a right-click opens a lock at
 /// all, so its inputs (maxLevel 27 · baseLevel 28 · EffectDieSides 64 · EffectBaseDice 67 ·
 /// EffectDicePerLevel 70 · EffectRealPointsPerLevel 73 · EffectBasePoints 76) are pinned by
 /// *result*, against anchors whose right answers are known from the game rather than the file —
-/// the below-cap rows are §4a's own discriminating table (the values the refuted caster-level
+/// the below-cap rows are the discriminating ones (the values the refuted caster-level
 /// reading could not produce). Skips without client data.
 #[test]
 fn real_spell_catalog_computes_the_lock_skill_an_opener_provides() {
@@ -355,7 +355,7 @@ fn real_spell_catalog_computes_the_lock_skill_an_opener_provides() {
     let cat = load_spell_catalog(&mut chain).expect("load Spell/SpellIcon");
 
     // Pick Lock (1804): `4 + 1 + 5.0×(skill/5 − 1)` — the skill itself, exactly: a capped rogue
-    // provides 300, and a 150-skill rogue provides 150 (§4a's discriminator; the old reading
+    // provides 300, and a 150-skill rogue provides 150 (the discriminator; the old reading
     // said 300 for both at level 60).
     assert_eq!(cat.get(1804).unwrap().open_lock_skill(300), Some(300));
     assert_eq!(cat.get(1804).unwrap().open_lock_skill(225), Some(225));
@@ -454,7 +454,7 @@ fn real_spell_catalog_reads_cooldown_cost_and_range_columns() {
 
 /// The cast-arm targeting columns ([`COL_TARGETS`] 13 / [`COL_IMPLICIT_TARGET_A1`] 82) on the
 /// real build-5875 `Spell.dbc` — each row chosen to pin a distinct switch arm or `Targets`
-/// bit (values cross-checked against the `0x6e5250` arm map, wow-re `wave-cast.md`). Skips
+/// bit (values cross-checked against the `0x6e5250` arm map). Skips
 /// without client data.
 #[test]
 fn real_spell_catalog_reads_cast_targeting_columns() {
@@ -486,7 +486,7 @@ fn real_spell_catalog_reads_cast_targeting_columns() {
     assert_eq!(cat.get(8613).unwrap().targets, 0x402, "Skinning");
 }
 
-/// The usable-walk columns (§2a) on the real build-5875 data — one pinned row per gate
+/// The usable-walk columns (`0x6e3d60`) on the real build-5875 data — one pinned row per gate
 /// family — plus the form-gate law over the real form flags. Skips without client data.
 #[test]
 fn real_spell_catalog_reads_usable_walk_columns() {
@@ -514,10 +514,10 @@ fn real_spell_catalog_reads_usable_walk_columns() {
     assert_eq!((execute.stances, execute.target_aura_state), (0x50000, 2));
     assert_eq!(cat.get(6572).unwrap().caster_aura_state, 1, "Revenge");
 
-    // Leg 5, the combo-point gate (0869): Overpower carries NO aura state — its window rides
-    // `AttributesEx` b20 (`FINISHING_MOVE_DAMAGE`) exactly like the rogue/druid finishers, which
-    // is why the aura-state legs alone left it permanently lit. Every rank, the finishers with
-    // it, and the neighbouring warrior abilities as the control.
+    // The combo-point gate (`0x6e3e7a`, decision 0869): Overpower carries NO aura state — its
+    // window rides `AttributesEx` b20 (`FINISHING_MOVE_DAMAGE`) exactly like the rogue/druid
+    // finishers, which is why the aura-state legs alone left it permanently lit. Every rank, the
+    // finishers with it, and the neighbouring warrior abilities as the control.
     for rank in [7384, 7887, 11584, 11585] {
         let op = cat.get(rank).unwrap();
         assert!(op.needs_combo_points(), "Overpower {rank}");
@@ -605,14 +605,14 @@ fn real_spell_catalog_reads_usable_walk_columns() {
     assert_eq!(FormRefusal::NotShapeshift.reason(), 0x3d);
     assert_eq!(FormRefusal::OnlyShapeshift.reason(), 0x56);
 
-    // The active-action toggle's raw-column gate (wow-re shapeshift-plaincast-toggle.md):
+    // The active-action toggle's raw-column gate (`0x4e563c`):
     // Ghost Wolf carries a nonzero ActiveIconID, so its button press-again cancels; Battle
     // Stance carries 0, which is what keeps a stance un-cancelable on the plain paths.
     assert_ne!(ghost_wolf.active_icon_id, 0);
     assert_eq!(cat.get(2457).unwrap().active_icon_id, 0, "Battle Stance");
 
-    // The form's AttackIconID column (field 13, `0x4e6870`'s `+0x34` read — wow-re
-    // `action-spell-icon-apis.md` §3.3), resolved through SpellIcon.dbc at load: Cat Form
+    // The form's AttackIconID column (field 13, `0x4e6870`'s `+0x34` read), resolved through
+    // SpellIcon.dbc at load: Cat Form
     // carries its own attack face, Ghost Wolf's column is 0 → the weapon fall-through.
     assert_eq!(
         forms.get(&1).unwrap().attack_icon.as_deref(),
@@ -830,7 +830,7 @@ fn real_spell_catalog_classifies_combat_initiation() {
 /// **`modalNextSpell` — `Spell.dbc` column 38** on the real build-5875 file (decision 1597, bug
 /// B280). This is the column that makes casting a hunter shot start Auto Shot, so a column slip
 /// here is a silently-broken hunter; and the shape of the census is itself the evidence that the
-/// column is the one wow-re named — non-zero on 57 of 22357 rows, 52 of those naming spell 75.
+/// column is the one `0x6e7447` reads — non-zero on 57 of 22357 rows, 52 of those naming spell 75.
 /// Skips without client data.
 #[test]
 fn real_spell_catalog_reads_modal_next_spell() {
@@ -942,7 +942,7 @@ fn real_crafting_columns_read_created_item_and_focus() {
 /// data — no client install needed.
 #[test]
 fn the_tooltip_gates_read_effect_and_mask() {
-    // §3.4: the cast|cooldown line goes on the ATTRIBUTE bit or on Effect[0] ∈ {47, 78}.
+    // `0x52eb15`: the cast|cooldown line goes on the ATTRIBUTE bit or on Effect[0] ∈ {47, 78}.
     let plain = SpellDisplay::default();
     assert!(!plain.tooltip_omits_cast_line());
     let attribute_passive = SpellDisplay {
@@ -964,7 +964,8 @@ fn the_tooltip_gates_read_effect_and_mask() {
     };
     assert!(trade_skill.tooltip_omits_cast_line());
 
-    // §3-EQUIPITEM's naming rule moved to `ItemSubClassCatalog::requirement_name`, where the
+    // The equipped-item line's naming rule (`0x52eea7`–`0x52f10a`) moved to
+    // `ItemSubClassCatalog::requirement_name`, where the
     // vocabulary it reads lives — see `itemsubclass::tests` for its coverage against the real DBCs.
 }
 
@@ -1201,8 +1202,8 @@ fn real_item_target_family_and_its_gate_columns() {
     }
 }
 
-/// The 0948 §5's flagged data questions, pinned on the real 5875 data (`gcd-power-gate.md`
-/// §2.1): the SpellCategory flags-bit-0x2 wildcard set is EXACTLY {351} — wand Shoot's category
+/// Decision 0948's flagged data questions (`GetCooldownInfo 0x6e13e0`), pinned on the real 5875
+/// data: the SpellCategory flags-bit-0x2 wildcard set is EXACTLY {351} — wand Shoot's category
 /// (the whole-bar swing sweep the store's wildcard leg implements) — and the `{cat=0, time≠0}`
 /// GCD-source shape (which would arm a category-0 GCD node matching every category-0 press) has
 /// NO player-castable carrier: every such row is an NPC/internal spell. A data change here means
@@ -1345,7 +1346,7 @@ fn real_spell_catalog_cost_columns() {
 /// `Languages.dbc` carries no skill column and three of the thirteen name pairs do not match
 /// (Dwarvish/Dwarven, Demonic/Demon Tongue, Kalimag/Old Tongue), so the only route from a chat
 /// line's language id to the skill that gates it is the **spell** whose `Effect_1` is
-/// `SPELL_EFFECT_LANGUAGE` (wow-re `chat-language-scramble.md` §8, `0x4b2656`).
+/// `SPELL_EFFECT_LANGUAGE` (`0x4b2656`).
 ///
 /// The mechanism is byte-verified; what it *does against shipped 5875 content* is this test's
 /// subject, and it is not what the mechanism alone suggests. **Fourteen spells declare a language
@@ -1513,7 +1514,7 @@ fn real_channel_bar_name_law() {
         assert!(!d.no_channel_bar(), "{id} {:?} still shows a bar", d.name);
     }
 
-    // The named leg — the sharpest control wow-re names: Fishing and Mind Flay take opposite
+    // The named leg — the sharpest control: Fishing and Mind Flay take opposite
     // legs of the same `0x6e75a1`, and vanilla really does print one name and one generic word.
     for (id, name) in [
         (7620u32, "Fishing"),
@@ -1562,7 +1563,7 @@ fn real_channel_bar_name_law() {
 /// the whole table is 35, so the HIGH dword is live. The **three worked spells** pin the join
 /// direction: 4987 sets 12 and 33, which a low-dword-only read or a swapped pair both get wrong.
 ///
-/// Numbers from wow-re `system/spell/scratch/spellmod-table-law.md` (Provenance), re-measured here
+/// Numbers from the reference, re-measured here
 /// off the file this catalog actually loads. Skips without client data.
 #[test]
 fn real_spell_family_columns_carry_the_modifier_gate() {

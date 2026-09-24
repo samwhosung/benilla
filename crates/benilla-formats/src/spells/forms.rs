@@ -19,22 +19,22 @@ pub struct ShapeshiftForm {
     /// **BonusActionBar** (field 1) — the stance page the bar flips to (0 = none).
     pub bonus_bar: u32,
     /// **Name** (the locstring at fields 2..10; enUS slot) — "Battle Stance", "Cat Form" —
-    /// the `SPELL_REQUIRED_FORM` "Requires %s" cell of the spell tooltip (the 0276 line law §3.6).
+    /// the `SPELL_REQUIRED_FORM` "Requires %s" cell of the spell tooltip (decision 0276;
+    /// `0x52f10a`–`0x52f2ae`).
     pub name: String,
     /// `flags1` (field 11, vmangos `SpellShapeshiftFormEntry`). Bit 0 = the form is a *stance*
     /// (warrior stances, stealth): it does NOT count as "shapeshifted" for the form gate —
     /// vmangos `SHAPESHIFT_FLAG_STANCE`, the `actAsShifted` fork of
     /// [`SpellDisplay::usable_in_form`].
     pub flags: u32,
-    /// **creatureType** (field 12, int32 — the byte-carved `+0x30` read, wow-re
-    /// `track-predicates.md`): the form's creature-type OVERRIDE. The client's creature-type
+    /// **creatureType** (field 12, int32 — the `+0x30` read): the form's creature-type OVERRIDE.
+    /// The client's creature-type
     /// resolver (`0x605570`) reads a shapeshifted unit's type from HERE before the creature
     /// template or race table — a cat-form druid is a Beast (1) to the minimap tracking
     /// predicates. `<= 0` reads Humanoid (the resolver's fallback; vmangos's own row comment).
     /// Consumed by the tracking dots (decision 0564).
     pub creature_type: i32,
-    /// **AttackIconID** (field 13, the byte-carved `+0x34` read — wow-re
-    /// `action-spell-icon-apis.md` §3.3): the form's own attack icon, resolved through
+    /// **AttackIconID** (field 13, the `+0x34` read): the form's own attack icon, resolved through
     /// `SpellIcon.dbc` at load. The Attack action's icon resolver (`0x4e6870`) serves the
     /// CURRENT form's icon before the main-hand weapon's, on both the action bar and the
     /// spellbook. `None` = column 0, no form icon — fall through to the weapon (5875 data:
@@ -50,7 +50,7 @@ impl ShapeshiftForm {
 
     /// Clicking this form's stance button while it is ACTIVE cancels the form aura
     /// (`CMSG_CANCEL_AURA`) — unless `flags1` bit `0x2` blocks it (`CastShapeshiftForm
-    /// 0x4b4810`'s guard at `0x4b4963`, wow-re `shapeshift-bar-api.md` VERIFIED: active + bit
+    /// 0x4b4810`'s guard at `0x4b4963`: active + bit
     /// set = silent no-op). 5875: the warrior stances carry `0x7` (blocked — you never cancel
     /// OUT of a stance); druid forms (0x70/0x50), Stealth (0x1), Moonkin (0x41), Shadowform
     /// (0x9), Ghost Wolf (0x40) all cancel.
@@ -61,8 +61,8 @@ impl ShapeshiftForm {
 
 /// `SpellShapeshiftForm.dbc` → form id → the consumed row ([`ShapeshiftForm`]).
 ///
-/// **BonusActionBar** is the client's own bar mapping (wow-re, byte-verified 2026-07-02:
-/// `GetBonusBarOffset 0x4e7620` returns a cached global that the `UPDATE_BONUS_ACTIONBAR`
+/// **BonusActionBar** is the client's own bar mapping
+/// (`GetBonusBarOffset 0x4e7620` returns a cached global that the `UPDATE_BONUS_ACTIONBAR`
 /// handler `0x4e4fc0` fills by indexing this DBC by the player's shapeshift form and reading
 /// `rec->field[1]` — data, not a stance switch). 5875 values: Cat(1)→1, Bear(5)/DireBear(8)→3,
 /// Battle(17)→1, Defensive(18)→2, Berserker(19)→3, Stealth(30)→1, everything else 0.

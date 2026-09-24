@@ -10,8 +10,8 @@ use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::dbc::{f32_at, parse, u32_at};
 
-/// One `SpellRange.dbc` row — the `GetMinMaxRange 0x6e3480` inputs (wow-re `wave-cooldown.md`,
-/// VERIFIED: min f32 `+0x4`, max f32 `+0x8`, flags `+0xc` with **bit 0 = melee**, whose branch
+/// One `SpellRange.dbc` row — the `GetMinMaxRange 0x6e3480` inputs
+/// (min f32 `+0x4`, max f32 `+0x8`, flags `+0xc` with **bit 0 = melee**, whose branch
 /// substitutes the combat-reach sum floored at 5.0 for the authored pair). Pinned on the extracted
 /// 5875 file (28 records × 22 fields): row 2 = {0, 5, flags 1} (melee), 114 = {8, 35} (Auto Shot),
 /// 95 = {8, 25} (Charge), 35 = {0, 35} (Fireball).
@@ -41,9 +41,8 @@ pub const ON_NEXT_SWING_RANGE: f32 = 100.0;
 
 /// `GetMinMaxRange 0x6e3480` — a spell's `{min, max}` cast range, the ONE home for the reach
 /// arithmetic every consumer shares (the action bar's out-of-range red, the spell tooltip's range
-/// cell). Transcribed from wow-re's diff-gated `crates/spell/src/cooldown.rs::spell_minmax_range`
-/// (`PRIMITIVE:spell_minmax_range`), including its 53-bit intermediates: the binary keeps the reach
-/// sums on the x87 stack and stores `f32` only at the end, so the additions are `f64` here.
+/// cell). Transcribed from `0x6e3480`, including its 53-bit intermediates: the binary keeps the
+/// reach sums on the x87 stack and stores `f32` only at the end, so the additions are `f64` here.
 ///
 /// - **on-next-swing** (`Attributes & 0x404`, `0x6e34fb`): `(0, 100)` — the self-cast
 ///   short-circuit, before the row is even read.
@@ -60,13 +59,13 @@ pub const ON_NEXT_SWING_RANGE: f32 = 100.0;
 /// this moved here, which diverged for every non-default reach). **A caller with no explicit
 /// target still owes the auto-attack one**: the melee arm resolves `[caster+0xc48]`
 /// (`attack_target_guid`) itself at `0x6e356a` and uses that unit's reach, which is why the spell
-/// tooltip's melee cell moves while you are swinging at something big (wow-re
-/// `tooltip-damage-matrix-and-container-slots.md` §D4.2b). Passing it as `target_reach` is how a
+/// tooltip's melee cell moves while you are swinging at something big.
+/// Passing it as `target_reach` is how a
 /// caller models that; only with neither does the caster's own reach stand in twice.
 ///
 /// Two decomp legs are deliberately UNMODELED (0426), and **neither is target-gated the way an
 /// earlier reading here claimed**: the PvP `max += 2.6667` bonus (`0x6e3648`, gated on both
-/// units' `[unit+0x118]+0x40 & 0x200d` through the un-RE'd `0x5fc350`) is reachable from the
+/// units' `[unit+0x118]+0x40 & 0x200d` through the unidentified `0x5fc350`) is reachable from the
 /// melee arm even with no target argument, because that arm sets the target register itself; and
 /// the `Attributes & 2` leg (`0x6e36aa`) is not an "inspect" arm and touches the target nowhere —
 /// it is `max *= RangedModRange(item template +0x118) · 0.01` for whatever sits in
@@ -83,9 +82,9 @@ pub const ON_NEXT_SWING_RANGE: f32 = 100.0;
 /// It stays unmodelled anyway, and for the honest reason rather than the false one: whether a
 /// stock client ever *builds* a bit-1 spell's range cell for a relic-wearing player is a question
 /// about the builder's callers, not about this function — none of the 192 `Attributes & 2` rows
-/// is a spell a relic class learns, so the only route is an addon's `SetHyperlink`. wow-re has
-/// that scoped as a caller census; `ItemInfo::ranged_mod_range` is already on the wire here, so
-/// modelling it is a small change the moment the census says it is reachable.
+/// is a spell a relic class learns, so the only route is an addon's `SetHyperlink`. The caller
+/// question is open; `ItemInfo::ranged_mod_range` is already on the wire here, so
+/// modelling it is a small change the moment it is shown reachable.
 ///
 /// `None` = no range to test: no row, or the self row (id 1, `{0, 0}`).
 pub fn min_max_range(

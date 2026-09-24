@@ -1,7 +1,6 @@
 //! `SpellDuration.dbc` — the base/per-level/max duration (ms) a spell's `DurationIndex` column
 //! ([`crate::spells::SpellDisplay::duration_index`]) resolves against. Feeds the duration
-//! formula — `Spell_C::GetDuration 0x6ea000`, byte-confirmed by the 2026-07-10 wow-re §5
-//! cross-check (`wave-cooldown.md`, wow-re commit `f2c563c9`): it reads DurationIndex
+//! formula — `Spell_C::GetDuration 0x6ea000`: it reads DurationIndex
 //! `[SpellRec+0x78]`, resolves this table's recordsById at `[0xc0d828]`, and applies spell-mod
 //! op `1` (SPELLMOD_DURATION). The row layout is settled independently (WoWDBDefs'
 //! `1.0.0.3980`–`1.12.3.6141` layout `$id$ID<32> Duration<32> DurationPerLevel<32>

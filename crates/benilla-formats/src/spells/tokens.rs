@@ -1,7 +1,7 @@
 //! The spell-description **$-token engine** (decision 0274 P2) — the substitution the real
 //! client runs over `Spell.dbc` Description/AuraDescription text (and item trigger lines), with
-//! the value formulas byte-verified by the 0276 fold-back (wow-re `tooltip-content-law.md`,
-//! `0x5075f0 → 0x507710`, the effect-value core `0x6e3800`):
+//! the value formulas from the 0276 fold-back
+//! (`0x5075f0 → 0x507710`, the effect-value core `0x6e3800`):
 //!
 //! - `$s` (and `$m`/`$M`): `MIN = BasePoints + BaseDice`, `MAX = BasePoints + DieSides·BaseDice`
 //!   — the general n-dice rule (the common `BaseDice = 1` case reduces to `base+1 … base+dieSides`).
@@ -13,7 +13,7 @@
 //! - `$o`: the over-time total `perTick · duration / period` (period = `EffectAmplitude`,
 //!   defaulting 5000 ms when 0 — the byte default).
 //! - `$d`: the duration via `SpellDuration.dbc` — "until cancelled" when permanent; whole
-//!   seconds/minutes/hours text (INTERIM shape pending the `0x52fa50` formatter's pin).
+//!   seconds/minutes/hours text (INTERIM shape pending the `0x52fa50` formatter).
 //! - `$t` period seconds · `$a` radius yards (`SpellRadius.dbc`) · `$h` proc chance · `$x` chain
 //!   targets · `$e` the multiple-value float · `$r` range yards · `$u` stack/charge count
 //!   (unparsed — leaves the token in place, a visible fold-back flag).
@@ -75,8 +75,8 @@ fn duration_ms(d: &SpellDisplay, ctx: &TokenContext) -> Option<i64> {
 /// exactly the trap decision 2045 describes: a text search finds a key, and it is the wrong key
 /// for this call site. It also had no days arm at all, so a two-day aura read "48 hrs".
 ///
-/// The ladder is the one `0x52fa50` walks (byte-pinned for the aura line as wow-re §3-BUFF, and
-/// implemented for that surface in `benilla_ui::script::tooltip::duration_text`) and the plural
+/// The ladder is the one `0x52fa50` walks for the aura line (implemented for that surface in
+/// `benilla_ui::script::tooltip::duration_text`) and the plural
 /// pick is `GetText`'s: the bare token at exactly one, the `_P1` twin otherwise. Only HOURS ships
 /// a twin in this family, so the other three fall back to the bare token — which is the same
 /// fallback `plural_template` takes, and the reason `INT_SPELL_DURATION_MIN` reads "1 min" and

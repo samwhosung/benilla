@@ -69,7 +69,7 @@ pub struct SpellDisplay {
     /// else: `!= 0` (`6e6b38`), then `== [0xcecaac]`, the local player's own class family
     /// (`6e6b46` — [`crate::ChrClasses::spell_family`]). A spell that fails either takes no
     /// modifier at all, which is how a mage's talent stays off a warrior's ability and off every
-    /// item/creature spell in the file. wow-re `system/spell/scratch/spellmod-table-law.md` §5.1.
+    /// item/creature spell in the file.
     pub spell_family: u32,
     /// **`SpellFamilyFlags`** (columns 161/162, `SpellRec+0x284`/`+0x288`) — the 64-bit bit-set
     /// naming which of its family's modifier rows this spell subscribes to, low dword first.
@@ -117,8 +117,7 @@ pub struct SpellDisplay {
     /// file are three "(TEST) bow shot" rows → 59 and two `Minigun` rows → 23675 (self-referential,
     /// absorbed by the equal-branch).
     ///
-    /// wow-re `spell/scratch/modalnext-chain-cast.md` (§5 round, 7 agents + orchestrator byte
-    /// arbitration); benilla decision 1597. It **corrects** the reading in 0994 §4 — the client
+    /// benilla decision 1597. It **corrects** the reading in 0994 §4 — the client
     /// really does not start the repeat from the sting's *own* send, and then starts it from a
     /// *second cast it issues itself*.
     pub modal_next_spell: u32,
@@ -132,8 +131,8 @@ pub struct SpellDisplay {
     /// `Effect[3]` (column 61 == [`COL_EFFECT_1`], module docs) — each effect's type. Slot 0 is what
     /// almost every consumer wants (the auto-attack gate [`Self::is_melee_auto_attack`], the
     /// tradeskill/enchant/duel classifications); the trainer's icon law is the one caller that scans
-    /// all three, hunting a learn-wrapper effect in any slot (wow-re
-    /// `system/ui/scratch/spell-icon-substitution-law.md` §1, `0x4d8fed`'s three-slot loop). Carried
+    /// all three, hunting a learn-wrapper effect in any slot (`0x4d8fed`'s
+    /// three-slot loop). Carried
     /// as the `[T; 3]` array every other per-effect column already uses — it was a lone `effect_1`
     /// until that scan needed the siblings.
     pub effects: [u32; 3],
@@ -142,8 +141,8 @@ pub struct SpellDisplay {
     /// spells: "Opening" for keyless chests, "Mining"/"Herb Gathering"/"Pick Lock" for skill locks.
     /// The skill it *provides* is [`Self::open_lock_skill`].
     pub open_lock: Option<OpenLock>,
-    /// `baseLevel` (column 28, `SpellRec+0x70`; **not** `spellLevel`, column 29 `+0x74` — wow-re
-    /// `openlock-spell-store-order.md` §4a pinned the split) — the level the effect values are
+    /// `baseLevel` (column 28, `SpellRec+0x70`; **not** `spellLevel`, column 29 `+0x74`) — the
+    /// level the effect values are
     /// quoted at: the effect-value walk subtracts it, floored at 0 (`0x6e3826`), and the
     /// cast-time scaling reads the same column (`0x6e3340`).
     pub base_level: u32,
@@ -162,8 +161,8 @@ pub struct SpellDisplay {
     /// `Category` (column 2, [`COL_CATEGORY`]) — the shared-cooldown category; `0` = none.
     pub category: u32,
     /// Whether [`Self::category`]'s `SpellCategory.dbc` row carries the flags-bit-`0x2`
-    /// "matches every query" wildcard (`GetCooldownInfo 0x6e13e0`'s category leg,
-    /// `gcd-power-gate.md` §2) — resolved at catalog load. Only wand Shoot's category 351 in
+    /// "matches every query" wildcard (`GetCooldownInfo 0x6e13e0`'s category leg) — resolved at
+    /// catalog load. Only wand Shoot's category 351 in
     /// the 5875 data: its running swing cooldown sweeps EVERY button.
     pub category_wildcard: bool,
     /// `RecoveryTime` ms (column 19) — the spell's own cooldown.
@@ -175,7 +174,7 @@ pub struct SpellDisplay {
     pub interrupt_flags: u32,
     /// `AuraInterruptFlags` ([`COL_AURA_INTERRUPT_FLAGS`]) — what breaks this spell's applied
     /// aura (the food/drink "sit still" bits live here). The cast-initiation moving gate
-    /// (`0x609de3`, wow-re `moving-cast-gate.md`; decision 0862) reads its `0x18`
+    /// (`0x609de3`; decision 0862) reads its `0x18`
     /// (MOVING|TURNING) bits as one of the three "would movement matter" arms. `0` for most
     /// direct casts.
     pub aura_interrupt_flags: u32,
@@ -232,7 +231,7 @@ pub struct SpellDisplay {
     /// `UNIT_FIELD_AURASTATE`); 0 = none. Revenge's defense state (1).
     pub caster_aura_state: u32,
     /// `TargetAuraState` (column 17) — required aura-state index on the CURRENT TARGET; 0 =
-    /// none. The one target-dependent usable leg (§2a leg 10): Execute's healthless-20% (2).
+    /// none. The one target-dependent usable leg (`0x6e3f58`): Execute's healthless-20% (2).
     pub target_aura_state: u32,
     /// `Totem[2]` (columns 40-41) — tool items that must be PRESENT (not consumed): fishing
     /// pole-less fishing, blacksmith hammers. 0 = unused slot.
@@ -258,7 +257,7 @@ pub struct SpellDisplay {
     pub requires_spell_focus: u32,
     /// The `SpellShapeshiftForm.dbc` form id this spell shifts into — the `EffectMiscValue` of
     /// its first `SPELL_AURA_MOD_SHAPESHIFT` apply-aura effect — or `None` for a non-form spell.
-    /// The stance bar's admission + isActive keys (wow-re `shapeshift-bar-api.md`, VERIFIED).
+    /// The stance bar's admission + isActive keys (`0x4b2810`, `0x4b475c`).
     pub shapeshift_form: Option<u32>,
     /// `StanceBarOrder` ([`COL_STANCE_BAR_ORDER`], signed) — the stance bar's sort key
     /// (ascending, negative last, spell id tiebreak).
@@ -267,8 +266,8 @@ pub struct SpellDisplay {
     /// button while this form is active, when present (druid forms); `None` falls back to `icon`.
     pub active_icon: Option<String>,
     /// `ActiveIconID` raw ([`COL_ACTIVE_ICON_ID`]) — the plain-path active-action toggle's gate
-    /// (`0x4e55f0`/`0x4b36f0` test the COLUMN, not the resolved texture; wow-re
-    /// `shapeshift-plaincast-toggle.md`): a nonzero id marks the spell press-again-to-cancel
+    /// (`0x4e55f0`/`0x4b36f0` test the COLUMN, not the resolved texture): a nonzero id marks the
+    /// spell press-again-to-cancel
     /// while its own aura is live (`benilla::ui_action::toggle`).
     pub active_icon_id: u32,
     /// `Description` enUS (column 138, module docs) — the tooltip body, raw `$`-token text
@@ -324,8 +323,8 @@ pub struct SpellDisplay {
     /// `SPELL_EFFECT_CREATE_ITEM` effect creates (the crafting book's product, 0437); `0` = none.
     pub effect_item_type: [u32; 3],
     /// `EffectMiscValue[3]` (column 106 == [`COL_EFFECT_MISC_1`], **signed**) — each effect's
-    /// misc payload. For an effect-47 opener, slot 0 is the **window routing key** (wow-re
-    /// `tradeskill` node, VERIFIED at `0x6e4bd7`: `!= 0` → the CraftFrame — Enchanting 3, Beast
+    /// misc payload. For an effect-47 opener, slot 0 is the **window routing key** (`0x6e4bd7`:
+    /// `!= 0` → the CraftFrame — Enchanting 3, Beast
     /// Training 1 — else the TradeSkillFrame). The OPEN_LOCK/shapeshift slots are already
     /// exposed derived ([`Self::open_lock`]/[`Self::shapeshift_form`]); this is the raw
     /// array.
@@ -441,10 +440,9 @@ impl SpellDisplay {
     /// resolver's satisfaction test (`0x5f850f`: `cmp eax,esi; jge`). `None` when the spell
     /// opens no lock.
     ///
-    /// **The level term IS the player's skill** (wow-re `openlock-spell-store-order.md` §4a,
-    /// byte-verified 2026-08-14, overturning `cursor-system.md` §8.8's "no player skill block is
-    /// read anywhere in the chain" — and this doc's own earlier "never the player's skill block"
-    /// gloss with it): `0x6e3800`'s level call (`0x6e384d → 0x6e3130`) resolves the CGPlayer
+    /// **The level term IS the player's skill** (overturning this doc's own earlier
+    /// "never the player's skill block"
+    /// gloss): `0x6e3800`'s level call (`0x6e384d → 0x6e3130`) resolves the CGPlayer
     /// vtable slot `+0xa8` = `0x5ea690`, which reads `PLAYER_SKILL_INFO` for the spell's
     /// SkillLineAbility line — value **plus** bonuses (`0x5ea56d`/`0x5ea578`/`0x5ea580`) —
     /// clamps it to `maxLevel × 5` (`0x5ea6e3`), and returns it `/5` (`0x6e3195`). So:
@@ -484,7 +482,7 @@ impl SpellDisplay {
 
     /// The client's ranged-stance gate, verbatim: `AttributesEx2 & 0x20` (auto-repeat: Auto Shot,
     /// wand Shoot) **or** `Attributes & 0x2` (uses the ranged slot: every Shoot variant, Throw).
-    /// Byte-verified in wow-re (`SpellRec+0x20&0x20 || +0x18&0x2` — the test every ranged trigger
+    /// (`SpellRec+0x20&0x20 || +0x18&0x2` — the test every ranged trigger
     /// runs: the `SMSG_SPELL_START` stance/ammo sites `0x6e78b6`/`0x6e78f3` and the local cast-send
     /// site `0x6e5930`).
     /// The client's spell-hostility classifier `Spell_C::GetSpellVisualState` (`0x6ea280`),
@@ -523,7 +521,7 @@ impl SpellDisplay {
     /// bit picks the first: for a **player** caster (`6e5361`: `[[caster+8]+8] >> 4 & 1`, the
     /// typemask-`0x10` test) carrying the bit (`6e5371: test ah,0x2`), the candidate is the
     /// player's inventory slot table entry 15 — `[player+0x1d3c][15]`, `EQUIPMENT_SLOT_MAINHAND`
-    /// (`6e5385`–`6e538e`, the `+0x78/+0x7c` guid pair; the table is wow-re's pinned
+    /// (`6e5385`–`6e538e`, the `+0x78/+0x7c` guid pair; the table is the
     /// `[player+0x1d38]` count / `[player+0x1d3c]` array, bounds-checked at `6e5376`). Only if
     /// the bit is clear does the walk fall to the explicit guid, then to the current selection
     /// (`6e5393`/`6e539f`).
@@ -548,7 +546,7 @@ impl SpellDisplay {
 
     /// `AttributesEx3 & 0x400000` — `SPELL_ATTR_EX3_CASTING_CANCELS_AUTOREPEAT`: a *running*
     /// auto-repeat carrying this bit is cancelled when any new cast begins (the client's
-    /// `0x60959e` test on the **cached** spell, wow-re `nocked-ammo-cancel.md` §Q-B-5). Exactly
+    /// `0x60959e` test on the **cached** spell). Exactly
     /// ONE of the 22357 `Spell.dbc` records has it — wand Shoot 5019; Auto Shot (75) survives
     /// new casts, which is how hunter shot-weaving works at all.
     pub fn casting_cancels_autorepeat(&self) -> bool {
@@ -558,16 +556,15 @@ impl SpellDisplay {
     /// The ranged-slot attribute **alone** (`Attributes & 0x2`) — the client's weapon-visual
     /// fallback gate (`0x60d46a`): a ranged-slot spell whose own `SpellVisual` resolves to nothing
     /// borrows the equipped ranged weapon's `ItemDisplayInfo` visual for its fire animation —
-    /// how Throw/Auto Shot/wand Shoot animate at all (byte-verified, wow-re
-    /// `throw-ranged-attack-anim.md`; every one of them has `SpellVisual1 = 0`).
+    /// how Throw/Auto Shot/wand Shoot animate at all (every one of them has `SpellVisual1 = 0`).
     pub fn ranged_slot(&self) -> bool {
         self.attributes & ATTR_RANGED != 0
     }
 
     /// `AttributesEx3 & 0x8000` — this spell's damage numbers render **melee-white**, not
-    /// spell-gold: the second half of the combat-text color law's `B` bit (byte-verified: the
-    /// emitter `0x6128b0` tests `sign(byte[SpellRec+0x25])` = bit 15 of the `+0x24` word, wow-re
-    /// `combattext-color-law.md`; the "no record ⇒ melee" half lives at the call sites). On the
+    /// spell-gold: the second half of the combat-text color law's `B` bit (the
+    /// emitter `0x6128b0` tests `sign(byte[SpellRec+0x25])` = bit 15 of the `+0x24` word; the
+    /// "no record ⇒ melee" half lives at the call sites). On the
     /// real 5875 DBC the bit is set on exactly the ranged basic shots — Auto Shot 75, Shoot Bow
     /// 2480, Throw 2764, wand Shoot 5019 — whose damage ships as spell packets yet floats white
     /// (vmangos delivers them via `SMSG_SPELLNONMELEEDAMAGELOG`; the modern name is
@@ -597,8 +594,7 @@ impl SpellDisplay {
     /// A **different** suppression from [`Self::no_casting_bar_text`]'s and a total one: that bit
     /// blanks the cast bar's *label* and still draws the bar; this one removes the event. The two
     /// live one nibble apart in the same column and are easy to conflate — the channel path never
-    /// reads bit 2 at all (`0x6e7a2d` is the only bit-2 test on `SpellRec+0x24` image-wide, wow-re
-    /// `wave-cast.md`'s twice-run census).
+    /// reads bit 2 at all (`0x6e7a2d` is the only bit-2 test on `SpellRec+0x24` image-wide).
     ///
     /// Both shipped rows are 24322/24323 "Blood Siphon", the Hakkar encounter's drain.
     pub fn no_channel_bar(&self) -> bool {
@@ -620,8 +616,8 @@ impl SpellDisplay {
         self.attributes_ex & ATTR_EX_CHANNEL_BAR_OWN_NAME != 0
     }
 
-    /// The ranged-shot cooldown pad's gate (`0x6e2b60` at `0x6e2c2c`–`0x6e2c47`, byte-verified —
-    /// wow-re `ranged-cooldown-sweep.md`): on the caster's own SPELL_GO self-insert, a
+    /// The ranged-shot cooldown pad's gate (`0x6e2b60` at `0x6e2c2c`–`0x6e2c47`): on the caster's
+    /// own SPELL_GO self-insert, a
     /// `Attributes & 0x2` spell WITHOUT `AttributesEx2 & 0x20000`
     /// (`SPELL_ATTR_EX2_DO_NOT_RESET_COMBAT_TIMERS`) adds the caster's live
     /// `UNIT_FIELD_RANGEDATTACKTIME` to its category recovery — how the Throw / wand Shoot
@@ -632,8 +628,8 @@ impl SpellDisplay {
             && self.attributes_ex2 & ATTR_EX2_DO_NOT_RESET_COMBAT_TIMERS == 0
     }
 
-    /// Whether this spell appears in the spellbook — the client's book **add-gate**, byte-verified
-    /// (decision 0227; wow-re `system/ui/scratch/spellbook-book-build.md`, `CGPlayer_C::AddSpell
+    /// Whether this spell appears in the spellbook — the client's book **add-gate**
+    /// (decision 0227; `CGPlayer_C::AddSpell
     /// 0x5e9c20` → the classify+append `0x4b25b0`). A known spell is kept OUT of the book when any
     /// of three gates trips: `Attributes & 0x80` (`SPELL_ATTR_DO_NOT_DISPLAY` — every language,
     /// armor/weapon proficiency, and hidden racial passive), `Attributes & 0x20`
@@ -665,22 +661,22 @@ impl SpellDisplay {
     }
 
     /// The **melee auto-attack** — `Effect[0] == SPELL_EFFECT_ATTACK (78)`, the client's own
-    /// effect-type trigger for the equipped-weapon icon substitution (decision 0231; wow-re
-    /// `attack-icon-substitution.md`, resolvers `0x4b3f8a`/`0x4e59de`). In 1.12 the only spell
+    /// effect-type trigger for the equipped-weapon icon substitution (decision 0231; resolvers
+    /// `0x4b3f8a`/`0x4e59de`). In 1.12 the only spell
     /// carrying it is 6603 "Attack" (its `SpellIconID` → the `Temp` placeholder the client never
     /// shows, substituting the main-hand weapon icon instead).
     pub fn is_melee_auto_attack(&self) -> bool {
         self.effects[0] == SPELL_EFFECT_ATTACK
     }
 
-    /// The spell **tooltip's** passive gate (wow-re `tooltip-content-law.md` §3.4): the
+    /// The spell **tooltip's** passive gate (`0x52eb15`–`0x52eb45`): the
     /// CastTime|Cooldown line is skipped whole for `Attributes & 0x40` **or**
     /// `Effect[0] ∈ {0x2f, 0x4e}` — `SPELL_EFFECT_TRADE_SKILL` (the profession book entries) and
     /// `SPELL_EFFECT_ATTACK` (6603 "Attack"). Wider than [`Self::passive`], which is the
     /// spellbook's own gray-and-refuse gate and must keep reading the attribute alone.
     ///
-    /// The law's note writes the field as "iconID `[+0xf4]`"; the offset is Effect[0]
-    /// (`0xf4/4 == 61` — the same `[SpellRec+0xf4]` the byte-verified auto-attack resolvers
+    /// The field at `[+0xf4]` is Effect[0], not an icon id
+    /// (`0xf4/4 == 61` — the same `[SpellRec+0xf4]` the auto-attack resolvers
     /// compare against `0x4e`). Confirmed on the shipped data: 6603 "Attack" carries
     /// `Effect[0] = 78` with `Attributes = 0x10`, and the reference's spellbook hover shows it
     /// with NO cast-time line.
@@ -695,17 +691,16 @@ impl SpellDisplay {
     /// The spell **tooltip's** range gate — the two attribute tests the builder runs BEFORE it
     /// ever calls `GetMinMaxRange 0x6e3480` (`0x52e9a5`: `Attributes & 0x404`, the on-next-swing
     /// pair; `0x52e9b2`: `AttributesEx3 & 0x40000000`), each jumping straight past the cell.
-    /// The third absence case is not an attribute — it is a resolved `max <= 0`, which is what
-    /// the 11 777 self-only rows produce and is by far the dominant one (wow-re
-    /// `tooltip-globalstring-key-resolves.md` §A3, VERIFIED).
+    /// The third absence case is not an attribute — it is a resolved `max <= 0` (`0x52e9ed`),
+    /// which is what the 11 777 self-only rows produce and is by far the dominant one.
     ///
     /// So a Heroic Strike or a Backstab shows **no range cell at all** — not a melee wording.
     pub fn tooltip_omits_range_line(&self) -> bool {
         self.on_next_swing() || self.attributes_ex3 & 0x4000_0000 != 0
     }
 
-    /// The cooldown getter's HEAD exclusion (`GetCooldownInfo 0x6e13e0` @ `6e1439`/`6e1442`,
-    /// wow-re `gcd-power-gate.md` §2, §5-verified): `Effect[0] ∈ {0x4e ATTACK, 0x2f TRADE_SKILL}`
+    /// The cooldown getter's HEAD exclusion (`GetCooldownInfo 0x6e13e0` @ `6e1439`/`6e1442`):
+    /// `Effect[0] ∈ {0x4e ATTACK, 0x2f TRADE_SKILL}`
     /// returns "no cooldown" unconditionally — the reason the Attack and profession buttons never
     /// show a pie AND their presses can never be cooldown-refused.
     pub fn cooldown_query_excluded(&self) -> bool {
@@ -717,14 +712,14 @@ impl SpellDisplay {
 
     // The equipped-item requirement's NAME used to be decided here, by a
     // `single_equipped_subclass` that answered only for a one-bit mask — a placeholder standing in
-    // for the uncarved `0x6e2380`. `0x6e2380` is carved now, and it reads only ItemSubClass.dbc,
+    // for `0x6e2380`. `0x6e2380` reads only ItemSubClass.dbc,
     // behind an ItemSubClassMask.dbc group lookup that names a wide mask in one word. The whole
     // rule (both spellings, both call sites) lives with the vocabulary it reads:
     // [`crate::ItemSubClassCatalog::requirement_name`].
 
     /// The **ranged** icon-substitution gate — `Attributes & 0x2` AND `AttributesEx2 & 0x20`,
-    /// both bits (decision 0231's deferred ranged case; wow-re `attack-icon-substitution.md` §5,
-    /// byte-verified: the paired tests at `0x4b3f99`/`0x4b3f9f` and `0x4e5a2e`/`0x4e5a34` gate the
+    /// both bits (decision 0231's deferred ranged case; the paired tests at `0x4b3f99`/`0x4b3f9f`
+    /// and `0x4e5a2e`/`0x4e5a34` gate the
     /// call into the ranged helper `0x4e6990`). Auto Shot 75 and wand Shoot 5019 carry both;
     /// Throw 2764 carries only `0x2` and keeps its own icon.
     pub fn ranged_icon_substitution(&self) -> bool {
@@ -738,7 +733,8 @@ impl SpellDisplay {
     }
 
     /// A **combo-point consumer** (`AttributesEx` bits 20/22, [`ATTR_EX_FINISHING_MOVE`]) — the
-    /// usable walk's leg 5 greys it while the caster's combo-point byte is 0 (decision 0869). The
+    /// usable walk's combo-point gate (`0x6e3e7a`) greys it while the caster's combo-point byte
+    /// is 0 (decision 0869). The
     /// rogue/druid finishers, and Overpower.
     pub fn needs_combo_points(&self) -> bool {
         self.attributes_ex & ATTR_EX_FINISHING_MOVE != 0
@@ -761,16 +757,15 @@ impl SpellDisplay {
     }
 
     /// The tooltip cast cell's "Channeled" arm — `AttributesEx & 0x44` (`SPELL_ATTR_EX_CHANNELED`
-    /// both variants), the byte test at `0x52ec27` (`test [rec+0x1c],0x44`; wow-re
-    /// `tooltip-content-law.md` §3.4, folded as 1074). Distinct from
+    /// both variants), the byte test at `0x52ec27` (`test [rec+0x1c],0x44`; folded as 1074).
+    /// Distinct from
     /// [`Self::channel_interrupt_flags`], which is the *running* channel's break mask.
     pub fn tooltip_channeled(&self) -> bool {
         self.attributes_ex & ATTR_EX_CHANNELED != 0
     }
 
     /// Whether *casting* this spell turns on the melee auto-attack **at the send** —
-    /// `Spell_C::TryCast`'s post-send tail (`6e51b5`), byte-verified whole by the 2026-07-14
-    /// wow-re §5 (`combat-feel-law.md` @ c445713b): fires the attack entry `0x6131a0` iff the
+    /// `Spell_C::TryCast`'s post-send tail (`6e51b5`): fires the attack entry `0x6131a0` iff the
     /// cast committed+sent this call (`[0xcead5c] == spell_id`), the rec passes
     /// `[ebp-2] = 0x6e5200 && Ex2-bit20 CLEAR`, and no attack is already running (`0x60ecb0`).
     /// With `0x6e5200 = (Attr & 0x404) || (AttrEx & 0x200) || (AttrEx2 & 0x100000)`, the
@@ -799,8 +794,8 @@ impl SpellDisplay {
     /// 6e8402  call 0x6131a0(ecx=caster, guid)              ; START MELEE AUTO-ATTACK
     /// ```
     ///
-    /// **Only the bit20 leg is modelled**, deliberately — and the §5 that closed B280 measured the
-    /// other one rather than leaving it to the argument below. `rec+0x54` is `Spell.dbc` **column
+    /// **Only the bit20 leg is modelled**, deliberately — and the other one was measured when B280
+    /// closed, rather than left to the argument below. `rec+0x54` is `Spell.dbc` **column
     /// 21, `InterruptFlags`** (VERIFIED position; bit 3's *semantics* stay INFERRED), which is
     /// [`Self::interrupt_flags`] — so we could build the leg today. Its live set in the shipped
     /// file is **8 rows, 3 names** (Slam, Shield Slam, Polymorphic Ray) and is **disjoint from the
@@ -821,8 +816,8 @@ impl SpellDisplay {
     /// Hidden from the player's buff bar — the cache-builder's **display filter**
     /// (`PlayerAuras_Update 0x4e4170`'s append pass, sites `0x4e42b6`–`0x4e42c8`). The `Attributes`
     /// clause is a **byte-width** read — `mov cl,[SpellRec+0x18]; test cl,cl; js` — so it tests
-    /// bit `0x80` (`SPELL_ATTR_DO_NOT_DISPLAY`), NOT the dword sign bit that wow-re's
-    /// `aura-display-pipeline.md` §3 originally transcribed (decision 0385 corrects 0268; vmangos
+    /// bit `0x80` (`SPELL_ATTR_DO_NOT_DISPLAY`), NOT the dword sign bit
+    /// (decision 0385 corrects 0268; vmangos
     /// corroborates: `SpellDefines.h:799` "not visible in spellbook or aura bar"). The other
     /// clause is `SpellRec+0x1c & 0x10000000` (`SPELL_ATTR_EX_NO_AURA_ICON`). The aura stays live
     /// on the wire and in `UNIT_FIELD_AURA` — the reference just never admits it to the display
@@ -849,7 +844,7 @@ impl SpellDisplay {
     /// The spell's `Stances` mask is an **allow-list, not a requirement** — `AttributesEx2`
     /// bit 19. Two independent consumers test exactly this bit: the form gate `0x612480` (which
     /// [`Self::form_refusal`] transcribes) and, separately, the spell tooltip's required-form
-    /// line at `52f115` (wow-re §3-REQFORM) — the builder duplicates the test inline rather than
+    /// line at `52f115` — the builder duplicates the test inline rather than
     /// calling the gate, so one predicate here keeps our two callers from drifting the way they
     /// did in 1483.
     ///
@@ -865,15 +860,15 @@ impl SpellDisplay {
         self.attributes_ex2 & ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED != 0
     }
 
-    /// The shapeshift-form gate as a boolean — the usable walk's leg 6. See
+    /// The shapeshift-form gate as a boolean — the usable walk's form leg (`0x6e3ec6`). See
     /// [`Self::form_refusal`], the reason-carrying transcription this wraps.
     pub fn usable_in_form(&self, form: u8, form_is_stance: bool) -> bool {
         self.form_refusal(form, form_is_stance).is_none()
     }
 
-    /// The shapeshift-form gate — `0x612480` (wow-re §2a: reads the caster form, builds
+    /// The shapeshift-form gate — `0x612480` (reads the caster form, builds
     /// `1 << (form-1)`, tests **StancesNot** then **Stances**, then the Attributes-bit-16 /
-    /// AttributesEx2-bit-19 composition), which both the usable walk's leg 6 and the TryCast
+    /// AttributesEx2-bit-19 composition), which both the usable walk (`0x6e3ec6`) and the TryCast
     /// requirement validator (`0x6094f0`, the leg right after the mounted block) run. The
     /// composition over the form's stance flag — and the reason split — is the vmangos
     /// corroboration (`SpellEntry::GetErrorAtShapeshiftedCast`, `SpellEntry.cpp` — anchored to
@@ -913,7 +908,7 @@ impl SpellDisplay {
     ///
     /// Two surfaces build this string and both reach the same literal, so it is one method rather
     /// than a copy each: the trainer window's prerequisite-ability list
-    /// (`GetTrainerServiceAbilityReq`, wow-re `system/ui/scratch/trainer-requirement.md`) and the
+    /// (`GetTrainerServiceAbilityReq 0x4d96e0`) and the
     /// learn announcement's argText (`0x4b2963`'s empty-subtext test, then either
     /// `0x4b2982 call 0x64a7f0` — `SStrPrintf(buf, 0x200, "%s (%s)", name, subtext)` — or
     /// `0x4b29a0 call 0x64a5a0`, the plain copy). The format is a property of the spell record,

@@ -1,7 +1,6 @@
 //! `SpellCastTimes.dbc` — the base/per-level/minimum cast time (ms) a spell's `CastingTimeIndex`
 //! column ([`crate::spells::SpellDisplay::casting_time_index`]) resolves against. Feeds the
-//! level-scaled cast-time formula — `Spell_C::GetCastTime 0x6e3340`, byte-confirmed by the
-//! 2026-07-10 wow-re §5 cross-check (`wave-cooldown.md`, wow-re commit `f2c563c9`): it reads
+//! level-scaled cast-time formula — `Spell_C::GetCastTime 0x6e3340`: it reads
 //! CastingTimeIndex `[SpellRec+0x48]`, resolves this table's recordsById at `[0xc0d878]`, scales
 //! base/perLevel floored to the row minimum, and applies spell-mod op `0xa`
 //! (SPELLMOD_CASTING_TIME). The row layout is settled independently (WoWDBDefs'

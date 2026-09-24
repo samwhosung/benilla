@@ -2,12 +2,12 @@
 //! the class is *named at all*.
 //!
 //! Two consumers read exactly this table: the **aura tooltip's right column** ("Magic" on Ice
-//! Armor — wow-re `tooltip-content-law.md` §3-BUFF, the aura builder `0x52f880`), and the
+//! Armor — the aura builder `0x52f880`), and the
 //! `debuffType` return of `UnitAura`/`UnitDebuff`, which FrameXML's `DebuffTypeColor` keys the
 //! debuff border tint on. Both take the name from this row; neither hard-codes it.
 //!
 //! **The gate is `[+0x28]`, not the id.** A row is named only when its `+0x28` field is nonzero —
-//! byte-verified in wow-re, and confirmed here on the shipped file: the 11 records are `{0 "",
+//! read at `0x52f906`, and confirmed here on the shipped file: the 11 records are `{0 "",
 //! 1 Magic, 2 Curse, 3 Disease, 4 Poison, 5 Stealth, 6 Invisibility, 7 All(M+C+D+P), 8 "Special -
 //! npc only", 9 Frenzy, 10 ZG Trinkets}` and `[+0x28]` reads **1 for ids 1–4 and 0 for every
 //! other row**. So Stealth and Invisibility have names in the file yet print nothing — the flag,
