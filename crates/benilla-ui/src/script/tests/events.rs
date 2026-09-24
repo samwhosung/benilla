@@ -1,4 +1,4 @@
-//! RegisterEvent + fire_event via BOTH conventions (RF-0025).
+//! RegisterEvent + fire_event via BOTH conventions (`0x704d50` / `0x704f10`).
 //!
 //! The handler's extra arguments are read through 5.0's implicit `arg` table, not `select(n, ...)`:
 //! `...` as a value is not in this VM's grammar (decision 2101), because it is not in the 1.12
@@ -57,7 +57,7 @@ fn globals_are_restored_after_firing_nesting_safe() {
     )
     .unwrap();
     s.fire_event("E", vec![ScriptValue::Str("x".into())]);
-    // After firing, the prior global values must be restored (RF-0025 set-then-restore).
+    // After firing, the prior global values must be restored (`0x704f10`'s set-then-restore).
     let (t, e, a): (String, String, String) = s.eval("return this, event, arg1").unwrap();
     assert_eq!(
         (t.as_str(), e.as_str(), a.as_str()),
@@ -82,7 +82,7 @@ fn handler_errors_are_collected_not_panicked() {
     assert!(errs[0].contains("boom"), "{errs:?}");
 }
 
-/// The cross-frame dispatch ORDER law (wow-re `event-dispatch-order.md`, VERIFIED): the client's
+/// The cross-frame dispatch ORDER law: the client's
 /// per-event listener list is tail-appended (`0x7052d0`) and walked head-first (`0x703e50`) —
 /// **FIFO: registration order = firing order**. Duplicate registration keeps the original
 /// position (`0x702264` dup ret); unregister+re-register moves to the tail. The ZoneText frames

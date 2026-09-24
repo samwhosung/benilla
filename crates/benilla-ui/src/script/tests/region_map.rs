@@ -135,12 +135,11 @@ fn get_num_points_answers_on_a_frame_too() {
     assert_eq!(s.eval::<i64>("return Host:GetNumPoints()").unwrap(), 0);
 }
 
-/// **The carve's other edge, and the control that keeps it honest.** These six look like they
-/// belong to the Region map and do not: Frame, Texture and FontString each register their *own*
-/// at different addresses (`texture-fontstring-method-split.md` §3 — Texture `SetAlpha 0x79b580`
-/// vs FontString `0x79cb70`, and Frame's own `0x79b...` twin). So `WorldFrame.Show(someTexture)`
-/// fails on the real client, and hoisting them here to make more addon code work would be the
-/// superset decision 1189 had to take back out.
+/// **The negative case, and the control that keeps it honest.** These six look like they belong to
+/// the Region map and do not: Frame, Texture and FontString each register their *own* at different
+/// addresses — Texture `SetAlpha 0x79b580` vs FontString `0x79cb70`, and Frame's own `0x774e90`
+/// twin. So `WorldFrame.Show(someTexture)` fails on the real client, and hoisting them here to make
+/// more addon code work would be the superset decision 1189 had to take back out.
 #[test]
 fn the_six_look_alikes_are_not_shared() {
     let s = vm();

@@ -406,7 +406,7 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
         "an explicitly-set property must survive a font-object mutation"
     );
 
-    // §5-verified: severance SURVIVES a re-point. The reference's inheritMask bit (`+0x2c`,
+    // Severance SURVIVES a re-point. The reference's inheritMask bit (`+0x2c`,
     // FontString `+0xd4`) is cleared by the local setter and never restored, so "a FontString that
     // set its own colour stays severed even across a later SetFontObject". Our first cut reset the
     // mask here and this assertion was its inverse.
@@ -652,9 +652,10 @@ fn button_state_fonts_take_the_object_and_follow_its_mutation() {
 }
 
 /// **A `CreateFont` object holds nothing, so pointing a FontString at it copies nothing.**
-/// §5-verified: the reference gates every merge on the source's own has-a-value mask, and a fresh
-/// font has `mask == 0` — the FontString keeps exactly what it had, no blanking and no fallback to
-/// a default. Our first cut wrote face/height through unconditionally and would have wiped it.
+/// The reference gates every merge (`0x770910`/`0x770800`) on the source's own has-a-value mask,
+/// and a fresh font has `mask == 0` — the FontString keeps exactly what it had, no blanking and no
+/// fallback to a default. Our first cut wrote face/height through unconditionally and would have
+/// wiped it.
 #[test]
 fn an_empty_font_object_copies_nothing_onto_a_fontstring() {
     let mut s = script();
@@ -907,9 +908,10 @@ fn a_cross_axis_token_erases_the_axis_but_still_draws_centred() {
     );
 }
 
-/// The font block is a **per-table membership fact**, and wow-re's registrar carve names the six:
-/// *"Exposed on: FontString, Font object, EditBox, MessageFrame, ScrollingMessageFrame,
-/// SimpleHTML. NOT on Button."* We shipped it on two; these are the third and fourth.
+/// The font block is a **per-table membership fact**, and the shared shadow-accessor (`0x79f910`,
+/// FontString's own `0x79dbe0`) names the six: *"Exposed on: FontString, Font object, EditBox,
+/// MessageFrame, ScrollingMessageFrame, SimpleHTML. NOT on Button."* We shipped it on two; these
+/// are the third and fourth.
 ///
 /// `BigWigs/Plugins/Messages.lua:212` — `self.msgframe:SetFontObject(GameFontNormalLarge)` on a
 /// frame it has just given `SetInsertMode("TOP")` — died there every session.
@@ -950,7 +952,7 @@ fn the_font_block_reaches_both_message_frame_tables() {
             .eval::<(mlua::Value, f32, String)>(&format!("return {obj}:GetFont()"))
             .unwrap();
         assert_eq!(height, 16.0, "{obj}:GetFont reads back what SetFont wrote");
-        // The four-value getters the carve pins at 4 for every one of the six tables.
+        // The four-value getters pin at 4 for every one of the six tables (`0x79f9b3`).
         assert_eq!(s.arity(&format!("{obj}:GetShadowColor()")).unwrap(), 4);
     }
 

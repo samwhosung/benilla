@@ -23,10 +23,10 @@
 //!
 //! ## The tooltip (`GameTooltip:SetTalent(tab, index)`)
 //!
-//! The 1.12 talent tooltip IS the spell builder `0x52e610` with the talent params (wow-re
-//! `tooltip-content-law.md` §3: line 2 `TOOLTIP_TALENT_RANK` "Rank %d/%d" white iff
-//! `param7≠0 && param8==0`; line 13 `TOOLTIP_TALENT_LEARN` "Click to learn" green on a learnable
-//! higher rank) — so `SetTalent` renders THROUGH the spell channel: the talent's display-rank
+//! The 1.12 talent tooltip IS the spell builder `0x52e610` with the talent params: line 2
+//! `TOOLTIP_TALENT_RANK 0x854a2c` "Rank %d/%d" white iff `param7≠0 && param8==0`; line 13
+//! `TOOLTIP_TALENT_LEARN 0x8549f8` "Click to learn" green on a learnable higher rank — so
+//! `SetTalent` renders THROUGH the spell channel: the talent's display-rank
 //! spell view comes from the same ask-once store `SetSpell` uses (a miss queues the id for the
 //! app's resolver), interleaved with the talent lines ([`TalentLines`]). The red requirement
 //! lines' position (here: after the rank line) is CONFIRMED — decision 0305's residue: it
@@ -239,7 +239,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ConfirmTalentWipe() — the CONFIRM_TALENT_WIPE dialog's Accept, and the one call in the
     // client that unlearns talents: the trainer's question changed nothing (decision 1580).
     // Zero-arg because the guid it sends is one the client latched from that question — the
-    // reference's own `0xc4d7a0` (wow-re `talent-api.md` §ConfirmTalentWipe); here the app holds it.
+    // reference's own `0xc4d7a0`; here the app holds it.
     g.set(
         "ConfirmTalentWipe",
         lua.create_function(|lua, ()| {

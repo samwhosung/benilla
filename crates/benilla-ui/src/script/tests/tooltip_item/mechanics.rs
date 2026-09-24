@@ -353,7 +353,7 @@ fn broken_instance_hover_renders_zero_durability() {
     )
     .unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    // Red iff broken — the byte law ("durability (red iff broken==0)", wow-re ui.md): the 0/40
+    // Red iff broken (`0x854bc4`, colour `0xc0d390`): the 0/40
     // line paints the requirement red, never white.
     let lines = super::lines_of(&mut s);
     let dur = lines
@@ -451,12 +451,11 @@ fn an_enchanted_instance_renders_its_enchant_line_before_durability() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **enchant colour bands** — the correction the byte-carve landed (wow-re §1-ENCHANT §E3,
-/// decision 0920). The colour is per SLOT, not per family: only slots 0 (permanent) and 1
-/// (temporary) are ever coloured — green for a positive id, the tooltip's OTHER red
-/// (`0xc0d398 = ffff0000`, distinct from the requirement lines' `ffff2020`) for a negative one —
-/// and the random-property slots 2..6 are always white whatever the sign. Our first cut painted
-/// every slot green.
+/// The **enchant colour bands** (`0x52ca29`, decision 0920). The colour is per SLOT, not per
+/// family: only slots 0 (permanent) and 1 (temporary) are ever coloured — green for a positive id,
+/// the tooltip's OTHER red (`0xc0d398 = ffff0000`, distinct from the requirement lines' `ffff2020`)
+/// for a negative one — and the random-property slots 2..6 are always white whatever the sign. Our
+/// first cut painted every slot green.
 #[test]
 fn enchant_line_colour_is_per_slot_and_sign() {
     let mut s = script();
@@ -548,7 +547,7 @@ fn enchant_line_colour_is_per_slot_and_sign() {
 }
 
 /// The temporary enchant's countdown REPLACES the name in the same line (never a second one), and
-/// the charges suffix rides after it — §E3's `0x52fa50` bucket ladder and the `" (%s)"` join. The
+/// the charges suffix rides after it — the `0x52fa50` bucket ladder and the `" (%s)"` join. The
 /// countdown's source is `SMSG_ITEM_ENCHANT_TIME_UPDATE`, so a slot with no packet shows the bare
 /// name: that is the control here.
 #[test]
@@ -616,11 +615,11 @@ fn temporary_enchant_line_carries_its_countdown_and_charges() {
     );
 }
 
-/// **The loot hover shows the ROLL, never the placeholder** (decision 1547; wow-re §E6-LOOT).
-/// `SetLootItem 0x533470` writes an instance block (p6=1) whose `+0x424` is the wire's
-/// randomPropertyId and whose seven enchant slots are zeroed, and passes an all-zero item GUID —
-/// so there is never an object, the builder takes §E5's suffix-row copy into slots 2..6, and the
-/// `ITEM_RANDOM_ENCHANT` arm is unreachable (§E1's fork). The row's name is the suffix-joined one
+/// **The loot hover shows the ROLL, never the placeholder** (decision 1547). `SetLootItem 0x533470`
+/// writes an instance block (p6=1) whose `+0x424` is the wire's randomPropertyId and whose seven
+/// enchant slots are zeroed, and passes an all-zero item GUID — so there is never an object, the
+/// builder takes the suffix-row copy (`0x52b7e0`) into slots 2..6, and the `ITEM_RANDOM_ENCHANT`
+/// arm is unreachable (the entry fork, `0x52c991`). The row's name is the suffix-joined one
 /// (`0x5d8b00`, the same string `GetLootSlotInfo` returns), so the plate reads "… of the Monkey".
 ///
 /// This is the reported bug's exact shape: through the template path (`BenillaSetItemById`) the same
@@ -703,14 +702,14 @@ fn a_looted_roll_shows_its_lines_and_never_the_placeholder() {
             .iter()
             .find(|(t, _)| t == line)
             .unwrap_or_else(|| panic!("the roll's slot line {line} — got {texts:?}"));
-        // Slots 2..6 are always WHITE, whatever the sign (§E3).
+        // Slots 2..6 are always WHITE, whatever the sign (`0x52ca29`).
         assert_eq!(l.1, [1.0, 1.0, 1.0, 1.0], "{line} is white");
     }
 }
 
 /// The other half of the same law: a loot row with **no** roll shows no enchant line AND no
 /// placeholder, even though the template can roll. The fork tests the block's presence, not its
-/// contents (§E1) — which is why this cannot be expressed as "print the placeholder when the
+/// contents (`0x52c9a3`) — which is why this cannot be expressed as "print the placeholder when the
 /// slots are empty".
 #[test]
 fn a_looted_item_with_no_roll_shows_neither_line_nor_placeholder() {
@@ -756,10 +755,10 @@ fn a_looted_item_with_no_roll_shows_neither_line_nor_placeholder() {
 }
 
 /// A **chat link** is a block source too (`SetHyperlink 0x532181`, p6=1): its `|Hitem:` token 2 is
-/// the roll, which §E5 expands into slots 2..6, and the placeholder arm is unreachable. Decision
-/// 0920's prose said a hyperlink hover shows the placeholder; §E1's fork says otherwise, and this
-/// is the case that proves it — the same drop, linked in chat instead of hovered in the loot
-/// window, must read identically.
+/// the roll, which `0x52b7e0` expands into slots 2..6, and the placeholder arm is unreachable.
+/// Decision 0920's prose said a hyperlink hover shows the placeholder; `0x52c9a3` says otherwise,
+/// and this is the case that proves it — the same drop, linked in chat instead of hovered in the
+/// loot window, must read identically.
 #[test]
 fn a_linked_roll_shows_its_lines_and_never_the_placeholder() {
     let mut s = script();
@@ -816,9 +815,9 @@ fn a_linked_roll_shows_its_lines_and_never_the_placeholder() {
     );
 }
 
-/// `ITEM_RANDOM_ENCHANT` (§E5) — the template-only placeholder: a random-property item with NO
-/// instance to read a roll from prints it, green, and the per-slot lines and this one are mutually
-/// exclusive by construction. The control is the same template hovered as a real enchanted
+/// `ITEM_RANDOM_ENCHANT` (`0x52cc33`) — the template-only placeholder: a random-property item with
+/// NO instance to read a roll from prints it, green, and the per-slot lines and this one are
+/// mutually exclusive by construction. The control is the same template hovered as a real enchanted
 /// instance: the roll is known, so the placeholder gives way to the slot lines.
 #[test]
 fn random_property_template_hover_shows_the_placeholder() {

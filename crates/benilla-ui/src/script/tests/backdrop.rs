@@ -1,4 +1,4 @@
-//! Backdrop: Lua verbs + extract emission (backdrop-mechanism.md).
+//! Backdrop: Lua verbs + extract emission (the reference's Backdrop object, `0x77e5f0`).
 
 use super::common::script;
 use crate::script::*;
@@ -37,7 +37,7 @@ fn backdrop_installs_and_extracts_pieces_with_colors() {
     assert_eq!(pieces.len(), 9);
     // First is the bg, tinted the tooltip background color — QUANTIZED. The reference's colour
     // field is a packed `0xAARRGGBB` byte quad and the setter converts `×255 + 0.5` through
-    // `__ftol` (wow-re `numeric-arg-coercion-law.md` Q4), so `0.09` stores as 23 and reads back
+    // `__ftol` (`SetBackdropColor 0x777d30`), so `0.09` stores as 23 and reads back
     // as `23/255`. This assertion used to hold `0.09` exactly, which was our lossless `[f32; 4]`
     // showing through a store the client cannot make.
     assert_eq!(pieces[0].0, "bg");
@@ -49,7 +49,7 @@ fn backdrop_installs_and_extracts_pieces_with_colors() {
         .all(|(p, c)| p == "edge" && *c == [1.0, 1.0, 1.0, 1.0]));
 }
 
-// `GetBackdrop()` — the four traps of `0x777370` (wow-re `widget-api-batch-benilla.md` Q5), pinned
+// `GetBackdrop()` — the four traps of `0x777370`, pinned
 // where an addon can observe them. The corpus caller is `BuffCheck2.lua:448`, which reads the table
 // back, edits `insets`, and feeds it straight to `SetBackdrop` — so a wrong `tile` type or a missing
 // ctor default does not just read wrong, it round-trips wrong.
@@ -184,8 +184,7 @@ fn set_backdrop_nil_tears_down() {
 }
 
 /// **The colour setters' argument gating is asymmetric, and getting it backwards is worse than
-/// the bug it replaces** (wow-re `numeric-arg-coercion-law.md` Q4, VERIFIED at `0x777d30` /
-/// `0x7780d0`).
+/// the bug it replaces** (`0x777d30` / `0x7780d0`).
 ///
 /// r/g/b go through a bare `lua_tonumber` — a `nil` channel is `0.0` and the call COMPLETES.
 /// benilla typed them `f32` and raised, which killed ShaguTweaks at `helpers.lua:248`, where

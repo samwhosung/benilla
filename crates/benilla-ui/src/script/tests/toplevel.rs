@@ -95,7 +95,7 @@ fn the_flag_round_trips_and_defaults_off() {
 /// a licence to go quiet about the other. It now lands on a real `EnableKeyboard`, so the warning
 /// is gone and this asserts the flag instead. Key *delivery* reads the same flag
 /// (`script::keyboard`'s walk, 1319); the flag and a handler stay separable in the reference too
-/// (`frame-key-script-delivery.md` §3.2), which is why this asserts the flag alone.
+/// (`0x76af00`), which is why this asserts the flag alone.
 #[test]
 fn the_xml_toplevel_and_enable_keyboard_attributes_both_reach_their_methods() {
     let s = script();
@@ -154,11 +154,11 @@ fn a_non_toplevel_frame_does_not_move_when_shown() {
 }
 
 /// The headline: the same frame, marked `toplevel`, comes to the front on **Show** — the trigger
-/// the law names (`effective_visible_show 0x76ae10` @`0x76aee0`), not on a click.
+/// the reference raises on (`0x76ae10` @`0x76aee0`), not on a click.
 ///
 /// The arithmetic is pinned here because it is the whole mapping onto our order model. Visible
-/// MEDIUM levels are `{0 (Dialog), 5 (Board)}`; `level_compact 0x764eb0` renumbers those occupied
-/// levels contiguously into `[0, 2)` — Board 5 → 1 — and the raise then writes
+/// MEDIUM levels are `{0 (Dialog), 5 (Board)}`; level compaction (`0x764eb0`) renumbers those
+/// occupied levels contiguously into `[0, 2)` — Board 5 → 1 — and the raise then writes
 /// `level := bucket->count` = **2**. Not a live max-scan (`5 + 1`), not a re-stamp: one above the
 /// top *occupied* level, counted after the compaction.
 #[test]
@@ -277,7 +277,7 @@ fn the_scan_ignores_frames_below_the_raised_frames_own_level() {
 }
 
 /// A window overlaps its own children by construction, so the scan excludes the raised frame's
-/// subtree (`is_descendant 0x767010`). Without that clause every toplevel frame with content in it
+/// subtree (`0x767010`). Without that clause every toplevel frame with content in it
 /// would raise on every trigger.
 #[test]
 fn the_scan_excludes_the_raised_frames_own_subtree() {
@@ -302,7 +302,7 @@ fn the_scan_excludes_the_raised_frames_own_subtree() {
 /// A raise **never changes the stratum** — `0x7650f0` never writes `+0xc0`. A LOW toplevel frame
 /// raises over its LOW neighbours and stays under every MEDIUM frame, however many times it is
 /// raised. (This is the mechanism that could not have fixed the party-frame-through-loot-window
-/// bug: wow-re's CLAIM 2, refuted.)
+/// bug — refuted.)
 #[test]
 fn a_raise_can_never_lift_a_frame_out_of_its_stratum() {
     let mut s = script();
@@ -398,7 +398,7 @@ fn the_raised_subtree_shifts_by_one_delta_and_keeps_its_internal_order() {
 /// traded back and forth twenty times settle inside a two-level band instead of climbing one step
 /// per show — and the frame shown last is on top every single time.
 ///
-/// Without `level_compact 0x764eb0` this test ends at level 20, and a long session ends at
+/// Without level compaction (`0x764eb0`) this test ends at level 20, and a long session ends at
 /// `u16::MAX`.
 #[test]
 fn compaction_bounds_the_raise_across_repeated_shows() {
@@ -530,7 +530,7 @@ fn centre(s: &UiScript, name: &str) -> (f32, f32) {
 }
 
 /// **A press brings the window forward** — the trigger at `0x766392` in the mouse-down handler
-/// `0x7662c0`, the last of the six census sites to be wired (wow-re ledger `0x7662c0`).
+/// `0x7662c0`, the last of the six census sites to be wired (`0x7662c0`).
 ///
 /// Without it `toplevel` gives only half the behaviour a player reads as "windows": a window you
 /// *open* comes to the front, and a window you *click* stays buried under whatever is on top of it.

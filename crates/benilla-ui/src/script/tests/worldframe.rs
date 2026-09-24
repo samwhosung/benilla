@@ -1,4 +1,4 @@
-//! The `WorldFrame` kind (decisions 1983/1984; wow-re `worldframe-widget.md`): a `Frame` to Lua,
+//! The `WorldFrame` kind (decisions 1983/1984; vtable `0x8043e8`): a `Frame` to Lua,
 //! a one-shot type, born in stratum `WORLD` with mouse and wheel enabled, and a hit the app's
 //! arbiter must be able to tell apart.
 

@@ -143,7 +143,7 @@ fn a_numeric_string_takes_the_index_arm() {
 
 /// **`GetAddOnInfo`'s string miss echoes the caller's own name back** (`0x48e401`, non-NULL by
 /// `lua_isstring`), then five metadata misses, `"MISSING"` and `"INSECURE"`. We answered the
-/// literal `"NoSuchAddon"` — which is wow-re's *example call*, not a constant in the image.
+/// literal `"NoSuchAddon"` — an arbitrary choice, not a constant in the image.
 ///
 /// The name form is never existence-checked by the prologue; only the numeric one is.
 #[test]

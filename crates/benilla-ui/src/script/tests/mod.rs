@@ -1,6 +1,6 @@
 //! Rust-driven tests of the Lua host: the object model, layout+size reads, show/hide + event + tick
-//! firing (both RF-0025 conventions), the WoW stdlib (positional `format`, the aliases,
-//! `getglobal`), the sandbox holes, and an end-to-end extract in ZKey order.
+//! firing (both `0x704d50`/`0x704f10` conventions), the WoW stdlib (positional `format`, the
+//! aliases, `getglobal`), the sandbox holes, and an end-to-end extract in ZKey order.
 //!
 //! Split by subject; the shared `script()` fixture lives in [`common`].
 

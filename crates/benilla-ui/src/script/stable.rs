@@ -30,12 +30,10 @@
 //! `PickupStablePet` puts the pet on the **global cursor** under payload mode 10
 //! ([`super::cursor::CursorPayload::StablePet`]), carrying the stable index the grab recorded.
 //!
-//! This corrects what benilla shipped first. The original build made the drag frame-local on the
-//! strength of wow-re's payload-mode table, which recorded mode 10 as "class/talent ability (DBC)"
-//! — so the census read as "there is no stable-pet mode". The stable-master carve found that
-//! `0x495020` **is** the stabled-pet grab and that `[0xb4d900] = 10` is written at exactly one site
-//! image-wide, inside it; wow-re corrected its own note in the same round
-//! (`system/ui/scratch/stable-master-window.md` §9). Decision 1677.
+//! This corrects what benilla shipped first. The original build made the drag frame-local, reading
+//! payload mode 10 as a class/talent-ability id rather than the stabled-pet grab. `0x495020` **is**
+//! the stabled-pet grab, and `[0xb4d900] = 10` is written at exactly one site image-wide, inside
+//! it. Decision 1677.
 //!
 //! ## Two return conventions that are the API, not details
 //!
@@ -100,7 +98,7 @@ pub struct StableState {
     /// The three window slots; index `0` is the current pet.
     pub slots: [Option<StablePetSlot>; NUM_STABLE_SLOTS],
     /// The player has a **live** pet out — the client's own `[0xb714a0]|[0xb714a4]` guid test, the
-    /// gate that forks a stabled pet's drop between swap and unstable (§6.2).
+    /// gate that forks a stabled pet's drop between swap and unstable.
     ///
     /// **Deliberately not `slots[0].is_some()`.** A dismissed pet, or one left out of range, still
     /// has a slot-0 row from the server's character-pet cache while the live guid is zero — so the
@@ -141,7 +139,7 @@ pub(crate) struct StableModel {
     ///
     /// A petNumber rather than a slot index because that is what the binary stores, and it is what
     /// makes a *stale* selection degrade correctly: `GetSelectedStablePet` searches the array for
-    /// the number and answers `-1` when the pet is no longer there (§7.1's fall-through).
+    /// the number and answers `-1` when the pet is no longer there (fall-through `0x4cb84c`).
     pub(crate) selected: i32,
     pub(crate) intents: Vec<StableIntent>,
     pub(crate) close: bool,
@@ -149,7 +147,7 @@ pub(crate) struct StableModel {
 
 /// The zero state is the client's `0` — "nothing selected" — not `-1`, which is its encoding for
 /// *the summoned pet*. The Lua-facing `-1` that `PetStable.lua:44` tests is
-/// [`super::UiScript::stable_selection`]'s translation of this, not this field (§7.1).
+/// [`super::UiScript::stable_selection`]'s translation of this, not this field.
 impl Default for StableModel {
     fn default() -> Self {
         Self {
@@ -169,7 +167,7 @@ impl super::UiScript {
     /// **Every list message clears the selection**, and that is the client's own behaviour
     /// (`0x4cadf8` writes `[0xb72250] = 0` on each one), not a simplification. The first build kept
     /// it across a refresh on the reasoning that benilla re-lists after every action and a reset
-    /// would "fight the player" — the carve says the reference re-lists on exactly the same
+    /// would "fight the player" — but the reference re-lists on exactly the same
     /// successes and clears every time. It does not fight anything, because `PetStable_Update`
     /// immediately re-picks: the current pet if there is one, else the first occupied slot
     /// (`PetStable.lua:44-59`). Keeping a selection across a list is what would be wrong — it can
@@ -203,7 +201,7 @@ impl super::UiScript {
     }
 }
 
-/// The petNumber→slot translation behind `GetSelectedStablePet` (§7.1).
+/// The petNumber→slot translation behind `GetSelectedStablePet` (`0x4cb810`).
 fn selected_slot(m: &StableModel) -> i32 {
     match m.selected {
         -1 => 0,
@@ -236,8 +234,7 @@ fn slot_index(i: i64) -> Option<usize> {
 }
 
 /// Commit a drag from slot `from` onto slot `to` — the **one** place the stable's move law lives,
-/// now read off the binary (`ClickStablePet 0x4cb420` regime B, wow-re
-/// `system/ui/scratch/stable-master-window.md` §6.2; decision 1677).
+/// now read off the binary (`ClickStablePet 0x4cb420` regime B; decision 1677).
 ///
 /// The first build inferred this from the server's constraint set and got the shape right and the
 /// **three edges wrong**. Each of them is a real case:
@@ -399,7 +396,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ClickStablePet(i) → **exactly one value, always**, and which one is keyed SOLELY on whether
-    // the cursor held a pet — never on whether a packet went out (§6.2).
+    // the cursor held a pet — never on whether a packet went out (`0x4cb420`).
     //
     //   plain click  -> pure select, no packet, pushes 1.0 on ALL THREE legs  => always TRUTHY
     //   drop         -> clears the cursor, pushes nil on EVERY leg            => always FALSY
@@ -498,9 +495,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnstablePet(i) — carries a gate the drag path does NOT (§7.1): it requires no charmed unit
-    // and **no pet out**, and bails SILENTLY otherwise, with no packet and no error. Its unsigned
-    // bound also rejects index 0 outright, where the drag path treats 0 as the summoned pet.
+    // UnstablePet(i) — carries a gate the drag path does NOT: it requires no charmed unit and **no
+    // pet out** (`0x468550`), and bails SILENTLY otherwise, with no packet and no error. Its
+    // unsigned bound also rejects index 0 outright, where the drag path treats 0 as the summoned
+    // pet.
     g.set(
         "UnstablePet",
         lua.create_function(|lua, i: i64| {
@@ -535,11 +533,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|_, _model: Value| Ok(()))?,
     )?;
 
-    // BuyStableSlot() — 0 args, with the client's own **silent** local gates in order (§7.1): a
-    // stable master open · the hard cap `slots != 2` · a price row exists · **affordability**.
-    // None of them shows a message; the reference disables the button instead. Applying them here
-    // rather than trusting the button matters because an addon can call the binding directly, and
-    // the server's refusal for the cap is the same indistinguishable ERR_STABLE as everything else.
+    // BuyStableSlot() — 0 args, with the client's own **silent** local gates in order: a stable
+    // master open · the hard cap `slots != 2` (`0x4cb0c4`) · a price row exists · **affordability**
+    // (`0x4cb122`). None of them shows a message; the reference disables the button instead.
+    // Applying them here rather than trusting the button matters because an addon can call the
+    // binding directly, and the server's refusal for the cap is the same indistinguishable
+    // ERR_STABLE as everything else.
     g.set(
         "BuyStableSlot",
         lua.create_function(|lua, ()| {

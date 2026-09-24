@@ -32,11 +32,11 @@ impl UiScript {
             .push((event.to_string(), args));
     }
 
-    /// Fire an event to every frame registered for it, invoking their `OnEvent` handlers (RF-0025):
-    /// both the legacy `this`/`event`/`arg1..argN` globals *and* the modern `(self, event, ...)`
-    /// arguments. Events reach registered frames regardless of visibility, **in registration
-    /// order** — the client's `SignalEvent 0x703e50` walks the per-event listener list head-first
-    /// (tail-append insert `0x7052d0`, wow-re `event-dispatch-order.md`: FIFO, first-registered
+    /// Fire an event to every frame registered for it, invoking their `OnEvent` handlers
+    /// (`0x704d50`/`0x704f10`): both the legacy `this`/`event`/`arg1..argN` globals *and* the
+    /// modern `(self, event, ...)` arguments. Events reach registered frames regardless of
+    /// visibility, **in registration order** — the client's `SignalEvent 0x703e50` walks the
+    /// per-event listener list head-first (tail-append insert `0x7052d0`: FIFO, first-registered
     /// fires first). Cross-frame order is a LAW consumers depend on: both ZoneText frames write
     /// `PVPInfoTextString` on one event — the last writer decides. Handler errors are collected
     /// into [`UiScript::errors`], never panicking.
@@ -101,7 +101,7 @@ pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
 
 impl super::UiScript {
     /// Advance time: run `OnUpdate(self, elapsed)` on every *effectively-visible* frame that has one
-    /// (RF-0025: OnUpdate → `this` + `arg1 = elapsed`). Errors collected, never panicking.
+    /// (`0x704f10`: OnUpdate → `this` + `arg1 = elapsed`). Errors collected, never panicking.
     /// Also advances the `GetTime()` clock — the FrameXML session clock (seconds, monotonic,
     /// arbitrary epoch like the real client's), kept as the `__benilla_now` global so the stdlib
     /// binding reads it without a host round-trip. Reference FrameXML (CastingBarFrame & co.)
@@ -118,11 +118,11 @@ impl super::UiScript {
     /// **freshly built** VM the clock its process is already on (decision 2116).
     ///
     /// The reference's `GetTime` (`0x515ea0`) is `KERNEL32!GetTickCount` scaled by 0.001 (through
-    /// the thunk `0x42c010` → `0x42b790`; wow-re `system/core/ledger.tsv` boundary row and
-    /// `system/ui/ledger.tsv:3265`) — an **OS** clock that knows nothing about the Lua VM and never
-    /// restarts, which is exactly what lets stock `Cooldown.lua` gate on `start > 0`. Ours lives
-    /// inside the VM, so without this a rebuilt VM — every logout/login, every `ReloadUI` — would
-    /// restart it at zero and every host value already converted onto it would land in the past.
+    /// the thunk `0x42c010` → `0x42b790`) — an **OS** clock that knows nothing about the Lua VM and
+    /// never restarts, which is exactly what lets stock `Cooldown.lua` gate on `start > 0`. Ours
+    /// lives inside the VM, so without this a rebuilt VM — every logout/login, every `ReloadUI` —
+    /// would restart it at zero and every host value already converted onto it would land in the
+    /// past.
     ///
     /// Set once, at construction: from then on only [`Self::tick`] moves the clock, so the
     /// `(Instant, GetTime)` pair a host keeps beside it stays atomic by construction.
@@ -274,7 +274,7 @@ impl super::UiScript {
 }
 
 impl UiScript {
-    /// The model panes' per-frame pass (decision 2007; wow-re `modelframe-render-law.md` §4).
+    /// The model panes' per-frame pass (decision 2007).
     ///
     /// Three things the reference does each frame for a **visible** model pane, in this order:
     /// the widget's own `OnUpdate` (`0x76d7f0`, walked by the UI pump with the Lua OnUpdates the
@@ -283,8 +283,8 @@ impl UiScript {
     /// `OnUpdateModel` before it builds the scene; and the scene's animate runs the completion
     /// callback (`0x76cdc0`) when the armed sequence has run its length — `OnAnimFinished`, on
     /// natural completion only (mode 0), once per arm, for a looping sequence's first pass as
-    /// much as for a clamped one's end (the flag test sits after the enqueue — wow-re
-    /// `modelframe-texanim-and-sequence-law.md`, Q4). A hidden pane gets none of the three: its
+    /// much as for a clamped one's end (the flag test sits after the enqueue, `0x719370`). A hidden
+    /// pane gets none of the three: its
     /// clock stands still and it completes nothing, which is what makes the minimap ping "resume
     /// where the last one stopped".
     ///
@@ -325,8 +325,7 @@ impl UiScript {
             // Visible MODEL panes WITH A MODEL INSTALLED: the handler is `CSimpleModel::LoadXML`'s
             // (`+0x3cc`) and the paint that fires it (`76d1bc`) is reached only past the
             // `[widget+0x318] ≠ 0` gate at `76d24c` — a file set, resident or still streaming;
-            // a pane with no file paints nothing and fires nothing (wow-re
-            // `modelframe-texanim-and-sequence-law.md`, Q4). A script of that name on any
+            // a pane with no file paints nothing and fires nothing. A script of that name on any
             // other kind is inert, as it is in the reference.
             let frames: Vec<FrameHandle> = model
                 .on_update_model_frames

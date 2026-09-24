@@ -55,7 +55,7 @@ fn allowed_beyond_1_12() -> HashSet<&'static str> {
         //
         // **This list has been shrinking as the dialect got measured**: `coroutine` left in 1194
         // with the 5.1-only members of `string`/`table`/`math`; `print` and `_VERSION` left in
-        // 1197, when the RE dispatch read the base library's 36-entry array and neither was in it.
+        // 1197, when the base library's 36-entry table `0x811e28` was found to hold neither.
         // `select` left last, and it is the one that shows what a written reason is worth — it
         // carried two and outlived both. The first ("our transcribed FrameXML uses it in 16 files
         // as the 5.1 spelling of 5.0's implicit `arg` table") was retired by 1751's migration and
@@ -208,8 +208,7 @@ fn the_exception_list_has_no_dead_entries() {
 }
 
 /// **`Texture:GetTexture()` — the three contract details that a plausible implementation gets
-/// silently wrong.** Verified in wow-re's widget-method batch (`0x79ba70`/`0x79baf0`/`0x835708`,
-/// `system/ui/scratch/widget-api-batch-benilla.md`).
+/// silently wrong.** Verified at `0x79ba70`/`0x79baf0`/`0x835708`.
 ///
 /// Four corpus addons reach it: `AtlasQuest.lua:228` is `AQATLASMAP = AtlasMap:GetTexture()` and
 /// `FuBarPlugin-2.0.lua:343` is `return self.iconFrame:GetTexture()`, each behind two addons.
@@ -287,7 +286,7 @@ fn get_texture_returns_the_stripped_path_and_solid_texture_for_a_fill() {
 /// a fresh region, in one line — and `KLHThreatMeter/.../KTM_Gui.lua:404` is
 /// `fontstring:SetShadowColor(0,0,0,0.3)`.
 ///
-/// **Four values, not three** (`0x79dd2f`, `mov eax,0x4` — wow-re's widget-method batch). Three is
+/// **Four values, not three** (`0x79dd2f`, `mov eax,0x4`). Three is
 /// the plausible wrong answer and it silently drops the alpha NavigatorFu round-trips: the whole
 /// point of its line is that whatever `GameFontNormal` carries arrives intact.
 #[test]
@@ -330,7 +329,7 @@ fn region_shadow_accessors_round_trip_four_values() {
 /// it.** `SetParent` is in the Region method table (`0x7a1550`) and both leaf lookups fall back to
 /// Region's (`0x79c650` / `0x79ee50`), so `FuBar_FuXPFu.lua:210`'s
 /// `self.Spark:SetParent(self.XPBar)` — a texture from `XPBar:CreateTexture` — is a working line on
-/// the real client (wow-re `system/ui/scratch/widget-api-batch-benilla.md` Q7).
+/// the real client.
 ///
 /// The two traps pinned here are the ones a plausible implementation gets wrong in opposite
 /// directions. **A non-Frame argument RAISES** (`IsA(FrameTag)` at `0x7a16ea`, message
@@ -433,7 +432,7 @@ fn region_set_parent_relinks_the_draw_owner_and_leaves_anchors_alone() {
 }
 
 /// **`Button:SetFont(file, height [, flags])` — it exists, it returns NOTHING, and it never
-/// touches the label.** `0x780880`, wow-re's widget-method batch Q8 (§5-verified).
+/// touches the label.** `0x780880`.
 /// `_LazyPig/LazyPigMenu.lua:214` calls it straight on a `CreateFrame("Button", …)` and is blocked
 /// on it today.
 ///
@@ -537,8 +536,8 @@ fn button_set_font_returns_nothing_and_is_a_no_op_without_a_label() {
     );
 }
 
-/// **`SetNonSpaceWrap` / `CanNonSpaceWrap`** — FontString only (`0x79e9f0`/`0x79ead0`, wow-re's
-/// widget-method batch). `oRA2/Leader/Item.lua:561` is `f.textname:SetNonSpaceWrap(false)`, reached
+/// **`SetNonSpaceWrap` / `CanNonSpaceWrap`** — FontString only (`0x79e9f0`/`0x79ead0`).
+/// `oRA2/Leader/Item.lua:561` is `f.textname:SetNonSpaceWrap(false)`, reached
 /// by two addons.
 ///
 /// Two contract details, both easy to get wrong and both pinned here: the getter is
@@ -587,9 +586,9 @@ fn non_space_wrap_defaults_on_and_answers_one_or_nil() {
 /// single gap the per-kind widget-method census found** (decision 1229, whose ranking opens
 /// `63  EditBox:SetFontObject   (on Texture, FontString)`).
 ///
-/// `EditBox`'s table is `.data 0x87bb68`, **48 entries** — the count read from the `mov edx,0x30` at
-/// the registering site `0x799ab5`, never from a run-length scan. There is no `FontInstance` class
-/// in the 1.12 Lua chain (wow-re `widget-api-batch-benilla.md`): each of the six text-bearing types
+/// `EditBox`'s table is `.data 0x87bb68`, **48 entries** — the count read from the `mov edx,0x30`
+/// at the registering site `0x799ab5`, never from a run-length scan. There is no `FontInstance`
+/// class in the 1.12 Lua chain (the shared C++ impl `0x79f210`): each of the six text-bearing types
 /// re-declares the block in its own flat table, so membership is a per-table fact and **a name we
 /// add that the table does not carry is exactly as wrong as one we miss**.
 ///
@@ -824,9 +823,7 @@ fn editbox_justify_masks_to_its_axis_and_answers_unknown() {
     // **LEFT, not the generic font default CENTER.** The `CSimpleFont` ctor really does default to
     // `0x212` (CENTER | MIDDLE | 0x200), but the EditBox ctor overrides the horizontal axis right
     // after linking its font instance (`0x779bcd … and eax,~6; or eax,1;` stored at `0x779be4`), so
-    // a fresh box starts at `0x211`. Taking the generic default is the plausible wrong answer, and
-    // it is exactly what this test asserted until wow-re's §5 trio read that ctor
-    // (`system/ui/scratch/editbox-font-surface.md` §6.2).
+    // a fresh box starts at `0x211`. Taking the generic default is the plausible wrong answer.
     assert_eq!(
         s.eval::<String>("return EBJustify:GetJustifyH()").unwrap(),
         "LEFT"
@@ -863,10 +860,10 @@ fn editbox_justify_masks_to_its_axis_and_answers_unknown() {
 }
 
 /// **`EditBox:SetJustifyV` echoes through its getter and never reaches the pixels — on the real
-/// client too, permanently and by construction.** wow-re `editbox-font-surface.md` §6 (§5 trio +
-/// byte arbitration): `CSimpleFontString+0x124` is a per-bit *inherit* mask over the rendered
-/// justify `+0x120`, and `SetMultiLine 0x77a4a0` clears the whole vertical group `0x38` from it on
-/// **both** legs while writing the V bits locally — multi-line → TOP, single-line → MIDDLE. The
+/// client too, permanently and by construction.** `CSimpleFontString+0x124` is a per-bit *inherit*
+/// mask over the rendered justify `+0x120`, and `SetMultiLine 0x77a4a0` clears the whole vertical
+/// group `0x38` from it on **both** legs while writing the V bits locally — multi-line → TOP,
+/// single-line → MIDDLE. The
 /// EditBox ctor calls `SetMultiLine` unconditionally at birth (`0x779c2f`, with the ctor's zero
 /// register), and a census of all 256 `+0x124` operands image-wide found every `CSimpleFontString`
 /// writer to be an AND: **nothing ever ORs an inherit bit back in.** So the value written by
@@ -932,7 +929,7 @@ fn editbox_justify_v_echoes_but_multiline_alone_decides_the_pixels() {
 
 /// **`Texture:SetDesaturated(flag)` answers `shaderSupported`, and since 1327 ours says yes.**
 ///
-/// `0x79c1e0` (wow-re ledger). The reference's own `ItemButtonTemplate.lua:69` is
+/// `0x79c1e0`. The reference's own `ItemButtonTemplate.lua:69` is
 /// `local shaderSupported = icon:SetDesaturated(desaturated)`, and lines 70-78 fall back to a 0.5
 /// grey vertex tint when that answer is falsy — 1.12 shipped on cards without the shader, so the
 /// verb reporting "no" is a real machine's answer, not a stub.
@@ -1142,8 +1139,8 @@ fn get_inventory_slot_info_folds_case_and_flags_only_the_ranged_slot() {
 ///
 /// `SetParent` above landed as one name because one addon line named it. That is how this table has
 /// always grown, and it is why `GetParent` — its own getter — was still absent while `SetParent`
-/// worked. wow-re carves the map as a SET, not as names: FontString's lookup `0x79ee20` chains its
-/// own map `0xcf5400` to the Region map `0xcf54b4`, whose 19 entries are
+/// worked. The reference exposes it as a SET, not as names: FontString's lookup `0x79ee20` chains
+/// its own map `0xcf5400` to the Region map `0xcf54b4`, whose 19 entries are
 ///
 /// ```text
 /// GetObjectType IsObjectType GetName GetParent SetParent GetCenter GetLeft GetRight GetTop
@@ -1151,9 +1148,9 @@ fn get_inventory_slot_info_folds_case_and_flags_only_the_ranged_slot() {
 /// ClearAllPoints
 /// ```
 ///
-/// (`system/ui/scratch/font-object-lua-surface.md` — the same note whose point is that a `<Font>`
-/// object does NOT chain and so has none of these. Texture reaches the identical map through its
-/// own leaf lookup, which is why both are asserted here.)
+/// (the reference's Font lookup `0x7a1100` has no fallback — a `<Font>` object does NOT chain and
+/// so has none of these. Texture reaches the identical map through its own leaf lookup, which is
+/// why both are asserted here.)
 ///
 /// So this asserts membership rather than behaviour: each name is *present and callable* on a
 /// Texture and on a FontString. Behaviour belongs in the focused tests around it — what is pinned
@@ -1161,8 +1158,8 @@ fn get_inventory_slot_info_folds_case_and_flags_only_the_ranged_slot() {
 #[test]
 fn every_region_map_method_is_callable_on_a_texture_and_a_fontstring() {
     /// All 19. `GetObjectType`/`IsObjectType` were held out of this list when 1244 landed the other
-    /// four — dispatched rather than guessed — and joined it when wow-re answered
-    /// (`system/ui/scratch/widget-type-identity.md`). The list is the whole map again.
+    /// four — dispatched rather than guessed — and joined it once `0x7a11d0`/`0x7a1290` were
+    /// confirmed on the Region map. The list is the whole map again.
     // The one list, shared with the title region's narrower table (`script::REGION_MAP_METHODS`)
     // so the two can never disagree about what "the Region map" is.
     const REGION_MAP: [&str; 19] = crate::script::REGION_MAP_METHODS;
@@ -1269,13 +1266,12 @@ fn the_region_map_readers_answer_the_way_the_edges_do() {
     );
 }
 
-/// **`GetObjectType`/`IsObjectType` — every detail wow-re had to answer, asserted.**
+/// **`GetObjectType`/`IsObjectType` — every detail confirmed at the bytes, asserted.**
 ///
-/// 1244 shipped four Region-map members and left these two out rather than guess them, because
-/// each of the four traps below is a coin-flip a reimplementation loses (1203/1205/1211 are three
-/// records of losing it). The carve is `system/ui/scratch/widget-type-identity.md`; this is that
-/// answer turned into a gate, so the next person to touch these has to disagree with the binary
-/// rather than with me.
+/// 1244 shipped four Region-map members and left these two out rather than guess them, because each
+/// of the four traps below is a coin-flip a reimplementation loses (1203/1205/1211 are three
+/// records of losing it). This test turns that reading into a gate, so the next person to touch
+/// these has to disagree with the binary rather than with me.
 #[test]
 fn the_type_identity_verbs_answer_what_the_binary_answers() {
     let s = crate::script::UiScript::new().unwrap();
@@ -1406,8 +1402,7 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
 ///
 /// The client registers type identity twice: `CScriptRegion` publishes
 /// `GetObjectType`/`IsObjectType` (the test above), and `CSimpleFrameScript.cpp` publishes
-/// `GetFrameType 0x773640` / `IsFrameType 0x773700` — both carved at the bytes in wow-5875-re
-/// `system/ui/scratch/item17-frameapi-batch1.md`. Later clients kept the first pair and dropped
+/// `GetFrameType 0x773640` / `IsFrameType 0x773700`. Later clients kept the first pair and dropped
 /// the second; we had shipped only the first, which is the inverse of 1189's usual failure — a
 /// real 1.12 name we were *missing*, not an invented one we offered.
 ///
@@ -1491,8 +1486,8 @@ fn the_frame_side_type_identity_verbs_are_1_12s_own_names() {
 ///
 /// `_Nameplates.lua` is why this half exists: it asks `Region:GetObjectType()` (the region twin)
 /// AND `Nameplate:GetObjectType() ~= "Button"` / `Frame:GetObjectType() == "StatusBar"` in the same
-/// file. The chains come from wow-re's 23-class roster, which is a hardcoded straight-line list per
-/// class in the binary rather than a runtime parent walk.
+/// file. The chains come from the reference's own 23-class roster, which is a hardcoded
+/// straight-line list per class in the binary rather than a runtime parent walk.
 #[test]
 fn a_frames_type_chain_matches_the_roster() {
     let s = crate::script::UiScript::new().unwrap();
@@ -1544,7 +1539,7 @@ fn a_frames_type_chain_matches_the_roster() {
         ),
         ("Minimap", "Minimap", &["Minimap", "Frame", "Region"]),
         // `PlayerModel` derives from `Model`, which is why `SetUnit` on a portrait pane finds
-        // `SetCamera` too (wow-re `ui/scratch/widget-type-identity.md` §6) — and `DressUpModel`
+        // `SetCamera` too (`0x505830`/`0x5057c0`) — and `DressUpModel`
         // derives from it in turn: the roster's maximum depth, 5 (1969; `TabardModel` is the
         // other depth-5 chain — built by 1977).
         (
@@ -1796,7 +1791,7 @@ fn the_pfui_hdgraphic_extended_arm_runs() {
 ///
 /// `ShowNameplates 0x489450` / `HideNameplates 0x489460` / `ShowFriendNameplates 0x489470` /
 /// `HideFriendNameplates 0x489480` — four 10-byte bodies over two setters, differing only in an
-/// `or`/`and` mask (wow-re `ui/scratch/party-leader-and-nameplate-verbs.md`).
+/// `or`/`and` mask.
 ///
 /// Both halves of the shape are asserted because both are easy to invent differently:
 ///

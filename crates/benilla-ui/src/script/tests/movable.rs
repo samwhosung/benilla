@@ -1,5 +1,5 @@
 //! The movable-frame family — `SetMovable`/`StartMoving`/`StopMovingOrSizing`/`SetUserPlaced`/
-//! `SetResizable` (the mechanism and its wow-re addresses are in `script::object::movable`).
+//! `SetResizable` (the mechanism and its addresses are in `script::object::movable`).
 //!
 //! Every test here drives the PRODUCTION path: the Lua bindings, and the real
 //! `mouse_button`/`mouse_move` entry points, so the drag gesture that fires `OnDragStart` is the
@@ -220,7 +220,7 @@ fn a_frame_stretched_between_two_anchors_moves_rigidly() {
 }
 
 /// A SCALED frame moves with the cursor 1:1 on screen — the anchor offsets it writes are in local
-/// units, so they carry the inverse of the frame's own scale (`geo_768710`'s `dx/scale`).
+/// units, so they carry the inverse of the frame's own scale (`0x768710`'s `dx/scale`).
 #[test]
 fn a_scaled_frame_tracks_the_cursor_one_to_one_on_screen() {
     let mut s = script();
@@ -351,15 +351,15 @@ fn the_xml_movable_and_resizable_attributes_reach_the_methods() {
 
 /// **`StartSizing(grip)` moves the gripped edges and plants the opposite ones.**
 ///
-/// `0x776830`, verified in wow-re's ledger; the reference's own caller is
+/// `0x776830`; the reference's own caller is
 /// `FloatingChatFrame.lua:600`. Four corpus addons reach it through ONE line —
 /// `FuBar_Panel.lua:980`, replicated into FuBar_CorkFu, FuBar_FuXPFu, FuBar_SpellStatusFu and oRA2
 /// (1207: one library, not four votes).
 ///
-/// What the ledger does NOT record is which edges a grip moves — it has the verb as pure
-/// orchestration with no inline math. Taken here as the plain meaning of an anchor point, which is
-/// how the reference's caller uses it. This test is where that reading is pinned, so an RE pass
-/// that contradicts it fails here first.
+/// What is not settled anywhere is which edges a grip moves — the verb only orchestrates, with no
+/// inline math. Taken here as the plain meaning of an anchor point, which is how the reference's
+/// caller uses it. This test is where that reading is pinned, so a finding that contradicts it
+/// fails here first.
 #[test]
 fn start_sizing_moves_the_gripped_edge_and_plants_the_other() {
     let mut s = crate::script::UiScript::new().unwrap();
@@ -413,8 +413,7 @@ fn start_sizing_moves_the_gripped_edge_and_plants_the_other() {
     );
 }
 
-/// **`CreateTitleRegion` / `GetTitleRegion` — the object half** (wow-re
-/// `widget-api-batch-benilla.md` Q6, `0x773910` / `0x773820`).
+/// **`CreateTitleRegion` / `GetTitleRegion` — the object half** (`0x773910` / `0x773820`).
 ///
 /// Four details, each one a coin-flip a reimplementation loses, and each one asserted.
 #[test]
@@ -431,7 +430,7 @@ fn a_title_region_is_a_plain_region_and_creating_it_twice_is_destructive() {
     .unwrap();
 
     // GetTitleRegion answers ONE value and it is nil — not zero values, which is the asymmetry
-    // Q6 flags against `GetBackdrop`.
+    // against `GetBackdrop 0x777370`.
     assert_eq!(s.arity("TFrame:GetTitleRegion()").unwrap(), 1);
     assert!(s
         .eval::<Option<bool>>("return TFrame:GetTitleRegion() ~= nil and true or nil")
@@ -477,8 +476,9 @@ fn a_title_region_is_a_plain_region_and_creating_it_twice_is_destructive() {
     );
 
     // **It answers the 19 Region methods and NOTHING else** — 1250 §5's named divergence, closed.
-    // Q6: no Show/Hide, no scripts, no textures. Ours used to share one metatable with Texture and
-    // FontString, so a title region answered `SetTexture` where the reference raises.
+    // (`0x81c554`/`0x81c528`): no Show/Hide, no scripts, no textures. Ours used to share one
+    // metatable with Texture and FontString, so a title region answered `SetTexture` where the
+    // reference raises.
     for name in crate::script::REGION_MAP_METHODS {
         assert_eq!(
             s.eval::<String>(&format!("return type(TR.{name})"))
@@ -578,10 +578,10 @@ fn a_title_region_drag_swallows_the_press_and_ends_on_release() {
         "the move ended at the release; a scripted StartMoving would still be running"
     );
 
-    // **No `SetMovable` gate on this path** — TP was never made movable, and it dragged. Q6 marks
-    // the no-gate reading VERIFIED (the movable bit is simply not read on
-    // 0x7662c0->0x765320->0x7652b0->0x768430); a title region on a non-movable frame is the case
-    // that tells it apart from `StartMoving`, which raises "Frame %s is not movable".
+    // **No `SetMovable` gate on this path** — TP was never made movable, and it dragged. The
+    // movable bit is simply not read on 0x7662c0->0x765320->0x7652b0->0x768430; a title region on a
+    // non-movable frame is the case that tells it apart from `StartMoving`, which raises "Frame %s
+    // is not movable".
     assert!(!s.eval::<bool>("return TP:IsMovable()").unwrap());
 }
 

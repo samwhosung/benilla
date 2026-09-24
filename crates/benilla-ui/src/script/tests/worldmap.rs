@@ -12,7 +12,7 @@ fn push_catalog(s: &mut UiScript) {
     let mut ek_grid = vec![0u16; 128 * 128];
     ek_grid[12735] = 1;
     // Cell 8801 = the child (0.5, 0.5) resolves to through Elwynn's OWN loc rect — a "Stormwind
-    // City" peer child. Clicking it from the Elwynn zone map drills into the city (the §3 path).
+    // City" peer child. Clicking it from the Elwynn zone map drills into the city (`0x4a67a0`).
     ek_grid[8801] = 2;
     // Cell 9060 = the child (0.82, 0.82) resolves to through Elwynn's own rect — Elwynn itself,
     // the case the zone-level hover must stay silent on (the displayed zone never names itself).
@@ -95,7 +95,7 @@ fn push_catalog(s: &mut UiScript) {
                     ],
                 },
                 // A city peer of Elwynn — a WorldMapArea child of the continent with its own art
-                // folder, indistinguishable from a zone in code (wow-re 15b2a8ea Part 2a).
+                // folder, indistinguishable from a zone in code (`0x4a67a0`).
                 WorldMapZoneView {
                     name: "Stormwind City".into(),
                     area_id: 1519,
@@ -150,7 +150,7 @@ fn push_direct_areas(s: &mut UiScript) {
 }
 
 /// **The direct-area selection** — the third state, and the whole of what a battleground map is
-/// (wow-re `system/ui/scratch/worldmap-direct-area-selection.md`). Inside Warsong Gulch the
+/// (`[0x845074]`). Inside Warsong Gulch the
 /// reference selects `(continent = -2, direct = WorldMapArea 443)`, and `GetMapInfo()` answers the
 /// art folder that `Blizzard_BattlefieldMinimap.lua:83-86` needs before it will draw anything at
 /// all; a client that models the selection as `(continent, zone)` answers nil there and draws an
@@ -243,9 +243,9 @@ fn a_direct_area_is_the_third_selection_state() {
 }
 
 /// An instance map's overlays are **admitted**, keyed by the direct area, under exactly the zone's
-/// explored-bit gate (`0x4a67a0`'s overlay half, `0x4a6b10 jl 0x4a6b3d`; wow-re
-/// `worldmap-overlay-reveal-gate.md` §2) — no free reveal for a battleground. On 5875 data that
-/// means Alterac Valley's three rows and nothing at all for the other two.
+/// explored-bit gate (`0x4a67a0`'s overlay half, `0x4a6b10 jl 0x4a6b3d`) — no free reveal for a
+/// battleground. On 5875 data that means Alterac Valley's three rows and nothing at all for the
+/// other two.
 #[test]
 fn an_instance_map_reveals_its_overlays_under_the_zone_gate() {
     let mut s = script();
@@ -391,8 +391,7 @@ fn worldmap_current_zone_and_player_feed() {
 
 /// The **engine** moves the selection too, with no Lua in the loop — the reference's second
 /// writer of `[0x84506c]`/`[0x845070]`: `0x494780`'s `old == 0` side call to the resolver
-/// `0x4a6650`, which every exit of ends in the `SetMap` setter `0x4a67a0` (wow-re
-/// `system/ui/scratch/worldmap-selection-autosync.md`).
+/// `0x4a6650`, which every exit of ends in the `SetMap` setter `0x4a67a0`.
 ///
 /// We only ever had the Lua writers, so until something opened the map we sat at the world
 /// level — and there `GetPlayerMapPosition` answers a world-SHEET uv, which every addon built on
@@ -463,7 +462,7 @@ fn worldmap_click_containment_and_zone_grid() {
 
     // Continent level: Goldshire's UV inside the EK rect lands on grid cell 12735 (the real
     // Azeroth.zmp index for that world position) → zone 1. The zone lights up: name + fileName +
-    // the six geometry values (wow-re 15b2a8ea continent branch), all against the zone's loc rect
+    // the six geometry values (`0x4a8494`), all against the zone's loc rect
     // within the continent. cont_w=35199.9, cont_h=23466.6; w=2000, h=1500.
     let (name, file, tpx, tpy, tx, ty, sx, sy) = s
         .eval::<(String, String, f64, f64, f64, f64, f64, f64)>(
@@ -512,10 +511,10 @@ fn worldmap_click_containment_and_zone_grid() {
         "the grid click drills into the zone"
     );
 
-    // Now at the ZONE level (Elwynn): a click re-expressed through ELWYNN's own rect lands on
-    // cell 8801 = the Stormwind City peer child → drills into the city map. This is the path that
-    // was a no-op before (wow-re 15b2a8ea Part 2: continent- and zone-level clicks run identical
-    // code, only the windowing rect differs).
+    // Now at the ZONE level (Elwynn): a click re-expressed through ELWYNN's own rect lands on cell
+    // 8801 = the Stormwind City peer child → drills into the city map. This is the path that was a
+    // no-op before (`0x4a75c9`: continent- and zone-level clicks run identical code, only the
+    // windowing rect differs).
     s.run("ProcessMapClick(0.5, 0.5)").unwrap();
     assert_eq!(
         s.eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
@@ -530,7 +529,7 @@ fn worldmap_click_containment_and_zone_grid() {
     assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 0);
 }
 
-/// At ZONE level `UpdateMapHighlight` answers a NAME only (report B360; wow-re 15b2a8ea §1a/1b/1d):
+/// At ZONE level `UpdateMapHighlight` answers a NAME only (report B360; `0x4a812e`):
 /// a revealed overlay's sub-area when the cursor is inside its hit rect, else the neighbouring
 /// zone or city whose grid cell the cursor is in through the DISPLAYED zone's rect window — never
 /// the displayed zone itself — and always a nil fileName + six zeros, so the stock frame hides the

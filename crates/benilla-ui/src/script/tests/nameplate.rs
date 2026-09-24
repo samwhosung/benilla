@@ -6,8 +6,7 @@
 //!
 //! Sources, all `## Interface: 11200`: `pfUI/modules/nameplates.lua` (+ `compat/vanilla.lua`),
 //! `ShaguTweaks/libs/libnameplate.lua`, `CustomNameplates/CustomNameplates.lua`,
-//! `_Nameplates/_Nameplates.lua`. The byte side is wow-re
-//! `system/ui/scratch/nameplate-lua-surface.md` (§5, 2026-09-09).
+//! `_Nameplates/_Nameplates.lua`. The byte side is read off the reference binary.
 
 use crate::script::{PlateGeometry, PlateState, UiScript};
 
@@ -219,8 +218,8 @@ fn the_two_fontstring_anchors_are_what_nameplates_validates() {
 /// `GetMinMaxValues` → `(0, maxHealth)`. pfUI (`:595`) and CustomNameplates (`:471`) both divide,
 /// so a fraction here would read as full health on every plate.
 ///
-/// This one corrected wow-re's own note: `nameplate-vkey.md` §4 had recorded `0x783380`, which is
-/// the internal fill *fraction*, as the Lua getter.
+/// The internal fill *fraction* `0x783380` is a distinct value, easily confused for the Lua getter
+/// above.
 #[test]
 fn the_healthbar_reports_raw_health_and_its_max() {
     let mut s = vm();
@@ -622,8 +621,9 @@ fn a_plate_created_after_the_first_frame_is_laid_out() {
 }
 
 /// An addon's own frame parented to `WorldFrame` shares the list with the plates —
-/// `_NameplatesFrame` and `pfUICombatScreen` both are — which is why the identification test in
-/// §2 is load-bearing and why the count-grew heuristic re-scans. It must not be mistaken for one.
+/// `_NameplatesFrame` and `pfUICombatScreen` both are — which is why the identification test
+/// (`0x7a1390`'s always-nil `GetName`) is load-bearing and why the count-grew heuristic re-scans.
+/// It must not be mistaken for one.
 #[test]
 fn an_addon_frame_under_the_worldframe_is_not_a_plate() {
     let mut s = vm();
@@ -705,8 +705,7 @@ fn a_completed_click_on_a_plate_reaches_the_app() {
 
 /// **The right button too** — `RegisterForClicks(0x500)` is LeftButtonUp | **RightButtonUp**
 /// (`0x7cb637` → `[this+0x330]`), and the reference's slot forks on it: mask 1 → `0x4925d0`
-/// select, mask 4 → `0x492820` select **and interact** (decision 2233, wow-re
-/// `ui/scratch/mouselook-mouseover-and-nameplate-click-law.md` §6.4).
+/// select, mask 4 → `0x492820` select **and interact** (decision 2233).
 ///
 /// The regression this pins: a plate is created as a plain `Button`, whose default registered set
 /// is `{"LeftButtonUp"}` alone, so the release was refused before the click funnel — and with 2233

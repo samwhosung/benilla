@@ -6,8 +6,7 @@
 //! publishes `_G[name] = T` for a named widget (non-overwriting), and the by-name resolvers read
 //! that table back and nothing else — `0x76c760` (FrameScript globals **rawget** + Lua-type-5 +
 //! the `vtbl+0x10` tag check) and its geometry-vtable `+0x28` twin `0x76c700`
-//! (`_G[name]` → `t[0]` userdata → `IsA`). `wow-5875-re` `system/ui/ledger.tsv` rows 7972/7973,
-//! `system/ui/scratch/worldmap-arrow-and-positions.md` §2.4, `system/ui/ui.md` §RF-0023(c).
+//! (`_G[name]` → `t[0]` userdata → `IsA`).
 //!
 //! A frame's published name is therefore only the commonest way such a global comes to exist —
 //! **an alias is just as good a name**, and 1.12 addons lean on that. Bartender2 2.0 aliases every

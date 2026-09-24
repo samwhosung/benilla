@@ -5,9 +5,8 @@
 //! rebuilds in exactly one place: the tail of `AddOn_ReadAddonInfoReply 0x51da70`
 //! (`[0x51dc30, 0x51dcdf)`), driven by `SMSG_ADDON_INFO`. It is `## Title`-sorted with
 //! `SStrCmpI`, filtered by `[rec+0x29]`, and empty before the reply — three properties benilla had
-//! none of, because it indexed the registry list directly. wow-re
-//! `system/ui/scratch/addon-registry-scan-and-order.md` §7 (byte-read, and §11-executed over the
-//! binary's own `qsort 0x73f727` and comparator `0x51deb0`).
+//! none of, because it indexed the registry list directly (the binary's own `qsort 0x73f727` and
+//! comparator `0x51deb0`).
 
 use crate::script::{AddOnInfo, UiScript};
 

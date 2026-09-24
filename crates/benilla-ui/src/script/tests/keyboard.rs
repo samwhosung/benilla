@@ -1,11 +1,11 @@
-//! The frame keyboard delivery law (decision 1319; wow-re
-//! `system/ui/scratch/frame-key-script-delivery.md`, §5 trio — VERIFIED).
+//! The frame keyboard delivery law (decision 1319; the walk `0x765f10`, the existence gate
+//! `0x76b7d0`).
 //!
 //! Each test pins one clause that a plausible-but-wrong implementation gets backwards.
 
 use super::common::script;
 
-/// The bucket gate (§3.2): membership is the **keyboard-enabled flag**, not the presence of a
+/// The bucket gate (`0x76af00`): membership is the **keyboard-enabled flag**, not the presence of a
 /// script. A Lua-created frame auto-enables nothing (the reference's `SetScript` doesn't either),
 /// so its handler is unreachable until `EnableKeyboard(true)` puts it in the walk.
 #[test]
@@ -37,9 +37,9 @@ fn a_key_script_alone_does_not_put_a_frame_in_the_walk() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The existence gate's asymmetry (§3): a frame carrying **only** an `OnKeyUp` consumes every
-/// key-down and runs nothing. This is the clause an implementation "tidies away" — and doing so
-/// silently un-suppresses that frame's keybindings.
+/// The existence gate's asymmetry (`0x76b7d0`): a frame carrying **only** an `OnKeyUp` consumes
+/// every key-down and runs nothing. This is the clause an implementation "tidies away" — and doing
+/// so silently un-suppresses that frame's keybindings.
 #[test]
 fn only_an_onkeyup_still_swallows_the_key_down() {
     let mut s = script();
@@ -65,9 +65,9 @@ fn only_an_onkeyup_still_swallows_the_key_down() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The walk order (§2): **strata descending first**, and only then level. A LOW frame can never
-/// take a key from a HIGH one, however high its level — the same "a raise never changes stratum"
-/// shape the toplevel law has.
+/// The walk order (`0x765f10`, `0x764ae2`): **strata descending first**, and only then level. A LOW
+/// frame can never take a key from a HIGH one, however high its level — the same "a raise never
+/// changes stratum" shape the toplevel law has.
 #[test]
 fn the_walk_is_strata_then_level_then_registration() {
     let mut s = script();
@@ -113,8 +113,8 @@ fn the_walk_is_strata_then_level_then_registration() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **At most one frame consumes** (§2, "Delivery"): the walk stops at the first consumer, so a
-/// second keyboard frame below it never sees the key.
+/// **At most one frame consumes** (`0x765f10`): the walk stops at the first consumer, so a second
+/// keyboard frame below it never sees the key.
 #[test]
 fn the_first_consumer_ends_the_walk() {
     let mut s = script();
@@ -165,7 +165,7 @@ fn a_hidden_frame_is_not_in_the_walk() {
 }
 
 /// A raising handler must not eat the key or abort the walk's caller: the error is recorded, the
-/// frame still consumed (consumption is the C++ gate's, never the handler's — §3.1).
+/// frame still consumed (consumption is the C++ gate's, never the handler's — `0x7026f0`).
 #[test]
 fn a_raising_handler_still_consumes_and_is_recorded() {
     let mut s = script();
@@ -185,8 +185,8 @@ fn a_raising_handler_still_consumes_and_is_recorded() {
     );
 }
 
-/// **A `CSimpleEditBox` in the walk is asked about FOCUS, never about a script slot** (§1's vtable
-/// table + `0x77a900`). Its ctor registers it in both key buckets, and vtable `0x81c910` replaces
+/// **A `CSimpleEditBox` in the walk is asked about FOCUS, never about a script slot** (the vtable
+/// slot `0x77a900`). Its ctor registers it in both key buckets, and vtable `0x81c910` replaces
 /// `+0x5c`/`+0x60` with overrides that *never chain to the base* — "there is no `call 0x76b760`
 /// anywhere in it, so the generic `OnChar` slot `+0x180` is unreachable on an editbox". An
 /// unfocused box therefore takes the `0x77a956 xor eax,eax` leg: decline, walk continues.

@@ -112,7 +112,7 @@ fn nothing_is_joined_before_the_server_confirms_it() {
 /// **`GetChannelList()` is a FLAT vararg of (slot, name) pairs in join order** — not a table, and
 /// not name-first.
 ///
-/// Neither wow-re nor any recorded signature pins the shape; two independent consumers do, and the
+/// No single reference address pins the shape; two independent consumers do, and the
 /// test asserts what each of them relies on. The reference's `FCFDropDown_LoadChannels` walks
 /// `for i=1, arg.n, 2` and reads `arg[i+1]` as the name, so the pair order is (slot, name) and the
 /// stride is 2. `ChatLog.lua:424` packs it with `{ GetChannelList() }` and tests
@@ -184,8 +184,7 @@ fn the_guild_recruitment_mode_boots_auto_and_answers_a_number() {
 /// `__ftol 0x40a2b0` and range-gates `0 <= mode < 2`, raising
 /// `SetGuildRecruitmentMode: invalid mode` outside it. Most 1.12 numeric bindings swallow a nil
 /// as 0.0 — this one does not, and a client that guessed the common shape would turn an addon's
-/// own bug into silence (wow-re `numeric-arg-coercion-law.md`; the per-binding split is the whole
-/// point of that note).
+/// own bug into silence.
 ///
 /// Success pushes **0 values**, not nil.
 #[test]

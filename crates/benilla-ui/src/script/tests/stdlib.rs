@@ -166,7 +166,7 @@ fn a_named_frame_uses_the_5_0_backtick_quoting() {
 }
 
 /// **Every frame carries its own trailing `\n`, and `count1` bounds nothing on its own**
-/// (decision 2121, wow-re `debugstack-return-shape.md` §3.1).
+/// (decision 2121).
 ///
 /// Stock Lua 5.0 pushes `"\n\t"` *before* each frame plus a header once; the reference pushes a
 /// single `"\n"` after each frame and no header (`0x703971`). And the walk formats while the level
@@ -321,7 +321,7 @@ fn the_rest_of_the_bare_globals() {
 /// **The Lua 5.0 dialect a vanilla addon is written in runs on our 5.1 VM** — measured, because
 /// this question has been answered three different ways from memory.
 ///
-/// 1.12 runs Lua 5.0 (byte-confirmed in wow-5875-re: `0x811b30 = "Lua: Lua 5.0 Copyright..."`);
+/// 1.12 runs Lua 5.0 (byte-confirmed: `0x811b30 = "Lua: Lua 5.0 Copyright..."`);
 /// we run 5.1 via mlua's `lua51`. Decision 1188 called that "the deepest divergence and it is
 /// unresolved" and told the next session to test it; 1189 replied that 0068 had already closed it.
 /// Meanwhile five of our own transcribed FrameXML files carried the opposite claim in a comment —

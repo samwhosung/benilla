@@ -52,8 +52,8 @@ fn setpoint_resolve_size_and_rect() {
     assert_eq!(w, 200.0);
     assert_eq!(h, 50.0);
 
-    // Hand-computed (layout.md oracle): TOPLEFT anchored to screen [0,0,600,800] at (10,-5), size
-    // 200×50 → Rect(bottom 545, left 10, top 595, right 210).
+    // Hand-computed against the reference rect assembly (`0x767a20`): TOPLEFT anchored to screen
+    // [0,0,600,800] at (10,-5), size 200×50 → Rect(bottom 545, left 10, top 595, right 210).
     let quads = s.extract();
     let frame_rect = quads
         .iter()

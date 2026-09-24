@@ -1,6 +1,5 @@
-//! The guild tabard designer's engine surface (decision 1977; wow-re
-//! `system/ui/scratch/tabard-designer.md`, VERIFIED at the bytes unless marked): the
-//! `TabardModel` kind's own method table (`0x84ee40`, ten verbs) and the window's two globals.
+//! The guild tabard designer's engine surface (decision 1977): the `TabardModel` kind's own method
+//! table (`0x84ee40`, ten verbs) and the window's two globals.
 //!
 //! **The designer's whole state is five ints on the frame** — emblem style, emblem colour,
 //! border style, border colour, background colour — bounded by a `.rdata` constant table

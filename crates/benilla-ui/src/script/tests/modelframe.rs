@@ -76,9 +76,9 @@ fn the_model_pane_holds_the_scene_it_was_given() {
 ///
 /// The client registers four model-pane types and each has its own Lua method table that never
 /// repeats its base's; a derived pane reaches its base through the miss leg of `vtable+0x8`
-/// (wow-re `ui/scratch/model-pane-method-tables.md` §3). So `PlayerModel`'s three-entry table
-/// `0x84f1fc` must sit *over* `Model`'s 23-entry `0x878948`, and nothing may chain the other way:
-/// `CSimpleModel`'s lookup `0x76f870` has no leg into `CGCharacterModelBase`'s `0x506260`.
+/// (`0x7020b0`). So `PlayerModel`'s three-entry table `0x84f1fc` must sit *over* `Model`'s 23-entry
+/// `0x878948`, and nothing may chain the other way: `CSimpleModel`'s lookup `0x76f870` has no leg
+/// into `CGCharacterModelBase`'s `0x506260`.
 ///
 /// This is the shape pfUI's unit frames need — `CreateFrame("PlayerModel", ...)` driven by
 /// `SetUnit` + `SetCamera`, one verb from each table on the same frame.
@@ -230,11 +230,11 @@ fn the_string_setters_gate_their_argument_and_a_number_is_a_string() {
 
 /// **The whole block, both directions** — decision 1718's rule applied to the two model tables.
 ///
-/// The lists below are the reference's OWN enumerations, transcribed entry-for-entry from
-/// wow-re's `ui/scratch/model-pane-method-tables.md` §2.1 and §2.2 (each table's count fixed twice:
-/// the registering `mov edx, imm32`, and the dword at `base + 8*count` being the start of the
-/// string pool). They are **not** the names anyone noticed were missing — that is exactly the
-/// mistake 1718 records, and it was re-made inside the test written to enforce it.
+/// The lists below are the reference's OWN enumerations, transcribed entry-for-entry from `Model`'s
+/// table `0x878948` and `PlayerModel`'s `0x84f1fc` (each table's count fixed twice: the registering
+/// `mov edx, imm32`, and the dword at `base + 8*count` being the start of the string pool). They
+/// are **not** the names anyone noticed were missing — that is exactly the mistake 1718 records,
+/// and it was re-made inside the test written to enforce it.
 ///
 /// Guarding both directions is the point:
 ///
@@ -276,10 +276,10 @@ fn the_two_model_tables_are_the_references_own() {
     const PLAYERMODEL_3: [&str; 3] = ["SetUnit", "RefreshUnit", "SetRotation"];
     /// The subset of [`MODEL_23`] this client does not build. Named, not stubbed (1134 §4).
     /// **Empty since decision 2027** — the last five were the fog near/far set, held back only
-    /// because `ClearFog`'s effect on the colour/near/far triple was uncarved; the render law
-    /// (§5.4) reads it as `76f5c5 and [edi+0x3a4],-2`, bit 0 alone, so the guess is gone and the
-    /// verbs are real. Kept as an empty array rather than deleted: the wall below is the thing
-    /// that notices when a name arrives or leaves.
+    /// because `ClearFog`'s effect on the colour/near/far triple was uncarved;
+    /// `76f5c5 and [edi+0x3a4],-2` shows bit 0 alone, so the guess is gone and the verbs are
+    /// real. Kept as an empty array rather than deleted: the wall below is the thing that
+    /// notices when a name arrives or leaves.
     const UNBUILT: [&str; 0] = [];
 
     let mut s = script();
@@ -380,12 +380,12 @@ fn the_two_sequence_verbs_arm_the_pane_on_its_own_clock() {
 }
 
 /// `SetLight` writes the widget's embedded `CGLight` by the reference's own argument walk
-/// (`0x76e1e0`, render law §5.3), and `GetLight` reads it back at arity **7 | 10 | 13**.
+/// (`0x76e1e0`), and `GetLight` reads it back at arity **7 | 10 | 13**.
 ///
-/// This test is the law, not a round trip: the tuple used to be stored verbatim because nobody
-/// had carved the binding, and "what went in comes out" is the one thing the reference does NOT
-/// do — the intensities are folded into the colours, the direction is normalised, and both of
-/// §5.3's traps change what a call means.
+/// This test is the law, not a round trip: the tuple used to be stored verbatim because nobody had
+/// read the binding at the bytes, and "what went in comes out" is the one thing the reference does
+/// NOT do — the intensities are folded into the colours, the direction is normalised, and both
+/// traps change what a call means.
 #[test]
 fn the_light_tuple_is_opaque_and_survives_the_round_trip() {
     let mut s = script();
@@ -564,8 +564,8 @@ fn set_camera_is_a_raw_index_bounds_checked_against_the_file() {
 }
 
 /// The fog block: `SetFogColor` **arms** it, `ClearFog` disarms **bit 0 alone**, and near/far are
-/// stored raw by the Lua setters (render law §5.4, decision 2027). The five verbs held back as
-/// uncarved since 1134 §4 are real now.
+/// stored raw by the Lua setters (`0x76ee60`/`0x76f540`, decision 2027). The five verbs held back
+/// as uncarved since 1134 §4 are real now.
 #[test]
 fn the_fog_block_arms_on_colour_and_clears_only_its_bit() {
     use super::model_clock::pane;

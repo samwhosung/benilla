@@ -13,9 +13,9 @@
 //! so the shape under test is the one that idiom needs: **multiple return values**, in the
 //! structure's own order, each a usable widget object.
 //!
-//! Every claim here is VERIFIED against the reference by a wow-re §5 quartet
-//! (`ui/scratch/widget-list-bindings.md`): the lists are `[frame+0x300]` and `[frame+0x1b8]`, both
-//! linkers APPEND AT THE TAIL so the values come back oldest-first with no reversal, hidden nodes
+//! Every claim here is confirmed against the reference (`0x773f60`/`0x774180`): the lists are
+//! `[frame+0x300]` and `[frame+0x1b8]`, both linkers APPEND AT THE TAIL so the values come back
+//! oldest-first with no reversal, hidden nodes
 //! are returned and counted, a detached region and the title region are both absent, a Button's
 //! label and state textures are present, and an empty frame returns zero values while `GetNum*`
 //! returns the number `0`.
@@ -112,10 +112,9 @@ fn the_structure_queries_report_the_structure() {
     );
 
     // ── DETACHED REGIONS LEAVE BOTH VERBS. `Region:SetParent(nil)` unlinks from the parent's draw
-    //    layer AND its region list in the client (`0x77fd10`, wow-re `widget-api-batch-benilla.md`
-    //    Q7). We keep the entry so the arena can still free the slot — a representation choice that
-    //    must not be observable here, or a StripTextures-shaped walk would "strip" a region that is
-    //    already off the screen.
+    //    layer AND its region list in the client (`0x77fd10`). We keep the entry so the arena can
+    //    still free the slot — a representation choice that must not be observable here, or a
+    //    StripTextures-shaped walk would "strip" a region that is already off the screen.
     s.run("SQFontB:SetParent(nil)").unwrap();
     assert_eq!(
         s.eval::<String>(
@@ -136,9 +135,8 @@ fn the_structure_queries_report_the_structure() {
     //    creation paths in the client dispatch a vtable slot that is a bare `[this+0x9c] = parent`
     //    and never reach the region linker, so it was never in the list `GetRegions` walks —
     //    corroborated by `Hide`/`Show` carrying an explicit extra `[frame+0xa8]` case *because* the
-    //    walk misses it (wow-re `ui/scratch/widget-list-bindings.md`, §5 quartet). Ours lives in
-    //    `Frame::regions` so the arena can still free it, which makes that a representation detail
-    //    this walk must not leak.
+    //    walk misses it (`0x768060`). Ours lives in `Frame::regions` so the arena can still free
+    //    it, which makes that a representation detail this walk must not leak.
     s.run("SQHost:CreateTitleRegion()").unwrap();
     assert_eq!(
         s.eval::<usize>("return SQHost:GetNumRegions()").unwrap(),

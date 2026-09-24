@@ -1,5 +1,4 @@
-//! **The resize-bounds quad**, pinned to wow-re's byte carve
-//! (`system/ui/scratch/resize-bounds-and-button-fontstring.md`, §5 trio, 2026-08-21).
+//! **The resize-bounds quad**, pinned to the reference's own storage (`CLayoutFrame 0x767680`).
 //!
 //! Every assertion here is one the first cut of this code got *wrong* by writing the plausible
 //! thing instead of the read thing — which is why they are pinned rather than trusted:

@@ -98,8 +98,8 @@ fn region_fontstring_span_floors_at_one_unit_until_measured() {
     );
 }
 
-/// `ExhaustionLevelFillBar`'s exact shape, both ways (wow-re `region-size-fallback.md` §5, and
-/// the counterfactual it states): authored width **0**, one TOPLEFT anchor, and a `<Color>`.
+/// `ExhaustionLevelFillBar`'s exact shape, both ways: authored width **0**, one TOPLEFT anchor,
+/// and a `<Color>`.
 ///
 /// The colour form installs a real 8×8 texture before any resolve (`0x7700a9` → `0x770360` →
 /// `0x44a900`), so `CSimpleTexture::GetWidth 0x770720` answers **8** for the authored zero and
@@ -142,7 +142,7 @@ fn a_zero_width_solid_spans_eight_units_and_its_artless_twin_gets_no_rect() {
 
 #[test]
 fn templateless_lua_region_without_anchors_never_draws() {
-    // Decision 1310 (wow-re `region-implicit-anchor.md`, VERIFIED): the creation-path implicit
+    // Decision 1310 (`CreateTexture 0x773a20`): the creation-path implicit
     // anchor fires from Lua CreateTexture only on a template-registry hit — a templateless region
     // gets NOTHING, stays rect-less (the resolver has no zero-anchor fallback), and never renders,
     // its explicit size notwithstanding. This replaced the old draws-centered-at-its-size
@@ -451,9 +451,9 @@ fn child_frame_layers_regions_render_after_the_fixpoint() {
 
 /// `SetAlpha`/`GetAlpha` on a Texture/FontString — the region's *own* alpha, distinct from its
 /// owner frame's. A region draws at `ownAlpha × ownerFrame.alpha`: a single hop to the immediate
-/// owner (wow-re `propagation.md` — frame SetAlpha overwrite-cascades onto child *frames* and only
-/// invalidates child regions). The getter must return the region's value, never the frame's: the
-/// ref kit ramps a texture by reading it back (`CastingBarFlash:SetAlpha(GetAlpha() + step)`).
+/// owner (`SetAlpha 0x76a690` overwrite-cascades onto child *frames* and only invalidates child
+/// regions). The getter must return the region's value, never the frame's: the ref kit ramps a
+/// texture by reading it back (`CastingBarFlash:SetAlpha(GetAlpha() + step)`).
 #[test]
 fn region_alpha_is_its_own_and_multiplies_the_owner_frames() {
     let mut s = script();
@@ -504,10 +504,10 @@ fn region_alpha_is_its_own_and_multiplies_the_owner_frames() {
     );
 }
 
-/// **The texture-colour composition law** (wow-re `system/ui/scratch/texture-color-composition.md`,
-/// VERIFIED): a region's own solid colour is a real *texel* (`SetTexture(r,g,b,a)` generates an 8×8
-/// block at `+0xcc`), its vertex colour is a *separate* slot (`+0xb8`), and the draw
-/// **multiplies** them per channel, alpha included — it does not replace.
+/// **The texture-colour composition law**: a region's own solid colour is a real *texel*
+/// (`SetTexture(r,g,b,a)` → `0x770360` generates an 8×8 block at `+0xcc`), its vertex colour is a
+/// *separate* slot (`SetVertexColor 0x77f750`, `+0xb8`), and the draw **multiplies** them per
+/// channel, alpha included — it does not replace.
 ///
 /// This is the reference `SkillFrame` row trough, verbatim: declared `<Color 1,1,1,0.2>`, then
 /// `SetVertexColor(0, 0, 0.75, 0.5)`'d. It draws at alpha `0.2 × 0.5 = 0.1`. benilla stored ONE
@@ -635,8 +635,8 @@ fn desaturation_rides_the_extract_for_art_and_never_for_a_solid() {
 
 /// Read a Texture region's desaturation state straight off the model, by name.
 ///
-/// It has no getter in Lua on purpose — `IsDesaturated` (`0x79c2c0`) is in wow-re's ledger but its
-/// return shape is not carved, and inventing one to make a test convenient is how an unverified API
+/// It has no getter in Lua on purpose — `IsDesaturated` (`0x79c2c0`) exists, but its return shape
+/// is unconfirmed, and inventing one to make a test convenient is how an unverified API
 /// gets shipped (decision 1327's own residual). The extract quad is the other way to see it, but a
 /// cleared texture emits no quad at all, which is exactly the case these tests need to observe.
 fn desaturated(s: &UiScript, name: &str) -> bool {
@@ -648,7 +648,7 @@ fn desaturated(s: &UiScript, name: &str) -> bool {
 }
 
 /// **`SetTexture` clears the desaturation — except when the path does not actually change**
-/// (wow-re `texture-desaturate-law.md` §2.3, VERIFIED; decision 1330).
+/// (decision 1330).
 ///
 /// `+0x128` is a `CGxShader*`, and `CSimpleTexture::SetTexture` writes it from a shader index the
 /// Lua binding always passes as slot 0 (permanently NULL). Storing a desaturate boolean *beside*
@@ -692,8 +692,8 @@ fn set_texture_clears_desaturation_unless_the_path_is_unchanged() {
     assert!(grey(&s), "the colour form does not touch the shader slot");
 }
 
-/// **`SetDesaturated`'s argument truth table has two arms that read backwards** (wow-re
-/// `texture-desaturate-law.md` §1.1, VERIFIED at `0x6f1c10`'s jump table; decision 1330).
+/// **`SetDesaturated`'s argument truth table has two arms that read backwards**
+/// (`0x6f1c10`'s jump table; decision 1330).
 ///
 /// `0x6f1c10(L, 2, default=1)` takes its DEFAULT on `LUA_TNONE`, so a bare `SetDesaturated()` greys
 /// — the opposite of the `if flag then` an implementation writes without looking. And a number is
@@ -729,12 +729,12 @@ fn set_desaturated_takes_the_clients_argument_truth_table() {
     assert!(!grey(&s), "false clears");
 }
 
-/// The draw gate is the TEXTURE slot, never the colour (`texture-color-composition.md` §4,
-/// VERIFIED): `0x7706e0` tests `+0xcc` and emits NOTHING when it is empty, whatever the vertex
-/// colour holds. Since the tint deliberately survives `SetTexture(nil)` ("a tint outlives the art
-/// it was tinting"), a cleared region used to leak its tint out of extract as a solid plate — an
-/// occupied action button going empty on a character switch drew its surviving 1/1/1 usable-tint
-/// as a solid WHITE square (decision 1108; the 2026-07-10 grey wells were the same class).
+/// The draw gate is the TEXTURE slot, never the colour: `0x7706e0` tests `+0xcc` and emits NOTHING
+/// when it is empty, whatever the vertex colour holds. Since the tint deliberately survives
+/// `SetTexture(nil)` ("a tint outlives the art it was tinting"), a cleared region used to leak its
+/// tint out of extract as a solid plate — an occupied action button going empty on a character
+/// switch drew its surviving 1/1/1 usable-tint as a solid WHITE square (decision 1108; the
+/// 2026-07-10 grey wells were the same class).
 #[test]
 fn a_vertex_colour_without_a_texture_draws_nothing() {
     let mut s = script();
@@ -868,8 +868,7 @@ fn a_gradient_is_stored_whole_and_painted_as_its_midpoint() {
 /// **The split itself: a Texture answers texture verbs and NOT text ones, and vice versa.**
 ///
 /// Until this landed, one shared table meant a Texture answered `SetText` and a FontString answered
-/// `SetTexture` — a superset in both directions (wow-re
-/// `system/ui/scratch/texture-fontstring-method-split.md`: Texture's map `0x87c128` is 22 entries,
+/// `SetTexture` — a superset in both directions (Texture's map `0x87c128` is 22 entries,
 /// FontString's `0xcf5400` is 32, both tail-calling the Region map and stopping there).
 #[test]
 fn the_two_region_leaves_answer_their_own_maps() {
@@ -888,7 +887,7 @@ fn the_two_region_leaves_answer_their_own_maps() {
             == "function"
     };
 
-    // Texture-only, and the asymmetry the carve calls out: `SetVertexColor` is on BOTH leaves while
+    // Texture-only, and an asymmetry worth noting: `SetVertexColor` is on BOTH leaves while
     // `GetVertexColor` is Texture-only. No reasonable partition invents that.
     for m in [
         "SetTexture",
@@ -1109,9 +1108,8 @@ fn a_textures_getters_report_its_texel_span_on_an_unsized_axis() {
 
 /// **The three constructors' string arguments are FOUR different shapes, not one rule.**
 ///
-/// Verified together in wow-re `ui/scratch/xml-template-name-lookup.md` §5.2 (§5 pair, orchestrator
-/// byte-arbitration). The discriminator is **not** the argument's type — it is whether the binding
-/// *tests* its parser's return, which is the sentence `numeric-arg-coercion-law.md` §6 had wrong:
+/// The discriminator is **not** the argument's type — it is whether the binding *tests* its
+/// parser's return:
 ///
 /// | position | fetch | a table there | a number there |
 /// |---|---|---|---|
@@ -1261,8 +1259,7 @@ fn set_portrait_texture_folds_the_token_to_lowercase() {
 /// empty strings, because `SetText 0x771d80` never writes NULL to `+0xf0` on any leg: NULL and
 /// `""` share one leg that truncates the buffer in place. Per binding, not per family:
 /// `Button:GetText 0x780e10` carries the same substitution (`0x780ec5`), `EditBox:GetText
-/// 0x7985c0` carries none (wow-re `fontstring-text-cell-and-gettext-contract.md`, a §5 round;
-/// decision 2110).
+/// 0x7985c0` carries none (decision 2110).
 ///
 /// The director's shape (Cartographer 2.02, the world map's hover label): the stock
 /// `WorldMapFrameAreaDescription` is blanked with `SetText("")` by `WorldMapPOI_OnEnter`/`_OnLeave`
@@ -1346,7 +1343,7 @@ fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
 ///
 /// The reference's load-failure arm is explicit about it: `0x770288 cmp [ebp-4],2; jl` →
 /// `0x77028e`–`0x7702b2` releases the handle it just built and returns 0 **without ever touching
-/// `+0xcc`** (wow-re `texture-service-name-resolution.md`). Ours stored the path first and used the
+/// `+0xcc`**. Ours stored the path first and used the
 /// probe's verdict only for the return value, so a mistyped or not-yet-shipped path erased the art
 /// it failed to replace — `GetTexture()` echoed the miss, and the extract dropped the quad, so the
 /// region went blank with nothing said anywhere.

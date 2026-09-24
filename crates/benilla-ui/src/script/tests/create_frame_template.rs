@@ -65,8 +65,8 @@ fn a_runtime_template_brings_size_anchors_regions_and_a_fired_onload() {
         "the template's <Size>"
     );
 
-    // The template's own <Anchors> substitute `$parent` against the frame's PARENT (rf27) — the
-    // instance's enclosing frame, not the instance itself.
+    // The template's own <Anchors> substitute `$parent` against the frame's PARENT (`0x76c5b0`) —
+    // the instance's enclosing frame, not the instance itself.
     let (point, rel, rel_point, x, y): (String, String, String, f32, f32) = s
         .eval(
             "local p, r, rp, ox, oy = Mine:GetPoint(1) \
@@ -149,12 +149,12 @@ fn a_nested_frames_child_is_named_against_the_caller() {
 /// The template argument is **one name**, on this path exactly as on the XML one — and a chain
 /// through a single name still resolves.
 ///
-/// This asserted the opposite until the registry lookup was carved. `"TemplA, TemplB"` is not a
-/// list, it is a literal name nothing declared: 1.12's `CreateFrame` reaches the same `0x6ee6f0`
-/// the XML loader does (call site `0x7061dd`) with the string Lua handed it, and the loader has no
-/// splitter anywhere — comma lists are a **later**-client feature. Corroborated by the corpus:
-/// 6842 `inherits=` across 282 vanilla XML files contain **zero** comma lists, while the modern
-/// Blizzard UI source is full of them.
+/// This asserted the opposite until the registry lookup was read at the bytes. `"TemplA, TemplB"`
+/// is not a list, it is a literal name nothing declared: 1.12's `CreateFrame` reaches the same
+/// `0x6ee6f0` the XML loader does (call site `0x7061dd`) with the string Lua handed it, and the
+/// loader has no splitter anywhere — comma lists are a **later**-client feature. Corroborated by
+/// the corpus: 6842 `inherits=` across 282 vanilla XML files contain **zero** comma lists, while
+/// the modern Blizzard UI source is full of them.
 #[test]
 fn a_comma_list_is_one_name_and_a_single_name_still_chains() {
     let mut s = script();
@@ -374,11 +374,10 @@ fn a_region_template_or_a_mismatched_kind_is_named_never_fatal() {
 /// **`<ScrollChild>` gives a ScrollFrame its range** — the loader element that was missing, and
 /// the whole remaining distance for an addon's scrolling list (decision 1205).
 ///
-/// wow-5875-re `rf28-typed-widget-loadxml.md`: the single child is instantiated via the same
-/// RF-0026 path `<Frames>` uses, then stored as the scroll child. Without it a `ScrollFrame` has
-/// nothing to pan, so `GetVerticalScrollRange()` is 0, `SetVerticalScroll` clamps to 0, and
-/// `OnVerticalScroll` fires with 0 forever — the list never moves and nothing errors, which is why
-/// no instrument could see it.
+/// The single child is instantiated via the same `0x6ee280` path `<Frames>` uses, then stored as
+/// the scroll child. Without it a `ScrollFrame` has nothing to pan, so `GetVerticalScrollRange()`
+/// is 0, `SetVerticalScroll` clamps to 0, and `OnVerticalScroll` fires with 0 forever — the list
+/// never moves and nothing errors, which is why no instrument could see it.
 #[test]
 fn a_scroll_child_element_gives_the_frame_a_real_scroll_range() {
     let mut s = script();
@@ -399,7 +398,7 @@ fn a_scroll_child_element_gives_the_frame_a_real_scroll_range() {
     );
     s.resolve();
 
-    // The child exists, is named against the FRAME (rf27's `$parent`), and is the scroll child.
+    // The child exists, is named against the FRAME (`$parent` `0x76c5b0`), and is the scroll child.
     assert!(s.eval::<bool>("return RollerChild ~= nil").unwrap());
     assert!(s
         .eval::<bool>("return Roller:GetScrollChild() == RollerChild")
@@ -420,9 +419,9 @@ fn a_scroll_child_element_gives_the_frame_a_real_scroll_range() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The scroll range is the child's SUBTREE, not the child frame's own height** (decision 1338,
-/// wow-re `simplehtml-markup-engine.md` §4.5: `0x786e30` seeds a bbox and walks `0x786f80`
-/// recursively over the child's region and child-frame lists).
+/// **The scroll range is the child's SUBTREE, not the child frame's own height** (decision 1338:
+/// `0x786e30` seeds a bbox and walks `0x786f80` recursively over the child's region and child-frame
+/// lists).
 ///
 /// The geometry is the reference reader's own: `ItemTextPageScrollChild` is declared **10×10**
 /// around a 270×304 page. Measured as the child's height that is range 0 — a book that cannot be
@@ -480,8 +479,8 @@ fn the_scroll_range_is_the_childs_whole_subtree() {
     );
 }
 
-/// An empty `<ScrollChild>` is an error — the reference's own behaviour (`rf28`), and the honest
-/// one: a ScrollFrame that declares a child and has none is a typo, not a design.
+/// An empty `<ScrollChild>` is an error (`0x786bc0`) — the reference's own behaviour, and the
+/// honest one: a ScrollFrame that declares a child and has none is a typo, not a design.
 #[test]
 fn an_empty_scroll_child_is_reported() {
     let s = script();

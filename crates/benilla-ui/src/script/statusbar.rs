@@ -1,11 +1,11 @@
 //! The `StatusBar` method surface — the first *per-kind* widget behavior over the kind tag
 //! (`CSimpleStatusBar`, factory `0x6eef20`).
 //!
-//! Grounded in wow-re's byte-verified LoadXML table (RF-28, `rf28-typed-widget-loadxml.md`):
+//! Grounded in the reference's StatusBar `LoadXML 0x782ef0`:
 //! a reversed `min > max` pair is swapped, `defaultValue` routes through SetValue, orientation is
 //! the shared enum HORIZONTAL=0/VERTICAL=1 (`0x811b00`), the bar texture's layer defaults ARTWORK,
 //! and the widget adds the `OnValueChanged` script slot (`+0x32c`). The **fill** mechanism is
-//! byte-pinned too (`nameplate-vkey.md`): `SetValue` writes the bar region's 4-corner UV block with
+//! byte-pinned too (`0x770410`): `SetValue` writes the bar region's 4-corner UV block with
 //! `u1 = GetValue()` *and* recomputes `right = left + frac·width`, so the fill is a left-anchored
 //! **crop** — the art is sliced, never squeezed. Applied at extract (`bar_fill_rect`/`bar_fill_uv`).
 //!
@@ -106,7 +106,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetMinMaxValues",
         lua.create_function(|lua, (this, min, max): (Table, f32, f32)| {
-            // A reversed pair is swapped (RF-28's LoadXML does exactly this) — one behavior for the
+            // A reversed pair is swapped (`LoadXML 0x782ef0` does the same) — one behavior for the
             // XML and API paths. The held value re-clamps into the new range; a move fires
             // OnValueChanged, as a value change the caller didn't make explicitly is still a change.
             let changed = with_bar(lua, &this, |sb| {
@@ -211,9 +211,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
         })?,
     )?;
-    // **Shape C on r, g, b** (`StatusBar:SetStatusBarColor `0x78fc20``, `2=C 3=C 4=C 5=B`, wow-re
-    // `numeric-arg-coercion-law.md`): a bare `lua_tonumber` with no `lua_isnumber` gate, so a nil,
-    // a table or a string is **0.0** and the call never raises. Taking them as `f32` made mlua's
+    // **Shape C on r, g, b** (`StatusBar:SetStatusBarColor `0x78fc20``, `2=C 3=C 4=C 5=B`): a bare
+    // `lua_tonumber` with no `lua_isnumber` gate, so a nil, a table or a string is **0.0** and the
+    // call never raises. Taking them as `f32` made mlua's
     // converter the gate instead — the 2176 class — and the stock
     // `QuestLogFrame.lua:337` idiom hands three nils (`titleButton.r/g/b` are only assigned in
     // `QuestLog_Update`) on any path that selects a quest-log entry before the window has painted.
@@ -252,7 +252,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Fire `OnValueChanged(self, value)` if `changed` carries the new value (RF-28: the StatusBar's own
+/// Fire `OnValueChanged(self, value)` if `changed` carries the new value (the StatusBar's own
 /// script slot `+0x32c`). Fired outside any model borrow; errors go to [`Model::errors`].
 fn fire_value_changed(lua: &Lua, this: &Table, changed: Option<f32>) -> mlua::Result<()> {
     let Some(value) = changed else { return Ok(()) };

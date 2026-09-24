@@ -1,11 +1,11 @@
-//! The §22 item-SET block: order (blank, gold header, skill line, member ladder, blank,
-//! bonuses), the threshold-ascending sort, the skill gate, member cream/gray, and the
-//! ask-once for unseen set ids.
+//! The item-SET block (`ITEM_SET_NAME 0x854b1c`): order (blank, gold header, skill line, member
+//! ladder, blank, bonuses), the threshold-ascending sort, the skill gate, member cream/gray, and
+//! the ask-once for unseen set ids.
 
 use super::{lines_of, script};
 use crate::script::*;
 
-/// The §22 SET block, byte-read: a blank gold line, the gold `ITEM_SET_NAME` header, the skill
+/// The SET block, byte-read: a blank gold line, the gold `ITEM_SET_NAME` header, the skill
 /// line (white/red) between header and the member ladder (cream when equipped / gray; in-flight
 /// names wait), a second blank, then the threshold bonuses SORTED ascending — green only when the
 /// skill requirement is met AND owned ≥ threshold — plus the ask-once for an unseen set id.

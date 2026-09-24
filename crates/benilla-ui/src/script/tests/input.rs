@@ -39,10 +39,10 @@ fn enable_mouse_gates_hit_testing() {
 }
 
 /// The hit sweep's key, all three terms: strata, then level, then — at a tie — the **earlier-linked**
-/// frame, NOT the later one that draws on top (decision 1816; wow-re
-/// `ui/scratch/hittest-no-fallthrough-law.md` §4, `0x764aa0`'s strict `ja` appending equal keys and
-/// `0x7660d0` sweeping from index 0). This test used to assert the opposite at the tie and was named
-/// for it — draw order and hit order agree on strata and level and disagree on exactly this.
+/// frame, NOT the later one that draws on top (decision 1816; `0x764aa0`'s strict `ja` appending
+/// equal keys and `0x7660d0` sweeping from index 0). This test used to assert the opposite at the
+/// tie and was named for it — draw order and hit order agree on strata and level and disagree on
+/// exactly this.
 #[test]
 fn hit_order_is_strata_then_level_then_the_earlier_linked_frame() {
     let mut s = script();
@@ -356,8 +356,7 @@ fn an_enum_attribute_tolerates_the_whitespace_a_real_addon_ships() {
 
 // ── OnDoubleClick — the corpus's biggest script gap (250 sites / 85 addons) ───────────────────
 //
-// Every rule below is byte-verified, from the §5 cross-check this work dispatched into wow-re
-// (`system/ui/scratch/button-doubleclick-law.md`): the interval is a hardcoded **300 ms**
+// Every rule below is byte-verified: the interval is a hardcoded **300 ms**
 // (`0x77937b cmp ecx, 0x12c`), the fire site is the mouse-**UP** dispatcher `0x7792d0` alone, the
 // double leg **replaces** the second `OnClick` (`0x77939d jmp` past `call [edx+0x94]`), a completed
 // double **zeroes** the stamp so clicks pair up, the detector is armed only when the frame carries
@@ -641,10 +640,10 @@ fn the_unfired_script_kinds_still_raise_rather_than_silently_accepting() {
     }
 }
 
-/// The hover-hide law (wow-re `ui/scratch/hover-hide-and-tooltip-owner-law.md`, §5-arbitrated):
-/// hiding the hovered frame fires its `OnLeave` synchronously, BEFORE its own `OnHide`
-/// (`0x764ba0`'s kind-2 tail runs mid-hide, the leave at `0x764cce`; OnHide fires at the hide
-/// body's tail) — and an ancestor's `Hide()` reaches the hovered descendant through the cascade.
+/// The hover-hide law: hiding the hovered frame fires its `OnLeave` synchronously, BEFORE its own
+/// `OnHide` (`0x764ba0`'s kind-2 tail runs mid-hide, the leave at `0x764cce`; OnHide fires at the
+/// hide body's tail) — and an ancestor's `Hide()` reaches the hovered descendant through the
+/// cascade.
 #[test]
 fn hiding_the_hovered_frame_fires_its_onleave_before_onhide() {
     let mut s = script();
@@ -769,7 +768,7 @@ fn the_repick_re_hovers_without_a_mouse_move() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// The mouse-UP dispatch law (decision 1599) — byte-verified, wow-re `mouseup-dispatch-law.md`
+// The mouse-UP dispatch law (decision 1599) — byte-verified at `0x766420`
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// Two side-by-side frames, each recording every `OnMouseDown`/`OnMouseUp` it gets.
@@ -867,7 +866,7 @@ fn the_capture_is_per_button() {
 
 /// **A DISABLED Button runs neither `<OnEnter>` nor `<OnLeave>`** — `CSimpleButton::OnEnter
 /// 0x779490` / `OnLeave 0x7794e0` open `mov eax,[esi+0x328]; test eax,eax; je`, branching past the
-/// base notify that owns both script slots (wow-re `scratch/button-state-edge-set.md` §3.1). It
+/// base notify that owns both script slots (`0x76b6a0`/`0x76b6f0`). It
 /// still TAKES the hover, because the walk reassigns `[root+0x7c]` before it fires the notify.
 ///
 /// The customer is every 1.12 addon that wrote `if this:IsEnabled() then` at the top of an

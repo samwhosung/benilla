@@ -271,9 +271,9 @@ fn invalidate_text_measures_reopens_the_round_trip() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **`GetStringWidth` is the NATURAL width — never the box, never the wrapped extent** (wow-re
-/// `fontstring-overflow.md`, "The measurement echo": the reference re-measures the raw text with no
-/// wrap constraint, so "Lua sees the natural, unwrapped, un-truncated width at the DRAWN size").
+/// **`GetStringWidth` is the NATURAL width — never the box, never the wrapped extent**
+/// (`0x79e510`→`0x772890`: the reference re-measures the raw text with no wrap constraint, so "Lua
+/// sees the natural, unwrapped, un-truncated width at the DRAWN size").
 ///
 /// This is the distinction whose absence made the reference's own `PanelTemplates_TabResize` a
 /// feedback loop in this engine (decision 0997): the kit sized a tab from `GetStringWidth`, set that

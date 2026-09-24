@@ -251,8 +251,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // The token argument is `Value`, not `String`, so the miss is the reference's own message: the
     // binding carries an `lua_isstring` gate at `0x517a48` whose failure arm is
-    // `luaL_error("Usage: UnitOnTaxi(\"unit\")")` (wow-re
-    // `ui/scratch/nil-unit-token-arg-law.md` §10, row 33). A Rust `String` parameter raised mlua's
+    // `luaL_error("Usage: UnitOnTaxi(\"unit\")")`. A Rust `String` parameter raised mlua's
     // own type-conversion error there instead.
     g.set(
         "UnitOnTaxi",

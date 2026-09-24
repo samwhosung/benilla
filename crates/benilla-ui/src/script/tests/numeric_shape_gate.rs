@@ -1,12 +1,10 @@
-//! **Shape C, closed as a CLASS**: every numeric position wow-re's
-//! `system/ui/scratch/numeric-arg-coercion-law.md` records as shape C must take a `nil` — or a
+//! **Shape C, closed as a CLASS**: every shape-C numeric position must take a `nil` — or a
 //! table, or a string — as **0.0** and complete, because the reference reads it with a bare
 //! `lua_tonumber 0x6f3620` and no `lua_isnumber` gate at all.
 //!
-//! The law's own framing is why this is one test and not six: *"which shape a given argument takes
-//! is per binding, not a global law"* — it censused all 408 widget-registrar positions (110 gated,
-//! 64 ungated) precisely so a re-implementation could be checked against a table rather than an
-//! instinct. Our half of that table had drifted: 1973 closed `SetTextColor` and left every sibling
+//! This is one test and not six because which shape a given argument takes is per binding, not a
+//! global law: the reference's 408 widget-registrar positions (110 gated, 64 ungated) are a table
+//! a re-implementation is checked against, not an instinct. Our half of that table had drifted: 1973 closed `SetTextColor` and left every sibling
 //! strict, so mlua's converter went on being the gate for five more years' worth of call sites.
 //!
 //! The live symptom that forced the audit: stock `QuestLogFrame.lua:337` does

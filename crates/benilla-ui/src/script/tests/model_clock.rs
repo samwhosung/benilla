@@ -1,5 +1,5 @@
-//! **The model pane's clock, arm, and two handlers** (decision 2007; wow-re
-//! `ui/scratch/modelframe-render-law.md` §4).
+//! **The model pane's clock, arm, and two handlers** (decision 2007; `0x76d7f0`, `0x7121a0`,
+//! `0x76cac0`).
 //!
 //! A `<Model>` widget owns a private scene whose clock its own `OnUpdate` advances while the
 //! frame is visible; `SetSequence`/`SetSequenceTime` arm a sequence with an anchor the sampler
@@ -166,7 +166,7 @@ fn set_model_seeds_stand_now_or_when_the_facts_land() {
 }
 
 /// `SetSequence(id)` with an id the file does not own **stops what was playing and arms
-/// nothing** — `0x7121a0`'s interrupt runs before its bounds check (§4.2). A queued arm on a
+/// nothing** — `0x7121a0`'s interrupt runs before its bounds check. A queued arm on a
 /// file still loading is kept until the facts say otherwise.
 #[test]
 fn an_unowned_id_stops_the_track_and_arms_nothing() {
@@ -352,9 +352,8 @@ fn on_update_model_fires_per_visible_paint_with_this() {
 }
 
 /// A LOOPING sequence fires `OnAnimFinished` once too — at the end of its first pass — and keeps
-/// looping (`0x719370` enqueues the completion before it tests the loop flag; wow-re
-/// `modelframe-texanim-and-sequence-law.md` Q4). And a pane with no file fires no
-/// `OnUpdateModel` at all (`76d24c`'s gate), however visible.
+/// looping (`0x719370` enqueues the completion before it tests the loop flag). And a pane with no
+/// file fires no `OnUpdateModel` at all (`76d24c`'s gate), however visible.
 #[test]
 fn a_loop_completes_once_and_a_fileless_pane_paints_nothing() {
     let mut s = script();
@@ -417,7 +416,7 @@ fn a_loop_completes_once_and_a_fileless_pane_paints_nothing() {
 fn a_size_less_pane_takes_its_files_rect_in_layout_units() {
     let mut s = script();
     s.set_screen_size(1024.0, 768.0);
-    // The map arrow's own box (`MinimapArrow.m2`, render law §2): 0.0262 × 0.0263 units.
+    // The map arrow's own box (`MinimapArrow.m2`, `0x76d080`/`0x76d0d0`): 0.0262 × 0.0263 units.
     let arrow = |s: &mut UiScript| {
         s.set_model_facts(
             r"Interface\Minimap\MinimapArrow.mdx",

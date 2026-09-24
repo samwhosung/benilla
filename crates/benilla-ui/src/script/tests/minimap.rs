@@ -194,7 +194,7 @@ fn zooming_without_a_registered_cvar_table_is_silent() {
 ///
 /// The `CMinimap` ctor `0x4edbc0` builds nine `CSimpleModel` children parented to the Minimap
 /// before anything else touches the widget, in three source-ordered groups (`__LINE__` 1424 / 1438
-/// / 1450 — wow-re `ui/scratch/widget-list-bindings.md` §5, VERIFIED), the last being
+/// / 1450), the last being
 /// `[Minimap+0x338]`, the player arrow. Because both linkers append at the tail and the ctor runs
 /// before the XML `<Frames>` descent, `({Minimap:GetChildren()})[9]` is that arrow on a stock
 /// client — which is exactly what Questie's `QuestieArrow.lua` and pfQuest's `compat/client.lua`

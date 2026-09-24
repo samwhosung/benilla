@@ -193,10 +193,9 @@ fn justify_v_defaults_middle_and_overrides() {
     assert_eq!(justify_v(&s), JustifyV::Bottom);
 
     // A font object carrying justify_v applies it — but ONLY on the axis this string has not
-    // already claimed for itself. `SetJustifyV` above severed the V axis, and §5-verified that
-    // severance is permanent: the reference clears the axis's inheritMask bit (`+0x124`, the
-    // per-axis justify mask — wow-re `system/ui/scratch/font-object-lua-surface.md`) and never
-    // restores it, so a later `SetFontObject` cannot take the axis back.
+    // already claimed for itself. `SetJustifyV` above severed the V axis, and that severance is
+    // permanent: the reference clears the axis's inheritMask bit (`+0x124`, the per-axis justify
+    // mask) and never restores it, so a later `SetFontObject` cannot take the axis back.
     //
     // This assertion used to read `Top`. That was our copy-everything model, not the client's; the
     // shipped XML path is unaffected either way, because the loader applies `inherits=` BEFORE the

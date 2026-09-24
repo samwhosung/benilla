@@ -134,7 +134,7 @@ fn page(s: &UiScript) {
 ///
 /// The line count is the client's own kernel `0x5c2070`, not "breaks + 1": it counts a line per
 /// class-2 token consumed and exits at the terminator, so a **trailing** break opens no new line
-/// and the one-byte `"\n"` a `<BR/>` block carries is **one** line, not two (§4.4). An empty string
+/// and the one-byte `"\n"` a `<BR/>` block carries is **one** line, not two. An empty string
 /// never enters the loop body at all and measures 0 — the empty-`<P>` edge.
 fn measure_at_16px(s: &mut UiScript) {
     s.resolve();
@@ -192,7 +192,7 @@ fn a_well_formed_body_is_one_block_per_tag() {
             ("Right body.".to_string(), "RIGHT"),
         ]
     );
-    // §5.3 — `elementFont[1]`'s path is empty, so `0x78ae30` substitutes `elementFont[0]`. There
+    // `elementFont[1]`'s path is empty, so `0x78ae30` substitutes `elementFont[0]`. There
     // is NO header scaling anywhere in the TU: the H1 is the same 15px as the paragraphs.
     for blk in &b {
         assert_eq!(blk.font.as_deref(), Some("Fonts\\MORPHEUS.TTF"));
@@ -203,9 +203,9 @@ fn a_well_formed_body_is_one_block_per_tag() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The anchor chain of §4.2 step 2, and the flush default of §4.3: block 0 pins TOPLEFT→frame
-/// TOPLEFT, every later block TOPLEFT→**the previous block's** BOTTOMLEFT at `−spacing` — which
-/// is `0` out of the box, so the blocks touch.
+/// The anchor chain (`CLayoutFrame::SetPoint 0x767c70`) and the flush default (`0x770d89` zeroes
+/// spacing): block 0 pins TOPLEFT→frame TOPLEFT, every later block TOPLEFT→**the previous block's**
+/// BOTTOMLEFT at `−spacing` — which is `0` out of the box, so the blocks touch.
 #[test]
 fn blocks_chain_bottom_to_top_and_are_flush_at_spacing_zero() {
     let mut s = script();
@@ -363,9 +363,9 @@ fn a_second_set_text_replaces_the_blocks() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The real `page_text` shape §8 quotes, driven through the widget: the `<H1>` at the `<P>` size,
-/// every block centred, each `<BR/>` one blank line, and the body's own inter-tag newlines adding
-/// nothing at all.
+/// The real `page_text` shape `ItemTextFrame.xml`'s ItemTextPageText renders, driven through the
+/// widget: the `<H1>` at the `<P>` size, every block centred, each `<BR/>` one blank line, and the
+/// body's own inter-tag newlines adding nothing at all.
 #[test]
 fn the_page_text_body_renders_the_block_list_a_reader_would_draw() {
     let mut s = script();
@@ -550,7 +550,7 @@ fn an_unfloated_image_reserves_height_without_becoming_the_anchor() {
 /// block is sized `0 × 0`. In the reference that is not "no size": the resolver's size call is
 /// VIRTUAL, and `CSimpleTexture::GetWidth 0x770720` / `GetHeight 0x770790` answer an authored `0.0`
 /// with the loaded texture's own texel extent, through bit-for-bit the converter `<AbsDimension>`
-/// uses — **one texel is one FrameXML unit** (wow-re `region-size-fallback.md` §2, decision 1349).
+/// uses — **one texel is one FrameXML unit** (decision 1349).
 /// `PvPRankAlliance.blp` is 128×128, so the crest is a 128-unit square.
 ///
 /// The falsification is the reported shape itself, asserted below: a zero span leaves the opposite
@@ -605,8 +605,8 @@ fn the_books_unsized_crest_is_its_arts_texel_square_not_the_whole_page() {
     );
 }
 
-/// The flow half of the same law (`simplehtml-markup-engine.md` §7 step 6): an **unfloated** image
-/// reserves `texture.GetHeight()` — `CSimpleTexture`'s override — so one with no `height=` reserves
+/// The flow half of the same law (`0x78ad07`): an **unfloated** image reserves
+/// `texture.GetHeight()` — `CSimpleTexture`'s override — so one with no `height=` reserves
 /// its art's texel height, and the next text block hangs that far lower. A floated one (the book's
 /// `align="left"`) still reserves nothing, which is why its text overlaps it in both clients.
 #[test]
@@ -646,7 +646,7 @@ fn an_unsized_image_reserves_its_arts_texel_height_unless_it_is_floated() {
 /// axis** — and with one corner pinned and nothing to add to it, it does not resolve at all. That
 /// is the reference's own answer for a texture with no `CGxTex*`: `combineEdge`'s legs both fail
 /// their `span != 0.0` test, `assemble 0x767a20` returns 0, and the texture emits a degenerate
-/// all-zero quad (wow-re `region-size-fallback.md` §5's counterfactual and §7). Stated so the
+/// all-zero quad. Stated so the
 /// engine-less path cannot quietly go back to borrowing the page's width.
 #[test]
 fn without_a_size_oracle_an_unsized_image_does_not_resolve() {
@@ -864,8 +864,8 @@ fn block_color(s: &UiScript, name: &str, i: usize) -> Option<[f32; 4]> {
 /// The two halves of `SetFontObject`'s severance law, which the element font has to reproduce by
 /// hand because it resolves its object lazily rather than copying the paint at the call:
 ///
-/// - a **re-point does not reset** the explicit mask (§5-verified for the region side: the
-///   inheritMask bit a local setter clears is never restored), so a face set on the element
+/// - a **re-point does not reset** the explicit mask (`CSimpleFont+0x2c`/`CSimpleFontString+0xD4`:
+///   the inheritMask bit a local setter clears is never restored), so a face set on the element
 ///   survives being pointed at a different object;
 /// - the **nil form severs the link and leaves the paint standing** — it does not blank the
 ///   element.

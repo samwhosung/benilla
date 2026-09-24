@@ -5,10 +5,10 @@
 //! quarters of everything that breaks in a running session. The fix is 5.0's `OP_TFORPREP` folded
 //! into `OP_TFORLOOP` in `third_party/lua-src/lua-5.1.5/lvm.c`.
 //!
-//! Each test below pins one detail that was byte-verified in the real 1.12.1 client (wow-5875-re
-//! `system/ui/scratch/lua-generic-for.md`), because each is a place where a *reasonable* guess
-//! diverges from what the client does. The `__call` case is the sharpest: two of the three
-//! conditions somebody would naturally write for this behave differently there.
+//! Each test below pins one detail that was byte-verified in the real 1.12.1 client, because each
+//! is a place where a *reasonable* guess diverges from what the client does. The `__call` case is
+//! the sharpest: two of the three conditions somebody would naturally write for this behave
+//! differently there.
 
 use super::common::script;
 
@@ -259,8 +259,8 @@ fn a_double_semicolon_inside_a_constructor_parses_as_lua_50_does() {
 
 /// **The restoration is exactly one semicolon wide, and constructor-only.** Both halves of the
 /// boundary are the client's: 5.0 eats ONE extra `;` per position (a third dies in `listfield`),
-/// and statement-level `;;` is rejected by 5.0 and 5.1 alike — the half wow-5875-re byte-verified
-/// in the client's `luaL_loadbuffer` first (`system/ui/scratch/lua-dialect.md`).
+/// and statement-level `;;` is rejected by 5.0 and 5.1 alike — confirmed by the client's own parser
+/// (`luaL_loadbuffer` → `chunk 0x6fcc90`).
 #[test]
 fn the_compat_semicolon_is_one_wide_and_statement_level_stays_rejected() {
     let s = script();
