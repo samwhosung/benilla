@@ -65,9 +65,9 @@ enum Pending {
         tries: u16,
     },
     /// An inbound addon line awaiting its SENDER's name — `CHAT_MSG_ADDON` (event 227, fired at
-    /// `0x49a95f`). Parked here rather than fired at decode for the reason wow-re records: the
-    /// reference fires it *downstream* of the name resolve, from the `CMSG_NAME_QUERY` callback
-    /// (`0x49ccc0`), so `sender` is a NAME and never a guid.
+    /// `0x49a95f`). Parked here rather than fired at decode because the reference fires it
+    /// *downstream* of the name resolve, from the `CMSG_NAME_QUERY` callback (`0x49ccc0`), so
+    /// `sender` is a NAME and never a guid.
     Addon {
         prefix: String,
         message: String,
@@ -139,7 +139,7 @@ enum Pending {
 ///
 /// Split out of the drain so the shape that reaches Lua is testable without standing up
 /// `feed_chat`'s dozen resources — the scaffolding is not what can be wrong here; the argument
-/// ORDER is. wow-re carves it as `SignalEvent2(227, "%s%s%s%s", prefix, message, distribution,
+/// ORDER is. The reference fires `SignalEvent2(227, "%s%s%s%s", prefix, message, distribution,
 /// sender)` (`0x49a95f`), and `BigWigs` independently self-delivers
 /// `self:CHAT_MSG_ADDON("BigWigs", msg, "RAID", playerName)` — a 2006 addon author and the binary
 /// agreeing.
@@ -526,10 +526,9 @@ const RESTED_STATE: &str = "Rested";
 /// The honor line an `SMSG_PVP_CREDIT` becomes — the three GlobalStrings forms (COMBATLOG_HONORAWARD
 /// :786, COMBATLOG_HONORGAIN :787, COMBATLOG_DISHONORGAIN :785), decision 1512.
 ///
-/// **The fork is byte-VERIFIED** (wow-re `system/ui/scratch/honor-panel-law.md`, formatter
-/// `0x625270`), and it is three-way, not two: no victim guid → AWARD; victim and `honor > 0` →
-/// GAIN; victim and **`honor <= 0`** → DISHONOR. The boundary is `<=`, not `<` — a zero-honor kill
-/// takes the dishonorable arm, which the pre-verdict reading had on the honorable side.
+/// **The fork** (formatter `0x625270`) is three-way, not two: no victim guid → AWARD; victim and
+/// `honor > 0` → GAIN; victim and **`honor <= 0`** → DISHONOR. The boundary is `<=`, not `<` — a
+/// zero-honor kill takes the dishonorable arm, which the earlier reading had on the honorable side.
 ///
 /// An absent `rank_title` fills an EMPTY rank slot rather than dropping the clause. That is the
 /// reference's own shape — it is precisely the emptiness vmangos floors a rankless victim's rank at
@@ -596,7 +595,7 @@ pub(super) fn notice_event(
     a: Option<String>,
     b: Option<String>,
 ) -> Option<ChatEvent> {
-    // The display type per notice byte — wow-re `chat-msg-event-args.md`'s notice table, read
+    // The display type per notice byte — the `0x49c60c` jump table, read
     // off each arm's `mov edi`: 0x00/0x01 are the join/leave lines, MODE_CHANGE (0x0c) fires no
     // chat event at all, a byte past THROTTLED fires SYSTEM with an empty token, and the rest
     // split between CHANNEL_NOTICE (0x12) and CHANNEL_NOTICE_USER (0x13) exactly as listed.
@@ -898,7 +897,7 @@ pub(super) fn feed_chat(
                     None
                 };
                 let plain = expanded.unwrap_or_else(|| msg.text.clone());
-                // **The language gate** (B262, wow-re `chat-language-scramble.md`). The wire always
+                // **The language gate** (B262). The wire always
                 // carries plaintext; whether this character can read it is entirely ours to decide,
                 // and the answer is one rewritten buffer that EVERY consumer below shares — the
                 // chat line, the Lua `arg1`, the bubble, the gesture. That is the reference's own
@@ -927,8 +926,8 @@ pub(super) fn feed_chat(
                     // NOT built, and named rather than faked: the whisper leg. A dropped
                     // `CHAT_MSG_WHISPER` with a non-zero report guid also sends `CMSG_CHAT_FILTERED`
                     // (`0x331`) before returning — still firing no event, so the player sees the
-                    // same nothing either way. The packet's BODY is not settled (wow-re parked
-                    // `0x508680`'s send-path verdict as a DEFERRED), vmangos has no handler for the
+                    // same nothing either way. The packet's BODY is not settled (`0x508680`'s
+                    // send-path verdict is still open), vmangos has no handler for the
                     // opcode, and inventing a body to send a server that ignores it would be worse
                     // than the honest gap.
                     debug!(
@@ -976,8 +975,7 @@ pub(super) fn feed_chat(
                 // expanded text, and takes its laugh words off the player's own FrameXML globals —
                 // the enumeration is the mechanism, the words are content (decision 1469).
                 //
-                // **It reads `plain`, NOT the garbled text, and that is byte-verified rather than
-                // reasoned** (wow-re `chat-language-scramble.md` §10.1). The selector is not on
+                // **It reads `plain`, NOT the garbled text.** The selector is not on
                 // this display path at all: it lives in the *parser* `0x49d560` at
                 // `0x49d820`-`0x49d8ae`, and the slot it matches against — `[ebp-0x10]` — is the
                 // very buffer `0x49dbc2` then hands to `0x49a870` as its `src`. The garbled buffer
@@ -985,7 +983,7 @@ pub(super) fn feed_chat(
                 //
                 // So the gesture is **language-independent**: a Horde player yelling `lol` laughs
                 // for every observer, Alliance included. We had this wired to the garbled text on
-                // an inference from §10's consumer census — that census was complete for
+                // an inference from the consumer census — that census was complete for
                 // `0x49a870` and could never have found a consumer reading the pre-garble value in
                 // the *caller's* frame.
                 if let Some(gesture) =
@@ -1166,9 +1164,9 @@ pub(super) fn feed_chat(
                 // **The side is the VICTIM's and the gender is OURS**, and that asymmetry is the
                 // reference's own (`0x625270`): the team digit is computed inline over the victim's
                 // faction template, while the gendered GlobalString resolve runs against the local
-                // player. It reads like a bug in the real client and it is what the bytes do; both
-                // halves are wow-re-VERIFIED. The victim's side rides the same name-query record we
-                // just resolved the name from; ours rides our own.
+                // player. It reads like a bug in the real client and it is what the bytes do. The
+                // victim's side rides the same name-query record we just resolved the name from;
+                // ours rides our own.
                 //
                 // A victim with no record is a creature — a racial leader is the only one the
                 // server ranks, at 19, and "Leader" is the same word on both sides — or an

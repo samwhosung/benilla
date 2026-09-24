@@ -3,7 +3,7 @@
 //! module is `0x49a870`'s share of the work: the exemptions, and the "how well does this character
 //! know that language" answer the routine takes as its second argument.
 //!
-//! Byte-verified in wow-re `system/ui/scratch/chat-language-scramble.md` §8. The chain is entirely
+//! That answer is `0x5ec720`'s. The chain is entirely
 //! client-side over server-synced skill data — **nothing is pushed as a "language list"**:
 //!
 //! ```text

@@ -1,8 +1,6 @@
 //! The `AUTO_JOIN_GUILD_CHANNEL` cascade — the reference's `0x49ea90`, the thing
 //! `SetGuildRecruitmentMode(1)` tail-jumps into and the one place the client joins or leaves
-//! `GuildRecruitment - City` on its own (decision 2144; every byte fact below is wow-re
-//! `system/ui/scratch/guild-recruitment-mode.md`, a §5 round, and its callers' census in
-//! `zone-chat-channel-autojoin.md` §11.5).
+//! `GuildRecruitment - City` on its own (decision 2144).
 //!
 //! **What it is for.** `GuildRecruitment` is the channel *unguilded* players sit in to be found.
 //! Its `ChatChannels.dbc` row carries no `INITIAL` bit, so the zone walk never seeds it; instead
@@ -12,7 +10,7 @@
 //! - **guilded** ⇒ leave-by-name `"GuildRecruitment - City"` (`0x49eb17` → `0x49ee70`):
 //!   `CMSG_LEAVE_CHANNEL` and its `ZONECHANNELS` bit cleared, then `UPDATE_CHAT_WINDOWS`. **No
 //!   already-a-member check.** The window entry the join registered **stays**: the leave's strip
-//!   key is the full name, which no window carries (wow-re `leavechannelbyname-contract.md` §6/§9).
+//!   key is the full name, which no window carries (`0x49f017`).
 //! - **unguilded, in a capital** (`AreaTable Flags & 0x100`) ⇒ join `"GuildRecruitment"`
 //!   (`0x49eb55` → `0x49eb70`): a slot, the composed name into chat window 1's list,
 //!   `CMSG_JOIN_CHANNEL`, then `UPDATE_CHAT_WINDOWS`. **No already-joined check.**
@@ -25,7 +23,7 @@
 //! gate, suspended outside a capital, re-joined on the way back in through the state-3 bypass
 //! ([`super::channels::plan_walk`]). The cascade is the *entry*, not the upkeep.
 //!
-//! **Triggers** (`0x49ea90`'s closed caller census, §4.2): `SetGuildRecruitmentMode(1)`; the
+//! **Triggers** (`0x49ea90`'s closed caller census): `SetGuildRecruitmentMode(1)`; the
 //! chat-cache loader seating `AUTO`; the local player's `PLAYER_GUILDID` field-change watcher
 //! (`0x5e2770`); and every `CGPlayer` create (`0x5dec1e`) — which includes the local player's own
 //! at login. Ours: the Lua verb's ask, and a watcher over the local player's guild id whose first
@@ -55,7 +53,7 @@ use super::edit::ChannelState;
 /// `AreaTable.dbc` `Flags & 0x100` — vmangos `AREA_FLAG_CAPITAL`. The cascade's own capital test
 /// (`0x49eb2e test ch,1`): a *different* bit from the walk's eligibility gate (`0x8`), read here
 /// as its own flag because the client reads it as one. In the 1.12.1 data both sit on exactly the
-/// same six rows (autojoin §5).
+/// same six rows.
 const AREA_FLAG_CAPITAL: u32 = 0x100;
 
 /// The cascade's own state: whether a run is owed, and the guild id its watcher last saw.
@@ -229,10 +227,9 @@ pub(super) fn guild_recruitment_cascade(
 ///
 /// **No window strip.** `0x49ee70` does strip every window's list, but keyed on the DBC Shortcut
 /// only when its *argument* matched a shortcut — else on the argument verbatim (`0x49eff6` /
-/// `0x49f017`, wow-re `leavechannelbyname-contract.md` §6, VERIFIED). The full name matches no
-/// shortcut, and the join arm registered window 1's entry under the Shortcut
-/// `"GuildRecruitment"`, so the scan misses in every window and the entry survives (§9). Stripping
-/// by the Shortcut here removed an entry the reference keeps.
+/// `0x49f017`). The full name matches no shortcut, and the join arm registered window 1's entry
+/// under the Shortcut `"GuildRecruitment"`, so the scan misses in every window and the entry
+/// survives. Stripping by the Shortcut here removed an entry the reference keeps.
 fn cascade_leave(channels: &mut ChannelState, commands: &NetCommands, name: String) {
     let _ = commands
         .0
@@ -263,8 +260,8 @@ mod tests {
         assert_eq!(cascade(true, 0, false), Some(Cascade::Deferred));
     }
 
-    /// **The cascade's own leave cannot strip its window entry** (wow-re
-    /// `leavechannelbyname-contract.md` §6/§9, VERIFIED). The join arm registered window 1's entry
+    /// **The cascade's own leave cannot strip its window entry** (`0x49f017`).
+    /// The join arm registered window 1's entry
     /// under the Shortcut `"GuildRecruitment"`; the leave's strip key is its argument, the full
     /// `"GuildRecruitment - City"`, which matches no DBC shortcut and so is used verbatim — and
     /// equals no window entry. The packet goes out and the mask bit clears; the entry stays.

@@ -101,7 +101,7 @@ impl SendType {
 
 /// How many channels the client can hold at once — its allocator refuses the eleventh
 /// (`0x49b9c0: cmp ecx,0xa`), and the ten boot-seeded `CHANNEL1`…`CHANNEL10` color rows are the
-/// same ten (wow-re `chat-color-table.md`).
+/// same ten (seeded by `0x4982c0`).
 pub(crate) const MAX_CHANNELS: usize = 10;
 
 /// The channels this session has joined — the CLIENT-side number law (`GetChannelName(n)`): `/1`
@@ -142,8 +142,7 @@ pub(crate) struct ChannelState {
     /// "no zone channels, arg7 always 0" rather than to an error.
     pub channels: benilla_formats::ChatChannelsCatalog,
     /// **The `ZONECHANNELS` mask** — the reference's `DWORD ds:0xb6e5e0`, bit `1 << (ChannelID-1)`
-    /// (decision 2120; wow-re `system/ui/scratch/zone-chat-channel-autojoin.md` §3 carries the
-    /// complete 8-site census of that global).
+    /// (decision 2120; the global's complete census is eight sites).
     ///
     /// **It is durable state, not a view of [`Self::joined`].** The reference seeds it once — from
     /// the chat cache's header line (`0x498d83`, an overwrite) or, with no usable file, from every
@@ -211,7 +210,7 @@ pub(crate) struct ChannelSlot {
 /// differs — because the token is what the stock `ChatFrame_OnEvent` branches on, and one of those
 /// branches deletes the window's channel registration.
 ///
-/// The complete writer census is wow-re `zone-chat-channel-autojoin.md` §6.
+/// Its complete writer census is six sites.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SlotState {
     /// `0` (server-confirmed) and `1` (join not yet acknowledged), which we cannot tell apart and
@@ -226,13 +225,13 @@ pub(crate) enum SlotState {
     /// *"Changed Channel: [%s]"*, a line the reference has and we never printed.
     Renamed,
     /// `3` — **locally suspended**: the row lost its eligibility, which in the 1.12 data means
-    /// exactly one thing, walking out of a capital with `Trade` joined (§5/§6). `0x49bcf0` sets it
+    /// exactly one thing, walking out of a capital with `Trade` joined. `0x49bcf0` sets it
     /// and sends nothing; the LEAVE has already gone out earlier in the same iteration.
     ///
     /// The record and its number survive, and the arriving `YOU_LEFT` carries the `SUSPENDED`
     /// token instead (`0x49c0e0`) — same rendered text, different arg1, which is exactly what stops
     /// `ChatFrame_OnEvent` from deleting the registration. Walking back into a city then re-joins
-    /// through the state-3 bypass (§7 pass 1 step 2), where the name has not changed and the
+    /// through the state-3 bypass (`0x49a31c`), where the name has not changed and the
     /// comparison would otherwise say there was nothing to do.
     Suspended,
 }
@@ -281,7 +280,7 @@ impl ChannelState {
     /// `0x49ee70`, and only there. The zone walk's LEAVE goes out on a different path and leaves
     /// the mask alone: crossing a border is not "I left this channel".
     ///
-    /// Keyed the way the reference keys it (wow-re `leavechannelbyname-contract.md` §8): the slot
+    /// Keyed the way the reference keys it (`0x49f0f4`): the slot
     /// found by the **wire name**, and its own DBC id — so a name no slot carries clears nothing,
     /// whatever row it would resolve to.
     pub(crate) fn note_zone_channel_left(&mut self, name: &str) {
@@ -318,9 +317,8 @@ impl ChannelState {
         self.zone_mask.is_some_and(|mask| mask & zone_bit(id) != 0)
     }
 
-    /// **The numeric leg of leave-by-name** — `0x49ee70` step 1 (wow-re
-    /// `leavechannelbyname-contract.md` §3, VERIFIED): a `SStrToInt` of the argument that is not
-    /// zero names joined slot `n`, and only a **server-confirmed** one (`slot+0x9c == 0`,
+    /// **The numeric leg of leave-by-name** — `0x49ee70` step 1: a `SStrToInt` of the argument that
+    /// is not zero names joined slot `n`, and only a **server-confirmed** one (`slot+0x9c == 0`,
     /// `0x49be50`); a hole, an out-of-range number or a suspended slot make the whole call a
     /// no-op — no packet, no mask change. `None` is that no-op. Anything else is already the wire
     /// name: the VM's `LeaveChannelByName` composed a shortcut or passed a custom name through.
@@ -352,10 +350,10 @@ impl ChannelState {
 
     /// **Rename a slot in place — the zone walk crossing a border** (decision 2130).
     ///
-    /// The reference's `0x49bc50(oldName, newName)`, called from `ZoneChannelRefresh`'s pass 1
-    /// step 6 (wow-re `zone-chat-channel-autojoin.md` §7, VERIFIED): it copies the new name into
-    /// the slot and moves its state to "re-join pending" — **at send time**, before the server has
-    /// answered the `CMSG_LEAVE_CHANNEL` that went out a moment earlier.
+    /// The reference's `0x49bc50(oldName, newName)`, called from `ZoneChannelRefresh`'s pass 1 at
+    /// `0x49a3dc`: it copies the new name into the slot and moves its state to "re-join pending" —
+    /// **at send time**, before the server has answered the `CMSG_LEAVE_CHANNEL` that went out a
+    /// moment earlier.
     ///
     /// That ordering is the whole point, and it is not bookkeeping. When the server's `YOU_LEFT`
     /// for the *old* name arrives, no slot carries that name any more — `0x49be90` is a pure name
@@ -372,8 +370,8 @@ impl ChannelState {
     ///
     /// Nothing in stock FrameXML ever re-adds one on a join, and **nothing in the engine does
     /// either**: a closed census of event 395 (`0x18b`) leaves five fire sites in the image, none of
-    /// them reachable from a zone change, for guilded and unguilded players alike (wow-re §11.1,
-    /// VERIFIED). The rename is not one repopulation mechanism among several — it is the only thing
+    /// them reachable from a zone change, for guilded and unguilded players alike (`0x49a6a4`).
+    /// The rename is not one repopulation mechanism among several — it is the only thing
     /// standing between a border crossing and a dead channel.
     ///
     /// So without it, one crossing costs the window General and LocalDefense **for the rest of the
@@ -503,14 +501,14 @@ impl ChannelState {
     /// client's local channel record — `slot+0x00`, `+0x04`, `+0x94`, `+0x98` — so a name that is
     /// *not* in the local list has no record to read and every one of them is empty: arg4 falls
     /// back to the bare incoming name and arg7/arg8/arg9/arg10 are `0/0/""/0` together. They are
-    /// never independently populated. (wow-re `system/ui/scratch/chat-msg-event-args.md` §§4, 7-10,
-    /// VERIFIED; the `"%d. %s"` prefix at `0x8445c8` is applied on the hit leg `0x49aa48`, and
-    /// `0x49aa86` is the bare-name miss leg.)
+    /// never independently populated. (`0x49b12f` installs the empty defaults together; the
+    /// `"%d. %s"` prefix at `0x8445c8` is applied on the hit leg `0x49aa48`, and `0x49aa86` is the
+    /// bare-name miss leg.)
     ///
     /// So: on entry `event.channel` holds the name as the wire gave it ("General - Elwynn Forest").
     /// If we are in that channel, on exit arg4 is the numbered display form, arg9 the stored name
-    /// **with its " - Zone" tail intact** (§9: the DBC name column *is* the format string the
-    /// client built the stored name with), arg8 the 1-based local slot and arg7 the
+    /// **with its " - Zone" tail intact** (`0x49a4ea`: the DBC name column *is* the format string
+    /// the client built the stored name with), arg8 the 1-based local slot and arg7 the
     /// `ChatChannels.dbc` ChannelID — 0 for a custom channel. If we are not, nothing is stamped.
     ///
     /// arg7 is resolved from the name against `ChatChannels.dbc` rather than remembered per join.

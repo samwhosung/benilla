@@ -13,7 +13,7 @@
 //! This is the part a reimplementation gets wrong, and the reference is unambiguous about it. Both
 //! handlers (`0x49dcc0` for ZONE_UNDER_ATTACK, `0x49de30` for DEFENSE_MESSAGE) end in the same
 //! loop over the client's own joined-channel array (`[0xb4fe04]`, count `[0xb4fe00]`, stride
-//! `0xa0` — wow-re `system/ui/scratch/chat-msg-event-args.md` §7 owns that record), delivering the
+//! `0xa0`), delivering the
 //! text once per surviving channel as chat type **`0xE` = `CHAT_MSG_CHANNEL`** with a NULL sender
 //! and language `0`. `0x49de04` and `0x49df4c` are the **only two sites in the whole image** that
 //! hand the composer a literal chat type `0xE`: engine-composed channel chat exists for these two
@@ -248,8 +248,8 @@ pub(super) fn feed_broadcasts(
                 // An absent key shows nothing — this crate's uniform GlobalStrings stance, and a
                 // deliberate half-step short of the reference: `0x496720` suppresses on the message
                 // record's own key field being NULL or empty (`0x4967c5`), but `FrameScript_GetText`
-                // returns `""` rather than NULL for a missing global (VERIFIED, wow-re
-                // `world-broadcast-opcodes.md` §5), so a broken `GlobalStrings.lua` would make the
+                // returns `""` rather than NULL for a missing global (`0x703c02` seeds it), so a
+                // broken `GlobalStrings.lua` would make the
                 // reference print an EMPTY line here rather than none. Showing nothing is what every
                 // other tenant of this route does; diverging in one module would be the
                 // inconsistency.

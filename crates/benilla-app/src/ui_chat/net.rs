@@ -155,7 +155,7 @@ fn chat(
     // `[Party] [Soreen]: Quiver VERSION:3.1.4` version ping as ordinary party chat, and a
     // mixed-client party makes that constant background noise.
     //
-    // VERIFIED in `WoW.exe` (5875) — wow-re `system/ui/scratch/addon-chat-law.md`: the test is
+    // In `WoW.exe` (5875) the test is
     // `0x49a89b`/`0x49a89e cmp edi,-0x1`, in the DISPLAY function `0x49a870`, and every branch of
     // the addon arm `[0x49a8a7, 0x49a96d)` jumps below the normal render path at `0x49a970` — the
     // chat frame is unreachable for such a line by construction. The **language field is the whole
@@ -191,10 +191,8 @@ fn chat(
     //     no tab the whole text is the *prefix* and the message is `""`, not the other way round.
     //   - `distribution` is the remap table `0x49aff4` → jump table `0x49afe0`: only
     //     PARTY/RAID/GUILD/BATTLEGROUND get names, every other type byte reports `"UNKNOWN"`.
-    //   - the *fire* must move downstream of the name resolve so `sender` is a name, not a guid.
-    //     The drop can stay here; the fire cannot.
-    //
-    // All four are recorded byte-exact in wow-re `system/ui/scratch/addon-chat-law.md` §3/§4/§6.
+    //   - the *fire* must move downstream of the name resolve (`0x49ccc0`) so `sender` is a name,
+    //     not a guid. The drop can stay here; the fire cannot.
     //
     // The payload rides `debug!` and its own `addon` trace tag rather than vanishing, so
     // mixed-client traffic stays diagnosable: invisible in chat, never invisible to us.
@@ -248,8 +246,8 @@ fn chat(
         );
     }
     // The ignore gate (decision 0668): an ignored speaker is dropped SILENTLY — no line at all —
-    // which is the client's own `FriendList::IsIgnored 0x5ae5a0` check, VERIFIED for the sibling
-    // text-emote path (wow-re `system/ui/scratch/text-emote-composition.md`). A dropped WHISPER
+    // which is the client's own `FriendList::IsIgnored 0x5ae5a0` check, read on the sibling
+    // text-emote path (`0x49dbe0`). A dropped WHISPER
     // additionally tells the server, so the sender gets the "is ignoring you" answer: that is what
     // `CMSG_CHAT_IGNORED` is for, and only the client can send it.
     if social.is_ignored(m.sender_guid) {
@@ -302,8 +300,8 @@ fn chat_wrong_faction(errors: &mut crate::ui_action::UiErrorKeys) {
 /// Byte-verified in the reference: opcode `0x1cb`'s handler is `0x401800` (registered at
 /// `0x40172f`, torn down at `0x401f09`), whose whole body is "read the cstring, then
 /// `mov edx,1; lea ecx,[buf]; call 0x4945b0`" plus a console log (`0x63cd00(…, 3, buf)` — our
-/// `info!` below). `0x4945b0(text, 1)` fires FrameScript event `0xe0` = `UI_ERROR_MESSAGE`
-/// (wow-re `system/ui/ui.md` l.2459). Nothing on this path touches the chat composer.
+/// `info!` below). `0x4945b0(text, 1)` fires FrameScript event `0xe0` = `UI_ERROR_MESSAGE`.
+/// Nothing on this path touches the chat composer.
 ///
 /// **This used to push into the chat feed**, as a stand-in from before benilla had an errors
 /// frame. It has had a real one for a long time — the ref `UIErrorsFrame`, a genuine

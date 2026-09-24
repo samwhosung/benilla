@@ -1,20 +1,22 @@
-//! The battleground **scoreboard** feed (decision 1972; wow-re `battlefield-verb-family.md`):
+//! The battleground **scoreboard** feed (decision 1972):
 //! the app's half of the stock `WorldStateFrame.lua` score frame — the name-resolution barrier,
 //! the team derivation, the column headers, the request throttle and the leave.
 //!
 //! - **The board arrives raw** (`MSG_PVP_LOG_DATA`, GUIDs and numbers, wire order) and the
-//!   reference does nothing with it until EVERY row's name has resolved (§6.1: the last name
-//!   arrival is what rebuilds and fires). Ours asks the name cache for each row every frame it
-//!   is unresolved and pushes the board the frame the last one lands.
-//! - **Team is derived, never wire data** (§6.2): race → faction; `0` Horde, `1` Alliance, `-1`
-//!   for a race the tables do not carry. Race and class strings come off the same traits the
+//!   reference does nothing with it until EVERY row's name has resolved (`0x4aa580` → `0x4aa200`:
+//!   the last name arrival is what rebuilds and fires). Ours asks the name cache for each row every
+//!   frame it is unresolved and pushes the board the frame the last one lands.
+//! - **Team is derived, never wire data** (`0x4aa200`): race → faction; `0` Horde, `1` Alliance,
+//!   `-1` for a race the tables do not carry. Race and class strings come off the same traits the
 //!   name query answered with.
-//! - **Columns are `WorldStateUI.dbc` rows** (`worldstate-ui-law.md`, the `0x2D4` status-3 arm):
+//! - **Columns are `WorldStateUI.dbc` rows** (the `0x2D4` status-3 arm, `0x4aa9c3`–`0x4aaa17`):
 //!   in table order, the first contiguous run of rows whose `MapID` is the battleground's map or
 //!   `-1` and whose `Type` is 2; the text raw, the icon, the tooltip.
 //! - **`UPDATE_BATTLEFIELD_SCORE`** fires here — on a pushed board, and on the status-3 arrival
-//!   the queue flags — BEFORE the queue feed fires `UPDATE_BATTLEFIELD_STATUS` (§4.2's order).
-//! - **The request is throttled to 5000 ms** (§5.1) and the leave carries the active map (§5.3).
+//!   the queue flags — BEFORE the queue feed fires `UPDATE_BATTLEFIELD_STATUS` (`0x4aaa5a` before
+//!   `0x4aab05`).
+//! - **The request is throttled to 5000 ms** (`0x4aa170`) and the leave carries the active map
+//!   (`LeaveBattlefield 0x4abe60`).
 
 use std::time::{Duration, Instant};
 
@@ -186,9 +188,9 @@ mod net {
             .net_handler(SessionEventKind::Disconnected, on_session_end);
     }
 
-    /// The board and the request stamp are zeroed at every login (wow-re
-    /// `battlefield-verb-family.md` §8: module init `0x4a9c40` zeroes the score scalars) — a
-    /// listener on the session end (a second handler on the kind, after the bridge's own teardown).
+    /// The board and the request stamp are zeroed at every login (module init `0x4a9c40` zeroes
+    /// the score scalars) — a listener on the session end (a second handler on the kind, after the
+    /// bridge's own teardown).
     fn on_session_end(In(_): In<SessionEvent>, mut board: ResMut<BattlefieldScoreboard>) {
         *board = BattlefieldScoreboard::default();
     }
@@ -265,7 +267,7 @@ mod tests {
         assert_eq!(cols, ["Flags Returned"]);
     }
 
-    /// **The board is zeroed at every login** (wow-re `battlefield-verb-family.md` §8: module
+    /// **The board is zeroed at every login** (module
     /// init `0x4a9c40`, from `InitializeGame`, zeroes the score scalars) — the last session's
     /// `MSG_PVP_LOG_DATA` must not come back as the next character's scoreboard, and its request
     /// stamp must not throttle that character's first ask.

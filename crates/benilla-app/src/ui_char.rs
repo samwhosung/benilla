@@ -153,10 +153,10 @@ type SkillBlock = Option<(u64, std::collections::HashMap<u16, u16>)>;
 /// `PLAYER_SKILL_INFO` descriptor deltas (verified at the vmangos source: no chat send anywhere
 /// in `UpdateSkill*`/`SetSkill`) — so the client diff-watches its own skill block exactly as the
 /// real one does (the rank-field UpdateField watcher `0x5de180` → message facility `0x496720`,
-/// tokens `ERR_SKILL_UP_SI` / `ERR_SKILL_GAINED_S` — wow-re tradeskill TU-E, correcting 0437's
-/// "SKILL_RANK_UP" token guess), prints the GlobalStrings lines on the Skill chat channel, and
-/// fires `SKILL_LINES_CHANGED` on ANY block change (the skills pane's repaint event; TU-E: the
-/// real client fires it from a separate skill-manager TU on add/remove only — ours riding the
+/// tokens `ERR_SKILL_UP_SI` / `ERR_SKILL_GAINED_S` — correcting 0437's "SKILL_RANK_UP" token
+/// guess), prints the GlobalStrings lines on the Skill chat channel, and fires
+/// `SKILL_LINES_CHANGED` on ANY block change (the skills pane's repaint event; the real client
+/// fires it from a separate skill-manager TU (`0x4d2fec`) on add/remove only — ours riding the
 /// same watcher is a benign coarsening, the pane just repaints). **The message gate** (B19/B245,
 /// decisions 1309/1314): both lines are skipped when the line's `SkillRaceClassInfo.flags`
 /// carries `0x402` (`SkillRaceClass::skill_up_silent`) — the class spec lines, racials,
@@ -166,7 +166,7 @@ type SkillBlock = Option<(u64, std::collections::HashMap<u16, u16>)>;
 /// skill-ups still print. The
 /// login fill (empty → populated) and a character switch (self guid change) re-seed silently —
 /// the event fires, the lines don't. Still open: the exact chat channel of the real emitter
-/// (TU-E left `0x496720`'s routing untraced; Skill is the `ChatTypeInfo` family's own key).
+/// (`0x496720`'s routing is untraced; Skill is the `ChatTypeInfo` family's own key).
 /// One skill-watcher line: resolve the key off the player's own `GlobalStrings.lua`, fill it, and
 /// push it as `CHAT_MSG_SKILL`.
 ///
@@ -283,8 +283,8 @@ fn watch_skill_ups(
                         }
                     }
                     // A NEW line: the ERR_SKILL_GAINED_S line (GlobalStrings.lua:1837) — the
-                    // fold-back's second token (wow-re `tradeskill` TU-E: the watcher emits
-                    // both, first-gain vs rank-up).
+                    // fold-back's second token (the watcher `0x5de180` emits both, first-gain vs
+                    // rank-up).
                     None => {
                         if let Some(name) = name() {
                             if announces() {
@@ -316,8 +316,8 @@ fn watch_skill_ups(
 /// off the line's `categoryId` × `SkillLineCategory.dbc` (name + displayOrder) — pushed via
 /// `set_skills` on change; the ENGINE groups/sorts/folds.
 ///
-/// The inclusion predicate is the client's own list build (`0x4d2cb0`, wow-re
-/// `system/tradeskill/scratch/skillframe-display-list.md`), transcribed in its order: a line needs
+/// The inclusion predicate is the client's own list build (`0x4d2cb0`), transcribed in its
+/// order: a line needs
 /// a `SkillLine.dbc` row, an admitting `SkillRaceClassInfo` row and a real `SkillLineCategory` row;
 /// `flags & 0x2` drops it outright; and a line held at **rank 0** appears only if its flags admit
 /// it at this player's level. Note what is NOT a filter: the `Not Displayed` category (12). We used
@@ -467,15 +467,13 @@ fn weapon_skill_id(
 /// **The split is not `(value, temp + perm)`, which is what this returned until decision 1812.**
 /// The reader every skill-shaped binding goes through is `0x5ea460`, and it writes
 /// `*out1 = value + permBonus` / `*out2 = tempBonus` — the permanent half folds into the BASE and
-/// only the temporary half is the modifier (VERIFIED, wow-re
-/// `ui/scratch/unitrangedattack-skill-pair.md` §3; the field reads are `+0x84C` `movzx` value,
+/// only the temporary half is the modifier (the field reads are `+0x84C` `movzx` value,
 /// `+0x850` `movsx` temp — the block's only sign-extended read — and `+0x852` `movzx` perm).
 ///
 /// The old shape had the right TOTAL and the wrong halves, which is why nothing caught it: the
 /// paper doll's Attack row prints `base` and colours `base + mod`, so a 300-value line with a +5
 /// talent and a +10 aura read "300" with a green +15 where the reference reads "305" with a green
-/// +10. wow-re's own `object-layer/scratch/w2b2.md` had the two inverted as well, and that is
-/// where ours came from; the same round corrected it there.
+/// +10.
 ///
 /// **The perm add is skipped when the value is 0** (`0x5ea4b4 jle`), so an unknown line stays a
 /// flat 0 rather than reading back a bare talent bonus.
@@ -692,7 +690,7 @@ fn slot_view(
         .filter(|&(_, max)| max > 0);
     // ITEM_FIELD_FLAGS — the broken/alert laws' wrapped (0x08) and force-red (0x10) bits.
     let flags = obj.item_flags().unwrap_or(0);
-    // `0x5da2c0` — soulbound, or carrying a binding enchant: the equipped tooltip's §6 Soulbound
+    // `0x5da2c0` — soulbound, or carrying a binding enchant: the equipped tooltip's Soulbound
     // override (B310 — the doll is exactly where it was reported). Read off the raw descriptor,
     // never off the enchant LINES below.
     let already_bound = crate::items::already_bound(obj, rolls.enchants);
@@ -1224,7 +1222,7 @@ pub(crate) fn feed_char(
     // `PLAYERBANKSLOTS_CHANGED`'s two producers, planned off the OLD memo before the push
     // replaces it. `false` = P1, the player-descriptor path (`0x5ddd6e`, no arguments — a bag
     // arriving, leaving or exchanged); `true` = P2, the item-object path (`0x4c728d`,
-    // `arg1 = "player"` — the same bag, its own fields changed). The full carve and why the guid
+    // `arg1 = "player"` — the same bag, its own fields changed). The full account and why the guid
     // is the only sound discriminator are at `ui_items::feed`'s vault twin; decision 2140.
     let bank_bag_guids: [u64; BANK_BAG_SLOT_COUNT] =
         std::array::from_fn(|i| store.0.player_bank_bag_slot(i as u8).unwrap_or(0));
@@ -1259,9 +1257,8 @@ pub(crate) fn feed_char(
         // announces the band whose data it owns, and `feed_char` is ordered first, so both fire
         // after their own push.
         //
-        // **Which arguments it carries depends on WHICH producer fired** (CARVED — wow-re
-        // `system/object-layer/scratch/bank-slot-event-law.md` §3/§4, folded back in 2140). The
-        // descriptor watcher `0x5ddd6e` calls `FrameScript_SignalEvent 0x703e50`, an
+        // **Which arguments it carries depends on WHICH producer fired** (folded back in 2140).
+        // The descriptor watcher `0x5ddd6e` calls `FrameScript_SignalEvent 0x703e50`, an
         // `__fastcall(ecx = id)` with a plain `ret` and no vararg push — zero Lua values; the
         // item-object notifier `0x4c728d` goes through `SignalEvent2` and pushes the literal
         // string `"player"`. benilla fired the argless one for both until 2140. An event is fired
@@ -1344,8 +1341,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     /// **The skill pair splits `(value + PERM, TEMP)`, not `(value, temp + perm)`** — the reader
-    /// every skill-shaped binding goes through (`0x5ea460`, VERIFIED: wow-re
-    /// `ui/scratch/unitrangedattack-skill-pair.md` §3).
+    /// every skill-shaped binding goes through (`0x5ea460`).
     ///
     /// It reported the right TOTAL and the wrong halves until decision 1812, which is exactly why
     /// nothing caught it: `UnitAttackBothHands`'s caller prints the base and colours `base + mod`,

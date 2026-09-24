@@ -156,9 +156,8 @@ pub(crate) fn compose(
             // the code was not, which cost every Horde character a `[Orcish]` tag on ordinary
             // faction chat and stripped the tag from Common. The reference's test is
             // `arg3 ~= this.defaultLanguage` and `GetDefaultLanguage()` answers the **faction**
-            // tongue, so it reads Orcish for a Horde body (wow-re
-            // `system/ui/scratch/chat-language-scramble.md` §10/§12: the tag is FrameXML's and its
-            // condition is about the *default* language, never about whether the language is
+            // tongue, so it reads Orcish for a Horde body (`0x5ec890`; the tag is FrameXML's and
+            // its condition is about the *default* language, never about whether the language is
             // understood — a character who knows both Common and Dwarvish still sees `[Dwarvish]`
             // on a line they read perfectly).
             //

@@ -1,5 +1,5 @@
-//! The combat-log lines that are **not packet-driven at all** — the two families §3 of wow-re's
-//! `combat-log-chat-law.md` singles out, plus the pet-loyalty leaf.
+//! The combat-log lines that are **not packet-driven at all** — the reference's two families of
+//! them, death and aura, plus the pet-loyalty leaf.
 //!
 //! Everything else in [`super`] hangs off an SMSG arm. These three hang off *descriptor changes*,
 //! exactly as the reference does:
@@ -69,7 +69,7 @@ impl WatchCtx<'_> {
     }
 
     /// The reference's ONE-SIDED range test — the shape 15 formatters run instead of the two-ended
-    /// gate (§5.2), the death and aura lines among them. One participant, one distance.
+    /// gate `0x626630`, the death and aura lines among them. One participant, one distance.
     ///
     /// **`range` is the caller's**, because the death line does not use the class table: its
     /// formatter `0x62c160` reads `CombatDeathLogRange` first (`0x62c19c`) and only falls back to
@@ -123,8 +123,8 @@ const DESTROYED_EFFECTS: [u32; 10] = [50, 74, 87, 88, 89, 90, 104, 105, 106, 107
 ///
 /// **The XP-award suppression is deliberately not modelled**, and is named rather than dropped:
 /// `[CGUnit+0xc58] bit 3`, set only in the `SMSG_LOG_XPGAIN` chain, makes the death reflex emit the
-/// award line *instead of* the plain death line (§5.9). wow-re found no clearing site for the bit,
-/// so whether it survives a second death is UNSETTLED there — and modelling an unsettled latch is
+/// award line *instead of* the plain death line (`0x62c23e`). No clearing site for the bit is
+/// known, so whether it survives a second death is UNSETTLED — and modelling an unsettled latch is
 /// how you get a line that silently stops appearing. The visible consequence today is one extra
 /// "%s dies." beside the XP line on a kill that awards experience.
 pub(crate) fn death_lines(
@@ -190,9 +190,9 @@ pub(crate) fn death_lines(
 ///   fresh slot's count is not a rise (its `AURA` dword moved in the same block, so its byte is
 ///   skipped here).
 ///
-/// **HARMFUL is the SLOT INDEX, not a flag** (§4.4, three byte sites): slots `0x20`–`0x2f` are
-/// harmful, every other slot helpful. `UNIT_FIELD_AURAFLAGS` is only an occupancy predicate — using
-/// it here would be the wrong mechanism that happens to agree most of the time.
+/// **HARMFUL is the SLOT INDEX, not a flag** (three byte sites, e.g. `0x61238e`): slots
+/// `0x20`–`0x2f` are harmful, every other slot helpful. `UNIT_FIELD_AURAFLAGS` is only an occupancy
+/// predicate — using it here would be the wrong mechanism that happens to agree most of the time.
 pub(crate) fn aura_lines(
     ctx: WatchCtx,
     stores: Query<(Entity, &ObjectStore)>,
@@ -201,7 +201,7 @@ pub(crate) fn aura_lines(
     mut log: ResMut<ChatLog>,
 ) {
     use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_AURAAPPLICATIONS};
-    /// The first harmful aura slot — `0x20`. Slots below it are helpful (§4.4).
+    /// The first harmful aura slot — `0x20`. Slots below it are helpful (`0x61238e`).
     const FIRST_HARMFUL_SLOT: u16 = 0x20;
     const SLOTS: u16 = benilla_protocol::messages::UNIT_AURA_SLOTS as u16;
     let harmful = |slot: u16| slot >= FIRST_HARMFUL_SLOT;

@@ -4,8 +4,8 @@
 //!
 //! ## The three predicates are three different predicates
 //!
-//! VERIFIED at the 1.12.1 bytes (wow-re `system/object-layer/scratch/bind-confirm-law.md`), one
-//! `item_template + 0x194` compare per arm and **no `+0x1c` (quality) read in any of the three**:
+//! In the 1.12.1 client, one `item_template + 0x194` compare per arm and **no `+0x1c` (quality)
+//! read in any of the three**:
 //!
 //! | arm | event | fires from | predicate | site |
 //! |---|---|---|---|---|
@@ -16,8 +16,8 @@
 //!
 //! Carrying the loot arm's `quality >= 2` across would have been wrong twice over: it would have
 //! silenced the confirm on a white BoE, and it would have asked about the wrong `bonding` value
-//! entirely. (This was benilla's working assumption until the RE refuted it; that is why the table
-//! is here and not a sentence.)
+//! entirely. (This was benilla's working assumption until the reference refuted it; that is why the
+//! table is here and not a sentence.)
 //!
 //! ## The other conjuncts, and where benilla already had them
 //!
@@ -48,8 +48,8 @@
 //!
 //! ## The index space is the reference's own
 //!
-//! `arg1` is a **0-based index into the pending array**, not a slot (wow-re corrected benilla's
-//! assumption here). It is opaque on both sides — the event hands it out, `dialog.data` carries it,
+//! `arg1` is a **0-based index into the pending array**, not a slot (allocated by `0x5e1110`).
+//! It is opaque on both sides — the event hands it out, `dialog.data` carries it,
 //! and the two verbs hand it straight back — so unlike the loot arm's row number (1744, translated
 //! into benilla's display space) there is nothing to gain by re-basing it, and it is kept as-is.
 

@@ -110,8 +110,7 @@ pub(super) struct ChatProbes<'w, 's> {
 ///
 /// - `stand`/`sheath` — the two setters `DoEmote` drives besides the packet: the **posture**
 ///   (`EmoteSpecProc == 1` → `SetStandState`) and the **stow** (`SetSheatheState(0, SNAP)`,
-///   unconditional on every emote that passes the gates — wow-re `sheath-policy.md` §1, site
-///   `0x5ef630`).
+///   unconditional on every emote that passes the gates — site `0x5ef630`).
 /// - `target`/`assist` — the by-name selection asks (decision 0886), answered by
 ///   [`crate::target`]'s shared resolver so they commit through the same SetSelection path a click
 ///   does. Chat never writes [`Selection`] itself.
@@ -182,9 +181,9 @@ fn engine_verbs(
 /// **A manual join or leave of `GuildRecruitment` turns the auto-join option off** — the
 /// reference's `0x49ed3d` (join) and `0x49ef8f` (leave), each `call 0x49ea70(0)` gated on the
 /// matched `ChatChannels.dbc` row carrying `flags & 0x20000` and on the caller's own flag, which
-/// the Lua bindings pass and the cascade's internal calls do not (wow-re
-/// `guild-recruitment-mode.md` §3; decision 2144). The player has taken manual control, and an
-/// option left checked would silently re-join or re-leave behind them.
+/// the Lua bindings pass and the cascade's internal calls do not (decision 2144). The player has
+/// taken manual control, and an option left checked would silently re-join or re-leave behind
+/// them.
 fn manual_join_or_leave(
     channels: &super::edit::ChannelState,
     script: &mut benilla_ui::script::UiScript,
@@ -776,9 +775,8 @@ pub(super) fn drain_chat_input(
                     }
                 }
             }
-            // `DoEmote` (`0x5ef560`) end to end — wow-re `object-layer/scratch/emote-posture-
-            // gate.md` §1. The gates in the client's own order, then the two things it DOES: set a
-            // posture (the `/sit` family) and send the packet.
+            // `DoEmote` (`0x5ef560`) end to end. The gates in the client's own order, then the two
+            // things it DOES: set a posture (the `/sit` family) and send the packet.
             ParsedChat::TextEmote(text_id) => {
                 let (stand_state, flags) = self_player
                     .single()
@@ -1448,13 +1446,12 @@ fn combat_log_battery(log: &mut super::feed::ChatLog, get: &dyn Fn(&str) -> Opti
     }
 }
 
-/// The send-side emote **posture-eligibility gate** (wow-re `object-layer/scratch/emote-posture-
-/// gate.md`, commit `f9584b45`, §0): the real client's `CheckEmoteEligible` (`0x47db40`), the *only*
-/// site that reads an `Emotes.dbc` `EmoteFlags` — called from `DoEmote` (`0x5ef560`) *before*
-/// `CMSG_TEXT_EMOTE` is built, so a suppressed emote sends no packet and plays no local anim at all
-/// (a seated `/bow` self-censors; the server round-trip never happens). Byte-verified predicate,
-/// exactly these four tests in the note's site order. `true` = eligible (send + play); `false` =
-/// suppress both.
+/// The send-side emote **posture-eligibility gate**: the real client's `CheckEmoteEligible`
+/// (`0x47db40`), the *only* site that reads an `Emotes.dbc` `EmoteFlags` — called from `DoEmote`
+/// (`0x5ef560`) *before* `CMSG_TEXT_EMOTE` is built, so a suppressed emote sends no packet and
+/// plays no local anim at all (a seated `/bow` self-censors; the server round-trip never happens).
+/// The predicate is exactly these four tests, in the client's own order. `true` = eligible (send +
+/// play); `false` = suppress both.
 ///
 /// # The fifth flag, `0x4000` — NOT built, and the reason recorded here was WRONG
 ///
@@ -1475,9 +1472,8 @@ pub(super) enum EmoteGate {
 }
 
 /// This doc used to say `0x4000` ("requires standing still") *"only sets an out param the client
-/// acts on while fear/confuse-controlled, which benilla doesn't model"*. A §5 trio carve of the
-/// neighbouring stand-state gate re-read the leg and **inverted that polarity**
-/// (wow-re `standstate-movement-trigger.md` §5.6, 2026-08-23; decision 1582). The bytes:
+/// acts on while fear/confuse-controlled, which benilla doesn't model"*. The polarity is the
+/// **inverse** (2026-08-23; decision 1582). The bytes:
 ///
 /// - `0x47dbab` tests `EmoteFlags & 0x4000`, and if set, `0x47dbb3` tests the live `CMovement`
 ///   word against **`0x20ff`** — the four direction bits, the two turn bits, the two pitch bits and
@@ -1535,11 +1531,10 @@ pub(super) fn emote_send_eligible(
 
 /// `PLAYER_FLAGS_DND` (`0x4`) off our own live descriptor — the DND arm's state test.
 ///
-/// **Live, not mirrored, and that asymmetry is the reference's** (wow-re
-/// `afk-dnd-command-law.md` §8): the AFK path keeps an optimistic global and the DND path keeps
-/// nothing, so a second `/dnd` typed before the server's `PLAYER_FLAGS` update lands still reads
-/// DND clear and re-marks, where a second `/afk` in the same window clears. Do not "fix" this into
-/// a symmetric pair.
+/// **Live, not mirrored, and that asymmetry is the reference's** (`0x49f3f0`): the AFK path keeps
+/// an optimistic global and the DND path keeps nothing, so a second `/dnd` typed before the
+/// server's `PLAYER_FLAGS` update lands still reads DND clear and re-marks, where a second `/afk`
+/// in the same window clears. Do not "fix" this into a symmetric pair.
 fn is_dnd(self_q: &Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>) -> bool {
     self_q
         .iter()
@@ -1607,7 +1602,7 @@ pub(super) fn drain_addon_chat_sends(
         // `SendChatMessage 0x49f1e0` is not a uniform dispatcher: AFK and DND each carry their own
         // arm ahead of the generic send, and EVERY other type first clears a standing AFK. The
         // whole law — the four `CHAT_MSG_SYSTEM` lines, the client-side default substitution, the
-        // optimistic mirror — is `super::away`, off wow-re's `afk-dnd-command-law.md` §12 table.
+        // optimistic mirror — is `super::away`, off the reference's truth table.
         let strings = |key: &str| crate::ui_chat::combat::global_string(&script, key);
         let wire = kind.wire();
         let text = match wire {
@@ -1622,8 +1617,8 @@ pub(super) fn drain_addon_chat_sends(
                 out.body
             }
             crate::net::ChatKind::Dnd => {
-                // The live descriptor bit, not a mirror: DND has none (§8), which is what makes a
-                // repeated `/dnd` re-mark where a repeated `/afk` clears.
+                // The live descriptor bit, not a mirror: DND has none (`0x49f3f0`), which is what
+                // makes a repeated `/dnd` re-mark where a repeated `/afk` clears.
                 let out = super::away::dnd_line(&send.text, is_dnd(&self_q), &strings);
                 if let Some(line) = out.line {
                     super::away::push_system(&mut chat_log, line);

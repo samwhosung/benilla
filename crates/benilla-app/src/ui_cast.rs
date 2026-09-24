@@ -51,8 +51,7 @@ pub(crate) enum CastBarEdge {
 pub(crate) struct CastBarFeed(pub(crate) Vec<CastBarEdge>);
 
 /// `SPELLCAST_START`'s **name argument** — what the reference `CastingBarFrame` puts straight into
-/// `CastingBarText:SetText(...)` for a *cast*. Byte-verified at `0x6e7a2d`–`0x6e7a47` (wow-re
-/// `spell/scratch/wave-cast.md`, "The casting-bar TEXT law", §5 cross-checked): the handler tests
+/// `CastingBarText:SetText(...)` for a *cast*. At `0x6e7a2d`–`0x6e7a47` the handler tests
 /// `AttributesEx3 & 0x4` and pushes **the empty string `0x882748`** when set, `Name[locale]` when
 /// clear — the event still fires either way, carrying its duration, so the bar is a normal
 /// full-length *untitled* bar rather than a hidden one.
@@ -85,7 +84,7 @@ fn cast_bar_label(spells: Option<&crate::ui_action::Spells>, id: u32) -> String 
 /// all** and the bar never appears.
 ///
 /// The handler is 147 bytes and every one of its gates is here, in its order (decomp
-/// `FUN_006e7550`; disassembly quoted in wow-re `system/spell/scratch/wave-cast.md` §0x6e7550):
+/// `FUN_006e7550`; the disassembly of `0x6e7550`):
 ///
 /// ```text
 /// 6e7571  test eax,eax / jle 6e75d8      ; (1) duration <= 0            -> NO EVENT
@@ -159,7 +158,7 @@ fn channel_start_args(
 /// conditions under which `0x6e7550` returns without firing, and the bar then never appears.
 ///
 /// Also pushes the frame's stoppable mirror (running auto-repeat OR the [`Inflight`] slot — NOT
-/// a channel, which `SpellStopCasting()` answers nil for: wow-re `esc-stopcasting.md`) into the
+/// a channel, which `SpellStopCasting 0x6e6e80` answers nil for) into the
 /// VM **after** [`local_self_cancel`] resolved, so the ESC chain's `SpellStopCasting()` reads
 /// post-cancel truth when `UiInput` runs later this frame.
 ///

@@ -9,7 +9,7 @@
 //! `SPELL_*` block is the combat-log content arc, deliberately out — 0288 §3, except
 //! `COMBAT_XP_GAIN`, pulled in by the ding arc 0304: the XP line is part of leveling feedback);
 //! the group tables are `ChatTypeGroup` transcribed; the colors are the complete shipped default
-//! table (the ref client's own `chat-cache.txt` COLORS block ≡ wow-re's byte-verified
+//! table (the ref client's own `chat-cache.txt` COLORS block ≡ the
 //! `.rdata 0x804710` table, double-sourced in 0288's pin).
 //!
 //! This module also carries the **Lua face** of that currency: [`event_name`]
@@ -333,8 +333,7 @@ impl ChatEventKind {
 /// **The arg list is TEN wide, and its shape is byte-pinned.** The client's per-type fire helper
 /// `0x49b0b0` (reached from the chat chokepoint `0x49a870` at `0x49ac9a`) calls
 /// `FrameScript_SignalEvent 0x703f50` with the format string `"%s%s%s%s%s%s%d%d%s%d"`
-/// (`.rdata 0x844608`) — wow-re `system/ui/scratch/rested-xp-bindings.md` §9, VERIFIED there in
-/// the course of the rest-state RE. So **arg1..arg6 are strings, arg7 and arg8 are numbers, arg9
+/// (`.rdata 0x844608`). So **arg1..arg6 are strings, arg7 and arg8 are numbers, arg9
 /// is a string, arg10 is a number**, and not one of them is ever `nil`: `ChatFrame_OnEvent`
 /// compares `arg7 > 0` and `arg10 > 0` bare, which under Lua 5.0 errors on a nil. Every slot is
 /// always passed — zero or empty when unused.
@@ -386,11 +385,10 @@ impl ChatEventKind {
 ///
 /// **Corrections on record.** This comment previously listed args 1-6, 8 and 9 only — arg7 and
 /// arg10 were absent, and arg7 is a real slot the reference's own channel routing turns on. The
-/// omission was ours. The whole map is now byte-verified end to end in wow-re
-/// `system/ui/scratch/chat-msg-event-args.md` (T2), which also **refutes** 0288's standing lead
-/// that rf77 had traced this marshaller: rf77's trace was opcode `0x92` = SMSG_GUILD_EVENT,
-/// misfiled. Real `SMSG_MESSAGECHAT` is `0x96` → `0x49d560` and matches vmangos branch for branch,
-/// which is what benilla's decode already did.
+/// omission was ours. The whole map is now read end to end off `0x49b0b0`, which also **refutes**
+/// 0288's standing lead that an earlier trace had covered this marshaller: that trace was opcode
+/// `0x92` = SMSG_GUILD_EVENT, misfiled. Real `SMSG_MESSAGECHAT` is `0x96` → `0x49d560` and matches
+/// vmangos branch for branch, which is what benilla's decode already did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ChatEvent {
     pub kind: Option<ChatEventKind>,
@@ -574,9 +572,8 @@ pub(crate) fn event_name(kind: ChatEventKind) -> &'static str {
 /// are asserted against each other rather than left to drift
 /// (`ui_chat::tests::every_rendered_notice_has_a_token`).
 ///
-/// Byte-for-byte identical to the client's own jump table (`0x49c60c`, 32 direct arms), verified
-/// arm by arm in wow-re `chat-msg-event-args.md` §9 — checked against that table after the fact,
-/// not derived from it.
+/// Byte-for-byte identical to the client's own jump table (`0x49c60c`, 32 direct arms) — checked
+/// against that table after the fact, not derived from it.
 ///
 /// `None` = a byte the reference passes no token for: `0x00`/`0x01` are the CHANNEL_JOIN /
 /// CHANNEL_LEAVE member lines (their arg1 is the empty string, not a token), `0x0C` MODE_CHANGE
@@ -586,8 +583,7 @@ pub(crate) fn event_name(kind: ChatEventKind) -> &'static str {
 ///
 /// **Two of the arms are state-dependent** (decision 2130): the client answers `"YOU_CHANGED"` for
 /// `0x02` and `"SUSPENDED"` for `0x03` when its own channel record is in the matching state
-/// (`rec+0x9c == 2` at `0x49c087` / `== 3` at `0x49c0e0`; wow-re
-/// `zone-chat-channel-autojoin.md` §11.3, VERIFIED), and both alternates are real
+/// (`rec+0x9c == 2` at `0x49c087` / `== 3` at `0x49c0e0`), and both alternates are real
 /// `CHAT_<X>_NOTICE` strings —
 /// *"Changed Channel: [%s]"* and *"Left Channel: [%s]"*. We modelled neither until the zone walk's
 /// registration loss made it matter: `arg1` is what the stock `ChatFrame_OnEvent` branches on, and
@@ -645,7 +641,7 @@ pub(crate) fn notice_token(
 /// The kind's row in the shipped colour table — what the chat bubble and the edit box's header
 /// tint with. The window's own line colour is `ChatTypeInfo`'s, in the reference's Lua (1948).
 ///
-/// The complete shipped table (chat-cache COLORS ≡ wow-re `chat-color-table.md`, both quoted in
+/// The complete shipped table (chat-cache COLORS ≡ `.rdata 0x804710`, both quoted in
 /// 0288's pin; entries this kind set carries).
 pub(crate) fn default_color(kind: ChatEventKind) -> [u8; 3] {
     use ChatEventKind as K;

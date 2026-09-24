@@ -237,7 +237,7 @@ pub(in crate::ui_chat) fn parse_line(table: &SlashCommands, line: &str) -> Parse
 /// 0x700010` routes `=` to its default arm as ordinary content, the `[` arm at `0x6ff771` makes
 /// exactly one comparison (`cmp eax,0x5b`), and a `[=` therefore leaves the lexer holding the
 /// single-character token `[`, which `prefixexp 0x6fde40` refuses with ``unexpected symbol near
-/// `['`` (wow-5875-re `lua-dialect.md` §9.2, verified and executed).
+/// `['`` (measured on the reference client's own Lua loader).
 ///
 /// 2101 removed the three 5.1 grammar additions the corpus probes and left the levelled long
 /// bracket standing, on a measurement of **zero occurrences** across FrameXML, GlueXML,

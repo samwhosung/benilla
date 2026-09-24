@@ -176,7 +176,7 @@ fn the_auto_join_walk_names_the_channels_the_server_resolves() {
 
     // The city word is DBC data, so read it the way the walk does rather than spelling it here —
     // that this resolves to "City" at all is the finding (`AreaTable.dbc` row 3459,
-    // `Flags & 0x200`; wow-re `zone-chat-channel-autojoin.md` §3).
+    // `Flags & 0x200`, the row `0xb4e4f0` caches).
     let areas = benilla_formats::load_area_table_catalog(&mut chain).expect("AreaTable.dbc");
     let city = super::channels::city_word(&areas);
     assert_eq!(

@@ -34,7 +34,7 @@
 //! wire carries none for anyone but yourself). It **does** carry the display filter, though: an aura
 //! whose spell is flagged never-display (`NO_AURA_ICON`/`DO_NOT_DISPLAY` — a warrior stance) is
 //! hidden on *every* aura display, target rows included, not just the player's own bar (decision
-//! 0417, correcting 0268's scope note and wow-re §9 — the director watched the reference hide a
+//! 0417, correcting 0268's scope note — the director watched the reference hide a
 //! target's Battle Stance, which the "other-unit reads straight" reading can't explain: `NO_AURA_ICON`
 //! means exactly that, everywhere). A self-target is the one exception in *ordering*: decision 0257 §2
 //! resolves the Era API's single `UnitAura` toward the player-bar law under every token, so targeting
@@ -372,7 +372,7 @@ fn other_unit_auras(
 }
 
 /// **`UnitBuff 0x519500`'s unit-level gate** — may this unit's *buffs* be enumerated at all?
-/// (Decision 1035; byte-derived in wow-re `ui/scratch/aura-display-pipeline.md` §9b.)
+/// (Decision 1035.)
 ///
 /// This sits **before** the per-slot walk and outranks it: when it fails, `UnitBuff` pushes a
 /// single nil for **every** index without examining one slot, so the unit shows *no buffs*
@@ -471,19 +471,18 @@ fn until_cancelled(
 /// The reference's aura display filter (decisions 0268 + 0417): an aura is shown iff its spell is
 /// *not* flagged never-display (`SPELL_ATTR_DO_NOT_DISPLAY` / `SPELL_ATTR_EX_NO_AURA_ICON`, via
 /// `SpellDisplay::hidden_from_aura_bar`) **and** is not a tracking spell
-/// (`SpellDisplay::tracking_aura` — the `{0x2c,0x2d,0x97}` effect exclusion both byte-verified
-/// filters carry: the player-cache rebuild skips a tracking aura *before* the insert, diverting it
-/// to the tracking global instead, and `IsAuraDisplayable 0x519860` hides it from other units'
-/// rows the same way; wow-re `aura-display-pipeline.md` §3/§9a). This holds on **every** aura
-/// display — the player's own bar and any other unit's rows alike (the director watched the
-/// reference hide a target's Battle Stance; 0417 corrects 0268's player-only scope note and
-/// wow-re §9). A spell the catalog can't resolve stays visible — fail-open, like every other
-/// catalog miss in the feed.
+/// (`SpellDisplay::tracking_aura` — the `{0x2c,0x2d,0x97}` effect exclusion both filters carry:
+/// the player-cache rebuild `PlayerAuras_Update 0x4e4170` skips a tracking aura *before* the
+/// insert, diverting it to the tracking global instead, and `IsAuraDisplayable 0x519860` hides it
+/// from other units' rows the same way). This holds on **every** aura display — the player's own
+/// bar and any other unit's rows alike (the director watched the reference hide a target's Battle
+/// Stance; 0417 corrects 0268's player-only scope note). A spell the catalog can't resolve stays
+/// visible — fail-open, like every other catalog miss in the feed.
 ///
 /// **That fail-open is ours, not the reference's, on this path** — the parenthetical that used to
 /// justify it here ("like the reference's own no-SpellRec path, which inserts") was true of the
-/// *player cache* (§3) and is FALSE of the non-player walk: `UnitBuff`/`UnitDebuff` **skip** a slot
-/// whose id has no `Spell.dbc` row (`id > [0xc0d78c]` or a null row; wow-re §9c, decision 1035).
+/// *player cache* and is FALSE of the non-player walk: `UnitBuff`/`UnitDebuff` **skip** a slot
+/// whose id has no `Spell.dbc` row (`id > [0xc0d78c]` or a null row; decision 1035).
 /// Kept as fail-open deliberately: every id on the wire is a real spell, so the two behaviours are
 /// indistinguishable in practice, and failing *closed* would let a catalog load hiccup silently
 /// blank every aura on every frame. A knowing divergence, recorded — not a comment asserting
@@ -494,8 +493,8 @@ fn shown_in_aura_ui(catalog: Option<&SpellCatalog>, spell_id: u32) -> bool {
         .is_none_or(|d| !d.hidden_from_aura_bar() && !d.tracking_aura())
 }
 
-/// The player's active tracking aura — the reference's tracking global (`DAT_00bc6378`, wow-re
-/// `aura-display-pipeline.md` §3): the cache rebuild walks the raw slots **ascending** and each
+/// The player's active tracking aura — the reference's tracking global (`DAT_00bc6378`): the
+/// cache rebuild walks the raw slots **ascending** and each
 /// visible tracking-effect aura overwrites it, so the LAST one wins. The attribute clauses are
 /// tested *first* in the reference (the `goto` skips the effect loop), so an attribute-hidden
 /// tracking spell never lands here; a catalog miss can't be identified as tracking and lands in
@@ -735,7 +734,7 @@ fn feed_auras(
         .and_then(|&e| stores.get(e).ok())
         // **The pet keeps the ungated read, deliberately** (decision 1035). A pet is
         // PLAYER_CONTROLLED, which sends `CanAssist` down an arm (`0x60673e`-`0x60679f`, keyed on
-        // an `[obj+0xe68]` record) wow-re did NOT name — so the gate is not known here, and
+        // an `[obj+0xe68]` record) not yet named — so the gate is not known here, and
         // guessing it is the one mistake that could blank a working pet frame. `true` is the
         // status quo; the pet frame draws only debuffs today anyway (0990), so nothing observable
         // rides on it until that arm is derived.
@@ -1044,8 +1043,8 @@ mod tests {
         assert!(shown_in_aura_ui(Some(&catalog), 0xffff_fffe));
     }
 
-    /// The tracking half of the display filter (the Pass-2 law, wow-re `aura-display-pipeline.md`
-    /// §3: the `{0x2c,0x2d,0x97}` effect exclusion + the tracking global), against the REAL 5875
+    /// The tracking half of the display filter (Pass 2 of `PlayerAuras_Update 0x4e4170`: the
+    /// `{0x2c,0x2d,0x97}` effect exclusion + the tracking global), against the REAL 5875
     /// `Spell.dbc`: a tracking aura rides a visible `UNIT_FIELD_AURA` slot but never reaches any
     /// bar — it is diverted to the tracking state instead, and the ascending walk's LAST tracking
     /// aura wins the global. Skips without client data.

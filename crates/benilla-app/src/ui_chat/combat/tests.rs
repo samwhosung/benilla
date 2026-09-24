@@ -325,8 +325,8 @@ fn the_silent_victim_states_emit_no_melee_line() {
     assert_eq!(melee_family(0, 5, 0, 0).map(|f| f.stem), Some("VSBLOCK"));
 }
 
-/// The melee msgType matrix, against `0x62a0d0`/`0x62a2e0` as decompiled and against wow-re's
-/// byte-verified 94-entry type table (whose 1-based index is one more than the selector's return).
+/// The melee msgType matrix, against `0x62a0d0`/`0x62a2e0` as decompiled and against the 94-entry
+/// type table `.rdata 0x804710` (whose 1-based index is one more than the selector's return).
 #[test]
 fn the_melee_matrix_is_the_reference_selector() {
     use ChatEventKind as K;

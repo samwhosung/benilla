@@ -639,9 +639,9 @@ fn a_channel_notice_fires_its_token_and_the_reference_reads_arg7_and_arg10_bare(
 /// **MODE_CHANGE produces no chat event at all** — not a silent one.
 ///
 /// This test replaced an earlier one that asserted the opposite (that a notice the UI renders
-/// silently still reaches Lua, using MODE_CHANGE as the example). The byte-level carve settled it
+/// silently still reaches Lua, using MODE_CHANGE as the example). The bytes settle it
 /// the other way: `0x49c24d`, the `0x0C` arm of the notice jump table, calls `0x49e910` and
-/// **returns** — it never reaches the fire (wow-re `chat-msg-event-args.md` §9). So the right
+/// **returns** — it never reaches the fire. So the right
 /// behaviour is what our feed already does: drop it before it becomes an event, which is what this
 /// now asserts.
 #[test]
@@ -677,7 +677,7 @@ fn a_mode_change_notice_never_becomes_an_event() {
 
 /// A channel line whose channel we are **not** in leaves all four channel slots empty — arg4 falls
 /// back to the bare name and arg7/arg8/arg9 stay `0/0/""`. They are one record in the reference
-/// (`slot+0x00/+0x04/+0x94/+0x98`), so they are one record here (`chat-msg-event-args.md` §§4, 7-10).
+/// (`slot+0x00/+0x04/+0x94/+0x98`, defaulted together at `0x49b12f`), so they are one record here.
 #[test]
 fn a_channel_we_are_not_in_fires_the_bare_name_and_zeroes() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -781,7 +781,7 @@ fn a_channel_notice_renders_in_the_channels_color_not_the_notice_row() {
 /// **Crossing a zone border must not deregister the channel it renames** (decision 2130).
 ///
 /// The walk sends `LEAVE(General - Elwynn Forest)` then `JOIN(General - Westfall)` — one DBC row,
-/// renamed, and the retail sniff in wow-re `zone-chat-channel-autojoin.md` §7 shows exactly that
+/// renamed, and the retail 1.8.1 Winterspring sniff shows exactly that
 /// pair on the wire. The server answers each with a notice, and the stock `ChatFrame_OnEvent`'s
 /// `YOU_LEFT` arm **deletes the window's registration for whatever it matched**
 /// (`ChatFrame.lua` l.1382-1384):
@@ -910,7 +910,7 @@ fn a_zone_change_must_not_deregister_the_channel_it_renames() {
 /// **Walking out of a capital SUSPENDS Trade — it does not free it** (decision 2130).
 ///
 /// The zone walk's other leave: a row that stops applying entirely, which in the 1.12 data means
-/// exactly `Trade` when you step out of a city (wow-re `zone-chat-channel-autojoin.md` §5). The
+/// exactly `Trade` when you step out of a city (the city gate `0x49a3b8`). The
 /// `CMSG_LEAVE_CHANNEL` still goes out, but the client marks its own slot state 3 (`0x49bcf0`) and
 /// keeps the record — so the notice comes back as the `SUSPENDED` token, the stock handler's
 /// `YOU_LEFT` arm never runs, and the window keeps its registration. Walking back in re-joins
@@ -1797,7 +1797,7 @@ fn self_controlled_is_true_for_an_ordinary_player() {
 }
 
 // ── The send-side posture-eligibility gate (`emote_send_eligible`) — the director-verified rows
-// from wow-re `emote-posture-gate.md` §3, real `Emotes.dbc` `EmoteFlags` values.
+// against `CheckEmoteEligible 0x47db40`, real `Emotes.dbc` `EmoteFlags` values.
 const BOW: u32 = 0x4801;
 const RUDE: u32 = 0x0001;
 const APPLAUD: u32 = 0x0000;
@@ -1864,8 +1864,8 @@ fn unconditional_and_sleep_dead_rules() {
 ///
 /// `CHAT_MSG_ADDON` (event 227) carries `(prefix, message, distribution, sender)`. The text divides
 /// on its **FIRST** tab (`0x49a8d0`) — and with **no tab at all the whole text is the PREFIX** with
-/// an empty message, not the reverse. wow-re records that direction explicitly because it is the
-/// counter-intuitive one; this test is where it is pinned.
+/// an empty message, not the reverse. That direction is the counter-intuitive one; this test is
+/// where it is pinned.
 ///
 /// `distribution` is the remap at `0x49aff4`: only the four lanes have names, and anything else
 /// reports `"UNKNOWN"` rather than being dropped — the reference hands the addon a string it can
@@ -1917,7 +1917,7 @@ fn an_inbound_addon_line_splits_on_the_first_tab_only() {
 /// silently wrong — an addon reading `arg3` as the sender instead of the distribution gets a string
 /// either way and misbehaves without erroring.
 ///
-/// wow-re carves the shape as `SignalEvent2(227, "%s%s%s%s", prefix, message, distribution, sender)`
+/// The reference fires `SignalEvent2(227, "%s%s%s%s", prefix, message, distribution, sender)`
 /// (`0x49a95f`); `BigWigs` self-delivers the identical order by hand. The handler below records all
 /// four positionally, so a reordering fails on the values rather than on a count.
 #[test]
@@ -2019,7 +2019,7 @@ fn an_addon_message_survives_its_own_send_and_receive() {
 ///
 /// `ChatFrame.lua`'s test is `strlen(arg3) > 0 and arg3 ~= "Universal" and arg3 ~= this.defaultLanguage`,
 /// and `GetDefaultLanguage()` answers the **faction** language — Common for every Alliance race,
-/// Orcish for every Horde one (wow-re `chat-language-scramble.md` §12, and benilla's own
+/// Orcish for every Horde one (`0x5ec890`, and benilla's own
 /// `ChrRaces` field-8 join). The composer hardcoded `"Common"`, which is right for half the game
 /// and exactly backwards for the other half: a Horde character saw `[Orcish]` on every ordinary
 /// line of their own faction's chat, and no tag at all on the Common they cannot read.
@@ -2083,8 +2083,7 @@ fn the_language_header_suppresses_only_the_frames_own_default_tongue() {
 /// language-independent, and a Horde player yelling `lol` laughs for every observer, Alliance
 /// included.
 ///
-/// This is byte-verified rather than reasoned (wow-re `chat-language-scramble.md` §10.1), and it
-/// corrects an inference we had already wired: the §5's consumer census of the display path
+/// This corrects an inference we had already wired: the consumer census of the display path
 /// `0x49a870` found the chat line, the Lua `arg1` and the bubble all sharing the rewritten buffer,
 /// and we concluded the gesture did too. It does not — the selector is not on that path at all. It
 /// lives in the **parser** `0x49d560` at `0x49d820`-`0x49d8ae`, matching against `[ebp-0x10]`, which
@@ -2798,8 +2797,8 @@ fn the_chat_cache_restore_is_finished_before_player_login() {
         "ChatFrame1 must carry the SYSTEM message group at PLAYER_LOGIN, not {:?}",
         read("ChatOrderProbe.loginRegistered")
     );
-    // The reference's own login order, byte-derived (wow-re `login-chat-colour-pipeline.md`;
-    // decision 2125): addons and their `ADDON_LOADED` (`0x4900a3`), then `VARIABLES_LOADED`
+    // The reference's own login order (decision 2125): addons and their `ADDON_LOADED`
+    // (`0x4900a3`), then `VARIABLES_LOADED`
     // (`0x4900b2`), then the chat-cache reader's burst (`0x4900d6`), then `PLAYER_LOGIN`
     // (`0x490959`). 2119 put the burst ahead of `VARIABLES_LOADED`, one step too early.
     assert_eq!(

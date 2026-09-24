@@ -1,5 +1,5 @@
-//! The battleground **teammate and flag positions** on the world map (decision 1980; wow-re
-//! `worldmap-arrow-and-positions.md` §3): `MSG_BATTLEGROUND_PLAYER_POSITIONS` both ways, resolved
+//! The battleground **teammate and flag positions** on the world map (decision 1980):
+//! `MSG_BATTLEGROUND_PLAYER_POSITIONS` both ways, resolved
 //! into the engine's `GetBattlefieldPosition` / `GetBattlefieldFlagPosition` /
 //! `GetBattlefieldMapIconScale` backing the stock `WorldMapFrame.lua` and
 //! `Blizzard_BattlefieldMinimap.lua` poll every update.

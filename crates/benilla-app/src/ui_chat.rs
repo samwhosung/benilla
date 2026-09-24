@@ -165,7 +165,7 @@ impl Plugin for UiChatPlugin {
             // the queue for the frames after it, and this is what holds it for that one.
             //
             // **…and after the world-enter cascade, because that is the reference's own order**
-            // (decision 2221, carved in wow-5875-re for this — their `ca5f7d38`). The real client does not print
+            // (decision 2221). The real client does not print
             // login chat when it arrives either: `[0x8435fc]` is a latch that ships statically
             // `1`, so every `SMSG_MESSAGECHAT` in the login burst is queued into
             // `__AUPENDINGCHAT__` (`0x49db5c`/`0x49db62` → `0x49cae0`) instead of displayed. It is
@@ -282,7 +282,7 @@ impl Plugin for UiChatPlugin {
 /// **The chat module's session end** — what the reference gets for free by destroying its Lua
 /// state, and we have to do by hand until that teardown lands (1288).
 ///
-/// `shutdown_ui_state`'s own doc carves the reference's logout tail: `PLAYER_LEAVING_WORLD` →
+/// `shutdown_ui_state`'s own doc records the reference's logout tail: `PLAYER_LEAVING_WORLD` →
 /// `PLAYER_LOGOUT` → the saved files → **destroy the Lua state**. That last step is the one
 /// `crate::ui_script::IngameUiLoaded` exists to stand in for; while it does, every window in the
 /// VM keeps its contents across a character switch. The director saw it as the previous

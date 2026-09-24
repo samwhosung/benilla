@@ -18,9 +18,8 @@
 //!   frame it goes false.
 //!
 //! Both halves are now **byte-pinned** against the reference's own handler `0x5dfdc0` and its
-//! `SMSG_BINDER_CONFIRM` arm `0x5e4aa2` (wow-re
-//! `system/ui/scratch/gossip-icon-and-binder-flow.md`; folded back by decision 1335, which
-//! promotes what decision 1331 had to leave INFERRED):
+//! `SMSG_BINDER_CONFIRM` arm `0x5e4aa2` (folded back by decision 1335, which promotes what
+//! decision 1331 had to leave INFERRED):
 //!
 //! 1. **`arg1` is an AREA name, never the NPC's** — the handler never looks a name up. It resolves
 //!    the player's own **sub-area** through `AreaTable.dbc`, falls back to the **parent zone** when
@@ -148,8 +147,8 @@ fn area_name(
 /// [`area_name`]'s chain over a bare leaf id — split out so the three legs are testable against the
 /// real `AreaTable` without standing up a world.
 ///
-/// The tail is the `HOME_INN` GlobalString (`GetBindLocation` uses the identical fallback, which is
-/// how wow-re cross-checked the order), read off the player's own table rather than re-typed
+/// The tail is the `HOME_INN` GlobalString (`GetBindLocation 0x48dae0` uses the identical
+/// fallback), read off the player's own table rather than re-typed
 /// (decision 2045); an install that does not carry it yields the empty string, which is the
 /// reference's data-suppression face and still fires the question.
 fn area_name_of(

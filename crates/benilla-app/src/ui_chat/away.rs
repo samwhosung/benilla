@@ -1,6 +1,4 @@
-//! **`/afk` and `/dnd` — the client-side command law** (decision 2088; wow-re
-//! `ui/scratch/afk-dnd-command-law.md`, a §5 trio incl. one cold derivation + orchestrator
-//! arbitration).
+//! **`/afk` and `/dnd` — the client-side command law** (decision 2088).
 //!
 //! The two commands look like a pair and are not one. `SendChatMessage 0x49f1e0` handles them
 //! **asymmetrically**, and the reference's own string pool shows why: the DND keys live in the chat
@@ -12,7 +10,7 @@
 //!   descriptor bit — and returns, delegating to `CGPlayer_C::SetAFK 0x5eb740` /
 //!   `ClearAFK 0x5eb830`, which build their own packets.
 //!
-//! **The echo is OPTIMISTIC, never descriptor-driven** (§8): the print and the mirror write are
+//! **The echo is OPTIMISTIC, never descriptor-driven**: the print and the mirror write are
 //! straight-line before the send. `0x5ee990`'s `test al,0xe` arm — the `PLAYER_FLAGS` delta arm
 //! that carries AFK/DND/GM — calls only `0x6c78f0` (name invalidation) and `0x468550` between
 //! `0x5ee9c0` and `0x5ee9f8`: no string resolve, no chat sink. So a client that waited for the
@@ -34,17 +32,17 @@ use super::feed::ChatLog;
 /// bit**, reconciled by the descriptor. Authoritative for the client's own toggle decision, never
 /// for anyone else's state.
 ///
-/// Its full 11-site census is wow-re `afk-dnd-command-law.md` §8. Written optimistically at command
-/// time (`SetAFK 0x5eb7ae` ← 1, `ClearAFK 0x5eb885` ← 0), reconciled from the descriptor on every
-/// local `PLAYER_FLAGS` delta (`0x5ee9f2`), re-seeded at world enter (`0x4989c0`, §9 — which is
-/// **not** the `/afk` toggle, a correction that round made to `overhead-name.md`). Consumed by the
-/// overhead-name AFK tag as the own-player override, and by the `/afk` toggle itself.
+/// Eleven sites in the image reference it. Written optimistically at command time
+/// (`SetAFK 0x5eb7ae` ← 1, `ClearAFK 0x5eb885` ← 0), reconciled from the descriptor on every local
+/// `PLAYER_FLAGS` delta (`0x5ee9f2`), re-seeded at world enter (`0x4989c0`, which is **not** the
+/// `/afk` toggle). Consumed by the overhead-name AFK tag as the own-player override, and by the
+/// `/afk` toggle itself.
 ///
 /// **`u32`, not `bool`, and never compared against 1.** The five writers store **three** truthy
 /// values — `1` (`0x4989eb`, `0x5eb7ae`), `0` (`0x4989f7`, `0x5eb885`) and **`2`** (`0x5ee9f2`
 /// stores `PLAYER_FLAGS & 2`). All six readers are pure non-zero tests, so the reference never
 /// notices; a re-implementation that types this `bool` or tests `== 1` diverges at the first
-/// descriptor-driven set. That is a stated hazard in §8, and this type is the answer to it.
+/// descriptor-driven set. That is the hazard, and this type is the answer to it.
 ///
 /// **There is no DND mirror** — no global is written on the DND path, which is why [`dnd_line`]
 /// takes the live descriptor bit and [`afk_line`] takes this. The observable asymmetry is real and
@@ -79,7 +77,7 @@ pub(crate) struct AwayOutcome {
     pub(crate) body: String,
 }
 
-/// Resolve `/afk <msg>` against the mirror — wow-re §3/§4/§5 and the §12 truth table.
+/// Resolve `/afk <msg>` against the mirror — the AFK arm `0x49f4f3`-`0x49f562`.
 ///
 /// | `msg` | mirror before | line | mirror after |
 /// |---|---|---|---|
@@ -88,7 +86,7 @@ pub(crate) struct AwayOutcome {
 /// | `M` | clear | `MARKED_AFK_MESSAGE` % `M` | 1 |
 /// | `M` | set | *(nothing)* | unchanged |
 ///
-/// **The default text is the CLIENT's and is substituted BEFORE the send** (§2): the server
+/// **The default text is the CLIENT's and is substituted BEFORE the send** (`0x49f512`): the server
 /// receives the literal `"Away from Keyboard"`, never an empty body, so vmangos stores that as the
 /// auto-reply. `SetAFK` substitutes again for a NULL message (`0x5eb761`) — belt and braces in the
 /// reference, one substitution here.
@@ -136,7 +134,8 @@ pub(crate) fn afk_line(
     }
 }
 
-/// Resolve `/dnd <msg>` against the **live** `PLAYER_FLAGS` bit `0x4` — wow-re §6 and §12.
+/// Resolve `/dnd <msg>` against the **live** `PLAYER_FLAGS` bit `0x4` — the DND arm
+/// `0x49f3de`-`0x49f591`.
 ///
 /// | `msg` | DND before | line |
 /// |---|---|---|
@@ -182,8 +181,7 @@ pub(crate) fn dnd_line(
 /// zeroes the mirror, then goes on to send the message's own packet.
 ///
 /// **It runs before the refusal arms, not after** — `0x49f3c7`/`0x49f3d6` sit above `0x49f592`, so
-/// a ghost typing `/say` clears AFK and *then* gets `ERR_CHAT_WHILE_DEAD`. (One worker in the §5
-/// round put this the other way round; the orchestrator's byte arbitration rejected it — §13.)
+/// a ghost typing `/say` clears AFK and *then* gets `ERR_CHAT_WHILE_DEAD`.
 pub(crate) fn auto_clear_line(
     mirror: AfkMirror,
     auto_clear_afk: bool,
@@ -240,12 +238,11 @@ pub(crate) struct AfkMirrorMemo(Option<u32>);
 /// writes `PLAYER_FLAGS & 2` (`0x5ee9ef`/`0x5ee9f2`). A reconcile that instead wrote on *any*
 /// flags delta would clobber the optimistic `1` back to `0` the first time an unrelated bit moved
 /// — walk into an inn while AFK and the resting bit alone would drop your `<AFK>` a round trip
-/// early. The whole point of the mirror is that it is allowed to lead the descriptor (§8: "the
-/// mirror can lead the descriptor for exactly one round trip"), and this gate is what protects
-/// that window.
+/// early. The whole point of the mirror is that it is allowed to lead the descriptor (for exactly
+/// one round trip), and this gate is what protects that window.
 ///
 /// The value written is `flags & 0x2` — so **`2`, not `1`** — which is exactly why [`AfkMirror`]
-/// is a `u32` tested for non-zero and never compared against `1` (§8's stated encoding hazard).
+/// is a `u32` tested for non-zero and never compared against `1`.
 pub(crate) fn reconcile_afk_mirror(
     self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     mut mirror: ResMut<AfkMirror>,
@@ -267,7 +264,7 @@ pub(crate) fn reconcile_afk_mirror(
     }
 }
 
-/// The **four movement clears** — `autoClearAFK`'s other call sites (wow-re §10):
+/// The **four movement clears** — `autoClearAFK`'s other call sites:
 /// `Jump 0x513d36`, forward/back `0x514e23`, strafe `0x514f0b`, keyboard-turn `0x514fca`. All four
 /// share one idiom — `if (OBJECT_FIELD_TYPE & TYPEMASK_PLAYER) ClearAFK(obj, 0)` sitting right
 /// after the same function's stand-up call — so they are one rule here, not four.
@@ -343,7 +340,7 @@ mod tests {
         )
     }
 
-    /// **wow-re `afk-dnd-command-law.md` §12, transcribed.** Every row, including the three that a
+    /// **The reference's truth table, transcribed.** Every row, including the three that a
     /// re-implementer gets wrong by symmetry.
     #[test]
     fn the_truth_table_row_for_row() {
@@ -417,7 +414,7 @@ mod tests {
         );
         // **The asymmetry.** `/dnd M` while DND RE-PRINTS, where `/afk M` while AFK is silent.
         // Not a bug on either side: AFK reads its optimistic mirror, DND reads the live descriptor
-        // bit and has no mirror at all (§8).
+        // bit and has no mirror at all (`0x49f3f0`).
         assert_eq!(
             dnd("busy", true),
             AwayOutcome {
@@ -432,8 +429,8 @@ mod tests {
     /// **The director's capture, reproduced: THREE lines from TWO commands.**
     ///
     /// `/afk` then `/dnd` prints the mark, then the implicit AFK clear, then the DND mark — because
-    /// `/dnd` is chat type `0x15` and the auto-clear skips only `0x14` (§10). Anyone reading the
-    /// reference screenshot as three typed commands would build the wrong thing.
+    /// `/dnd` is chat type `0x15` and the auto-clear skips only `0x14` (`0x49f4f6`). Anyone reading
+    /// the reference screenshot as three typed commands would build the wrong thing.
     #[test]
     fn afk_then_dnd_prints_three_lines() {
         let mut mirror = AfkMirror::default();
@@ -476,7 +473,7 @@ mod tests {
             "not afk"
         );
         assert!(auto_clear_line(AfkMirror(1), true, &strings).is_some());
-        // **The descriptor-driven value is 2, not 1** (§8's encoding hazard): the reconcile stores
+        // **The descriptor-driven value is 2, not 1** (`0x5ee9f2`): the reconcile stores
         // `PLAYER_FLAGS & 2`. A mirror typed `bool`, or tested `== 1`, would answer "not AFK" here
         // and silently stop clearing after the server's first confirmation.
         assert!(

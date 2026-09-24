@@ -15,9 +15,8 @@
 //! name *inside* the channel name, so crossing a border is genuinely leaving one channel and
 //! joining another — LEAVE(old) then JOIN(new), interleaved per slot.
 //!
-//! The mechanism is byte-verified in wow-re's `system/ui/scratch/zone-chat-channel-autojoin.md`
-//! (the whole thing is one function, `ZoneChannelRefresh 0x49a210`); each part below cites the
-//! section it comes from.
+//! The whole mechanism is one function of the reference, `ZoneChannelRefresh 0x49a210`; each part
+//! below cites the address it comes from.
 //!
 //! ## Why this is worth more than three channel names
 //!
@@ -53,11 +52,10 @@ const AREA_FLAG_TRADE_CHANNEL: u32 = 0x08;
 /// word** the Trade channel is named after.
 ///
 /// Not a geographic area at all: the client scans the table once at load for this bit and keeps
-/// the row's name at `0xb4e4f0` (single writer `0x4985fd`), then splices it into `Trade - %s`
-/// (wow-re `system/ui/scratch/zone-chat-channel-autojoin.md` §3, VERIFIED). Exactly one row in the
-/// shipped 5875 table carries it — **id 3459, `AreaName[enUS] = "City"`** — which is the whole
-/// reason the word appears nowhere in `WoW.exe`. Reading it here rather than hardcoding `"City"`
-/// is what keeps a localized install localized.
+/// the row's name at `0xb4e4f0` (single writer `0x4985fd`), then splices it into `Trade - %s`.
+/// Exactly one row in the shipped 5875 table carries it — **id 3459, `AreaName[enUS] = "City"`** —
+/// which is the whole reason the word appears nowhere in `WoW.exe`. Reading it here rather than
+/// hardcoding `"City"` is what keeps a localized install localized.
 const AREA_FLAG_CITY_NAME_ROW: u32 = 0x200;
 
 /// The shared city word, scanned out of `AreaTable.dbc` — the client's own load-time scan
@@ -236,7 +234,7 @@ pub(super) fn load_chat_channels(
 ///
 /// The client has no such guard — its capital arm null-checks the DBC row pointer but not the
 /// string, so a locale with the sentinel row's name blank would compose exactly `"Trade - "`
-/// (wow-re `zone-chat-channel-autojoin.md`, branch caveat). We decline instead: joining the wrong
+/// (`0x49a2d0`–`0x49a2f6`). We decline instead: joining the wrong
 /// channel name is invisible and permanent, and joining none is neither.
 fn compose(
     row: &benilla_formats::ChatChannelRow,
@@ -259,10 +257,10 @@ fn compose(
 /// [`plan_walk`]'s pass 2 — the walk itself plans over the slot array.
 ///
 /// The reference registers the slot (`0x49b980`) *before* it asks whether the row is eligible:
-/// `0x49a50d` precedes the city gate at `0x49a512` (wow-re `zone-chat-channel-autojoin.md` §7 pass
-/// 2, §11). So a character standing outside a capital still holds a `Trade - City` slot — created,
-/// never joined, state 3 — and it still occupies **number 2**, because the `N.` a channel line
-/// carries is `slot[+0x00]`, the client-local index, never the `ChatChannels.dbc` ChannelID.
+/// `0x49a50d` precedes the city gate at `0x49a512`. So a character standing outside a capital
+/// still holds a `Trade - City` slot — created, never joined, state 3 — and it still occupies
+/// **number 2**, because the `N.` a channel line carries is `slot[+0x00]`, the client-local index,
+/// never the `ChatChannels.dbc` ChannelID.
 #[cfg(test)]
 pub(crate) fn tracked_channels(
     catalog: &ChatChannelsCatalog,
@@ -323,8 +321,7 @@ pub(crate) enum WalkStep {
 }
 
 /// **The walk, as a plan** — `ZoneChannelRefresh 0x49a210`'s two passes over the current slot
-/// array and the mask, for a player standing in `zone_name` (wow-re
-/// `zone-chat-channel-autojoin.md` §7, VERIFIED).
+/// array and the mask, for a player standing in `zone_name`.
 ///
 /// **Pass 1 — the slots already held**, in slot order (`0x49a284`), each one whose name resolves
 /// to a `ChatChannels.dbc` row. The row's name is composed for this zone, **whatever the mask
@@ -336,7 +333,8 @@ pub(crate) enum WalkStep {
 ///   changed; not eligible ⇒ nothing.
 /// - **name unchanged, otherwise** ⇒ nothing, unless the row stopped being eligible: then
 ///   `Leave` (only if server-confirmed) and `Suspend` — walking out of the city; the LEAVE goes
-///   out *before* the gate suspends the slot because it sits earlier in the same iteration (§5).
+///   out *before* the gate (`0x49a3b8`) suspends the slot because it sits earlier in the same
+///   iteration.
 /// - **name moved** ⇒ `Leave(old)` if server-confirmed (`0x49a35e`), then the gate: eligible ⇒
 ///   `Rename` + `Join(new)`; not eligible ⇒ `Suspend(old)`.
 /// - **the row no longer composes here** (no city word for a city-named row) ⇒ treated as not
@@ -351,7 +349,7 @@ pub(crate) enum WalkStep {
 /// a `/join General` confirms and sets the bit back.
 ///
 /// LEAVE strictly precedes JOIN per slot, interleaved across slots — never a batch of leaves then
-/// a batch of joins. The retail 1.8.1 Winterspring sniff shows exactly this shape (§7).
+/// a batch of joins. The retail 1.8.1 Winterspring sniff shows exactly this shape.
 pub(crate) fn plan_walk(
     channels: &ChannelState,
     zone_name: &str,
@@ -493,10 +491,10 @@ fn zone_is_settled(player: Option<&crate::player::Player>) -> bool {
 /// display text. That is not a preference: the client composes from `GetRealZoneText`'s own cache
 /// (`0xb4b404`, written from the parent zone's `AreaName_lang`), and the indoor/WMO name override
 /// `0x67e670` rewrites only the slot feeding `GetZoneText`, never the one that becomes a channel
-/// name (wow-re `zone-chat-channel-autojoin.md` §3). So a building never renames your channel.
+/// name. So a building never renames your channel.
 ///
-/// **Timing:** the client re-walks inside `UpdateZoneText 0x494780` on every zone change (`§1`,
-/// callsite `0x494931`), immediately *before* it fires `ZONE_CHANGED_NEW_AREA`, plus once at world
+/// **Timing:** the client re-walks inside `UpdateZoneText 0x494780` on every zone change (callsite
+/// `0x494931`), immediately *before* it fires `ZONE_CHANGED_NEW_AREA`, plus once at world
 /// entry. This polls the same two inputs each frame and early-outs when they have not moved, which
 /// reaches the same states; it is a poll rather than a hook because the zone is already derived
 /// here, not published as an event payload.
@@ -551,7 +549,7 @@ pub(super) fn auto_join_zone_channels(
     // sites that read the reference's cinematic-state cell exist for exactly this — `0x49491e`
     // (the zone-text update) and `0x5ff566` (a `UPDATEFLAGS` reflex) both skip
     // `ZoneChannelRefresh` (`0x49a210`) while one runs, and `EndCinematic` calls it once at
-    // `0x48f1d0` (wow-re `ui/scratch/cinematic-camera-law.md` §3.3, the complete 10-site census).
+    // `0x48f1d0` (the cell is `[0xb4e310]`; the ten sites are its complete census).
     //
     // The walk stays armed and only its *zone* goes unknown, so "rejoin once at the end" is what
     // the first frame after the shot already does — there is nothing to re-arm. It matters because
@@ -593,9 +591,9 @@ pub(super) fn auto_join_zone_channels(
     //
     // Fed zone-less, every zone-dependent row carries `resolved: None`, which is the reference's
     // own "matched a row but there is no zone text yet" leg: `AddChatWindowChannel` stores nothing
-    // and answers nil, `JoinChannelByName` returns nil and sends nothing (chat-cache-grammar.md §5,
-    // decision 1908). Right answer instead of a wrong one, and the walk re-feeds the moment a zone
-    // lands.
+    // and answers nil (`0x4a10d9`), `JoinChannelByName` returns nil and sends nothing
+    // (`0x49ece5`, decision 1908). Right answer instead of a wrong one, and the walk re-feeds the
+    // moment a zone lands.
     let mut script = script;
     if !channels.channels.is_empty() {
         if let Some(script) = script.as_mut() {
@@ -667,11 +665,11 @@ pub(crate) fn seed_zone_channel_catalog(
     script.set_zone_channel_catalog(zone_channel_catalog(&channels.channels, "", false, city));
 }
 
-/// Every `ChatChannels.dbc` row as the VM needs it (decision 1908; wow-re chat-cache-grammar.md
-/// §5-6): the id, the Shortcut the verbs compare a typed name against, the name composed for
-/// `zone_name` — `None` when the composition has nothing to substitute (a zone-dependent row with
-/// no zone, a city row with no city word), which is the verbs' nil leg — and whether
-/// `EnumerateServerChannels` lists it here (a city-only row, `flags & 0x10`, only in a city).
+/// Every `ChatChannels.dbc` row as the VM needs it (decision 1908): the id, the Shortcut the verbs
+/// compare a typed name against (`0x4a10b2`), the name composed for `zone_name` — `None` when the
+/// composition has nothing to substitute (a zone-dependent row with no zone, a city row with no
+/// city word), which is the verbs' nil leg — and whether `EnumerateServerChannels 0x4a1790` lists
+/// it here (a city-only row, `flags & 0x10`, only in a city).
 pub(crate) fn zone_channel_catalog(
     catalog: &ChatChannelsCatalog,
     zone_name: &str,
@@ -723,7 +721,7 @@ mod tests {
     /// sentinel — see [`city_word`]).
     const CITY: Option<&str> = Some("City");
 
-    /// A fresh character's mask: the DBC's three `INITIAL` rows, `0x200003` (§3).
+    /// A fresh character's mask: the DBC's three `INITIAL` rows, `0x200003` (seeded at `0x4997fc`).
     const SEED: u32 = 0x0020_0003;
     /// `1 << (25 - 1)` — `GuildRecruitment`'s bit, which the cascade's confirmed join adds.
     const GUILD_RECRUITMENT_BIT: u32 = 1 << 24;
@@ -948,7 +946,7 @@ mod tests {
     }
 
     /// **A border crossing is LEAVE(old) → rename → JOIN(new), per slot, interleaved, in slot
-    /// order** — pass 1 over the slot array (§7; the retail 1.8.1 Winterspring sniff is the
+    /// order** — pass 1 over the slot array (`0x49a284`; the retail 1.8.1 Winterspring sniff is the
     /// control). The suspended Trade slot in the middle is walked too and does nothing: its
     /// name never moves and it is not eligible here.
     #[test]
@@ -1236,9 +1234,9 @@ mod tests {
         );
     }
 
-    /// The numeric leg of leave-by-name ([`ChannelState::leave_target`], contract §3): a non-zero
-    /// leading integer names a **confirmed** slot or makes the call a no-op; anything else is
-    /// already the wire name, composed by the VM or passed through.
+    /// The numeric leg of leave-by-name ([`ChannelState::leave_target`], `0x49ee70` step 1): a
+    /// non-zero leading integer names a **confirmed** slot or makes the call a no-op; anything else
+    /// is already the wire name, composed by the VM or passed through.
     #[test]
     fn leave_target_resolves_a_number_to_a_confirmed_slot_or_to_nothing() {
         let mut c = state(SEED);
@@ -1278,7 +1276,7 @@ mod tests {
         );
         assert_eq!(c.leave_target("mychan").as_deref(), Some("mychan"));
 
-        // …and the mask clear needs a slot carrying the wire name (contract §8).
+        // …and the mask clear needs a slot carrying the wire name (`0x49f0f4`).
         c.note_zone_channel_left("General - Nowhere");
         assert_eq!(c.zone_mask, Some(SEED), "no slot carries it: no clear");
         c.note_zone_channel_left("General - Elwynn Forest");
@@ -1309,7 +1307,7 @@ mod tests {
     /// `JoinChannelByName` returns `(0, nil)` — the custom leg — and **sends
     /// `CMSG_JOIN_CHANNEL("General")`**. Fed zone-less instead, every zone-dependent row is present
     /// but carries `resolved: None`, which is the reference's own "matched a row, no zone text yet"
-    /// leg: store nothing, answer nil, send nothing (chat-cache-grammar.md §5).
+    /// leg: store nothing, answer nil, send nothing (`0x4a10d9`, `0x49ece5`).
     ///
     /// That gap is what wrote `CHANNELS / General / LocalDefense` into the director's `Onewarrior`
     /// window block with the zone bits stripped, and it was open on every login until the world

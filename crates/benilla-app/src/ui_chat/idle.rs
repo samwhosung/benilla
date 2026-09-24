@@ -1,7 +1,6 @@
 //! **The idle handler** — `WorldFrame::Render 0x482ea0`, the one reference function that watches
 //! how long it has been since the player last touched anything and does three unrelated-looking
-//! things about it (wow-re `object-layer/scratch/standstate-movement-trigger.md` §5.4 and
-//! `ui/scratch/afk-dnd-command-law.md` §10/§12).
+//! things about it.
 //!
 //! One module because it is **one timer**, read once per frame against one global stamp, with a
 //! three-way branch hung off it:
@@ -16,7 +15,7 @@
 //! `0x482ede add eax,0xffe488c0` is `-1 800 000`.
 //!
 //! **The 30-minute leg is a CAMP, not a kick.** `0x5ab000` is `ClientServices::SendLogout(flag,
-//! force)` (wow-re `system/net/ledger.tsv`) — the *same* function the game menu's Logout button
+//! force)` — the *same* function the game menu's Logout button
 //! reaches through `Logout 0x489390`, sending `CMSG_LOGOUT_REQUEST 0x4B`. So the server decides:
 //! it refuses outright in combat, logs you out instantly in an inn, and otherwise runs the
 //! twenty-second countdown that [`crate::ui_logout`] already narrates as the CAMP dialog. A
@@ -86,14 +85,12 @@ const AUTO_AFK_AFTER: Duration = Duration::from_millis(300_000);
 ///
 /// **Absolute, not five-plus-thirty.** The subtraction above it writes `ecx`, so `eax` still holds
 /// the raw elapsed when this one runs. Reading the pair as two chained deductions gives 35 minutes
-/// and is the natural misreading of the two-instruction sequence; the §5 round caught itself
-/// making it.
+/// and is the natural misreading of the two-instruction sequence.
 const AUTO_LOGOUT_AFTER: Duration = Duration::from_millis(1_800_000);
 
 /// Stamp the clock — the **seven** writers of `[0xcf0bc8]`, all registered on the one input ring
 /// at priority `1.0f` (`0x765c04`–`0x765cfe` via `0x41fca0`), all storing the same ring field
-/// `payload[3]` (wow-re `ui/scratch/idle-timer-input-stamp-law.md`, a §5 with four independent
-/// reproductions and a closed image-wide census of the dword: 37 occurrences, 7 W / 30 R).
+/// `payload[3]` (a closed image-wide census of the dword: 37 occurrences, 7 W / 30 R).
 ///
 /// | writer | bus category | what the player did |
 /// |---|---|---|
@@ -111,9 +108,9 @@ const AUTO_LOGOUT_AFTER: Duration = Duration::from_millis(1_800_000);
 /// - **Auto-repeat.** `0x424810` promotes category 8 to 0xa at `0x4248b3` when the key is already
 ///   held, and `0x766070` (category 0xa) has no store. So **holding a key is idle** — running with
 ///   W held, or on autorun, reaches the five-minute auto-AFK. This is the single most surprising
-///   thing the round found and it is deliberate here, not an omission.
+///   thing the reference does and it is deliberate here, not an omission.
 /// - Zero-motion moves and the pump's synthetic hover re-pick (`0x7660d0`'s `0x766122`–`0x766140`
-///   filter), which is the bypass `hover-hide-and-tooltip-owner-law.md` recorded without pinning.
+///   filter, and its `0x766120` bypass).
 /// - Double-clicks, `WM_MOUSEHWHEEL`, `WM_CHAR`, the joystick, and any VK outside `0x42d800`'s
 ///   table.
 /// - Mouse **movement and left-button-up during an OS window drag** — a title-bar drag or border
@@ -123,8 +120,7 @@ const AUTO_LOGOUT_AFTER: Duration = Duration::from_millis(1_800_000);
 /// **Mouselook is NOT an exclusion** — it is `[0x884e5c]`, a different global entirely, and all it
 /// picks is which arm enqueues (absolute → category 0xc, delta → category 0xd, both stamping). A
 /// player turning the camera with the right button held is *not* idle. This module briefly recorded
-/// the opposite, off a mislabelled global, before the second round pinned `[0x884e64]`'s writers to
-/// `SetCapture`.
+/// the opposite, off a mislabelled global; `[0x884e64]`'s writers are `SetCapture`'s.
 ///
 /// **The store sits on the raw input bus, ahead of dispatch**, so a keystroke a frame *consumes*
 /// still stamps: typing into the chat edit box is input, and so is a click that only moves a
@@ -288,7 +284,7 @@ pub(crate) fn idle_handler(
     let strings = |key: &str| crate::ui_chat::combat::global_string(&script, key);
     if action.afk {
         // `SetAFK(NULL)` is `/afk` with an empty message and the mirror clear — the one row of the
-        // §12 truth table this can reach, which is why it goes through the same function rather
+        // `/afk` truth table this can reach, which is why it goes through the same function rather
         // than composing its own line: same `MARKED_AFK_MESSAGE % DEFAULT_AFK_MESSAGE` echo, the
         // same client-side default substitution reaching the wire, the same optimistic mirror.
         let out = afk_line("", *mirror, &strings);
@@ -606,7 +602,7 @@ mod tests {
         // **The one that is not an omission.** `0x424810` promotes a held key from bus category 8
         // to 0xa, and `0x766070` — category 0xa's handler — has no store. So running with W held,
         // or sitting on autorun, walks straight into the five-minute auto-AFK. It is the single
-        // most surprising thing the §5 found, four workers agreed on it, and a re-implementation
+        // most surprising thing the reference does, and a re-implementation
         // that "fixed" it would diverge from the reference in a way a player would notice.
         assert_eq!(
             stamped(&|app| {
