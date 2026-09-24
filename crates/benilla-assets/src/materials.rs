@@ -74,7 +74,7 @@ pub type WowModelMaterial = ExtendedMaterial<StandardMaterial, WowModelExt>;
 
 /// Pipeline-specialization key for [`WowModelExt`] — picks the two distance-fade pipeline tweaks Bevy
 /// has no built-in `AlphaMode` for. Both make the fade **OPACITY** with **depth-write ON**, matching the
-/// reference (`RECONCILE-fade-render-state.md` / `-clutter-fade-render-state.md`):
+/// reference:
 /// - `fade` (`model_flags.y`) = the **M2-doodad** fade blend twin: `AlphaMode::Blend` (transparent pass,
 ///   depth-write normally OFF) → `specialize` forces depth-write back ON so a fading haystack's near
 ///   cross-quads occlude its far ones. Silhouette stable for an AlphaKey source (the shader re-applies
@@ -96,13 +96,13 @@ pub struct WowModelKey {
     /// M2 render flag 0x08 — disable depth TEST (packed into `clutter_fade.z` bit 1).
     no_depth_test: bool,
     /// The MULTIPLY blends (clutter_fade.z bits 7/8; decision 0528) — `specialize` swaps the blend
-    /// state to the byte-verified factors: Mod `DST_COLOR/ZERO`, Mod2x `DST_COLOR/SRC_COLOR`
-    /// (wow-re `m2-depth-blend-state`). Exact on the 0161 gamma lane — the framebuffer holds gamma
-    /// values, so the hardware multiply IS the reference's byte multiply.
+    /// state to the reference's factors: Mod `DST_COLOR/ZERO`, Mod2x `DST_COLOR/SRC_COLOR`
+    /// (`0x70c190`). Exact on the 0161 gamma lane — the framebuffer holds gamma values, so the
+    /// hardware multiply IS the reference's byte multiply.
     modulate: bool,
     modulate2x: bool,
     /// Depth-prime twin (`clutter_fade.z` bit 9 — `model_render::zfill_material`, the reference's
-    /// `M2UseZFill` clone command, wow-re `m2-blend-promotion-zfill.md` §4): `specialize` masks the
+    /// `M2UseZFill` clone command, emitted at `0x707f7d`–`0x708072`): `specialize` masks the
     /// colour writes off, turns blend off, and forces depth-write ON.
     zfill: bool,
     /// Far side of the water plane (`clutter_fade.z` bit 11 — `model_render`'s far twin, the
@@ -189,10 +189,10 @@ pub struct WowModelExt {
     /// effect's white-hot flash cooling to red). `xyz = 1` — the identity — for the overwhelming
     /// majority. **`w` = the WMO interior batch-class lane** (`0` = exterior law, `1` = interior
     /// INT ⇒ unlit `tex × MOCV`, `2` = interior TRANS ⇒ the per-vertex MOCV-alpha lit↔bake lerp —
-    /// wow-re `trace-forensics-abbey-interior-d3d` §2); `0` for every non-WMO batch.
+    /// the interior draw `0x6b5190`); `0` for every non-WMO batch.
     #[uniform(100)]
     pub tint: Vec4,
-    /// The WMO window/glass law (byte-verified, wow-re `wmo-lit-selector` / `wmo-interior-night-light`).
+    /// The WMO window/glass law (SIDN ramp `0x6b4090`, WINDOW light `0x6d37e0`).
     /// `xyz` = the MOMT **SIDN** authored emissive colour (gamma bytes /255; `0` for non-SIDN and every
     /// M2): the shader multiplies it by the live night fraction (`wow_light.grade.x`) and adds it inside
     /// the lit sum on lit lanes — windows glow warm at night, nothing by day. `w` = the MOMT **WINDOW**
@@ -240,10 +240,10 @@ impl MaterialExtension for WowModelExt {
 
     /// Per-batch depth + blend overrides Bevy's `AlphaMode` can't express. **Depth:** the real client
     /// writes depth for EVERY M2 batch — opaque or transparent — and tests `LEQUAL`, *unless* the
-    /// material's render flag 0x10 (no-write) / 0x08 (no-test) clears it (VERIFIED, wow-re
-    /// `m2-depth-blend-state`). Bevy's transparent pass defaults depth-write OFF, so a model's own
-    /// transparent cards bleed through / flicker from some angles; we set it per-flag. The distance-fade
-    /// blend twin (`fade`) additionally forces depth-write ON (benilla's feather pass) regardless.
+    /// material's render flag 0x10 (no-write) / 0x08 (no-test) clears it (`0x70c190`). Bevy's
+    /// transparent pass defaults depth-write OFF, so a model's own transparent cards bleed
+    /// through / flicker from some angles; we set it per-flag. The distance-fade blend twin
+    /// (`fade`) additionally forces depth-write ON (benilla's feather pass) regardless.
     fn specialize(
         _pipeline: &MaterialExtensionPipeline,
         descriptor: &mut RenderPipelineDescriptor,
@@ -352,7 +352,7 @@ impl MaterialExtension for WowModelExt {
         // synchronous render-thread compile on macOS (the city first-sight stall, decision 0837).
         // The nudge now lives in `wow_model.wgsl`'s vertex stage, an exact relative scale of clip z
         // driven by `sun_scale.y` (uniform DATA, no pipeline axis) — same one-ULP-per-index
-        // semantics, byte-verified intent unchanged (wow-5875-re wmo-batch-blend-depth-state.md).
+        // semantics, intent unchanged (the file-order batch walks `0x6b4f10`/`0x6b5190`).
         if key.bind_group_data.fade && !key.bind_group_data.sky_depth {
             // The distance-fade blend twin needs depth-write ON so near geometry occludes far within the
             // same fading model — force it regardless of the per-flag rule above. EXCEPT on the
@@ -406,7 +406,7 @@ impl MaterialExtension for WowModelExt {
         }
         if key.bind_group_data.zfill {
             // The depth-prime twin (`model_render::zfill_material` — the reference's `M2UseZFill`
-            // clone, wow-re `m2-blend-promotion-zfill.md` §4): a translucent model's z-writing
+            // clone, emitted at `0x707f7d`–`0x708072`): a translucent model's z-writing
             // batches draw once colour-masked-off, blend-off, z-write ON, sorted before its colour
             // batches (the material's negative sort bias) — so each colour fragment passes
             // GreaterEqual only at the model's own nearest surface, and interior/overlapped layers
@@ -440,7 +440,7 @@ impl MaterialExtension for WowModelExt {
         }
         let key = &key.bind_group_data;
         if key.modulate || key.modulate2x {
-            // The MULTIPLY blends (decision 0528, byte-verified wow-re `m2-depth-blend-state`):
+            // The MULTIPLY blends (decision 0528, `0x70c190`):
             // Mod (M2 mode 5 / WMO 4) = DST_COLOR/ZERO → out = src·dst; Mod2x (M2 6 / WMO 5) =
             // DST_COLOR/SRC_COLOR → out = 2·src·dst — the ARMORREFLECT weapon/armor sheen (neutral
             // at mid-grey, brightening at the streak). The framebuffer holds gamma (0161), so these
@@ -685,7 +685,7 @@ mod tests {
     }
 
     /// The ADT depth swatch, pinned two ways: the WGSL still carries the reference's own row
-    /// arithmetic, and that arithmetic reproduces wow-re's published byte vectors.
+    /// arithmetic, and that arithmetic reproduces the byte vectors the reference builds.
     ///
     /// The mirror below is a **spec anchor**, not a second implementation — nothing else calls it.
     /// It exists because WGSL has no unit-test harness here (Bevy's `#import`/`#ifdef` mean naga
@@ -693,8 +693,8 @@ mod tests {
     /// together: change the shader's formula and this fails, pointing at the numbers it has to keep
     /// producing.
     ///
-    /// The vectors are wow-re's, from `terrain/scratch/ocean-depth-ramp-law.md` — `Light.dbc` id 4,
-    /// map 0, t = 1440, the ocean pair `LightIntBand` sub-14 → sub-15.
+    /// The vectors are the row-fill `0x68a830`'s output on real data — `Light.dbc` id 4, map 0,
+    /// t = 1440, the ocean pair `LightIntBand` sub-14 → sub-15.
     #[test]
     fn liquid_swatch_reproduces_the_reference_row_ramp() {
         let src = include_str!("shaders/liquid.wgsl");

@@ -29,7 +29,7 @@ pub struct SkinBatch {
     pub texture_combo_index: u16,
     /// Index into [`crate::M2Model::texture_unit_lookup`] → where this stage's texture coordinates
     /// come from (a UV channel, or a generated environment coordinate). texUnit `+0x12`
-    /// (wow-re rf72 `0x70b8a4`).
+    /// (`0x70b8a4`).
     pub texture_coord_combo_index: u16,
     pub material_index: u16,
     /// Direct index into [`crate::M2Model::color_alpha_tracks`] (`0xffff` = none). texUnit `+0x08`.
@@ -39,7 +39,7 @@ pub struct SkinBatch {
     /// Texture count (texUnit `+0x0e`); `0` ⇒ the transparency factor is not applied (verified gate).
     pub texture_count: u16,
     /// Index into [`crate::M2Model::texture_transform_lookup`] → a texture transform (UV
-    /// animation). texUnit `+0x16` (wow-re rf72, `0x70b897`).
+    /// animation). texUnit `+0x16` (`0x70b897`).
     pub texture_transform_combo_index: u16,
 }
 

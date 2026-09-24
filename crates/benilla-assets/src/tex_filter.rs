@@ -11,8 +11,8 @@
 //! **`[0x835254] = 1`**, and a full image-wide caller census of their only two writers
 //! (`0x449ac0` / `0x449ad0`) finds exactly three call sites, all inside the CVar callbacks below.
 //! WMO, M2/character and terrain textures all share the one policy; there is no per-draw filter
-//! override anywhere. (wow-re `system/models/scratch/wmo-texture-sampling.md` §2, VERIFIED off
-//! `0x449ae0`/`0x59f170`/`0x58a980`/`0x6c4c20` + the registration block `0x6885b0`-`0x688840`.)
+//! override anywhere. (`0x449ae0`/`0x59f170`/`0x58a980`/`0x6c4c20` + the registration block
+//! `0x6885b0`-`0x688840`.)
 //!
 //! Mode 3 — the static `.data` value — is `GL_LINEAR_MIPMAP_NEAREST` / `GL_LINEAR`: bilinear with
 //! nearest-mip select, anisotropy off. Two CVars move it, and only upward:

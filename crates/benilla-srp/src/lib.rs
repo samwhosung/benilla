@@ -18,7 +18,7 @@
 //! implementations in the wild serialize a number differently:
 //!
 //! - The **1.12.1 client** writes each at its declared width, zero-padded in the high bytes — `A`/`B`
-//!   32, `K` 40, `M1` 20 (`wow-5875-re` `srp6_client_session`, byte-exact from `WoW.exe` `0x5d3650`).
+//!   32, `K` 40, `M1` 20 (byte-exact from `WoW.exe` `0x5d3650`).
 //! - The **mangos family** (vmangos `SHA1::Generator::UpdateData(BigNumber const&)`, cmangos
 //!   `Sha1Hash::UpdateBigNumbers`) writes `BigNumber::AsByteArray()` with no minimum — **high-order
 //!   zero bytes dropped**.
@@ -249,12 +249,11 @@ fn calculate_u(client_public_key: &PublicKey, server_public_key: &PublicKey) -> 
 /// SHA-1 each half, then interleave the two digests. This is WoW's specific `SHA1_Interleave`.
 ///
 /// This is the crate-doc encoding split again, at the *low* end of `S`. The SRP-6 RFC strips leading
-/// zero bytes before the split and the real client does too (`wow-5875-re` `srp6_interleave`, from
-/// `WoW.exe` `0x5d3360`, 406 cases bit-exact) — leading in its little-endian `S` meaning the **low**
-/// bytes. vmangos does not: it hashes all 32 unconditionally (`SRP6::HashSessionKey`,
-/// `S.AsByteArray(32)`). A trim would derive a different `K`, hence a different `M1`, for the
-/// ~1-in-256 `S` ending in a zero low byte — an intermittent `WOW_FAIL_UNKNOWN_ACCOUNT` (0x04) on a
-/// correct password.
+/// zero bytes before the split and the real client does too (from `WoW.exe` `0x5d3360`, bit-exact)
+/// — leading in its little-endian `S` meaning the **low** bytes. vmangos does not: it hashes all 32
+/// unconditionally (`SRP6::HashSessionKey`, `S.AsByteArray(32)`). A trim would derive a different
+/// `K`, hence a different `M1`, for the ~1-in-256 `S` ending in a zero low byte — an intermittent
+/// `WOW_FAIL_UNKNOWN_ACCOUNT` (0x04) on a correct password.
 ///
 /// We hash all 32 bytes, and [`SrpClientChallenge::new`] only keeps an `S` whose low byte is
 /// non-zero — which makes the strip a no-op, so this `K` is simultaneously the real client's and

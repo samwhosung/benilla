@@ -187,8 +187,8 @@ mod tests {
         }
     }
 
-    /// The reference packs a 4-bit layer weight into an RGBA4444 texel (wow-re `terrain.md`,
-    /// the `alpha_texel_*` packers), and a 4-bit unorm channel reads as `n / 15` — so a fully
+    /// The reference packs a 4-bit layer weight into an RGBA4444 texel (the 64×64 and 32×32
+    /// packers `0x6b03d0`/`0x6b08d0`), and a 4-bit unorm channel reads as `n / 15` — so a fully
     /// painted nibble is full coverage. `n × 16` stopped at 240: every "fully painted" road or rock
     /// let 6% of the layer beneath show through.
     #[test]

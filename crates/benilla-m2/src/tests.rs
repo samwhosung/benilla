@@ -157,8 +157,8 @@ fn texture_transform_translation_track_decodes() {
 }
 
 /// The three adjacent u16 lookup slots must not be confused: texUnitLookup@0x9c ·
-/// transLookup@0xa4 · texAnimLookup@0xac (wow-re stride-pin reconciliation; models.md's field-map
-/// *line* labels them one slot early). Shaped like the real StormwindMagePortal01 header — [0] at
+/// transLookup@0xa4 · texAnimLookup@0xac (the reference's header walk `0x71cdf0`, not one slot
+/// early). Shaped like the real StormwindMagePortal01 header — [0] at
 /// 0x9c, the identity [0,1,2,3] at 0xa4, [0xffff] at 0xac — where reading 0x9c as the transparency
 /// lookup silently dropped the combo-1..3 weight tracks.
 #[test]
@@ -186,9 +186,8 @@ fn transparency_lookup_reads_0xa4_not_the_texture_unit_lookup_at_0x9c() {
 fn playable_animation_lookup_decodes_low16_high16() {
     let mut b = header();
     let pal_ofs = b.len() as u32;
-    // Row 0: identity, no dir flags. Row 1: HumanMale's real byte-verified example
-    // (`playableAnimationLookup[6] = 0x00030001`, wow-re `anim-id-resolution.md` §4) — resolved
-    // id 1, dir-flags code 3.
+    // Row 0: identity, no dir flags. Row 1: HumanMale's real example, read off the shipped asset
+    // (`playableAnimationLookup[6] = 0x00030001`) — resolved id 1, dir-flags code 3.
     b.extend(0u32.to_le_bytes());
     b.extend(0x0003_0001u32.to_le_bytes());
     set_arr(&mut b, OFS_PLAYABLE_ANIM_LOOKUP, 2, pal_ofs);

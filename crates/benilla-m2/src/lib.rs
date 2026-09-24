@@ -136,11 +136,11 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     p += 8;
     // header 0x9c: texture_unit_lookup — the **env-vs-UV mapping table**. `texUnit.texture_coord_combo_index`
     // (+0x12) indexes it; a value `< 3` names a UV channel, `>= 3` (real art: `0xffff`) is a
-    // *generated* environment coordinate (wow-re `m2-texanim-uv` §`0x70b8bd`, models.md §944).
+    // *generated* environment coordinate (`0x70b8bd`).
     //
-    // The three lookup slots here follow wow-re's *stride-pin reconciliation* (renderFlags pinned
+    // The three lookup slots here follow the reference's header walk `0x71cdf0` (renderFlags pinned
     // at 0x84 ⇒ texLookup 0x94 · texUnitLookup 0x9c · transLookup 0xa4 · texAnimLookup 0xac), NOT
-    // the stale one-slot-early labels in models.md's field-map line. Byte-proof on real art:
+    // one slot early. Byte-proof on real art:
     // ElwynnTallWaterfall01 (2 transforms, batch combos 0/1) has [0,1] at 0xac, and
     // StormwindMagePortal01 (4 weight tracks) has the identity [0,1,2,3] at 0xa4 with [0] at 0x9c
     // — reading 0x9c as the transparency lookup silently dropped the portal's combo-1..3 tracks.
@@ -150,7 +150,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     let transparency_lookup_arr = arr(p)?;
     p += 8;
     // header 0xac: texture_animation_lookup (u16) — `texture_transform_combo_index` (texUnit
-    // +0x16) indexes it to reach a texture transform (wow-re rf72 `0x70b897`); 0xffff = none.
+    // +0x16) indexes it to reach a texture transform (`0x70b897`); 0xffff = none.
     let tex_anim_lookup_arr = arr(p)?;
     p += 8;
     // Authored bounds: AABB (min C3, max C3) then sphere radius.
@@ -188,7 +188,7 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     // header 0x114: the animation-event table (the `$CSL`/`$BWR`/`$SND`… records) — the positional
     // markers are kept below; the per-sequence fire keys are `benilla-formats`' concern.
     let events = arr(p)?;
-    // The follow-camera pivot height source (wow-re `follow-camera`, `0x50cbc0`): attachment **id 17**'s
+    // The follow-camera pivot height source (`0x50cbc0`): attachment **id 17**'s
     // model-space Z. `None` if the model has no slot-17 attachment (caller falls back to the vertex box).
     let pivot_attach_z = attachment_z(b, 17, attachments, attach_lookup);
 
@@ -401,8 +401,8 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
 
     // Each M2Color (stride 0x38) is an RGB **colour** track @ +0x00 (C3Vector keys) + an **alpha**
     // track @ +0x1c (fix16); each M2TextureWeight (stride 0x1c) is a single **weight** track. The
-    // alpha/weight values gate batch visibility (a constant 0 hides the batch — wow-re
-    // `m2-alpha-combine-cull`); the RGB is the per-batch tint multiplied into the vertex colour.
+    // alpha/weight values gate batch visibility (a constant 0 hides the batch — the zero-alpha
+    // cull `0x707b3a`–`0x707b5c`); the RGB is the per-batch tint multiplied into the vertex colour.
     // `track_fix16`/`track_vec3_timed` bounds-check internally and return an empty key list for
     // an out-of-range track (kept exactly — real art relies on that "no keys" tolerance). That
     // same tolerance is why the *outer* loops run over the whole records the file holds past the
@@ -447,8 +447,8 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     }
 
     // Each M2TextureTransform (header 0x74, stride 0x54) is 3 back-to-back M2Tracks — translation
-    // (C3Vector) @+0x00, rotation (quaternion) @+0x1c, scaling (C3Vector) @+0x38 (wow-re models.md
-    // element table). Same "no keys" tolerance as the colour/weight tracks above, and the same
+    // (C3Vector) @+0x00, rotation (quaternion) @+0x1c, scaling (C3Vector) @+0x38 (the M2 load
+    // `0x70ebd0`). Same "no keys" tolerance as the colour/weight tracks above, and the same
     // file-bounded loop for the same reason.
     let ttf_avail = b.len().saturating_sub(tex_anim_arr.1 as usize);
     let ttf_cap = capped(tex_anim_arr.0 as usize, 0x54, ttf_avail);

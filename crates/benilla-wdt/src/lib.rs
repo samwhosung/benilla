@@ -56,7 +56,7 @@ const CHUNK_YARDS: f32 = TILE_YARDS / CHUNKS_PER_TILE as f32;
 ///
 /// This is the reference's own streaming coordinate: `0x672730` computes
 /// `fistp((17066.666 − pos) × 0.03 − 0.5)` per axis — the containing chunk — and sizes its
-/// residency windows in these units (wow-re `terrain.md`, "Streaming residency").
+/// residency windows in these units.
 pub fn world_to_chunk(world_x: f32, world_y: f32) -> (u32, u32) {
     let offset = 32.0 * TILE_YARDS;
     let max = MAP_SIZE as u32 * CHUNKS_PER_TILE - 1;

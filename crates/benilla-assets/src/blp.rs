@@ -10,8 +10,8 @@
 //! - [`BlpVariant::Sprite`] — emissive billboards (sun/moon discs): `Rgba8UnormSrgb`, clamp, mip 0.
 //! - [`BlpVariant::Cursor`] — the OS cursor image: `Rgba8UnormSrgb`, single mip.
 //!
-//! Fidelity rationale (authored mips, the gamma-space `Unorm` invariant) is anchored in
-//! `wow-5875-re/system/{terrain,lighting}`; here we only build the GPU resource.
+//! Fidelity rationale (authored mips, the gamma-space `Unorm` invariant) is anchored in the
+//! reference client; here we only build the GPU resource.
 
 use bevy::asset::io::Reader;
 use bevy::asset::{AssetLoader, LoadContext, RenderAssetUsages};
@@ -44,7 +44,7 @@ pub enum BlpVariant {
     /// *minification* of a 64×64 texture, which is why the asset ships 7 mip levels. Mip-0-only
     /// here is not "crisp", it is aliased: a 1-px flake samples one arbitrary texel of a dendrite
     /// and the field becomes flickering speckle.
-    /// (wow-re `system/lighting/scratch/rf-snow-flake-render.md` §2.1/§6.)
+    /// (The point-sprite leg `0x678610`; `GL_COORD_REPLACE` at device init, `0x59cf30`–`0x59cf58`.)
     PointSprite,
     /// A **minimap tile** (ADT `map<X>_<Y>` or a WMO group's interior tile) — clamp, mip 0, linear,
     /// and filtered in **gamma space**, the reference's `GL_SKIP_DECODE_EXT`. See [`map_tile_image`].
@@ -114,8 +114,8 @@ impl AssetLoader for BlpImageLoader {
 }
 
 /// The gamma-byte lane's uncompressed format — non-sRGB, so the GPU does not linearize on sample
-/// and shader math stays in WoW's byte space (the RE'd faithful invariant;
-/// `wow-5875-re/system/lighting`). Every decoded lane below uploads as this.
+/// and shader math stays in WoW's byte space (the RE'd faithful invariant). Every decoded lane
+/// below uploads as this.
 const GAMMA_BYTES: TextureFormat = TextureFormat::Rgba8Unorm;
 
 /// World/model albedo: the BLP's authored mip pyramid laid in verbatim, repeat + the process
@@ -205,9 +205,9 @@ fn sprite_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
 /// alike, and the trace reads it whole: `CLAMP_TO_EDGE` both axes, `MAG_FILTER = MIN_FILTER =
 /// GL_LINEAR` with no mip term, LOD bias 0, anisotropy 1, and — the part that is not the default —
 /// **`GL_TEXTURE_SRGB_DECODE_EXT = GL_SKIP_DECODE_EXT`**, plus `GL_TEXTURE_MAX_LEVEL = 0` per tile.
-/// (wow-re `system/minimap/scratch/wmo-interior-no-adt-underlay.md` §7, device-observed and matching
-/// its own binary derivation; a positive control in the same trace emits `GL_NEAREST` for a
-/// different sampler, so the layer would have shown point sampling had the client asked for it.)
+/// (A reference capture, matching the binary derivation at the tile loader `0x6d9ed0`; a positive
+/// control in the same trace emits `GL_NEAREST` for a different sampler, so the layer would have
+/// shown point sampling had the client asked for it.)
 ///
 /// SKIP_DECODE is the whole reason this is not [`sprite_image`]: it means the hardware **filters the
 /// authored bytes**, not their linearisation. An `Rgba8UnormSrgb` upload decodes each texel to

@@ -2,8 +2,8 @@
 //!
 //! WoW ships almost all world art as S3TC (DXT1/DXT3/DXT5) blocks, and the reference client uploads
 //! those blocks verbatim — `glCompressedTexImage2DARB`, with the software DXT decoder existing only
-//! as a 16-bit-device fallback (wow-re `system/image/image.md`: *"raw passthrough — device eats
-//! DXT"*, and `system/models/scratch/wmo-texture-sampling.md` for the per-level upload formats).
+//! as a 16-bit-device fallback (the device-format query `0x58a230`, where DXT is a raw passthrough
+//! the device eats; the per-level upload formats at `0x59f270`).
 //! benilla used to decode every one of them to `Rgba8Unorm` on the CPU and upload that: **8x the
 //! bytes of DXT1, 4x of DXT3/DXT5**, on the whole resident working set and on every texture fetch
 //! that misses the cache. On a bandwidth-starved integrated GPU that is the frame's dominant cost,
@@ -116,9 +116,8 @@ pub struct UploadChain {
 /// **blocks if it can, pixels if it cannot.**
 ///
 /// The format is always in the **gamma-byte (non-sRGB) lane** every world/model albedo lives in —
-/// the RE'd invariant that the GPU must not linearize albedo on sample
-/// (`wow-5875-re/system/lighting`). `Bc1RgbaUnorm` and friends carry that rule exactly as
-/// `Rgba8Unorm` does, which is what makes the passthrough look-neutral.
+/// the RE'd invariant that the GPU must not linearize albedo on sample. `Bc1RgbaUnorm` and friends
+/// carry that rule exactly as `Rgba8Unorm` does, which is what makes the passthrough look-neutral.
 pub fn for_upload(chain: BlpMipChain) -> UploadChain {
     if uploadable_as_blocks(&chain) {
         let format = match chain.texels {

@@ -142,9 +142,9 @@ pub struct M2RawData {
 /// The authored bounds from the MD20 header. Two boxes: the **bounding** box (+ sphere radius) is the
 /// render/cull volume (the all-animation vertex extent — large); the **collision** box (+ sphere radius)
 /// is the tight collision hull (~the body). The **render sphere** sizes the *unit* selection ring
-/// (`0.5 × radius × scale`, the client's cached `[unit+0x2b0]`, wow-re selection-circle RE) and drives
-/// render culling; the **collision box** is the *GameObject* ring's source (wow-re `0x711a20`/`0x713700`)
-/// — parsed here for that path.
+/// (`0.5 × radius × scale`, the client's cached `[unit+0x2b0]`) and drives render culling; the
+/// **collision box** is the *GameObject* ring's source (`0x711a20`/`0x713700`) — parsed here for
+/// that path.
 pub struct M2Header {
     pub bounding_box_min: [f32; 3],
     pub bounding_box_max: [f32; 3],
@@ -154,21 +154,20 @@ pub struct M2Header {
     pub collision_sphere_radius: f32,
 }
 
-/// One row of the M2's baked **PlayableAnimationLookup** table (decision 0082, wow-re
-/// `anim-id-resolution.md`, byte-verified `0x711bf0`): the model's own precomputed answer to "if the
-/// game requests `AnimationData.dbc` id X, which id do I actually play, and in which
-/// direction/variant". Header `count@+0x2c`/`offset@+0x30` (pre-Wrath M2 only — the array is dropped
-/// past version 263), stride 4 (one dword per row): low16 = the resolved id, high16 = a
-/// direction/variant playback code. `nPlayableAnimationLookup` is a fixed **203** across the entire
-/// retail 1.12.1 corpus (VERIFIED, wow-re empirical cross-check) — the per-model table is a baked
-/// cache of the `AnimationData.dbc` Fallback-column walk (PATH 2, below), frozen against that model's
+/// One row of the M2's baked **PlayableAnimationLookup** table (decision 0082, `0x711bf0`): the
+/// model's own precomputed answer to "if the game requests `AnimationData.dbc` id X, which id do I
+/// actually play, and in which direction/variant". Header `count@+0x2c`/`offset@+0x30` (pre-Wrath
+/// M2 only — the array is dropped past version 263), stride 4 (one dword per row): low16 = the
+/// resolved id, high16 = a direction/variant playback code. `nPlayableAnimationLookup` is a fixed
+/// **203** across the entire retail 1.12.1 corpus (measured) — the per-model table is a baked cache
+/// of the `AnimationData.dbc` Fallback-column walk (PATH 2, below), frozen against that model's
 /// actual sequence set at export (a chicken lacking Attack2H bakes `[18] = [17] = 16`).
 #[derive(Clone, Copy)]
 pub struct M2PlayableAnim {
     /// The `AnimationData.dbc` id this model actually plays for the row's requested id.
     pub resolved_id: u16,
     /// Direction/variant playback code — **not yet consumed** by benilla (decision 0082 flags its
-    /// exact playback semantics, wow-re `~0x7126d2`, as untraced; carried here for a future slice).
+    /// exact playback semantics, `~0x7126d2`, as untraced; carried here for a future slice).
     pub dir_flags: u16,
 }
 
@@ -212,10 +211,10 @@ pub struct M2EventMarker {
 
 /// One M2 **texture transform** (header `0x74`, file stride `0x54`): 3 back-to-back M2Tracks —
 /// `translation` (C3Vector) @`+0x00`, `rotation` (quaternion) @`+0x1c`, `scaling` (C3Vector)
-/// @`+0x38` (wow-re `models.md` element table, runtime `[model+0x98]`). Sampled per frame these
+/// @`+0x38` (the M2 load `0x70ebd0`, runtime `[model+0x98]`). Sampled per frame these
 /// drive UV animation — flowing waterfalls, scrolling energy fields. How the sampled TRS is
-/// *applied* at draw (texture matrix vs CPU UVs, pivot/composition convention) is under RE in
-/// wow-re; parsed and carried here, not yet consumed.
+/// *applied* at draw (texture matrix vs CPU UVs, pivot/composition convention) is open; parsed
+/// and carried here, not yet consumed.
 pub struct M2TextureTransform {
     pub translation: M2Vec3Track,
     pub rotation: M2QuatTrack,
@@ -226,8 +225,7 @@ pub struct M2TextureTransform {
 /// eye/target path a `Cameras\*.m2` cinematic fly-by *is*, and the same record the portrait bake
 /// and the `<Model>` panes frame themselves with.
 ///
-/// Field map VERIFIED at the reference's M2 load `0x70ebd0` + the publish pass `0x718960` (wow-re
-/// `ui.md` §"The `Model` / `PlayerModel` pane camera", `models.md` §182):
+/// Field map from the reference's M2 load `0x70ebd0` + the publish pass `0x718960`:
 /// `type@+0x00 · fov@+0x04 · farClip@+0x08 · nearClip@+0x0c · positions@+0x10 ·
 /// position_base@+0x2c · target@+0x38 · target_position_base@+0x54 · roll@+0x60`. The load copies
 /// only fov/far/near into the runtime `CCamera`; the tracks are evaluated by the animate kernel and
@@ -240,9 +238,9 @@ pub struct M2Camera {
     /// The record's `type` word. `0` = portrait, `1` = "characterinfo" (the `<PlayerModel>` pane's
     /// raw index 1); every shipped `Cameras\*.m2` fly-by authors `-1`.
     pub camera_type: i32,
-    /// **Diagonal** field of view, radians — the reference's `camera_view_lookat` `0x7ac640` takes
-    /// the half-angle as `θ = (fov/2)/√(aspect²+1)`, *not* `fov/2` (wow-re
-    /// `ui/scratch/portrait-projection-aspect.md`). All ten fly-bys author `0.7854` (45°).
+    /// **Diagonal** field of view, radians — the reference's camera build `0x7ac640` takes the
+    /// half-angle as `θ = (fov/2)/√(aspect²+1)`, *not* `fov/2`. All ten fly-bys author `0.7854`
+    /// (45°).
     pub fov: f32,
     /// Far clip as authored (`+0x08`). Every fly-by carries `27.777779` (= 1000/36).
     pub far_clip: f32,
@@ -268,7 +266,7 @@ pub struct M2Model {
     /// Per-`M2Color` **alpha** track (full [`M2ScalarTrack`]: interp + gseq tag + timed keys), one
     /// per color record (header `0x54`). A `texUnit.colorIndex` (direct) selects one; no keys ⇒ the
     /// factor doesn't apply. The alpha governs batch visibility (a constant 0 hides the batch) and,
-    /// time-varying, the animated material combine (wow-re `m2-alpha-combine-cull`).
+    /// time-varying, the animated material combine (`0x707680`).
     pub color_alpha_tracks: Vec<M2ScalarTrack>,
     /// Per-`M2Color` **RGB colour** track (full [`M2Vec3Track`]: interp + gseq tag + timed
     /// `C3Vector` keys, the colour record's `+0x00` track), one per record. Selected by the same
@@ -282,7 +280,7 @@ pub struct M2Model {
     /// `0x64`). Selected via `texUnit.weight_combo_index → transparency_lookup → here` (two-hop).
     pub transparency_tracks: Vec<M2ScalarTrack>,
     /// The transparency lookup table (header `0xa4`, u16): `weight_combo_index` indexes this to reach
-    /// [`Self::transparency_tracks`] (verified two-hop, wow-re `m2-alpha-combine-cull`).
+    /// [`Self::transparency_tracks`] (two-hop, `0x707b19`–`0x707b26`).
     pub transparency_lookup: Vec<u16>,
     /// The **texture-unit lookup** table (header `0x9c`, u16): `texture_coord_combo_index` (texUnit
     /// `+0x12`) indexes this to decide where a stage's texture coordinates come from. A value
@@ -295,7 +293,7 @@ pub struct M2Model {
     /// `texture_transform_combo_index → texture_transform_lookup → here`.
     pub texture_transforms: Vec<M2TextureTransform>,
     /// The texture-animation lookup table (header `0xac`, u16): `texture_transform_combo_index`
-    /// (texUnit `+0x16`, wow-re rf72 `0x70b897`) indexes this to reach
+    /// (texUnit `+0x16`, `0x70b897`) indexes this to reach
     /// [`Self::texture_transforms`]; `0xffff` = no animation.
     pub texture_transform_lookup: Vec<u16>,
     /// Global-sequence durations (header `0x14/0x18`, ms): the free-running loop clocks
@@ -307,15 +305,14 @@ pub struct M2Model {
     pub cameras: Vec<M2Camera>,
     /// The **CameraLookup** table (header `0x12c`, u16): a camera *purpose* index → the slot in
     /// [`Self::cameras`] that serves it. The portrait bake selects through it (`cameraLookup[0]`,
-    /// `0x525266`); the `<Model>` pane indexes [`Self::cameras`] raw instead (wow-re
-    /// `ui/scratch/modelframe-camera-law.md`). Carried so a selection can be written the way the
-    /// reference writes it rather than assumed 1:1.
+    /// `0x525266`); the `<Model>` pane indexes [`Self::cameras`] raw instead (`0x76cec0`). Carried
+    /// so a selection can be written the way the reference writes it rather than assumed 1:1.
     pub camera_lookup: Vec<u16>,
     pub raw_data: M2RawData,
     pub header: M2Header,
-    /// Model-space **Z** of attachment id 17 — the reference's follow-camera pivot height (wow-re
-    /// `follow-camera`, `0x50cbc0`: the camera targets `feet + (attach17.z + 0.0972)·scale`). `None` when
-    /// the model has no slot-17 attachment (a non-character model → the camera falls back to the box).
+    /// Model-space **Z** of attachment id 17 — the reference's follow-camera pivot height
+    /// (`0x50cbc0`: the camera targets `feet + (attach17.z + 0.0972)·scale`). `None` when the model
+    /// has no slot-17 attachment (a non-character model → the camera falls back to the box).
     pub pivot_attach_z: Option<f32>,
     /// The full attachment-point table (see [`M2Attachment`]) — every record whose id/bone fit `u16`
     /// and whose bone indexes into [`Self::bones`]. `pivot_attach_z` above is the id-17 special case
@@ -354,13 +351,13 @@ impl M2Model {
     /// **Are this batch's stage-`stage` texture coordinates GENERATED (environment-mapped) rather
     /// than read from the vertex UVs?**
     ///
-    /// The reference's gate, at `0x70b8bd` (`cmp word[ [MD20+0xa0][texCoordSet + stage] ], 0x2; jbe`
-    /// — wow-re `m2-texanim-uv` §2, models.md §936/§944): a [`Self::texture_unit_lookup`] entry
-    /// `<= 2` names a vertex UV channel, anything higher (real art authors `0xffff`) is a
+    /// The reference's gate, at `0x70b8bd`
+    /// (`cmp word[ [MD20+0xa0][texCoordSet + stage] ], 0x2; jbe`): a [`Self::texture_unit_lookup`]
+    /// entry `<= 2` names a vertex UV channel, anything higher (real art authors `0xffff`) is a
     /// **generated environment coordinate**. Such a stage can never be `textureTransform`-driven,
     /// and the shipped vertex program writes it as the sphere-map remap of the view-space
     /// reflection vector — `uv = normalize(P − 2(P·N)N).xy · 0.5 + 0.5`, the `(0.5,0,0,0.5 /
-    /// 0,0.5,0,0.5)` matrix wow-re byte-derived at `0x70b8d0`.
+    /// 0,0.5,0,0.5)` matrix at `0x70b8d0`.
     ///
     /// **An out-of-range index reads as env-mapped**, matching the reference: `0x70b8bd` indexes
     /// the table unguarded and falls through to the same `else` branch that writes the env remap.
@@ -377,7 +374,7 @@ impl M2Model {
     /// `0xffff` sentinel for an out-of-range index) compared against `0xffff`.
     ///
     /// This is the predicate the GameObject animation arm branches on when the substate's animation
-    /// id is missing from the model (wow-re `gameobject-anim-arm.md` §2c's four-way remap), so it
+    /// id is missing from the model (the four-way remap in `0x5f3930`), so it
     /// must answer exactly as the reference does — including for an id past the table's end, which
     /// is **not owned** even if some later mechanism could reach a sequence carrying it.
     pub fn owns_animation(&self, anim_id: u16) -> bool {

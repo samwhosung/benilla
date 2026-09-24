@@ -3,7 +3,7 @@
 //! interior arc). Pure geometry — no Bevy — so the app renderer and the against-real-data test share
 //! one source of truth.
 //!
-//! Mechanism (RE'd in `wow-5875-re`'s minimap node, tile producer in the CMapObj/WMO TU; the grid
+//! Mechanism (the reference's tile producer `0x6a5270`, in the CMapObj/WMO TU; the grid
 //! **corrected + verified against Ironforge's authored tiles this session**, see
 //! `ironforge_group_grid_matches_trs`): the bake is a fixed **0.5 yd/texel**, each tile a
 //! power-of-two texel square clamped to `[32, 256]` px, sized to cover the group's footprint extent,
@@ -11,9 +11,8 @@
 //!
 //! Both roundings go **up**: the binary's round-to-int (`FUN_0073fdf5`) loads a control word with
 //! the RC field = round-toward-+∞, i.e. `ceil` — so the pixel edge is `2^ceil(log2(extent·2))` and
-//! the count is `ceil(extent / 128)` (a full 256-px tile = 128 yd). The RE note first read these as
-//! `floor`, which under-counts (group 1 → 0 columns, group 66 → 1×1); the byte-verified `ceil`
-//! matches the authored data — root cause in `wmo-interior-minimap.md` (fold-back this session).
+//! the count is `ceil(extent / 128)` (a full 256-px tile = 128 yd). `floor` would under-count
+//! (group 1 → 0 columns, group 66 → 1×1); `ceil` matches the authored data.
 
 /// The minimap tile bake resolution: world yards per texel (RE constant `0xca7ebc`).
 pub const YD_PER_TEXEL: f32 = 0.5;

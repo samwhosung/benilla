@@ -10,8 +10,8 @@
 //! **Two entry points, because the GPU wants the blocks and the CPU wants the pixels.**
 //! [`decode`] always yields `Rgba8Unorm`; [`decode_native`] hands back the DXTC blocks *verbatim*
 //! and only decodes the shapes that have no GPU-native form (Raw1/Raw3). The reference client
-//! uploads the stored blocks untouched (`glCompressedTexImage2DARB`; wow-re `system/image/image.md`
-//! "raw passthrough — device eats DXT"), so the native path is both the faithful one and 4x-8x
+//! uploads the stored blocks untouched (`glCompressedTexImage2DARB` in `0x59f270`; a raw
+//! passthrough — the device eats DXT), so the native path is both the faithful one and 4x-8x
 //! cheaper in VRAM and texture bandwidth. Decoding is for consumers that read texels on the CPU.
 //!
 //! Two fidelity points that cost the old `wow-blp` two forks, folded in here natively:
@@ -294,8 +294,7 @@ impl Header<'_> {
     /// the read from the format alone, `bpp · max(4, wL) · max(4, hL) / 8` (`0x59f4e6`–`0x59f515`).
     /// Either way the GPU gets the full block grid from the level's offset, so a short level is
     /// completed with the bytes that FOLLOW it in the file: the next levels' own authored blocks
-    /// (wow-re `system/image/scratch/dxt-level-span-law.md`, both arms VERIFIED; decisions
-    /// 2020/2024). Padding the difference with
+    /// (decisions 2020/2024). Padding the difference with
     /// zeros instead (an all-zero BC block = colour black, alpha 0) is what turned the far rain
     /// black: `RainDrop01.blp`'s levels 3 and 4 came out three-quarters and half black, and its
     /// Mod2x lane reads no alpha (decision 2020, B358/B225). Only a level the FILE itself ends

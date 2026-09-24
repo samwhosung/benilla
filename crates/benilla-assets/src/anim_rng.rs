@@ -5,9 +5,9 @@
 //! host and the game's creature, GameObject and portrait-booth arms all roll a variation off this
 //! sequence, and in the reference they roll it off the *same cell*: `rand` reads and rewrites
 //! `[ptd+0x14]`, one per thread, and every animation arm in the client runs on the primary thread
-//! (`_initterm` is pre-`WinMain`; the frame loop is inline, not spawned — wow-re
-//! `net/scratch/crt-rand-stream-seeding.md` §4). A leaf with no dependencies can be reached by
-//! everything; an owner at the top of the stack cannot be reached by the engine at all.
+//! (`_initterm` is pre-`WinMain`; the frame loop `0x420c00` is inline, not spawned). A leaf with no
+//! dependencies can be reached by everything; an owner at the top of the stack cannot be reached by
+//! the engine at all.
 //!
 //! **Why one stream and not one per consumer** (decision 0768, and 2301 which found the drift):
 //! a shared sequence is what de-syncs a stand of identical props. Not a per-placement seed — just
@@ -21,8 +21,7 @@
 //! 0x82a9ac` → the `_dynamic_initializer_for_*` trampoline `0x5b7ff0` → `0x5b8000`) calls
 //! `0x5d1c70`, which calls `srand(GetTickCount())` at `0x5d1c8b`. So the reference's variation
 //! sequence differs on every run, and [`AnimRng::seed_for_session`] is where benilla says the same
-//! thing. Byte-VERIFIED by a wow-re §5 round; recorded in
-//! `net/scratch/crt-rand-stream-seeding.md`.
+//! thing.
 //!
 //! **Sequence parity with the reference is not achievable and is not the goal.** Where the stream
 //! stands at any given arm depends on every intervening draw — the noise table `Model2::Initialize`

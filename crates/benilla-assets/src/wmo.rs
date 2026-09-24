@@ -43,7 +43,7 @@ pub struct WmoGroupNav {
     pub area_table_id: u32,
     /// The group's MOGP fog indices (disk `+0x30`, empirically pinned against the Goldshire inn) —
     /// up to four indices into [`WmoModel::fogs`], walked by the camera-in-interior fog selector
-    /// (`0x69de20`, wow-re `rf-weather-emission-timeline` ROUND 5).
+    /// (`0x69de20`).
     pub fog_indices: [u8; 4],
     /// MOGP `groupLiquid` (`0xf` = none) — the **whole-group submersion override**. On the 13
     /// shipped groups that set it, the client's liquid probe answers "submerged" for the entire
@@ -73,8 +73,7 @@ pub struct WmoModel {
     pub group_nav: Vec<WmoGroupNav>,
     /// The root's MFOG fog records — record 0 is the WMO default (the interior-fog selector's
     /// seed); a group's [`WmoGroupNav::fog_indices`] point here. Consumed by the camera-in-interior
-    /// fog resolve (`crate::wmo_portal` in the app), per wow-re `rf-weather-emission-timeline`
-    /// ROUND 5 (`0x69de20`).
+    /// fog resolve (`crate::wmo_portal` in the app), per the reference (`0x69de20`).
     pub fogs: Vec<WmoFog>,
     /// The root's **MOSB** skybox model (`.m2`), drawn as the sky backdrop while the camera stands in
     /// a group whose flags carry `0x40000` — see `crate::skybox` in the app for the gate and
@@ -85,10 +84,10 @@ pub struct WmoModel {
     /// Per-group **walking-collision** triangles (WoW model space, indexed by absolute group index) —
     /// the Leg-A face set for the current-group **down-ray** (`crate::wmo_portal`). The faithful "which
     /// room is the camera in" test casts a ray straight down from the eye against the same face set the
-    /// player's walking collision uses — every non-DETAIL face, **no orientation filter** (`wow-5875-re`
-    /// `system/models/scratch/wmo-portal-audit.md` Q3/Q4: the client's Leg A is the walking-collision
-    /// BSP, mask `0x84`; an earlier render-face `|n.z|` floor heuristic mis-seeded doorways and slab
-    /// edges). Same triangles as [`Self::collision`], kept per group for group attribution.
+    /// player's walking collision uses — every non-DETAIL face, **no orientation filter** (the
+    /// client's Leg A, `0x6be250`, is the walking-collision BSP, mask `0x84`; an earlier
+    /// render-face `|n.z|` floor heuristic mis-seeded doorways and slab edges). Same triangles as
+    /// [`Self::collision`], kept per group for group attribution.
     pub group_collision_tris: Vec<Vec<[[f32; 3]; 3]>>,
     /// Per-group **camera-only** triangles (parallel to [`Self::group_collision_tris`]): the faces
     /// the camera gather keeps but the walking gather drops — DETAIL (`0x04`) set, NOCAMCOLLIDE
@@ -139,8 +138,8 @@ pub struct WmoModel {
     /// fixed in the root). See [`DoodadBase`]: an interior-group doodad's base is its own MODD
     /// entry's baked colour, and its point light comes only from its owning group's MOLR list. The
     /// footprint down-ray this replaced (decision 0290) is byte-real code, but it is the ADT-MDDF
-    /// attach path — a WMO MODD doodad never reaches it (create never calls SetMatrix; wow-re
-    /// `trace-forensics-abbey-interior-d3d` §1.1).
+    /// attach path — a WMO MODD doodad never reaches it (create `0x694e90` never calls SetMatrix
+    /// `0x698d20`).
     pub doodad_base: Vec<DoodadBase>,
     /// Per-MODD **instantiating group** (the first group whose MODR refs name it), parallel to
     /// [`Self::doodads`]; `None` for a MODD no group references. The reference creates a doodad
@@ -155,8 +154,7 @@ pub struct WmoModel {
     ///
     /// This is the prop's portal-cull key. The reference commits a WMO's doodads **per visible
     /// group** — `0x695aa0` loops the group's own MODR refs at `group+0xe8`/count `+0x144`, called
-    /// from the visible-group walk `0x698720` (wow-re `m2-interior-doodad-base-light.md` §453,
-    /// `trace-forensics-abbey-interior-d3d.md` §90) — so a group the portal flood culled draws none
+    /// from the visible-group walk `0x698720` — so a group the portal flood culled draws none
     /// of its furniture, and a prop **any** of whose referrers is visible is drawn. Without the key
     /// at all, props outlive their own building: cull every group of a dungeon and its lanterns,
     /// crates and cobwebs hang in the void (decision 0689). With the key collapsed to one owner, a
@@ -167,7 +165,7 @@ pub struct WmoModel {
     /// group index; `None` for exterior groups / groups without MOCV. The **GameObject M2** light
     /// lane samples it: the entity node's env-update attach down-rays the render mesh under the
     /// object and bakes the hit's barycentric MOCV, floor-168/cap-96, on the fixed interior axis
-    /// (`0x69e4c0`; wow-re `wmo-lit-selector.md`, trace-decisive on the abbey benches).
+    /// (`0x69e4c0`; a reference capture of the abbey benches decides it).
     pub group_footprints: Vec<Option<FootprintTris>>,
     /// Root MOMT `ground_type` per material — the `TerrainType.dbc` id a face's
     /// `FootprintTris::mopy_material` resolves to. Shared by every group (MOMT lives on the root),
@@ -201,10 +199,10 @@ pub struct WmoModel {
 }
 
 /// The load-resolved lighting base of one placed MODD doodad. The real client fills an
-/// interior-group doodad's slot-0 words at CREATE, from the MODD record's own colour field —
-/// byte-verified (`0x694e90` → `6950de call 0x6a77e0(&MODD.colour, &diffuse, 0x70, &ambient, 0x60)`)
-/// and read live off the reference's abbey draws, where both decoded stands' diffuse words equal
-/// their MODD colour bytes verbatim (wow-re `trace-forensics-abbey-interior-d3d` §1).
+/// interior-group doodad's slot-0 words at CREATE, from the MODD record's own colour field
+/// (`0x694e90` → `6950de call 0x6a77e0(&MODD.colour, &diffuse, 0x70, &ambient, 0x60)`), and read
+/// live off the reference's abbey draws, where both decoded stands' diffuse words equal their MODD
+/// colour bytes verbatim.
 #[derive(Clone, PartialEq, Debug)]
 pub enum DoodadBase {
     /// Exterior-group doodad — the sky-lit lane (day/night sun; a WMO prop takes the plain matte).
@@ -343,9 +341,8 @@ pub fn collision_tri_bounds(
     (per_group, union)
 }
 
-/// The ambient-word CAP of `0x6a77e0` (exact fixed-point arithmetic, byte-verified — re-derived in
-/// wow-re `trace-forensics-abbey-interior-d3d` §1.1 and bit-exact against both decoded abbey stands):
-/// a colour whose max channel exceeds 96 is scaled down so max = 96 — per channel
+/// The ambient-word CAP of `0x6a77e0` (exact fixed-point arithmetic, bit-exact against both decoded
+/// abbey stands): a colour whose max channel exceeds 96 is scaled down so max = 96 — per channel
 /// `(c·scale + 255) >> 8` with `scale = round(96·255/max − 0.5)`; max ≤ 96 passes through raw.
 pub fn cap96(c: [u8; 3]) -> [f32; 3] {
     let max = c[0].max(c[1]).max(c[2]);
@@ -358,10 +355,10 @@ pub fn cap96(c: [u8; 3]) -> [f32; 3] {
 
 /// The diffuse-word FLOOR of `0x6a77e0`: a colour whose max channel is below `thresh` is raised —
 /// HSV round-trip re-emitting at value `thresh`, which for an RGB triple is a hue/saturation-
-/// preserving scale by `thresh/max`, **truncated** per channel. The rounding was OPEN until the
-/// abbey INNBENCH decode exercised the raise leg live: bench MOCVs (59,65,92)/(69,63,83) raise to
+/// preserving scale by `thresh/max`, **truncated** per channel. The abbey INNBENCH decode (a
+/// reference capture) exercises the raise leg live: bench MOCVs (59,65,92)/(69,63,83) raise to
 /// diffuse (107,118,168)/(139,127,168) — 63·(168/83) = 127.52 lands on 127, which truncation gives
-/// and nearest-rounding does not (wow-re `wmo-lit-selector.md`, machine-zero fits).
+/// and nearest-rounding does not (machine-zero fits).
 fn floor_raise(c: [u8; 3], thresh: u8) -> [f32; 3] {
     let max = c[0].max(c[1]).max(c[2]);
     if max >= thresh || max == 0 {
@@ -380,9 +377,8 @@ pub fn floor112(c: [u8; 3]) -> [f32; 3] {
 }
 
 /// [`floor_raise`] at the entity/footprint attach site's diffuse threshold `0xA8` (168) — the
-/// GameObject M2 lane (`0x69e4c0`, the entity twin of the ADT-MDDF `0x6a8410`; wow-re
-/// `wmo-lit-selector.md`). Both decoded abbey benches take the raise leg (MOCV maxes 92/83 →
-/// diffuse max exactly 168 on the wire).
+/// GameObject M2 lane (`0x69e4c0`, the entity twin of the ADT-MDDF `0x6a8410`). Both decoded abbey
+/// benches take the raise leg (MOCV maxes 92/83 → diffuse max exactly 168 on the wire).
 pub fn floor168(c: [u8; 3]) -> [f32; 3] {
     floor_raise(c, 168)
 }
@@ -621,7 +617,7 @@ impl AssetLoader for WmoModelLoader {
             let subs = wmo_group_submeshes(&gbytes, &root).map_err(to_io)?;
             // This group's MODR (which MODD placements it owns/instantiates) + MOLR (which MOLT
             // lights fold into its doodads' committed light) — the per-doodad base resolution below
-            // consumes both (wow-re trace-forensics-abbey-interior-d3d §1.1/§4).
+            // consumes both (MODR walked at `0x695aa0`, MOLR at `0x695c00`).
             if let Some(slot) = group_doodad_refs.get_mut(gi as usize) {
                 *slot = wmo_group_doodad_refs(&gbytes);
             }
@@ -756,11 +752,11 @@ impl AssetLoader for WmoModelLoader {
 /// the visible line along the Stormwind canals (B141's water half).
 ///
 /// The reference picks the winner by 2-colouring the portal graph on the depth parity of the flood
-/// that reached each group, recomputed every frame (`0x6b41c0`/`0x6b4074`/`0x6b61a0`, wow-re
-/// `terrain/scratch/wmo-liquid-shared-tile-gate.md`). We pick **the lowest group index**, which is
-/// pixel-identical and needs no flood: the RE measured all 415 corners of Stormwind's 190 shared
-/// cells and the two claimants agree exactly — the same per-vertex alpha byte (415/415) and heights
-/// within 5e-6 yd. Which one draws cannot be seen; that two draw can.
+/// that reached each group, recomputed every frame (`0x6b41c0`/`0x6b4074`/`0x6b61a0`). We pick
+/// **the lowest group index**, which is pixel-identical and needs no flood: measured over all 415
+/// corners of Stormwind's 190 shared cells, the two claimants agree exactly — the same per-vertex
+/// alpha byte (415/415) and heights within 5e-6 yd. Which one draws cannot be seen; that two draw
+/// can.
 ///
 /// Cells are matched on their XY centre quantised to a hundredth of a yard — the two authors share
 /// the same MLIQ lattice, so the coordinates agree to float exactness and the quantisation is only
@@ -832,10 +828,9 @@ mod doodad_base_tests {
         }
     }
 
-    /// GOLDEN — the two abbey stands the reference trace decoded (wow-re
-    /// `trace-forensics-abbey-interior-d3d` §1): MODD[18] colour (78,76,134) → ambient (56,55,96)
-    /// diffuse raw; MODD[24] colour (90,86,141) → ambient (61,59,96) diffuse raw. Both bit-exact
-    /// through the `0x6a77e0` fixed-point cap (scales 182 and 173).
+    /// GOLDEN — the two abbey stands the reference trace decoded: MODD[18] colour (78,76,134) →
+    /// ambient (56,55,96) diffuse raw; MODD[24] colour (90,86,141) → ambient (61,59,96) diffuse
+    /// raw. Both bit-exact through the `0x6a77e0` fixed-point cap (scales 182 and 173).
     #[test]
     fn cap96_matches_the_decoded_abbey_stands_bit_exact() {
         let as_bytes = |c: [f32; 3]| c.map(|v| (v * 255.0).round() as u8);
@@ -861,7 +856,7 @@ mod doodad_base_tests {
 
     #[test]
     fn floor168_matches_the_decoded_abbey_benches_bit_exact() {
-        // wow-re `wmo-lit-selector.md`: the INNBENCH GameObject draws (14150796/14150859) decode to
+        // The reference trace's INNBENCH GameObject draws (14150796/14150859) decode to
         // ambient = the raw MOCV (max ≤ 96 → cap96 pass-through) and diffuse = floor168(MOCV) with
         // TRUNCATING rounding — 63·168/83 = 127.52 lands on 127 (nearest would give 128).
         let as_bytes = |c: [f32; 3]| c.map(|v| (v * 255.0).round() as u8);

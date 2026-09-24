@@ -9,20 +9,19 @@ use benilla_bytes::ByteExt;
 /// with values. The v256 track (stride `0x1c`): `interp`@0, `global_seq`@2, interpolation_ranges
 /// `M2Array`@`0x04/0x08`, timestamps `M2Array`@`0x0c/0x10` (u32 ms), values `M2Array`@`0x14/0x18`.
 /// A sequence-timeline track (`gseq == 0xffff`) keys inside each sequence's absolute time band; a
-/// global-sequence track loops on `global_sequences[gseq]`'s own clock (wow-re
-/// `eval.md`/`doodad-anim-host.md`). Key count is `min(timestamps, values)` — vanilla art
-/// occasionally pads one array.
+/// global-sequence track loops on `global_sequences[gseq]`'s own clock (`0x713d50`). Key count is
+/// `min(timestamps, values)` — vanilla art occasionally pads one array.
 #[derive(Clone, Debug)]
 pub struct M2Track<V> {
-    /// Interpolation type: `0` = step (nearest-previous key), nonzero = linear (wow-re `eval.md`:
-    /// the scalar sampler's `cmp word[track],0` two-way dispatch).
+    /// Interpolation type: `0` = step (nearest-previous key), nonzero = linear (the scalar sampler
+    /// `0x71af20`'s `cmp word[track],0` two-way dispatch).
     pub interp: u16,
     /// Global-sequence index, `0xffff` = an ordinary sequence-timeline track.
     pub gseq: u16,
     /// The per-sequence **key-index window** `(lo, hi)`, one entry per sequence in file order —
     /// the array the reference's key search indexes by the playing sequence's slot before it ever
-    /// looks at a timestamp (VERIFIED wow-re `eval.md` FN1 `0x713d50` §1: `[track+8][idx*8+{0,4}]`;
-    /// an empty array is the `[track+4]==0` fallback, "search the whole key list").
+    /// looks at a timestamp (`0x713d50`: `[track+8][idx*8+{0,4}]`; an empty array is the
+    /// `[track+4]==0` fallback, "search the whole key list").
     ///
     /// These are **brackets**, not the playable key set: `hi` routinely points at a key in a LATER
     /// sequence's band, which is why selecting in-clip keys through this window instead of by
@@ -113,15 +112,15 @@ fn rd_vec3(b: &[u8], o: usize) -> Option<[f32; 3]> {
 /// Read a scalar `fix16` track (**`int16`**/32767 values). Used for the colour-**alpha** and
 /// transparency-**weight** tracks that gate batch visibility and drive the animated material combine.
 ///
-/// **The key is SIGNED** — `movsx`, not `movzx` (VERIFIED, wow-re `system/animation/scratch/tracks.md`
-/// flavour (c): `dest = (f32)(int16 P[k0]) * (1/0x7fff)`, bytes `movsx edx,word[P+k0*2]; fild;
-/// fmul [0x811610]; fstp dest` at `0x715b2f`–`0x715b46`, dispatched at the M2Color-alpha site
-/// `0x715b21` (`colors[]` stride 0x38, track @ +0x1c) and the transparency-weight site `0x715ce2`).
-/// Read unsigned, the authored "hide me" key `0x8001` decodes as `+1.00006` instead of `−1.0`, so a
-/// batch the reference culls (`A ≤ 0`, wow-re `m2-alpha-combine-cull`) draws at full alpha instead:
-/// that is how Zul'Farrak's troll gate drew its BURNT twin on top of its intact self and z-fought
-/// (B138, decision 1460). Values outside `[0, 1]` are the artist's own encoding, not a data quirk —
-/// the combine consumes them as signed floats and the cull tests `≤ 0`.
+/// **The key is SIGNED** — `movsx`, not `movzx` (`dest = (f32)(int16 P[k0]) * (1/0x7fff)`, bytes
+/// `movsx edx,word[P+k0*2]; fild; fmul [0x811610]; fstp dest` at `0x715b2f`–`0x715b46`, dispatched
+/// at the M2Color-alpha site `0x715b21` (`colors[]` stride 0x38, track @ +0x1c) and the
+/// transparency-weight site `0x715ce2`). Read unsigned, the authored "hide me" key `0x8001` decodes
+/// as `+1.00006` instead of `−1.0`, so a batch the reference culls (`A ≤ 0`, `0x707b3a`–`0x707b5c`)
+/// draws at full alpha instead: that is how Zul'Farrak's troll gate drew its BURNT twin on top
+/// of its intact self and z-fought (B138, decision 1460). Values outside `[0, 1]` are the
+/// artist's own encoding, not a data quirk — the combine consumes them as signed floats and the
+/// cull tests `≤ 0`.
 pub(crate) fn track_fix16(b: &[u8], track_ofs: usize) -> M2ScalarTrack {
     track_read(b, track_ofs, 2, |b, o| {
         b.u16_at(o).map(|v| f32::from(v as i16) / 32767.0)
@@ -148,9 +147,8 @@ pub(crate) fn track_quat(b: &[u8], track_ofs: usize) -> M2QuatTrack {
 }
 
 /// One key of a **cubic** M2 track — the reference's `M2SplineKey<T>`: the value plus its in/out
-/// tangents, `{value@+0, in_tan@+1·sizeof(T), out_tan@+2·sizeof(T)}` (VERIFIED wow-re
-/// `animation/scratch/kern-inner.md` §2a: the vec3 key is stride `0x24`
-/// `{value@+0, inTan@+0xc, outTan@+0x18}`, the scalar-float key stride `0xc`
+/// tangents, `{value@+0, in_tan@+1·sizeof(T), out_tan@+2·sizeof(T)}` (the vec3 key is stride
+/// `0x24` `{value@+0, inTan@+0xc, outTan@+0x18}`, the scalar-float key stride `0xc`
 /// `{value@+0, inTan@+4, outTan@+8}`).
 ///
 /// **The wide key is the stride whatever `interp` says.** The reference's cubic element loops
@@ -203,9 +201,7 @@ impl<V: CubicValue> M2Track<M2SplineKey<V>> {
     ///
     /// The four-way `interp` dispatch is the reference's own, and it is the *cubic element loops'*
     /// dispatch — not the two-way `cmp word[track],0; jne <linear>` the bone/TRS loops collapse to
-    /// (VERIFIED wow-re `animation/scratch/tracks.md` deviation #2: the switch is per-loop, by
-    /// track type). Byte-verified bases, `kern-inner.md` §2a(i)/(ii) with `t` the key-interval
-    /// fraction:
+    /// (the switch is per-loop, by track type). The bases, with `t` the key-interval fraction:
     ///
     /// - `0` **STEP** — `value[k0]`, no tangent read (`0x716b5f`).
     /// - `1` **LINEAR** — `value[k0] + (value[k1] − value[k0])·t` (`0x716cf1`).

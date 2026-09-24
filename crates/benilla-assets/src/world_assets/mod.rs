@@ -177,8 +177,8 @@ pub fn sprite_candidates(path: &str) -> [String; 2] {
 
 /// The **texel dimensions** of a UI sprite reference, or `None` when nothing resolves — the number
 /// the client's `CSimpleTexture` size getters read out of `[tex+0x144]`/`[tex+0x148]` when a region
-/// authored no size on an axis (wow-re `region-size-fallback.md` §2, decision 1349: one texel is one
-/// FrameXML unit).
+/// authored no size on an axis (`0x770720`/`0x770790`, decision 1349: one texel is one FrameXML
+/// unit).
 ///
 /// It goes through [`decode_sprite`] rather than sniffing a header, so the size layout uses is the
 /// size the screen shows: the same candidate order, the same BLP-vs-TGA content sniff, and the same
@@ -300,10 +300,10 @@ fn decode_sprite_bytes(bytes: &[u8]) -> anyhow::Result<(u32, u32, Vec<u8>)> {
 /// three copies of that would be three things to keep in step — the font leg was already a
 /// hand-rolled second copy of the sprite leg's order when audio became the third caller.
 ///
-/// The reference asks the install tree *before* the archive (`0x647e60`'s attempt #4 is the MPQ —
-/// wow-re `ui/scratch/include-lua-dispatch.md` §4.1); the order is flipped here for the same
-/// reason [`decode_sprite`] flips it, and it is unobservable: the chain carries no `AddOns\` path,
-/// so every non-addon read stays on exactly the code it always ran.
+/// The reference asks the install tree *before* the archive (`0x647e60`'s attempt #4 is the MPQ);
+/// the order is flipped here for the same reason [`decode_sprite`] flips it, and it is
+/// unobservable: the chain carries no `AddOns\` path, so every non-addon read stays on exactly the
+/// code it always ran.
 pub fn read_chain_or_loose(
     chain: &Mutex<Chain>,
     loose_root: Option<&Path>,
@@ -539,7 +539,7 @@ impl WorldAssets {
     }
 
     /// A UI sprite decoded with **repeat** (wrap) addressing on both axes — the frame `Backdrop`
-    /// tiled pieces (`backdrop-mechanism.md`): a border edge strip samples UVs `[0..N]` and a tiled
+    /// tiled pieces (`0x77f0c0`): a border edge strip samples UVs `[0..N]` and a tiled
     /// bg `[0..w/period]`, so the texture must wrap, not clamp. [`Self::sprite_texture_wrapped`]
     /// with both axes on; see there for the cache and the decode.
     pub fn sprite_texture_tiled(
@@ -758,7 +758,7 @@ impl WorldAssets {
                 ..default()
             },
             // No resolved texture → untextured WHITE draw (stage disabled in the reference —
-            // wow-re m2-runtime-texture-null-bind.md; see model_render.rs for the full note).
+            // `0x59d020`; see model_render.rs for the full note).
             None => StandardMaterial {
                 base_color: Color::WHITE,
                 ..default()

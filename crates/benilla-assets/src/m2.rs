@@ -55,10 +55,10 @@ pub struct M2Model {
     /// Particle emitters (flames, glows, smoke). Each carries its parsed def (positions in raw WoW
     /// model space) + its resolved texture handle. Empty for most models; one or two for campfires.
     pub emitters: Vec<ModelEmitter>,
-    /// Ribbon emitters (weapon trails, wisp streamers, missile trails — wow-re
-    /// `ribbon-emitter-spec.md`). Same shape as the particle emitters: parsed def + resolved trail
-    /// texture + the host bone's pivot for joint riding. Empty for nearly everything (176 models
-    /// corpus-wide author one).
+    /// Ribbon emitters (weapon trails, wisp streamers, missile trails — the reference's
+    /// `CRibbonEmitter`, simulated per frame at `0x7b7e60`). Same shape as the particle emitters:
+    /// parsed def + resolved trail texture + the host bone's pivot for joint riding. Empty for
+    /// nearly everything (176 models corpus-wide author one).
     pub ribbons: Vec<ModelRibbon>,
     /// M2 light blocks (raw WoW model space + the host bone's rest pivot). The spawn site turns each
     /// casting `type==1` (point) light into a Bevy `PointLight` that lays the faithful dynamic
@@ -79,12 +79,12 @@ pub struct M2Model {
     /// The **file-order-first sequence's authored duration** (seconds, one full pass) — carried even
     /// when no clip builds ([`ModelAnimations`] drops sequences that move no bone, and a model whose
     /// sequences all sit still has no `animations` at all). The real client's effect-completion
-    /// clock runs one pass of the armed sequence regardless of bone keys or the LOOP flag
-    /// (byte-verified, wow-re `ceffect-selfterm.md`: the fire is the CM2 advance `0x7194f8`, a pure
-    /// end-boundary compare; loop is tested only *after* it) — the spell-fx self-termination reads
-    /// this. Named approximation: the client arms `animationLookup[0]`'s sequence, not strictly the
-    /// file-order-first one; they coincide on every effect model probed (single-sequence models).
-    /// `None` for a model with no sequences at all.
+    /// clock runs one pass of the armed sequence regardless of bone keys or the LOOP flag (the fire
+    /// is the CM2 advance `0x7194f8`, a pure end-boundary compare; loop is tested only *after* it)
+    /// — the spell-fx self-termination reads this. Named approximation: the client arms
+    /// `animationLookup[0]`'s sequence, not strictly the file-order-first one; they coincide on
+    /// every effect model probed (single-sequence models). `None` for a model with no sequences at
+    /// all.
     pub first_seq_span: Option<f32>,
     /// **Every sequence the file owns, in file order** — id, slot, length, loop — whatever
     /// [`Self::animations`] kept a clip for. The UI model pane's clock needs exactly this
@@ -102,18 +102,18 @@ pub struct M2Model {
     /// client's `0x7130e0`/`0x7131b0` surface. Empty for a model with no events.
     pub markers: Vec<crate::ModelMarker>,
     /// The model's authored **portrait camera** (`benilla_formats::M2PortraitCamera` baked to Bevy
-    /// space) — the exact rig the real client renders the unit-frame portrait through (VERIFIED,
-    /// wow-re portrait-render §4: `cameraLookup[0]`, `lookAt` + authored perspective, no engine-side
-    /// framing on top). `None` for a model with no camera table (props, a few creatures).
+    /// space) — the exact rig the real client renders the unit-frame portrait through
+    /// (`cameraLookup[0]` via `0x713540`, `lookAt` + authored perspective at `0x7ac640`, no
+    /// engine-side framing on top). `None` for a model with no camera table (props, a few
+    /// creatures).
     pub portrait_camera: Option<PortraitCamera>,
     /// The camera **table's first record** — the glue screens' `Model:SetCamera(0)` rig (the
     /// create/select background scenes; their camera *lookup* is the 0xffff none sentinel, so
     /// `portrait_camera` sees nothing there). Same Bevy-space conversion as `portrait_camera`.
     pub camera0: Option<PortraitCamera>,
     /// The camera table's **second** record — what a 1.12 `<PlayerModel>` UI widget (the paper doll,
-    /// the inspect pane, the pet page) renders through (VERIFIED, wow-re
-    /// `ui/scratch/modelframe-camera-law.md`: `0x505b30` → the chooser `0x505890` selects **raw
-    /// index 1**, the `type == 1` "characterinfo" camera, and freezes it at `0x7acf10`).
+    /// the inspect pane, the pet page) renders through (`0x505b30` → the chooser `0x505890` selects
+    /// **raw index 1**, the `type == 1` "characterinfo" camera, and freezes it at `0x7acf10`).
     ///
     /// **Raw, not through `cameraLookup`** — that array is the portrait bake's path and is not
     /// consulted here; the index is a literal 1 whatever the record's `type` says. `None` for a
@@ -127,16 +127,16 @@ pub struct M2Model {
     /// a pane renders through the perspective leg at all (an index past the count installs a NULL
     /// camera and the pane falls back to the orthographic leg).
     pub cameras: Vec<PaneCamera>,
-    /// A bow's `$WTT`/`$WTB` bowstring anchors (wow-re `nocked-ammo-cancel.md` §G2), baked to Bevy
-    /// space: `[top, bottom]` as `(bone index, model-local position)` — the two limb-tip points the
-    /// engine-drawn string spans. `None` for every non-bow model.
+    /// A bow's `$WTT`/`$WTB` bowstring anchors (the endpoints of the string drawer `0x611ff0`),
+    /// baked to Bevy space: `[top, bottom]` as `(bone index, model-local position)` — the two
+    /// limb-tip points the engine-drawn string spans. `None` for every non-bow model.
     pub string_anchors: Option<[(u16, Vec3); 2]>,
-    /// The fishing pole's `$CCH` line anchor (wow-re `fishing-line.md` §2), baked to Bevy space in
-    /// the mesh frame — the rod-tip point the engine-drawn fishing line starts from. `None` for
-    /// every model that doesn't author it (exactly one weapon model in the chain does).
+    /// The fishing pole's `$CCH` line anchor (read by the line draw `0x61f780`), baked to Bevy
+    /// space in the mesh frame — the rod-tip point the engine-drawn fishing line starts from.
+    /// `None` for every model that doesn't author it (exactly one weapon model in the chain does).
     pub cch_marker: Option<Vec3>,
     /// MD20 header `GlobalModelFlags` (`+0x10`). Bits `&3` are the **terrain-conform gate**
-    /// (wow-re `terrain-tilt.md`, §5 byte-verified): `1` = pitch to the ground slope (every
+    /// (read by the root-matrix builder `0x7106c0`): `1` = pitch to the ground slope (every
     /// mount + most quadrupeds), `3` = pitch **and** roll (kodo/crab/spider), `0`/`2` = level.
     /// The entity layer reads it to conform a standing model to the terrain under it.
     pub global_flags: u32,
@@ -191,8 +191,8 @@ pub struct PaneCamera {
     /// six glue scenes. Carried, never selected on: the widget's index is raw.
     pub camera_type: i32,
     /// The rig at rest (bases + each track's first key), Bevy space. The whole answer for every
-    /// model a `<Model>` pane can name — wow-re's census over the composite's 9691 `.m2` found
-    /// every one of those cameras keying a single `(0,0,0)` on all three tracks.
+    /// model a `<Model>` pane can name — a census over the composite's 9691 `.m2` found every one
+    /// of those cameras keying a single `(0,0,0)` on all three tracks.
     pub still: PortraitCamera,
     /// The authored tracks, raw WoW space, kept only when one of them actually moves — the
     /// `Cameras\*.m2` fly-bys. Read through [`Self::at`].
@@ -257,8 +257,8 @@ pub struct ModelEmitter {
     /// (`benilla_formats::Skeleton::billboard_host`): that bone's arm and its pivot, **raw WoW
     /// model space**. The emitter's live origin is then camera-dependent —
     /// `pivot + camBasis·(def.position − pivot)` — because the reference folds the record position
-    /// through the *replaced* palette matrix (wow-re `part-anchoring-live-bone.md` §1 row 3,
-    /// `billboard-bone-law.md`'s "children multiply onto this").
+    /// through the *replaced* palette matrix (`0x718960` at `0x7190a9`–`0x71910c`; the billboard
+    /// tail `0x715868` writes that matrix).
     ///
     /// A rigged host in the WORLD needs nothing from this: its joint palette already carries the
     /// replacement (`billboard::billboard_joint_palette`) and the emitter rides the joint. Two
@@ -271,24 +271,24 @@ pub struct ModelEmitter {
     /// for the ordinary case.
     pub billboard: Option<EmitterBillboard>,
     /// The **recursion model** (`def.recursion_model`) as a loaded dependency: its own emitters
-    /// become this emitter's CHILD emitters (wow-re `part-child-recursion.md`), wired by the
-    /// app's particle system once the asset resolves. `None` when unauthored.
+    /// become this emitter's CHILD emitters (the reference's load-completion wiring `0x7b5dd0`),
+    /// wired by the app's particle system once the asset resolves. `None` when unauthored.
     pub recursion: Option<Handle<M2Model>>,
     /// The **geometry model** (`def.geometry_model`) as a loaded dependency: this emitter's
-    /// particles render as 3-D instances of it instead of billboard quads (wow-re
-    /// `part-model-particles.md`). `None` when unauthored.
+    /// particles render as 3-D instances of it instead of billboard quads (the per-particle
+    /// instance draw `0x7b4840`). `None` when unauthored.
     pub geometry: Option<Handle<M2Model>>,
     /// How far the OWNER model's own transparent-pass batches sort from its origin, model-local
     /// yards — the bound the draw-order rung is sized from (`particles::owner_last_bias`,
     /// decisions 0719/0721). Computed by [`benilla_formats::m2_owner_reach`], which is where the
     /// reasoning lives.
     pub owner_reach: f32,
-    /// The OWNER model's authored bound sphere — the water-plane classification input (wow-re
-    /// `water-frame-straddle.md` §6, byte-VERIFIED): the reference dots `world_matrix ×
-    /// (bbox_min+bbox_max)/2` against the plane once per MODEL and every emitter reads that one
-    /// verdict, with the slack `above ⇔ d ≥ −r`, `r = |matrix row 0| × sphere radius`. Centre in
-    /// **Bevy model space** (the same frame the instance transform maps), radius model-local
-    /// yards. `(ZERO, 0)` when the header carries no bounds — the sign test at the anchor.
+    /// The OWNER model's authored bound sphere — the water-plane classification input
+    /// (`0x7083df`–`0x7084dd`): the reference dots `world_matrix × (bbox_min+bbox_max)/2` against
+    /// the plane once per MODEL and every emitter reads that one verdict, with the slack
+    /// `above ⇔ d ≥ −r`, `r = |matrix row 0| × sphere radius`. Centre in **Bevy model space** (the
+    /// same frame the instance transform maps), radius model-local yards. `(ZERO, 0)` when the
+    /// header carries no bounds — the sign test at the anchor.
     pub water_bound: (Vec3, f32),
     /// The OWNER model's **loader-idle file sequence slot**
     /// ([`crate::ModelAnimations::idle_seq`]) — the sequence every M2 instance is playing when no
@@ -354,7 +354,7 @@ pub struct ModelRibbon {
     pub owner_reach: f32,
     /// The owner model's bound sphere for the water-plane side — same field, same law as
     /// [`ModelEmitter::water_bound`]: the ribbon leg reads the MODEL's side-A boolean verbatim
-    /// (wow-re `water-frame-straddle.md` §6 — `cmp [ebp-0x24],0` at `0x7081f1`), slack included.
+    /// (`cmp [ebp-0x24],0` at `0x7081f1`), slack included.
     pub water_bound: (Vec3, f32),
 }
 
@@ -640,8 +640,8 @@ impl AssetLoader for M2ModelLoader {
             }
             // Per-hand **finger** mask groups (3 = right hand, 4 = left) for the weapon grip: a clip
             // masked with group 3 (or 4) animates only that hand's finger key-bone subtrees, so the
-            // `HandsClosed` pose curls the fingers while the arm keeps its gait (wow-re
-            // `hand-grip-mechanism.md`). Empty per hand for a model with no finger key-bones (beasts).
+            // `HandsClosed` pose curls the fingers while the arm keeps its gait (`CloseHand`
+            // `0x479660`). Empty per hand for a model with no finger key-bones (beasts).
             let finger_roots = finger_subtree_roots(&skeleton_raw);
             for i in 0..skeleton_raw.bones.len() {
                 let target = bone_target_id(i as u16);
@@ -674,13 +674,12 @@ impl AssetLoader for M2ModelLoader {
             let animation_lookup =
                 benilla_formats::parse_m2_animation_lookup(&bytes).unwrap_or_default();
             let mut clips = Vec::new();
-            // The loader-idle seed (decision 0637, wow-re `gameobject-anim-arm.md` §1 — the
-            // corrected `0x71019b` read): the loader arms **animation id 0 ("Stand")** resolved
-            // through the model's own `playableAnimationLookup`, NOT the file-order-first
-            // sequence. For the overwhelming majority of models those coincide, which is why the
-            // old file-order read survived; they diverge exactly on models whose first sequence is
-            // a Spawn — `DuelingFlag.m2` is Spawn(145)/Stand(0)/Despawn(157), and looping its
-            // Spawn band left the flag hanging 9 yards in the air on a 3.3 s cycle.
+            // The loader-idle seed (decision 0637, `0x71019b`): the loader arms **animation id 0
+            // ("Stand")** resolved through the model's own `playableAnimationLookup`, NOT the
+            // file-order-first sequence. For the overwhelming majority of models those coincide,
+            // which is why the old file-order read survived; they diverge exactly on models whose
+            // first sequence is a Spawn — `DuelingFlag.m2` is Spawn(145)/Stand(0)/Despawn(157), and
+            // looping its Spawn band left the flag hanging 9 yards in the air on a 3.3 s cycle.
             let idle_id = playable_animation_lookup
                 .first()
                 .map_or(0, |p: &benilla_formats::PlayableAnim| p.resolved_id);
@@ -768,8 +767,8 @@ impl AssetLoader for M2ModelLoader {
             // — each finger key-bone posed at its **clamped** `HandsClosed` value — masked to one hand's
             // finger subtrees (group 3 = right, 4 = left). Built separately from the sequence clips above
             // because the general in-band read drops the weapon-hand fingers (keyed off the HandsClosed
-            // frame); [`hand_grip_finger_poses`] clamps them, scoped to the grip (wow-re
-            // `hand-grip-mechanism.md`). `None` per hand for a model with no finger key-bones / no grip pose.
+            // frame); [`hand_grip_finger_poses`] clamps them, scoped to the grip (`CloseHand`
+            // `0x479660`). `None` per hand for a model with no finger key-bones / no grip pose.
             let mut hand_close: [Option<bevy::animation::graph::AnimationNodeIndex>; 2] =
                 [None, None];
             // Every bone in a finger subtree — the key-bone AND its child segments (the fingertip joints),

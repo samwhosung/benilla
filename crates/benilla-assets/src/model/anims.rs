@@ -14,11 +14,10 @@ use bevy::prelude::*;
 ///
 /// It carries **where** as well as **when**, because the reference's event kernel does: `0x719370`
 /// computes `placementMatrix · (boneMatrix[event.bone] · event.position)` and snapshots it by
-/// value into the deferred callback record every dispatcher reads (wow-re
-/// `spell/scratch/camera-shake-producers.md` §5). A consumer that plays at the model root is using
-/// the placement alone, which is the same point only where the record sits at the origin — and
-/// corpus-wide it does not: 149 of 244 `$DSL` records are off-origin, out to 67.6 yd
-/// (`Maraudon_Waterfall01.m2`), and every player model's six `$CSD` records ride the head
+/// value into the deferred callback record every dispatcher reads. A consumer that plays at the
+/// model root is using the placement alone, which is the same point only where the record sits at
+/// the origin — and corpus-wide it does not: 149 of 244 `$DSL` records are off-origin, out to
+/// 67.6 yd (`Maraudon_Waterfall01.m2`), and every player model's six `$CSD` records ride the head
 /// (`benilla-extract eventmarkerscan`).
 ///
 /// **Two points, because there are two cases and both are exact.** [`Self::offset`] is bone-local
@@ -66,7 +65,7 @@ pub struct AnimClip {
     ///
     /// **Signed, and the sign is load-bearing — never `abs()` it.** A backwards gait is authored
     /// NEGATIVE (`RidingKodo.m2` seq 14, WalkBackwards: `-2.5`), and the client's rate guard is a
-    /// strict `divisor > 0` (`0x5fe2f0`, §5-verified — decisions 0903/0910/0912). So an authored
+    /// strict `divisor > 0` (`0x5fe2f0` — decisions 0903/0910/0912). So an authored
     /// backwards clip plays at a flat 1×, while a model that has *no* WalkBackwards and falls back
     /// to Walk (`+2.5`) gets speed-scaled. That asymmetry is the reference's behaviour; taking the
     /// magnitude here — an inviting-looking tidy-up — inverts it on every model authoring a reverse
@@ -79,15 +78,15 @@ pub struct AnimClip {
     /// mapped like the mesh vertices, so it shares the rendered parts' frame). With
     /// [`Self::bounds_radius`], the mouse-pick **broad phase**: the real client tests the cursor ray
     /// against the *current* animation's sphere — world-placed + scaled, no pad — before the posed
-    /// per-triangle narrow test (wow-re pick-volume RE, `0x7089c0`).
+    /// per-triangle narrow test (`0x7089c0`).
     pub bounds_center: Vec3,
     /// The sequence's bounds-sphere radius (model-local yards). `0.0` ⇒ unauthored (callers fall back).
     pub bounds_radius: f32,
     /// The sequence's CAaBox, **Bevy model space** (componentwise min/max of the WoW-space corners
     /// mapped like the mesh vertices). The unit **blob shadow**'s projection box: the real client
     /// sizes the shadow from the *current* animation's box — clamped into ±5 per axis, scaled by
-    /// the world matrix, yaw-rotated then axis-aligned (VERIFIED wow-5875-re `unit-blob-shadow.md`,
-    /// `0x711a20` + the `0x6d7920` corner build). `(Vec3::ZERO, Vec3::ZERO)` ⇒ unauthored.
+    /// the world matrix, yaw-rotated then axis-aligned (`0x711a20` + the `0x6d7920` corner build).
+    /// `(Vec3::ZERO, Vec3::ZERO)` ⇒ unauthored.
     pub bounds_min: Vec3,
     pub bounds_max: Vec3,
     /// The sequence's event keyframes (`$SND`/footsteps/`$CSS`… — decision 0070 slice 3), sorted by
@@ -110,7 +109,7 @@ pub struct AnimClip {
     /// This variation's weight in the per-play roll (`M2Sequence.frequency` @+0x14): sequences
     /// sharing an `anim_id` are **variations** (the alternating 1H swing arcs, the wound recoils),
     /// and the real client picks one per one-shot play by a `_rand()`-weighted walk of the chain
-    /// (wow-re `anim-id-resolution.md`, op4 `0x71248a..`) — [`ModelAnimations::pick_variation`].
+    /// (op4 `0x71248a..`) — [`ModelAnimations::pick_variation`].
     pub frequency: u16,
     /// The sequence's `(minReplay, maxReplay)` range (`M2Sequence` +0x18/+0x1c): the client rolls a
     /// play count `R = max(1, min + ((rand()·(max−min)) >> 15))` at every arm and multiplies it into
@@ -118,11 +117,11 @@ pub struct AnimClip {
     /// freezing. Benilla expresses that as a `RepeatAnimation::Count(R)` on the one-shot play.
     /// `(0, 0)` — the overwhelming majority — rolls to `R = 1`.
     ///
-    /// **A loop-flag sequence does NOT ignore it** (this doc said so, sourced from
-    /// `loop-replay-fidget.md`'s unit-lane reading, and decision 0768 corrected it): the window still
-    /// governs, and for a *placed doodad* its expiry is what fires the re-arm that rolls a fresh
-    /// variation — `(0, 0)` ⇒ `R = 1` ⇒ a re-roll every single loop. That is the whole mechanism
-    /// behind the Blasted Lands lightning wandering instead of strobing from one fixed spot.
+    /// **A loop-flag sequence does NOT ignore it** (this doc said so, and decision 0768 corrected
+    /// it): the window still governs, and for a *placed doodad* its expiry is what fires the re-arm
+    /// that rolls a fresh variation — `(0, 0)` ⇒ `R = 1` ⇒ a re-roll every single loop. That is the
+    /// whole mechanism behind the Blasted Lands lightning wandering instead of strobing from one
+    /// fixed spot.
     pub replay: (u32, u32),
     /// Whether this clip actually **poses bones** — some bone track produced a curve. `false` for a
     /// sequence whose bones all hold bind pose: it still exists as a clip (playing it is how the
@@ -145,7 +144,7 @@ pub struct ModelAnimations {
     /// The **`HandsClosed` finger-grip masked nodes** `(right, left)` — graph nodes that animate only one
     /// hand's finger key-bone subtrees ([`finger_subtree_roots`]) with the model's `HandsClosed`
     /// (AnimationData 15) pose, played as a persistent weighted overlay over the gait while a weapon is
-    /// held in that hand (wow-re `hand-grip-mechanism.md`: the fingers curl for a held weapon; a
+    /// held in that hand (`0x479660`/`0x60b590`: the fingers curl for a held weapon; a
     /// forearm-mounted shield or an empty hand stays open). `None` per hand for a model with no finger
     /// key-bones or no `HandsClosed` clip (beasts, props — they never grip).
     pub hand_close: [Option<AnimationNodeIndex>; 2],
@@ -158,7 +157,7 @@ pub struct ModelAnimations {
     /// model's first sequence slot for it, `0xffff` where it authors none. Kept beside the playable
     /// table because it is a *different question* — "does this model own id X at all", the
     /// reference's `0x711960` — and the GameObject arm's missing-sequence remap branches on it four
-    /// times (wow-re `gameobject-anim-arm.md` §2c). See [`Self::owns`].
+    /// times (`0x5f3930`). See [`Self::owns`].
     pub animation_lookup: Vec<u16>,
     /// The model's **global-sequence bone channels** baked to Bevy space (the eye-blink eyelid scale and
     /// kin): free-clock loops the runtime samples independently of the playing animation and composes
@@ -166,13 +165,12 @@ pub struct ModelAnimations {
     /// tracks.
     pub global_bones: Vec<super::GlobalBone>,
     /// Index into [`Self::clips`] of the model's **loader-idle seed** — the sequence the client's
-    /// M2-instance loader arms once at load and plays forever (wow-re `gameobject-anim-arm.md` §1,
-    /// byte-verified `0x71019b`): **animation id 0 ("Stand")**, resolved through the model's own
-    /// `playableAnimationLookup`. NOT the file-order-first sequence — an earlier reading of
-    /// `doodad-anim-host.md` said `animations[0].id`, and wow-re corrected it in place (0637).
-    /// The two coincide for almost every model and diverge exactly on one whose first sequence is
-    /// a Spawn: `DuelingFlag.m2` is Spawn/Stand/Despawn, and arming file-order-0 looped its Spawn
-    /// band, leaving the duel flag hanging 9 yards in the air on a 3.3 s cycle.
+    /// M2-instance loader arms once at load and plays forever (`0x71019b`): **animation id 0
+    /// ("Stand")**, resolved through the model's own `playableAnimationLookup`. NOT the
+    /// file-order-first sequence (0637). The two coincide for almost every model and diverge
+    /// exactly on one whose first sequence is a Spawn: `DuelingFlag.m2` is Spawn/Stand/Despawn,
+    /// and arming file-order-0 looped its Spawn band, leaving the duel flag hanging 9 yards in the
+    /// air on a 3.3 s cycle.
     ///
     /// `None` when the resolved idle leaves every bone at **bind pose** — looping that really does
     /// render identically to the static mesh, so the spawn site skips the skin + player (the
@@ -187,14 +185,14 @@ pub struct ModelAnimations {
 }
 
 /// A requested `AnimationData.dbc` id resolved to what a specific model actually plays (decision
-/// 0082, wow-re `anim-id-resolution.md`, byte-verified `0x711bf0`) — see [`ModelAnimations::resolve`].
+/// 0082, `0x711bf0`) — see [`ModelAnimations::resolve`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResolvedAnim {
     /// The `AnimationData.dbc` id to look up via [`ModelAnimations::find`].
     pub id: u16,
     /// PATH 1's high16 direction/variant playback code (`0` from PATH 2 / the no-table degrade, which
     /// have no such code of their own). **Plumbed through, not applied**: decision 0082 flags the
-    /// exact playback consumption (wow-re `~0x7126d2`) as untraced — no consumer reads this yet.
+    /// exact playback consumption (`~0x7126d2`) as untraced — no consumer reads this yet.
     pub dir_flags: u16,
 }
 
@@ -221,10 +219,10 @@ impl ModelAnimations {
 
     /// The clip a free/effect model instance runs: the caller's `preferred` id when the model has
     /// it (the thrown-weapon missile asks for InFlight), else the reference's **model-load
-    /// bootstrap** — animation id **0 (`Stand`)**, variation 0 (wow-re `ceffect-anim-lifecycle.md`
-    /// §D1a, byte-verified `0x710153`–`0x71019b`: `0x711bf0(reqId = 0)` → `0x711960` → op4 with an
-    /// explicit `push 0x0` variation), falling back to the first sequence record's own id only when
-    /// the model authors no `Stand` (the guarded `*(dword*)&sequences[0]` at `0x710181`).
+    /// bootstrap** — animation id **0 (`Stand`)**, variation 0 (`0x710153`–`0x71019b`:
+    /// `0x711bf0(reqId = 0)` → `0x711960` → op4 with an explicit `push 0x0` variation), falling
+    /// back to the first sequence record's own id only when the model authors no `Stand` (the
+    /// guarded `*(dword*)&sequences[0]` at `0x710181`).
     ///
     /// **Not the file-order-first slot**, which is what this used to be: the two differ on 583
     /// models corpus-wide (`benilla-extract fxlifescan`), and arming slot 0 hands
@@ -281,11 +279,11 @@ impl ModelAnimations {
     }
 
     /// Pick a **variation** of `anim_id` for one play, given a fresh `roll` (the client's `_rand()`,
-    /// `0..0x7fff`): the byte-verified weighted walk (wow-re `anim-id-resolution.md`, op4 with
-    /// variationIdx −1) — `roll < frequency` picks the current node, else `roll -= frequency` and
-    /// advance; chain exhaustion falls back to the **head** (the client leaves the resolved seqIndex
-    /// untouched on the exhaust path — `edi` set at `0x71247a`, only the win path overwrites it at
-    /// `0x7124e9`; wow-re `loop-replay-fidget.md`, correcting decision 0114's clamp-to-last).
+    /// `0..0x7fff`): the weighted walk (op4 `0x7121a0` with variationIdx −1) — `roll < frequency`
+    /// picks the current node, else `roll -= frequency` and advance; chain exhaustion falls back to
+    /// the **head** (the client leaves the resolved seqIndex untouched on the exhaust path — `edi`
+    /// set at `0x71247a`, only the win path overwrites it at `0x7124e9`; correcting decision 0114's
+    /// clamp-to-last).
     /// Variations are the sequences sharing `anim_id`, taken in file order (retail exporters bake
     /// the `variationNext` chain contiguously and in order — the same assumption [`Self::find`]'s
     /// head = variation 0 already rests on). `None` iff the model has no sequence for `anim_id`.
@@ -303,8 +301,8 @@ impl ModelAnimations {
     }
 
     /// Resolve a *requested* `AnimationData.dbc` id to the id this model actually plays (decision
-    /// 0082, wow-re `anim-id-resolution.md` — the byte-verified two-path `0x711bf0` resolver the real
-    /// client runs before every sequence lookup, ahead of [`Self::find`]):
+    /// 0082 — the two-path `0x711bf0` resolver the real client runs before every sequence lookup,
+    /// ahead of [`Self::find`]):
     /// - **PATH 1** (`requested < playable_animation_lookup.len()`): the model's own baked table —
     ///   one dword read, already the precomputed `AnimationData.dbc` Fallback-column walk's result for
     ///   THIS model's actual sequence set (a chicken lacking Attack2H bakes `[18] = 16`).
@@ -329,10 +327,10 @@ impl ModelAnimations {
         self.resolve_path2(requested, catalog)
     }
 
-    /// PATH 2 — the `AnimationData.dbc` Fallback-column walk (wow-re `anim-id-resolution.md`): follow
+    /// PATH 2 — the `AnimationData.dbc` Fallback-column walk (`0x711bf0` at `0x711c1f`): follow
     /// `catalog.fallback` from `requested` until this model actually has a sequence for the current id
     /// (mirrors the real walk's `animationLookup[eax] != 0xffff` success test via [`Self::find`]),
-    /// guarded by a 208-entry visited set (`AnimationData.dbc`'s row count — the byte-verified cycle
+    /// guarded by a 208-entry visited set (`AnimationData.dbc`'s row count — the reference's cycle
     /// guard). `catalog.fallback` already collapses the walk's NULL-row guard, self-fallback
     /// termination, and "Fallback is 0 (Stand)" into a single `None` — each of those is a dead end that
     /// leads to the same exhaustion default, so folding them costs nothing here. Exhaustion → Stand(0),
@@ -433,9 +431,9 @@ mod tests {
         );
     }
 
-    /// PATH 1 also carries the dir-flags code — the real byte-verified HumanMale example
-    /// (`playableAnimationLookup[6] = 0x00030001`, wow-re `anim-id-resolution.md` §4): resolved id 1,
-    /// dir code 3. PATH 1 never consults the catalog at all (an empty one is fine here).
+    /// PATH 1 also carries the dir-flags code — the real HumanMale example, read off the shipped
+    /// asset (`playableAnimationLookup[6] = 0x00030001`): resolved id 1, dir code 3. PATH 1 never
+    /// consults the catalog at all (an empty one is fine here).
     #[test]
     fn path1_carries_dir_flags_through_unapplied() {
         let mut table = vec![playable(0, 0); 7];
@@ -558,7 +556,7 @@ mod tests {
         );
     }
 
-    // ── preferred_clip: the model-load bootstrap (wow-re `ceffect-anim-lifecycle.md` §D1a) ──────
+    // ── preferred_clip: the model-load bootstrap (`0x710153`–`0x71019b`) ─────────────────────
 
     /// The bootstrap arms **id 0 `Stand`**, not the file's first slot. `LightningShield_State`'s
     /// real shape: sequence 0 is its `Decay`(159), and arming file-order-first handed a freshly
@@ -641,9 +639,9 @@ mod tests {
         assert_eq!(slotted(&[], Vec::new()).idle_seq(), None);
     }
 
-    /// The variation pick is the client's weighted walk (wow-re `anim-id-resolution.md`, op4 with
-    /// variationIdx −1): `roll < frequency` picks, else `roll -= frequency` and advance; chain
-    /// exhaustion clamps to the last variation; a lone variation always wins.
+    /// The variation pick is the client's weighted walk (op4 `0x7121a0` with variationIdx −1):
+    /// `roll < frequency` picks, else `roll -= frequency` and advance; chain exhaustion clamps to
+    /// the last variation; a lone variation always wins.
     #[test]
     fn pick_variation_walks_the_weighted_chain() {
         let mut anims = test_anims(&[16, 16, 5], Vec::new());
@@ -658,7 +656,7 @@ mod tests {
         assert_eq!(pick(&anims, 16, 0x6000), 1); // first roll past it
         assert_eq!(pick(&anims, 16, 0x7ffe), 1);
         // Weights under-cover the roll → the HEAD, not the last (the client's exhaust path leaves
-        // the resolved seqIndex untouched — wow-re loop-replay-fidget.md, corrects decision 0114).
+        // the resolved seqIndex untouched — `0x7124de`, corrects decision 0114).
         assert_eq!(pick(&anims, 16, 0x7fff), 0);
         assert_eq!(pick(&anims, 5, 0x7fff), 2); // lone variation wins by exhaustion→head (weight 0)
         assert!(anims.pick_variation(99, 0).is_none());

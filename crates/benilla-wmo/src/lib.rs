@@ -56,7 +56,7 @@ pub struct Material {
     ///
     /// The offset is anchored on both sides by fields this repo verified independently of water:
     /// `+0x18` texture 2 and `+0x20` [`Self::ground_type`]. Stride 0x40, base `[CMapObj+0x1d8]`
-    /// (`0x6c3ace` + `0x6c3ad7 shr edx,6`). VERIFIED wow-re `terrain/scratch/water-shading-law.md`.
+    /// (`0x6c3ace` + `0x6c3ad7 shr edx,6`).
     pub diff_color: [u8; 3],
     /// **MOMT+0x20 — the surface's `TerrainType.dbc` id**, i.e. what walking on this material
     /// sounds like. The footstep chain's WMO leg: the client's down-ray arbitrates a terrain probe
@@ -120,9 +120,8 @@ pub struct MopyEntry {
 /// fountains, dungeon pools). A flat `xverts × yverts` height grid over `xtiles × ytiles` cells, in
 /// **WMO model space** (WoW axes, yards); the placement transform lifts it into the world. Cell
 /// membership + type come from the per-tile flag low nibble (`& 0xf`): `0xf` = hole (no liquid), else
-/// the nibble is the liquid type indexing the reference's texture table (VERIFIED wow-re
-/// `rf-water-liquid-type-texture-material.md`; render dispatch `0x6b62e0`, water kernels
-/// `0x6b6420`/`0x6b6630`, magma/slime `0x6b68f0` — `rf-mliq-liquid-uv-texgen.md`).
+/// the nibble is the liquid type indexing the reference's texture table (render dispatch
+/// `0x6b62e0`, water kernels `0x6b6420`/`0x6b6630`, magma/slime `0x6b68f0`).
 pub struct WmoLiquid {
     /// Vertex-grid dimensions (`xtiles = xverts − 1`, `ytiles = yverts − 1`).
     pub xverts: u32,
@@ -145,8 +144,8 @@ pub struct WmoLiquid {
     /// water is; this byte **is** the authored opacity. The reference indexes a 256-entry alpha ramp
     /// (`[0xca7f10]`, rebuilt per frame from the zone's river shallow/deep alpha pair) with it and
     /// uses the result as the vertex alpha — the water arms bind no depth-ramp texture at all
-    /// (VERIFIED wow-re `terrain/scratch/water-shading-law.md`; zero references to the ADT ramp
-    /// globals `0xc7fbc0`/`0xc81768`/`0xc7fcd8` anywhere in `[0x6b0000, 0x6c4000)`).
+    /// (zero references to the ADT ramp globals `0xc7fbc0`/`0xc81768`/`0xc7fcd8` anywhere in
+    /// `[0x6b0000, 0x6c4000)`).
     ///
     /// It was parsed as nothing for a long time — the field it replaced was documented as "flow
     /// data" — which is why every WMO pool in benilla rendered at one pinned opacity.
@@ -175,7 +174,7 @@ pub struct WmoGroup {
     /// MOGP group flags (bit test `& 0x48` selects exterior vs interior).
     pub flags: u32,
     /// MOGP `groupLiquid` @ header `0x34` — the liquid **type override**: when `!= 0xf` it names the
-    /// whole group's liquid type directly (wow-re `wmoliquid` `type_override`); `0xf` (the common
+    /// whole group's liquid type directly (`0x6b9f10`); `0xf` (the common
     /// case) defers to the per-tile MLIQ nibble. `0xf` when the header is too short to carry it.
     pub group_liquid: u32,
     pub vertex_positions: Vec<Vec3>,

@@ -112,16 +112,16 @@ pub struct ModelSubmesh {
     /// Set when this batch rides an M2 billboard bone (glow cards, chains): the spawn site faces it to
     /// the camera each frame. The [`Self::mesh`] is built centred at the pivot so it rotates in place.
     pub billboard: Option<BillboardInfo>,
-    /// The batch's **animated material alpha** (decision 0130 phase 2, wow-re `m2-alpha-combine-cull`):
+    /// The batch's **animated material alpha** (decision 0130 phase 2, combined in `0x707680`):
     /// time-varying colour-alpha/transparency-weight loops (or a dimming constant) the doodad spawn
     /// site samples per instance into the render-alpha channel. `None` for the overwhelming majority
     /// (both factors static-1 or statically culled). `Arc` keeps the submesh clone cheap.
     pub alpha_anim: Option<std::sync::Arc<benilla_formats::AlphaAnim>>,
-    /// The batch's **UV-animation** loop (decision 0130 phase 3, wow-re `m2-texanim-uv`): the
-    /// texture transform's translation track — sampled per frame into the batch material's UV
-    /// offset (flowing waterfalls, scrolling energy). `None` for the ~98.6% of models with no
-    /// texture transform and all WMO batches. The `Arc` doubles as the material-dedup identity:
-    /// every instance of a loaded model shares this allocation.
+    /// The batch's **UV-animation** loop (decision 0130 phase 3; sampled in `0x714260`, applied at
+    /// `0x70b740`): the texture transform's translation track — sampled per frame into the batch
+    /// material's UV offset (flowing waterfalls, scrolling energy). `None` for the ~98.6% of models
+    /// with no texture transform and all WMO batches. The `Arc` doubles as the material-dedup
+    /// identity: every instance of a loaded model shares this allocation.
     pub uv_anim: Option<std::sync::Arc<benilla_formats::UvAnim>>,
     /// The batch's UV loop **per file sequence slot**, `Some` only where the slots disagree — the
     /// batches for which [`Self::uv_anim`]'s single loop is structurally unable to be right,
@@ -297,8 +297,9 @@ pub struct ModelJoint {
     /// CHILD of a lock-Z bone). Rigged hosts feed this to the billboard joint pass; the per-batch
     /// card split only covers geometry skinned to the billboard bone itself.
     ///
-    /// Authored on every bone that carries the flag, welded seam or not: `m2_animate` reads no
-    /// vertex, weight or triangle data at all, so there is no topology gate on the arm (decision
+    /// Authored on every bone that carries the flag, welded seam or not: the animate kernel
+    /// `0x714260` reads no vertex, weight or triangle data at all, so there is no topology gate on
+    /// the arm (decision
     /// 0945 superseding 0935). A welded seam stays welded because the replacement is built about
     /// the bone's own pivot, which is what makes the blended seam ring move by millimetres.
     pub billboard: Option<benilla_formats::BillboardKind>,
@@ -326,7 +327,7 @@ pub struct ModelSkeleton {
 
 /// Bake a raw [`Skeleton`] into the Bevy-space [`ModelSkeleton`] + its inverse-bind-pose matrices.
 ///
-/// Verified rig math (wow-5875-re: vanilla M2 has no inverse-bind array, rest pose is identity TRS,
+/// Rig math per the reference (vanilla M2 has no inverse-bind array, rest pose is identity TRS,
 /// the **pivot encodes bind position**) composed with Bevy's joint formula
 /// (`joint_matrix = joint_global · inverse_bindpose`, which *becomes* `world_from_local`):
 /// - **inverse bind pose** `i = translate(−pivot_i)` (model→bone-local at bind),
@@ -422,10 +423,10 @@ pub(crate) fn arm_subtree_roots(
 /// the capability probe `0x60ce70` (`keyBoneLookup[4]` preferred, `[6]` fallback, else the −1
 /// sentinel = no split). On HumanMale `keyBoneLookup[4]` is bone 20 (SpineLow: chest/shoulders/arms/
 /// hands/head — a subtree that provably **excludes** the legs, which hang off the pelvis sibling
-/// bone 21), so a clip masked to this subtree moves the upper body only (wow-re
-/// `anim-composition-model.md` §1, `923ac7bc`). A bone carries KeyBoneID `k` iff `keyBoneLookup[k]`
-/// points at it, so the SpineLow bone is the one whose `key_bone == 4` (else `== 6`). `None` when the
-/// model has neither (the −1 sentinel) — the one-shot route then falls back to full-body.
+/// bone 21), so a clip masked to this subtree moves the upper body only. A bone carries KeyBoneID
+/// `k` iff `keyBoneLookup[k]` points at it, so the SpineLow bone is the one whose `key_bone == 4`
+/// (else `== 6`). `None` when the model has neither (the −1 sentinel) — the one-shot route then
+/// falls back to full-body.
 pub(crate) fn upper_subtree_root(skel: &Skeleton) -> Option<usize> {
     let bone_with = |k: i16| skel.bones.iter().position(|b| b.key_bone == k);
     bone_with(4).or_else(|| bone_with(6))
@@ -434,10 +435,10 @@ pub(crate) fn upper_subtree_root(skel: &Skeleton) -> Option<usize> {
 /// The model's **finger key-bone subtree roots** per hand `(right, left)` — the client's `CloseHand`
 /// targets. WoW rigs each hand's fingers under **key-bones 8–12 (mainhand/right)** and **13–17 (offhand/
 /// left)**; the grip pose (`HandsClosed`, AnimationData 15) is armed on exactly these when a weapon is
-/// held in that hand (wow-re `hand-grip-mechanism.md`: `0x479660`/`0x60b590`). Only the *rigged* ones
-/// exist (HumanMale carries 11/12 and 16/17; the rest are the −1 sentinel), so each entry is the set of
-/// bones actually carrying a finger key-bone in that hand's range — **empty** for a model with no finger
-/// key-bones (beasts/props), which never grip.
+/// held in that hand (`0x479660`/`0x60b590`). Only the *rigged* ones exist (HumanMale carries 11/12
+/// and 16/17; the rest are the −1 sentinel), so each entry is the set of bones actually carrying a
+/// finger key-bone in that hand's range — **empty** for a model with no finger key-bones
+/// (beasts/props), which never grip.
 pub(crate) fn finger_subtree_roots(skel: &Skeleton) -> [Vec<usize>; 2] {
     let roots = |lo: i16, hi: i16| -> Vec<usize> {
         skel.bones
@@ -1086,9 +1087,9 @@ mod tests {
     ///
     /// `LShoulder_Plate_PVPAlliance_A_01.m2` authors 3 bones: a plain root and two spherical
     /// billboard spikes whose 8-vertex 50/50 seam rings stitch them to the body. 0935 dropped
-    /// their arm on exactly that welding. `m2_animate` reads no vertex, weight or triangle data at
-    /// all — over its whole extent there is a single `movzx byte ptr`, the arm-selector map — so
-    /// no such gate exists in the reference (wow-re `billboard-bone-law.md` §9.4 SQ1). The seam
+    /// their arm on exactly that welding. The animate kernel `0x714260` reads no vertex, weight or
+    /// triangle data at all — over its whole extent there is a single `movzx byte ptr`
+    /// (`0x7152ea`), the arm-selector map — so no such gate exists in the reference. The seam
     /// survives because the replacement is built about the bone's own pivot, not because the arm
     /// is skipped.
     ///
@@ -1134,7 +1135,7 @@ mod tests {
     /// rotation + scale. That is why a galloping horse never rocks its rider: the seat's basis is
     /// replaced by the mount's own root basis before the rider's frame is built from it, so the
     /// spine's ~21° stride swing is discarded at the saddle while the seat still *translates* with
-    /// it (wow-re §9.1/§9.2, byte-verified). Every vanilla player mount is `0x4`, `0x6`, or has a
+    /// it (the copy-root leg `0x714a18`). Every vanilla player mount is `0x4`, `0x6`, or has a
     /// seat whose ancestors don't rotate.
     #[test]
     fn the_riding_horse_seat_bone_carries_the_root_basis_arm() {

@@ -125,10 +125,9 @@ impl LiquidVertex {
     /// The authored `(s, t)` texture-coordinate pair — two little-endian `u16`s over the same 4
     /// union bytes. **Magma blocks only**: the reference's lava vert-fill is single-stage and reads
     /// its `tc0` straight from here, where water/ocean instead write a UV into the depth-ramp
-    /// texture (VERIFIED bit-exact `WoW.exe 0x68d890` `liquid_render_verts`, emulation-diffed in
-    /// wow-re `crates/terrain`: `u = (s as i32 as f64 · 3/256) as f32`, same for `t`). The field is
-    /// authored world-continuous — a chunk's east edge repeats its neighbour's west edge exactly —
-    /// so lava tiles seamlessly across MCNK borders.
+    /// texture (bit-exact `WoW.exe 0x68d890`: `u = (s as i32 as f64 · 3/256) as f32`, same for
+    /// `t`). The field is authored world-continuous — a chunk's east edge repeats its neighbour's
+    /// west edge exactly — so lava tiles seamlessly across MCNK borders.
     pub fn texcoords(&self) -> [u16; 2] {
         [
             u16::from_le_bytes([self.union_data[0], self.union_data[1]]),
@@ -140,16 +139,16 @@ impl LiquidVertex {
 /// One MCLQ liquid **block** — a 9×9 absolute-height grid + an 8×8 cell-flag grid, `0x324` bytes.
 ///
 /// An MCNK carries **one block per set liquid header bit** (bits 2–5), packed back to back and with
-/// absent bits consuming nothing (VERIFIED wow-re `system/terrain/scratch/adt-format.md`, the cursor
-/// walk at `0x6af7a3`–`0x6af7cb`). Most liquid chunks set exactly one bit; **28 shipped Azeroth
-/// chunks set two** — a river *and* the sea, at a river mouth — and carry two blocks at different
-/// heights (measured: `sizeMCLQ` 1616 = 8 + 2·`0x324`, block 0 the stream at z≈5.0, block 1 the
-/// ocean at z=0). Reading only the first is how the sea goes missing there.
+/// absent bits consuming nothing (the cursor walk at `0x6af7a3`–`0x6af7cb`). Most liquid chunks set
+/// exactly one bit; **28 shipped Azeroth chunks set two** — a river *and* the sea, at a river mouth
+/// — and carry two blocks at different heights (measured: `sizeMCLQ` 1616 = 8 + 2·`0x324`, block 0
+/// the stream at z≈5.0, block 1 the ocean at z=0). Reading only the first is how the sea goes
+/// missing there.
 ///
 /// **No liquid type here on purpose.** The header-bit→type ordering (bit2 river / bit3 ocean /
-/// bit4 magma / bit5 slime) is *INFERRED* upstream — never byte-proven — while the per-cell flag low
-/// nibble IS the type, VERIFIED at both consumers (`0x6ba970` `and al,0xf`, `0x68d9b0`). So this
-/// reader takes only the block *count* from the flags and leaves the type to whoever reads
+/// bit4 magma / bit5 slime) is *inferred* — never byte-proven — while the per-cell flag low nibble
+/// IS the type, as both consumers read it (`0x6ba970` `and al,0xf`, `0x68d9b0`). So this reader
+/// takes only the block *count* from the flags and leaves the type to whoever reads
 /// [`Self::tile_flags`]. (The old `LiquidType::from_mcnk_flags` priority guess labelled all 28
 /// two-bit chunks "ocean" while handing back the river block's bytes.)
 #[derive(Debug, Clone)]
@@ -167,9 +166,8 @@ pub struct MclqChunk {
 /// MCNK header flag **bit 1** — the chunk a mover may not enter (the "impassable" band that walls
 /// Searing Gorge and the other mountain rims off from their neighbours).
 ///
-/// The *producer* is VERIFIED per-instruction in wow-re (`system/terrain/scratch/adt-format.md`,
-/// the MCNK header walk: `hdr+0x00` bit1 → `chunk+0xc |= 0x40`); the *name* is wow-re's INFERRED
-/// label for that bit. Consuming it is decision 1266 / report B129.
+/// The *producer* is the MCNK header walk (`0x6af5f0`: `hdr+0x00` bit1 → `chunk+0xc |= 0x40`);
+/// the *name* is an inferred label for that bit. Consuming it is decision 1266 / report B129.
 pub const MCNK_IMPASSABLE: u32 = 0x2;
 
 /// The fields of the 128-byte MCNK header the renderer reads. `pred_tex`/`no_effect_doodad`/
@@ -559,10 +557,10 @@ const MCLQ_BLOCK: usize = 0x324;
 /// read: the bit→type ordering is INFERRED, the cell nibble is VERIFIED (see [`MclqChunk`]).
 const MCNK_LIQUID_BITS: u32 = 0x3c;
 
-/// Read the packed MCLQ blocks — one per set liquid header bit, back to back (VERIFIED wow-re
-/// `adt-format.md`). Stops early on a block the payload can't cover, so a truncated tail degrades to
-/// the blocks that *are* whole rather than to nothing. A chunk with an MCLQ sub-chunk but no liquid
-/// bit set still yields one block, matching the pre-multi-block reader.
+/// Read the packed MCLQ blocks — one per set liquid header bit, back to back (the cursor walk
+/// `0x6af7a3`–`0x6af7cb`). Stops early on a block the payload can't cover, so a truncated tail
+/// degrades to the blocks that *are* whole rather than to nothing. A chunk with an MCLQ sub-chunk
+/// but no liquid bit set still yields one block, matching the pre-multi-block reader.
 fn read_mclq_blocks(sub: &[u8], mcnk_flags: u32) -> Vec<MclqChunk> {
     let want = (mcnk_flags & MCNK_LIQUID_BITS).count_ones().max(1) as usize;
     let mut out = Vec::with_capacity(want);
