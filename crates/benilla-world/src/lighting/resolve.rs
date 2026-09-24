@@ -383,7 +383,7 @@ pub(super) fn update_time_lighting(
         // Sun disc grows to 2× at the dawn/dusk horizon (size table 0xce8cac); 1× midday. Not gated by
         // a toggle — it's a faithful, binary-verified curve (the trace cross-checks the 2× ratio).
         sun_disc_scale: daynight::sun_disc_scale(minute_f),
-        // The per-body lens-flare day/night envelopes (dnCurve tables, Addendum #5 / 0508): the
+        // The per-body lens-flare day/night envelopes (dnCurve tables, `0x6cf6c0`, 0508): the
         // sun's flare is a day thing, the moon's halo a deep-night thing; both are 0 at dusk/dawn.
         sun_flare_dn: daynight::sun_flare_dn(minute_f),
         // The white moon (az 45°, the sun's bearing) + the shared moon size curve.

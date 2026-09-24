@@ -225,7 +225,7 @@ pub(super) fn sun_flare_dn(minute: f32) -> f32 {
 }
 
 /// Moon lens-flare **night envelope** curve (moon dnCurve table `0xce9768`, built by `0x6d1f30`;
-/// VERIFIED, Addendum #5, decision 0508): flat **zero from 03:15 to 22:45** — the whole day *and*
+/// decision 0508): flat **zero from 03:15 to 22:45** — the whole day *and*
 /// early evening — ramping in 22:45→24:00 (23:00 ≈ 0.20, 23:30 ≈ 0.61), full 00:00→02:00, out by
 /// 03:15. A 22:30 moonrise has NO halo in the reference; it first lights at 22:45 and peaks near
 /// midnight. This was the missing gate behind the director's "moon halo far too big" report.
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn flare_dn_curves_gate_the_halos_by_time_of_day() {
-        // VERIFIED per-body dnCurve tables (sun 0xce9818 / moon 0xce9768, Addendum #5, 0508). The
+        // VERIFIED per-body dnCurve tables (sun 0xce9818 / moon 0xce9768, 0508). The
         // load-bearing value: a 22:30 moonrise has NO halo — the moon's curve is flat zero from
         // 03:15 all the way to 22:45, then ramps in toward midnight (23:00 ≈ 0.20, 23:30 ≈ 0.61).
         assert_eq!(moon_flare_dn((22 * 60 + 30) as f32), 0.0, "22:30 no halo");

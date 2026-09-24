@@ -151,7 +151,7 @@ pub struct WowLighting {
     pub(crate) cloud_colors: [[f32; 3]; 3],
     /// **Storm blend `bcc`** = `min(1, weather_density·4)` (`0x6d4500`) — the
     /// weight already lerping the storm LightParams over the clear one, published for the
-    /// celestial-alpha seed (`floor(255·(1−bcc))` on the five body alphas, Addendum #6) and the
+    /// celestial-alpha seed (`floor(255·(1−bcc))` on the five body alphas, `0x6d2c74`) and the
     /// cloud sun-glow dimming (`1 − 0.75·bcc`). Purely weather-driven — authored `C` (`[0xce9c64]`)
     /// never feeds it; `bcc` reads the separate weather-density global `[0xce9ba0]`.
     pub(crate) storm_bcc: f32,
