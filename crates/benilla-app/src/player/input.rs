@@ -171,7 +171,7 @@ pub(super) fn move_axes(
     }
     // ── The cancel set ── autorun is NOT simply "held forward" — the thing that makes it its own
     // mode is what *destroys* it. Six writers clear the bit in the reference; these are the ones
-    // with a benilla analog (VERIFIED, wow-re `rf79-autorun-cancel-set.md`):
+    // with a benilla analog:
     //
     // - **A W or S key-DOWN** — unconditional, and the subtle one: the directional handlers look
     //   pure (each pushes only its own bit), but they tail into the shared SET helper `0x514840`,
@@ -189,10 +189,10 @@ pub(super) fn move_axes(
     //   the term passed here was the root alone, so dying with autorun latched kept the bit. It is
     //   [`state::may_translate`] now — the gate itself.
     //
-    //   **This list used to say "a taxi/charge hand-off", on rf79 §4's parked reading that
-    //   `0x60f5b0` is an on-taxi predicate. It is not** — wow-re §6.2 reads it as
-    //   `AnimationData.dbc` column 3 bit `0x80`, set on exactly one of 208 shipped rows, id 121
-    //   `Knockdown`. The ride term below is benilla's own and is kept on its own merits.
+    //   **This list used to say "a taxi/charge hand-off", on a reading of `0x60f5b0` as an
+    //   on-taxi predicate. It is not** — it reads `AnimationData.dbc` column 3 bit `0x80`, set
+    //   on exactly one of 208 shipped rows, id 121 `Knockdown`. The ride term below is benilla's
+    //   own and is kept on its own merits.
     //
     // Deliberately absent, each VERIFIED as a *survivor*: a jump, a chat EditBox taking focus, and
     // a zone change. Mounting is genuinely unsettled in the reference and left alone here.
@@ -232,7 +232,7 @@ pub(super) fn move_axes(
         both_buttons,
         autorun,
     );
-    // Vanilla turn/strafe control model (decision 0050, VERIFIED wow-5875-re `0x7c5360`): W/S move
+    // Vanilla turn/strafe control model (decision 0050, `0x7c5360`): W/S move
     // forward/back in the facing; **A/D turn the character** (rotate the facing at the turn rate) so
     // the body faces where it runs — UNLESS right-mouse is held (mouse-look), where A/D strafe and
     // the facing tracks the camera; **Q/E always strafe**. Movement basis is the *character* facing,

@@ -6,8 +6,7 @@
 //! `0x100` out onto every packet, the speed cascade ([`crate::net::current_speed`]) turns it into
 //! `min(MOVE_WALK, MOVE_RUN)`, and the animation selector needs nothing at all — it picks Walk(4)
 //! over Run(5) purely on `speed > 2 × walkSpeed`, so a correct speed *is* the correct clip and a
-//! correct playback rate (wow-re `rf57-movement-anim-select.md`: "Walk-vs-run is SPEED-driven,
-//! NOT the WALK-mode bit").
+//! correct playback rate (`0x5fd224`: walk-vs-run is speed-driven, not the walk-mode bit).
 //!
 //! **The one thing the toggle owns that the differ does not**: nothing else in the client would
 //! ever announce this. The reference's own move-state broadcaster gates every send on the
@@ -41,16 +40,15 @@ use super::{BodyQuery, Player};
 /// so a corpse run may be walked, and the corpse it is running to may not toggle anything.
 ///
 /// The spline gate reads the other way round from how it looks: bit `0x4` of the spline flags is
-/// the **finalize / `MOVE_SPLINE_DONE` latch** (wow-re `rf57-movement-anim-select.md`, the FLY
-/// gate's `(flags & 0x204) == 0x200`), so "the latch must be set" means *the spline is finished* —
+/// the **finalize / `MOVE_SPLINE_DONE` latch** (`0x619de0` sets it; the FLY gate reads
+/// `(flags & 0x204) == 0x200`), so "the latch must be set" means *the spline is finished* —
 /// i.e. **a mover on a live server spline is refused**. Ours is [`Player::server_riding`]: the
 /// taxi flight and the charge/knock hand-offs are the states where a spline is actually flying.
 ///
 /// `0x1200` is two bits and only one of them is settled: `0x1000` is `MOVEFLAG_ROOT`
-/// (VERIFIED — `SetRoot 0x7c7340` writes it, wow-re `moveflag-family.md`), and `0x200` is a bit
-/// benilla does not model at all. The same pair gates the autorun emitter `0x514560`, where
-/// [`super::input`] records the identical caveat, and a wow-re §5 is pinning it; until it lands
-/// the modelled half is the whole of what we can refuse on.
+/// (`SetRoot 0x7c7340` writes it), and `0x200` is a bit benilla does not model at all. The same
+/// pair gates the autorun emitter `0x514560`, where [`super::input`] records the identical caveat;
+/// until `0x200` is identified, the modelled half is the whole of what we can refuse on.
 pub(super) fn toggle_refused(dead: bool, rooted: bool, on_spline: bool) -> bool {
     dead || rooted || on_spline
 }

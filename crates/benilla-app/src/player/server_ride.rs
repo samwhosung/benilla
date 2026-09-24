@@ -47,10 +47,9 @@ fn ride_ground(world: &benilla_world::collision::WorldCollision, pos: Vec3) -> O
 ///
 /// The reference's integrate loop makes no distinction between the body it steers and any other
 /// mover here: `0x616de0`'s path-select produces a displacement from *either* the physics path or
-/// the spline path and hands **both** to `0x616cb0` (wow-re `collision/scratch/spec-driver-B.md`
-/// K5/K3), which zeroes the vertical component and lets `0x634040`'s swept resolve read Z off the
-/// surface. Keeping the chord instead is what B357 fixed for a Playerbot; this is the same wire Z,
-/// on the one body that had it left.
+/// the spline path and hands **both** to `0x616cb0`, which zeroes the vertical component and lets
+/// `0x634040`'s swept resolve read Z off the surface. Keeping the chord instead is what B357 fixed
+/// for a Playerbot; this is the same wire Z, on the one body that had it left.
 ///
 /// **The keeps are the reference's own fork**, `0x616cec`-`0x616d03`:
 /// - a **flying spline** (`MI.flags & 0x200`) — the taxi owns its altitude, and its sampled Z is
@@ -171,7 +170,7 @@ pub(super) fn drive_self_ride(
                     spline.duration.as_millis(),
                 );
                 // **A spline re-authors the walk gait, and its RUNMODE bit is inverted** (decision
-                // 1758, wow-re `walk-mode-law.md` §5.2). The reference's `SMSG_MONSTER_MOVE` commit
+                // 1758). The reference's `SMSG_MONSTER_MOVE` commit
                 // `0x7c6a50` does this unconditionally for every incoming spline: `0x7c6ac2 and
                 // edi,0x100` takes the path's own `SPLINEFLAG_RUNMODE` and `0x7c6acb` hands it to
                 // `CMovement::SetRunMode 0x7c71c0`, whose argument is *run* — so a path the server

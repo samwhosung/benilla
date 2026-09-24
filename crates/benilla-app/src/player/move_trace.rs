@@ -24,7 +24,7 @@
 //!   `SET_WALK_MODE`/`SET_RUN_MODE` that went out), but a **refused** press is silent by design —
 //!   indistinguishable from a key that isn't bound, or from a binding whose dispatch never fired.
 //!   The chain also has an open byte (`0x1200`'s second bit, decision 1752 §6), so a live run is
-//!   how the §5's answer gets checked against a real refusal instead of re-reasoned.
+//!   how any answer about it gets checked against a real refusal instead of re-reasoned.
 //! - **`knb`** — one line per **knockback** ([`knockback`]): the launch quad the server aimed and
 //!   whether the mover flew it. The one mover edge with no observable of its own — its ack is not a
 //!   `MSG_MOVE_*` so `snd` misses it, its refusal is silent by design, and a wrong ack's whole
@@ -51,7 +51,7 @@ pub(super) struct Frame {
     /// Horizontal distance covered this frame (yd). Paired with the vertical it gives the frame's
     /// **descent slope**, which is the whole question behind "we dive over the edge instead of
     /// stepping down it": the reference bounds a step-down to the foot cone's own
-    /// [`super::STEP_SLOPE_RATIO`] per unit of horizontal travel (wow-re `step-off-recourse.md`), so
+    /// [`super::STEP_SLOPE_RATIO`] per unit of horizontal travel (`0x636dda`), so
     /// a walk-off that reads far steeper — or worse, flat-then-plummet across two frames — is the
     /// mover leaving the surface instead of following it down.
     pub dx: f32,

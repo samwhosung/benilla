@@ -50,14 +50,13 @@ use super::{
 /// - **`water_walking`** — `0x631610 test eax,0x10000000`, the granted bit. Setting it ORs the two
 ///   ADT liquid layers into the walk trace's *class mask* (`0x63162e or edi,0x30000`), which is the
 ///   whole of what the flag does: the surface becomes ordinary swept geometry and the resolver
-///   stands on it at its raw Z. `0x6367b0` contains **zero** references to the bit
-///   (wow-re `moveflag-family.md` §2.1/§2.2).
+///   stands on it at its raw Z. `0x6367b0` contains **zero** references to the bit.
 /// - **`!swimming`** — `0x631617 test eax,0x200000; jne`. Granting *this* bit to a submerged caster
 ///   does **not** eject them, and that is the reference's behaviour too, not a gap of ours
 ///   (decision 1616): the swim path traces the same two liquid layers into a *different* container
 ///   with the plane **negated** (`0x6320fe fchs`) — a bound above, not a floor below — so the two
 ///   are mutually exclusive by construction and the same triangles can never enter the solver twice
-///   with opposite orientation (§2.4). A swimmer surfaces onto the water on the way *out*, when the
+///   with opposite orientation. A swimmer surfaces onto the water on the way *out*, when the
 ///   depth compare `0x6030c0` drops SWIMMING in water shallower than `0.75·h − 1/36`.
 ///
 ///   **Do not read that as "casting Levitate while swimming does nothing" — 1616 did, and it was
@@ -93,7 +92,7 @@ pub(super) struct Outcome {
     /// This frame's take-off was a **server-aimed knockback**, not a jump (decision 1702). Implies
     /// [`Self::jumped`] — the arc bookkeeping cannot tell them apart and must not — but the wire can:
     /// `MSG_MOVE_JUMP` has exactly one emission site in the reference image, the move-command drain's
-    /// jump arm (wow-re, decision 1464), so a knockback's launch announces itself with
+    /// jump arm (`0x615ed1`, decision 1464), so a knockback's launch announces itself with
     /// `CMSG_MOVE_KNOCK_BACK_ACK` and nothing else. Sending a JUMP for it would also be an
     /// instant `CHEAT_TYPE_OVERSPEED_JUMP` — the one jump check vmangos does *not* exempt during a
     /// knockback (`MovementAnticheat.cpp:650`), and a knockback's horizontal speed is well over run
@@ -161,7 +160,7 @@ pub(super) fn step(
     // **Water walking: the liquid surface is GROUND, and the classify above has to see it**
     // (decision 1611, correcting 0866). In the reference the surface is not a special case at all
     // — `MOVEFLAG_WATERWALKING` ORs the two ADT liquid layers into the walk trace's *class mask*
-    // (`0x63162e or edi, 0x30000`, wow-re `moveflag-family.md` §2.2), so the same swept query that
+    // (`0x63162e or edi, 0x30000`), so the same swept query that
     // finds terrain finds the water, and the walk resolver stands on it at its raw Z with no
     // water-specific code anywhere (`0x6367b0` contains zero references to the bit).
     //
@@ -221,8 +220,7 @@ pub(super) fn step(
     // and why the drop resumes only on release: `ClearRoot 0x7c7370` calls `0x7c61c0` StartFalling,
     // and `0x7c61c0` is precisely the entry that refuses while rooted
     // (`0x7c61d6 test dword ptr [ecx+0x40], 0x203800` — SWIMMING|FALLING|ROOT|FIXED_Z), so no fall
-    // can begin under a root by any path. (wow-re `moveflag-family.md` §1/§5.3,
-    // `step-vs-fall-election.md`.)
+    // can begin under a root by any path.
     let anchored = !held && player.modes.rooted;
     // A body part-way up a foot cone is standing (decision 1123). The probe above looks straight
     // down and finds only the steep riser it is riding, so on its own it would call a mid-ride frame
@@ -288,9 +286,8 @@ pub(super) fn step(
     } else if grounded {
         player.vel_y = 0.0;
         // **HOVER refuses the jump** — the FIRST test in `CMovement::Jump 0x7c6230`
-        // (`0x7c623a test [ecx+0x40], 0x40000000`; wow-re `fall-steep-response.md` §10). The
-        // keyboard jump IS the forced jump (`moveflag-family.md` §4.2, CORRECTED 2026-08-08:
-        // the queued command's replay pushes force=1 at `0x615eba`; the sole force=0 caller is
+        // (`0x7c623a test [ecx+0x40], 0x40000000`). The keyboard jump IS the forced jump (the
+        // queued command's replay pushes force=1 at `0x615eba`; the sole force=0 caller is
         // the wire's SetHover(0) path, which exists so a server move can jump a hovering unit).
         // The refusal is SILENT, byte-for-byte: the caller drops it at `0x615ec5` — no
         // MSG_MOVE_JUMP (its only emission site sits behind this very test), no toast, no retry
@@ -364,7 +361,7 @@ pub(super) fn step(
         // direction *really* moves us, so it re-seeds the frozen airborne direction flags.
         //
         // **The guard is a velocity proxy for a flag test, and the reference's is the flag**
-        // (decision 1736, wow-re `airborne-steerability.md`). `0x7c5a20`/`0x7c5c20` do not bail on
+        // (decision 1736). `0x7c5a20`/`0x7c5c20` do not bail on
         // FALLING — they bail on `FALLING && arg == 0`, and the two openers that pass `arg = 1`
         // sit behind `0x7c6afc test al,0xf`: the door opens exactly while the **direction nibble
         // `+0x40 & 0xf` is clear**. That is why a moving jump is locked, and it is a different
@@ -756,7 +753,7 @@ pub(crate) fn grounded_step(
             );
         }
     }
-    // **Which regime** (decisions 1123/1126, wow-re `climb-vs-slide.md` §2/§4/§6). The certification
+    // **Which regime** (decisions 1123/1126; `0x631be0`, `0x635c00`). The certification
     // above settles *whether* the obstacle can be cleared; the height of the **blocking edge** — the
     // face the look-ahead is pressed against, measured from the feet — settles *how*. The real
     // client's solid is a cone below [`FOOT_CONE_HEIGHT`] and a vertical box above it, so a low edge
@@ -792,7 +789,7 @@ pub(crate) fn grounded_step(
     // of travel in one frame, at ten times walking speed. That lurch, not the height, is what the
     // director reported as Goldshire's tables feeling teleporty.
     //
-    // The reference does none of it (wow-re `ret2-commit-law.md`, a §5 trio):
+    // The reference does none of it:
     //   - `max(H·tan50°, r+1/720)` = 1.1917536 is **only ever a sweep distance**. `ebx` @`0x636193`
     //     has exactly two uses, both the length argument to `0x632ba0`. It is never added to `pos`.
     //   - the resolver holds `L / t_remaining` invariant across hits, deflections and misses, so the
@@ -847,20 +844,20 @@ pub(crate) fn grounded_step(
     );
     let mut slid = out.position;
     // Snap onto the surface so we follow downhill slopes + steps down — the client's step-vs-fall
-    // election (`0x6367b0`, wow-re `step-vs-fall-election.md`): the probe reaches
+    // election (`0x6367b0`): the probe reaches
     // [`STEP_SLOPE_RATIO`]·travel + [`STEP_SNAP_SLACK`], and snaps only onto a *walkable* floor
     // (≤50°, the election's own `cos50°` = [`GROUND_COS`]).
     //
     // **The reach is the cone's own slope, and nothing else, on an ordinary walking frame**
     // (decision 1129). It used to carry a flat `+`[`CAPSULE_HEIGHT`] — 2.028 yd of unconditional
     // extra depth — on the reading that `0x617430` returned a collision height. Both halves of that
-    // were wrong (decision 1125, wow-re `mover-collision-scalars.md` + `step-off-recourse.md`):
-    // `0x617430` is `[unit+0xb8]`, the dimensionless scale ratio `max(SCALE_X / CreatureModelScale,
-    // 1)`, so `H` is **1.0** for a player and not 2.028; and the reference adds it only while
-    // `0x4000000` is set — "the current support is a certified STEEP contact, not a walkable
-    // floor", which is [`Support::steep`]. So the deep reach belongs to the step-down *recourse*,
-    // where a body already following a steep face down needs to see the walkable ground waiting at
-    // its foot; the ordinary walking frame reaches exactly as far as the foot cone could rest.
+    // were wrong (decision 1125): `0x617430` is `[unit+0xb8]`, the dimensionless scale ratio
+    // `max(SCALE_X / CreatureModelScale, 1)`, so `H` is **1.0** for a player and not 2.028; and the
+    // reference adds it only while `0x4000000` is set (`0x636dfc`) — "the current support is a
+    // certified STEEP contact, not a walkable floor", which is [`Support::steep`]. So the deep
+    // reach belongs to the step-down *recourse*, where a body already following a steep face down
+    // needs to see the walkable ground waiting at its foot; the ordinary walking frame reaches
+    // exactly as far as the foot cone could rest.
     //
     // What that costs is real and intended: a drop deeper than the cone is NOT absorbed. No snap,
     // the next frame's ground probe misses, and the gap becomes a fall (the client's
@@ -929,8 +926,8 @@ pub(crate) fn grounded_step(
     // **The step-down follows the surface; it does not leave it** (decision 1127). The reference's
     // finalize writes `pos.z -= min(clearance, d_h·1.8493990)` *before* it classifies anything, and a
     // steep landing is answered by the multipass rather than by a fall — a `ret 2` continues,
-    // grounded, with the "my support is a certified steep contact" bit set (wow-re
-    // `step-off-recourse.md`; the bit's meaning is decision 1125's).
+    // grounded, with the "my support is a certified steep contact" bit set (`0x636f21`; the
+    // bit's meaning is decision 1125's).
     //
     // We refused every hit under 50° outright, so walking off a kerb the probe found only the ~61°
     // riser, declined it, and the body kept its full height while its forward speed carried it out
@@ -940,7 +937,7 @@ pub(crate) fn grounded_step(
     //
     // **The reach is how far we can SEE; the descent is how far we may GO — and for a capsule those
     // are not the same number** (decision 1132). Byte-exact the finalize is one line
-    // (`0x636e45`–`0x636e52`, wow-re `step-off-recourse.md` §1): sweep down by `L`, write
+    // (`0x636e45`–`0x636e52`): sweep down by `L`, write
     // `pos.z -= achieved`, *then* classify. `achieved` is the sweep's own output, so on the reference
     // the descent is bounded only by `L` — no second, smaller cap exists anywhere on that path.
     //
@@ -1041,7 +1038,7 @@ pub(crate) fn grounded_step(
 /// `mean · dt` is the closed form `v₀·dt − ½g·dt²`, not an approximation of it. That matters
 /// because the reference does not integrate at all: it evaluates a closed form anchored at the
 /// launch every substep (`+0x7c − D(+0x78)` via `0x7c5e70`), so its arc is frame-rate independent
-/// and cannot drift (decision 1740, wow-re `airborne-steerability.md`). Stepping at either
+/// and cannot drift (decision 1740). Stepping at either
 /// endpoint's velocity instead of the mean loses `½·g·dt²` per frame — and both of ours did, in
 /// opposite directions:
 ///
@@ -1117,7 +1114,7 @@ fn is_steep_face(ny: f32) -> bool {
 /// The even-speed ramp ride: a walkable slope never slows or deflects the grounded walk. The
 /// real client's walk step is two-dimensional — the resolver takes speed·dt as a *horizontal*
 /// distance and a normalized 2D direction, and Z follows purely through the snap/step machinery
-/// (`0x6367b0`'s own signature, wow-re `step-vs-fall-election.md`) — so on every walkable
+/// (`0x6367b0`'s own signature) — so on every walkable
 /// (< 50°) surface the horizontal speed is exactly the run speed. Collide-and-slide's
 /// true-plane clip breaks that invariant: `v' = v − (v·n)n` shortens the horizontal part to
 /// `h·cos²θ` (half speed at 45°) and bends a diagonal approach off the input line. When the
@@ -1141,13 +1138,12 @@ fn walkable_ride_velocity(n: Vec3, v: Vec3) -> Option<Vec3> {
 ///
 /// The real client's movement solid is a **cone below the waist**: the k-DOP build at `0x631440`
 /// emits four bevels running from a point at the foot out to the full radius at
-/// `foot + radius·1.8493990`, and only above that height is it a vertical box (wow-re
-/// `climb-vs-slide.md` §2 — the `n.z < 0` sign on those planes is the tell that the cone narrows
-/// *downward*, so it is a foot cone and not a top-rim chamfer). A low edge therefore never presents
-/// the mover a wall to be lifted over: it presents the slanted skirt, and the resolver's own slide
-/// runs the body up it.
+/// `foot + radius·1.8493990`, and only above that height is it a vertical box (the `n.z < 0` sign
+/// on those planes is the tell that the cone narrows *downward*, so it is a foot cone and not a
+/// top-rim chamfer). A low edge therefore never presents the mover a wall to be lifted over: it
+/// presents the slanted skirt, and the resolver's own slide runs the body up it.
 ///
-/// The gain is the note's `T` at §4 — `1.8494 · cosθ · len`, where `θ` is how squarely the approach
+/// The gain is `0x635c00`'s `T` — `1.8494 · cosθ · len`, where `θ` is how squarely the approach
 /// meets the face — and that is exactly this projection: the closing horizontal speed (the dot
 /// product supplies `cosθ`) times [`STEP_SLOPE_RATIO`], the cone's own surface slope. Horizontal
 /// speed is untouched, as it is on every walkable ride ([`walkable_ride_velocity`]); the grounded
@@ -1173,8 +1169,7 @@ fn foot_cone_ride(n: Vec3, v: Vec3) -> Option<Vec3> {
 
 /// The steep-contact response: **the descent is never touched, and the push-out is horizontal.**
 ///
-/// VERIFIED against the reference (wow-re `system/collision/scratch/fall-steep-response.md`, the
-/// dispatch this decided): `0x635090` writes **exactly two floats** — an x/y push-out along the
+/// The reference's `0x635090` writes **exactly two floats** — an x/y push-out along the
 /// horizontal projection of the contact normal — and `0x635600` adds them to `Δx`/`Δy` only, while
 /// `Δz = dir.z · remaining` passes through **with no addend at all**. The normal's vertical is
 /// annihilated in the response's own denominator (`0x635166 fmul [0x7ffd74]`, and that constant is
@@ -1729,8 +1724,8 @@ mod tests {
     fn a_step_up_never_outruns_the_frame_it_happens_in() {
         // **The pin on decision 1130.** The reference holds `L / t_remaining` invariant across every
         // hit, deflection and miss in the walk resolver, so a frame's total horizontal displacement
-        // is bounded by its own substep budget — `dx = 1.19` where a walking frame is 0.117 "cannot
-        // arise from this path" (wow-re `ret2-commit-law.md`, claim 2). 0209 committed the probe's
+        // is bounded by its own substep budget — `dx = 1.19` where a walking frame is 0.117 cannot
+        // arise from this path (`0x6367b0`). 0209 committed the probe's
         // full advance as motion, which put exactly that lurch in every single step-up.
         //
         // **A Goldshire table, profiled from the director's own capture** — the shape they reported
@@ -1974,7 +1969,7 @@ mod tests {
 
     #[test]
     fn the_cone_ride_gains_the_reference_slope() {
-        // wow-re `climb-vs-slide.md` §4: `T = 1.8494 · cosθ · len`. Head-on, the gain is the cone's
+        // The reference's `T = 1.8494 · cosθ · len` (`0x635c00`). Head-on, the gain is the cone's
         // own surface slope times the speed…
         let head_on = foot_cone_ride(Vec3::new(-1.0, 0.0, 0.0), Vec3::X * 7.0).unwrap();
         assert!(
@@ -2489,11 +2484,10 @@ mod tests {
     #[test]
     fn a_hovering_mover_refuses_the_jump_and_leaves_no_trace() {
         // `0x7c623a` — HOVER is the FIRST test in `CMovement::Jump 0x7c6230`, and the keyboard
-        // jump is the forced jump it applies to (wow-re `fall-steep-response.md` §10;
-        // `moveflag-family.md` §4.2 CORRECTED 2026-08-08 — every player-side call site pushes
-        // force=1). Refused means NOTHING happens: no take-off velocity, `jumped` false (the
-        // wire's MSG_MOVE_JUMP rides that bit), no latch. The same press with hover off is the
-        // control that proves this fixture can jump at all.
+        // jump is the forced jump it applies to (every player-side call site pushes force=1, the
+        // keyboard's at `0x615eba`). Refused means NOTHING happens: no take-off velocity, `jumped`
+        // false (the wire's MSG_MOVE_JUMP rides that bit), no latch. The same press with hover off
+        // is the control that proves this fixture can jump at all.
         let flat: [(f32, f32); 2] = [(-3.0, 0.0), (3.0, 0.0)];
         let rows = world_from_profile(&flat)
             .world_mut()
@@ -2673,7 +2667,7 @@ mod tests {
     }
 
     /// **A knockback is unsteerable because its launch plants a direction bit — not because it is
-    /// fast** (decision 1740, wow-re `airborne-steerability.md`).
+    /// fast** (decision 1740).
     ///
     /// This is the case the old gate got wrong, and it is the reason the gate changed. Air control
     /// opens on the reference exactly while the direction nibble `[CMovement+0x40] & 0xf` is clear

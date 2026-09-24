@@ -42,7 +42,7 @@ pub(super) fn update(
             // `SetStandState`'s own first two guards, read together with the byte they gate:
             // health ≤ 0, **or** `UNIT_DYNAMIC_FLAGS & 0x20` — a feigner, whose health never moved.
             // Deliberately NOT `unit_reads_dead`, which folds in stand state 7 as a third term the
-            // setter does not test (wow-re `local-move-input-gate.md` §6.7; decision 1753).
+            // setter does not test (`0x5ed4a9`–`0x5ed4bd`; decision 1753).
             store.map(|s| {
                 (
                     s.0.unit_stand_state(),
@@ -74,13 +74,13 @@ pub(super) fn update(
     }
     // Any movement input stands the avatar back up (the client volunteers the stand — the
     // server never auto-stands a moving player; verified vmangos MovementHandler). The input
-    // set is byte-pinned (wow-re `standstate-movement-trigger.md`, §5 2026-07-14): the net
+    // set is byte-pinned: the net
     // input axes (translation), keyboard turn, and jump all reach the guarded stand wrapper
     // `0x60be30(0)`; a left-drag camera orbit provably does not; sit(1)/chair(2)/sleep(3)
     // all stand identically (the value-agnostic `GetStandState() != 0` gate).
     //
-    // **The MOUSE turn is not in this set, and that corner is now closed** (decision 1766; the
-    // note's B3, which stood open for weeks). A deliberate right-drag turn cannot stand a seated
+    // **The MOUSE turn is not in this set, and that corner is now closed** (decision 1766).
+    // A deliberate right-drag turn cannot stand a seated
     // player — two independent gates refuse the body-facing commit for a seated body, and
     // `0x514f50` skips its stand arm outright while the RMB bit is held. The director's
     // observation was right and this file's attribution was wrong: what stands you is the
@@ -136,9 +136,8 @@ pub(super) fn update(
     // client-side state (the setter cache — attacking auto-draws and the anim reconcile
     // force-stows, which a local bool or the raw echo byte would drift from), commit + send
     // `CMSG_SETSHEATHED` there, and play the ceremony — the manual toggle is the ONLY path
-    // in the whole client that plays it (`bInstant = 0` at the 4 ToggleSheath sites — wow-re
-    // `sheath-policy.md`). No body model yet (no driver) drops the toggle, the client's own
-    // refusal.
+    // in the whole client that plays it (`bInstant = 0` at the 4 ToggleSheath `0x5eb480` sites).
+    // No body model yet (no driver) drops the toggle, the client's own refusal.
     if binds.fired(crate::bindings::cmd::TOGGLE_SHEATH) {
         if let Ok((e, _, _, _, Some(drv), store, engaged, _, _, wielded, _)) = body.single() {
             // The manual toggle's guard chain (decision 0080d) — the guards of the client's
@@ -146,7 +145,7 @@ pub(super) fn update(
             // today: dead · engaged in combat · not standing (`GetStandState() != 0` —
             // chairs block the toggle too, unlike the *stow rider's* {0, 2} exemption) ·
             // mid-ceremony (the 89/90 clip still playing) · MOUNTED (chain check 4,
-            // `UNIT_FIELD_MOUNTDISPLAYID > 0` — wow-re `sheath-policy.md` §2, wired with
+            // `UNIT_FIELD_MOUNTDISPLAYID > 0`, wired with
             // 0441's mounts). Stunned / channeling join when those states exist. A refused
             // press is simply dropped — no message, like the client.
             let dead = store.is_some_and(|s| s.0.unit_is_dead());
@@ -190,14 +189,12 @@ pub(super) fn update(
 /// The stand-state setter's **local half** — the reference's `0x6127b0`, reached by the
 /// volunteered change (`0x5ed430`, after it has sent `CMSG_STANDSTATECHANGE`) and by the server's
 /// own `SMSG_STANDSTATE_UPDATE` (`0x603e50`) alike; it sends no `CMSG_STANDSTATECHANGE` itself —
-/// its four callers image-wide hold none of the five send sites (wow-re `object-layer.md` "Three
-/// server handlers at the bytes"; decision 2339).
+/// its four callers image-wide hold none of the five send sites (decision 2339).
 ///
 /// On a CHANGE it writes the predicted state (`[player+0x1d68]`, our `stand_pending`), which the
 /// pose reads until the `UNIT_FIELD_BYTES_1` echo lands ([`predict`]). Whether or not the state
 /// changed, a drawn weapon meeting a state outside {0 STAND, 2 SIT_CHAIR} is stowed through the
-/// anim layer's one setter — `0x6127cc`'s gate is the sheath state, not the same-state compare
-/// (wow-re `sheath-policy.md` §4).
+/// anim layer's one setter — `0x6127cc`'s gate is the sheath state, not the same-state compare.
 ///
 /// What the reference's local half also does on a change, and this does not yet: release an open
 /// loot window and stop a running attack when sitting down (`0x5f0790` → `0x48f200`, `0x5ecac0`),

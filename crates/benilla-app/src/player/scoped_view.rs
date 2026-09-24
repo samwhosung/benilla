@@ -7,8 +7,7 @@
 //! **client-local camera override** and never touches that field — which is why the server appears
 //! to do nothing for the spyglass, and why chasing it on the wire finds no packet to handle.
 //!
-//! **VERIFIED against the 5875 binary** (wow-re `object-layer/scratch/farsight-and-client-control.md`,
-//! §5 cross-checked): the aura watcher `0x604d00` routes to `0x5ff350` (add) / `0x612320` (remove);
+//! The reference's aura watcher `0x604d00` routes to `0x5ff350` (add) / `0x612320` (remove);
 //! both, **for the local player only** (`0x5fa6d0`), walk the spell's three effects comparing
 //! `EffectApplyAuraName[i]` (`SpellRec+0x16c`) against `0x4c` = 76 and call
 //! `0x50d320(camera, EffectMiscValue[i])`. That function forces **first person**, sets a camera flag

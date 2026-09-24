@@ -9,10 +9,10 @@ use bevy::prelude::*;
 
 /// Backpedal speed as a fraction of run: vanilla `MOVE_RUN_BACK` 4.5 / `MOVE_RUN` 7.0. Moving backward
 /// (the `0x2` backward move-flag) selects the backward speed over run, **dominating strafe** —
-/// binary-VERIFIED 1v1 (`backward-speed-{a,b}.md`; the speed getter `FUN_007c4c90` tests only bit `0x2`
-/// on the forward/back axis, never the forward/strafe bits) — and the backward arm is a
-/// **`min(runBack, run)`**, not a plain select (`0x7c4d1d`, the swim-feel §5's TU-H; identical in
-/// template to the swim pair's `min(swimBack, swim)`). runBack is server-seeded (the ctor zeroes it;
+/// the speed getter `FUN_007c4c90` tests only bit `0x2` on the forward/back axis, never the
+/// forward/strafe bits — and the backward arm is a **`min(runBack, run)`**, not a plain select
+/// (`0x7c4d1d`; identical in template to the swim pair's `min(swimBack, swim)`). runBack is
+/// server-seeded (the ctor zeroes it;
 /// standard vanilla 4.5), so we keep it as a ratio of the configured run speed → a `$WOW_MOVE_SPEED`
 /// override / Ctrl sprint scales backpedal too. A backward *jump* inherits this automatically: takeoff
 /// freezes the current horizontal speed (`FUN_007c61f0` never rewrites it), so a backward jump lands
@@ -35,7 +35,7 @@ pub(super) const WALK_RATIO: f32 = 2.5 / 7.0;
 /// `CMSG_FORCE_TURN_RATE_CHANGE_ACK`, `0x2df`) and read for held turns by `GetYawRate 0x7c5c50`.
 /// The base ctor `0x7c4850` *zeroes* all six, so the client keeps no default of its own — π is the
 /// vanilla server's value, and this constant stands in only for frames before a create block lands.
-/// VERIFIED wow-5875-re (`0x7c4f30` heading integrate; the speed block, decision 1278).
+/// (`0x7c4f30` heading integrate; the speed block, decision 1278).
 ///
 /// Because it lives on the mover, a possessed creature turns at **its** rate, not ours. Reduced to
 /// [`TURN_RATE_MOVING`] while translating **or falling** (`flags & 0x200f`), and the same cell is
@@ -43,8 +43,8 @@ pub(super) const WALK_RATIO: f32 = 2.5 / 7.0;
 /// Decision 0050.
 pub(super) const TURN_RATE: f32 = std::f32::consts::PI;
 
-/// The mouselook swim-pitch clamp (radians) — **VERIFIED** ±89.0° = 1.5533431 (`0x8089d8` =
-/// `0x3fc6d3f2`, the camera→SetPitch path's clamp; wow-re `swim-camera-pitch.md`, decision
+/// The mouselook swim-pitch clamp (radians) — ±89.0° = 1.5533431 (`0x8089d8` =
+/// `0x3fc6d3f2`, the camera→SetPitch path's clamp; decision
 /// 0492). NOT ±π/2 — that clamp belongs to the separate, rate-limited pitch-KEY integrator
 /// (`0x7c4f80`), whose keys are default-unbound and which we don't bind.
 pub(super) const MOUSELOOK_PITCH_CLAMP: f32 = 1.553_343;
@@ -73,8 +73,8 @@ pub(super) const TURN_RATE_MOVING: f32 = 0.75;
 /// The stationary body catch-up: once steering input stops, the rendered body closes on the aim at
 /// `turnRate × 8` rad/s, gap-clamped (the client's chase, `0x607ed0` tail — its clock is stamped
 /// every non-steering frame, so elapsed ≈ one frame). While steering, the catch-up is FROZEN and
-/// only the 90° ceiling moves the body — the head-leads-then-body-follows turn-in-place (wow-re
-/// `b947e5aa`, decision 0106).
+/// only the 90° ceiling moves the body — the head-leads-then-body-follows turn-in-place
+/// (`0x60818a`–`0x6081bf`, decision 0106).
 pub(super) const STATIONARY_CHASE_RATE: f32 = 8.0;
 
 // ── Character-controller feel knobs (decision 0009) ──────────────────────────────────────────────
@@ -88,9 +88,9 @@ pub(super) const STATIONARY_CHASE_RATE: f32 = 8.0;
 /// Known since to be the ctor **placeholder**, not the real mover's radius: `0x6174b0` overwrites
 /// `+0xb0`/`+0xb4` from `CreatureModelData` on every model build (`0x5fb880` → `0x5fb9dd` passes
 /// `force = 1`, which skips the only refusal path), so the live extents are per-model — human male
-/// radius **0.30555**, human female **0.20835** (VERIFIED, wow-re `mover-collision-scalars.md`;
-/// decision 1125). Adopting them is the same movement-fidelity question [`CAPSULE_HEIGHT`] describes
-/// below, and this radius is its other half.
+/// radius **0.30555**, human female **0.20835** (decision 1125). Adopting them is the same
+/// movement-fidelity question [`CAPSULE_HEIGHT`] describes below, and this radius is its other
+/// half.
 pub(crate) const CAPSULE_RADIUS: f32 = 1.0 / 3.0;
 /// Player capsule total height (yd) — the **movement** capsule avian sweeps, deliberately a
 /// constant. Numerically the vanilla ctor-default collision height it was derived from
@@ -104,7 +104,7 @@ pub(crate) const CAPSULE_RADIUS: f32 = 1.0 / 3.0;
 pub(crate) const CAPSULE_HEIGHT: f32 = 2.027_777_7;
 
 /// The client's own **empty-world collision height** (yd) — the `CMovement` ctor's immediate
-/// `0x4001c71c` at `0x616fd8` (VERIFIED, wow-re `collision.md` "the collision volume"), which the
+/// `0x4001c71c` at `0x616fd8`, which the
 /// per-unit param setter `0x6174b0` overwrites from the unit's model. This is the fallback every
 /// depth line takes for a unit whose display id doesn't resolve to a `CreatureModelData` row — the
 /// same role it plays in the reference, and what vmangos falls back to as well (its `2.f`).
@@ -123,8 +123,7 @@ pub(crate) const TERMINAL_VELOCITY: f32 = 60.148_003;
 /// **Terminal fall speed under feather fall** (yd/s) — the *whole* of what Slow Fall does. The
 /// reference's fall-velocity query `0x7c5d20` picks its clamp from one flag test
 /// (`0x7c5d23 test [ecx+0x40], 0x20000000`): the ordinary cap `[0x87d894]` = 60.148, or this one
-/// `[0x87d898]` when `MOVEFLAG_SAFE_FALL` is set. VERIFIED — wow-re `system/collision/ledger.tsv`
-/// (`0x7c5d20`, sweep2 §5) and `scratch/spec-ground.md`'s terminal-vel select.
+/// `[0x87d898]` when `MOVEFLAG_SAFE_FALL` is set. `0x7c5f50` makes the same select as `0x7c5d20`.
 ///
 /// The same 7.0 shows up on the server: vmangos raises its anticheat's expected jump speed to
 /// `max(current, 7.0f)` on receiving a feather-fall ack (`HandleMovementFlagChangeToggleAck:576`) —
@@ -132,9 +131,8 @@ pub(crate) const TERMINAL_VELOCITY: f32 = 60.148_003;
 pub(crate) const FEATHER_TERMINAL_VELOCITY: f32 = 7.0;
 /// **How far above the ground a hovering body rests** (yd) — the whole of what Hover does. The
 /// reference extends the walk resolver's down-probe by `[0x7ff9d8]` = 1.0 (`0x636dd2`) and then
-/// subtracts it back out of the snap, landing the body exactly a yard clear. VERIFIED — wow-re
-/// `scratch/moveflag-family.md` §4, which settled it as a **direct write to `CMovement.pos.z`**
-/// rather than a probe widening, closing `step-vs-fall-election.md`'s open bit-identity handoff.
+/// subtracts it back out of the snap, landing the body exactly a yard clear: a **direct write to
+/// `CMovement.pos.z`** (`0x636e81`–`0x636ea9`) rather than a probe widening.
 pub(crate) const HOVER_HEIGHT: f32 = 1.0;
 /// **How fast a hovering body rises to that clearance** (yd/s). The snap itself can only *lower* the
 /// body — `pos.z −= max(L − 1.0, 0)` (`0x636e52`–`0x636ea9`) skips its write entirely when the floor
@@ -148,7 +146,7 @@ pub(super) const GROUND_COS: f32 = 0.642_788;
 /// Downward probe distance (yd) to decide whether we're standing on ground.
 pub(super) const GROUND_PROBE: f32 = 0.2;
 /// The post-move downward snap's **slope ratio** — the client's step-vs-fall election
-/// (`0x6367b0`, constant `[0x80c740]` = 1.8493990; wow-re `step-vs-fall-election.md`): the snap
+/// (`0x6367b0`, constant `[0x80c740]` = 1.8493990): the snap
 /// probe reaches `d_h · ratio + slack + collision height` below the post-move position, where
 /// `d_h` is the frame's achieved horizontal travel. Scaling by the travel makes the absorbed
 /// *slope* the constant (atan 1.8494 ≈ 61.6°, comfortably above the 50° walkable limit),
@@ -160,7 +158,7 @@ pub(super) const GROUND_PROBE: f32 = 0.2;
 /// The ratio itself is confirmed to be one constant with two jobs, exactly as we use it: `0x80c740`
 /// has four references image-wide, and they are the foot cone's waist ring (`0x631c0b`) and this
 /// step-down term (`0x636dda`, inside `0x6367b0`) among them — the same 61.6° serving the climb and
-/// the descent (wow-re `mover-collision-scalars.md`).
+/// the descent.
 pub(super) const STEP_SLOPE_RATIO: f32 = 1.849_399;
 /// The election's fixed slack (yd) added to the travel-scaled snap reach — `[0x7ff9d0]` = 1/36 yd.
 pub(super) const STEP_SNAP_SLACK: f32 = 0.027_777_8;
@@ -181,8 +179,8 @@ pub(super) const STEP_SNAP_SLACK: f32 = 0.027_777_8;
 /// flat top) and 1121's deferred 1.04 yd ledge.
 pub(crate) const STEP_UP_HEIGHT: f32 = 1.0;
 /// The rise budget of a body the reference does **not** treat as player-controlled — a creature, a
-/// pet, a charmed/possessed/feared/confused/rooted player (decision 1125, wow-re
-/// `mover-collision-scalars.md`): `0x617430` takes `0x5fa550`'s FALSE leg and returns the constant
+/// pet, a charmed/possessed/feared/confused/rooted player (decision 1125): `0x617430` takes
+/// `0x5fa550`'s FALSE leg and returns the constant
 /// `2.0` at `[0x801628]`, where a player's is its own `[CMovement+0xb8]` = 1.0. So a creature steps
 /// twice as high as we do, and its certify advance (`H·tan50°`) reaches twice as far; the creature
 /// clamp's walker step ([`crate::net::motion::spline::ground_clamp_creatures`]) is the consumer.
@@ -217,8 +215,8 @@ pub(crate) const CREATURE_STEP_UP_HEIGHT: f32 = 2.0;
 /// at one radius is still over the face and reads it as a steep floor.
 pub(super) const STEP_UP_ADVANCE: f32 = 1.191_753_6;
 /// The certify reach **per yard of rise budget** — `tan 50°`, since the reference's reach is
-/// `max(H·tan50°, r + 1/720)` with `H` the mover's own budget (`0x636147`–`0x636190`, wow-re
-/// `ret2-commit-law.md`). [`STEP_UP_ADVANCE`] is this at the player's `H` of 1.0; a creature's 2.0
+/// `max(H·tan50°, r + 1/720)` with `H` the mover's own budget (`0x636147`–`0x636190`).
+/// [`STEP_UP_ADVANCE`] is this at the player's `H` of 1.0; a creature's 2.0
 /// (`CREATURE_STEP_UP_HEIGHT`) reaches 2.38 yd through the same law.
 pub(super) const STEP_UP_ADVANCE_PER_YARD: f32 = STEP_UP_ADVANCE / STEP_UP_HEIGHT;
 /// The **foot cone's height** (yd): how far above the feet the reference's movement solid is still
@@ -229,11 +227,11 @@ pub(super) const STEP_UP_ADVANCE_PER_YARD: f32 = STEP_UP_ADVANCE / STEP_UP_HEIGH
 /// at `0x631440` emits 9 planes — 4 vertical box sides at `center.xy ± radius`, and 4 bevels running
 /// from a point at the foot out to `(pos.xy ± radius, pos.z + r')` with `r' = radius · 1.8493990`
 /// (`[0x80c740]` — our [`STEP_SLOPE_RATIO`]), above which it is a plain vertical box. There is no
-/// −Z plane: the solid is open at the bottom (wow-re `climb-vs-slide.md` §2).
+/// −Z plane: the solid is open at the bottom.
 ///
 /// So a *low* edge never meets a wall — it meets the slanted skirt, and the resolver's ordinary
 /// slide carries the body up it at the cone's own surface slope, atan 1.8494 ≈ 61.6°, gaining
-/// `1.8494 · cosθ · len` per step (the note's `T` at §4). Only an edge **above** this height meets
+/// `1.8494 · cosθ · len` per step (`0x635c00`'s `T`). Only an edge **above** this height meets
 /// the vertical box square, and that is the case the instant step-up ([`STEP_UP_HEIGHT`]) exists
 /// for. One solid, two behaviours, selected by the edge's height above the feet.
 ///
@@ -282,7 +280,7 @@ pub(super) const WEDGE_MIN_FALL: f32 = 1.0;
 pub(super) const AIR_NUDGE_SPEED: f32 = 2.5;
 /// The FALLINGFAR **distance leg** (yd): a *jump* arc (launch vz ≠ 0) latches MOVEFLAG_FALLINGFAR
 /// once it descends this far below its launch height — the fall resolver's `0x633240`, constant
-/// `[0x80dff8]` = 1/9 yd (wow-re `land-anim-height-gate.md`). Latched, the arc is a **far fall**:
+/// `[0x80dff8]` = 1/9 yd. Latched, the arc is a **far fall**:
 /// the anim layer swaps to Fall(40) mid-air. A flat jump never descends below its takeoff, so it
 /// never latches — its hang stays Jump(38). The legs are exclusive on the launch vz: step-off
 /// falls take [`FALL_FAR_TIME`] instead (decision 0179).
@@ -476,20 +474,19 @@ impl MoveModes {
 
 /// **The precondition both movement-input predicates evaluate first** — the reference's
 /// `0x5144e0`, called at the head of `0x514560` (at `0x514568`) and of `0x5145b0` (at `0x5145b8`).
-/// It answers *"is there a mover, and is it in a state where input means anything at all"*. Quoted
-/// in full and re-derived in wow-re `ui/scratch/local-move-input-gate.md` **§6.2**, its five
-/// conjuncts are:
+/// It answers *"is there a mover, and is it in a state where input means anything at all"*.
+/// Its five conjuncts are:
 ///
 /// 1. the mover object resolves (`0x5144e7`);
 /// 2. **`[[mover+0x110]+0x40] > 0` — UNIT_FIELD_HEALTH**, signed i32, strictly greater, the `jg` at
-///    `0x5144fd`. (The field identity is **VERIFIED** three independent ways in §6.1 — the
+///    `0x5144fd`. (The field identity is established three independent ways — the
 ///    descriptor-base arithmetic, the `UnitHealth` registrar pair `.data 0x850510 → 0x5174d0`, and
-///    the low-health warning's `fild [eax+0x40]; fidiv [eax+0x58]`. `rf79`'s INFERRED label is
-///    retired.) — the [`MoverInput::dead`] field;
+///    the low-health warning's `fild [eax+0x40]; fidiv [eax+0x58]` at `0x5ecafd`.) — the
+///    [`MoverInput::dead`] field;
 /// 3. the CMovement-aux gate `[[mover+0x118]+0xa4]` null-or-`&4` (`0x514516`);
 /// 4. `!0x60f5b0(obj)` — the **KNOCKDOWN animation lockout**, and *not* an on-taxi predicate: it
 ///    returns `AnimationData.dbc` column 3 bit `0x80`, which the shipped table sets on exactly one
-///    of 208 rows, id 121 `Knockdown` (§6.2's census). It contributes nothing while dead;
+///    of 208 rows, id 121 `Knockdown`. It contributes nothing while dead;
 /// 5. `!(IsActivePlayer(mover) && [mover+0x1c70] & 1)` — the **far-sight ENGAGED latch**, the
 ///    [`MoverInput::view_is_out`] field.
 ///
@@ -517,15 +514,14 @@ pub(crate) struct MoverInput {
     /// (0308 §the release), so `0x5144fd`'s `jg` is taken and the ghost gets every input back.
     /// Nothing in the input path, the emitters or the send gates reads the ghost bit at all — a
     /// band census finds **zero** `PLAYER`-block reads across the whole InputControl and CMovement
-    /// ranges (§6.6). The ghost bit *is* read in the collision layer, where it adds trace mask bit
-    /// `0x8000` (`0x631658`) — a separate finding, and not this one.
+    /// ranges (`0x513000`–`0x516000`, `0x7c4000`–`0x7c8000`). The ghost bit *is* read in the
+    /// collision layer, where it adds trace mask bit `0x8000` (`0x631658`) — a separate finding,
+    /// and not this one.
     pub(crate) dead: bool,
     /// **Conjunct 5, the far-sight term** — `!(IsActivePlayer(mover) && [mover+0x1c70] & 1)`, held
     /// here in the affirmative: *my view is out on a far-sight object, and the body I would be
     /// driving is my own*. While that holds the reference refuses **both** predicates — you may
-    /// neither walk nor turn your own body while you are looking through Mind Vision. (wow-re
-    /// §6.2. Both of this conjunct's labels were CORRECTED on 2026-08-31: they previously read
-    /// "charmed", and had never been derived.)
+    /// neither walk nor turn your own body while you are looking through Mind Vision.
     ///
     /// **Both halves are load-bearing, and `IsActivePlayer` is the one that would be easy to
     /// drop.** `0x514537 call 0x5fa6d0` tests the *mover* against the active player and returns the
@@ -539,8 +535,8 @@ pub(crate) struct MoverInput {
     /// **Engaged means the subject RESOLVED, not merely that the field arrived.** The far-sight
     /// machine `0x5ee290` sets the latch only on its ENGAGE leg (`0x5ee3f6 or ecx,1`), reached
     /// after `0x5ee2ef` resolves the guid; the *field non-zero but object unresolved* leg falls
-    /// through to `0x5ee32d` — camera home, pending cast cancelled, `return 0` — and sets nothing
-    /// (wow-re `object-layer/scratch/farsight-and-client-control.md` §2.1). So the benilla analog
+    /// through to `0x5ee32d` — camera home, pending cast cancelled, `return 0` — and sets nothing.
+    /// So the benilla analog
     /// is the **resolved** [`super::view_subject::ViewSubject`] subject, not the raw
     /// `PLAYER_FARSIGHT` field: through the ~400 ms vmangos defers the set by, the body is still
     /// ours to drive.
@@ -585,14 +581,14 @@ impl MoverInput {
     /// outright *and* force-stops either already in flight. Each emitter has exactly one caller,
     /// immediately behind that gate, and no data or vtable reference anywhere in the image — so
     /// while this predicate is false **no keyboard or mouse turn can reach `CMovement::StartTurn
-    /// 0x7c6d90` by any route** (VERIFIED, wow-re `local-move-input-gate.md` §4).
+    /// 0x7c6d90` by any route**.
     ///
     /// Its own term past the shared precondition is `UNIT_FIELD_FLAGS & 0x40000` — a descriptor
     /// read, not an aura and not a movement flag (decision 0872). **And because the precondition is
     /// shared, a dead body is "stunned" as far as this predicate is concerned**: that single fact is
     /// why the reference refuses to turn a corpse.
     ///
-    /// **The MOUSE turn reaches the same answer down a different path** (§6.4, and this corrects
+    /// **The MOUSE turn reaches the same answer down a different path** (this corrects
     /// what 1753 first wrote). The right-drag handler is `0x514400`, called from the mouse-MOVE
     /// handler `0x492c00`; its body hand-off `0x51447b call 0x5103e0` is gated at `0x514474` by a
     /// *third* predicate, **`0x5145e0`**, whose first act is to call this one — so the health term
@@ -619,8 +615,7 @@ impl MoverInput {
     /// caller's here), and **`GetStandState() == 0`** (`0x51460c call [eax+0xa4]` → the CGPlayer
     /// override `0x5ed570`, the client-predicted cache `[player+0x1d68]`; `0x514612 neg; sbb; inc`).
     /// The commit is refused a second, independent time downstream: `0x5151b0` re-tests the raw
-    /// descriptor byte at `0x51520a` (wow-re `local-move-input-gate.md` §6.4,
-    /// `standstate-movement-trigger.md` §4.1, both VERIFIED).
+    /// descriptor byte at `0x51520a`.
     ///
     /// So a right-drag while **seated** — sitting, in a chair (2, and the server-driven 4/5/6),
     /// asleep — turns the camera and leaves the body exactly where it is, and puts nothing on the
@@ -640,12 +635,11 @@ impl MoverInput {
     /// click-to-move and `/follow` and fires `AUTOFOLLOW_END` (event `0x170`).
     ///
     /// It is reached only when **BOTH** predicates are down: `0x5146c3 jne` not taken (`bl == 0`)
-    /// *and* `0x5146ce jne` not taken (`[ebp+0xf] == 0`). That is the correction wow-re's §6.3 makes
-    /// to `rf86-autofollow-cancel-set.md` §5, which named the health test alone — necessary, but not
-    /// enough to name the leg. **A pure ROOT does not cancel a follow** (translate down, turn still
-    /// up), and neither does a pure stun; **death does**, because it takes both. Ice Block, which
-    /// grants root and stun together, does too. So does the far-sight term, for the same reason
-    /// death does — it is the other conjunct of the shared precondition.
+    /// *and* `0x5146ce jne` not taken (`[ebp+0xf] == 0`). The health test alone is necessary, but
+    /// not enough to name the leg. **A pure ROOT does not cancel a follow** (translate down, turn
+    /// still up), and neither does a pure stun; **death does**, because it takes both. Ice Block,
+    /// which grants root and stun together, does too. So does the far-sight term, for the same
+    /// reason death does — it is the other conjunct of the shared precondition.
     ///
     /// benilla had the root alone in this position and so cancelled on a Frost Nova, which the
     /// reference does not (decision 1753).
@@ -678,7 +672,7 @@ impl MoverInput {
 ///
 /// They are keyed on different state on purpose, exactly as the reference has them: a pure root
 /// (Frost Nova, Entangling Roots) still pivots — turn is on the allow-list *deliberately* — and only
-/// `UNIT_FLAG_STUNNED` takes the pivot away (wow-re `unit-flags-movement-gates.md` §5). Nothing else
+/// `UNIT_FLAG_STUNNED` takes the pivot away. Nothing else
 /// is touched: the granted modes ride on (drop one and the server forgets it), SWIMMING survives a
 /// root exactly as `0xffe07f00` preserves `0x200000`, and FALLING is already gone by the time we get
 /// here — the root ended the arc ([`super::mover`]'s anchor).
@@ -716,8 +710,7 @@ pub(crate) struct Player {
     pub(super) modes: MoveModes,
     /// **Autorun** latched on — the reference's input bit `0x1000` in the local mover's input word
     /// `[MOVE+4]`, flipped by `ToggleAutoRun 0x513de0` (a read+invert: the command family's only
-    /// *toggle*, where every directional command is a set/clear pair). VERIFIED, wow-re
-    /// `rf78-movement-command-handlers.md`.
+    /// *toggle*, where every directional command is a set/clear pair).
     ///
     /// It is not a movement of its own. The axis emitter `0x514da0` folds the bit into the
     /// **forward axis** (`test ah,0x10`), so autorun *is* held-forward: it nets against a held S
@@ -890,7 +883,7 @@ pub(crate) struct Player {
     pub(super) ride_abort: bool,
     /// **A `MSG_MOVE_WORLDPORT_ACK` is owed, payable at the settle release** (decision 1340).
     /// The real client sends the worldport ack as the LAST act of its blocking destination load
-    /// (wow-re: `0x401bc0` sends `0xDC` at `0x401cae` only after `0x66fbe0`'s load returns) — our
+    /// (`0x401bc0` sends `0xDC` at `0x401cae` only after `0x66fbe0`'s load returns) — our
     /// async re-expression of "after the load" is the release. Safe to defer: vmangos has no load
     /// timeout, drops every packet we'd send meanwhile (the player is out-of-world for the whole
     /// window), and force-acks at logout. Set by the non-riding worldport snap; a riding crossing
@@ -938,7 +931,7 @@ pub(crate) struct Player {
     ///
     /// `force == 0` is what makes it a *different* jump from the player's: it skips
     /// `0x7c623a`'s `test [ecx+0x40], 0x40000000` hover refusal — the wire path exists precisely to
-    /// be able to jump a unit that is already hovering (wow-re `moveflag-family.md` §4.2). It still
+    /// be able to jump a unit that is already hovering. It still
     /// takes the ROOT|FALLING refusal at `0x7c625c`, and it still reads SWIMMING at `0x7c6261` to
     /// pick the take-off seed. So this is a latch and not a direct write: the reference commits the
     /// jump inside the handler because `MOVEFLAG_FALLING` then keeps its resolver off the body,
@@ -1033,15 +1026,14 @@ pub(crate) struct Player {
     /// ([`super::camera_water::classify`]) therefore reads *this*, one frame behind, which is the
     /// same lag the reference's own camera runs at — and it is load-bearing, not incidental: a
     /// depth that is piecewise constant is what keeps `d - target` from grazing a band edge while
-    /// swimming (2173, and `camera-water-corridor-spec.md` §7).
+    /// swimming (2173).
     pub(crate) liquid_surface: Option<f32>,
     /// The **mover pitch** (radians, +up) — the client's persistent per-unit pitch
-    /// (`CMovement+0x20`, the swim §5's TU-B): **held** when unsteered (an idle floater keeps its
+    /// (`CMovement+0x20`): **held** when unsteered (an idle floater keeps its
     /// pitch — never auto-leveled; the only zeroing writer `0x7c6e80` fires from
     /// stop-swim/teleport, not mouse release). ActiveMover by mouselook as a **DIRECT set** of the
-    /// camera aim pitch, clamped [`MOUSELOOK_PITCH_CLAMP`] (±89°) — **VERIFIED** (the camera-pitch
-    /// §5, wow-re `swim-camera-pitch.md`, decision 0492, refuting the earlier no-camera-coupling
-    /// census): the ref's mouse-move event chain lands in `SetPitch 0x7c6f70`, an unconditional
+    /// camera aim pitch, clamped [`MOUSELOOK_PITCH_CLAMP`] (±89°; decision 0492): the ref's
+    /// mouse-move event chain lands in `SetPitch 0x7c6f70`, an unconditional
     /// store with no integrator and no rate limit, and the basis rebuild re-aims travel in-call —
     /// hence zero lag. The `0x7c4f80` 0.75·turnRate integrator (clamp ±π/2) belongs to the
     /// PitchUp/Down keys, default-unbound in 1.12, which we don't bind. A left-drag camera
@@ -1051,23 +1043,22 @@ pub(crate) struct Player {
     /// **It is not the *swim* pitch, and the name it used to carry was the bug** (decision 1616,
     /// B322): `+0x20` is one field, live in every mode. The mouse path that writes it —
     /// `0x514400 → 0x5103e0 → 0x515330 → 0x60de70 → 0x6198a0` — carries **no swim test** at any
-    /// link (`swim-camera-pitch.md` §5/§7: the unit gate `0x5145e0` is controllability only), and
+    /// link (the unit gate `0x5145e0` is controllability only), and
     /// `SetPitch`'s own store at `0x7c6f91` precedes its `test [esi+0x40],0x200000`. Swimming gates
     /// only what *reads* it: the travel basis, the body pose, the wire tail. On land it has two
     /// other readers, and both are water walking's — the trace-mask arm's third gate
     /// (`0x63161e`, pitch > −37°) and `SetPitch`'s own dive-through (`0x7c6fb3`). Steering it only
     /// inside the swim branch left both unbuildable, which is why 1611 could only name them.
     /// Streamed on the wire's swim tail; the body renders pitched by it while swimming fwd/back
-    /// (TU-A's `Ry` law, see the render block in [`super::control`]).
+    /// (the `Ry` law of `0x60a110`, see the render block in [`super::control`]).
     pub(super) mover_pitch: f32,
     /// The camera pitch the **last pitch event** carried — the aim value we most recently pushed
     /// into [`Player::mover_pitch`]. Not state of the avatar's; state of the *input*, and it is
     /// here because the reference's pitch push is **event-driven, not per-frame**: `SetPitch` is
     /// called from the mouse-MOTION handler `0x514400` (input event `0x400500cb`, gated on a held
-    /// drag button), so a mouse that does not move enqueues nothing at all
-    /// (`swim-camera-pitch.md`, CADENCE). Our control system has only the already-accumulated
-    /// camera angle, so "the mouse moved" is spelled here as "the camera aim differs from the one
-    /// the last push carried".
+    /// drag button), so a mouse that does not move enqueues nothing at all. Our control system has
+    /// only the already-accumulated camera angle, so "the mouse moved" is spelled here as "the
+    /// camera aim differs from the one the last push carried".
     ///
     /// Which is load-bearing rather than pedantic (decision 1616): the other writers of the pitch —
     /// the drunk wobble, and StopSwim's zeroing at `0x7c6e80` — are only real if a still mouse
@@ -1077,7 +1068,7 @@ pub(crate) struct Player {
     pub(super) aim_pitch_seen: f32,
     /// This frame's **flag-scalar swim travel speed** (yd/s) — the directional swim/swimBack
     /// speed when any swim translation input is live, else 0. The swim stroke's playback-rate
-    /// numerator — **VERIFIED** (the swim-feel §5's TU-I): `0x5fe2f0` divides `GetCurrentSpeed`
+    /// numerator: `0x5fe2f0` divides `GetCurrentSpeed`
     /// (flags + static speed fields only, never a velocity/pitch projection) by the clip's
     /// moveSpeed, so a vertically pitched stroke plays at full rate. Written by the controller's
     /// swim arm; read at the `MovementState` fill; stale while not swimming.
@@ -1200,7 +1191,7 @@ impl Player {
     /// `controller`, which needs a real held mouse button (`mouselook`) and a moving OS cursor
     /// inside the viewport. Neither is available to an unfocused probe window, so before this
     /// there was **no way to make a benilla client swim nose-up or nose-down without a human on
-    /// the mouse** — which is why the observed-swimmer tilt (decision 0464 TU-A) could ship, and
+    /// the mouse** — which is why the observed-swimmer tilt (decision 0464) could ship, and
     /// sit for weeks, with nothing but the director's eye able to say whether it worked.
     ///
     /// Writes the same field `SetPitch 0x7c6f70` writes, under the same ±89°
@@ -1209,8 +1200,8 @@ impl Player {
     /// one value.
     ///
     /// Not a *byte* copy of `SetPitch`, and deliberately: that store is epsilon-gated — it commits
-    /// iff `|new − old| >= [0x8026bc] = 2^-20`, the `==` case included (a parity test, wow-re
-    /// `system/collision/scratch/create-block-swim-pitch.md`). Reproducing a 1e-6 rad deadband in
+    /// iff `|new − old| >= [0x8026bc] = 2^-20`, the `==` case included (a parity test).
+    /// Reproducing a 1e-6 rad deadband in
     /// an instrument would buy nothing and would make a slow scripted sweep stutter; the gate is
     /// gameplay's to model on the mouse-look push if it ever matters, which at that magnitude it
     /// cannot.
@@ -1229,8 +1220,7 @@ impl Player {
     /// The character's *facing* (Bevy yaw, radians) — the aim, kept in sync with the camera by
     /// right-drag/movement. This is the unit's orientation as sent to the server, distinct from the
     /// rendered body heading (`model_yaw`, which a strafe rotates). The 3D-audio listener panning
-    /// tracks this (wow-re benilla-pins B14: the listener forward is the character facing, not the
-    /// camera).
+    /// tracks this (the listener forward is the character facing, not the camera: `0x483430`).
     pub(crate) fn facing(&self) -> f32 {
         self.face_yaw
     }
@@ -1247,7 +1237,7 @@ impl Player {
 
     /// The avatar's current CMovement move-flags as last streamed (directional + turn bits — see
     /// [`crate::creature_anim::move_flags`]). The water-foam selector reads the same two bit-tests as
-    /// the reference (`& 0xf` translating, `& 0x30` turning; wow-re CWater0Ripple driver `0x5fa760`).
+    /// the reference (`& 0xf` translating, `& 0x30` turning; the CWater0Ripple driver `0x5fa760`).
     pub(crate) fn move_flags(&self) -> u32 {
         self.move_flags
     }
@@ -1303,7 +1293,7 @@ impl Player {
     /// So it is **exactly zero with no direction key held** — not a measured velocity that decays,
     /// and not the weather wind's 149 ms positional average (`0x67c150`): it is live, and tracks a
     /// speed change on the same frame. The precipitation spawn slab's tilt keys on it through
-    /// `mgr+0x7c` (wow-re `wx-snow-placement-law.md` §9), which is why the distinction earns an
+    /// `mgr+0x7c` (`0x67bf8b`), which is why the distinction earns an
     /// accessor: an averaged stand-in would leave the slab leaning for 150 ms after a stop, and a
     /// raw `horiz_vel` would keep it leaning through an entire fall on take-off momentum.
     pub(crate) fn planar_speed(&self) -> f32 {
@@ -1336,8 +1326,7 @@ impl Player {
     }
 }
 
-/// The **forward/back axis** — a net accumulation, byte-verified at the reference's emitter
-/// `0x514da0` (wow-re `rf79-autorun-cancel-set.md` §3):
+/// The **forward/back axis** — a net accumulation, at the reference's emitter `0x514da0`:
 /// `autorun(+1) + forward(+1) + both-buttons(+1) − backward(−1)`, then one START in `sign(axis)`,
 /// or a genuine STOP at zero. A pure function so the state table it encodes can be pinned by test —
 /// the controller reads it for the direction vector, the backpedal speed, the swim amounts, and the
@@ -1351,13 +1340,14 @@ pub(super) fn forward_axis(
     i32::from(forward) + i32::from(both_buttons) + i32::from(autorun) - i32::from(backward)
 }
 
-/// Does this frame's input **destroy** autorun? The cancel set (wow-re `rf79-autorun-cancel-set.md`
-/// §1 — six writers clear the reference's `0x1000`; these are the four with a benilla analog).
+/// Does this frame's input **destroy** autorun? The cancel set (six writers clear the reference's
+/// `0x1000`; these are the four with a benilla analog).
 ///
 /// `fwd_down`/`back_down` are **key-DOWN edges, not held state**: the clear lives in the shared SET
 /// helper (`0x514a5a`, gated `test cl,0x30`), and the release path restores nothing. `both_engaged`
 /// is the transition *into* both-buttons-held (`0x514a73`). `lost_mover` is death / root / stun / a
-/// taxi hand-off, where the emitter's gate drops and writer #4 clears the bit — a level, not an edge.
+/// taxi hand-off, where the emitter's gate drops and `0x514748` clears the bit — a level, not an
+/// edge.
 ///
 /// A jump, a chat EditBox taking focus, and a zone change are each VERIFIED *survivors* and are
 /// deliberately absent. Mounting is unsettled in the reference and is treated as a survivor here.
@@ -1380,8 +1370,7 @@ pub(super) fn autorun_cancelled(
 /// Standing up is the asymmetry: `newState == 0` jumps straight to the send and never consults the
 /// word at all, so movement can always stand you.
 ///
-/// Byte-for-byte (`0x5ed4d8`–`0x5ed501`; wow-re `object-layer/scratch/standstate-movement-trigger.md`
-/// §5.1, a §5 trio carve, decisions 1581/1582):
+/// Byte-for-byte (`0x5ed4d8`–`0x5ed501`; decisions 1581/1582):
 ///
 /// ```c
 /// if (newState != 0) {
@@ -1392,8 +1381,7 @@ pub(super) fn autorun_cancelled(
 ///
 /// **SLEEP takes BOTH tests, not a different one.** `0x5ed4ec eb 04` is an unconditional `jmp`
 /// *into* the second test, not around it — an either/or would have jumped to the send at
-/// `0x5ed501`. 1581 shipped it as an alternative, off a clause §1 had recorded in passing; §5
-/// carved the block for its own sake and corrected it. The `newState == 3` test is a plain
+/// `0x5ed501`. 1581 shipped it as an alternative. The `newState == 3` test is a plain
 /// equality: `2` (SIT_CHAIR) and `8` (KNEEL) take the shared leg exactly like `1` (SIT).
 ///
 /// | target state | effective mask | refused while |
@@ -1411,8 +1399,8 @@ pub(super) fn autorun_cancelled(
 /// **absent** from both — pitch, walk-mode, ROOT, and `FALLING` (`0x2000`): a standing jump does
 /// not block a sit, while a running one does, through `FORWARD` rather than through the jump.
 ///
-/// Because the refusal lives in the **one setter**, it covers every caller at once. wow-re's caller
-/// census closed that exhaustively (§5.2: six `e8` callers, no tail-jumps, no dword reference
+/// Because the refusal lives in the **one setter**, it covers every caller at once. Its caller
+/// census is exhaustive (six `e8` callers, no tail-jumps, no dword reference
 /// anywhere in the image, in no vtable) — the `X` keybind (`SitOrStand`, Lua `0x48b920`), the
 /// posture emotes through `DoEmote`'s `EmoteSpecProc == 1` leg, `StartAttack`, the movement-input
 /// wrapper `0x60be30`, and the five-minute AFK auto-sit in `WorldFrame::Render`.
@@ -1428,8 +1416,8 @@ pub(super) fn stand_state_refused(reads_dead: bool, move_flags: u32, new_state: 
     // **A body that reads dead is refused outright, in EITHER direction** — the same setter's first
     // two guards, ahead of the stand-up asymmetry below and of the movement word: `0x5ed4a9 cmp
     // [eax+0x40],ebx` / `0x5ed4ac jle 0x5ed566` (UNIT_FIELD_HEALTH ≤ 0), then `0x5ed4b2`–`0x5ed4bd`
-    // on `UNIT_DYNAMIC_FLAGS & 0x20` — so a **feigner** is refused too, at unchanged health (wow-re
-    // `local-move-input-gate.md` §6.7; decision 1753). A corpse cannot sit, and it cannot stand up
+    // on `UNIT_DYNAMIC_FLAGS & 0x20` — so a **feigner** is refused too, at unchanged health
+    // (decision 1753). A corpse cannot sit, and it cannot stand up
     // either, which is why this sits above the `new_state == 0` exit rather than beside it.
     if reads_dead {
         return true;
@@ -1453,7 +1441,7 @@ mod stand_state_tests {
     /// **A body that reads dead is refused in EITHER direction** — `SetStandState`'s first two
     /// guards, ahead of the stand-up asymmetry and of the movement word: health ≤ 0 at `0x5ed4ac`,
     /// and `UNIT_DYNAMIC_FLAGS & 0x20` at `0x5ed4b2`–`0x5ed4bd`, which catches a **feigner** whose
-    /// health never moved (decision 1753, wow-re §6.7).
+    /// health never moved (decision 1753).
     #[test]
     fn a_body_that_reads_dead_can_neither_sit_nor_stand() {
         for state in [0u8, 1, 2, 3, 8] {
@@ -1570,7 +1558,7 @@ mod stand_state_tests {
 mod autorun_tests {
     use super::{autorun_cancelled, forward_axis};
 
-    /// The four states of wow-re RF-0079 §3's table, in its own terms.
+    /// The four states of the reference's axis table (`0x514da0`), in its own terms.
     #[test]
     fn the_axis_reproduces_the_verified_state_table() {
         // autorun, nothing held → +1, runs forward.
@@ -1971,9 +1959,8 @@ mod move_mode_tests {
         );
     }
 
-    /// **The teardown leg needs BOTH predicates down** (`0x5146d6 call 0x60fb60`) — wow-re §6.3,
-    /// which sharpens `rf86-autofollow-cancel-set.md` §5. benilla had the root in this position and
-    /// so ended a follow on a Frost Nova, which the reference does not.
+    /// **The teardown leg needs BOTH predicates down** (`0x5146d6 call 0x60fb60`). benilla had the
+    /// root in this position and so ended a follow on a Frost Nova, which the reference does not.
     #[test]
     fn only_both_predicates_down_tears_the_follow_down() {
         assert!(

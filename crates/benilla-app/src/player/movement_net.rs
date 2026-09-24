@@ -35,10 +35,10 @@ use crate::net::{ClientCommand, MoveKind};
 
 use super::Player;
 
-/// How often (s) we send a `MSG_MOVE_HEARTBEAT` while moving. **VERIFIED** against wow-5875-re
-/// (collision node, "the move-send cadence"): the local-player send-deadline `mgr+0x130` is armed to
-/// `clientTime + 500 ms` (`0x615b80`) — the wire report is the per-transition broadcast plus this
-/// ~500 ms-paced heartbeat, independent of the 250 ms physics substeps.
+/// How often (s) we send a `MSG_MOVE_HEARTBEAT` while moving: the local-player send-deadline
+/// `mgr+0x130` is armed to `clientTime + 500 ms` (`0x615b80`) — the wire report is the
+/// per-transition broadcast plus this ~500 ms-paced heartbeat, independent of the 250 ms physics
+/// substeps.
 const HEARTBEAT_INTERVAL: f32 = 0.5;
 /// The move-flag bits we put on the wire — the base directional / turn / walk set **plus `FALLING`**
 /// (= `MOVEFLAG_JUMPING` 0x2000): we serialize the jump tail (`zspeed, cos, sin, xyspeed`) whenever it's
@@ -129,7 +129,7 @@ pub(super) struct ArcEdges {
 /// Stream this frame's movement to the server the way the real client does: a `MSG_MOVE_*` per movement-
 /// *axis* transition (start/stop forward-back, strafe, turn), a JUMP on take-off, a SET_FACING every
 /// frame the facing changes off the turn axis, and a HEARTBEAT every ~500 ms while moving — each
-/// carrying the current `MovementInfo`. **VERIFIED** against wow-5875-re (collision "move-send cadence"):
+/// carrying the current `MovementInfo`:
 /// the move-state-change broadcaster `0x61a820` selects the wire opcode *from the flag delta*
 /// (`0x619f00`), and the flag report is exactly "per-transition broadcast + ~500 ms heartbeat" — with
 /// the *facing* report its own independent emitter alongside it (decision 0617: in the 1.12.1 sniff
@@ -301,7 +301,7 @@ pub(super) fn stream_self_movement(
     // not a carve-out: the wire mirrors actual motion (0056). The reference's airborne silence is a
     // real flags-side mechanism — while FALLING, `StartMove 0x7c6ae0` defers a new press into an inert
     // latch (`0x20000`/`0x40000`) instead of flipping the direction bit, "**unless nothing is
-    // currently moving**" (wow-re `hvel-fall-arc.md` Q3, VERIFIED bytes) — and the broadcaster
+    // currently moving**" — and the broadcaster
     // `0x61a820` picks its opcode from the *flag delta*, so a deferred press produces no delta and
     // no packet. In the one non-deferred case the bit really flips, so the transition really
     // broadcasts. That case is exactly our nudge (`mover::step`: airborne, nothing moving, a
@@ -317,7 +317,7 @@ pub(super) fn stream_self_movement(
     //
     // **A fall that had no jump opens with NOTHING** — decision 1464, and the third of 0053's
     // inventions to be retired by the bytes. We used to push an immediate heartbeat here "so
-    // observers start the arc promptly"; wow-re's §5 refuted it three ways: the move-state
+    // observers start the arc promptly"; the reference refutes it three ways: the move-state
     // broadcaster `0x61a820` gates every send on the *locomotion nibble* (`61a99d test al,0xf`)
     // and FALLING/`0x2000` lives in `ah`, so a flags change that is only the fall bit never
     // broadcasts at all; every non-jump `StartFalling 0x7c61f0` site seeds `+0xa0 = 0.0f` while
@@ -347,10 +347,9 @@ pub(super) fn stream_self_movement(
         send_move!(MoveKind::FallLand);
     }
     // Swim transition: the real client announces entering/leaving the water with a dedicated
-    // MSG_MOVE_START_SWIM (0xca) / STOP_SWIM (0xcb) the frame the `SWIMMING` bit flips (VERIFIED, wow-re
-    // swim-transition — the local `0x6030c0` decision enqueues it), rather than letting the flag ride
-    // the next heartbeat. Airborne and swimming are mutually exclusive, so this never races the arc
-    // lifecycle above.
+    // MSG_MOVE_START_SWIM (0xca) / STOP_SWIM (0xcb) the frame the `SWIMMING` bit flips (the local
+    // `0x6030c0` decision enqueues it), rather than letting the flag ride the next heartbeat.
+    // Airborne and swimming are mutually exclusive, so this never races the arc lifecycle above.
     if added & move_flags::SWIMMING != 0 {
         send_move!(MoveKind::StartSwim);
     } else if removed & move_flags::SWIMMING != 0 {
@@ -406,7 +405,7 @@ pub(super) fn stream_self_movement(
     // SET_FACING — more than every other movement opcode combined — streamed at *frame* cadence (median
     // 41 ms between them, p25 23 ms, minimum 17 ms) and, decisively, **while moving**: 116 of the 179
     // carry a direction bit (`Forward` ×68, `StrafeRight` ×12, `Forward+StrafeRight` ×9, `Backward` ×12,
-    // `Forward+Falling` ×4, …). There is no rate limit and no angular epsilon — wow-re's `0x617100`
+    // `Forward+Falling` ×4, …). There is no rate limit and no angular epsilon — `0x617100`
     // (SetFacing-then-send) reports whenever `0x617170`'s **exact-equality** change detector says the
     // facing differs at all, so a frame that didn't move the mouse sends nothing and a frame that did
     // sends one packet. (Our own `face_yaw` is likewise only written by real input, so the exact
@@ -437,7 +436,7 @@ pub(super) fn stream_self_movement(
     //
     // **And it runs while FALLING too** (decision 1464). This arm used to carry `&& !falling`,
     // defended as "the real client sends a normal-length jump with no mid-air packet at all
-    // (sniff-verified)" — which wow-re's §5 refuted on both halves against the same 1.12.1 capture.
+    // (sniff-verified)" — which the same 1.12.1 capture refutes on both halves.
     // `MSG_MOVE_JUMP` is the **44-byte** form (the jump quad is present, `vz = -7.955547`, matching
     // the `.text` constant `0xc0fe93d8` bit for bit), and mid-air packets are routine: heartbeats
     // and a mid-air SET_FACING, all 44 B. The "untraced trigger" behind the sniff's sparse mid-air
@@ -496,8 +495,7 @@ pub(super) fn stream_self_movement(
 /// (decision 1935). Accumulate while the mover holds; report the total once, on the release edge.
 ///
 /// **The law is "time the movement simulation advanced through without integrating"** — not "a
-/// long frame", which is what this packet is usually described as. wow-re's carve
-/// (`collision/scratch/move-time-skipped-law.md`, §5-verified, landed 2026-09-03) found **four**
+/// long frame", which is what this packet is usually described as. The reference has **four**
 /// emission sites feeding one builder `0x600be0`, and the long-frame one (`0x616642 cmp esi,0xfa`
 /// → send `dt − 250`) is only one of them and not the common one. The two that dominate real
 /// traffic are the **no-geometry** pair: the resolve entry's swept query returning nothing
@@ -525,9 +523,9 @@ pub(super) fn stream_self_movement(
 /// The other two sites are deliberately unbuilt. The long-frame one has no meaning here: benilla
 /// has no 250 ms substep clamp — it integrates the whole frame — so a long frame is time we
 /// *spent*, not time we skipped, and reporting it would be a lie about our own simulation. The
-/// `[CMovement+0x40] & 0x8000000` free-advance bit's own setter is not modelled at all. wow-re's
-/// own verdict on the build order says as much: a client implementing cases 1–3 matches every
-/// packet in the shipped captures.
+/// `[CMovement+0x40] & 0x8000000` free-advance bit's own setter is not modelled at all, and need
+/// not be: a client implementing the other three sites matches every packet in the shipped
+/// captures.
 fn stream_skipped_time(sender: &Sender<ClientCommand>, player: &mut Player, skip: SkipClock) {
     if skip.held {
         player.skipped_ms += skip.dt * 1000.0;
@@ -995,8 +993,8 @@ mod tests {
     }
 
     /// **A fall that had no jump opens with nothing, and then heartbeats on the ordinary deadline**
-    /// — decision 1464, replacing two 0053-era inventions with the law wow-re's §5 read off the
-    /// broadcaster and reproduced in the 1.12.1 capture: `echo → heartbeats every 500 ms while the
+    /// — decision 1464, replacing two 0053-era inventions with the law read off the broadcaster
+    /// `0x61a820` and reproduced in the 1.12.1 capture: `echo → heartbeats every 500 ms while the
     /// fall lasts → FALL_LAND`, the parenthesis empty for any fall shorter than the deadline.
     ///
     /// The opener is the load-bearing half. It is the only packet that could put `MOVEFLAG_JUMPING`

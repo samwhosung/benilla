@@ -4,36 +4,34 @@
 //! the swim gaits ([`crate::creature_anim`] ids 41–45) for the local player and streams
 //! `MOVEFLAG_SWIMMING` (+ the pitch tail) on the wire (the decision-0052 swim follow-up).
 //!
-//! The enter/exit boundary is **VERIFIED** against the real client (wow-re
-//! `collision/scratch/swim-transition.md`, resolving benilla-pins **B7**): the per-frame local decision
+//! The enter/exit boundary is the real client's: the per-frame local decision
 //! `0x6030c0` fires `MOVEFLAG_SWIMMING 0x00200000` off `depth = liquidSurface − feetZ` vs a fraction of
 //! the unit's collision height, with a genuine 1/36-yd hysteresis band (see [`swim_enter_depth`]).
 //! There is **no** separate wade/water movement flag (`0x40000000` is HOVER — wading is just the
 //! implicit in-liquid-below-threshold state).
 //!
-//! The **vertical law is VERIFIED** (the swim §5's TU-B, wow-re `swim-mechanism.md`, superseding the
+//! The **vertical law** (superseding the
 //! earlier surface-follow reading): while SWIMMING the mover routes through the client's *floating*
 //! resolver, which **bypasses gravity entirely** — an idle swimmer's depth is **frozen** (no sink, no
 //! rise, no ease), the vertical comes only from the pitched travel velocity, and the one constraint is
 //! a **hard top-cap at `surface − 0.75·collisionHeight`** (`0x632ba0` ×0.75): the feet can never be
 //! shallower than the resting waterline, so a surfacing swimmer stops ~three-quarters submerged, head
-//! out. That cap constrains the **position, both ways** — wow-re's Q5 states it as "feet cannot come
-//! shallower than `surface − 0.75·collisionHeight`", a hard clamp re-tested each active substep — and
+//! out. That cap constrains the **position, both ways** — feet cannot come shallower than
+//! `surface − 0.75·collisionHeight`, a hard clamp re-tested each active substep — and
 //! what leaves a *stroking* swimmer above the line is usually not a rise but the surface **descending**
 //! under them, which is why the constraint has to be re-satisfied and not merely guarded against
 //! ([`settle_to_rest`], decision 0644). It is still no spring and no resting *seek* — the old
 //! `REST_SUBMERSION`/`BUOYANCY_RATE` ease is gone, and a swimmer *below* the line is never pulled up.
 //! Reaching the cap does NOT bleed the stroke off: the capped rise redirects **level, at full
 //! speed** — surface swimming — and the presented pitch levels with it ([`cap_redirect`],
-//! decisions 0499+0505). This is a **named divergence**: the §5 (wow-re
-//! `swim-topcap-velocity.md`) found the exe's own-input resolver GRINDS a steep aim at the
-//! cap (`0x634640` tangential re-sweep, no renormalization) — which contradicts the
-//! director-confirmed ref behavior — and its only leveling regime (travel-derived
-//! `asin(dir.z)` pitch) belongs to spline/CTM movers and would be overwritten per-frame by
-//! the 0492 mouselook direct-set. The redirect is benilla's construction reproducing the
-//! validated feel, kept until wow-re's live capture pins the real surface law (0505).
+//! decisions 0499+0505). This is a **named divergence**: the exe's own-input resolver GRINDS a
+//! steep aim at the cap (`0x634640` tangential re-sweep, no renormalization) — which contradicts
+//! the director-confirmed ref behavior — and its only leveling regime (travel-derived `asin(dir.z)`
+//! pitch) belongs to spline/CTM movers and would be overwritten per-frame by the 0492 mouselook
+//! direct-set. The redirect is benilla's construction reproducing the validated feel, kept until a
+//! live capture of the reference pins the real surface law (0505).
 //!
-//! The one way OUT through the top is the **swim jump** ([`breach_step`], TU-B(f)+TU-F
+//! The one way OUT through the top is the **swim jump** ([`breach_step`],
 //! `0x7c6230`): jump clears SWIMMING unconditionally and launches the walk mover's FALLING arc at
 //! [`SWIM_JUMP_SPEED`] — the breach hop. Re-entry is the same depth check plus the verified fall
 //! gate `0x7c5de0` — swim re-latches once the upward velocity has decayed to half the launch
@@ -43,9 +41,8 @@
 //! 0487 + 0498): a swimming press fires the jump-exit wherever it happens — at the surface it
 //! breaches out; submerged it's the ~1.6-yd dolphin-hop — and a held key does NOT re-fire
 //! after the re-latch (director-verified on the ref; the byte gate behind that is an open
-//! wow-re question, see 0498). The way to RISE is aiming up with the right mouse and swimming
-//! forward — the ref's own mouselook→SetPitch mechanism, **VERIFIED** (wow-re
-//! `swim-camera-pitch.md`, decision 0492).
+//! question, see 0498). The way to RISE is aiming up with the right mouse and swimming
+//! forward — the ref's own mouselook→SetPitch mechanism (`0x7c6f70`, decision 0492).
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -64,7 +61,7 @@ pub(super) const SWIM_SPEED: f32 = 4.722_222;
 
 /// Backward swim speed (yd/s) — vanilla's default `MOVE_SWIM_BACK` (vmangos `baseMoveSpeed[4]` =
 /// 2.5), the fallback when the server's `SpeedInfo` hasn't streamed. A net-backward swim takes
-/// `min(swimBack, swim)` — **VERIFIED** (`0x7c4c90`'s swim arm, the swim-feel §5's TU-H): the
+/// `min(swimBack, swim)` (`0x7c4c90`'s swim arm): the
 /// backward bit `0x2` selects a min byte-identical in template to the run arm's
 /// `min(runBack, run)`; strafe-only swims at the forward [`SWIM_SPEED`].
 pub(super) const SWIM_BACK_SPEED: f32 = 2.5;
@@ -81,9 +78,8 @@ const SWIM_DEPTH_FRAC: f32 = 0.75;
 /// `0.75·h`, leave against `0.75·h − 1/36`, so between them the swim state holds (`0x603100`/`0x6031c0`).
 const SWIM_HYSTERESIS: f32 = 1.0 / 36.0;
 
-/// The `UNIT_FIELD_FLAGS` bits that decide whether a unit **may be locally SWIMMING at all** —
-/// **VERIFIED** in the shipped 5875 image (wow-re `collision/scratch/remote-swim-decision.md`, §5
-/// trio). `0x6030c0` tests them on **both** legs of its decision, with **opposite sense**:
+/// The `UNIT_FIELD_FLAGS` bits that decide whether a unit **may be locally SWIMMING at all**.
+/// `0x6030c0` tests them on **both** legs of its decision, with **opposite sense**:
 ///
 /// ```text
 /// ENTER (after depth > 0.75·R):
@@ -102,8 +98,7 @@ const SWIM_HYSTERESIS: f32 = 1.0 / 36.0;
 ///
 /// So the three bits are **one predicate**, not an entry permit: false blocks entry *and* forces an
 /// exit however deep the water. (Decision 1568 shipped this as enter-only, on the reading that the
-/// exit leg was flag-free — `wmo-liquid-scoping.md` §4.6 had never re-derived it. The §5 that
-/// re-derived it cold says otherwise; corrected in 1572.)
+/// exit leg was flag-free; corrected in 1572.)
 ///
 /// What each bit is:
 ///
@@ -152,8 +147,8 @@ pub(crate) fn swim_enter_depth(h: f32) -> f32 {
 }
 /// Submersion depth (yd) below which swimming **stops** — VERIFIED `0.75·h − 1/36` (the lower edge
 /// of the hysteresis band); also stops the instant there's no liquid over the feet. The band itself
-/// is an absolute `1/36` yd, independent of `h` (wow-re: "the band is exactly 1/36 yd … independent
-/// of `h`") — so it is subtracted, never scaled.
+/// is an absolute `1/36` yd, independent of `h` (`0x6030f2` subtracts `[0x7ff9d0]` from `0.75·h`) —
+/// so it is subtracted, never scaled.
 pub(super) fn swim_exit_depth(h: f32) -> f32 {
     swim_enter_depth(h) - SWIM_HYSTERESIS
 }
@@ -187,8 +182,8 @@ pub(super) fn surface_over_feet(world: &WorldPoint, feet: Vec3) -> Option<f32> {
 /// binary's `inLiquid == 0 → STOP`). Enter is a strict `depth > 0.75·h`; leave is `depth < 0.75·h − 1/36`
 /// (i.e. swimming holds while `depth ≥` the leave threshold), matching the two byte compares.
 ///
-/// The enter arm carries the **fall re-entry gate** — **VERIFIED** `0x7c5de0`, called from
-/// `0x6030c0`'s ENTER branch (the Space-§5's TU-G): a fresh launch is not re-latched into swim
+/// The enter arm carries the **fall re-entry gate** — `0x7c5de0`, called from
+/// `0x6030c0`'s ENTER branch: a fresh launch is not re-latched into swim
 /// until its **upward velocity has decayed to HALF the launch value** — blocked iff
 /// `FALLING ∧ v_up > 0 ∧ t_airborne < v_launch/(2g)` (≈0.236 s for a swim jump). Note the release
 /// happens *while still rising*: the dolphin-hop tops out ≈1.6 yd up, then swim re-latches and the
@@ -202,7 +197,7 @@ pub(super) fn surface_over_feet(world: &WorldPoint, feet: Vec3) -> Option<f32> {
 /// only the walk mover ran).
 pub(super) fn update_swimming(player: &mut Player, surface_y: Option<f32>, now: f32) -> bool {
     // **LEVITATING bails the whole decision** — the reference's very first instruction here
-    // (`0x6030d2 test ah,4` → `0x6031fa`; VERIFIED, wow-re `swim-transition.md`): neither the ENTER
+    // (`0x6030d2 test ah,4` → `0x6031fa`): neither the ENTER
     // arm nor the STOP arm runs, so the latch is left exactly as it stands. Not an optimisation —
     // it IS the mechanism of GM flight (decision 0726). The server sets SWIMMING and LEVITATING in
     // one packet, and the second is what stops the dry ground under us clearing the first on the
@@ -234,7 +229,7 @@ pub(super) fn update_swimming(player: &mut Player, surface_y: Option<f32>, now: 
 /// **StopSwim zeroes the mover pitch** — `0x7c6e80` (`and [esi+0x40],0xffdfff3f`, then `+0x54` and
 /// `+0x20` to zero), the swim-clear the depth-driven stop reaches through
 /// `0x6031eb → 0x60dff0 → 0x61a070` → queue opcode `0x13` → the dispatcher arm `0x61601d`. It is
-/// the *only* zeroing writer of [`Player::mover_pitch`] (`swim-camera-pitch.md` (b)): mouse release
+/// the *only* zeroing writer of [`Player::mover_pitch`]: mouse release
 /// never levels it, and neither does anything on land.
 ///
 /// Which matters now that the pitch is land-live and water walking reads it (decision 1616): swim
@@ -252,8 +247,8 @@ fn stop_pitch(player: &mut Player, was: bool) {
     }
 }
 
-/// The **jump out of the water** — the takeoff frame of a jump while swimming (**VERIFIED**
-/// mechanism, wow-re `swim-mechanism.md` TU-B(f)+TU-F, `0x7c6230`): SWIMMING selects the take-off
+/// The **jump out of the water** — the takeoff frame of a jump while swimming (`0x7c6230`):
+/// SWIMMING selects the take-off
 /// [`SWIM_JUMP_SPEED`] over the land 7.9555, then the handler clears SWIMMING and sets FALLING.
 /// The Jump command routes here at *any* depth (no swim re-route, no surface-proximity gate —
 /// the deep press is the dolphin-hop; decision 0487 restored the ref routing after 0479's
@@ -314,7 +309,7 @@ pub(super) struct SwimOutcome {
 /// it off: reaching the surface flips a pitched-up swim into full-speed *surface swimming*
 /// (director-verified on the ref, 2026-07-18; decisions 0499+0505). A plain slide against the
 /// top-cap plane leaves only `cos(pitch)·speed` — ~0 at a steep aim — pinning the swimmer
-/// under the waterline (the "invisible wall"), and per the §5 that grind IS what the exe's
+/// under the waterline (the "invisible wall"), and that grind IS what the exe's
 /// own-input resolver computes (`0x634640`) — contradicting the confirmed ref behavior, so
 /// this redirect stands as benilla's own construction (the 0505 named divergence). The
 /// stroke's SPEED is preserved: the upward component is clamped to `cap` (how much rise
@@ -363,7 +358,7 @@ pub(super) fn rest_line(player: &Player, surface_y: Option<f32>) -> Option<f32> 
 }
 
 /// Advance the avatar one swim frame: the pitched travel velocity through the client's *floating*
-/// physics (VERIFIED, TU-B — gravity bypassed: an idle swimmer's depth is **frozen**, the vertical
+/// physics (`0x634640`, gravity bypassed: an idle swimmer's depth is **frozen**, the vertical
 /// comes only from `input_vel`), a collide-and-slide against the lakebed/banks, and the hard
 /// [`rest_cap`] line — where a rise doesn't stop dead but **redirects level into full-speed
 /// surface swimming** ([`cap_redirect`], decision 0499), and where a stroke that ends up *above*
@@ -443,7 +438,7 @@ pub(super) fn swim_step(
     //
     // Gated on a stroke, matching the resolver's own outer gate (`0x634100 test [esi+0x40],0x200f`
     // — translation or falling, never idle): an idle floater is not resolved at all, so its depth
-    // stays frozen (TU-B(c)).
+    // stays frozen.
     //
     // …and gated on **`surface_y.is_some()` — the very same rest line the cap above reads**, which
     // is the whole of B128 (decision 0882). The rest line has two arms — refuse the rise, satisfy
@@ -533,7 +528,7 @@ pub(super) fn drive_step(
     // Whether the water owns our vertical at all this frame, and where its line sits — the
     // one source both arms of the constraint read ([`rest_line`]; `None` is GM flight).
     let rest_line = rest_line(player, surface_y);
-    // Directional swim speed — **VERIFIED** (`0x7c4c90`'s swim arm, the §5's TU-H):
+    // Directional swim speed (`0x7c4c90`'s swim arm):
     // forward or strafe-only → swim; the backward bit `0x2` → `min(swimBack, swim)` —
     // byte-identical in template to the run arm's `min(runBack, run)`. Vanilla defaults
     // 4.722/2.5 (vmangos `baseMoveSpeed`).
@@ -549,7 +544,7 @@ pub(super) fn drive_step(
     // The stroke's playback-rate numerator is the FLAG-scalar speed — the full
     // directional speed regardless of pitch, 0 with no translation input — never a
     // horizontal projection, which would starve a pitched stroke toward a freeze.
-    // **VERIFIED** (TU-I): `0x5fe2f0` divides GetCurrentSpeed (flags + static speed
+    // `0x5fe2f0` divides GetCurrentSpeed (flags + static speed
     // fields only) by the clip's moveSpeed, the same path for local and observed units.
     player.swim_stroke_speed = if dir3 == Vec3::ZERO { 0.0 } else { dir_speed };
     let out = swim_step(
@@ -706,7 +701,7 @@ mod tests {
 
     /// Swim mode latches with the verified 1/36-yd hysteresis: enter is a strict `depth > 0.75·h`, leave
     /// is `depth < 0.75·h − 1/36`, so a depth inside the band holds whatever state we were in — wading
-    /// the boundary can't flicker the physics regime frame to frame (wow-re swim-transition `0x6030c0`).
+    /// the boundary can't flicker the physics regime frame to frame (`0x6030c0`).
     #[test]
     fn swim_entry_and_exit_hysteresis() {
         // The band is exactly 1/36 yd, independent of height — so it holds at every race's line.
