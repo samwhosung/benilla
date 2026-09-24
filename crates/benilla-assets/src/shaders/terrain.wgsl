@@ -4,14 +4,10 @@
 //     and clamped per vertex (GL T&L), Gouraud-interpolated, modulated 1× into the texture;
 //   specular = clamp(row 9 · max(N·H, 0)^20) per vertex (local viewer), times the sheen mask (the
 //     `_s` texture's per-texel alpha, blended like the colour), added after the modulate.
-// The per-vertex evaluation and the mask both bound the sheen: evaluated per pixel, or unmasked,
-// the near-white row 9 washes lit ground to cream.
+// Evaluated per pixel, or unmasked, the near-white row 9 would wash lit ground to cream.
 //
 // Bevy's `VertexOutput` has no slot for the interpolated specular, so the vertex transform and IO
 // struct are our own and `main_pass_post_lighting_processing` is dropped; fog is in-shader.
-//
-// One material serves an ADT tile: layer textures in one `texture_2d_array` (binding 100),
-// per-chunk alpha maps in another (104).
 
 #import bevy_pbr::{
     mesh_functions,
@@ -32,9 +28,8 @@ struct TerrainParams {
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var<uniform> t: TerrainParams;
 
-// The shared global light (`lighting::global_light`), one storage buffer updated in place once a
-// frame; this mirrors its row layout, which must match. Read in both stages: the per-vertex sheen
-// needs the sun and specular rows.
+// The shared global light (`lighting::global_light`), updated in place once a frame; this mirrors
+// its row layout, which must match.
 struct WowLight {
     light_ambient: vec4<f32>, // rgb = row 1 ambient; w = Mod2x scale (×1).
     light_diffuse: vec4<f32>, // rgb = row 0 sun diffuse; w = clamp-light flag (>0.5 ⇒ saturate).
@@ -70,19 +65,18 @@ struct TerrainVsOut {
 
 // Terrain's point-light candidacy half-width (yd): `w + 10`, `w` being the chunk's bounding-sphere
 // radius `sqrt(2·16.666666² + (zExtent/2)²)`, 23.570166 on flat ground (constant at `0x68dfac`).
-// Deviation: the flat `w` everywhere, so steep chunks gather slightly narrower than the reference,
-// because the lights that differ are 33 yd out or more, where att ≈ 0.02.
+// This takes the flat `w` everywhere, so steep chunks gather slightly narrower than the reference;
+// the lights that differ are 33 yd out or more, where att ≈ 0.02.
 const TERRAIN_REACH: f32 = 33.570166;
 
-// The dynamic point-light term at a world-space point. The reference commits at most three point
-// lights per draw, the nearest by squared distance to the receiving unit, into GL slots 1-3;
-// terrain's unit is the MCNK chunk, so `anchor` is its cell centre. Candidacy is a 20-yd
-// spatial-hash sweep over `[floor((c - w - 10)/20), floor((c + w + 10)/20)]`, a Chebyshev box
-// (`w` is `chunk+0x68`, copied at `0x71bc47`), whose guaranteed half-width `w + 10` is
-// `TERRAIN_REACH`.
-// A committed light is diffuse only (the staging ambient/specular slots are zeroed at `0x71c7e3`),
-// falls off as `1/(0.7·d + 0.03·d²)` on the vertex normal, and has no distance cutoff.
-// The M2 lane in wow_model.wgsl uses the packed per-light range: the lanes differ on purpose.
+// The dynamic point-light term. The reference commits at most three point lights per draw, the
+// nearest by squared distance to the receiving unit, into GL slots 1-3; terrain's unit is the MCNK
+// chunk, so `anchor` is its cell centre. Candidacy is a 20-yd spatial-hash sweep over
+// `[floor((c - w - 10)/20), floor((c + w + 10)/20)]`, a Chebyshev box (`w` is `chunk+0x68`,
+// copied at `0x71bc47`) of half-width `w + 10`, at least `TERRAIN_REACH`. A committed light is
+// diffuse only (the ambient and specular slots are zeroed at `0x71c7e3`), falls off as
+// `1/(0.7·d + 0.03·d²)` on the vertex normal, and has no distance cutoff. The M2 lane in
+// wow_model.wgsl uses the packed per-light range: the lanes differ on purpose.
 fn point_light_sum(P: vec3<f32>, N: vec3<f32>, anchor: vec3<f32>) -> vec3<f32> {
     let count = u32(wow_light.point_count.x);
     var sel = array<u32, 3>(0u, 0u, 0u);
@@ -124,11 +118,11 @@ fn point_light_sum(P: vec3<f32>, N: vec3<f32>, anchor: vec3<f32>) -> vec3<f32> {
 
 // The MCNK chunk cell centre under a world point: the reference's light anchor, the chunk's world
 // AABB centre `CMapChunk+0x5c..0x64` (written by `0x6b0e50`). The grid is fixed world-wide (chunk
-// 533.33333/16 yd, half-extent 32 tiles) and symmetric; WoW x/y are Bevy −z/−x, so snapping Bevy
-// x/z lands on the same cells. Mirrored in wow_model.wgsl, where clutter snaps to the same cells.
-// Deviation: the anchor height is the vertex's own y, not the chunk's mid-height
-// `(minH + maxH)/2`, so on relief one chunk's vertices can select different lights; the per-chunk
-// constant is not plumbed to the vertex stage. On flat ground the two agree.
+// 533.33333/16 yd, half-extent 32 tiles) and symmetric, and WoW x/y are Bevy −z/−x, so snapping
+// Bevy x/z lands on the same cells; wow_model.wgsl mirrors it for clutter.
+// The anchor height is the vertex's own y, not the chunk's mid-height `(minH + maxH)/2`, so on
+// relief one chunk's vertices can select different lights: the per-chunk constant is not plumbed
+// to the vertex stage. On flat ground the two agree.
 fn mcnk_cell_anchor(P: vec3<f32>) -> vec3<f32> {
     let cell = 533.33333 / 16.0;
     let half = 32.0 * 533.33333;
@@ -172,9 +166,8 @@ fn vertex(in: Vertex) -> TerrainVsOut {
 
 @fragment
 fn fragment(in: TerrainVsOut) -> @location(0) vec4<f32> {
-    // The far-clip wall: the reference clips the detailed world per pixel at its projection far
-    // plane (`farclip`, about 777 yd). Discard beyond `fog_params.w` (0 disables) on planar eye-Z,
-    // the fog's coordinate; WDL and sky draw behind it.
+    // The far-clip wall: the reference clips the detailed world per pixel at its far plane
+    // (`farclip`, about 777 yd). Discard beyond `fog_params.w` (0 disables) on planar eye-Z.
     if (wow_light.fog_params.w > 0.0) {
         let clip_z = -(view.view_from_world * vec4<f32>(in.world_position.xyz, 1.0)).z;
         if (clip_z > wow_light.fog_params.w) {
@@ -182,22 +175,21 @@ fn fragment(in: TerrainVsOut) -> @location(0) vec4<f32> {
         }
     }
 
-    // Per-chunk array indices, baked into the merged mesh: COLOR = 4 layer indices, UV1.x = alpha;
-    // constant across a chunk, so they interpolate back to the integer.
+    // Per-chunk array indices baked per vertex, COLOR the 4 layers and UV1.x the alpha; constant
+    // across a chunk, so they interpolate back to the integer.
     let li = vec4<i32>(round(in.color));
     let ai = i32(round(in.uv_b.x));
 
     let tiled = in.uv * t.params.x;
-    // `.rgb` = diffuse, `.a` = the `_s` texture's sheen mask (the base `.blp` has no alpha; matte
-    // without an `_s`). `view.mip_bias` undoes the coarser mip a render scale below 1 picks, 0 at
-    // native and above; the alpha and shadow arrays have a single mip, so only the layers take it.
+    // `.a` is the `_s` texture's sheen mask, 0 without an `_s`. `view.mip_bias` undoes the coarser
+    // mip a render scale below 1 picks; the alpha and shadow arrays have one mip, so only the
+    // layers take it.
     let s0 = textureSampleBias(layer_array, splat_samp, tiled, li.x, view.mip_bias);
     let s1 = textureSampleBias(layer_array, splat_samp, tiled, li.y, view.mip_bias);
     let s2 = textureSampleBias(layer_array, splat_samp, tiled, li.z, view.mip_bias);
     let s3 = textureSampleBias(layer_array, splat_samp, tiled, li.w, view.mip_bias);
-    // The alpha and shadow maps (one 64² grid per chunk, in 0..1, not tiled) share the layers'
-    // repeat sampler, and under linear filtering the footprint at a chunk edge wraps to the map's
-    // opposite edge; the half-texel inset clamps it instead.
+    // The alpha and shadow maps (one untiled 64² grid per chunk) share the layers' repeat sampler,
+    // so a linear footprint at a chunk edge would wrap to the far edge; a half-texel inset clamps.
     let auv = clamp(in.uv, vec2<f32>(0.5 / 64.0), vec2<f32>(1.0 - 0.5 / 64.0));
     let a = textureSample(alpha_array, splat_samp, auv, ai);
 
@@ -218,7 +210,7 @@ fn fragment(in: TerrainVsOut) -> @location(0) vec4<f32> {
     // MCSH baked shadow. With `pixelShaders` and `specular` on, terrain is one pass through
     // `terrainp_s.bls`, which reads the MCSH bit from the blend texture's alpha (1 lit, 0 shadowed)
     // and uses it twice, below; with them off the reference draws a separate ambient-tint overlay.
-    // Our `shadow_array` R8 is 255 shadowed, 0 lit. A chunk with no MCSH map (`uv_b.y < 0`) is lit.
+    // Our `shadow_array` is 255 shadowed, 0 lit; a chunk with no MCSH map (`uv_b.y < 0`) is lit.
     var shadow_lit = 1.0;
     let si = in.uv_b.y;
     if (si >= 0.0) {
@@ -233,9 +225,8 @@ fn fragment(in: TerrainVsOut) -> @location(0) vec4<f32> {
     let spec_term = in.specular * specmask * shadow_lit;
     var tuned = clamp(diffuse_term + spec_term, vec3<f32>(0.0), vec3<f32>(1.0));
 
-    // Gamma-space GL_LINEAR fog on planar eye-Z, not radial distance: the reference computes
-    // `fogcoord` from eye-Z, and radial distance over-fogs the screen edges. Per pixel matches the
-    // reference's per-vertex fog, since a linear factor interpolates exactly.
+    // Gamma-space GL_LINEAR fog on planar eye-Z, as the reference computes `fogcoord`, not radial
+    // distance. Per pixel matches its per-vertex fog, since a linear factor interpolates exactly.
     if (wow_light.fog_color.w > 0.5) {
         let eye_z = -(view.view_from_world * vec4<f32>(in.world_position.xyz, 1.0)).z;
         let denom = max(wow_light.fog_params.y - wow_light.fog_params.x, 0.001);

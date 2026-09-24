@@ -1,56 +1,26 @@
-//! The **column index**: which of a face set's triangles can own a vertical (x, y) column.
-//!
-//! Every position question this client asks a WMO is a column query — which room is the camera in
-//! (`wmo_portal::seed`), which room is a unit in (`track_unit_interiors`), which floor's baked MOCV
-//! lights an entity (`interior::classify_entity_interior`), what the zone text should say. All of
-//! them cast straight down and want "the triangles whose XY projection contains this point".
-//!
-//! Until now the narrow phase for that was **a linear scan of every triangle in every group whose
-//! AABB contains the column** (decisions 0330/0364 built the per-group bounds; the group is where
-//! the culling stopped). That is fine for a cottage and catastrophic for a dungeon: Blackrock
-//! Spire's groups hold ~11–16k faces each, and a vertically stacked spire puts several of them in
-//! any given column. Measured in LBRS on 2026-07-27: **~1.2 M triangle tests per frame** to light
-//! **37 moving NPCs** — ~32k per unit per frame, 11 ms of a 29 ms frame, the second-largest term in
-//! the NPC-population collapse (B31/B06 + the BWL/LBRS reports).
-//!
-//! So each group's faces get a uniform XY grid, built once at load: a column tests one cell's
-//! worth of triangles instead of the group's whole face list.
-//!
-//! **The index never changes a verdict.** It is a pure accelerator with two properties the callers
-//! depend on, both pinned by tests:
-//!
-//! - **Superset** — every triangle whose XY projection contains the column is a candidate. A
-//!   triangle is inserted into every cell its XY AABB touches (inclusive both ends), a query point
-//!   outside the grid clamps into the edge cell rather than missing, and a triangle whose AABB
-//!   spans more cells than [`MAX_SPAN_CELLS`] goes in [`ColumnGrid::spanning`], tested always.
-//! - **Order** — candidates come back in **ascending triangle index**, the order a linear scan
-//!   visits them, so every tie-break downstream (`down_ray_claim`'s first-wins, `footprint_sample`'s
-//!   later-wins) resolves exactly as it did before the index existed.
+//! The column index: which of a face set's triangles can own a vertical (x, y) column, for the
+//! down-cast position queries against a WMO (the camera's room, a unit's room, the floor MOCV that
+//! lights an entity). It never changes a verdict: the candidates are a superset of the triangles
+//! whose XY box holds the column, in ascending index order, the order a linear scan visits them,
+//! so the first-wins and later-wins tie-breaks downstream resolve the same.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-/// A triangle whose XY AABB touches more cells than this is not binned at the level being built —
-/// it is handed to the next level down (the coarse grid), and only a face too large for *that*
-/// becomes a [`ColumnGrid::spanning`] always-tested residue. Big floor slabs are the case: at a
-/// ~1-triangle-per-cell sizing a 100-yd slab would otherwise be copied into hundreds of cells.
+/// A triangle touching more cells than this goes to the next level down, and past the coarse level
+/// to [`ColumnGrid::spanning`], so a big floor slab is not copied into hundreds of cells.
 const MAX_SPAN_CELLS: u32 = 32;
 
-/// Below this many oversized faces, a second grid is not worth its own allocation pair and lookup —
-/// they stay an always-tested list. Well under the per-query counts 1351 measured (~480), so the
-/// pin's groups all take the coarse level.
+/// Below this many oversized faces they stay an always-tested list instead of a second grid.
 const MIN_COARSE_TRIS: usize = 24;
 
-/// Never build cells finer than this (yd) — a degenerate face set (all triangles stacked in one
-/// spot) would otherwise ask for an unbounded grid.
+/// The finest cell, yd, so a face set stacked in one spot cannot ask for an unbounded grid.
 const MIN_CELL: f32 = 0.25;
 
-/// Cell budget per group: the grid is at most this many cells regardless of face count, so a
-/// 500-yd dungeon group costs tens of KB of index, not tens of MB.
+/// The most cells one level holds, whatever the face count.
 const MAX_CELLS: usize = 1 << 16;
 
-/// One uniform XY grid over some set of triangles — CSR (`starts`/`items`), so one allocation
-/// pair per level rather than a `Vec` per cell.
+/// One uniform XY grid in CSR form (`starts`, `items`).
 #[derive(Debug, Clone)]
 struct Level {
     /// Grid origin (the indexed set's XY minimum).
@@ -61,69 +31,38 @@ struct Level {
     ny: u32,
     /// CSR row offsets into [`Self::items`], length `nx * ny + 1`.
     starts: Vec<u32>,
-    /// **Global** triangle indices, ascending within each cell.
+    /// Global triangle indices, ascending within each cell.
     items: Vec<u32>,
 }
 
-/// A face set's column index: **two grids and a residue**.
-///
-/// One grid cannot serve a dungeon group. Sizing cells at ~1 triangle each is right for the ~11–16k
-/// small faces, and catastrophic for the handful of 40–100 yd floor slabs sharing the group: a slab
-/// would be copied into hundreds of cells, so [`MAX_SPAN_CELLS`] sets it aside instead — and
-/// "aside" used to mean *tested on every query*.
-///
-/// 1351 measured what that cost at the LBRS pin: **99.26 %** of all triangles tested per frame were
-/// those set-aside slabs — 93,624 of 94,322, against 698 that came from a cell list. The index was
-/// accelerating the 0.7 %.
-///
-/// So the oversized set gets its own grid, sized from its own extent and its own count (0711's
-/// named fix, deferred there and confirmed by 1351). Cells at that level are ~an order of magnitude
-/// wider, which is exactly what a slab needs to bin. Whatever is still too big for the coarse level
-/// — a face spanning the whole group — falls to [`Self::spanning`] and keeps the old always-tested
-/// behaviour, which is now a residue rather than the main term.
-///
-/// **Two levels, not recursion.** A recursive grid would need a boxed iterator per query on the
-/// hottest path in the interior lane; two explicit levels keep [`ColumnGrid::candidates`] a
-/// three-way merge of three ascending *slices* — no allocation, no indirection, and the
-/// superset+ascending invariants hold at each level independently.
+/// A face set's column index: a fine grid at about one triangle a cell, a coarse grid over the
+/// faces too large for it (dungeon floor slabs), and a residue too large for both.
 #[derive(Debug, Clone)]
 pub struct ColumnGrid {
     /// The ~1-triangle-per-cell grid over the ordinary faces.
     fine: Level,
-    /// The coarse grid over the faces `fine` set aside. `None` when there were too few of them to
-    /// be worth a second index — then they are all in [`Self::spanning`], as before.
+    /// The grid over the faces `fine` set aside; `None` when too few, all in [`Self::spanning`].
     coarse: Option<Level>,
-    /// Faces too large to bin at **either** level, ascending — candidates for every query.
+    /// Faces too large for either level, ascending: candidates for every query.
     spanning: Vec<u32>,
 }
 
-/// `WOW_COLUMN_COST=1`: how many triangles a column query actually tests, split by **source** —
-/// `binned` (the fine level's cell), `coarse` (the coarse level's cell), and `spanning` (the
-/// residue too large for either, tested on every query).
-///
-/// This is 0711's residual, and the counter that confirmed it. That hunt cut the lane from ~1.2 M
-/// triangle tests/frame to an 88 k remainder, wrote down what the remainder was — big floor slabs,
-/// too large to bin, merged into every column query — named the fix, and left it. 1351 measured the
-/// remainder three weeks later: **99.26 %** of tested triangles were that set, and `resolve_ms` was
-/// still 1.14, byte for byte the number 0711 recorded, because nothing had touched the file.
-///
-/// The counter stays as the **regression watch** on the two-level index: `spanning_pct` is now the
-/// residue's share and should read near zero. If it climbs, some face set has a slab too big for
-/// even the coarse level and the lane is quietly reverting to 0711's shape.
+/// `WOW_COLUMN_COST=1`: triangles tested per column query by source (fine cell, coarse cell,
+/// residue). The residue's share should read near zero; a climb means a slab too big for the
+/// coarse level.
 static COLUMN_QUERIES: AtomicU64 = AtomicU64::new(0);
 static COLUMN_BINNED: AtomicU64 = AtomicU64::new(0);
 static COLUMN_COARSE: AtomicU64 = AtomicU64::new(0);
 static COLUMN_SPANNING: AtomicU64 = AtomicU64::new(0);
 
-/// Whether the column-query meter is armed (`WOW_COLUMN_COST`). Read once, then a relaxed bool.
+/// Whether the column-query meter is armed (`WOW_COLUMN_COST`), read once.
 pub fn column_cost_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("WOW_COLUMN_COST").is_some())
 }
 
-/// Take and zero the column-query counters: `(queries, binned, coarse, spanning)` triangles tested.
-///
-/// One caller per frame — the meter that prints them — so the numbers are always per-frame.
+/// Take and zero the counters, `(queries, binned, coarse, spanning)`; one caller a frame keeps them
+/// per frame.
 pub fn take_column_query_stats() -> (u64, u64, u64, u64) {
     (
         COLUMN_QUERIES.swap(0, Ordering::Relaxed),
@@ -134,11 +73,8 @@ pub fn take_column_query_stats() -> (u64, u64, u64, u64) {
 }
 
 impl Level {
-    /// Index `ids` (ascending, global triangle indices) into one uniform grid.
-    ///
-    /// Returns the level plus the **overflow**: the ids whose XY AABB spans more than
-    /// [`MAX_SPAN_CELLS`] cells at this level's sizing, ascending, for the next level down.
-    /// `None` when the set has no finite extent to grid.
+    /// Index ascending `ids` into one grid, also returning, ascending, the ids that span more than
+    /// [`MAX_SPAN_CELLS`] cells, for the next level; `None` when the set has no finite extent.
     fn build(
         ids: &[u32],
         xy_aabb: &impl Fn(usize) -> ([f32; 2], [f32; 2]),
@@ -155,10 +91,8 @@ impl Level {
         if !w.is_finite() || !h.is_finite() || (w <= 0.0 && h <= 0.0) {
             return None;
         }
-        // Aim for ~one triangle per cell, then clamp both ways: never finer than MIN_CELL, never
-        // more than MAX_CELLS cells. Sizing from THIS set's own count and extent is what makes the
-        // coarse level coarse: a few hundred slabs over the same group span give cells ~an order of
-        // magnitude wider than the fine level's, which is what lets a slab bin at all.
+        // About one triangle a cell, clamped by MIN_CELL and MAX_CELLS. Sizing from this set's own
+        // count and extent is what makes the coarse level coarse enough for a slab to bin.
         let target_cells = ids.len().clamp(1, MAX_CELLS) as f32;
         let area = (w * h).max(f32::MIN_POSITIVE);
         let mut cell = (area / target_cells).sqrt().max(MIN_CELL);
@@ -170,7 +104,7 @@ impl Level {
         let inv_cell = 1.0 / cell;
         let cells = nx as usize * ny as usize;
 
-        // Pass 1 — count per cell, and set the oversized triangles aside for the next level.
+        // Pass 1: count per cell, and set the oversized triangles aside.
         let mut counts = vec![0u32; cells + 1];
         let mut overflow = Vec::new();
         let span_of = |i: u32| -> Option<(u32, u32, u32, u32)> {
@@ -203,8 +137,7 @@ impl Level {
         }
         starts[cells] = acc;
 
-        // Pass 2 — fill. `ids` is ascending, so each cell fills in ascending triangle order, which
-        // is the order guarantee the tie-breaks downstream rest on.
+        // Pass 2: fill. `ids` is ascending, so each cell is too, which the tie-breaks rest on.
         let mut items = vec![0u32; acc as usize];
         let mut cursor = starts.clone();
         for &i in ids {
@@ -231,7 +164,7 @@ impl Level {
         ))
     }
 
-    /// This level's own cell list for the column at `(x, y)` — ascending, possibly empty.
+    /// This level's cell list for the column at `(x, y)`, ascending.
     fn cell(&self, x: f32, y: f32) -> &[u32] {
         let cx = cell_of(x, self.min[0], self.inv_cell, self.nx);
         let cy = cell_of(y, self.min[1], self.inv_cell, self.ny);
@@ -241,12 +174,9 @@ impl Level {
 }
 
 impl ColumnGrid {
-    /// Build the index for `count` triangles, given each one's XY AABB by index.
-    ///
-    /// Returns `None` when there is nothing to accelerate — an empty face set, or one small enough
-    /// that a linear scan beats the indirection (the caller then keeps its plain scan).
+    /// Index `count` triangles by their XY AABBs; `None` for a set small enough that the caller's
+    /// linear scan is cheaper.
     pub fn build(count: usize, xy_aabb: impl Fn(usize) -> ([f32; 2], [f32; 2])) -> Option<Self> {
-        // Below this a linear scan is the cheaper answer and the grid is pure overhead.
         const MIN_TRIS: usize = 64;
         if count < MIN_TRIS {
             return None;
@@ -254,9 +184,6 @@ impl ColumnGrid {
         let all: Vec<u32> = (0..count as u32).collect();
         let (fine, oversized) = Level::build(&all, &xy_aabb)?;
 
-        // The oversized set gets its own grid when there are enough of them to pay for one. What
-        // *that* level cannot bin stays an always-tested residue — the old behaviour, now applied
-        // to a set 1351 predicts is tiny rather than to 99 % of the traffic.
         let (coarse, spanning) = if oversized.len() >= MIN_COARSE_TRIS {
             match Level::build(&oversized, &xy_aabb) {
                 Some((level, residue)) => (Some(level), residue),
@@ -273,7 +200,7 @@ impl ColumnGrid {
         })
     }
 
-    /// The triangles that can own the column at `(x, y)` — a superset, in ascending index order.
+    /// The triangles that can own the column at `(x, y)`: a superset, ascending.
     pub fn candidates(&self, x: f32, y: f32) -> ColumnCandidates<'_> {
         let binned = self.fine.cell(x, y);
         let coarse = self.coarse.as_ref().map_or(&[][..], |c| c.cell(x, y));
@@ -290,7 +217,7 @@ impl ColumnGrid {
         }
     }
 
-    /// Index size in triangle slots — the memory the acceleration costs, for the load-time log.
+    /// Index size in triangle slots, for the load-time log.
     pub fn slots(&self) -> usize {
         self.fine.items.len()
             + self.coarse.as_ref().map_or(0, |c| c.items.len())
@@ -298,13 +225,8 @@ impl ColumnGrid {
     }
 }
 
-/// Ascending merge of the three sources a column can draw from: the fine level's cell, the coarse
-/// level's cell, and the always-tested residue. All three are ascending, so this is a three-pointer
-/// walk and the output order matches a linear scan exactly — which is the guarantee every downstream
-/// tie-break (`down_ray_claim`'s first-wins, `footprint_sample`'s later-wins) rests on.
-///
-/// A triangle appears in exactly one source by construction: a face is binned at the fine level, or
-/// handed down to the coarse level, or in the residue — never two. So the merge cannot duplicate.
+/// Ascending merge of the fine cell, the coarse cell and the residue. A face is in exactly one of
+/// them, so the merge never duplicates, and its order is a linear scan's.
 pub struct ColumnCandidates<'a> {
     binned: &'a [u32],
     coarse: &'a [u32],
@@ -344,9 +266,8 @@ fn dims(w: f32, h: f32, cell: f32) -> (u32, u32) {
     (n(w), n(h))
 }
 
-/// Cell coordinate of a world value, clamped into the grid — a column outside the face set's
-/// bounds lands in the edge cell rather than missing, which keeps the candidate set a superset
-/// under float error at the boundary.
+/// A value's cell, clamped into the grid so a column just outside the bounds (float error at the
+/// edge) still lands in the edge cell.
 fn cell_of(v: f32, min: f32, inv_cell: f32, n: u32) -> u32 {
     let i = ((v - min) * inv_cell).floor();
     if i < 0.0 {
@@ -360,7 +281,6 @@ fn cell_of(v: f32, min: f32, inv_cell: f32, n: u32) -> u32 {
 mod tests {
     use super::*;
 
-    /// A triangle's XY AABB, the shape the callers hand `build`.
     fn aabb(tri: [[f32; 3]; 3]) -> ([f32; 2], [f32; 2]) {
         let xs = [tri[0][0], tri[1][0], tri[2][0]];
         let ys = [tri[0][1], tri[1][1], tri[2][1]];
@@ -376,8 +296,7 @@ mod tests {
         )
     }
 
-    /// A deterministic pseudo-random field of small triangles plus a few slabs — the dungeon shape
-    /// (many small faces, a handful of huge floors) the index has to survive.
+    /// Small pseudo-random triangles with a slab every 97th: the dungeon shape.
     fn field(n: usize) -> Vec<[[f32; 3]; 3]> {
         let mut out = Vec::with_capacity(n);
         let mut s = 12345u32;
@@ -388,7 +307,7 @@ mod tests {
         for i in 0..n {
             let (x, y) = (rnd() * 200.0 - 100.0, rnd() * 200.0 - 100.0);
             if i % 97 == 0 {
-                // A slab spanning a large area — the MAX_SPAN_CELLS path.
+                // A slab: the MAX_SPAN_CELLS path.
                 out.push([[x, y, 0.0], [x + 80.0, y, 0.0], [x, y + 80.0, 0.0]]);
             } else {
                 let (dx, dy) = (rnd() * 3.0, rnd() * 3.0);
@@ -398,9 +317,6 @@ mod tests {
         out
     }
 
-    /// The load-bearing property: for any column, the index's candidates are a SUPERSET of the
-    /// triangles a linear scan would find containing it — an index that can miss a face silently
-    /// moves a unit's room, its light, and the zone name.
     #[test]
     fn candidates_are_a_superset_of_the_linear_scan() {
         let tris = field(4000);
@@ -428,8 +344,6 @@ mod tests {
         assert!(probes > 500, "the sweep must actually probe");
     }
 
-    /// The other half of "never changes a verdict": candidates arrive in the order a linear scan
-    /// visits them, so first-wins / later-wins tie-breaks downstream are unaffected.
     #[test]
     fn candidates_are_ascending() {
         let tris = field(2000);
@@ -447,8 +361,6 @@ mod tests {
         }
     }
 
-    /// A column far outside the face set still returns a valid (edge-cell) candidate list rather
-    /// than panicking or indexing out of range.
     #[test]
     fn columns_outside_the_bounds_are_safe() {
         let tris = field(200);
@@ -458,17 +370,13 @@ mod tests {
         }
     }
 
-    /// The two-level structure actually engages on the dungeon shape, and the residue it leaves is
-    /// small. Without this, a regression that quietly stopped building the coarse level would still
-    /// pass every invariant test above — the index would just be slow again, which is exactly how
-    /// 0711's residual survived ~600 decision records unnoticed.
+    /// The tests above would still pass with no coarse level at all; this one would not.
     #[test]
     fn the_coarse_level_takes_the_slabs() {
         let tris = field(4000);
         let grid = ColumnGrid::build(tris.len(), |i| aabb(tris[i])).expect("field indexes");
 
-        // `field` plants a slab every 97th triangle; every one of them is far too wide to bin at
-        // the fine level's ~1-triangle-per-cell sizing.
+        // Every 97th triangle is a slab, too wide for the fine level.
         let slabs = tris.len().div_ceil(97);
         let coarse = grid
             .coarse
@@ -486,8 +394,6 @@ mod tests {
         );
     }
 
-    /// The merge draws from three sources; a face must appear in exactly one of them, or a column
-    /// would test it twice and `later-wins` tie-breaks would read the same triangle as two hits.
     #[test]
     fn no_triangle_is_in_two_sources() {
         let tris = field(3000);
@@ -508,7 +414,6 @@ mod tests {
         }
     }
 
-    /// Small face sets opt out — the caller keeps its linear scan rather than paying indirection.
     #[test]
     fn tiny_face_sets_are_not_indexed() {
         let tris = field(8);

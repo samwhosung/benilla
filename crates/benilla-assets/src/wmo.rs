@@ -1,14 +1,7 @@
-//! WMO → model asset loader.
-//!
-//! A WMO (building) is a **root** file plus N **group** files (`<stem>_NNN.wmo`). The loader reads the
-//! root from the [`Reader`], then reads each group via [`LoadContext::read_asset_bytes`] (raw bytes,
-//! recorded as a dependency — *not* `load()`, which would recurse back into this loader), building one
-//! [`ModelSubmesh`] per group render batch with its texture resolved against the root's material
-//! tables.
-//!
-//! Same app-independent shape as the M2 loader (geometry + texture handles + metadata; meshes are
-//! built paced app-side — decision 0834 — and materials at spawn). WMOs don't size-fade, so there
-//! are no bounds.
+//! WMO asset loader: a root file plus its group files (`<stem>_NNN.wmo`), one [`ModelSubmesh`] per
+//! group render batch. Groups are read with [`LoadContext::read_asset_bytes`], not `load()`, which
+//! would recurse into this loader. The app builds the meshes, paced, as a city's thousands of
+//! batches would land in one frame.
 
 use crate::column_grid::ColumnGrid;
 use std::sync::Arc;
@@ -27,11 +20,8 @@ use bevy::reflect::TypePath;
 
 use crate::model::ModelSubmesh;
 
-/// Per-WMO-group navigation data for the portal visibility cull (`crate::wmo_portal`): the group's
-/// MOGP flags (the EXTERIOR `0x8` bit the flood defers on), its bounding box (WMO model space, WoW
-/// axes — the camera current-group containment test), and its slice of [`WmoModel::portal_refs`].
-/// Indexed by **absolute group index** (parallel gaps for unreadable groups carry a degenerate box +
-/// zero refs, so they're never a current-group candidate and never flood).
+/// One WMO group's portal-cull data: MOGP flags (the flood defers on EXTERIOR `0x8`), the MOGI box
+/// and its slice of [`WmoModel::portal_refs`]; an unreadable group never floods.
 #[derive(Clone, Copy)]
 pub struct WmoGroupNav {
     pub flags: u32,
@@ -39,196 +29,111 @@ pub struct WmoGroupNav {
     pub bbox_max: [f32; 3],
     pub ref_start: u16,
     pub ref_count: u16,
-    /// The group's `WMOAreaTable.WMOGroupID` key (MOGP `uniqueID`; 0 = none carried).
+    /// The `WMOAreaTable.WMOGroupID` key, MOGP `uniqueID`; 0 when none.
     pub area_table_id: u32,
-    /// The group's MOGP fog indices (disk `+0x30`, empirically pinned against the Goldshire inn) —
-    /// up to four indices into [`WmoModel::fogs`], walked by the camera-in-interior fog selector
-    /// (`0x69de20`).
+    /// MOGP fog indices (disk `+0x30`) into [`WmoModel::fogs`], for the fog selector (`0x69de20`).
     pub fog_indices: [u8; 4],
-    /// MOGP `groupLiquid` (`0xf` = none) — the **whole-group submersion override**. On the 13
-    /// shipped groups that set it, the client's liquid probe answers "submerged" for the entire
-    /// group at every Z with no grid involved at all; see
-    /// [`benilla_formats::WmoGroupHeader::group_liquid`].
+    /// MOGP `groupLiquid` (`0xf` = none): when set, the whole group reads submerged at every Z.
     pub group_liquid: u32,
 }
 
-/// A loaded WMO building: the render batches across all its groups, flattened, plus the flattened
-/// collidable triangles (the app bakes a collider from these per placement).
-/// `Default` = the empty building (every field vacuous) — a test scaffold, never a loader product.
+/// A loaded WMO building; `Default` is an empty test scaffold, never a loader product.
 #[derive(Asset, TypePath, Clone, Default)]
 pub struct WmoModel {
-    /// The building's `WMOAreaTable.WMOID` key (root `MOHD.wmoID`; NSabbey → 59).
+    /// The `WMOAreaTable.WMOID` key (root `MOHD.wmoID`).
     pub wmo_id: u32,
     pub submeshes: Vec<ModelSubmesh>,
-    /// Group index per entry in [`Self::submeshes`] (parallel) — which WMO group each render batch
-    /// belongs to, so the portal cull can hide a whole group by toggling its submeshes' `Visibility`.
+    /// The group of each entry in [`Self::submeshes`], so the portal cull can hide a whole group.
     pub submesh_group: Vec<u16>,
-    /// The portal graph (MOPV vertices / MOPT infos / MOPR refs), WMO model space (WoW axes). The
-    /// per-frame cull floods this from the camera's current group (`crate::wmo_portal`). Empty ⇒ no
-    /// portals (single-group props) ⇒ every group stays visible.
+    /// The portal graph (MOPV, MOPT, MOPR) in model space; with none, every group stays visible.
     pub portal_vertices: Vec<[f32; 3]>,
     pub portal_infos: Vec<WmoPortalInfo>,
     pub portal_refs: Vec<WmoPortalRef>,
-    /// Per-group nav (flags + bbox + portal-ref slice), indexed by absolute group index.
+    /// Per-group cull data, indexed by absolute group index.
     pub group_nav: Vec<WmoGroupNav>,
-    /// The root's MFOG fog records — record 0 is the WMO default (the interior-fog selector's
-    /// seed); a group's [`WmoGroupNav::fog_indices`] point here. Consumed by the camera-in-interior
-    /// fog resolve (`crate::wmo_portal` in the app), per the reference (`0x69de20`).
+    /// The root's MFOG records; record 0 is the building default.
     pub fogs: Vec<WmoFog>,
-    /// The root's **MOSB** skybox model (`.m2`), drawn as the sky backdrop while the camera stands in
-    /// a group whose flags carry `0x40000` — see `crate::skybox` in the app for the gate and
-    /// `benilla_formats::WmoGroupInfo::show_skybox` for how that bit was identified. `None` for all
-    /// but a handful of roots (`benilla-extract skyboxscan`); carrying it here costs one `Option`
-    /// per building and saves the sky lane a second root parse.
+    /// The root's MOSB skybox model, drawn while the camera is in a group flagged `0x40000`.
     pub skybox: Option<String>,
-    /// Per-group **walking-collision** triangles (WoW model space, indexed by absolute group index) —
-    /// the Leg-A face set for the current-group **down-ray** (`crate::wmo_portal`). The faithful "which
-    /// room is the camera in" test casts a ray straight down from the eye against the same face set the
-    /// player's walking collision uses — every non-DETAIL face, **no orientation filter** (the
-    /// client's Leg A, `0x6be250`, is the walking-collision BSP, mask `0x84`; an earlier
-    /// render-face `|n.z|` floor heuristic mis-seeded doorways and slab edges). Same triangles as
-    /// [`Self::collision`], kept per group for group attribution.
+    /// Per-group walking-collision faces (non-DETAIL, no orientation filter): the reference's
+    /// walking BSP set (`0x6be250`, mask `0x84`) that the current-group down-ray casts on.
     pub group_collision_tris: Vec<Vec<[[f32; 3]; 3]>>,
-    /// Per-group **camera-only** triangles (parallel to [`Self::group_collision_tris`]): the faces
-    /// the camera gather keeps but the walking gather drops — DETAIL (`0x04`) set, NOCAMCOLLIDE
-    /// (`0x02`) clear. The down-ray's **camera-void fallback** races this set only
-    /// after the faithful walking Leg A and portal Leg B both miss AND no terrain surface sits at or
-    /// below the eye: an eye held between camera-collidable surfaces (the Deadmines entrance pocket,
-    /// whose floor is all-DETAIL) then still names its room instead of blanking the building.
+    /// Per-group camera-only faces (DETAIL `0x04` set, NOCAMCOLLIDE `0x02` clear). Deviation: the
+    /// down-ray tries them when the walking and portal legs miss and no terrain lies below the eye,
+    /// because the reference reads outside there and blanks the building around a camera sealed in
+    /// an all-DETAIL pocket.
     pub group_camera_only_tris: Vec<Vec<[[f32; 3]; 3]>>,
-    /// Per-group AABB of [`Self::group_collision_tris`] (parallel; `None` = no collision faces),
-    /// computed at load **from the triangles themselves** — the broad phase for the faces-only
-    /// down-ray (`area_down_ray`). Bounds derived from the faces can only summarize the geometry,
-    /// never understate it the way an authored MOGI box can (NSabbey group 3's authored bottom
-    /// floats 1.5 yd above its own floor polys — the 2026-07-12 indoor flap), so culling on them
-    /// is exact: a group is skipped only when no face of it could own the probe column.
+    /// Per-group AABB of [`Self::group_collision_tris`], from the faces rather than MOGI: an
+    /// authored MOGI box can sit above its own floor (Northshire Abbey group 3, by 1.5 yd).
     pub group_collision_bounds: Vec<Option<([f32; 3], [f32; 3])>>,
-    /// Per-group column index over [`Self::group_collision_tris`] (parallel; `None` = a face set
-    /// too small to be worth indexing, and the caller keeps its linear scan). The narrow phase the
-    /// per-group bounds above never had: a dungeon group holds ~11–16k faces, so bounds alone
-    /// still left every down-ray scanning tens of thousands of triangles per unit per frame
-    /// (LBRS, 2026-07-27). See [`crate::column_grid`].
+    /// Per-group [`ColumnGrid`] over [`Self::group_collision_tris`]; `None` when too few to index.
     pub group_collision_grids: Vec<Option<ColumnGrid>>,
-    /// The union of [`Self::group_collision_bounds`] — the whole-building broad phase: a probe
-    /// column outside it cannot hit any collision face, so the per-frame indoor trackers skip the
-    /// placed instance outright (a camera in open country pays one AABB test per building, not a
-    /// face scan — the 2026-07-12 fps regression).
+    /// The union of [`Self::group_collision_bounds`]: the whole-building broad phase.
     pub collision_bounds: Option<([f32; 3], [f32; 3])>,
-    /// **Walking** collidable triangles across all groups in raw WMO-local coords — the player-body
-    /// gather (excludes DETAIL faces). `None` when the building carries no collidable geometry.
+    /// Walking collision across all groups in WMO-local coords, DETAIL faces excluded.
     pub collision: Option<CollisionMesh>,
-    /// **Camera/LOS** collidable triangles — the third-person-camera gather (excludes NOCAMCOLLIDE,
-    /// *keeps* DETAIL). Distinct from [`Self::collision`]; the app bakes a separate collider on the
-    /// camera collision layer so the camera can't slip behind visible decals/overhangs (e.g. forge
-    /// pipes) the player walks under. `None` when the building has no camera-collidable geometry.
+    /// Camera and line-of-sight collision: DETAIL kept, NOCAMCOLLIDE dropped.
     pub collision_camera: Option<CollisionMesh>,
-    /// The root's placed doodads (MODD props — candle stands, banners), in WMO model space; the app
-    /// spawns each as an M2 composed with the WMO instance transform, selected by doodad set.
+    /// The root's MODD doodads in WMO model space, spawned by doodad set.
     pub doodads: Vec<WmoDoodad>,
-    /// The doodad sets (MODS) — ranges into [`Self::doodads`]; set 0 is global, a placement picks one more.
+    /// The MODS ranges into [`Self::doodads`]: set 0 always, plus the one a placement picks.
     pub doodad_sets: Vec<WmoDoodadSet>,
-    /// The root's MOLT lights (the interior fixture lights — fireplaces, forge, candles, chandeliers),
-    /// in WMO model space. Spawned as dynamic point lights that warm nearby
-    /// doodads/NPCs, terrain, and the building's own walls/floor over their baked MOCV.
+    /// The root's MOLT fixture lights in WMO model space, spawned as point lights.
     pub lights: Vec<WmoLight>,
-    /// Per-group interior flag + bounding box (MOGI), WMO model space — classifies which placed doodads
-    /// are interior (lit off the room/fixtures) vs exterior (lit off the sky). See [`WmoGroupInfo`].
+    /// Per-group MOGI interior flag and box, in WMO model space.
     pub group_bounds: Vec<WmoGroupInfo>,
-    /// Per-MODD lighting base, parallel to [`Self::doodads`] — resolved ONCE at load (placements are
-    /// fixed in the root). See [`DoodadBase`]: an interior-group doodad's base is its own MODD
-    /// entry's baked colour, and its point light comes only from its owning group's MOLR list. The
-    /// footprint down-ray this replaced is byte-real code, but it is the ADT-MDDF
-    /// attach path — a WMO MODD doodad never reaches it (create `0x694e90` never calls SetMatrix
-    /// `0x698d20`).
+    /// Per-MODD lighting base, parallel to [`Self::doodads`]. A MODD doodad never takes the
+    /// footprint down-ray: its create (`0x694e90`) never calls `SetMatrix` (`0x698d20`).
     pub doodad_base: Vec<DoodadBase>,
-    /// Per-MODD **instantiating group** (the first group whose MODR refs name it), parallel to
-    /// [`Self::doodads`]; `None` for a MODD no group references. The reference creates a doodad
-    /// once, on the first visible-group walk that reaches it, and that create is what fills its
-    /// baked colour words — so this names the MOLR set the interior fold gates on
-    /// ([`Self::doodad_base`]). It is **not** the interior/exterior class: every referrer writes the
-    /// lane of the same def and exterior is absorbing, so the class reads [`Self::doodad_groups`]
-    /// (see [`resolve_doodad_bases`]).
+    /// Per-MODD first referencing group, whose MOLR set the interior lane folds; the
+    /// interior/exterior class reads [`Self::doodad_groups`].
     pub doodad_owner: Vec<Option<u16>>,
-    /// Per-MODD **referencing groups** — every group whose MODR names it, parallel to
-    /// [`Self::doodads`]; empty for a MODD no group references.
-    ///
-    /// This is the prop's portal-cull key. The reference commits a WMO's doodads **per visible
-    /// group** — `0x695aa0` loops the group's own MODR refs at `group+0xe8`/count `+0x144`, called
-    /// from the visible-group walk `0x698720` — so a group the portal flood culled draws none
-    /// of its furniture, and a prop **any** of whose referrers is visible is drawn. Without the key
-    /// at all, props outlive their own building: cull every group of a dungeon and its lanterns,
-    /// crates and cobwebs hang in the void. With the key collapsed to one owner, a
-    /// prop that hangs through several rooms — a lava fall — blinks out on every camera angle whose
-    /// flood reaches a different one of its referrers.
+    /// Per-MODD every group whose MODR names it: the portal-cull key, as the reference draws
+    /// doodads per visible group (`0x695aa0`, MODR at `+0xe8`, count `+0x144`, walk `0x698720`).
     pub doodad_groups: Vec<Arc<[u16]>>,
-    /// Per-group FOOTPRINT face set (render tris + baked MOCV + MOPY flags), indexed by absolute
-    /// group index; `None` for exterior groups / groups without MOCV. The **GameObject M2** light
-    /// lane samples it: the entity node's env-update attach down-rays the render mesh under the
-    /// object and bakes the hit's barycentric MOCV, floor-168/cap-96, on the fixed interior axis
-    /// (`0x69e4c0`; a reference capture of the abbey benches decides it).
+    /// Per-group footprint faces (render faces, MOCV, MOPY flags); `None` for exterior groups and
+    /// groups without MOCV. A GameObject M2 down-rays them for its MOCV lighting (`0x69e4c0`).
     pub group_footprints: Vec<Option<FootprintTris>>,
-    /// Root MOMT `ground_type` per material — the `TerrainType.dbc` id a face's
-    /// `FootprintTris::mopy_material` resolves to. Shared by every group (MOMT lives on the root),
-    /// and the tail of the footstep chain's WMO leg.
+    /// Root MOMT `ground_type` per material: the `TerrainType.dbc` id of a face's MOPY material.
     pub material_ground_type: Vec<u32>,
-    /// Root MOMT `diffColor` per material, RGB 0..1 — the body colour an **interior** MLIQ pool
-    /// takes, indexed by its `LiquidMesh::material_id`. MOMT lives in the root, so a group file
-    /// cannot resolve its own pool's colour; the spawner does it from here.
+    /// Root MOMT `diffColor` per material, RGB 0..1: an interior MLIQ pool's colour, by material.
     pub material_diff_color: Vec<[f32; 3]>,
-    /// Per-group AABB of the faces [`Self::group_footprints`] actually references (parallel;
-    /// `None` = no footprint faces), computed at load from the triangles themselves — the broad
-    /// phase for the footprint down-ray, the same exact-cull argument as
-    /// [`Self::group_collision_bounds`]: a probe column outside a group's face bounds in XY, or
-    /// wholly below its lowest vertex, can hit none of its faces. Without it every re-rayed
-    /// entity scanned EVERY interior group of the whole model — at Stormwind (one WMO, all
-    /// districts) that was the live-session frame.
+    /// Per-group AABB of the faces [`Self::group_footprints`] uses: the footprint broad phase.
     pub group_footprint_bounds: Vec<Option<([f32; 3], [f32; 3])>>,
-    /// Per-group column index over [`Self::group_footprints`] (parallel; `None` = not indexed).
-    /// The footprint sample is the heavier of the two column rays — it walks render faces, not
-    /// collision ones. See [`crate::column_grid`].
+    /// Per-group [`ColumnGrid`] over [`Self::group_footprints`]; `None` when not indexed.
     pub group_footprint_grids: Vec<Option<ColumnGrid>>,
-    /// Per-group MOLR light refs (indices into [`Self::lights`]), indexed by absolute group index —
-    /// the point lights that fold into an interior GameObject's committed light are gated by the
-    /// footprint-hit group's list, same as a MODD prop's by its owning group.
+    /// Per-group MOLR refs into [`Self::lights`]: a MODD prop folds its owning group's list, a
+    /// GameObject its footprint-hit group's.
     pub group_light_refs: Vec<Vec<u16>>,
-    /// Per-group MLIQ liquid surface (the animated water/lava/slime a group embeds — Stormwind's
-    /// canals + fountains, the Ironforge lava, dungeon pools), indexed by absolute group index;
-    /// `None` for a group with no `MLIQ`. Built in WMO model space (WoW axes); the app spawns each at
-    /// the placement transform, on the shared per-kind liquid material.
+    /// Per-group MLIQ liquid surface in WMO model space; `None` for a group without one.
     pub group_liquids: Vec<Option<LiquidMesh>>,
 }
 
-/// The load-resolved lighting base of one placed MODD doodad. The real client fills an
-/// interior-group doodad's slot-0 words at CREATE, from the MODD record's own colour field
-/// (`0x694e90` → `6950de call 0x6a77e0(&MODD.colour, &diffuse, 0x70, &ambient, 0x60)`), and read
-/// live off the reference's abbey draws, where both decoded stands' diffuse words equal their MODD
-/// colour bytes verbatim.
+/// One MODD doodad's lighting base. The reference fills an interior doodad's words at create from
+/// the MODD colour: `0x694e90` calls `0x6a77e0`, diffuse floor `0x70`, ambient cap `0x60`.
 #[derive(Clone, PartialEq, Debug)]
 pub enum DoodadBase {
-    /// Exterior-group doodad — the sky-lit lane (day/night sun; a WMO prop takes the plain matte).
+    /// The sky-lit lane of an exterior-group doodad.
     Exterior,
-    /// Interior-group doodad: the MODD-colour base + the owning group's light refs.
+    /// An interior-group doodad: the MODD-colour base and the owning group's light refs.
     Interior(InteriorPropBase),
 }
 
-/// An interior MODD doodad's resolved base light — computed once at load, day/night-independent.
+/// An interior MODD doodad's base light, independent of the time of day.
 #[derive(Clone, PartialEq, Debug)]
 pub struct InteriorPropBase {
-    /// The ambient word: `cap96(MODD.colour)` (0–1 RGB). See [`cap96`].
+    /// The ambient word, [`cap96`] of the MODD colour, RGB 0..1.
     pub ambient: [f32; 3],
-    /// The diffuse word: `floor112(MODD.colour)` (0–1 RGB), committed as a directional lobe on the
-    /// fixed engine axis (−0.30822, −0.30822, −0.9) — never the day/night sun. See [`floor112`].
+    /// The diffuse word, [`floor112`] of the MODD colour, lit along the fixed axis
+    /// (−0.30822, −0.30822, −0.9), never the sun.
     pub diffuse: [f32; 3],
-    /// The owning group's MOLR light refs (indices into [`WmoModel::lights`]): the ONLY point lights
-    /// this doodad's committed light folds (range-gated by each light's disk attenStart/attenEnd at
-    /// spawn). Empty — a group with no MOLR — means NO point light at all, its own flame included.
+    /// The owning group's MOLR refs into [`WmoModel::lights`], the only point lights it folds
+    /// (range-gated by attenStart and attenEnd); empty means none, its own flame included.
     pub light_refs: Vec<u16>,
 }
 
-/// Per-group AABBs of the footprint faces each group actually references —
-/// [`WmoModel::group_footprint_bounds`], derived at load from the indexed vertices (not the whole
-/// position array, which may carry vertices no footprint face uses). Shared with the fixture
-/// builders so tests and the loader can never disagree on what the bounds mean.
+/// Per-group AABBs of the vertices the footprint faces index, not of every position; shared with
+/// the test fixtures.
 pub fn footprint_tri_bounds(
     footprints: &[Option<FootprintTris>],
 ) -> Vec<Option<([f32; 3], [f32; 3])>> {
@@ -252,9 +157,7 @@ pub fn footprint_tri_bounds(
         .collect()
 }
 
-/// Per-group column indexes over the footprint faces — [`WmoModel::group_footprint_grids`].
-/// Shared with the fixture builders for the same reason the bounds are: a test model and a loaded
-/// one must be indexed by identical code, or an exactness test proves nothing about the real path.
+/// Per-group column indexes over the footprint faces, shared with the test fixtures.
 pub fn footprint_tri_grids(footprints: &[Option<FootprintTris>]) -> Vec<Option<ColumnGrid>> {
     footprints
         .iter()
@@ -278,7 +181,7 @@ pub fn footprint_tri_grids(footprints: &[Option<FootprintTris>]) -> Vec<Option<C
         .collect()
 }
 
-/// Per-group column indexes over a per-group triangle set — [`WmoModel::group_collision_grids`].
+/// Per-group column indexes over a per-group triangle set.
 pub fn collision_tri_grids(tris: &[Vec<[[f32; 3]; 3]>]) -> Vec<Option<ColumnGrid>> {
     tris.iter()
         .map(|group| {
@@ -299,9 +202,7 @@ pub fn collision_tri_grids(tris: &[Vec<[[f32; 3]; 3]>]) -> Vec<Option<ColumnGrid
         .collect()
 }
 
-/// The per-group AABBs of a per-group triangle set + their union — [`WmoModel::group_collision_bounds`]
-/// and [`WmoModel::collision_bounds`], derived from the faces at load (shared with the down-ray tests,
-/// so fixtures and the loader can never disagree on what the bounds mean).
+/// Per-group AABBs of a per-group triangle set, and their union; shared with the down-ray tests.
 #[allow(clippy::type_complexity)]
 pub fn collision_tri_bounds(
     tris: &[Vec<[[f32; 3]; 3]>],
@@ -341,9 +242,8 @@ pub fn collision_tri_bounds(
     (per_group, union)
 }
 
-/// The ambient-word CAP of `0x6a77e0` (exact fixed-point arithmetic, bit-exact against both decoded
-/// abbey stands): a colour whose max channel exceeds 96 is scaled down so max = 96 — per channel
-/// `(c·scale + 255) >> 8` with `scale = round(96·255/max − 0.5)`; max ≤ 96 passes through raw.
+/// The ambient cap of `0x6a77e0`, in its fixed point: a colour whose max channel exceeds 96 scales
+/// per channel to `(c·scale + 255) >> 8`, `scale = round(96·255/max − 0.5)`; otherwise it is raw.
 pub fn cap96(c: [u8; 3]) -> [f32; 3] {
     let max = c[0].max(c[1]).max(c[2]);
     if max <= 96 {
@@ -353,41 +253,30 @@ pub fn cap96(c: [u8; 3]) -> [f32; 3] {
     c.map(|v| ((u32::from(v) * scale + 255) >> 8) as f32 / 255.0)
 }
 
-/// The diffuse-word FLOOR of `0x6a77e0`: a colour whose max channel is below `thresh` is raised —
-/// HSV round-trip re-emitting at value `thresh`, which for an RGB triple is a hue/saturation-
-/// preserving scale by `thresh/max`, **truncated** per channel. The abbey INNBENCH decode (a
-/// reference capture) exercises the raise leg live: bench MOCVs (59,65,92)/(69,63,83) raise to
-/// diffuse (107,118,168)/(139,127,168) — 63·(168/83) = 127.52 lands on 127, which truncation gives
-/// and nearest-rounding does not (machine-zero fits).
+/// The diffuse floor of `0x6a77e0`: a colour whose max channel is below `thresh` is raised by the
+/// reference's HSV round trip at value `thresh`, a scale by `thresh/max` truncated per channel.
 fn floor_raise(c: [u8; 3], thresh: u8) -> [f32; 3] {
     let max = c[0].max(c[1]).max(c[2]);
     if max >= thresh || max == 0 {
         return c.map(|v| f32::from(v) / 255.0);
     }
-    // Integer scale — truncating by construction AND exact on the max channel (a float
-    // `v · (thresh/max)` can land a hair under `thresh` and truncate to `thresh − 1`).
+    // Integer math: a float `v · (thresh/max)` can land under `thresh`, truncating to `thresh − 1`.
     c.map(|v| ((u32::from(v) * u32::from(thresh)) / u32::from(max)) as f32 / 255.0)
 }
 
-/// [`floor_raise`] at the MODD create site's diffuse threshold `0x70` (112). Max ≥ 112 passes
-/// through RAW — both decoded abbey stands do (maxes 134/141 → the diffuse word IS the MODD colour
-/// verbatim).
+/// [`floor_raise`] at the MODD create site's diffuse threshold `0x70` (112).
 pub fn floor112(c: [u8; 3]) -> [f32; 3] {
     floor_raise(c, 112)
 }
 
-/// [`floor_raise`] at the entity/footprint attach site's diffuse threshold `0xA8` (168) — the
-/// GameObject M2 lane (`0x69e4c0`, the entity twin of the ADT-MDDF `0x6a8410`). Both decoded abbey
-/// benches take the raise leg (MOCV maxes 92/83 → diffuse max exactly 168 on the wire).
+/// [`floor_raise`] at the GameObject footprint attach site's diffuse threshold `0xA8` (168),
+/// `0x69e4c0`, the entity twin of the ADT-MDDF attach at `0x6a8410`.
 pub fn floor168(c: [u8; 3]) -> [f32; 3] {
     floor_raise(c, 168)
 }
 
-/// Invert MODR: MODD index → its **instantiating** group. First referencing group wins — the
-/// reference creates a doodad once, on the first visible-group walk that names it, and that create
-/// is what fills its baked colour words. `None` = referenced by no group at all (the reference never
-/// instantiates such a MODD). This picks the interior lane's **MOLR light set**; the interior/exterior
-/// *class* is the whole referrer set's ([`resolve_doodad_bases`]), and the *cull* key is [`modr_refs`].
+/// MODD index to its first referencing group, whose MOLR set the interior lane uses. The reference
+/// creates a doodad on the first visible-group walk that names it, and never one no group names.
 fn modr_owners(doodad_count: usize, group_doodad_refs: &[Vec<u16>]) -> Vec<Option<u16>> {
     let mut owner: Vec<Option<u16>> = vec![None; doodad_count];
     for (gi, refs) in group_doodad_refs.iter().enumerate() {
@@ -400,13 +289,8 @@ fn modr_owners(doodad_count: usize, group_doodad_refs: &[Vec<u16>]) -> Vec<Optio
     owner
 }
 
-/// Invert MODR the other way: MODD index → **every** group whose refs name it. The draw loop is
-/// per *visible* group over that group's own MODR (`0x695aa0` from the visible-group walk
-/// `0x698720`), so a doodad named by N groups is reached by N independent chances to draw — it is
-/// on screen when ANY of them is in the portal PVS, not only its first. Collapsing this to the
-/// first owner is what made Blackrock's and the Great Forge's lava falls blink out by camera
-/// angle: `BLACKROCKSTATUELAVAFLOW` is named by 9–19 groups apiece and `LAVAPOTS` by 13, so all
-/// but one referrer's rooms hid a prop that the reference draws from every one of them.
+/// MODD index to every group whose MODR names it: the reference draws per visible group
+/// (`0x695aa0` from the walk at `0x698720`), so a prop shows while any of them is visible.
 fn modr_refs(doodad_count: usize, group_doodad_refs: &[Vec<u16>]) -> Vec<Arc<[u16]>> {
     let mut refs: Vec<Vec<u16>> = vec![Vec::new(); doodad_count];
     for (gi, group) in group_doodad_refs.iter().enumerate() {
@@ -422,27 +306,10 @@ fn modr_refs(doodad_count: usize, group_doodad_refs: &[Vec<u16>]) -> Vec<Arc<[u1
     refs.into_iter().map(Arc::from).collect()
 }
 
-/// Resolve every MODD placement's lighting base once, at load. Ownership follows the faithful
-/// create path: a doodad belongs to the group(s) whose **MODR** references it (the instantiate loop
-/// is per-group over MODR — never a spatial test), and the interior lane's point-light candidate
-/// set is its owning group's **MOLR** list. A MODD referenced by no group is never instantiated by
-/// the reference at all — Exterior here (the harmless default if our spawner shows it anyway).
-///
-/// **EXTERIOR WINS.** The class is *not* the first referrer's: the reference caches one
-/// `CMapDoodadDef` per (MODD index, **placement instance**) — `0x694e90` matches on
-/// `[def+0xb4] == modd` *and* `[def+0xc8] == [placement+0x7c]+1` — so every group of a placed
-/// building writes the lane of the *same* def, and the classify at `0x695aa0` makes exterior
-/// absorbing: an interior group refuses to mark a def already flagged exterior
-/// (`695ba0 test al,0x4; 695ba2 jne` → the exterior leg), while an exterior group **clears** the
-/// interior bit and sets its own (`695bbd and ecx,0xfffd; 695bc3 or ecx,0x4`). So a prop any
-/// exterior group names is sky-lit from the first frame that group is walked, and never goes back.
-/// Taking the first referrer instead pinned Booty Bay's entrance arch — named by g22 (interior) and
-/// g42 (exterior) — to the interior lane, whose whole base is the MODD colour: `#000000` there, i.e.
-/// a pure black silhouette at the town gate (`benilla-extract darkpropscan` is the
-/// corpus census).
-///
-/// `owner` is [`modr_owners`]' inversion and `refs` is [`modr_refs`]' — the latter shared with the
-/// portal-cull key ([`WmoModel::doodad_groups`]), so the lane and the cull read the same relation.
+/// Every MODD doodad's lighting base, from MODR ownership, never a spatial test; an unnamed MODD
+/// is Exterior. Exterior wins: the reference keeps one def per (MODD, placement) (`0x694e90`), and
+/// its classify (`0x695aa0`) never re-marks an exterior def interior while an exterior group
+/// clears the interior bit, so any exterior referrer makes the prop sky-lit.
 fn resolve_doodad_bases(
     doodads: &[WmoDoodad],
     groups: &[WmoGroupInfo],
@@ -462,7 +329,7 @@ fn resolve_doodad_bases(
             let Some(gi) = owner.get(di).copied().flatten() else {
                 return DoodadBase::Exterior;
             };
-            // Exterior is absorbing across the whole referrer set — not just the first referrer.
+            // Exterior is absorbing across the whole referrer set.
             let all_interior = refs
                 .get(di)
                 .is_some_and(|gs| !gs.is_empty() && gs.iter().all(interior_group));
@@ -482,7 +349,7 @@ fn resolve_doodad_bases(
         .collect()
 }
 
-/// Bevy [`AssetLoader`] decoding a WMO root `*.wmo` (+ its group files) → [`WmoModel`].
+/// Loads a WMO root and its group files into a [`WmoModel`].
 #[derive(Default, TypePath)]
 pub struct WmoModelLoader;
 
@@ -502,8 +369,7 @@ impl AssetLoader for WmoModelLoader {
         let to_io = |e: anyhow::Error| std::io::Error::other(format!("{e:#}"));
         let root = parse_wmo_root(&bytes).map_err(to_io)?;
 
-        // Root path → stem for the group files. Lowercased so the suffix strip + group URLs are
-        // consistent (MPQ resolution is case-insensitive regardless).
+        // Lowercased so the `.wmo` strip matches; MPQ lookup is case-insensitive anyway.
         let root_path = ctx.path().path().to_string_lossy().to_ascii_lowercase();
         let stem = root_path
             .strip_suffix(".wmo")
@@ -511,13 +377,9 @@ impl AssetLoader for WmoModelLoader {
             .to_string();
 
         let mut submeshes = Vec::new();
-        // Group index per submesh (parallel to `submeshes`) — the portal cull's handle on which group a
-        // render batch belongs to.
         let mut submesh_group: Vec<u16> = Vec::new();
-        // Per-group nav, pre-sized to the full group count and indexed by absolute group index so the
-        // MOPR `group` references line up even when a group file is skipped below. Bounds come from the
-        // root MOGI (available for every group); flags + portal-ref span are filled from each group
-        // header as it's read.
+        // Pre-sized to the group count so MOPR group indices line up when a group file is skipped;
+        // boxes from the root MOGI, the rest from each MOGP header.
         let mut group_nav: Vec<WmoGroupNav> = (0..root.group_count() as usize)
             .map(|gi| {
                 let (bbox_min, bbox_max) = root
@@ -538,24 +400,14 @@ impl AssetLoader for WmoModelLoader {
                 }
             })
             .collect();
-        // Per-group walking-collision triangles for the current-group down-ray, indexed by absolute
-        // group index (the flat collider below is fed from the same gather).
         let mut group_collision_tris: Vec<Vec<[[f32; 3]; 3]>> =
             vec![Vec::new(); root.group_count() as usize];
-        // Per-group camera-only triangles (DETAIL set, NOCAMCOLLIDE clear) — the down-ray's
-        // camera-void fallback set, disjoint from the walking gather above.
         let mut group_camera_only_tris: Vec<Vec<[[f32; 3]; 3]>> =
             vec![Vec::new(); root.group_count() as usize];
-        // Collidable triangles flattened across every group (raw WMO-local coords), accumulated as we
-        // read each group's bytes — no second pass / second read.
         let mut col_pos: Vec<[f32; 3]> = Vec::new();
         let mut col_idx: Vec<u32> = Vec::new();
-        // Camera/LOS gather (keeps DETAIL, drops NOCAMCOLLIDE) — a separate mesh from the walking one.
         let mut cam_pos: Vec<[f32; 3]> = Vec::new();
         let mut cam_idx: Vec<u32> = Vec::new();
-        // Per-group MODR (doodad ownership, transient — consumed into the doodad bases) + MOLR
-        // (light refs — kept on the asset: the GameObject footprint lane gates its point lobes by
-        // the hit group's list) + footprint face sets (interior groups only).
         let mut group_doodad_refs: Vec<Vec<u16>> = vec![Vec::new(); root.group_count() as usize];
         let mut group_light_refs: Vec<Vec<u16>> = vec![Vec::new(); root.group_count() as usize];
         let mut group_liquids: Vec<Option<LiquidMesh>> =
@@ -565,10 +417,8 @@ impl AssetLoader for WmoModelLoader {
         for gi in 0..root.group_count() {
             let group_url = format!("mpq://{stem}_{gi:03}.wmo");
             let Ok(gbytes) = ctx.read_asset_bytes(group_url).await else {
-                continue; // a missing/unreadable group is skipped, like the chain reader
+                continue; // a missing or unreadable group is skipped
             };
-            // Fill this group's flags + portal-ref span from its MOGP header (what the client's
-            // visibility pass reads). Bounds were seeded from MOGI above.
             if let (Some(h), Some(nav)) =
                 (wmo_group_header(&gbytes), group_nav.get_mut(gi as usize))
             {
@@ -579,8 +429,7 @@ impl AssetLoader for WmoModelLoader {
                 nav.fog_indices = h.fog_indices;
                 nav.group_liquid = h.group_liquid;
             }
-            // Walking gather once per group: the per-group down-ray face set AND the flat collider
-            // (appended with an index offset) come from the same buffers.
+            // One walking gather feeds both the per-group faces and the flat collider.
             let mut gpos: Vec<[f32; 3]> = Vec::new();
             let mut gidx: Vec<u32> = Vec::new();
             accumulate_wmo_group_collision(&gbytes, &mut gpos, &mut gidx);
@@ -599,8 +448,6 @@ impl AssetLoader for WmoModelLoader {
             col_pos.extend_from_slice(&gpos);
             col_idx.extend(gidx.iter().map(|i| i + base));
             accumulate_wmo_group_camera_collision(&gbytes, &mut cam_pos, &mut cam_idx);
-            // Camera-only gather (the walking gather's DETAIL complement) — kept per group for the
-            // down-ray's camera-void fallback.
             let (mut dpos, mut didx): (Vec<[f32; 3]>, Vec<u32>) = (Vec::new(), Vec::new());
             accumulate_wmo_group_camera_only_collision(&gbytes, &mut dpos, &mut didx);
             if let Some(tris) = group_camera_only_tris.get_mut(gi as usize) {
@@ -615,9 +462,7 @@ impl AssetLoader for WmoModelLoader {
                 }
             }
             let subs = wmo_group_submeshes(&gbytes, &root).map_err(to_io)?;
-            // This group's MODR (which MODD placements it owns/instantiates) + MOLR (which MOLT
-            // lights fold into its doodads' committed light) — the per-doodad base resolution below
-            // consumes both (MODR walked at `0x695aa0`, MOLR at `0x695c00`).
+            // The reference walks MODR at `0x695aa0` and MOLR at `0x695c00`.
             if let Some(slot) = group_doodad_refs.get_mut(gi as usize) {
                 *slot = wmo_group_doodad_refs(&gbytes);
             }
@@ -631,14 +476,8 @@ impl AssetLoader for WmoModelLoader {
                 *slot = wmo_group_liquid_mesh(&gbytes);
             }
             for sub in subs {
-                // No meshes built here: a city root's ~thousands of group batches
-                // as labeled sub-assets landed in ONE frame — the geometry ships on the submesh
-                // and the app builds each batch's mesh paced (`benilla`'s `model_forms`).
-                //
-                // Lowercase the path: Bevy's loader lookup is case-sensitive and these tables carry
-                // uppercase `.BLP`, so an uppercase extension falls back to type-based resolution —
-                // ambiguous with Bevy's built-in image loader, which spams a "Multiple AssetLoaders
-                // found" warning per texture. Lowercasing matches `BlpImageLoader`'s `blp` + dedupes case.
+                // Lowercased: Bevy's loader lookup is case-sensitive, and an uppercase `.BLP` falls
+                // to type-based resolution, ambiguous with Bevy's own image loader.
                 let texture = sub.texture.as_deref().map(|t| {
                     ctx.load::<Image>(format!(
                         "mpq://{}",
@@ -647,41 +486,36 @@ impl AssetLoader for WmoModelLoader {
                 });
                 submeshes.push(ModelSubmesh {
                     texture,
-                    skin_slot: sub.skin_slot, // always None for WMO groups (no creature skins)
-                    geoset_id: 0,             // WMO has no M2 geoset concept
-                    char_slot: None,          // WMO is never a character body
-                    icon_slot: false,         // M2-only (texture type 14)
+                    skin_slot: sub.skin_slot,
+                    geoset_id: 0,
+                    char_slot: None,
+                    icon_slot: false,
                     blend: sub.blend,
                     two_sided: sub.two_sided,
                     interior: sub.interior,
                     emissive: sub.emissive,
-                    sidn: sub.sidn, // MOMT SIDN (0x10) — the authored night-glow colour
-                    window: sub.window, // MOMT WINDOW (0x20) — the interior midpoint light
-                    additive: sub.additive, // always false for WMO (additive WMO batches deferred)
-                    env_map: false, // M2-only (the WMO env/specular overlay is a separate path)
-                    no_depth_write: false, // WMO uses the standard opaque/transparent depth state
+                    sidn: sub.sidn, // MOMT SIDN (0x10): the authored night-glow colour
+                    window: sub.window, // MOMT WINDOW (0x20): the interior midpoint light
+                    additive: sub.additive,
+                    env_map: false,
+                    no_depth_write: false,
                     no_depth_test: false,
-                    fog_policy: sub.fog_policy, // always Scene for WMO (remap_submesh's default)
-                    billboard: None,            // WMO geometry isn't billboarded
-                    alpha_anim: None,           // WMO batches carry no M2 colour/weight tracks
-                    uv_anim: None,              // …nor texture transforms
-                    uv_seq: None,               // …so no per-sequence set either (1408)
+                    fog_policy: sub.fog_policy,
+                    billboard: None,
+                    alpha_anim: None,
+                    uv_anim: None,
+                    uv_seq: None,
                     uv_rot_seq: None,
                     uv_scale_seq: None,
                     rgb_anim: None,
-                    rgb_seq: None,            // …nor M2Color tints
-                    wmo_batch: sub.wmo_batch, // the MOBA section — an interior group's lighting law
-                    ground_quad: None,        // the fx decal lane is M2-only
+                    rgb_seq: None,
+                    wmo_batch: sub.wmo_batch, // the MOBA section: an interior group's lighting
+                    ground_quad: None,
                     geometry: std::sync::Arc::new(sub),
                 });
                 submesh_group.push(gi as u16);
             }
         }
-        // Resolve every MODD placement's base once — placements, colours, MODR ownership, and MOLR
-        // light lists are all fixed in the root/groups, so nothing here is ever re-derived. Both
-        // MODR inversions come off the same refs: the first-owner one names the MOLR set the
-        // interior fold gates on, the full-set one is both the per-visible-group cull key and the
-        // exterior-wins lane test.
         let doodad_owner = modr_owners(root.doodads().len(), &group_doodad_refs);
         let doodad_groups = modr_refs(root.doodads().len(), &group_doodad_refs);
         let doodad_base = resolve_doodad_bases(
@@ -746,21 +580,11 @@ impl AssetLoader for WmoModelLoader {
     }
 }
 
-/// Apply the MLIQ **shared-tile gate** across a model's groups: a cell flagged `0x80`
-/// ([`LiquidMesh::shared`]) is claimed by TWO groups and authored in both, and exactly one of them
-/// may draw it. Both drawing means the translucent sheet composites twice over the overlap band —
-/// the visible line along the Stormwind canals (B141's water half).
-///
-/// The reference picks the winner by 2-colouring the portal graph on the depth parity of the flood
-/// that reached each group, recomputed every frame (`0x6b41c0`/`0x6b4074`/`0x6b61a0`). We pick
-/// **the lowest group index**, which is pixel-identical and needs no flood: measured over all 415
-/// corners of Stormwind's 190 shared cells, the two claimants agree exactly — the same per-vertex
-/// alpha byte (415/415) and heights within 5e-6 yd. Which one draws cannot be seen; that two draw
-/// can.
-///
-/// Cells are matched on their XY centre quantised to a hundredth of a yard — the two authors share
-/// the same MLIQ lattice, so the coordinates agree to float exactness and the quantisation is only
-/// there to make them hashable.
+/// The MLIQ shared-cell gate: a cell flagged `0x80` ([`LiquidMesh::shared`]) is authored in two
+/// groups and only one may draw it, or the sheet composites twice. The reference picks the drawer
+/// by the portal flood's depth parity each frame (`0x6b41c0`, `0x6b4074`, `0x6b61a0`); the lowest
+/// group index draws the same pixels, as both claimants carry the same alpha and heights. Cells
+/// match on their XY centre, quantised to 0.01 yd only to hash.
 fn resolve_shared_liquid_cells(group_liquids: &mut [Option<LiquidMesh>]) {
     let key = |m: &LiquidMesh, c: usize| -> Option<(i32, i32)> {
         let (cols, rows) = (m.grid[0] as usize, m.grid[1] as usize);
@@ -828,49 +652,35 @@ mod doodad_base_tests {
         }
     }
 
-    /// GOLDEN — the two abbey stands the reference trace decoded: MODD[18] colour (78,76,134) →
-    /// ambient (56,55,96) diffuse raw; MODD[24] colour (90,86,141) → ambient (61,59,96) diffuse
-    /// raw. Both bit-exact through the `0x6a77e0` fixed-point cap (scales 182 and 173).
+    /// Northshire Abbey's candle stands MODD[18] and MODD[24], as the reference commits them
+    /// through `0x6a77e0` (cap scales 182 and 173).
     #[test]
     fn cap96_matches_the_decoded_abbey_stands_bit_exact() {
         let as_bytes = |c: [f32; 3]| c.map(|v| (v * 255.0).round() as u8);
         assert_eq!(as_bytes(cap96([78, 76, 134])), [56, 55, 96]);
         assert_eq!(as_bytes(cap96([90, 86, 141])), [61, 59, 96]);
-        // max ≤ 96 passes through raw.
         assert_eq!(as_bytes(cap96([96, 40, 20])), [96, 40, 20]);
-        // The diffuse floor: max ≥ 112 is RAW (both stands), below 112 raises hue-preserving.
         assert_eq!(as_bytes(floor112([78, 76, 134])), [78, 76, 134]);
         assert_eq!(as_bytes(floor112([90, 86, 141])), [90, 86, 141]);
         let raised = as_bytes(floor112([56, 28, 14]));
-        assert_eq!(raised[0], 112); // max channel lands on the 112 value
-        assert_eq!(raised, [112, 56, 28]); // pure scale — hue/saturation preserved
-                                           // Black stays black — and that IS the reference, not just our divide-by-zero guard. The
-                                           // raise re-emits through HSV, and `RGBtoHSV(0,0,0)` gives S=0/H=−1 (`7bbcb5`/`7bbccd`) so
-                                           // `HSVtoRGB` would return the grey `(V,V,V)` (`7bbd76`) — but the caller SCALES the value
-                                           // rather than setting it (`6a78a5 fild thresh · 6a78ab fidiv max · 6a78b1 fmul V`), and
-                                           // `V·thresh/max` is 0 when V is. `6a780e cmp dl,1 / 6a7813 mov bl,1` forces max to 1 only
-                                           // to keep that `fidiv` finite. So a zero-colour interior prop commits black in the real
-                                           // client too, and the black Booty Bay arch was a LANE bug, never this.
+        assert_eq!(raised[0], 112);
+        assert_eq!(raised, [112, 56, 28]);
+        // Black stays black in the reference too: it scales the HSV value by `thresh/max`
+        // (`0x6a78a5`) and forces max to 1 only to keep that divide finite (`0x6a780e`).
         assert_eq!(as_bytes(floor112([0, 0, 0])), [0, 0, 0]);
     }
 
     #[test]
     fn floor168_matches_the_decoded_abbey_benches_bit_exact() {
-        // The reference trace's INNBENCH GameObject draws (14150796/14150859) decode to
-        // ambient = the raw MOCV (max ≤ 96 → cap96 pass-through) and diffuse = floor168(MOCV) with
-        // TRUNCATING rounding — 63·168/83 = 127.52 lands on 127 (nearest would give 128).
+        // The abbey inn benches as the reference commits them; 63·168/83 = 127.52 truncates to 127.
         let as_bytes = |c: [f32; 3]| c.map(|v| (v * 255.0).round() as u8);
         assert_eq!(as_bytes(cap96([59, 65, 92])), [59, 65, 92]);
         assert_eq!(as_bytes(cap96([69, 63, 83])), [69, 63, 83]);
         assert_eq!(as_bytes(floor168([59, 65, 92])), [107, 118, 168]);
         assert_eq!(as_bytes(floor168([69, 63, 83])), [139, 127, 168]);
-        // max ≥ 168 passes through raw.
         assert_eq!(as_bytes(floor168([200, 30, 10])), [200, 30, 10]);
     }
 
-    /// Ownership is MODR, never spatial: an interior-group doodad takes its MODD colour (cap96
-    /// ambient / floor112 diffuse) + its OWNING group's MOLR; an exterior-group doodad is sky-lit;
-    /// an unreferenced MODD (never instantiated by the reference) defaults exterior.
     #[test]
     fn modr_ownership_picks_the_lane_and_the_light_refs() {
         let doodads = vec![
@@ -883,8 +693,6 @@ mod doodad_base_tests {
         let molr = vec![vec![7u16, 9u16], vec![3u16]];
         let owner = modr_owners(doodads.len(), &modr);
         let refs = modr_refs(doodads.len(), &modr);
-        // The same inversion the portal cull keys props on: owned props name their
-        // group, the unreferenced one names none — so it is the one prop the cull can't hide.
         assert_eq!(owner, vec![Some(0), Some(1), None]);
         let bases = resolve_doodad_bases(&doodads, &groups, &owner, &refs, &molr);
         match &bases[0] {
@@ -899,12 +707,6 @@ mod doodad_base_tests {
         assert_eq!(bases[2], DoodadBase::Exterior);
     }
 
-    /// EXTERIOR WINS over every interior referrer, whatever the MODR order — the reference's def is
-    /// per (MODD, placement) and its classify makes the exterior bit absorbing (`0x695aa0`:
-    /// `695ba2 jne` refuses to re-mark interior, `695bbd/695bc3` clears interior and sets exterior).
-    /// Booty Bay's entrance arch is the live case: g22 (interior) names it FIRST and g42 (exterior)
-    /// second, its MODD colour is `#000000`, and first-referrer-wins therefore drew it as a pure
-    /// black silhouette at the town gate.
     #[test]
     fn one_exterior_referrer_makes_the_whole_prop_exterior() {
         let doodads = vec![
@@ -929,9 +731,6 @@ mod doodad_base_tests {
             "the exterior referrer wins even though an interior group names it first"
         );
         match &bases[1] {
-            // Interior-only: the lane still applies, and a zero MODD colour still commits black —
-            // the reference's own arithmetic (`0x6a77e0` forces max=1 only to dodge the divide, so
-            // the HSV raise re-emits value 0·112/1 = 0). Only its MOLR fixtures can light it.
             DoodadBase::Interior(b) => {
                 assert_eq!(b.ambient, [0.0; 3]);
                 assert_eq!(b.diffuse, [0.0; 3]);
@@ -941,13 +740,8 @@ mod doodad_base_tests {
         }
     }
 
-    /// GOLDEN, on the shipped asset that produced the report: Booty Bay's entrance arch
-    /// (`BootyBay.wmo` MODD[3], `BootyBayEntrance_02`, MODF uid 118213 at world
-    /// (-14258.29, 330.26, 44.00)) resolves **Exterior**. Its MODR referrers are g22 (interior,
-    /// first) and g42 (exterior), and its MODD colour is `#000000` — so first-referrer-wins put it
-    /// on the interior lane with an all-zero base and drew it as a pure black silhouette over the
-    /// town gate. This reads the real root + group files through the same inversions the loader
-    /// calls, so it fails the moment the lane law regresses.
+    /// Booty Bay's entrance arch, `BootyBay.wmo` MODD[3], named first by interior g22 and also by
+    /// exterior g42, with a black MODD colour.
     #[test]
     fn booty_bays_entrance_arch_is_sky_lit_not_a_black_silhouette() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -1007,9 +801,8 @@ mod doodad_base_tests {
         );
     }
 
-    /// A group with NO MOLR chunk gives its doodads an EMPTY light set — the abbey's group 3 case:
-    /// the director's stand receives zero point light, its own flame included (machine-zero in the
-    /// reference decode).
+    /// Northshire Abbey's group 3 has no MOLR, and its candle stand takes no point light in the
+    /// reference, its own flame included.
     #[test]
     fn no_molr_means_no_point_lights_at_all() {
         let bases = resolve_doodad_bases(
@@ -1025,30 +818,21 @@ mod doodad_base_tests {
         }
     }
 
-    /// A MODD named by several groups resolves to its **first** referencing group, and the mapping is
-    /// dense over the doodad list — the interior fold's MOLR set keys off this (the create that fills
-    /// the baked words runs once, on the first visible-group walk to reach it). Out-of-range MODR
-    /// entries (a malformed group) are ignored rather than panicking.
     #[test]
     fn a_shared_modd_takes_its_first_referencing_groups_molr() {
-        // g0 names doodad 2; g1 names 0 and 2; g2 names 1 — plus a ref past the end of the list.
+        // g0 names doodad 2; g1 names 0 and 2; g2 names 1, plus a ref past the end of the list.
         let modr = vec![vec![2u16], vec![0u16, 2u16], vec![1u16, 99u16]];
         assert_eq!(
             modr_owners(3, &modr),
             vec![Some(1), Some(2), Some(0)],
             "doodad 2 is named by g0 and g1 — g0 wins"
         );
-        // No groups at all ⇒ nothing is owned, and nothing is cullable.
         assert_eq!(modr_owners(2, &[]), vec![None, None]);
     }
 
-    /// The CULL key is the whole referrer set, not the first: the draw loop runs per *visible* group
-    /// over that group's MODR, so a prop several rooms name is drawn from every one of them. Keying
-    /// it to the first owner instead is what blinked Blackrock's and the Great Forge's lava falls
-    /// out by camera angle — real files name those props from 9–19 groups apiece.
     #[test]
     fn the_cull_key_is_every_referencing_group() {
-        // Same fixture as above: g0 names 2; g1 names 0 and 2; g2 names 1 + an out-of-range ref.
+        // The fixture above: g0 names 2; g1 names 0 and 2; g2 names 1 and an out-of-range ref.
         let modr = vec![vec![2u16], vec![0u16, 2u16], vec![1u16, 99u16]];
         let refs = modr_refs(3, &modr);
         assert_eq!(&*refs[0], &[1], "doodad 0 is named by g1 alone");
@@ -1058,8 +842,7 @@ mod doodad_base_tests {
             &[0, 1],
             "doodad 2 hangs in two rooms — either one draws it"
         );
-        // A group naming the same doodad twice contributes it once; no groups ⇒ no key at all (the
-        // prop is uncullable, matching `modr_owners`' `None`).
+        // A doodad named twice by one group counts once.
         assert_eq!(&*modr_refs(1, &[vec![0u16, 0u16]])[0], &[0]);
         assert!(modr_refs(2, &[])[0].is_empty());
     }

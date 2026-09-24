@@ -1,12 +1,5 @@
-//! `benilla-assets` — the bridge from the WoW 1.12.1 MPQ patch chain into Bevy's asset system.
-//!
-//! Registers an `mpq://` [`AssetSource`](bevy::asset::io::AssetSource) backed by
-//! [`benilla_formats::Chain`], so every WoW asset loads through the standard
-//! [`AssetServer`](bevy::asset::AssetServer) as a `Handle<T>` — gaining async loading, handle dedup,
-//! a dependency graph, and hot-reload for free, instead of the bespoke caches and hand-rolled
-//! worker/finalize pipeline the old client carried. The per-format
-//! [`AssetLoader`](bevy::asset::AssetLoader)s (BLP→`Image`, M2/WMO→model, ADT→tile, DBC→catalog)
-//! build on this foundation.
+//! `benilla-assets`: the WoW 1.12.1 MPQ patch chain as an `mpq://` Bevy asset source backed by
+//! [`benilla_formats::Chain`], and the per-format loaders (BLP, M2, WMO, ADT, WDT) on top of it.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -48,7 +41,7 @@ pub use adt::{chunk_to_mesh, chunks_to_mesh, AdtLoader, AdtTile, ChunkShading};
 pub use wdt::{WdtIndex, WdtIndexLoader};
 mod blp;
 pub use blp::{BlpImageLoader, BlpLoaderSettings, BlpVariant};
-/// Whether this run's GPU can eat WoW's stored DXT blocks, and the chain form that follows.
+/// Whether this GPU takes WoW's stored DXT blocks, and the chain form that follows.
 mod gpu_blp;
 pub use gpu_blp::{bc_supported, for_upload, publish_bc_support, BlpGpuSupportPlugin, UploadChain};
 mod tex_filter;
@@ -68,16 +61,14 @@ pub use wmo::{
 /// The asset-source id for MPQ-backed assets: load paths look like `mpq://World/Azeroth/foo.adt`.
 pub const MPQ_SOURCE: &str = "mpq";
 
-/// A Bevy [`AssetReader`] over the vanilla MPQ patch chain. Cheap to clone — every clone shares the
-/// one open chain ([`Chain`] reads through fresh per-call handles, so this is `Send + Sync`).
+/// A Bevy [`AssetReader`] over the MPQ patch chain; every clone shares the one open [`Chain`].
 #[derive(Clone)]
 pub struct MpqAssetReader {
     chain: Arc<Chain>,
 }
 
 impl MpqAssetReader {
-    /// Open the patch chain from a `Data` directory (or a single `.MPQ`), ready to back an
-    /// `mpq://` source.
+    /// Open the patch chain from a `Data` directory or a single `.MPQ`.
     pub fn open(data_dir: &Path) -> Result<Self> {
         Ok(Self {
             chain: Arc::new(Chain::open(data_dir)?),
@@ -90,8 +81,7 @@ impl AssetReader for MpqAssetReader {
         let raw = path
             .to_str()
             .ok_or_else(|| AssetReaderError::NotFound(path.to_path_buf()))?;
-        // Strip the sampler-mode marker ([`texture_url`]) before the archive lookup — it is part of
-        // the ASSET identity, not of the file name.
+        // The sampler-mode marker (`texture_url`) names the asset, not the archive file.
         let stripped = strip_sampler_marker(raw);
         let internal = stripped.as_deref().unwrap_or(raw);
         if !self.chain.contains(internal) {
@@ -113,7 +103,7 @@ impl AssetReader for MpqAssetReader {
         &'a self,
         path: &'a Path,
     ) -> Result<Box<PathStream>, AssetReaderError> {
-        // We load by explicit path; directory enumeration / folder-watching isn't supported.
+        // Loads are by explicit path; there is no directory listing.
         Err(AssetReaderError::NotFound(path.to_path_buf()))
     }
 
@@ -122,22 +112,12 @@ impl AssetReader for MpqAssetReader {
     }
 }
 
-/// The sampler-mode marker separator in an `mpq://` texture URL (see [`texture_url`]).
+/// The sampler-mode marker in an `mpq://` texture URL.
 const SAMPLER_MARKER: char = '@';
 
-/// Build the `mpq://` URL for a model texture at a given sampler address mode.
-///
-/// The address mode lives on the GPU sampler, which in Bevy rides the `Image`, which is keyed by
-/// asset path — so two modes of one `.blp` need two asset paths. **243 of the corpus's 4677 texture
-/// paths are asked for more than one mode** (`benilla-extract texmodescan`), so this is not a
-/// hypothetical: without it, whichever model loaded a shared sheet first would decide the mode for
-/// every later one.
-///
-/// Repeat/repeat — the overwhelming majority — keeps the bare path, so the common case is one upload
-/// and every pre-existing URL is unchanged. Any other mode gets a marker **before the extension**
-/// (`…\leaves01@cc.blp`), because Bevy selects the loader by extension and a trailing marker would
-/// stop `.blp` resolving. [`MpqAssetReader::read`] strips it back off for the archive lookup.
-/// Decision 0763.
+/// The `mpq://` URL of a model texture at a sampler address mode. Bevy keys the sampler to the
+/// `Image` and the `Image` to its path, so a mode other than repeat/repeat marks the path before
+/// the extension (`…/leaves01@cc.blp`), which must stay `.blp` to pick the loader.
 pub fn texture_url(internal: &str, wrap: (bool, bool)) -> String {
     let path = internal.replace('\\', "/").to_ascii_lowercase();
     if wrap == (true, true) {
@@ -154,27 +134,13 @@ pub fn texture_url(internal: &str, wrap: (bool, bool)) -> String {
     }
 }
 
-/// Bevy resource wrapper around the format crate's [`MapCatalog`] (`mapId` -> directory +
-/// `LoadingScreenID`), read out of `Map.dbc`.
-///
-/// The newtype exists because the orphan rule forbids `Resource` on a foreign type, and it lives
-/// here rather than in the client for the same reason the rest of this crate does: a `.dbc` table
-/// turned into something Bevy can hold is exactly this layer's job, and the three readers are the
-/// WDL streamer, the world-map UI and the loading screen — one engine, two game.
-/// The *loader* stays up top with the patch chain's plugin shell, which is what inserts it.
+/// The `Map.dbc` [`MapCatalog`] (`mapId` to directory and `LoadingScreenID`) as a Bevy resource; a
+/// newtype because the orphan rule forbids `Resource` on a foreign type.
 #[derive(Resource)]
 pub struct MapCatalogRes(pub benilla_formats::MapCatalog);
 
-/// The `mpq://` URL an authored **model** path resolves to.
-///
-/// The archive holds 1.12.1 `.mdx`/`.mdl`, the loader produces an `M2Model`, and Bevy picks a loader
-/// by extension — so every reference is normalised to one lowercase `mpq://…m2`, which is also what
-/// makes the handle dedup work (a path differing only in case or slash would load twice). The WMO and
-/// skin builders are the same rewrite for their own extensions. They sit beside [`texture_url`]
-/// because they are the same act: turning a path the game files wrote into the one URL this crate's
-/// asset source answers to.
-/// A model reference path (`.mdx`/`.mdl`, mixed case, backslashes) → its `mpq://…m2` load URL.
-/// Lowercased so case variants share one `AssetServer` handle; the physical archive file is `.m2`.
+/// A model reference path (`.mdx`/`.mdl`, any case, backslashes) as its lowercase `mpq://…m2` URL:
+/// the archive file is `.m2`, and one spelling per model keeps the handle dedup working.
 pub fn m2_url(raw: &str) -> String {
     let p = raw.to_ascii_lowercase().replace('\\', "/");
     let stem = p
@@ -185,13 +151,13 @@ pub fn m2_url(raw: &str) -> String {
     format!("mpq://{stem}.m2")
 }
 
-/// A WMO root path → its `mpq://…wmo` load URL (already `.wmo`; lowercased for handle dedup).
+/// A WMO root path as its `mpq://…wmo` URL, lowercased for handle dedup.
 pub fn wmo_url(raw: &str) -> String {
     format!("mpq://{}", raw.to_ascii_lowercase().replace('\\', "/"))
 }
 
-/// A creature skin variation → its `mpq://…blp` URL: `<model-dir>\<name>.blp`. `model_dir` is the
-/// directory of the creature's model path (where its `Monster1/2/3` skins live).
+/// A creature skin variation's `mpq://` URL, `<model-dir>/<name>.blp`: the `Monster1/2/3` skins
+/// live beside the model.
 pub fn skin_url(model_dir: &str, name: &str) -> String {
     let dir = model_dir.replace('\\', "/").to_ascii_lowercase();
     let name = name.to_ascii_lowercase();
@@ -215,17 +181,15 @@ pub fn sampler_mode_of(path: &str) -> (bool, bool) {
     }
 }
 
-/// Remove a [`texture_url`] marker, yielding the real archive path. `None` when there is none.
+/// The archive path under a [`texture_url`] marker; `None` when unmarked.
 fn strip_sampler_marker(path: &str) -> Option<String> {
     let (stem, ext) = path.rsplit_once('.')?;
     let (base, tag) = stem.rsplit_once(SAMPLER_MARKER)?;
     matches!(tag, "rc" | "cr" | "cc").then(|| format!("{base}.{ext}"))
 }
 
-/// Register the `mpq://` asset source on `app`, backed by the patch chain at `data_dir`.
-///
-/// Must be called **before** Bevy's `AssetPlugin` builds (i.e. before `DefaultPlugins`): asset
-/// sources are read when the plugin initializes the [`AssetServer`](bevy::asset::AssetServer).
+/// Register the `mpq://` source on `app`, backed by the patch chain at `data_dir`. Call it before
+/// `AssetPlugin` builds (before `DefaultPlugins`), which reads the sources.
 pub fn register_mpq_source(app: &mut App, data_dir: &Path) -> Result<()> {
     let reader = MpqAssetReader::open(data_dir)?;
     app.register_asset_source(
@@ -235,24 +199,20 @@ pub fn register_mpq_source(app: &mut App, data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Register benilla's asset loaders on `app`. Call **after** Bevy's `AssetPlugin` (loaders register
-/// into the live [`AssetServer`](bevy::asset::AssetServer)); pair with [`register_mpq_source`], which
-/// must run *before* `AssetPlugin`.
+/// Register benilla's asset loaders on `app`, after `AssetPlugin`, into its live `AssetServer`.
 pub fn register_asset_loaders(app: &mut App) {
     app.init_asset::<M2Model>();
     app.init_asset::<WmoModel>();
     app.init_asset::<AdtTile>();
     app.init_asset::<WdtIndex>();
-    // Publishes whether this device can eat DXT blocks. A plugin, because the
-    // answer only exists after `RenderPlugin::finish` — see `BlpGpuSupportPlugin`.
+    // A plugin: whether the device takes DXT blocks is known only after `RenderPlugin::finish`.
     app.add_plugins(BlpGpuSupportPlugin);
     app.register_asset_loader(BlpImageLoader);
     app.register_asset_loader(M2ModelLoader);
     app.register_asset_loader(WmoModelLoader);
     app.register_asset_loader(AdtLoader);
     app.register_asset_loader(WdtIndexLoader);
-    // The render materials' WGSL, compiled in rather than served off the host binary's asset root
-    // — same "after AssetPlugin" requirement as the loaders above, so it rides here.
+    // The materials' WGSL, compiled in; it too needs `AssetPlugin` first.
     materials::register_shaders(app);
 }
 
@@ -262,25 +222,21 @@ mod tests {
     use bevy::camera::primitives::MeshAabb;
     use bevy::tasks::block_on;
 
-    /// The sampler-mode URL round-trips, and repeat/repeat stays byte-identical to the old bare
-    /// path — so the common case keeps ONE upload and no pre-existing URL changed.
     #[test]
     fn sampler_mode_rides_the_asset_path_and_round_trips() {
         let tex = "World\\KhazModan\\Ironforge\\PassiveDoodads\\Trees\\IronForgeleaves01.blp";
-        // The default is the bare path — unchanged from before this scheme existed.
         let repeat = texture_url(tex, (true, true));
         assert_eq!(
             repeat,
             "mpq://world/khazmodan/ironforge/passivedoodads/trees/ironforgeleaves01.blp"
         );
         assert_eq!(sampler_mode_of(&repeat), (true, true));
-        // Every other mode marks the STEM, so the `.blp` extension still selects the loader.
+        // Every other mode marks the stem, so `.blp` still picks the loader.
         for wrap in [(false, false), (true, false), (false, true)] {
             let url = texture_url(tex, wrap);
             assert!(url.ends_with(".blp"), "extension must survive: {url}");
             assert_ne!(url, repeat, "a marked mode is a distinct asset path");
             assert_eq!(sampler_mode_of(&url), wrap, "round-trip {wrap:?}");
-            // ...and the marker comes back off for the archive lookup.
             assert_eq!(
                 strip_sampler_marker(url.strip_prefix("mpq://").unwrap()).as_deref(),
                 Some("world/khazmodan/ironforge/passivedoodads/trees/ironforgeleaves01.blp"),
@@ -297,7 +253,6 @@ mod tests {
         let data = benilla_formats::wow_data_or_skip!();
         let reader = MpqAssetReader::open(&data).expect("open mpq reader");
 
-        // A real file resolves and drains to its bytes through the Bevy AssetReader/Reader traits.
         let bytes = block_on(async {
             let mut r = AssetReader::read(&reader, Path::new("DBFilesClient/Spell.dbc"))
                 .await
@@ -309,7 +264,7 @@ mod tests {
         assert_eq!(&bytes[..4], b"WDBC", "Spell.dbc starts with the WDBC magic");
         assert!(bytes.len() > 1_000_000, "Spell.dbc should be sizable");
 
-        // A missing path yields NotFound — the variant Bevy relies on for meta fallback.
+        // A missing path is `NotFound`, which Bevy's meta fallback relies on.
         let missing = block_on(AssetReader::read(&reader, Path::new("does/not/exist.blp")));
         assert!(
             matches!(missing, Err(AssetReaderError::NotFound(_))),
@@ -320,7 +275,6 @@ mod tests {
     #[test]
     fn loads_a_blp_image_through_the_full_mpq_pipeline() {
         let data = benilla_formats::wow_data_or_skip!();
-        // Full pipeline, headless: mpq:// source → AssetServer → BlpImageLoader → Handle<Image>.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         register_mpq_source(&mut app, &data).expect("register mpq source");
@@ -334,7 +288,7 @@ mod tests {
             .load("mpq://Interface/Icons/Spell_Holy_ArcaneIntellect.blp");
 
         let mut got = None;
-        // Same generous ceiling as the WMO test below — parallel-session load starves the IO pool.
+        // A generous ceiling: a parallel gate run starves the IO pool.
         for _ in 0..15_000 {
             app.update();
             if let Some(img) = app.world().resource::<Assets<Image>>().get(&handle) {
@@ -356,12 +310,8 @@ mod tests {
         );
     }
 
-    /// Regression guard: `load_with_settings(Sprite)` must reach the loader on the async `mpq://`
-    /// path so a streamed tile lands as `Rgba8UnormSrgb`, not the loader's `WorldArt` default
-    /// (`Rgba8Unorm`). The minimap streams its tiles this way (`minimap.rs`), and the UI pass's
-    /// contract is sRGB textures (linearize → multiply → re-encode); a silent regression to the
-    /// gamma-space default re-encodes every tile ~2× brighter — the decision-0178 over-bright class
-    /// of bug, but for the minimap. Skips without the vanilla client data.
+    /// The minimap streams its tiles with `load_with_settings(Sprite)`; the UI pass wants sRGB, and
+    /// the `WorldArt` default would draw every tile about twice as bright.
     #[test]
     fn minimap_tile_settings_reach_the_async_loader() {
         use bevy::render::render_resource::TextureFormat;
@@ -373,9 +323,7 @@ mod tests {
         app.init_asset::<Image>();
         register_asset_loaders(&mut app);
 
-        // IN ISOLATION — the real app (minimap.rs) only ever loads a tile via
-        // `load_with_settings(Sprite)`, never a bare `load()` of the same path. Loading both here
-        // would let Bevy's path-dedup hand the second call the first's settings, masking the truth.
+        // In isolation: a bare `load()` of the same path would share the handle and its settings.
         let tile = "mpq://textures/Minimap/ea283abc0bf9637c3fad5e840a65b38b.blp";
         let server = app.world().resource::<AssetServer>().clone();
         let sprite_h: Handle<Image> =
@@ -384,7 +332,7 @@ mod tests {
             });
 
         let mut sprite_fmt = None;
-        // Same generous ceiling as the WMO test below — parallel-session load starves the IO pool.
+        // A generous ceiling: a parallel gate run starves the IO pool.
         for _ in 0..15_000 {
             app.update();
             if let Some(img) = app.world().resource::<Assets<Image>>().get(&sprite_h) {
@@ -401,10 +349,7 @@ mod tests {
         );
     }
 
-    /// The WMO interior-minimap tile grid (`crate::minimap::group_axis_grid`) verified against real
-    /// authored data: load Ironforge and check the per-group tile count each axis matches the
-    /// `md5translate.trs` ground truth — group 66 = 2×2, 44 = 1(X)×2(Y), 89 = 2(X)×1(Y), and the
-    /// small groups 1×1. Grounds the (RE-inferred) footprint→grid bake the interior renderer rests on.
+    /// Ironforge's interior minimap tile counts per group, against `md5translate.trs`.
     #[test]
     fn ironforge_group_grid_matches_trs() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -420,9 +365,7 @@ mod tests {
             .resource::<AssetServer>()
             .load("mpq://World/wmo/KhazModan/Cities/Ironforge/Ironforge.wmo");
         let mut model = None;
-        // A generous ~30 s ceiling (healthy runs finish in well under a second): the async IO
-        // pool gets starved when a parallel session runs its own full gates on this machine, and
-        // the old ~4 s budget flaked exactly then (2026-07-10, two concurrent workspace runs).
+        // About 30 s, though a healthy run takes under one: a parallel gate run starves IO.
         for _ in 0..15_000 {
             app.update();
             if let Some(m) = app.world().resource::<Assets<WmoModel>>().get(&h) {
@@ -432,7 +375,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         let m = model.expect("Ironforge loads");
-        // (group index, expected X-count, expected Y-count) — read off the trs tile names.
+        // (group, X tiles, Y tiles), read off the trs tile names.
         let grid = |ext: f32| crate::minimap_grid::group_axis_grid(ext).0;
         for &(g, ex_n, ey_n) in &[
             (1, 1, 1),
@@ -458,16 +401,14 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default());
         app.init_asset::<Image>();
         app.init_asset::<Mesh>();
-        // The M2 loader emits labeled sub-assets the skinned + animated path needs: the
-        // inverse bind poses, plus the idle `AnimationClip` + `AnimationGraph`. The real app registers
-        // these via `DefaultPlugins` (bevy_mesh's `MeshPlugin` + `AnimationPlugin`); the minimal harness
-        // registers them here so the campfire's M2 (which has bones + a Stand sequence) loads.
+        // The M2 loader emits inverse bind poses, an `AnimationClip` and an `AnimationGraph`, which
+        // `DefaultPlugins` would register.
         app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
         app.init_asset::<bevy::animation::AnimationClip>();
         app.init_asset::<bevy::animation::graph::AnimationGraph>();
-        register_asset_loaders(&mut app); // inits M2Model + registers BLP/M2 loaders
+        register_asset_loaders(&mut app);
 
-        // A doodad with embedded (hardcoded) textures — the campfire (`.mdx` ref → `.m2` physical file).
+        // The campfire: a doodad with embedded textures.
         let handle: Handle<M2Model> = app
             .world()
             .resource::<AssetServer>()
@@ -493,9 +434,8 @@ mod tests {
         assert!(has_bounds, "M2 carries authored bounds");
         assert!(textured > 0, "campfire batches reference embedded textures");
 
-        // The loader ships geometry, no meshes — the app builds the render form.
-        // Exercise both builders per batch: non-empty, and the static form must yield the Aabb
-        // the spawn side inserts explicitly (RENDER_WORLD meshes race `calculate_bounds`).
+        // The loader ships geometry; the spawn side inserts the static form's Aabb itself, as
+        // `RENDER_WORLD` meshes race `calculate_bounds`.
         for g in &geometries {
             let mesh = submesh_to_static_mesh(g);
             assert!(mesh.count_vertices() > 0, "submesh has vertices");
@@ -520,7 +460,7 @@ mod tests {
         app.init_asset::<Mesh>();
         register_asset_loaders(&mut app);
 
-        // The Goldshire Inn — a root + group WMO; the loader reads the groups via read_asset_bytes.
+        // The Goldshire Inn: a root and its group files.
         let handle: Handle<WmoModel> = app
             .world()
             .resource::<AssetServer>()
@@ -545,7 +485,6 @@ mod tests {
         );
         assert!(textured > 0, "WMO batches reference textures");
 
-        // Geometry, no meshes: the static build is the WMO's one render form.
         for g in &geometries {
             let mesh = submesh_to_static_mesh(g);
             assert!(mesh.count_vertices() > 0, "group submesh has vertices");
@@ -556,7 +495,6 @@ mod tests {
     #[test]
     fn loads_an_adt_terrain_tile_through_the_pipeline() {
         let data = benilla_formats::wow_data_or_skip!();
-        // Find an existing Elwynn-area Azeroth tile (don't hardcode exact coords).
         let reader = benilla_formats::Chain::open(&data).expect("open chain");
         let mut url = None;
         'find: for tx in 28..36u32 {
@@ -601,11 +539,7 @@ mod tests {
         let (cells, n_shading, layer_h, alpha_h, shadow_h, n_doodads) =
             info.expect("the ADT tile should load via mpq:// + AdtLoader");
 
-        // One drawn mesh per MCNK cell, never one merged slab — the exterior-scene
-        // cull's unit is the chunk, and a tile that loads as a single object cannot be culled from
-        // inside a building. The loader ships the shading (index-parallel with the chunks); the
-        // mesh itself is the app's paced `chunk_to_mesh` build — exercised per cell here. Every
-        // drawn cell must be a 145-vertex 9×9+8×8 grid.
+        // One mesh per drawn MCNK chunk, a 145-vertex 9×9 + 8×8 grid.
         assert_eq!(n_shading, cells.len(), "one ChunkShading per decoded chunk");
         let drawn: Vec<Mesh> = cells
             .iter()
@@ -640,7 +574,7 @@ mod tests {
         );
         assert!(images.get(&alpha_h).is_some(), "alpha array present");
         assert!(images.get(&shadow_h).is_some(), "shadow array present");
-        // Placement lists are carried as data (count is tile-dependent — some tiles are bare).
+        // Some tiles have no placements, so the count is only printed.
         eprintln!(
             "ADT tile loaded: {} MCNK cells, {n_doodads} doodad placements",
             drawn.len()

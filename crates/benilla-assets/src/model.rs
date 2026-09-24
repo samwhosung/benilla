@@ -1,7 +1,5 @@
-//! Shared building blocks for the M2 and WMO model loaders: the per-batch submesh type and the
-//! WoW→Bevy mesh bake. Both formats decode to a list of these (geometry + texture + blend/sidedness),
-//! with materials deferred to the spawn site (see the loader module docs) so the assets stay
-//! app-independent.
+//! What the M2 and WMO loaders share: the per-batch submesh and the WoW-to-Bevy bakes of its mesh,
+//! skeleton, attachments and animation clips. Materials are built at the spawn site.
 
 use benilla_formats::{
     BillboardKind, BoneScaleAnim, CharSkinSlot, M2Attachment, ModelAnimation, ModelBlend,
@@ -22,149 +20,83 @@ mod pose;
 pub use anims::{AnimClip, ClipEvent, ModelAnimations};
 pub use pose::{PoseBone, PoseClip, PoseNode, PoseSource, PoseTrack};
 
-/// A billboarded submesh's render data (Bevy space): the bone pivot the card rotates about (model-local
-/// — compose with the instance transform) and the billboard kind. The mesh is built **centred at
-/// `pivot`** so the spawn site can rotate it about the pivot to face the camera each frame.
+/// A billboarded batch's card in Bevy space; its mesh is centred on `pivot` (model-local).
 #[derive(Clone)]
 pub struct BillboardInfo {
     pub pivot: Vec3,
-    /// The billboard bone's index — the joint the card rides on an animated host (swinging lamp,
-    /// mount lights). On a rest-pose host the pivot alone places the card.
+    /// The billboard bone, the joint the card rides on an animated host.
     pub bone: u16,
     pub kind: BillboardKind,
-    /// The billboard bone's global-sequence scale animation (the looping glow-card pulse), if any —
-    /// sampled per-frame at the spawn site and folded into the card scale. `None` for a static card.
+    /// The bone's global-sequence scale loop (a glow card's pulse), folded into the card's scale.
     pub scale_anim: Option<BoneScaleAnim>,
-    /// The bone's per-sequence translation loops `(anim id, loop)`, keys baked to **Bevy axes** —
-    /// a model-local offset the card adds at its pivot when the spawn site arms one. Anim 0 is the
-    /// load arm's default (the questgiver `?` marker's low bob); anim 190 the marker's raised bob,
-    /// armed while the unit shows an overhead name (only the marker arms these today; see
-    /// `benilla_formats::Billboard::seq_translations`).
+    /// The bone's per-sequence translation loops `(anim id, loop)`, keys in Bevy axes: the quest
+    /// marker bobs low on anim 0, and higher on 190 while its unit shows an overhead name.
     pub seq_translations: Vec<(u16, BoneScaleAnim)>,
 }
 
-/// One render batch of a loaded model (an M2 batch or a WMO group batch): the decoded geometry,
-/// the batch's albedo texture (WorldArt), and its blend/sidedness. Carries data + metadata only —
-/// **no `Mesh` assets** (the model-lane twin of 0832's terrain rule): a labeled
-/// mesh sub-asset lands the instant the decode completes and the render world ingests the whole
-/// model in ONE frame, which is the city first-contact spike. The app builds each batch's render
-/// form paced (`benilla`'s `model_forms`) via [`submesh_to_static_mesh`] /
-/// [`submesh_to_skinned_mesh`]; the material stays a spawn-site concern as before.
+/// One render batch of an M2 or a WMO group: decoded geometry, texture and draw state, but no
+/// `Mesh` asset, since a labeled mesh sub-asset uploads the whole model in one frame. The app
+/// builds meshes paced, through [`submesh_to_static_mesh`] and [`submesh_to_skinned_mesh`].
 #[derive(Clone)]
 pub struct ModelSubmesh {
-    /// The batch's decoded geometry (model space, WoW axes) — everything the mesh builders below
-    /// need, shared across every instance of the model. `Arc` keeps the submesh clone cheap and is
-    /// the model's single resident CPU copy of the vertex data (the static render form is
-    /// GPU-only; see [`submesh_to_static_mesh`]).
+    /// The decoded geometry in WoW model space, the model's one resident CPU copy of its vertices.
     pub geometry: std::sync::Arc<RenderSubmesh>,
-    /// Embedded albedo texture, if any. `None` for creature skin slots (filled at spawn from the
-    /// display's skin variation — see [`Self::skin_slot`]).
+    /// The embedded albedo texture; `None` for a creature skin slot, filled at spawn.
     pub texture: Option<Handle<Image>>,
-    /// The creature skin variation this batch draws from (`Some(0/1/2)` ⇒ `Monster1/2/3`) when its
-    /// [`Self::texture`] is `None` — so the entity spawn site can fill it from `CreatureDisplayInfo`.
-    /// `None` for batches with their own embedded texture (all doodads/WMOs; most M2 batches).
+    /// The creature skin variation this batch draws from (`0/1/2` for `Monster1/2/3`).
     pub skin_slot: Option<u8>,
-    /// The batch's `skinSectionId` (geoset / mesh-part ID, see
-    /// [`benilla_formats::RenderSubmesh::geoset_id`]) — `group*100 + variant`. The character compositor
-    /// selects which geosets a player shows by this; `0` for a single-geoset model (creatures/doodads).
+    /// The geoset id, `group * 100 + variant`, by which the character compositor picks parts.
     pub geoset_id: u16,
-    /// The character runtime texture slot this batch carries (see
-    /// [`benilla_formats::RenderSubmesh::char_slot`]) — the spawn site fills its texture per-player from
-    /// the appearance. `None` for everything with its own texture.
+    /// The character texture slot the spawn site fills from the player's appearance.
     pub char_slot: Option<CharSkinSlot>,
     pub blend: ModelBlend,
     pub two_sided: bool,
-    /// This batch is a WMO **interior** group (see [`benilla_formats::RenderSubmesh::interior`]) — lit
-    /// by its baked MOCV with the directional sun off. `false` for M2 doodads and exterior WMO groups.
+    /// A WMO interior group's batch, lit by its baked MOCV with the sun off.
     pub interior: bool,
-    /// This batch is unlit (see [`benilla_formats::RenderSubmesh::emissive`]) — rendered fullbright:
-    /// M2 `UNLIT (0x01)` glass/glow, or WMO `UNLIT` on an exterior-group batch. `false` otherwise.
+    /// Unlit, drawn fullbright: M2 render flag `UNLIT` (0x01), or WMO `UNLIT` on an exterior group.
     pub emissive: bool,
-    /// This batch's texture is the **icon slot** (M2 texture type 14, see
-    /// [`benilla_formats::RenderSubmesh::icon_slot`]): the spawn site fills it from
-    /// `Model:ReplaceIconTexture`'s path. `false` for every other batch and all of WMO.
+    /// The icon slot (M2 texture type 14), filled from `Model:ReplaceIconTexture`'s path.
     pub icon_slot: bool,
-    /// The WMO MOMT **SIDN** night-glow colour (see [`benilla_formats::RenderSubmesh::sidn`]) — the
-    /// authored emissive RGB the shader ramps by the night fraction on lit lanes. `None` for M2.
+    /// The WMO MOMT SIDN night-glow colour, ramped by the night fraction.
     pub sidn: Option<[u8; 3]>,
-    /// WMO MOMT **WINDOW** (see [`benilla_formats::RenderSubmesh::window`]) — an interior-group
-    /// batch takes the brighter Direct/Ambient-midpoint light. `false` for M2.
+    /// WMO MOMT WINDOW: an interior batch lit by the Direct/Ambient midpoint.
     pub window: bool,
-    /// This batch blends **additively** (M2 glow cards / coronae — see
-    /// [`benilla_formats::RenderSubmesh::additive`]): the spawn site builds it with `AlphaMode::Add` so
-    /// its warm colour is added on top of the scene, not mixed with the background. `false` otherwise.
+    /// Blends additively (M2 glow cards and coronae).
     pub additive: bool,
-    /// This batch's texture coordinates are **generated, not authored** (see
-    /// [`benilla_formats::RenderSubmesh::env_map`]): a sphere-map environment coordinate off the
-    /// view-space reflection vector. The spawn site marks the material so `wow_model.wgsl` derives
-    /// the UV instead of reading the (meaningless) vertex one. `false` for WMO batches and for the
-    /// M2 batches that name a real UV channel.
+    /// Sphere-mapped: `wow_model.wgsl` derives the UV from the view-space reflection.
     pub env_map: bool,
-    /// M2 render flag **0x10 — disable depth write** (see [`benilla_formats::RenderSubmesh::no_depth_write`]):
-    /// `specialize` keeps depth-write ON for transparent batches *unless* this is set, matching the real
-    /// client (so a model's transparent cards occlude each other instead of bleeding through). `false` for WMO.
+    /// M2 render flag 0x10; unset, a transparent batch writes depth, as in the reference.
     pub no_depth_write: bool,
-    /// M2 render flag **0x08 — disable depth test** (drawn over everything). `false` for WMO.
+    /// M2 render flag 0x08: no depth test.
     pub no_depth_test: bool,
-    /// The batch's fog COLOUR policy (see [`benilla_formats::RenderSubmesh::fog_policy`]) — `Scene`
-    /// for WMO and every non-M2 batch.
+    /// The batch's fog colour policy; `Scene` for WMO.
     pub fog_policy: benilla_formats::FogPolicy,
-    /// Set when this batch rides an M2 billboard bone (glow cards, chains): the spawn site faces it to
-    /// the camera each frame. The [`Self::mesh`] is built centred at the pivot so it rotates in place.
+    /// Set when the batch rides an M2 billboard bone; its mesh is built centred on the pivot.
     pub billboard: Option<BillboardInfo>,
-    /// The batch's **animated material alpha** (decision 0130 phase 2, combined in `0x707680`):
-    /// time-varying colour-alpha/transparency-weight loops (or a dimming constant) the doodad spawn
-    /// site samples per instance into the render-alpha channel. `None` for the overwhelming majority
-    /// (both factors static-1 or statically culled). `Arc` keeps the submesh clone cheap.
+    /// The animated material alpha, colour alpha times transparency weight (`0x707680`).
     pub alpha_anim: Option<std::sync::Arc<benilla_formats::AlphaAnim>>,
-    /// The batch's **UV-animation** loop (decision 0130 phase 3; sampled in `0x714260`, applied at
-    /// `0x70b740`): the texture transform's translation track — sampled per frame into the batch
-    /// material's UV offset (flowing waterfalls, scrolling energy). `None` for the ~98.6% of models
-    /// with no texture transform and all WMO batches. The `Arc` doubles as the material-dedup
-    /// identity: every instance of a loaded model shares this allocation.
+    /// The texture transform's translation loop (sampled at `0x714260`, applied at `0x70b740`).
+    /// The `Arc` is also the material-dedup identity, shared by every instance.
     pub uv_anim: Option<std::sync::Arc<benilla_formats::UvAnim>>,
-    /// The batch's UV loop **per file sequence slot**, `Some` only where the slots disagree — the
-    /// batches for which [`Self::uv_anim`]'s single loop is structurally unable to be right,
-    /// because which loop applies depends on the sequence the *instance* is playing (decision
-    /// 1408). Like [`Self::uv_anim`], the `Arc` doubles as a material-dedup identity.
+    /// The UV loop per file sequence slot, `Some` only where slots disagree; also a dedup identity.
     pub uv_seq: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 2]>>>,
-    /// The batch's texture-transform **rotation** loop per file sequence slot
-    /// — the UI model tiles sample it off the pane's play head into the material's affine row;
-    /// no world lane reads it (no placed doodad authors one). `None` for the rest.
+    /// The texture-transform rotation loop per file sequence slot, read only by the UI model tiles.
     pub uv_rot_seq: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 4]>>>,
-    /// The scaling twin of [`Self::uv_rot_seq`].
+    /// The scale loop per file sequence slot, likewise.
     pub uv_scale_seq: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 2]>>>,
-    /// The batch's **animated RGB tint** (the M2Color colour track, time-varying only — a spell
-    /// effect's white-hot flash cooling to red). When `Some`, the static vertex tint was skipped
-    /// at parse (`benilla-formats`): the render side seeds the material's tint at the first key —
-    /// pixel-identical to the old static bake — and the material-animating lanes tick it per
-    /// frame. `None` for constant/keyless tints (the vertex bake).
+    /// The time-varying M2Color tint; when `Some`, the material carries it, not the vertex colour.
     pub rgb_anim: Option<std::sync::Arc<benilla_formats::RgbAnim>>,
-    /// The tint twin of [`Self::uv_seq`], on the same rule.
+    /// The tint loop per file sequence slot, on [`Self::uv_seq`]'s rule.
     pub rgb_seq: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 3]>>>,
-    /// The batch's MOBA section for WMO group batches ([`benilla_formats::WmoBatchClass`] — an
-    /// interior group's per-batch lighting law: INT = unlit `tex × MOCV`, TRANS = the MOCV-alpha
-    /// lit↔bake lerp, EXT = the exterior day/night law). `None` for every M2 batch.
+    /// The WMO batch's MOBA section, which picks an interior batch's lighting (INT, TRANS, EXT).
     pub wmo_batch: Option<benilla_formats::WmoBatchClass>,
-    /// The batch's flat **ground-plane quad** shape ([`benilla_formats::GroundQuad`], detected at
-    /// load — corners stay in WoW model space; consumers map through `coords::wow_to_bevy`). The
-    /// ground-fx decal lane (`benilla::ground_fx`) re-renders such parts of a base-anchored spell
-    /// effect as projected surface decals. `None` for ordinary geometry and all WMO batches.
+    /// A flat ground quad (WoW model space), which the ground-fx lane redraws as a projected decal.
     pub ground_quad: Option<benilla_formats::GroundQuad>,
 }
 
-/// Turn a [`RenderSubmesh`] (model space) into a Bevy [`Mesh`] baked to Bevy space — decision 0002,
-/// applied here at the render boundary. Prefers the authored normals (soft, outward — how WoW lights
-/// foliage); recomputes flat ones only when absent. WMO per-vertex MOCV colour is folded in when
-/// present (M2 has none). The WoW→Bevy map is a pure rotation, so it applies to normals too.
-///
-/// `usages` is the caller's lane split: the **static** form is `RENDER_WORLD`-only
-/// (nothing reads it main-side; the render world takes the buffers at extract, no resident CPU
-/// copy), while the **skinned** twin keeps the default `MAIN_WORLD | RENDER_WORLD` because the
-/// mouseover picker rays its vertices on the main world (`target::hover::ray_posed_mesh`).
+/// Bake a [`RenderSubmesh`] to a Bevy-space [`Mesh`]: authored normals, else flat ones.
 fn build_submesh_mesh(sub: &RenderSubmesh, usages: RenderAssetUsages) -> Mesh {
-    // A billboard batch is built centred at its bone pivot, so the spawn site can rotate it about that
-    // point to face the camera (the entity transform then re-places it at the pivot in the world).
+    // A billboard batch is centred on its bone pivot, so the spawn site turns it in place.
     let center = sub
         .billboard
         .as_ref()
@@ -182,15 +114,9 @@ fn build_submesh_mesh(sub: &RenderSubmesh, usages: RenderAssetUsages) -> Mesh {
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, sub.vertex_colors.clone());
     }
     if sub.normals.len() == sub.positions.len() {
-        // A billboard CARD is lit on the face it PRESENTS: a card authored
-        // back-to-front against the law's `+X`-at-the-viewer gets its plane's normals turned round
-        // here, so its shading stops swinging with the camera (the shape, the reference's own
-        // behaviour and the 279-batch population are on
-        // [`RenderSubmesh::billboard_card_faces_away`]).
-        //
-        // **Normals only — never the winding.** The 177 away-facing SINGLE-sided cards are
-        // authored placeholder geometry the reference backface-culls from every angle
-        // (`bbfacescan`), and our `cull_mode` reproduces that; re-winding them would reveal it.
+        // A card authored facing away from the viewer is lit on the face it presents, so flip its
+        // normals, never its winding: the reference culls the single-sided ones from every angle,
+        // and re-winding would show them.
         let flip = sub.billboard_card_faces_away();
         let normals: Vec<[f32; 3]> = sub
             .normals
@@ -207,22 +133,16 @@ fn build_submesh_mesh(sub: &RenderSubmesh, usages: RenderAssetUsages) -> Mesh {
     mesh
 }
 
-/// The skinned twin's per-vertex joint indices (`Uint16x4` — M2 bone indices, used directly as
-/// palette indices). **Deliberately NOT `Mesh::ATTRIBUTE_JOINT_INDEX`**: Bevy's
-/// `SKINNED` pipeline path triggers on the standard attributes being in the mesh LAYOUT — while
-/// its draw-time skin bind group resolves per ENTITY registration — so a mesh carrying them can
-/// only ever render through Bevy's skin lane. Our own attribute ids keep Bevy's `is_skinned()`
-/// false everywhere; `WowModelExt::specialize` sees them in the layout and compiles the
-/// `WOW_RIG_SKIN` path instead, which skins from the owned palette region of the shared light
-/// buffer (`rig_palette`). Shader locations 10/11 (Bevy's builtin set ends at 7).
+/// The skinned mesh's per-vertex M2 bone indices, at shader location 10. Not Bevy's
+/// `ATTRIBUTE_JOINT_INDEX`, whose presence in a layout forces Bevy's own skinning: this id makes
+/// `WowModelExt::specialize` compile the `WOW_RIG_SKIN` path, which reads our own palette.
 pub const ATTRIBUTE_WOW_JOINT_INDEX: bevy::mesh::MeshVertexAttribute =
     bevy::mesh::MeshVertexAttribute::new(
         "Wow_JointIndex",
         988_540_917,
         bevy::render::render_resource::VertexFormat::Uint16x4,
     );
-/// The skinned twin's per-vertex joint weights (`Float32x4`, normalised) — see
-/// [`ATTRIBUTE_WOW_JOINT_INDEX`].
+/// The skinned mesh's per-vertex joint weights, normalized, at shader location 11.
 pub const ATTRIBUTE_WOW_JOINT_WEIGHT: bevy::mesh::MeshVertexAttribute =
     bevy::mesh::MeshVertexAttribute::new(
         "Wow_JointWeight",
@@ -230,11 +150,8 @@ pub const ATTRIBUTE_WOW_JOINT_WEIGHT: bevy::mesh::MeshVertexAttribute =
         bevy::render::render_resource::VertexFormat::Float32x4,
     );
 
-/// A merged fader blob's per-vertex fade sphere (`center.xyz` world-space, `w` = fade radius —
-/// decision 1418): every vertex of one baked placement carries the placement's sphere, and
-/// `wow_model.wgsl` computes the faithful `doodad_fade_alpha` from it per vertex (the erode
-/// lane), replacing the per-entity MeshTag/twin/Hidden fade channels a merged draw cannot
-/// express. Own attribute id for the same reason as the joints above; shader location 12.
+/// A merged blob's per-vertex fade sphere (world centre, fade radius), the same on every vertex
+/// of one placement, from which `wow_model.wgsl` fades each placement. Shader location 12.
 pub const ATTRIBUTE_WOW_FADE_SPHERE: bevy::mesh::MeshVertexAttribute =
     bevy::mesh::MeshVertexAttribute::new(
         "Wow_FadeSphere",
@@ -242,10 +159,8 @@ pub const ATTRIBUTE_WOW_FADE_SPHERE: bevy::mesh::MeshVertexAttribute =
         bevy::render::render_resource::VertexFormat::Float32x4,
     );
 
-/// A merged interior-prop blob's per-vertex SH-probe slot (decision 1418 lane 3): the slot
-/// index every vertex of one baked placement carries, replacing the per-entity `MeshTag`
-/// payload (`wow_model.wgsl`'s `WOW_MERGED_SLOT` reads it instead of the tag bits). Shader
-/// location 13.
+/// A merged interior-prop blob's per-vertex SH-probe slot, in place of the `MeshTag` payload.
+/// Shader location 13.
 pub const ATTRIBUTE_WOW_MERGED_SLOT: bevy::mesh::MeshVertexAttribute =
     bevy::mesh::MeshVertexAttribute::new(
         "Wow_MergedSlot",
@@ -253,22 +168,14 @@ pub const ATTRIBUTE_WOW_MERGED_SLOT: bevy::mesh::MeshVertexAttribute =
         bevy::render::render_resource::VertexFormat::Uint32,
     );
 
-/// The app-facing **static** mesh build: geometry only, `RENDER_WORLD`-only
-/// usages — the render world takes the vertex buffers at extract and the main world keeps no
-/// copy. Consumers must pair it with an explicit `Aabb` computed at build time (the exterior
-/// cull fails OPEN on a missing bound, and `RENDER_WORLD` races Bevy's `calculate_bounds` —
-/// the same rule 0832 set for terrain cells).
+/// The static mesh, render-world only. Pair it with an explicit `Aabb`: a render-world mesh races
+/// Bevy's `calculate_bounds`, and the exterior cull draws a mesh that has no bound.
 pub fn submesh_to_static_mesh(sub: &RenderSubmesh) -> Mesh {
     build_submesh_mesh(sub, RenderAssetUsages::RENDER_WORLD)
 }
 
-/// Build the **skinned** twin of [`submesh_to_static_mesh`]: the same baked geometry plus the
-/// per-vertex [`ATTRIBUTE_WOW_JOINT_INDEX`] + [`ATTRIBUTE_WOW_JOINT_WEIGHT`]. These two
-/// attributes are the entire trigger for the owned-palette skinning path.
-/// When the submesh carries no skin (WMO / a boneless batch) this is identical to the static
-/// mesh — harmless, but the rigged paths are the only consumers regardless. Keeps the default
-/// `MAIN_WORLD | RENDER_WORLD` usages: the mouseover picker skins these vertices on the CPU
-/// (`target::hover`), so the main-world copy is read, not waste.
+/// The skinned mesh: the static one plus the joint attributes. It keeps its main-world copy,
+/// which the mouseover picker (`target::hover`) skins on the CPU.
 pub fn submesh_to_skinned_mesh(sub: &RenderSubmesh) -> Mesh {
     let mut mesh = build_submesh_mesh(sub, RenderAssetUsages::default());
     if sub.joints.len() == sub.positions.len() && !sub.joints.is_empty() {
@@ -284,59 +191,36 @@ pub fn submesh_to_skinned_mesh(sub: &RenderSubmesh) -> Mesh {
     mesh
 }
 
-/// One joint of a model's rest skeleton, baked to Bevy space: its parent joint index
-/// (`-1` = root → parented to the entity) and its **local** rest translation. The skinned creature
-/// path spawns one entity per joint carrying this translation; animation later drives each joint's TRS.
+/// One rest-skeleton joint in Bevy space: its parent (`-1` for the root) and local translation.
 #[derive(Clone, Copy)]
 pub struct ModelJoint {
     pub parent: i16,
     pub local_translation: Vec3,
-    /// The bone's billboard arm, if authored (M2 bone flags `0x08/0x10/0x20/0x40`). The byte law
-    /// replaces the billboarded bone's rotation IN THE PALETTE, so children — and any geometry
-    /// skinned to them — inherit the camera facing (the frost-armor sheets skin to the scale-in
-    /// CHILD of a lock-Z bone). Rigged hosts feed this to the billboard joint pass; the per-batch
-    /// card split only covers geometry skinned to the billboard bone itself.
-    ///
-    /// Authored on every bone that carries the flag, welded seam or not: the animate kernel
-    /// `0x714260` reads no vertex, weight or triangle data at all, so there is no topology gate on
-    /// the arm (decision
-    /// 0945 superseding 0935). A welded seam stays welded because the replacement is built about
-    /// the bone's own pivot, which is what makes the blended seam ring move by millimetres.
+    /// The bone's billboard arm (bone flags 0x08/0x10/0x20/0x40). The reference replaces the
+    /// bone's rotation in the palette, so its children inherit the facing, and arms every flagged
+    /// bone: the animate kernel `0x714260` reads no vertex data, so a welded seam is no gate. The
+    /// seam holds because the replacement is built about the bone's own pivot.
     pub billboard: Option<benilla_formats::BillboardKind>,
-    /// Bone flags `0x1/0x2/0x4` (see [`benilla_formats::SkeletonBone::parent_arm`]): how the
-    /// bone's effective PARENT matrix is rebuilt from the model's own root frame before it
-    /// composes. Applied by the same palette passes as `billboard`, and *before* them.
+    /// Bone flags 0x1/0x2/0x4: how the parent matrix is rebuilt from the model's root frame,
+    /// applied before the billboard arm.
     pub parent_arm: Option<benilla_formats::ParentArm>,
 }
 
-/// A model's rest skeleton in Bevy space. Built once per M2 asset; the creature path
-/// spawns a joint-entity hierarchy per instance from `joints` and shares the matching inverse bind
-/// poses ([`build_skeleton`]'s second return) across instances.
+/// A model's rest skeleton in Bevy space, shared by every instance.
 #[derive(Clone, Default)]
 pub struct ModelSkeleton {
     pub joints: Vec<ModelJoint>,
-    /// The bone whose `KeyBoneID == 4` (SpineLow) — the client's display-facing counter-twist spine
-    /// channel (`0x711f10(4, …)` in the `0x607ed0` body-facing tail): while a unit's rendered root
-    /// yaw is offset from its aim (a strafe), this subtree counter-rotates back toward the aim.
-    /// `None` when the model lacks the key-bone (beasts, props).
+    /// The KeyBoneID 4 (SpineLow) bone, which counter-twists toward the aim while the body's yaw
+    /// is off it, as in a strafe (`0x711f10(4, …)` in `0x607ed0`).
     pub spine_bone: Option<u16>,
-    /// The bone whose `KeyBoneID == 6` (Head) — the twist's head channel (`0x711f10(6, …)`), taking
-    /// the gap the spine channel leaves so the head lands back on the aim. `None` when absent.
+    /// The KeyBoneID 6 (Head) bone, which takes the rest of that twist (`0x711f10(6, …)`).
     pub head_bone: Option<u16>,
 }
 
-/// Bake a raw [`Skeleton`] into the Bevy-space [`ModelSkeleton`] + its inverse-bind-pose matrices.
-///
-/// Rig math per the reference (vanilla M2 has no inverse-bind array, rest pose is identity TRS,
-/// the **pivot encodes bind position**) composed with Bevy's joint formula
-/// (`joint_matrix = joint_global · inverse_bindpose`, which *becomes* `world_from_local`):
-/// - **inverse bind pose** `i = translate(−pivot_i)` (model→bone-local at bind),
-/// - **joint rest-local translation** = `pivot_i − pivot_parent` (pure translations, so they telescope
-///   to `pivot_i` up the chain). At rest every joint matrix collapses to the entity transform, so the
-///   creature renders exactly where the static mesh did, undeformed — even with a scaled entity
-///   transform (the two pivot translations cancel before scale acts).
-///
-/// Pivots map WoW→Bevy via [`wow_to_bevy`] (a pure rotation), so the whole skeleton lives in mesh space.
+/// Bake a [`Skeleton`] to Bevy space, with its inverse bind poses. A vanilla M2 has no
+/// inverse-bind array and an identity rest pose, and a bone's pivot is its bind position, so the
+/// inverse bind pose is `translate(−pivot)` and a joint's rest translation `pivot − parent pivot`:
+/// at rest every joint matrix is the entity transform.
 pub(crate) fn build_skeleton(skel: &Skeleton) -> (ModelSkeleton, Vec<Mat4>) {
     let pivots = skeleton_pivots(skel);
     let joints = skel
@@ -357,8 +241,7 @@ pub(crate) fn build_skeleton(skel: &Skeleton) -> (ModelSkeleton, Vec<Mat4>) {
         })
         .collect();
     let inverse_bindposes = pivots.iter().map(|p| Mat4::from_translation(-*p)).collect();
-    // A bone carries KeyBoneID `k` iff `keyBoneLookup[k]` points at it (same rule as
-    // [`upper_subtree_root`]); 4 = SpineLow, 6 = Head — the display-facing twist channels.
+    // A bone carries KeyBoneID `k` iff `keyBoneLookup[k]` points at it.
     let key_bone = |k: i16| {
         skel.bones
             .iter()
@@ -375,18 +258,13 @@ pub(crate) fn build_skeleton(skel: &Skeleton) -> (ModelSkeleton, Vec<Mat4>) {
     )
 }
 
-/// Each bone's Bevy-space bind-pose pivot (`wow_to_bevy(bone.pivot)`), in file order — the one
-/// source [`build_skeleton`] (inverse bind poses) and [`build_attachments`] (attach-point offsets)
-/// both derive from, so the two never compute a divergent pivot.
+/// Each bone's Bevy-space pivot, the one source for the joints and the attachment offsets.
 pub(crate) fn skeleton_pivots(skel: &Skeleton) -> Vec<Vec3> {
     skel.bones.iter().map(|b| wow_to_bevy(b.pivot)).collect()
 }
 
-/// One M2 attachment point (held items), baked to a **Bevy-space bone-local
-/// offset**: a child spawned under the bone's joint entity at `Transform::from_translation(offset)`
-/// sits exactly at the attach point at bind pose and rides the bone's animation thereafter.
-/// `offset` is `≈ Vec3::ZERO` on character models (the attach bones are leaves sitting exactly at
-/// the attach point — VERIFIED, direct dump of `HumanMale.m2`, `decisions/0072`).
+/// One M2 attachment point as an offset from its bone's pivot, Bevy space; about zero on
+/// character models, whose attach bones sit on the point.
 #[derive(Clone, Copy)]
 pub struct ModelAttachment {
     pub id: u16,
@@ -394,11 +272,8 @@ pub struct ModelAttachment {
     pub offset: Vec3,
 }
 
-/// The right/left **arm subtree roots** for the per-arm animation masks: each hand attachment's
-/// (id 1 = right, id 2 = left) bone walked up to its shoulder-keybone ancestor (keybones 2/3 —
-/// either; the walk just finds "the shoulder above this hand", so no left/right convention is
-/// assumed). `None` when the model lacks either hand attachment or a shoulder ancestor (beasts,
-/// props — they never play per-slot one-shots).
+/// The right and left arm subtree roots: each hand attachment's bone (1 right, 2 left) walked up
+/// to its shoulder key-bone (2 or 3).
 pub(crate) fn arm_subtree_roots(
     skel: &Skeleton,
     attachments: &[ModelAttachment],
@@ -419,26 +294,17 @@ pub(crate) fn arm_subtree_roots(
     Some((shoulder_of(1)?, shoulder_of(2)?))
 }
 
-/// The model's **upper-body split key-bone** subtree root — the client's `CGUnit+0xd5c`, selected by
-/// the capability probe `0x60ce70` (`keyBoneLookup[4]` preferred, `[6]` fallback, else the −1
-/// sentinel = no split). On HumanMale `keyBoneLookup[4]` is bone 20 (SpineLow: chest/shoulders/arms/
-/// hands/head — a subtree that provably **excludes** the legs, which hang off the pelvis sibling
-/// bone 21), so a clip masked to this subtree moves the upper body only. A bone carries KeyBoneID
-/// `k` iff `keyBoneLookup[k]` points at it, so the SpineLow bone is the one whose `key_bone == 4`
-/// (else `== 6`). `None` when the model has neither (the −1 sentinel) — the one-shot route then
-/// falls back to full-body.
+/// The upper-body subtree root, the reference's `CGUnit+0xd5c` from the probe `0x60ce70`:
+/// key-bone 4 (SpineLow), else 6 (Head). SpineLow's subtree leaves out the legs, which hang off
+/// the pelvis. `None` means no split, and a one-shot plays full-body.
 pub(crate) fn upper_subtree_root(skel: &Skeleton) -> Option<usize> {
     let bone_with = |k: i16| skel.bones.iter().position(|b| b.key_bone == k);
     bone_with(4).or_else(|| bone_with(6))
 }
 
-/// The model's **finger key-bone subtree roots** per hand `(right, left)` — the client's `CloseHand`
-/// targets. WoW rigs each hand's fingers under **key-bones 8–12 (mainhand/right)** and **13–17 (offhand/
-/// left)**; the grip pose (`HandsClosed`, AnimationData 15) is armed on exactly these when a weapon is
-/// held in that hand (`0x479660`/`0x60b590`). Only the *rigged* ones exist (HumanMale carries 11/12
-/// and 16/17; the rest are the −1 sentinel), so each entry is the set of bones actually carrying a
-/// finger key-bone in that hand's range — **empty** for a model with no finger key-bones
-/// (beasts/props), which never grip.
+/// The finger key-bones per hand `(right, left)`, 8-12 and 13-17: the reference's `CloseHand`
+/// targets, posed with `HandsClosed` (AnimationData 15) while that hand holds a weapon
+/// (`0x479660`/`0x60b590`). Empty for a model without them.
 pub(crate) fn finger_subtree_roots(skel: &Skeleton) -> [Vec<usize>; 2] {
     let roots = |lo: i16, hi: i16| -> Vec<usize> {
         skel.bones
@@ -451,7 +317,7 @@ pub(crate) fn finger_subtree_roots(skel: &Skeleton) -> [Vec<usize>; 2] {
     [roots(8, 12), roots(13, 17)]
 }
 
-/// Whether bone `i` is `root` or one of its descendants (a parent-chain walk).
+/// Whether bone `i` is `root` or one of its descendants.
 pub(crate) fn in_subtree(skel: &Skeleton, i: usize, root: usize) -> bool {
     let mut cur = i;
     loop {
@@ -469,10 +335,7 @@ pub(crate) fn in_subtree(skel: &Skeleton, i: usize, root: usize) -> bool {
     }
 }
 
-/// Bake the raw [`M2Attachment`] table into [`ModelAttachment`]s: `offset = wow_to_bevy(position) −
-/// pivot_bevy(bone)`, the bone-local offset from the joint's bind position. Records whose `bone`
-/// indexes past `pivots` are dropped (defence in depth — `benilla-m2` already range-checks against
-/// its own bone array; this guards against the skeleton/attachment parses ever disagreeing).
+/// Bake the [`M2Attachment`] table to bone-local offsets, dropping a record with a bad bone.
 pub(crate) fn build_attachments(
     attachments: &[M2Attachment],
     pivots: &[Vec3],
@@ -490,11 +353,8 @@ pub(crate) fn build_attachments(
         .collect()
 }
 
-/// One M2 animation-event **positional marker**, baked exactly like [`ModelAttachment`] (same
-/// bone-local Bevy-space offset convention — a consumer transforms it by the bone joint's live
-/// global). The client's by-4CC position queries (`0x7130e0`/`0x7131b0`) read this table first
-/// match: the missile launch points `$CSL`/`$CSR`/`$CST` (casting hand) and `$BWR` (ranged
-/// release) are the consumers here.
+/// One animation-event position, baked like [`ModelAttachment`]. The reference's by-4CC queries
+/// (`0x7130e0`/`0x7131b0`) take the first match: `$CSL`/`$CSR`/`$CST` hands, `$BWR` ranged release.
 #[derive(Clone, Copy)]
 pub struct ModelMarker {
     /// The identifier 4CC, stored forward (`*b"$CSL"`).
@@ -503,10 +363,7 @@ pub struct ModelMarker {
     pub offset: Vec3,
 }
 
-/// Bake the raw [`benilla_formats::EventMarker`] table into [`ModelMarker`]s — the same
-/// `offset = wow_to_bevy(position) − pivot_bevy(bone)` bake and the same defence-in-depth bone
-/// range check as [`build_attachments`]. File order is preserved (queries take the first ident
-/// match, the client's scan order).
+/// Bake the event markers like [`build_attachments`], in file order: queries take the first match.
 pub(crate) fn build_markers(
     markers: &[benilla_formats::EventMarker],
     pivots: &[Vec3],
@@ -524,17 +381,12 @@ pub(crate) fn build_markers(
         .collect()
 }
 
-/// A stable [`AnimationTargetId`] for bone index `bone`. The idle clip's curves and the
-/// joint entities' target ids both derive from the bone index (via a synthetic name), so they match
-/// without a real `Name` hierarchy. Scoped to one creature's joints + its shared clip.
+/// A bone's stable [`AnimationTargetId`], shared by the clips' curves and the joint entities.
 pub fn bone_target_id(bone: u16) -> AnimationTargetId {
     AnimationTargetId::from_name(&Name::new(format!("benilla_bone_{bone}")))
 }
 
-/// The WoW→Bevy basis change as a quaternion. DR 0002's map is a proper rotation (det +1); a bone
-/// rotation track is a WoW-space quat, and a rotation transforms under a basis change by **conjugation**
-/// `r·q·r⁻¹`, so this `r` is what [`build_idle_clip`] conjugates each rotation keyframe by. Derived from
-/// `wow_to_bevy` itself (its images of the basis vectors are `R`'s columns) so it can't drift from it.
+/// The WoW-to-Bevy basis change as a quaternion `r`; a rotation key converts as `r·q·r⁻¹`.
 fn wow_to_bevy_quat() -> Quat {
     Quat::from_mat3(&Mat3::from_cols(
         wow_to_bevy([1.0, 0.0, 0.0]),
@@ -543,8 +395,7 @@ fn wow_to_bevy_quat() -> Quat {
     ))
 }
 
-/// Build a keyframe curve, handling Bevy's ≥2-sample requirement: a single key (a constant channel)
-/// becomes a flat curve spanning `[0, duration]`. `None` for no keys (the channel stays at rest).
+/// A keyframe curve; one key becomes a flat curve over `[0, duration]`, as Bevy needs two.
 fn keyframe_curve<T: Animatable + Clone>(
     duration: f32,
     keys: Vec<(f32, T)>,
@@ -560,23 +411,10 @@ fn keyframe_curve<T: Animatable + Clone>(
     }
 }
 
-/// Build one sequence's [`AnimationClip`] — **and its [`PoseClip`] twin** (one walk
-/// so the two cannot drift) — from parsed raw-WoW keyframes, transforming each
-/// channel into the joints' Bevy-space `Transform`:
-/// - **translation** = the bone's rest local (`pivot − pivot_parent`) **plus** `wow_to_bevy(track)` —
-///   the M2 translation track is a delta on the pivot offset;
-/// - **rotation** = the WoW quat conjugated into Bevy space (`r·q·r⁻¹`);
-/// - **scale** = the WoW scale with axes permuted to Bevy's (magnitudes; near-always uniform anyway).
-///
-/// Always returns a clip, and a flag for whether any channel produced a **curve**. A sequence
-/// whose bones all hold bind pose still gets one — an empty clip carrying the sequence's own
-/// duration — because the clip is not only a bone pose: it is this model's carrier for the
-/// instance's **sequence clock** (which slot is playing, and how far into it), which the emitter
-/// rate/params tracks, the material-alpha loops and the GameObject state arm all resolve through.
-/// Dropping the track-less ones left 807 corpus models — the ones whose animation is authored
-/// entirely in the *emitter* tracks — with no clock at all, frozen on slot 0 at t=0 for ever.
-/// The flag is what the doodad content gate reads instead (`poses_bones`): a clip
-/// with no curves can only ever render the bind-pose mesh, so it must not spawn a rig.
+/// Build one sequence's [`AnimationClip`] and its [`PoseClip`] in one walk. The M2 translation
+/// track is a delta on the rest offset, a rotation converts as `r·q·r⁻¹`, and scale permutes axes.
+/// A sequence that poses no bone still gets a clip of its own duration, since the clip is the
+/// instance's sequence clock; the flag says whether any channel made a curve for a rig to pose.
 pub(crate) fn build_animation_clip(
     anim: &ModelAnimation,
     skeleton: &ModelSkeleton,
@@ -643,19 +481,13 @@ pub(crate) fn build_animation_clip(
         });
     }
     if !any {
-        // Bevy derives a clip's duration from its curves; with none, the sequence's own band
-        // length is the clock's period — without it the player would wrap on a 0-second loop
-        // (a modulo by zero) and the clock would never leave t=0, which is the whole defect.
+        // Bevy takes a clip's duration from its curves; with none, the clock would never leave 0.
         clip.set_duration(anim.duration.max(1e-3));
     }
     (clip, pose, any)
 }
 
-/// Build the weapon-grip **overlay clip** from clamped finger poses ([`benilla_formats::hand_grip_finger_poses`]):
-/// a single constant rotation key per finger key-bone, conjugated into Bevy space with the same `r·q·r⁻¹`
-/// as [`build_animation_clip`]. Played masked to one hand's finger subtrees, it holds those fingers curled
-/// over the gait (rotation only — the fingers don't translate). Empty `poses` → an empty clip (the caller
-/// builds no grip node).
+/// The weapon-grip overlay: one constant rotation per finger bone, played masked to one hand.
 pub(crate) fn build_grip_clip(poses: &[(u16, [f32; 4])]) -> (AnimationClip, PoseClip) {
     let r = wow_to_bevy_quat();
     let mut clip = AnimationClip::default();
@@ -678,12 +510,7 @@ pub(crate) fn build_grip_clip(poses: &[(u16, [f32; 4])]) -> (AnimationClip, Pose
     (clip, pose)
 }
 
-/// The [`BillboardInfo`] for a submesh that rides a billboard bone (Bevy space): the pivot to rotate
-/// about. `None` for ordinary geometry. Pairs with [`build_submesh_mesh`], which centres the mesh.
-///
-/// It used to also derive the card's resting plane normal from its first triangle. Nothing has read
-/// that since the camera-basis law replaced the facet-normal card (0788's family), so it is deleted
-/// rather than left as a field that reads as load-bearing.
+/// The [`BillboardInfo`] of a submesh that rides a billboard bone, in Bevy space.
 pub(crate) fn billboard_info(sub: &RenderSubmesh) -> Option<BillboardInfo> {
     let bb = sub.billboard.as_ref()?;
     Some(BillboardInfo {
@@ -691,8 +518,7 @@ pub(crate) fn billboard_info(sub: &RenderSubmesh) -> Option<BillboardInfo> {
         bone: bb.bone,
         kind: bb.kind,
         scale_anim: bb.scale_anim.clone(),
-        // Translation values are model-space offsets — bake each key to Bevy axes here (scale keys
-        // above stay raw: per-axis factors, not vectors).
+        // Translation keys are vectors and take Bevy axes; the scale keys stay per-axis factors.
         seq_translations: bb
             .seq_translations
             .iter()
@@ -707,9 +533,7 @@ pub(crate) fn billboard_info(sub: &RenderSubmesh) -> Option<BillboardInfo> {
     })
 }
 
-/// A global-sequence bone channel baked to Bevy space: the free-clock loop the runtime samples at
-/// `(model_time mod period)` and writes onto the joint. `period` and key times are **seconds**; values
-/// are already in the joints' Bevy `Transform` frame. See [`GlobalBone`].
+/// A global-sequence bone channel in Bevy space, a free-running loop; times in seconds.
 #[derive(Clone)]
 pub struct GlobalSeqChannel<T> {
     pub period: f32,
@@ -717,8 +541,7 @@ pub struct GlobalSeqChannel<T> {
 }
 
 impl<T: Copy> GlobalSeqChannel<T> {
-    /// The two keys bracketing `t` (wrapped into `[0, period]`) and the fraction between them. Clamps to
-    /// the end keys (WoW authors the first/last key at the loop endpoints, so there is no wrap gap).
+    /// The keys around `t` mod the period, clamped at the end keys, which sit on the loop's ends.
     fn bracket(&self, t: f32) -> (T, T, f32) {
         let period = self.period.max(1e-3);
         let t = t.rem_euclid(period);
@@ -751,9 +574,7 @@ impl GlobalSeqChannel<Quat> {
     }
 }
 
-/// A bone's global-sequence channels baked to Bevy space (see [`GlobalSeqChannel`]) — any of
-/// translation / rotation / scale, each on its own free clock. The runtime writes only the driven
-/// components onto the bone's joint entity, leaving the rest to the playing animation.
+/// A bone's global-sequence channels; only the driven ones override the playing animation.
 #[derive(Clone)]
 pub struct GlobalBone {
     pub bone: u16,
@@ -762,10 +583,7 @@ pub struct GlobalBone {
     pub scale: Option<GlobalSeqChannel<Vec3>>,
 }
 
-/// Bake the raw [`benilla_formats::GlobalSeqBone`] channels into Bevy-space [`GlobalBone`]s, applying
-/// the same per-channel transforms as [`build_animation_clip`]: translation = the bone's rest-local
-/// (`pivot − pivot_parent`) plus `wow_to_bevy(track)`; rotation conjugated `r·q·r⁻¹`; scale axis-permuted
-/// to Bevy's. Times/periods convert ms → seconds.
+/// Bake the global-sequence channels with [`build_animation_clip`]'s transforms, ms to seconds.
 pub(crate) fn build_global_bones(
     gseq: &[benilla_formats::GlobalSeqBone],
     skeleton: &ModelSkeleton,
@@ -814,27 +632,12 @@ pub(crate) fn build_global_bones(
         .collect()
 }
 
-/// Build ONE mesh from many placed static submeshes — the transforms baked into the vertices
-/// (the production blob build, 1418; the retired `WOW_MEGA_STATIC` bracket's unfaded twin died
-/// with it): same attribute recipe as [`submesh_to_static_mesh`], concatenated, with each part's
-/// placement transform applied to positions and its rotation to normals (placements scale
-/// uniformly, so directions survive), plus the per-vertex [`ATTRIBUTE_WOW_FADE_SPHERE`] (one
-/// sphere per PART, replicated onto each of its vertices). `slots` (index-parallel with `parts`
-/// when `Some`) additionally bakes each part's SH-probe slot as [`ATTRIBUTE_WOW_MERGED_SLOT`] —
-/// the interior-prop lane. Parts lacking vertex colours pad white when any part has them — one
-/// attribute set must cover the whole concatenation.
-///
-/// **The mesh is recentred on its union-AABB centre** and that world centre is returned last:
-/// the caller places the entity AT the centre (`Transform::from_translation`), and the returned
-/// min/max are mesh-LOCAL for its `Aabb`. A world-baked mesh on `Transform::IDENTITY` sorts the
-/// entity at the WORLD ORIGIN in Bevy's transparent phase — ~9 400 yd out, drawn first among
-/// ALL transparent content with the twin's depth-write ON, so a feathering blob's translucent
-/// pixels depth-killed every transparent entity drawn after it (a per-entity fader behind a
-/// 20 %-alpha merged fence vanished outright, popping in only when the sightline cleared the
-/// segment). Centre-sort restores the same location-sort semantics every
-/// per-entity draw has (whose sort key is its placement origin). The fade spheres stay
-/// WORLD-space — the shader compares them against the camera, never against mesh-local
-/// positions — so the recentring does not touch them.
+/// One mesh from many placed static parts, transforms baked in (normals take only the rotation,
+/// as placements scale uniformly), each vertex carrying its part's fade sphere and, with `slots`,
+/// its SH-probe slot; missing normals and colours pad (up, white). Returns the mesh, its local
+/// bounds and its world centre, where the caller must place the entity: Bevy sorts transparent
+/// draws by entity origin, and a mesh left at the world origin draws first and depth-hides the
+/// transparent draws behind it. The fade spheres stay world-space.
 pub fn merged_static_mesh_faded(
     parts: &[(std::sync::Arc<RenderSubmesh>, Transform)],
     spheres: &[Vec4],
@@ -873,9 +676,6 @@ fn merged_static_mesh_impl(
                 normals.push(if flip { -b } else { b }.normalize_or_zero().to_array());
             }
         } else {
-            // The lone compute_normals fallback path never merges (its models are rare and the
-            // bracket tolerates flat shading there): pad up, face normals are close enough for a
-            // measurement build.
             normals.extend(std::iter::repeat_n([0.0, 1.0, 0.0], sub.positions.len()));
         }
         uvs.extend(sub.uvs.iter().copied());
@@ -920,10 +720,7 @@ fn merged_static_mesh_impl(
         }
     }
     mesh.insert_indices(Indices::U32(indices));
-    // Recentre on the union-AABB centre (see `merged_static_mesh`'s doc): positions become
-    // mesh-local, min/max follow, the centre goes back to the caller for the entity Transform.
-    // Guard the empty accumulation (no parts) — a MAX/MIN sentinel centre would explode.
-    // (`mn > mx` iff the vertex loop never ran; `positions` has been moved into the mesh.)
+    // Recentre on the union-AABB centre; with no vertices (`mn > mx`) the centre is the origin.
     let center = if mn.x > mx.x {
         Vec3::ZERO
     } else {
@@ -948,7 +745,7 @@ fn merged_static_mesh_impl(
 mod tests {
     use super::*;
 
-    /// One sequence record, `bones` supplied by the caller — everything else at a neutral value.
+    /// One sequence record with the given bones, the rest neutral.
     fn sequence(duration: f32, bones: Vec<benilla_formats::BoneKeys>) -> ModelAnimation {
         ModelAnimation {
             anim_id: 0,
@@ -971,13 +768,7 @@ mod tests {
         }
     }
 
-    /// A sequence whose bones hold bind pose still becomes a clip — an EMPTY one carrying the
-    /// sequence's own duration — because the clip is this model's carrier for the instance's
-    /// **sequence clock**. Dropping it left 807 corpus models whose animation is
-    /// authored purely in their emitter tracks with no clock at all: no player, so no slot and no
-    /// time, so every per-sequence track read file slot 0 at t = 0 for ever. The duration is the
-    /// load-bearing half — Bevy derives a clip's period from its curves, and a 0-second period
-    /// would wrap the player's `seek_time` by a modulo-zero and never leave t = 0.
+    /// A clip with no curves still carries its sequence's duration, or its clock never advances.
     #[test]
     fn a_boneless_sequence_still_yields_a_clock_clip() {
         let skeleton = ModelSkeleton {
@@ -993,7 +784,7 @@ mod tests {
             "the clock's period is the sequence's own band, not 0: {}",
             clip.duration()
         );
-        // The flag is what the doodad content gate reads: a clock-only clip must never spawn a rig.
+        // The flag gates the rig: a clock-only clip must never spawn one.
         let moving = benilla_formats::BoneKeys {
             bone: 0,
             translation: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [0.0, 0.0, 1.0])],
@@ -1004,9 +795,7 @@ mod tests {
         assert!(poses_bones, "a keyed track ⇒ a real pose");
     }
 
-    /// A [`GlobalSeqChannel`] samples with linear interpolation, clamps at the endpoint keys, and wraps
-    /// on its period — the eye-blink shape: `0` (open) held, a fast ramp to `1` (shut), back to `0`, and
-    /// the whole thing repeating every `period`. Models the real eyelid keys (ms → seconds).
+    /// The eye-blink shape from a real eyelid track: open, a fast ramp shut, open, repeating.
     #[test]
     fn global_seq_channel_samples_and_wraps() {
         let ch = GlobalSeqChannel {
@@ -1040,8 +829,6 @@ mod tests {
         );
     }
 
-    /// The WoW→Bevy rotation quat must reproduce `wow_to_bevy` on vectors — it's the same rotation, so
-    /// `r·v` equals the coordinate map. (Guards against `wow_to_bevy_quat` drifting from `wow_to_bevy`.)
     #[test]
     fn rotation_quat_matches_the_coordinate_map() {
         let r = wow_to_bevy_quat();
@@ -1055,9 +842,7 @@ mod tests {
         }
     }
 
-    /// A bone rotation about WoW **up** (+Z) must conjugate to a rotation about Bevy **up** (+Y) by the
-    /// same angle — the load-bearing check for the `r·q·r⁻¹` conjugation + the `[x,y,z,w]` quat order.
-    /// (A wrong conjugation/sign/order is exactly the "plausible but twisted creature" failure.)
+    /// Pins the conjugation and the `[x, y, z, w]` key order.
     #[test]
     fn wow_up_yaw_conjugates_to_bevy_up_yaw() {
         let r = wow_to_bevy_quat();
@@ -1074,7 +859,6 @@ mod tests {
         );
     }
 
-    /// Conjugating the identity rotation is the identity (a sanity floor for the conjugation).
     #[test]
     fn identity_rotation_conjugates_to_identity() {
         let r = wow_to_bevy_quat();
@@ -1082,21 +866,9 @@ mod tests {
         assert!(id.dot(Quat::IDENTITY).abs() > 0.9999, "got {id:?}");
     }
 
-    /// **A welded billboard bone still reaches the palette with its arm** (
-    /// superseding 0935's gate) — on the real shipped asset, the director's own pauldron.
-    ///
-    /// `LShoulder_Plate_PVPAlliance_A_01.m2` authors 3 bones: a plain root and two spherical
-    /// billboard spikes whose 8-vertex 50/50 seam rings stitch them to the body. 0935 dropped
-    /// their arm on exactly that welding. The animate kernel `0x714260` reads no vertex, weight or
-    /// triangle data at all — over its whole extent there is a single `movzx byte ptr`
-    /// (`0x7152ea`), the arm-selector map — so no such gate exists in the reference. The seam
-    /// survives because the replacement is built about the bone's own pivot, not because the arm
-    /// is skipped.
-    ///
-    /// The predicate itself is still live and still correct where it belongs: the per-batch **card
-    /// split** refuses to lift a welded bone's geometry into its own draw. This test pins
-    /// that the two lanes now disagree *on purpose* — welded for the card split, faced by the
-    /// palette. Skips when the client isn't installed (the repo ships no assets).
+    /// The shipped pauldron `LShoulder_Plate_PVPAlliance_A_01.m2` welds two spherical billboard
+    /// bones to the body with 50/50 seam rings: the card split refuses to lift them, and the
+    /// palette faces them anyway, since `0x714260` reads no vertex data.
     #[test]
     fn a_welded_billboard_bone_still_reaches_the_palette_with_its_arm() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -1104,8 +876,7 @@ mod tests {
         let path = "Item\\ObjectComponents\\Shoulder\\LShoulder_Plate_PVPAlliance_A_01.m2";
         let bytes = chain.read_file(path).expect("read the pauldron");
         let raw = benilla_formats::parse_m2_skeleton(&bytes).expect("parse its skeleton");
-        // The asset really does author two spherical arms — otherwise this test would pass on a
-        // build that had simply stopped parsing bone flags.
+        // Two authored arms, so the test cannot pass on a build that stopped parsing bone flags.
         assert_eq!(
             raw.bones.iter().filter(|b| b.billboard.is_some()).count(),
             2,
@@ -1128,15 +899,9 @@ mod tests {
         );
     }
 
-    /// **The mount seat's parent arm survives the bake** — the load-bearing case, on the asset
-    /// that decides it.
-    ///
-    /// `RidingHorse.m2` attachment 0 (the rider seat) rides bone 30, `flags = 0x6` = ignore parent
-    /// rotation + scale. That is why a galloping horse never rocks its rider: the seat's basis is
-    /// replaced by the mount's own root basis before the rider's frame is built from it, so the
-    /// spine's ~21° stride swing is discarded at the saddle while the seat still *translates* with
-    /// it (the copy-root leg `0x714a18`). Every vanilla player mount is `0x4`, `0x6`, or has a
-    /// seat whose ancestors don't rotate.
+    /// `RidingHorse.m2`'s rider seat (attachment 0) rides bone 30, flags 0x6: the mount's root
+    /// basis replaces the seat's, so the gallop's spine swing reaches the rider as translation
+    /// only (the copy-root leg `0x714a18`).
     #[test]
     fn the_riding_horse_seat_bone_carries_the_root_basis_arm() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -1160,7 +925,7 @@ mod tests {
             }),
             "the seat takes the mount's own root basis — the gallop reaches it as translation only"
         );
-        // The spine bones it hangs off carry no arm: they are what supplies the discarded swing.
+        // The spine bones above it carry no arm; they supply the swing.
         assert!(
             built.joints[23].parent_arm.is_none() && built.joints[25].parent_arm.is_none(),
             "the swinging spine bones are ordinary"

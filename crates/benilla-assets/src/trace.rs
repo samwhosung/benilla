@@ -1,30 +1,9 @@
-//! The shared debug-trace sink behind `WOW_MOVE_TRACE=<path>`: one file, one clock, written by
-//! the player mover's frame lines (`benilla::player`'s `move_trace`), its outbound wire lines
-//! (`snd`), the anim driver's event lines (`benilla::creature_anim`), and the remote-replay lines
-//! (`rly`/`run`, `benilla::net::motion`) — so the layers interleave on a common timeline and a feel
-//! report ("it snaps when I land") can be read across all of them.
-//!
-//! **The two wire tags are `in` and `out`, and between them every packet is accounted for by
-//! name.** `in` is the full inbound opcode stream; `out` is the full outbound one,
-//! written by the write thread from the writer's own post-write log — so an `out`
-//! line is a *transmission*, where the mover's `snd` line is a decision taken before the command is
-//! even queued and `wire` carries only failures. Each file opens with a
-//! `# t0=<unix epoch>` header so **two clients' traces align with each other**, which is what a
-//! sender-vs-observer question needs. Costs one `OnceLock` read per call when the env var is unset.
-//!
-//! **It lives down here, below both sides of decision 1160's line, because both sides write to it**
-//! — the engine's billboard/zfill/particle traces and the game's mover and wire traces share one
-//! file and one clock, which is the whole point of it. An instrument at the *top* of the stack
-//! could not be called by the engine at all; a leaf with no dependencies can be called by
-//! everything. It carries no domain knowledge: a tag, a message, a mutex and a file.
-//!
-//! **`WOW_MOVE_TRACE_TAGS="move,snd,in"` narrows it to those tags** (unset = everything). This is
-//! not tidiness: every line is an unbuffered `write` under one global mutex on the main thread, so a
-//! busy tag distorts the run it is meant to measure. A 600-yd fall probe wrote
-//! ~4,200 lines/s, nearly all of them `card`, and the `move` line's own `t=` then carried whatever
-//! the queue ahead of it cost — frames read back as 0.011 s with 2.86 yd of travel, or 0.040 s with
-//! 0.96 yd, against a physics integration that was exact. A trace whose clock cannot be trusted for
-//! per-frame timing is half an instrument; filtering to the tags the question needs gives it back.
+//! The shared debug-trace sink behind `WOW_MOVE_TRACE=<path>`: one file and one clock for every
+//! layer's tagged lines, engine and game alike, so it sits below both. `in` and `out` are the full
+//! inbound and outbound opcode streams; `out` is written after the send, where the mover's `snd`
+//! is a decision before queueing. Each file opens with a `# t0=<unix epoch>` header so two
+//! clients' traces align. `WOW_MOVE_TRACE_TAGS="move,snd,in"` keeps only those tags: every line is
+//! an unbuffered write under one mutex on the main thread, so a busy tag skews every `t=`.
 
 use std::fs::File;
 use std::io::Write;
@@ -44,10 +23,7 @@ fn sink() -> Option<&'static Mutex<Sink>> {
         let mut out = File::create(&path)
             .map_err(|e| eprintln!("dbg-trace: cannot create {path}: {e}"))
             .ok()?;
-        // The wall-clock epoch of this file's `t=0`, so **two traces can be read against each other**
-        // — a sender's `snd` lines beside an observer's `rly`/`run` lines from a different process.
-        // `t=` alone is per-process seconds and says nothing across clients; with
-        // this header, wall time is `t0 + t`.
+        // Wall time is `t0 + t`, which aligns the traces of two processes.
         let t0_wall = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64());
@@ -60,11 +36,10 @@ fn sink() -> Option<&'static Mutex<Sink>> {
     .as_ref()
 }
 
-/// The optional tag allow-list from `WOW_MOVE_TRACE_TAGS`; `None` (unset or empty) = keep everything.
+/// The tag allow-list from `WOW_MOVE_TRACE_TAGS`; `None`, unset or empty, keeps everything.
 static TAGS: OnceLock<Option<Vec<String>>> = OnceLock::new();
 
-/// Whether `tag` survives the allow-list. Checked **before** the mutex, so a filtered-out tag costs
-/// a slice compare rather than a lock and a syscall — which is the whole point (see the module note).
+/// Whether `tag` survives the allow-list, checked before the mutex so a filtered tag takes no lock.
 fn tag_allowed(tag: &str) -> bool {
     TAGS.get_or_init(|| {
         let raw = std::env::var("WOW_MOVE_TRACE_TAGS").ok()?;
@@ -79,13 +54,12 @@ fn tag_allowed(tag: &str) -> bool {
     .is_none_or(|allow| allow.iter().any(|t| t == tag))
 }
 
-/// Whether the trace is enabled — lets callers skip building their line when it's off.
+/// Whether the trace is on, so a caller can skip building its line.
 pub fn enabled() -> bool {
     sink().is_some()
 }
 
-/// Whether this *tag* is being written — [`enabled`] plus the allow-list, for a caller whose line is
-/// expensive to build (a per-frame `format!` over a hot loop) and which is filtered out anyway.
+/// [`enabled`] plus the allow-list, for a caller whose line is expensive to build.
 pub fn enabled_for(tag: &str) -> bool {
     enabled() && tag_allowed(tag)
 }

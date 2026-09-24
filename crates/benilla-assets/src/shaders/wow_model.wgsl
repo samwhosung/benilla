@@ -6,7 +6,7 @@
 // 1); M2's one FFP light site (`70bdf6`) runs only with that cvar off. Clutter and WMO are the FFP
 // light (GL_LIGHTING, GL_LIGHT0, GL_COLOR_MATERIAL); clutter's normal is the terrain normal under
 // the tuft, which the reference writes onto the clutter vertex.
-// Deviation: no specular term (the M2 per-material shininess is only inferred) and no WMO
+// Not built: a specular term (the M2 per-material shininess is only inferred) and the WMO
 // per-group authored colour.
 
 #import bevy_pbr::{
@@ -185,8 +185,8 @@ fn point_light_sum(P: vec3<f32>, N: vec3<f32>, anchor: vec3<f32>) -> vec3<f32> {
 
 // The centre of the MCNK chunk under P, the light anchor for world-merged clutter, since the
 // reference gathers lights per terrain chunk (mirrored in terrain.wgsl). WoW x/y are Bevy −z/−x
-// and the grid is symmetric, so snapping Bevy x/z lands on the same cells. Deviation: the height
-// is the vertex's own, not the chunk record's, because lights sit near the surface.
+// and the grid is symmetric, so snapping Bevy x/z lands on the same cells. The height is the
+// vertex's own, not the chunk record's: lights sit near the surface.
 fn mcnk_cell_anchor(P: vec3<f32>) -> vec3<f32> {
     let cell = 533.33333 / 16.0;
     let half = 32.0 * 533.33333;
@@ -695,8 +695,8 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
 
     // The hover/target highlight (tag bit 31): the scene's committed ambient
     // (`0x614576`-`0x6145bd`), added to the batch colour inside the final clamp, lit or unlit
-    // (`c29`). Deviation: sampled live, where the reference holds the value sampled when the
-    // highlight began; a unit's tag has no slot to hold a colour, and the ambient moves slowly.
+    // (`c29`). Sampled live, where the reference holds the value sampled when the highlight
+    // began: a unit's tag has no slot to hold a colour, and the ambient moves slowly.
     let highlight = select(vec3<f32>(0.0), wow_light.light_ambient.rgb, highlighted);
     // The FFP combine: the light sum (lit, point lights, emission) clamps first and the texture
     // modulates it, `tex × clamp(C·sum + emission)`, with C the GL_COLOR_MATERIAL colour (MOCV on

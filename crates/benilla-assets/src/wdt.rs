@@ -1,12 +1,6 @@
-//! WDT → map tile-index asset loader.
-//!
-//! Decodes a map's tiny `.wdt` into a [`WdtIndex`] — the 64×64 `MAIN` tile-existence grid the
-//! terrain streamer consults before requesting any `.adt`: open ocean authors no
-//! tiles, and probing them wholesale spammed asset-server NotFound errors on every boat crossing.
-//! It also carries the map's **global WMO** where there is one: on the 20 shipped
-//! maps that author no terrain at all, that single placement is the entire world.
-//! The parse itself is `benilla-wdt`'s [`WdtReader`] (oracle-tested in the 0021 migration); this
-//! module only wraps it in the Bevy asset machinery.
+//! WDT loader: a map's 64×64 `MAIN` tile-existence grid, which the terrain streamer checks before
+//! requesting an `.adt` (open ocean authors none), and its global WMO, the whole world on a map
+//! with no terrain.
 
 use benilla_formats::{GlobalWmo, WdtFile, WdtReader, WowVersion};
 use bevy::asset::io::Reader;
@@ -18,23 +12,21 @@ use bevy::reflect::TypePath;
 pub struct WdtIndex(WdtFile);
 
 impl WdtIndex {
-    /// Whether tile `(tile_x, tile_y)` has an `.adt` (`MAIN` flag bit 0) — the same index order as
-    /// the `Map_<tile_x>_<tile_y>.adt` file names and [`benilla_formats::world_to_tile`].
-    /// Out-of-range ⇒ `false`.
+    /// Whether tile `(tile_x, tile_y)` has an `.adt` (`MAIN` flag bit 0), in the order of the
+    /// `Map_<tile_x>_<tile_y>.adt` names.
     pub fn has_tile(&self, tile_x: u32, tile_y: u32) -> bool {
         self.0
             .get_tile(tile_x as usize, tile_y as usize)
             .is_some_and(|t| t.has_adt)
     }
 
-    /// The map's single global building, on a map with no terrain (`MPHD` bit 0) — see
-    /// [`GlobalWmo`]. `None` on an ADT map.
+    /// The single global building of a map with no terrain (`MPHD` bit 0); `None` on an ADT map.
     pub fn global_wmo(&self) -> Option<&GlobalWmo> {
         self.0.global_wmo()
     }
 }
 
-/// Bevy [`AssetLoader`] decoding a vanilla `*.wdt` → [`WdtIndex`].
+/// Loads a `*.wdt` into a [`WdtIndex`].
 #[derive(Default, TypePath)]
 pub struct WdtIndexLoader;
 
@@ -64,9 +56,7 @@ impl AssetLoader for WdtIndexLoader {
 mod tests {
     use super::*;
 
-    /// A minimal synthetic WDT: MVER + a MAIN grid with exactly two tiles flagged present.
-    /// Pins the parse AND the index order ([`WdtIndex::has_tile`] is `(tile_x, tile_y)`, the
-    /// on-disk grid is row-major `y * 64 + x`).
+    /// The on-disk grid is row-major, `y * 64 + x`.
     #[test]
     fn parses_main_grid_in_tile_index_order() {
         let mut buf = Vec::new();

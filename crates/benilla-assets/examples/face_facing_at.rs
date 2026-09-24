@@ -1,25 +1,13 @@
-//! Which way do the collidable faces under a world pin actually FACE — and would the reference
-//! block on them?
+//! Every walking-collidable WMO face under a world pin, with its height, its authored normal
+//! against a fall, and whether the reference blocks on it.
 //! `cargo run -p benilla-assets --example face_facing_at -- <map> <x> <y> <z> [wmo-substring]`
 //! e.g. `face_facing_at Kalimdor -8137.9 -4897.2 2.0 caverns`.
 //!
-//! The reference's movement collision is **one-sided**: `0x671cc0` emits each
-//! candidate face's plane at the **unflipped file winding**, and `0x632700` then processes it
-//! only if `n·dir <= -1e-5`. A player falling straight down has `dir` = −up, so **a face blocks
-//! the fall iff its authored normal points up**. Ours is a parry trimesh — two-sided — so it
-//! blocks either way.
-//!
-//! This tool turns that difference into a number at a specific `.go xyz` pin: every walking-collidable
-//! WMO face whose footprint contains the pin, with its world height, its authored normal's up
-//! component, and the reference's verdict. Where a face reads `PASSES`, the reference falls through
-//! it and we stand on it.
-//!
-//! It goes through the **same transform the app bakes colliders with** — `wow_to_bevy` per vertex
-//! then the placement `Transform`, exactly as `terrain_stream::collider::placement_collider_data`
-//! does — so the geometry here is the geometry the player collides with, not a re-derivation. Both
-//! maps are proper rotations, so a face's winding (and the sign of `n·dir`) survives them.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! The reference's movement collision is one-sided: `0x671cc0` emits each face's plane at the file
+//! winding and `0x632700` processes it only if `n·dir <= -1e-5`, so a face blocks a fall only if
+//! its authored normal points up. Faces take the app's collider transform, `wow_to_bevy` then the
+//! placement `Transform`; both are proper rotations, so the winding and the sign of `n·dir`
+//! survive. Output is Blizzard data: never commit it.
 
 use benilla_assets::coords::{placement_rotation, wow_to_bevy};
 use bevy::prelude::*;
@@ -71,8 +59,7 @@ fn main() -> anyhow::Result<()> {
     for (model, transform, uid) in &placements {
         let stem = model.to_ascii_lowercase().replace('\\', "/");
         let stem = stem.strip_suffix(".wmo").unwrap_or(&stem).to_string();
-        // Walk group files by index — the same `<stem>_NNN.wmo` naming the loader uses. A gap is not
-        // expected, but tolerate a few misses rather than trusting a count we did not read.
+        // Group files by index, `<stem>_NNN.wmo` as the loader names them, tolerating a few misses.
         let (mut gi, mut misses) = (0u32, 0u32);
         while misses < 4 {
             let Ok(gbytes) = chain.read_file(&format!("{stem}_{gi:03}.wmo")) else {
@@ -81,8 +68,7 @@ fn main() -> anyhow::Result<()> {
                 continue;
             };
             misses = 0;
-            // The WALKING gather — the player-body audience, skip DETAIL (`0x04`). Identical call to
-            // the one the WMO asset loader makes.
+            // The walking gather, DETAIL (`0x04`) skipped, as the WMO loader makes it.
             let (mut pos, mut idx) = (Vec::new(), Vec::new());
             benilla_formats::accumulate_wmo_group_collision(&gbytes, &mut pos, &mut idx);
             let verts: Vec<Vec3> = pos
@@ -131,7 +117,7 @@ fn main() -> anyhow::Result<()> {
     );
     let (mut blocks, mut passes) = (0usize, 0usize);
     for h in &hits {
-        // The pin is Bevy-space; its Y is the WoW Z the tester read off the panel.
+        // The pin is Bevy-space; its Y is WoW Z.
         let reference_blocks = h.dot <= FACING_EPS;
         if reference_blocks {
             blocks += 1;
@@ -161,15 +147,15 @@ fn main() -> anyhow::Result<()> {
 struct Hit {
     /// World height (Bevy +Y = WoW +Z) where the pin's vertical line meets this face's plane.
     height: f32,
-    /// The authored winding normal dotted with the fall direction — the reference's gate input.
+    /// The authored winding normal dotted with the fall direction, the reference's gate input.
     dot: f32,
     group: u32,
     uid: u32,
     model: String,
 }
 
-/// Where the vertical line through `pin` meets the triangle's plane — `None` unless the pin's
-/// horizontal footprint is inside the triangle (the XZ projection in Bevy space, since +Y is up).
+/// Where the vertical through `pin` meets the triangle's plane, if the pin is inside its XZ
+/// projection.
 fn plane_height_under(pin: Vec3, tri: [Vec3; 3]) -> Option<f32> {
     let p = Vec2::new(pin.x, pin.z);
     let [a, b, c] = tri.map(|v| Vec2::new(v.x, v.z));

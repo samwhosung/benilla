@@ -1,30 +1,21 @@
-//! The pose source — the direct M2 pose evaluator's baked data.
-//!
-//! Bevy's `animate_targets` prices every bone at graph-walk + hash-lookup + boxed-curve rates
-//! (~1.9 µs/bone — 0711's second lane). These types hold the *same* Bevy-space keyframes as the
-//! `AnimationClip`s — emitted by the same bake walk, so they cannot drift — in the flat shape a
-//! direct sampler wants: per clip, bone-sorted channel tracks; per graph node, the (clip, mask)
-//! pair; per bone, its mask-group bits. The runtime evaluator (`benilla::creature_anim::pose`)
-//! folds these with Bevy's own `Animatable::interpolate`, reproducing `animate_targets`' output
-//! exactly (goldens there assert it bone-for-bone).
+//! The direct M2 pose evaluator's baked data: the `AnimationClip`s' keyframes from the same bake
+//! walk, flattened per clip, graph node and bone. The evaluator (`benilla_world::rig_anim::pose`)
+//! reproduces Bevy's `animate_targets` output exactly, so these must match the clips key for key.
 
 use bevy::animation::animatable::Animatable;
 use bevy::animation::graph::AnimationNodeIndex;
 use bevy::prelude::*;
 
-/// One channel's keyframes: times ascending and strictly deduplicated — the exact normalization
-/// `UnevenCore::new` applies to the twin `AnimatableKeyframeCurve` (stable sort by time, dedup
-/// keeping the FIRST sample at each time), so [`Self::sample`] and `sample_clamped` agree
-/// key-for-key. Empty ⇒ the channel is absent (the clip never keys it — Bevy leaves the joint
-/// component untouched, and so does the evaluator).
+/// One channel's keyframes, normalized as `UnevenCore::new` does (stable sort by time, the first
+/// sample at a time kept), so [`Self::sample`] matches the clip's curve. Empty: the clip does not
+/// key the channel, and the joint keeps its value.
 #[derive(Clone)]
 pub struct PoseTrack<T> {
     times: Vec<f32>,
     values: Vec<T>,
 }
 
-// Manual: the derive would bound `T: Default`, which `Quat` channels don't need — an empty track
-// has no values of `T` at all.
+// Manual: the derive would add a needless `T: Default` bound.
 impl<T> Default for PoseTrack<T> {
     fn default() -> Self {
         Self {
@@ -35,10 +26,8 @@ impl<T> Default for PoseTrack<T> {
 }
 
 impl<T: Animatable + Clone> PoseTrack<T> {
-    /// Bake a channel from the clip walk's key list, mirroring `keyframe_curve`'s presence rules
-    /// exactly: no keys ⇒ absent; one key ⇒ a constant (Bevy builds a flat 2-key curve — same
-    /// sampled value everywhere); ≥2 keys ⇒ `UnevenCore`'s sort + dedup, and absent if fewer than
-    /// 2 distinct times remain (Bevy's constructor errors there and the channel is dropped).
+    /// Mirrors `keyframe_curve`: one key is a constant, and keys that dedup to fewer than two
+    /// times are absent, since Bevy's constructor refuses them.
     pub fn new(keys: &[(f32, T)]) -> Self {
         match keys.len() {
             0 => Self::default(),
@@ -59,10 +48,7 @@ impl<T: Animatable + Clone> PoseTrack<T> {
         }
     }
 
-    /// Sample at `t`, clamped into the key span — `uneven_interp`'s law verbatim (binary search;
-    /// exact hit returns that key; before/after the span clamps to the end keys; between keys
-    /// interpolates with `Animatable::interpolate` — `Vec3::lerp` / `Quat::slerp`, the same calls
-    /// the Bevy curve makes). `None` iff the channel is absent.
+    /// Sample at `t`, clamped into the key span, as Bevy's `uneven_interp` does.
     #[inline]
     pub fn sample(&self, t: f32) -> Option<T> {
         let times = &self.times;
@@ -88,7 +74,7 @@ impl<T: Animatable + Clone> PoseTrack<T> {
     }
 }
 
-/// One bone's channels in one clip — only bones with at least one present channel appear.
+/// One bone's channels in one clip; a bone with no channel is left out.
 #[derive(Clone)]
 pub struct PoseBone {
     pub bone: u16,
@@ -97,17 +83,14 @@ pub struct PoseBone {
     pub scale: PoseTrack<Vec3>,
 }
 
-/// One clip's keyed bones, sorted ascending by bone index (the evaluator's merge walk relies on
-/// it). The same channels, values, and presence as the twin `AnimationClip`.
+/// One clip's keyed bones, ascending by bone index, which the evaluator's merge walk needs.
 #[derive(Clone, Default)]
 pub struct PoseClip {
     pub bones: Vec<PoseBone>,
 }
 
 impl PoseClip {
-    /// Push a bone's channels, keeping [`Self::bones`] sorted (the bake walks file bone order,
-    /// which is ascending for every retail M2 — the insertion sort is a no-op there and a
-    /// correctness backstop elsewhere). Bones with no present channel are skipped.
+    /// Insert a bone in bone order, skipping one with no channel.
     pub fn push(&mut self, bone: PoseBone) {
         if bone.translation.is_empty() && bone.rotation.is_empty() && bone.scale.is_empty() {
             return;
@@ -117,18 +100,15 @@ impl PoseClip {
     }
 }
 
-/// One graph node the evaluator understands: which [`PoseClip`] it plays and its mask bits (the
-/// `add_clip_with_mask` argument; a node whose mask bit intersects a bone's mask groups skips
-/// that bone — Bevy's `computed_masks` law with a flat graph, where ancestors contribute 0).
-/// Node weights are all 1.0 by construction (`add_clip(_, 1.0, root)`), so none is stored.
+/// One graph node: the [`PoseClip`] it plays and its mask bits, which skip a bone whose mask
+/// groups they intersect. Every node's weight is 1.0, so none is stored.
 #[derive(Clone, Copy)]
 pub struct PoseNode {
     pub clip: u32,
     pub mask: u64,
 }
 
-/// A model's baked pose source: everything the runtime evaluator needs, filled by
-/// the same code that builds the `AnimationGraph` so the two cannot drift.
+/// A model's baked pose source, filled beside the `AnimationGraph` it mirrors.
 #[derive(Clone, Default)]
 pub struct PoseSource {
     /// The pose twin of each built clip (sequence clips in build order, then the grip clip).
@@ -140,8 +120,7 @@ pub struct PoseSource {
 }
 
 impl PoseSource {
-    /// Record `node` as playing `clip` under `mask` — called right after the corresponding
-    /// `graph.add_clip*` so the table mirrors the graph by construction.
+    /// Record `node` as playing `clip` under `mask`; call it beside each `graph.add_clip*`.
     pub fn set_node(&mut self, node: AnimationNodeIndex, clip: u32, mask: u64) {
         let i = node.index();
         if self.nodes.len() <= i {
@@ -163,10 +142,6 @@ mod tests {
     use bevy::animation::animation_curves::AnimatableKeyframeCurve;
     use bevy::math::curve::Curve;
 
-    /// The channel golden: [`PoseTrack::sample`] must equal
-    /// `AnimatableKeyframeCurve::sample_clamped` — the exact curve the twin `AnimationClip`
-    /// carries — over a dense time sweep spanning before-first, between-keys, exact-hit, and
-    /// past-last, for both Vec3 (lerp) and Quat (slerp) channels.
     #[test]
     fn track_matches_the_bevy_keyframe_curve() {
         let vkeys = [
@@ -204,9 +179,6 @@ mod tests {
         }
     }
 
-    /// The presence rules mirror `keyframe_curve`: a single key is a constant everywhere (Bevy's
-    /// flat 2-key curve), duplicate-time keys dedup keeping the FIRST (`UnevenCore::new`), and a
-    /// list that dedups below 2 keys is absent (Bevy's constructor errors → the channel drops).
     #[test]
     fn presence_and_dedup_mirror_the_curve_constructor() {
         assert!(PoseTrack::<Vec3>::new(&[]).sample(0.5).is_none());
@@ -234,13 +206,12 @@ mod tests {
             assert_eq!(dup.sample(t).unwrap(), curve.sample_clamped(t), "t={t}");
         }
 
-        // Two keys at one time: Bevy's constructor would fail — the channel must be absent.
+        // Two keys at one time: Bevy's constructor fails, so the channel is absent.
         assert!(PoseTrack::new(&[(0.5, Vec3::X), (0.5, Vec3::Y)])
             .sample(0.5)
             .is_none());
     }
 
-    /// `PoseClip::push` keeps bones ascending and drops all-absent bones.
     #[test]
     fn clip_bones_stay_sorted() {
         let bone = |i: u16| PoseBone {
