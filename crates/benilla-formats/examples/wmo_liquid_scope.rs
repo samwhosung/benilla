@@ -217,8 +217,8 @@ fn main() -> anyhow::Result<()> {
     // A WMO-only map has no ADT at all — the whole world is the WDT's single `MODF` (20 of the 43
     // shipped maps, decision 0688). Scanning only ADTs therefore declared the Deeprun Tram, the
     // jails and every instance-shaped dungeon *unplaced*, which is the one thing this census uses
-    // to decide a group is unreachable. The tram's own flooded sections are named by the RE note
-    // that commissioned this check, so the blind spot was hiding exactly the sites asked about.
+    // to decide a group is unreachable. The tram's own flooded sections are among the sites this
+    // check was written for, so the blind spot was hiding exactly the sites asked about.
     let wdts: Vec<String> = chain
         .list()?
         .into_iter()

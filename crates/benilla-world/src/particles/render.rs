@@ -1015,7 +1015,7 @@ mod tests {
     ///
     /// **Since 1817 it pins the raise as well as the floor.** The residual is 2.59× the 0781-era
     /// +4096 margin, so it is also **1.30× the +8192** the selection ring and the ground-target
-    /// reticle rode until the RE showed they share the blob shadow's lane and therefore its
+    /// reticle rode until the reference showed they share the blob shadow's lane and therefore its
     /// conflict — those two were under their own residual and had simply not been walked on a
     /// slope. The measurement is per-lane-independent by construction: the residual is the
     /// *bake's*, and the bake is one path, so one number serves every ground decal.

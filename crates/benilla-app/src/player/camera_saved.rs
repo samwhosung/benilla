@@ -263,8 +263,8 @@ mod tests {
     use super::*;
 
     /// The file we write is byte-for-byte the reference's shape: its two keys, its order, its six
-    /// decimals, LF, trailing newline — checked against a real `camera-settings.txt` from the RE
-    /// tree (`Account/ONE/VMaNGOS/One`, `16.068569` / `13.449968`).
+    /// decimals, LF, trailing newline — checked against a real `camera-settings.txt` the reference
+    /// client wrote (`16.068569` / `13.449968`).
     #[test]
     fn the_rendered_file_matches_the_references_shape() {
         let text = render(16.068_57, pitch_from_file(13.449_968));

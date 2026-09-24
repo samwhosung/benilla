@@ -1,7 +1,7 @@
 //! Session probe: which bones carry keys in a given sequence — `cargo run -p benilla-formats
 //! --example dump_bone_keys <file.m2> <anim_id> [bone ...]`. With bone indices, prints their
 //! key counts + first rotation keys; without, lists every keyed bone. Extract the file first
-//! via `mpqx` (benilla-mpq). Built for the nocked-ammo RE round (decision 2273 follow-up).
+//! via `mpqx` (benilla-mpq). Built for the nocked-ammo investigation (decision 2273 follow-up).
 
 fn main() {
     let mut args = std::env::args().skip(1);
