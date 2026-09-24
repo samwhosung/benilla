@@ -15,7 +15,7 @@
 //! in [`crate::billboard::BillboardPlace`] — post-propagation, like the cards), the quad's four
 //! authored corners are posed through its live joint × the bone's inverse bindpose (exactly the
 //! skinned-vertex path, so the authored slide/spin/scale animation is preserved); when the posed
-//! corners moved (0733 §5 — the ShadowKey treatment; a static pose costs a compare), a
+//! corners moved (the ShadowKey treatment; a static pose costs a compare), a
 //! projection frame is fitted to the posed rectangle and the ground triangles inside it are
 //! re-emitted with the quad's own UVs bilerped across the frame — the crescent drapes the
 //! terrain it crosses. The cached triangles are pushed onto the shared effect stream every
@@ -200,7 +200,7 @@ pub(crate) fn update_ground_fx_decals(
         }
         let pose = joint.affine() * Affine3A::from_mat4(decal.ibp);
         let corners = decal.corners.map(|c| pose.transform_point3(c));
-        // The rebuild gate (0733 §5): the posed corners capture the whole pose effect, so a
+        // The rebuild gate: the posed corners capture the whole pose effect, so a
         // static aura under a static rig costs this compare. (NaN-seeded corners make the
         // first pass always project.)
         if corners != decal.cached_corners || surface_count != decal.cached_surfaces {

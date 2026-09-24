@@ -333,7 +333,7 @@ fn bake_cell(items: &[GxItem], meshes: &mut Assets<Mesh>) -> render::GxCellDraw 
             slot: item.prop.as_ref().and_then(|p| p.slot).unwrap_or(0),
         });
     }
-    // Recentre for clip-space precision (0974): the shader reconstructs world = v + origin.
+    // Recentre for clip-space precision: the shader reconstructs world = v + origin.
     // The origin is the f32 ROUNDING of the f64 centre, and the subtraction runs in f64
     // against that exact value — the vertex absorbs every bit the origin's rounding lost, so
     // the only f32 quantization anywhere is of the SMALL recentred coordinate.
@@ -440,7 +440,7 @@ mod tests {
         assert_eq!((gx.accepted, gx.declined[3]), (0, 0), "a fresh world");
     }
 
-    /// The bake cadence (B3, decision 1432): first bakes wait only the short window, re-bakes
+    /// The bake cadence (B3): first bakes wait only the short window, re-bakes
     /// of a published region wait for the long one, and the age cap consolidates a
     /// never-quiet region regardless.
     #[test]
@@ -468,7 +468,7 @@ mod tests {
             "published: long window"
         );
         // The reveal gate's request overrides every window: a load that has finished arriving
-        // publishes what it holds instead of waiting out the quiet timer (decision 1498).
+        // publishes what it holds instead of waiting out the quiet timer.
         state.last_change = IDLE_FRAMES;
         assert!(
             !bake_due(&state, false, IDLE_FRAMES, false),

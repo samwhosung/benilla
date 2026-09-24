@@ -94,13 +94,13 @@ pub struct TerrainStreamer {
     /// The window's `(inner, outer)` half-widths as of last frame, so the reach is logged once
     /// per change (the Terrain Distance slider) rather than per frame.
     reach: Option<(i32, i32)>,
-    /// The current map's WDT tile index (decision 0476), requested with the map: ADT requests wait
+    /// The current map's WDT tile index, requested with the map: ADT requests wait
     /// for it and consult its `MAIN` grid — open ocean authors no tiles to ask for.
     wdt: Option<Handle<WdtIndex>>,
     /// The WDT failed to load (unheard of for a shipped map): stream ungated like pre-0476 rather
     /// than showing no world. Reset on map change.
     wdt_ungated: bool,
-    /// `true` once this map's global WMO has been registered as a placement (decision 0688) — on a
+    /// `true` once this map's global WMO has been registered as a placement — on a
     /// WMO-only map that one building is the whole world, so there is nothing else to stream.
     /// Cleared on map change, which also releases the placement.
     global_wmo: bool,
@@ -146,7 +146,7 @@ struct TileState {
     /// off the root (one material per tile — the loader's arrays make that possible).
     material: Option<Handle<TerrainMaterial>>,
     /// The furnishing cursor: the next `AdtTile::chunks` index whose cell [`furnish::furnish_tile_cells`]
-    /// should build. Cells land a few per frame while live (decision 0832) — the mesh-asset creation
+    /// should build. Cells land a few per frame while live — the mesh-asset creation
     /// IS the pacing point; everything downstream (extract, prepare, upload) follows its rate.
     next_cell: usize,
     /// `true` once every cell is up (or cells are ablated off): the "this tile is really resident"
@@ -157,17 +157,17 @@ struct TileState {
     placements: Vec<u32>,
     /// The tile's water-surface entities (tile-exclusive, like the terrain mesh — despawned on unload).
     liquid: Vec<Entity>,
-    /// The tile's impassable-chunk wall collider, if it authors any (decision 1266). Its own static
+    /// The tile's impassable-chunk wall collider, if it authors any. Its own static
     /// body rather than a child of the root, matching the per-WMO walk/camera bakes: two colliders
     /// with different audiences are two bodies, not a nested one.
     wall: Option<Entity>,
     /// The tile's per-chunk `ClutterChunk` entities (tile-exclusive; their lazily-built clutter meshes
     /// are children, so despawning these cascades to them).
     clutter: Vec<Entity>,
-    /// The welded map-doodad hull colliders this tile owns (decision 1369): batches of the hulls
+    /// The welded map-doodad hull colliders this tile owns: batches of the hulls
     /// whose placements registered here first, despawned with the tile like [`Self::wall`].
     welds: Vec<Entity>,
-    /// The merged static-render blobs this tile owns (decision 1417, `WOW_STATIC_MERGE`):
+    /// The merged static-render blobs this tile owns (`WOW_STATIC_MERGE`):
     /// per-(cell × material) bakes of the doodads whose placements registered here first,
     /// despawned with the tile exactly like [`Self::welds`].
     merged: Vec<Entity>,
@@ -227,7 +227,7 @@ struct Placement {
     /// How many loaded tiles reference this placement; despawned when it hits zero.
     refs: u32,
     /// The first tile to register this placement — loaded at that moment by construction. For an
-    /// M2 doodad this is its hull weld's owner tile (decision 1369; the lifetime argument is in
+    /// M2 doodad this is its hull weld's owner tile (the lifetime argument is in
     /// `weld`'s module doc). WMO placements never read it: their prop hulls weld per placement.
     owner: (i32, i32),
 }
@@ -238,7 +238,7 @@ struct Placement {
 /// It lived in `loading_screen` — the engine publishing its own residency fact to the wrong side
 /// of 1160's line (1163's finding). Two readers, and only one of them is a screen: the loading
 /// bar reads it to draw itself, and the **player's post-snap hold** reads it to decide when to let
-/// go (decision 0737 — the physics hold keys on this signal, never on ground contact). Both are
+/// go (the physics hold keys on this signal, never on ground contact). Both are
 /// the game asking the world what it has; neither is the world asking the game anything.
 #[derive(Resource, Default)]
 pub struct WorldLoadProgress {
@@ -251,7 +251,7 @@ pub struct WorldLoadProgress {
     /// teleports like a cross-continent `.tele`, which don't change `CurrentMap`). During normal
     /// streaming the focus tile is always resident, so it never fires spuriously.
     pub focus_resident: bool,
-    /// The scene term (0737): the focus tile **and its 8 neighbours** are spawned with every
+    /// The scene term: the focus tile **and its 8 neighbours** are spawned with every
     /// placement they reference (WMOs, doodads, WMO props) — "the buildings and trees around you
     /// exist", which is what makes a reveal read as a world rather than bare terrain. Collider
     /// quiet is deliberately *not* folded in here (it is published a stage apart); consumers use
@@ -279,7 +279,7 @@ pub struct WorldLoadProgress {
     /// **Which tile these facts are about** — the focus tile the streamer computed this frame.
     /// `None` until the streamer first runs (and again after `release_world`). The settle release
     /// compares it against the tile under the avatar's own feet and refuses the resident release on
-    /// a mismatch (decision 1336): residency published for one tile must never unfreeze a body
+    /// a mismatch: residency published for one tile must never unfreeze a body
     /// standing on another — the fail-closed guard that makes any future focus/snap ordering
     /// regression cost a logged 6 s timeout instead of a silent fall through the world.
     pub focus_tile: Option<(i32, i32)>,
@@ -329,7 +329,7 @@ impl WorldLoadProgress {
 /// a second program with no avatar at all (`benilla-worldview`) answers it from its free-fly
 /// camera without stubbing a player.
 ///
-/// The ladder it encodes, unchanged (`0x695650`-era behaviour, decision 0772): a live attached
+/// The ladder it encodes, unchanged (`0x695650`-era behaviour): a live attached
 /// avatar wins; with no avatar, the picked character's entry row; else the camera; else the spawn
 /// point. A **detached** eye (free-fly) skips straight to the camera — but keeps publishing the
 /// body's position, because the zone authority follows the character and not the camera.
@@ -368,7 +368,7 @@ impl ViewFocus {
     /// The question anyone asking "is the world under the *player* loaded?" actually means. While
     /// the eye is detached — free-fly, a cinematic fly-by — residency describes wherever the
     /// camera went, so a consumer that reads it as a fact about the body is reading someone else's
-    /// tile. `release_post_snap_hold` already learned that the hard way (decision 1336) and tests
+    /// tile. `release_post_snap_hold` already learned that the hard way and tests
     /// the tile itself; this is the cheap form for a consumer that only needs the yes/no.
     pub fn follows_body(&self) -> bool {
         self.attached && self.body.is_some()
@@ -467,7 +467,7 @@ enum ModelHandle {
 /// *what the streamer did that frame*, which no 1 Hz journal row can attribute: the spike frame
 /// needs its own row saying what was dropped, requested and spawned beside what the frame cost.
 /// `perf`'s stream trace is that reader, and it used to own this resource too, which meant the
-/// engine's own streaming account only existed if an instrument was installed (decision 1164 —
+/// engine's own streaming account only existed if an instrument was installed (
 /// the same mis-filing as `terrain_stream` writing its residency into `loading_screen`). The
 /// writer owns it now; the instrument reads it.
 #[derive(Resource, Default)]
@@ -482,9 +482,9 @@ pub struct StreamActivity {
     pub tiles_requested: u32,
     /// Loaded tiles spawned (root + collider kicked off + placements registered + liquid + clutter).
     pub tiles_spawned: u32,
-    /// MCNK cell meshes built + spawned by the paced furnisher (decision 0832).
+    /// MCNK cell meshes built + spawned by the paced furnisher.
     pub cells_spawned: u32,
-    /// Model submesh render forms built by the paced model furnisher (decision 0834).
+    /// Model submesh render forms built by the paced model furnisher.
     pub model_meshes_built: u32,
     /// Placements (or WMO props) whose model landed and spawned.
     pub placements_spawned: u32,
@@ -538,7 +538,7 @@ impl Plugin for TerrainPlugin {
             // all in one frame, so a swap never renders uncovered. The legacy streamer carried
             // this membership and the cutover to this one silently dropped it — the executor was
             // then free to run the streamer *before* the snap, and the cover landed a frame late
-            // on exactly the burst frame (the `.tele` destination flash; decision 0738).
+            // on exactly the burst frame (the `.tele` destination flash).
             // `finish_colliders` heads the chain so the collider-queue depth the settle release
             // and the Present-stage clear read is this frame's, not last frame's.
             .add_systems(
@@ -554,7 +554,7 @@ impl Plugin for TerrainPlugin {
                 )
                     .chain()
                     .in_set(WorldStage::Stream)
-                    // **No world until a character is in one** (decision 0777). The whole chain,
+                    // **No world until a character is in one**. The whole chain,
                     // not just the request side: with nothing streamed there is nothing to spawn,
                     // no collider to finish and no WMO volume to mirror, and gating the head alone
                     // would leave three systems walking empty queries to prove it every frame.
@@ -568,7 +568,7 @@ impl Plugin for TerrainPlugin {
                     .run_if(merge::blob_vis_enabled)
                     .run_if(crate::schedule::world_is_live),
             )
-            // The model-forms furnisher (decision 0834) runs UNGATED, unlike the chain above: the
+            // The model-forms furnisher runs UNGATED, unlike the chain above: the
             // glue screens' character preview requests forms pre-world (`update_display_models`
             // serves the glue stage too), and a world-live gate would starve it forever. Ordered
             // before the placement spawner so a form completed this frame can land this frame;
@@ -592,7 +592,7 @@ impl Plugin for TerrainPlugin {
                     .after(crate::schedule::WorldStage::Net)
                     .before(crate::schedule::WorldStage::Stream),
             )
-            // Within-map art residency (decision 0793): the placement material dedup expires by
+            // Within-map art residency: the placement material dedup expires by
             // distance, so a long flight on one continent stops ratcheting. Ungated by
             // `world_is_live` on purpose — a cache still holding the last world's art is exactly
             // what should be draining while you sit at character select.
@@ -616,8 +616,8 @@ impl Plugin for TerrainPlugin {
 
 /// Stream `AdtTile`s around the view focus: drop tiles that left range (releasing their placements),
 /// request newly-in-range tiles, and — as each finishes loading — spawn its terrain mesh + material and
-/// register its doodad/WMO placements. The desired square is gated on the map's WDT `MAIN` grid
-/// (decision 0476): a tile the map doesn't author is never requested — no NotFound error spam on
+/// register its doodad/WMO placements. The desired square is gated on the map's WDT `MAIN` grid:
+/// a tile the map doesn't author is never requested — no NotFound error spam on
 /// open-ocean crossings, and the loading screen's ready/total counts only tiles that can exist.
 #[allow(clippy::type_complexity)] // the bundled asset_stores tuple
 fn stream_terrain(
@@ -701,7 +701,7 @@ fn stream_terrain(
         state.wdt = Some(asset_server.load(format!("mpq://World/Maps/{dir}/{dir}.wdt")));
         state.wdt_ungated = false;
     }
-    // The WDT gate (0476). A missing/failed WDT (unheard of for a shipped map) falls back to the
+    // The WDT gate. A missing/failed WDT (unheard of for a shipped map) falls back to the
     // old ungated probing, warned once per map — a broken index must never mean "no world".
     let wdt_index = state.wdt.as_ref().and_then(|h| wdts.get(h));
     if wdt_index.is_none() && !state.wdt_ungated {
@@ -716,7 +716,7 @@ fn stream_terrain(
         }
     }
 
-    // A WMO-only map (decision 0688): the WDT says this map authors no terrain and its entire world
+    // A WMO-only map: the WDT says this map authors no terrain and its entire world
     // is one building. Register it exactly like any ADT-placed WMO — same `Placement`, same
     // spawn/collider/doodad/portal path — because that is what the reference does: its WDT branch
     // hands the global MODF entry to the SAME consumer (`0x695650`) an ADT's MCRF walk does. It is
@@ -746,7 +746,7 @@ fn stream_terrain(
 
     // Stream around the *view focus* — see [`ViewFocus`] for the ladder — as far as the view
     // distance reaches: the residency window is the reference's own, derived from the live
-    // `farclip` in chunk units (`window`, decision 1513). The slider that moves the far-clip
+    // `farclip` in chunk units (`window`). The slider that moves the far-clip
     // wall moves this with it.
     let center = focus.resolve(camera.single().ok().map(|c| c.translation));
     let window = StreamWindow::at(view.farclip, center[0], center[1]);
@@ -829,7 +829,7 @@ fn stream_terrain(
     }
 
     // Unload tiles no longer desired: despawn the terrain entity, release the placements, drop the
-    // handle. **Budgeted per frame** (B181): dropping the whole trailing row on the crossing frame
+    // handle. **Budgeted per frame**: dropping the whole trailing row on the crossing frame
     // freed ~1300 mesh assets — each tile's 256 chunk cells, CPU copies included — plus the tiles'
     // decoded chunks and their placements' models, all in one frame. Measured (`WOW_STREAM_TRACE`,
     // Emerald Dream flat-map pin): that free wave is the 2–3-dropped-interval spike on every ADT
@@ -840,7 +840,7 @@ fn stream_terrain(
     // re-cross inside the drain window finds its tile still loaded (no re-decode, no re-spawn).
     // A cross-map swap is NOT budgeted (`drop_streamed_world` above): the loading screen covers
     // it, and holding a dead map's tiles through a fresh map's IO burst helps nothing.
-    // **The keep-band** (B181): a tile is wanted inside the outer window but released only past
+    // **The keep-band**: a tile is wanted inside the outer window but released only past
     // it plus one chunk (`StreamWindow::keeps`) — hysteresis. Without it, a body pacing across
     // the one chunk line that toggles a far tile cycles that tile per step: the reporter's own
     // minimal repro (`.go` half a yard across, and back) re-decoded and re-spawned five tiles
@@ -898,7 +898,7 @@ fn stream_terrain(
     // free) — only once the WDT has answered (or failed into the ungated fallback): a request
     // fired before the index lands could probe a tile that doesn't exist.
     //
-    // **Staggered while live** (B181): a whole fresh row requested in one frame decodes in
+    // **Staggered while live**: a whole fresh row requested in one frame decodes in
     // parallel and LANDS near-together — ~1300 mesh assets plus the texture arrays hitting the
     // render world's prepare in one or two frames, a wave no app-side budget downstream of the
     // request can spread. One fresh request per frame, nearest first, staggers the landings for
@@ -963,12 +963,12 @@ fn stream_terrain(
                 light_buf: shared_light.0.clone(),
             },
         });
-        // Terrain collider (decision 0009): ONE static trimesh per tile, welded from the same decoded
+        // Terrain collider: ONE static trimesh per tile, welded from the same decoded
         // chunks the drawn cells are built from (so you stand on the visible ground), built off-thread
         // (attached by `finish_colliders`) so a tile streaming in never hitches the frame. It rides the
         // tile root's lifecycle — gone when the tile despawns, no separate bookkeeping.
         let collider_data = terrain_collider_data(&adt.chunks);
-        // …and, separately, the tile's impassable-chunk fences (decision 1266, report B129). A
+        // …and, separately, the tile's impassable-chunk fences (report B129). A
         // SECOND collider because the audience is the point: the reference's fence is emitted only
         // into the movement box gather, and its segment/ray path never reads the flag at all. So —
         // the walk layer, where the body sees it and the camera boom does not, and unmarked, so it
@@ -976,11 +976,11 @@ fn stream_terrain(
         let wall_data = impassable_wall_data(&adt.chunks);
         // The tile ROOT draws nothing: it carries the collider and the surface roles, and its MCNK
         // cells hang off it as children — one drawn object per 33.333 yd chunk. That is the unit the
-        // exterior-scene cull needs (decision 0780; a 533 yd slab the camera stands on intersects
+        // exterior-scene cull needs (a 533 yd slab the camera stands on intersects
         // every portal window, so it could never be hidden), and it also gives Bevy's own frustum cull
         // something smaller than half a kilometre to reject. Despawning the root takes the cells.
         //
-        // The cells themselves do NOT spawn here (decision 0832): a whole row of tiles finishes
+        // The cells themselves do NOT spawn here: a whole row of tiles finishes
         // decoding in one frame, and spawning ~1300 loader-built cell meshes at once handed the
         // render world their entire extract/prepare/upload as one 80–105 ms (process-CPU) frame —
         // the B181 first-contact spike. `furnish_tile_cells` (chained right after this system)
@@ -1063,7 +1063,7 @@ fn stream_terrain(
 
     // Publish residency for the loading screen: how many desired tiles are actually spawned,
     // whether the tile under the view focus is up (the backstop trigger), and the scene term
-    // (decision 0737) — the focus tile + its 8 neighbours with every placement they reference, so
+    // — the focus tile + its 8 neighbours with every placement they reference, so
     // "ready to reveal" means the buildings and trees around you exist, not just bare terrain. A
     // focus tile that doesn't exist (map edge) counts as resident so we never get stuck waiting
     // for ground that isn't there.
@@ -1095,7 +1095,7 @@ fn stream_terrain(
         if wdt_index.is_none() && !state.wdt_ungated {
             p.focus_resident = false;
         }
-        // A WMO-only map's focus residency IS its one building's spawn (0688) — there is no
+        // A WMO-only map's focus residency IS its one building's spawn — there is no
         // tile to gate on. The bar/scene accounting for it lives in the gated block below.
         if state.global_wmo {
             p.focus_resident &= placements
@@ -1165,7 +1165,7 @@ fn stream_terrain(
             // `focus_resident` already folds the WDT gate and the global WMO's spawn, so both
             // ride into the scene term through it.
             p.scene_ready = p.focus_resident && !near_tile_missing && near_pending == 0;
-            // A WMO-only map's bar and clear-condition ride the placement (0688). Counting it
+            // A WMO-only map's bar and clear-condition ride the placement. Counting it
             // keeps `total > 0`, which is what `is_ready` requires before it will clear the
             // screen at all; the scene term also waits for its props (the Stockade's 740
             // candles are the reveal).
@@ -1326,9 +1326,9 @@ fn drop_streamed_world(
     crate::static_merge::reset();
 }
 
-/// Expire the placement material dedup by **distance** (decision 0793) — the within-map half of
+/// Expire the placement material dedup by **distance** — the within-map half of
 /// [`drop_streamed_world`]'s clear. This is the big one: `mats` 2603 → 26786 over ten minutes on a
-/// same-map tour (decision 0785) is overwhelmingly submesh materials of doodads and buildings whose
+/// same-map tour is overwhelmingly submesh materials of doodads and buildings whose
 /// tiles unloaded thousands of yards ago. The placements themselves are already refcount-released;
 /// only the dedup kept their materials — and through them their textures — alive.
 fn scope_placement_art(mut scope: crate::art_scope::ArtScope, mut placements: ResMut<Placements>) {
@@ -1404,7 +1404,7 @@ fn despawn_tile_owned(commands: &mut Commands, t: &TileState) {
     }
 }
 
-/// The `WorldDetail` re-scatter (0992): 1.12's own setter law — writing the density CVar
+/// The `WorldDetail` re-scatter: 1.12's own setter law — writing the density CVar
 /// tail-calls the chunk-rebuild walk (`0x6725a0` → `0x6b1d20`), so a change
 /// re-scatters the LOADED tiles too, not just future streams. The fresh `ClutterChunk`s spawn
 /// unbuilt and the lazy builder re-meshes the ~70 yd bubble over the next frames. Watches the
@@ -1604,7 +1604,7 @@ fn release_placement(
 /// The terrain base material (the `TerrainExtension` does the real work).
 ///
 /// **Single-sided, backface-culled** — the ground is see-through from underneath, exactly as the
-/// real client renders it (decision 0960; B193: testers see through 1.12.1's terrain from below, the
+/// real client renders it (testers see through 1.12.1's terrain from below, the
 /// way a WMO exterior reads from inside a cave; we drew it solid). The reference never sets
 /// `EGxRs 0x14` (`GL_CULL_FACE`) in its terrain-chunk pass `0x684510`/`0x6beb50`, so terrain inherits
 /// the device baseline `0x14 = 1` written by `0x593bf0` — culling ON, and a census of all 39
@@ -1643,7 +1643,7 @@ mod focus_tests {
     fn the_pick_outranks_the_camera_until_the_avatar_exists() {
         // The regression this guards is invisible and expensive: with the camera winning, world
         // entry spends its scarcest IO on Northshire tiles for a character in Stratholme, then
-        // throws them away when the snap lands (decision 0777).
+        // throws them away when the snap lands.
         let idle = ViewFocus::entry(PICK.0, PICK.1);
         assert_eq!(
             idle.map(Some(0)),

@@ -18,7 +18,7 @@ use super::{daynight, quantize_glow, ClockSource, GameClock, LightSampler, WowLi
 
 /// The scene-fog stage (`dn_scene_fog 0x6cee30`): resolve the
 /// **pushed** `(start, end)` fog pair from the blended bands. `end = min(zone_end, farclip)` — the
-/// zone ends in yards (Elwynn 500 clear / 278 storm, decision 0324) exceed only a lowered farclip,
+/// zone ends in yards (Elwynn 500 clear / 278 storm) exceed only a lowered farclip,
 /// so the wall sits at the zone value and pulls in when the view-distance slider drops below it.
 /// `start = frac × end`, **unclamped** — the storm fraction is negative (Elwynn −0.5), flooring the
 /// whole near field at `1 − 1/(1−frac)` ≈ 33% fog *at the eye*: the constant storm veil.
@@ -280,7 +280,7 @@ pub(super) fn update_time_lighting(
     // existing consumer (terrain/model/water/WDL fog + the clear colour) becomes underwater for free
     // (VERIFIED apitrace WoW.18: the reference just switches the active param; no overlay quad).
     let submerged = eye_liquid.submersion();
-    // The ghost-world atmosphere (decision 0308 §7): while PLAYER_FLAGS_GHOST is up the active
+    // The ghost-world atmosphere: while PLAYER_FLAGS_GHOST is up the active
     // LightParams slot is 4 — the death profile (`[0xce9bb0]`) — applied instantly (the client
     // rebuilds its color tables per frame off the single active slot).
     let ghost = viewer.ghost;
@@ -342,7 +342,7 @@ pub(super) fn update_time_lighting(
         )
     };
     let moon02 = daynight::moon02_state(day_f);
-    // **The ocean depth ramp** (decision 1829). Ocean alone runs it, and it darkens the two
+    // **The ocean depth ramp**. Ocean alone runs it, and it darkens the two
     // committed light triples — the first (`DNState+0x178`) by `fac1` down to 0.5 (`0x6d28e0`),
     // the second (`+0x174`) by `fac2` down to 0.75 (`0x6d28fe`), over the first 30 yards.
     // Every other submersion state, ocean's own fog colour included, is untouched: the fog-colour
@@ -383,7 +383,7 @@ pub(super) fn update_time_lighting(
         // Sun disc grows to 2× at the dawn/dusk horizon (size table 0xce8cac); 1× midday. Not gated by
         // a toggle — it's a faithful, binary-verified curve (the trace cross-checks the 2× ratio).
         sun_disc_scale: daynight::sun_disc_scale(minute_f),
-        // The per-body lens-flare day/night envelopes (dnCurve tables, `0x6cf6c0`, 0508): the
+        // The per-body lens-flare day/night envelopes (dnCurve tables, `0x6cf6c0`): the
         // sun's flare is a day thing, the moon's halo a deep-night thing; both are 0 at dusk/dawn.
         sun_flare_dn: daynight::sun_flare_dn(minute_f),
         // The white moon (az 45°, the sun's bearing) + the shared moon size curve.
@@ -396,7 +396,7 @@ pub(super) fn update_time_lighting(
         moon02_disc_scale: moon02.1,
         star_alpha: daynight::star_alpha(minute_f),
         sidn_night: daynight::sidn_night_fraction(minute_f),
-        // The celestial-body tint (discs + glares; decision 0485) — band sub-9, the same row as spec.
+        // The celestial-body tint (discs + glares) — band sub-9, the same row as spec.
         celestial_tint: atmo.sun_color,
         cloud_density: atmo.cloud_density,
         cloud_colors: atmo.cloud_colors,
@@ -425,7 +425,7 @@ pub(super) fn update_time_lighting(
     // staged interior one on `staged.is_some()`, so a target that alternates frame to frame alternates
     // the committed fog frame to frame, and a once-a-second sample simply lands on whichever side it
     // lands on. Rows 18/19 are read by WMO materials *alone*, which is exactly the footprint B38 shows
-    // (decision 0670: one WMO re-lit, terrain and sky untouched).
+    // (one WMO re-lit, terrain and sky untouched).
     static FOG_DUMP: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
     if let Some(mode) = FOG_DUMP.get_or_init(|| std::env::var_os("WOW_FOG_DUMP")) {
         let sec = (mode.as_os_str() != "frame").then(|| time.elapsed_secs() as u32);
@@ -518,7 +518,7 @@ pub(super) fn apply_sky_backdrop(
         return;
     }
     *last = Some(l.fog_color);
-    // GAMMA LANE (0161): the buffer holds gamma bytes — the clear writes the authored DBC
+    // GAMMA LANE: the buffer holds gamma bytes — the clear writes the authored DBC
     // value RAW (`linear_rgb` = no conversion); the frame's one decode is the FFXGlow combine.
     clear.0 = Color::linear_rgb(l.fog_color[0], l.fog_color[1], l.fog_color[2]);
 }

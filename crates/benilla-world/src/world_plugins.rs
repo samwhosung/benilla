@@ -21,7 +21,7 @@
 //!
 //! `debug_panel`, `perf` and the particle census are **not** here either, and the reason they once
 //! had to be is worth keeping: the panel was the model-`Visibility` authority (the WMO portal PVS
-//! is applied through it, decisions 0025/0031), so the world did not draw without it. That
+//! is applied through it), so the world did not draw without it. That
 //! authority is `model_render`'s now and the toggles it reads are `dev_state`'s, so the panel is an
 //! instrument again — which is what 1160 wanted, instruments at the top of the stack rather than
 //! the bottom. `art_scope` stays: within-map art residency is engine behaviour, not a readout, and
@@ -43,14 +43,14 @@ pub struct WorldPlugins;
 impl PluginGroup for WorldPlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
-            // The engine's own WGSL, compiled into the binary (decision 1175). First in the group
+            // The engine's own WGSL, compiled into the binary. First in the group
             // because every material below specializes against a shader handle, and a shader that
             // was never registered fails silently — as a whole world drawn with nothing on it.
             .add(crate::shaders::plugin)
             .add(MaterialPlugin::<TerrainMaterial>::default())
             .add(MaterialPlugin::<WowModelMaterial>::default())
             // Physics (avian3d): collider storage + collider BVH + shape-casts for the character
-            // controller (decision 0009). The streamed terrain/placement entities carry
+            // controller. The streamed terrain/placement entities carry
             // `Collider`s; the player drives `MoveAndSlide` against them. No character controller
             // rides them in the viewer, but the ray-caster and the shape queries do.
             .add_group(PhysicsPlugins::default())
@@ -70,9 +70,9 @@ impl PluginGroup for WorldPlugins {
             // fixed-timestep catch-up runs up to 16 ticks in one frame (`Time<Virtual>`'s stock
             // 250 ms `max_delta`). Four stall captures across three sessions caught the main
             // thread inside `update_narrow_phase` for 12–41% of their samples; the run that
-            // prompted this stalled >600 ms three times in five minutes. Decision 1232.
+            // prompted this stalled >600 ms three times in five minutes.
             .disable::<BvhBroadPhasePlugin>()
-            // …and NOT the dynamics pipeline either (decision 1445 — stage 2 of the same diet,
+            // …and NOT the dynamics pipeline either (stage 2 of the same diet,
             // on the same recorded premise as `SubstepCount(1)` below: the world has ZERO
             // `RigidBody::Dynamic` bodies, zero joints, zero velocity/force consumers — verified
             // by grep across the workspace, only Static colliders and Kinematic transports that
@@ -117,7 +117,7 @@ impl PluginGroup for WorldPlugins {
             .add(crate::interact::InteractPlugin)
             // M2 billboard cards (glow halos, chains) — faced to the camera each frame.
             .add(crate::billboard::BillboardPlugin)
-            // The owned skin palette (decision 0720): every skinned rig's joint matrices, computed
+            // The owned skin palette: every skinned rig's joint matrices, computed
             // by us and skinned in wow_model.wgsl — Bevy's SkinnedMesh lane is fully replaced.
             // The ground-fx decal lane (1164: 326 lines of pure render that had been
             // filed in the app). Its ordering rides the billboard place set, which is why the
@@ -130,14 +130,14 @@ impl PluginGroup for WorldPlugins {
             // Split out of `creature_anim` (1163's re-check of `finalize_rig_worlds`) — the game
             // still decides which clip plays; posing and composing are the world's.
             .add(crate::rig_anim::plugin)
-            // The per-instance body tint (decision 0812), on the same slot index as that palette:
+            // The per-instance body tint, on the same slot index as that palette:
             // the aura state kit's CharProc-1 colour, in its own region of the shared light buffer.
             .add(crate::instance_tint::plugin)
-            // The mat-anim delta table (decision 1381), one region over: the per-frame samples of
+            // The mat-anim delta table, one region over: the per-frame samples of
             // every UV/tint-animated batch material, so animating a waterfall never mutates its
             // material asset again.
             .add(crate::mat_anim_table::plugin)
-            // The M2 render lane's three own plugins (decision 1163, stage zero). All three used to
+            // The M2 render lane's three own plugins (stage zero). All three used to
             // be registered by `EntitiesPlugin` — the entity streamer — which is why booting the
             // engine without the game left the model-`Visibility` authority reading a
             // `FarSideTwins` that nobody had created. Nothing in them is about streamed entities:
@@ -146,12 +146,12 @@ impl PluginGroup for WorldPlugins {
             .add(crate::model_fade::plugin)
             .add(crate::model_render::plugin)
             .add(crate::zfill::plugin)
-            // The straddle split (decision 2188): a translucent model crossing its water plane draws
+            // The straddle split: a translucent model crossing its water plane draws
             // on both sides of the water pass, each half clipped at the waterline — the band
             // verdict, the per-slot clip region and the far-side twins, beside the two lanes
             // (water-side twins, depth primes) it composes with.
             .add(crate::straddle::plugin)
-            // Within-map art residency (decision 0793): the dedup caches expire by DISTANCE, so a
+            // Within-map art residency: the dedup caches expire by DISTANCE, so a
             // long flight inside one map stops ratcheting. Before `AssetPlugin` only so the census
             // resource exists for anything that reads it at startup; it needs no ordering.
             .add(crate::art_scope::ArtScopePlugin)
@@ -173,7 +173,7 @@ impl PluginGroup for WorldPlugins {
             // visible layer.
             .add(crate::clouds::CloudsPlugin)
             // Weather: the SMSG_WEATHER state machine driving the storm light-blend +
-            // precipitation (decision 0310). Lighting reads its densities `.after(WeatherTick)`.
+            // precipitation. Lighting reads its densities `.after(WeatherTick)`.
             .add(crate::weather::WeatherPlugin)
             // Sun disc + glow halo: the celestial sprites WoW draws at the sun (RE'd from
             // CSky::Render).
@@ -184,19 +184,19 @@ impl PluginGroup for WorldPlugins {
             .add(crate::interior::InteriorPlugin)
             .add(crate::entity_shade::EntityShadePlugin)
             // The world camera's pose, published before the `Update`-stage viewer authorities
-            // below read it (decision 1503) — without it they answer about where the camera was
+            // below read it — without it they answer about where the camera was
             // last frame, which on a teleport frame is the place we just left.
             .add(crate::view::ViewPlugin)
             // WMO portal visibility: per-frame, decides which of a building's groups are reachable
             // through portals from the camera's group, so the Stormwind cathedral culls from the
             // Trade District. Only computes the PVS; the `Visibility` authority
-            // (`model_render::visibility`) applies it (decisions 0025/0031).
+            // (`model_render::visibility`) applies it.
             .add(crate::wmo_portal::WmoPortalPlugin)
             // The exterior scene draws only through portal windows the flood left behind (decision
             // 0774): from inside a building, terrain and ADT doodads are gated on the deferred
             // window worklist.
             .add(crate::exterior_cull::ExteriorCullPlugin)
-            // Doodad animation (decision 0130): placed M2s loop their first sequence + global
+            // Doodad animation: placed M2s loop their first sequence + global
             // sequences, gated to drawn instances.
             .add(crate::doodad_anim::DoodadAnimPlugin)
             // Ground clutter: the GroundEffect catalog + the lazy per-chunk build lifecycle, owned
@@ -207,16 +207,15 @@ impl PluginGroup for WorldPlugins {
             .add(crate::wdl::WdlPlugin)
             // Liquid: animated lake/river/ocean water surfaces (MCLQ), spawned with their tile.
             .add(crate::liquid::LiquidPlugin)
-            // Particle emitters: the additive flames/glows of campfires, torches, braziers
-            // (decision 0014).
+            // Particle emitters: the additive flames/glows of campfires, torches, braziers.
             .add(crate::particles::ParticlePlugin)
             // Water foam decals (CWater0Ripple wake/ring/step-in splash) — the record model,
-            // rebuilt from the byte RE + two reference-trace reconstructions (decision 0264).
+            // rebuilt from the byte RE + two reference-trace reconstructions.
             .add(crate::water_fx::WaterFxPlugin)
             .add(crate::ffx_glow::FfxGlowPlugin)
             .add(crate::ribbons::RibbonPlugin)
             // Stuck-modifier reconciliation: macOS system shortcuts (⇧⌘5) swallow modifier
-            // releases without a focus loss, wedging every bare-key binding (decision 0606).
+            // releases without a focus loss, wedging every bare-key binding.
             .add(crate::modkeys::ModKeysPlugin)
             // Terrain streaming: the benilla-assets `AdtTile` pipeline — streams tiles around the
             // viewer through the `AssetServer`, owning the terrain mesh/material/collision,
@@ -247,7 +246,7 @@ impl Plugin for WorldFoundation {
             // The faithful view distance (`farclip`) — one source of truth for the wall + the
             // per-object cull (and, post-split, the stream radius). See `view.rs`.
             .init_resource::<crate::view::ViewDistance>()
-            // The world camera's multisampling level (`gxMultisample`, decision 1629) — read
+            // The world camera's multisampling level (`gxMultisample`) — read
             // ONCE, at the camera's spawn, because the reference's own flag says latched.
             .init_resource::<crate::view::MsaaSetting>()
             .init_resource::<crate::view::MsaaFormats>()
@@ -262,7 +261,7 @@ impl Plugin for WorldFoundation {
             // The viewer's body (wire (a)'s kinematics half) — defaulted by the engine so a
             // program with no avatar leaves it empty and every reader takes its no-body branch.
             .init_resource::<crate::view::Viewer>()
-            // The dev state (decision 0026): the always-present config layer eight subsystems
+            // The dev state: the always-present config layer eight subsystems
             // read, whose defaults ARE the player behaviour. The debug panel is only its editor
             // and may not be installed at all.
             .init_resource::<crate::dev_state::DebugState>()
@@ -344,7 +343,7 @@ impl Plugin for WorldFoundation {
         // re-pricing. 1370's note that the lever must cover every camera, not just the world's,
         // is why this covers `Camera` itself rather than our own marker.
         //
-        // **A REQUIRED COMPONENT, not a sweep** (decision 1488). 1374/1376 shipped this as an
+        // **A REQUIRED COMPONENT, not a sweep**. 1374/1376 shipped this as an
         // `Update` system that inserted the marker on any camera lacking it, and that is a latent
         // GPU crash: bevy's own doc on `NoIndirectDrawing` says *"This component should only be
         // added when initially spawning a camera. Adding or removing after spawn can result in

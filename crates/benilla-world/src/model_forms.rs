@@ -1,10 +1,10 @@
-//! Paced model render-form building — the model-lane twin of the tile furnisher (decision 0834,
+//! Paced model render-form building — the model-lane twin of the tile furnisher (
 //! closing 0832's named residual).
 //!
 //! The M2/WMO loaders ship **geometry, no meshes** (`ModelSubmesh::geometry`): a loader-built
 //! labeled sub-asset lands the instant its decode completes, and the render world ingests the
 //! whole model — a city root's thousands of group batches, a fresh row's hundreds of doodads —
-//! in ONE frame. Measured at the Stormwind line (pre-0834): 2000–3200 mesh assets per crossing,
+//! in ONE frame. Measured at the Stormwind line (pre): 2000–3200 mesh assets per crossing,
 //! 44–119 ms wall on the worst frame, on every crossing including re-entries. No budget
 //! downstream of a load can spread work the loader has already packaged, so the build lives
 //! here: consumers `require()` the forms they need, and [`furnish_model_forms`] builds a bounded

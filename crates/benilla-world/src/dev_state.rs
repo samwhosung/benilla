@@ -5,7 +5,7 @@
 //! compile-time `dev` seam lands (0026's deferred phase), this module stays in a player build —
 //! the defaults ARE the player behaviour — and only the egui surfaces gate out.
 //!
-//! It was `debug_panel::state` until decision 1164. Living inside the panel's module made the
+//! It was `debug_panel::state` until. Living inside the panel's module made the
 //! panel look like the owner of config eight other subsystems read, and it was the second reason
 //! `DebugPanelPlugin` had to be inside the engine's plugin group — the first being the model
 //! `Visibility` authority, now `model_render`'s. With both out, the panel is an instrument again
@@ -78,7 +78,7 @@ pub(crate) fn count_still_inputs(
 /// (`open: false`), each section its own `Default` (so this derives cleanly).
 #[derive(Resource)]
 pub struct DebugState {
-    /// Panel visible? Hidden by default; toggled with the dev chord + `D` (decisions 1043, 1048).
+    /// Panel visible? Hidden by default; toggled with the dev chord + `D`.
     ///
     /// `$WOW_PANEL=1` starts it **open**, which is how a headless capture run gets the panel into
     /// the frame. Without it a panel change (a new footer line, a section that grew past the
@@ -105,7 +105,7 @@ impl Default for DebugState {
 }
 
 /// Weather-instrument state: a panel-armed override that drives the same `WeatherState::apply`
-/// path as the wire (decision 0302), so any type/grade transition can be exercised without a GM
+/// path as the wire, so any type/grade transition can be exercised without a GM
 /// `.wchange`. While `force` is on, wire weather is consumed and ignored.
 #[derive(Default)]
 pub struct WeatherDebug {
@@ -131,7 +131,7 @@ pub struct SoundDebug {
     pub kit_query: String,
     /// One-shot: play `kit_query` through the kit player.
     pub play_kit: bool,
-    /// How many copies of `kit_query` the probe fires **in one frame** (decision 1551).
+    /// How many copies of `kit_query` the probe fires **in one frame**.
     ///
     /// The reported defect is an overlap defect — "a lot of mobs attacking same time, or a priest
     /// buffing a group with mass fort" — and it needs no game state to reproduce, only N
@@ -197,7 +197,7 @@ pub struct ModelDebug {
     pub kind_visible: [bool; 4],
     /// Visible flags indexed by [`crate::model_render::blend_index`].
     pub blend_visible: [bool; 5],
-    /// WMO portal visibility culling on/off (decision 0031). On = the faithful per-group PVS; off =
+    /// WMO portal visibility culling on/off. On = the faithful per-group PVS; off =
     /// every group of a building always drawn (the pre-portal behaviour). An A/B switch for the
     /// director: flip it off in the Trade District and the cathedral above reappears.
     pub portal_cull: bool,

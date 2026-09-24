@@ -130,7 +130,7 @@ impl Plugin for SkyPlugin {
                     // The dome's stops are the resolved atmosphere, so the push belongs on the
                     // READ side of the resolve (`lighting::LightingConsumeSet`) — unordered it
                     // runs at the top of `Update` and paints last frame's palette, which on a
-                    // surfacing frame is the underwater one (B354, decision 2032).
+                    // surfacing frame is the underwater one.
                     update_sky_colors.in_set(crate::lighting::LightingConsumeSet),
                     // The dome stands down for a WMO skybox, so its gate must read the SETTLED
                     // resolve, not whichever side of it the executor picked (`crate::skybox`).
@@ -305,7 +305,7 @@ fn update_sky_colors(
         .map(|c| col(benilla_assets::quant255(*c)))
         .collect();
     let f = benilla_assets::quant255(light.fog_color);
-    // `fog.w` unused by the shader (the old raw-vs-linearised A/B is gone — GAMMA LANE, 0161).
+    // `fog.w` unused by the shader (the old raw-vs-linearised A/B is gone — GAMMA LANE).
     let fog = Vec4::new(f[0], f[1], f[2], 0.0);
     // Dawn/dusk warp: strength S + the sun's compass azimuth (Bevy world `atan2(z, x)` of the
     // camera→sun direction). The warp's glow table is symmetric about this bearing, so the sun-facing

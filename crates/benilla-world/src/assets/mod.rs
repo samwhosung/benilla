@@ -1,7 +1,7 @@
 //! The asset foundation's **plugin shell** — the three systems that drive
 //! [`benilla_assets::WorldAssets`] from inside the client.
 //!
-//! The store itself went down to `benilla-assets` (decision 1164); what could not follow it is
+//! The store itself went down to `benilla-assets`; what could not follow it is
 //! exactly this: opening the chain needs the shared light buffer (`lighting`), evicting the world
 //! art needs the cross-map message (`world_map`), and the residency sweep needs the art-scope
 //! instrument. Three upward reaches, all of them here, none of them in the data core.
@@ -43,7 +43,7 @@ fn evict_world_art(
     }
 }
 
-/// Expire the world-art dedup by **distance** (decision 0793) — the within-map half of the eviction
+/// Expire the world-art dedup by **distance** — the within-map half of the eviction
 /// above. `textures` is the one that matters for VRAM: a decoded BLP is pinned by the material that
 /// samples it, and a material by this cache, so nothing here dropping is why `images` never fell on a
 /// same-map traverse. The UI sprite caches stay unswept for the same reason they survive a map change
@@ -56,7 +56,7 @@ fn scope_world_art(mut scope: ArtScope, assets: Option<ResMut<WorldAssets>>) {
 }
 
 /// Open the vanilla patch chain from wherever the install is ([`benilla_formats::wow_data`] —
-/// `$WOW_DATA`, the project folder on a dev build, else beside the binary; decision 1175) and
+/// `$WOW_DATA`, the project folder on a dev build, else beside the binary) and
 /// insert the shared [`WorldAssets`] (chain + dedup caches) + [`RenderConfig`]. If the client data
 /// can't be found or opened, `WorldAssets` is simply absent and downstream startup falls back to
 /// an empty free-fly scene.
@@ -68,7 +68,7 @@ fn open_world_assets(mut commands: Commands, device: Res<RenderDevice>) {
     // render-world upload. Always present — even with no client data — so the render upload has a
     // target; harmless if unused. It used to be created *after* the lookup, so a client that found no
     // install had no buffer at all and `particles::model::update_model_particles` — a hard
-    // `Res<SharedLightBuffer>` — could not validate (decision 1451).
+    // `Res<SharedLightBuffer>` — could not validate.
     let shared_light = crate::lighting::new_shared_light_buffer(&device);
     let light_buf = shared_light.0.clone();
     commands.insert_resource(shared_light);
@@ -81,8 +81,8 @@ fn open_world_assets(mut commands: Commands, device: Res<RenderDevice>) {
     };
     // How much terrain is resident is NOT a knob here: the streamer derives its window from the
     // live `farclip` (`view::ViewDistance`, the player's Terrain Distance setting) the way the
-    // reference does — `terrain_stream::window`, decision 1513. `$WOW_TILE_RADIUS` is retired.
-    // See the field doc: the tile-unload budget (B181). Default 1 — even the fastest focus
+    // reference does — `terrain_stream::window`. `$WOW_TILE_RADIUS` is retired.
+    // See the field doc: the tile-unload budget. Default 1 — even the fastest focus
     // (boosted free-fly, ~1 stale row/s) produces stale tiles far slower than 60/s drains them.
     let unload_budget = std::env::var("WOW_TILE_UNLOAD")
         .ok()

@@ -14,7 +14,7 @@ use crate::particles;
 /// Light intensity for an M2 light of unit `diffuse_intensity`, in the units Bevy's `PointLight`
 /// used when it carried this (`linear_color × intensity/(4π)`), so `4π` makes the packer read exactly
 /// `diffuse_color × diffuse_intensity` — a clean, predictable base. `wow_model.wgsl` then applies the
-/// faithful WoW falloff `1/(0.7d+0.03d²)` (decision 0016). There is no gain dial any
+/// faithful WoW falloff `1/(0.7d+0.03d²)`. There is no gain dial any
 /// more: the 0273 `sh_c16.w` gain is retired and the commit is the reference's raw product
 /// (`global_light::commit_raw`).
 const POINT_LIGHT_INTENSITY: f32 = 4.0 * std::f32::consts::PI;
@@ -27,8 +27,8 @@ const POINT_LIGHT_RANGE: f32 = 48.0;
 
 /// The one [`WorldPointLight`] recipe for an authored WoW light source (M2 or WMO MOLT). The light only
 /// carries position + colour into the shared packed table; every lit surface — terrain, M2
-/// doodads/NPCs, and WMO walls/floors (decision 0273: the reference lights them all) — then selects
-/// its unit's ≤3 NEAREST from that table and applies the faithful falloff in-shader (decision 0285;
+/// doodads/NPCs, and WMO walls/floors (the reference lights them all) — then selects
+/// its unit's ≤3 NEAREST from that table and applies the faithful falloff in-shader (
 /// the committed light is diffuse-only). `color` is the authored WoW RGB (linear, hue preserved);
 /// `intensity_scale` folds in the per-light authored intensity.
 ///
@@ -52,7 +52,7 @@ fn spawn_point_light(
     intensity_scale: f32,
     // The rooms this source belongs to, for a light inside a building — `None` outdoors. A torch in
     // a culled room is one the reference never instantiated, so it lights nothing
-    // ([`crate::lighting::LightRooms`], decision 0689).
+    // ([`crate::lighting::LightRooms`]).
     room: Option<crate::wmo_portal::WmoGroupVis>,
     out: &mut Vec<Entity>,
 ) {
@@ -99,7 +99,7 @@ pub(super) fn spawn_lights_for(
 
 /// Spawn a [`WorldPointLight`] for each omni (`type==0`) **WMO MOLT** light at the building's `transform` (the
 /// interior fixture sources — forge fire, inn fireplaces, chapel candles/chandeliers). These radiate onto
-/// the NPCs/doodads near each fixture and onto the building's own walls/floor (decision 0273). Position
+/// the NPCs/doodads near each fixture and onto the building's own walls/floor. Position
 /// is WMO model space. The MOLT curve is the same fixed WoW falloff as the M2 path — byte-verified
 /// (`0x695c00`: the disk attenStart/End do not shape the GL falloff) and confirmed live in
 /// the reference GL trace (committed c/l/q = 0/0.7/0.03, diffuse = colour × intensity, ambient 0).
@@ -150,7 +150,7 @@ pub(super) fn spawn_wmo_lights_for(
 /// placement applied to it — the same point the doodad's own visibility gate measures to.
 /// `instance` is the WMO placement this model's doodad set belongs to (`None` for an ADT map
 /// doodad), carrying the exterior-window exemption for a prop of the building the camera is
-/// standing in (0786). `groups` are the rooms of that placement which name this prop — `None` or
+/// standing in. `groups` are the rooms of that placement which name this prop — `None` or
 /// empty ⇒ **no room gate**, which is the mesh path's own `d.groups.is_empty()` arm, spelled once
 /// here so the two cannot diverge (0689/1289). It is borrowed rather than owned because the shared
 /// `Arc` is exactly what wants cloning, and an ADT map doodad — the tens-of-thousands case — must
@@ -177,7 +177,7 @@ pub(super) fn emitter_fade(
 /// resolved texture are skipped by [`particles::spawn_emitter`].
 ///
 /// `host` is the placement's [`PlacementHost`] when it animates (0130 phase 4): each emitter then
-/// rides its host bone's ANCHOR (decision 1365 — the collapsed rig's stand-in for the joint,
+/// rides its host bone's ANCHOR (the collapsed rig's stand-in for the joint,
 /// pre-minted by the assembler for exactly these bones) — the torch flame follows the flame-bone
 /// jiggle, the inn chandelier's candle flames swing with it. Riding is unconditional given a
 /// host: for a bone whose chain never animates the anchor holds its telescoped rest pivot, so
@@ -192,7 +192,7 @@ pub(super) fn emitter_fade(
 /// for ever and emitted nothing, on every placement, while still building, pooling and ticking.
 /// `benilla-extract partslotscan` counts **947** such emitters across **184** models; the one that
 /// surfaced it is the Blasted Lands lightning strike, whose whole burst lives in slot 1
-/// (decision 0760, bug B63).
+/// (bug B63).
 pub(super) fn spawn_emitters_for(
     commands: &mut Commands,
     emitters: &[ModelEmitter],
@@ -218,13 +218,13 @@ pub(super) fn spawn_emitters_for(
                 anchor: None, // anchor at the placement: an animated bone never drags the cloud
                 // An animated doodad's rig goes when its placement unloads, and that IS this
                 // model being destroyed — free the pool with it, the same rule the WMO-prop lane
-                // beside this one already states (0826, missed here: a tile crossing left the
+                // beside this one already states (missed here: a tile crossing left the
                 // brazier's flame draining at the old spot).
                 on_owner_loss: particles::OwnerLoss::Free,
                 ..default()
             },
-            // A placed doodad's arm is NOT one-time: it re-rolls its variation every play-window
-            // (decision 0768), so the emitters read the slot AND the clip time off the host's live
+            // A placed doodad's arm is NOT one-time: it re-rolls its variation every play-window,
+            // so the emitters read the slot AND the clip time off the host's live
             // player each frame — the same lane units and GameObjects use, and what the reference's
             // animate kernel (`0x714260`) does for every model without distinction. A pinned slot
             // was right only under the superseded "armed once at load" contract.
@@ -278,7 +278,7 @@ pub(super) fn spawn_ribbons_for(
                 crate::ribbons::RibbonSeq::Fixed(0),
                 crate::ribbons::RibbonSeq::Host,
             ),
-            // No model-alpha source: a placed prop / effect instance is always drawn (0827).
+            // No model-alpha source: a placed prop / effect instance is always drawn.
             None,
             Some(fade.clone()),
         );

@@ -4,7 +4,7 @@
 //! two optional instruments — [`super::depthdump`] (`$WOW_PARTICLE_DEPTHDUMP`, the depth numbers
 //! a pool brings to the compare) and [`super::emitdump`] (`$WOW_EMIT_DUMP`, what the emission
 //! front end decided) — each of which would otherwise spend a parameter or two of its own. That
-//! ceiling should never be the reason an instrument doesn't get built (0022), so the
+//! ceiling should never be the reason an instrument doesn't get built, so the
 //! pair shares one: both stay inert without their env, and the sim reads them through here.
 
 use bevy::ecs::system::SystemParam;

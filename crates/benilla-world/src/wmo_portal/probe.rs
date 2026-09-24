@@ -1,4 +1,4 @@
-//! The portal-cull probe + trace instrument (decision 0022 — instruments as first-class): the live
+//! The portal-cull probe + trace instrument (instruments as first-class): the live
 //! seed/visibility readout the debug panel shows, and the on-demand full-trace dump that turns a
 //! director-found "it vanishes here" into an exact fixture (eye coordinates, seed evidence, and every
 //! portal hop's verdict). The flood itself lives in the parent module; [`TraceLog`] records through
@@ -11,7 +11,7 @@ use super::{
     MAX_FLOOR_DROP,
 };
 
-/// The portal-cull probe (decision 0022 — instruments as first-class): an on-demand full trace dump —
+/// The portal-cull probe (instruments as first-class): an on-demand full trace dump —
 /// the "found a spot where it vanishes" loop: click dump at the broken spot, and the exact seed evidence
 /// + per-portal verdicts land in a file the audit harness can replay as a fixture.
 #[derive(Resource, Default)]

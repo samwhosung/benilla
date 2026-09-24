@@ -7,7 +7,7 @@
 //! encoder. Under a background build the frame's own workers wait in the compiler's queue and the
 //! client drops to 20 fps while the retail client (whose workers are promoted, plus Game Mode)
 //! holds steady. Promoting the workers is the per-thread half of that story; the Game Mode half
-//! needs an app bundle and is release-track (decision 0609).
+//! needs an app bundle and is release-track.
 //!
 //! `pthread_set_qos_class_self_np` is not bound by the `libc` crate, so the extern lives here.
 //! Everything is a no-op off macOS.
@@ -29,11 +29,11 @@ pub enum QosClass {
     /// runs the compile at the **calling thread's** QoS, and Apple's own prescription for
     /// pipeline prewarming is exactly this class (WWDC25 "Explore Metal 4 games":
     /// "Set QoS class to default for pipeline prewarming and streaming", with sample code using
-    /// `QOS_CLASS_DEFAULT`). Decision 1117.
+    /// `QOS_CLASS_DEFAULT`).
     Default = 0x15,
 }
 
-/// Set while the *covered* pipeline-warm burst runs (decision 1117): the render thread spends
+/// Set while the *covered* pipeline-warm burst runs: the render thread spends
 /// that window blocked inside Metal pipeline compilation, and there is no frame to protect —
 /// the loading cover is a still image. Published by `pipe_warm`, applied by
 /// [`promote_render_thread`] on the render thread itself, which is the only thread that can set

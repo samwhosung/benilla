@@ -1,7 +1,7 @@
 //! **Which build is this?** — the commit the running binary was built from, stamped in at
 //! compile time by the `benilla` launcher shim's `build.rs` (which owns the *how*, including why
 //! the stamp can't go stale — and why it is stamped into the ~30-line shim rather than this
-//! crate: cargo re-dirties whatever package carries the stamp on every commit, decision 0993)
+//! crate: cargo re-dirties whatever package carries the stamp on every commit)
 //! and handed to [`crate::run`] as the [`BuildId`] resource.
 //!
 //! A report from someone else's machine — "the water reads wrong here", "it panicked on login" —
@@ -36,7 +36,7 @@ pub struct BuildId {
     /// The commit date of [`sha`](Self::sha) (`YYYY-MM-DD`) — a property of the sha, so it can
     /// never disagree with it.
     pub date: &'static str,
-    /// The cargo profile directory this was built in: `debug`, `release`, or `ship` (0736). Half
+    /// The cargo profile directory this was built in: `debug`, `release`, or `ship`. Half
     /// of every "it runs badly" report is a debug build.
     pub profile: &'static str,
 }

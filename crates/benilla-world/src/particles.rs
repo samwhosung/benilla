@@ -2,7 +2,7 @@
 //!
 //! The 1.12 client simulates particles on the CPU and draws them as camera-facing, additive quads; we
 //! do the same (the GPU never touched the legacy particle path, and a CPU sim is the only way to match
-//! the integrator exactly — see decision 0014). Each [`ParticleEmitter`] owns a small pool of live
+//! the integrator exactly). Each [`ParticleEmitter`] owns a small pool of live
 //! particles: every frame we age + integrate the pool, then expand each live particle into a
 //! camera-facing quad written into the **shared effect-quad stream** ([`buffer::EffectQuads`],
 //! decision 0732 slice P1 — one CPU vertex vec + one GPU upload for the whole family, drawn by
@@ -18,7 +18,7 @@
 //! (`0x7b3efb`). The lane's
 //! fragment does the vanilla gamma-space combine (`shaders/wow_effect.wgsl`, decisions
 //! 0152/0161). The whole effect family — particles, ribbons, the decal family, water foam,
-//! precipitation — draws through the lane; `WowParticleMaterial` retired with slice P2 (0733).
+//! precipitation — draws through the lane; `WowParticleMaterial` retired with slice P2.
 //!
 //! Over-life colour (incl. the alpha that is the additive weight), size and texture-cell are sampled
 //! from the parsed [`benilla_formats::OverLife`] ramp by the particle's normalized age.
@@ -48,9 +48,9 @@ pub(crate) use sim::{far_side_of_water, model_far_side, water_height, WaterInter
 /// SKIPPED frame, not a sleeping scene — so the lanes that freeze with a sleeping booth camera
 /// ([`sim::simulate_particles`]) must keep simulating through it.
 ///
-/// The distinction is the whole point (decision 1559). The draw-set law — an emitter ticks only
+/// The distinction is the whole point. The draw-set law — an emitter ticks only
 /// inside a draw the frame performs, one frame's dt, no catch-up — is the *reference's*, and it
-/// is keyed on the reference's own cull. `boothHalfRate` (decision 1444) is **ours**: a camera it
+/// is keyed on the reference's own cull. `boothHalfRate` is **ours**: a camera it
 /// skips has a scene that is still posing at full rate (the skeleton's `AnimParked` keys on the
 /// booth's LOGICAL active state, never on the rendered frame). Reading our skip as the
 /// reference's cull ran the body panes' item emitters at half speed — director report B312,
@@ -87,7 +87,7 @@ impl Default for ParticleTuning {
 }
 
 /// One live particle. Its frame is the emitter's storage space, which the file flag `0x10` picks
-/// — and the two spaces are the whole of the ride-vs-trail law (decision 1585):
+/// — and the two spaces are the whole of the ride-vs-trail law:
 /// - **World mode** (flag `0x10` CLEAR — ~70 % of the corpus): `pos`/`vel` are **absolute world
 ///   coordinates, Bevy axes**. The birth bakes everything — bone pose, model rotation, scale,
 ///   position — through the live emitter matrix (`0x7b8acf`/`0x7b8b0f`), and the draw folds
@@ -146,7 +146,7 @@ pub struct ParticleEmitter {
     /// Static for terrain doodads; refreshed each frame from [`Self::owner`] when set.
     placement: Transform,
     /// **The frame this cloud's WORLD-mode particles are stored in** — world on the ground, the
-    /// transport's deck while the owning model rides one ([`crate::ride_frame`], decision 1591).
+    /// transport's deck while the owning model rides one ([`crate::ride_frame`]).
     ///
     /// The `0x10` CLEAR store bakes a birth into absolute coordinates and never re-applies a live
     /// matrix, which is what makes a trail. On a transport that leaves a rider's cloud behind the
@@ -175,7 +175,7 @@ pub struct ParticleEmitter {
     /// the reference's `emitter+0x1a8`, a per-frame copy of that model's `+0x19c` (`0x718960`
     /// @`0x719073`), folded into each particle's ALPHA by the over-life sampler (`0x7b9b10`
     /// @`0x7b9b42`). For an ATTACHED model — a held item, a helm, a pauldron — it is the
-    /// WEARER's, because an attached model inherits its parent's computed alpha (decision 0827).
+    /// WEARER's, because an attached model inherits its parent's computed alpha.
     /// `None` ⇒ 1.0: a placed doodad instead multiplies its own distance fade ([`EmitterFade`]).
     alpha_src: Option<Entity>,
     /// This frame's value of that alpha (1.0 until read).
@@ -246,7 +246,7 @@ pub struct ParticleEmitter {
     /// hidden. Quads need no flag: a gated pool simply pushes nothing into the shared stream.
     gated: bool,
     /// **The owner's own freeze** — the scene-level "this cloud is not being drawn" answer for a
-    /// scene whose CAMERA cannot give it (decision 2046). [`sim::booth_frozen`] reads a
+    /// scene whose CAMERA cannot give it. [`sim::booth_frozen`] reads a
     /// booth-layered emitter's freeze off its camera's `is_active` bit, which is exact while one
     /// camera means one scene — and the `<Model>` tile atlas broke that: EVERY orthographic pane
     /// on the sheet shares one camera, and that camera is deliberately kept active whenever any
@@ -314,7 +314,7 @@ impl ChildEmitter {
 }
 
 /// What becomes of a live pool when its owner entity goes away — the distinction the sim itself
-/// cannot make, because from inside it a despawned owner looks the same either way (decision 0826).
+/// cannot make, because from inside it a despawned owner looks the same either way.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum OwnerLoss {
     /// The owner MODEL was destroyed: **free the emitter with it**, live particles and all. This
@@ -368,7 +368,7 @@ impl ParticleEmitter {
     }
 
     /// Set the lane's size unit for this cloud — see [`quads::DrawFrame::size_scale`]. A UI
-    /// model tile (decision 2008) stores its cloud in device pixels and passes the reference's
+    /// model tile stores its cloud in device pixels and passes the reference's
     /// pixels-per-model-unit for a particle's half-extent; every world lane leaves the default.
     pub fn set_size_scale(&mut self, size_scale: f32) {
         self.size_scale = size_scale;
@@ -387,7 +387,7 @@ impl ParticleEmitter {
     ///
     /// A tile's cloud is quads in the shared atlas's own space, so without this a cloud that
     /// reaches past its cell lands in the cell the shelf packed beside it — which the composite
-    /// hands to a different widget (B379: the autocast shine's golden `GlowStar` down the left
+    /// hands to a different widget (the autocast shine's golden `GlowStar` down the left
     /// edge of a bag slot's cooldown). The reference has no atlas and no such reach: it draws
     /// each `<Model>` with the widget's rect as the VIEWPORT.
     pub fn set_clip(&mut self, clip: Option<Vec4>) {
@@ -434,7 +434,7 @@ impl ParticleEmitter {
 
     /// Is this emitter in the frame's draw set — i.e. did the draw-set gate let it tick and push
     /// quads this frame? The instrument-side spelling of [`Self::gated`], read by the particle
-    /// census probe. (It read the entity's `Visibility` until slice P2 (0733) moved the family onto
+    /// census probe. (It read the entity's `Visibility` until slice P2 moved the family onto
     /// the shared stream and emitter entities stopped carrying one — after which the probe's query
     /// matched NOTHING and every column it printed, including B39's `drawn_beyond_wall` guard, was
     /// a vacuous zero.)
@@ -460,8 +460,7 @@ impl ParticleEmitter {
     /// `None` for a pinned or effect clock. The read an instrument or a wiring test needs, because
     /// the difference is invisible in every other observable: a hosted and a pinned emitter build,
     /// pool, tick and draw identically, and differ only in *which* sequence's tracks they read —
-    /// which is the whole difference between a firearm's muzzle blast firing and never firing
-    /// (decision 2281).
+    /// which is the whole difference between a firearm's muzzle blast firing and never firing.
     pub fn emit_host(&self) -> Option<Entity> {
         self.host
     }
@@ -481,7 +480,7 @@ impl ParticleEmitter {
     /// It is deliberately NOT the spawn-time policy for an attached instance, because the *other*
     /// way an effect's owner can vanish is the model dtor — a gear change, a display swap, a unit
     /// streaming out — and there the reference frees the emitters synchronously and the pool must
-    /// go with the body (decisions 0826/0833: draining that case stranded ghost clouds in the air
+    /// go with the body (draining that case stranded ghost clouds in the air
     /// where the character had been). Both look identical from inside the sim, so the ending side
     /// says so explicitly.
     pub fn drain_on_owner_loss(&mut self) {
@@ -564,7 +563,7 @@ impl ParticleEmitter {
 /// (fade ≤ 0 — a small prop past 50 yd, a mid prop past 125), the emitter neither simulates nor
 /// draws — the reference ticks particles as part of the owning model's animate step, which only
 /// runs for drawn models. This is the system that bounds the reference's emitter population; the
-/// particle-side rule (emission LOD, no cull — decision 0151) applies only WITHIN the draw set.
+/// particle-side rule (emission LOD, no cull) applies only WITHIN the draw set.
 /// Attached by the terrain spawn path; entity-owned emitters (creatures/GameObjects/spells) are
 /// bounded by server visibility instead and carry no fade.
 /// The rule is shared by BOTH emitter families — the quad clouds here and the ribbon trails in
@@ -589,7 +588,7 @@ pub struct EmitterFade {
     /// It answers the question [`Self::instance`] cannot: not *which building am I furniture of*
     /// (identity, for the exemption above) but *is the room I stand in drawn this frame*. The
     /// reference never has to ask, because it instantiates a WMO's props out of each **visible**
-    /// group's own MODR list (`0x695aa0` from the visible-group walk `0x698720`, decision 0689) —
+    /// group's own MODR list (`0x695aa0` from the visible-group walk `0x698720`) —
     /// a prop in a culled room is never created, so it has no emitters to tick. We create props
     /// once and cull them per frame, so every rider of a prop has to ask for itself, and this is
     /// the one place the answer is spelled.
@@ -602,7 +601,7 @@ pub struct EmitterFade {
     ///
     /// By value and not as a component on the emitter entity, because a `WmoGroupVis` there would
     /// enlist it in `apply_model_visibility`'s `group_only` query — a second `Visibility` writer on
-    /// an entity whose `Visibility` this lane does not read (decision 0025).
+    /// an entity whose `Visibility` this lane does not read.
     pub(crate) room: Option<crate::wmo_portal::WmoGroupVis>,
 }
 
@@ -622,7 +621,7 @@ impl EmitterFade {
 
     /// This owner's distance-fade ALPHA (not the cutoff): the reference writes it into the
     /// doodad's `CM2Model+0x180`, so it multiplies that model's particles exactly as it does its
-    /// batches (`FUN_00683f80` → `+0x180` → `+0x19c` → `emitter+0x1a8`, decision 0827). The
+    /// batches (`FUN_00683f80` → `+0x180` → `+0x19c` → `emitter+0x1a8`). The
     /// [`Self::in_draw_set`] gate is the same curve's zero crossing — this is the feather before
     /// it, which is why a small prop's flame now thins out over its band instead of cutting.
     pub fn distance_alpha(&self, cam_pos: Vec3) -> f32 {
@@ -637,10 +636,10 @@ impl EmitterFade {
     /// 1. the radius-tiered distance fade hasn't reached zero (`FUN_00683f80`),
     /// 2. the sphere is inside the far-clip wall ([`crate::view::within_farclip`]),
     /// 3. `lateral_in_frustum` — the caller's frustum sphere test on the side/near planes,
-    /// 4. `exterior_admitted` — the caller's exterior-window test (decision 0786),
-    /// 5. `room_admitted` — the caller's portal-PVS test ([`Self::room_admitted`], decision 0689).
+    /// 4. `exterior_admitted` — the caller's exterior-window test,
+    /// 5. `room_admitted` — the caller's portal-PVS test ([`Self::room_admitted`]).
     ///
-    /// Term 2 is the one bug B39 was missing (decision 0678), and it cannot be folded into term 1:
+    /// Term 2 is the one bug B39 was missing, and it cannot be folded into term 1:
     /// [`crate::model_fade::doodad_fade_alpha`] returns a flat `1.0` for any owner bigger than
     /// [`crate::model_fade::NEVER_FADE_RADIUS`], so for exactly the props that carry the big
     /// effects — braziers, bonfires, portal frames — term 1 admits at *every* distance.
@@ -654,8 +653,8 @@ impl EmitterFade {
     /// Term 5 is the same omission one layer *in*: the exterior window asks whether the BUILDING is
     /// in the scene, and answers "yes" for every building the camera can see — which says nothing
     /// about the sealed room inside it that this emitter's owner actually stands in. Ninety Caverns
-    /// of Time ribbon trails burned up through 200 yd of Tanaris rock on exactly that gap
-    /// (decision 1289); this is the shared spelling that decision named as the fix.
+    /// of Time ribbon trails burned up through 200 yd of Tanaris rock on exactly that gap;
+    /// this is the shared spelling that decision named as the fix.
     ///
     /// Pure and total so the rule is pinned by tests without an ECS (the `model_fade` pattern).
     pub fn in_draw_set(
@@ -737,7 +736,7 @@ pub fn spawn_emitter(
     if def.params.peak_lifespan() <= 0.0 || def.timing.peak_rate() <= 0.0 {
         return None; // emits nothing
     }
-    // The starting slot is the model's **loader-idle** sequence, never "unknown" (decision 0936).
+    // The starting slot is the model's **loader-idle** sequence, never "unknown".
     // The reference arms that sequence on every M2 instance at load, so an emitter always has a
     // sequence to sample; leaving it `None` handed the slot resolution to `EmitTiming::idx`'s
     // `unwrap_or(0)` degrade, which is the idle slot only by accident. On the Spawn/Stand/Despawn
@@ -824,11 +823,11 @@ pub fn spawn_emitter(
 /// - **Quad clouds** sort at the owner's ORIGIN, so the order flips with camera ELEVATION. On the
 ///   voidwalker at 12 yd: at 0° the eye emitters land at transparent slots 324/325 with 5 of the 14
 ///   blend batches still behind them; at 35° they drop to slots 7/8 and **all 14** draw over them —
-///   B16, the eye glow visible from below the eye horizon and gone from above (decision 0719).
+///   B16, the eye glow visible from below the eye horizon and gone from above.
 /// - **Ribbon trails** sort at the live head node, which sits *inside* the owner, so they interleave
 ///   at every angle and the interleave MOVES. On the wisp at 6 yd, elevation 0°: its three streamers
 ///   land at slots 310/317/324 among the wisp's own 14 blend batches, 6 batches deep each, and which
-///   batches are over which streamer changes frame to frame as the streamers whip (decision 0721).
+///   batches are over which streamer changes frame to frame as the streamers whip.
 ///
 /// `reach` is the owner's authored [`benilla_assets::ModelEmitter::owner_reach`] (or
 /// [`benilla_assets::ModelRibbon::owner_reach`]) in **world** yards — the model-local bound
@@ -855,7 +854,7 @@ pub(crate) fn owner_last_bias(reach: f32) -> f32 {
 /// only particle source is the per-parent-particle drive in the sim.
 /// An emitter whose child-emitter model (`ParticleEmitter::recursion`) has not been resolved
 /// yet — the only emitters [`wire_child_emitters`] visits. Without it the wiring walked every
-/// resident emitter every frame to find the handful still waiting on a model (decision 1979).
+/// resident emitter every frame to find the handful still waiting on a model.
 #[derive(Component)]
 pub(crate) struct PendingChildren;
 
@@ -927,7 +926,7 @@ pub enum EmitClock {
     Pinned,
     /// The SPELL-FX lane: the rig's armed slot (a missile's InFlight is not file-order-first;
     /// `None` = slot 0) on the spawn-age clock, like every pinned lane — the effect instance is
-    /// byte-verified fresh per play (decision 0858), so its gseq loops open at phase 0 with it.
+    /// byte-verified fresh per play, so its gseq loops open at phase 0 with it.
     Effect(Option<usize>),
     /// A live host's `AnimationPlayer` decides the slot **and the clip time** each frame — units
     /// and GameObjects, whose playing sequence changes; the reference's animate kernel
@@ -983,7 +982,7 @@ impl Plugin for ParticlePlugin {
     fn build(&self, app: &mut App) {
         // The whole effect family draws through the dedicated lane
         // ([`render::EffectLanePlugin`]); `WowParticleMaterial` and its MaterialPlugin retired
-        // with slice P2 (0733 §1) when precipitation and water foam moved onto the stream.
+        // with slice P2 when precipitation and water foam moved onto the stream.
         app.add_plugins(render::EffectLanePlugin)
             .init_resource::<ParticleTuning>()
             .init_resource::<buffer::EffectQuads>()
@@ -1013,7 +1012,7 @@ impl Plugin for ParticlePlugin {
                     // …and after the CARD facing pass, for the same reason one step further out:
                     // an equipped item's emitter rides a mesh-less billboard *frame* card (its
                     // bone chain reaches a billboard bone and an item model has no rig to carry
-                    // the palette replacement — decision 0813), so that card's transform has to be
+                    // the palette replacement), so that card's transform has to be
                     // this frame's before births read it.
                     .after(crate::billboard::face_billboards),
             )
@@ -1095,7 +1094,7 @@ pub(crate) mod tests {
     /// (`0x6203e0` hides the node; `0x61f680` frees it once drained). An attached instance is
     /// spawned `Free` so that a model
     /// dtor — a gear change, a display swap, a unit streaming out — takes its pool with the body
-    /// (0826/0833: draining that case stranded ghost clouds in the air). The *other* way an
+    /// (draining that case stranded ghost clouds in the air). The *other* way an
     /// effect's owner vanishes is the effect simply ending, and there the reference hides the node
     /// and lets the particles age out. Both look identical from inside the sim, so the ending side
     /// flips the policy explicitly — and this is the flip.
@@ -1156,7 +1155,7 @@ pub(crate) mod tests {
         .in_draw_set(Vec3::ZERO, Vec3::NEG_Z, farclip, true, true, true)
     }
 
-    /// **The owner-last rung, pinned** (decisions 0719/0721), through the wrapper the renderer
+    /// **The owner-last rung, pinned**, through the wrapper the renderer
     /// actually calls. The whole point of it is one inequality — the rung must be STRICTLY greater
     /// than the owner's reach, or a batch centred at the edge of the model ties with the effect and
     /// the draw order goes back to being whatever the queue emitted. The voidwalker (reach 3.666 yd
@@ -1175,7 +1174,7 @@ pub(crate) mod tests {
         assert_eq!(owner_last_bias(-1.0), 1.0);
     }
 
-    /// **The B39 defect, pinned** (decision 0678). An owner bigger than `NEVER_FADE_RADIUS` never
+    /// **The B39 defect, pinned**. An owner bigger than `NEVER_FADE_RADIUS` never
     /// distance-fades, so the fade term admits it at every distance — the far-clip term is the only
     /// thing that stops its emitter. Reverting that term makes this test fail, which is the point:
     /// a big fire prop's flames used to draw a kilometre away, over terrain the same wall had
@@ -1216,7 +1215,7 @@ pub(crate) mod tests {
         };
         assert!(f.in_draw_set(Vec3::ZERO, Vec3::NEG_Z, 777.0, true, true, true));
         assert!(!f.in_draw_set(Vec3::ZERO, Vec3::NEG_Z, 777.0, false, true, true));
-        // …and the exterior-window term is ANDed the same way (0786): a doodad no portal window
+        // …and the exterior-window term is ANDed the same way: a doodad no portal window
         // admits is not in the worklist, so its emitter neither ticks nor draws.
         assert!(!f.in_draw_set(Vec3::ZERO, Vec3::NEG_Z, 777.0, true, false, true));
         // …as is the room term (0689/1289): the window admits the BUILDING, the PVS admits the
@@ -1267,11 +1266,11 @@ pub(crate) mod tests {
     /// **A prop in a culled room emits nothing, and an orphaned emitter refuses.**
     ///
     /// The reference instantiates a WMO's props out of each VISIBLE group's own MODR list
-    /// (`0x695aa0` from the visible-group walk `0x698720`, decision 0689) — a prop in a culled room
+    /// (`0x695aa0` from the visible-group walk `0x698720`) — a prop in a culled room
     /// is never created, so it has no emitters to tick. Our props' *meshes* are culled by exactly
     /// this predicate and their emitters were not, which is how Caverns of Time's twelve
     /// energy-trail props kept ninety additive ribbon strips burning up through 200 yd of rock into
-    /// Tanaris while every one of their submeshes was correctly hidden (decision 1289).
+    /// Tanaris while every one of their submeshes was correctly hidden.
     ///
     /// All four arms, including the one that fails CLOSED where the rest of the cull fails open.
     #[test]

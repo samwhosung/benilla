@@ -13,7 +13,7 @@
 //! chain re-uploaded ~14 material uniforms, rebuilt their Metal bind groups, and armed the
 //! whole-population `AssetChanged` walks 24 times a second. A deterministic run bakes the freeze
 //! at BUILD time (`anim.w = 0` → the shader clock reads 0 forever), so captures keep frame 0 /
-//! scroll 0 bit-exactly — the same pin the old tick enforced (0600). Two clocks, unchanged in
+//! scroll 0 bit-exactly — the same pin the old tick enforced. Two clocks, unchanged in
 //! spirit: animation = wall clock; day/night = server game-time.
 
 use std::collections::HashMap;
@@ -65,8 +65,7 @@ pub(crate) struct LiquidAssets {
 /// reference decides fog per *pass*, not per liquid type, and a WMO group's own pool is drawn by the
 /// WMO liquid pass, which re-submits the smoothed interior fog block (`0x6b6323`–`0x6b6342`) under
 /// the same `[0xca7f00]` gate as the WMO *geometry* pass — so a pool and the walls around it always
-/// fog alike, while ADT liquid submits no fog and draws under the once-a-frame scene block
-/// (decision 0691).
+/// fog alike, while ADT liquid submits no fog and draws under the once-a-frame scene block.
 /// `WmoInterior` is exactly the old `interior == true`, so [`Self::interior_fog`] is the whole of
 /// what that flag used to say — with the renderer identity now carried alongside it rather than
 /// inferred from it.
@@ -192,7 +191,7 @@ pub(crate) struct LiquidSurface;
 /// surface now has a real per-frame `Visibility` owner: an ADT surface is `ExteriorScene`, written
 /// by `exterior_cull::apply_exterior_cull`; a WMO pool carries `WmoGroupVis`, written by
 /// `model_render::visibility::apply_model_visibility`'s `group_only` query. So this runs in
-/// `PostUpdate` **after** both (decision 1652) and wins the frame.
+/// `PostUpdate` **after** both and wins the frame.
 ///
 /// It used to run in `Update` on `Added`, writing `Hidden` exactly once when a surface streamed in.
 /// That was already broken for WMO pools before this change — 0689 gave them `WmoGroupVis` in
@@ -389,7 +388,7 @@ fn liquid_bevy_mesh(lq: &LiquidMesh, body_color: Option<[f32; 3]>) -> Mesh {
 /// `pool` is the surface's **scope** (see [`WmoPool`]): the room it belongs to, and that room's own
 /// floor. A liquid footprint has no floor of its own, so an unscoped pool claims every position
 /// under its XY forever — the Uldaman entrance read as submerged under a mushroom cave's water
-/// 186 yd overhead (0696), and Undercity's upper slime submerged the rooms 115 yd below it (0701).
+/// 186 yd overhead, and Undercity's upper slime submerged the rooms 115 yd below it.
 pub(crate) fn spawn_wmo_liquids<'a>(
     commands: &mut Commands,
     liquids: impl Iterator<Item = &'a LiquidMesh>,
@@ -444,12 +443,12 @@ pub(crate) fn spawn_wmo_liquids<'a>(
                 transform,
                 LiquidSurface,
                 // The per-frame interior-fog lane rides `MeshTag` bit 30, written by the one
-                // `Visibility` authority off this pool's own room (decision 1787; `liquid.wgsl`'s
+                // `Visibility` authority off this pool's own room (`liquid.wgsl`'s
                 // `room_fog`). Spawned clear: a pool wears the room's fog only once the flood has
                 // said the room is on the lane.
                 bevy::mesh::MeshTag(0),
-                // The ambient-loop source rides EVERY kind — the fullbright lava/slime hum too
-                // (0506). It reads its geometry off the `WaterChunkInfo` inserted below.
+                // The ambient-loop source rides EVERY kind — the fullbright lava/slime hum too.
+                // It reads its geometry off the `WaterChunkInfo` inserted below.
                 LiquidSoundSource {
                     nibble: lq.sound_nibble,
                 },
@@ -457,7 +456,7 @@ pub(crate) fn spawn_wmo_liquids<'a>(
             .id();
         // The swim/submersion grid rides EVERY kind, magma and slime included — that is what
         // makes Blackrock's lava and Undercity's slime swimmable instead of something you fall
-        // through (decision 0634, bugs B24/B25). It used to be gated on `!is_fullbright()` because
+        // through (bugs B24/B25). It used to be gated on `!is_fullbright()` because
         // `WaterChunkInfo` carried no kind, so tagging lava would have swum the player under a teal
         // *water* murk with white foam. The component carries [`LiquidKind`] now and the
         // water-flavoured consumers filter on it (`water_surface_at`, `detect_submersion`), so the
@@ -496,7 +495,7 @@ const FRAME_SETS: &[(LiquidKind, &str, &str, u32)] = &[
     // The fullbright kinds: opaque + unlit + fogged, the animated texture IS the body colour, there
     // being no vertex colour or depth LUT to modulate it by (`0x6b68f0`). **Magma reaches here from
     // BOTH liquid systems** — the WMO
-    // MLIQ pools *and* the ADT MCLQ magma queue (B21: the 128 open-world lava chunks, Burning
+    // MLIQ pools *and* the ADT MCLQ magma queue (the 128 open-world lava chunks, Burning
     // Steppes/Searing Gorge/Un'Goro); only slime is WMO-only, the reference having no ADT queue for
     // it at all. See [`benilla_formats::LiquidKind`].
     (LiquidKind::Magma, "lava", "lava", 30),
@@ -761,7 +760,7 @@ mod tests {
         }
     }
 
-    /// **The spawner's half of the indoor water cull** (decision 1652) — and the half no test in
+    /// **The spawner's half of the indoor water cull** — and the half no test in
     /// `exterior_cull` can cover, because that module's harness spawns its own entities and tags
     /// them itself. `apply_exterior_cull` decides nothing about a surface it never queries, and
     /// what puts a surface in its query is this tag, applied here. 0780 left exactly this note on

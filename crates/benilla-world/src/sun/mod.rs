@@ -1,5 +1,5 @@
 //! Celestial sprites — the **sun** (disc + glare halo), the **white moon** (disc + glare), and the
-//! night-sky **stars**, drawn over the sky dome. Byte-pinned end to end (decision 0485): setup
+//! night-sky **stars**, drawn over the sky dome. Byte-pinned end to end: setup
 //! `0x6d1ba0` builds six bodies (sun/moon glares, three discs, stars), the
 //! builder `0x6d3b80` places each on a camera-centred sphere of radius 12 (`pos = cam + 12·dir`, world
 //! space — no local→world rotation), `CSky::Render 0x6d4940` draws stars → sun → white moon → moon02
@@ -17,12 +17,12 @@
 //! - **Sun glare** — `sunGlare.blp` (a big dark radial glow with authored star rays), additive,
 //!   co-located; a **view-lerped lens flare** (`0x6cf490`): quad scale 3→20 world units as the view
 //!   axis swings onto the sun (`f = saturate((cosθ − 0.7)/0.3)`), intensity `lerp(0.5, 1, f)` × the
-//!   slewed dnCurve envelope — a DAY flare, full 07:30→19:30, gone by 21:00 (decision 0508).
+//!   slewed dnCurve envelope — a DAY flare, full 07:30→19:30, gone by 21:00.
 //! - **White moon** — `moon.blp`, alpha blend, base ×1.75, up at night (azimuth 45°, the sun's bearing).
 //! - **Moon glare** — `moonglare.blp` (a soft ring), additive, co-located; quad scale = `2.0 × the
 //!   moon size curve` (≈1.14× the disc, both endpoints overwritten per frame), intensity
 //!   `lerp(0.1, 1, f)` on the same view lerp × the slewed dnCurve envelope — a DEEP-NIGHT halo,
-//!   nothing until 22:45, full only near midnight (decision 0508).
+//!   nothing until 22:45, full only near midnight.
 //! - **Stars** — the real `Stars.m2` patches, camera-anchored, global alpha = the star curve, each
 //!   patch × its authored transparency weight.
 //!
@@ -39,7 +39,7 @@
 //! The DISCS are pinned at their body directions (`WowLighting.{celestial_dir, moon_dir_white}`) just
 //! inside the far plane, so terrain occludes them like the reference's far-depth-slice trick. The GLARE
 //! quads sit on the reference's own **near sphere** (`cam + 12·dir` — a far-placed quad at the byte-law
-//! flare size pierced the sky dome and the depth test cut a giant faceted halo edge; decision 0500);
+//! flare size pierced the sky dome and the depth test cut a giant faceted halo edge);
 //! their envelope, not the depth buffer, hides an occluded flare (the [`follow`] terrain/interior
 //! visibility gate — the occlusion-query stand-in). Our camera fovy (45°) ≈ the reference's (44.1°), so
 //! plain world placement reproduces its projection in both axes.
@@ -95,7 +95,7 @@ struct MoonSprite {
 /// A night-sky **star** mesh — one tag per `Stars.m2` patch (or the procedural fallback). Camera-anchored
 /// over the gradient dome, unlit + alpha-blended; its material's global alpha is driven each frame by the
 /// verified star curve (`WowLighting.star_alpha` — the model-global fade `[stars+0xb]/255`, byte =
-/// `trunc(curve·254+1)`, draw skipped below 2; `0x6d1b50`, decision 0485). The faithful
+/// `trunc(curve·254+1)`, draw skipped below 2; `0x6d1b50`). The faithful
 /// geometry is the real `Stars.m2` (authored star positions/sizes + UVs into `Stars.blp`/`Stars2.blp`);
 /// [`mesh::star_field_mesh`] is the assetless fallback. Built in [`setup::setup_sun`], anchored + faded in
 /// [`follow::follow_stars`].
@@ -120,7 +120,7 @@ impl Plugin for SunPlugin {
             // Post-propagation camera-anchored placement (the BillboardPlace slot): the follows read
             // the camera's SAME-frame pose and write GlobalTransform directly. In plain Update they
             // read the last-frame camera — one frame of motion is ~1% of the glare quads' 12-unit
-            // distance, a visible halo swim/size-pump while moving (decision 0504).
+            // distance, a visible halo swim/size-pump while moving.
             .add_systems(
                 PostUpdate,
                 (follow_sun, follow_moons, follow_stars).in_set(crate::billboard::BillboardPlace),
@@ -164,7 +164,7 @@ impl Plugin for SunPlugin {
 /// a sun flare still blooms over the painted sky. (Whether the glare path carries its own submersion
 /// gate is not yet known; until it is, the flare keeps its envelope behaviour.) The
 /// gradient band is [`crate::sky`]'s dome and the cloud dome is [`crate::clouds`]'s; each keeps its
-/// own authority (decision 0025) reading these same resources.
+/// own authority reading these same resources.
 #[allow(clippy::type_complexity)]
 fn apply_celestial_visibility(
     skybox: Res<crate::skybox::SkyboxWeight>,

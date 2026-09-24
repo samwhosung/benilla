@@ -62,17 +62,17 @@ pub(super) struct CamBasis {
 /// coordinates reach the world (the anchored/model split of [`super::Particle`]'s doc).
 pub(super) struct DrawFrame {
     pub(crate) anchored: bool,
-    /// The WORLD-mode store's **ride frame** `A` ([`crate::ride_frame`], decision 1591) — the
+    /// The WORLD-mode store's **ride frame** `A` ([`crate::ride_frame`]) — the
     /// reference's `[ebp+8]` at `0x7b3d20`, folded forward on the `0x7b3f4f` leg. `None` off a
     /// transport, which is every cloud on the ground, and then every fold below is the identity.
     /// Model mode never reads it: `0x7b3efb` leaves `[ebp+8]` untouched.
     pub(crate) ride: crate::ride_frame::StoredFrame,
     /// The owning MODEL's render alpha, folded into every particle's alpha channel — the
-    /// reference's `emitter+0x1a8` (decision 0827). 1.0 for a model that isn't fading.
+    /// reference's `emitter+0x1a8`. 1.0 for a model that isn't fading.
     pub(crate) alpha: f32,
     /// The lane's **size unit** — what one model unit of a particle's half-extent is in this
     /// cloud's stored frame. `1.0` everywhere in the world (a yard is a yard). A UI model tile
-    /// (decision 2008) stores its particles in device pixels, and the reference maps a
+    /// stores its particles in device pixels, and the reference maps a
     /// widget's particle half-extent through the screen — `768·√(a²+1)` FrameXML units per
     /// unit, the instance scale NOT included (`0x7b2ba6`) — so
     /// the tile sets this to that many pixels per unit; an emitter flagged to scale with its
@@ -86,7 +86,7 @@ pub(super) struct DrawFrame {
 pub(super) fn particle_center(frame: &DrawFrame, placement: &Transform, p: &Particle) -> Vec3 {
     if frame.anchored {
         // WORLD mode (`0x10` CLEAR): the store is absolute in its OWN frame and the draw never
-        // folds `rt+0x1fc` back — the reference's `0x7b3f48` (decision 1585). The
+        // folds `rt+0x1fc` back — the reference's `0x7b3f48`. The
         // one matrix that does fold is the ride frame, on the `0x7b3f4f` leg: `A · T · S`. Off a
         // transport `A` is NULL and the store is world, which is the `0x7b3f95` leg.
         frame.ride.to_world(p.pos)
@@ -170,7 +170,7 @@ pub(super) fn expand_quads(
     // NOT**: there is no clamp into the atlas anywhere on the reference's path, so an index past
     // the last cell yields `V ≥ 1.0` and is handed to the sampler's (repeat) addressing — landing
     // back on row 0, not on the final cell. 553 emitters author exactly that, at the tail of a
-    // flame's flipbook (decision 0685); a `min(rows·cols − 1)` here held the last cell instead.
+    // flame's flipbook; a `min(rows·cols − 1)` here held the last cell instead.
     let (cols, rows) = (def.tile_cols, def.tile_rows);
     let (inv_cols, inv_rows) = (1.0 / cols as f32, 1.0 / rows as f32);
     let cell_uv = |idx: u16| {
@@ -194,7 +194,7 @@ pub(super) fn expand_quads(
         let (mut rgba, size) = (ol.color, ol.size);
         // The MODEL's render alpha, folded into the ALPHA channel only — exactly where and how the
         // reference does it: the sampler `0x7b9b10` takes it as its second argument and applies it
-        // at `0x7b9b42 fmul` to the alpha byte alone, RGB untouched (decision 0827). So a unit
+        // at `0x7b9b42 fmul` to the alpha byte alone, RGB untouched. So a unit
         // fading in fades its effects in with it, and a first-person avatar's torch stops burning
         // in your face.
         rgba[3] *= frame.alpha;
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(spin_angle(0.0, 0.5, 0xff), 0.0);
     }
 
-    /// **The model's render alpha reaches its particles, and ONLY their alpha** (decision 0827).
+    /// **The model's render alpha reaches its particles, and ONLY their alpha**.
     /// The reference folds `emitter+0x1a8` (a per-frame copy of the model's `CM2Model+0x19c`)
     /// inside the over-life sampler `0x7b9b10`, at `0x7b9b42 fmul` — which writes the **alpha byte
     /// alone** (`mov [eax+3],cl`); R/G/B never see it. A fold into RGB would look

@@ -5,7 +5,7 @@
 //! trail: run past a torch and the smoke hangs where it was born. On a **transport** the same
 //! rule would stream a rider's effects off the stern, so the reference stores them in the
 //! transport's frame instead and re-projects them live at draw. The mechanism is one matrix
-//! entering at exactly two sites, and they are inverses (decision 1591, which named this gap and
+//! entering at exactly two sites, and they are inverses (which named this gap and
 //! left it unbuilt):
 //!
 //! ```text

@@ -77,7 +77,7 @@ mod tests {
         [0usize, 1, 2].map(|ch| c[ch].dot(n1) + c[3 + ch].dot(quad) + c[6][ch] * x2y2)
     }
 
-    /// GOLDEN — this lane's half of the two-curve split (decision 1709). An interior fold puts its
+    /// GOLDEN — this lane's half of the two-curve split. An interior fold puts its
     /// diffuse word on the fixed axis `(−0.30822, −0.30822, −0.9)` in WoW space, whose Bevy image
     /// is unit and 0.9 up, so a world-up normal reads μ = 0.9 at every camera angle. A MESH batch
     /// takes the SH lane and therefore `ambient + (4/17)·(0.375 + 2·0.9 + 1.875·0.81)·diffuse`

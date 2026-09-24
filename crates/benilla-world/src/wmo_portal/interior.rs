@@ -64,7 +64,7 @@ pub struct CurrentWmoInterior(pub Option<WmoInteriorKeys>);
 /// the placement identity ([`WmoRoom`]) rather than the `WMOAreaTable` join keys. Written by
 /// [`track_current_interior`] in the same pass (no second ray).
 ///
-/// Its consumer is the liquid query's scope key (decision 0696): a building's MLIQ pool belongs to
+/// Its consumer is the liquid query's scope key: a building's MLIQ pool belongs to
 /// that building, so only a subject standing in *that placement* can be in it. Before this, "indoors"
 /// was a bare `bool` and every WMO pool on the map answered — the Uldaman entrance read as submerged
 /// under a mushroom cave's water 186 yd overhead, in a building the player was 191 yd below.
@@ -79,7 +79,7 @@ pub struct PlayerWmoRoom(pub Option<WmoRoom>);
 /// marker, the wade splash, the footstep splash slot, the remote-motion depth — passed it, so both
 /// sources answered and an ADT lake claimed anything beneath it. In Undercity's Rogues' Quarter the
 /// NPCs stood 95 yd under Tirisfal's water at z 32.93 and swam on dry stone, in the same rooms the
-/// player (who *did* have a claim) walked normally (decision 0696).
+/// player (who *did* have a claim) walked normally.
 ///
 /// Re-rayed only when the unit MOVES or a building streams in/out — a room changes at doorways, not
 /// per frame — so a town full of standing NPCs costs one position compare each.
@@ -251,7 +251,7 @@ pub(super) fn track_current_interior(
                 name_set: u32::from(inst.name_set),
                 group_area_id: model.group_nav.get(gi).map_or(0, |g| g.area_table_id),
             });
-            // The same claim as a placement identity — the liquid query's scope key (0696).
+            // The same claim as a placement identity — the liquid query's scope key.
             found_room = Some(WmoRoom {
                 instance: entity,
                 group: gi as u16,
@@ -300,8 +300,8 @@ pub(super) fn track_unit_interiors(
 ) {
     let generation = residency.generation();
     for (entity, transform, body, claim) in &mut units {
-        // World position, not the local one: a mounted unit's `Transform` is seat-relative
-        // (0441), and its room is decided where it actually stands.
+        // World position, not the local one: a mounted unit's `Transform` is seat-relative,
+        // and its room is decided where it actually stands.
         let pos = transform.translation();
         // The re-test gate: a settled unit in an unchanged world keeps its room for free. A
         // building streaming in UNDER a standing NPC must still re-claim it — that is the whole
@@ -355,7 +355,7 @@ pub(super) fn track_unit_interiors(
 /// that is UNDER the surface** — a firepit's origin sits in the pit, a signpost's at the buried foot
 /// of its post. A ray down from such an origin passes beneath the floor the object stands on and
 /// finds nothing, so the body reads "outdoors" in the middle of a building. Orgrimmar: 32 of 133
-/// streamed bodies at once, measured 0.45–1.16 yd under their floor face (decision 1409).
+/// streamed bodies at once, measured 0.45–1.16 yd under their floor face.
 ///
 /// Two yards covers that spread with margin and cannot reach the storey above — no room we draw is
 /// under two yards tall. A **fallback, not a lift**: it runs only where the position cast found no
@@ -433,7 +433,7 @@ fn room_cast(
 /// the exterior leg (`or [node+0xc],0x4`: sun diffuse, MCSH 2.5/0.5 intensity, scene fog) — which
 /// DIVERGES from the zone-text indoor bit (`0x8` alone) exactly on the `0x40`-only city street
 /// groups: Stormwind's pavement and Orgrimmar's valleys are "indoors" for area naming yet sunlit
-/// (decision 0475; keying
+/// (keying
 /// the light off the zone-text bit flat-lit every unit in those cities). The face geometry is
 /// robust exactly where group BOUNDING BOXES are not — a room's box bottom can float above its own
 /// walkable floor when the floor polys belong to a neighbouring group (NSabbey group 3: box min z
@@ -523,7 +523,7 @@ pub enum IndoorVerdict {
 /// [`LightAttach::DownRay`], the model's world bounding-box CENTRE for
 /// [`LightAttach::Containment`] (see the enum for the bytes). A GameObject's origin routinely sits
 /// at or under its own floor — a Stratholme portcullis spawns 15 cm below the corridor slab — and
-/// a ray from there leaves the building entirely; the reference never casts from there (0776).
+/// a ray from there leaves the building entirely; the reference never casts from there.
 /// `Containment` also takes the reference's UPWARD retry on the footprint leg (`6a908d`), so an
 /// object resting a hair below its floor still bakes from it.
 ///
@@ -531,7 +531,7 @@ pub enum IndoorVerdict {
 /// won, paired with the claim's group index — `None` on both outdoor arms. That pair is the
 /// reference's per-(instance, group) render record `P`: the light node's attach is what creates it
 /// (`0x685f85` → `[P+0x98]`), and it is the key the interior-FOG gate is asked at, separately from
-/// the light law (decision 1792 §4). Callers that only want the bool pass `()` as the key.
+/// the light law. Callers that only want the bool pass `()` as the key.
 pub fn indoor_verdict_at<'a, K: Copy>(
     wmos: &Assets<WmoModel>,
     instances: impl IntoIterator<Item = (K, &'a WmoPortalInstance)>,
@@ -653,7 +653,7 @@ pub(super) fn footprint_sample(
     footprint_scan(model, probe_local, false, None).map(|(g, c, m, _)| (g, c, m))
 }
 
-/// The footstep surface's **material ray** (decision 1161) — the second of the client's two rays.
+/// The footstep surface's **material ray** — the second of the client's two rays.
 /// The first (the collision-face down-ray that races terrain) has already picked `group`; this
 /// re-casts the same column over that group's RENDER faces and reads the winning face's
 /// `TerrainType` id: `MOPY[face].material_id → MOMT[id].ground_type` (`0x6a26c0`).
@@ -713,8 +713,7 @@ fn footprint_scan(
         // authored box, so the cull is exact): a down-ray at (px, py) can hit no face of a group
         // whose XY face bounds exclude the column, and no face whose LOWEST vertex is already
         // above the probe (interpolated z ≥ the face set's min z). Without this every re-rayed
-        // entity scanned every interior group of the whole model — the Stormwind live-frame cost
-        // (decision 0364).
+        // entity scanned every interior group of the whole model — the Stormwind live-frame cost.
         if let Some(Some((min, max))) = model.group_footprint_bounds.get(gi) {
             let past_probe = if up { max[2] < pz } else { min[2] > pz };
             if px < min[0] || px > max[0] || py < min[1] || py > max[1] || past_probe {
@@ -920,7 +919,7 @@ mod tests {
     }
 
     /// **The material ray reads the hit FACE's material, inside the group the arbitration chose.**
-    /// The group restriction is the whole point (decision 1161): the first ray already picked the
+    /// The group restriction is the whole point: the first ray already picked the
     /// group off the *collision* faces, so a nearer render face in a different group must not steal
     /// the answer. And a group with no face under the column is the client's `−1` — silent — not an
     /// invitation to go looking elsewhere.
@@ -1009,7 +1008,7 @@ mod tests {
     /// **The containment attach's upward retry** (`6a908d..6a90c7`): the down leg missed, so the
     /// segment is re-cast toward `anchor.z + 1000` and the nearest face ABOVE answers — with the
     /// same group / MOCV / MOPY it would have given from below. This is the leg a GameObject
-    /// resting a hair under its own floor needs; the down-ray lane never takes it (decision 0776).
+    /// resting a hair under its own floor needs; the down-ray lane never takes it.
     #[test]
     fn the_upward_retry_finds_the_floor_a_sunk_object_sits_under() {
         let mut model = bare_model();

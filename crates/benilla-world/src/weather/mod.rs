@@ -1,4 +1,4 @@
-//! Weather — the `SMSG_WEATHER`-driven state machine and its render subsystems (decision 0310).
+//! Weather — the `SMSG_WEATHER`-driven state machine and its render subsystems.
 //!
 //! The wire (`WeatherMessage`, bridged from the Net drain) carries `type/grade/sound/instant`;
 //! sound is already handled (`sound/weather.rs`). This module owns the **visual** state: the
@@ -30,7 +30,7 @@ use crate::dev_state::DebugState;
 mod precip;
 
 /// Rain's forced-fog window — the effect lane's `EffectFog::Rain` params row reads the law
-/// from its owner (0733 §4).
+/// from its owner.
 pub(crate) use precip::{RAIN_FOG_END, RAIN_FOG_START};
 
 /// Wire weather types (`SMSG_WEATHER` / vmangos `WeatherType`).
@@ -184,7 +184,7 @@ impl WeatherState {
         // linearly over the WHOLE swing — fog visibly leads the rain up (rain needs A > 0.25)
         // and starts clearing IMMEDIATELY on the way down. Feeding the full grade here (the
         // 0310-era misread of the ×4 as "4× slower") pinned the fog at 100% for ~30 s of every
-        // downswing — the director's "takes a long time until it gets sunny" (0326).
+        // downswing — the director's "takes a long time until it gets sunny".
         let sky_target = target.min(0.25);
         if instant {
             self.intensity.snap(target);
@@ -344,10 +344,10 @@ fn weather_tick(
 pub(crate) struct WeatherPlugin;
 
 /// **The weather command.** What the zone's weather should now be: `weather_type`/`grade`/
-/// `instant` drive the visuals' state machine ([`weather_tick`], decision 0310) and `sound_id`
+/// `instant` drive the visuals' state machine ([`weather_tick`]) and `sound_id`
 /// names the loop kit for the sound subsystem.
 ///
-/// Owned here, written by whoever knows (decision 1160). It lived in `net` — where `SMSG_WEATHER`
+/// Owned here, written by whoever knows. It lived in `net` — where `SMSG_WEATHER`
 /// is decoded — and `NetPlugin` registered it, so the weather system could not run at all without
 /// a network stack: the world viewer's survey caught it as "Message not initialized" every frame.
 /// The engine owning the command and the game writing it is the same relationship the other way
@@ -404,7 +404,7 @@ mod tests {
 
     /// Channel B runs the [0, 0.25] knee domain: a full sky swing (0→0.25) ALSO takes ~10 s
     /// ((0.25·4+0.001)·10) — the ×4 cancels the quarter-span. The storm blend `min(1, B·4)`
-    /// therefore ramps linearly over the whole swing, both directions (0326: the "40 s sky"
+    /// therefore ramps linearly over the whole swing, both directions (the "40 s sky"
     /// was the 0310 misread, and it pinned the fog at 100% for ~30 s of every downswing).
     #[test]
     fn sky_swing_is_ten_seconds_and_clears_immediately() {

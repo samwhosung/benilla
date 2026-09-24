@@ -7,7 +7,7 @@
 //! them would be a second place for them to rot.
 //!
 //! The `Window` stays the caller's, because that is genuinely per-binary: the client's is shaped by
-//! the capture harness and the background-run rules (decisions 0703/0709/1148), the world viewer's
+//! the capture harness and the background-run rules, the world viewer's
 //! is a plain window.
 
 use bevy::app::{PluginGroupBuilder, TaskPoolOptions, TaskPoolPlugin};
@@ -22,10 +22,10 @@ pub fn tuned_default_plugins(primary_window: Window) -> PluginGroupBuilder {
             primary_window: Some(primary_window),
             ..default()
         })
-        // NOTE: there is deliberately no `AssetPlugin::file_path` here (decision 1175). This used
+        // NOTE: there is deliberately no `AssetPlugin::file_path` here. This used
         // to bake `concat!(env!("CARGO_MANIFEST_DIR"), "/assets")` — the *build* machine's source
         // tree — because a shim package builds the binary and Bevy's runtime `CARGO_MANIFEST_DIR`
-        // fallback would otherwise resolve `assets/` in the shim's dir (0993). It worked on the
+        // fallback would otherwise resolve `assets/` in the shim's dir. It worked on the
         // machine that compiled it and nowhere else: on a player's machine every shader resolved
         // to nothing and the world drew bare, the "silently-no-shaders trap" `capture/mod.rs`'s
         // header names. Every WGSL file in the tree is now compiled into the binary
@@ -33,7 +33,7 @@ pub fn tuned_default_plugins(primary_window: Window) -> PluginGroupBuilder {
         // `embedded://<crate>/shaders/…`, so nothing reaches for a file root at all and 1171's
         // engine/game line survives as the crate each shader is embedded from.
         // Quiet wgpu/naga; our own crates stay at info. The ring keeps the last lines of what
-        // stderr shows for the crash report (`log_ring`; decision 2266 §B2).
+        // stderr shows for the crash report (`log_ring`).
         .set(bevy::log::LogPlugin {
             filter: "wgpu=error,naga=warn".into(),
             custom_layer: |_| Some(Box::new(crate::log_ring::LogRing)),
@@ -46,7 +46,7 @@ pub fn tuned_default_plugins(primary_window: Window) -> PluginGroupBuilder {
         // net-driven NPC/GameObject models queue behind the flood. Give IO more of the box (it sits
         // idle when not streaming); the world-render path is GPU/IO-bound, not compute-bound, so
         // trading some compute threads for streaming throughput is the right call.
-        // Thread QoS (decision 0609): Bevy's workers spawn at default QoS — the same Darwin
+        // Thread QoS: Bevy's workers spawn at default QoS — the same Darwin
         // scheduling class as rustc or an OBS encoder — so under a background build the frame's own
         // threads queue behind the compiler for P-core time. Promote them at spawn: compute runs
         // this frame's systems (user-interactive); IO/async-compute feed upcoming frames
@@ -88,19 +88,19 @@ pub fn tuned_default_plugins(primary_window: Window) -> PluginGroupBuilder {
                 ..default()
             },
         })
-        // Sound is kira behind our own mixer seam (decision 0070). Bevy's `AudioPlugin` used to be
-        // disabled here (0530) so it would not open a second, never-used OS output stream — but
+        // Sound is kira behind our own mixer seam. Bevy's `AudioPlugin` used to be
+        // disabled here so it would not open a second, never-used OS output stream — but
         // the crate behind it was still compiled and linked. Since 1932 `bevy_audio` is off at the
         // feature level, so there is no plugin to disable and no rodio/cpal/vorbis stack in the
         // binary; the feature list that keeps it out is in the workspace `Cargo.toml`.
-        // The dead registrations (decision 1438): DefaultPlugins members whose only runtime
+        // The dead registrations: DefaultPlugins members whose only runtime
         // trace here was per-frame machinery for types nothing instantiates — every registered
         // asset/material type costs an `Assets<T>` event system in PostUpdate plus
         // extract/prepare/sweep families in the render app, priced by the 1437 census against
         // the 1435 band map. Each cut was usage-grepped NEGATIVE and then proven by a clean
         // boot, and the boot vetoed two of the five candidates the greps had passed (its
         // missing-resource panic names the dependent): gizmos are the bowstring/fishing-line
-        // renderer (0938, warmed through a bare-`Gizmos` param no `Gizmos<` pattern sees), and
+        // renderer (warmed through a bare-`Gizmos` param no `Gizmos<` pattern sees), and
         // the sprite pair carries our OWN FrameXML quad pass — `UiQuadMaterial` is a
         // `Material2d` riding `Mesh2dPipeline`. What else stays, stays for a reason:
         // bevy_picking drives the world-interact lane, TextPlugin draws the glue-screen text,
@@ -113,6 +113,6 @@ pub fn tuned_default_plugins(primary_window: Window) -> PluginGroupBuilder {
         .disable::<bevy::gltf::GltfPlugin>()
         // No bevy AA: no Fxaa/TAA/SMAA/CAS component anywhere (MSAA is core render, unaffected).
         .disable::<bevy::anti_alias::AntiAliasPlugin>()
-        // No gamepad input; 1.12's bindings are keyboard/mouse (0997).
+        // No gamepad input; 1.12's bindings are keyboard/mouse.
         .disable::<bevy::gilrs::GilrsPlugin>()
 }

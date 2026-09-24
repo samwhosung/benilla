@@ -97,7 +97,7 @@ pub(super) fn moon_direction(minute: f32) -> Vec3 {
 
 /// Visible **moon02** direction + size scale (camera→body Bevy direction, size-curve multiplier) —
 /// the engine's third disc (`moon02.blp`), drawn every frame but **vertex-black** (its colour field
-/// `[0xce98a4]` has no writer in the binary), so it never reads as a second moon (decision 0485).
+/// `[0xce98a4]` has no writer in the binary), so it never reads as a second moon.
 /// Its tracks run on the **phase-precessed clock**: `phase = fmod(dayCounter + todPhase, 1.7)`
 /// (`0x6d41b9`, 65536 fixed-point; `day_continuous` = that sum, server-synced), which the track
 /// kernel `0x6cf6c0` **clamps to [0,1]** — so for the whole `r∈[1.0,1.7)` leg both tracks park on
@@ -208,7 +208,7 @@ pub(super) fn star_alpha(minute: f32) -> f32 {
 }
 
 /// Sun lens-flare **day/night envelope** curve — the per-body inline 4-key dnCurve table at
-/// `[glare+0x70]` (sun `0xce9818`, built by `0x6d1e30`; decision 0508). A factor of the
+/// `[glare+0x70]` (sun `0xce9818`, built by `0x6d1e30`). A factor of the
 /// flare-intensity slew target in `sun::follow`: the sun's
 /// flare exists only by day — 0 until 06:30, full 07:30→19:30, gone by 21:00. Dusk (21:00→22:45)
 /// and dawn (03:15→06:30) are flare dead-bands for BOTH bodies.
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn flare_dn_curves_gate_the_halos_by_time_of_day() {
-        // VERIFIED per-body dnCurve tables (sun 0xce9818 / moon 0xce9768, 0508). The
+        // VERIFIED per-body dnCurve tables (sun 0xce9818 / moon 0xce9768). The
         // load-bearing value: a 22:30 moonrise has NO halo — the moon's curve is flat zero from
         // 03:15 all the way to 22:45, then ramps in toward midnight (23:00 ≈ 0.20, 23:30 ≈ 0.61).
         assert_eq!(moon_flare_dn((22 * 60 + 30) as f32), 0.0, "22:30 no halo");

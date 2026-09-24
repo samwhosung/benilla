@@ -22,13 +22,13 @@
 //!   completely different DRAW. The leg that runs is the ARB **point sprite** `0x678610`
 //!   (`glDrawArrays(GL_POINTS)`, `snowpoint.bls`), so a flake is sized in **pixels**,
 //!   `max(1, 14·clamp01(1 − 0.02·d))` — denominated in the ERA's screen height so the angle, not
-//!   the pixel count, carries to a modern display ([`SNOW_PX_REF_HEIGHT`], decision 1162) — with
+//!   the pixel count, carries to a modern display ([`SNOW_PX_REF_HEIGHT`]) — with
 //!   alpha `clamp01(t − f1)` falling (a 1 s fade-in) and
 //!   `clamp01(1 − 4·(t − f2))` settled. Blend mode 2 (SrcAlpha, 1−SrcAlpha), fog OFF,
 //!   depth-write off, RGB white. The `1/12` world-space triangle of `0x678960` is the
 //!   fixed-function FALLBACK and never runs on real hardware — benilla drew it (as a *quad*,
 //!   times an invented size jitter) while taking the shader leg's population, which is B233's
-//!   "flakes seem too big" (decision 1149).
+//!   "flakes seem too big".
 //! - **Mist**: every precip type carries a companion mist — its own object in the reference
 //!   (ctor `0x67a5b0`, spawn `0x67a990`, render `0x67ae20`); the law lives in [`mist`].
 //! - Ground heights come from a **lazy height cache** of the reference's weather ground
@@ -61,7 +61,7 @@
 //!   (`pool::Pool::retire_far`) — the teleport guard, which is why a `.go` no longer strands the
 //!   field at the position you left. See `pool` and [`SHADER_LEG`].
 //!
-//! Geometry is pushed per frame from the live pools onto the shared effect stream (0733):
+//! Geometry is pushed per frame from the live pools onto the shared effect stream:
 //! rain's Mod2x blend + forced fog are the lane's `EffectBlend::Mod2x` + `EffectFog::Rain`
 //! variants; snow and mist ride the Alpha/fog-off rows. Idle pools push nothing — the
 //! structural replacement for the old fixed-capacity meshes' write gate (the 0353 fps hunt).
@@ -261,7 +261,7 @@ const STREAK_HALF_W: f32 = 0.05;
 const STREAK_TAIL: f32 = 2.0;
 /// Rain's forced fog window (render-state 0x0a/0x0b, CPU leg): start 70, end 75 — under Mod2x
 /// the grey-0.5 fog colour is NEUTRAL, so this IS the streak distance fade. `pub(crate)`: the
-/// effect lane's canonical `EffectFog::Rain` params row is written from these (0733 §4).
+/// effect lane's canonical `EffectFog::Rain` params row is written from these.
 pub(crate) const RAIN_FOG_START: f32 = 70.0;
 pub(crate) const RAIN_FOG_END: f32 = 75.0;
 /// Patter triangle half-edges: `view_right/12` × `view_up/6` (`0x80e004`/`0x803568`, CONFIRMED).
@@ -281,7 +281,7 @@ const SNOW_HALF_XY: f32 = 45.0;
 /// **It is not a world height.** The slab tilt rotates the local offset, so the realised spawn
 /// heights fan out to `z_off·cos α ∓ half_xy·sin α` — ~8..46 yd for snow at a 7 yd/s run, and the
 /// leading edge dips *below* the eye entirely past ~13 yd/s. Reading this as "the plane the
-/// particles are born on" is what made the untilted model look self-consistent (decision 1159).
+/// particles are born on" is what made the untilted model look self-consistent.
 const RAIN_Z_OFF: f32 = 37.5;
 const SNOW_Z_OFF: f32 = 30.0;
 /// Snow fall speed: `vz = −2 − 3.5m − m·r` (`0x6778bc`–`0x6778ec`, bit-cited) — calm
@@ -309,7 +309,7 @@ const SNOW_SPREAD_W: f32 = f32::from_bits(0x40bd_e44f); // ≈ 5.9341197
 /// `useWeatherShaders` is 0). benilla drew the *fallback's* geometry while taking the *shader*
 /// leg's population — the two mutually exclusive sides of `0x6790c1` — and inflated it further
 /// with an invented per-flake size jitter; that pairing is what made the flakes read as far too
-/// big (B233, decision 1149).
+/// big.
 ///
 /// **This is not a world size, and it is not `∝ 1/d`.** A flake 1 yd away is 14 px and one 30 yd
 /// away is 5.6 px — near flakes far smaller, and distant flakes far larger, than any fixed
@@ -327,7 +327,7 @@ const SNOW_PX_AT_EYE: f32 = 14.0;
 /// how good the monitor is: at the reference install's own `gxResolution 1280x800` a near flake
 /// spans `14/800` = **1.75%** of frame height, while benilla on a scale-factor-2 4K panel
 /// (physical ≈ 2144 tall) spans `14/2144` = **0.65%** — **2.7× smaller**, from resolution alone.
-/// That is B233's "the size of the snow is way too small" (director A/B, decision 1162), and it is
+/// That is B233's "the size of the snow is way too small" (director A/B), and it is
 /// the same failure mode `lib.rs` already records for FFXGlow's texel-pinned blur geometry.
 ///
 /// So the law is evaluated in **era pixels** and converted to an angle, which makes the sprite

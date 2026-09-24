@@ -49,7 +49,7 @@ pub struct WorldCensus<'w, 's> {
     /// that no registered placement owns. Optional for a viewer with no streamer.
     placements: Option<Res<'w, crate::terrain_stream::Placements>>,
     streamer: Option<Res<'w, crate::terrain_stream::TerrainStreamer>>,
-    /// The exterior-scene gate's two terms (decision 0774) and what the cull actually did with
+    /// The exterior-scene gate's two terms and what the cull actually did with
     /// them. Optional so the census works in a viewer that has not installed the portal system.
     claim: Option<Res<'w, CameraInteriorClaim>>,
     windows: Option<Res<'w, ExteriorWindows>>,
@@ -102,7 +102,7 @@ pub struct CensusReport {
     /// entity), most first; `"-"` for the untagged (units, GameObjects, the app lane).
     pub why: Vec<(&'static str, usize)>,
     /// Of every [`ExteriorScene`]-tagged submesh: how many exist, how many the cull wrote `Hidden`
-    /// on, how many were exempt (the camera's own placement — decision 0784), and how many carry
+    /// on, how many were exempt (the camera's own placement), and how many carry
     /// **no `Aabb`**, which is the cull's fail-open arm admitting them unconditionally.
     pub tagged: usize,
     pub hidden: usize,
@@ -247,7 +247,7 @@ impl WorldCensus<'_, '_> {
             // The duplicate census: a doodad/WMO part is spawned by exactly one placement and
             // recorded on it; one alive outside every placement's list outlived a respawn. The
             // one population that lives outside the registry by design is the retained pass's
-            // fader EXILES (`static_gx::cull`, decision 1431): the feather-band respawns are
+            // fader EXILES (`static_gx::cull`): the feather-band respawns are
             // recorded on their fader seed, not on the placement, and they name themselves.
             let exile = path_why.is_some_and(|w| w.0 == "exile");
             if let (Some(owned), Some(o), false) = (owned.as_ref(), object, exile) {
@@ -260,7 +260,7 @@ impl WorldCensus<'_, '_> {
             *why.entry(path_why.map_or("-", |w| w.0)).or_default() += 1;
             drawn += usize::from(vis.get());
             if gated {
-                // The camera's own placement is not exterior scene to itself (decision 0784) and
+                // The camera's own placement is not exterior scene to itself and
                 // is *supposed* to draw; without that subtraction the escapee list is all
                 // room-you-are-in furniture and says nothing.
                 let exempt = group.is_some_and(|g| Some(g.instance) == own_instance);

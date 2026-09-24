@@ -6,7 +6,7 @@
 //! [`UnitWmoRoom`] claim: the anim-LOD gate (`creature_anim::lod`, decision 0739 — parks the
 //! pose) and the body draw election (`crate::exterior_cull`, decision 1475 — hides the root).
 //! One function answers both, so the two can never drift apart (the drift is how 0448's park and
-//! 0648's draw ended up disagreeing for a month — decision 1473).
+//! 0648's draw ended up disagreeing for a month).
 
 use bevy::prelude::*;
 

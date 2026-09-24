@@ -3,7 +3,7 @@
 //! render texgen. Every formula is byte-verified and validated against the two reference-trace
 //! reconstructions; the tests pin the envelopes.
 //!
-//! The 0264 INTERIM constants are gone (decision 0265): the wake-size factor was the reference
+//! The 0264 INTERIM constants are gone: the wake-size factor was the reference
 //! *render* aging a record one frame before its first draw (an artifact of the capture's ~20 fps,
 //! not an emit multiplier — negligible at our frame rates), and the ring-lifetime factor was a
 //! circular fps estimate in the reconstruction (no such factor exists at the bytes). The cadences
@@ -47,7 +47,7 @@ pub(super) struct FoamParams {
 
 /// The driver's parameter computation. `scale` = `OBJECT_FIELD_SCALE_X`; `gate` = the depth
 /// gate `max(2 × collisionHeight, 1.0)` (`[unit+0x297]` = CMovement+0xb4, ≈4.06 yd for a human
-/// — decision 0489); `depth` = surface − feet (yd, > 0 in water). `None` when the depth gate
+/// ); `depth` = surface − feet (yd, > 0 in water). `None` when the depth gate
 /// rejects: not in water, or dived deeper than ~2 body heights — surface swimming (rest depth
 /// ~0.75·h) stays well inside and emits.
 pub(super) fn foam_params(

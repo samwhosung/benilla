@@ -227,7 +227,7 @@ pub(super) fn apply_cloud_visibility(
 /// the disc shells so the transparent pass draws the clouds over a setting sun, the reference's
 /// depth-band layering. The radius sets the dome's *screen* geometry only: occlusion against the
 /// world is the far depth `sky_vertex.wgsl` pins (`sky_order`, "The depth law"), not this shell —
-/// the WDL horizon reaches past it (0588).
+/// the WDL horizon reaches past it.
 #[allow(clippy::type_complexity)]
 pub(super) fn follow_cloud_dome(
     cam: Query<(&GlobalTransform, &Projection), With<WorldCamera>>,

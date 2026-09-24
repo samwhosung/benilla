@@ -12,7 +12,7 @@
 //! - the **ray caster** ([`pick`]) — the pick-geometry declarations ([`PickMesh`] / [`PickBox`]) and
 //!   the shared triangle-accurate cast against the **actual resident mesh geometry** (so it works on
 //!   colliderless props — most doodads, including the campfire — which a physics raycast misses),
-//!   plus the generous inflated pass the mouse pick retries with (decision 1071).
+//!   plus the generous inflated pass the mouse pick retries with.
 //! - [`MouseoverTarget`] — the resource [`update_mouseover`] fills each frame with the nearest
 //!   `WorldObject` under the cursor, for the inspector.
 //!
@@ -26,7 +26,7 @@
 //!
 //! The player-facing consumers (`crate::target`) run their picks through [`pick`] unconditionally.
 //!
-//! **Not every drawn thing has an entity** (decision 1534). The consolidating render lanes — the
+//! **Not every drawn thing has an entity**. The consolidating render lanes — the
 //! static merge's blobs and the retained static pass — draw many placements as one thing, and the
 //! per-placement entity that used to carry the declaration is gone. So the declaration has two more
 //! shapes: [`PickBlob`] (members on the blob entity, for a lane that still draws from one) and
@@ -78,7 +78,7 @@ pub struct CreaturePickPart;
 /// A left *select* gesture in the world. Emitted by [`crate::player::control`] on the button's
 /// **release**, when the press satisfied the reference's click predicate — under 200 ms whatever the
 /// mouse did, or under 800 ms having turned the camera less than 2.25° of yaw / 2.0° of pitch
-/// ([`crate::player::camera::PressGesture`], decision 1122).
+/// ([`crate::player::camera::PressGesture`]).
 ///
 /// **A drag emits this too.** Orbit and select are independent in the reference: the press engages
 /// the camera look immediately and arms this test alongside it, so a fast flick-and-click orbits the
@@ -114,7 +114,7 @@ pub struct WorldRightPress;
 /// Bundled deliberately. A consumer that reaches for the entity half alone still compiles, still
 /// casts, and still returns hits — it just stops seeing most of the static world, silently. That is
 /// precisely how the inspector, the hover and `WOW_PICK` went quiet when the consolidating lanes
-/// shipped (decision 1534): nothing failed, the answers just went blank over trees and buildings.
+/// shipped: nothing failed, the answers just went blank over trees and buildings.
 /// So the roster of lanes lives HERE, once, and a new consumer gets it by construction.
 ///
 /// The caster itself stays lane-agnostic — it only knows the trait. This is the one place that

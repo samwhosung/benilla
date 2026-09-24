@@ -12,7 +12,7 @@
 //! wrappers. They hold `Visibility` for one reason only — hide-propagation to renderable
 //! *descendants* (a hidden unit must hide its weapon), and that chain runs entirely on
 //! `Visibility` + `InheritedVisibility`. Their `ViewVisibility` row is pure sweep tax: at the
-//! Goldshire pin it was ~6.7k of the 25.2k-row population (decision 1441).
+//! Goldshire pin it was ~6.7k of the 25.2k-row population.
 //!
 //! `Visibility` `#[require]`s `ViewVisibility`, so the component can't be left out at spawn —
 //! it has to be removed right after. [`VisChainOnly::vis_chain_only`] is that removal, named:

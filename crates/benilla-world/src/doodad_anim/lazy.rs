@@ -1,4 +1,4 @@
-//! The lazy palette-rig lane (decision 0863): a placed doodad's slot in the 2048-entry skin
+//! The lazy palette-rig lane: a placed doodad's slot in the 2048-entry skin
 //! palette is claimed at its **first draw-gate wake**, not at spawn — and given back under table
 //! pressure while the host is parked.
 //!
@@ -62,7 +62,7 @@ pub(crate) struct LazyRig {
 }
 
 /// On a part spawned on its static form with a skinned twin waiting: the promote swaps
-/// `Mesh3d` to `skinned`, the demote back to `stat`. Both forms are app-built (decision 0834)
+/// `Mesh3d` to `skinned`, the demote back to `stat`. Both forms are app-built
 /// and the handles held here keep them resident across the swaps.
 #[derive(Component)]
 pub(crate) struct SkinnedTwin {
@@ -103,7 +103,7 @@ pub(super) fn promote_lazy_rig(
     };
     let slot = rig.slot;
     if let (Some(ibp), Some(pose)) = (ibps.get(&lazy.ibp), pose) {
-        // Rig-relative like every other seed (decision 0974): the same compose the world pass
+        // Rig-relative like every other seed: the same compose the world pass
         // runs, from the root's propagated world.
         let root_g = worlds.get(root).copied().unwrap_or_default();
         crate::rig_anim::seed_rig_rows(pose, root_g, &rig, ibp, palettes);
@@ -447,7 +447,7 @@ mod tests {
     }
 }
 
-/// The Bevy contract this lane's `Aabb` depends on (decision 1261), pinned against the real
+/// The Bevy contract this lane's `Aabb` depends on, pinned against the real
 /// `calculate_bounds` system rather than a reading of it.
 ///
 /// `promote_lazy_rig`/`demote_lazy_rig` write `Mesh3d`. Bevy's `calculate_bounds` runs two

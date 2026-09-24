@@ -14,7 +14,7 @@
 //!   activation policy, so even an unfocused run activated the app: the menu bar switched and
 //!   the window ordered in **front** of every other app's. bevy_winit 0.18 exposes no
 //!   `EventLoopBuilderExtMacOS` hook to turn either off, so it can't be prevented — only undone,
-//!   immediately after launch (decision 0703).
+//!   immediately after launch.
 //!
 //! Stealing the screen is a **launch-time event**, and only an event's worth of correction is
 //! owed. 0703 paid for it with two *permanent* states, and the bill came due: with
@@ -136,8 +136,8 @@ const NO_PIXEL_ENV_PREFIXES: &[&str] = &[
 /// re-asserted every frame, over the `AlwaysOnBottom` birth cage AND over the `Normal` this module
 /// hands back at release. That assertion is correct and stays. What was wrong is pairing it with
 /// the **full 1600×900 default**, so every agent probe planted a screen-filling window over
-/// whatever they were doing — six of them in one session, which is how it got reported
-/// (decision 1148). Un-occludable and unobtrusive were never in conflict: a small window in a
+/// whatever they were doing — six of them in one session, which is how it got reported.
+/// Un-occludable and unobtrusive were never in conflict: a small window in a
 /// corner is both.
 ///
 /// `WOW_BG=1` (forced background, no run-driving env) is deliberately NOT no-pixel — that is the
@@ -233,7 +233,7 @@ mod macos {
     /// it for the whole run, which is the 2026-07-19 keystroke-stealing bug exactly. Accessory is
     /// what actually keeps us out of the foreground. Its cost — no Cmd-Tab entry — is why it is
     /// wrong to *leave* on (that is what stranded the window), so it is scoped to the launch and
-    /// promoted back to Regular the moment things settle (decision 0709).
+    /// promoted back to Regular the moment things settle.
     pub(super) fn hand_back_activation(_main_thread: NonSendMarker) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;

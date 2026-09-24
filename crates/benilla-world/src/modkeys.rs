@@ -8,7 +8,7 @@
 //! (92 lines, no dependants of its own). Nothing about "which two modifiers are the dev plane" is
 //! a debug-panel opinion.
 //!
-//! ## Stuck-modifier reconciliation against the OS's live flag state (decision 0606)
+//! ## Stuck-modifier reconciliation against the OS's live flag state
 //!
 //! macOS system shortcuts that grab the keyboard *without* de-focusing the window — the ⇧⌘5
 //! screenshot overlay is the canonical one — swallow the modifiers' release events: the overlay is
@@ -36,15 +36,15 @@ use bevy::prelude::*;
 /// what [`dev_chord`] actually listens for.
 pub const DEV_CHORD: &str = "Ctrl+Shift";
 
-/// Did the **dev-overlay chord** — [`DEV_CHORD`]+*key* — just fire? (decisions 0585, 0867, 0870,
+/// Did the **dev-overlay chord** — [`DEV_CHORD`]+*key* — just fire? (
 /// 1043 — which moved the last two dev keys onto it, so the whole fleet is here now.)
 ///
 /// The dev instruments used to sit on bare letters, which is a namespace we don't own: every letter is
-/// a *game* binding in the reference client, so `P` both opened the spellbook and toggled the perf HUD
-/// (0585). They moved to `Ctrl`+`Cmd`, and then off it: on Windows that is `Ctrl`+`Win`, a plane the
-/// shell owns and keeps extending — `Win+Ctrl+M` is Magnifier settings, which had our mute (0867).
+/// a *game* binding in the reference client, so `P` both opened the spellbook and toggled the perf HUD.
+/// They moved to `Ctrl`+`Cmd`, and then off it: on Windows that is `Ctrl`+`Win`, a plane the
+/// shell owns and keeps extending — `Win+Ctrl+M` is Magnifier settings, which had our mute.
 ///
-/// **`Ctrl`+`Shift`, one plane on every OS** (0870, director's call). The alternative was keeping
+/// **`Ctrl`+`Shift`, one plane on every OS** (director's call). The alternative was keeping
 /// `Ctrl`+`Cmd` on macOS for its one real advantage — Cmd is outside the reference's binding namespace
 /// (1.12 builds binding names from `ALT-`/`CTRL-`/`SHIFT-` only), so nothing in game could *ever* claim
 /// it. That buys protection against a binding no default declares and no player has yet written, and
@@ -54,15 +54,14 @@ pub const DEV_CHORD: &str = "Ctrl+Shift";
 ///
 /// `Ctrl`+`Shift` is the emptiest plane the reference *can* name: of its 152 defaults, exactly two
 /// carry two modifiers — `CTRL-SHIFT-TAB` and `CTRL-SHIFT-PAGEDOWN` — and no letter at all.
-/// `Ctrl`+`Alt` was never available: that is AltGr, which European layouts type real characters with
-/// (decision 0702).
+/// `Ctrl`+`Alt` was never available: that is AltGr, which European layouts type real characters with.
 ///
 /// **Exactly those two modifiers and no others**, both sides of each. The block is what makes this
 /// plane safe to leave ungated below: AltGr+Shift+*key* is `Ctrl`+`Alt`+`Shift`+*key*, and a German
 /// layout typing one of those into chat must not fire an overlay.
 ///
-/// **"No letter at all" was half the story, and the missing half cost us a plane's worth of safety**
-/// (decision 1142). The reference does not match bindings by equality alone: an exact miss re-probes
+/// **"No letter at all" was half the story, and the missing half cost us a plane's worth of safety**.
+/// The reference does not match bindings by equality alone: an exact miss re-probes
 /// **once** with the leftmost modifier dropped, so `CTRL-SHIFT-`*key* falls through to
 /// `SHIFT-`*key* — never to the bare letter, which is why this plane survived the correction at all,
 /// but far enough that `Ctrl`+`Shift`+`P` would open the pet paper doll (`SHIFT-P`,
@@ -213,7 +212,7 @@ mod tests {
     /// One modifier is not the chord, and a third one names something else. The case that matters:
     /// AltGr *is* `Ctrl`+`Alt`, so AltGr+Shift+key is a character a European layout types, never a
     /// dev chord — the overlays are ungated while the chat bar is open. `Ctrl`+`Cmd` is likewise
-    /// nothing of ours now (0870): on Windows it is the shell's, `Win+Ctrl+M` being Magnifier
+    /// nothing of ours now: on Windows it is the shell's, `Win+Ctrl+M` being Magnifier
     /// settings.
     #[test]
     fn a_lone_or_extra_modifier_is_not_the_chord() {

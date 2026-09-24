@@ -1,5 +1,5 @@
 //! Water foam — the client's **`CWater0Ripple`** wade wake / standing ring / step-in splash,
-//! rebuilt as the reference's actual **record model** (decision 0264; supersedes the ribbon of 0240
+//! rebuilt as the reference's actual **record model** (supersedes the ribbon of 0240
 //! and the stamps of 0234).
 //!
 //! Ground truth, twice over: byte-exact reverse engineering **and** two live GL traces
@@ -31,10 +31,10 @@
 //!   ~2 body heights silences it) — with a linear attenuation past half. One shared per-unit
 //!   cooldown cell paces both
 //!   kinds: rings every 400–450 ms, wakes one per ~0.625 yd of travel (the byte cadence laws —
-//!   the 0264 INTERIM constants are resolved, decision 0265).
+//!   the 0264 INTERIM constants are resolved).
 //!
 //! - **The patch sits ON the plane; its coplanar ties are settled in DEPTH, never by a lift**
-//!   (B348, 1807/1808). A decal's verts are the plane's own, so it ties with the water surface
+//!   (1807/1808). A decal's verts are the plane's own, so it ties with the water surface
 //!   everywhere and with the *terrain* along the shoreline, where the two cross. Lifting the patch
 //!   in world space wins that tie and also moves the geometry — and on a beach a vertical lift is a
 //!   horizontal overshoot: a decal `l` yards up keeps painting for `l / slope` yards past the
@@ -46,7 +46,7 @@
 //!   year is refuted; the real term is `footstepBias(0.125) × [0x810390]` = D3D `DEPTHBIAS −1/8192`).
 //!   Ours needs no settle at all, and that is worth stating rather than assuming (1811): the patch
 //!   is not a decal *over* the surface, it **is** the liquid mesh's own triangles — the same wet
-//!   cells, the same winding, through the same `clip_from_world` (`DECAL_WORLD_CLIP`, 0781) as a
+//!   cells, the same winding, through the same `clip_from_world` (`DECAL_WORLD_CLIP`) as a
 //!   mesh whose `Transform` is `IDENTITY` — so the depths agree exactly and `GreaterEqual` passes
 //!   the tie unaided. [`Rung::FOAM_RASTER`] stays as a few ULPs of insurance against a driver
 //!   rounding two pipelines differently; the **slope half is disarmed**, because its pull grows as
@@ -100,7 +100,7 @@ const ONESHOT_DEPTH_FRAC: f32 = 0.4;
 /// `[unit+0x297]` is the dword-indexed `+0xa5c` = CMovement+0xb4 = **collision height**, not
 /// `UNIT_FIELD_BOUNDINGRADIUS`: reading it as the latter (`2 × UNIT_FIELD_BOUNDINGRADIUS` ≈ 0.78,
 /// clamped to a 1-yd gate) is what killed all foam the moment swim latched: the ~1.52-yd swim
-/// rest depth sat past the misread gate (decision 0489 —
+/// rest depth sat past the misread gate (
 /// the director's ref-check shows surface swimmers foaming, which the true 4-yd gate allows).
 const GATE_DEPTH_FRAC: f32 = 2.0;
 
@@ -322,7 +322,7 @@ fn drive_unit(
     pos: Vec3,
     state: WadeState,
     scale: f32,
-    // The unit's collision height (yd) — both depth lines below are fractions of it (0645).
+    // The unit's collision height (yd) — both depth lines below are fractions of it.
     h: f32,
     water: &Query<(Entity, &WaterChunkInfo, &FoamPatch)>,
     index: &WaterIndex,
@@ -332,8 +332,8 @@ fn drive_unit(
     foam_state.active = true;
     let wow = bevy_to_wow(pos);
     // The surface height under the unit, from the wet cell it stands on — not the chunk's box and
-    // not the chunk's highest vertex, which on a sloped river put the wade depth ~2 yd out
-    // (decision 0642). Through [`WaterIndex`], not the full chunk walk: this line used to be a
+    // not the chunk's highest vertex, which on a sloped river put the wade depth ~2 yd out.
+    // Through [`WaterIndex`], not the full chunk walk: this line used to be a
     // linear scan of every loaded surface (~2.2k at a city pin) PER UNIT PER FRAME — exactly the
     // per-consumer shape `liquid/spatial.rs`'s module doc warns detonates; a dry-land unit now
     // costs one hash miss. A dead index entry self-filters at `water.get` (the index contract),
@@ -603,7 +603,7 @@ fn push_water_foam(
                 // triangles, so `GreaterEqual` already passes the coplanar tie and the only thing
                 // a pull toward the eye can reach is the wet-lattice skirt over dry sand. The
                 // nonzero constant also selects `DECAL_WORLD_CLIP`, so these absolute verts skip
-                // the cam-relative rebase and go through the world meshes' own matrix (0781) —
+                // the cam-relative rebase and go through the world meshes' own matrix —
                 // which is what makes the two depths agree in the first place.
                 raster_bias: crate::sky_order::Rung::FOAM_RASTER,
                 raster_slope: crate::sky_order::Rung::FOAM_RASTER_SLOPE,
@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(verts.len(), 6, "only the one wet cell overlaps");
         let wow = bevy_to_wow(verts[0]);
         // ON the plane, to the bit — the coplanar tie is the rasterizer's, and a geometric lift
-        // here is a horizontal overshoot onto dry ground at every shoreline (B348).
+        // here is a horizontal overshoot onto dry ground at every shoreline.
         assert!(
             (wow[2] - 5.0).abs() < 1e-4,
             "the patch sits exactly on the liquid surface, unlifted"

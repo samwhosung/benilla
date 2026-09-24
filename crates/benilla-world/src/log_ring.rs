@@ -1,5 +1,5 @@
 //! **The last few hundred log lines, kept in memory** — so a crash report can carry what the
-//! client was doing when it died (decision 2266 §B2).
+//! client was doing when it died.
 //!
 //! The only log sink is stderr, and a player's terminal (or a packaged Windows build with no
 //! console at all) is gone with the process. Of bug B390's four reporters one attached anything,

@@ -1,4 +1,4 @@
-//! `$WOW_PARTICLE_DEPTHDUMP` — the CPU half of the particle **depth-contest** measurement (B16).
+//! `$WOW_PARTICLE_DEPTHDUMP` — the CPU half of the particle **depth-contest** measurement.
 //!
 //! Prints, for every live world-lane quad emitter, the numbers the depth compare is decided by:
 //! each particle's quad centre in the world, its rendered half-extent, its view-space z, the NDC

@@ -81,7 +81,7 @@ impl Plugin for CloudsPlugin {
                     // …and on the READ side of the lighting resolve: the surfacing rebuild
                     // below takes its density and palette from `WowLighting`, so an unordered
                     // tick rebuilds the field from the atmosphere we just LEFT — the underwater
-                    // one, whose cloud density is 0.0 in Stranglethorn (B354, decision 2032).
+                    // one, whose cloud density is 0.0 in Stranglethorn.
                     tick_clouds
                         .after(crate::liquid::SubmersionVerdict)
                         .in_set(crate::lighting::LightingConsumeSet),
@@ -93,7 +93,7 @@ impl Plugin for CloudsPlugin {
                         .after(crate::liquid::SubmersionVerdict),
                 ),
             )
-            // Camera-anchored placement post-propagation, like the sky dome (decision 0504).
+            // Camera-anchored placement post-propagation, like the sky dome.
             .add_systems(
                 PostUpdate,
                 layer::follow_cloud_dome.in_set(crate::billboard::BillboardPlace),

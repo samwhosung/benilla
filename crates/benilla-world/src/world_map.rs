@@ -109,7 +109,7 @@ fn load_world_map(mut commands: Commands, world_assets: Option<Res<WorldAssets>>
             //
             // A named capture scenario carries its own map (`capture::scenarios::Scenario::map`)
             // and writes it here before this runs, so the golden sweep's Kalimdor shots need no env
-            // at all — see `capture::CapturePlugin::build` (decision 0743).
+            // at all — see `capture::CapturePlugin::build`.
             let map = map_id_from_env();
             commands.insert_resource(CurrentMap(map));
         }

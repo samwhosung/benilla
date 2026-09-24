@@ -44,7 +44,7 @@
 //! says otherwise: map 329's only reachable `Light.dbc` atmosphere (global row 341 → `LightParams`
 //! 336) is a khaki-brown gradient with a near-black apex, and it is not what draws in there.
 //!
-//! **A skybox is an ordinary M2, and is drawn as one** (decision 1264). This lane used to have a
+//! **A skybox is an ordinary M2, and is drawn as one**. This lane used to have a
 //! private mesh builder and a private material — positions, UVs, one texture, everything opaque —
 //! which is a faithful drawing of `StratholmeSkybox.m2` (three opaque batches × 8 verts, one texture
 //! pair per axis, no animation) and of nothing else. `CavernsOfTimeSky.m2` is the counter-example the
@@ -244,7 +244,7 @@ impl Plugin for SkyboxPlugin {
 /// the asset: BFS over `Stratholme_B`'s MOPR reaches 82 of 83 groups from group 39, 61 of them
 /// flagged.) The camera's down-ray CLAIM is a different resolver and is *not* cleared there — at
 /// the reported spot it seeds the street group g08 (`0x42805`, a true interior; pin-probed
-/// 2026-09-01, decision 1827) — which is what lets the crossfade weight engage in the square while
+/// 2026-09-01) — which is what lets the crossfade weight engage in the square while
 /// the skybox *name* comes from the flood predicate above.
 fn resolve_camera_skybox(
     instances: Query<&crate::wmo_portal::WmoPortalInstance>,
@@ -285,7 +285,7 @@ fn resolve_camera_skybox(
     // tie would otherwise alternate two backdrops frame to frame. Five roots qualify — Stratholme_B
     // and the four Caverns of Time shells — and the tie-break is live code, not a formality: the
     // note that used to sit here read "unreleased" as "unreachable" and concluded this can never
-    // pick twice. `CavernsofTime.wmo` is placed in the live world (decision 1264, and the module
+    // pick twice. `CavernsofTime.wmo` is placed in the live world (and the module
     // header above); two of its shells overlapping the camera is exactly the case `min()` settles.
     let resolved = instances
         .iter()
@@ -394,7 +394,7 @@ fn build_skybox(
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, sub.uvs.clone());
         mesh.insert_indices(Indices::U32(sub.indices.clone()));
-        // The batch's own authored address mode (decision 0763) — a skybox's UVs sit inside 0..1 for
+        // The batch's own authored address mode — a skybox's UVs sit inside 0..1 for
         // the cube faces, but Caverns of Time's asteroid belts tile theirs over ±21 wraps.
         let texture = sub
             .texture
@@ -457,7 +457,7 @@ fn sole_bone(sub: &benilla_formats::RenderSubmesh) -> Option<u16> {
 /// Show the wanted skybox's batches at this frame's slot weight and hide every other built one —
 /// the draw half of the 4-second crossfade. This is the sole `Visibility`, material and `MeshTag`
 /// writer for these entities (the gradient dome's own gate lives in [`crate::sky`], which reads
-/// [`SkyboxWeight`] — one authority per entity class, decision 0025).
+/// [`SkyboxWeight`] — one authority per entity class).
 ///
 /// Per slot the reference draws only at weight > 0 (`0x6d4afe fcomp 0.0`), with the weight
 /// multiplied into every batch's combined alpha (`0x710cb0` → `[CM2Model+0x180]`)

@@ -1,4 +1,4 @@
-//! **macOS `Cmd+Q`, turned into an exit the client can see** (decision 1528).
+//! **macOS `Cmd+Q`, turned into an exit the client can see**.
 //!
 //! On every other exit the client gets a frame to write the player's session down — the shutdown
 //! systems run in `Last`, after the `AppExit` (`benilla_app::shutdown`). `Cmd+Q` gets none.
@@ -80,7 +80,7 @@ fn route_quit_through_window_close(_main_thread: bevy::ecs::system::NonSendMarke
     };
     // Loud when it finds nothing: a winit change that moves or renames the item would otherwise
     // silently restore the settings-eating gesture, and that failure is invisible from inside the
-    // client (decision 1528).
+    // client.
     if rerouted == 0 {
         warn!(
             "mac_quit: no Quit item bound to terminate: — Cmd+Q may bypass the shutdown tail \

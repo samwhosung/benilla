@@ -1,4 +1,4 @@
-//! The direct M2 pose evaluator (decision 0712): turn each rig's `AnimationPlayer` state into
+//! The direct M2 pose evaluator: turn each rig's `AnimationPlayer` state into
 //! bone `Transform`s ourselves, off the baked [`PoseSource`], instead of routing per-bone entities
 //! through Bevy's `animate_targets` (0711's second lane — ~1.9 µs *per bone* of graph-walk +
 //! hash-lookup + boxed-curve machinery to produce, for most bones, a constant).
@@ -14,7 +14,7 @@
 //! (there is no rest-pose reset — the joint keeps what it has). Paused animations still evaluate
 //! at their frozen seek, exactly as Bevy does.
 //!
-//! Parking (decision 0448) is the [`AnimParked`] marker: a parked rig is skipped here — clocks,
+//! Parking is the [`AnimParked`] marker: a parked rig is skipped here — clocks,
 //! driver, and events all keep running — which preserves 0448's two observables (absolute-clock
 //! snap on wake, off-screen combat audibility) with no `AnimatedBy` repoint machinery.
 
@@ -28,7 +28,7 @@ use bevy::transform::TransformSystems;
 use super::AnimParked;
 use crate::vis_chain::VisChainOnly;
 
-/// The collapsed rig's pose buffer (decision 0724), on the entity carrying the `AnimationPlayer`:
+/// The collapsed rig's pose buffer, on the entity carrying the `AnimationPlayer`:
 /// one local `Transform` per bone in skeleton order — no joint entities at all (decision 0712's
 /// `PosedRig` handle grew into this when the ~59 k bone entities collapsed). Every pose writer —
 /// the evaluator below, the body twist, the global-sequence channels — writes `locals` and raises
@@ -121,7 +121,7 @@ impl RigPose {
     /// afterwards leaves ordinary propagation to carry every attached subtree on the UN-armed
     /// frame — and the world pass's patch walk deliberately does not enter a nested rig. That is
     /// how a mounted rider's pauldron ended up riding the horse's gallop while the shoulder it
-    /// hangs off did not (decision 0945).
+    /// hangs off did not.
     pub(crate) fn compose(&mut self) {
         for i in 0..self.locals.len() {
             let local = self.locals[i].compute_affine();
@@ -155,11 +155,11 @@ impl RigPose {
         self
     }
 
-    /// The anchor entity standing in for `bone`, spawned on first demand (decision 1355): a
+    /// The anchor entity standing in for `bone`, spawned on first demand: a
     /// consumer that needs an *entity* on a bone — a held item's parent, an emitter's owner
     /// frame, a quest marker's seat — resolves it here, and only bones something actually
     /// consumes ever get one. At the LBRS pin, 96 % of the eagerly-spawned population hosted
-    /// nothing (decision 1354).
+    /// nothing.
     ///
     /// The spawn seats from `model` — the same matrices the compose pass re-seats every anchor
     /// from — so an anchor created mid-frame (a weapon equipped in combat) stands at the current
@@ -182,7 +182,7 @@ impl RigPose {
         // Visibility so an attached subtree (a held item under a hand anchor) inherits the
         // owner's hide — chain only: an anchor renders nothing, and at the Goldshire pin the
         // anchor population was the single largest never-rendering block in the per-camera
-        // visibility sweep (4.8k rows, decision 1441).
+        // visibility sweep (4.8k rows).
         let anchor = commands
             .spawn((
                 Transform {
@@ -202,8 +202,8 @@ impl RigPose {
 
     /// The world-space point `offset` under `bone` at the current composed pose — what a
     /// consumer that only ever *reads* a position (the overhead anchor, a missile launch point,
-    /// the bowstring's nock) gets instead of an anchor entity, so those reads spawn nothing
-    /// (decision 1355). `root_global` is [`Self::joints_root`]'s `GlobalTransform` — exactly the
+    /// the bowstring's nock) gets instead of an anchor entity, so those reads spawn nothing.
+    /// `root_global` is [`Self::joints_root`]'s `GlobalTransform` — exactly the
     /// frame an anchor's own global would compose through.
     ///
     /// One deliberate difference from reading a spawned anchor: `model` carries the composed
@@ -261,7 +261,7 @@ struct Active {
 fn evaluate_rig_poses(
     mut rigs: Query<(&AnimationPlayer, &ModelAnimations, &mut RigPose), Without<AnimParked>>,
 ) {
-    // Parallel over rigs (decision 1945): a rig reads its shared clips and writes only its own
+    // Parallel over rigs: a rig reads its shared clips and writes only its own
     // pose, and a raid stands ~400 live rigs / ~12k bones — 0.4 ms of one thread's frame when
     // walked serially, and this system sits on the main thread's critical path.
     rigs.par_iter_mut().for_each(|(player, anims, mut rig)| {

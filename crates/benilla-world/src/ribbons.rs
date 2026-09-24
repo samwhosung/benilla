@@ -98,7 +98,7 @@ pub struct RibbonTrail {
     /// Which clock the `+0xc0` enable gate is sampled against, every frame ([`RibbonSeq`]).
     seq: RibbonSeq,
     /// The MODEL INSTANCE whose [`crate::model_fade::ModelAlpha`] decides whether this trail is
-    /// drawn at all (decision 0827). The reference's ribbon render leg reads the owning model's
+    /// drawn at all. The reference's ribbon render leg reads the owning model's
     /// render alpha (`block+0x3c × Model+0x19c`) and **drops the draw** below a threshold
     /// (`0x707680`) — so an invisible model has no streamer, which is what a
     /// first-person avatar's enchant trail needs (ledger F05). Only the drop is implemented: the
@@ -115,14 +115,14 @@ pub struct RibbonTrail {
     /// same spawn site: distance fade, the far-clip wall, the lateral frustum, the exterior window,
     /// and the room ([`crate::particles::EmitterFade::in_draw_set`]). The ribbon lane used to have
     /// **no term of any kind** here, which is how ninety Caverns of Time trails burned up through
-    /// 200 yd of Tanaris rock (decision 1289, the room term) and how a placed prop's streamer drew
+    /// 200 yd of Tanaris rock (the room term) and how a placed prop's streamer drew
     /// past the far-clip wall its own mesh had already been culled by (bug B39, decision 0678 —
     /// fixed for the quad clouds and left open here).
     ///
     /// By value and not as a component, because a trail entity holding an `EmitterFade` would be
     /// picked up by the particle sim's own optional-fade query, and its `WmoGroupVis` inside would
     /// enlist it in `apply_model_visibility`'s group query — a second `Visibility` writer on an
-    /// entity whose `Visibility` nobody reads (decision 0025).
+    /// entity whose `Visibility` nobody reads.
     ///
     /// `None` = an ENTITY-owned trail (a creature, a GameObject, a missile, a held item), bounded
     /// by server visibility and by [`Self::alpha_src`] instead — the same split
@@ -130,7 +130,7 @@ pub struct RibbonTrail {
     /// in [`simulate_ribbons`] for the one lane server visibility does not bound (transports).
     fade: Option<crate::particles::EmitterFade>,
     /// **The frame the committed edges are expressed in** — world on the ground, the transport's
-    /// deck while the owning model rides one ([`crate::ride_frame`], decision 1591).
+    /// deck while the owning model rides one ([`crate::ride_frame`]).
     ///
     /// A ribbon's whole point is that a committed edge never moves again, which is what draws a
     /// streak behind a swinging weapon. On a transport that same rule streams the streak off the
@@ -152,11 +152,11 @@ pub struct RibbonTrail {
     texture: Handle<Image>,
     /// The owner-last draw-order rung ([`crate::particles::owner_last_bias`] over the owner's
     /// world reach, computed at spawn) — a trail is one of its model's emitters and takes the
-    /// SAME rung as the quad clouds beside it (0721). Was the material's `depth_bias`; now the
+    /// SAME rung as the quad clouds beside it. Was the material's `depth_bias`; now the
     /// draw record's sort-key add.
     bias: f32,
     /// The owner model's bound sphere ([`ModelRibbon::water_bound`]) — the water-plane side is
-    /// the MODEL's (0921): the ribbon leg reads the model's side-A boolean verbatim, slack
+    /// the MODEL's: the ribbon leg reads the model's side-A boolean verbatim, slack
     /// included, so the trail flips with its model's bound centre, never with its whipping head.
     water_bound: (Vec3, f32),
 }
@@ -294,8 +294,8 @@ pub(crate) fn simulate_ribbons(
     hosts: Query<(&AnimationPlayer, &benilla_assets::ModelAnimations)>,
     images: Res<Assets<Image>>,
     mut quads: ResMut<EffectQuads>,
-    // The owning model's render alpha — the trail's draw gate (decision 0827), composed along the
-    // attached-model chain (0833).
+    // The owning model's render alpha — the trail's draw gate, composed along the
+    // attached-model chain.
     model_alphas: crate::model_fade::ModelAlphas,
     // Trails belong to the world lane (no booth ribbons; a booth-parked owner's strip is eaten
     // by the shader's farclip wall, exactly as on the material path). The frustum/projection come
@@ -408,7 +408,7 @@ pub(crate) fn simulate_ribbons(
         // `simulate_particles` freezes a culled owner's pool in, resuming from frozen state with
         // one frame's dt rather than catching up. Until now the ribbon lane had no term here at
         // all: not distance, not the far-clip wall, not the frustum, not the exterior window, not
-        // the portal PVS (decisions 0678 / 0786 / 1289 — each of which closed this hole for the
+        // the portal PVS (each of which closed this hole for the
         // quad clouds and left it open for the strips).
         //
         // Only while the owner LIVES. Freezing a DRAINING trail strands it — it can never empty
@@ -590,7 +590,7 @@ pub(crate) fn simulate_ribbons(
             continue;
         }
         // An invisible MODEL has no streamer: the reference's ribbon render leg reads the owning
-        // model's render alpha and drops the draw below a threshold (decision 0827). This is what
+        // model's render alpha and drops the draw below a threshold. This is what
         // takes your own weapon's enchant trail out of your face in first person, and keeps a
         // not-yet-shown unit's trail off the screen while its body is still at alpha 0.
         if alpha_src.is_some_and(|e| model_alphas.get(e) <= 1e-3) {
@@ -610,7 +610,7 @@ pub(crate) fn simulate_ribbons(
             f32::from(cell / cols) / f32::from(rows),
             f32::from(cell / cols + 1) / f32::from(rows),
         );
-        // RAW authored RGB — the gamma decode happens once in the effect shader (decision 0152),
+        // RAW authored RGB — the gamma decode happens once in the effect shader,
         // covering the texture term too. Alpha is a blend weight, raw.
         let rgb = def.color.sample_ms(ms);
         let rgba = [rgb[0], rgb[1], rgb[2], def.alpha.sample_ms(ms).max(0.0)];
@@ -680,7 +680,7 @@ pub(crate) fn simulate_ribbons(
                 anchor,
                 // The owner rung, dropped under the water pass when the MODEL sits on the eye's
                 // far side of its water plane — the model's bound centre with the bound-radius
-                // slack, never the whipping head node (0921: the ribbon leg reads the model's
+                // slack, never the whipping head node (the ribbon leg reads the model's
                 // side-A boolean verbatim, `0x7081f1`). The model frame is `alpha_src` — "the
                 // MODEL INSTANCE" — with the owner (possibly a joint) seconding as the walk
                 // seed; an unresolvable matrix falls back to the sign test at the head.

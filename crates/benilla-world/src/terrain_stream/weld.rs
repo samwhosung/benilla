@@ -1,4 +1,4 @@
-//! Doodad-hull **welding** (decision 1369). The 1367 premise check measured ~0.8 cpu_ms at
+//! Doodad-hull **welding**. The 1367 premise check measured ~0.8 cpu_ms at
 //! Stormwind riding the doodad-hull *population* — 12.2k collider entities' tree proxies, AABBs
 //! and per-collider row visits in avian's per-frame passes — and refuted the row-weight redesign
 //! (a body-less collider costs the same). So the fix is the terrain collider's own pattern
@@ -50,7 +50,7 @@ const WELD_MAX_TRIS: usize = 16_384;
 /// Quiet frames that close a live batch's tail. The spawner lands a tile's placements over many
 /// budget-paced frames; a quarter second of silence means the burst is done. Under the loading
 /// cover the tail closes after ONE quiet frame instead: the settle release waits on the collider
-/// backlog (0737, via `finish_colliders`' publish), and a fixed quarter-second tail would push
+/// backlog (via `finish_colliders`' publish), and a fixed quarter-second tail would push
 /// every world entry longer for nothing.
 const WELD_IDLE_FRAMES: u32 = 15;
 
@@ -189,7 +189,7 @@ pub(super) fn flush_hull_welds(
 /// One closed batch → one off-thread trimesh build, carrying exactly what an individual hull
 /// carried: default layers (both audiences), the pick clamp, and — unless the 1367 lever bares
 /// it — a static body. Tagged for the census/inspector so the row is nameable, but with no
-/// `PickMesh`/`PickBox` it is not pickable (0929: pick geometry is declared, never inferred).
+/// `PickMesh`/`PickBox` it is not pickable (pick geometry is declared, never inferred).
 fn spawn_weld(commands: &mut Commands, acc: &mut WeldAcc) -> Entity {
     let verts = std::mem::take(&mut acc.verts);
     let tris = std::mem::take(&mut acc.tris);

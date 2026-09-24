@@ -50,7 +50,7 @@ pub(super) fn apply_model_visibility(
     // The per-frame WMO portal PVS (computed by `crate::wmo_portal`), read here so the cull composes
     // with the toggles + far-clip in this single Visibility authority rather than fighting it.
     instances: Query<&WmoPortalInstance>,
-    // …and, for exactly the same reason, the exterior-scene window gate (decision 0784). It used to
+    // …and, for exactly the same reason, the exterior-scene window gate. It used to
     // write `Visibility` itself in `PostUpdate`, i.e. AFTER this system — so on every object it
     // admitted it silently undid the toggles, the far-clip cull and the portal PVS, including
     // outdoors, where it wrote `Inherited` over all of them every single frame.
@@ -69,7 +69,7 @@ pub(super) fn apply_model_visibility(
     // its rig, both of which carry the root's propagated verdict. Read-only, and for the same
     // one-authority reason as the two above: a card is a world root, so nothing carries its owner's
     // hide to it, and the mirror that used to live in `billboard::face_billboards` was ordered too
-    // late to survive (decision 1409).
+    // late to survive.
     card_owners: Query<&InheritedVisibility>,
     mut q: Query<(
         Entity,
@@ -90,7 +90,7 @@ pub(super) fn apply_model_visibility(
     // `WmoGroupVis` like every other piece of their group but no `ModelPart` — they are not model
     // submeshes and take none of the toggle/far-clip/fade rules above. A second QUERY, deliberately
     // not a second SYSTEM: decision 0025 wants one `Visibility` authority, and this keeps it
-    // (decision 0689 — a culled room's water must go with the room, same as its furniture).
+    // (a culled room's water must go with the room, same as its furniture).
     mut group_only: Query<
         (
             &WmoGroupVis,
@@ -212,7 +212,7 @@ pub(super) fn apply_model_visibility(
             };
 
             // WMO portal visibility: a group the camera can't reach through any portal is hidden — the
-            // faithful cull (decision 0031), computed per-frame by `crate::wmo_portal` and ANDed in here so
+            // faithful cull, computed per-frame by `crate::wmo_portal` and ANDed in here so
             // it composes with the toggles + far-clip instead of a second Visibility writer. A submesh with
             // no `WmoGroupVis` (every non-WMO entity, and a portal-less WMO) is never portal-culled; the
             // panel's `portal_cull` switch disables it wholesale for an A/B against the old "draw every
@@ -311,7 +311,7 @@ pub(super) fn apply_model_visibility(
             if let Some(mut tag) = tag {
                 let mut bits = tag.0;
                 if fade.is_some() || mat_anim.is_some_and(|m| !m.composes_unit_tag()) {
-                    // Glow cards render at AUTHORED brightness (decision 0159 — the dimmer knob died
+                    // Glow cards render at AUTHORED brightness (the dimmer knob died
                     // with the faithful FFXGlow pass; the square-law is what keeps halos in check).
                     let alpha = fade_alpha * mat_factor;
                     // `with_alpha` handles the `MeshTag == 0` opaque-sentinel (a *visible* glow card
@@ -359,7 +359,7 @@ pub(super) fn apply_model_visibility(
     // The gate is the **ever-visited latch**, not this frame's PVS: the client's render-record
     // persistence (`0x684fe0` → `0x6b4060` → `0x6b62e0`) draws a visited MLIQ group's
     // liquid every frame with no portal re-check for the rest of the world session — the Great
-    // Forge's walkway-level pool stays put when its group drops out of the flood (B65). An index
+    // Forge's walkway-level pool stays put when its group drops out of the flood. An index
     // past the latch fails OPEN (portal-less props never latch and must always draw).
     for (gv, mut vis, xf, aabb, exterior, tag) in &mut group_only {
         let portal_ok = !m.portal_cull
@@ -373,7 +373,7 @@ pub(super) fn apply_model_visibility(
         let exterior_ok = !exterior || Some(gv.instance) == own_instance || gate.admits(xf, aabb);
         // **A building's water rides the building's own toggle** — the reference's WMO liquid drain
         // `0x684cd0` gates on `[0xc7b2a4] & 0x100`, the "Map objects" bit, NOT on the `0x1000000`
-        // "Water" bit the three ADT drains test (decision 1657). Our `ModelKind::Wmo` toggle is
+        // "Water" bit the three ADT drains test. Our `ModelKind::Wmo` toggle is
         // that bit, and until now it hid a building
         // and left its pool hanging in the air — which is also the shape a mis-placed pool takes, so
         // the one instrument for telling those apart was itself producing the symptom.
@@ -418,7 +418,7 @@ pub(super) fn apply_model_visibility(
 /// - **`vis=Hidden`** — [`apply_model_visibility`] above said no: a toggle, the far-clip wall, a
 ///   fully-faded doodad, an `A ≤ 0` material track, the portal PVS or the exterior window gate.
 /// - **`vis=Inherited inh=false`** — *this* part said yes and an **ancestor** said no. For a body
-///   part that is the exterior-scene election (decision 1270), which is decided once on the net
+///   part that is the exterior-scene election, which is decided once on the net
 ///   root and inherits down; it is also how a transport hides its deck. Without this field the
 ///   line was indistinguishable from the frustum case below — the election arrived after the
 ///   trace did, and a body vanishing for the right reason would have read as a bound bug.
@@ -473,7 +473,7 @@ type TracedModels<'w, 's> = Query<
         Option<&'static Aabb>,
         // Which lane the row is: a world-root billboard CARD inherits nothing, so `inh=true` on it
         // means only "no parent", never "my model is drawn" — the one row where the second field
-        // must not be read as the owner's verdict (decision 1409).
+        // must not be read as the owner's verdict.
         Has<crate::billboard::BillboardCard>,
     ),
 >;
@@ -541,7 +541,7 @@ mod tests {
     use benilla_assets::BillboardInfo;
     use benilla_formats::{BillboardKind, ModelBlend};
 
-    /// **A billboard card draws only while the model it is a batch of draws** (decision 1409).
+    /// **A billboard card draws only while the model it is a batch of draws**.
     ///
     /// A card is split out to a world root — its transform belongs to the billboard system — so
     /// nothing carries its owner's hide to it. `billboard::face_billboards` used to mirror that
@@ -614,7 +614,7 @@ mod tests {
         );
     }
 
-    /// **A building's pool rides the building's own toggle** (decision 1657) — and ADT liquid must
+    /// **A building's pool rides the building's own toggle** — and ADT liquid must
     /// not, which is the half that makes this a fidelity fact rather than a tidy-up.
     ///
     /// The reference gates its WMO liquid drain `0x684cd0` on `[0xc7b2a4] & 0x100`, the "Map

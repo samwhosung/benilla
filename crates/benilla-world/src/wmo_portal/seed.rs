@@ -27,11 +27,11 @@
 //!   WMO flag only on `t_terrain < t_wmo`; `GetAreaID 0x670250` arbitrates identically at `0x670345`).
 //!   Equal keeps the WMO. Without this leg a camera standing on open ground **above a buried interior**
 //!   — a mine dug into a hillside — reads "inside a tunnel" and the flood culls the building out from
-//!   under it (decision 0258; it is what 0233 deferred). Terrain *above* the eye is not on the
+//!   under it (it is what 0233 deferred). Terrain *above* the eye is not on the
 //!   down-segment at all, which is exactly what keeps a real tunnel reading INSIDE, and a column in an
 //!   MCNK hole has no terrain surface to hit, which is how a mine entrance stays walkable.
 //!
-//! - **Leg C — the camera-void fallback** (decision 0692; **ours**, not the client's): only when Legs
+//! - **Leg C — the camera-void fallback** (**ours**, not the client's): only when Legs
 //!   A and B both miss AND no terrain surface sits at or below the eye's column, the same race runs
 //!   once more over the **camera-only** faces (DETAIL set, NOCAMCOLLIDE clear — the faces that stop
 //!   the camera but never carried the walking BSP). The client returns "outside" here and blanks the
@@ -193,7 +193,7 @@ pub(crate) fn down_ray_pick(
     // Outside: nothing within the ray length, or the winning surface belongs to an exterior group
     // (the client clears the instance for either — and then appends no seeds).
     let Some(in_group) = best else {
-        // Leg C — the camera-void fallback (decision 0692; ours, the module doc has the case).
+        // Leg C — the camera-void fallback (ours, the module doc has the case).
         // Fires only when BOTH faithful legs found nothing AND no terrain surface sits at or below
         // the eye: an under-ground eye with a camera-collidable DETAIL surface below it is between
         // interior surfaces the camera itself cannot leave, and blanking the building there is the
@@ -297,7 +297,7 @@ pub(crate) struct DownRayClaim {
 /// [`area_down_ray`] without the outdoor collapse (see it for the mechanism + provenance): the
 /// entity LIGHT chain needs to distinguish "outdoors because an EXTERIOR/EXTERIOR_LIT face won"
 /// from "outdoors because only terrain is below" — a deck unit and a field unit take different
-/// intensity laws (decision 0477).
+/// intensity laws.
 pub(crate) fn down_ray_claim(
     tris: &[Vec<[[f32; 3]; 3]>],
     bounds: &[Option<([f32; 3], [f32; 3])>],
@@ -780,7 +780,7 @@ mod tests {
     }
 
     /// **A body planted UNDER the floor it stands on is invisible to the position cast, and the
-    /// under-floor fallback is what finds it** (decision 1409). Orgrimmar's bonfires, braziers,
+    /// under-floor fallback is what finds it**. Orgrimmar's bonfires, braziers,
     /// meat racks and shop signs are authored 0.45–1.16 yd below the group floor they sit in — a
     /// ray down from the origin passes beneath that floor and reports open ground, which the
     /// exterior-scene election reads as "outdoors" and hides. `room_at`'s second pass re-casts from
@@ -940,7 +940,7 @@ mod tests {
 
     #[test]
     fn exterior_lit_group_splits_the_two_laws() {
-        // The Stormwind-street shape (decision 0475): a `0x40`-only group (EXTERIOR_LIT, no
+        // The Stormwind-street shape: a `0x40`-only group (EXTERIOR_LIT, no
         // EXTERIOR) is "indoors" on the zone-text law (`[node+0x90]` bit 0 keys on `0x8` alone)
         // but OUTDOORS on the unit-lighting law (the `0x6a87f0` class fork keys on `MOGI & 0x48`).
         let street = nav(EXTERIOR_LIT, [-10.0, -10.0, 0.0], [10.0, 10.0, 10.0], 0, 0);
@@ -1002,7 +1002,7 @@ mod tests {
 
     #[test]
     fn down_ray_claim_distinguishes_deck_from_terrain() {
-        // The Booty Bay boardwalk shape (decision 0477): the un-collapsed claim keeps the
+        // The Booty Bay boardwalk shape: the un-collapsed claim keeps the
         // "outdoors ON an outdoor-class WMO face" vs "outdoors over terrain" distinction the
         // collapsed `area_down_ray` erases — a deck unit forces the lit 2.5, a field unit takes
         // the MCSH fork. Depth is the cross-placement arbitration key.
@@ -1153,7 +1153,7 @@ mod tests {
 
     #[test]
     fn camera_void_fallback_names_the_detail_floored_room() {
-        // The Deadmines-pocket shape (decision 0692): an interior group whose only floor is DETAIL
+        // The Deadmines-pocket shape: an interior group whose only floor is DETAIL
         // faces — present in the camera-only set, absent from the walking set.
         let pocket = nav(0, [-10.0, -10.0, 0.0], [10.0, 10.0, 12.0], 0, 0);
         let walk: [Vec<[[f32; 3]; 3]>; 1] = [Vec::new()];

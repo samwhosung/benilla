@@ -35,7 +35,7 @@ impl Plugin for ClutterPlugin {
     fn build(&self, app: &mut App) {
         // The config exists from plugin build, not `setup_clutter`: the CVar loader
         // (`crate::cvars::load_config`, also Startup) applies a saved `WorldDetail` onto it, and
-        // an ordering flip must not silently drop the file's value (0992).
+        // an ordering flip must not silently drop the file's value.
         app.init_resource::<ClutterConfig>()
             .add_systems(Startup, setup_clutter.after(AssetSet::Open))
             .add_systems(
@@ -103,7 +103,7 @@ fn evict_clutter_geometry(
     }
 }
 
-/// Expire the decoded clutter geometry by **distance** (decision 0793) — the within-map half of
+/// Expire the decoded clutter geometry by **distance** — the within-map half of
 /// [`evict_clutter_geometry`]. Clutter models are map-*flavoured*: the handful a zone uses is decoded
 /// on its first chunk build and then held for the process, so a continent tour accumulates every
 /// zone's set. Re-approaching re-decodes one M2 off the chain, inside the same lazy per-chunk build
@@ -159,7 +159,7 @@ pub(crate) const DETAIL_DOODAD_ALPHA_REF: f32 = 128.0 / 255.0;
 pub(crate) const DETAIL_DOODAD_FADE_FAR: f32 = 70.0;
 
 /// Ground-clutter tunables (read at tile scatter; a `density` change re-scatters LOADED tiles too —
-/// `terrain_stream::rescatter_clutter`, the 1.12 setter's own chunk-rebuild law, 0992):
+/// `terrain_stream::rescatter_clutter`, the 1.12 setter's own chunk-rebuild law):
 /// `density` multiplies the per-chunk cell-visit count (the client's `frillDensity`, faithful=16 at ×1)
 /// — player-settable through **either** registered CVar over this one field, [`ClutterConfig::frill_density`]
 /// being the conversion: `WorldDetail` (the panel's stop, 0/1/2 → ×1/×2/×3) or `frillDensity` (the
@@ -559,7 +559,7 @@ pub(crate) fn stream_chunk_clutter(
     // Both come from `setup_clutter`, which inserts neither when there is no client data — and a
     // hard `ResMut` here is a *validation* failure, not a `None` the body can handle: the system
     // never runs, Bevy's default error handler panics, and a client that found no install died on
-    // its first frame instead of sitting at the login screen (decision 1451).
+    // its first frame instead of sitting at the login screen.
     let (Some(mut geometry), Some(mut assets)) = (geometry, assets) else {
         return;
     };

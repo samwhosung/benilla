@@ -14,7 +14,7 @@
 //! draw order exists only on transparent-pass batches) and not an interior-slot prop, into
 //! this buffer; the flush bakes each `(owner tile, 133⅓-yd cell, material)` group into ONE
 //! mesh entity with placement transforms baked into the vertices. **The fader lane (lane 2)
-//! is dev-opt-in only (`WOW_MERGE_FADERS=1`, decision 1423)**: each vertex carries its
+//! is dev-opt-in only (`WOW_MERGE_FADERS=1`)**: each vertex carries its
 //! placement's fade sphere ([`benilla_assets::ATTRIBUTE_WOW_FADE_SPHERE`]) and
 //! `wow_model.wgsl`'s `WOW_MERGED_FADE` lane computes the faithful fade curve per vertex —
 //! alpha in-shader, `Hidden` as a clip-space collapse at zero — on the BLEND TWIN permanently
@@ -100,8 +100,7 @@ const RETIRE_FRAMES: u32 = 10;
 /// drawn 400 → ~830): one blob per material spans the whole streamed scene, so its Aabb defeats
 /// the frustum cull and every blob's full vertex load encodes every frame. The cell restores
 /// locality; the distinct-material count (~5.6k at SW) remains the blob-count floor either way —
-/// the census finding that per-material merging alone cannot reach the few-hundred-row regime
-/// (decision 1413).
+/// the census finding that per-material merging alone cannot reach the few-hundred-row regime.
 const CELL: f32 = 533.333_3 / 4.0;
 
 /// One accumulating blob: shared geometry + placement transforms + per-placement fade
@@ -109,7 +108,7 @@ const CELL: f32 = 533.333_3 / 4.0;
 struct MergeAcc {
     parts: Vec<(Arc<RenderSubmesh>, Transform)>,
     /// Each part's placement identity (index-parallel with `parts`) — what the pick names when
-    /// the cursor lands on this blob (decision 1534). Shared per placement, so a merged cell of
+    /// the cursor lands on this blob. Shared per placement, so a merged cell of
     /// 300 trees holds 300 refcount bumps, not 300 strings.
     objects: Vec<Arc<crate::interact::WorldObject>>,
     spheres: Vec<Vec4>,
@@ -443,7 +442,7 @@ pub(super) fn flush_static_merge(
         blobs += 1;
         // The blob takes exactly the vis/tagging its members had (spawn/mod.rs's prop site):
         // the set-valued `WmoGroupVis` + `ExteriorScene` when the building has an instance and
-        // rooms name the prop; untagged otherwise (no key ⇒ no exemption possible — 0784).
+        // rooms name the prop; untagged otherwise (no key ⇒ no exemption possible).
         let vis = (!key.1.is_empty())
             .then_some(p.portal_instance)
             .flatten()
@@ -674,7 +673,7 @@ pub(crate) fn log_blob_vis(
 /// Its pick declaration is a [`PickBlob`], not a `PickMesh`: the baked mesh is the union of
 /// every member, so casting against it would answer "static-merge", which is what this blob's
 /// `WorldObject` said and why 1418's "nameable, not pickable" was a real loss of the inspector
-/// over merged content (decision 1534). The members carry the placement identities, and the
+/// over merged content. The members carry the placement identities, and the
 /// entity keeps the broad phase and the drawn test it always had.
 fn spawn_blob(
     commands: &mut Commands,
@@ -694,7 +693,7 @@ fn spawn_blob(
     } = src;
     let n = parts.len();
     // `center` is the blob's world position and therefore its TRANSPARENT-PHASE SORT KEY (the
-    // mesh is baked blob-local around it — decision 1422). On `Transform::IDENTITY` a fader
+    // mesh is baked blob-local around it). On `Transform::IDENTITY` a fader
     // blob sorted at the world origin: drawn first among all transparent content, its
     // depth-write killing every transparent entity behind its translucent pixels.
     let (mesh, mn, mx, center) =
@@ -787,7 +786,7 @@ mod tests {
         }
     }
 
-    /// A test placement identity — every divert carries one (decision 1534).
+    /// A test placement identity — every divert carries one.
     fn object() -> Arc<crate::interact::WorldObject> {
         Arc::new(crate::interact::WorldObject {
             kind: ModelKind::Doodad,
@@ -927,7 +926,7 @@ mod tests {
     }
 
     /// An EXTERIOR prop blob (no slots) bakes no slot attribute, and a prop no room names
-    /// takes no vis key and no exterior tag (the untagged-not-gated-blind rule, 0784).
+    /// takes no vis key and no exterior tag (the untagged-not-gated-blind rule).
     #[test]
     fn exterior_and_unnamed_prop_blobs_stay_plain() {
         let mut app = test_app();

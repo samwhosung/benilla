@@ -1,6 +1,6 @@
 //! The per-frame CPU scene walk of the retained pass (split from `mod.rs` at the
 //! 1,000-line budget) — the seven-term collapse at cell/group granularity, the dead-region
-//! reap, the fader exile scan (B2, decision 1431), and the `WOW_GX_CENSUS` agreement
+//! reap, the fader exile scan (B2), and the `WOW_GX_CENSUS` agreement
 //! instrument.
 
 use bevy::prelude::*;
@@ -370,7 +370,7 @@ pub(super) fn cull_cells(
     let own = claim.0.map(|c| c.room.instance);
     // The dev doodad toggle, cell-wholesale (see the module doc). The doodad phase — cells
     // AND prop regions (B4; a WMO's furniture is the M2 scene, not the WMO phase) — sorts
-    // NEAR-FIRST as one list (B3, decision 1432): the 1.12 client's front-to-back band walk
+    // NEAR-FIRST as one list (B3): the 1.12 client's front-to-back band walk
     // (32 bands × 33⅓ yd, `0xc7bd40`) at this lane's grain: the node draws the
     // list in order, so early-z rejects the far entries' fragments instead of shading them.
     if doodads_on {
@@ -520,7 +520,7 @@ pub(super) fn cull_cells(
                 if !frustum.intersects_sphere(&sphere, false) {
                     continue;
                 }
-                // Another building is exterior scene; the camera's own is exempt (0784).
+                // Another building is exterior scene; the camera's own is exempt.
                 if Some(entity) != own
                     && !gate.admits(&GlobalTransform::from_translation(draw.origin), Some(aabb))
                 {

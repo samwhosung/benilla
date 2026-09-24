@@ -47,7 +47,7 @@ pub struct BatchVariants {
     /// The interior BAKE variant: interior-PROP mode, the shader evaluating the model's SH probe
     /// by its `MeshTag` slot — the steady indoor law for every entity M2.
     pub interior_bake: Handle<WowModelMaterial>,
-    /// The bake lane's blend twin — the probe-lit feather (decision 0355). Without it a fade
+    /// The bake lane's blend twin — the probe-lit feather. Without it a fade
     /// indoors swaps to the EXTERIOR twin and the light jumps mid-feather.
     pub interior_bake_blend: Handle<WowModelMaterial>,
     /// The `AlphaMode::Blend` twin every feather pass rides (spawn appear-fade, distance fade,
@@ -58,8 +58,8 @@ pub struct BatchVariants {
     pub zfill: Option<Handle<WowModelMaterial>>,
 }
 
-/// The **UV lane** an [`M2BatchMaterials::entity_variants`] call registers into (decision 2295) —
-/// the animated-material registry, the delta table (decision 1381) and, for the one measured class
+/// The **UV lane** an [`M2BatchMaterials::entity_variants`] call registers into —
+/// the animated-material registry, the delta table and, for the one measured class
 /// that needs it, the instance the materials belong to.
 ///
 /// A bundle rather than three arguments because they are one thing — *where this batch's texture
@@ -105,7 +105,7 @@ impl M2BatchMaterials<'_> {
 
     /// The material store this param already holds — for a spawner that builds a batch's world
     /// material here and then clones it against a light buffer of its own (the UI model tiles'
-    /// twin, decision 2013). Taking a second `ResMut<Assets<WowModelMaterial>>` beside this
+    /// twin). Taking a second `ResMut<Assets<WowModelMaterial>>` beside this
     /// param is a schedule-time conflict (B0002), which is why the store is reached through it.
     pub fn materials(&mut self) -> &mut Assets<WowModelMaterial> {
         &mut self.materials
@@ -137,7 +137,7 @@ impl M2BatchMaterials<'_> {
     }
 
     /// The material pair for a batch of a **WMO skybox** — the painted sky a building owns
-    /// ([`crate::skybox`]), which is an ordinary M2 and is drawn as one (decision 1264).
+    /// ([`crate::skybox`]), which is an ordinary M2 and is drawn as one.
     ///
     /// Everything that makes it a *skybox* rather than a doodad is here, and it is only three
     /// things. Blend mode, sidedness, the UNLIT and UNFOGGED bits, the alpha-key reference, the
@@ -229,7 +229,7 @@ impl M2BatchMaterials<'_> {
     /// the one dedup cache with the world lane without ever colliding with it.
     ///
     /// `rig` picks the scene's **own authored M2 light rig** ([`ShadeSel::Rig`] — the probe-slot SH
-    /// eval plus the buffer's point table, decisions 0429/0435) over the sky lane, and plays the
+    /// eval plus the buffer's point table) over the sky lane, and plays the
     /// batch's authored UV animation: together, what a char-select scene is and a portrait bake
     /// is not (a booth freezes at t = 0 and is never ground-shaded).
     ///
@@ -257,7 +257,7 @@ impl M2BatchMaterials<'_> {
     /// held item, spell effect — is built LIT and carries the same indoor pair, because the
     /// reference hands every entity M2 the same entity-node fill (`0x672a20`).
     ///
-    /// **It also puts the batch on the UV lane** (decision 2295), and takes `uv` for exactly that
+    /// **It also puts the batch on the UV lane**, and takes `uv` for exactly that
     /// reason rather than leaving it to the caller: seeding a material's `sun_scale.zw` and
     /// registering it for the per-frame sample are one fact — *this batch's texture transform
     /// runs* — and the recurring bug on this lane is a caller that does one and not the other
@@ -314,7 +314,7 @@ impl M2BatchMaterials<'_> {
         // identity-lerp on the tag alpha instead (0865's mechanism, 1489-verified as the
         // reference's own preset-5 shape) — the second because its colour pass already blends.
         // Everything else gets a real twin, built from the SOURCE blend so the 224/255 cutout
-        // marker matches what the colour pass discards (decision 0842).
+        // marker matches what the colour pass discards.
         let own_twin = matches!(
             sub.blend,
             ModelBlend::Blend | ModelBlend::Mod | ModelBlend::Mod2x
@@ -433,7 +433,7 @@ impl M2BatchMaterials<'_> {
             fade_blend: mk(ShadeSel::Lit, false, true),
             // Decision 0831: character parts are opaque/alpha-cut and always z-writing, so every
             // one twins. `cutout` mirrors the colour twin's 224/255 discard exactly — only an
-            // AlphaKey source alpha-tests while fading (decision 0842).
+            // AlphaKey source alpha-tests while fading.
             zfill: Some(zfill_material(
                 &mut self.cache.0,
                 &mut self.materials,
@@ -505,7 +505,7 @@ impl M2BatchMaterials<'_> {
             texture,
             sub.blend,
             // A billboard card is culled by the SAME rule as any other batch — the material's
-            // `0x04` flag, nothing else (decision 0629, bugs B05/B34).
+            // `0x04` flag, nothing else (bugs B05/B34).
             sub.two_sided,
             sub.wmo_batch.is_some(),
             // Interior-PROP mode (the SH-probe lane) when a variant asks for it; otherwise the
@@ -531,7 +531,7 @@ impl M2BatchMaterials<'_> {
             false,
             light,
             // The ENTITY lane's batches (units, GameObjects, held items): shared per batch, as
-            // ever. The per-placement lane is the world streamer's alone (decision 1408) — every
+            // ever. The per-placement lane is the world streamer's alone — every
             // affected model is a placed `World\…` prop, and an entity already resolves its
             // sequence through `MatAnim::host`.
             None,

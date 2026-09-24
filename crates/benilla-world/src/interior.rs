@@ -31,7 +31,7 @@
 //! the hit group's `MOGI & 0x48` — NOT the zone-text `[node+0x90]` bit-0 predicate, which keys on
 //! `0x8` alone and so calls the `0x40`-only city street groups "indoors"; decision 0475 — and an
 //! outdoor-class WMO surface forces the LIT target, no MCSH beneath the building: the WMO-linked
-//! skip-shadow bit, byte-verified; decisions 0477/0480). One verdict per UNIT, sampled at its
+//! skip-shadow bit, byte-verified). One verdict per UNIT, sampled at its
 //! [`InteriorLit::anchor`] — a body's parts must never split across light laws (group bounding
 //! boxes did exactly that at floor level; director-caught, 2026-07-12), and a held/equipped item
 //! M2 anchors at its WEARER's root, never its own carried position: the reference aliases the
@@ -118,10 +118,10 @@ pub(crate) enum InteriorKind {
 /// **Every batch of a model goes through this, cards included.** The reference has one light node
 /// per object and every batch shades through the same node fill (`0x7192b0`);
 /// a billboard BONE re-orients geometry, it does not re-route light. Our billboard batches spawn as
-/// world ROOTS so the facing system can own their transform (0153) — an implementation detail that
+/// world ROOTS so the facing system can own their transform — an implementation detail that
 /// must not reach the light, and which did while this policy was written out longhand at each spawn
 /// site and one of them omitted it: a Stratholme hanging sign baked from the room it hangs in while
-/// its own chain cards stayed on the exterior material and lit from the sky (decision 0778).
+/// its own chain cards stayed on the exterior material and lit from the sky.
 ///
 /// `anchor` is the model's NET ENTITY root for every caller — body mesh, held item, and card alike
 /// — so a model can never split across the two light laws ([`BodyBakeCenter`] for why an item
@@ -167,7 +167,7 @@ enum AppliedLaw {
 /// item never folds from its own carried position.
 ///
 /// For a [`ContainmentAttach`] anchor it is also the **attach anchor** — the reference's
-/// `[node+0x5c]`, the same world point (decision 0776).
+/// `[node+0x5c]`, the same world point.
 #[derive(Component, Clone, Copy)]
 pub struct BodyBakeCenter(pub Vec3);
 
@@ -182,7 +182,7 @@ pub struct BodyBakeCenter(pub Vec3);
 #[derive(Component)]
 pub struct ContainmentAttach;
 
-/// The part → anchor edge of the classifier's registry (0734): every [`InteriorLit`] part names
+/// The part → anchor edge of the classifier's registry: every [`InteriorLit`] part names
 /// its NET ENTITY root here — body parts and held/equipped items alike (module docs — the
 /// reference has one light node per unit and items alias it). Bevy's relationship hooks maintain
 /// the anchor-side [`LitParts`] list through spawn, gear-swap despawn, and teardown, so a law
@@ -225,7 +225,7 @@ pub struct LitEmitters(Vec<Entity>);
 
 /// The constant RGB a LIT particle of this anchor's model is multiplied by — the anchor's own
 /// committed light evaluated along the **world up axis**, which is the only normal a particle quad
-/// ever carries (one constant per draw, `0x7b3fd0`, `0x58b0b0`; decision 1696).
+/// ever carries (one constant per draw, `0x7b3fd0`, `0x58b0b0`).
 ///
 /// Present only while the anchor is on the [`AppliedLaw::Bake`] law. Its ABSENCE is the exterior
 /// lane and means "take the scene's light", which the effect shader applies by itself — so an
@@ -250,7 +250,7 @@ pub struct ParticleLight(pub [f32; 3]);
 #[derive(Component, Clone, Copy, PartialEq, Debug)]
 pub struct NodeAmbient(pub [f32; 3]);
 
-/// The anchor's classification record (0734) — the law its parts render under, plus the
+/// The anchor's classification record — the law its parts render under, plus the
 /// movement/residency gate that used to live per part. Inserted by the classifier on the first
 /// resolve; a settled anchor is one distance compare per frame, whatever its part count.
 #[derive(Component)]
@@ -287,7 +287,7 @@ impl InteriorAnchor {
 }
 
 /// Parts whose material/tag need re-authoring from their anchor's current law — the classifier's
-/// convergence queue (0734), replacing the per-part sweep's repair duty. Fed by the
+/// convergence queue, replacing the per-part sweep's repair duty. Fed by the
 /// [`InteriorLit`] `on_add` hook (a fresh part joining a settled anchor), the fade-latch observer
 /// ([`enqueue_on_fade_latch`] — a part re-entering the write query after a fade owned its
 /// channel), and the self-avatar zoom feather's release edge. Drained every classifier run;
@@ -313,7 +313,7 @@ pub struct InteriorLit {
     applied: Option<AppliedLaw>,
     /// The [`crate::mesh_tag::INTERIOR_FOG_BIT`] as last written, beside the law rather than inside
     /// it: the two are decided by different questions (the law by where this part STANDS, the fog
-    /// by whether that room is on the camera's chain this frame — decision 1792 §4), so a part can
+    /// by whether that room is on the camera's chain this frame), so a part can
     /// need a rewrite for one with the other unchanged. Meaningless while `applied` is `None`.
     fogged: bool,
 }
@@ -329,7 +329,7 @@ impl InteriorLit {
 
     /// The steady (non-feathering) material for the part's CURRENT law — the classifier's own
     /// choice, exposed so the fade writers settle a part onto exactly what the classifier would
-    /// have written rather than onto a `cutout` latched before the law was known (decision 0755).
+    /// have written rather than onto a `cutout` latched before the law was known.
     ///
     /// The exterior and day/night (Matte) states share the exterior material: since 0354 the
     /// difference between them is the node's intensity target (the tag byte `entity_shade` ramps),
@@ -428,7 +428,7 @@ impl Plugin for InteriorPlugin {
             .init_resource::<InteriorReauthor>()
             // **After the flood**, like every other reader of the per-group gate
             // (`model_render::ModelVisSet`): since the interior-FOG half of a part's channel is
-            // `[0xca7f00]` (decision 1792 §4), classifying before the flood would answer a
+            // `[0xca7f00]`, classifying before the flood would answer a
             // camera-move with last frame's rooms. The ray half wants the same order anyway — the
             // placements it rays are the ones this frame's residency published.
             .add_systems(
@@ -436,7 +436,7 @@ impl Plugin for InteriorPlugin {
                 classify_entity_interior
                     .after(crate::wmo_portal::WmoPvsSet)
                     // The fold reads the resolved `WowLighting`, so it belongs on the resolve's
-                    // read side (`lighting::LightingConsumeSet`, decision 2032).
+                    // read side (`lighting::LightingConsumeSet`).
                     .in_set(crate::lighting::LightingConsumeSet),
             )
             .add_observer(enqueue_on_fade_latch);
@@ -460,12 +460,12 @@ pub struct BakeState {
 /// Light each entity part by where its model stands. Outside ⇒ the exterior lane (the global SH ×
 /// the ramped intensity byte). Inside a WMO room ⇒ the footprint-MOCV bake folded into the
 /// anchor's OWNED SH probe (refolded per frame while the node moves or its ramps chase — the
-/// reference's per-tick env update, decision 0354), or the day/night state = the same exterior
+/// reference's per-tick env update), or the day/night state = the same exterior
 /// material at the intensity-1.0 byte point. One law for every entity M2, unit and GameObject
 /// alike (module docs). The verdict is the client's faces-only down-ray at the model's anchor —
 /// one ray per UNIT per re-test, re-run only when the anchor moves or a building streams in/out.
 ///
-/// The walk is over ANCHORS, not parts (0734): a settled anchor is one distance compare, whatever
+/// The walk is over ANCHORS, not parts: a settled anchor is one distance compare, whatever
 /// its part count, and parts are written only when their anchor's law changes (or through the
 /// [`InteriorReauthor`] drain — a fresh part, a fade latch, the zoom feather's release).
 #[allow(clippy::type_complexity)]
@@ -503,7 +503,7 @@ pub fn classify_entity_interior(
     seats: Query<&PropProbeSlot>,
     mut queue: ResMut<InteriorReauthor>,
     part_anchors: Query<&ClassifiedBy>,
-    // Fading parts are **included** (decision 0755). The light law and the fade alpha are
+    // Fading parts are **included**. The light law and the fade alpha are
     // orthogonal, and they are deconflicted by field, not by lockout: the classifier's payload
     // writes carry the tag's alpha field through (`mesh_tag::with_interior_probe` /
     // `with_exterior_reset`), and a fading part takes the BLEND twin of its law from the very
@@ -572,7 +572,7 @@ pub fn classify_entity_interior(
                     }
                 }
                 // The law is settled; the FOG is not. Its gate is the camera's chain, not this
-                // anchor's position (decision 1792 §4) — a unit standing perfectly still leaves
+                // anchor's position — a unit standing perfectly still leaves
                 // and rejoins its building's MFOG as the camera walks between rooms — so the one
                 // thing a settled anchor still re-reads is this bit. A compare per anchor, and a
                 // part write only on the frames the verdict actually moves.
@@ -664,7 +664,7 @@ pub fn classify_entity_interior(
         // `WOW_INTERIOR_LOG=1`: print interior classifications — the live-probe instrument for
         // "did this entity actually classify indoors, and under which law?". Scoped to interior
         // verdicts (plus interior→exterior flips) so the world's exterior masses stay silent. The
-        // ATTACH and the point it probed are printed too (0776): a line that says only "exterior"
+        // ATTACH and the point it probed are printed too: a line that says only "exterior"
         // can't be read without knowing which lane produced it, and the two lanes now probe
         // different points.
         // Scoped to interior verdicts (plus interior→exterior flips) so the world's exterior
@@ -680,7 +680,7 @@ pub fn classify_entity_interior(
             // model took, never which of its batches actually joined. A billboard card that
             // silently classified out is invisible to every other reading of this line — the
             // Stratholme sign baked correctly *and* its chains lit from the sky, and the anchor
-            // log said only "INTERIOR bake" for weeks (decision 0778). Compare it against the
+            // log said only "INTERIOR bake" for weeks. Compare it against the
             // model's batch count (`benilla-extract m2batch <model>`).
             //
             // The EMITTER count is the same reading for the node's other consumer class: a model
@@ -845,17 +845,17 @@ fn write_anchor_parts(
 /// reset to the plain exterior payload (shade byte 0 — `entity_shade` runs after the classifier and
 /// re-asserts the ramped intensity byte the same frame; it skips only Bake parts). Both writes
 /// carry the tag's **alpha** field through, so a law change lands cleanly mid-fade. Every arm
-/// carries the part's rig field through (decision 0720): a skinned part keeps its palette across
+/// carries the part's rig field through: a skinned part keeps its palette across
 /// the indoor/outdoor transition.
 ///
 /// `fog` is the INTERIOR_FOG_BIT, decided by the CALLER and orthogonal to the law: the reference
 /// fogs a unit by its own interior classification **and** by whether the room it attached to is on
 /// the camera's `[0xca7f00]` chain this frame — `[node+0xc]&2` is necessary, `[P+0x98] != 0` is the
-/// other half (decision 1792 §4). An exterior-law part is never fogged, which the caller asserts by
+/// other half. An exterior-law part is never fogged, which the caller asserts by
 /// passing `false`; that is the only coupling left between the two.
 ///
 /// `fade` is `Some` only while an appear/despawn ramp owns the part (live **or** pending), and it
-/// selects the law's BLEND twin instead of its steady material (decision 0755). It is the same
+/// selects the law's BLEND twin instead of its steady material. It is the same
 /// [`crate::model_fade::FadeMaterials::material_for`] rule the ramp itself applies every frame, so
 /// the two writers produce the identical handle and can never fight, in either order.
 ///
@@ -894,7 +894,7 @@ fn write_part_law(
 }
 
 /// **Is this anchor's room on the camera's interior-fog chain this frame?** — the `[P+0x98]` half
-/// of a unit's fog lane (decision 1792 §4), resolved through the same chain the room-visibility
+/// of a unit's fog lane, resolved through the same chain the room-visibility
 /// leg walks: anchor record → placement instance → the flood's per-group gate.
 ///
 /// Fails CLOSED at every seam (no room, despawned placement, a group past the set), which is
@@ -918,7 +918,7 @@ fn anchor_room_fogged(
 /// The attach and its anchor point — one choice, because `0x6a86d0`'s mode fork picks both the
 /// routine and the field it reads: a GameObject attaches by CONTAINMENT from its world
 /// bounding-box centre (`[node+0x5c]`), everything else DOWN-RAYS from its position
-/// (`[node+0xa8]`). Decision 0776.
+/// (`[node+0xa8]`).
 fn attach_anchor(
     containment: bool,
     bake_center: Option<&BodyBakeCenter>,
@@ -971,7 +971,7 @@ fn resolve_anchor_law(
     );
     // Publish the outdoor GROUND kind to the node before the law resolves: standing on an
     // outdoor-class WMO surface (street/deck/porch) forces the lit 2.5 target — the WMO-linked
-    // skip-shadow bit, byte-verified (0477/0480; `entity_shade` reads it).
+    // skip-shadow bit, byte-verified (`entity_shade` reads it).
     let on_wmo = matches!(verdict, IndoorVerdict::OutdoorsOnWmo);
     if let Ok(mut node) = nodes.get_mut(anchor) {
         if node.on_wmo != on_wmo {
@@ -1319,7 +1319,7 @@ mod tests {
         );
     }
 
-    /// **The `[P+0x98]` conjunct** (decision 1792 §4): standing indoors is not enough. A settled
+    /// **The `[P+0x98]` conjunct**: standing indoors is not enough. A settled
     /// anchor whose room drops off the camera's interior-fog chain must return to the SCENE fog
     /// without moving an inch and without changing its light law — the camera walked, not the
     /// unit. This is B335's own artifact seen from one room further in: at Shadowfang the walls of
@@ -1382,7 +1382,7 @@ mod tests {
     }
 
     /// Decision 0778: a model's BILLBOARD batch takes the same law as its mesh batches. The card
-    /// spawns as a world ROOT (the facing system owns its transform, 0153) rather than as a child
+    /// spawns as a world ROOT (the facing system owns its transform) rather than as a child
     /// of the model, and that is the whole difference — it goes through the same
     /// [`part_interior_lit`] and names the same anchor, so both converge on the same law. The bug
     /// this pins: a Stratholme hanging sign baked from its room while its own chain cards, never
@@ -1462,7 +1462,7 @@ mod tests {
         );
     }
 
-    /// The mixed-kind hole (0734 §3): a bake-capable part joining an anchor whose law was
+    /// The mixed-kind hole: a bake-capable part joining an anchor whose law was
     /// resolved from a matte-kind part drops the anchor's record — the next run re-rays with the
     /// bake kind in reach instead of riding the matte fallback until the anchor happens to move.
     #[test]
@@ -1645,7 +1645,7 @@ mod tests {
     }
 
     /// The fade-latch edge: removing a part's `RenderFade` re-enqueues it for authoring — the
-    /// event that closes every fade-exclusion window (0734 §3; the old settled-path sweep is
+    /// event that closes every fade-exclusion window (the old settled-path sweep is
     /// gone, so this observer IS the convergence path).
     #[test]
     fn a_fade_latch_enqueues_the_part_for_reauthoring() {

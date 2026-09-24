@@ -1,4 +1,4 @@
-//! **The retained static-world pass — ON by default** (decisions 1429–1434;
+//! **The retained static-world pass — ON by default** (1434;
 //! `WOW_STATIC_GX=0` opts out): the static world leaves bevy_pbr entirely and draws from
 //! retained buffers in one custom render node, cross-material — per-vertex texture-array
 //! layers + flag bits where the entity path had one material handle per batch. Grown in
@@ -23,7 +23,7 @@
 //! kind/blend toggles are honoured cell-wholesale via [`crate::dev_state::DebugState`]'s
 //! doodad toggle (a prototype coarsening — the entity path toggles per blend class).
 //!
-//! **B2 (decision 1431): faders ride the retained pass via the exile protocol.** The pass
+//! **B2: faders ride the retained pass via the exile protocol.** The pass
 //! draws only fade = 1 content: a fader placement diverts with an exile SEED (uid + handle
 //! clones of the production bundle), and [`cull::cull_cells`]'s per-frame scan classifies it
 //! on `doodad_fade_alpha` — the same function the entity authority evaluates. Steady = drawn
@@ -67,7 +67,7 @@
 //! it costs the load no extra frames. It was not a beat: it was the director's report of
 //! teleporting into a Stormwind with no Stormwind in it.
 //!
-//! **B3 (decision 1432): the churn 1431 priced is paid.** Texture arrays are ONE SHARED POOL
+//! **B3: the churn 1431 priced is paid.** Texture arrays are ONE SHARED POOL
 //! across every cell and region (dedup by asset id; `pool.rs` owns the design note), layer
 //! copies encode exactly once, re-bakes ride the long quiet window ([`REBAKE_FRAMES`] —
 //! 1424's consolidate-on-quiet at bake grain), admitted cells and regions draw NEAR-FIRST
@@ -88,7 +88,7 @@
 //! classes, SIDN night glow, WINDOW midpoint light, the interior fog triple, ZERO point
 //! lights, the authored batch-order clip-z nudge) mirror `wow_model.wgsl` in `static_gx.wgsl`.
 //!
-//! **B4 (decision 1433): the prop site joins the pass — A's blobs absorbed.** WMO doodad
+//! **B4: the prop site joins the pass — A's blobs absorbed.** WMO doodad
 //! props (1418's lane 3, the population A merged) divert into PROP REGIONS keyed by the same
 //! instance entity as the WMO regions but held apart (props trickle in as their M2s load;
 //! a shared region would re-bake the building's geometry per arrival — B3's churn class).
@@ -143,7 +143,7 @@ const CELL: f32 = 533.333_3 / 4.0;
 /// rationale: fast appearance, consolidation once the admission burst has moved on.
 const IDLE_FRAMES: u32 = 15;
 /// Quiet frames before an already-published cell RE-bakes (~2 s) — 1424's spawn-fast/
-/// consolidate-on-quiet shape at bake granularity (B3, decision 1432): the admission trickle
+/// consolidate-on-quiet shape at bake granularity (B3): the admission trickle
 /// arrives in bursts spaced wider than [`IDLE_FRAMES`], so the short window re-baked cells
 /// once per arrival for minutes (1431 measured the churn); the long window batches a whole
 /// trickle span per re-bake. The cost is arrival latency for content joining an ALREADY-baked
@@ -187,17 +187,17 @@ const WORD_WINDOW: u32 = 1 << 26;
 // colourless INT batch takes the no-COLORS combine (plain tex × lit), so the override must
 // key on authored colours, not on the lane.
 const WORD_HAS_VC: u32 = 1 << 27;
-// The prop lane (B4, decision 1433) — an exterior WMO MODD prop's Matte sun family: intensity
+// The prop lane (B4) — an exterior WMO MODD prop's Matte sun family: intensity
 // FIXED 1.0 (`ShadeSel::Matte`, the mid-band selector — the ADT 2.5 site (`0x69e4ad`) is one a
 // MODD prop never reaches). A distinct bit rather than an alias of SHADE_LIT: under the recorded
 // `min(I,1)` cap the two read identically today, but the cap is the lane's one unfaithful
-// term (0803 §3) and lifting it must not silently split this lane's parity.
+// term and lifting it must not silently split this lane's parity.
 const WORD_MATTE: u32 = 1 << 28;
 // An INTERIOR M2 prop (B4) is WORD_INTERIOR with WORD_WMO clear — exactly the entity shader's
 // `interior_prop = flags.z && !flags.x`: the per-item SH-probe lane (record-table slot),
 // interior fog, zero live point lights (the group-MOLR lobes are folded into the probe).
 
-/// Armed? **ON by default** (decision 1434: the B chapter's population story is complete —
+/// Armed? **ON by default** (the B chapter's population story is complete —
 /// B1–B4 — with pixel parity at the quantization floor, legs negative at all four pins, and
 /// the director's eye passed at the pins). `WOW_STATIC_GX=0` is the opt-out lever — the A/B
 /// arm for every comparison this chapter still owes; `=1` still reads as an explicit on for
@@ -285,7 +285,7 @@ struct GxItem {
     geometry: Arc<RenderSubmesh>,
     transform: Transform,
     /// This item's placement identity — what the inspector/`WOW_PICK` name when the cursor lands
-    /// on it (decision 1534). Shared per placement, so a 40-batch building costs one allocation.
+    /// on it. Shared per placement, so a 40-batch building costs one allocation.
     object: Arc<crate::interact::WorldObject>,
     /// The batch's model-local bound (the render form's build-time `Aabb`), kept for the pick's
     /// broad phase — the drawn side recentres and unions its bounds per cell, which cannot
@@ -310,9 +310,9 @@ struct GxItem {
     /// `Some` on a WMO group-geometry item (slice 2) — the per-batch WMO facts the shader's
     /// WMO lanes read.
     wmo: Option<GxItemWmo>,
-    /// `Some` on a WMO-prop item (B4, decision 1433) — the referrer-set index + probe slot.
+    /// `Some` on a WMO-prop item (B4) — the referrer-set index + probe slot.
     prop: Option<GxItemProp>,
-    /// `Some(uid)` on a FADER item (B2, decision 1431): the placement this item exiles with.
+    /// `Some(uid)` on a FADER item (B2): the placement this item exiles with.
     /// The flush maps post-sort item indices back to the cell's [`GxFader`] through it.
     fader: Option<u32>,
 }
@@ -327,7 +327,7 @@ struct GxItemProp {
     slot: Option<u16>,
 }
 
-/// One fader placement's exile seed + live state (B2, decision 1431): everything needed to
+/// One fader placement's exile seed + live state (B2): everything needed to
 /// respawn the placement's diverted batches as ordinary entities the frame the camera enters
 /// its feather band, and to punch its retained items out (the per-item kill bit) while any
 /// state but Steady holds. Lives in its cell, keyed by placement uniqueId; released with the
@@ -436,7 +436,7 @@ pub struct StaticGx {
     /// The WMO regions (slice 2), keyed by placement instance entity — the same identity the
     /// portal PVS is computed on, so range selection needs no translation table.
     wmos: bevy::platform::collections::HashMap<Entity, GxCell>,
-    /// The PROP regions (B4, decision 1433), keyed by the SAME instance entity but held
+    /// The PROP regions (B4), keyed by the SAME instance entity but held
     /// apart from [`Self::wmos`] deliberately: props trickle in over seconds as their M2s
     /// load, and sharing the building's region would convert every arrival into a re-bake
     /// of the whole building's geometry — the exact churn class B3 paid down.
@@ -499,9 +499,9 @@ pub struct GxBatch<'a> {
     pub shade: ShadeSel,
     /// `Some` = a WMO group-geometry batch (slice 2).
     pub wmo: Option<GxWmoBatch>,
-    /// `Some` = a WMO-prop batch (B4, decision 1433).
+    /// `Some` = a WMO-prop batch (B4).
     pub prop: Option<GxPropBatch>,
-    /// `Some` = a FADER batch (B2, decision 1431): the exile seed. `None` on never-fade
+    /// `Some` = a FADER batch (B2): the exile seed. `None` on never-fade
     /// batches, the WMO lane, and the prop lane (an exterior fader prop never diverts —
     /// see the assemble gate).
     pub fade: Option<GxFadeSeed>,
@@ -1043,7 +1043,7 @@ mod tests {
 
     /// A diverted batch is collected geometry that draws NOTHING until its region bakes — the
     /// reveal hole [`StaticGx::undrawn_regions`] exists to publish, and the fact the reveal gate
-    /// keys on (decision 1498). Publishing the region clears it; a re-bake of a published region
+    /// keys on. Publishing the region clears it; a re-bake of a published region
     /// is not a hole, because the previous bake is still on screen.
     #[test]
     fn a_collected_region_is_undrawn_until_it_publishes() {

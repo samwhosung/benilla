@@ -369,7 +369,7 @@ fn inn_corridor_light_probe() {
 /// report: chars/creatures mis-lit across the city WMOs (Booty Bay / Stormwind / Orgrimmar).
 ///
 /// The point is the **down-ray lane's** anchor — a unit's position. A GameObject anchors at its
-/// world bounding-box CENTRE instead (decision 0776), so to read a GameObject's lane, probe at
+/// world bounding-box CENTRE instead, so to read a GameObject's lane, probe at
 /// `z + centre` (`benilla-extract m2coll <model>` prints the box; the two Stratholme portcullises
 /// that found 0776 read `exterior` at their spawn z and `BAKE g02` at their centres).
 #[test]

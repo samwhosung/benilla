@@ -235,7 +235,7 @@ impl GxTexturePool {
                         // texture. Uncompressed formats have 1x1 blocks, so this is the identity
                         // there and the line reads the same for both. Without the round-up, the
                         // first BC texture pooled here is a validation error, and wgpu's default
-                        // handler makes that a process panic (decision 1626).
+                        // handler makes that a process panic.
                         Extent3d {
                             width: (class.size.width >> mip).max(1).div_ceil(block_w) * block_w,
                             height: (class.size.height >> mip).max(1).div_ceil(block_h) * block_h,

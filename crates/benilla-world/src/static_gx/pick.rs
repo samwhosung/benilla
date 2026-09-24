@@ -1,4 +1,4 @@
-//! The retained pass answers the ray — **the lane names what it drew** (decision 1534).
+//! The retained pass answers the ray — **the lane names what it drew**.
 //!
 //! Slices 1–2 and B4 moved the static world's geometry off per-placement entities into retained
 //! cell/region bakes. The pick declaration ([`crate::interact::PickMesh`] + `WorldObject`) rode

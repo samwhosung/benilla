@@ -1,4 +1,4 @@
-//! The faithful **FFXGlow** post pass (decision 0158) — the reference's full-screen glow
+//! The faithful **FFXGlow** post pass — the reference's full-screen glow
 //! (`FFXEffects.cpp` / `FFXGlow.bls`), replacing the Bevy-`Bloom` approximation and its two
 //! eye-tuned constants.
 //!
@@ -16,8 +16,7 @@
 //! **What a bake does NOT inherit.** The node's two other lanes are keyed on the *viewer's own
 //! state*, not on the scene — the drunk/underwater haze and the ghost's FFXDeath combine — and the
 //! reference runs its FFX pass inside the WorldFrame's paint, with every UI frame compositing
-//! afterwards. [`FfxGlow::state_scale`] is that whole class in one field, `0` on every bake
-//! (decision 1481).
+//! afterwards. [`FfxGlow::state_scale`] is that whole class in one field, `0` on every bake.
 //!
 //! **Two nodes since decision 2234.** The world view's node runs the three filter passes and,
 //! for a view nobody claims, the combine where [`crate::final_pass`] says. The player-UI camera
@@ -53,7 +52,7 @@ use crate::view::WorldCamera;
 /// Marks a camera rendering with the faithful FFXGlow pass (extracted to the render world).
 ///
 /// The pass is TWO things in one: the frame's single gamma→linear decode (mandatory on every view
-/// that draws our gamma-byte materials — decision 0161) and the glow add on top. `gain_scale`
+/// that draws our gamma-byte materials) and the glow add on top. `gain_scale`
 /// separates them: it multiplies the zone's [`FfxGlowGain`] for this view, so `0.0` keeps the
 /// decode and drops the glow.
 #[derive(Component, Clone, Copy, ExtractComponent)]
@@ -76,12 +75,12 @@ pub struct FfxGlow {
     /// `0x6cb020`, which shares the single active-pass slot `0xce8bb4` with the death pass and
     /// runs through the same bracket into the same three targets. So they are **one class**, and
     /// this is one field. The zone glow is not in it (authored scene data, and a bake wants world
-    /// parity for it — decision 0638), which is why [`Self::gain_scale`] stays separate.
+    /// parity for it), which is why [`Self::gain_scale`] stays separate.
     ///
     /// The haze had its own `haze_scale` and the death gate had none, so a released ghost's
     /// portraits baked through the FFXDeath combine and came back steel-blue luma (report B49,
     /// decision 1481). Naming the *class* rather than the member was the fix; naming the **pass
-    /// pair** (decision 1731) is the same fix one step further, and it is the reference's own
+    /// pair** is the same fix one step further, and it is the reference's own
     /// shape — see [`FfxState`].
     pub(crate) state: FfxState,
 }
@@ -133,11 +132,11 @@ impl FfxGlow {
         gain_scale: 1.0,
         state: FfxState::Glue,
     };
-    /// A portrait/booth bake at world parity for *lighting and glow* (decision 0638) — but never
+    /// A portrait/booth bake at world parity for *lighting and glow* — but never
     /// a player-state pass: a bake stands in for a UI model widget, which the reference
     /// composites after the WorldFrame's FFX pass. So a drunk player's unit frame stays sharp
     /// while the world swims, and a **ghost's portrait keeps its living face** while the world
-    /// goes steel-blue (decision 1481, report B49).
+    /// goes steel-blue (report B49).
     pub const BOOTH: Self = Self {
         gain_scale: 1.0,
         state: FfxState::None,
@@ -160,7 +159,7 @@ impl Default for FfxGlow {
     }
 }
 
-/// **A 2D camera whose ground is the world's FFX combine** (decision 2234) — the player-UI
+/// **A 2D camera whose ground is the world's FFX combine** — the player-UI
 /// camera.
 ///
 /// The world reaches the interface's byte buffer as the FIRST DRAW of this camera's main pass:
@@ -196,13 +195,13 @@ pub struct FfxBackdrop {
 #[derive(Resource, Clone, ExtractResource)]
 pub struct FfxGlowGain(pub f32);
 
-/// The FFXDeath gate (decision 0308 §7): `1.0` while the
+/// The FFXDeath gate: `1.0` while the
 /// player is a released ghost (`0x5de9c0`) — the combine swaps to the FFXDeath program whole —
 /// else `0.0`.
 /// INSTANT on both edges (the client has no time ramp; the ghost tint is a shader constant).
 /// Driven by `benilla-app`'s death arc off `PLAYER_FLAGS_GHOST`; uploaded as the combine
 /// uniform's `y`, scaled per view by [`FfxGlow::state_scale`] — it is a **player-state** pass and
-/// reaches the world view only (decision 1481).
+/// reaches the world view only.
 #[derive(Resource, Clone, Default, ExtractResource)]
 pub struct FfxDeathFade(pub f32);
 
@@ -320,7 +319,7 @@ fn sync_haze(
     }
 }
 
-/// **The GlowWave lane** — the underwater screen warp's two inputs (decision 1824).
+/// **The GlowWave lane** — the underwater screen warp's two inputs.
 ///
 /// Underwater the reference swaps its whole post-process pass list: `CFFXGlow::Render 0x6cc630`
 /// walks a second list whose third pass is **FFXGlowWave** (`0x6cb1f0`, render `0x6cb310`) rather
@@ -400,8 +399,8 @@ fn sync_wave(
 
     // `WOW_WAVE_DUMP` — 1 Hz, and it reports on EVERY frame including the ones that do not warp,
     // naming why. An instrument that only speaks while the effect is running cannot tell "not
-    // armed" from "armed and broken", which is exactly the hour the drift cloud's first probe cost
-    // (decision 1814 §6b): the effect was off, the screen was silent, and the silence was
+    // armed" from "armed and broken", which is exactly the hour the drift cloud's first probe cost:
+    // the effect was off, the screen was silent, and the silence was
     // indistinguishable from a compile failure.
     if std::env::var_os("WOW_WAVE_DUMP").is_some() {
         let sec = time.elapsed_secs() as u32;
@@ -458,7 +457,7 @@ fn sync_gain(
     }
 }
 
-/// The FFXGlow pass is MANDATORY on the world camera in the gamma lane (decision 0161): its
+/// The FFXGlow pass is MANDATORY on the world camera in the gamma lane: its
 /// combine owns the frame's single gamma→linear decode — without it the whole frame presents
 /// over-bright. Insert on any world camera that lacks it (idempotent; spawn sites also add it).
 fn ensure_ffx_glow(
@@ -469,7 +468,7 @@ fn ensure_ffx_glow(
     // Perf-bisect kill-switch: $WOW_NO_FFX strips the GLOW from every camera — the three filter
     // passes and the blur term, [`FfxGlow::UI_PANE`]'s shape — and keeps the combine, because in
     // the gamma lane the combine is not an effect: it is the frame's one decode on a `Write`
-    // view and the UI camera's ground pass on a claimed one (decision 2234), and a frame
+    // view and the UI camera's ground pass on a claimed one, and a frame
     // without it has no world in it. The frame shows the world un-glowed at its right
     // brightness; what the lever prices is the blur chain and the glow add.
     static NO_FFX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -516,11 +515,11 @@ struct FfxGlowPipelines {
     combine: FfxCombinePipeline,
 }
 
-/// The combine — specialised on the **format it renders in** (decision 2206, [`crate::final_pass`]):
+/// The combine — specialised on the **format it renders in** ([`crate::final_pass`]):
 /// a view whose camera runs `CameraOutputMode::Skip` gets it rendered straight into the output
 /// texture (a bake's image), a `Write` view into the HDR main texture for bevy's blit to copy
 /// out, as before — and the world view's combine is the UI camera's own pass, keyed on the UI
-/// target (decision 2234, [`FfxBackdrop`]). The three filter passes never leave the ¼-res chain
+/// target ([`FfxBackdrop`]). The three filter passes never leave the ¼-res chain
 /// and stay unspecialised.
 struct FfxCombinePipeline {
     layout: BindGroupLayoutDescriptor,
@@ -531,10 +530,10 @@ struct FfxCombinePipeline {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct FfxCombineKey {
     format: TextureFormat,
-    /// The combine as a **gamma-lane** pass (decision 2234): it stores the gamma byte it computed
+    /// The combine as a **gamma-lane** pass: it stores the gamma byte it computed
     /// and leaves the frame's one decode to the lane that owns it — the UI camera's, at its end,
     /// for a view this combine grounds ([`FfxBackdrop`]). `false` is the world lane's own exit,
-    /// the decode here (0161).
+    /// the decode here.
     gamma_out: bool,
     /// The combine drawn INSIDE a 2D main pass — the first draw of a backdrop camera's
     /// transparent pass — which carries the `Core2d` depth attachment and the view's sample
@@ -835,8 +834,8 @@ fn prepare_textures(
         let Some(vp) = camera.physical_viewport_size else {
             continue;
         };
-        // The view's OWN combine pair, specialised **whether or not this view is claimed**
-        // (decision 2262). A claimed view (some [`FfxBackdrop`] names it) has no combine of its
+        // The view's OWN combine pair, specialised **whether or not this view is claimed**.
+        // A claimed view (some [`FfxBackdrop`] names it) has no combine of its
         // own — the UI camera's ground pass is it, keyed on THAT camera's target — so it carries
         // none rather than a pair keyed on a target nothing writes. But the claim is not a
         // property of the world, it is a property of *this frame*: it drops the moment the UI
@@ -924,7 +923,7 @@ fn prepare_textures(
 /// small-moves-tick / big-moves-smooth split.
 ///
 /// **Off by default because it is a divergence.** The reference's framebuffer was 8-bit and
-/// undithered; this lane is byte-exact against it (0161) and dithering trades that for a smoother
+/// undithered; this lane is byte-exact against it and dithering trades that for a smoother
 /// gradient. Bevy would normally apply its own in the tonemapping pass, but `Tonemapping::None`
 /// makes that node return immediately, so the `DebandDither::Enabled` our camera inherits from
 /// `Camera3d` never runs — this is the only place it can live.
@@ -940,11 +939,11 @@ fn dither_armed() -> f32 {
 /// pure function, so it can be tested without a render world.
 ///
 /// - **x** — the zone glow weight, scaled by [`FfxGlow::gain_scale`]: authored *scene* data, so a
-///   portrait bake carries it at world parity (decision 0638) and only a UI model pane drops it,
+///   portrait bake carries it at world parity and only a UI model pane drops it,
 ///   keeping the combine for its gamma decode alone.
 /// - **y/z** — the FFXDeath gate and the haze mix, both selected by [`FfxGlow::state`]: which pass
-///   pair this view runs decides what drives them, and a bake runs neither pair (decision 1481,
-///   report B49 — now structural rather than arithmetic, decision 1731).
+///   pair this view runs decides what drives them, and a bake runs neither pair (
+///   report B49 — now structural rather than arithmetic).
 /// - **w** — the deband-dither arm ([`dither_armed`]), 0 or 1.
 ///
 /// The second row is the GlowWave lane: the two phases, written on every frame and read only by
@@ -1036,7 +1035,7 @@ impl ViewNode for FfxGlowNode {
         };
         // Where this view's combine lands (2206, `final_pass`): a `Skip` camera's output texture
         // itself, a `Write` camera's ping-pong for bevy's blit to copy out. A CLAIMED view
-        // (decision 2234, [`FfxBackdrop`]) has no combine here at all: the UI camera's ground
+        // ([`FfxBackdrop`]) has no combine here at all: the UI camera's ground
         // pass is its combine, and samples this view's finished main texture — unflipped, which
         // is why a claimed camera runs `Skip` — once the filter passes below have built the
         // blur it reads beside it.
@@ -1262,7 +1261,7 @@ fn prepare_backdrops(
     }
 }
 
-/// **The 2D main pass with the world as its first draw** (decision 2234) — bevy's
+/// **The 2D main pass with the world as its first draw** — bevy's
 /// `MainTransparentPass2dNode` with one addition, registered under bevy's own label
 /// (`RenderGraph::add_node` is a map insert; the graph's edges, keyed by label, carry over — the
 /// same replacement `benilla_app::opaque2d` makes of the opaque node).
@@ -1377,7 +1376,7 @@ impl ViewNode for FfxTransparent2dNode {
                     // as a timestamp pair, and wgpu allows ONE such query active at a time: a
                     // second one opened inside the pass's own was the validation error that
                     // aborted every Vulkan build of the 09-15 sync on its first world frame
-                    // (B390, 2258) — and only Vulkan exposes the feature, so Metal and DX12
+                    // (2258) — and only Vulkan exposes the feature, so Metal and DX12
                     // never nested anything and no gate saw it. The transparent pass's number
                     // carries the combine; the journal never read a nested span.
                     render_pass.set_render_pipeline(combine);
@@ -1425,7 +1424,7 @@ impl Plugin for FfxGlowPlugin {
                     // read side; the haze floor and the wave's arm are the camera-eye submersion
                     // verdict, so they are after the slot that writes it. Unordered, both flipped
                     // a frame late — the underwater blur and warp outlived the surfacing frame
-                    // they belong to, exactly like the sky dome's stops (decision 2032).
+                    // they belong to, exactly like the sky dome's stops.
                     sync_gain.in_set(crate::lighting::LightingConsumeSet),
                     (sync_haze, sync_wave).after(crate::liquid::SubmersionVerdict),
                     ensure_ffx_glow,
@@ -1478,9 +1477,9 @@ mod tests {
         FfxPassState::glue(0.0)
     }
 
-    /// The zone glow is scene data — a portrait bake wants it at world parity (decision 0638) —
+    /// The zone glow is scene data — a portrait bake wants it at world parity —
     /// while the death and haze lanes belong to a *pass pair*, and a bake runs neither
-    /// (decision 1481, now structural: 1731). One preset table, checked as a whole so a new preset
+    /// (now structural: 1731). One preset table, checked as a whole so a new preset
     /// can't quietly join the wrong side.
     #[test]
     fn only_the_two_screen_views_run_a_pass_pair() {
@@ -1564,7 +1563,7 @@ mod tests {
         );
     }
 
-    /// **The two pairs are independent, which is the whole point of naming them** (decision 1731).
+    /// **The two pairs are independent, which is the whole point of naming them**.
     /// The reference has one active-pass slot because its screens take turns; ours coexist, so the
     /// invariant has to be stated: a ghost on the CHARACTER-SELECT list death-combines the glue
     /// scene and nothing else, and a released ghost in the WORLD never reaches the glue view.

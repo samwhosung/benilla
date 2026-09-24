@@ -3,7 +3,7 @@
 //! Standing inside a WMO interior, the reference does not draw the outdoor world at large — it draws
 //! it once per *portal window* left over by the interior portal flood, with the view frustum narrowed
 //! to that window. We drew it unconditionally, which is why a hillside tree 200 yd outside Stratholme
-//! showed through the city's walls (the director's report; decision 0774).
+//! showed through the city's walls (the director's report).
 //!
 //! ## The carved law
 //!
@@ -23,7 +23,7 @@
 //! liquid layers (`0x683ab0`) and the far band (`0x683040`) — and each drain unlinks what it walks. So
 //! "no window" really does mean "no exterior content", with no second path to leak through.
 //!
-//! ## Bodies ride the same walk — the correction 0774 needed (decision 1270)
+//! ## Bodies ride the same walk — the correction 0774 needed
 //!
 //! 0774 read this lane one stage too late and wrote the opposite: *"units are exempt and must stay
 //! exempt … the reference submits outdoor mobs from a sealed room and lets the building's own
@@ -48,7 +48,7 @@
 //! So a body is exterior scene exactly when it is not in a WMO room, and the windows gate it like
 //! the ground it stands on — [`WorldUnit::bound`].
 //!
-//! **The outdoor half of the same election (decision 1475).** The reference's OUTSIDE leg is not a
+//! **The outdoor half of the same election.** The reference's OUTSIDE leg is not a
 //! stand-down — it is one full-screen window through the same walk (`0x6811ff`), whose producer
 //! `0x683340` frustum-tests every node; and the sibling in-room producer `0x6834e0` submits a
 //! group's members only when the group is rendered, frustum-testing each. So outdoors a body's
@@ -86,11 +86,11 @@
 //! **Gated:** ADT terrain (`0x683bf0`), ADT doodad placements (`0x683700`), the WDL far band
 //! (`0x683040`), the net **bodies** on `0x683340` ([`WorldUnit::bound`]), and open-world **liquid**
 //! (`0x683ab0`) — the buckets whose entities have no other `Visibility` writer, so this is their
-//! sole authority (decision 0025). World **WMO placements** (`0x6856c0`), their props and their
+//! sole authority. World **WMO placements** (`0x6856c0`), their props and their
 //! MLIQ pools are gated too, but by the *model-visibility* authority, which folds [`ExteriorGate`]
-//! into its own AND rather than being written here (decision 0784).
+//! into its own AND rather than being written here.
 //!
-//! **Liquid was the last of them** (decision 1652). 0774 deferred it and 0784 deferred it again,
+//! **Liquid was the last of them**. 0774 deferred it and 0784 deferred it again,
 //! both on the same stated ground — that it "already has a visibility authority… its own lane". It
 //! did not. An ADT surface is spawned as a world root with `Mesh3d`, and nothing ever wrote its
 //! `Visibility`; the only writer in the whole subsystem was the `$WOW_NO_LIQUID` kill-switch,
@@ -104,7 +104,7 @@
 //! ceiling.
 //!
 //! **The unit is the drawn object, and for terrain that is the 33.333 yd MCNK cell, not the 533 yd
-//! tile** (decision 0780). This is a property of the *spawner*, not of anything here — but the cull is
+//! tile**. This is a property of the *spawner*, not of anything here — but the cull is
 //! where it bites: a tile-sized box always contains the camera's own ground, so it intersects every
 //! window and is admitted whichever way the doorway faces. The cull was correct and looked broken.
 //! The far band keeps its whole-tile box, which is the reference's own far-tier granularity.
@@ -132,7 +132,7 @@ const MIN_WINDOW_NDC: f32 = 0.02;
 /// Tag for a piece of the **exterior scene** — the content the window worklist gates. Put this on ADT
 /// terrain **chunks**, ADT doodad placements, the WDL far band, world WMO placements and open-world
 /// liquid. Tag the object that is *drawn*: this is tested per entity, so tagging a container whose box
-/// spans far more than any one draw admits the lot (decision 0780).
+/// spans far more than any one draw admits the lot.
 ///
 /// **Never on anything parented to a WMO group** — those are already culled by the portal PVS
 /// ([`crate::wmo_portal::WmoGroupVis`]), and double-gating them would blank building interiors.
@@ -172,8 +172,8 @@ pub struct ExteriorCullVerdict {
     pub(crate) bodies: usize,
     pub(crate) bodies_hidden: usize,
     /// Open-world liquid surfaces the cull reached, and how many the windows rejected — a
-    /// **subset** of `tested`/`hidden` above, reported separately for the reason the body leg is
-    /// (decision 1652). A tile carries a handful of MCNK liquid layers against ~250 terrain cells,
+    /// **subset** of `tested`/`hidden` above, reported separately for the reason the body leg is.
+    /// A tile carries a handful of MCNK liquid layers against ~250 terrain cells,
     /// so a liquid leg that reached *nothing* would move `tested` by less than its own noise. This
     /// is the number that says "the lake is being decided", and before 1652 it was structurally
     /// zero.
@@ -208,7 +208,7 @@ impl Plugin for ExteriorCullPlugin {
 
 /// The sub-frustum for one NDC window rect — the **construction alone**, no narrowness gate.
 ///
-/// **Two callers, deliberately one construction** (decision 1826): this module gates the open world
+/// **Two callers, deliberately one construction**: this module gates the open world
 /// through these rects, and `crate::wmo_portal`'s Pass 2 gates the containing building's own
 /// exterior groups through the same ones. The reference likewise builds one volume per window and
 /// hands it to both (`0x682930` for `0x6b3b20`'s Pass 2, and the copy at `0xc7cb7c` for
@@ -247,7 +247,7 @@ pub(crate) fn window_frustum(rect: Rect, clip_from_world: &Mat4) -> Frustum {
 /// `[0x6b3c73, 0x6b3d6f)` has seven, none of them on the rect. Decision 1826 read the reject as
 /// part of the shared construction and applied it to both, which silently culled the containing
 /// building's whole exterior shell for every window between the recursion's own collapse guard
-/// (`0.001` NDC, `0x6b44b1`) and this one. Decision 1853.
+/// (`0.001` NDC, `0x6b44b1`) and this one.
 pub(crate) fn scene_window_frustum(rect: Rect, clip_from_world: &Mat4) -> Option<Frustum> {
     let [x0, y0, x1, y1] = rect;
     if x1 - x0 < MIN_WINDOW_NDC || y1 - y0 < MIN_WINDOW_NDC {
@@ -260,7 +260,7 @@ pub(crate) fn scene_window_frustum(rect: Rect, clip_from_world: &Mat4) -> Option
 /// per object. **Two systems ask it**, which is the whole point of it being a value rather than a
 /// loop: [`apply_exterior_cull`] owns the exterior objects nothing else writes (terrain cells, the
 /// far band), and [`crate::debug_panel`]'s model-visibility authority folds the same answer into its
-/// own AND for every model submesh, because those already have an owner (decision 0784).
+/// own AND for every model submesh, because those already have an owner.
 pub enum ExteriorGate {
     /// Outdoors — the driver's outside leg (`0x6811ca`): the ordinary frustum is the window, so the
     /// gate admits everything and each object goes back to whatever else owns it.
@@ -355,7 +355,7 @@ type UnownedSceneFilter = (
 /// **`WOW_CULL_TRACE=1` — one line per body per frame, saying why it drew.**
 ///
 /// `cull_bodies`/`cull_bodies_hidden` say *how many*; they cannot say *which*, and the difference
-/// cost three live runs of inference during decision 1270. A body escapes this cull in exactly three
+/// cost three live runs of inference during. A body escapes this cull in exactly three
 /// ways — it was never elected (no `WorldUnit::bound`), it claims a WMO room, or a window admitted
 /// its box — and from a screenshot, and from the aggregate counters, all three look identical.
 ///
@@ -421,10 +421,10 @@ type ElectedBody = (
 /// `Visibility` owner**. A model submesh (`ModelPart`) and a WMO group piece (`WmoGroupVis`) are
 /// written by [`crate::debug_panel`]'s model-visibility authority, which composes the toggles, the
 /// far-clip wall, the distance fade and the portal PVS; a second writer here does not "also cull"
-/// them, it *overwrites* all of that every frame (decision 0784). So this system owns exactly what
+/// them, it *overwrites* all of that every frame. So this system owns exactly what
 /// it is the sole authority for: terrain cells, the WDL far band, and — in the second query below,
 /// a different audience under the same law rather than a second system — the elected net bodies
-/// ([`ElectedBody`], decision 1270), whose roots nothing else writes.
+/// ([`ElectedBody`]), whose roots nothing else writes.
 // A Bevy system's params are not an argument list to shorten — each is a distinct world access
 // the scheduler needs by name (the `update_ground_shade` precedent).
 fn apply_exterior_cull(
@@ -452,7 +452,7 @@ fn apply_exterior_cull(
     // The camera's own view volume, as the full-screen window: the reference's OUTSIDE leg is
     // literally one `{0,0,1,1}` window through the same walk (`0x6811ff`), so outdoors is not a
     // stand-down for bodies — an out-of-frustum body is elected pass 2, not drawn and not ticked
-    // (1473's correction of 0648; decision 1475). Built from this frame's own camera transform
+    // (1473's correction of 0648). Built from this frame's own camera transform
     // (we run after `Propagate`), never the `Frustum` component, which another PostUpdate set
     // may not have refreshed yet. `None` (no camera) admits: a verdict without a view matrix
     // would be arbitrary — `ExteriorGate::build`'s own law.
@@ -490,7 +490,7 @@ fn apply_exterior_cull(
         let Some(bound) = body.bound.as_ref() else {
             // The game says this body is not ours to decide (`WorldUnit::bound`). Traced too: an
             // un-elected body is invisible to every counter below, which is exactly how a whole
-            // class of creature sat outside this cull unnoticed (decision 1270 §5).
+            // class of creature sat outside this cull unnoticed.
             trace_body(&trace, e, "unelected", gt, room, None, true);
             continue;
         };
@@ -608,7 +608,7 @@ mod tests {
         );
     }
 
-    /// **The granularity of the tagged object is half the cull** (decision 0780). This test is the
+    /// **The granularity of the tagged object is half the cull**. This test is the
     /// same patch of ground twice: once as the 33.333 yd MCNK cell it is drawn as now, once as the
     /// 533.333 yd ADT tile it used to be merged into. The cell is rejected; the tile is admitted,
     /// because a tile is drawn around the camera and so reaches the doorway's side of the view no
@@ -662,8 +662,8 @@ mod tests {
     }
 
     /// …and the volume builder itself has no such gate, because `0x682930` has no compares at all:
-    /// Pass 2 draws the containing building's own shell through a window the open world cannot use
-    /// (decision 1853). The band is `[0.001, 0.02)` NDC — above the recursion's collapse guard,
+    /// Pass 2 draws the containing building's own shell through a window the open world cannot use.
+    /// The band is `[0.001, 0.02)` NDC — above the recursion's collapse guard,
     /// below the scene walk's entry.
     #[test]
     fn pass_twos_builder_takes_a_window_the_scene_walk_rejects() {
@@ -756,7 +756,7 @@ mod tests {
         Aabb::from_min_max(Vec3::ZERO, Vec3::ZERO)
     }
 
-    /// **The Caverns of Time report, as a test** (decision 1270). Sealed room ⇒ no windows ⇒ the
+    /// **The Caverns of Time report, as a test**. Sealed room ⇒ no windows ⇒ the
     /// exterior walk never runs, so an outdoor body is not submitted at all — while a body standing
     /// in a WMO room rides the sibling producer `0x6834e0` and still draws. Both bodies sit at the
     /// same spot dead ahead of the camera: the *only* thing separating them is the room claim,
@@ -833,7 +833,7 @@ mod tests {
 
     /// Outdoors the driver's `{0,0,1,1}` leg IS the ordinary frustum — the reference's outside
     /// leg is one full-screen window through the same frustum-testing walk, so a body behind the
-    /// camera is elected pass 2: not drawn (decision 1475). This test asserted the opposite under
+    /// camera is elected pass 2: not drawn. This test asserted the opposite under
     /// 1270 ("`Unrestricted` is a stand-down… the arm that must never narrow") — that law was
     /// built before the outside-leg election was corrected and is deliberately superseded here
     /// (1473).
@@ -1042,7 +1042,7 @@ mod tests {
         )
     }
 
-    /// **The director's report, as a test** (decision 1652): from inside a cavern you could see the
+    /// **The director's report, as a test**: from inside a cavern you could see the
     /// lake above through the ceiling. Sealed room ⇒ no windows ⇒ the reference's per-window
     /// exterior populate never runs, and its ADT liquid producer `0x683ab0` is reachable from
     /// nowhere else — so the lake is not submitted at all.
@@ -1107,9 +1107,9 @@ mod tests {
     }
 
     /// **The failure mode this change could have had, pinned:** the cavern's OWN pool must not be
-    /// blanked by the sealed room it sits in. A WMO pool carries `WmoGroupVis` (0689), so it is
+    /// blanked by the sealed room it sits in. A WMO pool carries `WmoGroupVis`, so it is
     /// owned by the model-visibility authority — which exempts the camera's own placement and folds
-    /// the window term in itself (0784) — and this system's `Without<WmoGroupVis>` filter must keep
+    /// the window term in itself — and this system's `Without<WmoGroupVis>` filter must keep
     /// its hands off it entirely, tag or no tag.
     ///
     /// Asserting on `liquid` is the point: the counter proves the surface was not merely *admitted*

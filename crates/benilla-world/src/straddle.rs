@@ -1,5 +1,5 @@
 //! **The straddle split** — a translucent model that crosses its water plane draws on BOTH sides
-//! of the water pass, each copy cut at the waterline (decision 2188).
+//! of the water pass, each copy cut at the waterline.
 //!
 //! **The reference.** The collector (`0x707680`) dots each model's bound-box centre (instance
 //! matrix × `(min+max)/2`) against the plane `{0,0,1,−surfaceZ}` from the model's own liquid hit,
@@ -9,10 +9,10 @@
 //! lists, its z-fill depth primes ride the same booleans (`0x707ffe`/`0x708048`), and the mesh
 //! draw arm brackets each list's copy with a hardware clip plane at the waterline (`0x70baf0`
 //! @`0x70c094`–`0x70c103`). The frame interleave draws the eye's far list before the water and the
-//! near list after it (0911) — so the half under the surface is painted over by the water, and the
+//! near list after it — so the half under the surface is painted over by the water, and the
 //! half above it paints over the water.
 //!
-//! **What benilla had.** The mesh lane (0919) shipped the no-clip-planes fallback only — one list
+//! **What benilla had.** The mesh lane shipped the no-clip-planes fallback only — one list
 //! per model, a bare sign test at the placement origin — and named the band as a gap. Its worst
 //! case was a unit fading in while standing in water (the director's report, 2026-09-11): the
 //! appear ramp puts every part on its blend twin, which is exactly when the lane classifies it;
@@ -25,7 +25,7 @@
 //! - [`band_instances`] — per model instance (a root carrying a [`RigSkin`] slot and a
 //!   [`WorldUnit`] bound), the reference's two booleans at the transformed bound centre. A
 //!   straddler's plane goes into the per-slot [`WaterClips`] table — a region of the shared light
-//!   buffer on the same slot index as the body tint (0812) — and [`ModelWaterBand`] on the root is
+//!   buffer on the same slot index as the body tint — and [`ModelWaterBand`] on the root is
 //!   the edge the classifier fans down from.
 //! - `model_render::classify_water_side` reads the SAME table word by the batch's `MeshTag` slot:
 //!   a straddling batch stays on its NEAR identity and is marked [`StraddlesWater`], and
@@ -42,7 +42,7 @@
 //! the fragment stage has is the rig slot — so the split covers every skinned wire body (units,
 //! players, rigged GameObjects), the parts carrying its slot (boneless geosets, billboard cards),
 //! and every model CHAINED to it — worn gear and hung spell kits, which own slots of their own
-//! since 1609 and take the body's word through their `ParentModel` link (decision 2190). Slot-0
+//! since 1609 and take the body's word through their `ParentModel` link. Slot-0
 //! content — map doodads, unskinned models — keeps 0919's one-sided fallback; its only
 //! translucent episodes are the distance-fade ring's small props.
 
@@ -271,7 +271,7 @@ type BandRoot<'a> = (
 /// word (the fragment's clip plane, the classifier's doubling verdict) and [`ModelWaterBand`]
 /// on the root (the classifier's re-classify edge).
 ///
-/// **Every model chained to a body inherits the body's word** (decision 2190). Worn gear does not
+/// **Every model chained to a body inherits the body's word**. Worn gear does not
 /// share its wearer's slot: since 1609 every ordinary item rides a rider slot of its own (0841's
 /// welded items a joint rig), so a helm, a pair of shoulders or a weapon at the waterline was
 /// never banded and kept the one-list fallback — the hole in the water the director still saw
@@ -525,7 +525,7 @@ fn upload_water_clips(
     );
 }
 
-/// The straddle split's registration (decision 2188).
+/// The straddle split's registration.
 pub fn plugin(app: &mut App) {
     app.init_resource::<WaterClips>()
         .add_plugins(ExtractResourcePlugin::<WaterClips>::default())

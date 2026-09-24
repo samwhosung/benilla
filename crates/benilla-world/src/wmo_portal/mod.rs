@@ -18,10 +18,10 @@
 //! visible in a frustum clipped to that doorway becomes a **flood root of its own** (`0x6b3d39 call
 //! 0x6b41c0` — the same recursion, not a draw), carrying that window's rect onward through the
 //! graph. So a doorway shows you the courtyard beyond it *and* what the courtyard's own portals
-//! show, narrowing all the way (decision 1853).
+//! show, narrowing all the way.
 //!
 //! Seam: this module only **computes** the per-group visible set ([`WmoPortalInstance::visible`]). The
-//! single `Visibility` authority ([`crate::debug_panel`]'s `apply_model_visibility`, decision 0025)
+//! single `Visibility` authority ([`crate::debug_panel`]'s `apply_model_visibility`)
 //! reads it and ANDs it with the dev toggles + the far-clip cull — we never write `Visibility` here.
 //!
 //! Current-group seed: the **downward raycast** in [`seed`] — the byte-audited client mechanism
@@ -74,7 +74,7 @@ const EXTERIOR: u32 = 0x8;
 /// (`or [node+0xc],0x4`: sun diffuse × the MCSH-driven 2.5/0.5 intensity, scene fog) — while the
 /// zone-text indoor bit (`[node+0x90]` bit 0) keys on `0x8` alone, so a `0x40`-only group is
 /// "indoors" for area naming but sunlit. The city street WMOs are exactly this: Stormwind's
-/// streets (115 of 306 groups) and Orgrimmar's valleys are `0x40`-without-`0x8` (decision 0475).
+/// streets (115 of 306 groups) and Orgrimmar's valleys are `0x40`-without-`0x8`.
 const EXTERIOR_LIT: u32 = 0x40;
 
 /// Eye-on-portal-plane band (WMO yards): an eye within this of a portal's plane **and inside its
@@ -116,7 +116,7 @@ const CALLBACK_PASS: u32 = 0x10000;
 /// nothing in the shipped data comes near it. We do not reproduce the overflow — emulating a buffer
 /// overrun is not fidelity — but we do watch the number, because a flood producing more windows than
 /// the reference's own designers left room for is far more likely to be OUR bug than the data's
-/// (decision 1148: one Trade District room once opened eleven windows onto Elwynn).
+/// (one Trade District room once opened eleven windows onto Elwynn).
 const WORKLIST_CAP: usize = 16;
 /// Recursion depth cap — the client's own, `[0xcb004c]` seeded from `[0x86b6b8]` = **10**, refreshed
 /// by every `depth = 0` entry (so Pass 2's re-seeds each get a fresh ten hops, RE 2026-09-02). Ours
@@ -350,7 +350,7 @@ impl Plugin for WmoPortalPlugin {
                 track_unit_interiors,
             )
                 .in_set(WmoPvsSet)
-                // **On this frame's camera pose, not last frame's** (decision 1503). The flood,
+                // **On this frame's camera pose, not last frame's**. The flood,
                 // the interior claim and the exterior windows all key on the eye, and every one of
                 // them decides what the frame is allowed to draw. Unordered, this set could even
                 // run before the controller had moved the camera at all; ordered here it answers
@@ -516,8 +516,8 @@ fn compute_wmo_pvs(
                     // its across-portal partner, which is exactly that set — is a TRUE interior,
                     // `flags & 0x48 == 0`. In an exterior-LIT courtyard the client's `t` decays to
                     // 0 and the interior triple
-                    // equals the scene triple; no surface of the building is on the lane either
-                    // (decision 1787), so what this conjunct actually decides is the fog of an
+                    // equals the scene triple; no surface of the building is on the lane either,
+                    // so what this conjunct actually decides is the fog of an
                     // interior-classified UNIT standing in the building, which reads the triple by
                     // its own classification and would otherwise wear a courtyard's MFOG.
                     //
@@ -557,8 +557,8 @@ fn compute_wmo_pvs(
                     // binary and neighbours here, and 0774 recorded them as *correlated, not
                     // equivalent*; the port read `0x148` anyway, which made every
                     // `0x40`-without-`0x8` group a doorway onto the open world. Stormwind's streets
-                    // are 115 of its 306 groups (decision 0475), so one Trade District room opened
-                    // eleven windows onto Elwynn — decision 1148.
+                    // are 115 of its 306 groups, so one Trade District room opened
+                    // eleven windows onto Elwynn.
                     windows = Some(std::mem::take(&mut fresh.windows));
                 }
             }
@@ -624,7 +624,7 @@ fn compute_wmo_pvs(
 ///
 /// The deferred windows used to be reconstructed here, by filtering every entered step for an
 /// exterior destination. They are [`GroupPvs::windows`] now — the flood's own output — because the
-/// flood's **Pass 2** needs the identical list to decide which exterior groups draw (decision 1826),
+/// flood's **Pass 2** needs the identical list to decide which exterior groups draw,
 /// and two filters over the same steps are two places for the push test to drift.
 #[derive(Default)]
 struct SeedTap {
@@ -650,7 +650,7 @@ impl FloodTrace for SeedTap {
 /// `[0xcbe2d8]+0x38` — not `0x6b4680`, the producer of the record's 5th float. Nothing else
 /// qualifies: not [`EXTERIOR_LIT`], not the weather global's `0x148` (that mask lives at `0x6b42d0`
 /// and drives `[0xca80c4]`, a *correlated but different* signal — decision 0774 said so and the
-/// port read it anyway; decision 1148).
+/// port read it anyway).
 fn opens_a_window(nav: &[WmoGroupNav], to: usize) -> bool {
     nav.get(to).is_some_and(|n| n.flags & EXTERIOR != 0)
 }
@@ -1353,9 +1353,9 @@ mod tests {
     }
 
     /// **Only `0x8` opens a window onto the open world** (`0x6b44f8`), and the flag values here are
-    /// Stormwind's own, read off a live cull trace at the director's `.go xyz -8798.70 478.64 95.79`
-    /// (decision 1148). The city is 306 groups of which **exactly one** — `g46`, `0x08809` — carries
-    /// `0x8`; the streets and rooms are `0x40`-without-`0x8` (decision 0475). Testing the weather
+    /// Stormwind's own, read off a live cull trace at the director's `.go xyz -8798.70 478.64 95.79`.
+    /// The city is 306 groups of which **exactly one** — `g46`, `0x08809` — carries
+    /// `0x8`; the streets and rooms are `0x40`-without-`0x8`. Testing the weather
     /// global's `0x148` instead turned all eleven rooms the flood reached from that spot into
     /// doorways onto Elwynn, one of them 74% of the screen wide. If this test ever goes green on
     /// `0x148` again, the whole exterior cull is off in every city.
@@ -1516,7 +1516,7 @@ mod tests {
         assert!(portal_screen_rect(&model, info, &clip, &Affine3A::IDENTITY).is_none());
     }
 
-    /// **Pass 2 is a per-window test, not a blanket** (decision 1826, `0x6b3d13`/`0x6b3d22`). One
+    /// **Pass 2 is a per-window test, not a blanket** (`0x6b3d13`/`0x6b3d22`). One
     /// interior room with a narrow doorway onto the outdoors, and two portal-disconnected exterior
     /// shells: one straight through the doorway,
     /// one 30 yd off to the side. The reference draws each `0x8` group only where a *deferred
@@ -1582,7 +1582,7 @@ mod tests {
     }
 
     /// **Pass 3 draws a `0x10000` group from a SEALED room** — the `jbe` fall-through at
-    /// `0x6b3d6f`, against the full frustum, gated on nothing (decision 1826). This is the half
+    /// `0x6b3d6f`, against the full frustum, gated on nothing. This is the half
     /// Pass 2 cannot express: with an empty worklist Pass 2 does not run at all, and every `0x8`
     /// group is correctly dark, yet a callback-pass group still draws.
     ///

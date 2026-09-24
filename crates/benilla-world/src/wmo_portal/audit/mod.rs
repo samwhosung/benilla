@@ -11,7 +11,7 @@
 //! - [`wmo_outside_audit`] — the **outside** invariant: a camera in the open air above the terrain is
 //!   OUTSIDE, and the building's exterior shell draws. Subject: Fargodeep Mine, whose 21 tunnel groups
 //!   sprawl 150 yd under an Elwynn hillside while its one exterior group covers only the entrance
-//!   mound. Before the terrain race (decision 0258) a camera on the grass above the tunnels seeded
+//!   mound. Before the terrain race a camera on the grass above the tunnels seeded
 //!   *inside* one of them and the flood culled the mine out from under the director's cursor. The same
 //!   test asserts the race does not over-fire and seal the mine: a standing point on a tunnel floor,
 //!   under the hill, still reads INSIDE.
@@ -140,7 +140,7 @@ const SHADOWFANG: Site = Site {
 /// the city's outdoor areas stitched to each other and to every shop by portals. That shape is what
 /// makes it the discriminating subject for Pass 2: standing in a shop, the doorway admits the one
 /// outdoor group beyond it, and everything else the director can see through that doorway is reached
-/// only by WALKING ON from there (decision 1853). `.go xyz 10188.36 2348.35 1328.96 1` is the pin.
+/// only by WALKING ON from there. `.go xyz 10188.36 2348.35 1328.96 1` is the pin.
 const DARNASSUS: Site = Site {
     wmo: r"world\wmo\kalimdor\darnassis\darnassis.wmo",
     map: "Kalimdor",
@@ -237,7 +237,7 @@ fn load_subject(internal: &str, site: Option<&Site>) -> Subject {
             continue;
         };
         // The group's MLIQ surface, exactly as the asset loader stores it — the down-ray's liquid
-        // leg (B65) needs it, so the pin probe must carry it too or an over-lava eye can't replay.
+        // leg needs it, so the pin probe must carry it too or an over-lava eye can't replay.
         group_liquids[gi] = benilla_formats::wmo_group_liquid_mesh(&gbytes);
         group_footprints[gi] = wmo_group_footprint_tris(&gbytes);
         if let (Some(h), Some(nav)) = (wmo_group_header(&gbytes), group_nav.get_mut(gi)) {
@@ -267,7 +267,7 @@ fn load_subject(internal: &str, site: Option<&Site>) -> Subject {
         walk_pos.extend_from_slice(&cp);
         walk_idx.extend(ci.iter().map(|i| i + base));
         // Leg C's fallback set — the camera-only complement (DETAIL set, NOCAMCOLLIDE clear),
-        // exactly as the asset loader stores it (decision 0692).
+        // exactly as the asset loader stores it.
         let (mut dp, mut di): (Vec<[f32; 3]>, Vec<u32>) = (Vec::new(), Vec::new());
         benilla_formats::accumulate_wmo_group_camera_only_collision(&gbytes, &mut dp, &mut di);
         for t in di.as_chunks::<3>().0 {
@@ -552,7 +552,7 @@ const OUTSIDE_HEIGHTS: [f32; 4] = [0.5, 1.7, 4.0, 9.0];
 /// draws. Fargodeep Mine is the extreme shape: a 150-yd tunnel network buried under an Elwynn hillside,
 /// with a single exterior group covering only the entrance mound. Without the terrain race, every camera
 /// column over the hill seeds *inside* a tunnel, the flood starts in a room the camera cannot see out
-/// of, and the mine's entrance — the only part of it above ground — is culled (decision 0258).
+/// of, and the mine's entrance — the only part of it above ground — is culled.
 ///
 /// The oracle is deliberately restricted to **buried** columns, because "the eye is above the terrain"
 /// alone does not mean "the eye is outdoors": a WMO surface can sit above the ADT ground (the mine's own

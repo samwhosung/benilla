@@ -57,7 +57,7 @@ const SPAWN_COUNT_CAP: usize = 150;
 /// `MeshTag` components the old spawn used — so the existing visibility/fade/lighting systems take over.
 /// The nested resource tuple of [`spawn_loaded_placements`] (the 16-SystemParam ceiling): the
 /// prop-probe table, the stream-trace counters, the live/settling state the landing cap reads,
-/// and the model-forms cache (0834). The skin-palette table left with decision 0863 — a
+/// and the model-forms cache. The skin-palette table left with decision 0863 — a
 /// placement's rig slot is the draw gate's to claim at first wake now, not the spawner's.
 type SpawnTables<'w> = (
     ResMut<'w, PropProbes>,
@@ -93,7 +93,7 @@ pub(super) fn spawn_loaded_placements(
     mut anim_table: ResMut<crate::mat_anim_table::MatAnimTable>,
     // Nested to stay inside Bevy's 16-element system-param tuple limit: the prop-probe table +
     // the stream-trace counters + the live/settling state the landing cap reads + the
-    // model-forms cache (decision 0834).
+    // model-forms cache.
     tables: SpawnTables,
 ) {
     let (mut probes, mut activity, focus, mut forms, mut welds, mut merge, mut staticgx) = tables;
@@ -107,7 +107,7 @@ pub(super) fn spawn_loaded_placements(
         return;
     }
     let t0 = Instant::now();
-    // The landing COUNT cap (B181), on top of the time budget below. The clock gates main-thread
+    // The landing COUNT cap, on top of the time budget below. The clock gates main-thread
     // cost — but ~1000 one-submesh doodads pass a 4 ms budget in 2.5 ms and hand the render world
     // their whole extract/specialize/upload wave in one frame: the measured 60–80 ms landing
     // frame when a fresh Undercity row streams in. Counting bounds the downstream wave the clock
@@ -119,7 +119,7 @@ pub(super) fn spawn_loaded_placements(
         usize::MAX
     };
     let mut spawned_n = 0usize;
-    // The animated-doodad clock origin (decision 0130): per-instance phase = spawn time, as in the
+    // The animated-doodad clock origin: per-instance phase = spawn time, as in the
     // reference (the arm-time cursor offset), and the draw gate seeks against it on resume.
     let now = time.elapsed_secs();
     let light = &shared_light.0;
@@ -147,7 +147,7 @@ pub(super) fn spawn_loaded_placements(
                     let Some(m) = m2s.get(h) else {
                         continue; // model still loading (or missing) — try next frame
                     };
-                    // The model's app-built render forms (decision 0834): request static — plus
+                    // The model's app-built render forms: request static — plus
                     // the skinned twins iff the anim host will rig this model — and wait for the
                     // paced furnisher, exactly as the placement waits for the asset itself.
                     let key = ModelKey::from(h);
@@ -195,7 +195,7 @@ pub(super) fn spawn_loaded_placements(
                     let fade = emitter_fade(p.transform, (radius, center), None, None);
                     // The placement's identity, built BEFORE the spawn: every lane that takes
                     // a batch — entity, merge blob, retained cell — carries this same Arc, so
-                    // whichever one draws it, the pick names the placement (decision 1534).
+                    // whichever one draws it, the pick names the placement.
                     let object = Arc::new(WorldObject {
                         kind: ModelKind::Doodad,
                         label: handle_label(h),
@@ -246,7 +246,7 @@ pub(super) fn spawn_loaded_placements(
                     // no `Aabb` and lands in the cull's fail-open arm — harmless to draw (it draws
                     // nothing) but it was 484 of the 6917 "tested" objects at one Stratholme pin,
                     // which is exactly the kind of noise that makes the instrument stop meaning
-                    // anything. Tag what is drawn (decision 0784).
+                    // anything. Tag what is drawn.
                     let anim_root = host.as_ref().map(|h| h.root);
                     for e in ents.iter().filter(|e| Some(**e) != anim_root) {
                         commands
@@ -254,7 +254,7 @@ pub(super) fn spawn_loaded_placements(
                             .insert(crate::exterior_cull::ExteriorScene);
                     }
                     // Doodad collider (avian): a static trimesh hull baked at this placement's
-                    // transform, WELDED into its owner tile's batch (decision 1369 — the entity
+                    // transform, WELDED into its owner tile's batch (the entity
                     // granularity was ~0.8 cpu_ms of avian per-frame cost at Stormwind; see
                     // `super::weld`). `None` ⇒ the model has no collision hull, so a hull-less
                     // tree canopy stays pick-through, matching the reference's
@@ -325,7 +325,7 @@ pub(super) fn spawn_loaded_placements(
                     let Some(m) = wmos.get(h) else {
                         continue;
                     };
-                    // The building's app-built render forms (0834): static only — WMO group
+                    // The building's app-built render forms: static only — WMO group
                     // geometry never skins. A city root's thousands of batches are exactly the
                     // burst the paced furnisher exists to spread.
                     let key = ModelKey::from(h);
@@ -343,7 +343,7 @@ pub(super) fn spawn_loaded_placements(
                     // lane ⇒ no anim host, so only the mesh half of the gate is ever read.
                     let fade = emitter_fade(p.transform, (f32::INFINITY, Vec3::ZERO), None, None);
                     // The building's identity, shared by every lane that takes one of its batches
-                    // (decision 1534) — see the doodad site above.
+                    // — see the doodad site above.
                     let object = Arc::new(WorldObject {
                         kind: ModelKind::Wmo,
                         label: handle_label(h),
@@ -370,7 +370,7 @@ pub(super) fn spawn_loaded_placements(
                                 // groups in the whole archive declare "this room is wholly
                                 // submerged" in place of carrying a liquid grid, and 5 of them are
                                 // placed — the Deeprun Tram's two flooded sections, the Prison
-                                // Oubliette, the MD crypt and the mountain cave (decision 1000).
+                                // Oubliette, the MD crypt and the mountain cave.
                                 flooded: m
                                     .group_nav
                                     .iter()
@@ -458,7 +458,7 @@ pub(super) fn spawn_loaded_placements(
                     // draws only through a portal window. 0774 left this ungated because these
                     // entities already had a `Visibility` authority and a second writer would have
                     // fought it — that is fixed at the root now, with the window term folded INTO
-                    // that authority (decision 0784), so the tag is safe to add.
+                    // that authority, so the tag is safe to add.
                     //
                     // Tagging is unconditional and the **exemption is dynamic**: the camera's own
                     // containing placement is not exterior to itself, which the authority decides
@@ -496,7 +496,7 @@ pub(super) fn spawn_loaded_placements(
                             }
                         }
                         // The props spawn later — each waits on its own M2 — so they can't be
-                        // tagged here; hold the instance for them (decision 0689). Held for EVERY
+                        // tagged here; hold the instance for them. Held for EVERY
                         // instance, not just a portal-bearing one: since 0696 it is also the
                         // placement identity each embedded pool is scoped by, and a portal-less
                         // building's pool needs an owner exactly as much as a canal does.
@@ -509,7 +509,7 @@ pub(super) fn spawn_loaded_placements(
                     // zip above reads `by_batch`, so appends to `ents` no longer threaten it.)
                     // Spawned a group at a time so each surface can take that group's cull key: a
                     // pool belongs to the room it sits in, and a culled room's lava must go with it
-                    // (decision 0689 — the same defect as the props, on the same building).
+                    // (the same defect as the props, on the same building).
                     for (gi, lq) in m.group_liquids.iter().enumerate() {
                         let Some(lq) = lq else { continue };
                         let first = ents.len();
@@ -523,9 +523,9 @@ pub(super) fn spawn_loaded_placements(
                             // its pool draws under, so an indoor pool hazes with the room the way
                             // the walls beside it do (decision 0691's open lane).
                             m.group_bounds.get(gi).is_some_and(|g| g.interior),
-                            // …and the pool's SCOPE: the room it belongs to (0696 — only a subject
+                            // …and the pool's SCOPE: the room it belongs to (only a subject
                             // standing in this placement can be in it) plus that room's own floor
-                            // in world Z (0701 — and only one at or above it).
+                            // in world Z (and only one at or above it).
                             crate::liquid::WmoPool::new(
                                 p.portal_instance.map(|instance| WmoRoom {
                                     instance,
@@ -572,7 +572,7 @@ pub(super) fn spawn_loaded_placements(
                             let groups: Arc<[u16]> = Arc::from([gi as u16].as_slice());
                             for &e in &ents[first..] {
                                 // …and where there IS an instance, the pool rides its group with
-                                // the room (0689) and takes the exemption (0784) — which moves it
+                                // the room and takes the exemption — which moves it
                                 // out of `apply_exterior_cull`'s query (`Without<WmoGroupVis>`)
                                 // and into the model-visibility authority, the one that can see
                                 // both terms.
@@ -624,7 +624,7 @@ pub(super) fn spawn_loaded_placements(
                     }
                     // Interior MOLT lights (forge fire, inn fireplaces, chapel candles) — the radiating
                     // sources that light nearby NPCs/doodads AND the building's own walls/floor over
-                    // their baked MOCV (decision 0273).
+                    // their baked MOCV.
                     spawn_wmo_lights_for(
                         &mut commands,
                         &m.lights,
@@ -658,7 +658,7 @@ pub(super) fn spawn_loaded_placements(
         // 2. Spawn each WMO doodad prop as its M2 asset finishes loading (across frames). Their
         //    entities join `p.entities`, so they despawn with the placement. Empty for M2 doodads.
         // Copied out before the loop borrows `p.doodads`: the props tag onto the same portal
-        // instance their building's groups did (decision 0689).
+        // instance their building's groups did.
         let portal_instance = p.portal_instance;
         for d in &mut p.doodads {
             if d.spawned {
@@ -667,7 +667,7 @@ pub(super) fn spawn_loaded_placements(
             let Some(m) = m2s.get(&d.handle) else {
                 continue; // this prop's M2 still loading
             };
-            // The prop's app-built render forms (0834) — same gate as its owning placement's.
+            // The prop's app-built render forms — same gate as its owning placement's.
             let key = ModelKey::from(&d.handle);
             let kinds = WANT_STATIC | if wants_rig(m) { WANT_SKINNED } else { 0 };
             if !forms.require(
@@ -698,8 +698,8 @@ pub(super) fn spawn_loaded_placements(
             // One gate for every rider of this prop: the prop rides its building's
             // exterior-window exemption AND the portal PVS of the rooms that name it — the same
             // `WmoGroupVis` the submeshes are culled by, so a prop's mesh, its flames, its
-            // streamers and (since 2059) its ANIM HOST are admitted or refused together
-            // (decisions 0786 / 0689 / 1289). Hoisted above the spawn because the assembler takes
+            // streamers and (since 2059) its ANIM HOST are admitted or refused together.
+            // Hoisted above the spawn because the assembler takes
             // it now; a particles-only prop has no submesh to carry a verdict, so this is the only
             // thing that tells its host it is furniture rather than exterior scene.
             let fade = emitter_fade(
@@ -784,7 +784,7 @@ pub(super) fn spawn_loaded_placements(
                         slot: interior_slot,
                     },
                 )),
-                // The prop retained-pass site (B4, decision 1433): region keyed by the
+                // The prop retained-pass site (B4): region keyed by the
                 // building's instance entity — the PVS identity AND the lifecycle. No
                 // instance ⇒ no region key ⇒ the merge/entity path, tallied per prop so
                 // the declined population is never silent.
@@ -821,11 +821,11 @@ pub(super) fn spawn_loaded_placements(
             }
             // Portal-cull the prop with the rooms that name it — the reference commits a WMO's
             // doodads per VISIBLE group (`0x695aa0` over the group's MODR refs, from the
-            // visible-group walk `0x698720`), so furniture never outlives its room (decision 0689)
+            // visible-group walk `0x698720`), so furniture never outlives its room
             // and a prop several rooms name is drawn from ANY of them. Every submesh spawned above
             // is this one prop, so they all share the one key.
             //
-            // The anim-host ROOT is skipped, for the reason the ADT site skips it (0784): it is a
+            // The anim-host ROOT is skipped, for the reason the ADT site skips it: it is a
             // joint hierarchy, not geometry — no `ModelPart`, no `Aabb` — so it lands in the cull's
             // fail-open arm and inflates every "objects tested" count without ever being drawn. The
             // ADT lane has excluded it since 0784; this lane did not, which made the same root a
@@ -838,7 +838,7 @@ pub(super) fn spawn_loaded_placements(
                             instance,
                             groups: d.groups.clone(),
                         },
-                        // Furniture is exterior scene when its building is (0784) — and exempt when
+                        // Furniture is exterior scene when its building is — and exempt when
                         // that building is the one the camera stands in. Keyed on the instance
                         // `WmoGroupVis` carries, so a prop no group names (no key, no exemption
                         // possible) is deliberately left untagged rather than gated blind.
@@ -849,8 +849,8 @@ pub(super) fn spawn_loaded_placements(
             // Prop collider (avian): a static trimesh from the prop's collision hull at its world
             // transform — collide-iff-hull, exactly like a map doodad, so a weapon rack / crate / cargo
             // net is solid to both the player and the camera while a hull-less prop (banner, small
-            // candle) isn't. Default collision layer ⇒ both audiences. WELDED per placement
-            // (decision 1369): every prop of a building despawns with the building, so the batch
+            // candle) isn't. Default collision layer ⇒ both audiences. WELDED per placement:
+            // every prop of a building despawns with the building, so the batch
             // has exactly the lifetime the individual hulls had — the weld flushes into
             // `Placement::entities` one chain-step later. (The 1367 premise levers and the 1369
             // A/B lever gate here exactly as at the map-doodad site above.)
@@ -975,7 +975,7 @@ fn resolve_wmo_doodads(
                 handle: asset_server.load(m2_url(&d.model)),
                 transform: wmo_world.mul_transform(local),
                 // Every MODR referrer, inverted with the lighting base at load — the prop's
-                // portal-cull key, so a lantern is hidden with the room it hangs in (decision 0689)
+                // portal-cull key, so a lantern is hidden with the room it hangs in
                 // and a lava fall the rooms below and above both name survives either being culled.
                 groups: wmo.doodad_groups.get(di).cloned().unwrap_or_default(),
                 light,
@@ -1028,7 +1028,7 @@ fn log_fade_near(
 
 /// A model handle's source path as a readable label for the object inspector (the asset path without
 /// the `mpq://` source prefix). Empty if the handle carries no path.
-/// A placement's model-forms build priority (decision 0834): its Chebyshev tile distance to the
+/// A placement's model-forms build priority: its Chebyshev tile distance to the
 /// stream focus, scaled to leave the band below for the entity lane — a mob walking into view
 /// never queues behind a city's scenery. `translation` is Bevy space (the placement transform);
 /// `world_to_tile` wants WoW ground coords, the inverse of decision 0002's rotation.
@@ -1053,7 +1053,7 @@ fn handle_label<A: Asset>(handle: &Handle<A>) -> String {
 ///
 /// The identity is built by the caller and passed IN, because a batch that diverts into a
 /// consolidating lane spawns no entity for this to reach: the same Arc rides the divert as the
-/// lane's pick-member identity (decision 1534). This tag covers what the entity path did spawn —
+/// lane's pick-member identity. This tag covers what the entity path did spawn —
 /// including the fx entities (emitters, ribbons, lights) that no lane ever takes.
 fn tag_world_object(commands: &mut Commands, ents: &[Entity], object: &Arc<WorldObject>) {
     for &e in ents {
@@ -1072,7 +1072,7 @@ fn tag_world_object(commands: &mut Commands, ents: &[Entity], object: &Arc<World
 /// birds\Bird01.m2` is the extreme: a 1.2 × 1.8 × 0.23 yd bind-pose box, and a root-bone translation
 /// track that flies the bird 64 yd along X and 17 yd along Y away from it. Culled by the bind pose,
 /// the bird blinks out whenever that 1-yd box leaves the frustum while the bird itself is still on
-/// screen — the director's "birds in the sky often dis/appear based on the cam angle" (decision 1259).
+/// screen — the director's "birds in the sky often dis/appear based on the cam angle".
 ///
 /// The reference tests one volume per doodad *object* and derives it from these same header fields:
 /// `0x683700` calls `0x682ef0(ecx = &[rec+0x5c] centre, [rec+0x68] radius)` → `0x686b80`, a 6-plane

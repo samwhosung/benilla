@@ -54,7 +54,7 @@ pub struct MatAnim {
     unit_lane: bool,
     /// The gseq factors' ATTACH anchor (secs on the shared clock): `None` until the first
     /// [`sample_mat_anim`] pass stamps it — the reference snapshots the scene clock once per
-    /// model instance at attach (`CM2Model+0x68`; decisions 0856/0858).
+    /// model instance at attach (`CM2Model+0x68`).
     gseq_attach: Option<f64>,
     /// The last sampled combined factor (colour-alpha × weight), read by the visibility authority.
     pub current: f32,
@@ -156,7 +156,7 @@ impl MatAnim {
 ///
 /// A player with **nothing armed** is not "no sequence" — the reference arms the loader-idle clip on
 /// every M2 instance at load, so the answer is that sequence at its opening frame
-/// ([`ModelAnimations::idle_seq`], decision 0936). benilla's rig tier skips the arm whenever looping
+/// ([`ModelAnimations::idle_seq`]). benilla's rig tier skips the arm whenever looping
 /// the idle would render identically to the static mesh, and that skip used to leak out of the mesh
 /// question into this one: both callers read the returned `None` as "keep the pinned slot", which
 /// starts life at file slot 0. On a Spawn/Stand/Despawn GameObject slot 0 is the Spawn flourish, so
@@ -191,7 +191,7 @@ pub fn sample_mat_anim(
     let now = time.elapsed_secs();
     // The scene clock, full-precision (a long-uptime f32 elapsed drifts whole milliseconds,
     // which a 433 ms twinkle shows): the base the per-instance gseq attach anchor subtracts
-    // from (0856).
+    // from.
     let shared = time.elapsed_secs_f64();
     for mut m in &mut q {
         if m.frozen {
@@ -213,7 +213,7 @@ pub fn sample_mat_anim(
             None => (m.seq, now - m.spawned_at),
         };
         // The instance's gseq cursor: sceneNow − attach, the anchor stamped on this first pass
-        // (decisions 0856/0858 — every lane, spell effects included: fresh instance per play).
+        // (every lane, spell effects included: fresh instance per play).
         let attach = *m.gseq_attach.get_or_insert(shared);
         m.current = m.anim.sample(seq, elapsed, shared - attach);
     }
@@ -223,7 +223,7 @@ pub fn sample_mat_anim(
 /// each batch material carrying a texture-transform translation loop, keyed by material asset id.
 /// [`tick_anim_materials`] re-samples a *drawn* entry's offset into the material's `sun_scale.zw`
 /// each frame — one shared uniform per material, so every instance of a model batch scrolls in
-/// phase. A recorded, invisible divergence for BOTH clock laws (0856): the reference phases a
+/// phase. A recorded, invisible divergence for BOTH clock laws: the reference phases a
 /// seq-band loop per play (arm cursor) and a gseq loop per instance (attach anchor,
 /// `CM2Model+0x68`), but one uniform per material cannot phase per instance — meaningless for a
 /// seamless scroll either way. Entries drop when the material asset does.
@@ -235,12 +235,12 @@ pub fn sample_mat_anim(
 #[derive(bevy::prelude::Component)]
 pub struct AnimMatPart;
 
-/// **Which loop a registered material animates on** — and the whole of decision 1408.
+/// **Which loop a registered material animates on** — and the whole of.
 ///
 /// A registry keyed by MATERIAL is shared by every instance of a batch, so it has no sequence to
 /// key on. That is exactly right while every sequence bakes the same loop, and structurally unable
 /// to be right when they don't: the BRM lava bubbles key their whole flipbook inside a 50 %-weighted
-/// variation, and their 15 placements re-roll independently every ~3.3 s (decision 0768), so at any
+/// variation, and their 15 placements re-roll independently every ~3.3 s, so at any
 /// instant some are on slot 0 and some on slot 1. One shared row cannot serve both.
 ///
 /// So a batch whose slots disagree — 22 batch-channels across **6 models**, corpus-wide
@@ -273,7 +273,7 @@ pub enum UvLoop {
         seqs: std::sync::Arc<benilla_formats::SeqLoops<[f32; 2]>>,
         host: Entity,
     },
-    /// The **spell-effect** lane (decision 2282): this material is one effect instance's own
+    /// The **spell-effect** lane: this material is one effect instance's own
     /// clone, and the scroll rides that instance's clip — `host`'s live `AnimationPlayer`, the
     /// same source [`MatAnim::following_host`] reads, so the two material channels of one cast
     /// stay in step through `Stand` → `Hold` → `Decay`.
@@ -309,7 +309,7 @@ pub struct UvAnimEntry {
     pub anim: UvLoop,
     pub slot: u16,
     pub seed: [f32; 2],
-    /// The effect lane's **affine half** ([`UvAffine`], decision 2282) — `None` on every other
+    /// The effect lane's **affine half** ([`UvAffine`]) — `None` on every other
     /// lane, and on an effect batch whose transform only translates (the common case).
     affine: Option<UvAffine>,
 }
@@ -390,7 +390,7 @@ impl UvAnimEntry {
         let a = self.affine.as_ref()?;
         // Per lane, exactly as `delta` does it: the shared lane reads the free-running scene clock
         // on both, the per-placement lane its host's playing clip, and the effect lane its own
-        // age-anchored pair (decisions 0856/0858).
+        // age-anchored pair.
         let (band_t, gseq) = match &self.anim {
             UvLoop::Shared(_) => (now, gseq_now),
             UvLoop::PerSeq { .. } => (playing.map_or(now, |(_, t)| t), gseq_now),
@@ -505,7 +505,7 @@ pub(crate) fn register_uv(
         bevy::log::warn_once!("mat-anim table full — a UV-scroll batch stays at its seed");
         return;
     };
-    // **Through the parked half, not `Assets::get_mut`** (decision 2038). A material this
+    // **Through the parked half, not `Assets::get_mut`**. A material this
     // spawner just built is not in the store yet — `model_render::lazy` reserves its handle and
     // parks the value until something view-visible binds it — so the store-only read returned
     // `None` for *every* registration, freed the slot again and left the registry empty: no UV
@@ -527,7 +527,7 @@ pub(crate) fn register_uv(
         // The breadcrumb for the lanes that have no other tell: a per-placement or per-instance
         // material is invisible in every count (it is one more material, one more row), so "did
         // the bubbles / the claw trail take the new lane at all" would otherwise be a question
-        // only the eye could answer. One line per registration, at debug (decisions 1408, 2282).
+        // only the eye could answer. One line per registration, at debug.
         UvLoop::PerSeq { host, .. } => {
             bevy::log::debug!("mat-anim: per-placement UV lane armed for host {host} (slot {slot})")
         }
@@ -584,7 +584,7 @@ fn attach_affine(
     }
 }
 
-/// Put one **spell-effect material clone** on the per-instance UV lane (decision 2282): the
+/// Put one **spell-effect material clone** on the per-instance UV lane: the
 /// engine's whole door for `entities::spell_fx`, which owns the clone and nothing else about how
 /// the scroll is delivered.
 ///
@@ -644,7 +644,7 @@ pub fn register_fx_uv(
     }
 }
 
-/// Put one **unit / GameObject / held-item** batch material on the UV lane (decision 2295) — the
+/// Put one **unit / GameObject / held-item** batch material on the UV lane — the
 /// engine's whole door for the entity lane, and the twin of [`register_fx_uv`] for a population
 /// that is resident rather than pooled.
 ///
@@ -762,7 +762,7 @@ impl UvLoops {
 /// frame. 0130 sized this as "a few uniform writes per frame" on the premise that the resident
 /// population is tiny (113 texanim models exist game-wide, a handful in view) — true per view,
 /// **false per map session**: the dedup caches hold every material they ever built until a
-/// `MapChange` (decision 0729), and a registry entry only evicts when its material dies, so on a
+/// `MapChange`, and a registry entry only evicts when its material dies, so on a
 /// single-map traverse both registries grow monotonically and every entry is re-uploaded every
 /// frame for ever. Measured on a parked same-map leg by square-waving this system:
 /// **+9.85 ms of CPU per frame at 174 resident entries (~57 µs each)** — and residency 4 → 248
@@ -796,7 +796,7 @@ pub(super) fn tick_anim_materials(
         With<AnimMatPart>,
     >,
     twins: Res<crate::model_render::FarSideTwins>,
-    // The per-placement lane's sequence source (decision 1408): an entry registered `PerSeq` asks
+    // The per-placement lane's sequence source: an entry registered `PerSeq` asks
     // its own anim host which slot it is playing, instead of reading the shared clock.
     hosts: SeqHosts,
     mut drawn: Local<
@@ -824,7 +824,7 @@ pub(super) fn tick_anim_materials(
     // A deterministic run freezes the SHARED-clock lanes at their seed (the whole reason a golden
     // frame is reproducible) but keeps the effect lane running, because that lane's clock is one
     // instance's frame-stepped `AnimationPlayer` — the `fxview` carve-out `MatAnim` and
-    // `spell_fx::FxTintAnims` already take (decision 2282). A capture with no effect in it — every
+    // `spell_fx::FxTintAnims` already take. A capture with no effect in it — every
     // golden scenario — holds no such entry, so it returns here exactly as it always has.
     let frozen = crate::dev_state::deterministic_run() && !matanim_live();
     if frozen && !uv_reg.0.values().any(UvAnimEntry::instance_lane) {
@@ -854,7 +854,7 @@ pub(super) fn tick_anim_materials(
     // and its slot zeroes back to identity ([`crate::mat_anim_table`]'s free law).
     let gseq_now = f64::from(now);
     uv_reg.0.retain(|id, entry| {
-        // **Alive means either half holds it** (decision 2038): a material still parked by
+        // **Alive means either half holds it**: a material still parked by
         // `model_render::lazy` — built, handle reserved, nothing view-visible bound to it yet —
         // is not in the store, and `Assets::contains` alone reads that as death. Evicting there
         // would drop the entry a spawn just made and never rebuild it, because registration
@@ -868,7 +868,7 @@ pub(super) fn tick_anim_materials(
         }
         // **The effect lane skips the draw gate.** That gate's argument is a material nothing
         // draws costing a per-frame rebuild for ever, on a population that grows monotonically
-        // across a map session (B131). An effect instance is one of a handful and lives about a
+        // across a map session. An effect instance is one of a handful and lives about a
         // second, so there is nothing to ratchet — while making it obey the gate would mean
         // threading [`AnimMatPart`] onto every fx part, card and decal, and a part that missed the
         // marker would silently freeze mid-scroll. It is also what keeps the lane running inside a
@@ -900,7 +900,7 @@ pub(super) fn tick_anim_materials(
     });
 }
 
-/// **The price-this-system knob** (`WOW_MATANIM_DUTY=<start_s>:<period_s>`, decision 0785): alternate
+/// **The price-this-system knob** (`WOW_MATANIM_DUTY=<start_s>:<period_s>`): alternate
 /// [`tick_anim_materials`] off/on every `period` seconds from `start`. Park at one pin, square-wave
 /// it, and the difference between the ON and OFF buckets **is** this system's per-frame cost, with
 /// residency, scene, entity count and camera all held identical — a measurement, not an argument.
@@ -934,7 +934,7 @@ fn matanim_off(time: &Time<bevy::time::Real>) -> bool {
 /// The freeze above is what makes a golden frame reproducible, and it is right for every scenario
 /// in the sweep. It also means `fxview` — the fixture whose whole job is to age a subject — cannot
 /// show a **unit's or GameObject's** texture transform at all, because those are shared-clock
-/// entries (decision 2295); the effect lane is exempt only because its clock is one instance's
+/// entries; the effect lane is exempt only because its clock is one instance's
 /// frame-stepped player. Without this knob the A/B for "does this creature's skin scroll" does not
 /// exist, and the answer would have to come from the director's screen, which is not what §7 means
 /// by leaving the look to them.
@@ -1019,7 +1019,7 @@ pub fn register_tint(
         bevy::log::warn_once!("mat-anim table full — a tint batch stays at its seed");
         return;
     };
-    // The parked half, exactly as [`register_uv`] reaches it (decision 2038).
+    // The parked half, exactly as [`register_uv`] reaches it.
     let Some(seed) = crate::model_render::lazy::with_material_mut(materials, id, |mat| {
         let seed = [
             mat.extension.tint.x,
@@ -1058,7 +1058,7 @@ pub fn register_tint(
 ///
 /// It samples the loop itself rather than watching the row over time, so it is a **one-shot that
 /// works in a deterministic capture** — where [`tick_anim_materials`]'s shared lanes are skipped
-/// and their rows stay zero by design (the effect lane keeps running there; decision 2282). In a
+/// and their rows stay zero by design (the effect lane keeps running there). In a
 /// live run the `row` column is the tick's real output and the two halves can be compared
 /// directly.
 ///
@@ -1161,7 +1161,7 @@ pub(super) fn matanim_probe(
         let label = obj.map_or_else(|| "-".to_string(), |o| format!("{}#{}", o.label, o.id));
         // Through the parked half (`lazy::with_material`), or the readout would report every
         // not-yet-drawn material's stamp as a zero it never had — the deferral confusion this
-        // probe exists to resolve (decision 2038). `parked` says which half answered.
+        // probe exists to resolve. `parked` says which half answered.
         let parked = !materials.contains(id);
         let slots =
             crate::model_render::lazy::with_material(&materials, id, |m| m.extension.anim_slots)
@@ -1272,7 +1272,7 @@ mod delta_tests {
         )
     }
 
-    /// **`animates()` is the one predicate, and it is not `uv_anim.is_some()`** (decision 2295).
+    /// **`animates()` is the one predicate, and it is not `uv_anim.is_some()`**.
     /// Two entity batches in the shipped corpus rotate and never translate, so the channel a
     /// reader would check first answers `None` for them; and a translation keyed to one constant
     /// value is the material's seed, not a loop to sample (1375).
@@ -1348,7 +1348,7 @@ mod delta_tests {
         );
     }
 
-    /// **The effect lane reads its INSTANCE's play head, not the scene clock** (decision 2282).
+    /// **The effect lane reads its INSTANCE's play head, not the scene clock**.
     /// The band clock is the clip time the host's `AnimationPlayer` reports, so two casts a minute
     /// apart are at the same point of their own scroll — the property a shared-material lane
     /// structurally cannot have, and the one Swipe's one-shot reveal rests on.
@@ -1430,7 +1430,7 @@ mod delta_tests {
         })
     }
 
-    /// The delta law (decision 1381): a row is the quantized live sample minus the BUILT seed,
+    /// The delta law: a row is the quantized live sample minus the BUILT seed,
     /// so the shader's `seed + row` shows exactly the number the old asset-mutating lane wrote.
     /// At t = 0 that is the quantized seed — the same value the old tick's first frame produced.
     #[test]
@@ -1465,7 +1465,7 @@ mod delta_tests {
         }
     }
 
-    /// **B98** (decision 1408): the per-placement lane samples the slot the placement's own host is
+    /// **B98**: the per-placement lane samples the slot the placement's own host is
     /// playing — not slot 0, and not a shared clock.
     ///
     /// The BRM lava bubble's shape, exactly: slot 0 bakes to nothing (a dead hold) and slot 1

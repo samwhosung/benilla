@@ -30,7 +30,7 @@ pub use compose::{finalize_rig_worlds, PosePost};
 pub use global_seq::GlobalSeqDrive;
 pub use pose::{RigAnchor, RigFrame, RigPose};
 
-/// This rig's per-bone pose evaluation is parked (decision 0448): the pose evaluator and the pose
+/// This rig's per-bone pose evaluation is parked: the pose evaluator and the pose
 /// post-passes skip it. The sequence clocks, the driver state machine, and the event scanner all
 /// keep running — parking turns *sampling* off, nothing else.
 #[derive(Component)]

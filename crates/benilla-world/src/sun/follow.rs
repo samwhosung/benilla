@@ -9,7 +9,7 @@
 //! `[0.995, 1.0]` back-slice depth test, `0x7e5a0c`) and the envelope —
 //! the slewed [`FlareGate`]: the per-body **dnCurve** day/night gate × the below-horizon
 //! smoothstep × the terrain/interior visibility (the occ3 fractional-probe stand-in),
-//! rate-limited like the reference's `[glare+0x30]` (decision 0508).
+//! rate-limited like the reference's `[glare+0x30]`.
 //!
 //! **These systems run in `PostUpdate` after transform propagation** ([`crate::billboard::BillboardPlace`],
 //! the camera-anchored placement slot), reading the camera's SAME-frame propagated pose and writing
@@ -47,7 +47,7 @@ const SUN_SIZE: f32 = 0.0833;
 /// encodes for the far-placed discs, so the angular sizes are identical by construction. Far
 /// placement was our first "equivalent" and it broke at the byte-law flare size: a 20-unit quad at
 /// `far·0.85` pierced the sky-dome sphere (`far·0.9`) and the depth test cut it along the
-/// plane∩sphere circle — a giant faceted halo edge around the sun (decision 0500). At 12 units the
+/// plane∩sphere circle — a giant faceted halo edge around the sun. At 12 units the
 /// quad can touch neither the dome nor the far plane; its DEPTH is forced far per-fragment instead
 /// (`celestial.wgsl` — the reference's own split: glare geometry on the near sphere, depth squashed
 /// to the `[0.995, 1.0]` back slice, drawn LAST in the frame; the sort slot is
@@ -62,7 +62,7 @@ const GLARE_DIST: f32 = 12.0;
 const FLARE_RAY_SAMPLES: u32 = 48;
 const FLARE_RAY_RANGE: f32 = 2800.0;
 
-/// Flare-envelope slew rates (per second) — `[glare+0x28]`/`[+0x2c]` (decision 0508): the
+/// Flare-envelope slew rates (per second) — `[glare+0x28]`/`[+0x2c]`: the
 /// reference smooths the whole occlusion×dnCurve product with an **asymmetric LINEAR rate
 /// limiter** (`[glare+0x30]`, sole writer `0x6cf5ea`) —
 /// not an exponential ease. The sun's flare rises at 4.0/s, the moon's at 100/33 ≈ 3.03/s, and both
@@ -73,7 +73,7 @@ const FLARE_FALL: f32 = f32::from_bits(0x3fc1_f07c); // [0xce97d4]/[0xce9724] �
 
 /// One celestial body's sprite row: transform + the body tag + its material — every disc AND glare
 /// rides [`CelestialMaterial`] (disc mode alpha-blends with the horizon clip; glare mode gamma-ADDS,
-/// the reference's SRC_ALPHA, ONE lens-flare blend — decision 0502).
+/// the reference's SRC_ALPHA, ONE lens-flare blend).
 type BodySprites<'w, 's, T> = Query<
     'w,
     's,
@@ -157,7 +157,7 @@ const FLARE_FRACTION_GRID: u32 = 4;
 /// The grid's cell count — the fraction's denominator and the cached mask's width.
 const FLARE_CELLS: u32 = FLARE_FRACTION_GRID * FLARE_FRACTION_GRID;
 
-/// How many grid cells the probe re-marches per frame (decision 1436): the full 16×48-sample march
+/// How many grid cells the probe re-marches per frame: the full 16×48-sample march
 /// every frame priced 0.45 ms/f — the biggest single system in the 1435 parked band map — for a
 /// value the slew rate-limits anyway. Two cells/frame refreshes the whole grid in 8 frames
 /// (0.13 s at 60 Hz), inside BOTH slew time constants (rise 0.25 s, fall 0.66 s), so the drip is
@@ -189,7 +189,7 @@ fn flare_visible_fraction(
 }
 
 /// March ONE grid cell of the quad's [−half, +half]² angular footprint — the unit the round-robin
-/// re-prices per frame (decision 1436). Cell `c` = row `c / 4`, column `c % 4`, centre-sampled.
+/// re-prices per frame. Cell `c` = row `c / 4`, column `c % 4`, centre-sampled.
 fn flare_cell_clear(
     height_under: impl Fn(Vec3) -> Option<f32>,
     cam_pos: Vec3,
@@ -231,7 +231,7 @@ fn flare_mask_update(
 }
 
 /// The flare **envelope** — our build of the reference's `[glare+0x30]` smoothed intensity
-/// (Addenda #5+#8, decisions 0508+0532): each frame a slew target is assembled from the terms we
+/// (Addenda #5+#8): each frame a slew target is assembled from the terms we
 /// model — the per-body **dnCurve** (`WowLighting.{sun,moon}_flare_dn`, the real day/night gate),
 /// the below-horizon smoothstep, and the **fractional** terrain visibility of the disc's quad
 /// ([`flare_visible_fraction`] — the reference's occ3 occlusion probe: a half-hidden sun carries
@@ -243,7 +243,7 @@ fn flare_mask_update(
 /// 12-unit position exactly like `0x6cf7b0`/`0x6cf7d0`. The remaining unmodeled factors —
 /// **occ2** (scene async-occlusion, 1.0 in normal outdoor play) and the scene lens-flare-slot
 /// gate **(1−V)** (1.0 without scene-light flares) — stand at
-/// 1.0 (recorded residual, 0532). One instance per system → one slewed scalar per body
+/// 1.0 (recorded residual). One instance per system → one slewed scalar per body
 /// (`follow_sun` the sun, `follow_moons` the white moon); seeds at 0 like the reference's `.bss`,
 /// so a flare always rises into view.
 #[derive(SystemParam)]
@@ -255,7 +255,7 @@ pub(super) struct FlareGate<'w, 's> {
     /// ring (the same surface that draws the distant horizon mountains). Absent in assetless dev.
     wdl: Option<Res<'w, WdlStreamer>>,
     camera_interior: Res<'w, CameraInteriorClaim>,
-    /// The submerged-eye depth — the glare's own submersion fade (decision 1829). The glare is
+    /// The submerged-eye depth — the glare's own submersion fade. The glare is
     /// NOT part of the sky pass the client skips underwater: it draws in its own top-level pass
     /// (`0x6cf490` ← `0x6d48c0` ← `0x483740`, unconditional), while the sky is `0x6d4940` *inside*
     /// `0x681070`, which is what `0x6812a4` skips. Both facts are true at once, which is why the
@@ -265,8 +265,8 @@ pub(super) struct FlareGate<'w, 's> {
     /// the visible layer, like the reference).
     clouds: Res<'w, CloudCoverage>,
     env: Local<'s, f32>,
-    /// The occ3 grid's cached per-cell verdicts (bit = clear) and the round-robin cursor
-    /// (decision 1436): [`FLARE_RAYS_PER_FRAME`] cells re-march per active frame. `primed`
+    /// The occ3 grid's cached per-cell verdicts (bit = clear) and the round-robin cursor:
+    /// [`FLARE_RAYS_PER_FRAME`] cells re-march per active frame. `primed`
     /// falls when the probe is skipped (night, interior, below horizon) so the first active
     /// frame after a gap marches the whole grid instead of trusting a stale mask.
     mask: Local<'s, u16>,
@@ -275,7 +275,7 @@ pub(super) struct FlareGate<'w, 's> {
 }
 
 /// The glare's **submersion fade** — `1 − clamp(depth × 0.1, 0, 1)`, a 10-yard linear ramp on the
-/// glare alpha (decision 1829). `depth` is `liquidSurfaceHeight − probeZ` in world-Z yards,
+/// glare alpha. `depth` is `liquidSurfaceHeight − probeZ` in world-Z yards,
 /// positive when submerged, so a dry camera reads `0` and the fade is the exact identity.
 ///
 /// **The glare's submersion term is easy to miss.** The read is one indirection out
@@ -346,7 +346,7 @@ impl FlareGate<'_, '_> {
                 )
                 .or_else(|| wdl.as_ref().and_then(|w| w.height_under(p)))
             };
-            // The round-robin drip (decision 1436): an unprimed mask marches every cell once,
+            // The round-robin drip: an unprimed mask marches every cell once,
             // a primed one re-prices FLARE_RAYS_PER_FRAME — the slew smooths the ≤8-frame
             // staleness exactly as it smooths the grid's own 1/16 quantization.
             let cells = if *self.primed {
@@ -375,7 +375,7 @@ impl FlareGate<'_, '_> {
 /// (`0xce8cac`: 2× at the dawn/dusk horizon → 1× midday). The GLARE is the `0x6cf490` lens flare on
 /// the near sphere ([`GLARE_DIST`]): quad scale `lerp(3, 20, f)` world units and intensity
 /// `lerp(0.5, 1, f)` on the view lerp, × the slewed [`FlareGate`] envelope (the sun's dnCurve makes
-/// it a DAY flare — full 07:30→19:30, gone by 21:00; decision 0508) — near-screen-filling star rays
+/// it a DAY flare — full 07:30→19:30, gone by 21:00) — near-screen-filling star rays
 /// when you look into the sun. Disabled together with the sky dome.
 pub(super) fn follow_sun(
     cam: Query<(&GlobalTransform, &Projection), With<WorldCamera>>,
@@ -463,7 +463,7 @@ pub(super) fn follow_sun(
                 // × the slewed envelope (dnCurve × horizon × visibility — `0x6cf490`'s
                 // `[+0x1b] = floor(255·lerp·[+0x30])` shape). Rides base_color alpha — the shader's
                 // glare mode ADDS `gamma(tint × texel) × a` onto the scene, the reference's
-                // SRC_ALPHA byte weighting (decision 0502).
+                // SRC_ALPHA byte weighting.
                 // × the weather seed — the glare's alpha byte is the seed the per-frame pack
                 // modulates (`oldByte` into `0x6cf490`), so storms dim the flare.
                 let env =
@@ -485,13 +485,13 @@ pub(super) fn follow_sun(
 /// Pin the white moon's disc + glare to the moon's world direction (azimuth 45°, the sun's bearing),
 /// camera-facing, at the same far distance as the sun, and rewrite both tints from the per-frame
 /// celestial diffuse band (the same `0x6d2260` broadcast the sun reads — the glare is WARM; the teal
-/// rim the director sees is the dome's night bands through the disc's feathered edge, decision 0485).
+/// rim the director sees is the dome's night bands through the disc's feathered edge).
 /// Disc size = the unit quad × the white-moon base ×1.75 × the shared size curve (`0xce8c8c`, 1.5×
 /// at moonrise/set → 1× overhead); it rises/sets edge-first via the shader clip+fade. The GLARE quad
 /// = `2.0 ×` the same curve (`0x6cf490` overwrites both lerp endpoints with it; ≈1.14× the disc),
 /// intensity `lerp(0.1, 1, f)` on the view lerp × the slewed [`FlareGate`] envelope — whose moon
-/// dnCurve makes the halo a DEEP-NIGHT thing: nothing until 22:45, full only near midnight
-/// (decision 0508). Disabled with the sky dome.
+/// dnCurve makes the halo a DEEP-NIGHT thing: nothing until 22:45, full only near midnight.
+/// Disabled with the sky dome.
 pub(super) fn follow_moons(
     cam: Query<(&GlobalTransform, &Projection), With<WorldCamera>>,
     light: Res<WowLighting>,
@@ -517,7 +517,7 @@ pub(super) fn follow_moons(
     let seed = celestial_alpha_seed(light.storm_bcc);
     // One slewed envelope per frame, along the white moon's ray (only its glare exists). The moon's
     // dnCurve inside the target is the load-bearing night gate: flat 0 until 22:45, full near
-    // midnight (decision 0508) — a 22:30 moonrise carries NO halo, exactly like the reference.
+    // midnight — a 22:30 moonrise carries NO halo, exactly like the reference.
     let to_white = light.moon_dir_white.normalize_or_zero();
     let env30 = if to_white == Vec3::ZERO {
         0.0
@@ -579,7 +579,7 @@ pub(super) fn follow_moons(
                 // clear weather (`0xce98a4`) — but the weather seed lands on its alpha
                 // byte like the other four: under active weather moon02 surfaces as the
                 // reference's faint dark disc (`0x6d2c74`). The span drives the per-vertex
-                // fade lane (0529) so a horizon crossing keeps the faithful sub-band wedge.
+                // fade lane so a horizon crossing keeps the faithful sub-band wedge.
                 tf.translation = cam_pos + to_moon * dist;
                 let size = if hidden {
                     0.0
@@ -721,7 +721,7 @@ mod tests {
     use crate::dev_state::DebugState;
     use crate::wmo_portal::CameraInteriorClaim;
 
-    /// The moonrise-halo lag regression (decision 0504): with the camera moving every frame, the
+    /// The moonrise-halo lag regression: with the camera moving every frame, the
     /// glare quad's rendered pose (`GlobalTransform`) must be placed from the SAME frame's camera —
     /// zero error. The old plain-`Update` wiring read the camera's `GlobalTransform` (synced only in
     /// `PostUpdate`), placing the quad from the *previous* frame's camera: this exact harness
@@ -822,7 +822,7 @@ mod tests {
         })
     }
 
-    /// The `[glare+0x30]` slew (`0x6cf59b`–`0x6cf5ea`, 0508): asymmetric LINEAR rates — rise capped
+    /// The `[glare+0x30]` slew (`0x6cf59b`–`0x6cf5ea`): asymmetric LINEAR rates — rise capped
     /// per body, fall shared and slower — and it clamps to the target instead of overshooting.
     #[test]
     fn flare_slew_is_asymmetric_linear_and_never_overshoots() {

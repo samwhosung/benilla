@@ -16,7 +16,7 @@
 //! pooling), and the director's own 3-cast
 //! apitrace shows the impact flash at the same +16-frame offset every cast — the apparent
 //! cast-to-cast scatter is particle randomness plus the moving cast-anim hands, not clock
-//! phase (decisions 0855/0856/0858). The canonical creature consumer is the eyelid:
+//! phase. The canonical creature consumer is the eyelid:
 //! its scale is `0` (lid retracted, eye open) for ~96% of the loop and `1` (lid full, eye shut)
 //! for ~100 ms — the blink. Without this pass the eyelid sits at its default identity scale
 //! (full size) forever: eyes shut.
@@ -26,7 +26,7 @@ use bevy::prelude::*;
 use benilla_assets::GlobalBone;
 
 /// One channel's write target: a live joint entity (the doodad/effect/booth lane) or a bone index
-/// into the host's [`super::RigPose`] locals (the collapsed unit lane, decision 0724).
+/// into the host's [`super::RigPose`] locals (the collapsed unit lane).
 enum SeqTarget {
     Joint(Entity),
     Bone(u16),
@@ -49,7 +49,7 @@ pub struct GlobalSeqDrive {
     /// by the widget's own `OnUpdate` (`0x76d7f0`) and by nothing else. So a UI model tile writes
     /// its pane's clock here every frame it draws and the phase rides the pane, not the world:
     /// a pane whose frame is hidden stops its clock, and the spin resumes where it stopped.
-    /// `None` — every world lane — is the world scene's free-running clock (decision 2046).
+    /// `None` — every world lane — is the world scene's free-running clock.
     clock: Option<f64>,
     /// Paused: skip the joint writes (the doodad host gates animation to drawn instances — the
     /// ref's kernel ticks at draw time (`0x707680`), so a culled model isn't evaluated). Creatures
@@ -80,7 +80,7 @@ impl GlobalSeqDrive {
         })
     }
 
-    /// The collapsed-rig lane (decision 0724): channels write the host's [`super::RigPose`]
+    /// The collapsed-rig lane: channels write the host's [`super::RigPose`]
     /// locals by bone index — no joint entities exist. Same `None` gate as [`Self::new`].
     pub fn new_rig(global_bones: &[GlobalBone], nbones: usize) -> Option<Self> {
         let bones: Vec<_> = global_bones
@@ -214,7 +214,7 @@ mod tests {
         }
     }
 
-    /// The anchor law (0856): a FRESH drive stamps its attach on its first tick, so a drive
+    /// The anchor law: a FRESH drive stamps its attach on its first tick, so a drive
     /// spawned later reads a SMALLER cursor than one spawned earlier (per-instance phase — two
     /// creatures attached on different frames blink at different times). Ticks are
     /// deterministic via `TimeUpdateStrategy::ManualDuration`.

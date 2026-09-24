@@ -1,5 +1,5 @@
 //! The **effect lane** — the render-world half of the shared effect stream (decisions 0732
-//! P1/P2, 0733): one vertex buffer + one per-frame index stream for every dynamic-effect
+//! P1/P2): one vertex buffer + one per-frame index stream for every dynamic-effect
 //! family, drawn as directly-constructed [`Transparent3d`] items.
 //!
 //! The shape is bevy_ui_render's (`draw_indexed(range, 0, 0..1)` over a shared `RawBufferVec`,
@@ -12,9 +12,9 @@
 //!   against M2 blend batches, model-particle instances and the sky ladder is unchanged by
 //!   construction;
 //! - **prepare** (after `PhaseSort`) rebases each draw's vertices against its target view's
-//!   camera position (0733 §2 — the `ViewUniform.world_position` source value, so the shader's
+//!   camera position (the `ViewUniform.world_position` source value, so the shader's
 //!   reconstruction is exact; decal draws are exempt and stay absolute for the
-//!   `DECAL_WORLD_CLIP` mesh-matrix transform, 0781), uploads them, then walks the sorted
+//!   `DECAL_WORLD_CLIP` mesh-matrix transform), uploads them, then walks the sorted
 //!   items building the frame's
 //!   index stream in draw order and **merging sort-adjacent items that share (pipeline,
 //!   texture, light, fog)** into one draw call. The merge rides bevy's own sorted-phase
@@ -23,7 +23,7 @@
 //!   exact mechanism. Bevy's mesh batcher leaves items whose main entity owns no registered
 //!   mesh untouched (0732 audit III), so nothing else rewrites the ranges.
 //!
-//! Pipeline variants (0733 §4): Add = premultiplied-alpha + the shader's gamma `rgb·a` fold,
+//! Pipeline variants: Add = premultiplied-alpha + the shader's gamma `rgb·a` fold,
 //! Alpha = standard, Opaque = no blend with depth-write ON (in the transparent bracket at the
 //! owner rung — the 0719 reference law), Multiply = bevy's `AlphaMode::Multiply` state (the
 //! blob shadow's modulate; `ModelBlend::Mod` at α=1), Mod2x = 0528's `(Dst, Src)`. The decal
@@ -93,7 +93,7 @@ struct ExtractedDraw {
     no_depth_test: bool,
     /// Vertex range in the shared stream.
     range: Range<u32>,
-    /// A booth's scene-light override (0539 §5); `None` = the world's shared light buffer.
+    /// A booth's scene-light override; `None` = the world's shared light buffer.
     light: Option<Buffer>,
     /// The target-pixel clip rect — see [`super::buffer::EffectDrawSpec::clip`].
     clip: Option<Vec4>,
@@ -218,7 +218,7 @@ impl EffectMeta {
 /// Per-(texture, light-buffer) bind groups (texture + sampler + light blob + params uniform),
 /// cached across frames — invalidated by that image's asset events, mirroring bevy_ui_render's
 /// cache. The light key is `None` for the world's shared buffer (startup-created, never
-/// re-created, so it cannot stale a cached group) or a booth scene blob's id (0539 §5).
+/// re-created, so it cannot stale a cached group) or a booth scene blob's id.
 #[derive(Resource, Default)]
 pub struct EffectBindGroups {
     images: HashMap<(AssetId<Image>, Option<BufferId>), BindGroup>,
@@ -269,11 +269,11 @@ pub fn init_effect_pipeline(mut commands: Commands, asset_server: Res<AssetServe
 pub struct EffectPipelineKey {
     samples: u32,
     hdr: bool,
-    /// The draw's blend — the whole state-variant axis (0733 §4).
+    /// The draw's blend — the whole state-variant axis.
     blend: EffectBlend,
     /// The rasterizer depth-bias constant (the decal family's coplanarity settle; 0 for
     /// free-floating geometry). Three values exist ({0, 8192, 32768}), so the key space stays
-    /// small. Nonzero ALSO selects the `DECAL_WORLD_CLIP` transform (0781): a coplanar decal
+    /// small. Nonzero ALSO selects the `DECAL_WORLD_CLIP` transform: a coplanar decal
     /// keeps absolute verts and runs the mesh path's `clip_from_world`, so its depth ties
     /// against the drawn ground within the bias.
     raster_bias: i32,
@@ -298,7 +298,7 @@ impl SpecializedRenderPipeline for EffectPipeline {
             VertexStepMode::Vertex,
             vec![
                 // position (camera-relative — prepare rebased it; 0733 §2. Decal draws are
-                // the exception: absolute world-space, transformed by `clip_from_world`; 0781)
+                // the exception: absolute world-space, transformed by `clip_from_world`)
                 VertexFormat::Float32x3,
                 // uv
                 VertexFormat::Float32x2,
@@ -306,7 +306,7 @@ impl SpecializedRenderPipeline for EffectPipeline {
                 VertexFormat::Float32x4,
             ],
         );
-        // The blend states each family's material carried (0733 §4): Add/Alpha/Opaque are the
+        // The blend states each family's material carried: Add/Alpha/Opaque are the
         // P1 trio; Multiply is bevy's own `AlphaMode::Multiply` state (mesh.rs:2486 — the blob
         // shadow's `dst·lerp(1, src, α)` with the shader-side premultiply); Mod2x is 0528's
         // `(Dst, Src)` = `2·src·dst` (rain's verified state, ARMORREFLECT's law).
@@ -354,7 +354,7 @@ impl SpecializedRenderPipeline for EffectPipeline {
         // The decal family (nonzero raster bias ⇔ ground-coplanar): absolute verts through
         // `clip_from_world` — the same matrix, hence the same rounding, as the world-mesh
         // shaders whose depth the bias must settle against. `prepare_effects` skips these
-        // draws' cam-relative rebase on the same predicate (decision 0781).
+        // draws' cam-relative rebase on the same predicate.
         if key.raster_bias != 0 {
             shader_defs.push("DECAL_WORLD_CLIP".into());
         }
@@ -363,11 +363,11 @@ impl SpecializedRenderPipeline for EffectPipeline {
         if key.lit {
             shader_defs.push("EFFECT_LIT".into());
         }
-        // `$WOW_PARTICLE_FLAT` — the fragment-input A/B (B16): solid magenta, no inputs.
+        // `$WOW_PARTICLE_FLAT` — the fragment-input A/B: solid magenta, no inputs.
         if std::env::var_os("WOW_PARTICLE_FLAT").is_some() {
             shader_defs.push("WOW_PARTICLE_FLAT".into());
         }
-        // `$WOW_PARTICLE_NODEPTH` — the occlusion A/B (B16): force the depth COMPARE to
+        // `$WOW_PARTICLE_NODEPTH` — the occlusion A/B: force the depth COMPARE to
         // `Always`, splitting "nothing is emitted" from "emitted and the depth buffer eats it".
         let depth_compare =
             if key.no_depth_test || std::env::var_os("WOW_PARTICLE_NODEPTH").is_some() {
@@ -557,7 +557,7 @@ pub static EFFECT_DRAW_STATS: [std::sync::atomic::AtomicU32; 2] = [
 ];
 
 /// After `PhaseSort`: rebase each draw's vertices against its target view's camera position
-/// (0733 §2; decal draws are exempt — 0781), upload them, build the frame's index stream in
+/// (decal draws are exempt), upload them, build the frame's index stream in
 /// sorted-item order while merging sort-adjacent compatible items into single draws, and write
 /// the canonical fog-params rows once.
 fn prepare_effects(
@@ -569,7 +569,7 @@ fn prepare_effects(
     views: Query<&ExtractedView>,
 ) {
     let meta = &mut *meta;
-    // The rebase (0733 §2): subtract the draw's target camera position — the exact value the
+    // The rebase: subtract the draw's target camera position — the exact value the
     // view's `ViewUniform.world_position` is built from (`view/mod.rs:985`), so the shader's
     // `view_from_world`-rotation reconstruction is bitwise-consistent. The stream stays
     // world-space main-world-side (instruments read it); only the upload copy moves.
@@ -584,7 +584,7 @@ fn prepare_effects(
     }
     for draw in &meta.draws {
         // Decal draws stay ABSOLUTE: their pipeline transforms through `clip_from_world`
-        // (`DECAL_WORLD_CLIP`, the same `raster_bias != 0` predicate — decision 0781), so a
+        // (`DECAL_WORLD_CLIP`, the same `raster_bias != 0` predicate), so a
         // rebase here would shift them a full camera-position off.
         if draw.raster_bias != 0 {
             continue;
@@ -608,7 +608,7 @@ fn prepare_effects(
     }
     meta.vertices.write_buffer(&device, &queue);
 
-    // The merge walk (0733 §3, the bevy_ui_render shape): one pass over each LIVE view's sorted
+    // The merge walk (the bevy_ui_render shape): one pass over each LIVE view's sorted
     // items — the same views queue targeted, never the raw phase map (a map entry bevy hasn't
     // swept yet would carry a dead frame's indices). Every effect item's indices are appended
     // (quad pattern or identity tri-list); adjacent items sharing a [`RunKey`] fold into the
@@ -947,7 +947,7 @@ mod tests {
         c.z / c.w
     }
 
-    /// The cam-relative route (0733 §2): prepare's rebase, then rotation + `clip_from_view`.
+    /// The cam-relative route: prepare's rebase, then rotation + `clip_from_view`.
     fn depth_cam_relative(
         view_from_world: &Mat4,
         clip_from_view: &Mat4,
@@ -960,7 +960,7 @@ mod tests {
     }
 
     /// 0781's premise, demonstrated in the two routes' exact arithmetic shapes: give both the
-    /// SAME ground vertex at WoW-scale coordinates, and the cam-relative route (0733 §2)
+    /// SAME ground vertex at WoW-scale coordinates, and the cam-relative route
     /// disagrees with the world-mesh route by the ORDER OF THE WHOLE 0781-era 4096-unit bias
     /// at close camera distances — pure arithmetic divergence spending the margin that exists
     /// to settle real geometry deltas (the CPU-baked decal verts vs the GPU-transformed render
@@ -1003,14 +1003,14 @@ mod tests {
         );
     }
 
-    /// 0781's named residual, sized (B131 — the director-confirmed flicker): the decal's verts
+    /// 0781's named residual, sized (the director-confirmed flicker): the decal's verts
     /// are CPU-baked world positions, the receiver's are GPU-transformed per frame, and the two
     /// roundings displace the baked point from the drawn plane by a few ulps of the WORLD
     /// COORDINATE — millimetres at city magnitudes. The depth conflict is that displacement's
     /// component along the receiver's normal: a level street barely samples it (the y ulp at
     /// street height is micro-scale), a *sloped* receiver takes the full horizontal ulps onto
     /// its tilted normal — and the confirmed flicker walk was the Stormwind gate ramp. Model
-    /// the 3-ulp worst case (0781: "~1–3 ulps") at the walk's own coordinates across zoom and
+    /// the 3-ulp worst case ("~1–3 ulps") at the walk's own coordinates across zoom and
     /// slope, and pin both ends of the sizing.
     ///
     /// **Since 1817 it pins the raise as well as the floor.** The residual is 2.59× the 0781-era

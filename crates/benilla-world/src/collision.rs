@@ -94,7 +94,7 @@ pub(crate) fn liquid_layers() -> CollisionLayers {
 /// streaming out, an entity despawning).
 ///
 /// It exists because a cached collision *answer* is only as good as the world it was computed
-/// against. The one consumer today is the creature ground clamp's cast gate (decision 1357), which
+/// against. The one consumer today is the creature ground clamp's cast gate, which
 /// holds a hit while the unit's own inputs are unchanged: the unit's position and the colliders
 /// under it. It could see the first half change and not the second, so a unit that took its answer
 /// from a half-arrived world — the terrain under a building, before the building's own floor
@@ -192,7 +192,7 @@ pub struct MoverTraceExclusions(pub bevy::ecs::entity::EntityHashSet);
 ///
 /// The **one-sidedness** is the whole reason these are not avian's own calls: the reference
 /// discards a face approached from its back before computing any distance, and that gate has to
-/// run where candidates are enumerated (see [`one_sided`]'s header, decisions 0967/0968).
+/// run where candidates are enumerated (see [`one_sided`]'s header).
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct WorldCollision<'w, 's> {
     ms: MoveAndSlide<'w, 's>,
@@ -225,7 +225,7 @@ impl WorldCollision<'_, '_> {
         ))
     }
 
-    /// **The waterline leg of the camera trace — a RAY, not the probe sphere** (decision 2185).
+    /// **The waterline leg of the camera trace — a RAY, not the probe sphere**.
     ///
     /// `cameraWaterCollision` is a trace mask (`0x50e5ec` ORs `0xf0000` into the word the solver
     /// hands its three collision queries), and the query that word rides is a **line segment**:
@@ -304,7 +304,7 @@ impl WorldCollision<'_, '_> {
     /// gate exists because a *body* must not stand on a face wound away from it, and a camera has
     /// no such contract — it just must not end up inside geometry, from either side.
     ///
-    /// **Two legs, two shapes, and that is the point** (decision 2185). The solid world is swept
+    /// **Two legs, two shapes, and that is the point**. The solid world is swept
     /// with the caller's probe sphere, which is benilla's own margin against a wall's near plane;
     /// the waterline is a bare ray, which is the reference's own geometry and the only shape that
     /// fits through the clearance the corridor budgets for it — see
@@ -720,7 +720,7 @@ mod liquid_trace_mask {
         }
     }
 
-    /// **The probe that did not fit through its own corridor** (decision 2185).
+    /// **The probe that did not fit through its own corridor**.
     ///
     /// The corridor lifts the camera's sweep origin to `surface + 2/9 = 0.2222` yd. That is a
     /// **reference** constant, and the reference's trace is a bare ray: `0x672170` takes a start,
@@ -797,7 +797,7 @@ mod liquid_trace_mask {
     }
 }
 
-/// The contact pipeline we deliberately do not run (decision 1232, disabled in `world_plugins`).
+/// The contact pipeline we deliberately do not run (disabled in `world_plugins`).
 ///
 /// These two tests are a matched pair: the first shows the cost was real — a kinematic trimesh
 /// resting in the static world generates contact pairs, and avian then computes a trimesh-vs-trimesh

@@ -103,7 +103,7 @@ fn wmo_group_census() {
     );
     // The root's MFOG table, once. Every group line below names the ≤4 record indices it points
     // at, and the fog a room ends up wearing is one of these — which is the whole diagnosis when a
-    // far room reads as a flat wash of one colour (B335: SFK's `0xff28444f` at end 106.9 yd). The
+    // far room reads as a flat wash of one colour (SFK's `0xff28444f` at end 106.9 yd). The
     // colour is decoded exactly as [`super::super::fog`] decodes it (`0xAARRGGBB`).
     for (i, f) in subject.model.fogs.iter().enumerate() {
         println!(
@@ -332,7 +332,7 @@ fn wmo_group_census() {
 ///   cargo test -p benilla wmo_pin_probe -- --ignored --nocapture
 /// ```
 ///
-/// The subject defaults to [`UNDERCITY`] (B26); `WOW_PIN_WMO` + `WOW_PIN_UID` + `WOW_PIN_MAP` +
+/// The subject defaults to [`UNDERCITY`]; `WOW_PIN_WMO` + `WOW_PIN_UID` + `WOW_PIN_MAP` +
 /// `WOW_PIN_TILE` retarget it at another placement. Output is Blizzard-derived — keep it out of the repo.
 #[test]
 #[ignore = "instrument: aimed by WOW_PIN_*, run by hand — cargo test -p benilla-world --lib wmo_portal::audit::pin -- --ignored --nocapture"]

@@ -101,7 +101,7 @@ pub fn doodad_fade_alpha(radius: f32, horiz_dist: f32) -> f32 {
 
 /// The fade-band edges for a fader of bounding-sphere `radius`: `(near, far)` horizontal
 /// CENTRE distances — [`doodad_fade_alpha`] is `1.0` at `d ≤ near`, `0.0` at `d ≥ far`, and
-/// feathers between. `None` for a never-fader. The static-gx exile scan (B2, decision 1431)
+/// feathers between. `None` for a never-fader. The static-gx exile scan (B2)
 /// classifies placements on these edges, derived from the SAME bucket table the per-frame
 /// alpha evaluates — one source, so the two verdicts can never disagree.
 pub fn fade_band(radius: f32) -> Option<(f32, f32)> {
@@ -125,19 +125,19 @@ pub fn fade_band(radius: f32) -> Option<(f32, f32)> {
 /// distance fade; CGObjects → appear fade). [`apply_render_fade`] drives it.
 ///
 /// It owns the part's **alpha** and its **material** while it lives; [`crate::interior`]'s
-/// classifier keeps owning the part's **light law** right through the ramp (decision 0755), and
+/// classifier keeps owning the part's **light law** right through the ramp, and
 /// the fade reads that law each frame to pick the blend twin of the right family
 /// ([`FadeMaterials::material_for`]) — so an entity that streams in indoors ramps up already lit by
 /// its room instead of appearing under exterior light and snapping to the room's when it latches.
 ///
 /// One channel, **two curves**, and that is the reference's shape rather than a generalisation of
-/// ours (decisions 2198/2203). Both ramps write this same per-instance alpha, but they are different
+/// ours. Both ramps write this same per-instance alpha, but they are different
 /// functions armed by different subsystems: the appear ramp is `FadeTo 0x614f80` eased cubically by
 /// the object's own vtable slot 14, and the teardown ramp is the `SWModelFadeout` pump `0x672ef0`
 /// smoothstepping a *detached* model the object left behind. [`FadeCurve`] is which one; the
 /// teardown case is `{curve: Smoothstep, from: the live α, to: 0, duration: 2 s}` plus a
 /// despawn-on-complete system ([`DespawnFade`]), the appear case
-/// `{curve: Cubic, from: 0, to: 1, duration: 2 s}`. (Decision 0032; teardown fidelity corrected in
+/// `{curve: Cubic, from: 0, to: 1, duration: 2 s}`. (teardown fidelity corrected in
 /// 0067, its mechanism pinned in 2198 and its curve in 2203.)
 #[derive(Component, Clone)]
 pub struct RenderFade {
@@ -204,8 +204,7 @@ pub fn fade_alpha(from: f32, to: f32, t: f32) -> f32 {
 }
 
 /// The reference's **teardown** render-alpha — the `SWModelFadeout` pump `0x672ef0`, which is
-/// what drives a model handed to the scheduler `0x672df0` by the base OnDeactivate `0x6145e0`
-/// (decision 2203):
+/// what drives a model handed to the scheduler `0x672df0` by the base OnDeactivate `0x6145e0`:
 ///
 /// ```text
 /// t = clamp((1 − age_ms · 0.0005 [0x80c698]) · startAlpha, 0, 1)
@@ -237,14 +236,14 @@ pub const TEARDOWN_MIN_ALPHA: f32 = 0.01;
 /// benilla keeps that alpha on the MESH side in the per-part `MeshTag` (the appear/despawn ramp,
 /// the self-avatar feather, the doodad fade — three writers, one channel). This component is the
 /// same number published **per model instance**, for the consumers that are not meshes and cannot
-/// read a `MeshTag`: an emitter's particles and a ribbon's strip, whose alpha is per-vertex colour
-/// (decision 0827). Missing ⇒ `1.0`.
+/// read a `MeshTag`: an emitter's particles and a ribbon's strip, whose alpha is per-vertex colour.
+/// Missing ⇒ `1.0`.
 ///
 /// An **attached** model inherits its parent's, which is why an item's effects read their WEARER's
 /// (the `0x714000` recursion: a child model with `[model+0x1cc] ≠ 0` composes onto the parent's
 /// computed colours and alpha — `0x714260`'s `[ebp+0x14]`).
 /// That inheritance is [`ParentModel`] + [`ModelAlphas`], never a spawn site pointing at the top
-/// of the chain by hand (decision 0833).
+/// of the chain by hand.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct ModelAlpha(pub f32);
 
@@ -270,7 +269,7 @@ pub struct ModelFade(pub f32);
 /// composes each child onto its parent's *computed* colour and alpha) and every spawn site knows
 /// exactly one thing for certain: who it just attached itself to. Asking a site for the far end of
 /// the chain instead is what left a weapon's glow — two links down — with no alpha source at all,
-/// blazing at full strength over a character that had not faded in yet (decision 0833).
+/// blazing at full strength over a character that had not faded in yet.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct ParentModel(pub Entity);
 
@@ -335,7 +334,7 @@ impl ModelAlphas<'_, '_> {
 ///
 /// - the **appear** ramp: none ⇒ opaque; pending ⇒ 0 (the entity is not being shown yet, so its
 ///   effects must not be either — this is the login symptom); live ⇒ the cubic ramp,
-/// - × the **despawn** ramp (our stream-out look, 0032/0067) once armed,
+/// - × the **despawn** ramp (our stream-out look) once armed,
 /// - × the **self-avatar** zoom feather, which applies to the player's own body alone,
 /// - × the **aura** alpha (`crate::aura_visual` — stealth's 0.3, invisibility's 0.5, …): the ramped
 ///   CharProc-14 product. In the reference this is not a separate channel at all — the aura
@@ -493,7 +492,7 @@ mod unit_render_alpha_tests {
         );
     }
 
-    /// **The two ramps are different functions** (decision 2203), and this is the test that would
+    /// **The two ramps are different functions**, and this is the test that would
     /// have caught benilla running one of them backwards in place of the other. The appear ease is
     /// the CGObject's own (`0x614a90`, `t³`); the teardown ease is the scene-node fadeout
     /// scheduler's (`0x672ef0`, `smoothstep(1 − t)`), and they agree only at the endpoints.
@@ -656,7 +655,7 @@ pub fn self_model_fade_alpha(dist: f32, nearclip: f32, window: f32) -> f32 {
 /// cost is nil.
 ///
 /// The material is resolved from [`FadeMaterials`] + the live [`crate::interior::InteriorLit`]
-/// every frame rather than from a pair latched at arm time (decision 0755), so a part that
+/// every frame rather than from a pair latched at arm time, so a part that
 /// classifies (or re-classifies) *during* its ramp follows its room's light immediately instead of
 /// finishing the ramp on whichever law happened to hold when the fade armed.
 #[allow(clippy::type_complexity)]
@@ -809,7 +808,7 @@ pub(crate) fn arm_appear_fade(
     let now = time.elapsed_secs();
     let shown = !viewer.world_covered;
     let mut armed = 0usize;
-    // Of those, the world-ROOT billboard cards (decision 0836). Called out separately because a
+    // Of those, the world-ROOT billboard cards. Called out separately because a
     // card reaches this system through nothing but its own spawn — no tree walk can find it — so
     // "how many cards armed" is the one readout that separates "the cards fade" from "the cards
     // are simply absent from the ramp", which is what they were.
@@ -872,7 +871,7 @@ pub(crate) fn retire_unit_appear_fade(
 /// draws with, across every fade in the client: `cutout` = the steady opaque/alpha-test material,
 /// `blend` = its `AlphaMode::Blend` twin. Attached to every fadeable entity submesh at spawn.
 ///
-/// Held persistently rather than copied into each fade (decision 0755): a latched pair is a
+/// Held persistently rather than copied into each fade: a latched pair is a
 /// snapshot of the part's light law at arm time, and a law that changes mid-ramp — a streamed
 /// indoor unit classifying while it appears, an NPC crossing a doorway as it fades out — cannot be
 /// expressed by one. Every fade instead resolves its material *per frame* through
@@ -883,10 +882,10 @@ pub struct FadeMaterials {
     pub blend: Handle<WowModelMaterial>,
     /// The interior-BAKE variant's blend twin (probe-lit): a fade on a bake-classified part rides
     /// this so its light stays the room's probe through the feather instead of jumping to the
-    /// exterior twin's lit-outdoor intensity (0355). `None` for parts without a bake variant.
+    /// exterior twin's lit-outdoor intensity. `None` for parts without a bake variant.
     pub bake_blend: Option<Handle<WowModelMaterial>>,
     /// The depth-prime twin material ([`crate::model_render::zfill_material`] — the reference's
-    /// `M2UseZFill` clone, `0x707f7d`, decision 0831). While this
+    /// `M2UseZFill` clone, `0x707f7d`). While this
     /// part's instance alpha sits in `(0, 1)`, [`sync_zfill_twins`] keeps a colour-masked,
     /// z-writing child mesh alive on it, drawn before the model's colour parts — one blended layer
     /// everywhere, no self-overlap darkening. `None` for a batch whose material disables
@@ -903,7 +902,7 @@ impl FadeMaterials {
     /// ([`crate::player::apply_self_model_fade`]) — agrees on the answer regardless of which runs
     /// last in the frame. Feathering picks the law's **blend** twin (the probe-lit one indoors, so
     /// the room's light rides the fade rather than jumping to the exterior twin's outdoor
-    /// intensity — 0355); settled hands back the law's **steady** material, which is the
+    /// intensity); settled hands back the law's **steady** material, which is the
     /// classifier's own choice ([`crate::interior::InteriorLit::steady_material`]).
     pub fn material_for<'a>(
         &'a self,
@@ -923,15 +922,15 @@ impl FadeMaterials {
 /// [`FadeMaterials`] is built from. `blend: None` means the batch cannot feather at all (a
 /// WMO-display batch builds no twin), which is the one legitimate reason for a part to spawn
 /// opaque while its unit is still ramping. A MULTIPLY batch (Mod/Mod2x) passes its **steady self**
-/// as the twin: its blend equation reads no alpha (decision 0528), so no material swap can feather
+/// as the twin: its blend equation reads no alpha, so no material swap can feather
 /// it — instead it arms the ramp like any other part and `wow_model.wgsl` lerps its colour toward
 /// the blend identity by the tag alpha — 0865's mechanism, since proven the reference's own
-/// (preset 5 lerps the source colour by the instance alpha; decision 1489).
+/// (preset 5 lerps the source colour by the instance alpha).
 pub struct FadeSet<'a> {
     pub steady: &'a Handle<WowModelMaterial>,
     pub blend: Option<&'a Handle<WowModelMaterial>>,
     pub bake_blend: Option<&'a Handle<WowModelMaterial>>,
-    /// The depth-prime twin (decision 0831). Carried here for the same reason as the rest of the
+    /// The depth-prime twin. Carried here for the same reason as the rest of the
     /// set: it is needed exactly while the batch is feathering — which a card now does too.
     pub zfill: Option<&'a Handle<WowModelMaterial>>,
 }
@@ -944,7 +943,7 @@ pub struct FadeSet<'a> {
 /// the *model*, not of how benilla happens to parent a batch: the reference has one instance alpha
 /// (`CM2Model+0x19c`) that every batch of the model draws through, billboard batches included, so a
 /// lane that skips this is a batch that pops opaque over a body still fading in. Both card lanes did
-/// exactly that until decision 0836.
+/// exactly that until.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PartFade {
     /// No ramp to join (unit already appeared, or the batch cannot feather): open opaque.
@@ -1066,9 +1065,9 @@ impl DespawnFade {
 /// the whole tree fades as one instead of the body thinning around a still-opaque weapon.
 ///
 /// **And the tree is not the whole model.** A BILLBOARD batch is a world ROOT that merely *follows*
-/// an anchor inside the tree (decision 0153), so the walk cannot reach it — the cards are picked up
+/// an anchor inside the tree, so the walk cannot reach it — the cards are picked up
 /// by testing their follow-anchor against the walked set, the same idiom
-/// [`crate::player::apply_self_model_fade`] uses (decision 0836).
+/// [`crate::player::apply_self_model_fade`] uses.
 pub(crate) fn apply_despawn_fade(
     time: Res<Time>,
     mut commands: Commands,
@@ -1116,13 +1115,13 @@ pub(crate) fn apply_despawn_fade(
 }
 
 /// Arm one fadeable entity's teardown ramp, **from the alpha it is actually showing**. The
-/// scheduler is handed `obj+0xf4`, the object's live transition alpha (decision 2203), so a
+/// scheduler is handed `obj+0xf4`, the object's live transition alpha, so a
 /// model torn down mid-appear-fade ramps down from where it stood — where a hardcoded `1.0` would
 /// snap it opaque first and then fade, a visible pop in the one case the fade exists to avoid.
 /// Ours lives in the part's `MeshTag`, which is the same channel the ramp is about to write.
 ///
-/// No material is chosen here: [`apply_render_fade`] resolves it per frame from the part's live law
-/// (0755), so a bake-classified part fades out probe-lit — and keeps doing so if it re-classifies
+/// No material is chosen here: [`apply_render_fade`] resolves it per frame from the part's live law,
+/// so a bake-classified part fades out probe-lit — and keeps doing so if it re-classifies
 /// mid-ramp, which a pair latched at this instant could not express. `try_*`: a child (a held item
 /// mid-re-resolve, a gear swap) can be despawned by its own owner in the same frame — the
 /// lifetime contract in [`arm_appear_fade`].
@@ -1178,7 +1177,7 @@ fn arm_despawn_descendants(
     }
 }
 
-/// The model-fade lane's own registrations (decision 1163, stage zero).
+/// The model-fade lane's own registrations (stage zero).
 ///
 /// These five systems were registered by `EntitiesPlugin` — a *gameplay* plugin — for no reason
 /// beyond history: the fade lane grew inside the entity streamer and never claimed a plugin of its
@@ -1274,7 +1273,7 @@ mod chain_tests {
 mod tests {
     use super::*;
 
-    /// The `0x714000` recursion as a lookup (decision 0833). A weapon's enchant glow is **two**
+    /// The `0x714000` recursion as a lookup. A weapon's enchant glow is **two**
     /// links from the body wearing it — glow → item → wearer — and the director's report is what
     /// happens when a lane has no expression for that at all: the glow's particles blazed at full
     /// strength over a character that was still at alpha 0, because the site that spawned them
@@ -1577,7 +1576,7 @@ mod tests {
         }
     }
 
-    /// **The login symptom, at its cause** (decision 0827): a unit whose appear-fade has not been
+    /// **The login symptom, at its cause**: a unit whose appear-fade has not been
     /// armed yet is not being shown at all, so its render alpha is **0** — and the item sparkle
     /// that reads this number is therefore invisible too, instead of burning at full strength in
     /// front of a body that hasn't faded in. Then the ramp: the same cubic the mesh parts run, so

@@ -1,4 +1,4 @@
-//! Entity ground-shade (decision 0173): units, players, and GameObjects sample the terrain MCSH under
+//! Entity ground-shade: units, players, and GameObjects sample the terrain MCSH under
 //! them **dynamically** and dim their sun term when standing in baked ground shadow: a spawned
 //! unit/player/GameObject carries the SAME 2.5-lit / 0.5-MCSH-shadowed chain as an ADT doodad, driven by
 //! a per-frame MCSH sample at the object's node position and a linear intensity ramp (`0x69e770`, the
@@ -41,8 +41,8 @@
 //! only (they write through `with_alpha`), so shade rides through appear/despawn/zoom feathering.
 //!
 //! **The descendant tree is a TRANSFORM relation, not a light one, and the difference is a bug we
-//! shipped** (B373). A WMO-display GameObject's doodad props — a transport's cabin furniture — are
-//! parented under the net entity so they sail with the deck (decision 0474), but their light is
+//! shipped**. A WMO-display GameObject's doodad props — a transport's cabin furniture — are
+//! parented under the net entity so they sail with the deck, but their light is
 //! their own baked MODD colour folded into an SH probe, the reference's `CMapDoodadDef` provider
 //! (`0x6a8050`) rather than the WENTITY node this file models. They were nonetheless in the walk,
 //! and since the shade byte overlaps the probe slot in bits 6..=13, every one of them was pushed
@@ -89,7 +89,7 @@ const AMBIENT_RAMP_PER_SEC: f32 = 2.0;
 /// exactly how 0809 talked itself into pinning every unit here.
 const DAYNIGHT_T: f32 = 0.75;
 
-/// The LIT outdoor target (decision 0821). The reference's lit target is intensity **2.5**, and this is
+/// The LIT outdoor target. The reference's lit target is intensity **2.5**, and this is
 /// **1.0** — not because the 2.5 is wrong, but because our shader cannot express it: `wow_model.wgsl`
 /// caps the gain with `min(intensity, 1.0)`, so every value from 2.5 down to 1.0 renders *identically*.
 ///
@@ -110,7 +110,7 @@ const LIT_T: f32 = 0.75;
 const RAMP_EPS: f32 = 1.0 / 640.0;
 
 /// The per-entity light-node state, on the net entity **root** (unit / player / GameObject) — the
-/// CPU twin of the reference's per-object light node (decision 0354): the intensity chase
+/// CPU twin of the reference's per-object light node: the intensity chase
 /// (`[+0xa4]`→`[+0xf8]`, held as the normalized mix `t` over the 2.5→0.5 span) and the ambient
 /// word chase (`[+0x9c]`→`[+0xf4]`) — the pair `0x69e770` steps every frame.
 #[derive(Component)]
@@ -130,8 +130,7 @@ pub struct GroundShade {
     pub(crate) indoor: bool,
     /// Standing on an outdoor-class WMO surface (street/deck/porch — `MOGI & 0x48`), published by
     /// the classifier: the MCSH verdict of the terrain BENEATH the building is overridden by the
-    /// lit target ([`LIT_T`]; the reference's own value here is intensity 2.5) — byte-verified
-    /// (0477/0480):
+    /// lit target ([`LIT_T`]; the reference's own value here is intensity 2.5) — byte-verified:
     /// the down-ray attach's WMO branch sets the skip-shadow bit `[node+0xd]|=0x2` (`0x6a8bc7`,
     /// every node subclass), the terrain branch clears it (`0x6a8bed`), and the exterior intensity
     /// leg commits the constant 2.5 whenever it's set (`0x69e483`→`0x69e4ad` — the MCSH sample
@@ -183,7 +182,7 @@ impl GroundShade {
     /// sample, so a root stepping back onto terrain resumes from it); otherwise the MCSH verdict
     /// stands, for a unit exactly as for a GameObject — the target law is byte-shared and single-site
     /// (`69e4ad`/`69e496`) and we model the registered
-    /// delivery that consumes it (0814).
+    /// delivery that consumes it.
     fn effective_target(&self) -> f32 {
         if self.indoor {
             DAYNIGHT_T
@@ -231,7 +230,7 @@ impl GroundShade {
 /// So the faithful value is **1.0**, or 0.5 from a SINGLE MCSH sample at the doodad's own
 /// footprint — `0x698c50` is a one-shot queue drain that unlinks each entry, so the verdict
 /// freezes at the pose the prop became resident at, and never ramps. Pushing the host's ramped,
-/// re-sampled byte onto these parts was a divergence (decision 2047, the other half of 2031).
+/// re-sampled byte onto these parts was a divergence (the other half of 2031).
 #[derive(Component)]
 pub struct DoodadDefLit;
 
@@ -376,7 +375,7 @@ pub(crate) fn update_ground_shade(
     // A card is a world ROOT (the facing system owns its transform), so the descendant walk below
     // cannot reach one — it carries its owner instead. Disjoint from `parts` by the filter above.
     // It asks the same payload question: an interior prop's glow card carries its doodad's probe
-    // slot, and this pass reaches it by walking UP from the card's owner (B373).
+    // slot, and this pass reaches it by walking UP from the card's owner.
     mut cards: Query<(
         &crate::billboard::BillboardCard,
         &mut MeshTag,
@@ -396,7 +395,7 @@ pub(crate) fn update_ground_shade(
     dirty_roots: Res<ShadeDirtyRoots>,
     mut self_log: Local<f32>,
 ) {
-    // The map persists across frames (decision 1979): a settled root's byte is already in it,
+    // The map persists across frames: a settled root's byte is already in it,
     // and re-inserting ~1.3 k entries a frame was the walk's cost. A despawned root's entry is
     // dead weight nothing reads — entity ids are generational, so a reuse never aliases it.
     let Some(streamer) = streamer else {
@@ -447,12 +446,12 @@ pub(crate) fn update_ground_shade(
             }
         }
         // Indoors the MCSH sample is moot: the day/night intensity target is 1.0 (the reference's
-        // interior `[+0xf8]`, decision 0354). The sample above still ran its movement gate, so
+        // interior `[+0xf8]`). The sample above still ran its movement gate, so
         // stepping back outside resumes from a fresh MCSH verdict.
         let target = shade.effective_target();
         // `WOW_INTERIOR_LOG=1`: one line whenever a node's intensity target moves — the live
         // instrument for "which stage is this character actually in?" — MCSH-shadowed 0.5 ⇒ t 1;
-        // exterior lit and day/night both ⇒ t 0.75 / committed 1.0 while the gain cap stands (0821).
+        // exterior lit and day/night both ⇒ t 0.75 / committed 1.0 while the gain cap stands.
         if (target - shade.logged_target).abs() > f32::EPSILON && interior_log_enabled() {
             eprintln!(
                 "[node] root {root:?} at ({:.1}, {:.1}, {:.1}) -> target t {target:.2} \
@@ -530,7 +529,7 @@ pub(crate) fn update_ground_shade(
         }
     }
     // The cards (0788's loose end). A card belongs to the same light node as the body it hangs off —
-    // the reference shades every batch of an object through one node (0778) — but it is a world root,
+    // the reference shades every batch of an object through one node — but it is a world root,
     // so the walk above skips it and it kept the lit rung while its owner dimmed. 0811 scoped this to
     // GameObjects because 0809 had pinned units flat; 0814 put units back on the chase, so it is once
     // again every carried card — a torch's flame card dims with the hand that holds it. The owner (an
@@ -540,7 +539,7 @@ pub(crate) fn update_ground_shade(
     for (card, mut tag, lit, own_probe, own_def) in &mut cards {
         // Both questions again, and a card needs them at least as much: it is a world ROOT, so
         // this pass finds its owner by walking UP — which is how a deck lantern's glow card and a
-        // cabin prop's alike reached the host GameObject that does not light them (B373, 2047).
+        // cabin prop's alike reached the host GameObject that does not light them (2047).
         if own_def {
             continue;
         }
@@ -671,7 +670,7 @@ mod tests {
         );
     }
 
-    /// **The payload question, both populations** (B373). The guard used to ask "is this part on
+    /// **The payload question, both populations**. The guard used to ask "is this part on
     /// the classifier's Bake law", which is only one of the two ways a `MeshTag` comes to hold a
     /// probe slot; a WMO doodad prop holds one from spawn and carries no `InteriorLit` at all.
     /// A transport's cabin furniture is where the second population lands inside an entity's

@@ -17,7 +17,7 @@
 //! claimed for `benilla-world`; everything in [`crate::run`] and not here is claimed for the game.
 //! The `STUB` block is the spike's finding: the gameplay resources the engine reads *as data* and
 //! which a stub therefore satisfies. Each stub is a line item on the work order — the engine should
-//! end up not needing it (decision 1160, "the nine wires"), and until it doesn't, the stub says so
+//! end up not needing it ("the nine wires"), and until it doesn't, the stub says so
 //! out loud rather than the coupling hiding inside a working game.
 
 use bevy::camera::{PerspectiveProjection, Projection};
@@ -90,7 +90,7 @@ pub fn run(build: BuildId) -> AppExit {
     // spike is one run instead of one rebuild per finding. Bevy's default error handler panics on
     // the first system whose parameters don't validate, so a viewer missing N gameplay resources
     // reports exactly one of them; downgraded to `warn`, a single run names all N and the log IS
-    // the work order (decision 1160). Off by default, because for the finished enforcer the panic
+    // the work order. Off by default, because for the finished enforcer the panic
     // is the point: wire a game concept back into the engine and this binary must stop, loudly.
     if std::env::var("WOW_WORLDVIEW_SURVEY").as_deref() == Ok("1") {
         warn!("worldview: SURVEY mode — unmet dependencies are warnings, not panics");
@@ -103,7 +103,7 @@ pub fn run(build: BuildId) -> AppExit {
     //
     // This exists because the enforcer rotted. It is a binary whose entire purpose is to fail
     // loudly the day a game concept is wired back into the engine — and it had been failing on
-    // frame one, unnoticed, because nothing ran it (decision 1164). A tripwire nobody trips is not
+    // frame one, unnoticed, because nothing ran it. A tripwire nobody trips is not
     // a tripwire. The wall test measures the doorway on every `cargo test`; this measures the
     // other half, the coupling that crosses no symbol at all.
     let check = check_seconds();
@@ -136,7 +136,7 @@ pub fn run(build: BuildId) -> AppExit {
                 let (w, h) = v.split_once('x')?;
                 Some(UVec2::new(w.parse().ok()?, h.parse().ok()?))
             })
-            // Small + cornered for a run nothing photographs (decision 1148, the client's own
+            // Small + cornered for a run nothing photographs (the client's own
             // rule): the check reads the error log, not the framebuffer.
             .unwrap_or(if crate::bgwin::no_pixel_run() {
                 UVec2::new(640, 360)
@@ -149,7 +149,7 @@ pub fn run(build: BuildId) -> AppExit {
         } else {
             bevy::window::PresentMode::default()
         },
-        // Same rule as the client (decision 0703): an instrumented run never fights the
+        // Same rule as the client: an instrumented run never fights the
         // director's screen.
         focused: !background,
         window_level: if background {
@@ -161,7 +161,7 @@ pub fn run(build: BuildId) -> AppExit {
     }))
     .add_plugins(thread_qos::ThreadQosPlugin)
     .add_plugins(crate::bgwin::BgWinPlugin)
-    // The third launch-time platform correction, and the client's own (decision 1528): macOS's
+    // The third launch-time platform correction, and the client's own: macOS's
     // `Cmd+Q` is wired to `terminate:`, which leaves the event loop without ever running another
     // frame. Here that costs the check its verdict — `report_check` turns the `AppExit` into the
     // process exit code, and there is no `AppExit` — so the viewer wants it for the same reason
@@ -169,7 +169,7 @@ pub fn run(build: BuildId) -> AppExit {
     .add_plugins(crate::mac_quit::MacQuitPlugin);
 
     // **The cut line**, and the whole of it: everything `benilla-world` will own, in one name
-    // (decision 1164, `crate::world_plugins`). This binary and the client add the identical group,
+    // (`crate::world_plugins`). This binary and the client add the identical group,
     // so a divergence between them is no longer possible to write by accident — which is what the
     // hand-kept twin list here was for.
     app.add_plugins(crate::world_plugins::WorldPlugins);
@@ -247,7 +247,7 @@ fn report_check(exit: AppExit) -> AppExit {
          fact is parked on the game side. Decision 1160.",
         faults.len()
     );
-    // The no-install run (`WOW_DATA=`, decision 1451) fails for a different reason than 1160's,
+    // The no-install run (`WOW_DATA=`) fails for a different reason than 1160's,
     // and the run that trips it is a gate line nobody is watching — so it says which reason.
     if benilla_formats::wow_data().is_none() {
         println!(
@@ -279,7 +279,7 @@ fn report_check(exit: AppExit) -> AppExit {
 /// this binary: an ordering edge onto an unregistered system is silently dropped by Bevy, an
 /// `Option<Res<…>>` read just sees `None`, and a query filtered on a component nobody spawns
 /// simply matches nothing. All three classes were found by *static* sweeps, not by running this —
-/// the panic list is a floor on the work order, never a ceiling (decision 1163).
+/// the panic list is a floor on the work order, never a ceiling.
 fn stubs(app: &mut App) {
     // ── The world-existence gate ──────────────────────────────────────────────────────────────
     // The viewer's world is permanently live. This used to assert the *game's* session state
@@ -310,7 +310,7 @@ fn plugin(app: &mut App) {
 
 /// The one-shot frame writer behind `WOW_WORLDVIEW_SHOT` — fires once, then gives the screenshot
 /// observer a couple of seconds to reach the disk before exiting (the write is asynchronous; an
-/// immediate exit is how a "clean run" ends with no PNG, decision 0743).
+/// immediate exit is how a "clean run" ends with no PNG).
 fn shoot_and_exit(
     time: Res<Time>,
     mut commands: Commands,
@@ -338,7 +338,7 @@ fn shoot_and_exit(
 }
 
 /// The free-fly camera. The client's own `FlyCam` is gameplay-side today and comes over in stage
-/// zero (decision 1160); until it does, this is the viewer's own — deliberately the *minimum* that
+/// zero; until it does, this is the viewer's own — deliberately the *minimum* that
 /// proves the engine renders, not a second implementation to keep in step.
 #[derive(Component)]
 struct ViewCam {

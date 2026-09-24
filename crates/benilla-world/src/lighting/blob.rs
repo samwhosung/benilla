@@ -70,7 +70,7 @@ impl LightBlob {
     /// Fog with an explicit **near**, the ramp's low end (`fog_params.x`): the factor is
     /// `(far − eye_z)/(far − near)` clamped, so near is where the fog first bites and not a
     /// cosmetic. The one producer that can state one is the `<Model>` widget's `SetFogNear`
-    /// (decision 2027) — every other off-world blob leaves it at 0, which is what
+    /// — every other off-world blob leaves it at 0, which is what
     /// [`Self::fog`] passes and what `CharModelFogInfo`'s own `SetFogNear(0)` says.
     /// The farclip wall (`.w`) stays inert at `10_000`: it is a per-pixel *discard*, not a fade,
     /// and an off-world scene has no clip distance to enforce.

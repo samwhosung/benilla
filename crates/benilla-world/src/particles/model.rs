@@ -10,7 +10,7 @@
 //! ramp; over-life COLOR rides a per-instance tint clone (`WowModelExt::tint`, the fx-tint
 //! mechanism) and over-life ALPHA rides the per-instance `MeshTag` alpha field. The
 //! reference's optional per-emitter depth sort (rt+0x1ac & 0x10) is folded into the pool-order
-//! simplification named in decision 0148. The reference draws each instance through its
+//! simplification named in. The reference draws each instance through its
 //! generic model-render pass; our instances are the geometry model's submeshes with their own
 //! materials — mini-model *animation* (a rigged geometry model) is not run: every spell-corpus
 //! geometry target probed is a static mesh, and a rigged one would surface as a visibly stiff
@@ -63,8 +63,8 @@ pub(super) fn update_model_particles(
         let Some(geometry) = emitter.geometry.clone() else {
             continue;
         };
-        // A GATED emitter's pool is frozen and the sim already edge-hid its instances
-        // (decision 1480): running this body anyway re-showed them the same frame —
+        // A GATED emitter's pool is frozen and the sim already edge-hid its instances:
+        // running this body anyway re-showed them the same frame —
         // `Visibility::Inherited` below undid the hide, so a frozen emitter's shards drew
         // forever — and kept every instance's Transform/GlobalTransform/MeshTag/material a
         // per-frame write. The sim clears `gated` before this system in the same chained set,
@@ -75,7 +75,7 @@ pub(super) fn update_model_particles(
         let Some(model) = models.get(&geometry) else {
             continue; // still loading — particles simulate meanwhile, nothing draws yet
         };
-        // The geometry model's render forms, built NOW rather than paced (decision 0834): a
+        // The geometry model's render forms, built NOW rather than paced: a
         // spell's visual must not lag its cast, and a particle-geometry model is a handful of
         // tiny batches — the booth-lane exception, not the streaming rule.
         forms.ensure_now_static(&geometry, &model.submeshes, &mut mesh_assets);
@@ -131,7 +131,7 @@ pub(super) fn update_model_particles(
                     // move one number. These instance materials are per-instance throwaways
                     // (their `tint` is already mutated every frame), so nothing else sees it.
                     //
-                    // BUCKETED, and transparent-pass only (decision 0945). On a material the rung
+                    // BUCKETED, and transparent-pass only. On a material the rung
                     // is also a *pipeline-key axis* (bevy folds `depth_bias as i32` into the key
                     // — 0837's law), and 32 integer rungs × every blend state is an open key
                     // space no warm pass can pre-compile: each first-seen combination was a
@@ -191,12 +191,12 @@ pub(super) fn update_model_particles(
             // 3-D model particles carry no texture atlas — only colour and size reach them.
             let ol = emitter.def.over_life.sample(u);
             let (mut rgba, size) = (ol.color, ol.size);
-            // The owning model's render alpha, same fold as the quad lane (decision 0827) — here
+            // The owning model's render alpha, same fold as the quad lane — here
             // into the instance's `MeshTag` alpha, which is where a 3-D particle carries it.
             rgba[3] *= emitter.render_alpha();
             let tf = if anchored {
                 Transform {
-                    // World mode: the instance transform IS the stored one (decision 1585) —
+                    // World mode: the instance transform IS the stored one —
                     // through the ride frame, which is the identity off a transport (1591).
                     translation: emitter.ride.to_world(p.pos),
                     rotation: emitter.ride.rotation() * p.quat,

@@ -3,7 +3,7 @@
 //! [`super::surfaces_at`] answers "what liquid is at this XY" by testing every loaded
 //! [`WaterChunkInfo`] in turn. That is fine for the consumers that ask once or twice a frame
 //! (the camera waterline, the submersion verdict, a footstep) — and it detonates the moment a
-//! consumer asks per *draw*: the water-plane interleave's mesh lane (0919) classified ~13k
+//! consumer asks per *draw*: the water-plane interleave's mesh lane classified ~13k
 //! transparent batches against ~2.2k loaded surfaces every frame — 29 M box tests, 54 ms, the
 //! 2026-08-03 "60 → 12 fps" regression, measured at the Stormwind pin by the live FPS probe.
 //!

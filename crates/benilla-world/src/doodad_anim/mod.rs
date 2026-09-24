@@ -1,4 +1,4 @@
-//! The doodad animation host (decision 0130, phase 1) — world-placed M2 doodads (ADT MDDF + WMO MODD
+//! The doodad animation host (phase 1) — world-placed M2 doodads (ADT MDDF + WMO MODD
 //! props) animate: flags wave, windmills turn, flame bones jiggle.
 //!
 //! Byte ground: a doodad's M2
@@ -16,7 +16,7 @@
 //! benilla's translation: the spawn site ([`crate::terrain_stream`]) classifies each placed model by
 //! [`classify`] — the ~90% with no animated channel stay on today's static path (measured,
 //! `benilla-extract doodadscan`) — and an animated one spawns the skinned twin + a collapsed
-//! [`RigPose`] buffer (decision 1365 — no joint entities; consumers ride on-demand anchors) on an
+//! [`RigPose`] buffer (no joint entities; consumers ride on-demand anchors) on an
 //! anim-root entity carrying [`DoodadAnimHost`]: an `AnimationPlayer` on the armed clip,
 //! re-rolled every window by [`reroll_doodad_variation`], and/or a [`GlobalSeqDrive`] for the
 //! free-running channels. [`gate_doodad_anim`] here is the draw-time tick made explicit: animation
@@ -57,7 +57,7 @@ pub enum DoodadAnimTier<'a> {
     /// The **loader-idle seed** moves bones (flags, windmills, torch flames): joints + an
     /// `AnimationPlayer` looping this clip — the client's one-time load arm. That seed is animation
     /// id 0 (Stand) resolved through the model's own `playableAnimationLookup`, NOT the file-order
-    /// first sequence (decision 0637; the variant name predates the correction and is kept because
+    /// first sequence (the variant name predates the correction and is kept because
     /// it is the tier's identity, not a claim about which sequence). Global-sequence channels ride
     /// along if the model also has them.
     FirstSeq(&'a AnimClip),
@@ -145,7 +145,7 @@ pub struct AnimHostSpawn {
     ///
     /// This is the *loader's* var-0 seed only. It is no longer what the placement ends up playing:
     /// [`reroll_doodad_variation`] overrides it on the first frame with a real weighted roll and
-    /// keeps re-rolling every play-window (decision 0768), exactly as the reference's holder setup
+    /// keeps re-rolling every play-window, exactly as the reference's holder setup
     /// `0x695100` lands its `variationIdx = -1` arm after the loader's var-0 one. Consumers that
     /// must track the *current* slot therefore read the host's live player instead — the emitters
     /// ride [`crate::particles::EmitClock::Host`].
@@ -181,7 +181,7 @@ impl AnimHostSpawn {
 }
 
 /// Whether [`spawn_anim_host`] would rig this model — the model-forms requester's twin of the
-/// spawn gate (decision 0834), so the skinned twins are built exactly for the placed models that
+/// spawn gate, so the skinned twins are built exactly for the placed models that
 /// will draw them. Mirrors both of the host's gates: the tier, and the capture freeze (captures
 /// keep every doodad static, so they need no twins either).
 pub fn wants_rig(m: &M2Model) -> bool {
@@ -193,7 +193,7 @@ pub fn wants_rig(m: &M2Model) -> bool {
 }
 
 /// Spawn the animation host for one placed M2, if [`classify`] says it animates: an anim-root entity
-/// at the placement transform carrying the collapsed [`RigPose`] buffer (decision 1365 — no joint
+/// at the placement transform carrying the collapsed [`RigPose`] buffer (no joint
 /// entities; consumer anchors are minted on demand and cascade with the root),
 /// and — per tier — an `AnimationPlayer` looping the **loader-idle seed's** clip (the client's
 /// one-time load arm at `0x70ebd0`: `0x7121a0(bone 0, animation id 0 resolved through the model's
@@ -205,9 +205,9 @@ pub fn spawn_anim_host(
     m: &M2Model,
     transform: Transform,
 ) -> Option<AnimHostSpawn> {
-    // The visual A/B harness (decision 0010) needs deterministic frames; a live animation clock
+    // The visual A/B harness needs deterministic frames; a live animation clock
     // isn't. Captures keep every doodad on the static path — bind pose renders identically to the
-    // static mesh (decision 0035), so world baselines stay comparable across runs and branches.
+    // static mesh, so world baselines stay comparable across runs and branches.
     if crate::dev_state::deterministic_run() {
         return None;
     }
@@ -233,12 +233,12 @@ pub fn spawn_anim_host(
         .spawn((transform, Visibility::default()))
         .vis_chain_only()
         .id();
-    // The collapsed pose buffer (decision 1365 — 0724 replayed for this lane): no joint
+    // The collapsed pose buffer (0724 replayed for this lane): no joint
     // entities, no `AnimatedBy` targets, no `BillboardJointRig`. The 0712 evaluator poses
     // `locals` off the player, the model pass folds + seats the anchors, and the world pass
     // handles the billboard/arm bones and the palette rows.
     //
-    // NO palette rig here either (decision 0863). The host's slot allocation is the CALLER's
+    // NO palette rig here either. The host's slot allocation is the CALLER's
     // policy: the terrain-stream lane goes lazy — parts spawn on the static form and the draw
     // gate allocates at the first wake ([`LazyRig`]) — because the resident population is
     // thousands of parked hosts while the 2048-slot table is the scarce axis (the 0863 census:
@@ -320,7 +320,7 @@ pub struct DoodadAnimHost {
     /// building's prop. Stratholme's fire is 88 particles-only props of `stratholme_b.wmo`, and
     /// with no instance the exterior-window term asks `ExteriorGate::admits_sphere` — which,
     /// standing in a sealed room, is `Windows([])` and admits **nothing**. Every meshless prop of
-    /// the building the camera stood in was parked (decision 2059).
+    /// the building the camera stood in was parked.
     pub(crate) fade: crate::particles::EmitterFade,
     /// The looping first-sequence graph node + its duration (secs); `None` on the gseq-only tier.
     pub(crate) clip: Option<(AnimationNodeIndex, f32)>,
@@ -372,7 +372,7 @@ impl DoodadAnimHost {
     }
 }
 
-/// The doodad's self-sustaining re-arm (decision 0768): when the
+/// The doodad's self-sustaining re-arm: when the
 /// armed play-window ends, roll a fresh frequency-weighted variation of the same animation id, snap
 /// to it, and write the next window. This is the whole of bug B63's residual — the Blasted Lands
 /// lightning keys its entire burst in a 5.0 %-weighted variation (`frequency` 1638 of 32767), so
@@ -472,12 +472,12 @@ fn gate_doodad_anim(
     changed_vis: Query<(), (Changed<Visibility>, With<crate::model_render::ModelPart>)>,
     // The frame's draw-set inputs, as ONE bundle: the far-clip wall, the exterior-window gate
     // (a meshless prop OUTSIDE, seen from a WMO interior, is not in the frame's worklist and must
-    // not tick its bones either — 0786), the room the camera stands in, and the portal instances
+    // not tick its bones either), the room the camera stands in, and the portal instances
     // a prop's own rooms resolve through (0689/1289). The same `SystemParam` the particle and
     // ribbon sims read, so the three riders of one placement cannot answer the draw-set question
     // differently (2059).
     scene: crate::particles::sim::SceneGates,
-    // The lazy-rig lane's wake half (decision 0863, [`lazy`]): a drawn host without a slot
+    // The lazy-rig lane's wake half ([`lazy`]): a drawn host without a slot
     // promotes here — allocation, row seed, part swap.
     mut palettes: ResMut<crate::rig_palette::RigPalettes>,
     ibps: Res<Assets<SkinnedMeshInverseBindposes>>,
@@ -514,7 +514,7 @@ fn gate_doodad_anim(
             // "Exactly like" is literal: this asks the placement's OWN `EmitterFade` — the very
             // value its emitters and ribbons were handed — through `in_draw_set`, the single
             // spelling of the rule. A second copy of it is how the far-clip term went missing
-            // here as well as in the emitters (0678/B39), and how a particles-only WMO prop lost
+            // here as well as in the emitters, and how a particles-only WMO prop lost
             // its building identity and was culled from inside its own room (2059).
             let fade = &host.fade;
             world_cam.as_ref().is_some_and(|(cam_tf, frustum, _, _)| {
@@ -538,7 +538,7 @@ fn gate_doodad_anim(
                 .iter()
                 .any(|&e| vis.get(e).is_ok_and(|v| *v != Visibility::Hidden))
         };
-        // The lazy-rig promote (decision 0863, [`lazy`]): a host DRAWN two frames running (`&&
+        // The lazy-rig promote ([`lazy`]): a host DRAWN two frames running (`&&
         // host.active` — last frame's verdict) holding a [`lazy::LazyRig`] and no slot yet — its
         // first wake, or a denial being retried — claims its palette slot now. Checked every
         // frame it stays drawn, not just on the flip edge, so a momentarily full table is a
@@ -570,7 +570,7 @@ fn gate_doodad_anim(
             continue;
         }
         host.active = drawn;
-        // The rig-machinery half of the park (decision 1365): the marker gates the 0712
+        // The rig-machinery half of the park: the marker gates the 0712
         // evaluator, the model compose, and the world finalize — so a hidden host's collapsed
         // rig costs nothing at all, where the joint hierarchy kept paying propagation. The
         // commands apply before `AnimationSystems` (the gate orders `.before` it), so a resume's
@@ -589,7 +589,7 @@ fn gate_doodad_anim(
                     if duration > 0.0 {
                         // Phase from the current ARM, not from spawn: the variation re-arms every
                         // play-window, so `spawned_at` names a clip this host may have stopped
-                        // playing many windows ago (decision 0768).
+                        // playing many windows ago.
                         anim.seek_to((now - host.armed_at).rem_euclid(duration));
                     }
                 }
@@ -601,7 +601,7 @@ fn gate_doodad_anim(
             }
         }
         if let Some(mut d) = drive {
-            // No re-seek on resume: the drive samples the shared world clock (decision 0855), so
+            // No re-seek on resume: the drive samples the shared world clock, so
             // a re-appearing doodad lands on the phase the clock dictates by construction.
             d.set_paused(!drawn);
         }
@@ -617,7 +617,7 @@ impl Plugin for DoodadAnimPlugin {
         // The client's ONE `rand()` stream (`benilla_assets::AnimRng`), seeded here because this
         // is where the engine boots and where `deterministic_run` is knowable — the reference's
         // own `srand(GetTickCount())` runs once per process from CRT static init, pre-`WinMain`
-        // (`0x5d1c70`; decision 2301). A capture keeps the
+        // (`0x5d1c70`). A capture keeps the
         // CRT's pre-`srand` value, so golden frames stay reproducible.
         app.init_resource::<benilla_assets::AnimRng>();
         let deterministic = crate::dev_state::deterministic_run();
@@ -633,7 +633,7 @@ impl Plugin for DoodadAnimPlugin {
                 .chain()
                 .before(AnimationSystems),
         );
-        // The lazy-rig pressure reaper (decision 0863): one headroom read per frame when the
+        // The lazy-rig pressure reaper: one headroom read per frame when the
         // table has room; demotes longest-parked rigged hosts when it doesn't.
         app.add_systems(Update, lazy::reap_parked_rigs);
         // `sample_mat_anim` runs before the visibility authority (`ModelVisSet`): it composes
@@ -859,7 +859,7 @@ mod tests {
             classify(&skeleton(3), Some(&a)),
             DoodadAnimTier::FirstSeq(c) if c.anim_id == 0
         ));
-        // A CLOCK-ONLY model (decision 0941): every sequence now builds a clip, so a model whose
+        // A CLOCK-ONLY model: every sequence now builds a clip, so a model whose
         // bones never move — the Molten Core rune, the flame ring, 807 corpus models whose
         // animation lives entirely in their emitter tracks — arrives here with clips and NO
         // `first_seq` (the content gate declined it). It must still classify Static: its clock is
@@ -1074,15 +1074,15 @@ mod tests {
     fn gate_pauses_hidden_and_resumes_on_the_shared_clock() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default())); // Time + asset stores
-                                                                   // The gate reads the far-clip wall (0678) — this host is mesh-BACKED, so it takes the
+                                                                   // The gate reads the far-clip wall — this host is mesh-BACKED, so it takes the
                                                                    // `Visibility` branch and never consults it, but the system still needs the resource.
         app.init_resource::<crate::view::ViewDistance>();
-        // …and the exterior-window gate's two terms (0786), for the same reason: this host is
+        // …and the exterior-window gate's two terms, for the same reason: this host is
         // mesh-BACKED so it never consults them, but the system's params must resolve. Their
         // defaults are the outdoor case (`Unrestricted`, no room claimed).
         app.init_resource::<crate::wmo_portal::ExteriorWindows>();
         app.init_resource::<crate::wmo_portal::CameraInteriorClaim>();
-        // The lazy-rig promote's params (decision 0863) — this host carries no `LazyRig`, so
+        // The lazy-rig promote's params — this host carries no `LazyRig`, so
         // the wake edge never fires here, but the params must resolve.
         app.init_resource::<crate::rig_palette::RigPalettes>();
         app.init_asset::<SkinnedMeshInverseBindposes>();
@@ -1392,7 +1392,7 @@ mod tests {
             anim_id: Some(0),
             // PARKED — and the clock still answers, which is the point: `arm_clock` is a pure
             // function of the shared clock, so the phase is defined whether or not the host is in
-            // the animate set. Honouring that membership is the CALLER's job (decision 2059).
+            // the animate set. Honouring that membership is the CALLER's job.
             active: false,
             parked_at: 0.0,
         };

@@ -1,8 +1,8 @@
 //! The shared **ray caster** — the pick-geometry declarations and the triangle-accurate cast every
 //! "what is under the cursor" consumer runs through: the inspector's mouseover, the target module's
 //! GameObject hover, the `WOW_PICK` probe. Casts against **resident geometry** ([`PickMesh`] —
-//! decision 0857), because the render meshes are `RENDER_WORLD`-only (0834) and a physics ray
-//! misses colliderless props. Pick geometry is **declared, never inferred** (decision 0929).
+//! decision 0857), because the render meshes are `RENDER_WORLD`-only and a physics ray
+//! misses colliderless props. Pick geometry is **declared, never inferred**.
 
 use std::sync::Arc;
 
@@ -16,14 +16,14 @@ use bevy::prelude::*;
 use super::WorldObject;
 
 /// The resident **pick geometry** of one drawn batch: the model's decoded `RenderSubmesh`, `Arc`-shared
-/// with the model asset itself (decision 0857). The render forms are `RENDER_WORLD`-only since 0834 —
+/// with the model asset itself. The render forms are `RENDER_WORLD`-only since 0834 —
 /// their main-world vertex data is gone after extract, which is why Bevy's `MeshRayCast` silently
 /// stopped hitting every static model (the GO hover, the inspector, `WOW_PICK`). So the pickers read
 /// triangles from THIS instead, through the same WoW→Bevy bake the render form was built with
 /// (`submesh_to_static_mesh`: `wow_to_bevy` per vertex, billboard cards centred at their pivot).
 /// Attached beside `Mesh3d` at every spawn site that also attaches a pick key
 /// ([`super::WorldObject`] / `ModelPart`). A keyed entity carrying neither this nor [`PickBox`] is
-/// **not pickable** — pick geometry is declared, never inferred from a bound (decision 0929).
+/// **not pickable** — pick geometry is declared, never inferred from a bound.
 #[derive(Component, Clone)]
 pub struct PickMesh(pub Arc<RenderSubmesh>);
 
@@ -33,7 +33,7 @@ pub struct PickMesh(pub Arc<RenderSubmesh>);
 ///
 /// It exists as a **positive declaration** because the alternative — inferring it from the *absence*
 /// of a [`PickMesh`] — silently promoted every other keyed-but-mesh-less drawn entity into a solid
-/// invisible box. That is what broke the inspector inside a city WMO (decision 0929): a WMO group's
+/// invisible box. That is what broke the inspector inside a city WMO: a WMO group's
 /// MLIQ pool is a drawn `Mesh3d` with no resident geometry, it inherits the building's
 /// [`super::WorldObject`] from the placement's blanket tag, and its render mesh keeps the **whole**
 /// MLIQ vertex grid — dry cells included, sitting at height 0 while the drawn lava is 86–127 yd
@@ -50,7 +50,7 @@ pub struct PickBox;
 /// *removing* the per-placement entity — and the pick declaration ([`PickMesh`] + [`super::WorldObject`])
 /// used to ride that entity, so consolidating a placement silently un-named it: the inspector, the GO
 /// hover and `WOW_PICK` all went quiet over most of the static world, and 0929's "declared, never
-/// inferred" rule made the loss indistinguishable from correct transparency (decision 1534).
+/// inferred" rule made the loss indistinguishable from correct transparency.
 ///
 /// This is the declaration that survives the consolidation: identity + geometry + pose, per member,
 /// held by whoever owns the consolidated draw. The pick walks members exactly as it walks parts, so
@@ -79,14 +79,14 @@ pub struct PickBlob(pub Arc<[PickMember]>);
 /// One hit from the **identified** cast ([`cast_object_ray`]): what was hit, and where.
 ///
 /// The identity is *resolved here*, not left as an entity for the caller to look up, because most
-/// of the static world has no entity to look anything up on — it draws from a consolidated lane
-/// (decision 1534). `entity` is `Some` only when one owns the geometry, which is exactly when the
+/// of the static world has no entity to look anything up on — it draws from a consolidated lane.
+/// `entity` is `Some` only when one owns the geometry, which is exactly when the
 /// per-entity readouts (a unit's descriptor store, a GameObject's collision, a part's material)
 /// exist to be read.
 pub struct ObjectHit {
     /// What was hit. `None` only for an entity a caller made pickable WITHOUT a world identity —
     /// an equipped item's part or its billboard card, which `WOW_PICK` admits on `ModelPart` so a
-    /// "my pauldron looks wrong" report has something to name (decision 0836). Consolidated
+    /// "my pauldron looks wrong" report has something to name. Consolidated
     /// content is always identified: identity is what its lane carries it by.
     pub object: Option<WorldObject>,
     pub entity: Option<Entity>,
@@ -228,7 +228,7 @@ pub fn pick_object_at_cursor(
 /// Triangles test **two-sided**, like the unit picker's narrow phase — a generous pick beats a
 /// strict one at silhouette edges.
 ///
-/// **Pick geometry is required, never inferred** (decision 0929): an entity that is neither a
+/// **Pick geometry is required, never inferred**: an entity that is neither a
 /// [`PickMesh`] nor a [`PickBox`] is not pickable, however identified or bounded it is. The box hit
 /// used to be the fallback for *any* keyed entity with an `Aabb` and no mesh, which quietly turned
 /// a WMO's MLIQ pool — a drawn mesh with no resident geometry, wearing its building's identity —
@@ -245,7 +245,7 @@ pub fn cast_pick_ray(
         .collect()
 }
 
-/// [`cast_pick_ray`]'s **generous second pass** (decision 1071 — resolve `0x7089c0` pass 2,
+/// [`cast_pick_ray`]'s **generous second pass** (resolve `0x7089c0` pass 2,
 /// mouse-pick only): every vertex displaced by its **authored normal,
 /// added raw** — 1 model-unit (× the part's world scale) outward, the same halo the unit picker
 /// builds from skinned normals. A part without authored normals cannot build the halo and stays
@@ -382,7 +382,7 @@ fn cast_pick_ray_impl(
 /// Vertices go through the render form's own bake (`build_submesh_mesh`): `wow_to_bevy` per vertex,
 /// a billboard card centred at its pivot — so the pick tests exactly the surface the part draws
 /// (a card's live camera-facing rotation rides its `GlobalTransform`, shared here too). With
-/// `inflate` (the generous pass 2, decision 1071), each vertex is additionally displaced by its
+/// `inflate` (the generous pass 2), each vertex is additionally displaced by its
 /// authored normal, raw — 1 model-unit in local space, which the world transform then scales,
 /// exactly the reference's `skinned_pos + rot·normal` with no extra constant. `wow_to_bevy` is a
 /// pure axis permutation with sign flips (orthonormal), so applying it to the normal is exact. A
@@ -700,10 +700,10 @@ mod tests {
         }
     }
 
-    /// The picker ↔ render-form bake contract (decision 0857): [`ray_submesh`] must test the
+    /// The picker ↔ render-form bake contract: [`ray_submesh`] must test the
     /// resident WoW-axes geometry through the SAME `wow_to_bevy` bake `submesh_to_static_mesh`
     /// builds the drawn mesh with, under the part's world transform — the render mesh itself is
-    /// `RENDER_WORLD`-only (0834), so this path is the only thing keeping static models pickable.
+    /// `RENDER_WORLD`-only, so this path is the only thing keeping static models pickable.
     #[test]
     fn resident_geometry_picks_where_the_render_form_draws() {
         let mesh = PickMesh(std::sync::Arc::new(wow_tri()));

@@ -50,7 +50,7 @@ impl PropLight {
     /// The prop's lighting lane, as the mouseover inspector says it. A WMO prop that looks wrong is
     /// almost always on the wrong *lane* or carrying an unbaked base — and neither is visible from
     /// the model path alone, which is why Booty Bay's black entrance arch read as a texture bug for
-    /// as long as it did (decision 0969). `sky-lit` is the exterior lane; the interior lane prints
+    /// as long as it did. `sky-lit` is the exterior lane; the interior lane prints
     /// the MODD-colour words it actually commits, so a base of `#000000` names itself on hover.
     pub(crate) fn inspector_label(&self) -> String {
         let hex = |c: &[f32; 3]| hex_word(*c);
@@ -131,7 +131,7 @@ pub fn interior_light_up(
     // The ≤3 NEAREST in range, which is the reference's 4-entry max-heap by squared distance
     // (`0x71bf90`, `71bfca cmp esi,0x4`) minus slot 0. Membership is our own disk window — the
     // reference's is `0x6a7ac0`'s radius test against the proxy's WMO instances, which we model
-    // the same way for the SH lane; see the residual in decision 1709.
+    // the same way for the SH lane; see the residual in.
     let mut near: Vec<(f32, &PropLobeLight)> = lights
         .iter()
         .map(|l| ((l.pos - ref_point).length(), l))

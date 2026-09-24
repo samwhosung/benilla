@@ -88,7 +88,7 @@ fn integrate_particle(p: &mut Particle, env: &StepEnv) -> bool {
 /// keyed on). Zero when unauthored, and zero for a degenerate response (equal authored speeds,
 /// which the reference answers by zeroing both).
 ///
-/// **The ride-vs-trail baseline is NOT here** — it is the storage space itself (decision 1585):
+/// **The ride-vs-trail baseline is NOT here** — it is the storage space itself:
 /// file `0x10` SET stores the raw emitter-LOCAL pos/vel
 /// (`0x7b8aa5`) and the draw folds the live emitter matrix `rt+0x1fc` back in every frame
 /// (`0x7b3efb`) ⇒ a rigid ride, keep `1.0`, for free. CLEAR bakes pos/vel through that matrix
@@ -214,8 +214,8 @@ fn birth_age(is_burst: bool, dt: f32, rng: &mut u32) -> f32 {
     rand01(rng) * dt.min(0.1)
 }
 
-/// The **draw-set gate's** scene inputs, bundled: the far-clip wall the gate bounds emitters at
-/// (0678), the exterior-window test a WMO interior applies to everything outside it (0786) with the
+/// The **draw-set gate's** scene inputs, bundled: the far-clip wall the gate bounds emitters at,
+/// the exterior-window test a WMO interior applies to everything outside it with the
 /// camera's own room as its one exemption, and the per-frame portal PVS the rooms *inside* a
 /// building are gated by (0689/1289). One `SystemParam` because they are read together, at one
 /// place, and Bevy caps a system at 16 parameters — which `simulate_particles` already sits at, so
@@ -233,7 +233,7 @@ pub(crate) struct Owners<'w, 's> {
         Query<'w, 's, &'static GlobalTransform, (Without<ParticleEmitter>, Without<ChildDraw>)>,
     visibility: Query<'w, 's, &'static InheritedVisibility>,
     /// Which transport (if any) the owner's MODEL is riding — the frame world-mode particles are
-    /// stored in ([`crate::ride_frame`], decision 1591). Joined the bundle for the same reason the
+    /// stored in ([`crate::ride_frame`]). Joined the bundle for the same reason the
     /// portal query did: [`simulate_particles`] is at the ceiling.
     rides: crate::ride_frame::RideFrames<'w, 's>,
 }
@@ -345,7 +345,7 @@ impl WaterInterleave<'_, '_> {
 ///
 /// `r` is the caller's lane law: the model bound-sphere slack for emitters and ribbons
 /// ([`model_far_side`]), `0` for the mesh lane's no-clip-planes fallback (`A = d ≥ 0`,
-/// `0x7079ed`; decision 0919).
+/// `0x7079ed`).
 pub(crate) fn far_side_of_water_at(
     w: &WaterInterleave,
     claim_seed: Option<Entity>,
@@ -367,7 +367,7 @@ pub(crate) fn far_side_of_water_at(
 /// `+0x19c == 0`, which every lane reads as the above list.
 ///
 /// The one plane query behind both laws: [`far_side_of_water_at`]'s one-list membership, and
-/// the straddle split's two-list band (`crate::straddle`, decision 2188), which also needs the
+/// the straddle split's two-list band (`crate::straddle`), which also needs the
 /// plane's height itself for the clip.
 pub(crate) fn water_height(
     w: &WaterInterleave,
@@ -401,7 +401,7 @@ pub(crate) fn water_height(
 }
 
 /// The mesh lane's wrapper: the sign test at the batch's own transform (r = 0) — the
-/// reference's no-clip-planes fallback, `model_render::classify_water_side`'s law (0919).
+/// reference's no-clip-planes fallback, `model_render::classify_water_side`'s law.
 pub(crate) fn far_side_of_water(
     w: &WaterInterleave,
     claim_seed: Option<Entity>,
@@ -446,8 +446,8 @@ fn is_above(d: f32, r: f32) -> bool {
     d >= -r
 }
 
-/// Does a booth-layered emitter freeze this frame? The rule the body panes' item effects turn on
-/// (decision 1559), stated once because it was got wrong by being written inline.
+/// Does a booth-layered emitter freeze this frame? The rule the body panes' item effects turn on,
+/// stated once because it was got wrong by being written inline.
 ///
 /// A booth camera that is **asleep** — `gate_booth_cameras` put its pane's window away — draws
 /// none of this lane, so its emitters freeze with it: pool + age held, one frame's dt on
@@ -455,7 +455,7 @@ fn is_above(d: f32, r: f32) -> bool {
 /// only inside a draw the frame performs) and it is keyed on the reference's own cull.
 ///
 /// A camera that is merely **rate-throttled** ([`super::ViewThrottled`]) is not asleep. Its scene
-/// is posing at full rate; `boothHalfRate` (decision 1444) is *our* pacing of the render, and a
+/// is posing at full rate; `boothHalfRate` is *our* pacing of the render, and a
 /// frame we chose to skip is not a frame the reference culled. Reading the two as one ran the
 /// body panes' item effects at half speed for as long as a pane was open — director report B312.
 ///
@@ -468,7 +468,7 @@ fn booth_frozen(cam_active: bool, throttled: bool, draining: bool) -> bool {
 }
 
 /// Does this emitter's SCENE freeze it this frame? The whole law, in one place because it has two
-/// sources and having only one of them was a defect (decision 2046).
+/// sources and having only one of them was a defect.
 ///
 /// [`booth_frozen`] asks about a CAMERA, and that was exact for as long as one camera meant one
 /// scene: every booth before the `<Model>` tiles owned its own. The tile atlas broke the premise —
@@ -491,8 +491,8 @@ fn scene_frozen(booth: Option<(bool, bool)>, owner_frozen: bool, draining: bool)
 pub(super) fn simulate_particles(
     time: Res<Time>,
     tuning: Res<ParticleTuning>,
-    // The draw-set gate's scene inputs — the far-clip wall (0678) and the exterior window test
-    // (0786); see [`SceneGates`].
+    // The draw-set gate's scene inputs — the far-clip wall and the exterior window test;
+    // see [`SceneGates`].
     gates: SceneGates,
     // The water-plane interleave inputs — see [`WaterInterleave`] and [`far_side_of_water`].
     interleave: WaterInterleave,
@@ -541,7 +541,7 @@ pub(super) fn simulate_particles(
         ),
         Without<WorldCamera>,
     >,
-    // Booth cameras (decision 0539 §5): a booth-layered emitter (the glue scenes' braziers)
+    // Booth cameras: a booth-layered emitter (the glue scenes' braziers)
     // billboards against ITS camera, matched by layer intersection — the `face_booth_billboards`
     // rule. `Without<ParticleEmitter>`/`Without<ChildDraw>` keep the read provably disjoint from
     // the `&mut GlobalTransform` writes above.
@@ -595,9 +595,9 @@ pub(super) fn simulate_particles(
     let cam_fwd = Vec3::from(cam_tf.forward());
     // The far-clip wall, the exterior gate and the camera's own room — built once for the whole
     // emitter walk, the same values the model visibility authority and `exterior_cull` ask
-    // (0784/0786: one spelling of the window test).
+    // (one spelling of the window test).
     let (farclip, exterior_gate, camera_instance) = gates.scene(Some((&*cam_tf, &*projection)));
-    // `$WOW_PARTICLE_DEPTHDUMP` (B16): is this a dump frame? Decided once per run.
+    // `$WOW_PARTICLE_DEPTHDUMP`: is this a dump frame? Decided once per run.
     let dump_frame = dumps.depth_frame(time.elapsed_secs());
     // `$WOW_EMIT_DUMP`: is this a dump tick? Decided once per frame, for the whole walk.
     let emit_dump = dumps.emit.due(time.elapsed_secs());
@@ -615,7 +615,7 @@ pub(super) fn simulate_particles(
     {
         // The camera this emitter's quads face + its emission-LOD distance origin — and, in the
         // shared lane, the view its draw record targets: a booth-layered emitter uses its
-        // booth's camera (decision 0539 §5 — the glue scenes' braziers, which the WORLD camera
+        // booth's camera (the glue scenes' braziers, which the WORLD camera
         // would billboard sideways and LOD from a nonsense distance); everything else the world
         // camera.
         let booth = layers
@@ -652,7 +652,7 @@ pub(super) fn simulate_particles(
             }
             None => (world_cam, cam_pos, cam_right, cam_up),
         };
-        // Draw-set gate (byte-verified, decision 0171): the reference ticks an emitter only when
+        // Draw-set gate (byte-verified): the reference ticks an emitter only when
         // its owner doodad is in the frame's scene worklist — admission = the frustum sphere test
         // + the radius-tiered distance-fade cutoff (`FUN_00683f80`; alpha ≤ 0 is never inserted).
         // A culled owner's emitter neither simulates nor draws: pool + age FROZEN
@@ -660,7 +660,7 @@ pub(super) fn simulate_particles(
         // state with one frame's dt — no catch-up, no refill. All three tests use the owner's fade
         // sphere, matching the reference's `[rec+0x68]`.
         //
-        // The **far-clip** term is the third test and it is load-bearing (decision 0678, bug B39):
+        // The **far-clip** term is the third test and it is load-bearing (bug B39):
         // the reference's frustum is bounded by its projection far plane at `farclip`, ours is not
         // — our projection far is ~3000 yd so the WDL horizon can draw behind the wall, and
         // `intersects_sphere`'s far-plane term would therefore bound at 3000, not 777. Worse, the
@@ -688,7 +688,7 @@ pub(super) fn simulate_particles(
                     },
                     false,
                 ),
-                // …and the exterior-window term (0786): standing in a WMO interior, a doodad
+                // …and the exterior-window term: standing in a WMO interior, a doodad
                 // outside is not in the worklist at all, so its emitter neither ticks nor draws —
                 // which the mesh gate already knew and this one did not.
                 f.exterior_admitted(&exterior_gate, camera_instance),
@@ -718,7 +718,7 @@ pub(super) fn simulate_particles(
             // ENTITY-owned emitters (creatures, GameObjects, spell kits, WMO-prop deck lanterns)
             // carry no `EmitterFade`, and the premise that excused them — "the population is
             // bounded by server visibility instead" (`entities::wmo_props`) — is FALSE for
-            // transports, which vmangos streams map-wide. Measured (decision 0678): parked in
+            // transports, which vmangos streams map-wide. Measured: parked in
             // Durotar, **56 emitters** were ticking and drawing at 4853–7080 yd — the deck
             // lanterns of the Teldrassil↔Auberdine boat (`transports` 176244 "Moonspray") and its
             // Menethil↔Auberdine neighbour, five to seven kilometres away. So the wall is applied
@@ -742,7 +742,7 @@ pub(super) fn simulate_particles(
                 Some(o) => owners.at(o),
                 None => Some(emitter.anchor_pos),
             };
-            // **…and the owner's own draw verdict** (decision 1409). An emitter entity is a world
+            // **…and the owner's own draw verdict**. An emitter entity is a world
             // root — `spawn_emitter` parents it to nothing, because its cloud is anchored, not
             // carried — so every hide that reaches its model through the scene graph reaches the
             // emitter not at all. The reference has no such gap: it ticks a model's particles
@@ -836,8 +836,8 @@ pub(super) fn simulate_particles(
         // clock as the rate track (the reference's animate kernel, `0x714260`, samples all ten
         // scalar tracks per frame). Frost Nova rides its emission radius
         // 0.19 → 13.2 yd out with the ring; Arcane Explosion 0 → 7.2 yd with the dome — births
-        // MUST read the frame's values, not `value[0]` (decision 0844).
-        // The instance's gseq cursor (0856/0858): the spawn age IS `sceneNow − attach` — the
+        // MUST read the frame's values, not `value[0]`.
+        // The instance's gseq cursor: the spawn age IS `sceneNow − attach` — the
         // emitter spawns with its instance, and every lane's instance is fresh per play.
         let gseq_now = f64::from(*age);
         // Anchored mode (see [`Particle`]): positions are emitter-relative, so tracking a moving
@@ -857,7 +857,7 @@ pub(super) fn simulate_particles(
                     *owner = None;
                     match *on_owner_loss {
                         // The owner MODEL is gone, so its effects go with it — the reference frees
-                        // a model's emitters at its dtor (decision 0826). Nothing to drain: an
+                        // a model's emitters at its dtor. Nothing to drain: an
                         // unequipped torch's flame does not stay behind in the air.
                         OwnerLoss::Free => {
                             for slot in model_instances.iter() {
@@ -899,7 +899,7 @@ pub(super) fn simulate_particles(
             commands.entity(entity).despawn();
             continue;
         }
-        // Dormant (decision 1979) — judged AFTER the owner-loss and drain-complete blocks above,
+        // Dormant — judged AFTER the owner-loss and drain-complete blocks above,
         // which are the emitter's lifetime and must run every frame (review of 2026-09-04: a
         // one-shot whose owner despawned never drained and lived for the session). Nothing
         // alive, nothing draining, and the timing tracks say
@@ -913,11 +913,11 @@ pub(super) fn simulate_particles(
         {
             continue;
         }
-        // The MODEL's render alpha for this frame (decision 0827 — the reference's per-frame
+        // The MODEL's render alpha for this frame (the reference's per-frame
         // `emitter+0x1a8 = Model+0x19c` copy at `0x718960` @`0x719073`). Two disjoint sources, the
         // same slot the reference writes both through: an entity-owned cloud takes its OWN model
         // instance's composed alpha ([`crate::model_fade::ModelAlphas`] walks the attached-model
-        // chain, so a weapon glow's reaches the item's and the item's the wearer's — 0833), and a
+        // chain, so a weapon glow's reaches the item's and the item's the wearer's), and a
         // placed doodad's takes its own distance fade, whose cutoff the draw-set gate above
         // already applies as a hard stop.
         *alpha = alpha_src.map_or(1.0, |e| owner_mul.alpha(e))
@@ -937,7 +937,7 @@ pub(super) fn simulate_particles(
         // `anchor` is shadowed by the draw anchor further down.
         let dump_owner = (*host).or(*anchor);
 
-        // 0a. THE RIDE FRAME (`[CM2Model+0x17c]`, decision 1591) — which transport, if any, this
+        // 0a. THE RIDE FRAME (`[CM2Model+0x17c]`) — which transport, if any, this
         //     cloud's MODEL is standing on. Inherited down the `ParentModel` chain, so a held
         //     weapon's sparkle takes its wearer's deck without either spawn site knowing.
         //     A transport that has streamed out reads as no frame: that is the leave leg, and it
@@ -1103,7 +1103,7 @@ pub(super) fn simulate_particles(
         //    may legitimately go negative). Birth position/velocity come from the shape kernel
         //    ([`emit_local`], `0x7b8890`/`0x7b8d70`/`0x7b9500`).
         //    Within the draw set the reference has NO particle-side distance cull or fade
-        //    (population is bounded by the OWNER draw-set gate above — decision 0171). Its one
+        //    (population is bounded by the OWNER draw-set gate above). Its one
         //    distance mechanism is this emission LOD (`0x7b5550`): spawn count ×
         //    clamp(1 − (camDist − 50)·0.02, 0.25, 1.0) — full rate
         //    inside 50 yd, linear falloff, a 25% floor from 87.5 yd out, never zero — and × the
@@ -1229,7 +1229,7 @@ pub(super) fn simulate_particles(
         //     A draining parent stops driving; child pools live out their spans (the despawn
         //     above waits for them).
         for child in children.iter_mut() {
-            // A child cloud is its own fresh instance: its gseq cursor is its own age (0856).
+            // A child cloud is its own fresh instance: its gseq cursor is its own age.
             let c_emitting = !*draining && child.def.timing.emitting(None, *age, f64::from(*age));
             let c_rate = child.def.timing.rate(None, *age, f64::from(*age));
             let c_now = child.def.params.sample(None, *age, f64::from(*age));
@@ -1289,7 +1289,7 @@ pub(super) fn simulate_particles(
         // dispatch skips the whole quad path when the model mode is on; its instances
         // render via [`super::model::update_model_particles`].
         let want_quads = def.geometry_model.is_none() && images.contains(&*texture);
-        // Every effect of one model takes the SAME rung (0719/0721) — computed here per frame,
+        // Every effect of one model takes the SAME rung — computed here per frame,
         // where it used to be baked into the material's `depth_bias` at spawn. Plus the
         // water-plane interleave ([`far_side_of_water`]): a cloud on the eye's far side of its
         // local water plane drops under the water pass, so the surface paints over it — the
@@ -1334,7 +1334,7 @@ pub(super) fn simulate_particles(
         if want_quads && !particles.is_empty() {
             expand_quads(def, particles, &frame, placement, &cam, &mut quads.verts);
         }
-        // `$WOW_PARTICLE_DEPTHDUMP` (B16): the depth numbers this pool brings to the compare —
+        // `$WOW_PARTICLE_DEPTHDUMP`: the depth numbers this pool brings to the compare —
         // now over the quads THIS frame just wrote (the exact vertices the draw will consume).
         // Booth emitters are skipped — their pixels belong to a booth camera's target, not the
         // world depth buffer `WOW_DEPTH` reads.
@@ -1463,7 +1463,7 @@ pub(super) fn simulate_particles(
 /// that is the forcing function, not the reason.)
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct OwnerMultipliers<'w, 's> {
-    /// The per-model render alpha (decision 0827), composed along the attached-model chain (0833).
+    /// The per-model render alpha, composed along the attached-model chain.
     alphas: crate::model_fade::ModelAlphas<'w, 's>,
     /// The light node a LIT emitter shades under when its model stands in a WMO room: the
     /// reference lights the object from its OWN node, never from the day/night sun (the WENTITY
@@ -1514,7 +1514,7 @@ fn fold_committed_light(
                     // `0x4549a0` is three dword moves and a `ret`) and it is GL that clamps the
                     // LIT VERTEX COLOUR at the end. Clamping the term instead would cap a bright
                     // room's multiplier at 1 and quietly lose the brightening a dim emitter is
-                    // authored to receive (decision 1709).
+                    // authored to receive.
                     *c = (*c * m).clamp(0.0, 1.0);
                 }
             }
@@ -1625,7 +1625,7 @@ mod tests {
     #[test]
     fn membership_is_d_at_least_minus_r() {
         // The slack: a model bobbing within its own radius of the plane stays ABOVE — the
-        // shoulder flame's stability at the waterline (0921).
+        // shoulder flame's stability at the waterline.
         assert!(is_above(-0.5, 2.0));
         assert!(is_above(-2.0, 2.0), "tie at d == -r lands above");
         assert!(!is_above(-2.1, 2.0));
@@ -1654,7 +1654,7 @@ mod tests {
         assert!(!booth_frozen(false, true, true));
     }
 
-    /// **A camera is not a scene any more** (decision 2046). Every booth before the `<Model>`
+    /// **A camera is not a scene any more**. Every booth before the `<Model>`
     /// tile atlas owned its own camera, so `is_active` answered "is this scene drawn". The atlas
     /// puts EVERY orthographic pane behind one camera that stays active whenever any cell is
     /// packed — it is the camera that clears the sheet — so for a pane that left the paint list
@@ -1735,7 +1735,7 @@ mod tests {
         assert!(!integrate_particle(&mut out, &kill));
     }
 
-    /// [`world_motion_kept`] — the ride-vs-trail law (`0x7b8a9a`, decision 1578). The emitter's
+    /// [`world_motion_kept`] — the ride-vs-trail law (`0x7b8a9a`). The emitter's
     /// own file flag `0x10` sets the baseline; the follow flag
     /// `0x4000` adds the authored response on top; a degenerate response adds nothing. The host
     /// class is not an input — the same unflagged def trails whoever carries it.
@@ -1818,7 +1818,7 @@ mod tests {
         }
     }
 
-    /// …with exactly one exception, and it is the reason the ride frame exists (decision 1591):
+    /// …with exactly one exception, and it is the reason the ride frame exists:
     /// a world-mode particle follows the **transport** its host is standing on, because its store
     /// is the deck's frame and the draw re-projects through the deck's live pose (`A · T · S`,
     /// `0x7b3f4f`). This is the director's Thunder Bluff report: without it a weapon's sparkle

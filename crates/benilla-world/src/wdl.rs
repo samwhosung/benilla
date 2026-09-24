@@ -1,12 +1,12 @@
 //! Distant low-detail terrain (WDL): streams the map's coarse horizon heightmap around the view —
 //! beyond the detailed ADT ring — drawn unlit-white under a fog pair of its own that saturates it
-//! into the flat scene-fog colour (a "fog hull", decision 1521), the hills the reference shows on the
+//! into the flat scene-fog colour (a "fog hull"), the hills the reference shows on the
 //! horizon where ours used to fade to void. The parse + coarse mesh live in `benilla_formats::wdl`; this
 //! is just the Bevy streaming + render glue (one shared [`WdlMaterial`], one mesh per ring tile).
 //!
 //! Mechanism + RE (geometry/shading/fog/depth all VERIFIED from apitrace WoW.8 + the real `.wdl`).
 //! How it partitions against the detailed world — the reference's far-band **backdrop** law, and why a
-//! shared clip plane could not work — is `wdl.wgsl`'s header (decision 0684).
+//! shared clip plane could not work — is `wdl.wgsl`'s header.
 
 use std::collections::HashMap;
 
@@ -25,11 +25,11 @@ use benilla_assets::{AssetSet, RenderConfig, WorldAssets};
 use benilla_formats::WdlFile;
 
 /// Chebyshev tile radius the WDL ring covers around the view. WDL is flat haze at every distance (its
-/// own saturated fog pair, decision 1521) — what it contributes is silhouette, and hills 2–4 tiles out
+/// own saturated fog pair) — what it contributes is silhouette, and hills 2–4 tiles out
 /// still rise above the horizon as fog-coloured silhouettes, so we extend toward the reference's
 /// `horizonfarclip` (~2112 yd ≈ 4 tiles). Drawn as a full ring; the
 /// shader makes it a **backdrop** — near plane at `farclip − 33`, depth clamped behind everything the
-/// detailed world can draw (`wdl.wgsl`'s header, decision 0684) — so it fills whatever the detailed
+/// detailed world can draw (`wdl.wgsl`'s header) — so it fills whatever the detailed
 /// world leaves empty and can never overlap it. (The reference's own far walk is a ±3-tile window.)
 const WDL_RADIUS: u32 = 5;
 
@@ -45,7 +45,7 @@ impl Plugin for WdlPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<WdlMaterial>::default())
             .add_systems(Startup, setup_wdl.after(AssetSet::Open))
-            // The distant ring is world, and follows the world's lifecycle (decision 0777): it
+            // The distant ring is world, and follows the world's lifecycle: it
             // spawns only while a character is in one, and its meshes go when they leave.
             .add_systems(Update, stream_wdl.run_if(crate::schedule::world_is_live))
             .add_systems(
@@ -144,7 +144,7 @@ fn stream_wdl(
     // All four are absent together — there is no client data, so `setup_wdl` and `load_world_map`
     // both bailed. `Option` rather than a hard `Res` because a missing resource is a *validation*
     // failure, not a `None`: the system would never run, and Bevy's default handler panics the
-    // client (decision 1451). This one is gated on `world_is_live`, so it takes a world with no
+    // client. This one is gated on `world_is_live`, so it takes a world with no
     // install to reach — which a player build in the wrong folder can still do.
     let (Some(mut streamer), Some(assets), Some(current_map), Some(map_catalog)) =
         (streamer, assets, current_map, map_catalog)
@@ -178,7 +178,7 @@ fn stream_wdl(
     }
 
     // The same view focus the detailed streamer uses — literally the same resource now, rather
-    // than a copy under a comment claiming they agree (decision 0777).
+    // than a copy under a comment claiming they agree.
     let center = focus.resolve(camera.single().ok().map(|c| c.translation));
     // The FULL window, the camera's own tile INCLUDED (`tiles_in_ring`'s doc is the why — at a
     // lowered view distance the own tile *is* the near horizon, and dropping it leaves a gap the sky
@@ -235,7 +235,7 @@ fn stream_wdl(
                 // walk `0x683040` is fed by the SAME per-window populate `0x682fa0`, so from a sealed
                 // room the horizon is not drawn either (`crate::exterior_cull`). One ring tile is one
                 // drawn object here, which is already the reference's far-tier granularity — this
-                // band never needed the chunk split the near tiles did (decision 0780).
+                // band never needed the chunk split the near tiles did.
                 crate::exterior_cull::ExteriorScene,
             ))
             .id();
@@ -243,7 +243,7 @@ fn stream_wdl(
     }
 }
 
-/// Leaving the world drops the distant ring (decision 0777). The parsed `.wdl` itself stays — it is
+/// Leaving the world drops the distant ring. The parsed `.wdl` itself stays — it is
 /// one small file, the resource `stream_wdl` needs to exist at all, and `height_under` is read by
 /// the sun's flare-occlusion march; what costs per frame is the spawned mesh set, and that goes.
 fn release_wdl_ring(mut commands: Commands, streamer: Option<ResMut<WdlStreamer>>) {
@@ -253,7 +253,7 @@ fn release_wdl_ring(mut commands: Commands, streamer: Option<ResMut<WdlStreamer>
     }
 }
 
-/// The backdrop law (`wdl.wgsl`'s header, decision 0684) is a property of the **shader**, so it is
+/// The backdrop law (`wdl.wgsl`'s header) is a property of the **shader**, so it is
 /// checked there — the same shape as `sky_order.rs`'s depth-law test, and for the same reason: the
 /// failure it guards is invisible except at a ridge crest on a fogged horizon, and the obvious "tidy-up"
 /// (go back to one shared clip plane, drop the frag-depth write) silently reintroduces it.
@@ -272,7 +272,7 @@ fn the_far_band_stays_a_depth_pushed_backdrop() {
     );
 }
 
-/// The hull is a **fog hull**, not a fogged surface (decision 1521): the reference's far-band emitter
+/// The hull is a **fog hull**, not a fogged surface: the reference's far-band emitter
 /// submits its own fog pair — start `0`, end `1.0` (`0x6bd7ae`–`0x6bd7c8` inside `0x6bd780`) — so the
 /// hull is the flat fog colour at every distance. Reading the SCENE fog distances here is the bug this
 /// pins: the 33 yd overlap then sits inside the fog ramp, up to `33 / (end − start)` white (25% at

@@ -1,6 +1,6 @@
 //! What the streamed world answers about a position: the spawn-time MCSH ground-shade lookup,
 //! the ground-effect/height queries the sound + clutter systems make against resident tiles, and
-//! the area authority (the `AreaTable.dbc` leaf under the player's feet, decision 0070).
+//! the area authority (the `AreaTable.dbc` leaf under the player's feet).
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_assets::AdtTile;
@@ -10,11 +10,11 @@ use bevy::prelude::*;
 use super::TerrainStreamer;
 
 /// The `AreaTable.dbc` id under the player's feet — the zone/subzone, from the containing
-/// resident chunk's MCNK `areaId` (decision 0070: drives zone music/ambience/reverb; later the
+/// resident chunk's MCNK `areaId` (drives zone music/ambience/reverb; later the
 /// minimap zone text). `None` until the ground tile is resident (or off-terrain). Written each
 /// frame by [`update_current_area`]; consumers change-detect on the inner value.
 ///
-/// **It is scoped to the character session, not to the process** (decision 2130). It goes back to
+/// **It is scoped to the character session, not to the process**. It goes back to
 /// `None` the moment there is no avatar to measure from, so "we have not answered yet" is never
 /// spelled the same way as "here is the character before this one".
 #[derive(Resource, Default, PartialEq, Eq)]
@@ -25,7 +25,7 @@ pub struct CurrentArea(pub Option<u32>);
 /// indoor bit + names always come from one coherent frame — the client's single-pass resolve.
 ///
 /// **Every consumer that ACTS on the area belongs after it**, and the zone-channel walk is the
-/// case that proves it (decision 2130): unordered, it read whatever the previous frame had
+/// case that proves it: unordered, it read whatever the previous frame had
 /// published and paid for the difference in `CMSG_JOIN_CHANNEL`/`CMSG_LEAVE_CHANNEL` traffic for
 /// zones the player was never in.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -121,7 +121,7 @@ pub fn terrain_height_under(
 }
 
 /// [`terrain_height_under`] for a caller that asks many columns of the same tile in one go —
-/// the sun-flare march asks ~96 a frame along two rays (decision 1979): the tile resolution
+/// the sun-flare march asks ~96 a frame along two rays: the tile resolution
 /// (a streamer map lookup and an asset lookup) is done once per tile change, not per column.
 pub fn terrain_height_under_cached<'a>(
     streamer: &TerrainStreamer,
@@ -162,7 +162,7 @@ pub(super) fn update_current_area(
     wmo_areas: Option<Res<crate::wmo_portal::WmoAreas>>,
 ) {
     let Some(wow) = focus.body_pos() else {
-        // **No avatar — and the authority DIES with the character session** (decision 2130).
+        // **No avatar — and the authority DIES with the character session**.
         //
         // The hold below is a within-session convenience (a tile-edge crossing must not flicker
         // through `None`). Holding across the *session* boundary is a different thing entirely:
@@ -176,7 +176,7 @@ pub(super) fn update_current_area(
         //
         // `body_pos()` is `Some` only for a live avatar (`ViewFocus::body`/`detached`) and `None`
         // for both glue-screen focuses, so this is the session edge without a state transition to
-        // subscribe to. A recoverable disconnect keeps the body as the local puppet (0065), so the
+        // subscribe to. A recoverable disconnect keeps the body as the local puppet, so the
         // area correctly survives one.
         if area.0.is_some() {
             *area = CurrentArea(None);
@@ -229,7 +229,7 @@ mod tests {
         w
     }
 
-    /// **The area authority dies with the character session** (decision 2130).
+    /// **The area authority dies with the character session**.
     ///
     /// It had exactly one writer, which only ever assigned `Some`, and nothing reset it — so once
     /// a character had published a zone it stayed published for the life of the *process*. The
@@ -264,7 +264,7 @@ mod tests {
              NEXT character's login reading THIS character's zone"
         );
 
-        // And the entry-window focus (decision 0777) is the same: a picked row is not a body.
+        // And the entry-window focus is the same: a picked row is not a body.
         w.insert_resource(CurrentArea(Some(1519)));
         w.insert_resource(crate::terrain_stream::ViewFocus::entry(
             0,
@@ -274,7 +274,7 @@ mod tests {
         assert_eq!(w.resource::<CurrentArea>().0, None);
     }
 
-    /// A **recoverable** disconnect keeps the avatar as the local puppet (0065), so the area must
+    /// A **recoverable** disconnect keeps the avatar as the local puppet, so the area must
     /// survive one: nothing about the world under the player's feet changed when the socket died.
     /// This is why the clear hangs off "is there a body" rather than off the net session.
     #[test]

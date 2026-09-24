@@ -88,7 +88,7 @@ pub struct MatKey {
     /// not the vertex UVs ([`benilla_formats::RenderSubmesh::env_map`]). Packed into
     /// `clutter_fade.z` bit 12; a key axis because two batches sharing a texture but differing here
     /// sample it completely differently. **Not** a `WowModelKey` axis — it swaps which UV the
-    /// FRAGMENT stage samples, no pipeline state, so it mints no pipeline (decision 0837).
+    /// FRAGMENT stage samples, no pipeline state, so it mints no pipeline.
     env_map: bool,
     /// The batch's static terrain-shade selector ([`ShadeSel`]). Static per placement, so it dedups a
     /// lit / matte / shaded material variant.
@@ -122,7 +122,7 @@ pub struct MatKey {
     /// dedupe onto a colour material.
     zfill: bool,
     /// This batch is part of a **WMO skybox** ([`crate::skybox`]) — the building-owned painted sky,
-    /// drawn on this lane like any other M2 since decision 1264. Its own key axis because the lane
+    /// drawn on this lane like any other M2 since. Its own key axis because the lane
     /// changes pipeline state ([`SKY_DEPTH_MARKER`]: the far depth pinned at the vertex) and sort rung
     /// ([`skybox_sort_bias`]), so a skybox batch must never dedupe onto the identical-looking world
     /// batch — `CavernsOfTimeSky` and Elwynn share no texture today, but nothing enforces that and
@@ -135,17 +135,17 @@ pub struct MatKey {
     /// are keyed by MATERIAL, so a batch whose animated loop depends on **which sequence its
     /// instance is playing** cannot share one and be right: the BRM lava bubbles key their whole
     /// flipbook inside a 50 %-weighted variation of animation id 0, and their 15 placements re-roll
-    /// independently every ~3.3 s (decision 0768), so at any instant some are on slot 0 and some on
+    /// independently every ~3.3 s, so at any instant some are on slot 0 and some on
     /// slot 1. Keying the material by the placement's anim host gives each its own row and its own
-    /// sequence (decision 1408); the population is 22 batch-channels across 6 models
+    /// sequence; the population is 22 batch-channels across 6 models
     /// (`benilla-extract uvslotscan`), and the clones expire on the same distance evictor as every
-    /// other material ([`scope_model_materials`], decision 0785).
+    /// other material ([`scope_model_materials`]).
     instance: Option<Entity>,
 }
 
 /// The per-material static terrain-shade **selector** baked into `sun_scale.x` — NOT an intensity
 /// itself. `wow_model.wgsl` thresholds the selector (≥0.85 / ≥0.5) into the byte-true INTENSITY
-/// family (decision 0354: 2.5 lit / 1.0 day-night / 0.5 MCSH-shadowed — `[node+0xa4]`) scaling the
+/// family (2.5 lit / 1.0 day-night / 0.5 MCSH-shadowed — `[node+0xa4]`) scaling the
 /// global SH eval. It is the static half of the verified per-category matrix (`0x69e280`,
 /// decision 0173) — dynamic entities
 /// (units/players/GameObjects) are always [`ShadeSel::Lit`] here and mix toward the shaded
@@ -177,7 +177,7 @@ pub enum ShadeSel {
     Matte,
     /// The base sits on MCSH-shadowed terrain: the dim intensity (the binary's 0.5).
     Shaded,
-    /// Lit by an **authored M2 light rig** (the glue create booth, decision 0429): the lit value is
+    /// Lit by an **authored M2 light rig** (the glue create booth): the lit value is
     /// the order-2 SH probe in slot 0 of the material's *own* light buffer — the scene's ambient +
     /// directional lights folded by `lighting::prop_probe_coeffs`, the same `Model2.bls` curve the
     /// reference's vertex program runs — plus the per-vertex ≤3-nearest point term (the scene's
@@ -217,7 +217,7 @@ pub type MaterialCache = benilla_assets::SpatialCache<MatKey, Handle<WowModelMat
 /// always blends — the reference's promotion is transparent-pass membership, not a per-mode state
 /// (`0x70c1fd`) — but the alpha TEST under promotion keys on the *stored* blend mode (`0x70c237`):
 /// AlphaKey keeps its 224/255 cutout while blending, Opaque runs with no alpha test at all. The
-/// source blend is what sets [`TWIN_CUTOUT_MARKER`] right (decision 0842: a twin
+/// source blend is what sets [`TWIN_CUTOUT_MARKER`] right (a twin
 /// built as `Blend` cut every texel under 224/255 out of a stealthed Opaque batch, which erased
 /// Gressil's blade body and left only its high-alpha rune pattern).
 pub fn model_material(
@@ -256,7 +256,7 @@ pub fn model_material(
     light: &Buffer,
     // The ONE placement this material belongs to, or `None` for the shared batch material every
     // instance of the model reuses. `Some` only for a batch whose animated UV/tint loop depends on
-    // the sequence its instance is playing (decision 1408): the animated-material registries are
+    // the sequence its instance is playing: the animated-material registries are
     // keyed by material, so such a batch cannot share one and be right. See `MatKey::instance`.
     instance: Option<Entity>,
 ) -> Handle<WowModelMaterial> {
@@ -291,13 +291,13 @@ pub fn model_material(
     // Additive batches (M2 glow cards) ADD their colour to the framebuffer — so the warm glow isn't
     // muted by the (cool, at night) background bleeding through. They go in the transparent pass
     // (`AlphaMode::Blend`); the shader folds the radial alpha into the colour IN GAMMA SPACE
-    // (decision 0160) and `specialize` overrides the blend STATE to a pure (ONE, ONE) add. The
+    // and `specialize` overrides the blend STATE to a pure (ONE, ONE) add. The
     // additive marker is `clutter_fade.z` bit 2 — the shader gates the gamma-premultiply on the
     // SAME bit specialize keys on (a stale "model_flags.w == 2.0" claim here once desynced the
     // two: blend went pure-add while the premultiply never fired — the flat-square regression).
     // `WOW_NO_ALPHATEST=1` draws every cutout batch opaque — the A/B for "is the alpha test
     // itself discarding this surface?", which is otherwise indistinguishable in the pixels
-    // from the surface losing a depth test or never being submitted. (B38: the flip
+    // from the surface losing a depth test or never being submitted. (the flip
     // survives it unchanged, so the cutout is not what removes the awning.) It suppresses the
     // fade twin's cutout marker too, so the A/B answers the same question mid-fade.
     let source_cutout = blend == ModelBlend::AlphaTest && !alphatest_disabled();
@@ -313,7 +313,7 @@ pub fn model_material(
             ModelBlend::AlphaTest => AlphaMode::Opaque,
             // Mod/Mod2x ride the transparent pass (they multiply what's already drawn, so the
             // scene under them must exist); `specialize` swaps the actual blend state to the
-            // byte-verified multiply factors via the marker bits below (decision 0528).
+            // byte-verified multiply factors via the marker bits below.
             ModelBlend::Blend | ModelBlend::Mod | ModelBlend::Mod2x => AlphaMode::Blend,
         }
     };
@@ -393,10 +393,10 @@ pub fn model_material(
                     // which leave the byte's high bits 0 (see `WorldAssets::model_material`,
                     // `water_fx`) — keep ordinary scene fog; 1/2/3 = the additive/Mod/Mod2x BLACK/
                     // WHITE/GREY fog colours; 4 = fog disabled outright (render flag 0x02).
-                    // Bits 7/8 = the MULTIPLY blends (decision 0528): `specialize` swaps the pipeline
+                    // Bits 7/8 = the MULTIPLY blends: `specialize` swaps the pipeline
                     // to the byte-verified factors — Mod DST_COLOR/ZERO, Mod2x DST_COLOR/SRC_COLOR
                     // (exact on the 0161 gamma lane: the framebuffer holds gamma, like the reference).
-                    // Bit 10 = TWIN CUTOUT (decision 0842): this fade twin's SOURCE batch alpha-tests,
+                    // Bit 10 = TWIN CUTOUT: this fade twin's SOURCE batch alpha-tests,
                     // so the shader re-applies the hard 224/255 cutout on the unfaded alpha (the
                     // reference's promoted-AlphaKey ALPHAREF = A×224 — the same fixed silhouette). An
                     // Opaque source sets no bit: the reference disables its alpha test outright, steady
@@ -428,10 +428,10 @@ pub fn model_material(
                 // unless 0x01 is set (`DAT_00811fa8[4] = 1`), so an
                 // un-flagged additive (e.g. ArmorReflect shine) is lit. The M2 path DOES generate
                 // env-map texcoords — in the vertex program, invisible to a SetRenderState-only
-                // sweep (decision 0971). See [`ENV_MAP_MARKER`].
+                // sweep. See [`ENV_MAP_MARKER`].
                 // M2 Mod/Mod2x ARE fullbright regardless of 0x01 — the lighting table
                 // `DAT_00811fa8 = {1,1,1,1,1,0,0}` clears GL_LIGHTING for modes 5/6; WMO lighting
-                // stays flag-driven only (decision 0528).
+                // stays flag-driven only.
                 model_flags: Vec4::new(
                     if is_wmo { 1.0 } else { 0.0 },
                     if fade_variant { 1.0 } else { 0.0 },
@@ -453,7 +453,7 @@ pub fn model_material(
                 // draw order — the byte-verified MOBA draw-order determinism. Uniform data by design:
                 // as a `WowModelKey` axis driving a fixed-function depth bias it made every batch index
                 // its own PIPELINE, and a first city sight compiled ~3000 of them synchronously on the
-                // render thread (decision 0837). `WOW_WMO_BIAS=0` (B38's A/B diagnostic) zeroes it here.
+                // render thread. `WOW_WMO_BIAS=0` (B38's A/B diagnostic) zeroes it here.
                 // zw = the batch's live **UV-animation offset** (decision 0130 phase 3, `0x714260`:
                 // the real client adds the sampled translation to the stage UVs —
                 // translation is un-pivoted, and no placed doodad uses rotation/scaling). Seeded at
@@ -499,7 +499,7 @@ pub fn model_material(
                         if window { 1.0 } else { 0.0 },
                     )
                 },
-                // Static until a sampler registers this material (decision 1381) — then the
+                // Static until a sampler registers this material — then the
                 // table slot is baked in exactly once.
                 anim_slots: Vec4::ZERO,
                 light_buf: light.clone(),
@@ -517,19 +517,19 @@ pub(crate) const ZFILL_MARKER: u16 = 1 << 9;
 /// the hard 224/255 cutout while blending (`wow_model.wgsl`). Set from the source blend mode by
 /// [`model_material`] (fade twins) and [`zfill_material`] (depth-prime twins); never on an
 /// Opaque-source twin — the reference runs mode 0 with the alpha test disabled, steady and
-/// promoted alike (`0x70c237`; decision 0842).
+/// promoted alike (`0x70c237`).
 pub(crate) const TWIN_CUTOUT_MARKER: u16 = 1 << 10;
 
 /// `clutter_fade.z` marker bit 12: this batch's texture coordinates are **generated**, so
 /// `wow_model.wgsl` derives them from the view-space reflection vector instead of sampling the
 /// (meaningless) vertex UVs — the reference's `texture_unit_lookup > 2` env stage. Bit 11 is
 /// [`FAR_SIDE_MARKER`]. Deliberately **not** a [`benilla_assets::materials::WowModelKey`] axis: it changes
-/// only what the fragment stage samples, so it needs no pipeline of its own (decision 0837).
+/// only what the fragment stage samples, so it needs no pipeline of its own.
 pub(crate) const ENV_MAP_MARKER: u16 = 1 << 12;
 
 /// `clutter_fade.z` marker bit 13: the **WMO-skybox lane** — this batch is part of a building's
 /// painted sky, so `specialize` compiles the shader's `WOW_SKY_DEPTH` branch (the far depth,
-/// pinned at the vertex — decision 2016) and drops the rasterizer bias constant. It *is* a
+/// pinned at the vertex) and drops the rasterizer bias constant. It *is* a
 /// [`benilla_assets::materials::WowModelKey`] axis, unlike [`ENV_MAP_MARKER`]: the pin belongs
 /// to exactly one camera-anchored model, and every other draw in the frame must keep the
 /// pipeline that leaves its depth real.
@@ -585,7 +585,7 @@ pub(crate) const ZFILL_SORT_BIAS: f32 = -8.0;
 /// leaves an invisible depth wall inside the cutout holes. Only an AlphaKey source rides the fade
 /// twin's hard 224/255 cutout ([`TWIN_CUTOUT_MARKER`]); Opaque sources never alpha-test
 /// (`0x70c237`/`0x707f7d` — the reference's twin keeps mode 1's test, mode 0 has
-/// none; decision 0842) and authored-Blend sources discard nothing either.
+/// none) and authored-Blend sources discard nothing either.
 ///
 /// Everything that shapes only the *colour* (lighting lane, shade, fog, tint) is canonicalized so
 /// twins dedupe maximally — the `WOW_ZFILL` fragment returns before any of it.
@@ -806,7 +806,7 @@ pub struct FarSideOfWater;
 /// fade resolve, deriving near-vs-far from the CURRENT handle so an upstream overwrite is
 /// re-classified the same frame instead of fought over.
 ///
-/// **Reactive, not per-frame** (decision 0930; 0922 named the lever). A batch's verdict is a
+/// **Reactive, not per-frame** (0922 named the lever). A batch's verdict is a
 /// function of its transform, its handle, its layers, its ancestors' room claim, the loaded
 /// surfaces, and the eye's side — so a *clean* batch is skipped, and only the changed set
 /// re-classifies (~2.6k of ~40k parts on a measured Stormwind frame; the full sweep cost 2.2 ms).
@@ -814,7 +814,7 @@ pub struct FarSideOfWater;
 /// a global term that changes VERDICTS moves: the eye crosses the surface (every verdict
 /// inverts) or surfaces stream in/out. A part *despawn* changes no live verdict — it only
 /// obligates the twin GC's exact mark eventually — so it schedules a full walk behind
-/// [`GC_DEADLINE_SECS`] instead of promoting the same frame (decision 1462: walking streams
+/// [`GC_DEADLINE_SECS`] instead of promoting the same frame (walking streams
 /// parts out on 12–22 frames/s, and each promotion was a full re-classify of every part —
 /// lane B of 1461's walking tax; between full frames a pair orphaned by a handle overwrite —
 /// a fade settling to its cutout — lingers harmlessly, kept fresh by the mirror above, until
@@ -872,7 +872,7 @@ pub(crate) fn classify_water_side(
         ),
     >,
     reclaimed: Query<Entity, Changed<crate::wmo_portal::UnitWmoRoom>>,
-    // The straddle verdict's edge (decision 2188): an instance entering or leaving its water band
+    // The straddle verdict's edge: an instance entering or leaving its water band
     // re-classifies its whole subtree — the same fan-down as the room claim.
     rebanded: Query<Entity, Changed<crate::straddle::ModelWaterBand>>,
     clips: Res<crate::straddle::WaterClips>,
@@ -1064,7 +1064,7 @@ fn classify_part(
     if let Some(used) = used {
         used.insert(near.id());
     }
-    // **The straddle split** (decision 2188, [`crate::straddle`]): an instance inside its water
+    // **The straddle split** ([`crate::straddle`]): an instance inside its water
     // band draws on BOTH lists. This batch keeps its NEAR identity — the fragment clips it to the
     // eye's half — and `sync_straddle_twins` hangs its far twin beside it, clipped to the other.
     // The verdict is the per-slot word the clip itself reads, so a batch is doubled exactly when
@@ -1149,15 +1149,15 @@ fn trace_side(what: &str, entity: Entity, gt: &GlobalTransform) {
 }
 
 /// Replace the fog-policy bits (4-6) inside a packed `clutter_fade.z` marker word, preserving
-/// every other pipeline marker — bits 0-3 AND the Mod/Mod2x multiply markers in bits 7-8
-/// (decision 0528). The mask lives here, beside the packer above: the portrait booth's rig twin
+/// every other pipeline marker — bits 0-3 AND the Mod/Mod2x multiply markers in bits 7-8.
+/// The mask lives here, beside the packer above: the portrait booth's rig twin
 /// once truncated the word to `u8` and hand-masked `& 0x0f`, silently dropping the multiply
 /// markers — the char-select white-blade regression.
 pub fn replace_fog_policy(z: f32, policy: benilla_formats::FogPolicy) -> f32 {
     f32::from((z as u16 & !(7 << 4)) | ((policy as u16) << 4))
 }
 
-/// The model-render lane's own registrations (decision 1163, stage zero).
+/// The model-render lane's own registrations (stage zero).
 ///
 /// `FarSideTwins` is engine state in an engine module, and it was initialised by `EntitiesPlugin`
 /// purely because `model_render` had no plugin to put it in — which is how the world viewer's very
@@ -1174,7 +1174,7 @@ pub fn plugin(app: &mut App) {
     // marker through `far_resolved`, so the two writers can only disagree on a frame the marker
     // itself flips — a one-frame stale side on the player's own parts at the instant the eye
     // crosses the surface, inside the whole-screen atmosphere swap that crossing already is (the
-    // same accepted class as the interior law's one-frame lag, 0919).
+    // same accepted class as the interior law's one-frame lag).
     app.init_resource::<FarSideTwins>().add_systems(
         Update,
         classify_water_side
@@ -1202,8 +1202,8 @@ pub fn plugin(app: &mut App) {
         Update,
         visibility::trace_model_visibility.after(ModelVisSet),
     );
-    // The material dedup cache and its two evictors — the soft one (distance, decision 0785) and
-    // the hard one (a cross-map transition, decision 0729). Both used to live in `entities`, which
+    // The material dedup cache and its two evictors — the soft one (distance) and
+    // the hard one (a cross-map transition). Both used to live in `entities`, which
     // owned the cache because the entity spawner was the first lane to want one; the glue booth
     // and the portrait bake each kept a `Local` that nothing ever swept, which is exactly the
     // unbounded residency `art_scope` was written to end.
@@ -1228,12 +1228,12 @@ pub fn plugin(app: &mut App) {
     }
 }
 
-/// Expire the material dedup by **distance** (decision 0785).
+/// Expire the material dedup by **distance**.
 fn scope_model_materials(mut scope: crate::art_scope::ArtScope, mut mats: ResMut<ModelMaterials>) {
     scope.apply(&mut mats.0, crate::art_scope::ArtSlot::ModelMats);
 }
 
-/// …and drop it whole on a cross-map transition (decision 0729 — see `MapChange` for why a clear
+/// …and drop it whole on a cross-map transition (see `MapChange` for why a clear
 /// is always safe mid-session). Every entry is get-or-insert at its use site, so a cleared one
 /// rebuilds on the next spawn that wants it.
 fn evict_model_materials(
@@ -1324,7 +1324,7 @@ mod tests {
 
     /// The authored-batch-order sort epsilon sits in its working band: any realistic model's
     /// last batch still biases UNDER the effect lane's owner-last rung floor (an item's glow
-    /// particles must draw after every batch of the item — 0719/0721), and one step is far above
+    /// particles must draw after every batch of the item), and one step is far above
     /// f32 noise on a far-scene sort distance (~4e-5 at 500 yd), so the tie actually breaks.
     /// Pins the constant against a careless resize in either direction — either end failing is
     /// the Naxx-item strobe (coplanar layers re-flipping a sort tie every frame) or its dual
@@ -1346,7 +1346,7 @@ mod tests {
             "one order step must dominate f32 noise on a far sort distance"
         );
         // Bevy's pipeline key truncates the WHOLE band to 0 — no batch index may mint a
-        // pipeline (0837, re-learned in 0938's tail): the cap holds for any u16.
+        // pipeline (re-learned in 0938's tail): the cap holds for any u16.
         assert_eq!(deepest as i32, 0);
         const {
             assert!(super::BATCH_ORDER_SORT_CAP < 1.0);
@@ -1361,7 +1361,7 @@ mod tests {
     }
 
     /// The **WMO-skybox band**: the four properties the lane's whole ordering rests on, none of
-    /// which survives being reasoned about in prose (decision 1264). The band is arithmetic at a
+    /// which survives being reasoned about in prose. The band is arithmetic at a
     /// magnitude where f32 stops being able to represent the steps, which is exactly how the
     /// ordinary eps would have failed here in silence.
     #[test]

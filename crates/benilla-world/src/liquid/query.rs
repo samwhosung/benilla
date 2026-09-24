@@ -98,7 +98,7 @@ pub struct Underwater(pub(crate) benilla_formats::Submersion);
 ///
 /// Without the source split, a tunnel bored under a lake inherits the lake: an ADT footprint is a
 /// flat XY rectangle with no floor, so every position beneath it reads as submerged — the "swim in
-/// air" family (decision 0634). Without the **owner**, the same holds one level up: a WMO pool
+/// air" family. Without the **owner**, the same holds one level up: a WMO pool
 /// claims every position under its XY in *every other building on the map*, at any depth. That is
 /// decision 0696 — the Uldaman entrance read as submerged under a mushroom cave's pool 186 yd
 /// overhead, in a building the player was 191 yd below and had never entered.
@@ -114,7 +114,7 @@ pub enum LiquidSource {
 /// A WMO pool's **scope**: whose room it is, and how far down that room reaches.
 ///
 /// Both fields exist to bound a footprint that has none of its own. `owner` bounds it sideways, to
-/// one placement (0696). `floor` bounds it *downwards*, to one storey — the piece 0696 named as
+/// one placement. `floor` bounds it *downwards*, to one storey — the piece 0696 named as
 /// still open, now measured against the shipped files: Undercity's upper
 /// slime channels (groups 7 and 10, world z ≈ 52) were submerging the Rogues'-Quarter-level rooms
 /// **115 yd below them**, in the same placement, so owner scoping alone could not reject them.
@@ -286,7 +286,7 @@ struct LiquidGrid {
     inv_det: Option<f32>,
     /// The highest wet vertex — the **degenerate fallback only**. Never the answer for a grid we can
     /// sample: taking the chunk maximum as "the surface" is precisely the bug this type was rebuilt
-    /// to kill (decision 0642).
+    /// to kill.
     fallback_z: f32,
 }
 
@@ -357,7 +357,7 @@ impl LiquidGrid {
 impl WaterChunkInfo {
     /// The **chunk-maximum** height — the single highest wet vertex of the whole grid.
     ///
-    /// This is the rule the per-cell sample REPLACED (decision 0634): it answered "swimming" from
+    /// This is the rule the per-cell sample REPLACED: it answered "swimming" from
     /// anywhere under a surface's XY box, which is how Blackrock's staircase read as submerged with
     /// its lava metres below. Nothing live reads it; `super::real_data` does, to assert the number
     /// the fix moved away from — a regression test whose baseline would otherwise be a comment.
@@ -464,7 +464,7 @@ impl WaterChunkInfo {
     /// vertex**. A liquid grid is a heightfield, not a plane: Blackrock's magma runs 167.29 → 175.00
     /// across one group, and Felwood's river drops ~2 yd across a single MCNK. The maximum is the
     /// *whole surface's* ceiling, which near the low end sits metres above the liquid actually under
-    /// your feet — and that read as "swim in air" over both (decision 0642).
+    /// your feet — and that read as "swim in air" over both.
     pub(crate) fn surface_z_at(&self, x: f32, y: f32) -> Option<f32> {
         if !self.contains(x, y) {
             return None; // the bounding box is the cheap reject
@@ -499,7 +499,7 @@ impl WaterChunkInfo {
     /// [`Unknown`](LiquidClaim::Unknown) is the un-classified first frame and admits both.
     ///
     /// `z` is the subject's own WoW height, and it is what bounds a WMO pool **downwards** to its
-    /// own storey ([`WmoPool::floor`], decision 0701) — a test on the pool rather than on the
+    /// own storey ([`WmoPool::floor`]) — a test on the pool rather than on the
     /// delegation, so it holds under every claim including `Unknown`.
     fn answers(&self, claim: LiquidClaim, z: f32) -> bool {
         match (claim, self.source) {
@@ -623,16 +623,16 @@ pub struct LiquidHit {
 /// subject is not in cannot answer for it.
 ///
 /// It is the fix for "swim in air" at both levels. A footprint is a flat XY rectangle with **no
-/// floor**: before the source split the Stormwind canal claimed the mage-district tunnel beneath it
-/// (0634); before the *owner* scoping a mushroom cave's pool claimed the Uldaman entrance 186 yd
-/// below it, in a building the player had never entered (0696).
+/// floor**: before the source split the Stormwind canal claimed the mage-district tunnel beneath it;
+/// before the *owner* scoping a mushroom cave's pool claimed the Uldaman entrance 186 yd
+/// below it, in a building the player had never entered.
 ///
 /// Each candidate answers with its height **at this XY** ([`WaterChunkInfo::surface_z_at`]), and
 /// among them the **lowest wins**. Overlapping footprints used to resolve by iteration order
 /// (`.next()`) — an arbitrary pick that made the answer depend on spawn order. The lowest is the one
 /// whose volume you are actually in when standing between two stacked surfaces.
 ///
-/// And a WMO pool is bounded **below** by its own room's floor ([`WmoPool::floor`], decision 0701):
+/// And a WMO pool is bounded **below** by its own room's floor ([`WmoPool::floor`]):
 /// owner scoping bounded a pool to its building but not to its *storey*, which left Undercity's
 /// upper slime channels submerging the rooms 115 yd beneath them — the same defect a third time,
 /// one level further in.
@@ -678,13 +678,13 @@ pub fn liquid_at<'a>(
 /// the two failures this instrument exists to separate look identical without them: claiming a spot
 /// it shouldn't (wrong cell) versus claiming the right spot at the wrong height (wrong height rule).
 /// 0635 read a footprint's *size* off this instrument to find the first; a `grid z` span far from
-/// the sampled height is the second (decision 0642).
+/// the sampled height is the second.
 ///
 /// And each line names its **owner** — which placement + group a WMO pool belongs to, and whether
 /// the subject's own claim matches it (`◀ YOURS` / `other room`). Without that column the Uldaman
 /// report ("VERDICT Still, +185.91 over feet, WmoGroup WET-CELL") was indistinguishable from a
 /// legitimate pool sampled at the wrong height: nothing on the line said the surface belonged to a
-/// *different building* — which was the entire bug (0696).
+/// *different building* — which was the entire bug.
 pub fn describe_at<'a>(
     liquids: impl Iterator<Item = &'a WaterChunkInfo>,
     wow: [f32; 3],
@@ -760,7 +760,7 @@ pub fn describe_at<'a>(
 /// delegation [`submersion_at`] applies (the 0634/0696 scoping: a pool in another building or
 /// storey never answers), with no over/under verdict attached: the consumer that needs the
 /// surfaces a subject is merely *near* — above or below — is the effect lane's water-side
-/// classification (`particles::sim::far_side_of_water_at`, decisions 0911/0921). Kept here so
+/// classification (`particles::sim::far_side_of_water_at`). Kept here so
 /// the delegation rule has one owner; `answers` stays private.
 pub fn surfaces_at<'a>(
     liquids: impl Iterator<Item = &'a WaterChunkInfo> + 'a,
@@ -789,7 +789,7 @@ pub fn water_surface_at<'a>(
 }
 
 // The **wade ceiling** used to live here, as `WADE_MAX = 2.0` — a flat proxy for a boundary B7
-// (decision 0226) had already shown to be `0.75·collisionHeight`, kept because the per-unit height
+// had already shown to be `0.75·collisionHeight`, kept because the per-unit height
 // it needed was 0464's un-plumbed `CreatureModelData.collisionHeight`. Decision 0645 plumbed it, so
 // the proxy is gone and there is no wade constant to re-import: wading is *the complement of
 // swimming*, one number, and its one spelling is `player::swim_enter_depth(h)`. A human's line
@@ -807,7 +807,7 @@ fn submersion_of(kind: LiquidKind) -> benilla_formats::Submersion {
     use benilla_formats::Submersion;
     match kind {
         LiquidKind::Still | LiquidKind::Rapids => Submersion::Water,
-        // Ocean is its own verdict — it alone runs the depth ramp (decision 1829). It can only come
+        // Ocean is its own verdict — it alone runs the depth ramp. It can only come
         // from ADT MCLQ (`(b & 0x0f) & 3 == 1`); a WMO cannot author it, which is why no interior
         // pool ever reaches this arm.
         LiquidKind::Ocean => Submersion::Ocean,
@@ -833,7 +833,7 @@ fn submersion_of(kind: LiquidKind) -> benilla_formats::Submersion {
 /// query had delegated since 0634 — so the two disagreed by construction, and the screen took the
 /// underwater filter in rooms the player was demonstrably dry in. Standing in Undercity's Rogues'
 /// Quarter at `(1414.08, 53.00, -62.26)`, 95 yd of rock below Tirisfal's ADT water at z 32.93, the
-/// player read "not in liquid" and the whole scene still rendered green (decision 0696).
+/// player read "not in liquid" and the whole scene still rendered green.
 ///
 /// **Every** liquid counts, including magma and slime — they are not the water murk, they are their
 /// own atmospheres (see [`Underwater`]). The eye's own **`+0.01` accept margin is water's alone**:
@@ -854,7 +854,7 @@ fn submersion_of(kind: LiquidKind) -> benilla_formats::Submersion {
 /// The verdict alone, for the tests that assert on it — a thin delegation to
 /// [`submersion_claim_at`], never a second copy of the rule. It restated the filter for about an
 /// hour of this change, and that was already one copy too many: the reason the surface height is
-/// threaded out of a *single* pass is precisely that two passes can disagree (decision 0701).
+/// threaded out of a *single* pass is precisely that two passes can disagree.
 #[cfg(test)]
 pub(super) fn submersion_at<'a>(
     liquids: impl Iterator<Item = &'a WaterChunkInfo>,
@@ -922,7 +922,7 @@ impl EyeLiquid<'_> {
 }
 
 /// The submerged camera's two scalars, published beside [`Underwater`] for the consumers that need
-/// a *distance* rather than a verdict (decision 1829).
+/// a *distance* rather than a verdict.
 #[derive(bevy::prelude::Resource, Default, Clone, Copy)]
 pub struct SubmergedEye {
     /// `liquidSurfaceHeight − probeZ` in world-Z yards, **positive when submerged** and `0.0` when
@@ -1234,7 +1234,7 @@ mod tests {
     }
 
     /// The 5207 groups that carry the `0xf` sentinel must be untouched — the override only ever
-    /// *adds* water, and a claim without one is the pre-1000 query exactly (decision 1000).
+    /// *adds* water, and a claim without one is the pre-1000 query exactly.
     #[test]
     fn a_room_without_the_override_is_the_old_query_unchanged() {
         assert!(liquid_at(std::iter::empty(), [0.0, 0.0, 0.0], inside(1)).is_none());
@@ -1406,7 +1406,7 @@ mod tests {
         );
     }
 
-    /// **The Undercity storey bug** (decision 0701): a pool in ANOTHER GROUP of the SAME placement,
+    /// **The Undercity storey bug**: a pool in ANOTHER GROUP of the SAME placement,
     /// far above, still claimed you — owner scoping bounds a pool sideways to one building but not
     /// downwards to one room. Live repro at `.go xyz 1732.68 187.01 -65.70`: the eye's own room
     /// (group 182) held slime at z −64.48, *below* the eye and so not submerging it, while groups 7

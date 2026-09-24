@@ -18,7 +18,7 @@
 //! (`model_render::apply_model_visibility`), the particle **draw-set gate**
 //! (`particles::sim::simulate_particles`) — both through [`within_farclip`] — and the terrain
 //! **residency window** (`terrain_stream::window`), which derives its reach from `farclip` the way
-//! the reference does (decision 1513). The player's lever is the Terrain Distance row of the
+//! the reference does. The player's lever is the Terrain Distance row of the
 //! options window (the `farclip` CVar); `$WOW_FARCLIP` is the headless one.
 
 use bevy::prelude::*;
@@ -55,13 +55,13 @@ pub struct Viewer {
     /// is a property of the eye, not of any body in the scene.
     pub drunk: f32,
     /// Is the viewer a **ghost**? While the flag is up the active `LightParams` slot is 4 — the
-    /// death profile, applied instantly (decision 0308 §7; `0x6d4620` sets slot 4, `0x6d2260`
+    /// death profile, applied instantly (`0x6d4620` sets slot 4, `0x6d2260`
     /// re-derives it every frame).
     pub ghost: bool,
     /// Is a loading cover over the world right now, so the viewer has not actually *seen* anything
     /// yet? The appear ramp arms on this falling edge — the faithful trigger is "the player can
     /// see the entity", and the residency proxy goes true well before the cover drops now that
-    /// the clear waits for the whole scene (decision 0737).
+    /// the clear waits for the whole scene.
     pub world_covered: bool,
 }
 
@@ -98,8 +98,8 @@ impl Viewer {
 
 /// View distance in yards. `farclip` = WoW's `farclip` CVar — the ONE view distance: the far plane of
 /// the detailed world (geometry beyond it is clipped per-pixel, the wall, and the WDL horizon fills
-/// in beyond) **and** the reach of terrain residency (`terrain_stream::window`, decision 1513).
-/// Default **350** — the reference client's own registered default (decision 1624, superseding
+/// in beyond) **and** the reach of terrain residency (`terrain_stream::window`).
+/// Default **350** — the reference client's own registered default (superseding
 /// 0954's divergence to the clamp's max 777). 777 shipped as "the `Config.wtf` most players ran",
 /// but it is the *maximum*, and it is what every player gets before they touch anything: at 777 the
 /// residency window is 24 chunks per axis against 350's 11 ([`terrain_stream::window::inner_radius`]),
@@ -174,7 +174,7 @@ pub const NEARCLIP_RANGE: std::ops::RangeInclusive<f32> = 0.01..=0.33;
 /// only ever holds 1 (144 rows) or 2 (49 rows) — nothing higher exists anywhere in it — and all
 /// three rows reachable by the fallback match hold **1**. Every id in the table is 2004-era, so no
 /// modern GPU matches a specific row and the fallback is what answers: the string registered on
-/// any machine this client actually runs on today is `"1"`. Decision 1629.
+/// any machine this client actually runs on today is `"1"`.
 ///
 /// **Latched, like the reference's own flag byte** (`CVar::Register` flags `3` = registered |
 /// latched; the callback echoes `"set pending gxRestart"`). The value here is the **pending** one:
@@ -303,7 +303,7 @@ pub struct MsaaFormats {
 impl MsaaFormats {
     /// `requested`, stepped DOWN to the nearest count this device actually offers.
     ///
-    /// **The single expression of "the device has the final say"** (decision 1643). It used to
+    /// **The single expression of "the device has the final say"**. It used to
     /// exist only inside [`MsaaSupportPlugin::finish`], which runs once, before the first update —
     /// i.e. against whatever [`MsaaSetting::default`] seeded, and therefore *before*
     /// `config.toml` had been folded in. The doc two paragraphs up already claimed that "the list
@@ -399,7 +399,7 @@ impl Plugin for MsaaSupportPlugin {
 }
 
 /// The world camera's projection far plane in yards — the **horizon** plane, far beyond `farclip`
-/// on purpose so the coarse WDL ring draws behind the wall (decision 0684; the reference's own
+/// on purpose so the coarse WDL ring draws behind the wall (the reference's own
 /// `horizonfarclip` is a second plane floored at `farclip + 528`, default 2112). One number, not a
 /// function of anything: the detailed world ends at `farclip` by the wall, never by this plane.
 pub const CAM_FAR: f32 = 3000.0;
@@ -564,7 +564,7 @@ pub const CAM_FOVY: f32 = std::f32::consts::FRAC_PI_4;
 /// by the controller in [`crate::schedule::WorldStage::Input`] — is this frame's. Walking, the two
 /// differ by centimetres and nothing shows. On the frame a teleport snaps they differ by the whole
 /// jump, and an authority that decides *what may draw* off the stale one gates a frame drawn from
-/// the new pose with a verdict about the old place (decision 1503).
+/// the new pose with a verdict about the old place.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CameraPoseSet;
 

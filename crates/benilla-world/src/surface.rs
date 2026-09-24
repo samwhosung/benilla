@@ -1,5 +1,5 @@
 //! **What you are standing on** — the `TerrainType` id under a unit's feet, for every consumer of
-//! it (decision 1161).
+//! it.
 //!
 //! The reference keeps this as one cached dword per unit, `CGUnit+0xc60`: an environment-node
 //! down-ray (`0x6a8a20`) resolves it on movement, and four readers consume that single value — the

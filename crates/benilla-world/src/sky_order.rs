@@ -25,7 +25,7 @@
 //! ## Which way the bias points — the sign, read off Bevy 0.18 (never guessed again)
 //!
 //! Every rung below is a *signed* number in one direction, and the direction was inverted here for
-//! a week (decision 0639 — the whole ladder ran upside down; names sorted UNDER the water that
+//! a week (the whole ladder ran upside down; names sorted UNDER the water that
 //! erased them). Verified in the bevy 0.18.1 sources, so the next edit can check rather than
 //! recall:
 //!
@@ -63,7 +63,7 @@
 //! the WDL horizon ring ([`crate::wdl`]) streams ±5 tiles ≈ 2.9 km and is drawn out to the far plane
 //! (3 km), so distant hills land in a band *behind* every shell — and stars, clouds and discs then
 //! passed the depth test in front of terrain the reference would have occluded them with (the
-//! sighting: stars showing *through* a fogged mountain range at night, decision 0588).
+//! sighting: stars showing *through* a fogged mountain range at night).
 //!
 //! So every sky VERTEX pins its clip z to `SKY_FAR_CLIP_Z = 0.0` — reverse-Z "infinitely far" —
 //! under Bevy's `GreaterEqual` test, in the one vertex stage every sky material shares
@@ -74,7 +74,7 @@
 //! any shell radius. The shells now decide only *screen size and sky-internal parallax*, never
 //! occlusion.
 //!
-//! It was a `@builtin(frag_depth)` write in each fragment shader until decision 2016. Same number,
+//! It was a `@builtin(frag_depth)` write in each fragment shader until. Same number,
 //! wrong stage: a pipeline whose fragment decides its own depth cannot be early-Z rejected, so
 //! every dome fragment under a hill, a wall or a leaf was shaded in full and discarded late — a
 //! full-screen gradient (and the cloud dome, and the star patches) paid for the covered fraction
@@ -189,7 +189,7 @@ pub(crate) const WORLD_VIEW_Z_FLOOR: f32 = -3.0e3;
 /// as the ring's"), which is a ladder held together by prose. The compile-time assert below can
 /// only check an order it can see — and 1163 left two out of view: the footprint print and the
 /// ground-target reticle each kept a private constant in its own lane, copied from a neighbour's
-/// number by the same prose 1163 came to end. Both are rungs now (B347).
+/// number by the same prose 1163 came to end. Both are rungs now.
 ///
 /// Named as one type so a lane reaches the ladder, not a constant: `Rung::GROUND_FX`.
 pub struct Rung;
@@ -209,12 +209,12 @@ impl Rung {
     /// conform anywhere in the spell-visual chain (`ground_fx`'s header) — conforming them is our
     /// own improvement, so "wherever that M2 transparent sorts" is the honest answer and the
     /// near-side default is after the water. Everything with a *known* slot moved to the
-    /// pre-water band below (B347).
+    /// pre-water band below.
     pub const GROUND_FX: f32 = 8192.0;
     /// **The one rasterizer settle every ground decal shares** — every client of the shared
     /// surface-decal projector (`decal.rs`): the selection ring, the unit blob shadow, spell
     /// ground-fx quads, the footprints and the ground-target reticle. It funds the `GreaterEqual`
-    /// tie against the drawn ground (`DECAL_WORLD_CLIP`, 0781).
+    /// tie against the drawn ground (`DECAL_WORLD_CLIP`).
     ///
     /// **It used to be two constants, and the split was wrong** (1817, superseding B131's
     /// `SHADOW_RASTER`): the ring and reticle rode +8192 on the claim that "the blob shadow is the
@@ -275,7 +275,7 @@ impl Rung {
     /// beat every world transparent — [`WATER_BIAS`], [`FAR_SIDE_BIAS`], and the unbiased
     /// near-side default — making it the one thing in the scene the water did not attenuate: a
     /// crocolisk's blob read through a Stranglethorn river that hid the crocolisk itself, and the
-    /// player's read through the Stormwind mage-tower portal (B347, both shots).
+    /// player's read through the Stormwind mage-tower portal (both shots).
     ///
     /// **Where the band fits.** Its keys must clear the world-transparent band below it and the
     /// WMO-skybox band above it, each by more than a world view-z can travel (`WORLD_VIEW_Z_FLOOR`
@@ -327,7 +327,7 @@ impl Rung {
     /// ~1 µm per yard of view distance at `C = 8`. The reference's is `1.29847e−3 · d²` — 0.13 yd
     /// at 10 yd, 0.52 at 20, 3.2 at 50 — and **measured, from framebuffer pixels on two
     /// Northshire wade frames, that it does paint the splash decal onto dry bank**, by ~0.3–1.0 yd
-    /// at an 11.9-yd camera. That bleed is the thing the director reported twice (B348), so the
+    /// at an 11.9-yd camera. That bleed is the thing the director reported twice, so the
     /// fidelity is available and deliberately not taken; the reference's own bound on it is not
     /// the depth test but the texgen box plus the decal texture's alpha-0 border under CLAMP.
     /// What ours funds instead is a guard against a driver rounding one pipeline's coplanar
@@ -348,7 +348,7 @@ impl Rung {
     /// live: our foam patch is not a decal *over* the liquid surface — it **is** the
     /// liquid surface's own triangles: [`water_fx::build_patch`] emits the wet cells straight out
     /// of [`WaterChunkInfo`]'s grid, in the liquid mesh's own winding, through the same
-    /// `clip_from_world` (`DECAL_WORLD_CLIP`, 0781) against a mesh whose `Transform` is
+    /// `clip_from_world` (`DECAL_WORLD_CLIP`) against a mesh whose `Transform` is
     /// `IDENTITY`. Same vertices, same matrix, same arithmetic — so the depths agree exactly and
     /// `GreaterEqual` passes the tie on its own. That holds for the fullbright kinds too, which
     /// are the only liquids that write depth at all (magma/slime are `AlphaMode::Opaque`; water is
@@ -366,7 +366,7 @@ impl Rung {
     pub const FOAM_RASTER_SLOPE: f32 = 0.0;
     /// **The underwater drift cloud** — the mote field, at the reference's own frame slot
     /// `0x483731`: after the water surface AND both M2 transparent passes, immediately before the
-    /// glare dispatch `0x483740`. The last world content in the frame (decision 1814).
+    /// glare dispatch `0x483740`. The last world content in the frame.
     ///
     /// The window is narrow and this rung is checked against its actual NEIGHBOURS rather than the
     /// blanket 1e4, exactly as the decal band is: it has to clear
@@ -380,15 +380,15 @@ impl Rung {
     /// (`0x68f3c9`) in slot order, with depth WRITE off and no per-mote ordering anywhere.
     pub const DRIFT_CLOUD: f32 = 1.4e4;
     /// **World text** — above the celestial glare, so a flare never washes a nameplate, and above
-    /// every sky rung. The reference draws its world text late in the frame (decision 0519).
+    /// every sky rung. The reference draws its world text late in the frame.
     /// Small on purpose: 6× the far plane is all the ordering needs, and this same field doubles
     /// as the rasterizer depth bias on a layer that is depth-TESTED (walls must keep occluding
-    /// names). The sign was inverted here once and the water erased the glyphs (decision 0639).
+    /// names). The sign was inverted here once and the water erased the glyphs.
     pub const NAMEPLATE: f32 = 4.0e4;
 }
 
 /// The ladder IS the reference order — checked at compile time: monotonic through the sky pass,
-/// then the **pre-water decal band** (the reference's own decal slots, B347), then the water-plane
+/// then the **pre-water decal band** (the reference's own decal slots), then the water-plane
 /// interleave, then rain (unbiased view-z, ≈ 0), the glare above it, and the nameplates above the
 /// glare so text stays readable through a flare. Rung gaps stay wider than any view-z that could
 /// reorder them — over 10⁴ inside the sky (camera-anchored shells spread ±far·0.85 ≈ 2.6e3) and
@@ -407,7 +407,7 @@ const _: () = {
     assert!(WATER_BIAS - FAR_SIDE_BIAS > 1.0e4);
     assert!(-3.0e3 - WATER_BIAS > 1.0e4); // world view-z floor = −far (the ~3 km projection) stays above
                                           // Foam sits in the water pass, over every liquid surface and under the near-side default,
-                                          // whatever the two draws' distances are (B348).
+                                          // whatever the two draws' distances are.
     assert!(FOAM_BIAS + WORLD_VIEW_Z_FLOOR - WATER_BIAS > 1.0e3);
     assert!(WORLD_VIEW_Z_FLOOR - FOAM_BIAS > 1.0e3);
     assert!(Rung::GROUND_FX - CLOUDS_BIAS > 1.0e4);
@@ -419,7 +419,7 @@ const _: () = {
     // two anchors here can differ by, and the cloud's anchor IS the eye.
     assert!(Rung::DRIFT_CLOUD - Rung::GROUND_FX > -WORLD_VIEW_Z_FLOOR);
     assert!(GLARE_BIAS - Rung::DRIFT_CLOUD > -WORLD_VIEW_Z_FLOOR);
-    // The raster margins are their own axis (B131) — not comparable to the sort rungs above, only
+    // The raster margins are their own axis — not comparable to the sort rungs above, only
     // to zero and to each other. One number for every ground decal (1817); the foam is not one of
     // them, and takes far less.
     assert!(Rung::DECAL_RASTER > 0 && Rung::FOAM_RASTER < Rung::DECAL_RASTER);
@@ -432,7 +432,7 @@ const _: () = {
     // being the liquid mesh's own triangles. A nonzero value here is a decision, not a tune.
     assert!(Rung::FOAM_RASTER_SLOPE == 0.0);
 
-    // ─── The pre-water decal band (B347, 1785/1789) ─────────────────────────────────────────
+    // ─── The pre-water decal band (1785/1789) ─────────────────────────────────────────
     // Internally ordered as the reference's frame emits them — ring then shadow, both from
     // PHASE 1's node drain (`0x6812c5 call 0x683dd0`: the `+0x38` tick at `0x48160c`, then the
     // shadow gate at `0x683ec3`) → footprints (`0x483654`) → the reticle's solid pass
@@ -456,7 +456,7 @@ const _: () = {
 /// The depth law (module doc) is a property of the **shaders**, so it is checked there: the shared
 /// vertex stage must pin the far depth, every sky material must draw through it, and no sky
 /// fragment shader may take the depth back (a `frag_depth` write is the same number at the cost of
-/// the pipeline's early-Z — decision 2016). Without this, a shell radius silently becomes
+/// the pipeline's early-Z). Without this, a shell radius silently becomes
 /// load-bearing again the moment someone edits one of them — the exact regression 0588 fixed, and
 /// one that only shows up at night, on a mountainous horizon, past 2.6 km.
 #[test]

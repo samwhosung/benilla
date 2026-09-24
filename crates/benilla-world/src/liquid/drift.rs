@@ -1,5 +1,5 @@
 //! The underwater **drift cloud** — the 4000-mote field the reference draws while the camera eye
-//! is inside a liquid (decision 1814).
+//! is inside a liquid.
 //!
 //! The object is `World.cpp`'s own — `0xfa40` bytes from
 //! `0x66f971`, ctor `0x68e5a0`, held by the pointer `[0xc63180]` — and it is **not** part of the

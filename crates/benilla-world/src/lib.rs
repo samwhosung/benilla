@@ -100,7 +100,7 @@ pub mod testing {
     }
 
     /// A bind-pose [`crate::rig_anim::RigPose`] for tests that resolve consumer anchors
-    /// (decision 1355: anchors spawn on first demand through `RigPose::anchor_for`, so a test
+    /// (anchors spawn on first demand through `RigPose::anchor_for`, so a test
     /// wearer/mount/caster needs a pose, not a hand-built joint map): one root-parented joint per
     /// entry, seated at its local translation.
     pub fn test_rig_pose(
@@ -150,7 +150,7 @@ pub mod liquid;
 pub mod log_ring;
 
 /// macOS `Cmd+Q`, re-pointed at the window close so the gesture goes through an exit the client
-/// can actually observe (decision 1528).
+/// can actually observe.
 pub mod mac_quit;
 pub mod map_proj;
 pub mod mat_anim_table;

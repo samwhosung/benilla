@@ -1,4 +1,4 @@
-//! Paced per-cell tile furnishing — the fix for B181's *first-contact* spike (decision 0832).
+//! Paced per-cell tile furnishing — the fix for B181's *first-contact* spike.
 //!
 //! A landed tile's ~256 MCNK cell meshes used to arrive as loader-built sub-assets: the whole
 //! set (and, decodes bunching, usually the whole 5-tile row's ~1300) hit the render world's
@@ -28,7 +28,7 @@ use super::TerrainStreamer;
 const CELL_SPAWN_CAP: usize = 64;
 
 /// A tile's 16×16 chunks furnish as 4×4 CELLS of 4×4 chunks each — one mesh, one entity, one
-/// draw per cell (decision 1945). A chunk was one draw each, and a city horizon is over a
+/// draw per cell. A chunk was one draw each, and a city horizon is over a
 /// thousand of them a frame; every per-chunk fact is baked per vertex and the material is the
 /// tile's, so the cell mesh is the chunks' concatenation. `static_gx` and the merge lanes cut
 /// the world into the same 133⅓-yd cell for the same locality reason.

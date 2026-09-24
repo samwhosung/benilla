@@ -66,7 +66,7 @@ pub struct BillboardCard {
     arm_neg_ms: u32,
     /// The gseq [`Self::scale_anim`]'s ATTACH anchor (ms): `None` until the first placement pass
     /// stamps it — the reference snapshots the scene clock once per model instance at attach
-    /// (`CM2Model+0x68`; decision 0856), so a row of lampposts streamed
+    /// (`CM2Model+0x68`), so a row of lampposts streamed
     /// in on different frames breathes at per-instance phases, while same-frame spawns share
     /// one. Distinct from [`Self::arm_neg_ms`]: the gseq anchor is stamped once per instance,
     /// the sequence cursor re-arms per play. (An earlier position-hash de-sync here emulated
@@ -85,7 +85,7 @@ pub struct BillboardCard {
     /// re-seats the card from its live `GlobalTransform` every frame and despawns the card when it
     /// goes — the ONE mechanism for every non-doodad spawn path (braziers, held torches, missiles),
     /// so a glow card can never again render at the model origin because a spawn site forgot the
-    /// pivot (the recurring "glow on the ground" family — decision 0153). `None` = fixed placement
+    /// pivot (the recurring "glow on the ground" family). `None` = fixed placement
     /// (terrain doodads, whose transform never moves).
     follow: Option<Entity>,
     /// The pivot in the model's local Bevy frame (re-applied each frame when `follow` is set).
@@ -130,7 +130,7 @@ impl BillboardCard {
     /// reads the composed result back as [`Self::scale`] — so the card must NOT sample its own
     /// copy of the track. Keeping it multiplied the twinkle in twice, at two different clocks
     /// (the drive's spawn clock × the card's position-hash phase): squared peaks at random
-    /// alignment — Arcane Intellect's sometimes-2.5-yd lens flare (decision 0851). The sampler
+    /// alignment — Arcane Intellect's sometimes-2.5-yd lens flare. The sampler
     /// stays on the rigless lanes ([`Self::new`]/[`Self::following`]), where the card is the only
     /// thing animating.
     pub fn following_joint(info: &BillboardInfo, joint: Entity) -> Self {
@@ -194,7 +194,7 @@ impl BillboardCard {
     ///
     /// It is also the entity whose `InheritedVisibility` decides whether an entity-lane card draws
     /// at all — a world root inherits nothing, so its model's hide has to be *read*, by the one
-    /// `Visibility` authority (`model_render::visibility`, decision 1409).
+    /// `Visibility` authority (`model_render::visibility`).
     pub fn follows(&self) -> Option<Entity> {
         self.follow
     }
@@ -418,7 +418,7 @@ impl BillboardJointRig {
 pub fn billboard_joint_palette(
     cam: Query<&GlobalTransform, With<WorldCamera>>,
     hosts: Query<&BillboardJointRig>,
-    // A parked unit's pose is frozen off-frustum (decision 0448) — camera-facing its glow joints
+    // A parked unit's pose is frozen off-frustum — camera-facing its glow joints
     // would re-dirty the subtree for a rig no one sees. A parked host still sits in the
     // do-not-enter set (its propagated frames are real); it just isn't re-faced.
     parked: Query<Has<crate::rig_anim::AnimParked>>,
@@ -537,12 +537,12 @@ pub struct BillboardPlace;
 /// write ABSOLUTE world transforms and live at the root/identity, so the direct write is exact.
 ///
 /// It does NOT own a card's `Visibility` — [`crate::model_render::visibility`] does, for every
-/// card as for every other `ModelPart` (decision 0025). This system used to mirror a hidden owner
+/// card as for every other `ModelPart`. This system used to mirror a hidden owner
 /// here as well, and that write was **dead**: [`BillboardPlace`] is only ordered
 /// `before(CheckVisibility)`, not before `VisibilityPropagate`, so the `Hidden` it wrote landed
 /// after the propagation that would have consumed it and was overwritten in the next frame's
 /// `Update` by the authority — for a year, a GameObject's glow card went on burning over its own
-/// culled model (decision 1409).
+/// culled model.
 #[allow(clippy::type_complexity)] // the card tuple, commented inline
 pub(crate) fn face_billboards(
     mut commands: Commands,
@@ -600,7 +600,7 @@ pub(crate) fn face_billboards(
                     // `enabled_for`, not `enabled`: this is by far the busiest tag in the file
                     // (thousands of lines a second in a populated scene, each an unbuffered write
                     // under the shared mutex), so it is the one most worth dropping cheaply when the
-                    // run is asking a movement question — `WOW_MOVE_TRACE_TAGS`, decision 0880.
+                    // run is asking a movement question — `WOW_MOVE_TRACE_TAGS`.
                     if benilla_assets::trace::enabled_for("card") && elapsed_ms % 512 < 20 {
                         benilla_assets::trace::line(
                             "card",
@@ -622,7 +622,7 @@ pub(crate) fn face_billboards(
             continue;
         }
         // The gseq attach anchor: stamped on the card's first placement pass — the reference's
-        // once-per-instance scene-clock snapshot (decision 0856).
+        // once-per-instance scene-clock snapshot.
         let attach_ms = *card.gseq_attach_ms.get_or_insert(elapsed_ms);
         let card = &*card;
         let rotation = billboard_basis(card.kind, card.placement_rot, fwd, right, up);
@@ -680,7 +680,7 @@ impl Plugin for BillboardPlugin {
             PostUpdate,
             (
                 billboard_joint_palette,
-                // The collapsed-rig world pass (decision 0724): palette rows + replaced-subtree
+                // The collapsed-rig world pass: palette rows + replaced-subtree
                 // anchor re-seats, between the entity lane's joint rewrite and the card facing
                 // (cards following a unit's billboard-bone anchor read the replaced frame).
                 crate::rig_anim::finalize_rig_worlds,
@@ -747,7 +747,7 @@ mod tests {
         }
     }
 
-    /// A FOLLOWING card (decision 0153 — the entity-path glow cards) re-seats from its owner's
+    /// A FOLLOWING card (the entity-path glow cards) re-seats from its owner's
     /// live global transform each frame and despawns with it: the brazier glow burns at the bowl
     /// (owner translation + authored pivot), never the model origin — and dies when the owner
     /// streams out / unequips.
@@ -784,7 +784,7 @@ mod tests {
         );
         // The hidden-owner half of this test used to live here, asserting a `Visibility` write
         // this system made and the real schedule then threw away — a green test pinning a dead
-        // write (decision 1409). The law is unchanged and now lives with the one authority that
+        // write. The law is unchanged and now lives with the one authority that
         // can enforce it: `model_render::visibility::a_card_follows_its_owners_verdict`.
         app.world_mut().entity_mut(owner).despawn();
         app.update();
@@ -794,7 +794,7 @@ mod tests {
         );
     }
 
-    /// A JOINT-lane card takes the global-sequence twinkle from the joint ALONE (decision 0851):
+    /// A JOINT-lane card takes the global-sequence twinkle from the joint ALONE:
     /// every joint/anchor lane runs a `GlobalSeqDrive` that writes the bone's scale track onto
     /// the joint, and `re_place` reads the composed result back as the card's scale — a card that
     /// also sampled its own copy multiplied the twinkle in twice, at two clocks offset by the
@@ -922,7 +922,7 @@ mod tests {
         );
     }
 
-    /// **The billboard FRAME an equipped item's emitter rides** (decision 0813), with the real
+    /// **The billboard FRAME an equipped item's emitter rides**, with the real
     /// numbers of the R14 PVP shoulder (`LShoulder_Mail_PVPAlliance_C_01`: billboard bone 1 pivot
     /// `(-0.012, 0.162, -0.060)`, sparkle emitter position `(-0.252, 0.178, -0.046)`, both raw WoW
     /// model space — pinned in `benilla_formats`' `real_pvp_shoulder_emitters_ride_a_billboard_bone`).
@@ -1044,8 +1044,8 @@ mod tests {
         );
     }
 
-    /// A card the **exterior-scene cull** owns must not have its `Visibility` written here
-    /// (decision 0784). One component, one authority (0025): a world-placement card is tagged
+    /// A card the **exterior-scene cull** owns must not have its `Visibility` written here.
+    /// One component, one authority: a world-placement card is tagged
     /// with the rest of its model, both systems run in the same unordered post-propagation
     /// window, and this mirror silently undid the cull's `Hidden` — a lamp glow drawing through
     /// a sealed room's wall while every other submesh of the same lamp was correctly gone.

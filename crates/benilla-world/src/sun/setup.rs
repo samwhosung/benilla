@@ -26,13 +26,13 @@ pub(super) fn setup_sun(
     mut world_assets: Option<ResMut<WorldAssets>>,
 ) {
     let mesh = meshes.add(quad_mesh());
-    // Every body sprite uses `CelestialMaterial` (celestial.wgsl — the gamma lane, 0161). The DISCS
+    // Every body sprite uses `CelestialMaterial` (celestial.wgsl — the gamma lane). The DISCS
     // (sun, white moon, moon02): unlit gamma-correct alpha-blend + the SHARED horizon clip+fade — the
     // real client routes all three through the same `0x6d1960` (clip to the horizon; the fade store
     // `clamp(2.5·height, 0, 1)` is CONDITIONAL on the near-horizon band, above which the disc keeps its
-    // colour's own alpha `a_disc`; body skipped entirely below the horizon — decision 0485). The
+    // colour's own alpha `a_disc`; body skipped entirely below the horizon). The
     // GLARES: additive in GAMMA — the reference's SRC_ALPHA, ONE byte addition
-    // (`0x7e5a16`), no horizon clip (their lens-flare envelope gates them; decision 0502). Every RGB
+    // (`0x7e5a16`), no horizon clip (their lens-flare envelope gates them). Every RGB
     // tint is the DayNight celestial diffuse band, rewritten per frame by the follow systems —
     // base_color here is only the frame-0 seed.
     let clip = |base: StandardMaterial, a_disc: f32| CelestialMaterial {
@@ -104,7 +104,7 @@ pub(super) fn setup_sun(
     // opaque (texture alpha only), tinted per frame by the same celestial band as the sun. The old
     // hand-built composite (a cyan `Moon02.blp` backing + a 0.55-alpha front disc + a hand-cyan glare)
     // is dead: it faked the reference's teal rim while the real mechanism is the band tint + the additive
-    // glare ring + the feathered edge over the night sky (decision 0485). Assetless dev falls back to a
+    // glare ring + the feathered edge over the night sky. Assetless dev falls back to a
     // generated disc.
     let moon_tex = world_assets
         .as_mut()
@@ -137,7 +137,7 @@ pub(super) fn setup_sun(
     // stars" reading is superseded; director-verified against the reference).
     // `a_disc = 0.0` gates the whole quad multiplicatively — including the near-horizon fade band,
     // where our per-fragment lane would otherwise render the reference's soft per-vertex crossing
-    // wedge as a hard black bar (decision 0524). Kept spawned for the future weather seed
+    // wedge as a hard black bar. Kept spawned for the future weather seed
     // (`255·(1−bcc)` dims all three discs under cloud).
     let moon02_tex = world_assets
         .as_mut()

@@ -1,4 +1,4 @@
-//! **The engine's WGSL, compiled into the binary** (decision 1175).
+//! **The engine's WGSL, compiled into the binary**.
 //!
 //! The seven shaders under `src/shaders/` are the *engine's* — 1171's line, unchanged: the game's
 //! five live in `benilla-app`, and `embedded_asset!` is per-crate by construction, so the seam

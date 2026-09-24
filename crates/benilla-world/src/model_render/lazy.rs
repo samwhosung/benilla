@@ -121,7 +121,7 @@ impl<A: Asset> Parked<A> {
     /// built" into two homes, and a lane that reaches for the store alone reads a *live feature*
     /// as an absent asset: the mat-anim registration wrote its table slot with
     /// `Assets::get_mut`, got `None` for every deferred material, and silently froze every
-    /// UV-scroll and animated-tint batch in the world (decision 2038). Realizing the asset to
+    /// UV-scroll and animated-tint batch in the world. Realizing the asset to
     /// stamp it would work and would also throw away exactly the residency deferral buys; the
     /// stamp belongs in the value, not in the store it happens to be sitting outside of.
     pub fn value_mut<'a>(

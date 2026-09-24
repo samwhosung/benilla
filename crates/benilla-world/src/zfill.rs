@@ -1,5 +1,5 @@
 //! **The depth-prime twin** — the reference's `M2UseZFill` ("z-fill transparent objects", default
-//! ON, `0x82e748`) reproduced for fading/stealthed entities (decision 0831).
+//! ON, `0x82e748`) reproduced for fading/stealthed entities.
 //!
 //! The mechanism it reproduces: when a model instance draws translucent (`0 < A < 1` — stealth's
 //! CharProc 0.3, the appear/despawn ramps, the self-avatar zoom feather), the reference's collector
@@ -134,10 +134,10 @@ fn trace(what: &str, part: Entity, tag: u32) {
     benilla_assets::trace::line("zfl", &format!("{what} part={part} tag={tag:#010x}"));
 }
 
-/// The depth-prime lane's own registration (decision 1163, stage zero) — `EntitiesPlugin`'s last
+/// The depth-prime lane's own registration (stage zero) — `EntitiesPlugin`'s last
 /// piece of the render lane.
 pub fn plugin(app: &mut App) {
-    // The depth-prime twins (decision 0831 — the reference's `M2UseZFill`): PostUpdate, after the
+    // The depth-prime twins (the reference's `M2UseZFill`): PostUpdate, after the
     // Update-side tag writers, so a twin arms on its episode's first frame.
     app.add_systems(PostUpdate, sync_zfill_twins);
 }

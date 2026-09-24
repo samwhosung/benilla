@@ -69,7 +69,7 @@ pub struct WowLighting {
     /// 16/17) and `.water_ocean` (rows 14/15), RAW, resolved from the **area-light blend**, exactly
     /// like every other band: the client's gather record carries all 18 colour rows and
     /// `0x6d30e0` merges all 18 per light (rows 14–17 are its `+0x34..+0x40`
-    /// step-9 loop) — there is no single-sphere pick in the water path (decision 1104, superseding
+    /// step-9 loop) — there is no single-sphere pick in the water path (superseding
     /// the `pick_light` split whose discontinuity snapped the tint at Tirisfal→Silverpine). The
     /// from-above depth swatch is a 2-endpoint linear lerp of these by the per-vertex depth `V`
     /// (river/lake `V = clamp(byte/42)`; VERIFIED `WoW.exe FUN_0068a830` + `c81768`). Pushed onto the
@@ -100,25 +100,25 @@ pub struct WowLighting {
     pub(crate) sun_disc_scale: f32,
     /// **Sun lens-flare day/night envelope** — the per-body dnCurve table (`0xce9818`): `1.0` across
     /// the day (07:30→19:30), `0.0` all night with dawn/dusk dead-bands (off by 21:00, back at
-    /// 06:30→07:30). A factor of the flare intensity's slew target in `sun::follow`
-    /// (decision 0508). See [`daynight::sun_flare_dn`].
+    /// 06:30→07:30). A factor of the flare intensity's slew target in `sun::follow`.
+    /// See [`daynight::sun_flare_dn`].
     pub(crate) sun_flare_dn: f32,
     /// **Visible moon direction** (Bevy camera→moon) — the white moon at azimuth 45° (the sun's
     /// bearing), up at night and below the horizon by day (`daynight::moon_direction`). The engine's
     /// second disc (`moon02.blp`) IS drawn but vertex-black (its colour field has no writer in the
-    /// binary) at azimuth 135–165° on a phase-precessed schedule — never a visible second moon
-    /// (decision 0485). Consumed by the moon billboards in `sun`.
+    /// binary) at azimuth 135–165° on a phase-precessed schedule — never a visible second moon.
+    /// Consumed by the moon billboards in `sun`.
     pub(crate) moon_dir_white: Vec3,
     /// **Moon disc size multiplier** — `1.0` overhead (~midnight) → `1.5` at moonrise/set (size table
     /// `0xce8c8c`); `sun` multiplies by the white moon's base ×1.75.
     pub(crate) moon_disc_scale: f32,
     /// **Moon lens-flare night envelope** — the moon's dnCurve table (`0xce9768`): flat `0.0` from
     /// 03:15 all the way to 22:45 (the whole day + early evening), ramping in 22:45→24:00, full
-    /// 00:00→02:00. The moon's halo simply does not exist at a 22:30 moonrise (decision 0508).
+    /// 00:00→02:00. The moon's halo simply does not exist at a 22:30 moonrise.
     /// See [`daynight::moon_flare_dn`].
     pub(crate) moon_flare_dn: f32,
     /// **moon02 direction** (Bevy camera→body) — the engine's third disc, drawn vertex-BLACK on its
-    /// phase-precessed 1.7-day clock ([`daynight::moon02_state`]; decision 0485). Never a visible
+    /// phase-precessed 1.7-day clock ([`daynight::moon02_state`]). Never a visible
     /// second moon; faithfully occludes stars behind it.
     pub(crate) moon_dir_02: Vec3,
     /// **moon02 size multiplier** — the shared `0xce8c8c` curve sampled on moon02's own phase
@@ -135,7 +135,7 @@ pub struct WowLighting {
     pub(crate) sidn_night: f32,
     /// **Celestial diffuse tint** (sRGB) — the one DayNight colour the client broadcasts into the sun
     /// disc, sun glare, white-moon disc, and moon glare every frame (`[0xce9c2c]`, broadcast by
-    /// `0x6d2260`; decision 0485). **LightIntBand sub-9** — byte-pinned: the band gather `0x6d64d0`
+    /// `0x6d2260`). **LightIntBand sub-9** — byte-pinned: the band gather `0x6d64d0`
     /// swaps positions 8/9 so table[8] = sub-9, whose alpha is forced 0xFF (`0x6d62e0`); the same
     /// row [`Self::spec`] samples (warm cream at night — matching the reference trace's moon VBO
     /// (254,240,228) — orange at dawn/dusk). The `sun` follow systems rewrite the disc/glare
@@ -169,7 +169,7 @@ impl WowLighting {
     /// Per-kind **water swatch endpoints**: `(shallow_rgb, deep_rgb, shallow_alpha, deep_alpha)`. These
     /// are the ENDPOINTS; the ramp between them is a 64-row byte-space accumulator that `liquid.wgsl`
     /// reproduces (`swatch_row`), not the plain lerp this doc used to describe — it stops one row short
-    /// of `deep`, and the ocean's last row is darkened (decision 2074). The rows are the zone's
+    /// of `deep`, and the ocean's last row is darkened. The rows are the zone's
     /// dedicated `Light.dbc` water rows — IntBand 16/17 (river/lake) or 14/15 (ocean), **RAW** (no
     /// ×0.711) — indexed by the per-vertex
     /// depth `V` (river/lake `V = clamp(byte/42)`, built in `benilla-formats::liquid`). VERIFIED from WoW.exe
@@ -192,7 +192,7 @@ impl WowLighting {
     /// **byte 42 ≈ 5 yd** (ramp ≈8.5 byte/yd, VERIFIED `probe_water_depth`, re-measured at 8.96 over
     /// every MCLQ block in Azeroth + Kalimdor), leaving only the shore edge see-through; the sea
     /// authors its byte 5.2× gentler (1.72 byte/yd), so its `/255` saturates at ~148 yd of depth —
-    /// the same ramp in yards, not a 6× slower one (decision 2069).
+    /// the same ramp in yards, not a 6× slower one.
     /// (Earlier bugs: `×8 DEPTH_RAMP_SCALE` saturated at ~4 yd; then the gentle `byte/255` was the
     /// WRONG LUT **for a river** and the river middle never reached teal — which is what got the
     /// sea's own `/255` mislabelled a placeholder for months.)
@@ -297,7 +297,7 @@ pub struct LightingResolveSet;
 /// [`WowLighting`] belongs in this set.** Configured once, here, as
 /// `LightingConsumeSet.after(LightingResolveSet)`; a consumer joins the contract with
 /// `.in_set(..)` instead of remembering a bespoke `.after(..)`, which is precisely what five of
-/// them did not remember (decision 2032).
+/// them did not remember.
 ///
 /// **Why the contract needs a name of its own.** [`resolve::update_time_lighting`] is a *late*
 /// system by construction — it waits on the wire drain ([`crate::schedule::WorldStage::Net`]),
@@ -349,7 +349,7 @@ impl Plugin for LightingPlugin {
                 (update_time_lighting, apply_sky_backdrop)
                     .chain()
                     .in_set(LightingResolveSet)
-                    // The storm blend reads this frame's weather densities (decision 0302).
+                    // The storm blend reads this frame's weather densities.
                     .after(crate::weather::WeatherTick)
                     // …and this frame's game clock, which whatever owns the session publishes in
                     // the wire-drain stage (`WorldTime`). Without this the two are unordered and
@@ -431,7 +431,7 @@ mod ordering_tests {
     ///
     /// Scoped to this crate's sources — `benilla-app`'s three readers are outside what a
     /// `benilla-world` test can see (two are after the resolve by schedule; `minimap` is a
-    /// deliberate exception, decision 2032).
+    /// deliberate exception).
     #[test]
     fn every_update_reader_joins_the_consume_set() {
         /// after-by-schedule, so the set would be redundant — file → why.

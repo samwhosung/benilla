@@ -19,8 +19,8 @@ use bevy::tasks::futures_lite::future;
 use bevy::tasks::{block_on, AsyncComputeTaskPool, Task};
 
 /// Wall-clock spent per frame *attaching* finished colliders before deferring the rest to a later
-/// frame — the collider twin of `SPAWN_BUDGET`, and for the same reason. Measured cost of one attach
-/// (decision 0610): ~0.004 ms per entity plus ~1.8e-5 ms per triangle, so a burst of a thousand-odd
+/// frame — the collider twin of `SPAWN_BUDGET`, and for the same reason. Measured cost of one attach:
+/// ~0.004 ms per entity plus ~1.8e-5 ms per triangle, so a burst of a thousand-odd
 /// doodads (or a dozen tiles) landing together is the 9.45 ms of main-thread time the traced flight
 /// hitch spent here. Deferring is nearly free to *feel*: the streamer loads ahead of the view, so
 /// just-streamed static geometry going solid a few frames late is not yet reachable.
@@ -115,13 +115,13 @@ pub(super) fn finish_colliders(
             ready.push(entity);
         }
     }
-    // Publish the queue depth (decision 0737): the loading-screen clear and the settle release
+    // Publish the queue depth: the loading-screen clear and the settle release
     // both refuse to call the world presentable while attaches are outstanding — a spawned
     // building whose collider still sits in this queue is exactly what a body must not be
-    // released onto. This system heads the Stream chain (0738), so the consumers read this
+    // released onto. This system heads the Stream chain, so the consumers read this
     // frame's depth; the count is the depth entering the frame (attaches below shrink it next
     // publish), which can only delay a release, never wrong one.
-    // The weld accumulators count as pending too (decision 1369): each unflushed batch becomes
+    // The weld accumulators count as pending too: each unflushed batch becomes
     // at least one collider on this queue, and the settle release must not let a body go while
     // doodad hulls still sit in one. Same conservative semantics as the depth itself.
     let weld_backlog = world
@@ -239,7 +239,7 @@ pub fn placement_collider_data(
 /// ground). `None` for a tile with no triangles at all.
 ///
 /// Built from the decoded chunks rather than the render meshes because the tile no longer *has* one
-/// merged mesh to read (decision 0780) — and one collider per 33 yd cell would be 256 parry builds
+/// merged mesh to read — and one collider per 33 yd cell would be 256 parry builds
 /// and 256 QBVHs where the ground is a single continuous surface. The mapping is the loader's,
 /// verbatim: `wow_to_bevy` per position, hole-masked indices rebased onto the running vertex count.
 pub(super) fn terrain_collider_data(
@@ -287,7 +287,7 @@ const FENCE_REACH: f32 = 32000.0;
 ///   *within* it either — and the tile seam stops being a question, since nothing is ever asked
 ///   about a chunk in another tile.
 /// - **Outward normals, so the fence is one-way.** Composed with the universal facing gate
-///   (`n·dir ≤ −1e-5`, decision 0970), entry is blocked and the same face is discarded on the way
+///   (`n·dir ≤ −1e-5`), entry is blocked and the same face is discarded on the way
 ///   out: you cannot walk in, and if you start inside you can always walk out.
 /// - **Whole chunk.** The flag is tested once, before the reference's 8×8 cell loop opens — unlike
 ///   holes and the no-doodad bits, which are per cell.
@@ -402,7 +402,7 @@ mod tests {
     }
 
     /// A flagged chunk is boxed in, and every face is wound OUTWARD — which is the whole mechanism:
-    /// composed with the one-sided movement law (0970), the fence blocks a mover walking in and is
+    /// composed with the one-sided movement law, the fence blocks a mover walking in and is
     /// discarded from behind, so the band cannot be entered and never traps what starts inside it.
     #[test]
     fn a_flagged_chunk_is_boxed_in_by_outward_facing_walls() {

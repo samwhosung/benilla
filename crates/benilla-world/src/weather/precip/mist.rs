@@ -292,7 +292,7 @@ pub(super) fn run_mist(
 /// (the reference computes the distance ramp per billboard corner at `0x67add0`, packed into the
 /// vertex colour at `0x67ae20`; no peak cap) — so a quad hanging beside the camera still shows its
 /// far corners. Alpha-blended, fog off (the tint already IS the fog colour). Pushed onto the
-/// shared effect stream (0733), perimeter corner order for the quad-index pattern.
+/// shared effect stream, perimeter corner order for the quad-index pattern.
 pub(super) fn push_mist(
     out: &mut Vec<crate::particles::buffer::EffectVertex>,
     mist: &Mist,

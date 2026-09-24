@@ -289,7 +289,7 @@ fn uldaman_is_not_submerged_in_a_mushroom_caves_pool() {
     );
 }
 
-/// **The Undercity STOREY bug** (decision 0701) — the same wrong-underwater-filter as B60, one
+/// **The Undercity STOREY bug** — the same wrong-underwater-filter as B60, one
 /// storey further in, and the half owner scoping could not reach. Live repro at
 /// `.go xyz 1732.68 187.01 -65.70`, where `WOW_FOG_DUMP` read:
 ///
@@ -408,7 +408,7 @@ fn the_rogues_quarter_is_not_under_tirisfals_lake() {
     );
 }
 
-/// **The gradient the swim law is sized against** (decision 0644): Felwood's Felfire Hill
+/// **The gradient the swim law is sized against**: Felwood's Felfire Hill
 /// channel, along the run the live probe swam. A liquid surface is a heightfield, and *how far
 /// from flat* is exactly what decides whether the swim latch's 1/36-yd hysteresis band can
 /// absorb travelling along it — so the slope `player::swim`'s regression test drives is pinned

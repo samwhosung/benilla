@@ -100,7 +100,7 @@ impl PropProbes {
         Some(slot)
     }
 
-    /// Claim an OWNED slot for a dynamic entity's ramping probe (decision 0354): no content dedup —
+    /// Claim an OWNED slot for a dynamic entity's ramping probe: no content dedup —
     /// two units walking the same room ramp independently, so sharing would couple their light —
     /// and the holder updates it in place via [`Self::update_owned`] while its node ramps/moves.
     /// Freed through the same [`PropProbeSlot`] hook as deduped slots.
@@ -268,7 +268,7 @@ pub(super) fn upload_prop_probes(
 
 /// Attached to ONE entity of each lit interior prop instance (they despawn together with the
 /// placement); the hook returns the slot to the table whoever despawns it — and `on_replace`,
-/// not `on_remove` (the `RigSkin` shape, decision 2005): `on_remove` never fires on an
+/// not `on_remove` (the `RigSkin` shape): `on_remove` never fires on an
 /// insert-overwrite, so a re-seat that wrote a fresh slot over the old one leaked the old slot
 /// for the life of the session, and only a remove-then-insert discipline at the one re-seat
 /// site kept that from happening. `on_replace` fires once per transition on both edges.

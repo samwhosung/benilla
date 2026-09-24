@@ -1,4 +1,4 @@
-//! **The rider lane** (decision 1609): an attached model — a helm, a pauldron, a held weapon, a
+//! **The rider lane**: an attached model — a helm, a pauldron, a held weapon, a
 //! shield — placed by a palette frame measured in its WEARER's rig frame, so its position is
 //! never an absolute f32 world coordinate that gets recomputed every frame.
 //!
@@ -56,7 +56,7 @@ use crate::rig_anim::RigPose;
 use crate::rig_palette::{rebase_origin, RigPalettes, RigSkin};
 
 /// An attached model whose palette slot is placed from a bone of `host`'s rig, in `host`'s own rig
-/// frame (decision 1609). Lives on the attached model's root, beside the [`crate::rig_palette::RigSkin`]
+/// frame. Lives on the attached model's root, beside the [`crate::rig_palette::RigSkin`]
 /// that owns the slot — so the slot is freed, and the rider forgotten, on the same despawn edge.
 #[derive(Component, Clone, Copy)]
 pub struct RigRider {
@@ -81,7 +81,7 @@ pub struct RigRider {
 /// lane too. [`RigPalettes::write_rider`] is idempotent, so a standing unit's riders cost one
 /// compare each and never reach the upload.
 ///
-/// **A rider that carries a pose of its OWN is posed, not repeated** (decision 2281). 1609's
+/// **A rider that carries a pose of its OWN is posed, not repeated**. 1609's
 /// "every row is the placement" collapse is a consequence of bind pose, and the ranged weapon prop
 /// does not rest at bind pose: the reference re-arms `[CGUnit+0xd24]`'s own M2 instance to
 /// BowPull(160) at `$BWP` and to BowRelease(161) / Stand(0) at `$BWR`, so its bones move. Such a
@@ -162,7 +162,7 @@ mod tests {
     fn a_rider_composes_through_the_rigs_own_frame_not_the_units() {
         let mut app = App::new();
         app.init_resource::<RigPalettes>();
-        // The posed arm's asset lookup (decision 2281); `AssetPlugin` provides it in the app.
+        // The posed arm's asset lookup; `AssetPlugin` provides it in the app.
         app.init_resource::<Assets<SkinnedMeshInverseBindposes>>();
         // The seat: a yard and a half up and turned 90° — a mount's saddle, exaggerated so a
         // composition through the wrong frame cannot land near the right answer by luck.
@@ -231,7 +231,7 @@ mod tests {
         );
     }
 
-    /// **A rider that poses writes DIFFERENT rows** (decision 2281) — the property that makes the
+    /// **A rider that poses writes DIFFERENT rows** — the property that makes the
     /// gun's bolt recoil and the bow's limbs bend without giving either the absolute-frame ULP
     /// staircase 1609 removed.
     ///
@@ -311,7 +311,7 @@ mod tests {
         );
     }
 
-    /// **The pin** (decision 1609), in the shape decision 0974 set for the body: score both
+    /// **The pin**, in the shape decision 0974 set for the body: score both
     /// routes' *rendered motion* against an f64 oracle of the identical chain, at Goldshire, with
     /// real glam f32 arithmetic — not a model of it.
     ///

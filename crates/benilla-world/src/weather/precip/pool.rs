@@ -65,7 +65,7 @@ pub(super) struct Patter {
 }
 
 /// The per-kind pool (falling layer + ground layer) — its geometry rides the shared effect
-/// stream (0733), so it owns no meshes.
+/// stream, so it owns no meshes.
 #[derive(Default)]
 pub(super) struct Pool {
     /// ACTIVE drops — falling, rendered, landing.

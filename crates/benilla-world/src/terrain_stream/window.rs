@@ -1,5 +1,5 @@
 //! **The residency window** — how far around the view focus terrain is kept resident, derived
-//! from `farclip` exactly as the reference derives it (decision 1513).
+//! from `farclip` exactly as the reference derives it.
 //!
 //! The reference has one view-distance setting, the `farclip` CVar (the Video Options "Terrain
 //! Distance" slider, 177..777), and streams *from* it: `SetFarClip 0x6725d0` computes

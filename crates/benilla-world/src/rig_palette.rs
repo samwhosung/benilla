@@ -1,4 +1,4 @@
-//! The owned skin palette (decision 0720): benilla computes every skinned rig's joint palette
+//! The owned skin palette: benilla computes every skinned rig's joint palette
 //! itself and uploads it to a region of the shared light buffer; `wow_model.wgsl`'s vertex stage
 //! skins from it. This replaces Bevy's `SkinnedMesh` lane end to end — `extract_skins`'
 //! world-wide `Changed<GlobalTransform>` sweep and `prepare_skins`' full-staging-buffer rewrite
@@ -12,7 +12,7 @@
 //! and a `PrepareResources` upload that writes only what changed — here per-rig **dirty ranges**
 //! (a parked, stationary rig re-uploads nothing) plus the slot table on allocation changes.
 //!
-//! **Palettes are RIG-RELATIVE** (decision 0974): row `b` of rig `r` is
+//! **Palettes are RIG-RELATIVE**: row `b` of rig `r` is
 //! `rig_from_joint(b) × inverse_bindpose(b)`, where `rig_from_joint` is the joint's world frame
 //! with the rig's own world origin subtracted off — same 3×3 as Bevy's `skin_model` would
 //! produce, translation measured from the rig root instead of the map's. The origin itself rides
@@ -60,7 +60,7 @@ use crate::mesh_tag::MAX_RIG_SLOTS;
 use crate::vis_chain::VisChainOnly;
 
 /// Bone capacity of the palette region — concurrently-resident skinned bones across every live
-/// rig (units, animated doodads, spell effects, booths). The LBRS census (0718) holds ~59 k unit
+/// rig (units, animated doodads, spell effects, booths). The LBRS census holds ~59 k unit
 /// bones + ~1.6 k doodad-rig bones; 128 k is head-room, at 48 B/bone = 6 MB of the shared buffer.
 /// Mirrored by `wow_model.wgsl`'s region declaration — keep in sync.
 pub(crate) const MAX_PALETTE_BONES: usize = 131_072;
@@ -74,7 +74,7 @@ pub(crate) fn rig_table_region_offset() -> u64 {
     crate::lighting::prop_probe_region_offset() + (7 * crate::lighting::MAX_PROP_PROBES * 16) as u64
 }
 
-/// Byte offset of the per-slot rig ORIGIN table (decision 0974) — one `vec4` per slot, `xyz` =
+/// Byte offset of the per-slot rig ORIGIN table — one `vec4` per slot, `xyz` =
 /// the world position the rig's rows are measured from (`w` unused). Sits after the instance-tint
 /// table, mirroring `wow_model.wgsl`'s struct order.
 pub(crate) fn rig_origin_region_offset() -> u64 {
@@ -87,9 +87,9 @@ pub(crate) fn rig_origin_region_bytes() -> u64 {
 }
 
 /// Byte offset of the palette rows themselves — after the slot table, the per-instance tint table
-/// that shares this slot index ([`crate::instance_tint`], decision 0812), the origin table, and
-/// the mat-anim delta table ([`crate::mat_anim_table`], decision 1381), and the straddle clip
-/// table ([`crate::straddle`], decision 2188). The rows stay last because `wow_model.wgsl`
+/// that shares this slot index ([`crate::instance_tint`]), the origin table, and
+/// the mat-anim delta table ([`crate::mat_anim_table`]), and the straddle clip
+/// table ([`crate::straddle`]). The rows stay last because `wow_model.wgsl`
 /// declares them as the struct's one runtime-sized array.
 pub(crate) fn palette_region_offset() -> u64 {
     crate::straddle::region_offset() + crate::straddle::region_bytes()
@@ -117,7 +117,7 @@ pub struct RigPalettes {
     spare: Option<Arc<Vec<[f32; 4]>>>,
     /// Slot → base bone index. Slot 0 is the tag's "no rig" sentinel and never allocated.
     table: Arc<Vec<u32>>,
-    /// Slot → the world position this rig's rows are measured from (decision 0974); `w` unused.
+    /// Slot → the world position this rig's rows are measured from; `w` unused.
     /// Written by the same call that writes the rows, so the pair can never disagree.
     origins: Arc<Vec<[f32; 4]>>,
     /// Bumped whenever any origin changes — the origin table's upload gate for the shared buffer.
@@ -144,7 +144,7 @@ pub struct RigPalettes {
     peak_bones: u32,
     live_bones: u32,
     /// Allocations refused since the last census line (`WOW_RIG_CENSUS`) — the exhaustion
-    /// diagnosis's live denial rate (decision 0863). Read-and-reset by [`census_rig_palettes`].
+    /// diagnosis's live denial rate. Read-and-reset by [`census_rig_palettes`].
     denied: u32,
     /// Has the exhaustion warn already been logged this session? A latch, not a counter, and
     /// deliberately never reset: [`Self::denied`] is `mem::take`n by the census, so gating the
@@ -198,7 +198,7 @@ pub fn rig_cost_enabled() -> bool {
 /// the frame's first write the extract holds a second reference, so that write must clone. A
 /// static helper (not a method) so call sites keep their split-field borrows.
 ///
-/// **The clone is bounded by the bone watermark, never the capacity** (decision 1479).
+/// **The clone is bounded by the bone watermark, never the capacity**.
 /// `Arc::make_mut` cloned the whole 3×131072-row vec — ~6.3 MB, once per frame, at every spot in
 /// the world, however few rigs were awake (1473's fixed-tax finding). A fresh zeroed vec is a
 /// calloc — the kernel hands back zero pages untouched — so the real cost is the live-prefix
@@ -356,7 +356,7 @@ impl RigPalettes {
         rows[3 * base as usize..3 * (base + len) as usize].fill([0.0; 4]);
         self.dirty.push((base, len, self.mirrored[s]));
         // …and the origin with them, so "collapsed at the origin" stays literally true for a
-        // stale tag during the one-frame despawn skew (decision 0974).
+        // stale tag during the one-frame despawn skew.
         self.set_origin(slot, Vec3::ZERO);
         // Insert sorted + coalesce with both neighbours.
         let i = self.free_ranges.partition_point(|&(b, _)| b < base);
@@ -377,7 +377,7 @@ impl RigPalettes {
         }
     }
 
-    /// Publish the world position slot `slot`'s rows are measured from (decision 0974). Called by
+    /// Publish the world position slot `slot`'s rows are measured from. Called by
     /// both row writers with the same origin they subtracted, so the pair is atomic by
     /// construction — there is no frame where the shader can add a stale origin to fresh rows.
     fn set_origin(&mut self, slot: u16, origin: Vec3) {
@@ -439,12 +439,12 @@ impl RigPalettes {
         }
     }
 
-    /// The collapsed-rig lane's row write (decision 0724): the world pass hands the composed —
+    /// The collapsed-rig lane's row write: the world pass hands the composed —
     /// and billboard-replaced — per-bone frames directly; rows are `frame × ibp`, the same product
     /// [`Self::write_rig`] reads off joint entities. `worlds` beyond the allocation (or the
     /// bindpose list) is ignored, mirroring the entity path's clamp.
     ///
-    /// The frames arrive already **rig-relative** (decision 0974) — the world pass composes the
+    /// The frames arrive already **rig-relative** — the world pass composes the
     /// chain from a zero-translation root — so nothing here spends a ~9 k-yard ULP and the rows
     /// are exact to a rig-sized quantity. `origin` is the world position they are measured from;
     /// the vertex stage adds it back camera-relative.
@@ -481,7 +481,7 @@ impl RigPalettes {
         }
     }
 
-    /// **The rider write** (decision 1609): fill every row of `slot` with ONE rigid frame, and
+    /// **The rider write**: fill every row of `slot` with ONE rigid frame, and
     /// publish the world position it is measured from.
     ///
     /// An attached model rests at bind pose, where a palette row `world_from_joint × ibp` is the
@@ -494,7 +494,7 @@ impl RigPalettes {
     /// **Idempotent, deliberately.** Riders are re-derived every frame from the host's pose, so a
     /// standing unit would otherwise dirty its rows — and pay an upload — for a value that has not
     /// moved. The compare is bit equality, not an epsilon, exactly as the camera's own no-op write
-    /// gate is (decision 1362): a real sub-epsilon change must still land.
+    /// gate is: a real sub-epsilon change must still land.
     pub(crate) fn write_rider(&mut self, slot: u16, frame: Affine3A, origin: Vec3) {
         let s = slot as usize;
         let (Some(&base), Some(&len)) = (self.table.get(s), self.slot_len.get(s)) else {
@@ -541,7 +541,7 @@ impl RigPalettes {
         if let Some(m) = self.mirrored.get_mut(slot as usize) {
             *m = true;
         }
-        // Push the ORIGIN table to the mirrors on this edge, unconditionally (decision 0974). The
+        // Push the ORIGIN table to the mirrors on this edge, unconditionally. The
         // mirror upload is gated on `origin_mirror_generation`, which only moves when a slot that
         // is ALREADY mirrored changes — so a booth rig whose origin was written before this call
         // (or written again to the same value after it) would leave the studio buffers holding a
@@ -551,14 +551,14 @@ impl RigPalettes {
 
     /// The mouseover picker's read side: rig slot → **world-space** `Mat4` palette (the same
     /// values Bevy's `skin_model` would compute), reconstructed from the rows. The stored rows are
-    /// rig-relative (decision 0974), so the slot's origin goes back on here — the picker ray is a
+    /// rig-relative, so the slot's origin goes back on here — the picker ray is a
     /// world-space ray, and it is not a precision consumer.
     pub fn world_palette(&self, slot: u16, bones: usize) -> Option<Vec<Mat4>> {
         let o = *self.origins.get(slot as usize)?;
         self.rows_at(slot, bones, [o[0], o[1], o[2]])
     }
 
-    /// The rig's palette rows **as the vertex stage blends them** — rig-relative (decision 0974),
+    /// The rig's palette rows **as the vertex stage blends them** — rig-relative,
     /// the slot origin deliberately NOT added back. [`Self::world_palette`] is the picker's
     /// world-space read; this is the PRECISION one, for the same reason [`Self::rider_placement`]
     /// returns its pair unsummed: re-adding the ~9 k-yard origin would stamp the very f32 grid
@@ -600,7 +600,7 @@ impl RigPalettes {
         Some(Vec3::new(o[0], o[1], o[2]))
     }
 
-    /// A rider slot's placement **as the vertex stage reads it** (decision 1609): its
+    /// A rider slot's placement **as the vertex stage reads it**: its
     /// `(rig_origin, row-0 translation)` pair, unsummed. The instrument read — `WOW_JITTER`
     /// measures the row's own motion against the anchor's absolute world translation, and the
     /// whole point of the lane is that only the first of those two is on an f32 grid coarse
@@ -612,7 +612,7 @@ impl RigPalettes {
     }
 
     /// The same pair for an arbitrary bone of a slot. A bind-pose rider repeats one frame across
-    /// every row, so row 0 answers for the model; a **posed** one (decision 2281 — the flexing
+    /// every row, so row 0 answers for the model; a **posed** one (the flexing
     /// ranged prop) does not, and asking which bone is the only way to see that its rows differ at
     /// all. `None` for an unallocated slot or a bone past its length.
     pub fn row_placement(&self, slot: u16, bone: u32) -> Option<(Vec3, Vec3)> {
@@ -648,7 +648,7 @@ impl RigPalettes {
         )
     }
 
-    /// Slots still allocatable right now — the pressure signal (decision 0863): the doodad
+    /// Slots still allocatable right now — the pressure signal: the doodad
     /// reaper starts reclaiming parked rigs under [`crate::doodad_anim::REAP_LOW_WATER`], and
     /// the unit heal only rebuilds a starved visual when there is real room to succeed.
     pub fn slot_headroom(&self) -> usize {
@@ -657,7 +657,7 @@ impl RigPalettes {
 }
 
 /// The unit whose visual was built WITHOUT a palette rig because the table was full at attach
-/// time (decision 0863) — it renders the static bind pose. [`crate::entities`]' heal system
+/// time — it renders the static bind pose. [`crate::entities`]' heal system
 /// rebuilds it (the 0x60abe0 display-swap teardown, `Reattached` so it doesn't re-fade) once the
 /// table has headroom again; without this marker the denial was PERMANENT, the "statue mobs at
 /// the stream-in boundary" bug.
@@ -696,7 +696,7 @@ impl RigSkin {
         &self.ibp
     }
 
-    /// Allocate a palette rig for the collapsed lane (decision 0724): no joint entities — the
+    /// Allocate a palette rig for the collapsed lane: no joint entities — the
     /// world pass hands composed frames to [`RigPalettes::write_rig_worlds`] instead, so the
     /// entity-lane change sweep never touches this slot (empty `joints` make its `write_rig` a
     /// no-op by construction).
@@ -709,7 +709,7 @@ impl RigSkin {
     }
 
     /// Allocate a palette rig over live joint entities (the effect/booth/equipment lane — the
-    /// change sweep computes its rows; doodads moved to [`Self::allocate_bones`], decision 1365).
+    /// change sweep computes its rows; doodads moved to [`Self::allocate_bones`]).
     /// `None` (with one loud warn per session — a promise this doc made for a long time before
     /// the code kept it, 2264) when the table is full — the caller renders the
     /// static bind-pose mesh instead.
@@ -766,14 +766,14 @@ fn free_rig_skin(mut world: DeferredWorld, ctx: HookContext) {
         .map(|r| r.slot)
         .expect("on_remove runs with the component still present");
     world.resource_mut::<RigPalettes>().free(slot);
-    // The slot indexes the per-instance TINT table too (decision 0812), and slots are recycled — so
+    // The slot indexes the per-instance TINT table too, and slots are recycled — so
     // clear it on the same edge that frees it. Structural, not disciplinary: whatever kills a rig
     // (despawn, gear/display rebuild) cannot leave a dead unit's colour behind for the next unit
     // that allocates the slot, and no tinted-unit teardown path has to remember to.
     if let Some(mut tints) = world.get_resource_mut::<crate::instance_tint::InstanceTints>() {
         tints.clear(slot);
     }
-    // …and the straddle split's waterline (decision 2188), on the same index for the same reason:
+    // …and the straddle split's waterline, on the same index for the same reason:
     // a recycled slot must not clip the next unit at the last one's water.
     if let Some(mut clips) = world.get_resource_mut::<crate::straddle::WaterClips>() {
         clips.clear(slot);
@@ -809,7 +809,7 @@ fn compute_rig_palettes(
         let Some(ibp) = ibps.get(&rig.ibp) else {
             continue;
         };
-        // The rig holder's own world translation is the rebasing origin (decision 0974): every
+        // The rig holder's own world translation is the rebasing origin: every
         // joint is a descendant of it, so the rows come out rig-sized. Any origin would be
         // *correct* — only precision cares that it sits near the geometry — so a holder without a
         // global (mid-teardown) safely falls back to the map origin, i.e. the old behaviour.
@@ -913,7 +913,7 @@ fn upload_rig_palettes(
     let dirty_ptr = Arc::as_ptr(&data.dirty) as u64;
     let table_new = last.table != Some(data.table_generation);
     let dirty_new = last.dirty != dirty_ptr && !data.dirty.is_empty();
-    // The origin table is 32 KB written whole (decision 0974): tiny beside the rows, and the
+    // The origin table is 32 KB written whole: tiny beside the rows, and the
     // mirrors take their own generation so a world full of walking creatures does not re-push it
     // into every booth buffer each frame.
     let origin_new = last.origin != Some(data.origin_generation) && !data.origins.is_empty();
@@ -1227,7 +1227,7 @@ mod tests {
         assert!(p.dirty.contains(&(base, 2, false)));
     }
 
-    /// The COW clone copies the live prefix and nothing else (decision 1479): a shared-Arc write
+    /// The COW clone copies the live prefix and nothing else: a shared-Arc write
     /// used to `Arc::make_mut` all 3×131072 rows — ~6.3 MB, once per frame, wherever any rig
     /// wrote — where the bone watermark bounds the content. The invariant it leans on is pinned
     /// here too: rows at or above the watermark are bitwise zero, through alloc, write, free and
@@ -1315,7 +1315,7 @@ mod tests {
         assert!(p.alloc(1).is_some());
     }
 
-    /// **The rider write's two contracts** (decision 1609): one frame reaches EVERY row of the
+    /// **The rider write's two contracts**: one frame reaches EVERY row of the
     /// slot — which is what makes an attached model's bind-pose palette equal its static
     /// placement — and re-writing the same frame is a no-op, so a standing unit's five
     /// attachments cost five compares a frame and never an upload.
@@ -1362,7 +1362,7 @@ mod tests {
         assert_eq!(p.dirty.len(), 1, "a sub-millimetre move is still a move");
     }
 
-    /// The picker's read side puts the slot's ORIGIN back on (decision 0974) — rows are stored
+    /// The picker's read side puts the slot's ORIGIN back on — rows are stored
     /// rig-relative, so a reconstruction that forgot the origin would ray-test every skinned unit
     /// against a copy of itself sitting at the map origin.
     #[test]
@@ -1446,7 +1446,7 @@ mod tests {
     #[test]
     fn region_layout_is_consistent() {
         // The slot table sits after the probe region, then the per-instance tint table (decision
-        // 0812 — same slot index), then the rig-origin table (decision 0974 — same slot index
+        // 0812 — same slot index), then the rig-origin table (same slot index
         // again), the palette rows last, and the blob-size extension covers all four exactly
         // (wow_model.wgsl mirrors this layout, and wgpu validates the bound size against the
         // shader's struct at draw time — a mismatch here is a draw-time failure, which is why this

@@ -1,4 +1,4 @@
-//! The render-world half of the B1 retained pass (see `mod.rs`; decision 1429): extraction of
+//! The render-world half of the B1 retained pass (see `mod.rs`): extraction of
 //! the published cell set, per-cell GPU assembly (texture-array classes + the item→layer
 //! table), the pipeline family, and the draw node between the main opaque and transparent
 //! passes.
@@ -10,7 +10,7 @@
 //! streams batches in piecewise; cell-granular appearance is the same arrival class, mostly
 //! under the load cover).
 //!
-//! **The arrays are ONE SHARED POOL, not per-cell (B3, decision 1432)** — `pool.rs` owns the
+//! **The arrays are ONE SHARED POOL, not per-cell (B3)** — `pool.rs` owns the
 //! design note (the two driver taxes 1431's `sample` caught, and how dedup + drain-once +
 //! sibling growth remove them structurally). Here, a re-bake costs a record table and a few
 //! bind groups, never a texture.
@@ -136,8 +136,8 @@ pub(crate) struct GxSel {
     pub fog: Vec<bool>,
 }
 
-/// The published half the render world clones each frame. The baked regions sit behind `Arc`
-/// (decision 1436): the 1435 band map priced the publish + extract clone pair at 0.39 ms/f —
+/// The published half the render world clones each frame. The baked regions sit behind `Arc`:
+/// the 1435 band map priced the publish + extract clone pair at 0.39 ms/f —
 /// tens of thousands of `GxItemDraw`s memcpy'd twice a frame — so the per-frame clones are
 /// refcount bumps now, and the ONE writer that mutates a published region (the kill scan's
 /// bitmap rebuild) pays a copy-on-write of that region alone, only on a real fade transition.
@@ -160,7 +160,7 @@ pub(crate) struct GxWorld {
 
 use super::pool::GxTexturePool;
 
-/// Record column `w`, bit 14 — the per-item **interior fog** lane (decision 1787), written per
+/// Record column `w`, bit 14 — the per-item **interior fog** lane, written per
 /// frame by the fog sync and read by `static_gx.wgsl`'s fog select. Bit 0 is the exile kill bit
 /// and bits 1..=13 the interior-prop probe slot, so 14 is the first free bit.
 const RECORD_FOG_BIT: u32 = 1 << 14;
@@ -528,7 +528,7 @@ fn prepare_static_gx(
         gpu.killed_applied = draw.killed_rev;
     }
 
-    // The interior-fog sync (decision 1787): the client's per-group `[0xca7f00]` decides which
+    // The interior-fog sync: the client's per-group `[0xca7f00]` decides which
     // fog triple a WMO group's surfaces — and its doodad props — are pushed with, so it is a
     // per-frame property of the SELECTION, not of the bake. It rides the record table's w column
     // (bit `RECORD_FOG_BIT`) beside the kill bit, written per item from its own selection grain.
@@ -892,7 +892,7 @@ pub(super) fn build(app: &mut App) {
             ),
         )
         .add_render_graph_node::<ViewNodeRunner<StaticGxNode>>(Core3d, StaticGxLabel)
-        // BEFORE bevy's opaque pass (decision 2016): the retained statics — every building and
+        // BEFORE bevy's opaque pass: the retained statics — every building and
         // every steady doodad — are the frame's best early-Z occluders, and terrain's fragment is
         // the frame's dearest (four splat layers, the alpha map, the baked shadow: six samples a
         // pixel). Drawn first, the walls and trunks fill the depth buffer with early writes and
@@ -920,7 +920,7 @@ pub(super) fn publish_gx_world(gx: Res<super::StaticGx>, mut out: ResMut<GxWorld
     // structures it produced last frame, and an unconditional `clone_from` through `ResMut`
     // both re-cloned them here and marked the resource changed, so the render world cloned
     // the whole set again at extract — 1435's two 0.2 ms rows, paid on every frame that
-    // changed nothing (decision 1979). The maps hold `Arc`s, so identity is pointer identity.
+    // changed nothing. The maps hold `Arc`s, so identity is pointer identity.
     fn same_arcs<K: std::hash::Hash + Eq>(
         a: &HashMap<K, std::sync::Arc<GxCellDraw>>,
         b: &HashMap<K, std::sync::Arc<GxCellDraw>>,

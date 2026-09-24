@@ -25,7 +25,7 @@
 //!   the deep endpoint**, and it is sampled LINEAR/CLAMP at texel `V·64 − 0.5`. **The ocean's last
 //!   row alone is then darkened** `floor(0.9·byte)` per channel (an HSV `V ×= 0.9` that reduces to
 //!   exactly that) with its alpha forced opaque — and ~80 % of the world's ocean vertices sample
-//!   that one row, so it is the open sea's actual colour (decision 2074). The swatch is rebuilt **per world frame**,
+//!   that one row, so it is the open sea's actual colour. The swatch is rebuilt **per world frame**,
 //!   not baked once at bootstrap: the dirty flags `[0xc8117c]`/`[0xc81b70]` clear at
 //!   `0x680b90`/`0x680b97` and refill via `0x58acd0`, so colour and opacity track the zone and the
 //!   clock. (The earlier "reflected sky × 0.711 via `FUN_0068c250`" model fingered the WRONG builder —
@@ -86,7 +86,7 @@
 //! * [`surface`] — **the Bevy render glue.** The per-kind animated materials, the two spawn paths
 //!   (MCLQ and WMO MLIQ), the flat mesh build, and the 24 fps frame cycler.
 //! * [`drift`] — **the underwater drift cloud**: the 4000-mote field the reference draws while the
-//!   camera eye is inside a liquid (decision 1814). It is here rather than under `weather` because
+//!   camera eye is inside a liquid. It is here rather than under `weather` because
 //!   the reference keeps it that way too — the pool is CWorld's, not the weather manager's, and
 //!   the two share no state and no code — and because [`Underwater`] is its whole trigger.
 //!
@@ -108,7 +108,7 @@ mod surface; // the against-real-client-files tests — they span both halves
 
 // The submodules are private, so this list IS the subsystem's face: everything the rest of the
 // client may name. Most of this list is now reached through `crate::world_point::WorldPoint`
-// rather than directly (decision 1164).
+// rather than directly.
 //
 // `LiquidSurface` used to be deliberately absent — "spawned, never named from outside; add it here
 // the day something needs it". Decision 1652 is that day: the exterior-window cull counts liquid
@@ -131,7 +131,7 @@ pub(crate) use surface::{
 /// this names, so a transition artefact can be photographed or logged deterministically inside
 /// the capture harness (`WOW_CAPTURE=<scenario>`).
 ///
-/// Built for B354 (decision 2032), where the whole defect lived in the ONE frame after the edge
+/// Built for B354, where the whole defect lived in the ONE frame after the edge
 /// and the reported spot was a dusk swim off the Savage Coast — a place a screenshot harness
 /// cannot get to and a bug a still frame cannot catch. It reproduced in `water-noon` in one
 /// command.
@@ -200,8 +200,8 @@ impl Plugin for LiquidPlugin {
             // var, so it costs nothing when it isn't being used.
             //
             // `PostUpdate`, after the two systems that now own a liquid surface's `Visibility`
-            // every frame — the exterior-window cull (ADT surfaces, decision 1652) and the
-            // model-visibility authority (WMO pools, 0689/0784) — and before Bevy consumes the
+            // every frame — the exterior-window cull (ADT surfaces) and the
+            // model-visibility authority (WMO pools) — and before Bevy consumes the
             // result. An *override* that runs last, deliberately, rather than a second writer
             // trying to compose with them (decision 0025's law, and 0784's reasoning for why
             // ordering is the wrong tool for two real terms but the right one for a kill-switch:

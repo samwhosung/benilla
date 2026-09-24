@@ -34,7 +34,7 @@
 //! only correct a mis-split one.
 //!
 //! **Why `Time<Virtual>` and not `Time<Real>`.** `Real` is the wall clock, and the probe harness is
-//! required to read it (`capture::probes::ProbeClock`, decision 0789) precisely so a hitching run
+//! required to read it (`capture::probes::ProbeClock`) precisely so a hitching run
 //! cannot silently under-run a knob. Pacing it would hide the defect from the instrument that found
 //! it. `Virtual` is Bevy's own *adjustable* game clock and is what `advance_animations`, the
 //! particle/ribbon sims and `Time<Fixed>` all derive from — one correction there reaches every

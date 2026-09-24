@@ -1,4 +1,4 @@
-//! The collapsed rig's two composition passes (decision 0724) — what transform propagation and
+//! The collapsed rig's two composition passes — what transform propagation and
 //! the billboard joint pass used to do through ~59 k bone entities, done on the [`RigPose`]
 //! arrays instead.
 //!
@@ -13,11 +13,11 @@
 //! **World pass** ([`finalize_rig_worlds`], post-propagation, inside
 //! [`crate::billboard::BillboardPlace`]): per rig needing it — pose-dirty, `joints_root` moved,
 //! or camera-faced — compose the chain `world_from_model × local…` **with the root's translation
-//! zeroed** (decision 0974: the whole chain runs rig-relative, because composing it at the map's
+//! zeroed** (the whole chain runs rig-relative, because composing it at the map's
 //! ~9.5 k-yard coordinates spent an f32 ULP — ~1 mm — per matmul, freshly every frame), apply the
 //! byte-law bone replacements (`billboard_joint_palette`'s math verbatim: the arm again, in its
 //! world-space form, then billboard kinds take the camera basis, and descendants chain onto the
-//! replaced frames), write the palette rows (`frame × inverse_bindpose`, decision 0720) beside the
+//! replaced frames), write the palette rows (`frame × inverse_bindpose`) beside the
 //! rig's world origin (which the vertex stage adds back camera-relative), and re-seat the
 //! anchors sitting on replaced subtrees — including the same rigid-child re-walk and the same
 //! nested-rig do-not-enter rule as the entity pass. A re-seated subtree that carries another
@@ -27,7 +27,7 @@
 //! The arm appearing in BOTH passes is not a double application — each pass builds its own chain
 //! once, in its own space, and the two agree (see `RigPose::compose`). What it is NOT allowed to
 //! be is world-pass-only: the anchors are seated from the model pass, so an arm that ran only
-//! afterwards left every attached subtree riding the un-armed frame (decision 0945).
+//! afterwards left every attached subtree riding the un-armed frame.
 //!
 //! A parked, stationary rig runs neither pass and uploads zero bytes (decision 0448's park
 //! observables carry over unchanged).
@@ -51,7 +51,7 @@ pub struct PosePost;
 /// anchors' local `Transform`s, so this frame's propagation places every consumer subtree at
 /// this frame's pose. `pose_dirty` stays raised — the world pass consumes and clears it.
 ///
-/// A PARKED rig skips even this (decision 1365): the doodad lane's hosts are born pose-dirty and
+/// A PARKED rig skips even this: the doodad lane's hosts are born pose-dirty and
 /// spend most of their residency parked with the flag still raised (the world pass, which clears
 /// it, also skips parked rigs), so an unfiltered pass re-composed every parked host's bind pose
 /// every frame. Nothing observable is lost — a parked rig's anchors were seated by its last
@@ -85,7 +85,7 @@ fn compose_rig_models(
     }
 }
 
-/// Translate a composed rig-relative frame back into world space (decision 0974).
+/// Translate a composed rig-relative frame back into world space.
 fn shift(g: GlobalTransform, origin: Vec3) -> GlobalTransform {
     let mut a = g.affine();
     a.translation += bevy::math::Vec3A::from(origin);
@@ -94,7 +94,7 @@ fn shift(g: GlobalTransform, origin: Vec3) -> GlobalTransform {
 
 /// One rig's chain + which bones sit in a replaced subtree, composed **in the root's frame**: the
 /// caller passes `root_g` with its translation zeroed, so every frame out is rig-relative
-/// (decision 0974) and the whole chain runs at rig-sized magnitudes. `root_g` is otherwise the
+/// and the whole chain runs at rig-sized magnitudes. `root_g` is otherwise the
 /// rig's `joints_root` propagated world — the model's own root frame `[model+0xfc]`, which is both
 /// what the `flags & 0x7` arm rebuilds a parent matrix out of and, for a mounted rider, its seat
 /// anchor (`0x714389`). `cam` is the camera basis (`None` = no camera, so only the arm applies).
@@ -146,7 +146,7 @@ fn rig_worlds(
 }
 
 /// Seed one collapsed rig's palette rows from its CURRENT composed pose — the doodad lane's
-/// lazy-promote edge (decision 1365, the 0863 wake): the slot is claimed mid-frame and the
+/// lazy-promote edge (the 0863 wake): the slot is claimed mid-frame and the
 /// skinned mesh swaps in the same frame, so the rows must be written NOW or the first skinned
 /// frame renders zeroed (origin-collapsed) rows. No camera basis — a billboard bone seeds at its
 /// composed pose and the world pass re-faces it this same frame (the promoted host is unparked
@@ -170,12 +170,12 @@ pub(crate) fn seed_rig_rows(
 #[allow(clippy::type_complexity)] // billboard_joint_palette's shape
 pub fn finalize_rig_worlds(
     cam: Query<&GlobalTransform, With<WorldCamera>>,
-    // `Option<&RigSkin>`, not `&RigSkin` (decision 1365): the doodad lane's rigs hold their
+    // `Option<&RigSkin>`, not `&RigSkin`: the doodad lane's rigs hold their
     // palette slot lazily (allocated at first wake, reaped under pressure), and a slot-less rig
     // still needs this pass for two things — clearing `pose_dirty` (or the model pass re-composes
     // it every frame for ever) and, when it authors billboard/arm bones, the camera-dependent
     // anchor re-seat its cards and emitters ride. The palette write alone is skipped.
-    // `Has<RigRider>`: a rider owns its slot's rows from the OTHER end (decision 1609 — the
+    // `Has<RigRider>`: a rider owns its slot's rows from the OTHER end (the
     // placement is composed in the HOST's rig frame, never from this absolute one), and decision
     // 2281 gave that lane a posed arm, so an animated ranged prop arrives here with both a pose
     // and a skin and must still not have its rows written twice from two different frames.
@@ -205,7 +205,7 @@ pub fn finalize_rig_worlds(
         .ok()
         .map(|t| (*t.forward(), *t.right(), *t.up()));
     // Which rigs refresh this frame: pose-dirty, model frame moved, or camera-faced — and never
-    // a parked one (decision 0739). The LOD gate ruled a parked rig un-viewable, so neither an
+    // a parked one. The LOD gate ruled a parked rig un-viewable, so neither an
     // idle's pose_dirty, a patrol's root motion, nor a billboard face can matter until the wake
     // — which drops the marker before the same frame's pose evaluation, re-raising `pose_dirty`
     // before this pass runs, so a woken rig's rows are current before anything draws them. (The
@@ -226,7 +226,7 @@ pub fn finalize_rig_worlds(
     if refresh.is_empty() {
         return;
     }
-    // The `WOW_RIG_COST` compose meter (decision 0736): how many rigs refresh and what the
+    // The `WOW_RIG_COST` compose meter: how many rigs refresh and what the
     // whole finalize pass costs, beside the palette's copy/write and upload lines.
     let cost_t0 = crate::rig_palette::rig_cost_enabled().then(std::time::Instant::now);
     let mut globals = worlds_params.p1();
@@ -251,7 +251,7 @@ pub fn finalize_rig_worlds(
             let Ok(root_g) = globals.get(rig.joints_root).map(|(_, g)| *g) else {
                 return;
             };
-            // **The chain is composed RIG-RELATIVE** (decision 0974): same root basis, translation
+            // **The chain is composed RIG-RELATIVE**: same root basis, translation
             // zeroed. Every operation below — the `flags & 0x7` arm, the local compose, the
             // billboard replacement — is translation-equivariant (the arm is 3×3 work plus a
             // pivot-preserving translation; the billboard rewrites rotation only), so this yields
@@ -280,7 +280,7 @@ pub fn finalize_rig_worlds(
             // seat is patched here, so every one of its anchors is standing on the pre-patch
             // frame. Its palette rows are rebuilt from `root_g` either way, which is why the BODY
             // looked right while its attached items rode the stale seat — the mounted pauldron
-            // swinging on the gallop while the shoulder under it did not (decision 0945).
+            // swinging on the gallop while the shoulder under it did not.
             let mut stack: Vec<(Entity, GlobalTransform)> = Vec::new();
             for &(bone, anchor) in &rig.anchors {
                 let b = bone as usize;
@@ -290,7 +290,7 @@ pub fn finalize_rig_worlds(
                 // Anchors are ordinary scene-graph entities: their `GlobalTransform` is world
                 // space and every consumer (propagation, colliders, the effect lane, item
                 // placement) reads it as such — so the rig-relative frame goes back to absolute
-                // here. Only the PALETTE stays relative; that is the whole seam (decision 0974).
+                // here. Only the PALETTE stays relative; that is the whole seam.
                 let Some(world) = worlds.get(b).map(|&w| shift(w, origin)) else {
                     continue;
                 };
@@ -563,7 +563,7 @@ mod tests {
         }
     }
 
-    /// **The jitter pin** (decision 0974) — the measurement the rebase exists for.
+    /// **The jitter pin** — the measurement the rebase exists for.
     ///
     /// Compose the same idling six-bone chain frame by frame two ways — rooted at Goldshire's real
     /// world coordinates, and rooted at the rig's own origin with the position carried alongside —

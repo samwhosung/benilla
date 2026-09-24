@@ -1,4 +1,4 @@
-//! The per-instance body **TINT** — a unit's whole model multiplied by one colour (decision 0812):
+//! The per-instance body **TINT** — a unit's whole model multiplied by one colour:
 //! the render channel for the aura state kit's CharProc 1 ([`crate::aura_visual`]), which had the
 //! nodes modelled and nowhere to put them.
 //!
@@ -87,7 +87,7 @@ pub fn pack(rgb: [u8; 3]) -> u32 {
 /// colour `(1,1,1)` and alpha `1.0` (`0x70ea60`-`0x70ea89`/`0x70eaca`), and `0x525261 call 0x47a230`
 /// then sets those very two fields *again* — so a ghost's portrait shows the pre-death, untinted,
 /// fully-opaque face, and "a client that tints the portrait when the ghost flags are set diverges
-/// from 1.12.1" (benilla report B49, decision 1481).
+/// from 1.12.1" (benilla report B49).
 /// Our round portraits mirror the world entity's own children, so they carry the WORLD unit's rig
 /// slot — pushing this region into their buffer would tint them with it. Their buffer keeps the
 /// zero-initialised (identity) region instead, which is the reference's fresh-instance behaviour

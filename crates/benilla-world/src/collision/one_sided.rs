@@ -8,7 +8,7 @@
 //! from its back is discarded before any distance is computed, and this is not a wall-slide special
 //! case: the 16 callers of `0x632ba0 earliest_contact` span falling, walking, step-up, ground-settle,
 //! transports and the water-surface arm — "the surface you stand on is filtered exactly like the wall
-//! you slide along" (decision 0967; confirmed
+//! you slide along" (confirmed
 //! at B86's exact pin in decision 0968). parry's trimesh is two-sided by construction, which is why
 //! benilla stood on CoT's inward-wound shell where 1.12.1 falls through it.
 //!
@@ -21,16 +21,16 @@
 //! projection — over its public building blocks, walking each trimesh's BVH itself so every triangle
 //! is gated on its **authored winding** before it may block. `Collider::trimesh` stores vertices and
 //! indices exactly as passed (parry `TriMeshFlags::empty()`), and every transform between the file
-//! and the collider is a proper rotation (decision 0968), so `TriMesh::triangle(i)`'s winding *is*
+//! and the collider is a proper rotation, so `TriMesh::triangle(i)`'s winding *is*
 //! the authored winding.
 //!
 //! What is ported is the **law**, not the reference's resolver: the slide/step/snap machinery stays
 //! the standard kinematic controller (that direction was closed in 0207), contact normals for edge
 //! hits stay parry's, and convex (non-trimesh) colliders stay whole-shape — a convex volume has no
 //! reachable backface. The camera/LOS path is untouched *on purpose*: the reference's segment
-//! kernel `0x7c29f0` is two-sided (0967), so avian's ordinary cast is already faithful there.
+//! kernel `0x7c29f0` is two-sided, so avian's ordinary cast is already faithful there.
 //!
-//! **There is no depenetration pass, and that is the law too** (decision 2018). avian's
+//! **There is no depenetration pass, and that is the law too**. avian's
 //! `move_and_slide` opens and closes with a Gauss–Seidel push-out of every face the shape overlaps;
 //! the reference's resolver has no such stage anywhere in `0x634040`'s closure. Its world query is a
 //! time-of-impact sweep and nothing else: a face the prism starts *behind* by more than 1/36 yd
@@ -39,7 +39,7 @@
 //! nowhere. The push-out was benilla's, and it is what shoved a seated body sideways off its stool:
 //! the server seats a player at a chair's origin, inside the chair's own collision box, and the
 //! minimum-translation vector for a tall capsule inside a small box is horizontal — out through the
-//! nearest side (B359, measured at 0.555 yd on the first frame, with no input). A body that starts
+//! nearest side (measured at 0.555 yd on the first frame, with no input). A body that starts
 //! inside geometry leaves it the way the reference does: by walking out through the faces wound
 //! away from it, which the sweep never counts.
 
@@ -73,7 +73,7 @@ const DOT_EPSILON: f32 = 0.005;
 /// faces it already straddles, and the band says which of those still count — a seat top half a
 /// yard into the body, every vertex of it behind the body's leading edge, does not exist; a sloped
 /// terrain triangle a few centimetres into the feet, one vertex of which still lies below them,
-/// does (decision 2018). **Measured against the vertices, not the penetration depth**: the first
+/// does. **Measured against the vertices, not the penetration depth**: the first
 /// port used parry's contact depth, and on a 19° slope under a stool that read the terrain as
 /// behind the feet — the body fell 26 yd through the world. Ported at this seam, like the facing
 /// law, because it can only be applied where the *overlapping* triangle is known: avian's own
@@ -689,7 +689,7 @@ mod tests {
             .unwrap()
     }
 
-    /// **The backface band, both faces of it** (decision 2018). The capsule here is 1.8 tall
+    /// **The backface band, both faces of it**. The capsule here is 1.8 tall
     /// (radius 0.4, segment 1.0), its centre 0.9 above its feet.
     ///
     /// A small horizontal face the body straddles — a seat top 0.5 yd into it, every vertex behind

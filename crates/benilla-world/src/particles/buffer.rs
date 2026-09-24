@@ -1,6 +1,6 @@
 //! The **shared effect stream** — the one CPU vertex stream every dynamic-effect family writes
 //! into each frame (particles, ribbons, and — since 0733 — the decal family, water foam, and
-//! precipitation), and the draw records that slice it (decisions 0732 P1/P2, 0733).
+//! precipitation), and the draw records that slice it (decisions 0732 P1/P2).
 //!
 //! Before this, every effect owned a `Mesh` asset rewritten per frame: ~145 mesh `Modified`
 //! events/frame at the LBRS pin, each a full free+realloc in Bevy's mesh allocator (no partial
@@ -14,7 +14,7 @@
 //! whole quads (4 corners in perimeter order, closed by the `[0,1,2, 0,2,3]` pattern) or a
 //! triangle list — then commits one draw for the range ([`EffectQuads::commit_quads`] /
 //! [`EffectQuads::commit_tris`]). The render half rebases every draw's vertices against its
-//! target view's camera position before upload (0733 §2 — absolute coordinates through the view
+//! target view's camera position before upload (absolute coordinates through the view
 //! transform shear thin geometry apart far from the origin; the precip module learned this
 //! empirically at ~9000 yd), builds the frame's index stream in sorted-item order, and merges
 //! sort-adjacent draws that share (pipeline, texture, light, fog) into single draw calls
@@ -36,7 +36,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::Buffer;
 
 /// One vertex of the shared lane. **World-space** position in the stream; the render-world
-/// prepare pass rebases it camera-relative before upload (0733 §2), so instruments reading the
+/// prepare pass rebases it camera-relative before upload, so instruments reading the
 /// stream (depth probe, depth dump) always see world coordinates — with one declared exception,
 /// [`EffectDrawSpec::cam_relative`], whose producer has already done the subtraction because its
 /// geometry is too small to survive being written in absolute-world f32 at all.
@@ -45,20 +45,20 @@ use bevy::render::render_resource::Buffer;
 pub struct EffectVertex {
     pub pos: [f32; 3],
     pub uv: [f32; 2],
-    /// RAW authored gamma-space RGBA (the GAMMA LANE invariant, 0161) — alpha is the blend
+    /// RAW authored gamma-space RGBA (the GAMMA LANE invariant) — alpha is the blend
     /// weight, never encoded.
     pub color: [f32; 4],
 }
 
-/// The lane's blend variants (0733 §4) — a superset of the file-format enums it serves:
+/// The lane's blend variants — a superset of the file-format enums it serves:
 /// [`ParticleBlend`]'s four, plus the multiplicative pair the decal family and rain need.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EffectBlend {
-    /// `(SRC_ALPHA, ONE)` via premultiplied-alpha + the shader's gamma `rgb·a` fold (0160/0161).
+    /// `(SRC_ALPHA, ONE)` via premultiplied-alpha + the shader's gamma `rgb·a` fold.
     Add,
     /// Standard alpha blending.
     Alpha,
-    /// No blend, depth-write ON — drawn in the transparent bracket at the owner rung (0719).
+    /// No blend, depth-write ON — drawn in the transparent bracket at the owner rung.
     Opaque,
     /// [`EffectBlend::Opaque`]'s state plus the fixed-function **alpha test** — the fragment is
     /// discarded below `224/255` ([`benilla_assets`]'s `VANILLA_ALPHA_KEY_REF`, the same ref the
@@ -67,7 +67,7 @@ pub enum EffectBlend {
     AlphaKey,
     /// `dst · lerp(1, src, α)` — bevy's `AlphaMode::Multiply` state (`(Dst, 1−srcα)` + shader
     /// premultiply, bevy_pbr mesh.rs:2486): the blob shadow's `GL_DST_COLOR/GL_ZERO`-with-fade,
-    /// and `ModelBlend::Mod` (0528) at α = 1.
+    /// and `ModelBlend::Mod` at α = 1.
     Multiply,
     /// `2·src·dst` — `(Dst, Src)`, 0528's factors; rain's verified state (rf-weather-render).
     Mod2x,
@@ -97,13 +97,13 @@ impl EffectBlend {
     /// additive"), and the material path recovers them from `model_render`'s separate
     /// `is_additive` flag. Taking only the enum made this function *unable* to be right for an
     /// additive batch — every `Spells\` ground quad is mode 4, so Arcane Explosion / Blast Wave /
-    /// Battle Shout drew their black-backed additive art alpha-blended: an opaque black tile
-    /// (decision 0748). Keeping it in the signature is what stops the next caller repeating it.
+    /// Battle Shout drew their black-backed additive art alpha-blended: an opaque black tile.
+    /// Keeping it in the signature is what stops the next caller repeating it.
     pub fn from_model(blend: ModelBlend, additive: bool) -> Self {
         if additive {
             // `BLEND_ADD` is byte-for-byte the material path's additive: the shader gamma-
             // premultiplies (`rgb·α`) and returns α = 0, turning `(One, 1−srcα)` into pure
-            // addition — the same fold `specialize` gates on marker bit 2 (0160/0161).
+            // addition — the same fold `specialize` gates on marker bit 2.
             return EffectBlend::Add;
         }
         match blend {
@@ -250,14 +250,14 @@ pub struct EffectDraw {
     /// The cloud's sort point — the emitter anchor / ribbon head node / decal center, exactly
     /// the sort point the material path used.
     pub(crate) anchor: Vec3,
-    /// The ladder rung added to the view-space sort distance — owner-last (0719/0721) for
+    /// The ladder rung added to the view-space sort distance — owner-last for
     /// emitters, the decal constants (ring/ground-fx 8192, shadow 4096), foam's +1 water
     /// tie-break; `sky_order`'s sign law (positive draws later).
     pub(crate) bias: f32,
-    /// The rasterizer `DepthBiasState` constant for this draw's pipeline (0733 §4): the
+    /// The rasterizer `DepthBiasState` constant for this draw's pipeline: the
     /// coplanar decals keep the depth-offset half their materials carried (projected verts are
     /// exact sub-pieces of drawn ground — clip-interpolated vertices land within ULPs of it);
-    /// everything free-floating passes 0. Nonzero ALSO selects the decal transform (0781):
+    /// everything free-floating passes 0. Nonzero ALSO selects the decal transform:
     /// the draw's verts skip the cam-relative rebase and run the world-mesh `clip_from_world`,
     /// so the depth tie the bias settles is against the same arithmetic.
     pub(crate) raster_bias: i32,
@@ -368,14 +368,14 @@ pub struct EffectDrawSpec {
     /// every particle, ribbon, decal and streak wants. One family sets it — the weapon swing trail,
     /// whose callback writes EGxRs id `0x10` to `0` (`0x6c686e`; GL `glDisable(GL_DEPTH_TEST)`,
     /// D3D `ZFUNC = D3DCMP_ALWAYS`) so the arc is never eaten by the swinging character's own
-    /// shoulder (decision 2076).
+    /// shoulder.
     pub no_depth_test: bool,
     pub main_entity: Entity,
     pub light: Option<Buffer>,
     /// **Clip this draw to a rectangle of its RENDER TARGET, in target pixels** — `(min.x,
     /// min.y, max.x, max.y)`, `None` for the whole target, which is every world family.
     ///
-    /// It exists for the UI model tiles (decision 2008): every visible `<Model>` pane renders
+    /// It exists for the UI model tiles: every visible `<Model>` pane renders
     /// into its own cell of ONE shared atlas, and a pane's particles are quads in that atlas's
     /// space — so a cloud that reaches past its cell lands in the cell **next to** it, which the
     /// composite hands to a different widget. The reference cannot have this: it draws each
@@ -463,7 +463,7 @@ pub fn clear_effect_frame_flag(mut quads: ResMut<EffectQuads>) {
 mod tests {
     use super::*;
 
-    /// The additive flag OVERRIDES the folded enum (decision 0748). `ModelBlend::Blend` means
+    /// The additive flag OVERRIDES the folded enum. `ModelBlend::Blend` means
     /// "alpha-blended **or** additive" — M2 modes 2/3/4 all land there — so a mapping that reads
     /// only the enum cannot be right. Every `Spells\` flat ground quad in the 1.12.1 corpus is
     /// mode 4 (`m2batch`: ArcaneExplosion_Base, BattleShout_Cast_Base, …), and drawing those

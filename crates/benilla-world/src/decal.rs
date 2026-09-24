@@ -7,7 +7,7 @@
 //! what's on screen — **provided it transforms through the same `clip_from_world` matrix as the
 //! world-mesh shaders** (the `DECAL_WORLD_CLIP` lane variant; the cam-relative route reaches
 //! the same plane through different arithmetic and misses by more than the bias at WoW-scale
-//! coordinates — decision 0781), the rasterizer `depth_bias` settling the depth test — and
+//! coordinates), the rasterizer `depth_bias` settling the depth test — and
 //! drapes down
 //! steps and ledge faces precisely like the reference (a vertical face gets the smeared texel
 //! column of its XZ spot: projective texturing, faithfully).

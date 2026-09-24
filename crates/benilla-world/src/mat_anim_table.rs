@@ -1,4 +1,4 @@
-//! The shared **mat-anim table** (decision 1381) — the per-frame samples of every UV-scroll /
+//! The shared **mat-anim table** — the per-frame samples of every UV-scroll /
 //! tint-animated batch material, delivered through the `wow_light` buffer instead of by mutating
 //! the material asset.
 //!
@@ -63,7 +63,7 @@ pub(crate) fn region_bytes() -> u64 {
 ///
 /// A lane whose materials bind a light buffer of their own — the UI model tiles, whose twins
 /// carry the widget's black light — reads `matanim[slot]` out of THAT buffer, so rows it writes
-/// into the table reach it only if the table is uploaded there too (decision 2023: the cooldown
+/// into the table reach it only if the table is uploaded there too (the cooldown
 /// sweep's rotation rows were written every frame into a region only the world's materials ever
 /// sampled, and the tile read the zero-initialised identity). The portrait booths are not on it:
 /// a bake stands in for a world instance whose animated materials keep the world's rows, and the
@@ -145,7 +145,7 @@ impl MatAnimTable {
     }
 }
 
-/// The **affine row** (decision 2019): a texture transform's rotation and scale as the deltas
+/// The **affine row**: a texture transform's rotation and scale as the deltas
 /// from the identity the shader adds back — `[cos − 1, sin, sx − 1, sy − 1]`, with `cos`/`sin`
 /// the raw quaternion's `1 − 2z²` / `2zw` ([`benilla_formats::rotation_2x2`]). The identity
 /// encodes as the zero row, which is what lets slot 0 serve every material with no transform.

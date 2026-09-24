@@ -44,7 +44,7 @@ use crate::view::WorldCamera;
 ///      interior lanes (`0x71c110` stages it into the model's own light collector); terrain
 ///      mirrors the rows for layout only ·
 ///   20 point_count (x = live entries) · 21+ the point-light table, TWO rows per light:
-///      `[pos.xyz, range]`, `[rgb, 0]` (decision 0278 — the Gouraud point term reads this in the
+///      `[pos.xyz, range]`, `[rgb, 0]` (the Gouraud point term reads this in the
 ///      VERTEX stage; bevy's own clusterable buffer is fragment-only in the view bind-group layout,
 ///      so the lights ride our buffer instead).
 ///
@@ -81,8 +81,8 @@ pub const LIGHT_HEADER_ROWS: usize = 21;
 /// never goes meaningfully negative — the old trace-fit's ~¼-strength lobe with a negative back
 /// side (shadow-side characters turned blue as the warm channels floored at 0) is superseded.
 ///
-/// **The SH block (rows 6-11, row 12 `.xyz`, row 17 `.yzw`) is the live exterior M2 response**
-/// (0803). It was dormant for months — 0410 took the lane off this curve onto a hard-cutoff FFP
+/// **The SH block (rows 6-11, row 12 `.xyz`, row 17 `.yzw`) is the live exterior M2 response**.
+/// It was dormant for months — 0410 took the lane off this curve onto a hard-cutoff FFP
 /// matte on the director's look call and nothing consumed the rows — until 0796 refuted the fidelity
 /// premise behind that retirement (the reference's M2 lane IS this SH shader) and 0799 put the two
 /// side by side for the call. Anything that stops writing these rows now renders every exterior
@@ -149,7 +149,7 @@ pub(super) const MAX_POINT_LIGHTS: usize = 256;
 /// Pack lights only within this camera distance (yd). A point light's whole visible effect lives
 /// within its ~48 yd candidacy range (`spawn::POINT_LIGHT_RANGE`, the packed `.w`); a pool farther
 /// than ~300 yd is sub-pixel and usually fogged, and the cap keeps the per-vertex selection walk
-/// (0285: each unit picks its ≤3 nearest from this table) bounded.
+/// (each unit picks its ≤3 nearest from this table) bounded.
 const POINT_PACK_RADIUS: f32 = 300.0;
 
 /// **The rooms a point light belongs to** — a WMO's own MOLT fixture (the groups whose MOLR names
@@ -170,19 +170,19 @@ const POINT_PACK_RADIUS: f32 = 300.0;
 /// A newtype rather than a bare [`crate::wmo_portal::WmoGroupVis`] on purpose: that component on a
 /// light entity would enlist it in `apply_model_visibility`'s `group_only` query — a `PointLight`
 /// carries `Visibility` and `GlobalTransform`, so it matches — making the model-visibility
-/// authority a second writer on an entity whose `Visibility` nothing reads (decision 0025).
+/// authority a second writer on an entity whose `Visibility` nothing reads.
 #[derive(Component)]
 pub struct LightRooms(pub(crate) crate::wmo_portal::WmoGroupVis);
 
 /// **An authored WoW point light source** — an M2 light, a WMO MOLT omni, a carried torch —
 /// as the packed light table reads it. This used to be Bevy's `PointLight`, kept purely as a
 /// data carrier: [`build_light_data`] was its only reader in the engine, every lit surface
-/// takes its lights from the shared table (0273/0285), and no shader here consumes Bevy's
+/// takes its lights from the shared table, and no shader here consumes Bevy's
 /// clustered lights at all. Bevy nonetheless ran its whole light lane over every one of them
 /// each frame — `assign_objects_to_clusters` (a `Vec` rebuilt per frame with a `RenderLayers`
 /// clone per light, even with the world camera's `ClusterConfig::None`), `extract_lights`,
 /// `prepare_lights`, the light visibility check — a city of lamps' worth of work for nothing,
-/// ~2 % of the alone frame on the crowd rig's sampled profile (decision 1945). The fields keep
+/// ~2 % of the alone frame on the crowd rig's sampled profile. The fields keep
 /// the `PointLight` numbers exactly (`intensity` in the same 4π-scaled units), so the packing
 /// below and every recipe are unchanged.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -227,7 +227,7 @@ pub(super) fn register(app: &mut App) {
         .add_plugins(ExtractResourcePlugin::<SharedLightBuffer>::default())
         .add_plugins(ExtractResourcePlugin::<super::prop_probes::PropProbeExtract>::default())
         // PostUpdate, **after transform propagation**: the point table is packed from each light's
-        // `GlobalTransform`, and a CARRIED light (0587 — the torch in an NPC's hand) is a child of a
+        // `GlobalTransform`, and a CARRIED light (the torch in an NPC's hand) is a child of a
         // moving joint, so its global is only correct once `Propagate` has run. Packed from `Update`
         // it read the PREVIOUS frame's pose — the pool rubber-banded behind a walking bearer, and a
         // freshly spawned light packed one frame at the world origin. A world-baked doodad light
@@ -268,7 +268,7 @@ pub fn new_shared_light_buffer(device: &RenderDevice) -> SharedLightBuffer {
 /// The full byte size of the shared light BUFFER: the per-frame blob ([`LightStd430`] — 19 header
 /// rows + the point-light table) PLUS the interior-prop probe region PLUS the skin-palette
 /// regions (rig slot table + tint table + rig-origin table + mat-anim table + straddle clip
-/// table + palette rows — decisions 0720/0812/0974/1381/2188) at the tail. **Every buffer bound as
+/// table + palette rows) at the tail. **Every buffer bound as
 /// `wow_light` must be at least this big** — `wow_model.wgsl` declares the whole layout,
 /// and wgpu validates bound size against the shader's struct at draw time. The portrait booth's
 /// frozen studio-light buffer sizes itself with this (its table regions stay zeroed ⇒ no scene
@@ -339,7 +339,7 @@ fn build_light_data(
     // Rows 0-2, the SH block 6-12.xyz, and the sun DC (17.yzw) — the shared model-light core
     // (also the portrait booth's packer). Row 20 (point_count) is the point-table pack's below.
     pack_model_core_rows(rows, l.ambient, l.diffuse, l.sun_dir);
-    // The dynamic point-light table (decision 0278): every spawned point light within
+    // The dynamic point-light table: every spawned point light within
     // [`POINT_PACK_RADIUS`] of the camera, nearest-first when over capacity — the VERTEX stages of
     // `terrain.wgsl`/`wow_model.wgsl` walk it for the Gouraud point term (bevy's clusterable buffer
     // is fragment-only in the view layout, so the lights ride this buffer). Colour = the light's
@@ -497,7 +497,7 @@ fn upload_light(
 mod tests {
     use super::*;
 
-    /// GOLDEN — the **live exterior M2 response** (0803): `wow_model.wgsl`'s doodad/entity lane must
+    /// GOLDEN — the **live exterior M2 response**: `wow_model.wgsl`'s doodad/entity lane must
     /// reproduce `E = A + I·D·(4/17)(0.375 + 2μ + 1.875μ²)` off the rows [`pack_model_core_rows`]
     /// writes, with `A` NOT scaling by the per-instance intensity and every sun band scaling by it
     /// exactly once (never I²).
@@ -505,8 +505,8 @@ mod tests {
     /// This exists because the capture harness cannot check it. `visual.sh`-style captures are
     /// bit-deterministic on static scenes (water-noon: MAE 0.000) but NOT on the entity/GameObject
     /// scenarios this lane owns — measured run-to-run at MAE 5.1 (chest-shade-rear) and 8.8
-    /// (creature-sun-rear), a noise floor far above the ~0.24 signal the response change produces
-    /// (0799 §2). So the lane's correctness is pinned HERE, deterministically, and the captures are
+    /// (creature-sun-rear), a noise floor far above the ~0.24 signal the response change produces.
+    /// So the lane's correctness is pinned HERE, deterministically, and the captures are
     /// only good for "it compiles and it moves pixels".
     ///
     /// `eval_sh_lane` mirrors the WGSL lane-for-lane on purpose — read the two side by side; a
@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn the_sh_response_lane_matches_the_closed_form_at_every_intensity() {
         // Stormwind, minute ≈1185 — the bands were independently recovered from the reference's own
-        // uploaded shader constants (0796 §1), so the test is anchored on a real committed pair.
+        // uploaded shader constants, so the test is anchored on a real committed pair.
         let ambient = [102.0 / 255.0, 97.0 / 255.0, 123.0 / 255.0];
         let diffuse = [255.0 / 255.0, 112.0 / 255.0, 0.0];
         let sun_dir = Vec3::new(0.31, -0.82, 0.48).normalize(); // travel dir; to-light = −this
@@ -635,7 +635,7 @@ mod tests {
     /// 1.0 mid-band / 0.5 MCSH-shadowed). Pins the "every sun band scales by I, never I²" law and
     /// the row homes (ambient in the DC lanes, the sun's DC redistribution on grade.yzw).
     ///
-    /// NB (0747): no shader currently READS rows 6-12.xyz / 17.yzw — the live exterior lane in
+    /// NB: no shader currently READS rows 6-12.xyz / 17.yzw — the live exterior lane in
     /// `wow_model.wgsl` implements the same closed form inline (sun side only, `max(0, f(μ))`;
     /// the full block's back-side wrap stays out per the anti-sun ruling). This golden pins the
     /// packed block itself; the flagged cleanup is either wiring a lane to the rows or retiring

@@ -1,4 +1,4 @@
-//! **Where a colour lane's final pass lands** (decision 2206) — the one rule the FFXGlow combine
+//! **Where a colour lane's final pass lands** — the one rule the FFXGlow combine
 //! ([`crate::ffx_glow`]) and the UI gamma decode (`benilla_app::ui_gamma`) share.
 //!
 //! Each of benilla's two colour lanes ends in a full-screen pass that owns the frame's one gamma

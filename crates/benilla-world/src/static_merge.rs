@@ -1,4 +1,4 @@
-//! **`WOW_MERGE_CENSUS=1` — the production-merge population census** (decision 1417: "the
+//! **`WOW_MERGE_CENSUS=1` — the production-merge population census** ("the
 //! census comes first").
 //!
 //! Tallies every batch the streamer walks through `spawn_model_entities` into the population

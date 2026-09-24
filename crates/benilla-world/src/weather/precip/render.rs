@@ -1,5 +1,5 @@
 //! The precip **stream pushers** — streak/patter/flake geometry emitted each frame from the
-//! live pools straight into the shared effect stream (0733; world-space, and the lane rebases
+//! live pools straight into the shared effect stream (world-space, and the lane rebases
 //! camera-relative render-side — except the FLAKE draw, which writes camera-relative itself for
 //! f32 precision, see [`push_flakes`]). Split from `precip`'s root; geometry only, no sim state.
 //! Empty pools push nothing, so an idle sky costs zero here — the structural replacement for
@@ -237,8 +237,8 @@ mod tests {
     /// `GL_VERTEX_PROGRAM_POINT_SIZE_ARB` does, not as a statement about apparent size; on 2004
     /// hardware the framebuffer *was* the screen. Obeyed literally, the flake's angular size falls
     /// as `1/height` — the director's A/B put benilla's flakes 2.7× under the reference's purely
-    /// because a 4K scale-2 framebuffer is 2.7× taller than the reference install's 800
-    /// (decision 1162). Pin the invariant that fixed it: the fraction of the screen a flake covers
+    /// because a 4K scale-2 framebuffer is 2.7× taller than the reference install's 800.
+    /// Pin the invariant that fixed it: the fraction of the screen a flake covers
     /// does not depend on the resolution.
     #[test]
     fn the_flake_holds_its_angle_across_resolutions() {

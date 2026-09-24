@@ -37,7 +37,7 @@ use crate::wmo_portal::{
     CameraInteriorClaim, CurrentAreaInterior, CurrentWmoInterior, PlayerWmoRoom, UnitWmoRoom,
 };
 
-/// Whose question it is — the liquid query's delegation + scope key (decisions 0634/0696/0701).
+/// Whose question it is — the liquid query's delegation + scope key.
 ///
 /// It is not decoration and it is not optional: inside a building only *that placement's* MLIQ
 /// answers, outdoors only the ADT's. A caller that cannot say who is asking is a caller that will
@@ -64,7 +64,7 @@ pub struct WorldPoint<'w, 's> {
     /// the full walk by construction (a surface is registered in every cell its box overlaps —
     /// spatial.rs), and it is what keeps the per-unit askers — the swim mark, the splash line,
     /// the ground clamp, one each per moving creature per frame — off a 650-surface walk apiece
-    /// (decision 1979: ~0.35 ms of a raid's main thread was those three walks).
+    /// (~0.35 ms of a raid's main thread was those three walks).
     index: Res<'w, crate::liquid::WaterIndex>,
     /// Liquid surfaces that also carry a sound class — the ambient-loop scan's population.
     sound_sources: Query<'w, 's, (&'static LiquidSoundSource, &'static WaterChunkInfo)>,
@@ -74,7 +74,7 @@ pub struct WorldPoint<'w, 's> {
     eye_room: Res<'w, CameraInteriorClaim>,
     unit_rooms: Query<'w, 's, &'static UnitWmoRoom>,
     underwater: Res<'w, Underwater>,
-    /// What you are standing on — the terrain/WMO surface race (decision 1161). Folded in rather
+    /// What you are standing on — the terrain/WMO surface race. Folded in rather
     /// than left beside: it is the same question about the same point, and 1164 named it this
     /// facade's seed.
     surface: SurfaceUnderfoot<'w, 's>,
@@ -154,7 +154,7 @@ impl WorldPoint<'_, '_> {
 
     /// The liquid at `wow` for this subject, nearest surface first, or `None` for dry.
     ///
-    /// Every liquid, not only water: **you swim in lava and slime too** (0634).
+    /// Every liquid, not only water: **you swim in lava and slime too**.
     pub fn liquid_at(&self, who: Subject, wow: [f32; 3]) -> Option<LiquidHit> {
         liquid_at(self.over(wow), wow, self.claim(who))
     }
@@ -331,7 +331,7 @@ mod tests {
     /// looks the room up. Those must be the same answer, including the two `None` cases — a unit
     /// the room tracker has not reached, and an entity that is not a unit at all. Getting this
     /// wrong is silent: every consumer would simply read the open world's liquid indoors, which is
-    /// the "swim in air" family (0634/0696/0701) coming back through the front door.
+    /// the "swim in air" family coming back through the front door.
     #[test]
     fn a_unit_subject_resolves_to_that_units_own_room() {
         let mut world = World::new();

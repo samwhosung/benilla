@@ -70,9 +70,9 @@ pub struct WorldUnit {
     /// extents disagreeing.
     ///
     /// It exists because standing in a sealed WMO room the reference never *submits* an outdoor
-    /// object at all (`crate::exterior_cull`, decision 1270) — so the cull needs one whole-object
+    /// object at all (`crate::exterior_cull`) — so the cull needs one whole-object
     /// AABB per body, on its root, which is the reference's own granularity. The game supplies the
-    /// loader-armed idle's authored CAaBox (decision 0637 — a skinned body's bind-pose box is not
+    /// loader-armed idle's authored CAaBox (a skinned body's bind-pose box is not
     /// where it draws), unscaled: the root transform already carries the display scale.
     ///
     /// **`None` means one thing only: not the world's to decide.** In 1.12 content that is the

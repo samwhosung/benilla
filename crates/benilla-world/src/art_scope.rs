@@ -106,7 +106,7 @@ pub enum ArtSlot {
     /// `ModelMaterials` — every authored-batch material: creatures, players, GameObjects, the
     /// character composites, the booth scenes.
     ModelMats,
-    /// `SkinComposites` — composited character body atlases (decision 0044).
+    /// `SkinComposites` — composited character body atlases.
     Skins,
     /// `WorldAssets::model_materials` — the ground-clutter material dedup.
     ClutterMats,

@@ -1,5 +1,5 @@
 //! The per-instance `MeshTag` channel: **one home for its bit conventions and ownership protocol**
-//! (decisions 0066, 0173 — the typed field layout; 0720 — the rig field + the 6-bit alpha).
+//! (the typed field layout; 0720 — the rig field + the 6-bit alpha).
 //!
 //! Every `WowModelMaterial` submesh carries a Bevy `MeshTag` (a raw `u32` the shader reads per
 //! instance). **Bits 31 and 30 are standalone flags; bits 0..=29 are the payload.** The **rig
@@ -15,19 +15,19 @@
 //!   triple (shared-light rows 18-19) instead of the scene fog. **Two conjuncts, never one**: the
 //!   model must stand in a WMO interior (the reference's per-unit classification `0x71c110` →
 //!   collector `+0x184..`, lane by `[node+0xc]&2`) *and* the room it attached to must be on the
-//!   camera's `[0xca7f00]` chain this frame (`[P+0x98] != 0`, decision 1792 §4). Both writers
+//!   camera's `[0xca7f00]` chain this frame (`[P+0x98] != 0`). Both writers
 //!   below decide it that way — the classifier for entity parts, `apply_model_visibility` for
 //!   room-bound WMO content — through [`with_interior_fog`]. Masked off with bit 31 before the
 //!   payload decode.
-//! - **Instance slot** (bits 19..=29, BOTH payload modes — decisions 0720, 0812, 0820): the
+//! - **Instance slot** (bits 19..=29, BOTH payload modes): the
 //!   per-instance index into the shared buffer's slot-keyed regions. `0` is the world's shared
 //!   no-instance sentinel (terrain, WMO, doodads, clutter, and every part of a rig-less model). Two
 //!   consumers, reading it in different stages — which is why it is no longer called "the rig slot":
-//!     - the **vertex** stage indexes the skin-palette region with it ([`crate::rig_palette`], 0720)
+//!     - the **vertex** stage indexes the skin-palette region with it ([`crate::rig_palette`])
 //!       — but only under `WOW_RIG_SKIN`, which `WowModelExt::specialize` compiles from the **mesh's
 //!       own joint attributes**, never from this field. A static mesh carrying a slot is not skinned.
 //!     - the **fragment** stage indexes the per-instance body-tint table with it
-//!       ([`crate::instance_tint`], 0812) — for every part, skinned or not.
+//!       ([`crate::instance_tint`]) — for every part, skinned or not.
 //!
 //!   That asymmetry is why the field is written from the **unit** and not from the part: a unit's
 //!   boneless geosets and its billboard cards carry their wearer's slot, so a tinted unit tints
@@ -80,7 +80,7 @@
 //!    An exterior-law part is never fogged; an indoor-law one is fogged only while its room's gate
 //!    is on.
 //!
-//!    It is **not** filtered by fade state (decision 0755): the light law and the fade alpha are
+//!    It is **not** filtered by fade state: the light law and the fade alpha are
 //!    orthogonal, so 1 and 2 are deconflicted by *field*, not by lockout — the law follows a part
 //!    through its appear/despawn ramp, and only the *material* defers to 1 while a fade is live
 //!    (the fade picks the blend twin **of the law's family**, `FadeMaterials::material_for`). The
@@ -173,7 +173,7 @@ const SHADE_SHIFT: u32 = 6;
 /// Bits 6..=18 of the interior payload: the SH-probe table slot (13 bits ⇔ 8192 slots).
 const PROBE_MASK: u32 = 0x0007_ffc0;
 const PROBE_SHIFT: u32 = 6;
-/// Bits 19..=29 of BOTH payload modes: the skin-palette rig slot (decision 0720); `0` = no rig.
+/// Bits 19..=29 of BOTH payload modes: the skin-palette rig slot; `0` = no rig.
 const RIG_MASK: u32 = 0x3ff8_0000;
 const RIG_SHIFT: u32 = 19;
 /// Rig slots addressable by the tag's 11-bit rig field (slot 0 = the "no rig" sentinel). The
@@ -200,7 +200,7 @@ pub(crate) fn probe_bits(slot: u16) -> u32 {
 /// [`alpha_bits`] floors at `1`, so a `0` here can only be the sentinel).
 ///
 /// This is what lets the interior classifier **re-lane a part while a fade owns its alpha**: the
-/// law rewrites the payload, the ramp's alpha rides through untouched (decision 0755). Before it,
+/// law rewrites the payload, the ramp's alpha rides through untouched. Before it,
 /// the classifier's payload writes hardcoded opaque, which is why it had to be locked out of
 /// fading parts entirely — and why a freshly-streamed indoor entity spent its whole 2 s appear
 /// ramp on the exterior lane and swapped light laws in one frame when the ramp latched.
@@ -218,7 +218,7 @@ fn carried_alpha(tag: u32) -> u32 {
 ///
 /// **Payload only — it does not touch [`INTERIOR_FOG_BIT`]**, unlike its spawn-side sibling
 /// [`probe_bits`]. Standing indoors is necessary for a part's fog but not sufficient: the room must
-/// also be on the camera's `[0xca7f00]` chain this frame (decision 1792 §4), so the classifier
+/// also be on the camera's `[0xca7f00]` chain this frame, so the classifier
 /// composes this with [`with_interior_fog`] and the bit has exactly one decision point.
 pub(crate) fn with_interior_probe(tag: u32, slot: u16) -> u32 {
     (tag & RIG_MASK) | (u32::from(slot) << PROBE_SHIFT) | carried_alpha(tag)
@@ -246,7 +246,7 @@ pub fn spawn_tag(rig_slot: u16, alpha: f32) -> u32 {
     rig_bits(rig_slot) | alpha_bits(alpha)
 }
 
-/// The rig field of a part's spawn tag (decision 0720): the skin-palette rig slot, written once
+/// The rig field of a part's spawn tag: the skin-palette rig slot, written once
 /// when the skinned part spawns (composed with [`alpha_bits`]`(1.0)` or [`probe_bits`]). Every
 /// runtime writer preserves it. Slot 0 is the "no rig" value — [`crate::rig_palette`] never
 /// allocates it.
@@ -261,7 +261,7 @@ pub fn rig_of(tag: u32) -> u16 {
 }
 
 /// Rewrite a tag's rig field in place, preserving every other field and both flag bits — the
-/// lazy-rig promote/demote writer (decision 0863): a doodad part's slot arrives at its first
+/// lazy-rig promote/demote writer: a doodad part's slot arrives at its first
 /// draw-wake and leaves under table pressure, and neither edge may touch the law payload, the
 /// fade alpha, or the shade/probe field. "Written once at spawn" (the module doc) remains the
 /// rule for every OTHER lane; this is the one sanctioned re-writer, and it owns only its field.
@@ -363,7 +363,7 @@ pub(crate) fn shade_of(tag: u32, _: ExteriorPayload) -> u8 {
 }
 
 /// Whether this tag's instance draws **translucent** (`0 < α < 1`) — the depth-prime twin's
-/// activation rule ([`crate::zfill`], decision 0831), decoding exactly as the shader does: the
+/// activation rule ([`crate::zfill`]), decoding exactly as the shader does: the
 /// flag bits split off first, a whole payload of `0` is the *untagged ⇒ opaque* sentinel, and a
 /// full alpha field (63) is opaque. The field is never legitimately `0` ([`alpha_bits`] floors at
 /// `1`), so there is no "invisible" branch to exclude — bits `1..=62` are the whole translucent
@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(with_exterior_reset(0) & ALPHA_MASK, ALPHA_MASK);
     }
 
-    /// **Why the shade writer must never touch a probe payload** (B373): the byte lives in bits
+    /// **Why the shade writer must never touch a probe payload**: the byte lives in bits
     /// 6..=13 and the slot in 6..=18, so a shade write does not *corrupt* the slot in a way
     /// anything downstream can notice — it RENAMES it, to `(slot & 0x1f00) | byte`, which is a
     /// perfectly well-formed index into somebody else's probe (or into an unallocated, zeroed
