@@ -126,9 +126,9 @@ fn backward_is_walkbackwards() {
 
 #[test]
 fn swimming_back_forward_strafe_and_idle() {
-    // The RF-0057 swim row (`0x5fd137`…): fwd/back/turn/strafe → 42/45/41/43-44. SwimLeft 43 /
+    // The swim row (`0x5fd137`…): fwd/back/turn/strafe → 42/45/41/43-44. SwimLeft 43 /
     // SwimRight 44 byte-read from AnimationData.dbc; the combined-bit cascade below is the
-    // VERIFIED TU-E order (wow-re `swim-mechanism.md`).
+    // `0x5fd100` order.
     let back = MovementState {
         speed: 4.0,
         flags: move_flags::SWIMMING | move_flags::BACKWARD,
@@ -153,7 +153,7 @@ fn swimming_back_forward_strafe_and_idle() {
         ..Default::default()
     };
     assert_eq!(gait_candidates(&right, 2.5, None, None), &[44, 42, 41, 0]);
-    // The VERIFIED `0x5fd100` cascade (TU-E): TURN > STRAFE > BACKWARD > FORWARD. A strafe
+    // The `0x5fd100` cascade: TURN > STRAFE > BACKWARD > FORWARD. A strafe
     // diagonal plays the side-stroke — strafe outranks both fwd and back…
     let diag = MovementState {
         speed: 4.0,
@@ -198,9 +198,9 @@ fn swimming_back_forward_strafe_and_idle() {
 
 #[test]
 fn airborne_splits_jump_fall_and_gait_freeze() {
-    // The three-way airborne split (wow-re land-anim-height-gate): a jump arc plays the 37/38
-    // bracket; FALLINGFAR latched → the Fall(40) loop (whatever the arc's origin); a step-off
-    // fall below the latch is NO special — the gait freezes through it (keep-current).
+    // The three-way airborne split: a jump arc plays the 37/38 bracket; FALLINGFAR latched → the
+    // Fall(40) loop (`0x602c40`, whatever the arc's origin); a step-off fall below the latch is NO
+    // special — the gait freezes through it (keep-current).
     let s = MovementState {
         flags: move_flags::FORWARD | move_flags::FALLING,
         ..Default::default()
@@ -234,14 +234,14 @@ fn a_pose_yields_to_movement_but_a_jump_landing_plays_out() {
 
 #[test]
 fn jump_sequence_ids() {
-    // The §5/asset-verified sequence: JumpStart 37 → Jump 38 → the landing pick (below).
+    // The asset-verified sequence: JumpStart 37 (`0x60e480`) → Jump 38 → the landing pick (below).
     assert_eq!(Special::Jump.enter(), 37);
     assert_eq!(Special::Jump.loop_id(), 38);
 }
 
 #[test]
 fn jump_land_pick_is_the_0x602c60_rule() {
-    // The land dispatcher `0x602c60` (wow-re rf57b §2): stopped → JumpEnd 39; moving forward or
+    // The land dispatcher `0x602c60`: stopped → JumpEnd 39; moving forward or
     // strafing → JumpLandRun 187; backpedaling or walk-mode → NO landing clip (the recompute drops
     // straight into the gait — a jump-then-hold-S backpedals the instant it touches down, never
     // flashing the forward-run footplant); swimming → no clip (the swim gait takes over).
@@ -388,7 +388,7 @@ fn reconcile_priority_is_stow_over_draw() {
 
 #[test]
 fn reconcile_mounted_is_a_persistent_draw_block() {
-    // Mounted forces stow on every recompute (decision 0441, wow-re sheath-policy §3): it beats
+    // Mounted forces stow on every recompute (decision 0441, `0x5fdfd9`): it beats
     // the engaged draw, the &0x20 draw, and the remote server-byte pull-through alike — a
     // volunteered drawn byte can never re-arm a rider.
     assert_eq!(reconcile_sheath(1, 0, 0, true, true, 1, true), Some(0));
@@ -514,13 +514,13 @@ fn ranged_load_idle_selects_by_weapon_and_ranks_below_ready() {
     )));
 }
 
-/// The drawn ranged idle is claimed by **two tests and no others** ([`ranged_idle_gate`],
-/// byte-verified — wow-re `shooter-stop-law.md` §J6 claim 1): `0x5fd460` reads the ranged sheath
-/// (`cmp [+0xd40],2`) and the local auto-repeat bit (`test ah,0x2` = `0x200`). The any-caster
-/// weapon-visual hold `0x400` is **never tested in that function**; it appears only in
-/// `0x5fc3f0`'s Hold self-loop gates, which are never reached for a bow id. Admitting it here is
-/// the defect the director reported on 2026-08-05 ("they keep aiming like they are going to shoot
-/// at something"): one Serpent Sting sets `0x400`, and no volley end ever clears it.
+/// The drawn ranged idle is claimed by **two tests and no others** ([`ranged_idle_gate`]):
+/// `0x5fd460` reads the ranged sheath (`cmp [+0xd40],2`) and the local auto-repeat bit
+/// (`test ah,0x2` = `0x200`). The any-caster weapon-visual hold `0x400` is **never tested in that
+/// function**; it appears only in `0x5fc3f0`'s Hold self-loop gates, which are never reached for a
+/// bow id. Admitting it here is the defect the director reported on 2026-08-05 ("they keep aiming
+/// like they are going to shoot at something"): one Serpent Sting sets `0x400`, and no volley end
+/// ever clears it.
 #[test]
 fn the_ranged_idle_is_entered_by_the_auto_repeat_bit_and_the_ranged_sheath_alone() {
     // The whole claim of `0x5fd460`: the local `0x200`, with the ranged sheath.
@@ -540,8 +540,8 @@ fn the_ranged_idle_is_entered_by_the_auto_repeat_bit_and_the_ranged_sheath_alone
 /// in the cycle authored as a LOOP and therefore the one that can sit between shots.
 ///
 /// This replaces 0994's `is_ranged_fire` law test, which asserted the opposite mechanism: that a
-/// fire clip's completion must NOT recompute the base. wow-re's §5 refuted the absence proof it
-/// rested on — the completion dispatcher has a second, deferred fire site — so the fire clips
+/// fire clip's completion must NOT recompute the base. The absence proof it rested on is false —
+/// the completion dispatcher has a second, deferred fire site (`0x7075af`) — so the fire clips
 /// recompute like every other one-shot and the promotion below is what holds the pose instead.
 #[test]
 fn each_ranged_load_promotes_to_its_weapon_familys_hold() {
@@ -680,8 +680,8 @@ fn route_land_row8_picks_land_clip_from_touchdown_input() {
 
 #[test]
 fn route_classifier_memberships_are_the_decoded_bytes() {
-    // The load-bearing byte-decoded memberships (wow-re §3): 17 ∈ COMBAT, 66/68/80 ∉ COMBAT;
-    // 17/66/68/80 ∈ CLASS_A. All swing ids are COMBAT; no emote id is.
+    // The load-bearing byte-decoded memberships (`0x5fcc10`, `0x5fed90`): 17 ∈ COMBAT, 66/68/80 ∉
+    // COMBAT; 17/66/68/80 ∈ CLASS_A. All swing ids are COMBAT; no emote id is.
     assert!(is_combat(17));
     for id in [66, 68, 80] {
         assert!(!is_combat(id), "emote {id} must not be COMBAT");
@@ -864,7 +864,7 @@ fn swing_ids_cover_both_hands() {
 
 #[test]
 fn a_flying_spline_is_fly_before_backward_and_speed() {
-    // RF-0057 `0x5fd19c`: the fly branch sits between the swim block and the backward test —
+    // `0x5fd19c`: the fly branch sits between the swim block and the backward test —
     // a 32 yd/s taxi plays Fly 135, never Sprint 143 (the ≥11 branch) and never WalkBackwards.
     let fly = MovementState {
         flying: true,
@@ -971,7 +971,7 @@ fn the_granted_modes_fold_into_the_flags_word_on_every_leg_but_our_own() {
     );
 }
 
-/// The prowl creep outranks the WHOLE speed tail (RF-0057 `0x5fd1d3` precedes `0x5fd202`): a
+/// The prowl creep outranks the WHOLE speed tail (`0x5fd1d3` precedes `0x5fd202`): a
 /// stealthed unit plays 119 at a dead crawl and at sprint speed alike — never Walk, Run or Sprint.
 #[test]
 fn the_prowl_creeps_at_every_speed() {

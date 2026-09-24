@@ -32,8 +32,8 @@ const ERROR_CUBE: &str = "Spells\\ErrorCube.mdx";
 
 /// The reserved [`SpellKitFx`] reap key for the lootable-corpse effect — NOT a spell id (no 5875
 /// spell id is anywhere near `u32::MAX`; the client keys these nodes by attach tag + node flag
-/// instead of a spell, wow-re `loot-corpse-effect.md`). One key suffices: a unit carries at most
-/// one loot effect (the client's flag8 dedup), which [`arm_loot_fx`]'s edge cache guarantees.
+/// instead of a spell — `0x61fa10`). One key suffices: a unit carries at most one loot effect (the
+/// client's flag8 dedup), which [`arm_loot_fx`]'s edge cache guarantees.
 const LOOT_FX_KEY: u32 = u32::MAX;
 
 /// The M2 attachment the three engine-spawned effects we ship hang from — the loot sparkle, the
@@ -41,25 +41,25 @@ const LOOT_FX_KEY: u32 = u32::MAX;
 /// fallback, so a model lacking the point lands on the unit base — exactly the reference's
 /// root fallback (`0x61fb4f`–`0x61fb5f`: `HasAttachment(tag)` on `[unit+0xd8]`, else `0x13`).
 ///
-/// **It is a table value, not an engine-wide constant** (wow-re `mount-composition.md` Q4b.1, §5
-/// 2026-08-03 — the 14-entry `DAT_0080c968`, dumped and joined to the `0x8617b8` name table). It
-/// happens to be `0x13` for indices **4** Loot Art, **5** Unit Level Up and **6** Mount Poof —
-/// our three — and for the PetLoyalty/Meeting-Stone/Reputation rows; it is `0x11` for the two
-/// breath effects and Inebriated Bubbles, and the sentinel `0x25` (spawn refused outright) for
-/// the two footstep sprays. A fourth consumer must read the table row, not reuse this.
+/// **It is a table value, not an engine-wide constant** (the 14-entry `DAT_0080c968`, dumped and
+/// joined to the `0x8617b8` name table). It happens to be `0x13` for indices **4** Loot Art, **5**
+/// Unit Level Up and **6** Mount Poof — our three — and for the PetLoyalty/Meeting-Stone/Reputation
+/// rows; it is `0x11` for the two breath effects and Inebriated Bubbles, and the sentinel `0x25`
+/// (spawn refused outright) for the two footstep sprays. A fourth consumer must read the table row,
+/// not reuse this.
 const HARDCODED_FX_ATTACH: u16 = 0x13;
 
 /// The engine-spawned level-up effect's baked lookup name (the client's string `0x8618e0`,
-/// matched by the boot name-resolve `0x61f5b0`; wow-re `levelup-ding.md` — decision 0305).
+/// matched by the boot name-resolve `0x61f5b0`; decision 0305).
 const LEVEL_UP_EFFECT: &str = "HARDCODED Unit Level Up";
 
 /// The mount transition's cloud — hardcoded index **6**, shipped as `SpellVisualEffectName` row
-/// 1185 → `Spells\DruidMorph_Impact_Base.mdx`, i.e. literally the druid-morph puff (wow-re
-/// `mount-composition.md` Q4b, decision 0927).
+/// 1185 → `Spells\DruidMorph_Impact_Base.mdx`, i.e. literally the druid-morph puff (`0x5ffa50`
+/// pushes index 6 to `0x61fae0`; decision 0927).
 const MOUNT_POOF_EFFECT: &str = "HARDCODED Mount Poof";
 /// The meeting-stone join — hardcoded index **0xc** (`0x861808`), spawned on the local player by
-/// the `SMSG 0x295` status-1 arm with the same `Effect_C` shape as the mount poof (wow-re
-/// `meeting-stone-status.md` §8; decision 1974).
+/// the `SMSG 0x295` status-1 arm `0x4ca2c7` with the same `Effect_C` shape as the mount poof
+/// (decision 1974).
 const MEETING_STONE_JOIN_EFFECT: &str = "HARDCODED Meeting Stone Join";
 
 /// The meeting-stone join visual for `entity`, or `None` without client data or the row —
@@ -102,17 +102,17 @@ pub(crate) enum SpellKitSound {
     /// unit's tracked hold loop, if any (the client kills the effect's sound at `0x614150`).
     StopHold { entity: Entity },
     /// Ring this kit at a bare **world point**, with no owning unit — the kit-sound leg's
-    /// `extra`-override arm (wow-re `kit-sound-leg.md`: "position = `extra` if non-NULL else the
-    /// unit's own position", `60f49e`–`60f4bc`). Its one caller is the missile's ground arrival,
-    /// where `0x61d870` passes the landing point: the bomb's boom belongs where it landed, not at
-    /// the thrower. Always a one-shot — a LOOPING sound here would need a tracked node with an
-    /// owner, and none of the six shipped ground-arrival kits carries one (census below).
+    /// `extra`-override arm (position = `extra` if non-NULL else the unit's own position,
+    /// `60f49e`–`60f4bc`). Its one caller is the missile's ground arrival, where `0x61d870` passes
+    /// the landing point: the bomb's boom belongs where it landed, not at the thrower. Always a
+    /// one-shot — a LOOPING sound here would need a tracked node with an owner, and none of the six
+    /// shipped ground-arrival kits carries one (census below).
     PlayAt { pos: Vec3, kit_sound: u32 },
     /// Stop exactly `kit_sound`'s channels on this unit — the aura-drop reap of a LOOPING
-    /// **state**-kit sound (wow-re `kit-sound-leg.md`: a looping kit sound rides a tracked,
-    /// spell-id-tagged CEffect on the unit's list, and `0x614150` stops it with a 0.15 s fade
-    /// when the aura leaves). Kit-scoped so an unrelated hold loop on the same unit survives;
-    /// a one-shot kit is never tracked, so for it this is a no-op.
+    /// **state**-kit sound (a looping kit sound rides a tracked, spell-id-tagged CEffect on the
+    /// unit's list, and `0x614150` stops it with a 0.15 s fade when the aura leaves). Kit-scoped so
+    /// an unrelated hold loop on the same unit survives; a one-shot kit is never tracked, so for it
+    /// this is a no-op.
     StopKit { entity: Entity, kit_sound: u32 },
 }
 
@@ -121,13 +121,12 @@ pub(crate) enum SpellKitSound {
 /// [`SpellKitSound`]'s two play arms: the reference reaches both through the same leg of the same
 /// one-time node arm pass, one field apart.
 ///
-/// **Exactly once per `PlaySpellVisualKit` call, and always** (wow-re
-/// `spell/scratch/camera-shake-producers.md`, §5 2026-09-02). The primary site is `0x620e11`,
-/// inside the first-created effect node's one-time arm pass `0x620be0`, gated on that node's
-/// flags snapshot carrying bit `0x10` — which `0x60edf0` sets iff `kit+0x38 != 0` and every later
-/// spawner clears via `(flags & ~0x11) | 0x400`, so exactly the FIRST node carries it. `0x60f4e6`
-/// in the kit tail is the **no-node fallback**, gated on "nothing was created" rather than on a
-/// flag. There is no stage gate and no cancel path: a shake outlives its source and plays out.
+/// **Exactly once per `PlaySpellVisualKit` call, and always**. The primary site is `0x620e11`,
+/// inside the first-created effect node's one-time arm pass `0x620be0`, gated on that node's flags
+/// snapshot carrying bit `0x10` — which `0x60edf0` sets iff `kit+0x38 != 0` and every later spawner
+/// clears via `(flags & ~0x11) | 0x400`, so exactly the FIRST node carries it. `0x60f4e6` in the
+/// kit tail is the **no-node fallback**, gated on "nothing was created" rather than on a flag.
+/// There is no stage gate and no cancel path: a shake outlives its source and plays out.
 #[derive(Message, Clone, Copy, Debug)]
 pub(crate) enum SpellKitShake {
     /// Shake at the playing unit's own world position — the ordinary kit play.
@@ -139,12 +138,11 @@ pub(crate) enum SpellKitShake {
 }
 
 /// A persistent effect instance's **lifetime class** — which owner's reap can kill it.
-/// Byte-verified (wow-re `state-kit-aura-lifecycle.md`, §5 2026-07-14): the client's reap walk
-/// `0x614150(spellId, force)` discriminates by node flags — every SPELL_GO / SPELL_FAILED reap
-/// passes `force=0`, which **spares** stage-2 nodes (flag `0x1000`); only the aura-remove path
-/// (`0x612320 → 0x5ff290`) passes `force=1` and takes them. So a cast's GO releasing its precast
-/// never sweeps the same spell's aura-state models (re-eat while the food buff holds: the GO
-/// must not take the bread with it). This enum is that discriminator, named.
+/// The client's reap walk `0x614150(spellId, force)` discriminates by node flags — every SPELL_GO /
+/// SPELL_FAILED reap passes `force=0`, which **spares** stage-2 nodes (flag `0x1000`); only the
+/// aura-remove path (`0x612320 → 0x5ff290`) passes `force=1` and takes them. So a cast's GO
+/// releasing its precast never sweeps the same spell's aura-state models (re-eat while the food
+/// buff holds: the GO must not take the bread with it). This enum is that discriminator, named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FxClass {
     /// Cast-lifecycle instances: precast/channel holds (and every self-terminating flash, whose
@@ -157,13 +155,13 @@ pub(crate) enum FxClass {
 
 /// Which of the reference's five kit **stages** an instance's model runs its *animation lifecycle*
 /// as — the discriminator behind `PlaySpellVisualKit`'s per-stage completion-callback table
-/// (`0x60edf0`'s jump table `0x60f4f8`; wow-re `ceffect-anim-lifecycle.md` §2, §5 trio 2026-08-02).
+/// (`0x60edf0`'s jump table `0x60f4f8`).
 ///
 /// Distinct from [`FxClass`], which answers a different question — *whose reap can kill this* (the
 /// `0x614150` force census). The two are not derivable from each other: a channel kit and an
 /// aura-state kit are both stage 2 but reaped by different owners, while a precast and a channel
 /// are both [`FxClass::Hold`] and run *different* animation lifecycles. So the stage rides its own
-/// field, set at each writer from the caller table (`spell-visual-apply.md` §1.6).
+/// field, set at each writer from the stage its caller passes to `0x60edf0`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FxStage {
     /// Stages 0/1 (kit push, cast release, impact) — callback `0x5fbf50`: destroy at the first
@@ -186,9 +184,8 @@ pub(crate) enum FxStage {
 /// The id is not decoration. It is half the reference's **same-slot replace** key: every
 /// `CEffect::AddEffect` (`0x61fdd0`) first calls `0x6208e0(owner, rec, tag)`, which walks the
 /// owner's `+0xb4` list and **destroys** every node carrying the same record id at the same tag
-/// (wow-re `kit30-effect-slot.md` §4, VERIFIED `[0x6208e0, 0x62092c]`; decision 2057). Keying on
-/// the path instead would be a different rule — two `SpellVisualEffectName` rows may name one
-/// `.mdx`, and the reference lets those coexist.
+/// (`[0x6208e0, 0x62092c]`; decision 2057). Keying on the path instead would be a different rule —
+/// two `SpellVisualEffectName` rows may name one `.mdx`, and the reference lets those coexist.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FxSlot {
     /// The M2 attachment id to hang from ([`benilla_formats::KIT_SLOT_TAGS`]), or
@@ -202,9 +199,9 @@ pub(crate) struct FxSlot {
 }
 
 /// A spell-visual kit's attach-point **effect model** edge (kit fields 3–11 →
-/// `SpellVisualEffectName` `.mdx` — decision 0099 phase 3; slot loop byte-pinned in wow-re
-/// `spell-visual-apply.md` §1.3). Written here, consumed by `crate::entities::spell_fx` (the
-/// bone-rider home). One message type so the consumer sees edges **in emission order** — a GO's
+/// `SpellVisualEffectName` `.mdx` — decision 0099 phase 3; the slot loop's tag pushes
+/// `0x60f00d`–`0x60f309`). Written here, consumed by `crate::entities::spell_fx` (the bone-rider
+/// home). One message type so the consumer sees edges **in emission order** — a GO's
 /// reap-then-begin never races.
 #[derive(Message, Clone)]
 pub(crate) enum SpellKitFx {
@@ -283,12 +280,12 @@ pub(crate) struct MissileSpawn {
     /// point, exactly ONE projectile flies at it instead (the client's `0x6e8a50` empty-hit-array
     /// arm — `0x6e8aa2 test al,0x60; setne cl` latches "SOURCE or DEST location present",
     /// `0x6e8bd4` then calls the spawner once, `0x60a5b6`–`0x60a5c9` copies `targets+0x3c` into
-    /// the aim point and `0x60a5ec` forces the owning unit slot to −1; wow-re
-    /// `spell-go-dest-effect.md` §3). This is what a pure ground cast — Flare, a bomb thrown at
-    /// empty dirt — actually shows travelling. Its arrival is [`super::CastEventKind::GroundImpact`],
-    /// never the unit hand-off. Named divergence: the reference latches on `flags & 0x60` and then
-    /// reads the DEST vector regardless, so a SOURCE-only cast aims at whatever the zero-initialised
-    /// DEST slot holds; we carry only a real DEST (`flags & 0x40`) and launch nothing without one.
+    /// the aim point and `0x60a5ec` forces the owning unit slot to −1). This is what a pure ground
+    /// cast — Flare, a bomb thrown at empty dirt — actually shows travelling. Its arrival is
+    /// [`super::CastEventKind::GroundImpact`], never the unit hand-off. Named divergence: the
+    /// reference latches on `flags & 0x60` and then reads the DEST vector regardless, so a
+    /// SOURCE-only cast aims at whatever the zero-initialised DEST slot holds; we carry only a real
+    /// DEST (`flags & 0x40`) and launch nothing without one.
     pub(crate) ground_aim: Option<Vec3>,
     /// The caster's ranged-weapon fallback `SpellVisual` id, resolved at GO time — rides the
     /// flight and returns in [`super::CastEventKind::Impact`] so a basic shot's impact kit
@@ -330,7 +327,7 @@ pub(super) fn load_spell_visuals(mut commands: Commands, assets: Option<Res<Worl
 
 /// The lookup bundle behind the client's `0x60d450` ranged fallback: caster →
 /// equipped-ranged-weapon display → `ItemDisplayInfo` col 10 substitute `SpellVisual` id
-/// (wow-re `throw-ranged-attack-anim.md`, decision 0370).
+/// (decision 0370).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct WeaponVisualSrc<'w, 's> {
     displays: Option<Res<'w, ItemDisplays>>,
@@ -485,10 +482,10 @@ fn resolve_kit_traced(
 /// The in-flight cast's **strike sound** for the `$TRD` anim event (`0x62faa0`): the handler
 /// resolves the spell's visual to its 16-dword `SpellVisual.dbc` row (`0x60d450` →
 /// `DAT_00c0d738[visualId]`) and plays that row's **dword 14** (`[row+0x38]`) positioned at the
-/// unit — wow-re `sound/scratch/gather-sound-anim-events.md`, decision 0562. Mining's visual 93
-/// carries 1143 "Mining Impact" here (the pick clang — client-side complete, no server state);
-/// the smithing crafts' 395 the same hammer; Herb's 91 carries 1142 but its anim never fires
-/// `$TRD`. No ranged-weapon fallback (`$TRD` rides work/craft anims, never a ranged shot's).
+/// unit (decision 0562). Mining's visual 93 carries 1143 "Mining Impact" here (the pick clang —
+/// client-side complete, no server state); the smithing crafts' 395 the same hammer; Herb's 91
+/// carries 1142 but its anim never fires `$TRD`. No ranged-weapon fallback (`$TRD` rides work/craft
+/// anims, never a ranged shot's).
 pub(crate) fn held_strike_sound(
     spells: &crate::ui_action::Spells,
     visuals: &SpellVisualCatalog,
@@ -568,10 +565,10 @@ struct KitOut<'a, 'w1, 'w2, 'w3, 'w4, 'w5, 'w6, 'w7, 'w8> {
 /// - `effects`: whether the models spawn here at all. `false` for the impact hand-off's STATE
 ///   stage — its models belong to the aura's life and [`arm_aura_state_fx`] owns them.
 /// - `sound`: whether the kit's sound rings — **ungated and positional at the unit, every
-///   stage** (wow-re `kit-sound-leg.md`, decision 0852: `0x60edf0`'s sound leg carries no self
-///   test; the old "state sound is self-only" reading was `0x5ff43e`'s gate on a *different*
-///   aura-apply cue, and `0x5fa6d0` appears nowhere in the kit play). The flag exists for
-///   plays that deliberately hand the sound to another owner (none today).
+///   stage** (decision 0852: `0x60edf0`'s sound leg carries no self test; the old "state sound is
+///   self-only" reading was `0x5ff43e`'s gate on a *different* aura-apply cue, and `0x5fa6d0`
+///   appears nowhere in the kit play). The flag exists for plays that deliberately hand the sound
+///   to another owner (none today).
 #[derive(Clone, Copy)]
 struct KitPlay {
     persistent: bool,
@@ -585,10 +582,9 @@ struct KitPlay {
     ///
     /// Stage 2 is **foreclosed from the play site**: `0x60f387 jne` diverts it around the sole
     /// `0x60f3c5 call 0x5fe2f0` that ever hands a kit's `AnimID` to the animation primitive, and
-    /// its leg leaves the block with `jmp 0x60f3ca` (VERIFIED, wow-re
-    /// `state-kit-anim-and-stun-pose.md` §1). So a state kit neither plays its anim nor reaches
-    /// the `[8,10]` wound test (the half decision 2063 already had): the id is only ever the
-    /// right-hand side of a comparison against what the unit is already playing, and a mismatch
+    /// its leg leaves the block with `jmp 0x60f3ca`. So a state kit neither plays its anim nor
+    /// reaches the `[8,10]` wound test (the half decision 2063 already had): the id is only ever
+    /// the right-hand side of a comparison against what the unit is already playing, and a mismatch
     /// spends itself on a base recompute ([`BaseAnimRecompute`]).
     ///
     /// The other exclusion at `0x60f3a0` — stage 4 with a zero cast time — never reaches this
@@ -698,13 +694,12 @@ struct ImpactPlay {
 /// kit plays its anim + sound only: its **effect models live for the aura's life**, owned by
 /// [`arm_aura_state_fx`]'s slot watcher (a single instance, begun when the aura lands in the
 /// slots and reaped when it leaves — the same packet burst as the GO, so there is no visible
-/// gap). The state sound rings **ungated and positional** (wow-re `kit-sound-leg.md`, decision
-/// 0852: `0x60edf0`'s sound leg has no self test — the old self-only reading belonged to a
-/// different aura-apply cue); the same-frame duplicate against the aura watcher's ADD-edge play
-/// collapses in the sound router. Named approximation: the client's small stage-2 gate
-/// `0x61dc20` (37 B, content unpinned) is not modeled. `weapon_visual` = the CASTER's ranged
-/// fallback visual (already resolved — the caster may be gone by a missile arrival), through
-/// which a basic shot's impact kit resolves.
+/// gap). The state sound rings **ungated and positional** (decision 0852: `0x60edf0`'s sound leg
+/// has no self test — the old self-only reading belonged to a different aura-apply cue); the
+/// same-frame duplicate against the aura watcher's ADD-edge play collapses in the sound router.
+/// Named approximation: the client's small stage-2 gate `0x61dc20` (37 B, content unpinned) is not
+/// modeled. `weapon_visual` = the CASTER's ranged fallback visual (already resolved — the caster
+/// may be gone by a missile arrival), through which a basic shot's impact kit resolves.
 ///
 /// [`ImpactPlay::flinch`] is the **spell impact body twitch** (decision 2058): the client lays
 /// the victim's wound flinch at `severity = 0` beside the impact kit — the instant-hit loop
@@ -898,14 +893,12 @@ pub(super) fn route_cast_visuals(
                     |s| s.precast,
                     || weapon_src.caster(ev.entity),
                 ) {
-                    // The `0x400` weapon-visual hold, ANY caster (wow-re
-                    // `ranged-sheath-exempt-autorepeat.md` §Q4): a RANGED spell's visual play
-                    // sets it (`0x60d020`, sole caller inside PlaySpellVisual); any other
-                    // visual play clears it (the stale-visual cleanup `0x6ec39e` — re-set only
-                    // when the new visual is ranged). It is what keeps a REMOTE shooter (an NPC
-                    // archer, another hunter) in the drawn Load/Hold idle between shots — the
-                    // local `0x200` ([`super::AutoRepeatArmed`]) never exists off the local
-                    // cast-send.
+                    // The `0x400` weapon-visual hold, ANY caster: a RANGED spell's visual play sets
+                    // it (`0x60d020`, sole caller inside PlaySpellVisual); any other visual play
+                    // clears it (the stale-visual cleanup `0x6ec39e` — re-set only when the new
+                    // visual is ranged). It is what keeps a REMOTE shooter (an NPC archer, another
+                    // hunter) in the drawn Load/Hold idle between shots — the local `0x200`
+                    // ([`super::AutoRepeatArmed`]) never exists off the local cast-send.
                     let ranged = spells
                         .catalog
                         .get(ev.spell_id)
@@ -970,9 +963,9 @@ pub(super) fn route_cast_visuals(
                 });
                 // A ranged-slot spell's GO **re-draws ranged before its cast-kit play** — the
                 // kit-play path's internal snap (`0x60f34c`, gate `Attributes & 0x2`, stages
-                // {0, 4} — wow-re `ranged-sheath-exempt-autorepeat.md` Q3): SPELL_GO makes no
-                // direct SetSheatheState call, but every auto-repeat shot re-snaps state 2
-                // through its play. This is what re-draws a bow an emote lowered mid-volley.
+                // {0, 4}): SPELL_GO makes no direct SetSheatheState call, but every auto-repeat
+                // shot re-snaps state 2 through its play. This is what re-draws a bow an emote
+                // lowered mid-volley.
                 if spells
                     .catalog
                     .get(ev.spell_id)
@@ -986,8 +979,8 @@ pub(super) fn route_cast_visuals(
                 }
                 // The cast kit (the release flash) — a discrete play, effects self-terminating
                 // after their model's own clip span (the client's stage-0/1 completion callback).
-                // For a basic shot this is the fire clip itself (the ranged fallback: Throw's
-                // AttackThrown, Auto Shot's AttackBow — wow-re `throw-ranged-attack-anim.md`).
+                // For a basic shot this is the fire clip itself (the ranged fallback `0x60d450`:
+                // Throw's AttackThrown, Auto Shot's AttackBow).
                 if let Some(kit) = resolve_kit_traced(
                     "cast",
                     ev.entity,
@@ -1106,7 +1099,7 @@ pub(super) fn route_cast_visuals(
         // gate `field 6 == 0` (no missile owns the arrival) ∧ `field 12 ≠ 0`. NOT gated on the
         // hit list (a pure ground cast's lists are empty and the burst still plays — the
         // captured Flamestrike shape); fired here at the GO, never waiting on the dynobj
-        // create (wow-re trap #6: the burst precedes the object).
+        // create (the burst precedes the object).
         if let Some(dest) = go.dest {
             if let Some(stages) = stages {
                 if stages.missile_gate == 0 && stages.area_effect != 0 {
@@ -1297,17 +1290,16 @@ pub(super) fn route_cast_visuals(
 /// still plays the state kit as its short impact-time flash (the client's `0x61dc50` order —
 /// impact, then state), which simply overlaps the persistent instance this watcher owns.
 ///
-/// The trigger and reap are byte-verified (wow-re `state-kit-aura-lifecycle.md`, §5 2026-07-14):
-/// the aura watcher `0x604d00 → 0x6123f0 → 0x5ff350` reads `SpellVisual` field 4 and plays the
-/// kit at stage 2 (`0x5ff4c2: push 2`); the remove path `0x612320 → 0x5ff290` reaps with
-/// `0x614150(spellId, force=1)`. The ADD edge's kit sound rings **ungated and positional** (wow-re
-/// `kit-sound-leg.md`, decision 0852 — its §5 corrected the earlier "SELF-gated" reading: the
-/// `0x5fa6d0` gate at `0x5ff43e` covers only a separate spellRec-driven aura-apply cue, and both
-/// branches fall through to the ungated kit play at `0x5ff4c6`); a looping kit sound is tracked
-/// and stops with the aura ([`SpellKitSound::StopKit`]). The body anim is NOT code-suppressed
-/// (`0x60edf0`'s tail plays `kit+0x08` unconditionally) — this watcher plays effects + sound,
-/// with a **named residual** for a state kit carrying a real anim: that ADD-edge replay isn't
-/// built (no live kit demonstrates it; build it from the verdict when one shows).
+/// The trigger and reap: the aura watcher `0x604d00 → 0x6123f0 → 0x5ff350` reads `SpellVisual`
+/// field 4 and plays the kit at stage 2 (`0x5ff4c2: push 2`); the remove path `0x612320 → 0x5ff290`
+/// reaps with `0x614150(spellId, force=1)`. The ADD edge's kit sound rings **ungated and
+/// positional** (decision 0852 — not SELF-gated: the `0x5fa6d0` gate at `0x5ff43e` covers only a
+/// separate spellRec-driven aura-apply cue, and both branches fall through to the ungated kit play
+/// at `0x5ff4c6`); a looping kit sound is tracked and stops with the aura
+/// ([`SpellKitSound::StopKit`]). The body anim is NOT code-suppressed (`0x60edf0`'s tail plays
+/// `kit+0x08` unconditionally) — this watcher plays effects + sound, with a **named residual** for
+/// a state kit carrying a real anim: that ADD-edge replay isn't built (no live kit demonstrates it;
+/// build it from the reference when one shows).
 ///
 /// `armed` tracks exactly the (unit, spell) pairs this watcher began, so the REMOVE edge never
 /// reaps another owner's persistent instances (a channel hold whose spell also rides an aura).
@@ -1325,8 +1317,8 @@ pub(super) fn route_cast_visuals(
 /// visual is one proc-14 CharProc), so an effects-only test dropped it and the character showed
 /// nothing.
 /// The reference's one aura watch: `UNIT_FIELD_AURA` + `UNIT_FIELD_AURAFLAGS` as a single
-/// registration — `0x604d00`, registered `604226 mov edx,0xa4` / `604221 push 0xd8` for class 3
-/// (wow-re `object-layer.md`): field offset `0xa4` = dword 41 past the 6 OBJECT fields =
+/// registration — `0x604d00`, registered `604226 mov edx,0xa4` / `604221 push 0xd8` for class 3:
+/// field offset `0xa4` = dword 41 past the 6 OBJECT fields =
 /// `FIELD_UNIT_AURA`, length `0xd8` bytes = 54 dwords = the 48 slot ids and the 6 packed flag words.
 const AURA_WATCH_BASE: u16 = benilla_protocol::field::FIELD_UNIT_AURA;
 const AURA_WATCH_SPAN: u16 = 54;
@@ -1458,10 +1450,9 @@ pub(crate) fn arm_aura_state_fx(
     armed.retain(|e, _| units.contains(*e));
 }
 
-/// Arm/reap the **lootable sparkle** on both things that can wear it (wow-re
-/// `loot-corpse-effect.md` + `corpse-decal-and-loot-sparkle.md` §Q2, both §5 cross-checked):
-/// a DEAD unit carrying `UNIT_DYNFLAG_LOOTABLE`, **and a corpse object carrying
-/// `CORPSE_FIELD_DYNAMIC_FLAGS` bit 0** (decision 1723 — a battleground body's insignia). Each
+/// Arm/reap the **lootable sparkle** on both things that can wear it: a DEAD unit carrying
+/// `UNIT_DYNFLAG_LOOTABLE`, **and a corpse object carrying `CORPSE_FIELD_DYNAMIC_FLAGS` bit 0**
+/// (watcher `0x5d6de0`; decision 1723 — a battleground body's insignia). Each
 /// wears the `SpellVisualEffectName` row named
 /// `"HARDCODED Loot Art"` (5875: `Particles\LootFX.mdl` — a golden flare + three star-twinkle
 /// emitters; cadence/size/color/blend all authored in the asset, the client sets none of them)
@@ -1517,10 +1508,10 @@ pub(super) fn arm_loot_fx(
         due.into_iter().filter_map(|e| units.get(e).ok()).collect()
     };
     for (entity, store, net) in scan {
-        // The **corpse object**'s own sparkle (wow-re `corpse-decal-and-loot-sparkle.md` §Q2, §5
-        // cross-checked): `0x5d6de0` watches `CORPSE_FIELD_DYNAMIC_FLAGS`, and bit 0 rising calls
-        // `0x5d6e30` → the same `"HARDCODED Loot Art"` row at the same attachment `0x13`. Same
-        // asset, same tag — so it shares this body rather than growing a second one.
+        // The **corpse object**'s own sparkle: `0x5d6de0` watches `CORPSE_FIELD_DYNAMIC_FLAGS`, and
+        // bit 0 rising calls `0x5d6e30` → the same `"HARDCODED Loot Art"` row at the same
+        // attachment `0x13`. Same asset, same tag — so it shares this body rather than growing a
+        // second one.
         let lootable = if net.kind == benilla_protocol::EntityKind::Corpse {
             store.0.corpse_lootable()
         } else {
@@ -1539,8 +1530,8 @@ pub(super) fn arm_loot_fx(
                 persistent: true,
                 class: FxClass::Hold,
                 // Not a kit stage at all (this is `SpawnHardcodedEffect`, not
-                // `PlaySpellVisualKit`), but wow-re `loot-corpse-effect.md`'s recorded law for the
-                // loot art is "its own first sequence, LOOPING" — which is precisely what
+                // `PlaySpellVisualKit`), but the reference's law for the loot art is "its own first
+                // sequence, LOOPING" (the `0x600640` re-arm) — which is precisely what
                 // [`FxStage::Relive`] renders, and unlike a bare loop-flag arm it holds even if the
                 // art model's sequence were clamp-flagged.
                 // **The one place the two paths differ, and it is a real divergence.** The unit's
@@ -1575,7 +1566,7 @@ pub(super) fn arm_loot_fx(
     armed.retain(|e| units.contains(*e));
 }
 
-/// The engine-spawned **ding** (decision 0305, byte-verified — wow-re `levelup-ding.md`): a
+/// The engine-spawned **ding** (decision 0305): a
 /// `UNIT_FIELD_LEVEL` **change** on any streamed unit (the client's descriptor change-watcher
 /// `CMirrorHandler 0x6045b0` → `SpawnHardcodedEffect(5)`) spawns [`LEVEL_UP_EFFECT`]
 /// (`Spells\LevelUp\LevelUp.mdl`) at the base attach — the ding visual is DECOUPLED from
@@ -1631,9 +1622,9 @@ pub(super) fn arm_level_up_fx(
 /// boot name-match table to `"HARDCODED Mount Poof"` → row 1185 → `Spells\DruidMorph_Impact_Base`
 /// — the druid-morph cloud, which is exactly the "cloud shapeshift animation" of the report.
 /// Byte-for-byte the same spawn shape as [`arm_level_up_fx`]'s index 5, so it is the same edge
-/// here (wow-re `mount-composition.md` Q4b, §5 2026-08-03; decision 0927).
+/// here (decision 0927).
 ///
-/// The three properties that decide the shape of this arm, all VERIFIED there:
+/// The three properties that decide the shape of this arm:
 /// - **Mount side only.** The build *and the entire allocation* sit behind `5ffa87 je 0x5ffade`
 ///   on the **NEW** field value. `N→0` jumps clean past it: **no poof on dismount.** `0→N` and
 ///   `N→N′` both spawn one.
@@ -1689,15 +1680,15 @@ pub(super) fn arm_mount_poof_fx(
     }
 }
 
-/// The one-slot **pending-morph latch** — the reference's `[unit+0xd54]`, a `SpellRec*` (wow-re
-/// `shapeshift-morph-cloud.md`, §5 trio 2026-08-21): armed by `0x5ff0c0` on every aura **add
-/// AND remove** whose spell passes [`is_morph_spell`]; consumed and cleared by the DISPLAYID
+/// The one-slot **pending-morph latch** — the reference's `[unit+0xd54]`, a `SpellRec*`: armed by
+/// `0x5ff0c0` on every aura **add AND remove** whose spell passes [`is_morph_spell`]; consumed and
+/// cleared by the DISPLAYID
 /// rebuild `0x60abe0`, which — after draining every attached effect and rebuilding the model —
 /// **replays the latched spell's IMPACT kit** (stage 1, `0x6ec1e0` → `[SpellVisual+0xc]` →
 /// `0x60edf0` at `0x60ad67`, cleared at `0x60ad6c`). That replay IS the druid-morph cloud the
 /// player sees, both directions: shift-in's SPELL_GO impact instance dies in the drain and the
 /// replay restores it in sync with the swap; shift-out has no GO at all (the cancel is
-/// client-side, `shapeshift-plaincast-toggle.md`) — the aura-REMOVE handler's last call
+/// client-side, `CancelAura 0x6e7040`) — the aura-REMOVE handler's last call
 /// (`0x6123ad`) re-arms the latch, and the aura fields precede DISPLAYID in the applier's
 /// ascending field order, so the demorph revert replays the same kit. A swap with no latch — a
 /// GM morph, a revive — plays nothing. One entry per unit (a one-slot field); entries die with
@@ -1756,8 +1747,8 @@ pub(super) fn arm_morph_latch(
     latch.0.retain(|e, _| units.contains(*e));
 }
 
-/// The rebuild's **impact-kit replay** — the tail of the reference's `0x60abe0` (wow-re
-/// `shapeshift-morph-cloud.md`): a display swap that finds the latch armed plays the latched
+/// The rebuild's **impact-kit replay** — the tail of the reference's `0x60abe0`: a display swap
+/// that finds the latch armed plays the latched
 /// spell's impact kit as an ordinary discrete kit play ([`KitPlay::DISCRETE`] — full
 /// `PlaySpellVisualKit`: effects, sound, anim, CharProcs) and clears the latch; a swap with no
 /// latch plays nothing. Runs off [`crate::entities::DisplaySwapped`], which the swap writes as

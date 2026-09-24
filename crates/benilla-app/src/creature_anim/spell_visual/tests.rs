@@ -847,12 +847,11 @@ fn missile_spawn_defers_iff_the_cast_kit_animates() {
     );
 }
 
-/// The **location fallback** and its arrival, end to end through the router (wow-re
-/// `spell-go-dest-effect.md` §3 + `spell-visual-lifecycle.md` §Q4): a Speed>0 GO whose hit and
-/// miss lists are empty but which carries a ground point spawns one projectile aimed at the
-/// point — the flight a pure ground cast (Flare, a bomb thrown at empty dirt) shows — and that
-/// projectile's ground arrival rings `SpellVisual` field 13's kit sound **at the landing point**,
-/// not at the caster.
+/// The **location fallback** and its arrival, end to end through the router (`0x6e8a50`'s empty-hit
+/// arm, then the arrival `0x61d870`): a Speed>0 GO whose hit and miss lists are empty but which
+/// carries a ground point spawns one projectile aimed at the point — the flight a pure ground cast
+/// (Flare, a bomb thrown at empty dirt) shows — and that projectile's ground arrival rings
+/// `SpellVisual` field 13's kit sound **at the landing point**, not at the caster.
 #[test]
 fn a_targetless_dest_go_spawns_a_ground_missile_whose_arrival_sounds_at_the_point() {
     const GROUND: u32 = 1543; // Flare's shape: speed>0, dest-targeted, empty hit list
@@ -1009,10 +1008,9 @@ fn a_despawned_subject_never_panics_the_router() {
     }
 }
 
-/// The `0x400` weapon-visual hold (wow-re `ranged-sheath-exempt-autorepeat.md` §Q4): a RANGED
-/// spell's visual play inserts [`RangedHold`] on ANY caster — what keeps a remote shooter in
-/// the drawn Load/Hold idle between shots — and a non-ranged visual play clears it (the
-/// client's stale-visual cleanup `0x6ec39e`).
+/// The `0x400` weapon-visual hold (set by `0x60d020`): a RANGED spell's visual play inserts
+/// [`RangedHold`] on ANY caster — what keeps a remote shooter in the drawn Load/Hold idle between
+/// shots — and a non-ranged visual play clears it (the client's stale-visual cleanup `0x6ec39e`).
 #[test]
 fn ranged_visual_play_arms_the_any_caster_hold_and_a_non_ranged_play_clears_it() {
     let mut app = app();
@@ -1564,12 +1562,12 @@ fn a_shooter_with_no_ranged_weapon_resolves_no_clip_at_all() {
     );
 }
 
-/// **A state kit's animation id is a comparison, never a play** (decision 2085; VERIFIED wow-re
-/// `state-kit-anim-and-stun-pose.md` §1): `0x60edf0`'s tail has exactly one site that hands a
-/// kit's `AnimID` to the animation primitive (`0x60f3c5 call 0x5fe2f0`) and `0x60f387 jne`
-/// diverts stage 2 around it. Both `SpellVisual` field-4 consumers hardcode stage 2 — the aura
-/// watcher and this one, the impact hand-off `0x61dced` — so the state kit's id is only ever the
-/// right-hand side of `0x60f390`'s compare, spent on a base recompute.
+/// **A state kit's animation id is a comparison, never a play** (decision 2085): `0x60edf0`'s tail
+/// has exactly one site that hands a kit's `AnimID` to the animation primitive
+/// (`0x60f3c5 call 0x5fe2f0`) and `0x60f387 jne` diverts stage 2 around it. Both `SpellVisual`
+/// field-4 consumers hardcode stage 2 — the aura watcher and this one, the impact hand-off
+/// `0x61dced` — so the state kit's id is only ever the right-hand side of `0x60f390`'s compare,
+/// spent on a base recompute.
 ///
 /// The subject is the real Silithus chain: a Dredge Striker's **Charge** (22911 → visual 3783)
 /// plays `Knockdown`(121) from impact kit 348, and state kit 349 names `Stun`(14). Before this,

@@ -1,6 +1,7 @@
-//! The pure animation-selection logic (RF-0057/0073 tables, movement/Special state, gait/swing/ready
-//! picks, playback-rate math) — kept in its own file as it carries the bulk of the unit-tested selector
-//! logic, separate from the Bevy driver systems in [`super::driver`].
+//! The pure animation-selection logic (the `0x5fd8b0` selector's and decision 0073's tables,
+//! movement/Special state, gait/swing/ready picks, playback-rate math) — kept in its own file as it
+//! carries the bulk of the unit-tested selector logic, separate from the Bevy driver systems in
+//! [`super::driver`].
 
 use benilla_assets::AnimClip;
 use bevy::prelude::*;
@@ -8,11 +9,11 @@ use bevy::prelude::*;
 use crate::net::{RemoteMotion, Spline};
 
 /// Fallback walk speed (yd/s) for a unit whose movement block didn't carry one — vanilla's default
-/// creature walk speed. The run boundary is 2× this (`RecomputeBaseAnim`, RF-0057).
+/// creature walk speed. The run boundary is 2× this (`RecomputeBaseAnim`, the `0x5fd224` compare).
 pub(super) const DEFAULT_WALK_SPEED: f32 = 2.5;
 
 /// Fast-run cutoff (yd/s): at or above it the unit plays the sprint animation (id 143) ahead of Run
-/// (`[0x80c484]` in the real selector, RF-0057).
+/// (`[0x80c484]` in the real selector).
 const FAST_RUN_SPEED: f32 = 11.0;
 
 /// Below this ground speed (yd/s) a streamed mover counts as standing still — guards a near-zero residual.
@@ -25,29 +26,27 @@ pub(super) const DEATH: u16 = 1;
 /// ShuffleLeft (11) / ShuffleRight (12) — the **turn-in-place foot-shuffle**, picked below when
 /// the unit turns without translating. Named because their *lifecycle* is unlike any other gait:
 /// once armed they are held to their own clip window rather than released when the turn ends
-/// (decision 1655, wow-re `object-layer/scratch/turn-shuffle-lifecycle.md`), and the driver has
-/// to be able to say so.
+/// (decision 1655; the clip-end watchdog `0x719370`), and the driver has to be able to say so.
 pub(super) const SHUFFLE_LEFT: u16 = 11;
 /// See [`SHUFFLE_LEFT`].
 pub(super) const SHUFFLE_RIGHT: u16 = 12;
 
 /// StealthWalk (119) — the **prowl creep**, and with [`STEALTH_STAND`] the entire difference
-/// stealth makes to a body's *pose*. Byte-verified (wow-re `rf57-movement-anim-select.md`, the
-/// 2026-07-18 §5): both ids are gated by the same descriptor bit — `[[unit+0x110]+0x213] & 2`,
-/// `UNIT_FIELD_BYTES_1` byte 3's CREEP flag ([`crate::net::ObjectStore`]'s `unit_is_stealthed`) —
-/// 119 from the core cascade at `0x5fd1d3`, tested **after** the backward branch and **before the
-/// whole speed tail**, so a prowling unit never plays Run or Sprint however fast it travels.
+/// stealth makes to a body's *pose*. Both ids are gated by the same descriptor bit —
+/// `[[unit+0x110]+0x213] & 2`, `UNIT_FIELD_BYTES_1` byte 3's CREEP flag
+/// ([`crate::net::ObjectStore`]'s `unit_is_stealthed`) — 119 from the core cascade at `0x5fd1d3`,
+/// tested **after** the backward branch and **before the whole speed tail**, so a prowling unit
+/// never plays Run or Sprint however fast it travels.
 ///
 /// No aura, no visual kit, no spell id is involved. Stealth's *translucency* is its aura state
 /// kit's CharProc-14 (decision 0806) and its *pose* is this flag: two independent mechanisms off
 /// one server byte, which is exactly why the body could go translucent and still stand bolt
-/// upright. (The same flag's other three read sites are nameplate/marker suppression — it drives
-/// no body render at all; wow-re `ghost-death-visuals.md`.)
+/// upright. (The same flag's other three read sites are nameplate/marker suppression, among them
+/// `0x6070a0` and `0x60f600` — it drives no body render at all.)
 ///
 /// **119 is NOT rate-scaled.** The client's locomotion-rate whitelist `0x5fee80` is exactly
-/// `{4,5,11,12,13,37,38,39,42,43,44,45,135,143,187}` (byte-verified, §5-agreed; wow-re
-/// `rf57b-rate-jump-standstate.md`) and 119 is absent — the creep cycle plays at 1× whatever the
-/// live speed, so [`playback_rate`] leaves it alone.
+/// `{4,5,11,12,13,37,38,39,42,43,44,45,135,143,187}` and 119 is absent — the creep cycle plays at
+/// 1× whatever the live speed, so [`playback_rate`] leaves it alone.
 pub(super) const STEALTH_WALK: u16 = 119;
 
 /// StealthStand (120) — the prowl idle, from the **last** resolver in the chain (the fallback idle
@@ -56,17 +55,16 @@ pub(super) const STEALTH_WALK: u16 = 119;
 /// shuffle, the combat Ready idle, loot — outranks it. See [`STEALTH_WALK`] for the shared gate.
 pub(super) const STEALTH_STAND: u16 = 120;
 
-/// Mount (91) — the rider's seated pose while a mount model is attached (decision 0441;
-/// byte-verified, wow-re `mount-composition.md` B1): held **unconditionally** — moving, turning,
-/// airborne. The client arms it outside the base selector (once at attach by `0x607a00`, then
-/// re-forced on every `PlayAnimation` by `0x5fe2f0`'s mounted branch — there is NO mount leg in
-/// the `0x5fd8b0` chain); benilla pins the gait slot instead, the same rendered result. The
-/// locomotion the selector would pick plays on the mount model (same `0x5fd100` thresholds),
-/// via the mount child's own driver pass. Variations roll as any base loop (HumanMale authors 3).
+/// Mount (91) — the rider's seated pose while a mount model is attached (decision 0441): held
+/// **unconditionally** — moving, turning, airborne. The client arms it outside the base selector
+/// (once at attach by `0x607a00`, then re-forced on every `PlayAnimation` by `0x5fe2f0`'s mounted
+/// branch — there is NO mount leg in the `0x5fd8b0` chain); benilla pins the gait slot instead, the
+/// same rendered result. The locomotion the selector would pick plays on the mount model (same
+/// `0x5fd100` thresholds), via the mount child's own driver pass. Variations roll as any base loop
+/// (HumanMale authors 3).
 pub(super) const MOUNT: u16 = 91;
 
-/// Loot (50) — the kneel-and-rummage held while a unit's loot window is open. Byte-verified end
-/// to end (wow-re `loot-anim-leg.md`, the 2026-07-18 §5 + the 08-21 §5 trio; decisions 0515 /
+/// Loot (50) — the kneel-and-rummage held while a unit's loot window is open (decisions 0515 /
 /// 1471 / 1477): the `0x5fd8b0` chain's loot leg `0x5fd260` → 0x32 = 50, chain order locomotion →
 /// **LOOT** → standState → combat/channel (movement outranks by position — the leg itself reads no
 /// movement state), leg gates `[+0xdc]==0` (never mounted) + the `[+0xd58]&0x40` enable.
@@ -96,22 +94,22 @@ pub(super) const LOOT: u16 = 50;
 pub(super) const UNIT_FLAG_LOOTING: u32 = 0x400;
 
 /// `UNIT_FIELD_FLAGS` bit `0x1000_0000` — must be CLEAR for a remote unit's loot kneel
-/// (`0x612710`, byte-verified; the §5's one INFERRED residue is this bit's Blizzard *name*, not
+/// (`0x612710`; its one inferred residue is this bit's Blizzard *name*, not
 /// its role). vmangos never sets it on players, so the gate is inert on our wire — carried for
 /// the faithful predicate shape.
 pub(super) const UNIT_FLAG_LOOT_SUPPRESS: u32 = 0x1000_0000;
 
 /// MountSpecial (94) — the mounted flourish (the horse rears; decision 0441 P2). Plays on the
-/// MOUNT model as a one-shot (§5-verified, wow-re `mount-composition.md`: MountSpecial routes to
-/// the mount via the same `0x5fe2f0` op4 target as its locomotion), never on the rider — the
-/// rider holds [`MOUNT`] throughout. Fired by the space-bar gate (self, locally at send time)
-/// and by `SMSG_MOUNTSPECIAL_ANIM` (observed riders; our own echo is dropped in the net drain).
+/// MOUNT model as a one-shot (MountSpecial routes to the mount via the same `0x5fe2f0` op4 target
+/// as its locomotion), never on the rider — the rider holds [`MOUNT`] throughout. Fired by the
+/// space-bar gate (self, locally at send time) and by `SMSG_MOUNTSPECIAL_ANIM` (observed riders;
+/// our own echo is dropped in the net drain).
 pub(crate) const MOUNT_SPECIAL: u16 = 94;
 
 /// The three ids whose arm takes the **base-animation lock** — `0x5fdba0`'s tail keyed on the id
-/// actually armed, byte table `0x5fdd90` (wow-re `base-anim-lock-knockdown.md` §2). While one of
-/// these holds bone 0, `PlayAnimation` refuses every base request outright, which is what lets a
-/// stunned victim's `Knockdown` play out over the root's own `Stand` recompute.
+/// actually armed, byte table `0x5fdd90`. While one of these holds bone 0, `PlayAnimation` refuses
+/// every base request outright, which is what lets a stunned victim's `Knockdown` play out over the
+/// root's own `Stand` recompute.
 ///
 /// They are the clips with a definite start and end pose — the ones a re-pick mid-flight would
 /// leave the body wrong: knocked flat, or halfway off the ground.
@@ -122,8 +120,8 @@ pub(crate) const LIFT_OFF: u16 = 192;
 pub(crate) const LAND: u16 = 200;
 
 /// Movement direction/mode flag bits, matching the client's CMovement `MOVEMENTFLAGS` (cached at
-/// `unit+0x9e8`; VERIFIED wow-5875-re RF-0057 + the jump §5 cross-check). The selector tests these
-/// exactly as the binary does, so a streamed unit can eventually drop the server's raw `u32` straight in.
+/// `unit+0x9e8`). The selector tests these exactly as the binary does, so a streamed unit can
+/// eventually drop the server's raw `u32` straight in.
 pub(crate) mod move_flags {
     pub const FORWARD: u32 = 0x1;
     pub const BACKWARD: u32 = 0x2;
@@ -139,9 +137,8 @@ pub(crate) mod move_flags {
     pub const WALK_MODE: u32 = 0x100;
     /// MOVEFLAG_LEVITATING — **the free-flight bit, and it works by SUPPRESSION.** It is the very
     /// first test in the client's per-frame swim decision `0x6030c0` (`0x6030d2 test ah,4` → bail to
-    /// `0x6031fa`; VERIFIED, wow-re `collision/scratch/swim-transition.md`): set, and the whole
-    /// water/depth decision is skipped — neither the ENTER arm nor the STOP arm runs, so liquid can
-    /// no longer latch *or unlatch* [`SWIMMING`].
+    /// `0x6031fa`): set, and the whole water/depth decision is skipped — neither the ENTER arm nor
+    /// the STOP arm runs, so liquid can no longer latch *or unlatch* [`SWIMMING`].
     ///
     /// That suppression is the entirety of GM flight. vmangos's `.cheat fly` sends
     /// `LEVITATING | SWIMMING | MOVED | FLYING` (`Player::SetFly`): `SWIMMING` puts the mover in the
@@ -152,13 +149,13 @@ pub(crate) mod move_flags {
     pub const LEVITATING: u32 = 0x400;
     /// JUMPING/FALLING — set for the whole airborne arc; drives the jump Special state.
     pub const FALLING: u32 = 0x2000;
-    /// MOVEFLAG_FALLINGFAR — the arc has become a **far fall** (`0x633220`/`0x633240`; wow-re
-    /// `land-anim-height-gate.md`, legs corrected by decision 0179): a *jump* (launch vz ≠ 0)
-    /// latches once it descends 1/9 yd below its launch height; a *step-off fall* (launch vz = 0)
-    /// latches at 500 ms airborne (≈ 2.41 yd of free fall — a fence hop never latches, a
-    /// wagon-height drop latches just before the floor). Cleared only with FALLING at StopFalling
-    /// (`0x7c6290`). Mid-air it swaps the pose to Fall(40) and it opens the landing-anim gate; a
-    /// flat jump never descends below its takeoff, so its hang stays Jump(38).
+    /// MOVEFLAG_FALLINGFAR — the arc has become a **far fall** (`0x633220`/`0x633240`; legs
+    /// corrected by decision 0179): a *jump* (launch vz ≠ 0) latches once it descends 1/9 yd below
+    /// its launch height; a *step-off fall* (launch vz = 0) latches at 500 ms airborne (≈ 2.41 yd
+    /// of free fall — a fence hop never latches, a wagon-height drop latches just before the
+    /// floor). Cleared only with FALLING at StopFalling (`0x7c6290`). Mid-air it swaps the pose to
+    /// Fall(40) and it opens the landing-anim gate; a flat jump never descends below its takeoff,
+    /// so its hang stays Jump(38).
     pub const FALLING_FAR: u32 = 0x4000;
     /// MOVEFLAG_ROOT — the server rooted this mover (death, until release). The controller MUST
     /// carry it in the root-apply ack's MovementInfo (vmangos `HandleMoveRootAck:715` KICKS a
@@ -178,19 +175,18 @@ pub(crate) mod move_flags {
     /// MOVEFLAG_SAFE_FALL — **feather fall** (Slow Fall, Levitate; decision 0866). It has exactly
     /// one effect: the fall-velocity query `0x7c5d20` picks its terminal clamp on this bit
     /// (`0x7c5d23 test [ecx+0x40],0x20000000`) — 7.0 yd/s `[0x87d898]` instead of the ordinary
-    /// 60.148 `[0x87d894]`. wow-re's ledger labels it "in-water; selects swim gravity", which is the
-    /// bit's *shape* read without the server-side name: vmangos sets it only from
+    /// 60.148 `[0x87d894]`. A bytes-only reading labels it "in-water; selects swim gravity", which
+    /// is the bit's *shape* read without the server-side name: vmangos sets it only from
     /// `SPELL_AURA_FEATHER_FALL`, and swimming is the separate [`SWIMMING`] (0x200000).
     pub const SAFE_FALL: u32 = 0x2000_0000;
-    /// MOVEFLAG_HOVER — the body rests 1.0 yd above the ground (Levitate; decision 0866). VERIFIED
-    /// as hover rather than a wade bit in wow-re `system/collision/collision.md`: the WALK resolver
-    /// `0x6367b0` gates a `[0x7ff9d8]` = +1.0-yd surface offset on it, and the step-down reach
-    /// widens by the same yard (`0x633e35`).
+    /// MOVEFLAG_HOVER — the body rests 1.0 yd above the ground (Levitate; decision 0866). Hover
+    /// rather than a wade bit: the WALK resolver `0x6367b0` gates a `[0x7ff9d8]` = +1.0-yd surface
+    /// offset on it, and the step-down reach widens by the same yard (`0x633e35`).
     pub const HOVER: u32 = 0x4000_0000;
 
     /// The bits a **server-authored move packet owns**, and the only ones it may write — the
-    /// reference's flag *merge* mask, VERIFIED at `0x618c30 @0x618deb`
-    /// (`new = old ^ ((old ^ wire) & 0x75a07dff)`; wow-re `self-addressed-move.md`, decision 0725).
+    /// reference's flag *merge* mask, at `0x618c30 @0x618deb`
+    /// (`new = old ^ ((old ^ wire) & 0x75a07dff)`; decision 0725).
     /// Applying a `MSG_MOVE_*` is not an assignment: bits outside this mask are kept from local
     /// state, because they are the client's own (`0x618c30` also holds a second mask,
     /// `0x75a01dff`, for a caller arm that passes a non-zero 4th arg — the plain state family
@@ -209,7 +205,7 @@ pub(crate) mod move_flags {
     /// assignment. One law, both movers: our own (`player::wire_in`'s self-addressed pose) and every
     /// watched one (`net::motion::remote::apply_move`), because the reference runs this merge inside
     /// the one scheduler both go through and the mask is arm-invariant across all thirty relay
-    /// opcodes (wow-re `collision/scratch/movement-relay-family-map.md`, decision 2064).
+    /// opcodes (`0x618f20` always takes the wide arm; decision 2064).
     ///
     /// The omission that bites is pinned by test on the self lane: [`ON_TRANSPORT`] sits **outside**
     /// the mask, so a server-authored pose can relocate a rider but never board or deboard them.
@@ -224,11 +220,9 @@ pub(crate) mod move_flags {
     /// must pass before any physics runs on it. `CMovement::Update 0x616de0` opens its substep loop
     /// with `0x616e20 test dword [esi+0x40],0x20ff; je 0x616f49` (none set ⇒ finalize, having
     /// integrated nothing), and the movement manager tests the same mask before it ever calls the
-    /// integrator (`0x6166f5`) — the "idle gate" decision 0059 named by address. wow-re states the
-    /// consequence for a watched player outright: *"for a **STANDING remote** the integrator does
-    /// NOT run … a flag-less unit is not even in the mover list"*
-    /// (`collision/scratch/remote-air-facing.md` §A4; the loop gate is in `collision/collision.md`
-    /// and `scratch/spec-driver-A.md`/`-B.md`).
+    /// integrator (`0x6166f5`) — the "idle gate" decision 0059 named by address. The consequence
+    /// for a watched player: for a **STANDING remote** the integrator does NOT run, and a flag-less
+    /// unit is not even in the mover list (`0x618940`).
     ///
     /// So a mover with none of these bits keeps the pose its last packet wrote, verbatim, until a
     /// packet or a flag moves it — which is what decision 1545 makes benilla do. The bits: the four
@@ -248,13 +242,13 @@ pub(crate) mod move_flags {
         FORWARD | BACKWARD | STRAFE_LEFT | STRAFE_RIGHT | TURN_LEFT | TURN_RIGHT | SWIMMING;
 
     /// The stationary-cast pin's "moving" test — the client's `[9e8] & 0x20000f` in the `0x5fde80`
-    /// cast-override gate (wow-re `spell-visual-apply.md` §2.1, VERIFIED): the direction bits plus
-    /// swim, and NOTHING else. The turn bits are absent — a caster turning in place (keys or a
-    /// mouselook body-step) keeps the full-body pin. Distinct from [`ROUTE_COMMITTED_MOVE`]'s
-    /// `0x20003f` (the one-shot route test at `0x5fe6dc` — a different byte site, a different
-    /// mask); using that mask here made the pin flap at mouse-event cadence — the transient
-    /// chase-step TURN flags demoted the hold to shuffle+overlay on every mouse-delta frame and
-    /// re-pinned on every quiet one (decision 0491, the frostbolt right-drag jitter).
+    /// cast-override gate: the direction bits plus swim, and NOTHING else. The turn bits are absent
+    /// — a caster turning in place (keys or a mouselook body-step) keeps the full-body pin.
+    /// Distinct from [`ROUTE_COMMITTED_MOVE`]'s `0x20003f` (the one-shot route test at `0x5fe6dc` —
+    /// a different byte site, a different mask); using that mask here made the pin flap at
+    /// mouse-event cadence — the transient chase-step TURN flags demoted the hold to
+    /// shuffle+overlay on every mouse-delta frame and re-pinned on every quiet one (decision 0491,
+    /// the frostbolt right-drag jitter).
     pub const CAST_PIN_MOVE: u32 = ANY_MOVE | SWIMMING;
 }
 
@@ -279,14 +273,13 @@ pub(crate) fn ease_strafe_yaw(current_yaw: f32, aim: f32, offset: f32, dt: f32) 
 }
 
 /// The strafe **body-heading offset** (radians) a unit's rendered root yaw sits from its aim — the
-/// client's display-facing strafe blend (wow-5875-re `body-facing-pipeline.md` §3, `0x607ed0` tail):
-/// ±π/2 for a pure strafe, ±π/4 when forward/back is also held (`flags & 3`). Yaw is left-positive
-/// (WoW orientation and our Bevy yaw alike), so strafe-left is `+` — **mirrored while backpedaling**
-/// (the client's sign fold `((flags>>1)&2) == (flags&2)`): a back-left diagonal faces the body
-/// forward-right and backpedals along the movement line, legs never crossing. `0` when not strafing
-/// (both strafe bits set cancel — no lateral motion results, unlike the client's left-bit-only fold,
-/// an unobservable edge). The [`super::twist::BodyTwist`] counter-twist then walks the upper body
-/// back toward the aim.
+/// client's display-facing strafe blend (`0x607ed0` tail): ±π/2 for a pure strafe, ±π/4 when
+/// forward/back is also held (`flags & 3`). Yaw is left-positive (WoW orientation and our Bevy yaw
+/// alike), so strafe-left is `+` — **mirrored while backpedaling** (the client's sign fold
+/// `((flags>>1)&2) == (flags&2)`): a back-left diagonal faces the body forward-right and backpedals
+/// along the movement line, legs never crossing. `0` when not strafing (both strafe bits set cancel
+/// — no lateral motion results, unlike the client's left-bit-only fold, an unobservable edge). The
+/// [`super::twist::BodyTwist`] counter-twist then walks the upper body back toward the aim.
 pub(crate) fn strafe_body_offset(flags: u32) -> f32 {
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
     let left = flags & move_flags::STRAFE_LEFT != 0;
@@ -305,7 +298,7 @@ pub(crate) fn strafe_body_offset(flags: u32) -> f32 {
 }
 
 /// The **swim body pitch** — the one render law, for every mover that has a reported pitch
-/// (TU-A, decision 0464 §1; `0x60a110`→`0x710620`, the Euler-ZYX builder).
+/// (decision 0464 §1; `0x60a110`→`0x710620`, the Euler-ZYX builder).
 ///
 /// The reference composes `T·S·Rz(facing)·Ry(2π − pitch)`: yaw about WoW +Z, pitch about WoW +Y
 /// from `CMovement+0x20`, +pitch = nose up. That is this expression, worked through the basis
@@ -317,21 +310,19 @@ pub(crate) fn strafe_body_offset(flags: u32) -> f32 {
 ///
 /// The facing it reads is `+0xc94`, the **render** facing rather than the raw movement one
 /// (`+0x1c`); for a swimmer the two coincide, because SWIMMING is on the display-facing SNAP list
-/// (`mov [esi+0xc94],[esi+0xc98]`, wow-re `body-facing-pipeline.md`) — the same gate our callers
+/// (`mov [esi+0xc94],[esi+0xc98]` in the `0x607ed0` tail) — the same gate our callers
 /// apply before handing a yaw in.
 ///
 /// The gate is `SWIMMING` **and** a forward/back bit: strafe-only, idle, and grounded all render
 /// **level** (the ground path). It is `CMovement+0x40 & 3`, read at `0x60857d` off the very word
 /// the create-block apply and every relayed `MSG_MOVE_*` merge into under `0x75a07dff` — **not**
 /// a `CM2Model+0x3c & 3` dirty gate, which is what an earlier reading of this law named and which
-/// a wow-re §5 has since scanned for exhaustively and found does not exist (`0x710620` is an
-/// unconditional 16-dword copy). Recorded in wow-re
-/// `system/collision/scratch/create-block-swim-pitch.md`.
+/// does not exist (`0x710620` is an unconditional 16-dword copy).
 ///
 /// One function rather than one per pose owner: the law has three consumers — our own avatar
 /// ([`crate::player::body_pose`]), an observed relay mover
 /// ([`crate::net::motion::extrapolate_remote_units`]), and the create-block seed
-/// ([`crate::net::objects`]) — and TU-A is explicit that all of them present the *same*
+/// ([`crate::net::objects`]) — and in the reference all of them present the *same*
 /// pitch. Held apart, they drift: the remote lane shipped in July 2026 with no test and no trace
 /// of its own, so "does an observed swimmer tilt?" had no answer short of the director's eye.
 pub(crate) fn swim_body_rotation(yaw: f32, flags: u32, pitch: f32) -> Quat {
@@ -344,8 +335,9 @@ pub(crate) fn swim_body_rotation(yaw: f32, flags: u32, pitch: f32) -> Quat {
     }
 }
 
-/// The per-frame movement descriptor that drives a unit's animation (wow-5875-re RF-0057). The player
-/// controller fills it for our avatar from input; a streamed unit's is derived from its [`Spline`].
+/// The per-frame movement descriptor that drives a unit's animation (what the selector `0x5fd8b0`
+/// reads). The player controller fills it for our avatar from input; a streamed unit's is derived
+/// from its [`Spline`].
 #[derive(Component, Clone, Copy, Default)]
 pub(crate) struct MovementState {
     /// Live movement speed (yd/s) — `0` while standing. The rate-scaler's numerator and the
@@ -371,27 +363,25 @@ pub(crate) struct MovementState {
     pub(crate) stealthed: bool,
     /// Riding a **flying** server spline (the taxi flight): the client's selector reads the active
     /// CMovement's spline flags (`[[unit+0x118]+0xa4]+0x18`) and plays Fly 135 when the wire Flying
-    /// bit (0x200) is set — RF-0057 `0x5fd19c`. Stamped by [`unify`] from the entity's live
+    /// bit (0x200) is set — `0x5fd19c`. Stamped by [`unify`] from the entity's live
     /// [`Spline`] each frame (the same read-through the client does); the controller's stored
     /// component leaves it `false`.
     pub(crate) flying: bool,
 }
 
 /// A transition-bracketed animation state — a one-shot **enter** → **loop** → one-shot **exit**, as
-/// opposed to the directly-cross-faded gaits. The ids are from the verified selector + the HumanMale.m2
-/// sequence table (wow-5875-re; decisions 0047/0049).
+/// opposed to the directly-cross-faded gaits. The ids are from the reference selector + the
+/// HumanMale.m2 sequence table (decisions 0047/0049).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Special {
     /// Airborne from a **jump** (the arc launched upward): JumpStart(37) → Jump(38) hang.
-    /// **VERIFIED** (the swim-hop §5, wow-re `swim-jump-anim-law.md`): `0x60e480` case 0xbb
-    /// (MSG_MOVE_JUMP) arms **37 directly**, local and observed alike, and 38 follows only by
-    /// 37's own 833 ms window elapsing — a short arc (the ~0.24 s deep swim hop) never shows
-    /// 38, which the Entering→`oneshot_finished` machine reproduces. (rf57b's dispatcher
-    /// divergence is settled: `0x5fc3f0`'s events 0x25/0x26 → 38 is the separate
-    /// emote/anim-event dispatcher, not the jump path.) FALLINGFAR
-    /// latching mid-arc hands off to [`Special::Fall`]; the landing is [`jump_land_pick`]. A
-    /// **step-off fall** never enters here — its gait freezes (the base selector's keep-current,
-    /// via the takeoff-frozen flags/speed) until FALLINGFAR latches.
+    /// `0x60e480` case 0xbb (MSG_MOVE_JUMP) arms **37 directly**, local and observed alike, and 38
+    /// follows only by 37's own 833 ms window elapsing — a short arc (the ~0.24 s deep swim hop)
+    /// never shows 38, which the Entering→`oneshot_finished` machine reproduces. (`0x5fc3f0`'s
+    /// events 0x25/0x26 → 38 is the separate emote/anim-event dispatcher, not the jump path.)
+    /// FALLINGFAR latching mid-arc hands off to [`Special::Fall`]; the landing is
+    /// [`jump_land_pick`]. A **step-off fall** never enters here — its gait freezes (the base
+    /// selector's keep-current, via the takeoff-frozen flags/speed) until FALLINGFAR latches.
     Jump,
     /// Airborne and **fallen far** (FALLINGFAR latched): the Fall(40) loop, entered *directly* —
     /// the client plays 40 the tick the flag latches (`0x602c40`), no enter one-shot — so
@@ -449,13 +439,13 @@ impl Special {
     }
 }
 
-/// The jump-landing one-shot, from the flags at touchdown — the client's land dispatcher `0x602c60`
-/// (wow-5875-re rf57b §2), transcribed: swimming → no landing anim (the recompute picks the swim
-/// gait); stopped (`flags & 0xf == 0`) → JumpEnd **39**; moving — unless BACKWARD (`0x2`) or
-/// WALK-mode (`0x100`) — → JumpLandRun **187**; a **backpedaling or walking** landing plays **no
-/// one-shot at all**, dropping straight into the gait (the reference backpedals the instant it
-/// touches down; 187 is a forward-run footplant and never plays backward — the "forward run flash
-/// after a jump-then-hold-S" bug). `None` = no landing clip, go straight to `Mode::Gait`.
+/// The jump-landing one-shot, from the flags at touchdown — the client's land dispatcher
+/// `0x602c60`, transcribed: swimming → no landing anim (the recompute picks the swim gait); stopped
+/// (`flags & 0xf == 0`) → JumpEnd **39**; moving — unless BACKWARD (`0x2`) or WALK-mode (`0x100`) —
+/// → JumpLandRun **187**; a **backpedaling or walking** landing plays **no one-shot at all**,
+/// dropping straight into the gait (the reference backpedals the instant it touches down; 187 is a
+/// forward-run footplant and never plays backward — the "forward run flash after a
+/// jump-then-hold-S" bug). `None` = no landing clip, go straight to `Mode::Gait`.
 ///
 /// **A ROOTED arc end is not a landing** (decision 0880). A root or a stun caught mid-air ends the
 /// fall where the body hangs — `SetRoot 0x7c7340`'s `StopFalling` clears FALLING with no ground
@@ -505,7 +495,7 @@ pub(super) enum Mode {
     /// While `under` is airborne the one-shot obeys the client's airborne-freeze: a finished clip
     /// clamps and holds its last frame, flag changes are keep-current no-ops, and only a Special
     /// *edge* exits — the FALLINGFAR latch's Fall (played ONCE, at the latch edge
-    /// `0x61a820` — 0864's per-tick re-assert was §5-refuted, decision 0868; a clip armed
+    /// `0x61a820` — 0864's per-tick re-assert was refuted, decision 0868; a clip armed
     /// after the latch holds like any other) and the `0x602c60` land pick at touchdown. Grounded
     /// (`under == None`) it returns to Gait when it finishes; a new one restarts it — and any
     /// movement-flag change since the **base** was last armed
@@ -520,11 +510,11 @@ pub(super) enum Mode {
 }
 
 /// The gait an idle/moving unit should play in [`Mode::Gait`], most-specific id first with fallbacks so a
-/// model lacking the ideal clip steps down rather than snapping (RF-0057 core, minus the Special states —
-/// jump and the sit/sleep/kneel poses are handled by the state machine). `walk_speed` is the unit's own
-/// walk speed (the run boundary is 2× it). `ready` is the engaged combat idle (decision 0073), played
-/// only when standing on the ground — locomotion outranks it, and a swimming engaged unit treads
-/// water (the client's own gate order).
+/// model lacking the ideal clip steps down rather than snapping (the `0x5fd8b0` chain's core, minus
+/// the Special states — jump and the sit/sleep/kneel poses are handled by the state machine).
+/// `walk_speed` is the unit's own walk speed (the run boundary is 2× it). `ready` is the engaged
+/// combat idle (decision 0073), played only when standing on the ground — locomotion outranks it,
+/// and a swimming engaged unit treads water (the client's own gate order).
 pub(super) fn gait_candidates(
     state: &MovementState,
     walk_speed: f32,
@@ -533,11 +523,11 @@ pub(super) fn gait_candidates(
 ) -> &'static [u16] {
     use move_flags::*;
     let f = state.flags;
-    // Swimming (RF-0057 core, `[9e8] & 0x200000`) — the VERIFIED `0x5fd100` cascade (the swim §5's
-    // TU-E, wow-re `swim-mechanism.md`): **TURN > STRAFE > BACKWARD > FORWARD**, ids turn→41,
-    // strafeL(0x4)→43 / strafeR(0x8)→44 (SwimLeft/SwimRight — names byte-read from
-    // AnimationData.dbc), back→45, fwd→42, idle→41. So a turning swimmer treads water whatever its
-    // travel bits, and a strafe diagonal (fwd+strafe, back+strafe) plays the side-stroke, not 42/45.
+    // Swimming (`[9e8] & 0x200000`) — the `0x5fd100` cascade: **TURN > STRAFE > BACKWARD >
+    // FORWARD**, ids turn→41, strafeL(0x4)→43 / strafeR(0x8)→44 (SwimLeft/SwimRight — names
+    // byte-read from AnimationData.dbc), back→45, fwd→42, idle→41. So a turning swimmer treads
+    // water whatever its travel bits, and a strafe diagonal (fwd+strafe, back+strafe) plays the
+    // side-stroke, not 42/45.
     if f & SWIMMING != 0 {
         return if f & (TURN_LEFT | TURN_RIGHT) != 0 {
             &[41, 0]
@@ -553,7 +543,7 @@ pub(super) fn gait_candidates(
             &[41, 0]
         };
     }
-    // A flying server spline — the taxi ride (RF-0057 `0x5fd19c`, between the swim block and the
+    // A flying server spline — the taxi ride (`0x5fd19c`, between the swim block and the
     // backward test in the byte cascade): the spline's wire Flying bit selects Fly 135 outright,
     // before the backward and speed branches — a 32 yd/s taxi plays Fly, never Sprint 143. The
     // one-step fallback mirrors AnimationData (Fly → 0 Stand); every shipped taxi mount authors
@@ -561,11 +551,11 @@ pub(super) fn gait_candidates(
     if state.flying {
         return &[135, 0];
     }
-    // Backward dominates strafe (RF-0057 `[9e8] & 2` → WalkBackwards 13).
+    // Backward dominates strafe (`0x5fd1bc`, `[9e8] & 2` → WalkBackwards 13).
     if f & BACKWARD != 0 {
         return &[13, 4, 0];
     }
-    // Stealthed and moving — the prowl (RF-0057 `0x5fd1d3`, sitting between the backward branch and
+    // Stealthed and moving — the prowl (`0x5fd1d3`, sitting between the backward branch and
     // the speed tail; [`STEALTH_WALK`]). The gate outranks the ENTIRE speed tail, so a stealthed
     // unit creeps at any speed, while a *backpedaling* one plays WalkBackwards — backward is tested
     // first. The Walk 4 fallback is `AnimationData.dbc`'s own Fallback for row 119, which is also
@@ -575,8 +565,8 @@ pub(super) fn gait_candidates(
     if state.stealthed && f & ANY_MOVE != 0 {
         return &[STEALTH_WALK, 4, 0];
     }
-    // Ground gaits by live speed (RF-0057 core): fast-run ≥ 11, run > 2× walk, else walk.
-    // (Strafe currently routes here to Run/Walk; the dedicated-shuffle question is under §5 verification.)
+    // Ground gaits by live speed (`0x5fd202`/`0x5fd224`): fast-run ≥ 11, run > 2× walk, else walk.
+    // (Strafe currently routes here to Run/Walk; whether it has a dedicated shuffle is open.)
     if f & ANY_MOVE != 0 {
         let s = state.speed;
         return if s >= FAST_RUN_SPEED {
@@ -587,7 +577,7 @@ pub(super) fn gait_candidates(
             &[4, 0]
         };
     }
-    // Turning in place (the turn keys with no translation): the foot-shuffle (RF-0057 `0x5fd3f0` →
+    // Turning in place (the turn keys with no translation): the foot-shuffle (`0x5fd3f0` →
     // ShuffleLeft 11 / ShuffleRight 12). Only reached when not moving — moving with a turn curves the
     // run path and plays the gait above.
     if f & TURN_LEFT != 0 {
@@ -615,10 +605,10 @@ pub(super) fn gait_candidates(
         // The Hold twins 109/110 ARE reachable (decision 1544): `0x5fd460`'s own jump table writes
         // only 105/106/111/112, but a finished Load is promoted to its Hold by the completion
         // dispatch (`0x5fc3f0` slot 11/12/15), and the caller passes whichever of the pair
-        // currently owns the pose. 0994 left them out on §J4.1's absence proof — that the
-        // dispatcher is never reached for a bow id — which wow-re's §5 has since refuted.
-        // Each Hold falls back to its own Load first: a model that authors the pull but not the
-        // hold should freeze at full draw, not drop to ReadyUnarmed.
+        // currently owns the pose. 0994 left them out on an absence proof — that the dispatcher is
+        // never reached for a bow id — which is false: the completion dispatcher has a second,
+        // deferred fire site (`0x7075af`). Each Hold falls back to its own Load first: a model that
+        // authors the pull but not the hold should freeze at full draw, not drop to ReadyUnarmed.
         return match l {
             105 => &[105, 25, 0],
             106 => &[106, 25, 0],
@@ -645,18 +635,17 @@ pub(super) fn gait_candidates(
     }
 }
 
-/// The local auto-repeat **standing idle** id — the client's `0x5fd460` → LUT `0x5fd530`
-/// (byte-verified, wow-re `ranged-shot-anim.md`): the RANGED-slot item's subclass picks a held
-/// Load/Hold clip — Bow → LoadBow 105 · Gun/Crossbow → LoadRifle 106 · Thrown → LoadThrown 112 ·
-/// Wand → HoldThrown 111 · anything else → ReadyUnarmed 25. **Not** ReadyBow/AttackBow: no code
-/// in the client plays those rows.
+/// The local auto-repeat **standing idle** id — the client's `0x5fd460` → LUT `0x5fd530`: the
+/// RANGED-slot item's subclass picks a held Load/Hold clip — Bow → LoadBow 105 · Gun/Crossbow →
+/// LoadRifle 106 · Thrown → LoadThrown 112 · Wand → HoldThrown 111 · anything else →
+/// ReadyUnarmed 25. **Not** ReadyBow/AttackBow: no code in the client plays those rows.
 ///
-/// (This doc used to carry `ranged-shot-anim.md` §(a)'s "the per-shot caster fire animation is a
-/// verified NEGATIVE — the shot shows only the missile". That was REFUTED twice over: by the
-/// weapon-visual merge, which plays the fire clip off the weapon's own substitute visual
-/// (decision 0370/0986), and by the completion dispatch below (decision 1544). It is gone rather
-/// than hedged — a stale negative in a doc is how a session concludes the missing animation is
-/// correct, which is exactly what happened to bug B307.)
+/// (This doc used to carry the claim "the per-shot caster fire animation is a verified NEGATIVE —
+/// the shot shows only the missile". That was REFUTED twice over: by the weapon-visual merge, which
+/// plays the fire clip off the weapon's own substitute visual (decision 0370/0986), and by the
+/// completion dispatch below (decision 1544). It is gone rather than hedged — a stale negative in a
+/// doc is how a session concludes the missing animation is correct, which is exactly what happened
+/// to bug B307.)
 pub(super) fn ranged_load_anim(ranged: Option<(u8, u8)>) -> u16 {
     match ranged {
         Some((2, 2)) => 105,           // Bow → LoadBow
@@ -679,7 +668,7 @@ pub(super) fn is_ranged_load(id: u16) -> bool {
 /// → HoldThrown 111. The wand's HoldThrown 111 is already the hold and re-arms itself, and
 /// anything else (ReadyUnarmed 25) holds nothing and stays put.
 ///
-/// **The promotion is UNCONDITIONAL** (wow-re §5, decision 1544): the `[+0xd24]` ranged-prop and
+/// **The promotion is UNCONDITIONAL** (decision 1544): the `[+0xd24]` ranged-prop and
 /// `[+0xd58] & 0x600` test at `0x5fc5bc` belongs to slot **13** — the Hold's own re-arm — not to
 /// the Load's slot 11, which is the bare `mov eax,0x6d ; push eax ; call 0x5fe2f0` at `0x5fc5e9`.
 /// Reading that gate onto the Load is the mistake that would leave a shooter frozen at full draw.
@@ -696,8 +685,7 @@ pub(super) fn ranged_hold_anim(load: u16) -> u16 {
     }
 }
 
-/// Does the drawn ranged Load idle own this unit's standing pose? Byte-verified, wow-re
-/// `shooter-stop-law.md` §J6 claim 1 (§5, four independent pairs + byte arbitration):
+/// Does the drawn ranged Load idle own this unit's standing pose?
 ///
 /// `0x5fd460` — tier 9 of `ComputeAnimation 0x5fd8b0`, and the **only** writer of 105/106/111/112
 /// image-wide — claims on exactly two tests and nothing else:
@@ -710,15 +698,15 @@ pub(super) fn ranged_hold_anim(load: u16) -> u16 {
 /// `0x200`'s only writer image-wide is the LOCAL cast-send `0x6e593b`, gated `AttributesEx2 &
 /// 0x20` — so entry means *this client's player is actively auto-repeating*. **`0x400`
 /// ([`super::RangedHold`]) is never tested in this function.** It appears only in `0x5fc3f0`'s
-/// sustain gates (`test ah,0x6` for 109, `test ah,0x4` for 110/111/112), which §J4 shows never
+/// sustain gates (`test ah,0x6` for 109, `test ah,0x4` for 110/111/112), which never
 /// run. Folding it into this gate is what let one Serpent Sting / Multi-Shot — any ranged-slot
 /// spell whose visual sets the hold bit — leave the shooter aiming a drawn bow with nothing able
 /// to clear it (director-reported 2026-08-05).
 ///
 /// A REMOTE shooter never runs the local cast-send, so it never enters here. It is not simply
-/// Stand, though (§J6 claim 2, CORRECTED): it plays **LoadBow(105) once** at the volley's single
-/// `SMSG_SPELL_START`, through the PrecastKit — our [`super::CastHold`] path — then AttackBow per
-/// GO over its ordinary idle. Never a sustained aim pose.
+/// Stand, though: it plays **LoadBow(105) once** at the volley's single `SMSG_SPELL_START`
+/// (`0x6e7901`), through the PrecastKit — our [`super::CastHold`] path — then AttackBow per GO over
+/// its ordinary idle. Never a sustained aim pose.
 ///
 /// The caller applies the tier order: locomotion (tier 4) outranks tier 9, so a moving unit is
 /// never in the idle whatever these bits say.
@@ -754,7 +742,7 @@ pub(super) fn defense_anim(victim_state: u32, main: Option<(u8, u8)>) -> Option<
 
 /// The **play-time unarmed-special substitution** — the third weapon substitution in the client,
 /// and the only one that lives inside `PlayAnimation` itself rather than in a selector
-/// (`0x5fe2f0` @ `0x5fe3cc`–`0x5fe3e9`, byte-verified: wow-re `disarm-weapon-gate-law.md` §7).
+/// (`0x5fe2f0` @ `0x5fe3cc`–`0x5fe3e9`).
 /// A requested **Special1H(57) / Special2H(58)** — the weapon-remapped spin a spell kit asks for,
 /// Eviscerate's among them — becomes **SpecialUnarmed(118)** when `GetWeapon(0, 0)` *and*
 /// `GetWeapon(1, 0)` are both NULL, i.e. both hands are empty to the combat reading.
@@ -777,8 +765,7 @@ pub(super) fn is_swing_id(id: u16) -> bool {
     matches!(id, 16..=19 | 85 | 87 | 88 | 117)
 }
 
-/// The client's COMBAT-anim classifier (`0x5fcc10` — wow-re `combat-anim-fastpath.md` §3, the
-/// exhaustive byte-decoded table, cross-confirmed against `anim-composition-model.md`): the gate
+/// The client's COMBAT-anim classifier (`0x5fcc10` — the exhaustive byte-decoded table): the gate
 /// on `PlayAnimation`'s combat fast-path (decision 0406). A combat clip requested while another
 /// combat clip is playing is NOT armed — the current clip's rate doubles and the request defers.
 /// Members: the swings (16–19 main, 85/86 dagger, 87/88/117 off), the specials (57/58/118 —
@@ -789,13 +776,12 @@ pub(super) fn is_combat_anim(id: u16) -> bool {
     matches!(id, 10 | 16..=24 | 30 | 36 | 57..=59 | 85..=88 | 95 | 117 | 118)
 }
 
-/// The client's **CAST** classifier (`0x5fcbb0` — byte-decoded in wow-re `oneshot-lifecycle.md`
-/// §7, previously unlabelled): the spell-cast release anims `{2, 32, 33, 53, 54}`. Together with
-/// [`is_combat_anim`] it is what the **transplant** predicate (`0x5feae0`) tests on the *currently
-/// armed bone-0 clip*: a locomotion request over one of these does not replace it — the clip moves
-/// up onto the key-bone at its live play position ([`OneShotRoute`]'s two slots, decision 0878).
-/// NOT the ReadySpell holds (51/52) — those are their own set (`0x5fde40`), and a jump over a
-/// standing hold really does take the whole body.
+/// The client's **CAST** classifier (`0x5fcbb0`): the spell-cast release anims
+/// `{2, 32, 33, 53, 54}`. Together with [`is_combat_anim`] it is what the **transplant** predicate
+/// (`0x5feae0`) tests on the *currently armed bone-0 clip*: a locomotion request over one of these
+/// does not replace it — the clip moves up onto the key-bone at its live play position
+/// ([`OneShotRoute`]'s two slots, decision 0878). NOT the ReadySpell holds (51/52) — those are
+/// their own set (`0x5fde40`), and a jump over a standing hold really does take the whole body.
 pub(super) fn is_cast_anim(id: u16) -> bool {
     matches!(id, 2 | 32 | 33 | 53 | 54)
 }
@@ -854,8 +840,8 @@ pub(super) fn swing_anim_off(wielded: Option<(u8, u8)>) -> u16 {
     }
 }
 
-/// The draw/stow clip for one weapon slot, by the item's **sheathe-type** byte — the byte-verified
-/// pick (wow-re `sheath-anim-pick.md`, 8 sites, byte-identical): `(1 << (type & 0x1f)) & 0x88` →
+/// The draw/stow clip for one weapon slot, by the item's **sheathe-type** byte — the client's
+/// pick (8 byte-identical sites, `0x611930`–`0x611cc6`): `(1 << (type & 0x1f)) & 0x88` →
 /// HipSheath(90) for types {3, 7}, Sheath(89) for everything else (back-mounts, shields, staves).
 /// The slot's own byte is the *only* input — mainhand, offhand, shield and ranged all run the same
 /// test, each on its own record.
@@ -867,8 +853,7 @@ pub(super) fn sheath_clip(sheath_type: u8) -> u16 {
     }
 }
 
-/// The ranged-handling anims exempt from the `&0x10` force-stow while ranged-drawn —
-/// **byte-verified** (wow-re `ranged-sheath-exempt-autorepeat.md`, the 2026-07-15 §5): the
+/// The ranged-handling anims exempt from the `&0x10` force-stow while ranged-drawn — the
 /// exemption is the predicate `0x5fe180` (sole caller `0x5fe04c`, the **CUR==2 path only**;
 /// index table `0x5fe1a8`, targets `0x5fe1a0`), returning true for exactly these nine ids —
 /// the ranged Load/Hold/Attack family. **ReadyThrown 108 is NOT exempt** and genuinely stows;
@@ -885,8 +870,7 @@ const SHEATH_RANGED_EXEMPT: [u16; 9] = [46, 49, 105, 106, 107, 109, 110, 111, 11
 /// 1. flag `&4` → stow (casts, swim, mount, sit-chair, loot);
 /// 2. mounted → stow — the persistent mounted draw-block (`0x5fdfd9`: the reconcile forces
 ///    state 0 on every recompute while a mount model is attached, so weapons sit at their sheath
-///    points and the manual toggle can never stick — wow-re `sheath-policy.md` §3, VERIFIED;
-///    dismount does NOT restore the pre-mount state);
+///    points and the manual toggle can never stick; dismount does NOT restore the pre-mount state);
 /// 3. flag `&0x10` → stow (emotes, unarmed attacks, sit-ground/kneel, bow/rifle/thrown shots) —
 ///    except the three ranged-handling anims while ranged-drawn;
 /// 4. engaged **or** flag `&0x20` → draw melee (armed attacks, the Ready idles, fishing) — only
@@ -927,15 +911,14 @@ pub(super) fn reconcile_sheath(
 }
 
 /// Whether a **looping base arm** keeps the deterministic HEAD variation instead of rolling a
-/// fresh one — the client's re-zero gate on the arm helper (`0x5fdba0`, wow-re
-/// `loop-replay-fidget.md` §5b): every base (re-)arm carries `variationIdx = −1` (a weighted
-/// roll) **unless** the unit has an auto-attack target, is holding a cast/channel, or the
-/// *outgoing* clip was a combat/cast/ready id — then it is forced to `0` (the head). This is why
-/// a relaxed unit "looks around" on each Stand re-arm while a fighting one holds one steady idle.
-/// The outgoing-id families here approximate the client's four classifier calls
-/// (`0x5fcc10`/`0x5fcbb0`/`0x5fde40`/`0x5fde60`, exact id sets unpinned): the melee swings
-/// (16–19), the ready stances (25–29, the 0111-cited set), and the spell ready/cast poses
-/// (51–54) — engagement and the cast hold carry the main weight regardless (decision 0123).
+/// fresh one — the client's re-zero gate on the arm helper (`0x5fdba0`): every base (re-)arm
+/// carries `variationIdx = −1` (a weighted roll) **unless** the unit has an auto-attack target, is
+/// holding a cast/channel, or the *outgoing* clip was a combat/cast/ready id — then it is forced to
+/// `0` (the head). This is why a relaxed unit "looks around" on each Stand re-arm while a fighting
+/// one holds one steady idle. The outgoing-id families here approximate the client's four
+/// classifier calls (`0x5fcc10`/`0x5fcbb0`/`0x5fde40`/`0x5fde60`, exact id sets unpinned): the
+/// melee swings (16–19), the ready stances (25–29, the 0111-cited set), and the spell ready/cast
+/// poses (51–54) — engagement and the cast hold carry the main weight regardless (decision 0123).
 pub(super) fn arm_forces_head(engaged: bool, casting: bool, outgoing: u16) -> bool {
     engaged || casting || matches!(outgoing, 16..=19 | 25..=29 | 51..=54)
 }
@@ -1019,12 +1002,12 @@ pub(super) fn ready_anim(main: Option<(u8, u8)>) -> u16 {
     }
 }
 
-/// The Special state a unit is in this frame, if any. Airborne splits three ways (wow-re
-/// `land-anim-height-gate.md` + rf57b §2): FALLINGFAR latched → **Fall** (the 40 loop); else a
-/// **jump** arc (launched upward, `jump_arc`) → Jump (the 37/38 bracket); else a **step-off fall**
-/// → `None` — the base selector's keep-current freeze: the gait keeps playing off the
-/// takeoff-frozen flags/speed until FALLINGFAR latches or the unit lands. Standing with a
-/// transition-able stand-state (sit/sleep/kneel) → Pose; movement suppresses a pose.
+/// The Special state a unit is in this frame, if any. Airborne splits three ways: FALLINGFAR
+/// latched → **Fall** (the 40 loop, `0x602c40`); else a **jump** arc (launched upward, `jump_arc`)
+/// → Jump (the 37/38 bracket); else a **step-off fall** → `None` — the base selector's keep-current
+/// freeze (`0x5fd8e8`): the gait keeps playing off the takeoff-frozen flags/speed until FALLINGFAR
+/// latches or the unit lands. Standing with a transition-able stand-state (sit/sleep/kneel) → Pose;
+/// movement suppresses a pose.
 pub(super) fn current_special(mv: &MovementState, jump_arc: bool) -> Option<Special> {
     if mv.flags & move_flags::FALLING != 0 {
         if mv.flags & move_flags::FALLING_FAR != 0 {
@@ -1041,8 +1024,8 @@ pub(super) fn current_special(mv: &MovementState, jump_arc: bool) -> Option<Spec
     }
 }
 
-/// Where a requested one-shot (a swing or an emote) is routed this play (decision 0087, wow-re
-/// `anim-composition-model.md` §3/§5 at `923ac7bc`).
+/// Where a requested one-shot (a swing or an emote) is routed this play (decision 0087; the route
+/// flag `esi`, `0x5fe6c8..0x5fe74d`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum OneShotRoute {
     /// Onto the SpineLow-subtree **masked overlay** ([`AnimClip::upper_node`]): the torso plays the
@@ -1054,18 +1037,18 @@ pub(super) enum OneShotRoute {
     FullBody,
 }
 
-/// The **CLASS_A** membership (wow-re `0x5fed90`) — the maskable-eligible set that gates the whole
+/// The **CLASS_A** membership (`0x5fed90`) — the maskable-eligible set that gates the whole
 /// state-route block; a non-CLASS_A id is always full-body. The load-bearing memberships were
 /// byte-decoded (17/66/68/80 ∈; the 37–45 jump/swim/locomotion band excluded); the patchy interior of
-/// the wide ranges is INFERRED (wow-re note §3 Open) but never load-bearing here — the only ids that
-/// reach [`route_oneshot`] are swings, emotes, and the spell-kit cast anims (32/33/51–54 — wow-re's
-/// own CLASS_A gloss: "swings, emotes, casts"), all squarely inside these ranges.
+/// the wide ranges is inferred and still open, but never load-bearing here — the only ids that
+/// reach [`route_oneshot`] are swings, emotes, and the spell-kit cast anims (32/33/51–54 — CLASS_A
+/// covers swings, emotes and casts), all squarely inside these ranges.
 fn is_class_a(id: u16) -> bool {
     matches!(id,
         2 | 8..=10 | 14..=36 | 46..=49 | 51..=90 | 105..=113 | 117..=118 | 122..=138 | 185..=186 | 195)
 }
 
-/// The **COMBAT** membership (wow-re `0x5fcc10`) — the set whose airborne test can route to the mask
+/// The **COMBAT** membership (`0x5fcc10`) — the set whose airborne test can route to the mask
 /// (a mid-jump swing). Byte-decoded memberships: **17 ∈**, and **66/68/80 ∉** (the emotes never mask
 /// on airborne alone). Every swing id (16–19/85/87/88/117) is in it; no emote id is — and no CAST id
 /// (32/33/51–54) either, which is why a jump-in-place cast routes FULL-BODY and replaces the hang
@@ -1074,7 +1057,7 @@ fn is_combat(id: u16) -> bool {
     matches!(id, 10 | 16..=24 | 30 | 36 | 57..=59 | 85..=88 | 95 | 117 | 118)
 }
 
-/// The **forced-full-body** carve-outs (wow-re §3): Death-class `{1,6,131,132}` (`0x5fda90`) and the
+/// The **forced-full-body** carve-outs: Death-class `{1,6,131,132}` (`0x5fda90`) and the
 /// sit-transition ids `{57,58,118}` (`0x5fec60`) route to bone 0 regardless of state. Kept faithful
 /// though benilla never feeds these through the one-shot path.
 fn is_forced_full_body(id: u16) -> bool {
@@ -1082,7 +1065,7 @@ fn is_forced_full_body(id: u16) -> bool {
 }
 
 /// Route a requested one-shot (swing/emote id) by the unit's **live state**, per play — the client's
-/// `esi` decision `0x5fe6c8..0x5fe74d` (decision 0087, wow-re §3/§5): masked onto the SpineLow overlay
+/// `esi` decision `0x5fe6c8..0x5fe74d` (decision 0087): masked onto the SpineLow overlay
 /// when the lower body is committed — **moving/turning/swimming** (`[9e8] & 0x20003f`), a **non-Stand
 /// stand-state** (seated/sleep/kneel/chair, `standState ≠ 0`), or a **combat** id while **airborne**
 /// (`activeCMovement+0x40 & 0x2000`); **full-body** on bone 0 when standing idle (none of those). The
@@ -1102,14 +1085,14 @@ pub(super) fn route_oneshot(id: u16, flags: u32, stand_state: u8) -> OneShotRout
     }
 }
 
-/// `AnimationData` ids whose playback rate the client scales by movement speed (wow-5875-re `0x5fee80`):
+/// `AnimationData` ids whose playback rate the client scales by movement speed (`0x5fee80`):
 /// the locomotion gaits. An id outside this set plays at rate 1×. The **same** table is the
 /// LOCOMOTION membership the transplant predicates key on ([`is_locomotion`]).
 const RATE_SCALED: &[u16] = &[4, 5, 11, 12, 13, 37, 38, 39, 42, 43, 44, 45, 135, 143, 187];
 
 /// The client's **LOCOMOTION** membership (`0x5fee80` — the very table the rate scaler uses):
 /// what the transplant predicates test as "the clip being *requested* is a base locomotion clip"
-/// (`0x5feae0`/`0x5fe912`, wow-re `oneshot-lifecycle.md` §3a). Note Fall(40) and SwimIdle(41) are
+/// (`0x5feae0`/`0x5fe912`). Note Fall(40) and SwimIdle(41) are
 /// **not** members — a FALLINGFAR latch mid-cast replaces the cast on bone 0 rather than
 /// transplanting it, exactly as the bytes order it.
 pub(super) fn is_locomotion(id: u16) -> bool {
@@ -1136,8 +1119,7 @@ pub(super) fn gait_is_locomotion(state: &MovementState, walk_speed: f32) -> bool
 }
 
 /// The playback rate for a clip given the unit's live speed and its rendered model scale — the
-/// client's `0x5fe2f0` divide, VERIFIED byte-for-byte and §5 cross-checked (wow-5875-re
-/// `anim-rate-divisor.md`, the canonical note; `0x5fe4be..0x5fe550`):
+/// client's `0x5fe2f0` divide (`0x5fe4be..0x5fe550`):
 ///
 /// ```text
 /// 5fe508  call 0x711a20   ; DIVISOR = ‖row0(M+0xbc)‖ · M2Sequence[reqId].moveSpeed
@@ -1162,7 +1144,7 @@ pub(super) fn gait_is_locomotion(state: &MovementState, walk_speed: f32) -> bool
 /// folded the DBC scale in — `entities::attach`), and `+0x9c` is a mount's own
 /// `CreatureDisplayInfo` column, composed under the rider's. Our unit transform and mount-child
 /// transform carry exactly those, so `transform.scale.x × host` reproduces the product (decision
-/// 0910). Two exactness notes from the cross-check:
+/// 0910). Two exactness notes:
 ///
 /// - The client takes the **L2 length of row 0** of the model's world matrix, not an `abs()`. For a
 ///   *uniform* scale — which every unit of ours is (`Vec3::splat`) — the two are identical at any
@@ -1225,7 +1207,7 @@ pub(super) fn unify(
     modes: Option<&crate::net::UnitMoveModes>,
 ) -> MovementState {
     // The flying-spline fact is read through to the live `Spline` on EVERY leg — the client's
-    // selector reads the active CMovement's spline flags at select time (RF-0057 `0x5fd19c`),
+    // selector reads the active CMovement's spline flags at select time (`0x5fd19c`),
     // so a self ride (MovementState leg) and a remote taxi (spline leg) both fly.
     let flying = spline.is_some_and(|s| !s.grounded);
     if let Some(m) = movement {

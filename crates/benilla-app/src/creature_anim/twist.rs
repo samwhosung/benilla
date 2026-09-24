@@ -1,5 +1,5 @@
-//! The **display-facing counter-twist** — the client's strafe/look body pose (wow-5875-re
-//! `body-facing-pipeline.md` §3, the `0x607ed0` tail → the `0x711f10` bone channels).
+//! The **display-facing counter-twist** — the client's strafe/look body pose (the `0x607ed0` tail →
+//! the `0x711f10` bone channels).
 //!
 //! A unit's rendered root yaw can sit *offset* from its aim — a strafe turns the root toward the
 //! slide (±90° pure, ±45° diagonal) while the aim (camera, server orientation) holds. The client
@@ -71,7 +71,7 @@ pub(crate) fn wrap_pi(angle: f32) -> f32 {
 ///
 /// The binary carries a full-share branch too (`0x6103a0`: local player AND a live click-to-move
 /// action), but `[0xc4d888]` is the click-to-move action type and `0xc` = disabled is its normal
-/// in-world value (VERIFIED, wow-re `b947e5aa`) — so half is the effective share for everyone in
+/// in-world value — so half is the effective share for everyone in
 /// ordinary play, exactly as the director's reference eye called it when the full-share variant
 /// was tried and rejected (decision 0104). Full share would fire only during click-to-move, which
 /// benilla doesn't have.
@@ -84,8 +84,8 @@ fn twist_shares(gap: f32) -> (f32, f32) {
 
 /// The shares actually ARMED on a unit — [`twist_shares`] with the **mounted spine gate** applied.
 ///
-/// The SpineLow channel is armed only on an UNMOUNTED unit: `CGUnit+0xdc == 0` (wow-re
-/// `body-facing-pipeline.md` Q3, alongside the per-model capability bit `+0xd58 & 0x80` we model as
+/// The SpineLow channel is armed only on an UNMOUNTED unit: `CGUnit+0xdc == 0` (in the `0x607ed0`
+/// tail, alongside the per-model capability bit `+0xd58 & 0x80` we model as
 /// "the skeleton authors the key bone"). `+0xdc` is the **mount model** pointer — the same field
 /// `0x614cd0` passes to `0x7106c0` as "model `[+0xd8]` or mount `[+0xdc]`". The HEAD channel
 /// (`+0xd58 & 0x100`) carries no mount gate. So a strafing rider counter-twists its head alone
@@ -98,7 +98,7 @@ fn twist_shares(gap: f32) -> (f32, f32) {
 /// back to its animated base, which is the reference's disarm (`0x711f10(4, 0, 0x80)`); skipping
 /// would freeze our last twist into any frame the clip does not re-key.
 ///
-/// (`+0xdc`'s semantics are flagged INFERRED in that note. It is taken here because the mechanism
+/// (`+0xdc`'s semantics are inferred. It is taken here because the mechanism
 /// PREDICTS the reference: the director reported the mounted over-wobble before this gate was
 /// found, and it is the gate that accounts for it.)
 fn armed_shares(gap: f32, mounted: bool) -> (f32, f32) {

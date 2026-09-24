@@ -97,9 +97,8 @@ const SHEATH_OVERLAY_WEIGHT: f32 = 8.0;
 /// sender), the attack-start auto-draw, the stand-state stow rider — and `drive_animations` is
 /// the sole executor: the idempotency refusal, the commit to the client-side cache, the
 /// `CMSG_SETSHEATHED` volunteer for the local player (`bFireEvent = 1`), and the ceremony-vs-snap
-/// visual all live in that one place. Byte-verified across all 24 client call sites (wow-re
-/// `sheath-policy.md`): **only the manual `ToggleSheath` passes `bInstant = 0`** — every reactive
-/// trigger and the server-field apply snap.
+/// visual all live in that one place. Across all 24 client call sites, **only the manual
+/// `ToggleSheath` passes `bInstant = 0`** — every reactive trigger and the server-field apply snap.
 #[derive(Message, Clone, Copy)]
 pub(crate) struct SheathRequest {
     pub(crate) entity: Entity,
@@ -111,8 +110,8 @@ pub(crate) struct SheathRequest {
 
 /// The manual `ToggleSheath` **cycle** — the state a Z press asks for next, or `None` where the
 /// ref makes no `SetSheatheState` call at all. Byte-read off `0x5eb642`–`0x5eb6a8` (the four
-/// ToggleSheath call sites tabulated in wow-re `sheath-policy.md` §1; the dispatch is a
-/// `sub 0; je` / `dec; je` / `dec; jne` walk over the committed state `[unit+0xd40]`):
+/// ToggleSheath call sites; the dispatch is a `sub 0; je` / `dec; je` / `dec; jne` walk over the
+/// committed state `[unit+0xd40]`):
 ///
 /// ```text
 /// CUR 0   mainhand or offhand worn -> 1 melee      (0x5eb6a0: push 1, 0, 1)
