@@ -146,7 +146,7 @@ pub(crate) enum GoOpener {
 pub(crate) struct Spells {
     pub(crate) catalog: SpellCatalog,
     /// Form id → the `SpellShapeshiftForm.dbc` row: **BonusActionBar** (the client's own paging
-    /// map, wow-re byte-verified: `GetBonusBarOffset` reads a cached copy of exactly this
+    /// map: `GetBonusBarOffset 0x4e7620` reads a cached copy of exactly this
     /// lookup) + **flags1** (the form gate's stance bit, [`state`]'s usable walk; the
     /// toggle-cancel block bit, `crate::ui_shapeshift`'s drain).
     pub(crate) forms: std::collections::HashMap<u32, benilla_formats::ShapeshiftForm>,
@@ -163,10 +163,9 @@ pub(crate) struct Spells {
 }
 
 impl Spells {
-    /// The resolved cast time, ms — `GetCastTime 0x6e3340`'s level-scaled walk (wow-re
-    /// `wave-cooldown.md`/`moving-cast-gate.md`, byte-verified): `CastingTimeIndex` resolves the
-    /// [`Self::cast_times`] row, `base + perLevel·(casterLevel − baseLevel)` floors to the
-    /// row's minimum (row 1, the all-zero instant sentinel, resolves 0). The level term keys on
+    /// The resolved cast time, ms — `GetCastTime 0x6e3340`'s level-scaled walk: `CastingTimeIndex`
+    /// resolves the [`Self::cast_times`] row, `base + perLevel·(casterLevel − baseLevel)` floors to
+    /// the row's minimum (row 1, the all-zero instant sentinel, resolves 0). The level term keys on
     /// the `SpellRec+0x70` column ([`SpellDisplay::base_level`]). Spell-mod op `0xa`
     /// (SPELLMOD_CASTING_TIME) is still unread here — the tables themselves are live
     /// (`crate::spell::mods`), only this consumer is not wired to them, so a talent-shortened
@@ -206,9 +205,9 @@ impl Spells {
 /// `[0xb700e8]` — and the unlearn path `0x4b2c50` zeroes whichever global named that spell.
 ///
 /// The world cursor's skin leg then reads `[0xb700e4 + 4×isPlayerTarget]` as a hard precondition
-/// (wow-re `cursor-system.md` §3, the skin/insignia row): **a corpse flagged `UNIT_FLAG_SKINNABLE`
-/// shows no skin cursor at all to a player who never learned Skinning.** Without it the ladder
-/// offers the knife to everyone, which is what the channel reported.
+/// (`0x482589`): **a corpse flagged `UNIT_FLAG_SKINNABLE` shows no skin cursor at all to a player
+/// who never learned Skinning.** Without it the ladder offers the knife to everyone, which is
+/// what the channel reported.
 #[derive(Resource, Default)]
 pub(crate) struct LearnedAbilities {
     /// `[0xb700e4]` — our known `SPELL_EFFECT_SKINNING` spell (creature skinning), `None` if we
@@ -231,7 +230,7 @@ pub(crate) struct LearnedAbilities {
 const SPELL_EFFECT_SKIN_PLAYER_CORPSE: u32 = 0x74;
 
 /// `SpellEffects` value `0x65` (101) — `SPELL_EFFECT_FEED_PET`, the effect the reference tests at
-/// learn time to latch `[0xcecad8]` (wow-re `ui/scratch/item-target-cursor-and-dropitemonunit.md`).
+/// learn time to latch `[0xcecad8]` (`0x5e9e42`).
 /// Feed Pet 6991 is the only shipped row carrying it.
 const SPELL_EFFECT_FEED_PET: u32 = 0x65;
 

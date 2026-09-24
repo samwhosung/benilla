@@ -1,6 +1,5 @@
 //! **`DropItemOnUnit 0x48d960`** — the cursor's held item dropped onto a unit, which in 1.12 is
-//! how you feed your pet (decision 1055; wow-re `ui/scratch/item-target-cursor-and-dropitemonunit.md`,
-//! VERIFIED).
+//! how you feed your pet (decision 1055).
 //!
 //! The reference's binding forks on which unit it was given:
 //!

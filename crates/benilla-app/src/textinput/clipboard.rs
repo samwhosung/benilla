@@ -1,8 +1,8 @@
 //! The host OS pasteboard seam — the one place benilla talks to the platform clipboard.
 //!
-//! The UI engine is engine-free and can't reach the OS clipboard (RF-0082's stated gap), so the
-//! three clipboard chords ([`keymap::Chord`]) resolve host-side: copy/cut write out what
-//! `editbox_copy`/`editbox_cut` hand back, paste reads the pasteboard and feeds `UiScript::paste`.
+//! The UI engine is engine-free and can't reach the OS clipboard, so the three clipboard chords
+//! ([`keymap::Chord`]) resolve host-side: copy/cut write out what `editbox_copy`/`editbox_cut`
+//! hand back, paste reads the pasteboard and feeds `UiScript::paste`.
 //!
 //! **Why this is a held resource with a per-platform backend, and not `arboard::Clipboard::new()`
 //! per call.** Both halves of copy/paste were broken on Linux, for two independent reasons

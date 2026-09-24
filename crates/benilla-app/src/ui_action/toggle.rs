@@ -1,7 +1,6 @@
-//! The plain-path **press-again-to-cancel** toggles — wow-re `shapeshift-plaincast-toggle.md`
-//! (§5 cross-checked 2026-07-31). The reference client cancels an active toggle spell in its
-//! DISPATCHERS, above `TryCast 0x6e4b60` (which itself has no cancel branch), and the two plain
-//! paths are deliberately asymmetric:
+//! The plain-path **press-again-to-cancel** toggles. The reference client cancels an active
+//! toggle spell in its DISPATCHERS, above `TryCast 0x6e4b60` (which itself has no cancel branch),
+//! and the two plain paths are deliberately asymmetric:
 //!
 //! - **Active-action toggle** ([`active_action_toggle`], predicate `0x4e55f0` and its byte-twin
 //!   `0x4b36f0`) — on BOTH `UseAction 0x4e5ee0` (cancel `0x4e60c1`) and the `CastSpell`/

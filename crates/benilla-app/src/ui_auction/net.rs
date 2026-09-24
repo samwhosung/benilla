@@ -107,8 +107,8 @@ fn on_session_end(In(_): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
     auction.clear_session();
 }
 
-/// `MSG_AUCTION_HELLO`'s reply — **this**, not our send, is what opens the window (wow-re: the
-/// window's opener runs inside the hello handler). The house id keys the deposit rate.
+/// `MSG_AUCTION_HELLO`'s reply — **this**, not our send, is what opens the window (the window's
+/// opener runs inside the hello handler `0x4cc420`). The house id keys the deposit rate.
 fn auction_hello(auctioneer: u64, house_id: u32, auction: &mut AuctionOpen) {
     auction.open(auctioneer, house_id);
 }
@@ -187,9 +187,8 @@ fn auction_command_result(
         // the only thing that knows what the page looks like now, and the result carries an
         // auction id, not a row.
         //
-        // **The reference re-asks on two of these three, and neither ask is page 0** — VERIFIED
-        // (wow-re auction node §12: a closed caller census of both list senders, two callers each
-        // and zero address-takes; decision 2308):
+        // **The reference re-asks on two of these three, and neither ask is page 0** (both list
+        // senders have exactly two callers each and zero address-takes; decision 2308):
         //
         // - `STARTED` — `[0xb7263c] = 1`, then `0x4cc4e0 call 0x4cd680` = `CMSG 0x259` at the
         //   **saved page offset** `[0xb72650]`. No row patch, no event of its own.
@@ -208,8 +207,8 @@ fn auction_command_result(
         // reference cannot, because its notification handlers patch instead of asking
         // (`AuctionOpen::refresh_owner`).
         //
-        // Each success also says so, in **chat** — the success arm shows `0x178`/`0x179`/`0x17f`
-        // keyed on the action field, with zero varargs (wow-re §11.2/§11.3).
+        // Each success also says so, in **chat** — the success arm `0x4cc4be` shows
+        // `0x178`/`0x179`/`0x17f` keyed on the action field, with zero varargs.
         match action {
             auction_action::STARTED => {
                 // The item is gone from the bag; the sell slot must stop claiming to hold it.
@@ -238,7 +237,7 @@ fn auction_command_result(
     // **HIGHER_BID says nothing here.** Its arm (`0x4cc672`) reads two extra fields and takes the
     // live *outbid update* path — it patches the row rather than raising a message, and the line
     // the player actually sees is `ERR_AUCTION_OUTBID_S`, off the bidder notification. Printing a
-    // refusal here would double it (wow-re §11.2).
+    // refusal here would double it.
     if error == auction_error::HIGHER_BID {
         auction.refresh_bidder();
         return;
@@ -251,13 +250,13 @@ fn auction_command_result(
 /// The failed command's GlobalStrings key — resolved to text in the feed against the player's own
 /// table, never carried as English here (decisions 0669 / 1190).
 ///
-/// **INTERIM on three arms.** wow-re §11.2 reads the dispatch as: code 1 computes its id from the
-/// packet's own second field through the *inventory*-result formatter (`0x622630`) — a different
-/// message family, whose keys are not carved; code 4 raises `0x17`; code 13 raises `0x1be`. Those
-/// three ids are outside the `ERR_AUCTION_*` block and their GlobalStrings names are not recorded
-/// yet, so they fall to the catch-all here rather than being invented. Everything else is the
-/// dispatch table verbatim, including that `2, 6, 8, 9, 11, 12` and anything above 13 are the
-/// reference's own `ja` default.
+/// **INTERIM on three arms.** In the reference's dispatch (`0x4cc460`), code 1 computes its id from
+/// the packet's own second field through the *inventory*-result formatter (`0x622630`) — a
+/// different message family, whose keys are not yet decoded; code 4 raises `0x17`; code 13 raises
+/// `0x1be`. Those three ids are outside the `ERR_AUCTION_*` block and their GlobalStrings names are
+/// not recorded yet, so they fall to the catch-all here rather than being invented. Everything else
+/// is the dispatch table verbatim, including that `2, 6, 8, 9, 11, 12` and anything above 13 are
+/// the reference's own `ja` default.
 fn command_error_key(error: u32) -> Option<&'static str> {
     Some(match error {
         auction_error::NOT_ENOUGH_MONEY => "ERR_NOT_ENOUGH_MONEY", // `0x25`, the shared id
@@ -289,7 +288,7 @@ fn auction_bidder_notification(notice: &AuctionBidderNotification, auction: &mut
 /// `SMSG_AUCTION_OWNER_NOTIFICATION` — one of ours sold, or took a bid. An all-zero bidder guid is
 /// the "sold" signal (the server zeroes it on a sale).
 fn auction_owner_notification(notice: &AuctionOwnerNotification, auction: &mut AuctionOpen) {
-    // **Two stages, and the first one decides whether anything is said at all** (wow-re §11.4).
+    // **Two stages, and the first one decides whether anything is said at all** (`0x4cd1f0`).
     // A NON-zero bidder guid is "somebody bid on your auction": the row updates and the client says
     // nothing — `[0x4cd25f, 0x4cd3bd)` holds no display call. Only a zeroed guid reaches the message
     // path, and there the *bid* picks the line: non-zero sold, zero expired.
@@ -308,8 +307,8 @@ fn auction_owner_notification(notice: &AuctionOwnerNotification, auction: &mut A
 
 /// `SMSG_AUCTION_REMOVED_NOTIFICATION` — an auction we had bid on was cancelled by its seller.
 ///
-/// One id, unconditionally (wow-re §11.4: `0x4cd480` has exactly one `call 0x496720` and no branch
-/// selecting an id).
+/// One id, unconditionally (`0x4cd480` has exactly one `call 0x496720` and no branch selecting
+/// an id).
 fn auction_removed_notification(item_entry: u32, auction: &mut AuctionOpen) {
     auction.messages.push(AuctionMessage::chat_item(
         "ERR_AUCTION_REMOVED_S",
@@ -379,7 +378,7 @@ mod tests {
         }
     }
 
-    /// The owner notification's **two-stage** discrimination (wow-re §11.4), and the first stage is
+    /// The owner notification's **two-stage** discrimination (`0x4cd1f0`), and the first stage is
     /// the one a re-implementation gets wrong: a NON-zero bidder guid means "somebody bid on your
     /// auction", and the client says **nothing at all** — the row updates and that is the whole
     /// response. Only a zeroed guid reaches the message path, and there the *bid* picks the line.

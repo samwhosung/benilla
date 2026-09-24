@@ -284,9 +284,9 @@ fn an_unknown_entry_answers_once_and_settles() {
 /// A MACRO slot serves **the macro's own icon**, and follows an EDIT of that macro without any
 /// bar-table change at all (decision 0983).
 ///
-/// Two things are pinned. The icon rule is byte-verified: `GetActionTexture`'s macro arm
-/// (`0x4e6bf9`) builds the macro record's own icon path and never touches the bound spell
-/// (`action-spell-icon-apis.md` §3.7). And the *trigger* is the macro-table generation — the third
+/// Two things are pinned. The icon rule: `GetActionTexture`'s macro arm (`0x4e6bf9`) builds the
+/// macro record's own icon path and never touches the bound spell. And the *trigger* is the
+/// macro-table generation — the third
 /// input beside `dirty` and the item-template epoch — because renaming or re-iconing a macro moves
 /// neither of those, and gating on them alone leaves a stale icon on the bar until some unrelated
 /// edit happens to re-dirty the feed (exactly decision 0660's bug, one seam over).

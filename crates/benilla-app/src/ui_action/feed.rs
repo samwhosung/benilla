@@ -21,8 +21,8 @@
 //! instead — and [`UiErrorTexts`], the lines that arrive already resolved) into
 //! `UI_ERROR_MESSAGE`, or `UI_INFO_MESSAGE` for the yellow arm; and the stance page
 //! (`GetBonusBarOffset`) — our descriptor's
-//! shapeshift-form byte indexed into `SpellShapeshiftForm.dbc`'s BonusActionBar column, wow-re
-//! byte-verified, firing `UPDATE_BONUS_ACTIONBAR` on change.
+//! shapeshift-form byte indexed into `SpellShapeshiftForm.dbc`'s BonusActionBar column
+//! (`0x4e4fc0`), firing `UPDATE_BONUS_ACTIONBAR` on change.
 
 use crate::ui_items::{count_of, InventoryScope};
 use std::collections::{HashMap, HashSet};
@@ -44,8 +44,8 @@ use super::{
 };
 
 /// What an ITEM action shows when its icon cannot be resolved — the reference's own hardcoded
-/// literal at `0x847fe4`, returned by the item-icon resolver's failure block `0x5d8927` (wow-re
-/// `action-item-slot.md` §1/§4: exactly two engine sites binary-wide, zero Lua). Reached two ways:
+/// literal at `0x847fe4`, returned by the item-icon resolver's failure block `0x5d8927` (exactly
+/// two engine sites binary-wide, zero Lua). Reached two ways:
 /// the template hasn't answered yet (displayId 0 — the login window decision 0660 closes), or the
 /// displayId has no `ItemDisplayInfo` row at all.
 pub(super) const MISSING_ITEM_ICON: &str = "Interface\\Icons\\INV_Misc_QuestionMark";
@@ -176,8 +176,8 @@ pub(super) fn feed_actions(
                 // through `0x6e2380`): "Must have a **Wand** equipped", the SINGULAR DisplayName,
                 // where the spell tooltip's own requirement line takes the verbose plural. Purely a
                 // DBC read, so no query/redisplay round trip. A multi-bit mask resolves too — through
-                // ItemSubClassMask.dbc's group name, else the FIRST matching subclass (law
-                // §3-EQUIPITEM; the tooltip's twin joins instead).
+                // ItemSubClassMask.dbc's group name, else the FIRST matching subclass (the
+                // tooltip's twin at `0x52eea7` joins instead).
                 if let (0x19..=0x1b, Some(d), Some(subs)) = (reason, d, sub_classes.as_deref()) {
                     if let Some(name) = (d.equipped_item_class >= 0)
                         .then(|| {
@@ -532,11 +532,11 @@ pub(super) fn feed_actions(
                     (Some(texture), count, consumable)
                 }
                 // A MACRO slot serves **the macro's own icon, never its bound spell's** — the one
-                // asymmetry in the icon resolver, byte-verified: `0x4e6a50`'s macro arm
-                // (`0x4e6bf9`) validates the slot and calls `0x4f0fd0(idx, buf, 0x104)`, the macro
-                // record's own icon-path builder, without ever touching `[rec+0x564]` (wow-re
-                // `action-spell-icon-apis.md` §3.7). Its dynamic state DOES go through the bound
-                // spell — that split is the whole design (`state`'s macro arm, decision 0983).
+                // asymmetry in the icon resolver: `0x4e6a50`'s macro arm (`0x4e6bf9`) validates the
+                // slot and calls `0x4f0fd0(idx, buf, 0x104)`, the macro record's own icon-path
+                // builder, without ever touching `[rec+0x564]`. Its dynamic state DOES go
+                // through the bound spell — that split is the whole design (`state`'s macro
+                // arm, decision 0983).
                 ACTION_KIND_MACRO => (
                     macros
                         .get(button.action as usize)
@@ -656,8 +656,8 @@ pub(super) fn feed_actions(
     }
 }
 
-/// The whole SPELL-slot icon rule — the reference's `GetActionTexture` resolver `0x4e6a50`
-/// (wow-re `action-spell-icon-apis.md` §3, §5-verified), arms in its execution order:
+/// The whole SPELL-slot icon rule — the reference's `GetActionTexture` resolver `0x4e6a50`, arms
+/// in its execution order:
 ///
 /// 1. The **pre-emptive arms** ([`auto_attack_icon`]): Attack serves the current form's face /
 ///    the main-hand weapon (`0x4e6870`), an auto-repeat shot the ranged weapon (`0x4e6990`) —
@@ -669,8 +669,8 @@ pub(super) fn feed_actions(
 /// 3. The spell's own `SpellIconID` face.
 ///
 /// The spellbook's `GetSpellTexture` (`0x4b3f50`) deliberately runs ONLY arms 1 and 3 — it never
-/// serves `ActiveIconID` (proof by exhaustion in the note). `ui_spellbook` keeps that asymmetry;
-/// do not "fix" it to match the bar.
+/// serves `ActiveIconID` (proof by exhaustion of its return paths). `ui_spellbook` keeps that
+/// asymmetry; do not "fix" it to match the bar.
 fn spell_action_icon(
     spell_id: u32,
     d: &benilla_formats::SpellDisplay,

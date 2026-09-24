@@ -39,9 +39,8 @@ pub(super) enum ItemRoute {
     Nowhere,
 }
 
-/// The reference's **two-stage** equip-vs-use decision for an ITEM action, byte-verified (wow-re
-/// `action-item-slot.md` §8.1, `0x4e5fdd`–`0x4e5ff7`; decision 0666, which supersedes 0216 §7's
-/// guessed one):
+/// The reference's **two-stage** equip-vs-use decision for an ITEM action (`0x4e5fdd`–`0x4e5ff7`;
+/// decision 0666, which supersedes 0216 §7's guessed one):
 ///
 /// ```text
 /// InventoryType == 0            → USE          (a consumable is never equipped)
@@ -140,7 +139,7 @@ pub(super) fn attack_target_binding(
 /// the seam [`crate::ui_action::GoOpenerCasts`] exists for.
 ///
 /// The reference reaches TryCast from the GameObject strategy's use-sender exactly as it does from
-/// a button press (`0x5f35c0 → 0x6e5a90 → 0x6e4b60`, wow-re `cursor-system.md` §8.4), so an opener
+/// a button press (`0x5f35c0 → 0x6e5a90 → 0x6e4b60`), so an opener
 /// takes **every rung** — in-flight, cooldown/GCD, power, crowd control, mounted, water, moving,
 /// form, reagents — and not the two the click used to check on its own. The rung that matters for
 /// the report this closes is the in-flight one: the second right-click on a chest whose Opening
@@ -248,7 +247,7 @@ pub(super) fn drain_action_uses(
                 // The attack-start validator's Phase A ([`attack_actor_refusal`]) — for a melee
                 // swing the actor is US. It refuses BEFORE the with-target swing and before the
                 // nearest-enemy scan (every Phase A gate precedes `0x6130b5`), so both arms gate
-                // here. Widened from mounted-only when wow-re carved the rest of `0x612df0`:
+                // here. Widened from mounted-only to the rest of `0x612df0`:
                 // stunned, pacified, fleeing, confused, charmed by somebody else, and dead now
                 // refuse the swing too, each with its own red line.
                 if attack_actor_refusal(
@@ -264,7 +263,7 @@ pub(super) fn drain_action_uses(
                         // pseudo-spell reaches through `TryCast`'s effect-0x4e short-circuit
                         // (`0x6e4c7a`), forks on `0x60ecb0`: already attacking →
                         // `0x6131d9 call 0x5ecac0` **StopAttack**, else `0x6131ee call 0x5ecb70`
-                        // **StartAttack** (wow-re `melee-autorepeat-exclusion.md` §5f).
+                        // **StartAttack**.
                         //
                         // Both halves were wrong here. There was no toggle-off at all, and the
                         // press cancelled a running auto-repeat *unconditionally* — but only the
@@ -311,9 +310,9 @@ pub(super) fn drain_action_uses(
                     ladder.ground.clear();
                     continue;
                 }
-                // The active-action toggle (`0x4e55f0` → the `0x4e60c1` cancel; wow-re
-                // `shapeshift-plaincast-toggle.md`): a live ActiveIconID spell re-pressed on
-                // its button cancels its own aura — Ghost Wolf, the druid forms, Stealth. The
+                // The active-action toggle (`0x4e55f0` → the `0x4e60c1` cancel): a live
+                // ActiveIconID spell re-pressed on its button cancels its own aura — Ghost Wolf,
+                // the druid forms, Stealth. The
                 // form-match toggle is deliberately NOT here (the ref's `UseAction` has no such
                 // leg — the `CastSpell` dispatcher alone carries it; keep the asymmetry).
                 if let Some(d) = ladder.spells.as_ref().and_then(|s| s.catalog.get(b.action)) {
@@ -433,11 +432,10 @@ pub(super) fn drain_action_uses(
                     );
                 }
             }
-            // The MACRO arm (`0x4e5ee0`'s `and ecx,0xbfffffff; call 0x4f1460` fork, wow-re
-            // `action-item-slot.md` §8): run the macro's body. Every line goes onto the chat-input
-            // queue — the door a typed line comes through — so `/cast`, `/target`, `/script`, the
-            // chat types and the 225 emotes all work in a macro by construction
-            // (`crate::ui_macro::run`'s module doc).
+            // The MACRO arm (`0x4e5ee0`'s `and ecx,0xbfffffff; call 0x4f1460` fork): run the
+            // macro's body. Every line goes onto the chat-input queue — the door a typed line
+            // comes through — so `/cast`, `/target`, `/script`, the chat types and the 225 emotes
+            // all work in a macro by construction (`crate::ui_macro::run`'s module doc).
             Some(b) if b.kind == ACTION_KIND_MACRO => {
                 if !crate::ui_macro::run_macro(&mut script, b.action) {
                     debug!(

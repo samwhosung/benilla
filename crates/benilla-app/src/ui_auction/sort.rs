@@ -9,11 +9,10 @@
 //! flipped arrow, and the sort is *stable across keys* — dropping "quality" to second place still
 //! breaks ties by it.
 //!
-//! **VERIFIED** (wow-re §5, TU-5, `system/ui/scratch/auction-house.md`): `0x4cd940` *is* the
-//! auction comparator, the sort *is* an 8-key MRU cascade, and each list owns its own `{col,dir}`
-//! stack. The per-key directions below are that verdict's, not our guess — three of them were
-//! wrong when this file first landed, and all three were ones a shopping UI makes the "obvious"
-//! way round.
+//! `0x4cd940` *is* the auction comparator, the sort *is* an 8-key MRU cascade, and each list owns
+//! its own `{col,dir}` stack. The per-key directions below are the reference's, not our guess —
+//! three of them were wrong when this file first landed, and all three were ones a shopping UI
+//! makes the "obvious" way round.
 
 use std::cmp::Ordering;
 
@@ -77,8 +76,8 @@ impl SortStack {
     }
 }
 
-/// One key's comparison, in the direction a *first* click on that column produces (wow-re §5
-/// TU-5, stated there as "which row appears first").
+/// One key's comparison, in the direction a *first* click on that column produces (`0x4cd940`'s
+/// arms, read as "which row appears first").
 ///
 /// Three of these run the opposite way to the intuition, and each is intuitive once you know what
 /// the column is for: **quality** opens with the epics, **buyout** opens with the most expensive
@@ -198,7 +197,7 @@ mod tests {
         assert_eq!(got, vec!["Charlie", "Alpha", "Bravo"], "level, then bid");
     }
 
-    /// Buyout opens HIGHEST-first (wow-re §5 TU-5) — and a buyout of `0` means "none", not
+    /// Buyout opens HIGHEST-first (`0x4cdaf2`) — and a buyout of `0` means "none", not
     /// "free", so descending puts it last with no special case.
     #[test]
     fn buyout_opens_highest_first_and_no_buyout_sinks() {
@@ -215,7 +214,7 @@ mod tests {
     }
 
     /// The three columns that run opposite to the intuition, pinned together so a future "fix"
-    /// has to argue with the §5 rather than with a hunch.
+    /// has to argue with the comparator `0x4cd940` rather than with a hunch.
     #[test]
     fn quality_and_status_open_highest_and_mine_first() {
         let mut rows = vec![

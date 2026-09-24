@@ -1,8 +1,7 @@
 //! The per-action **dynamic-state feed** (decision 0137 phase 4) — the app-side computation
 //! behind the engine's `IsUsableAction`/`IsActionInRange`/`IsCurrentAction`/`GetActionCooldown`
 //! family: each occupied action slot's [`ActionState`], recomputed per frame, diff-pushed into
-//! the VM, with the reference client's own event edges fired on the transitions the 2026-07-10
-//! wow-re §5 byte-mapped (`system/ui/scratch/action-button-state-api.md`):
+//! the VM, with the reference client's own event edges fired on these transitions:
 //!
 //! - a cooldown-store change → `ACTIONBAR_UPDATE_COOLDOWN` + `SPELL_UPDATE_COOLDOWN` +
 //!   `BAG_UPDATE_COOLDOWN` (the `0x4b31b0`/`0x4f93d0` flush pair the SMSG handlers call);
@@ -15,13 +14,12 @@
 //! - the live autorepeat key's edges → `START_AUTOREPEAT_SPELL` (`0x6e5952`, at cast-send) /
 //!   `STOP_AUTOREPEAT_SPELL` (`0x6ea170`).
 //!
-//! The per-flag semantics are the §5's confirmed laws (C1–C5): `notEnoughMana` is strictly the
-//! power-cost verdict, `IsCurrentAction` keys on the engaged attack GUID / the in-flight cast id,
+//! The per-flag semantics are the reference's: `notEnoughMana` is strictly the power-cost verdict,
+//! `IsCurrentAction` (`0x4e53a0`) keys on the engaged attack GUID / the in-flight cast id,
 //! `IsAutoRepeatAction` on the `0xceac30` key, and the range test is squared distance against the
-//! byte-verified `GetMinMaxRange 0x6e3480` (its constants transcribed below). The usable pair
-//! itself is the full `IsSpellUsableNow 0x6e3d60` gate walk — [`crate::spell::usable`], the 2026-07-10
-//! §2a fold-back: reagents, forms, stealth, aura states (the Execute-family target dependence),
-//! the works.
+//! `GetMinMaxRange 0x6e3480` (its constants transcribed below). The usable pair itself is the full
+//! `IsSpellUsableNow 0x6e3d60` gate walk — [`crate::spell::usable`]: reagents, forms, stealth,
+//! aura states (the Execute-family target dependence), the works.
 
 use crate::ui_items::carried_counts;
 use std::collections::HashMap;
@@ -76,9 +74,9 @@ enum SlotResolve {
 ///
 /// Every `Is*Action`/`GetActionCooldown` binding routes through the one slot→spell resolver
 /// `0x4e5a50`, whose MACRO arm resolves the macro record and returns `[rec+0x564]` as the slot's
-/// spell id (wow-re `action-spell-icon-apis.md` §2, VERIFIED). So from here down, a macro that
-/// casts Fireball simply *is* the Fireball slot. `GetActionTexture` is the deliberate exception —
-/// its macro arm keeps the macro's own icon (`super::feed`).
+/// spell id. So from here down, a macro that casts Fireball simply *is* the Fireball slot.
+/// `GetActionTexture` is the deliberate exception — its macro arm keeps the macro's own icon
+/// (`super::feed`).
 ///
 /// The zero is NOT "nothing to report" (0983's reading — B340's grey `.spawn` macro): the field
 /// is three-valued and the usable compute reads each value differently, which [`SlotResolve`]
@@ -193,8 +191,8 @@ pub(super) fn feed_action_state(
                 // The spell-less leg of `0x4e5050`: the macro exists, so the slot is usable —
                 // full colour on the bar — and there is no other state to compute (1636). The
                 // leg's one gate benilla does not model is `[0xb4b3e4]`, the player-control
-                // flag (wow-re `right-click-open.md` §3.1: 1 from boot, 0 only across a control
-                // loss — taxi/fear/charm); for that span the reference greys every spell-less
+                // flag (1 from boot, `0x48f626`; 0 only across a control loss — taxi/fear/charm —
+                // through `0x4958e0`); for that span the reference greys every spell-less
                 // macro and item.
                 st.usable = true;
                 fresh.insert(action, st);
@@ -218,17 +216,16 @@ pub(super) fn feed_action_state(
                     continue;
                 };
                 st.is_attack = d.is_melee_auto_attack();
-                // C2: the Attack action is "current" while auto-attack is engaged; a castable
+                // The Attack action is "current" while auto-attack is engaged; a castable
                 // spell while it is our in-flight cast OR our queued on-next-swing strike OR our
                 // running channel (the ref reads one inflight id `0xceca88` — which a queued
                 // Heroic Strike *occupies* until the swing fires it — plus the channel id
                 // `0xceac58`; our model splits the queue into its own slot, same observable) —
-                // OR the shapeshift arm (`IsCurrentAction`'s predicate `0x4e53a0` @ `0x4e5556`,
-                // wow-re `action-spell-icon-apis.md` §5): a MOD_SHAPESHIFT spell whose form ==
-                // the player's form byte reads checked. Deliberately NOT the icon's aura-scan
-                // predicate — the two are different functions in the binary and the asymmetry
-                // is load-bearing (a form granted by a different spell lights the check without
-                // swapping the icon).
+                // OR the shapeshift arm (`IsCurrentAction`'s predicate `0x4e53a0` @ `0x4e5556`):
+                // a MOD_SHAPESHIFT spell whose form == the player's form byte reads checked.
+                // Deliberately NOT the icon's aura-scan predicate — the two are different
+                // functions in the binary and the asymmetry is load-bearing (a form granted by a
+                // different spell lights the check without swapping the icon).
                 st.current = if st.is_attack {
                     engaged
                 } else {
@@ -241,7 +238,7 @@ pub(super) fn feed_action_state(
                         || (form_byte != 0 && d.shapeshift_form == Some(u32::from(form_byte)))
                 };
                 st.auto_repeat = auto_repeat.0 == Some(button.action);
-                // The full usable walk (`0x6e3d60` §2a — [`super::usable`]): reagents, combo
+                // The full usable walk (`0x6e3d60` — [`super::usable`]): reagents, combo
                 // points, forms, stealth, aura states, the bit-25 cooldown fold, and the power
                 // gate (the sole notEnoughMana writer). Target-dependent for the Execute family
                 // only. `spells` is necessarily Some here — `d` came out of it.
@@ -269,7 +266,7 @@ pub(super) fn feed_action_state(
                 } else {
                     st.usable = true;
                 }
-                // C4: the range verdict vs the current target; nil without one.
+                // The range verdict vs the current target (`0x4e56f0`); nil without one.
                 let row = spells.as_ref().and_then(|s| s.ranges.get(d.range_index));
                 let resolved = benilla_formats::min_max_range(d, row, self_reach, target_reach);
                 st.has_range = resolved
@@ -317,7 +314,7 @@ pub(super) fn feed_action_state(
                 // the item's on-use spell run through the SAME `0x6e3d60` walk a spell slot
                 // takes ([`super::usable::item_usable`]). Food greys in combat from leg 8 there.
                 // No active player and the reference answers (0,0) before resolving anything
-                // (§2a P0) — which is `ActionState::default()`'s `usable`.
+                // (`0x4e5080`) — which is `ActionState::default()`'s `usable`.
                 if let Some((store, _, _, _)) = me {
                     let ctx = usable::UsableCtx {
                         store,

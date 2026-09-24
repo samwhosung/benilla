@@ -11,8 +11,8 @@
 //! - **Type 11 (`TRANSPORT`, elevators/lifts/trams — decision 0438 phase 3's second consumer):**
 //!   the authored keyframe path from `TransportAnimation.dbc` keyed by the **template entry**;
 //!   the car sits at `spawn + R(spawn_quat)·lerp(keyframes, (anchor + local_elapsed) % period)`
-//!   ([`benilla_formats::elevator_sample`] — the client's `gameobject_path_eval`, byte-verified
-//!   in wow-re; vmangos `ElevatorTransport::Update` is the same math server-side).
+//!   ([`benilla_formats::elevator_sample`] — the client's path evaluator `0x5f6280`; vmangos
+//!   `ElevatorTransport::Update` is the same math server-side).
 //!
 //! Re-creates (map transitions, the server's mid-course "update frames") re-anchor the clock;
 //! decision 0318's replace semantics make that free.
@@ -419,8 +419,8 @@ fn arm_transports(
             .or_insert_with(|| {
                 let t = nodes.path(mo.taxi_path_id).and_then(|path| {
                     // The build self-pins its cycle length to the real client's own bookkeeping
-                    // (bit-exact against all nine server-sniff periods — the 2026-07-17 wow-re
-                    // §5 verdict), so the period on the label IS the server's.
+                    // (`0x5f4cc0`, bit-exact against all nine server-sniff periods), so the
+                    // period on the label IS the server's.
                     let t = TransportTimetable::build(path, mo.move_speed, mo.accel_rate)?;
                     info!(
                         "transport: path {} timetable built — period {} ms",
@@ -454,7 +454,7 @@ fn arm_transports(
 }
 
 /// The per-frame transport tick — the client's own `(progress + anchor) % period` leg walk
-/// (wow-re `0x5f50a0`, decision 0438): sample the timetable, write the pose. Translation +
+/// (`0x5f50a0`, decision 0438): sample the timetable, write the pose. Translation +
 /// rotation only — the renderer bakes model scale into the transform (`write_pose`'s law).
 /// Off-map samples (the boat is sailing the other continent's leg) hide the model; the server
 /// removes the GO around the same time, so this is belt-and-braces for the transition frames.
@@ -769,7 +769,7 @@ fn compose_riders(
 /// **Re-ground a deck-splined rider onto the deck it is walking on** (decision 1936's correction).
 ///
 /// The tempting reading — "a transport spline's Z is authoritative, because there is no terrain
-/// under a boat" — is what benilla shipped for a few hours and what wow-re's carve refuted. The
+/// under a boat" — is what benilla shipped for a few hours, and the reference refutes it. The
 /// transport guid appears in **neither** `0x616cb0`'s predicate **nor** `0x634040`'s dispatch: a
 /// grounded `SMSG_MONSTER_MOVE_TRANSPORT` spline takes the *same* fork as a plain one,
 /// `0x616d03` zeroes its Z-delta and the WALK resolver `0x6367b0` re-derives Z off the world trace
@@ -847,7 +847,8 @@ fn ground_deck_riders(
 /// **observed** rider takes the wire's transport tail ([`TransportRider`]). Everything hung off
 /// either — a held weapon, its enchant streamer, a spell kit — inherits it through the
 /// `ParentModel` chain rather than being stamped itself, which is exactly how the reference
-/// propagates `[model+0x17c]` to a model's children every frame (`0x7142c1` in `m2_animate`).
+/// propagates `[model+0x17c]` to a model's children every frame (`0x7142c1` in the animate
+/// kernel `0x714260`).
 ///
 /// Why this is a component and not a field on `Transport`: the fact is *per rider*, it changes on
 /// a step, and `benilla-world` — which owns the emitters that consume it — cannot see either

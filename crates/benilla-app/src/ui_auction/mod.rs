@@ -5,7 +5,7 @@
 //! **The window is opened by the server, not by the click.** A right-click on an auctioneer
 //! ([`crate::target`]) sends `MSG_AUCTION_HELLO` and nothing else happens; the *reply* — the same
 //! opcode coming back with the auctioneer guid and an `AuctionHouse.dbc` house id — is what opens
-//! the session here (wow-re: the window's opener calls `SetInteractNPC` and fires
+//! the session here (the window's opener `0x4cd570` calls `SetInteractNPC` and fires
 //! `AUCTION_HOUSE_SHOW` from inside the hello handler). That house id is load-bearing rather than
 //! decorative: it keys the deposit rate the sell pane displays, and the six faction houses charge
 //! 5% where the neutral goblin house charges 25%.
@@ -14,8 +14,8 @@
 //! and Auctions (`"owner"`) are three independent server queries into one window. Each holds at
 //! most one 50-row page — the server's own cap — plus the pre-cap match count the pager needs,
 //! plus its own sort stack, plus its own update event. The reference keeps them just as far apart
-//! (wow-re's auction node §1: three arrays, three counts, three sort stacks, and a fire-site
-//! census in which every `AUCTION_*_LIST_UPDATE` is fired by whatever just touched *its* array).
+//! (three arrays allocated by `0x4cc0f0`, three counts, three sort stacks, and every
+//! `AUCTION_*_LIST_UPDATE` fired by whatever just touched *its* array).
 //! So a list-update event here is a statement about **one** list; firing the other two runs the
 //! stock addon's other tabs over state they were never given, and the Auctions tab answers that
 //! by crashing (decision 2308).
@@ -28,7 +28,7 @@
 //! of the last one and *drops it with no failure event*, which is why the Search button polls
 //! [`benilla_ui::script::UiScript::set_auction_can_query`] every frame instead of reacting to a
 //! refusal. The window opening clears the gate, so the first search is always allowed. (INTERIM,
-//! decision 1511 — pinned to the in-flight §5's TU-2.)
+//! decision 1511.)
 //!
 //! The packet handlers ([`net`], in the net handler table — decision 2305) fill [`AuctionOpen`]
 //! from the wire. Each frame
@@ -38,7 +38,7 @@
 //! fires the events the reference Lua drives. [`drain_auction`] pulls the Lua intents back out
 //! into the auction `CMSG`s. The standardized NPC-session range guard ([`crate::ui_session`])
 //! client-side-closes the window when the player walks away from the auctioneer. That radius is
-//! **VERIFIED** rather than borrowed (wow-re §5 TU-6): the auction window's own interaction cell
+//! the auction window's own rather than borrowed: its interaction cell `[0xb72410]`
 //! holds `30.864194869995117` — a radius of `5.5555553` yd — which is exactly the service gate
 //! the cursor already greys at, so the guard's existing constant is the right one. The close
 //! sends no packet, also byte-confirmed.
@@ -65,14 +65,14 @@ use sort::SortStack;
 
 mod net;
 
-/// The browse query rate limit, in seconds. **VERIFIED** (wow-re §5 TU-2): the reference arms the
+/// The browse query rate limit, in seconds (`QueryAuctionItems 0x4ce980`): the reference arms the
 /// gate with `tick + 0x1388` *after* the packet goes out, re-checks it inside the query itself,
 /// and its refusal path fires **nothing at all** — no event, no error. That silence is why the
 /// Search button polls the gate every frame instead of waiting to be told no.
 const QUERY_THROTTLE_SECS: f64 = 5.0;
 
 /// The time-left buckets, in milliseconds — the thresholds the reference's four
-/// `AUCTION_TIME_LEFT` strings key off. **VERIFIED** (wow-re §5 TU-3: the table at `0x8072a8`).
+/// `AUCTION_TIME_LEFT` strings key off (the table at `0x8072a8`).
 const TIME_LEFT_SHORT_MS: u32 = 30 * 60 * 1000;
 const TIME_LEFT_MEDIUM_MS: u32 = 2 * 60 * 60 * 1000;
 const TIME_LEFT_LONG_MS: u32 = 8 * 60 * 60 * 1000;
@@ -90,7 +90,7 @@ const TIME_LEFT_IMPLAUSIBLE_MS: u32 = 7 * 24 * 60 * 60 * 1000;
 /// house's category filter.
 ///
 /// Read directly off the shipped table when the polarity was still ambiguous, and since
-/// **independently confirmed at the bytes** (wow-re §5 TU-4). Guessing it backwards would have
+/// **independently confirmed at the bytes** (`0x4cf9c0`). Guessing it backwards would have
 /// emptied the filter instead of trimming it: every row carrying the bit is an obsolete or unused subclass —
 /// Spear, Buckler(OBSOLETE), the OBSOLETE quivers, bolts and wands, Engineering Bag — and every
 /// subclass a player can actually buy (Cloth, Leather, Mail, Plate, Shield, Arrow, Bullet, the
@@ -105,8 +105,8 @@ const SUBCLASS_HIDDEN_FROM_AUCTIONS: u32 = 0x2;
 /// which is what keeps this feature clear of decisions 1234/1260 — we ship the structure, the
 /// install supplies the words.
 ///
-/// Each entry is the reference's `0x807060` row `{itemClassId, hasSubclassFilter}` (wow-re
-/// auction-house §9.1): a class whose flag is 0 offers no subclass rows and no inventory-slot rows.
+/// Each entry is the reference's `0x807060` row `{itemClassId, hasSubclassFilter}`: a class whose
+/// flag is 0 offers no subclass rows and no inventory-slot rows.
 const AUCTION_CLASSES: [(u32, bool); 10] = [
     (2, true),   // Weapon
     (4, true),   // Armor
@@ -197,9 +197,9 @@ pub(crate) struct AuctionListSlot {
 /// - a *successful* `SMSG_AUCTION_COMMAND_RESULT` is consumed straight into a re-query
 ///   (`crate::ui_auction::net`) and leaves no record — only a *failed* one surfaces, and only
 ///   as an error line;
-/// - a browse query the throttle refuses is dropped with **no event at all** (the §5-verified
-///   silence this module's header describes), so "refused" and "sent" differ only in what went
-///   out on the wire.
+/// - a browse query the throttle refuses is dropped with **no event at all** (the silence this
+///   module's header describes), so "refused" and "sent" differ only in what went out on the
+///   wire.
 ///
 /// Nothing in the client needs any of it: the window reacts to the *effects*. It therefore lives
 /// in one clearly-named block that the client never reads, rather than being smeared through the
@@ -951,9 +951,9 @@ fn drain_auction(
 mod tests {
     use super::*;
 
-    /// The tree off the player's own DBCs carries the reference's two gates (wow-re
-    /// auction-house §9.1/§9.2): the `0x807060` class flag, and `ItemSubClass.Flags & 0x200` for
-    /// the inventory-slot rows — which Shield does NOT carry, though it is Armor.
+    /// The tree off the player's own DBCs carries the reference's two gates: the `0x807060` class
+    /// flag, and `ItemSubClass.Flags & 0x200` (`0x4cfb63`) for the inventory-slot rows — which
+    /// Shield does NOT carry, though it is Armor.
     #[test]
     fn the_tree_carries_the_reference_gates() {
         let data = benilla_formats::wow_data_or_skip!();

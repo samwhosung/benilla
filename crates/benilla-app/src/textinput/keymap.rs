@@ -5,10 +5,10 @@
 //! action on which OS — the director's "everything OS-native" call (decision 0301).
 //!
 //! The Windows/Linux table doubles as the reference law where the 1.12 client had a chord at all
-//! (RF-0082 §4: Ctrl+arrows word-granular, Ctrl+A/C/X/V, the Ctrl/Shift+Insert + Shift+Delete
-//! CUA mirrors). Ctrl+Backspace/Delete word deletes are modern-OS additions with no 1.12
-//! counterpart; the whole macOS table is the platform's native law (Cmd/Option families), not
-//! the (Windows) reference's.
+//! (the key handler `0x77b160`: Ctrl+arrows word-granular, Ctrl+A/C/X/V, the Ctrl/Shift+Insert +
+//! Shift+Delete CUA mirrors). Ctrl+Backspace/Delete word deletes are modern-OS additions with no
+//! 1.12 counterpart; the whole macOS table is the platform's native law (Cmd/Option families),
+//! not the (Windows) reference's.
 //!
 //! One rule spans both of those platforms and is easy to miss: **AltGr is not Ctrl**. Windows and
 //! Linux both deliver AltGr as Ctrl+Alt, and European layouts type real letters with it, so the
@@ -119,7 +119,7 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
 }
 
 /// Windows/Linux: the Ctrl law — the reference client's own chords where 1.12 had them
-/// (RF-0082 §4), plus the modern Ctrl word-deletes.
+/// (`0x77b160`), plus the modern Ctrl word-deletes.
 fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
     use EditUnit::{Char, Edge, Word};
     let mv = |unit, back| {
@@ -131,7 +131,7 @@ fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
     };
     let del = |unit, back| Some(Chord::Edit(EditAction::Delete { unit, back }));
     match key {
-        // Ctrl picks the word-granular helper — the ref's own fork (RF-0082 §4).
+        // Ctrl picks the word-granular helper — the ref's own fork on its Ctrl test `0x41f8f0(1)`.
         KeyCode::ArrowLeft | KeyCode::ArrowRight => {
             let back = key == KeyCode::ArrowLeft;
             if m.ctrl {
@@ -150,7 +150,7 @@ fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
         // Ctrl+Home/End = plain Home/End in a single-line box.
         KeyCode::Home => mv(Edge, true),
         KeyCode::End => mv(Edge, false),
-        // Shift+Delete = Cut — the CUA mirror the ref itself honors (RF-0082 §4) — else the
+        // Shift+Delete = Cut — the CUA mirror the ref itself honors (`0x77b160`) — else the
         // modern Ctrl word-delete, else one char.
         KeyCode::Backspace => {
             if m.ctrl {

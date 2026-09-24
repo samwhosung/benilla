@@ -1,5 +1,5 @@
 //! **Weapon-icon substitution** — the handful of spells that show an *equipped weapon's* icon
-//! instead of their own (decisions 0230 + 0231; wow-re `attack-icon-substitution.md`).
+//! instead of their own (decisions 0230 + 0231; `0x4e6870` melee, `0x4e6990` ranged).
 //!
 //! Two spells' worth of law, but it is character-level rather than spell-level: the melee
 //! auto-attack borrows the main hand's icon (or `Spell-Reset` when unarmed), a ranged auto-repeat
@@ -19,16 +19,16 @@ use crate::net::{NetCommands, ObjectStore, Objects};
 const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 
 /// Equipment slot 17 = `EQUIPMENT_SLOT_RANGED` — the ranged helper `0x4e6990`'s read
-/// (`[ecx+0x88]`, `0x88 = 17×8`; wow-re `attack-icon-substitution.md` §5).
+/// (`[ecx+0x88]`, `0x88 = 17×8`).
 const EQUIPMENT_SLOT_RANGED: u8 = 17;
 
 /// Weapon subclass 16 = thrown — the ranged icon helper's skip (`0x4e6990`'s `0x5d9f90 == 0x10`
 /// test): a thrown weapon never substitutes its icon, so Throw keeps the spell's own face.
 const ITEM_SUBCLASS_THROWN: u32 = 16;
 
-/// The client's unarmed/disarmed auto-attack icon (wow-re `attack-icon-substitution.md`, the
-/// hardcoded string at `0x84bf58`) — what the melee auto-attack shows when there is no main-hand
-/// weapon to borrow from, instead of spell 6603's `Temp` placeholder (decision 0231).
+/// The client's unarmed/disarmed auto-attack icon (the hardcoded string at `0x84bf58`) — what the
+/// melee auto-attack shows when there is no main-hand weapon to borrow from, instead of spell
+/// 6603's `Temp` placeholder (decision 0231).
 const SPELL_RESET_ICON: &str = "Interface\\Buttons\\Spell-Reset";
 
 /// `ItemClass` 2 — **WEAPON**: what the disarmed guard tests on the hand it just fetched
@@ -59,11 +59,11 @@ fn main_hand_item(
 }
 
 /// The character's melee auto-attack icon (decision 0231; the client's melee helper `0x4e6870`).
-/// The helper's four steps, in order (wow-re `attack-icon-substitution.md` §7):
+/// The helper's four steps, in order:
 ///
 /// 1. the **current shapeshift form's own attack face** when its `SpellShapeshiftForm` row carries
 ///    one (the `+0x34` AttackIconID read, `0x4e68af`–`0x4e68da` — a cat's paw, a bear's swipe;
-///    wow-re `action-spell-icon-apis.md` §3.3, closing decision 0231's deferred form case);
+///    closing decision 0231's deferred form case);
 /// 2. the **disarmed guard** (`0x4e68df`) → [`SPELL_RESET_ICON`], weapon equipped or not
 ///    (decision 1863, closing 0231's other deferred case);
 /// 3. the equipped main-hand weapon's icon;
@@ -106,11 +106,10 @@ pub(crate) fn melee_auto_attack_icon(
 }
 
 /// The equipped ranged weapon's inventory icon (slot 17 → `ItemDisplayInfo`), for the ranged
-/// icon substitution (`0x4e6990`, decision 0231's deferred case — wow-re
-/// `attack-icon-substitution.md` §5): a **thrown** weapon is skipped (the helper's
-/// `0x5d9f90 == 0x10` test), and `None` — missing weapon, thrown, or an unstreamed item — falls
-/// back to the spell's OWN icon at the caller, never `Spell-Reset` (the helper's `0x4e6a44` null
-/// return hands over to the normal SpellIconID path).
+/// icon substitution (`0x4e6990`, decision 0231's deferred case): a **thrown** weapon is skipped
+/// (the helper's `0x5d9f90 == 0x10` test), and `None` — missing weapon, thrown, or an unstreamed
+/// item — falls back to the spell's OWN icon at the caller, never `Spell-Reset` (the helper's
+/// `0x4e6a44` null return hands over to the normal SpellIconID path).
 pub(crate) fn ranged_weapon_icon(
     store: &ObjectStore,
     objects: &Objects,
@@ -245,8 +244,8 @@ mod tests {
         assert_eq!(icon(DISARMED, None, 0), SPELL_RESET_ICON);
     }
 
-    /// The precedence the helper reads in (§7 of the wow-re note): the **form** override is step
-    /// 1 and the disarmed guard step 2, so a disarmed bear still swipes with its own paw.
+    /// The precedence the helper `0x4e6870` reads in: the **form** override is step 1 and the
+    /// disarmed guard step 2, so a disarmed bear still swipes with its own paw.
     #[test]
     fn the_form_icon_outranks_the_disarmed_guard() {
         assert_eq!(icon(DISARMED, Some(2), 1), BEAR_ICON);

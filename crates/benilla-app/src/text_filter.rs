@@ -1,6 +1,5 @@
 //! The two 1.12 text filters — `profanityFilter`'s **masker** and `spamFilter`'s **predicate**
-//! (decision 2077; wow-re `system/ui/scratch/text-filter-law.md`, a §5 round of seven workers with
-//! an emulated run of the binary's own compile/exec over the shipped lists).
+//! (decision 2077; an emulated run of the binary's own compile/exec over the shipped lists).
 //!
 //! Both are **PCRE over shipped DBCs**, not word lists: `ChatProfanity.dbc` (2289 rows) feeds the
 //! masker `0x4a1a60`, `SpamMessages.dbc` (28 gold-seller URL patterns) feeds the predicate
@@ -49,9 +48,8 @@
 //! - **`\<` and `\>` are word boundaries, not literals.** Blizzard *patched* PCRE's escape table
 //!   (`.rdata 0x812330`) to give `\<`, `\>` and `\b` the identical code `−4`, so both are
 //!   non-directional `\b`. Stock PCRE has no `<`/`>` entries and would make them literals, which
-//!   would kill the entire ASCII half of `ChatProfanity`. wow-re settled this twice — at the table,
-//!   and by running the binary's own compiler on a reversal control (`\>twat\<` behaves exactly
-//!   like `\<twat\>`).
+//!   would kill the entire ASCII half of `ChatProfanity`. The binary's own compiler, run on a
+//!   reversal control, agrees: `\>twat\<` behaves exactly like `\<twat\>`.
 //! - **CASELESS folds ASCII only** — the fold table `0x873c40` is the identity over `0x80..=0xff`.
 //!   `regex`'s own `(?i)` folds Unicode, which would match `É` where the reference matches nothing,
 //!   so instead both the pattern's literals and the subject are ASCII-lowercased and the match runs
@@ -352,9 +350,9 @@ mod tests {
             .collect()
     }
 
-    /// `\<` and `\>` are **word boundaries**, and non-directional — wow-re's reversal control,
-    /// which could have failed: the reversed spelling behaves identically to the ordinary one and
-    /// to `\b`, and none of the three matches inside a word.
+    /// `\<` and `\>` are **word boundaries**, and non-directional — the reversal control run
+    /// through the binary's own compiler, which could have failed: the reversed spelling behaves
+    /// identically to the ordinary one and to `\b`, and none of the three matches inside a word.
     #[test]
     fn the_angle_escapes_are_non_directional_word_boundaries() {
         for spelling in [r"\<twat\>", r"\>twat\<", r"\btwat\b"] {
@@ -373,8 +371,8 @@ mod tests {
     }
 
     /// The mask is **in place, length-preserving, case-insensitive and unanchored where the pattern
-    /// is** — and the phase **carries across calls**. This is wow-re's oracle transcript, run
-    /// against the binary's own bytes, reproduced pattern for pattern.
+    /// is** — and the phase **carries across calls**. This is an oracle transcript, run against
+    /// the binary's own bytes, reproduced pattern for pattern.
     ///
     /// The list order is the oracle's: `\<fagg[aeiouy]t` before `\<twat\>`, which is what makes the
     /// *later* word in the sentence take the *earlier* mask characters. Had the client scanned in
@@ -528,9 +526,8 @@ impl ChatTextFilter<'_> {
     ///
     /// **A GM viewer skips this arm and still reaches the mask** — all three of the spam arm's
     /// exits converge on `0x49abb7`, the profanity arm's entry, not on the epilogue `0x49afd7`.
-    /// (wow-re settled that at the bytes after the note first said "bypassing both arms"; the
-    /// reductio is that the wrong reading would make `spamFilter = 0` disable profanity masking
-    /// too.)
+    /// (Reading it as "bypassing both arms" is wrong: it would make `spamFilter = 0` disable
+    /// profanity masking too.)
     pub(crate) fn should_drop(
         &self,
         chat_type: u8,

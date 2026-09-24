@@ -1,5 +1,4 @@
-//! Cast-failure display strings — the reference's **two-layer** pipeline, byte-verified and
-//! §5 cross-checked (wow-re `system/spell/scratch/cast-fail-strings.md`; decision 0427):
+//! Cast-failure display strings — the reference's **two-layer** pipeline (decision 0427):
 //!
 //! 1. `HandleCastFailed 0x6e1a00` resolves the wire reason through the name-identity table
 //!    `0x6e23e0` (wire order = the vmangos `SpellCastResult` enum) into
@@ -58,8 +57,8 @@
 //!
 //! Stripping is a **deliberate divergence**, now byte-confirmed as one: on a
 //! bad id or an absent word the reference jumps to the default arm with the pointer still on the
-//! *unfilled* template, so it displays a literal `Requires %s` (wow-re §WIRE-ARGS C3 — the fill
-//! path's own buffer swap sits after the printf and is skipped). We show the bare stem instead:
+//! *unfilled* template, so it displays a literal `Requires %s` (the fill path's own buffer swap
+//! `0x6e21d2` sits after the printf and is skipped). We show the bare stem instead:
 //! "Requires" reads as terse, "Requires %s" reads as broken software (§7 — judge by the result).
 //! **`0x56` is the exception, and it is the reference's own** ([`Fill::Nothing`]): its three
 //! failure exits land on the function epilogue, not on that default arm, so an unfillable
@@ -297,8 +296,7 @@ impl FailArgs<'_> {
     /// The `%s` fill for the argument-formatted reasons this module owns, or `None` to leave the
     /// template to the strip fallback.
     ///
-    /// Both arms are byte-verified and §5 cross-checked (wow-re `cast-fail-strings.md`
-    /// §WIRE-ARGS): each reads the **wire's** first argument word — `[ebx+8]`, the handler's own
+    /// Each of the two arms reads the **wire's** first argument word — `[ebx+8]`, the handler's own
     /// stack slot, never a re-read of `Spell.dbc` — indexes its DBC store, and `SStrPrintf`s the
     /// reason's `SPELL_FAILED_*` template. The errorId stays the default `0x2c` (`"%s"`) for both,
     /// so what the player reads IS the filled template. A single-`%s` template is what makes a
@@ -1113,7 +1111,7 @@ mod tests {
         }
     }
 
-    /// The table's byte-verified anchors (wow-re cast-fail-strings.md).
+    /// The `0x6e23e0` table's anchors.
     #[test]
     fn the_key_table_holds_the_verified_anchors() {
         assert_eq!(CAST_FAIL_KEYS.len(), 146);

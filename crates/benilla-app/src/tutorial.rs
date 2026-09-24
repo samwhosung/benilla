@@ -1,9 +1,9 @@
-//! The tutorial system (decision 1976; wow-re `system/ui/scratch/tutorial-flags.md`): the two
+//! The tutorial system (decision 1976; the reference's `[0x4b5150, 0x4b5a60)`): the two
 //! bit banks, the fire-once trigger, the acknowledge-and-send setter, the timers, the popup
 //! sound, and the trigger sites the app can produce — everything behind the stock
 //! `TutorialFrame.xml`.
 //!
-//! ## Two banks, not one (§1, §2)
+//! ## Two banks, not one (`0xb711b8`, `0xb711e4`)
 //!
 //! Both are filled byte for byte from the same `SMSG_TUTORIAL_FLAGS`, and until it lands no
 //! tutorial can fire. **Bank A** is the fire-once bank: [`Tutorials::trigger`] tests it, sets it,
@@ -13,14 +13,14 @@
 //! `ClearTutorials`/`ResetTutorials` write both banks and send. So A ⊇ B, and doing the thing
 //! (moving, chatting, adding a friend…) suppresses the tutorial about it, account-wide.
 //!
-//! ## The trigger (§3)
+//! ## The trigger (`0x4b5390`)
 //!
 //! `TriggerTutorial(id, delayMs)`: no bank → silent; bank-A bit set → silent; else the bit is
 //! set and, with a zero delay, the `TutorialPopup` cue plays and the event fires now; with any
 //! other delay (unsigned — the 10 s Targeting popup is the one site) a timer holds it. The
 //! reference bounds-checks nothing; ours refuses an id past the bank as a no-op.
 //!
-//! ## The sites (§4, §5)
+//! ## The sites (the callers of `0x4b5390` and `0x4b54c0`)
 //!
 //! Fifty-one trigger sites and seven acknowledge sites exist in the reference. The ones this app
 //! can produce are wired — the self-descriptor edges here, the packets and drains at their own
@@ -74,7 +74,7 @@ pub(crate) mod id {
     pub(crate) const KEYRINGS: u32 = 0x31;
 }
 
-/// The level-gated arm of the `SMSG_LEVELUP_INFO` handler (§4): in the handler's own order,
+/// The level-gated arm of the `SMSG_LEVELUP_INFO` handler (`0x5e38c0`): in the handler's own order,
 /// each fires when the new level is at least its threshold.
 const LEVEL_TRIGGERS: [(u32, u32); 8] = [
     (3, 0x16),  // Chatting
@@ -90,9 +90,9 @@ const LEVEL_TRIGGERS: [(u32, u32); 8] = [
 /// The Targeting popup's delay at its one site (`0x514a8d mov edx,0x2710`).
 pub(crate) const TARGETING_DELAY_MS: u32 = 10_000;
 
-/// The Movement popup's silence window (`0x482ff7`: elapsed − stamp − 90 000 ≥ 0) — INFERRED as
-/// ninety seconds after world enter with no movement input (§4's row reads the stamp getter,
-/// not its meaning).
+/// The Movement popup's silence window (`0x482ff7`: elapsed − stamp − 90 000 ≥ 0) — inferred as
+/// ninety seconds after world enter with no movement input (the stamp getter `0x5143e0` is
+/// read, its meaning is not).
 const MOVEMENT_SILENCE: Duration = Duration::from_millis(90_000);
 
 /// A site's ask of the tutorial system — written from wherever the reference's site lives.
@@ -169,7 +169,7 @@ impl Tutorials {
         self.timers.clear();
     }
 
-    /// `TriggerTutorial(id, delayMs)` (§3).
+    /// `TriggerTutorial(id, delayMs)` (`0x4b5390`).
     pub(crate) fn trigger(&mut self, id: u32, delay_ms: u32, now: Instant) {
         let Some(bank) = self.fire_once.as_mut() else {
             return; // no bank yet: silent
@@ -186,7 +186,7 @@ impl Tutorials {
         }
     }
 
-    /// `SetTutorialFlag(id)` (`0x4b54c0`, §5): bank B's bit gates; both banks set; the id's timer
+    /// `SetTutorialFlag(id)` (`0x4b54c0`): bank B's bit gates; both banks set; the id's timer
     /// cancelled; the 0-based id sent. The reference dereferences an absent bank B; ours treats
     /// that as a no-op.
     pub(crate) fn acknowledge(&mut self, id: u32) {
@@ -254,7 +254,7 @@ impl Tutorials {
     }
 }
 
-/// The self descriptor's last-seen fields, for the edge-triggered sites (§4): the level-up
+/// The self descriptor's last-seen fields, for the edge-triggered `0x4b5390` sites: the level-up
 /// arm, the ghost flag, the resting flag, the PvP flag, the rest state.
 #[derive(Default)]
 struct SelfWatch {
@@ -297,9 +297,9 @@ fn feed_tutorials(
     }
 
     // The item-received handler's sites, over the item's template: Backpack unconditionally;
-    // Equippable Items for an inventory type with an equip slot (INFERRED as any non-zero type —
-    // the reference's 23-bit mask is not carved bit by bit); Hearthstones by entry; Ranged
-    // Weapons for a ranged type on a non-hunter; Keyrings by the slot band.
+    // Equippable Items for an inventory type with an equip slot (inferred as any non-zero type —
+    // the reference's 23-bit mask (`0x809200`) is not decoded bit by bit); Hearthstones by entry;
+    // Ranged Weapons for a ranged type on a non-hunter; Keyrings by the slot band.
     let pushes = std::mem::take(&mut tutorials.pushes);
     let class = self_q.single().ok().and_then(|s| s.0.unit_class());
     for (entry, bag, slot) in pushes {
@@ -346,8 +346,8 @@ fn feed_tutorials(
     }
 }
 
-/// The self descriptor's edge sites (§4): the `SMSG_LEVELUP_INFO` arm on the level rising, the
-/// ghost and resting flags, the PvP flag, the rested table's one live row, and the mover
+/// The self descriptor's `0x4b5390` edge sites: the `SMSG_LEVELUP_INFO` arm on the level rising,
+/// the ghost and resting flags, the PvP flag, the rested table's one live row, and the mover
 /// entering water — a change each, never the login descriptor. The memory is per world session:
 /// the bring-up resets it, so a re-login's first descriptor arms silently like the first one.
 fn watch_self(
@@ -488,7 +488,7 @@ fn run_world_enter_cascade(
     }
 }
 
-/// The world-input sites (`0x514840`, §4/§5), bundled for the controller: a movement input
+/// The world-input sites (`0x514840`), bundled for the controller: a movement input
 /// acknowledges Movement and arms the 10 s Targeting popup; a mouse-look acknowledges Cameras.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct InputHooks<'w> {
