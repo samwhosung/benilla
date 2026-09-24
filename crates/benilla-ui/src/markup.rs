@@ -57,7 +57,7 @@
 //!
 //! ## Inferred, not verified
 //!
-//! Flagged here as well as at each site, because the note is explicit about what it proved:
+//! Flagged here as well as at each site:
 //!
 //! - **`|H` opens and `|h` closes, discriminated by case.** The remap sends both to one arm and the
 //!   case test itself was not disassembled; the class table above (class 4 is the whole
@@ -69,8 +69,9 @@
 //!   the decoder arm's scan was not disassembled.
 //! - **`0x77bc80`'s second argument is a byte budget**, not a token count — from the `(start, count)`
 //!   signature and the byte-budget shape of its sibling kernel `0x5c6940`.
-//! - **The end-of-buffer guard on [`ClassMap::advance`] is ours.** The note's excerpt of `0x77bb30`
-//!   shows no bound, and its class-0/class-4 "keep skipping" arms would spin on the zero terminator.
+//! - **The end-of-buffer guard on [`ClassMap::advance`] is ours.** The disassembled excerpt of
+//!   `0x77bb30` shows no bound, and its class-0/class-4 "keep skipping" arms would spin on the zero
+//!   terminator.
 //! - **The worked example is itself inferred, not independently verified** — it follows from the
 //!   verified mechanism above.
 
@@ -281,7 +282,7 @@ pub fn token_at(text: &str, at: usize) -> Option<Token<'_>> {
                 byte_len: 2,
             },
             // INFERRED (see the module doc): uppercase opens, lowercase closes. The remap sends both
-            // to one arm and the note does not disassemble the case test.
+            // to one arm and the case test itself was not disassembled.
             Some(b'H') => match parse_link_open(rest) {
                 Some((payload, byte_len)) => Token {
                     kind: TokenKind::LinkOpen { payload },
@@ -498,8 +499,8 @@ impl ClassMap {
     /// This is what `GetNumLetters` reports and what `SetMaxLetters` caps, so **classes 0/1/4/5 are
     /// not letters**: a 48-byte item link costs 14, its visible `[Chipped Claw]` and nothing more.
     ///
-    /// INFERRED: that the second argument is a byte budget (the note gives only the `(start, count)`
-    /// signature; the sibling kernel `0x5c6940` consumes bytes the same way). A token straddling the
+    /// INFERRED: that the second argument is a byte budget (only its `(start, count)` signature is
+    /// known; the sibling kernel `0x5c6940` consumes bytes the same way). A token straddling the
     /// end of the budget is counted whole and ends the walk — deliberately *not* the sibling
     /// kernel's run-to-the-NUL behaviour, which is a latent trap with no upside here.
     pub fn letters(&self, start: usize, byte_count: usize) -> usize {
@@ -1177,7 +1178,8 @@ mod tests {
     }
 
     /// The two degenerate ends the guard owns: a step that runs out of buffer while skipping escapes
-    /// lands on the far end rather than spinning (ours, not the note's — see [`ClassMap::advance`]).
+    /// lands on the far end rather than spinning (ours, not the reference's — see
+    /// [`ClassMap::advance`]).
     #[test]
     fn a_step_that_runs_out_of_buffer_lands_on_the_far_end() {
         let map = ClassMap::new("ab|cffff0000");
