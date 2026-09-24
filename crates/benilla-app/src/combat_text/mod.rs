@@ -1,5 +1,4 @@
-//! **Floating combat text** (decision 0137 phase 2) — the client's WORLDTEXTSTRING engine
-//! (wow-re `playername/scratch/worldtext-spawn-and-law.md`, §5-verified 2026-07-05).
+//! **Floating combat text** (decision 0137 phase 2) — the client's WORLDTEXTSTRING engine.
 //!
 //! The law, transcribed: a combat-log SMSG's handler picks a **category 0–5** and submits a string
 //! over the damage/outcome **recipient**; the text is **world-anchored** — the unit's OVERHEAD
@@ -14,10 +13,9 @@
 //! head; the XP emitter (category 4) is self-anchored by design and skips the gate. Heals and
 //! energize NEVER float in 5875 (chat log only; there is no `CombatHealing` cvar).
 //!
-//! **The COLOR law** (wow-re `playername/scratch/combattext-color-law.md`, §5-verified
-//! 2026-07-06 — the director's "melee vs spell differ" CONFIRMED): the emitters key two bits —
-//! `B` (record NULL ⇒ melee, or **AttributesEx3 bit-15** — `SpellRec+0x24`'s word; the note's
-//! "+0x25 sign" byte) and `K` (the `0x5efea0` **source-ownership** class: self / owned-by-me /
+//! **The COLOR law** (the director's "melee vs spell differ" CONFIRMED): the emitters key two bits
+//! — `B` (record NULL ⇒ melee, or **AttributesEx3 bit-15** — `SpellRec+0x24`'s word, tested as the
+//! sign of byte `+0x25`) and `K` (the `0x5efea0` **source-ownership** class: self / owned-by-me /
 //! other). Master gate: the CombatDamage cvar. Self melee → **WHITE** (NULL override ⇒ the row
 //! default); self spell/periodic → **GOLD** `0xFFFFDE00`; pet melee → **ORANGE** `0xFFFF8400`
 //! (PetMeleeDamage cvar); pet spell → GOLD (PetSpellDamage cvar); **any OTHER source is
@@ -43,14 +41,14 @@
 //! reads "Resist" when the ball lands, a missed Sinister Strike at packet receive.
 //! [`missile_miss_text`] is that arrival half, fed by [`crate::entities::MissileMiss`].
 //!
-//! **The render geometry** (wow-re `worldtext-geometry-law.md`, §5-verified, 9af65294 — zero free
+//! **The render geometry** (zero free
 //! parameters; the anchor-seat half corrected here, see the seating comment in
 //! [`float_combat_text`]): the rise is added to **world z before projection**; the block is
 //! **h-centered with its bottom at** the projected point (rising above it), clamped on-screen —
 //! but only once the projector has ACCEPTED the point at all: a number whose anchor lands behind
 //! the camera or outside the viewport is **destroyed and its slot released**
-//! (`6c7d9d` → `6c6dda` → `0x6c86a0`; wow-re `object-layer/scratch/nameplate-offscreen-cull.md`,
-//! §5-VERIFIED 2026-08-15), never clamped to a border and never claiming a bucket-1 rect. Ours
+//! (`6c7d9d` → `6c6dda` → `0x6c86a0`),
+//! never clamped to a border and never claiming a bucket-1 rect. Ours
 //! clamped, which put another unit's numbers on the screen edge — the worldtext half of 1341's
 //! phantom plates, and the half that record's §7 wrongly called byte-attested;
 //! the on-screen size is
@@ -58,8 +56,8 @@
 //! and composes as `px = round_half_away(v × √(W²+H²))` — `v` the category's interpolated scale
 //! value, the diagonal the gx screencoord unit (`0x832a44/48` hold the live aspect basis; the
 //! first reading hardcoded its 4:3 value 0.6 — see [`text_px`]), the round being the gx
-//! `ScreenToPixelHeight` law (`0x5c6fa0`, wow-re `crates/font/src/screen_pixel.rs`, bit-exact
-//! difftested). At 1024×768 (diag 1280): normal number 23 px, crit settles 35 px, pop peaks ~70 px.
+//! `ScreenToPixelHeight` law (`0x5c6fa0`). At 1024×768 (diag 1280): normal number 23 px, crit
+//! settles 35 px, pop peaks ~70 px.
 //! The font is **whatever the Lua global `DAMAGE_TEXT_FONT` holds** when `0x6c8470` reads it —
 //! see [`DamageTextFont`] for the binding law (a plain `lua_gettable`, evaluated once, at the tail
 //! of the world-entry UI load, i.e. after every addon's `ADDON_LOADED`). `Fonts\FRIZQT__.TTF` is
@@ -68,9 +66,8 @@
 //! NULL handle and the combat text simply does not draw. Created flags 0 (`6c8493 xor edx,edx` —
 //! not `6c8498`, which is `mov ecx,esi`): no outline.
 //!
-//! **The ALPHA + SHADOW law** (`time_alpha_fade 0x6c82e0` — wow-re
-//! `playername/scratch/worldtext-alpha-shadow-law.md`, §5 pair + the emulated bit-exact difftest,
-//! 2026-07-12; the director's "XP text less visible than ref"): the per-tick fade REPLACES the
+//! **The ALPHA + SHADOW law** (the alpha fade `0x6c82e0`; the director's "XP text less visible
+//! than ref"): the per-tick fade REPLACES the
 //! live color's alpha byte (`mov [obj+0x23], bl` — the ARGB high byte), it never multiplies. The
 //! plateau between fade-in end and fade-out start is an **unconditional `(0xFF, 0x7F)`** — so the
 //! config table's packed alpha (row 4's `0x80`) is dead data, overwritten before it ever renders:
@@ -85,9 +82,9 @@
 //! black, `(al<<24)|0` → `SetShadowColor 0x5c27a0` with the static offset `0xce8804 =
 //! {0.002, 0.002}` (init `0x6c7c20`), every category, unconditionally.
 //!
-//! **The STORE seam caps the shadow** (font node `outline-bake-tint.md` §5, byte-verified):
+//! **The STORE seam caps the shadow**:
 //! `SetShadowColor`'s persistent store `0x5cd650` writes the shadow colour's alpha byte as
-//! **`min(shadowA, mainA)`** — and `time_alpha_fade` calls SetColor (text) *then* SetShadowColor
+//! **`min(shadowA, mainA)`** — and the alpha fade calls SetColor (text) *then* SetShadowColor
 //! every tick, so the RENDERED shadow alpha is `min(shadow lane, text alpha)`. The fade-out
 //! lane's byte-true `[128, 255]` inversion is dead past the text's own value: the rendered
 //! shadow steps up to ~0xFF at fade-out start, then tracks the text alpha down to **0** — it
@@ -96,13 +93,11 @@
 //! fraction**, converted per-axis at draw (`0x5c8710` → `ScreenToPixelWidth 0x5c7010` ×W /
 //! `ScreenToPixelHeight 0x5c6fa0` ×H, each `+0.5`-truncate rounded): `offset_px =
 //! {round(0.002·W), round(0.002·H)}`, drawn **down-right** (the Y-down ortho), shadow pass
-//! before main — the whole as-rendered law is wow-re
-//! `playername/scratch/worldtext-shadow-render-law.md` (§5 three pairs, 2026-07-13).
+//! before main.
 //!
 //! **The anti-overlap push IS real** — decision 0367, superseding 0363's "none exists" (that
 //! verdict was true of the worldtext code and wrong about the system: the push lives in the
-//! shared `UIUtil\SmartScreenRect` draw-time solver, wow-re
-//! `ui/scratch/smartscreenrect-solver-law.md`, §5 2026-07-13). Every frame each live string
+//! shared `UIUtil\SmartScreenRect` draw-time solver). Every frame each live string
 //! submits its desired rect — the clamped projected center ± its **crit-pop-scaled** measured
 //! half-extents — to claim **bucket 1** ([`crate::smart_rect`]), gets relocated off the strings
 //! already seated this frame, and draws from the returned rect (`0x6c7cc0` → `0x509520`,
@@ -187,7 +182,7 @@ pub(crate) struct WorldTexts(Vec<WorldText>);
 /// pointer is a borrowed `const char*` into the Lua TString, consumed before the call returns.
 /// `0x6c847c` is the **only** instruction in the image that reads this global.
 ///
-/// **When** is the whole finding. `0x6c8470` is not CRT init, as three wow-re notes had it — it
+/// **When** is the whole finding. `0x6c8470` is not CRT init — it
 /// runs from `0x401570 + 0x1620`, *after* the UI load `0x401602`, so after FrameXML has run
 /// `Fonts.xml` and after every non-LoadOnDemand addon's `ADDON_LOADED`. That is exactly where
 /// MikScrollingBattleText (`MikScrollingBattleText.lua:255`) and pfUI (`pfUI.lua:179`) assign it,
@@ -341,8 +336,7 @@ pub(crate) fn float_combat_text(
     order.sort_by_key(|&i| (texts.0[i].anchor, std::cmp::Reverse(texts.0[i].slot)));
     // A number whose anchor fails the projector's accept verdict is **destroyed, and its slot
     // released** (`6c7d9d` → `6c6dda` → `0x6c86a0`) — not skipped for a frame, and never clamped
-    // to a border (wow-re `object-layer/scratch/nameplate-offscreen-cull.md`, §5-VERIFIED
-    // 2026-08-15). Collected here and reaped after the walk, since the walk holds the list.
+    // to a border. Collected here and reaped after the walk, since the walk holds the list.
     let mut culled: Vec<usize> = Vec::new();
     for i in order {
         let t = &texts.0[i];
@@ -402,7 +396,7 @@ pub(crate) fn float_combat_text(
         // half-extents, run it through claim bucket 1 — normalize → solve → clamp → claim
         // ([`crate::smart_rect`]) — and place the string at the SOLVED rect's center. The ink
         // then sits h-centered with its BOTTOM at that point: the string's own justify pair at
-        // creation (`6c8254 push 0x2` in `string_measure_layout`'s `GxuFontCreateString` —
+        // creation (`6c8254 push 0x2` in the measure layout `0x6c81a0`'s `GxuFontCreateString` —
         // vertical justify 2 = BOTTOM through `ComputeAnchor 0x5cdf70`'s `anchor.y = h +
         // anchor.y` arm; horizontal 0 = left, the caller pre-subtracts hw → net h-centered), so
         // the ink rises above the seat point while the claimed rect brackets it — the ref's
@@ -411,7 +405,7 @@ pub(crate) fn float_combat_text(
             // The claimed box is the ref's MEASURED BLOCK under its own units quirk — the box
             // the solver sees runs 1/G48 (~1.667×) taller and 1/G44 (~1.25×) wider than the
             // rendered glyphs, the reference's generous size-proportional padding
-            // ([`claimed_box_px`], wow-re `worldtext-measured-block-wh-law.md`).
+            // ([`claimed_box_px`], `0x6c81a0`).
             let claim = claimed_box_px(b.width(), size_value, viewport);
             let (hw, hh) = (claim.x * 0.5, claim.y * 0.5);
             let cx = screen

@@ -1,6 +1,5 @@
-//! **Chat bubbles** — `CGChatBubbleFrame` (wow-re `object-layer/scratch/chat-bubble.md`,
-//! §5-verified 2026-07-11; decision 0288's phase-9 tail, landed by decision 0598): the
-//! over-the-head speech bubble a chat line spawns, a **2-D overlay** like the V-plate
+//! **Chat bubbles** — `CGChatBubbleFrame` (decision 0288's phase-9 tail, landed by decision
+//! 0598): the over-the-head speech bubble a chat line spawns, a **2-D overlay** like the V-plate
 //! ([`crate::vplates`]) and unlike the world-pass overhead *names* ([`crate::nameplates`]).
 //!
 //! The pinned law, transcribed:
@@ -31,15 +30,14 @@
 //!   the **MD20 header image**, i.e. the **Stand sequence CAaBox's Z extent**, a file constant
 //!   with no bone matrix anywhere in its call tree — and the scaled product is **latched** at
 //!   `bubble+0x354` behind a parity guard, so it is queried exactly **once per chat line**
-//!   ([`crate::entities::StandBoxHeight`], wow-re's anchor cross-check 2026-08-17; 1406).
+//!   ([`crate::entities::StandBoxHeight`], 1406).
 //! - **Stacking** (`0x4b1060`, the per-frame pass over ALL live bubbles — one caller, `0x4817a3`):
 //!   each bubble is its own frame and its frame LEVEL is restamped every frame from the CAMERA's
 //!   distance to the speaker. The list re-sorts farthest-first (`0x4b1360`, comparing
 //!   `[bubble+0x350]` = |cam − unit|², written at `0x4b12c0`), then a head→tail walk stamps
 //!   `SetFrameLevel(2), (3), (4)…` (`0x4b1309`). Level outranks draw layer in the client's total
 //!   order, so overlapping bubbles stack as WHOLE cards with the nearest speaker's on top —
-//!   nothing interleaves. ([`level_z`]; benilla read the bytes for this one, 1504 — wow-re's
-//!   `chat-bubble.md` covers the spawn/geometry/anchor and never reached the manager tick.)
+//!   nothing interleaves. ([`level_z`]; benilla read the bytes for this one, 1504.)
 //!
 //! Named divergences (all deliberate):
 //! - ~~**`ChatBubblesParty` defaults ON**~~ — **no longer a divergence (1804).** It shipped `"1"`
@@ -48,8 +46,8 @@
 //!   [`crate::vplates::VPlateMode`], whose enemy plates were the same shape of pin.
 //! - **The v1 kind set is SAY/YELL/PARTY + monster say/yell.** The byte gate is
 //!   "sender resolves", not a type whitelist, which *implies* guild/officer/whisper/emote
-//!   bubbles too — but that category claim is INFERRED on an OPEN wire-type remap
-//!   (chat-bubble.md §1) and contradicts the remembered reference look, so the uncontested
+//!   bubbles too — but that category claim is inferred, resting on an open wire-type remap
+//!   (`0x49a870`), and contradicts the remembered reference look, so the uncontested
 //!   set ships and a capture can widen it ([`bubble_cvar`]).
 //! - ~~**The anchor height is the posed overhead attachment**~~ — **REFUTED and removed (1406).**
 //!   This shipped as an INFERRED equivalence ("both are the head-region attachment height,
@@ -91,9 +89,9 @@ use benilla_world::view::WorldCamera;
 /// they were a pair of `const bool` from 0598 until the options window had a page to put
 /// them on, which is exactly the shape 1134 calls a row over a frozen gate.
 ///
-/// **Both defaults are the binary's own** (`ChatBubbles` `"1"`, `ChatBubblesParty` `"0"` — wow-re
-/// `object-layer/scratch/chat-bubble.md`). `party` shipped ON from 0598 to 1804 on the director's
-/// `/p` ask; the row is on the Chat page, one click from where it was.
+/// **Both defaults are the binary's own** (`ChatBubbles` `"1"`, `ChatBubblesParty` `"0"`).
+/// `party` shipped ON from 0598 to 1804 on the director's `/p` ask; the row is on the Chat page,
+/// one click from where it was.
 #[derive(Resource)]
 pub(crate) struct BubbleConfig {
     /// `ChatBubbles` — say/yell and their monster variants.
@@ -136,7 +134,7 @@ const BORDER_FRAC: f32 = 16.0 / 1024.0;
 /// over the frame's bottom edge piece: its art carries the border lines that make the seam read
 /// continuous, and the reference gets the same result from its own layer key (the tail is an
 /// ARTWORK texture, the text an ARTWORK font string, and a batch drains every texture before
-/// every font string — wow-re `ui/scratch/draw-order-law.md` §4).
+/// every font string — `0x76fb00`).
 const Z_BG: u64 = 0;
 const Z_EDGE: u64 = 1;
 const Z_TAIL: u64 = 2;

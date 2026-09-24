@@ -8,8 +8,8 @@
 //!
 //! Regimes (decisions 0049 → 0083/0087):
 //! - **Gait** — the directly-cross-faded ground/swim gaits + idle: Stand / Walk / Run / Fast-run by speed,
-//!   WalkBackwards when moving back, the swim ids when swimming (verified client selector, wow-5875-re
-//!   RF-0057). A change cross-fades to the new clip over its `blend_time` instead of snapping.
+//!   WalkBackwards when moving back, the swim ids when swimming (the client's selector `0x5fd8b0`).
+//!   A change cross-fades to the new clip over its `blend_time` instead of snapping.
 //! - **Special** — the stand-state poses (sit/sleep/kneel: down → loop → up) as one-shot-bracketed
 //!   loops, **preemptible** (decision 0055), plus the jump's enter/hang. The jump's *landing* is NOT a
 //!   bracket: [`select::Mode::Land`] is a plain pick from the input at touchdown, freely overwritten the
@@ -20,7 +20,7 @@
 //!   torso-masked overlay ([`AnimClip::upper_node`]) while the base keeps driving the legs underneath —
 //!   never dropped, never bracket-gated.
 //!
-//! The playback **rate** of a locomotion clip is `speed / sequence.moveSpeed` (wow-5875-re `0x5fe2f0`), so
+//! The playback **rate** of a locomotion clip is `speed / sequence.moveSpeed` (`0x5fe2f0`), so
 //! a unit moving faster than the clip's design speed cycles its legs proportionally faster (the fix for a
 //! backpedal that otherwise drags). Non-locomotion clips (idle, the jump/sit transitions — `moveSpeed 0`)
 //! play at 1×. Death (decoded health 0) overrides everything.
@@ -42,9 +42,9 @@ use bevy::prelude::*;
 use benilla_assets::AssetSet;
 use benilla_world::schedule::WorldStage;
 
-/// The pure animation-selection logic (RF-0057/0073 tables, movement/Special state, gait/swing/ready
-/// picks, playback-rate math) — kept in its own file as it carries the bulk of the unit-tested selector
-/// logic, separate from the Bevy driver systems in [`driver`].
+/// The pure animation-selection logic (the `0x5fd100`/0073 tables, movement/Special state,
+/// gait/swing/ready picks, playback-rate math) — kept in its own file as it carries the bulk of the
+/// unit-tested selector logic, separate from the Bevy driver systems in [`driver`].
 pub(crate) mod select;
 pub(crate) use select::{
     ease_strafe_yaw, move_flags, strafe_body_offset, swim_body_rotation, MovementState,
@@ -59,8 +59,8 @@ pub(crate) use twist::{wrap_pi, BodyTwist};
 /// The unit animation-LOD gate (decision 0448): park an off-frustum rig's per-bone pose
 /// evaluation — the clocks, the driver state machine, and the event tracks keep running, so
 /// off-screen combat stays audible (0075) and a re-appearing unit snaps to the absolute-clock
-/// pose. Shipped as a modernization; wow-re's 2026-08-13 election correction
-/// (`outdoor-object-pass-election.md`) made it the faithful direction instead — decision 1473
+/// pose. Shipped as a modernization, it is the faithful direction instead: the reference does not
+/// tick an off-frustum unit (`0x683dd0`'s second walk) — decision 1473
 /// records that, and what still diverges (parked rigs keep drawing; the reference keeps only
 /// `MORE_AUDIBLE` creatures audible off-screen).
 mod lod;
@@ -86,8 +86,8 @@ pub(crate) struct Wielded {
     /// ([`select::ranged_load_anim`], the client's `0x5fd530` LUT; decision 0099 phase 5).
     pub(crate) ranged: Option<(u8, u8)>,
     /// The mainhand/offhand items' sheath *types* (1 back-2H · 2 back-staff · 3 hip · 4 shield ·
-    /// 0 none) — each picks its arm's draw/stow one-shot independently (VERIFIED wow-re
-    /// `sheath-anim-pick.md`: `(1 << (rec[+4] & 0x1f)) & 0x88` → HipSheath 90 for types {3, 7},
+    /// 0 none) — each picks its arm's draw/stow one-shot independently (`0x611930`:
+    /// `(1 << (rec[+4] & 0x1f)) & 0x88` → HipSheath 90 for types {3, 7},
     /// Sheath 89 otherwise; the slot's own byte is the *only* input).
     pub(crate) main_sheath: u8,
     pub(crate) off_sheath: u8,
@@ -129,8 +129,7 @@ pub(crate) const UNIT_FLAG_DISARMED: u32 = 0x0020_0000;
 pub(crate) const ITEM_CLASS_WEAPON: u8 = 2;
 
 /// **The disarm ladder** — which single held slot `UNIT_FLAG_DISARMED` hides, given what each
-/// melee hand holds (decision 1863; wow-re `disarm-weapon-gate-law.md` §2, byte-verified by a
-/// trio including a cold decoder-first read, both class bodies identical).
+/// melee hand holds (decision 1863; both class bodies identical).
 ///
 /// The reference does not "empty a disarmed unit's hands". `GetWeapon(slot, visFlag = 0)` runs a
 /// **two-probe ladder with main-hand precedence**, and the off-hand probe's polarity is the
@@ -198,46 +197,44 @@ impl Wielded {
 /// **It carries that GUID**, because the reference's `[+0xc48]` is the target and not a flag, and
 /// a second reader wants the unit and not just the fact: `0x6e3480`'s melee arm resolves
 /// `[caster+0xc48]` and uses THAT unit's combat reach, which is what the spell tooltip's range
-/// cell prints while you are auto-attacking (wow-re
-/// `tooltip-damage-matrix-and-container-slots.md` §D4.2b). Every animation reader still asks only
+/// cell prints while you are auto-attacking. Every animation reader still asks only
 /// `With`/`Has`, which is unchanged by the payload.
 #[derive(Component)]
 pub(crate) struct Engaged(pub(crate) u64);
 
 /// The local player has fired an auto-repeat spell (Auto Shot / wand Shoot) — the client's
 /// `[+0xd58] & 0x200`, whose **only writer binary-wide** is the local cast-send tail (`0x6e593b`,
-/// gated `AttributesEx2 & 0x20`; byte-verified, wow-re `ranged-shot-anim.md`). While it and the
+/// gated `AttributesEx2 & 0x20`). While it and the
 /// ranged **sheath** gate (`CUR == 2`) both hold, a standing unit's base idle is the ranged
 /// weapon's Load clip ([`select::ranged_load_anim`]) — the client's resolver `0x5fd460`,
 /// which gates on exactly this bit; local-player-only by construction (remote units never run
 /// the local cast-send). A REMOTE shooter has no drawn idle at all: it plays LoadBow **once** at
-/// the volley's single `SMSG_SPELL_START` through the PrecastKit ([`CastHold`]), then the fire
-/// clip per GO over its ordinary idle (wow-re `shooter-stop-law.md` §J6 claim 2). Cleared
+/// the volley's single `SMSG_SPELL_START` through the PrecastKit ([`CastHold`], `0x6e7901`), then
+/// the fire clip per GO over its ordinary idle. Cleared
 /// only by [`cancel_auto_repeat_local`]'s callers — the client's cancel `0x6ea080` (its `0x200`
 /// clear `0x6ea113`), reached from the cast-result fail of the cached spell, the button
 /// re-press toggle, melee attack-start, target death, the wand-only new-cast handoff, and
 /// `SMSG_CANCEL_AUTO_REPEAT` — which vmangos DOES send (corrected 2026-08-05; see
 /// `crate::spell::net`'s `cancel_auto_repeat`), so against a live server that packet, not
-/// a local death watcher, is what ends a volley whose target dies (wow-re
-/// `nocked-ammo-cancel.md`).
+/// a local death watcher, is what ends a volley whose target dies.
 #[derive(Component)]
 pub(crate) struct AutoRepeatArmed;
 
 /// The weapon-visual hold — the client's `[+0xd58] & 0x400`, set for **ANY caster** (self,
 /// remote players, NPCs) whose **ranged** spell visual plays (`0x60d020`, sole caller `0x6ec2cf`
-/// inside `PlaySpellVisual`; byte-verified, wow-re `ranged-sheath-exempt-autorepeat.md` §Q4).
+/// inside `PlaySpellVisual`).
 /// Cleared like the client's id-matched `0x60d040` + its unconditional sibling `0x60fc50`: a
 /// **non-ranged** visual play by the same caster (the stale-visual cleanup `0x6ec39e`), the
-/// local cancel (`0x6ea12b`), melee attack-start, and the spline-move apply (`0x6020e8`, wow-re
-/// `shooter-stop-law.md` §J1.3). Deliberately NOT cleared on sheath change or volley end — the
+/// local cancel (`0x6ea12b`), melee attack-start, and the spline-move apply (`0x6020e8`).
+/// Deliberately NOT cleared on sheath change or volley end — the
 /// client's bit persists latent.
 ///
 /// **It gates nothing here — but no longer for the reason this doc used to give.** `0x400` is
 /// tested in exactly one place image-wide: `0x5fc3f0`'s Hold self-loop gates (`test ah,0x6` for
 /// HoldBow 109, `test ah,0x4` for 110/111/112). 0994 recorded that the dispatcher is never
-/// reached for a bow id (`shooter-stop-law.md` §J4.1) and concluded the bit is dead. **wow-re's
-/// §5 refuted that absence proof** (decision 1544): the dispatcher has a second, deferred fire
-/// site, so those gates DO execute — they are the Hold's own per-completion re-arm.
+/// reached for a bow id and concluded the bit is dead. **That absence proof is wrong**
+/// (decision 1544): the dispatcher has a second, deferred fire site (`0x7075af`), so those gates
+/// DO execute — they are the Hold's own per-completion re-arm.
 ///
 /// We still gate nothing on it, and that is now a *modelling* choice with a stated equivalence
 /// rather than a claim about the binary. Our Hold is armed once and loops until a real recompute
@@ -251,10 +248,9 @@ pub(crate) struct AutoRepeatArmed;
 pub(crate) struct RangedHold;
 
 /// A unit's displayed **nocked ammo** — the client's `[+0xd28]`/`[+0xd2c]` ammo-model pair,
-/// written only by `CGUnit::UpdateAmmoDisplay 0x60ba30` (byte-verified, wow-re
-/// `nocked-ammo-cancel.md`): the ammo's `ItemDisplayInfo` id, rendered as a model on the unit's
-/// **body** at HandArrow (35) — the ONE bone attach, bow-only (§E2; the old Special2/Special3
-/// reading is refuted — those are model-directory selectors, §E1). Set per shot from the
+/// written only by `CGUnit::UpdateAmmoDisplay 0x60ba30`: the ammo's `ItemDisplayInfo` id, rendered
+/// as a model on the unit's **body** at HandArrow (35) — the ONE bone attach, bow-only (`0x60bb19`;
+/// `0x479f40`'s 0x18/0x19 pick a model directory, not Special2/Special3). Set per shot from the
 /// `SMSG_SPELL_START` `CAST_FLAG_AMMO` tail (any caster — the only source for a remote/NPC
 /// shooter). This is the display-id CACHE; whether the arrow is visibly in the hand is the
 /// [`NockLatch`] (the `$BWP`/`$BWR` cycle). Removed by the un-nock `0x60f530` paths: the local
@@ -265,7 +261,7 @@ pub(crate) struct NockedAmmo {
     pub(crate) display_id: u32,
 }
 
-/// The client's nock latch `[+0xd58] & 0x4000` (wow-re `nocked-ammo-cancel.md` §G1/G4): SET at
+/// The client's nock latch `[+0xd58] & 0x4000` (set `0x624b70`, cleared `0x60016c`): SET at
 /// the body clip's **`$BWP`** BowPull keyframe (LoadBow 105 carries it at ~0.6 s — the visible
 /// pull-from-quiver moment, which also (re)attaches the in-hand arrow), CLEARED at **`$BWR`**
 /// BowRelease (AttackBow 46 carries it at ~0.067 s — the arrow leaves the hand as the missile
@@ -301,8 +297,8 @@ pub(crate) fn drive_nock_latch(
     }
 }
 
-/// The one local auto-repeat cancel — benilla's `0x6ea080` (byte-verified whole, wow-re
-/// `nocked-ammo-cancel.md`): clear the live key (`[0xceac30]`), drop the Load/Hold idle gates
+/// The one local auto-repeat cancel — benilla's `0x6ea080`: clear the live key (`[0xceac30]`),
+/// drop the Load/Hold idle gates
 /// (the `0x200`/`0x400` bits — [`AutoRepeatArmed`] + [`RangedHold`]), un-nock the ammo
 /// (`0x60f530` — [`NockedAmmo`]), and ack the server (`CMSG_CANCEL_AUTO_REPEAT_SPELL`, the
 /// client's sole send site `0x6ea0c6`) — **sheath untouched**: the weapon stays drawn, the idle
@@ -327,8 +323,7 @@ pub(crate) fn cancel_auto_repeat_local(
     let _ = net.0.send(crate::net::ClientCommand::CancelAutoRepeat);
 }
 
-/// The one local **StopAttack** — benilla's `0x5ecac0` (wow-re §5 trio-verified,
-/// `object-layer/scratch/melee-autorepeat-exclusion.md`): player-only, a no-op unless an attack
+/// The one local **StopAttack** — benilla's `0x5ecac0`: player-only, a no-op unless an attack
 /// lock is held, then `CMSG_ATTACKSTOP` (its builder `0x624370` pushes opcode `0x142`) followed by
 /// the tail jump `0x5ecb63 → CancelQueuedCast 0x6e6f30` — which takes the **queued on-next-swing
 /// spell** down with the attack: `0x6e6f30`'s first leg tests the inflight id `[0xceca88]` for
@@ -369,8 +364,8 @@ pub(crate) fn stop_attack_local(
     }
 }
 
-/// The one local **StartAttack** — benilla's `0x5ecb70`, [`stop_attack_local`]'s twin (wow-re §5
-/// `melee-autorepeat-exclusion.md` §5c–§5f). Two halves, and keeping them apart is the whole point:
+/// The one local **StartAttack** — benilla's `0x5ecb70`, [`stop_attack_local`]'s twin. Two halves,
+/// and keeping them apart is the whole point:
 ///
 /// - **the send** (`0x5eccfd`) is gated by the already-attacking test at `0x5eccda` — skipped when
 ///   the attack lock is held, *unless* a stop is in flight (`[+0xc54]`), which is why
@@ -433,7 +428,7 @@ pub(crate) fn start_attack_local(
 /// pseudo-spell runs (`TryCast`'s effect-`0x4e` short-circuit at `0x6e4c7a` dispatches straight to
 /// it, ahead of every cast gate). It forks on the attack lock and nothing else: already attacking →
 /// `0x6131d9 call 0x5ecac0` [`stop_attack_local`], otherwise `0x6131ee call 0x5ecb70`
-/// [`start_attack_local`] (wow-re `melee-autorepeat-exclusion.md` §5f).
+/// [`start_attack_local`].
 ///
 /// The fork is the whole content, and it is worth a name because both halves used to be wrong here:
 /// the button never toggled melee OFF, and it cancelled a running auto-repeat on *every* press —
@@ -530,7 +525,7 @@ pub(crate) struct Casting {
 /// The client's PlayAnimation **call order**, reconstructed. The real client has no pecking
 /// order between a swing and a spell kit's anim landing in the same frame — its handlers run
 /// synchronously in packet order and the LATER `PlayAnimation` call simply overwrites bone 0
-/// (wow-re, the Eviscerate-timing round's arm C). benilla's swing and cast pipelines are
+/// (`0x5fe2f0`). benilla's swing and cast pipelines are
 /// separate message streams, so that order must ride the messages: every emitter of an
 /// animation-bearing request ([`SwingMessage`], [`CastEvent`], [`EmoteAnim`], [`KitPush`])
 /// stamps `next()` at emission — the wire drain stamps in packet order; scene-time emitters
@@ -581,13 +576,13 @@ pub(crate) enum CastEventKind {
     Impact { weapon_visual: Option<u32> },
     /// A projectile arrived at a **ground point** instead of on a unit — the client's per-tick
     /// missile dispatch taking `0x61e1d0` → `0x61d870`, which is the **no-live-target** arm, not
-    /// a ground arm as such (a target that despawned mid-flight lands there too; wow-re
-    /// `missile-arrival-dispatch.md`). Ours is reached only by the single
+    /// a ground arm as such (a target that despawned mid-flight lands there too). Ours is reached
+    /// only by the single
     /// missile a dest-targeted GO with an empty hit list launches
     /// ([`spell_visual::MissileSpawn::ground_aim`]). `entity` is the **caster** — `0x61d870`
     /// plays the kit on it, not on anything at the point — and `pos` is the arrival position,
     /// the client's `extra` override (`0x61d8e7`: `lea edx,[esi+0x20]`). Plays `SpellVisual`
-    /// **field 13 at stage 3** (wow-re `spell-visual-lifecycle.md` §Q4).
+    /// **field 13 at stage 3**.
     GroundImpact { pos: Vec3 },
 }
 
@@ -605,8 +600,7 @@ pub(crate) struct CastHold {
     pub(crate) spell_id: u32,
     /// A ranged-slot shot's wind-up (`Attributes & 0x2` — Throw's ReadyThrown, the bow's
     /// LoadBow): the client brackets every ranged kit play with ranged snaps (`0x60f34c`
-    /// before, the outer `0x6e5930`/`0x6e78f3` after — wow-re
-    /// `ranged-sheath-exempt-autorepeat.md`), so while this hold is live the sheath
+    /// before, the outer `0x6e5930`/`0x6e78f3` after), so while this hold is live the sheath
     /// reconcile's force-stow never survives the frame ([`driver`]'s bracket override).
     pub(crate) ranged: bool,
 }
@@ -614,7 +608,7 @@ pub(crate) struct CastHold {
 /// Per-hand weapon-grip state: whether a weapon is held in the right/left hand, so that hand's fingers
 /// curl into a grip. The real client arms `HandsClosed` (AnimationData 15) on a hand's finger key-bones
 /// **purely by that hand's attach point being occupied by a weapon** — not combat, not sheath state; a
-/// forearm-mounted shield or an empty hand stays open (wow-re `hand-grip-mechanism.md`, `0x60b590` /
+/// forearm-mounted shield or an empty hand stays open (`0x60b590` /
 /// paperdoll `0x5059a0`). Written by the held-item resolver ([`crate::entities`], decision 0072) from the
 /// weapon's hand attach point; read by [`driver::drive_hand_grip`] to hold/release the finger overlay.
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
@@ -681,7 +675,7 @@ pub(crate) struct EmoteAnim {
 }
 
 /// A **state kit's animation id, which is a comparison and never a play** — `PlaySpellVisualKit`'s
-/// stage-2 leg (VERIFIED, wow-re `state-kit-anim-and-stun-pose.md` §1/§2; decision 2085).
+/// stage-2 leg (decision 2085).
 ///
 /// `0x60edf0`'s tail has exactly one site that hands a kit's `+0x8` to the play primitive
 /// (`0x60f3c5 call 0x5fe2f0`), and **stage 2 is diverted around it**: `0x60f387 jne` takes the
@@ -695,8 +689,8 @@ pub(crate) struct EmoteAnim {
 /// It is therefore an animation-**cutting** mechanism, and the cut is not incidental: Charge
 /// (22911) plays `Knockdown`(121) from its impact kit and then cuts it with its own state kit's
 /// `Stun`(14), because 121 ≠ 14 forces the recompute. That is also why no stun ever shows the
-/// `Stun` pose despite 23 kits naming it — the selector `0x5fd8b0` cannot produce 14 (its literal
-/// outputs are enumerated in the note), so the recompute lands on `Stand`.
+/// `Stun` pose despite 23 kits naming it — the selector `0x5fd8b0` cannot produce 14 (14 is not
+/// among its literal outputs), so the recompute lands on `Stand`.
 ///
 /// The driver holds the comparison because the armed id lives there. An aura **refresh** in place
 /// emits nothing: the watcher `0x604d00` fires neither arm when a slot is rewritten with the same
@@ -709,7 +703,7 @@ pub(crate) struct BaseAnimRecompute {
 }
 
 /// Rear up a rider's mount (decision 0441 P2): resolved to a [`EmoteAnim`] one-shot of
-/// MountSpecial(94) on the unit's MOUNT CHILD entity by [`flourish_to_anim`] — the §5-verified
+/// MountSpecial(94) on the unit's MOUNT CHILD entity by [`flourish_to_anim`] — `0x608d50`'s
 /// routing (the flourish plays on the mount model; the rider holds Mount(91) throughout).
 /// Written by the net drain (`SMSG_MOUNTSPECIAL_ANIM` — observed riders only; our own echo
 /// is dropped there) and by the self space-bar gate (`crate::player`, locally at send time).
@@ -776,15 +770,15 @@ pub(crate) struct SpellGoTargets {
     pub(crate) hits: Vec<Entity>,
     /// Units it missed, with the wire's `SpellMissInfo` code — a projectile still flies at
     /// each, and its **arrival** plays the victim's defense clip for DODGE(3)/BLOCK(5) (the
-    /// client's `Missile_C::Update 0x61ceb0` dispatch — Dodge 30 / ShieldBlock 24, never Parry;
-    /// wow-re `smsg-attackerstate-consequences.md` §Q4). No impact kit plays. The deflect
+    /// client's `Missile_C::Update 0x61ceb0` dispatch — Dodge 30 / ShieldBlock 24, never Parry).
+    /// No impact kit plays. The deflect
     /// *flight* visual (the projectile glancing off) stays a named approximation — ours ends
     /// the flight at the target.
     pub(crate) misses: Vec<(Entity, u8)>,
     /// The ground point a dest-targeted cast launched at (`TARGET_FLAG_DEST_LOCATION`), in
     /// **bevy** coords (converted at the apply seam like every scene position). A ground AOE's
     /// GO arrives with empty hit/miss lists and only this. No consumer reads it yet — the
-    /// dest-anchored launch visual is pending the dispatched wow-re read (the persistent area
+    /// dest-anchored launch visual is still an open question (the persistent area
     /// effect anchors to the DynamicObject create, not to this packet).
     pub(crate) dest: Option<Vec3>,
     /// The GO's ammo block (`castFlags & 0x20`, a ranged shot): the `ItemDisplayInfo` id of the
@@ -913,8 +907,8 @@ pub(crate) struct AnimDriver {
     /// (`0x5fe48e`, the fields' only reader), and `0x5fe2f0` is the **single** animation entry
     /// point in the image — 40 call sites, locomotion among them (`0x602c60` → `0x5fd9e0` →
     /// `0x5fd8b0` → `0x5fd100`), which is why this is not a one-shot flag: a unit that simply
-    /// starts running consumes the arm, and that is what starts Charge's trail (wow-re
-    /// `charproc8-trail-draw-state.md` §11.5/§11.6). benilla's driver is one batched system, not
+    /// starts running consumes the arm, and that is what starts Charge's trail.
+    /// benilla's driver is one batched system, not
     /// a per-play function, so the arm cannot be read at the call the way the reference reads it.
     started_anim: bool,
     /// A **masked upper-body one-shot** in flight (decision 0087): a swing/emote the live-state route
@@ -953,15 +947,15 @@ pub(crate) struct AnimDriver {
     /// the landing of a bracket-less step-off fall (which must still run the `0x602c60` land pick
     /// even though no Special drove the arc).
     was_falling: bool,
-    /// The **deferred combat one-shot** — the client's `CGUnit+0xd60` cache (wow-re
-    /// `combat-anim-fastpath.md`, decision 0406): a combat clip requested while another combat
+    /// The **deferred combat one-shot** — the client's `CGUnit+0xd60` cache (decision 0406):
+    /// a combat clip requested while another combat
     /// clip plays is NOT armed — the playing clip's rate doubles (op6 2.0f) and the request
     /// parks here, played by the driver the moment no one-shot is live (the client's
     /// base-recompute read). Any normal arm clears it (the client's `0x5fe48e` writes −1 on
     /// every non-fast-path PlayAnimation; the driver clears at its play sites).
     deferred: Option<u16>,
-    /// The armed looping arm's **replay window** (decision 0516 — wow-re `loop-replay-fidget`
-    /// §7/§7d): the variation node the loop armed + its rolled budget `R` (the client's
+    /// The armed looping arm's **replay window** (decision 0516): the variation node the loop
+    /// armed + its rolled budget `R` (the client's
     /// `block+0xbc`; the window is `R` clip-lengths wide, op4 `0x7126d8` — live for LOOPS too,
     /// correcting 0117's "loops ignore it"). The per-frame watchdog (`0x719370`'s transcription
     /// in `drive_animations`) re-arms the id when the node — still the MAIN armed animation —
@@ -1044,9 +1038,9 @@ struct Overlay {
     looping: bool,
 }
 
-/// A key-bone cross-fade in flight ([`AnimDriver::overlay_fade`], decision 0878 — wow-re
-/// `oneshot-lifecycle.md` §5.4). `out` is the **retiring** node, holding the outgoing pose the
-/// client snapshots into the bone's secondary slot (`rep movsd +0x98 → +0xc4`); it is `None` when
+/// A key-bone cross-fade in flight ([`AnimDriver::overlay_fade`], decision 0878). `out` is the
+/// **retiring** node, holding the outgoing pose the client snapshots into the bone's secondary
+/// slot (`0x7123af`: `rep movsd +0x98 → +0xc4`); it is `None` when
 /// a fresh clip fades in over the *inherited base* pose, which needs no node of its own — the base
 /// is already there. `left`/`total` are the window: the fixed 150 ms of a fade-to-rest, or the
 /// incoming clip's own blendTime on a blended re-arm.
@@ -1105,7 +1099,7 @@ impl AnimDriver {
     /// The `AnimationData.dbc` id of the clip this unit is currently playing (target gait, a Special's
     /// enter/loop/exit one-shot, or Death — which the death override records as the gait). `None` before
     /// the first selection. The mouse pick reads it for the **current animation's** bounds sphere — the
-    /// real client's broad-phase volume tracks the playing sequence (wow-re pick-volume RE).
+    /// real client's broad-phase volume tracks the playing sequence (`0x7089c0`).
     pub(crate) fn active_anim(&self) -> Option<u16> {
         match self.mode {
             Mode::Gait => self.gait,
@@ -1231,7 +1225,7 @@ impl Plugin for CreatureAnimPlugin {
                     arm_mount_poof_fx,
                     // The aura-slot watcher: state kits persist for the aura's life (the bread).
                     arm_aura_state_fx,
-                    // The pending-morph latch (wow-re `shapeshift-morph-cloud.md`): the aura
+                    // The pending-morph latch (`0x5ff0c0` arms, `0x60abe0` replays): the aura
                     // add/remove edges arm it, and a display swap's rebuild replays the latched
                     // spell's impact kit — the shapeshift cloud, both directions. Arm before
                     // replay: the swap message crosses from last frame's teardown, and its
@@ -1316,7 +1310,7 @@ impl Plugin for CreatureAnimPlugin {
     }
 }
 
-/// Resolve `id` to the id this model actually plays (decision 0082, wow-re `anim-id-resolution.md`):
+/// Resolve `id` to the id this model actually plays (decision 0082, `0x711bf0`):
 /// [`ModelAnimations::resolve`] via `catalog` when `AnimationData.dbc` has loaded, else identity — a
 /// brief window at startup ([`load_anim_data`](sheath::load_anim_data) runs at `Startup`, so this
 /// degrade is only ever live for the first few frames, same shape as `anim_data.map_or(0, ..)`
@@ -1399,7 +1393,7 @@ mod attack_stand_tests {
 mod nock_latch_tests {
     use super::*;
 
-    /// The `$BWP`/`$BWR` nock cycle (wow-re `nocked-ammo-cancel.md` §G1/G4): the pull keyframe
+    /// The `$BWP`/`$BWR` nock cycle (set `0x624b70`, cleared `0x60016c`): the pull keyframe
     /// latches (only a unit with a cached ammo display), the release keyframe clears — the arrow
     /// appears as she draws it and leaves the hand with the shot.
     #[test]
@@ -1454,7 +1448,7 @@ mod nock_latch_tests {
 mod disarm_tests {
     use super::*;
 
-    /// **The ladder, hand by hand** (decision 1863; wow-re `disarm-weapon-gate-law.md` §2c). The
+    /// **The ladder, hand by hand** (decision 1863; `0x5ec240`/`0x605e30`). The
     /// reference hides **exactly one weapon**, main hand first — so a disarmed dual-wielder
     /// punches with the main hand and still swings its off-hand weapon. Every selector downstream
     /// reaches its own unarmed leg by its own table; there is no disarm case in any of them.

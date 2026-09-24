@@ -1,5 +1,5 @@
 //! The combat log's **floating number** leg — the combat-text **spawn table** (decision 0137
-//! phase 2; wow-re `worldtext-spawn-and-law.md`). One fn per packet, mirroring the client's
+//! phase 2; the callers of `SubmitWorldText 0x6c7840`). One fn per packet, mirroring the client's
 //! handler → emitter structure; [`super`]'s handlers call it after the chat line: each classifies
 //! the damage **source** (the color law's `K` — self / owned-by-me / anything else SUPPRESSED),
 //! resolves the outcome **recipient**, applies Gate A (self-anchored damage text is
@@ -73,8 +73,8 @@ pub(super) fn melee_styled(spells: Option<&crate::ui_action::Spells>, spell_id: 
 
 /// The spell arms' shared `UNIT_COMBAT` split: a landed amount is `WOUND` (`CRITICAL` descriptor
 /// on crit), zero damage degrades to the full-`ABSORB`/`RESIST` descriptor, else nothing (a clean
-/// spell miss arrives via `SMSG_SPELLLOGMISS` instead). PROVISIONAL string mapping pending the
-/// wow-re UNIT_COMBAT emission pin (decision 0576).
+/// spell miss arrives via `SMSG_SPELLLOGMISS` instead). PROVISIONAL string mapping until the
+/// reference's UNIT_COMBAT emission is pinned down (decision 0576).
 fn spell_feedback(
     damage: u32,
     absorb: u32,
@@ -92,12 +92,11 @@ fn spell_feedback(
     }
 }
 
-/// Spell packet → the center text's messageType (§5-verified against the emission law, wow-re
-/// `combat-text-update-emission-law.md`): landed damage is ALWAYS `SPELL_DAMAGE` — **a spell
+/// Spell packet → the center text's messageType: landed damage is ALWAYS `SPELL_DAMAGE` — **a spell
 /// crit does NOT fire DAMAGE_CRIT** (no crit-distinct type exists for spell damage; the `0x62cd80`
 /// emitter fires 29 regardless, crit changes only the chat template) — zero damage the
 /// `SPELL_ABSORBED`/`SPELL_RESISTED` word. Spell-side partial trailers stay a named residual (the
-/// verdict pinned the melee helper-B partials; the spell emitter's partial path is unread).
+/// melee partials go through helper B `0x6268f0`; the spell emitter's partial path is unread).
 fn spell_center_text(
     damage: u32,
     absorb: u32,
@@ -114,12 +113,12 @@ fn spell_center_text(
     }
 }
 
-/// Melee packet → the center text's messageType + args (§5-verified emission shape, wow-re
-/// `combat-text-update-emission-law.md`; fired **synchronously at packet receive** — the
-/// impact-keyframe deferral belongs to the worldtext/UNIT_COMBAT victim dispatch, NOT this Lua
-/// event). Helper-B partials CONFIRMED: a landed hit with a partial block/absorb/resist fires
-/// the word type with `(damage, partial)` — the addon renders `"25 (10 blocked)"`. The
-/// partial-vs-crit precedence when both apply is unpinned — partials win here, flagged in 0580.
+/// Melee packet → the center text's messageType + args (`0x629d30`; fired **synchronously at
+/// packet receive** — the impact-keyframe deferral belongs to the worldtext/UNIT_COMBAT victim
+/// dispatch, NOT this Lua event). Helper-B partials CONFIRMED: a landed hit with a partial
+/// block/absorb/resist fires the word type with `(damage, partial)` — the addon renders
+/// `"25 (10 blocked)"`. The partial-vs-crit precedence when both apply is unpinned — partials
+/// win here, flagged in 0580.
 pub(crate) fn melee_center_text(
     hit_info: u32,
     victim_state: u32,
@@ -334,9 +333,8 @@ pub(super) fn periodic_aura_log(
                     (action, flags, amount, school)
                 }
                 PeriodicTick::Heal { amount } => ("HEAL", "", amount, 0),
-                // NO ENERGIZE: 5875 never emits it (the string is absent binary-wide —
-                // §5-verified, wow-re `unit-combat-event-law.md`); the power gain reaches the
-                // center text only.
+                // NO ENERGIZE: 5875 never emits it (the string is absent binary-wide); the power
+                // gain reaches the center text only.
                 PeriodicTick::Energize { .. } | PeriodicTick::ManaLeech { .. } => continue,
             };
             feedback.write(UnitCombatFeedback {
@@ -461,8 +459,7 @@ pub(super) fn spell_heal_log(
 
 /// `SMSG_SPELLENERGIZELOG` → the center text's `MANA`/`RAGE`/`FOCUS`/`ENERGY` line (self-only).
 /// NO `UNIT_COMBAT` fires here: the 5875 engine has no ENERGIZE emission — the string is absent
-/// from the whole binary (§5-verified, wow-re `unit-combat-event-law.md`; the shipped
-/// CombatFeedback.lua ENERGIZE arm is dead code in 1.12).
+/// from the whole binary (the shipped CombatFeedback.lua ENERGIZE arm is dead code in 1.12).
 ///
 /// The amount is the **displayed** figure: the handler `0x5e8a90` divides by
 /// `0x6e7130(powerType)` at `0x5e8af3` and hands that one number to the COMBAT_TEXT push
@@ -605,8 +602,8 @@ pub(super) fn xp_gain(
 }
 
 /// `SMSG_EXPLORATION_EXPERIENCE` → the discovery announcement (decision 0828; surfaces and
-/// sound byte-verified by the 0829 RE, wow-re `system/net/net.md`). Three legs, mirroring the
-/// real handler's case body `[0x5e41d2, 0x5e42bb]`:
+/// sound from the reference, 0829). Three legs, mirroring the real handler's case body
+/// `[0x5e41d2, 0x5e42bb]`:
 /// - the ERR_ZONE_EXPLORED toast + (xp > 0) the ERR_ZONE_EXPLORED_XP chat line, queued via
 ///   [`ChatLog::push_exploration`] — the area name is the packet's `AreaTable.dbc` row id
 ///   resolved through the shared catalog; a miss (no catalog, or an id the DBC doesn't know)
@@ -658,10 +655,9 @@ pub(super) fn exploration_xp(
 }
 
 /// `SMSG_LEVELUP_INFO` → the ding's chat lines (decision 0304). The talent-count arg is not on the
-/// wire — the client computes `(newLevel >= 10) ? 1 : 0` (byte-verified `0x5e407c`, wow-re
-/// levelup-ding.md — the 0305 fold-back), exactly this. The ding's VISUAL is deliberately absent
-/// here: it rides the UNIT_FIELD_LEVEL change-watcher (`entities` spell_fx::level_up_flash), never
-/// this packet.
+/// wire — the client computes `(newLevel >= 10) ? 1 : 0` (`0x5e407c`, the 0305 fold-back), exactly
+/// this. The ding's VISUAL is deliberately absent here: it rides the UNIT_FIELD_LEVEL
+/// change-watcher (`entities` spell_fx::level_up_flash), never this packet.
 pub(super) fn level_up(l: LevelUpInfo, chat_log: &mut ChatLog) {
     let talent_points = u32::from(l.level >= 10);
     // Park the raw tuple for `ui_unit`'s `PLAYER_LEVEL_UP`, whose nine args the reference's own

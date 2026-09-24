@@ -1,6 +1,6 @@
 //! The in-game **console command registry** (decision 2303) — the reference's `ConsoleCommand`
 //! table, host side: `ConsoleCommandRegister 0x63f9e0` over a `TSExplicitList<CONSOLECOMMAND>`,
-//! with parse / register / lookup / execute (wow-re `console/console.md`, the upper band). A
+//! with parse / register / lookup / execute (the registry runtime, `[0x63f880, 0x640c50)`). A
 //! subsystem registers its commands from its own plugin ([`ConsoleCommandApp::console_command`]),
 //! the way each of the reference's registers into the one table, and `/console <line>` reaches
 //! [`execute`] through the chat drain.

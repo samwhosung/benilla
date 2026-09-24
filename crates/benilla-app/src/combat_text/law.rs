@@ -118,8 +118,7 @@ pub(crate) const COLOR_PET_MELEE_ORANGE: u32 = 0xFFFF_8400;
 ///
 /// Each has a **closed reader census** in the reference: one store and exactly two reads
 /// image-wide, one in the localized-WORD emitter `0x607140` and one in the `"%d"` NUMBER emitter
-/// `0x6128b0` (wow-re `playername/scratch/worldtext-spawn-and-law.md` §4,
-/// `combattext-color-law.md`). Both branch targets are function epilogues, so a gate that fails
+/// `0x6128b0`. Both branch targets are function epilogues, so a gate that fails
 /// **suppresses the emit entirely** — it never falls through to a default colour, which is why
 /// [`damage_color`] returns `Option` rather than a colour.
 ///
@@ -132,7 +131,7 @@ pub(crate) const COLOR_PET_MELEE_ORANGE: u32 = 0xFFFF_8400;
 /// **`PetMeleeDamage` and `PetSpellDamage` do not split on "melee vs spell" the way a player
 /// would mean it.** The selector is `B` — no spell record (a real melee swing) *or* the spell's
 /// `AttributesEx` bit 15 — so a pet spell carrying that bit is gated by `PetMeleeDamage` and
-/// coloured orange. Which spell ids carry it is on wow-re's own Open board.
+/// coloured orange. Which spell ids carry it is an open question.
 ///
 /// These were `const bool`s with the comment "consts until a cvar system exists". The CVar system
 /// existed; this is the row 2077's census was holding the place for.
@@ -267,18 +266,17 @@ fn round_px(t: f64) -> f32 {
 /// The composed size law (module doc): category value `v` → on-screen pixel height. One gx unit
 /// is the **screen diagonal** `√(W²+H²)`: the screencoord device space spans `[0,G44]×[0,G48]`
 /// with `G44 = s/√(s²+1)`, `G48 = 1/√(s²+1)` (`s = W/H` — the live globals `0x832a44/48`), so
-/// `v/G48 × H = v·√(W²+H²)`. The first reading hardcoded G48's **4:3 value** (0.6 — the
-/// resolution the difftest ran at), which under-sizes ~22% at 16:9 — the director's "damage
-/// numbers should be 1–2 sizes bigger", one root cause with the small nameplates (wow-re
-/// `nameplate-vkey.md` §8 Q4). The round is the gx px law ([`round_px`]); constant with unit
-/// distance.
+/// `v/G48 × H = v·√(W²+H²)`. The first reading hardcoded G48's **4:3 value** (0.6), which
+/// under-sizes ~22% at 16:9 — the director's "damage numbers should be 1–2 sizes bigger", one
+/// root cause with the small nameplates. The round is the gx px law ([`round_px`]); constant
+/// with unit distance.
 pub(super) fn text_px(v: f32, viewport: Vec2) -> f32 {
     round_px(f64::from(v) * f64::from(viewport.x).hypot(f64::from(viewport.y)))
 }
 
-/// The shadow's offset — the verified static at `0xce8804` (`{0.002, 0.002}`, init `0x6c7c20`):
-/// a **viewport fraction**, resolved per-axis and integer-rounded at draw (module doc; wow-re
-/// `worldtext-shadow-render-law.md`, TU-A — which corrected our first `× diagonal` reading: the
+/// The shadow's offset — the static at `0xce8804` (`{0.002, 0.002}`, init `0x6c7c20`):
+/// a **viewport fraction**, resolved per-axis and integer-rounded at draw (module doc; `0x5c8710`,
+/// not our first `× diagonal` reading: the
 /// `√(W²+H²)` lives only in the unrelated Lua `GetScreenWidth/Height` path).
 const SHADOW_OFFSET_FRAC: f32 = 0.002;
 
@@ -293,9 +291,9 @@ pub(super) fn shadow_offset_px(viewport: Vec2) -> Vec2 {
 }
 
 /// The anti-overlap CLAIM box (full width × height, px) — the ref's measured block under its
-/// own units quirk (wow-re `worldtext-measured-block-wh-law.md`, §5 b2d59e6e): `0x6c81a0`
+/// own units quirk: `0x6c81a0`
 /// stores the halves as SCREEN FRACTIONS — height = the raw size value ÷ G48 verbatim (single
-/// line: no line gap, and the shadow-Y term is a byte-verified dead store), width = the advance
+/// line: no line gap, and the shadow-Y term is a dead store), width = the advance
 /// sum ÷ screen width plus a `round(0.002·diag)` pen seed — and `0x6c7cc0` then spends those
 /// fractions as DDC lengths in the solver rect. A fraction in a DDC slot inflates by diag/dim
 /// (1/G48 ≈ 1.667× tall, 1/G44 ≈ 1.25× wide at 4:3): the reference's generous,
@@ -310,8 +308,8 @@ pub(super) fn claimed_box_px(ink_w: f32, size_value: f32, viewport: Vec2) -> Vec
     )
 }
 
-/// The text and RENDERED shadow alpha bytes at `elapsed_ms` — `time_alpha_fade 0x6c82e0`'s two
-/// lanes (§5-verified constants 255.0 / 127.0) composed through the store seam (module doc, the
+/// The text and RENDERED shadow alpha bytes at `elapsed_ms` — the alpha fade `0x6c82e0`'s two
+/// lanes (constants 255.0 / 127.0) composed through the store seam (module doc, the
 /// STORE law): the shadow's stored alpha is **`min(shadow lane, text alpha)`** (`SetShadowColor
 /// 0x5cd650`, font node — SetColor runs first each tick, so `mainA` is the fresh text byte).
 /// Branch order is the client's: fade-in first (below fade-in-end the ramp arm wins even when
@@ -342,7 +340,7 @@ pub(super) fn fade_alpha(cat: &Category, elapsed_ms: f32) -> (u8, u8) {
     (text, shadow.min(text))
 }
 
-/// The category's scale value at normalized life `t` (`keyframe_interp 0x6c80b0`): category 2 runs
+/// The category's scale value at normalized life `t` (`0x6c80b0`): category 2 runs
 /// the crit-pop keyframes × `valueHi`; every other row is the affine `lo + (hi − lo)·t` (constant,
 /// since `lo == hi` outside the crit row). Floor 0.001, as the client clamps.
 pub(super) fn scale_value(category: u8, t: f32) -> f32 {
@@ -378,9 +376,9 @@ mod tests {
 
     /// The composed size law (`v · diagonal` → `ScreenToPixelHeight`): the exact pixel heights
     /// at the 1024×768 reference window (diag 1280 — where the old `/0.6 × H` law coincides),
-    /// the round-half-away behavior, and the ASPECT correction (the whole point of the §8 Q4
-    /// re-pin: a 16:9 window sizes by ITS diagonal, not the 4:3 constant).
-    /// The claimed-box anchors from wow-re `worldtext-measured-block-wh-law.md` (b2d59e6e) at
+    /// the round-half-away behavior, and the ASPECT correction (the whole point: a 16:9 window
+    /// sizes by ITS diagonal through the live G48 `0x832a48`, not the 4:3 constant).
+    /// The claimed-box anchors (`0x6c81a0`) at
     /// 1024×768: the box the solver sees runs 1/G48 taller than the glyph render — 39.1 px for
     /// the 23 px steady number, 58.7 px for the 35 px crit settle — and 1/G44 (1.25×) wider
     /// than ink + the `round(0.002·diag)` pen seed.
@@ -413,18 +411,18 @@ mod tests {
         assert_eq!(text_px(scale_value(0, 0.5), ref43), 23.0);
     }
 
-    /// The shadow offset law (`worldtext-shadow-render-law.md` TU-A): a per-axis viewport
+    /// The shadow offset law (`0x5c8710`): a per-axis viewport
     /// fraction, gx-rounded — NOT the isotropic diagonal (which overstated the vertical ~2.2×
     /// at 16:9 and grew with resolution).
     #[test]
     fn shadow_offset_is_a_per_axis_viewport_fraction() {
-        // The verdict's own example: 1920×1080 → {round(3.84), round(2.16)} = {4, 2}.
+        // 1920×1080 → {round(3.84), round(2.16)} = {4, 2}.
         assert_eq!(
             shadow_offset_px(Vec2::new(1920.0, 1080.0)),
             Vec2::new(4.0, 2.0)
         );
-        // The 4:3 reference window: {round(2.048), round(1.536)} = {2, 2} — the old note's
-        // "~2.6 px" diagonal read never rendered.
+        // The 4:3 reference window: {round(2.048), round(1.536)} = {2, 2} — the "~2.6 px"
+        // diagonal read never rendered.
         assert_eq!(
             shadow_offset_px(Vec2::new(1024.0, 768.0)),
             Vec2::new(2.0, 2.0)
@@ -442,9 +440,9 @@ mod tests {
         assert_eq!(CATEGORIES[5].color, 0xFFE0_CA0A);
     }
 
-    /// `time_alpha_fade 0x6c82e0` at the pinned points of row 0 (in 150 / out 760 / dur 1500),
+    /// The alpha fade `0x6c82e0` at the pinned points of row 0 (in 150 / out 760 / dur 1500),
     /// composed through the store seam (rendered values): fade-in ramps 255·t / 127·t over the
-    /// DURATION (so the fade-in boundary is a step to 255, the byte-verified pop-in), the
+    /// DURATION (so the fade-in boundary is a step to 255, the pop-in), the
     /// plateau is the unconditional `(0xFF, 0x7F)`, the fade-out drops the text
     /// `255 − clamp(255·u)` — and the SHADOW's raw `[128, 255]` inversion is min-capped to the
     /// text alpha by the `0x5cd650` store, so it steps to ~0xFF at fade-out start and then

@@ -69,11 +69,11 @@ impl ChatCtx<'_> {
     }
 
     /// A spell's display name, or `None` when the reference would emit **no line at all** for this
-    /// spell (§5.5 of the §5 verdict). Two gates, both of which 1571 was missing:
+    /// spell (`0x62cd80`, like every spell formatter). Two gates, both of which 1571 was missing:
     ///
     /// - **`Attributes & 0x180`** — `SPELL_ATTR_DO_NOT_DISPLAY | SPELL_ATTR_DO_NOT_LOG` (the mask
-    ///   and the `SpellRec+0x18` offset are VERIFIED; the two enum names are wow-re's INFERRED
-    ///   corroboration from vmangos). This is what keeps the invisible book-keeping spells every
+    ///   and the `SpellRec+0x18` offset are the binary's; the enum names are inferred from vmangos
+    ///   `SpellDefines.h:799-800`). This is what keeps the invisible book-keeping spells every
     ///   server casts constantly — proc triggers, aura tickers — out of the log entirely.
     /// - **An empty localized name.** The reference gates on the name it is about to print, so a
     ///   row with no text in this locale produces silence rather than a sentence with a hole in it.
@@ -93,8 +93,8 @@ impl ChatCtx<'_> {
     }
 
     /// `0x6ea280 == 2` — **"this spell targets enemies"**, the predicate the chat-type stubs
-    /// `0x627d30`/`0x627d60` run to choose between a family's `…_DAMAGE` and `…_BUFF` rows
-    /// (§2.3). It reads the row, never the endpoints, which is why it lives beside
+    /// `0x627d30`/`0x627d60` run to choose between a family's `…_DAMAGE` and `…_BUFF` rows.
+    /// It reads the row, never the endpoints, which is why it lives beside
     /// [`Self::spell_name`] and not beside the classifier.
     ///
     /// A row the catalog cannot answer reads as **harmful**, which is not a claim about the
@@ -149,7 +149,7 @@ pub(super) fn attacker_state(
         amount: i64::from(s.damage),
         // **Only the landed-hit family grows a trailer**, and it is the only family in the whole
         // block that can show GLANCING/CRUSHING/BLOCK: `0x628410`'s four call sites, and this is
-        // the one that passes a real `blocked` and a real `HitInfo` (§4.2). A dodge or a full
+        // the one that passes a real `blocked` and a real `HitInfo` (`0x629ee7`). A dodge or a full
         // absorb prints no amount at all — the reference does not append to those lines.
         trailers: landed.then_some(combat::Trailers {
             absorbed: s.absorb,
@@ -260,7 +260,7 @@ pub(super) fn spell_damage_log(
         return;
     };
     // Nothing through: the reference words it as the reason rather than as a zero, and the order
-    // of the three tests is its own — absorb, then BLOCK, then resist (§4.3).
+    // of the three tests is its own — absorb, then BLOCK, then resist (`0x62cd80`).
     let family = if s.damage == 0 && s.absorb > 0 {
         combat::SPELLLOGABSORB
     } else if s.damage == 0 && s.blocked > 0 {
@@ -325,8 +325,8 @@ pub(super) fn spell_log_miss(
     // which routes `0x62bc5a` to `0x62c140` — the damage-shield two-way selector — instead of the
     // usual eight-row spell matrix. Its five other callers pass 0 and take the normal path.
     //
-    // Whether that is deliberate or a 1.12 bug is **not derivable from the binary**, and wow-re
-    // says so rather than guessing. We reproduce the behaviour, because an addon filtering on
+    // Whether that is deliberate or a 1.12 bug is **not derivable from the binary**. We reproduce
+    // the behaviour, because an addon filtering on
     // chat type has to see what the reference shows; the discriminator, if anyone wants it, is a
     // live cast that misses and a look at which ChatFrame filter catches the line. 1571 sent these
     // through `spell_kind` and had them land in `SPELL_*_DAMAGE`.
@@ -1214,7 +1214,7 @@ fn power_drain_line(
     let family = leech_family(multiplier);
     // Arm 6. Both stubs ask the SPELL, not the family: `0x627d30` is
     // `call 0x6ea280; cmp eax,2; je -> 0x626be0 (damage) else 0x627820 (buff)` and `0x627d60` is
-    // its periodic twin over `0x627d80`/`0x6274a0` (§2.3 of wow-re's combat-log chat law). So a
+    // its periodic twin over `0x627d80`/`0x6274a0`. So a
     // helpful drain files under `…_BUFF` and a harmful one under `…_DAMAGE`, which is a property
     // of the row in `Spell.dbc` and not something either call site may hardcode — both of ours
     // did, in opposite directions.
@@ -1433,7 +1433,7 @@ fn queue(
 }
 
 /// [`queue`] for a family whose `Named` slot still has to be looked up — an item entry or a unit
-/// guid rides along and the drain resolves it, holding the line until it lands (§5.7).
+/// guid rides along and the drain resolves it, holding the line until it lands (`0x6294b0`).
 fn queue_named(
     log: &mut ChatLog,
     ctx: &ChatCtx,
@@ -1466,7 +1466,7 @@ fn queue_reported(
     fills: Fills,
     named: combat::Named,
 ) -> bool {
-    // **The gate is an OR over the two endpoints, not an AND** — the §5 verdict's own wording:
+    // **The gate is an OR over the two endpoints, not an AND** — `0x626630`'s own test:
     // `dist²(player, src) < range(srcClass)²` **OR** `dist²(player, tgt) < range(tgtClass)²`. 1571
     // required both and therefore dropped lines the client shows: your own pet (range 100000)
     // fighting something 80 yards away is logged by the reference and was silent here.

@@ -9,8 +9,7 @@
 //!
 //! # What the reference does, and what we match
 //!
-//! Byte-verified in wow-re (the cinematic dispatch, 2026-08-29), and the reason each piece here is
-//! shaped the way it is:
+//! The reason each piece here is shaped the way it is:
 //!
 //! - **A trigger that arrives before the world is up is deferred, not dropped.** The reference
 //!   stashes the sequence id in a single-slot latch (`0xc4d75c`) whenever its world-load gate is
@@ -50,8 +49,7 @@
 //! its *completion callback*: `0x4c0d10` builds a fullscreen opaque-black quad (`0xff000000`) and
 //! latches what to run when it is fully up, so `CINEMATIC_START`, each shot advance and
 //! `EndCinematic` all execute at full black and `0x4c1280` fades back in. Six sites, both edges,
-//! always black, always 0.25 s (wow-re `ui/scratch/cinematic-camera-law.md` §3.7, a CORRECTION to
-//! the earlier "deferred by a delay" reading). There is **no audio fade anywhere on this path**.
+//! always black, always 0.25 s. There is **no audio fade anywhere on this path**.
 //!
 //! benilla plays and acks immediately. Building the picture is what would let the timing be
 //! faithful too, so the two go together and neither is faked without the other — decision 1724
@@ -97,10 +95,10 @@ pub(crate) struct Cinematic {
     /// is **holding at black** until the world around the body is presentable again.
     ///
     /// This is the reference's `0x48f080` — EndCinematic's forced terrain load back around the
-    /// followed unit, which runs at full black and *blocks* (law §8.2, and §8.4: no loading cover
-    /// is raised anywhere on this path). benilla streams asynchronously and cannot block, so it
-    /// holds the black the reference was already showing for as long as that load would have
-    /// taken. Same thing on screen; ours keeps rendering.
+    /// followed unit, which runs at full black and *blocks* (no loading cover is raised anywhere on
+    /// this path: its raise, `0x406800`, has no caller there). benilla streams asynchronously and
+    /// cannot block, so it holds the black the reference was already showing for as long as that
+    /// load would have taken. Same thing on screen; ours keeps rendering.
     ///
     /// The value is the seconds of black left to spend waiting. **Black is never held forever:**
     /// if the world does not come back inside the budget the fade comes in anyway, and the loading
@@ -321,8 +319,7 @@ fn drive_letterbox(
     // `UiHidden` goes back to meaning only what ALT-Z means.
 
     // **The hardware cursor goes with it** — `0x58b590(0)` at StartCinematic, `(1)` at
-    // EndCinematic and at the leave-world teardown (wow-re `ui/scratch/cinematic-camera-law.md`
-    // §3.4, the complete 10-site census of the cinematic state cell). Nothing else in benilla
+    // EndCinematic and at the leave-world teardown. Nothing else in benilla
     // would: this flag is otherwise written only by the mouse-look session in `player::camera`,
     // and `control` skips that whole branch while the view is detached, so the pointer the player
     // arrived at character-select with simply sat on top of the fly-by.
@@ -541,8 +538,8 @@ const SETTLE_BUDGET: f32 = 8.0;
 ///
 /// **The FOV is not touched at all**, and that is the correction decision 1711 landed. A fly-by is
 /// rendered through the world camera's own optics, re-stamped every frame — the M2 camera record's
-/// `fov` is written at model load and read by nothing on this path (wow-re
-/// `ui/scratch/cinematic-camera-law.md`, a 24-site census; its one raw reader is reachable only
+/// `fov` is written at model load (`0x70f336`) and read by nothing on this path (its one raw
+/// reader, `0x7ac640`, is reachable only
 /// from the portrait and `<Model>` frames). Feeding the authored 45 degrees through the reference's
 /// own `theta_v = F / sqrt(aspect^2 + 1)` builder — which is otherwise right, and angle-space
 /// division really is what `0x5c3cc0` does — rendered fifteen of the sixteen shipped shots at
@@ -965,11 +962,11 @@ mod ack_ledger {
 
 /// **The end boundary holds the black until the world is back around the body.**
 ///
-/// The reference's EndCinematic does a *blocking* terrain load at full black (`0x48f080`, law
-/// §8.2) and raises no loading cover anywhere on the cinematic path (§8.4). benilla streams
-/// asynchronously, so "block" is not available — but "keep showing the black the fade already put
-/// up" is, and it produces the same thing on screen. Without it the fly-by ends into a loading
-/// cover for half a second, measured, every time.
+/// The reference's EndCinematic does a *blocking* terrain load at full black (`0x48f080`) and
+/// raises no loading cover anywhere on the cinematic path (its raise, `0x406800`, has no caller
+/// there). benilla streams asynchronously, so "block" is not available — but "keep showing the
+/// black the fade already put up" is, and it produces the same thing on screen. Without it the
+/// fly-by ends into a loading cover for half a second, measured, every time.
 #[cfg(test)]
 mod settling_under_black {
     use super::*;
