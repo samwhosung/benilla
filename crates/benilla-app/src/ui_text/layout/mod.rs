@@ -84,9 +84,8 @@ pub(crate) struct FontSpec<'a> {
     pub height: Option<f32>,
     /// The font's TRUE glyph outline ([`Outline::None`] for the common case). It selects the
     /// composite cell variant (ring+fill in one texture) AND, for THICK only, the step law's extra
-    /// `+1` (`GlyphStepBase` 0x5ca2b0 biases solely under the THICK flag — wow-re
-    /// `outline-bake-tint.md`), so [`measure_text`] must see it too: a THICK outline changes
-    /// measured/wrapped width.
+    /// `+1` (`GlyphStepBase` 0x5ca2b0 biases solely under the THICK flag), so [`measure_text`]
+    /// must see it too: a THICK outline changes measured/wrapped width.
     pub outline: Outline,
     /// The write-on reveal (`SetAlphaGradient` — per-FontString paint state, like `outline`):
     /// [`layout_text_quads`] multiplies each glyph's alpha by the ramp at its character position.
@@ -96,9 +95,9 @@ pub(crate) struct FontSpec<'a> {
     pub alpha_gradient: Option<(f32, f32)>,
 }
 
-/// The client's per-glyph **step law** (verified in wow-re, `system/font`): the rasterizer stores
-/// each glyph's step base as `(FT_advance >> 6) + 1.0` — the FreeType advance floored to integer
-/// pixels **plus one** (`rasterize_glyph` 0x5d1120, `out[5]`); an outlined font biases it another
+/// The client's per-glyph **step law**: the rasterizer stores each glyph's step base as
+/// `(FT_advance >> 6) + 1.0` — the FreeType advance floored to integer pixels **plus one** (the
+/// glyph rasterizer 0x5d1120, `out[5]`); an outlined font biases it another
 /// `+1.0` (`GlyphStepBase` 0x5ca2b0); `ComputeStep` 0x5ca2d0 consumes exactly that (plus
 /// only-negative kerning scaled by the face's advance-adjust, then rounds). This extra tracking is
 /// look-defining — it is why real client text reads wider/denser than the raw font metrics.
@@ -121,11 +120,10 @@ fn client_step(raw_physical_advance: f32, step_extra: f32) -> f32 {
 
 /// The step-law bias for a font's outline flag: the base `+1` for everyone, and one more `+1` for
 /// **THICK only** — `GlyphStepBase 0x5ca2b0` adds its extra pixel solely under the THICK font flag
-/// (wow-re `outline-bake-tint.md`, §5 + difftests, commit `f80ce699`, CORRECTING the earlier "any
-/// outline" reading this module shipped with: a NORMAL-outlined font steps exactly like a plain
-/// one, its 1px ring riding the base `+1` tracking; mirroring the cell pad onto the advance was the
-/// flagged trap). NumberFontNormal digits (money, counts, hotkeys) are the visible beneficiaries:
-/// one less pixel of gap per glyph.
+/// (CORRECTING the earlier "any outline" reading this module shipped with: a NORMAL-outlined font
+/// steps exactly like a plain one, its 1px ring riding the base `+1` tracking; mirroring the cell
+/// pad onto the advance was the flagged trap). NumberFontNormal digits (money, counts, hotkeys) are
+/// the visible beneficiaries: one less pixel of gap per glyph.
 fn step_extra_of(outline: Outline) -> f32 {
     match outline {
         Outline::Thick => 2.0,
@@ -133,15 +131,14 @@ fn step_extra_of(outline: Outline) -> f32 {
     }
 }
 
-/// The client's SINGLE vertical anchor snap (`anchor_justify_snap 0x5cdf70` @`0x5ce051`,
-/// `fontstring-vertical-placement.md`): the composed block top — rect top plus the justify offset —
-/// rounds ONCE to the integer pixel grid; the per-line ladder and the within-cell ascender are added
-/// as exact integers after it, never re-snapped. The client's round runs in the y-UP frame
-/// (`round(viewH·anchor.y)`), so a half-pixel tie pushes the block UP on screen — in y-down units
-/// that is round-half-DOWN, `ceil(y − 0.5)` (the money row's H=13/S=14 MIDDLE tie: offset −1, not 0
-/// — the note's Case 3). Applied in LOGICAL units: the byte law at the 768-tall design resolution
-/// (the 0292 posture), so a retina window seats text exactly as the design-resolution layout,
-/// scaled.
+/// The client's SINGLE vertical anchor snap (`0x5cdf70` @`0x5ce051`): the composed block top — rect
+/// top plus the justify offset — rounds ONCE to the integer pixel grid; the per-line ladder and the
+/// within-cell ascender are added as exact integers after it, never re-snapped. The client's round
+/// runs in the y-UP frame (`round(viewH·anchor.y)`), so a half-pixel tie pushes the block UP on
+/// screen — in y-down units that is round-half-DOWN, `ceil(y − 0.5)` (the money row's H=13/S=14
+/// MIDDLE tie: offset −1, not 0). Applied in LOGICAL units: the byte law at the 768-tall design
+/// resolution (the 0292 posture), so a retina window seats text exactly as the design-resolution
+/// layout, scaled.
 fn snap_block_top(y: f32) -> f32 {
     snap_block_top_law(y) + UI_SEAT_NUDGE
 }
@@ -285,10 +282,10 @@ fn layout_text_quads_inner(
     // The render lays the same lines the measure counted, or a MIDDLE-justified block seats
     // against a height it does not have ([`fontstring_lines`], decision 1343).
     let lines = fontstring_lines(text, base_color);
-    // The THICK ink rise (`fontstring-baseline-row.md`, §5 trio): the client's THICK quad shift
-    // (−2, `0x5cd0e1`) against its blit's baked seat nets the INK **1 row above** the plain
-    // baseline law; NORMAL cancels exactly (outline-invariant). Our composite cell reproduces the
-    // blit, so the quad carries the net: THICK cells rise 1 logical px.
+    // The THICK ink rise: the client's THICK quad shift (−2, `0x5cd0e1`) against its blit's baked
+    // seat nets the INK **1 row above** the plain baseline law; NORMAL cancels exactly
+    // (outline-invariant). Our composite cell reproduces the blit, so the quad carries the net:
+    // THICK cells rise 1 logical px.
     let thick_rise = f32::from(u8::from(matches!(font.outline, Outline::Thick)));
 
     // Word-wrap within the rect when it carries a pinned width; an unsized single-point FontString
@@ -306,12 +303,11 @@ fn layout_text_quads_inner(
     } else {
         lines
     };
-    // The height-limit line stack (regime 2's vertical half, `CGxString+0x40`,
-    // `fontstring-overflow.md`): a height-pinned rect stops emitting wrapped lines when the
-    // accumulated pitch passes it. A FontString the ellipsis seam ([`ellipsize_to_fit`]) already
-    // truncated fits by construction, so this is the belt under any caller that skips that seam —
-    // in the client the same split: the ui truncate feeds the gx string, and the gx line stack
-    // clamps regardless.
+    // The height-limit line stack (regime 2's vertical half, `CGxString+0x40` in `0x5cdc20`): a
+    // height-pinned rect stops emitting wrapped lines when the accumulated pitch passes it. A
+    // FontString the ellipsis seam ([`ellipsize_to_fit`]) already truncated fits by construction,
+    // so this is the belt under any caller that skips that seam — in the client the same split: the
+    // ui truncate feeds the gx string, and the gx line stack clamps regardless.
     if rect.height() > HEIGHT_LIMIT_MIN {
         render_lines.truncate(overflow::lines_allowed(rect.height(), r.size));
     }
@@ -326,10 +322,10 @@ fn layout_text_quads_inner(
     // single-point anchor, pre-measure) keeps the v1 top placement rather than hoisting text above
     // its anchor.
     //
-    // NO outline pad in the pitch — the byte law (`fontstring-vertical-placement.md`, VERIFIED at
-    // `0x5cdc20`/`0x5cdf70`): the justify block is `h = N·S`, and the `+2r` lives ONLY in the atlas
-    // cell (`[font+0x178]`), which the layout never reads. (The pre-verdict `+2r` here seated every
-    // outlined MIDDLE string r px too high — the money-digit bug.)
+    // NO outline pad in the pitch — the byte law (`0x5cdc20`/`0x5cdf70`): the justify block is
+    // `h = N·S`, and the `+2r` lives ONLY in the atlas cell (`[font+0x178]`), which the layout
+    // never reads. (The earlier `+2r` here seated every outlined MIDDLE string r px too high — the
+    // money-digit bug.)
     let pitch = r.size;
     let block_h = render_lines.len() as f32 * pitch;
     let v_offset = if rect.height() > f32::EPSILON {
@@ -342,10 +338,10 @@ fn layout_text_quads_inner(
         0.0
     };
     // Baseline of the first line: the row the client hangs ink from — the face's pixel ascender
-    // `[CGxFont+0x17c] = round(size · asc/(asc+|desc|))`, threaded unchanged into `glyph_vplace`
-    // 0x5d1360 as the operand that fixes `baseline = cellTop + ascender` (wow-re `system/font`,
-    // §5-verified 2026-07-09). NOT `asc/upem` ≈ 0.965 — that is the FreeType scaled hhea ascender,
-    // which appears nowhere in the placement path; seating with it dropped every line ~3px too low.
+    // `[CGxFont+0x17c] = round(size · asc/(asc+|desc|))`, threaded unchanged into the glyph
+    // placement kernel 0x5d1360 as the operand that fixes `baseline = cellTop + ascender`. NOT
+    // `asc/upem` ≈ 0.965 — that is the FreeType scaled hhea ascender, which appears nowhere in the
+    // placement path; seating with it dropped every line ~3px too low.
     let ascent_ratio = e.ascent_ratio_of(r.face);
     let baseline_in_cell = (f64::from(r.size) * f64::from(ascent_ratio) + 0.5).floor() as f32;
     // The block top takes the client's ONE vertical snap ([`snap_block_top`]) — unless this block
@@ -481,9 +477,9 @@ fn layout_text_quads_inner(
 mod seat_tests {
     use super::*;
 
-    /// The composed MIDDLE seat for one line: block top from box top, per
-    /// `fontstring-vertical-placement.md` — `d = H − round_half_away((H+h)/2)` in the client's
-    /// y-up frame, which [`snap_block_top`] reproduces in y-down over the exact offset.
+    /// The composed MIDDLE seat for one line: block top from box top, per the anchor snap
+    /// `0x5cdf70` — `d = H − round_half_away((H+h)/2)` in the client's y-up frame, which
+    /// [`snap_block_top`] reproduces in y-down over the exact offset.
     fn middle_d(box_h: f32, block_h: f32) -> f32 {
         snap_block_top_law((box_h - block_h) * 0.5)
     }
@@ -618,9 +614,9 @@ mod measure_fits_render {
     /// second line inside the 16-unit row; 1944 then put the reference's own file on the chain and
     /// the cap went live with it. The reading was wrong about our own engine, and this pins why:
     /// the title FontString carries a DECLARED height (`<ButtonText>` `y="10"`), which arms both
-    /// overflow regimes — the ellipsis gate (`boxW > 0 && boxH > 0`, wow-re
-    /// `fontstring-overflow.md`; [`measure::ellipsize_to_fit`]) and the line stack
-    /// ([`overflow::lines_allowed`]) — and each on its own holds the paint to one line. The
+    /// overflow regimes — the ellipsis gate (`boxW > 0 && boxH > 0`, `0x771ec0`;
+    /// [`measure::ellipsize_to_fit`]) and the line stack ([`overflow::lines_allowed`]) — and each
+    /// on its own holds the paint to one line. The
     /// reference does exactly this: its gate holds on the same declared height and its display
     /// string is `prefix + "..."`.
     ///

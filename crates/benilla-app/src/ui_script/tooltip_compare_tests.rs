@@ -7,7 +7,7 @@
 //! **1.12.1 has no hover compare, and neither does benilla now.** `SHOW_COMPARE_TOOLTIP` (event
 //! 377) has zero fire sites in 5875, so `PaperDollFrame.lua:621-640` is dead code there and the
 //! vendor row (plus the auction row, 1971) is the only live consumer of the shopping plates
-//! (wow-re `merchant-compare-item-law.md` §8). benilla fired that event until 2202 and then drove
+//! (`SetMerchantCompareItem 0x536080`). benilla fired that event until 2202 and then drove
 //! the plates itself on a shift-held hover until 2210; both were supersets of a client that
 //! compares only where its own FrameXML asks. The plates' geometry and lifetime belong to that
 //! FrameXML — this engine seats none of them.
@@ -412,7 +412,7 @@ fn shipped_merchant_row_raises_the_compare_plates() {
 }
 
 /// An armour template in one `InventoryType` — the CLASS is what the selection law compares by
-/// (wow-re `merchant-compare-item-law.md` §3).
+/// (the class test at `0x536262` in `SetMerchantCompareItem 0x536080`).
 fn armor_template(name: &str, inventory_type: u32) -> ItemTemplateView {
     ItemTemplateView {
         name: name.into(),

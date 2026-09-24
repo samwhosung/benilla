@@ -1271,8 +1271,8 @@ fn a_dead_player_opens_only_whiledead_windows() {
         s.eval::<bool>("return GetLeftFrame() == nil").unwrap(),
         "the refused window took no slot"
     );
-    // ...and the refusal is heard: NotWhileDeadError (the binary's 0x48d340 — push 0x7e, wow-re
-    // cross-checked) queued the catalog row's key for the app to resolve and toast.
+    // ...and the refusal is heard: NotWhileDeadError (the binary's 0x48d340 — push 0x7e) queued
+    // the catalog row's key for the app to resolve and toast.
     assert_eq!(
         s.take_ui_errors(),
         vec!["ERR_PLAYER_DEAD"],

@@ -10,14 +10,14 @@
 //! - **name/icon** ride the display rank's spell (`Spell.dbc`), max(rank, 1) — an unlearned
 //!   talent wears rank 1's face, the reference's own look.
 //! - **`learnable`** (the tooltip's green "Click to learn" hint) = unspent points > 0 ∧
-//!   `rank < maxRank` — the hint's own byte-verified gate (SetTalent `0x535170`, wow-re
-//!   `talent-api.md`); the frame's gold/green/gray availability compose Lua-side from the
-//!   transcribed reference (tier gate, prereq triplets, meetsPrereq). The learn SEND gates on
-//!   not-at-max only (LearnTalent `0x4f36a0`) — the server enforces the rest.
+//!   `rank < maxRank` — the hint's own gate (SetTalent `0x535170`); the frame's gold/green/gray
+//!   availability compose Lua-side from the transcribed reference (tier gate, prereq triplets,
+//!   meetsPrereq). The learn SEND gates on not-at-max only (LearnTalent `0x4f36a0`) — the server
+//!   enforces the rest.
 //! - **tooltip req lines** (red, shown while locked): `TOOLTIP_TALENT_TIER_POINTS` (`0x854a40`)
 //!   for a short tab total, `TOOLTIP_TALENT_PREREQ[_P1]` (`0x854a5c`) per unmet prereq slot, and
 //!   `ITEM_REQ_SKILL` (`0x84e338`, reused from the item tooltip) for an unmet `required_spell` —
-//!   the three keys `0x52b390` emits, in wow-re `talent-api.md`'s own order. **Keys, resolved off
+//!   the three keys `0x52b390` emits, in the reference's own order. **Keys, resolved off
 //!   the player's own `GlobalStrings.lua` at the feed** (decision 2045), never sentences written
 //!   here; a key the install does not carry renders no line, which is the reference's own
 //!   data-suppression face (the desaturation still communicates the lock).
@@ -251,8 +251,8 @@ pub(crate) fn build_pages(
                 0
             };
             let d = spells.get(display_spell);
-            // meetsPrereq is the requiredSpell known-check ONLY (byte-verified GetTalentInfo,
-            // wow-re talent-api.md — the 0305 fold-back; talent prereqs live in the triplets).
+            // meetsPrereq is the requiredSpell known-check ONLY (GetTalentInfo `0x4f3200` — the
+            // 0305 fold-back; talent prereqs live in the triplets).
             let meets_prereq = t.required_spell == 0 || known.contains(&t.required_spell);
             // The tier gate reads the tab's own spent sum; prereqs read the prereq's rank.
             let tier_unlocked = t.row * 5 <= spent;
@@ -264,8 +264,8 @@ pub(crate) fn build_pages(
                 );
             }
             // The requiredSpell line rides ITEM_REQ_SKILL (`0x84e338`, the item tooltip's own
-            // key reused) — byte-verified in the SetTalent builder, wow-re talent-api.md. It is
-            // NOT the `LOCKED_WITH_*`/`SPELL_FAILED_*` family, which reads identically in enUS.
+            // key reused) — emitted by the SetTalent requirement builder `0x52b390`. It is NOT the
+            // `LOCKED_WITH_*`/`SPELL_FAILED_*` family, which reads identically in enUS.
             if !meets_prereq {
                 if let Some(req) = spells.get(t.required_spell) {
                     req_lines.extend(get("ITEM_REQ_SKILL").map(|f| fill(&f, &[Arg::S(&req.name)])));
@@ -294,7 +294,7 @@ pub(crate) fn build_pages(
                 }
             }
             // The green learn hint's own gate is points-available && not-maxed ONLY
-            // (byte-verified SetTalent, wow-re talent-api.md) — the frame's gold/green/gray
+            // (SetTalent `0x535170`) — the frame's gold/green/gray
             // availability law stays the transcribed Lua's (tier/prereq/meetsPrereq).
             let learnable = rank < max_rank && points.0 > 0;
             views.push(TalentView {

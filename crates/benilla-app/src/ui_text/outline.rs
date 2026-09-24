@@ -2,7 +2,7 @@
 //!
 //! An outlined font (`outline="NORMAL"/"THICK"`, the Number* fonts) does not draw a ring and a fill
 //! as two things. The real client composites both into **one** atlas cell and blits it once
-//! (`glyph_blit_aa_outline 0x5cea30`, dispatched by `0x5cf310` off the font flags at
+//! (the AA-outline blit `0x5cea30`, dispatched by `0x5cf310` off the font flags at
 //! `[CGxFont+0x180]`), which is what makes an outlined string fade correctly: one quad, one alpha,
 //! ring and fill thinning together. Stamping a ring behind a fill instead — which this codebase did
 //! before the composite cell — blackens mid-fade on the `α(1−α)` compositing term.
@@ -23,15 +23,13 @@ pub(super) fn radius_of(outline: benilla_ui::script::Outline) -> u8 {
     }
 }
 
-/// The client's AA neighbour-count → outline-alpha LUT (`DAT_0080a8ec`, wow-re
-/// `system/font/scratch/outline-bake-tint.md`, §5 double-pair + difftests, commit `f80ce699`):
-/// index = the number of marked cells in the in-bounds 3×3 box (centre included), value = the
-/// 4-bit alpha, here pre-widened to 8-bit (`nibble × 17`).
+/// The client's AA neighbour-count → outline-alpha LUT (`DAT_0080a8ec`): index = the number of
+/// marked cells in the in-bounds 3×3 box (centre included), value = the 4-bit alpha, here
+/// pre-widened to 8-bit (`nibble × 17`).
 const AA_NEIGHBOUR_LUT: [u8; 10] = [0, 17, 17, 51, 85, 119, 153, 187, 221, 255];
 
 /// Composite one glyph's coverage bitmap into an **outlined cell** — the byte recipe of the
-/// client's AA-outline blit (`glyph_blit_aa_outline 0x5cea30`, dispatched by `0x5cf310`; wow-re
-/// `outline-bake-tint.md`, difftested emulation `wow-5875-re/crates/font/src/raster.rs`):
+/// client's AA-outline blit (`0x5cea30`, dispatched by `0x5cf310`):
 ///
 /// 1. **Mark** every texel with non-zero coverage.
 /// 2. **Dilate** iteratively — each pass marks every virgin texel 8-adjacent to a marked one.
@@ -46,9 +44,9 @@ const AA_NEIGHBOUR_LUT: [u8; 10] = [0, 17, 17, 51, 85, 119, 153, 187, 221, 255];
 ///    white-with-thin-alpha) at the LUT alpha. The binary quantizes to ARGB4444; we keep 8-bit
 ///    (same law, no banding — the one deliberate widening, like the LUT `×17`).
 ///
-/// Draw-side law this feeds (same note, prongs 2–3): one quad per glyph, vertex color MODULATE —
-/// white fill takes the text tint, black ring stays black — and ONE alpha per pass, so a frame fade
-/// thins ring+fill together (no `α(1−α)` blackening, the defect the stamped halos had).
+/// Draw-side law this feeds: one quad per glyph (the quad builder `0x5ccbe0`), vertex color
+/// MODULATE — white fill takes the text tint, black ring stays black — and ONE alpha per pass, so a
+/// frame fade thins ring+fill together (no `α(1−α)` blackening, the defect the stamped halos had).
 ///
 /// Returns `(rgba, out_w, out_h, pad)`: the cell grows by `pad = r·round(dpi)` texels each side
 /// (the binary's cell `em+2/+4` and origin col `1/2`, generalized); the caller shifts bearings by

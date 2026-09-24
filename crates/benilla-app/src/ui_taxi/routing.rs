@@ -74,9 +74,8 @@ pub(super) fn load_taxi_catalogs(
     }
 }
 
-/// Project a node's world `(x, y)` onto the taxi map's normalized 0..1 space — **byte-VERIFIED**
-/// (decision 0496 folds back the 0484 §5's TU-2: the FPU trace at `0x4db958`, recorded in wow-re
-/// `system/ui/scratch/taxi-system.md`): rect = `WorldMapContinent.dbc` fields 9–12
+/// Project a node's world `(x, y)` onto the taxi map's normalized 0..1 space (decision 0496; the
+/// FPU trace at `0x4db958`): rect = `WorldMapContinent.dbc` fields 9–12
 /// (Xmin/Ymin/Xmax/Ymax), matched by continentId, and
 ///
 /// ```text
@@ -283,11 +282,11 @@ pub(super) fn build_nodes(
 ///
 /// The reference's parser `FUN_005ed1e0` indexes a 13-entry table at `[0x85fedc + 4*code]` and
 /// hands the result straight to `CGGameUI::DisplayError 0x496720`: `code == 0` closes the map,
-/// `1..=12` toast, `code >= 13` does nothing at all (wow-re `system/ui/scratch/taxi-system.md`
-/// §TU-1, VERIFIED byte-exact). So this returns a key rather than a string, and the catalog row
-/// behind it decides the text, the **surface** and the sound — which matters here more than
-/// anywhere: **seven of the twelve are `kind = 1`, the YELLOW info line**, not the red one they
-/// all used to take, and `ERR_TAXINOTENOUGHMONEY` carries error-speech line `0x36` (decision 1815).
+/// `1..=12` toast, `code >= 13` does nothing at all. So this returns a key rather than a string,
+/// and the catalog row behind it decides the text, the **surface** and the sound — which matters
+/// here more than anywhere: **seven of the twelve are `kind = 1`, the YELLOW info line**, not the
+/// red one they all used to take, and `ERR_TAXINOTENOUGHMONEY` carries error-speech line `0x36`
+/// (decision 1815).
 ///
 /// `OK` and anything past the table return `None` — the reference's own `code >= 13` no-op, in
 /// place of the "Taxi activation failed (n)." literal that used to stand here and that the

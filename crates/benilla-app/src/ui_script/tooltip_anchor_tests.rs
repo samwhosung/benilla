@@ -506,7 +506,7 @@ fn buff_hover_hangs_below_left_of_the_button() {
     s.resolve();
     // Through the template's real `<OnEnter>` — the reference keeps the SetOwner/SetPlayerBuff pair
     // inline there rather than in a named function, so the handler body itself is what this drives.
-    // `this` is set by hand because the engine sets it only when it *fires* a handler (RF-0025);
+    // `this` is set by hand because the engine sets it only when it *fires* a handler (`0x704d50`);
     // calling the compiled function directly does not, and the body reads `this`, not its argument.
     s.run("this = BuffButton0; BuffButton0:GetScript(\"OnEnter\")(BuffButton0)")
         .unwrap();

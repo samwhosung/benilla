@@ -7,8 +7,8 @@
 //! What places the label is the template's `<NormalFont inherits="GameFontNormal"
 //! justifyH="LEFT"/>`: `SetText`'s lazy label creation funnels through the adopter
 //! `CSimpleButton::SetFontString 0x778d20`, which anchors an unanchored label to the button by the
-//! NORMAL embedded font's justify word (`[button+0x390]`: LEFT→LEFT, RIGHT→RIGHT, else CENTER —
-//! wow-re `system/ui/scratch/resize-bounds-and-button-fontstring.md` §5.2, VERIFIED). Decision 1996.
+//! NORMAL embedded font's justify word (`[button+0x390]`: LEFT→LEFT, RIGHT→RIGHT, else CENTER).
+//! Decision 1996.
 
 use benilla_ui::script::UiScript;
 

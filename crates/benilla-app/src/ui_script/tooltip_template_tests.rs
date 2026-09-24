@@ -243,7 +243,7 @@ fn an_addon_may_call_gametooltip_onload_the_reference_way_with_no_argument() {
 
     // The tint the bare call was there to apply (ref-GameTooltip.lua l.79-82's two colours),
     // QUANTIZED: the reference's backdrop colour field is a packed `0xAARRGGBB` byte quad and the
-    // setter converts `×255 + 0.5` through `__ftol` (wow-re `numeric-arg-coercion-law.md` Q4), so
+    // setter converts `×255 + 0.5` through `__ftol` (`SetBackdropColor 0x777d30`), so
     // `0.09` stores as 23 and reads back as `23/255`. This used to compare against `0.09` exactly,
     // which was our lossless `[f32; 4]` showing through a store the client cannot make.
     let q = |x: f32| f32::from((x * 255.0 + 0.5) as u8) / 255.0;

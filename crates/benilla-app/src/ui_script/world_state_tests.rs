@@ -148,7 +148,7 @@ fn leaving_the_zone_clears_the_readout() {
     );
 }
 
-/// The dynamic icon is a SECOND slot, not a swap (wow-re `worldstate-ui-law.md` §12; decision
+/// The dynamic icon is a SECOND slot, not a swap (`GetWorldStateUIInfo 0x4c5a70`; decision
 /// 1604). The `Icon` column and the `DynamicIcon` column feed two different regions — a 42x42
 /// static slot and a 32x32 button off the row's right edge — and only `uiState == 2`, the
 /// flag-taken value, lights the second one. The first pass replaced the static art whenever the
@@ -369,11 +369,11 @@ fn ink_box(chain: &mut benilla_formats::Chain, path: &str) -> (f32, f32, f32, f3
 /// have. Every icon the readout names is a sprite authored into the UPPER-LEFT corner of a
 /// power-of-two canvas (`AllianceTower` fills 16x16 of 32x32; `UI-PVP-Alliance` ~40x40 of 64x64),
 /// nothing is cropped, and the reference compensates *geometrically* — a 42x42 slot hung 6 units
-/// off the row's left edge with the label seated 10 above its centreline (wow-re
-/// `worldstate-ui-law.md` §12). Pin the OUTCOME rather than the constants: whatever the numbers,
-/// the visible art must sit beside its label and share its line. A snug icon box — the obvious
-/// thing to write, and what we shipped — puts the ink up and to the left of its own slot, which is
-/// exactly what the director saw. Skips without client data.
+/// off the row's left edge with the label seated 10 above its centreline (`WorldStateFrame.xml`).
+/// Pin the OUTCOME rather than the constants: whatever the numbers, the visible art must sit beside
+/// its label and share its line. A snug icon box — the obvious thing to write, and what we shipped
+/// — puts the ink up and to the left of its own slot, which is exactly what the director saw.
+/// Skips without client data.
 #[test]
 fn the_visible_ink_sits_beside_its_label_not_adrift_of_it() {
     let data = benilla_formats::wow_data_or_skip!();

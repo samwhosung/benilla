@@ -8,7 +8,7 @@
 //! proficiencies, which the server really does report as `1/1`, and the **single-rank** lines
 //! (class skills, Dual Wield, racials, the per-mount riding lines), whose `skillMaxRank` the
 //! engine overrides to `1` off `SkillRaceClassInfo.flags & 0x400` however high the server's own
-//! descriptor is (`benilla-ui`'s `SkillEntry::mono`; wow-re `0x4d3610`'s `4d38b1` branch). A
+//! descriptor is (`benilla-ui`'s `SkillEntry::mono`; `0x4d3610`'s `4d38b1` branch). A
 //! hunter's `Beast Mastery` on vmangos arrives as `300/300` and must still read gray and
 //! numberless, exactly as it does in the real client.
 //!
@@ -374,11 +374,11 @@ fn the_pages_close_button_sits_where_the_reference_seats_it_and_closes_the_windo
 
     // Its label is the CLOSE global string's seat, in the panel-button gold.
     // **"Close", not "CLOSE".** An XML `text=` attribute is a GlobalStrings LOOKUP, not a literal
-    // (`loader::Loader::resolve_text`, wow-re `rf28-typed-widget-loadxml.md` l.36 —
-    // `FrameScript_GetText 0x703bf0`), and `CLOSE = "Close"` (`GlobalStrings.lua:760`). This test
-    // read "CLOSE" while the page's list carried no `GlobalStrings.lua`: it was asserting the
-    // miss-fallback (the raw attribute), which is the REFERENCE's own arm too (`0x778c31` /
-    // `0x771032`), not the label a client with the strings loaded draws.
+    // (`loader::Loader::resolve_text` — `FrameScript_GetText 0x703bf0`), and `CLOSE = "Close"`
+    // (`GlobalStrings.lua:760`). This test read "CLOSE" while the page's list carried no
+    // `GlobalStrings.lua`: it was asserting the miss-fallback (the raw attribute), which is the
+    // REFERENCE's own arm too (`0x778c31` / `0x771032`), not the label a client with the strings
+    // loaded draws.
     // [`super::test_ui::CHARACTER_UI`] loads the player's own strings first, as the app does, so
     // this is the real label now.
     let label = page_quads(&s)

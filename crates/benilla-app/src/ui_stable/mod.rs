@@ -101,7 +101,7 @@ pub(crate) struct StableOpen {
     pub(crate) pets: Vec<StabledPet>,
     /// A list packet has landed and the feed has not yet turned it into `PET_STABLE_SHOW`.
     ///
-    /// The distinction this latch draws is the carve's: `PET_STABLE_SHOW` fires **unconditionally
+    /// The distinction this latch draws is the client's: `PET_STABLE_SHOW` fires **unconditionally
     /// at the tail of every `MSG_LIST_STABLED_PETS` handler** (`0x4cac9b`) — every list, not just
     /// the first — while `PET_STABLE_UPDATE`/`_PADERDOLL` fire from the **creature-cache
     /// callbacks** (`0x4cb3bf`, `0x4cba5f`), i.e. exactly when a late template answer fills a row
@@ -354,7 +354,7 @@ fn drain_stable(
 }
 
 /// Point the stable window's model pane at the pet `GetSelectedStablePet()` names — the app half of
-/// the reference's `SetPetStablePaperdoll` (wow-re `ui/scratch/stable-master-window.md` §7.1).
+/// the reference's `SetPetStablePaperdoll 0x4cb870`.
 ///
 /// **The reference's own fork, and it is the whole of this system.** On `[0xb72250] == -1` — the
 /// summoned pet — it resolves the live pet by GUID and takes `[unit+0xb30]`'s model; the resolve
@@ -408,8 +408,8 @@ fn feed_stable_booth(
 /// The selection → `(live unit, display id)` fork, pure so the law is testable without a VM, a
 /// wire or a world (module doc on [`feed_stable_booth`] for the reference's shape).
 ///
-/// **The live arm consults no row at all** — §7.1's `[0xb72250] == -1` branch reads the live pet's
-/// GUID out of `[0xb714a0]` and takes its model; the stable array is not in that path. So a
+/// **The live arm consults no row at all** — `0x4cb870`'s `[0xb72250] == -1` branch reads the live
+/// pet's GUID out of `[0xb714a0]` and takes its model; the stable array is not in that path. So a
 /// summoned pet is drawn from its world body whether or not the list happened to carry its row.
 ///
 /// **The display arm is resolved regardless**, because that is the reference's own order: the live
@@ -434,9 +434,9 @@ fn stable_subject(
 
 /// Stable refusals staged for the feed, as **message-catalog keys** — only ever
 /// `ERR_NOT_ENOUGH_MONEY`, the single code the client speaks for (decision 1677), reached through
-/// `DisplayError(0x25)` (wow-re `system/ui/scratch/stable-master-window.md` §5, VERIFIED). A key
-/// rather than the resolved text because that row carries error-speech line `0x28` too — the
-/// character says it aloud (decision 1815).
+/// `DisplayError(0x25)` (the `SMSG_STABLE_RESULT` handler `0x4cacb0`). A key rather than the
+/// resolved text because that row carries error-speech line `0x28` too — the character says it
+/// aloud (decision 1815).
 #[derive(Resource, Default)]
 pub(crate) struct StableErrors(pub(crate) Vec<&'static str>);
 

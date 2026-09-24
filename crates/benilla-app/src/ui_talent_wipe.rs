@@ -13,8 +13,7 @@
 //! It is the innkeeper bind's twin, not a talent-window affordance, and that is why it lives beside
 //! [`crate::ui_binder`] rather than inside [`crate::ui_talent`]: same shape on the wire (a question
 //! carrying a guid, an answer echoing it), same latch, same range gate, same free-standing dialog
-//! over a gossip menu that is already gone. wow-re says so at the bytes
-//! (`system/ui/scratch/gossip-icon-and-binder-flow.md` §5.3): the talent master
+//! over a gossip menu that is already gone. The bytes say so: the talent master
 //! (`0xc4d7a0`/`0xc4d7a4`), the pet untrainer and the binder are **one latch/range family**, three
 //! copies of a single shape.
 //!
@@ -28,8 +27,7 @@
 //!   the frame it goes false.
 //!
 //! Both halves are **byte-pinned** against the reference's `0x5df980`, one function that serves
-//! both directions of the opcode (wow-re `system/ui/scratch/talent-api.md` §ConfirmTalentWipe, and
-//! the disassembly under it):
+//! both directions of the opcode:
 //!
 //! 1. **Arrival** (`guid != 0`): resolve the unit, gate on `d² <= [0xc4c28c]` — the identical
 //!    constant behind [`crate::target::SERVICE_RANGE_SQ`], which is what makes modelling the

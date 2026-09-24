@@ -47,7 +47,7 @@ const WHO_KEYS: [&str; 4] = [
 /// **`ecx` is the RAW wire display count** (`[ebp-0x14]`), not the 50-capped global the cap at
 /// `0x5adf92` writes — a re-implementation must not test its own clamped count and call it the
 /// same rule. Ours is [`SocialState::who`]'s length, which is the wire's count uncapped (vmangos
-/// sends at most 49), so the two agree. wow-re `who-list-sort-law.md` §11.3, decision 2030.
+/// sends at most 49), so the two agree. Decision 2030.
 const WHO_CHAT_MAX: usize = 3;
 
 /// What the feed last announced, so the Era events fire on edges rather than every frame.
@@ -205,7 +205,7 @@ fn drain_result_lines(
 ///
 /// The order is the parser's, not a presentation choice: `0x5ae0a1` composes a record's line
 /// inside the loop that reads it, and the summary block `0x5ae0f1`–`0x5ae12a` sits after the
-/// loop's back-edge (wow-re `who-list-sort-law.md` §11.4).
+/// loop's back-edge.
 fn who_lines(rows: &[WhoInfo], total: u32, get: &dyn Fn(&str) -> Option<String>) -> Vec<Shown> {
     use benilla_ui::strings::{fill, Arg};
 
@@ -566,7 +566,7 @@ mod tests {
     /// the `qsort` that orders the array sits past that loop's back-edge (`0x5ae0e2`) — so the
     /// lines are already gone by the time anything is sorted, and only the array `GetWhoInfo`
     /// reads is ordered. Sorting them "for consistency" is the plausible wrong answer, and it was
-    /// this client's until wow-re read the call site (`who-list-sort-law.md` §11.4).
+    /// this client's until the call site was read.
     #[test]
     fn the_chat_lines_come_out_in_wire_order_with_the_total_last() {
         let mut social = SocialState::default();
@@ -611,10 +611,10 @@ mod tests {
 
     /// The comparator's "missing DBC row" marker is the **empty** name, and it must stay that
     /// way: `who_row` leaves an unresolvable class/race/zone empty, and the chain ties on it
-    /// rather than ordering it (wow-re §11.1 — the arm jumps to the loop's `inc esi`).
+    /// rather than ordering it (the arm jumps to the loop's `inc esi` at `0x5adbb2`).
     ///
     /// **This test is a tripwire.** The reference's `GetWhoInfo 0x5ad6e0` substitutes the
-    /// localized `"UNKNOWN"` on those same three legs (§11.2), so the two sides deliberately
+    /// localized `"UNKNOWN"` on those same three legs, so the two sides deliberately
     /// disagree: the cell reads UNKNOWN and the row sorts as if the column were not there. If
     /// this client ever adopts that substitution — it should; ours shows an empty cell today —
     /// the miss has to travel to the comparator by some other route than the string, or the tie

@@ -4,15 +4,13 @@
 //! join, and drives `benilla_ui::script::spellbook`'s snapshot + cast-drain seam behind
 //! `SpellBookFrame.xml` (the P key, `ui_script/input.rs`).
 //!
-//! The **add-gate** is byte-verified (decision 0227; wow-re `system/ui/scratch/
-//! spellbook-book-build.md`): a known spell reaches the book only when
+//! The **add-gate** (decision 0227; `0x4b25b0`): a known spell reaches the book only when
 //! [`SpellDisplay::in_spellbook`](benilla_formats::SpellDisplay::in_spellbook) — `Attributes` not
 //! `DO_NOT_DISPLAY`/`IS_TRADESKILL`, `castUI == 0`. Languages, armor/weapon proficiencies, and
 //! hidden racial passives are excluded exactly as the real client excludes them, so a live
 //! character's book no longer grows the junk tabs the pre-0227 build showed.
 //!
-//! Tab classification is byte-verified (decision 0228; wow-re
-//! `system/ui/scratch/spellbook-book-build.md` §3): a spell's `SkillLineAbility` line is routed
+//! Tab classification (decision 0228; `0x4b24f0`): a spell's `SkillLineAbility` line is routed
 //! through the per-race/class table (`0x6ddf90` → `SkillRaceClassInfo.dbc`) — if no row admits the
 //! player's race+class, or the matching row carries `SKILL_FLAG_DISPLAY_SORTED` (`flags & 0x80`),
 //! the spell lands in the **General** tab (key 0) instead of its line's own. That collapses
@@ -22,9 +20,9 @@
 //! to [`SkillLineCatalog::spell_tab`]; absent a character (capture with no self player) or the
 //! `SkillRaceClassInfo` data, the collapse is skipped and each line keeps its own tab.
 //!
-//! Tab order + book order follow the same §5 (`0x4b3040`/`0x4b30c0`): **General/key-0 pinned
-//! first**, then alphabetical by `SkillLine.dbc` name (locale collator `0x64a480` — plain byte
-//! order stands in for enUS); within a tab, name → **parsed rank number** ([`spell_sort_key`]).
+//! Tab order + book order (`0x4b3040`/`0x4b30c0`): **General/key-0 pinned first**, then
+//! alphabetical by `SkillLine.dbc` name (locale collator `0x64a480` — plain byte order stands in
+//! for enUS); within a tab, name → **parsed rank number** ([`spell_sort_key`]).
 //!
 //! INTERIM (flagged, none load-bearing): the multi-row `SkillRaceClassInfo` tie-break (first
 //! admitting row wins — the client's `0x6ddf90` returns one; consistent for the lines that matter),
@@ -55,9 +53,9 @@ pub(crate) struct SkillLines {
 }
 
 /// The line id for a spell with no resolvable skill line — the **General tab, key 0**, which the
-/// client pins FIRST in the tab strip and renders with a fixed name + icon (byte-verified: wow-re
-/// spellbook-book-build.md, `GetSpellTabInfo 0x4b3ce0` — key 0 → the localized `GENERAL`
-/// GlobalString name `0x846910` + the hardcoded icon `Interface\Icons\Ability_Kick` `0x8468f0`).
+/// client pins FIRST in the tab strip and renders with a fixed name + icon
+/// (`GetSpellTabInfo 0x4b3ce0` — key 0 → the localized `GENERAL` GlobalString name `0x846910` +
+/// the hardcoded icon `Interface\Icons\Ability_Kick` `0x8468f0`).
 /// `0` is never a real vmangos `SkillType` (`SharedDefines.h`'s `SKILL_NONE = 0`), so it can't
 /// collide with a real line id.
 const NO_LINE: u32 = 0;
@@ -262,15 +260,14 @@ fn feed_spellbook(
         attack_icon,
         ranged_icon,
     );
-    // The `IsCurrentCast` verdict per slot — the delegate `0x4b3600` (wow-re
-    // `spellbook-checked-predicate.md`, §5-verified): its OWN function, NOT the action bar's
-    // `0x4e53a0`, and deliberately narrower — TWO arms only. The shapeshift arm is built here: a
-    // MOD_SHAPESHIFT spell reads current exactly while the player's form byte equals its form id
-    // (keyed on the FORM, so any spell/rank granting it reads true — Ghost Wolf's slot glows
-    // while shifted, a druid form's likewise). The other arm (the open trade-skill window) stays
-    // unmodeled with the trade-skill session itself. The action predicate's casting-now /
+    // The `IsCurrentCast` verdict per slot — the delegate `0x4b3600`: its OWN function, NOT the
+    // action bar's `0x4e53a0`, and deliberately narrower — TWO arms only. The shapeshift arm is
+    // built here: a MOD_SHAPESHIFT spell reads current exactly while the player's form byte equals
+    // its form id (keyed on the FORM, so any spell/rank granting it reads true — Ghost Wolf's slot
+    // glows while shifted, a druid form's likewise). The other arm (the open trade-skill window)
+    // stays unmodeled with the trade-skill session itself. The action predicate's casting-now /
     // awaiting-target / item / attack arms are ABSENT in the binary — a book slot must NOT light
-    // during an ordinary cast (the verdict's load-bearing negative).
+    // during an ordinary cast (the load-bearing negative).
     let form_byte = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
     if form_byte != 0 {
         for slot in &mut fresh.slots {
@@ -548,12 +545,11 @@ fn drain_spell_casts(
         return;
     };
     for spell_id in script.take_spell_casts() {
-        // The `CastSpell` dispatcher's two press-again-to-cancel forks (`0x4b3300`, wow-re
-        // `shapeshift-plaincast-toggle.md`), in the ref's own order: the active-action toggle
-        // (`0x4b36f0` → cancel `0x4b3466`), then the shapeshift form-match fork
-        // (`0x4b348b`–`0x4b35e5`) with its non-cancelable silent no-op (`0x4b35cf`). This is the
-        // leg `UseAction` does NOT have — a druid's `/cast Cat Form` powershift-out and a
-        // shaman's Ghost Wolf re-cast both land here.
+        // The `CastSpell` dispatcher's two press-again-to-cancel forks (`0x4b3300`), in the ref's
+        // own order: the active-action toggle (`0x4b36f0` → cancel `0x4b3466`), then the shapeshift
+        // form-match fork (`0x4b348b`–`0x4b35e5`) with its non-cancelable silent no-op
+        // (`0x4b35cf`). This is the leg `UseAction` does NOT have — a druid's `/cast Cat Form`
+        // powershift-out and a shaman's Ghost Wolf re-cast both land here.
         if let (Some(sp), Some(store)) =
             (ladder.spells.as_ref(), targeting.self_store.iter().next())
         {

@@ -172,7 +172,7 @@ fn abbey_grounds_subzone_hop_shows_no_territory_line() {
     );
 }
 
-/// The abbey repro, indoor half — the byte-corrected feed (wow-re `zonetext-indoor-bit.md` (d)):
+/// The abbey repro, indoor half — the byte-corrected feed (`0x67e670`):
 /// crossing the abbey threshold, the zone-name override SKIPS (the whole-WMO name
 /// "Northshire Abbey" equals the yard subzone), so the ZONE slot stays "Elwynn Forest" and the
 /// group row's name re-populates the SUBZONE ("Main Hall"). ZoneTextFrame's text never changes ⇒
@@ -208,7 +208,7 @@ fn abbey_interior_shows_the_room_in_the_small_line_alone() {
 
 /// The INN case — the override FIRES (the whole-WMO name differs from the street subzone):
 /// zone slot = the inn's name, subzone nulls (unnamed group rows). The big splash shows the inn
-/// name, and — the FIFO dispatch law (wow-re `event-dispatch-order.md`: SubZoneTextFrame
+/// name, and — the FIFO dispatch law (`RegisterEvent 0x702140` tail-appends: SubZoneTextFrame
 /// registered second fires LAST, its SetZoneText(1) is the last writer) — the territory line
 /// shows under it, exactly as on a NEW_AREA splash.
 #[test]

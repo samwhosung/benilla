@@ -90,8 +90,8 @@ fn list_stabled_pets(
 }
 
 /// The answer to a stable verb (`SMSG_STABLE_RESULT`) — one byte, and the client's whole response
-/// to it is a five-way jump table (wow-re `system/ui/scratch/stable-master-window.md` §5, VERIFIED
-/// off the raw remap/jump bytes at `0x4cadac`/`0x4cad98`; decision 1677):
+/// to it is a five-way jump table (the raw remap/jump bytes at `0x4cadac`/`0x4cad98`; decision
+/// 1677):
 ///
 /// | code | what the client does |
 /// |---|---|

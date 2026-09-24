@@ -3,8 +3,8 @@
 //!
 //! [`SocialState`] mirrors the wire the way [`crate::ui_party`]'s `GroupState` does: the three
 //! server packets replace it wholesale or patch one row, and the feed turns it into the VM
-//! snapshot the FriendsFrame reads. Two client-side laws from wow-re's `FriendList.cpp` findings
-//! (`system/net/scratch/w2b.md`, the 0x728-byte object at `DAT_00c28168`) shape everything here:
+//! snapshot the FriendsFrame reads. Two client-side laws of the reference's `FriendList.cpp` (the
+//! 0x728-byte object at `DAT_00c28168`) shape everything here:
 //!
 //! - **The lists are guids.** A friend slot holds `{status, note*, guid, area, level, class}` —
 //!   no name — and the display name comes from the ObjectMgr name cache (`0x55f080`) at format
@@ -28,13 +28,12 @@
 //!
 //! Which result maps to which GlobalStrings key is *inferred by name* (the `ERR_FRIEND_*` /
 //! `ERR_IGNORE_*` set is one-to-one with vmangos's `FriendsResult` enum, and 18 results collapse
-//! to the 17 ids because both ADDED codes share `ERR_FRIEND_ADDED_S`) — the open dispatch item in
-//! the record.
+//! to the 17 ids because both ADDED codes share `ERR_FRIEND_ADDED_S`) — still open.
 //!
 //! ## What the ignore list is *for*
 //!
 //! Not the window — the silence. `FriendList::IsIgnored 0x5ae5a0` gates inbound chat and text
-//! emotes (wow-re `system/ui/scratch/text-emote-composition.md`: ignored performer ⇒ dropped
+//! emotes (the `SMSG_TEXT_EMOTE` handler `0x49dbe0`: ignored performer ⇒ dropped
 //! silently, no line at all) and the duel handler's auto-decline (`0x4d4a33`). [`is_ignored`] is
 //! that predicate; its callers are the chat apply arm and the duel one, which is how decision
 //! 0633's stated "no ignore list yet" deviation closes.
@@ -97,9 +96,9 @@ impl SocialState {
     /// Only [`Self::who_sort`] survives, and it survives because the reference's chain is
     /// per-process: its initialiser `0x5adc50` is reached once from the process-start run at
     /// `0x401666`, never from a login, so a player who left the who list sorted by level
-    /// descending finds it that way after a relog (wow-re `who-list-sort-law.md` §3). Everything
-    /// else is login-scoped for the reasons decision 0668 gives — the server re-pushes both lists
-    /// at the next login, and a stale ignore list would silence the wrong guids.
+    /// descending finds it that way after a relog. Everything else is login-scoped for the reasons
+    /// decision 0668 gives — the server re-pushes both lists at the next login, and a stale ignore
+    /// list would silence the wrong guids.
     pub(crate) fn clear_session(&mut self) {
         *self = Self {
             who_sort: std::mem::take(&mut self.who_sort),
@@ -115,7 +114,7 @@ impl SocialState {
 
     /// Is `guid` on the FRIEND list? The reference's `FriendList::FindFriendSlot 0x5ae810` —
     /// base `this+8`, stride `0x20`, bound `0x32`, the same triple `GetNumFriends 0x5ae490`
-    /// counts over (§5, wow-re `system/object-layer/scratch/guild-signon-cvar-gate.md`).
+    /// counts over.
     ///
     /// Its one consumer is the guild sign-on/sign-off line's fourth conjunct, and its purpose is
     /// **de-duplication, not suppression**: `SMSG_FRIEND_STATUS` emits the same two chat ids with

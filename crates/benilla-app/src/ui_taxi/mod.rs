@@ -175,8 +175,8 @@ fn feed_taxi(
     }
 
     // The first-visit "learn" (SMSG_NEW_TAXI_PATH): the real client shows message 0xf2 —
-    // ERR_NEWTAXIPATH, "New flight path discovered!" — via its descriptor (byte-verified at §5
-    // grade, decision 0516 resolving 0501 §1's INTERIM): channel 1 routes the text to the
+    // ERR_NEWTAXIPATH, "New flight path discovered!" — via its descriptor (decision 0516
+    // resolving 0501 §1's INTERIM): channel 1 routes the text to the
     // YELLOW `UI_INFO_MESSAGE` FrameScript event (`0x4945b0` → event 0xe1 — good news, not the
     // red warning), and tag 0x44 plays the descriptor's `+0x08` string as a SOUND-KIT NAME
     // through `PlaySoundByName` (`0x458030`, the `MasterSoundEffects`-gated kit lookup) —
@@ -252,10 +252,9 @@ fn feed_taxi(
 
 /// Push `UnitOnTaxi("player")` — **our own descriptor's `UNIT_FLAG_TAXI_FLIGHT`, and nothing
 /// else**. The reference's verb (`0x517a40`) resolves the token, then reads `UNIT_FIELD_FLAGS`
-/// (`[[obj+0x110]+0xa0]`) and answers `1` iff bit 20 is set (`0x517a86 shr ecx,0x14; test cl,1`;
-/// wow-re `unit-verbs-controlled-charmed-creaturetype.md`). vmangos sets and clears that bit exactly
-/// around a flight (`WaypointMovementGenerator.cpp`, the `FlightPathMovementGenerator`
-/// initialize/finalize).
+/// (`[[obj+0x110]+0xa0]`) and answers `1` iff bit 20 is set (`0x517a86 shr ecx,0x14; test cl,1`).
+/// vmangos sets and clears that bit exactly around a flight (`WaypointMovementGenerator.cpp`, the
+/// `FlightPathMovementGenerator` initialize/finalize).
 ///
 /// It used to read [`crate::player::Player::server_riding`] — "a server spline owns the avatar" —
 /// which is also true under a fear's flee path, a Charge and a knockback. That was not a cosmetic

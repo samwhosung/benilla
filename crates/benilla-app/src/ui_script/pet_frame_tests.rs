@@ -2,7 +2,7 @@
 //! `PetFrame` over synthetic `"pet"` snapshots and the events the app's feed fires.
 //!
 //! The frame's whole job is to be right about **which unit an event names**, and that is what most
-//! of these test: `UNIT_PET` names the OWNER (`arg1 == "player"`, wow-re §9), every other `UNIT_*`
+//! of these test: `UNIT_PET` names the OWNER (`arg1 == "player"`, `0x4bc84f`), every other `UNIT_*`
 //! names the pet itself, and a frame that mixes the two repaints off the player's health.
 
 use benilla_ui::script::{
@@ -541,7 +541,7 @@ fn the_happiness_icon_shows_per_bucket_and_hides_for_a_non_hunter_pet() {
 
 /// **Bucket 0 keeps the icon up.** The reference hides on `not happiness`, and `0` is truthy in
 /// Lua — so a client that folded bucket 0 into nil would hide a frame the reference shows. This is
-/// the trap wow-re calls out by name, tested where it would actually bite: in the frame.
+/// the `GetPetHappiness 0x4be900` trap, tested where it would actually bite: in the frame.
 #[test]
 fn happiness_bucket_zero_keeps_the_icon_showing() {
     benilla_formats::wow_data_or_skip!();

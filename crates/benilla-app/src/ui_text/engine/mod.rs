@@ -22,15 +22,14 @@
 //!
 //! ## What the real client does
 //!
-//! wow-re `system/font` (T3, verified — the lifecycle re-derived by a four-pair cross-check for
-//! decision 1342): a `CGxFont` exists per (face, flags, **exact pixel size**), the size being
-//! `min(32, round(H · max(reqSize, 2/H)))` (`0x5ca030` → `[CGxFont+0x24c]`) — integer device
-//! pixels, always. Glyphs are rasterized **on demand** by `NewCodeDesc` (`0x5cabd0`) into a
-//! per-font `TSHashTable<codepoint → CharCodeDesc>` (`+0x30/+0x38`) and land in a row-partitioned
-//! texture cache (`texcache_set_cellsize` `0x5cf360`, cell size `em + 2·outline pad`, free-slot
-//! search `0x5cf5a0`) of up to 8 pages (`CGxFont+0x18c`). One bitmap per (font, codepoint), zero
-//! subpixel phases — the face is sized by `FT_Set_Pixel_Sizes` to a square integer ppem and the
-//! module calls no `FT_Set_Transform` anywhere.
+//! In the reference (decision 1342), a `CGxFont` exists per (face, flags, **exact pixel size**),
+//! the size being `min(32, round(H · max(reqSize, 2/H)))` (`0x5ca030` → `[CGxFont+0x24c]`) —
+//! integer device pixels, always. Glyphs are rasterized **on demand** by `NewCodeDesc` (`0x5cabd0`)
+//! into a per-font `TSHashTable<codepoint → CharCodeDesc>` (`+0x30/+0x38`) and land in a
+//! row-partitioned texture cache (the cell-size setter `0x5cf360`, cell size `em + 2·outline pad`,
+//! free-slot search `0x5cf5a0`) of up to 8 pages (`CGxFont+0x18c`). One bitmap per (font,
+//! codepoint), zero subpixel phases — the face is sized by `FT_Set_Pixel_Sizes` to a square integer
+//! ppem and the module calls no `FT_Set_Transform` anywhere.
 //!
 //! There is no size ladder and no snapping. **`k` has no counterpart in the ordinary UI path**,
 //! and the reason is precise: `CSimpleFontString`'s constructor sets the one-to-one bit

@@ -265,7 +265,8 @@ fn shipped_multibars_drive_end_to_end() {
 /// The stance bar (StanceBar.xml) through the REAL shipped XML: hidden at zero forms, sized to
 /// the pushed list (buttons past numForms hide), the checked ring on the active form, the 0.4
 /// grey on a not-castable one, a click queuing the form's spell id, and an emptied push hiding
-/// the whole frame again — the wow-re shapeshift-bar-api mechanism driven end to end.
+/// the whole frame again — the reference's form list (`0xb71100`) and its four bindings driven
+/// end to end.
 #[test]
 fn shipped_stance_bar_drives_end_to_end() {
     benilla_formats::wow_data_or_skip!();
@@ -636,7 +637,7 @@ fn the_vertical_multibars_exist_hidden_on_the_reference_pages() {
 /// **Every extra bar is down until its own toggle says otherwise, and `MultiBarLeft` needs two.**
 ///
 /// The four bits of `PLAYER_FIELD_BYTES` byte 2 map to bars 1-4 at the FrameXML layer (the binary
-/// is bar-agnostic — wow-5875-re `system/ui/scratch/action-bar-toggles.md`), and a fresh
+/// is bar-agnostic — `SetActionBarToggles 0x4e76e0` packs four unnamed bits), and a fresh
 /// character's byte is 0, which is the whole of "off by default": nothing here fakes a default,
 /// the bars simply have nothing telling them to show.
 ///
@@ -966,8 +967,8 @@ fn the_grid_option_holds_the_extra_bars_empty_wells_open() {
 /// DIVERGENCES, chosen in 1782. In stock 1.12.1 the dim is fanned to every button and then never
 /// cleared by anything: `SetNormalTexture(path)` reuses the region and writes only its texture
 /// handle, and a 3-argument `SetVertexColor` is `SetVertexColor(r, g, b, currentAlpha)` — so the
-/// first spell anyone picks up leaves every border at alpha 0x80 for the session (wow-re
-/// `button-state-texture-path-setter.md` §2/§7, byte-verified). That is a stuck state keyed to
+/// first spell anyone picks up leaves every border at alpha 0x80 for the session (the reuse leg
+/// `0x778f10`, the alpha-keeping `SetVertexColor` `0x79abd0`). That is a stuck state keyed to
 /// nothing the player can see. We take the look the dim was written for and let go of it with the
 /// payload, which is what the last two assertions here pin.
 #[test]
@@ -1097,10 +1098,10 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
     );
     // What happens to that ring NEXT is decision 1782's open question, deliberately not asserted:
     // the reference's `SetVertexColor(1, 1, 1)` in `ActionButton_UpdateUsable` keeps the alpha
-    // already on the region (byte-pinned, wow-re button-state-texture-path-setter.md §7 — the
-    // "stuck dim" a 1.12 player sees after a drag), while this engine's three-argument call still
-    // resets it to 1.0 until the director calls 1782. A test that pinned either outcome would be
-    // enshrining a divergence as fidelity.
+    // already on the region (`SetVertexColor` `0x79abd0` — the "stuck dim" a 1.12 player sees
+    // after a drag), while this engine's three-argument call still resets it to 1.0 until the
+    // director calls 1782. A test that pinned either outcome would be enshrining a divergence as
+    // fidelity.
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
@@ -1108,9 +1109,9 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
 ///
 /// The whole round trip, over the REAL bindings (`benilla_ui::script::action_bar_toggles`): the
 /// row's setter writes a global, re-derives the bars and posts `CMSG_SET_ACTIONBAR_TOGGLES` with
-/// the WHOLE byte — bits `0x01/0x02/0x04/0x08`, verified against the 1.12.1 binary (wow-5875-re
-/// `417c2d31`). Coming back, the server's descriptor push is the only thing that moves the getter,
-/// and `UIParent.xml`'s `PLAYER_ENTERING_WORLD` arm reads it exactly once as the seed.
+/// the WHOLE byte — bits `0x01/0x02/0x04/0x08` (`SetActionBarToggles 0x4e76e0`). Coming back,
+/// the server's descriptor push is the only thing that moves the getter, and `UIParent.xml`'s
+/// `PLAYER_ENTERING_WORLD` arm reads it exactly once as the seed.
 ///
 /// Every `Set` is one packet, deliberately (the binding gates nothing), which is why the drain is a
 /// list and each step below checks the packet it just caused.
@@ -1745,7 +1746,7 @@ fn the_middle_strip_tiles_along_its_length_only() {
 /// alone, both end caps down.
 ///
 /// The reference fires `UPDATE_SHAPESHIFT_FORMS` for exactly one thing: the form LIST changed
-/// (learn / unlearn / rank — wow-re `shapeshift-bar-api.md`, the fires at `0x4b28ff`/`0x4b2e43`).
+/// (learn / unlearn / rank — the fires at `0x4b28ff`/`0x4b2e43`).
 /// Our feed fired it for any change in the pushed view — a stance switch, a castable flip, the
 /// shared 1 s category cooldown arming and then EXPIRING. Every fire runs the stock
 /// `ShapeshiftBar_Update` (BonusActionBarFrame.lua l.170): `ShapeshiftBarMiddle:Show()`

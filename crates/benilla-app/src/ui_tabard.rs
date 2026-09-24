@@ -1,4 +1,4 @@
-//! The guild tabard designer (decision 1977; wow-re `system/ui/scratch/tabard-designer.md`):
+//! The guild tabard designer (decision 1977):
 //! the app half of the stock `TabardFrame.xml` — the vendor session, the body preview, the save's
 //! pre-flight checks and wire, the reply, and the four events.
 //!
@@ -235,7 +235,8 @@ fn drain_tabard(
             TabardIntent::Close => open.close_core(),
             TabardIntent::Save(design) => {
                 // The vendor guid is the global UI interaction target, which the open set to
-                // this vendor (§2c); ours is the session's stored guid, the same value.
+                // this vendor (`0x502a60` reads `[0xb4e2d0]`); ours is the session's stored guid,
+                // the same value.
                 let Some(vendor) = open.vendor else {
                     continue;
                 };

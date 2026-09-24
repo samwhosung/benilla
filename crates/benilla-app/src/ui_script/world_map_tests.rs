@@ -52,7 +52,7 @@ fn harness() -> UiScript {
 /// button and the elapsed time its one argument. Everything on the sheet — the arrow, the party
 /// and raid blips, the battleground teammates and flags, the corpse — is seated here.
 /// The map arrow's file facts (`MinimapArrow.m2`: one looping 3.333 s Stand keying no bone; the
-/// header box `x ∈ [−0.0127, 0.0135]`, `y ∈ [−0.0118, 0.0145]` — render law §2), handed to the
+/// header box `x ∈ [−0.0127, 0.0135]`, `y ∈ [−0.0118, 0.0145]`), handed to the
 /// engine the way the app does once the asset lands (2007/2015).
 fn arrow_facts(s: &mut UiScript) {
     use benilla_ui::widget::{ModelFileFacts, SequenceFacts};

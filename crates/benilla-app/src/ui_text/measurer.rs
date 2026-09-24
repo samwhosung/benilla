@@ -46,16 +46,16 @@ pub(crate) fn measure_request(
         // frame-local UI units below.
         height: super::drawn_px(r.height, r.text_height, rs),
         // The TRUE outline: THICK biases the client's step law (+1px per glyph — GlyphStepBase
-        // 0x5ca2b0, THICK-only per outline-bake-tint.md), so measure must see it.
+        // 0x5ca2b0, THICK-only), so measure must see it.
         outline: r.outline,
         alpha_gradient: None, // alpha never changes metrics
     };
     let wrap = r.wrap_width.map(|w| w * rs);
     let (w, h) = super::measure_text(e, &r.text, wrap, spec());
     // …and the NATURAL width, which is what `GetStringWidth` answers with (the reference measures
-    // its getter's string with no wrap constraint — wow-re `fontstring-overflow.md`, "The
-    // measurement echo"). A second pass only for the regions that actually carry a declared width;
-    // for the rest the two are one number.
+    // its getter's string with no wrap constraint — the extent measure `0x5c6940`). A second pass
+    // only for the regions that actually carry a declared width; for the rest the two are one
+    // number.
     let natural = if wrap.is_some() {
         super::measure_text(e, &r.text, None, spec()).0
     } else {

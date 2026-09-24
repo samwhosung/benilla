@@ -747,8 +747,9 @@ fn shipped_target_frame_runs_the_level_law() {
         .unwrap();
     assert!(ok, "hostile +10: the skull shows ({:?})", s.errors());
 
-    // A DEAD mob is NOT a corpse (§5: UnitIsCorpse is a pure TYPEID_CORPSE object check, and
-    // UnitLevel has no health test) — the ref shows a dead mob's NUMBER, not the skull.
+    // A DEAD mob is NOT a corpse (UnitIsCorpse `0x5161c0` is a pure TYPEID_CORPSE object check,
+    // and UnitLevel `0x517fc0` has no health test) — the ref shows a dead mob's NUMBER, not the
+    // skull.
     s.set_unit(
         "target",
         Some(UnitState {

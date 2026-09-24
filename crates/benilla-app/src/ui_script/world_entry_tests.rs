@@ -1747,7 +1747,7 @@ fn taken_kit_names(world: &mut World) -> Vec<String> {
 /// **A login and a `/reload` load without a sound** — `0x48fbf0` brackets itself in the counted
 /// suppression scope (`0x48fbfa` → `0x49016d`) across the TOC walk, the addons, the saved
 /// variables and the login cascade, and both of its callers (login `0x48f681`, `/reloadui`
-/// `0x495669`) go through it (wow-re `system/ui/scratch/framexml-load-sound-suppression.md`).
+/// `0x495669`) go through it.
 ///
 /// Stock `TargetFrame_OnLoad` → `TargetFrame_Update` → `Hide()` → `TargetFrame_OnHide` really does
 /// call `PlaySound("INTERFACESOUND_LOSTTARGETUNIT")` at load; the engine drops it. Before the

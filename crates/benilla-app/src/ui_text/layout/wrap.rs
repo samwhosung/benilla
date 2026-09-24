@@ -2,9 +2,9 @@
 //! tokenization, the greedy packer, and the run re-join. Pure (no atlas, no shaping) — the parent
 //! binds the measure closure ([`super::wrap_line`]); the tests here run on stub measures. Split
 //! out of `layout.rs` when it crossed the size budget (the fade-composite arc). The break law is
-//! the byte-verified regime-2 wrap (`system/ui/scratch/fontstring-overflow.md`): break at the last
-//! opportunity, force-break a no-opportunity overflow at the last fitting glyph — a rendered line
-//! never exceeds the wrap width. Remaining approximation stated on [`super::wrap_line`].
+//! the regime-2 wrap (`0x5c7780`): break at the last opportunity, force-break a no-opportunity
+//! overflow at the last fitting glyph — a rendered line never exceeds the wrap width. Remaining
+//! approximation stated on [`super::wrap_line`].
 
 use crate::ui_text::markup::ColorRun;
 
@@ -143,10 +143,10 @@ pub(super) fn tokenize_words(line: &[ColorRun]) -> Vec<WrapWord> {
 /// A word that exceeds `max_width` alone on its line **force-breaks at the last fitting glyph** —
 /// the client's no-break-opportunity path (`0x5c7780` picks the last opportunity in the line; with
 /// none, `0x5c7623 fcomp / 0x5c762b je` drops the exceeding glyph and ends the line — a rendered
-/// line never exceeds the wrap width; `system/ui/scratch/fontstring-overflow.md` regime 2). When
-/// not even one glyph fits (a sub-glyph-width box), the builder makes no progress and bails —
-/// the client drops the remainder; we mirror it per source line. Unreachable for any shipped box
-/// (all are tens of px wide), kept for loop-termination correctness.
+/// line never exceeds the wrap width). When not even one glyph fits (a sub-glyph-width box), the
+/// builder makes no progress and bails — the client drops the remainder; we mirror it per source
+/// line. Unreachable for any shipped box (all are tens of px wide), kept for loop-termination
+/// correctness.
 pub(super) fn greedy_pack<F: FnMut(&str) -> f32>(
     words: Vec<WrapWord>,
     max_width: f32,
@@ -310,7 +310,7 @@ mod wrap_tests {
     #[test]
     fn overlong_word_force_breaks_at_the_last_fitting_glyph() {
         // A single word wider than the limit force-breaks (the client's no-opportunity path,
-        // fontstring-overflow.md regime 2): each produced line fits the width exactly greedily.
+        // `0x5c7623`): each produced line fits the width exactly greedily.
         let w = words(&[("Supercalifragilistic", WHITE), ("ok", WHITE)]);
         let lines = greedy_pack(w, 8.0, char_measure);
         assert_eq!(lines.len(), 3);

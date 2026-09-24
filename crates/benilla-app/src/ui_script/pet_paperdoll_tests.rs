@@ -484,11 +484,10 @@ fn hovering_the_diet_icon_lists_what_the_pet_eats() {
     // **The pane's scene draws AFTER the icon, and that is the reference's own order.**
     // `PetPaperDollPetInfo` is a sibling frame of `PetModelFrame` (same parent, so the same
     // `(strata, level)` bucket) and its happiness art is a BACKGROUND texture on it; a model's
-    // scene drains out of that bucket's ARTWORK batch, last (wow-re
-    // `ui/scratch/model-frame-draw-order.md`: `0x76d160` registers the render callback only for
-    // layer 2, and `0x76fb00` drains quads, then text, then callbacks). The icon stays visible
-    // because a model pane is not an opaque quad — the bake is transparent everywhere the pet
-    // is not, here as in the client. This assertion is the ordering, not the pixels.
+    // scene drains out of that bucket's ARTWORK batch, last (`0x76d160` registers the render
+    // callback only for layer 2, and `0x76fb00` drains quads, then text, then callbacks). The icon
+    // stays visible because a model pane is not an opaque quad — the bake is transparent everywhere
+    // the pet is not, here as in the client. This assertion is the ordering, not the pixels.
     assert!(
         pane.z > icon.z,
         "the pane's scene draws out of the ARTWORK batch, after a sibling's BACKGROUND art \

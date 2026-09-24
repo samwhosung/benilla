@@ -15,9 +15,9 @@
 //! `1` — reads a `true` as "not held". So the kinds column is gated as well, wherever the table
 //! says it is trustworthy (decision 2118).
 //!
-//! The table is wow-re's `re/audit/binding-shapes.tsv`, vendored: 1722 rows over all 82 registrar
-//! tables, one per registered binding, generated and differentially tested against that repo's
-//! other harvester. It carries the gate rule **per row** rather than in prose, which is the whole
+//! The table is a harvest of the reference binary, vendored: 1722 rows over all 82 registrar
+//! tables, one per registered binding, generated and differentially tested against a second
+//! harvester. It carries the gate rule **per row** rather than in prose, which is the whole
 //! reason it can be enforced instead of remembered:
 //!
 //! * `arity_conf = exact` — sound. This is the column to gate on.
@@ -71,9 +71,9 @@ const NOT_YET_ASSERTED: &[(&str, usize, &str)] = &[];
 /// two it held did exactly that, within the day.
 ///
 /// **It is empty.** It held `GetSendMailItem`, whose no-attachment leg the shapes table types as
-/// two numbers and no recorded note gave the values of. wow-re answered it at the bytes —
-/// `0x4ae590` pushes `(nil, nil, 0, 0)`, and the stray `1` we had was borrowed from
-/// `GetAuctionSellItemInfo`'s empty leg — and 2129 folded the verdict back.
+/// two numbers without their values. The bytes answer it — `0x4ae590` pushes `(nil, nil, 0, 0)`,
+/// and the stray `1` we had was borrowed from `GetAuctionSellItemInfo`'s empty leg — and 2129
+/// folded the verdict back.
 const KINDS_NOT_YET_ASSERTED: &[(&str, &str, &str)] = &[];
 
 /// The widget kind gate's shrinking list — see [`KINDS_NOT_YET_ASSERTED`].
@@ -124,12 +124,11 @@ fn rows_of_kind(kind: &str) -> Vec<Row> {
                 return None;
             }
             // **`agree` is necessary and not sufficient, and the second condition is the table's
-            // own too** (2150 + wow-re `scratch/binding-kinds-stack-overwrite.md`). The kinds
-            // come from tracing each binding's `lua_push*` calls; a row whose notes carry
-            // `delegated-push` has a CALLEE that pushes on its own behalf, which the trace sees
-            // one level too high up, so its tuple covers the binding's own ops only. `eax` is
-            // unaffected, so arity stays gated on every row — it is the kinds claim alone that
-            // narrows.
+            // own too** (2150). The kinds come from tracing each binding's `lua_push*` calls; a row
+            // whose notes carry `delegated-push` has a CALLEE that pushes on its own behalf, which
+            // the trace sees one level too high up, so its tuple covers the binding's own ops only.
+            // `eax` is unaffected, so arity stays gated on every row — it is the kinds claim alone
+            // that narrows.
             let delegated = f.len() > 11 && f[11].contains("delegated-push");
             Some(Row {
                 name: f[0].to_string(),
@@ -322,7 +321,7 @@ fn every_query_binding_answers_the_reference_s_return_arity() {
 const BASELIB_PROBES: &[(&str, &str)] = &[
     ("collectgarbage", ""),
     ("date", ""),
-    // The five shipped stubs — `xor eax,eax; ret` in the image (`lua-dialect.md` §3a), so calling
+    // The five shipped stubs — `xor eax,eax; ret` in the image (`0x7027e0`–`0x702820`), so calling
     // one is as safe here as it is there, and their `0 exact ()` rows are still worth holding.
     ("debugbreak", ""),
     ("debugdump", ""),

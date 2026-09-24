@@ -15,10 +15,10 @@ pub(super) const CLIENT_FONTS: &[&str] = &[
 /// The face's baseline ascender as a fraction of the em — `hhea.asc / (hhea.asc + |hhea.desc|)` —
 /// straight from the raw sfnt bytes. This is the term in the client's glyph *placement* law: the
 /// ink hangs from the pixel ascender `[CGxFont+0x17c] = round(em · asc/(asc+|desc|))`, threaded
-/// unchanged into `glyph_vplace` (0x5d1360) as the operand that fixes `baseline = cellTop +
-/// ascender` (wow-re `system/font`, §5-verified 2026-07-09: the call chain `0x5ca160 → 0x5d1120
-/// [ebp+0xc] → 0x5d1360 [ebp+0x10]`, where the cell's own `[[FT_Face+0x54]+0x68]` is the
-/// per-glyph `bitmap_top`, the *subordinate* operand). This is the `ComputeRasterMetrics`
+/// unchanged into the glyph placement kernel (0x5d1360) as the operand that fixes
+/// `baseline = cellTop + ascender` (the call chain `0x5ca160 → 0x5d1120 [ebp+0xc] → 0x5d1360
+/// [ebp+0x10]`, where the cell's own `[[FT_Face+0x54]+0x68]` is the per-glyph `bitmap_top`, the
+/// *subordinate* operand). This is the `ComputeRasterMetrics`
 /// `load_param`; the FreeType scaled hhea ascender (`asc/upem` ≈ 0.965) appears NOWHERE in the
 /// placement path — seating with it drops every line ~3px too low for Friz (965/1215 ≈ 0.794 vs
 /// 0.965 → baseline row 10 vs 13 in a 13-tall cell). A tiny table-directory walk (`hhea` →

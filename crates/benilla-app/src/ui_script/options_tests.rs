@@ -4249,8 +4249,8 @@ fn the_max_camera_distance_slider_stores_a_factor_and_reads_out_yards() {
 /// Controls-page dropdown, and the setting that decides whether the camera returns to behind the
 /// character at all. What is pinned here is the trap: the reference's own dropdown writes `1/2/3`,
 /// but the ENGINE's tables are indexed `0 = Never · 1 = Smart · 2 = Always`, and `3` is not a style
-/// — the validator accepts it while the terrain-tilt consumer indexes off the end of its table
-/// (wow-re `camera-smooth-style.md` §2/§4). So our entries carry the engine's numbers in the
+/// — the validator (`0x50c060`) accepts it while the terrain-tilt consumer (`0x50dbc0`) indexes
+/// off the end of its table. So our entries carry the engine's numbers in the
 /// reference's display order, a stray `3` still reads as Never rather than as the numerically
 /// nearest "Always", and the plate follows the SELECTION the way that dropdown's own does.
 #[test]

@@ -1,9 +1,8 @@
-//! The overflow law — the pure side of the FontString three-regime overflow verdict
-//! (`system/ui/scratch/fontstring-overflow.md`, decision 0292): the height-limit line stack
-//! (regime 2's vertical half, `CGxString+0x40`) and the height-gated ellipsis-truncate
-//! (regime 3, `CSimpleFontString 0x771ec0`). Pure (no atlas, no shaping) — the parent binds the
-//! row-count closure ([`super::ellipsize_to_fit`]), mirroring how [`super::wrap`] binds its
-//! measure; the tests here run on stub row counts.
+//! The overflow law — the pure side of the FontString's three overflow regimes (decision 0292):
+//! the height-limit line stack (regime 2's vertical half, `CGxString+0x40`) and the height-gated
+//! ellipsis-truncate (regime 3, `CSimpleFontString 0x771ec0`). Pure (no atlas, no shaping) — the
+//! parent binds the row-count closure ([`super::ellipsize_to_fit`]), mirroring how [`super::wrap`]
+//! binds its measure; the tests here run on stub row counts.
 
 /// The client's truncation marker: three ASCII dots (`.rdata 0x800188` = `2e 2e 2e 00`) — never
 /// the single `…` glyph.
@@ -31,8 +30,8 @@ pub(super) fn lines_allowed(box_h: f32, pitch: f32) -> usize {
 /// the one the ellipsis-truncate measures against.
 ///
 /// The truncate loop re-measures each backed-off candidate through
-/// `0x44d960` → **`0x5c21c0` `GxuFont_GetMaxCharsWithinHeight`** (`system/font/scratch/
-/// re-wave1-capi.md` l.53-61), whose per-line test **breaks** when `boxH + 2⁻²⁰ < accumH + lineH`.
+/// `0x44d960` → **`0x5c21c0` `GxuFont_GetMaxCharsWithinHeight`**, whose per-line test **breaks**
+/// when `boxH + 2⁻²⁰ < accumH + lineH`.
 /// A line is therefore admitted only if it lands *wholly within* the box: the largest `n` with
 /// `n·pitch ≤ box_h`. That is a **floor**, where [`lines_allowed`]'s render stack is a **ceil** —
 /// the render emits a line and *then* notices it overran, so it draws one more line than fits
@@ -46,8 +45,7 @@ pub(super) fn lines_allowed(box_h: f32, pitch: f32) -> usize {
 ///
 /// `0` is this floor's honest answer for a box shorter than a single line — but it is NOT what the
 /// ellipsis seam may act on: `0x771ec0` clamps its box height to one line pitch *before* the fit
-/// test (`boxH := max(boxH, lineH+gap)` when maxLines==0 — bytes `0x771f9e..0x771faa`, byte-read
-/// 2026-07-23, recorded in wow-re's `fontstring-overflow.md` "The min-one-line height clamp"), so
+/// test (`boxH := max(boxH, lineH+gap)` when maxLines==0 — bytes `0x771f9e..0x771faa`), so
 /// the sub-one-line call this 0 describes never happens in the client. [`ellipsize_in_box`]
 /// mirrors the clamp. Decision 0597's "0 lines → the loop backs off to the bare ellipsis" reading
 /// missed it and turned every sub-one-line fixed box into three dots — money purses, hotkeys,

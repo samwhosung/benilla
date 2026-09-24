@@ -108,8 +108,8 @@ pub(crate) fn measure_line_width_for_test(
 /// Greedy word-boundary wrap of one markup line (a `\n`-delimited run sequence) into sub-lines that
 /// each fit within `max_width` px.
 ///
-/// The break law is the byte-verified regime-2 wrap (`system/ui/scratch/fontstring-overflow.md`,
-/// the `0x5c6c50`/`0x5c7780` kernel): break at the last break opportunity; a word with none that
+/// The break law is the regime-2 wrap (the `0x5c6c50`/`0x5c7780` kernel): break at the last
+/// break opportunity; a word with none that
 /// overflows alone force-breaks at the last fitting glyph — a rendered line never exceeds the wrap
 /// width. Inter-word whitespace is preserved verbatim (a double space after a period stays a double
 /// space — see [`tokenize_words`]), and only the trailing separator at a line break drops. Colors
@@ -181,9 +181,9 @@ pub(crate) fn measure_text(
     // refactor's.
     //
     // Height: N lines at the client's intrinsic pitch — the font em, NO outline pad (the byte law:
-    // `font_textblock_height 0x5c2070` = N·S + (N−1)·gap, spacing 0 for all shipped UI; the +2r
-    // lives only in the atlas CELL, never the block math — `fontstring-vertical-placement.md`). An
-    // outlined line's ring pokes past this height by design, exactly as it does in the client.
+    // the text-block height kernel `0x5c2070` = N·S + (N−1)·gap, spacing 0 for all shipped UI; the
+    // +2r lives only in the atlas CELL, never the block math). An outlined line's ring pokes past
+    // this height by design, exactly as it does in the client.
     (max_w.ceil() + 1.0, render_lines.len() as f32 * r.size)
 }
 
@@ -213,9 +213,9 @@ fn wrapped_rows(e: &TextEngine, r: Resolved, text: &str, wrap_width: f32) -> usi
 /// [`wrapped_rows`] that stops once `cap` rows exist — the client's own fit walk is bounded by the
 /// BOX, not by the string: `GxuFont_GetMaxCharsWithinHeight` (`0x5c21c0`) lays out `min(needed,
 /// fits + 1)` lines and abandons the rest, because the height test sits downstream of the per-line
-/// kernel call (wow-re `system/ui/scratch/fontstring-ellipsis-cost.md`). A caller that only needs
-/// to know whether the text OVERFLOWS passes `allowed + 1` and never pays for the tail; the chat
-/// band's row count, which is a real number, passes [`usize::MAX`].
+/// kernel call. A caller that only needs to know whether the text OVERFLOWS passes `allowed + 1`
+/// and never pays for the tail; the chat band's row count, which is a real number, passes
+/// [`usize::MAX`].
 fn wrapped_rows_capped(
     e: &TextEngine,
     r: Resolved,
@@ -261,9 +261,9 @@ pub(super) fn wrapped_rows_capped_for_test(
 }
 
 /// The FontString display string under the height-gated ellipsis-truncate — `CSimpleFontString
-/// 0x771ec0`, regime 3 of the overflow verdict (`fontstring-overflow.md`, decision 0292's named
-/// residue): when the wrapped text needs more lines than the box allows, the tail is replaced by
-/// `"..."`, backed off one char at a time until the candidate fits. `None` = draw the raw text
+/// 0x771ec0`, regime 3 of the overflow law (decision 0292's named residue): when the wrapped text
+/// needs more lines than the box allows, the tail is replaced by `"..."`, backed off one char at a
+/// time until the candidate fits. `None` = draw the raw text
 /// (fits, or the gate fails). The gate is geometric — `boxW > 0 && boxH > 0` on the resolved rect
 /// (`maxLines` unmodeled; nothing shipped sets it): an auto-height FontString's rect height IS its
 /// wrapped block (the measure round-trip), so it always fits and never truncates — the byte law's

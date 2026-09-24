@@ -22,7 +22,7 @@
 //!   replaced and why.
 //! - **Outlines are one composite cell.** An outlined glyph's black ring and its fill are
 //!   rasterized together into a single cell and blitted once — the client's own baked-outline
-//!   architecture (`glyph_blit_aa_outline 0x5cea30`; see [`outline`]), which is what makes an
+//!   architecture (the AA-outline blit `0x5cea30`; see [`outline`]), which is what makes an
 //!   outlined string fade as one thing instead of blackening. The Number* fonts (action-bar
 //!   hotkeys/counts) carry it.
 //! - **`justifyH` and `justifyV` are honored** (see [`layout_text_quads`]): lines justify
@@ -36,11 +36,11 @@
 //!
 //! `cosmic-text`'s shaper is used for glyph SELECTION and rasterization, **one character at a
 //! time** ([`engine::TextEngine::ensure_char`]); the pen then **advances by the client's own step
-//! law** (wow-re `system/font`): per glyph, `floor(advance) + 1` px (`rasterize_glyph` 0x5d1120's
+//! law**: per glyph, `floor(advance) + 1` px (the glyph rasterizer 0x5d1120's
 //! `out[5] = (FT_advance>>6)+1.0`), plus another `+1` for a **THICK**-outlined font only
-//! (`GlyphStepBase` 0x5ca2b0 biases solely under the THICK flag — `outline-bake-tint.md`,
-//! correcting this module's earlier any-outline reading) — the extra tracking that makes real
-//! client text read wider/denser than raw font metrics.
+//! (`GlyphStepBase` 0x5ca2b0 biases solely under the THICK flag — correcting this module's earlier
+//! any-outline reading) — the extra tracking that makes real client text read wider/denser than
+//! raw font metrics.
 //!
 //! Per character is not a shortcut; it is the law. The client's `ComputeStep` (0x5ca2d0) has no
 //! neighbour term, so a string's width is a pure function of its characters — which is what lets
@@ -53,9 +53,9 @@
 //! *negative* pair kerns and rounds — ~0 at UI sizes; the test that pins the width law also pins
 //! that this is what we are doing), and glyph BITMAPS are cosmic/swash unhinted coverage where the
 //! client runs 2004-era FreeType with hinting flags (0x208a/0x20c2) — slightly slimmer stems at
-//! small sizes. A future bit-exact replacement (wow-re's font kernel) only changes this module;
-//! nothing in its callers moves. The deliberate *rendering* divergences — where the client stretches
-//! a cell and we rasterize the true size — are named in [`engine`]'s module doc.
+//! small sizes. A future bit-exact replacement (a port of the client's font kernel) only changes
+//! this module; nothing in its callers moves. The deliberate *rendering* divergences — where the
+//! client stretches a cell and we rasterize the true size — are named in [`engine`]'s module doc.
 
 mod engine;
 mod layout;
@@ -80,8 +80,8 @@ pub(crate) use layout::{
 /// pre-font-object behavior; a font object supplies a per-`FontString` height instead.
 const DEFAULT_FONT_SIZE: f32 = 12.0;
 
-/// The FontString **one-to-one raster cap** (wow-re `system/ui/scratch/fontstring-overflow.md`,
-/// §5 pair + byte arbitration, VERIFIED): every `CSimpleFontString` ships with the one-to-one bit
+/// The FontString **one-to-one raster cap**:
+/// every `CSimpleFontString` ships with the one-to-one bit
 /// set (`+0x120` bit `0x200`, ctor `0x770d30` default `0x212`; the sole clearer is `SetTextHeight`
 /// `0x771600`, which nothing we ship calls), so the size every build/measure actually uses is the
 /// getter `0x7727b0(1)`'s return — the font's RASTERIZED pixel size drawn 1:1, not the requested
@@ -110,10 +110,10 @@ pub(crate) fn fontstring_em(height: Option<f32>) -> Option<f32> {
     height.map(|h| h.min(FONTSTRING_EM_CAP))
 }
 
-/// The DRAWN pixel height of a UI FontString under the client's two size regimes (§5-verified,
-/// wow-re `fontstring-overflow.md` + `font-size-to-freetype-em.md`), times the seam scale
-/// `s = windowH/768 × uiScale` (decisions 0582 + 0584, `crate::ui_script::seam_scale`; `s = 1`
-/// at the design height with the dial at 1, where this is byte-identical to the pre-scaling law):
+/// The DRAWN pixel height of a UI FontString under the client's two size regimes (the size getter
+/// `0x7727b0`), times the seam scale `s = windowH/768 × uiScale` (decisions 0582 + 0584,
+/// `crate::ui_script::seam_scale`; `s = 1` at the design height with the dial at 1, where this is
+/// byte-identical to the pre-scaling law):
 ///
 /// - **one-to-one** (the ctor default, everything but SetTextHeight): the raster size — the
 ///   [`FONTSTRING_EM_CAP`] applied in UNITS (the recorded divergence above: the client caps in
@@ -149,7 +149,7 @@ mod cap_tests {
     }
 }
 // NOTE on line pitch: there is deliberately NO line-height factor. The client's line-step law
-// (`LayoutLines` 0x5cdc20, wow-re `system/font`) is `lineStep = px(size) + spacing`, where
+// (`LayoutLines` 0x5cdc20) is `lineStep = px(size) + spacing`, where
 // `spacing` is the FontString's own extra line gap (XML `spacing`, default **0** — none of our
 // shipped UI sets one), so the pitch IS the font height. The earlier `1.25` factor here was
 // cosmic-text's convention, not the client's, and read as "line height too large" against the
@@ -159,13 +159,12 @@ mod cap_tests {
 /// The FontString **display string** — the ellipsis seam's answer, remembered per region.
 ///
 /// The real client does not recompute this per frame, and the reason it can afford the back-off's
-/// shape is that it almost never runs (wow-re `system/ui/scratch/fontstring-ellipsis-cost.md`, §5
-/// trio + byte arbitration): `0x771ec0`'s result is built into the `CGxString` at `+0xf8` and
-/// rebuilt only when the rebuild guard `[fontstring+0x60] & 1` is cleared — by `SetFont`
+/// shape is that it almost never runs: `0x771ec0`'s result is built into the `CGxString` at `+0xf8`
+/// and rebuilt only when the rebuild guard `[fontstring+0x60] & 1` is cleared — by `SetFont`
 /// (`0x7715e0`), `SetTextHeight` (`0x771666`), `SetText` (`0x771ea4`), or a resolved-rect **size**
 /// change (`0x768d20`, which fires nothing when all four edges move less than `1e-5`). Nothing on
-/// the draw path can reach it at all: the note's dword scan of every PE section finds `0x771ec0`
-/// and `0x7724a0` in no vtable, table or pointer cell, so the complete caller set is their direct
+/// the draw path can reach it at all: a dword scan of every PE section finds `0x771ec0` and
+/// `0x7724a0` in no vtable, table or pointer cell, so the complete caller set is their direct
 /// `call` sites — none of them per-frame. **A pure move, a same-text `SetText`, and any no-op
 /// setter cost zero.**
 ///
@@ -257,10 +256,10 @@ impl EllipsisMemo {
     }
 }
 
-/// [`EllipsisMemo`]'s invalidation set — the client's own (`fontstring-ellipsis-cost.md` §6:
-/// `SetFont`, `SetTextHeight`, `SetText`, and a resolved-rect SIZE change past `1e-5`), expressed
-/// as an input comparison. A memo that misses is merely slow; one that HITS when an input moved
-/// draws a stale string, so each input gets its own test.
+/// [`EllipsisMemo`]'s invalidation set — the client's own (what rebuilds `0x7724a0`: `SetFont`,
+/// `SetTextHeight`, `SetText`, and a resolved-rect SIZE change past `1e-5`), expressed as an input
+/// comparison. A memo that misses is merely slow; one that HITS when an input moved draws a stale
+/// string, so each input gets its own test.
 #[cfg(test)]
 mod ellipsis_memo_tests {
     use super::*;
