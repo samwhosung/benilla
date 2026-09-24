@@ -76,13 +76,11 @@ const PLAYER_FLAGS_GM: u32 = 0x0000_0008;
 /// **PACIFIED and DISARMED used to sit in here and do not belong** (decision 1903): neither
 /// touches movement, and a banner telling a session "movement is server-blocked" because the
 /// character is disarmed sends someone hunting a mover bug that is not there. They moved to
-/// [`ABILITY_BLOCKERS`]. What is left is movement, and wow-re's
-/// `object-layer/scratch/unit-flags-movement-gates.md` is where each row's mechanism lives —
-/// note they are **not one gate**: STUNNED is the only bit that reaches the local input tick
-/// (`0x5145b0` → `0x514755`, killing the turn and pitch emitters), CONFUSED and FLEEING act
-/// through the `IsSelfControlled` predicate `0x5fa550` (mask `0xc00004`, which STUNNED is *not*
-/// in), POSSESSED does not refuse at all but redirects to the charmer, and the taxi bit shares
-/// no gate with any of them.
+/// [`ABILITY_BLOCKERS`]. What is left is movement — and note they are **not one gate**: STUNNED
+/// is the only bit that reaches the local input tick (`0x5145b0` → `0x514755`, killing the turn
+/// and pitch emitters), CONFUSED and FLEEING act through the `IsSelfControlled` predicate
+/// `0x5fa550` (mask `0xc00004`, which STUNNED is *not* in), POSSESSED does not refuse at all but
+/// redirects to the charmer (`0x5fa582`), and the taxi bit shares no gate with any of them.
 const MOVE_BLOCKERS: &[(u32, &str)] = &[
     (0x0004_0000, "STUNNED (no turning, no pitch)"),
     (

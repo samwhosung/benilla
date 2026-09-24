@@ -2,7 +2,7 @@
 //!
 //! The real 1.12 client renders a unit's model **once** into a tiny (64²) off-screen texture and
 //! freezes it (re-baked only on model change), then stamps a round alpha stencil into it; the low
-//! resolution is a 2004 shortcut, not a look (wow-re `system/ui/scratch/portrait-render.md`, §5-verified).
+//! resolution is a 2004 shortcut, not a look (`0x524f60`).
 //! benilla keeps the *idea* — a flat 2D face in the ring — but bakes it properly: a **high-resolution**
 //! off-screen render of the unit's real model, so the still is crisp. No live 3D widget sits in the UI;
 //! what lands in the circle is a plain rendered image (director's call).
@@ -24,30 +24,28 @@
 //! mesh twin + steady exterior material. Mirroring the children (not the shared display cache) means
 //! the portrait can never drift from what's standing in the world, and gear/appearance rebuilds
 //! re-bake automatically (the parts key changes). While a live unit's model is still loading, the
-//! slot shows the ref's own 2D stand-in (`TemporaryPortrait-{Sex}-{Race}` / `-Monster`, RE C5) via
-//! [`PortraitSource::File`].
+//! slot shows the ref's own 2D stand-in (`TemporaryPortrait-{Sex}-{Race}` / `-Monster`,
+//! `0x525ba0`) via [`PortraitSource::File`].
 //!
 //! ## Framing: the model's own authored camera
 //!
 //! The framing is the model's **authored portrait camera** — the MD20 camera `cameraLookup[0]`
-//! selects (VERIFIED, wow-re `system/ui/scratch/portrait-render.md` §4 + corrected verdict
-//! `aa186e79`): the real bake builds `lookAt(eye, target, up-from-roll)` + the gxumath
+//! selects (`0x713540`): the real bake builds `lookAt(eye, target, up-from-roll)` + the gxumath
 //! *diagonal-FOV* perspective at the portrait path's aspect, which is **1.0 on every screen** —
 //! net vertical half-angle `fov/(2√2)`, isotropic (`framing::WowPortraitProjection`, decision
 //! 1543) — and **no** engine-side yaw or normalization on top. Every artist calibrated camera 0 to their
 //! own model — that is the whole mechanism behind the ref's uniformly tight, consistently-angled
-//! face crops across humans, wolves, and rabbits. It supersedes the first RE verdict's C4 ("framing
-//! is not model data"), corrected on the wow-re record. A camera-less model (a few creatures,
+//! face crops across humans, wolves, and rabbits. A camera-less model (a few creatures,
 //! props) falls back to [`frame`]'s heuristic head-anchor framing.
 //!
 //! ## Pose: a fresh instance at Stand
 //!
-//! The bake is **posed like the ref's** (wow-re §4 D2): a fresh throwaway instance — the booth's
-//! own joint hierarchy + the parts' skinned twins — armed to the model's Stand (anim id 0 through
-//! its own baked resolution, the ref's loader-idle seed) and frozen, never the unit's live world
-//! pose. Bone riders (helm/shoulder armor, held items) ride their bone's joint, so they sit in
-//! the Stand pose exactly like the world instance ([`PortraitRider`]; the ref resets the attach
-//! *sockets* the same way, RE C3). See [`spawn_booth_model`].
+//! The bake is **posed like the ref's** (instance `0x707400`, pose `0x7121a0`): a fresh throwaway
+//! instance — the booth's own joint hierarchy + the parts' skinned twins — armed to the model's
+//! Stand (anim id 0 through its own baked resolution, the ref's loader-idle seed) and frozen, never
+//! the unit's live world pose. Bone riders (helm/shoulder armor, held items) ride their bone's
+//! joint, so they sit in the Stand pose exactly like the world instance ([`PortraitRider`]; the ref
+//! resets the attach *sockets* the same way, `0x47a230`). See [`spawn_booth_model`].
 //!
 //! ## Deviations from the ref (deliberate) and what's still coarse
 //!
@@ -55,7 +53,7 @@
 //! ambient state — the *body* panes instead carry the reference's own `<PlayerModel>` light, see
 //! [`model_pane_light`]), continuous
 //! booth render vs dirty-byte bake, and the frozen Stand *phase* is t=0 (the ref's sampling clock
-//! is the verdict's one unsettled INFERRED point — t≈0 vs live phase; both are Stand, and t=0
+//! is the one unsettled, inferred point — t≈0 vs live phase; both are Stand, and t=0
 //! reproduces the ref wolf's open mouth). The creature *loading* stand-in is `-Monster` (our
 //! pick — the ref's `-Pet` belongs to its pet-frame delegate).
 //! `WOW_PORTRAIT_TEST=<Model\Path.mdx>` (+ `WOW_PORTRAIT_TEST_SKIN=<blp>`) bakes that model into
@@ -137,7 +135,7 @@ const INSPECT_SLOT: &str = "inspect";
 /// rather than sharing the `"pet"` portrait slot because that one is a 256² *bust* for the pet unit
 /// frame — different subject framing, different resolution, and a yaw the portrait must never have.
 const PETDOLL_SLOT: &str = "petdoll";
-/// The **stable window**'s model pane (wow-re `ui/scratch/stable-master-window.md` §7.1) — the
+/// The **stable window**'s model pane (`0x4cb870`) — the
 /// fourth body pane, and the only one whose subject may have no world object at all.
 /// `SetPetStablePaperdoll` forks on the selection: `-1` (the summoned pet) resolves the live pet by
 /// GUID and takes its model, anything else maps the petNumber back to a slot and goes through the
@@ -288,10 +286,10 @@ const PORTRAIT_SIZE: u32 = 256;
 const PAPERDOLL_SIZE: u32 = 512;
 /// Stamped on every spawned unit-model part child by the attach path ([`crate::entities`]): the
 /// part's two mesh twins — the booth poses the **skinned** twin at Stand on its own throwaway
-/// skeleton (the ref bake, wow-re §4 D2), the **static** bind-pose twin serving the boneless
-/// fallback — and its **steady exterior material** (the child may currently wear the appear-fade
-/// blend or interior variant; a portrait always wants the steady look). The booth mirrors a unit's
-/// `PortraitPart` children — the exact dressed look standing in the world.
+/// skeleton (the ref bake: instance `0x707400`, pose `0x7121a0`), the **static** bind-pose twin
+/// serving the boneless fallback — and its **steady exterior material** (the child may currently
+/// wear the appear-fade blend or interior variant; a portrait always wants the steady look). The
+/// booth mirrors a unit's `PortraitPart` children — the exact dressed look standing in the world.
 #[derive(Component)]
 pub(crate) struct PortraitPart {
     pub(crate) static_mesh: Handle<Mesh>,
@@ -304,7 +302,8 @@ pub(crate) struct PortraitPart {
 /// [`crate::entities::equipment`]): the mesh + steady material like [`PortraitPart`], plus where it
 /// sits — the body bone it rides and the attach-point offset under that bone. The posed booth
 /// seats the rider under its throwaway skeleton's joint (so it rides the Stand pose exactly like
-/// the world instance rides its gait); the ref resets the attach *sockets* the same way (RE C3).
+/// the world instance rides its gait); the ref resets the attach *sockets* the same way
+/// (`0x47a230`).
 ///
 /// It also rides a **mirror-only carrier** — a marker child that draws nothing — where the world
 /// geometry it names is not a unit descendant we can stamp: an item glow's own render batches, which
@@ -428,7 +427,7 @@ pub(crate) struct PortraitEffects {
 pub(crate) struct PortraitStandIn(pub(crate) u32);
 
 /// What a portrait slot currently shows — the booth's live bake, or the ref's 2D stand-in file
-/// while a unit's model is still streaming in (RE C5).
+/// while a unit's model is still streaming in (`0x525ba0`).
 #[derive(Clone, PartialEq)]
 pub(crate) enum PortraitSource {
     /// The slot's off-screen render target (the model bake).
@@ -438,8 +437,7 @@ pub(crate) enum PortraitSource {
     File(String),
 }
 
-/// **The GUID-keyed bake cache** — `0xc0ce7c` (decision 1640; wow-re
-/// `ui/scratch/party-oor-stats-and-portrait-law.md` §4/§5, report B334).
+/// **The GUID-keyed bake cache** — `0xc0ce7c` (decision 1640; report B334).
 ///
 /// `SetPortraitTexture` on a player GUID whose object the client does not hold does **not** go
 /// straight to the 2D stand-in: it probes this cache by guid and, on a hit with a live handle,
@@ -556,7 +554,7 @@ impl Default for PetDollBooth {
     }
 }
 
-/// The stable window's model pane input (wow-re `stable-master-window.md` §7.1) — the
+/// The stable window's model pane input — the
 /// [`PetDollBooth`] shape plus the one thing no other body pane needs: a **subject with no world
 /// object**.
 ///
@@ -584,11 +582,10 @@ impl Default for PetDollBooth {
 /// (`0x4cb870`) writes no scale on either arm; `0x505cb0` only stores the pointer into
 /// `[widget+0x3f0]` and clears `[+0x3e0]`/`[+0x3e4]`; and the record→model build it defers to
 /// (`0x505a70`) walks `CreatureDisplayInfo` → `CreatureModelData` → the model path and calls
-/// `0x4797b0`, which wow-re's `charactermodel` ledger records as the creature **texture-variation**
-/// applier — there is no `fmul` of a scale anywhere on the path. The pane is unnormalized by
-/// construction anyway ([`framing::body_frame`]: a `<PlayerModel>` renders through the model's own
-/// authored camera or a fixed rig, never a bounds fit), so "small model draws small" is already the
-/// law here.
+/// `0x4797b0`, the creature **texture-variation** applier — there is no `fmul` of a scale anywhere
+/// on the path. The pane is unnormalized by construction anyway ([`framing::body_frame`]: a
+/// `<PlayerModel>` renders through the model's own authored camera or a fixed rig, never a bounds
+/// fit), so "small model draws small" is already the law here.
 ///
 /// The second reason is internal, and it is the stronger one: the live arm goes through
 /// [`sync_body_booth`] like every other body pane, which applies only [`framing::pane_root_scale`].
@@ -747,7 +744,7 @@ struct Booth {
 /// A body pane's **turn animation** state — the half of the reference's `SetRotation` that is not
 /// the facing write (decision 1559, director report B313).
 ///
-/// `PlayerModel:SetRotation(angle)` (`0x505bb0`, wow-re `modelframe-camera-law.md` §6) does two
+/// `PlayerModel:SetRotation(angle)` (`0x505bb0`) does two
 /// things: it picks a turn-in-place shuffle by direction, queues it and arms a 100 ms expiry, and
 /// *then* writes the facing field `SetFacing` writes. Ours only ever did the second — the doll
 /// spun on the spot while the reference's steps its feet round, which is what a held arrow looks
@@ -802,7 +799,7 @@ impl Turn {
 /// slot, seeded by every arm the turn makes (decision 1565, director report B321).
 ///
 /// `0x7121a0`'s sixth argument is `1` at both of the turn's call sites (`0x505c23` the rotation,
-/// `0x505c98` the 100 ms expiry — wow-re `modelframe-camera-law.md` §13.4). A non-zero there is
+/// `0x505c98` the 100 ms expiry). A non-zero there is
 /// `0x7125d6`: `rep movsd` copies the live primary track into the secondary sub-record `[blk+0xc4]`
 /// — the outgoing clip, **still on its own clock**, not a frozen pose — then writes the window end
 /// `[blk+0x100]`, the rate `[blk+0x104] = 1/blendTime` and the amplitude `[blk+0x108] = 1.0f`. The
@@ -1504,7 +1501,7 @@ fn setup_booths(
 
     // The four **body** booths — the character window's paper doll (decision 0208 §5), the
     // inspect window's pane (decision 0631 §4), the pet paper doll's (decision 1057) and the
-    // stable window's (wow-re `stable-master-window.md` §7.1). Same off-screen pipeline as the
+    // stable window's (`SetPetStablePaperdoll 0x4cb870`). Same off-screen pipeline as the
     // portrait slots (transparent target, HDR + the FFXGlow node, negative order so the bake is
     // ready before the world/UI cameras), but their own 512² targets, their own layers, and a
     // body-framing projection (aimed per-bake by `sync_body_booth`). Kept a separate spawn from
@@ -1641,8 +1638,8 @@ fn bump_model_revision(
 /// The attach ids the **sheath lane owns** — the hand points a weapon is drawn into, the forearm a
 /// shield takes, and the six sheath points plus the shield's back slot it is stowed at. A draw or
 /// a stow moves an item among these, and for two kinds of item makes it vanish outright: a
-/// **ranged** weapon renders nothing while stowed (`0x611770` detaches it and never re-attaches —
-/// `ranged-sheath-display.md`), and so does a melee weapon whose `SheatheType` is 0. The worn
+/// **ranged** weapon renders nothing while stowed (`0x611770` detaches it and never
+/// re-attaches), and so does a melee weapon whose `SheatheType` is 0. The worn
 /// quiver rides `0x1a` on the same gate.
 ///
 /// [`SnapKey`] is blind to every one of them, which is the whole mechanism of `#bugs` B324: a
@@ -1656,7 +1653,7 @@ fn sheath_lane(attach: Option<u16>) -> bool {
 /// A `<PlayerModel>` does not mirror the unit: it **duplicates** the unit's `CM2Model` once and
 /// renders the copy (`0x5059a0` → `0x707400`), and the copy is dead to everything the world does
 /// afterwards — `[dup+0x34]` holds the source only long enough to build, and is Released and
-/// nulled inside `0x707400` itself (wow-re `ui/scratch/paperdoll-liveness-law.md`, §5 verified).
+/// nulled inside `0x707400` itself.
 /// Ours mirrored the live tree every frame, so a bow drawn in combat walked straight onto the
 /// character sheet.
 ///
@@ -1759,8 +1756,7 @@ impl SnapKey {
 /// Every widget that shows a live unit builds its model by *duplicating* the unit's own
 /// `CM2Model`, attachment tree and all (`0x707400`/`0x70ea00` deep-copy the children at the same
 /// attach ids), and then runs this partial reset on the copy — the `<PlayerModel>` paper doll via
-/// `0x5059a0 → 0x47a230`, the round unit portrait via `0x525261` (wow-re
-/// `ui/scratch/dressup-model-equipment.md` §1, `ui/scratch/portrait-render.md` §4, both VERIFIED).
+/// `0x5059a0 → 0x47a230`, the round unit portrait via `0x525261`.
 ///
 /// It detaches fifteen ids — `0xf` (twice), `0x10`, `0x11`, `0x12`, `0x13`–`0x19`, `0x1d`, `0x22`,
 /// `0x23` — and pointedly **keeps** the three hand points `0`/`1`/`2`, the sheath family
@@ -1777,9 +1773,8 @@ fn attach_reset(attach: Option<u16>) -> bool {
 
 /// The reference's **hand grip** for a widget's duplicate, from attachment occupancy alone
 /// (`0x5059a0` at `505a34`/`505a4d`: `GetAttachment(model, 2)` non-null → `CloseHand(1)`,
-/// `GetAttachment(model, 1)` non-null → `CloseHand(0)` — wow-re
-/// `animation/scratch/hand-grip-mechanism.md` §4c, which names this the cleanest expression of the
-/// rule and the one benilla should implement).
+/// `GetAttachment(model, 1)` non-null → `CloseHand(0)` — the cleanest expression of the rule and
+/// the one benilla should implement).
 ///
 /// Returns [`booth::spawn_booth_model`]'s `[right, left]`. **Occupancy, not sheath state and not
 /// combat**: a hand holding anything closes; the shield's forearm point (`0`) closes nothing. The
@@ -1908,7 +1903,7 @@ impl DressedLook<'_, '_> {
 /// Each frame: for every slot, mirror the unit's **live dressed look** — its attach-spawned
 /// [`PortraitPart`] children — into the booth whenever that look changes (new unit, gear swap,
 /// appearance refresh), re-framing the camera from the display's anchors. A live unit whose model
-/// hasn't attached yet shows the ref's 2D `TemporaryPortrait` stand-in instead (RE C5).
+/// hasn't attached yet shows the ref's 2D `TemporaryPortrait` stand-in instead (`0x525ba0`).
 fn sync_portraits(
     mut commands: Commands,
     mut booths: ResMut<Booths>,
@@ -1933,10 +1928,10 @@ fn sync_portraits(
     for token in SLOTS {
         // A token can name a unit the object manager does not hold: a party member outside the
         // local area, a pet whose object hasn't streamed yet. The reference does NOT leave that
-        // circle empty — RE C5 (`portrait-render.md`, CONFIRMED taxonomy) is explicit that a unit
-        // not held as a live UNIT object draws the 2D stand-in, and only "model/subsystem not
-        // ready" draws the blank. `unseen` carries that art for exactly those tokens; a token that
-        // names nobody at all leaves it `None` and the booth empties as before (report B315).
+        // circle empty — a unit not held as a live UNIT object draws the 2D stand-in (`0x525ba0`),
+        // and only "model/subsystem not ready" draws the blank (`0x519fcc`). `unseen` carries that
+        // art for exactly those tokens; a token that names nobody at all leaves it `None` and the
+        // booth empties as before (report B315).
         let mut unseen: Option<String> = None;
         // The guid this slot names, when the slot is one that retains a bake (decision 1640).
         let mut occupant: Option<u64> = None;
@@ -2080,9 +2075,9 @@ fn sync_portraits(
         // while the model is still loading / cube-fallback.
         let (parts, riders, billboards, effects) = look.collect(unit);
         if parts.is_empty() {
-            // Model not attached yet → the ref's own 2D stand-in (RE C5): sex/race for a player
-            // body, the Monster art for a creature (our pick — the ref's `-Pet` file belongs to
-            // its pet delegate). Keeps the booth's last bake around; only the bridge flips.
+            // Model not attached yet → the ref's own 2D stand-in (`0x525ba0`): sex/race for a
+            // player body, the Monster art for a creature (our pick — the ref's `-Pet` file belongs
+            // to its pet delegate). Keeps the booth's last bake around; only the bridge flips.
             let file = temporary_portrait(ent_q.get(unit).ok(), stores_q.get(unit).ok());
             let src = PortraitSource::File(file);
             if portraits.0.get(token) != Some(&src) {
@@ -2202,7 +2197,7 @@ fn sync_portraits(
             // **No emitters here, and that is the reference's own answer** (decision 0822): the
             // round portrait is a ONE-SHOT bake — a fresh M2 scene + instance, one `0x707680` draw,
             // the texture cached by GUID/displayId and returned with *no re-render* on a hit, nothing
-            // persisting between bakes (wow-re `portrait-render.md` §2, byte-verified). A particle
+            // persisting between bakes (`0x524f60`). A particle
             // emitter contributes nothing to a single frame of a freshly-born pool, so the ref's
             // portrait shows none — and a booth that spawned them would either freeze a cloud
             // mid-birth into the still or have to render forever for a 256² face. The batches above
@@ -2410,7 +2405,7 @@ fn sync_stable_standin(
 ) {
     // **The live pet wins.** With a world body to mirror there is nothing for a stand-in to do, and
     // the reference agrees: `SetPetStablePaperdoll` reaches the creature cache only after the
-    // live-pet-by-GUID resolve has failed (§7.1's fall-through at `0x4cb9bc`).
+    // live-pet-by-GUID resolve has failed (the fall-through at `0x4cb9bc`).
     let want = stable.unit.is_none().then_some(stable.display_id).flatten();
     if state.display != want {
         if let Some(old) = state.entity.take() {
@@ -2510,8 +2505,8 @@ fn sync_stable_booth(
 
 /// Bake `unit`'s full-body dressed look into the `slot` booth at `yaw` — the shared body of all
 /// four body booths (decision 0208 §5 for the paper doll, 0631 §4 for inspect, 1057 for the pet
-/// doll, wow-re `stable-master-window.md` §7.1 for the stable pane). `unit` is `None` when there is
-/// nothing to show, which empties the booth.
+/// doll, `0x4cb870` for the stable pane). `unit` is `None` when there is nothing to show, which
+/// empties the booth.
 ///
 /// `unit` is a **subject**, not necessarily a world unit: a [`PortraitStandIn`] mirrors the same
 /// way and carries its own display id, which is how the stable pane draws a pet that has no object
@@ -3031,7 +3026,7 @@ fn gate_booth_cameras(
 /// The stand-in art's folder + stem, shared by the three arms below.
 const TEMPORARY_PORTRAIT: &str = "Interface\\CharacterFrame\\TemporaryPortrait";
 
-/// The ref's 2D portrait stand-in for a not-yet-renderable unit (RE C5):
+/// The ref's 2D portrait stand-in for a not-yet-renderable unit (`0x525ba0`):
 /// `TemporaryPortrait-{Male|Female}-{Race}` for a player body, `-Monster` otherwise.
 fn temporary_portrait(net: Option<&NetEntity>, store: Option<&crate::net::ObjectStore>) -> String {
     use benilla_protocol::EntityKind;
@@ -3514,8 +3509,7 @@ mod tests {
 
     /// **The grip is occupancy, not sheath state — and a shield never closes a hand.** The
     /// forearm point (`0`) is the shield's, and `0x479700`/`0x5059a0` fork on ids `1`/`2` alone
-    /// (wow-re `hand-grip-mechanism.md` §4a/§4b: "a shield in the offhand NEVER closes the hand,
-    /// in any stance").
+    /// (`0x60b678`: a shield in the offhand NEVER closes the hand, in any stance).
     #[test]
     fn a_shield_on_the_forearm_closes_no_hand() {
         use crate::entities::attach_id::{HAND_RIGHT, SHIELD};
@@ -3579,7 +3573,7 @@ mod tests {
         assert!(LookKey::build(&parts, &riders, &[], &[&glow]) == after);
     }
 
-    /// RE C5's player arm (`portrait-render.md`, CONFIRMED taxonomy): a unit the object manager
+    /// The 2D stand-in's player arm (`0x525ba0`): a unit the object manager
     /// does not hold draws `TemporaryPortrait-{Sex}-{Race}`. The out-of-area party member reaches
     /// it through the name cache's triple rather than a descriptor — same art, other source
     /// (report B315).

@@ -1,6 +1,6 @@
 //! **`QueryCache<K, V>` — the one ask-once cache** (decision 2288; 2265 §A4).
 //!
-//! The reference has one `DBCache<T>` (wow-re `system/dbcache/dbcache.md`): a consumer's miss
+//! The reference has one `DBCache<T>` (vtable `0x80912c`): a consumer's miss
 //! sends the query and queues a callback; a second lookup of a pending key appends a callback
 //! instead of re-sending; the response handler writes the record and fires the callbacks;
 //! eviction is explicit only. benilla had that machine hand-copied across eight modules under

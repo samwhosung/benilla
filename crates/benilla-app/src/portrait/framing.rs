@@ -3,11 +3,11 @@
 //! Both booth families frame through the model's **own authored camera**, and neither fits anything
 //! (the mechanism — see the module docs in [`super`]):
 //!
-//! - [`frame`] — a ROUND portrait: `cameraLookup[0]`, verbatim (wow-re portrait-render §4). Its
+//! - [`frame`] — a ROUND portrait: `cameraLookup[0]`, verbatim (`0x713540`). Its
 //!   fallback for a camera-less model is a heuristic head closeup, anchored by the bind-pose bone
 //!   walk [`head_anchor`] (which the posed booth also uses to seat riders on real joints).
 //! - [`body_frame`] — a `<PlayerModel>` body PANE: raw `cameras[1]`, verbatim, else the client's own
-//!   synthesized *fixed* rig (wow-re `modelframe-camera-law.md`, decision 1089). No fit, no
+//!   synthesized *fixed* rig (`0x505890`, decision 1089). No fit, no
 //!   normalization, no bone anchor anywhere on this path.
 
 use bevy::camera::{CameraProjection, PerspectiveProjection, Projection, SubCameraView};
@@ -49,7 +49,7 @@ pub(super) fn diag_to_vert(fov: f32, aspect: f32) -> f32 {
 /// The **authored aspect** of every 1.12 glue composition: `4/3`.
 ///
 /// It is the client's own reference frame, not a guess. The Lua screen is `768a × 768`
-/// (wow-re `ui/scratch/modelframe-camera-law.md` §12.1), so at the era's default `a = 4/3` the
+/// (`GetScreenWidth 0x48b480`, `GetScreenHeight 0x48b4d0`), so at the era's default `a = 4/3` the
 /// design space is exactly `1024×768` — the resolution every `UI_<Race>` diorama and its camera-0
 /// framing were authored against. One definition, in the crate that also measures the art
 /// against it ([`benilla_formats::glue_art_extent`]).
@@ -59,7 +59,7 @@ pub(super) use benilla_formats::{ArtExtent, GLUE_AUTHORED_ASPECT};
 ///
 /// The reference law and why we do not ship it: a glue screen's `<ModelFFX>` is `setAllPoints` to
 /// `GlueParent`, which is `setAllPoints` to the screen, so the pane rect *is* the window and
-/// `0x5c3cc0`'s single `aspect` is the display's own (wow-re §12.1: `aspect = (W/H)·(a/a_screen)`,
+/// `0x5c3cc0`'s single `aspect` is the display's own (`0x76d42d`: `aspect = (W/H)·(a/a_screen)`,
 /// which is `a` for a full-screen pane — the `gxResolution`/`widescreen` CVar pair, normally the
 /// live mode). Feeding that straight into [`diag_to_vert`] makes the *diagonal* angle the invariant,
 /// so every pixel of extra width is paid for out of height: `0.600·fov` at 4:3, `0.492·fov` at 16:9,
@@ -326,7 +326,7 @@ impl CameraProjection for WowPortraitProjection {
 
 /// The framing the entities cache hands the booth for a display id
 /// ([`Creatures::display_anchors`]). All **model-local at scale 1** (the ref bakes with root scale
-/// reset, RE `0x47a230`), matching the booth's identity-transform parts.
+/// reset, `0x47a230`), matching the booth's identity-transform parts.
 pub(crate) struct PortraitAnchors {
     /// The model's **authored portrait camera** — the real client's exact framing rig for a ROUND
     /// portrait (`cameraLookup[0]`, module docs). `None` for a camera-less model → the heuristic
@@ -465,7 +465,7 @@ pub(super) fn frame(a: &PortraitAnchors) -> (Transform, Projection) {
 ///
 /// `a` is the **`gxResolution` CVar's width/height**, gated by the `widescreen` CVar (registered at
 /// `0x63a74f` with default `"1"` — on by default); with `widescreen = 0` the client uses `4/3` on
-/// any monitor. (wow-re `ui/scratch/modelframe-camera-law.md` §11.)
+/// any monitor (`0x46ab40`).
 ///
 /// **It applies to exactly one path, and this is the subtle part.** The widget's model root is
 /// `T(pos)·R(facing)·S(s)`, and `0x71439b` composes the *camera's* publish through that same root
@@ -482,9 +482,9 @@ pub(super) fn pane_model_scale(display_aspect: f32) -> f32 {
 }
 
 /// The client's **synthesized fallback camera** for a model frame whose model carries fewer than two
-/// cameras — a *fixed* rig, not a fit (wow-re `ui/scratch/modelframe-camera-law.md`, VERIFIED
-/// `0x505890`): eye at a constant point in WoW model space, look-at the MD20 header bbox centre, and
-/// its own fov/near/far. The only model-derived quantity anywhere in it is the target.
+/// cameras — a *fixed* rig, not a fit (`0x505890`): eye at a constant point in WoW model space,
+/// look-at the MD20 header bbox centre, and its own fov/near/far. The only model-derived quantity
+/// anywhere in it is the target.
 ///
 /// A small model therefore renders *small* in the pane and a large one overflows it — there is no
 /// normalization step. Both of the numbers here are literals in the binary.
@@ -499,7 +499,7 @@ const PANE_FIXED_NEAR: f32 = 1.0 / 36.0;
 const PANE_FIXED_FAR: f32 = 5000.0;
 
 /// The **body pane** booth camera rig — a 1.12 `<PlayerModel>` widget's own camera, verbatim
-/// (decision 1089; wow-re `ui/scratch/modelframe-camera-law.md`).
+/// (decision 1089; `0x505890`).
 ///
 /// **There is no fit.** The widget renders through a frozen snapshot of the model's *authored*
 /// camera at **raw table index 1** — the `type == 1` "characterinfo" camera — and when the model has
@@ -567,13 +567,13 @@ pub(super) fn pane_camera(a: &PortraitAnchors) -> benilla_assets::PortraitCamera
 /// squeeze and the diagonal→vertical crop, because the client renders straight into the pane rect.
 /// See [`WowPortraitProjection::aspect`].
 ///
-/// **1543's cancellation does NOT reach here, and this was checked, not assumed** (wow-re
-/// `bcd1f2c2`, a §5 round run blind to decision 1089). Both paths build through the same
-/// `0x7ada40`/`0x7ac640`, so the question is only what each caller puts in the aspect rect: the
-/// *bake* constructs `{0, 0, 1.0, D}` whose only size terms are its fixed 64/64, which is why its
-/// screen terms cancel to `1.0`; the *widget* (`0x76d42d`) hands over the frame's **raw cached
-/// layout rect** verbatim (`0x768320`, a 4-dword copy of `[layoutFrame+0x40]`), so the same
-/// cancellation removes only the screen terms and the pane's own shape survives —
+/// **1543's cancellation does NOT reach here, and this was checked, not assumed.** Both paths
+/// build through the same `0x7ada40`/`0x7ac640`, so the question is only what each caller puts in
+/// the aspect rect: the *bake* constructs `{0, 0, 1.0, D}` whose only size terms are its fixed
+/// 64/64, which is why its screen terms cancel to `1.0`; the *widget* (`0x76d42d`) hands over the
+/// frame's **raw cached layout rect** verbatim (`0x768320`, a 4-dword copy of
+/// `[layoutFrame+0x40]`), so the same cancellation removes only the screen terms and the pane's
+/// own shape survives —
 /// `aspect = (W/H)·(a/a_screen)` = `W/H` whenever the configured and actual display aspects agree,
 /// which 1543's `widescreen` census showed is every state the client can reach. The `0x41ade0`
 /// unscales on this path (`0x76d45b`/`0x76d46e`) run *after* the camera build and serve the
@@ -609,7 +609,8 @@ mod tests {
         ndc(transform, proj, p).y
     }
 
-    /// The M2 `cameras[1]` records the RE reports, in Bevy space — `wow_to_bevy` is `(-y, z, -x)`.
+    /// The M2 `cameras[1]` records measured off the shipped files, in Bevy space — `wow_to_bevy`
+    /// is `(-y, z, -x)`.
     fn cam(eye_wow: [f32; 3], target_wow: [f32; 3], fov: f32) -> benilla_assets::PortraitCamera {
         benilla_assets::PortraitCamera {
             eye: benilla_assets::coords::wow_to_bevy(eye_wow),
@@ -647,7 +648,7 @@ mod tests {
     /// derived from the model's size.
     #[test]
     fn a_pane_takes_the_models_own_camera_untouched() {
-        // HumanMale's `cameras[1]`, per the RE.
+        // HumanMale's `cameras[1]`, measured off the shipped file.
         let human = cam([3.6585, 0.0338, 0.9227], [-0.3644, 0.0291, 0.9873], 0.97991);
         for &aspect in &[1.0_f32, 318.0 / 224.0, 233.0 / 224.0, 316.0 / 351.0] {
             let (transform, projection) =
@@ -768,7 +769,7 @@ mod tests {
         );
     }
 
-    /// The **renormalize-to-4:3** model-root factor, against the values the RE reports —
+    /// The **renormalize-to-4:3** model-root factor, against the reference's values —
     /// `√((4/3)²+1)/√(a²+1)`, which is `G48·(5/3)` with `G48 = 1/√(a²+1)`.
     #[test]
     fn the_model_root_renormalizes_to_four_thirds() {

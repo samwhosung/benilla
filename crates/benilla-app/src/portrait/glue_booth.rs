@@ -47,7 +47,7 @@ const GLUE_SIZE: u32 = 1024;
 /// dials (decisions 0423 + 0527): the create body dressed in the (race, class, sex) level-1 starting
 /// outfit (CharStartOutfit), the ref's create preview. Class is load-bearing here — a different
 /// class wears different starting gear, and the ref re-applies equipment on class change
-/// (`SelectClass` → `cc_apply_sections`, wow-re `wave-preview.md`).
+/// (`SelectClass 0x470f50` → `cc_apply_sections 0x470800`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct CreateLook {
     pub(crate) race: u8,
@@ -213,9 +213,8 @@ pub(crate) struct CreateScene {
     /// roster selection moved between races.
     viewport_aspect: Option<f32>,
     /// The character's stage spot — scene attachment 0 (Bevy model space), `ZERO` with no scene.
-    /// (Verified for select too: the body seats on attachment **0**, `0x473039` — attachment 1 is
-    /// the enum's secondary model, wow-re `glue-select-model.md` TU-B; 0429's attachment-1
-    /// presumption is dead.)
+    /// (At select too: the body seats on attachment **0**, `0x473039` — attachment 1 is the
+    /// enum's secondary model, `0x47306b`; 0429's attachment-1 presumption is dead.)
     char_spot: Vec3,
     /// The stage's **authored frame** — attachment 0's bone matrix ([`stage_frame`]): the rotation
     /// and uniform scale the scene author parked on that bone. Identity/1.0 with no scene;
@@ -252,7 +251,7 @@ pub(crate) struct CreateScene {
     /// law (see [`SceneRig`]: directionals → ambient + SH probe slot 0, points → the per-vertex
     /// point table) plus the ref's per-race fog (`CharModelFogInfo`) — **create only**: at select
     /// the client overwrites the background's fog callback with the light callback, so the select
-    /// scene renders unfogged (wow-re `glue-select-model.md` TU-C, byte-verified `0x472110`) —
+    /// scene renders unfogged (`0x472110`) —
     /// rewritten on each scene swap. The character re-lights onto it too — the ref's create character is scene-lit (the
     /// NightElf/Scourge characters are lit almost entirely by stage-local point lights).
     light: Option<bevy::render::render_resource::Buffer>,
@@ -339,7 +338,7 @@ fn may_swap(standing: bool, art_ready: bool, body_ready: bool, waited: f32) -> b
 }
 
 /// A glue scene's authored M2 light rig, folded for the booth's light buffer under the
-/// byte-verified world law (wow-re `m2-dynamic-lights.md`): **directional** lights accumulate —
+/// world law (the gather `0x718960`): **directional** lights accumulate —
 /// ambient tracks summed into one ambient term, each diffuse×intensity an SH lobe with its *own*
 /// direction (the `Model2.bls` fold, [`benilla_world::lighting::prop_probe_coeffs`]) — and **point**
 /// lights become per-vertex lights on the buffer's point table, evaluated with the engine's fixed
@@ -363,9 +362,9 @@ const SCENE_POINT_RANGE: f32 = 1.0e6;
 
 /// Fold the scene model's light table into a [`SceneRig`] (see there for the law). A directional
 /// light's **to-light direction is its bone's local +Z axis** (`M2Light::bone_z` — the gather
-/// reads row 2 of the light bone's pose matrix, never the def position; byte-verified in wow-re
-/// `glue/scratch/glue-model-lighting.md §3`, on-surface to-light = `normalize(Bz·BM_rot)`); the
-/// model rotation `BM_rot` is identity here (the scene root never rotates).
+/// reads row 2 of the light bone's pose matrix at `0x718a76`, never the def position; on-surface
+/// to-light = `normalize(Bz·BM_rot)`); the model rotation `BM_rot` is identity here (the scene
+/// root never rotates).
 fn scene_rig(lights: &[benilla_assets::ModelLight]) -> SceneRig {
     let mut ambient = [0.0f32; 3];
     let mut lobes: Vec<(Vec3, [f32; 3])> = Vec::new();
@@ -377,8 +376,7 @@ fn scene_rig(lights: &[benilla_assets::ModelLight]) -> SceneRig {
         let color = l.diffuse_color.map(|c| c * l.diffuse_intensity);
         if l.is_point() {
             // `LightBlob::point` applies the same RAW commit the world table does (the `0x71ca80`
-            // encode is undone by the `0x593040` decode — wow-re
-            // trace-forensics-overgamut-point-commit-d3d): a glue scene is just another CM2Scene,
+            // encode is undone by the `0x593040` decode): a glue scene is just another CM2Scene,
             // and the GL commit is shared. One law covers both tables, not two by coincidence.
             points.push((benilla_assets::coords::wow_to_bevy(l.position), color));
         } else {
@@ -394,8 +392,7 @@ fn scene_rig(lights: &[benilla_assets::ModelLight]) -> SceneRig {
 }
 
 /// **The GHOST select screen's hardcoded sun** — the one directional the reference injects when the
-/// selected roster record carries `CHARSELECT+0xfc & 0x2000`, replacing the authored rig entirely
-/// (wow-re `glue-select-model.md` §C1–C4 + `glue-select-ghost-treatment.md`, VERIFIED).
+/// selected roster record carries `CHARSELECT+0xfc & 0x2000`, replacing the authored rig entirely.
 ///
 /// `0x472150` is a per-model per-frame **fill callback** (`[model+0x3bc]`, registered by `0x7134b0`)
 /// whose *entire body* is gated on that bit (`47218e mov ecx,[record+0xfc]; 472194 test ch,0x20;
@@ -577,13 +574,13 @@ pub(crate) struct PreviewEffects {
 
 /// The select screen's **ghost** treatment on the character body — what the reference's
 /// `0x4727f0` applies when the selected roster record carries `CHARSELECT+0xfc & 0x2000`
-/// (wow-re `glue-select-model.md` §A2, VERIFIED; the row text is the same bit, `refresh.rs`).
+/// (the row text is the same bit, `refresh.rs`).
 ///
 /// **It is one hard-coded `SpellVisualKit` row, and we read it from the DBC exactly as the
 /// reference does.** `0x47280f` loads `idmap[989]` behind the guard `0x4727f6 cmp ds:0xc0d750,0x3dd`
 /// — the *id* is the constant, the values are data — and 989 is the state kit of `SpellVisual` 886,
 /// which is the visual of spell 8326 "Ghost", the very aura the WORLD ghost rides
-/// (`crate::aura_visual`, wow-re `ghost-death-visuals.md` §2/§5a). So the select mannequin and a
+/// (`crate::aura_visual`, `0x5ff350`). So the select mannequin and a
 /// released ghost in the world are the same kit reaching the same three render properties by two
 /// different code paths, and benilla resolves both through the one dispatch point
 /// ([`crate::aura_visual::node_for`]) rather than transcribing constants twice.
@@ -626,7 +623,7 @@ pub(crate) struct GluePreviewBake {
     /// [`PreviewBillboard`].
     pub(crate) billboards: Vec<PreviewBillboard>,
     /// Per-hand weapon grip `[right, left]` — a hand whose attach point holds a weapon closes into the
-    /// `HandsClosed` finger pose (wow-re `hand-grip-mechanism.md`). The builder knows the held items'
+    /// `HandsClosed` finger pose (`CloseHand 0x479660`). The builder knows the held items'
     /// attach ids (which the flat rider list drops), so it resolves the grip here for the booth spawn.
     pub(crate) grip: [bool; 2],
     /// The selected character's **ghost** kit, or `None` for a living selection — see [`GhostKit`].
@@ -797,7 +794,7 @@ pub(super) fn spawn_glue_booth(
 /// which pass the glue pair has installed, and what `LightParams.glow` is pinned to.
 ///
 /// One writer for all three glue screens, because the reference's three writers are all reached
-/// through the same widget and the same build (wow-re `glue-select-ghost-treatment.md`):
+/// through the same widget and the same build:
 ///
 /// | look | reference | pass | glow |
 /// |---|---|---|---|
@@ -938,14 +935,14 @@ pub(super) fn sync_glue_scene(
     let token = scene_token(which);
     // The fog law forks on the scene kind (decision 0539 §5): the main menu is ALWAYS fogged with
     // its authored XML fog; for a race stage it is per-SCREEN — create keeps `CharModelFogInfo`,
-    // select renders the same scene unfogged (`0x472110` overwrites the background's fog callback —
-    // wow-re `glue-select-model.md` TU-C). The screen is told by the look's flavor (every create
+    // select renders the same scene unfogged (`0x472110` overwrites the background's fog
+    // callback). The screen is told by the look's flavor (every create
     // writer sets a Create look with the scene; select feeds Select or, on an empty account, None).
     let fog = match which {
         GlueScene::MainMenu => true,
         GlueScene::Race(_) => matches!(preview.look, Some(GlueLook::Create(_))),
     };
-    // The GHOST light fork (wow-re `glue-select-model.md` §C1, and [`ghost_rig`]): the selected
+    // The GHOST light fork (`0x472150`, and [`ghost_rig`]): the selected
     // roster record's `CHARSELECT+0xfc & 0x2000`, which reaches the background scene, the character
     // and the pet through one `[0x83856c]`-keyed read in the reference and through one light buffer
     // here — all three of ours bind it.
@@ -1134,10 +1131,9 @@ pub(super) fn sync_glue_scene(
                 // Not a bake question, which is why it is decided here rather than deferred to
                 // 0130's bake law: a create/main-menu screen is a LIVE render, and the reference
                 // runs the texture transform inside the per-model-per-frame animate kernel
-                // (`0x715f25`-`0x7163bc` over the MD20 `+0x74` table, wow-re
-                // `modelframe-texanim-and-sequence-law.md` §3.1) — it is what an animated CM2Model
-                // does, not a lane a host opts into. The portrait and dressing-room bakes are the
-                // opposite case and stay still (`BoothPart::mat_anim`).
+                // (`0x715f25`-`0x7163bc` over the MD20 `+0x74` table) — it is what an animated
+                // CM2Model does, not a lane a host opts into. The portrait and dressing-room bakes
+                // are the opposite case and stay still (`BoothPart::mat_anim`).
                 //
                 // **Shared lane only, and that is measured, not assumed** (`benilla-extract
                 // uvslotscan interface\glues`): 13 models, 261 batches, **15 live UV loops over 6
@@ -1393,7 +1389,7 @@ fn resize_target(images: &mut Assets<Image>, target: &Handle<Image>, w: u32, h: 
 /// screen's live yaw (drag / rotate — cheap, no re-bake). Mirrors [`super::sync_paperdoll`]: the
 /// parts + riders come pre-assembled from the entities builder, so here we only re-light them —
 /// onto the **scene's authored rig** while a scene is up (the ref's glue character is scene-lit;
-/// the select screen's hardcoded weather-sun is the in-flight §5's to settle, decision 0465 §5),
+/// the select screen's hardcoded weather-sun is not yet settled, decision 0465 §5),
 /// the studio buffer otherwise — pose a fresh Stand-**looping** instance with the riders on its
 /// joints, and frame it full-body.
 pub(super) fn sync_glue_booth(
@@ -1497,7 +1493,7 @@ pub(super) fn sync_glue_booth(
             }
         };
         // The bake's instance-level render properties — the ghost kit's alpha, or opaque
-        // (`GhostKit`, wow-re `glue-select-model.md` §A2). It reaches every batch of the bake, the
+        // (`GhostKit`, `0x4727f0`). It reaches every batch of the bake, the
         // riders and cards included: the reference has ONE instance alpha per CM2 and every model
         // attached to it composes onto that (`0x714000`).
         let instance = BoothInstance {
@@ -1704,8 +1700,7 @@ pub(super) fn sync_glue_booth(
 }
 
 /// Stand the select screen's **pet** on scene attachment 1 — the hunter/warlock companion beside
-/// the selected character (the reference's secondary model `record+0x114`, wow-re
-/// `glue-select-model.md` §A4/§B1).
+/// the selected character (the reference's secondary model `record+0x114`, `0x47306b`).
 ///
 /// The booth twin of [`sync_glue_booth`], and deliberately the simpler one: a pet is an ordinary
 /// creature display, so its parts come straight off the shared display cache with no compositor,
@@ -1891,7 +1886,7 @@ fn apply_yaw(
 /// A stage is an M2 *attachment*, and an attachment carries a frame, not just a point. The
 /// reference composes the whole thing: `child+0xfc = child+0xbc × (T(att.pos) · parentBone[att.bone])`
 /// (`MatrixMultiply` at `0x71439b`, inside `0x714260`) — **rotation and scale go in, not only the
-/// translation** (wow-re `glue/scratch/glue-preview-facing-law.md`, §the attachment leg).
+/// translation**.
 /// Five of the six shipped `UI_*` scenes leave that bone unrotated,
 /// because their camera is authored looking straight down the stage's +X and a WoW model's default
 /// facing already looks that way (measured on the files: Orc +0.02°, Dwarf +0.62°, NightElf
@@ -2156,18 +2151,16 @@ mod tests {
         }
     }
 
-    /// GOLDEN — the ghost select screen's hardcoded sun, every number byte-VERIFIED (wow-re
-    /// `glue-select-ghost-treatment.md`; see [`ghost_rig`] for the citations).
+    /// GOLDEN — the ghost select screen's hardcoded sun (see [`ghost_rig`] for the citations).
     ///
-    /// The **sign** is the assertion that matters. wow-re's earlier §C4 was internally
-    /// contradictory about it — it called `CGLight+0x24` a to-light vector with no sign flip in the
-    /// SH chain, then concluded "lit from directly overhead" via the fixed-function commit, which
-    /// negates. Those differ by 180°: a character lit from above versus from below. The round that
-    /// settled it found `0x71bce0` negating all three components (`0x71be7c`/`0x71be81`/`0x71be86`)
-    /// before it accumulates, so both lanes agree on `(0,0,+1)`. The trap it also found is why this
-    /// is pinned rather than trusted to a comment: an AUTHORED M2 light already carries one
-    /// negation (`0x718960` stores `-Bz`, which is why [`scene_rig`] feeds `+bone_z`), so reusing
-    /// the authored convention here double-negates and lights the ghost from underneath.
+    /// The **sign** is the assertion that matters: a wrong sign is 180° off, a character lit from
+    /// above versus from below. `CGLight+0x24` is a from-light vector, not a to-light one:
+    /// `0x71bce0` negates all three components (`0x71be7c`/`0x71be81`/`0x71be86`) before it
+    /// accumulates, and the fixed-function commit negates too, so both lanes agree on `(0,0,+1)`.
+    /// The trap is why this is pinned rather than trusted to a comment: an AUTHORED M2 light
+    /// already carries one negation (`0x718960` stores `-Bz`, which is why [`scene_rig`] feeds
+    /// `+bone_z`), so reusing the authored convention here double-negates and lights the ghost from
+    /// underneath.
     #[test]
     fn the_ghost_sun_is_one_overhead_directional_over_a_wiped_gather() {
         let rig = ghost_rig();
@@ -2191,11 +2184,11 @@ mod tests {
         assert_eq!(rig.ambient.map(byte), [26, 56, 85], "…and sub 1");
     }
 
-    /// GOLDEN — the rig fold's classification law (wow-re `m2-dynamic-lights.md` +
-    /// `glue-model-lighting.md`): directionals accumulate (ambient tracks summed; diffuse×intensity
-    /// as per-light SH lobes whose to-light is the **bone's +Z axis**, never the def position),
-    /// points land on the point table verbatim (colour × intensity, position wow→bevy) — never
-    /// folded into the sun, and their dead authored attenuation radii never scale anything.
+    /// GOLDEN — the rig fold's classification law (the gather `0x718960`): directionals
+    /// accumulate (ambient tracks summed; diffuse×intensity as per-light SH lobes whose to-light is
+    /// the **bone's +Z axis**, never the def position), points land on the point table verbatim
+    /// (colour × intensity, position wow→bevy) — never folded into the sun, and their dead authored
+    /// attenuation radii never scale anything.
     #[test]
     fn rig_fold_classifies_directional_vs_point() {
         let lights = [

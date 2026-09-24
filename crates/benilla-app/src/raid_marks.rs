@@ -1,18 +1,18 @@
-//! Raid-target marker **overhead billboards** — wow-re `name-render-geometry-law.md` §6
-//! (VERIFIED): for each unit holding a mark on the 8-slot board (decision 0434 §6,
+//! Raid-target marker **overhead billboards** — the name render's marker leg `0x6c709a`: for
+//! each unit holding a mark on the 8-slot board (decision 0434 §6,
 //! `GroupState::raid_targets`) and NOT carrying a live V-nameplate (the `[CGUnit+0xe60]==0`
 //! mutual exclusion — the plate shows its own raid-icon child instead, `vplates`), the client
 //! draws a separate world billboard: the anchor unit-quad LUT `(−.5,1,0),(.5,1,0),(.5,0,0),
 //! (−.5,0,0)` (bottom-anchored, h-centered), the 4-column `UI-RaidTargetingIcons` atlas cell
 //! (`col = idx&3`, `row = idx>>2`, cell 0.25), index list `{0,1,3,3,1,2}`.
 //!
-//! Seat (§6): if the unit's overhead NAME shows this frame, the marker's bottom sits **one
-//! line-pitch above the top of the name block** — world Z = `anchor + (lineCount + 1)·scale`;
+//! Seat (`0x6c70d8`): if the unit's overhead NAME shows this frame, the marker's bottom sits
+//! **one line-pitch above the top of the name block** — world Z = `anchor + (lineCount + 1)·scale`;
 //! with no name it sits at the bare anchor. Camera-facing, world-scaled by the shared name
 //! height-scale law ([`crate::nameplates::height_scale`]) — same world-pass unlit/Blend state
 //! as the names (walls occlude; the skipped depth-write is the shared named divergence).
 //!
-//! Size (VERIFIED, wow-re `name-render-geometry-law.md` §6, commit 5e78ea75): the marker is a
+//! Size (`0x6c7200`): the marker is a
 //! **fixed unit (1×1) world billboard** — `scale` feeds only the seat (the z-raise), NEVER the
 //! quad geometry. The ref builds the quad by a verbatim vertex copy of the unit LUT (no `fmul`
 //! on position) and billboards it through a world-matrix-cancellation chain (`0x7bca80…`) that
@@ -35,7 +35,7 @@ use benilla_world::view::WorldCamera;
 /// rows and the plate child slice.
 const MARK_TEXTURE: &str = "mpq://interface/targetingframe/ui-raidtargetingicons.blp";
 
-/// The marker's world size (VERIFIED, wow-re §6 / commit 5e78ea75): a **fixed** world unit,
+/// The marker's world size (`0x6c7200`): a **fixed** world unit,
 /// independent of the name `scale`. The ref's quad is the bare unit LUT billboarded by a
 /// world-matrix-cancellation chain that leaves a unit-length basis; the pixel projection is the
 /// render boundary (a director look-call — adjust here if it reads too big/small).
@@ -61,8 +61,8 @@ pub(crate) struct RaidMarks {
 #[derive(Component)]
 struct RaidMarkBillboard;
 
-/// The §6 quad for one wire icon: the LUT positions (local X ∈ [−.5, .5], Y ∈ [0, 1], bottom
-/// anchored), the atlas cell UVs, the ref's own index list.
+/// The marker quad (`0x6c709a`) for one wire icon: the LUT positions (local X ∈ [−.5, .5],
+/// Y ∈ [0, 1], bottom anchored), the atlas cell UVs, the ref's own index list.
 fn mark_mesh(icon: u32) -> Mesh {
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
@@ -95,7 +95,7 @@ fn mark_mesh(icon: u32) -> Mesh {
     mesh
 }
 
-/// The marker's world transform for `unit` this frame — the §6 seat over the shared
+/// The marker's world transform for `unit` this frame — the seat (`0x6c70d8`) over the shared
 /// anchor/scale law. Generic over the joint-globals filter like [`overhead_anchor`] (the placer
 /// passes a disjoint query).
 fn mark_place<F: bevy::ecs::query::QueryFilter>(
@@ -111,8 +111,8 @@ fn mark_place<F: bevy::ecs::query::QueryFilter>(
 ) -> Transform {
     let anchor = overhead_anchor(unit, tf, attach, poses, fallback, globals, mounts);
     // `scale` (the name's world height-law) drives ONLY the seat — the marker sits one
-    // line-pitch above the top of the name block. The quad SIZE is a fixed world unit (§6:
-    // `scale` never enters the marker geometry), not `scale`-scaled.
+    // line-pitch above the top of the name block. The quad SIZE is a fixed world unit
+    // (`0x6c7200`: `scale` never enters the marker geometry), not `scale`-scaled.
     let scale = height_scale(anchor.y - tf.translation.y);
     let lift = match plates.line_count(unit) {
         Some(lines) => (lines as f32 + 1.0) * scale,
@@ -289,9 +289,9 @@ impl Plugin for RaidMarksPlugin {
 mod tests {
     use super::*;
 
-    /// The §6 quad against the verified laws: the LUT positions (bottom-anchored, h-centered,
-    /// one unit square) and the 4-column atlas cells (`col = idx&3`, `row = idx>>2`, cell 0.25)
-    /// — skull (Lua 8 = wire 7) lands on the second row's last cell.
+    /// The marker quad (`0x6c709a`) against the reference's laws: the LUT positions
+    /// (bottom-anchored, h-centered, one unit square) and the 4-column atlas cells (`col = idx&3`,
+    /// `row = idx>>2`, cell 0.25) — skull (Lua 8 = wire 7) lands on the second row's last cell.
     #[test]
     fn mark_mesh_matches_the_lut_and_atlas_laws() {
         let mesh = mark_mesh(0);

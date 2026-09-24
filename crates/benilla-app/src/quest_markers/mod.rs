@@ -10,7 +10,7 @@
 //! own concern and lives in [`query`] (decisions 0650/0654). Answers land in [`QuestGiver`]'s
 //! per-guid status map (`net/apply`); THIS module is the render half: attach, scale, animate.
 //!
-//! The render law is byte-verified (wow-re object-layer `questgiver-marker.md`):
+//! The render law:
 //! - **Attach** (`0x6074c0`): the marker is a CHILD of the unit's own body M2 at attachment slot
 //!   **18** (0x12), or **29** (`PlayerNameMounted`) when a mount model exists and the body authors
 //!   it — [`overhead_slot`], one definition shared with the overhead name/plate/FCT readers. No
@@ -24,8 +24,8 @@
 //! - **Scale** (`0x607570`): `1 / |attach-bone basis|`, computed once at attach and baked into the
 //!   marker's base matrix (`marker+0xbc`). Not distance-based, not unit scale, no clamp or floor.
 //!
-//!   **The `1/L` is a SNAPSHOT, not an invariant** (wow-re AMENDED §Q3/§Q3c, 2026-08-22, four-worker
-//!   §5 + oracle execution of `0x607570` under the difftest harness). The arithmetic is confirmed —
+//!   **The `1/L` is a SNAPSHOT, not an invariant** (`0x607570` executed on the reference's own
+//!   bytes, not only read). The arithmetic is confirmed —
 //!   `L = ‖row0‖` of the attach point's WORLD matrix, so the compensation cancels the whole attach
 //!   basis (`s` and any bone-chain scale alike). What was wrong is the *published consequence*: the
 //!   old sentence here — "a constant world size regardless of the NPC's model scale, a gnome and an
@@ -55,7 +55,7 @@
 //!   real, and the change is one line — which is exactly why this paragraph exists.
 //!
 //!   One correction worth carrying: the post-multiply operand is `CM2Scene+0xdc` = **inverse(view)**,
-//!   not "the model's world transform" (`CM2Shared+0xdc`) as the note used to say. The bone matrices
+//!   not "the model's world transform" (`CM2Shared+0xdc`). The bone matrices
 //!   live in VIEW space and already carry `model+0xbc`; the final compose is
 //!   `marker+0xfc = marker+0xbc × parentAttachMatrix` at `0x71439b`.
 //! - **Animation** (`0x6076c0`): the marker's own M2 animation is armed looping — anim **0**
@@ -119,9 +119,9 @@ fn seq_loop(info: &BillboardInfo, anim_id: u16) -> Option<BoneScaleAnim> {
         .map(|(_, l)| l.clone())
 }
 
-/// The marker M2 per dialog status — the client's own dispatch, byte-verified (wow-re
-/// object-layer `questgiver-marker.md`: file table `0xc4d9d8` × status map `0x80c454` =
-/// `{0,3,0,2,7,1,6,6}`; the binary ships `.mdx` names, the loader maps them to `.m2`):
+/// The marker M2 per dialog status — the client's own dispatch (file table `0xc4d9d8` × status
+/// map `0x80c454` = `{0,3,0,2,7,1,6,6}`; the binary ships `.mdx` names, the loader maps them to
+/// `.m2`):
 /// UNAVAILABLE(1) → grey `!`, INCOMPLETE(3) → grey `?`, REWARD_REP(4) → light-blue `?`,
 /// AVAILABLE(5) → gold `!`, REWARD_OLD/REWARD2(6/7) → gold `?`; NONE(0)/CHAT(2) → nothing.
 /// (The Green/Blue `!` variants are driven by sibling handlers off NPC_FLAGS, not this status
@@ -511,12 +511,11 @@ fn build_markers(
 /// (WoW z +0.427..+0.517 vs anim 0's −0.089..0), lifting the marker clear of the name text.
 /// Benilla raises for the floating name ([`Nameplates::shows`]) OR a live V-plate
 /// ([`VPlates`](crate::vplates::VPlates)) — the plate leg is a **director-pinned deviation**
-/// (2275): the reference arms anim 0 under a live plate (byte-verified, wow-re
-/// `questgiver-marker.md` Q4a — ShouldShowName's plate suppression destroys the rendered name
-/// and nulls the `desc+0x8` handle the selector `0x6c7950` tests), leaving its marker low
-/// behind the plate; the director rejected that overlap on sight. The re-arm law is settled
-/// faithful: the reference arms at attach AND re-arms on the frame the name shown-state flips
-/// (an edge inside `0x6c6e90`, never per-frame) — exactly our re-arm-on-flip.
+/// (2275): the reference arms anim 0 under a live plate (ShouldShowName's plate suppression
+/// destroys the rendered name and nulls the `desc+0x8` handle the selector `0x6c7950` tests),
+/// leaving its marker low behind the plate; the director rejected that overlap on sight. The
+/// re-arm law is settled faithful: the reference arms at attach AND re-arms on the frame the name
+/// shown-state flips (an edge inside `0x6c6e90`, never per-frame) — exactly our re-arm-on-flip.
 #[allow(clippy::type_complexity)] // a Bevy system: each param is one resource, the app's convention
 fn pose_markers(
     plates: Res<Nameplates>,

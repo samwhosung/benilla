@@ -1,7 +1,7 @@
 //! The booth **bake spawn** — how a mirrored look becomes the posed throwaway instance the
-//! camera shoots (the ref mechanism, wow-re portrait-render §4 D2). [`spawn_booth_model`] is the
-//! whole surface; the sync systems in [`super`] build [`BoothPart`]/[`BoothRider`] lists from the
-//! unit's mirrored children and hand them here.
+//! camera shoots (the ref mechanism: instance `0x707400`, pose `0x7121a0`). [`spawn_booth_model`]
+//! is the whole surface; the sync systems in [`super`] build [`BoothPart`]/[`BoothRider`] lists
+//! from the unit's mirrored children and hand them here.
 //!
 //! Since decision 1443 the bake rides the **collapsed rig lane** (0724/1365): the skeleton is a
 //! [`RigPose`](benilla_world::rig_anim::RigPose) buffer on the booth root — no joint entities,
@@ -47,8 +47,8 @@ pub(super) struct BoothPart {
     /// `false` for every booth but the **glue create / main-menu scene**. A portrait or
     /// dressing-room bake is a still by design (0130's bake law — it photographs one instant);
     /// the create screen is a live render, and the reference animates a texture transform inside
-    /// the per-model-per-frame animate kernel (`0x715f25`-`0x7163bc` over `md+0x74`, wow-re
-    /// `modelframe-texanim-and-sequence-law.md` §3.1), which is not a lane a host opts into.
+    /// the per-model-per-frame animate kernel (`0x715f25`-`0x7163bc` over `md+0x74`), which is not
+    /// a lane a host opts into.
     pub(super) mat_anim: bool,
 }
 
@@ -150,8 +150,8 @@ impl BoothInstance {
 ///
 /// Being out of that query means being out of **both** halves of what it does, and the booth owes
 /// its parts both: the alpha field *and* the `mat_factor > 0.0` term in its `desired` verdict — the
-/// reference's `A <= 0` cull, which fires before the blend mode is ever read (wow-re
-/// `m2-alpha-combine-cull.md`). Marking the marker is therefore also a claim of sole `Visibility`
+/// reference's `A <= 0` cull, which fires before the blend mode is ever read
+/// (`0x707b3a`–`0x707b5c`). Marking the marker is therefore also a claim of sole `Visibility`
 /// authority over the parts that carry it; nothing else in the booth writes theirs.
 #[derive(Component)]
 pub(super) struct BoothMatAlpha;
@@ -205,8 +205,8 @@ impl BoothBillboard {
     /// — not a second mechanism. Today's caller is the glue booth's equipment riders
     /// ([`super::glue_booth`]): an item model spawns no rig, so nothing else would apply the
     /// replacement to a particle emitter hanging under its billboard bone, and the reference folds
-    /// the emitter's record position through exactly this matrix (wow-re
-    /// `part-anchoring-live-bone.md` §1 row 3).
+    /// the emitter's record position through exactly this matrix (`0x7190a9`–`0x71910c`, in
+    /// `0x718960`).
     ///
     /// The caller owns the frame's **translation** (the billboard bone's pivot in its parent's
     /// frame); [`face_booth_billboards`] writes only the rotation.
@@ -308,7 +308,7 @@ pub(super) fn clear_booth_rig(commands: &mut Commands, root: Entity) {
 /// stages every frame (`0x76d680`, decision 0638) — the same widget family as the animating glue
 /// preview (decision 0423). The round unit-frame portraits are not: `SetPortraitTexture` bakes a
 /// fresh instance in ONE draw and caches the texture by GUID/displayId, returning it with no
-/// re-render (wow-re `portrait-render.md` §2). A one-frame draw of a freshly-born particle pool
+/// re-render (`0x524f60`). A one-frame draw of a freshly-born particle pool
 /// yields nothing, so emitters have no place in a portrait — and a booth that owns emitters must
 /// keep its camera awake ([`crate::portrait::Booth::live`]), which is exactly what a still should
 /// never need to do.
@@ -507,8 +507,9 @@ pub(super) enum BoothMotion {
     Loop,
 }
 
-/// Spawn a booth bake under `root` on the booth's layer — the ref mechanism (wow-re §4 D2): a
-/// **fresh throwaway instance posed at Stand**, never the unit's live world pose.
+/// Spawn a booth bake under `root` on the booth's layer — the ref mechanism (instance `0x707400`,
+/// pose `0x7121a0`): a **fresh throwaway instance posed at Stand**, never the unit's live world
+/// pose.
 ///
 /// With a rig (skeleton + inverse bindposes; every M2 display), the booth builds a collapsed
 /// [`RigPose`](benilla_world::rig_anim::RigPose) buffer (decision 1443 — no joint entities),
@@ -516,10 +517,9 @@ pub(super) enum BoothMotion {
 /// anchor, and arms the model's own Stand (anim id 0 through its baked resolution — the ref's
 /// loader-idle seed): `motion` decides whether that Stand is **frozen at t = 0** (a portrait
 /// still) or **looping** (the live glue scenes/preview — decisions 0423 + 0539). (The ref's own
-/// sampling clock is the one unsettled INFERRED point of the verdict — t≈0 vs live phase; a
-/// frozen t=0 is inside its envelope either way.) Without a rig (boneless / WMO-display / rig
-/// not built), the static bind-pose bake: parts at identity, riders dropped (no bones to seat
-/// them on).
+/// sampling clock is the one unsettled, inferred point — t≈0 vs live phase; a frozen t=0 is
+/// inside its envelope either way.) Without a rig (boneless / WMO-display / rig not built), the
+/// static bind-pose bake: parts at identity, riders dropped (no bones to seat them on).
 ///
 /// Returns the [`BoothRig`] handle — seat any remaining consumers on it (the effect hosts, the
 /// glue scene's emitters), then `finish()` it.
@@ -538,7 +538,7 @@ pub(super) fn spawn_booth_model(
     catalog: Option<&benilla_formats::AnimDataCatalog>,
     motion: BoothMotion,
     // Per-hand weapon grip `[right, left]` — hold that hand's `HandsClosed` finger pose because a weapon
-    // occupies its attach point (the paperdoll rule, wow-re `hand-grip-mechanism.md` §4c). The glue
+    // occupies its attach point (the paperdoll rule, `0x5059a0`). The glue
     // preview and the body panes both resolve it from **attachment occupancy**, which is the whole
     // rule (`crate::portrait::hand_grip`); the round portraits pass `[false, false]` because the
     // reference's portrait bake never arms a grip at all, not because they sheath anything.
@@ -823,7 +823,7 @@ const SHUFFLE_LEFT: u16 = 11;
 const SHUFFLE_RIGHT: u16 = 12;
 
 /// **Which sequence a facing change arms** — the reference's own direction test, stated once
-/// (`0x505bb0`, wow-re `modelframe-camera-law.md` **§13**).
+/// (`0x505bb0`).
 ///
 /// The `fcomp` at `0x505bce` compares the **current** facing (in ST(0)) against the argument, and
 /// the two branches read out as: current **<** angle ⇒ `0xc` **ShuffleRight**, current **>** angle
@@ -831,9 +831,8 @@ const SHUFFLE_RIGHT: u16 = 12;
 /// that is an *active* play, not a no-op: it is why `Model:SetSequence` cannot stick on one of
 /// these panes.
 ///
-/// **§6's prose had this pair inverted**, and this port was built on it before wow-re's §13
-/// re-derived the compare instruction by instruction. The direction was wrong in exactly the way
-/// nothing local can catch — the doll still stepped, just into its turn instead of with it.
+/// **This port was first built with this pair inverted.** The direction was wrong in exactly the
+/// way nothing local can catch — the doll still stepped, just into its turn instead of with it.
 ///
 /// It runs on the **Lua-facing scalar** — the very value the reference hands `SetRotation` — so
 /// the branch transfers with no sign work, and no reasoning about which way a Bevy `+Y` spin goes
@@ -853,7 +852,7 @@ pub(super) fn turn_shuffle(faced: f32, angle: f32) -> u16 {
 /// timer.
 ///
 /// The arm is **unconditional** — every one of `0x505bb0`'s three early exits jumps to `0x505c28`,
-/// where the flag and the deadline are written, so no path through it skips them (wow-re §13.1).
+/// where the flag and the deadline are written, so no path through it skips them.
 /// A held rotate arrow rewrites the facing every frame (the pane's `OnUpdate`,
 /// `ROTATIONS_PER_SECOND`), so the deadline is pushed forward every frame and the doll steps
 /// continuously until the button comes up. Taking `spun` before the expiry check below reproduces
@@ -870,8 +869,8 @@ fn fade_frac(fade: &super::Fade, now: f64) -> f32 {
 }
 
 /// Arm one `AnimationData` id on a booth root the way the reference's turn does — every one of its
-/// plays is `0x7121a0(bone -1, id, variation -1, offset 0, rate 1.0f, blend 1, primary 1)`
-/// (wow-re `modelframe-camera-law.md` §13.4), and all three of those trailing arguments show:
+/// plays is `0x7121a0(bone -1, id, variation -1, offset 0, rate 1.0f, blend 1, primary 1)`, and
+/// all three of those trailing arguments show:
 ///
 /// - **variation `-1`** — a freshly *rolled* frequency-weighted variation, not the head. HumanMale
 ///   authors four Stands (frequencies 14199 / 2184 / 2184 / 14199), and the reference re-rolls on
@@ -1059,7 +1058,7 @@ fn step_turn(
                 *until = now + SHUFFLE_HOLD_SECS;
             }
         } else if arm_turn(player, anims, catalog, rng, turn, want, now) {
-            // Equal facings — and NaN — arm Stand outright (wow-re §13.2), which is an *active*
+            // Equal facings — and NaN — arm Stand outright (`0x505c23`), which is an *active*
             // play, not a no-op; nothing is stepping after it, so it schedules no expiry.
             turn.shuffle = (want != STAND).then_some((want, now + SHUFFLE_HOLD_SECS));
         }
@@ -1252,7 +1251,7 @@ mod tests {
 
     /// The `A <= 0` cull — the half the booth twin was missing, and the reason the Voidwalker
     /// stood in the char-select booth with two shoulder props hung in the air. The reference culls
-    /// the batch before it reads the blend mode (wow-re `m2-alpha-combine-cull.md`), and the world
+    /// the batch before it reads the blend mode (`0x707b3a`–`0x707b5c`), and the world
     /// lane says so as `mat_factor > 0.0` in its `desired` verdict
     /// (`model_render::visibility`); a tag write alone cannot express it, because an Opaque draw
     /// never looks at the blend source the tag alpha feeds. Both directions, in one run: a zeroed
@@ -1555,11 +1554,10 @@ mod tests {
     }
 
     /// **The rotate arrows arm the shuffle the model turns toward** (1559, B313), and the pair is
-    /// the one wow-re §13.2 read off the `fcomp` at `0x505bce` — *not* the pair §6's prose
-    /// carried, which was inverted and which this port was first built on. Current facing **<**
-    /// the new angle ⇒ `0xc` ShuffleRight; **>** ⇒ `0xb` ShuffleLeft; equal (and NaN, which the
-    /// compare's unordered flags send the same way) ⇒ `0` Stand, an active arm rather than a
-    /// no-op.
+    /// the one read off the `fcomp` at `0x505bce` — *not* the inverted pair this port was first
+    /// built on. Current facing **<** the new angle ⇒ `0xc` ShuffleRight; **>** ⇒ `0xb`
+    /// ShuffleLeft; equal (and NaN, which the compare's unordered flags send the same way) ⇒ `0`
+    /// Stand, an active arm rather than a no-op.
     ///
     /// The pane's own Lua is what makes the mapping checkable end to end, and it is why an
     /// inversion cannot be caught by reading either side alone: the reference uses **opposite

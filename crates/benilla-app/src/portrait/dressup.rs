@@ -12,7 +12,7 @@
 //!
 //! The spec's equipment is the player's own visible items with the tried-on ones substituted in
 //! ([`crate::ui_dressup`] composes it). One consequence worth naming: the preview dresses by the
-//! **select-screen** law (weapons drawn in the hands, wow-re `glue-select-model.md`), not by the
+//! **select-screen** law (weapons drawn in the hands, `0x47a0c0`), not by the
 //! world's sheath state — the reference's `DressUpModel` is a `<PlayerModel>` subclass showing the
 //! character posed for inspection, and that is the pose the shared assembly produces.
 //!
@@ -183,7 +183,7 @@ pub(super) fn spawn_dressup_booth(
 /// fresh instance, seat the riders and effects, frame it full-body, arm the wake window. What
 /// differs from the paper doll is only where the parts come from (a bake resource, not a live
 /// unit's children) and the hand grip — the assembly holds the weapons, so the hands close on them
-/// (wow-re `hand-grip-mechanism.md`).
+/// (`CloseHand 0x479660`).
 pub(super) fn sync_dressup_booth(
     mut commands: Commands,
     preview: Res<DressUpPreview>,

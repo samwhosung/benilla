@@ -32,18 +32,13 @@
 //! **It is the GATE that is keyed, never the rate** — the track at `def+0x1dc`, outside the ten
 //! scalar ones, `u8`-valued, step-interpolated (decision 2286). A consumer that asks "does this
 //! emitter emit anything?" of the *rate* sees a non-zero constant in every sequence, for a bank
-//! that has never once been switched on; that false negative is why this shipped broken and why a
-//! wow-re round briefly published the opposite reading.
+//! that has never once been switched on; that false negative is why this shipped broken.
 //!
-//! **wow-re recorded the opposite**, flagged INFERRED: `ranged-shot-anim.md` read the mechanism as
-//! "bow-only by asset … gun/crossbow/thrown/wand have **no** analogous prop re-anim call anywhere
-//! (exhaustive search)". The rifle arm is in the same function as the bow arm, eleven instructions
-//! apart. The §5 correction round landed as wow-re `ranged-prop-reanim-two-arm.md`: the fork is
-//! CONFIRMED in every detail, and its census finds **exactly four** sites that arm `[+0xd24]` —
-//! `0x624e31` (160), `0x600209` (0), `0x600273` (161) and `0x60f59d` (0, the reset below). The
-//! surviving, precise form of "no analog" is **thrown and wand**: a third family predicate
-//! `0x5fcf90` = {107, 111, 112} exists and the `$BWR` handler never calls it, so those two match
-//! neither arm and get no prop animation at all.
+//! **The rifle arm is in the same function as the bow arm**, eleven instructions apart, and
+//! **exactly four** sites arm `[+0xd24]` — `0x624e31` (160), `0x600209` (0), `0x600273` (161) and
+//! `0x60f59d` (0, the reset below). Only **thrown and wand** have no prop re-anim: a third family
+//! predicate `0x5fcf90` = {107, 111, 112} exists and the `$BWR` handler never calls it, so those
+//! two match neither arm and get no prop animation at all.
 //!
 //! **Both arms sit under a gate, and it is the projectile queue** (decision 2288). `[CGUnit+0xac]`
 //! is not a spell-visual list, as this file first guessed from its readers — it is the queue of
@@ -139,15 +134,15 @@ pub(crate) fn flex_ranged_props(
         let Ok((mut player, anims)) = props_mut.get_mut(prop) else {
             continue;
         };
-        // **The two asks are not the same ask, and the asymmetry is real** (wow-re
-        // `ranged-prop-reanim-two-arm.md`, claim B). `$BWP` is guarded by `0x711960` — the
-        // *direct, unsubstituted* "does this model author id X" test — and bails when it fails:
-        // that is what confines BowPull to its 25 models, and what a firearm exits on, its whole
-        // cycle being the `$BWR` blast. `$BWR`'s arms carry no such guard, and `0x7121a0` does
-        // **not** silently no-op on a miss: `0x711bf0` substitutes through the model's own
-        // `PlayableAnimationLookup` first, and every weapon model that authors neither flex clip
-        // bakes both ids to Stand(0) (measured there: 571/571 resolve). So a rifle-family body
-        // holding a model without 161 re-arms Stand, it does not leave the prop alone.
+        // **The two asks are not the same ask, and the asymmetry is real.** `$BWP` is guarded by
+        // `0x711960` — the *direct, unsubstituted* "does this model author id X" test — and bails
+        // when it fails: that is what confines BowPull to its 25 models, and what a firearm exits
+        // on, its whole cycle being the `$BWR` blast. `$BWR`'s arms carry no such guard, and
+        // `0x7121a0` does **not** silently no-op on a miss: `0x711bf0` substitutes through the
+        // model's own `PlayableAnimationLookup` first, and every weapon model that authors neither
+        // flex clip bakes both ids to Stand(0) (measured on the shipped weapon corpus: 571/571
+        // resolve). So a rifle-family body holding a model without 161 re-arms Stand, it does not
+        // leave the prop alone.
         let want = if want == BOW_PULL {
             if !anims.owns(BOW_PULL) {
                 continue;
@@ -169,7 +164,7 @@ pub(crate) fn flex_ranged_props(
         // builds from the block's window. Everything else plays at the literal 1.0 both `$BWR`
         // arms push (`0x3f800000`).
         let speed = if want == BOW_PULL {
-            // **`n <= 0` is NO FLEX THAT SHOT, not a flex at 1.0** (`0x624d91 jle`, claim C): the
+            // **`n <= 0` is NO FLEX THAT SHOT, not a flex at 1.0** (`0x624d91 jle`): the
             // reference abandons the whole arm when the body clip has no time left to fill.
             let Some(left) = wearers
                 .get(ev.entity)
@@ -217,9 +212,8 @@ pub(crate) fn flex_ranged_props(
     }
 }
 
-/// **The un-nock's reset — `0x60f59d`, and its condition is INVERTED from what wow-re's prose
-/// said.** `ranged-shot-anim.md` read it as "re-arms the prop to Stand(0) **after** release"; the
-/// bytes say **UNLESS** it is releasing:
+/// **The un-nock's reset — `0x60f59d`, and its condition is INVERTED.** Not "re-arms the prop to
+/// Stand(0) **after** release": the bytes say **UNLESS** it is releasing:
 ///
 /// ```text
 /// 60f578  push -1 ; call 0x712090   ; the prop's CURRENT requested animation id
@@ -231,7 +225,7 @@ pub(crate) fn flex_ranged_props(
 /// `0x60f530`, which `$BWR` itself reaches every shot (`0x600294` → `0x60c940` → `0x60c951`) —
 /// *after* the arm at `0x600273`. So the arm runs first and is exactly what that `cmp` reads back;
 /// build the two independently and a gun's muzzle blast is cancelled on the frame it starts. The
-/// guard exists for precisely this collision (wow-re `ranged-prop-reanim-two-arm.md`, claim D).
+/// guard exists for precisely this collision.
 ///
 /// benilla reproduces the shape rather than the call graph: the un-nock's observable here is
 /// [`NockLatch`] leaving the wearer, which `$BWR` does every shot and every cancel path does too
@@ -538,10 +532,10 @@ mod tests {
         );
     }
 
-    /// **The reset's guard, which is what the round corrected** (`0x60f584 je`): the un-nock
-    /// re-arms Stand **unless** the prop is releasing. Taken the other way round — "reset after
-    /// release", which is how wow-re's prose read — a gun's muzzle blast is cancelled on the frame
-    /// it starts, because the reference reaches this reset from the very `$BWR` that armed 161.
+    /// **The reset's guard** (`0x60f584 je`): the un-nock re-arms Stand **unless** the prop is
+    /// releasing. Taken the other way round — "reset after release" — a gun's muzzle blast is
+    /// cancelled on the frame it starts, because the reference reaches this reset from the very
+    /// `$BWR` that armed 161.
     #[test]
     fn the_unnock_resets_a_drawn_prop_but_never_a_releasing_one() {
         fn unnock(prop_anims: ModelAnimations, armed: u16) -> Option<AnimationNodeIndex> {

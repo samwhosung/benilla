@@ -121,14 +121,14 @@ pub(crate) enum VariantLane {
     World,
     /// The scene's authored M2 light rig ([`benilla_world::model_render::ShadeSel::Rig`] — the
     /// probe-slot SH eval + the buffer's point table, decisions 0429/0435) **with fog forced
-    /// OFF**: the glue CHARACTER model takes no fog in the reference (its fill callback stages
-    /// none, its collector's fog stays zeroed — wow-re `glue-model-lighting.md` §5), and so does
-    /// a `<Model>` pane that never armed any.
+    /// OFF**: the glue CHARACTER model takes no fog in the reference (its fill callback
+    /// `0x470ce0` stages none, its collector's fog stays zeroed), and so does a `<Model>` pane
+    /// that never armed any.
     RigUnfogged,
     /// The rig lane with the batch's **authored** fog policy kept — a `<Model>` pane whose Lua
     /// armed fog (decision 2027). The per-material UNFOGGED bit (`0x02`) then does its own work,
     /// which is the reference's own per-batch fork: a fogged pane still draws its UNFOGGED
-    /// materials unfogged (render law §5.6). The glue background scene takes this lane too.
+    /// materials unfogged (`0x70bb24`). The glue background scene takes this lane too.
     RigFogged,
 }
 
@@ -184,19 +184,20 @@ pub(crate) fn material_variant(
 /// - That ctor configures the widget's embedded `CGLight` at `+0x324`: **directional**
 ///   (`0x71b620(light, 0)` @`0x5056c9`), **direction `(0, 1, 0)` — the direction the light
 ///   PROPAGATES** (`0x71b6a0` @`0x505761` writes `CGLight+0x24`, which `0x71bce0` negates — three
-///   `fchs` at `71be7c`/`71be81`/`71be86` — before building the SH basis, wow-re
-///   `modelframe-facing-cancels.md` Q4; 0638 read the field as a to-light vector, 2034 corrects
-///   it — it overwrites an earlier `(0, −0.7071, −0.7071)` set at `0x5056e9`, dead code), **diffuse
+///   `fchs` at `71be7c`/`71be81`/`71be86` — before building the SH basis; 0638 read the field as
+///   a to-light vector, 2034 corrects it — it overwrites an earlier `(0, −0.7071, −0.7071)` set at
+///   `0x5056e9`, dead code), **diffuse
 ///   `(0.8, 0.8, 0.64)`** (`+0x3c`, @`0x505702`), **ambient `(0.7, 0.7, 0.7)`** (`+0x30`,
 ///   @`0x50572e`), then **enables** it (`0x71b780(light, 1)` @`0x50576a`).
 /// - It is the widget's ONLY light: the per-frame fill callback `0x76d680` (registered on the
 ///   model at `[model+0x3bc]` by `0x76cd30`) stages exactly this one, gated on its enable flag; the
 ///   widget's private scene container holds no others (a paper doll has no background scene M2
-///   authoring lights, unlike the glue screens — wow-re `glue-model-lighting.md §0`), and
-///   `CSimpleModel::SetLight` (`0x76cf30`) has exactly one caller in the whole binary — the Lua
-///   `Model:SetLight` binding, which no 1.12 FrameXML file ever calls.
-/// - No `×2.5` exterior-intensity node on this path (widgets carry no lighting node —
-///   `glue-model-lighting.md §4`), so row 19's dial stays at the studio's `0.4` = intensity 1.0.
+///   authoring lights, unlike the glue screens — create's `SetCharCustomizeBackground 0x4707b0`
+///   loads one), and `CSimpleModel::SetLight` (`0x76cf30`) has exactly one caller in the whole
+///   binary — the Lua `Model:SetLight` binding, which no 1.12 FrameXML file ever calls.
+/// - No `×2.5` exterior-intensity node on this path (widgets carry no lighting node, and the ×2.5
+///   node-apply `0x6a7300` is world-only), so row 19's dial stays at the studio's `0.4` =
+///   intensity 1.0.
 ///
 /// **Why this reads so much darker than the studio light, and why that is the point.** The
 /// reference's light is a pure SIDE light: it travels toward WoW `(0, 1, 0)`, the model's own left
