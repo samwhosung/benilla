@@ -1,5 +1,5 @@
 //! **The widget-method surface gate** — the sibling of [`super::reference_surface`], for the API
-//! an addon reaches through a *widget* rather than through `_G` (decision 2142).
+//! an addon reaches through a *widget* rather than through `_G`.
 //!
 //! `our_globals_stay_inside_the_1_12_surface` has guarded the global namespace since 1189, and the
 //! shape gate (1842/1843/2118) guards the arity and return kinds of the methods we *have*. Between
@@ -30,7 +30,7 @@
 //! [`WIDGET_CHAINS`] is that inheritance, and its two non-obvious rows are byte-settled, not
 //! guessed: `0x87c9b8` is the base `Region` map (its 19 names are exactly [`super::super`]'s
 //! `REGION_MAP_METHODS`), and `0x847ce4` is `LootButton`, whose whole surface of its own is
-//! `SetSlot` (decision 1799, read off the registrar's own `mov edx,1`).
+//! `SetSlot` (read off the registrar's own `mov edx,1`).
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::script::{widget_method_census, UiScript};
@@ -89,8 +89,8 @@ const FRAME_CHAIN: &[&str] = &[FRAME, REGION];
 /// here: it belongs implemented.
 const NOT_YET_ANSWERED: &[(&str, &str, &str)] = &[
     // ── The MovieFrame trio: zero addon demand, and the stock GLUE screen calls all three ──────
-    // `_extracted_gluexml/MovieFrame.lua:23/30/35/47/71`. The glue screens stay ours permanently
-    // (0068 §8), so the intro-movie screen is owed these however little the ecosystem wants them —
+    // `_extracted_gluexml/MovieFrame.lua:23/30/35/47/71`. The glue screens stay ours permanently,
+    // so the intro-movie screen is owed these however little the ecosystem wants them —
     // which makes this the one group here that is a real backlog item rather than a name nobody
     // has ever typed. benilla has no movie playback at all, so it is a feature, not a verb.
     (

@@ -1,4 +1,4 @@
-//! The character-window stats + equipment seam (decision 0208 §3) — the paper doll's data feed.
+//! The character-window stats + equipment seam — the paper doll's data feed.
 //!
 //! Same engine-free shape as [`super::unit`]: the app pushes a **combat-stats snapshot** per unit
 //! that has one ([`super::UiScript::set_player_combat_stats`] /
@@ -6,7 +6,7 @@
 //! ([`super::UiScript::set_inventory_slots`]) each frame they change, and the stat/slot globals
 //! here read that plain data.
 //!
-//! **The stat family is unit-parameterised, as the reference's is** (decision 1057): every
+//! **The stat family is unit-parameterised, as the reference's is**: every
 //! `PaperDollFrame_Set*(unit, prefix)` helper the character sheet calls with `"player"`, the pet
 //! sheet calls with `"pet"` (ref `PetPaperDollFrame.lua:73-81`), through these very bindings. So
 //! `UnitStat`/`UnitResistance`/`UnitArmor`/… route on the token — `"player"` and `"pet"` each read
@@ -35,7 +35,7 @@
 //! `unit_combat_stats` already works over any store, so the missing piece is a third push.
 //!
 //! **Return shapes differ BY FAMILY, and the reference Lua's own asymmetry is the tell**
-//! (decision 1397 — reading one and assuming the other is how 0208 got the stat row wrong).
+//! (reading one and assuming the other is how 0208 got the stat row wrong).
 //! `UnitStat` serves the **raw** `UNIT_FIELD_STAT` twice — once as-is, once clamped at zero — and
 //! leaves the subtraction to `PaperDollFrame_SetStats`, which writes `(stat - posBuff - negBuff)`
 //! itself. `UnitResistance`/`UnitArmor` serve a **decomposed** first return, because the engine
@@ -102,7 +102,7 @@ pub const SKILL_DEFENSE: u32 = 95;
 /// `[0]` = armor/physical. The `*_neg` values are **negative-or-zero** (the stored wire sign; see
 /// the module doc).
 ///
-/// Two units carry one: the player and (decision 1057) the pet. A **creature's** descriptor has no
+/// Two units carry one: the player and the pet. A **creature's** descriptor has no
 /// PLAYER block, so every field sourced from one — the stat/resistance buff splits, the
 /// damage-done mods, the skill pairs — keeps its default for a pet, which is exactly the ref pet
 /// sheet's plain white numbers with no buff decomposition in the tooltip.
@@ -284,14 +284,14 @@ pub struct InvSlotView {
     /// `0x5da2c0` — **the instance is runtime-bound**: `ITEM_FIELD_FLAGS & 1` (soulbound), or a
     /// live enchant slot naming a `SpellItemEnchantment` row that binds. App-resolved off the raw
     /// descriptor (the doll twin of [`super::container::ContainerSlot::already_bound`]); the
-    /// tooltip's bind line overrides to **Soulbound** on it (B310).
+    /// tooltip's bind line overrides to **Soulbound** on it.
     pub already_bound: bool,
     /// An `|Hitem:…|h[Name]|h` link once the name is known — the doll twin of
     /// `ContainerSlot::link`; carried onto the cursor payload so a world-drop `DELETE_ITEM_CONFIRM`
     /// off an equipped item can report its name (decision 0208 phase 1b).
     pub link: Option<String>,
     /// Whether an outstanding pending op covers `(EQUIPMENT_BAG, this slot)` — the app's
-    /// `PendingItemOps` feed (decision 0216 §4/0218 §3), fed by `ui_char.rs::feed_char` the same
+    /// `PendingItemOps` feed, fed by `ui_char.rs::feed_char` the same
     /// way `ContainerSlot::locked` is. `IsInventoryItemLocked` ORs this with the payload-held-here
     /// check.
     pub locked: bool,
@@ -303,7 +303,7 @@ pub struct InvSlotView {
     /// "<Made by %s>" line (see [`super::container::ContainerSlot::creator`], the bag twin).
     pub creator: Option<String>,
     /// The instance's resolved enchant slots, in slot order — the doll twin of
-    /// [`super::container::ContainerSlot::enchants`] (decisions 0915/0920). Our own equipped item
+    /// [`super::container::ContainerSlot::enchants`]. Our own equipped item
     /// reads all 7 slots off its streamed item object; an INSPECTED player's record carries 7 too
     /// and the reference renders all 7 from it — but a 1.12 server fills only PERM and TEMP, so in
     /// practice that is what an inspect hover shows.
@@ -311,7 +311,7 @@ pub struct InvSlotView {
     /// **The instance's remaining LIFETIME in milliseconds** — the doll twin of
     /// [`super::container::ContainerSlot::duration_ms`]. `None` = no timer. In practice an
     /// equipped duration item is rare (the holiday masks are the shipped case), but the line law
-    /// is one law and the doll hover runs the same builder. Decision 1933.
+    /// is one law and the doll hover runs the same builder.
     pub duration_ms: Option<u64>,
 }
 
@@ -450,12 +450,12 @@ fn ammo_alert_status(slot: &Option<InvSlotView>) -> u8 {
 
 impl super::UiScript {
     /// Push (or clear, with `None`) the player's combat-stats snapshot — the app calls this each
-    /// frame any of the backing descriptor fields changed (decision 0208 §3).
+    /// frame any of the backing descriptor fields changed.
     pub fn set_player_combat_stats(&mut self, stats: Option<UnitCombatStats>) {
         self.model_mut().player_combat_stats = stats;
     }
 
-    /// The `"pet"` twin (decision 1057) — `None` whenever there is no pet, which is what makes
+    /// The `"pet"` twin — `None` whenever there is no pet, which is what makes
     /// every `Unit*("pet")` fall back to the absent shape the moment one is dismissed.
     pub fn set_pet_combat_stats(&mut self, stats: Option<UnitCombatStats>) {
         self.model_mut().pet_combat_stats = stats;
@@ -554,7 +554,7 @@ fn cgunit_skill(model: &Model, token: &str) -> i64 {
 /// Read inventory slot `slot` under a short borrow, cloned out so the caller holds no borrow.
 /// `None` = empty / out of range / a token with no equipment source.
 ///
-/// **Unit-keyed, and that is the reference's own shape** (decision 0631): the engine answers
+/// **Unit-keyed, and that is the reference's own shape**: the engine answers
 /// `GetInventoryItemTexture(unit, slot)` for any unit whose item data it holds, which is why the
 /// inspect paper doll reuses the very same bindings rather than a parallel `GetInspectItem*`
 /// family. Two sources, by token:
@@ -716,7 +716,7 @@ const RESISTANCE_INDEX_ERROR: &str = "Invalid resistance index in UnitResistance
 const STAT_USAGE: &str = "Usage: UnitStat(\"unit\", statIndex)";
 const RESISTANCE_USAGE: &str = "Usage: UnitResistance(\"unit\", resistanceIndex)";
 
-/// Register the paper-doll stat/slot globals (decision 0208 §3).
+/// Register the paper-doll stat/slot globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -727,7 +727,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `setl cl; dec ecx; and ecx,eax`). Slots 3/4 are `PLAYER_FIELD_POSSTAT0+i` (`0x518712`) and
     // `NEGSTAT0+i` (`0x518772`), each behind a SELF gate.
     //
-    // This served `effective − pos − neg` as the first return until decision 1397. Subtracting is
+    // This served `effective − pos − neg` as the first return until. Subtracting is
     // the ref Lua's *own* job — `PaperDollFrame_SetStats` writes the tooltip's base as
     // `(stat - posBuff - negBuff)` — so a pre-subtracted `stat` deducts the buff twice. It was
     // invisible only because pos/neg were stuck at 0 by the field-decode bug 1397 fixes; the two
@@ -1041,7 +1041,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // and neither is known until it lands). Unit-keyed like its siblings, so the reference's paper
     // doll and its inspect twin both reach it from one binding:
     // `DressUpItemLink(GetInventoryItemLink("player", this:GetID()))` (PaperDollFrame.lua:650) and
-    // the shift-click `ChatFrameEditBox:Insert(...)` beside it (l.653). Decision 1059.
+    // the shift-click `ChatFrameEditBox:Insert(...)` beside it (l.653).
     g.set(
         "GetInventoryItemLink",
         lua.create_function(|lua, (token, slot): (Option<String>, i64)| {
@@ -1190,7 +1190,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // a property of the SLOT, not of the player. It pairs with `UnitHasRelicSlot("player")`,
     // which is the class half, and stock reads the two as a conjunction
     // (`PaperDollFrame.lua:680`/`:744`). This comment used to say `UnitHasRelicSlot` is a
-    // later-era concept, always false in vanilla; it is not — decision 1796.
+    // later-era concept, always false in vanilla; it is not.
     g.set(
         "GetInventorySlotInfo",
         lua.create_function(|lua, name: String| {
@@ -1605,7 +1605,7 @@ mod tests {
         );
     }
 
-    /// **`UnitRangedAttack` does NOT take the pet fork its two neighbours take** (decision 1812).
+    /// **`UnitRangedAttack` does NOT take the pet fork its two neighbours take**.
     ///
     /// `UnitDefense` `0x519200` and `UnitAttackBothHands` `0x518810` gate on SELF-OR-MINE and then
     /// dispatch through the resolved unit's vtable, so a pet passes and lands on `CGUnit_C`'s
@@ -1697,7 +1697,7 @@ mod tests {
         );
     }
 
-    /// **The pet routing, end to end** (decision 1057) — the thing no build gate can catch: a
+    /// **The pet routing, end to end** — the thing no build gate can catch: a
     /// pushed pet snapshot really is what `Unit*("pet")` answers, while `"player"` still answers
     /// the player's and a third token still answers the absent shape. The failure this guards is
     /// silent: a mis-routed reader shows a pet sheet full of the *player's* numbers, or of zeros,
@@ -2131,7 +2131,7 @@ mod tests {
     }
 
     /// The character and pet paper dolls' facings are **the panes' own `SetRotation` state**, read
-    /// back by name — not the two benilla-named scalars they were until decision 1751.
+    /// back by name — not the two benilla-named scalars they were until.
     ///
     /// The two tabs are two `<PlayerModel>`s that can sit at different facings, which is the whole
     /// reason this is per-pane at all: turning one must leave the other alone. It used to be

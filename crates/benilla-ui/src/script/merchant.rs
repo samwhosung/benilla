@@ -22,7 +22,7 @@
 //!
 //! Buying addresses the row by its **1-based list position** here (`BuyMerchantItem(index)`); the app
 //! maps that position to the item *entry* the wire's `CMSG_BUY_ITEM` needs (buy is by entry, not the
-//! vendor `muid` — decision 0081). vanilla's client-side `CloseMerchant()` sends no packet, so it
+//! vendor `muid`). vanilla's client-side `CloseMerchant()` sends no packet, so it
 //! just flags the app to clear its local state (the gossip pattern).
 
 use mlua::{Lua, MultiValue, Value};
@@ -31,7 +31,7 @@ use super::container::UiCursorMode;
 use super::cursor::CursorPayload;
 use super::Model;
 
-/// One vendor row, resolved by the app from the wire `VendorItem` (decision 0081). Plain data —
+/// One vendor row, resolved by the app from the wire `VendorItem`. Plain data —
 /// 1-based order in the window is its position in [`MerchantState::items`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MerchantItem {
@@ -254,7 +254,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // modifier arms — `DressUpItemLink(GetMerchantItemLink(this:GetID()))` (`MerchantFrame.lua:303`)
     // and `ChatFrameEditBox:Insert(...)` (`:306`); ours routes the second through
     // `BenillaChatEdit_InsertLink`, whose whole job is the nil this getter can answer. Merchant rows
-    // only: see [`MerchantItem::link`] for why a buyback row carries none. Decision 1059.
+    // only: see [`MerchantItem::link`] for why a buyback row carries none.
     g.set(
         "GetMerchantItemLink",
         lua.create_function(|lua, index: usize| {
@@ -375,7 +375,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // clear is the SELL clear, not `ClearCursor`: it fires `CURSOR_UPDATE` and leaves the
             // source slot greyed until the server's inventory update
             // (`cursor::take_cursor_item_for_sale`, shared with the interact ladder's vendor arm,
-            // which is the same `0x494b60` call — decision 1914).
+            // which is the same `0x494b60` call).
             if let Some(item) = crate::script::cursor::take_cursor_item_for_sale(&mut model) {
                 model.merchant_cursor_sells.push((item.bag, item.slot));
                 return Ok(());
@@ -734,7 +734,7 @@ mod tests {
             .unwrap());
 
         // GetMerchantItemLink: the resolved row's link; nil while the template is in flight and nil
-        // out of range (the row click's ctrl/shift arms hand this straight on — decision 1059).
+        // out of range (the row click's ctrl/shift arms hand this straight on).
         assert_eq!(
             s.eval::<String>("return GetMerchantItemLink(1)").unwrap(),
             "|cffffffff|Hitem:159:0:0:0|h[Refreshing Spring Water]|h|r"
@@ -1235,7 +1235,7 @@ mod tests {
         );
     }
 
-    /// `ClearCursor 0x495190` opens with the gift-wrap cancel (`0x5edf10`, decision 1934), and the
+    /// `ClearCursor 0x495190` opens with the gift-wrap cancel (`0x5edf10`), and the
     /// grab's first act is that clear (`0x49510b`) — so taking a vendor row disarms a wrap.
     #[test]
     fn a_vendor_grab_cancels_an_armed_gift_wrap() {

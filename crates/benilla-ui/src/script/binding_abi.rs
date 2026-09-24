@@ -150,7 +150,7 @@ pub(crate) fn optional_string(lua: &Lua, v: &Value) -> Option<String> {
     }
 }
 
-/// **A free-text argument — the player-visible kind — as the reference takes it** (decision 2138).
+/// **A free-text argument — the player-visible kind — as the reference takes it**.
 ///
 /// The text sinks (`FontString`/`Button`/`EditBox`/`SimpleHTML` `SetText`, `SetFormattedText`,
 /// `EditBox:Insert`) took their argument as mlua's `Option<String>`, whose `FromLua` demands valid
@@ -208,7 +208,7 @@ pub(crate) fn text_arg(lua: &Lua, v: Option<Value>) -> mlua::Result<Option<Strin
 /// string-valued option in the game. Equally, `"0.5"` and `"-1"` are decided by their first byte
 /// alone — false and `default` — never by their numeric value.
 /// Lua 5.0's own number→string rule as the 1.12 client compiles it: `sprintf("%.14g")`
-/// (`luaV_tostring 0x6f7c80`, format string `0x871960`). Decision 1831.
+/// (`luaV_tostring 0x6f7c80`, format string `0x871960`).
 ///
 /// This is the whole of `EditBox:SetNumber`'s formatting, because **`SetNumber 0x798690` and
 /// `SetText 0x7984c0` are byte-identical functions** — 245 bytes each, zero differences after
@@ -335,7 +335,7 @@ pub(crate) fn bool_or_default(v: Option<&Value>, default: bool) -> bool {
 /// variable. That is why it survived so long: the transcribed FrameXML reads every one of these
 /// with a plain `if`, so `true` and `1` were interchangeable for as long as *we* wrote the callers.
 /// Real 1.12 addons are not our callers — `ColorPickerPlus.lua:121` writes
-/// `if IsShiftKeyDown() == 1 then`, and reads a `true` as "not held" (decision 2118).
+/// `if IsShiftKeyDown() == 1 then`, and reads a `true` as "not held".
 ///
 /// Enforced, not remembered: `ui_script::shape_gate::no_query_binding_answers_a_lua_boolean`
 /// probes the whole registered query surface and fails on any Lua boolean.

@@ -1,4 +1,4 @@
-//! Player **macros** (decision 0983) — the one seam in this crate that owns its game state
+//! Player **macros** — the one seam in this crate that owns its game state
 //! outright, because the 1.12 macro system has no server side at all: there is no macro opcode on
 //! the wire (vmangos has none, and the client's own `UIMacros.cpp` persists to
 //! `WTF/…/macros-cache.txt`), so the macro table *is* client state. Contrast [`super::action`],

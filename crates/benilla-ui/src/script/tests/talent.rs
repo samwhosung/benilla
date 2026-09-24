@@ -1,4 +1,4 @@
-//! The talent engine seam (decision 0304): the Era binding tuples over a pushed snapshot, the
+//! The talent engine seam: the Era binding tuples over a pushed snapshot, the
 //! learn-click queue, and the `SetTalent` tooltip — the spell builder with the talent
 //! interleave (rank line white, req lines red, next-rank block, learn hint green).
 
@@ -108,7 +108,7 @@ fn learn_talent_queues_for_the_app_drain() {
 
 /// A stand-in string table for the talent tail's three keys — **deliberately not the shipped
 /// wording**, because what is under test is which key each line reaches and what fills it, never
-/// what the sentence says (decision 2045).
+/// what the sentence says.
 fn seed_talent_strings(s: &mut UiScript) {
     s.run(
         r#"

@@ -1,4 +1,4 @@
-//! The trainer bindings (decision 0237) — the Era-shaped class/profession trainer surface driving a
+//! The trainer bindings — the Era-shaped class/profession trainer surface driving a
 //! faithful port of the real 1.12 `ClassTrainerFrame` (extracted from `interface.MPQ`:
 //! `Interface\FrameXML\ClassTrainerFrame.{xml,lua}`). Same two-way seam as [`super::merchant`]: the
 //! app pushes a **trainer snapshot** ([`UiScript::set_trainer`] — the wire services already resolved
@@ -17,7 +17,7 @@
 //! `"header"` (a skill-line group header, with `isExpanded` set) or the service's colour state
 //! `"available"`/`"unavailable"`/`"used"` (green/red/gray, `isExpanded` nil).
 //!
-//! ## The tree (decisions 0247 + 1124 — the byte-verified grouping/sort model, **per trainer type**)
+//! ## The tree (the byte-verified grouping/sort model, **per trainer type**)
 //!
 //! The 1.12 wire (`SMSG_TRAINER_LIST`) is a **flat** service list; the client builds a **collapsible
 //! tree** on top of it, and `index` is **1-based into that visible tree**, not the wire order.
@@ -77,7 +77,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
 
-/// The green/red/gray state of a service (the wire's `TrainerSpellState`, decision 0237), surfaced to
+/// The green/red/gray state of a service (the wire's `TrainerSpellState`), surfaced to
 /// Lua as the Era `category` string `GetTrainerServiceInfo` returns.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TrainerServiceCategory {
@@ -186,7 +186,7 @@ impl Default for TrainerTooltip {
     }
 }
 
-/// One trainer service row, resolved by the app from the wire `TrainerSpell` (decision 0237). Plain
+/// One trainer service row, resolved by the app from the wire `TrainerSpell`. Plain
 /// data — position in [`TrainerState::services`] is the *unsorted* wire order; the 1-based index the
 /// Lua uses is a position in the visible display tree ([`rows`], built from [`TrainerState::groups`]).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -219,7 +219,7 @@ pub struct TrainerService {
     /// A tradeskill step (`IsTrainerServiceTradeSkill`) vs. a plain learn-spell.
     pub is_trade_skill: bool,
     /// The tree's grouping key, resolved app-side by the **trainer type's own** builder law
-    /// (module doc, decision 1124): the taught spell's `SkillLine` at types 0/1/3, or the
+    /// (module doc): the taught spell's `SkillLine` at types 0/1/3, or the
     /// `SKILL_STEP` partition's `1`/`2` at type 2. `0` = unresolved: the service is **dropped** from
     /// the tree (the client's `skillLine == 0 → drop`) — reachable only at types 0/1/3.
     pub group_key: u32,
@@ -231,7 +231,7 @@ pub struct TrainerService {
     pub tooltip: TrainerTooltip,
 }
 
-/// One group in the display tree (decisions 0247/1124): the header's key + name and the positions
+/// One group in the display tree: the header's key + name and the positions
 /// (into [`TrainerState::services`]) of the group's services, pre-sorted by the trainer type's
 /// within-group comparator. Synthesized by [`UiScript::set_trainer`] — the app pushes only the flat
 /// services.
@@ -288,13 +288,13 @@ impl super::UiScript {
     /// **Reset what one `SMSG_TRAINER_LIST` arriving resets — the state filter, the collapse set,
     /// and the selection.**
     ///
-    /// Byte-verified (decision 1128): the list builder writes the filter mask itself on every
+    /// Byte-verified: the list builder writes the filter mask itself on every
     /// packet — `0x4d75d9 mov ds:0xb73a1c,3`
     /// (available|unavailable, "already known" OFF), or `5` (available|used) when `trainerType == 1`
     /// — alongside `ds:0xb73a20 = ds:0xb73a24 = 0xffffffff`, which is "no group collapsed". So the
     /// player's filter choice does NOT live in the engine across trainer visits in the reference: it
     /// lives in the saved variable `TRAINER_FILTER_*`, and the window's show handler pushes it back
-    /// over this reset (decision 1128; `TrainerFrame.xml`'s `BenillaTrainerFrame_ApplyFilter`).
+    /// over this reset (`TrainerFrame.xml`'s `BenillaTrainerFrame_ApplyFilter`).
     ///
     /// **The selection is the same edge and the same law.** `0x4d7560`'s tail selects record 0 —
     /// `0x4d7b40 xor ecx,ecx` → `0x4d7b42 call 0x4d74f0`, after the sort — and since row 0 is always
@@ -415,7 +415,7 @@ fn talent_order(a: &TrainerService, b: &TrainerService) -> std::cmp::Ordering {
         .then_with(|| collate(&name(a), &name(b)))
 }
 
-/// Build the display tree from the flat services (decisions 0247/1124), by the trainer type's own
+/// Build the display tree from the flat services, by the trainer type's own
 /// three laws:
 ///
 /// * **group** on the app-resolved [`TrainerService::group_key`], dropping the unresolved `0` (which
@@ -468,7 +468,7 @@ fn build_groups(services: &[TrainerService], trainer_type: u32) -> Vec<TrainerGr
 }
 
 /// The client's whole row array, and how much of its front is **on screen** — the visible rows in
-/// display order (decisions 0247/1124), then every hidden one in a **tail** behind them.
+/// display order, then every hidden one in a **tail** behind them.
 ///
 /// **Hiding a row is not removing it**, and that is the shape of the real array rather than a
 /// convenience here. The finalizer `0x4d8410` writes only a per-record visible flag — `[+0x34] = 1`
@@ -608,7 +608,7 @@ fn selected_row(model: &Model) -> Option<usize> {
 /// **not** carved, and the difference is unobservable through the stock window, which only ever
 /// passes a visible header's index or `0`.
 /// Queue `TRAINER_UPDATE` — **the repaint the reference fires from the mask-commit thunk itself**,
-/// not from Lua (decision 2244).
+/// not from Lua.
 ///
 /// `SetTrainerServiceTypeFilter`'s four legs all commit through `0x4d8c90`, whose whole body is
 /// `mov ds:0xb73a1c,ecx; call 0x4d8410; mov ecx,0x136; jmp 0x703e50` — write the mask, re-run the
@@ -693,7 +693,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetTrainerServiceInfo(index) → name, subText, serviceType, isExpanded. `index` 1-based into the
     // visible tree; out of range → a single nil. A HEADER row returns (skillLineName, nil, "header",
-    // isExpanded); a SERVICE row returns (name, subText, stateString, nil) (decision 0247).
+    // isExpanded); a SERVICE row returns (name, subText, stateString, nil).
     g.set(
         "GetTrainerServiceInfo",
         lua.create_function(|lua, index: usize| {
@@ -889,7 +889,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // IsTalentTrainer() → 1/nil: `0x4d8ed0` tests trainerType == 1 — vmangos's MOUNT trainers, which
-    // the client's own vocabulary calls "talent" (decision 1124). It used to return a hardcoded nil
+    // the client's own vocabulary calls "talent". It used to return a hardcoded nil
     // on the belief that benilla drives no such trainer; the shipped world has 23 of them.
     g.set(
         "IsTalentTrainer",
@@ -944,7 +944,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // Collapse/ExpandTrainerSkillLine(id) — fold a skill line by the display index of its header row
-    // (id 0 = all groups, the collapse-all button); a non-header index no-ops (decision 0247).
+    // (id 0 = all groups, the collapse-all button); a non-header index no-ops.
     g.set(
         "CollapseTrainerSkillLine",
         lua.create_function(|lua, id: usize| {

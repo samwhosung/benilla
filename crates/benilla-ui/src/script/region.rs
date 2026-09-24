@@ -125,7 +125,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // nil/absent/boolean/table abandon the caller's statement. Stock
             // `Blizzard_InspectUI.lua:49` reaches it on a re-open, which is how it was found.
             // A token that RESOLVES to nothing is a different, quiet case — it blanks the portrait
-            // and returns no values. Decision 1834.
+            // and returns no values.
             let unit = crate::script::binding_abi::string_arg(
                 lua,
                 unit,
@@ -140,8 +140,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `MerchantFrame.lua:68`, `GuildRegistrarFrame.lua:4` and `TradeFrame.lua:41` all
             // write `"NPC"` and mean `"npc"`. The app samples the booth by this string
             // (`portrait::PortraitImages`, keyed by the lowercase slot names), and a raw `"NPC"`
-            // reached it and matched nothing: an empty portrait ring on all three windows
-            // (decision 2022).
+            // reached it and matched nothing: an empty portrait ring on all three windows.
             data.portrait_unit = Some(unit.to_ascii_lowercase());
             data.texture = None;
             data.fill = None;
@@ -188,14 +187,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // BenillaSetBoothTexture(textureRegion, slotToken) — the **square** twin of
-    // SetPortraitTexture (decision 0208 §5): the same `portrait_unit` booth-image binding
+    // SetPortraitTexture: the same `portrait_unit` booth-image binding
     // WITHOUT the circular mask, for a body pane whose texture region samples the booth's bake
     // edge to edge (no frame ring to mask for). Benilla-named because it is not the live API: it
     // is the pane→booth join written in Lua.
     //
     // **RETIRING.** A migrated window's file is the reference's, which declares a bare
     // `<PlayerModel>` and no texture at all, so the join moved app-side
-    // (`portrait::MODEL_PANE_BOOTHS`) and the widget draws itself (decision 1810). Two callers are
+    // (`portrait::MODEL_PANE_BOOTHS`) and the widget draws itself. Two callers are
     // left — the dressing room and the inspect window, both still our own files — and this goes
     // with the later of them.
     lua.globals().set(
@@ -212,7 +211,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // **`__index` is the method TABLE, not a dispatcher function** (decision 2310) — here and at
+    // **`__index` is the method TABLE, not a dispatcher function** — here and at
     // the three leaf metatables below. A Rust `__index` makes every `t.SetTexture` a Lua→Rust→Lua
     // round trip plus a named-registry string lookup; measured at ~195 ns against ~9 ns for the
     // table form, paid by every widget method access in the client. Nothing mutates these tables
@@ -613,8 +612,7 @@ pub(crate) fn free_region(model: &mut Model, rh: RegionHandle) {
     }
     model.arena.destroy_region(rh);
     // A death is the archetypal STRUCTURAL change — it takes a node out of the layout roster and
-    // its reverse edges with it, which is exactly what a per-node ledger cannot describe
-    // (decision 1388).
+    // its reverse edges with it, which is exactly what a per-node ledger cannot describe.
     model.touch_layout();
 }
 
@@ -625,7 +623,7 @@ pub(super) fn region_owner_id(model: &mut Model, rh: RegionHandle) -> u32 {
     }
 }
 
-/// The client's **creation-path implicit anchor** (decision 1310): a per-region-type post-step
+/// The client's **creation-path implicit anchor**: a per-region-type post-step
 /// the real engine runs immediately after a region's LoadXML returns (`0x7701c0` texture /
 /// `0x771480` fontstring — the same two fire from the Button state-texture and ButtonText paths,
 /// and from Lua `CreateTexture`/`CreateFontString` only on a template-registry hit). Condition:
@@ -635,7 +633,7 @@ pub(super) fn region_owner_id(model: &mut Model, rh: RegionHandle) -> u32 {
 /// - a **Texture** gets `SetAllPoints(parent)` — two corner anchors, TOPLEFT→TOPLEFT and
 ///   BOTTOMRIGHT→BOTTOMRIGHT at (0,0). Two opposing corners pin all four edges, so an authored
 ///   `<Size>` is **structurally unread** (the resolver law) — which is why the reference's
-///   stack-split plate authors a vestigial 256×32 and renders 172×96 (B180).
+///   stack-split plate authors a vestigial 256×32 and renders 172×96.
 /// - a **FontString** gets ONE middle-row `SetPoint` chosen by its live justify word
 ///   (`[this+0x120] & 7`: 1 → LEFT→LEFT, 4 → RIGHT→RIGHT, else CENTER→CENTER, offsets (0,0)) —
 ///   and its `<Size>` stays live (single anchor + W/H sizes the opposite edges).
@@ -679,7 +677,7 @@ pub(crate) fn implicit_creation_anchor(model: &mut Model, rh: RegionHandle) {
 /// share: `& 7`, then equality against LEFT (1) and RIGHT (4); every other value — the CENTER bit
 /// and a cleared axis alike — falls to CENTER. What differs between the two callers is only WHOSE
 /// word is read: the post-step reads the string's own (`+0x120`), the adopter reads the button's
-/// normal font's (`+0x390`) — see [`super::button`]'s `adopt_label` (decision 1996).
+/// normal font's (`+0x390`) — see [`super::button`]'s `adopt_label`.
 pub(crate) fn justify_anchor_point(word: u32) -> crate::layout::Point {
     use crate::layout::Point;
     match word & crate::justify::H_MASK {
@@ -781,10 +779,10 @@ pub(super) fn region_set_point(lua: &Lua, this: &Table, args: &MultiValue) -> ml
             .iter()
             .any(|a| a.point == point);
     if !same_at_tail {
-        // The frame twin's law (decision 1388): re-pointing the same anchor at the same target is
+        // The frame twin's law: re-pointing the same anchor at the same target is
         // a VALUE change and names its node; anything that moves the target set is structural.
         // This is the castbar spark's and every combat-text string's per-frame write.
-        // …and a retarget names its node too (decision 1625) — see the frame twin.
+        // …and a retarget names its node too — see the frame twin.
         let structural = anchor_retarget_is_structural(&data.anchors, &new);
         let old_targets: Option<Vec<u32>> =
             structural.then(|| data.anchors.iter().map(|a| a.relative_to).collect());
@@ -812,7 +810,7 @@ pub(super) fn region_set_point(lua: &Lua, this: &Table, args: &MultiValue) -> ml
 /// receiver's own **geometry vtable** — slots `+0x1c`/`+0x20` — which is the identical call the
 /// rect resolver makes (`0x767579`). So a region's Lua-visible size and the size its rect is built
 /// from are one number BY CONSTRUCTION on the reference, and this function is how they are one
-/// number here (decision 1670; the resolver half is `layout::content_span` +
+/// number here (the resolver half is `layout::content_span` +
 /// `layout::FONTSTRING_MIN_SPAN`, and both are read from here).
 ///
 /// | class | law |
@@ -879,7 +877,7 @@ pub(super) fn virtual_span(model: &Model, rh: RegionHandle) -> (f32, f32) {
             // A genuinely EMPTY string is a different thing: its extent is known and it is zero, so
             // it floors — which is the case the reference's floor exists for. The layout sweep
             // floors unconditionally because a rect has to exist on every frame and nothing reads
-            // it as a sentinel (decision 1664); the difference between the two is exactly this
+            // it as a sentinel; the difference between the two is exactly this
             // pending state, which the reference does not have.
             //
             // "Known" is the same test the layout sweep applies: **empty text needs no

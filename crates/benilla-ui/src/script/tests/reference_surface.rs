@@ -1,4 +1,4 @@
-//! **The 1.12 surface is the contract** (decisions 1188 §2, 1189) — enforced here rather than
+//! **The 1.12 surface is the contract** — enforced here rather than
 //! trusted to memory.
 //!
 //! benilla targets the 1.12.1 API. Anything beyond it is a *listed, justified* exception, and the
@@ -71,7 +71,7 @@ fn allowed_beyond_1_12() -> HashSet<&'static str> {
         // FrameXML today", and as of 2026-09-09 that is true of exactly ONE of the sixteen**
         // (`SubmitChatInput`, in the dev-only `ScriptLogFrame.xml`) — a corpus census measured it
         // and this file's own claim was checked against `assets/ui`'s seven remaining files, name
-        // by name, before this comment was rewritten (decision 2142). 1751's migration retired the
+        // by name, before this comment was rewritten. 1751's migration retired the
         // windows that used the rest; the list outlived its justification, which is exactly how
         // 2118 found the modifier keys still answering booleans years after 0068's reason for it
         // had gone.
@@ -583,7 +583,7 @@ fn non_space_wrap_defaults_on_and_answers_one_or_nil() {
 }
 
 /// **The EditBox font block — the first sixteen entries of its own registrar table, and the largest
-/// single gap the per-kind widget-method census found** (decision 1229, whose ranking opens
+/// single gap the per-kind widget-method census found** (whose ranking opens
 /// `63  EditBox:SetFontObject   (on Texture, FontString)`).
 ///
 /// `EditBox`'s table is `.data 0x87bb68`, **48 entries** — the count read from the `mov edx,0x30`
@@ -760,7 +760,7 @@ fn editbox_font_block_return_shapes_are_the_shared_implementations() {
 /// — an **anonymous** EditBox parented to a frame, then `SetFontObject` on it two lines later. That
 /// file is vendored into **63 addon folders** of the 218-addon corpus (65 copies: `FuBar` plus ~50
 /// FuBar plugins, `BigWigs`, `AtlasLoot`, `oRA2`, `SnaFu`, …), so the census's `63` is **one library
-/// replicated**, not 63 independent addons (decision 1207).
+/// replicated**, not 63 independent addons.
 ///
 /// `AceGUIWidget-Slider.lua:204-210` is the same shape with `SetJustifyH("CENTER")` on the end.
 #[test]
@@ -1397,8 +1397,7 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
     );
 }
 
-/// **`GetFrameType`/`IsFrameType` — 1.12's own names for the pair above, on the FRAME side**
-/// (decision 2106).
+/// **`GetFrameType`/`IsFrameType` — 1.12's own names for the pair above, on the FRAME side**.
 ///
 /// The client registers type identity twice: `CScriptRegion` publishes
 /// `GetObjectType`/`IsObjectType` (the test above), and `CSimpleFrameScript.cpp` publishes

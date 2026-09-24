@@ -1,4 +1,4 @@
-//! The FrameXML **loader** (decision 0068): the join between the document layer ([`crate::framexml`])
+//! The FrameXML **loader**: the join between the document layer ([`crate::framexml`])
 //! and the runtime ([`crate::script`]). It walks a parsed FrameXML document and *materializes* it —
 //! turning `<Include>`/`<Script>` sequencing, template instances, `<Layers>` regions, nested
 //! `<Frames>`, and `<Scripts>` handlers into live frames in a running [`UiScript`] — by driving the
@@ -22,16 +22,16 @@
 //! ## The engine-free seam
 //!
 //! `<Include>`/`<Script file=>` need file bytes, which this crate must not read itself (no Bevy, no
-//! IO — decision 0068 §1). The app supplies a `files` closure that resolves a FrameXML path to its
+//! IO). The app supplies a `files` closure that resolves a FrameXML path to its
 //! **bytes** (from the MPQ/addon dir); the loader stays IO-free.
 //!
-//! **Bytes, not text** (decision 1193). A `<Script file=>` chunk is handed to Lua as the bytes on
+//! **Bytes, not text**. A `<Script file=>` chunk is handed to Lua as the bytes on
 //! disk, exactly as the reference's `luaL_loadbuffer` receives them; only an `<Include>`d document
 //! is decoded ([`crate::source::decode`]), because roxmltree needs `&str` and Lua does not. Before
 //! 1193 the provider returned `String`, so a cp1252 locale file did not lose a glyph — it read as
 //! *absent*, and the include or every handler in the script vanished with it.
 //!
-//! **The loader owns relative-path resolution; the provider owns the root** (decision 1186). A
+//! **The loader owns relative-path resolution; the provider owns the root**. A
 //! reference is relative to the directory of the *file that contains it*, and may walk up with `..`
 //! — `Bagnon/src/main.xml` reaches its sibling as `templates.xml` and a shared library addon as
 //! `..\..\BagBrother\core\core.xml`. Only the loader knows the include tree, so it does the joining
@@ -39,15 +39,15 @@
 //! path is allowed to reach. [`load`] starts at the root, [`load_in`] starts at a named directory.
 //!
 //! A path with **no provider hit gets its own list**, [`LoadReport::missing_files`] — neither a
-//! warning nor an error (decision 2155). It was a warning until 1186, and the cost was that an
+//! warning nor an error. It was a warning until 1186, and the cost was that an
 //! addon which resolved *nothing* reported success — Bagnon missed all eleven of its references
 //! and came back with zero errors. 1186 answered that by calling it an error, which fixed the
 //! visibility and got the *severity* wrong the other way: the reference logs `"Couldn't open %s"`
 //! and carries on, with nothing raised, so an addon shipping an incomplete package was scoring as
 //! a client script error and reaching the player's red error dialog. Both facts are true and they
-//! need two different lists. The load continues either way (0068: the client logs and carries on).
+//! need two different lists. The load continues either way (the client logs and carries on).
 //!
-//! ## MAXCSTACK discipline (decision 0068, probe A)
+//! ## MAXCSTACK discipline (probe A)
 //!
 //! Like the host it drives, the loader holds **no** breadth-wise accumulation of Lua handles: a
 //! frame's wrapper `Table` and its (optional) `OnLoad` `Function` live only on the Rust stack across
@@ -70,20 +70,20 @@ mod widgets;
 /// The outcome of a [`load`]: what went wrong tolerably (`warnings`), what went wrong that dropped
 /// something (`errors`), and how much got built (`frames`). Never a panic and never an abort — a bad
 /// handler body, an unknown frame type, a missing include, or an unsupported attribute is an entry
-/// here and the load continues (decision 0068: the client logs-and-continues; so do we).
+/// here and the load continues (the client logs-and-continues; so do we).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LoadReport {
     /// Tolerable issues: a missing include/script provider, an unsupported-in-v1 attribute or script
     /// handler, an unregistered `inherits=` font object, and the parse/expand warnings folded in from
     /// the document layer. None of these dropped a frame — except one, on purpose: an **unknown
     /// frame type** drops its own node here rather than in `errors`, because that is the channel
-    /// the reference uses for it at the XML door (`0x6ee356`, logged and non-fatal; decision 2191).
+    /// the reference uses for it at the XML door (`0x6ee356`, logged and non-fatal).
     pub warnings: Vec<String>,
     /// Things that dropped a frame or a handler and that the reference RAISES on: a handler that
     /// failed to compile, a method call that errored, a malformed included document.
     pub errors: Vec<String>,
     /// **A named file the provider does not have** — an `<Include file=>` or `<Script file=>` whose
-    /// resolved path hit nothing (decision 2155).
+    /// resolved path hit nothing.
     ///
     /// Its own list because it is its own severity, and 1186 put it in the wrong one. The reference
     /// does not raise here: `0x6edaa0` logs `"Couldn't open %s"` (`0x846ff4`) and returns null, the
@@ -103,7 +103,7 @@ pub struct LoadReport {
     /// How many frame instances were successfully created (`CreateFrame` returned a wrapper) — the
     /// coverage number the real-file smoke test reports.
     pub frames: usize,
-    /// **The loader's trace lines, emitted only while `FrameXML_Debug` is on** (decision 2160).
+    /// **The loader's trace lines, emitted only while `FrameXML_Debug` is on**.
     ///
     /// Empty in every normal load, which is the reference's own default: `[0xceea30]` boots at 0
     /// and each of the loader's five trace sites is gated `flag > 0` (`0x6ee298 jle`). Its own
@@ -123,7 +123,7 @@ pub struct LoadReport {
 ///
 /// `files` is the engine-free seam (see module docs): it resolves a FrameXML/Lua path to its
 /// **bytes**. Returning `None` yields a [`LoadReport::missing_files`] row — reported, but not an
-/// error, because nothing raised (decision 2155).
+/// error, because nothing raised.
 pub fn load(
     script: &UiScript,
     doc: &ParsedDocument,
@@ -138,13 +138,13 @@ pub fn load(
 /// document with no path, which only tests have). Its directory is what every `<Include>`/`<Script
 /// file=>` inside resolves against, and each nested include resolves against *its* own directory in
 /// turn — so an addon whose manifest lists `src\main.xml` passes `"<Addon>/src/main.xml"` here and
-/// its `<Include file="templates.xml">` reaches `<Addon>/src/templates.xml` (decision 1186).
+/// its `<Include file="templates.xml">` reaches `<Addon>/src/templates.xml`.
 ///
 /// **The path, not the directory, because the loader has to be able to say where a raise came
 /// from.** Every `<Script>` chunk is named after the file carrying it; an unnamed chunk takes
 /// mlua's `#[track_caller]` default, which is *this file's* Rust source line, and 26 of the corpus
 /// survey's 70 readable failures pointed at `crates/benilla-ui/src/loader/mod.rs` instead of the
-/// addon (decision 1217). Three callers used to derive this directory themselves with the same
+/// addon. Three callers used to derive this directory themselves with the same
 /// three lines; they pass the path now and [`dir_of`] does it once.
 pub fn load_in(
     script: &UiScript,
@@ -172,7 +172,7 @@ pub fn load_into(
         warned: HashSet::new(),
         deferred_anchors: Vec::new(),
     };
-    // Fold the document layer's own parse warnings in (decision 0068: reuse framexml's warnings).
+    // Fold the document layer's own parse warnings in (reuse framexml's warnings).
     loader.report.warnings.extend(doc.warnings.iter().cloned());
     loader.load_doc(doc);
     loader.report
@@ -330,7 +330,7 @@ pub fn join_ref(base: &str, path: &str) -> String {
 
 /// Is `tag` one of the four model-pane kinds — the `CSimpleModel` family, whose own `LoadXML`
 /// (`0x76cac0`) reads the `scale=` attribute into the MODEL scale (`geometry.rs`'s
-/// `apply_attrs`, decision 2007).
+/// `apply_attrs`).
 pub(super) fn model_kind_tag(tag: &str) -> bool {
     ["Model", "PlayerModel", "DressUpModel", "TabardModel"]
         .iter()
@@ -413,14 +413,14 @@ impl Loader<'_> {
 
     /// Run a chunk in the one global state — `UiScript::run`'s body, reachable from `&Lua`.
     ///
-    /// Takes **bytes**, because a `<Script file=>` chunk is whatever is on disk (decision 1193) and
+    /// Takes **bytes**, because a `<Script file=>` chunk is whatever is on disk and
     /// Lua 5.0 strings are byte strings. An inline `<Script>` body arrives as `&str` from the XML
     /// and is passed through as its own bytes, which is the same thing.
     ///
     /// `path` names the chunk, and **naming it is not cosmetic**: mlua's `load` is `#[track_caller]`
     /// and an unnamed chunk is named after the Rust line that loaded it, so every raise from every
-    /// FrameXML and addon `<Script>` block in this project reported `loader/mod.rs` as its source
-    /// (decision 1217). Lua's leading `@` is what makes it a *file* name rather than a quoted
+    /// FrameXML and addon `<Script>` block in this project reported `loader/mod.rs` as its source.
+    /// Lua's leading `@` is what makes it a *file* name rather than a quoted
     /// source snippet, and the separator is `\` because that is the shape an addon parsing its own
     /// `debugstack()` matches against (`crate::script::addon_chunk_name`).
     fn run(&self, chunk: &[u8], path: &str) -> mlua::Result<()> {
@@ -762,7 +762,7 @@ impl Loader<'_> {
         //   path enters at exactly that seam (`apply_template`) — its frame already exists, and
         //   re-entering here would recurse.
 
-        // 0 · **The type lookup, and its XML miss LOGS and skips the node** (decision 2191).
+        // 0 · **The type lookup, and its XML miss LOGS and skips the node**.
         //
         //     `Instantiate 0x6ee280` looks the element's own tag up first (`0x6ee2e5 mov
         //     edi,[esi+8]`, before `parent=` is read), and on a miss prints `"Unknown frame type:
@@ -800,7 +800,7 @@ impl Loader<'_> {
         //      corpus XML files writes `parent="$parent…"`, so expanding it was a dead deviation —
         //      but a dead deviation on this line is exactly what made 2208's live one hard to see.
         //
-        //      **Three outcomes, not two** (decision 2213):
+        //      **Three outcomes, not two**:
         //      the slot `[ebp-0x8]` is seeded at `0x6ee28b` with the incoming default parent, and
         //      `0x6ee3ef mov [ebp-0x8],eax` writes the lookup's result back **unconditionally** —
         //      so a *miss* stores 0 over that seed and the frame is constructed **parentless**
@@ -844,7 +844,7 @@ impl Loader<'_> {
             None => parent,
         };
 
-        // 1b · **The name, resolved AFTER the parent — and against it** (B387). `$parent` is not a
+        // 1b · **The name, resolved AFTER the parent — and against it**. `$parent` is not a
         //      lexical token: `SetName 0x76c650` expands it in `0x76c5b0` by walking the frame's
         //      **actual** parent chain (`this+0x9c`) to the nearest non-empty name, seeded `"Top"`.
         //      And in `Instantiate 0x6ee280` the parent is attached *first* —
@@ -918,7 +918,7 @@ impl Loader<'_> {
             .unwrap_or_else(|| format!("<{}>", el.tag));
 
         // The one trace site walked to the bytes — `Instantiate 0x6ee280`'s
-        // `0x871154 "-- Creating %s named %s"`, gated `flag > 0` at `0x6ee298` (decision 2160).
+        // `0x871154 "-- Creating %s named %s"`, gated `flag > 0` at `0x6ee298`.
         // The kind is the element tag, which is what the reference's first `%s` carries.
         if self.model().framexml_debug.get() > 0 {
             self.report

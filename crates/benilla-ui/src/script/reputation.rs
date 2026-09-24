@@ -46,7 +46,7 @@
 //!
 //! ## Where the numbers come from — all of them, the app
 //!
-//! This crate is engine-free by design (decision 0068: roxmltree + mlua, no DBC, no wire), so every
+//! This crate is engine-free by design (roxmltree + mlua, no DBC, no wire), so every
 //! fidelity number arrives already computed, the same division [`super::skills`] draws.
 //! `crates/benilla-app/src/ui_reputation.rs` owns: the race/class slot pick that gates membership,
 //! adding `Faction.dbc`'s base to the wire standing (`wire + base` at `0x4d6370`), ranking the
@@ -546,7 +546,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             });
             let Some(e) = watched else {
                 // FIVE values on the nothing-watched branch too — `0x4d6820` has four guards onto
-                // one label and no raise, so the shape is `nil, 0, 0, 0, 0` (decision 1845).
+                // one label and no raise, so the shape is `nil, 0, 0, 0, 0`.
                 //
                 // Worth carrying with it: the `[0, 64)` bound is **not in the binding**.
                 // `0x4d5620` maps an out-of-range index to `0`, so the "nothing watched" sentinel

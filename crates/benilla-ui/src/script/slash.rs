@@ -1,4 +1,4 @@
-//! **`SlashCmdList` dispatch** — how an addon gets a `/command` (decision 1195).
+//! **`SlashCmdList` dispatch** — how an addon gets a `/command`.
 //!
 //! The single most-wanted *table* in the corpus. 26 of 218 addons stop on
 //! `attempt to index global 'SlashCmdList'` — the top runtime wall after the dialect gap — because

@@ -20,7 +20,7 @@
 //! it is a tax on every future message. The registry is a **fact about the client**, of exactly the
 //! kind this project already carries as code — opcode numbers, struct offsets, DBC schemas — so it
 //! belongs here as a table, once, instead of being re-derived per call site. Nothing localized
-//! ships with it: the *keys* are `GlobalStrings.lua` identifiers (interface code, decision 1602)
+//! ships with it: the *keys* are `GlobalStrings.lua` identifiers (interface code)
 //! and the text itself is still read at runtime out of the player's own install.
 //!
 //! It is **generated**, never hand-edited — `scripts/gen-message-catalog.py` from the vendored
@@ -69,10 +69,10 @@ pub struct MessageRecord {
     /// Where it is shown.
     pub kind: MsgKind,
     /// The sound cue played with it, or `None` for the 435 silent rows. Read at the display, by
-    /// `benilla_app::sound::message` (decision 1815).
+    /// `benilla_app::sound::message`.
     pub sound: Option<&'static str>,
     /// `+0x0c`. `0x44` means "play [`Self::sound`]"; the other 56 rows carry an error-speech line
-    /// id instead, spoken in the player's own race and gender voice (decision 1815).
+    /// id instead, spoken in the player's own race and gender voice.
     pub type_tag: u8,
     /// The chat type handed to the composer, meaningful for [`MsgKind::Chat`] rows only. `10`
     /// (`CHAT_MSG_SYSTEM`) for all but three — the skill-up trio `ERR_PROFICIENCY_GAINED_S`,

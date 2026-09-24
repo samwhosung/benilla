@@ -8,7 +8,7 @@ use crate::order::ZTarget;
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// A simple, engine-free value the host can inject into Lua — the seam the app's net/state→event
-/// bridge (decision 0068 §3) uses to hand `fire_event` its `arg1..argN`. Deliberately not
+/// bridge uses to hand `fire_event` its `arg1..argN`. Deliberately not
 /// `mlua::Value` so callers never touch mlua handles (the MAXCSTACK discipline reaches the API too).
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScriptValue {
@@ -51,7 +51,7 @@ impl TexCoords {
     /// `Rect`, the bounding box for `Corners`).
     ///
     /// **Not what `GetTexCoord()` reports** — that answers eight per-corner values, and the 4-value
-    /// rect it used to return is a shape the reference has nowhere (decision 1840). This is the
+    /// rect it used to return is a shape the reference has nowhere. This is the
     /// renderer's and the app's convenience view, and it keeps its callers.
     pub fn edges(&self) -> [f32; 4] {
         match *self {
@@ -73,7 +73,7 @@ pub enum QuadContent {
     Frame,
     /// A `Minimap` widget's own draw slot: the circular HUD map's content hole. The engine core
     /// carries the resolved rect + the zoom index; the app renderer draws the world into it —
-    /// the streamed tile window, the mask, and the player arrow (decision 0203). Emitted *at the
+    /// the streamed tile window, the mask, and the player arrow. Emitted *at the
     /// frame's own z*, so the widget's children (border art, buttons) paint above the map exactly
     /// as the reference layers them.
     Minimap {
@@ -94,7 +94,7 @@ pub enum QuadContent {
     /// host memoizes its whole quad conversion on the extracted list being unchanged — a
     /// cursor in this variant would re-convert the entire interface every frame a cooldown or a
     /// ping is showing. The host reads the play heads straight off the engine instead
-    /// (`UiScript::visible_model_panes`, decision 2008); this variant carries only what the
+    /// (`UiScript::visible_model_panes`); this variant carries only what the
     /// layout and the Lua setters decide.
     ///
     /// **Why the NAME travels rather than the scene.** benilla draws a body pane by sampling an
@@ -106,13 +106,13 @@ pub enum QuadContent {
     /// that is also what a `SetModel` pane does today, and it is honest rather than a white slab.
     ModelPane {
         /// The pane's frame handle — the renderer's key for the tile it keeps per pane (a name
-        /// is optional and shared by nothing; the handle is neither). Decision 2007.
+        /// is optional and shared by nothing; the handle is neither).
         handle: crate::widget::FrameHandle,
         /// The pane's global frame name (`$parent`-expanded), or `None` for an anonymous
         /// `CreateFrame("Model")` — pfUI's autocast shine is the corpus example of the latter.
         name: Option<String>,
         /// The `SetModel` path the pane holds (`None` for a unit pane or an empty one) — what the
-        /// host's tile renderer draws (decision 2013), the map arrow's `crate::script::ARROW_MODEL`
+        /// host's tile renderer draws, the map arrow's `crate::script::ARROW_MODEL`
         /// among them since 2015.
         model: Option<String>,
         /// `SetFacing`'s radians (0 default).
@@ -131,7 +131,7 @@ pub enum QuadContent {
         /// own textures.
         icon: Option<String>,
         /// The installed camera as a RAW index into the file's camera table, or `None` for the
-        /// NULL camera. **This is the render leg** (decision 2027): `None` is the orthographic
+        /// NULL camera. **This is the render leg**: `None` is the orthographic
         /// one — the model laid flat over the pane's rect — and `Some(n)` the perspective one,
         /// framed by the file's own record `n`.
         camera: Option<u32>,
@@ -157,7 +157,7 @@ pub enum QuadContent {
         /// `SetPortraitTexture`'s round unit-portrait binding). The renderer bakes the circular
         /// alpha so the square icon/model doesn't poke past the frame ring. A `portrait_unit`
         /// binding with this **false** is the square booth pane (`BenillaSetBoothTexture` —
-        /// the paper doll's model view, decision 0208 §5).
+        /// the paper doll's model view).
         circular: bool,
         /// A **live unit portrait** (`SetPortraitTexture(region, unit)` round;
         /// `BenillaSetBoothTexture(region, token)` square — `circular` above distinguishes): the
@@ -178,7 +178,7 @@ pub enum QuadContent {
         /// because it runs into the app's quad emit; see [`RegionData::rotation`].
         rotation: f32,
         /// `Texture:SetDesaturated(1)` — draw the sampled texel as its **luminance** instead of
-        /// its colour (decision 1327). The renderer greys the texel and *then* modulates by
+        /// its colour. The renderer greys the texel and *then* modulates by
         /// `color`, because the reference's own consumers pass a dim tint alongside the flag
         /// (`SetItemButtonDesaturated(button, 1, 0.65, 0.65, 0.65)`) and expect both to land.
         desaturated: bool,
@@ -258,7 +258,7 @@ pub enum QuadContent {
         alpha_gradient: Option<(f32, f32)>,
         /// **Seat this block exactly where `rect` puts it**, skipping the UI grid's vertical
         /// block-top snap — true for a FontString owned by a V-plate, false for every other one
-        /// (`super::nameplate::is_world_seated`, decision 2172).
+        /// (`super::nameplate::is_world_seated`).
         ///
         /// Not a client concept: in the reference the whole interface *is* the pixel grid, so the
         /// snap and the rect agree by construction. benilla has one family of frames that lives
@@ -469,7 +469,7 @@ pub struct ExtractedQuad {
     pub alpha: f32,
     /// The renderable content.
     pub content: QuadContent,
-    /// The ScrollFrame clip this quad draws within (decision 0112): `Some(rect)` when the owning
+    /// The ScrollFrame clip this quad draws within: `Some(rect)` when the owning
     /// frame is a ScrollFrame's scroll child, or any descendant of one — nested ScrollFrames
     /// intersect (see [`UiScript::extract`](super::UiScript::extract)'s `effective_clip`). `None` = unclipped, the common case.
     pub clip: Option<Rect>,
@@ -571,7 +571,7 @@ pub(crate) struct RegionData {
     /// are circular — the frame ring is a thin band whose transparent corners would otherwise
     /// expose the square icon/model. The app bakes the circular alpha mask; the flag rides
     /// through [`QuadContent::Texture::circular`]. False with a live `portrait_unit` = the square
-    /// booth pane (`BenillaSetBoothTexture`, decision 0208 §5).
+    /// booth pane (`BenillaSetBoothTexture`).
     pub(crate) circular: bool,
     /// A **live unit portrait** (`SetPortraitTexture(region, unit)` round;
     /// `BenillaSetBoothTexture(region, token)` square): the unit token whose model this region
@@ -600,7 +600,7 @@ pub(crate) struct RegionData {
     /// Explicit region size (`SetWidth`/`SetHeight`/XML `<Size>`); `None` = derive. Size fills the
     /// axis the anchors don't pin (the client's "0 = derive") — so under a texture's implicit
     /// SetAllPoints (two corners pin everything) an authored size is structurally unread, which is
-    /// how the reference stack-split plate authors 256×32 and renders 172×96 (decision 1310, B180).
+    /// how the reference stack-split plate authors 256×32 and renders 172×96.
     pub(crate) size: Option<(f32, f32)>,
     /// Region anchors (`SetPoint`/XML `<Anchors>` on a Texture/FontString). An anchor's
     /// `relative_to` defaults to the owner frame and may name a frame or a **sibling region**
@@ -613,7 +613,7 @@ pub(crate) struct RegionData {
     pub(crate) anchors: Vec<Anchor>,
     /// `Texture:SetDesaturated(flag)` — the shader desaturation state (`0x79c1e0`).
     /// Rides the extract as [`QuadContent::Texture::desaturated`] and the
-    /// renderer greys the texel by it (decision 1327), so the binding answers "shader supported"
+    /// renderer greys the texel by it, so the binding answers "shader supported"
     /// — see `region/paint.rs`'s `SetDesaturated`.
     pub(crate) desaturated: bool,
     /// `SetNonSpaceWrap` / `CanNonSpaceWrap` — FontString only (`0x79e9f0`/`0x79ead0`).
@@ -632,7 +632,7 @@ pub(crate) struct RegionData {
     /// state differently (`"UNKNOWN"` vs centred) — both faithfully.
     pub(crate) justify: crate::justify::Justify,
     /// The `<TexCoords>`/`SetTexCoord` UV mapping ([`TexCoords`]: the 4-edge crop, or the 8-arg
-    /// affine quad). `None` = the full texture. Slices the quadrant/atlas art (decision 0084).
+    /// affine quad). `None` = the full texture. Slices the quadrant/atlas art.
     pub(crate) tex_coords: Option<TexCoords>,
     /// `Texture:SetTexCoordModifiesRect(flag)` / `GetTexCoordModifiesRect()` — the reference's
     /// `[texture+0x124]`, whose sole writer is `SetTexCoordModifiesRect 0x79c080`
@@ -734,14 +734,14 @@ pub(crate) struct MeasuredText {
     /// difference: any kit that sizes a box from `GetStringWidth` and then sets a width on the string
     /// — which is what the reference's own `PanelTemplates_TabResize` does — reads its own output
     /// back as its next input. The macro window's character tab changed width every single frame for
-    /// exactly this reason (decision 0997).
+    /// exactly this reason.
     pub(crate) natural_w: f32,
     /// Hash of (text, font path, font height bits, wrap-width bits) — mismatch ⇒ re-measure.
     pub(crate) key: u64,
 }
 
 impl MeasuredText {
-    /// Did the part of this measurement the **layout** reads move? (decision 1385)
+    /// Did the part of this measurement the **layout** reads move?
     ///
     /// Only `w`/`h` are layout inputs — they are the auto-size axes, and the only fields
     /// `InputFingerprint` feeds (`script::layout`'s region walk hashes `m.w`/`m.h`, nothing else).
@@ -777,7 +777,7 @@ impl RegionData {
     /// round-trip frame. **With one carve-out, and it is the carve-out this cache needs**: EMPTY
     /// text is never measured at all (both measure asks filter it out), so "until the fresh
     /// measure lands" is a promise that can never be kept for a cell that goes from text to `""`
-    /// — the solver drops the stored measure there rather than hold a dead box forever (B309: the
+    /// — the solver drops the stored measure there rather than hold a dead box forever (the
     /// item tooltip's blank SET spacers drew rows the plate counted as zero).
     /// `scale` is the owner frame's `effective_scale`: it's in the key because the host measures
     /// at the drawn raster size ([`MeasureRequest::scale`]), so a `SetScale` under a cached
@@ -836,8 +836,8 @@ pub struct EditBoxAdvanceRequest {
 
 // `EditAction`/`EditUnit` are the *editing law's* vocabulary, so they live beside the state that
 // law mutates ([`crate::widget::EditBoxState`]) rather than here — `script` depends on `widget`,
-// never the other way round, and the glue screens drive the law with no Lua VM in sight
-// (decision 0704). Re-exported here because this is the path the host has always used.
+// never the other way round, and the glue screens drive the law with no Lua VM in sight.
+// Re-exported here because this is the path the host has always used.
 pub use crate::widget::{EditAction, EditOutcome, EditUnit};
 
 /// The focused EditBox's per-frame text-UI geometry — returned by

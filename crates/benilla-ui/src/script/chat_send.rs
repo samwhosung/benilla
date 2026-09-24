@@ -1,4 +1,4 @@
-//! **`SendChatMessage`** — the addon's own line into the chat wire (decision 1199).
+//! **`SendChatMessage`** — the addon's own line into the chat wire.
 //!
 //! 24 corpus addons call it, and it is the one verb that makes an addon able to *say* anything:
 //! every "announce the pull", every raid warning helper, every whisper-the-invite bot is this one

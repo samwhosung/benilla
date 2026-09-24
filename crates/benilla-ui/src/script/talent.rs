@@ -1,4 +1,4 @@
-//! The talent window's engine seam (decision 0304) — the same two-way shape as
+//! The talent window's engine seam — the same two-way shape as
 //! [`super::spellbook`]: the app pushes a **talent snapshot** ([`UiScript::set_talents`] — the
 //! class's tabs + each tab's talents, already resolved to name/icon/rank/availability by the
 //! app's `Talent.dbc` × `Spell.dbc` join), the Era bindings below read it verbatim, and
@@ -6,7 +6,7 @@
 //! ([`UiScript::take_talent_learns`]) into `CMSG_LEARN_TALENT`. The engine holds no talent
 //! KNOWLEDGE — grid seats, ranks, prerequisites, and availability are the app's resolve.
 //!
-//! The **respec** pair rides here too (decision 1580) and is the binder question's twin, not a
+//! The **respec** pair rides here too and is the binder question's twin, not a
 //! talent-window affordance: `ConfirmTalentWipe()` answers a class trainer's
 //! `CONFIRM_TALENT_WIPE`, and `CheckTalentMasterDist()` is the range poll that takes the dialog
 //! away when you walk off. Both are 1.12 engine bindings (`reference/1.12-globals.tsv`), and
@@ -74,7 +74,7 @@ pub struct TalentView {
     /// `TalentRec+0x4c` bit0; the reference frame reads and ignores it).
     pub exceptional: bool,
     /// The non-prereq requirements hold — the required-spell known-check only, prereqs live in
-    /// the triplets (decision 0305: `meetsPrereq`'s derivation, confirmed as built).
+    /// the triplets (`meetsPrereq`'s derivation, confirmed as built).
     pub meets_prereq: bool,
     pub prereqs: Vec<TalentPrereqView>,
     /// The tooltip's spell part: the display rank's spell id (rank max(1, rank)) — its view
@@ -237,7 +237,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ConfirmTalentWipe() — the CONFIRM_TALENT_WIPE dialog's Accept, and the one call in the
-    // client that unlearns talents: the trainer's question changed nothing (decision 1580).
+    // client that unlearns talents: the trainer's question changed nothing.
     // Zero-arg because the guid it sends is one the client latched from that question — the
     // reference's own `0xc4d7a0`; here the app holds it.
     g.set(
@@ -298,7 +298,7 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     })
                     .flatten();
                 // `TOOLTIP_TALENT_RANK` = "Rank %d/%d" (`0x854a2c`, pushed at `0x52b213`) —
-                // the key, filled with the two counts, never a sentence of ours (decision 2045).
+                // the key, filled with the two counts, never a sentence of ours.
                 // An install whose string table lacks it shows no rank line at all.
                 let rank_line = crate::strings::global(lua, "TOOLTIP_TALENT_RANK").map(|tmpl| {
                     crate::strings::fill(

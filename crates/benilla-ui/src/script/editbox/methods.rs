@@ -48,7 +48,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // SetNumber(v) — **the same function as SetText**. `0x798690` and `0x7984c0` are byte-identical
     // (245 bytes each, zero differences after masking rel32 and absolute-VA operands; only the
     // usage string differs), so this does no numeric work of its own: it hands the argument to the
-    // shared `lua_tostring` marshalling and sets the result as text. Decision 1831.
+    // shared `lua_tostring` marshalling and sets the result as text.
     //
     // The GATE is `lua_isstring 0x6f3510`, a pure type test over {number, string} — NOT
     // `lua_isnumber` and NOT `luaL_checknumber`. So a STRING is accepted and passed through
@@ -310,8 +310,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // GetNumLetters: the LETTER count — `0x7992c0` walks the class array (`0x77bc80`), which
-    // counts classes 2, 3 and 6 only, so escapes are free and a 43-byte item link reports 9
-    // (decision 1077). Not bytes, and not chars either.
+    // counts classes 2, 3 and 6 only, so escapes are free and a 43-byte item link reports 9.
+    // Not bytes, and not chars either.
     m.set(
         "GetNumLetters",
         lua.create_function(|lua, this: Table| {
@@ -387,7 +387,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// **The font block — entries #0–#15 of the EditBox method table**, and the largest single gap the
-/// per-kind widget-method census found in the 218-addon corpus (decision 1229).
+/// per-kind widget-method census found in the 218-addon corpus.
 ///
 /// `EditBox` is one of the six text-bearing types, so it re-declares the whole font block in its own
 /// flat table (`.data 0x87bb68`, 48 entries, count read from `mov edx,0x30` at `0x799ab5`; there is
@@ -404,8 +404,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 /// editBox:SetFontObject(ChatFontNormal)
 /// ```
 /// — vendored into 63 addon folders (65 copies of the file: `FuBar` and its ~50 plugins, `BigWigs`,
-/// `AtlasLoot`, `oRA2`, …). One library replicated, so 63 chances to hit the *same* next wall
-/// (decision 1207).
+/// `AtlasLoot`, `oRA2`, …). One library replicated, so 63 chances to hit the *same* next wall.
 ///
 /// Ten of the sixteen are the shared block and come from [`super::super::font_block`], which carries
 /// the per-verb byte evidence and the return-shape traps. Two are deliberately absent and four are

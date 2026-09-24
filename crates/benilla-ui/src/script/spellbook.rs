@@ -1,4 +1,4 @@
-//! The spellbook (decision 0216 §8, slice 5) — the spell **source** for the cursor payload
+//! The spellbook (slice 5) — the spell **source** for the cursor payload
 //! system: a read-only book model the app builds from `PlayerActions.spells`
 //! (`SMSG_INITIAL_SPELLS`), the same two-way seam shape as [`super::merchant`]/[`super::action`]:
 //! the app pushes a **book snapshot** ([`UiScript::set_spellbook`] — tabs + the flat slot list,
@@ -25,7 +25,7 @@
 //! running sum of every earlier tab's `num_spells` (tab 1's is `0`, so its first spell's book id
 //! is `1`, matching the ref's own "first tab's first spell is id 1").
 //!
-//! ## The pet book (decision 1032 — live; 0216 §8's deferral is retired)
+//! ## The pet book (live; 0216 §8's deferral is retired)
 //!
 //! `BOOKTYPE_PET` selects a **second slot list** ([`PetBookState`]), fed from `SMSG_PET_SPELLS`'
 //! own spell tail. Every `bookType`-taking binding is a two-way fork ([`book_slot`]) exactly as the
@@ -207,7 +207,7 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().spell_stop)
     }
 
-    /// Push whether the app's spell-targeting cursor mode is active (decision 0792) — what
+    /// Push whether the app's spell-targeting cursor mode is active — what
     /// `SpellIsTargeting()` reads and `SpellStopTargeting()` gates on. Pushed each frame by the
     /// app's targeting feed (`benilla::ui_action`), before the input pass runs the ESC chain.
     pub fn set_spell_targeting(&mut self, targeting: bool) {
@@ -295,7 +295,7 @@ pub(super) fn book_slot<'a>(
 }
 
 /// Resolve a spell **by name** against the player's book — the law behind `CastSpellByName` and,
-/// through it, `/cast` and every macro's `/cast` line (decision 0983).
+/// through it, `/cast` and every macro's `/cast` line.
 ///
 /// The grammar is the one the client documents in its own help text:
 /// `MACRO_HELP_TEXT_LINE4 = "- To cast a spell from a macro use the following syntax:
@@ -427,7 +427,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // `UpdateSpells()` — twelve bytes in the reference (`[0x4b43e0,0x4b43ec)`), and its entire
     // content is a bare `SignalEvent(SPELLS_CHANGED)`: event 260, **no arguments**, and NO state
-    // mutation whatsoever (decision 1924). Entered with both sort flags zero the worker
+    // mutation whatsoever. Entered with both sort flags zero the worker
     // performs exactly one memory write — a `push esi` undone nine instructions later — and
     // `0x4b302f` is the sole fire site for event 260 image-wide.
     //
@@ -474,7 +474,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetSpellTabInfo(i) -> name, texture, offset, numSpells. **FOUR values on every path that
     // returns** — `0x4b3ce0` has two live `ret`s and both `mov eax,4`; the `eax=0` one at `0x4b3d0d`
-    // is dead code after `luaL_error` longjmps (decision 1931).
+    // is dead code after `luaL_error` longjmps.
     //
     // **OUT OF RANGE IS `nil, nil, 0, 0` — LITERAL zeros, not a single nil.** This comment used to say
     // "out of range -> a single nil (GetMerchantItemInfo's own out-of-range shape)", i.e. one

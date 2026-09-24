@@ -1,4 +1,4 @@
-//! Input / hit-testing (decision 0068; spec-faithful, not byte-pinned).
+//! Input / hit-testing (spec-faithful, not byte-pinned).
 
 use super::common::script;
 
@@ -39,7 +39,7 @@ fn enable_mouse_gates_hit_testing() {
 }
 
 /// The hit sweep's key, all three terms: strata, then level, then — at a tie — the **earlier-linked**
-/// frame, NOT the later one that draws on top (decision 1816; `0x764aa0`'s strict `ja` appending
+/// frame, NOT the later one that draws on top (`0x764aa0`'s strict `ja` appending
 /// equal keys and `0x7660d0` sweeping from index 0). This test used to assert the opposite at the
 /// tie and was named for it — draw order and hit order agree on strata and level and disagree on
 /// exactly this.
@@ -277,8 +277,7 @@ fn hit_rect_insets_default_to_zero() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `EnableMouseWheel`/`IsMouseWheelEnabled` round-trip, and the two kinds born wheel-enabled
-/// (decision 1198).
+/// `EnableMouseWheel`/`IsMouseWheelEnabled` round-trip, and the two kinds born wheel-enabled.
 ///
 /// The flag is real and settable; **the dispatch is deliberately not gated on it yet** — see
 /// `object::frame_state`'s note for the 44 shipped `OnMouseWheel` sites that declare no
@@ -323,7 +322,7 @@ fn the_mouse_wheel_flag_round_trips_and_the_scrolling_kinds_are_born_enabled() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A closed-vocabulary attribute survives stray whitespace (decision 1204).
+/// A closed-vocabulary attribute survives stray whitespace.
 ///
 /// The corpus case: `zBar.xml:146` — a shipped, working 1.12 addon — declares
 /// `frameStrata="BACKGROUND "` with a trailing space. The real client took it; we refused, and the
@@ -768,7 +767,7 @@ fn the_repick_re_hovers_without_a_mouse_move() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// The mouse-UP dispatch law (decision 1599) — byte-verified at `0x766420`
+// The mouse-UP dispatch law — byte-verified at `0x766420`
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// Two side-by-side frames, each recording every `OnMouseDown`/`OnMouseUp` it gets.

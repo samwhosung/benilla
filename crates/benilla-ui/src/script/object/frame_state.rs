@@ -186,7 +186,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         },
     )?;
 
-    // ── GetFrameType / IsFrameType: the FRAME-side spellings of the pair above (decision 2106) ──
+    // ── GetFrameType / IsFrameType: the FRAME-side spellings of the pair above ──
     //
     // 1.12 registers the type-identity pair **twice, under two names**. The Region script
     // (`CScriptRegion`) publishes `GetObjectType`/`IsObjectType` — that is the pair above, and its
@@ -361,7 +361,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "GetNumRegions",
         lua.create_function(|lua, this: Table| Ok(regions_of(lua, &this)?.len()))?,
     )?;
-    // SetParent — the runtime reparent (decision 1323). The binding half
+    // SetParent — the runtime reparent. The binding half
     // (`0x7a1550`): the parent argument is a frame table, a NAME string (`0x76c760`), or an
     // explicit nil — an ABSENT argument is NOT the nil path (`0x6f3400` returns −1) and raises
     // like an unresolvable name; the cycle guard is the binding's own inline ancestor walk and
@@ -470,7 +470,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 // A real reparent moves the subtree's effective scale — a layout-gate input,
                 // and a measure-key input the subtree's FontStrings cannot name one by one.
                 //
-                // **The layout half NAMES its nodes** (decision 2314). This was the conservative
+                // **The layout half NAMES its nodes**. This was the conservative
                 // touch, on the reading that a reparent is human-rate; a pooled widget's recycle
                 // is a reparent, and `WOW_LAYOUT_DERIVE_TRACE` put every sampled give-up in a
                 // quest-accept spike on this one line — 58 whole-graph derivations in one frame,
@@ -518,7 +518,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // Only the toplevel raise shifts a subtree. Stock `BonusActionButtonTemplate` is written
             // for this: it raises the button +2 and then its cooldown +2 by hand, landing the sweep
             // one level over the button — carrying the children made it three, over the
-            // cooldown-count text an addon hangs at button + 2 (decision 2189).
+            // cooldown-count text an addon hangs at button + 2.
             lua.app_data_mut::<Model>()
                 .expect("model")
                 .arena
@@ -804,7 +804,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
     // `EnableMouseWheel(flag)` / `IsMouseWheelEnabled()` — the wheel's own gate, a separate flag
-    // from `EnableMouse` in the reference and separate here (decision 1198).
+    // from `EnableMouse` in the reference and separate here.
     //
     // The flag is real and round-trips. **The dispatch is NOT gated on it yet, deliberately.**
     // Our wheel dispatch keys off "does this frame carry an `OnMouseWheel` handler", walking up to
@@ -873,7 +873,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     // Clamp-to-screen (`0x776c00`/`0x776cb0`, geometry flags bit4): the layout resolve
     // keeps the frame's assembled rect inside the window, size preserved. GameTooltip frames
-    // default true by construction (widget::Frame::clamped_to_screen — decision 0352).
+    // default true by construction (widget::Frame::clamped_to_screen).
     m.set(
         "SetClampedToScreen",
         lua.create_function(|lua, (this, clamp): (Table, bool)| {

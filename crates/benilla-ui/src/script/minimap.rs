@@ -4,18 +4,18 @@
 //! `get_zoom_levels` (`0x6da9a0`) returns the constant 6, `set_zoom` clamps at 5 and marks the tile
 //! grid dirty, and the zoom index feeds the zoom-to-scale tables (`0x6da9b0`). The engine core
 //! carries only the index
-//! ([`MinimapState`]); the app renderer maps it to a world radius and draws the tiles
-//! (decision 0203). The two model attrs (`minimapArrowModel=`/`minimapPlayerModel=`) are modeled
+//! ([`MinimapState`]); the app renderer maps it to a world radius and draws the tiles.
+//! The two model attrs (`minimapArrowModel=`/`minimapPlayerModel=`) are modeled
 //! only as far as the Lua surface can see them: [`apply_model_attrs`] names the nine engine
 //! children the ctor built, and the app still draws every arrow from its own art.
 //!
-//! **The ping** (decision 1596) is the same split, one rung further out: the two methods here are
+//! **The ping** is the same split, one rung further out: the two methods here are
 //! pure seam — `PingLocation` parks a click and `GetPingPosition` reads back what the app
 //! published — because the ping's only stored form is a WORLD point the app pins it to, and the
 //! engine core has no world. Nothing here holds the ping's position, its lifetime, or its art;
 //! putting any of that in Lua is what made the first attempt flaky.
 //!
-//! **The level persists** (decision 1131). The client keeps two halves: the live indices
+//! **The level persists**. The client keeps two halves: the live indices
 //! (`0x86f698` outdoor / `0x86f69c` indoor — our [`MinimapState`]) and the two CVar objects
 //! `minimapZoom`/`minimapInsideZoom` (both registered default `"3"`), which are what `Config.wtf`
 //! actually stores. `set_zoom` writes *both*; the minimap reset path (`0x6d9008`–`0x6d901f`)
@@ -162,7 +162,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         // relative offsets in **UI units**, x right / y up — exactly `GetCursorPosition()` minus
         // `Minimap:GetCenter()`, both of which are UI-space. Parked, not converted: the app owns
         // the view scale, and it drains this in the SAME frame it draws the map so the click
-        // resolves against the geometry the player actually clicked on (decision 1596).
+        // resolves against the geometry the player actually clicked on.
         //
         // The receiver is validated but the value lives on the model — one pending click, not one
         // per Minimap widget.

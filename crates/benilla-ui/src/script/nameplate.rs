@@ -1,5 +1,4 @@
-//! **The nameplate widgets** — `CGNamePlateFrame` as the frame-system object it actually is
-//! (decision 2148).
+//! **The nameplate widgets** — `CGNamePlateFrame` as the frame-system object it actually is.
 //!
 //! benilla drew V-plates for a year as quads pushed straight into the UI pass, which made them
 //! invisible to Lua: a live run's `WorldFrame:GetChildren()` returned the two named FrameXML
@@ -890,7 +889,7 @@ fn font_string(model: &mut Model, frame: FrameHandle, justify_v: JustifyV) -> Re
     rh
 }
 
-/// **Is this frame a V-plate?** — the seat question, asked of the OWNER (decision 2172).
+/// **Is this frame a V-plate?** — the seat question, asked of the OWNER.
 ///
 /// A plate is a WorldFrame overlay: the driver snaps its rect to the DEVICE pixel grid
 /// (`vplates::device_snap`, 0188/1398) because it slides continuously over the world, and
@@ -937,7 +936,7 @@ pub(super) fn is_unpainted_glow(data: &RegionData) -> bool {
 }
 
 /// The LIT (mouseover ∪ target) bar brighten — a uniform multiplicative lift of the fill tint,
-/// gradient untouched (0184: the recorded additive `Nameplate-Glow` rim read as hard edge lines on
+/// gradient untouched (the recorded additive `Nameplate-Glow` rim read as hard edge lines on
 /// our linear-blending pipeline, and the director pinned the brighten instead).
 ///
 /// Quad colours are client-space sRGB (`srgb_quad_color` linearizes them), so this multiplies

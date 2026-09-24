@@ -1,7 +1,7 @@
 //! **One faithful substitution for reference string templates** — the client's `SStrPrintf` face.
 //!
-//! Every user-visible sentence benilla shows comes from `GlobalStrings.lua` or `GlueStrings.lua`
-//! (decision 2045), and most of those carry `%s`/`%d` holes the caller fills. Doing that filling
+//! Every user-visible sentence benilla shows comes from `GlobalStrings.lua` or `GlueStrings.lua`,
+//! and most of those carry `%s`/`%d` holes the caller fills. Doing that filling
 //! correctly is not `format!`'s job and never was: the template is *data read at runtime from the
 //! player's install*, so the holes have to be walked, not compiled.
 //!

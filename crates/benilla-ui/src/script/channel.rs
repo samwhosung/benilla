@@ -30,7 +30,7 @@ use mlua::{Lua, MultiValue, Value};
 use super::Model;
 
 /// The 1-based slot of `name`, case-insensitively — `GetChannelName`'s first return.
-/// One `ChatChannels.dbc` row as the VM needs it for `JoinChannelByName` (decision 1908),
+/// One `ChatChannels.dbc` row as the VM needs it for `JoinChannelByName`,
 /// `Add/RemoveChatWindowChannel` (`0x4a1000`/`0x4a1260`) and `EnumerateServerChannels`
 /// (`0x4a1790`): the id, the **Shortcut** (`General`, `Trade`, … — what every one of those verbs
 /// compares a typed name against, whole and case-folded), the name composed for the zone the
@@ -133,7 +133,7 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().channel_commands)
     }
 
-    /// The guild-recruitment auto-join latch — `0` STANDARD, `1` AUTO (decision 2115).
+    /// The guild-recruitment auto-join latch — `0` STANDARD, `1` AUTO.
     pub fn guild_recruitment_mode(&self) -> u8 {
         self.model_ref().guild_recruitment_mode
     }
@@ -154,7 +154,7 @@ impl super::UiScript {
     }
 
     /// Has Lua called `SetGuildRecruitmentMode(1)` since the last drain? The cascade's cue
-    /// (`0x49ea70` → `0x49ea90`; decision 2144).
+    /// (`0x49ea70` → `0x49ea90`).
     pub fn take_guild_recruitment_cascade(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().guild_recruitment_cascade)
     }
@@ -203,7 +203,7 @@ fn name_at(model: &Model, n: usize) -> Option<&str> {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // ── The guild-recruitment auto-join pair (decision 2115) ──────────────────────────────────
+    // ── The guild-recruitment auto-join pair ──────────────────────────────────
     //
     // `GetGuildRecruitmentMode 0x4a0040` / `SetGuildRecruitmentMode 0x4a0060` — the store behind
     // the reference's *Auto-join the Guild Recruitment Channel* option
@@ -235,7 +235,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(f64::from(model.guild_recruitment_mode))
         })?,
     )?;
-    // ── The `ecx == 1` cascade (decision 2144) ──────────────────────────────────────────
+    // ── The `ecx == 1` cascade ──────────────────────────────────────────
     // `0x49ea70` writes the latch and then tail-jumps into `0x49ea90` **only when the new
     // mode is 1**, and `0x49ea90` is not bookkeeping — it acts, on the wire: a guilded
     // player leaves `GuildRecruitment - City`, an unguilded one in a capital joins it, and
@@ -345,7 +345,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // the callers; not true of the client. `0x4a05e0` pushes three on every path, and
                 // slot 2 is neither the empty string nor the argument echoed back:
                 // `0x4a0659 xor edx,edx` then `lua_pushstring(NULL)`, which tail-jumps to
-                // `lua_pushnil`. Decision 1845.
+                // `lua_pushnil`.
                 //
                 // "Not joined" is also wider than a bad index: the lookup answers NULL while the
                 // join-pending word is non-zero, so a channel already in the list but not yet
@@ -426,7 +426,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`SStrCmpI`), on both sending legs. It is what puts a `/join`ed channel back into the
     // window after a `/leave` stripped it — the window's `ZONECHANNELS` word is the character's
     // registration for that channel's lines, and without this a leave-then-join-then-relog left
-    // General joined and its every line dropped (decision 2144, live run F).
+    // General joined and its every line dropped (live run F).
     g.set(
         "JoinChannelByName",
         lua.create_function(
@@ -791,7 +791,7 @@ mod command_tests {
     }
 
     /// **`JoinChannelByName`'s third argument registers the channel in that window**
-    /// (`0x49ec24`–`0x49ede7`; decision 2144): `frameId - 1` indexes the ten window records,
+    /// (`0x49ec24`–`0x49ede7`): `frameId - 1` indexes the ten window records,
     /// `(Shortcut, ChannelID)` for a DBC row and `(name, 0)` for a custom channel, deduplicated by
     /// name; a missing, non-numeric or out-of-range frame skips the registration and nothing else.
     /// It is what puts a `/join`ed channel back into a window a `/leave` had stripped it from.
@@ -834,7 +834,7 @@ mod command_tests {
         assert_eq!(s.take_channel_commands().len(), 5);
     }
 
-    /// `LeaveChannelByName`'s legs (`0x4a0000` → `0x49ee70`; decision 2144): a number passes
+    /// `LeaveChannelByName`'s legs (`0x4a0000` → `0x49ee70`): a number passes
     /// through for the app's slot lookup and strips nothing; a shortcut composes for the zone and
     /// strips the window entry it was registered under, in every window; an unresolvable shortcut
     /// is a complete no-op; a custom name goes verbatim and strips verbatim. Nil raises. Zero

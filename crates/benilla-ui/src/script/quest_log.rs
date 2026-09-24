@@ -12,7 +12,7 @@
 //!   (ref `QuestLogFrame.lua:318,308-346`); a drain-next-frame intent would read stale. The app
 //!   reads it back each frame ([`super::UiScript::quest_log_selection`]) only to RE-POINT it across
 //!   a rebuild. The **detail that selection names is resolved at call time**, off the row's own
-//!   [`QuestLogEntryView::detail`] — never from a selection baked into the push (decision 2247).
+//!   [`QuestLogEntryView::detail`] — never from a selection baked into the push.
 //!   The reference's detail bindings peek its quest cache inside the same call, so
 //!   `SelectQuestLogEntry(i)` immediately changes what `GetQuestLogQuestText()` answers; resolving
 //!   one detail per push instead made a whole log walk answer with a single row's text.
@@ -28,12 +28,12 @@
 //! [`QuestLogEntryView::quest_id`] under the index-based Era API, pruned on push, cap 5.
 //!
 //! A fourth engine-owned bit is the **countdown** (`GetQuestTimers`/`GetQuestIndexForTimer`/
-//! `GetQuestLogTimeLeft`, decision 1150): the snapshot carries each row's absolute deadline and the
+//! `GetQuestLogTimeLeft`): the snapshot carries each row's absolute deadline and the
 //! bindings subtract the live server clock per call, so the reference's `QuestTimerFrame` can tick
 //! from its OnUpdate without the log snapshot changing under it. [`seconds_left`] carries the
-//! reference's byte-verified formula and the ways a row has no timer to show (decision 1154).
+//! reference's byte-verified formula and the ways a row has no timer to show.
 //!
-//! A fifth is the **share** (`GetQuestLogPushable`/`QuestLogPushQuest`, decision 1733): the
+//! A fifth is the **share** (`GetQuestLogPushable`/`QuestLogPushQuest`): the
 //! pushable bit rides each entry (from the app's template cache) and the click resolves the
 //! selection to a quest id before it queues, so a log shuffle cannot retarget it.
 //!
@@ -75,7 +75,7 @@ pub struct QuestLogEntryView {
     /// A zone header row (the app synthesizes these from each quest's ZoneOrSort).
     pub is_header: bool,
     /// Whether this quest may be SHARED with the party — `GetQuestLogPushable`'s answer for the
-    /// row (decision 1733). Computed app-side from the cached `SMSG_QUEST_QUERY_RESPONSE`
+    /// row. Computed app-side from the cached `SMSG_QUEST_QUERY_RESPONSE`
     /// template's `QUEST_FLAGS_SHARABLE` (`0x8`), so a row whose template has not answered yet is
     /// `false` and turns true when it lands — the reference's own shape, since it reads the same
     /// cache. Never surfaced as a per-index Lua getter: the Era API asks only about the current
@@ -93,8 +93,7 @@ pub struct QuestLogEntryView {
     /// untimed. Deliberately the raw stamp and not a remaining-seconds count: a remaining count
     /// would change every second, and this snapshot is diffed by the app to decide whether to fire
     /// `QUEST_LOG_UPDATE` — a live number in here would rebuild the whole quest log every frame.
-    /// The countdown is subtracted per call instead, against [`super::Model::server_unix_time`]
-    /// (decision 1150).
+    /// The countdown is subtracted per call instead, against [`super::Model::server_unix_time`].
     pub timer: u32,
     /// The formatted objective lines for THIS entry (`GetNumQuestLeaderBoards(i)` /
     /// `GetQuestLogLeaderBoard(j, i)` serve any index off these — the watch tracker HUD reads
@@ -103,7 +102,7 @@ pub struct QuestLogEntryView {
     /// (description/rewards/money).
     pub objectives: Vec<QuestLogObjectiveView>,
     /// This row's detail pane — description, money, rewards, reward spell. **Per row, not per
-    /// selection** (decision 2247): the reference's detail bindings read `ds:0xbb7480` (what
+    /// selection**: the reference's detail bindings read `ds:0xbb7480` (what
     /// `SelectQuestLogEntry 0x4dfae0` wrote, synchronously) and then PEEK the quest cache in the
     /// same call (`0x4e1130` -> `0xc0e1b0`/`0x562a40`), so a
     /// select-then-read pair inside ONE frame answers about the row just selected. Carrying one
@@ -129,7 +128,7 @@ pub struct QuestLogObjectiveView {
     /// *"did the rendered line change?"*. A text-only diff cannot tell progress from a regression,
     /// and a quest turn-in produces exactly that regression — the required items are destroyed a
     /// frame or two before the log slot clears, so the line dips to `0/req` while the quest is
-    /// still in the log (decision 1152 / B237).
+    /// still in the log.
     pub cur: u32,
     /// See [`Self::cur`].
     pub req: u32,
@@ -224,7 +223,7 @@ impl super::UiScript {
     }
 
     /// Drain the escort-confirm answers: how many times `ConfirmAcceptQuest()` was called. A
-    /// count, because the verb carries no quest id (decision 1733) — the app answers the confirm
+    /// count, because the verb carries no quest id — the app answers the confirm
     /// it is holding.
     pub fn take_quest_confirms(&mut self) -> u32 {
         std::mem::take(&mut self.model_mut().quest_confirms)
@@ -247,7 +246,7 @@ impl super::UiScript {
 
     /// Push the server's wall clock (unix-epoch seconds) — the app's `SMSG_QUERY_TIME_RESPONSE`
     /// sample, advanced monotonically. Every countdown the engine answers is subtracted against
-    /// this, so it is pushed each frame rather than on change (decision 1150).
+    /// this, so it is pushed each frame rather than on change.
     ///
     /// This is the reference's `G` in a different frame of reference, and it is worth naming the
     /// equivalence because the two look nothing alike. The client stores only an **offset**
@@ -255,15 +254,14 @@ impl super::UiScript {
     /// store the server stamp and advance it monotonically, i.e. `deadline − serverNow()`.
     /// Expand either and both reduce to `remaining_at_sync − elapsed`. The one behavioural
     /// difference is deliberate and in our favour: a local wall-clock step mid-session (an NTP
-    /// correction, a manual change) jumps the reference's countdown and cannot move ours
-    /// (decision 1154).
+    /// correction, a manual change) jumps the reference's countdown and cannot move ours.
     pub fn set_server_unix_time(&mut self, unix_secs: f64) {
         self.model_mut().server_unix_time = Some(unix_secs);
     }
 }
 
 /// The signed seconds remaining on a quest-log row's timer, or `None` when the row has no timer at
-/// all. **This is the reference's own formula**, byte-verified (decision 1154):
+/// all. **This is the reference's own formula**, byte-verified:
 ///
 /// ```text
 /// value = slot.timer + G − now − 1
@@ -532,7 +530,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // *Info* pair above this one is kind-DISPATCHED, because that is the shape the reference's own
     // handler calls it with (`this.type` is "choice"/"reward", set by the shared
     // `QuestFrameItems_Update`); an unknown type, an out-of-range index, or a row whose template
-    // answer is still in flight all read nil. Decisions 1059/1060.
+    // answer is still in flight all read nil.
     g.set(
         "GetQuestLogItemLink",
         lua.create_function(|lua, (kind, index): (String, usize)| {
@@ -662,7 +660,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ── Timed quests (decision 1150) ─────────────────────────────────────────────────────────────
+    // ── Timed quests ─────────────────────────────────────────────────────────────
     // The engine owns the countdown, as the reference's C bindings do: the pushed snapshot carries
     // each row's absolute DEADLINE, and these subtract the live server clock per call. That split
     // is what lets the ref's QuestTimerFrame re-read GetQuestTimers() every OnUpdate and paint a
@@ -729,7 +727,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .and_then(|e| seconds_left(e, model.server_unix_time));
             Ok(match left {
                 // Clamped, not dropped — the reference's own asymmetry against the two list
-                // bindings above (decision 1154).
+                // bindings above.
                 Some(s) => Value::Integer(s.max(0)),
                 None => Value::Nil,
             })
@@ -776,12 +774,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             .and_then(|n| model.quest_log.entries.get(n))
             .map(|e| e.quest_id)
     }
-    // ── The party share (decision 1733) — the ref's `QuestFramePushQuestButton`, whose enable
+    // ── The party share — the ref's `QuestFramePushQuestButton`, whose enable
     // predicate is `GetQuestLogPushable() and GetNumPartyMembers() > 0` (QuestLogFrame.lua:299-305)
     // and whose OnClick is `QuestLogPushQuest()` (QuestLogFrame.xml:511-513). Both speak about the
     // CURRENT SELECTION and take no argument, exactly as the reference declares them.
     // `GetQuestLogPushable` returns `1` or **nil**, never `false` (`0x4e12b0` tail-calls
-    // `0x6f3810`/`0x6f37f0`, decision 1738). Both are falsy to the `and` in the reference's own
+    // `0x6f3810`/`0x6f37f0`). Both are falsy to the `and` in the reference's own
     // predicate, so the button reads the same either way — but an addon testing `== nil` would
     // not, and this is the Era idiom the rest of this surface already speaks (`GetPartyMember`).
     g.set(
@@ -799,7 +797,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // The C verb re-tests everything the Lua predicate tests **and one thing it does not**:
-            // a party check of its own (`0x4e13a6`, decision 1738). The reference does not trust
+            // a party check of its own (`0x4e13a6`). The reference does not trust
             // its own button — an addon or a macro can call this solo, and the send is refused
             // here rather than reaching the server. Resolve the id HERE rather than queueing the
             // index (see `Model::quest_log_pushes`); a HEADER row carries `quest_id` 0, so an
@@ -1354,7 +1352,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetNumQuestWatches()").unwrap(), 0);
     }
 
-    /// The countdown trio (decisions 1150/1154). One deadline stamp in the snapshot, one clock
+    /// The countdown trio. One deadline stamp in the snapshot, one clock
     /// pushed beside it, and every read is a live subtraction — so advancing the clock alone (no
     /// re-push of the log) makes the number fall, which is precisely what the reference's
     /// per-OnUpdate `GetQuestTimers()` depends on.
@@ -1459,7 +1457,7 @@ mod tests {
     }
 
     /// `GetQuestLogPushable` answers about the SELECTION, and only about the selection — the Era
-    /// API has no per-index form (decision 1733). Selecting the other quest changes the answer.
+    /// API has no per-index form. Selecting the other quest changes the answer.
     #[test]
     fn pushable_follows_the_selection() {
         let mut s = UiScript::new().unwrap();
@@ -1467,7 +1465,7 @@ mod tests {
         state.entries[0].pushable = true; // 783 is sharable, 7 is not
         s.set_quest_log(state);
 
-        // `1` or nil, never true/false (`0x4e12b0`, decision 1738) — an addon testing `== nil`
+        // `1` or nil, never true/false (`0x4e12b0`) — an addon testing `== nil`
         // sees the reference's own shape.
         assert_eq!(
             s.eval::<Option<i64>>("return GetQuestLogPushable()")
@@ -1575,7 +1573,7 @@ mod tests {
         assert!(s.take_quest_log_pushes().is_empty());
     }
 
-    /// **The C verb re-tests the party and the sharable bit itself** (`0x4e13a6`, decision 1738) —
+    /// **The C verb re-tests the party and the sharable bit itself** (`0x4e13a6`) —
     /// the reference does not trust its own button, because a macro or an addon can call this with
     /// the window shut. Each guard is moved alone, against an otherwise-valid push.
     #[test]

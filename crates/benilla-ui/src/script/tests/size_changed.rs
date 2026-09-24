@@ -162,7 +162,7 @@ fn set_script_on_size_changed_is_accepted_because_the_resolve_pass_fires_it() {
 
 /// **The watch list is exactly the frames carrying the script.** The resolve's "before" snapshot
 /// reads `SetScript`'s maintained `on_size_changed_frames` rather than filtering the whole scripts
-/// map (decision 1634), so the list itself is now load-bearing: `SetScript(…, nil)` must remove
+/// map, so the list itself is now load-bearing: `SetScript(…, nil)` must remove
 /// the frame, and re-registering must not enrol it twice.
 ///
 /// Asserted on the LIST, not on the fire count, and that is the point. A stale entry fires nothing

@@ -129,7 +129,7 @@ impl ScrollingMessageState {
     /// Returns how many lines moved; a recolour bumps the generation so a settled frame redraws.
     ///
     /// **`id == 0` matches nothing, and that is a guard the reference opens with, not a
-    /// consequence** (decision 2125).
+    /// consequence**.
     /// `0x788250` is `mov edi,[ebp+8]; test edi,edi; je 0x7882a4` → `ret 8`: zero never reaches a
     /// comparison and the record walk is not entered at all.
     ///

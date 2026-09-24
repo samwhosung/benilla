@@ -1,10 +1,9 @@
-//! The guild **Era API surface** — roster, ranks, notes, MOTD, and the membership verbs
-//! (decision 1257).
+//! The guild **Era API surface** — roster, ranks, notes, MOTD, and the membership verbs.
 //!
 //! [`super::social`]'s shape exactly: the app pushes a [`GuildState`] snapshot built from its own
 //! wire mirror ([`UiScript::set_guild`]) and the getters here read that plain data; every verb
 //! queues a [`GuildRequest`] the app drains ([`UiScript::take_guild_requests`]) into the matching
-//! `CMSG_*` send. No ECS or net reach from the engine (decision 0068 §3).
+//! `CMSG_*` send. No ECS or net reach from the engine.
 //!
 //! **The snapshot is already display-ready** — member names, localized class names, zone names,
 //! rank names, and the last-online decomposition — because every one of those is a *lookup the
@@ -452,7 +451,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // gets `0`. Returning nil there would be a different contract.
     //
     // **RECOGNISED and UNRESOLVABLE are two different things**, and this binding conflated them
-    // until the stock character sheet came off the chain (decision 1751). It resolves its argument
+    // until the stock character sheet came off the chain. It resolves its argument
     // through the GENERAL unit-token resolver `0x515940`, so an *unrecognised* token raises via the
     // L-less `luaL_error 0x7040e0` at `0x515c1a` — but "a recognised-but-unresolvable token, a
     // non-player, a guildless player and a not-yet-arrived cache record ALL return (nil, nil, 0)"
@@ -957,8 +956,8 @@ mod tests {
     /// The distinction is not academic. Stock `PaperDollFrame_SetGuild` calls
     /// `GetGuildInfo("player")` unguarded from `PaperDollFrame_OnShow`, so before this split
     /// existed, opening the character window in the frames before the app pushed its first player
-    /// snapshot raised — found by putting the reference's own `PaperDollFrame.xml` on the chain
-    /// (decision 1751). `"player"` with no unit behind it is the whole test.
+    /// snapshot raised — found by putting the reference's own `PaperDollFrame.xml` on the chain.
+    /// `"player"` with no unit behind it is the whole test.
     #[test]
     fn a_recognised_but_unresolved_unit_answers_nils_and_only_an_unknown_token_raises() {
         let s = crate::script::UiScript::new().unwrap();

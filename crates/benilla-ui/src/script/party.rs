@@ -1,13 +1,13 @@
-//! The party/raid **Era API surface** (decision 0434 §2, phase 2) — the engine-free seam mirroring
+//! The party/raid **Era API surface** (phase 2) — the engine-free seam mirroring
 //! [`super::unit`]: the app pushes a roster **snapshot** ([`UiScript::set_party`]) built from its own
 //! `GroupState` wire mirror, and the `GetNumPartyMembers`/`GetPartyLeaderIndex`/`GetLootMethod`/…
 //! globals here read that plain data. The invite/uninvite/promote/loot-config calls are the outbound
 //! half: they queue a [`PartyRequest`] the app drains ([`UiScript::take_party_requests`]) and turns
-//! into the matching `CMSG_GROUP_*`/`CMSG_LOOT_METHOD` send — no ECS/net reach from the engine
-//! (decision 0068 §3), exactly [`super::unit`]'s split.
+//! into the matching `CMSG_GROUP_*`/`CMSG_LOOT_METHOD` send — no ECS/net reach from the engine,
+//! exactly [`super::unit`]'s split.
 //!
 //! Per-member game state (health/mana/level/reaction/…) does **not** live here — it rides the
-//! existing per-unit snapshots under the `"party1"`..`"party4"` tokens (decision 0434 §3), the same
+//! existing per-unit snapshots under the `"party1"`..`"party4"` tokens, the same
 //! feed `"player"`/`"target"` use ([`super::unit::UnitState`]). This module owns only the
 //! roster-level facts a unit snapshot can't carry: how many members, who leads, the loot
 //! configuration. `PartyState::default()` is "not in a group" — every getter then answers the
@@ -21,9 +21,9 @@
 //! array `0xb712a8` bounded by the count `0xb713e0`, and two of the three bindings walk exactly
 //! that pair, so a client whose count and array can disagree hands an addon looping
 //! `for i = 1, GetNumRaidMembers()` a miss tuple it will then index. The per-member grid/UI is
-//! the RaidFrame (decision 1549), which reads exactly this array.
+//! the RaidFrame, which reads exactly this array.
 //!
-//! The **raid management verbs** (decision 1549) are the outbound half again, and they address
+//! The **raid management verbs** are the outbound half again, and they address
 //! members three different ways because the reference's own bindings do: by **raid index**
 //! (`SetRaidSubgroup`, `SwapRaidSubgroup`, `UninviteFromRaid` — the RaidFrame has the index in
 //! hand), by **name** (`PromoteByName`, `PromoteToAssistant`, `DemoteAssistant` — UnitPopup
@@ -51,7 +51,7 @@ pub struct PartyMemberInfo {
     pub guid: u64,
 }
 
-/// One saved raid lockout — `GetSavedInstanceInfo`'s three returns (decision 1549). Pushed whole
+/// One saved raid lockout — `GetSavedInstanceInfo`'s three returns. Pushed whole
 /// by the app ([`UiScript::set_saved_instances`]) from `SMSG_RAID_INSTANCE_INFO`, with the map
 /// **name** already resolved: the wire carries a `Map.dbc` id and the DBC is the app's to read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -127,7 +127,7 @@ pub struct RaidMemberInfo {
 }
 
 /// The party/raid roster snapshot, pushed whole by the app each frame it changes
-/// ([`UiScript::set_party`]) — the `GroupState` merged view's roster-level facts (decision 0434 §2).
+/// ([`UiScript::set_party`]) — the `GroupState` merged view's roster-level facts.
 /// `PartyState::default()` = not in a group.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PartyState {
@@ -156,7 +156,7 @@ pub struct PartyState {
     pub leader_guid: u64,
     /// **The active player's own GUID** — the reference's `0x468550` read (`[0xb41414]+0xc0`),
     /// `0` out of world. Fed by the app beside the leader; the pair is the leader gate the
-    /// ready-check timeout runs on (`CheckReadyCheckTime`, decision 1989): the reference compares
+    /// ready-check timeout runs on (`CheckReadyCheckTime`): the reference compares
     /// the two guids and nothing else, so a solo player (leader `0`, own non-zero) never matches.
     pub own_guid: u64,
     /// The **whole raid roster**, `GetRaidRosterInfo`'s 1-based array — empty outside a raid,
@@ -187,7 +187,7 @@ pub enum PartyRequest {
     Accept,
     /// `DeclineGroup()` — decline the pending invite.
     Decline,
-    /// `LeaveParty()` — leave the current group (no confirmation popup, decision 0434 §4).
+    /// `LeaveParty()` — leave the current group (no confirmation popup).
     Leave,
     /// `InviteByName(name)` — invite by character name.
     InviteName(String),
@@ -204,7 +204,7 @@ pub enum PartyRequest {
         master_name: Option<String>,
         /// `SetLootMethod`'s optional THIRD argument. The binding reads it whatever the method is
         /// (`0x4e92a0`, presence-checked via `0x6f34d0`), unlike the master-looter argument, which
-        /// it reads only for `"master"` (decision 1675).
+        /// it reads only for `"master"`.
         threshold: Option<u32>,
     },
     /// `SetLootThreshold(n)` — the new quality floor.
@@ -251,7 +251,7 @@ impl super::UiScript {
         self.model_mut().party = state;
         // `SMSG_GROUP_LIST`'s ready-check leg (`0x4ba5f0`, reached only from the `0x7d` handler):
         // the roster scan over the NEW roster — a member who left took their pending flag with
-        // them — and when nobody is left pending, a forced close (decision 1989).
+        // them — and when nobody is left pending, a forced close.
         let lua = self.lua();
         let mut model = self.model_mut();
         if model.ready_check.deadline.is_some() {
@@ -263,7 +263,7 @@ impl super::UiScript {
         }
     }
 
-    /// The `MSG_RAID_READY_CHECK` open form arrived (decision 1989). The handler `0x4ba360` splits
+    /// The `MSG_RAID_READY_CHECK` open form arrived. The handler `0x4ba360` splits
     /// on the leader guid: the **leader** takes the response-collection arm — reads the per-member
     /// records the body carries (none, on vmangos) and force-closes if nobody is left pending;
     /// everyone **else** arms the 30 s deadline (`0x4ba535`) that the leader-gated tick never
@@ -282,7 +282,7 @@ impl super::UiScript {
         }
     }
 
-    /// One member's answer, forwarded to the leader (`{guid, status}`, decisions 1989/1997).
+    /// One member's answer, forwarded to the leader (`{guid, status}`).
     /// The handler's leader arm (`0x4ba360`): the record's guid is matched against the roster
     /// entry in full (`0x4ba3f9`/`0x4ba405`),
     /// and a match stores **the constant 0** into the "has not answered" flag whatever the status
@@ -328,7 +328,7 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().party_requests)
     }
 
-    /// Push the saved raid-lockout list, replacing whatever was there (decision 1549). A bare
+    /// Push the saved raid-lockout list, replacing whatever was there. A bare
     /// setter like [`Self::set_party`] — firing `UPDATE_INSTANCE_INFO` is the app's diff-and-fire
     /// job, never auto-fired here.
     pub fn set_saved_instances(&mut self, saved: Vec<SavedInstanceInfo>) {
@@ -533,7 +533,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             // **`freeforall`, not `group`.** The three cells this reads sit past `.data`'s raw end
             // in the zero-filled tail, so a client that has never been in a group answers the
-            // zeroth method — which is `freeforall`. Decision 1840.
+            // zeroth method — which is `freeforall`.
             let method = if model.party.loot_method.is_empty() {
                 "freeforall"
             } else {
@@ -616,7 +616,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     // SetLootMethod("method" [,master] [,threshold]) — the reference's own usage string
     // (`0x84c42c`). The master-looter argument is read ONLY for "master"; the threshold argument
-    // is optional for every method (decision 1675).
+    // is optional for every method.
     g.set(
         "SetLootMethod",
         lua.create_function(
@@ -668,7 +668,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|_, ()| Ok(Value::Nil))?,
     )?;
 
-    // ── The raid-management verbs (decision 1549) ────────────────────────────────────────────
+    // ── The raid-management verbs ────────────────────────────────────────────
     //
     // All nine share the same shape (`ConvertToRaid 0x4bbc90`, `SetRaidSubgroup 0x4bb990`,
     // `SwapRaidSubgroup 0x4bbb00`, `PromoteToAssistant 0x4bbd20`, `RequestRaidInfo 0x4a1850`,
@@ -752,7 +752,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let now = clock(lua);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // The worker `0x4bb1d0` (decision 1989): every roster member except the caller is
+            // The worker `0x4bb1d0`: every roster member except the caller is
             // flagged "has not answered" (`0x4bb24c`), the caller cleared (`0x4bb258`), the 30 s
             // deadline armed (`0x4bb2b6`) — then the packet. A party has no raid roster, so the
             // flags are empty there and the leader's own echo closes the check at once.
@@ -778,7 +778,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // unanswered, and prints `RAID_MEMBERS_AFK` with the `", "`-joined names — or
     // `READY_CHECK_NO_AFK` — as a `CHAT_MSG_SYSTEM` line. Both keys are read raw off `_G`
     // (`0x704350`: `lua_gettable` on GLOBALSINDEX, empty-string default), never through
-    // `GetText`. Sends no packet, raises nothing, returns nothing (decision 1989).
+    // `GetText`. Sends no packet, raises nothing, returns nothing.
     g.set(
         "CheckReadyCheckTime",
         lua.create_function(|lua, ()| {
@@ -882,7 +882,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 /// The ready-check deadline, `0x7530` ms after the arm (`0x4ba535`, `0x4bb2b6`).
 const READY_CHECK_SECONDS: f64 = 30.0;
 
-/// The client's ready-check state (`RaidInfo.cpp`, decision 1989): the armed deadline
+/// The client's ready-check state (`RaidInfo.cpp`): the armed deadline
 /// (`[0xb713f4]`, `None` = disarmed) and the roster members whose "has not answered yet" flag
 /// (`[entry+0x158]`) is set, plus the summary lines the timeout worker composed and the app has
 /// not yet pushed into chat. Outside [`PartyState`] because a roster push replaces that whole
@@ -930,7 +930,7 @@ fn ready_check_tick(lua: &Lua, model: &mut Model, now: f64) {
     model.ready_check.lines.push(text);
 }
 
-/// The `0x322` handler's close predicate (`0x4ba498`–`0x4ba4cc`, decision 1997): a member still
+/// The `0x322` handler's close predicate (`0x4ba498`–`0x4ba4cc`): a member still
 /// holds the check open only while they are BOTH flagged unanswered AND online (`[entry+0x18]`
 /// bit 0, the `SMSG_GROUP_LIST` online byte). An empty roster closes at once (`0x4ba3ea`).
 fn ready_check_pending_online(model: &Model) -> bool {
@@ -1032,7 +1032,7 @@ mod tests {
             .unwrap();
         // **`freeforall` is the UNGROUPED answer**, not `group`: the cells the reference reads
         // sit in `.data`'s zero-filled tail, so a client that has never been in a group reports
-        // the zeroth method (decision 1840). The `group` above is a real party's, and stays.
+        // the zeroth method. The `group` above is a real party's, and stays.
         assert_eq!(method, "freeforall");
         assert_eq!(master, None);
     }
@@ -1323,7 +1323,7 @@ mod tests {
         );
 
         // The optional THIRD argument, which the real binding reads for every method — not only
-        // for "master", the way the master-looter argument is read (decision 1675).
+        // for "master", the way the master-looter argument is read.
         s.run(r#"SetLootMethod("group", nil, 4)"#).unwrap();
         assert_eq!(
             s.take_party_requests(),
@@ -1355,7 +1355,7 @@ mod tests {
         );
     }
 
-    /// `IsRaidOfficer()` still answers nil, and the raid arc landing (decision 1549) did NOT
+    /// `IsRaidOfficer()` still answers nil, and the raid arc landing did NOT
     /// change that — it is not waiting on a feature, it is waiting on a reading of `0x4bb910`'s
     /// own body. The binding's doc carries the refusal; this pins the behaviour so a later
     /// "surely it is just rank >= 1" edit has to argue with a test.
@@ -1377,7 +1377,7 @@ mod tests {
         assert!(s.take_tell_requests().is_empty());
     }
 
-    // ── The identity predicates (decision 0434 §5 — the popup's menu pick + gating) ─────────────
+    // ── The identity predicates (the popup's menu pick + gating) ─────────────
 
     fn unit(exists: bool, guid: u64) -> crate::script::UnitState {
         crate::script::UnitState {
@@ -1520,7 +1520,7 @@ mod tests {
     }
 
     /// Every raid-management verb queues the request it names, with its arguments in the order
-    /// the reference's binding takes them — the seam the whole pane acts through (decision 1549).
+    /// the reference's binding takes them — the seam the whole pane acts through.
     #[test]
     fn the_raid_verbs_queue_what_they_name() {
         let mut s = UiScript::new().unwrap();
@@ -1658,7 +1658,7 @@ mod tests {
             .unwrap());
     }
 
-    // ── The ready-check timeout (decision 1989) ─────────────────────────────────────────────
+    // ── The ready-check timeout ─────────────────────────────────────────────
 
     /// A raid we lead: us, Alice and Bob on the roster; the two strings the summary reads raw.
     fn raid_we_lead(s: &UiScript) -> PartyState {

@@ -1,4 +1,4 @@
-//! The battleground **scoreboard** family (decision 1972): the eleven
+//! The battleground **scoreboard** family: the eleven
 //! verbs the stock `WorldStateFrame.lua` score frame calls, over a board the app pushes.
 //!
 //! ## What is the app's and what is the VM's

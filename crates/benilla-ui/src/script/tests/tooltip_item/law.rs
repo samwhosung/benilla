@@ -472,7 +472,7 @@ fn required_level_one_is_hidden() {
 /// on an openable instance shows the green `<Right Click to Open>` (director-observed on a clam;
 /// the `p6` leg selector, `0x6e2ed0`, gates it).
 /// A **running cooldown** takes SetBagItem's other leg and suppresses the line — the two are
-/// structurally exclusive on this binding (decision 0896).
+/// structurally exclusive on this binding.
 /// **Line 3 — the charter's guild name and master**, between the NAME and the green
 /// `ITEM_SIGNABLE` (the builder `0x52b650`'s emission order: 2 NAME, 3 the petition
 /// triple, 4 SIGNABLE).

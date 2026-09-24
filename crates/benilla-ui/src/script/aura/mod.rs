@@ -1,4 +1,4 @@
-//! The game-state aura bindings — **two dialects over one list** (decisions 0255, 0257).
+//! The game-state aura bindings — **two dialects over one list**.
 //!
 //! Same engine-free seam as [`super::unit`]: the app pushes a per-token, **already ordered** list of
 //! [`AuraState`] via [`UiScript::set_auras`], and these globals index it. This module deliberately
@@ -289,8 +289,8 @@ fn nth_aura(
 }
 
 impl super::UiScript {
-    /// Push (or clear) a unit token's aura list, **in display order** — the app decides that order
-    /// (decision 0257): the maintained insertion-order cache for the local player, ascending aura
+    /// Push (or clear) a unit token's aura list, **in display order** — the app decides that order:
+    /// the maintained insertion-order cache for the local player, ascending aura
     /// slot for anyone else. `None` (or an empty list) makes every `UnitAura(token, i)` return nil.
     pub fn set_auras(&mut self, token: &str, auras: Option<Vec<AuraState>>) {
         let mut model = self.model_mut();
@@ -342,7 +342,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UnitBuff(unit, index [, raidFilter]) / UnitDebuff(unit, index [, raidFilter]) — the 1.12
-    // signature and the 1.12 RETURN SHAPE (decision 1818). The sign is fixed by the verb, not by a
+    // signature and the 1.12 RETURN SHAPE. The sign is fixed by the verb, not by a
     // filter word: `0x519500` reads aura slots 0..31 and `0x5198f0` reads 32..47.
     //
     // **The third argument is a `raidFilter` flag, not Era's filter string.** Non-zero enables ONE
@@ -490,7 +490,7 @@ mod tests {
             "Battle Stance"
         );
         // `UnitBuff`/`UnitDebuff` enumerate the same list, but their first return is the ICON, not
-        // the name (1.12's shape — decision 1818), so they are addressed by it here.
+        // the name (1.12's shape), so they are addressed by it here.
         assert_eq!(
             s.eval::<String>(r#"return (UnitBuff("player", 2))"#)
                 .unwrap(),

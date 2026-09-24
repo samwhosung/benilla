@@ -34,7 +34,7 @@ use super::binding_abi::flag;
 use super::cursor::{self, CursorPayload};
 use super::Model;
 
-/// One inbox row, resolved by the app from a wire `MailListEntry` (decision 0544). Plain data — its
+/// One inbox row, resolved by the app from a wire `MailListEntry`. Plain data — its
 /// 1-based order in the window is its position in [`MailState::inbox`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MailInboxRow {
@@ -74,7 +74,7 @@ pub struct MailInboxRow {
     /// `GetInboxText`'s fourth return. **Narrower than "an auction mail"**: the reference answers
     /// `1` iff the record carries the three fields its subject parser persisted (`[rec+0x250] != 0`,
     /// `0x4af2eb`), and the parser persists them *only* for result code 1 (won) or 2 (sold). An
-    /// outbid or expiry notice is an auction mail that is **not** an invoice (decision 1527).
+    /// outbid or expiry notice is an auction mail that is **not** an invoice.
     pub is_invoice: bool,
     /// The auction invoice this mail carries, once it can be answered — `GetInboxInvoiceInfo`'s
     /// seven values. `None` is the reference's **miss tail**, and it covers four different states
@@ -90,7 +90,7 @@ pub struct MailInboxRow {
     /// The enclosed item's **random-suffix roll** (`SMSG_MAIL_LIST`'s per-item `randomPropId`) —
     /// what the hover resolves its enchant lines from, and the id whose suffix
     /// [`Self::item_name`] already carries. `0` = unrolled. The reference's `SetInboxItem` writes
-    /// exactly this into the tooltip's `+0x424` (decision 1547).
+    /// exactly this into the tooltip's `+0x424`.
     pub item_random_property_id: u32,
     /// The enclosed item's name (`GetInboxItem`'s first return); `None` while the template is in
     /// flight.
@@ -254,7 +254,7 @@ impl super::UiScript {
     /// answered with the item that had just been sent, and its own `SendMailFrame_Update()` tail
     /// put the item's name straight back into the subject box and its texture back on
     /// `SendMailPackageButton`. Nothing re-ran the update after the clear landed, so a sent letter
-    /// left its subject and its icon sitting in the form (director's report, decision 2145).
+    /// left its subject and its icon sitting in the form (director's report).
     ///
     /// `MAIL_SEND_SUCCESS` is **overloaded** — it means "the compose form is now clean", not "a
     /// mail was sent" — opening a mailbox fires it too.
@@ -580,7 +580,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SendMail",
         lua.create_function(|lua, (target, subject, body): (String, String, String)| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // `SendMail 0x4ae800` (decision 1965): money and COD are exclusive AT SEND TIME — both
+            // `SendMail 0x4ae800`: money and COD are exclusive AT SEND TIME — both
             // set is a silent abort, no packet — and a COD with no attached item aborts the same
             // way. 0 returns on every path, so Lua cannot tell.
             if model.mail_send_money != 0 && model.mail_send_cod != 0 {
@@ -602,7 +602,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // SetSendMailMoney(copper) → 1 (the SEND_MONEY popup's OnAccept gates SendMail on the truthy
     // return, StaticPopup.lua l.252). Stores the enclose-money amount the app reads at send time.
-    // SetSendMailMoney(copper) — `0x4ae0f0` → `0x4adbe0` (decision 1965): a non-number RAISES;
+    // SetSendMailMoney(copper) — `0x4ae0f0` → `0x4adbe0`: a non-number RAISES;
     // more than the purse (unsigned) shows ERR_NOT_ENOUGH_MONEY and answers nil; else the store,
     // SEND_MAIL_MONEY_CHANGED, and the number 1 — StaticPopup.lua l.257 branches on that value.
     g.set(
@@ -651,7 +651,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SetSendMailCOD(copper) — store the COD amount the app reads at send time (MailFrame.lua l.497).
-    // SetSendMailCOD(copper) — `0x4ae180` → `0x4adc70` (decision 1965): a non-number RAISES;
+    // SetSendMailCOD(copper) — `0x4ae180` → `0x4adc70`: a non-number RAISES;
     // without an attached item nothing happens at all — no store, no event, no message — and
     // there is no affordability or sign check; 0 returns on every path.
     g.set(
@@ -679,7 +679,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // **The empty leg is `(nil, nil, 0, 0)`** — four values, and slots 3 and 4 are NUMBERS. Read at
     // `0x4ae590`: `0x4ae6d3`/`0x4ae6da` push nil, then two `push 0; push 0; lua_pushnumber` pairs
-    // at `0x4ae6df`/`0x4ae6ea`, `eax = 4` (decision 2129). All three of the reference's failure
+    // at `0x4ae6df`/`0x4ae6ea`, `eax = 4`. All three of the reference's failure
     // guards share that one block, so "nothing attached" and "the item template has not loaded
     // yet" are indistinguishable to a script.
     //
@@ -996,7 +996,7 @@ mod tests {
     /// That is the reference's own carve-out (`0x4af1cf cmp [esi+0x4],2` → `lua_pushnil`), and it
     /// is what lets MailFrame lay the invoice pane over the letter page: the auction house's raw
     /// bookkeeping is in the text cache — `GetInboxInvoiceInfo` parses exactly that string — and
-    /// this binding refuses to hand it back (decision 1527).
+    /// this binding refuses to hand it back.
     #[test]
     fn an_invoice_has_no_letter_body() {
         let mut s = UiScript::new().unwrap();

@@ -13,7 +13,7 @@
 //! stock button (`Bar8Button1 = CharacterBag3Slot`, file scope, `Alias.lua`) and then lays each bar
 //! out by anchoring button *i* to the string `"Bar8Button"..(i-1)`. Resolving those against a
 //! private frame-name registry finds nothing, every anchor falls back to the parent, and all five
-//! bag buttons land in one spot on the bar's far corner. Decision 2105.
+//! bag buttons land in one spot on the bar's far corner.
 
 use super::common::script;
 
@@ -107,7 +107,7 @@ fn setpoint_relative_to_resolves_a_region_alias_global() {
 }
 
 /// A global that is not a widget resolves to nothing — the reference's type-5 + tag check — and
-/// the binding then takes its unresolved-name leg, which **raises** (`0x87ccd4`; decision 2176).
+/// the binding then takes its unresolved-name leg, which **raises** (`0x87ccd4`).
 /// The value is never used, and no anchor is left behind.
 #[test]
 fn setpoint_relative_to_ignores_a_non_widget_global() {

@@ -110,7 +110,7 @@ impl Loader<'_> {
                         self.apply_fontstring_font(region, &region_wrapper, dbg);
                     }
                     self.apply_region_visual(region, &region_wrapper, is_texture, dbg);
-                    // The creation-path implicit anchor (decision 1310): AFTER the authored
+                    // The creation-path implicit anchor: AFTER the authored
                     // `<Size>`/`<Anchors>`/justify are on the region, exactly where the real
                     // engine runs it (`0x7701c0`/`0x771480`, immediately after the region's
                     // LoadXML returns). A region the XML anchored is untouched.
@@ -197,7 +197,7 @@ impl Loader<'_> {
             self.apply_region_layout(region, &region_wrapper, parent_name, dbg, FontAttrs::Own);
             self.apply_fontstring_font(region, &region_wrapper, dbg);
             self.apply_region_visual(region, &region_wrapper, false, dbg);
-            // The creation-path implicit anchor (decision 1310), as in `apply_layers`. For the
+            // The creation-path implicit anchor, as in `apply_layers`. For the
             // EditBox adopt below it is moot — `write_inset_anchors` replaces the anchor set
             // wholesale — but a plain special FontString (a chat window's) gets the same
             // justify-point the real engine gives it.

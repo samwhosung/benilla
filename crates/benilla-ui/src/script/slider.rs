@@ -8,7 +8,7 @@
 //! widget's own `OnValueChanged` script slot (`+0x330`). The **thumb-position** mechanism — the
 //! thumb's rect placed at the value fraction along the orientation axis, applied at extract — is
 //! faithful to the *documented* widget model, not byte-pinned (same posture as StatusBar's fill and
-//! ScrollFrame's scroll; decisions 0112/0250).
+//! ScrollFrame's scroll).
 //!
 //! `SetValue` fires `OnValueChanged` on the **first-ever** value and after that **only on an
 //! actual change** ([`SliderState::store_value`] — the client's `+0x314` bit2, `SetValue
@@ -183,7 +183,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // They were a superset in PRESENCE, which is what 1189 records the cost of: a duck-typing addon
     // that branches on `if widget.IsEnabled then` reads a Slider as a Button. Ours also answered a
-    // Lua BOOLEAN, which the reference has no query that does (decision 2118) — `IsEnabled 0x7800b0`
+    // Lua BOOLEAN, which the reference has no query that does — `IsEnabled 0x7800b0`
     // is number-1/number-0 and never even nil.
     //
     // Removed rather than corrected because nothing calls them on a Slider receiver: a
@@ -320,7 +320,7 @@ pub(super) fn thumb_rect(r: Rect, thumb_size: (f32, f32), vertical: bool, fracti
 /// on a `CSimpleTexture` those slots are `0x770720`/`0x770790` — the **native-texel fallback**:
 /// authored span when it is non-zero on that axis, else the art's own texel span through the same
 /// `<AbsDimension>` converter, else `0.0` when there is no art at all (ours is
-/// [`super::region::virtual_span`], decision 1349).
+/// [`super::region::virtual_span`]).
 ///
 /// Reading `RegionData::size` instead is what broke every Lua-built slider: `SetThumbTexture(path)`
 /// authors no size, all four stock `<ThumbTexture>`s declare one, and the old fallback — *the thumb
@@ -332,7 +332,7 @@ fn thumb_extent(model: &Model, thumb: Option<crate::widget::RegionHandle>) -> Op
     Some(super::region::virtual_span(model, thumb?))
 }
 
-/// The in-flight thumb drag (decision 0250 §5): the slider being dragged + the grab offset
+/// The in-flight thumb drag: the slider being dragged + the grab offset
 /// [`slider_grab`] returned, so the thumb tracks the cursor without jumping. Engine C++-equivalent
 /// — no Lua, like the real client's scrollbar.
 #[derive(Clone, Copy)]

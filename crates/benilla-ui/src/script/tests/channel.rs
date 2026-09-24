@@ -151,7 +151,7 @@ fn get_channel_list_is_a_flat_slot_name_vararg_in_join_order() {
     assert_eq!(empty.arity("GetChannelList()").unwrap(), 0);
 }
 
-/// **The guild-recruitment latch boots at AUTO and round-trips as a NUMBER** (decision 2115).
+/// **The guild-recruitment latch boots at AUTO and round-trips as a NUMBER**.
 ///
 /// `GetGuildRecruitmentMode 0x4a0040` is 23 bytes and one path — `fild` the int global,
 /// `lua_pushnumber`, `mov eax,1`, `ret` — so it has no nil leg at all, and
@@ -177,7 +177,7 @@ fn the_guild_recruitment_mode_boots_auto_and_answers_a_number() {
     );
 }
 
-/// **The setter is shape A — it RAISES rather than swallowing a bad argument** (decision 2115).
+/// **The setter is shape A — it RAISES rather than swallowing a bad argument**.
 ///
 /// `0x4a0060` gates on `lua_isnumber 0x6f34d0` (so a numeric STRING passes) and otherwise
 /// `luaL_error`s `Usage: SetGuildRecruitmentMode(mode)`; it then truncates toward zero through
@@ -233,7 +233,7 @@ fn the_guild_recruitment_setter_gates_its_argument_the_way_the_reference_does() 
     );
 }
 
-/// **The setter is not inert** (decision 2144). `0x49ea70` stores the latch and tail-jumps into
+/// **The setter is not inert**. `0x49ea70` stores the latch and tail-jumps into
 /// the cascade `0x49ea90` on the new value alone — `Set(1)` raises the app's cue whether or not
 /// the value moved; `Set(0)` never does — and `0x4a00a4`/`0x4a00a9` fire `UPDATE_CHAT_WINDOWS`
 /// on every successful call, before any cascade fires it again.

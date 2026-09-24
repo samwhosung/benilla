@@ -2,7 +2,7 @@
 //! show/hide transitions.
 //!
 //! Every handler is invoked through the *same* protected path, which reproduces both calling
-//! conventions the transition-era client supported (decision 0068):
+//! conventions the transition-era client supported:
 //!
 //! - **Legacy globals (byte-verified):** `this` (`0x872e64`) = the firing frame's wrapper, `event`
 //!   (`0x84b648`) = the event name (OnEvent only), `arg1..argN` (`0x8722dc`) = the args — each
@@ -46,7 +46,7 @@ pub(super) fn fire_global(lua: &Lua, event: &str, args: &[ScriptValue]) {
 /// registration and a `RegisterEvent` for *this* event is one listener, not two — `RegisterEvent`'s
 /// own `if !list.contains(&h)` is the same rule one level down.
 ///
-/// Same mid-dispatch discipline as the walk above (`0x703ee8`, decision 1324): the next frame is
+/// Same mid-dispatch discipline as the walk above (`0x703ee8`): the next frame is
 /// re-found by position each step, so a handler that unregisters the walk's successor stops the
 /// dispatch there rather than robbing it.
 pub(super) fn fire_all_event_listeners(lua: &Lua, event: &str, args: &[ScriptValue]) {
@@ -228,8 +228,7 @@ pub(super) fn fire_visibility_changes(lua: &Lua, changed: Vec<FrameHandle>) {
             //
             // It hangs off the VISIBILITY transition, not off the hover, which is what it is in
             // the reference — a button hidden nowhere near the cursor un-presses too, and one
-            // hidden under the cursor no longer needs the hover-drop above to notice
-            // (decision 2134).
+            // hidden under the cursor no longer needs the hover-drop above to notice.
             let mut model = lua.app_data_mut::<Model>().expect("model");
             super::button::edge(&mut model, h, ButtonState::on_hide);
         }
@@ -288,7 +287,7 @@ fn fire(
     };
 
     let wrapper = frame_wrapper(lua, id)?;
-    // The attribution seam (decision 1395). Tight around the call and *after* `frame_wrapper` —
+    // The attribution seam. Tight around the call and *after* `frame_wrapper` —
     // which documents that callers hold no model borrow here, so the profiler's own borrow cannot
     // land in the middle of one. Off, it is a relaxed load and a not-taken branch; the guard closes
     // the fire on the way out of this scope, including an unwind.

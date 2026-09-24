@@ -586,7 +586,7 @@ fn a_title_region_drag_swallows_the_press_and_ends_on_release() {
 }
 
 /// A region's rect getters answer in its OWNER's units — screen ÷ the owner's effective scale —
-/// exactly as the frame getters do (decision 1985): a texture inside a frame scaled to 0.5 that
+/// exactly as the frame getters do: a texture inside a frame scaled to 0.5 that
 /// covers the frame answers the frame's own width, not half of it.
 #[test]
 fn region_getters_answer_in_the_owners_units_under_scale() {
@@ -616,7 +616,7 @@ fn region_getters_answer_in_the_owners_units_under_scale() {
     assert!((cx - (fl + fr) * 0.5).abs() < 1e-3);
 }
 
-/// **The layout cache's filter is the flags AND the bit, at both ends** (decision 2193).
+/// **The layout cache's filter is the flags AND the bit, at both ends**.
 ///
 /// `SetUserPlaced` is already guarded by `movable|resizable` at its own setter (`0x776adb`), but
 /// the drag entry (`0x7652b0` @`0x7652e5`) and the cache's own apply stamp the bit without going
@@ -659,7 +659,7 @@ fn the_write_filter_is_user_placed_and_movable_or_resizable() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The apply is gated per ARM** (decision 2193): position behind `movable` (`0x490600 test
+/// **The apply is gated per ARM**: position behind `movable` (`0x490600 test
 /// ah,0x1`), size behind `resizable` (`0x490689 test ah,0x2`), and each arm stamps the userPlaced
 /// bit itself (`0x49067e` / `0x490706`) only if it ran. A stock frame carrying neither flag is
 /// left entirely alone, however old its row — which is what stops one addon's stamp from seating

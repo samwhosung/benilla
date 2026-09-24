@@ -1,4 +1,4 @@
-//! TexCoords + Font objects (decision 0084).
+//! TexCoords + Font objects.
 
 use super::common::script;
 use crate::script::*;

@@ -1,6 +1,5 @@
 //! The draw-order primitive — the strata/layer vocabulary and the packed total-order key
-//! (`ZKey`), plus the visible-tree [`traversal`] that realizes the client's painter order
-//! (decision 0068).
+//! (`ZKey`), plus the visible-tree [`traversal`] that realizes the client's painter order.
 //!
 //! ## Ground truth
 //!
@@ -16,7 +15,7 @@
 //! BACKGROUND, then every frame's BORDER, and so on — regions are *not* grouped behind their owning
 //! frame. Within one layer the same is true of kind: the batch holds a quad sub-array and a text
 //! sub-array, and `0x76fb00` drains all quads before any text, so **all** textures of a
-//! `(strata, level, layer)` precede **all** its font strings (decision 0884).
+//! `(strata, level, layer)` precede **all** its font strings.
 //!
 //! ## The total order (most- to least-significant)
 //!
@@ -57,7 +56,7 @@ use crate::widget::{FrameHandle, RegionHandle, RegionKind, WidgetArena};
 /// The frame strata, in draw order (low → high). Variants 0..=8 are the client's nine
 /// buckets, byte-verified in the `CSimpleTop` ctor's 9-loop (`0x764180`): WORLD, BACKGROUND,
 /// LOW, MEDIUM (the default, id 3), HIGH, DIALOG, FULLSCREEN, FULLSCREEN_DIALOG, TOOLTIP. `BLIZZARD`
-/// (id 9) is the one stratum the modern engine adds *above* TOOLTIP (decision 0068) — an
+/// (id 9) is the one stratum the modern engine adds *above* TOOLTIP — an
 /// extension point, never selected by 1.12 content.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -80,7 +79,7 @@ pub enum Strata {
     FullscreenDialog = 7,
     /// id 8 — topmost in 1.12.
     Tooltip = 8,
-    /// id 9 — **Era addition**, drawn above `Tooltip` (decision 0068). No 1.12 content uses it.
+    /// id 9 — **Era addition**, drawn above `Tooltip`. No 1.12 content uses it.
     Blizzard = 9,
 }
 
@@ -163,7 +162,7 @@ impl Default for DrawLayer {
 //   bits 12..=19 (8)   sub-level        i8 biased by +128        (0..=255) — INERT on 1.12
 //   bits  0..=11 (12)  declaration seq  region index within its owner frame (< 4096)
 //
-// ## Why the draw layer outranks the frame (decision 0884 — §5-VERIFIED)
+// ## Why the draw layer outranks the frame (§5-VERIFIED)
 //
 // **The five render batches belong to the LEVEL NODE, not to the frame** (`levelNode+0x1c`, five
 // 0x30-byte batches), and the emitter `0x765920` loops `layer = 0..4` on the OUTSIDE and frames on
@@ -210,7 +209,7 @@ const LEVEL_SHIFT: u32 = 44;
 const LAYER_SHIFT: u32 = 41;
 /// The batch RANK within a `(strata, level, layer)`: the three sub-arrays a layer batch carries and
 /// the order `0x76fb00` drains them — its quads (`+0x10`), its string batch (`+0x18`), then its
-/// render-callback list (`+0x1c`; decision 1995).
+/// render-callback list (`+0x1c`).
 /// Two bits at 39..40, where the one font-string bit used to be; the link stamp below lost a bit
 /// for it (18, from 19 — the arena renumbers at the cap either way).
 const RANK_SHIFT: u32 = 39;
@@ -226,7 +225,7 @@ const DECL_BITS: u32 = 12;
 /// them. The client keeps them as three arrays on one batch object (ctor `0x772e80`: quads at
 /// `+0x10`, the `CGxStringBatch` at `+0x18`, a `RENDERCALLBACKNODE` list at `+0x1c`) and empties
 /// them in this order, so within one `(strata, level, layer)` every texture precedes every font
-/// string, and every font string precedes every model scene (decision 1995).
+/// string, and every font string precedes every model scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum BatchRank {
@@ -328,7 +327,7 @@ impl ZKey {
     /// own place for it: `0x76d160` registers the model's render callback into the layer batch,
     /// and `0x76fb00` drains the callback list after the quads and the text. Two scenes in one
     /// bucket keep the link-stamp order below the rank (registration order = FIFO), which the
-    /// bare slot's own insertion carries here (decision 1995).
+    /// bare slot's own insertion carries here.
     #[inline]
     #[must_use]
     pub const fn callback(self, layer: DrawLayer) -> ZKey {
@@ -366,7 +365,7 @@ pub struct ZParts {
     pub strata: u8,
     /// The frame level within the strata bucket.
     pub level: u16,
-    /// The draw layer (0..=4, [`DrawLayer::index`]) — bucket-wide, above the frame (decision 0884).
+    /// The draw layer (0..=4, [`DrawLayer::index`]) — bucket-wide, above the frame.
     pub layer: u8,
     /// The batch rank: all textures of a `(strata, level, layer)` precede all its text, and all its
     /// text precedes its model scenes ([`BatchRank`]).
@@ -478,7 +477,7 @@ fn walk(arena: &WidgetArena, mut f: impl FnMut(ZTarget, ZKey)) {
 /// quads. (The 1.12 region-draw cluster that would pin the *draw-time* skip remains unread; the
 /// flag itself and its setter `0x77fcb0` are recorded.)
 ///
-/// Cached against its own inputs (decision 1979): the list
+/// Cached against its own inputs: the list
 /// is a pure function of every visible frame's `(strata, level, insertion)` and every attached
 /// region's layer/sub-level/kind/decl — a walk over ~2 k frames and ~6 k regions, then a sort,
 /// and it was rebuilt on every frame for the extract, the pointer and the edit box alike. The
@@ -541,14 +540,14 @@ pub fn traversal(arena: &WidgetArena) -> DrawList {
 /// registered first. Walking the draw order in reverse inverts it and hands the click to the
 /// child, so right-clicking a unit frame opened nothing.
 ///
-/// **The SIBLING case is the one that bites hardest, and it is why this is not a local fix**
-/// (decision 1816). All children of one parent share `parent.level + 1`, so every sibling set is one
+/// **The SIBLING case is the one that bites hardest, and it is why this is not a local fix**.
+/// All children of one parent share `parent.level + 1`, so every sibling set is one
 /// big tie, resolved purely by declaration order — and under the true law the FIRST-declared sibling
 /// wins, not the last. A full-area mouse-enabled overlay declared at the top of a `<Frames>` list
 /// therefore swallows its whole window. Five of our own windows shipped exactly that (the
 /// `*WheelCatcher` `<Button>`s), correct only under the inverted order and now removed;
 /// `SkillFrame.xml` had already recorded one shipped bug from the same shape. Note that
-/// `<Button>` is mouse-enabled by its *constructor* (decision 1795), so such an overlay needs no
+/// `<Button>` is mouse-enabled by its *constructor*, so such an overlay needs no
 /// `enableMouse` to compete — the wheel is a separate index and needs no mouse hit target at all.
 ///
 /// Drawing is unaffected and stays later-on-top: this reordering is the HIT sweep's alone.
@@ -632,7 +631,7 @@ mod tests {
             mk(DrawLayer::Border, i8::MIN, false, 0) > mk(DrawLayer::Background, 127, true, 4095)
         );
         // Within a layer, KIND is next: all textures precede all fontstrings — and it now outranks
-        // sub-level (0884: the layer batch's two sub-arrays, quads drained before text).
+        // sub-level (the layer batch's two sub-arrays, quads drained before text).
         assert!(
             mk(DrawLayer::Artwork, i8::MIN, true, 0) > mk(DrawLayer::Artwork, 127, false, 4095)
         );
@@ -752,7 +751,7 @@ mod tests {
     /// within one (strata, level) bucket, a frame shown LATER draws over one declared later but
     /// never hidden — the exact minimap case (MiniMapTrackingFrame is declared before
     /// MinimapBackdrop, hidden at load, and its runtime Show must lift it over the backdrop's
-    /// ring art, as the director's reference A/B shows; decision 0557). A strata/level change on
+    /// ring art, as the director's reference A/B shows). A strata/level change on
     /// a visible frame re-buckets to the tail the same way; on a hidden frame it does not bump
     /// (the client's remove/add is visible-gated — it appends on the next show regardless).
     #[test]

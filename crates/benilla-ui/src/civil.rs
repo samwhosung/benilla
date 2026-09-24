@@ -2,7 +2,7 @@
 //!
 //! It lives here because this crate already had to have one: 1.12's `date()` global is Lua 5.0's
 //! `os.date` hoisted, and the sandbox strips `os` ([`crate::script`]'s stdlib), so the calendar
-//! had to be written by hand. The screenshot writer is its second caller (decision 1487), and one
+//! had to be written by hand. The screenshot writer is its second caller, and one
 //! correct closed form with two callers beats two hand-rolled loops.
 //!
 //! **UTC, deliberately, and it is a stated divergence wherever a caller wanted local time.** The

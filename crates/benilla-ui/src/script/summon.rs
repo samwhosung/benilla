@@ -1,4 +1,4 @@
-//! The player-summon **Era API surface** (decision 1747) — four globals, one snapshot.
+//! The player-summon **Era API surface** — four globals, one snapshot.
 //!
 //! These are the whole Lua side of being summoned, and they exist because the reference's
 //! `CONFIRM_SUMMON` dialog is written against exactly them (`StaticPopup.lua:1336-1357` +

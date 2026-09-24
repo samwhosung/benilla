@@ -1,7 +1,7 @@
 //! RegisterEvent + fire_event via BOTH conventions (`0x704d50` / `0x704f10`).
 //!
 //! The handler's extra arguments are read through 5.0's implicit `arg` table, not `select(n, ...)`:
-//! `...` as a value is not in this VM's grammar (decision 2101), because it is not in the 1.12
+//! `...` as a value is not in this VM's grammar, because it is not in the 1.12
 //! client's. The point of the test is unchanged — the same handler sees the legacy globals
 //! (`this`, `event`, `arg1`) AND the positional arguments.
 
@@ -178,7 +178,7 @@ fn has_script_reports_the_kind_is_supported_not_that_one_is_set() {
     );
 }
 
-/// **The walk steps by a next saved BEFORE the handler runs** (`0x703ee8`; decision 1324): a
+/// **The walk steps by a next saved BEFORE the handler runs** (`0x703ee8`): a
 /// handler that unregisters ITSELF mid-dispatch cannot rob its successor. This is AceEvent-2.0's
 /// fire-once idiom for `PLAYER_LOGIN`/`VARIABLES_LOADED` — its frame unregisters inside the
 /// handler, and the index-walk this replaces skipped whichever addon registered right after it

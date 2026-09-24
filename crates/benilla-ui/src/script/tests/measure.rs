@@ -276,7 +276,7 @@ fn invalidate_text_measures_reopens_the_round_trip() {
 /// sees the natural, unwrapped, un-truncated width at the DRAWN size").
 ///
 /// This is the distinction whose absence made the reference's own `PanelTemplates_TabResize` a
-/// feedback loop in this engine (decision 0997): the kit sized a tab from `GetStringWidth`, set that
+/// feedback loop in this engine: the kit sized a tab from `GetStringWidth`, set that
 /// width on the label, and read its own output back next frame — a tab that changed width every
 /// single frame. Three separate things are pinned here because each one was wrong on its own:
 ///

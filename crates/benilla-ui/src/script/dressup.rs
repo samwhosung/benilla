@@ -1,4 +1,4 @@
-//! The **dressing room** surface (decisions 1060, 1969) — the `DressUpModel` widget's own three
+//! The **dressing room** surface — the `DressUpModel` widget's own three
 //! verbs (table `0x84f190`: `Undress 0x504c00` · `Dress 0x504cd0` · `TryOn 0x504d90`) and the
 //! ordered intent queue behind them and behind `PlayerModel`'s `SetUnit`/`RefreshUnit` when the
 //! pane is a dressing room.

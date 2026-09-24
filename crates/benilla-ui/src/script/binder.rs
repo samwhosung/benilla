@@ -1,4 +1,4 @@
-//! The innkeeper-bind **Era API surface** (decision 1331) — two globals, no snapshot.
+//! The innkeeper-bind **Era API surface** — two globals, no snapshot.
 //!
 //! These are the whole Lua side of setting a hearthstone, and they exist because the reference's
 //! `CONFIRM_BINDER` dialog is written against exactly them (`StaticPopup.lua:1308-1322`):

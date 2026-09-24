@@ -1,4 +1,4 @@
-//! **Lua 5.0's remembered table size, and the whole library that rides it** (decision 2102).
+//! **Lua 5.0's remembered table size, and the whole library that rides it**.
 //!
 //! 5.0 does **not** simply write `t.n`. `luaL_setn` (`0x6f4ea0`) writes `t.n` *only if a
 //! non-negative numeric `t.n` already exists*; otherwise it stores the size in a weak-keyed table
@@ -73,7 +73,7 @@ const MAX_SHIFT: i64 = 1_000_000;
 /// `luaL_getn 0x6f5050` — `t.n`, then `sizes[t]`, then a linear count.
 ///
 /// The count is `rawgeti` from 1 to the first nil, not the `#` border: 1.12's Lua has no length
-/// operator at all (decision 2101) and the two disagree on a table with holes, where `#` is
+/// operator at all and the two disagree on a table with holes, where `#` is
 /// explicitly undefined. It costs O(n) — exactly as it does in the reference, and only until
 /// the first `insert`/`setn` remembers a size for that table.
 fn get_n(sizes: &Table, t: &Table) -> mlua::Result<i64> {

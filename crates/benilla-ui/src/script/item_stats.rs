@@ -151,7 +151,7 @@ pub struct ItemTemplateView {
     /// `RandomProperty` (template `+0x1b8`) — the item CAN roll a "… of the Bear" suffix. Its one
     /// consumer is the enchant family's third arm: with no instance to read a roll from, the
     /// tooltip prints the `<Random enchantment>` placeholder instead of any per-slot line
-    /// (`0x52cc33`). Decision 0920.
+    /// (`0x52cc33`).
     pub random_property: u32,
 }
 
@@ -210,7 +210,7 @@ pub(super) fn item_usable_by_id(model: &super::Model, item_id: u32) -> bool {
 /// 3. race mask: same test against `allowableRace`.
 /// 4. proficiency: a mask exists for the item class AND the item's **own** subclass bit is clear
 ///    → unusable. NO ItemSubClass alternate walk here — the alternate only chooses which tooltip
-///    CELL reds (0297); the usable gate is the raw bit.
+///    CELL reds; the usable gate is the raw bit.
 /// 5. `requiredSkill`: unknown skill → unusable; known → `value + permBonus ≥ requiredSkillRank`.
 /// 6. `requiredSpell`: not in the spellbook → unusable.
 /// 7. `requiredHonorRank`: player's highest honor rank (`PLAYER_FIELD_BYTES` byte 3) short →
@@ -516,7 +516,7 @@ fn parse_item_arg(v: &Value) -> mlua::Result<(i64, u32, u32, u32)> {
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
-    // `GetItemQualityColor(quality)` → `r, g, b, escapeString` (decision 1199).
+    // `GetItemQualityColor(quality)` → `r, g, b, escapeString`.
     //
     // A **C-registered** binding in the reference (`0x48dfb0`) and `function engine` in the
     // captured `_G`, which is why it belongs here rather than in `assets/ui`: the shipped
@@ -536,7 +536,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (grey). There is no out-of-bounds read: the unsigned compare catches it first. The value
     // stopped being academic when the loot window went to the chain — `-1` is what
     // `GetLootSlotInfo` answers for a row whose item template is not cached, and that row's text
-    // colour is this table's `-1` row (`0x4c2435`, decision 1805).
+    // colour is this table's `-1` row (`0x4c2435`).
     lua.globals().set(
         "GetItemQualityColor",
         lua.create_function(|lua, quality: i64| {
@@ -562,7 +562,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // **Nine values, and every one of them confirmed** against the registered binding
     // `0x48e070`, which ends `mov eax,0x9; ret`. The
-    // signature is the whole point of the verb (decision 1199): a later client inserts `itemLevel`
+    // signature is the whole point of the verb: a later client inserts `itemLevel`
     // at position 4 and pushes the required level to 5, and 36 corpus addons destructure this one
     // positionally — `Informant/Informant.lua:268` reads all nine and stores position 4 as
     // `['reqLevel']`, `Auctioneer/Database/AucItemDB.lua:288` as `useLevel`.

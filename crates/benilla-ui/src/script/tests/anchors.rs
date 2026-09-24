@@ -77,7 +77,7 @@ fn getwidth_falls_back_to_explicit_size_before_resolve() {
 
 /// A *named* `relativeTo` that does not resolve **RAISES** and abandons the call — the reference's
 /// `luaL_error(0x87ccd4, "%s:SetPoint(): Couldn't find region named '%s'")`, with no fallback and
-/// no no-op (decision 2176; 2105 pinned the bytes and deferred the change until the addon survey
+/// no no-op (2105 pinned the bytes and deferred the change until the addon survey
 /// could see engine warnings). The region path is the same registered function, so it raises the
 /// same way — and both quote the receiver's own name, `<unnamed>` (`0x84c7f0`) when it has none.
 ///

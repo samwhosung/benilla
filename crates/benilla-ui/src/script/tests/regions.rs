@@ -1,4 +1,4 @@
-//! Regions join the anchor layout (decision 0068).
+//! Regions join the anchor layout.
 //!
 //! The smeared-merchant root cause: region `<Size>`/`<Anchors>` used to be dropped — a region either
 //! filled its owner or (with a size) drew centered, and its anchors were ignored. Regions now resolve
@@ -57,7 +57,7 @@ fn region_texture_anchored_topleft_resolves_exact_rect() {
 }
 
 /// A FontString's implicit extent is its measured TEXT, **floored at one FrameXML unit**
-/// (`CSimpleFontString::GetWidth 0x772930` / `GetHeight 0x772a60` — decision 1664). So a
+/// (`CSimpleFontString::GetWidth 0x772930` / `GetHeight 0x772a60`). So a
 /// single-anchored FontString whose measure has not landed is a 1×1 box seated on its anchor,
 /// not a collapse onto the pinned edge and not the owner's rect: the floor is what makes such a
 /// FontString **always resolve**, and it is why the resolver needs no owner-edge fallback at all.
@@ -404,7 +404,7 @@ fn long_region_chain_resolves_and_a_frame_binds_to_its_tail() {
 
 /// Decision 0088 §2 pinned "a child frame shown at runtime does not draw its own `<Layers>`
 /// FontStrings" — the engine constraint that forced every window FLAT. Re-tested after the
-/// resolver fixpoint (decision 0112): a child frame created and SHOWN at runtime, carrying its own
+/// resolver fixpoint: a child frame created and SHOWN at runtime, carrying its own
 /// text + texture regions, must extract both quads at the child's resolved position.
 #[test]
 fn child_frame_layers_regions_render_after_the_fixpoint() {
@@ -580,7 +580,7 @@ fn a_solid_colour_texel_multiplies_with_the_vertex_colour() {
     );
 }
 
-/// **`SetDesaturated` rides the extract, and only against real ART** (decision 1327).
+/// **`SetDesaturated` rides the extract, and only against real ART**.
 ///
 /// The state was stored from the day the verb landed and read by nobody, which is why every
 /// greyed-out affordance in the UI was a brightness tint (B162's talent tree). The flag now travels
@@ -647,8 +647,7 @@ fn desaturated(s: &UiScript, name: &str) -> bool {
     model.region_data.get(&h).is_some_and(|d| d.desaturated)
 }
 
-/// **`SetTexture` clears the desaturation — except when the path does not actually change**
-/// (decision 1330).
+/// **`SetTexture` clears the desaturation — except when the path does not actually change**.
 ///
 /// `+0x128` is a `CGxShader*`, and `CSimpleTexture::SetTexture` writes it from a shader index the
 /// Lua binding always passes as slot 0 (permanently NULL). Storing a desaturate boolean *beside*
@@ -693,7 +692,7 @@ fn set_texture_clears_desaturation_unless_the_path_is_unchanged() {
 }
 
 /// **`SetDesaturated`'s argument truth table has two arms that read backwards**
-/// (`0x6f1c10`'s jump table; decision 1330).
+/// (`0x6f1c10`'s jump table).
 ///
 /// `0x6f1c10(L, 2, default=1)` takes its DEFAULT on `LUA_TNONE`, so a bare `SetDesaturated()` greys
 /// — the opposite of the `if flag then` an implementation writes without looking. And a number is
@@ -733,7 +732,7 @@ fn set_desaturated_takes_the_clients_argument_truth_table() {
 /// when it is empty, whatever the vertex colour holds. Since the tint deliberately survives
 /// `SetTexture(nil)` ("a tint outlives the art it was tinting"), a cleared region used to leak its
 /// tint out of extract as a solid plate — an occupied action button going empty on a character
-/// switch drew its surviving 1/1/1 usable-tint as a solid WHITE square (decision 1108; the
+/// switch drew its surviving 1/1/1 usable-tint as a solid WHITE square (the
 /// 2026-07-10 grey wells were the same class).
 #[test]
 fn a_vertex_colour_without_a_texture_draws_nothing() {
@@ -1004,7 +1003,7 @@ fn set_portrait_to_texture_is_a_global_taking_a_name() {
 
 /// **`Region:GetWidth`/`GetHeight` are the VIRTUAL getters** — the same content-derived law the
 /// rect resolver calls, because the Lua bindings dispatch through the same geometry-vtable slots
-/// (`GetWidth 0x7a1e00` ends `ff 52 1c`, `GetHeight 0x7a2030` ends `ff 52 20`; decision 1670).
+/// (`GetWidth 0x7a1e00` ends `ff 52 1c`, `GetHeight 0x7a2030` ends `ff 52 20`).
 ///
 /// Both halves of the FontString row, each of which we had backwards:
 ///
@@ -1214,7 +1213,7 @@ fn the_constructors_string_arguments_are_four_shapes_not_one() {
 /// `TradeFrame.lua:41`), binds as `"npc"`. The reference resolves every unit token
 /// case-insensitively (`0x515970`'s ten compares are all `_strnicmp`), and the app samples the
 /// booth by this exact string — a raw `"NPC"` matched no slot and left the ring empty on all
-/// three windows (decision 2022).
+/// three windows.
 #[test]
 fn set_portrait_texture_folds_the_token_to_lowercase() {
     let mut s = script();
@@ -1339,7 +1338,7 @@ fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
 }
 
 /// **A `SetTexture` the host cannot resolve leaves the region's art alone** — it does not overwrite
-/// it with the path that failed (decision 2124).
+/// it with the path that failed.
 ///
 /// The reference's load-failure arm is explicit about it: `0x770288 cmp [ebp-4],2; jl` →
 /// `0x77028e`–`0x7702b2` releases the handle it just built and returns 0 **without ever touching
@@ -1458,7 +1457,7 @@ fn get_blend_mode_answers_one_string_and_defaults_to_the_ctors_blend() {
 }
 
 /// `Texture:GetTexCoordModifiesRect()` — the 1.12 predicate return, `1`/`nil` and never a Lua
-/// boolean (`0x79c120`, table `0x87c128`, argc 1, arity 1, kinds `(nil) | (number)`; decision 2118).
+/// boolean (`0x79c120`, table `0x87c128`, argc 1, arity 1, kinds `(nil) | (number)`).
 /// `pfUI/modules/thirdparty-tbc.lua:319` calls it bare on a Texture.
 ///
 /// The flag's effect on the region's rect is deliberately NOT wired (see

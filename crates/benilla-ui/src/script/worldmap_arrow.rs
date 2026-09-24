@@ -1,4 +1,4 @@
-//! The world map's **arrow frames** (decision 1980, `0x4a8bb0`): the seven bindings the stock
+//! The world map's **arrow frames** (`0x4a8bb0`): the seven bindings the stock
 //! `WorldMapFrame.lua` and `Blizzard_BattlefieldMinimap.lua` call to put the player's arrow on
 //! the map.
 //!
@@ -27,7 +27,7 @@ use super::Model;
 pub const ARROW_MODEL: &str = "Interface\\Minimap\\MinimapArrow.mdx";
 
 /// The arrow's rect is the file's own bounding box — the implicit rect of a size-less pane
-/// (decision 2015; `MinimapArrow.mdx`'s `0.0262 × 0.0263` model units read as layout units,
+/// (`MinimapArrow.mdx`'s `0.0262 × 0.0263` model units read as layout units,
 /// `1280·extent = 33.5 × 33.7` FrameXML units at 4:3). The world-map arrow's model scale is
 /// `G48 · 5/3` (`= 1.0` at 4:3, `G48 = 1/√(aspect² + 1)`) and the mini's `G48 · 10/9`, so the
 /// quad holds a constant apparent size as the window's shape changes while its rect grows with
@@ -155,9 +155,9 @@ fn create(lua: &Lua, which: Arrow, parent: Value) -> mlua::Result<()> {
     };
     // `SetModel("Interface\Minimap\MinimapArrow.mdx")` in C++ (`0x4a7a80` → `0x76c8e0`): the
     // same file set every pane takes, seeded with the file's facts when the host has them
-    // (decision 2007 — the arrow's Stand loops its 3.333 s with no bone keyed, so nothing
+    // (the arrow's Stand loops its 3.333 s with no bone keyed, so nothing
     // moves; the arm is the reference's, not a look). No authored size: the widget's rect is
-    // the file's bounding box (decision 2015), and `0x4a7b20`'s `SetPosition(½·GetWidth,
+    // the file's bounding box, and `0x4a7b20`'s `SetPosition(½·GetWidth,
     // ½·GetHeight, 0)` — the geometry override's bbox extent, in layout units — centres the
     // model on it.
     let facts = lua

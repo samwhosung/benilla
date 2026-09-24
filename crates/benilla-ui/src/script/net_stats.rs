@@ -6,7 +6,7 @@
 //! feeding `0x537f20`'s throughput/avg-RTT math (host telemetry; no wire bytes). The app owns
 //! that ring
 //! ([`crate`]'s consumer keeps it beside its ping clock) and pushes the average here; the engine
-//! stays free of ECS/net reach (decision 0068 §3), exactly as [`super::unit`]'s `GetMoney` does.
+//! stays free of ECS/net reach, exactly as [`super::unit`]'s `GetMoney` does.
 //!
 //! **The two bandwidth returns are `0`.** benilla measures no throughput — its socket threads tally
 //! no bytes — and nothing in the 1.12 UI reads them: `MainMenuBarPerformanceBarFrame` is the whole

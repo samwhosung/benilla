@@ -1,7 +1,7 @@
 //! Per-handler cost attribution (`WOW_UI_HANDLERS=<secs>`) — *which* FrameXML handler is spending
 //! the frame. An `impl UiScript` block beside its concern, the `layout.rs` pattern.
 //!
-//! ## Why it exists (decision 1395)
+//! ## Why it exists
 //!
 //! Three perf hunts in a row — 1383's autocast shine, 1385's cast bar, 1388's layout graph — each
 //! opened with the same question and each answered it **by hand**: read the shipped Lua, guess the

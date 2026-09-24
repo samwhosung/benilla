@@ -372,7 +372,7 @@ fn a_region_template_or_a_mismatched_kind_is_named_never_fatal() {
 }
 
 /// **`<ScrollChild>` gives a ScrollFrame its range** — the loader element that was missing, and
-/// the whole remaining distance for an addon's scrolling list (decision 1205).
+/// the whole remaining distance for an addon's scrolling list.
 ///
 /// The single child is instantiated via the same `0x6ee280` path `<Frames>` uses, then stored as
 /// the scroll child. Without it a `ScrollFrame` has nothing to pan, so `GetVerticalScrollRange()`
@@ -419,7 +419,7 @@ fn a_scroll_child_element_gives_the_frame_a_real_scroll_range() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The scroll range is the child's SUBTREE, not the child frame's own height** (decision 1338:
+/// **The scroll range is the child's SUBTREE, not the child frame's own height** (
 /// `0x786e30` seeds a bbox and walks `0x786f80` recursively over the child's region and child-frame
 /// lists).
 ///
@@ -497,6 +497,6 @@ fn an_empty_scroll_child_is_reported() {
         "errors: {:?}",
         report.errors
     );
-    // ...and the frame still exists — the client logs and carries on (decision 0068).
+    // ...and the frame still exists — the client logs and carries on.
     assert!(s.eval::<bool>("return Hollow ~= nil").unwrap());
 }

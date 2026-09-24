@@ -102,7 +102,7 @@ pub(crate) use view::recipe_at;
 /// The recipe difficulty band (the color law, computed app-side): the Lua color-table key
 /// `GetTradeSkillInfo` returns as its `type`. These four names ARE the real client's own
 /// `TradeSkillTypeColor` keys (`TradeSkillFrame.lua`); WHICH recipes land in which band (the
-/// trivial-rank cut points) is CONFIRMED at the bytes (decision 0446, `0x4fca20`:
+/// trivial-rank cut points) is CONFIRMED at the bytes (`0x4fca20`:
 /// gray ≥ trivialHigh, green ≥ the low/high midpoint, yellow ≥ trivialLow, orange below) — this
 /// enum is the verified Era vocabulary the app's law picks from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +131,7 @@ impl TradeSkillDifficulty {
 
     /// The byte tier a group sorts recipes by, ascending (`0x4fd380`):
     /// Optimal < Medium < Easy < Trivial, 0..3. The **Craft** window's row comparators key on the
-    /// same tier byte first (`row[+0xc]`, decision 1124), which is why this is `pub(crate)` and not
+    /// same tier byte first (`row[+0xc]`), which is why this is `pub(crate)` and not
     /// private to this module: the client's two code tables are one vocabulary shifted by one
     /// (Craft's `0` is a `"none"` tier benilla cannot produce), so the *relative* order is identical
     /// and the shift is invisible to a comparator.
@@ -160,7 +160,7 @@ pub struct TradeSkillReagent {
     pub icon: Option<String>,
     /// How many this recipe consumes.
     pub need: u32,
-    /// How many the player's bags currently hold (`count_of`, decision 0269) — the row's own
+    /// How many the player's bags currently hold (`count_of`) — the row's own
     /// have-vs-need gate, which the ref Lua grays/counts off directly.
     pub have: u32,
 }
@@ -233,7 +233,7 @@ pub struct TradeSkillState {
     /// straight into this slice — see [`recipe_at`].
     pub recipes: Vec<TradeSkillRecipe>,
     /// Remaining Create All repeats (`GetTradeskillRepeatCount`) — the client-side repeat machine's
-    /// own counter (`0x500230`, decision 0446), not engine-driven: the app decrements
+    /// own counter (`0x500230`), not engine-driven: the app decrements
     /// and re-pushes as each repeat's cast resolves.
     pub repeat_count: u32,
 }
@@ -292,7 +292,7 @@ impl super::UiScript {
     /// Drain the **(spell id, count)** intents `DoTradeSkill` queued since the last call — the engine
     /// resolves each clicked recipe's INDEX to its spell id, so the app sends `CMSG_CAST_SPELL`
     /// without needing the index mapping; `count` is the total the app's own client-side repeat
-    /// loop (decision 0437 §5, `0x4fd7b0`) turns into that many sequential sends, one per item —
+    /// loop (`0x4fd7b0`) turns into that many sequential sends, one per item —
     /// "Create" queues `1`, "Create All" queues [`TradeSkillState::repeat_count`].
     pub fn take_trade_skill_dos(&mut self) -> Vec<(u32, u32)> {
         std::mem::take(&mut self.model_mut().trade_skill_dos)

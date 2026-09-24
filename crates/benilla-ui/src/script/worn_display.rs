@@ -1,5 +1,5 @@
-//! The **equipment-display** API surface — `ShowHelm`/`ShowingHelm`, `ShowCloak`/`ShowingCloak`
-//! (decision 1472): the player's two "don't draw this piece of my gear" preferences.
+//! The **equipment-display** API surface — `ShowHelm`/`ShowingHelm`, `ShowCloak`/`ShowingCloak`:
+//! the player's two "don't draw this piece of my gear" preferences.
 //!
 //! Two bits, and they are not the UI's to keep. The preference lives server-side in the character's
 //! own `PLAYER_FLAGS` (`HIDE_HELM 0x400` / `HIDE_CLOAK 0x800`), which is a **public** descriptor

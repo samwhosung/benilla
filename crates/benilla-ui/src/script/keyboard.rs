@@ -119,7 +119,7 @@ fn has_script(lua: &Lua, id: u32, name: &str) -> bool {
 /// keystroke aimed at its neighbours**: stock `SendMailNameEditBox` has one
 /// (`SendMailFrame_SendeeAutocomplete`) and is the first-registered keyboard frame in the mail
 /// window, so the send tab's subject, body and three money boxes took no input at all — the whole
-/// window typed dead except the one box the handler is on (decision 2145).
+/// window typed dead except the one box the handler is on.
 fn is_editbox(lua: &Lua, h: FrameHandle) -> bool {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     model
@@ -225,7 +225,7 @@ pub(super) fn key_input(lua: &Lua, key: &str) -> bool {
 
 /// The same key-down walk, for the keys this engine delivers to a **focused EditBox as a semantic
 /// [`crate::script::EditAction`] chord** rather than by name — BACKSPACE, DELETE, the arrows, HOME,
-/// END (decision 0301: the host's per-OS keymap owns which chord means what, so the box never sees
+/// END (the host's per-OS keymap owns which chord means what, so the box never sees
 /// these as names).
 ///
 /// Those keys still have to reach a keyboard frame — a dialog you type into needs its BACKSPACE —

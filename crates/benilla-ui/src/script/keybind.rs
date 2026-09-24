@@ -1,4 +1,4 @@
-//! The **key-binding table** — the client's chord→command store, engine side (decision 0997).
+//! The **key-binding table** — the client's chord→command store, engine side.
 //!
 //! In the reference every rebindable action is a *binding*: a command name (`MOVEFORWARD`)
 //! carrying a category header and up to two bound key chords, stored key→command and saved to
@@ -8,7 +8,7 @@
 //! `LoadBindings(0 default | 1 account | 2 character)`, `SaveBindings(which)`,
 //! `GetCurrentBindingSet()`.
 //!
-//! benilla keeps the same shape at the same seam, split like the CVar table (0954): the **host
+//! benilla keeps the same shape at the same seam, split like the CVar table: the **host
 //! registers** the commands it actually implements (honest-tree — no row without a real engine
 //! action) with their 1.12 default chords, **this table is the string-domain truth** the window's
 //! Lua reads and writes synchronously, and the app derives its dispatch view (parsed chords →
@@ -82,7 +82,7 @@ pub enum KeybindRequest {
     Run(String),
 }
 
-/// The reference's key-string gate — the whole of `SetBinding`'s refusal (decision 1295), in its
+/// The reference's key-string gate — the whole of `SetBinding`'s refusal, in its
 /// two halves: the alias normalization at the head of `CBindings::SetBinding 0x4b7490`, and the
 /// validator `IsValidBindingKeyString 0x4b7890` it then calls.
 ///
@@ -205,7 +205,7 @@ pub(crate) struct KeybindState {
     /// Saved snapshots: `stored[0]` = account (set 1), `stored[1]` = character (set 2, `None`
     /// when no character-specific bindings exist). Each is per-entry key lists, entry order.
     stored: [Option<Vec<Vec<String>>>; 2],
-    /// The same two stored sets **by command name** (decision 1201).
+    /// The same two stored sets **by command name**.
     ///
     /// [`Self::stored`] is positional over [`Self::entries`], which is exactly right for the
     /// commands that exist when a set is seeded and useless for the ones that do not: an addon's
@@ -245,7 +245,7 @@ impl KeybindState {
     /// The reference's `SetBinding(key[, command])`: unbind `key` wherever it is, then (with a
     /// command) append it to that command's key list.
     ///
-    /// **The only thing it refuses is a key string that is not a key** (decision 1295). We used to
+    /// **The only thing it refuses is a key string that is not a key**. We used to
     /// refuse a mousewheel chord on a press+release (`runOnUp`) command — the reading everyone
     /// takes from `Blizzard_BindingUI`'s `if not SetBinding(…) then … KEYBINDINGFRAME_MOUSEWHEEL_
     /// ERROR`. It is wrong: `CBindings::SetBinding 0x4b7490` never reads a command node at all
@@ -394,7 +394,7 @@ impl KeybindState {
                 continue;
             }
             let idx = self.entries.len();
-            // The player's stored chord for this command, if they ever set one (decision 1201).
+            // The player's stored chord for this command, if they ever set one.
             // The CURRENT set first, then the account set behind it — the same precedence `load`
             // applies, so an addon binding restores exactly like a shipped one.
             let stored = {
@@ -504,7 +504,7 @@ impl super::UiScript {
         let kb = &mut model.keybinds;
         // Keep the pairs BY NAME as well as positionally: a command that does not exist yet
         // (an addon's, registered at world entry) has no position to occupy, and the by-name map
-        // is what `register_addon` consults when it finally does (decision 1201).
+        // is what `register_addon` consults when it finally does.
         let mut by_name_owned: HashMap<String, Vec<String>> = HashMap::new();
         let snap = keys.map(|pairs| {
             let by_name: HashMap<_, _> = pairs.into_iter().collect();
@@ -801,7 +801,7 @@ mod tests {
                 .unwrap(),
             ""
         );
-        // **The wheel binds to a press+release command** (B265, decision 1295). This assertion
+        // **The wheel binds to a press+release command**. This assertion
         // used to read `== nil`, on the universal misreading of `Blizzard_BindingUI`'s
         // `if not SetBinding(…) then … KEYBINDINGFRAME_MOUSEWHEEL_ERROR`. `0x4b7490` never looks
         // at a command node, so 1.12 takes it — and the notch runs both halves.

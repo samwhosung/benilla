@@ -1,4 +1,4 @@
-//! The trainer tree's tests — the per-`trainerType` ordering laws (decisions 0247/1124) pinned
+//! The trainer tree's tests — the per-`trainerType` ordering laws pinned
 //! against emulated runs of the real finalizer, plus the filter/collapse/intent
 //! surface. Split out of `mod.rs` when the four comparators pushed it past the file budget.
 
@@ -176,7 +176,7 @@ fn service_getters_read_the_row_at_a_visible_index() {
 }
 
 /// The state filter takes a group's **header with it** once it hides the group's last service — the
-/// finalizer's `[+0x1c]` hide has no header-row exemption (`0x4d8528`/`0x4d8535`, decision 1124).
+/// finalizer's `[+0x1c]` hide has no header-row exemption (`0x4d8528`/`0x4d8535`).
 /// This asserted the opposite until 1124: benilla rendered bare headers over empty groups, and an
 /// all-boxes-off filter left a window full of headings and nothing else.
 #[test]
@@ -638,8 +638,8 @@ fn tradeskill_trainer_matches_the_emulated_reference_order() {
     assert_eq!(got, expected);
 }
 
-/// **The mount (type 1, the client's "talent") order, pinned against an emulated run**
-/// (decision 1124): the already-known services fold into the `-1` "My Talents" group, which the
+/// **The mount (type 1, the client's "talent") order, pinned against an emulated run**:
+/// the already-known services fold into the `-1` "My Talents" group, which the
 /// header comparator puts **first**, ahead of the name-ordered skill-line headers; within a group
 /// the state byte sorts available → unavailable → used, then the name.
 #[test]

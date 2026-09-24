@@ -361,7 +361,7 @@ fn set_unit_is_read_by_the_bindings() {
 #[test]
 fn absent_token_reports_not_existing_with_zero_numbers() {
     let s = UiScript::new().unwrap();
-    // **nil, not `false`** — the family's false leg (decision 2043). `== nil` is the comparison a
+    // **nil, not `false`** — the family's false leg. `== nil` is the comparison a
     // boolean would invert, so it is the one worth asserting.
     assert!(s
         .eval::<bool>(r#"return UnitExists("target") == nil"#)
@@ -399,7 +399,7 @@ fn a_dead_unit_reports_dead_and_zero_health() {
     assert_eq!(s.eval::<i64>(r#"return UnitIsDead("target")"#).unwrap(), 1);
     assert_eq!(s.eval::<i64>(r#"return UnitHealth("target")"#).unwrap(), 0);
     // Name unknown (no name-query yet) → `UNKNOWNOBJECT`, never nil: the unit RESOLVED, and the
-    // reference pushes nil for a zero GUID only (decision 2002; the shape is pinned below). A bare
+    // reference pushes nil for a zero GUID only (the shape is pinned below). A bare
     // VM carries no GlobalStrings, so this is the binary's own literal.
     assert_eq!(
         s.eval::<String>(r#"return UnitName("target")"#).unwrap(),
@@ -412,7 +412,7 @@ fn a_dead_unit_reports_dead_and_zero_health() {
 /// `FrameScript_GetText("UNKNOWNOBJECT")` for a unit that resolved but whose name the cache has not
 /// answered (`0x517020`; `0x609324`). The stock stable window concatenates the answer on
 /// `UNIT_PET` (`PetStable.lua:129`), the instant a called pet's name is still in flight — the
-/// director's `attempt to concatenate a nil value` dialog (decision 2002).
+/// director's `attempt to concatenate a nil value` dialog.
 #[test]
 fn unitname_reads_unknownobject_for_a_resolved_unit_whose_name_is_in_flight() {
     let mut s = UiScript::new().unwrap();
@@ -483,7 +483,7 @@ fn power_bindings_read_the_active_type() {
     let mut s = UiScript::new().unwrap();
     s.set_unit("player", Some(player())); // rage 35/100
                                           // ONE value. The Era `(type, "RAGE")` pair does not exist in 5875 — `0x517940` pushes a
-                                          // number at every one of its four live `ret`s and never a string (decision 1840).
+                                          // number at every one of its four live `ret`s and never a string.
     assert_eq!(
         s.eval::<i64>(r#"return UnitPowerType("player")"#).unwrap(),
         1
@@ -657,7 +657,7 @@ fn unit_race_class_sex_report_the_snapshot_or_the_absent_shape() {
 
 /// `UnitFactionGroup` returns the (english, localized) pair the PvP-icon law reads, and `nil, nil`
 /// for a unit with no side — the state the reference's `if ( factionGroup and … )` gate exists
-/// for (decision 0646 §1). `TogglePVP` queues one toggle per call.
+/// for. `TogglePVP` queues one toggle per call.
 #[test]
 fn faction_group_pair_and_the_pvp_toggle() {
     let mut s = UiScript::new().unwrap();
@@ -730,7 +730,7 @@ fn faction_group_pair_and_the_pvp_toggle() {
     assert_eq!(s.take_pvp_toggles(), 0, "the drain empties the queue");
 }
 
-/// `UnitClassification` (decision 0782, byte-verified table `0x850424`): five words indexed by the
+/// `UnitClassification` (byte-verified table `0x850424`): five words indexed by the
 /// gated rank, a STRING for every input — including an absent token, which the binary answers
 /// `"normal"` for (its unresolved path loads index 0), never nil.
 #[test]
@@ -921,7 +921,7 @@ fn unit_is_charmed_answers_one_or_nil_and_only_for_the_charmed_side() {
     );
 }
 
-/// **`UnitIsPlusMob` reads a FLAG BIT, not the creature rank** (B385; `0x516d40`).
+/// **`UnitIsPlusMob` reads a FLAG BIT, not the creature rank** (`0x516d40`).
 ///
 /// Decision 2209. The name says "elite" and its table neighbour `UnitClassification` answers off
 /// the gated rank, so the natural implementation is `rank > 0`. The binary's is not: it takes
@@ -1166,7 +1166,7 @@ fn an_unrecognised_unit_token_raises_and_a_recognised_empty_one_does_not() {
     // `Usage: UnitName("unit")` (`0x850ee0`); `luaL_error` does not return. The comment this
     // replaces said the per-binding gates were "not uniform … only two poles verified", which was
     // true when it was written — all 83 entries of the table at `0x850438` gate and raise in 53
-    // cases, and only 13 unit-token bindings are quiet. Decision 1834.
+    // cases, and only 13 unit-token bindings are quiet.
     assert!(s.run("UnitName()").is_err(), "absent argument raises");
     assert!(s.run("UnitName(nil)").is_err(), "nil argument raises");
     // A NUMBER passes the gate — `lua_isstring` admits tag 3 — and is handed to the resolver as
@@ -1516,7 +1516,7 @@ fn unit_is_party_leader_ors_two_legs_and_answers_one_when_solo() {
 /// `UnitHasRelicSlot` — the number 1 or nil, per token, never a boolean.
 ///
 /// This shipped **absent** for months on the belief that the relic slot post-dates 1.12, which is
-/// false (decision 1796). Stock `PaperDollFrame.lua` calls it unconditionally at l.429 and l.580,
+/// false. Stock `PaperDollFrame.lua` calls it unconditionally at l.429 and l.580,
 /// so while it was missing the character sheet raised `attempt to call global` for every class —
 /// which is why the nil-global case is asserted here too, not just the answer.
 #[test]
@@ -2107,7 +2107,7 @@ fn the_player_record_outlives_every_snapshot() {
     );
 }
 
-/// **The unset record's four answers, which are not uniform** (decision 2263).
+/// **The unset record's four answers, which are not uniform**.
 ///
 /// The state is "no Enter World has been committed in this process" — unreachable from Lua in the
 /// reference, because the four verbs only exist inside `UI_Init`'s table and only an Enter World

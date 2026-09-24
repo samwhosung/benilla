@@ -2,7 +2,7 @@
 //! 0112, the engine's last structural gap): `SetScrollChild`/`GetScrollChild`, the two scroll
 //! offsets (`Set`/`GetVerticalScroll`, `Set`/`GetHorizontalScroll`), and the live ranges
 //! (`Get{Vertical,Horizontal}ScrollRange`/`UpdateScrollChildRect`). The offset setters and the
-//! ranges are byte-pinned (decisions 1338, 2017): `0x786db0` stores the offset VERBATIM — the
+//! ranges are byte-pinned: `0x786db0` stores the offset VERBATIM — the
 //! engine never clamps it — and `0x786e30` measures both ranges off the scroll child's subtree. The
 //! rest is spec-faithful to the documented widget contract (the Era `ScrollFrameTemplate` Lua
 //! drives its scrollbar off exactly these), same posture as StatusBar's fill.
@@ -255,14 +255,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // re-lays the child out and fires OnVerticalScroll(self, offset) — the scrollbar's
     // OnValueChanged wiring's other half.
     //
-    // **No clamp** (decision 2017). The reference's `0x786db0` compares the new value against the
+    // **No clamp**. The reference's `0x786db0` compares the new value against the
     // OLD one alone (an epsilon change-gate: unchanged → nothing happens, not even the script),
     // writes it to `[+0x328]`, re-anchors the scroll child off it (`0x787100` →
     // `SetPoint(child, self, hScroll, vScroll)`) and fires the handler. `[+0x320]` — the range —
     // is never read on this path. Every clamp the reference exhibits is FrameXML's own, through
     // the scroll bar's `[min, max]` (`ScrollFrameTemplate_OnMouseWheel`,
     // `ScrollFrame_OnScrollRangeChanged`). The clamp this carried from 07-05 (a3fce6a76) to 2017
-    // cost every faux list whose frame is taller than `rows × step` its last rows (B370): the
+    // cost every faux list whose frame is taller than `rows × step` its last rows: the
     // reference's `FauxScrollFrame_Update` drives the bar to `(n − rows) × step`, which is past
     // `n × step − frameHeight` whenever the frame has slack under its last row.
     m.set(

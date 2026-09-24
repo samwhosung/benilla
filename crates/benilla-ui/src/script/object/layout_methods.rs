@@ -45,7 +45,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         // pinning the gate open — the same absorption the fingerprint gives, paid once at
         // the write instead of per-frame over the whole model.
         //
-        // **And it NAMES its node** (decision 2114, completing 1625's migration). Dropping
+        // **And it NAMES its node** (completing 1625's migration). Dropping
         // every anchor is a retarget whose NEW target list is empty, and both lists are right
         // here — so the cached graph's edges get unlinked instead of thrown away. Left on the
         // conservative touch, this was the one recurring `[layout-derive]` site in a live
@@ -104,7 +104,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     // GetNumPoints() → how many anchors this frame carries. On the Region map (`0x87c9b8`), so
     // every widget answers it — the region twin shipped first and noted this side was missing;
-    // collapsing the map to one implementation each (decision 1501) is what made the gap fatal
+    // collapsing the map to one implementation each is what made the gap fatal
     // rather than merely absent, and this is the arm it was missing.
     set_shared(lua, m, Side::Frame, "GetNumPoints", |lua, this: Table| {
         let h = frame_handle_of(lua, &this)?;
@@ -163,7 +163,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let changed = input.width.to_bits() != w.to_bits();
             input.width = w;
             if changed {
-                // A size write moves no edge and no roster membership (decision 1388).
+                // A size write moves no edge and no roster membership.
                 model.touch_layout_frame(h);
             }
             model.note_authored_size(h);
@@ -226,7 +226,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // GetEffectiveScale() — the frame's real effective scale (parentScale · ownScale, the arena's
     // propagated product). The ROOT factor is 1, and that is not because benilla lacks a `uiScale`
     // CVar (it has one, `cvars.rs`, default 0.9): the dial is applied at the RASTER seam — it sets
-    // how many UI units tall the virtual screen is, `768/uiScale` (`ui_script::seam_scale`, 0584) —
+    // how many UI units tall the virtual screen is, `768/uiScale` (`ui_script::seam_scale`) —
     // rather than as a scale on UIParent. So every coordinate the VM hands Lua is already in those
     // units, `GetCursorPosition()` included, and the reference's
     // `GetCursorPosition()/GetEffectiveScale()` transcriptions convert screen→local correctly with
@@ -369,11 +369,11 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
             .iter()
             .any(|a| a.point == point);
     if !same_at_tail {
-        // Value-only unless the target moved (decision 1388) — the per-frame `SetPoint` idiom
+        // Value-only unless the target moved — the per-frame `SetPoint` idiom
         // (a dragged window, a moving spark) re-points the SAME anchor at the SAME target with new
         // offsets, so it names its node and the cached graph survives the frame.
         //
-        // A retarget names its node too now (decision 1625): the edge set is not derivable from a
+        // A retarget names its node too now: the edge set is not derivable from a
         // per-node hash, but it IS derivable from the anchors, and both lists are right here. The
         // target lists are collected only on the structural path — the value-only one is the hot
         // idiom and must stay allocation-free.
@@ -399,7 +399,7 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
 
 /// Would this `SetPoint` change the node's set of anchor TARGETS — i.e. is it structural?
 ///
-/// The layout scope's reverse edges are built from `Anchor::relative_to` (decision 1350): "this
+/// The layout scope's reverse edges are built from `Anchor::relative_to`: "this
 /// node reads that node's rect". An anchor whose OFFSETS moved is a value change — the node
 /// re-solves and nothing else does, which is exactly what a precise touch claims. An anchor whose
 /// TARGET moved is not: an edge has to disappear and another to appear, and no per-node hash can

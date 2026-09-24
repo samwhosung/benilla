@@ -367,7 +367,7 @@ fn broken_instance_hover_renders_zero_durability() {
     );
 }
 
-/// The **enchant lines** (law line 17, decision 0915) — the director's report: an axe carrying
+/// The **enchant lines** (law line 17) — the director's report: an axe carrying
 /// Enchant Weapon - Agility showed its green glow in the world and said nothing in the tooltip.
 ///
 /// Three claims at once: the line renders from the instance's resolved enchant text, it sits
@@ -451,7 +451,7 @@ fn an_enchanted_instance_renders_its_enchant_line_before_durability() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **enchant colour bands** (`0x52ca29`, decision 0920). The colour is per SLOT, not per
+/// The **enchant colour bands** (`0x52ca29`). The colour is per SLOT, not per
 /// family: only slots 0 (permanent) and 1 (temporary) are ever coloured — green for a positive id,
 /// the tooltip's OTHER red (`0xc0d398 = ffff0000`, distinct from the requirement lines' `ffff2020`)
 /// for a negative one — and the random-property slots 2..6 are always white whatever the sign. Our
@@ -615,7 +615,7 @@ fn temporary_enchant_line_carries_its_countdown_and_charges() {
     );
 }
 
-/// **The loot hover shows the ROLL, never the placeholder** (decision 1547). `SetLootItem 0x533470`
+/// **The loot hover shows the ROLL, never the placeholder**. `SetLootItem 0x533470`
 /// writes an instance block (p6=1) whose `+0x424` is the wire's randomPropertyId and whose seven
 /// enchant slots are zeroed, and passes an all-zero item GUID — so there is never an object, the
 /// builder takes the suffix-row copy (`0x52b7e0`) into slots 2..6, and the `ITEM_RANDOM_ENCHANT`

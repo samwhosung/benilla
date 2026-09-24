@@ -211,7 +211,7 @@ impl UiScript {
 
     /// Push one submitted line into the named box's recall history — the ref's
     /// `ChatEdit_AddHistory` slot (the canonical slash line, added by the app's router AFTER it
-    /// parses the send; decision 0301). By name, not focus: the submit pipeline is asynchronous,
+    /// parses the send). By name, not focus: the submit pipeline is asynchronous,
     /// so by the time the router runs, the box has already cleared and dropped focus. Returns
     /// `false` when `box_name` names no live EditBox.
     pub fn editbox_add_history(&mut self, box_name: &str, line: &str) -> bool {

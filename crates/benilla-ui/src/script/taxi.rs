@@ -1,4 +1,4 @@
-//! The taxi-map bindings (decision 0484) — the Era-shaped flight-master surface driving a faithful
+//! The taxi-map bindings — the Era-shaped flight-master surface driving a faithful
 //! port of the real 1.12 `TaxiFrame` (extracted from the patch chain:
 //! `Interface\FrameXML\TaxiFrame.{xml,lua}`). Same two-way seam as [`super::trainer`]: the app
 //! pushes a **taxi snapshot** ([`UiScript::set_taxi`] — the known-node mask, DBC positions, route
@@ -241,7 +241,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `UnitOnTaxi(unit)` (`0x517a40`) → **the number 1 or nil**, never a Lua boolean — the unit
-    // predicate family's one return shape (decisions 1830, 2043; the push law is
+    // predicate family's one return shape (the push law is
     // `crate::script::binding_abi::flag`). It lives here rather than beside its 22 siblings
     // because the ride flag it reads is this module's, not `UnitState`'s — which is exactly how it
     // came to be the one predicate still answering a `bool` after the family was fixed.

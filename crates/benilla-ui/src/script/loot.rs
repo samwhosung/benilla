@@ -1,4 +1,4 @@
-//! The loot bindings (decision 0084) — the Era-shaped loot-window surface, the same two-way seam as
+//! The loot bindings — the Era-shaped loot-window surface, the same two-way seam as
 //! [`super::merchant`]/[`super::container`]/[`super::gossip`]: the app pushes a **loot snapshot**
 //! ([`UiScript::set_loot`] — the rows already resolved from the wire to name/icon/quantity/quality by
 //! the app's item stores, with the synthesized coin row first) and the Lua `LootSlot`/`CloseLoot`
@@ -12,11 +12,11 @@
 //! extracted `LootFrame.lua`, scratchpad): `GetNumLootItems()`, `GetLootSlotInfo(slot)` →
 //! `texture, item, quantity, quality` (`LootFrame.lua:81`), `LootSlotIsItem(slot)` /
 //! `LootSlotIsCoin(slot)` (`LootFrame.lua:80`), `GetLootSlotLink(slot)` → the row's item link (what
-//! the row click's ctrl/shift arms read, `LootFrame.lua:149`/`:152` — decision 1059),
+//! the row click's ctrl/shift arms read, `LootFrame.lua:149`/`:152`),
 //! and `CloseLoot()` (fired from `OnHide`, `LootFrame.lua:143-145`). `slot` is **1-based**; an
 //! out-of-range slot answers `nil`.
 //!
-//! ## The take is TWO verbs, not one (decision 1744)
+//! ## The take is TWO verbs, not one
 //!
 //! `LootSlot(slot)` looks like "loot row n" and is not: in 1.12 it is the **LOOT_BIND confirmation
 //! continuation** alone. The C dispatcher `0x4c2790(slot, flag)` takes the row only on `flag == 0`,
@@ -34,7 +34,7 @@
 //! *not* the 1-based display position once a coin row is prepended or a row is removed) — the Lua side
 //! never sees the wire slot, exactly as the merchant's Lua side never sees the item entry.
 //!
-//! ## Master loot (decision 1675)
+//! ## Master loot
 //!
 //! Two more globals ride the same seam when the group's loot method is master loot:
 //! `GetMasterLootCandidate(index)` reads [`LootState::master_candidates`] (names, 1-based, dense)
@@ -61,7 +61,7 @@ pub(super) const REG_LOOTBUTTON_METHODS: &str = "__benilla_lootbutton_methods";
 /// index `-1` exists *for this value*. `LootFrame_Update` indexes the table with the raw return and
 /// no guard — `color = ITEM_QUALITY_COLORS[quality]` (`LootFrame.lua:82`), dereferenced one line
 /// later at `color.r` (`:85`) — so a nil here is a Lua runtime error on every loot opened before
-/// its templates arrive, which is every loot on a cold item cache (decision 1805).
+/// its templates arrive, which is every loot on a cold item cache.
 const CACHE_MISS_QUALITY: i64 = -1;
 
 /// The row text on that same miss. The reference composes every loot row's name through `0x5d8b00`,
@@ -87,7 +87,7 @@ const MISSING_ICON: &str = "Interface\\Icons\\INV_Misc_QuestionMark";
 /// (`0x55ba3d`/`0x55ba42`) — a guaranteed cache miss, so it takes the `-1` arm at `0x4c2435`.
 const NO_SLOT_QUALITY: i64 = 0;
 
-/// One loot-window row, resolved by the app (decision 0084). Plain data — its 1-based order in the
+/// One loot-window row, resolved by the app. Plain data — its 1-based order in the
 /// window is its position in [`LootState::rows`]; the coin row (when present) is always position 1.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LootRow {
@@ -105,7 +105,7 @@ pub struct LootRow {
     /// Item quality 0..6, for the quality-coloured row text; `None` while the template is in flight,
     /// which the API reports as [`CACHE_MISS_QUALITY`] (`-1`, the reference's cache-miss sentinel and
     /// a real row of `ITEM_QUALITY_COLORS`) — never a nil, which is what raised in the stock
-    /// `LootFrame_Update` (decision 1805). The coin row carries a fixed quality.
+    /// `LootFrame_Update`. The coin row carries a fixed quality.
     pub quality: Option<u32>,
     /// Whether this is the synthesized coin pile (`LootSlotIsCoin` true, `LootSlotIsItem` false).
     pub is_coin: bool,
@@ -113,7 +113,7 @@ pub struct LootRow {
     /// row. A benilla extension riding as a TRAILING return of `GetLootSlotInfo` (the era 4-tuple
     /// never carried it; tooltip content was C++'s alone), same idiom as the quest item getters.
     pub item_id: u32,
-    /// The row's full escaped `|cff…|Hitem:…|h[Name]|h|r` link (`GetLootSlotLink`, decision 1059).
+    /// The row's full escaped `|cff…|Hitem:…|h[Name]|h|r` link (`GetLootSlotLink`).
     /// `None` for the synthesized coin row (there is no item to link) and while the ask-once
     /// template answer is in flight — the link embeds the name, so it cannot exist before `name`
     /// does; the same `Option` shape [`super::char_stats::InvSlotView::link`] carries. Both arms of
@@ -122,7 +122,7 @@ pub struct LootRow {
     /// ([`super::editbox`]) so the other drops it silently.
     pub link: Option<String>,
     /// The wire's `randomPropertyId` — the drop's **random-suffix roll**, the id the tooltip
-    /// resolves against [`super::Model::random_properties`] for its enchant lines (decision 1547).
+    /// resolves against [`super::Model::random_properties`] for its enchant lines.
     /// `0` = unrolled.
     ///
     /// The client keeps exactly this, at `+0x14` of its own 0x1c-byte loot record, and
@@ -144,11 +144,11 @@ pub struct LootState {
     /// instead of collapsing the rows below it upward.
     pub rows: Vec<Option<LootRow>>,
     /// Whether this loot came from fishing (`IsFishingLoot()` — the wire `SMSG_LOOT_RESPONSE`
-    /// `loot_type == 3`, decision 1086). `LootFrame_OnShow` keys the "FISHING REEL IN" sound and
+    /// `loot_type == 3`). `LootFrame_OnShow` keys the "FISHING REEL IN" sound and
     /// the FishingLoot portrait overlay on it (`LootFrame.lua:137-140`).
     pub fishing: bool,
     /// The master-loot candidate slots — what `GetMasterLootCandidate(i)` answers for a 1-based
-    /// `i` (decision 1675). Empty unless the group's loot method is master loot and the server
+    /// `i`. Empty unless the group's loot method is master loot and the server
     /// sent `SMSG_LOOT_MASTER_LIST` for this window.
     ///
     /// **A `None` is a real slot that answers nil**, not padding, and the list is deliberately
@@ -173,7 +173,7 @@ impl super::UiScript {
 
     /// Drain the 1-based row indices queued by `BenillaTakeLootSlot` since the last call — the ROW
     /// CLICK's take. The app maps each to either the coin (money) intent or the item's wire loot
-    /// slot, and applies the bind-on-pickup deferral (decision 1744).
+    /// slot, and applies the bind-on-pickup deferral.
     pub fn take_loot_picks(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().loot_picks)
     }
@@ -193,7 +193,7 @@ impl super::UiScript {
 
     /// Drain the `GiveMasterLoot(slot, candidateIndex)` assignments queued since the last call —
     /// both 1-based display numbers. The app resolves the row to its wire slot and the candidate
-    /// to a guid, then sends `CMSG_LOOT_MASTER_GIVE` (decision 1675).
+    /// to a guid, then sends `CMSG_LOOT_MASTER_GIVE`.
     pub fn take_loot_master_gives(&mut self) -> Vec<(u32, u32)> {
         std::mem::take(&mut self.model_mut().loot_master_gives)
     }
@@ -217,7 +217,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetLootSlotInfo(slot) → texture, item, quantity, quality — the reference's four, in its order
     // (`0x4c2c60`, `mov eax,4` at `0x4c2d07`; `LootFrame.lua:81`). `slot` is 1-based.
     //
-    // **It answers four values on every leg — never three, never a bare nil** (decision 1805).
+    // **It answers four values on every leg — never three, never a bare nil**.
     // A slot with no item at all (past the end, slot 0, no window) is `nil, "", 0, 0`; a CLEARED
     // slot is `nil, "", 0, -1`, because its record survives with a zeroed itemId and that is a
     // guaranteed item-cache miss.
@@ -285,7 +285,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // it for BOTH modifier arms — `DressUpItemLink(GetLootSlotLink(this.slot))` (`LootFrame.lua:149`)
     // and `ChatFrameEditBox:Insert(GetLootSlotLink(this.slot))` (`:152`). Since 1751 put the stock
     // file on the chain both of those are the live call sites — our own `BenillaChatEdit_InsertLink`
-    // detour is not on this path any more — and both survive the nil on their own. Decision 1059.
+    // detour is not on this path any more — and both survive the nil on their own.
     g.set(
         "GetLootSlotLink",
         lua.create_function(|lua, slot: usize| {
@@ -331,7 +331,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // IsFishingLoot() → 1/nil, whether the open loot came from fishing (nil when none is open).
     // `LootFrame_OnShow` keys the reel-in sound + the fishing portrait overlay on it
-    // (`LootFrame.lua:137-140`; decision 1086).
+    // (`LootFrame.lua:137-140`).
     g.set(
         "IsFishingLoot",
         lua.create_function(|lua, ()| {
@@ -379,7 +379,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // BenillaTakeLootSlot(slot) — the ROW CLICK's take, queued as a 1-based display row; the app
     // maps it to the coin or the item's wire slot and applies the bind-on-pickup gate.
     //
-    // Why this is not `LootSlot`, and why the name is ours (decision 1744): in 1.12 the plain take
+    // Why this is not `LootSlot`, and why the name is ours: in 1.12 the plain take
     // is **not a Lua binding at all**. The dispatcher `0x4c2790(slot, flag)` has exactly two
     // callers — the C `CLootButton::OnClick 0x4c1820` with `flag = 0`, and the `LootSlot` binding
     // `0x4c2e70` with `flag = 1` — and only the `flag = 0` arm reaches the take. benilla has no
@@ -469,7 +469,7 @@ mod tests {
         LootState {
             master_candidates: Vec::new(),
             rows: vec![
-                // The coin pile, always first. No link: there is no item to link (decision 1059).
+                // The coin pile, always first. No link: there is no item to link.
                 Some(LootRow {
                     item_id: 0,
                     name: Some("1g 23s 45c".into()),
@@ -535,7 +535,7 @@ mod tests {
             .unwrap();
         assert_eq!((name.as_str(), qty), ("Wool Cloth", 3));
 
-        // Row 3: in flight — the reference's cache-miss SENTINELS, not nils (decision 1805). The
+        // Row 3: in flight — the reference's cache-miss SENTINELS, not nils. The
         // quality is the load-bearing one: stock `LootFrame_Update` does
         // `ITEM_QUALITY_COLORS[quality].r` with no guard, and `-1` is a real row of that table
         // (`UIParent.lua` builds it `for i = -1, 6`) while a nil is a runtime error.
@@ -560,7 +560,7 @@ mod tests {
         s.set_loot(Some(loot()));
 
         // GetLootSlotLink: the resolved item's link, nil for the coin row and for the in-flight one
-        // (both arms of the reference's row click hand this straight on — decision 1059).
+        // (both arms of the reference's row click hand this straight on).
         assert_eq!(
             s.eval::<String>("return GetLootSlotLink(2)").unwrap(),
             "|cffffffff|Hitem:2589:0:0:0|h[Wool Cloth]|h|r"
@@ -569,7 +569,7 @@ mod tests {
         assert!(s.eval::<bool>("return GetLootSlotLink(3) == nil").unwrap());
 
         // IsFishingLoot: false on an ordinary loot, true when the snapshot says fishing, false
-        // again with no loot open (decision 1086).
+        // again with no loot open.
         assert!(s.eval::<bool>("return not IsFishingLoot()").unwrap());
         let mut fished = loot();
         fished.fishing = true;
@@ -599,7 +599,7 @@ mod tests {
         assert!(s.eval::<bool>("return LootSlotIsItem(2)").unwrap());
     }
 
-    /// The master-loot half of the seam (decision 1675). `GetMasterLootCandidate` must answer nil
+    /// The master-loot half of the seam. `GetMasterLootCandidate` must answer nil
     /// past the end rather than raise — `GroupLootDropDown_Initialize` probes it sparsely (the
     /// raid arm walks 1..40 in blocks of five) and reads the nil as "nobody here".
     #[test]
@@ -709,8 +709,7 @@ mod tests {
     }
 
     /// `LootSlot` is the confirmation continuation, so it rides its OWN queue — a client that let
-    /// it fall into the pick queue would loot any row an addon named, which the reference refuses
-    /// (decision 1744).
+    /// it fall into the pick queue would loot any row an addon named, which the reference refuses.
     #[test]
     fn loot_slot_queues_confirms_not_picks() {
         let mut s = UiScript::new().unwrap();
@@ -933,7 +932,7 @@ mod tests {
 
         // Never slotted → takes nothing, rather than silently taking row 1. `LB1` is still parked
         // under the cursor from the clicks above and, being linked first, would win the tie for the
-        // point (decision 1816) and take row 2 again — get it out of the way first.
+        // point and take row 2 again — get it out of the way first.
         s.run("LB1:Hide()").unwrap();
         s.run(r#"fresh = CreateFrame("LootButton", "LB2", UIParent)"#)
             .unwrap();

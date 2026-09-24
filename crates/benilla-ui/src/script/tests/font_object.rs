@@ -979,7 +979,7 @@ fn the_font_block_reaches_both_message_frame_tables() {
 }
 
 /// `CreateFontString`'s **third argument** applies a font object — the argument we accepted and
-/// then dropped on the floor (decision 1255).
+/// then dropped on the floor.
 ///
 /// 49 corpus call sites across 5 distinct addons pass one, and every one names a font object:
 /// AckisRecipeList (28), CustomNameplates (10), _LazyPig (6), LibAboutPanel (4), ColorPickerPlus.
@@ -1028,7 +1028,7 @@ fn create_font_string_applies_the_font_object_named_by_its_third_argument() {
         .expect("the two-argument form still works");
 }
 
-/// **`SetFont`'s nil is a LOAD failure, and only the host knows** (decision 2103).
+/// **`SetFont`'s nil is a LOAD failure, and only the host knows**.
 ///
 /// The reference answers the number 1 or nil (`0x79f345`/`0x79f361`), and the nil originates in
 /// the font factory at `0x5c1ae0` — a path that names no readable file. `!OmniCC/main.lua:41`
@@ -1081,8 +1081,7 @@ fn set_font_answers_the_hosts_load_verdict_when_there_is_a_host() {
 }
 
 /// **Mik's Scrolling Battle Text, end to end** — the exact sequence the addon runs per event,
-/// pinned because it is the shape a whole class of "the addon's font did not take" reports wears
-/// (decisions 2103, 2112).
+/// pinned because it is the shape a whole class of "the addon's font did not take" reports wears.
 ///
 /// MSBT's twenty scroll-area FontStrings are declared `inherits="MasterFont"` — the reference's
 /// root font object, which carries a `<Shadow>` and **nothing else**: no face, no height, no

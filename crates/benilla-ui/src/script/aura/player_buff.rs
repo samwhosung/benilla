@@ -85,7 +85,7 @@ fn buff_index_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Result<i64>
 }
 
 /// The player's display cache — the reference's `0xbc6040`, which for us **is** the pushed
-/// `"player"` list (decision 0257; `benilla::ui_aura` maintains the insertion order across frames).
+/// `"player"` list (`benilla::ui_aura` maintains the insertion order across frames).
 /// `pos` is a physical cache position, 0-based.
 ///
 /// Out of range is `None`, covering both of the reference's miss shapes: `0x4e4430` hands back NULL
@@ -220,7 +220,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // -1* `GetPlayerBuff` straight in and then compares `> 0`.
     //
     // The clock is the VM's own `GetTime()` session clock, the same one `expiration_time` is
-    // expressed on (decision 0257) — so this is a live subtraction per call, exactly as
+    // expressed on — so this is a live subtraction per call, exactly as
     // `ref-BuffFrame.lua:130` re-reads it every frame from `OnUpdate` rather than caching it on the
     // event.
     g.set(

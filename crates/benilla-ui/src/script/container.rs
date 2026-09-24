@@ -1,5 +1,5 @@
 //! The container bindings (decision 0068 T2) — the 1.12 bag verbs, every one of them a plain
-//! top-level global (decision 1198; measured on the corpus: `GetContainerItemLink`,
+//! top-level global (measured on the corpus: `GetContainerItemLink`,
 //! `GetContainerNumSlots` and `GetContainerItemInfo` are the three most-wanted engine verbs of
 //! all, and Bagnon's data engine is built on exactly these). Same two-way seam as
 //! [`super::action`]: the app pushes a **container snapshot** per bag id
@@ -68,7 +68,7 @@ pub struct ContainerSlot {
     /// Whether this item may be placed on an ACTION-BAR slot — app-resolved from the template
     /// exactly like [`Self::equip_slots`] (the engine holds no item knowledge of its own).
     /// `PlaceAction`'s only item filter, byte-read: an on-use spell OR equippable
-    /// (`ItemInfo::placeable_on_action_bar`, `PlaceAction 0x4e62e0` — decision 0666).
+    /// (`ItemInfo::placeable_on_action_bar`, `PlaceAction 0x4e62e0`).
     pub bar_placeable: bool,
     /// The instance's live durability `(current, max)` — `ITEM_FIELD_DURABILITY`/`MAXDURABILITY`
     /// off the streamed item object; `None` for indestructible items (max 0) or while the create
@@ -98,19 +98,19 @@ pub struct ContainerSlot {
     /// descriptor ([`crate::items::already_bound`] in benilla-app — the same predicate the enchant
     /// cursor's bind question asks), because the binding half needs a DBC join and the engine
     /// holds no item knowledge of its own. The tooltip's bind line overrides to **Soulbound**
-    /// on it (B310); `false` on any source with no streamed item object.
+    /// on it; `false` on any source with no streamed item object.
     pub already_bound: bool,
     /// The instance's enchant slots, resolved by the app ([`super::EnchantView`]) and in
     /// enchant-slot order: it joins the id through `SpellItemEnchantment.dbc`'s name column and
     /// hands over the row's name plus the three facts the line law needs to place and paint it.
-    /// Empty = unenchanted, or the enchant DBC never loaded. Decisions 0915/0920.
+    /// Empty = unenchanted, or the enchant DBC never loaded.
     pub enchants: Vec<super::EnchantView>,
     /// **The instance's remaining LIFETIME in milliseconds** — a duration-limited item counting
     /// down to its own destruction (a conjured stone, a holiday gift, a timed quest item). Its
     /// only feed is `SMSG_ITEM_TIME_UPDATE`, parked as an absolute deadline and recomputed on
     /// read ([`crate::items::Countdowns::lifetime_remaining_display_ms`] in benilla-app), floored to
     /// the whole second so the snapshot moves once a second rather than every frame.
-    /// `None` = no timer, which is nearly every item. Decision 1933.
+    /// `None` = no timer, which is nearly every item.
     pub duration_ms: Option<u64>,
     /// The petition this item names, when it is a signable charter — **line 3 of the tooltip's
     /// emission law**, between the NAME and the green `ITEM_SIGNABLE` line.
@@ -122,7 +122,7 @@ pub struct ContainerSlot {
     pub petition: Option<PetitionSlotView>,
 }
 
-/// One enchant slot as the tooltip renders it (`0x52c9f9`–`0x52ca23`; decision 0920). The app
+/// One enchant slot as the tooltip renders it (`0x52c9f9`–`0x52ca23`). The app
 /// resolves the DBC row; every rule below is the engine's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EnchantView {
@@ -144,7 +144,7 @@ pub struct EnchantView {
 }
 
 /// One `ItemRandomProperties` row as the engine renders it — the **random-suffix roll** a dropped,
-/// linked, auctioned or mailed item carries (decision 1547). The app resolves the DBC (both of
+/// linked, auctioned or mailed item carries. The app resolves the DBC (both of
 /// them: the roll's table and the `SpellItemEnchantment` names its five ids land on) and pushes the
 /// whole table once at load; a tooltip source supplies only the id, exactly as in the reference.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -237,7 +237,7 @@ impl super::UiScript {
     }
 
     /// Push the app's answer to `HasKey()` — whether the player owns any `BagFamily` KEYS item
-    /// anywhere the reference's own search reaches. The keyring UI's one gate (decision 0765).
+    /// anywhere the reference's own search reaches. The keyring UI's one gate.
     pub fn set_has_key(&mut self, has_key: bool) {
         self.model_mut().has_key = has_key;
     }
@@ -276,7 +276,7 @@ impl super::UiScript {
     /// Three acts, exactly the three `0x5edea0` performs: the paper's slot reads **locked**, the
     /// displayed cursor becomes **mode 2** (`Interface\Cursor\Cast.blp` — the same art the cast
     /// cursor uses, table `0x853b88` slot 2), and **nothing goes on the wire**. What completes it
-    /// is the next left-click on a container slot. Decision 1934.
+    /// is the next left-click on a container slot.
     pub fn arm_gift_wrap(&mut self, bag: i64, slot: u32) {
         let mut model = self.model_mut();
         model.pending_wrap = Some(PendingWrap { bag, slot });
@@ -312,7 +312,7 @@ impl super::UiScript {
 
     /// The mode the last FrameXML cursor call armed — `None` after a `ResetCursor`. This is the
     /// *value* of the most recent write; whether a write happened at all is
-    /// [`Self::take_cursor_write`], and that is what the app acts on (decision 1061).
+    /// [`Self::take_cursor_write`], and that is what the app acts on.
     pub fn ui_cursor(&self) -> Option<UiCursorMode> {
         self.model_ref().ui_cursor
     }
@@ -324,7 +324,7 @@ impl super::UiScript {
     /// The three-state return is the point. A UI element with no cursor handler must leave the
     /// cursor exactly as it was — that is how an armed spell keeps its cast cursor while the mouse
     /// crosses a spellbook button, and reading a two-state latch instead is what made it snap to
-    /// Point (decision 1061).
+    /// Point.
     #[allow(clippy::option_option)]
     pub fn take_cursor_write(&mut self) -> Option<Option<UiCursorMode>> {
         let mut model = self.model_mut();
@@ -369,7 +369,7 @@ pub enum UiCursorMode {
     CastError,
 }
 
-/// The pick/place/swap gesture behind `PickupContainerItem` (decision 0216 §2, amended by 0218;
+/// The pick/place/swap gesture behind `PickupContainerItem` (amended by 0218;
 /// unit-testable without Lua). Mirrors the real client's single entry point:
 /// - an empty cursor over a resolved, UNLOCKED slot picks it up (a locked slot refuses — the real
 ///   client's refusal; today only the app's `locked` flag drives this, the engine's own
@@ -380,7 +380,7 @@ pub enum UiCursorMode {
 ///   lands where the held one came from) all alike. The displaced item never hops onto the
 ///   cursor: 0216 §2 shipped that exchange off 0091's gloss; the director's eye caught it and
 ///   the bytes refuted it — no `SetCursorItem` on the place branch
-///   (`0x5e0c40`/`0x4f9b30`), `ClearCursor(0)`, one put-down sound (decision 0218). Bag
+///   (`0x5e0c40`/`0x4f9b30`), `ClearCursor(0)`, one put-down sound. Bag
 ///   placements are server-authoritative; only the ACTION bar
 ///   hops its displaced payload (client-authoritative — the slice-4 note in 0218).
 /// - holding a SPLIT carry (`count: Some(n)`), a click onto an empty/unresolved/same-item
@@ -390,7 +390,7 @@ pub enum UiCursorMode {
 ///
 /// Returns whether the caller should repaint (the source-slot lock or the held payload changed).
 fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool {
-    // **The gift-wrap completion, ahead of the whole gesture** (decision 1934). `0x4f9b30` is the
+    // **The gift-wrap completion, ahead of the whole gesture**. `0x4f9b30` is the
     // *only* entry to the wrap sender `0x5edfc0` image-wide — which is why the paper doll cannot
     // finish a wrap and an equipped item is therefore unwrappable — and it takes this branch
     // before it looks at the cursor at all.
@@ -421,7 +421,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
         // No eligibility test of any kind. The wrap arm reads each item's `ITEM_FIELD_CONTAINED`
         // and nothing else — not flags, not stack count, not bind state — and the client ships six
         // `ERR_CANT_WRAP_*` strings for the server to answer with (`SMSG_INVENTORY_CHANGE_FAILURE`
-        // reasons 43-48). Same law as the openable click (decision 0896): gating locally would eat
+        // reasons 43-48). Same law as the openable click: gating locally would eat
         // the click in silence and cost the player their error line.
         model.pending_wrap = None;
         model.container_wraps.push((wrap.bag, wrap.slot, bag, slot));
@@ -486,7 +486,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
                 // carry's count through to the wire (a split placement or a merge the server
                 // tops up); a whole-stack place onto a different item is the plain SWAP — the
                 // displaced item lands where the held one came from, and the cursor empties
-                // (decision 0218, the director's eye over 0216 §2's hop).
+                // (the director's eye over 0216 §2's hop).
                 (count, _) => {
                     queue_move(model, &held, bag, slot, count);
                     cursor::queue_cursor_update(model);
@@ -525,7 +525,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
             | CursorPayload::Action(_)
             | CursorPayload::Macro(_)
             | CursorPayload::PetAction(_)
-            // Mode 10 (decision 1677) — a stabled pet refuses a bag/doll slot exactly as the
+            // Mode 10 — a stabled pet refuses a bag/doll slot exactly as the
             // spell/action family does, and stays on the cursor for the stable window to take.
             | CursorPayload::StablePet(_)
             // Mode 2 (1962) — coins have no slot to land in; a money frame's DropFunc takes them.
@@ -554,8 +554,8 @@ fn queue_move(
     });
 }
 
-/// Register the container verbs — **top-level globals, because that is where 1.12 puts them**
-/// (decision 1198). Every name below is `function engine` in `reference/1.12-globals.tsv` as a
+/// Register the container verbs — **top-level globals, because that is where 1.12 puts them**.
+/// Every name below is `function engine` in `reference/1.12-globals.tsv` as a
 /// bare global: `GetContainerNumSlots`, never `C_Container.GetContainerNumSlots`. The
 /// `C_Container` namespace 1187 reached for while chasing an Era addon is a *Dragonflight*
 /// reorganisation, and an addon that feature-detects it concludes it is on Dragonflight.
@@ -725,7 +725,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `GetContainerItemInfo(bag, slot)` → **`texture, itemCount, locked, quality, readable`**
-    // — the 1.12 shape, five values (decision 1199).
+    // — the 1.12 shape, five values.
     //
     // It used to return a single 1.14-shaped `containerInfo` TABLE, inherited from decision 1187's
     // reach for the Classic Era surface. That was wrong in a way neither instrument could see:
@@ -760,7 +760,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 ) ||
                 // An armed gift wrap locks its paper for as long as it stands (`0x4953e0` at
                 // `0x5edeb5`) — the same dimming a held item's source slot shows, and released by
-                // the send or by any cancel rather than by the server (decision 1934).
+                // the send or by any cancel rather than by the server.
                     matches!(
                         &model.pending_wrap,
                         Some(w) if w.bag == bag && w.slot == slot
@@ -1015,7 +1015,7 @@ mod tests {
         }
     }
 
-    /// **The gift-wrap state machine** (decision 1934), all four of its edges. Armed by the app's
+    /// **The gift-wrap state machine**, all four of its edges. Armed by the app's
     /// right-click on a wrapper, the arm locks the paper and paints cursor mode 2 and sends
     /// nothing; the next LEFT-click on a container slot spends it; an empty slot bails and leaves
     /// it armed; and any `ClearCursor` cancels it.
@@ -1059,7 +1059,7 @@ mod tests {
 
     /// Any `ClearCursor` cancels an armed wrap — the reference tests it FIRST inside
     /// `ClearCursor 0x495190` and does so ungated by either parameter, so all 70 of its call
-    /// sites cancel (decision 1934).
+    /// sites cancel.
     #[test]
     fn clear_cursor_cancels_an_armed_gift_wrap() {
         let mut s = UiScript::new().unwrap();
@@ -1095,7 +1095,7 @@ mod tests {
             s.eval::<String>("return GetBagName(0)").unwrap(),
             "Backpack"
         );
-        // The 1.12 five-value shape (decision 1199): texture, itemCount, locked, quality,
+        // The 1.12 five-value shape: texture, itemCount, locked, quality,
         // readable — the names `ContainerFrame.lua:241` destructures into, in its order.
         let (icon, count, quality) = s
             .eval::<(String, i64, i64)>(
@@ -1125,7 +1125,7 @@ mod tests {
 
         // **The in-flight slot**: an entry exists but its template has not landed, so texture and
         // quality are nil while itemCount is real. This is the state that made the five-value
-        // shape's occupancy test subtle (decision 1199) — the reference's own `if texture then`
+        // shape's occupancy test subtle — the reference's own `if texture then`
         // would read this as empty, which is why our own FrameXML tests `texture or itemCount`.
         assert!(s
             .eval::<bool>(
@@ -1206,7 +1206,7 @@ mod tests {
     }
 
     /// The sibling of the test above onto an OCCUPIED, DIFFERENT-item slot: the plain SWAP
-    /// (decision 0218, superseding 0216 §2's hop — byte-verified: no `SetCursorItem` on the place
+    /// (superseding 0216 §2's hop — byte-verified: no `SetCursorItem` on the place
     /// branch; the wire swaps and the cursor empties, exactly like an empty destination). The
     /// displaced item never lands on the cursor.
     #[test]

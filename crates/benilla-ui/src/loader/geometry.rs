@@ -12,7 +12,7 @@ impl Loader<'_> {
         if el.attr_bool("hidden") {
             self.call(wrapper, "Hide", (), dbg);
         }
-        // **An unrecognised `frameStrata=` WARNS and skips; it does not raise** (decision 2160).
+        // **An unrecognised `frameStrata=` WARNS and skips; it does not raise**.
         //
         // The two doors are genuinely different in the reference and this is the one that is
         // quiet. `CSimpleFrame::LoadXML 0x769820` resolves the name through `0x6f17d0`, whose miss
@@ -62,7 +62,7 @@ impl Loader<'_> {
         // attribute of its own is unconfirmed; a plain frame's `scale=` is left as it was.
 
         // `file=` on a model pane is `SetModel` (`CSimpleModel::LoadXML` `0x76cac0` installs the
-        // file into the widget, resident or streaming — decision 2013). Until 2013 no XML-declared
+        // file into the widget, resident or streaming). Until 2013 no XML-declared
         // pane ever held a file: the loader read `file=` only to turn the cooldown indicator's
         // pane into a native widget of ours (retired by 2019), and the pings, the shine and the
         // item card were bare panes to the engine.
@@ -89,7 +89,7 @@ impl Loader<'_> {
         // here (`76cbbb`-`76cbd2` / `76cbf3`-`76cc0a`: `0.0 fcomp value ; jne store ; else store
         // 0.0`) — the Lua setters store raw. The `<FogColor>` child writes the packed colour AND
         // arms the fog bit, so it is `SetFogColor` in every respect; nothing in XML touches the
-        // light. Decision 2027.
+        // light.
         if model_kind {
             for (attr, verb) in [("fogNear", "SetFogNear"), ("fogFar", "SetFogFar")] {
                 if let Some(v) = el.attr(attr).and_then(|v| v.trim().parse::<f32>().ok()) {

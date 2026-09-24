@@ -130,10 +130,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     // (`script::tooltip::cursor_anchor`).
                     //
                     // Dropping every anchor is a retarget to the EMPTY target set, and it names
-                    // its node like any other (decision 1625). It matters here more than
+                    // its node like any other. It matters here more than
                     // anywhere: left on the conservative touch, this line was a whole-graph
                     // derivation on every action button the cursor crossed and on nothing else —
-                    // exactly the shape the director's recorder reported (decision 1630).
+                    // exactly the shape the director's recorder reported.
                     if matches!(anchor, TooltipAnchor::Cursor | TooltipAnchor::None) {
                         let dropped = match model.layout_inputs.get_mut(&h) {
                             Some(input) if !input.anchors.is_empty() => {
@@ -159,7 +159,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                             // The plate re-points at the button under the cursor, which moves
                             // an EDGE — structural under 1388, and therefore a whole-graph
                             // derivation on every bag slot and every spellbook button a hover
-                            // sweep crossed. It names its node now (decision 1625): the old
+                            // sweep crossed. It names its node now: the old
                             // and new target lists are both right here, so the cached graph's
                             // edges are re-pointed instead of thrown away.
                             let old_targets: Vec<u32> =
@@ -509,8 +509,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // The spell/aura/action content channels (SetSpell/SetShapeshift/SetPlayerBuff/SetAction) —
     // the verified spell-builder law (decision 0274 P2, grounded by 0276).
     crate::script::tooltip_spell::install_methods(lua, &m)?;
-    // The talent channel (SetTalent) — the spell builder with the talent interleave
-    // (decision 0304).
+    // The talent channel (SetTalent) — the spell builder with the talent interleave.
     crate::script::talent::install_tooltip_method(lua, &m)?;
     // The unit content channel (SetUnit + the world-mouseover drivers) — the verified unit law
     // (decision 0274 P3, grounded by 0276).

@@ -328,8 +328,8 @@ fn the_hover_re_enter_loop_neither_re_measures_nor_re_solves() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// Tier 1 of the gate (decision 0740): the mutation epoch. **Any CONVERGED resolve closes it**
-/// (decision 1385) — the fingerprint is hashed over inputs alone, so a solve cannot outgrow the
+/// Tier 1 of the gate: the mutation epoch. **Any CONVERGED resolve closes it**
+/// — the fingerprint is hashed over inputs alone, so a solve cannot outgrow the
 /// value it stores — and from then on a quiet frame skips at a `u64` compare without computing
 /// the fingerprint at all.
 fn tier_one_closed(s: &UiScript) -> bool {
@@ -337,7 +337,7 @@ fn tier_one_closed(s: &UiScript) -> bool {
     m.layout_epoch_resolved == Some(m.layout_epoch)
 }
 
-/// **The castbar law** (decision 1385, ledger B283): a region that MOVES every frame — the classic
+/// **The castbar law** (ledger B283): a region that MOVES every frame — the classic
 /// OnUpdate animation idiom, our own `CastingBarSpark:SetPoint`, and every addon that slides a
 /// texture — must cost exactly **one** let-through resolve per frame.
 ///
@@ -349,7 +349,7 @@ fn tier_one_closed(s: &UiScript) -> bool {
 ///
 /// This is the regression guard for that whole bug class. `solves` is the honest counter — a
 /// wasted walk that concludes "nothing moved" still costs the full preamble — so the assertion is
-/// on the count, never on a duration (0735: milliseconds are not evidence of a scope regression).
+/// on the count, never on a duration (milliseconds are not evidence of a scope regression).
 #[test]
 fn a_region_moving_every_frame_costs_exactly_one_solve_per_frame() {
     let mut s = script();
@@ -421,7 +421,7 @@ fn a_settled_resolve_closes_tier_one_and_a_real_write_reopens_it() {
     s.set_screen_size(800.0, 600.0);
     setup(&s);
 
-    // ONE resolve closes the epoch (decision 1385): the fingerprint is hashed over inputs alone,
+    // ONE resolve closes the epoch: the fingerprint is hashed over inputs alone,
     // and the rounds just drove those inputs to their fixpoint, so there is nothing left for a
     // settling pass to discover. This used to need two.
     s.resolve();
@@ -491,7 +491,7 @@ fn a_paint_only_write_leaves_tier_one_closed() {
     assert_eq!(solves(&s), before);
 }
 
-/// **The retarget falsifier** (decision 1625): after a node is re-pointed from target A to target
+/// **The retarget falsifier**: after a node is re-pointed from target A to target
 /// B, the cached graph's EDGES must describe the new shape — moving B must move the node.
 ///
 /// This is the one direction that can be silently wrong. 1625 keeps the cached graph across an

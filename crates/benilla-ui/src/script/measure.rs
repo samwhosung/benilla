@@ -95,7 +95,7 @@ pub(super) fn ensure_measured(lua: &Lua, rh: RegionHandle) {
         // Measured extents are the auto-size axes' inputs — the layout gate's read set, the
         // same touch `set_measured_text` does. Guarded on a change the LAYOUT can see: a
         // re-measure that returns the same box (a same-width countdown tick) must not open
-        // tier 1, or it costs a whole-roster hash to conclude nothing moved (decision 1385).
+        // tier 1, or it costs a whole-roster hash to conclude nothing moved.
         // A new extent moves no edge and no roster membership, so it names its node (1388).
         model.touch_layout_region(rh);
     }

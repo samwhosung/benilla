@@ -1,8 +1,8 @@
 //! **benilla's widget METHOD surface, asked of a running VM** — the shared measurement behind
 //! the `dump_widget_methods` example and the widget-surface gate
-//! (`script::tests::widget_surface`, decision 2142).
+//! (`script::tests::widget_surface`).
 //!
-//! It exists for the same reason `dump_globals` does (decisions 1188, 1189): **it is a run, not a
+//! It exists for the same reason `dump_globals` does: **it is a run, not a
 //! grep**. `_G` is not the whole surface an addon can tell apart — most of what an addon touches
 //! is reached through a *widget*, and an addon's test for "does this client have X" is
 //! `if frame.SetBackdrop then`, i.e. what the `__index` chain answers on a live instance. A regex
@@ -64,7 +64,7 @@ const METHOD_TABLES: &[&str] = &[
 /// `DW_<Class>`; the frame kinds also publish their own `CreateFrame` name, which is harmless.
 ///
 /// `TaxiRouteFrame` is absent on purpose — it is a registered `CreateFrame` type that *is* a
-/// `Frame` and nothing else (decision 1828), so it would be the `Frame` row twice.
+/// `Frame` and nothing else, so it would be the `Frame` row twice.
 const CLASSES: &[(&str, &str)] = &[
     ("Frame", r#"CreateFrame("Frame", "DWFrameN", UIParent)"#),
     (

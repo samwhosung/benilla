@@ -1,4 +1,4 @@
-//! The group-loot-roll bindings (decision 0591) — the `GroupLootFrame` half of the loot surface,
+//! The group-loot-roll bindings — the `GroupLootFrame` half of the loot surface,
 //! the same two-way seam as [`super::loot`]: the app pushes a snapshot of the **open rolls**
 //! ([`UiScript::set_loot_rolls`] — each already resolved to name/icon/quantity/quality/bind and a
 //! live time-remaining) and the Lua `RollOnLoot` call queues an outbound **vote** the app drains
@@ -18,7 +18,7 @@
 //! - `GetLootRollTimeLeft(rollID)` → the milliseconds left, polled from the Timer's `OnUpdate`
 //!   (`LootFrame.lua:287-296`).
 //! - `GetLootRollItemLink(rollID)` → the rolled item's link, read by the icon button's ctrl/shift
-//!   arms (`LootFrame.xml:353-361` — decision 1059).
+//!   arms (`LootFrame.xml:353-361`).
 //! - `RollOnLoot(rollID, rollType)` — `0` Pass, `1` Need, `2` Greed, wired to the frame's
 //!   PassButton/RollButton/GreedButton `OnClick` (`LootFrame.xml:375`/`:398`/`:425`).
 //! - `CANCEL_LOOT_ROLL` fires with `arg1 = rollID`; the matching frame hides (`LootFrame.lua:279-285`).
@@ -48,7 +48,7 @@ const PASS: u8 = 0;
 /// file does not, so the nil this used to answer is a raise waiting for that file's migration.
 const CACHE_MISS_QUALITY: i64 = 1;
 
-/// One open group loot roll, resolved by the app (decision 0591). Plain data — the app rebuilds the
+/// One open group loot roll, resolved by the app. Plain data — the app rebuilds the
 /// whole list each frame, so `time_left_ms` is simply re-derived rather than ticked here.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LootRollEntry {
@@ -87,7 +87,7 @@ pub struct LootRollEntry {
     /// hover resolves against [`super::Model::random_properties`] for its enchant lines. `0` =
     /// unrolled. The reference's `SetLootRollItem 0x5364a0` copies the same value into the
     /// tooltip's `+0x424` and passes no item object, so the roll is the roll window's only enchant
-    /// source — the loot window's own shape (decision 1547). [`Self::name`] carries the suffix the
+    /// source — the loot window's own shape. [`Self::name`] carries the suffix the
     /// same id joins on.
     pub random_property_id: u32,
 }
@@ -164,7 +164,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // nil while the item template is in flight (the link embeds the name). The reference's icon
     // button reads it for both modifier arms — `DressUpItemLink(GetLootRollItemLink(...))` and
     // `ChatFrameEditBox:Insert(...)`, `LootFrame.xml:353-361`; ours routes the second through
-    // `BenillaChatEdit_InsertLink`, whose whole job is the nil this getter can answer. Decision 1059.
+    // `BenillaChatEdit_InsertLink`, whose whole job is the nil this getter can answer.
     g.set(
         "GetLootRollItemLink",
         lua.create_function(|lua, roll_id: u32| {
@@ -194,7 +194,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // here rather than sent. An unknown rollID is likewise dropped — the app couldn't map it back
     // to a (lootedTarget, itemSlot) anyway.
     //
-    // THE BoP GATE (decision 0594, VERIFIED in the 5875 binary at `0x61bdf0`): a Need or Greed on
+    // THE BoP GATE (VERIFIED in the 5875 binary at `0x61bdf0`): a Need or Greed on
     // an item whose template binds on pickup sends **no packet at all** and leaves the dialog up —
     // it fires `CONFIRM_LOOT_ROLL` and returns (`0x61be8b`). Only `ConfirmLootRoll` (below), which
     // the popup's OnAccept calls, re-enters past the gate. Pass is never gated: passing binds
@@ -314,7 +314,7 @@ mod tests {
             .unwrap());
 
         // GetLootRollItemLink: the resolved roll's link; nil while the template is in flight (the
-        // icon button's ctrl/shift arms hand this straight on — decision 1059).
+        // icon button's ctrl/shift arms hand this straight on).
         assert_eq!(
             s.eval::<String>("return GetLootRollItemLink(7)").unwrap(),
             "|cffa335ee|Hitem:17182:0:0:0|h[Staff of Jordan]|h|r"
@@ -357,7 +357,7 @@ mod tests {
         assert!(s.take_loot_roll_confirms().is_empty(), "nothing to confirm");
     }
 
-    /// The BoP gate (decision 0594): Need/Greed on a bind-on-pickup roll must send NOTHING and ask
+    /// The BoP gate: Need/Greed on a bind-on-pickup roll must send NOTHING and ask
     /// for the confirm popup instead; Pass on the same roll goes straight out. This is the
     /// behaviour benilla shipped wrong in 0591 — it sent the vote immediately, binding the item
     /// with no prompt.

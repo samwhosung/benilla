@@ -1,4 +1,4 @@
-//! The frame keyboard delivery law (decision 1319; the walk `0x765f10`, the existence gate
+//! The frame keyboard delivery law (the walk `0x765f10`, the existence gate
 //! `0x76b7d0`).
 //!
 //! Each test pins one clause that a plausible-but-wrong implementation gets backwards.
@@ -194,7 +194,7 @@ fn a_raising_handler_still_consumes_and_is_recorded() {
 /// Modelling the box as a plain frame here is not a subtle divergence. Stock
 /// `SendMailNameEditBox` carries an XML `<OnChar>` (`SendMailFrame_SendeeAutocomplete`), which
 /// auto-enables it, and it registers first in the mail window — so it consumed every keystroke and
-/// the send tab's other four boxes took no input at all (decision 2145).
+/// the send tab's other four boxes took no input at all.
 #[test]
 fn an_unfocused_editbox_declines_rather_than_eating_its_neighbours_keys() {
     let mut s = script();

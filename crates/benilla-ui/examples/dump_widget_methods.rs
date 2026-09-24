@@ -6,7 +6,7 @@
 //!
 //! The sibling of [`dump_globals`](../dump_globals.rs). The measurement itself lives in
 //! `benilla_ui::script::widget_method_census` — its module doc is the *why*, and the widget-surface
-//! gate (decision 2142) reads the same function, so the instrument you look at by hand and the gate
+//! gate reads the same function, so the instrument you look at by hand and the gate
 //! that fails the build can never disagree about what our surface is.
 use benilla_ui::script::{widget_method_census, UiScript};
 

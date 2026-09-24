@@ -1,5 +1,5 @@
 //! **The Lua 5.0 dialect** — the layer that makes an mlua 5.1 VM answer the questions a 1.12 addon
-//! asks about its interpreter (decision 1194).
+//! asks about its interpreter.
 //!
 //! The 1.12.1 client embeds **Lua 5.0**; we embed mlua's `lua51`. Every prior decision in this
 //! crate treated that as a detail — 0068 called the target "stock Lua 5.1", and the WoW stdlib
@@ -87,7 +87,7 @@
 //! function on the hottest path in every addon in existence. Revisit it if a *runtime* failure is
 //! ever traced here — not before.
 //!
-//! ## Ground truth (decision 1196 — verified, no longer derived)
+//! ## Ground truth (verified, no longer derived)
 //!
 //! This module first shipped with its member lists taken from Lua 5.0's published library
 //! registrations and cross-checked against two artifacts we hold. Every list here is now read
@@ -123,7 +123,7 @@ const REMOVED: &[(&str, &[&str])] = &[
 ];
 
 /// Lua 5.0's remembered table size, and the whole `n`-based table library that rides it
-/// (decision 2102) — [`table_size`]'s own header is the mechanism, the byte census behind it, and
+/// — [`table_size`]'s own header is the mechanism, the byte census behind it, and
 /// the runtime failure that retired this module's "revisit if ever traced" note.
 mod table_size;
 
@@ -217,7 +217,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // so the bare global and the member are the same function and cannot drift apart.
     g.set("getn", table.get::<Value>("getn")?)?;
 
-    // ── 4 · what the binary said and nobody had asked (decision 1196) ─────────────────────────
+    // ── 4 · what the binary said and nobody had asked ─────────────────────────
     // `print` and `_VERSION` are **not in 1.12's `_G`** — the captured table says so, and the base
     // library's 36-entry array at `0x811e28` confirms why: neither is in it (`_VERSION`'s literal
     // is not even in the image). Both were on `reference_surface`'s exception list as "inherited
@@ -240,7 +240,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The **`bit` library** — 1.12 opens one, and it is not stock Lua (decision 1196).
+/// The **`bit` library** — 1.12 opens one, and it is not stock Lua.
 ///
 /// `InitLua 0x7039e0` opens exactly five libraries: base, `string`, `table`, `math`, and **`bit`**
 /// (`0x7fadc0`, array `0x822c18`). The captured `_G` agrees — `bit` is there, attributed `engine`.
@@ -310,7 +310,7 @@ fn install_bit(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// The **garbage-collector pair** — `gcinfo` answers TWO numbers and `collectgarbage` answers
-/// NONE and takes a *number* (decision 2136).
+/// NONE and takes a *number*.
 ///
 /// Both are 5.0-shaped, and 5.1 changed both in ways that are observable from Lua — already
 /// carried in `reference/1.12-shapes.tsv` as `gcinfo … 2 exact (number,number) agree` and
@@ -508,8 +508,7 @@ fn type_name(v: &Value) -> &'static str {
 mod tests {
     use crate::script::UiScript;
 
-    /// **`gcinfo()` answers TWO numbers, and the second one is what the corpus reads**
-    /// (decision 2136).
+    /// **`gcinfo()` answers TWO numbers, and the second one is what the corpus reads**.
     ///
     /// `0x703200` is `lua_getgccount` + `lua_getgcthreshold`, each `>> 10`, then `mov eax, 2`.
     /// 5.1 kept the name and dropped the second value, so we answered one — and the reach is not
@@ -551,7 +550,7 @@ mod tests {
         );
     }
 
-    /// **`collectgarbage` answers NOTHING and takes a NUMBER** (decision 2136) — the two dialects
+    /// **`collectgarbage` answers NOTHING and takes a NUMBER** — the two dialects
     /// are inverted on the argument, so this is not a superset either way.
     ///
     /// `0x703250` is 35 bytes: `luaL_optnumber(L, 1, 0.0)` → `_ftol` → `lua_setgcthreshold` →
@@ -587,8 +586,7 @@ mod tests {
             .unwrap());
     }
 
-    /// **A `loadstring` chunk is named by its own SOURCE, and an explicit name is used verbatim**
-    /// (decision 2136).
+    /// **A `loadstring` chunk is named by its own SOURCE, and an explicit name is used verbatim**.
     ///
     /// `luaB_loadstring 0x703280` pushes the string `luaL_checklstring` just returned as
     /// `luaL_optlstring`'s `def` (`0x70329a`), so the default chunk name is the source text and
@@ -828,7 +826,7 @@ mod tests {
         );
     }
 
-    /// The `bit` library exists in 1.12 and we did not have it (decision 1196).
+    /// The `bit` library exists in 1.12 and we did not have it.
     ///
     /// `InitLua 0x7039e0` opens exactly five libraries and `bit` is the fifth; the captured `_G`
     /// lists it as `engine`. The corpus's `attempt to index global 'bit'` had been written off as
@@ -1028,7 +1026,7 @@ mod tests {
         assert!(ms >= 0.0, "elapsed milliseconds, not nil: {ms}");
     }
 
-    /// The divergence that USED to be pinned here is gone (decision 2102): `table.insert` now
+    /// The divergence that USED to be pinned here is gone: `table.insert` now
     /// consults the remembered size, as `0x7fb6d8` does. The behaviour it asserted — an append
     /// landing at the border after `setn(t, 0)` — was traced to a real addon failure, so the
     /// mechanism moved to [`super::table_size`] and its tests moved with it. This is the one line
@@ -1113,8 +1111,8 @@ mod tests {
 mod error_quoting_tests {
     use crate::script::UiScript;
 
-    /// **Every error message quotes a program element the way 5.0 does — `` `x' ``, not `'x'``
-    /// (decision 2122).**
+    /// **Every error message quotes a program element the way 5.0 does — `` `x' ``, not `'x'``.
+    /// **
     ///
     /// 5.1 introduced `LUA_QL` and made it two apostrophes; the fork's `luaconf.h` puts 5.0's
     /// backquote back. The five formats it feeds are all readable in `WoW.exe`'s own `.rdata`, and
@@ -1183,7 +1181,7 @@ mod error_quoting_tests {
         }
     }
 
-    /// **`select` is not a 1.12 global** (decision 2171) — and 5.0's own answer to the same
+    /// **`select` is not a 1.12 global** — and 5.0's own answer to the same
     /// question still is.
     ///
     /// The pair matters more than the removal. `select('#', …)` was how 177 of our own tests asked
@@ -1226,7 +1224,7 @@ mod error_quoting_tests {
     }
 
     /// **1.12 installs no metatable on the string type**, so method-call syntax on a string raises
-    /// there and quietly worked here (decision 2171).
+    /// there and quietly worked here.
     ///
     /// The claim is stronger than "nobody installs one": the reference's `lua_setmetatable
     /// 0x6f4020` accepts exactly two type tags — `LUA_TTABLE` and `LUA_TUSERDATA`, sharing one

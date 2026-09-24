@@ -48,7 +48,7 @@
 //!
 //! Exactly [`super::tradeskill`]'s own v1 law: [`CraftState::recipes`] renders as one flat row per
 //! recipe, `index` 1-based straight into the list — though the ORDER of that list is now this
-//! module's, not the app's (decision 1124: [`recipe_order`], the craft type's own byte-verified
+//! module's, not the app's ([`recipe_order`], the craft type's own byte-verified
 //! comparator, applied in [`UiScript::set_craft`]). `GetCraftInfo` therefore never
 //! returns the `"header"` `craftType` the ref Lua also checks for (ref l.38/77/199/252/292). The
 //! header/grouping law itself is no longer pending — decision 0446 confirmed it byte-exact
@@ -89,7 +89,7 @@ pub struct CraftReagent {
     pub icon: Option<String>,
     /// How many this recipe consumes.
     pub need: u32,
-    /// How many the player's bags currently hold (`count_of`, decision 0269).
+    /// How many the player's bags currently hold (`count_of`).
     pub have: u32,
 }
 
@@ -187,7 +187,7 @@ pub struct CraftState {
 const CRAFT_TYPE_BEAST_TRAINING: u32 = 1;
 
 /// The Craft window's **row order** — `0x4f6920` (craft type 1, Beast Training) / `0x4f67a0` (every
-/// other type, i.e. Enchanting; decision 1124). Both are the same cascade and
+/// other type, i.e. Enchanting). Both are the same cascade and
 /// the Beast Training one has one extra key:
 ///
 /// 1. the **difficulty tier** `[+0xc]` ascending ([`super::TradeSkillDifficulty::tier`]);
@@ -830,7 +830,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 0);
     }
 
-    /// **Beast Training's rank order** (decision 1124), pinned against an emulated run of the
+    /// **Beast Training's rank order**, pinned against an emulated run of the
     /// real `0x4f6920` over real `Spell.dbc` values — and the regression for the director's report
     /// that "Beast Training lists a skill's ranks out of ascending order" (ledger B229).
     ///

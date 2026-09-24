@@ -179,7 +179,7 @@ fn request_time_played_queues_an_ask_and_the_answer_arrives_as_an_event() {
     );
 }
 
-/// **The engine hands caught script errors to the CHOSEN Lua error handler** (decision 1305) —
+/// **The engine hands caught script errors to the CHOSEN Lua error handler** —
 /// the reference's `seterrorhandler` contract, which is how `_ERRORMESSAGE`'s dialog (or an
 /// addon's own ImprovedErrorFrame-style handler) ever hears about a failure the engine caught.
 #[test]

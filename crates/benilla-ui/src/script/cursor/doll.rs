@@ -33,7 +33,7 @@ use super::{queue_cursor_update, queue_lock_changed, CursorItem, CursorPayload, 
 /// - holding + the SAME slot → cancel (mirrors `pickup_container_item`'s own same-slot branch).
 /// - holding an Item payload whose `equip_slots` contains `id` (the fit rule — `equip_slots` rides
 ///   the payload from wherever it was picked up, doll or bag alike) → queues the move (dst =
-///   `(EQUIPMENT_BAG, id)`) and CLEARS (decision 0218: a plain clear, no hop) — UNLESS it's a
+///   `(EQUIPMENT_BAG, id)`) and CLEARS (a plain clear, no hop) — UNLESS it's a
 ///   split carry (`count: Some(_)`): refused outright, kept (you can't equip a partial stack).
 /// - holding a non-fitting Item, or any Spell/Action payload → no-op, kept (mirrors
 ///   `pickup_container_item`'s own refusal of a payload a bag slot can't take).
@@ -45,7 +45,7 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
     if !(1..=23).contains(&id) && !super::bag_verbs::BANK_BAG_INV_SLOTS.contains(&id) {
         return false;
     }
-    // The targeting cursor's item half, on the doll (decision 0923). The reference's doll pickup
+    // The targeting cursor's item half, on the doll. The reference's doll pickup
     // `0x4c7300` carries the byte-IDENTICAL rung to the bag one — `4c76df: call 0x6e48a0`
     // (IsTargeting), `4c76e8: call 0x6e6330` (TargetingWantsItem), `4c76fb: call 0x495d60` (bind
     // this item), then return with nothing picked up — and it is what makes poisoning or
@@ -132,7 +132,7 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
             | CursorPayload::Action(_)
             | CursorPayload::Macro(_)
             | CursorPayload::PetAction(_)
-            // Mode 10 (decision 1677) — a stabled pet refuses a bag/doll slot exactly as the
+            // Mode 10 — a stabled pet refuses a bag/doll slot exactly as the
             // spell/action family does, and stays on the cursor for the stable window to take.
             | CursorPayload::StablePet(_)
             // Mode 2 (1962) — coins have no slot to land in; a money frame's DropFunc takes them.
@@ -211,7 +211,7 @@ pub(super) fn use_inventory_item(model: &mut Model, id: u32) {
 /// `IsInventoryItemLocked(id)` — true while `id` is the ACTIVE cursor payload's source (the
 /// picked-up slot dims immediately, no server round-trip — the doll twin of
 /// `GetContainerItemInfo`'s `held_here` derivation) OR the app's fed `InvSlotView.locked` says so
-/// (an outstanding pending op the app's `PendingItemOps` tracks, decision 0216 §4/0218 §3).
+/// (an outstanding pending op the app's `PendingItemOps` tracks).
 ///
 /// Reads through [`Model::inv_slot`], not the doll array, so it answers over the WHOLE live-id
 /// space that binding covers — the reference's `BankFrameItemButton_UpdateLock` calls it with
@@ -694,7 +694,7 @@ mod tests {
         );
     }
 
-    /// The targeting cursor's item half reroutes BOTH pickup seams (decision 0923), and the
+    /// The targeting cursor's item half reroutes BOTH pickup seams, and the
     /// held-payload check precedes it in both — the reference's own order (`4f9c38` before
     /// `4f9c54`; `4c73af` before `4c76df`). Without the doll seam a rogue could not poison the
     /// weapon they are wearing; without the payload gate, dragging an item across a bag while a

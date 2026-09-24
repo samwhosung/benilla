@@ -351,7 +351,7 @@ fn player_buff_hover_names_the_dispel_class_in_gold() {
 }
 
 /// `0x52e610`'s equipped-item line and its reagents line — the two lines the 2026-07-25 reports
-/// found missing (B54, B56). Order: cast|cooldown → requires-item → requires-form → reagents →
+/// found missing. Order: cast|cooldown → requires-item → requires-form → reagents →
 /// description, each requirement red while unmet.
 #[test]
 fn requirement_and_reagent_lines_render_in_law_order() {
@@ -509,7 +509,7 @@ fn player_buff_hover_indexes_the_cache_position_not_a_filtered_ordinal() {
             },
         );
     }
-    // The player's cache: two buffs then a debuff, ONE list, insertion-ordered (decision 0257).
+    // The player's cache: two buffs then a debuff, ONE list, insertion-ordered.
     s.set_auras(
         "player",
         Some(vec![
@@ -804,7 +804,7 @@ fn set_trainer_service_selects_the_builder_and_never_renders_its_own_line() {
 /// `SetCraftSpell` is `SetTrainerService`'s structural twin: a selector, not the two-line
 /// name/description stub it used to be. Both arms are pinned, and the assertion that matters most
 /// is the negative one — a rod recipe's hover shows the ROD's item tooltip while the same row's
-/// ICON is the spell's (Law D, decision 1107). Icon and tooltip disagreeing on one row is the
+/// ICON is the spell's (Law D). Icon and tooltip disagreeing on one row is the
 /// verified shape, not a bug to reconcile.
 #[test]
 fn set_craft_spell_selects_the_builder_like_the_trainer_hover_does() {

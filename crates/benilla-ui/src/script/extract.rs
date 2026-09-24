@@ -1,4 +1,4 @@
-//! [`UiScript::extract`] — the render-list builder (decision 0068): the visible-tree
+//! [`UiScript::extract`] — the render-list builder: the visible-tree
 //! [`crate::order::traversal`] zipped with the resolved rects and per-kind region visuals, in the
 //! client's painter order. An `impl UiScript` block beside its concern (the `layout.rs` pattern);
 //! the shared ScrollFrame clip it walks lives in [`super::clip`].
@@ -87,14 +87,14 @@ impl UiScript {
         None
     }
 
-    /// The render list in the client's painter order (decision 0068): the visible-tree
+    /// The render list in the client's painter order: the visible-tree
     /// [`crate::order::traversal`] zipped with the resolved rects and region visuals. Already sorted
     /// ascending by `ZKey`. Call [`UiScript::resolve`] first for populated rects.
     pub fn extract(&self) -> Vec<ExtractedQuad> {
         let model = self.model_ref();
         let list = order::traversal(&model.arena);
         let mut out = Vec::with_capacity(list.len());
-        // The ScrollFrame clip sources (decision 0112): every live ScrollFrame with a resolved rect
+        // The ScrollFrame clip sources: every live ScrollFrame with a resolved rect
         // and a live child, `child handle → the scrollframe's resolved rect`. Built once per extract;
         // [`effective_clip`] walks a quad's owner up through this to find every ancestor ScrollFrame
         // it is clipped by (nested ScrollFrames intersect).
@@ -107,7 +107,7 @@ impl UiScript {
                     let scale = frame.map(|f| f.effective_scale).unwrap_or(1.0);
                     let clip = effective_clip(&model, &scroll_sources, fh);
                     // A Minimap widget's own slot carries its zoom out to the app renderer (the
-                    // tile/mask/arrow draw — decision 0203); every other frame slot is bare.
+                    // tile/mask/arrow draw); every other frame slot is bare.
                     let content = match frame.map(|f| &f.kind_state) {
                         Some(crate::widget::KindState::Minimap(m)) => QuadContent::Minimap {
                             zoom: m.zoom,
@@ -154,7 +154,7 @@ impl UiScript {
                             continue;
                         }
                     }
-                    // Regions clip with their owner frame (decision 0112 §4).
+                    // Regions clip with their owner frame.
                     let clip = owner.and_then(|o| effective_clip(&model, &scroll_sources, o));
                     let mut rect = owner.and_then(|o| model.resolved.get(&o).copied());
                     // A StatusBar's bar-fill region draws at the value fraction of the frame's rect,
@@ -170,7 +170,7 @@ impl UiScript {
                             bar_fill = Some(sb);
                         }
                     }
-                    // A Slider's thumb draws at the value fraction along the track (decision 0250 §4),
+                    // A Slider's thumb draws at the value fraction along the track,
                     // centered on the cross-axis — like the bar-fill, it owns its geometry and skips
                     // the region-rect precedence below.
                     let mut thumb_fill = false;
@@ -281,7 +281,7 @@ impl UiScript {
                             //
                             // INFERRED, not byte-verified: that an unset state instance leaves the
                             // label on the normal one. A null slot in the *texture* array draws
-                            // nothing (decision 0227) and a font instance with no object cannot
+                            // nothing and a font instance with no object cannot
                             // work that way — a disabled button with no `<DisabledFont>` still
                             // shows its label. Every state-colour caller in our own UI ships the
                             // matching font object, so the two readings agree on all of them.
@@ -332,7 +332,7 @@ impl UiScript {
                         continue;
                     }
                     // THE NAMEPLATE GLOW IS SHOWN AND NOT DRAWN — the one region in the engine
-                    // whose paint the director replaced with something else (decision 0184: the
+                    // whose paint the director replaced with something else (the
                     // lit plate brightens its bar instead of wearing the additive rim). It has to
                     // stay a real, shown, ADD-blended `Nameplate-Glow` region because
                     // `glow:IsShown()` IS the mouseover signal every 1.12 nameplate addon reads —
@@ -357,7 +357,7 @@ impl UiScript {
                         // `SetFont`, and the outline was written unconditionally — so a label
                         // that called `SetFont(path, h, "OUTLINE")` for itself had all three put
                         // back from the object on the very next extract, every frame, forever.
-                        // That is the *shape* of the report this was found under (decision 2112:
+                        // That is the *shape* of the report this was found under (
                         // an addon's `SetFont` silently not taking); MSBT's own strings are not
                         // a button's label and never met it, but any addon that restyles a
                         // `<ButtonText>` did.
@@ -389,7 +389,7 @@ impl UiScript {
                             data.vertex_color = fo.color.or(data.vertex_color);
                         }
                         // The instance's justify: its own `<…Font justifyH=>` (a local write on
-                        // the embedded font, decision 1996), else the object's. Between frames
+                        // the embedded font), else the object's. Between frames
                         // the label's own word carries the NORMAL instance's value
                         // (`button::apply_normal_font`, the live link); a hover or a disable swaps
                         // it here the way the client re-links the label to another instance
@@ -428,7 +428,7 @@ impl UiScript {
                     if let Some(c) = state_color {
                         data.vertex_color = Some(c);
                     }
-                    // A region draws at its RESOLVED rect, and nothing else (decision 1310,
+                    // A region draws at its RESOLVED rect, and nothing else (
                     // superseding 0068 v1's centered/fill-the-owner fallbacks): every drawable
                     // region carries real anchors — authored, or the creation-path implicit anchor
                     // (`region::implicit_creation_anchor`) — and the real resolver has no

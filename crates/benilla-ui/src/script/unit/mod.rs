@@ -1,7 +1,7 @@
-//! The game-state `Unit*` bindings (decision 0068 §3) — the first slice of the addon-facing API that
+//! The game-state `Unit*` bindings — the first slice of the addon-facing API that
 //! reads *live game state*, and the seam that keeps this crate engine-free while doing so.
 //!
-//! The engine must not touch the ECS/net (decisions 0006/0061: the codec is stateless, the ECS owns
+//! The engine must not touch the ECS/net (the codec is stateless, the ECS owns
 //! state). So instead of reaching outward, the app pushes a per-frame **unit snapshot** into the VM
 //! via [`UiScript::set_unit`], and the `Unit*` globals here read that plain data. A frame's
 //! `UnitHealth("player")` therefore resolves against a [`UnitState`] the Bevy side deposited that
@@ -53,7 +53,7 @@ pub enum SelectionRequest {
     LastEnemy,
 }
 
-/// **The local player record — `0xc27d80`, ours** (decision 2263).
+/// **The local player record — `0xc27d80`, ours**.
 ///
 /// A copy of ONE `SMSG_CHAR_ENUM` `CHARACTER_INFO` row, and the source the reference answers four
 /// `"player"` verbs from. Each opens with the identical full-string, case-insensitive compare of
@@ -185,7 +185,7 @@ pub struct UnitState {
     /// Maximum power of the active type (`UnitManaMax`).
     pub max_power: u32,
     /// Whether the unit is dead (`UnitIsDead`). NB a released ghost is NOT dead by this
-    /// predicate — its wire health is 1 (decision 0308 §1); the trio is dead / [`Self::ghost`] /
+    /// predicate — its wire health is 1; the trio is dead / [`Self::ghost`] /
     /// dead-or-ghost, the real client's three tests.
     pub dead: bool,
     /// Whether somebody is charming this unit (`UnitIsCharmed`).
@@ -208,7 +208,7 @@ pub struct UnitState {
     pub reaction: u8,
     /// The unit's localized race display name (`UnitRace`'s first return, e.g. "Night Elf").
     /// `None` = unknown (the race byte hasn't streamed, or a raceless creature) → `UnitRace`
-    /// returns nil, nil. The app resolves it from `UNIT_FIELD_BYTES_0` byte 0 (decision 0208 §3).
+    /// returns nil, nil. The app resolves it from `UNIT_FIELD_BYTES_0` byte 0.
     pub race: Option<String>,
     /// The race's file/token name (`UnitRace`'s second return, e.g. "NightElf" — 1.12's 8 races),
     /// the shape texture-path splices key on.
@@ -257,7 +257,7 @@ pub struct UnitState {
     /// width 4)` registered at `0x5e25d7`), and its handler `0x5ee990` fires the event from
     /// `0x5eea35`-`0x5eea3d` — **unguarded by any bit test, and above the local-player GUID gate
     /// at `0x5eea93`** — so *any* bit moving on *any* player announces itself, remote players
-    /// included. Decision 2078.
+    /// included.
     ///
     /// Raw, not a decoded subset, and that is the point: [`Self::group_leader`] (`0x1`) and
     /// [`Self::ghost`] (`0x10`) are the only bits this struct decodes, while `0x2`/`0x4` (the
@@ -286,7 +286,7 @@ pub struct UnitState {
     /// The unit's owner — `UNIT_FIELD_SUMMONEDBY`, else its charmer, else its creator; `0` for
     /// nobody's. What `UnitPlayerOrPetInParty`/`InRaid` read for the "or pet" half (1958).
     pub owner: u64,
-    /// The unit's guild membership (`GetGuildInfo(unit)`, decision 1257). `None` = guildless, or
+    /// The unit's guild membership (`GetGuildInfo(unit)`). `None` = guildless, or
     /// a creature, or a player whose `PLAYER_GUILDID` has not streamed yet. Filled from the
     /// PUBLIC descriptor fields 191/192 joined against the app's guild-identity cache — see
     /// [`super::guild::UnitGuild`].
@@ -298,9 +298,9 @@ pub struct UnitState {
     /// `CreatureType.dbc`; the level line's class slot for hostile/neutral creatures.
     pub creature_type_name: Option<String>,
     /// Elite rank 0..4 — the creature classification every rank reader in the client shares, via
-    /// the one getter `0x605620`: the level line's rank word `{"", Elite, Elite, Boss, ""}` (0276),
+    /// the one getter `0x605620`: the level line's rank word `{"", Elite, Elite, Boss, ""}`,
     /// `UnitLevel`'s world-boss −1 ([`level_reads_unknown`]), and `UnitClassification`
-    /// ([`classification_word`], decision 0782). **Already gated** by the app when it fills this:
+    /// ([`classification_word`]). **Already gated** by the app when it fills this:
     /// the getter answers `0` unless the unit has a cached creature template *and* a zero
     /// `UNIT_FIELD_PETNUMBER`, so a player, an un-queried creature and an enslaved elite all read
     /// `0` here — the gate belongs at the one write, not in each of the three readers.
@@ -313,7 +313,7 @@ pub struct UnitState {
     /// the same PvP bit as CIVILIAN).
     pub racial_leader: bool,
     /// PvP-flagged (`UNIT_FIELD_FLAGS` PvP bit) — the tooltip's "PvP" line, and also `UnitIsPVP`
-    /// (decision 0434 §2: the party-frame PVP icon reads the same flag the tooltip line does, so
+    /// (the party-frame PVP icon reads the same flag the tooltip line does, so
     /// there's one field, not two).
     pub pvp: bool,
     /// Skinnable (`UNIT_FIELD_FLAGS` skinnable bit) — the tooltip's RED "Skinnable" line.
@@ -347,7 +347,7 @@ pub struct UnitState {
     /// or neither independently (an FFA zone flags this without the ordinary flag ever setting).
     pub is_pvp_ffa: bool,
     /// The unit's **current** PvP rank on the internal `0..=18` scale, `0` = no rank
-    /// (`UnitPVPRank`; decision 1512). `PLAYER_BYTES_3` **byte 3** — a **PUBLIC** descriptor field,
+    /// (`UnitPVPRank`). `PLAYER_BYTES_3` **byte 3** — a **PUBLIC** descriptor field,
     /// which is the whole reason a foreign player's rank is knowable and why the reference's
     /// inspect pane can call `UnitPVPRank("target")`. Not to be confused with the HIGHEST LIFETIME
     /// rank (`PLAYER_FIELD_BYTES` byte 3), which is private, rides
@@ -394,7 +394,7 @@ pub struct UnitState {
     /// [`Self::faction_group`] restated.
     ///
     /// The two answer different questions and the difference is a shipped bug's whole cause
-    /// (report B378, decision 2227): `UnitFactionGroup` reads the unit's LIVE
+    /// (report B378): `UnitFactionGroup` reads the unit's LIVE
     /// `UNIT_FIELD_FACTIONTEMPLATE` (`0x5166b8`/`0x5166be`), while every rank-title surface reads
     /// the unit's **RACE** and walks `ChrRaces` → `FactionTemplate` → factionGroupMask
     /// (`0x5efe00`, `[obj+0x110]+0x78`). A vmangos GM is forced to template 35 and so genuinely
@@ -416,7 +416,7 @@ pub struct UnitState {
     /// law) — the phase-5 submenu reads it; the phase-6 world renders draw from the same board.
     pub raid_target: u8,
     /// The player can attack this unit (`UnitCanAttack("player", unit)`) — app-fed from the
-    /// byte-confirmed `CanAttack 0x606980` predicate (decision 0172; the flag disqualifiers +
+    /// byte-confirmed `CanAttack 0x606980` predicate (the flag disqualifiers +
     /// reaction ≤ neutral legs TAB and the combat flash share; the Lua binding `0x516c50` is
     /// pure delegation to it). Like [`Self::reaction`], the feed resolves it for
     /// the `"target"` token; other tokens leave the default `false` (→ nil), which is right for
@@ -460,10 +460,10 @@ pub struct UnitState {
 /// ```
 ///
 /// One resolver, so the verb and the plate can never disagree about what a unit whose name is
-/// still in flight is called (decisions 2002, 2040).
+/// still in flight is called.
 ///
 /// **Both halves of that tail are here, and both are load-bearing.** The lookup is the rule
-/// (decision 2045: the sentence is the install's, not ours); the literal beside it is the
+/// (the sentence is the install's, not ours); the literal beside it is the
 /// reference's own `0x860fa4`, which is what "a literal is legitimate only as a fallback beside a
 /// lookup" means. Spelled `globals().get::<String>` — the shape `benilla-app`'s
 /// `reference_strings` tripwire recognises as a resolver — so the fallback reads as the fallback
@@ -513,7 +513,7 @@ pub fn unit_is_grey(player_level: u32, unit_level: u32) -> bool {
 /// civilian, or one that still cons, is not one.
 ///
 /// **ONE home, two callers**, which is the whole reason it is a function: the unit tooltip's green
-/// CIVILIAN line ([`super::tooltip_unit`], decision 0276) and `UnitPVPName`'s civilian arm
+/// CIVILIAN line ([`super::tooltip_unit`]) and `UnitPVPName`'s civilian arm
 /// ([`super::pvp`] — `0x609370` leg B, which prefixes `PVP_RANK_CIVILIAN` onto a non-player's
 /// name). The engine gates both on the same call; a second copy here would let the tooltip and the
 /// name disagree about whether the same mob is a civilian.
@@ -539,8 +539,8 @@ pub fn level_reads_unknown(u: &UnitState, player_level: u32) -> bool {
     !u.is_player && (u.level == 0 || u.rank == 3 || much_higher_hostile)
 }
 
-/// `UnitClassification`'s return — the classification-word table, **byte-verified** at `0x850424`
-/// (decision 0782): the binding `0x516d90` is nothing but `TABLE[rank(unit)]`, indexed by the same
+/// `UnitClassification`'s return — the classification-word table, **byte-verified** at `0x850424`:
+/// the binding `0x516d90` is nothing but `TABLE[rank(unit)]`, indexed by the same
 /// gated rank [`UnitState::rank`] carries. The table is exactly five entries long (the sixth dword
 /// at `0x850438` is an unrelated `"UnitExists"` literal), and rank comes pre-clamped to 0..4 by
 /// `CreatureInfo+0x20`, so an out-of-range value can only be our own bug — it reads `"normal"`,
@@ -575,7 +575,7 @@ pub fn power_token(ty: u8) -> &'static str {
 impl super::UiScript {
     /// Push (or clear) a unit token's snapshot. `Some(state)` stores it under `token`; `None` removes
     /// it (so `UnitExists(token)` reports false and the numeric getters return `0`). The app's
-    /// per-frame feed (decision 0068 §3) calls this for `"player"`/`"target"`/… before the VM's
+    /// per-frame feed calls this for `"player"`/`"target"`/… before the VM's
     /// event dispatch, so a frame's `OnEvent` sees the current values.
     pub fn set_unit(&mut self, token: &str, state: Option<UnitState>) {
         {
@@ -645,8 +645,7 @@ impl super::UiScript {
     /// `PLAYER_REST_STATE_EXPERIENCE` pool (raw wire value, base kill-XP units) and the
     /// `PLAYER_FLAGS_RESTING` bit — taken together so the `GetRestState`/`GetXPExhaustion`/
     /// `IsResting` trio can never read a half-updated rest picture. Player-level fields, same
-    /// shape as [`Self::set_money`]; the app calls this each frame any of the three moves
-    /// (decision 1082).
+    /// shape as [`Self::set_money`]; the app calls this each frame any of the three moves.
     pub fn set_rest_state(&mut self, state: u8, pool: u32, resting: bool) {
         let mut model = self.model_mut();
         model.rest_state = state;
@@ -655,7 +654,7 @@ impl super::UiScript {
     }
 
     /// Push the two **play-time** bits of `PLAYER_FLAGS` — 12 (`PartialPlayTime`) and 13
-    /// (`NoPlayTime`), decision 1746. Taken together for the same reason the rest trio is:
+    /// (`NoPlayTime`). Taken together for the same reason the rest trio is:
     /// stock `PlayerFrame_UpdatePlaytime` (PlayerFrame.lua:244) tests them as an if/elseif pair
     /// and a half-updated pair would paint the wrong one of the two icons.
     pub fn set_play_time(&mut self, partial: bool, none: bool) {
@@ -665,7 +664,7 @@ impl super::UiScript {
     }
 
     /// Push the account's **rested billing minutes**, from the `SMSG_AUTH_RESPONSE` that admitted
-    /// the session — what `GetBillingTimeRested()` returns (decision 1820). Set once at login: the
+    /// the session — what `GetBillingTimeRested()` returns. Set once at login: the
     /// client parks it in a process-lifetime global and nothing else on the wire ever writes it.
     pub fn set_billing_time_rested(&mut self, minutes: u32) {
         self.model_mut().billing_time_rested = minutes;
@@ -693,7 +692,7 @@ impl super::UiScript {
 
     /// Push Exhaustion.dbc — `(rest-state byte, localized name, factor)` rows for the
     /// `GetRestState`/`GetXPExhaustion` bindings (they read the table exactly as `0x48d350` /
-    /// `0x48d3f0` read the client's own copy; decision 1087). Called once at startup off the
+    /// `0x48d3f0` read the client's own copy). Called once at startup off the
     /// patch chain; an empty push is ignored so a failed DBC read keeps the shipped-table
     /// fallback the model seeds.
     pub fn set_exhaustion_rows(&mut self, rows: Vec<(u8, String, f64)>) {
@@ -708,7 +707,7 @@ impl super::UiScript {
     /// on (`PLAYER_FIELD_COMBO_TARGET`) — the pair `Player::SetComboPoints` writes together, taken
     /// together so they can never be read half-updated. Player-level PRIVATE fields, same shape as
     /// [`Self::set_money`]; the app calls this each frame either moves, including the drop back to
-    /// zero (decisions 0869, 0875).
+    /// zero.
     ///
     /// **Raw wire values** — `GetComboPoints`'s class and current-target gates live in the binding,
     /// where the binary puts them.
@@ -735,7 +734,7 @@ impl super::UiScript {
     }
 
     /// Drain the `(name, exactMatch)` pairs `TargetByName` queued since the last call — the app
-    /// runs the shared by-name resolver (decision 0886) and commits the selection.
+    /// runs the shared by-name resolver and commits the selection.
     pub fn take_target_by_name_requests(&mut self) -> Vec<(String, bool)> {
         std::mem::take(&mut self.model_mut().target_by_name_requests)
     }
@@ -825,7 +824,7 @@ pub(crate) fn token_recognised(token: &str) -> bool {
 ///   * **absent argument** — quiet nil *here*, because this helper is only the resolver's half.
 ///     Whether a nil ever reaches it is the BINDING's question, and it is settled per binding:
 ///     all 83 entries at `0x850438` gate the token position with `lua_isstring` and raise `Usage:`
-///     in 53 cases, against 13 unit-token bindings with no gate at all (decision 1834). The gated
+///     in 53 cases, against 13 unit-token bindings with no gate at all. The gated
 ///     ones call `binding_abi::string_arg` before they get here, so a nil never arrives; the quiet
 ///     13 pass it straight through. This comment used to say the gates were "NOT uniform … only
 ///     those two poles are verified" and decline to guess, which was the right call at the time —
@@ -867,7 +866,7 @@ fn with_unit<T>(
 /// (`0x515fb0`) pushes `lua_pushnumber` (`0x6f3810`, tag 3, the double `1.0`) or `lua_pushnil`
 /// (`0x6f37f0`, tag 0) and nothing else, and so does every other predicate in the family. So the
 /// whole family goes through [`super::binding_abi::flag`] — 1830's widget law, which is the
-/// *same* law, finally applied to the unit surface (decision 2043). A predicate that hand-computes
+/// *same* law, finally applied to the unit surface. A predicate that hand-computes
 /// its own bool calls that helper directly; one that reads a snapshot field calls this. Both end at
 /// the one push site, which is what stops the family drifting apart again.
 ///

@@ -664,7 +664,7 @@ fn subclass_filter_exclusive_narrows_list_but_not_vocabulary() {
 
 /// A stand-in string table for the `0x84dd70` token family — **deliberately not the shipped
 /// wording**, because what these tests establish is *which token* each slot bit reaches, never
-/// what the word says (decision 2045, "assert the identifier, not the sentence"). Naming each
+/// what the word says ("assert the identifier, not the sentence"). Naming each
 /// value after its own key is the point: `SECONDARYHANDSLOT`, `INVTYPE_SHIELD` and
 /// `INVTYPE_WEAPONOFFHAND` all read "Off Hand" in enUS, so an assertion on the English could not
 /// tell a correct table from one wired to the item tooltip's family.
@@ -828,7 +828,7 @@ fn same_tier_recipes_order_by_product_item_level_before_name() {
     assert_eq!(names, ["Cloth", "Mmm Robe", "Zzz Robe", "Aaa Robe"]);
 }
 
-/// The link pair (`0x4ff410`/`0x4ff800`, decision 1973): the product's link in its
+/// The link pair (`0x4ff410`/`0x4ff800`): the product's link in its
 /// quality colour with zero tokens; ZERO values for a header, a missing product or an uncached
 /// template; the reagent link nil on the same misses and always exactly one value; the typo'd
 /// reagent Usage; the number gate.

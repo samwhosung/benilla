@@ -1,4 +1,4 @@
-//! The GameTooltip widget's engine mechanics (decision 0274): the line stack + named line
+//! The GameTooltip widget's engine mechanics: the line stack + named line
 //! regions, auto-size from the measure round-trip, the right-flush, SetOwner's anchor law +
 //! IsOwned, SetText's implicit show, both AddLine shapes, ClearLines/Hide firing
 //! `OnTooltipCleared`, SetMinimumWidth's floor, and FadeOut's ramp-then-hide.
@@ -124,7 +124,7 @@ fn empty_line_is_a_one_unit_row_and_the_chain_stays_inside_the_plate() {
     );
     // Rows 14 + 1 + 12 + 12 with 3 slot gaps ⇒ totalh 45, height 65; maxw 90 ⇒ width 110.
     // The blank row is ONE unit, not zero: a FontString's span floors at one FrameXML unit on
-    // both the plate's metric and the line's own rect, from one constant (decision 1664).
+    // both the plate's metric and the line's own rect, from one constant.
     // (That this row exists at all is a separate open question — on the reference `AddLine("")`
     // returns without incrementing the line count, `0x530270`.)
     s.run(
@@ -376,7 +376,7 @@ fn fadeout_ramps_then_hides() {
 
 /// SetOwner's anchor law at the screen edge CLAMPS — the client's geometry-flags-bit4 clamp
 /// (`assemble 0x767a20`), carried by every GameTooltip frame **by
-/// construction** (decision 0352: no tooltip ever leaves the window). The reproduction is the
+/// construction** (no tooltip ever leaves the window). The reproduction is the
 /// minimap zone-text hover (MinimapCluster.xml: `ANCHOR_LEFT` on a button at the very top of
 /// the screen — plate bottom-right at the owner's top-left seats it wholly ABOVE the window):
 /// the reference plate hangs DOWN from the screen top instead, size preserved, X untouched.
@@ -594,7 +594,7 @@ fn an_emptied_pooled_line_drops_its_stale_box_and_the_plate_still_contains_the_c
 /// between NONE and PRESERVE, not between "points" and "doesn't".
 ///
 /// 2142's open thread 1 predicted the opposite on both counts — a mode-7 default, and a NONE arm
-/// that must stop dropping anchors — and the bytes refute both (decision 2176). What is actually
+/// that must stop dropping anchors — and the bytes refute both. What is actually
 /// there:
 ///
 /// * `0x53120d` zeroes the binding's local mode before any compare, and `0x531214`'s

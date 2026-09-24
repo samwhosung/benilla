@@ -36,7 +36,7 @@ use super::Model;
 /// `benilla-protocol` dependency (this crate is engine-only).
 pub const TRADE_SLOTS: usize = 7;
 
-/// One resolved trade slot, as the app pushes it (decision 0592) — the wire `TradeItem`'s
+/// One resolved trade slot, as the app pushes it — the wire `TradeItem`'s
 /// entry/display resolved through the shared item-template + display caches. Plain data; an empty
 /// slot is `None` in [`TradeSideState::slots`], never a zeroed `Some`.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -122,14 +122,14 @@ impl super::UiScript {
     }
 
     /// Whether `BeginTrade()` was called since the last drain — `CMSG_BEGIN_TRADE`, empty
-    /// (decision 1963; the TRADE dialog that calls it can never show in 1.12.1, so this is an
+    /// (the TRADE dialog that calls it can never show in 1.12.1, so this is an
     /// addon's reach).
     pub fn take_trade_begin(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().trade_begin)
     }
 
     /// Whether `CancelTrade()` was called since the last drain — the BARE `CMSG_CANCEL_TRADE`,
-    /// where `CloseTrade` wraps the same opcode in the window's teardown (decision 1963).
+    /// where `CloseTrade` wraps the same opcode in the window's teardown.
     pub fn take_trade_cancel(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().trade_cancel)
     }
@@ -182,7 +182,7 @@ fn gold(model: &Model, pick: impl Fn(&TradeState) -> &TradeSideState) -> u32 {
 /// empty cursor on a filled slot queues a clear (`CMSG_CLEAR_TRADE_ITEM`; the item never left the bag,
 /// the server just un-references it). A spell/action payload is refused, put back untouched.
 fn click_trade_button(model: &mut Model, id: u32) {
-    // The money arm runs first and never reads the index (`0x4bfe34`, decision 1965): coins on
+    // The money arm runs first and never reads the index (`0x4bfe34`): coins on
     // the cursor go into the offer as `AddTradeMoney` puts them, and that is the whole click.
     if matches!(model.cursor, Some(CursorPayload::Money(_))) {
         cursor::money::add_trade_money(model);
@@ -420,7 +420,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "SetTradeMoney",
         lua.create_function(|lua, copper: Value| {
-            // `0x4c0820` (decision 1965): a non-number RAISES; the low dword goes on the wire as an
+            // `0x4c0820`: a non-number RAISES; the low dword goes on the wire as an
             // absolute offer, gated on the purse covering it — a refusal is silent at every level.
             let n = crate::script::binding_abi::number_arg(
                 lua,
@@ -453,7 +453,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ClickTargetTradeButton",
         lua.create_function(|lua, _id: u32| {
-            // The same money arm as `ClickTradeButton` (`0x4c00a3`, decision 1965): coins on the
+            // The same money arm as `ClickTradeButton` (`0x4c00a3`): coins on the
             // cursor go into OUR offer whichever side's slot was clicked, the index unread.
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             cursor::money::add_trade_money(&mut model);

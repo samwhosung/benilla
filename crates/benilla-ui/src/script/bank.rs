@@ -28,7 +28,7 @@
 //! - `PurchaseSlot()` — the confirm popup's accept (`StaticPopup.lua` `CONFIRM_BUY_BANK_SLOT`):
 //!   queue the buy intent; the app sends `CMSG_BUY_BANK_SLOT`. No packet on success — the
 //!   descriptor's byte-2 delta is the confirmation (`PLAYERBANKBAGSLOTS_CHANGED`).
-//! - `CloseBankFrame()` — client-side close, **no packet exists** for it (decision 0604): flag the
+//! - `CloseBankFrame()` — client-side close, **no packet exists** for it: flag the
 //!   app to clear its session, the merchant/gossip pattern.
 //! - `BankButtonIDToInvSlotID(id, isBag)` — the pure button→live-inventory-slot map: item button
 //!   `i` (1..24) → live `39 + i` (wire 39..62 + 1), bag button — whose id is the **container id**
@@ -119,7 +119,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseBankFrame() — client-side close (no packet exists, decision 0604): flag the app.
+    // CloseBankFrame() — client-side close (no packet exists): flag the app.
     g.set(
         "CloseBankFrame",
         lua.create_function(|lua, ()| {

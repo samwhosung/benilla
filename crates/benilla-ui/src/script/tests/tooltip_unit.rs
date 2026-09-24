@@ -10,7 +10,7 @@ use crate::script::*;
 /// A stand-in string table for the level line — the four `TOOLTIP_UNIT_LEVEL*` templates and the
 /// three word slots that fill them, **deliberately not the shipped wording**. What these tests
 /// establish is *which key* each slot combination reaches and what fills it, never what the
-/// sentence says (decision 2045, "assert the identifier, not the sentence"), and here that is not
+/// sentence says ("assert the identifier, not the sentence"), and here that is not
 /// a formality: `TOOLTIP_UNIT_LEVEL_CLASS`'s enUS "Level %s %s" is word-for-word
 /// `FRIENDS_LEVEL_TEMPLATE`, `UNIT_TYPE_LEVEL_TEMPLATE` and `CHARACTER_SELECT_INFO`, and the bare
 /// template's "Level %s" is also `ITEM_LEVEL`, `LEVEL_GAINED` and `UNIT_LEVEL_TEMPLATE`. An

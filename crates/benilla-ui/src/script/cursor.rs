@@ -1,7 +1,7 @@
-//! The cursor payload (decision 0216, slice 1) — the client's payload-mode global `[0xb4d900]`
+//! The cursor payload (slice 1) — the client's payload-mode global `[0xb4d900]`
 //! as a typed enum, and the drag-gesture mechanics (`RegisterForDrag`/`OnDragStart`/`OnDragStop`/
 //! `OnReceiveDrag`) that transition it. One seam for every surface — bags, the paper doll
-//! ([`doll`], decision 0208 phase 1b), action bars ([`bar`], decision 0216 §7/0218 §4), and the
+//! ([`doll`], decision 0208 phase 1b), action bars ([`bar`]), and the
 //! spellbook ([`super::spellbook`]'s `PickupSpell`, slice 5 — the [`CursorSpell`] producer) — so
 //! sounds, `CURSOR_UPDATE`, grid events, and lock display can't drift apart per window.
 //!
@@ -28,7 +28,7 @@ pub(crate) use drag::{
 };
 
 /// The sentinel bag id that folds the player's EQUIPPED slots into the ONE payload space
-/// (decision 0216 §1, extended to the paper doll by decision 0208 phase 1b): a
+/// (extended to the paper doll by decision 0208 phase 1b): a
 /// [`CursorItem`]/[`super::container::ContainerMove`] whose `bag` is `EQUIPMENT_BAG` addresses
 /// `slot` as a 1-based live-API inventory slot id — `GetInventorySlotInfo`'s own numbering
 /// (HeadSlot=1 … TabardSlot=19, `char_stats::SLOT_INFO`'s convention), not a bag's contents.
@@ -48,7 +48,7 @@ pub const EQUIPMENT_BAG: i64 = -100;
 /// (1 = live item, 3 = spell, **4 = pet action**, **8 =
 /// macro**, **10 = stabled pet**; our Action arm is the client's bar-slot pickup; the money arm
 /// is mode 2 ([`CursorMoney`], 1962/1965) and the preview arm stays unbuilt). One transition seam
-/// for every surface, so sounds, CURSOR_UPDATE, and lock display can't drift apart per window (decision 0216).
+/// for every surface, so sounds, CURSOR_UPDATE, and lock display can't drift apart per window.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CursorPayload {
     Item(CursorItem),
@@ -160,7 +160,7 @@ pub struct CursorItem {
     /// [`doll::cursor_can_go_in_slot`] serves it straight to `CURSOR_UPDATE`'s highlight.
     pub equip_slots: Vec<u8>,
     /// Whether this item may be placed on an ACTION-BAR slot, captured at pickup from the
-    /// source's own `bar_placeable` — `PlaceAction`'s only item filter (decision 0666).
+    /// source's own `bar_placeable` — `PlaceAction`'s only item filter.
     pub bar_placeable: bool,
 }
 
@@ -197,7 +197,7 @@ pub struct CursorSpell {
     pub spell_id: u32,
     pub texture: Option<String>,
     /// `Attributes & 0x40` (`SPELL_ATTR_PASSIVE`) — a passive cannot go on the action bar
-    /// (`PlaceAction`'s other filter, `0x4e63ad`; decision 0666).
+    /// (`PlaceAction`'s other filter, `0x4e63ad`).
     pub passive: bool,
 }
 
@@ -214,7 +214,7 @@ pub struct CursorAction {
 
 /// A pet-bar payload ([`pet`]'s `PickupPetAction` produces it) — the client's cursor mode **4**,
 /// whose payload global `[0xb4e2f8]` is the picked slot's **packed word, copied verbatim** (its
-/// sole writer `0x494f0c` is a plain `mov edx,[edi]; mov [0xb4e2f8],edx`; decision 1010).
+/// sole writer `0x494f0c` is a plain `mov edx,[edi]; mov [0xb4e2f8],edx`).
 ///
 /// The word is the payload, and that is the whole design: the drop trampoline `0x4bce00` forwards
 /// this dword into the assign core without reading a field of it, so a slot's contents after any
@@ -256,7 +256,7 @@ pub struct CursorMacro {
 /// Queue `CURSOR_UPDATE` — fired on EVERY payload transition (pickup, place/clear, cancel,
 /// `ClearCursor`, `DeleteCursorItem`, a world-drop clear). One push per transition.
 ///
-/// Also derives `ACTIONBAR_SHOWGRID`/`ACTIONBAR_HIDEGRID` (decision 0216 §7) off
+/// Also derives `ACTIONBAR_SHOWGRID`/`ACTIONBAR_HIDEGRID` off
 /// [`Model::cursor_grid_shown`]'s mirror against the CURRENT `model.cursor` (already the
 /// post-transition state at every call site — every caller mutates `model.cursor` before calling
 /// this): a None→Some edge (any bar-droppable arm, any surface — bags/doll/actions alike) shows the
@@ -268,7 +268,7 @@ pub(crate) fn queue_cursor_update(model: &mut Model) {
         .pending_events
         .push(("CURSOR_UPDATE".to_string(), Vec::new()));
     // The two grids are derived off DIFFERENT predicates, because the reference fires them from
-    // different places and the payload spaces do not overlap (decision 1010):
+    // different places and the payload spaces do not overlap:
     //
     // - the ACTION bar's grid follows "is anything held that could land there" — every arm except
     //   the pet one, which `PlaceAction` refuses outright, and the vendor row (mode 5): its grab
@@ -303,7 +303,7 @@ pub(crate) fn queue_cursor_update(model: &mut Model) {
 }
 
 /// Queue `ITEM_LOCK_CHANGED(bag, slot)` — a pickup locking a source slot, or a place/cancel/
-/// clear/destroy unlocking it (decision 0216 §4: the engine-derived held-here lock,
+/// clear/destroy unlocking it (the engine-derived held-here lock,
 /// `container.rs`'s `GetContainerItemInfo` `held_here` check).
 pub(crate) fn queue_lock_changed(model: &mut Model, bag: i64, slot: u32) {
     model.pending_events.push((
@@ -313,7 +313,7 @@ pub(crate) fn queue_lock_changed(model: &mut Model, bag: i64, slot: u32) {
 }
 
 /// Queue `DELETE_ITEM_CONFIRM(name, quality)` for an item payload dropped on the world (the popup
-/// flow transcribed from `StaticPopup.lua`, decision 0216 §3). `name` is parsed out of the link's
+/// flow transcribed from `StaticPopup.lua`). `name` is parsed out of the link's
 /// `[...]` segment (empty string with no link); the payload is left untouched here — the popup's
 /// `OnAccept`/`OnCancel` (`DeleteCursorItem`/`ClearCursor`) own clearing it.
 fn queue_delete_item_confirm(model: &mut Model, item: &CursorItem) {
@@ -338,7 +338,7 @@ pub(super) fn item_link_name(link: Option<&str>) -> String {
 /// item payload also un-locks its source slot; an already-empty cursor is not a transition (no
 /// event).
 pub(crate) fn clear_cursor(model: &mut Model) {
-    // **An armed gift wrap dies with any cancel** (decision 1934), and this is the FIRST thing
+    // **An armed gift wrap dies with any cancel**, and this is the FIRST thing
     // the reference's `ClearCursor 0x495190` does — `0x5edf10` is its opening act and it is
     // **ungated by either parameter**, including `ClearCursor(0)`, the flavour that deliberately
     // keeps an ordinary held item's lock. So all 70 of its call sites cancel a wrap. The paper
@@ -424,7 +424,7 @@ pub enum WorldPick {
 
 /// A world drop: a completed left CLICK on the game world while a payload is held — press and
 /// release both on the world (the world frame, or no frame at all where none is loaded — the
-/// caller's `over_world`, decision 2089), no drag (the byte-verified trigger, decision 0218: the
+/// caller's `over_world`), no drag (the byte-verified trigger, decision 0218: the
 /// client's `0x495300` runs on the WorldFrame click release only; a drag released over the world
 /// routes as a drag and keeps carrying) — routed by [`Model::world_pick`] (`0x481f60`; decisions
 /// 0571 + 0574):
@@ -434,7 +434,7 @@ pub enum WorldPick {
 /// - `Terrain`: an item payload fires `DELETE_ITEM_CONFIRM(name, quality)` and STAYS held (the
 ///   reference popup's `OnAccept` calls `DeleteCursorItem`, `OnCancel` `ClearCursor`, and its
 ///   `OnUpdate` auto-hides when the cursor empties — the engine must not pre-clear); a
-///   spell/action payload clears silently — a DELIBERATE divergence (decision 0843, the
+///   spell/action payload clears silently — a DELIBERATE divergence (the
 ///   director's call): the reference's terrain leg keeps a non-item payload on the left click
 ///   (`0x492c90`/`0x5e0320` clear non-items only on the right button), which leaves a spell
 ///   stuck to the cursor with no left-handed way off it.
@@ -501,7 +501,7 @@ pub(crate) fn split_container_item(model: &mut Model, bag: i64, slot: u32, count
     true
 }
 
-/// `DeleteCursorItem()` — the delete popup's `OnAccept` (decision 0216 §3): an Item payload
+/// `DeleteCursorItem()` — the delete popup's `OnAccept`: an Item payload
 /// queues its `(bag, slot, count)` destroy (`count == 0` = the whole stack) and clears; any other
 /// payload (or an empty cursor) is a no-op — the client's contract for a stale/mismatched confirm.
 pub(crate) fn delete_cursor_item(model: &mut Model) {
@@ -539,7 +539,7 @@ impl super::UiScript {
     }
 
     /// Feed: what the app's world pick resolves under the cursor this frame
-    /// ([`Model::world_pick`], decisions 0571 + 0574) — routes [`world_drop_click`]'s legs
+    /// ([`Model::world_pick`]) — routes [`world_drop_click`]'s legs
     /// (object keeps everything, terrain drops items only, nothing drops any arm).
     pub fn set_world_pick(&mut self, pick: WorldPick) {
         self.model_mut().world_pick = pick;
@@ -555,7 +555,7 @@ impl super::UiScript {
     /// `ClearCursor()`'s Rust seam — drops whatever the cursor holds, any arm, silently (fires
     /// `CURSOR_UPDATE` + the item source un-lock, exactly the Lua `ClearCursor`). The app's
     /// world-click router calls it for a clean RIGHT-click over empty world (`0x492c90`/
-    /// `0x492d30`'s action-4 leg: `ClearCursor 0x495190(1,1)` unconditionally — decision 0571).
+    /// `0x492d30`'s action-4 leg: `ClearCursor 0x495190(1,1)` unconditionally).
     pub fn clear_cursor_payload(&mut self) {
         clear_cursor(&mut self.model_mut());
     }
@@ -578,7 +578,7 @@ impl super::UiScript {
     /// list instead of running the cursor gesture, exactly as the reference's two pickup
     /// functions reroute (`0x4f9b30` @ `4f9c54`, `0x4c7300` @ `4c76df`). The app owns the word:
     /// it arms on a resolved item-targeted cast and clears on the bind, a cancel, or ESC
-    /// (decision 0923 — before it, this was the CraftFrame's private enchant pick).
+    /// (before it, this was the CraftFrame's private enchant pick).
     pub fn set_item_pick_armed(&mut self, armed: bool) {
         self.model_mut().item_pick_armed = armed;
     }
@@ -596,7 +596,7 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().item_picks)
     }
 
-    /// Drain the enchant-confirm popups' answers since the last call (decision 0928). Both are
+    /// Drain the enchant-confirm popups' answers since the last call. Both are
     /// answers to the *same* pick the app parked, which is why they share one queue.
     pub fn take_enchant_confirms(&mut self) -> Vec<EnchantConfirm> {
         std::mem::take(&mut self.model_mut().enchant_confirms)
@@ -604,7 +604,7 @@ impl super::UiScript {
 }
 
 /// A Yes on one of the enchant-apply confirms — the two Lua globals `StaticPopup.lua` calls from
-/// `BIND_ENCHANT`'s and `REPLACE_ENCHANT`'s `OnAccept` (decision 0928). Plain intents; the app
+/// `BIND_ENCHANT`'s and `REPLACE_ENCHANT`'s `OnAccept`. Plain intents; the app
 /// holds the item guid they answer for (the reference's `0xb4e3c0/0xb4e3c4`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnchantConfirm {
@@ -691,7 +691,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Value::Nil,
                     Value::Nil,
                 )),
-                // Mode 10 — the stabled-pet grab (decision 1677). Reported as nothing: the
+                // Mode 10 — the stabled-pet grab. Reported as nothing: the
                 // reference's `GetCursorInfo` arms are not carved for it, the stable window never
                 // asks, and inventing a type string would put a guess where an addon could read it.
                 Some(CursorPayload::StablePet(_)) => {
@@ -950,7 +950,7 @@ mod tests {
         assert!(s.cursor_payload().is_none());
     }
 
-    /// The world-drop pick routing (decisions 0571 + 0574 — `0x481f60`, amended by 0843): a
+    /// The world-drop pick routing (`0x481f60`, amended by 0843): a
     /// spell/action payload clears silently on BOTH empty-world legs — terrain included, the
     /// 0843 divergence (the reference keeps it on terrain; the director wants the left click to
     /// dismiss) — while an item keeps its byte-faithful popup flow.

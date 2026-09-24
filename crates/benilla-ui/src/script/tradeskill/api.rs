@@ -61,7 +61,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The two link verbs (decision 1973).
+    // The two link verbs.
     //
     // GetTradeSkillItemLink(index) — `0x4ff410`: the number gate raises its Usage; then ZERO
     // values on every miss — an index off the list, a header row, a recipe with no product, an
@@ -439,8 +439,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let mut out = Vec::new();
-            // Each word is its `0x84dd70` token resolved off the player's own string table
-            // (decision 2045). A token the table does not carry answers the empty string rather
+            // Each word is its `0x84dd70` token resolved off the player's own string table.
+            // A token the table does not carry answers the empty string rather
             // than being dropped: the list is POSITIONAL — `GetTradeSkillInvSlotFilter(index)`
             // indexes the same order — so a hole would shift every filter after it.
             for bit in present_inv_slots(&model) {

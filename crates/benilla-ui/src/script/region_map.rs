@@ -1,7 +1,7 @@
 //! **The Region method map, reached by frames and regions alike** — the 19 names of the client's
 //! `0x87c9b8` table, each ONE callable that works on a Frame, a Texture or a FontString.
 //!
-//! ## The fact this exists for (byte-verified in `WoW.exe`, decision 1501)
+//! ## The fact this exists for (byte-verified in `WoW.exe`)
 //!
 //! 1.12.1's widget inheritance is not a Lua metatable chain: every class owns a flat
 //! `{name, lua_CFunction}` `.data` table, and its lookup probes that table and, on a miss,
@@ -91,7 +91,7 @@ fn side_of(lua: &Lua, this: &Table) -> mlua::Result<Option<Side>> {
 
 /// One side's implementation of one of the 19, type-erased to the variadic ABI.
 ///
-/// **The erasure is the point** (decision 2310). The dispatcher used to hold each side as an
+/// **The erasure is the point**. The dispatcher used to hold each side as an
 /// `mlua::Function` and reach it with `Function::call`, which re-enters Lua: every argument and
 /// every return value round-trips through mlua's ref thread twice, and the whole call is wrapped
 /// in a `lua_pcall`. Measured in a release build, a `MultiValue` relay costs **~420 ns** against

@@ -1,9 +1,9 @@
-//! The **session API** (decisions 0674, 1291) — the four exit globals the game menu's Logout and
+//! The **session API** — the four exit globals the game menu's Logout and
 //! Exit Game buttons call, the two dialogs' answers to them, and `ReloadUI()`.
 //!
 //! The shape is [`super::duel`]'s: nothing to read, only the outbound half. Each call queues a
 //! [`SessionRequest`] the app drains ([`super::UiScript::take_session_requests`]) and turns into a
-//! packet or a process exit, so the engine keeps no reach into ECS/net (decision 0068 §3).
+//! packet or a process exit, so the engine keeps no reach into ECS/net.
 //!
 //! What each one means, and where the reference puts it:
 //!
@@ -40,7 +40,7 @@ pub enum SessionRequest {
     ForceQuit,
     /// `ForceLogout()` — the session dispatcher with `force = 1`: `CMSG_PLAYER_LOGOUT` (`0x4A`,
     /// empty) instead of `Logout`'s `0x4B`, the pending-logout latch bypassed, and nothing at all
-    /// without a live in-world session (decision 1963; `ForceLogout 0x48ab50`'s `0x5ab020` gate).
+    /// without a live in-world session (`ForceLogout 0x48ab50`'s `0x5ab020` gate).
     ForceLogout,
     /// `ReloadUI()` — tear this VM down and build a fresh one, without leaving the world.
     ///

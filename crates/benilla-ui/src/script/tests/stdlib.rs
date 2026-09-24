@@ -86,7 +86,7 @@ fn sandbox_removes_dangerous_globals() {
         !trace.is_empty(),
         "debugstack must return a real traceback: {trace:?}"
     );
-    // **Frames only — no `stack traceback:` header** (decision 2121). Line 1 IS a frame, which is
+    // **Frames only — no `stack traceback:` header**. Line 1 IS a frame, which is
     // what `AceLibrary.lua:70` reads (`string.gsub(stack, "\n.*", "")` then
     // `".*\\(.*).lua:%d+: .*"`), and what `AceDB-2.0.lua:742` counts on when it skips exactly one
     // line to reach its caller's.
@@ -99,7 +99,7 @@ fn sandbox_removes_dangerous_globals() {
     assert_eq!(s.eval::<String>("return debugstack(99)").unwrap(), "");
 }
 
-/// **AceDB-2.0's own capture, run for real across two chunks** (decision 2121).
+/// **AceDB-2.0's own capture, run for real across two chunks**.
 ///
 /// `RegisterDB` reads the calling addon's folder out of `debugstack()` by skipping exactly one
 /// line — its own frame — and taking the `\AddOns\<folder>\` out of the next. That only works if
@@ -165,8 +165,7 @@ fn a_named_frame_uses_the_5_0_backtick_quoting() {
     assert_eq!(found, "`BenillaProbeNamed'");
 }
 
-/// **Every frame carries its own trailing `\n`, and `count1` bounds nothing on its own**
-/// (decision 2121).
+/// **Every frame carries its own trailing `\n`, and `count1` bounds nothing on its own**.
 ///
 /// Stock Lua 5.0 pushes `"\n\t"` *before* each frame plus a header once; the reference pushes a
 /// single `"\n"` after each frame and no header (`0x703971`). And the walk formats while the level
@@ -267,7 +266,7 @@ fn loadstring_is_text_only_bytecode_rejected() {
     assert!(ok, "loadstring must reject bytecode");
 }
 
-// ── GetTime: the session clock (decision 0137 — the reference cast bar anchors on it) ───────────
+// ── GetTime: the session clock (the reference cast bar anchors on it) ───────────
 
 #[test]
 fn gettime_starts_at_zero_and_tracks_tick() {
@@ -279,7 +278,7 @@ fn gettime_starts_at_zero_and_tracks_tick() {
     assert!((t - 0.5).abs() < 1e-6, "two 0.25s ticks = 0.5 (got {t})");
 }
 
-/// The rest of the bare globals Blizzard's own restricted scope enumerates (decision 1187).
+/// The rest of the bare globals Blizzard's own restricted scope enumerates.
 ///
 /// The list is not from memory: `Blizzard_RestrictedAddOnEnvironment/RestrictedEnvironment.lua`
 /// copies exactly these out of the engine, which is what distinguishes them from the table helpers

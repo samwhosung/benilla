@@ -1,4 +1,4 @@
-//! The **CVar table** — the client's named-console-variable store, engine side (decision 0954).
+//! The **CVar table** — the client's named-console-variable store, engine side.
 //!
 //! In the reference every player setting is a CVar: a case-insensitively named string value with
 //! a registered default, read and written from Lua through `GetCVar`/`SetCVar`/`GetCVarDefault`
@@ -13,10 +13,10 @@
 //!
 //! Values are **strings**, like the client's (`GetCVar` returns a string; consumers parse and
 //! clamp at their own edge). An unknown name warns once and no-ops — a benilla CVar is either
-//! host-registered or addon-declared through `RegisterCVar` (decision 1195), so an unknown key
+//! host-registered or addon-declared through `RegisterCVar`, so an unknown key
 //! is a typo or an unshipped feature, never a storage slot.
 //!
-//! **The table dies with the VM, so persistence bridges it** (decision 1291): in the reference
+//! **The table dies with the VM, so persistence bridges it**: in the reference
 //! this store is engine memory and survives every `ReloadUI`; ours is per-VM state, replaced at
 //! every login and reload (1290/1291). The host hands each fresh VM the config file's values
 //! ([`super::UiScript::set_cvar_saved_base`]) before anything registers, and registration —
@@ -36,7 +36,7 @@ pub(crate) struct CvarSlot {
     pub name: String,
     pub value: String,
     pub default: String,
-    /// The reference's flag bit1 (`rec+0x1c & 0x2`, decision 2303): a write lands in
+    /// The reference's flag bit1 (`rec+0x1c & 0x2`): a write lands in
     /// [`Self::pending`] instead of [`Self::value`], so `GetCVar` keeps answering the applied
     /// value until the host commits the latch (`CVar::Update 0x63e060` — for the `gx*` rows,
     /// inside `RestartGx`). Seeded by the host ([`super::UiScript::seed_cvars`]); a row the VM
@@ -48,7 +48,7 @@ pub(crate) struct CvarSlot {
     pub pending: Option<String>,
 }
 
-/// One row of the host's registry, as the VM's mirror is seeded from it (decision 2303): the
+/// One row of the host's registry, as the VM's mirror is seeded from it: the
 /// registered spelling, the **applied** value, the registered default, and the latch flag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SeededCvar {
@@ -149,7 +149,7 @@ pub struct VideoCaps {
 }
 
 impl super::UiScript {
-    /// Hand registration the config file's persisted values (decision 1291): name → value, keys
+    /// Hand registration the config file's persisted values: name → value, keys
     /// lowercased here. Set **before** any `register_cvars` / addon `RegisterCVar` runs in this
     /// VM; a name registered while present here starts at the saved value instead of its default.
     ///
@@ -173,8 +173,7 @@ impl super::UiScript {
     /// Takes `&self` rather than `&mut self` because the table lives behind the VM's app-data
     /// (interior mutability), and the interface loader has to be able to guarantee it from a
     /// `&UiScript` — the stock `UIOptionsFrame.xml` reads CVars in its own `OnLoad`, so a VM that
-    /// loads the client's interface without the client's CVar table is not the client
-    /// (decision 2115).
+    /// loads the client's interface without the client's CVar table is not the client.
     pub fn register_cvars<'a>(&self, vars: impl IntoIterator<Item = (&'a str, &'a str)>) {
         let mut model = self.model_mut();
         for (name, default) in vars {
@@ -202,7 +201,7 @@ impl super::UiScript {
         }
     }
 
-    /// Seed the mirror from the host's registry (decision 2303): every row's spelling, applied
+    /// Seed the mirror from the host's registry: every row's spelling, applied
     /// value, default and latch flag, creating or overwriting the slot. This is what a fresh VM
     /// gets at claim time and at the world-entry edge — the host's table is the store that
     /// outlives the VM, so the mirror starts wherever it stands, and a re-seed of a live table
@@ -210,7 +209,7 @@ impl super::UiScript {
     /// the pending copy and pushes it back through the outbox if it still stands).
     ///
     /// `&self` for [`Self::register_cvars`]'s reason — the interface loader seeds from a
-    /// `&UiScript` before the stock files read their first CVar (decision 2115).
+    /// `&UiScript` before the stock files read their first CVar.
     pub fn seed_cvars(&self, rows: impl IntoIterator<Item = SeededCvar>) {
         let mut model = self.model_mut();
         for row in rows {
@@ -270,7 +269,7 @@ impl super::UiScript {
     }
 
     /// Drain the `(name, default)` rows an addon's `RegisterCVar` created since the last call
-    /// (decision 2303) — the host's cue to give each one a row in its own registry, which is the
+    /// — the host's cue to give each one a row in its own registry, which is the
     /// store that survives this VM. In the reference an addon's registration lands in the same
     /// engine-side table as the client's own; this is how ours does.
     pub fn take_cvar_registrations(&mut self) -> Vec<(String, String)> {
@@ -279,7 +278,7 @@ impl super::UiScript {
 
     /// A native surface's write — [`set_from_engine`]'s public face: sets the value AND queues
     /// the change like a Lua `SetCVar`, so the host's sync dirties the config file. The glue
-    /// AddOns screen's *Load out of date AddOns* checkbox is the caller (decision 1293): a
+    /// AddOns screen's *Load out of date AddOns* checkbox is the caller: a
     /// native widget editing a CVar is the minimap-zoom pattern, reached from outside the crate.
     pub fn set_cvar_engine(&mut self, name: &str, value: &str) {
         set_from_engine(&mut self.model_mut(), name, value.to_string());
@@ -364,7 +363,7 @@ pub(super) fn set_from_engine(model: &mut Model, name: &str, value: String) {
 /// writes above. Returns the registered spelling when the write moved something (and queued it
 /// for the host), `None` for an unknown key or a write that changed nothing.
 ///
-/// A **latched** slot (decision 2303) takes the write as its staged value and leaves `value`
+/// A **latched** slot takes the write as its staged value and leaves `value`
 /// alone, which is the reference's `Set 0x63df50`: `latchedValue` gets the string, `InternalSet`
 /// does not run, and `GetCVar` keeps answering what is applied. Writing a latched slot back to
 /// its applied value clears the stage instead of staging a no-op. Either way the host hears it
@@ -452,7 +451,7 @@ pub const CVAR_NAMEPLATE_ENEMIES: &str = "nameplateShowEnemies";
 pub const CVAR_NAMEPLATE_FRIENDS: &str = "nameplateShowFriends";
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
-    // `RegisterCVar(name, value)` — declare a CVar the client does not ship (decision 1195).
+    // `RegisterCVar(name, value)` — declare a CVar the client does not ship.
     //
     // This is how an addon gets a persisted setting without a saved-variables file, and it is why
     // `GetCVar` on an unknown name is a *warning* rather than an error: an addon that calls
@@ -466,7 +465,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let value = value.as_ref().and_then(value_to_string).unwrap_or_default();
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let key = name.to_ascii_lowercase();
-            // The saved base outranks the declared default (decision 1291): an addon-declared
+            // The saved base outranks the declared default: an addon-declared
             // CVar the player has set persists in the config file, and this lookup is how the
             // saved value survives the VM being replaced — the declared value stays the DEFAULT,
             // so the saver still knows what "moved off default" means for this key.
@@ -474,7 +473,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if model.cvars.contains_key(&key) {
                 return Ok(());
             }
-            // The host learns the row through its own queue (decision 2303): an addon-declared
+            // The host learns the row through its own queue: an addon-declared
             // CVar gets a row in the host's registry, which is the store that survives this VM.
             model.cvar_registrations.push((name.clone(), value.clone()));
             model.cvars.insert(
@@ -583,7 +582,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             set_from_engine(&mut model, "gxDepthBits", f.depth_bits.to_string());
             set_from_engine(&mut model, "gxMultisample", f.samples.to_string());
             // The reference then sets `gxRestart` (`0x842978`, `0x63ce00`). We deliberately do not
-            // register that CVar: `gxMultisample` is latched here too (decision 1629 — the camera
+            // register that CVar: `gxMultisample` is latched here too (the camera
             // reads its sample count once, at spawn), so "applies at next launch" is already the
             // behaviour and a second flag saying so would be a flag nothing reads.
             Ok(())
@@ -604,7 +603,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Err(mlua::Error::runtime("Usage: SetCVar(\"name\", value)"));
             };
             // The THIRD argument is the `CVAR_UPDATE` token, and it is the whole mechanism behind
-            // that event (decision 1140). 1.12's own callers are its two options panels —
+            // that event. 1.12's own callers are its two options panels —
             // `SetCVar(value.cvar, value.value, index)` (UIOptionsFrame.lua l.335/343/345,
             // OptionsFrame.lua l.192) — where `index` is the CheckButtons table's KEY, an
             // uppercase display name like "STATUS_BAR_TEXT". The engine passes it straight through
@@ -674,7 +673,7 @@ pub const VIDEO_DEFAULT_CVARS: &[&str] = &[
 /// **The Video options window's own engine verbs** — the nine `OptionsFrame.xml` needs that
 /// nothing else in this client provides.
 ///
-/// The window is loaded off the player's chain and kept hidden (decision 2177, the shape 2115 and
+/// The window is loaded off the player's chain and kept hidden (the shape 2115 and
 /// 2147 set for the Interface and Sound windows): nothing of ours shows it, and it exists so that
 /// an addon reaching for the reference's video-options names finds real frames and real functions
 /// instead of an alias onto a window of ours.
@@ -881,7 +880,7 @@ fn install_video_verbs(lua: &Lua) -> mlua::Result<()> {
     // format record and can veto the write outright; the handler validates that record, applies it
     // with `DeviceSetFormat`, and then COMMITS the fourteen latched CVars so `GetCVar` catches up.
     //
-    // **benilla's latch is the host's** (decision 2303): a gx write stages in the host's CVar
+    // **benilla's latch is the host's**: a gx write stages in the host's CVar
     // registry, and this verb is the host's cue to commit the gx stages (the fourteen-record
     // commit, `Cvars::commit_latched`) and re-assert them against the window. The one difference
     // left is when a change callback runs — the reference's at `SetCVar`, ours at the commit.
@@ -1032,7 +1031,7 @@ pub const WORLD_DETAIL_STOPS: [u32; 3] = [16, 32, 48];
 /// **The Environment Detail pair** — `SetWorldDetail 0x488dd0` and `GetWorldDetail 0x488d70`, the
 /// two engine bindings 1.12's own options panel drives that slider through (`OptionsFrame.lua`'s
 /// row 3 is `func = "WorldDetail"`, and `OptionsFrame_Save`/`_Load` prefer `getglobal("Set"..func)`
-/// / `getglobal("Get"..func)` over `SetCVar`/`GetCVar`). Decision 2163.
+/// / `getglobal("Get"..func)` over `SetCVar`/`GetCVar`).
 ///
 /// **The setter, carved end to end** (own decode):
 ///
@@ -1250,7 +1249,7 @@ mod tests {
         assert!(s.take_cvar_changes().is_empty());
     }
 
-    /// **A latched row stages the write and keeps answering the applied value** (decision 2303)
+    /// **A latched row stages the write and keeps answering the applied value**
     /// — the reference's `Set 0x63df50` on flag bit1: `latchedValue` takes the string, `InternalSet`
     /// never runs, so `GetCVar` (which reads `rec+0x20`) answers the old value until
     /// `CVar::Update 0x63e060` commits it. The host still hears every staged write through the
@@ -1315,7 +1314,7 @@ mod tests {
         );
     }
 
-    /// **An addon's `RegisterCVar` reaches the host** (decision 2303): the row it creates is
+    /// **An addon's `RegisterCVar` reaches the host**: the row it creates is
     /// reported once, with the declared default, so the host's registry — the store that
     /// outlives this VM — can carry it. A re-declaration of a live name is the no-op it always
     /// was, and reports nothing.
@@ -1336,7 +1335,7 @@ mod tests {
         );
     }
 
-    /// **A bare CVar name through `ConsoleExec` is the host's to answer** (decision 2303): the
+    /// **A bare CVar name through `ConsoleExec` is the host's to answer**: the
     /// reference's per-CVar console command prints `CVar "%s" is "%s"` on an empty argument
     /// (`0x63dde0`), and that printing lives host-side with the rest of the command registry.
     /// A name WITH a value is still written synchronously, so the next Lua line reads it back.
@@ -1357,7 +1356,7 @@ mod tests {
         assert_eq!(s.take_console_lines(), vec!["MusicVolume".to_string()]);
     }
 
-    /// **`SetCVar`'s third argument is the `CVAR_UPDATE` token** (decision 1140) — the whole
+    /// **`SetCVar`'s third argument is the `CVAR_UPDATE` token** — the whole
     /// mechanism behind that event. 1.12's options panels pass their CheckButtons table KEY
     /// (`SetCVar(value.cvar, value.value, index)`), an uppercase display name, and the engine
     /// hands it back verbatim as arg1 — which is what lets `UIOptionsFrame_OnEvent` do
@@ -1436,7 +1435,7 @@ mod tests {
     ///
     /// It is a real 1.12 CVar (`0x83f2d0`, persisted — the client builds its SavedVariables path
     /// from it) and it had no value here at all. `Ace/AceState.lua:27` is
-    /// **Registration honors the saved base** (decision 1291) — the bridge that makes the
+    /// **Registration honors the saved base** — the bridge that makes the
     /// per-VM table behave like the reference's engine-side store: a knobless CVar keeps the
     /// player's persisted value across a VM replacement, and the default stays the DEFAULT so
     /// "moved off default" still means something to the saver.
@@ -1465,7 +1464,7 @@ mod tests {
         );
     }
 
-    /// The same law through the Lua half: an addon's `RegisterCVar` (decision 1195) starts at
+    /// The same law through the Lua half: an addon's `RegisterCVar` starts at
     /// the persisted value, so its setting survives the VM being replaced (1290/1291).
     #[test]
     fn an_addon_registered_cvar_starts_at_its_saved_value() {

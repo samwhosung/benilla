@@ -90,7 +90,7 @@ mod loader_tests {
     }
 
     /// **`parent="Name"` attaches a top-level element** — the reference's own way of doing it,
-    /// because its FrameXML is flat (decision 1211). 79 corpus addons, 708 sites.
+    /// because its FrameXML is flat. 79 corpus addons, 708 sites.
     ///
     /// Three claims in one document: the attribute supplies the parent when there is no lexical
     /// one; an anchor with no `relativeTo` then measures from THAT parent rather than the screen
@@ -178,7 +178,7 @@ mod loader_tests {
     }
 
     /// **A `parent=` that resolves to nothing leaves the frame PARENTLESS** — it does not fall back
-    /// to the enclosing frame (decision 2213). `0x6ee280` seeds `[ebp-0x8]` with the incoming
+    /// to the enclosing frame. `0x6ee280` seeds `[ebp-0x8]` with the incoming
     /// default parent and then writes the lookup's result back **unconditionally** at
     /// `0x6ee3ef`, so a miss stores 0 over the seed and `0x6ee408` constructs with `ecx = 0`. And
     /// an **empty** `parent=""` short-circuits
@@ -246,7 +246,7 @@ mod loader_tests {
         );
     }
 
-    /// **A top-level `name="$parent…"` resolves against the `parent=` attribute** (B387) — the
+    /// **A top-level `name="$parent…"` resolves against the `parent=` attribute** — the
     /// reference attaches the parent *first* (`0x6ee280` resolves it at `0x6ee3e8` and passes it to
     /// the constructor at `0x6ee408`) and only then runs the node-apply step that reads `name=` and
     /// calls `SetName` (`0x6ee4d6`), whose expander walks the frame's **actual** parent chain
@@ -575,7 +575,7 @@ mod loader_tests {
     }
 
     /// **An unrecognised `frameStrata=` warns and skips; the frame keeps the stratum it had, and
-    /// the rest of the document loads** (decision 2160).
+    /// the rest of the document loads**.
     ///
     /// The two doors differ in the reference and this is the quiet one. `CSimpleFrame::LoadXML
     /// 0x769820` resolves through `0x6f17d0`, whose miss returns 0 without writing the out-param;
@@ -633,7 +633,7 @@ mod loader_tests {
     }
 
     /// **`FrameXML_Debug` is a get-or-set whose SET arm turns on the loader's trace lines**
-    /// (decision 2160) — and `0` takes the SET arm, because the number zero is Lua-truthy and only
+    /// — and `0` takes the SET arm, because the number zero is Lua-truthy and only
     /// `nil`/`false` are not (`0x48845d`, after `lua_toboolean 0x6f34d0`). That is the half a
     /// re-implementation gets backwards, so it is the half asserted first.
     #[test]
@@ -892,7 +892,7 @@ mod loader_tests {
     }
 
     /// **An unknown frame type at the XML door is LOGGED, and its node is skipped — nothing
-    /// raises** (decision 2191).
+    /// raises**.
     ///
     /// `Instantiate 0x6ee280` prints `"Unknown frame type: %s"` (`0x871124`) at `0x6ee356` and makes
     /// no object for that node; only the Lua `CreateFrame` binding raises (`0x872fa8` via
@@ -962,7 +962,7 @@ mod loader_tests {
     }
 
     /// The WorldFrame's one-shot record, at the XML door: a second `<WorldFrame>` is an unknown
-    /// type, so it logs and builds nothing (decisions 1984, 2191) where `CreateFrame` raises.
+    /// type, so it logs and builds nothing where `CreateFrame` raises.
     #[test]
     fn a_second_xml_world_frame_is_logged_not_raised() {
         let s = UiScript::new().unwrap();
@@ -1034,7 +1034,7 @@ mod loader_tests {
         );
     }
 
-    /// The creation-path implicit anchor, XML half (decision 1310; `0x7701c0`): a `<Texture>` with
+    /// The creation-path implicit anchor, XML half (`0x7701c0`): a `<Texture>` with
     /// zero anchors gets SetAllPoints(parent) right after its LoadXML — two corner anchors that pin
     /// all four edges, so an authored `<Size>` is structurally unread. This is B180's engine shape:
     /// the reference stack-split plate authors a vestigial 256×32 and renders 172×96, the frame.
@@ -1410,7 +1410,7 @@ mod loader_tests {
         );
 
         // A click focuses the box (mouse-enabled by construction); a typed char marks it changed,
-        // and the drain on the next tick is what actually fires OnTextChanged (decision 1831).
+        // and the drain on the next tick is what actually fires OnTextChanged.
         s.resolve();
         s.mouse_button(50.0, 10.0, "LeftButton", true);
         s.mouse_button(50.0, 10.0, "LeftButton", false);
@@ -1428,7 +1428,7 @@ mod loader_tests {
     /// 1.12.1 chain names the attribute names it to turn the flag *off* (MailFrame ×3,
     /// MoneyInputFrame ×3, FriendsFrame ×3, AddonList ×1). The flag loop used to call the setter
     /// only when an attribute parsed as `true`, which made all ten a no-op: harmless while our own
-    /// default was off, and exactly backwards once it matches the client's (decision 1686).
+    /// default was off, and exactly backwards once it matches the client's.
     ///
     /// Both directions asserted, because a presence-blind reader passes the `true` half.
     #[test]
@@ -2581,7 +2581,7 @@ mod region_template_tests {
     }
 }
 
-/// Chunk naming — which FILE and which LINE a `<Script>` raise reports (decision 1217).
+/// Chunk naming — which FILE and which LINE a `<Script>` raise reports.
 mod chunk_name_tests {
     use crate::framexml;
     use crate::loader::*;
@@ -2600,7 +2600,7 @@ mod chunk_name_tests {
     /// Both halves are load-bearing and both were wrong. `Loader::run` loaded every chunk with no
     /// name, and mlua's `load` is `#[track_caller]` — so the chunk was named after the *Rust* line
     /// that ran it, and a corpus read-back of 70 failures had 26 rows saying
-    /// `crates/benilla-ui/src/loader/mod.rs:327` where the addon's file belonged (decision 1217).
+    /// `crates/benilla-ui/src/loader/mod.rs:327` where the addon's file belonged.
     ///
     /// Naming it is only half. A Lua chunk starts at line 1, so an inline block 40 lines down a
     /// file would report `File.xml:3` for its third line — a lie you can go and check, which is
@@ -2749,7 +2749,7 @@ mod chunk_name_tests {
     }
 }
 
-/// [`super::join_ref`] — the FrameXML path rule (decision 1186).
+/// [`super::join_ref`] — the FrameXML path rule.
 ///
 /// A reference is relative to the directory of the file containing it, `\` and `/` are the same
 /// separator, and `..` walks up. The escape case is the load-bearing one: a `..` above the root is

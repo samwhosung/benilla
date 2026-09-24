@@ -430,7 +430,7 @@ fn a_missing_rank_global_reads_nil_not_empty() {
     assert!(s.eval::<bool>("return GetPVPRankInfo(9) == nil").unwrap());
 }
 
-/// **The team digit is NOT the faction group** — report B378 at the binding level (decision 2227).
+/// **The team digit is NOT the faction group** — report B378 at the binding level.
 ///
 /// `UnitFactionGroup` reads the unit's live `UNIT_FIELD_FACTIONTEMPLATE` (`0x516630`) and the rank
 /// title's team digit reads the unit's RACE (`0x5efe00`), so a vmangos GM — template 35, group

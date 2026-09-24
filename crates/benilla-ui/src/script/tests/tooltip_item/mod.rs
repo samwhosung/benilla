@@ -8,7 +8,7 @@ use crate::script::*;
 
 /// A stand-in `GlobalStrings.lua` for the item builder — **deliberately not the shipped wording**.
 ///
-/// Every sentence the builder draws is a key resolved off the VM's own globals (decision 2045),
+/// Every sentence the builder draws is a key resolved off the VM's own globals,
 /// and what these tests establish is *which key* each line reaches and what fills it, never what
 /// the sentence says. Naming each value after its own key is the point: `INVTYPE_SHIELD`,
 /// `INVTYPE_WEAPONOFFHAND` and `SECONDARYHANDSLOT` all read "Off Hand" in enUS, `ITEM_REQ_SKILL`

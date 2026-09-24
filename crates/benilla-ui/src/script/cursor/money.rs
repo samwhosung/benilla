@@ -1,4 +1,4 @@
-//! The money cursor — payload mode 2 (decisions 1962, 1965): coins picked up off a money frame,
+//! The money cursor — payload mode 2: coins picked up off a money frame,
 //! and everything the reference does with them. VERIFIED at the bytes throughout:
 //!
 //! * **The purse is never debited.** Nothing on this path writes `PLAYER_FIELD_COINAGE`; the

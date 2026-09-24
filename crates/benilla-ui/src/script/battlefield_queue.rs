@@ -1,4 +1,4 @@
-//! The battleground **list and queue** family (decision 1974): the fourteen
+//! The battleground **list and queue** family: the fourteen
 //! verbs the stock `BattlefieldFrame.lua` and `Minimap.xml` call, over the instance list and the
 //! three queue slots the app pushes. The scoreboard half of the same TU is
 //! [`super::battlefield_score`]; `AcceptBattlefieldPort` is [`super::dialog_verbs`]'s.

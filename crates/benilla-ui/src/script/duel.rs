@@ -1,10 +1,10 @@
-//! The duel **Era API surface** (decision 0633) — four globals, no state.
+//! The duel **Era API surface** — four globals, no state.
 //!
 //! Duels are the smallest possible shape of the [`super::party`] seam: everything the UI needs to
 //! *read* arrives as event arguments (the challenger's name on `DUEL_REQUESTED`), so there is no
 //! snapshot to push — only the outbound half. Each call queues a [`DuelRequest`] the app drains
 //! ([`UiScript::take_duel_requests`]) and turns into its send, keeping the engine free of ECS/net
-//! reach (decision 0068 §3).
+//! reach.
 //!
 //! The four are exactly the reference's own duel bindings, registered adjacent in its Lua API
 //! table (`0x849fc8`..`0x849ff0`) and each a one-liner over the same TU: `AcceptDuel` `0x4d4ce0`

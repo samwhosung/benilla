@@ -1,10 +1,10 @@
-//! The **PvP + honor** surface — `TogglePVP` (decision 0646) and the vanilla honor system's
-//! thirteen bindings (decision 1512): the character window's Honor tab, the inspect window's Honor
+//! The **PvP + honor** surface — `TogglePVP` and the vanilla honor system's
+//! thirteen bindings: the character window's Honor tab, the inspect window's Honor
 //! tab, and the rank every unit frame can read off a *foreign* player.
 //!
 //! ## The three seams
 //!
-//! The crate's usual split (decision 0068 §3 — no ECS, no wire, no DBC in here):
+//! The crate's usual split (no ECS, no wire, no DBC in here):
 //!
 //! - **Pushed state.** The local player's honor counters are PRIVATE descriptor fields
 //!   (`PLAYER_FIELD_SESSION_KILLS` … `PLAYER_FIELD_BYTES2`), so the app decodes them and pushes a
@@ -111,7 +111,7 @@ use super::unit::{check_unit_token, is_civilian_kill};
 use super::Model;
 
 /// The local player's honor snapshot — every number the character window's Honor tab shows, as the
-/// app decoded it from the PRIVATE honor descriptor fields (decision 1512 §1). EXACT shape the app
+/// app decoded it from the PRIVATE honor descriptor fields. EXACT shape the app
 /// feed is written against; do not rename.
 ///
 /// The kill counters are `u16` because their fields are `TWO_SHORT` descriptors read as halves
@@ -159,7 +159,7 @@ pub struct HonorState {
     pub rank_bar: u8,
 }
 
-/// One `MSG_INSPECT_HONOR_STATS` reply (decision 1512 §2), as the app decoded its 50-byte body.
+/// One `MSG_INSPECT_HONOR_STATS` reply, as the app decoded its 50-byte body.
 ///
 /// Fourteen numbers and the guid they were about. **There is no per-period DK here** — the reply
 /// carries a session HK/DK pair and then bare HK counts for yesterday/last week/this week (the
@@ -352,7 +352,7 @@ fn global_string(lua: &Lua, key: &str) -> Option<String> {
 /// whose race resolves to no side.
 ///
 /// The engine walks race → `ChrRaces` → `FactionTemplate` and tests `[rec+0xc]`'s factionGroupMask
-/// `& 4` → 0, `& 2` → 1, else −1. This crate holds no DBC (decision 0068 §3), so the walk is the
+/// `& 4` → 0, `& 2` → 1, else −1. This crate holds no DBC, so the walk is the
 /// app's and the answer arrives pre-resolved as [`UnitState::pvp_team`](super::UnitState).
 ///
 /// **It is not [`UnitState::faction_group`](super::UnitState), which this used to read.** That
@@ -360,7 +360,7 @@ fn global_string(lua: &Lua, key: &str) -> Option<String> {
 /// part company the moment anything moves a unit off its racial faction. A vmangos GM is forced
 /// to template 35 (group mask 0), so every rank title in the Honor tab read `NONE` for a Grand
 /// Marshal while the 1.12 client on the same server read "Grand Marshal" off his unchanged race:
-/// report B378, decision 2227.
+/// report B378.
 ///
 /// −1 needs no special case: it formats into the key, and `PVP_RANK_9_-1` matches no GlobalString.
 fn team_of(u: &super::UnitState) -> i64 {
@@ -501,7 +501,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // form of the opcode (a one-byte body) has no binding, so there is nothing to pass. The
     // reference registers it at `0x48d700` and calls it from exactly one place in the whole
     // shipped 1.12 UI: `SlashCmdList["PVP"]` (ChatFrame.lua); benilla's popup row is a deliberate
-    // second caller — decision 0646 §3.
+    // second caller.
     g.set(
         "TogglePVP",
         lua.create_function(|lua, ()| {
@@ -746,8 +746,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //    engine's silence, not a second query.
     //  * `pending` — modelled here, and this is the one that earns its keep: it is what stops a
     //    pane shown/hidden/shown before the reply lands sending duplicates.
-    //  * the guid — **not** modelled here and it cannot be: this crate never sees a guid
-    //    (decision 0068 §3). The app drops a queued request with no inspect target, which is the
+    //  * the guid — **not** modelled here and it cannot be: this crate never sees a guid.
+    // The app drops a queued request with no inspect target, which is the
     //    same outcome one seam further out. The cost is that our `pending` latches on *queue*
     //    where the engine's latches on *send*, so a request the app drops leaves the latch set
     //    until the next `set_inspect_honor` — which the app's own `ClearInspectPlayer` path

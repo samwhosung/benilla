@@ -1,4 +1,4 @@
-//! The guild tabard designer's engine surface (decision 1977): the `TabardModel` kind's own method
+//! The guild tabard designer's engine surface: the `TabardModel` kind's own method
 //! table (`0x84ee40`, ten verbs) and the window's two globals.
 //!
 //! **The designer's whole state is five ints on the frame** — emblem style, emblem colour,

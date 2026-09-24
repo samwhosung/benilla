@@ -1,4 +1,4 @@
-//! **`SendAddonMessage`** — the addon-to-addon channel (decision 1235).
+//! **`SendAddonMessage`** — the addon-to-addon channel.
 //!
 //! ```lua
 //! SendAddonMessage(prefix, message [, distribution])
@@ -83,7 +83,7 @@
 //! the "unknown type silently guessed into SAY" failure is impossible by construction rather than
 //! by a second validation nobody remembers to write.
 //!
-//! ## The `|`-escape scan — carved, and it is a forward SKIP, not a flat scan (decision 1236)
+//! ## The `|`-escape scan — carved, and it is a forward SKIP, not a flat scan
 //!
 //! `0x49f9bb`-`0x49fa04`, running on the **composed** buffer (cursor `0x49f9bd
 //! lea ecx,[ebp-0x81c]`, byte-identical to the `_snprintf` destination `lea` at `0x49f9a7`) and
@@ -111,7 +111,7 @@
 //!   packet. Those two are **`partyMemberGuid[0].lo/.hi` — element 0 of a FOUR-entry array**
 //!   (stride 8, limit `0x20`; `Ui\PartyFrame.cpp`), not "the party GUID" as 1235 called them:
 //!   slot 0 being non-zero is a sound "in a party" test only because `SMSG_GROUP_LIST` refills the
-//!   roster lowest-slot-first (decision 1236 §3).
+//!   roster lowest-slot-first.
 //!   We do not implement it, and the reason is a window we have and the reference does
 //!   not: its gate reads the live group GUID, ours would read [`super::party::PartyState`], which
 //!   is `default()` between world entry and the first `SMSG_GROUP_LIST`. Implementing it would
@@ -195,7 +195,7 @@ impl AddonDistribution {
     /// `GetNumRaidMembers()`'s own backing (empty outside a raid, and including the player inside
     /// one).
     ///
-    /// **That is not an analogy — it is the same cell** (decision 1236). `[0xb713e0]` is not a
+    /// **That is not an analogy — it is the same cell**. `[0xb713e0]` is not a
     /// flag: it is the raid member **count**, used as an unsigned loop bound over the 40-slot
     /// roster at `0xb712a8`, and the binding `GetNumRaidMembers` (`0x4bb530`, `Ui\RaidInfo.cpp`)
     /// returns that cell verbatim. So the reference's test `[0xb713e0] == 0` *is*
@@ -231,7 +231,7 @@ pub struct AddonSend {
 /// `_snprintf(dst, 0x800, …)` writes at most 2047 bytes plus its NUL (`0x64a861`-`0x64a868`).
 const ADDON_MESSAGE_CAP: usize = 0x800 - 1;
 
-/// **The `|`-escape scan** (`0x49f9bb`-`0x49fa04`, decision 1236) — the reference's only text
+/// **The `|`-escape scan** (`0x49f9bb`-`0x49fa04`) — the reference's only text
 /// validation, run on the already-composed payload and **before** the distribution is even
 /// fetched.
 ///
@@ -335,7 +335,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     text.truncate(cut);
                 }
                 // **The escape scan runs HERE — after the compose, before argument 3 is fetched**
-                // (`0x49fa06` is the sole predecessor of `0x49fa0b`; decision 1236). So a call
+                // (`0x49fa06` is the sole predecessor of `0x49fa0b`). So a call
                 // that is wrong in both ways reports the ESCAPE, and a bad distribution beside a
                 // bad escape is never even looked at. It may truncate `text` in place, which is
                 // the reference's silent leg.

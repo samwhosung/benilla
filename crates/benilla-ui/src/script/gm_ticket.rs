@@ -1,4 +1,4 @@
-//! The GM trouble-ticket **Era API surface** (decision 1673) — the seven globals `HelpFrame.lua`
+//! The GM trouble-ticket **Era API surface** — the seven globals `HelpFrame.lua`
 //! is written against, and nothing else.
 //!
 //! All seven are engine bindings in 1.12 (`reference/1.12-globals.tsv` lists each as

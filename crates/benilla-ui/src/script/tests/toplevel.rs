@@ -31,7 +31,7 @@ fn level(s: &mut UiScript, frame: &str) -> i64 {
 /// and `Dialog`, born at level 0 and hidden.
 ///
 /// The level split is the point. A frame's link stamp already lifts it within its bucket when it is
-/// shown (`resequence_to_tail`, decision 0557), so a same-level sibling would prove nothing about
+/// shown (`resequence_to_tail`), so a same-level sibling would prove nothing about
 /// the raise; **level outranks the link stamp** in the draw key, so nothing but a real level bump
 /// can get `Dialog` over `Board`. This is the shape of the complaint the law answers: a dialog
 /// opening behind a window that happens to sit higher in its stratum.
@@ -691,7 +691,7 @@ fn a_chorded_press_raises_the_held_frame_not_the_one_under_the_cursor() {
 }
 
 /// **A window raised while part of it is hidden must keep its own children level with each other**
-/// — the compaction may not split a sibling pair (director's report 2026-09-08, decision 2104).
+/// — the compaction may not split a sibling pair (director's report 2026-09-08).
 ///
 /// This is Gatherer 1.0.0's Report window, built the way its XML builds it and reduced to the four
 /// frames that matter:
@@ -802,7 +802,7 @@ fn a_raise_with_a_hidden_child_keeps_the_windows_own_siblings_level() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **A script level change carries no children** (decision 2189): the Lua binding `0x774560`
+/// **A script level change carries no children**: the Lua binding `0x774560`
 /// calls `set_frame_level 0x76a4f0` with `propagate=0` — only the raise shifts a subtree. Stock
 /// FrameXML is written against it (`BonusActionButtonTemplate` raises the button and then its
 /// cooldown by hand), and carrying the children put the bonus bar's sweep over an addon's

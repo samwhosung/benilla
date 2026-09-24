@@ -40,10 +40,10 @@
 //! callers in the 218-addon corpus and waited for one under decision 1195; the customer that
 //! arrived is our own `ColorPickerFrame.xml`, whose four elements the XML loader installs through
 //! exactly these — two of them with **no file at all**, because the disc and the strip are pixels
-//! the client computes and the app renderer now computes too (decision 1592 — the wheel `0x78b580`
+//! the client computes and the app renderer now computes too (the wheel `0x78b580`
 //! and the value strip `0x78b8a0` generate them).
 //!
-//! **NOT carried, still waiting for a customer (decision 1195):** `SetColorHSV`/`GetColorHSV`
+//! **NOT carried, still waiting for a customer:** `SetColorHSV`/`GetColorHSV`
 //! (`0x78e920`/`0x78ea00`) — zero corpus callers, though the state they would read and write is
 //! now the right shape for them, and [`ColorSelectState::set_hsv`] is already the store they'd
 //! use (three *raw* `f32` — no clamp, no quantize, zero `fcom` in its body), because the drag path
@@ -269,7 +269,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // The four texture accessors (`0x78de90`/`0x78e160`/`0x78e450`/`0x78e720` and the getters
-    // `0x78dd80`/`0x78e070`). They had zero corpus callers and waited for one (decision 1195); the
+    // `0x78dd80`/`0x78e070`). They had zero corpus callers and waited for one; the
     // customer that arrived is our own `ColorPickerFrame.xml`, whose four elements the XML loader
     // installs through exactly these.
     install_slot_texture(

@@ -1,6 +1,6 @@
 //! The `.toc` manifest parser — the load list + metadata of every addon, including Blizzard's own
 //! (`FrameXML.toc` and the `Blizzard_*` AddOns are ordinary manifests; third-party addons are the
-//! identical mechanism — decision 0068).
+//! identical mechanism).
 //!
 //! Grammar, shared by 1.12 and Era manifests (Era only adds directive *keys*, not syntax):
 //! - `## Key: Value` — a directive. Keys compare case-insensitively; localized variants carry a
@@ -84,7 +84,7 @@ impl Toc {
             .unwrap_or_default()
     }
 
-    /// `## Interface:` **as the 1.12 client reads it** (decision 1292): the leading integer of the
+    /// `## Interface:` **as the 1.12 client reads it**: the leading integer of the
     /// value, and a manifest with no `## Interface` line (or a non-numeric one) is `0`.
     /// `Toc_Parse 0x51c9b0` stores `SStrToInt` of the value at `[rec+0x1c]`, the record ctor
     /// leaves it `0`, and the version gate compares that single dword — so an Era manifest's
@@ -103,7 +103,7 @@ impl Toc {
     /// the reference tokenizes it. Missing directive = empty list.
     ///
     /// **Two departures from the obvious read, both byte-derived, both of which were losing real
-    /// data** (decision 2126):
+    /// data**:
     ///
     /// * **A repeated directive APPENDS.** The reference `strdup`s each item (`0x64a620`) into a
     ///   `0x40`-granular array at `[rec+0x80]` with a running count at `[rec+0x7c]`, so a second
@@ -139,7 +139,7 @@ impl Toc {
     /// and a whole-key compare against `"Dep"` could never match a line reading `Dependencies:`.
     /// So the compare is a PREFIX compare — `SStrCmpI(line, key, SStrLen(key))` at
     /// `0x51cd4e`-`0x51cd5f` — and `## Dependencies`, `## RequiredDependencies` and
-    /// `## Dependency` all land here (decision 2126).
+    /// `## Dependency` all land here.
     ///
     /// Both keys feed the SAME array in the reference (`[rec+0x50]`), so a manifest writing both
     /// gets their union rather than whichever this function happened to test first.
@@ -181,7 +181,7 @@ impl Toc {
     ///
     /// **A manifest that does not write the line is enabled** — which is what makes a folder
     /// dropped into `AddOns/` just work, and is the record's initial byte, read at the bytes and
-    /// not inferred from the two literals' fall-through (decision 2316). The ctor `0x520550` seeds
+    /// not inferred from the two literals' fall-through. The ctor `0x520550` seeds
     /// this one field to 1 explicitly — `0x5205b9 mov [esi+0x2b],al` with `eax = 1`, where its five
     /// neighbours take `bl = 0` — over an allocation that does zero-fill, which is exactly what
     /// made "the ctor zeroes it" read as true.
@@ -274,7 +274,7 @@ mod tests {
     }
 
     /// **A scalar directive REPLACES on a repeat; a list directive APPENDS** — the reference's two
-    /// stores, and this file had both backwards (decision 2126). `MoveAnything.toc` writes
+    /// stores, and this file had both backwards. `MoveAnything.toc` writes
     /// `## Notes` twice and `AtlasLoot.toc` writes `## Author` twice, so the scalar half is not
     /// hypothetical either.
     #[test]

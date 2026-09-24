@@ -387,7 +387,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // **An unset Font answers `(nil, 0, "")`, all three ctor-determined** — `0x783a40` writes
     // `[esi+0x48]` and `[esi+0x4c]` from a zeroed register, and its `0x41e3a0(NULL)` stores the
     // shared empty record whose `char*` is NULL, which `lua_pushstring` turns into nil. So the
-    // height is the NUMBER zero, not nil (decision 2129).
+    // height is the NUMBER zero, not nil.
     m.set(
         "GetFont",
         lua.create_function(|lua, this: Table| {
@@ -549,7 +549,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     let meta = lua.create_table()?;
-    // **`__index` is the method TABLE, not a dispatcher function** (decision 2310). A Rust
+    // **`__index` is the method TABLE, not a dispatcher function**. A Rust
     // `__index` turns every `fo.GetFont` — a plain table index in the source — into a Lua→Rust→Lua
     // round trip plus a named-registry string lookup; measured at ~200 ns against ~9 ns for the
     // table form, on a path every widget call in the client begins with. The table is mutated in

@@ -1,4 +1,4 @@
-//! The **script error log** — what went wrong, kept where the player can read it (decision 1495).
+//! The **script error log** — what went wrong, kept where the player can read it.
 //!
 //! ## Why this exists
 //!
@@ -90,7 +90,7 @@ pub enum DiagnosticKind {
     /// nothing registered, a saved variable that could not be serialised, a `CreateMacro` that
     /// was refused. The addon runs on, believing it got what it asked for.
     ///
-    /// **This kind exists because the channel was a dead end** (decision 2135). These messages had
+    /// **This kind exists because the channel was a dead end**. These messages had
     /// one consumer — a `warn!` line in the host's terminal, drained and discarded every frame —
     /// so they reached neither the player (who cannot read a terminal, which is the whole
     /// argument of 1495 above) nor the addon survey (whose columns read `errors`). A warning is
@@ -223,7 +223,7 @@ impl super::UiScript {
     }
 
     /// Retain one non-fatal warning the HOST caught and has already logged — a loader warning off
-    /// an addon's XML, carrying the `<Addon>/<file>` prefix only the caller knows (decision 2135).
+    /// an addon's XML, carrying the `<Addon>/<file>` prefix only the caller knows.
     ///
     /// The retention half alone, exactly like [`Self::report_script_error`]: the caller writes its
     /// own `warn!` line, and putting the message on [`Model::warnings`] as well would double it at
@@ -257,7 +257,7 @@ pub(crate) fn record_load_failure(lua: &Lua, msg: &str) {
 }
 
 /// **THE rule for "something was accepted and did not do what it said"** — the retention half of
-/// the warning channel, for a caller that holds `&Lua` (decision 2135).
+/// the warning channel, for a caller that holds `&Lua`.
 ///
 /// Its `&UiScript` face is [`super::UiScript::report_warning`] and its engine-internal sibling is
 /// [`Model::record_warning`]; the difference is only which of the two channels the caller still

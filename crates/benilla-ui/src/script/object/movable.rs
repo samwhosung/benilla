@@ -514,7 +514,7 @@ fn mark_user_placed_change(model: &mut Model, h: FrameHandle) {
 
 /// Apply a frame's `SetMinResize`/`SetMaxResize` bounds to a proposed size, per axis.
 ///
-/// The reference's predicate, transcribed (decision 1505 — decoded from `0x768710`'s **emitted**
+/// The reference's predicate, transcribed (decoded from `0x768710`'s **emitted**
 /// `jcc`, not from the FPU status mask, and deliberately not from the dead `0x768550` copy whose
 /// operand order differs):
 ///
@@ -651,10 +651,10 @@ pub(crate) fn advance_size(model: &mut Model, pos: (f32, f32)) {
     // single-axis grip dragged purely across its axis gives `dw == dh == 0`, and so does a grip
     // held against a bound. Both used to bump the epoch and then hash all ~10k anchored regions to
     // conclude nothing had moved — the castbar's bug class in miniature, for every frame of such a
-    // drag (decision 1385).
+    // drag.
     if moved {
         // Offsets only — a resize grip never repoints an anchor, so the frame names itself and the
-        // cached graph survives the drag (decision 1388). A drag is per-frame by nature: this is
+        // cached graph survives the drag. A drag is per-frame by nature: this is
         // the difference between a smooth window resize and one that re-derives 13,656 nodes on
         // every mouse-move.
         model.touch_layout_frame(sz.frame);
@@ -698,7 +698,7 @@ pub(crate) fn advance_move(model: &mut Model, pos: (f32, f32)) {
             // The one mutation path every layout setter shares — the tier-1 epoch, never the
             // solver's arrays (see [`super::layout_methods`]'s mutate-only-on-change law; a zero
             // delta returned above, so this write always moved something). Translating every
-            // anchor moves no TARGET, so the frame names itself (decision 1388).
+            // anchor moves no TARGET, so the frame names itself.
             model.touch_layout_frame(mv.frame);
             mark_user_placed_change(model, mv.frame);
         }

@@ -29,7 +29,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetText",
         lua.create_function(|lua, (this, text): (Table, Option<mlua::Value>)| {
             // `text_arg`, not `Option<String>`: a Lua string is bytes and a sliced one need not be
-            // valid UTF-8 (decision 2138 — this raise took the whole handler down).
+            // valid UTF-8 (this raise took the whole handler down).
             let text = crate::script::binding_abi::text_arg(lua, text)?;
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
@@ -74,7 +74,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // `[edit+0x32c]` straight through), which is what stock `MailFrame.lua`'s
     // `GetText() == ""`/`strlen(GetText())` is written against. Do not hoist this.
     //
-    // What it costs to get wrong (decision 2110): the stock world map blanks
+    // What it costs to get wrong: the stock world map blanks
     // `WorldMapFrameAreaDescription` with `SetText("")` on every POI hover, and Cartographer 2.02
     // reads `if WorldMapFrameAreaDescription:GetText() then` as "this POI has a status line" —
     // answering `""` there put the zone's level range on the description's own line under a
@@ -125,7 +125,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // does NOT fall back to a declared `SetWidth`: that width is the very thing a caller
     // asks this to be independent of. A kit that sizes a box from this number and then sets a width
     // on the string — which is what the reference's own `PanelTemplates_TabResize` does — would
-    // otherwise read its own output back as its next input and never settle (decision 0997, the
+    // otherwise read its own output back as its next input and never settle (the
     // macro window's character tab changing width every frame). `0` until measured, as ever.
     fn natural_w(lua: &Lua, this: &Table) -> mlua::Result<f32> {
         let rh = region_handle_of(lua, this)?;

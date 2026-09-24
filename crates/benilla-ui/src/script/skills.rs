@@ -1,7 +1,7 @@
 //! The skills-pane bindings (decision 0437 phase 4) — the Era-shaped `SkillFrame` surface driving
 //! a faithful port of the real 1.12 Skills tab (extracted from `interface.MPQ`: FrameXML
 //! `SkillFrame.{xml,lua}`). Unlike [`super::tradeskill`]'s deliberately FLAT v1 recipe list, this
-//! pane needs the trainer's own GROUP/TREE machinery ([`super::trainer`], decision 0247): the app
+//! pane needs the trainer's own GROUP/TREE machinery ([`super::trainer`]): the app
 //! pushes a flat, unordered snapshot ([`UiScript::set_skills`] — [`SkillsState::entries`], each
 //! already resolved to name/category by the app from `SkillLine.dbc`/`SkillLineCategory.dbc`), and
 //! the ENGINE groups by category, sorts, and folds — the trainer's synthesized-tree pattern, minus
@@ -39,7 +39,7 @@
 //! ([`SkillEntry::mono`]; the pane's proficiency gate is `skillMaxRank == 1`).
 //!
 //! `numTempPoints` is a **REAL FIELD** (`entry->+0x10`) that this client answers as `0`. The
-//! distinction matters and this comment used to blur it (decision 1919): the field has four writers
+//! distinction matters and this comment used to blur it: the field has four writers
 //! in the real client — zeroed per list rebuild (`0x4d2e2e`), incremented by `AddSkillUp`'s worker
 //! (`0x4d345b`), decremented at `0x4d358a`, reset by `CancelSkillUps` (`0x4d35c9`) — and
 //! `SkillFrame.xml:697` wires `AddSkillUp` for real. What is true is a **data-reachability** verdict
@@ -167,7 +167,7 @@ impl super::UiScript {
     /// The re-expand is the client's, not a convenience: its list rebuild writes
     /// `expandedMask = 0xFFFFFFFF` unconditionally (`0x4d2cb0`, store at `0x4d2ce2`), so a fold
     /// survives only until the next skill-field change — the trainer's collapse-survives-an-update
-    /// rule this pane once borrowed is simply a different window's law (decision 1091).
+    /// rule this pane once borrowed is simply a different window's law.
     pub fn set_skills(&mut self, state: SkillsState) {
         let mut model = self.model_mut();
         let groups = build_groups(&state.entries);
@@ -306,7 +306,7 @@ fn set_collapsed(model: &mut Model, id: usize, collapse: bool) {
 /// module doc's by-id persistence); a header row or an out-of-range index clears the selection.
 /// `GetSkillLineInfo`'s **out-of-range tuple** — thirteen values, four of them numeric zeros.
 ///
-/// Byte-verified (pushes `0x4d3a2c`…`0x4d3a98`, `mov eax,0xd` at `0x4d3a9f`); decision 1919. One
+/// Byte-verified (pushes `0x4d3a2c`…`0x4d3a98`, `mov eax,0xd` at `0x4d3a9f`). One
 /// shape serves five distinct conditions — index 0, a negative index, an index past the end, no
 /// active player, and an in-range row whose DBC record is missing — because the reference's
 /// bounds test (`0x4d3675`) is a single UNSIGNED compare that funnels them all to the same exit.
@@ -404,7 +404,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // a header (`0x4d3768`). `index` 1-based.
     //
     // **OUT OF RANGE IS THE 13-VALUE FALLBACK, NOT A SINGLE NIL.** This comment used to say the
-    // opposite and it was wrong; the correction is decision 1919. `0x4d3675`'s bounds test is
+    // opposite and it was wrong; the correction is. `0x4d3675`'s bounds test is
     // UNSIGNED against the total row count, so index 0, a negative index, an index past the end, no
     // active player, and an in-range row whose DBC record is missing all fall to `0x4d3a2a` and push
     // the same thirteen: `nil, nil, nil, 0, 0, 0, 0, nil, nil, nil, 0, 0, nil` (`0x4d3a2c`…
@@ -537,7 +537,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // CancelSkillUps() — `0x4d3e30` → `0x4d35c9` (reference `1.12-shapes.tsv`: no arguments, no
     // returns): the reset leg of the temp-point table, zeroing every entry's `numTempPoints` and
     // giving the points back to the pool. The stock page's LIVE Close button calls it before
-    // hiding (`SkillFrame.xml`'s SkillFrameCancelButton, decision 1496), so it is reached on
+    // hiding (`SkillFrame.xml`'s SkillFrameCancelButton), so it is reached on
     // every close. This model carries no temp points (module docs, 1919): the table it resets is
     // empty by construction, so the reset moves nothing — the binding's whole effect on this
     // client's data, not a stand-in for it. The day temp points are modelled, this is where
@@ -695,7 +695,7 @@ mod tests {
     }
 
     /// A re-push keeps the SELECTION (by skill id) but throws every fold away — the client's list
-    /// rebuild re-expands unconditionally (`expandedMask = 0xFFFFFFFF`, decision 1091).
+    /// rebuild re-expands unconditionally (`expandedMask = 0xFFFFFFFF`).
     #[test]
     fn a_repush_keeps_the_selection_and_re_expands_every_group() {
         let mut s = UiScript::new().unwrap();

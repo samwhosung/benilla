@@ -244,7 +244,7 @@ pub(super) fn install(
                 // (`0x5c1ae0` under the `0x44d040` font-factory cache), so a path naming no file
                 // — an addon's TTF the AddOns folder does not hold — has to come back falsey, and
                 // only the store knows. With no probe installed, a non-empty path is 1: a VM with
-                // no font backend has nothing for a load to fail against (decision 2103).
+                // no font backend has nothing for a load to fail against.
                 let ok =
                     !path.is_empty() && model.font_probe.as_ref().is_none_or(|probe| probe(&path));
                 let d = model.region_data.entry(rh).or_default();
@@ -278,7 +278,7 @@ pub(super) fn install(
     // never takes (`0x79d499 push 0`) — so slot 2 never touches the `CGxFont` at all and always
     // pushes a double. We answer 0 there: `+0xe4` has **no constructor writer** in the reference,
     // so its value on this path is a recycled float that nothing can reproduce, and 0 is what the
-    // Font object's own ctor-determined `+0x48` gives (decision 2129).
+    // Font object's own ctor-determined `+0x48` gives.
     //
     // A nil here is not a cosmetic difference. `aux-addon/tabs/search/frame.lua:481` computes
     // `aux.select(2, child:GetFont()) + arg1*2` in its font-resize wheel handler — `aux.select`,

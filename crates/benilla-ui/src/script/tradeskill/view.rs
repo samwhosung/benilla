@@ -42,7 +42,7 @@ fn inv_slot_mask(inv_type: u32) -> u32 {
 
 /// The InvSlot dropdown's per-bit GlobalString **token** — the real client's 24-entry table
 /// (`0x84dd70`), dumped entry by entry. The caller
-/// resolves it against the player's own `GlobalStrings.lua` (decision 2045); these are the
+/// resolves it against the player's own `GlobalStrings.lua`; these are the
 /// paper-doll `*SLOT` family, **not** the `INVTYPE_*` family the item tooltip's slot line uses,
 /// and that distinction is exactly why the word cannot be stored here: `SECONDARYHANDSLOT`,
 /// `INVTYPE_SHIELD` and `INVTYPE_WEAPONOFFHAND` are three separately-localizable strings that all

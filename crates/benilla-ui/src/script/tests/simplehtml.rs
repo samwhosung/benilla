@@ -549,7 +549,7 @@ fn an_unfloated_image_reserves_height_without_becoming_the_anchor() {
 /// block is sized `0 × 0`. In the reference that is not "no size": the resolver's size call is
 /// VIRTUAL, and `CSimpleTexture::GetWidth 0x770720` / `GetHeight 0x770790` answer an authored `0.0`
 /// with the loaded texture's own texel extent, through bit-for-bit the converter `<AbsDimension>`
-/// uses — **one texel is one FrameXML unit** (decision 1349).
+/// uses — **one texel is one FrameXML unit**.
 /// `PvPRankAlliance.blp` is 128×128, so the crest is a 128-unit square.
 ///
 /// The falsification is the reported shape itself, asserted below: a zero span leaves the opposite

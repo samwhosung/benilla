@@ -145,8 +145,7 @@ pub struct EditBoxState {
     /// The submitted-line history (`AddHistoryLine`; the XML `historyLines` cap) — oldest first,
     /// newest last; UP recalls older from the end, DOWN newer. The exact recall keys + draft model
     /// are inferred: the 1.12 history controller is an untraced observer (`0x77b730`) — plain
-    /// UP/DOWN with the in-progress line restored past the newest entry; still open on the chat arc
-    /// (decision 0288).
+    /// UP/DOWN with the in-progress line restored past the newest entry; still open on the chat arc.
     pub history: Vec<String>,
     /// `historyLines` — max entries kept (drop-oldest on add). `0` = history off (the widget
     /// default; ChatFrame's edit box declares 32).
@@ -430,7 +429,7 @@ impl EditBoxState {
     /// The candidates are the **reachable cursor stops**, not every char boundary: the client's
     /// hit-test converts its glyph index through the same token walk everything else uses, with
     /// `atomicLinks = 0` (`0x77d0d0`, `6a 00` @`0x77d2f6`), so a click stops on each visible
-    /// character of a link's text but can never land inside an escape (decision 1077).
+    /// character of a link's text but can never land inside an escape.
     fn index_at_x_in(&self, x: f32, start: usize, end: usize, display: &str) -> usize {
         if self.advances.len() != display.len() + 1 {
             return end;
@@ -605,7 +604,7 @@ impl EditBoxState {
 // These used to live in `script::editbox` welded to the Lua layer, which meant the *only* way to
 // get the byte-verified box law was to be a FrameXML EditBox. The glue screens (login, character
 // create, the delete dialog) therefore each grew their own three-case imitation of it — append a
-// char, Backspace, Tab — with no caret movement, no selection, and no clipboard (decision 0704).
+// char, Backspace, Tab — with no caret movement, no selection, and no clipboard.
 // The law lives here now, and `script::editbox` is a thin wrapper that calls these and fires the
 // Lua events an [`EditOutcome`] tells it to. Anything with a `&mut EditBoxState` gets the real
 // law, whether or not there is a Lua VM anywhere near it.
@@ -633,7 +632,7 @@ impl EditOutcome {
 
 impl EditBoxState {
     /// Apply one semantic [`EditAction`] — the single entry point the host's per-OS chord table
-    /// feeds (decision 0301: the host owns *which chord*, this owns *what it does*).
+    /// feeds (the host owns *which chord*, this owns *what it does*).
     pub fn apply(&mut self, action: EditAction) -> EditOutcome {
         match action {
             EditAction::Move { unit, back, extend } => {
@@ -678,7 +677,7 @@ impl EditBoxState {
             return EditOutcome::default();
         }
         // Refused outright with the caret strictly inside a hyperlink — the opening guard of
-        // `0x77bee0` (decision 1077). Only the mouse can put the caret there (the keyboard treats a
+        // `0x77bee0`. Only the mouse can put the caret there (the keyboard treats a
         // link as one unit), and the client then silently swallows the typing rather than letting
         // it split `|Hitem:…|h[Name]|h` into something unclickable.
         if !crate::markup::ClassMap::new(&self.text).insert_allowed(self.cursor) {
@@ -712,7 +711,7 @@ impl EditBoxState {
     }
 
     /// `SetText` (`0x77be00`) is a clear-all followed by `Insert`, not a plain assignment, and the
-    /// order of its three parts is load-bearing (decision 1831):
+    /// order of its three parts is load-bearing:
     ///
     /// 1. the selection collapses **unconditionally**, before anything is compared — an identical
     ///    `SetText` still drops a highlight;
@@ -842,8 +841,8 @@ impl EditBoxState {
     pub fn move_by_char(&mut self, right: bool, extend: bool) {
         // One TOKEN step, links atomic — `0x77bb30(±1, atomicLinks = 1)`, which every arrow path
         // reaches (`6a 01` @`0x77c6d2`). So one press crosses a whole `|cff…|Hitem:…|h[Name]|h|r`
-        // rather than stepping into the middle of an escape, and Shift+arrow selects all of it
-        // (decision 1077). Not a char step: an escape byte is not a cursor position.
+        // rather than stepping into the middle of an escape, and Shift+arrow selects all of it.
+        // Not a char step: an escape byte is not a cursor position.
         let step = |s: &str, i: usize| {
             crate::markup::ClassMap::new(s).advance(i, if right { 1 } else { -1 }, true)
         };
@@ -864,7 +863,7 @@ impl EditBoxState {
     /// Ctrl/Option+arrow: the caret to the next [`word_boundary`](Self::word_boundary) — reached as
     /// a **loop of single atomic steps** (`0x77c8c0`/`0x77c7a0` loop `0x77c6b0`), so the landing
     /// place is always a reachable stop even when the word target falls inside an escape or
-    /// part-way through a link (decision 1077).
+    /// part-way through a link.
     pub fn move_by_word(&mut self, right: bool, extend: bool) {
         let word = self.word_boundary(right);
         let mut target = self.cursor;
@@ -962,8 +961,8 @@ impl EditBoxState {
         }
         if self.max_letters > 0 {
             // LETTERS, not chars: `0x77bc80` counts classes 2, 3 and 6 only, so a 48-byte item link
-            // costs 14 against `maxLetters` — its visible `[Chipped Claw]` and nothing more
-            // (decision 1077). Counting raw chars made a 255-letter chat line fill up three times
+            // costs 14 against `maxLetters` — its visible `[Chipped Claw]` and nothing more.
+            // Counting raw chars made a 255-letter chat line fill up three times
             // too fast once it held links.
             //
             // The trim pops through `0x77c280(-1)` — the BACKSPACE primitive, `atomicLinks = 1` —

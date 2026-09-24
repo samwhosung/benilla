@@ -1,7 +1,7 @@
 //! The widget-kind vocabulary + per-kind state (the "later layer" over the frame arena): the
 //! 13 client widget classes ([`FrameKind`]), the two region leaves ([`RegionKind`]), and the
 //! modeled per-kind behavior ([`KindState`]) that a `CSimple*` subtype adds over `CSimpleFrame`
-//! (the reference's LoadXML tables; decision 0068). Split from the arena so each grows
+//! (the reference's LoadXML tables). Split from the arena so each grows
 //! independently.
 
 use std::collections::{HashSet, VecDeque};
@@ -14,14 +14,14 @@ pub use editbox::*;
 pub use messageframe::*;
 
 /// The widget subtype of a [`Frame`]. Each corresponds to a client `CSimple*` class
-/// (the reference's 13 widget factories, decision 0068). Kinds with modeled behavior carry it
+/// (the reference's 13 widget factories). Kinds with modeled behavior carry it
 /// in [`Frame::kind_state`] (StatusBar today); the rest are tags whose per-kind behavior (button
 /// states, editbox text, …) is a later layer over this arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FrameKind {
     /// Plain `CSimpleFrame` — the base container.
     Frame,
-    /// The reference's `CGWorldFrame` (decisions 1983/1984): the singleton the 3D world renders
+    /// The reference's `CGWorldFrame`: the singleton the 3D world renders
     /// behind. Registered as its own frame type (`"WorldFrame"`
     /// @`0x843450`, factory `0x4959d0`) whose registry record is **destroyed on the first
     /// instantiation** — a second `<WorldFrame>` or `CreateFrame("WorldFrame")` is an unknown type;
@@ -61,7 +61,7 @@ pub enum FrameKind {
     ///
     /// Its whole Lua surface of its own is **one method, `SetSlot(index)`** (table `0x847ce4`,
     /// count 1 read off the registrar's own `mov edx,1`) — 1-based in, 0-based stored, no returns.
-    /// `LootFrame.lua:94` is its only caller. Decision 1799.
+    /// `LootFrame.lua:94` is its only caller.
     LootButton,
     CheckButton,
     EditBox,
@@ -103,13 +103,13 @@ pub enum FrameKind {
     /// `Model`'s, by the same chaining. Its state is [`KindState::Model`] like both of them; what a
     /// try-on DOES lives app-side as an ordered intent queue (`script::dressup`), because the
     /// substitution set is a look composed against the player's live equipment, which the VM
-    /// never holds (`0x707400` duplicates the live model natively; decisions 1060, 1969).
+    /// never holds (`0x707400` duplicates the live model natively).
     DressUpModel,
     /// `TabardModel` (`0x503bd0`) — the guild tabard designer's pane: `CGCharacterModelBase`'s
     /// other subclass (the dress-up model's sibling), with ten verbs of its own in table
     /// `0x84ee40` — the emblem/colour cycling, the two emblem-texture setters, the save gate and
     /// the save. Its state is [`KindState::Model`] like its siblings; the design it carries lives
-    /// app-side (`script::tabard`, decision 1977).
+    /// app-side (`script::tabard`).
     TabardModel,
     /// `CSimpleMessageFrame` — the non-scrolling message frame (`UIErrorsFrame`'s class, and the
     /// one `CreateFrame("MessageFrame")` makes). Its behaviour (the display lines, the per-line
@@ -125,7 +125,7 @@ pub enum FrameKind {
     ColorSelect,
     SimpleHtml,
     MovieFrame,
-    /// The `GameTooltip` widget family (decision 0274). Like [`FrameKind::Minimap`], a
+    /// The `GameTooltip` widget family. Like [`FrameKind::Minimap`], a
     /// *game-layer* factory over `CSimpleFrame`; its modeled behavior —
     /// the line stack, owner/anchor law, auto-size, fade — lives in [`KindState::Tooltip`] and
     /// `script::tooltip`. The real class's Lua surface is the 38-binding family at
@@ -136,7 +136,7 @@ pub enum FrameKind {
     /// *game-layer* factory, not one of the 13 base FrameXML types (`RegisterFrameFactories`
     /// `0x495940` registers the game UI's own widget set at `CGGameUI::Initialize`; ui node). The
     /// widget is a sized hole the game engine draws into — tiles, blips, and the player arrow are
-    /// the app renderer's job (decision 0203); the engine core carries only the rect and the zoom
+    /// the app renderer's job; the engine core carries only the rect and the zoom
     /// state ([`KindState::Minimap`]).
     Minimap,
 }
@@ -185,7 +185,7 @@ pub enum KindState {
     /// [`KindState::ScrollingMessage`], not a subset of it ([`MessageFrameState`]'s doc has the
     /// contract table).
     Message(MessageFrameState),
-    /// `CSimpleScrollFrame` (decision 0112 — the ScrollFrame mechanism, the engine's last structural
+    /// `CSimpleScrollFrame` (the ScrollFrame mechanism, the engine's last structural
     /// gap: the quest log's detail pane, chat history, and every long-content window need it): the
     /// scroll child + the vertical scroll offset. The offset setter and the range are byte-pinned
     /// (2017: `0x786db0` stores the offset as given, no clamp; 1338: `0x786e30` measures the
@@ -195,7 +195,7 @@ pub enum KindState {
     /// `CSimpleSlider` (factory `0x6eee40`; LoadXML table `0x789580`): a value in `[min, max]`
     /// with a step and orientation, positioning a thumb texture along the track. The mechanism is
     /// spec-faithful to the documented Slider widget contract (same posture as StatusBar's fill /
-    /// ScrollFrame's scroll), not byte-pinned. Every scrollbar is one (decision 0250).
+    /// ScrollFrame's scroll), not byte-pinned. Every scrollbar is one.
     Slider(SliderState),
     /// `CSimpleColorSelect` (ctor `0x78b220`, factory `0x6eef90`; LoadXML `0x78b3f0`, script-map
     /// `0x78b4f0`): the colour the picker window holds, as the client holds it — **HSV
@@ -209,10 +209,10 @@ pub enum KindState {
     /// the Lua API reads and writes, and the pixels are the app renderer's job. See
     /// [`ModelState`].
     Model(ModelState),
-    /// The `<Minimap>` widget's zoom state (decision 0203). The engine core carries only what the
+    /// The `<Minimap>` widget's zoom state. The engine core carries only what the
     /// Lua API reads/writes (`GetZoom`/`SetZoom`/`GetZoomLevels`); the tile/blip render is app-side.
     Minimap(MinimapState),
-    /// The GameTooltip widget's line stack + owner/fade state ([`TooltipState`], decision 0274).
+    /// The GameTooltip widget's line stack + owner/fade state ([`TooltipState`]).
     Tooltip(TooltipState),
 }
 
@@ -268,7 +268,7 @@ impl KindState {
 /// **The id order below is the jump table's, and it is NOT the setter's compare order**: the
 /// setter compares `ANCHOR_BOTTOMRIGHT` third and stores it as id 3 while comparing
 /// `ANCHOR_BOTTOMLEFT` fourth and storing it as id 2; the getter's arm *bodies* sit in `.text` in
-/// that same compare order, corroborating it (decision 2176).
+/// that same compare order, corroborating it.
 ///
 /// **All nine modes are reachable.** `SetOwner`'s absent / non-string / unrecognised argument is
 /// mode **0** = [`TooltipAnchor::Left`], silently — the binding zero-initialises its local at
@@ -338,7 +338,7 @@ impl TooltipAnchor {
     }
 }
 
-/// A `GameTooltip`'s runtime state (decision 0274). The line *text/color/wrap* is not duplicated
+/// A `GameTooltip`'s runtime state. The line *text/color/wrap* is not duplicated
 /// here — each line pair is a real named FontString region (`<name>TextLeftN`/`TextRightN`,
 /// engine-created on demand, published as Lua globals exactly like the real template's 30
 /// pre-declared pairs, which reference Lua addresses by name: `GameTooltipTextLeft1:SetTextColor`).
@@ -463,7 +463,7 @@ pub struct ModelState {
     /// pump walks for **visible** frames only — so a hidden pane's clock stands still and a
     /// re-shown one resumes where it stopped (the minimap ping's "ping N resumes where ping N−1
     /// left off"). Nothing else advances it: `AdvanceTime` is inert. The scene outlives the
-    /// model, so `SetModel` does not reset it. Decision 2007.
+    /// model, so `SetModel` does not reset it.
     pub clock_ms: u64,
     /// What is armed on bone slot 0 — the sequence the pane plays and the anchor its cursor is
     /// read against. `None` while nothing plays: before any file, after `ClearModel`, or after
@@ -482,7 +482,7 @@ pub struct ModelState {
     pub icon: Option<String>,
     /// The frame's size is the **implicit rect** — the file's bounding-box extent in layout units
     /// (`bboxExtent · 768·√(a²+1)` FrameXML units, the `0x6f1eb0` unit conversion),
-    /// written by the engine because the pane authored no size (decision 2015). The geometry
+    /// written by the engine because the pane authored no size. The geometry
     /// getters `0x76d080`/`0x76d0d0` answer it whenever no size is authored; here it is written
     /// into the layout input when the file's facts land and re-derived when the screen's aspect
     /// moves, and an authored `SetWidth`/`SetHeight` clears it for good.
@@ -500,7 +500,7 @@ pub struct ModelState {
     /// camera 0, which the model-ready hook applies ([`ModelState::seed_from_facts`]); `SetCamera`
     /// with no facts yet defers into it (`0x76cec0`'s two early legs). **While it is `Some`, the
     /// pane draws nothing at all** — the reference's draw gate is
-    /// `76d5f0 cmp [this+0x320],-1 ; jne <skip everything>` (decision 2027).
+    /// `76d5f0 cmp [this+0x320],-1 ; jne <skip everything>`.
     pub camera_pending: Option<i32>,
     /// The **installed** camera (`+0x31c`) as a RAW index into the file's camera table, or `None`
     /// for the NULL camera — which is what an index past the table's count installs (`76cf08`)
@@ -519,7 +519,7 @@ pub struct ModelState {
     pub light: ModelLight,
     /// `SetFogColor(r, g, b, a)` as the reference stores it: **one packed `0xAARRGGBB` dword**,
     /// which is why its getter is four values wide and why a Set→Get round trip is **lossy** —
-    /// eight bits per channel (decision 1845).
+    /// eight bits per channel.
     ///
     /// `0xffff_ffff` is the ctor's own terminal write, so the never-set answer is `1, 1, 1, 1` and
     /// not four zeros. It used to be `Option<(f32, f32, f32)>` here: three components, no alpha,
@@ -645,7 +645,7 @@ impl Default for ModelState {
 /// seed `0x70ebd0`): the id, and the **anchor** the cursor is read against. The reference
 /// bakes `cursor_lo = sceneClock − trunc(ms)` once and its sampler re-reads that anchor every
 /// frame; there is no counter that advances on its own, which is what lets the cooldown scrub
-/// the pane every paint without the clock fighting it. Decision 2007.
+/// the pane every paint without the clock fighting it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArmedSequence {
     /// The `AnimationData.dbc` id — `SetSequence`'s argument, or the loader's Stand seed.
@@ -691,7 +691,7 @@ pub struct SequenceFacts {
 /// reads these off the resident `MD20` (`animationLookup` at `md20+0x24`, the sequence table,
 /// the header bounds); here the host's M2 loader has them and hands them over through
 /// `UiScript::set_model_facts` once the asset lands. Keyed by the `SetModel` path
-/// ([`model_key`]), shared by every pane holding that file. Decision 2007.
+/// ([`model_key`]), shared by every pane holding that file.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelFileFacts {
     /// The sequences the file owns, **in file order** — the first is `animations[0]`, the
@@ -703,7 +703,7 @@ pub struct ModelFileFacts {
     /// How many records the file's **camera table** holds (`MD20+0x124`) — the bound
     /// `Model:SetCamera(n)` is checked against (`0x76cec0`: `76ceeb if idx >= count -> install
     /// NULL`). `0` for the overwhelming majority of models, which is why a plain `<Model>` almost
-    /// always ends on the orthographic leg. Decision 2027.
+    /// always ends on the orthographic leg.
     pub cameras: u32,
 }
 
@@ -937,7 +937,7 @@ pub struct MinimapState {
     /// name is in the 5875 image; there is no `GetMaskTexture` beside it, so this is write-only
     /// from Lua). `None` = the engine default, [`MINIMAP_DEFAULT_MASK`].
     ///
-    /// State-only here, pixels app-side, like the zoom index (0203): the app already masks the
+    /// State-only here, pixels app-side, like the zoom index: the app already masks the
     /// disc through its own `UiQuadMask`, and this only decides which texture it loads. It is what
     /// makes a **square minimap** possible, which is the single most recognisable thing pfUI does
     /// to the default UI (`modules/minimap.lua:27`).
@@ -1037,7 +1037,7 @@ pub const MINIMAP_DEFAULT_PLAYER_MODEL: &str = "Interface\\Minimap\\MinimapArrow
 /// A `CSimpleScrollFrame`'s runtime state: the frame whose anchors are overridden to track the
 /// scroll offset ([`crate::script::UiScript::resolve`]'s scroll-child override), and the current
 /// scroll position on each axis. `SetVerticalScroll` stores the offset VERBATIM — the reference's
-/// `0x786db0` never reads the range (decision 2017) — and the ranges are always computed live from
+/// `0x786db0` never reads the range — and the ranges are always computed live from
 /// the resolved rects (never cached here), so this struct carries only the three members the
 /// client's `SetScrollChild`/`SetHorizontalScroll`/`SetVerticalScroll` actually set (`[+0x318]`,
 /// `[+0x324]`, `[+0x328]`).
@@ -1157,7 +1157,7 @@ pub struct ButtonState {
     /// DisabledChecked art falls back to this; a checked one never falls the other way.
     pub checked_tex: Option<RegionHandle>,
     /// CheckButton `<DisabledCheckedTexture>` (`+0x4e4`) — replaces CheckedTexture when disabled.
-    /// The greyed tick a peace-forced faction's At War box wears (B369).
+    /// The greyed tick a peace-forced faction's At War box wears.
     pub disabled_checked: Option<RegionHandle>,
     /// The `<ButtonText>` fontstring (`+0x338`; `SetText`). Always drawn.
     pub text: Option<RegionHandle>,
@@ -1189,7 +1189,7 @@ pub struct ButtonState {
     /// (`[button+0x390]`: LEFT→LEFT, RIGHT→RIGHT, else CENTER), which is how a row of the
     /// reference's `UIMenuButtonTemplate` (no `<ButtonText>`, `SetText` from Lua) hugs its left
     /// edge. The second is the label's paint and query surface, reached through the live link
-    /// (`script::button::apply_normal_font`, `script::extract`). Decision 1996.
+    /// (`script::button::apply_normal_font`, `script::extract`).
     pub normal_justify_h: Option<crate::script::JustifyH>,
     /// See [`ButtonState::normal_justify_h`] — `<HighlightFont justifyH=>`, the highlight instance
     /// (`+0x3b8`). Paint only: the adopter reads the normal instance alone.
@@ -1531,7 +1531,7 @@ impl StatusBarState {
 /// **Default orientation is VERTICAL** — the opposite of [`StatusBarState`]'s HORIZONTAL default,
 /// and verified against the real templates, not assumed: `UIPanelScrollBarTemplate` (every
 /// scrollbar) declares no `orientation` and is vertical, while a horizontal slider
-/// (`OptionsSliderTemplate`) must declare `orientation="HORIZONTAL"` (decision 0250). Sliders in the
+/// (`OptionsSliderTemplate`) must declare `orientation="HORIZONTAL"`. Sliders in the
 /// UI are overwhelmingly scrollbars, so VERTICAL is the ctor default.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SliderState {
@@ -1606,7 +1606,7 @@ impl Default for SliderState {
 /// thumb, warps the value to seat the thumb's CENTER under the cursor and begins one continuous
 /// drag capture, button-agnostic, clamped by SetValue. We take all of that except the thumb press:
 /// ours grabs **offset-preserving**, so the point you grabbed stays under the finger instead of
-/// jumping to the thumb's middle (decision 0992 §6 — kept as the less surprising feel, and
+/// jumping to the thumb's middle (kept as the less surprising feel, and
 /// invisible on a reference-sized thumb either way). If that ever flips to byte-faithful, it flips
 /// here, once, for every surface at the same time.
 ///
@@ -1616,7 +1616,7 @@ impl Default for SliderState {
 /// cursor for the rest of the drag.
 ///
 /// `cursor` and `thumb_lead` are distances from the track's leading edge; `thumb_extent` is the
-/// thumb's length along the axis. A press **on** the thumb keeps its grabbed point (0992 §6); a
+/// thumb's length along the axis. A press **on** the thumb keeps its grabbed point; a
 /// press **off** it — anywhere on the track — grabs the thumb by its center, which is what makes
 /// the value warp under the cursor and the drag continue as one gesture (1.12's whole law, and
 /// 0989's directed requirement, which converged with it).
@@ -1761,7 +1761,7 @@ impl SliderState {
         })
     }
 
-    /// **`SetValueStep` (`0x789a60`) — which is not a field write** (decision 2143).
+    /// **`SetValueStep` (`0x789a60`) — which is not a field write**.
     ///
     /// The byte read:
     ///
@@ -1839,7 +1839,7 @@ impl SliderState {
 /// No alpha: `SetColorRGB` reads an optional 5th argument, quantizes it, and *discards* it
 /// (`0x7bbf20` reads three bytes; `0x7bbec0` hard-writes `0xff`). The reference's opacity is a
 /// separate `Slider`. `SetColorHSV`/`GetColorHSV` (`0x78e920`/`0x78ea00`) have zero callers across
-/// the 218-addon corpus, so they wait for a customer (decision 1195) — but the state they would read
+/// the 218-addon corpus, so they wait for a customer — but the state they would read
 /// and write is now the right shape for them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorSelectState {

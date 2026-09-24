@@ -275,7 +275,7 @@ fn fire_value_changed(lua: &Lua, this: &Table, changed: Option<f32>) -> mlua::Re
 }
 
 /// `OnValueChanged` for a bar the ENGINE moved rather than Lua — the nameplate health bars, whose
-/// value the plate driver re-sets from the unit's descriptor each time it changes (decision 2148).
+/// value the plate driver re-sets from the unit's descriptor each time it changes.
 ///
 /// The reference fires the same script from the same place: the plate's bar is driven by a
 /// GUID-watch callback (`0x7cc570`, registered `0x467e70`) that re-reads health and re-sets the bar

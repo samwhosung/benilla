@@ -53,8 +53,8 @@
 //!   `tests/toplevel.rs::a_raise_is_top_occupied_level_plus_one_after_compaction`.
 //! - **Level compaction** is [`crate::widget::WidgetArena::compact_levels`] — an order-preserving
 //!   renumber of **every frame** in one stratum, hidden ones included: `0x764eb0` walks the client's
-//!   master frame list filtering on strata and level alone, and never reads `+0xd4`
-//!   (decision 2104). It changes no draw order by itself; it is
+//!   master frame list filtering on strata and level alone, and never reads `+0xd4`.
+//! It changes no draw order by itself; it is
 //!   what keeps `level := max + 1` from ratcheting upward for the length of a session. Renumbering
 //!   only the *bucket* (the visible half) is the one shape it may not have: the raise's `propagate`
 //!   delta is computed in the new numbering and applied to levels that are still in the old one, so

@@ -1,4 +1,4 @@
-//! **The Lua index space is not the registry** (decision 2175) — a different order, over a
+//! **The Lua index space is not the registry** — a different order, over a
 //! different set, that does not exist until the server answers.
 //!
 //! `GetNumAddOns` and the *index* form of every AddOn verb address a flat array the client

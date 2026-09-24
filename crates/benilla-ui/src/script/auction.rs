@@ -1,4 +1,4 @@
-//! The auction-house bindings (decision 1511) — the Era-shaped auctioneer surface, the same two-way
+//! The auction-house bindings — the Era-shaped auctioneer surface, the same two-way
 //! seam as [`super::merchant`]/[`super::mail`]: the app pushes an **auction snapshot** (three lists
 //! of rows, already resolved from the wire to name/icon/quality/owner and already in display order)
 //! and the Lua `QueryAuctionItems`/`PlaceAuctionBid`/`StartAuction`/… calls queue outbound
@@ -75,7 +75,7 @@ fn list_index(kind: &str) -> Option<usize> {
     }
 }
 
-/// One auction row, resolved by the app from a wire record (decision 1511). Plain data — its
+/// One auction row, resolved by the app from a wire record. Plain data — its
 /// 1-based order in the window is its position in [`AuctionListState::rows`], which is already the
 /// sorted display order.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -88,7 +88,7 @@ pub struct AuctionItemRow {
     /// The listed item's **random-suffix roll** (the wire's `randomPropertyId`) — what the row
     /// hover resolves its enchant lines from, and the id whose suffix [`Self::name`] already
     /// carries. `0` = unrolled. The reference's `SetAuctionItem` writes exactly this into the
-    /// tooltip's `+0x424` (decision 1547).
+    /// tooltip's `+0x424`.
     pub random_property_id: u32,
     /// `None` while the item template answer is in flight (the row shows a placeholder and fills
     /// in when it lands, the merchant/mail pattern).
@@ -143,7 +143,7 @@ impl AuctionListState {
 }
 
 /// One row of the Browse tab's category tree, pushed by the app from the player's own
-/// `ItemClass.dbc` / `ItemSubClass.dbc` (decision 1511 §5 — the set and order of classes is a
+/// `ItemClass.dbc` / `ItemSubClass.dbc` (the set and order of classes is a
 /// structural fact; every string here comes off the player's install).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuctionCategory {
@@ -342,8 +342,8 @@ fn sell_item_info(model: &Model) -> Option<(String, Option<String>, u32, i64, bo
     ))
 }
 
-/// The real client's deposit arithmetic, reproduced including its intermediate truncation
-/// (decision 1511 §7): `floor(rate × stackValue / 100) × floor(minutes / 120)`. Both floors matter
+/// The real client's deposit arithmetic, reproduced including its intermediate truncation:
+/// `floor(rate × stackValue / 100) × floor(minutes / 120)`. Both floors matter
 /// — the inner one is what makes a cheap stack deposit zero here while the server still charges a
 /// few copper, and the outer is why 120/480/1440 minutes scale as 1/4/12 rather than continuously.
 fn deposit_for(rate: u32, stack_value: u32, minutes: u32) -> u32 {
@@ -565,7 +565,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetAuctionItemClasses() → the class names, in the reference's own menu order. The ORDER and
     // the set are structural (ten auctionable classes); every string is the player's own
-    // ItemClass.dbc row, so none of Blizzard's text ships with us (decisions 1234/1260). Static —
+    // ItemClass.dbc row, so none of Blizzard's text ships with us. Static —
     // pushed at login, read by the stock addon at its load (1971), no session required.
     g.set(
         "GetAuctionItemClasses",
@@ -1044,7 +1044,7 @@ mod tests {
     }
 
     /// The client's own deposit arithmetic, including the intermediate truncation that makes it
-    /// disagree with the server (decision 1511 §7). The cheap-stack case is the one that matters:
+    /// disagree with the server. The cheap-stack case is the one that matters:
     /// a 9-copper vendor value at 5% over 24h floors to 0 here while vmangos still charges 5, and
     /// that divergence is deliberate — the label is a client artifact.
     #[test]

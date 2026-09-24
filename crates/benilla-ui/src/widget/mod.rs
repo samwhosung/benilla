@@ -1,5 +1,5 @@
 //! The widget object model — the frame arena and the show/hide/strata/level/scale/alpha
-//! mutations, transcribed from the reference's binary-verified propagation cluster (decision 0068).
+//! mutations, transcribed from the reference's binary-verified propagation cluster.
 //!
 //! This crate owns the *model*, not the runtime: the arena stores frames and their region leaves and
 //! implements the propagation math, but it does **not** run Lua or fire `OnShow`/`OnHide` — the
@@ -251,8 +251,7 @@ pub struct Frame {
     /// scope in this crate for now.)
     pub mouse_enabled: bool,
     /// Whether the frame accepts the **wheel** (`EnableMouseWheel` / XML `enableMouseWheel`) — a
-    /// flag of its own in the reference, and separate from [`Self::mouse_enabled`] there and here
-    /// (decision 1198).
+    /// flag of its own in the reference, and separate from [`Self::mouse_enabled`] there and here.
     ///
     /// Default **false**, WoW's own default. The wheel dispatch bubbles to the nearest *enabled*
     /// ancestor carrying an `OnMouseWheel`, which is how a scroll region hands the wheel to the
@@ -266,7 +265,7 @@ pub struct Frame {
     /// Default **false**, the client's own default. **This is the field key delivery gates on**:
     /// [`crate::script::keyboard`]'s walk builds its candidate set from
     /// `effective_visible && keyboard_enabled`, then orders it strata 8→0 / level high→low /
-    /// oldest-registration-first (built 2026-08-14, decision 1319). `0x76af00` never touches the
+    /// oldest-registration-first (built 2026-08-14). `0x76af00` never touches the
     /// handler slots, so the flag and a handler are separable: `EnableKeyboard(true)` on a
     /// script-less frame "puts it in the walk where it is called and declines — transparent to
     /// everything downstream", so **being enabled is not being a handler**.
@@ -277,7 +276,7 @@ pub struct Frame {
     /// Default **true for GameTooltip frames**, false otherwise: the reference tooltip observably
     /// clamps (the minimap zone-text hover's ANCHOR_LEFT plate hangs down from the screen top
     /// instead of leaving the window) though its XML never sets the attribute — the class supplies
-    /// the flag — and the rule here is absolute: no tooltip ever leaves the window (decision 0352).
+    /// the flag — and the rule here is absolute: no tooltip ever leaves the window.
     pub clamped_to_screen: bool,
     /// `SetHitRectInsets` / XML `<HitRectInsets>` — how far the frame's **mouse** rect is inset
     /// from its resolved rect, as `[left, right, top, bottom]` (default all 0, i.e. the hit rect
@@ -330,7 +329,7 @@ pub struct Frame {
     /// **Necessary, not sufficient.** Every drag entry stamps this bit unconditionally
     /// (`0x7652b0` @`0x7652e5`), so an addon that drags a stock frame once stamps it too; the
     /// cache's own filter is this bit AND [`Frame::movable`]`|`[`Frame::resizable`], at both the
-    /// write and the apply, which is what lets the stamp fall off again (decision 2193).
+    /// write and the apply, which is what lets the stamp fall off again.
     pub user_placed: bool,
     /// `SetToplevel` / XML `toplevel` — flag word `[frame+0xb4]` **bit `0x1`**, the same word as
     /// [`Frame::movable`] (`0x100`) and [`Frame::resizable`] (`0x200`), written by the same pure
@@ -360,8 +359,8 @@ pub struct Frame {
     /// effectively visible, and a *changing* strata or level on an already-visible frame.
     ///
     /// It orders **two** sweeps that disagree about which end wins. Drawing takes the LATER-linked
-    /// frame on top; the HIT sweep probes the EARLIER-linked frame first and stops there
-    /// (decision 1816). See [`crate::order::hit_test`], and the note on [`WidgetArena`].
+    /// frame on top; the HIT sweep probes the EARLIER-linked frame first and stops there.
+    /// See [`crate::order::hit_test`], and the note on [`WidgetArena`].
     pub insertion_seq: u32,
     /// Per-kind behavior state (StatusBar value model, …); [`KindState::None`] for plain kinds.
     pub kind_state: KindState,
@@ -406,13 +405,13 @@ pub struct Region {
 /// `parent == None` is a top-level frame anchored to the always-visible, unit-scale screen root.
 ///
 /// **Link-stamp / draw order.** Each frame gets a monotonic `insertion_seq` at creation, used as the
-/// draw-order tiebreak **below the draw layer** within a `(strata, level)` bucket (decision 0884 —
+/// draw-order tiebreak **below the draw layer** within a `(strata, level)` bucket (
 /// the layer outranks the frame; see [`crate::order`]). Like the client, a frame is re-stamped to
 /// its bucket's **tail** whenever it *becomes visible* (show `0x76ae10` re-ADDS to the intrusive
 /// level list) or a visible frame changes strata/level (both setters remove-then-add). Show order
 /// IS draw order within a bucket — how the reference's late-shown
 /// `MiniMapTrackingFrame` draws over the earlier-declared `MinimapBackdrop` ring despite the XML
-/// declaring it first (decision 0557; the mutators live in [`propagation`]).
+/// declaring it first (the mutators live in [`propagation`]).
 ///
 /// The client's own list is a *head* insert walked tail→head, i.e. FIFO by link time with the
 /// newest-linked frame emitted last — order-equivalent to this ascending counter, which is why the
@@ -431,7 +430,7 @@ pub struct WidgetArena {
     minimap_created: u64,
     /// Frames whose kind carries **engine-side per-tick behavior** — ScrollingMessageFrame /
     /// MessageFrame (the line fades) and Cooldown (the flash-finished hide). The tick's registry
-    /// (decision 1446, the `minimap_created` disposition at list size): the per-frame advance
+    /// (the `minimap_created` disposition at list size): the per-frame advance
     /// walks these few dozen instead of the whole arena, which it used to do TWICE per tick — a
     /// corpus UI is thousands of frames. Appended at creation (kinds never change after);
     /// `destroy` removes its own handle, so the list never carries dead entries.
@@ -446,7 +445,7 @@ pub struct WidgetArena {
     /// Every live **Minimap**, same registry shape as [`Self::ticked_kinds`] and for the same
     /// reason: three state feeds (containment, the two zoom indices, and the player-arrow facing)
     /// all begin "find the Minimaps", and the facing is *per frame*. The ping's own lesson
-    /// (decision 1596) was that a per-widget push must not walk the ~3–4k-frame arena every frame
+    /// was that a per-widget push must not walk the ~3–4k-frame arena every frame
     /// to reach the one widget that exists. Appended at creation (kinds never change); `destroy`
     /// removes its own handle.
     minimap_kinds: Vec<FrameHandle>,
@@ -490,14 +489,14 @@ pub fn mouse_enabled_by_ctor(kind: FrameKind) -> bool {
             | FrameKind::CheckButton
             | FrameKind::EditBox
             // `CGWorldFrame`'s ctor enables key + mouse + wheel (`0x481b09`/`0x481b14`/`0x481b1f`);
-            // the hit is the world's, not the UI's (decision 1983).
+            // the hit is the world's, not the UI's.
             | FrameKind::WorldFrame
             // A Slider's thumb must be draggable: every scrollbar is a UIPanelScrollBarTemplate
-            // Slider that declares no `enableMouse` yet is draggable in-game (decision 0250).
+            // Slider that declares no `enableMouse` yet is draggable in-game.
             | FrameKind::Slider
             | FrameKind::ColorSelect
             | FrameKind::Minimap
-            // `LootButton` extends `CSimpleButton` and inherits its ctor's bit (decision 1799).
+            // `LootButton` extends `CSimpleButton` and inherits its ctor's bit.
             | FrameKind::LootButton
     )
 }
@@ -608,7 +607,7 @@ impl WidgetArena {
     /// Resolve a name to the frame that published it, or `None`. Publishing is **non-overwriting**:
     /// the first frame created with a given name owns it; a later duplicate keeps its own `name`
     /// field but does not become the lookup target (matching the client's auto-publish rule,
-    /// `0x701bd0`; decision 0068).
+    /// `0x701bd0`).
     pub fn lookup(&self, name: &str) -> Option<FrameHandle> {
         self.names.get(name).copied()
     }
@@ -666,8 +665,8 @@ impl WidgetArena {
             effective_visible: shown && parent_visible,
             mouse_enabled: mouse_enabled_by_ctor(kind),
             // The two kinds whose ctor takes the WHEEL rather than the mouse generally — the same
-            // by-construction argument as above, narrowed to the flag it is actually about
-            // (decision 1198): a ScrollingMessageFrame and a ScrollFrame are wheel-interactive
+            // by-construction argument as above, narrowed to the flag it is actually about:
+            // a ScrollingMessageFrame and a ScrollFrame are wheel-interactive
             // with no attribute, and nothing else is.
             mouse_wheel_enabled: matches!(
                 kind,
@@ -735,7 +734,7 @@ impl WidgetArena {
             self.minimap_created += 1;
         }
         // The model panes ride the same registry: their scene clock advances per tick and their
-        // completion edge is read there (decision 2007).
+        // completion edge is read there.
         let ticked = matches!(
             kind,
             FrameKind::ScrollingMessageFrame

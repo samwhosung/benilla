@@ -1,4 +1,4 @@
-//! The stable-master bindings (decision 1676) — the hunter stable window's Lua surface, the same
+//! The stable-master bindings — the hunter stable window's Lua surface, the same
 //! two-way seam as [`super::bank`] and [`super::trainer`]: the app pushes a **stable snapshot**
 //! ([`UiScript::set_stable`] — the wire's pet rows already resolved to icon/family/loyalty/diet
 //! strings), and the Lua's click/purchase/close calls queue outbound **intents** the app drains.
@@ -20,10 +20,10 @@
 //!
 //! The wire names a `creature_template` entry and a loyalty *level*; the window wants an icon, a
 //! localized family word, a loyalty *name* and a diet list. Every one of those is a catalog join
-//! the app already owns for the live pet ([`super::pet`], decisions 1005/1062), so the app does the
+//! the app already owns for the live pet ([`super::pet`]), so the app does the
 //! join once and pushes strings — this module never sees a DBC. The one join with no live-pet twin
 //! is the icon of a pet that is *not* summoned: it comes from the creature query's display id,
-//! which is why that field stopped being discarded (decision 1676).
+//! which is why that field stopped being discarded.
 //!
 //! ## The drag rides the cursor at mode 10
 //!
@@ -33,7 +33,7 @@
 //! This corrects what benilla shipped first. The original build made the drag frame-local, reading
 //! payload mode 10 as a class/talent-ability id rather than the stabled-pet grab. `0x495020` **is**
 //! the stabled-pet grab, and `[0xb4d900] = 10` is written at exactly one site image-wide, inside
-//! it. Decision 1677.
+//! it.
 //!
 //! ## Two return conventions that are the API, not details
 //!
@@ -234,7 +234,7 @@ fn slot_index(i: i64) -> Option<usize> {
 }
 
 /// Commit a drag from slot `from` onto slot `to` — the **one** place the stable's move law lives,
-/// now read off the binary (`ClickStablePet 0x4cb420` regime B; decision 1677).
+/// now read off the binary (`ClickStablePet 0x4cb420` regime B).
 ///
 /// The first build inferred this from the server's constraint set and got the shape right and the
 /// **three edges wrong**. Each of them is a real case:

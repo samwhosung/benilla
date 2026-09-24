@@ -1,5 +1,5 @@
 //! The sandbox + the WoW stdlib layer — the global aliases and helpers FrameXML/addon Lua assumes
-//! exist on top of stock Lua 5.1 (decision 0068).
+//! exist on top of stock Lua 5.1.
 //!
 //! - **Sandbox** ([`sandbox`]): remove `io`/`os`/`package`/`require`/`dofile`/`loadfile`/`debug`
 //!   (keeping a `debugstack` stub returning `""`), and replace chunk loading with a **text-only**
@@ -55,7 +55,7 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
     // False: the corpus PARSES it, three different ways, and every one of them reads the string's
     // shape rather than its contents.
     //
-    // **There is no `stack traceback:` header, and line 1 is the caller's frame** (decision 2121).
+    // **There is no `stack traceback:` header, and line 1 is the caller's frame**.
     // mlua's `Lua::traceback` is `luaL_traceback`, which emits that header — and the header cost a
     // whole addon family its saved variables. `AceDB-2.0:RegisterDB` (`AceDB-2.0.lua:742`) does
     //
@@ -109,7 +109,7 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
     // makes mlua reject a binary chunk (the `\27Lua` signature), the "loadstring of bytecode
     // rejected" guarantee.
     // The BOM strip and the `#`-line skip ride along, because in the reference they live *inside*
-    // `luaL_loadbuffer`/`luaX_setinput` — the same door `loadstring` goes through (decision 1193).
+    // `luaL_loadbuffer`/`luaX_setinput` — the same door `loadstring` goes through.
     let loadstring = lua.create_function(
         |lua, (src, chunkname): (mlua::String, Option<mlua::String>)| {
             let raw = src.as_bytes();
@@ -161,7 +161,7 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // The default `geterrorhandler()` reports into the same channel a failed handler uses, so an
     // addon's `geterrorhandler()(msg)` surfaces where every other script error does rather than
-    // vanishing (decision 1195). Named with the `__benilla_` prefix because it is host plumbing,
+    // vanishing. Named with the `__benilla_` prefix because it is host plumbing,
     // not a 1.12 global — the reference's default handler is FrameXML's `_ERRORMESSAGE`.
     lua.globals().set(
         "__benilla_script_error",
@@ -184,7 +184,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         .set_mode(mlua::ChunkMode::Text)
         .exec()?;
     // Remember the default handler BY IDENTITY, right after installing it — the engine-side
-    // dispatch (decision 1305) skips it (it reports into the host channel, where every dispatched
+    // dispatch skips it (it reports into the host channel, where every dispatched
     // message already is) and fires only a handler somebody *chose*: FrameXML's `_ERRORMESSAGE`
     // or an addon's own.
     let default: mlua::Function = lua.load("return geterrorhandler()").eval()?;
@@ -608,7 +608,7 @@ fn format_epoch(secs: i64, fmt: &str) -> String {
     out
 }
 /// `luaO_chunkid` (`0x6f5c40`), the reference's own — because `debugstack`'s frames carry
-/// `short_src`, and **it truncates from the FRONT** (decision 2121).
+/// `short_src`, and **it truncates from the FRONT**.
 ///
 /// An `@`-named chunk longer than [`CHUNKID_KEEP`] characters after the `@` becomes `"..."` plus
 /// its LAST [`CHUNKID_KEEP`], so the head of the path is what is lost. That is not a detail: over a
@@ -650,7 +650,7 @@ const CHUNKID_KEEP: usize = 52;
 /// What `[string "…"]` costs the budget in the third `luaO_chunkid` arm.
 const STRING_CHUNK_OVERHEAD: usize = 17;
 
-/// One `debugstack` frame, in the reference's own wording (decision 2121):
+/// One `debugstack` frame, in the reference's own wording:
 /// `short_src ":" [currentline ":"] DESC`, with the `\n` pushed **after** it by the caller.
 ///
 /// `DESC` is the `*namewhat` switch at `0x7038fa`: a `f`/`g`/`l`/`m` name renders
@@ -700,7 +700,7 @@ fn traceback_frame(d: &mlua::Debug) -> String {
 /// `debugstack`'s body — `0x703760`'s walk, which is stock Lua 5.0's `db_errorfb` with its header
 /// and its `"\n\t"` prefix replaced by a `"\n"` pushed **after** each frame (`0x703971`). That one
 /// substitution is the whole difference in shape, and it is why line 1 is a frame and why
-/// `AceDB-2.0`'s skip-one-line lands on its caller (decision 2121).
+/// `AceDB-2.0`'s skip-one-line lands on its caller.
 ///
 /// **`count1` bounds nothing on its own.** The loop formats while the level is `<= start + count1`
 /// (`0x703857` is `jbe`, unsigned ≤), and past that it probes `getstack(level + count2)`: a probe

@@ -1,8 +1,8 @@
-//! The action bar (decision 0216 §7, slice 4; byte-verified 0218 §2/§4): `PickupAction`/
+//! The action bar (slice 4; byte-verified 0218 §2/§4): `PickupAction`/
 //! `PlaceAction` join the ONE payload space as the [`CursorAction`] arm. Two things set this
 //! surface apart from bags/doll:
 //!
-//! - **The bar is client-authoritative and actions HOP** (0218 §4, `PlaceAction 0x4e62e0`) — the
+//! - **The bar is client-authoritative and actions HOP** (`PlaceAction 0x4e62e0`) — the
 //!   opposite of the post-0218 item swap: placing onto an occupied slot puts the DISPLACED action
 //!   on the cursor rather than clearing, because there is no server round-trip to wait on (the
 //!   120-slot table is ours; [`place_action`] IS the mutation, not a request for one).
@@ -11,7 +11,7 @@
 //!   authoritative store, kept only so `HasAction`/`GetActionTexture`/&c. read right the instant a
 //!   local pickup/place happens, without waiting a frame for the app to re-feed. Every mutation
 //!   also queues `(lua id, packed)` onto [`Model::action_sets`] — the wire intent the app drains
-//!   into `CMSG_SET_ACTION_BUTTON`, one send per queued entry (0218 §4: a drag-swap is two sends,
+//!   into `CMSG_SET_ACTION_BUTTON`, one send per queued entry (a drag-swap is two sends,
 //!   never atomic — this module never coalesces them).
 
 use mlua::Lua;
@@ -27,7 +27,7 @@ use super::{queue_cursor_update, CursorAction, CursorPayload};
 /// `Model::ui_errors` for the app's action feed to resolve and fire.
 const PASSIVE_ON_BAR_ERROR: &str = "ERR_PASSIVE_ABILITY";
 
-/// Pack `(kind, action)` into the wire's `u32` slot word (`kind<<24 | action`, decision 0216 §1).
+/// Pack `(kind, action)` into the wire's `u32` slot word (`kind<<24 | action`).
 fn pack(kind: u8, action: u32) -> u32 {
     (u32::from(kind) << 24) | (action & 0x00FF_FFFF)
 }
@@ -70,7 +70,7 @@ pub(super) fn pickup_action(model: &mut Model, id: u32) -> bool {
 ///
 /// Every arm writes the held action into `model.actions[id]` optimistically and queues
 /// `action_sets.push((id, packed))`; what happens to the cursor afterward is the byte-verified
-/// divergence from every other surface (0218 §4): an OCCUPIED destination puts the DISPLACED
+/// divergence from every other surface: an OCCUPIED destination puts the DISPLACED
 /// action on the cursor (referencing `id` as its new `src_slot` — the slot it can now be placed
 /// FROM), an empty destination just clears.
 ///
@@ -84,7 +84,7 @@ pub(super) fn pickup_action(model: &mut Model, id: u32) -> bool {
 ///
 /// Returns whether the caller should repaint.
 pub(crate) fn place_action(model: &mut Model, id: u32) -> bool {
-    // The two accept filters, byte-read (`PlaceAction 0x4e62e0` — decision 0666). Both
+    // The two accept filters, byte-read (`PlaceAction 0x4e62e0`). Both
     // reject with a **bare return**: no store, no clear, no packet — mechanically identical to
     // clicking with an empty cursor, and the refused payload STAYS on the cursor.
     //
@@ -119,11 +119,11 @@ pub(crate) fn place_action(model: &mut Model, id: u32) -> bool {
         // macros are not). It packs the bare macro id under the MACRO tag, exactly as the SPELL
         // and ITEM arms pack theirs.
         CursorPayload::Macro(m) => Some((ACTION_KIND_MACRO, m.index, m.texture.clone())),
-        // Mode 4 — the other half of that same table's refusal (decision 1010). A pet action has
+        // Mode 4 — the other half of that same table's refusal. A pet action has
         // no `CMSG_SET_ACTION_BUTTON` encoding at all, so there is nothing to pack: the payload
         // goes straight back on the cursor, where the pet bar can still take it.
         CursorPayload::PetAction(_) => None,
-        // Mode 10 (decision 1677) — a stabled pet has no `CMSG_SET_ACTION_BUTTON` encoding either,
+        // Mode 10 — a stabled pet has no `CMSG_SET_ACTION_BUTTON` encoding either,
         // so the action bar refuses it and it goes back on the cursor.
         CursorPayload::StablePet(_) => None,
         // Mode 2 (1962) — `PlaceAction`'s table takes modes 1, 2 and 8 … where its mode 2 is the
@@ -146,7 +146,7 @@ pub(crate) fn place_action(model: &mut Model, id: u32) -> bool {
             action,
             // The engine holds no item knowledge, so neither half of the Count pair can be
             // answered here: the app's next-frame re-feed resolves the real bag count and the
-            // `IsConsumableAction` gate together, off the item template (decision 1301).
+            // `IsConsumableAction` gate together, off the item template.
             count: 0,
             consumable: false,
         },
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(s.take_action_sets(), vec![(7, 133)]);
     }
 
-    /// The byte-verified divergence from bags/doll (0218 §4): placing onto an OCCUPIED action
+    /// The byte-verified divergence from bags/doll: placing onto an OCCUPIED action
     /// slot HOPS the displaced action onto the cursor — two `action_sets` entries across the
     /// gesture (the pickup's clear, then the place's write), never a container move.
     #[test]
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return hides").unwrap(), 1);
     }
 
-    /// `PlaceAction`'s ITEM filter (decision 0666): an item with neither an on-use spell nor an
+    /// `PlaceAction`'s ITEM filter: an item with neither an on-use spell nor an
     /// equip slot — a grey trade good — is refused, and the refusal is a **bare return**: nothing
     /// stored, nothing sent, and the payload is still on the cursor afterwards.
     #[test]

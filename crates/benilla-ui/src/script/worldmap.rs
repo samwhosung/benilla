@@ -42,8 +42,7 @@
 //! discovered sub-area's overlay art (`GetNumMapOverlays`/`GetMapOverlayInfo`, filtered by the
 //! pushed `PLAYER_EXPLORED_ZONES` bitset) fills it in — the reference's own overlay pool draws
 //! the returned pieces. The landmark family (`GetNumMapLandmarks`/`GetMapLandmarkInfo`) answers
-//! with the `AreaPOI.dbc` rows the displayed level admits, then the guard-directions marker
-//! (decisions 1586, 1514).
+//! with the `AreaPOI.dbc` rows the displayed level admits, then the guard-directions marker.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -74,7 +73,7 @@ pub struct WorldMapZoneView {
 ///
 /// - the **`AreaPOI.dbc` rows** that survive the builder's level-flag, exploration and
 ///   world-state gates — the town and capital icons, the capitals' "Under Attack" markers, and the
-///   Eastern Plaguelands towers (decision 1586);
+///   Eastern Plaguelands towers;
 /// - then the **guard-directions marker** (`SMSG_GOSSIP_POI` — the flag a guard drops when you ask
 ///   where the warrior trainer is), appended last as the one element with `+0x10 == 1` and exempt
 ///   from every gate above.

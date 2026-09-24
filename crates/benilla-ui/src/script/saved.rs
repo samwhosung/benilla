@@ -1,4 +1,4 @@
-//! **Saved variables** — the Lua-level settings that survive a restart (decision 1128).
+//! **Saved variables** — the Lua-level settings that survive a restart.
 //!
 //! The reference client has *two* mechanisms for this, byte-verified:
 //!
@@ -14,7 +14,7 @@
 //! two collapse into one here: the *declaration* API is (1) — the one our XML can call — and the
 //! *load* is (2)'s, a real chunk, because we already have a Lua VM and executing beats a line
 //! parser that cannot carry a table. One file, install-scoped (the `benilla/` folder is already
-//! per-install, so it IS the reference's account scope — decision 0954). The host side — path,
+//! per-install, so it IS the reference's account scope). The host side — path,
 //! load seam, write triggers — is the app's `ui_saved` module's.
 //!
 //! **Deliberate divergences from the reference's serializer**, all recorded in 1128: LF and no

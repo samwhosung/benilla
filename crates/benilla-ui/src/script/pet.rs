@@ -1,4 +1,4 @@
-//! The pet action bar seam (decision 0982) — the eight bindings `PetActionBarFrame.lua` consumes
+//! The pet action bar seam — the eight bindings `PetActionBarFrame.lua` consumes
 //! (`GetPetActionInfo`/`GetPetActionsUsable`/`GetPetActionCooldown`/`PetHasActionBar`/
 //! `CastPetAction`/`TogglePetAutocast`/`IsPetAttackActive`/`PetStopAttack`) over an app-pushed
 //! slot snapshot, in [`super::shapeshift`]'s two-way shape: the app resolves everything (which
@@ -17,9 +17,9 @@
 //! elapsed-goes-cold rule `GetActionCooldown` uses.
 //!
 //! Two later families joined the bar's eight through the same two-way seam, because they are about
-//! the same unit and move on the same push: the **hunter stat block** ([`PetStats`], decision 1005)
+//! the same unit and move on the same push: the **hunter stat block** ([`PetStats`])
 //! that the pet paper doll and the happiness icon read, and the **right-click menu**
-//! (`PetCanBeAbandoned`/`PetCanBeRenamed`/`PetAbandon`/`PetDismiss`/`PetRename`, decision 1066).
+//! (`PetCanBeAbandoned`/`PetCanBeRenamed`/`PetAbandon`/`PetDismiss`/`PetRename`).
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -75,7 +75,7 @@ pub struct PetActionView {
     /// exact shape; `None` = no cooldown.
     pub cooldown: Option<(i64, u32, bool)>,
     /// **The slot's packed word, verbatim** — the one place this seam's "the engine holds no pet
-    /// knowledge" rule bends, and deliberately (decision 1010).
+    /// knowledge" rule bends, and deliberately.
     ///
     /// The drag ([`super::cursor::pet`]) is word arithmetic in the reference and cannot be
     /// anything else: `0x4bc9a0` compares occupants under `& 0x3FFFFFFF`, tests a candidate's low
@@ -102,8 +102,8 @@ pub(crate) struct StoredPetAction {
 }
 
 /// The hunter-pet stat block behind `GetPetHappiness`/`GetPetLoyalty`/`GetPetTrainingPoints`/
-/// `GetPetExperience` and `HasPetUI`'s second return (`0x4be670`; decision 1005), plus the two
-/// **family**-derived answers `UnitCreatureFamily("pet")` and `GetPetFoodTypes()` (decision 1062).
+/// `GetPetExperience` and `HasPetUI`'s second return (`0x4be670`), plus the two
+/// **family**-derived answers `UnitCreatureFamily("pet")` and `GetPetFoodTypes()`.
 ///
 /// **The four stat bindings share one gate** — `0x6116e0(pet)`, "is this a hunter's pet" — which is
 /// why they share one pushed struct: a warlock's imp resolves perfectly well and still answers
@@ -155,7 +155,7 @@ pub struct PetStats {
     /// four lookup-miss paths as [`Self::family`], which is why it sits beside it.
     ///
     /// **Outside the hunter gate, like [`Self::family`] and unlike [`Self::food_types`] — and that
-    /// placement is INFERRED** (decision 1676). `GetPetIcon 0x4beb10` is registered adjacent to
+    /// placement is INFERRED**. `GetPetIcon 0x4beb10` is registered adjacent to
     /// both in the same table and has not been read.
     /// It is grouped with the family word because it is a pure family-row lookup like that one,
     /// where the diet's gate is shared with the four *stat* bindings. The choice is unobservable
@@ -200,7 +200,7 @@ pub(crate) struct PetBarState {
     ///
     /// It sits before the cursor fork, so it blocks the DROP as well as the pick-up.
     pub(crate) pickup_allowed: bool,
-    /// `PetCanBeAbandoned()` — **the pet right-click menu's whole fork** (decision 1066).
+    /// `PetCanBeAbandoned()` — **the pet right-click menu's whole fork**.
     ///
     /// Three of the PET menu's four rows show only when this is true (paperdoll, rename, abandon)
     /// and the fourth — Dismiss — shows only when it is *false* (`UnitPopup.lua:402-417`). So it is
@@ -258,7 +258,7 @@ impl super::UiScript {
         bar.stats = stats;
     }
 
-    /// Push the right-click menu's two predicates (decision 1066) — a third clock again, the pet's
+    /// Push the right-click menu's two predicates — a third clock again, the pet's
     /// own `UNIT_FIELD_FLAGS`, which the rename's one-shot bit moves independently of both.
     pub fn set_pet_menu(&mut self, can_be_abandoned: bool, can_be_renamed: bool) {
         let bar = &mut self.model_mut().pet_bar;
@@ -293,7 +293,7 @@ impl super::UiScript {
         self.model_mut().player_control = in_control;
     }
 
-    /// Drain the pet bar writes the drag queued (decision 1010) — **one `Vec` per
+    /// Drain the pet bar writes the drag queued — **one `Vec` per
     /// `CMSG_PET_SET_ACTION`**, each of one or two `(0-based position, packed word)` pairs.
     ///
     /// Already-applied on the engine's side: the app's job is to mirror each pair into its own
@@ -522,7 +522,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UnitCreatureFamily(unit) → the localized family word, or NIL. Exactly ONE return on every
-    // path (`0x51a310`) — decision 1062.
+    // path (`0x51a310`).
     //
     // **Scoped to the `"pet"` token, and that narrowing is stated rather than hidden.** The real
     // binding resolves any unit and reads `[[unit+0xb30]+0x1c]` off its cached creature-query
@@ -557,7 +557,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetPetIcon() → the pet's icon path, or NIL. One return. The stable window reads it both as a
     // predicate ("is there a current pet?", `PetStable.lua:51`) and as the texture itself (`161`),
     // so the nil must be a real nil rather than an empty string — `SetItemButtonTexture` would
-    // happily take "" and a path resolving to nothing draws WHITE (decision 1046).
+    // happily take "" and a path resolving to nothing draws WHITE.
     g.set(
         "GetPetIcon",
         lua.create_function(move |lua, ()| {
@@ -639,7 +639,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ── The right-click menu (decision 1066) ─────────────────────────────────────────────────
+    // ── The right-click menu ─────────────────────────────────────────────────
     // Two predicates that decide what the PET menu SHOWS, and three verbs it can pick. The
     // predicates are 1/nil like the rest of this file, which is all `UnitPopup.lua` needs — every
     // one of its four uses is a bare `not PetCanBeAbandoned()` or an AND of the two.
@@ -871,7 +871,7 @@ mod tests {
             .unwrap());
     }
 
-    /// The right-click menu's two predicates and three verbs (decision 1066).
+    /// The right-click menu's two predicates and three verbs.
     ///
     /// The predicate half is checked the way `UnitPopup.lua` actually reads them — as the four
     /// row conditions — because that is the only thing they are for, and getting the Dismiss row's
@@ -1148,7 +1148,7 @@ mod tests {
             .unwrap());
     }
 
-    /// **`UnitCreatureFamily`'s nil paths — all four of them** (decision 1062). The reference
+    /// **`UnitCreatureFamily`'s nil paths — all four of them**. The reference
     /// guards its whole level-line `SetText` on this binding, so an accidental `""` in place of
     /// nil would print a bare "Level 58 " with a trailing space instead of nothing at all.
     #[test]

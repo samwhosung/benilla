@@ -1,5 +1,5 @@
 //! The runtime `SetParent` law — strata/level re-assignment, the hide→show round-trip, and the
-//! binding's error surface (`SetParent 0x7a1550`; decision 1323). Every test drives the
+//! binding's error surface (`SetParent 0x7a1550`). Every test drives the
 //! production Lua binding; the arena split
 //! (`reparent_begin`/`reparent_finish`) is exercised through it.
 

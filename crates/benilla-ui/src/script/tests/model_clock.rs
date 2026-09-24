@@ -1,4 +1,4 @@
-//! **The model pane's clock, arm, and two handlers** (decision 2007; `0x76d7f0`, `0x7121a0`,
+//! **The model pane's clock, arm, and two handlers** (`0x76d7f0`, `0x7121a0`,
 //! `0x76cac0`).
 //!
 //! A `<Model>` widget owns a private scene whose clock its own `OnUpdate` advances while the
@@ -409,7 +409,7 @@ fn a_loop_completes_once_and_a_fileless_pane_paints_nothing() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The implicit rect** (decision 2015): a model pane that authored no size takes its file's
+/// **The implicit rect**: a model pane that authored no size takes its file's
 /// bounding-box extent in LAYOUT units — `768·√(a²+1)` FrameXML units per unit, `1280` at 4:3
 /// — the moment the facts are known; it follows the screen's aspect; an authored size wins.
 #[test]

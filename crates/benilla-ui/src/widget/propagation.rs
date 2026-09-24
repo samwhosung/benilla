@@ -17,7 +17,7 @@ impl WidgetArena {
     /// **every frame whose `effective_visible` actually changed** — the caller fires
     /// `OnShow`/`OnHide` for those, in order.
     ///
-    /// **Two recorded deviations from `0x76ae10`, both in this signature** (decision 2317). The
+    /// **Two recorded deviations from `0x76ae10`, both in this signature**. The
     /// reference is **post-order** — it marks itself visible, recurses into its children, and fires
     /// its own notify last (`0x76aef5`, past both child loops) — so descendants are notified before
     /// ancestors. And it keeps **no snapshot**: each loop re-reads the live links after every
@@ -139,7 +139,7 @@ impl WidgetArena {
     /// raised frame's level to `bucket->count(+0x8)`.
     ///
     /// **EVERY frame of the stratum is renumbered — hidden ones included, and that is the byte
-    /// law, not a benilla choice** (decision 2104). `0x764eb0`'s occupancy test is a two-part OR: a
+    /// law, not a benilla choice**. `0x764eb0`'s occupancy test is a two-part OR: a
     /// level node's own list, else a scan of the client's **master frame list** (`[root+0xcc4]`,
     /// link offset `0x304` — every live frame, joined in the `CSimpleFrame` ctor and counted by
     /// `GetNumFrames`), and that scan filters on exactly two fields — `+0xc0` strata (`0x764f18`)
@@ -280,7 +280,7 @@ impl WidgetArena {
     // ── Reparenting (reparent_begin / reparent_finish) ───────────────────────────────────────────
 
     /// The runtime reparent, phase 1 of 2 — the guards and the **hide half** of
-    /// `CSimpleFrame::SetParent 0x76ab10`'s sequence (decision 1323, which corrects this
+    /// `CSimpleFrame::SetParent 0x76ab10`'s sequence (which corrects this
     /// module's previous "strata/level are NOT changed by reparenting" — refuted at `0x76ab65`).
     ///
     /// Returns `None` for the byte-verified TOTAL no-op — `newParent == currentParent` (`0x76ab20`
@@ -500,7 +500,7 @@ impl WidgetArena {
         self.frame(h).is_some_and(|f| f.keyboard_enabled)
     }
 
-    /// `EnableMouseWheel` — the wheel's own gate, separate from the mouse's (decision 1198).
+    /// `EnableMouseWheel` — the wheel's own gate, separate from the mouse's.
     pub fn set_mouse_wheel_enabled(&mut self, h: FrameHandle, enabled: bool) {
         if let Some(f) = self.frame_mut(h) {
             f.mouse_wheel_enabled = enabled;

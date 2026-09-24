@@ -1,9 +1,9 @@
-//! The social **Era API surface** — friends, ignores, and `/who` (decision 0668).
+//! The social **Era API surface** — friends, ignores, and `/who`.
 //!
 //! The [`super::party`] shape exactly: the app pushes a [`SocialState`] snapshot built from its
 //! own wire mirror ([`UiScript::set_social`]) and the getters here read that plain data; every
 //! verb queues a [`SocialRequest`] the app drains ([`UiScript::take_social_requests`]) into the
-//! matching `CMSG_*` send. No ECS or net reach from the engine (decision 0068 §3).
+//! matching `CMSG_*` send. No ECS or net reach from the engine.
 //!
 //! **The snapshot is already display-ready** — names, class name, zone name, the `<AFK>` tag —
 //! because every one of those is a *lookup the engine owns* in the real client too: the friend
@@ -489,7 +489,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `SortWho(sortType) 0x5ad890` — the column-header and dropdown sorts, and three things at
-    // once (decision 2030):
+    // once:
     //
     //  1. **promote** the key into the seven-slot chain, flipping its direction only if it was
     //     already at the front — so a repeated click on the same header REVERSES;

@@ -65,12 +65,12 @@ pub(crate) struct Model {
     /// world entry ([`super::UiScript::register_addons`]). See [`super::addon`].
     pub(crate) addons: Vec<super::addon::AddOnInfo>,
     /// **The Lua index space** — positions into [`Self::addons`], `## Title`-sorted and
-    /// hidden-filtered (decision 2175). NOT the registry: the reference keeps two structures and
+    /// hidden-filtered. NOT the registry: the reference keeps two structures and
     /// they are different permutations of different sets (`0x51da70` rebuilds this one).
     pub(crate) addon_index: Vec<usize>,
     /// The lowercased names `SMSG_ADDON_INFO` marked `status = 2`, or **`None` when no reply has
-    /// arrived this session** — and `None` is why [`Self::addon_index`] can be legitimately empty
-    /// (decision 2175). `[0xbe1b90]` is zeroed by the registry reset `0x51fad1` and written
+    /// arrived this session** — and `None` is why [`Self::addon_index`] can be legitimately empty.
+    /// `[0xbe1b90]` is zeroed by the registry reset `0x51fad1` and written
     /// nowhere but the reply's own rebuild, so `GetNumAddOns()` really is 0 until the server
     /// answers.
     pub(crate) addon_info_hidden: Option<Vec<String>>,
@@ -98,7 +98,7 @@ pub(crate) struct Model {
     /// CONTENT, the way the real client's size getters do — `CSimpleTexture::GetWidth 0x770720` /
     /// `GetHeight 0x770790` return the authored value only when it is not `0.0`, and otherwise read
     /// the loaded texture's `[tex+0x144]`/`[tex+0x148]` through the same converter `<AbsDimension>`
-    /// uses, so **one texel is one FrameXML unit** (decision 1349). The host answers off the same
+    /// uses, so **one texel is one FrameXML unit**. The host answers off the same
     /// candidate walk the renderer decodes with and memoises,
     /// so the size layout resolves with is the size the screen shows.
     ///
@@ -113,7 +113,7 @@ pub(crate) struct Model {
     /// revert end` is exactly that probe.
     ///
     /// **`None` answers 1 for a non-empty path, which is where this differs from
-    /// [`Self::texture_probe`]** (decision 2103). A VM with no font backend has no font store to
+    /// [`Self::texture_probe`]**. A VM with no font backend has no font store to
     /// fail against, so nil there would report a load failure that never happened — and it would
     /// send `!OmniCC` down its revert branch in every harness run. The texture probe could take
     /// the opposite default because nil was already what its engine-less callers observed; here 1
@@ -135,7 +135,7 @@ pub(crate) struct Model {
     /// the same kind of thing — VM-global registries the loader fills.
     pub(crate) framexml_templates:
         std::cell::RefCell<std::collections::HashMap<String, crate::framexml::Element>>,
-    /// **`FrameXML_Debug`'s flag** — the loader's own trace-severity switch (decision 2160).
+    /// **`FrameXML_Debug`'s flag** — the loader's own trace-severity switch.
     ///
     /// `0x488440` is a get-or-set over the single global `[0xceea30]`, which boots at 0 and is
     /// read at six sites image-wide: the binding itself and five inside the XML loader, each
@@ -233,14 +233,14 @@ pub(crate) struct Model {
     /// production — nothing reads it unless the verify build set it.
     pub(crate) layout_verify_recheck: bool,
     /// Per-node input hashes + the dirty-closure scratch — what makes a resolve cost the nodes
-    /// that MOVED rather than the whole graph (decision 1350; see `script::layout::LayoutScope`).
+    /// that MOVED rather than the whole graph (see `script::layout::LayoutScope`).
     /// Tiers 1 and 2 above decide *whether* to solve; this decides *what*.
     pub(crate) layout_scope: super::layout::LayoutScope,
     /// The [`Self::layout_epoch`] value the last CONVERGED resolve closed on. `None` forces the
     /// next resolve through tier 1: the initial state, a cycle-bailed pass, and
     /// [`super::UiScript::force_full_layout_resolve`].
     ///
-    /// **Every converged resolve closes tier 1** (decision 1385) — a real solve as much as a
+    /// **Every converged resolve closes tier 1** — a real solve as much as a
     /// skipping one. It could not, while the fingerprint was hashed over the 0294 seeds as well
     /// as the inputs: a solve outgrew the value it had just stored, so a mutated frame paid three
     /// whole-roster walks (solve, settle, skip) instead of one. Hashing inputs alone makes the
@@ -253,8 +253,8 @@ pub(crate) struct Model {
     /// merely producing the same rects. Counts the gate's decision, so it reads the same with the
     /// `WOW_LAYOUT_VERIFY` self-check on (which re-runs skipped resolves) as with it off.
     pub(crate) layout_solves: u64,
-    /// How many times a resolve got **past tier 1** — the count of whole-roster preamble WALKS
-    /// (decision 1385). This, not [`Self::layout_solves`], is the honest cost counter for the
+    /// How many times a resolve got **past tier 1** — the count of whole-roster preamble WALKS.
+    /// This, not [`Self::layout_solves`], is the honest cost counter for the
     /// gate: a walk that ends in `gate_skips` still rebuilt the ids/plan, re-synced every frame's
     /// scale and re-hashed all ~10k anchored regions to conclude "nothing moved" — ~1.0 ms at the
     /// Stormwind pin — and `layout_solves` cannot see it, because it counts only the walks that
@@ -273,7 +273,7 @@ pub(crate) struct Model {
     /// production's; inside this crate's own tests, assert on `layout_solves`.
     pub(crate) layout_gate_walks: u64,
     /// How many times a resolve **derived the layout graph** — the whole-roster walk that rebuilds
-    /// the frame/region roster, the reverse edges and every per-node hash (decision 1388).
+    /// the frame/region roster, the reverse edges and every per-node hash.
     ///
     /// This is the cost counter [`Self::layout_gate_walks`] used to be. 1385 got a moving castbar
     /// spark down from three walks per frame to one; 1388 made that one walk *cheap* by seeding the
@@ -351,7 +351,7 @@ pub(crate) struct Model {
     pub(crate) scripts: HashMap<FrameHandle, HashSet<&'static str>>,
     /// The frames carrying an `OnUpdate` script, maintained by `SetScript` — `scripts`' one
     /// writer — so the tick iterates exactly the OnUpdate population instead of re-filtering
-    /// (and re-allocating from) the whole scripts map every frame (decision 1446). Order is
+    /// (and re-allocating from) the whole scripts map every frame. Order is
     /// irrelevant here: the tick sorts its visible subset by frame id every pass (the
     /// deterministic-dispatch law stays where it was).
     pub(crate) on_update_frames: Vec<FrameHandle>,
@@ -363,7 +363,7 @@ pub(crate) struct Model {
     /// (decision 1634's `[layout-pre] watched=`).
     pub(crate) on_size_changed_frames: Vec<FrameHandle>,
     /// The frames carrying an `OnUpdateModel` script — the list the tick fires at the top of
-    /// every paint of a visible model pane (`0x76d1a0`'s first act; decision 2007). Same one
+    /// every paint of a visible model pane (`0x76d1a0`'s first act). Same one
     /// writer as the two lists above.
     pub(crate) on_update_model_frames: Vec<FrameHandle>,
     /// What the engine knows about each model **file** a pane has named — the sequences and
@@ -377,7 +377,7 @@ pub(crate) struct Model {
     pub(crate) model_facts_wanted: Vec<String>,
     /// Edit boxes whose text changed and whose `OnTextChanged` has **not fired yet** — the
     /// reference's `textChanged` dirty bit (`[E+0x31c]` bit 0), which `SetText`/`Insert` raise and
-    /// only the dirty-word drain `0x77d3e0` clears (decision 1831).
+    /// only the dirty-word drain `0x77d3e0` clears.
     ///
     /// The fire is deferred, not immediate: `SetText` returns to Lua before any handler runs, and N
     /// changes to one box between two drains produce exactly ONE fire carrying the final text. The
@@ -465,9 +465,9 @@ pub(crate) struct Model {
     /// shape as the pointer path's `OnValueChanged`/`OnDragStart` hand-offs.
     pub(crate) pending_size_changed: Vec<(u32, f32, f32)>,
 
-    /// Script errors collected from `pcall`'d handlers (never panics, never prints — decision 0068).
+    /// Script errors collected from `pcall`'d handlers (never panics, never prints).
     pub(crate) errors: Vec<String>,
-    /// Script errors awaiting dispatch to the **Lua-side** error handler (decision 1305) — the
+    /// Script errors awaiting dispatch to the **Lua-side** error handler — the
     /// reference calls `geterrorhandler()`'s function on every caught script error, which is how
     /// FrameXML's `_ERRORMESSAGE` puts the red ScriptErrors dialog on the player's screen. Every
     /// message recorded through [`Model::record_script_error`] lands here as well as in `errors`;
@@ -476,7 +476,7 @@ pub(crate) struct Model {
     /// that asymmetry is the recursion guard.
     pub(crate) pending_error_dispatch: Vec<String>,
     /// The **retained** script-error log — what [`errors`](Self::errors) and the load walk both
-    /// throw away once logged (decision 1495). `errors` is a per-frame drain for the host's
+    /// throw away once logged. `errors` is a per-frame drain for the host's
     /// terminal; this is the session's memory, deduplicated and bounded, and the only thing a
     /// player can actually read. See [`super::diagnostics`] for why the reference's own dialog is
     /// not enough on its own.
@@ -488,7 +488,7 @@ pub(crate) struct Model {
 
     /// The per-unit-token game-state snapshot the app pushes in each frame (`"player"`, `"target"`,
     /// …), read by the `Unit*` Lua bindings ([`unit`]). Plain data — the engine never touches the
-    /// ECS/net; the app's feed writes here via [`UiScript::set_unit`] (decision 0068 §3). A token
+    /// ECS/net; the app's feed writes here via [`UiScript::set_unit`]. A token
     /// absent from the map is a non-existent unit (`UnitExists` false, numbers `0`/nil).
     ///
     /// **Keyed by the ASCII-LOWERCASED token, and the name says so because the invariant has no
@@ -505,7 +505,7 @@ pub(crate) struct Model {
     /// Per-unit-token aura list, **in display order**, pushed by the app's aura feed each frame and
     /// read by the `UnitAura` family ([`super::aura`]). The order is the app's decision, not the
     /// engine's: the local player's is a maintained insertion-order cache, every other unit's is
-    /// ascending aura slot (decision 0257). A token absent here has no auras.
+    /// ascending aura slot. A token absent here has no auras.
     pub(crate) auras: HashMap<String, Vec<AuraState>>,
     /// Spell ids `CancelUnitBuff` queued since the app's last drain — one `CMSG_CANCEL_AURA` each.
     pub(crate) cancel_aura_requests: Vec<u32>,
@@ -527,7 +527,7 @@ pub(crate) struct Model {
     /// `(name, exactMatch)` pairs `TargetByName` queued since the app's last
     /// [`UiScript::take_target_by_name_requests`] drain — the by-NAME twin of
     /// `Self::target_requests`, which takes unit tokens. The app runs the shared by-name
-    /// resolver (`crate::target::by_name`, decision 0886) and commits the selection ([`unit`]).
+    /// resolver (`crate::target::by_name`) and commits the selection ([`unit`]).
     pub(crate) target_by_name_requests: Vec<(String, bool)>,
     /// Set when `ClearTarget()` fired with a live target — the ESC chain's LAST leg
     /// (`ToggleGameMenu`'s order: the clear runs only when nothing earlier ate the press).
@@ -553,9 +553,9 @@ pub(crate) struct Model {
     /// Party/loot intents (`AcceptGroup`/`InviteToParty`/`SetLootMethod`/…) queued since the
     /// app's last [`super::UiScript::take_party_requests`] drain — the outbound seam ([`party`]).
     pub(crate) party_requests: Vec<party::PartyRequest>,
-    /// The ready-check deadline and the unanswered flags the timeout tick reads (decision 1989).
+    /// The ready-check deadline and the unanswered flags the timeout tick reads.
     pub(crate) ready_check: party::ReadyCheckState,
-    /// The saved raid lockouts the Raid tab's info panel reads (decision 1549), pushed by the app
+    /// The saved raid lockouts the Raid tab's info panel reads, pushed by the app
     /// from `SMSG_RAID_INSTANCE_INFO`. Its own field rather than a [`party::PartyState`] member
     /// because it arrives on its own packet and survives every roster change.
     pub(crate) saved_instances: Vec<party::SavedInstanceInfo>,
@@ -564,13 +564,13 @@ pub(crate) struct Model {
     /// The current map's `Map.dbc` `InstanceType`, pushed by the app — `IsInInstance()`'s whole
     /// input ([`instance`]). `None` = the map id has no DBC row.
     pub(crate) instance_type: Option<u32>,
-    /// `CanShowResetInstances()`'s answer, pushed by the app (decision 1748) — the four-term
+    /// `CanShowResetInstances()`'s answer, pushed by the app — the four-term
     /// predicate the reference computes at `0x495c90` over state only the app holds.
     pub(crate) can_reset_instances: bool,
     /// `ResetInstances()` calls queued since the app's last
     /// [`super::UiScript::take_reset_instance_asks`] drain — the outbound seam ([`instance`]).
     pub(crate) reset_instance_asks: u32,
-    /// The social snapshot the app pushes (friends, ignores, the last `/who` — decision 0668):
+    /// The social snapshot the app pushes (friends, ignores, the last `/who`):
     /// `GetNumFriends`/`GetFriendInfo`/`GetWhoInfo`/… read it ([`social`]). Already
     /// display-resolved (names, class/zone names) because the reference resolves them
     /// engine-side too.
@@ -584,7 +584,7 @@ pub(crate) struct Model {
     /// in the reference: see [`social`].
     pub(crate) lfg_slots: [u32; 3],
     pub(crate) lfg_comment: String,
-    /// The guild snapshot the app pushes (roster, ranks, MOTD, info text — decision 1257):
+    /// The guild snapshot the app pushes (roster, ranks, MOTD, info text):
     /// `GetNumGuildMembers`/`GetGuildRosterInfo`/`GuildControlGetRankFlags`/… read it
     /// ([`guild`]). Already display-resolved and already sorted + filtered, because the sort
     /// field and the show-offline toggle live app-side where the roster does.
@@ -616,7 +616,7 @@ pub(crate) struct Model {
     /// less resolved: a name there, a whole draft line here ([`chat_window`] registers the global).
     pub(crate) open_chat_requests: Vec<String>,
     /// Per-chat-window **look** — background tint, background alpha, font size — index 0 =
-    /// `ChatFrame1` (decision 1589, [`chat_window`]). The engine's own per-window record narrowed
+    /// `ChatFrame1` ([`chat_window`]). The engine's own per-window record narrowed
     /// to the three fields the tab menu's Display block can move; the host seeds it from the
     /// player's saved file and persists what Lua writes back.
     pub(crate) chat_window_looks: [chat_window::ChatWindowLook; chat_window::NUM_CHAT_WINDOWS],
@@ -638,7 +638,7 @@ pub(crate) struct Model {
     /// Channel verbs since the last [`super::UiScript::take_channel_commands`] drain.
     pub(crate) channel_commands: Vec<super::channel::ChannelCommand>,
     /// **The guild-recruitment auto-join latch** — the reference's int global `[0x843608]`, which
-    /// `GetGuildRecruitmentMode` returns and `SetGuildRecruitmentMode` writes (decision 2115).
+    /// `GetGuildRecruitmentMode` returns and `SetGuildRecruitmentMode` writes.
     ///
     /// `0` = STANDARD, `1` = AUTO, and those two words are literally what the per-character chat
     /// cache stores it as (`OPTION_GUILD_RECRUITMENT_CHANNEL STANDARD|AUTO`; `0x49ea70` maps
@@ -648,7 +648,7 @@ pub(crate) struct Model {
     /// never opened the option.
     pub(crate) guild_recruitment_mode: u8,
     /// A `SetGuildRecruitmentMode(1)` since the last drain — `0x49ea70`'s tail-jump into the
-    /// cascade `0x49ea90`, which the app runs (decision 2144). Keyed on the *new value alone*, not
+    /// cascade `0x49ea90`, which the app runs. Keyed on the *new value alone*, not
     /// on a change: the reference's store is unconditional and the jump reads only `ecx == 1`.
     pub(crate) guild_recruitment_cascade: bool,
     /// Whether Lua has moved [`Self::guild_recruitment_mode`] since the last drain — the chat
@@ -701,7 +701,7 @@ pub(crate) struct Model {
     /// [`super::UiScript::take_pvp_toggles`] drain — the outbound seam ([`pvp`]). A count, not a
     /// payload: `CMSG_TOGGLE_PVP` carries no body.
     pub(crate) pvp_toggles: u32,
-    /// The local player's honor snapshot ([`pvp::HonorState`], decision 1512) — the PRIVATE honor
+    /// The local player's honor snapshot ([`pvp::HonorState`]) — the PRIVATE honor
     /// descriptor fields the app decodes and pushes ([`super::UiScript::set_honor`]). `None`
     /// before the first push, which the six self getters read as a zeroed snapshot (see
     /// [`pvp`]'s module doc for why they never return short).
@@ -723,7 +723,7 @@ pub(crate) struct Model {
     /// (`0x4c6f4c`), or the app invalidated the slot (`0x4c6f9d`).
     pub(crate) inspect_honor_pending: bool,
     /// The two **equipment-display** preferences as the VM currently believes them —
-    /// `ShowingHelm()` / `ShowingCloak()` ([`worn_display`], decision 1472). Not a setting: the
+    /// `ShowingHelm()` / `ShowingCloak()` ([`worn_display`]). Not a setting: the
     /// truth is `PLAYER_FLAGS`' `HIDE_HELM`/`HIDE_CLOAK` bits, pushed here on the descriptor edge
     /// by [`super::UiScript::set_worn_display`]. Both start **shown**, which is both the reference's
     /// panel default and the zero-flags state a fresh character logs in with.
@@ -779,10 +779,10 @@ pub(crate) struct Model {
     /// handler rings.
     pub(crate) sound_suppression: u32,
 
-    /// The CVar table (decision 0954, [`super::cvars`]): lowercase name → slot. Host-registered
+    /// The CVar table ([`super::cvars`]): lowercase name → slot. Host-registered
     /// only; Lua reads/writes through `GetCVar`/`SetCVar`/`GetCVarDefault`.
     pub(crate) cvars: HashMap<String, super::cvars::CvarSlot>,
-    /// The persisted values registration honors (decision 1291): lowercase name → the config
+    /// The persisted values registration honors: lowercase name → the config
     /// file's value, set by the host **before** any registration. A CVar registered while its
     /// name is in here — host-registered or an addon's `RegisterCVar` — starts at the saved
     /// value, not the default. This is what makes a knobless CVar (`statusBarText`) and an
@@ -793,7 +793,7 @@ pub(crate) struct Model {
     /// [`super::UiScript::take_cvar_changes`] drain — the knob-sync + config-dirty cue.
     pub(crate) cvar_changes: Vec<(String, String)>,
     /// `(name, default)` per addon `RegisterCVar` that created a slot, since the host's last
-    /// [`super::UiScript::take_cvar_registrations`] drain (decision 2303).
+    /// [`super::UiScript::take_cvar_registrations`] drain.
     pub(crate) cvar_registrations: Vec<(String, String)>,
     /// Unknown CVar names already warned about (warn-once, the era-atlas-miss posture).
     pub(crate) cvars_warned: HashSet<String>,
@@ -834,14 +834,14 @@ pub(crate) struct Model {
     pub(crate) restart_gx_asks: u32,
 
     /// The globals `RegisterForSave` declared, in registration order — the saved-variables set the
-    /// host writes out at logout/exit and re-executes at load (decision 1128, [`super::saved`]).
+    /// host writes out at logout/exit and re-executes at load ([`super::saved`]).
     pub(crate) saved_names: Vec<String>,
     /// The saved-variables files that failed to load this session ([`super::saved`]'s
     /// `hold_saved_file`) — the shutdown write leaves each one on disk rather than replacing a
     /// settings file it never read with the defaults it ran on instead.
     pub(crate) held_saved_files: Vec<std::path::PathBuf>,
 
-    /// The key-binding table (decision 0997, [`super::keybind`]) — the chord→command store the
+    /// The key-binding table ([`super::keybind`]) — the chord→command store the
     /// Key Bindings window edits, plus its stored account/character sets. The CVar table's twin:
     /// host-registered commands, Lua reads/writes synchronously, the app re-derives dispatch when
     /// [`super::UiScript::keybinds_generation`] moves and persists on the queued save requests.
@@ -856,7 +856,7 @@ pub(crate) struct Model {
     pub(crate) action_states: HashMap<u32, super::action::StoredActionState>,
     pub(crate) bonus_bar_offset: u8,
     pub(crate) action_uses: Vec<super::action::ActionUse>,
-    /// `(lua action id, packed)` pairs queued by `PickupAction`/`PlaceAction` (decision 0216 §7,
+    /// `(lua action id, packed)` pairs queued by `PickupAction`/`PlaceAction` (
     /// slice 4) — one entry per local slot mutation, `packed == 0` clearing the slot. Drained by
     /// the app into `CMSG_SET_ACTION_BUTTON`, one send per entry (client-authoritative, per-change
     /// — 0218 §4: a drag-swap is two sends, never atomic).
@@ -870,16 +870,16 @@ pub(crate) struct Model {
     /// errorId table (`0xb4b498`, stride `0x14`), never runtime-built.
     pub(crate) ui_errors: Vec<&'static str>,
 
-    /// The player's known-spell book (decision 0216 §8, slice 5) — tabs + the flat slot list the
+    /// The player's known-spell book (slice 5) — tabs + the flat slot list the
     /// `GetSpellTabInfo`/`GetSpellName`/… bindings read ([`spellbook`]). Durable player state like
     /// `actions` above, never `Option` — "no known spells yet" is simply empty vectors.
     pub(crate) spellbook: spellbook::SpellBookState,
-    /// The **pet's** book (decision 1032) — a second flat slot list, no tabs, with its own
+    /// The **pet's** book — a second flat slot list, no tabs, with its own
     /// add-gate and its own class token ([`spellbook::PetBookState`]). Held apart from
     /// [`Self::spellbook`] because the reference holds two arrays too (`0xb700f0` / `0xb6f098`)
     /// and every `bookType`-taking binding is a fork between them, never a filter over one.
     pub(crate) pet_book: spellbook::PetBookState,
-    /// The player's **macros** (decision 0983) — the one game-state table this crate owns
+    /// The player's **macros** — the one game-state table this crate owns
     /// outright, because 1.12 macros have no server side at all ([`macros`]'s module docs). The
     /// app seeds it from `benilla-config/macros/…` and reads it back to persist.
     pub(crate) macros: macros::MacroState,
@@ -913,7 +913,7 @@ pub(crate) struct Model {
     /// trigger, drained by [`super::UiScript::take_spell_stop`] ([`spellbook`]).
     pub(crate) spell_stop: bool,
     /// Whether the app's spell-targeting cursor mode is active — the `flag_word != 0` mirror
-    /// (`SpellIsTargeting 0x6e6cd0`, decision 0792). Pushed each frame by the app's targeting
+    /// (`SpellIsTargeting 0x6e6cd0`). Pushed each frame by the app's targeting
     /// feed ([`super::UiScript::set_spell_targeting`]); read by `SpellIsTargeting()` and gating
     /// `SpellStopTargeting()`, whose 1/nil return the ESC chain's rung (`UIParent.lua:1490`)
     /// falls through on, exactly like [`Self::casting`]'s.
@@ -923,14 +923,14 @@ pub(crate) struct Model {
     ///
     /// Always `false` today, and *derived* rather than hardcoded so it stops being false the moment
     /// that stops being true: benilla's targeting cursor models the location / item / gameobject
-    /// words (0792/0923/0939), and no unit satisfies any of them — a unit-target spell never enters
+    /// words, and no unit satisfies any of them — a unit-target spell never enters
     /// targeting mode at all, it resolves to `CastWireTarget::Unit` or refuses.
     pub(crate) spell_can_target_unit: bool,
     /// Set when `SpellStopTargeting()` fired while [`Self::spell_targeting`] — the ESC-chain
     /// targeting cancel, drained by [`super::UiScript::take_stop_targeting`] ([`spellbook`]).
     pub(crate) spell_stop_targeting: bool,
 
-    /// The player's talent pages (decision 0304) — tabs + per-tab talents the
+    /// The player's talent pages — tabs + per-tab talents the
     /// `GetNumTalentTabs`/`GetTalentInfo`/… bindings read ([`super::talent`]). Durable player
     /// state like `spellbook`; "no talents yet" is simply empty.
     pub(crate) talents: super::talent::TalentUiState,
@@ -939,15 +939,15 @@ pub(crate) struct Model {
     pub(crate) talent_learns: Vec<(u32, u32)>,
     /// `ConfirmTalentWipe()` calls queued since the app last drained them — each is one outbound
     /// `MSG_TALENT_WIPE_CONFIRM`. A COUNT for [`Self::binder_confirms`]'s reason: the app holds
-    /// the trainer's guid, so the intent carries no payload of its own (decision 1580).
+    /// the trainer's guid, so the intent carries no payload of its own.
     pub(crate) talent_wipe_confirms: u32,
     /// Is a trainer's respec question still live and in range — the answer
     /// `CheckTalentMasterDist()` gives, pushed by the app each frame
     /// ([`super::UiScript::set_talent_master_pending`]). The CONFIRM_TALENT_WIPE dialog polls it
     /// from OnUpdate and hides itself when it goes false; the binder question's twin, and the same
-    /// range gate stands behind both (decision 1580).
+    /// range gate stands behind both.
     pub(crate) talent_master_pending: bool,
-    // ── The dialog engine's verbs (decision 1963; `0x48dca0` is the first below) ──
+    // ── The dialog engine's verbs (`0x48dca0` is the first below) ──
     /// `ConfirmPetUnlearn()` calls since the app's last drain — the pet trainer's twin of
     /// [`Self::talent_wipe_confirms`]; the app holds the latched trainer and the money gate.
     pub(crate) pet_unlearn_confirms: u32,
@@ -1034,14 +1034,14 @@ pub(crate) struct Model {
     /// `SMSG_CLIENT_CONTROL_UPDATE` naming the local player and read as "if zero, refuse" by
     /// every cast, item and cursor gate. Boot value 1.
     pub(crate) player_control: bool,
-    /// Pet bar writes queued by the drag ([`cursor::pet`], decision 1010) — **one entry per
+    /// Pet bar writes queued by the drag ([`cursor::pet`]) — **one entry per
     /// `CMSG_PET_SET_ACTION`**, each holding the one or two `(0-based position, packed word)` pairs
     /// that send names. The nesting is the point: the server tells the one-pair form from the
     /// two-pair form **by body size**, so a relocation and its write must travel together and must
     /// not be flattened into a stream of singles.
     pub(crate) pet_set_actions: Vec<Vec<(u32, u32)>>,
     /// `PetAbandon()` and `PetDismiss()` calls queued — two counts, not one, even though both menu
-    /// rows end at the same opcode (decision 1066). They are two *bindings*, with two Lua names and
+    /// rows end at the same opcode. They are two *bindings*, with two Lua names and
     /// two menu rows the reference shows to different classes, so the seam keeps them apart and
     /// lets the app decide each one's wire; folding them together here would bake a wire fact into
     /// an engine that is supposed to hold none.
@@ -1060,23 +1060,22 @@ pub(crate) struct Model {
     pub(crate) container_cooldowns: HashMap<(i64, u32), (f64, f64, bool)>,
     /// `HasKey()` — whether the player owns any item of `BagFamily` KEYS, anywhere the reference's
     /// own search reaches (equipment, bags, backpack, **bank**, keyring). App-resolved like every
-    /// other item fact; the engine holds no item knowledge of its own. Gates the whole keyring UI
-    /// (decision 0765).
+    /// other item fact; the engine holds no item knowledge of its own. Gates the whole keyring UI.
     pub(crate) has_key: bool,
     /// What the cursor carries (`PickupContainerItem`/`SplitContainerItem`/… set it; `None` =
     /// empty cursor) — the real client's transient drag state, typed by payload arm
-    /// ([`cursor::CursorPayload`], decision 0216). Purely visual + intent-routing: no item moves
+    /// ([`cursor::CursorPayload`]). Purely visual + intent-routing: no item moves
     /// locally, the server's field updates settle the bag ([`container`]). The app draws the
     /// held icon at the mouse and reads `None`/`Some` to show/hide it.
     pub(crate) cursor: Option<cursor::CursorPayload>,
     /// Mirrors "is `cursor` currently `Some`" across transitions — [`cursor::queue_cursor_update`]
     /// compares it against the live state on every call to derive `ACTIONBAR_SHOWGRID`/
-    /// `ACTIONBAR_HIDEGRID` (decision 0216 §7): fires exactly on a None↔Some edge, any payload
+    /// `ACTIONBAR_HIDEGRID`: fires exactly on a None↔Some edge, any payload
     /// arm, any surface (bags/doll/actions alike — the reference's own "any placeable payload
     /// shows the bar's drop grid"). A Some→Some transition (the action hop) updates nothing here,
     /// so no spurious HIDE+SHOW churns out of one gesture.
     ///
-    /// The **pet** payload arm is excluded (decision 1010): `PlaceAction` refuses it, so lighting
+    /// The **pet** payload arm is excluded: `PlaceAction` refuses it, so lighting
     /// the action bar's empty slots for a payload that cannot land there would be an invitation to
     /// a no-op. It drives [`Self::pet_grid_shown`] instead. So is the **vendor row** (mode 5): its
     /// grab setter `0x4950f0` fires `ACTIONBAR_SHOWGRID` for mode 7 alone.
@@ -1089,7 +1088,7 @@ pub(crate) struct Model {
     /// The app's world pick under the cursor — the reference's click-time pick state
     /// (`[this+0x350]`: nothing / terrain / object), fed once per frame
     /// ([`super::UiScript::set_world_pick`]; stays `Nothing` in tests/captures). Routes
-    /// [`cursor::world_drop_click`]'s legs (decisions 0571 + 0574): an `Object` pick drops no
+    /// [`cursor::world_drop_click`]'s legs: an `Object` pick drops no
     /// payload at all, `Terrain` drops items only (a spell/action survives the ground click),
     /// `Nothing` drops any arm.
     pub(crate) world_pick: cursor::WorldPick,
@@ -1108,15 +1107,15 @@ pub(crate) struct Model {
     /// one bag space the drain already resolves.
     pub(crate) item_picks: Vec<(i64, u32)>,
     /// `BindEnchant()`/`ReplaceEnchant()` — the two enchant-confirm popups' answers to a pick the
-    /// app already parked, drained by it (decision 0928; [`cursor::EnchantConfirm`]).
+    /// app already parked, drained by it ([`cursor::EnchantConfirm`]).
     pub(crate) enchant_confirms: Vec<cursor::EnchantConfirm>,
     /// `(bag, slot, count)` triples queued by `DeleteCursorItem` (`count == 0` = the whole
-    /// stack) — the popup-confirmed destroy (decision 0216 §3), drained by the app into
+    /// stack) — the popup-confirmed destroy, drained by the app into
     /// `CMSG_DESTROYITEM`.
     pub(crate) container_destroys: Vec<(i64, u32, u32)>,
     /// **The armed gift wrap** — the `(bag, slot)` of a piece of wrapping paper whose right-click
     /// took the reference's begin-wrap arm (`0x5edea0`: lock the paper, cursor mode 2, no packet).
-    /// `None` = nothing armed, which is nearly always. Decision 1934.
+    /// `None` = nothing armed, which is nearly always.
     ///
     /// Deliberately **not** a [`cursor::CursorPayload`]: the reference writes no payload global at
     /// all here, only the displayed-cursor mode, so `CursorHasItem()` stays nil and none of the
@@ -1134,7 +1133,7 @@ pub(crate) struct Model {
     /// Set by every FrameXML cursor call — `Show*SellCursor` / `ShowInspectCursor` / `SetCursor` /
     /// `ResetCursor` — and drained by the app each frame ([`UiScript::take_cursor_write`]).
     ///
-    /// **The cursor mode is a WRITE, not a level** (decision 1061), and that distinction is the
+    /// **The cursor mode is a WRITE, not a level**, and that distinction is the
     /// whole of B208's regression. The reference keeps one sticky global (`0xbe2c2c`): the world
     /// classifier writes it while the pointer is over the world, FrameXML writes it from a hover
     /// handler, and in between **nothing** writes it — so the last value simply stands. Reading
@@ -1160,7 +1159,7 @@ pub(crate) struct Model {
     pub(crate) drag_registered: HashMap<FrameHandle, HashSet<String>>,
     /// The in-flight drag gesture: armed at mouse-down on a [`Model::drag_registered`] frame,
     /// `started` once the cursor has moved past the drag-start threshold — `None` between
-    /// gestures ([`cursor::DragGesture`], decision 0216 §3).
+    /// gestures ([`cursor::DragGesture`]).
     pub(crate) drag: Option<cursor::DragGesture>,
     /// The one in-flight `StartMoving()` — the client's single root-side drag slot (`root+0xcfc`
     /// and the cursor sample beside it), `None` between moves ([`super::object::FrameMove`]). Held
@@ -1174,7 +1173,7 @@ pub(crate) struct Model {
     /// `StopMovingOrSizing` (`0x776990`).
     pub(crate) sizing: Option<super::object::FrameSizing>,
     /// The in-flight Slider thumb drag: set when a LeftButton press lands on a Slider's thumb, held
-    /// until release / pointer-leave (decision 0250 §5, the engine's C++-equivalent thumb drag —
+    /// until release / pointer-leave (the engine's C++-equivalent thumb drag —
     /// like a scrollbar dragging in the real client, no Lua involved). `None` between drags
     /// ([`slider::SliderDrag`]).
     pub(crate) slider_drag: Option<slider::SliderDrag>,
@@ -1188,7 +1187,7 @@ pub(crate) struct Model {
     pub(crate) gossip: Option<gossip::GossipMenu>,
     pub(crate) gossip_selects: Vec<u32>,
     pub(crate) gossip_close: bool,
-    /// 1-based quest-row selects queued by `SelectGossipQuest` (decision 0088) — the app maps each
+    /// 1-based quest-row selects queued by `SelectGossipQuest` — the app maps each
     /// to the row's quest id and sends `CMSG_QUESTGIVER_QUERY_QUEST`.
     pub(crate) gossip_quest_selects: Vec<u32>,
 
@@ -1212,7 +1211,7 @@ pub(crate) struct Model {
     pub(crate) repair_mode: bool,
 
     /// The stable window's whole state — the pushed snapshot, the selection, the frame-local
-    /// drag, and the queued verbs (the stable seam, [`stable`], decision 1676). One sub-struct
+    /// drag, and the queued verbs (the stable seam, [`stable`]). One sub-struct
     /// rather than five loose fields because the close path resets several of them together.
     pub(crate) stable: stable::StableModel,
 
@@ -1225,7 +1224,7 @@ pub(crate) struct Model {
 
     /// The open trainer's service snapshot the app pushes (`None` = no trainer open), the
     /// `BuyTrainerService` intents it drains, the engine-held selection, and whether `CloseTrainer`
-    /// was called — the trainer seam ([`trainer`], decision 0237).
+    /// was called — the trainer seam ([`trainer`]).
     ///
     /// The selection is the selected service's **spell id**, not its row number. A row number is a
     /// coordinate in a list that three independent things move under it — the state filter, a
@@ -1237,16 +1236,16 @@ pub(crate) struct Model {
     pub(crate) trainer_close: bool,
     /// The three state filters (available / unavailable / used) — the real client hides filtered
     /// service rows itself ([`trainer`]); all shown by default. A state filter hides *services*, never
-    /// headers (decision 0247).
+    /// headers.
     pub(crate) trainer_filter: [bool; 3],
-    /// The skill lines the player has collapsed in the tree — their services hide, the header stays
-    /// (decision 0247). Keyed by skill-line id so it survives a content update (`set_trainer` keeps
+    /// The skill lines the player has collapsed in the tree — their services hide, the header stays.
+    /// Keyed by skill-line id so it survives a content update (`set_trainer` keeps
     /// only still-present lines); cleared when the trainer closes.
     pub(crate) trainer_collapsed: HashSet<u32>,
 
     /// The open taxi map's snapshot the app pushes (`None` = closed), the `TakeTaxiNode` intents
     /// it drains, whether `CloseTaxiMap` was called, and whether our own player is riding a
-    /// taxi — the taxi seam ([`taxi`], decision 0484).
+    /// taxi — the taxi seam ([`taxi`]).
     pub(crate) taxi: Option<taxi::TaxiUiState>,
     pub(crate) taxi_takes: Vec<usize>,
     pub(crate) taxi_close: bool,
@@ -1315,14 +1314,14 @@ pub(crate) struct Model {
 
     /// The `EquipPendingItem`/`CancelPendingEquip` answers the app drains, in call order, and the
     /// `ConfirmBindOnUse()` count — the non-loot soulbind confirmations' whole Lua side
-    /// ([`bind_confirm`], decision 1750). The pending records themselves are the app's.
+    /// ([`bind_confirm`]). The pending records themselves are the app's.
     pub(crate) pending_equip_answers: Vec<bind_confirm::PendingEquipAnswer>,
     pub(crate) bind_on_use_confirms: u32,
 
     /// The open loot's row snapshot the app pushes (`None` = no loot open), the row-pick intents it
     /// drains, and whether `CloseLoot` was called — the loot seam ([`loot`]).
     ///
-    /// **The picks come in two flavours, and the flavour is load-bearing** (decision 1744): the
+    /// **The picks come in two flavours, and the flavour is load-bearing**: the
     /// reference's take dispatcher `0x4c2790(slot, flag)` is one function with two entries, and the
     /// flag decides whether a bind-on-pickup row raises the LOOT_BIND confirm or is taken outright.
     /// `flag == 0` is the row click, which in 1.12 is the C `CLootButton`'s own behaviour and here
@@ -1338,11 +1337,11 @@ pub(crate) struct Model {
     /// The `GiveMasterLoot(slot, candidateIndex)` assignments the app drains — both 1-based and
     /// both display-side: the row as the window numbers it, and the candidate's position in
     /// [`loot::LootState::master_candidates`]. The app owns the translation to the wire slot and
-    /// the recipient's guid (decision 1675).
+    /// the recipient's guid.
     pub(crate) loot_master_gives: Vec<(u32, u32)>,
 
     /// The open group-loot rolls the app pushes (empty = none open) and the `RollOnLoot`
-    /// `(roll_id, roll_type)` votes it drains — the roll seam ([`loot_roll`], decision 0591).
+    /// `(roll_id, roll_type)` votes it drains — the roll seam ([`loot_roll`]).
     pub(crate) loot_rolls: loot_roll::LootRollsState,
     pub(crate) loot_roll_votes: Vec<(u32, u8)>,
     /// Need/Greed on a **bind-on-pickup** roll: not a vote but a request for the
@@ -1351,7 +1350,7 @@ pub(crate) struct Model {
     pub(crate) loot_roll_confirms: Vec<(u32, u8)>,
 
     /// The open mailbox's inbox snapshot the app pushes (`None` = no mailbox open) and the intents
-    /// the app drains — the mail seam ([`mail`], decision 0544). `mail_opens` are the 1-based rows
+    /// the app drains — the mail seam ([`mail`]). `mail_opens` are the 1-based rows
     /// `GetInboxText` touched (the app marks each read + ask-once fetches its body); the take/delete/
     /// return vecs are 1-based row picks; `mail_send` is the pending `SendMail(target,subject,body)`
     /// the app folds `mail_send_money`/`mail_send_cod`/`mail_send_item` into at drain.
@@ -1372,7 +1371,7 @@ pub(crate) struct Model {
     pub(crate) mail_send: Option<(String, String, String)>,
     pub(crate) mail_send_money: u32,
     pub(crate) mail_send_cod: u32,
-    /// The Send tab's attached bag item (a cursor drop, decision 0216) — carried until the send
+    /// The Send tab's attached bag item (a cursor drop) — carried until the send
     /// fires; the app resolves its `(bag, slot)` to the wire item guid then.
     pub(crate) mail_send_item: Option<cursor::CursorItem>,
     /// The usable stationery list the app pushes, in the picker's order (1970).
@@ -1386,7 +1385,7 @@ pub(crate) struct Model {
     pub(crate) has_new_mail: bool,
 
     /// The open auction house's snapshot the app pushes (`None` = no auctioneer session) and the
-    /// intents the app drains — the auction seam ([`auction`], decision 1511). `auction_selected`
+    /// intents the app drains — the auction seam ([`auction`]). `auction_selected`
     /// is engine-local per list ([`auction::LIST`]/`BIDDER`/`OWNER`) and holds the selected
     /// **auction id**, not a row position (`0x4cfda0`/`0x4cfec0`): an id follows its row through a
     /// re-sort, where an index would quietly come to mean the auction that took its place. `0` =
@@ -1407,7 +1406,7 @@ pub(crate) struct Model {
     pub(crate) auction_start: Option<auction::AuctionStartRequest>,
     pub(crate) auction_sorts: Vec<(usize, String)>,
     pub(crate) auction_close: bool,
-    /// The sell slot's staged item (a cursor drop, decision 0216) — carried until `StartAuction`
+    /// The sell slot's staged item (a cursor drop) — carried until `StartAuction`
     /// fires, when the app resolves its `(bag, slot)` to the wire item guid.
     pub(crate) auction_sell_item: Option<cursor::CursorItem>,
 
@@ -1422,7 +1421,7 @@ pub(crate) struct Model {
     pub(crate) trade_accept: bool,
     pub(crate) trade_unaccept: bool,
     pub(crate) trade_close: bool,
-    /// `BeginTrade()` / `CancelTrade()` since the last drain (decision 1963).
+    /// `BeginTrade()` / `CancelTrade()` since the last drain.
     pub(crate) trade_begin: bool,
     pub(crate) trade_cancel: bool,
     pub(crate) trade_set_money: Option<u32>,
@@ -1438,7 +1437,7 @@ pub(crate) struct Model {
     pub(crate) quest_selects: Vec<quest::QuestSelect>,
     pub(crate) quest_actions: Vec<quest::QuestAction>,
 
-    /// The death-arc seam ([`death`], decision 0308): the snapshot the app pushes (countdowns +
+    /// The death-arc seam ([`death`]): the snapshot the app pushes (countdowns +
     /// offer bits) and the drained release/reclaim/resurrect intents.
     pub(crate) death: death::DeathUiState,
     pub(crate) death_actions: Vec<death::DeathAction>,
@@ -1451,13 +1450,13 @@ pub(crate) struct Model {
     pub(crate) quest_log_selection: u32,
     pub(crate) quest_log_abandon_mark: u32,
     pub(crate) quest_log_abandons: Vec<u32>,
-    /// Quest ids `QuestLogPushQuest()` queued for the app to push to the party (decision 1733).
+    /// Quest ids `QuestLogPushQuest()` queued for the app to push to the party.
     /// **Ids, not entry indices**, like the abandon mark above: the id is resolved at click time,
     /// so a log shuffle between click and drain cannot retarget it.
     pub(crate) quest_log_pushes: Vec<u32>,
     /// How many times `ConfirmAcceptQuest()` was called — the escort confirm's Yes. A counter, not
     /// a quest id: the reference's verb takes no argument and answers whatever confirm the client
-    /// is holding, so the id lives app-side with the pending confirm (decision 1733).
+    /// is holding, so the id lives app-side with the pending confirm.
     pub(crate) quest_confirms: u32,
     /// The shared item-template store: `item id → full tooltip view` ([`item_stats`] module doc,
     /// decision 0274 P1).
@@ -1470,7 +1469,7 @@ pub(crate) struct Model {
     pub(crate) item_sets: HashMap<u32, super::ItemSetView>,
     pub(crate) item_set_asks: HashSet<u32>,
     /// The **random-suffix roll** store (`ItemRandomProperties` id → its resolved view) — pushed
-    /// WHOLE at startup, not asked for (decision 1547). It is a static DBC the app has in memory
+    /// WHOLE at startup, not asked for. It is a static DBC the app has in memory
     /// from load, and its consumers are click-driven (a chat-link tooltip has no hover re-enter
     /// loop to repaint on a late answer), so the ask-once shape the template store uses would
     /// leave a first click showing an item with no lines. This mirrors the reference exactly: the
@@ -1497,7 +1496,7 @@ pub(crate) struct Model {
     /// countdown the Lua reads: a timed quest's deadline is an absolute stamp in this epoch, and
     /// `GetQuestTimers` subtracts against it **per call**, exactly as the reference's C binding
     /// does. That is what lets the reference `QuestTimerFrame` tick smoothly from its OnUpdate
-    /// while the log snapshot itself only changes when the log does (decision 1150).
+    /// while the log snapshot itself only changes when the log does.
     pub(crate) server_unix_time: Option<f64>,
     /// The player's purse in copper (`GetMoney`), pushed each frame it changes by the app's
     /// `PLAYER_FIELD_COINAGE` feed ([`UiScript::set_money`]). Plain data — the money display + the
@@ -1523,8 +1522,8 @@ pub(crate) struct Model {
     /// **Raw wire values, deliberately ungated.** The server banks a point here for a *warrior*
     /// too (the Overpower window), and the usable walk's leg 5 consumes exactly that. The two
     /// gates the real `GetComboPoints 0x51a190` applies — rogue-or-druid only, and the banked
-    /// target must be the CURRENT target — live in the binding, where the binary puts them
-    /// (decision 0875). Read [`Self::combo_points`] directly and you are reading the wire, not
+    /// target must be the CURRENT target — live in the binding, where the binary puts them.
+    /// Read [`Self::combo_points`] directly and you are reading the wire, not
     /// what the reference UI can see.
     pub(crate) combo_points: u8,
     pub(crate) combo_target: u64,
@@ -1557,7 +1556,7 @@ pub(crate) struct Model {
     pub(crate) no_play_time: bool,
 
     /// The account's accumulated **rested billing minutes**, from `SMSG_AUTH_RESPONSE` — what
-    /// `GetBillingTimeRested()` returns (decision 1820, binding `0x48ec50`). Minutes is the
+    /// `GetBillingTimeRested()` returns (binding `0x48ec50`). Minutes is the
     /// server's convention and the engine converts nothing; stock `PlayerFrame.lua:246` divides by
     /// 60 for hours. Reached only from inside the two play-time bits above, so with those clear
     /// nothing in stock FrameXML ever reads it.
@@ -1571,7 +1570,7 @@ pub(crate) struct Model {
     pub(crate) in_cinematic: bool,
     /// Exhaustion.dbc as the rest bindings consume it — rest-state byte → (localized name,
     /// factor), the table `GetRestState` indexes directly and whose row 1 scales
-    /// `GetXPExhaustion` (`0x48d3f0`; decision 1087). Seeded with the shipped
+    /// `GetXPExhaustion` (`0x48d3f0`). Seeded with the shipped
     /// 5875 enUS rows so the engine tests and a failed DBC read behave like the shipped client
     /// (the GlobalStrings-fallback posture); the app overwrites it with the install's real —
     /// localized — rows at startup ([`UiScript::set_exhaustion_rows`]).
@@ -1579,9 +1578,9 @@ pub(crate) struct Model {
 
     /// The paper doll's combat-stats snapshot (`None` until the app's feed lands), the
     /// equipment/ammo slot views, and the model pane's persistent bake yaw — the character-window
-    /// seam ([`char_stats`], decision 0208 §3).
+    /// seam ([`char_stats`]).
     pub(crate) player_combat_stats: Option<char_stats::UnitCombatStats>,
-    /// The **pet's** combat-stats snapshot (decision 1057) — the same shape under the `"pet"`
+    /// The **pet's** combat-stats snapshot — the same shape under the `"pet"`
     /// token, because the reference's own pet sheet calls the very same `UnitStat`/`UnitResistance`/
     /// `PaperDollFrame_Set*(unit, prefix)` family with `unit = "pet"` (ref
     /// `PetPaperDollFrame.lua:73-81`). A second slot rather than a token map: exactly two units
@@ -1608,7 +1607,7 @@ pub(crate) struct Model {
     /// frame, where the slot snapshot is change-gated and fires an event.
     pub(crate) weapon_enchants: [Option<weapon_enchant::WeaponEnchant>; 2],
 
-    /// The inspected unit's equipment view, keyed by unit token ([`inspect`], decision 0631) —
+    /// The inspected unit's equipment view, keyed by unit token ([`inspect`]) —
     /// the *second* source behind the unit-keyed `GetInventoryItem*` family. Unlike
     /// [`Self::inventory_slots`] this is PUBLIC descriptor data (`PLAYER_VISIBLE_ITEM_*`), which
     /// is the whole reason a foreign player's gear can be read at all. `None` = nothing inspected.
@@ -1617,7 +1616,7 @@ pub(crate) struct Model {
     pub(crate) inspect_notifies: Vec<String>,
     /// `ClearInspectPlayer` was called — drained by the app, which drops its inspect target.
     pub(crate) inspect_clear: bool,
-    /// The dressing room's queued intents (decision 1060) — the `DressUpModel` widget's
+    /// The dressing room's queued intents — the `DressUpModel` widget's
     /// `SetUnit`/`Dress`/`Undress`/`TryOn`, drained by the app in order (see [`super::dressup`] on
     /// why order matters). The pane's yaw is its own `ModelState` facing, like every migrated
     /// window's (`UiScript::model_pane_facing`, 1751/1969).
@@ -1681,7 +1680,7 @@ pub(crate) struct Model {
     /// engine-owned selection.
     pub(crate) worldmap: super::worldmap::WorldMapState,
     /// The V-key nameplate pool — engine-owned `Button` widgets under the `WorldFrame`, grown on
-    /// demand and never shrunk, in creation order (decision 2148). Lives here rather than on
+    /// demand and never shrunk, in creation order. Lives here rather than on
     /// [`super::UiScript`] because it IS model state: the plates are arena frames, and an addon
     /// walking `WorldFrame:GetChildren()` reaches them like any other.
     pub(crate) nameplates: super::nameplate::NamePlates,
@@ -1716,15 +1715,15 @@ pub(crate) struct Model {
     /// is exactly one ping, so it lives here rather than on each Minimap widget's
     /// [`KindState`](crate::widget::KindState) — one write, one read, no arena walk.
     pub(crate) minimap_ping: (f32, f32),
-    /// The realm this session is on, behind `GetRealmName()` (decision 1195). `""` until the app
+    /// The realm this session is on, behind `GetRealmName()`. `""` until the app
     /// pushes one — the glue screen's own answer, and never `nil`, because the corpus idiom is
     /// `db[GetRealmName()] = …` at file scope and a nil index errors one call deeper.
-    /// Lines an addon queued with `SendChatMessage`, drained by the app into the wire
-    /// (decision 1199). Deliberately a different queue from the chat box's input: the box's drain
+    /// Lines an addon queued with `SendChatMessage`, drained by the app into the wire.
+    /// Deliberately a different queue from the chat box's input: the box's drain
     /// runs the slash grammar and this one must not.
     pub(crate) chat_sends: Vec<super::chat_send::ChatSend>,
-    /// Broadcasts an addon queued with `SendAddonMessage`, drained by the app into the wire
-    /// (decision 1235). Its own queue rather than [`Self::chat_sends`] because it is a different
+    /// Broadcasts an addon queued with `SendAddonMessage`, drained by the app into the wire.
+    /// Its own queue rather than [`Self::chat_sends`] because it is a different
     /// wire: `LANG_ADDON` in the language field, a four-value distribution set, and a payload the
     /// binding already composed as `prefix` TAB `message`.
     pub(crate) addon_sends: Vec<super::addon_message::AddonSend>,
@@ -1732,12 +1731,12 @@ pub(crate) struct Model {
     /// `CMSG_PLAYED_TIME`. A COUNT, not a payload, for [`super::pvp`]'s reason: the packet is
     /// empty, so two asks in a frame are two sends rather than one collapsed intent.
     pub(crate) played_time_asks: u32,
-    /// `Screenshot()` calls queued since the app last drained them — each is one capture
-    /// (decision 1487). A COUNT for [`Self::played_time_asks`]'s reason: the request carries no
+    /// `Screenshot()` calls queued since the app last drained them — each is one capture.
+    /// A COUNT for [`Self::played_time_asks`]'s reason: the request carries no
     /// payload, so two calls in a frame are two captures.
     pub(crate) screenshot_asks: u32,
     pub(crate) realm_name: String,
-    /// **The local player record — `0xc27d80`, ours** (decisions 2261 and 2263).
+    /// **The local player record — `0xc27d80`, ours**.
     ///
     /// The bytes, the four verbs that read it and why `UnitLevel` is not among them are on
     /// [`super::PlayerRecord`] itself; what belongs here is the *lifetime*, because that is what
@@ -1769,14 +1768,12 @@ pub(crate) struct Model {
     /// no payload (the app holds the innkeeper's guid), so two calls are two sends.
     /// The `GMTicketCategory.dbc` rows behind `GetGMTicketCategories()` — `(id, name)` in file
     /// order, pushed once by the app ([`super::UiScript::set_gm_ticket_categories`]). The ids are
-    /// the wire values, so this is an ordered pair list rather than an indexable table
-    /// (decision 1673).
+    /// the wire values, so this is an ordered pair list rather than an indexable table.
     pub(crate) gm_ticket_categories: Vec<(u32, String)>,
     /// Every ticket verb the window called since the app's last drain, **in call order** — ask,
     /// status-ask, delete, create, edit, one packet each. ONE queue rather than a counter per verb
     /// so that `DeleteGMTicket(); GetGMTicket()` in a single chunk reaches the wire in that order;
-    /// per-verb drains cannot express it, and the get would answer with the pre-delete state
-    /// (decision 1673).
+    /// per-verb drains cannot express it, and the get would answer with the pre-delete state.
     pub(crate) gm_ticket_intents: Vec<super::gm_ticket::GmTicketIntent>,
     /// `Stuck()` calls queued — each is one cast of spell 7355, the Help window's Auto-Unstuck.
     pub(crate) stuck_casts: u32,
@@ -1784,13 +1781,13 @@ pub(crate) struct Model {
     /// Is an innkeeper's bind question still live and in range — the answer `CheckBinderDist()`
     /// gives, pushed by the app each frame ([`super::UiScript::set_binder_pending`]). The
     /// CONFIRM_BINDER dialog polls it from OnUpdate and hides itself when it goes false, which is
-    /// how walking away from the innkeeper takes the question off screen (decision 1331).
+    /// how walking away from the innkeeper takes the question off screen.
     pub(crate) binder_pending: bool,
     /// The summon question's three resolved reads, pushed by the app each frame
     /// ([`super::UiScript::set_summon_confirm`]) — what `GetSummonConfirmSummoner`,
     /// `GetSummonConfirmAreaName` and `GetSummonConfirmTimeLeft` answer ([`super::summon`]).
     /// Default (two empty strings and a zero) is exactly what the reference's getters answer with
-    /// nothing pending, so the pre-push window behaves like the post-expiry one (decision 1747).
+    /// nothing pending, so the pre-push window behaves like the post-expiry one.
     pub(crate) summon_confirm: super::summon::SummonConfirmUiState,
     /// `ConfirmSummon()` calls queued since the app's last drain — each is one outbound
     /// `CMSG_SUMMON_RESPONSE`. A COUNT for [`Self::binder_confirms`]'s reason: the app holds the
@@ -1807,7 +1804,7 @@ pub(crate) struct Model {
 
 impl Model {
     /// The detail pane of the row `SelectQuestLogEntry` currently names — resolved HERE, per call,
-    /// never baked into the pushed snapshot (decision 2247). The reference's detail bindings read
+    /// never baked into the pushed snapshot. The reference's detail bindings read
     /// the selection variable and peek the quest cache inside the same call, so a select-then-read
     /// pair within one frame answers about the row just selected; the app's push only supplies the
     /// per-row data those reads land on. `None` for no selection, an out-of-range one, or a header.
@@ -1841,11 +1838,11 @@ impl Model {
 
     /// Record one script error on **both** channels: the host's `errors` vec (the instruments'
     /// channel — the harness blocker tables, the app's log drain) and the handler-dispatch queue
-    /// (the player's channel — decision 1305). Every engine-caught script error goes through here;
+    /// (the player's channel). Every engine-caught script error goes through here;
     /// a failure raised by the error handler *itself* is pushed to `errors` directly instead,
     /// which is what keeps the dispatch from recursing.
     pub(crate) fn record_script_error(&mut self, msg: String) {
-        // Three channels now, and the third is the one with a memory (decision 1495): the dialog
+        // Three channels now, and the third is the one with a memory: the dialog
         // shows a burst's first message and the host drain empties every frame, so without this
         // the 1,112 raises after the first exist nowhere a player can reach.
         self.diagnostics
@@ -1854,7 +1851,7 @@ impl Model {
         self.errors.push(msg);
     }
 
-    /// **Record one non-fatal warning — the channel's one door** (decision 2135). Both halves:
+    /// **Record one non-fatal warning — the channel's one door**. Both halves:
     /// the host's per-frame `warnings` drain (a `warn!` line in the terminal, for whoever is
     /// running the client), and the retained diagnostic log, which is the only copy a player or an
     /// instrument can read after the frame that produced it.
@@ -2362,7 +2359,7 @@ impl Model {
     /// exactly the failure `WOW_LAYOUT_VERIFY` (on for every benilla-ui test) exists to catch
     /// loudly, by proving the fingerprint still matches whenever tier 1 claims quiet.
     pub(crate) fn touch_layout(&mut self) {
-        // The conservative half of the tier-1 ledger (decision 1388): this write did not name a
+        // The conservative half of the tier-1 ledger: this write did not name a
         // node, so the cached graph can no longer be trusted to describe the live model and the
         // next resolve must derive it in full. Every site that has NOT been migrated to a precise
         // touch lands here, which is why migration can be incremental and a missed one is slow
@@ -2398,7 +2395,7 @@ impl Model {
 
     /// A **REPARENT** that names its nodes: `SetParent` moved the effective scale of every frame
     /// in the subtree rooted at `root`, and moved nothing else the layout graph is made of
-    /// (decision 2314, extending 1388).
+    /// (extending 1388).
     ///
     /// ## Why a reparent is a value-only write here
     ///
@@ -2459,7 +2456,7 @@ impl Model {
 
     /// An anchor RETARGET that names its node: the write moved node `h`'s (or `rh`'s) set of
     /// anchor TARGETS, and hands over both target lists so the cached graph's edges can be
-    /// re-pointed instead of thrown away (decision 1625, extending 1388).
+    /// re-pointed instead of thrown away (extending 1388).
     ///
     /// `old`/`new` are the node's FULL anchor-target lists either side of the write. Falls back to
     /// the conservative touch whenever the scope refuses the patch — the same "worst case is a

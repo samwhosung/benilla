@@ -37,16 +37,16 @@ pub struct ActionSlot {
     /// The icon texture path (`Interface\Icons\…`); `None` shows the slot's fallback.
     pub texture: Option<String>,
     /// The wire's kind byte (bits 24–31 of the packed slot word — SPELL 0x00/MACRO 0x40/ITEM
-    /// 0x80, decision 0216 §1). Opaque to the engine beyond the cursor seam's own pack/unpack
+    /// 0x80). Opaque to the engine beyond the cursor seam's own pack/unpack
     /// (`super::cursor::bar`); ids, targets, and the cast are still the app's.
     pub kind: u8,
     /// The spell/macro/item id (bits 0–23 of the packed slot word).
     pub action: u32,
     /// Bag count for an ITEM-kind slot (`GetActionCount`), `0` for every other kind or an empty
-    /// bag — the app-resolved value the Count fontstring reads (decision 0216 §7).
+    /// bag — the app-resolved value the Count fontstring reads.
     pub count: u32,
-    /// `IsConsumableAction`: the gate the ref's `UpdateCount` puts in front of [`Self::count`]
-    /// (decision 0926 §3). **Identity, not state** — `0x4e5250` reads nothing but the slot's own
+    /// `IsConsumableAction`: the gate the ref's `UpdateCount` puts in front of [`Self::count`].
+    /// **Identity, not state** — `0x4e5250` reads nothing but the slot's own
     /// item template, so it changes exactly when the icon does and rides the same push (decision
     /// 1301; it lived in [`ActionState`] until the login race that split the pair).
     pub consumable: bool,
@@ -162,7 +162,7 @@ impl super::UiScript {
     }
 
     /// Drain the `(lua action id, packed)` pairs `PickupAction`/`PlaceAction` queued since the
-    /// last call (decision 0216 §7) — the app sends one `CMSG_SET_ACTION_BUTTON` per entry
+    /// last call — the app sends one `CMSG_SET_ACTION_BUTTON` per entry
     /// (`packed == 0` clears the slot) and updates its own authoritative `PlayerActions` store.
     pub fn take_action_sets(&mut self) -> Vec<(u32, u32)> {
         std::mem::take(&mut self.model_mut().action_sets)
@@ -243,7 +243,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // the 1..36 index — `GetMacroInfo` translates an index through `0xbdcc60` first and
     // `GetActionText` never does, so a client that treats the payload as an index reads the wrong
     // macro for every macro whose id ≠ its slot. benilla's macro table has no id space at all
-    // (decision 0983: two dense lists addressed by the 1..36 Lua index), so the payload our wire
+    // (two dense lists addressed by the 1..36 Lua index), so the payload our wire
     // carries IS that index — and this is the same lookup `ui_action::feed`'s MACRO icon arm
     // makes, through the same `MacroState::get`, so a slot's text and its icon cannot disagree
     // about which macro it holds.
@@ -406,7 +406,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // The Count gate reads the SLOT, not the state map: `IsConsumableAction 0x4e5250` is a pure
     // query over the item template the icon already came from, so it has to arrive on the same
     // push the icon does. Split across the two feeds it answered `nil` for the whole session on a
-    // freshly logged-in character (decision 1301).
+    // freshly logged-in character.
     g.set(
         "IsConsumableAction",
         lua.create_function(|lua, action: u32| {

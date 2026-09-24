@@ -50,7 +50,7 @@ fn with_smf<T>(
 }
 
 /// `lua_isnumber` semantics — a number, or a string Lua would coerce to one. The rgb trio's
-/// presence test is three of these (decision 2125), so a caller passing `"1"` still colours the
+/// presence test is three of these, so a caller passing `"1"` still colours the
 /// line and a caller passing `nil` or a table does not.
 fn is_number(v: &Value) -> bool {
     match v {
@@ -107,7 +107,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // quantizes round-half-up and forces the line opaque, then the fade drives its alpha.
     //
     // **The rgb gate is three separate `lua_isnumber` calls on indices 3/4/5, and the id's index
-    // is LEG-DEPENDENT** (decision 2125): 6 when rgb are
+    // is LEG-DEPENDENT**: 6 when rgb are
     // present (`0x792b13 mov edx,6`), **3** when they are absent (`0x792b48 mov edx,3`) — which is
     // what makes the documented `AddMessage(text, id)` shorthand work. So `AceConsole-2.0`'s
     // `AddMessage(text, nil, nil, nil, nil, 5)` fails the R gate at index 3, takes the absent leg,
@@ -238,7 +238,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // 1/nil, the reference's predicate shape (`0x793a40`): `(nil) | (number)`, like every other
-    // 1.12 predicate (decision 2118).
+    // 1.12 predicate.
     m.set(
         "GetFading",
         lua.create_function(|lua, this: Table| {
@@ -826,7 +826,7 @@ mod tests {
         assert!(!s.add_chat_message("PlainFrame", "x", 1.0, 1.0, 1.0));
     }
 
-    /// **`AddMessage`'s id lives at a different stack index on each leg** (decision 2125): the
+    /// **`AddMessage`'s id lives at a different stack index on each leg**: the
     /// sixth argument when r,g,b are present, the THIRD when they are not — which is what makes
     /// the `AddMessage(text, id)` shorthand work at all (`0x792b13 mov edx,6` /
     /// `0x792b48 mov edx,3`).
@@ -880,7 +880,7 @@ mod tests {
         assert_ne!(smf.lines_gen, gen, "a recolour is a redraw");
         assert_eq!(smf.update_color_by_id(11, 0.0, 0.5, 1.0), 0, "idempotent");
         assert_eq!(smf.update_color_by_id(99, 0.0, 0.0, 0.0), 0, "no such id");
-        // **Id 0 matches nothing** — `0x788250`'s own opening guard (decision 2125). Line "d" was
+        // **Id 0 matches nothing** — `0x788250`'s own opening guard. Line "d" was
         // printed with no id, so it carries 0; so does `ChatTypeInfo["REPLY"]`, which the
         // `UPDATE_CHAT_COLOR` handler mirrors WHISPER into. Without the guard that pair repainted
         // every colourless line in the window whisper-pink at every login.

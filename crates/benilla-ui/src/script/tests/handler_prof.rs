@@ -1,7 +1,7 @@
-//! Per-handler cost attribution (decision 1395) — the instrument that answers *which* handler.
+//! Per-handler cost attribution — the instrument that answers *which* handler.
 //!
-//! These assert on **names, call counts, and the self/total relation**, never on a duration
-//! (0735): "this handler cost 2 ms" is not a fact a test can own. The one relational assertion
+//! These assert on **names, call counts, and the self/total relation**, never on a duration:
+//! "this handler cost 2 ms" is not a fact a test can own. The one relational assertion
 //! (`self < total` under nesting) carries its own exact control — the same shape with nothing
 //! nested inside it must report `self == total` to the last nanosecond, which is what proves the
 //! difference came from the subtraction rather than from the clock.

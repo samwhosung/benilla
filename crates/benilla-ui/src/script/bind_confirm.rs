@@ -1,5 +1,5 @@
 //! The **item soulbind confirmations** other than the loot one — the Era API surface behind
-//! `EQUIP_BIND` / `AUTOEQUIP_BIND` / `USE_BIND` (decision 1750). Three globals, no snapshot: the
+//! `EQUIP_BIND` / `AUTOEQUIP_BIND` / `USE_BIND`. Three globals, no snapshot: the
 //! question arrives as an event and the answer goes straight back out, exactly like
 //! [`super::binder`] and [`super::duel`].
 //!

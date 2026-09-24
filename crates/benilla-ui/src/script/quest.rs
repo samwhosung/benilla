@@ -1,4 +1,4 @@
-//! The questgiver bindings (decision 0088) — the Era-shaped quest-dialog surface, the same two-way
+//! The questgiver bindings — the Era-shaped quest-dialog surface, the same two-way
 //! seam as [`super::gossip`]/[`super::merchant`]: the app pushes a **quest panel snapshot**
 //! ([`UiScript::set_quest`] — the greeting/detail/progress/reward text + item rows already resolved
 //! from the wire), and the Lua `AcceptQuest`/`CompleteQuest`/`GetQuestReward`/`SelectActiveQuest`/…
@@ -17,7 +17,7 @@
 //! `GetRewardMoney()`/`GetQuestItemInfo("choice"|"reward",i)`. Benilla keeps those exact names on a
 //! single pushed [`QuestState`]; which panel is live is [`QuestState::panel`], surfaced to the XML
 //! through the `QUEST_GREETING`/`QUEST_DETAIL`/`QUEST_PROGRESS`/`QUEST_COMPLETE` events the app
-//! fires. `GetRewardSpell()` returns `nil` in v1 (spell-reward rows are out of scope, decision 0088).
+//! fires. `GetRewardSpell()` returns `nil` in v1 (spell-reward rows are out of scope).
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -61,7 +61,7 @@ pub struct QuestItemView {
     /// the server stays authoritative).
     pub usable: bool,
     /// The full escaped `|cff…|Hitem:…|h[Name]|h|r` link (`GetQuestItemLink` /
-    /// `GetQuestLogItemLink` serve it) — the ctrl/shift click arms' payload (decisions 1059/1060).
+    /// `GetQuestLogItemLink` serve it) — the ctrl/shift click arms' payload.
     /// `None` until the ask-once item template lands: the link is built from the name **and** the
     /// quality, and neither is known before then, exactly like [`super::InvSlotView::link`].
     pub link: Option<String>,
@@ -355,7 +355,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // this.type, this:GetID()))` (ref QuestFrame.lua:118/130) and the shift-click
     // `ChatFrameEditBox:Insert(...)` beside it (l.122/134). Same `type`/`index` addressing as
     // `GetQuestItemInfo` above; nil for an out-of-range row, an unknown type, or a row whose
-    // template answer is still in flight (see [`QuestItemView::link`]). Decisions 1059/1060.
+    // template answer is still in flight (see [`QuestItemView::link`]).
     g.set(
         "GetQuestItemLink",
         lua.create_function(|lua, (kind, index): (String, usize)| {
@@ -477,7 +477,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // ConfirmAcceptQuest() — the escort confirm's Yes (ref StaticPopup.lua:731-733, raised by
     // QUEST_ACCEPT_CONFIRM). No argument and no quest id: the client answers whichever confirm it
-    // is holding, so the engine counts the calls and the app supplies the id (decision 1733).
+    // is holding, so the engine counts the calls and the app supplies the id.
     g.set(
         "ConfirmAcceptQuest",
         lua.create_function(|lua, ()| {
@@ -771,7 +771,7 @@ mod tests {
     }
 
     /// `ConfirmAcceptQuest` counts rather than carrying a quest id — the reference's verb takes no
-    /// argument and answers whichever confirm the client holds (decision 1733).
+    /// argument and answers whichever confirm the client holds.
     #[test]
     fn confirm_accept_quest_counts_and_drains() {
         let mut s = UiScript::new().unwrap();

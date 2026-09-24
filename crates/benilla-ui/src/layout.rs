@@ -1,4 +1,4 @@
-//! The frame anchor/layout resolver — anchor graph → resolved rects (decision 0068).
+//! The frame anchor/layout resolver — anchor graph → resolved rects.
 //!
 //! This is a faithful transcription of the WoW 1.12.1 client's `CLayoutFrame` geometry resolver,
 //! reverse-engineered bit-exact against `WoW.exe`. The leaf float kernels and the
@@ -507,7 +507,7 @@ fn anchor_scan_y(ids: &[usize; 3], f: &EdgeInput) -> f64 {
 /// al.): operands are `f32` fields, the product narrowed to `f32` at the `fstp [esp]` site,
 /// negated for LEFT/BOTTOM.
 ///
-/// **`size` is not always the authored field, and this is the trap** (decision 1349): each
+/// **`size` is not always the authored field, and this is the trap**: each
 /// caller's `call [eax+0x1c]` is **virtual**. A plain frame lands on
 /// `0x768420 fld [G+0x50]` — the flat read this signature assumes — but a `CSimpleTexture` lands on
 /// `0x770720` and a `CSimpleFontString` on `0x772930`, both of which substitute a **content-derived**
@@ -857,7 +857,7 @@ impl LayoutSolver {
     }
 
     /// [`set_frame`](Self::set_frame) with `src`'s anchors replaced by exactly `anchor` — the
-    /// ScrollFrame child override (decision 0112), which otherwise cost a full input clone plus a
+    /// ScrollFrame child override, which otherwise cost a full input clone plus a
     /// one-element `Vec` per scroll child per round.
     pub fn set_frame_anchored(&mut self, h: Handle, src: &LayoutInput, anchor: Anchor) {
         self.ensure(h);
@@ -1461,7 +1461,7 @@ mod tests {
     }
 
     /// A frame registered with the ScrollFrame override keeps its size/scale but drops its own
-    /// anchors for exactly the override (decision 0112) — and the slot's anchor `Vec` is reused,
+    /// anchors for exactly the override — and the slot's anchor `Vec` is reused,
     /// so the previous round's anchors must not leak through.
     #[test]
     fn set_frame_anchored_replaces_only_the_anchors() {

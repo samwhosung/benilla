@@ -45,7 +45,7 @@
 //! reads it; the options dropdown checks `FCF_GetCurrentChatFrame():GetFont()` instead), and no
 //! corpus addon reads it.
 //!
-//! ## The three setters, and why this getter stopped being a constant (decision 1589)
+//! ## The three setters, and why this getter stopped being a constant
 //!
 //! Until 1589 the whole tuple above was a frozen table: benilla had no way to *change* a window's
 //! look, so answering with the stock cache row was the honest answer. B246 ("no chat options at
@@ -95,7 +95,7 @@
 //! grips and the tab drag on, so a value that used to be a constant has a player-reachable writer
 //! and belongs in the record with the rest. The other five stay constants, and that is the honest
 //! tree rather than an omission: benilla has no rename, no undock and no window create/close, so
-//! `name`, `shown` and `docked` still have nothing that could move them (0288 §2).
+//! `name`, `shown` and `docked` still have nothing that could move them.
 //!
 //! Measured demand: **3 of the 5 corpus addons that iterate `NUM_CHAT_WINDOWS` call this on the
 //! very next line** — `EnhTooltip/Tooltip.lua:1302`, `MikScrollingBattleText.lua:1951` and

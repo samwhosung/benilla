@@ -380,7 +380,7 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                 //
                 // The height it reserves is `texture.GetHeight()`, which is `CSimpleTexture`'s
                 // **override**: a `<IMG>` with no `height=` reserves its art's own texel height,
-                // not nothing (decision 1349 — one texel is one FrameXML unit). Asked of the same
+                // not nothing (one texel is one FrameXML unit). Asked of the same
                 // host oracle the resolve derives the region's rect from, so the space the flow
                 // leaves and the space the image fills are one number.
                 if !*floated {

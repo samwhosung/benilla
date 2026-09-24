@@ -1,4 +1,4 @@
-//! The instance-lockout **Era API surface** (decision 1748) — three globals, no snapshot struct.
+//! The instance-lockout **Era API surface** — three globals, no snapshot struct.
 //!
 //! `IsInInstance`, `CanShowResetInstances` and `ResetInstances` are all engine bindings in 1.12
 //! (`reference/1.12-globals.tsv` lists the three as `function`/`engine`), and between them they

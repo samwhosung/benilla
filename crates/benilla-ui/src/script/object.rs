@@ -129,7 +129,7 @@ pub(super) fn publish_global(lua: &Lua, name: &str, wrapper: &Table) -> mlua::Re
 /// So the name is not a *frame name* — it is a **global**, and a frame's published name is only the
 /// commonest way one comes to exist. Resolving against a private registry instead makes an alias
 /// invisible: `Bar8Button1 = CharacterBag3Slot` at an addon's file scope is a global that is no
-/// frame's name, and Bartender2 anchors every bar's buttons through exactly those (decision 2105).
+/// frame's name, and Bartender2 anchors every bar's buttons through exactly those.
 ///
 /// ## Why the lookup is its own phase
 ///
@@ -252,7 +252,7 @@ pub(super) fn point_name(p: Point) -> &'static str {
     }
 }
 
-/// Every closed-vocabulary attribute parser **trims** before it matches (decision 1204).
+/// Every closed-vocabulary attribute parser **trims** before it matches.
 ///
 /// Not tidiness: `zBar.xml:146` — a shipped, working 1.12 addon — declares
 /// `frameStrata="BACKGROUND "` with a trailing space, and the real client took it. Ours refused,
@@ -266,7 +266,7 @@ fn enum_token(s: &str) -> String {
 
 /// The reference's strata NAME table (`0x8119f8`) has eight rows, `BACKGROUND`..`TOOLTIP`; stratum
 /// 0 (`WORLD`) has no name and no XML or Lua can put a frame there — the WorldFrame's constructor
-/// is its only writer (decision 1984, `0x481aff`).
+/// is its only writer (`0x481aff`).
 pub(crate) fn strata_from_str(s: &str) -> Option<Strata> {
     Some(match enum_token(s).as_str() {
         "BACKGROUND" => Strata::Background,
@@ -318,10 +318,10 @@ pub fn frame_kind_from_tag(s: &str) -> Option<FrameKind> {
 ///
 /// "Right now" is the WorldFrame's one-shot: the reference unlinks and releases that record the
 /// moment the first `<WorldFrame>` is instantiated (`0x6ee439`), so a second one — from any XML, or
-/// `CreateFrame("WorldFrame")` — takes the lookup's miss leg (decision 1984).
+/// `CreateFrame("WorldFrame")` — takes the lookup's miss leg.
 ///
-/// One function because the two doors disagree only in what a MISS does, never in what a miss is
-/// (decision 2191): the Lua binding raises ([`create_frame`]), the XML loader logs
+/// One function because the two doors disagree only in what a MISS does, never in what a miss is:
+/// the Lua binding raises ([`create_frame`]), the XML loader logs
 /// `"Unknown frame type: %s"` and skips the node (`crate::loader`) — both legs off the same
 /// `0x6ee280`.
 pub(crate) fn registered_frame_kind(lua: &Lua, kind: &str) -> Option<FrameKind> {
@@ -337,11 +337,11 @@ pub(crate) fn registered_frame_kind(lua: &Lua, kind: &str) -> Option<FrameKind> 
 fn frame_kind_from_str(s: &str) -> Option<FrameKind> {
     Some(match enum_token(s).as_str() {
         "FRAME" => FrameKind::Frame,
-        // The world frame's own registered type (decision 1983; `0x495948` in the registration
+        // The world frame's own registered type (`0x495948` in the registration
         // batch, the one row passing `1` as its third argument).
         "WORLDFRAME" => FrameKind::WorldFrame,
         // `TaxiRouteFrame` — a registered `CreateFrame` type that is a `CSimpleFrame` and NOTHING
-        // else, so it maps to `Frame` rather than earning a kind (decision 1828). Factory
+        // else, so it maps to `Frame` rather than earning a kind. Factory
         // `0x495ba0` allocates `0x314`, the same
         // size the plain-`<Frame>` factory `0x6eec10` allocates for the same base ctor `0x769090`,
         // and the ctor `0x506950` adds no field. Its vtables are the base's length exactly (36 + 11
@@ -360,7 +360,7 @@ fn frame_kind_from_str(s: &str) -> Option<FrameKind> {
         "TAXIROUTEFRAME" => FrameKind::Frame,
         "BUTTON" => FrameKind::Button,
         "CHECKBUTTON" => FrameKind::CheckButton,
-        // A real registered type (`0x4959a6`), not an alias for Button — decision 1799. Registering
+        // A real registered type (`0x4959a6`), not an alias for Button. Registering
         // it AS a Button would load `LootFrame.xml` and leave every row dead, because 1.12 has no
         // Lua verb for "take slot N": `LootSlot` is the bind-confirm continuation, hard-wired to
         // `flag = 1`.
@@ -422,7 +422,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     super::button::install(lua)?;
     super::editbox::install(lua)?;
     // AFTER every table above exists: collapse the 19 Region-map names to one shared
-    // implementation each, so a method pulled off a frame works on a texture (decision 1501).
+    // implementation each, so a method pulled off a frame works on a texture.
     super::region_map::install(lua)?;
 
     // The per-kind metatable cache ([`frame_meta_for`]) and the base metatable in it: the one a
@@ -457,7 +457,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SetupFullscreenScale(frame) — the registered binding `0x48c270` the stock WorldMapFrame.xml,
-    // CinematicFrame.xml and UIOptionsFrame.xml call from OnShow (decision 1980): the frame's scale
+    // CinematicFrame.xml and UIOptionsFrame.xml call from OnShow: the frame's scale
     // becomes `min(0.75 · a, 1.0)` for the CONFIGURED aspect `a` — the `gxResolution` width over
     // height (the `widescreen` CVar's default of 1 selects it; at 0 the aspect is 4:3 and the
     // scale 1) — and nothing else is written: no anchor, size or position, and `UIParent`'s
@@ -492,7 +492,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `mouse_button`), UI units y-up like every other coordinate read — the SCREEN's units, which
     // is what the reference hands Lua too; a caller inside a scaled frame divides by its
     // `GetEffectiveScale()` (the reference's own `MouseIsOver` does, and the stock world map at
-    // a scale under 1 is the case that made the division load-bearing here — decision 1985). The
+    // a scale under 1 is the case that made the division load-bearing here). The
     // world map polls this every OnUpdate for hover/click math.
     lua.globals().set(
         "GetCursorPosition",
@@ -510,7 +510,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // **1/nil, not a Lua boolean.** These three shipped Era booleans on 0068's reasoning that
     // "every transcribed `if IsShiftKeyDown()` reads both identically" — true while we wrote every
     // caller, and false the day real 1.12 addons load (1188/1751). `ColorPickerPlus.lua:121` is
-    // `if IsShiftKeyDown() == 1 then`, and a `true` reads there as "not held" (decision 2118).
+    // `if IsShiftKeyDown() == 1 then`, and a `true` reads there as "not held".
     for (name, pick) in [
         ("IsShiftKeyDown", 0usize),
         ("IsControlKeyDown", 1),
@@ -535,7 +535,7 @@ const REG_KIND_METAS: &str = "__benilla_frame_meta_by_kind";
 
 /// The metatable a frame of `kind` wears — built once per kind, cached in [`REG_KIND_METAS`].
 ///
-/// ## `__index` is a TABLE, and that is the whole point (decision 2310)
+/// ## `__index` is a TABLE, and that is the whole point
 ///
 /// This used to be one shared metatable whose `__index` was a **Rust function** that resolved the
 /// receiver's kind and walked its registries per lookup. Every `frame:SetPoint(...)` — every plain

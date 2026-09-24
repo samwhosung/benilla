@@ -1,4 +1,4 @@
-//! **`Screenshot()`** — the engine verb behind the print-screen key (decision 1487).
+//! **`Screenshot()`** — the engine verb behind the print-screen key.
 //!
 //! One global and one counter. The reference's binding is `SCREENSHOT` → `TakeScreenshot()`
 //! (FrameXML `Bindings.xml`), whose body hides the status text and then calls this engine

@@ -1,4 +1,4 @@
-//! The Help window's seven engine globals ([`crate::script::gm_ticket`], decision 1673).
+//! The Help window's seven engine globals ([`crate::script::gm_ticket`]).
 //!
 //! Two claims carry the whole feature and each has a test named after it: the category list is
 //! **flat pairs consumed by Lua 5.0 varargs** (that is what `HelpFrameGM_UpdateCategories` reads),
@@ -92,7 +92,7 @@ fn the_payload_free_verbs_queue_rather_than_latch() {
 /// **Call order is wire order.** A chunk that abandons and then re-asks must reach the server in
 /// that order — reversed, the get answers with the state *before* the delete and the window is
 /// told it still has the ticket it just abandoned. Per-verb drains cannot express this, which is
-/// why there is one queue (decision 1673).
+/// why there is one queue.
 #[test]
 fn the_queue_preserves_call_order_across_different_verbs() {
     let mut s = script();

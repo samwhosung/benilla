@@ -45,7 +45,7 @@ fn action_state_bindings_answer_the_reference_conventions() {
     assert!(s
         .eval::<bool>("return IsAutoRepeatAction(3) == nil")
         .unwrap());
-    // IsConsumableAction reads the SLOT, not this map (decision 1301) — it is a pure query over
+    // IsConsumableAction reads the SLOT, not this map — it is a pure query over
     // the item template, so it arrives with the icon it gates the count beside.
     assert!(s
         .eval::<bool>("return IsConsumableAction(3) == nil")

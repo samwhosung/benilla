@@ -1,4 +1,4 @@
-//! The taxi seam (decision 0484): the app-pushed snapshot surfaces through the Era bindings the
+//! The taxi seam: the app-pushed snapshot surfaces through the Era bindings the
 //! reference `TaxiFrame.lua` reads, and the click/close intents drain back out.
 
 use super::common::script;

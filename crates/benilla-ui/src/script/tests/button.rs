@@ -531,7 +531,7 @@ fn highlight_is_additive_and_state_textures_fill_then_anchor() {
         &find("Interface\\Hi.blp").content,
         QuadContent::Texture { additive: true, .. }
     ));
-    // A fresh state texture gets the creation-path implicit SetAllPoints (decision 1310 — the
+    // A fresh state texture gets the creation-path implicit SetAllPoints (the
     // reference's string setters anchor a freshly built texture to the button outright), whose
     // two corners pin all four edges: the later 64px size is structurally unread and the ring
     // FILLS the 36px button.
@@ -1074,7 +1074,7 @@ fn a_lazily_made_label_is_anchored_by_the_normal_fonts_justify() {
 }
 
 /// **A label that set its own face keeps it — the severance mask covers every axis, not three of
-/// six** (decision 2112).
+/// six**.
 ///
 /// `font_explicit` is the client's explicitly-set mask (`FONTINSTANCE+0x38`): an axis a widget
 /// writes for *itself* severs inheritance from the font instance it reads, and is never restored
@@ -1167,8 +1167,7 @@ fn a_button_labels_own_setfont_survives_the_state_font_repoint() {
 }
 
 /// **A state-texture setter takes an OBJECT and takes nil**, not only a path — the reference's
-/// `0x781970` forks on `lua_type(L, 2)` into four legs and benilla honoured one of them
-/// (decision 2124).
+/// `0x781970` forks on `lua_type(L, 2)` into four legs and benilla honoured one of them.
 ///
 /// Both missing legs are silent no-ops rather than errors, which is why nothing caught them:
 ///
@@ -1244,8 +1243,7 @@ fn a_state_texture_slot_takes_an_object_and_a_nil() {
     );
 }
 
-/// **The unlocked scripted push is released by the next mouse release — Tablet-2.0's rows**
-/// (decision 2134).
+/// **The unlocked scripted push is released by the next mouse release — Tablet-2.0's rows**.
 ///
 /// `SetButtonState(state[, lock])` writes `[+0x32c]` unconditionally, and the mouse-up edge
 /// `0x7793de` un-presses whenever `locked == 0`. Tablet-2.0 (`Tablet-2.0.lua:1645`) pushes a row it

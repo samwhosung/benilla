@@ -80,7 +80,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     // `UnregisterAllEvents()` — drop every registration this frame holds, in one call.
     //
-    // 10 corpus addons stop on it (decision 1195), and the idiom is why: an addon's "disable me"
+    // 10 corpus addons stop on it, and the idiom is why: an addon's "disable me"
     // path is `self.frame:UnregisterAllEvents()`, and a library that pools frames calls it before
     // handing one out. Unregistering them one by one is not equivalent — the caller does not know
     // what it registered, which is the whole point of the verb.
@@ -142,7 +142,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // own measurement; it is not a tail on this one.
     //
     // 1/nil, not a Lua boolean: the reference's row is `(nil) | (number)` like every other
-    // predicate (decision 2118).
+    // predicate.
     m.set(
         "HasScript",
         lua.create_function(|_, (_this, name): (Table, String)| {
@@ -151,8 +151,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             ))
         })?,
     )?;
-    // RegisterForDrag(...varargs of button names) — the drag-gesture twin of `RegisterForClicks`
-    // (decision 0216 §3), but on the SHARED table: any Frame can be a drag source, not just a
+    // RegisterForDrag(...varargs of button names) — the drag-gesture twin of `RegisterForClicks`,
+    // but on the SHARED table: any Frame can be a drag source, not just a
     // Button. Replace-the-set semantics (empty varargs clears); `crate::script::cursor`'s
     // arm/start/release path consults the set case-insensitively (the `RegisterForClicks`
     // precedent). Pruning on frame destroy: see [`Model::drag_registered`]'s doc — nothing in
@@ -348,7 +348,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 ///   `editbox::drain_cursor_changed` is our counterpart, on the tick, gated on the caret having
 ///   actually moved. The stock `MailFrame.xml` and `HelpFrame.xml` declare it, so until 2141 the
 ///   mail body and the GM ticket box did not scroll as you typed past their bottom — a bug nobody
-///   could see, because the load-time refusal only reached a terminal (decision 2135).
+///   could see, because the load-time refusal only reached a terminal.
 /// * **`OnAttributeChanged`** (1 site, `Roid-Macros`) — **raising, permanently.** It is 2.0's secure
 ///   frame/attribute system; there is no such slot in any 1.12 resolver. That addon is asking for a
 ///   later client and should hear so.
@@ -391,7 +391,7 @@ fn set_script(lua: &Lua, this: &Table, name: &str, func: Option<Function>) -> ml
             per.set(kind, f)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             // `insert` answering true = this frame did not have the kind before — the tick's
-            // OnUpdate list rides that edge (decision 1446; `scripts` has no other writer).
+            // OnUpdate list rides that edge (`scripts` has no other writer).
             if model.scripts.entry(h).or_default().insert(kind) {
                 match kind {
                     "OnUpdate" => model.on_update_frames.push(h),
@@ -545,7 +545,7 @@ mod tests {
     use crate::script::UiScript;
 
     /// `UnregisterAllEvents` drops every registration the frame holds and leaves every other
-    /// frame's alone — the "disable me" path 10 corpus addons stop on (decision 1195).
+    /// frame's alone — the "disable me" path 10 corpus addons stop on.
     ///
     /// The second half is the one worth asserting: the cheap implementation (sweep every listener
     /// list) and the correct one differ only when a *second* frame shares an event, which is the

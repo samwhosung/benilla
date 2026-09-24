@@ -136,7 +136,7 @@ impl std::error::Error for Error {
 /// client's own are named.
 pub fn parse(text: &str) -> Result<Vec<AddonBinding>, Error> {
     // Namespace-oblivious, like the FrameXML document layer beside it and for the same reason
-    // (decision 2155; `framexml::parse`'s comment is the mechanism): a `Bindings.xml` is read by
+    // (`framexml::parse`'s comment is the mechanism): a `Bindings.xml` is read by
     // the same `XMLTree.cpp` tree the client builds with expat's `XML_ParserCreate`, which has no
     // namespace processing at all — so an undeclared prefix cannot be an error there, and must not
     // cost the whole file here.

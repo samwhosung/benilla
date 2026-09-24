@@ -1,4 +1,4 @@
-//! The nameplate ABI, as the four vanilla addons actually read it (decision 2148).
+//! The nameplate ABI, as the four vanilla addons actually read it.
 //!
 //! These are not "does the pool work" tests. Each is a transcription of a real corpus idiom — the
 //! same walk, the same destructuring, the same identification test — so a change that would break
@@ -431,7 +431,7 @@ fn a_hovered_plate_emits_no_glow_quad() {
     );
 }
 
-/// **The plate's name and level seat off the UI pixel grid** (decision 2172).
+/// **The plate's name and level seat off the UI pixel grid**.
 ///
 /// The plate is a WorldFrame overlay: the driver snaps its rect to the DEVICE pixel grid
 /// (`vplates::device_snap` — half a logical pixel at 2×) because it slides continuously over the
@@ -532,7 +532,7 @@ fn an_addon_that_retextures_the_glow_gets_its_art_painted() {
 }
 
 /// pfUI reads `glow:IsShown()` as the MOUSEOVER signal (`:601`, `:880`). benilla does not paint the
-/// additive rim (0184 — it read as hard edge lines on our pipeline, and the director pinned a bar
+/// additive rim (it read as hard edge lines on our pipeline, and the director pinned a bar
 /// brighten instead), but the region is structurally present and really shown, because the
 /// deviation is about pixels and this is about data.
 #[test]
@@ -705,7 +705,7 @@ fn a_completed_click_on_a_plate_reaches_the_app() {
 
 /// **The right button too** — `RegisterForClicks(0x500)` is LeftButtonUp | **RightButtonUp**
 /// (`0x7cb637` → `[this+0x330]`), and the reference's slot forks on it: mask 1 → `0x4925d0`
-/// select, mask 4 → `0x492820` select **and interact** (decision 2233).
+/// select, mask 4 → `0x492820` select **and interact**.
 ///
 /// The regression this pins: a plate is created as a plain `Button`, whose default registered set
 /// is `{"LeftButtonUp"}` alone, so the release was refused before the click funnel — and with 2233
@@ -770,7 +770,7 @@ fn a_scripted_click_selects_too() {
 ///
 /// **What it is for is NOT "a drag that begins over a plate"** — that gesture never reaches
 /// mouselook at all, because `0x7662c0` hands the mouse-down to the plate and stops the bus walk
-/// before any binding runs (decision 2233, which reversed the inference this doc used to carry).
+/// before any binding runs (which reversed the inference this doc used to carry).
 /// It is for a turn that started on the **world** and then dragged the pointer across a plate: the
 /// plates must not take a pointer that is hidden and locked to the camera.
 #[test]

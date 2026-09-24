@@ -38,7 +38,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // **KNOWN DIVERGENCE, byte-pinned and deliberately not closed here (decision 1782).** An
+    // **KNOWN DIVERGENCE, byte-pinned and deliberately not closed here.** An
     // ABSENT alpha argument is 1.0 below; in the reference it is *the alpha already on the region*.
     // `0x79abd0` reads the current colour back (`0x79ac81` -> `0x77f8c0`), packs the caller's rgb
     // against an `a` default of 1.0 (`0x79ad43`), and then asks a SECOND time whether argument 5
@@ -201,7 +201,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         data.desaturated = false;
                     }
                     // Does this region's rect come from its ART? An axis authored `0` takes its span
-                    // from the content (decision 1349, `script::layout::content_span`), so on that
+                    // from the content (`script::layout::content_span`), so on that
                     // shape — and only there — swapping the texture MOVES the region and the resolve
                     // has to hear about it. Read before the match, which writes the art and never the
                     // size.
@@ -211,7 +211,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // (`combine_edge` needs one), so every edge stays unset — which is why the
                     // resolve sweep skips such regions outright. Painting one is a paint, not a
                     // layout change, and saying otherwise would re-open the change gate on every
-                    // `CreateTexture(…):SetTexture(…)` in the UI (decisions 0740/1385/1388).
+                    // `CreateTexture(…):SetTexture(…)` in the UI.
                     let derived = !data.anchors.is_empty()
                         && data.size.is_none_or(|(w, h)| w == 0.0 || h == 0.0);
                     // Both forms write the SAME `+0xcc` texture slot — the path form loads a file
@@ -235,8 +235,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         // the path first and letting the verdict drive only the *return value*
                         // meant a mistyped or not-yet-shipped path ERASED the art it failed to
                         // replace, and did it silently: `GetTexture()` echoed the missing path and
-                        // the quad was dropped, so the region went blank with nothing said
-                        // (decision 2124).
+                        // the quad was dropped, so the region went blank with nothing said.
                         //
                         // The store and the return ask deliberately different questions. A VM with
                         // **no probe installed** has no backend to ask, so it stores — that is
@@ -293,8 +292,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 };
                 // Named precisely, and only on the content-derived shape: an ordinary sized icon's
                 // rect cannot move here, and touching the layout on every icon repaint would
-                // re-open the resolve's change gate every frame for a rect nobody moved
-                // (decisions 0740/1385/1388).
+                // re-open the resolve's change gate every frame for a rect nobody moved.
                 if derived {
                     lua.app_data_mut::<Model>()
                         .expect("model")
@@ -321,7 +319,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     //     elseif ( not r or not shaderSupported ) then r,g,b = 0.5,0.5,0.5 end
     //     icon:SetVertexColor(r, g, b)
     //
-    // The renderer now greys the texel (decision 1327 — `ui_quad.wgsl`'s luminance fold), so we
+    // The renderer now greys the texel (`ui_quad.wgsl`'s luminance fold), so we
     // answer **1 — supported**, and the branch above takes its shader arm: the icon goes greyscale
     // AND wears the caller's own dim tint. Until 1327 this answered nil, which is a real 1.12
     // card's answer and was the honest one while nothing greyed — but it costs the *look*: a 0.65
@@ -570,8 +568,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // its removal is a wider prune with its own review, not a tail on a method-surface fix.
 
     // SetTexCoord(left, right, top, bottom) — the 4-edge form (XML `<TexCoords>`): a UV sub-rect in
-    // 0..1 texture space (top-left origin) the Texture region samples, slicing quadrant/atlas art
-    // (decision 0084). SetTexCoord(ULx,ULy, LLx,LLy, URx,URy, LRx,LRy) — the 8-arg affine form: an
+    // 0..1 texture space (top-left origin) the Texture region samples, slicing quadrant/atlas art.
+    // SetTexCoord(ULx,ULy, LLx,LLy, URx,URy, LRx,LRy) — the 8-arg affine form: an
     // arbitrary UV quad (rotation/shear — the reference's `DrawRouteLine` route lines), stored per
     // corner in the renderer's screen winding.
     m.set(
@@ -622,7 +620,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // getter in this API at all: the 4-argument `(minX, maxX, minY, maxY)` min/max rect is
             // **setter-only**, and returning it here was a shape that exists nowhere in the client.
             // Order is `SetTexCoord`'s own usage string (`0x87c538`):
-            // `ULx, ULy, LLx, LLy, URx, URy, LRx, LRy`. Decision 1840.
+            // `ULx, ULy, LLx, LLy, URx, URy, LRx, LRy`.
             //
             // `GetTexCoord` has zero call sites in 1.12 FrameXML, so nothing on the chain could
             // ever have caught this — only the binary could.
@@ -666,7 +664,7 @@ impl crate::script::UiScript {
     }
 
     /// Install the host's font-path oracle — the resolver behind `SetFont`'s **1 | nil** return
-    /// ([`Model::font_probe`], decision 2103). The host hands in load-ability over its real stores
+    /// ([`Model::font_probe`]). The host hands in load-ability over its real stores
     /// (patch chain + the one AddOns folder); a VM that never gets one keeps answering 1 for every
     /// non-empty path, because it has no font store a load could fail against.
     pub fn set_font_probe(&mut self, probe: crate::script::FontProbe) {

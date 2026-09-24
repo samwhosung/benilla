@@ -21,7 +21,7 @@ pub(super) struct FramePaint {
 /// A 128-bit rolling fingerprint of everything [`UiScript::resolve_layout`] *reads*, so a resolve
 /// whose inputs are byte-identical to the last one can be skipped outright.
 ///
-/// ## Tier 2 of a two-tier gate (decision 0740)
+/// ## Tier 2 of a two-tier gate
 ///
 /// This fingerprint began as the WHOLE gate, chosen over a dirty flag because a flag has sites to
 /// miss and a fingerprint is computed FROM the read set — any change moves it by construction.
@@ -124,7 +124,7 @@ const NO_NODE: u64 = 0;
 
 /// One FRAME's per-node input hash — [`LayoutScope::last`]'s currency.
 ///
-/// Factored out (decision 1388) because two paths now compute it: the full derive, over every
+/// Factored out because two paths now compute it: the full derive, over every
 /// frame, and the incremental pass, over the handful a write named. They must agree *bit for bit* —
 /// a hash that differs by path would read as a change on the frame the paths swap, and (worse) as
 /// no-change on the frame they swap back. One function is the only way to make that true by
@@ -160,7 +160,7 @@ fn region_node_hash(data: &RegionData) -> u64 {
         }
         None => node.feed(u64::MAX),
     }
-    // **The ART, on a region whose rect is derived from it** (decision 1349): an axis authored `0`
+    // **The ART, on a region whose rect is derived from it**: an axis authored `0`
     // takes its span from the content ([`content_span`]), so swapping the texture on such a region
     // MOVES it and the node must re-hash. Fed only on that shape — a sized region's art cannot
     // change its rect, and hashing every icon path would put a string walk in the derive's hot loop
@@ -181,7 +181,7 @@ fn region_node_hash(data: &RegionData) -> u64 {
 }
 
 /// A region's **content-derived span**, in FrameXML units — the client's virtual size getters,
-/// which the resolver calls instead of reading a stored width/height (decision 1349).
+/// which the resolver calls instead of reading a stored width/height.
 ///
 /// `CSimpleTexture::GetWidth 0x770720` returns the authored value only when it is **not exactly
 /// `0.0`**; on `0.0` with a texture loaded it returns the texture's own texel extent, through
@@ -196,8 +196,8 @@ fn region_node_hash(data: &RegionData) -> u64 {
 ///
 /// This is the TEXTURE half. A `CSimpleFontString`'s span is derived the same way and lives in
 /// the sweep itself, because it needs the measure the sweep already folds in
-/// ([`FONTSTRING_MIN_SPAN`]). Between them they are what let the owner-edge fallback go
-/// (decision 1664): a region's span comes from its content, never from the frame it hangs on.
+/// ([`FONTSTRING_MIN_SPAN`]). Between them they are what let the owner-edge fallback go:
+/// a region's span comes from its content, never from the frame it hangs on.
 pub(super) fn content_span(
     data: &RegionData,
     probe: Option<&crate::script::TextureSizeProbe>,
@@ -220,7 +220,7 @@ pub(super) fn texel_span(
 }
 
 /// The edge of the surface `CSimpleTexture::SetTexture(const CImVector*)` generates for the colour
-/// form — 64 texels, `0x44a900` stamping `[tex+0x144] = [tex+0x148] = 8` (decision 1349 §1).
+/// form — 64 texels, `0x44a900` stamping `[tex+0x144] = [tex+0x148] = 8`.
 const SOLID_TEXTURE_TEXELS: f32 = 8.0;
 
 /// The floor under a **FontString's** derived span, in FrameXML units —
@@ -236,7 +236,7 @@ pub(super) const FONTSTRING_MIN_SPAN: f32 = 1.0;
 /// thousands, so the top bit is free forever.
 const REGION_TAG: u32 = 0x8000_0000;
 
-/// Per-node layout scope — the state that lets a resolve touch only what MOVED (decision 1350,
+/// Per-node layout scope — the state that lets a resolve touch only what MOVED (
 /// the phase 2 decision 0771 left open).
 ///
 /// 0771 halved the per-content-change cost by folding two whole-UI solves into one; it also said
@@ -283,7 +283,7 @@ pub(crate) struct LayoutScope {
     /// The closure's worklist.
     stack: Vec<u32>,
     /// The frame roster this cached graph describes: `(handle, id, ScrollFrame anchor override)`,
-    /// indexed by [`Self::node_of`] (decision 1388).
+    /// indexed by [`Self::node_of`].
     ///
     /// It holds no borrow of `layout_inputs`, and that is the whole point. The borrowed form 1350
     /// introduced had to be rebuilt every call, which forced the *derivation* — the ids walk, the
@@ -303,7 +303,7 @@ pub(crate) struct LayoutScope {
 }
 
 /// One anchored, live region as the round loop consumes it — resolved ONCE per *derivation*
-/// instead of re-derived per call (decision 1350) or per round (before it). Before this list the
+/// instead of re-derived per call or per round (before it). Before this list the
 /// sweep walked `region_data` itself every round and paid, per region per round, an `arena.region`
 /// probe for liveness/owner/kind and a `region_to_id` probe to publish the result — and it paid
 /// them for the anchor-less entries too, which it then `continue`d past.
@@ -348,7 +348,7 @@ impl LayoutScope {
         self.staged.clear();
     }
 
-    /// The incremental entry (decision 1388): the roster, the edges and `node_of` ARE the cached
+    /// The incremental entry: the roster, the edges and `node_of` ARE the cached
     /// graph and must survive; only the per-pass dirty marks are scratch. This is the whole saving
     /// — `begin_full`'s six resizes and the four whole-roster walks that refill them are what a
     /// mutated frame used to pay to rediscover a graph that had not changed shape.
@@ -587,7 +587,7 @@ struct PreambleProf {
     /// The same over every anchored REGION — the biggest roster (10,438 anchored at the SW pin,
     /// and by far the biggest single phase: 0.45–1.0 ms of the ~1.0–1.4 ms walk).
     fp_regions: u128,
-    /// The INCREMENTAL pass's whole preamble (decision 1388): re-hash the nodes the ledger named,
+    /// The INCREMENTAL pass's whole preamble: re-hash the nodes the ledger named,
     /// seed the ones that moved, close. Every phase above is zero on such a pass, and this is what
     /// replaced them — read the two side by side to see what a derivation costs.
     seed: u128,
@@ -705,7 +705,7 @@ impl UiScript {
         if !model.layout_verify_recheck {
             return;
         }
-        // ── `WOW_LAYOUT_VERIFY`: the incremental pass's falsifier (decision 1388) ─────────────
+        // ── `WOW_LAYOUT_VERIFY`: the incremental pass's falsifier ─────────────
         // The pass just taken seeded its dirty closure from a LEDGER of named nodes rather than
         // from a fresh derivation, and it reused a roster and an edge set built some frames ago.
         // Two things can be wrong with that and neither is visible from inside it: a write that
@@ -778,7 +778,7 @@ impl UiScript {
         // `WOW_LAYOUT_PROF=1`'s preamble split — see [`PreambleProf`]. Started here, so the clock
         // covers everything the tier-1 gate above did NOT skip.
         let mut pre = PreambleProf::new(layout_prof_enabled());
-        // The GameTooltip auto-size + right-flush pre-pass (decision 0274): writes tooltip frame
+        // The GameTooltip auto-size + right-flush pre-pass: writes tooltip frame
         // sizes + right-column anchor offsets from the measure round-trip's cached extents, so
         // the graph below solves them like any other frame.
         super::tooltip::layout_tooltips(model);
@@ -805,7 +805,7 @@ impl UiScript {
             .collect();
         pre.watched = pre.lap();
         // ── The graph: the ledger's cache, or a fresh derivation ─────────────────────────────
-        // `layout_touched` is tier 1's PRECISE form (decision 1388). `Some` carries the claim that
+        // `layout_touched` is tier 1's PRECISE form. `Some` carries the claim that
         // every write since the cached graph was built named its node and left the graph's shape
         // alone — so the roster, the edge set and the per-node hashes in `layout_scope` still
         // describe the live model, and this resolve can seed its dirty closure straight from the
@@ -840,7 +840,7 @@ impl UiScript {
             texture_size_probe,
             ..
         } = model;
-        // ── The incremental seed (decision 1388) ─────────────────────────────────────────────
+        // ── The incremental seed ─────────────────────────────────────────────
         // Re-hash only the nodes the ledger named, and seed the ones whose hash actually moved.
         // This runs BEFORE the gate's verdict because on this path it IS the verdict: an empty
         // seed set means no named write moved anything, which is the same conclusion tier 2
@@ -916,7 +916,7 @@ impl UiScript {
         // setters' own compare let through.)
         if gate_skips {
             *layout_epoch_resolved = Some(epoch_at_entry);
-            // Re-arm the ledger here too (decision 1388). A pass that found nothing to do left the
+            // Re-arm the ledger here too. A pass that found nothing to do left the
             // graph exactly as it found it — derived a moment ago on one path, untouched on the
             // other — so the cache is as trustworthy as it was. Dropping it here would make every
             // named-but-idempotent write (the tooltip pre-pass, a re-`SetPoint` to the value
@@ -943,7 +943,7 @@ impl UiScript {
         if !gate_skips {
             *layout_solves += 1;
         }
-        // ── The scope: which nodes this solve is actually allowed to touch (decision 1350) ────
+        // ── The scope: which nodes this solve is actually allowed to touch ────
         // A node whose own inputs are unchanged, and none of whose dependencies moved, recomputes
         // to the rect it already holds — the 0294 seed property, stated per node instead of for
         // the graph as a whole. So the solve below runs over the dirty CLOSURE and leaves every
@@ -959,7 +959,7 @@ impl UiScript {
         //     last pass had nodes, something left;
         //   * verify, which runs the scoped pass and then the full one and compares.
         //
-        // An INCREMENTAL pass (decision 1388) reaches the same closure by the other end, and has
+        // An INCREMENTAL pass reaches the same closure by the other end, and has
         // already done so above — it re-hashes only the nodes the ledger named and seeds the ones
         // whose hash moved. None of the four structural cases can reach it: each is a conservative
         // touch, and a conservative touch is what leaves the ledger `None`.
@@ -1072,7 +1072,7 @@ impl UiScript {
             }
             for &i in &solve_frames {
                 // The `layout_inputs` probe the borrowed plan used to hoist out of the round loop
-                // (decision 1350) is back — but paid per frame this solve TOUCHES, not per frame in
+                // is back — but paid per frame this solve TOUCHES, not per frame in
                 // the UI, which is what lets the roster itself outlive the call (1388).
                 let (h, id, over) = scope.plan[i as usize];
                 let Some(input) = layout_inputs.get(&h) else {
@@ -1125,7 +1125,7 @@ impl UiScript {
                     is_fontstring,
                 } = scope.regions[ri as usize];
                 // The roster's mutable half, re-probed here rather than borrowed into the row —
-                // once per region SWEPT instead of once per region in the UI (decision 1388). A
+                // once per region SWEPT instead of once per region in the UI. A
                 // row whose data has gone is a region the derive will drop on its next run; it
                 // resolves to nothing in the meantime, exactly as a dead one does.
                 let Some(data) = region_data.get(&rh) else {
@@ -1135,7 +1135,7 @@ impl UiScript {
                     n_regions_swept += 1;
                 }
                 // The owner supplies the region's SCALE and nothing else. It used to supply
-                // fallback edges too; it does not any more (decision 1664) — see the `axis`
+                // fallback edges too; it does not any more — see the `axis`
                 // closure below for why, and what the two shapes that leaned on it get instead.
                 let scale = arena.frame(owner).map(|f| f.effective_scale).unwrap_or(1.0);
                 // A FontString with no explicit height takes its host-measured wrapped size
@@ -1222,7 +1222,7 @@ impl UiScript {
                     (id != SCREEN).then(|| solver.rect(id)).flatten()
                 });
                 // **An axis resolves, or the region does not** — there is no owner-edge fallback
-                // and no zero-span collapse (decision 1664). A complete memory-operand enumeration
+                // and no zero-span collapse. A complete memory-operand enumeration
                 // of the real resolver core `[0x7671a0, 0x76761f)` finds no parent or owner pointer
                 // in it at all: the only fallbacks are the object's own nine anchor slots and
                 // `combineEdge`/`combineCenter` over its own opposite edge/centre ± its own size.
@@ -1235,7 +1235,7 @@ impl UiScript {
                 // * **No anchors at all.** The client anchors those at CREATION, per region type —
                 //   a texture gets `SetAllPoints(parent)`, a FontString one justify-selected
                 //   `SetPoint` — so by the time the resolver sees them they are pinned like
-                //   anything else ([`super::region::implicit_creation_anchor`], decision 1310).
+                //   anything else ([`super::region::implicit_creation_anchor`]).
                 //   The ones that reach here still unanchored are the shapes the reference leaves
                 //   rect-less too: a templateless `CreateTexture`, a title region, a plain frame.
                 // * **A pinned edge with a zero span.** The span is content-derived on both region
@@ -1316,7 +1316,7 @@ impl UiScript {
                 // would be seeding it from a lie.
                 //
                 // An incremental pass adopts only the nodes it re-hashed — the rest of `last` is
-                // already the memory of the derivation this pass is standing on (decision 1388).
+                // already the memory of the derivation this pass is standing on.
                 if touched.is_some() {
                     scope.commit_incremental();
                 } else {
@@ -1335,7 +1335,7 @@ impl UiScript {
                 // compare rects — the incremental pass's falsifier. Costs nothing in production,
                 // where `layout_verify_enabled` is false and nothing ever reads this.
                 *layout_verify_recheck = touched.is_some() && verify;
-                // **A CONVERGED SOLVE CLOSES TIER 1** (decision 1385) — unconditionally, not only
+                // **A CONVERGED SOLVE CLOSES TIER 1** — unconditionally, not only
                 // on the `gate_skips` re-run. The fingerprint above is hashed over INPUTS alone,
                 // and the rounds just drove those inputs to their fixpoint, so the fp stored on
                 // the line above is exactly the one the next mutation-free resolve recomputes:
@@ -1379,7 +1379,7 @@ impl UiScript {
     /// reverse-edge set between them, the per-node input hashes, and the aggregate fingerprint
     /// that is tier 2 of the change gate.
     ///
-    /// Every resolve did this, until decision 1388. It is ~1.48 ms at the Stormwind pin, 79% of it
+    /// Every resolve did this, until. It is ~1.48 ms at the Stormwind pin, 79% of it
     /// in two phases (`fp_regions` 919 µs, `retain` 255 µs) that rediscover a graph which had not
     /// changed shape. It now runs only when the ledger cannot vouch for the cache: the first
     /// resolve, a cycle-bailed one, and any frame in which a write moved the roster, retargeted an
@@ -1428,7 +1428,7 @@ impl UiScript {
         }
         pre.ids = pre.lap();
 
-        // The ScrollFrame mechanism (decision 0112): a live ScrollFrame with a live scroll child
+        // The ScrollFrame mechanism: a live ScrollFrame with a live scroll child
         // overrides the child's own anchors for this solve — `SetScrollChild` pins the child TOPLEFT
         // to the scrollframe's TOPLEFT, offset by the two live scroll offsets
         // (`(horizontal, vertical)`, both RAW and unnegated, exactly as the reference's re-anchor
@@ -1483,7 +1483,7 @@ impl UiScript {
         // pass recomputes from the same inputs through the same arithmetic, so stabilized values
         // repeat bit-for-bit (no epsilon drift).
         //
-        // The fixpoint CARRIES ACROSS FRAMES (decision 0294): every rect is recomputed purely from
+        // The fixpoint CARRIES ACROSS FRAMES: every rect is recomputed purely from
         // (inputs, externals), never from its own prior value, so last frame's converged rects are a
         // legal seed — a quiet frame re-verifies in ONE round instead of re-propagating every anchor
         // chain link-by-link (measured: the full default UI held 5–10 rounds × ~7 ms/round at
@@ -1515,7 +1515,7 @@ impl UiScript {
         //   * `arena.region(rh)`            — liveness and owner (a dead region drops out of the
         //                                     sweep; the owner supplies the fallback edges).
         //
-        // **INPUTS ONLY — the 0294 seeds are deliberately NOT hashed** (decision 1385). They are
+        // **INPUTS ONLY — the 0294 seeds are deliberately NOT hashed**. They are
         // the previous pass's OUTPUT, and 0294's own property ("every rect is recomputed purely
         // from (inputs, externals), never from its own prior value") makes a converged pass's
         // rects a pure function of the inputs: the seeds change how many ROUNDS convergence
@@ -1525,7 +1525,7 @@ impl UiScript {
         // nor the settling pass behind it could close tier 1. (`resolved`, the FRAME rects, was
         // never in the read set at all — the seed half was asymmetric as well as redundant.)
         //
-        // ── …and, in the same walk, the SCOPE (decision 1350) ─────────────────────────────────
+        // ── …and, in the same walk, the SCOPE ─────────────────────────────────
         // Each node's own inputs are hashed a second time on their own, into
         // [`LayoutScope::now`], and its anchor targets are recorded as reverse edges. That turns
         // the gate's one verdict ("something moved") into the far more useful one ("*these* moved,
@@ -1538,7 +1538,7 @@ impl UiScript {
         pre.begin = pre.lap();
         let mut fp = InputFingerprint::default();
         fp.rect(*screen);
-        // The frame roster is built HERE rather than in a walk of its own (decision 1388): it is
+        // The frame roster is built HERE rather than in a walk of its own: it is
         // the same `ids` list, the same `layout_inputs` probe and the same `scroll_child_anchor`
         // lookup this walk already needs, so a separate pass over every live frame bought nothing
         // but a second traversal (77 µs of the old preamble) and a borrow that stopped the roster
@@ -1579,7 +1579,7 @@ impl UiScript {
         }
         pre.fp_frames = pre.lap();
         let mut fed_regions = 0u64;
-        // The round loop's region roster, built in this same walk (decision 1350) — see
+        // The round loop's region roster, built in this same walk — see
         // [`RegionRow`]. Only LIVE, anchored regions: an anchor-less one is invisible to the
         // rounds and a destroyed one has already been dropped from `region_resolved` by the retain
         // above, so both are exactly what the sweep used to `continue` past.
@@ -1679,14 +1679,14 @@ impl UiScript {
         let mut model = self.model_mut();
         // ANY FontString with text — not only the auto-sized ones. A region with both axes
         // declared needs no measure for its *layout*, but `GetStringWidth` still has to answer
-        // with the string's natural width, and only a measure can supply it (decision 0997: a
+        // with the string's natural width, and only a measure can supply it (a
         // kit that reads that number and then SETS a width on the string would otherwise stop
         // receiving measures the instant it did so, and start reading its own box back).
         //
         // Asked off the MEASURE LEDGER, not the roster (the 1388 shape one lane over): the
         // sweep existed to *discover* silent writes — `SetText` touches no layout until the
         // extent moves — and discovery cost two whole-roster walks per frame at a city pin
-        // (~300 µs of the `resolve` lap, decision 1370) to conclude, almost always, that
+        // (~300 µs of the `resolve` lap) to conclude, almost always, that
         // nothing was written. The write sites announce themselves now
         // ([`Model::touch_measure`]); draining the ledger re-arms it, so the second ask of the
         // same frame (`fill_measures`, inside `resolve`) sees only what was written *between*

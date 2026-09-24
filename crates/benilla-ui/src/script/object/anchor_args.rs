@@ -7,7 +7,7 @@
 //! keeps for itself is only the thing the reference reads off the receiver — the layout parent's
 //! default id, and where the anchor is stored.
 //!
-//! **Every failure leg RAISES**, which is the point of the module (decision 2176, closing 2105's
+//! **Every failure leg RAISES**, which is the point of the module (closing 2105's
 //! "Named, not done"). `luaL_error` does not return: `luaG_errormsg [0x6fc780,0x6fc861)` and
 //! `luaD_throw [0x6f5d80,0x6f5da5)` hold zero `ret`s, and `luaD_throw`'s *elided* epilogue is the
 //! positive control that says so. There is no fallback and no silent no-op on any of them.

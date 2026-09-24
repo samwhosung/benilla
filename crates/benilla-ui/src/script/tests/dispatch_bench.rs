@@ -1,4 +1,4 @@
-//! **What one widget method lookup costs** — the bench behind the `__index` table (decision 2310).
+//! **What one widget method lookup costs** — the bench behind the `__index` table.
 //!
 //! Every `frame:SetPoint(...)` in FrameXML and in every addon begins with a table index on the
 //! wrapper, which misses and falls to the metatable's `__index`. That path is on the hottest edge

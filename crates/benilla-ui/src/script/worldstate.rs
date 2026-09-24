@@ -1,5 +1,5 @@
 //! The world-state UI seam — `GetNumWorldStateUI` / `GetWorldStateUIInfo`, the two bindings behind
-//! the always-up PvP readout (`WorldStateFrame`; decision 1586).
+//! the always-up PvP readout (`WorldStateFrame`).
 //!
 //! The list is built app-side ([`crate::world_state_ui`](benilla_app)) because every one of its
 //! gates reads app state — the last init's `(map, area)` scope, the joined chat channels, the live

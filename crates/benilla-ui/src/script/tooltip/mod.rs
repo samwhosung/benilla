@@ -1,4 +1,4 @@
-//! The `GameTooltip` method surface + engine behavior (decision 0274): the line stack, the
+//! The `GameTooltip` method surface + engine behavior: the line stack, the
 //! owner/anchor law, auto-size, and the fade — the modeled behavior of the client's game-layer
 //! tooltip class over `CSimpleFrame` (the reference's full 38-binding Lua surface, plus its
 //! money/cooldown internals; the *content* builders land per 0274's phases on top of these
@@ -601,7 +601,7 @@ pub(super) fn append_line(
     if let Some(d) = model.region_data.get_mut(&lh) {
         if d.size != pin {
             d.size = pin;
-            // NAMED, not conservative (decision 1388). This writes one region's EXPLICIT SIZE and
+            // NAMED, not conservative. This writes one region's EXPLICIT SIZE and
             // nothing else — no anchor target, no roster membership — which is the exact shape
             // 1388 migrated every size setter to. It was missed because it is an internal write
             // rather than a `SetWidth` binding, and the miss is expensive in the one place it can
@@ -672,7 +672,7 @@ fn cell(model: &Model, rh: crate::widget::RegionHandle) -> Cell {
     d.measured.map(|m| (m.w, m.h))
 }
 
-/// The auto-size + right-flush pre-pass, run at the top of every layout resolve (decision 0274):
+/// The auto-size + right-flush pre-pass, run at the top of every layout resolve:
 /// for each live GameTooltip, frame size = max measured line width (a double line is
 /// left + gap + right) + 2·pad, floored by `SetMinimumWidth`, × summed line heights + gaps; each
 /// visible right column's anchor re-points so its right edge sits at the text inset. Skips
@@ -743,7 +743,7 @@ fn cursor_anchor(model: &mut Model, h: FrameHandle) {
 pub(super) fn layout_tooltips(model: &mut Model) {
     // The arena's tooltip registry, not the resolve's whole frame roster: this pre-pass runs at
     // the top of EVERY resolve, and finding two or three tooltips by scanning ~4000 ids was most
-    // of what it cost (decision 1634). `frame_to_id` still gates each one — a tooltip outside the
+    // of what it cost. `frame_to_id` still gates each one — a tooltip outside the
     // resolve's roster would mint an id here and take the ledger's conservative branch with it.
     let tips: Vec<FrameHandle> = model
         .arena

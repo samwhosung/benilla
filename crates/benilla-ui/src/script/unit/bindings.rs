@@ -7,7 +7,7 @@
 //! Neither ever hands mlua a Rust `bool`: all 29 of the reference's unit predicates push the
 //! constant double `1.0` (`lua_pushnumber 0x6f3810`) or `nil` (`lua_pushnil 0x6f37f0`), one value
 //! at every live `ret`, and **no binding in the 83-entry table at `0x850438` calls
-//! `lua_pushboolean 0x6f39f0` at all** (decisions 1830, 2043, 2048). A new predicate that open-codes
+//! `lua_pushboolean 0x6f39f0` at all**. A new predicate that open-codes
 //! `Value::Integer(1)`/`Value::Nil`, or returns a `bool`, is the drift those records exist to stop.
 //!
 //! **The scope of that claim is the unit table, not "the binding surface"** — 2043 said the wider
@@ -24,7 +24,7 @@ use super::{
     unit_predicate, unknownobject, with_unit, PlayerRecord, SelectionRequest,
 };
 
-/// **The `"player"` fast path, shared by the four verbs that take it** (decision 2263).
+/// **The `"player"` fast path, shared by the four verbs that take it**.
 ///
 /// `Some(x)` = this token is `"player"` and `x` is the record's answer; `None` = it is any other
 /// token and the caller falls through to the unit resolver. That is the reference's own shape —
@@ -56,7 +56,7 @@ fn player_record_arm<T>(
 /// same value [`PlayerReqState::class_id`](super::super::PlayerReqState) carries; `UnitClass`'s own
 /// binding (`0x518350`) reads it through the identical `[obj+0x110]+0x79` chain, which is what
 /// identifies it. The *names* are the conventional vanilla ids — the client's class table is
-/// heap-built, so nothing in the file maps 4→Rogue by itself (decision 0875).
+/// heap-built, so nothing in the file maps 4→Rogue by itself.
 const CLASS_ROGUE: u32 = 4;
 const CLASS_DRUID: u32 = 11;
 
@@ -112,7 +112,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // design, because that is right for `UnitExists`, `UnitIsVisible` and eleven others. **"and
     // most of this family" is what this comment used to say, and it was the wrong way round** —
     // all 83 entries of the table at `0x850438` gate and raise in 53 cases, with only 13 unit-token
-    // bindings quiet (decision 1834). These two were never the exception; they were an early
+    // bindings quiet. These two were never the exception; they were an early
     // instance of the rule.
     for (name, usage, by_player) in [
         ("UnitIsTapped", r#"Usage: UnitIsTapped("unit")"#, false),
@@ -198,7 +198,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // pet, creature, game object or item — `0x609210` writes the out-parameter only on its
             // PLAYER branch. benilla is single-realm, so the second is always nil here; the day a
             // cross-realm name arrives it is `UnitState`'s to carry, and `UnitPopup.lua:106`'s
-            // `name.."-"..server` join is what will read it. Decision 1840.
+            // `name.."-"..server` join is what will read it.
             //
             // Not to be confused with `showServerName`: that is the parameter of FrameXML's own
             // `GetUnitName(unit, showServerName)` wrapper, which calls this binding with ONE
@@ -224,9 +224,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // `UnitExists` is a conjunction with `IsSelectable` (the `UnitState::exists` doc's
             // named gap), so a not-selectable unit reads its name there with `UnitExists` nil; the
             // name resolver's own nil is GUID 0 and nothing else, and a feed that seats a token
-            // has resolved it. Decision 2002.
+            // has resolved it.
             //
-            // **The `"player"` arm is the BUFFER, not the snapshot** (decision 2261). `0x51708c`
+            // **The `"player"` arm is the BUFFER, not the snapshot**. `0x51708c`
             // reads `0x5abdc0` — the local name buffer at `0xc27d88` — and returns; it never
             // reaches the resolver, so no object, no descriptor and no name-query answer is
             // involved on this path at all. Modelling it off the snapshot (as this did until
@@ -323,7 +323,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UnitCanAttack (`0x516c50`) → 1/nil: pure delegation to the
-    // `CanAttack 0x606980` predicate (decision 0172), read from the non-player token's app-fed
+    // `CanAttack 0x606980` predicate, read from the non-player token's app-fed
     // snapshot ([`UnitState::can_attack`]). Directional in the live API; our snapshot carries
     // the player→unit direction, the only order the shipped FrameXML calls
     // (`UnitCanAttack("player", "target")`).
@@ -331,7 +331,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "UnitCanAttack",
         lua.create_function(|lua, (a, b): (Value, Value)| {
             // BOTH positions carry an `lua_isstring` gate — two sites in the body —
-            // so either argument being nil raises (decision 1836).
+            // so either argument being nil raises.
             let a = Some(crate::script::binding_abi::string_arg(
                 lua,
                 a,
@@ -371,7 +371,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The other two of the client's death trio (decision 0308 §1): a released ghost has health 1,
+    // The other two of the client's death trio: a released ghost has health 1,
     // so IsDead is false for it and the popup flow branches on all three.
     g.set(
         "UnitIsGhost",
@@ -401,7 +401,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // which is the sole caller (`TargetFrame_CheckFaction`), so the `other` arg is accepted and
     // unused.
     //
-    // **NOT a 1/nil predicate, and its nil does not mean "reaction 0"** (decision 2048, correcting
+    // **NOT a 1/nil predicate, and its nil does not mean "reaction 0"** (correcting
     // 2043's aside). `0x5167e0` pushes `0x6061e0(u1, u2)` **plus one** (`0x51683e inc eax`,
     // `0x516842 fild`) — a self-compare answers **5** — so the value is 1-based and **0 is
     // unreachable**. Its nil leg (`0x51685f`) means only that a token failed to resolve to a live
@@ -415,7 +415,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "UnitReaction",
         lua.create_function(|lua, (token, _other): (Value, Value)| {
             // BOTH positions carry an `lua_isstring` gate — two sites in the body —
-            // so either argument being nil raises (decision 1836).
+            // so either argument being nil raises.
             let token = Some(crate::script::binding_abi::string_arg(
                 lua,
                 token,
@@ -447,7 +447,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "UnitIsEnemy",
         lua.create_function(|lua, (a, b): (Value, Value)| {
             // BOTH positions carry an `lua_isstring` gate — two sites in the body —
-            // so either argument being nil raises (decision 1836).
+            // so either argument being nil raises.
             let a = Some(crate::script::binding_abi::string_arg(
                 lua,
                 a,
@@ -467,7 +467,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "UnitIsFriend",
         lua.create_function(|lua, (a, b): (Value, Value)| {
             // BOTH positions carry an `lua_isstring` gate — two sites in the body —
-            // so either argument being nil raises (decision 1836).
+            // so either argument being nil raises.
             let a = Some(crate::script::binding_abi::string_arg(
                 lua,
                 a,
@@ -542,7 +542,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // reads: `shr ecx,6; test cl,1` — bit 6, `UNIT_FLAG_PLUS_MOB 0x40`.
     //
     // **It is not a rank read**, which is the trap the name sets. `UnitClassification` is its
-    // table neighbour and answers off the gated creature rank (decision 0782), so the obvious
+    // table neighbour and answers off the gated creature rank, so the obvious
     // implementation is `rank > 0` — but `0x516d40` never calls the rank getter `0x605620` (whose
     // six callers are enumerated) and never touches the creature cache. The two agree in practice
     // because the SERVER derives the bit from the rank — vmangos `Creature::UpdateEntry` sets it
@@ -555,7 +555,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // No stock FrameXML file calls it, which is why nothing shipped ever raised on its absence;
     // addons do (`FuBar_DakSmak` colours its tooltip with it), and calling the nil global is what
-    // B385 reported. Last of the three verbs decision 1834 left loudly absent. Decision 2209.
+    // B385 reported. Last of the three verbs decision 1834 left loudly absent.
     g.set(
         "UnitIsPlusMob",
         lua.create_function(|lua, token: Option<String>| {
@@ -566,13 +566,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The identity predicates (decision 0434 §5 — the unit popup's menu pick + gating). Same-token
+    // The identity predicates (the unit popup's menu pick + gating). Same-token
     // is trivially the same unit; otherwise both snapshots must carry a real (nonzero) guid.
     g.set(
         "UnitIsUnit",
         lua.create_function(|lua, (a, b): (Value, Value)| {
             // BOTH positions carry an `lua_isstring` gate — two sites in the body —
-            // so either argument being nil raises (decision 1836).
+            // so either argument being nil raises.
             let a = Some(crate::script::binding_abi::string_arg(
                 lua,
                 a,
@@ -751,7 +751,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "UnitCanCooperate",
         lua.create_function(|lua, (a, b): (Value, Value)| {
             // BOTH positions carry an `lua_isstring` gate — two sites in the body —
-            // so either argument being nil raises (decision 1836).
+            // so either argument being nil raises.
             let a = Some(crate::script::binding_abi::string_arg(
                 lua,
                 a,
@@ -776,7 +776,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetRaidTargetIndex",
         lua.create_function(|lua, token: Value| {
             // Gated (`0x4bb4be` → `0x4bb4cd`), and the usage string names the
-            // argument unquoted — the reference's own spelling. Decision 1836.
+            // argument unquoted — the reference's own spelling.
             let token = Some(crate::script::binding_abi::string_arg(
                 lua,
                 token,
@@ -893,7 +893,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // UnitRace(unit) → (localized, raceFile) or nil, nil; UnitClass(unit) → (localized,
     // classFileName) — the paper doll's "Level %d %s %s" line + the CLASSFILENAME-keyed
-    // stat-tooltip lookups (decision 0208 §3). Unknown (feed not landed / a raceless creature)
+    // stat-tooltip lookups. Unknown (feed not landed / a raceless creature)
     // reports nil, nil — the live API's shape for an absent unit.
     g.set(
         "UnitRace",
@@ -903,7 +903,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitRace("unit")"#,
             )?);
-            // The `"player"` arm is the RECORD, not the snapshot (decision 2263): `0x518269`
+            // The `"player"` arm is the RECORD, not the snapshot: `0x518269`
             // reads `0x5abdd0` — `0xc27e80`, the char-enum row's race byte — and resolves it
             // through `ChrRaces`, never reaching the unit resolver. See [`PlayerRecord`].
             if let Some(pair) = player_record_arm(lua, &token, |r| r.race.clone()) {
@@ -935,7 +935,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitClass("unit")"#,
             )?);
-            // The `"player"` arm is the RECORD (decision 2263): `0x5183b9` → `0x5abde0`,
+            // The `"player"` arm is the RECORD: `0x5183b9` → `0x5abde0`,
             // `0xc27e81` through `ChrClasses`. Second return is the UPPERCASE token.
             if let Some(pair) = player_record_arm(lua, &token, |r| r.class.clone()) {
                 return match pair {
@@ -970,7 +970,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // **This shipped absent for a long time, on a claim that was simply false** — that the relic
     // slot post-dates 1.12 and `UnitHasRelicSlot` is a later-era verb. The base `dbc.MPQ` copy of
     // `ChrClasses.dbc` really does have no field 16; the `patch.MPQ` copy the client actually
-    // reads has it, set for Paladin, Shaman and Druid. Decision 1796. Stock `PaperDollFrame.lua`
+    // reads has it, set for Paladin, Shaman and Druid. Stock `PaperDollFrame.lua`
     // calls this **unconditionally** at l.429 and l.580 — so while it was missing, the character
     // sheet raised `attempt to call global 'UnitHasRelicSlot' (a nil value)` for *every* class,
     // not just the three.
@@ -999,7 +999,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // constant double 2.0 (`push 0x40000000; push 0`) — the numeric-getter contrast to the
     // predicate family's `1.0`/nil: the numeric getters in this same table answer a number on the
     // unresolved leg, never nil. The shapes table agrees — this row is `(number)`, with no nil
-    // alternative anywhere (decision 2118).
+    // alternative anywhere.
     g.set(
         "UnitSex",
         lua.create_function(|lua, token: Value| {
@@ -1008,7 +1008,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitSex("unit")"#,
             )?);
-            // The `"player"` arm is the RECORD (decision 2263): `0x517ef9` → `0x5abdf0`,
+            // The `"player"` arm is the RECORD: `0x517ef9` → `0x5abdf0`,
             // `0xc27e82`. **No bounds check anywhere on that path** — the byte indexes
             // `fild [4*eax+0x808be4]` over `{2,3,1,6}` directly — so an unset record answers `2`
             // ("male") in the reference too, which is what our `0` maps to below.
@@ -1104,7 +1104,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             )?);
             // ONE value, not the Era pair. `0x517940` has four live `ret`s and `eax = 1` at every
             // one, four `lua_pushnumber` sites and zero `lua_pushstring` — the `(type, "MANA")`
-            // tuple does not exist in 5875 (decision 1840). `power_token` stays: 1819's per-resource
+            // tuple does not exist in 5875. `power_token` stays: 1819's per-resource
             // event names are its real caller.
             //
             // The miss default is the NUMBER 0, the same value as Mana and never nil, which is
@@ -1220,7 +1220,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // token — the 1.12 binding takes no arguments). `ComboFrame` shows/hides on it, and the
     // combat-text COMBO_POINTS arm reads it.
     //
-    // TWO gates before the byte, transcribed from `0x51a190` (decision 0875) — the
+    // TWO gates before the byte, transcribed from `0x51a190` — the
     // reference `ComboFrame.lua` carries no class check at all, so BOTH of them live here or
     // nowhere:
     //
@@ -1232,7 +1232,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // The class gate is why a *warrior* never sees a dot even though the server really does bank a
     // point for them on a victim's dodge: that byte reaches the usable walk's leg 5 (which has no
-    // class test, and is what greys Overpower — 0869) but stops here, before any UI can see it.
+    // class test, and is what greys Overpower) but stops here, before any UI can see it.
     // The target gate is why combo points read as "per target": re-targeting empties the dots
     // without the count moving, and selecting the banked unit again refills them.
     //
@@ -1255,7 +1255,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The rest-state trio (decisions 1082/1087) — player-level globals over the app's rest feed
+    // The rest-state trio — player-level globals over the app's rest feed
     // ([`UiScript::set_rest_state`]), the MainMenuBar exhaustion tick's and the player frame's
     // whole wire: the surface is Exhaustion.dbc DATA, not client constants — the rows live in the
     // model ([`UiScript::set_exhaustion_rows`]; shipped-table fallback).
@@ -1314,7 +1314,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     // PartialPlayTime() / NoPlayTime() → 1/nil: the two anti-addiction play-time regimes, read
     // straight off `PLAYER_FLAGS` — `0x48eb70` is `shr eax,0xc; and al,1` (bit 12) and `0x48ebe0`
-    // its bit-13 neighbour (decision 1746, which carved both while establishing that bit 0x1000 is
+    // its bit-13 neighbour (which carved both while establishing that bit 0x1000 is
     // PARTIAL_PLAY_TIME on 5875 rather than the pre-1.6.1 CAN_SELF_RESURRECT). Same Lua-vanilla
     // predicate shape as `IsResting` above: the NUMBER 1 or nil, never a boolean. Stock
     // `PlayerFrame_UpdatePlaytime` (PlayerFrame.lua:244) is the only FrameXML caller of either.
@@ -1333,7 +1333,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // GetBillingTimeRested() → the account's rested billing MINUTES, as one number, always
-    // (decision 1820; binding `0x48ec50`, byte-VERIFIED). The body has no `jcc` at all and ends in
+    // (binding `0x48ec50`, byte-VERIFIED). The body has no `jcc` at all and ends in
     // an unconditional `mov eax,1`, and both callees are branchless and call-free — so it can never
     // return nil and never return zero values, which is why this is not the `Value::Nil` shape its
     // neighbours use. The engine applies NO conversion: `0x48ec5e` is a bare unsigned u32→double
@@ -1457,7 +1457,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // TargetByName(name [, exactMatch]) — select by NAME through the shared resolver `0x493aa0`
-    // (`0x489d60`). The app already owns that resolver for `/target` (decision 0886,
+    // (`0x489d60`). The app already owns that resolver for `/target` (
     // `crate::target::by_name`); this is the binding half, which 11 corpus addons call and the
     // slash command bypassed.
     //
@@ -1530,7 +1530,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // It is registered as an accepted **no-op**, deliberately, and that is faithful for every word
     // benilla can currently arm: the targeting cursor models the location / item / gameobject
-    // seams (0792/0923/0939), and a *unit* cannot satisfy any of them — the reference's
+    // seams, and a *unit* cannot satisfy any of them — the reference's
     // `BindTarget 0x6e5b40` would reject it at the same three mask tests our seams ask. The word
     // that would make this do something is the residual unit-word machine that `cast_target`'s
     // header names as still deferred (a unit-target spell never enters targeting mode here at all;

@@ -1,10 +1,10 @@
 //! The chat slash handlers' engine verbs that are not sends, channels, or window state —
 //! `DoEmote`, `RandomRoll`, `AssistByName`, `UninviteByName`, `ConsoleExec`, `LoggingChat`,
 //! `LoggingCombat`. Each is what a stock `ChatFrame.lua` built-in handler calls once it has
-//! parsed the line (`SlashCmdList` walk, decision 1195); the app used to parse these lines
+//! parsed the line (`SlashCmdList` walk); the app used to parse these lines
 //! itself (`ui_chat/input/parse.rs`) and now drains what the reference's own Lua decided.
 //!
-//! Every verb is a queue or a flag — the engine-free seam (0068 §3): the VM never sees the wire,
+//! Every verb is a queue or a flag — the engine-free seam: the VM never sees the wire,
 //! the app drains and sends. Registrar addresses:
 //! `0x49fd30 DoEmote`, `0x48c7b0 RandomRoll`, `0x489c40 AssistByName`, `0x48a610 UninviteByName`.
 
@@ -143,7 +143,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // CVAR_UPDATE token), synchronously, so a script reading it back on the next line sees the
     // write. Everything else — a command name, or a bare CVar name, which the reference's
     // per-CVar console command answers with `CVar "%s" is "%s"` (`0x63dde0`) — is a line for
-    // the host's command registry (decision 2303).
+    // the host's command registry.
     g.set(
         "ConsoleExec",
         lua.create_function(|lua, line: Option<String>| {

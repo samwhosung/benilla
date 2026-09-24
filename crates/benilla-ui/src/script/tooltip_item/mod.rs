@@ -7,7 +7,7 @@
 //!
 //! **The line law is BYTE-VERIFIED** — the 0274 §5 verdict on `0x52b650`'s emission order:
 //! every family's order, gate, and color pointer is the binary's, and every sentence is a KEY
-//! resolved off the player's own `GlobalStrings.lua` at render time (decision 2045). Not yet
+//! resolved off the player's own `GlobalStrings.lua` at render time. Not yet
 //! built (feeds pending, laws recorded): the instance families (soulbound override, enchants,
 //! made-by, live durability, cooldown-remaining).
 //! Residual INTERIMs cited inline: the dual-wield/off-hand proficiency exception
@@ -427,7 +427,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // (paperdoll slots, buff-frame weapon enchants) and the shopping-compare listener's render
     // (ref PaperDollFrame.lua:626). **Unit-keyed** through `Model::inv_slot`, the same router the
     // `GetInventoryItem*` getters use: `"player"` from the self feed, the inspected token from the
-    // PUBLIC visible-item view (decision 0631 — the ref's inspect slot OnEnter calls exactly this,
+    // PUBLIC visible-item view (the ref's inspect slot OnEnter calls exactly this,
     // `InspectPaperDollFrame.xml:20`). An inspected item carries no durability/creator, so those
     // lines simply don't render — the reference's own inspect tooltip shape. On an ARMED shopping
     // tooltip this renders the byte law's compare shape; the arm is consumed either way.
@@ -594,7 +594,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // item-cooldown query `0x6e2ed0` and takes the p6=1 (instance-block) leg iff
                     // **all three** of enable/start/duration are non-zero — a genuinely running
                     // cooldown. That one boolean is both the Lua `hasCooldown` return and the
-                    // openable gate's inverse, so they are computed once, here (decision 0896).
+                    // openable gate's inverse, so they are computed once, here.
                     Some(s) => {
                         let has_cd = s
                             .cooldown
@@ -655,7 +655,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 None => {
                     // Template in flight. The real client early-outs to an EMPTY tooltip here
                     // (`0x52b6a3`); benilla keeps a name-only line instead
-                    // (decision 0138 — the name is already on the slot's link, and a blank plate
+                    // (the name is already on the slot's link, and a blank plate
                     // under an on-screen name reads broken). The re-enter loop repaints the
                     // moment the push lands.
                     if let Some(name) = link.as_deref().and_then(link_name) {
@@ -687,13 +687,13 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // slot is no item object, so its rolled random-suffix enchants reach the builder through the
     // block — never through `ITEM_FIELD_ENCHANTMENT`, which the wire does not carry for loot.
     // Hovering a "… of the Monkey" drop through the template path `BenillaSetItemById` instead printed
-    // the `<Random enchantment>` placeholder until the item was in the bag (decision 1547).
+    // the `<Random enchantment>` placeholder until the item was in the bag.
     //
     // `slot` is the 1-based display row, like every other loot getter; the coin pile and a
     // cleared row have no tooltip.
     // GameTooltip:SetTradePlayerItem(id) / SetTradeTargetItem(id) — `0x5341e0` / `0x534410`, two
     // arguments exact (self, slot), no returns: the trade slot's item, rendered off its template
-    // the way the loot slot is (decision 1966; the stock TradeFrame.xml's slot OnEnter). The
+    // the way the loot slot is (the stock TradeFrame.xml's slot OnEnter). The
     // target side reads the partner's slot guids (`[0xb715a0 + slot*4]`); an empty or
     // out-of-range slot leaves the tooltip untouched. The
     // slot's enchant line waits on the trade snapshot carrying the wire's enchant id (0592 P3).
@@ -1071,7 +1071,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         )?;
     }
 
-    // GameTooltip:SetInboxItem(index) — the mail window's enclosed-item hover (decision 0544): the
+    // GameTooltip:SetInboxItem(index) — the mail window's enclosed-item hover: the
     // inbox row's item entry through the same id-keyed store (MailFrame.lua l.218/470). A row with no
     // enclosed item (item_id 0) is a no-op, like the reference (which only calls this when hasItem).
     m.set(
@@ -1098,7 +1098,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             fire_cleared(lua, h);
             // A block source (`SetInboxItem 0x5355fa`, p6=1) carrying the attachment's roll — so
             // an "… of the Monkey" in the mail reads like the same drop in the loot window, and
-            // the placeholder arm is unreachable here too (decision 1547).
+            // the placeholder arm is unreachable here too.
             let inst = render::ItemInstance {
                 name,
                 enchants: roll_enchants(lua, roll),
@@ -1112,7 +1112,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GameTooltip:SetAuctionItem(type, index) — an auction ROW's hover (decision 1511). The row's
+    // GameTooltip:SetAuctionItem(type, index) — an auction ROW's hover. The row's
     // item entry through the same id-keyed store, keyed by list type ("list"/"bidder"/"owner").
     //
     // An auction row's tooltip deliberately emits **no** "Made by", "Gift from" or openable lines,
@@ -1146,7 +1146,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             }
             fire_cleared(lua, h);
             // A block source (`SetAuctionItem 0x5359d9`, p6=1) carrying the listing's roll: a
-            // rolled auction shows its real lines, never the placeholder (decision 1547). The
+            // rolled auction shows its real lines, never the placeholder. The
             // zeroed GUIDs the note above describes are unaffected — a roll is not an instance.
             let inst = render::ItemInstance {
                 name,
@@ -1161,7 +1161,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GameTooltip:SetAuctionSellItem() — the create-auction slot's hover (decision 1511). The item
+    // GameTooltip:SetAuctionSellItem() — the create-auction slot's hover. The item
     // staged in the sell slot, through the same id-keyed store. A no-op when the slot is empty
     // (the reference gates the call on GetAuctionSellItemInfo()).
     //
@@ -1198,7 +1198,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GameTooltip:SetSendMailItem() — the mail Send tab's attached-item hover (decision 0544): the
+    // GameTooltip:SetSendMailItem() — the mail Send tab's attached-item hover: the
     // cursor item attached to the send slot, through the same id-keyed store (MailFrame.lua l.952).
     // A no-op when nothing is attached (the reference gates the call on GetSendMailItem()).
     m.set(

@@ -1,4 +1,4 @@
-//! The dialog engine's own verbs (decision 1963) — the bindings the stock `StaticPopup.lua`
+//! The dialog engine's own verbs — the bindings the stock `StaticPopup.lua`
 //! bodies call that no window of ours had ever needed, each built to the reference's own shape
 //! (VERIFIED at the bytes unless a line here says INFERRED):
 //!

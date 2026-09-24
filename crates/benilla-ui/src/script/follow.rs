@@ -3,7 +3,7 @@
 //! [`super::duel`]'s shape exactly: everything the UI *reads* about a follow arrives as an event
 //! argument (`AUTOFOLLOW_BEGIN`'s name), so there is no snapshot to push — only the outbound half.
 //! Each call queues a [`FollowRequest`] the app drains ([`super::UiScript::take_follow_requests`])
-//! and turns into its own follow start, keeping the engine free of ECS reach (decision 0068 §3).
+//! and turns into its own follow start, keeping the engine free of ECS reach.
 //!
 //! The two are the reference's own follow bindings, and between them they cover every shipped call
 //! site in the 1.12 FrameXML:
@@ -20,7 +20,7 @@
 //! clicking *Follow* on a menu that already names the unit exactly must not prefix-match its way
 //! onto somebody else standing nearby, while `/follow rag` still may.
 //!
-//! benilla parses slash lines in Rust rather than in Lua (decision 0881), so the chat half of that
+//! benilla parses slash lines in Rust rather than in Lua, so the chat half of that
 //! table enters the app's follow funnel directly; these globals are the *other* half — the shipped
 //! UI's, and any addon's.
 
@@ -34,7 +34,7 @@ use super::Model;
 pub enum FollowRequest {
     /// `FollowUnit(unit)` — follow whoever a unit token points at. The app resolves the token;
     /// `"target"` is the bare `/follow`, and takes the selection **whatever it is** (the reference
-    /// applies no typemask on this path — decision 0890).
+    /// applies no typemask on this path).
     ByUnit(String),
     /// `FollowByName(name, exactMatch)` — follow a player found by name. `exact` is the second Lua
     /// argument: set, it skips the resolver's longest-common-prefix tier and admits only a

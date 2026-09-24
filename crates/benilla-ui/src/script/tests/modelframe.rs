@@ -452,7 +452,7 @@ fn the_light_tuple_is_opaque_and_survives_the_round_trip() {
     // returns NOTHING rather than three zeros — a pane with no fog and a pane fogged to black are
     // different states", which is a good argument about a model the client does not have: there is
     // no unset state. The fog colour is one packed `0xAARRGGBB` dword whose ctor writes
-    // `0xffffffff`, so a fresh pane reads **four** values, `1, 1, 1, 1` (decision 1845).
+    // `0xffffffff`, so a fresh pane reads **four** values, `1, 1, 1, 1`.
     assert_eq!(
         s.eval::<usize>("return table.getn({ MLight:GetFogColor() })")
             .unwrap(),
@@ -489,7 +489,7 @@ fn the_light_tuple_is_opaque_and_survives_the_round_trip() {
 
 /// `SetCamera(n)` selects by **raw table index**, is bounds-checked against the file's camera
 /// count, defers until the file's facts land, and gates the paint until the question is settled —
-/// the four halves of `0x76cec0`/`0x76ce80`/`0x76ce00`/`76d5f0` (decision 2027).
+/// the four halves of `0x76cec0`/`0x76ce80`/`0x76ce00`/`76d5f0`.
 ///
 /// The whole point of the state is which render leg a pane takes: an installed camera is the
 /// perspective leg, the NULL camera is the orthographic one, and an index past the count is a
@@ -564,7 +564,7 @@ fn set_camera_is_a_raw_index_bounds_checked_against_the_file() {
 }
 
 /// The fog block: `SetFogColor` **arms** it, `ClearFog` disarms **bit 0 alone**, and near/far are
-/// stored raw by the Lua setters (`0x76ee60`/`0x76f540`, decision 2027). The five verbs held back
+/// stored raw by the Lua setters (`0x76ee60`/`0x76f540`). The five verbs held back
 /// as uncarved since 1134 §4 are real now.
 #[test]
 fn the_fog_block_arms_on_colour_and_clears_only_its_bit() {

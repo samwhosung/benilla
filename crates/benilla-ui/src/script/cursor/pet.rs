@@ -1,4 +1,4 @@
-//! The pet bar's drag (decision 1010) — **one** Lua verb, `PickupPetAction`, which forks on
+//! The pet bar's drag — **one** Lua verb, `PickupPetAction`, which forks on
 //! whether the cursor is already carrying a pet payload. The reference's own bar calls it from all
 //! three gestures (`PetActionButton_OnClick`
 //! under shift, `OnDragStart`, and `OnReceiveDrag` — `PetActionBarFrame.lua:252-283`), so "pick up"

@@ -27,7 +27,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
 
-/// One gossip menu option, resolved by the app from the wire `GossipOption` (decision 0081). Plain
+/// One gossip menu option, resolved by the app from the wire `GossipOption`. Plain
 /// data — 1-based order in the menu is its position in [`GossipMenu::options`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GossipOptionView {
@@ -37,13 +37,13 @@ pub struct GossipOptionView {
     /// the wire `GOSSIP_ICON` byte (`"gossip"`/`"vendor"`/`"taxi"`/`"trainer"`/…). The XML resolves
     /// it to a `Interface\GossipFrame\<Type>GossipIcon` texture.
     pub icon_type: String,
-    /// A password-gated (`coded`) option — greyed and unselectable in v1 (decision 0081).
+    /// A password-gated (`coded`) option — greyed and unselectable in v1.
     pub coded: bool,
 }
 
 /// One quest row riding a gossip menu (`SMSG_GOSSIP_MESSAGE`'s quest-option block). A gossip NPC
 /// that also gives quests lists them above the gossip options; a click sends
-/// `CMSG_QUESTGIVER_QUERY_QUEST` (decision 0088). `active` splits the row into the "current quests"
+/// `CMSG_QUESTGIVER_QUERY_QUEST`. `active` splits the row into the "current quests"
 /// vs "available quests" headers (the app derives it from the wire dialog-status icon); the app maps
 /// the clicked 1-based row back to its quest id.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -66,7 +66,7 @@ pub struct GossipMenu {
     /// The NPC greeting, always resolved: a menu is only pushed once its `SMSG_NPC_TEXT_UPDATE`
     /// answered — an open gossip frame with a blank page is not a reachable state (module doc).
     pub greeting: String,
-    /// Quest rows the NPC offers/has active, riding the same packet (decision 0088).
+    /// Quest rows the NPC offers/has active, riding the same packet.
     pub quests: Vec<GossipQuestRow>,
     pub options: Vec<GossipOptionView>,
 }
@@ -154,7 +154,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // SelectGossipOption(i [, ...]) — queue the 1-based option position; the app maps it to the
     // wire option index + guid. Extra Era args (the code / a confirm flag) are ignored: v1 never
-    // sends a code (decision 0081).
+    // sends a code.
     g.set(
         "SelectGossipOption",
         lua.create_function(|lua, (i, _rest): (u32, mlua::MultiValue)| {
@@ -177,7 +177,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ══ THE TWO QUEST LISTS, and why there are two ══════════════════════════════════════════
     //
     // 1.12 splits the gossip packet's quest rows by their WIRE ICON — `{3,4}` are "active", every
-    // other value "available" (decision 0758) — and publishes each list through its own vararg
+    // other value "available" — and publishes each list through its own vararg
     // verb. The reference runs that same test lazily behind these two bindings
     // (`0x4e2430`/`0x4e2580`); we run it at parse time and keep the answer on the row.
     //

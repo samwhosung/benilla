@@ -1,4 +1,4 @@
-//! The death-arc Lua surface (decisions 0308, 1746): the release/reclaim/resurrect/self-res verbs
+//! The death-arc Lua surface: the release/reclaim/resurrect/self-res verbs
 //! and the state getters the reference's DEATH / RECOVER_CORPSE / RESURRECT* / XP_LOSS dialogs
 //! call.
 //!
@@ -17,7 +17,7 @@ use super::Model;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DeathUiState {
     /// Seconds until the server force-releases — the client-side mirror of the 6:00
-    /// `CORPSE_REPOP_TIME` the wire never carries (decision 0308 §4), counted from the death
+    /// `CORPSE_REPOP_TIME` the wire never carries, counted from the death
     /// edge. `None` = no release timer (`PLAYER_FIELD_BYTES` bit 0x08 clear — an instanceable
     /// map): `GetReleaseTimeRemaining` returns **−1** and the DEATH dialog shows the no-timer
     /// text.
@@ -38,12 +38,12 @@ pub struct DeathUiState {
     /// XP_LOSS_NO_SICKNESS, ref UIParent.lua's CONFIRM_XP_LOSS arm).
     pub sickness_duration: Option<String>,
     /// What `HasSoulstone()` answers: the **label** of the self-resurrect available right now, or
-    /// `None` for nil (`HasSoulstone 0x48ac80`; decision 1746).
+    /// `None` for nil (`HasSoulstone 0x48ac80`).
     ///
     /// A string, not an id, because that is the whole of what the API returns: the DEATH dialog
     /// stamps it straight onto its second button (`Button2:SetText(HasSoulstone())`) and uses the
     /// same call as `DisplayButton2`. The app resolves it, because the script VM has no
-    /// spell-catalog or item-cache binding (the `ui_cast`/`ui_mirror` idiom, decision 0107).
+    /// spell-catalog or item-cache binding (the `ui_cast`/`ui_mirror` idiom).
     ///
     /// Two sources, and the client's own fork picks between them
     /// ([`crate::script::death`]'s app-side resolver): `PLAYER_SELF_RES_SPELL` named through
@@ -71,7 +71,7 @@ pub enum DeathAction {
     /// `UseSoulstone()` — spend the self-resurrect. **Which wire that is, is the app's to decide
     /// at drain time**, exactly as the binding decides it at call time: a non-zero
     /// `PLAYER_SELF_RES_SPELL` sends `CMSG_SELF_RES`, and a zero one falls through to using the
-    /// carried item instead (decision 1746).
+    /// carried item instead.
     UseSoulstone,
 }
 
@@ -164,7 +164,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // HasSoulstone() → the self-resurrect's label, or nil (decision 1746). The DEATH dialog
+    // HasSoulstone() → the self-resurrect's label, or nil. The DEATH dialog
     // uses the one call three ways — `DisplayButton2` (show the button at all), `OnShow`
     // (`Button2:SetText(text)`) and `OnCancel`'s clicked arm (soulstone vs release) — so the
     // falsey return has to be **nil** and not `0`: Lua's `0` is truthy, and a `0` here would both

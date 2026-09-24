@@ -7,7 +7,7 @@
 //! very first chunk with `attempt to call global … (a nil value)`. `GetBuildInfo` alone was the
 //! first error for the whole Ace/Atlas/AtlasLoot family, which is a large slice of the ecosystem.
 //!
-//! ## The host-fed pair (decision 1195)
+//! ## The host-fed pair
 //!
 //! `GetRealmName` and `GetFramerate` are the next two down that list — 24 addons are stopped dead
 //! by `GetRealmName` at file scope, and it is the **top runtime wall in the corpus** after the
@@ -27,8 +27,8 @@ use super::Model;
 /// remembered: `5875` and `1.12.1` sit adjacent in the binary, and `Sep 19 2006` is its only
 /// build-date string.
 ///
-/// **Hardcoding is the faithful answer here, not a shortcut.** benilla targets exactly 1.12.1
-/// (decision 1188), so these are constants of the target, not of our build — an addon asking
+/// **Hardcoding is the faithful answer here, not a shortcut.** benilla targets exactly 1.12.1,
+/// so these are constants of the target, not of our build — an addon asking
 /// `GetBuildInfo()` is asking "which client am I on", and the honest answer is the one we
 /// implement the API of. Our *own* build stamp is a different question with a different verb
 /// ([`crate::script`] has no binding for it, and the reference has none either).
@@ -36,7 +36,7 @@ const VERSION: &str = "1.12.1";
 const BUILD: &str = "5875";
 const BUILD_DATE: &str = "Sep 19 2006";
 // There was a `TOC_VERSION = 11200` here, and `GetBuildInfo` pushed it as a fourth value. The
-// in-game registrar pushes three (decision 1842); the interface number is a later expansion's
+// in-game registrar pushes three; the interface number is a later expansion's
 // return, and `benilla.toc`'s own `## Interface` line is where that number belongs.
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -61,7 +61,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set("IsMacClient", lua.create_function(|_, ()| Ok(Value::Nil))?)?;
 
-    // **`FrameXML_Debug([v])` — the XML loader's own trace switch, get-or-set** (decision 2160).
+    // **`FrameXML_Debug([v])` — the XML loader's own trace switch, get-or-set**.
     // `0x488440` reads the global `[0xceea30]`
     // through `0x6edb40`, and:
     //
@@ -92,7 +92,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // version, build, date — three, and no fourth (decision 1842)
+    // version, build, date — three, and no fourth
     g.set(
         "GetBuildInfo",
         lua.create_function(|lua, ()| {
@@ -104,7 +104,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // `(string, string, string)`; the interface/TOC number is a later-expansion return
                 // and 1.12 has no fourth value here. (Its GLUE twin `0x46cd70` pushes five — the
                 // same name with a different shape per registrar table, which is why 1842's gate
-                // keys on the table and not the name.) Decision 1842.
+                // keys on the table and not the name.).
             ]))
         })?,
     )?;
@@ -262,12 +262,12 @@ impl super::UiScript {
         }
     }
 
-    /// Push the realm name — the host's half of `GetRealmName` (decision 1195).
+    /// Push the realm name — the host's half of `GetRealmName`.
     ///
     /// Set at world entry from the realm the session actually connected to. Idempotent, and the
     /// empty string is a legitimate value (no realm yet), not a "clear".
     /// Seed the **local player record** — the reference's `0xc27d80`, copied from the char-enum
-    /// row at the character-select Enter World commit (decisions 2261/2263, and see
+    /// row at the character-select Enter World commit (and see
     /// [`super::PlayerRecord`] for the bytes and the four verbs that read it).
     ///
     /// Called from the world-entry UI load beside [`Self::set_realm_name`], and for the same
@@ -332,7 +332,7 @@ mod tests {
     ///
     /// This used to assert four and explain the fourth as the `tocversion` an addon compares
     /// against its own `## Interface` — which is a TBC-and-later idiom. The in-game registrar
-    /// `0x4884a0` pushes `(string, string, string)` and nothing else (decision 1842); the
+    /// `0x4884a0` pushes `(string, string, string)` and nothing else; the
     /// interface number arrives in a later expansion.
     ///
     /// The corpus agrees, and it is worth the count: **458 sites** write

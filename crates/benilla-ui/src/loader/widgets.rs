@@ -71,8 +71,8 @@ impl Loader<'_> {
     /// plus the generic region layout — `<Size>`/`<Anchors>`/`setAllPoints` — so a state texture can
     /// cover less than its button (the merchant row's icon-scoped highlight); `$parent` in a state
     /// texture's anchors resolves against this button's own name, like a `<Layers>` region's.
-    /// The per-state fonts (`<NormalFont>` and kin) are modeled below — object and local justify
-    /// (decision 1996); not modeled (stated): `<PushedTextOffset>`.
+    /// The per-state fonts (`<NormalFont>` and kin) are modeled below — object and local justify;
+    /// not modeled (stated): `<PushedTextOffset>`.
     pub(super) fn apply_button(
         &mut self,
         el: &Element,
@@ -146,7 +146,7 @@ impl Loader<'_> {
                         this.call_region(&region, "SetBlendMode", mode.to_string(), dbg);
                     }
                     // The setter above MATERIALIZED the region with the runtime path's implicit
-                    // SetAllPoints (decision 1310) — but this is the XML path, where the real
+                    // SetAllPoints — but this is the XML path, where the real
                     // engine routes state textures through the region adder (`0x778903`…: authored
                     // `<Anchors>` first, the implicit step after). Reproduce that order: clear,
                     // apply the authored layout, then re-run the conditional step — a same-point
@@ -259,13 +259,13 @@ impl Loader<'_> {
             }
             self.call(wrapper, "SetText", label, dbg);
             if let Ok(region) = wrapper.call_method::<Table>("GetFontString", ()) {
-                // Same clear→layout→implicit order as the state textures above (decision 1310):
+                // Same clear→layout→implicit order as the state textures above:
                 // SetText materialized the label with the runtime path's implicit anchor; the XML
                 // path re-derives it AFTER the element's own `<Anchors>` apply, which is where
                 // both real legs run it (`0x6f27f5` for `<ButtonText>`, `0x778b96` for
                 // `<NormalText>` — two of that post-step's three call sites).
                 //
-                // **`font_attrs` is the load-bearing argument here** (decision 2100). On the
+                // **`font_attrs` is the load-bearing argument here**. On the
                 // `<NormalText>` leg the element's `justifyH`/`justifyV` belong to the button's
                 // per-state font, never to the label, so the post-step reads the string's
                 // untouched ctor word (`0x212` = CENTER|MIDDLE) and seats CENTER. Applying the
@@ -371,7 +371,7 @@ impl Loader<'_> {
                 // `[button+0x390]`), and it reaches an existing label only through the live
                 // link. The v1 form wrote it onto the label directly, which forced a label into
                 // being here with a CENTER anchor already decided — the chat menu's rows drew
-                // centred and "Macro" ran into "/macro" (decision 1996).
+                // centred and "Macro" ran into "/macro".
                 if let Some(j) = f.attr("justifyH") {
                     match crate::justify::parse_h(j) {
                         crate::justify::Set::To(jh) => {
@@ -403,8 +403,7 @@ impl Loader<'_> {
     /// `flags = 1` — **`autoFocus` defaults ON**, every other flag off (`0x779a29 mov eax,1` /
     /// `0x779a2e mov [esi+0x318],eax`; LoadXML's `autoFocus` leg writes nothing for an absent or
     /// empty attribute, `0x77a0b3`/`0x77a0b8`). So the UI.xsd's `true` default is the client's too,
-    /// and the divergence documented here — benilla applying `flags = 0` uniformly — is retired
-    /// (decision 1686).
+    /// and the divergence documented here — benilla applying `flags = 0` uniformly — is retired.
     ///
     /// **The flags are read presence-aware.** This loop used to call the setter only when an
     /// attribute parsed as `true`, so `autoFocus="false"` was a no-op — harmless while the default

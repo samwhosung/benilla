@@ -1,4 +1,4 @@
-//! Lua 5.0's iterator-less generic-for, restored in the vendored VM (decision 1215).
+//! Lua 5.0's iterator-less generic-for, restored in the vendored VM.
 //!
 //! `for k, v in someTable do` is Lua 5.0 syntax that 5.1 removed at the OPCODE level. 183 of 218
 //! corpus addons are reached by it and it is the first session-start error for 60 of them — three
@@ -222,14 +222,14 @@ fn a_nested_long_string_parses_as_lua_50_does() {
     assert_eq!(v, "a [[b]] c");
 }
 
-/// **5.0's constructor compat-semicolon, restored** — the third dialect divergence (decision 1315).
+/// **5.0's constructor compat-semicolon, restored** — the third dialect divergence.
 ///
 /// Lua 5.0's `constructor()` opens its field loop with `testnext(ls, ';')  /* compatibility
 /// only */` — a Lua 4.0 leftover (4.0 separated a constructor's list part from its record part
 /// with `;`) that silently eats ONE extra `;` per separator position inside a table constructor.
 /// 5.1 deleted the line. AtlasLoot's `ButtonRegistry.lua` writes `Back_Title = AL["Factions"];;`
 /// twenty times; the real client loads it (director-verified on the live 1.12.1 client), stock
-/// 5.1 answered "unexpected symbol near ';'" and the addon's registry global never existed (B266).
+/// 5.1 answered "unexpected symbol near ';'" and the addon's registry global never existed.
 #[test]
 fn a_double_semicolon_inside_a_constructor_parses_as_lua_50_does() {
     let s = script();

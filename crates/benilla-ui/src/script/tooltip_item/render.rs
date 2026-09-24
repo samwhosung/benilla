@@ -2,7 +2,7 @@
 //! client's shared renderer `0x52b650` (see the parent module doc for the law's provenance and
 //! the compare/red/SET summaries).
 //!
-//! **Every sentence here is a key, never a Rust string** (decision 2045). The builder names its
+//! **Every sentence here is a key, never a Rust string**. The builder names its
 //! keys outright — the census of the string pointers reachable from `[0x52b650, 0x52e600)` is
 //! where each one below came from, so a line's key is the *reference's* choice and not a match on
 //! English. That distinction is load-bearing: `ITEM_REQ_SKILL`, `LOCKED_WITH_ITEM`,
@@ -93,7 +93,7 @@ pub(super) struct ItemInstance {
     /// displays from — *"Though the client has the information in the item's data field, we have
     /// to send SMSG_ITEM_TIME_UPDATE to display the remaining time"* (`Item::SendTimeUpdate`,
     /// `Objects/Item.cpp:1094`) — which is the same split the temporary-enchant countdown one
-    /// field up already takes (decisions 0920/1933).
+    /// field up already takes.
     pub duration_ms: Option<u64>,
 }
 
@@ -110,7 +110,7 @@ pub(super) struct ItemInstance {
 /// scanned the space (`5c7659: add esi,ecx`) and the kernel's next top-of-loop read hits the NUL.
 ///
 /// benilla lands on the same row count from the same law: the app's `fontstring_lines`
-/// trailing-break rule (decision 1343) drops the empty segment a plain split would leave, so
+/// trailing-break rule drops the empty segment a plain split would leave, so
 /// `" \n"` is one line here too. We wrote `String::new()`, which our own engine calls zero lines
 /// of zero height — so the set block's two spacers were invisible where the reference shows two
 /// blank rows.
@@ -543,7 +543,7 @@ pub(super) fn render_view(
                 )?;
             }
         }
-        // **Line 17 — the enchant family** (decisions 0915/0920). One contiguous block
+        // **Line 17 — the enchant family**. One contiguous block
         // `[0x52c991, 0x52cc69)` between the resistances and the durability precompute, and three arms
         // that are mutually exclusive by construction — the per-slot loop falls through to the
         // proposed-enchant pair and jumps the block's end, so RANDOM_ENCHANT is reachable only when
@@ -871,7 +871,7 @@ pub(super) fn render_view(
     //
     // Note the lock sub-gate is the LINE's, not the CLICK's: the send arm tests the bare template
     // bit, so a locked junkbox stays silent here while its right-click still goes out and draws
-    // the server's "Item is locked" (decision 0896, `ItemInfo::opens_loot`). The click order is
+    // the server's "Item is locked" (`ItemInfo::opens_loot`). The click order is
     // also the inverse of this one — READABLE wins there.
     let openable = inst.openable_source
         && ((v.flags & 0x4 != 0 && (v.lock_id == 0 || inst.flags & 0x4 != 0))
@@ -945,7 +945,7 @@ mod tests {
     use super::*;
 
     /// A stand-in string table, **deliberately not the shipped wording** — what is under test is
-    /// which key is reached and what fills it, never what the sentence says (decision 2045,
+    /// which key is reached and what fills it, never what the sentence says (
     /// "assert the identifier, not the sentence"). Every value carries angle brackets so a
     /// resolved line cannot be mistaken for a composed one.
     fn table(key: &str) -> Option<String> {

@@ -23,7 +23,7 @@
 //!
 //! Milliseconds, not seconds: `ref-BuffFrame.lua:189`/`:212` divide by 1000 before displaying, and
 //! `0x5d9d00` is the same live remaining-time reader `benilla::items::Countdowns::enchant_remaining_ms`
-//! mirrors (decision 0920). It is *remaining* time, recomputed per call against a deadline — never
+//! mirrors. It is *remaining* time, recomputed per call against a deadline — never
 //! an absolute stamp.
 //!
 //! # Which slots, and which enchantment
@@ -44,7 +44,7 @@
 //! **The gate is the raw id and nothing else** — no DBC lookup, no display filter. That is why the
 //! app feeds this from [`benilla_protocol`]'s `item_enchant(1)` rather than from the tooltip-shaped
 //! [`super::EnchantView`] list, which drops an id the `SpellItemEnchantment` catalog cannot name
-//! *and* the whole `Flags & 0x2` print-no-line family (decision 0928) — the totem weapon imbues,
+//! *and* the whole `Flags & 0x2` print-no-line family — the totem weapon imbues,
 //! i.e. precisely the enchants this row exists to show.
 //!
 //! # The expiration is NOT the wire field
@@ -66,7 +66,7 @@
 //! reference answers the number `0` and we answer nil. Closing it needs an
 //! `item_enchant_duration(slot)` accessor beside `item_enchant`/`item_enchant_charges` in
 //! `benilla_protocol` (the triple's middle field, deliberately unexposed there because the tooltip
-//! never reads it — decision 0920). The server sends the packet in the same breath as the field, so
+//! never reads it). The server sends the packet in the same breath as the field, so
 //! the window is a frame or two.
 
 use mlua::{Lua, MultiValue, Value};

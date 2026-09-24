@@ -24,7 +24,7 @@ fn text_quad(s: &UiScript) -> Option<String> {
 /// already visible, so `visibility_focus` never runs for it) still takes the keyboard on the first
 /// key or char event, and processes that same event. Path 1, focus-on-show, is
 /// [`an_autofocus_box_takes_the_keyboard_when_it_is_shown`] below — this test's name used to assert
-/// its absence, which stopped being true at decision 1686.
+/// its absence, which stopped being true at.
 #[test]
 fn an_autofocus_box_self_acquires_on_the_first_event() {
     let mut s = script();
@@ -45,7 +45,7 @@ fn an_autofocus_box_self_acquires_on_the_first_event() {
 }
 
 /// **An `autoFocus` box takes the keyboard when it is shown** — the OnShow vtable override
-/// (`0x81c910` slot +0x30, `0x77a750`), missing here until decision 1686. Gated on nothing else
+/// (`0x81c910` slot +0x30, `0x77a750`), missing here until. Gated on nothing else
 /// holding focus, and the gate is the whole of it — no topmost/best choice.
 #[test]
 fn an_autofocus_box_takes_the_keyboard_when_it_is_shown() {
@@ -130,7 +130,7 @@ fn the_show_focus_is_refused_without_autofocus_or_with_the_keyboard_taken() {
 fn non_autofocus_unfocused_box_ignores_input() {
     let mut s = script();
     // `SetAutoFocus(false)` explicitly: the ctor's `flags = 1` leaves autoFocus **ON** by default
-    // (`0x779a29`/`0x779a2e`, decision 1686), so a bare `CreateFrame("EditBox")` is an autoFocus
+    // (`0x779a29`/`0x779a2e`), so a bare `CreateFrame("EditBox")` is an autoFocus
     // box and would self-acquire on the first char. This test is about the other kind.
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetAutoFocus(false)"#)
         .unwrap();
@@ -226,7 +226,7 @@ fn click_focuses_regardless_of_autofocus_and_transition_order_is_lost_then_gaine
 
 // ── text buffer + editing + OnTextChanged/OnTextSet ─────────────────────────────────────────
 
-/// **`OnTextChanged` is deferred and coalesced** (decision 1831). An edit only raises the
+/// **`OnTextChanged` is deferred and coalesced**. An edit only raises the
 /// `textChanged` dirty bit; the fire belongs to the drain (`0x77d3e0`) that the box's own OnUpdate
 /// runs. So three typed characters are three marks on ONE box and produce exactly ONE fire — this
 /// test asserted three before the law was checked.
@@ -266,7 +266,7 @@ fn typing_coalesces_into_one_deferred_ontextchanged() {
     assert_eq!(s.eval::<i64>("return changed").unwrap(), 1);
 }
 
-/// The two fires part company (decision 1831): **`OnTextSet` is synchronous, inside `SetText`
+/// The two fires part company: **`OnTextSet` is synchronous, inside `SetText`
 /// itself** (`0x77be6b`), while `OnTextChanged` waits for the drain. The equality short-circuit
 /// still suppresses both. So writing "hi", "hi", "bye" before any drain logs two `set`s and then a
 /// SINGLE `changed` carrying only the last value — `A → B` coalesces.
@@ -649,7 +649,7 @@ fn get_number_parses_the_text() {
 
 #[test]
 fn typing_fires_the_generic_on_char_with_what_was_inserted() {
-    // **The half of the old law that was wrong** (corrected 2026-08-29; decision 1686).
+    // **The half of the old law that was wrong** (corrected 2026-08-29).
     // `CSimpleEditBox` has its own input vtable which does not chain to the base — but Insert
     // itself fires the generic `OnChar` slot (`+0x180`) at `0x77c13c`, through the **varargs**
     // firer `0x7026f0` with fmt `"%s"` and the spliced string as the argument; the family's
@@ -1211,7 +1211,7 @@ fn caret_blinks_on_tick_and_resets_on_edit() {
     assert!(s.focused_editbox_text_ui().unwrap().caret_on);
 }
 
-// ── A hyperlink is ONE keypress (`AdvanceTokens 0x77bb30`, decision 1077) ─────────────────────
+// ── A hyperlink is ONE keypress (`AdvanceTokens 0x77bb30`) ─────────────────────
 //
 // The engine-level law lives in `markup`; these drive it the way a player does — through the
 // focused box's public keyboard API — because that is the level the reported defect lived at:
@@ -1339,7 +1339,7 @@ fn max_letters_counts_visible_letters_not_escape_bytes() {
 }
 
 /// **Creating a box is not showing it** — and that is what keeps the on-show self-focus safe now
-/// that autoFocus defaults ON (decision 1686). A frame born visible is not an effective-visibility
+/// that autoFocus defaults ON. A frame born visible is not an effective-visibility
 /// *transition*, so it never runs the OnShow override; only a real `Show()` does. Without this,
 /// loading the shipped chain would hand the keyboard to whichever edit box happened to be
 /// constructed first, and typing would go into it instead of to the game.
@@ -1587,7 +1587,7 @@ fn set_max_bytes_caps_the_buffer_in_bytes_with_minus_one_unlimited() {
 
 /// **`OnCursorChanged(x, y, w, h)` fires when the caret moves** — the edge the shipped
 /// `MailFrame.xml` and `HelpFrame.xml` wire `ScrollingEdit_OnCursorChanged` to, and the reason a
-/// multiline box follows its caret as you type past the bottom (decision 2141).
+/// multiline box follows its caret as you type past the bottom.
 ///
 /// The four args are the reference's (`0x77dd5f`, each scaled by `f`): `x` the caret's
 /// advance along its line, `y` **negative-downward** by row (which is what

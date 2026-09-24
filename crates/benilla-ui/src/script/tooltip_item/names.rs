@@ -1,8 +1,7 @@
 //! The item tooltip's display vocabulary — the builder's own **key** tables (`INVTYPE_*`,
 //! `ITEM_MOD_*`, `SPELL_SCHOOL%d_CAP`), the DBC-sourced subclass/class/race names, and the
 //! byte-verified color constants the render law paints with. Pure data; the law itself is
-//! [`super::render`], which resolves every key here against the player's own `GlobalStrings.lua`
-//! (decision 2045).
+//! [`super::render`], which resolves every key here against the player's own `GlobalStrings.lua`.
 //!
 //! **Keys, not sentences, and the difference is not cosmetic.** `INVTYPE_SHIELD` and
 //! `INVTYPE_WEAPONOFFHAND` both read "Off Hand" in enUS and are separately localizable

@@ -9,8 +9,7 @@
 //!
 //! **The bit is not the whole gate**, at either end — see [`super::UiScript::user_placed_layouts`]
 //! and [`super::UiScript::restore_user_placed_layouts`] for the conjuncts and their byte sites.
-//! Reading it as the whole gate is what let one addon's stamp seat a stock frame forever
-//! (decision 2193).
+//! Reading it as the whole gate is what let one addon's stamp seat a stock frame forever.
 //!
 //! This module is the **engine half** of that: a snapshot out, a restore in, and a dirty bit for
 //! the host to debounce on. Where the file lives, when it is written and which character owns it
@@ -28,7 +27,7 @@
 //! which is the failure mode the *bit* exists to prevent.
 //!
 //! So the seam is deliberately three calls wide and mirrors the chat-look seam next door
-//! (`chat_window_looks` / `set_chat_window_looks` / `take_chat_window_changes`, decision 1589):
+//! (`chat_window_looks` / `set_chat_window_looks` / `take_chat_window_changes`):
 //! [`super::UiScript::user_placed_layouts`], [`super::UiScript::restore_user_placed_layouts`] and
 //! [`super::UiScript::take_user_placed_change`].
 //!
@@ -139,7 +138,7 @@ impl super::UiScript {
     /// the position: `UIParent_ManageFramePositions` skips a user-placed frame, so the managed
     /// bottom-stack pass does not re-seat the window the player moved.
     ///
-    /// **The apply is gated per ARM, not per row** (`0x4905e0`, decision 2193): the position arm
+    /// **The apply is gated per ARM, not per row** (`0x4905e0`): the position arm
     /// is behind the frame's own `movable` bit (`0x490600 test ah,0x1`) and the size arm behind
     /// `resizable` (`0x490689 test ah,0x2`) — a frame carrying neither is left entirely alone,
     /// however old and however stamped its row is. The userPlaced stamp itself lives **inside**

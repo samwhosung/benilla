@@ -161,7 +161,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // 1/nil, the reference's predicate shape (`0x795170`): `(nil) | (number)`, like every other
-    // 1.12 predicate (decision 2118).
+    // 1.12 predicate.
     m.set(
         "GetFading",
         lua.create_function(|lua, this: Table| {

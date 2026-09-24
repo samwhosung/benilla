@@ -1,4 +1,4 @@
-//! Slider (per-kind behavior; LoadXML `0x789580`, decision 0250). The value/step/orientation
+//! Slider (per-kind behavior; LoadXML `0x789580`). The value/step/orientation
 //! contract, the VERTICAL ctor default, the no-swap divergence from StatusBar, and the change-gate
 //! that keeps the real scrollbar wiring from recursing.
 
@@ -610,8 +610,8 @@ fn a_move_inside_one_step_fires_nothing() {
 #[test]
 fn set_value_step_re_quantises_the_held_value_and_can_fire() {
     // `SetValueStep 0x789a60` stores the step and then re-pushes the range through
-    // `SetMinMaxValues`, which re-clamps the held value through `SetValue` — onto the NEW lattice
-    // (decision 2143). A step handed to a slider that already holds a value moves it and fires.
+    // `SetMinMaxValues`, which re-clamps the held value through `SetValue` — onto the NEW lattice.
+    // A step handed to a slider that already holds a value moves it and fires.
     let s = script();
     s.run(
         r#"

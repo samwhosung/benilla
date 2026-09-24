@@ -1,4 +1,4 @@
-//! The FrameXML **document** layer (decision 0068): turns a `.xml` file's text into an owned,
+//! The FrameXML **document** layer: turns a `.xml` file's text into an owned,
 //! order-preserving tree, resolves `virtual`/`inherits` template expansion, and rewrites `$parent`
 //! name tokens. This is XML-tree semantics only — no widget instantiation (frame factories, anchor
 //! resolution, script compilation) and no Lua; those live in the layer above, which walks the tree
@@ -90,7 +90,7 @@ pub enum ScriptRef {
         /// Carried so the loader can pad the chunk out to that offset, making Lua's own error
         /// lines the file's lines. Without it every inline block starts at line 1 and a raise
         /// reports a number belonging to no file — worse than no number, because it looks like one
-        /// you could go and read (decision 1214).
+        /// you could go and read.
         line: u32,
     },
 }
@@ -181,7 +181,7 @@ impl std::error::Error for Error {
 /// error: nothing establishes that the loader checks the root's own tag name, only that it walks
 /// its children (`0x6ede10`).
 pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
-    // **The reference has no XML Namespaces, and our stand-in parser does** (decision 2155).
+    // **The reference has no XML Namespaces, and our stand-in parser does**.
     //
     // The client's document tree is `XMLTree.cpp`'s, built by embedded **expat 1.95.5** created
     // through `XML_ParserCreate 0x7e6690` — *not* `XML_ParserCreateNS` — so namespace processing
@@ -268,7 +268,7 @@ pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
 }
 
 /// Declare every prefix the document uses but never binds, so a namespace-aware parser stops
-/// having an opinion the reference's parser cannot have (decision 2155; the *why* is in
+/// having an opinion the reference's parser cannot have (the *why* is in
 /// [`parse`]).
 ///
 /// **Driven by the parser's own error, not by a scan.** `roxmltree` names the offending prefix in
@@ -396,7 +396,7 @@ fn element_from_node(node: roxmltree::Node) -> Element {
         attrs: node
             .attributes()
             // **A prefixed attribute is unreachable in the reference, so it is not an attribute
-            // here** (decision 2155). `GetAttribute 0x6f2cf0` compares a lookup key against the
+            // here**. `GetAttribute 0x6f2cf0` compares a lookup key against the
             // stored name whole, and no FrameXML attribute name contains a colon — so
             // `xsi:schemaLocation` can never match any key the loader asks for. Dropping it is
             // what keeps a *declared* prefix (stock FrameXML's own `<Ui xmlns:xsi=… xsi:schema
@@ -461,7 +461,7 @@ pub fn expand(
 /// silently rather than warned as unknown. `Loader::expand_region` already made that distinction
 /// for an INSTANCE; it could not make it one level down, and stock `BuffFrame.xml` is exactly that
 /// case: `BuffButtonDurationTemplate` is a virtual `<FontString>` that inherits a font object, so
-/// every instance of it warned twenty-six times over (decision 1874).
+/// every instance of it warned twenty-six times over.
 pub fn expand_known(
     element: &Element,
     templates: &HashMap<&str, &Element>,
@@ -631,8 +631,8 @@ pub fn resolve_name(raw: &str, parent_name: &str) -> String {
 mod tests {
     use super::*;
 
-    /// **An undeclared namespace prefix is not an error, because the reference has no namespaces**
-    /// (decision 2155). The client's tree is `XMLTree.cpp`'s, built by expat 1.95.5 through
+    /// **An undeclared namespace prefix is not an error, because the reference has no namespaces**.
+    /// The client's tree is `XMLTree.cpp`'s, built by expat 1.95.5 through
     /// `XML_ParserCreate 0x7e6690` — never `XML_ParserCreateNS` — so nothing is resolving a prefix
     /// and nothing can find one unbound.
     ///

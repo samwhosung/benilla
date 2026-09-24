@@ -14,7 +14,7 @@ impl UiScript {
     /// [`super::Model::pending_events`] list the engine's own bindings use — so it lands *after*
     /// everything queued earlier in the frame and before that tick's `OnUpdate` pass.
     ///
-    /// **Ordering, not laziness, is the whole reason this is public** (decision 1750). A benilla
+    /// **Ordering, not laziness, is the whole reason this is public**. A benilla
     /// drain runs a step behind the input pass that fed it, so an event it fires *immediately*
     /// arrives BEFORE events the same input already queued — the reverse of the reference, where
     /// the deferral happens inside the very call that queued them. That inversion is not
@@ -58,7 +58,7 @@ impl UiScript {
 }
 
 /// [`UiScript::fire_event`] against the VM directly, for a caller that holds `&Lua` rather than
-/// `&UiScript` — which is every Lua binding, and therefore `UpdateSpells` (decision 1924).
+/// `&UiScript` — which is every Lua binding, and therefore `UpdateSpells`.
 ///
 /// Identical behaviour; `fire_event` is the same call with the script's own VM. The `&mut self` on
 /// the method was never load-bearing — the body reaches everything through `lua.app_data_mut()` —
@@ -109,13 +109,13 @@ impl super::UiScript {
     /// keeps the two views of time consistent within a frame.
     /// The current `GetTime()` value (`__benilla_now`, seconds) — the FrameXML clock. The app
     /// reads it to stamp an absolute expiry into the clock a Lua countdown reads (the aura feed's
-    /// `expirationTime`, decision 0257); it is the same value `GetTime()` returns inside the VM.
+    /// `expirationTime`); it is the same value `GetTime()` returns inside the VM.
     pub fn now(&self) -> f64 {
         self.lua.globals().get("__benilla_now").unwrap_or(0.0)
     }
 
     /// Start this VM's `GetTime()` clock at `secs` rather than at zero — how a host hands a
-    /// **freshly built** VM the clock its process is already on (decision 2116).
+    /// **freshly built** VM the clock its process is already on.
     ///
     /// The reference's `GetTime` (`0x515ea0`) is `KERNEL32!GetTickCount` scaled by 0.001 (through
     /// the thunk `0x42c010` → `0x42b790`) — an **OS** clock that knows nothing about the Lua VM and
@@ -144,7 +144,7 @@ impl super::UiScript {
         // The focused edit box's caret blink (`0x77a790` runs on the client's frame tick).
         editbox::tick_blink(&self.lua, elapsed);
         // …and, from inside that same `0x77a790` (`0x77a7a1`), the dirty-word drain that fires the
-        // `OnTextChanged`s an edit only marked (decision 1831). It runs BEFORE this tick's
+        // `OnTextChanged`s an edit only marked. It runs BEFORE this tick's
         // OnUpdate sweep, matching the reference's order: the box's own OnUpdate override drains
         // before the FrameXML handlers that read the box get their turn.
         editbox::drain_text_changed(&self.lua);
@@ -155,7 +155,7 @@ impl super::UiScript {
         editbox::drain_cursor_changed(&self.lua);
         // Events queued by Lua bindings last tick (`Model::pending_events` — e.g. `SetMapZoom` →
         // `WORLD_MAP_UPDATE`; the cursor arc's `CURSOR_UPDATE`/`ITEM_LOCK_CHANGED`/
-        // `DELETE_ITEM_CONFIRM`, decision 0216) fire first, so handlers see them before this
+        // `DELETE_ITEM_CONFIRM`) fire first, so handlers see them before this
         // frame's OnUpdate runs.
         let pending = std::mem::take(&mut self.model_mut().pending_events);
         for (event, args) in pending {
@@ -163,7 +163,7 @@ impl super::UiScript {
         }
         let ids: Vec<u32> = {
             let mut model = self.model_mut();
-            // The OnUpdate population is its own list (decision 1446) — maintained by
+            // The OnUpdate population is its own list — maintained by
             // `SetScript`, `scripts`' one writer — so this reads a few hundred handles instead
             // of re-filtering the whole scripts map. A destroyed frame's handle stays until its
             // liveness check fails once, then compacts here.
@@ -217,7 +217,7 @@ impl super::UiScript {
         // plus the capacity law that is this class's stand-in for `maxLines` — the cap is what fits
         // vertically, so it needs the frame's resolved rect and is collected first (the arena walk
         // below holds a mutable borrow that cannot also read `model.resolved`).
-        // Both per-kind walks below ride the arena's ticked-kind registry (decision 1446):
+        // Both per-kind walks below ride the arena's ticked-kind registry:
         // dozens of handles instead of two full-arena sweeps per tick.
         let ticked: Vec<FrameHandle> = model.arena.ticked_kinds().to_vec();
         let message_frames: Vec<(FrameHandle, usize)> = ticked
@@ -249,7 +249,7 @@ impl super::UiScript {
         }
         drop(model);
         // Advance fading tooltips (FadeOut's ramp + end-of-ramp hide) — engine behavior like the
-        // message fade above, decision 0274.
+        // message fade above.
         tooltip::tick_fades(&self.lua);
         // The hover RE-PICK ([`Model::hover_repick`]): the world under a stationary cursor
         // changed this tick (the hovered frame hid, or a frame was shown over the cursor), so
@@ -267,14 +267,14 @@ impl super::UiScript {
         if let Some((x, y)) = repick {
             self.mouse_move(x, y);
         }
-        // `WOW_UI_HANDLERS=<secs>` — who spent the frame (decision 1395). Last, so a report covers
+        // `WOW_UI_HANDLERS=<secs>` — who spent the frame. Last, so a report covers
         // everything this tick fired; a no-op unless the instrument is armed.
         self.report_handler_profile(elapsed);
     }
 }
 
 impl UiScript {
-    /// The model panes' per-frame pass (decision 2007).
+    /// The model panes' per-frame pass.
     ///
     /// Three things the reference does each frame for a **visible** model pane, in this order:
     /// the widget's own `OnUpdate` (`0x76d7f0`, walked by the UI pump with the Lua OnUpdates the

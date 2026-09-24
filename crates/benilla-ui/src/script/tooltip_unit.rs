@@ -5,10 +5,10 @@
 //!   like the reference's `GameTooltip_UnitColor`; the guild line is likewise FrameXML's and
 //!   joins when guild data streams). A name still in flight reads `UNKNOWNOBJECT`, never an
 //!   empty line — the builder's name read is `0x609210`, the same resolver `UnitName` uses, and
-//!   its miss tail is the same string (decisions 2002/2040);
+//!   its miss tail is the same string;
 //! - the creature SUBTITLE ("Stable Master") — white;
 //! - the LEVEL line, filled from three slots into one of the four `TOOLTIP_UNIT_LEVEL*` templates
-//!   the player's own `GlobalStrings.lua` carries (decision 2045 — the keys are the builder's,
+//!   the player's own `GlobalStrings.lua` carries (the keys are the builder's,
 //!   read off `0x52a622`/`0x52a64d`/`0x52a682`/`0x52a6ac`, never matched on their English):
 //!   level text (`"??"` for a world boss, a much-higher hostile, or level ≤ 0 — the hostile
 //!   delta is INTERIM at +10 pending a byte pin of the comparison), the class slot (the creature
@@ -49,7 +49,7 @@ const LOCK_OPEN: [f32; 4] = [64.0 / 255.0, 192.0 / 255.0, 64.0 / 255.0, 1.0];
 /// Unit names render gold (byte-verified `0xffffd200`); FrameXML recolors line 1 by reaction.
 const GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
 
-/// A GameObject tooltip line's colour, as the builder `0x52aa20` picks it (decision 0756). The
+/// A GameObject tooltip line's colour, as the builder `0x52aa20` picks it. The
 /// app half decides *which* line gets which tint from the lock law; this enum is only the
 /// crate-boundary spelling, so the colour constants stay private to the UI engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +82,7 @@ fn rank_key(rank: u32) -> Option<&'static str> {
 }
 
 /// The level line — three slots over the four `TOOLTIP_UNIT_LEVEL*` templates, each resolved off
-/// the player's own `GlobalStrings.lua` (decision 2045). The keys are the builder's own, pushed at
+/// the player's own `GlobalStrings.lua`. The keys are the builder's own, pushed at
 /// `0x52a622` (`_CLASS_TYPE`), `0x52a64d` (`_CLASS`), `0x52a682` (`_TYPE`) and `0x52a6ac` (the
 /// bare one) — which matters, because `TOOLTIP_UNIT_LEVEL_CLASS`'s enUS "Level %s %s" is also the
 /// wording of `FRIENDS_LEVEL_TEMPLATE`, `UNIT_TYPE_LEVEL_TEMPLATE` and `CHARACTER_SELECT_INFO`,
@@ -171,7 +171,7 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     // (`CGUnit+0xb30`) is still null, a pet whose `petnamecache.wdb` row is absent or stale, a
     // player row `namecache.wdb` has not answered — falls to the SAME
     // `FrameScript_GetText("UNKNOWNOBJECT")` tail `UnitName` falls to. One seam, one resolver
-    // ([`unknownobject`], decisions 2002/2040), so the verb and the plate can never disagree.
+    // ([`unknownobject`]), so the verb and the plate can never disagree.
     //
     // The builder has no counterpart to `UnitName`'s two nils: the `"player"` fast path is the
     // *binding's* (`0x517083`, before any resolve), and a token resolving to GUID 0 never reaches
@@ -375,7 +375,7 @@ impl super::UiScript {
     /// (decisions 0276 / **0756**): the NAME (gold) followed by the lock lines the caller
     /// resolved, each with its own tint.
     ///
-    /// **The anchor FORKS per object — it is not uniform** (decision 0766, correcting 0756). The
+    /// **The anchor FORKS per object — it is not uniform** (correcting 0756). The
     /// publisher's GameObject leg calls the picked object's `[obj->vtbl+0x5c]` and branches:
     ///
     /// - **true** (`0x492a01`) → `0x52ffe0(owner, 6, 0, 0)` — anchor-state **6**, the *cursor*
@@ -412,7 +412,7 @@ impl super::UiScript {
             // flag. Compare-then-touch so a still pointer never re-layouts.
             Some((ui_x, ui_y)) => {
                 let mut model = self.model_mut();
-                // **The OWNER, which this arm used to skip** (decision 2255). The
+                // **The OWNER, which this arm used to skip**. The
                 // reference's cursor arm is `0x492a01 → 0x52ffe0(owner, 6, 0, 0)` — the SetOwner
                 // CORE, not a bare re-anchor — and the core's `0x53000c` stores that owner into
                 // `+0x314`. Every OTHER world plate we build reaches an owner by accident: the

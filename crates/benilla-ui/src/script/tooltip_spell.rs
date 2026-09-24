@@ -28,9 +28,9 @@ use super::tooltip::{append_line, clear_content, fire_cleared};
 use super::{CraftTooltip, Model, TrainerTooltip};
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-/// The rank column's gray — byte-verified `0xff808080` (0276).
+/// The rank column's gray — byte-verified `0xff808080`.
 const GRAY: [f32; 4] = [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0];
-/// The description gold — byte-verified `0xffffd200` (0276).
+/// The description gold — byte-verified `0xffffd200`.
 const GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
 
 /// One spell's tooltip view — every string app-resolved (the $-engine's output for the
@@ -103,7 +103,7 @@ impl super::UiScript {
 }
 
 /// Look up the store; a miss records the ask. `pub(super)` for the talent tooltip's shared use
-/// (its display + next-rank spells ride this same ask-once channel — decision 0304).
+/// (its display + next-rank spells ride this same ask-once channel).
 pub(super) fn spell_view_of(lua: &Lua, spell_id: u32) -> Option<SpellTooltipView> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let v = model.spell_tooltips.get(&spell_id).cloned();
@@ -113,7 +113,7 @@ pub(super) fn spell_view_of(lua: &Lua, spell_id: u32) -> Option<SpellTooltipView
     v
 }
 
-/// The talent interleave for [`render_spell`] (decision 0304; the builder's own talent params —
+/// The talent interleave for [`render_spell`] (the builder's own talent params —
 /// `TOOLTIP_TALENT_RANK 0x854a2c` / `TOOLTIP_TALENT_LEARN 0x8549f8`): the white "Rank r/m" after
 /// the name, the red requirement lines while locked (position CONFIRMED — decision 0305's residue:
 /// matches the builder law, after the rank line), the "Next rank:" block, and the green learn hint.
@@ -121,7 +121,7 @@ pub(super) fn spell_view_of(lua: &Lua, spell_id: u32) -> Option<SpellTooltipView
 pub(super) struct TalentLines {
     /// `TOOLTIP_TALENT_RANK` = "Rank %d/%d", already filled by the caller off the player's own
     /// string table. `None` = the table does not carry the key, and the plate shows no rank row
-    /// (decision 2045 — never an invented one).
+    /// (never an invented one).
     pub rank_line: Option<String>,
     pub reqs: Vec<String>,
     /// The next rank's spell id (0 = none) — asked from the spell store when its description
@@ -261,7 +261,7 @@ fn render_spell(
     // The talent tail: the TOOLTIP_TALENT_NEXT_RANK header (white, `0x854a10` pushed at
     // `0x52b2cd`) over the next rank's gold description, and the green learn hint (builder
     // line 13, TOOLTIP_TALENT_LEARN `0x8549f8` at `0x52b362`). Both are keys into the player's
-    // own string table (decision 2045); an install without them shows the description alone
+    // own string table; an install without them shows the description alone
     // rather than a sentence of ours.
     if let Some(t) = talent {
         if let Some(next) = &t.next_desc {
@@ -287,7 +287,7 @@ fn render_spell(
     Ok(())
 }
 
-/// The talent tooltip's entry (decision 0304 — `GameTooltip:SetTalent`'s render half): the
+/// The talent tooltip's entry (`GameTooltip:SetTalent`'s render half): the
 /// display spell through the shared store + the talent interleave. A missing next-rank view is
 /// re-asked so the hover's re-enter completes the block.
 pub(super) fn set_spell_with_talent(
@@ -390,7 +390,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // split 1031 built.
     //
     // Before the fork, a pet-book hover indexed the PLAYER's slot list, so hovering the imp's first
-    // spell showed the player's first spell — "Attack", crit line and all (decision 1050).
+    // spell showed the player's first spell — "Attack", crit line and all.
     m.set(
         "SetSpell",
         lua.create_function(|lua, (this, book_id, book_type): (Table, u32, Value)| {
@@ -423,7 +423,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             set_spell_by_id(lua, &this, spell_id, name, SpellRenderOpts::default(), None)
         })?,
     )?;
-    // GameTooltip:SetPetAction(index) — the pet-bar hover (decision 0982). Only ever reached for a
+    // GameTooltip:SetPetAction(index) — the pet-bar hover. Only ever reached for a
     // SPELL slot: the reference's `PetActionButton_OnEnter` builds a token slot's tooltip inline
     // from `tooltipName`/`tooltipSubtext` and never calls this. A slot with no spell (a token, an
     // empty slot, an out-of-range index) is a no-op, leaving whatever was shown — the same shape

@@ -277,7 +277,7 @@ fn set_alpha_overwrites_the_subtree() {
 
 /// The tooltip registry is exactly the live GameTooltips — including when one dies as somebody
 /// else's child, which is the case a registry maintained only at the explicit `destroy` call site
-/// would miss. Three hot paths read it instead of scanning the resolve's roster (decision 1634), so
+/// would miss. Three hot paths read it instead of scanning the resolve's roster, so
 /// a stale entry is a dangling handle in the layout pre-pass, not a cosmetic drift.
 #[test]
 fn the_tooltip_registry_tracks_live_gametooltips() {

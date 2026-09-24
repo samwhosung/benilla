@@ -5,7 +5,7 @@
 //! cargo run -q -p benilla-ui --example dump_globals --members  # ...the stdlib TABLES' members too
 //! ```
 //!
-//! **The point is that it is a run, not a grep** (decisions 1188, 1189). Every wrong number in the
+//! **The point is that it is a run, not a grep**. Every wrong number in the
 //! addon arc came from measuring our API surface by pattern-matching Rust source: a regex over
 //! `.set("Name", …)` misses the Lua prelude, miscounts a `format!`-registered family, and cannot
 //! see what the sandbox removed. When the question is what a running system exposes, ask the
@@ -16,7 +16,7 @@
 //! deterministic, needs no install, and is exactly what `scripts/api-coverage.sh` compares against
 //! `reference/1.12-globals.tsv`'s `engine` and `lua` rows.
 //!
-//! ## `--members`, and the blind spot it closes (decision 1194)
+//! ## `--members`, and the blind spot it closes
 //!
 //! `_G` is not the whole surface an addon can tell apart. `table.setn` is not a global — it is a
 //! member of the `table` table — and it stopped **61 of 218** real addons dead, because mlua's Lua
@@ -25,7 +25,7 @@
 //! gap wide open. `--members` prints `table.setn`-style rows for the stdlib tables, so the dialect
 //! is measurable the same way the API surface is.
 //!
-//! It also prints the **per-type metatables** (decision 2171), which is the same blind spot one
+//! It also prints the **per-type metatables**, which is the same blind spot one
 //! layer further down and stayed open longer because a metatable is not a *name*: 5.1 gives the
 //! string type one and 5.0 cannot have one, so `("x"):upper()` worked here and raised on the
 //! reference for as long as nothing thought to look.

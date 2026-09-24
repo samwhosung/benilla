@@ -1,12 +1,12 @@
 //! The guild-charter **Era API surface** — the guild registrar and the petition window
-//! (decision 1672, **re-derived against the byte law in 1678**).
+//! (**re-derived against the byte law in 1678**).
 //!
 //! [`super::guild`] is *being* in a guild; this is *founding* one, which 1257 §2 deliberately left
 //! out and named as the next slice. Fifteen registered globals across two windows (the three tabard
 //! ones are the adjacent family and are not built), and the same shape as every other domain here:
 //! the app pushes a [`PetitionState`] snapshot ([`UiScript::set_petition`]) and the getters read
 //! that plain data; every verb queues a [`PetitionRequest`] the app drains
-//! ([`UiScript::take_petition_requests`]). No ECS or net reach from the engine (decision 0068 §3).
+//! ([`UiScript::take_petition_requests`]). No ECS or net reach from the engine.
 //!
 //! Every contract below is byte-verified against the whole `PetitionInfo.cpp` TU (`0x84cfb8`).
 //! Where it corrected what this file first shipped, the correction is named on the binding.

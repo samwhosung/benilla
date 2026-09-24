@@ -55,7 +55,7 @@
 //! 0x701d80`, read the count from the registering `mov edx`, read the pairs at `base + 8*i`, and
 //! settle "which table owns method M" by counting image-wide dword references to M's name VA.
 //!
-//! ## The clock is the engine's; the pixels are the host's (decision 2007)
+//! ## The clock is the engine's; the pixels are the host's
 //!
 //! A pane's animation state is not "a sequence index the host interprets": the reference widget
 //! owns a private `CM2Scene` whose clock its own `OnUpdate` advances, arms sequences through
@@ -102,7 +102,7 @@ impl Model {
         768.0 * (a * a + 1.0).sqrt()
     }
 
-    /// The **implicit rect** (decision 2015): a model pane that authored no size takes its
+    /// The **implicit rect**: a model pane that authored no size takes its
     /// file's bounding-box extent, in layout units, as its size — the reference's geometry
     /// overrides (`0x76d080`/`0x76d0d0`) answer the bbox whenever no size is authored, and its
     /// layout consumes them like any size. Written into the layout input when the facts are
@@ -406,7 +406,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "ClearModel",
         lua.create_function(|lua, this: Table| with_model(lua, &this, ModelState::clear_file))?,
     )?;
-    // ── Animation (decision 2007) ───────────────────────────────────────────────────────────
+    // ── Animation ───────────────────────────────────────────────────────────
     //
     // Both verbs are the same arm, `0x7121a0(model, -1, id, 0, ms, 1.0f, 0, 1)` — `SetSequence`
     // with `ms = 0` (`0x76dec0` → `0x76cf50`), `SetSequenceTime` with the caller's `ms`
@@ -538,7 +538,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // `[0,1]` clamp as the components, not a flag. It is **guarded with a default of
                 // `1.0`** where r/g/b are read unconditionally and yield `0.0` when absent, so
                 // `SetFogColor(r, g, b)` sets alpha 1.0. Getting that backwards renders the fog
-                // invisible. Decision 1845.
+                // invisible.
                 let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
                 let a = a.as_ref().map_or(1.0, num);
                 let packed = (q(a) << 24) | (q(num(&r)) << 16) | (q(num(&g)) << 8) | q(num(&b));
@@ -555,7 +555,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetFogColor",
         lua.create_function(|lua, this: Table| {
             // FOUR values, always — the packed dword unpacked. Never set reads `1, 1, 1, 1`,
-            // because the `CSimpleModel` ctor's terminal write is `0xffffffff` (decision 1845).
+            // because the `CSimpleModel` ctor's terminal write is `0xffffffff`.
             let packed = with_model(lua, &this, |m| m.fog_color)?;
             let ch = |shift: u32| f64::from((packed >> shift) & 0xff) / 255.0;
             Ok((ch(16), ch(8), ch(0), ch(24)))
@@ -752,7 +752,7 @@ impl crate::script::UiScript {
         self.model_pane(name).map_or(0.0, |m| m.facing)
     }
 
-    /// The host hands over what it knows about a model **file** (decision 2007): its sequences
+    /// The host hands over what it knows about a model **file**: its sequences
     /// and bounds, read off the loaded asset. Every pane holding that file then runs the
     /// reference's residency completion — the loader's Stand seed for a pane that was waiting,
     /// the ownership check for an arm that was queued ([`ModelState::seed_from_facts`]) — and
@@ -784,7 +784,7 @@ impl crate::script::UiScript {
     }
 
     /// The screen's aspect moved: every implicit rect is measured in layout units, which scale
-    /// with `√(a²+1)`, so each one is re-derived (decision 2015). An authored size is untouched.
+    /// with `√(a²+1)`, so each one is re-derived. An authored size is untouched.
     pub(crate) fn reapply_implicit_rects(&mut self) {
         let mut model = self.model_mut();
         let panes: Vec<FrameHandle> = model
@@ -817,7 +817,7 @@ impl crate::script::UiScript {
 
     /// **The paint list**: every effectively-visible model pane holding a file whose facts the
     /// engine has — with its scene clock and, when something is armed, its play head. The host's
-    /// renderer reads this once per frame (decision 2008) instead of the extract carrying a
+    /// renderer reads this once per frame instead of the extract carrying a
     /// cursor that moves every tick (`QuadContent::ModelPane`'s doc says why). Handle order —
     /// the arena's registry order, stable across frames.
     pub fn visible_model_panes(&self) -> Vec<ModelPaneFrame> {
@@ -839,7 +839,7 @@ impl crate::script::UiScript {
                 // The reference's draw gate (`76d5f0 cmp [this+0x320],-1 ; jne`): a pane whose
                 // camera question is still open paints NOTHING — not the model, not its
                 // `OnUpdateModel`. Reachable from Lua by `SetCamera(n)` on a pane whose file has
-                // not landed yet (decision 2027).
+                // not landed yet.
                 if m.camera_pending.is_some() {
                     return None;
                 }

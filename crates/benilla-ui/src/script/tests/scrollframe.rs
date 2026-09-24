@@ -1,4 +1,4 @@
-//! ScrollFrame (decision 0112 — the ScrollFrame mechanism): the scroll-child layout override, the
+//! ScrollFrame (the ScrollFrame mechanism): the scroll-child layout override, the
 //! live vertical-scroll range, the ScrollFrame clip on `extract`, and the clip-gated `hit_test`.
 
 use super::common::script;
@@ -74,7 +74,7 @@ fn get_scroll_child_roundtrips_wrapper_and_name_and_clears_on_nil() {
 
 /// The sign convention (verified against the design's own worked example): frame top 500, vertical
 /// 40 ⇒ child top 540. Also covers 0, an offset PAST the range and one below zero — both stored and
-/// applied verbatim, since the reference's `0x786db0` never reads the range (decision 2017) — and
+/// applied verbatim, since the reference's `0x786db0` never reads the range — and
 /// that `SetScrollChild(nil)` restores the child's own authored anchor (never mutated — the
 /// override is a local map).
 #[test]
@@ -293,7 +293,7 @@ fn vertical_scroll_range_is_local_units_on_a_scaled_frame() {
     );
 }
 
-/// `OnVerticalScroll` carries the value AS STORED — past the range too (decision 2017: the
+/// `OnVerticalScroll` carries the value AS STORED — past the range too (the
 /// reference's `0x786db0` fires with `[+0x328]`, which it never clamps) — under the reference's
 /// handler-firing conventions (`0x704f10`), and `UpdateScrollChildRect` fires
 /// `OnScrollRangeChanged` with the live range.
@@ -436,7 +436,7 @@ fn extract_clips_the_scroll_childs_whole_subtree_and_leaves_a_sibling_unclipped(
     );
 }
 
-/// Nested ScrollFrames intersect their rects (decision 0112 §4): an inner ScrollFrame living inside
+/// Nested ScrollFrames intersect their rects: an inner ScrollFrame living inside
 /// an outer one's scroll child clips its own content to the intersection of both rects, not just
 /// the innermost.
 #[test]
@@ -509,7 +509,7 @@ fn nested_scrollframes_intersect_their_clip_rects() {
     );
 }
 
-/// Hit-testing (decision 0112 §5): a button inside the scroll child, scrolled out of the frame's
+/// Hit-testing: a button inside the scroll child, scrolled out of the frame's
 /// rect, must not hit even though its own resolved rect contains the cursor; scrolled into view, it
 /// hits normally.
 #[test]

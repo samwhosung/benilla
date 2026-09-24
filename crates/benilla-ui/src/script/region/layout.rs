@@ -18,7 +18,7 @@ use super::{
 /// Populate `m`'s layout methods (see the module doc).
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // Region explicit size — fills the axes the region's anchors don't pin (unread under an
-    // implicit SetAllPoints's two corners; decision 1310).
+    // implicit SetAllPoints's two corners).
     set_shared(
         lua,
         m,
@@ -32,7 +32,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let changed = !size_bits_eq(d.size, new);
             d.size = new;
             if changed {
-                // A size write moves no edge and no roster membership (decision 1388) — and on
+                // A size write moves no edge and no roster membership — and on
                 // a FontString the width is the WRAP width, a measure-key input, so it names
                 // itself on the measure ledger too.
                 model.touch_layout_region(rh);
@@ -55,7 +55,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let changed = !size_bits_eq(d.size, new);
             d.size = new;
             if changed {
-                // A size write moves no edge and no roster membership (decision 1388) — and on
+                // A size write moves no edge and no roster membership — and on
                 // a FontString the width is the WRAP width, a measure-key input, so it names
                 // itself on the measure ledger too.
                 model.touch_layout_region(rh);
@@ -66,7 +66,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // **No `SetSize`** — the frame twin's note in `object/layout_methods.rs` applies here
-    // unchanged: an Era verb 1.12's Region map does not carry (decision 2142).
+    // unchanged: an Era verb 1.12's Region map does not carry.
 
     set_shared(lua, m, Side::Region, "GetWidth", |lua, this: Table| {
         Ok(measured_wh(lua, &this)?.0)
@@ -79,8 +79,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // GetLeft/GetRight/GetTop/GetBottom — the region's RESOLVED edges in its OWNER's units (y-up;
     // screen ÷ the owner's effective scale, the frame twin's law in `object/layout_methods.rs` —
     // a region shares its owner's scale, and a texture inside the scaled world map answered
-    // screen units here while its owner answered local ones, decision 1985). Every drawable
-    // region carries anchors (authored or the creation-path implicit anchor, decision 1310) and
+    // screen units here while its owner answered local ones). Every drawable
+    // region carries anchors (authored or the creation-path implicit anchor) and
     // reads its resolved rect; a templateless Lua region nobody anchored never resolves → nil,
     // same as pre-resolve.
     for (name, pick) in [

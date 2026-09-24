@@ -1,4 +1,4 @@
-//! The **inspect** surface (decision 0631) — the intent queues behind the ref's
+//! The **inspect** surface — the intent queues behind the ref's
 //! `NotifyInspect`/`ClearInspectPlayer`, and the foreign-unit equipment view the unit-keyed
 //! `GetInventoryItem*` family reads through.
 //!
@@ -71,13 +71,13 @@ pub struct UnitReach {
     /// must not read this, or following an enemy player would gray a row the reference leaves live.
     ///
     /// `sObjectMgr.GetPlayer` is the whole is-it-a-player leg, and it lives **here** rather than in
-    /// the map's membership: the map is fed for every held unit, creature included (B304), so a
+    /// the map's membership: the map is fed for every held unit, creature included, so a
     /// boar 3 yards away is `inspectable: false` while still answering `CheckInteractDistance`
     /// truthfully.
     pub inspectable: bool,
 }
 
-/// What the app has resolved for the unit currently being inspected (decision 0631).
+/// What the app has resolved for the unit currently being inspected.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InspectView {
     /// The unit token the frame is inspecting — the ref's `InspectFrame.unit` (`"target"`,

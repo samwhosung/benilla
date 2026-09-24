@@ -1,4 +1,4 @@
-//! The drag gesture (decision 0216 §3) — `RegisterForDrag`/`OnDragStart`/`OnDragStop`/
+//! The drag gesture — `RegisterForDrag`/`OnDragStart`/`OnDragStop`/
 //! `OnReceiveDrag`'s mechanics: arm on press, start past a threshold, resolve on release. Split
 //! out of [`super`] purely for size — [`super::pointer`](crate::script::pointer) is the only
 //! external caller (via [`super`]'s re-exports), and the payload types/transition seam this
@@ -76,7 +76,7 @@ pub(crate) fn maybe_start_drag(model: &mut Model, pos: (f32, f32)) -> Option<(u3
     // un-presses (`0x779410`, guarded on `locked == 0 && state != DISABLED`) and then forwards to
     // the base notify that fires `<OnDragStart>`. So a button you drag off releases its pushed art
     // at the THRESHOLD crossing, which is here — not when the cursor leaves its rect, and not for
-    // a frame that never registered for drag (decision 2134).
+    // a frame that never registered for drag.
     super::super::button::edge(model, source, crate::widget::ButtonState::on_drag_start);
     let id = model
         .arena
@@ -98,7 +98,7 @@ pub(crate) fn maybe_start_drag(model: &mut Model, pos: (f32, f32)) -> Option<(u3
 /// merely cancelled: the addon's `OnDragStop → StopMovingOrSizing` never runs, so the engine's
 /// single [`Model::moving`] slot stays taken, [`super::super::object::movable::advance_move`]
 /// keeps gluing that frame to the cursor for the rest of the session, and it swallows every press
-/// aimed at anything underneath. (B310 — the raid grid, where one drag off the window edge cost
+/// aimed at anything underneath. (the raid grid, where one drag off the window edge cost
 /// every later drag.)
 pub(crate) fn abandon_drag(model: &mut Model) -> Option<FrameHandle> {
     model.drag.take().filter(|g| g.started).map(|g| g.source)
@@ -451,8 +451,8 @@ mod tests {
         );
     }
 
-    /// A world object (unit/GameObject) under the cursor suppresses the world drop entirely
-    /// (decisions 0571 + 0574): the reference's object-leg dispatcher (`0x492ce0`) keeps every
+    /// A world object (unit/GameObject) under the cursor suppresses the world drop entirely:
+    /// the reference's object-leg dispatcher (`0x492ce0`) keeps every
     /// real payload and runs SELECT — no `DELETE_ITEM_CONFIRM`, payload untouched. The app
     /// feeds the pick (`set_world_pick`); tests/captures default `Nothing`.
     #[test]
@@ -571,7 +571,7 @@ mod tests {
     }
 
     /// **A drag the pointer carries out of the window ENDS, and the frame it was moving stops
-    /// following the cursor** (B310).
+    /// following the cursor**.
     ///
     /// The reference cannot reach this state — the OS holds the pointer for a button-held drag, so
     /// the release always arrives — which is exactly why nothing in FrameXML defends against it and

@@ -28,7 +28,7 @@
 //! ## The load law lives next door
 //!
 //! Every "can this load, and why not" answer comes from [`super::addon_gate`] — the reference's
-//! `AddOn_CanLoad 0x51e780` as one pure function (decision 1292). What 1191 §6 was missing has
+//! `AddOn_CanLoad 0x51e780` as one pure function. What 1191 §6 was missing has
 //! now landed: the version gate is an
 //! exact `== 11200` whose refusal the `checkAddonVersion` CVar suppresses by **actively
 //! resetting** the reason — so `INTERFACE_VERSION` is now enforced here exactly as the client
@@ -89,7 +89,7 @@ pub struct AddOnInfo {
     /// Has it loaded this session?
     pub loaded: bool,
     /// `## Interface` as the client parses it (`Toc::interface_version` — the leading integer,
-    /// `0` when the line is absent). What the version gate compares (decision 1292).
+    /// `0` when the line is absent). What the version gate compares.
     pub interface: u32,
     /// **The server excluded this record from the Lua index space** — `[rec+0x29]`, which
     /// `AddOn_ReadAddonInfoReply 0x51da70` sets to 1 for every `SMSG_ADDON_INFO` record whose
@@ -173,7 +173,7 @@ fn addon_key(lua: &Lua, model: &Model, key: &Value, usage: &'static str) -> mlua
         // `_ftol 0x40a2b0` truncates toward zero (not `floor`), then `dec eax`, then an unsigned
         // compare — so the whole out-of-range family collapses onto one `u32` bound test.
         let index0 = (n as i64 as i32).wrapping_sub(1) as u32 as usize;
-        // **The index space is NOT the registry** (decision 2175). `0x51df00` reads
+        // **The index space is NOT the registry**. `0x51df00` reads
         // `[[0xbe1b94] + 4*idx]` — the flat, Title-sorted, hidden-filtered name array — and its
         // bound is that array's own count `[0xbe1b90]`, which `GetNumAddOns 0x51def0` returns.
         // The registry list is a different order over a different set.
@@ -194,8 +194,7 @@ fn addon_key(lua: &Lua, model: &Model, key: &Value, usage: &'static str) -> mlua
 }
 
 /// **Rebuild the Lua index space** — the tail block `[0x51dc30, 0x51dcdf)` of
-/// `AddOn_ReadAddonInfoReply 0x51da70`, and the only place that array is ever built
-/// (decision 2175).
+/// `AddOn_ReadAddonInfoReply 0x51da70`, and the only place that array is ever built.
 ///
 /// Three properties, all byte-read, all easy to get wrong:
 ///
@@ -249,7 +248,7 @@ fn row_of(model: &Model, key: &AddonKey) -> Option<usize> {
 }
 
 /// Lower the registry into the gate's rows — ONE adapter, so every verb consults the same law
-/// ([`super::addon_gate`], decision 1292) over the same facts.
+/// ([`super::addon_gate`]) over the same facts.
 fn gate_rows(model: &Model) -> Vec<GateRow<'_>> {
     model
         .addons
@@ -305,7 +304,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetNumAddOns",
         lua.create_function(|lua, ()| {
             // `0x51def0` is six bytes: `return [0xbe1b90]` — the count of the SORTED array, not the
-            // registry size (decision 2175).
+            // registry size.
             Ok(lua
                 .app_data_ref::<Model>()
                 .expect("model")
@@ -344,7 +343,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetAddOnInfo",
         lua.create_function(|lua, key: Value| {
             let model = lua.app_data_ref::<Model>().expect("model");
-            // **The two argument forms miss differently** (decision 1845). The numeric one cannot
+            // **The two argument forms miss differently**. The numeric one cannot
             // reach here at all — [`addon_key`] has already raised the range error for it.
             let i = match addon_key(lua, &model, &key, USAGE_INFO)? {
                 AddonKey::Index(i) => i,
@@ -369,7 +368,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     }
                 },
             };
-            // The one arbiter (decision 1292): loaded short-circuit, then `AddOn_CanLoad` in the
+            // The one arbiter: loaded short-circuit, then `AddOn_CanLoad` in the
             // in-game flavour — so NOT_DEMAND_LOADED and INTERFACE_VERSION are reachable here,
             // exactly as `0x48e390` reports them.
             let reason = verdict(&model, i).token();
@@ -569,7 +568,7 @@ fn load_addon(lua: &Lua, i: usize) -> Result<(), String> {
     if already {
         return Ok(()); // the reference answers a redundant load with success, not an error
     }
-    // The one arbiter (decision 1292): the reference's own shape — `LoadAddOn 0x48e980` refuses
+    // The one arbiter: the reference's own shape — `LoadAddOn 0x48e980` refuses
     // through `AddOn_CanLoad` (via `AddOn_Load`'s step 3) and re-derives the reason from the
     // same gate on failure. The version gate is in here now: an out-of-date addon demand-loads
     // only under force-load, exactly as `0x48ea8c` records.
@@ -595,7 +594,7 @@ fn load_addon(lua: &Lua, i: usize) -> Result<(), String> {
     };
 
     // ── The *loaded* stamp goes HERE, before the dependency walk — and it is the whole reason a
-    // dependency cycle terminates (decision 2139).
+    // dependency cycle terminates.
     //
     // `AddOn_Load 0x51f240` carries **no re-entrancy guard of its own**: an image-wide census of
     // the visiting byte `[UIADDON+0x2d]` puts every live site inside `AddOn_CanLoad 0x51e780`
@@ -905,8 +904,7 @@ impl super::UiScript {
     }
 
     /// **The `SMSG_ADDON_INFO` (`0x2ef`) verdict** — the names the server answered `status = 2`
-    /// for, which the client stores as `[rec+0x29] = 1` and which the Lua index array then drops
-    /// (decision 2175).
+    /// for, which the client stores as `[rec+0x29] = 1` and which the Lua index array then drops.
     ///
     /// The reply carries no count and no names: it is one record per `## Secure:` addon, in the
     /// order the client itself sent them in `CMSG_AUTH_SESSION`, so the caller does the pairing

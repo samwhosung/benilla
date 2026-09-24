@@ -28,12 +28,12 @@
 //!
 //! The mouse/selection/caret half (click→index `0x77d0d0`, drag `0x77a860`, the clipboard pair,
 //! the 0.5 s blink, the char-granular scroll window) lives in [`interact`]/[`seam`] over the
-//! host-answered advance table — decision 0298. The OS clipboard itself stays host-side (this
+//! host-answered advance table. The OS clipboard itself stays host-side (this
 //! crate is engine-free): paste text arrives via [`paste`], copy/cut strings return through
 //! `UiScript::editbox_copy`/`editbox_cut`; Ctrl+A arrives as the SOH control char.
 //!
 //! Editing keys reach the box as semantic [`EditAction`]s ([`action`]) — the *host's* per-OS
-//! keymap decides which physical chord means which action (decision 0301), while the effect of
+//! keymap decides which physical chord means which action, while the effect of
 //! each action stays this module's byte-verified law. [`key_input`] keeps only the three
 //! box-event keys (ENTER/ESCAPE/TAB).
 //!
@@ -43,7 +43,7 @@
 //!   placeholder literal) are flagged where they live — decision 0298's list.
 //! - **Word/edge deletes** (`Delete{Word,Edge}`) have no 1.12 counterpart at all — they exist for
 //!   the host's OS-native keymaps (Option/Cmd+Backspace on macOS, Ctrl+Backspace/Delete on
-//!   Windows/Linux; decision 0301) and reuse the byte-verified word classes + selection-first
+//!   Windows/Linux) and reuse the byte-verified word classes + selection-first
 //!   delete law.
 
 use mlua::{Lua, Table, Value};
@@ -77,7 +77,7 @@ pub(super) fn char_input(lua: &Lua, text: &str) -> bool {
         // A printable char (or string); pure control input is consumed but not inserted.
         //
         // A typed `|` goes in as `||` — OnChar `0x77c200` pushes the literal at `0x879cac`, which
-        // is `"||"` (decision 1077). That is why real markup can only enter a box through
+        // is `"||"`. That is why real markup can only enter a box through
         // `SetText`, `Insert`, a paste or the C++ link-insert path: you cannot type an escape, and
         // the doubled form draws as one `|` and counts as one letter.
         insert(lua, h, &text.replace('|', "||"), true);
@@ -129,7 +129,7 @@ pub(super) fn key_input(lua: &Lua, key: &str) -> bool {
     true
 }
 
-/// One semantic editing operation — the host's per-OS keymap output (decision 0301). Same
+/// One semantic editing operation — the host's per-OS keymap output. Same
 /// routing/consumption law as [`key_input`]: the focused (or self-acquiring if needed) box
 /// processes it; no box → not consumed.
 pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
@@ -158,7 +158,7 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
         // restored past the newest. Single-line only (benilla's multiLine box has no vertical
         // caret nav — survey gap — a multiLine box consumes the step inert). The recall chords
         // are the host keymap's plain Up/Down (the reference's own history controller is
-        // untraced; decision 0301). The alt-arrow gate DOES cover them, upstream: UP and DOWN are
+        // untraced). The alt-arrow gate DOES cover them, upstream: UP and DOWN are
         // two of the four codes it declines, so on a flagged box — which the reference's own chat
         // box is — history recall is **Alt**+Up/Down and a plain Up/Down turns the camera. This
         // file used to say the opposite ("`ignoreArrows` does not gate them"), which followed
@@ -268,7 +268,7 @@ fn set_focus_handle(lua: &Lua, h: FrameHandle) {
 /// - **Hide** (`0x77a780`): tail-jumps `ClearFocus`, whose own guard makes it per-box — hiding a
 ///   box that does not hold the keyboard writes nothing and fires nothing.
 ///
-/// Both were missing until 2026-08-29 (decision 1686).
+/// Both were missing until 2026-08-29.
 pub(super) fn visibility_focus(lua: &Lua, h: FrameHandle, visible: bool) {
     if !visible {
         // The guard lives in `clear_focus_handle`, exactly as it does in `0x77e410` — so this is

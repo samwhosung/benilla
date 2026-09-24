@@ -1,4 +1,4 @@
-//! The Minimap widget kind (decision 0203): zoom API + the extracted content hole.
+//! The Minimap widget kind: zoom API + the extracted content hole.
 
 use super::common::script;
 use crate::script::*;
@@ -127,7 +127,7 @@ fn minimap_indoor_and_outdoor_zoom_indices_are_independent() {
     );
 }
 
-/// **The level persists** (decision 1131). `SetZoom` writes the live index *and* the matching CVar
+/// **The level persists**. `SetZoom` writes the live index *and* the matching CVar
 /// — `minimapInsideZoom` while inside a WMO, `minimapZoom` outside — the client's own `set_zoom` →
 /// `CVar::Set` pair, which is the whole reason a zoom survives a restart. The host push in the
 /// other direction (the seed) does *not* echo back as a change.
@@ -290,7 +290,7 @@ fn set_mask_texture_is_state_and_empty_restores_the_default() {
         .unwrap();
     assert_eq!(s.minimap_mask_texture(), None);
 
-    // There is no getter in 1.12, and we do not invent one (decision 1189).
+    // There is no getter in 1.12, and we do not invent one.
     assert!(s.eval::<bool>("return m.GetMaskTexture == nil").unwrap());
 }
 

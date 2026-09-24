@@ -91,7 +91,7 @@ impl Slot {
 /// plus its `+0x54` justify cell): the element-level `<NormalFont justifyH=>` when the template
 /// wrote one (a local write on that instance, severed from what it inherits), else what the
 /// instance inherits from its font object, else the ctor default (CENTER). The word the label
-/// adopter anchors by — decision 1996.
+/// adopter anchors by.
 fn normal_font_justify(model: &Model, bs: &ButtonState) -> Justify {
     let mut word = Justify::default();
     let inherited = || {
@@ -113,7 +113,7 @@ fn normal_font_justify(model: &Model, bs: &ButtonState) -> Justify {
 /// the string's own `+0x120`, which on a fresh string is the ctor's CENTER), then apply the
 /// button's per-state font to it on the spot (`0x779810`).
 ///
-/// The word's source is the whole bug this fixes (decision 1996): a `UIMenuButtonTemplate` row
+/// The word's source is the whole bug this fixes: a `UIMenuButtonTemplate` row
 /// has no `<ButtonText>` — its label is born from the reference's `UIMenu_AddButton` →
 /// `button:SetText(text)` — and its `<NormalFont inherits="GameFontNormal" justifyH="LEFT"/>` is
 /// the only thing that puts the label at the row's left edge. Reading the fresh string's own
@@ -175,7 +175,7 @@ fn apply_normal_font(model: &mut Model, owner: FrameHandle) {
         (rh, bs.normal_font.clone(), bs.normal_justify_h)
     };
     // An unregistered name is not an error here: `SetTextFontObject` already accepted it, and the
-    // loader's own log-and-continue rule (0068) owns the reporting.
+    // loader's own log-and-continue rule owns the reporting.
     let fo = name.as_deref().and_then(|n| model.font_object(n).cloned());
     let d = model.region_data.entry(rh).or_default();
     match (&name, fo) {
@@ -231,8 +231,8 @@ pub(crate) fn set_label_font_justify_h_lua(
 
 /// Run `f` over a frame's Button state under one short write borrow.
 ///
-/// **It no longer settles a state machine afterwards, because there is no longer one to settle**
-/// (decision 2134). The button's state is a latch the engine's own edges write; a Lua write moves
+/// **It no longer settles a state machine afterwards, because there is no longer one to settle**.
+/// The button's state is a latch the engine's own edges write; a Lua write moves
 /// it only when the write IS an edge (`Enable`/`Disable`, `SetButtonState`), and those call the
 /// edge themselves. `RegisterForClicks` and the texture setters no longer disturb the state at
 /// all — which is the reference's behaviour: re-registering a held button's clicks does not
@@ -330,7 +330,7 @@ fn set_enabled(lua: &Lua, this: &Table, on: bool) -> mlua::Result<()> {
 /// them are engine-side**: Enable, Disable, the hide
 /// notify, mouse-down, mouse-up and the drag-threshold crossing. There is **no enter or leave
 /// edge** — which is why the pointer path no longer calls anything here when the cursor crosses a
-/// button's boundary (decision 2134).
+/// button's boundary.
 ///
 /// Harmless on a non-Button handle, and on a stale one.
 pub(super) fn edge(model: &mut Model, h: FrameHandle, f: impl FnOnce(&mut ButtonState)) {
@@ -444,13 +444,13 @@ fn ensure_slot(lua: &Lua, this: &Table, slot: Slot) -> mlua::Result<u32> {
                     slot.set(bs, Some(rh));
                 }
             }
-            // A freshly built slot region gets its creation-path implicit anchor (decision 1310)
+            // A freshly built slot region gets its creation-path implicit anchor
             // — an EXISTING slot region is never touched here; the get half of get-or-create
             // changes no geometry. Which anchor depends on the slot: the reference's C++ string
             // setters SetAllPoints a fresh state texture outright (`0x778f9d`/`0x7790db` — fresh
             // means zero anchors, so the conditional form is equivalent), while a fresh LABEL is
             // handed to the adopter (`SetText 0x778dc0` → `0x778d20`), which anchors it by the
-            // button's normal font and links it (decision 1996). The XML loader re-derives after
+            // button's normal font and links it. The XML loader re-derives after
             // applying authored `<Anchors>` (see `loader/widgets.rs`).
             match slot {
                 Slot::Text => adopt_label(&mut model, h, rh),
@@ -625,7 +625,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // never reaches the label at all, so
             // it neither clears the text nor lazily creates the FontString. That guard is the
             // BUTTON's own: a `FontString:SetText(nil)` is not a no-op, it truncates the cell
-            // (`0x771d80`, decision 2110). Below the guard the button is a pass-through to
+            // (`0x771d80`). Below the guard the button is a pass-through to
             // `[button+0x338]->0x771d80`.
             let Some(text) = text else { return Ok(()) };
             let id = ensure_slot(lua, &this, Slot::Text)?;
@@ -636,7 +636,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // GetText — like the FontString's own (`region::text`, decision 2110), an **empty label reads
+    // GetText — like the FontString's own (`region::text`), an **empty label reads
     // back nil**: `Button:GetText 0x780e10` carries the same first-byte substitution at `0x780ec5`,
     // over three nil conditions rather than two (no label region, a NULL cell, an empty cell).
     // Its EditBox neighbour deliberately does not — the law is per binding.
@@ -663,7 +663,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // SetFontString(fontString) — ADOPT a caller-made FontString as this Button's label.
     //
-    // End to end (decision 1505): the binding `0x780a60` is gates + a delegate to
+    // End to end: the binding `0x780a60` is gates + a delegate to
     // `CSimpleButton::SetFontString 0x778d20`, which is the SAME function `SetText`'s lazy creation
     // path funnels through — so adopting and creating share their whole tail, and only the
     // allocation differs.
@@ -1149,7 +1149,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // live mouse-held press, because the state was derived and the press lived outside
             // the widget; now the press *wrote* the state at its edge, so a mouse-held button
             // answers "PUSHED" for the same reason the reference does — and cannot disagree with
-            // the art the way a re-derived answer could (decision 2134). The chat scroll buttons'
+            // the art the way a re-derived answer could. The chat scroll buttons'
             // hold-repeat (ref `MessageFrameScrollButton_OnUpdate`) still reads what it needs.
             with_button(lua, &this, |bs| match bs.button_state() {
                 ButtonVisualState::Disabled => "DISABLED",
@@ -1185,7 +1185,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     c.set(
         "SetChecked",
         lua.create_function(|lua, (this, v): (Table, Value)| {
-            // Numeric coercion, NOT Lua truthiness (decision 0227; `SetChecked 0x799bf0` →
+            // Numeric coercion, NOT Lua truthiness (`SetChecked 0x799bf0` →
             // `0x6f1c10`): a number goes through `lua_tonumber` then a truncate-to-int (`fistp`,
             // round-toward-zero, `0x40a2b0`) and the C++ setter tests `!= 0`. So `SetChecked(0)`
             // UNchecks (0 is Lua-truthy — only a numeric read gets this right) and `SetChecked(1)`
@@ -1349,7 +1349,7 @@ pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripte
             .expect("model app_data")
             .record_script_error(e.to_string());
     }
-    // **A nameplate's click is the engine's too** (decision 2148): the reference's plate overrides
+    // **A nameplate's click is the engine's too**: the reference's plate overrides
     // the button click slot (`0x7cb910`) *and* chains the base, so its unit is selected whether the
     // click came from the pointer or from Lua's own `Click()` — this funnel is both. Recorded after
     // the handler, like the loot take below and for the same reason: an addon hook that errors

@@ -1,5 +1,5 @@
 //! The Lua scripting host — the engine-free VM that turns the arena/layout/order *model* into a
-//! live, addon-facing runtime (decision 0068). No Bevy, no GPU: this module embeds mlua's Lua 5.1
+//! live, addon-facing runtime. No Bevy, no GPU: this module embeds mlua's Lua 5.1
 //! (the Classic Era version) and wires it to [`crate::widget`]'s frame arena, [`crate::layout`]'s
 //! anchor resolver, and [`crate::order`]'s draw-order traversal, exposing the WoW FrameScript object
 //! model and the slice-of stdlib addons expect.
@@ -15,7 +15,7 @@
 //!   (nesting-safe). We also pass the *modern* `(self, event, ...)` arguments the Era addons expect
 //!   (the transition-era client did both). See [`event`].
 //!
-//! ## The `LUAI_MAXCSTACK` discipline (decision 0068, probe A)
+//! ## The `LUAI_MAXCSTACK` discipline (probe A)
 //!
 //! Probe A found the hard constraint that Rust must **never** hold thousands of persistent mlua
 //! handles (each owned `Table`/`Function` occupies a slot on mlua's reference thread, capped by the
@@ -92,7 +92,7 @@ mod tabard;
 pub use handler_prof::HandlerRow;
 
 /// The widget-method surface measurement — shared by the `dump_widget_methods` example and the
-/// widget-surface gate (decision 2142).
+/// widget-surface gate.
 mod surface;
 pub use surface::widget_method_census;
 mod inspect;
@@ -127,7 +127,7 @@ mod quest;
 mod quest_log;
 pub(crate) mod region;
 /// The 19 Region-map methods, shared by frames and regions the way the reference shares them
-/// (decision 1501) — its header is the byte-verified chain and the bug that found the split.
+/// — its header is the byte-verified chain and the bug that found the split.
 mod region_map;
 mod reputation;
 mod saved;
@@ -161,7 +161,7 @@ mod types;
 mod unit;
 mod weapon_enchant;
 /// The `/who` list's seven-key sort chain and its comparator — its header is the whole
-/// mechanism, including why a repeated header click reverses (decision 2030).
+/// mechanism, including why a repeated header click reverses.
 mod who_sort;
 mod worldmap;
 mod worldstate;
@@ -441,17 +441,17 @@ pub const SCREEN: crate::layout::Handle = 0;
 /// The FrameScript handler kinds this host models. The first five are the lifecycle/event set; the
 /// six mouse handlers are driven by the hit-testing API in [`pointer`] ([`UiScript::mouse_move`] /
 /// [`mouse_button`](UiScript::mouse_button) / [`mouse_wheel`](UiScript::mouse_wheel)) — the app-side
-/// event feed (net/window → these calls) is the Bevy side's job (decision 0068). `OnValueChanged`
-/// is shared by the StatusBar (`+0x32c`) and the Slider (`+0x330`; decision 0250) — one name,
+/// event feed (net/window → these calls) is the Bevy side's job. `OnValueChanged`
+/// is shared by the StatusBar (`+0x32c`) and the Slider (`+0x330`) — one name,
 /// each kind dispatching to its own value-changed slot. The eight
 /// `On*Pressed`/text/focus slots are the EditBox's specialized scripts (vtable `0x81c910`): a
 /// focused EditBox fires ONLY these, never generic `OnKeyDown`/`OnChar` (its C++ override replaces
 /// those slots).
 /// `OnHorizontalScroll`/`OnVerticalScroll`/`OnScrollRangeChanged` are the ScrollFrame's own slots
-/// (decision 0112; the reference's `[+0x32c]`/`[+0x334]`/`[+0x33c]`, script-name map `0x786c40`).
+/// (the reference's `[+0x32c]`/`[+0x334]`/`[+0x33c]`, script-name map `0x786c40`).
 /// `OnHorizontalScroll` joined the other two with the horizontal offset pair — it is fired by
 /// `SetHorizontalScroll`, which is what earns it the row below.
-/// `OnDragStart`/`OnDragStop`/`OnReceiveDrag` are the drag trio (decision 0216 §3) — driven by
+/// `OnDragStart`/`OnDragStop`/`OnReceiveDrag` are the drag trio — driven by
 /// `RegisterForDrag` + the same mouse path as the six mouse handlers above, not a separate one.
 /// `OnColorSelect` is the ColorSelect's own slot (`+0x338`), fired by its `SetColorRGB`.
 ///
@@ -480,7 +480,7 @@ const SCRIPT_KINDS: [&str; 39] = [
     "OnEvent",
     "OnUpdate",
     // The model pane's two: fired by the tick's model pass — `OnUpdateModel` at the top of every
-    // paint of a visible pane, `OnAnimFinished` when a clamped sequence completes (decision 2007;
+    // paint of a visible pane, `OnAnimFinished` when a clamped sequence completes (
     // `object::events_regions::set_script`'s doc has the sites).
     "OnUpdateModel",
     "OnAnimFinished",
@@ -502,7 +502,7 @@ const SCRIPT_KINDS: [&str; 39] = [
     // The caret flush's own (`0x77da80`), fired by the tick's `drain_cursor_changed` when the
     // caret has moved — the edge `ScrollingEdit_OnCursorChanged` + `ScrollingEdit_OnUpdate` scroll
     // a multiline box by. It earns its row here the way this list's rule requires: together with
-    // the code that fires it (decisions 2135/2141).
+    // the code that fires it.
     "OnCursorChanged",
     "OnEditFocusGained",
     "OnEditFocusLost",
@@ -515,7 +515,7 @@ const SCRIPT_KINDS: [&str; 39] = [
     // A release over a message-frame hyperlink span (`OnHyperlinkClick(link, text, button)` —
     // the ChatFrameTemplate wires it to SetItemRef; decision 0288 P2).
     "OnHyperlinkClick",
-    // The GameTooltip's engine-fired widget scripts (decision 0274; the real template wires all
+    // The GameTooltip's engine-fired widget scripts (the real template wires all
     // three: money render, money clear, world-hover default placement).
     "OnTooltipAddMoney",
     "OnTooltipCleared",
@@ -609,7 +609,7 @@ impl UiScript {
         let lua = Lua::new();
         lua.set_app_data(Model::new());
         // Before anything can fire a handler, and while nothing holds an app-data borrow — the two
-        // conditions the profiler's slot has to be installed under (decision 1395).
+        // conditions the profiler's slot has to be installed under.
         handler_prof::install(&lua);
 
         addon::install(&lua)?;
@@ -622,7 +622,7 @@ impl UiScript {
         client::install(&lua)?;
         screenshot::install(&lua)?;
         stdlib::sandbox(&lua)?;
-        // Before the stdlib layer, so its aliases bind the 5.0-shaped functions (decision 1194).
+        // Before the stdlib layer, so its aliases bind the 5.0-shaped functions.
         lua50::install(&lua)?;
         stdlib::install(&lua)?;
         object::install(&lua)?;
@@ -714,7 +714,7 @@ impl UiScript {
     }
 
     /// The embedded VM — for the Bevy plugin / TOC-XML loader to add the game-state API bindings
-    /// (decision 0068 §1: "the Bevy side owns … the API bindings that touch ECS/net") on top of the
+    /// ("the Bevy side owns … the API bindings that touch ECS/net") on top of the
     /// object model this crate installs.
     pub fn lua(&self) -> &Lua {
         &self.lua
@@ -763,7 +763,7 @@ impl UiScript {
     /// hook raises, and the raise propagates like any other Lua error: the addon reports as failed
     /// with a distinctive message, and everything after it still runs.
     ///
-    /// **This is opt-in, and the app arms it only on the world-entry load edge** (decision 1306;
+    /// **This is opt-in, and the app arms it only on the world-entry load edge** (
     /// it began harness-only, e463649e). A real session must not kill a player's addon for being
     /// slow, so steady state — every OnUpdate, every event — runs unhooked; but a load walk that
     /// never returns is a client frozen on the loading screen with zero diagnostics (B271's
@@ -797,7 +797,7 @@ impl UiScript {
         );
     }
 
-    /// Remove an installed instruction budget — the load edge's disarm (decision 1306): the bound
+    /// Remove an installed instruction budget — the load edge's disarm: the bound
     /// covers the world-entry walk, and a session's steady state runs unhooked exactly as before.
     /// The counter keeps its last value, so [`Self::instructions_used`] still answers for the
     /// phase that just ended.
@@ -826,7 +826,7 @@ impl UiScript {
     /// client never had to care (its resolution changed through a restart, and its own
     /// `DISPLAY_SIZE_CHANGED` listeners are three model panes, none of them the manage pass), but
     /// benilla runs in a freely resizable window, so the caller re-runs
-    /// `UIParent_ManageFramePositions()` on a true return. Decision 1499.
+    /// `UIParent_ManageFramePositions()` on a true return.
     pub fn set_screen_size(&mut self, width: f32, height: f32) -> bool {
         let new = Rect::new(0.0, 0.0, height, width);
         let mut model = self.model_mut();
@@ -841,7 +841,7 @@ impl UiScript {
         true
     }
 
-    /// Replace the Era atlas table (decision 0950) — pushed once at boot, before the XML loads.
+    /// Replace the Era atlas table — pushed once at boot, before the XML loads.
     /// Push the modifier-key state (shift, ctrl, alt) behind `IsShiftKeyDown`/`IsControlKeyDown`/
     /// `IsAltKeyDown`. The app's input pass calls this BEFORE feeding the frame's mouse events, so
     /// a click handler's modifier fork (the reference's shift-split / ctrl-dressup /
@@ -914,7 +914,7 @@ impl UiScript {
     /// every frame a ping is live, before the tick, so a poller sees it track the world as the
     /// player walks.
     ///
-    /// One field, not one per widget: there is exactly one ping (decision 1596), and the old
+    /// One field, not one per widget: there is exactly one ping, and the old
     /// per-widget push walked the whole ~3k-frame arena every frame a ping was live.
     pub fn set_minimap_ping(&mut self, ping: (f32, f32)) {
         self.model_mut().minimap_ping = ping;
@@ -957,7 +957,7 @@ impl UiScript {
     /// the widget exists — not per frame: from then on the widget's index is the live truth and
     /// `Minimap:SetZoom` keeps the CVar following it, so a repeated push would fight the +/- buttons.
     /// Both indices clamp into `[0, MINIMAP_ZOOM_LEVELS)` exactly like `set_zoom`, so a hand-edited
-    /// `config.toml` cannot seed an out-of-range level (decision 1131).
+    /// `config.toml` cannot seed an out-of-range level.
     pub fn set_minimap_zoom(&mut self, zoom: u8, inside_zoom: u8) {
         let top = crate::widget::MINIMAP_ZOOM_LEVELS - 1;
         let (zoom, inside_zoom) = (zoom.min(top), inside_zoom.min(top));
@@ -974,7 +974,7 @@ impl UiScript {
         self.run_chunk(chunk.as_bytes())
     }
 
-    /// [`UiScript::run`] over a chunk that came off disk, which is **bytes** (decision 1193).
+    /// [`UiScript::run`] over a chunk that came off disk, which is **bytes**.
     ///
     /// The reference slurps the file (`0x704bc0`) and hands the buffer to `luaL_loadbuffer`
     /// (`0x6f5690`) with no conversion, and Lua 5.0 strings are byte strings — so a cp1252 locale
@@ -1202,7 +1202,7 @@ impl UiScript {
             }
             if moved {
                 // Measured extents are the auto-size axes' inputs — the layout gate's read set.
-                // Touched PER REGION rather than once for the batch (decision 1388): the batch
+                // Touched PER REGION rather than once for the batch: the batch
                 // touch could only say "some extent moved", which is exactly the whole-roster
                 // question the ledger exists to stop asking.
                 model.touch_layout_region(rh);
@@ -1234,7 +1234,7 @@ impl UiScript {
     /// round-trips re-answer on the frames that follow (the same one-frame convergence every
     /// measure already has).
     /// Force the next [`UiScript::resolve`] to rebuild the **whole** layout graph rather than the
-    /// dirty closure a scoped resolve would (decision 1350) — and to run at all, rather than stop
+    /// dirty closure a scoped resolve would — and to run at all, rather than stop
     /// at either change gate.
     ///
     /// This is the scoped resolve's own falsifier, and it exists so the claim the scope rests on —
@@ -1280,7 +1280,7 @@ impl UiScript {
         model.touch_measure_all();
     }
 
-    // ── Input: pointer-leaves-window cleanup (decision 0216 §3; the hit-test/mouse dispatch that
+    // ── Input: pointer-leaves-window cleanup (the hit-test/mouse dispatch that
     // used to sit here now lives in [`pointer`]) ─────────────────────────────────────────────────
 
     /// The OS pointer left the window (decision 0216 §3's drag-gesture leak): clears
@@ -1326,7 +1326,7 @@ impl UiScript {
         // image-wide (the ctor, the fired-double zero, the fired-single stamp) and none of them is
         // a hide, a disable, or a mouse-leave — so a half-finished double click really does survive
         // the cursor leaving the window and coming back inside the 300 ms.
-        // A thumb drag in progress when the pointer leaves is abandoned too (decision 0250 §5) —
+        // A thumb drag in progress when the pointer leaves is abandoned too —
         // the release that would end it is never fed, same leak as the drag gesture above.
         model.slider_drag = None;
     }
@@ -1383,7 +1383,7 @@ impl UiScript {
     }
 
     /// One semantic text-editing operation on the focused EditBox — the output of the host's
-    /// per-OS keymap (decision 0301). Same routing/consumption law as [`Self::key_input`].
+    /// per-OS keymap. Same routing/consumption law as [`Self::key_input`].
     /// Returns `true` if consumed.
     pub fn editbox_action(&mut self, action: EditAction) -> bool {
         editbox::action(&self.lua, action)
@@ -1444,7 +1444,7 @@ impl UiScript {
     }
 
     /// How many resolves got past **tier 1** and paid the whole-roster preamble
-    /// ([`Model::layout_gate_walks`], decision 1385) — the gate's true cost counter, ≥
+    /// ([`Model::layout_gate_walks`]) — the gate's true cost counter, ≥
     /// [`Self::layout_solves`] because a walk that concludes "nothing moved" pays the same
     /// preamble and never reaches the solve counter.
     pub fn layout_gate_walks(&self) -> u64 {
@@ -1471,13 +1471,13 @@ impl UiScript {
     /// OFTEN, rounds says how DEEP, this says how WIDE. A change that touches ten FontStrings must
     /// read a handful here however large the UI grows; a scope that tracks the graph is the
     /// regression, and it is asserted as a COUNT because milliseconds have twice failed to catch
-    /// this class (0735, 0771).
+    /// this class.
     pub fn layout_last_scope(&self) -> (usize, usize) {
         self.model_ref().layout_last_scope
     }
 
     /// Is `name` a registered FrameXML template — one `CreateFrame`'s fourth argument or an
-    /// `inherits=` can resolve (decision 1203)?
+    /// `inherits=` can resolve?
     ///
     /// A pure query on the VM's live registry, for the corpus harness: an addon naming a template
     /// we have not transcribed gets a bare frame and **no load error**, so nothing else can see it.
@@ -1512,7 +1512,7 @@ impl UiScript {
     /// on the live model, for the corpus harness. The harness needs to know what `UIErrorsFrame` in
     /// `UIErrorsFrame:AddMessage(…)` actually *is* in our object graph, because a widget-method
     /// census that asks "does ANY kind answer this name" cannot see a verb wired to one class and
-    /// forgotten on its sibling (decision 1228). Attributing the call site to a kind is what makes
+    /// forgotten on its sibling. Attributing the call site to a kind is what makes
     /// that question askable, and this is the only honest answer to "what kind is that global": the
     /// arena's own record, not a name list.
     ///
@@ -1593,10 +1593,10 @@ impl UiScript {
     /// logged it (the load walk's per-file `error!` + `failures` contract), so putting it there too
     /// would double-log at the app's per-frame drain.
     ///
-    /// Its silent sibling is [`Self::report_load_failure`] (decision 1495) — same retention, no
+    /// Its silent sibling is [`Self::report_load_failure`] — same retention, no
     /// dispatch, for the load failures that never raise at all.
     pub fn report_script_error(&self, msg: &str) {
-        // Retained as a **Load** row, not an Error one (decision 1495): every caller of this is
+        // Retained as a **Load** row, not an Error one: every caller of this is
         // the load walk, and from the player's side "the addon's file scope raised" and "the
         // addon's file was missing" are the same fact — the addon is not running. The retention
         // half is `diagnostics::record_load_failure`, shared with the demand-load path so the
@@ -1611,7 +1611,7 @@ impl UiScript {
     /// `seterrorhandler`/`geterrorhandler` are engine globals (`0x702900`/`0x702950`,
     /// the captured `_G`), the engine invokes the registered handler on a caught script error
     /// (that is the pair's contract — a handler nothing invokes would be two dead globals), and
-    /// FrameXML answers with `_ERRORMESSAGE` → the red ScriptErrors dialog (decision 1305).
+    /// FrameXML answers with `_ERRORMESSAGE` → the red ScriptErrors dialog.
     ///
     /// Called at a safe seam (the app's per-frame drain), never from inside the failed call.
     /// Three guards keep it bounded and honest:

@@ -1,4 +1,4 @@
-//! **The one load law — `AddOn_CanLoad 0x51e780`, as a pure function** (decision 1292).
+//! **The one load law — `AddOn_CanLoad 0x51e780`, as a pure function**.
 //!
 //! Every question of the form "can this addon load, and if not, why" has exactly one answer in
 //! the reference: a single arbiter whose checks run in a fixed order, whose version gate and
