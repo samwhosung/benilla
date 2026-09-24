@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate `reference/1.12-verb-events.tsv`: the events 1.12 Lua verbs fire, keyed by verb.
 
-    WOW_RE=DIR scripts/gen-reference-verb-events.py [--wow-re DIR] [--out FILE]
+    scripts/gen-reference-verb-events.py --names FILE --extents FILE... --disasm FILE [--out FILE]
 
 A row says the reference fires `event` on the call path of the registered Lua binding `verb`:
 from the verb's body (`shape=body`), or from a helper that only registered verbs call
@@ -21,14 +21,13 @@ and the unit-field bridge and token fan-out ids below 0xb6, which are state even
 A floor, not a census: a verb with no row may still fire an event, because the fire sites are
 only the two signal helpers' literal call sites and `shape=helper` stops one call deep.
 
-The fire sites and the binding shapes are the vendored `reference/` tables; the function names,
-extents and disassembly are the maintainer's analysis (`--wow-re` or `$WOW_RE`), not in this
-repo, so this is a manual regeneration.
+The fire sites and the binding shapes are the vendored `reference/` tables; the function names
+(`--names`), extents (`--extents`, the `size=` on each `fn` row) and disassembly (`--disasm`) are
+the maintainer's analysis, not in this repo, so this is a manual regeneration.
 """
 import argparse
 import bisect
 import collections
-import glob
 import os
 import re
 import sys
@@ -62,26 +61,28 @@ def rows(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--wow-re", default=os.environ.get("WOW_RE"))
+    ap.add_argument("--names", help="the function names: `addr<TAB>kind` rows, `func` a start")
+    ap.add_argument("--extents", nargs="+", default=[], help="tables whose `fn` rows carry size=")
+    ap.add_argument("--disasm", help="the client's disassembly, one objdump line per instruction")
     ap.add_argument("--out", default=os.path.join(REFERENCE, "1.12-verb-events.tsv"))
     a = ap.parse_args()
-    if not a.wow_re:
+    if not (a.names and a.extents and a.disasm):
         sys.exit(
-            "this table is derived from the RE repo's function names, ledgers and disassembly: "
-            "pass --wow-re or set WOW_RE. The committed reference/1.12-verb-events.tsv is the "
-            "surface benilla tracks."
+            "this table is derived from the maintainer's function names, extents and disassembly, "
+            "which are not in this repo: pass --names, --extents and --disasm. The committed "
+            "reference/1.12-verb-events.tsv is the surface benilla tracks."
         )
 
     starts = set()
-    for f in rows(os.path.join(a.wow_re, "re/names/out/names-5875.tsv")):
+    for f in rows(a.names):
         if len(f) >= 2 and f[1] == "func":
             starts.add(int(f[0], 16))
     if len(starts) < 1000:
-        sys.exit(f"names-5875.tsv gave only {len(starts)} functions — wrong path?")
+        sys.exit(f"{a.names} gave only {len(starts)} functions — wrong file?")
 
-    # Function extents: `size=` on the `fn` rows of the analysis's ledgers.
+    # Function extents: `size=` on the `fn` rows of the extent tables.
     extent = {}  # fn start -> size in bytes
-    for path in glob.glob(os.path.join(a.wow_re, "system/*/ledger.tsv")):
+    for path in a.extents:
         for line in open(path, encoding="utf-8", errors="replace"):
             if not line.startswith("fn\t"):
                 continue
@@ -91,7 +92,7 @@ def main():
                 fn = int(f[1], 16)
                 extent[fn] = max(extent.get(fn, 0), int(m.group(1)))
     if len(extent) < 5000:
-        sys.exit(f"the ledgers gave only {len(extent)} sized functions — wrong path?")
+        sys.exit(f"the extent tables gave only {len(extent)} sized functions — wrong files?")
     starts |= set(extent)
 
     verbs = {}  # fn address -> name
@@ -105,7 +106,7 @@ def main():
             continue
         verbs.setdefault(fn, f[0])
     if len(verbs) < 1000:
-        sys.exit(f"binding-shapes.tsv gave only {len(verbs)} verbs — wrong path?")
+        sys.exit(f"1.12-shapes.tsv gave only {len(verbs)} verbs — wrong path?")
     starts |= set(verbs)
 
     sites = []  # (site va, event name)
@@ -117,7 +118,7 @@ def main():
             continue
         sites.append((va, f[3]))
     if len(sites) < 300:
-        sys.exit(f"event-firesites.tsv gave only {len(sites)} sites — wrong path?")
+        sys.exit(f"1.12-event-firesites.tsv gave only {len(sites)} sites — wrong path?")
 
     # One pass over the disassembly: every call/jmp edge, and every padding boundary (an `int3`
     # run, or a `nop` run right after a `ret`). A `nop` run after a `jmp` is a loop head's
@@ -126,9 +127,9 @@ def main():
     after_pad = False
     ended = False  # the previous real instruction was a `ret`
     n_lines = 0
-    disasm = os.path.join(a.wow_re, "system/ui/scratch/disasm-full.txt")
+    disasm = a.disasm
     if not os.path.exists(disasm):
-        sys.exit(f"no disassembly at {disasm} — is --wow-re right?")
+        sys.exit(f"no disassembly at {disasm}")
     for line in open(disasm, encoding="utf-8", errors="replace"):
         m = LINE.match(line)
         if not m:
@@ -146,7 +147,7 @@ def main():
         if b:
             edges.append((va, b.group(1), int(b.group(2), 16)))
     if n_lines < 1_000_000:
-        sys.exit(f"disasm-full.txt gave only {n_lines} lines — wrong path?")
+        sys.exit(f"{disasm} gave only {n_lines} lines — wrong file?")
     starts |= {t for _, k, t in edges if k == "call"}
     ordered = sorted(starts)
 
@@ -192,7 +193,7 @@ def main():
         fh.write(
             "# The 1.12.1 client's FrameScript events fired from inside a Lua verb, keyed by the verb.\n"
             "# Generated by scripts/gen-reference-verb-events.py from reference/1.12-shapes.tsv,\n"
-            "# reference/1.12-event-firesites.tsv and the maintainer's analysis (`WOW_RE`).\n"
+            "# reference/1.12-event-firesites.tsv and the maintainer's analysis.\n"
             "#\n"
             "# shape  body   = a fire site inside the verb's own extent.\n"
             "#        helper = a fire site inside a function that only registered verbs call\n"

@@ -78,7 +78,7 @@ def main():
         if len(f) >= 2 and f[1]:
             catalog.setdefault(int(f[0]), f[1])
     if len(catalog) < 300:
-        sys.exit(f"event-catalog.tsv gave only {len(catalog)} names — wrong path?")
+        sys.exit(f"{a.catalog} gave only {len(catalog)} names — wrong path?")
 
     # name -> {ids, producers, formats, notes}
     ev = {}

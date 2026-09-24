@@ -32,8 +32,8 @@ surface is the function split: 1,100 engine functions, 1,075 FrameXML functions.
 shipped Lua is FrameXML's, and hardcoding it in Rust is a category error even when it works.
 
 Regenerating: `scripts/gen-reference-globals.py`, whose header carries the method and the traps. It
-needs a 1.12 install and the maintainer's runtime capture of the reference client's `_G`
-(`WOW_RE=<that analysis>`), which is not in this repo, so it is a manual regeneration. The table is
+needs a 1.12 install, its FrameXML extracted to a folder, and the maintainer's runtime capture of
+the reference client's `_G`, which is not in this repo, so it is a manual regeneration. The table is
 stable: it describes a client that shipped in 2006.
 
 Reading it: `scripts/api-coverage.sh` asks a real `UiScript::new()` what benilla exposes and reports
@@ -70,8 +70,8 @@ families it drops (glue-space verbs, the unit-field bridge) and why getters are 
 fire is a cache-miss re-query, a state event benilla's feeds fire off the packet). A fire site is
 attributed to a function by the verified function extents plus the disassembly's padding
 boundaries, and a site past its candidate's extent is left out rather than mis-filed. The fire
-sites and the shapes are the vendored tables above; the function names and the disassembly are the
-maintainer's (`WOW_RE=<that analysis>`), so this one is a manual regeneration.
+sites and the shapes are the vendored tables above; the function names, their extents and the
+disassembly are the maintainer's, so this one is a manual regeneration.
 
 Reading it: `crates/benilla-app/src/ui_script/verb_event_gate.rs` is the gate. For every pair whose
 verb benilla registers, the module that registers the verb fires the event, or the pair is declared

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Regenerate `reference/1.12-globals.tsv`: the 1.12.1 client's global namespace, by origin.
 
-    WOW_RE=DIR scripts/gen-reference-globals.py [--wow-re DIR] [--out FILE]
+    scripts/gen-reference-globals.py --capture FILE --framexml DIR [--data DIR] [--drop NAME]...
+        [--out FILE]
 
 Each name in a capture of the running reference client's in-world `_G` gets one origin:
 
@@ -21,8 +22,9 @@ Attribution is by definition site in the complete 1.12 shipped-UI corpus:
   - LUA_5_0 wins over all of these: FrameXML's `string = getglobal(...)` would otherwise claim
     the stdlib table.
 
-The inputs are the maintainer's analysis (`--wow-re` or `$WOW_RE`), not in this repo: the
-capture, the extracted FrameXML, and the install's MPQs. FrameXML alone is not the shipped UI:
+The capture (`--capture`, with `--drop` naming the capturing addon's own globals) and the
+extracted FrameXML (`--framexml`) are the maintainer's, not in this repo; the MPQs are the
+install's (`--data`, else `$WOW_DATA`, else `WoW/Data`). FrameXML alone is not the shipped UI:
 the twelve `Blizzard_*` addons live in the MPQs, and their `.lua` is reached through
 `<Script file=>` in their XML, not their `.toc`. A complete corpus is 233 files; the count is
 printed.
@@ -51,11 +53,6 @@ LUA_5_0 = {
     "setfenv", "setmetatable", "string", "table", "tonumber", "tostring", "type",
     "unpack", "xpcall",
 }
-
-# The capture addon's own globals (its holder frame, SavedVariables and slash token): the
-# instrument, not the client. `__framescript_meta` stays in: it is the client's own shared frame
-# metatable.
-CAPTURE_OWN = {"W5875CaptureDB", "W5875CaptureHolder", "SLASH_W5875CAP1"}
 
 LUA_ASSIGN = re.compile(r"^[ \t]*([A-Za-z_][A-Za-z0-9_]*)\s*=[^=]", re.M)
 LUA_FUNC = re.compile(r"^[ \t]*function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.M)
@@ -110,9 +107,9 @@ def join_ref(base, ref):
     return "/".join(out)
 
 
-def build_corpus(wowre):
+def build_corpus(data, framexml):
     """Every file of the 1.12 shipped UI, as {corpus-relative path: text}."""
-    archives = [f"{wowre}/WoW/Data/{a}.MPQ" for a in ("patch-2", "patch", "interface", "base")]
+    archives = [os.path.join(data, f"{a}.MPQ") for a in ("patch-2", "patch", "interface", "base")]
     archives = [a for a in archives if os.path.exists(a)]
     mpqcat = os.path.join(REPO, "target", "debug", "examples", "mpqcat")
     if not os.path.exists(mpqcat):
@@ -129,7 +126,7 @@ def build_corpus(wowre):
         return None
 
     files = {}
-    fx = os.path.join(wowre, "WoW", "_extracted_framexml")
+    fx = framexml
     for fn in sorted(os.listdir(fx)):
         p = os.path.join(fx, fn)
         if os.path.isfile(p):
@@ -212,25 +209,30 @@ def composed(name, roots, suffixes, depth=0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--wow-re", default=os.environ.get("WOW_RE"))
+    ap.add_argument("--capture", help="a capture of the running client's in-world _G")
+    ap.add_argument("--framexml", help="the shipped FrameXML, extracted to a folder")
+    ap.add_argument("--data", help="the install's Data folder, which holds the MPQs",
+                    default=os.environ.get("WOW_DATA") or os.path.join(REPO, "WoW", "Data"))
+    # The capturing addon's own globals (its holder frame, SavedVariables and slash token) are the
+    # instrument, not the client. `__framescript_meta` stays in: it is the client's own shared
+    # frame metatable.
+    ap.add_argument("--drop", action="append", default=[], help="a global of the capturing addon")
     ap.add_argument("--out", default=os.path.join(REPO, "reference", "1.12-globals.tsv"))
     args = ap.parse_args()
-    if not args.wow_re:
+    if not args.capture or not args.framexml:
         sys.exit(
-            "this table is derived from the RE repo's runtime capture of the reference client's "
-            "_G: pass --wow-re or set WOW_RE. The committed reference/1.12-globals.tsv is the "
-            "surface benilla tracks."
+            "this table is derived from a runtime capture of the reference client's _G and the "
+            "extracted FrameXML, which are not in this repo: pass --capture and --framexml. The "
+            "committed reference/1.12-globals.tsv is the surface benilla tracks."
         )
-
-    fixture = os.path.join(args.wow_re, "WoW", "_w5875_fixtures", "item13", "W5875Capture.lua")
-    if not os.path.exists(fixture):
-        sys.exit(f"no capture fixture at {fixture} — is --wow-re right?")
+    if not os.path.exists(args.capture):
+        sys.exit(f"no capture at {args.capture}")
 
     print("building the 1.12 shipped-UI corpus...")
-    corpus = build_corpus(args.wow_re)
+    corpus = build_corpus(args.data, args.framexml)
     print(f"  TOTAL: {len(corpus)} files" + ("" if len(corpus) == 233 else "  ** expected 233 **"))
 
-    recs = [(n, t) for n, t in captured_globals(fixture) if n not in CAPTURE_OWN]
+    recs = [(n, t) for n, t in captured_globals(args.capture) if n not in set(args.drop)]
     defined, suffixes = shipped_names(corpus)
     print(f"captured globals: {len(recs)}   shipped definitions: {len(defined)}   "
           f"$parent suffixes: {len(suffixes)}")
@@ -262,8 +264,8 @@ def main():
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as f:
         f.write("# The 1.12.1 client's global namespace. Generated by scripts/gen-reference-globals.py.\n")
-        f.write("# Source: a capture of the running client's in-world _G (the maintainer's analysis,\n")
-        f.write("# `WOW_RE`), attributed against the complete 1.12 shipped-UI corpus.\n")
+        f.write("# Source: a capture of the running client's in-world _G (the maintainer's),\n")
+        f.write("# attributed against the complete 1.12 shipped-UI corpus.\n")
         f.write("# Also every name that corpus defines but the capture lacks, as type `lod`: the\n")
         f.write("# twelve Blizzard_* addons are LoadOnDemand, so a live dump misses them unless\n")
         f.write("# their windows were opened.\n")
