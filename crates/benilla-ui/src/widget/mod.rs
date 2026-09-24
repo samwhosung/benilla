@@ -345,7 +345,7 @@ pub struct Frame {
     pub toplevel: bool,
     /// This frame's own scale (`ownScale +0xb8`, default 1.0).
     pub scale: f32,
-    /// `layoutScale` = `parentEffective * ownScale`, ε-gated (`effective_scale 0x76ac90`).
+    /// `layoutScale` = `parentEffective * ownScale`, ε-gated (`0x76ac90`).
     pub effective_scale: f32,
     /// Era `ignoreParentScale` opt-out — inert in 1.12 (no frame sets it; extension point).
     pub ignore_parent_scale: bool,
