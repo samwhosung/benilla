@@ -30,26 +30,25 @@ pub struct M2Bounds {
     /// The selection-ring **footprint** (model-local, pre-scale): `sqrt(0.5 · sqrt(dx² + dy²))`, where
     /// `dx,dy` are the horizontal (X,Y) extents of the unit's **Stand** animation bounding box (the M2
     /// sequence CAaBox). This is the exact model-local input the real client's living-unit selection ring
-    /// uses — byte-verified + Unicorn-emulated to the reference pixels (wow-re selection-ring RE,
-    /// `0x608e00`/`0x60aee0`): the ring's world radius = this × `OBJECT_FIELD_SCALE_X`. The nested sqrt is
-    /// a range-compressor (which is why the render-sphere never fit). Falls back to the header render-box
-    /// XY extents for a model with no animation sequences.
+    /// uses — matched to the reference pixels (`0x608e00`/`0x60aee0`): the ring's world radius =
+    /// this × `OBJECT_FIELD_SCALE_X`. The nested sqrt is a range-compressor (which is why the
+    /// render-sphere never fit). Falls back to the header render-box XY extents for a model with no
+    /// animation sequences.
     ///
     /// A **degenerate** box — `max.x == min.x` *and* `max.y == min.y` — takes
     /// [`DEGENERATE_RING_FOOTPRINT`] instead of the formula, which is the writer's own first branch
     /// and not a floor of ours (decision 1658).
     pub ring_footprint: f32,
-    /// Model-space **Z** of attachment id 17 — the reference's follow-camera pivot height (wow-re
-    /// `follow-camera`: `feet + (attach17.z + 0.0972)·scale`). `None` for a model with no slot-17
+    /// Model-space **Z** of attachment id 17 — the reference's follow-camera pivot height
+    /// (`0x50ca90`: `feet + (attach17.z + 0.0972)·scale`). `None` for a model with no slot-17
     /// attachment; the camera then falls back to a fraction of the box. See [`M2Bounds::pivot_z`].
     pub pivot_z: Option<f32>,
     /// The **Stand** animation box's vertical extent, `max.z − min.z` (model-local, pre-scale) — the
     /// chat bubble's anchor height above the unit's feet (× model scale, + 0.7 yd).
     ///
     /// The same `0x711a20` query the selection ring above is sized from, taking the box's Z instead
-    /// of its XY: wow-re's chat-bubble anchor cross-check (2026-08-17) followed `0x4b0e38 call
-    /// 0x711a20` into the model layer and found it reading the **MD20 header image** — file bytes,
-    /// no bone matrix anywhere in the call tree — and returning `out+0x20 − out+0x14`, which is that
+    /// of its XY: `0x4b0e38 call 0x711a20` reads the **MD20 header image** — file bytes, no bone
+    /// matrix anywhere in the call tree — and returns `out+0x20 − out+0x14`, which is that
     /// CAaBox's Z extent. Benilla anchored the bubble on the posed PlayerName attachment instead,
     /// on a recorded INFERRED claim that `0x608640` and `0x711a20` were "both the head-region
     /// attachment height"; that equivalence is **REFUTED** — they differ precisely on
@@ -67,10 +66,9 @@ pub struct M2Bounds {
     /// [`M2Bounds::pivot_z`] carries — and only the swim one is then pulled down, by exactly this:
     /// `0x50ccf6 fsubr [esi+0x124]` subtracts `S · (box0.max.z − box42.max.z)`, where the two boxes
     /// come from `0x711a20(model, 0)` and `0x711a20(model, 0x2a)` — the same `M2Sequence` `CAaBox`
-    /// query [`stand_box`] reads, on animation id **0** (Stand) and id **42** (Swim). Byte-decoded
-    /// and VERIFIED in wow-re `ui/scratch/water-band-discontinuity.md` §7, which measured
-    /// `+0x11c = +0x120 = 1.9002692` and `+0x124 = 1.5120120` off the shipped `HumanMale.m2` at
-    /// scale 1 — a drop of `0.3882572`, the number the fixture test pins.
+    /// query [`stand_box`] reads, on animation id **0** (Stand) and id **42** (Swim). Off the
+    /// shipped `HumanMale.m2` at scale 1 it gives `+0x11c = +0x120 = 1.9002692` and
+    /// `+0x124 = 1.5120120` — a drop of `0.3882572`, the number the fixture test pins.
     ///
     /// It is a **delta**, not a height, because that is the shape of the byte: the base is added to
     /// all three presets at `0x50cc0c`–`0x50cc2e` and only `+0x124` is decremented, so a consumer
@@ -100,14 +98,14 @@ pub fn load_m2_bounds(chain: &mut Chain, raw_path: &str) -> Result<M2Bounds> {
 }
 
 /// The ring footprint the real client stores for a **degenerate** box — one whose X *and* Y extents
-/// are both exactly zero. Byte-read at `0x60af4f..0x60af67` (wow-re `selection-ring-scale.md`): the
+/// are both exactly zero. Byte-read at `0x60af4f..0x60af67`: the
 /// writer `0x60aee0` compares `max.x==min.x` and `max.y==min.y` and, when both hold, stores the
 /// literal `0x3f99999a` = **1.2** into `[unit+0xcf0]` without ever running the `sqrt(0.5·sqrt(dx²+dy²))`
-/// formula. wow-re recorded it as a branch that "never fires for real creatures", which is true of
-/// the four life-size units it measured and false of the whole trigger-creature family: an
-/// `InvisibleStalker` body authors all 135 sequence boxes at zero, so this **is** its ring — and the
-/// Naxxramas weapon mobs, whose visible self is the axe in that body's hand, are exactly where a
-/// player sees it. Ours read 0 and drew a ring the width of a coin (decision 1658).
+/// formula. It never fires for the four life-size units measured, but it does for the whole
+/// trigger-creature family: an `InvisibleStalker` body authors all 135 sequence boxes at zero, so
+/// this **is** its ring — and the Naxxramas weapon mobs, whose visible self is the axe in that
+/// body's hand, are exactly where a player sees it. Ours read 0 and drew a ring the width of a coin
+/// (decision 1658).
 ///
 /// It is the model-less fallback too: "no box to measure" and "a box that measures zero" are the
 /// same question, and this is the reference's answer to it.
@@ -154,15 +152,15 @@ fn stand_record(bytes: &[u8]) -> Option<usize> {
     seq_record(bytes, seq_index(bytes, 0).unwrap_or(0))
 }
 
-/// One sequence box's `max.z` — `rec+0x38`, the `out+0x20` field `0x711a20` returns (wow-re
-/// `water-band-discontinuity.md` §7). The camera's swim preset is the difference of two of these.
+/// One sequence box's `max.z` — `rec+0x38`, the `out+0x20` field `0x711a20` returns. The camera's
+/// swim preset is the difference of two of these.
 fn seq_max_z(bytes: &[u8], anim_id: usize) -> Option<f32> {
     let rec = seq_record(bytes, seq_index(bytes, anim_id)?)?;
     bytes.f32_at(rec + 0x38)
 }
 
 /// Read the horizontal (X,Y) extents of the **Stand** animation's bounding box from a raw M2 — the input
-/// the real client's living-unit selection ring is sized from (wow-re selection-ring RE, `0x60aee0`).
+/// the real client's living-unit selection ring is sized from (`0x60aee0`).
 /// The animation `M2Sequence` array is at MD20 `0x1c`(count)/`0x20`(offset), stride `0x44`, with the
 /// sequence's `CAaBox` at record `+0x24` (min C3 `+0x24`, max C3 `+0x30`). Stand is animation **id 0**,
 /// whose *sequence index* is `animationLookup[0]` (array at `0x24`/`0x28`, `u16` each) — NOT necessarily

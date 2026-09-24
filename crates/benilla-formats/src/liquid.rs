@@ -42,9 +42,8 @@ pub enum LiquidKind {
     /// Ocean — `XTextures\ocean\ocean_h.*` (30 frames). Coastal / sea tiles.
     Ocean,
     /// Magma / lava — `XTextures\lava\lava.*`. Opaque and **unlit**: the animated texture IS the body,
-    /// with no depth LUT to modulate it by — but still **fogged**, like every liquid batch (VERIFIED
-    /// wow-re `liquid-render-state-sided.md` §3/§5, which corrected the earlier
-    /// `rf-water-liquid-type-texture-material.md` reading of the `0x68d890` vert-fill: its
+    /// with no depth LUT to modulate it by — but still **fogged**, like every liquid batch (no
+    /// liquid setup overrides the device's fog-on default `0x593d18`; the `0x68d890` vert-fill's
     /// `0x3f800000` is an up normal's Z, not a colour or alpha, and it is byte-identical in the river
     /// and ocean fills).
     ///
@@ -54,8 +53,8 @@ pub enum LiquidKind {
     /// ([`benilla_adt::LiquidVertex::texcoords`]).
     Magma,
     /// Slime — `XTextures\slime\slime.*`. Its own texture on the magma render category, and **code-path
-    /// identical to magma** on the WMO side: one handler, no type-2-vs-3 branch anywhere (VERIFIED
-    /// wow-re `liquid-render-state-sided.md` §5).
+    /// identical to magma** on the WMO side: one handler, no type-2-vs-3 branch anywhere
+    /// (`0x6b68f0`).
     ///
     /// **WMO liquid only** (nibbles `3`/`7`) — Undercity, the Sludge Fields. Not a deferral: the
     /// reference has no ADT queue for slime at all (VERIFIED — `0x68de40` dispatches only its three
@@ -64,10 +63,10 @@ pub enum LiquidKind {
 }
 
 impl LiquidKind {
-    /// The liquid type from a per-tile MLIQ flag low nibble (`flag & 0xf`) — the VERIFIED reference
-    /// selection (wow-re `rf-water-liquid-type-texture-material.md`, name table `0x86a000`): the
-    /// nibble indexes the animated-texture table directly. `0xf` (and any unmapped value) = hole /
-    /// no liquid → `None`. `4` is a same-class `lake_a` variant of `0`; `6`/`7` of `2`/`3`.
+    /// The liquid type from a per-tile MLIQ flag low nibble (`flag & 0xf`) — the reference
+    /// selection (name table `0x86a000`): the nibble indexes the animated-texture table directly.
+    /// `0xf` (and any unmapped value) = hole / no liquid → `None`. `4` is a same-class `lake_a`
+    /// variant of `0`; `6`/`7` of `2`/`3`.
     pub fn from_nibble(nibble: u8) -> Option<LiquidKind> {
         match nibble & 0xf {
             0 | 4 => Some(LiquidKind::Still),
@@ -86,8 +85,7 @@ impl LiquidKind {
     /// (@`0x68dabb`), `0x6855a0` → type 6 `lava` (@`0x68dcab`). The cell nibble selects queue
     /// *membership* — via the class `nibble & 3` — not the texture, so an ADT nibble 0 and 8 both
     /// draw `lake_a`, and 2 and 6 both draw `lava`. **Slime has no ADT queue at all**: it renders
-    /// only on the WMO path, so class 3 is `None` here (VERIFIED wow-re
-    /// `rf-water-liquid-type-texture-material.md` + `terrain.md`).
+    /// only on the WMO path, so class 3 is `None` here.
     ///
     /// The WMO path is the type-faithful one — it binds `0x68aac0(raw nibble)` — and keeps
     /// [`Self::from_nibble`].
@@ -105,8 +103,9 @@ impl LiquidKind {
     /// depth-swatch `ocean0_s.bls` path instead.
     ///
     /// "Fullbright" here means **unlit, not unfogged**: every liquid batch in the reference draws with
-    /// GL_FOG enabled, magma and slime included (wow-re `liquid-render-state-sided` §3/§5). Reading it
-    /// as "no fog" is what made a submerged slime surface a flat unshaded sheet.
+    /// GL_FOG enabled, magma and slime included (no liquid setup overrides the device's fog-on
+    /// default `0x593d18`). Reading it as "no fog" is what made a submerged slime surface a flat
+    /// unshaded sheet.
     pub fn is_fullbright(self) -> bool {
         matches!(self, LiquidKind::Magma | LiquidKind::Slime)
     }
@@ -122,9 +121,8 @@ impl LiquidKind {
 ///
 /// The queries (is this XY wet, how high is the surface here) read the **grid**, not the triangles:
 /// the reference samples the liquid height as a bilinear over the containing cell's four corners
-/// (VERIFIED `0x6b7500` `liquid_height_sample`, wow-re `system/terrain` — transcribed bit-exact
-/// there), which is a cell lookup, not a triangle search. Drawn two-sided (cull off), so winding
-/// is not load-bearing.
+/// (`0x6b7500`), which is a cell lookup, not a triangle search. Drawn two-sided (cull off), so
+/// winding is not load-bearing.
 #[derive(Debug, Clone)]
 pub struct LiquidMesh {
     /// Vertex-grid dimensions `[cols, rows]` — the counts along the two grid axes, `cols` fastest.
@@ -139,8 +137,7 @@ pub struct LiquidMesh {
     /// Per-**cell**, parallel to [`Self::wet`]: the MLIQ tile flag's **`0x80`** bit — "a neighbouring
     /// group also claims this cell". Authored on **both** claimants, never on a cell only one group
     /// covers (measured over `Stormwind.wmo`: 190 of 2685 wet cells, each claimed by exactly two
-    /// groups and flagged in both; zero overlap among the `0x80`-clear cells — wow-re
-    /// `terrain/scratch/wmo-liquid-shared-tile-gate.md`).
+    /// groups and flagged in both; zero overlap among the `0x80`-clear cells).
     ///
     /// The reference's strip builder emits a tile iff `(f & 0xf) != 0xf` **and** (`f & 0x80 == 0`
     /// **or** this group won the gate) — a per-frame 2-colouring of the portal graph that lets
@@ -180,7 +177,7 @@ pub struct LiquidMesh {
     /// The surface's **sound-class nibble** — the majority wet cell's low nibble (terrain), or
     /// the `0x6ba970`-resolved nibble (WMO): `class = nibble & 3`, `FluidSpeed = nibble & 0xc`,
     /// the key the above-water liquid ambient-loop system resolves through `SoundWaterType.dbc`
-    /// ([`crate::WaterSoundCatalog`]; wow-re `liquid-ambience-loop.md`, decision 0506). Carried
+    /// ([`crate::WaterSoundCatalog`]; `0x462a40`, decision 0506). Carried
     /// beside `kind` because the render kind collapses the river speeds (nibbles 0 and 4 both
     /// draw `lake_a`) that the sound table splits (RiverStill 1111 vs RiverSlow 1112).
     pub sound_nibble: u8,
@@ -201,10 +198,9 @@ const CELLS: usize = 8;
 /// Cell-flag low nibble meaning "dry / do not render".
 const DRY_NIBBLE: u8 = 0x0f;
 /// The scale the reference applies to a magma vertex's authored `u16` texture coords:
-/// `u = (s as i32 as f64 · TEXC) as f32`, `TEXC = 0x3c400000 = 3/256`. VERIFIED bit-exact at
-/// `WoW.exe 0x68d890` (`liquid_render_verts`), emulation-diffed over 60 randomized fills in wow-re
-/// `crates/terrain/tests/difftest/fills.rs`. Authored steps run ≈42 units per 4.167-yd cell, so one
-/// lava repeat spans ≈8.5 yd — twice the density of the ¼-per-cell water field.
+/// `u = (s as i32 as f64 · TEXC) as f32`, `TEXC = 0x3c400000 = 3/256`, bit-exact at
+/// `WoW.exe 0x68d890`. Authored steps run ≈42 units per 4.167-yd cell, so one lava repeat spans
+/// ≈8.5 yd — twice the density of the ¼-per-cell water field.
 const MAGMA_TEXCOORD_SCALE: f32 = f32::from_bits(0x3c40_0000);
 /// Verts under no liquid carry FLT_MAX (`0x7F7FFFFF`) — `is_finite()` is TRUE for it, so gate on
 /// magnitude instead.
@@ -222,8 +218,7 @@ const RIVER_DEPTH_V_SATURATION: f32 = 42.0;
 /// `DAT_00c7fcd8[i] = min(i/255, 1.0)` (256 f32 entries, `fstp` @`0x68c57c`) beside the river's
 /// `c81768`, and the ocean vert-fill reads it at `0x68d718 fld [depth*4 + 0xc7fcd8]` exactly as the
 /// river fill reads its own at `0x68d818` — same shape, same `tc0 = (0.5, ramp[depthByte])`, only a
-/// different divisor (wow-re `terrain/scratch/rf81-liquid-color-lut-builder.md`, a §5 pair that
-/// converged byte-identically, corroborated independently by `water-shading-law.md` §5).
+/// different divisor.
 ///
 /// **The two divisors are not comparable, because the two depth bytes are not on one scale** — which
 /// is what made `/255` look 6× too slow beside the river's `/42`. Measured over every MCLQ block in
@@ -249,7 +244,7 @@ const OCEAN_DEPTH_V_SATURATION: f32 = 255.0;
 /// band, so "is this the right curve" is a question about a beach, and a **look** question — the
 /// director's to call, not ours to grade from a screenshot. This is the A/B: `WOW_OCEAN_DEPTH_DIV=42`
 /// puts the river's ramp on the sea (deep by ~24 yd of depth instead of ~148), so the two can be run
-/// side by side against `./run-ref-client.sh` at the same shoreline. Read once, at first use.
+/// side by side against the reference client at the same shoreline. Read once, at first use.
 fn ocean_depth_v_divisor() -> f32 {
     static DIV: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *DIV.get_or_init(|| {
@@ -581,7 +576,7 @@ mod tests {
     }
 
     /// **The sweep's second find: an MCNK can carry more than one MCLQ block**, one per set liquid
-    /// header bit (VERIFIED wow-re `adt-format.md`). 28 shipped Azeroth chunks are river mouths that
+    /// header bit (the MCLQ walk `0x6af7a3`). 28 shipped Azeroth chunks are river mouths that
     /// carry two — the stream *and* the sea beneath it — and reading only the first dropped the sea
     /// while the old header-bit priority ("ocean wins") labelled the river block ocean.
     ///

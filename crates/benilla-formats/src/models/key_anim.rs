@@ -1,13 +1,13 @@
 //! The generic keyed-loop bake shared by the material-alpha (`mat_anim`) and texture-transform
 //! (`tex_anim`) channels: ONE kernel-faithful sampler (k0 = last key ≤ t, step holds, linear
 //! lerps, clamp past the last key — no wrap-lerp) and ONE clock resolution (gseq wrap vs
-//! per-sequence band rebase), so the byte-verified sampling semantics (wow-re `eval.md`, and the
-//! step-boundary fix) live in exactly one place.
+//! per-sequence band rebase), so the sampling semantics (`0x713d50`, and the step-boundary fix)
+//! live in exactly one place.
 //!
 //! **A track bakes per SEQUENCE, not once.** A sequence-timeline track keys on one absolute
-//! timeline that every sequence carves a band out of, so "the loop this track plays" is a question
+//! timeline that every sequence slices a band out of, so "the loop this track plays" is a question
 //! about *which sequence is playing* — the reference re-reads it every frame from the playing
-//! sequence's own key window (wow-re `eval.md` FN1 `0x713d50`: window = `ranges[seqSlot]`, and a
+//! sequence's own key window (`0x713d50`: window = `ranges[seqSlot]`, and a
 //! collapsed window `lo >= hi` resolves to the single key `keys[lo]`). Baking only the first
 //! sequence's band was correct for a placed doodad — which arms `animations[0]` once and loops it
 //! forever — and wrong for anything that changes sequence, i.e. every creature: a voidwalker's two
@@ -88,8 +88,8 @@ pub struct KeyAnim<V> {
     pub wrap: bool,
     /// **Which clock feeds the loop** — the other half of the clock law, also decided at bake
     /// time. `true` = a global-sequence loop: the reference's cursor is
-    /// `(sceneClock − instanceAttachTime) % duration` (wow-re `gseq-anchor.md`, byte-verified:
-    /// one free-running per-scene ms clock, snapshotted ONCE per model instance at attach —
+    /// `(sceneClock − instanceAttachTime) % duration` (`0x71437b`: one free-running per-scene ms
+    /// clock, snapshotted ONCE per model instance at attach `0x70ea00` —
     /// `CM2Model+0x68`). Per-INSTANCE anchoring, stamped at attach; sequence tracks instead
     /// re-arm their cursor at every play. `false` = a sequence-band loop: clocked by the host's
     /// playing-clip time. Consumers route via [`Self::clock`], passing their instance's anchored
@@ -160,7 +160,7 @@ impl<V: Lerp> KeyAnim<V> {
 }
 
 /// The reference's own track read at absolute time `t_ms`, for the key window `[lo, hi]` — the
-/// transcription of wow-re `eval.md` FN1 (`0x713d50`) + the scalar sampler's two-way interp
+/// transcription of `0x713d50` + the scalar sampler's two-way interp
 /// dispatch (`0x71af20`, `cmp word[track],0`):
 ///
 /// - a **collapsed window** (`lo >= hi`) resolves to `keys[lo]` outright — the degenerate
@@ -221,8 +221,8 @@ pub(super) fn sample_window<V: Lerp>(
 /// sequence's own free clock, the same loop in every animation.
 /// One baked loop **per file sequence slot** — the shape a channel needs when its track is keyed
 /// differently in different sequences, which the reference reads as a matter of course (it samples
-/// the *playing* sequence's own key window every frame, `ranges[seqSlot]`; wow-re `eval.md` FN1
-/// `0x713d50`) and benilla's UV/tint lanes did not.
+/// the *playing* sequence's own key window every frame, `ranges[seqSlot]`; `0x713d50`) and
+/// benilla's UV/tint lanes did not.
 ///
 /// Its whole reason to exist is [`Self::uniform`]. The UV and tint loops are consumed through a
 /// registry keyed by MATERIAL, which is shared by every instance of a batch and so has no sequence

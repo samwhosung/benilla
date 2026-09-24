@@ -2,17 +2,15 @@
 //! transparency-weight tracks, baked to loopable second-domain keys the runtime samples per instance
 //! — **one loop per sequence**, because which loop plays is a function of the playing animation.
 //!
-//! Byte ground (wow-re `m2-alpha-combine-cull.md`, VERIFIED): the per-batch alpha is
+//! Byte ground (`0x707680`): the per-batch alpha is
 //! `A = instanceAlpha × colors[colorIndex].alpha × transparency[transLookup[idx]].weight`, both
 //! tracks animation-evaluated each frame; `A ≤ 0` skips the batch before the blend mode is read, and
-//! an Opaque batch with `0 < A < 1` is **promoted to a blended draw** (that note's original "stays
-//! opaque" was refuted at the bytes on 2026-07-31 — wow-re `m2-blend-promotion-zfill.md` §1;
-//! benilla implements the promotion, decisions 0831/0842). Clocks (wow-re
-//! `eval.md`/`doodad-anim-host.md`): a `gseq`-tagged track wraps `global_sequences[gseq]`; an
-//! ordinary track keys inside the **playing** sequence's absolute time band — for a placed doodad
-//! that is the file-order-first sequence looping forever, but a creature changes sequence constantly
-//! and its batches' visibility changes with it (a voidwalker's upper armour pair is weight 0 in
-//! Stand/Walk/Run and 1 only in Death).
+//! an Opaque batch with `0 < A < 1` is **promoted to a blended draw** (`0x70c20f`; benilla
+//! implements the promotion, decisions 0831/0842). Clocks (`0x713d50`): a `gseq`-tagged track wraps
+//! `global_sequences[gseq]`; an ordinary track keys inside the **playing** sequence's absolute time
+//! band — for a placed doodad that is the file-order-first sequence looping forever, but a creature
+//! changes sequence constantly and its batches' visibility changes with it (a voidwalker's upper
+//! armour pair is weight 0 in Stand/Walk/Run and 1 only in Death).
 //!
 //! The sampler + clock resolution live in [`super::key_anim`] (shared with the texture-transform
 //! bake); this module owns only the alpha channel's semantics.
@@ -237,7 +235,7 @@ mod tests {
     /// (`0x7fff`) for the copy this sequence shows, `−1.0` (`0x8001`) for the copy it hides — and a
     /// negative alpha is what trips the reference's `A ≤ 0` batch cull. Decoded UNSIGNED, `0x8001`
     /// reads `+1.00006`: both gates drew, interpenetrating everywhere, and the pair z-fought until
-    /// the door swung open and pulled them apart. So the carve is per sequence slot: **Closed (0)**
+    /// the door swung open and pulled them apart. So the split is per sequence slot: **Closed (0)**
     /// shows the intact gate and hides the burnt one, **Destroy (3)** does the reverse — and the two
     /// tiki-mask batches, which share a texture, are never both visible. Skips without client data.
     #[test]
@@ -633,7 +631,7 @@ mod tests {
         assert!((a.sample(0.25) - 0.5).abs() < 1e-6);
         // Past the band's last key the value keeps ramping toward the NEXT key — the reference
         // takes `k1 = k0 + 1` bounded only by the total key count, never by the window's `hi`
-        // (wow-re `eval.md` FN1 §4/§5), so key 2 at 5000 ms is a live lerp endpoint here even
+        // (`0x713d50`), so key 2 at 5000 ms is a live lerp endpoint here even
         // though it belongs to a later sequence. It never wrap-lerps back to key 0.
         let expect = 1.0 + (0.3 - 1.0) * (1900.0 - 1500.0) / (5000.0 - 1500.0);
         assert!(
@@ -673,7 +671,7 @@ mod tests {
     }
 
     /// A band that keys nothing holds `keys[ranges[slot].lo]` — the reference's collapsed key
-    /// window (`lo >= hi` ⇒ the degenerate `{lo, lo, 0}` result, wow-re `eval.md` FN1). Including a
+    /// window (`lo >= hi` ⇒ the degenerate `{lo, lo, 0}` result, `0x713d50`). Including a
     /// held **0**, which must keep hiding the batch every frame of that sequence: the static cull
     /// never saw it, because the full track isn't constant.
     #[test]

@@ -1,8 +1,8 @@
 //! The **macro icon chooser's catalog** — the list `GetNumMacroIcons`/`GetMacroIconInfo` serve.
 //!
-//! Byte-derived from the reference client's `BuildMacroIconList` (`0x4f0090`); the full RE note is
-//! `wow-5875-re` `system/ui/scratch/macro-icon-chooser.md`. The headline: **the chooser does not
-//! read `SpellIcon.dbc`**. It enumerates the files that actually exist under `Interface\Icons\`.
+//! Byte-derived from the reference client's `BuildMacroIconList` (`0x4f0090`). The headline: **the
+//! chooser does not read `SpellIcon.dbc`**. It enumerates the files that actually exist under
+//! `Interface\Icons\`.
 
 use anyhow::Result;
 
@@ -42,8 +42,9 @@ const ICON_DIR: &str = "Interface\\Icons\\";
 /// (`Spells\Icon\Spell_Fire_Fire`, a different directory root; `Ability_Druid_Mangle.tga`, carrying
 /// a literal extension) — so the picker showed solid white cells where those landed. Enumerating
 /// the archive cannot produce a name with no file behind it: the defect class is gone by
-/// construction, not by an allow-list. On a stock 5875 install this yields **517** icons (the RE
-/// counts the same 517 off `patch.MPQ` 77 + `interface.MPQ` 443 = 520 raw, less 3 duplicate names).
+/// construction, not by an allow-list. On a stock 5875 install this yields **517** icons (the
+/// reference's rules count the same 517 off `patch.MPQ` 77 + `interface.MPQ` 443 = 520 raw, less 3
+/// duplicate names).
 pub fn load_macro_icons(chain: &mut Chain) -> Result<Vec<String>> {
     let mut names: Vec<String> = Vec::new();
     for entry in chain.list()? {

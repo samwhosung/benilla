@@ -11,10 +11,9 @@ pub(super) const IB_AMBIENT: u32 = 1;
 pub(super) const IB_SKY0: u32 = 2;
 pub(super) const IB_FOG_COLOR: u32 = 7;
 pub(super) const IB_SUN_COLOR: u32 = 9;
-/// **Cloud layer palette rows** — byte-VERIFIED (wow-re `scratch/cloud-coverage-pipeline.md` §3c:
-/// the band gather `0x6d64d0` stores sub-10/11/12 at color-table slots 9/10/11 = `0xce9c30/34/38`,
-/// the three palettes the cloud dome builder `0x6cfb00` reads): sun-glow tint, gradient slope,
-/// gradient base.
+/// **Cloud layer palette rows** (the band gather `0x6d64d0` stores sub-10/11/12 at color-table
+/// slots 9/10/11 = `0xce9c30/34/38`, the three palettes the cloud dome builder `0x6cfb00` reads):
+/// sun-glow tint, gradient slope, gradient base.
 pub(super) const IB_CLOUD_SUN: u32 = 10;
 pub(super) const IB_CLOUD_SLOPE: u32 = 11;
 pub(super) const IB_CLOUD_GBASE: u32 = 12;
@@ -31,21 +30,20 @@ pub(super) const IB_RIVER_DEEP: u32 = 17;
 /// LightFloatBand row indices (within a param's 6 rows).
 pub(super) const FB_FOG_END: u32 = 0;
 pub(super) const FB_FOG_START_MULT: u32 = 1;
-/// **Cloud density `C`** — byte-VERIFIED (wow-re `scratch/cloud-coverage-pipeline.md` §4: the
-/// scalar gather `0x6d64d0` stores float sub-3 at `0xce9c0c+0x58` = `[0xce9c64]`, the coverage
-/// threshold input `T = trunc((1−C)·255)`). Zeroed only in the degenerate no-light-record
-/// fallback — hence the 0.0 default.
+/// **Cloud density `C`** (the scalar gather `0x6d64d0` stores float sub-3 at `0xce9c0c+0x58` =
+/// `[0xce9c64]`, the coverage threshold input `T = trunc((1−C)·255)`). Zeroed only in the
+/// degenerate no-light-record fallback — hence the 0.0 default.
 pub(super) const FB_CLOUD_DENSITY: u32 = 3;
 
 /// LightParams.dbc field index of the **glow** scalar (the FFXGlow/bloom composite weight). VERIFIED
-/// from `WoW.exe` RE: the engine reads glow from record byte
+/// from `WoW.exe`: the engine reads glow from record byte
 /// **+0x10 = field index 4**, NOT the wiki's labelled +0x0C `m_glow` (which is 0.0 in all 426 vanilla
 /// records). Byte-exact cross-check: LightParams 12 (EK default) field 4 = 0.65 → `floor(0.65·255)/255 =
 /// 0.647`, matching the apitrace composite weight. Per-zone (13 distinct values, 0.0–1.0 across zones).
 pub(super) const LP_GLOW: usize = 4;
 
 /// `LightParams.dbc` field index of the **highlightSky** flag (record byte +0x04 = field index 1).
-/// VERIFIED from `WoW.exe` RE: the sky-dome
+/// VERIFIED from `WoW.exe`: the sky-dome
 /// colour fold `FUN_006d0f50` reads it as `params[0x14] = (float)*(int*)(LightSrc+4)` — an int 0/1
 /// flag that **gates the dawn/dusk sky-dome azimuthal warp** (Elwynn/Westfall = 1, Duskwood = 0).
 /// Stored as 0.0/1.0.
@@ -54,10 +52,9 @@ pub(super) const LP_HIGHLIGHT: usize = 1;
 /// `LightParams.dbc` field index of **lightSkyboxID** (record byte +0x08 = field index 2) — the
 /// `LightSkybox.dbc` row whose model replaces the whole celestial pass while it is active.
 ///
-/// **In 5875 this field is the ghost sky and nothing else.** Byte-VERIFIED (wow-re
-/// `lighting/scratch/wmo-skybox.md` §3): the DBC skybox slot `[0xce9bb4]` is filled inside
-/// `dn_color_table_build 0x6d2260` at `0x6d26cb` **gated on `[0xce9bb0] != -1`** — the ghost
-/// override cell, written only by `0x6d4620` off the `PLAYER_FLAGS` ghost bit (`death-light.md`).
+/// **In 5875 this field is the ghost sky and nothing else.** The DBC skybox slot `[0xce9bb4]` is
+/// filled inside the colour-table builder `0x6d2260` at `0x6d26cb` **gated on `[0xce9bb0] != -1`**
+/// — the ghost override cell, written only by `0x6d4620` off the `PLAYER_FLAGS` ghost bit.
 /// The shipped data agrees exactly: of 426 `LightParams` rows only **5** carry a non-zero id, all
 /// of them **3 = `DeathClouds.mdx`**, and all 374 `Light.dbc` rows reach one through param slot
 /// **4** alone (slots 0–3 are uniformly 0). So there is no live non-ghost skybox to miss here.
@@ -80,7 +77,7 @@ pub(super) const LP_OCEAN_DEEP_ALPHA: usize = 8;
 /// `LightFloatBand` rows are in, and the one this crate used to answer with an invented
 /// "neutral daytime" constant.
 ///
-/// Byte-VERIFIED (decision 1465, wow-re `system/lighting/scratch/band-zero-key-contract.md`):
+/// In the reference (decision 1465):
 /// the colour evaluator `0x6d62e0` early-outs *before* touching the key/value arrays — key-count
 /// load `0x6d62ec`, guard `0x6d62ef`/`0x6d62f4`, store `0x6d62f6 mov [edi], 0xff000000` — an
 /// immediate, so the slot is opaque **black**: not zero-alpha, not stale, not skipped, and the
@@ -106,7 +103,7 @@ pub const ZERO_KEY_SCALAR: f32 = 0.0;
 pub struct Atmosphere {
     /// Fog-end band value (FloatBand sub0) in **yards** (`raw/36` — Elwynn clear 18000→500, storm
     /// 10000→278). Byte-VERIFIED (0327): the client applies the ×1/36 ONCE at DBC load
-    /// (`dn_array_scale_36 0x6d6090`, selector `rowIndex % 6 == 0` — the sub-0 distance band only).
+    /// (`0x6d6090`, selector `rowIndex % 6 == 0` — the sub-0 distance band only).
     /// The consumer pushes `min(fog_end, farclip)` (`dn_scene_fog 0x6cee30`), so the wall tracks
     /// the view-distance slider only below the zone's value. Lerped verbatim across weather/area
     /// blends, like the binary's `0x6d69d8`.
@@ -160,7 +157,7 @@ pub struct Atmosphere {
     pub cloud_density: f32,
     /// **Cloud palette** `[sun-glow, slope, gbase]` (IntBand sub-10/11/12) — the visible cloud
     /// dome's colors: per-texel `RGB = slope·p + gbase` plus a sun-aligned glow tinted by the
-    /// sun row (wow-re `cloud-coverage-pipeline.md` §3b/§3c).
+    /// sun row (the cloud dome builder `0x6cfb00`).
     pub cloud_colors: [[f32; 3]; 3],
 }
 

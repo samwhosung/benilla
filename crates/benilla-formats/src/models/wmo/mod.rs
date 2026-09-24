@@ -37,10 +37,10 @@ pub fn load_wmo(chain: &mut Chain, raw_path: &str) -> Result<Vec<super::RenderSu
 /// FourCC reversed (`MODN` → `NDOM`). Top-level root chunks are laid out flat from byte 0
 /// (`[magic:4][size:u32 LE][data:size]`), so a linear walk locates any of them.
 ///
-/// **The last chunk clamps to EOF; it never rejects the file.** The reference's walk "reads chunks
-/// while the 8-byte header is in-bounds and clamps the last chunk to EOF (never requires exact
-/// tiling)" — wow-re `models.md`, "WMO chunk-structure contract", whose own worked example is the
-/// file this rule exists for: `Undercity_144.wmo`'s MOGP declares one byte more than the file holds.
+/// **The last chunk clamps to EOF; it never rejects the file.** The reference's walk
+/// (`0x6c3a60`/`0x6c3f80`) "reads chunks while the 8-byte header is in-bounds and clamps the last
+/// chunk to EOF (never requires exact tiling)", and its worked example is the file this rule exists
+/// for: `Undercity_144.wmo`'s MOGP declares one byte more than the file holds.
 /// Abandoning the walk there cost that group its MOGP entirely — flags, portal-ref span, area, fog,
 /// doodad and light refs — which dead-ended the portal flood at B26's doorway (decision 0972).
 pub(crate) fn find_wmo_chunk<'a>(bytes: &'a [u8], magic: &[u8; 4]) -> Option<&'a [u8]> {

@@ -27,8 +27,8 @@ pub struct WmoDoodad {
     /// baker's authored local-lighting product for this placement. For an INTERIOR-group doodad this
     /// IS the slot-0 base light — the real client copies it at doodad create into the diffuse word
     /// (floor-raised to HSV value 112) and the ambient word (capped to max 96), never running any
-    /// footprint/attach sample (byte-verified `0x694e90` create → `6950de call 0x6a77e0(&MODD.colour,
-    /// …, 0x70, …, 0x60)`; wow-re `trace-forensics-abbey-interior-d3d` §1.1 — the abbey stands'
+    /// footprint/attach sample (`0x694e90` create → `6950de call 0x6a77e0(&MODD.colour,
+    /// …, 0x70, …, 0x60)`; in a reference capture the abbey stands'
     /// decoded diffuse words equal these bytes verbatim).
     pub color: [u8; 4],
 }
@@ -111,8 +111,7 @@ impl WmoRoot {
     ///
     /// The footstep chain's WMO leg (decision 1161): the client's down-ray arbitrates terrain
     /// against a building's collision faces, and when the building wins it re-rays that group's
-    /// RENDER faces and resolves `MOPY[face].material_id → MOMT[id]+0x20` (`0x6a26c0`, wow-re
-    /// `wmo-footstep-surface.md`).
+    /// RENDER faces and resolves `MOPY[face].material_id → MOMT[id]+0x20` (`0x6a26c0`).
     pub fn material_ground_types(&self) -> Vec<u32> {
         match &self.parsed {
             ParsedWmo::Root(r) => r.materials.iter().map(|m| m.ground_type).collect(),
@@ -122,8 +121,8 @@ impl WmoRoot {
 
     /// Per-material MOMT `diffColor` (`+0x1C`), RGB 0..1. Read for one consumer: an **interior**
     /// WMO liquid pool's body colour is `MOMT[MLIQ.materialId].diffColor`, taken raw, because the
-    /// reference's interior water kernel runs unlit with no pixel shader (wow-re
-    /// `terrain/scratch/water-shading-law.md`). Indexed by [`LiquidMesh::material_id`].
+    /// reference's interior water kernel runs unlit with no pixel shader (`0x6b6420`). Indexed by
+    /// [`LiquidMesh::material_id`].
     pub fn material_diff_colors(&self) -> Vec<[f32; 3]> {
         match &self.parsed {
             ParsedWmo::Root(r) => r
@@ -222,10 +221,10 @@ fn parse_wmo_group_infos(bytes: &[u8]) -> Vec<WmoGroupInfo> {
 }
 
 /// The WMO root's **portal graph** — the three root chunks that drive per-group visibility culling
-/// (`wow-5875-re` `system/models/models.md` → "WMO portal-based visibility culling", VERIFIED against
-/// `WoW.exe` 5875). All coordinates are WMO model space (WoW axes, Z up), the same space as
-/// [`WmoGroupInfo`] bounds. A group references its portals through a slice of [`Self::refs`] given by
-/// the group header's `portal_ref_start`/`portal_ref_count` ([`super::wmo_group_header`]).
+/// (the portal recursion `0x6b41c0`). All coordinates are WMO model space (WoW axes, Z up), the
+/// same space as [`WmoGroupInfo`] bounds. A group references its portals through a slice of
+/// [`Self::refs`] given by the group header's `portal_ref_start`/`portal_ref_count`
+/// ([`super::wmo_group_header`]).
 #[derive(Debug, Clone, Default)]
 pub struct WmoPortals {
     /// **MOPV** — the portal polygon vertices, pooled; a portal indexes a contiguous run via
@@ -310,11 +309,11 @@ pub fn parse_wmo_portals(bytes: &[u8]) -> WmoPortals {
     }
 }
 
-/// One **MFOG** fog record (48 bytes on disk — stride `0x30` VERIFIED as the client's own
-/// (`wow-5875-re` ledger: `CMapObj+0x158` mfog_ptr, stride `0x30`)). Fields are the verbatim
+/// One **MFOG** fog record (48 bytes on disk — stride `0x30`, the client's own
+/// (root parser `0x6c3a60`: `CMapObj+0x158` mfog_ptr, stride `0x30`)). Fields are the verbatim
 /// v17 on-disk layout; *which* record an interior group selects and how the client consumes
-/// `start_scalar` are the round-5 Q-G carve (`rf-weather-emission-timeline`) — parse now,
-/// apply only once pinned. Position/radii are WMO model space, same as [`WmoGroupInfo`] bounds.
+/// `start_scalar` are still open — parse now, apply only once pinned. Position/radii are WMO model
+/// space, same as [`WmoGroupInfo`] bounds.
 #[derive(Debug, Clone, Copy)]
 pub struct WmoFog {
     pub flags: u32,
@@ -326,7 +325,7 @@ pub struct WmoFog {
     pub radius_outer: f32,
     /// Land fog end distance (world units from the eye).
     pub fog_end: f32,
-    /// Land fog start, as a scalar of `fog_end` per the v17 layout (client transform pending Q-G).
+    /// Land fog start, as a scalar of `fog_end` per the v17 layout (client transform still open).
     pub fog_start_scalar: f32,
     /// Land fog colour — raw on-disk dword (`u32 LE`; byte-order decode deferred to the fold).
     pub color: u32,

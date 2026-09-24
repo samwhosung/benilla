@@ -1,6 +1,6 @@
 //! LockType.dbc — the small table that names a lock's *interaction kind* (Herbalism, Mining, Pick
 //! Lock, Fishing, …), and — for the three that carry one — the **cursor** the client shows when you
-//! hover a GameObject wearing that lock (decision 0236; wow-re cursor-system.md §4/§4a). The world
+//! hover a GameObject wearing that lock (decision 0236; `0x5f3070`). The world
 //! cursor's GameObject branch resolves a base-type GO's cursor by data: the GO template's `lockId` →
 //! [`crate::LockCatalog`] row → its **first** requirement slot's `LockType` index → *this* table's
 //! **CursorName** column. A non-empty CursorName (only `PickLock`/`GatherHerbs`/`Mine` in 5875) names
@@ -11,12 +11,12 @@
 //! The localized **Name** block (`Name@1..8` + flags, enUS at field 1 — `[lockTypeRow + locale*4 +
 //! 4]`, the exact read the lock-refusal toast performs at `0x5f34f9`) is the word the client fills
 //! into the client-local "Requires %s" error for an unopenable skill lock — "Requires Herbalism" /
-//! "Requires Mining" (wow-re cursor-system.md §8.8, decision 0545).
+//! "Requires Mining" (decision 0545).
 //!
 //! Layout verified against build 5875 (byte-checked live: 19 records × 29 fields, record size 116):
 //! `ID@0`, then the localized `Name` block, and **`CursorName@28`** (`[lockTypeRow+0x70]`, the exact
-//! offset the RE pinned). Every field is 4 bytes, so the intervening columns are read as `UInt32`
-//! filler — only `ID`, `Name` (enUS), and `CursorName` are consumed here.
+//! offset `0x5f3070` reads). Every field is 4 bytes, so the intervening columns are read as
+//! `UInt32` filler — only `ID`, `Name` (enUS), and `CursorName` are consumed here.
 
 use std::collections::HashMap;
 
@@ -29,8 +29,8 @@ use crate::dbc::{parse, str_at, u32_at};
 const LOCK_TYPE: &str = "DBFilesClient\\LockType.dbc";
 /// The file's column count (must equal the DBC header `field_count` — `benilla-dbc` enforces it).
 const LOCK_TYPE_FIELDS: usize = 29;
-/// The **CursorName** column (`[lockTypeRow+0x70]` = field 28, VERIFIED both by the RE offset and by
-/// a live byte-dump of the 5875 file).
+/// The **CursorName** column (`[lockTypeRow+0x70]` = field 28, VERIFIED both by the offset
+/// `0x5f3070` reads and by a live byte-dump of the 5875 file).
 const CURSOR_NAME_FIELD: usize = 28;
 /// The localized **Name** block's enUS column (field 1 — the toast's `[lockTypeRow + locale*4 + 4]`
 /// with locale 0).
@@ -55,7 +55,7 @@ impl LockTypeCatalog {
     }
 
     /// The localized `Name` of a lock kind ("Herbalism", "Mining", "Pick Lock", …) — the word the
-    /// lock-refusal toast fills into "Requires %s" (wow-re cursor-system.md §8.8; the client falls
+    /// lock-refusal toast fills into "Requires %s" (`0x5f34f9`; the client falls
     /// back to the literal `"UNKNOWN"` when the row is missing — that fallback is the caller's).
     pub fn name(&self, lock_type_id: u32) -> Option<&str> {
         self.names.get(&lock_type_id).map(String::as_str)

@@ -17,8 +17,8 @@ pub enum ModelBlend {
     AlphaTest,
     /// Alpha-blended / additive.
     Blend,
-    /// Multiplicative — `out = src·dst` (GL `DST_COLOR/ZERO`; byte-verified wow-re
-    /// `m2-depth-blend-state`: M2 mode 5 → EGxBlend 4; WMO MOMT mode 4, direct index). Darkens/tints
+    /// Multiplicative — `out = src·dst` (GL `DST_COLOR/ZERO`; `0x811fe0`: M2 mode 5 → EGxBlend 4;
+    /// WMO MOMT mode 4, direct index). Darkens/tints
     /// what's already drawn; the blend equation reads NO alpha, so these batches cannot alpha-fade
     /// (decision 0528).
     Mod,
@@ -90,11 +90,11 @@ impl BillboardKind {
 /// How a bone's **effective parent matrix** is rewritten before it composes — M2 bone flag bits
 /// `0x1/0x2/0x4`, the standard `ignore parent translate / scale / rotate` trio.
 ///
-/// The reference tests `flags & 7` on every non-root bone (`m2_animate` `0x714961`) and, when any
+/// The reference tests `flags & 7` on every non-root bone (`0x714961`) and, when any
 /// of the three is set, takes a ~950-byte arm (`0x71496d`–`0x714d0c`) that rebuilds that bone's
 /// parent matrix out of the **model's own root matrix** — pivot-preserved — *and then falls into
 /// the billboard selector unchanged*. It is not an escape hatch from anything: it changes the
-/// INPUT the billboard law is applied to (wow-re `billboard-bone-law.md` §9.1, byte-verified).
+/// INPUT the billboard law is applied to.
 ///
 /// The three legs are proven from the binary, matching the standard names: `0x1` at `0x714c92`,
 /// `0x2` at `0x714bdb`, `0x4` at `0x714a6e` alone / `0x714a18` combined with `0x2`.
@@ -147,8 +147,8 @@ impl ParentArm {
 /// A bone **scale track driven by a global sequence** — the looping "breathe" pulse a glow card rides.
 /// VERIFIED mechanism: the Lamppost glow card sits on a spherical-billboard bone whose scale track
 /// (`interp=1`, `gseq=0`) oscillates `0.86 … 1.04` over the model's 1333 ms global sequence, so the
-/// card grows/shrinks — read as a brightness pulse. The clock is the `m2_animate` Phase-B rule
-/// (wow-5875-re): `gseq_time = elapsed_ms % duration`, then a linear lerp between adjacent keys. Only
+/// card grows/shrinks — read as a brightness pulse. The clock is the kernel's global-sequence rule
+/// `0x714352`: `gseq_time = elapsed_ms % duration`, then a linear lerp between adjacent keys. Only
 /// **global-sequence** tracks are captured here (they loop with zero arming, the static-doodad case);
 /// a `gseq == 0xffff` track needs the armed-animation machinery we don't run for static props.
 #[derive(Debug, Clone)]
@@ -163,8 +163,8 @@ pub struct BoneScaleAnim {
 
 impl BoneScaleAnim {
     /// Sample the scale at `time_ms` (wrapped into `[0, duration_ms)`), linearly interpolating between
-    /// the bracketing keys (or stepping when `interp == false`). Mirrors `m2_track_search` + the linear
-    /// sampler leg for the static-doodad / global-sequence case.
+    /// the bracketing keys (or stepping when `interp == false`). Mirrors the key search
+    /// `0x713d50` + the linear sampler leg for the static-doodad / global-sequence case.
     pub fn sample(&self, time_ms: u32) -> [f32; 3] {
         let n = self.keys.len();
         if n == 0 {
@@ -322,8 +322,8 @@ pub struct Billboard {
     /// keys inside that sequence's band, rebased to it)`. Same keyed-Vec3-loop shape as
     /// [`BoneScaleAnim`] (values are offsets, WoW axes, not scales). The client's one-time load arm
     /// plays anim **0** (the questgiver `?` marker's bob); the marker re-arms anim **190** — the
-    /// authored *raised* bob — while the unit shows an overhead name (wow-re `questgiver-marker.md`
-    /// Q4). A sequence whose band holds ≤1 key gets no entry; a global-sequence track gets none at
+    /// authored *raised* bob — while the unit shows an overhead name (`0x6076c0`). A sequence whose
+    /// band holds ≤1 key gets no entry; a global-sequence track gets none at
     /// all. Only the **marker spawn site arms these** today; placed doodads' cards stay static-pivot
     /// (the billboard half of the 0130 phase-4 bone-ride work owns that arming).
     pub seq_translations: Vec<(u16, BoneScaleAnim)>,
@@ -333,7 +333,7 @@ pub struct Billboard {
 /// TRANS, then `intBatchCount` INT, then EXT (MOGP header counts at `+0x28/+0x2a/+0x2c`, right after
 /// the byte-verified portal-ref span; cross-checked against NSabbey groups 1/3, whose per-class batch
 /// index counts match the reference client's observed draws batch-for-batch). The class picks an
-/// interior group's lighting law (wow-re `trace-forensics-abbey-interior-d3d` §2, observed on the
+/// interior group's lighting law (observed in a reference capture of the
 /// abbey at close range): **INT draws once, UNLIT — pure `tex × MOCV`, no exterior light, no
 /// points**; **TRANS draws as a per-vertex MOCV-**alpha** lerp between the day/night-lit surface and
 /// that unlit bake** (the reference does it as two passes; one pass computes the same product);
@@ -346,12 +346,12 @@ pub enum WmoBatchClass {
 }
 
 /// The batch's fog COLOUR policy — the per-blend fog table of the M2 batch state setter
-/// (`0x70baf0`, table `DAT_811fc4` dispatched at `0x70bddf`; wow-re rf-weather-emission-timeline
-/// ROUND 4): opaque/alpha-key/alpha fog toward the scene day-night colour; Add/AddAlpha toward
-/// BLACK (an additive batch FADES with distance/veil instead of adding grey — the storm-veil
-/// level-up fix); Mod toward WHITE; Mod2x toward GREY-128. Render flag 0x02 (`0x70bb24`) — or a
-/// dead scene fog — disables fog outright. Discriminants are the shader encoding (Scene = 0 so
-/// every non-M2 material defaults to the ordinary scene fog).
+/// (`0x70baf0`, table `DAT_811fc4` dispatched at `0x70bddf`): opaque/alpha-key/alpha fog toward
+/// the scene day-night colour; Add/AddAlpha toward BLACK (an additive batch FADES with
+/// distance/veil instead of adding grey — the storm-veil level-up fix); Mod toward WHITE; Mod2x
+/// toward GREY-128. Render flag 0x02 (`0x70bb24`) — or a dead scene fog — disables fog outright.
+/// Discriminants are the shader encoding (Scene = 0 so every non-M2 material defaults to the
+/// ordinary scene fog).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FogPolicy {
     #[default]
@@ -427,7 +427,8 @@ pub struct RenderSubmesh {
     /// cards). For **WMO** it's MOMT `UNLIT (0x01)` on an **exterior-group** batch only — the
     /// exterior drawer keys lighting per material (`rs 0xE = !(flags & 1)`, unlit ⇒ `tex × white`),
     /// while the interior drawer IGNORES the flag: lit/unlit there is dictated by the batch section
-    /// alone ([`Self::wmo_batch`]). Byte law: wow-re `wmo-lit-selector` §1.2/§1.3.
+    /// alone ([`Self::wmo_batch`]). Byte law: the interior drawer `0x6b5190`, the exterior
+    /// drawer `0x6b4f10`.
     pub emissive: bool,
     /// This batch's texture record is **type 14 — the icon slot**: no file of its own, filled at
     /// runtime by `Model:ReplaceIconTexture` (`0x710ec0` swaps every type-14 handle on the
@@ -441,14 +442,14 @@ pub struct RenderSubmesh {
     /// EMISSION, which the FFP adds **inside** the lit sum before the texture modulate —
     /// `tex × (lit + sidn·night)`. A GL_LIGHTING term, so it contributes on LIT lanes only (dead on
     /// an unlit INT batch, and under `UNLIT` where lighting is off). `None` for M2 and non-SIDN WMO
-    /// materials. Byte law: wow-re `wmo-interior-night-light` §3/§4, updater `0x6b4090`.
+    /// materials. Byte law: updater `0x6b4090`.
     pub sidn: Option<[u8; 3]>,
     /// MOMT **WINDOW** (`0x20`): in the **interior** drawer this batch swaps GL_LIGHT0 to the
     /// brighter interior pair — ambient AND diffuse = the midpoint of the Direct and Ambient
     /// day/night bands (ambient +16/255, saturating) — install → draw → restore, per batch. The
     /// exterior drawer has no WINDOW machinery, so the flag only acts on interior-group batches.
-    /// This is the bright warm pane seen from inside a building (wow-re `wmo-interior-night-light`
-    /// §2, derivation `0x6d37e0`). `false` for M2.
+    /// This is the bright warm pane seen from inside a building (derivation `0x6d37e0`). `false`
+    /// for M2.
     pub window: bool,
     /// This batch blends **additively** — its colour is *added* to the framebuffer rather than mixed
     /// with it (M2 blend mode `3` NoAlphaAdd / `4` Add). Glow cards, coronae, magic effects. Rendering
@@ -456,8 +457,8 @@ pub struct RenderSubmesh {
     /// warm glow; additive preserves the authored hue. `false` for everything else (incl. all WMO for now).
     pub additive: bool,
     /// M2 render-flag **0x10 — disable depth write** for this batch. The real 1.12 client writes depth
-    /// for *every* batch (opaque or transparent) **unless** this bit is set (VERIFIED, wow-re
-    /// `m2-depth-blend-state`); benilla otherwise blanket-disables depth-write for the whole transparent
+    /// for *every* batch (opaque or transparent) **unless** this bit is set
+    /// (`0x70c190`); benilla otherwise blanket-disables depth-write for the whole transparent
     /// pass, so a model's own transparent cards bleed through / flicker from some angles. `false` for WMO
     /// (its depth state is the standard opaque/transparent pass).
     pub no_depth_write: bool,
@@ -479,8 +480,8 @@ pub struct RenderSubmesh {
     /// The batch's **animated material alpha** (decision 0130 phase 2): its time-varying colour-alpha
     /// and/or transparency-weight loops, baked by [`mat_anim`](super::mat_anim). `None` when both
     /// factors are static (baked/culled at build) — the overwhelming majority. The runtime multiplies
-    /// the sampled value into the instance's render alpha, per the verified combine (wow-re
-    /// `m2-alpha-combine-cull`).
+    /// the sampled value into the instance's render alpha, per the reference's combine
+    /// (`0x707680`).
     pub alpha_anim: Option<AlphaAnim>,
     /// The batch's **UV-animation** loop (decision 0130 phase 3): the texture transform's
     /// translation track baked by [`tex_anim`](super::tex_anim) — the raw `(x, y)` offset over the loop
@@ -521,8 +522,8 @@ pub struct RenderSubmesh {
     /// layer and the shine/reflect layer authored over it (`ARMORREFLECT3` on the ballista's bolt
     /// heads and shields, `BALISTASHINE02` on the loose bolts — 264 sections across 221 world
     /// doodads, `m2_shared_section`). The reference draws both from one vertex array under
-    /// depth-write + LEQUAL, so the later one wins the coplanar tie **exactly** (wow-re
-    /// `m2-depth-blend-state`). We only match that while both take the same vertex-transform path,
+    /// depth-write + LEQUAL, so the later one wins the coplanar tie **exactly**
+    /// (`0x70c190`). We only match that while both take the same vertex-transform path,
     /// which is why the consolidators refuse a batch whose section they cannot take whole — see
     /// `terrain_stream::spawn::assemble`.
     pub section: Option<u16>,
@@ -640,11 +641,11 @@ impl RenderSubmesh {
     /// Is this a **billboard card authored back-to-front** — one flat plane whose normal sits in the
     /// −X half-space the billboard law points *away* from the camera?
     ///
-    /// The billboard arm aims bone-local **+X** at the viewer (wow-re `billboard-bone-law.md` §2;
+    /// The billboard arm aims bone-local **+X** at the viewer (`0x71547c`;
     /// M2 bones carry no bind rotation, so bone-local == model space here), and 279 of the corpus's
     /// 4424 billboard batches are wound and normalled the other way — the camera only ever sees the
     /// card's back. The reference skins the normal through the same billboard-replaced palette row
-    /// as the position (`m2_vertex_skin 0x71a460`) and never flips one per face, so on those cards
+    /// as the position (`0x71a460`) and never flips one per face, so on those cards
     /// its `max(N·L, 0)` runs off a normal pointing away from the viewer and the card's shading
     /// swings with the CAMERA: bare ambient when the sun is behind you, full sun when you look into
     /// it. Consumers light such a card off the side it presents instead (decision 0788).

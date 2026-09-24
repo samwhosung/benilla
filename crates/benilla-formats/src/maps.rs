@@ -32,7 +32,7 @@ pub struct MapCatalog {
     /// `mapId → MapName_Lang[enUS]` (field 4, `+0x10` — the offset the binary's map-name reader
     /// `0x4a65a0` uses against this same patch-2 layout). The world map's continent dropdown
     /// displays THIS ("Eastern Kingdoms"), not the WorldMapArea art-folder string ("Azeroth") —
-    /// wow-re Q3 verdict, 2026-07-07.
+    /// `GetMapContinents` `0x4a7ce0`.
     names: HashMap<u32, String>,
     /// `mapId → LoadingScreenID` FK into `LoadingScreens.dbc` (only maps with a non-zero FK).
     loading_screens: HashMap<u32, u32>,
@@ -48,8 +48,8 @@ pub struct MapCatalog {
     battleground: HashMap<u32, MapBattlegroundColumns>,
 }
 
-/// The Map.dbc columns the client's battleground family reads by row offset (wow-re
-/// `battlefield-verb-family.md` §3.4, §3.6, §4.1, §5.2; decision 1974). Offsets are into the
+/// The Map.dbc columns the client's battleground family reads by row offset (`GetBattlefieldInfo`
+/// `0x4ab0b0`, the list handler `0x4aa6c0`; decision 1974). Offsets are into the
 /// 168-byte record with the id at `+0x00`, so `+0x4·k` is field `k`. VERIFIED by dumping the
 /// shipped patch-2 `Map.dbc` (2026-09-04): Warsong Gulch `10, 60, 10, −1, (0, 0), span 10, group 1`;
 /// Arathi Basin `20, 60, 15, …, span 10, group 1`; Alterac Valley `51, 60, 40, −1, (0.74, 0.34),
@@ -57,7 +57,7 @@ pub struct MapCatalog {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct MapBattlegroundColumns {
     /// Field 13 (`+0x34`) — the bracket base: the list and status handlers compute a bracket's
-    /// floor as `bracket · span + min_level` (§4.1). `GetBattlefieldInfo`'s third value.
+    /// floor as `bracket · span + min_level` (`0x4aa6c0`). `GetBattlefieldInfo`'s third value.
     pub min_level: u32,
     /// Field 14 (`+0x38`) — `GetBattlefieldInfo`'s fourth value.
     pub max_level: u32,
@@ -71,24 +71,24 @@ pub struct MapBattlegroundColumns {
     pub field_18: f32,
     /// Fields 20 and 29 (`+0x50`, `+0x74`) — the two localized descriptions, indexed by the
     /// client's faction-group index: `0` for a FactionTemplate mask with bit `0x4`, `1` for bit
-    /// `0x2` (§3.4). The shipped rows carry the SAME text in both, so nothing observable rides on
-    /// which side is which.
+    /// `0x2` (`0x5efe00`). The shipped rows carry the SAME text in both, so nothing observable
+    /// rides on which side is which.
     pub descriptions: [String; 2],
     /// Field 39 (`+0x9c`) — the level-bracket span; `0` means one bracket and zeroed bounds.
     pub bracket_span: u32,
     /// Field 40 (`+0xa0`) — non-zero when the battleground can be queued as a group
-    /// (`CanJoinBattlefieldAsGroup`, §3.6).
+    /// (`CanJoinBattlefieldAsGroup` `0x4ac380`).
     pub group_queue: u32,
     /// Field 41 (`+0xa4`, f32, the record's last) — `MinimapIconScale`, what
-    /// `GetBattlefieldMapIconScale()` answers for the active queue slot's map (wow-re
-    /// `worldmap-arrow-and-positions.md` §3.6; 1980). Shipped: `1.25` for Arathi Basin, `1.0`
-    /// for every other row read.
+    /// `GetBattlefieldMapIconScale()` answers for the active queue slot's map (`0x4ac3d0`; 1980).
+    /// Shipped: `1.25` for Arathi Basin, `1.0` for every other row read.
     pub minimap_icon_scale: f32,
 }
 
 impl MapBattlegroundColumns {
-    /// The bracket's `(min, max)` for a wire bracket index (§4.1/§4.2): with a positive span,
-    /// `min = bracket · span + min_level` and `max = min(span + min − 1, 60)`; else both zero.
+    /// The bracket's `(min, max)` for a wire bracket index (`0x4aa6c0`/`0x4aa850`): with a
+    /// positive span, `min = bracket · span + min_level` and `max = min(span + min − 1, 60)`; else
+    /// both zero.
     pub fn bracket_levels(&self, bracket: u8) -> (u32, u32) {
         if self.bracket_span == 0 {
             return (0, 0);
@@ -259,7 +259,7 @@ mod tests {
     use super::*;
 
     /// The battleground columns off the shipped patch-2 `Map.dbc`, and the bracket arithmetic the
-    /// list and status handlers run on them (wow-re `battlefield-verb-family.md` §4.1).
+    /// list and status handlers run on them (`0x4aa6c0`, `0x4aa850`).
     #[test]
     fn the_battleground_columns_read_the_shipped_rows() {
         let data = crate::wow_data_or_skip!();

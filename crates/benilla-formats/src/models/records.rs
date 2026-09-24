@@ -2,13 +2,13 @@
 //! `benilla-m2` deliberately skips (it parses only the render path) plus the WMO root's MOLT
 //! lights: M2 dynamic lights (decision 0016), the WMO fixture lights, and the model's authored
 //! **portrait camera** (the unit-frame bake's framing source). Each is a small header-offset walk
-//! over the vanilla record shape, byte-verified in wow-5875-re; all positions stay raw WoW model
+//! over the vanilla record shape the reference reads; all positions stay raw WoW model
 //! space (the render boundary bakes to Bevy space).
 
 use benilla_bytes::ByteExt;
 
-/// An M2 **light** (MD20 lights array, byte-verified against wow-5875-re
-/// `models/scratch/m2-dynamic-lights.md`). A `light_type == 1` (point) light on a placed prop
+/// An M2 **light** (MD20 lights array, loaded by `0x70ebd0`). A `light_type == 1` (point) light
+/// on a placed prop
 /// (campfire/torch/brazier/candle/forge) is committed by the real client as a hardware `GL_LIGHT` with
 /// the fixed attenuation `1 / (0.7·d + 0.03·d²)` — constant term 0, so intensity peaks hard at the
 /// source: the tight interior "hot-spot" (decision 0016). It lights every lit surface — terrain, M2
@@ -31,13 +31,12 @@ pub struct M2Light {
     pub attenuation_start: f32,
     pub attenuation_end: f32,
     /// The light **bone's local +Z axis in model space** at the track origin (first rotation keys
-    /// composed up the parent chain) — a DIRECTIONAL light's direction basis. The byte law (wow-re
-    /// `glue/scratch/glue-model-lighting.md §3`, correcting `m2-dynamic-lights.md §2`): the gather
-    /// reads **row 2 of the light bone's pose matrix** — never the def position, which is the
-    /// POINT branch's input only — and the on-surface **to-light** vector nets to
-    /// `normalize(Bz·BM_rot)`. `[0,0,1]` for a boneless/rotationless chain (identity pose).
+    /// composed up the parent chain) — a DIRECTIONAL light's direction basis. The byte law
+    /// (`0x718a76`): the gather reads **row 2 of the light bone's pose matrix** — never the def
+    /// position, which is the POINT branch's input only — and the on-surface **to-light** vector
+    /// nets to `normalize(Bz·BM_rot)`. `[0,0,1]` for a boneless/rotationless chain (identity pose).
     pub bone_z: [f32; 3],
-    /// The **ON-gating** verdict (wow-re `m2-dynamic-lights.md` §9.4, VERIFIED mechanism): both
+    /// The **ON-gating**: both
     /// runtime gate bytes load as `1`, and the per-frame animate loop rewrites the visibility byte
     /// **only when the visibility track has keys** (`716413`: zero keys ⇒ sample skipped ⇒ the load
     /// default 1 stands). So a light is dark iff its asset ships a first visibility key of literally
@@ -48,13 +47,13 @@ pub struct M2Light {
 
 impl M2Light {
     /// `type == 1` — an omnidirectional point light (the hot-spot caster). Type 0 (directional) feeds the
-    /// ambient accumulator, not a discrete GL light (decision 0016 / wow-5875-re m2-dynamic-lights).
+    /// ambient accumulator, not a discrete GL light (decision 0016 / `0x71bc70`).
     pub fn is_point(&self) -> bool {
         self.light_type == 1
     }
 
-    /// The spawn gate: a **point** light whose visibility track doesn't hold it dark (§9.4). Every
-    /// site that turns authored M2 lights into scene lights filters on this.
+    /// The spawn gate: a **point** light whose visibility track doesn't hold it dark (`0x716413`).
+    /// Every site that turns authored M2 lights into scene lights filters on this.
     pub fn casts(&self) -> bool {
         self.is_point() && !self.visibility_off
     }
@@ -65,7 +64,7 @@ impl M2Light {
 /// fixtures (fireplaces, forge, candles, chandeliers); they are warm-coloured, and each wall fixture
 /// doodad gets a companion MOLT at its flames (NSabbey: one per candelabra, ~3.4 yd above the MODD
 /// origin). At runtime 1.12 commits them into the scene dynamic-light DB every frame for every visible
-/// WMO (wow-re `wmo-molt-runtime`), lighting terrain, doodads/NPCs, and the building's own surfaces
+/// WMO (`0x695c00` → `0x71b650`), lighting terrain, doodads/NPCs, and the building's own surfaces
 /// over their baked MOCV (decision 0273 — confirmed live in the reference GL trace: an NSabbey batch
 /// drew under `colour × intensity` point lights at the fixed 0/0.7/0.03 falloff). `position` is WMO
 /// model space (WoW axes). SMOLight stride 0x30.
@@ -196,7 +195,7 @@ fn bone_z_axis(bytes: &[u8], bone: i16) -> [f32; 3] {
 
 /// One M2 light record at a bounds-checked `rec` (the loop below already proved `rec + 0xd4 <=
 /// bytes.len()`), so these reads can only fail on a header/offset bug — treated as "stop", not panic.
-/// Offsets byte-verified in wow-5875-re `models/scratch/m2-dynamic-lights.md §1`: `type@0`, `bone@2`,
+/// Offsets as the reference reads them (`0x718960`, `0x714260`): `type@0`, `bone@2`,
 /// `position@4`, then 7 × `0x1c` M2Tracks — ambient colour/intensity `@0x10`/`@0x2c`, diffuse
 /// colour/intensity `@0x48`/`@0x64`, attenuation start/end `@0x80`/`@0x9c`, visibility `@0xb8`. We
 /// take diffuse (colour+intensity) + attenuation + the visibility gate ([`M2Light::visibility_off`],
@@ -246,8 +245,7 @@ pub fn parse_m2_lights(bytes: &[u8]) -> Vec<M2Light> {
 }
 
 /// The model's authored **portrait camera** — the MD20 camera the real 1.12 client renders every
-/// unit-frame portrait through (VERIFIED, wow-re `system/ui/scratch/portrait-render.md` §4,
-/// corrected verdict `aa186e79`): the bake at `0x524f60` selects camera `cameraLookup[0]` and
+/// unit-frame portrait through: the bake at `0x524f60` selects camera `cameraLookup[0]` and
 /// builds `lookAt(position, target, up-from-roll)` + the gxumath *diagonal-FOV* perspective
 /// (`0x5c3cc0`, half-angle `(fov/2)/√(aspect²+1)`) at the portrait path's fixed `aspect = 4/3` —
 /// net vertical half-angle `0.3·fov` with a 3:4 anamorphic squeeze. The framing is per-model
@@ -312,8 +310,8 @@ pub fn parse_m2_camera(bytes: &[u8], index: usize) -> Option<M2PortraitCamera> {
 /// type@0, useAtten@1, colour(BGRA)@4, position@8, intensity@0x14, **attenStart@0x28, attenEnd@0x2c**.
 /// The runtime-consumed disk attenuation fields sit at the record's TAIL, not right after the
 /// intensity — `+0x18..+0x28` hold four other floats (≈0, −0, −1, −0.5 on every vanilla light
-/// audited). Verified two ways: wow-re `trace-forensics-abbey-interior-d3d` §4 fitted the reference's
-/// fold window at exactly the `+0x28/+0x2c` values (NSabbey MOLT[10] 3.3333/4.7222; MOLT[40]/[41]
+/// audited). Verified two ways: a reference capture's fold window fits
+/// exactly the `+0x28/+0x2c` values (NSabbey MOLT[10] 3.3333/4.7222; MOLT[40]/[41]
 /// end 5.5556), and the abbey file carries those numbers at `+0x28/+0x2c` while `+0x18/+0x1c` read
 /// ≈0/−0 (an earlier read of `+0x18/+0x1c` shipped zeros — dormant while nothing consumed them).
 fn read_wmo_light(b: &[u8], r: usize) -> Option<WmoLight> {
@@ -434,16 +432,16 @@ mod tests {
 /// selects on a `<Model>` widget.
 ///
 /// The selection is **raw**: `0x76cec0` reads the count off `MD20+0x124` and the record at
-/// `[model+0x3c4] + idx·0x84 + 0x80`, and **`cameraLookup` is not consulted** on that path (wow-re
-/// `ui/scratch/modelframe-camera-law.md` §2.1 — the sibling pair that *does* consult it,
-/// `0x713500`/`0x713540`, has its one call site at the portrait bake). So the index decides and
+/// `[model+0x3c4] + idx·0x84 + 0x80`, and **`cameraLookup` is not consulted** on that path (the
+/// sibling pair that *does* consult it, `0x713500`/`0x713540`, has its one call site at the
+/// portrait bake). So the index decides and
 /// [`Self::camera_type`] never does; it is carried because a reader will otherwise assume the
 /// opposite.
 ///
 /// [`Self::still`] is the rest rig — the record's bases plus each track's first key. That is the
-/// whole answer for every model a `<Model>` pane can name: wow-re's census over all 9691 `.m2` of
+/// whole answer for every model a `<Model>` pane can name: a census over all 9691 `.m2` of
 /// the composite found every character/creature/interface camera's position/target/roll track
-/// carrying exactly one key of `(0,0,0)`/`0` (§7). [`Self::at`] is the general case — the
+/// carrying exactly one key of `(0,0,0)`/`0`. [`Self::at`] is the general case — the
 /// `Cameras\*.m2` fly-bys, whose Bézier paths a widget would sample like any other track.
 #[derive(Debug, Clone)]
 pub struct M2PaneCamera {
@@ -520,7 +518,7 @@ pub fn parse_m2_pane_cameras(bytes: &[u8]) -> Vec<M2PaneCamera> {
             };
             // A track that never leaves its first key is the still rig at every instant; keeping
             // it would cost a sample per frame to reproduce a constant. Every shipped
-            // character/creature/interface camera lands here (wow-re camera-law §7).
+            // character/creature/interface camera lands here (a census over every shipped `.m2`).
             let moves = |n: usize, same: bool| n > 1 && !same;
             let v3_moves = |t: &benilla_m2::M2Vec3SplineTrack| {
                 let first = key0(t);

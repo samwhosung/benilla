@@ -84,8 +84,8 @@ pub fn parse_m2_collision_hull(bytes: &[u8]) -> Result<CollisionMesh> {
     Ok(CollisionMesh { positions, indices })
 }
 
-/// MOPY per-face flags (1.12) and the two collision gather masks — both **VERIFIED** from `WoW.exe` 5875
-/// (objdump; see wow-5875-re `system/collision/collision.md` → "The WMO per-face MOPY collision mask").
+/// MOPY per-face flags (1.12) and the two collision gather masks — both from `WoW.exe` 5875
+/// (objdump).
 /// The skip predicate is a pure function of a 32-bit collision *class* word built per query; the two
 /// classes benilla reproduces, one collider mesh each:
 ///   - **WALKING / movement** (the player body): skip a face **iff `flags & 0x04`** (DETAIL/decal). Reject
@@ -95,8 +95,7 @@ pub fn parse_m2_collision_hull(bytes: &[u8]) -> Result<CollisionMesh> {
 ///     (e.g. forge pipes). Reject mask `0x82` from class word `0x10_0171` (ui `0x50e570`).
 ///
 /// So the difference is exactly: walking drops DETAIL; the camera instead drops NOCAMCOLLIDE. (The older
-/// `FUN_006bca50` citation was a superseded prototype lead, corrected
-/// when wow-re took ownership of the WMO leaf.)
+/// `FUN_006bca50` citation was a superseded prototype lead.)
 const MOPY_DETAIL: u8 = 0x04;
 /// The bit the **camera/LOS** gather excludes — NOCAMCOLLIDE, the faces the third-person camera passes
 /// through. See [`MOPY_DETAIL`] for the full walking-vs-camera mask derivation.
@@ -107,7 +106,7 @@ const MOPY_NOCAMCOLLIDE: u8 = 0x02;
 /// submeshes; the benilla bake reuses the identical MODF placement transform). Selection = the
 /// binary-VERIFIED client filter: a face collides **iff `(flags & 0x04 DETAIL) == 0`** (exclude
 /// render-only decals only) — the walking-gather mask 0x84 read from `WoW.exe` 5875 (`FUN_006bca50`,
-/// 3 agents/objdump). This is *more* inclusive than the old
+/// objdump). This is *more* inclusive than the old
 /// server-vmap-extractor rule `COLLISION || (RENDER && !DETAIL)`, which wrongly dropped the
 /// flags-0x00 / 0x40-only faces the real client collides. *(Whole-group skips — mogpFlags
 /// unreachable/antiportal — are a later refinement; including all rendered groups is safe for ground-snap.)*

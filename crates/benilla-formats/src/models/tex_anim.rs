@@ -117,9 +117,8 @@ fn is_scale_identity(v: [f32; 2]) -> bool {
 /// Bake the batch's texture-transform **rotation** loop per file sequence slot — the raw
 /// quaternion keys, **component-lerped and never normalised**, which is what the reference does
 /// (`0x713ea0` lerps each component and `0x7bddb0` consumes the result as is: between two 22.5°
-/// keys `|q|` dips to cos 11.25° and the block is a rotation with a slight shrink — wow-re
-/// `modelframe-texanim-and-sequence-law.md` §3.4). `None` when the transform is absent or its
-/// rotation never leaves the identity.
+/// keys `|q|` dips to cos 11.25° and the block is a rotation with a slight shrink). `None` when the
+/// transform is absent or its rotation never leaves the identity.
 pub(super) fn bake_uv_rot_seqs(
     model: &M2Model,
     combo_index: u16,
@@ -170,8 +169,8 @@ pub(super) fn bake_uv_scale_seqs(
     )
 }
 
-/// **The texture transform's law**, from the file to the texel (wow-re
-/// `modelframe-texanim-and-sequence-law.md` §3.4, VERIFIED trio-convergent):
+/// **The texture transform's law**, from the file to the texel (the texture-transform loop
+/// `0x715f25`):
 ///
 /// > `uv' = R_q((uv + t − p) ⊙ s) + p`, `p = (½, ½)`
 ///
@@ -200,7 +199,7 @@ mod tests {
     use super::*;
     use benilla_m2::M2Vec3Track;
 
-    /// The law's handedness, on the note's own worked example: `θ = +90°` (`z = w = √½`),
+    /// The law's handedness, worked through an example: `θ = +90°` (`z = w = √½`),
     /// `p = (½, ½)`, no translation, unit scale — `(1, 0.5) ↦ (0.5, 1.0)`, a counter-clockwise
     /// turn in the `u`-right / `v`-up frame; and a `z < 0` key (every key of the cooldown model)
     /// turns the other way.
@@ -227,7 +226,7 @@ mod tests {
             "{tr:?}"
         );
         // The lerped, unnormalised midpoint between 0° and 45° keys shrinks: |q| < 1 ⇒ the
-        // block's scale is below 1 (the note's cos 11.25° effect, at a coarser pair here).
+        // block's scale is below 1 (the same cos 11.25° shrink, at a coarser pair here).
         let (c, sn) = rotation_2x2([
             0.0,
             0.0,

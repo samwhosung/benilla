@@ -25,8 +25,8 @@
 //!
 //! **What counts as painted is the texel, not the batch.** An `Opaque` batch paints every pixel it
 //! covers. A `Blend`/`AlphaTest` batch paints where its texture's alpha would pass the reference's
-//! own alpha test — **`≥ 224/255`**, the 1.12 alpha-key reference (wow-re `models.md`, not Cata's
-//! 128) — sampled per pixel through the batch's UVs, perspective-correct, with its wrap/clamp mode.
+//! own alpha test — **`≥ 224/255`**, the 1.12 alpha-key reference (`0x70c256`, not Cata's 128) —
+//! sampled per pixel through the batch's UVs, perspective-correct, with its wrap/clamp mode.
 //! Both halves of that rule matter on the real art: the artists drew `UI_Human`'s street and its
 //! sky card as *blend* batches over opaque textures (so "opaque batches only" measured that scene
 //! at half its authored box), and `UI_NightElf`'s edges are an alpha-tested wall of trees over a
@@ -76,7 +76,7 @@ pub struct ArtExtent {
 pub const GLUE_AUTHORED_ASPECT: f32 = 4.0 / 3.0;
 
 /// The 1.12 client's alpha-key reference: a texel passes its alpha test at `alpha ≥ 224`
-/// (wow-re `models.md` — `ALPHAREF` 224, `GEQUAL`). The one threshold this module paints by.
+/// (`0x70c256` — `ALPHAREF` 224, `GEQUAL`). The one threshold this module paints by.
 pub const ALPHA_KEY_REF: u8 = 224;
 
 /// The **shipped** scenes' measured extents and authored fovs — `benilla-extract glueextent` on

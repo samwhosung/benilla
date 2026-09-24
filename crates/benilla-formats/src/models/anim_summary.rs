@@ -17,12 +17,10 @@ use crate::Chain;
 use super::{le_u32, model_path, parse_m2_animations, parse_m2_global_sequence_bones};
 
 /// Raw header read: the model's **texture-transform** (UV-animation) array count — MD20 `0x74`
-/// (count) / `0x78` (offset). VERIFIED wow-5875-re (`system/models/models.md`'s full 32-descriptor
-/// header field map labels this slot `texReplace@0x74`, and the element-def section separately
-/// confirms it IS the textureTransform array: "**textureTransform** (header `0x74`, runtime 0x98) =
-/// 3 M2Tracks translation(vec3) / rotation(quat) / scaling(vec3)" — a UV-space TRS animated over
-/// time). `benilla-m2` doesn't parse the track contents (no consumer yet), so this reads only the
-/// count: whether the model authors any UV animation at all.
+/// (count) / `0x78` (offset). It IS the textureTransform array (the header walk `0x71cdf0`; runtime
+/// 0x98) = 3 M2Tracks translation(vec3) / rotation(quat) / scaling(vec3) — a UV-space TRS animated
+/// over time. `benilla-m2` doesn't parse the track contents (no consumer yet), so this reads only
+/// the count: whether the model authors any UV animation at all.
 pub fn m2_texture_transform_count(b: &[u8]) -> usize {
     if b.len() < 0x78 || &b[0..4] != b"MD20" {
         return 0;
@@ -31,12 +29,10 @@ pub fn m2_texture_transform_count(b: &[u8]) -> usize {
 }
 
 /// Raw header read: the model's **ribbon emitter** array count — MD20 `0x134` (count) / `0x138`
-/// (offset), file stride `0xdc`. VERIFIED wow-5875-re (`system/models/models.md`: "ribbons@0x134" in
-/// the full header field map, corroborated by the emitter-def section's "**ribbon** (header `0x134`,
-/// file stride `0xdc`) → runtime `CRibbonEmitter`" and the loader's own copy loop, `0x70ebd0`
-/// `base+=0xdc @ ribbon 0x138`). Ribbon records aren't parsed here (deferred — wow-re item-12, the
-/// most version-variant MD20 record); the count alone says whether a model authors any trail effect
-/// (weapon glow trails, banner streamers).
+/// (offset), file stride `0xdc` (the header walk `0x71cdf0`, and the loader's own copy loop,
+/// `0x70ebd0` `base+=0xdc @ ribbon 0x138`; runtime `CRibbonEmitter`). Ribbon records aren't parsed
+/// here (deferred — the most version-variant MD20 record); the count alone says whether a model
+/// authors any trail effect (weapon glow trails, banner streamers).
 pub fn m2_ribbon_emitter_count(b: &[u8]) -> usize {
     if b.len() < 0x138 || &b[0..4] != b"MD20" {
         return 0;
@@ -80,7 +76,7 @@ pub struct M2AnimSummary {
     pub seq0_animated_bone_count: usize,
     /// How many sequences share sequence 0's `anim_id` — its **variation chain** length (file-order
     /// contiguous, retail exporters). The real client's effective load arm rolls `variationIdx = −1`
-    /// (a frequency-weighted pick over this chain, wow-re `doodad-anim-host.md` §4a), so a count > 1
+    /// (a frequency-weighted pick over this chain, `0x695100`), so a count > 1
     /// means instances of this model should NOT all play the same first-sequence variation.
     pub seq0_variation_count: usize,
     /// Every bone's **global-sequence** channel: `(bone, "T"/"R"/"S", period_ms)` — a free-running

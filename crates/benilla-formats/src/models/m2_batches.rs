@@ -104,10 +104,11 @@ fn normalize_weights(w: [u8; 4]) -> [f32; 4] {
 /// [`BoneScaleAnim`], straight from the raw M2 bytes. Returns `None` unless the track has >1 keys AND is
 /// tagged to a global sequence (`gseq != 0xffff`) — the always-looping pulse case (see [`BoneScaleAnim`]).
 ///
-/// MD20/bone offsets VERIFIED against wow-5875-re (`fields.md`: bones `count@0x34/ofs@0x38`, stride
-/// `0x6c`, scale track `+0x44`; global sequences `count@0x14/ofs@0x18`) and the real `Lamppost.m2`. The
-/// 28-byte vanilla M2Track tail: `interp@0`, `gseq@0x2`, `key{count@0xc, ofs@0x10}`, `val{count@0x14,
-/// ofs@0x18}` (C3Vector values, stride 12) — the same track shape the particle emission tracks use.
+/// MD20/bone offsets as the animate kernel `0x714260` reads them (bones `count@0x34/ofs@0x38`,
+/// stride `0x6c`, scale track `+0x44`; global sequences `count@0x14/ofs@0x18`), VERIFIED against
+/// the real `Lamppost.m2`. The 28-byte vanilla M2Track tail: `interp@0`, `gseq@0x2`,
+/// `key{count@0xc, ofs@0x10}`, `val{count@0x14, ofs@0x18}` (C3Vector values, stride 12) — the same
+/// track shape the particle emission tracks use.
 fn parse_bone_scale_anim(bytes: &[u8], bone_idx: usize) -> Option<BoneScaleAnim> {
     let bone_count = bytes.u32_at(0x34)? as usize;
     let bones_ofs = bytes.u32_at(0x38)? as usize;
@@ -157,11 +158,11 @@ fn parse_bone_scale_anim(bytes: &[u8], bone_idx: usize) -> Option<BoneScaleAnim>
 /// Read bone `bone_idx`'s **translation** track (M2Track<C3Vector> at `bone + 0x0c`) restricted to
 /// one sequence's absolute time `band`, rebased to it as a loop: the window an arm plays on the
 /// bone — anim 0 is the client's one-time load arm (the questgiver `?` marker's bob), anim 190 the
-/// marker's raised variant (wow-re `questgiver-marker.md` Q4 / `doodad-anim-host.md`). Returns
+/// marker's raised variant (`0x6076c0`). Returns
 /// `None` unless the track is a **sequence** track (`gseq == 0xffff` — the gseq case is the
 /// armed-free loop `parse_bone_scale_anim` handles for scale) holding >1 key inside the band.
-/// Offsets as [`parse_bone_scale_anim`]; the translation track sits at bone `+0x0c` (VERIFIED
-/// wow-5875-re `fields.md`: the three `M2Track`s at `+0x0c/+0x28/+0x44`).
+/// Offsets as [`parse_bone_scale_anim`]; the translation track sits at bone `+0x0c` (the three
+/// `M2Track`s at `+0x0c/+0x28/+0x44`, as `0x714260` reads them).
 fn parse_bone_seq_translation(
     bytes: &[u8],
     bone_idx: usize,
@@ -377,11 +378,11 @@ pub fn parse_m2_render_submeshes(
     //
     // A card is a RIGID body: the split below pulls a billboard bone's triangles out as their own
     // submesh and the renderer rotates that whole group about the bone's pivot. The reference has
-    // no card concept at all — it skins every vertex through the bone palette (`m2_vertex_skin`
-    // `0x71a460`), where a billboard bone's camera-replaced matrix (wow-re `billboard-bone-law.md`
-    // §5) is simply one more matrix in a per-vertex weighted blend. The two agree exactly when — and
-    // only when — the bone's geometry is rigidly **separable**: nothing shares a vertex or a
-    // triangle with the rest of the model.
+    // no card concept at all — it skins every vertex through the bone palette (the vertex skinner
+    // `0x71a460`), where a billboard bone's camera-replaced matrix (the billboard switch
+    // `0x7151f9`) is simply one more matrix in a per-vertex weighted blend. The two agree exactly
+    // when — and only when — the bone's geometry is rigidly **separable**: nothing shares a vertex
+    // or a triangle with the rest of the model.
     //
     // Where it isn't, a rigid group cannot express the answer *at all*, and the failure is not a
     // small error: a vertex weighted half to the flap and half to the body has to be placed wholly
@@ -460,10 +461,10 @@ pub fn parse_m2_render_submeshes(
         let blend = match material.map(|m| m.blend_mode.bits()) {
             Some(0) | None => ModelBlend::Opaque,
             Some(1) => ModelBlend::AlphaTest,
-            // Modes 5/6 are the MULTIPLY blends (wow-re `m2-depth-blend-state`, the DAT_00811fe0
-            // remap): 5 Mod → DST_COLOR/ZERO, 6 Mod2x → DST_COLOR/SRC_COLOR — the ARMORREFLECT
-            // weapon/armor sheen layers. Collapsing them into alpha-Blend painted the reflect
-            // texture OVER the blade instead of modulating it (decision 0528).
+            // Modes 5/6 are the MULTIPLY blends (the DAT_00811fe0 remap): 5 Mod → DST_COLOR/ZERO,
+            // 6 Mod2x → DST_COLOR/SRC_COLOR — the ARMORREFLECT weapon/armor sheen layers.
+            // Collapsing them into alpha-Blend painted the reflect texture OVER the blade instead
+            // of modulating it (decision 0528).
             Some(5) => ModelBlend::Mod,
             Some(6) => ModelBlend::Mod2x,
             Some(_) => ModelBlend::Blend,
@@ -488,11 +489,11 @@ pub fn parse_m2_render_submeshes(
         // batches (ElwynnLantern01.blp) carry 0x01; their bodies carry 0x00.
         let emissive = material.is_some_and(|m| m.flags.bits() & 0x01 != 0);
         // M2 render flags **0x10 (no depth-write)** / **0x08 (no depth-test)** — the real client keys
-        // per-batch depth state on these bits, NOT on the blend mode (VERIFIED, wow-re
-        // `m2-depth-blend-state`): every batch writes depth + tests LEQUAL unless its own bit clears it.
+        // per-batch depth state on these bits, NOT on the blend mode (`0x70c190`): every batch
+        // writes depth + tests LEQUAL unless its own bit clears it.
         let no_depth_write = material.is_some_and(|m| m.flags.bits() & 0x10 != 0);
         let no_depth_test = material.is_some_and(|m| m.flags.bits() & 0x08 != 0);
-        // The batch's fog COLOUR policy (wow-re rf-weather-emission-timeline ROUND 4, byte-cited): the
+        // The batch's fog COLOUR policy: the
         // M2 batch state setter `0x70baf0` disables fog outright when render flag 0x02 is set
         // (`0x70bb24`); otherwise the fog colour follows the blend mode via the policy table
         // `DAT_811fc4 = {1,1,1,2,2,3,4}` dispatched at `0x70bddf`/jump table `0x70c17c` — blend modes
@@ -509,7 +510,7 @@ pub fn parse_m2_render_submeshes(
             },
             None => FogPolicy::Scene,
         };
-        // Static visibility cull (VERIFIED, wow-re `m2-alpha-combine-cull`): the real client multiplies
+        // Static visibility cull (`0x707b3a`): the real client multiplies
         // a per-batch alpha `A = instanceAlpha · colorAlpha · transparencyWeight` and **skips the batch
         // when `A ≤ 0`** — *before* the blend mode is even read, so it culls even an Opaque batch. A
         // constant-0 colour-alpha or transparency-weight track is therefore invisible every frame: e.g.
@@ -540,7 +541,7 @@ pub fn parse_m2_render_submeshes(
         // constant — bakes to an [`AlphaAnim`] the app samples per instance on the model clock.
         //
         // Baked **once per sequence**: the tracks key on one absolute timeline that every sequence
-        // carves a band out of, and the reference re-reads them from the *playing* sequence's key
+        // slices a band out of, and the reference re-reads them from the *playing* sequence's key
         // window each frame. Baking only band 0 was right for a placed doodad (one arm, looped
         // forever) and wrong for every creature — a batch authored to appear only on death reads
         // its Stand value forever, so we draw geometry the reference hides.
@@ -744,9 +745,9 @@ pub fn parse_m2_render_submeshes(
     // fury zones, rallying-cry triggers, tonk-game consoles…): a flat (degenerate render box) quad
     // whose every batch is **opaque** and textured solely with the engine utility-white `WHITE1.BLP`.
     // The real 1.12 client DRAWS this mesh, but at per-instance render alpha ≈0 (the doodad-fade alpha
-    // slot drives it to ~0 here) so it is invisible — VERIFIED by a reference apitrace (wow-re
-    // `object-layer/scratch/go-render-gate.md`, the firing-4 capstone: drawn alpha-blended at
-    // α=8.5e-05). What *drives* that ≈0 alpha is an un-RE'd world-scene-render detail (open handoff),
+    // slot drives it to ~0 here) so it is invisible — a reference apitrace shows it drawn
+    // alpha-blended at α=8.5e-05. What *drives* that ≈0 alpha is an unidentified world-scene-render
+    // detail (open),
     // so benilla reproduces the observed invisibility by recognising the placeholder asset and dropping
     // its geometry. Scoped tight on purpose: verified against all 1602 GameObject display models, ONLY
     // this placeholder matches — visible flat decals (orc sleep mats, pentagram circles, AQ door runes)
@@ -1133,7 +1134,7 @@ mod tests {
     /// The questgiver `?` marker, straight off the real client data: ONE cylindrical-billboard
     /// bone with a 3-key translation bob per sequence — anim **0** (the load arm's low bob) and
     /// anim **190**, the authored **raised** bob the client arms while the unit shows an overhead
-    /// name (wow-re `questgiver-marker.md` Q4; m2bones-probed key values: anim 0 spans WoW z
+    /// name (`0x6076c0`; m2bones-probed key values: anim 0 spans WoW z
     /// 0.000→−0.089, anim 190 z +0.517→+0.427 — same key COUNT, different values, which is
     /// exactly how the earlier "seq 190 = same bob" count-only probe went wrong). Guards the
     /// band-restricted translation bake end-to-end.

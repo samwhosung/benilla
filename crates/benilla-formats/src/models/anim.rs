@@ -15,7 +15,8 @@ use crate::BoneSpin;
 /// One bone of a model's rest skeleton (decision 0019): its parent bone index (`-1` = root) and pivot
 /// point in **raw WoW model space** (the render boundary maps it to Bevy space). Vanilla M2 has no
 /// inverse-bind-matrix array — the rest pose is identity TRS and the **pivot encodes bind position**
-/// (VERIFIED wow-5875-re), so the skinned-entity path builds bone matrices pivot-relative up the chain.
+/// (the animate kernel `0x714260`), so the skinned-entity path builds bone matrices pivot-relative
+/// up the chain.
 #[derive(Debug, Clone, Copy)]
 pub struct SkeletonBone {
     pub parent: i16,
@@ -31,7 +32,7 @@ pub struct SkeletonBone {
     /// [`crate::ParentArm`]: the byte-verified `ignore parent translate / scale / rotate` trio.
     /// Carried by 862 bones across 456 shipped models — the unskinned attach helpers
     /// (HandArrow/Bullet: the nocked arrow lies flat along the facing instead of twisting with the
-    /// draw hand, wow-re `nocked-ammo-cancel.md` §E4) and, load-bearingly, **every vanilla player
+    /// draw hand, `0x714260`) and, load-bearingly, **every vanilla player
     /// mount's rider seat**, which is why a galloping horse's spine never rocks its rider.
     pub parent_arm: Option<crate::ParentArm>,
 }
@@ -51,11 +52,11 @@ impl Skeleton {
     ///
     /// This is the palette-level question, and the reason it has to be asked about ancestors and not
     /// just the bone itself: a billboard bone's matrix ROWS are replaced with the camera basis about
-    /// its own pivot, and *`children multiply onto this`* (wow-re `billboard-bone-law.md`) — so every
-    /// descendant frame is camera-dependent even though only the ancestor carries the flag. Three
-    /// consumers ask it: a skinned vertex (which arm its geometry inherits), a **particle emitter**
-    /// (whose record position rides the replaced matrix — wow-re `part-anchoring-live-bone.md` §1
-    /// row 3), and a ribbon anchor.
+    /// its own pivot, and *`children multiply onto this`* (the billboard switch `0x7151f9`) — so
+    /// every descendant frame is camera-dependent even though only the ancestor carries the flag.
+    /// Three consumers ask it: a skinned vertex (which arm its geometry inherits), a **particle
+    /// emitter** (whose record position rides the replaced matrix, `0x7190a9`), and a ribbon
+    /// anchor.
     ///
     /// The nearest host is the whole answer: a nearer replacement discards the rows an outer one
     /// wrote, and on a rest-pose chain the pivot-preserving translation rebuild reads the (identity)
@@ -77,8 +78,9 @@ impl Skeleton {
 
 /// Parse the M2 bone hierarchy (parent + pivot per bone) into a [`Skeleton`]. Straight off
 /// `benilla-m2`'s bone parse (vanilla bone record stride 0x6c: parent i16 @+0x08, pivot C3 @+0x60,
-/// VERIFIED wow-5875-re). A separate byte-in entry point alongside [`parse_m2_render_submeshes`], so
-/// the asset loader builds the skeleton beside the meshes without changing that signature.
+/// as the animate kernel `0x714260` reads it). A separate byte-in entry point alongside
+/// [`parse_m2_render_submeshes`], so the asset loader builds the skeleton beside the meshes without
+/// changing that signature.
 pub fn parse_m2_skeleton(bytes: &[u8]) -> Result<Skeleton> {
     let format =
         parse_m2(&mut Cursor::new(bytes)).map_err(|e| anyhow::anyhow!("parsing M2: {e}"))?;
@@ -170,7 +172,7 @@ pub fn parse_m2_event_markers(bytes: &[u8]) -> Result<Vec<EventMarker>> {
 }
 
 /// A bow M2's **bowstring anchors** — the `$WTT` (top) / `$WTB` (bottom) EVENT records the
-/// client's string drawer `0x611ff0` spans (wow-re `nocked-ammo-cancel.md` §G2: `0x7131b0` finds
+/// client's string drawer `0x611ff0` spans (`0x7131b0` finds
 /// each marker, transforms its local position by its bone's live matrix, and a 2-segment line
 /// list runs top → middle → bottom). Each anchor is `(bone index, raw WoW model-space position)`
 /// — the limb-tip helper bones (8/9 on the standard bows), which the bow's own BowPull/BowRelease
@@ -214,9 +216,9 @@ pub fn parse_m2_string_anchors(b: &[u8]) -> Option<StringAnchors> {
     })
 }
 
-/// Parse a model's first `$CCH` marker — the fishing line's near anchor on the pole (wow-re
-/// `fishing-line.md` §2: the line builder scans the M2 **events** table for `$CCH` and composes
-/// its position through the bone's pose; the bobber authors one too but the reference never reads
+/// Parse a model's first `$CCH` marker — the fishing line's near anchor on the pole (the line
+/// builder `0x7131b0` scans the M2 **events** table for `$CCH` and composes its position through
+/// the bone's pose; the bobber authors one too but the reference never reads
 /// it). Returns `(bone index, raw WoW model-space position)`; `None` for a model with no `$CCH`.
 /// Exactly one weapon model in the 5875 chain authors it (`Misc_2H_FishingPole_A_01.m2` — the
 /// `scan_events` sweep), which is what lets the held-item attach key on presence alone.
@@ -254,8 +256,8 @@ pub struct PlayableAnim {
     pub dir_flags: u16,
 }
 
-/// Parse the M2's [`PlayableAnim`] table (decision 0082, wow-re `anim-id-resolution.md`,
-/// byte-verified `0x711bf0`): the model's own precomputed answer to "if the game requests
+/// Parse the M2's [`PlayableAnim`] table (decision 0082,
+/// `0x711bf0`): the model's own precomputed answer to "if the game requests
 /// `AnimationData.dbc` id X, which id do I actually play, and in which direction/variant" — the
 /// source `benilla-assets`' `ModelAnimations::resolve` PATH 1 reads. Straight off `benilla-m2`'s
 /// header array (`count@+0x2c`/`ofs@+0x30`); empty for a model with no table (a boneless/malformed
@@ -289,12 +291,12 @@ pub fn parse_m2_animation_lookup(bytes: &[u8]) -> Result<Vec<u16>> {
 /// index, so a caller can look up the sole bone its batch is weighted to; empty for a model with no
 /// such bone, which is almost every model.
 ///
-/// **The sequence is `anim_id == 0`** — the idle the reference arms by default (VERIFIED
-/// wow-5875-re, and the doodad host's load arm: bone 0, animation id 0, wow-re
-/// `doodad-anim-host.md` §4a). Selection is by id, never by record index ([`ModelAnimation`]'s own
-/// rule). Whether a *WMO skybox* is armed by that same path is NOT byte-pinned — both shipped
-/// skyboxes author exactly one sequence, so there is nothing else it could be playing, but a model
-/// with several would need the arming verified before this picked among them.
+/// **The sequence is `anim_id == 0`** — the idle the reference arms by default (the M2 load arm in
+/// `0x70ebd0`, and the doodad host's load arm `0x695100`: bone 0, animation id 0). Selection is by
+/// id, never by record index ([`ModelAnimation`]'s own rule). Whether a *WMO skybox* is armed by
+/// that same path is NOT byte-pinned — both shipped skyboxes author exactly one sequence, so there
+/// is nothing else it could be playing, but a model with several would need the arming verified
+/// before this picked among them.
 pub fn m2_bone_spins(bytes: &[u8]) -> HashMap<u16, BoneSpin> {
     let mut out = HashMap::new();
     let Ok(skeleton) = parse_m2_skeleton(bytes) else {
@@ -352,8 +354,8 @@ pub struct BoneKeys {
 }
 
 /// One bone channel driven by a **global sequence**: a free-running loop *independent* of the playing
-/// animation, wrapped at `period_ms` off the model's own clock (VERIFIED wow-5875-re `animation.md` /
-/// `doodad-anim-host.md`: global sequences loop with zero arming, clock = `[CM2Model+0x2c]+0xc` mod
+/// animation, wrapped at `period_ms` off the model's own clock (the kernel's global-sequence wrap
+/// `0x714352`: global sequences loop with zero arming, clock = `[CM2Model+0x2c]+0xc` mod
 /// `globalSequences[gseq]`). Keys are absolute ms within `[0, period_ms]`, ascending. The canonical
 /// consumer is the character **eye blink** — an eyelid bone whose SCALE track holds `0` (lid retracted,
 /// eye open) for most of the loop and pops to `1` (lid full-size, eye shut) for ~100 ms.
@@ -404,10 +406,10 @@ pub struct AnimEvent {
 
 /// One animation sequence's per-bone keyframes (decision 0019): its `AnimationData.dbc` id, duration,
 /// loop flag, and the bones that move. **Stand is `anim_id` 0** — the idle the real client arms by default
-/// (VERIFIED wow-5875-re) — but its *record index* is not fixed: Stand is `animationLookup[0]`, which is
-/// record 0 only for some models (a chicken's Stand is record 2, a horse's record 1; those models' record
-/// 0 is a different sequence). Consumers select always by `anim_id`, never by record index; walk (4),
-/// run (5), death, emotes, … are other ids.
+/// (the load arm in `0x70ebd0`) — but its *record index* is not fixed: Stand is
+/// `animationLookup[0]`, which is record 0 only for some models (a chicken's Stand is record 2, a
+/// horse's record 1; those models' record 0 is a different sequence). Consumers select always by
+/// `anim_id`, never by record index; walk (4), run (5), death, emotes, … are other ids.
 #[derive(Debug, Clone)]
 pub struct ModelAnimation {
     /// `AnimationData.dbc` id, the selection key (0 Stand, 4 Walk, 5 Run, 13 WalkBackwards, …).
@@ -430,34 +432,34 @@ pub struct ModelAnimation {
     pub looping: bool,
     /// The sequence's authored **design movement speed** (`M2Sequence.moveSpeed` @+0x0c, yd/s) — the
     /// speed the locomotion was animated for. The real client scales a locomotion clip's playback rate
-    /// by `unitSpeed / (moveSpeed · modelScale)` (VERIFIED wow-5875-re `0x5fe2f0`: a §5-converged pair),
+    /// by `unitSpeed / (moveSpeed · modelScale)` (`0x5fe2f0`),
     /// so a unit moving faster than the design speed cycles its legs proportionally faster — without it
     /// a backpedal (slow design speed) played at 1× looks far too slow. `0.0` for a non-locomotion
     /// sequence (idle/emote), which the selector leaves at rate 1×.
     pub move_speed: f32,
     /// The sequence's **blend-in time** (`M2Sequence.blendTime` @+0x20, **seconds**) — how long the real
-    /// client cross-fades *into* this animation from the previous pose (VERIFIED wow-5875-re: op4 snapshots
-    /// the live pose `+0x98→+0xc4` and decays it over the blend-in, `rf29-playback-setters.md`). The spawn
+    /// client cross-fades *into* this animation from the previous pose (op4 `0x7121a0` snapshots
+    /// the live pose `+0x98→+0xc4` and decays it over the blend-in). The spawn
     /// site uses it as the cross-fade duration so a gait change eases instead of snapping (Walk/Run 0.25 s,
     /// Stand 0.5 s, jump/sit transitions 0.15 s). `0.0` ⇒ an instant cut.
     pub blend_time: f32,
     /// The sequence's bounds-sphere **centre** — the `M2Sequence` CAaBox (min @+0x24, max @+0x30) centre,
     /// **raw WoW model space**. The real client's mouse-pick broad phase tests the cursor ray against
     /// exactly this sphere for the unit's *current* animation — world-placed + scaled, **no pad**
-    /// (VERIFIED wow-5875-re `0x7089c0`, the pick-volume RE) — before the per-triangle posed-mesh test.
+    /// (`0x7089c0`) — before the per-triangle posed-mesh test.
     pub bounds_center: [f32; 3],
     /// The sequence's bounds-sphere **radius** (`M2Sequence` @+0x3c, model-local yards). `0.0` ⇒
     /// unauthored (the real client falls back to the header sphere).
     pub bounds_radius: f32,
     /// The sequence's CAaBox **min corner** (`M2Sequence` @+0x24), raw WoW model space — the box
     /// [`Self::bounds_center`] is the centre of. The unit **blob shadow** sizes its projection box
-    /// from exactly this box for the *current* animation, clamped into ±5 per axis (VERIFIED
-    /// wow-5875-re `unit-blob-shadow.md`: `0x711a20` → clamp `0x6992c0`/`0x699250`).
+    /// from exactly this box for the *current* animation, clamped into ±5 per axis (`0x711a20` →
+    /// clamp `0x6992c0`/`0x699250`).
     pub bounds_min: [f32; 3],
     /// The sequence's CAaBox **max corner** (`M2Sequence` @+0x30). See [`Self::bounds_min`].
     pub bounds_max: [f32; 3],
     /// The sequence's **variation frequency** (`M2Sequence.frequency` @+0x14) — this variation's
-    /// weight in the client's per-play roll (VERIFIED wow-5875-re `anim-id-resolution.md`: op4
+    /// weight in the client's per-play roll (op4 `0x7121a0`
     /// with variationIdx −1 rolls `_rand()` (0..0x7fff) and walks the id's variation chain —
     /// `roll < frequency` picks, else `roll -= frequency` and advance).
     pub frequency: u16,
@@ -465,7 +467,7 @@ pub struct ModelAnimation {
     /// client rolls a play count `R = max(1, min + ⌊rand·(max−min)/32768⌋)` at every arm (the
     /// second `_rand` site in op4, `0x712692..0x7126cd`) and **multiplies it into the play
     /// window** (`0x7126d8`): a clamp-flag one-shot runs its timeline `R` times before freezing;
-    /// a loop-flag sequence ignores it (VERIFIED wow-5875-re `loop-replay-fidget.md`). `(0, 0)`
+    /// a loop-flag sequence ignores it (`0x7145f1`). `(0, 0)`
     /// (the overwhelming majority) rolls to `R = 1`.
     pub min_replay: u32,
     pub max_replay: u32,
@@ -510,19 +512,19 @@ impl ModelAnimation {
 
 /// One bone-channel `M2Track`, read **once per model** rather than once per sequence: the v256 track
 /// (0x1c) is `interp_type`@0, `global_seq`@2, then three `M2Array`s — interpolation_ranges@0x04,
-/// **timestamps@0x0c**, **values@0x14** (each `{count u32, offset u32}`). Every sequence carves its
+/// **timestamps@0x0c**, **values@0x14** (each `{count u32, offset u32}`). Every sequence slices its
 /// own band out of this one shared key list ([`ChannelTrack::band`]), so re-reading the arrays per
 /// sequence was pure waste — HumanMale walked 143 sequences × 119 bones × 3 channels of headers to
 /// build 357 tracks' worth of keys.
 struct ChannelTrack<T> {
     /// `interp_type == 0`: hold each key until the next, no interpolation (the samplers' shared
-    /// `cmp word[track],0` dispatch — wow-re `eval.md` FN2/FN6).
+    /// `cmp word[track],0` dispatch — `0x713ea0`/`0x71af20`).
     step: bool,
     /// Global-sequence id, `0xffff` for an ordinary sequence-timeline track.
     gseq: u16,
     /// The per-sequence **key-index window** `(lo, hi)`, indexed by the sequence's FILE slot — the
-    /// array the reference's key search selects before it looks at a single timestamp (VERIFIED
-    /// wow-re `eval.md` FN1 `0x713d50` §1). Empty ⇒ the reference's own `[track+4]==0` fallback,
+    /// array the reference's key search selects before it looks at a single timestamp
+    /// (`0x713d50`). Empty ⇒ the reference's own `[track+4]==0` fallback,
     /// "search the whole key list".
     ranges: Vec<(u32, u32)>,
     /// `(absolute ms, value)` keys, file order — every sequence's keys concatenated on one
@@ -598,7 +600,7 @@ impl<T: super::key_anim::Lerp + PartialEq> ChannelTrack<T> {
     /// **bracket**, not a key set.
     ///
     /// Its load-bearing use is the band **edges**, where the reference keeps sampling and a
-    /// truncated key list does not (wow-re `eval.md` FN1 `0x713d50`):
+    /// truncated key list does not (`0x713d50`):
     ///
     /// - a band with **no keys of its own** still has an authored pose — the window resolves it,
     ///   either outright (`lo >= hi` ⇒ `keys[lo]`, the degenerate `{lo, lo, 0}` result) or as the
@@ -671,7 +673,7 @@ impl<T: super::key_anim::Lerp + PartialEq> ChannelTrack<T> {
 ///
 /// This exists as its own entry point because the grip is not a *clip* — it is a pose lifted out of
 /// one frame and worn as a masked overlay over whatever animation is playing, so the weapon hand
-/// stays closed while the body runs (wow-re `hand-grip-mechanism.md`). HandsClosed is a 33 ms band
+/// stays closed while the body runs (`CloseHand` `0x479660`). HandsClosed is a 33 ms band
 /// that keys nothing of its own on the finger bones (HumanMale bone 102 is keyed at 43333/70000 ms,
 /// both curled, not the 60000 ms frame) — its `interpolation_ranges` pair brackets it, which is
 /// exactly the case the window rule resolves.
@@ -733,10 +735,10 @@ pub fn hand_grip_finger_poses(bytes: &[u8], bones: &[u16]) -> Vec<(u16, [f32; 4]
 }
 
 /// Parse **all** of a model's animation sequences into per-bone keyframes (decision 0019). Offsets
-/// VERIFIED against wow-5875-re: sequences @MD20 `0x1c`/`0x20` (stride 0x44; id@+0x00, start@+0x04,
-/// end@+0x08, flags@+0x10 with **bit0 SET ⇒ clamp/one-shot, CLEAR ⇒ loop**); bones @`0x34`/`0x38`
-/// (stride 0x6c; the three `M2Track`s at +0x0c/+0x28/+0x44). Empty for a model with no sequences;
-/// degenerate (zero-length) sequences are skipped.
+/// as the reference reads them (the animate kernel `0x714260`): sequences @MD20 `0x1c`/`0x20`
+/// (stride 0x44; id@+0x00, start@+0x04, end@+0x08, flags@+0x10 with **bit0 SET ⇒ clamp/one-shot,
+/// CLEAR ⇒ loop**); bones @`0x34`/`0x38` (stride 0x6c; the three `M2Track`s at +0x0c/+0x28/+0x44).
+/// Empty for a model with no sequences; degenerate (zero-length) sequences are skipped.
 ///
 /// Cost note: each sequence scans every bone track's full timestamp array (the time-band select), so
 /// this is `O(sequences · bones · keys)` — fine at async load for the bounded vanilla rigs, a candidate
@@ -836,13 +838,13 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
             le_u32(b, rec + 0x10),
         );
         // M2Sequence.moveSpeed @+0x0c (f32, yd/s): the locomotion design speed the playback-rate scaler
-        // divides the unit's live speed by (VERIFIED wow-5875-re `0x711a20`/`0x5fe2f0`). `0.0` for a
+        // divides the unit's live speed by (`0x711a20`/`0x5fe2f0`). `0.0` for a
         // non-locomotion sequence.
         let move_speed = le_f32(b, rec + 0x0c);
         // M2Sequence.blendTime @+0x20 (u32, ms → seconds): the cross-fade-in duration into this sequence.
         let blend_time = le_u32(b, rec + 0x20) as f32 / 1000.0;
         // M2Sequence bounds: CAaBox min @+0x24 / max @+0x30, sphere radius @+0x3c — the mouse-pick
-        // broad-phase sphere for the model's current animation (wow-re pick-volume RE, `0x7089c0`).
+        // broad-phase sphere for the model's current animation (`0x7089c0`).
         let (bmin, bmax) = (vec3(b, rec + 0x24), vec3(b, rec + 0x30));
         let bounds_center = [
             (bmin[0] + bmax[0]) * 0.5,
@@ -1536,11 +1538,11 @@ mod doodad_sound_tests {
     /// t = 1.100, each about 1.18 s of audio.
     ///
     /// This looked like proof that `$DSL` could not mean "loop" — a pair of one-shots timed to
-    /// alternate. The RE says otherwise, and the real mechanism is better: a doodad holds exactly
-    /// ONE registration (`[CMapDoodadDef+0x168]`), and crossing a marker with a DIFFERENT id
-    /// releases the held one before registering the new (`0x69521d` → `0x461f80`). So both ARE
+    /// alternate. The reference says otherwise, and the real mechanism is better: a doodad holds
+    /// exactly ONE registration (`[CMapDoodadDef+0x168]`), and crossing a marker with a DIFFERENT
+    /// id releases the held one before registering the new (`0x69521d` → `0x461f80`). So both ARE
     /// ordinary loops, and the slot is what makes them alternate — the pumping bellows. Every
-    /// `$DSL` loops and no flag is consulted (wow-re `sound/scratch/doodad-sound-emitters.md`).
+    /// `$DSL` loops and no flag is consulted (the pool's looping entry point `0x7a54d0`).
     ///
     /// The guard is therefore on the eviction in `sound::anim_events`: without it both start and
     /// both drone.

@@ -4,11 +4,11 @@
 //! spell whose `SPELL_EFFECT_OPEN_LOCK` `EffectMiscValue` matches a **skill** slot's `LockType`
 //! index (mining / herbalism / lockpicking), or consumes the **item** slot's key. A `lockId` of 0,
 //! or a row whose every slot is empty, means "no lock" — the object opens by `CMSG_GAMEOBJ_USE`
-//! instead of a cast (the split the RE pinned; see `wow-5875-re` cursor-system.md §8).
+//! instead of a cast (the split in the use handler `0x5f33e0`).
 //!
-//! Layout verified against build 5875 (mangos `LockEntry`, `DBCStructure.h`, and the RE's
-//! `[lockRec+0x24]` = `Index[0]` = column 9): **33 fields** — `ID@0`, `Type[8]@1..8`,
-//! `Index[8]@9..16`, `Skill[8]@17..24`, `Action[8]@25..32`.
+//! Layout verified against build 5875 (mangos `LockEntry`, `DBCStructure.h`, and the reference's
+//! `[lockRec+0x24]` = `Index[0]` = column 9 at `0x5f84af`): **33 fields** — `ID@0`,
+//! `Type[8]@1..8`, `Index[8]@9..16`, `Skill[8]@17..24`, `Action[8]@25..32`.
 //!
 //! **`Action` is a gate, not a label** (decision 0752). Before the client's lock resolver
 //! (`0x5f83d0`) will even *consider* a slot, it asks `0x5f81d0(gameObject, Action[i])` — a
