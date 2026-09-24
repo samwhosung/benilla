@@ -88,9 +88,9 @@ pub struct SpellSlotView {
     /// nothing else: a passive can still be picked up/placed on a bar (the ref never blocks that).
     pub passive: bool,
     /// The `IsCurrentCast` verdict for this slot — the checked ring (`SpellButton_UpdateSelection`'s
-    /// gold glow). The delegate `0x4b3600` has exactly two arms (wow-re
-    /// `spellbook-checked-predicate.md`): a shapeshift spell whose form is the player's current
-    /// form byte, or the open trade-skill window's own spell — never an ordinary in-flight cast.
+    /// gold glow). The delegate `0x4b3600` has exactly two arms: a shapeshift spell whose form is
+    /// the player's current form byte, or the open trade-skill window's own spell — never an
+    /// ordinary in-flight cast.
     /// App-resolved (`benilla::ui_spellbook`), pushed with the book; the app fires
     /// `CURRENT_SPELL_CAST_CHANGED` on its edges.
     pub current: bool,
@@ -194,7 +194,7 @@ impl super::UiScript {
     /// Push whether the app's cast lifecycle holds something `SpellStopCasting()` can stop — a
     /// running auto-repeat or an in-flight cast, but NOT a channel (the ref's `0x6e6e80` reads
     /// only the auto-repeat key `0xceac30` and the inflight id `0xceca88`, and the inflight id
-    /// is already 0 during a channel — wow-re `esc-stopcasting.md`). Pushed each frame by the
+    /// is already 0 during a channel). Pushed each frame by the
     /// app's cast feed (`benilla::ui_cast`), before the input pass runs the ESC chain.
     pub fn set_casting(&mut self, casting: bool) {
         self.model_mut().casting = casting;
@@ -230,8 +230,8 @@ fn is_pet_book(book_type: &str) -> bool {
     book_type.eq_ignore_ascii_case(BOOKTYPE_PET)
 }
 
-/// The shared argument marshaller of the reference's spell-slot bindings (`0x4b3ec0`, wow-re
-/// `getspellname-return-contract.md` §6 — `GetSpellName`, `GetSpellTexture`, `IsCurrentCast`,
+/// The shared argument marshaller of the reference's spell-slot bindings (`0x4b3ec0` —
+/// `GetSpellName`, `GetSpellTexture`, `IsCurrentCast`,
 /// `GetSpellCooldown`, `IsSpellPassive`, `CastSpell`, `PickupSpell` and the two autocast verbs all
 /// call it): arg 1 must be a number and arg 2 a number or string — the book type is **not**
 /// optional; the index is `trunc(arg1 - 1)` and must land in `[0, 0x400)`, else the binding
@@ -427,8 +427,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // `UpdateSpells()` — twelve bytes in the reference (`[0x4b43e0,0x4b43ec)`), and its entire
     // content is a bare `SignalEvent(SPELLS_CHANGED)`: event 260, **no arguments**, and NO state
-    // mutation whatsoever. Byte-carved by a wow-re cross-check (decision 1924, their
-    // `system/ui/scratch/updatespells-verb.md`). Entered with both sort flags zero the worker
+    // mutation whatsoever (decision 1924). Entered with both sort flags zero the worker
     // performs exactly one memory write — a `push esi` undone nine instructions later — and
     // `0x4b302f` is the sole fire site for event 260 image-wide.
     //
@@ -475,8 +474,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetSpellTabInfo(i) -> name, texture, offset, numSpells. **FOUR values on every path that
     // returns** — `0x4b3ce0` has two live `ret`s and both `mov eax,4`; the `eax=0` one at `0x4b3d0d`
-    // is dead code after `luaL_error` longjmps. Byte-carved by a wow-re cross-check (decision 1931,
-    // `system/ui/scratch/spelltabinfo-return-contract.md`).
+    // is dead code after `luaL_error` longjmps (decision 1931).
     //
     // **OUT OF RANGE IS `nil, nil, 0, 0` — LITERAL zeros, not a single nil.** This comment used to say
     // "out of range -> a single nil (GetMerchantItemInfo's own out-of-range shape)", i.e. one
@@ -534,8 +532,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetSpellName(id, bookType) -> name, rank. **Always TWO values, never one, and the rank of a
-    // rankless spell is the EMPTY STRING, never nil** (wow-re
-    // `scratch/getspellname-return-contract.md`, §5-derived from the bytes alone).
+    // rankless spell is the EMPTY STRING, never nil** — derived from the bytes alone, below.
     //
     // Both returns go through the same push helper with **no rank-specific branch anywhere in the
     // binding** — a ranked and a rankless spell run byte-identical code: `0x4b4063 call 0x6f3890`
@@ -748,7 +745,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // CastSpellByName(name [, onSelf]) — the reference binding `0x4b4ab0`, whose only two callers
-    // share the `0x4b3300` dispatcher with `CastSpell` above (wow-re ledger), so this queues onto
+    // share the `0x4b3300` dispatcher with `CastSpell` above, so this queues onto
     // the same `spell_casts` list and the app's one cast tail handles both. `SlashCmdList["CAST"]`
     // is literally `CastSpellByName(msg)`, which is why `/cast` needs nothing else, and it is the
     // command the whole macro system is built to run.
@@ -776,8 +773,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellStopCasting() — the ref's Script::SpellStopCasting (`0x6e6e80`, §5-verified whole,
-    // wow-re `esc-stopcasting.md`): stop the FIRST of {running auto-repeat (`0x6ea080`,
+    // SpellStopCasting() — the ref's Script::SpellStopCasting (`0x6e6e80`): stop the FIRST of
+    // {running auto-repeat (`0x6ea080`,
     // CMSG_CANCEL_AUTO_REPEAT_SPELL), in-flight cast (`AbortCast` → CMSG_CANCEL_CAST)} and
     // return 1; nil when neither runs. A CHANNEL is nil — the body's whole callee closure
     // never reaches the channel canceler `0x6e9b70`, and the inflight id `0xceca88` it gates
@@ -801,8 +798,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellIsTargeting() — the ref's Script::SpellIsTargeting (`0x6e6cd0`, wow-re
-    // `wave-cast.md`): true while the targeting cursor is up (`flag_word != 0`), nil otherwise.
+    // SpellIsTargeting() — the ref's Script::SpellIsTargeting (`0x6e6cd0`): true while the
+    // targeting cursor is up (`flag_word != 0`), nil otherwise.
     // Read by FrameXML (PetFrame's right-click bind fork) and by the ESC chain's callers.
     g.set(
         "SpellIsTargeting",
@@ -1557,7 +1554,7 @@ mod tests {
     }
 
     /// **`UpdateSpells()` fires `SPELLS_CHANGED` and does nothing else** — decision 1924, from a
-    /// wow-re byte read of `[0x4b43e0,0x4b43ec)`.
+    /// byte read of `[0x4b43e0,0x4b43ec)`.
     ///
     /// The assertion is that a registered handler RAN, not that any frame repainted: the reference
     /// verb mutates no state at all, and the repaint is FrameXML's, reached only through the event.

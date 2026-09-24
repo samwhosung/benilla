@@ -102,14 +102,14 @@ pub(crate) struct StoredPetAction {
 }
 
 /// The hunter-pet stat block behind `GetPetHappiness`/`GetPetLoyalty`/`GetPetTrainingPoints`/
-/// `GetPetExperience` and `HasPetUI`'s second return (decision 1005; wow-re §11b), plus the two
+/// `GetPetExperience` and `HasPetUI`'s second return (`0x4be670`; decision 1005), plus the two
 /// **family**-derived answers `UnitCreatureFamily("pet")` and `GetPetFoodTypes()` (decision 1062).
 ///
 /// **The four stat bindings share one gate** — `0x6116e0(pet)`, "is this a hunter's pet" — which is
 /// why they share one pushed struct: a warlock's imp resolves perfectly well and still answers
 /// nothing, because happiness, loyalty and training points are hunter machinery.
 ///
-/// **The two family fields sit on OPPOSITE sides of that gate, and the split is carved.**
+/// **The two family fields sit on OPPOSITE sides of that gate.**
 /// [`Self::family`] is outside it — `UnitCreatureFamily 0x51a310` has no class test, so a warlock
 /// minion shows "Imp" and gating it would blank a line the reference fills. [`Self::food_types`] is
 /// inside it — `GetPetFoodTypes 0x4bea10` shares `0x6116e0` with the four stats.
@@ -155,8 +155,8 @@ pub struct PetStats {
     /// four lookup-miss paths as [`Self::family`], which is why it sits beside it.
     ///
     /// **Outside the hunter gate, like [`Self::family`] and unlike [`Self::food_types`] — and that
-    /// placement is INFERRED, not carved** (decision 1676). `GetPetIcon 0x4beb10` is registered
-    /// adjacent to both in the same table (wow-re §11b's neighbour list) and has not been read.
+    /// placement is INFERRED** (decision 1676). `GetPetIcon 0x4beb10` is registered adjacent to
+    /// both in the same table and has not been read.
     /// It is grouped with the family word because it is a pure family-row lookup like that one,
     /// where the diet's gate is shared with the four *stat* bindings. The choice is unobservable
     /// in the reference's own call sites — every one of them (`PetStable.lua:51`, `161-162`) sits
@@ -522,7 +522,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UnitCreatureFamily(unit) → the localized family word, or NIL. Exactly ONE return on every
-    // path (`0x51a310`, wow-re-VERIFIED) — decision 1062.
+    // path (`0x51a310`) — decision 1062.
     //
     // **Scoped to the `"pet"` token, and that narrowing is stated rather than hidden.** The real
     // binding resolves any unit and reads `[[unit+0xb30]+0x1c]` off its cached creature-query
@@ -533,9 +533,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // feed resolves it explicitly and the other tokens wait for a second consumer — at which point
     // this moves onto `UnitState` beside `creature_type_name`.
     //
-    // Note there is NO class gate here: a warlock's imp answers "Imp". That is the carved shape,
-    // and it is what makes the family word and `GetPetFoodTypes` below behave differently for the
-    // same pet.
+    // Note there is NO class gate here: a warlock's imp answers "Imp". That is the shape, and it
+    // is what makes the family word and `GetPetFoodTypes` below behave differently for the same
+    // pet.
     //
     // All four of the reference's nil paths arrive as one pushed `None` — no cached record, id 0,
     // id past the table, and a null row (ids 10/13/14/18/22 are absent from the shipped file). A
@@ -595,10 +595,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // PetStopAttack() — queue the call-off. No argument: the wire carries only the pet's guid.
-    // The six one-shot orders (`0x4be450`…`0x4be4a0`, wow-re `pet-action-bar-api.md` §10.9,
-    // carved 2026-09-03): each writes the literal slot word the bar's own reaction or command
-    // slot carries — `0x06000000`/1/2 PASSIVE/DEFENSIVE/AGGRESSIVE, `0x07000000`/1/2
-    // WAIT/FOLLOW/ATTACK — and re-enters `0x4bd1d0`, the identical call a `CastPetAction` press
+    // The six one-shot orders (`0x4be450`…`0x4be4a0`): each writes the literal slot word the
+    // bar's own reaction or command slot carries — `0x06000000`/1/2 PASSIVE/DEFENSIVE/AGGRESSIVE,
+    // `0x07000000`/1/2 WAIT/FOLLOW/ATTACK — and re-enters `0x4bd1d0`, the identical call a
+    // `CastPetAction` press
     // makes, PetAttack with the current selection's guid as a bar ATTACK click would. No
     // arguments, no returns; the no-pet gate is silent, so a session without a pet bar has
     // nothing to order and drops it, as the bar's own press would (1958; §10.9 confirmed the
@@ -686,11 +686,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // PetRename(name) — the PETRENAMECONFIRM popup's OnAccept, carrying the text the RENAME_PET
     // edit box collected.
     //
-    // The argument reaches `lua_tostring`, so a NUMBER coerces (wow-re §11c) — `mlua::String`
-    // accepts one the same way. What the reference does with the RESULT is the app's business and
-    // is queued for it rather than dropped here: an empty name raises `ERR_NULL_PETNAME` and an
-    // over-long one is truncated, both at the send. Only a missing or unconvertible argument dies
-    // here, because there is nothing to queue.
+    // The argument reaches `lua_tostring 0x6f3690`, which coerces a NUMBER via `0x6f7c80` —
+    // `mlua::String` accepts one the same way. What the reference does with the RESULT is the
+    // app's business and is queued for it rather than dropped here: an empty name raises
+    // `ERR_NULL_PETNAME` and an over-long one is truncated, both at the send. Only a missing or
+    // unconvertible argument dies here, because there is nothing to queue.
     g.set(
         "PetRename",
         lua.create_function(|lua, name: Option<mlua::String>| {
@@ -1109,9 +1109,9 @@ mod tests {
             .unwrap());
     }
 
-    /// **Bucket 0 is a number, not nil**, and this is the trap the RE calls out by name: the
-    /// shipped `PetFrame.lua` branches on 1/2/3 and hides only on `not happiness`, so a 0 must
-    /// leave the icon up. Collapsing it into the failure path hides a frame the reference shows.
+    /// **Bucket 0 is a number, not nil** (`GetPetHappiness 0x4be900`): the shipped `PetFrame.lua`
+    /// branches on 1/2/3 and hides only on `not happiness`, so a 0 must leave the icon up.
+    /// Collapsing it into the failure path hides a frame the reference shows.
     #[test]
     fn happiness_bucket_zero_is_not_the_failure_case() {
         let mut s = UiScript::new().unwrap();

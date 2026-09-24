@@ -6,10 +6,11 @@
 //!   effective-visible frame whose resolved rect (and effective ScrollFrame clip, decision 0112
 //!   §5) contains the point. Pure query; fires nothing, mutates nothing.
 //! - [`UiScript::mouse_move`] hit-tests every move and, on a captured-frame **change**, fires the
-//!   `OnLeave`/`OnEnter` pair (RF-0025's `motion=true` hover boundary) — and, before that,
-//!   advances an armed drag gesture, an in-flight **Slider thumb drag**, and an in-flight
-//!   **frame move** (`StartMoving`, [`super::object`]'s `movable` cluster). All three move within
-//!   one frame, crossing no hover boundary, so they must run before the boundary test.
+//!   `OnLeave`/`OnEnter` pair (the reference's own `motion=true` hover-boundary argument) — and,
+//!   before that, advances an armed drag gesture, an in-flight **Slider thumb drag**, and an
+//!   in-flight **frame move** (`StartMoving`, [`super::object`]'s `movable` cluster). All three
+//!   move within one frame, crossing no hover boundary, so they must run before the boundary
+//!   test.
 //! - [`UiScript::mouse_button`] resolves `OnMouseDown`/`OnMouseUp`, the `OnClick`
 //!   press/release-registration rules ([`button::wants_click`]), the **drag trio** + **world
 //!   drop** below, the **Slider thumb-drag** capture (a left press on a thumb, decision 0250 §5),
@@ -55,8 +56,7 @@ use super::{button, cursor, editbox, event, Model, UiScript};
 
 /// The double-click interval — **300 ms, VERIFIED off the bytes**, a hardcoded instruction
 /// immediate: `0x77937b  81 f9 2c 01 00 00  cmp ecx, 0x12c`, comparing `now − [this+0x334]` inside
-/// the Button mouse-UP dispatcher `0x7792d0` (wow-re `ui/scratch/button-doubleclick-law.md`, a §5
-/// cross-check dispatched from here).
+/// the Button mouse-UP dispatcher `0x7792d0`.
 ///
 /// The units are verified too, not assumed: `now` comes from `0x42c010` → `0x42b790`, whose
 /// scale is stored as `1.0/freq × 1000.0` and whose counter is `KERNEL32!GetTickCount` (import
@@ -67,8 +67,8 @@ use super::{button, cursor, editbox, event, Model, UiScript};
 /// pass `style = 0x20` = `CS_OWNDC` alone — and `GetDoubleClickTime` is not imported), it is not a
 /// CVar (no such `.rdata` string; nothing near the compare reaches `CVar::Register 0x63db90`), and
 /// there is **no position gate** (the `0x766122`–`0x766140` "double-click detector" this was first
-/// chased through is really the zero-motion cursor-move coalescing filter — that gloss in
-/// `world-click-drag-arbitration.md` l.238 is refuted and corrected). The only spatial constraint
+/// chased through is really the zero-motion cursor-move coalescing filter). The only spatial
+/// constraint
 /// is that each release hit-tests inside the frame, applied independently; the two clicks may land
 /// arbitrarily far apart.
 ///
@@ -77,10 +77,10 @@ pub(super) const DOUBLE_CLICK_SECS: f64 = 0.300;
 
 // ── Input / hit-testing (decision 0068; spec-faithful, not byte-pinned) ─────────────────────
 //
-// The mouse-focus model (`propagation.md`): focus walks frames top-down in reverse draw order;
-// the first mouse-enabled, effective-visible frame whose resolved rect contains the cursor
+// The reference's mouse-focus model: focus walks frames top-down in reverse draw order; the
+// first mouse-enabled, effective-visible frame whose resolved rect contains the cursor
 // captures. This is faithful to the *documented model*, **not** bit-exact — the real hit-test
-// leaf is a flagged RE-time item, not byte-pinned (`anchors.md`; see [`crate::order::hit_test`]).
+// leaf is not byte-pinned (see [`crate::order::hit_test`]).
 // Coordinates are WoW UI space (y-up, pixels) — the same space [`resolve`]/[`extract`] use.
 // Call [`resolve`] first so rects are populated; a frame with no resolved rect never captures.
 
@@ -129,10 +129,10 @@ pub(super) fn install(lua: &mlua::Lua) -> mlua::Result<()> {
 }
 
 /// Whether `h` is the world frame — the one frame whose mouse hits belong to the 3D world
-/// (decisions 1983/1984, `worldframe-widget.md`: "the hover walk probes strata 8→0 and the world
-/// frame wins exactly when nothing else mouse-enabled is under the cursor; the press runs the
-/// frame's Lua `OnMouseDown` (never consuming), then the `BUTTON1`/`BUTTON2` binding — which
-/// **is** the world click; the release mirrors it").
+/// (decisions 1983/1984: the hover walk `0x7661cd` inside `0x7660d0` probes strata 8→0, and the
+/// world frame wins exactly when nothing else mouse-enabled is under the cursor; the press runs
+/// the frame's Lua `OnMouseDown` — never consuming (`0x483c40`) — then the `BUTTON1`/`BUTTON2`
+/// binding, which **is** the world click; the release mirrors it).
 fn is_world_handle(model: &Model, h: FrameHandle) -> bool {
     model
         .arena
@@ -202,7 +202,7 @@ impl UiScript {
             // `ChatFrame1` is never in the hit-test index — instead the engine synthesises one
             // mouse-enabled `CSimpleHyperlinkButton` child PER SPAN (`0x7a3240`, born through the
             // `CSimpleButton` ctor) and routes the three hyperlink scripts back to the parent
-            // (wow-re `mouse-enable-law.md` + the follow-up round `68987021`).
+            // through vtable slots `+0x90`/`+0x94`/`+0x98`.
             //
             // We hold the spans as rects on the parent rather than as child frames, so the same
             // law expresses as a disjunct here. What it buys is everything the reference gets from
@@ -235,10 +235,11 @@ impl UiScript {
         let scroll_sources = scroll_clip_sources(&model);
         let fh = order::hit_test(&sorted, |fh| {
             // **The wheel gates on the handler and CONTINUES** — the one genuine fall-through in
-            // the engine (wow-re `ui/scratch/hittest-no-fallthrough-law.md`). Down/up deliberately
-            // do not use the idiom; the wheel does. So this asks for the WHEEL flag alone and lets
-            // the sweep walk past a frame that merely takes the mouse, which is what puts the wheel
-            // through a scroll pane's chrome and into the pane.
+            // the engine (`0x76c180`, gated on `[frame+0x160]`'s OnMouseWheel chunk being
+            // present). Down/up deliberately do not use the idiom; the wheel does. So this asks
+            // for the WHEEL flag alone and lets the sweep walk past a frame that merely takes the
+            // mouse, which is what puts the wheel through a scroll pane's chrome and into the
+            // pane.
             //
             // It used to also accept `is_mouse_enabled` as a stand-in, because the loader did not
             // arm the wheel kind and no frame ever carried the flag. The loader arms it now.
@@ -328,8 +329,7 @@ impl UiScript {
                 // used to sit here claimed the opposite off two mis-attributed addresses:
                 // `0x7793f0` is the drag-start override, not a leave, and `0x7791e0` is the hide
                 // override, not an enter. The real enter/leave notifies `0x779490`/`0x7794e0`
-                // read `[+0x328]` only as a DISABLED guard and never write it (wow-re
-                // `scratch/button-state-edge-set.md`, a §5 census of every store to the field).
+                // read `[+0x328]` only as a DISABLED guard and never write it.
                 //
                 // So a press held over a button and walked off it stays PUSHED in the reference —
                 // it is the *drag threshold* (below) that un-presses one, and only for a frame
@@ -398,7 +398,8 @@ impl UiScript {
     ///
     /// **False whenever the region has no resolved rect**, which is the common case and the correct
     /// one: a freshly created title region has NO anchors at all and does nothing until
-    /// `SetPoint`/`SetAllPoints` (Q6). Both corpus consumers call `SetAllPoints` immediately, so
+    /// `SetPoint`/`SetAllPoints` (`CreateTitleRegion 0x773910`). Both corpus consumers call
+    /// `SetAllPoints` immediately, so
     /// theirs covers the whole window — the whole-window-as-drag-handle idiom.
     fn title_region_hit(&self, h: crate::widget::FrameHandle, x: f32, y: f32) -> bool {
         let model = self.model_ref();
@@ -434,8 +435,8 @@ impl UiScript {
     /// ([`cursor::world_drop_click`]) fires ONLY on a completed left CLICK over the world —
     /// press AND release both [`over_world`], no started drag (the byte-verified trigger: the
     /// client's `0x495300` runs on the WorldFrame click release; a drag release routes as a
-    /// drag, never a click — wow-re cursor-dragdrop-payload.md, and the director's report it
-    /// confirmed) — routed by the app-fed pick (decisions 0571 + 0574): over an object nothing
+    /// drag, never a click — and the director's report confirmed it) — routed by the app-fed
+    /// pick (decisions 0571 + 0574): over an object nothing
     /// drops (the reference keeps an item payload and selects); over terrain an item fires
     /// `DELETE_ITEM_CONFIRM` and stays held while a spell/action survives; over nothing the
     /// item pops and any other payload clears silently. A drag released over nothing keeps its
@@ -448,11 +449,10 @@ impl UiScript {
         let hit_id = self.hit_test(x, y);
         // ── The RAISE, and it happens FIRST ─────────────────────────────────────────────────────
         //
-        // wow-re ledger `0x7662c0` (VERIFIED, the `toplevel-raise.md` §5 fan-out): the
-        // mouse-button-DOWN handler "resolves target = root+0x80 (existing capture) else
-        // root+0x7c (hover frame), calls `0x76a5b0` Raise() **UNGUARDED** @`0x766392` (the
-        // toplevel gate is inside `0x7650f0`, so the raised frame may be an ancestor of the
-        // clicked one), then title-region drag or capture+OnMouseDown".
+        // `0x7662c0`: the mouse-button-DOWN handler resolves target = root+0x80 (existing
+        // capture) else root+0x7c (hover frame), calls `0x76a5b0` Raise() **UNGUARDED**
+        // @`0x766392` (the toplevel gate is inside `0x7650f0`, so the raised frame may be an
+        // ancestor of the clicked one), then title-region drag or capture+OnMouseDown.
         //
         // Four clauses, each load-bearing and each visible:
         //
@@ -483,7 +483,7 @@ impl UiScript {
         // ordinary path: the reference's `0x7662c0` tests `titleRegion+0x24` point-in-rect FIRST
         // and only a MISS falls through to `0x7663e6`, which sets the captured frame and dispatches
         // `vtable[0x68]` — the OnMouseDown script. So a hit takes `OnMouseDown`/`OnMouseUp` and
-        // `RegisterForDrag`'s `OnDragStart` with it (wow-re `widget-api-batch-benilla.md` Q6).
+        // `RegisterForDrag`'s `OnDragStart` with it.
         //
         // Returning early is what implements that swallow: no OnMouseDown, no drag arm, no OnClick,
         // no double-click bookkeeping. It reports the event CONSUMED, because it was.
@@ -674,8 +674,8 @@ impl UiScript {
                 // ── The double-click adjudication — on the RELEASE edge, on the click that just
                 // qualified, and STRICTLY EXCLUSIVE with it.
                 //
-                // All three of those are byte-verified (wow-re `ui/scratch/button-doubleclick-law.md`):
-                // the only site that fires the `+0x4d4` slot is `0x77938d`, inside the mouse-UP
+                // All three of those are byte-verified: the only site that fires the `+0x4d4`
+                // slot is `0x77938d`, inside the mouse-UP
                 // dispatcher `0x7792d0` — the mouse-DOWN dispatcher `0x779210` has no double-click
                 // leg at all — and `0x77939d jmp 0x7793b5` skips *past* the single leg's
                 // `call [edx+0x94]`, so **`OnDoubleClick` REPLACES the second `OnClick`; it is not
@@ -736,13 +736,11 @@ impl UiScript {
         // ── `OnMouseUp` goes to the frame that took the PRESS, not to whatever is under the
         // cursor now — the mouse CAPTURE (`root+0x80`).
         //
-        // The client's mouse-DOWN handler `0x7662c0` takes the pointer: "resolves target =
+        // The client's mouse-DOWN handler `0x7662c0` takes the pointer: resolves target =
         // root+0x80 (existing capture) else root+0x7c (hover frame) … then title-region drag or
-        // **capture**+OnMouseDown" (wow-re ledger `0x7662c0`).
+        // **capture**+OnMouseDown (`0x7662c0`).
         //
-        // The **release** half is `0x766420`, and it is VERIFIED — wow-re
-        // `system/ui/scratch/mouseup-dispatch-law.md`, a §5 dispatched from this repo for exactly
-        // this line after it first landed on an extrapolation (decision 1599). It reads the capture
+        // The **release** half is `0x766420` (decision 1599). It reads the capture
         // and **nothing else**: `[mgr+0x80]` is snapshotted into `ebx` at entry (`0x76642b`),
         // before anything, and `[mgr+0x7c]` — the hover frame — is **never read** anywhere in
         // `[0x766420, 0x7664f0)`. One dispatch, `0x7664a4 call [eax+0x6c]`.
@@ -767,7 +765,7 @@ impl UiScript {
         // was a divergence that let a press over open space deliver a release to whatever the
         // cursor had wandered onto.
         //
-        // (Two things the same §5 settled that are invisible from here: the capture is cleared at
+        // (Two more facts about this dispatch, invisible from here: the capture is cleared at
         // `0x7664bb`, **after** the dispatch — so a C++ consumer inside `OnMouseUp` still sees it,
         // though no Lua binding reads it, `GetMouseFocus 0x48df40` being `+0x7c`; and the clear is
         // gated on `evt+0x18 == 0`, the button mask *after* the event, so a **chorded** release
@@ -904,8 +902,8 @@ impl UiScript {
         let target: Option<u32> = {
             // **Wheel-enabled OR mouse-enabled**, not mouse-enabled alone. The reference's wheel
             // dispatcher `0x7664f0` walks its OWN index and calls the hit probe directly, ignoring
-            // hover, capture and the mouse bit — `EnableMouse` is not a prerequisite
-            // (wow-re `mouse-enable-law.md` §6). Ours went through the mouse hit test, which
+            // hover, capture and the mouse bit — `EnableMouse` is not a prerequisite. Ours went
+            // through the mouse hit test, which
             // coupled the two: correcting the ctor list to the reference's (ScrollFrame is inert
             // on the mouse bit) silently stopped every scroll pane from taking the wheel.
             let hit = self.hit_test_wheel(x, y);
@@ -941,7 +939,7 @@ impl UiScript {
 /// Point-in-rect for hit-testing, in WoW UI coords (**y-up**): the cursor `(x, y)` is inside `r` when
 /// it lies within `[left, right] × [bottom, top]` (edges inclusive). This is the same space
 /// [`UiScript::resolve`]/[`UiScript::extract`] produce rects in — the verified `point_in_rect
-/// 0x76b020` primitive (`propagation.md`), modeled on our [`Rect`] convention.
+/// 0x76b020` primitive, modeled on our [`Rect`] convention.
 pub(super) fn point_in_rect(r: Rect, x: f32, y: f32) -> bool {
     x >= r.left && x <= r.right && y >= r.bottom && y <= r.top
 }

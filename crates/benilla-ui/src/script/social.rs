@@ -221,9 +221,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The LFG pair, as the bytes define it (wow-re `lfg-set-get-law.md`, 1961 — which corrects
-    // 1959's flag): the stock 1.12.1 FrameXML never calls either (FriendsFrame.xml's two call
-    // sites sit inside its l.1212-1301 XML comment), so this is an addon surface.
+    // The LFG pair, as the bytes define it (`GetLookingForGroup 0x4e95d0` / `SetLookingForGroup
+    // 0x4e96b0`; decision 1961 — which corrects 1959's flag): the stock 1.12.1 FrameXML never
+    // calls either (FriendsFrame.xml's two call sites sit inside its l.1212-1301 XML comment), so
+    // this is an addon surface.
     //
     // `GetLookingForGroup()` → FOUR values: the three slot NAMES — each nil for a slot word whose
     // id maps to nothing, and the reference's own pack (below) leaves every slot word 0, so nil
@@ -488,7 +489,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `SortWho(sortType) 0x5ad890` — the column-header and dropdown sorts, and three things at
-    // once (wow-re `who-list-sort-law.md`; decision 2030):
+    // once (decision 2030):
     //
     //  1. **promote** the key into the seven-slot chain, flipping its direction only if it was
     //     already at the front — so a repeated click on the same header REVERSES;

@@ -74,7 +74,7 @@ pub struct QuestItemView {
 /// the name and icon `GetRewardSpell` / `GetQuestLogRewardSpell` answer (stock
 /// `QuestFrameItems_Update` counts it as one more reward slot, `rewardType = "spell"`, and the
 /// slot's hover is `GameTooltip:SetQuestRewardSpell()`). `tradeskill` is the third return the
-/// reference derives from the spell itself (1944 — the derivation is wow-re's to pin).
+/// reference derives from the spell itself (1944 — the derivation is not yet pinned).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QuestRewardSpell {
     pub spell_id: u32,
@@ -114,7 +114,7 @@ pub struct QuestState {
     pub reward_spell: Option<QuestRewardSpell>,
     /// The panel's background material (`GetQuestBackgroundMaterial` — nil is the reference's own
     /// "Parchment" fallback in `QuestFrame_GetMaterial`). What fills it on the wire is 1944's
-    /// wow-re question; until the binary says, nothing does, and the verb answers nil honestly.
+    /// open question; until the binary says, nothing does, and the verb answers nil honestly.
     pub background_material: Option<String>,
 }
 
@@ -172,11 +172,11 @@ pub enum QuestAction {
     /// greeting's Goodbye (`HideUIPanel(QuestFrame)`), a UIPanel eviction. Its binding `0x501a10`
     /// calls the teardown `0x501130(0,1)` and **nothing else**; that routine's one send is
     /// `MSG_QUEST_PUSH_RESULT{DECLINE}` for a PLAYER source, so closing an NPC's window is
-    /// network-silent (wow-re `system/ui/scratch/quest-share-flow.md` §4.1 caller table, §6).
+    /// network-silent.
     ///
     /// **Two actions, because the reference has two routines.** 1738 merged this into
-    /// `DeclineQuest`'s action on the reading that both verbs are one routine; the note's caller
-    /// table shows they share only the teardown, and the HELLO re-open lives in `DeclineQuest`'s
+    /// `DeclineQuest`'s action on the reading that both verbs are one routine; the reference's
+    /// callers show they share only the teardown, and the HELLO re-open lives in `DeclineQuest`'s
     /// fork alone. The merge made ESC on an NPC re-open its list — a multi-quest greeting could
     /// not be closed.
     Close,
@@ -448,7 +448,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // QuestChooseRewardError() — 0x5021a0, 0 args, 0 returns: the Complete button pressed with
     // choices on offer and none picked (stock `QuestRewardCompleteButton_OnClick`,
     // QuestFrame.lua:96-100). Sixteen bytes — `push 0x98; call 0x496720` — the game-error row
-    // `ERR_QUEST_MUST_CHOOSE` (wow-re quest-material-reward-spell-bindings.md §2): the row's sound
+    // `ERR_QUEST_MUST_CHOOSE`: the row's sound
     // cue `igQuestFailed` plays first, then kind 2 routes the GlobalStrings text through
     // `UI_ERROR_MESSAGE` — synchronously, as SignalEvent is — and UIErrorsFrame prints it. The
     // text is read from the same global the FrameXML shows, so a localised chain shows its own
@@ -757,7 +757,7 @@ mod tests {
 
     /// `DeclineQuest` and `CloseQuest` are TWO intents — two reference routines (`0x5013f0` and
     /// `0x501a10`) that share only the teardown `0x501130`; the giver re-open is `DeclineQuest`'s
-    /// alone (wow-re `quest-share-flow.md` §4.1/§6).
+    /// alone.
     #[test]
     fn decline_and_close_are_two_intents() {
         let mut s = UiScript::new().unwrap();

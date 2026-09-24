@@ -5,8 +5,7 @@
 //!
 //! 1.12.1's widget inheritance is not a Lua metatable chain: every class owns a flat
 //! `{name, lua_CFunction}` `.data` table, and its lookup probes that table and, on a miss,
-//! **tail-calls exactly one base class's lookup** (wow-re
-//! `system/ui/scratch/widget-api-batch-benilla.md`):
+//! **tail-calls exactly one base class's lookup**:
 //!
 //! ```text
 //! Region   0x87c9b8 (19)  lookup 0x7a2ea0  → TERMINAL (root)
@@ -51,11 +50,11 @@
 //! way the binary's does — `WorldFrame.GetHeight == someTexture.GetHeight` is true here too.
 //!
 //! **Exactly the 19, and no more.** `Show`/`Hide`/`IsShown`/`IsVisible`/`SetAlpha`/`GetAlpha` look
-//! like they belong and do not: Frame and Texture each register their *own*, at different
-//! addresses (`texture-fontstring-method-split.md` §3), so `WorldFrame.Show(someTexture)` fails on
-//! the real client and must keep failing here. (`SetSize` used to sit outside the 19 for the
-//! opposite reason — in neither table because 1.12 has no such verb at all; decision 2142 removed
-//! it rather than filing it.) The map is the unit.
+//! like they belong and do not: Frame and Texture each register their *own* — `SetAlpha`, for
+//! instance, is `0x774e90` on Frame and `0x79b580` on Texture — so `WorldFrame.Show(someTexture)`
+//! fails on the real client and must keep failing here. (`SetSize` used to sit outside the 19 for
+//! the opposite reason — in neither table because 1.12 has no such verb at all; decision 2142
+//! removed it rather than filing it.) The map is the unit.
 
 use std::collections::HashMap;
 use std::rc::Rc;

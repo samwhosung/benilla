@@ -2,9 +2,8 @@
 //!
 //! Several of these pin facts that look like bugs — the multiply-not-divide rank bar, the
 //! backwards negative visual ranks, rank 19's rejection, the ungendered pane title, the suppressed
-//! sub-5 lifetime rank. They are wow-re `system/ui/scratch/honor-panel-law.md` (§5, 2026-08-21)
-//! and each one would pass just as happily against the wrong reading if it were written loosely,
-//! so they are written tightly on purpose.
+//! sub-5 lifetime rank. Each is verified at the bytes, and each one would pass just as happily
+//! against the wrong reading if it were written loosely, so they are written tightly on purpose.
 
 use super::*;
 use crate::script::{UiScript, UnitState};
@@ -936,7 +935,7 @@ fn has_inspect_honor_data_latches_on_the_push_and_clears_with_it() {
     assert!(s.eval::<bool>(held()).unwrap());
 
     // `0x4c95e0` pushes the NUMBER 1, not a boolean — one value either way, and the truthy arm is
-    // `1` rather than `true`. (The carve says `lua_pushnumber(1.0)`; in a VM whose numbers are all
+    // `1` rather than `true`. (It is `lua_pushnumber(1.0)`; in a VM whose numbers are all
     // doubles there is no observable integer/float distinction, and `tostring` proves it.)
     assert_eq!(
         s.eval::<String>("return type(HasInspectHonorData())")
@@ -1007,7 +1006,7 @@ fn get_inspect_honor_data_answers_twelve_zeros_when_no_reply_is_held() {
 
     // And after the app drops the reply it is zeros again — our `Option` is the latch AND the
     // data, where the engine keeps them apart and would answer the previous target's numbers
-    // here (§5.1/§5.2: re-keying zeroes the two flags and leaves the sixteen slots alone).
+    // here (`0x4c6f70` re-keying zeroes the two flags and leaves the sixteen slots alone).
     s.set_inspect_honor(Some(inspect_state()));
     s.set_inspect_honor(None);
     assert_eq!(

@@ -1,7 +1,6 @@
 //! **Saved variables** — the Lua-level settings that survive a restart (decision 1128).
 //!
-//! The reference client has *two* mechanisms for this, byte-verified in wow-re
-//! (`system/ui/scratch/savedvariables-protocol.md`):
+//! The reference client has *two* mechanisms for this, byte-verified:
 //!
 //! 1. **`RegisterForSave("NAME")`** — the Lua API FrameXML uses for its **38** globals
 //!    (`LOCK_ACTIONBAR`, `CHAT_LOCKED`, the eleven `COMBAT_TEXT_*`, …), written to the flat
@@ -46,9 +45,9 @@ impl super::UiScript {
     /// A file that fails as a chunk (a hand edit with a typo; a database past Lua's 262,143
     /// constants per chunk) leaves its globals at the defaults the code assigned, and the write at
     /// logout would then replace the player's whole file with those defaults. The reference does
-    /// exactly that — it discards an unparseable file and writes whole from live values (wow-re
-    /// `system/ui/scratch/savedvariables-protocol.md`) — and both load sites here already promised
-    /// otherwise ("left on disk untouched"); this is what makes the promise true. The cost is this
+    /// exactly that — it discards an unparseable file and writes whole from live values
+    /// (`0x51f865`–`0x51f970`) — and both load sites here already promised otherwise ("left on
+    /// disk untouched"); this is what makes the promise true. The cost is this
     /// session's changes to that one file, which is the trade the promise named.
     pub fn hold_saved_file(&self, path: &std::path::Path) {
         let mut model = self.model_mut();
@@ -136,7 +135,8 @@ fn serialize(v: &Value, depth: usize, seen: &mut HashSet<*const c_void>) -> Opti
         Value::String(s) => Some(quote(&s.as_bytes())),
         Value::Table(t) => table(t, depth, seen),
         // Functions, threads, userdata (every widget reference is one — a frame's Lua value is a
-        // table whose `[0]` is a lightuserdata handle, RF-0023) cannot be written as a literal.
+        // table whose `[0]` is a lightuserdata handle, written at `0x701bd0`) cannot be written as
+        // a literal.
         _ => None,
     }
 }
@@ -177,8 +177,9 @@ fn quote(s: &[u8]) -> Vec<u8> {
 
 /// A table constructor: `{\n<tabs>[key] = value,\n<tabs-1>}`. Keys are always bracketed (the
 /// reference's shape — its writer emits `[key] = value` for **every** table shape and never a bare
-/// positional entry, byte-verified in wow-re `system/ui/scratch/lua-table-storage-and-next-order.md`
-/// §Q5 — and it sidesteps every reserved-word and non-identifier question); entries are **sorted**
+/// positional entry, byte-verified (no branch in `[0x704607, 0x704989)` writes a value without a
+/// bracketed key, for any table shape — and it sidesteps every reserved-word and non-identifier
+/// question); entries are **sorted**
 /// — integer keys ascending, then strings alphabetically — so the file is stable across runs
 /// instead of following Lua's hash order.
 ///

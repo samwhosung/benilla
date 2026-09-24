@@ -1,8 +1,7 @@
 //! The **`SimpleHTML` widget** (`CSimpleHTML`, class size `0x374`, ctor `0x789dd0`) — its markup
 //! engine, its block layout, its four element fonts, and its 19-entry Lua method table.
 //!
-//! Ground truth: wow-5875-re `system/ui/scratch/simplehtml-markup-engine.md` (a §5 trio plus the
-//! orchestrator's own byte read and arbitration). The parse itself is [`parse`]; this module is
+//! Ground truth: byte-verified against `WoW.exe`. The parse itself is [`parse`]; this module is
 //! the half that touches the model — turning a block list into real FontString/Texture regions
 //! anchored bottom-to-top, and exposing the widget's Lua surface.
 //!
@@ -29,10 +28,11 @@
 //!   `ItemTextFrame` render, not an approximation of it.
 //! - **`GetContentHeight` does not exist in 1.12.1.** The method table has no height getter and
 //!   nothing in the TU aggregates one; the hosting ScrollFrame measures the subtree generically
-//!   instead (§4.5), which is what ours does too — the blocks are real regions of the SimpleHTML,
-//!   so `GetVerticalScrollRange` sees them without SimpleHTML publishing anything.
+//!   instead (`0x786e30`'s subtree union), which is what ours does too — the blocks are real
+//!   regions of the SimpleHTML, so `GetVerticalScrollRange` sees them without SimpleHTML
+//!   publishing anything.
 //!
-//! ## Where this diverges from the note, deliberately
+//! ## Where this diverges from the reference, deliberately
 //!
 //! - **`nextYOffset` is not pixel-snapped.** The reference stores
 //!   `−pixelSnap(spacing)` (`0x766750`, quantising to whole *device* pixels). Our layout is in
@@ -50,8 +50,9 @@
 //!
 //! ## The Lua table, and the one name that is NOT on it
 //!
-//! §5.1 dumps `.data 0x87ba80` as **19 `{name, fn}` pairs**, and all 19 are installed here. The
-//! first sixteen take an **optional leading element-name string** resolved by `0x795d80`; the last
+//! The method table `.data 0x87ba80` dumps as **19 `{name, fn}` pairs**, and all 19 are installed
+//! here. The first sixteen take an **optional leading element-name string** resolved by
+//! `0x795d80`; the last
 //! three (`SetText`, `SetHyperlinkFormat`, `GetHyperlinkFormat`) do not.
 //!
 //! **There is no `GetText`.** Later clients grew one; build 5875's table does not have it, and
@@ -216,9 +217,9 @@ fn resolve_font(model: &Model, ef: &ElementFont) -> BlockPaint {
 ///
 /// Returns `usedMarkup` (`0x78a519`'s `al`) — the Lua shim discards it, our tests do not.
 pub(crate) fn set_text(model: &mut Model, fh: FrameHandle, raw: &str) -> bool {
-    // §10 step 1. The reference pool-frees the previous parse's widgets; ours must too, or a
-    // second `SetText` leaves the first one's FontStrings standing behind the new ones — the
-    // failure a book with a "next page" button hits on its very first turn.
+    // `0x78a3a0`'s first step. The reference pool-frees the previous parse's widgets; ours must
+    // too, or a second `SetText` leaves the first one's FontStrings standing behind the new
+    // ones — the failure a book with a "next page" button hits on its very first turn.
     let old = model
         .simple_html
         .get_mut(&fh)
@@ -252,13 +253,14 @@ pub(crate) fn set_text(model: &mut Model, fh: FrameHandle, raw: &str) -> bool {
     parsed.used_markup
 }
 
-/// §10's `ADD_BLOCK`/`ADD_IMAGE` loop — the anchor chain, the fonts, and the `nextY` bookkeeping.
+/// `AddTextBlock 0x78adb0`/the `<IMG>` handler `0x78ab40`'s loop — the anchor chain, the fonts,
+/// and the `nextY` bookkeeping.
 fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
     let frame_id = model.frame_id(fh);
     // `0x78ae19 call [CLayoutFrame vtbl + 0x1c]` = `0x768420`, `fld [ecx+0x50]` — the frame's
     // **declared** width, not its resolved rect. Every block is exactly that wide, which is what
-    // makes each one word-wrap at the frame width; §4.6's corollary is that a later resize does
-    // NOT re-wrap, because each block snapshotted the width at creation.
+    // makes each one word-wrap at the frame width; `OnRectChanged 0x78a320`'s corollary is that a
+    // later resize does NOT re-wrap, because each block snapshotted the width at creation.
     let width = model
         .layout_inputs
         .get(&fh)
@@ -272,9 +274,10 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
     for block in blocks {
         match block {
             Block::Text { text, elem, align } => {
-                // §5.3, the empty-path fallback: `elementFont[elem]`, unless its resolved path is
-                // empty, in which case `elementFont[0]` — so a declaration that supplies only
-                // `<FontString>` supplies the font for every element, headers included.
+                // The empty-path fallback (`0x78ae29`–`0x78ae54`): `elementFont[elem]`, unless its
+                // resolved path is empty, in which case `elementFont[0]` — so a declaration that
+                // supplies only `<FontString>` supplies the font for every element, headers
+                // included.
                 let paint = {
                     let st = model.simple_html.entry(fh).or_default().clone();
                     let own = resolve_font(model, &st.fonts[*elem]);
@@ -312,7 +315,7 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                     font_shadow: paint.shadow,
                     ..RegionData::default()
                 };
-                // §5.4: `block->+0x120 = (block->+0x120 & ~7) | (align & 7)` (`0x78ae78`), written
+                // `block->+0x120 = (block->+0x120 & ~7) | (align & 7)` (`0x78ae78`), written
                 // AFTER `SetFontObject`, so the tag's `align` always wins over the element font's
                 // own justifyH. justifyV is left alone and keeps whatever the element font
                 // supplied (ctor MIDDLE) — visually inert here, because the block's rect height IS
@@ -349,7 +352,7 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                 // the image path): the id is what the resolve seats the region's rect under, and
                 // what `free_block` unmaps on the next `SetText`.
                 model.region_id(rh);
-                // §7 step 4 — the anchor corner is selected by `align`, and 8/16/32 get **no
+                // The anchor corner is selected by `align`, and 8/16/32 get **no
                 // `SetPoint` at all** (`0x78ac61 jne 0x78ace8`). An anchorless region never
                 // resolves here either, so it draws nothing, which is the same outcome.
                 let point = match *align {
@@ -370,10 +373,10 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                         ..RegionData::default()
                     },
                 );
-                // §7 step 6/7: an unfloated image reserves its own height in the flow, and
-                // `prevBlock` is **never** written by the image path (three reads of `+0x348` in
-                // the whole function, zero writes) — the next block still hangs off the last TEXT
-                // block, only lower.
+                // An unfloated image reserves its own height in the flow (`0x78ad07`–`0x78ad1b`),
+                // and `prevBlock` is **never** written by the image path (three reads of `+0x348`
+                // in the whole function, zero writes) — the next block still hangs off the last
+                // TEXT block, only lower.
                 //
                 // The height it reserves is `texture.GetHeight()`, which is `CSimpleTexture`'s
                 // **override**: a `<IMG>` with no `height=` reserves its art's own texel height,
@@ -401,8 +404,8 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
     model.touch_layout();
 }
 
-/// The two anchor forms of §4.2 step 2: block 0 pins to the frame, block *N* to its predecessor's
-/// bottom edge at `nextYOffset` (negative, i.e. downward).
+/// The two anchor forms of `AddTextBlock 0x78adb0`'s `SetPoint 0x767c70` step: block 0 pins to the
+/// frame, block *N* to its predecessor's bottom edge at `nextYOffset` (negative, i.e. downward).
 fn anchor_for(prev_block: Option<u32>, frame_id: u32, point: Point, next_y: f32) -> Anchor {
     match prev_block {
         None => Anchor::new(point, frame_id, point, 0.0, 0.0),
@@ -566,7 +569,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ── 0/1 · the font object, and the live link to it ──────────────────────────────────────
     // `SetFontObject([element,] font | "font" | nil)` → 0 values. Unlike a region's, this cannot
     // repaint anything already on screen: the element fonts are prototypes, and only the next
-    // `SetText` copies them into blocks (§4.6 — a built block is never re-fonted).
+    // `SetText` copies them into blocks (a built block is never re-fonted, `0x795d3e`).
     m.set(
         "SetFontObject",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
@@ -607,8 +610,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         justify_v: true,
                     };
                 }
-                // The severance mask is deliberately **not** reset on a re-point. §5-verified for
-                // the region side (`script::font_block`'s `SetFontObject`): the real "stop
+                // The severance mask is deliberately **not** reset on a re-point — true for
+                // the region side too (`script::font_block`'s `SetFontObject`): the real "stop
                 // inheriting this property" signal is a CLEARED bit in the inheritMask
                 // (`FONTINSTANCE+0x2c`), cleared by each local setter and never restored — so a
                 // property this element set for itself stays severed across a later

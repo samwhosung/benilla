@@ -3,7 +3,7 @@
 //! `CastShapeshiftForm`, consumed by `BonusActionBarFrame.lua`'s `ShapeshiftBar_*` family) over
 //! an app-pushed form list, the [`super::spellbook`]/[`super::action`] two-way shape: the app
 //! resolves everything (which known spells are forms, their icon/name/active/castable/cooldown —
-//! the wow-re-pinned mechanism lives app-side), pushes a snapshot
+//! the mechanism lives app-side), pushes a snapshot
 //! ([`super::UiScript::set_shapeshift_forms`]), and drains the click intents
 //! ([`super::UiScript::take_shapeshift_casts`]) onto the wire. The engine holds no form
 //! KNOWLEDGE — a form is "a spell id, a texture, a name, two bits, and a cooldown triple".

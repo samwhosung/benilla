@@ -172,7 +172,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         },
     )?;
 
-    // ── The rest of the Region map `0xcf54b4` (wow-re `font-object-lua-surface.md`) ──────────────
+    // ── The rest of the Region map `0xcf54b4` ───────────────────────────────────────────────────
     //
     // These four landed together because the MAP is the unit, not the name. `SetParent` shipped
     // alone when one addon line named it, and its own getter stayed missing for months — which is

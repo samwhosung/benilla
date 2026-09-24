@@ -37,9 +37,7 @@
 //! address-takes) is the whole of both verbs. What that shared head does before the branch, and
 //! what only the play arm does after it, is the app side's business (`sound::zone`'s
 //! `set_lua_music`) — the point here is that the two bindings are not independent, and a
-//! `MusicRequest` is the argument, not the verb (wow-re `sound/scratch/lua-music-bindings.md`,
-//! the §5 round dispatched for this report; it corrected wow-re's own table, which had recorded
-//! `StopMusic`'s callee as "—").
+//! `MusicRequest` is the argument, not the verb.
 
 use mlua::{Lua, Value};
 

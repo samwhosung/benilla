@@ -11,7 +11,7 @@
 //! ScrollFrame bindings are four symmetric pairs plus `UpdateScrollChildRect`, and the C++ under
 //! them is literally cloned: `0x786d30` (horizontal) is the byte-clone of `0x786db0` (vertical)
 //! against `[+0x324]`/`[+0x32c]` instead of `[+0x328]`/`[+0x334]`, and one `0x786e30` computes
-//! both ranges out of one subtree union (wow-re `scrollframe-offset-and-range-law.md`). This module
+//! both ranges out of one subtree union. This module
 //! is written that way too — one helper per concept, taken on the axis asked for. That the
 //! horizontal half went unwritten until the corpus asked for it (`aux-addon` reads and writes both
 //! axes in one function) is why this doc used to say horizontal scroll "is out of scope: no 1.12
@@ -76,8 +76,7 @@ enum Axis {
 /// cached: the scroll offset always clamps against the current layout, not a stale snapshot.
 ///
 /// **The content extent is the scroll child's whole SUBTREE, not the child frame's own height**
-/// (wow-re `system/ui/scratch/simplehtml-markup-engine.md` §4.5, byte-identified during the
-/// SimpleHTML RE; decision 1338 corrects what 0112 shipped). `0x786e30` seeds a bounding box
+/// (decision 1338 corrects what 0112 shipped). `0x786e30` seeds a bounding box
 /// `{FLT_MAX, FLT_MAX, 0, 0}` and calls the **recursive** `0x786f80(scrollChild, &bbox)`, which
 /// unions the frame's REGION list (head `+0x1b4`, link `+0x1b8`, guard `[entry+8]+0xc4`) and
 /// re-enters itself for every CHILD FRAME (head `+0x2fc`, link `+0x300`, guard `[entry+8]+0xd0`);
@@ -297,8 +296,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ── The horizontal axis: the same three verbs on `[+0x324]`/`[+0x31c]` ─────────────────────
     //
     // `SetHorizontalScroll(px)` `0x7912f0` → `0x786d30`, which is the BYTE-CLONE of
-    // `SetVerticalScroll`'s `0x786db0` against the horizontal fields (wow-re
-    // `scrollframe-offset-and-range-law.md` §2.2; `item9-firing34-glue786.md` identified the pair).
+    // `SetVerticalScroll`'s `0x786db0` against the horizontal fields.
     // So every law stated above holds verbatim on this axis: no clamp, the same 2⁻²² change-gate
     // against the OLD offset alone, the same re-anchor, and `OnHorizontalScroll(self, offset)`
     // fired only on a real change. Nothing here is a horizontal special case.
@@ -386,10 +384,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             event::fire_size_changes(lua);
             // `OnScrollRangeChanged(self, xRange, yRange)` — **horizontal first**, and that order is
             // byte-derived rather than assumed: at `0x786eff` the vertical result is on top of the
-            // x87 stack, is `fstp`'d first and therefore pushed DEEPEST, so it lands as `arg2`
-            // (wow-re `scrollframe-offset-and-range-law.md` §3.6, where two of the round's own
-            // workers published it the other way round). It is why stock
-            // `UIPanelScrollFrameTemplate` hands `arg2` to `ScrollFrame_OnScrollRangeChanged`.
+            // x87 stack, is `fstp`'d first and therefore pushed DEEPEST, so it lands as `arg2`. It
+            // is why stock `UIPanelScrollFrameTemplate` hands `arg2` to
+            // `ScrollFrame_OnScrollRangeChanged`.
             // `arg1` was a hardcoded `0.0` here for as long as there was no horizontal range to
             // put in it.
             if let Err(e) = event::fire_widget_handler(

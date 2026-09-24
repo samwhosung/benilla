@@ -45,7 +45,6 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // was present — when it was not, it copies byte 3 of the read-back colour over the packed
     // alpha (`0x79adfe`/`0x79ae0a`) before the store. So `SetVertexColor(r, g, b)` on 1.12.1 is
     // `SetVertexColor(r, g, b, currentAlpha)`, and a three-argument call CANNOT restore opacity.
-    // wow-re `system/ui/scratch/button-state-texture-path-setter.md` §7.
     //
     // Why it still says 1.0: the fix is one line, but its blast radius is every three-argument
     // call in FrameXML and in the addon corpus, and it only bites where a region already carries
@@ -55,8 +54,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // fourth argument explicitly (`SetVertexColor(1.0, 1.0, 1.0, 0.5)`), so closing this cannot
     // silently change that file.
     //
-    // **Shape C on r, g, b** (`Texture:SetVertexColor `0x79abd0``, `2=C 3=C 4=C 5=B`, wow-re
-    // `numeric-arg-coercion-law.md`): a bare `lua_tonumber` with no `lua_isnumber` gate, so a nil,
+    // **Shape C on r, g, b** (`Texture:SetVertexColor `0x79abd0``, `2=C 3=C 4=C 5=B`): a bare
+    // `lua_tonumber` with no `lua_isnumber` gate, so a nil,
     // a table or a string is **0.0** and the call never raises. Taking them as `f32` made mlua's
     // converter the gate instead — the 2176 class — and the stock
     // `QuestLogFrame.lua:337` idiom hands three nils (`titleButton.r/g/b` are only assigned in
@@ -78,9 +77,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         )?,
     )?;
 
-    // GetVertexColor — the setter's own pair, a real 5875 binding (`0x79aa50`, wow-re
-    // `system/ui/ledger.tsv`; it sits directly above `SetVertexColor 0x79abd0` in the same region
-    // method family). Never set = the untinted white every region draws at by default.
+    // GetVertexColor — the setter's own pair, a real 5875 binding (`0x79aa50`; it sits directly
+    // above `SetVertexColor 0x79abd0` in the same region method family). Never set = the untinted
+    // white every region draws at by default.
     m.set(
         "GetVertexColor",
         lua.create_function(|lua, this: Table| {
@@ -160,8 +159,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         // reached us only once the survey started seating the addon registry — the whole point of
         // that instrument fix. The stray `true` is meaningless in 1.12 and the addon author
         // presumably meant a later client's second parameter; either way the client shrugs.
-        // The RETURN is part of the contract (wow-re `widget-api-batch-benilla.md` Q1, VERIFIED):
-        // the path form answers **1 | nil — nil meaning the file did not load** — and the colour
+        // The RETURN is part of the contract (`SetTexture 0x79bb40`): the path form answers
+        // **1 | nil — nil meaning the file did not load** — and the colour
         // and clear forms answer 1. Atlas is the load-bearing caller: `Atlas_Refresh` does
         // `local builtIn = AtlasMap:SetTexture("…\Images\Maps\"..zoneID)` and walks its plugin
         // fallback chain on nil, so a binding that returns nothing draws no map at all whatever
@@ -182,9 +181,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     let data = model.region_data.entry(rh).or_default();
                     data.circular = false;
                     data.portrait_unit = None;
-                    // **`SetTexture` CLEARS the desaturation** (wow-re `texture-desaturate-law.md` §2.3,
-                    // VERIFIED): `+0x128` is a `CGxShader*`, and `CSimpleTexture::SetTexture`
-                    // (`0x770200`) writes it from its 4th stack arg, for which the Lua binding
+                    // **`SetTexture` CLEARS the desaturation**: `+0x128` is a `CGxShader*`, and
+                    // `CSimpleTexture::SetTexture` (`0x770200`) writes it from its 4th stack arg,
+                    // for which the Lua binding
                     // (`0x79bb40`) pushes slot 0 — permanently NULL — on both of its legs. A
                     // re-implementation that keeps a desaturate boolean independent of the texture
                     // handle diverges on every `icon:SetDesaturated(1)` followed by `icon:SetTexture(t)`.
@@ -232,12 +231,12 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         // **Ask the probe BEFORE writing the slot.** The reference's load-FAILURE
                         // arm (`cmp [ebp-4],2; jl` at `0x770288` → `0x77028e`–`0x7702b2`) releases
                         // the handle it just built and returns 0 **leaving `+0xcc` and `+0x128` as
-                        // they were** — "the widget keeps whatever texture it already had"
-                        // (wow-re `texture-service-name-resolution.md` §161-169). Storing the path
-                        // first and letting the verdict drive only the *return value* meant a
-                        // mistyped or not-yet-shipped path ERASED the art it failed to replace,
-                        // and did it silently: `GetTexture()` echoed the missing path and the quad
-                        // was dropped, so the region went blank with nothing said (decision 2124).
+                        // they were** — the widget keeps whatever texture it already had. Storing
+                        // the path first and letting the verdict drive only the *return value*
+                        // meant a mistyped or not-yet-shipped path ERASED the art it failed to
+                        // replace, and did it silently: `GetTexture()` echoed the missing path and
+                        // the quad was dropped, so the region went blank with nothing said
+                        // (decision 2124).
                         //
                         // The store and the return ask deliberately different questions. A VM with
                         // **no probe installed** has no backend to ask, so it stores — that is
@@ -281,7 +280,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             true
                         }
                         // SetTexture(nil) clears (the live API's blank-the-region form); a cleared
-                        // texture region draws nothing. Returns 1 (Q1's `SetTexture(nil) / ()` row).
+                        // texture region draws nothing. Returns 1 (`SetTexture 0x79bb40`'s
+                        // `SetTexture(nil) / ()` row).
                         Value::Nil => {
                             data.texture = None;
                             data.fill = None;
@@ -309,8 +309,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         )?,
     )?;
 
-    // SetDesaturated(flag) -> shaderSupported — Texture only (`0x79c1e0`, wow-re ledger; the
-    // reference's own `ItemButtonTemplate.lua:69` is `local shaderSupported =
+    // SetDesaturated(flag) -> shaderSupported — Texture only (`0x79c1e0`; the reference's own
+    // `ItemButtonTemplate.lua:69` is `local shaderSupported =
     // icon:SetDesaturated(desaturated)`).
     //
     // **The RETURN is the whole design, and it is the half a plausible implementation drops.**
@@ -334,8 +334,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // static scan costed this at 61 addons and it was declined; the use-probe costed it at 98 the
     // moment anyone right-clicks.
     //
-    // **The argument's truth table is not `if flag then`** (wow-re `texture-desaturate-law.md` §1.1,
-    // VERIFIED — `0x6f1c10(L, 2, default=1)` dispatched through the jump table at `0x6f1ce8`). Two
+    // **The argument's truth table is not `if flag then`** (`0x6f1c10(L, 2, default=1)`,
+    // dispatched through the jump table at `0x6f1ce8`). Two
     // of its arms are the opposite of the obvious reading, and both are reachable:
     //  · **no argument at all is ON**, not off — `LUA_TNONE` takes the `ja` default arm, so
     //    `tex:SetDesaturated()` greys. This is why the flag arrives as a `MultiValue`: mlua hands a
@@ -370,8 +370,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTexture() — Texture only (`0x79ba70`), verified in wow-re's widget-method batch
-    // (`system/ui/scratch/widget-api-batch-benilla.md`). Three contract details are each the kind a
+    // GetTexture() — Texture only (`0x79ba70`). Three contract details are each the kind a
     // plausible implementation gets silently wrong, so each is spelled out:
     //
     //  · **Exactly ONE return value**, never a multi-return.
@@ -469,7 +468,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // Lua boolean).
     //
     // **The flag's GEOMETRY effect is not wired, and that is stated rather than implied.** In the
-    // reference the flag gates a rect-recompute leg (`ui.md:4619`, `0x770462`): with it set, a
+    // reference the flag gates a rect-recompute leg (`0x770462`): with it set, a
     // `SetTexCoord` re-derives the region's own rect from the UV quad instead of leaving the rect
     // where the anchors put it and resampling inside it. Wiring that means the region resolve in
     // `region::layout` reading this flag and taking the rect from `RegionData::tex_coords` — a
@@ -554,8 +553,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 
     // `SetRotation` WAS here, on the Texture leaf, and is GONE. 1.12 registers the name once, in
     // the **PlayerModel** table `0x84f1fc` (`0x505f00`, argc 2 — the paper doll's rotate arrows),
-    // which we already answer through `modelframe`; it is in neither region map, and the carve
-    // above lists it among the five names that are in NEITHER (`texture-fontstring-method-split.md`).
+    // which we already answer through `modelframe`; it is in neither region map, and the complete
+    // membership census (`0x87c128`/`0xcf5400`) lists it among the five names that are in NEITHER.
     // Ours was a later-era Texture verb shipped early for the world-map player arrow's stand-in
     // rotation — and that arrow has since become a real Model frame driven by `ModelState::facing`
     // (`script::worldmap_arrow`), so the verb's own reason went with it.
@@ -577,8 +576,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // corner in the renderer's screen winding.
     m.set(
         "SetTexCoord",
-        // Every coordinate is **shape C** (`Texture:SetTexCoord 0x79beb0`, all positions C,
-        // wow-re `numeric-arg-coercion-law.md`): bare `lua_tonumber`, nil/table/string → 0.0. Only
+        // Every coordinate is **shape C** (`Texture:SetTexCoord 0x79beb0`, all positions C): bare
+        // `lua_tonumber`, nil/table/string → 0.0. Only
         // the ARITY raises (`0x79bf5d dec eax ; cmp eax,4 ; je ; cmp eax,8 ; je`), which is the
         // match below. `Variadic<f32>` made mlua the per-coordinate gate; it is not one.
         lua.create_function(|lua, (this, args): (Table, mlua::Variadic<Value>)| {
@@ -676,8 +675,8 @@ impl crate::script::UiScript {
 
     /// Install the host's texture **texel-size** oracle — what lets a region with an authored size
     /// of `0` on an axis take that span from its art, as the client's virtual size getters do
-    /// ([`Model::texture_size_probe`], decision 1349 / wow-re `region-size-fallback.md` §2). A VM
-    /// that never gets one leaves such a region exactly where it was.
+    /// ([`Model::texture_size_probe`], decision 1349; `CSimpleTexture::GetWidth 0x770720`'s
+    /// native-texel fallback). A VM that never gets one leaves such a region exactly where it was.
     pub fn set_texture_size_probe(&mut self, probe: crate::script::TextureSizeProbe) {
         self.model_mut().texture_size_probe = Some(probe);
     }

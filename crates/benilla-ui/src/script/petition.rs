@@ -8,10 +8,8 @@
 //! that plain data; every verb queues a [`PetitionRequest`] the app drains
 //! ([`UiScript::take_petition_requests`]). No ECS or net reach from the engine (decision 0068 §3).
 //!
-//! Every contract below is **VERIFIED at the bytes** — wow-re
-//! `system/ui/scratch/petition-charter-api.md`, a §5 round commissioned by this slice, which carved
-//! the whole `PetitionInfo.cpp` TU (`0x84cfb8`). Where it corrected what this file first shipped,
-//! the correction is named on the binding.
+//! Every contract below is byte-verified against the whole `PetitionInfo.cpp` TU (`0x84cfb8`).
+//! Where it corrected what this file first shipped, the correction is named on the binding.
 //!
 //! **The snapshot mirrors the module's own `.data` state, and that is why it looks split.** The
 //! real client keeps the signature list (`[0xbdce20]` + the `0x10`-stride signer array) and the
@@ -185,7 +183,7 @@ impl super::UiScript {
 /// GlobalStrings key of the line to show, and **no packet is built**.
 ///
 /// **Partial, deliberately, and here is exactly how far it goes.** The code space belongs to
-/// `0x6c9b70`, which that round did not carve, so only the checks whose meaning is unambiguous from
+/// `0x6c9b70`, which is not read in full, so only the checks whose meaning is unambiguous from
 /// the message keys are implemented — empty, a leading or trailing space, and consecutive spaces.
 /// The three that need data we do not have (`ERR_GUILD_NAME_TOO_SHORT`'s minimum,
 /// `ERR_GUILD_NAME_PROFANE`'s word list, `ERR_GUILD_NAME_MIXED_LANGUAGES`' script rules) **pass**
@@ -194,7 +192,7 @@ impl super::UiScript {
 /// sending blindly is the case the reference makes loudest and the server answers with silence —
 /// clicking Purchase with an empty box.
 ///
-/// The full table, from the note, with what each maps to:
+/// The reference's full table of codes, with what each maps to:
 ///
 /// | code | key | implemented |
 /// |---|---|---|
@@ -651,8 +649,8 @@ mod tests {
             Err("ERR_GUILD_NAME_NAME_CONSECUTIVE_SPACES")
         );
         // Passed through on purpose: the minimum length, the profanity list and the script rules
-        // all live inside a function that round did not carve, and refusing a name the server would
-        // accept is the worse failure. The server re-checks every one of them.
+        // all live inside `0x6c9b70`, which is not read in full, and refusing a name the server
+        // would accept is the worse failure. The server re-checks every one of them.
         for ok in ["Legacy of Steel", "A", "Ab", "Éclair", "x y z"] {
             assert_eq!(
                 validate_guild_name(ok),

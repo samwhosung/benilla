@@ -105,7 +105,7 @@ pub struct QuestLogEntryView {
     /// This row's detail pane — description, money, rewards, reward spell. **Per row, not per
     /// selection** (decision 2247): the reference's detail bindings read `ds:0xbb7480` (what
     /// `SelectQuestLogEntry 0x4dfae0` wrote, synchronously) and then PEEK the quest cache in the
-    /// same call (`0x4e1130` -> `0xc0e1b0`/`0x562a40`, wow-re `ui/ledger.tsv`), so a
+    /// same call (`0x4e1130` -> `0xc0e1b0`/`0x562a40`), so a
     /// select-then-read pair inside ONE frame answers about the row just selected. Carrying one
     /// detail for "the selection" instead made `SelectQuestLogEntry` inert until the next push:
     /// every entry of an addon's log walk answered with whichever row the snapshot happened to be
@@ -174,8 +174,8 @@ pub struct QuestLogState {
     /// The ids of the quests folded under a collapsed header — in the log, absent from
     /// [`Self::entries`]. No getter indexes them; they exist for the **watch prune** alone, which
     /// in the reference scans the whole row array, hidden rows included (`0x4de7a7`–`0x4de80f`;
-    /// a collapsed-group quest is still a row there, sorted past the visible window — wow-re
-    /// `system/ui/scratch/questlog-list-rebuild.md` §7). Without them a collapse would read as the
+    /// a collapsed-group quest is still a row there, sorted past the visible window). Without them
+    /// a collapse would read as the
     /// quest leaving the log and silently drop its watch.
     pub hidden_quest_ids: Vec<u32>,
 }
@@ -263,8 +263,7 @@ impl super::UiScript {
 }
 
 /// The signed seconds remaining on a quest-log row's timer, or `None` when the row has no timer at
-/// all. **This is the reference's own formula**, byte-verified (wow-re
-/// `system/ui/scratch/quest-timer-law.md`, the 2026-08-09 §5 trio; decision 1154):
+/// all. **This is the reference's own formula**, byte-verified (decision 1154):
 ///
 /// ```text
 /// value = slot.timer + G − now − 1
@@ -327,8 +326,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `tag` is the bare word (`Elite`, `Raid`, …) or nil — the ref's Lua wraps it in the
     // parentheses itself (`"("..questTag..")"`, ref l.195). isComplete is 1 / -1 / nil.
     //
-    // **The arity is always SIX, and the two failure shapes are different** (wow-re
-    // `ui/scratch/questlog-title-tag.md`, §5-verified at `0x4df930`): a MISSING or non-number
+    // **The arity is always SIX, and the two failure shapes are different** (`0x4df930`): a
+    // MISSING or non-number
     // argument raises `Usage:` (shape A — [`number_arg`], truncating toward zero like the
     // reference's `_ftol`), while an out-of-range NUMBER is not an error at all — it returns
     // `nil, 0, nil, nil, nil, nil` off `mov eax,6` at all three exits. Return 2 is the NUMBER
@@ -366,8 +365,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 0 => Value::Nil,
                 c => Value::Integer(i64::from(c.signum())),
             };
-            // **Returns 4 and 5 are `1`/`nil`, NOT booleans** (wow-re
-            // `ui/scratch/questlog-title-tag.md` §7's table): `isHeader` is `1` on a header row
+            // **Returns 4 and 5 are `1`/`nil`, NOT booleans**: `isHeader` is `1` on a header row
             // and `nil` on a quest; `isCollapsed` is `1` only for a header whose bit in
             // `[0xbb748c]` is clear — a quest row and an EXPANDED header both answer `nil`. We
             // pushed `true`/`false`, which every `if ( isHeader )` in FrameXML reads the same and
@@ -984,8 +982,8 @@ mod tests {
             .unwrap());
     }
 
-    /// The §5-verified arity contract (wow-re `ui/scratch/questlog-title-tag.md`, `0x4df930`):
-    /// six values ALWAYS, an out-of-range number is not an error, and return 2 is the number `0`
+    /// The arity contract (`0x4df930`): six values ALWAYS, an out-of-range number is not an
+    /// error, and return 2 is the number `0`
     /// — while a missing or non-number argument raises `Usage:`.
     #[test]
     fn out_of_range_is_six_values_with_a_zero_level_and_a_bad_arg_raises() {
@@ -1027,8 +1025,8 @@ mod tests {
         }
     }
 
-    /// §7's table for returns 4 and 5: `1` on a header, `nil` on a quest; `isCollapsed` is `1`
-    /// only for a COLLAPSED header — an expanded one and every quest row answer `nil`.
+    /// `isHeader`/`isCollapsed`, returns 4 and 5: `1` on a header, `nil` on a quest; `isCollapsed`
+    /// is `1` only for a COLLAPSED header — an expanded one and every quest row answer `nil`.
     #[test]
     fn is_header_and_is_collapsed_are_one_or_nil_never_booleans() {
         let mut s = UiScript::new().unwrap();
@@ -1313,7 +1311,7 @@ mod tests {
     /// the watch prune counts them — the reference's prune (`0x4de7a7`–`0x4de80f`) scans the whole
     /// row array for a non-header row with the watched id, and a collapsed-group quest is still a
     /// row there, just sorted past the visible window; the collapse itself (`0x4ded30`) re-sorts
-    /// and recounts only (wow-re `system/ui/scratch/questlog-list-rebuild.md` §7/§8). So watch →
+    /// and recounts only. So watch →
     /// collapse → expand keeps the watch, and a quest that genuinely LEFT the log still drops it.
     #[test]
     fn a_collapsed_header_keeps_its_quests_watched() {

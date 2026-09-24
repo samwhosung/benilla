@@ -51,8 +51,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // it behaved inside this shim.
 
     // GetText — **an EMPTY string comes back as `nil`, and that substitution is the getter's own**
-    // (`FontString:GetText 0x79d690`, wow-re
-    // `system/ui/scratch/fontstring-text-cell-and-gettext-contract.md`, §5 five-worker round):
+    // (`FontString:GetText 0x79d690`):
     //
     // ```text
     // 79d72f  mov  eax,[eax+0xf0]        ; the text cell
@@ -108,7 +107,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // (`0x7a2030` falls through to the same cached measurement), so it was pruned rather than
     // reimplemented (1251).
     // round-trip ([`super::UiScript::set_measured_text`]) — the client asks its font engine for the
-    // laid-out string's metrics exactly here (`fontstring.md`), and the tooltip's auto-size sums
+    // laid-out string's metrics exactly here, and the tooltip's auto-size sums
     // these to fit its lines. `0` until the string has been measured (a frame's latency; converges).
     // The stored measure only counts while its key matches the CURRENT text/font/wrap
     // ([`RegionData::measure_key`]): after a SetText the old string's width is not this string's
@@ -121,8 +120,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // the one cell `[fs+0xfc]` (`0x772890` is `0x79e510`'s callee). So the two agree exactly where
     // the reference makes them agree, and differ exactly where a width was declared.
     // GetStringWidth is the **natural, unwrapped** extent — never the declared box, and never the
-    // wrapped one (wow-re `fontstring-overflow.md`, "The measurement echo": the reference's getter
-    // re-measures the raw text with NO wrap constraint). Unlike `GetWidth` below it deliberately
+    // wrapped one (the reference's getter re-measures the raw text with NO wrap constraint).
+    // Unlike `GetWidth` below it deliberately
     // does NOT fall back to a declared `SetWidth`: that width is the very thing a caller
     // asks this to be independent of. A kit that sizes a box from this number and then sets a width
     // on the string — which is what the reference's own `PanelTemplates_TabResize` does — would
@@ -207,7 +206,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // GetJustifyH()/GetJustifyV() → **1 string**. Real entries on the reference's FontString table
-    // (`0x79e5f0` / `0x79e7f0`, the FontString column of wow-re's two-column accessor table) that
+    // (`0x79e5f0` / `0x79e7f0`, the FontString column of a two-column accessor table) that
     // this side had simply never grown: a FontString could set its justification and not read it
     // back, while the `<Font>` object — the same law, transcribed separately — could do both.
     //
@@ -233,7 +232,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 
     // SetNonSpaceWrap(enable) / CanNonSpaceWrap() — FontString only (`0x79e9f0` / `0x79ead0`).
     //
-    // Two contract details from wow-re's batch, both easy to get wrong:
+    // Two contract details, both easy to get wrong:
     //  · the getter is **`CanNonSpaceWrap`**, not `GetNonSpaceWrap`, and it answers **`1` or nil**,
     //    not a boolean — 1.12 predates that convention and an addon may compare against 1.
     //  · a **no-argument call ENABLES** it (the default is on), rather than being a query.
@@ -268,9 +267,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetTextHeight(height) — switch the FontString to the scaled-string regime (§5-verified,
-    // wow-re `fontstring-overflow.md`: `0x771600` is the ONLY clearer of the one-to-one bit
-    // `0x200`; the literal size then flows through UNCAPPED, magnified from the raster). Stored
+    // SetTextHeight(height) — switch the FontString to the scaled-string regime (`0x771600` is the
+    // ONLY clearer of the one-to-one bit `0x200`; the literal size then flows through UNCAPPED,
+    // magnified from the raster). Stored
     // as the distinct [`RegionData::text_height`] — the font object is untouched, so GetFont
     // keeps reporting the face's own height like the real API.
     m.set(

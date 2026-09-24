@@ -65,8 +65,7 @@ pub struct SavedInstanceInfo {
 }
 
 /// One **raid roster** row — `GetRaidRosterInfo`'s nine returns, as the app resolved them
-/// (wow-re `ui/scratch/raid-roster-bindings.md` §2, §5-cross-checked with orchestrator
-/// byte-arbitration). Field order is the push order of the reference's success tuple.
+/// (`0x4bb560`). Field order is the push order of the reference's success tuple.
 ///
 /// The row is the *record*, not the answer: two of the nine are computed at the binding
 /// ([`Self::subgroup`]'s 1-based exposure, [`Self::zone`]'s offline substitution), because both
@@ -86,8 +85,8 @@ pub struct RaidMemberInfo {
     /// false at its entry).
     pub guid: u64,
     /// Return 2 — the rank, **exposed exactly as stored** (`0x4bb607 fild [edi+0xc]`, no
-    /// adjustment). wow-re could not derive the numeric convention from the binding, and does not
-    /// claim one; the corpus does, consistently: `ChatLog.lua:351-353` prints `@` for `2` and `*`
+    /// adjustment). The numeric convention is not derivable from the binding alone; the corpus
+    /// does, consistently: `ChatLog.lua:351-353` prints `@` for `2` and `*`
     /// for `1`, i.e. **0 member · 1 assistant · 2 leader**, which is what the app fills.
     pub rank: u32,
     /// Return 3 — the subgroup **as stored, 0-based**. The binding exposes `subgroup + 1`
@@ -110,11 +109,11 @@ pub struct RaidMemberInfo {
     /// reference: return 8 is `1` on exactly the two arms that produced a real zone and `nil` on
     /// the `PLAYER_OFFLINE` one.
     pub online: bool,
-    /// Return 9 — **deliberately unlabelled.** wow-re verified the mechanism and refused the
-    /// name: a streamed member answers `1` iff `[obj+0x110 +0x40] <= 0` (UNIT_FIELD_HEALTH by the
-    /// descriptor line this repo already anchors), and an unstreamed one iff the roster record's
-    /// `[+0x18]` carries **both** bits `0x4` and `0x1`. Two independent workers guessed "isDead"
-    /// positionally and the note declined to adopt it (§5 Open).
+    /// Return 9 — **deliberately unlabelled.** The mechanism is confirmed: a streamed member
+    /// answers `1` iff `[obj+0x110 +0x40] <= 0` (UNIT_FIELD_HEALTH by the descriptor line this
+    /// repo already anchors), and an unstreamed one iff the roster record's `[+0x18]` carries
+    /// **both** bits `0x4` and `0x1`. The name itself is a guess, not settled: two independent
+    /// reads proposed "isDead" positionally, but it is not adopted here.
     ///
     /// Three things corroborate that guess without settling it, recorded here so whoever settles
     /// it starts ahead: the whole corpus destructures position 9 as `isDead`
@@ -153,7 +152,7 @@ pub struct PartyState {
     /// `UnitIsPartyLeader 0x516210` does not. So an unresolvable-but-non-raising argument (none,
     /// `nil`, `""`, `"target"` with no target) resolves to `0:0`, matches the zeroed leader, and
     /// the reference answers **`1` while solo**. A client that answers `nil` there is not
-    /// reproducing 1.12 (wow-re `ui/scratch/party-leader-and-nameplate-verbs.md`).
+    /// reproducing 1.12.
     pub leader_guid: u64,
     /// **The active player's own GUID** — the reference's `0x468550` read (`[0xb41414]+0xc0`),
     /// `0` out of world. Fed by the app beside the leader; the pair is the leader gate the
@@ -284,8 +283,8 @@ impl super::UiScript {
     }
 
     /// One member's answer, forwarded to the leader (`{guid, status}`, decisions 1989/1997).
-    /// The handler's leader arm (`0x4ba360`, wow-re `ui/scratch/readycheck-response-store.md`):
-    /// the record's guid is matched against the roster entry in full (`0x4ba3f9`/`0x4ba405`),
+    /// The handler's leader arm (`0x4ba360`): the record's guid is matched against the roster
+    /// entry in full (`0x4ba3f9`/`0x4ba405`),
     /// and a match stores **the constant 0** into the "has not answered" flag whatever the status
     /// byte says (`0x4ba40e`; `ecx` is zeroed before the loop and never written) — so any answer,
     /// ready or not, clears the member. The status byte gates one thing: a `0` prints
@@ -349,9 +348,8 @@ impl super::UiScript {
 /// against the local player's own GUID (`0x468550`). `IsPartyLeader 0x4e9130` opens
 /// `mov eax,[0xbc75fc]` · `mov esi,[0xbc75f8]` and compares **the same two globals** against the
 /// same GUID; its only extra instruction is an `or ecx,eax; je` short-circuit on a `0:0` cached
-/// leader, which is behaviourally inert (a zero GUID can never equal a live player's). wow-re's
-/// orchestrator re-read both prologues and they are byte-identical in the globals they load
-/// (`raid-roster-bindings.md` §3, VERIFIED).
+/// leader, which is behaviourally inert (a zero GUID can never equal a live player's), and both
+/// prologues are byte-identical in the globals they load.
 ///
 /// **So `IsRaidLeader()` is TRUE for an ordinary 5-man party leader**, and its body reads no
 /// raid-vs-party flag and never touches the roster array/count the other two raid bindings use.
@@ -662,9 +660,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // IsRaidOfficer() → nil, always: a 1.12 PARTY has no officer rank (the assistant flag is a
     // raid concept). The popup's leader-or-assistant gates read this and fall back to the leader
     // half. The roster now carries the assistant rank ([`RaidMemberInfo::rank`], `1`), so the
-    // *data* to answer this exists — what does not is a carve of `IsRaidOfficer`'s own body, and
-    // "it is probably rank ≥ 1 for the player's row" is a guess, not a mechanism. Left nil until
-    // someone reads the bytes.
+    // *data* to answer this exists — what does not is a reading of `IsRaidOfficer`'s own body,
+    // and "it is probably rank ≥ 1 for the player's row" is a guess, not a mechanism. Left nil
+    // until someone reads the bytes.
     g.set(
         "IsRaidOfficer",
         lua.create_function(|_, ()| Ok(Value::Nil))?,
@@ -672,12 +670,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // ── The raid-management verbs (decision 1549) ────────────────────────────────────────────
     //
-    // All nine are `ORCHESTRATION` in wow-re's own classification (`ui/scratch/bindings.md`:
-    // `ConvertToRaid 0x4bbc90`, `SetRaidSubgroup 0x4bb990`, `SwapRaidSubgroup 0x4bbb00`,
-    // `PromoteToAssistant 0x4bbd20`, `RequestRaidInfo 0x4a1850`, `GetSavedInstanceInfo 0x4a1920`;
-    // `UninviteFromRaid 0x48a580` and `SetRaidRosterSelection 0x4bb820` in
-    // `item17-frameapi-fullcarve.md`) — "marshals + delegates to a C++ method/net-send; no inline
-    // fidelity math". So the *binding* has no law of its own to reproduce: the law is the wire's,
+    // All nine share the same shape (`ConvertToRaid 0x4bbc90`, `SetRaidSubgroup 0x4bb990`,
+    // `SwapRaidSubgroup 0x4bbb00`, `PromoteToAssistant 0x4bbd20`, `RequestRaidInfo 0x4a1850`,
+    // `GetSavedInstanceInfo 0x4a1920`, `UninviteFromRaid 0x48a580`, `SetRaidRosterSelection
+    // 0x4bb820`): each marshals and delegates to a C++ method or net-send, with no inline
+    // fidelity math. So the *binding* has no law of its own to reproduce: the law is the wire's,
     // which `benilla-protocol`'s `group` family already carries byte-golden, and the marshalling
     // is the queue below. Nothing here is a guess about a body nobody has read.
     //
@@ -781,8 +778,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // unanswered, and prints `RAID_MEMBERS_AFK` with the `", "`-joined names — or
     // `READY_CHECK_NO_AFK` — as a `CHAT_MSG_SYSTEM` line. Both keys are read raw off `_G`
     // (`0x704350`: `lua_gettable` on GLOBALSINDEX, empty-string default), never through
-    // `GetText`. Sends no packet, raises nothing, returns nothing (decision 1989; wow-re
-    // `ui/scratch/uiparent-onupdate-engine-verbs.md` §3).
+    // `GetText`. Sends no packet, raises nothing, returns nothing (decision 1989).
     g.set(
         "CheckReadyCheckTime",
         lua.create_function(|lua, ()| {
@@ -1041,7 +1037,7 @@ mod tests {
         assert_eq!(master, None);
     }
 
-    // ── The raid trio (wow-re `ui/scratch/raid-roster-bindings.md`) ─────────────────────────────
+    // ── The raid trio (`UnitInRaid`, `GetRaidRosterInfo`, `IsRaidLeader`) ────────────────────
     //
     // One test per return-shape trap, in `item_stats`'s `get_item_info_tests` style: the ARITY
     // assertion is half of each, because a signature regression is the failure every individual
@@ -1210,11 +1206,9 @@ mod tests {
         assert!(s
             .eval::<bool>(r#"return UnitInRaid("mouseover") == nil"#)
             .unwrap());
-        // **The input partition, and it is NOT "never raises".** This test used to assert that a
-        // missing, wrong-typed or unknown token is all nil, on a wow-re finding that published "no
-        // error path". That claim was refuted by a later §5 cross-check and corrected at the source
-        // (`raid-roster-bindings.md` §1: *"The grammar is now enumerated and it settles the other
-        // way"*), which named `UnitInRaid` as one of exactly three verbs carrying the wrong claim.
+        // **The input partition, and it is NOT "never raises".** A quiet nil covers a missing,
+        // wrong-typed, or a recognised-but-unmatched token; a token matching none of the
+        // resolver's prefixes raises instead.
         //
         // Quiet nil: `0x6f3690` returns NULL for a missing or uncoercible argument, `0x515970` maps
         // NULL/empty to GUID `0:0`, and `0x4baee0` short-circuits `0:0` to false at entry.
@@ -1237,7 +1231,7 @@ mod tests {
 
     /// **`IsRaidLeader()` is true for an ordinary 5-man party leader.** Its body reads the same
     /// two leader-GUID globals `IsPartyLeader` does and carries no raid-vs-party flag at all
-    /// (`0x4bb8c0` vs `0x4e9130`, both prologues re-read by wow-re's orchestrator). Answering nil
+    /// (`0x4bb8c0` vs `0x4e9130`). Answering nil
     /// "because there is no raid" would be the divergence.
     #[test]
     fn is_raid_leader_is_true_for_a_party_leader() {
@@ -1362,9 +1356,9 @@ mod tests {
     }
 
     /// `IsRaidOfficer()` still answers nil, and the raid arc landing (decision 1549) did NOT
-    /// change that — it is not waiting on a feature, it is waiting on a carve of `0x4bb910`'s own
-    /// body. The binding's doc carries the refusal; this pins the behaviour so a later "surely it
-    /// is just rank >= 1" edit has to argue with a test.
+    /// change that — it is not waiting on a feature, it is waiting on a reading of `0x4bb910`'s
+    /// own body. The binding's doc carries the refusal; this pins the behaviour so a later
+    /// "surely it is just rank >= 1" edit has to argue with a test.
     ///
     /// What it costs today, stated where someone will find it: `RaidFrameAddMemberButton` is
     /// enabled for the raid LEADER only, where the reference also enables it for an assistant.
@@ -1759,7 +1753,7 @@ mod tests {
 
     /// A "not ready" answer prints `RAID_MEMBER_NOT_READY` for that member the moment it arrives —
     /// and clears their flag all the same, because the leader arm stores the constant 0 whatever
-    /// the byte says (`0x4ba40e`, wow-re `readycheck-response-store.md`). A guid the roster does
+    /// the byte says (`0x4ba40e`). A guid the roster does
     /// not hold writes nothing.
     #[test]
     fn a_not_ready_answer_prints_its_line_and_still_clears_the_member() {

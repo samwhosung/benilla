@@ -9,9 +9,8 @@
 //! id doing double duty as both the row's identity and the group key (here the GROUP key is the
 //! category, the row's identity is the skill id).
 //!
-//! ## The engine grouping law (PINNED at the bytes — decision 1091; wow-re
-//! `system/tradeskill/scratch/skillframe-display-list.md`, the list build `0x4d2cb0` + its
-//! comparator `0x4d3070`. The 0530 follow-up this once carried is closed.)
+//! ## The engine grouping law (PINNED at the bytes — decision 1091; the list build `0x4d2cb0` +
+//! its comparator `0x4d3070`. The 0530 follow-up this once carried is closed.)
 //!
 //! Groups ordered by `category_order` ascending (`category_id` breaks a tie, for determinism);
 //! one header row per non-empty group (text = `category_name`); within a group, **untrained lines
@@ -97,8 +96,7 @@ pub struct SkillEntry {
     pub max: u32,
     /// `SkillRaceClassInfo.flags & 0x400` (`SKILL_FLAG_MONO_VALUE`) for the player's race/class:
     /// a **single-rank** line. The real client's `GetSkillLineInfo` overrides `skillMaxRank` to
-    /// `1` for these, whatever the descriptor says (wow-re
-    /// `system/tradeskill/scratch/skillframe-seed-abandon.md`: `0x4d3610`, `4d38b1 test ah,0x4`) —
+    /// `1` for these, whatever the descriptor says (`0x4d3610`, `4d38b1 test ah,0x4`) —
     /// so a hunter's `Beast Mastery`, which vmangos happily reports as `300/300`, reads as a
     /// proficiency and `SkillFrame.lua`'s `skillMaxRank == 1` branch draws it gray with no rank
     /// text. The raw [`Self::max`] stays untouched here; the override lives at the API return,
@@ -308,11 +306,10 @@ fn set_collapsed(model: &mut Model, id: usize, collapse: bool) {
 /// module doc's by-id persistence); a header row or an out-of-range index clears the selection.
 /// `GetSkillLineInfo`'s **out-of-range tuple** — thirteen values, four of them numeric zeros.
 ///
-/// Byte-verified in wow-re's `system/tradeskill/scratch/skillframe-selection-and-oob.md` (pushes
-/// `0x4d3a2c`…`0x4d3a98`, `mov eax,0xd` at `0x4d3a9f`); decision 1919. One shape serves five
-/// distinct conditions — index 0, a negative index, an index past the end, no active player, and an
-/// in-range row whose DBC record is missing — because the reference's bounds test (`0x4d3675`) is a
-/// single UNSIGNED compare that funnels them all to the same exit.
+/// Byte-verified (pushes `0x4d3a2c`…`0x4d3a98`, `mov eax,0xd` at `0x4d3a9f`); decision 1919. One
+/// shape serves five distinct conditions — index 0, a negative index, an index past the end, no
+/// active player, and an in-range row whose DBC record is missing — because the reference's
+/// bounds test (`0x4d3675`) is a single UNSIGNED compare that funnels them all to the same exit.
 ///
 /// The numeric slots are 4 (`skillRank`), 5 (`numTempPoints`), 6 (`skillModifier`), 7
 /// (`skillMaxRank`), 11 (`minLevel`) and 12 (`skillCostType`). Slots 4 and 5 must be numbers or the
@@ -407,8 +404,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // a header (`0x4d3768`). `index` 1-based.
     //
     // **OUT OF RANGE IS THE 13-VALUE FALLBACK, NOT A SINGLE NIL.** This comment used to say the
-    // opposite and it was wrong; the correction is decision 1919, from a wow-re trio cross-check
-    // (`system/tradeskill/scratch/skillframe-selection-and-oob.md`). `0x4d3675`'s bounds test is
+    // opposite and it was wrong; the correction is decision 1919. `0x4d3675`'s bounds test is
     // UNSIGNED against the total row count, so index 0, a negative index, an index past the end, no
     // active player, and an in-range row whose DBC record is missing all fall to `0x4d3a2a` and push
     // the same thirteen: `nil, nil, nil, 0, 0, 0, 0, nil, nil, nil, 0, 0, nil` (`0x4d3a2c`…
@@ -894,7 +890,7 @@ mod tests {
     }
 
     /// **Out of range answers the reference's THIRTEEN-value tuple, not a bare nil** — decision
-    /// 1919, byte-verified in wow-re's `skillframe-selection-and-oob.md`.
+    /// 1919, byte-verified (`0x4d3675`'s bounds test, `0x4d3a2c`…`0x4d3a98`).
     ///
     /// The COUNT is the whole assertion. `GetSkillLineInfo(0) == nil` reads true either way,
     /// because Lua compares only the first returned value — which is precisely how the old

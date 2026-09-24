@@ -45,7 +45,8 @@
 //! −4; the *binding* subtracts 5 instead of negating, so it gives rank 1 → **−4** and rank 4 →
 //! **−1**. They genuinely disagree, and the client is the authority for what the client's binding
 //! returns — [`visual_rank`] implements the binding. Nothing here reads the server's form, and a
-//! reader "fixing" this back to `-rank` would be reverting a §5 cross-check.
+//! reader "fixing" this back to `-rank` would be undoing a verified read of [`visual_rank`]'s own
+//! bytes.
 //!
 //! Conflating the two scales puts Sergeant's badge on a Corporal, so [`visual_rank`] is the one
 //! place the conversion happens and every caller goes through it. The trap is that both numbers
@@ -91,9 +92,9 @@
 //! `GetPVPRankInfo` calls the first. **A client that gendered the pane's title would be more
 //! "correct" than the reference and would diverge from it**, which is not what we build.
 //!
-//! ## The counter-intuitive four (wow-re `system/ui/scratch/honor-panel-law.md`, §5, 2026-08-21)
+//! ## The counter-intuitive four
 //!
-//! Everything below is byte law from that carve, and every one of them looks like a bug:
+//! Everything below is byte law, and every one of them looks like a bug:
 //!
 //! 1. `GetPVPRankProgress` **multiplies by a slightly-wrong f32 reciprocal** and does not clamp —
 //!    [`rank_progress`].
@@ -184,7 +185,7 @@ pub struct InspectHonorData {
     /// The reply's `highestRank` byte — `GetInspectHonorData`'s twelfth return, which the
     /// reference names `lifetimeRank`. Internal scale, like every other rank here.
     ///
-    /// **Passed through, where its self-side twin is suppressed below 5.** The carve pins
+    /// **Passed through, where its self-side twin is suppressed below 5.** This pins
     /// `GetPVPLifetimeStats`'s `cmp al,5; jb` at `0x51a843` and records `0x4c9620` as twelve plain
     /// pushes with no such gate, so this one is not filtered here. That is a *recorded absence*
     /// rather than an asserted negative: if a re-read of `0x4c9620` ever turns up the same
@@ -257,7 +258,7 @@ impl super::UiScript {
     ///
     /// **Gendered is right *here* and wrong in the pane**, which is the whole reason this is not
     /// simply `GetPVPRankInfo`'s lookup: the credit formatter resolves through `0x612bf0`
-    /// (§4.3-VERIFIED) while `GetPVPRankInfo` passes gender 0. It shares [`rank_title_gendered`]
+    /// while `GetPVPRankInfo` passes gender 0. It shares [`rank_title_gendered`]
     /// with `UnitPVPName`, the engine's other gendered caller.
     ///
     /// The number `SMSG_PVP_CREDIT` carries is the **INTERNAL** rank — the GlobalString index
@@ -265,8 +266,8 @@ impl super::UiScript {
     /// badge indexes; see the module doc's "Two ranks". Unlike the pane's binding this path applies
     /// **no range check**, so rank 19 legitimately names "Leader" here.
     ///
-    /// Two facts the caller owns, both from the same carve, because neither is expressible in this
-    /// signature: the gender is the **local player's** while the team is the **victim's**
+    /// Two facts the caller owns, neither expressible in this signature: the gender is the
+    /// **local player's** while the team is the **victim's**
     /// (`0x625374` hands `0x612bf0` the entry `this`, still the local player), and a victim whose
     /// team resolves to **−1 emits no line at all** (`0x625321 js` bails the whole formatter) —
     /// which is a `u8` here precisely so that decision cannot be smuggled into a key that misses.
@@ -306,8 +307,8 @@ const RANK_BAR_SCALE: f64 = f32::from_bits(0x3B80_8081) as f64;
 /// The rank progress bar's byte → the fraction the reference feeds straight to a `StatusBar` whose
 /// `minValue`/`maxValue` are `0`/`1`.
 ///
-/// **A multiply by [`RANK_BAR_SCALE`], not a division by 255, and no clamp** — both halves are the
-/// §5 verdict correcting the natural reading, and both are deliberate:
+/// **A multiply by [`RANK_BAR_SCALE`], not a division by 255, and no clamp** — both halves are
+/// verified at the bytes, correcting the natural reading, and both are deliberate:
 ///
 /// - `0x51aace` is `fild DWORD` then `fmul DWORD PTR ds:0x8026c8`. Under the client's PC_53 x87
 ///   invariant `(double)b * (double)K` and `(double)b / 255.0` differ for **255 of the 256** byte

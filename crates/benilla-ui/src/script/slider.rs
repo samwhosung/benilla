@@ -2,7 +2,7 @@
 //! `0x6eee40`). A value in `[min, max]` with a step and orientation, driving a thumb texture along
 //! the track.
 //!
-//! Grounded in wow-re's byte-verified LoadXML table (RF-28, `rf28-typed-widget-loadxml.md`): the
+//! Grounded in the byte-verified LoadXML table (`Slider::LoadXML 0x789580`): the
 //! `<ThumbTexture>` sub-element (default layer OVERLAY=3), `minValue`/`maxValue`/`valueStep`/
 //! `defaultValue`, the `orientation` shared enum (HORIZONTAL=0/VERTICAL=1, `0x811b00`), and the
 //! widget's own `OnValueChanged` script slot (`+0x330`). The **thumb-position** mechanism — the
@@ -11,13 +11,14 @@
 //! ScrollFrame's scroll; decisions 0112/0250).
 //!
 //! `SetValue` fires `OnValueChanged` on the **first-ever** value and after that **only on an
-//! actual change** ([`SliderState::store_value`] — the client's `+0x314` bit2, wow-re
-//! `slider-mouse-law.md` §6). The change-gate is load-bearing, not an optimization: the real
-//! scrollbar template wires `OnValueChanged → this:GetParent():SetVerticalScroll(arg1)` and the
-//! ScrollFrame's `OnVerticalScroll → scrollbar:SetValue(arg1)` back the other way, so a fire-always
-//! `SetValue` would recurse forever (`UIPanelTemplates.xml`); the gate breaks the loop after one
-//! hop. `SetMinMaxValues` re-clamps through the same gate only once a value exists, so a range set
-//! from `<OnLoad>` never runs a handler the addon has not armed yet.
+//! actual change** ([`SliderState::store_value`] — the client's `+0x314` bit2, `SetValue
+//! 0x789930`'s `0x789a06 test bl,4` gate). The change-gate is load-bearing, not an optimization:
+//! the real scrollbar template wires `OnValueChanged →
+//! this:GetParent():SetVerticalScroll(arg1)` and the ScrollFrame's `OnVerticalScroll →
+//! scrollbar:SetValue(arg1)` back the other way, so a fire-always `SetValue` would recurse
+//! forever (`UIPanelTemplates.xml`); the gate breaks the loop after one hop. `SetMinMaxValues`
+//! re-clamps through the same gate only once a value exists, so a range set from `<OnLoad>` never
+//! runs a handler the addon has not armed yet.
 //!
 //! The methods live in their own registry table, consulted by the frame `__index` dispatcher only
 //! for Slider frames — so duck-typing addons (`if frame:GetThumbTexture() then …`) see `nil` on
@@ -60,7 +61,8 @@ fn with_slider<T>(
 
 /// Get-or-create the thumb texture region (`SetThumbTexture`/`<ThumbTexture>`); `layer` re-layers an
 /// existing thumb. Returns the region's id (for wrapper lookup). The widget default layer is OVERLAY
-/// (RF-28 — the Slider's `drawLayer` attr defaults OVERLAY=3, unlike StatusBar's ARTWORK bar).
+/// (`Slider::LoadXML 0x789580` — the Slider's `drawLayer` attr defaults OVERLAY=3, unlike
+/// StatusBar's ARTWORK bar).
 fn ensure_thumb(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Result<u32> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -111,10 +113,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetMinMaxValues",
         lua.create_function(|lua, (this, min, max): (Table, f32, f32)| {
-            // Unlike StatusBar, a reversed pair is NOT swapped (the Slider LoadXML stores min +
-            // (max−min) and does no swap, RF-28). A held value re-clamps into the new range and a
-            // move fires OnValueChanged — but only once a value EXISTS (`SliderState::set_min_max`,
-            // the client's bit2): on a fresh slider this sets the range and fires nothing.
+            // Unlike StatusBar, a reversed pair is NOT swapped (the Slider LoadXML `0x789580`
+            // stores min + (max−min) and does no swap). A held value re-clamps into the new
+            // range and a move fires OnValueChanged — but only once a value EXISTS
+            // (`SliderState::set_min_max`, the client's bit2): on a fresh slider this sets the
+            // range and fires nothing.
             let changed = with_slider(lua, &this, |s| s.set_min_max(min, max))?;
             fire_value_changed(lua, &this, changed)
         })?,
@@ -175,7 +178,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // **A 1.12 Slider has no enabled state at all**: the three names are registered once each, in
     // the BUTTON table `0x879d00` (`0x77fef0`/`0x77ffd0`/`0x7800b0`), and the Slider's own LoadXML
     // `0x789580` takes `drawLayer`/`minValue`/`maxValue`/`valueStep`/`defaultValue`/`orientation`
-    // and nothing else (wow-re `rf28-typed-widget-loadxml.md` §Slider) — so there was no way in
+    // and nothing else — so there was no way in
     // from Lua *or* from XML, and the flag could only ever read `true`.
     //
     // They were a superset in PRESENCE, which is what 1189 records the cost of: a duck-typing addon
@@ -250,8 +253,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Fire `OnValueChanged(self, value)` if `changed` carries the new value (RF-28: the Slider's own
-/// script slot `+0x330`). Fired outside any model borrow; errors go to [`Model::errors`].
+/// Fire `OnValueChanged(self, value)` if `changed` carries the new value (`Slider::LoadXML
+/// 0x789580`: the Slider's own script slot `+0x330`). Fired outside any model borrow; errors go
+/// to [`Model::errors`].
 fn fire_value_changed(lua: &Lua, this: &Table, changed: Option<f32>) -> mlua::Result<()> {
     let Some(value) = changed else { return Ok(()) };
     let id = {
@@ -315,8 +319,8 @@ pub(super) fn thumb_rect(r: Rect, thumb_size: (f32, f32), vertical: bool, fracti
 /// (`0x789ba0`: `ff 50 1c call [eax+0x1c]` for the horizontal branch, `+0x20` for the vertical), and
 /// on a `CSimpleTexture` those slots are `0x770720`/`0x770790` — the **native-texel fallback**:
 /// authored span when it is non-zero on that axis, else the art's own texel span through the same
-/// `<AbsDimension>` converter, else `0.0` when there is no art at all (wow-re
-/// `region-size-fallback.md` §2, VERIFIED; ours is [`super::region::virtual_span`], decision 1349).
+/// `<AbsDimension>` converter, else `0.0` when there is no art at all (ours is
+/// [`super::region::virtual_span`], decision 1349).
 ///
 /// Reading `RegionData::size` instead is what broke every Lua-built slider: `SetThumbTexture(path)`
 /// authors no size, all four stock `<ThumbTexture>`s declare one, and the old fallback — *the thumb

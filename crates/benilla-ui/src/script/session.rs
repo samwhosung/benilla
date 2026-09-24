@@ -8,7 +8,7 @@
 //! What each one means, and where the reference puts it:
 //!
 //! - `Logout()` — ask to leave the world (`CMSG_LOGOUT_REQUEST`; the client's own
-//!   `ClientServices::SendLogout`, wow-re `system/net/ledger.tsv` 0x5ab000). The **server** decides
+//!   `ClientServices::SendLogout 0x5ab000`). The **server** decides
 //!   whether that is instant or a 20-second countdown, and says so in `SMSG_LOGOUT_RESPONSE`; the
 //!   client's whole job is to narrate the answer, which is the CAMP dialog.
 //! - `Quit()` — the same request, plus a standing intent to end the *process* rather than return to
@@ -40,8 +40,7 @@ pub enum SessionRequest {
     ForceQuit,
     /// `ForceLogout()` — the session dispatcher with `force = 1`: `CMSG_PLAYER_LOGOUT` (`0x4A`,
     /// empty) instead of `Logout`'s `0x4B`, the pending-logout latch bypassed, and nothing at all
-    /// without a live in-world session (decision 1963; wow-re `staticpopup-dialog-bindings.md`
-    /// §4).
+    /// without a live in-world session (decision 1963; `ForceLogout 0x48ab50`'s `0x5ab020` gate).
     ForceLogout,
     /// `ReloadUI()` — tear this VM down and build a fresh one, without leaving the world.
     ///
@@ -50,7 +49,7 @@ pub enum SessionRequest {
     /// (`0x490bd0` → `0x48fbf0`) on the NEXT frame — a deferral that doubles as the reentrancy
     /// guard: the Lua state being destroyed is never the one mid-way through executing the call.
     /// Queuing an intent the app runs outside any VM call is that same guard in this engine's
-    /// shape (wow-re `system/ui/scratch/savedvariables-protocol.md` §2, byte-verified).
+    /// shape.
     ReloadUi,
     /// `StopCinematic()` — skip the cinematic that is playing.
     ///

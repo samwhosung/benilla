@@ -1,9 +1,8 @@
 //! The reputation-pane bindings — the twelve `ReputationFrame` globals, driving a faithful port of
 //! the real 1.12 Reputation tab (reference FrameXML `ReputationFrame.{xml,lua}`).
 //!
-//! **The display law here is byte-pinned**, not inferred: wow-5875-re
-//! `system/ui/scratch/reputation-panel-law.md`, carved from the client's whole reputation TU
-//! (`[0x4d5200, 0x4d6d80)`) by a §5 cross-check. Addresses below are that node's.
+//! **The display law here is byte-pinned**, not inferred, across the client's whole reputation TU
+//! (`[0x4d5200, 0x4d6d80)`).
 //!
 //! Same split as [`super::skills`]: the app pushes a flat, unordered snapshot
 //! ([`UiScript::set_reputation`], each row already resolved from `Faction.dbc` + the player's live
@@ -448,8 +447,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // **Both fire `UPDATE_FACTION`, and that is the engine's own doing, not a convenience.**
     // `CollapseFactionHeader 0x4d6a50` and `ExpandFactionHeader 0x4d6aa0` both reach `0x4d6400`,
     // which tail-jumps to `0x4d5c40` — and `0x4d5dab`, inside that function, is one of the FOUR
-    // whole-image fire sites of `UPDATE_FACTION` (wow-re `reputation-panel-law.md` §7.5 and §8,
-    // both VERIFIED). The stock pane has no other repaint path after a fold: its header `<OnClick>`
+    // whole-image fire sites of `UPDATE_FACTION`. The stock pane has no other repaint path after a
+    // fold: its header `<OnClick>`
     // calls the binding and nothing else (ReputationFrame.xml:9-15), and `ReputationFrame_OnEvent`
     // repaints on `UPDATE_FACTION` alone. Our own retired file repainted itself, which is why this
     // was invisible until the pane went stock (1875).

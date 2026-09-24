@@ -1,8 +1,8 @@
 //! The **markup parse** half of `CSimpleHTML::SetText` — `&str` in, a block list out.
 //!
-//! Pure: no Lua, no model, no arena. Everything here is one transcription of
-//! wow-5875-re `system/ui/scratch/simplehtml-markup-engine.md` §10's algorithm and the §0–§7
-//! derivations behind it; [`super`] does the materialization (regions, anchors, fonts).
+//! Pure: no Lua, no model, no arena. Everything here is one transcription of the reference's
+//! `SetText`/`WALK_BODY`/`ADD_PARAGRAPH` algorithm and the byte derivations behind it; [`super`]
+//! does the materialization (regions, anchors, fonts).
 //!
 //! ## The one fact everything else follows from
 //!
@@ -10,25 +10,25 @@
 //! `XMLTree::Parse 0x6f2a30`, which is embedded **expat 1.95.5** (version string `0x882094`,
 //! wrapper `__FILE__` `…\FrameXML\XMLTree.cpp` at `0x8715ec`). So an unclosed `<BR>`, a `</p>`
 //! closing a `<P>` (XML open/close matching is case-SENSITIVE, even though *SimpleHTML's own*
-//! name compares are not — §1.3, `SStrCmpI 0x414310`), a bare `&`, a non-predefined entity such
+//! name compares are not — `SStrCmpI 0x414310`), a bare `&`, a non-predefined entity such
 //! as `&nbsp;`, a duplicate attribute, or any non-whitespace after `</HTML>` all fail the parse
-//! outright, and the widget renders the **raw** string instead (§3).
+//! outright, and the widget renders the **raw** string instead (`0x78a501`).
 //!
 //! [`roxmltree`] stands in for expat here, and it is the right stand-in rather than a convenient
 //! one: it is a well-formedness-checking XML parser with exactly the five XML predefined entities
-//! plus numeric character references, and it was checked case by case against the note's error
-//! table before this module was written — plain prose, a bare `&`, a bare `<`, an unclosed `<BR>`,
-//! a case-mismatched close tag, `&nbsp;`, junk after the root and a duplicate attribute are each
-//! an `Err` (expat codes 4/4/4/7/7/11/9/8), while trailing whitespace after `</HTML>`, a leading
-//! newline, numeric refs, comments and CDATA are each an `Ok`. Its interleaved text/element child
-//! order also hands us the `<A>`/`<BR>` splice positions directly, so none of the note's
+//! plus numeric character references, and it was checked case by case against the reference's parse
+//! outcomes before this module was written — plain prose, a bare `&`, a bare `<`, an unclosed
+//! `<BR>`, a case-mismatched close tag, `&nbsp;`, junk after the root and a duplicate attribute are
+//! each an `Err` (expat codes 4/4/4/7/7/11/9/8), while trailing whitespace after `</HTML>`, a
+//! leading newline, numeric refs, comments and CDATA are each an `Ok`. Its interleaved text/element
+//! child order also hands us the `<A>`/`<BR>` splice positions directly, so none of the reference's
 //! `offsetInParentText` arithmetic (`XMLTree` node `+0x18`) is needed.
 //!
 //! **The one behavioural difference found**, stated rather than hidden: roxmltree refuses a
 //! document carrying an internal DTD subset (`XML with DTD detected`) where expat 1.95.5 may
-//! accept one and honour its `<!ENTITY>` declarations. §9 of the note leaves expat's build options
-//! unread for exactly this case and observes that no `page_text` body carries a DOCTYPE; for us a
-//! DOCTYPE simply takes the plain-text fallback, which is the same place a rejected parse lands.
+//! accept one and honour its `<!ENTITY>` declarations. Expat's build options are unread for
+//! exactly this case, and no `page_text` body carries a DOCTYPE; for us a DOCTYPE simply takes
+//! the plain-text fallback, which is the same place a rejected parse lands.
 
 use crate::justify;
 
@@ -54,7 +54,8 @@ pub(crate) const ALIGN_RIGHT: u32 = 0x04;
 
 /// The ctor default of `hyperlinkFormat` (`+0x360`, string `0x87a838`, installed by
 /// `0x789ea7`→`0x78a540`): `<A href="X">Y</A>` becomes `|HX|hY|h`, which the font engine then
-/// parses as an ordinary hyperlink (§6.5 — nothing disables `|H` on a `CSimpleFontString`).
+/// parses as an ordinary hyperlink (`SetText 0x771d80` never touches `+0x120` — nothing disables
+/// `|H` on a `CSimpleFontString`).
 pub(crate) const DEFAULT_HYPERLINK_FORMAT: &str = "|H%s|h%s|h";
 
 /// One block the walk produced — the arguments of `AddTextBlock 0x78adb0` / `AddImage 0x78ab40`,
@@ -64,7 +65,7 @@ pub(crate) enum Block {
     /// A text block: one `CSimpleFontString`, `SetWidth(frame width)`, no height.
     Text {
         /// The already-spliced, already-collapsed string handed to `SetText` — except on the
-        /// plain-text fallback path, which hands over the **raw** input (§3).
+        /// plain-text fallback path, which hands over the **raw** input (`0x78a501`).
         text: String,
         /// The `elementFont[]` index this block draws with, before the empty-path fallback.
         elem: usize,
@@ -76,14 +77,14 @@ pub(crate) enum Block {
         /// `src=`, used **verbatim** as a texture path — no prefix, no extension fix-up, no
         /// validation in this TU (`0x78ad02`).
         src: Option<String>,
-        /// `width=`/`height=` in logical UI pixels (§7 step 2 — the same units as
+        /// `width=`/`height=` in logical UI pixels (`0x78ab9e`/`0x78abd6` — the same units as
         /// `<AbsDimension>`); `0` when the attribute is absent.
         width: f32,
         height: f32,
         /// The `align` bits; selects which corner anchors to the previous block.
         align: u32,
-        /// The **separate** float byte `[ebp-1]` (§7 step 1): a floated image reserves no height
-        /// in the flow, so the following text overlaps it. Set only inside the
+        /// The **separate** float byte `[ebp-1]` (zeroed at `0x78ab55`): a floated image reserves
+        /// no height in the flow, so the following text overlaps it. Set only inside the
         /// attribute-present branch, which is why a bare `<IMG src=…/>` and
         /// `<IMG align="left" src=…/>` anchor identically and flow differently.
         floated: bool,
@@ -104,7 +105,7 @@ pub(crate) struct Parse {
     pub(crate) errors: Vec<String>,
 }
 
-/// `CSimpleHTML::SetText 0x78a3a0`'s parse half — §10's `SetText`/`WALK_BODY`/`ADD_PARAGRAPH`.
+/// `CSimpleHTML::SetText 0x78a3a0`'s parse half — its `WALK_BODY`/`ADD_PARAGRAPH` algorithm.
 ///
 /// `frame` is the widget's name, the `%s` of the error strings. `hyperlink_format` is
 /// `+0x360`'s current value, used by the `<A>` splice.
@@ -202,12 +203,12 @@ fn paragraph(
     errors: &mut Vec<String>,
 ) -> Block {
     let align = align_of(node);
-    // §6.1/§6.2 in one pass. The reference seeds the buffer with the node's whole accumulated
-    // character data (expat concatenates the text either side of an inline child into the SAME
-    // `+0x0c`) and then splices each child in at its recorded `+0x18` offset plus the running
-    // `extra`. roxmltree hands us text and elements interleaved in document order instead, so
-    // appending as we walk lands every splice exactly where the tag was, with no offset
-    // arithmetic to get wrong.
+    // `0x78a7b0` does this in one pass. The reference seeds the buffer with the node's whole
+    // accumulated character data (expat concatenates the text either side of an inline child
+    // into the SAME `+0x0c`) and then splices each child in at its recorded `+0x18` offset plus
+    // the running `extra`. roxmltree hands us text and elements interleaved in document order
+    // instead, so appending as we walk lands every splice exactly where the tag was, with no
+    // offset arithmetic to get wrong.
     let mut buf = String::new();
     for child in node.children() {
         if child.is_text() {
@@ -250,7 +251,7 @@ fn paragraph(
 fn image(node: roxmltree::Node) -> Block {
     let mut align = ALIGN_LEFT;
     let mut floated = false;
-    // §7 step 1, the round's arbitration point. The float byte `[ebp-1]` is zeroed at `0x78ab55`
+    // The float byte `[ebp-1]` is zeroed at `0x78ab55`
     // and set only INSIDE the attribute-present branch (`0x78ab67`/`0x78ab6c` both skip past it),
     // so it is a property of *the attribute being written*, not of the value:
     //
@@ -287,7 +288,7 @@ fn align_of(node: roxmltree::Node) -> u32 {
 }
 
 /// Attribute lookup, **case-insensitively** — every attribute-name compare in this engine goes
-/// through `0x64a4c0` → `SStrCmpI 0x414310` (§1.3), so `ALIGN`/`Align`/`align` are one attribute.
+/// through `0x64a4c0` → `SStrCmpI 0x414310`, so `ALIGN`/`Align`/`align` are one attribute.
 /// roxmltree's own `Node::attribute` is case-sensitive, which is why this scan exists.
 fn attr_ci<'a>(node: roxmltree::Node<'a, '_>, name: &str) -> Option<&'a str> {
     node.attributes()
@@ -381,7 +382,7 @@ fn atof(s: &str) -> f32 {
     s[start..i].parse::<f32>().unwrap_or(0.0)
 }
 
-/// The HTML-style whitespace collapse, §6.3 — `0x78a8af`–`0x78aa87`, a three-arm dispatch through
+/// The HTML-style whitespace collapse — `0x78a8af`–`0x78aa87`, a three-arm dispatch through
 /// the jump table at `.text 0x78aab8` with the byte remap at `.text 0x78aac4`.
 ///
 /// | arm | characters | behaviour |
@@ -400,7 +401,7 @@ fn atof(s: &str) -> f32 {
 /// verbatim. Operating on `&[u8]` here reproduces that exactly, and the result is valid UTF-8 by
 /// construction because only ASCII whitespace is ever dropped.
 ///
-/// **This applies to markup blocks only.** The §3 plain-text path bypasses it entirely.
+/// **This applies to markup blocks only.** The plain-text path (`0x78a501`) bypasses it entirely.
 fn collapse(buf: &str) -> String {
     let src = buf.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(src.len());
@@ -670,8 +671,8 @@ mod tests {
         }
     }
 
-    /// The `page_text` shape §8 quotes, end to end: an `<H1>` title, a `<BR/>`, and centred
-    /// paragraphs, with the body's own inter-tag newlines contributing nothing.
+    /// The stock `ItemTextFrame`'s `page_text` shape, end to end: an `<H1>` title, a `<BR/>`, and
+    /// centred paragraphs, with the body's own inter-tag newlines contributing nothing.
     #[test]
     fn the_page_text_shape_walks_to_the_block_list_a_reader_would_draw() {
         let p = parse_markup(
@@ -703,9 +704,10 @@ mod tests {
         assert!(p.errors.is_empty());
     }
 
-    /// The §8 signed-page consequence: `ItemTextFrame.lua` appends `From: <creator>` **after**
-    /// `</HTML>`, which is expat error 9 — so a signed HTML page renders as raw markup on the
-    /// reference client too. Our fallback must reach the same place rather than "fixing" it.
+    /// The signed-page consequence: `ItemTextFrame.lua` appends `From: <creator>` **after**
+    /// `</HTML>`, which is expat error 9 (`0x881fec`) — so a signed HTML page renders as raw
+    /// markup on the reference client too. Our fallback must reach the same place rather than
+    /// "fixing" it.
     #[test]
     fn a_signed_html_page_falls_back_exactly_as_the_reference_does() {
         let raw = "\n<HTML><BODY><P>The letter body.</P></BODY></HTML>\n\nFrom:\nMankrik\n\n";
