@@ -94,7 +94,7 @@ enum Phase {
         started_at: f64,
         last_report: f64,
         /// Latched true the first in-flight frame the anim pair reads right — rider base
-        /// Mount(91), mount child base Fly(135) (RF-0057 `0x5fd19c` + the 0441 mount pin).
+        /// Mount(91), mount child base Fly(135) (`0x5fd19c` + the 0441 mount pin).
         gait_ok: bool,
         /// The largest |flying pitch| (radians) seen on the SELF transform mid-flight — the
         /// `sample_splines` tangent-climb attitude (decisions 0501/0516). The route climbs
@@ -307,7 +307,7 @@ fn taxi_probe(
         } => {
             let wow = bevy_to_wow(player.pos);
             if player.server_riding() {
-                // The anim pair the flight must show (RF-0057 `0x5fd19c` + the 0441 mount pin):
+                // The anim pair the flight must show (`0x5fd19c` + the 0441 mount pin):
                 // rider base Mount(91), mount child base Fly(135). Latched — the first frames
                 // legitimately lag (mount attach, first selection).
                 let rider = drivers.get(self_entity).ok().map(|d| d.playing().0);

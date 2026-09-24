@@ -131,7 +131,7 @@ fn reader_state(script: &UiScript) -> (bool, i64) {
 
 /// Every string the UI currently draws — the render list is the honest place to ask what the page
 /// looks like, and the only place since `ItemTextPageText` became a `SimpleHTML` (5875's has no
-/// `GetText`; wow-re `simplehtml-markup-engine.md` §5.1).
+/// `GetText` in its method table `0x87ba80`).
 fn drawn_strings(script: &UiScript) -> Vec<String> {
     use benilla_ui::script::QuadContent;
     script

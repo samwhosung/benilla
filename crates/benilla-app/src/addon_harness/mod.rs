@@ -115,10 +115,9 @@ pub struct AddonReport {
     /// Not "did every entry resolve" — that is [`Self::absent_own_files`] and
     /// [`Self::absent_foreign_files`], and it is a different question because the reference
     /// answers it differently: a manifest line naming no file is `"Couldn't open %s"` in
-    /// FrameXML.log and the walk carries straight on (wow-re
-    /// `ui/scratch/xml-toc-path-resolution.md` §4, VERIFIED). An addon shipping an incomplete zip
-    /// *works* on a real client, so counting it here made the survey say the opposite of the truth
-    /// about 24 addons — FuBar itself among them, on two locale files it does not ship.
+    /// FrameXML.log and the walk carries straight on (`0x6edaa0`). An addon shipping an incomplete
+    /// zip *works* on a real client, so counting it here made the survey say the opposite of the
+    /// truth about 24 addons — FuBar itself among them, on two locale files it does not ship.
     ///
     /// **[`Self::errors`] is unchanged and still carries those rows verbatim** (1213), so every
     /// number in every past record is still readable off it; what changed, deliberately and with
@@ -144,11 +143,11 @@ pub struct AddonReport {
     ///
     /// A different question from [`Self::absent_own_files`] and kept apart from it: this addon's
     /// package is fine, it wants a neighbour. The corpus's two are Auctioneer and BeanCounter
-    /// reaching `..\Blizzard_AuctionUI\Blizzard_AuctionUITemplates.xml` — which wow-re records as
-    /// **RESOLVING** in the real client (`ui/scratch/xml-toc-path-resolution.md` §5 case 2, by
-    /// name), because there the file layer can see `Blizzard_AuctionUI` inside `patch.MPQ`. Ours
-    /// reads the AddOns directory only, so it misses. That one IS ours, and the split is what
-    /// makes it visible instead of averaging with the row above.
+    /// reaching `..\Blizzard_AuctionUI\Blizzard_AuctionUITemplates.xml` — which the real client
+    /// **RESOLVES** (`0x6ede10` collapses the `..`), because there the file layer can see
+    /// `Blizzard_AuctionUI` inside `patch.MPQ`. Ours reads the AddOns directory only, so it
+    /// misses. That one IS ours, and the split is what makes it visible instead of averaging
+    /// with the row above.
     pub absent_foreign_files: Vec<String>,
     /// Names it calls that the VM does not have — see the module doc on what this is worth.
     pub missing_globals: Vec<String>,
@@ -2084,11 +2083,10 @@ struct FileLoad {
     ///
     /// It is `false` for an addon whose only failures are absent files, because on the reference
     /// that addon *loads*: `0x6edaa0` logs `"Couldn't open %s"` and returns null, and the walk
-    /// carries on to the next manifest entry with nothing raised (wow-re
-    /// `ui/scratch/xml-toc-path-resolution.md` §4, VERIFIED — the same rule 2107 unified for the
-    /// two loaders that reach it from Lua). Until this existed the survey scored 24 corpus addons
-    /// as not surviving a session start on nothing but a locale file their own zip omits, FuBar
-    /// and 22 of its plugins among them.
+    /// carries on to the next manifest entry with nothing raised (the same rule 2107 unified for
+    /// the two loaders that reach it from Lua). Until this existed the survey scored 24 corpus
+    /// addons as not surviving a session start on nothing but a locale file their own zip omits,
+    /// FuBar and 22 of its plugins among them.
     raised: bool,
 }
 
@@ -2107,10 +2105,10 @@ fn load_addon_files(script: &UiScript, root: &Path, name: &str, toc: &Toc) -> Fi
         let Some(bytes) = read_under(root, &path) else {
             errors.push(format!("{file}: not found"));
             // WHOSE package is incomplete. `join_ref` has already collapsed the `..`s the way the
-            // client does (wow-re `ui/scratch/xml-toc-path-resolution.md` §2), so the resolved
-            // path is what the real file layer would be handed — and an entry that still points
-            // inside the addon's own folder is the addon shipping a manifest it does not satisfy,
-            // while one pointing out of it wants a neighbour that is not installed.
+            // client does (`0x6ede10`), so the resolved path is what the real file layer would be
+            // handed — and an entry that still points inside the addon's own folder is the addon
+            // shipping a manifest it does not satisfy, while one pointing out of it wants a
+            // neighbour that is not installed.
             let own = path
                 .strip_prefix(base.as_str())
                 .is_some_and(|rest| rest.starts_with('/'));
@@ -4135,12 +4133,12 @@ mod dependency_tests {
     ///   are this, all one family: `DPSMate_CureDisease.toc` names eight files and the folder
     ///   holds six, because the three `*Received*` ones were split into a sibling addon and the
     ///   manifest was never updated. Our loader is behaving correctly (the reference logs
-    ///   `Couldn't open %s` and carries on — wow-re `ui/scratch/xml-toc-path-resolution.md` §4).
+    ///   `Couldn't open %s` at `0x6edaa0` and carries on).
     /// - **`foreign`** — the entry escapes the addon's folder with `..`, which the client supports
     ///   and `join_ref` reproduces, into a folder that is not installed. The corpus's two are
-    ///   Auctioneer and BeanCounter reaching `..\Blizzard_AuctionUI\...`, which wow-re records as
-    ///   **RESOLVING** in the real client (§5 case 2, by name) because its file layer can see that
-    ///   folder inside `patch.MPQ`. That one IS ours.
+    ///   Auctioneer and BeanCounter reaching `..\Blizzard_AuctionUI\...`, which the real client
+    ///   **RESOLVES** (`0x6ede10` collapses the `..`) because its file layer can see that folder
+    ///   inside `patch.MPQ`. That one IS ours.
     ///
     /// The assertion that matters is that the two never merge: a single "files not found" count
     /// would average a broken package with a real client gap and read as one number.
@@ -4276,9 +4274,9 @@ mod dependency_tests {
         // **NOTHING is subtracted from `errors`** (1213) — both rows are still there, verbatim, so
         // every figure any past record quoted is still readable off this list. What changed in
         // 2155 is which of them `loaded` counts: on the reference these addons LOAD, because
-        // `0x6edaa0` logs `Couldn't open %s` and the walk carries on with nothing raised
-        // (`ui/scratch/xml-toc-path-resolution.md` §4). Both halves are asserted together,
-        // because either one alone is a rule that has already been got wrong in both directions.
+        // `0x6edaa0` logs `Couldn't open %s` and the walk carries on with nothing raised. Both
+        // halves are asserted together, because either one alone is a rule that has already been
+        // got wrong in both directions.
         for r in [short, wants] {
             assert!(
                 r.loaded,

@@ -585,8 +585,7 @@ fn latch_and_dispatch(
     // rising edge of `capture.typing`, on a misreading of `0x514490` as "the reference's chat-focus
     // handler": its sole caller `0x493058` hangs off the CSimpleTop root's WM_ACTIVATE callback
     // slot (`[root+0x1134]`, event category 2, payload 0 = deactivate), so it is the **OS
-    // window-deactivate** handler, not a UI-focus one (wow-re `loading-screen-input-law.md`; the
-    // conflated phrasing was `rf79-autorun-cancel-set.md`'s "Chat EditBox / window focus" row).
+    // window-deactivate** handler, not a UI-focus one.
     // In the reference a focused box merely turns the movement handlers into no-ops and the
     // direction bits are *frozen, not cleared* — so holding W and pressing ENTER keeps you
     // running, and the world map eating the `M` that closes it keeps you running too. Both
@@ -726,7 +725,7 @@ fn latch_and_dispatch(
 
     // ── Wheel ── **a notch is a press AND its release, back to back.** The reference builds one
     // chord and hands it to `CBindings::ExecuteBinding` twice — `isDown=1` at `0x483d6f`, then
-    // `isDown=0` at `0x483d82` (wow-re `system/ui/ui.md` §3, VERIFIED) — so a `runOnUp` command
+    // `isDown=0` at `0x483d82` — so a `runOnUp` command
     // runs both halves in the same frame and a plain one runs its single half (the up leg is the
     // `RunCommand 0x4b7b50` no-op: `UP + !runOnUp` returns without running anything). Before this
     // the notch was a press with no release, which quietly made every press+release command a
@@ -931,9 +930,10 @@ fn release(
 /// **Restoring it is not tidiness.** `keystate` is absent from the 1.12.1 client's in-world `_G`
 /// (`reference/1.12-globals.tsv`) even though its own `Bindings.xml` bodies read it as a bare
 /// global — which is only possible if the reference sets it transiently around the call, exactly
-/// as it does `this`/`event`/`arg1` (`invoke_with_globals`, RF-0025). Leaving it set would hand
-/// every addon a global the reference does not have, and an addon that feature-detects it would
-/// take a path we cannot honour — decision 1189's "a superset is not free", one call deeper.
+/// as it does `this`/`event`/`arg1` (`invoke_with_globals`; `0x703f50` → `0x704f10`). Leaving it
+/// set would hand every addon a global the reference does not have, and an addon that
+/// feature-detects it would take a path we cannot honour — decision 1189's
+/// "a superset is not free", one call deeper.
 ///
 /// Save-and-restore rather than set-and-delete, because these bodies nest: a binding whose Lua
 /// fires another binding must not clear the outer one's `keystate` on the way out.
@@ -1159,10 +1159,9 @@ mod tests {
     /// strata walk carries the key down to `CGWorldFrame`, and `ExecuteBinding` runs `TURNLEFT`.
     /// The reference's own chat box ships the flag, so this is the default experience.
     ///
-    /// benilla read the flag as "consumed but inert, unless Ctrl" until the §5
-    /// (`ignorearrows-alt-arrow-gate.md`) corrected both halves — the modifier is ALT, and the key
-    /// is not consumed at all. Under the old reading, holding LEFT with the chat box open did
-    /// nothing whatever.
+    /// benilla read the flag as "consumed but inert, unless Ctrl" until the bytes corrected both
+    /// halves — the modifier is ALT, and the key is not consumed at all. Under the old reading,
+    /// holding LEFT with the chat box open did nothing whatever.
     #[test]
     fn a_flagged_editbox_lets_the_arrow_keys_through_to_their_bindings() {
         let mut app = harness();

@@ -92,7 +92,7 @@ fn render_frames(frames: &[String]) -> String {
 /// diff interesting, and the extra-names side the one nothing else in this harness can see — every
 /// other ranking here is demand-driven, so it can only ever report what an addon *asked* for.
 ///
-/// The reference side is `reference/1.12-globals.tsv`, itself generated from wow-re's live capture.
+/// The reference side is `reference/1.12-globals.tsv`, generated from a live reference capture.
 /// `lod` rows are the twelve LoadOnDemand `Blizzard_*` addons' names, unioned in by 1200 because a
 /// live dump misses them unless the player opened those windows; they are counted separately rather
 /// than silently folded in, since "absent from us" means something different for a window nobody
@@ -736,9 +736,8 @@ fn main() {
     // **WHOSE package is incomplete** — printed immediately before the ranked blockers, because it
     // is the line that stops a session hunting for a client bug that is not one. A `.toc` entry
     // whose file the addon does not ship is the ADDON's defect, and the reference client's
-    // behaviour there is what ours already does: log `Couldn't open %s` and carry on
-    // (wow-re `ui/scratch/xml-toc-path-resolution.md` §4). Nothing is subtracted from the headline
-    // — 1213 — so both readings stay available.
+    // behaviour there is what ours already does: log `Couldn't open %s` and carry on (`0x6edaa0`).
+    // Nothing is subtracted from the headline — 1213 — so both readings stay available.
     let own: Vec<&addon_harness::AddonReport> = reports
         .iter()
         .filter(|r| !r.absent_own_files.is_empty())

@@ -372,8 +372,8 @@ fn class_file(class: u8) -> &'static str {
 
 // ── Input ────────────────────────────────────────────────────────────────────────────────────────
 
-/// The name box's caret blink clock (the ref's `blinkSpeed`, f32 default 0.5 s — wow-re
-/// `rf82-editbox-runtime.md`, period `E+0x370` / accumulator `E+0x374`), reset on every keystroke
+/// The name box's caret blink clock (the ref's `blinkSpeed`, f32 default 0.5 s — `0x77a790`,
+/// period `E+0x370` / accumulator `E+0x374`), reset on every keystroke
 /// so the caret is solid while you type.
 ///
 /// Its own resource rather than a [`CreateSelection`] field on purpose: ticking it there would trip

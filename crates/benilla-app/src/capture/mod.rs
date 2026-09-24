@@ -226,12 +226,12 @@ fn glue_screen() -> Option<GlueScreen> {
 ///
 /// **`WOW_FX_GO=<GameObjectDisplayInfo id>` swaps the subject onto the GAMEOBJECT path** — the
 /// third lane, and the one a placed trap/door/chest actually takes: the wire component set a
-/// streamed GO gets, so `crate::go_anim`'s §243 state machine — not the effect pool — chooses the
-/// sequence. `WOW_FX_GO_STATE` (`GAMEOBJECT_STATE`, default 1 READY) and `WOW_FX_GO_TYPE`
-/// (`GAMEOBJECT_TYPE_ID`, default 6 TRAP) select the substate; `benilla-extract goanimscan`
-/// *predicts* what that resolves to, and this *shows* it. The lane matters because an absent
-/// `GAMEOBJECT_STATE` reads as the wire default `0` = ACTIVE, which on a model with no `Opened`
-/// sequence lands somewhere else entirely:
+/// streamed GO gets, so `crate::go_anim`'s state machine (`0x5f3cb0`) — not the effect pool —
+/// chooses the sequence. `WOW_FX_GO_STATE` (`GAMEOBJECT_STATE`, default 1 READY) and
+/// `WOW_FX_GO_TYPE` (`GAMEOBJECT_TYPE_ID`, default 6 TRAP) select the substate;
+/// `benilla-extract goanimscan` *predicts* what that resolves to, and this *shows* it. The lane
+/// matters because an absent `GAMEOBJECT_STATE` reads as the wire default `0` = ACTIVE, which on a
+/// model with no `Opened` sequence lands somewhere else entirely:
 ///
 /// ```text
 /// WOW_DATA=<Data> WOW_CAPTURE=fxview WOW_FX_GO=3073 WOW_FX_GO_STATE=1 WOW_FX_AGE=4 \

@@ -176,8 +176,8 @@ pub(crate) fn key_token(k: KeyCode) -> Option<&'static str> {
         // **On a Mac keyboard the print-screen key IS F13 — read out of the Mac binary now, not
         // inferred.** The 1.12.1 Mac slice's key table `0x5bf320` maps Mac virtual keycode `0x69`
         // (F13) to `0x212`, the same `PRINTSCREEN` the Windows table reaches from `VK_SNAPSHOT`.
-        // (This arm shipped as an inference off `KEY_PRINTSCREEN_MAC = "F13"`; wow-re's
-        // `keycode-origin-law.md` settled it at the bytes.) macOS has no PrintScreen keycode at
+        // (This arm shipped as an inference off `KEY_PRINTSCREEN_MAC = "F13"`; the Mac table
+        // settled it at the bytes.) macOS has no PrintScreen keycode at
         // all, so without this the byte-real `PRINTSCREEN SCREENSHOT` default is a dead key on
         // every Mac — not fidelity, a broken key.
         #[cfg(target_os = "macos")]
@@ -252,10 +252,10 @@ pub(crate) fn key_token(k: KeyCode) -> Option<&'static str> {
         NumpadEqual => "NUMPADEQUALS",
         NumLock => "NUMLOCK",
         PrintScreen => "PRINTSCREEN",
-        // ScrollLock and Pause are deliberately absent: the reference's namer calls their key
-        // codes (`0x210`/`0x211`) `UNKNOWN`, so they are unbindable there (wow-re
-        // `keybinding-dispatch-law.md` §2.3), and `IsValidBindingKeyString` would refuse the
-        // names anyway — arm 4's 26-name table holds neither.
+        // ScrollLock and Pause are deliberately absent: the reference's namer (`0x4b66b0`) calls
+        // their key codes (`0x210`/`0x211`) `UNKNOWN`, so they are unbindable there, and
+        // `IsValidBindingKeyString` (`0x4b7890`) would refuse the names anyway — its 26-name table
+        // holds neither.
         CapsLock => "CAPSLOCK",
         Minus => "-",
         Equal => "=",

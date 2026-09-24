@@ -224,7 +224,7 @@ fn last_event(script: &UiScript) -> String {
 
 /// The `CHAT_MSG_SYSTEM` lines seen since the hook went in, newest last — step 6's second
 /// observation. `SMSG_PLAYERBOUND` prints `ERR_DEATHBIND_SUCCESS_S` here (`0x5e3d3f` →
-/// `DisplayError(0x138)`, chat type 238 = CHAT_MSG_SYSTEM; wow-re, decision 1335).
+/// `DisplayError(0x138)`, chat type 238 = CHAT_MSG_SYSTEM; decision 1335).
 fn system_lines(script: &UiScript) -> Vec<String> {
     script
         .eval::<Vec<String>>("return ProbeBinderSystemLines or {}")

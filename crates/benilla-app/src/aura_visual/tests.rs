@@ -66,8 +66,8 @@ fn the_dispatch_names_only_the_verified_procs() {
         Some(AuraNode::Alpha(0.0)),
         "kit 5129's 0.0 is a real value, not an absent one"
     );
-    // 9222653 = 0x8CB9FD — the ghost's pale blue-white, byte-cited in wow-re as 0xFF8CB9FD after the
-    // client ORs the opaque byte on.
+    // 9222653 = 0x8CB9FD — the ghost's pale blue-white, 0xFF8CB9FD once the client ORs the opaque
+    // byte on (`0x60d8cc`).
     assert_eq!(
         node_for(proc(char_proc_type::TINT, 9_222_653.0)),
         Some(AuraNode::Tint([0x8C, 0xB9, 0xFD])),
@@ -99,10 +99,9 @@ fn the_dispatch_names_only_the_verified_procs() {
 // ── The target and the ramp ──────────────────────────────────────────────────────────────────────
 
 /// `0x60d180`: the target is `baseAlpha × the HEAD node's factor` — at most one node term, the
-/// newest (nodes link at the list head as they install), never a product over the chain (wow-re
-/// `base-render-alpha.md` §4, correcting the earlier `Π` reading). Stacking stealth (0.3) then the
-/// ghost aura (0.5) reads 0.5 — whichever landed last — and dropping the head hands the term to
-/// the next node down.
+/// newest (nodes link at the list head as they install), never a product over the chain.
+/// Stacking stealth (0.3) then the ghost aura (0.5) reads 0.5 — whichever landed last — and
+/// dropping the head hands the term to the next node down.
 #[test]
 fn the_target_is_base_times_the_newest_node() {
     let mut n = AuraNodes::new(1.0);
@@ -135,7 +134,7 @@ fn the_target_is_base_times_the_newest_node() {
 
 /// The display-swap leg ([`refresh_base_alpha`]'s retarget): a base change rides the same 1000 ms
 /// cubic ramp an aura node does — Ghost Wolf's 102/255 eases in from opaque, and swapping home
-/// eases back — never snaps (`base-render-alpha.md` §5: the fade is part of the mechanism).
+/// eases back — never snaps (the fade, `0x614f80`, is part of the mechanism).
 #[test]
 fn a_base_change_rides_the_same_ramp() {
     let wolf = 102.0 / 255.0;

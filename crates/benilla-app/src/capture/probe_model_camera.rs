@@ -4,8 +4,8 @@
 //!
 //! ## What it asks, and why it is a probe rather than a test
 //!
-//! The unit tests in `crate::ui_models` pin the leg's arithmetic — the client's diagonal-FOV
-//! matrix against wow-re's worked numbers, and the three cancellations. What they cannot reach is
+//! The unit tests in `crate::ui_models` pin the leg's arithmetic — the client's diagonal-FOV matrix
+//! (`0x5c3cc0`) against its worked numbers, and the three cancellations. What they cannot reach is
 //! the half that only exists at run time: does the engine resolve the camera at all, does the
 //! renderer find the record, does a camera get spawned, aimed, and pointed at a real cell of a
 //! real atlas. So this probe drives the **whole live pipeline** from Lua and reads the result off
@@ -19,11 +19,10 @@
 //! - `scale` — `SetModelScale(3)` must not move a pixel. The authored eye is carried through the
 //!   model's root transform, so the camera scales with the model.
 //! - `position` — `SetPosition(0.4, −0.3, 0.9)` must not move a pixel, for the same reason.
-//! - `facing` — `SetFacing(1.0)` must not move a pixel **either**. That one is the finding this
-//!   work commissioned (wow-re `modelframe-facing-cancels.md`): the up vector `0x7ac640` builds is
-//!   model-space `+Z` at `roll = 0`, which is the axis the facing turns about, so eye, target,
-//!   geometry and up all turn together. `modelframe-render-law.md` §2's "only `SetFacing` shows"
-//!   is scoped to `<PlayerModel>`'s frozen camera.
+//! - `facing` — `SetFacing(1.0)` must not move a pixel **either**: the up vector `0x7ac640` builds
+//!   is model-space `+Z` at `roll = 0`, which is the axis the facing turns about, so eye, target,
+//!   geometry and up all turn together. The rule that only `SetFacing` shows is scoped to
+//!   `<PlayerModel>`'s frozen camera (`0x7acf10`).
 //! - `ortho` — the control that must NOT hold: `SetCamera(9)` is past the file's camera count, so
 //!   the widget installs the NULL camera and falls to the orthographic leg, where a facing is a
 //!   plain roll in the screen plane. A probe whose "identical" legs all passed because nothing was
@@ -56,8 +55,8 @@ use crate::ui_models::{TilePerspectiveCamera, TileRoot, UiModelTiles};
 /// index 1 type 1 at eye `(5.5556, 0, 1.8056)` fov `0.67620`), so it exercises the raw-index
 /// selection AND has an index past the count for the orthographic control.
 const FILE: &str = r"Creature\\Wolf\\Wolf.mdx";
-/// The pane's size in FrameXML units — the pet pane's own `318×224`, whose aspect is wow-re's
-/// worked example (`camera-law.md` §12.1: `θ = 0.287938 · fov`).
+/// The pane's size in FrameXML units — the pet pane's own `318×224`, whose aspect is a worked
+/// example of the projection `0x5c3cc0` (`θ = 0.287938 · fov`).
 const PANE_W: f32 = 318.0;
 const PANE_H: f32 = 224.0;
 /// Frames to let a change settle before the numbers are read: the extract republishes the request

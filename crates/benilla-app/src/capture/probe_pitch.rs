@@ -6,17 +6,17 @@
 //! `player::controller`, gated on `mouselook` (a held right button or MOVEANDSTEER) *and* a moving
 //! OS cursor inside the viewport. An unfocused probe window has neither. So the whole observed-swim
 //! lane — the wire's pitch tail, the dead-reckon's pitched travel basis, and the body-pitch render
-//! law (decision 0464 TU-A) — was **unreachable from any script**: a benilla client could be made
-//! to swim, but only ever level. The tilt shipped in July 2026 with no test, no trace field and no
-//! way to drive it, which is why "do other swimmers tilt?" had no answer short of the director's
-//! eye, and why a two-client probe of it could not be written at all.
+//! law (`0x60a110`, decision 0464) — was **unreachable from any script**: a benilla client could be
+//! made to swim, but only ever level. The tilt shipped in July 2026 with no test, no trace field
+//! and no way to drive it, which is why "do other swimmers tilt?" had no answer short of the
+//! director's eye, and why a two-client probe of it could not be written at all.
 //!
 //! Format: `WOW_PROBE_PITCH="<deg>@<start_s>[:<deg_per_sec>][;…]"` — `deg` is nose-**up** positive,
 //! matching `Player::mover_pitch` and the wire's own sign. `"-30@22;30@40"` aims 30° down at
 //! twenty-two seconds and 30° up at forty; `"-45@20:9"` starts level-ish and sweeps at 9°/s from
 //! twenty seconds on, which is what a slow real dive looks like on the wire. The last entry whose
 //! start has passed wins, and it is re-asserted **every frame** — the reference holds an unsteered
-//! pitch rather than levelling it (TU-B(c)), so a one-shot write would be indistinguishable from a
+//! pitch rather than levelling it, so a one-shot write would be indistinguishable from a
 //! held one; re-asserting is what makes the two separable when only one of them is under test.
 //!
 //! It writes [`Player::aim_pitch`] — the field the reference's `SetPitch` (`0x7c6f70`) writes,

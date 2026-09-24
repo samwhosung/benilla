@@ -90,7 +90,7 @@ const NPC_FLAG_QUESTGIVER: u32 = 0x2;
 /// `CHAT`, which would need `level > QuestLevel + Quests.LowLevelHideDiff`).
 const LOW_LEVEL: u32 = 2;
 const HIGH_LEVEL: u32 = 8;
-/// `DialogStatus` ids the verdict is written in (wow-re `questgiver-marker.md` §Q1's own map).
+/// `DialogStatus` ids the verdict is written in (the keys of the status map `0x80c454`).
 const STATUS_UNAVAILABLE: u32 = 1;
 const STATUS_AVAILABLE: u32 = 5;
 
@@ -319,9 +319,9 @@ fn goquest_probe(
         Phase::Level { to, since } => {
             if level == to {
                 // Force the sweep this window depends on. A GameObject GUID reaches the wire ONLY
-                // from a sweep (wow-re §W14.8), and the level change above is one — but it is a
-                // no-op when the character already stood at this level, so the epoch bump makes
-                // the window's sweep unconditional.
+                // from a sweep (`0x5eb159`, `0x5eb456`), and the level change above is one — but it
+                // is a no-op when the character already stood at this level, so the epoch bump
+                // makes the window's sweep unconditional.
                 quest.bump_reask();
                 info!("PROBE_GOQUEST: at level {to}, swept — reading the window");
                 probe.phase = Phase::Read {

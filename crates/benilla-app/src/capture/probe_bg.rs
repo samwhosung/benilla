@@ -262,7 +262,7 @@ const GHOST_SAMPLES: u32 = 11;
 const FLAG_SAMPLES: u32 = 5;
 
 /// `SPIRITGUIDE` — `UNIT_NPC_FLAGS` bit 6, the flag the reference's area-spirit-healer acquire
-/// scan keys on (wow-re `interact-dead-fork-and-npc-service-ladder.md` §C row 6).
+/// scan `0x4924c0` keys on.
 const NPC_FLAG_SPIRITGUIDE: u32 = 1 << 6;
 
 /// The **event tap** — a Lua frame the probe installs on entry that records every battleground

@@ -1,14 +1,13 @@
-//! The engine-drawn **bowstring** (wow-re `nocked-ammo-cancel.md` §G2, byte-verified): bow M2s
-//! carry NO string geometry — the real client registers a bow-only per-frame draw callback
-//! (`0x611ff0`) that spans the bow's `$WTT`/`$WTB` limb-tip event markers with a **2-segment
-//! line list**, middle vertex at the character's HandArrow attach while the nock latch
-//! (`[+0xd58] & 0x4000`) holds, else the tip midpoint — so the string tracks the draw hand while
-//! nocked and relaxes to a straight chord at rest.
+//! The engine-drawn **bowstring**: bow M2s carry NO string geometry — the real client registers a
+//! bow-only per-frame draw callback (`0x611ff0`) that spans the bow's `$WTT`/`$WTB` limb-tip event
+//! markers with a **2-segment line list**, middle vertex at the character's HandArrow attach while
+//! the nock latch (`[+0xd58] & 0x4000`) holds, else the tip midpoint — so the string tracks the
+//! draw hand while nocked and relaxes to a straight chord at rest.
 //!
 //! Benilla's transcription draws the two segments through Bevy's gizmo lines — the same
 //! immediate-mode screen-space-width primitive class as the client's GX lines. Named
-//! deviation (decision record): the string color/width are INFERRED (the callback emits a
-//! packed vertex color the round didn't decode — a dark cord is used).
+//! deviation (decision record): the string color/width are inferred (the callback emits a
+//! packed vertex color that is not decoded — a dark cord is used).
 //!
 //! **The tips are POSED** (decision 2281). The bow prop animates — `$BWP` arms BowPull(160) on the
 //! prop's own model and `$BWR` returns it to Stand(0) — so the `$WTT`/`$WTB` markers ride limb
@@ -21,7 +20,7 @@ use bevy::prelude::*;
 use crate::creature_anim::NockLatch;
 use crate::entities::BoneAttach;
 
-/// The HandArrow attach id (35 — wow-re §E2/G2): the string's middle control point while nocked,
+/// The HandArrow attach id (35 — `0x6121b8`): the string's middle control point while nocked,
 /// the same point the nocked-arrow model rides.
 const HAND_ARROW: u16 = 0x23;
 
@@ -55,7 +54,7 @@ fn draw_bowstrings(
     joints: Query<&GlobalTransform>,
     mut gizmos: Gizmos,
 ) {
-    // A dark waxed-cord tone; the ref's packed vertex color is not decoded (INFERRED, §G2).
+    // A dark waxed-cord tone, inferred: the ref's packed vertex color is not decoded.
     const STRING_COLOR: Color = Color::srgb(0.12, 0.10, 0.08);
     for (bs, prop, vis, flex) in &bows {
         if !vis.get() {

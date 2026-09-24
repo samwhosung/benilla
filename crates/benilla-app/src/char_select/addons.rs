@@ -389,11 +389,11 @@ impl AddonsPanel {
 
     /// Is this addon enabled *for the current view* — the bit the gate is fed? A single character
     /// reads their own column. The All view answers **"any staged character has it on"**, which
-    /// 1293 stated as the natural reading of an un-carved mechanism and which the bytes have
+    /// 1293 stated as the natural reading of an untraced mechanism and which the bytes have
     /// since confirmed: `AddonList_Update` computes `enabled = (checkboxState > 0)` off
     /// `GetAddOnEnableState(nil, i)`, whose `1` (enabled for some) therefore counts as on
-    /// (wow-5875-re `addon-enable-store.md` §4). What 1293 got wrong was not this fold but what
-    /// each column holds — see [`Self::open_for`] and decision 2311.
+    /// (`0x51e470`). What 1293 got wrong was not this fold but what each column holds — see
+    /// [`Self::open_for`] and decision 2311.
     fn effective_enabled(&self, i: usize) -> bool {
         self.box_state(i) != BoxState::Off
     }
@@ -604,7 +604,7 @@ pub(super) fn drive_addons_panel(
     for (entity, action, interaction) in &hovers {
         // **The scroll bar warps on the PRESS**, and only it: the reference's `CSimpleSlider`
         // OnMouseDown (`0x789ca0`, 45 bytes, zero branches) warps the value from any press inside
-        // the hit rect — there is no thumb hit-test in the class (wow-re `ui.md`). Every *button*
+        // the hit rect — there is no thumb hit-test in the class. Every *button*
         // in this panel fires on the RELEASE, over the button that took the press (1533).
         let click = if *action == AddonsAction::ScrollBar {
             interaction.is_changed() && *interaction == Interaction::Pressed
@@ -1846,7 +1846,7 @@ mod tests {
         );
     }
 
-    /// The All view's gate input is OUR carve (1293): "enabled = any staged character has it on".
+    /// The All view's gate input is OUR reading (1293): "enabled = any staged character has it on".
     #[test]
     fn the_all_view_feeds_the_gate_any_character_on() {
         let mut p = panel_for(
@@ -2019,10 +2019,9 @@ mod tests {
     /// (`effective_enabled`). One click there would then have written the all-enabled state back
     /// onto every other character's file: a one-way ratchet.
     ///
-    /// The reference does not do this and the mechanism is carved (wow-5875-re
-    /// `addon-enable-store.md` §4): the enable query counts only nodes with an **explicit** entry,
-    /// so a character with no file contributes no opinion and inherits the aggregate — here, the
-    /// unanimous `disabled` the player just saved. Decision 2311.
+    /// The reference does not do this: its enable query `0x51e470` counts only nodes with an
+    /// **explicit** entry, so a character with no file contributes no opinion and inherits the
+    /// aggregate — here, the unanimous `disabled` the player just saved. Decision 2311.
     #[test]
     fn a_new_character_inherits_the_disable_it_did_not_ask_for() {
         let _l = crate::local_state::test_env::ENV_LOCK
@@ -2212,8 +2211,8 @@ mod tests {
     }
 
     /// A press on the TRACK — off the knob — warps the knob's centre under the cursor and drags
-    /// on from there, one gesture. Byte-verified 1.12 (wow-re `slider-mouse-law.md` §1, and the
-    /// director's own requirement in 0989); the glue bar runs the same law as every in-game one.
+    /// on from there, one gesture. 1.12 does this (`0x789ca0`, and the director's own requirement
+    /// in 0989); the glue bar runs the same law as every in-game one.
     #[test]
     fn a_press_on_the_bare_track_warps_the_knob_under_the_cursor() {
         let thumb_n = KNOB / BAR_H;

@@ -3,8 +3,8 @@
 //! `GetMinimapZoneText`/`GetZonePVPInfo` (decision 0287; corrected to the bytes by its fold-back
 //! record).
 //!
-//! Byte-verified model (wow-re ui `zonetext-pvpinfo.md`; `0x494780` is the one updater all three
-//! zone events fire from, on the per-update area resolve):
+//! The model (`0x494780` is the one updater all three zone events fire from, on the per-update
+//! area resolve):
 //!
 //! - The client caches `(zoneId, zoneText, subzoneText)` and compares per update: **zone id
 //!   changed → `ZONE_CHANGED_NEW_AREA` fires alone**; else **either text changed →
@@ -23,10 +23,10 @@
 //!   ownerless zone** (nil is structural failure only); `factionName` = FactionGroup.dbc's
 //!   localized Name for the zone's mask bit; pvpType is never "arena"; realm type never enters.
 //! - **The indoor bit** is the player's faces-only down-ray verdict
-//!   ([`benilla_world::wmo_portal::CurrentAreaInterior`] — wow-re `zonetext-indoor-bit.md`, the CGLight
-//!   node's `+0x90` bit 0): indoors ⇔ the nearest surface below is a WMO face whose group lacks
-//!   MOGP `0x8` EXTERIOR. The abbey yard is terrain-below ⇒ outdoors; the flip is the doorway.
-//! - **The indoor naming** (`0x67e670` (d), byte-pinned by (d-ii)): while indoors and the hit
+//!   ([`benilla_world::wmo_portal::CurrentAreaInterior`] — the CGLight node's `+0x90` bit 0, set
+//!   by `0x6a87f0`): indoors ⇔ the nearest surface below is a WMO face whose group lacks MOGP
+//!   `0x8` EXTERIOR. The abbey yard is terrain-below ⇒ outdoors; the flip is the doorway.
+//! - **The indoor naming** (`0x67e670`): while indoors and the hit
 //!   GROUP is unchanged, the WHOLE updater is skipped (the dedup `[0x868608]`/`[0x86860c]`). On
 //!   an indoor change: **query A** (the whole-WMO −1 row, exact key, `0x69d830`) overrides the
 //!   ZONE slot — only when its resolved name is non-empty AND differs from the current subzone
@@ -43,9 +43,7 @@
 //! half is modelled where the map data lives, in
 //! [`crate::ui_world_map::world_enter_selection`] — the gate there is the same precondition
 //! (`0x67e510` never reaches this updater with a zero zone id), read off our own area feed rather
-//! than off the cache below. wow-re carved it as
-//! `system/ui/scratch/worldmap-selection-autosync.md`, correcting this note's own earlier source,
-//! which had dismissed the call as unrelated.
+//! than off the cache below.
 //!
 //! The area *authority* stays `terrain_stream::CurrentArea` (decision 0232 — the MCNK `areaId`
 //! with the WMO-interior override, now off the same faces-only claim). Host globals are written
@@ -110,9 +108,8 @@ struct ZoneCache {
     minimap_text: String,
     /// The previous update's indoor bit (`[0x868608]`).
     indoor: bool,
-    /// The previous hit group's identity (`[0x86860c]` — the client stores the group index,
-    /// (d-ii); we scope the MOGP uniqueID by WMO): same group while indoors ⇒ the whole updater
-    /// is skipped.
+    /// The previous hit group's identity (`[0x86860c]` — the client stores the group index; we
+    /// scope the MOGP uniqueID by WMO): same group while indoors ⇒ the whole updater is skipped.
     wmo_id: u32,
     wmo_group: u32,
 }
@@ -181,13 +178,13 @@ fn feed_zone_events(
         leaf_row.name.clone()
     };
 
-    // The indoor naming (`0x67e670` (d)/(d-ii), module doc): dedup-skip while the hit group
+    // The indoor naming (`0x67e670`, module doc): dedup-skip while the hit group
     // holds; else the default-row name (query A) may override the zone slot and the group-row
     // name (query B) re-populates the subzone — both EXACT-key lookups (no name-set retry).
     let mut wmo_group = 0u32;
     if let Some((k, group, default)) = world.area_interior_rows() {
         // The dedup key: the hit GROUP's identity (the client's `[groupRec+0x7c]` group index,
-        // nonzero-gated — (d-ii)). We key the MOGP uniqueID scoped by WMO id: it changes exactly
+        // nonzero-gated). We key the MOGP uniqueID scoped by WMO id: it changes exactly
         // when the hit group does, and — a named divergence — never aliases across two adjacent
         // buildings the way the client's raw per-WMO index can.
         wmo_group = k.group_area_id;
@@ -400,7 +397,7 @@ mod tests {
         );
     }
 
-    /// The indoor naming law (`0x67e670` (d)) against the REAL abbey/inn data shapes — the
+    /// The indoor naming law (`0x67e670`) against the REAL abbey/inn data shapes — the
     /// override-skip (whole-WMO name == yard subzone) and the override-fire (inn) branches,
     /// run through the same WmoAreaCatalog the live feed reads. Skips without client data.
     #[test]
@@ -419,7 +416,7 @@ mod tests {
             group.area_table_id, 24,
             "the leaf stays Northshire Abbey (24)"
         );
-        // The dedup rides the hit-group identity ((d-ii): the client's group index; our MOGP
+        // The dedup rides the hit-group identity (the client's group index; our MOGP
         // uniqueID) — distinct per room, so a room hop re-fires and standing still skips.
         let library = cat.group_row(59, 1, 1943).expect("library row");
         assert_ne!(group.id, library.id, "distinct rows exist per room");

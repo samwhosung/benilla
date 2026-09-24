@@ -9,7 +9,7 @@
 //! kit carries no effect models and no anim at all — its entire visual is one CharProc — so the
 //! effects-only watcher resolved the kit, found an empty slot list, and dropped it on the floor.
 //!
-//! ## The mechanism (VERIFIED — wow-re `ghost-death-visuals.md` §2, `state-kit-aura-lifecycle.md`)
+//! ## The mechanism
 //!
 //! `UNIT_FIELD_AURA` slot change → the aura watcher `0x604d00` → `0x6123f0` → **`0x5ff350`
 //! PlayAuraStateVisual**: the slot's spell → `Spell.dbc` → `SpellVisual` → **field 4 = the state
@@ -21,10 +21,9 @@
 //! - **proc 14 = translucency** (`0x60d972`): the param becomes a node keyed by spell id
 //!   (`node+0x18`, value at `node+0x78`), linked at the HEAD of the unit's list `unit+0xb50`. The
 //!   unit's effective alpha is then recomputed by `0x60d180` as **`baseAlpha × the head node's
-//!   factor`** — at most one node term, never a product over the chain (wow-re
-//!   `base-render-alpha.md` §4, correcting this note's earlier `Π` gloss) — `baseAlpha` from the
+//!   factor`** — at most one node term, never a product over the chain — `baseAlpha` from the
 //!   vtbl+0x6c getter `0x60d2d0` (`CreatureDisplayInfo+0x14 × 1/255`, the SAME slot in the unit
-//!   and player vtables: "players 1.0" was the data talking, not a type fork — §6) — and handed
+//!   and player vtables: a player's 1.0 is the data talking, not a type fork) — and handed
 //!   to **`0x614f80` StartAlphaFade(target, 1000 ms)**, the same ramp block (`+0xec..0x100`) and
 //!   the same `clamp01(t)³` ease (`0x614a90`) our appear-fade already rides
 //!   ([`benilla_world::model_fade::fade_alpha`]). Per frame `model+0x180 = master × fade`
@@ -41,10 +40,10 @@
 //!
 //! The vis-flag is a decoy and must not be used here: `UNIT_FIELD_BYTES_1` byte 3's CREEP (stealth)
 //! and GHOST bits drive **no** body render at all — an exhaustive census of every `+0x213` reference
-//! found three sites, all nameplate/marker suppression (wow-re `ghost-death-visuals.md` §1). The two
-//! co-travel only because the server sets the flag and the aura from the same spell. Keying the body
-//! off the flag would be the wrong mechanism that happens to look right on stealth and then fails on
-//! every other member of the family.
+//! found three sites, all nameplate/marker suppression (`0x5ff80d`, `0x607101`, `0x60f62e`). The
+//! two co-travel only because the server sets the flag and the aura from the same spell. Keying
+//! the body off the flag would be the wrong mechanism that happens to look right on stealth and
+//! then fails on every other member of the family.
 //!
 //! ## The shipped data (read from the real 5875 `SpellVisualKit.dbc` this session —
 //! `benilla-extract charprocs` censuses it)
@@ -96,7 +95,7 @@
 //!
 //! Types 2, 7 and 13 also appear on state kits (Berserk/Bloodlust's 2, the Sap/Feign-Death 7, the
 //! "Glowy (Red)" 13) and have **no verified mechanism** — they fall through [`node_for`]'s single `_`
-//! arm, which is where each lands as one match arm the day its RE returns.
+//! arm, which is where each lands as one match arm the day its mechanism is known.
 
 use benilla_protocol::EntityKind;
 use bevy::mesh::MeshTag;
@@ -154,10 +153,9 @@ pub(crate) struct AuraNodes {
     /// driver's own again.
     rate: Vec<(u32, f32)>,
     /// `baseAlpha`: the display row's `CreatureModelAlpha / 255` — for EVERY unit, players
-    /// included; the getter `0x60d2d0` has no type fork, a normal character's row just says 255
-    /// (`base-render-alpha.md` §6, correcting the "players 1.0" gloss). Owned by
-    /// [`refresh_base_alpha`], which re-resolves it on every display-id change (a shapeshift
-    /// swaps it live) and ramps to the new value.
+    /// included; the getter `0x60d2d0` has no type fork, a normal character's row just says 255.
+    /// Owned by [`refresh_base_alpha`], which re-resolves it on every display-id change (a
+    /// shapeshift swaps it live) and ramps to the new value.
     base: f32,
     /// Where the ramp is now — what the parts actually render at.
     current: f32,
@@ -188,8 +186,8 @@ impl AuraNodes {
 
     /// The reference's `0x60d180`: `baseAlpha × the HEAD alpha node's factor` — at most ONE node
     /// term, skipped entirely when the list is empty (`0x60d195 je`), never a product over the
-    /// chain (wow-re `base-render-alpha.md` §4, correcting `ghost-death-visuals.md`'s `Π` gloss).
-    /// Nodes are linked at the head as they install, so the newest one is the term that counts.
+    /// chain. Nodes are linked at the head as they install, so the newest one is the term that
+    /// counts.
     fn target(&self) -> f32 {
         let head = self.alpha.first().map_or(1.0, |(_, f)| *f);
         (self.base * head).clamp(0.0, 1.0)
@@ -365,7 +363,7 @@ pub(crate) struct AnimRateFreeze;
 /// inherit the freeze and outlive it.
 ///
 /// **Reasserted every frame, and that is the faithful shape, not a belt-and-braces clamp.** The
-/// reference's rate lives on the bone (`+0xb0`, the factor `timebase.md` §2's clock multiplies its
+/// reference's rate lives on the bone (`+0xb0`, the factor the clock at `0x71458e` multiplies its
 /// window by) and **arming an animation does not touch it**: op4 `0x7121a0`'s success leg writes the
 /// track index and the cursors and leaves `+0xb0` alone (only its disarm leg and `SetBoneAnimSpeed
 /// 0x712910` write it). So "rate 0 until the aura is reaped" is literally the reference's state
@@ -493,7 +491,7 @@ pub(crate) fn node_for(proc: benilla_formats::CharProc) -> Option<AuraNode> {
 ///
 /// `base_alpha` here only SEEDS a node set created by an aura edge — its steady-state owner is
 /// [`refresh_base_alpha`], which re-resolves it on every display change. The getter is the same
-/// for players and creatures (the display row's `CreatureModelAlpha`; `base-render-alpha.md` §6).
+/// for players and creatures (the display row's `CreatureModelAlpha`, read by `0x60d2d0`).
 /// A unit whose display is unknown falls back to `1.0` — opaque, i.e. the aura's factor alone,
 /// which is the safe direction (the alternative would hide a unit whose row simply failed to
 /// load).
@@ -566,9 +564,8 @@ fn reap(n: &mut AuraNodes, spell_id: u32, now: f32) {
 
 /// Install one spell's nodes, replacing any it already had (an aura re-applied by a second caster
 /// holds a second slot but installs one node set — the reference's own per-spell-id keying).
-/// New nodes link **at the head** (`base-render-alpha.md` §4: the newest node is the one the
-/// recompute reads), which is why both lists insert at the front here and both readers take
-/// `.first()`.
+/// New nodes link **at the head** (the newest node is the one the recompute `0x60d180` reads),
+/// which is why both lists insert at the front here and both readers take `.first()`.
 fn install(n: &mut AuraNodes, spell_id: u32, procs: &[AuraNode], now: f32) {
     n.alpha.retain(|(s, _)| *s != spell_id);
     n.tint.retain(|(s, _)| *s != spell_id);
@@ -616,10 +613,9 @@ fn trace_edge(what: &str, entity: Entity, spell_id: u32, n: &AuraNodes) {
 
 /// `baseAlpha` for a unit — the getter `0x60d2d0`: its CURRENT display row's
 /// `CreatureModelAlpha / 255`, for **every** unit kind. There is no player override — the same
-/// vtable slot in both classes, byte-identical (`base-render-alpha.md` §6); an unshifted
-/// character reads 1.0 only because its row (49, 50, …) says 255, and a shaman wearing Ghost
-/// Wolf's display 4613 reads 102/255 = 0.4 through exactly this path. No row → 1.0 (the
-/// `0x60d2e4` NULL fallback).
+/// vtable slot in both classes, byte-identical; an unshifted character reads 1.0 only because its
+/// row (49, 50, …) says 255, and a shaman wearing Ghost Wolf's display 4613 reads 102/255 = 0.4
+/// through exactly this path. No row → 1.0 (the `0x60d2e4` NULL fallback).
 fn base_alpha(
     entity: Entity,
     units: &Query<&crate::net::NetEntity>,
@@ -646,7 +642,7 @@ fn display_base_alpha(
 }
 
 /// Re-resolve every unit's base alpha when its display changes — the reference's DISPLAYID
-/// watcher path (`base-render-alpha.md` §5: `0x604990 → 0x60abe0 → 0x60afb0` caches the row →
+/// watcher path (`0x604990 → 0x60abe0 → 0x60afb0` caches the row →
 /// `0x60ad9f → 0x60d180 → StartAlphaFade(target, 1000 ms)`), self-gated on a real record change
 /// (`0x60ae10`). This is what makes a unit with `CreatureModelAlpha < 255` translucent with **no
 /// aura in play** — the shifted shaman's ghost look — and what ramps it back to opaque when the

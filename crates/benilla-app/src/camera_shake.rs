@@ -3,8 +3,8 @@
 //!
 //! **Four producers, two id spaces, one evaluator.** Every producer ends at the same spawner —
 //! `AddShake(id, worldPos)` (`0x511d40`), whose five call sites are the whole population (proven by
-//! xref sweep, wow-re `spell/scratch/camera-shake-producers.md` §Q4: no address-dword reference to
-//! it anywhere, and no Lua, console, cinematic or quake path).
+//! xref sweep: no address-dword reference to it anywhere, and no Lua, console, cinematic or quake
+//! path).
 //!
 //! The **creature** pair names a `CameraShakes.dbc` preset **directly**:
 //!
@@ -33,7 +33,7 @@
 //! thumping-giant list; 49 carry one of the two, and 58 of the 1772 kits carry a shake group. See
 //! `benilla-extract shakecensus`, which maps all four producers onto the 24 presets.
 //!
-//! ## The law (wow-re `ui/scratch/camera-shake-law.md`, §5-verified)
+//! ## The law
 //!
 //! **Emission — the footstep**, gated in this order (`0x5fbf70`): not hovering · `BYTES_1` byte 3
 //! bit `0x2` clear (our stealth bit) · not a player-ghost · **`|camera − footplant|² ≤ 2500`
@@ -171,7 +171,7 @@ impl CameraShakes {
     /// Retire what has expired and compose this frame's offset.
     ///
     /// `suspended` is the reference's skip — **two** gates that both jump the same block
-    /// (`0x50ea87` / `0x50ea8b` → `0x50eb01`, wow-re `camera-shake-law.md` §6): the followed unit
+    /// (`0x50ea87` / `0x50ea8b` → `0x50eb01`): the followed unit
     /// is **swimming** (`[[unit+0x118]+0x40] & 0x200000`), or it is riding a **flying server
     /// spline** (`MI = [[unit+0x118]+0xa4]` non-null, not done, Flying bit set) — a taxi flight.
     /// The accumulator is zeroed *before* both gates, so a suspended frame yields the offset zero
@@ -221,7 +221,7 @@ impl LiveShake {
     /// This record's `(compare key, signed offset)` at `eye`, or `None` when out of cull range.
     ///
     /// The compare key is the **distance-attenuated amplitude** — a per-record quantity that does
-    /// not swing with the sine — per wow-re's reading of the accumulator's stored slot.
+    /// not swing with the sine — the stored slot the reference compares at `0x5118a5`.
     fn sample(&self, eye: Vec3, now: f32) -> Option<(f32, f32)> {
         let d2 = eye.distance_squared(self.pos);
         if d2 > CULL_DISTANCE_SQ {
@@ -451,14 +451,14 @@ type FollowedUnit = (
 /// **Swimming** is its move flags (`[[unit+0x118]+0x40] & 0x200000`).
 ///
 /// **The spline gate** is read through to the LIVE path, exactly as the anim selector's `unify`
-/// does ([`crate::creature_anim`], RF-0057 `0x5fd19c`) — the reference re-reads
+/// does ([`crate::creature_anim`], `0x5fd19c`) — the reference re-reads
 /// `[[unit+0x118]+0xa4]` every frame rather than trusting a stamped flag, and our stored
 /// [`MovementState::flying`] is the selector's own derived value, left `false` on the controller's
 /// component. The [`Spline`]'s *presence* is the reference's "descriptor non-null **and** not done"
 /// (`sample_splines` removes the component the frame the path completes — the `& 0x4` DONE term),
 /// and `!grounded` is spline flag `0x200`.
 ///
-/// **`0x200` is the shared fly-*or*-swim spline bit, not "taxi"** (wow-re `swim-transition.md`) —
+/// **`0x200` is the shared fly-*or*-swim spline bit, not "taxi"** (`0x616cb0`) —
 /// so this arm covers a swimming server path as well as a flight, which is the same reason it
 /// sits beside a swim gate at all. Naming it "the taxi arm" (as 1540 did, and as this was first
 /// built) over-specifies what the bit means. A **ground** spline — Charge, knockback, a fleeing

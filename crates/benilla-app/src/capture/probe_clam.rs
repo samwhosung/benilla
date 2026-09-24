@@ -4,7 +4,7 @@
 //! The director, 2026-08-22: *"Clams don't open anymore. I right click them and they turn gray
 //! correctly but no loot window opens ever."* Both halves of that sentence are readings this probe
 //! takes separately, because they come from two different pre-send writes in the same emitter
-//! (`0x5edc80`, wow-re `loot-anim-leg.md` §5 / `inventory-change-failure-display.md` §8):
+//! (`0x5edc80`):
 //!
 //! - the **grey lock** ([`PendingItemOps`], `0x4953e0` at `0x5edcd9`) — the half that kept working;
 //! - the **loot latch** ([`LootLatch`], `0x5edcc0`) — the half decision 1477 left unmodelled, on

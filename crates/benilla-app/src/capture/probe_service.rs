@@ -3,8 +3,7 @@
 //! window instead of a gossip menu?".
 //!
 //! 1861 replaced a cursor-kind dispatch with the reference's own first-match-wins walk over
-//! `UNIT_NPC_FLAGS` ([`crate::target::click::service_arm`]; wow-re
-//! `object-layer/scratch/interact-dead-fork-and-npc-service-ladder.md` §C). **Bit 0 (GOSSIP) is
+//! `UNIT_NPC_FLAGS` ([`crate::target::click::service_arm`]; `0x5f0130`). **Bit 0 (GOSSIP) is
 //! tested first**, so the flag — not the profession — decides: a trainer or questgiver that also
 //! carries GOSSIP still opens a gossip menu, and only a flagless one opens its own window. That
 //! precedence is the whole question, and it is invisible to a unit test: the bits come off the

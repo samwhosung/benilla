@@ -85,10 +85,9 @@
 //! account to sign, and #5 (`ERR_GUILD_FOUNDER_S` on a successful turn-in) needs nine of them —
 //! neither is reachable from one client, so the whole sign/offer/turn-in half of the family
 //! (`SignPetition`, `OfferPetition`, `TurnInGuildCharter`, `MSG_PETITION_DECLINE`) still has no
-//! live coverage after this probe. #3 (the two closes send nothing) is *superseded*: the wow-re
-//! carve that landed alongside this file finds that closing a charter you do NOT own can send
-//! `MSG_PETITION_DECLINE`, so this probe deliberately asserts nothing about either close rather
-//! than pinning a claim that is being rewritten.
+//! live coverage after this probe. #3 (the two closes send nothing) is *superseded*: closing a
+//! charter you do NOT own can send `MSG_PETITION_DECLINE` (`0x4f3f60`), so this probe deliberately
+//! asserts nothing about either close rather than pinning a claim that is being rewritten.
 //!
 //! ## The run recipe
 //!

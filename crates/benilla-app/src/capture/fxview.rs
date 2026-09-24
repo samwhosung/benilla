@@ -97,8 +97,8 @@ pub(crate) fn drive_fx_view(
                 .id();
         }
         // `WOW_FX_GO`: the GAMEOBJECT lane. A placed trap/door/chest reaches the screen through
-        // `crate::go_anim`'s §243 state machine, never through the effect pool, so this is the
-        // only lane that reproduces one. The descriptor carries the three fields the machine
+        // `crate::go_anim`'s state machine (`0x5f3cb0`), never through the effect pool, so this is
+        // the only lane that reproduces one. The descriptor carries the three fields the machine
         // reads — display, TYPE_ID (the `go_animates` gate) and STATE (the substate) — and
         // nothing else, so an unset knob renders exactly what an omitted wire field renders.
         // Always seated on the terrain: a GO stands on the ground.

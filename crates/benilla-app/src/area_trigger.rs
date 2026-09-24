@@ -13,8 +13,7 @@
 //!
 //! ## The law, from the reference
 //!
-//! **VERIFIED** against `0x5e2110` (the per-frame check) and `0x5e22d0` (containment), wow-5875-re
-//! `object-layer/scratch/w2b1-decomp.c`; the geometry itself is
+//! From `0x5e2110` (the per-frame check) and `0x5e22d0` (containment); the geometry itself is
 //! [`AreaTriggerRow::contains`](benilla_formats::AreaTriggerRow::contains).
 //!
 //! - The map's rows are the only candidates (`0x5e2080` narrows the map-sorted table to a

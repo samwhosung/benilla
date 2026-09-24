@@ -212,16 +212,16 @@ pub(crate) struct Roster {
     ///
     /// The ref's `SelectCharacter` zeroes the select facing **unconditionally**: `0x472950`'s
     /// `mov ds:0xb4217c, 0` sits one instruction *above* the already-built discriminator, so it
-    /// dominates both legs, and the merged tail re-applies it geometrically (wow-re
-    /// `glue/scratch/glue-preview-facing-law.md`, 1533). A counter rather than change-detection on
-    /// `selected`, because the engine re-squares on a *re*-selection of the same index too — which
-    /// is exactly what a roster refresh does, calling it with the index it already holds.
+    /// dominates both legs, and the merged tail re-applies it geometrically (1533). A counter
+    /// rather than change-detection on `selected`, because the engine re-squares on a
+    /// *re*-selection of the same index too — which is exactly what a roster refresh does, calling
+    /// it with the index it already holds.
     ///
     /// **The click is the one caller that does not reach it**, and the gate is in the stock Lua
-    /// rather than in the engine — see [`Roster::click_row`] and decision 2194. The caller census
-    /// is wow-re `glue/scratch/select-character-caller-gate.md`: of the ten Lua call sites only the
-    /// two click handlers are gated, and of `0x472740`'s four C callers two are the roster teardown
-    /// passing `-1` (so `0x472950` exits above the reset) — every ungated path re-squares.
+    /// rather than in the engine — see [`Roster::click_row`] and decision 2194. Of the ten Lua call
+    /// sites only the two click handlers are gated, and of `0x472740`'s four C callers two are the
+    /// roster teardown passing `-1` (so `0x472950` exits above the reset) — every ungated path
+    /// re-squares.
     pub(super) select_seq: u64,
     /// The guid we answered the IO thread with; `Some` = a login is requested/live.
     pub(super) pending_pick: Option<u64>,
@@ -305,9 +305,8 @@ impl Roster {
     /// So the row you are already on is never re-selected from a click, and the facing zero
     /// [`Self::select`] owes never fires for it: the angle you dragged the character to survives
     /// clicking it again. Decision 2194, correcting 1533 — the engine function is unconditional as
-    /// recorded (verified again, three ways, in wow-re
-    /// `glue/scratch/select-character-caller-gate.md`), but the click never reaches it: the binding
-    /// has exactly one live call site, and the two handlers that lead to it both gate.
+    /// recorded (`0x472740`), but the click never reaches it: the binding has exactly one live call
+    /// site, and the two handlers that lead to it both gate.
     pub(super) fn click_row(&mut self, row: usize) {
         if self.selected != Some(row) {
             self.select(Some(row));
@@ -376,7 +375,7 @@ impl Roster {
 
 // ── The remembered character (`lastCharacterIndex`, decision 1622) ───────────────────────────────
 
-/// The CVar the select screen remembers you by — a **real 1.12 CVar**, byte-verified in wow-re
+/// The CVar the select screen remembers you by — a **real 1.12 CVar**
 /// (registered at `0x402d93`, name `0x82e8f8`, help "Last character selected", default `"0"`,
 /// pointer cached at `[0x882674]`), and written engine-side: no shipped GlueXML names it and the
 /// binary never looks it up by name.
@@ -670,9 +669,8 @@ fn back_on_login_refused(
 /// **skipping `0x41`**, `CHAR_LOGIN_FAILED`, which is reachable only as the default. So the
 /// tempting `0x3d + byte` is right for four rows and wrong for the rest, and `0` and anything past
 /// `6` are "Login failed" rather than an out-of-bounds read: the `ja` guard precedes the table.
-/// (VERIFIED off `WoW.exe`, cross-checked — wow-5875-re
-/// `system/net/scratch/char-login-failed-law.md`. The strings are the shipped
-/// `GlueStrings.lua:158-166`, quoted here only as the graceful-absence fallback.)
+/// (The strings are the shipped `GlueStrings.lua:158-166`, quoted here only as the
+/// graceful-absence fallback.)
 ///
 /// Both emulators speak this dialect. vmangos sends a bare `1` for all three of its refusal
 /// guards (`PlayerLoading() || GetPlayer() || !guid.IsPlayer()`), so **every** refusal from our
@@ -764,10 +762,9 @@ fn delete_result(
 /// success (`0x39`), which the refreshed roster says instead.
 ///
 /// The keys are the `CHAR_DELETE_*` block of the reference's status-key table `0x85cae8`
-/// (`0x38..=0x3b`, wow-5875-re `system/glue/scratch/login-failure-dialogs.md` §3.1), numbered
-/// exactly as vmangos's `ResponseCodes` (`SharedDefines.h`). vmangos sends only two of them:
-/// `0x39` on success and `0x3a` for a guild master; its three other refusals (a character still
-/// loaded, one not found, one on another account) send nothing at all.
+/// (`0x38..=0x3b`), numbered exactly as vmangos's `ResponseCodes` (`SharedDefines.h`). vmangos
+/// sends only two of them: `0x39` on success and `0x3a` for a guild master; its three other
+/// refusals (a character still loaded, one not found, one on another account) send nothing at all.
 ///
 /// **The default arm is benilla's, not the reference's.** The reference indexes the whole 83-row
 /// table with the byte, so an out-of-block byte would read some other family's sentence (and one

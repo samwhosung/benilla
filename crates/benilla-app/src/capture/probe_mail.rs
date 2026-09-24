@@ -358,7 +358,7 @@ fn mail_probe(
             let Some(idx) = index_of(&mail, letter_id) else {
                 return; // shouldn't happen the same frame we just found it — re-poll
             };
-            // CheckInbox() called twice, idempotently (wow-re §5's 60s client-side throttle,
+            // CheckInbox() called twice, idempotently (`0x4aeab0`'s 60s client-side throttle,
             // decision 0548 §2/0544) — proves a rapid re-call is a no-op, not a packet storm.
             if let Err(e) = script.run(&format!("CheckInbox() CheckInbox() GetInboxText({idx})")) {
                 error!("PROBE_MAIL: FAIL (b) — GetInboxText({idx}) errored: {e}");

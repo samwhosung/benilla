@@ -1149,10 +1149,10 @@ const TABLE: &[Spec] = &[
     // shot's confirmation, then ask the engine.
     //
     // `PRINTSCREEN` comes from the SHIPPED default, not a player's cache: `DefaultBindings.wtf`
-    // lives inside `patch.MPQ` and its line 128 is `bind PRINTSCREEN SCREENSHOT` (wow-re's
-    // dispatch on this feature; the install's account-ONE `bindings-cache.wtf` agrees). `Edge`,
-    // not `EdgeUpDown`, is also byte-real: the `<Binding>` carries no `runOnUp`, and the
-    // reference's dispatcher returns on key-up unless that flag is set (`0x4b7bea`).
+    // lives inside `patch.MPQ` and its line 128 is `bind PRINTSCREEN SCREENSHOT` (the install's
+    // account-ONE `bindings-cache.wtf` agrees). `Edge`, not `EdgeUpDown`, is also byte-real: the
+    // `<Binding>` carries no `runOnUp`, and the reference's dispatcher returns on key-up unless
+    // that flag is set (`0x4b7bea`).
     //
     // On a Mac keyboard the token arrives as F13, which is the reference's own Mac mapping rather
     // than an accommodation (`KEY_PRINTSCREEN_MAC = "F13"`); `super::chord` does the translation.

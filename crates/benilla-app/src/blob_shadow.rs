@@ -2,8 +2,7 @@
 //! creature), the reference's per-frame shadow pass rebuilt on the shared surface-decal projector
 //! ([`benilla_world::decal`]), drawn on the shared effect stream (0733).
 //!
-//! **The byte-verified mechanism** (wow-re `unit-blob-shadow.md`, a §5 cross-check; the "cloud
-//! shadow" label on `0x6d7920` was corrected — it IS the unit shadow draw):
+//! **The mechanism** (`0x6d7920` IS the unit shadow draw):
 //! - **Draw path**: a per-frame pass over registered model nodes (`0x683dd0`, list `[0xc7cb10]`)
 //!   → gate `0x6d78f0` (model streamed, master toggle) → `0x6d7920` → the **same decal chain the
 //!   selection ring uses** (`0x6d7330 → 0x6d6fa0 → 0x6d7480`), collector flags `0x2f0122` = the
@@ -11,15 +10,12 @@
 //!   [`GroundDecalSurface`] set yet — the shadow lands on terrain + WMO faces only).
 //! - **Frame slot**: PHASE 1, among the opaque drains — `0x6812c5 call 0x683dd0`, fifth of the
 //!   row `0x6812b1`–`0x6812ca` inside `0x681070`, which the driver `0x483460` calls at
-//!   `0x48361d` (wow-re `water-frame-straddle.md` §1 + `unit-blob-shadow.md` Q1). `0x683dd0` is
-//!   the **M2 node drain**, and the same loop body ticks each node's object first
-//!   (`0x48160c call [obj vt+0x38]` → the selection ring) and draws its shadow second
-//!   (`0x683ec3`) — so per unit the additive ring goes down and this modulate darkens it, never
-//!   the other way round (wow-re `decal-frame-slot.md`). That second step is **not** a gate:
-//!   both exits of the tick `0x481540` return 1, so `0x683ea5`'s `je` is dead — an earlier
-//!   reading of it as "the callback suppresses a hidden object's shadow" was wrong at the bytes
-//!   and is corrected in wow-re (2026-09-06). What the tick DOES do is write the alpha this draw
-//!   is about to read, 30 bytes later — which is the whole of §"Appearance" below. So the shadow
+//!   `0x48361d`. `0x683dd0` is the **M2 node drain**, and the same loop body ticks each node's
+//!   object first (`0x48160c call [obj vt+0x38]` → the selection ring) and draws its shadow second
+//!   (`0x683ec3`) — so per unit the additive ring goes down and this modulate darkens it, never the
+//!   other way round. That second step is **not** a gate: both exits of the tick `0x481540` return
+//!   1, so `0x683ea5`'s `je` is dead. What the tick DOES do is write the alpha this draw is about
+//!   to read, 30 bytes later — which is the whole of §"Appearance" below. So the shadow
 //!   lands after terrain and WMO and **before** everything else: the footprint decals
 //!   (`0x483654`), the M2 opaque pass (`0x4836a6`), the water surfaces (phase 3, drawn *between*
 //!   the two M2 transparent passes) and both of those passes. Every transparent in the world
@@ -29,17 +25,17 @@
 //! - **Texture**: `Textures\ShadowBlob.blp` — a 32×32 grayscale radial blob (flat gray-160 core,
 //!   linear rim to white) under a binary alpha disc. The reference multitextures a procedural 64×8
 //!   trapezoid ramp on a second stage (`0x6d81a0`/`0x6d82d0`, blend-mode-selected); its combine
-//!   wiring is an open RE item (apitrace) — here the ramp is the vertex-alpha vertical fade below.
+//!   wiring is open (an apitrace question) — here the ramp is the vertex-alpha vertical fade below.
 //! - **Box law** (`0x711a20` + the `0x6d7920` corner build): a sequence CAaBox, clamped INTO ±5
 //!   per axis (a cap, never a floor), scaled by the world matrix, yaw-rotated with the unit's
 //!   facing then **axis-aligned-bounded**. Vertical about the model origin: `+1.0·(zExt/2)` up,
 //!   `−(5/3)·(zExt/2)` down. A degenerate horizontal box is the reference's no-op exit (no
 //!   shadow). **No** `OBJECT_FIELD_SCALE_X` re-read (the transform scale already carries it), no
 //!   ring-style `sqrt` compression, no floor. **WHICH sequence — settled at bytes + pixels**
-//!   (decision 0316; wow-re `27406d9b`, Q3-ORACLE): the draw re-reads
+//!   (decision 0316): the draw re-reads
 //!   `playableAnimationLookup[0]` every frame — **slot 0 = Stand for characters, from the file
 //!   image, so the value never changes** (not the playing sequence: the director's gait-stable
-//!   observation falsified that first reading, and the trace oracle confirmed — 1,682 measured
+//!   observation falsified that first reading, and reference captures confirmed — 1,682 measured
 //!   draws, six bit-stable box sizes, HumanMale 0.9134 × 1.0805 yd permanently, Walk/Run extents
 //!   never appear). Full extents, no missing half/scale factor — the standing size IS the law.
 //! - **Appearance**: multiplicative darken — `GL_DST_COLOR/GL_ZERO` with the fade riding the
@@ -51,7 +47,7 @@
 //!   touched at exactly three `mov ecx,ebx; call` sites (box `0x711a20`, matrix `0x710600`,
 //!   alpha `0x710ca0`), which makes that list the complete field census.
 //!
-//!   **What rides in, at the bytes** (wow-re, 2026-09-06): the 2 s appear ramp and the despawn
+//!   **What rides in, at the bytes** (2026-09-06): the 2 s appear ramp and the despawn
 //!   ramp (`obj+0xf4`, `0x613b1e`'s `0x7d0`), the self first-person fade, **and the CharProc-14
 //!   aura transition** — stealth's `0.3`, ghost/invisibility's `0.5`. The aura is not a second
 //!   channel: `0x60d180` drives the SAME `StartAlphaFade` (`0x614f80`) the appear fade uses, and
@@ -70,7 +66,7 @@
 //! - **Gating**: the reference's `shadowLOD` cvar {0,1} is the master toggle (default on) — we are
 //!   always-on; `shadowBias` (default 0.1) is its depth-bias knob — [`SHADOW_DEPTH_BIAS`] plays
 //!   that role here. No dead/mount/kind test exists on the draw path, and **which** objects
-//!   register is now settled (wow-re, 2026-09-06 — the old `HANDOFF(-> object-layer)` is closed):
+//!   register is now settled (2026-09-06):
 //!   `[node+0x90]` bit `0x400` is `NOT(arg bit1)` (`0x670e94`), and `0x613e10` takes that arg off
 //!   `OBJECT_FIELD_TYPE` — `0xb` GAMEOBJECT, `2` DYNAMICOBJECT, `0` otherwise. **GameObjects and
 //!   DynamicObjects never cast a blob shadow; units, players and corpses always do.** Which is
@@ -103,7 +99,7 @@ use benilla_world::particles::buffer::{begin_effect_frame, EffectVertex};
 use benilla_world::schedule::WorldStage;
 use benilla_world::view::WorldCamera;
 
-/// The reference's shadow disc (`Textures\ShadowBlob.blp`, wow-re unit-blob-shadow RE): grayscale
+/// The reference's shadow disc (`Textures\ShadowBlob.blp`, created by `0x6d8070`): grayscale
 /// radial blob (gray-160 core → white rim) under a binary alpha disc, multiplied onto the ground.
 const SHADOW_TEXTURE: &str = "mpq://textures/shadowblob.blp";
 /// The byte clamp on the animation box: each corner component is clamped INTO ±5 yd pre-scale
@@ -253,7 +249,7 @@ fn update_shadows(
     // mount's rendered scale while a mount model is attached (the mount IS the footprint on the
     // ground; the rider's box would undersize it). The mount-vs-body source of the client's own
     // shadow box is untraced — this is the named approximation of decision 0441's P2, carried
-    // until a wow-re shadow-consumer trace pins it.
+    // until that source is known.
     mount_anims: Query<(&NetEntity, &ModelAnimations), With<crate::entities::mount::MountBody>>,
     mut shadows: Query<(&BlobShadow, &mut ShadowKey, &mut ShadowVerts)>,
     // Once-a-second census at debug level (`RUST_LOG=benilla_app::blob_shadow=debug` — the lib
@@ -299,7 +295,7 @@ fn update_shadows(
             Some((mnet, manims)) => (manims, mnet.scale),
             None => (anims, 1.0),
         };
-        // The byte+pixel law (0316, wow-re 27406d9b): the box is playableAnimationLookup[0]'s
+        // The byte+pixel law (0316): the box is playableAnimationLookup[0]'s
         // sequence — Stand, permanently (the reference re-reads it per frame from the file image;
         // the value can't change). resolve(0) walks the same baked table, so Stand-less models
         // land on their substitute exactly like the binary's row-0 fast path.
@@ -568,8 +564,8 @@ fn key_changed(a: &ShadowKey, b: &ShadowKey) -> bool {
         || a.surfaces != b.surfaces
 }
 
-/// The reference's trapezoid alpha ramp (`0x6d81a0`/`0x6d82d0`, diffed bit-exact in wow-re:
-/// `x = 12·u` — rise `x<2 → x/2`, flat `2≤x<10 → 1`, fall `x≥10 → (12−x)/2`, clamped at 0).
+/// The reference's trapezoid alpha ramp (`0x6d81a0`/`0x6d82d0`: `x = 12·u` — rise `x<2 → x/2`,
+/// flat `2≤x<10 → 1`, fall `x≥10 → (12−x)/2`, clamped at 0).
 fn shadow_ramp(u: f32) -> f32 {
     let x = 12.0 * u.clamp(0.0, 1.0);
     if x < 2.0 {

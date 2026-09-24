@@ -200,7 +200,8 @@ struct QuadProbe {
     corners: [Vec2; 4],
     /// The NDC depth the corners carry. Read from the projected corners, not assumed constant —
     /// the *spread* is reported, because a billboard that is not a constant-depth plane is a
-    /// different bug wearing the same symptom (wow-re `part-flush-emitter-depth.md` §4).
+    /// different bug wearing the same symptom (`0x7b2a50`'s plain billboard gives all four
+    /// corners one depth).
     dquad: f32,
     dspread: f32,
     /// The quad centre's distance to the camera plane, yards — the unit the burial is reported in.
