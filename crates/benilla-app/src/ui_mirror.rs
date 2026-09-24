@@ -78,8 +78,7 @@ fn global_string_label(kind: MirrorTimerKind) -> &'static str {
 
 /// The bar's caption — **arg6** of `MIRROR_TIMER_START`, and it is **not** a fixed word.
 ///
-/// §5-VERIFIED (wow-re `object-layer/scratch/mirror-timer.md`, the 2026-08-02 cross-check of
-/// handler `0x5e7990` and its label helper `0x5e7b10`): the client tries the **owning spell's
+/// Handler `0x5e7990` and its label helper `0x5e7b10`: the client tries the **owning spell's
 /// localized name first** — `Spell.dbc` `SpellRec + 0x1e0 + 4*locale`, indexed by the START
 /// packet's `spellId` — and only falls back to the `"<NAME>_LABEL"` global string when there is
 /// no spell (`spellId == 0`).
@@ -257,7 +256,7 @@ mod tests {
         assert_eq!(caption(MirrorTimerKind::FeignDeath, None), "");
     }
 
-    /// The correction 0874 got wrong (§5, wow-re `mirror-timer.md`): the client tries the OWNING
+    /// The correction 0874 got wrong (`0x5e7b10`): the client tries the OWNING
     /// SPELL's localized name first and only falls back to the global string. A water-breathing
     /// effect owns the breath timer while it is up, so the bar reads with the spell's name.
     #[test]

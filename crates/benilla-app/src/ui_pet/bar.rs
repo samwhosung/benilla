@@ -23,9 +23,9 @@ use crate::ui_action::Spells;
 use super::drain::UNIT_FLAG_POSSESSED;
 use super::PetBar;
 
-/// `GetPetActionsUsable()` — may the bar be used at all (wow-re §4, the predicate `0x4bcf70`).
+/// `GetPetActionsUsable()` — may the bar be used at all (the predicate `0x4bcf70`).
 ///
-/// benilla's earlier reading — "the enabled-flags byte's `0x8`" — was REFUTED by the RE as the
+/// benilla's earlier reading — "the enabled-flags byte's `0x8`" — was REFUTED as the
 /// *whole* answer, but it survives as one of the seven steps: the client tests bit 27 of the state
 /// dword, which is that same byte's `0x8` (see `PET_STATE_BAR_DISABLED`). The step it was missing
 /// is the pet's own crowd-control state — a **stunned, confused or feared** pet cannot be ordered,
@@ -139,7 +139,7 @@ pub(super) fn slot_paint(
         // - the compare is against the UNMASKED `state >> 8` (`PetSpells::command_state`'s own
         //   note), so a disabled bar puts every command button out;
         // - ATTACK gets the extra clause — and it is the *only* thing that can light ATTACK,
-        //   because the command byte is never written for it (§10.1).
+        //   because the command byte is never written for it (`0x4bc960`).
         //
         // So whether Attack ever appears lit is entirely a question about [`PetBar::attacking`],
         // and the answer for a pet bar is **never**: that latch is the possess bar's, gated on
@@ -165,7 +165,7 @@ pub(super) fn slot_paint(
         .flatten()
     {
         // The reaction compare's left side is forced to Passive when the bar is disabled
-        // (wow-re §2.2, `0x4bde3c`): a pet that cannot be ordered reads as Passive rather than
+        // (`0x4bde3c`): a pet that cannot be ordered reads as Passive rather than
         // keeping the mode light it had, which is the honest thing for it to say.
         let showing = if bar.bar_disabled() {
             benilla_protocol::messages::PET_REACT_PASSIVE
@@ -196,7 +196,7 @@ pub(super) fn slot_paint(
     PetActionView {
         name: Some(spell.name.clone()),
         subtext: spell.rank.clone(),
-        // THE ICON SWAP (decision 1007, wow-re §2.1 `0x4bdd2f`/`0x4bdd38`/`0x4bdd77`): a spell the
+        // THE ICON SWAP (decision 1007, `0x4bdd2f`/`0x4bdd38`/`0x4bdd77`): a spell the
         // pet is currently running draws its record's `ActiveIconID` instead of its `SpellIconID`.
         // Falling back to `icon` here would be wrong — the reference looks up whichever id the
         // predicate chose and pushes **nil** if that lookup fails (`0x4bdd50`), so an unresolvable
@@ -209,17 +209,16 @@ pub(super) fn slot_paint(
         },
         is_token: false,
         spell_id: Some(action),
-        // A spell slot NEVER reports isActive — VERIFIED nil on every path (wow-re §2.1, pushed
-        // at `0x4bdd5e`), which retires 0982's INTERIM. `isActive` is exclusively a token
-        // concept and `autoCast*` exclusively a spell one; the two halves of the signature never
-        // overlap (§2.5 quirk 3).
+        // A spell slot NEVER reports isActive — nil on every path (pushed at `0x4bdd5e`), which
+        // retires 0982's INTERIM. `isActive` is exclusively a token concept and `autoCast*`
+        // exclusively a spell one; the two halves of the signature never overlap (`0x4bdc50`).
         //
         // "The pet is running this spell" is expressed by the icon above, not by this flag — which
         // is why 0988's hole closes without this line changing.
         active: false,
-        // Autocast is bits 31/30 of the word, not the type byte (wow-re §2.1) — and both are
-        // additionally gated on the spell resolving in `Spell.dbc`, which the early return above
-        // has already enforced by the time we get here.
+        // Autocast is bits 31/30 of the word, not the type byte (`0x4bdd65`/`0x4bdda4`) — and both
+        // are additionally gated on the spell resolving in `Spell.dbc`, which the early return
+        // above has already enforced by the time we get here.
         autocast_allowed: entry.autocast_allowed(),
         autocast_enabled: entry.autocast_on(),
         attack_active: false,
@@ -229,9 +228,8 @@ pub(super) fn slot_paint(
     }
 }
 
-/// The pet spell slot that is **showing active** — the reference's `0x4bcea0` (wow-re
-/// `ui/scratch/pet-action-bar-api.md` §2.1), returning the spell id when it holds so the one
-/// answer can drive both of its consumers. Decision 1007.
+/// The pet spell slot that is **showing active** — the reference's `0x4bcea0`, returning the spell
+/// id when it holds so the one answer can drive both of its consumers. Decision 1007.
 ///
 /// It is not a new predicate: `0x4bcea0` is the *pet-side compiled twin* of the player's
 /// `0x4e55f0`, which we already carry as [`crate::ui_action::toggle::active_action_toggle`] — same
@@ -260,10 +258,10 @@ pub(super) fn active_aura_press(
 /// of the bar and `PET_BAR_UPDATE_COOLDOWN` on a change of its cooldowns alone.
 ///
 /// The reference fires `PET_BAR_UPDATE` from nine sites, each right after a state change, and
-/// `PET_BAR_UPDATE_COOLDOWN` from the cooldown subsystem when the PET bank mutates (wow-re
-/// `pet-action-bar-api.md` §9). Diffing the pushed state is the same edge from the other side:
-/// the slots' content and usability are the bar's, the ten triples are the bank's. `UNIT_PET` is
-/// `feed_pet_unit`'s; `UNIT_FLAGS`/`UNIT_AURA` for `"pet"` are the unit feed's.
+/// `PET_BAR_UPDATE_COOLDOWN` from the cooldown subsystem when the PET bank mutates (`0x6e2e8e`).
+/// Diffing the pushed state is the same edge from the other side: the slots' content and usability
+/// are the bar's, the ten triples are the bank's. `UNIT_PET` is `feed_pet_unit`'s;
+/// `UNIT_FLAGS`/`UNIT_AURA` for `"pet"` are the unit feed's.
 pub(super) fn feed_pet_bar(
     script: Option<NonSendMut<UiScript>>,
     bar: Res<PetBar>,

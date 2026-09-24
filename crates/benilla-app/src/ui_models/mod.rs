@@ -2,12 +2,12 @@
 //! sweep, the autocast shine, the minimap and world-map pings, the item-push card, the map's
 //! arrow, and whatever an addon parks in a `CreateFrame("Model")`.
 //!
-//! ## The law (wow-re `system/ui/scratch/modelframe-render-law.md`, `e1b1794b`)
+//! ## The law
 //!
 //! A `<Model>` **whose file supplies a camera** draws its scene through it: the widget holds a raw
 //! camera index (ctor 0, `SetCamera(n)`), and the record's `lookAt(eye, target, up)` plus the
-//! client's diagonal-FOV projection at the pane's own width/height frame the model (§2, camera-law
-//! §4a). The authored eye and target are carried through the model's root transform, so
+//! client's diagonal-FOV projection at the pane's own width/height frame the model (`0x76cec0`,
+//! `0x7ac640`). The authored eye and target are carried through the model's root transform, so
 //! `SetModelScale` and `SetPosition` cancel for framing on that leg and bite only on the record's
 //! unscaled near/far. An index past the file's camera count installs a NULL camera, which is the
 //! other leg:
@@ -15,12 +15,13 @@
 //! A `<Model>` with no M2 camera picked draws its scene **orthographically over the frame's
 //! rect**: origin at the rect's bottom-left, `+X` right, `+Y` up, `Z` depth only, with the root
 //! matrix `T(pos · layoutScale) · R(facing, +Z) · S(G48 · 5/3 · modelScale · layoutScale)` — so one
-//! model unit is `1280 · modelScale · layoutScale` FrameXML units, aspect-independent (§2/§3).
-//! Every batch draws once, LEQUAL over a depth buffer cleared for the widget's own rect, straight
-//! into the back buffer (§6); every in-game UI M2 is UNLIT on every material (§5.7); the
-//! animator is the world's, on the widget's private clock (§4). A particle's half-extent is the
-//! one quantity outside the unit law — added in eye space, it maps at `768 · √(a²+1)` FrameXML
-//! units per model unit and carries neither scale (`clip-and-scale.md` §6).
+//! model unit is `1280 · modelScale · layoutScale` FrameXML units, aspect-independent (`0x7ad7f0`,
+//! `0x76d1a0`). Every batch draws once, LEQUAL over a depth buffer cleared for the widget's own
+//! rect, straight into the back buffer (`0x76d240`, `0x70b360`); every in-game UI M2 is UNLIT on
+//! every material (measured over the shipped files); the animator is the world's, on the widget's
+//! private clock (`0x714260`, `0x76d7f0`). A particle's half-extent is the one quantity outside the
+//! unit law — added in eye space, it maps at `768 · √(a²+1)` FrameXML units per model unit and
+//! carries neither scale (`0x7b2a50`).
 //!
 //! ## The shape here: tiles in one atlas, composited at the callback rank
 //!
@@ -67,8 +68,8 @@
 //!
 //! ## What a tile's light is
 //!
-//! `<Model>`'s embedded light is DISABLED (§5.2), and a LIT batch under no light renders black —
-//! which never shows on the shipped UI M2s because all of them are unlit, and which is the
+//! `<Model>`'s embedded light is DISABLED (ctor `0x76c8e0`), and a LIT batch under no light renders
+//! black — which never shows on the shipped UI M2s because all of them are unlit, and which is the
 //! faithful answer for an addon's lit one. So the DEFAULT tile light buffer is a black light (no
 //! ambient, no diffuse, fog off) and unlit batches bypass it.
 //!
@@ -165,7 +166,7 @@ pub(crate) fn trace_on() -> bool {
 }
 
 /// One pane's request for a tile this frame — what the extract knows about the widget: its
-/// size on the device, the unit ladder the render law derives from it, and the Lua-set scene.
+/// size on the device, the unit ladder `0x76d1a0` derives from it, and the Lua-set scene.
 /// Published by the extract's `ModelPane` arm (keyed by the pane's frame handle, overwritten on
 /// every conversion), read by [`sync_tiles`].
 #[derive(Clone, Debug, PartialEq)]
@@ -211,7 +212,7 @@ pub(crate) struct TileRequest {
     pub rect: Rect,
     /// The pane's paint key: `ZKey::callback(Artwork)` (1995), the composite's rank.
     pub z_key: u64,
-    /// The frame's OWN alpha (render law §4.4): the composite draws at it.
+    /// The frame's OWN alpha (`0x76d120`): the composite draws at it.
     pub alpha: f32,
     /// The enclosing ScrollFrame clip, if any (decision 0112), in the quad pass's space.
     pub clip: Option<Rect>,
@@ -265,12 +266,12 @@ impl TileScene {
     /// The light buffer this scene wants — the reference's collector, finalized.
     ///
     /// The collector is zeroed every frame and gathers only what the fill callback `0x76d680`
-    /// stages (render law §5.5): the fog when it is armed, and the light when it is **enabled**.
+    /// stages: the fog when it is armed, and the light when it is **enabled**.
     /// With the light off, the finalize writes zero ambient and zero diffuse and a LIT batch draws
     /// black — the reference's answer, not a gap. With it on, the type decides which arm:
     /// directional folds ambient + one diffuse lobe through the SH accumulators
     /// (`0x71bc70`/`0x71bce0`), point drops into the ≤4-nearest heap and contributes **no**
-    /// ambient (wow-re `glue-model-lighting.md` §16 B1).
+    /// ambient (`0x71bf90`).
     ///
     /// The lit lane here is the rig one, so the ambient and the lobe go into **probe slot 0** —
     /// the slot every tile part's `MeshTag` names — exactly as the glue booth's own scene blob
@@ -684,7 +685,7 @@ fn setup_tiles(
         layer: layer.clone(),
         lights: Vec::new(),
     };
-    // Slot 0 — the `<Model>` ctor's scene: light disabled, fog off (render law §5.2). Built here
+    // Slot 0 — the `<Model>` ctor's scene: light disabled, fog off (`0x76c8e0`). Built here
     // rather than lazily because every shipped pane wants it and nothing else ever does.
     //
     // Tile rigs skin from a light buffer's palette region (decision 0720's mirror law), and the
@@ -813,8 +814,8 @@ pub(crate) fn spawn_warm_tile_cam(
 }
 
 /// The bevy-space → tile-camera-space rotation: WoW `+X` (bevy `−Z`) to the right, WoW `+Y`
-/// (bevy `−X`) up, WoW `+Z` (bevy `+Y`) toward the viewer — the ortho leg's axes (§2). A proper
-/// rotation (determinant +1), so winding survives.
+/// (bevy `−X`) up, WoW `+Z` (bevy `+Y`) toward the viewer — the ortho leg's axes (`0x7ad7f0`).
+/// A proper rotation (determinant +1), so winding survives.
 fn wow_to_screen() -> Quat {
     Quat::from_mat3(&Mat3::from_cols(
         Vec3::new(0.0, -1.0, 0.0),
@@ -1238,7 +1239,7 @@ fn sync_tiles(
 
         // ── The leg ────────────────────────────────────────────────────────────────────
         //
-        // PERSPECTIVE (render law §2, camera-law §4a): the file's own camera record frames the
+        // PERSPECTIVE (`0x7ac640`): the file's own camera record frames the
         // pane, through a camera of this tile's own whose viewport is the tile's cell. The root
         // is `T(pos·layoutScale) · R(facing) · S(s)` in MODEL units — no pixel ladder, because
         // the projection is the record's and the viewport is the cell — and the authored
@@ -1358,13 +1359,12 @@ fn sync_tiles(
         let gseq_s = pane.clock_ms as f64 / 1000.0;
         // …and the BONE global-sequence channels read it too, not the world clock (decision
         // 2046). The animation kernel's Phase B cursor is `[[model+0x2c]+0xc] − [model+0x68]`
-        // — the clock of the scene that OWNS the instance, minus the attach snapshot — and a
-        // `<Model>` widget owns a private `CM2Scene` (`CSimpleModel+0x314`) that only its own
-        // `OnUpdate` advances (wow-re `gseq-anchor.md` §1/§2, `modelframe-animation-clock.md`
-        // §1.1/§3, both byte-verified). The visible case is the ping's 4833 ms spinner: its
-        // phase belongs to the pane, which is why "ping N resumes where ping N−1 stopped" needs
-        // no accumulator of ours (2013). The drive stamps its own anchor on its first tick, which
-        // is the attach.
+        // (`0x714260`) — the clock of the scene that OWNS the instance, minus the attach
+        // snapshot — and a `<Model>` widget owns a private `CM2Scene` (`CSimpleModel+0x314`)
+        // that only its own `OnUpdate` (`0x76d7f0`) advances. The visible case is the ping's
+        // 4833 ms spinner: its phase belongs to the pane, which is why "ping N resumes where
+        // ping N−1 stopped" needs no accumulator of ours (2013). The drive stamps its own anchor
+        // on its first tick, which is the attach.
         if let Some(mut d) = drive {
             d.set_clock(gseq_s);
         }
@@ -1384,7 +1384,7 @@ fn sync_tiles(
                 trace_alphas.push(a);
             }
             if let Ok((mut tag, mut pvis)) = parts.get_mut(part.entity) {
-                // The `A ≤ 0` cull (wow-re `m2-alpha-combine-cull`): a batch the artist keyed
+                // The `A ≤ 0` cull (`0x707b3a`): a batch the artist keyed
                 // off in this sequence is skipped, not drawn at zero.
                 let want = if a > 0.0 {
                     Visibility::Inherited
@@ -1434,8 +1434,8 @@ fn sync_tiles(
         }
         // A particle's half-extent is added in EYE space, so its unit is the leg's: the
         // orthographic leg measures the cell in pixels and hands it `768·√(a²+1)` FrameXML units
-        // per model unit (§6, carrying neither scale), while the perspective leg's eye space IS
-        // the root's, and its own projection does the conversion — the world's plain 1.0.
+        // per model unit (`0x7b2a50`, carrying neither scale), while the perspective leg's eye
+        // space IS the root's, and its own projection does the conversion — the world's plain 1.0.
         let star = if tile.cam_slot.is_some() && req.camera.is_some() {
             1.0
         } else {
@@ -1523,7 +1523,7 @@ fn sync_tiles(
     );
 }
 
-/// The perspective leg's rig for one pane — the pure half, so the law's own worked numbers can be
+/// The perspective leg's rig for one pane — the pure half, so the reference's worked numbers can be
 /// checked without a world.
 struct PerspectiveRig {
     /// The model's root, `T(pos · layoutScale) · R(facing, +Z) · S(s)` in Bevy model space —
@@ -1535,28 +1535,27 @@ struct PerspectiveRig {
     projection: WowPortraitProjection,
 }
 
-/// Build it (render law §2, camera-law §4a/§11).
+/// Build it.
 ///
 /// **The authored eye and target are carried through the root transform.** That is `0x718960`'s
 /// publish — `eye_published = (position_base + posTrack) · M_root` — and it is the whole reason
 /// `SetModelScale` and `SetPosition` cancel here: the camera moves with the model, so the framing
 /// is invariant to both. They are still applied rather than skipped, because the record's near and
-/// far are copied into the camera **unscaled** while every eye-space depth scales with `s`, so a
-/// LARGE `SetModelScale` drives the model through the **far** plane and a small one through the
-/// near (wow-re `modelframe-facing-cancels.md` §6 — the direction is the opposite of the obvious
-/// guess). `near`/`far` reach only `m22`/`m32`: `near` cancels algebraically out of `m00`/`m11`,
-/// so the x/y screen scale is `fov` and `aspect` alone.
+/// far are copied into the camera **unscaled** (`0x70ebd0`) while every eye-space depth scales
+/// with `s`, so a LARGE `SetModelScale` drives the model through the **far** plane and a small one
+/// through the near (the direction is the opposite of the obvious guess). `near`/`far` reach only
+/// `m22`/`m32`: `near` cancels algebraically out of `m00`/`m11`, so the x/y screen scale is `fov`
+/// and `aspect` alone.
 ///
 /// The **up** vector does not ride the root: `0x7ac640` assembles it out of four `CCamera` fields
 /// the publish never writes — `up = (sin(a₆)·sin(roll), −cos(a₆)·sin(roll), cos(roll))` in WoW
 /// model space, and property `a₆` has **no writer image-wide**, so it holds its constructor `0`
-/// for ever and the vector is `(0, −sin(roll), cos(roll))` (wow-re
-/// `modelframe-facing-cancels.md` §2). At `roll = 0` that is model-space `+Z` exactly — which is
-/// the very axis `SetFacing` turns the model about, and *that* is why the facing cancels here too:
-/// the eye, the target and the geometry all turn about an axis the up vector lies on, so the image
-/// does not move (§3). The reference's own one-frame publish lag — it reads the eye before it
-/// rebuilds the root, so the frame a facing CHANGES draws one step out of phase (§4) — is a quirk
-/// of the ordering, not the mechanism, and is deliberately not reproduced.
+/// for ever and the vector is `(0, −sin(roll), cos(roll))`. At `roll = 0` that is model-space `+Z`
+/// exactly — which is the very axis `SetFacing` turns the model about, and *that* is why the facing
+/// cancels here too: the eye, the target and the geometry all turn about an axis the up vector lies
+/// on, so the image does not move. The reference's own one-frame publish lag — its paint `0x76d240`
+/// reads the eye before it rebuilds the root, so the frame a facing CHANGES draws one step out of
+/// phase — is a quirk of the ordering, not the mechanism, and is deliberately not reproduced.
 fn perspective_rig(
     record: &benilla_assets::PortraitCamera,
     req: &TileRequest,
@@ -1746,7 +1745,7 @@ pub(crate) fn composite_quads(bridge: &UiModelTiles) -> Vec<UiQuad> {
                 z_key: req.z_key,
                 texture: Some(atlas.clone()),
                 uv: UvRect::from_tex_coords([u0, u1, v0, v1]),
-                // The instance draws at the widget's OWN alpha (render law §4.4).
+                // The instance draws at the widget's OWN alpha (`0x76d120`).
                 color: [1.0, 1.0, 1.0, req.alpha],
                 // A render target: premultiplied by construction (`UiQuad` doc).
                 premultiplied: true,
@@ -1879,7 +1878,7 @@ fn build_tile(
         let world = render.mats.steady(sub, texture, (i + 1) as u16)?;
         // The twin: same material, this rig's light buffer, and the batch's AUTHORED fog policy
         // when the pane armed fog — which is where the per-material UNFOGGED bit does its own
-        // work (render law §5.6: a fogged pane still draws its unfogged materials unfogged). A
+        // work (`0x70bb24`: a fogged pane still draws its unfogged materials unfogged). A
         // pane with no fog forces it off, as every tile did before 2027. The shade selector both
         // lanes flip is inert on an unlit batch, which is every shipped UI M2.
         let lane = if fogged {
@@ -2446,8 +2445,8 @@ mod tests {
         }
     }
 
-    /// `HumanMale`'s camera 1 as `benilla-extract m2cam` reads it — and as wow-re
-    /// `modelframe-camera-law.md` §7 records it, to the digit.
+    /// `HumanMale`'s camera 1 as `benilla-extract m2cam` reads it — and as the reference records
+    /// it, to the digit.
     fn human_male_cam1() -> benilla_assets::PortraitCamera {
         let wow = benilla_assets::coords::wow_to_bevy;
         benilla_assets::PortraitCamera {
@@ -2464,14 +2463,14 @@ mod tests {
     /// `t = tan(fovy / (2·√(aspect²+1)))`, `m11 = 1/t`, `m00 = m11/aspect` — not a vertical fov,
     /// and not an aspect-independent crop.
     ///
-    /// The numbers are wow-re's own worked checks. `camera-law.md` §12.1: a `318×224` pane gives
-    /// `θ = 0.287938 · fov` and a `233×224` pane `θ = 0.346523 · fov`. §8's fallback check:
+    /// The numbers are the reference's own worked checks: a `318×224` pane gives
+    /// `θ = 0.287938 · fov` and a `233×224` pane `θ = 0.346523 · fov`. The fallback camera's check:
     /// `aspect = 1.4196429`, `√(aspect²+1) = 1.7364815`, `tan(0.5/(2·1.7364815)) = 0.1449700`.
     #[test]
     fn the_perspective_projection_is_the_clients_diagonal_fov_matrix() {
         use bevy::camera::CameraProjection;
 
-        // §8's worked line, on the fallback camera's `fov = 0.5` at the pet pane's 318×224.
+        // The fallback camera's worked line: `fov = 0.5` at the pet pane's 318×224.
         let cam = benilla_assets::PortraitCamera {
             eye: Vec3::new(0.0, 0.0, 5.0),
             target: Vec3::ZERO,
@@ -2483,7 +2482,7 @@ mod tests {
         let aspect: f32 = 318.0 / 224.0;
         assert!((aspect - 1.419_642_9).abs() < 1e-6);
         let m = pane_projection(&cam, aspect).get_clip_from_view();
-        // `m11 = 1/t` with `t = tan(θ)`; §8's `t` is 0.1449700.
+        // `m11 = 1/t` with `t = tan(θ)`; the fallback check's `t` is 0.1449700.
         let t = 1.0 / m.y_axis.y;
         assert!((t - 0.144_97).abs() < 1e-5, "t = {t}");
         // …and `m00 = m11 / aspect` — the one `aspect` doing both jobs, never 1.0 (a transplanted
@@ -2494,7 +2493,7 @@ mod tests {
             m.x_axis.x,
             m.y_axis.y / aspect
         );
-        // §12.1's two half-angles, as fractions of the record fov.
+        // The two worked half-angles, as fractions of the record fov.
         for (w, h, want) in [(318.0, 224.0, 0.287_938), (233.0, 224.0, 0.346_523_f32)] {
             let a: f32 = w / h;
             let theta = (0.5_f32 * cam.fov / (a * a + 1.0).sqrt()) / cam.fov;
@@ -2502,11 +2501,11 @@ mod tests {
         }
     }
 
-    /// **`SetModelScale` and `SetPosition` CANCEL on the perspective leg** (camera-law §11.4): the
+    /// **`SetModelScale` and `SetPosition` CANCEL on the perspective leg** (`0x718960`): the
     /// authored eye and target are carried through the very root transform the geometry is drawn
     /// through, so the picture is invariant to both. This is the property the leg is built on, and
-    /// the failure mode it guards is the one wow-re's own §5 pair got backwards — applying the
-    /// root to the geometry but not to the camera, which is wrong by `1/s`.
+    /// the failure mode it guards is applying the root to the geometry but not to the camera,
+    /// which is wrong by `1/s`.
     ///
     /// The check is on the pixels, not on the matrices: a model-local point's clip-space `x/w`
     /// and `y/w` must be identical at any scale and any offset.
@@ -2570,10 +2569,8 @@ mod tests {
         );
     }
 
-    /// **`SetFacing` cancels too** — the half of the leg that had to be settled at the bytes
-    /// before it could be built (wow-re `modelframe-facing-cancels.md`, a §5 round commissioned
-    /// by this work; `modelframe-render-law.md` §2's "only `SetFacing`/`SetRotation` show" is
-    /// scoped to `<PlayerModel>`'s FROZEN camera and does not hold here).
+    /// **`SetFacing` cancels too** (on `<PlayerModel>`'s FROZEN camera, `0x7acf10`, only
+    /// `SetFacing`/`SetRotation` show; that does not hold here).
     ///
     /// The reason is the up vector: `0x7ac640` builds it as `(0, −sin(roll), cos(roll))` in model
     /// space out of `CCamera` fields the publish never writes, and at `roll = 0` — every camera a
@@ -2643,7 +2640,7 @@ mod tests {
         let want = (cam.target - cam.eye).normalize();
         assert!((fwd - want).length() < 1e-5, "{fwd:?} vs {want:?}");
         // The distance the record authors — the whole mechanism behind "the pane looks
-        // normalized" (camera-law §7: Blizzard authored a per-model distance).
+        // normalized" (measured over the shipped models: Blizzard authored a per-model distance).
         let d = (cam.target - cam.eye).length();
         assert!((d - 4.0234).abs() < 1e-3, "authored eye distance {d}");
         // Up is the model's own up, not the camera's roll-free default in some other frame.

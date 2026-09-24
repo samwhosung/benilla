@@ -7,8 +7,7 @@
 //! warlock's demon — and the row a player sees is the whole of the difference the client draws
 //! between "give this pet up forever" and "send this summon away".
 //!
-//! **The predicates are VERIFIED at the bytes** (wow-re `ui/scratch/pet-action-bar-api.md` §11c,
-//! carved for this build). `0x4be500` and `0x4be580` are byte-identical but for three dwords:
+//! **The predicates** `0x4be500` and `0x4be580` are byte-identical but for three dwords:
 //! resolve `[0xb714a0]`, check the pet's `UNIT_FIELD_SUMMONEDBY` against the local player, then test
 //! **one byte of `UNIT_FIELD_FLAGS`** — `[pet+0x110]+0xa0`, dword 46 — with mask `0x20` for abandon
 //! (`0x4be544`) and `0x10` for rename (`0x4be5c4`). Each returns exactly one value on every path: a
@@ -16,12 +15,11 @@
 //!
 //! **The `UNIT_FIELD_BYTES_2` byte-2 layout everybody remembers is REFUTED here** — that is the
 //! TBC+ home of these bits, its record is dword 164, and neither predicate touches it. This is the
-//! shape decision 0988 warns about, and it was one carve away from being built wrong: benilla's own
+//! shape decision 0988 warns about, and it was nearly built wrong: benilla's own
 //! queue had recorded the TBC guess, off a field that is always zero on this server.
 //!
-//! **The two give-up verbs are NOT one opcode**, which is the correction that made carving them
-//! worth it (the seam's two counts, kept apart on principle, are what made the fold a two-line
-//! change):
+//! **The two give-up verbs are NOT one opcode** (the seam's two counts, kept apart on principle,
+//! are what made the fold a two-line change):
 //!
 //! - `PetAbandon 0x4be4c0` → `0x4bd740` sends **`CMSG_PET_ABANDON` 0x176** `{u64 petGuid}`.
 //! - `PetDismiss 0x4be4d0` → `0x4bd6e0` **opens no packet at all**. It stages the packed slot word
@@ -45,9 +43,9 @@ use super::{PetBar, PetUnit};
 /// `UNIT_FIELD_FLAGS` bit 4 — `UNIT_FLAG_PET_RENAME`, `0x4be5c4`'s mask. Set on a tamed hunter pet
 /// that has never been renamed.
 ///
-/// **One-shot, and server-side only.** wow-re's census of field-view reads of `[+0x110]+0xa0` found
-/// exactly three sites testing these two masks — the two predicates and the rename sender's own
-/// re-check — and **no writer anywhere in `.text`**. Nothing client-side clears this; the row
+/// **One-shot, and server-side only.** Of the field-view reads of `[+0x110]+0xa0`, exactly three
+/// test these two masks — the two predicates and the rename sender's own re-check (`0x4bd8b5`) —
+/// and **no writer exists anywhere in `.text`**. Nothing client-side clears this; the row
 /// disappears because the server re-streams the field and `UnitPopup` re-evaluates when the menu is
 /// next built. There is no event to listen for and none is needed.
 const UNIT_FLAG_PET_RENAME: u32 = 0x0000_0010;
@@ -56,7 +54,7 @@ const UNIT_FLAG_PET_RENAME: u32 = 0x0000_0010;
 const UNIT_FLAG_PET_ABANDON: u32 = 0x0000_0020;
 
 /// The client's own silent cap on a pet name — `0x64a7f0(dst, 0x50, "%s", name)` in the rename
-/// sender, i.e. 79 characters plus the terminator (wow-re §11c).
+/// sender `0x4bd840`, i.e. 79 characters plus the terminator.
 ///
 /// It is **not** the 12 everyone knows: that is `RENAME_PET`'s `maxLetters` in FrameXML, a
 /// different layer with a different job. This one is the last thing between the Lua and the wire,

@@ -2,7 +2,7 @@
 //!
 //! This lives with the pet bar rather than beside the `"player"`/`"target"` feed for one reason:
 //! the token's identity is [`PetBar`]'s cached pet guid — the client's `[0xb714a0]`, which is also
-//! what `UNIT_PET` fires off (wow-re §9) — so the token and its repaint wire read the same word,
+//! what `UNIT_PET` fires off (`0x4bc84f`) — so the token and its repaint wire read the same word,
 //! from the module that owns it.
 
 use bevy::prelude::*;
@@ -38,8 +38,7 @@ pub(super) struct PetUnitMemory {
 }
 
 /// `UNIT_FIELD_FLAGS` bit `0x800` — the **pet-in-combat** flag, and the whole trigger for
-/// `PET_ATTACK_START`/`PET_ATTACK_STOP` (`0x5ff75e test ah,8`, wow-re
-/// `object-layer/scratch/pet-command-validators.md` §4).
+/// `PET_ATTACK_START`/`PET_ATTACK_STOP` (`0x5ff75e test ah,8`).
 ///
 /// Server-owned and server-written: nothing client-side sets it, which is exactly why it — and not
 /// the local click latch — is what the reference watches.
@@ -48,7 +47,7 @@ pub(super) const UNIT_FLAG_PET_IN_COMBAT: u32 = 0x0000_0800;
 /// Feed the **`"pet"` unit token** and the pet frame's three events (decision 0990).
 ///
 /// **The token resolves off the bar's cached pet guid, not off our own `UNIT_FIELD_SUMMON`**, and
-/// that is the client's own choice rather than a convenience. wow-re §9 carves `UNIT_PET` as firing
+/// that is the client's own choice rather than a convenience. `UNIT_PET` fires
 /// from inside `SetPet 0x4bc7e0` (`0x4bc84f`: `SignalEvent(2, "%s", "player")`) — the single writer
 /// of `[0xb714a0]`, the same cached guid the whole pet bar reads — and **only when that guid
 /// actually changed**. Since `UNIT_PET` is the pet frame's only repaint wire, a token sourced from
@@ -152,8 +151,8 @@ pub(super) fn feed_pet_unit(
         None => memory.pushed = None,
     }
 
-    // UNIT_PET(arg1 = "player") — VERIFIED wow-re §9, including the `arg1` and the changed-guid
-    // gate. Summon, stable swap and dismiss are the three edges; a re-sent `SMSG_PET_SPELLS` for
+    // UNIT_PET(arg1 = "player"), fired only when the pet guid changes (`0x4bc84f`).
+    // Summon, stable swap and dismiss are the three edges; a re-sent `SMSG_PET_SPELLS` for
     // the same pet (a learned spell, a mode change) is not one, which is why this diffs the guid
     // rather than riding `feed_pet_bar`'s whole-state diff.
     if memory.guid != Some(pet_guid) {
@@ -167,11 +166,11 @@ pub(super) fn feed_pet_unit(
     // `UI-Player-AttackStatus` overlay.
     //
     // **CORRECTED.** Decision 0990 derived these from the attack latch `[0xb714b0]`'s edges and
-    // said so honestly; the derivation was wrong. wow-re later carved the real fire site —
-    // `0x5ff793`/`0x5ff79a` inside `0x5ff580`, a per-field change callback registered *by field
-    // byte offset* (`0x6042e2 mov edx,0xa0`), which is why walking the call graph out of the pet
-    // TU never reached it. The trigger is the unit's own server-supplied
-    // `UNIT_FIELD_FLAGS & 0x800` **transition**, gated on the unit's owner guid being ours.
+    // said so honestly; the derivation was wrong. The real fire site is `0x5ff793`/`0x5ff79a`
+    // inside `0x5ff580`, a per-field change callback registered *by field byte offset*
+    // (`0x6042e2 mov edx,0xa0`), which is why walking the call graph out of the pet TU never
+    // reaches it. The trigger is the unit's own server-supplied `UNIT_FIELD_FLAGS & 0x800`
+    // **transition**, gated on the unit's owner guid being ours.
     //
     // The two are not the same question and they visibly diverge: the latch is a local click
     // record with exactly three writers, so a pet that disengages on its own — its target dies, it
@@ -208,7 +207,7 @@ pub(super) fn feed_pet_unit(
 }
 
 /// **Watch the pet's name timestamp, drop the cached name when it moves, and announce it**
-/// (decision 1066; the mechanism is VERIFIED at the bytes — wow-re §11c).
+/// (decision 1066).
 ///
 /// A pet's name is the one name in the client that can change under us. It does not ride the
 /// descriptor — it is answered once by `CMSG_PET_NAME_QUERY` into `petnamecache.wdb` and keyed by

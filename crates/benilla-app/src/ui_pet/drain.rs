@@ -114,7 +114,7 @@ pub(super) fn drain_pet_actions(
         )
         .collect();
     for (slot, entry) in presses {
-        // The spell arm's early exit (wow-re §10.1, `0x4bd240`–`0x4bd2ad`): a press on a spell the
+        // The spell arm's early exit (`0x4bd240`–`0x4bd2ad`): a press on a spell the
         // pet is already running takes the aura OFF and **returns** — `CMSG_PET_ACTION` never
         // leaves, so it is a cancel, not a re-cast. Nothing is latched locally either: the icon
         // goes back when the pet's `UNIT_FIELD_AURA` says the aura is gone, which is the honest
@@ -216,7 +216,7 @@ pub(super) fn drain_pet_actions(
 /// of range, or a word that is not autocast-ALLOWED, bit 31 — `0x4bcbf1`).
 ///
 /// The client flips bit 30 in the slot word IN PLACE and sends the whole new word — it is not a
-/// "set autocast to X for spell Y" verb (wow-re §10.2, `0x4bcbff`/`0x4bcc17`). The server reads the
+/// "set autocast to X for spell Y" verb (`0x4bcbff`/`0x4bcc17`). The server reads the
 /// direction back out of the type byte it arrives in.
 ///
 /// Then `0x4bcc19` calls `0x4bd190(&bar[slot])` — the propagation into the **spellbook**: for a
@@ -409,7 +409,7 @@ pub(super) fn commit_press(
 ///   command, which is also the proof that bit 27 is server-owned: no client path writes it.
 ///
 /// **Only STAY and FOLLOW reach the command write.** The binary's type-7 arm gates it on
-/// `action <= 1` (§10.1): DISMISS (3) falls straight through, and ATTACK (2) leaves down the
+/// `action <= 1` (`0x4bd3b1`): DISMISS (3) falls straight through, and ATTACK (2) leaves down the
 /// validation chain that ends at `[0xb714b0] = 1` (`0x4bd42e`) — the attack latch, never the
 /// command byte. The distinction is the difference between a mode and an order: Stay and Follow
 /// are what the pet is *doing until told otherwise*, and they stay lit because `isActive`'s state

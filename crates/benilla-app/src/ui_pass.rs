@@ -202,11 +202,11 @@ pub(crate) struct UiQuad {
     ///
     /// The reference's minimap tile draw sets EGxBlend **1**, whose applicator `glDisable`s
     /// blending outright, and the `SetRenderState` id-7→id-8 cascade then arms
-    /// `glAlphaFunc(GL_GEQUAL, 0.87843144)` (`.data 0x85ad20[1] = 224`; wow-re
-    /// `wmo-interior-minimap-composite.md`). Blending those tiles instead leaves `(1−a)(1−b)` of
-    /// the black clear at EVERY boundary where two group tiles meet — up to 25% black where the
-    /// two filtered edges are complementary — which is B141's "odd black lines" (they recoloured
-    /// with the backing quad, which is how they were caught). Splits the batch run.
+    /// `glAlphaFunc(GL_GEQUAL, 0.87843144)` (`.data 0x85ad20[1] = 224`). Blending those tiles
+    /// instead leaves `(1−a)(1−b)` of the black clear at EVERY boundary where two group tiles meet
+    /// — up to 25% black where the two filtered edges are complementary — which is B141's "odd
+    /// black lines" (they recoloured with the backing quad, which is how they were caught). Splits
+    /// the batch run.
     pub alpha_test: Option<f32>,
     /// **The UV window this quad may sample**, already inset by half a texel — `None` = the
     /// sampler's own `ClampToEdge` is the whole story (decision 1608).
@@ -432,12 +432,11 @@ pub(crate) struct UiQuadMaterial {
 /// on Intel's DX12 driver (2236).
 ///
 /// One BYTE per channel, `×255 + 0.5`: exactly how the reference packs a vertex colour
-/// (`CImVector`; `SetVertexColor` at `0x79abd0`, the frame-alpha fold at `0x77fac0` in bytes —
-/// wow-re `system/ui/scratch/texture-color-composition.md`), so this is the precision the real
-/// client draws with, not a step down from it. Stored COMPLEMENTED: an entity with no `MeshTag`
-/// reads 0 in bevy's extract, and the complement makes 0 unpack to opaque white — untinted —
-/// so a Mesh2d that draws with this material and never asked for a tint (the minimap's
-/// interior tiles) is right without knowing this exists.
+/// (`CImVector`; `SetVertexColor` at `0x79abd0`, the frame-alpha fold at `0x77fac0` in bytes), so
+/// this is the precision the real client draws with, not a step down from it. Stored COMPLEMENTED:
+/// an entity with no `MeshTag` reads 0 in bevy's extract, and the complement makes 0 unpack to
+/// opaque white — untinted — so a Mesh2d that draws with this material and never asked for a tint
+/// (the minimap's interior tiles) is right without knowing this exists.
 fn tint_tag(color: [f32; 4]) -> u32 {
     let byte = |v: f32| {
         // Round half up on a clamped value — `0x40a2b0`'s `×255.0 + 0.5` then truncate; the
@@ -553,9 +552,8 @@ pub(crate) struct UiQuadAppend;
 /// Project a world point for a world-anchored overlay, **with the reference projector's own accept
 /// verdict** — `None` means "this one does not draw", and the caller must honour it.
 ///
-/// `0x483ee0` returns a boolean (wow-re `object-layer/scratch/nameplate-offscreen-cull.md`,
-/// §5-VERIFIED 2026-08-15). It rejects a point behind the near plane (`483f7a`) **and** a point
-/// outside the viewport — the four tests at `484075`/`484086`/`484096`/`4840a6`, against the
+/// `0x483ee0` returns a boolean. It rejects a point behind the near plane (`483f7a`) **and** a
+/// point outside the viewport — the four tests at `484075`/`484086`/`484096`/`4840a6`, against the
 /// **WorldFrame**'s own region (`[0xb4b2bc]`, mirrored ÷G44/÷G48 at `0x483970`), so the accept
 /// region is exactly the viewport, inclusive. Both plate and worldtext callers **destroy** the
 /// thing they were about to place when it comes back false.
@@ -1839,7 +1837,7 @@ mod tests {
     }
 
     /// **The tag is the reference's byte colour, complemented.** `SetVertexColor` quantises
-    /// `×255 + 0.5` into one byte per channel (wow-re `texture-color-composition.md`), and the
+    /// `×255 + 0.5` into one byte per channel (`0x79abd0`), and the
     /// complement is what makes bevy's untagged 0 read as opaque white (the minimap's interior
     /// tiles never set one).
     #[test]
@@ -2013,7 +2011,7 @@ mod tests {
     }
 
     // A rotated backdrop TOP-edge UV (atlas-u tied to screen-Y, atlas-v to screen-X reversed —
-    // backdrop-mechanism.md §3): clipping to the left half must reproject the *v* axis (screen-X),
+    // `0x77f0c0`): clipping to the left half must reproject the *v* axis (screen-X),
     // leaving *u* (screen-Y) untouched. This is the case the old separable-lerp clip could not do
     // and the four-corner bilinear must.
     #[test]

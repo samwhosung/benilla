@@ -38,8 +38,8 @@ use benilla_protocol::messages::BAG_PLAYER_INVENTORY;
 /// `ItemHandler.cpp`); the Lua side sees it as `numAvailable == -1`.
 const STOCK_UNLIMITED: u32 = 0xFFFF_FFFF;
 
-/// `UNIT_NPC_FLAG_REPAIR` — the vendor-can-repair service bit `CanMerchantRepair` tests (wow-re
-/// repair-machinery.md `0x4fadb0`: a merchant-frame gate, deliberately never in the cursor ladder).
+/// `UNIT_NPC_FLAG_REPAIR` — the vendor-can-repair service bit `CanMerchantRepair` tests
+/// (`0x4fadb0`: a merchant-frame gate, deliberately never in the cursor ladder).
 const NPC_FLAG_REPAIR: u32 = 0x4000;
 
 /// The wire's first absolute buyback inventory slot (`BUYBACK_SLOT_START`; slots 69–80).
@@ -257,7 +257,7 @@ fn resolve_item(
 }
 
 /// The occupied buyback slots' player-descriptor indices (0–11) in the client's display order —
-/// timestamp-ascending, oldest first (wow-re `0x4fafd0`: scan slots 69–80 for a non-zero
+/// timestamp-ascending, oldest first (`0x4fafd0`: scan slots 69–80 for a non-zero
 /// guid+price pair, sort by the timestamp fields). Index `i` here is Lua's `GetBuybackItemInfo(i+1)`;
 /// the wire's absolute slot for an entry is `BUYBACK_SLOT_FIRST + index`.
 fn buyback_order(store: &benilla_protocol::ObjectFields) -> Vec<u8> {
@@ -354,7 +354,7 @@ fn item_repair_cost(
         .repair_cost(points, level, quality, class, subclass, 0.0)
 }
 
-/// The repair-all total: the client's three sweeps (wow-re repair-machinery.md `0x4fbd60`) —
+/// The repair-all total: the client's three sweeps (`0x4fbd60`) —
 /// equipped 0–18, the backpack, and the CONTENTS of the 4 equipped bags (never bank/keyring/
 /// buyback).
 fn repair_all_cost(

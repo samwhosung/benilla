@@ -461,14 +461,14 @@ pub(super) fn feed_party(
     // expected to move *without* this event, and firing on them would make the whole raid pane
     // repaint every time somebody took damage.
     //
-    // The exact fire SITE is not pinned to bytes. wow-re has the event (FrameScript id `0x1f3`,
-    // its name slot `0xbe1964`) and the raid-roster TU that owns the neighbouring lines
-    // (`0x4ba220`/`0x4ba550`, `object-layer/scratch/party-group-wire.md`), but nobody has carved
-    // which of that TU's arms signal it. What IS constrained: `SMSG_GROUP_LIST` is the only
-    // packet that can move any of these four fields, and the reference's RaidFrame repaints on
-    // this event and on `PARTY_MEMBERS_CHANGED` alike — so a client that fires it on every
-    // identity change of the roster cannot show a stale pane, whatever the extra arms turn out to
-    // be. INFERRED, and named as such rather than left to be discovered from a bug.
+    // The exact fire SITE is not pinned to bytes. The reference has the event (FrameScript id
+    // `0x1f3`, its name slot `0xbe1964`) and the raid-roster TU that owns the neighbouring lines
+    // (`0x4ba220`/`0x4ba550`), but which of that TU's arms signal it is not identified. What IS
+    // constrained: `SMSG_GROUP_LIST` is the only packet that can move any of these four fields,
+    // and the reference's RaidFrame repaints on this event and on `PARTY_MEMBERS_CHANGED` alike
+    // — so a client that fires it on every identity change of the roster cannot show a stale
+    // pane, whatever the extra arms turn out to be. INFERRED, and named as such rather than left
+    // to be discovered from a bug.
     if raid_key != fed.raid_key {
         gate.audit("feed_party", "the raid-roster edge");
         fed.raid_key = raid_key;
@@ -494,10 +494,9 @@ pub(super) fn feed_party(
     // ── READY_CHECK (decision 1549) ─────────────────────────────────────────────────────────
     //
     // The reference's event `0x218`, fired by the `MSG_RAID_READY_CHECK` open handler
-    // (`0x4ba360` — wow-re `system/ui/ui.md`, "Raid target icons + ready check"), which is also
-    // where its 30 s deadline is armed (`0xb713f4 = clock + 0x7530`). UIParent registers it and
-    // calls `ShowReadyCheck()`; the countdown itself is the popup's own OnUpdate, so the deadline
-    // is Lua-side here rather than a second clock in Rust.
+    // (`0x4ba360`), which is also where its 30 s deadline is armed (`0xb713f4 = clock + 0x7530`).
+    // UIParent registers it and calls `ShowReadyCheck()`; the countdown itself is the popup's own
+    // OnUpdate, so the deadline is Lua-side here rather than a second clock in Rust.
     if group.ready_check != fed.ready_check {
         gate.audit("feed_party", "the ready-check edge");
         fed.ready_check = group.ready_check;
@@ -690,14 +689,14 @@ fn raid_guid_for_name(
         .map(|m| m.guid)
 }
 
-/// Build `GetRaidRosterInfo`'s array (decision 0434 §6's roster, wow-re
-/// `ui/scratch/raid-roster-bindings.md` §2). Empty outside a raid — `GroupState::group_type` is
-/// `1` only for one — which is what makes `GetNumRaidMembers()` answer `0` in a party.
+/// Build `GetRaidRosterInfo`'s array (decision 0434 §6's roster, `0x4bb560`). Empty outside a
+/// raid — `GroupState::group_type` is `1` only for one — which is what makes `GetNumRaidMembers()`
+/// answer `0` in a party.
 ///
 /// **The player is row 1.** The reference's array contains the local player (it is why
 /// `UnitInRaid("player")` answers `1`), and the wire's list does not, so the recipient is spliced
-/// back in here. *Where* the real client puts itself is **not derived** — the note carves the
-/// binding, not the array's fill order — and nothing observed depends on it: every corpus consumer
+/// back in here. *Where* the real client puts itself is **not derived** — the binding is derived,
+/// not the array's fill order — and nothing observed depends on it: every corpus consumer
 /// sweeps `1..GetNumRaidMembers()` (or `1..MAX_RAID_MEMBERS`) and keys the result by name.
 ///
 /// A pure function over plain data so the shape is testable without a second account in a raid:
@@ -713,7 +712,7 @@ fn raid_roster(
         return Vec::new();
     }
     // rank: 2 leader · 1 assistant · 0 member. The binding exposes `[edi+0xc]` unadjusted and
-    // wow-re could not derive the convention from its bytes; the corpus can and does —
+    // the convention cannot be derived from its bytes; the corpus can and does —
     // `ChatLog.lua:351-353` prints `@` for 2 and `*` for 1.
     let rank_of = |guid: u64, flags: u8| {
         if guid == group.leader {
@@ -813,10 +812,10 @@ fn member_unit_state(
         // unseen (`0x4e82d0`), and patched by the wire afterwards — so this leg never reads the
         // `0/0` report B334 is about, and there is always a record to read.
         //
-        // The reference's own getter chain, in order (`ui/scratch/party-oor-stats-and-portrait-
-        // law.md` §3): live descriptor → party record → pet record → 0. The pet leg is not
-        // reachable here (a `partyN` token is a player guid; the `partypetN` tokens resolve
-        // nowhere in benilla yet), so this is the whole of it.
+        // The reference's own getter chain, in order: live descriptor → party record (`0x496400`)
+        // → pet record (`0x496420`) → 0. The pet leg is not reachable here (a `partyN` token is a
+        // player guid; the `partypetN` tokens resolve nowhere in benilla yet), so this is the
+        // whole of it.
         None => UnitState {
             exists: true,
             name: Some(m.name.clone()),
@@ -829,7 +828,7 @@ fn member_unit_state(
             // range read ten times the rage of one in range.
             power: stats.map_or(0, PartyMemberStatsInfo::shown_power),
             max_power: stats.map_or(0, PartyMemberStatsInfo::shown_max_power),
-            // **The record's status bits, for the two predicates the RE actually pins to it**:
+            // **The record's status bits, for the two predicates the reference pins to it**:
             // `UnitIsDead 0x517b5d` reads `+0x08 & 4` and `UnitIsGhost 0x517c32` reads `& 8` on
             // the no-object leg. They matter because they are *fresher than the roster byte*: the
             // roster only moves on a `SMSG_GROUP_LIST`, while this byte is rewritten by the
@@ -837,12 +836,12 @@ fn member_unit_state(
             // member who was dead when they walked over the hill reads dead, where the last
             // roster echo still had them alive.
             //
-            // Connected / AFK / DND / PvP / FFA deliberately stay the roster's below: wow-re's §3
-            // table carves the no-object path for the health, power, level and dead/ghost/
-            // connected getters, and says nothing about `UnitIsAFK` and kin. Taking the record
-            // for those would be a guess, and vmangos only flags the status byte on the AFK/DND/
-            // PvP/FFA toggles anyway — never on death, which is exactly why the two above are the
-            // pair worth reading.
+            // Connected / AFK / DND / PvP / FFA deliberately stay the roster's below: the
+            // reference's no-object path (`0x496400`) is known for the health, power, level and
+            // dead/ghost/connected getters, and nothing is known of `UnitIsAFK` and kin. Taking
+            // the record for those would be a guess, and vmangos only flags the status byte on the
+            // AFK/DND/PvP/FFA toggles anyway — never on death, which is exactly why the two above
+            // are the pair worth reading.
             dead: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::DEAD != 0),
             ghost: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::GHOST != 0),
             ..Default::default()
@@ -1608,7 +1607,7 @@ mod tests {
     }
 
     /// **The record's dead/ghost bits are read out of range** — `UnitIsDead 0x517b5d` (`+0x08 &
-    /// 4`) and `UnitIsGhost 0x517c32` (`& 8`), the two predicates wow-re's §3 table pins to the
+    /// 4`) and `UnitIsGhost 0x517c32` (`& 8`), the two predicates the reference pins to the
     /// no-object leg.
     ///
     /// The falsifier is the roster byte's staleness: it only moves on a `SMSG_GROUP_LIST`, and

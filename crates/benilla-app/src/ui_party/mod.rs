@@ -6,12 +6,11 @@
 //! to the kicked player as the empty-body `SMSG_GROUP_UNINVITE`, and `SMSG_PARTY_COMMAND_RESULT`
 //! acks only the acting player. The real client composes every "%s joins the party." line
 //! engine-side from those packets against the GlobalStrings templates (the FrameXML never touches
-//! the `ERR_*` group strings; the mechanism is wow-re's verified errorId→GlobalStrings display,
+//! the `ERR_*` group strings; the mechanism is the reference's errorId→GlobalStrings display,
 //! `CGGameUI::DisplayError` 0x496720). benilla does the same here: [`GroupState`] mirrors the
 //! wire, and its `apply_*` methods return the finished lines for the net drain to push as
-//! CHAT_MSG_SYSTEM. The mapping is **byte-verified** (decision 0440's §5 fold-back, wow-re
-//! `system/object-layer/scratch/party-group-wire.md`, commit `a07c311c`): each opcode prints
-//! its own line and the GROUP_LIST diff prints the rest — there is NO empty-list state machine.
+//! CHAT_MSG_SYSTEM. In the mapping (decision 0440), each opcode prints its own line and the
+//! GROUP_LIST diff prints the rest — there is NO empty-list state machine.
 //!
 //! The line law (0440):
 //! - GROUP_LIST runs an **ungated** two-way roster diff: new guid → "%s joins the party."
@@ -105,12 +104,12 @@ pub struct GroupState {
     /// reaches the second for the ordinary player — their lockout list is empty, every answer says
     /// so, nothing ever changes, and the button they should not be able to press stays live (1561).
     ///
-    /// The real client fires per PACKET, not per change. VERIFIED off the bytes: the handler at
+    /// The real client fires per PACKET, not per change. The handler at
     /// `0x49e070` takes `jbe 0x49e19d` (`0x49e0d8`) when the entry count is zero — straight past
     /// the parse loop to `mov ecx, 0x21b` (539 = `UPDATE_INSTANCE_INFO`) and the one
     /// `call FrameScript_SignalEvent 0x703e50` at `0x49e1a7`, which is the function's only exit
-    /// and the event's only fire site in the binary (`re/events/event-firesites.tsv`). The empty
-    /// answer signals exactly like a full one.
+    /// and the event's only fire site in the binary. The empty answer signals exactly like a full
+    /// one.
     pub saved_instances_answers: u32,
     /// A ready-check TICKET, not a flag: every `MSG_RAID_READY_CHECK` open bumps it, so the feed
     /// fires `READY_CHECK` on a counter edge and a second check while the first popup is still up
@@ -147,8 +146,8 @@ impl GroupState {
         // one, and a solo-leader group has an empty member list *with* a leader guid).
         let leaving = leader == 0;
         // Raid wording keys off whichever side of the transition was a raid. INTERIM (0440):
-        // the §5 pinned the party line's `groupType==0` gate; the raid twin's exact trigger
-        // wasn't walked.
+        // the party line's `groupType==0` gate is pinned; the raid twin's exact trigger is not
+        // known.
         let (added, removed) = if group_type == 1 || (leaving && self.group_type == 1) {
             ("ERR_RAID_MEMBER_ADDED_S", "ERR_RAID_MEMBER_REMOVED_S")
         } else {
@@ -175,10 +174,9 @@ impl GroupState {
         }
         // The OTHER direction clears the raid-target board. `0x4ba550` — sole caller `0x5e6ebb`,
         // inside `SMSG_GROUP_LIST 0x7d`'s raid-flag-CLEAR leg — `rep stosd`-zeroes all eight slots
-        // and refreshes every formerly-marked unit (decision 1820, wow-re
-        // `object-layer/scratch/party-group-wire.md`). Without it a raid→party conversion leaves
-        // stale marks on screen: the icons are drawn from this board, and nothing else clears it
-        // short of a `0x321` for each slot, which the server does not send.
+        // and refreshes every formerly-marked unit (decision 1820). Without it a raid→party
+        // conversion leaves stale marks on screen: the icons are drawn from this board, and
+        // nothing else clears it short of a `0x321` for each slot, which the server does not send.
         //
         // A full disband needs no arm here — `leaving` above resets every group fact
         // ([`Self::leave_group`]), and the board is one. 1820 recorded this as "stale icons
@@ -255,8 +253,7 @@ impl GroupState {
         }
     }
 
-    /// `SMSG_PARTY_COMMAND_RESULT` — **the reference's own jump table, transcribed** (wow-re
-    /// `system/object-layer/scratch/party-command-result-law.md`, byte-verified §5).
+    /// `SMSG_PARTY_COMMAND_RESULT` — **the reference's own jump table, transcribed**.
     ///
     /// The handler `0x5e68b0` dispatches `dec eax; cmp eax,7; ja <silent>; jmp [4*eax+0x5e6a14]`,
     /// and each arm is one `CGGameUI::DisplayError(msgId)`. Returning the **message** rather than
@@ -888,7 +885,7 @@ mod tests {
     /// **The refusal table is the reference's, asserted by message id.**
     ///
     /// Each `result` must name the catalog row whose id the binary's own jump table pushes to
-    /// `DisplayError` (wow-re `party-command-result-law.md` §3, read out of the PE at `0x5e6a14`).
+    /// `DisplayError` (read out of the PE at `0x5e6a14`).
     /// Asserting the *id* rather than the sentence is the point, and this family is the reason:
     /// nothing about the displayed English distinguishes a right key from a wrong one here, and a
     /// plausible-looking `ERR_WRONG_FACTION` — which exists in neither `GlobalStrings.lua` nor the
