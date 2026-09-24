@@ -34,7 +34,7 @@ pub struct PageTextMaterialCatalog {
 
 impl PageTextMaterialCatalog {
     /// A catalog from `(id, basename)` rows — the shipped six are 1 Parchment · 2 Stone · 3 Marble
-    /// · 4 Silver · 5 Bronze · 6 Valentine (wow-re quest-material-reward-spell-bindings.md §1).
+    /// · 4 Silver · 5 Bronze · 6 Valentine (measured on the shipped file).
     pub fn from_rows(rows: &[(u32, &str)]) -> Self {
         Self {
             by_id: rows.iter().map(|&(id, n)| (id, n.to_string())).collect(),

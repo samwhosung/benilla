@@ -3,25 +3,25 @@
 //! (decision 0099 phase 2's data plane; schemas pinned by decision 0107, the chain table by 0955).
 //!
 //! Layout — VERIFIED against build 5875 (WDBC header dump of the extracted files, 2026-07-04;
-//! wow-re `system/dbc/scratch/spellvisual-schema.md` @ commit `ff91e7eb`, corroborated by vmangos
+//! the client's loaders `0x5508e0`/`0x550690`/`0x550460`, corroborated by vmangos
 //! `DBCStructure.h:613-640` `SpellVisualEntry` and our own header bytes):
 //!
 //! - **SpellVisual**: 2165 records × 16 fields × 64 B, all-`u32` (a 1-byte empty string block).
 //!   Field 0 = id; **field 1 = precastKit · field 2 = castKit · field 3 = impactKit · field 4 =
 //!   stateKit · field 5 = channelKit** — each a `SpellVisualKit` id, `0` = no kit at that stage.
-//!   The missile block (decision 0099 phase 4, wow-re `spell-visual-lifecycle.md` §Q4 — every
-//!   consumption byte-cited in the client's missile spawn `0x60a3d0`): **field 7 = the missile's
+//!   The missile block (decision 0099 phase 4 — every
+//!   consumption in the client's missile spawn `0x60a3d0`): **field 7 = the missile's
 //!   `SpellVisualEffectName` id** (`<1` → the ammo/weapon model; unresolvable → the client's
 //!   literal `Spells\ErrorCube.mdx`), **field 9 = the destination-attachment ordinal** (an index
-//!   into [`MISSILE_ATTACH_TABLE`], the client's `0x860a18` — dumped in wow-re
-//!   `spell-visual-apply.md` §5), and **field 10 = the missile's in-flight LOOP sound**
+//!   into [`MISSILE_ATTACH_TABLE`], the client's `0x860a18`), and **field 10 = the missile's
+//!   in-flight LOOP sound**
 //!   ([`SoundEntries`] id — Fireball's `FireMissileLoop`, the thrown dagger's `WeaponLoop`; the
-//!   client's per-missile loop handle `CMissile+0x44`, wow-re `w2f1.md`). Field 6 (`hasMissile`)
+//!   client's per-missile loop handle `CMissile+0x44`). Field 6 (`hasMissile`)
 //!   is never read by the missile spawn (its gate is `Spell.dbc` Speed alone) — its ONE reader
 //!   is the GO dest one-shot's suppressor ([`VisualStages::missile_gate`], 0797); field 8
 //!   (`missilePathType`) is dead-by-absence; **fields 11/12/13 are the dest-anchored block**
 //!   ([`VisualStages::area_gate`]/[`VisualStages::area_effect`]/[`VisualStages::area_kit`] —
-//!   wow-re `dynobject-visual-machine.md`, 0797). Stage
+//!   `0x5d57c0`/`0x5d55c0`, 0797). Stage
 //!   semantics (decision 0107 verdict 2): the stage sets *lifetime policy* only —
 //!   every populated slot on a reached row fires, precast persisting (reaped spell-id-keyed)
 //!   while cast/impact self-terminate.
@@ -30,18 +30,18 @@
 //!   route as melee swings — decision 0107 verdict 3); **field 13 = a `SoundEntries.dbc` id**;
 //!   **fields 3–11 are the nine `SpellVisualEffectName` emitter slots** (attach-point VFX —
 //!   decision 0099 phase 3, read here since that phase). Each slot's attach tag is a compile-time
-//!   immediate in the client's slot loop (`0x60edf0`, byte-cited push sites — wow-re
-//!   `spell-visual-apply.md` §1.3) and a **direct M2 `AttachmentID`**: in kit-field order,
+//!   immediate in the client's slot loop (`0x60edf0`, its push sites) and a **direct M2
+//!   `AttachmentID`**: in kit-field order,
 //!   [`KIT_SLOT_TAGS`]. **Field 12 (`kit+0x30`) is a TENTH effect slot** — read here as
-//!   [`VisualKit::world_effect`] (decision 0848): wow-re pinned its consumer as "the missile
+//!   [`VisualKit::world_effect`] (decision 0848): its consumer reads as "the missile
 //!   slot" (`0x60edf0` plays it inline via `0x61fcf0`, a `CEffect`-family node stamped with a
-//!   missile marker — `spell-visual-apply.md` §1.4), but the shipped table's population is
+//!   missile marker), but the shipped table's population is
 //!   **body/ground state models**, never projectiles: the aura-state family the nine slots miss
 //!   (Frost Nova's kit 285 → `Frost_Nova_state.mdx`, Net's 744 → `Net_State.mdx`, Entangling
 //!   Roots' 66, Web's 746) plus caster-feet rings on cast/impact kits (Thunderclap's 349,
 //!   Flamestrike's 420, Vanish's 389). Same `CEffect` lifecycle as the nine (spell-id-tagged on
-//!   the unit's `+0xb4` list, the stage sets lifetime — §1.5). Placement is byte-pinned (wow-re
-//!   `kit30-effect-slot.md`, folded back 0850): no bone — a one-time **world plant** at the
+//!   the unit's `+0xb4` list, the stage sets lifetime — `0x614150`). Placement (`0x620c86`,
+//!   decision 0850): no bone — a one-time **world plant** at the
 //!   owner's position/facing/scale, [`WORLD_EFFECT_TAG`]. **Field 14 is the kit's CAMERA SHAKE**
 //!   ([`VisualKit::shake`]) — a `SpellEffectCameraShakes.dbc` **group** id, not the "visual-group
 //!   fallback" earlier notes called it: 58 shipped kits carry one and all 58 values land on that
@@ -51,24 +51,22 @@
 //!   `CharProc` slots** — the
 //!   *character* half of a kit (the body's own alpha/tint, as opposed to the attach-point emitters):
 //!   five parallel 4-element arrays, `CharProcType[4]` @+0x3c then `CharParamZero/One/Two/Three[4]`
-//!   @+0x4c/+0x5c/+0x6c/+0x7c (wow-re `spellvisual-schema.md`, byte-pinned: all 20 consumed by the
+//!   @+0x4c/+0x5c/+0x6c/+0x7c (all 20 consumed by the
 //!   dispatcher `0x60d7c0`, which `lea edi,[kit+0x6c]` walks four times reading `[edi-0x30]` as the
 //!   type key). Read here as [`VisualKit::char_procs`]; the type semantics are
 //!   [`char_proc_type`]'s.
 //! - **SpellVisualEffectName**: 5 fields × 20 B. Field 0 = id; field 1 = a name string — a debug
 //!   label, and the lookup key for the client's boot-time HARDCODED-effect matcher (`0x61f5b0`
-//!   over a 14-string table: loot art, footsteps, breath, level-up…; wow-re
-//!   `loot-corpse-effect.md` + `levelup-ding.md`) — the `"HARDCODED *"` rows load into
-//!   [`SpellVisualCatalog::hardcoded_effect`]'s name→path map (two consumers today: the corpse
-//!   sparkle and the level-up ding); **field 2 = the effect model's `.mdx` path** (the
-//!   column every consumer reads — fields 3/4 are dead-by-absence, wow-re
-//!   `spellvisual-schema.md`; the emitter *scale* comes from kit CharProc params × the quality
-//!   tier, never from this table).
+//!   over a 14-string table: loot art, footsteps, breath, level-up…) — the `"HARDCODED *"` rows
+//!   load into [`SpellVisualCatalog::hardcoded_effect`]'s name→path map (two consumers today: the
+//!   corpse sparkle and the level-up ding); **field 2 = the effect model's `.mdx` path** (the
+//!   column every consumer reads — fields 3/4 are dead-by-absence in the reference; the emitter
+//!   *scale* comes from kit CharProc params × the quality tier, never from this table).
 //! - **SpellChainEffects**: 18 records × 8 fields × 32 B — the **beam/arc** geometry a kit's chain
 //!   `CharProc` draws (Chain Lightning's lightning, Drain Life's rope, C'Thun's eye beam). Its own
 //!   module: [`chain_effects`], decision 0955.
 //!
-//! **The none-sentinel, found empirically here (not pinned in the wow-re note):** on the real
+//! **The none-sentinel, found empirically here (not pinned by the reference):** on the real
 //! table, "no value" for both field 2 (anim) and field 13 (sound) is written as **either `0` or
 //! `0xFFFFFFFF`**, not consistently one or the other. Scanning all 1772 kits: 41 carry anim `0`,
 //! 875 carry anim `0xFFFFFFFF`, 856 carry a real id (max 203, inside `AnimationData.dbc`'s 208
@@ -105,8 +103,8 @@ const SPELL_VISUAL_FIELDS: usize = 16;
 const SPELL_VISUAL_KIT_FIELDS: usize = 35;
 
 /// The nine kit emitter slots' attach tags, **in kit-field order** (fields 3–11 ↔ this array's
-/// indices 0–8). Byte-pinned compile-time immediates in the client's slot loop (wow-re
-/// `spell-visual-apply.md` §1.3), each a **direct M2 `AttachmentID`**: Head(0x14), Chest(0x22),
+/// indices 0–8). Compile-time immediates in the client's slot loop (`0x60edf0`), each a
+/// **direct M2 `AttachmentID`**: Head(0x14), Chest(0x22),
 /// Base(0x13), LeftHand(0x15), RightHand(0x16), Breath(0x11), Special1–3(0x17–0x19).
 pub const KIT_SLOT_TAGS: [u16; 9] = [0x14, 0x22, 0x13, 0x15, 0x16, 0x11, 0x17, 0x18, 0x19];
 
@@ -115,13 +113,12 @@ pub const KIT_SLOT_TAGS: [u16; 9] = [0x14, 0x22, 0x13, 0x15, 0x16, 0x11, 0x17, 0
 /// `node+0x24` stays the ctor's −1), which in the placement walk `0x620be0` skips the entire
 /// bone pipeline and instead triggers a **one-time world plant** (`0x620c86`): transform =
 /// `translate(owner position) × yaw(owner facing) × scale(owner scale)`, baked at spawn — the
-/// model does NOT ride a bone and does not turn with the unit afterwards (wow-re
-/// `kit30-effect-slot.md`, §5 byte-arbitrated; decision 0848). Consumers key on this tag to
-/// plant in world space rather than attach.
+/// model does NOT ride a bone and does not turn with the unit afterwards (decision 0848).
+/// Consumers key on this tag to plant in world space rather than attach.
 pub const WORLD_EFFECT_TAG: u16 = u16::MAX;
 
 /// The missile **destination-attachment** ordinal table — the client's `0x860a18`, dumped
-/// byte-for-byte (wow-re `spell-visual-apply.md` §5, 11 live entries): [`KIT_SLOT_TAGS`] in
+/// byte-for-byte (11 live entries): [`KIT_SLOT_TAGS`] in
 /// kit-field order plus `0xf`/`0x10` at ordinals 9/10. `SpellVisual` field 9 indexes here to the
 /// M2 attach tag the missile homes to on a live target ([`VisualStages::missile_attach`]).
 pub const MISSILE_ATTACH_TABLE: [u16; 11] = [
@@ -140,7 +137,7 @@ pub const KIT_CHAR_PROCS: usize = 4;
 /// of a kit (the body's own render properties, not an attach-point emitter). The client's dispatcher
 /// `0x60d7c0` switches on [`Self::ty`] through a byte translation table (`0x60dc20`) into a 9-case
 /// jump table (`0x60dbfc`); each case reads whichever params it wants — the alpha and tint procs
-/// both read `params[0]` (wow-re `ghost-death-visuals.md` §2.3).
+/// both read `params[0]` (`0x60d972`, `0x60d840`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CharProc {
     /// `CharProcType[i]` — the dispatch key ([`char_proc_type`] names the ones we model). Never a
@@ -174,8 +171,7 @@ impl CharProc {
     /// ```
     ///
     /// `CharParamOne` is **not read by this arm** — stated because every shipped type-8 row
-    /// carries `20.0` there and a reader will look for its use (wow-re `charproc8-weapon-trail.md`
-    /// §1).
+    /// carries `20.0` there and a reader will look for its use.
     ///
     /// `None` for a zero duration: `0x5fe494 cmp eax,edi` / `je 0x5fe4b7` is the reference's own
     /// test, and a zero-duration arm fires nothing.
@@ -211,9 +207,9 @@ impl CharProc {
 
 /// The client's decode of a small integer stored in a `CharProc` **float** param column:
 /// `bits(param + 512.0f) >> 14 & 0xff`. Adding 512 forces the exponent, parking the integer part
-/// in known mantissa bits; the shift and mask lift it back out. Byte-pinned at `0x5d55c0` (the
-/// dynobject shard index, wow-re `dynobject-visual-machine.md`) and used identically by the chain
-/// proc for all three of its integer params (`0x60db19`–`0x60db6d`, decision 0955).
+/// in known mantissa bits; the shift and mask lift it back out. Used at `0x5d55c0` (the
+/// dynobject shard index) and identically by the chain proc for all three of its integer params
+/// (`0x60db19`–`0x60db6d`, decision 0955).
 ///
 /// The client applies **no bounds check** of its own — `mov cl,al` takes the byte and indexes with
 /// it — so callers clamp or bounds-test as the consumer requires.
@@ -249,7 +245,7 @@ impl TrailProc {
 
     /// The trail's starting alpha, `0..=255`. `100` on every shipped row (≈ 39 %) — and it is a
     /// *clock* as much as an opacity: the fade rate, the retained segment count and the
-    /// termination test are all `alpha`-derived (wow-re `charproc8-weapon-trail.md` §8).
+    /// termination test are all `alpha`-derived (`0x6c6560`).
     pub fn alpha(&self) -> u8 {
         (self.packed >> 24) as u8
     }
@@ -276,7 +272,7 @@ pub mod char_proc_type {
     /// back when it expires with the aura (`0x6203e0`, gated on the node's own `+0x2c & 0x4`).
     ///
     /// The rate is the per-bone `+0xb0` the animation clock multiplies its window by
-    /// (`timebase.md` §2: `t = trunc(f32(window) × rate) + bias`), and **arming an animation never
+    /// (`0x7145ae`: `t = trunc(f32(window) × rate) + bias`), and **arming an animation never
     /// touches it** — op4 `0x7121a0`'s success leg writes `+0xa4`/cursors and leaves `+0xb0` alone
     /// (only its disarm leg and `0x712910` write it). So the value persists across every re-arm for
     /// the aura's whole life, and `0x712910` re-bases `bias` so the *current frame* is preserved
@@ -293,8 +289,7 @@ pub mod char_proc_type {
     /// same-call effect: the proc writes `unit+0xd1c` (the packed colour) and `unit+0xd20` (the
     /// duration in ms), and the unit's **next** `PlayAnimation` (`0x5fe2f0`, the field's sole
     /// reader at `0x5fe48e`) hands both to each of its two weapon-hand trail objects and clears
-    /// the duration — so it fires exactly once per arm. See [`CharProc::as_weapon_trail`] and
-    /// wow-re `charproc8-weapon-trail.md`.
+    /// the duration — so it fires exactly once per arm. See [`CharProc::as_weapon_trail`].
     ///
     /// 34 of the 1772 kits carry it and for **18 of them it is the entire visual** — kit 324
     /// (Heroic Strike / Overpower / Mortal Strike / Bloodthirst / Rend, 218 spells), 3050
@@ -340,25 +335,23 @@ pub struct VisualStages {
     pub missile_attach: u32,
     /// Field 10: the `SoundEntries.dbc` id the missile sounds while it travels — a LOOPING whoosh
     /// on the thrown/ranged projectiles (the thrown dagger's `WeaponLoop.wav`, id 3318), the
-    /// client's per-missile loop handle (`CMissile+0x44`, wow-re `w2f1.md`; its volume is proximity
+    /// client's per-missile loop handle (`CMissile+0x44`; its volume is proximity
     /// -shaped by `0x61d790`). `None` = the row names no flight sound. Rung by
     /// `crate::entities::missile`, stopped when the projectile arrives.
     pub missile_sound: Option<u32>,
     /// Field 14: the `SoundEntries.dbc` id the `$TRD` anim event rings at the work/craft strike
     /// keyframe — the client's `$TRD` handler `0x62faa0` resolves the in-flight spell's visual to
-    /// this 16-dword row and plays its dword 14 (`[row+0x38]`, wow-re
-    /// `sound/scratch/gather-sound-anim-events.md`; decision 0562). Mining's visual 93 carries
-    /// 1143 "Mining Impact" (the pick clang), Herb's 91 carries 1142, the smithing crafts' 395
-    /// carries 1143 (the hammer). `None` = no strike sound.
+    /// this 16-dword row and plays its dword 14 (`[row+0x38]`; decision 0562). Mining's visual 93
+    /// carries 1143 "Mining Impact" (the pick clang), Herb's 91 carries 1142, the smithing
+    /// crafts' 395 carries 1143 (the hammer). `None` = no strike sound.
     pub strike_sound: Option<u32>,
     /// Field 6 (`+0x18`): the missile gate the dest one-shot checks — `SMSG_SPELL_GO` spawns a
     /// CEffect at the packet's DEST point only when this is **0** and [`Self::area_effect`] is
-    /// set (the client's `0x6e8088`–`0x6e8143`; wow-re `spell-go-dest-effect.md`). Nonzero =
+    /// set (the client's `0x6e8088`–`0x6e8143`). Nonzero =
     /// the missile owns the arrival, no dest one-shot.
     pub missile_gate: u32,
     /// Field 11 (`+0x2c`): the gate on a DynamicObject's **own** `.mdx` (visual A) — the model
-    /// resolve at `0x5d57c0` requires this ≠ 0 before reading [`Self::area_effect`] (wow-re
-    /// `dynobject-visual-machine.md`).
+    /// resolve at `0x5d57c0` requires this ≠ 0 before reading [`Self::area_effect`].
     pub area_gate: u32,
     /// Field 12 (`+0x30`): the `SpellVisualEffectName` id of the **dest-anchored model** — a
     /// DynamicObject's own `.mdx` (visual A, gated by [`Self::area_gate`]) and the GO dest
@@ -453,7 +446,7 @@ pub struct VisualKit {
     /// `aura_visual`, decision 0806), and the **dynobj emitter chain**, which scans for the FIRST
     /// type **9** slot — there `params[0]` encodes the shard-model table index (the exact small-int
     /// decode `bits(params[0] + 512.0) >> 14 & 0xff`, `0x5d55c0`) and `params[1]` is the emit rate
-    /// the graphics-quality factor multiplies (wow-re `dynobject-visual-machine.md`, decision 0797).
+    /// the graphics-quality factor multiplies (`0x6eb930`, decision 0797).
     pub char_proc_slots: [Option<CharProc>; KIT_CHAR_PROCS],
 }
 
@@ -487,7 +480,7 @@ impl VisualKit {
 
     /// The populated emitter slots as `(M2 attachment id, SpellVisualEffectName id)` pairs, in
     /// kit-field order — the client fires **all** populated slots at **every** stage (stage sets
-    /// lifetime policy only, wow-re `spell-visual-apply.md` §1.3) — then [`Self::world_effect`]
+    /// lifetime policy only, `0x60edf0`) — then [`Self::world_effect`]
     /// last, under the [`WORLD_EFFECT_TAG`] world-plant sentinel (decisions 0848/0850).
     pub fn effects(&self) -> impl Iterator<Item = (u16, u32)> + '_ {
         self.effect_slots
@@ -509,8 +502,8 @@ pub struct SpellVisualCatalog {
     effect_paths: HashMap<u32, String>,
     /// The `"HARDCODED *"`-named rows, name → (record id, path) — the client's engine-spawned effect set,
     /// resolved BY NAME once at boot exactly like this (`0x61f5b0` matches a 14-string baked
-    /// table against the name column: loot art, footsteps, breath, level-up…; wow-re
-    /// `loot-corpse-effect.md` + `levelup-ding.md`). Three consumers today: "HARDCODED Loot Art"
+    /// table against the name column: loot art, footsteps, breath, level-up…). Three consumers
+    /// today: "HARDCODED Loot Art"
     /// (id 14 → `Particles\LootFX.mdl`, the corpse sparkle), "HARDCODED Unit Level Up"
     /// (id 21 → `Spells\LevelUp\LevelUp.mdl`, the ding) and "HARDCODED Mount Poof"
     /// (id 1185 → `Spells\DruidMorph_Impact_Base.mdx`, the mount-up cloud — decision 0927).
@@ -670,7 +663,7 @@ fn effect_name_schema() -> Schema {
 
 /// `SpellVisualKit`'s 35-field schema: fields 0–14 are the ids/FKs (`u32`), **15–18 the signed
 /// `CharProcType` keys** and **19–34 the four float param arrays** — the client loads the params
-/// with `fld` (wow-re `spellvisual-schema.md`), so they are typed here rather than bit-cast at
+/// with `fld` (the dispatcher `0x60d7c0`), so they are typed here rather than bit-cast at
 /// every read.
 fn kit_schema() -> Schema {
     let mut s = Schema::new("SpellVisualKit");

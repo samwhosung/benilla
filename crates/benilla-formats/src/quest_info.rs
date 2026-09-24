@@ -26,7 +26,7 @@
 //! `quest_template.Type` carries exactly these sparse ids). A quest with `Type == 0` — the great
 //! majority — names no row and takes no tag.
 //!
-//! All of that is **§5-verified against the binary** (wow-re `ui/scratch/questlog-title-tag.md`):
+//! All of that is **read off the binary**:
 //! `0x4df930` reads the cached template's `+0x10`, bounds-checks it against the table's maxId
 //! (`0xc0d9d0`) and indexes `0xc0d9cc` with no arithmetic on the id; type `0` passes the bounds
 //! and dies on the zero-filled slot, which reaches Lua as `nil` because `lua_pushstring` tail-jumps

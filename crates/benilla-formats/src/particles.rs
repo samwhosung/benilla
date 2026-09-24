@@ -3,8 +3,8 @@
 //! `benilla-m2` parses only the render path and deliberately skips the cosmetic chunks, so the
 //! particle emitters are read here. The post-vanilla `M2ParticleEmitter` (with `texture_file_data_ids`,
 //! `enable_encryption`, WoD flag bits) does not match 1.12; the vanilla layout is a fixed
-//! **0x1f8-byte** record. The byte layout is from `wow-5875-re` (`FUN_0070ebd0` @ `0x70ebd0`,
-//! `m2-decomp.c`) and **difftested** here against `ElwynnCampfire.m2` (see `tests/`):
+//! **0x1f8-byte** record. The byte layout is the reference's (`FUN_0070ebd0` @ `0x70ebd0`) and
+//! **difftested** here against `ElwynnCampfire.m2` (see `tests/`):
 //!
 //! ```text
 //! header array : count @ MD20+0x13c, ptr @ MD20+0x140         record stride 0x1f8
@@ -25,15 +25,15 @@
 //! ```
 //!
 //! The two keyed tracks here (emission rate, enabled) bake **one loop per sequence** into
-//! [`EmitTiming`] through the same FN1 kernel as the material alpha (`models::key_anim`,
-//! decision 0641): the reference samples both per frame through the *playing* sequence's own key
-//! window (`0x713d50` — wow-re `part-emission-rate-animated.md` §2/§3), so what an emitter does
-//! is a function of which sequence its model instance is playing. A quest GameObject authors its
+//! [`EmitTiming`] through the same key-search kernel (`0x713d50`) as the material alpha
+//! (`models::key_anim`, decision 0641): the reference samples both per frame through the
+//! *playing* sequence's own key window (`0x713d50`), so what an emitter does is a function of
+//! which sequence its model instance is playing. A quest GameObject authors its
 //! explosion inside one-shot clips and an OFF window in every idle sequence; baking only
 //! sequence 0's band parked that choreography at its end value forever (bug B27).
 //!
-//! The record tail (+0x180..) is the wow-re `part-simspace-fields.md` §5-verified map (their
-//! `ac915a7d`): the loader `0x70ebd0` remaps file+0x188/+0x18c → runtime twinkleScale min/max
+//! The record tail (+0x180..) is the reference's own map: the loader `0x70ebd0` remaps
+//! file+0x188/+0x18c → runtime twinkleScale min/max
 //! (delta = max − min at rt+0x1c0), NOT a size multiplier — see [`ParticleEmitterDef::twinkle`].
 
 use std::io::Cursor;
@@ -67,16 +67,14 @@ pub enum ParticleBlend {
     /// solid little rocks, bone shards, ice splinters, each authored as a shape on a
     /// fully-transparent field.
     ///
-    /// Every step is byte-verified in wow-re (see [`ParticleBlend::Opaque`] for the shared half):
+    /// The steps (see [`ParticleBlend::Opaque`] for the shared half):
     /// the emitter's own blend field decides its list at `0x7085db` (`cmp word[rec+0x28],1; ja` —
-    /// mode ≤ 1 **and** instance alpha ≥ 0.99999 lands in the `+0x4c` **opaque** list, i.e. pass 0,
-    /// `part-flush-emitter-depth.md` §1), pass 0 takes promotion-table row 0
-    /// `0x811fe0 = {0,1,2,10,3,4,5}` so mode 1 stays **EGxBlend 1**
-    /// (`m2-blend-promotion-zfill.md` §1), EGxBlend 0/1 → `glDisable(GL_BLEND)`
-    /// (`0x59d563`, `egxrs-depth-blend-states.md`), and `0x70c256` sets the ref from the RAW mode —
-    /// `round(instanceAlpha × 224.0)`, `[0x812034] = 224.0f` — never from the pass
-    /// (`m2-blend-promotion-zfill.md` §2). Depth-write stays ON because the synthetic material only
-    /// sets its z-write-off bit for `blendMode > 1` (`0x70d8f1`, `part-scene-multipliers.md` §0).
+    /// mode ≤ 1 **and** instance alpha ≥ 0.99999 lands in the `+0x4c` **opaque** list, i.e.
+    /// pass 0), pass 0 takes promotion-table row 0 `0x811fe0 = {0,1,2,10,3,4,5}` so mode 1 stays
+    /// **EGxBlend 1**, EGxBlend 0/1 → `glDisable(GL_BLEND)` (`0x59d563`), and `0x70c256` sets the
+    /// ref from the RAW mode — `round(instanceAlpha × 224.0)`, `[0x812034] = 224.0f` — never from
+    /// the pass. Depth-write stays ON because the synthetic material only sets its z-write-off bit
+    /// for `blendMode > 1` (`0x70d8f1`).
     ///
     /// Folding this into `Opaque` — no discard at all — paints the transparent field solid: the
     /// Lesser Rock Elemental's debris (`PARTROCK.BLP`, 31 % of its texels at α = 0) came out as
@@ -90,7 +88,7 @@ pub enum ParticleBlend {
 
 /// One segment's integer **flipbook cell ramp** — the authored `(begin, end)` pair and the
 /// `(base, span)` the reference derives from it at load (`0x7b9da0` head / `0x7b9de0` tail, both
-/// pure-integer; wow-re `part-cell-flipbook-ramp.md` §2).
+/// pure-integer).
 ///
 /// The two build arms are deliberately **asymmetric**, and that asymmetry is the whole mechanism:
 /// the ramp covers `N = |end − begin| + 1` cells, each getting `1/N` of the segment, travelling in
@@ -152,8 +150,8 @@ impl CellRamp {
 /// age/lifespan`. Colour and size are **3-key ramps** evaluated as two linear segments split at
 /// [`Self::mid`]: key0→key1 over `u∈[0,mid]`, then key1→key2 over `u∈[mid,1]`. The flipbook cells
 /// are a different shape — a `(begin, end)` [`CellRamp`] **per segment**, and there are two
-/// independent sets of them (head quad, tail streak). Byte layout + math verified in `wow-5875-re`
-/// (`FUN_0070ebd0` builder, `FUN_007b9b10` evaluator, `part-cell-flipbook-ramp.md`) and difftested
+/// independent sets of them (head quad, tail streak). Byte layout + math are the reference's
+/// (`FUN_0070ebd0` builder, `FUN_007b9b10` evaluator) and difftested
 /// against `ElwynnCampfire.m2`. These drive the believable flame fade / grow / flicker.
 #[derive(Debug, Clone, Copy)]
 pub struct OverLife {
@@ -170,7 +168,7 @@ pub struct OverLife {
     /// The **tail** streak's own, independent flipbook ramp: A (`+0x174/+0x176`), B
     /// (`+0x178/+0x17a`). The reference emits two cell indices per particle and the tail quad reads
     /// this one — a model whose tail ramp differs from its head ramp animates the streak
-    /// separately (wow-re `part-cell-flipbook-ramp.md` §4, correcting `part-quad-tail-twinkle.md`).
+    /// separately (the tail quad's read, `0x7b304e`).
     pub tail_cells: [CellRamp; 2],
     /// Per-segment flipbook **repeat count** (`+0x16c`/`+0x172`, `fild`-converted at load). `1.0`
     /// (the ctor default, and what nearly all content authors) is one pass; anything else cycles
@@ -196,7 +194,7 @@ impl OverLife {
     /// Sample every ramp at normalized age `u` (0..1).
     pub fn sample(&self, u: f32) -> OverLifeSample {
         let u = u.clamp(0.0, 1.0);
-        // A `mid` of 0 divides by zero in the reference (§7 of the wow-re note: it walks NaN into
+        // A `mid` of 0 divides by zero in the reference (`0x7b9cf0`'s `fdivr`: it walks NaN into
         // the sampler); no shipped emitter authors one, and we refuse to reproduce the fault.
         let mid = self.mid.clamp(1e-3, 1.0);
         let (k0, k1, t, seg) = if u <= mid {
@@ -206,10 +204,9 @@ impl OverLife {
         };
         // **The endpoint inset, and it is the only normalized time the reference has.** `0x7b9b10`
         // computes `t·0.99 + 0.005` once, over its own `age` argument slot, and every consumer
-        // reloads that slot — all four colour channels, the size, and both cell ramps (verified
-        // instruction by instruction, wow-re `part-cell-flipbook-ramp.md` §3a "scope of the
-        // inset"). So a particle at a segment's start sits **0.5 % along** its colour and size
-        // ramps, never exactly on the authored key, and 99.5 % at the end.
+        // reloads that slot — all four colour channels, the size, and both cell ramps (read
+        // instruction by instruction). So a particle at a segment's start sits **0.5 % along** its
+        // colour and size ramps, never exactly on the authored key, and 99.5 % at the end.
         //
         // For the CELLS the inset is not a rounding artefact but load-bearing: co-designed with
         // the ramp's ±1, it is the only thing making `cell(0) == begin` and `cell(1) == end` hold
@@ -221,10 +218,10 @@ impl OverLife {
             *slot = self.color[k0][c] + (self.color[k1][c] - self.color[k0][c]) * t;
         }
         let size = self.scale[k0] + (self.scale[k1] - self.scale[k0]) * t;
-        // The repeat count cycles the FLIPBOOK ONLY — an explicit verified negative, and visible in
+        // The repeat count cycles the FLIPBOOK ONLY — an explicit negative, and visible in
         // the reference's own ordering: colour and size are computed and stored out before the
         // `rec+0x50 != 1.0` branch is even evaluated, and the wrapped coefficient never becomes `t`
-        // (§3b). So a 5× swarm emitter flaps its wings five times while fading exactly once.
+        // (`0x7b9bcc`). So a 5× swarm emitter flaps its wings five times while fading exactly once.
         let ct = if self.repeat[seg] != 1.0 {
             (t * self.repeat[seg]).fract()
         } else {
@@ -242,8 +239,8 @@ impl OverLife {
 /// A SPLINE (type-3) emitter's authored curve: a flattened **cubic Bézier chain** (K segments,
 /// `3K+1` control points: `P, out-tangent, in-tangent, P, …`), **arc-length parameterized** — the
 /// reference computes per-segment arc lengths into a knot array at load (`0x7b9a80` →
-/// `0x4532e0`; the knots are NOT on disk) and the spawn kernel's `t ∈ [0,1]` walks the chain by
-/// normalized arc length (wow-re `part-spline-file-layout.md` + `part-shape-kernels.md` §3). Our
+/// `0x4532e0`; the knots are NOT on disk) and the spawn kernel `0x7b9500`'s `t ∈ [0,1]` walks the
+/// chain by normalized arc length. Our
 /// per-segment length is a 16-chord subdivision (the reference's `0x453e50` method is untraced —
 /// any smooth-curve length approximation lands within a fraction of a percent).
 #[derive(Debug, Clone)]
@@ -350,15 +347,15 @@ pub struct ParticleEmitterDef {
     /// needs the RAW blend field, which [`ParticleBlend`] collapses (5/6 fold to `Alpha`), so the
     /// verdict is baked here at parse rather than re-derived downstream.
     pub lit: bool,
-    /// **Geometry model** (file+0x18 count / +0x1c offset, an `M2Array<char>` path — wow-re
-    /// `part-model-particles.md`): when it names a resolvable `.m2`, this emitter spawns tiny
+    /// **Geometry model** (file+0x18 count / +0x1c offset, an `M2Array<char>` path, loaded by
+    /// `0x7b1c80`): when it names a resolvable `.m2`, this emitter spawns tiny
     /// 3-D MODEL instances instead of billboard quads (Whirlwind's blades, Cone of Cold's
     /// shards, the cyclones). `None` when unauthored.
     pub geometry_model: Option<String>,
-    /// **Recursion model** (file+0x20 / +0x24 — wow-re `part-child-recursion.md`): the named
-    /// model's OWN particle emitters (capped at 4) become CHILD emitters driven once per live
-    /// parent particle per frame at the particle's position (Fire Blast's impact sparks, bomb
-    /// explosions). `None` when unauthored.
+    /// **Recursion model** (file+0x20 / +0x24 — wired by `0x7b5dd0`, spawned per particle at
+    /// `0x7b5b9f`): the named model's OWN particle emitters (capped at 4) become CHILD emitters
+    /// driven once per live parent particle per frame at the particle's position (Fire Blast's
+    /// impact sparks, bomb explosions). `None` when unauthored.
     pub recursion_model: Option<String>,
     /// Particle texture (`.blp` path, as embedded in the M2 textures table). `None` if unresolved.
     pub texture: Option<String>,
@@ -382,40 +379,39 @@ pub struct ParticleEmitterDef {
     /// entirely at the caster's feet (decision 0844).
     pub params: EmitParams,
     /// Velocity **drag** (file +0x194; a plain scalar, not a track — the builder copies it straight to
-    /// the runtime emitter's `+0x1e0` at `m2-decomp.c:8950`, *outside* the ten track setters). Each
-    /// frame the runtime applies `vel −= min(dt·drag, 1)·vel` (verified `particle_integrate` @
-    /// `0x7b2680`, step 4) — exponential
+    /// the runtime emitter's `+0x1e0` at `0x70ffdd`, *outside* the ten track setters). Each
+    /// frame the runtime applies `vel −= min(dt·drag, 1)·vel` (the integrator `0x7b2680`, after
+    /// its gravity step) — exponential
     /// velocity decay that caps a particle's total travel near `speed/drag`. Load-bearing for props
     /// that author a *fast, long-lived, zero-gravity* jet and rely on drag to contain it: e.g.
     /// `CandelabraTallWall01` (speed 0.56, life 6, gravity 0, **drag 10** → a ~0.06 yd flicker; with
     /// no drag the same particle coasts 3.3 yd to the ceiling). 0 = no drag.
     pub drag: f32,
-    /// **Tail time** (file +0x17c, seconds — wow-re `part-quad-tail-twinkle.md`, their `65b8305b`):
+    /// **Tail time** (file +0x17c, seconds — the quad writer's tail block `0x7b3041`):
     /// a tail-mode particle (`head_tail` 1/2) renders a velocity-projected streak of world length
     /// `|velocity| · tail_time`, trailing behind the motion; file flag `0x400` additionally clamps
     /// the time to the particle's age (the streak grows from zero at birth).
     pub tail_time: f32,
     /// **Tumble** — the model particles' angular-velocity range (file +0x19c min / +0x1a8 max,
-    /// C3Vectors, rad/s — wow-re `part-model-particles.md` §b): each birth rolls a body-frame
+    /// C3Vectors, rad/s — rolled in the spawn `0x7b2420`): each birth rolls a body-frame
     /// spin vector. The reference's roll carries a VERIFIED original-client asymmetry — only X
     /// honors `min + u·range`; Y and Z multiply a raw `[1,2)` mantissa by their range alone
     /// (their min is loaded but never read) — which a fidelity consumer must replicate.
     pub angular_velocity_min: [f32; 3],
     pub angular_velocity_max: [f32; 3],
-    /// **Emitter-motion inherit scale** (file +0x190 → runtime +0x1c4 — wow-re
-    /// `part-emitter-motion.md` §1, byte-verified `0x70ff71/0x70ff77`; closes the field the old
-    /// tail map left "?"): scales the inherited velocity a flag-0x40 emitter feeds its births
+    /// **Emitter-motion inherit scale** (file +0x190 → runtime +0x1c4, `0x70ff71/0x70ff77`):
+    /// scales the inherited velocity a flag-0x40 emitter feeds its births
     /// (see [`Self::inherits_emitter_motion`]).
     pub inherit_scale: f32,
-    /// **Follow pairs** (file +0x1c4..+0x1d0 — wow-re `part-emitter-motion.md` §2, the
-    /// `0x7b5d30` setter): two authored (emitter speed → follow fraction) samples defining the
-    /// follow-delta response line; see [`Self::follow_line`].
+    /// **Follow pairs** (file +0x1c4..+0x1d0 — the `0x7b5d30` setter): two authored (emitter
+    /// speed → follow fraction) samples defining the follow-delta response line; see
+    /// [`Self::follow_line`].
     pub follow_speed1: f32,
     pub follow_scale1: f32,
     pub follow_speed2: f32,
     pub follow_scale2: f32,
-    /// **Twinkle** — the per-frame flicker modulation (file +0x180/+0x184/+0x188/+0x18c; wow-re
-    /// `part-simspace-fields.md`, byte-verified in the quad writer `0x7b2a50`). The rendered half-
+    /// **Twinkle** — the per-frame flicker modulation (file +0x180/+0x184/+0x188/+0x18c; the quad
+    /// writer `0x7b2a50`). The rendered half-
     /// size is the over-life scale ramp × a **gated** twinkle multiplier:
     /// `min ≠ max ⇒ noise(speed·age)·(max − min) + min`, **skipped entirely when `min == max`**
     /// (a degenerate range — `{0,0}` and `{1,1}` alike burn steady at ramp size; the kobold candle's
@@ -428,8 +424,8 @@ pub struct ParticleEmitterDef {
     pub twinkle_min: f32,
     pub twinkle_max: f32,
     /// SPLINE (type-3) curve data — `Some` only when the record authors a valid Bézier chain
-    /// (file+0x1d4 count / +0x1d8 offset, `N = 3·⌊count/3⌋+1` C3Vectors — wow-re
-    /// `part-spline-file-layout.md`, VERIFIED). For splines the generic emission fields are
+    /// (file+0x1d4 count / +0x1d8 offset, `N = 3·⌊count/3⌋+1` C3Vectors — copied via
+    /// `0x7b9a80`). For splines the generic emission fields are
     /// **repurposed** (each setter reads its track's `values[0]`): `area_length`/`area_width`
     /// = **tMin/tMax** (the spawned arc-fraction window, clamped [0,1]), `vertical_range` =
     /// the **tangent-spin range ψ** (birth velocity = +Z rotated about the local tangent by
@@ -450,9 +446,9 @@ pub struct ParticleEmitterDef {
 
 impl ParticleEmitterDef {
     /// File flag `0x10` (→ runtime `0x100` — the loader's flag word is a **non-identity remap**,
-    /// wow-re `part-simspace-fields.md` corrections `1f40db0b`, byte block `0x70faf8–0x70fc44`):
-    /// **the storage-space choice, and so the ride-vs-trail switch** (wow-re
-    /// `part-emitter-motion.md` §2c, byte-settled). SET ⇒ the spawn stores raw emitter-LOCAL
+    /// byte block `0x70faf8–0x70fc44`):
+    /// **the storage-space choice, and so the ride-vs-trail switch** (spawn `0x7b8a9a`, draw
+    /// `0x7b3ef9`). SET ⇒ the spawn stores raw emitter-LOCAL
     /// pos/vel and the draw folds the live emitter matrix back in every frame: the whole cloud
     /// rides the emitter rigidly, rotation and all (the chandelier's candle flames ride the swing;
     /// a carried torch is flagged for it). CLEAR ⇒ the spawn bakes pos/vel into WORLD and the draw
@@ -460,14 +456,13 @@ impl ParticleEmitterDef {
     /// host lays a trail `host speed × particle lifetime` long.
     ///
     /// This doc said the opposite until 1578 — "a moving model carries its flame; there is NO
-    /// world-frozen trail mode" was the reading two earlier RE rounds built on a null test (a
-    /// kobold's 0.2 s candle smear, too small to see), and `part-emitter-motion.md` §2c refuted it
-    /// with the spawn/draw pairing plus a 7860-emitter corpus census.
+    /// world-frozen trail mode" rested on a null test (a kobold's 0.2 s candle smear, too small
+    /// to see); the spawn/draw pairing and a 7860-emitter corpus census refute it.
     pub fn model_space(&self) -> bool {
         self.flags & 0x10 != 0
     }
-    /// File flag `0x4000` (→ runtime `0x40000` — wow-re `part-emitter-motion.md` §2/§2b,
-    /// §5-resolved): live particles keep exactly **[`Self::follow_line`]'s fraction (≤ 1) of
+    /// File flag `0x4000` (→ runtime `0x40000` — the integrator's follow add at `0x7b2744`):
+    /// live particles keep exactly **[`Self::follow_line`]'s fraction (≤ 1) of
     /// the emitter's per-frame world motion** — at saturation the trail rides the emitter
     /// rigidly, below it lags toward a world-frozen trail; it never leads. (The reference's
     /// baseline for this content class is world-frozen — its emitter motion folds into the
@@ -488,7 +483,7 @@ impl ParticleEmitterDef {
             (slope, self.follow_scale1 - slope * self.follow_speed1)
         })
     }
-    /// File flag `0x40` (→ runtime `0x400` — wow-re `part-emitter-motion.md` §1, VERIFIED):
+    /// File flag `0x40` (→ runtime `0x400` — the inherit block at `0x7b53ce`):
     /// births inherit the emitter's recent motion. The emitter keeps a ~30 Hz inherit-velocity
     /// vector — at each trigger (accumulated dt > 1/30 s), `oneFrameΔ · ((1/30)/accum) ·
     /// inherit_scale`, zeroed while no particles are live — and each birth adds
@@ -524,13 +519,13 @@ impl ParticleEmitterDef {
     pub fn tail_clamps_to_age(&self) -> bool {
         self.flags & 0x400 != 0
     }
-    /// File flag `0x200` (→ runtime `0x8000` — wow-re `part-model-particles.md` §b): each
+    /// File flag `0x200` (→ runtime `0x8000` — tested in the spawn `0x7b2420`): each
     /// tumble axis's rolled angular velocity is independently sign-flipped with probability ½
     /// (three extra draws) — the model particles' spin-direction randomizer.
     pub fn tumble_random_sign(&self) -> bool {
         self.flags & 0x200 != 0
     }
-    /// File flag `0x2000` (→ runtime `0x20000` — wow-re `part-groundsnap-zhook.md`, VERIFIED):
+    /// File flag `0x2000` (→ runtime `0x20000`):
     /// the **at-spawn ground snap**. Once, at each birth (anchored mode only — the shape
     /// kernels call the hook `0x7b2140` inside their bit-0x100-CLEAR branch), the client
     /// probes **20 yd straight down** for terrain OR WMO/doodad geometry (`0x672b60` →
@@ -551,18 +546,17 @@ impl ParticleEmitterDef {
     /// skipped, so the `rate·dt` pour can never run for it. Re-arms only when the gate falls
     /// (a looping clip's next pass). This flag is why the Feint/Eviscerate impact's plume and
     /// crescents are over ~0.5 s while the same-shaped `Eviscerate_Cast_Hands` flame (bit clear)
-    /// pours for its whole 1.6 s clip (wow-re `part-emission-burst-flag.md`, byte-arbitrated).
+    /// pours for its whole 1.6 s clip.
     pub fn burst(&self) -> bool {
         self.flags & 0x8000 != 0
     }
     /// File flag `0x1000` (→ runtime `0x2000`): the head quad does NOT billboard — it lies flat
     /// in the emitter's model-space XY plane, carried by the live model→world matrix (the
     /// community "XYQuad"; the impact crescents, state rings, fish-school splash rings).
-    /// Byte-pinned end to end in wow-re: corners = the ±1 XY unit square (z = 0) × the draw
+    /// Corners = the ±1 XY unit square (z = 0) × the draw
     /// matrix — camera-independent, unit half-extent exactly like the billboard corner table —
-    /// and quad spin is Rodrigues about the quad-plane normal (consumption
-    /// `part-quad-tail-twinkle.md` §3, builder semantics `part-tiled-corner-builder.md`, both
-    /// VERIFIED).
+    /// and quad spin is Rodrigues about the quad-plane normal (consumption `0x7b2c25`, the
+    /// corner-table build `0x7b41a3`).
     pub fn xy_quad(&self) -> bool {
         self.flags & 0x1000 != 0
     }
@@ -595,8 +589,9 @@ fn le_vec3(b: &[u8], o: usize) -> [f32; 3] {
 }
 
 /// Read one raw vanilla M2Track (28 bytes at `track`) into the shared typed shape — **absolute**
-/// key timestamps plus the per-sequence `ranges` windows the FN1 bake indexes. `benilla-m2` skips
-/// the cosmetic chunks, so the two emitter timing tracks are lifted here; `elem`/`read` decode one
+/// key timestamps plus the per-sequence `ranges` windows the key-search bake indexes.
+/// `benilla-m2` skips the cosmetic chunks, so the two emitter timing tracks are lifted here;
+/// `elem`/`read` decode one
 /// value (`f32`, or the enabled gate's `u8` projected to 0/1).
 fn read_raw_track(
     b: &[u8],
@@ -647,7 +642,7 @@ fn blend_of(v: u8) -> ParticleBlend {
 
 /// `DAT_00811fa8` — the reference's per-blend-mode lighting table, indexed by the emitter's RAW
 /// blend field (file+0x28): the multiply/modulate modes light nothing, every other mode does
-/// (wow-re `part-scene-multipliers.md` §1, VERIFIED at `0x70bb0a`).
+/// (read at `0x70bb0a`).
 const LIGHTING_BY_BLEND: [bool; 7] = [true, true, true, true, true, false, false];
 
 /// Does the reference draw this emitter's quads **LIT** by the scene?
@@ -655,7 +650,7 @@ const LIGHTING_BY_BLEND: [bool; 7] = [true, true, true, true, true, false, false
 /// A particle emitter has no material of its own: the reference *synthesizes* an `M2Material` from
 /// the file record every draw (`0x70d8b0`) and runs it through the SAME batch state producer as an
 /// ordinary mesh submesh, so `GL_LIGHTING` (EGxRs id `0x0e`) is decided exactly as it is for a
-/// mesh. Byte-verified at `0x70baf0` @`0x70bb00` (wow-re `part-scene-multipliers.md` §1):
+/// mesh. At `0x70baf0` @`0x70bb00`:
 ///
 /// ```text
 /// lit  ⇔  (file+0x04 bit 0x1 CLEAR)  AND  DAT_00811fa8[file+0x28] ≠ 0
@@ -813,8 +808,8 @@ pub fn parse_m2_particle_emitters(bytes: &[u8]) -> Result<Vec<ParticleEmitterDef
             ],
             // The +0x168..+0x17b block is TEN u16s, read `{head A, head B, tail A, tail B}` with a
             // repeat count wedged after each head pair — not the eight that wowdev's
-            // `lifespanUVAnim[3]/decayUVAnim[3]/tailUVAnim[2]` naming implies (wow-re
-            // `part-cell-flipbook-ramp.md` §1; +0x17c is already the tail LENGTH dword).
+            // `lifespanUVAnim[3]/decayUVAnim[3]/tailUVAnim[2]` naming implies (`0x70ebd0`'s reads;
+            // +0x17c is already the tail LENGTH dword).
             head_cells: [
                 CellRamp::new(le_u16(bytes, e + 0x168), le_u16(bytes, e + 0x16a)),
                 CellRamp::new(le_u16(bytes, e + 0x16e), le_u16(bytes, e + 0x170)),
@@ -891,7 +886,7 @@ mod tests {
 
     /// **File bit 0x1 is UNLIT, not "lit"** — the polarity this whole mechanism turns on, and the
     /// one the community table gets backwards (wowdev: "0x1 = affected by lighting"; the binary
-    /// forces `GL_LIGHTING` OFF on that bit, wow-re `part-scene-multipliers.md` §1 @`0x70bb00`).
+    /// forces `GL_LIGHTING` OFF on that bit @`0x70bb00`).
     /// Inverting it would light exactly the wrong 95% of the corpus: every fire and spell effect
     /// would go dim at night while the environment sheets stayed full-white cutouts — a change
     /// that "works" on any single model you happen to check first.
@@ -1036,8 +1031,8 @@ mod tests {
         );
     }
 
-    /// The real `FlameStrike_Area.m2` — the spline-record law on real content (the
-    /// `part-spline-file-layout.md` corpus caveat, resolved): e2..e5 are type-3 emitters whose
+    /// The real `FlameStrike_Area.m2` — the spline-record law on real content: e2..e5 are
+    /// type-3 emitters whose
     /// control-point counts land exactly on the `3K+1` flattened-Bézier law (16 and 19), with
     /// the repurposed fields reading sanely (t window [0,1], no spin/scatter — the fire
     /// columns sit ON their authored descent curves with zero birth velocity).

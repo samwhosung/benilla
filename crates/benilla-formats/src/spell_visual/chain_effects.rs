@@ -57,15 +57,13 @@
 //!
 //! ## Layout — VERIFIED against build 5875
 //!
-//! **18 records × 8 fields × 32 B** (header dumped from the extracted file; wow-re
-//! `system/dbc/scratch/spellvisual-schema.md` records the same shape from the loader's own
-//! field-count assert, plus the client-DB globals `records 0xc0d848 / idIndex 0xc0d850 /
-//! maxId 0xc0d854`, loader `0x54e980`). Ids are `1..=13, 15, 17..=20` — note `14` and `16` are
-//! absent, so an id is a lookup, never an index.
+//! **18 records × 8 fields × 32 B** (header dumped from the extracted file; the reference shows
+//! the same shape from the loader's own field-count assert, plus the client-DB globals
+//! `records 0xc0d848 / idIndex 0xc0d850 / maxId 0xc0d854`, loader `0x54e980`). Ids are
+//! `1..=13, 15, 17..=20` — note `14` and `16` are absent, so an id is a lookup, never an index.
 //!
-//! **The columns — VERIFIED** (wow-re `system/spell/scratch/chain-beam-law.md`, the §5 dispatched
-//! with 0955; 4 agents, every contested point re-read at the bytes). Two of the community names
-//! this module first carried were **wrong**, and both mattered:
+//! **The columns** (decision 0955). Two of the community names this module first carried were
+//! **wrong**, and both mattered:
 //!
 //! | field | name | meaning |
 //! |---|---|---|
@@ -77,8 +75,8 @@
 //! | 6 | ~~`SegDelay`~~ **`BoltStagger`** (ms) | the delay between HOPS lighting up — `Bolt[i].start = t0 + i × field6` (`0x6ec9da`), its one consumer. It never reaches the *renderer*, which is what makes it look dead from the geometry side; it is what makes a 3-hop Chain Lightning arc **outward** rather than appearing all at once |
 //! | 7 | `Texture` | the beam's texture |
 //!
-//! The beam is **never tinted**: its colour word is always `0xFFFFFFFF`. Render state, settled
-//! against wow-re's own verified `EGxRs` map: **additive `SRC_ALPHA/ONE`, two-sided, depth-write
+//! The beam is **never tinted**: its colour word is always `0xFFFFFFFF`. Render state, set in
+//! `CLightning::Render 0x7afcb0`: **additive `SRC_ALPHA/ONE`, two-sided, depth-write
 //! OFF, fog off, emissive white, alpha-test `GEQUAL 1/255`**.
 //!
 //! **Geometry:** a chain is one polyline of `count+1` **nodes** and `count` **hops** running

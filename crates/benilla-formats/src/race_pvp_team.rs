@@ -13,8 +13,8 @@
 //! 5efe54  (any bound/NULL failure)                 -> -1
 //! ```
 //!
-//! (wow-re `system/ui/scratch/honor-panel-law.md` §3.11, VERIFIED; the `0`/`1` assignment is
-//! settled there against the shipped `FactionGroup.dbc` and `GlobalStrings.lua`, not inferred.)
+//! (The `0`/`1` assignment is settled against the shipped `FactionGroup.dbc` and
+//! `GlobalStrings.lua`, not inferred.)
 //!
 //! **This is not `UnitFactionGroup`**, which reads the live `UNIT_FIELD_FACTIONTEMPLATE`
 //! (`0x5166b8`/`0x5166be`) and so genuinely loses its side under GM mode. Confusing the two is

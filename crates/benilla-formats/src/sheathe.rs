@@ -1,5 +1,5 @@
 //! `SheatheSoundLookups.dbc` — the draw/stow sound table (the client's runtime
-//! `AUSHEATHSOUNDHASH`; wow-re sound node, wave2-CD).
+//! `AUSHEATHSOUNDHASH`, its entry alloc `0x45d3a0`).
 //!
 //! Layout — VERIFIED against build 5875 (header + full dump with SoundEntries name joins,
 //! 2026-07-03): **33 × 7 × 28 B**: `ID(0), ItemClass(1), ItemSubclass(2), Material(3),

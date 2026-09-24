@@ -5,8 +5,8 @@
 //! (`vmangos-src/src/game/Database/DBCStructure.h`'s `SkillLineEntry`/`SkillLineAbilityEntry`
 //! structs + `DBCfmt.h`'s `SkillLinefmt`/`SkillLineAbilityfmt` format strings): vmangos parses
 //! these two tables straight off the same build-5875 client data benilla reads, so its struct
-//! layout — not an empirical guess, not even wow-re's own notes (none exist for these two tables,
-//! grepped `system/dbc`) — is the strongest ground available, the same standing this codebase
+//! layout — not an empirical guess, and with no byte derivation of these two tables in the
+//! reference — is the strongest ground available, the same standing this codebase
 //! already gives vmangos's wire handlers (decision 0216's own citations of `ItemHandler.cpp`/
 //! `Player.cpp`).
 //!
@@ -31,8 +31,8 @@
 //! `min_value` are the recipe-difficulty trivial ranks (TrivialSkillLineRankHigh/Low): pinned on
 //! the raw 5875 file this session — Bolt of Linen Cloth 2963 → (line 197, req 1, low 25,
 //! high 50), Minor Healing Potion 2330 → (171, 1, 55, 95), which reproduces its known classic
-//! orange 1 / yellow 55 / green 75 / gray 95 progression under the color law TU-C confirmed at
-//! the bytes (decision 0446).
+//! orange 1 / yellow 55 / green 75 / gray 95 progression under the client's color law
+//! (`0x4fca20`, decision 0446).
 //!
 //! `SkillRaceClassInfo.dbc` — `SkillRaceClassInfofmt = "diiiiiix"` (8 fields, 32 B/record):
 //! `id`(0) · **`skillId` = column 1** · **`raceMask` = column 2** · **`classMask` = column 3** ·
@@ -41,10 +41,10 @@
 //! the table the client's spellbook tab classifier routes through (decision 0228): a spell's skill
 //! line is looked up here for the player's race+class, and if the matching row's `flags` bit `0x80`
 //! (`SKILL_FLAG_DISPLAY_SORTED`, cmangos `DBCEnums.h`) is set — or no row matches — the spell's tab
-//! is **General** (key 0) instead of the line's own tab. Byte-verified: wow-re
-//! `system/ui/scratch/spellbook-book-build.md` §3 (`0x6ddf90(skillLine, class, race) → variant`;
-//! `(int8)[variant+0x10] < 0 → key 0`; `[variant+4]` = skillId, `[variant+0x10]` = flags — the
-//! struct offsets confirm the column read). The `flags`/`raceMask`/`classMask` semantics follow
+//! is **General** (key 0) instead of the line's own tab
+//! (`0x6ddf90(skillLine, class, race) → variant`; `(int8)[variant+0x10] < 0 → key 0`;
+//! `[variant+4]` = skillId, `[variant+0x10]` = flags — the struct offsets confirm the column
+//! read). The `flags`/`raceMask`/`classMask` semantics follow
 //! vmangos `DBCStructure.h`'s `SkillRaceClassInfoEntry`; the row-match (first row whose masks
 //! admit the race/class) is the standard classic semantics, validated against the real build-5875
 //! data by [`SkillLineCatalog::spell_tab`]'s tests.
@@ -126,7 +126,7 @@ const SKILL_FLAG_UNLEARNABLE: u32 = 0x20;
 const SKILL_FLAG_ALWAYS_DISPLAY: u32 = 0x1;
 
 /// `SkillRaceClassInfo.flags` bit `0x2` — the Skills tab **drops the line entirely**
-/// (`4d2d9f test dl,0x2`, wow-re `skillframe-display-list.md`). mangos names this bit
+/// (`4d2d9f test dl,0x2`). mangos names this bit
 /// `SKILL_FLAG_NO_SKILLUP_MESSAGE` from a different call site; in the display list it is a hide
 /// bit, and it is what keeps `Dual Wield`, the racial lines, the per-mount riding lines and
 /// `GENERIC (DND)` off the real client's pane. mangos's "different call site" is the skill-up
@@ -141,10 +141,10 @@ const SKILL_FLAG_TRAINABLE_AT_LEVEL: u32 = 0x4;
 /// `SkillRaceClassInfo.flags` bit `0x400` — vmangos `DBCEnums.h`'s `SKILL_FLAG_MONO_VALUE` (a
 /// single-rank line). The real client's `GetSkillLineInfo` **overrides** its `skillMaxRank` return
 /// to `1` whenever the admitting row carries this bit, whatever the player's own skill descriptor
-/// says (wow-re `system/tradeskill/scratch/skillframe-seed-abandon.md`: `0x4d3610`, the
-/// `4d38b1 test ah,0x4` branch). That override is why a class skill the server reports as `300/300`
-/// draws as `SkillFrame.lua`'s gray, rank-text-less "proficiency" bar in the real client — the Lua
-/// gate is `skillMaxRank == 1`, and the DBC, not the wire, is what puts it there. Real build-5875
+/// says (`0x4d3610`, the `4d38b1 test ah,0x4` branch). That override is why a class skill the
+/// server reports as `300/300` draws as `SkillFrame.lua`'s gray, rank-text-less "proficiency"
+/// bar in the real client — the Lua gate is `skillMaxRank == 1`, and the DBC, not the wire, is
+/// what puts it there. Real build-5875
 /// data for a night-elf hunter: set on `Beast Mastery`/`Marksmanship`/`Survival` (0x410), `Dual
 /// Wield`/`Night Elf Racial`/the per-mount riding lines (0x492); clear on every weapon line, the
 /// armor proficiencies, the languages, `Riding` and the professions.
@@ -179,8 +179,7 @@ struct SrciRow {
 }
 
 /// The `SkillRaceClassInfo.dbc` row the client resolved for a given skill line × race × class —
-/// the whole of what its Skills-tab display law reads (wow-re
-/// `system/tradeskill/scratch/skillframe-display-list.md`: the list build `0x4d2cb0` and
+/// the whole of what its Skills-tab display law reads (the list build `0x4d2cb0` and
 /// `GetSkillLineInfo 0x4d3610`). Copy-cheap; obtained from
 /// [`SkillLineCatalog::race_class`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,7 +212,7 @@ impl SkillRaceClass {
     }
 
     /// Whether a change to this line prints **no** skill-up chat line — the real client's
-    /// rank-watcher gate (`0x5de180`, wow-re tradeskill TU-E): the message is skipped when the
+    /// rank-watcher gate (`0x5de180`): the message is skipped when the
     /// resolved row's flag word at `+0x10` carries `0x402` =
     /// [`SKILL_FLAG_MONO_VALUE`]`|`[`SKILL_FLAG_HIDDEN`]. On the real build-5875 data the mask
     /// cuts the table exactly along the historically attested line: every class spec line
@@ -222,10 +221,8 @@ impl SkillRaceClass {
     /// announces no skill at all, the level-up movers being all flagged — while the other weapon
     /// lines, `Defense`, the armor proficiencies, professions/secondary, `Lockpicking`,
     /// `Poisons` and the languages (`0x080`/`0x0a0`) announce. The table identity is settled at
-    /// the bytes (1309's dispatch, a unanimous wow-re §5 — the corrected TU-E carries the full
-    /// chain): the flag test `0x5de358` reads the **untouched return of the `0x6ddf90`
-    /// SkillRaceClassInfo resolve**, never a `SkillLine.dbc` field — TU-E's original prose had
-    /// conflated the two adjacent row pointers.
+    /// the bytes (1309): the flag test `0x5de358` reads the **untouched return of the `0x6ddf90`
+    /// SkillRaceClassInfo resolve**, never a `SkillLine.dbc` field.
     pub fn skill_up_silent(self) -> bool {
         self.flags & (SKILL_FLAG_MONO_VALUE | SKILL_FLAG_HIDDEN) != 0
     }
@@ -249,7 +246,7 @@ impl SkillRaceClass {
 
 /// One spell's `SkillLineAbility.dbc` row (module doc columns; first row wins across race/class
 /// variants): the skill line it belongs to, the rank required to learn it, and the trivial ranks
-/// the crafting book's difficulty colors band against (the color law TU-C confirmed at the bytes,
+/// the crafting book's difficulty colors band against (the client's color law `0x4fca20`,
 /// decision 0446).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SlaInfo {
@@ -352,7 +349,7 @@ impl SkillLineCatalog {
     }
 
     /// **Is a higher rank of `spell_id` known?** — the reference's `KnownHigherRank`
-    /// (`0x60c8d0`, wow-re `trainer-requirement.md`): walk the `forward_spellid` chain forward
+    /// (`0x60c8d0`): walk the `forward_spellid` chain forward
     /// from `spell_id` (exclusive) and answer on the first known rank. The trainer's requirement
     /// colouring and its state re-evaluator both OR this with plain known-ness (2333).
     pub fn higher_rank_known(
@@ -493,7 +490,7 @@ impl SkillLineCatalog {
     /// character of `race`/`class` (1-based unit bytes) — [`SkillRaceClass::skill_up_silent`],
     /// inverted. `false` with no admitting row: the real watcher skips the message when its
     /// `SkillRaceClassInfo` resolve comes back empty too (`0x5de352 je`, the same taken branch as
-    /// the flag test — 1309's §5 chain, decision 1314), so a line this character can't legally
+    /// the flag test — 1309, decision 1314), so a line this character can't legally
     /// hold stays silent however it got into the block.
     pub fn announces_skill_ups(&self, line_id: u32, race: u8, class: u8) -> bool {
         self.race_class(line_id, race, class)

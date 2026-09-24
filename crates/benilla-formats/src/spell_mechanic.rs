@@ -5,8 +5,7 @@
 //! blocking aura's mechanic as an **id**, and this names it. Without the table the arm's refusal
 //! displayed its template with the specifier unfilled, which is the loose end 1941 recorded.
 //!
-//! The reference reads the same store (`0xc0d7c4`) from `0x6e2190`, the `0x8d` argument arm
-//! (wow-re `cast-fail-strings.md` line 120).
+//! The reference reads the same store (`0xc0d7c4`) from `0x6e2190`, the `0x8d` argument arm.
 //!
 //! Layout byte-checked on the raw 5875 file (a struct-unpack dump: **27 records × 10 fields,
 //! record size 40**, string block 246) — the same shape as `SpellFocusObject.dbc`: `ID@0` · the

@@ -1,7 +1,6 @@
 //! `ChrRaces.dbc` — the race-keyed **exploration sound** (decision 0829): the jingle the real
 //! client plays on every `SMSG_EXPLORATION_EXPERIENCE`, resolved race → `ChrRaces` row →
-//! column 3 (`+0xc`) → SoundEntries kit. Byte-verified in wow-re
-//! (`system/net/net.md` § "SMSG_EXPLORATION_EXPERIENCE": handler case tail `0x5e41d2`, race byte
+//! column 3 (`+0xc`) → SoundEntries kit (handler case tail `0x5e41d2`, race byte
 //! → row `[0xc0dee0][race]` → `+0xc` → play tail `0x458850`); the column's canonical *name*
 //! ("ExplorationSoundID") is community lore, the offset and mechanism are the verified part.
 //!

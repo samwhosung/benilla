@@ -1,5 +1,5 @@
 //! `SoundWaterType.dbc` — the liquid-class → ambient-loop-kit map of the **above-water liquid
-//! ambient-loop system** (wow-re `liquid-ambience-loop.md`, §5-verified; benilla decision 0506):
+//! ambient-loop system** (`0x462a40`, benilla decision 0506):
 //! the continuous ocean/river/lava/slime sound the client plays near liquid. The driver reads the
 //! nearest wet cell's MCLQ low nibble as `class = nibble & 3`, `speed = nibble >> 2`, and resolves
 //! the kit **data-driven** through this table (store `[0xc0d898]`; not hardcoded ids): 16-byte
@@ -69,7 +69,8 @@ mod tests {
     use super::*;
 
     /// The real 5875 table, end to end: every wet nibble resolves, and the mapping matches the
-    /// §5's byte-cited dispatch (river split by authored speed, ocean uniform, magma pool/flow).
+    /// reference's dispatch (`0x462a40`: river split by authored speed, ocean uniform, magma
+    /// pool/flow).
     /// Skips without client data.
     #[test]
     fn real_table_resolves_every_wet_nibble() {

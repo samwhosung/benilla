@@ -1,5 +1,5 @@
 //! `PetPersonality.dbc` + `PetLoyalty.dbc` — the two tables behind a hunter pet's happiness and
-//! loyalty readouts (decision 1005; wow-re `ui/scratch/pet-action-bar-api.md` §11b).
+//! loyalty readouts (decision 1005).
 //!
 //! **`GetPetHappiness` does its own thresholding.** The client does not hand Lua a raw happiness
 //! number for the UI to bucket — it returns a **pre-bucketed 1/2/3** plus the two numbers that
@@ -14,9 +14,9 @@
 //! ret3 = rec[0x3c + 4*esi]               ; loyalty rate        (esi >= 1, may be NEGATIVE)
 //! ```
 //!
-//! **Which `.dbc` backs it was NOT carved** — wow-re records `[0xc0d9e0]`/`[0xc0d9e4]` only as an
-//! anonymous BSS `{indexTable, maxId}` pair, and the dispatch that produced the carve glossed the
-//! index as a *creature family*. That gloss is wrong, and the file settles it: `CreatureFamily.dbc`
+//! **Which `.dbc` backs it is NOT established from the bytes** — `[0xc0d9e0]`/`[0xc0d9e4]` is
+//! known only as an anonymous BSS `{indexTable, maxId}` pair. The index is not a *creature
+//! family*, and the file settles it: `CreatureFamily.dbc`
 //! has a **0x48-byte** record — the read at `rec+0x48` would run off the end — and every dword from
 //! `0x28` up is zero in all 23 rows. `PetPersonality.dbc` is a 0x4c-byte record whose last nine
 //! columns are exactly the three triples, at exactly those offsets:
@@ -124,12 +124,12 @@ impl PetPersonalities {
     ///
     /// **`id` is `None` today, always, and that is a recorded gap rather than an oversight.** The
     /// client selects the row with `0x605600(pet)` = `[[pet+0xb30]+0x24]` — a field of its cached
-    /// creature template — and wow-re has carved neither which template field `+0x24` is nor which
-    /// table it indexes. Passing `None` takes the reference's *own* out-of-range path
+    /// creature template — and which template field `+0x24` is, and which table it indexes, are
+    /// both open. Passing `None` takes the reference's *own* out-of-range path
     /// ([`FALLBACK_PERSONALITY`]), which is what every live pet is observed to land on: the file
     /// ships two rows, ids 1 and 3, and row 1 alone reproduces vanilla's 75/100/125% damage.
     ///
-    /// So the shape is right and the numbers are right; when the selector is carved, this call
+    /// So the shape is right and the numbers are right; when the selector is identified, this call
     /// gains an argument and nothing else moves.
     pub fn for_pet(&self, id: Option<u32>) -> Option<&PetPersonality> {
         id.and_then(|i| self.0.get(&i))

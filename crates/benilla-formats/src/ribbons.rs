@@ -1,9 +1,8 @@
 //! Vanilla (build 5875 / MD20 v256) M2 **ribbon emitter** parsing — the weapon trails, wisp
 //! streamers, and spell-missile trails. Read straight from raw bytes, like `particles`.
 //!
-//! Byte layout is wow-5875-re's transcription-ready spec (`system/models/scratch/
-//! ribbon-emitter-spec.md`, their `9c862186` — a §5 pair over the MD20 relocation fixup + the
-//! ctor/render reads; closes the models item-12 remainder for the ribbon record):
+//! Byte layout is the reference's, read off the MD20 relocation fixup `0x71ef40` + the
+//! ctor/render reads:
 //!
 //! ```text
 //! header array : count @ MD20+0x134, ptr @ MD20+0x138        record stride 0xdc
@@ -30,10 +29,9 @@
 //! `block+0xbc` — ctor `0x71b34c` = 0, loader default `0x70f80e` = 1, then written every frame
 //! from the sampled value at `0x7176ee` / `0x717714` inside `0x714260`; `0x718960` only reads it,
 //! and no equipment/attach/sheathe writer exists anywhere in the binary. Clearing it **kills the
-//! whole ribbon's draw** (`0x7080c2` → the collect loop's continue at `0x708263`). wow-re
-//! `ribbon-emitter-spec.md` §6/§7, settled by the dispatch behind decision 1017: §7 previously
-//! left the writer OPEN and *guessed* the equip/attach route, and decision 1013 unwound the whole
-//! mechanism on the strength of that guess.
+//! whole ribbon's draw** (`0x7080c2` → the collect loop's continue at `0x708263`). Settled for
+//! decision 1017; decision 1013 had unwound the whole mechanism on the strength of a *guessed*
+//! equip/attach route.
 //!
 //! The thrown weapon keys its flight trail OFF in Stand (worn in the hand) and Impact (landed),
 //! ON only in InFlight. Keeping the keys — rather than the old band-start bool per sequence — is
@@ -329,9 +327,9 @@ pub fn parse_m2_ribbon_emitters(bytes: &[u8]) -> Result<Vec<RibbonEmitterDef>> {
             color: track_keys_with(bytes, e + 0x24, [1.0; 3], band, 12, |b, o| {
                 [le_f32(b, o), le_f32(b, o + 4), le_f32(b, o + 8)]
             }),
-            // fix16 keys are SIGNED (`movsx`, wow-re `tracks.md` flavour (c) — the same decode as
-            // `benilla_m2::track_fix16`; the ribbon spec calls the stride-2 values int16 outright,
-            // `ribbon-emitter-spec.md` +0x40). The strip's own draw clamps a negative to 0 below.
+            // fix16 keys are SIGNED (`movsx` at the alpha site `0x717933` — the same decode as
+            // `benilla_m2::track_fix16`; the record's stride-2 values at +0x40 are int16 outright).
+            // The strip's own draw clamps a negative to 0 below.
             alpha: track_keys_with(bytes, e + 0x40, 1.0, band, 2, |b, o| {
                 f32::from(le_u16(b, o) as i16) / 32767.0
             }),

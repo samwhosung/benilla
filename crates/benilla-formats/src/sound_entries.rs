@@ -1,6 +1,6 @@
 //! SoundEntries.dbc loader — the central **sound-kit** table every audio trigger resolves through
 //! (decision 0070): a kit = up to 10 weighted variation files + volume/flags/distance parameters.
-//! Kits are playable by id and **by name** (the client's `PlaySoundByName`, RE `0x458030`, is a
+//! Kits are playable by id and **by name** (the client's `PlaySoundByName` (`0x458030`) is a
 //! name-hash into this table — the Lua `PlaySound("igMainMenuOpen")` path).
 //!
 //! Layout — VERIFIED against build 5875 (xxd + row decode of the extracted file, 2026-07-02): the
@@ -23,8 +23,8 @@ use crate::dbc::{f32_at, parse, str_at, u32_at};
 const SOUND_ENTRIES: &str = "DBFilesClient\\SoundEntries.dbc";
 
 /// `Flags` bits observed in the 5875 data (domain: 0/1/0x20/0x21/0x22/0x200/0x201/0x220/0x400/
-/// 0x420). The DBC word is copied **raw** into the runtime kit flag word (`0x45c139`, wow-re
-/// `benilla-pins.md` B2, VERIFIED) and the two variation gates read separate bits: `0x400` =
+/// 0x420). The DBC word is copied **raw** into the runtime kit flag word (`0x45c139`) and the
+/// two variation gates read separate bits: `0x400` =
 /// pitch variation (`0x458da0`), `0x800` = volume variation (`0x458c60`). No 5875 kit sets
 /// `0x800` — volume variation is dormant in this build's data. `0x20` no-duplicates, `0x200`
 /// looping (0.5.3-era wowdev meanings, behavior-consistent).
@@ -46,13 +46,13 @@ pub struct SoundKit {
     /// Variation files as `(full MPQ path, weight)` — `DirectoryBase\File[i]` joined here so
     /// consumers never re-derive paths; only non-empty slots, weight from the matching `Freq[i]`.
     pub files: Vec<(String, u32)>,
-    /// Base volume `[0,1]` (the per-shot variation math scales this — wow-re `0x458c60`).
+    /// Base volume `[0,1]` (the per-shot variation math scales this — `0x458c60`).
     pub volume: f32,
     pub flags: u32,
     /// Full-volume radius fed to the backend's min/max rolloff (FMOD `Sample_SetMinMaxDistance`).
     pub min_distance: f32,
     /// Selection/cull radius: the `d² < cutoff²` audibility gate + per-frame virtualization
-    /// (wow-re `0x45cdf0`/`0x7a5000`). `0` = non-positional (no 3D cull).
+    /// (`0x45cdf0`/`0x7a5000`). `0` = non-positional (no 3D cull).
     pub distance_cutoff: f32,
     /// `SoundSamplePreferences.dbc` FK — the per-channel EAX wet send (0/1/2 in the data;
     /// 2 072 kits carry 0, 2 549 carry 2, 2 carry 1). **`0` means dry, not "default"**: that DBC
@@ -60,7 +60,7 @@ pub struct SoundKit {
     /// and `FSOUND_Reverb_SetChannelProperties` (`0x7a5bf0`) skips before it even tests the
     /// 3D-open flag. Authored dryness — and it is how NPC voice lines stay out of an interior's
     /// reverb: **all 275 `SoundType 17` rows are `EAXDef 0`** (creature barks split 706 wet /
-    /// 285 dry). wow-re `reverb-default-and-eax-hardware.md`; benilla decision 1155.
+    /// 285 dry). benilla decision 1155.
     pub eax_def: u32,
 }
 
@@ -124,7 +124,7 @@ fn sound_entries_schema() -> Schema {
 
 /// Join one variation's `DirectoryBase` and `File[i]` into the path the archive is asked for —
 /// **the reference's own rule, byte-for-byte** (`0x45be10`, the sole caller `0x45c167` inside the
-/// `SOUNDDEFINITION` loader; wow-re `sound/scratch/soundentries-path-join.md`).
+/// `SOUNDDEFINITION` loader).
 ///
 /// The client formats `"%s%s%s"` over `(dir, sep, file)` and chooses `sep` with exactly two tests:
 /// it is the empty string when `DirectoryBase` is **NULL/empty**, and when `SStrChrR(dir, '\')`
@@ -132,7 +132,7 @@ fn sound_entries_schema() -> Schema {
 /// normalization in the client, at this layer or any other — and it has to be spelled here,
 /// because the archive layer below rescues nothing: `HashString` folds ASCII `a`–`z` to upper and
 /// maps `/` → `\` per character into the hash, and does **not** strip a leading separator, collapse
-/// a doubled one, or touch a trailing one (wow-re `mpq.md`, an evidenced absence — the hash loop
+/// a doubled one, or touch a trailing one (`0x6549a0`, an evidenced absence — the hash loop
 /// read end to end). There is no loose-file fallback either: `SFileOpenFileEx`'s disk diversion
 /// takes `\\`, `X:` and a flag WoW's own startup clears, never a single leading `\`.
 ///

@@ -381,7 +381,7 @@ fn real_spell_visual_chain_resolves_fireball() {
 /// The real 5875 `SpellVisualEffectName`: the boot-time HARDCODED name matcher's one consumed
 /// row — `"HARDCODED Loot Art"` is id 14 → `Particles\LootFX.mdl` (values pre-checked against
 /// the raw DBC bytes), and the `.m2` it names ships in the chain, so the lootable-corpse
-/// sparkle can actually load (wow-re `loot-corpse-effect.md`). Skips without client data.
+/// sparkle (`0x6005d0`) can actually load. Skips without client data.
 #[test]
 fn real_effect_name_table_resolves_the_loot_art_row() {
     let data = crate::wow_data_or_skip!();
@@ -396,7 +396,7 @@ fn real_effect_name_table_resolves_the_loot_art_row() {
 }
 
 /// The dest-anchored chain on the REAL data — 0797's mandatory per-spell data check (the
-/// wow-re read pinned the GATE; whether each spell passes it is a table fact). Skips
+/// GATE is the binary's, `0x5d57c0`; whether each spell passes it is a table fact). Skips
 /// without client data. Every value here corroborates the live vmangos wire capture:
 /// Blizzard's dynobj RADIUS was 8.0 (row 14), Flamestrike's 5.0 (row 8).
 #[test]
@@ -742,7 +742,7 @@ fn real_hunter_shots_take_the_bows_load_and_release_clips() {
     let data = crate::wow_data_or_skip!();
     let mut chain = crate::open_chain(&data).expect("open chain");
     let cat = load_spell_visual_catalog(&mut chain).expect("load spell visuals");
-    // `ItemDisplayInfo` col 10 for every bow (wow-re `throw-ranged-attack-anim.md`'s table).
+    // `ItemDisplayInfo` col 10 for every bow (measured on the shipped table).
     let bow = *cat.stages(5).expect("the bow's substitute visual 5");
     assert_eq!(
         (bow.precast, bow.cast),

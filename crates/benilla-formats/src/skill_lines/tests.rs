@@ -293,7 +293,7 @@ fn real_mono_value_split_class_lines_yes_weapons_no() {
 }
 
 /// `SkillRaceClassInfo.flags & 0x2` on the real build-5875 file — the bit that keeps a line
-/// off the Skills tab entirely (decision 1091; wow-re `0x4d2cb0`'s `4d2d9f test dl,0x2`), plus
+/// off the Skills tab entirely (decision 1091; `0x4d2cb0`'s `4d2d9f test dl,0x2`), plus
 /// the `reqLevel` column the untrained gate reads. A night-elf hunter, race 4 / class 3.
 /// Skips without client data.
 #[test]

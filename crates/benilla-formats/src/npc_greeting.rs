@@ -3,15 +3,15 @@
 //! creature-body vocals of [`crate::creature_sound`]:
 //!
 //! Chain — VERIFIED against build 5875, twice over: this session's raw DBC decode (2026-07-04)
-//! AND the wow-re §5 byte proof (`wow-5875-re/system/sound/scratch/npc-greeting.md`, `68cccdd1`
-//! — the loaders check exactly these layouts: NPCSounds `0x54afa0` cols==5/recsize==0x14,
-//! CreatureDisplayInfo `0x542e90` cols==12/recsize==0x30; the play path reads row`+0x2c`):
+//! AND the binary's bytes (the loaders check exactly these layouts: NPCSounds `0x54afa0`
+//! cols==5/recsize==0x14, CreatureDisplayInfo `0x542e90` cols==12/recsize==0x30; the play path
+//! reads row`+0x2c`):
 //! `UNIT_FIELD_DISPLAYID` → `CreatureDisplayInfo.dbc` **field[11]** (the last field, `NPCSoundID`)
 //! → `NPCSounds.dbc` row → **field[1]** (`hello`) / **field[2]** (`goodbye`) / **field[3]**
 //! (`pissed`, the variation-overflow line) — each a `SoundEntries` kit id, played through the
 //! shared kit player. NOT the `CreatureSoundData.NPCSoundID` the older wowdev notes suggest: that
-//! column (field 22) is **0/406 in 1.12** — entirely unused, and the wow-re proof confirms
-//! CreatureSoundData is not on the greeting path at all.
+//! column (field 22) is **0/406 in 1.12** — entirely unused, and the reference confirms
+//! CreatureSoundData is not on the greeting path (`0x60c3b0`, `0x623910`) at all.
 //!
 //! Byte-census of the real tables:
 //! - `CreatureDisplayInfo.dbc`: 10534 × 12 fields. field[11] is nonzero on **4509** displays, and
@@ -19,9 +19,10 @@
 //!   display (e.g. id 26) carries field[11]=0 → no greeting; only humanoid/character displays greet.
 //! - `NPCSounds.dbc`: 156 × 5 fields (recsize 20), layout `{id(0), hello(1), goodbye(2), pissed(3),
 //!   ack(4)}`. `hello` is set on all 156 rows; `goodbye` on 118; `pissed` on 120; `ack` is **0 on
-//!   every row** in 1.12 (and the binary never reads it — wow-re). The kits are all `SoundEntries`
+//!   every row** in 1.12 (and the binary never reads it: neither of the store's two readers,
+//!   `0x60c3b0` and `0x623910`, touches `+0x10`). The kits are all `SoundEntries`
 //!   type 17 (NPC greeting), flags `0x20` (no-duplicates), distance-cutoff 45 yd — a 3D world
-//!   emitter at the NPC, not a 2D sound (wow-re §4: `FSOUND_3D_SetAttributes` with the unit's
+//!   emitter at the NPC, not a 2D sound (`0x7a5b10`: `FSOUND_3D_SetAttributes` with the unit's
 //!   position).
 
 use std::collections::HashMap;
@@ -38,10 +39,10 @@ pub struct NpcGreeting {
     /// `NPCSounds.hello` — the greeting played on interact / target enter.
     pub hello: u32,
     /// `NPCSounds.goodbye` — the farewell, played when the tracked interaction unit clears
-    /// (wow-re: `0x60c3b0(0)` on mouseover/target leave — no discrete gossip-close callback).
+    /// (`0x60c3b0(0)` on mouseover/target leave — no discrete gossip-close callback).
     pub goodbye: u32,
     /// `NPCSounds.pissed` — the annoyed line the variation-overflow branch plays once repeat
-    /// interacts have cycled past the hello kit's variations (wow-re: `0x623910`'s overflow reads
+    /// interacts have cycled past the hello kit's variations (`0x623910`'s overflow reads
     /// row`+0xc`).
     pub pissed: u32,
 }
