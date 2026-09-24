@@ -3,8 +3,8 @@
 //! idx, no texture, additive); the gradient colours are the five `Light.dbc` `SkyColor` stops
 //! (LightIntBand rows 2–6) plus the fog colour (row 7), decoded into `WowLighting.{sky,fog_color}`.
 //!
-//! **Geometry + mapping are RE-VERIFIED** (binary `WoW.exe`: builder `FUN_006d0d10`, colour gen
-//! `FUN_006d0f50`; cross-checked against the actual memcpy'd dome vertices in apitrace WoW.5 — both
+//! **Geometry + mapping are verified** (binary `WoW.exe`: builder `0x6d0d10`, colour gen
+//! `0x6d0f50`; cross-checked against the actual memcpy'd dome vertices in apitrace WoW.5 — both
 //! agree). WoW's dome is a camera-centred cap of 1 apex + 5 rings × 24 segments, recentred by
 //! `−cos(45°)` so the rim sits at eye level (horizon). The five stops sit one-per-ring at GEOMETRIC
 //! elevations (above the horizon): **SkyColor0 @ 90° (zenith), SkyColor1 @ 16.8°, SkyColor2 @ 9.8°,
@@ -92,8 +92,8 @@ impl MaterialExtension for SkyExt {
     }
 
     /// Depth-write OFF — the reference draws its whole sky without writing depth (the apitrace
-    /// note in the module header, byte-confirmed by the `celestial-frame-anatomy` pin: every sky
-    /// element inherits `CSky::Render`'s depth-write-off state). Depth-TEST stays on, so terrain
+    /// note in the module header, byte-confirmed: every sky element inherits `CSky::Render`'s
+    /// (`0x6d4940`) depth-write-off state). Depth-TEST stays on, so terrain
     /// still occludes the dome; what this buys is a clean z-buffer over sky pixels — the glare
     /// quads (pinned to the far depth like the dome itself) are occluded per-pixel by *world*
     /// geometry only, never by the backdrop dome they must shine over. Plus the state every sky
@@ -259,8 +259,8 @@ fn follow_camera(
 /// while a **WMO skybox** owns the backdrop ([`crate::skybox`]), or while the eye is **submerged**:
 /// a building whose group asks for its MOSB model replaces this gradient, it does not layer over it,
 /// and underwater the reference skips the whole sky pass (the scene driver's `0x6812a4` submerged
-/// test gates `CSky::Render 0x6d4940` — stars, discs, gradient band and cloud dome together;
-/// byte-VERIFIED, wow-re terrain "the liquid render state"). With the dome hidden the `ClearColor`
+/// test gates `CSky::Render 0x6d4940` — stars, discs, gradient band and cloud dome together).
+/// With the dome hidden the `ClearColor`
 /// backdrop (the row-7 fog colour — submerged, the murk — or black via "black backdrop") shows through.
 ///
 /// The skybox gate is its **weight**, not the resolve: below the 0.99 threshold the dome still

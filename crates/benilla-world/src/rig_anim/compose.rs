@@ -114,8 +114,8 @@ fn rig_worlds(
             Some(p) => worlds[p],
             None => root_g,
         };
-        // `flags & 0x7` first: it changes the INPUT the billboard law is applied to, and the
-        // billboard switch below still runs (wow-re `billboard-bone-law.md` §9.1).
+        // `flags & 0x7` first (`0x714961`): it changes the INPUT the billboard law is applied
+        // to, and the billboard switch below still runs.
         let mut g = match rig.arms[i] {
             Some(arm) => {
                 touched[i] = true;
@@ -402,8 +402,8 @@ mod tests {
     ///
     /// The seat must come out with the MODEL's orientation whatever the spine does, while still
     /// being carried to the position the spine put it at — that is the byte law's pivot-preserving
-    /// tail (wow-re `billboard-bone-law.md` §9.1), and it is the whole reason a galloping horse
-    /// bobs its rider without rocking them. Asserted across a swept spine angle, because a single
+    /// tail (`0x714caf`–`0x714d09`), and it is the whole reason a galloping horse bobs its rider
+    /// without rocking them. Asserted across a swept spine angle, because a single
     /// sample cannot tell a discarded rotation from a lucky one.
     ///
     /// Pinning it HERE and not only in the world pass is the point of the regression: the arm was

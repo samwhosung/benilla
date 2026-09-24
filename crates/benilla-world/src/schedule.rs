@@ -121,7 +121,7 @@ impl Plugin for SchedulePlugin {
 /// from a per-frame `Update` poll instead of the state edge:
 /// [`crate::login::screen::materialize_screen`], [`crate::char_select::screen::enter_select`] and
 /// `sound::glue::start_glue_music`. Their comments name it "the boot-order trap". It is one cause
-/// with three patches, which is the shape §3 says to go after rather than add a fourth to.
+/// with three patches: the fix is the cause, not a fourth patch.
 ///
 /// The fix is to move that single startup entry to the end: the initial transition now runs after
 /// `PostStartup`, so `OnEnter(<initial>)` observes a fully built app exactly like every later

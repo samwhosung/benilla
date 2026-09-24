@@ -2,8 +2,7 @@
 //!
 //! The wire (`WeatherMessage`, bridged from the Net drain) carries `type/grade/sound/instant`;
 //! sound is already handled (`sound/weather.rs`). This module owns the **visual** state: the
-//! two ramped intensity channels of the real client's `weather_intensity_ramp` (`WoW.exe 0x67bc70`,
-//! byte-exact in wow-re `crates/lighting/src/weather_kernels.rs`):
+//! two ramped intensity channels of the real client's weather ramp (`0x67bc70`):
 //!
 //! - **channel A — effect intensity**: `t = elapsed_s / ((|to−from| + 0.001)·10)`, clamped lerp —
 //!   a full 0→1 swing takes ~10 s. The *effect density* handed to the precipitation pools is
@@ -13,7 +12,7 @@
 //!   `clamp(grade, 0, 0.25)` into them, so the ×4 cancels the quarter-span and B ALSO swings in
 //!   ~10 s (the 0310 fold misread the ×4 as "4× slower"; corrected in 0326). Published as
 //!   [`WeatherState::sky_density`] (0..0.25); lighting turns it into the **storm blend**
-//!   `bcc = min(1, B·4)` (`cloud_density_clamp 0x6d4500` — no sun term) and lerps the storm
+//!   `bcc = min(1, B·4)` (`0x6d4500` — no sun term) and lerps the storm
 //!   `LightParams` record over the clear one — so the overcast/fog ramps linearly across the
 //!   whole swing: it leads the rain on the way up and clears immediately on the way down.
 //!
@@ -55,7 +54,7 @@ impl WeatherKind {
     }
 }
 
-/// One ramped intensity channel — the byte law of `weather_intensity_ramp` (`0x67bc70`):
+/// One ramped intensity channel — the byte law of the reference's ramp function (`0x67bc70`):
 /// `value = clamped_lerp(from → to, elapsed / ((|to−from|·span_scale + 0.001)·10))`. Channel A
 /// uses `span_scale = 1` over the grade domain (~10 s per full swing); channel B `span_scale = 4`
 /// over the **[0, 0.25] knee domain** — also ~10 s per full swing (the ×4 cancels the quarter-span).
@@ -132,7 +131,7 @@ pub struct WeatherState {
     /// touches the wire grade, the ramps, or the storm/fog blend. Default 3 = the reference
     /// install's live `Config.wtf` (`SET weatherDensity "3"`) — the look target.
     pub weather_density: u8,
-    /// Bumped on every wire TYPE change (fine included) — the Q-D cut signal (round 3): the
+    /// Bumped on every wire TYPE change (fine included) — the cut signal: the
     /// driver's cross-fade path stops emission at once (`0x67585d`), retires the open packet,
     /// and discards every packet whose replay hasn't started (`0x67575a`). Same-type grade
     /// changes (e.g. rain 1 → rain 0) do NOT cut — they drain via the ramp, rain thinning and
@@ -170,7 +169,7 @@ impl WeatherState {
         } else {
             grade.clamp(0.0, 1.0)
         };
-        // A TYPE change cuts (Q-D, round 3): emission stops instantly and the unreplayed
+        // A TYPE change cuts (`0x67585d`): emission stops instantly and the unreplayed
         // pipeline is discarded — `effect_kind` flips to the NEW type at once (Fine ⇒ no
         // effect spawns; a rain→snow swap starts snow while old rain drops fall out). Only a
         // same-type grade change keeps the effect and drains it via the ramp.
@@ -222,7 +221,7 @@ impl WeatherState {
     }
 }
 
-/// The storm light-blend weight — `cloud_density_clamp 0x6d4500`: `bcc = min(1, density·4)`,
+/// The storm light-blend weight — `0x6d4500`: `bcc = min(1, density·4)`,
 /// purely the clamped sky density (no sun term). Lighting lerps the storm `LightParams` record
 /// over the clear one by this weight.
 pub fn storm_blend(sky_density: f32) -> f32 {
@@ -473,8 +472,8 @@ mod tests {
         assert!((s.density_gain() - 1.0).abs() < 1e-6);
     }
 
-    /// A wire TYPE change cuts (Q-D): Fine flips the effect kind at once (emission stops that
-    /// frame — the pipeline discard rides `cut_seq`), while a same-type grade change keeps the
+    /// A wire TYPE change cuts (`0x67585d`): Fine flips the effect kind at once (emission stops
+    /// that frame — the pipeline discard rides `cut_seq`), while a same-type grade change keeps the
     /// effect and drains it via the ramp — the director's `1 1 → 1 0` vs `1 1 → 0 0` split.
     #[test]
     fn type_change_cuts_same_type_drains() {

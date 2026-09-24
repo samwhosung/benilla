@@ -101,7 +101,7 @@ pub(super) fn spawn_lights_for(
 /// interior fixture sources — forge fire, inn fireplaces, chapel candles/chandeliers). These radiate onto
 /// the NPCs/doodads near each fixture and onto the building's own walls/floor (decision 0273). Position
 /// is WMO model space. The MOLT curve is the same fixed WoW falloff as the M2 path — byte-verified
-/// (wow-re wmo-molt-runtime: the disk attenStart/End do not shape the GL falloff) and confirmed live in
+/// (`0x695c00`: the disk attenStart/End do not shape the GL falloff) and confirmed live in
 /// the reference GL trace (committed c/l/q = 0/0.7/0.03, diffuse = colour × intensity, ambient 0).
 ///
 /// A fixture belongs to the rooms whose **MOLR** names it (`group_light_refs`, per absolute group
@@ -226,8 +226,8 @@ pub(super) fn spawn_emitters_for(
             // A placed doodad's arm is NOT one-time: it re-rolls its variation every play-window
             // (decision 0768), so the emitters read the slot AND the clip time off the host's live
             // player each frame — the same lane units and GameObjects use, and what the reference's
-            // `m2_animate` does for every model without distinction. A pinned slot was right only
-            // under the superseded "armed once at load" contract.
+            // animate kernel (`0x714260`) does for every model without distinction. A pinned slot
+            // was right only under the superseded "armed once at load" contract.
             match arm {
                 Some(root) => particles::EmitClock::Host(root),
                 None => particles::EmitClock::Pinned,

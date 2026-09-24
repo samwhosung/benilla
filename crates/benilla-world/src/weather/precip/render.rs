@@ -16,7 +16,7 @@ use crate::particles::buffer::EffectVertex;
 use super::pool::{Drop, Patter};
 use super::*;
 
-/// Falling-drop streaks — the verified triangle law (rf-weather-render Q1): per drop, base
+/// Falling-drop streaks — the verified triangle law (`0x80ff78`, `0x80ff74`): per drop, base
 /// verts `head ∓ 0.05·RIGHT` (RIGHT = normalize(cross(toCam, antiVel)), camera-facing width
 /// axis), apex `head + M·(2.0·antiVel̂)` with M the wind-tilt applied to the APEX ONLY. UVs
 /// (0,1)/(1,1)/(0.5,0). No vertex colour/alpha (white; the look is the texture under Mod2x).
@@ -58,7 +58,7 @@ pub(super) fn push_patters(
         let (u0, v0) = (frame * 0.25, f32::from(p.variant) * 0.25);
         // No vertex alpha (Mod2x has none): the atlas's 4 growth frames are the animation, and
         // the texture's grey-128 background is neutral.
-        // The byte texcoord law (`wx_rainrender.rs` step 8): base-left, apex, base-right.
+        // The byte texcoord law (`0x675ac0`): base-left, apex, base-right.
         for (pos, uv) in [
             (p.pos - right, [u0, v0 + 0.25]),
             (p.pos + up, [u0 + 0.125, v0 + 0.043]),
@@ -97,7 +97,7 @@ pub(super) struct FlakeView {
 /// Snow flakes — the ARB point-sprite leg `0x678610`, reproduced as screen-aligned quads because
 /// wgpu has no point size (WebGPU pins `PointList` at 1 px).
 ///
-/// Per flake (wow-re `rf-snow-flake-render.md` §2.4, the shipped `snowpoint.bls` read verbatim):
+/// Per flake (the shipped `snowpoint.bls` read verbatim):
 /// - size `max(1, 14·clamp01(1 − 0.02·d))` **era pixels**, `d = |flake − eye|` in yards — inverted
 ///   through the projection into a world half-extent, so the on-screen footprint matches the
 ///   reference's *angular* size at any resolution or fov (see [`super::SNOW_PX_REF_HEIGHT`] for

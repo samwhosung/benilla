@@ -1,23 +1,21 @@
 //! Precipitation — the pooled rain/snow simulation, its ground layers, and the mist companion.
-//! Spawn kinematics from wow-re's byte-exact transcriptions (`crates/lighting/src/
-//! wx_rainspawn.rs`, `wx_snowspawn.rs`, `weather_init.rs`, `wx_leaf_fp.rs`, `weather_scalars.rs`);
-//! render laws from the §5 finding `system/lighting/scratch/rf-weather-render.md` (the
-//! render-law fold-back record). Implemented idiomatically (f32 math, Bevy space) — the *laws*
-//! (constants, rates, gates, blend states) are the reference's, the x87 quirks are not.
+//! Spawn kinematics and render laws are byte-exact transcriptions of the reference's own.
+//! Implemented idiomatically (f32 math, Bevy space) — the *laws* (constants, rates, gates, blend
+//! states) are the reference's, the x87 quirks are not.
 //!
 //! The verified structure:
-//! - **Placement** is one law for both kinds ([`pool::spawn_particle`], wow-re
-//!   `wx-snow-placement-law.md`): `pos = R·(O − T·V) + 1.75·W + C`. The scatter `O` lies on the
+//! - **Placement** is one law for both kinds ([`pool::spawn_particle`], `0x677965`–`0x677a86`):
+//!   `pos = R·(O − T·V) + 1.75·W + C`. The scatter `O` lies on the
 //!   plane the particle *arrives* on; `−T·V` back-projects it up its own velocity; **`R` leans the
 //!   whole slab into the direction of travel** by `65°·sat(speed/18)`; then the wind lead and the
 //!   live camera eye. `R` was missing until decision 1159 and its absence IS B233's second half —
 //!   without it a particle needs its entire fall to reach eye height, which a running player
 //!   outpaces (snow at grade 0.6: 7.8 s of fall against 54 yd of running, versus a 45 yd box).
-//! - **Rain**: drops scatter across 130×130 yd, `T = −37.5/Vz` (`0x674df6–e53`;
-//!   rf-weather-emission-timeline Q5 — the old "spawns AT eye height" read killed only the box's
-//!   z-RANDOM, not the constant lift, and made density camera-angle-dependent). Each drop dies
-//!   at the **terrain** under its spawn column and leaves a 0.25 s *patter* splash **1:1** (calm
-//!   wind only). Streaks draw as fixed-size comet-tail TRIANGLES (0.1 wide × 2.0 long) with
+//! - **Rain**: drops scatter across 130×130 yd, `T = −37.5/Vz` (`0x674df6–e53`) — the old "spawns
+//!   AT eye height" read killed only the box's z-RANDOM, not the constant lift, and made density
+//!   camera-angle-dependent. Each drop dies at the **terrain** under its spawn column and leaves
+//!   a 0.25 s *patter* splash **1:1** (calm wind only). Streaks draw as fixed-size comet-tail
+//!   TRIANGLES (0.1 wide × 2.0 long) with
 //!   **no vertex colour** — the look is `RainDrop01.blp` (authored grey-128-neutral) under
 //!   **Mod2x** (`2·src·dst`) and a **forced grey fog** over 70..75 yd that IS the distance fade.
 //! - **Snow**: same rails, 90×90 box, slab lift +30, slow wandering kinematics — but a
@@ -30,17 +28,17 @@
 //!   depth-write off, RGB white. The `1/12` world-space triangle of `0x678960` is the
 //!   fixed-function FALLBACK and never runs on real hardware — benilla drew it (as a *quad*,
 //!   times an invented size jitter) while taking the shader leg's population, which is B233's
-//!   "flakes seem too big" (decision 1149; wow-re `rf-snow-flake-render.md`).
+//!   "flakes seem too big" (decision 1149).
 //! - **Mist**: every precip type carries a companion mist — its own object in the reference
 //!   (ctor `0x67a5b0`, spawn `0x67a990`, render `0x67ae20`); the law lives in [`mist`].
 //! - Ground heights come from a **lazy height cache** of the reference's weather ground
-//!   oracle (`0x67c760 → mgr+0x34 → 0x6b7070`): **WMO/doodad-AWARE** (round 3 Q-B, refuting
-//!   the round-2 "terrain-only" read) — after the terrain sample it probes the chunk's static
+//!   oracle (`0x67c760 → mgr+0x34 → 0x6b7070`): **WMO/doodad-AWARE**, not terrain-only — after
+//!   the terrain sample it probes the chunk's static
 //!   object refs and MAXes the hit (`CMapObj::IntersectSegment 0x6a37b0`, `0x6b7237–4a`), so
 //!   drops **land on roofs**: splashes on the inn roof, never inside, from any camera.
 //!   Independently, "no weather indoors" is the global weather-visible flag (`[0xca80c4]`) —
-//!   it kills the DRAW alone (`0x677380`/`0x6790b0`/`0x67a520`; simulation always runs — round-6
-//!   Q-H(b)); force-set with the camera outdoors (`0x6811d4`), and set from inside whenever an
+//!   it kills the DRAW alone (`0x677380`/`0x6790b0`/`0x67a520`; simulation always runs); force-set
+//!   with the camera outdoors (`0x6811d4`), and set from inside whenever an
 //!   exterior group survives the view-clipped portal-window pass (`0x6b42d9`) — rain shows
 //!   through a doorway the camera can SEE. See [`gate_weather_indoors`].
 //! - **Drift heading is WORLD-FIXED**: both spawn kernels centre the per-drop horizontal drift
@@ -92,9 +90,7 @@ use pool::{run_kind, HeightCache, Pool};
 use render::{push_flakes, push_patters, push_streaks, FlakeView};
 pub(crate) use wind::{wow_azimuth_to_bevy, WeatherWind};
 
-// ===== The reference's constants (byte-cited; render laws from wow-re rf-weather-render.md,
-// spawn kinematics from the wx_* transcriptions, packet pipeline from
-// rf-weather-emission-timeline) =====
+// ===== The reference's constants (byte-cited) =====
 
 /// Which weather **leg** we run — the reference picks per the `useWeatherShaders` CVar
 /// (default "1", registered `0x67b81d`) AND a rain.bls/patter.bls ARB validation (`0x58b360`);
@@ -228,7 +224,7 @@ const REF_MAXFPS: f32 = 30.0;
 ///
 /// Applied to the **drop/flake** rate only, never to the mist. The drop kernels throw their
 /// sub-unit remainder away every frame, which is what couples them to the frame rate; the mist
-/// accumulator carries its leftover across frames (`0x67b172`, wow-re rounds 3–4) and is the one
+/// accumulator carries its leftover across frames (`0x67b172`) and is the one
 /// precip rate in the reference that is *already* frame-rate independent. Halving it too would be
 /// a second, unrelated error dressed as consistency.
 const REF_FPS_GAIN: f32 = if REF_MAXFPS < 60.0 {
@@ -236,9 +232,9 @@ const REF_FPS_GAIN: f32 = if REF_MAXFPS < 60.0 {
 } else {
     1.0
 };
-/// A patter lives 0.25 s (`patter_record_init 0x675280`: `lifetime = now + 0.25`).
+/// A patter lives 0.25 s (`0x675280`: `lifetime = now + 0.25`).
 const PATTER_LIFE: f32 = 0.25;
-/// Per-frame spawn budget uses `min(dt, 1/60)` (`wx_leaf_fp.rs::update_dt_accum 0x80ffcc`).
+/// Per-frame spawn budget uses `min(dt, 1/60)` (`0x80ffcc`).
 const DT_CAP: f32 = 1.0 / 60.0;
 /// The spawn box leads the camera by `wind_motion · 1.75` (the spawn kernels' R11, `0x8680f8`).
 const WIND_LEAD: f32 = 1.75;
@@ -248,7 +244,7 @@ const WIND_LEAD: f32 = 1.75;
 /// direction seems different": calm-camera rain leaned toward an arbitrary Bevy axis instead of
 /// the reference's world-anchored one.
 const DRIFT_AZ_CENTER: f32 = -1.57;
-/// Rain fall speed: `vz = −28 − 4w − 2w·r` (`wx_rainspawn.rs` R6: 28.0/4.0/−2.0 bit-cited).
+/// Rain fall speed: `vz = −28 − 4w − 2w·r` (`0x80306c`/`0x80ffb4`, bit-cited).
 const RAIN_VZ_BASE: f32 = 28.0;
 const RAIN_VZ_W: f32 = 4.0;
 const RAIN_VZ_RNG: f32 = 2.0;
@@ -258,7 +254,7 @@ const RAIN_DRIFT_BASE: f32 = 9.49;
 const RAIN_DRIFT_EPS: f32 = 0.01;
 const RAIN_SPREAD_W: f32 = f32::from_bits(0x3e56_7750); // 0x80ffc4 ≈ 0.20944 (12°)
 const RAIN_SPREAD_BIAS: f32 = f32::from_bits(0x3d56_7750); // 0x80ffc0 ≈ 0.05236 (3°)
-/// The streak triangle (rf-weather-render Q1): base verts `head ∓ 0.05·RIGHT` (`0x80ff78`),
+/// The streak triangle: base verts `head ∓ 0.05·RIGHT` (`0x80ff78`),
 /// apex `head + tilt·(2.0·antiVel̂)` (`0x80ff74`) — FIXED world-space sizes, not |vel|-scaled.
 /// No vertex colour/alpha; the look is the texture under Mod2x + the forced fog.
 const STREAK_HALF_W: f32 = 0.05;
@@ -276,12 +272,11 @@ const PATTER_UP: f32 = 1.0 / 6.0;
 const RAIN_HALF_XY: f32 = 65.0;
 const SNOW_HALF_XY: f32 = 45.0;
 /// The slab's lift in **slab-local** space — HALF the ctor vertical extent (rain 75 → +37.5,
-/// snow 60 → +30). Q5-CORRECTED (wow-re rf-weather-emission-timeline): the box's z-RANDOM is
-/// dead (`·0.0`) but the constant lift is not — `0x674df6–e53` builds `T = −37.5/Vz` and seeds
-/// `local.z = −T·Vz = +37.5`, back-projecting the drop so its trajectory passes the arrival-plane
-/// scatter point at t = T. The earlier "spawns AT eye height" read (rf-weather-render Q4) was
-/// the bug behind camera-angle-dependent density, the precip-free view above the horizon, and
-/// uphill terrain getting no rain (director-caught, 2026-07-12).
+/// snow 60 → +30). The box's z-RANDOM is dead (`·0.0`) but the constant lift is not —
+/// `0x674df6–e53` builds `T = −37.5/Vz` and seeds `local.z = −T·Vz = +37.5`, back-projecting the
+/// drop so its trajectory passes the arrival-plane scatter point at t = T. The earlier "spawns AT
+/// eye height" read was the bug behind camera-angle-dependent density, the precip-free view above
+/// the horizon, and uphill terrain getting no rain (director-caught, 2026-07-12).
 ///
 /// **It is not a world height.** The slab tilt rotates the local offset, so the realised spawn
 /// heights fan out to `z_off·cos α ∓ half_xy·sin α` — ~8..46 yd for snow at a 7 yd/s run, and the
@@ -289,7 +284,7 @@ const SNOW_HALF_XY: f32 = 45.0;
 /// particles are born on" is what made the untilted model look self-consistent (decision 1159).
 const RAIN_Z_OFF: f32 = 37.5;
 const SNOW_Z_OFF: f32 = 30.0;
-/// Snow fall speed: `vz = −2 − 3.5m − m·r` (`wx_snowspawn.rs` R3c: 2.0/3.5 bit-cited) — calm
+/// Snow fall speed: `vz = −2 − 3.5m − m·r` (`0x6778bc`–`0x6778ec`, bit-cited) — calm
 /// flakes sink at 2 yd/s, a full blizzard at up to 6.5.
 const SNOW_VZ_BASE: f32 = 2.0;
 const SNOW_VZ_W: f32 = 3.5;
@@ -299,8 +294,8 @@ const SNOW_DRIFT_EPS: f32 = 0.015;
 /// Snow heading spread: `2π − 5.934·m` (R3a, `0x80fff4`) — calm snow wanders in ANY direction,
 /// a blizzard's flakes align to ±10° of the wind.
 const SNOW_SPREAD_W: f32 = f32::from_bits(0x40bd_e44f); // ≈ 5.9341197
-/// Snow flake size — **`snowpoint.bls`'s point-size law, in WINDOW PIXELS** (wow-re
-/// `rf-snow-flake-render.md` §2.4, read at the shipped shader's bytes):
+/// Snow flake size — **`snowpoint.bls`'s point-size law, in WINDOW PIXELS** (read at the shipped
+/// shader's bytes):
 ///
 /// ```text
 /// pointsize(d) = max(1.0, 14.0 · clamp01(1 − 0.02·d))   pixels, d = |flake − eye| in yards
@@ -349,10 +344,10 @@ const SNOW_PX_REF_HEIGHT: f32 = 800.0;
 const SNOW_PX_FALLOFF: f32 = 0.02;
 /// `max(1.0, …)` — the floor the ARB program applies last.
 const SNOW_PX_MIN: f32 = 1.0;
-/// A settled flake fades over 0.25 s (`snow_patter_value`: `max(t,0) + 0.25`).
+/// A settled flake fades over 0.25 s (`0x678dfa`, constant `0x8029b0`: `max(t,0) + 0.25`).
 const SNOW_SETTLE_LIFE: f32 = 0.25;
 /// A FALLING flake fades **in** over its first second — the vertex program's
-/// `alpha = clamp01(t − f1)` (rf-snow-flake-render §2.4). benilla drew every falling flake at
+/// `alpha = clamp01(t − f1)`. benilla drew every falling flake at
 /// alpha 1.0, so the top of the column was a hard-edged sheet instead of a soft one.
 const SNOW_FADE_IN: f32 = 1.0;
 
@@ -374,7 +369,7 @@ pub(super) struct Precip {
 /// stays visible (and falling) through a doorway's frame; the reference through the inn's
 /// open door shows the storm running (director ref-shot). Only a room with no reachable
 /// outside kills the effect — there it FREEZES (drops hang, unrendered) and resumes on
-/// stepping out. Exact writer semantics are the Q-H carve (round 6); this is the recorded
+/// stepping out. Exact writer semantics are not fully enumerated; this is the recorded
 /// shape.
 #[derive(Resource, Default)]
 pub(super) struct WeatherIndoors(bool);
@@ -506,9 +501,9 @@ fn simulate_precip(
         ..
     } = precip;
 
-    // The Q-D type-change cut: a wire TYPE change (fine included) stops emission at once and
-    // discards the not-yet-replaying pipeline; playing cohorts and falling drops finish. The
-    // mist's scheduled-but-unborn nodes retire with it (`0x67b234`, round 7).
+    // The type-change cut (`0x67585d`): a wire TYPE change (fine included) stops emission at once
+    // and discards the not-yet-replaying pipeline; playing cohorts and falling drops finish. The
+    // mist's scheduled-but-unborn nodes retire with it (`0x67b234`).
     if weather.cut_seq != *last_cut {
         *last_cut = weather.cut_seq;
         rain.cut(now);
@@ -586,7 +581,7 @@ fn simulate_precip(
         *census_frames = 0;
     }
 
-    // ===== the mist companion (rf-weather-render Q6) =====
+    // ===== the mist companion =====
     {
         let Precip { mist, rng, .. } = precip;
         run_mist(
@@ -606,7 +601,7 @@ fn simulate_precip(
 /// Push the frame's precip geometry onto the shared effect stream (PostUpdate, after the
 /// stream clear): rain streaks + patters as Mod2x tri-lists under the forced grey fog (their
 /// textures are authored grey-128-neutral — checked: both backgrounds mean exactly RGB 128);
-/// snow and mist as alpha-blended quads with fog off (rf-weather-render Q3). All four draws
+/// snow and mist as alpha-blended quads with fog off (`0x678610`, `0x67ae20`). All four draws
 /// anchor at the camera — view-z ≈ 0 sorts them after every world transparent, before the
 /// biased glare/nameplate rungs, exactly where the old camera-anchored layer entities landed.
 /// Indoors nothing is pushed — the frozen drops hang, unrendered (`[0xca80c4]`'s draw kill).

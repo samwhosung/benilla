@@ -1,6 +1,6 @@
 //! Celestial sprites — the **sun** (disc + glare halo), the **white moon** (disc + glare), and the
-//! night-sky **stars**, drawn over the sky dome. Byte-pinned end to end by the wow-re celestial-bodies
-//! §5 (decision 0485): setup `0x6d1ba0` builds six bodies (sun/moon glares, three discs, stars), the
+//! night-sky **stars**, drawn over the sky dome. Byte-pinned end to end (decision 0485): setup
+//! `0x6d1ba0` builds six bodies (sun/moon glares, three discs, stars), the
 //! builder `0x6d3b80` places each on a camera-centred sphere of radius 12 (`pos = cam + 12·dir`, world
 //! space — no local→world rotation), `CSky::Render 0x6d4940` draws stars → sun → white moon → moon02
 //! at a far depth slice with depth-write off (terrain occludes), and every disc routes through the
@@ -95,7 +95,7 @@ struct MoonSprite {
 /// A night-sky **star** mesh — one tag per `Stars.m2` patch (or the procedural fallback). Camera-anchored
 /// over the gradient dome, unlit + alpha-blended; its material's global alpha is driven each frame by the
 /// verified star curve (`WowLighting.star_alpha` — the model-global fade `[stars+0xb]/255`, byte =
-/// `trunc(curve·254+1)`, draw skipped below 2; wow-re celestial-bodies note, decision 0485). The faithful
+/// `trunc(curve·254+1)`, draw skipped below 2; `0x6d1b50`, decision 0485). The faithful
 /// geometry is the real `Stars.m2` (authored star positions/sizes + UVs into `Stars.blp`/`Stars2.blp`);
 /// [`mesh::star_field_mesh`] is the assetless fallback. Built in [`setup::setup_sun`], anchored + faded in
 /// [`follow::follow_stars`].
@@ -153,16 +153,16 @@ impl Plugin for SunPlugin {
 /// ([`crate::skybox::SkyboxWeight`]).
 ///
 /// The **submerged eye** suppresses the same set one level up: the scene driver's `0x6812a4`
-/// submerged test skips the whole `CSky::Render` call (byte-VERIFIED, wow-re terrain "the liquid
-/// render state" — "the surface is drawn identically from below; what changes underwater is
-/// scene-wide atmosphere only"). Without it the discs keep drawing under the murk, tinted by the
-/// underwater LightParams' celestial band — which is black there, so the sun read as a black ball
+/// submerged test skips the whole `CSky::Render` call ("the surface is drawn identically from
+/// below; what changes underwater is scene-wide atmosphere only"). Without it the discs keep
+/// drawing under the murk, tinted by the underwater LightParams' celestial band — which is black
+/// there, so the sun read as a black ball
 /// from under water (director report, 2026-08-03).
 ///
 /// **The GLARES are deliberately exempt.** They are not in this pass: the reference renders them
 /// last, on their own path (`0x483740 → 0x6d48c0 → 0x7e57e0`), which the boolean never reaches — so
 /// a sun flare still blooms over the painted sky. (Whether the glare path carries its own submersion
-/// gate is a wow-re question in flight; until it lands the flare keeps its envelope behaviour.) The
+/// gate is not yet known; until it is, the flare keeps its envelope behaviour.) The
 /// gradient band is [`crate::sky`]'s dome and the cloud dome is [`crate::clouds`]'s; each keeps its
 /// own authority (decision 0025) reading these same resources.
 #[allow(clippy::type_complexity)]

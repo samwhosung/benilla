@@ -30,8 +30,8 @@ pub(super) fn setup_sun(
     // (sun, white moon, moon02): unlit gamma-correct alpha-blend + the SHARED horizon clip+fade — the
     // real client routes all three through the same `0x6d1960` (clip to the horizon; the fade store
     // `clamp(2.5·height, 0, 1)` is CONDITIONAL on the near-horizon band, above which the disc keeps its
-    // colour's own alpha `a_disc`; body skipped entirely below the horizon — decision 0485 + wow-re
-    // Addendum #7). The GLARES: additive in GAMMA — the reference's SRC_ALPHA, ONE byte addition
+    // colour's own alpha `a_disc`; body skipped entirely below the horizon — decision 0485). The
+    // GLARES: additive in GAMMA — the reference's SRC_ALPHA, ONE byte addition
     // (`0x7e5a16`), no horizon clip (their lens-flare envelope gates them; decision 0502). Every RGB
     // tint is the DayNight celestial diffuse band, rewritten per frame by the follow systems —
     // base_color here is only the frame-0 seed.
@@ -134,7 +134,7 @@ pub(super) fn setup_sun(
     // dword (`[0xce98a4]`) has NO writer in the binary — RGB *and* alpha stay BSS-zero. The reference
     // issues its draw every frame, but the quad renders with vertex alpha 0, so the blender paints
     // NOTHING — the second moon is invisible in clear weather (the old "dark smudge that occludes
-    // stars" reading is superseded; director-verified against the reference; wow-re Addendum #7).
+    // stars" reading is superseded; director-verified against the reference).
     // `a_disc = 0.0` gates the whole quad multiplicatively — including the near-horizon fade band,
     // where our per-fragment lane would otherwise render the reference's soft per-vertex crossing
     // wedge as a hard black bar (decision 0524). Kept spawned for the future weather seed
@@ -153,7 +153,7 @@ pub(super) fn setup_sun(
             depth_bias: sky_order::MOON02_BIAS, // fourth sky draw — the last disc
             ..default()
         },
-        0.0, // colour ALPHA is unwritten too — the invisible second moon (Addendum #7)
+        0.0, // colour ALPHA is unwritten too — the invisible second moon (`0xce98a4`)
     ));
     commands.spawn((
         Mesh3d(mesh.clone()),

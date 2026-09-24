@@ -55,7 +55,8 @@ pub struct Viewer {
     /// is a property of the eye, not of any body in the scene.
     pub drunk: f32,
     /// Is the viewer a **ghost**? While the flag is up the active `LightParams` slot is 4 — the
-    /// death profile, applied instantly (decision 0308 §7, byte-verified `death-light.md`).
+    /// death profile, applied instantly (decision 0308 §7; `0x6d4620` sets slot 4, `0x6d2260`
+    /// re-derives it every frame).
     pub ghost: bool,
     /// Is a loading cover over the world right now, so the viewer has not actually *seen* anything
     /// yet? The appear ramp arms on this falling edge — the faithful trigger is "the player can
@@ -129,7 +130,7 @@ pub struct ViewDistance {
 }
 
 /// The settable range of [`ViewDistance::farclip`] — the vanilla `farclip` CVar clamp `[177, 777]`
-/// (validate callback `0x688d40`, wow-re `terrain.md` "Camera-distance CVars"), shared by the CVar
+/// (validate callback `0x688d40`), shared by the CVar
 /// apply, the options row and the `$WOW_FARCLIP` env knob so none can drift. It used to run to 1200
 /// as an A/B lever against the pre-wall "draw everything in the tile window" look; that look is
 /// gone and the window now follows this number, so the headroom went with it (1513).
@@ -149,10 +150,10 @@ pub const FARCLIP_RANGE: std::ops::RangeInclusive<f32> = 177.0..=777.0;
 /// used to be a hardcoded `1.0 / 9.0` named `CAM_NEAR`, documented as "the reference's own 1/9,
 /// hardcoded in its camera ctor (`0x50a6c0`: `+0x38 = 0x3de38e39`) — the `nearclip` console cvar
 /// stores to a global with zero readers, dead plumbing". Every clause of that is true and the
-/// conclusion is wrong: the *derived global* `[0xc7b480]` is indeed dead (wow-re
-/// `cvar/scratch/graphics-cost-cvar-census.md` §8 lists it), but the camera never reads that global
-/// — it reads the **record**, every frame, at `0x511bd4`. So the ctor's 1/9 is the value the camera
-/// holds for exactly as long as it takes the first frame's outer to overwrite it, and is never
+/// conclusion is wrong: the *derived global* `[0xc7b480]` is indeed dead, but the camera never
+/// reads that global — it reads the **record**, every frame, at `0x511bd4`. So the ctor's 1/9 is
+/// the value the camera holds for exactly as long as it takes the first frame's outer to
+/// overwrite it, and is never
 /// rendered with. `worldview`'s own near plane had already drifted to `0.1` under a doc claiming it
 /// was "kept in step by hand" with the 1/9 — the drift was the tell.
 pub const NEARCLIP_RANGE: std::ops::RangeInclusive<f32> = 0.01..=0.33;
@@ -165,7 +166,6 @@ pub const NEARCLIP_RANGE: std::ops::RangeInclusive<f32> = 0.01..=0.33;
 /// it that way: D3D9 at `0x599899` leaves `pp.MultiSampleType` at `D3DMULTISAMPLE_NONE` for any
 /// value `<= 1`, and the GL path at `0x59de32` never writes the `WGL_SAMPLE_BUFFERS_ARB` /
 /// `WGL_SAMPLES_ARB` pair at all — the attribute list simply terminates where they would begin.
-/// (wow-re `system/console/scratch/gxmultisample-default.md`, §5-verified 2026-08-26.)
 ///
 /// **Default 1 — off — and that is the reference's own default, not a perf choice dressed up as
 /// fidelity.** The reference does not register a literal here: `CVar::Register` at `0x63a950` is
@@ -505,8 +505,8 @@ pub fn msaa_from_env() -> bevy::render::view::Msaa {
 
 /// The **registered default** of the `nearclip` CVar — `"0.1"`, the default string at `0x84fb48`
 /// passed by `CVar::Register 0x63db90` at `0x68867a` (name `0x84ffb0` `"nearclip"`, help
-/// `"Near clip plane distance"`, callback `0x688d90`, record `[0xc7f348]`; wow-re
-/// `re/cvar/cvar-register-sites.tsv` row 187). 1804's law, so this is a `Same` row, not a choice.
+/// `"Near clip plane distance"`, callback `0x688d90`, record `[0xc7f348]`). 1804's law, so this is
+/// a `Same` row, not a choice.
 ///
 /// The live value is [`ViewDistance::nearclip`]; this is only where it starts and what the
 /// off-world spawners ([`crate::worldview`], the depth probe) use when there is no CVar table.

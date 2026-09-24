@@ -31,13 +31,13 @@ pub type CelestialMaterial = ExtendedMaterial<StandardMaterial, CelestialExt>;
 /// clip+fade `0x6d1960`, decision 0485). `fade.w` = the disc COLOUR's own alpha byte: `1.0` for the
 /// sun/white moon (their diffuse broadcast writes 0xFF every frame), `0.0` for moon02 (its colour
 /// dword has no writer in the binary — the draw runs and paints nothing: the reference's invisible
-/// second moon; wow-re Addendum #7). The fade is the reference's PER-VERTEX conditional store
+/// second moon; `0xce98a4`). The fade is the reference's PER-VERTEX conditional store
 /// (band vertices take the ramp instead of the colour alpha), which the fragment shader
 /// reconstructs by interpolating over [`CelestialExt::span`] — a setting body melts as a
 /// whole-disc gradient (decision 0529; supersedes the 0485 per-fragment band and 0524's
 /// workaround). Under active weather the follow systems overwrite `fade.w` with the celestial
 /// alpha seed `floor(255·(1−bcc))/255` on all three discs (`bcc` = weather density × 4, clamped —
-/// Addendum #6; `follow::celestial_alpha_seed`), so storms dim the bodies and surface moon02's
+/// `0x6d2c74`; `follow::celestial_alpha_seed`), so storms dim the bodies and surface moon02's
 /// faint dark disc. `fade.y` = a brightness multiplier on the emitted colour — `1.0` everywhere (the old
 /// moon `1.6` HDR boost died with decision 0163: the reference is LDR bytes and its moon glow is
 /// FFXGlow's blur² on the disc's own bytes). `fade.z` = mode: 0 = disc, 1 = additive glare (no

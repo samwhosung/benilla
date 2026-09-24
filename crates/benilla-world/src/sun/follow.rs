@@ -6,7 +6,7 @@
 //! lives in the shader ([`super::materials`]); the GLARE quads sit on the reference's **near sphere**
 //! (`cam + 12·dir`) with their fragment depth forced far (`celestial.wgsl`) — like the reference,
 //! the flare is dimmed by BOTH the z-buffer (per-pixel: a ridge, a wall, a leaf clips it — its
-//! `[0.995, 1.0]` back-slice depth test, the `celestial-frame-anatomy` pin) and the envelope —
+//! `[0.995, 1.0]` back-slice depth test, `0x7e5a0c`) and the envelope —
 //! the slewed [`FlareGate`]: the per-body **dnCurve** day/night gate × the below-horizon
 //! smoothstep × the terrain/interior visibility (the occ3 fractional-probe stand-in),
 //! rate-limited like the reference's `[glare+0x30]` (decision 0508).
@@ -62,9 +62,9 @@ const GLARE_DIST: f32 = 12.0;
 const FLARE_RAY_SAMPLES: u32 = 48;
 const FLARE_RAY_RANGE: f32 = 2800.0;
 
-/// Flare-envelope slew rates (per second) — `[glare+0x28]`/`[+0x2c]`, VERIFIED (wow-re
-/// celestial-bodies Addendum #5, decision 0508): the reference smooths the whole occlusion×dnCurve
-/// product with an **asymmetric LINEAR rate limiter** (`[glare+0x30]`, sole writer `0x6cf5ea`) —
+/// Flare-envelope slew rates (per second) — `[glare+0x28]`/`[+0x2c]` (decision 0508): the
+/// reference smooths the whole occlusion×dnCurve product with an **asymmetric LINEAR rate
+/// limiter** (`[glare+0x30]`, sole writer `0x6cf5ea`) —
 /// not an exponential ease. The sun's flare rises at 4.0/s, the moon's at 100/33 ≈ 3.03/s, and both
 /// fall at 50/33 ≈ 1.52/s (a killed flare takes ~0.66 s to go dark). Bit-exact `.rdata` constants.
 const SUN_FLARE_RISE: f32 = 4.0; // [0xce97d0]
@@ -95,7 +95,7 @@ fn view_lerp(cam_forward: Vec3, to_body: Vec3) -> f32 {
 
 /// Below-horizon gate for the additive glares (they can't route the disc clip): a smoothstep on the
 /// body's `sin(elev)` → 0 at/below the horizon. Stands in for the reference's occlusion queries
-/// seeing a set body sink (a factor of the slew target, like them — Addendum #5; the day/night term
+/// seeing a set body sink (a factor of the slew target, like them, `0x6cf490`; the day/night term
 /// they multiply is now modeled for real as the dnCurve).
 fn horizon_gate(to_body: Vec3) -> f32 {
     let t = (to_body.y / 0.035).clamp(0.0, 1.0);
@@ -166,7 +166,7 @@ const FLARE_CELLS: u32 = FLARE_FRACTION_GRID * FLARE_FRACTION_GRID;
 const FLARE_RAYS_PER_FRAME: u32 = 2;
 
 /// The **visible fraction** of the body's quad footprint against resident terrain ∈ [0, 1] — our
-/// CPU stand-in for the reference's fractional occlusion probe (`0x7e5220`, Addendum #8): the real
+/// CPU stand-in for the reference's fractional occlusion probe (`0x7e5220`): the real
 /// client draws the disc's OWN quad (same size/position) depth-tested inside a GPU occlusion query
 /// and uses `visiblePixels / projectedArea`, so a half-hidden sun carries ~half the flare. Here: a
 /// [`FLARE_FRACTION_GRID`]² ray grid over the quad's angular extent (`half` = the quad's angular
@@ -275,16 +275,15 @@ pub(super) struct FlareGate<'w, 's> {
 }
 
 /// The glare's **submersion fade** — `1 − clamp(depth × 0.1, 0, 1)`, a 10-yard linear ramp on the
-/// glare alpha (wow-re `submerged-consumer-census.md`; decision 1829). `depth` is
-/// `liquidSurfaceHeight − probeZ` in world-Z yards, positive when submerged, so a dry camera reads
-/// `0` and the fade is the exact identity.
+/// glare alpha (decision 1829). `depth` is `liquidSurfaceHeight − probeZ` in world-Z yards,
+/// positive when submerged, so a dry camera reads `0` and the fade is the exact identity.
 ///
-/// **This was a published negative until this round.** Two wow-re notes recorded the glare as
-/// having no submersion term; the read is one indirection out (`0x6cf4fe call [edx+0x10]` → the
-/// glare vtable's slot 4 → `0x6cf800`), which a direct-call census cannot see. It is worth
-/// implementing rather than filing as trivia: the glare is additive, so a black underwater
-/// celestial band would make it invisible anyway — and **288 of 374 `Light.dbc` rows (77%) carry a
-/// non-zero one**, so on most of the map there is a glare down there to fade.
+/// **The glare's submersion term is easy to miss.** The read is one indirection out
+/// (`0x6cf4fe call [edx+0x10]` → the glare vtable's slot 4 → `0x6cf800`), which a direct-call
+/// census cannot see. It is worth implementing rather than filing as trivia: the glare is
+/// additive, so a black underwater celestial band would make it invisible anyway — and **288 of
+/// 374 `Light.dbc` rows (77%) carry a non-zero one**, so on most of the map there is a glare down
+/// there to fade.
 ///
 /// Applies to the **sun and moon glares alike** (`0x6d48cf` / `0x6d48ea`; slot 4 of both glare
 /// vtables is `0x6cf800`, and they differ only at slot 3) and to **neither disc** — the discs have
@@ -294,7 +293,7 @@ fn submersion_glare_fade(depth: f32) -> f32 {
     1.0 - (depth * 0.1).clamp(0.0, 1.0)
 }
 
-/// The weather **celestial-alpha seed** (Addendum #6): under active weather the recompute writes
+/// The weather **celestial-alpha seed** (`0x6d2c74`): under active weather the recompute writes
 /// `floor(255·(1−bcc))` over the five body colour alpha bytes (sun disc, sun glare, white-moon
 /// disc, moon glare, moon02) — gated `bcc > 0`, so clear weather leaves the per-frame broadcast
 /// `0xFF` (discs) and moon02's unwritten `0` untouched. Returns the byte-quantized seed, or
@@ -318,8 +317,8 @@ impl FlareGate<'_, '_> {
     ///
     /// We shipped it the other way first, on the reasoning that a rate limiter should smooth
     /// *visibility* and depth is not visibility. That reasoning was fine and the fact was against
-    /// it — wow-re's summary said the fade goes "into the glare alpha", which is the drawn byte
-    /// `[glare+0x1b]` and is not where it goes. Asked, and corrected at the bytes.
+    /// it: the fade is not a multiply on the drawn alpha byte `[glare+0x1b]`. Corrected at the
+    /// bytes.
     ///
     /// It falls out that a deep camera (`fade == 0`) drives `base` to zero, which skips the terrain
     /// ray march entirely — the reference's own `0x6cf58c` shortcut, for free.
@@ -410,7 +409,7 @@ pub(super) fn follow_sun(
     let tint = benilla_assets::quant255(light.celestial_tint);
     // The weather celestial-alpha seed — dims the disc + glare under active weather.
     let seed = celestial_alpha_seed(light.storm_bcc);
-    // The occlusion probe covers the disc's own quad (Addendum #8): its angular half-size.
+    // The occlusion probe (`0x7e5220`) covers the disc's own quad: its angular half-size.
     let sun_half = (0.5 * SUN_SIZE * light.sun_disc_scale).atan();
     // occ1: cloud coverage over the sun's glare point (`0x6cf7b0` samples at glarePos = camera +
     // 12·dir) — a cloud drifting over the sun dims the flare linearly.
@@ -461,12 +460,12 @@ pub(super) fn follow_sun(
                 let units = 3.0 + 17.0 * f;
                 tf.scale = Vec3::splat(if hidden { 0.0 } else { units });
                 // Intensity: the view lerp's `lerp(0.5, 1, f)` (`[glare+0x9c]=0.5 → 1.0`, instant)
-                // × the slewed envelope (dnCurve × horizon × visibility — Addendum #5's
+                // × the slewed envelope (dnCurve × horizon × visibility — `0x6cf490`'s
                 // `[+0x1b] = floor(255·lerp·[+0x30])` shape). Rides base_color alpha — the shader's
                 // glare mode ADDS `gamma(tint × texel) × a` onto the scene, the reference's
                 // SRC_ALPHA byte weighting (decision 0502).
                 // × the weather seed — the glare's alpha byte is the seed the per-frame pack
-                // modulates (Addendum #6: `oldByte` into `0x6cf490`), so storms dim the flare.
+                // modulates (`oldByte` into `0x6cf490`), so storms dim the flare.
                 let env =
                     benilla_assets::quantize((0.5 + 0.5 * f) * env30 * seed.unwrap_or(1.0), 255.0);
                 let color = Color::srgba(tint[0], tint[1], tint[2], env);
@@ -523,7 +522,7 @@ pub(super) fn follow_moons(
     let env30 = if to_white == Vec3::ZERO {
         0.0
     } else {
-        // The occlusion probe covers the white moon's own disc quad (Addendum #8).
+        // The occlusion probe (`0x7e5220`) covers the white moon's own disc quad.
         let moon_half = (0.5 * SUN_SIZE * 1.75 * light.moon_disc_scale).atan();
         // occ1: the moon's halo is a THIN-CLOUD effect — the tent `1−|2(R−0.5)|` (`0x6cf7d0`) is
         // zero in a perfectly clear patch of sky AND under full cover, peaking on a wisp.
@@ -577,9 +576,9 @@ pub(super) fn follow_moons(
             MoonPart::Moon02 => {
                 // Base ×1.0, the shared size curve on moon02's own phase clock. The binary never
                 // writes its colour dword — black RGB, zero alpha, so the quad is invisible in
-                // clear weather (wow-re Addendum #7) — but the weather seed lands on its alpha
+                // clear weather (`0xce98a4`) — but the weather seed lands on its alpha
                 // byte like the other four: under active weather moon02 surfaces as the
-                // reference's faint dark disc (Addendum #6 C4). The span drives the per-vertex
+                // reference's faint dark disc (`0x6d2c74`). The span drives the per-vertex
                 // fade lane (0529) so a horizon crossing keeps the faithful sub-band wedge.
                 tf.translation = cam_pos + to_moon * dist;
                 let size = if hidden {
@@ -613,9 +612,9 @@ pub(super) fn follow_moons(
                 };
                 tf.scale = Vec3::splat(size);
                 // The view lerp's `lerp(0.1, 1, f)` (`[0xce9794]=0.1`, instant) × the slewed
-                // envelope (dnCurve × horizon × visibility) — Addendum #5's byte shape.
+                // envelope (dnCurve × horizon × visibility) — `0x6cf490`'s byte shape.
                 let f = view_lerp(*cam_gt.forward(), to_moon);
-                // × the weather seed (the glare alpha byte the pack modulates, Addendum #6).
+                // × the weather seed (the glare alpha byte the pack modulates, `0x6d2c74`).
                 let env =
                     benilla_assets::quantize((0.1 + 0.9 * f) * env30 * seed.unwrap_or(1.0), 255.0);
                 let color = Color::srgba(tint[0], tint[1], tint[2], env);
@@ -823,8 +822,8 @@ mod tests {
         })
     }
 
-    /// The `[glare+0x30]` slew (Addendum #5, 0508): asymmetric LINEAR rates — rise capped per body,
-    /// fall shared and slower — and it clamps to the target instead of overshooting.
+    /// The `[glare+0x30]` slew (`0x6cf59b`–`0x6cf5ea`, 0508): asymmetric LINEAR rates — rise capped
+    /// per body, fall shared and slower — and it clamps to the target instead of overshooting.
     #[test]
     fn flare_slew_is_asymmetric_linear_and_never_overshoots() {
         // Rising at the sun's 4.0/s: 0.1 s covers exactly 0.4.
@@ -863,7 +862,7 @@ mod tests {
         assert_eq!(flare_visible_fraction(ridge, cam, dir(12.0), half), 1.0);
         assert_eq!(flare_visible_fraction(ridge, cam, dir(1.0), half), 0.0);
         // A disc straddling the crest line is PARTIALLY visible — the fractional occ3 law
-        // (Addendum #8: half-hidden sun → ~half flare), not the old all-or-nothing gate.
+        // (`0x7e5220`: half-hidden sun → ~half flare), not the old all-or-nothing gate.
         let frac = flare_visible_fraction(ridge, cam, dir(5.4), half);
         assert!(
             (0.25..=0.75).contains(&frac),
@@ -912,7 +911,7 @@ mod tests {
         assert!((mid.x + mid.y).abs() < 1e-6);
     }
 
-    /// The weather celestial-alpha seed (Addendum #6): gated `bcc > 0` — clear weather leaves the
+    /// The weather celestial-alpha seed (`0x6d2c74`): gated `bcc > 0` — clear weather leaves the
     /// broadcast alphas alone — and byte-quantized `floor(255·(1−bcc))/255` under weather.
     #[test]
     fn weather_seed_is_gated_and_byte_quantized() {

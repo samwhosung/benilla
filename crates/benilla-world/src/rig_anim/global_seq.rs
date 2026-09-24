@@ -5,15 +5,15 @@
 //! samples them on the instance's global-sequence clock and writes the driven joint components
 //! *after* the [`AnimationPlayer`] posed the skeleton.
 //!
-//! Ground truth (wow-5875-re `gseq-anchor.md`, byte-verified): the cursor is
+//! Ground truth: the cursor is
 //! `(sceneClock − instanceAttachTime) % duration` — ONE free-running per-scene ms clock
 //! (`[scene+0xc]`, advanced once per scene update), snapshotted ONCE per model instance at attach
 //! (`CM2Model+0x68`, written unconditionally at `0x70eae1`). So a fresh instance starts its
 //! global sequences at phase 0, and two instances attached on different frames run at different
 //! phases — per-INSTANCE anchoring, not per-play arming (sequence tracks re-arm per play; the
 //! gseq anchor is stamped once). Spell effects are NOT an exception: the lifecycle is
-//! byte-verified fresh-per-play (wow-re `gseq-instance-lifecycle.md`: CreateModel always
-//! alloc→ctor→attach, teardown is a hard free, no pooling), and the director's own 3-cast
+//! fresh-per-play (`0x707350` alloc→ctor→attach; teardown is a hard free at `0x70e170`, no
+//! pooling), and the director's own 3-cast
 //! apitrace shows the impact flash at the same +16-frame offset every cast — the apparent
 //! cast-to-cast scatter is particle randomness plus the moving cast-anim hands, not clock
 //! phase (decisions 0855/0856/0858). The canonical creature consumer is the eyelid:
@@ -45,16 +45,15 @@ pub struct GlobalSeqDrive {
     anchor: Option<f64>,
     /// **This instance's scene clock**, when it is not the world's (secs). The kernel's Phase B
     /// reads `[[model+0x2c]+0xc]` — the clock of the scene that OWNS the instance — and a
-    /// `<Model>` widget owns a private `CM2Scene` at `CSimpleModel+0x314`, advanced by the
-    /// widget's own `OnUpdate` and by nothing else (wow-re `gseq-anchor.md` §1/§2 +
-    /// `modelframe-animation-clock.md` §1.1/§3, both byte-verified). So a UI model tile writes
+    /// `<Model>` widget owns a private `CM2Scene` at `CSimpleModel+0x314` (`0x76cfc0`), advanced
+    /// by the widget's own `OnUpdate` (`0x76d7f0`) and by nothing else. So a UI model tile writes
     /// its pane's clock here every frame it draws and the phase rides the pane, not the world:
     /// a pane whose frame is hidden stops its clock, and the spin resumes where it stopped.
     /// `None` — every world lane — is the world scene's free-running clock (decision 2046).
     clock: Option<f64>,
-    /// Paused: skip the joint writes (the doodad host gates animation to drawn instances — wow-re
-    /// `doodad-anim-host.md`: the ref's kernel ticks at draw time, so a culled model isn't
-    /// evaluated). Creatures never pause. Resuming needs no re-seek: the cursor is a pure
+    /// Paused: skip the joint writes (the doodad host gates animation to drawn instances — the
+    /// ref's kernel ticks at draw time (`0x707680`), so a culled model isn't evaluated). Creatures
+    /// never pause. Resuming needs no re-seek: the cursor is a pure
     /// function of the shared clock and the attach anchor, so a re-appearing doodad shows the
     /// pose the clock dictates.
     paused: bool,

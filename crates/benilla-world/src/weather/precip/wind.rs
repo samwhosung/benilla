@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-/// Streak tilt: `lerp(0°, 45°, sat(|wind.xy|/30))` (`weather_wind_tilt 0x674a70`; 30 @`0x8680f0`,
+/// Streak tilt: `lerp(0°, 45°, sat(|wind.xy|/30))` (`0x674a70`; 30 @`0x8680f0`,
 /// 45 @`0x8680f4`). Applied to the streak's APEX vertex only (the `M·(2·antiVel)` term).
 const WIND_TILT_DIV: f32 = 30.0;
 const WIND_TILT_MAX_DEG: f32 = 45.0;
@@ -46,7 +46,7 @@ pub(crate) struct WeatherWind {
     /// feeding `heading` straight into `wow_azimuth_to_bevy` to get a *direction* would silently
     /// yield an axis a quarter turn off.
     heading_dir: Vec3,
-    /// Streak-field tilt (rotates the fall axis toward the motion), from `weather_wind_tilt`.
+    /// Streak-field tilt (rotates the fall axis toward the motion), from `0x674a70`.
     pub(super) tilt: Quat,
     /// The **spawn-slab** tilt — rotates each particle's slab-local offset into the direction of
     /// travel, so the volume's leading edge is born low and close instead of a flat `z_off` up.
@@ -112,8 +112,7 @@ impl WeatherWind {
         // `mgr+0x78` (`0x67be40`): the `|W_xy| ≥ 1` test selects the heading's SOURCE — it does
         // NOT suppress the write. All three of its legs store `[esi+0x78]` (`0x67bee0`/`0x67bef6`/
         // `0x67bf02`), and below 1 yd/s the heading is overwritten with the **unit's own facing**
-        // (`0x67beff call [vtbl+0x18]`). The earlier "it HOLDS through calm" reading was wrong —
-        // corrected by wow-re alongside the slab tilt, `wx-snow-placement-law.md` §9.
+        // (`0x67beff call [vtbl+0x18]`). The earlier "it HOLDS through calm" reading was wrong.
         self.heading_dir = if mag2 >= 1.0 {
             self.vel / mag2.sqrt()
         } else {
@@ -128,7 +127,7 @@ impl WeatherWind {
         // Both rotations turn about `ŷ × ĥ` = `(h.z, 0, −h.x)`: a positive angle about it carries
         // `ŷ` toward `ĥ` (`R·ŷ = ŷcos + ĥsin`), i.e. leans into the heading. The handedness is
         // verified for the streak — the apex tips DOWNWIND, rain rushing into a moving player —
-        // and wow-re re-derived it independently for the slab.
+        // and holds equally for the slab.
         let lean = |dir: Vec3, speed: f32, div: f32, max_deg: f32| {
             Vec3::new(dir.z, 0.0, -dir.x)
                 .try_normalize()
@@ -139,7 +138,7 @@ impl WeatherWind {
                     )
                 })
         };
-        // The streak apex (`weather_wind_tilt 0x674a70`) keys on the AVERAGED wind, and dies below
+        // The streak apex (`0x674a70`) keys on the AVERAGED wind, and dies below
         // |wind|² < 0.001.
         self.tilt = if mag2 < 0.001 {
             Quat::IDENTITY
@@ -162,10 +161,10 @@ impl WeatherWind {
         self.heading
     }
 
-    /// The mist spawn frame: a yaw about the vertical by **+heading**. `mist_spawn 0x67a990`
+    /// The mist spawn frame: a yaw about the vertical by **+heading**. `0x67a990`
     /// feeds `−mgr+0x78` into the Z-rotation builder `0x7bdd60` — a wrapper around `0x7bdb00`,
-    /// which is the NEGATED-handedness family (`M(axis, θ) = R_standard(axis, −θ)`, rf-mist-motion
-    /// Q3) — so the true rotation is `R_standard(+Z_wow, +heading)`, and WoW +Z ↔ Bevy +Y carries
+    /// which is the NEGATED-handedness family (`M(axis, θ) = R_standard(axis, −θ)`) — so the true
+    /// rotation is `R_standard(+Z_wow, +heading)`, and WoW +Z ↔ Bevy +Y carries
     /// the angle sign-intact. Net effect: the −1.57 base azimuth (south = anti-north) spins to
     /// **anti-player-motion** — the stream always blows into a moving player's face, and holds
     /// that axis when they stop. (The earlier `−heading` transcribed the builder's literal minus
@@ -206,9 +205,8 @@ mod tests {
     /// azimuth; on stopping it is **overwritten with the unit's facing** rather than held.
     ///
     /// This test previously asserted the opposite ("standing still again HOLDS it"). That reading
-    /// was wrong — corrected by wow-re in the same round that found the spawn-slab tilt. The
-    /// visible consequence is the mist frame: it re-aims to where the player is looking when they
-    /// stop, instead of staying pinned to the direction they last ran.
+    /// was wrong. The visible consequence is the mist frame: it re-aims to where the player is
+    /// looking when they stop, instead of staying pinned to the direction they last ran.
     #[test]
     fn heading_takes_the_facing_below_a_yard_per_second() {
         let dt = 1.0 / 60.0;

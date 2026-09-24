@@ -7,7 +7,7 @@
 //! The reference keeps these in separate slots — the WMO's is loop slot A, the DBC's is the single
 //! slot B — and slot B, whose weight is hardcoded `1.0` whenever it is filled, makes
 //! `0x6d4ac1`–`0x6d4acc` skip loop A entirely: **an active DBC skybox suppresses the WMO one
-//! outright** (byte-VERIFIED, wow-re `lighting/scratch/wmo-skybox.md` §3–4). Here that is one
+//! outright**. Here that is one
 //! `Option` with the DBC source taken first, because a resolve that produced both would have to
 //! decide anyway and the binary has already decided.
 //!
@@ -67,11 +67,11 @@
 //!
 //! **The slot has a WEIGHT, and the weight is the 4-second crossfade.** The WMO slot is filled per
 //! frame as `0x6d4810(0, [0xca8080], [0xce9bdc])` — and `[0xce9bdc]` is the camera-in-WMO interior
-//! crossfade, THE same number the MFOG fog lerp rides (±0.25/s = `[0x8115b0]`, clamped [0,1];
-//! wow-re `wmo-skybox.md` §3: "the skybox alpha and the interior fog blend are the same number").
+//! crossfade, THE same number the MFOG fog lerp rides (±0.25/s = `[0x8115b0]`, clamped [0,1]) —
+//! the skybox alpha and the interior fog blend are the same number.
 //! A slot draws only at weight > 0 (`0x6d4afe`), with the weight multiplied into every batch's
 //! combined alpha (`0x710cb0` → `[CM2Model+0x180]`) — and a batch at `0 < A < 1` is promoted to
-//! SRC_ALPHA blending whatever its authored mode (`m2-blend-promotion-zfill.md`), so walking
+//! SRC_ALPHA blending whatever its authored mode (`0x811fe0`), so walking
 //! through Stratholme's gate alpha-blends the painted sky in over the still-standing celestial
 //! pass over 4 seconds, and back out on leaving. Here: [`crate::lighting::WmoCrossfade`] publishes
 //! the number, [`SkyboxWeight`] resolves the slot's weight from it (the DBC/ghost slot is
@@ -118,7 +118,7 @@ pub struct CameraSkybox(pub Option<String>);
 
 /// The resolved skybox's slot WEIGHT this frame — the second half of the resolve, and the number
 /// that makes the sky *crossfade* instead of pop (the report this closes). Per the byte law
-/// (module header + wow-re `wmo-skybox.md` §3–5):
+/// (module header):
 ///
 /// - the **WMO slot's** weight is `[0xce9bdc]`, the camera-in-WMO interior crossfade — THE same
 ///   number the MFOG fog lerp rides ([`crate::lighting::WmoCrossfade`], ±0.25/s, a 4-second fade
@@ -156,7 +156,7 @@ struct SkyboxPart {
     path: String,
     /// The batch's authored-blend material — what it draws with at weight 1.0.
     steady: Handle<WowModelMaterial>,
-    /// The blend-promotion twin for `0 < weight < 1` (`m2-blend-promotion-zfill.md`; equal to
+    /// The blend-promotion twin for `0 < weight < 1` (`0x811fe0`; equal to
     /// `steady` for a batch whose authored mode already blends).
     fade_blend: Handle<WowModelMaterial>,
 }
@@ -258,7 +258,7 @@ fn resolve_camera_skybox(
     mut weight: ResMut<SkyboxWeight>,
 ) {
     // **The ghost sky first — it wins outright.** Slot B is filled at weight 1.0 and that makes the
-    // reference skip loop A entirely (module header, wow-re §3–4), so a dead player under
+    // reference skip loop A entirely (module header), so a dead player under
     // Stratholme's painted sky sees DeathClouds, not the building's.
     //
     // Resolved from the SAME (map, camera position) seed the atmosphere uses, so the sky and the
@@ -460,9 +460,9 @@ fn sole_bone(sub: &benilla_formats::RenderSubmesh) -> Option<u16> {
 /// [`SkyboxWeight`] — one authority per entity class, decision 0025).
 ///
 /// Per slot the reference draws only at weight > 0 (`0x6d4afe fcomp 0.0`), with the weight
-/// multiplied into every batch's combined alpha (`0x710cb0` → `[CM2Model+0x180]`,
-/// `m2-alpha-combine-cull.md`) — and a batch at `0 < A < 1` is PROMOTED to
-/// SRC_ALPHA/INV_SRC_ALPHA blending whatever its authored mode (`m2-blend-promotion-zfill.md`),
+/// multiplied into every batch's combined alpha (`0x710cb0` → `[CM2Model+0x180]`)
+/// — and a batch at `0 < A < 1` is PROMOTED to
+/// SRC_ALPHA/INV_SRC_ALPHA blending whatever its authored mode (`0x811fe0`),
 /// which is what lets an opaque painted cube fade. Here that is: weight ≤ 0 ⇒ hidden; weight < 1
 /// ⇒ the blend-promotion twin + the weight in the `MeshTag` alpha field (the same rails every
 /// entity feather rides); weight ≥ 1 ⇒ the steady authored material, alpha field full.

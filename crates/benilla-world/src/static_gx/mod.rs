@@ -9,7 +9,7 @@
 //!
 //! The correctness bar is pixel-identity against the entity path
 //! (`WOW_STATIC_MERGE=0 WOW_STATIC_GX=0` vs the armed default) at the capture fixtures —
-//! the on-demand A/B harness, not the director's eye (§7: captures are a regression tool).
+//! the on-demand A/B harness, not the director's eye (captures are a regression tool).
 //!
 //! What it deliberately does NOT build (1429 stages them): horizon occlusion, class-aware
 //! index baking (items are sorted by `(bucket, texture)` main-world and coalesced into runs
@@ -188,8 +188,8 @@ const WORD_WINDOW: u32 = 1 << 26;
 // key on authored colours, not on the lane.
 const WORD_HAS_VC: u32 = 1 << 27;
 // The prop lane (B4, decision 1433) — an exterior WMO MODD prop's Matte sun family: intensity
-// FIXED 1.0 (`ShadeSel::Matte`, the mid-band selector — the ADT 2.5 site is one a MODD prop
-// never reaches, §8b). A distinct bit rather than an alias of SHADE_LIT: under the recorded
+// FIXED 1.0 (`ShadeSel::Matte`, the mid-band selector — the ADT 2.5 site (`0x69e4ad`) is one a
+// MODD prop never reaches). A distinct bit rather than an alias of SHADE_LIT: under the recorded
 // `min(I,1)` cap the two read identically today, but the cap is the lane's one unfaithful
 // term (0803 §3) and lifting it must not silently split this lane's parity.
 const WORD_MATTE: u32 = 1 << 28;

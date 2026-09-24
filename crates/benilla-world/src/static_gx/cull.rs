@@ -371,7 +371,7 @@ pub(super) fn cull_cells(
     // The dev doodad toggle, cell-wholesale (see the module doc). The doodad phase — cells
     // AND prop regions (B4; a WMO's furniture is the M2 scene, not the WMO phase) — sorts
     // NEAR-FIRST as one list (B3, decision 1432): the 1.12 client's front-to-back band walk
-    // (32 bands × 33⅓ yd, `terrain.md` 0xc7bd40) at this lane's grain: the node draws the
+    // (32 bands × 33⅓ yd, `0xc7bd40`) at this lane's grain: the node draws the
     // list in order, so early-z rejects the far entries' fragments instead of shading them.
     if doodads_on {
         let mut admitted: Vec<(u32, GxDoodadVis)> = Vec::new();

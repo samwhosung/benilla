@@ -8,8 +8,7 @@
 //! must be resident: the farclip disc rounded out to whole chunks) and the **outer**
 //! `idx ± max(r + 2, 8)` (requested ahead, built under a 5 ms/frame budget; the 8-chunk floor is
 //! 266⅔ yd). Eviction is pure membership in the outer window, at tile granularity (`[area+0x88]`
-//! vs `bounds >> 4`). Every number here is VERIFIED at the bytes — wow-re `terrain.md`,
-//! "Streaming residency", and `scratch/streaming-residency-and-forced-load.md` §1–§2.
+//! vs `bounds >> 4`).
 //!
 //! Two deliberate differences from the reference, both named in 1513:
 //! - **Whole tiles.** benilla loads, spawns and releases ADT tiles, not chunks; a tile is wanted iff

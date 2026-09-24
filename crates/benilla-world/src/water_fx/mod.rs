@@ -2,8 +2,7 @@
 //! rebuilt as the reference's actual **record model** (decision 0264; supersedes the ribbon of 0240
 //! and the stamps of 0234).
 //!
-//! Ground truth, twice over: the byte-exact RE (wow-5875-re `system/terrain/scratch/`
-//! `water-ripple-decal.md` + the `waterdecal-*.c` decomps, §5-verified) **and** two live GL traces
+//! Ground truth, twice over: byte-exact reverse engineering **and** two live GL traces
 //! of the reference reconstructed frame-by-frame (Northshire wade 2026-07-08 + standing-ring
 //! capture 2026-07-10; per-record texgen fits residual ≈ 0). The verified model:
 //!
@@ -98,11 +97,10 @@ const ONESHOT_DEPTH_FRAC: f32 = 0.4;
 
 /// The emission depth gate: **2 × the unit's collision height** (≈4.06 yd for a human, ≈2.3 for a
 /// gnome), floored at 1.0 like the reference's `max(…, 1.0)`. The gate field
-/// `[unit+0x297]` is the dword-indexed `+0xa5c` = CMovement+0xb4 = **collision height** —
-/// Q5(c) of wow-re `water-ripple-decal.md` cross-verifies the field identity; the note's
-/// depth-gate paragraph mislabels the same field "boundingRadius", and transcribing that label
-/// (`2 × UNIT_FIELD_BOUNDINGRADIUS` ≈ 0.78, clamped to a 1-yd gate) is what killed all foam the
-/// moment swim latched: the ~1.52-yd swim rest depth sat past the misread gate (decision 0489 —
+/// `[unit+0x297]` is the dword-indexed `+0xa5c` = CMovement+0xb4 = **collision height**, not
+/// `UNIT_FIELD_BOUNDINGRADIUS`: reading it as the latter (`2 × UNIT_FIELD_BOUNDINGRADIUS` ≈ 0.78,
+/// clamped to a 1-yd gate) is what killed all foam the moment swim latched: the ~1.52-yd swim
+/// rest depth sat past the misread gate (decision 0489 —
 /// the director's ref-check shows surface swimmers foaming, which the true 4-yd gate allows).
 const GATE_DEPTH_FRAC: f32 = 2.0;
 
@@ -197,8 +195,8 @@ fn alloc_slot(cursor: &mut usize, base: usize, len: usize) -> usize {
 }
 
 /// The two foam stencils (ring/wake), decoded raw at startup. The draws they feed carry the
-/// reference's **whole** foam render state (VERIFIED at the bytes — wow-re's §5 on `0x68fae0`,
-/// folded back as 1808): additive; **fog off** (`0x68fcd0`/`0x68fcd2`/`0x68fcd7` — *not*
+/// reference's **whole** foam render state (`0x68fae0`, folded back as 1808): additive; **fog
+/// off** (`0x68fcd0`/`0x68fcd2`/`0x68fcd7` — *not*
 /// `0x68fcc1`, which is the blend value's `mov edx,3` and was this file's citation until then);
 /// **depth-tested `LEQUAL`, depth-write off**; and a depth-buffer bias armed at `0x68fd0f`.
 /// Sorted on [`crate::sky_order::FOAM_BIAS`], a rung over the whole water band, because
@@ -443,7 +441,7 @@ fn emit_water_foam(
             let vel = prev.map_or(Vec3::ZERO, |p| (body - p) / dt);
             let w = bevy_to_wow(vel);
             let speed = (w[0] * w[0] + w[1] * w[1]).sqrt();
-            // Byte-faithful selection off our own streamed movement flags (wow-re CWater0Ripple
+            // Byte-faithful selection off our own streamed movement flags (the CWater0Ripple
             // driver `0x5fa760`); the masks live on `Viewer`, next to the field they read.
             let state = if viewer.translating() {
                 WadeState::Translating {

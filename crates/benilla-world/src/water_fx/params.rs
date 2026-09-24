@@ -1,8 +1,7 @@
 //! The CWater0Ripple **driver math** — pure functions (no ECS): the per-emission parameter
 //! formulas of `0x5fa760`, the record lifecycle (size growth + the 0.4/0.6 alpha ramp), and the
-//! render texgen. Every formula is byte-verified (the 0264 dispatch's §5 hand-trace closed the
-//! Ghidra-broken arg plumbing — wow-re `water-ripple-decal.md`, their `bb4793d7`) and validated
-//! against the two reference-trace reconstructions; the tests pin the envelopes.
+//! render texgen. Every formula is byte-verified and validated against the two reference-trace
+//! reconstructions; the tests pin the envelopes.
 //!
 //! The 0264 INTERIM constants are gone (decision 0265): the wake-size factor was the reference
 //! *render* aging a record one frame before its first draw (an artifact of the capture's ~20 fps,

@@ -1405,7 +1405,7 @@ fn despawn_tile_owned(commands: &mut Commands, t: &TileState) {
 }
 
 /// The `WorldDetail` re-scatter (0992): 1.12's own setter law — writing the density CVar
-/// tail-calls the chunk-rebuild walk (`0x6725a0` → `0x6b1d20`, wow-re terrain.md), so a change
+/// tail-calls the chunk-rebuild walk (`0x6725a0` → `0x6b1d20`), so a change
 /// re-scatters the LOADED tiles too, not just future streams. The fresh `ClutterChunk`s spawn
 /// unbuilt and the lazy builder re-meshes the ~70 yd bubble over the next frames. Watches the
 /// VALUE, not `is_changed()`, because the predicate is "the density moved" and not "the resource
@@ -1607,7 +1607,7 @@ fn release_placement(
 /// real client renders it (decision 0960; B193: testers see through 1.12.1's terrain from below, the
 /// way a WMO exterior reads from inside a cave; we drew it solid). The reference never sets
 /// `EGxRs 0x14` (`GL_CULL_FACE`) in its terrain-chunk pass `0x684510`/`0x6beb50`, so terrain inherits
-/// the device baseline `0x14 = 1` written by `0x593bf0` — culling ON, and wow-re's census of all 39
+/// the device baseline `0x14 = 1` written by `0x593bf0` — culling ON, and a census of all 39
 /// `0x14` setters proves none leaks in unbracketed ahead of the terrain drain. Only the passes that
 /// *want* two sides clear it inside their own `Push`/`PopRenderState` bracket: the four liquid
 /// passes, and the WDL mesh `0x6bd780` (cull 0 at `0x6bd79d`) — which is why `wdl.rs` stays

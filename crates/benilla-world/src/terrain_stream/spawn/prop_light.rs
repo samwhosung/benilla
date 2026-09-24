@@ -100,8 +100,7 @@ pub struct PropLobeLight {
 /// `70ca80 SetState(0x3f, 0)`). `0x70b360` zeroes `[esi+0x32f0]` at the head of every batch
 /// (`70b607`), and only `0x70cb30` (TYPE 0) and `0x70d330` (TYPE 2) ever write it back — so
 /// `0x70baf0`'s `70bb9c test eax,eax` reads 0 for a particle and `70bba4 je 0x70bdf2` takes the
-/// **fixed-function device-light commit** `0x71c730` unconditionally. wow-re
-/// `m2-lighting-lane-selector.md` §1(c2), triple-derived.
+/// **fixed-function device-light commit** `0x71c730` unconditionally.
 ///
 /// So the curve here is the hardware's `max(N·L, 0)`, **not** [`fold_interior_probe`]'s SH lobe —
 /// a mesh and its own particles share the room's committed WORDS and legitimately differ in the
@@ -187,7 +186,7 @@ pub fn fold_interior_probe(
 mod tests {
     use super::*;
 
-    /// GOLDEN — the exact worked case wow-re returned for the WENTITY interior leg (`0x6a7300`
+    /// GOLDEN — the exact worked case for the WENTITY interior leg (`0x6a7300`
     /// → `0x71bce0`/`0x71bc70` → `0x71c2f0` → `0x71c730`), reproduced end to end. A floor MOCV
     /// sample of `(70, 60, 50)`: the HSV boost fires (`70 < 168`, a uniform ×2.4 to `(168,144,120)`)
     /// and the cap does not (`70 <= 96`, so the ambient word is the sample itself). With one

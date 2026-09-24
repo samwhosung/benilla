@@ -1,6 +1,5 @@
 //! **The straddle split** — a translucent model that crosses its water plane draws on BOTH sides
-//! of the water pass, each copy cut at the waterline (decision 2188; wow-re
-//! `terrain/scratch/water-frame-straddle.md` §2, byte-VERIFIED).
+//! of the water pass, each copy cut at the waterline (decision 2188).
 //!
 //! **The reference.** The collector (`0x707680`) dots each model's bound-box centre (instance
 //! matrix × `(min+max)/2`) against the plane `{0,0,1,−surfaceZ}` from the model's own liquid hit,
@@ -381,10 +380,11 @@ fn band_one(
     near_side: f32,
     (entity, gt, unit, rig, band): BandRoot<'_>,
 ) {
-    // The reference's point and slack (§2/§6): the bound centre through the instance matrix, the
-    // radius through its row-0 scale. The game hands the armed idle's authored CAaBox rather than
-    // the header sphere, so the slack is that box's circumscribed sphere — never smaller than the
-    // model, and an over-wide band costs only a copy whose half the clip discards whole.
+    // The reference's point and slack: the bound centre through the instance matrix (`0x70848d`),
+    // the radius through its row-0 scale (`0x708478`). The game hands the armed idle's authored
+    // CAaBox rather than the header sphere, so the slack is that box's circumscribed sphere —
+    // never smaller than the model, and an over-wide band costs only a copy whose half the clip
+    // discards whole.
     let was = band.as_ref().is_some_and(|b| b.straddles);
     let word = unit.bound.and_then(|b| {
         let centre = gt.transform_point(Vec3::from(b.center));

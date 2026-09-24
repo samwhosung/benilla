@@ -1,5 +1,5 @@
 //! The celestial draw-order ladder — the reference's **fixed sky pass order**, expressed as
-//! `Transparent3d` sort biases (wow-re `celestial-frame-anatomy`, §5-verified off the binary).
+//! `Transparent3d` sort biases.
 //!
 //! The real client draws the frame `sky → opaque world → weather → glare`, and inside its sky pass
 //! (`CSky::Render 0x6d4940`, one squashed depth slice `[0.975, 0.98]`, depth-write off, painter's
@@ -132,10 +132,10 @@ pub(crate) const WHITE_MOON_BIAS: f32 = -8.1e5;
 pub(crate) const MOON02_BIAS: f32 = -8.0e5;
 /// The cloud dome — last of the sky pass (`0x6d4a71`): clouds blend over a setting sun.
 pub(crate) const CLOUDS_BIAS: f32 = -6.0e5;
-/// **Far-side model transparents** — the water-plane interleave's early half (byte-VERIFIED,
-/// wow-re `water-frame-straddle.md`): the reference splits M2 transparents into an above-water
-/// and a below-water list per model (per **emitter** for particles — each classifies onto exactly
-/// ONE list, `0x7084a0`), and `0x483460` draws the list on the eye's FAR side of the water plane
+/// **Far-side model transparents** — the water-plane interleave's early half: the reference splits
+/// M2 transparents into an above-water and a below-water list per model (`0x707680`; per
+/// **emitter** for particles — each classifies onto exactly ONE list, `0x7084a0`), and `0x483460`
+/// draws the list on the eye's FAR side of the water plane
 /// *before* the water pass, the near side *after*. A draw classified far-side takes this rung —
 /// an effect plus its owner-last rung (capped at 32), a translucent M2 mesh batch plus its batch
 /// eps (≤ ~65 × 1e-3, `model_render::BATCH_ORDER_SORT_EPS`), a zfill twin minus its 8 — so it
@@ -221,8 +221,8 @@ impl Rung {
     /// one lane that needs more". The binary groups them the other way — the blob shadow reaches
     /// the SAME EGxRs id-`0` arming site as the ring, corpse marker, click marker and sky decal
     /// (`0x6d7920` → `0x6d8047 call 0x6d7330` → `0x6d6fa0` → `0x6d7480`), and it is the
-    /// **footprints** that are a lane of their own (`0x69a54a` in `0x69a3e0`), at 10× (wow-re
-    /// `gx/scratch/decal-depth-bias-lanes.md`, §5 five-way). And our own measurement agrees with
+    /// **footprints** that are a lane of their own (`0x69a54a` in `0x69a3e0`), at 10× (measured on
+    /// the reference client). And our own measurement agrees with
     /// the grouping: the residual is 0781's bake error — the decal's CPU-baked world verts vs the
     /// receiver's GPU-transformed verts diverge by ~1–3 ulps of the *world coordinate*, millimetres
     /// at city magnitudes — which is a property of the bake, identical on every lane that uses it.
@@ -248,8 +248,8 @@ impl Rung {
     /// corpse marker and the click-to-move marker — the same `+0x30` slot and the same call site).
     ///
     /// This rung shipped at **+8192** for months and was moved on a guess's opposite: 1785 left it
-    /// alone because the ring's frame slot was *unread*, and the RE it dispatched came back with a
-    /// slot earlier than anything guessed. `[node+0xb4] = 0x481540` → `0x4815d0` →
+    /// alone because the ring's frame slot was *unread*, and it turned out earlier than anything
+    /// guessed. `[node+0xb4] = 0x481540` → `0x4815d0` →
     /// `0x48160c call [obj vt+0x38]` → `0x614ada call [obj vt+0x30]` → `0x608e00`: the ring is
     /// emitted **from inside PHASE 1's own M2 node drain** (`0x6812c5 call 0x683dd0`), the same
     /// loop body that then calls `0x6d78f0` for that node's blob shadow — so the family is not
@@ -265,11 +265,11 @@ impl Rung {
     ///
     /// The reference draws its ground decals *before* the water, and B347 is what it costs not
     /// to. The frame driver `0x483460` emits this one inside PHASE 1's opaque drain row
-    /// (`0x6812c5 call 0x683dd0` → `0x6d78f0` → `0x6d7920`; wow-re `unit-blob-shadow.md` Q1) —
-    /// in the same node-drain loop body as the ring above and immediately after it, before the
-    /// footprints, before the M2 opaque pass (`0x4836a6`), and long before the water surfaces,
-    /// which draw in phase 3 *between* the two M2 transparent passes (`water-frame-straddle.md`
-    /// §1). Every transparent in the world paints over a shadow there.
+    /// (`0x6812c5 call 0x683dd0` → `0x6d78f0` → `0x6d7920`) — in the same node-drain loop body
+    /// as the ring above and immediately after it, before the footprints, before the M2 opaque
+    /// pass (`0x4836a6`), and long before the water surfaces, which draw in phase 3 (`0x6816d0`)
+    /// *between* the two M2 transparent passes. Every transparent in the world paints over a
+    /// shadow there.
     ///
     /// Here it did the exact opposite. At the old **+4096** the shadow's key (`view-z + bias`)
     /// beat every world transparent — [`WATER_BIAS`], [`FAR_SIDE_BIAS`], and the unbiased
@@ -293,8 +293,7 @@ impl Rung {
     /// **The pre-water band, rung 3: footprints** — the reference draws them at
     /// `0x483654` (`0x670240` → `0x69a3e0`), one slot AFTER the shadow pass and still before the
     /// M2 opaque pass, so a print paints over a shadow rather than under it. That was inverted
-    /// here: the print rode +2048 *below* the shadow's +4096, on a comment calling the reference's
-    /// frame order an open RE item — `water-frame-straddle.md` §1 had already closed it.
+    /// here: the print rode +2048 *below* the shadow's +4096.
     pub const FOOTPRINT: f32 = -5.0e4;
     /// **The pre-water band, rung 4: the ground-target reticle** — the reference's solid-receiver
     /// pass (`0x4836c5`, flags `0x200122`) is the last decal before the water. Its *liquid* pass
@@ -308,8 +307,8 @@ impl Rung {
     ///
     /// **The shipped value is `D3DRS_DEPTHBIAS = −1.2207217514514923e−04`** =
     /// `−f32(footstepBias(0.125) × [0x810390])` — **−2048.03 ULPs** of the reference's 24-bit
-    /// buffer, 20× the ring/shadow lane and 2× the footprints' (VERIFIED, wow-re
-    /// `gx/scratch/decal-depth-bias-lanes.md`, §5 five-way, commit `6335d165`).
+    /// buffer, 20× the ring/shadow lane and 2× the footprints' (measured on the reference client,
+    /// four captures at the graphics boundary).
     ///
     /// **1809's `−8.0001` and its `factor = −4.0` were both dead code.** `gxApi` defaults to
     /// `"direct3d"` (`0x63a81d`) and no shipped `WTF` overrides it, so `GxDevCreate` builds
@@ -326,7 +325,7 @@ impl Rung {
     /// **We spend almost none of it, on purpose.** Our constant is in ULPs of a **float** buffer
     /// (per-primitive — the quantisation 1806 is about), so its world pull is `z · C · 2⁻²³`:
     /// ~1 µm per yard of view distance at `C = 8`. The reference's is `1.29847e−3 · d²` — 0.13 yd
-    /// at 10 yd, 0.52 at 20, 3.2 at 50 — and wow-re **measured, from framebuffer pixels on two
+    /// at 10 yd, 0.52 at 20, 3.2 at 50 — and **measured, from framebuffer pixels on two
     /// Northshire wade frames, that it does paint the splash decal onto dry bank**, by ~0.3–1.0 yd
     /// at an 11.9-yd camera. That bleed is the thing the director reported twice (B348), so the
     /// fidelity is available and deliberately not taken; the reference's own bound on it is not

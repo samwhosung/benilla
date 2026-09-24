@@ -263,8 +263,7 @@ pub(super) fn terrain_collider_data(
 }
 
 /// How far an impassable chunk's fence rises above the chunk's own floor — the reference's literal
-/// `u = (0, 0, 32000.0)` (immediate `0x46fa0000` at `0x6ab599`), VERIFIED by wow-re's §5 on
-/// `0x6ab530` (`system/terrain/scratch/impassable-chunk-walls.md`).
+/// `u = (0, 0, 32000.0)` (immediate `0x46fa0000` at `0x6ab599`, the emitter `0x6ab530`).
 ///
 /// It is a *reach*, not a height: the quad is based at `chunk+0x4c`, the chunk AABB's **min z**, so
 /// the fence stands on the chunk's lowest ground and rises 32 km. Nothing extends below — a mover
@@ -275,7 +274,7 @@ const FENCE_REACH: f32 = 32000.0;
 /// The `(vertices, triangles)` for a tile's **impassable-chunk fences** — the ADT-level invisible
 /// wall of report B129, in the same world space as the terrain collider.
 ///
-/// The mechanism is the reference's, VERIFIED (wow-re §5 on the emitter `0x6ab530`, reached from
+/// The mechanism is the reference's (the emitter `0x6ab530`, reached from
 /// the movement box gather `0x6721b0 → 0x6aa8b0 → 0x6aadc0`; the flag is `CMapChunk+0xc & 0x40`,
 /// written word-wide at `0x6af5f0` from MCNK header bit 1, and `0x6aae2a` is its only reader in the
 /// image):

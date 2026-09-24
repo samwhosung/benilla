@@ -241,7 +241,7 @@ pub fn spawn_model_entities(
     // Two batches naming one section rasterize the SAME triangles ([`RenderSubmesh::section`]): a
     // base layer and the shine/reflect layer authored over it. The reference draws both from one
     // vertex array under depth-write + LEQUAL, so the later batch wins that coplanar tie EXACTLY
-    // (wow-re `m2-depth-blend-state`). The consolidators exclude on per-batch facts — env-mapped
+    // (`0x70c190`). The consolidators exclude on per-batch facts — env-mapped
     // UVs and the `0x10`/`0x08` depth flags (`static_gx::divert`), additive order (`merge`) — and a
     // shine layer carries all of them, so the pair got split: base into the retained/merged lane,
     // shine onto the entity path. Those two lanes reach the same world vertex by different
@@ -270,9 +270,8 @@ pub fn spawn_model_entities(
         // transparent sort bias, so one model's coplanar layers draw in file order instead of
         // re-flipping a sort tie every frame (`model_render::BATCH_ORDER_SORT_EPS`). WMO batches
         // additionally ride it into the clip-z nudge that resolves coplanar layers in MOBA file
-        // order — the byte-verified client behaviour (wow-5875-re
-        // models/scratch/wmo-batch-blend-depth-state.md); `model_material` gates that half on
-        // `is_wmo`.
+        // order — the byte-verified client behaviour (`0x6b4f10`/`0x6b5190`); `model_material`
+        // gates that half on `is_wmo`.
         let batch_order = u16::try_from(batch_idx + 1).unwrap_or(u16::MAX);
         let interior = sub.interior || interior_slot.is_some();
         // A billboard card is culled by the SAME rule as any other batch — its material's `0x04`
@@ -280,9 +279,9 @@ pub fn spawn_model_entities(
         // that a card whose plane normal points away from the viewer would backface-cull to nothing;
         // that is precisely the mechanism the reference USES, and forcing it off is what drew the
         // stray solid triangles beside working particle effects (decision 0629, bugs B05/B34).
-        // A billboard bone puts the model's +X toward the viewer, the cull is GL_BACK/CCW (wow-re
-        // `models.md` MOMT/M2 flag map, `m2-depth-blend-state.md` §0x04), so a −X-facing card is
-        // never seen — and an author who wanted one seen set `0x04` themselves: Elwynn's LampPost
+        // A billboard bone puts the model's +X toward the viewer, the cull is GL_BACK/CCW
+        // (`0x70c2b3`), so a −X-facing card is never seen — and an author who wanted one seen
+        // set `0x04` themselves: Elwynn's LampPost
         // carries a two-sided −X card AND a single-sided +X glow card, one model, both rules.
         let two_sided = sub.two_sided;
         // A lit interior M2 prop submesh (not a WMO group): it carries its SH-probe slot in

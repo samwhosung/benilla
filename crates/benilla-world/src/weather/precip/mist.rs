@@ -1,9 +1,6 @@
 //! The companion mist — every precip type owns one in the reference (its own object: ctor
 //! `0x67a5b0`, spawn `0x67a990`, render `0x67ae20`; rain/snow texture `SnowMist01.blp`, sand
-//! `WeatherMistGrainy01.blp`). Spawn law: wow-re's **difftested** `mist.rs` transcription;
-//! lifetime/motion/fade semantics: the §5 ten-agent finding
-//! `system/lighting/scratch/rf-weather-mist-motion.md` (byte-arbitrated) — every constant here
-//! is now VERIFIED.
+//! `WeatherMistGrainy01.blp`).
 //!
 //! The mechanism: up to 128 puffs, spawned at `2·max(density−0.5, 0)·K·Q` nodes/s (zero below
 //! the density knee), each born from draws in the **wind-heading frame** — a polar motion
@@ -28,9 +25,9 @@ use super::{rand01, wow_azimuth_to_bevy, WeatherWind};
 /// Mist spawn-rate gain `Q` — per **kind** and per leg. The rate is `2·max(density − 0.5, 0)·K·Q`
 /// nodes/s (each density param-set's step 5 → effect+0x3c = mist+0x20 accumulator).
 ///
-/// **Snow carries its own pair and it is not rain's** (wow-re `weather_scalars`:
-/// `snow_density_param_set 0x6776c0` reads `0x80732c` = 24 / `0x80ffd8` = 48, against
-/// `rain_density_param_set 0x6749e0`'s `0x80ff9c` = 18 / `0x80ffa0` = 38). Applying rain's 38 to
+/// **Snow carries its own pair and it is not rain's** (the snow param set `0x6776c0` reads
+/// `0x80732c` = 24 / `0x80ffd8` = 48, against
+/// the rain param set `0x6749e0`'s `0x80ff9c` = 18 / `0x80ffa0` = 38). Applying rain's 38 to
 /// snow ran the snow mist at **0.79×** for as long as this constant was shared — the same class of
 /// mistake as reading a shared byte offset and assuming a shared table. Every scalar on these two
 /// paths is a *pair*; check the pair before reusing a number across kinds.
@@ -40,7 +37,7 @@ const MIST_Q_SNOW: f32 = if super::SHADER_LEG { 48.0 } else { 24.0 };
 pub(super) const MIST_CAP: usize = 128;
 /// Puff quad size: 12×12 world units (ctor arg) → half-extent 6.
 const MIST_HALF: f32 = 6.0;
-/// Puff floor bias: `z = max(grid_ground, seeded z) + 6.0` (`mist_spawn 0x67a990`: the
+/// Puff floor bias: `z = max(grid_ground, seeded z) + 6.0` (`0x67a990`: the
 /// `size·0.5` term over the fog-grid sample). The **max** is what makes the mist a volume
 /// rather than a sheet.
 const MIST_FLOOR: f32 = 6.0;
@@ -49,7 +46,7 @@ const MIST_FLOOR: f32 = 6.0;
 /// wind-heading frame → **±22 × ±22 × ±12.5** around the cluster centre.
 const MIST_EXT_XY: f32 = 44.0;
 const MIST_EXT_Z: f32 = 25.0;
-/// The polar motion basis each node carries (`mist_spawn` draws 1–3, stored at node+0x114):
+/// The polar motion basis each node carries (`0x67a990` draws 1–3, stored at node+0x114):
 /// azimuth `−1.57 ± 0.5·0.349` in the wind-heading frame (+0x24/+0x28), a per-type radius
 /// (below), rise `0.333 ± 0.5·0.0333` (`0x807a40`/`0x807334`). The node is born `1.5·dir`
 /// upstream of the camera (`0x80308c` = 1.5) and streams along `dir`.
@@ -75,7 +72,7 @@ const MIST_LIFE_SCALE: f32 = 0.3;
 /// The fade trapezoid (VERIFIED): `clamp(age/0.4) · clamp((life−age)/0.4)` — mist+0x30 = 0.4
 /// is each ramp's DURATION in seconds (not an alpha cap); the plateau sits at 1.0.
 const MIST_FADE_S: f32 = 0.4;
-/// The node's tail draw (`mist_spawn` draw 7): `((m−1)−0.5)·3.333` ∈ ±1.667 — the isotropic
+/// The node's tail draw (`0x67a990` draw 7): `((m−1)−0.5)·3.333` ∈ ±1.667 — the isotropic
 /// `0.5·dt²·tail` term of the per-frame advance.
 const MIST_TAIL_SCALE: f32 = 3.333_333_3;
 /// While a node sits below its terrain-follow target, `tail += 5/3` per FRAME (`0x80655c`,
@@ -94,13 +91,13 @@ const MIST_SLOPE_1: f32 = 0.5;
 const MIST_SLOPE_2: f32 = 0.75;
 const MIST_SLOPE_3: f32 = 1.0;
 /// The follow's upward-only per-frame z-step cap (`0x67b433–5a`; the exact scalar order is
-/// flagged in wow-re for a transcription re-check).
+/// unconfirmed).
 const MIST_Z_STEP_CAP: f32 = 3.0;
 
 /// One mist puff: position, its stored motion basis, and the lifecycle.
 struct MistNode {
     pos: Vec3,
-    /// The wind-yawed polar direction (`mist_spawn` node+0x114): advanced `pos += dt·dir` per
+    /// The wind-yawed polar direction (`0x67a990` node+0x114): advanced `pos += dt·dir` per
     /// frame (VERIFIED — the drift scalar is the frame dt, ≈|dir| yd/s, framerate-independent).
     dir: Vec3,
     /// node+0x128: the isotropic `0.5·dt²·tail` term; grows 5/3 per frame while below the
@@ -217,7 +214,7 @@ pub(super) fn run_mist(
     let yaw = wind.mist_yaw();
     while mist.budget >= 1.0 && mist.nodes.len() < MIST_CAP {
         mist.budget -= 1.0;
-        // The difftested spawn (`mist_spawn 0x67a990`): a polar motion basis + a box scatter,
+        // The difftested spawn (`0x67a990`): a polar motion basis + a box scatter,
         // both in the wind-heading frame; the node is born 1.5·|dir| upstream of the camera.
         let az = MIST_AZ_BASE + (rand01(rng) - 0.5) * MIST_AZ_SCALE;
         let radius = r_base + (rand01(rng) - 0.5) * r_span;
@@ -292,8 +289,8 @@ pub(super) fn run_mist(
 
 /// Mist puffs: 12×12 camera-facing quads, RGB = the CURRENT fog colour (one flat tint), alpha
 /// evaluated **per corner** — `linearstep(6, 18, corner→cam) · trapezoid(age)` at full range
-/// (the reference computes the distance ramp per billboard corner: `mistr_corner_dist` →
-/// `mistr_color_repack`; no peak cap) — so a quad hanging beside the camera still shows its
+/// (the reference computes the distance ramp per billboard corner at `0x67add0`, packed into the
+/// vertex colour at `0x67ae20`; no peak cap) — so a quad hanging beside the camera still shows its
 /// far corners. Alpha-blended, fog off (the tint already IS the fog colour). Pushed onto the
 /// shared effect stream (0733), perimeter corner order for the quad-index pattern.
 pub(super) fn push_mist(

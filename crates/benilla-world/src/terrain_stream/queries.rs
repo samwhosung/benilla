@@ -145,9 +145,9 @@ pub fn terrain_height_under_cached<'a>(
 }
 
 /// Track the `AreaTable` id under the player's feet. Faithful to the client's GetAreaID resolver
-/// (wow-re 0x670250): a WMO interior takes precedence over the terrain chunk when the down-ray
-/// keeps the WMO nearer — [`CurrentAreaInterior`] is exactly that player-position **faces-only**
-/// down-ray (wow-re `zonetext-indoor-bit.md`; the portal-legged render seed flipped in the abbey
+/// (`GetAreaID 0x670250`): a WMO interior takes precedence over the terrain chunk when the
+/// down-ray keeps the WMO nearer — [`CurrentAreaInterior`] is exactly that player-position
+/// **faces-only** down-ray (`0x6a8a20`; the portal-legged render seed flipped in the abbey
 /// yard), so an indoor city (Ironforge, Undercity) reports its OWN area via
 /// `WMOAreaTable.AreaTableID` rather than the enclosing zone's terrain. Outdoors (no interior
 /// claim, or a group with no area row) it falls to the containing chunk's MCNK `areaId`. Holds

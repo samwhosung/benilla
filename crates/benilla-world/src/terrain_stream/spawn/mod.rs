@@ -163,17 +163,16 @@ pub(super) fn spawn_loaded_placements(
                     // the doodad's origin, independent of which tile registered it or in what order.
                     //
                     // **An ADT map doodad is the FIXED-1.0 family, not the boosted one** (2050).
-                    // This site read `ShadeSel::Lit` (the 2.5 target) on the strength of wow-re
-                    // `m2-interior-doodad-base-light` §6, and §6 was wrong: a `CMapDoodadDef`'s
-                    // `[+0xa4]` is only ever {0.0, 0.5, 1.0}, and the class does not merely fail to
-                    // ramp — at `+0xf8`, where the ramp `0x69e770` reads its target, the doodad
-                    // class holds `m[2][3]` of its own world matrix. The 2.5 and the 3.3333/s chase
-                    // belong to the WENTITY light node (vtable `0x810810`, hung off `[obj+0xe0]`),
-                    // which a doodad has none of. Measured as well as read: 111 identified MDDF
+                    // This site read `ShadeSel::Lit` (the 2.5 target), which was wrong: a
+                    // `CMapDoodadDef`'s `[+0xa4]` is only ever {0.0, 0.5, 1.0}, and the class does
+                    // not merely fail to ramp — at `+0xf8`, where the ramp `0x69e770` reads its
+                    // target, the doodad class holds `m[2][3]` of its own world matrix. The 2.5 and
+                    // the 3.3333/s chase belong to the WENTITY light node (vtable `0x810810`, hung
+                    // off `[obj+0xe0]`), which a doodad has none of — the 2.5 constant's one reader
+                    // in the image is `0x69e4ad`. Measured as well as read: 111 identified MDDF
                     // placements over six trace frames, 356 draws, gains only ∈ {0.5, 1.0}, none
                     // changing — while an entity walking out of shadow climbed 0.5 → 0.81 → 1.09 →
-                    // 1.3367 in the same frames. wow-re `models/scratch/
-                    // adt-doodad-sun-scale-vs-entity-node.md`.
+                    // 1.3367 in the same frames.
                     //
                     // So this is the same family the exterior WMO MODD prop takes, and for the same
                     // reason: they are one C++ class. Nothing renders differently today — the
@@ -681,8 +680,8 @@ pub(super) fn spawn_loaded_placements(
             // The verified MODD lighting: an EXTERIOR-group WMO prop samples the terrain MCSH at
             // its footprint like the reference's per-frame refresh `0x698c50` — plain matte (sun
             // ×1.0) on lit ground, the shaded level on MCSH-shadowed ground, and NEVER the ADT 2.5
-            // boost (§8b: its one read site is unreachable from the WMO render band). An INTERIOR
-            // prop takes its per-instance SH probe instead — the selector is unread there.
+            // boost (its one read site, `0x69e4ad`, is unreachable from the WMO render band). An
+            // INTERIOR prop takes its per-instance SH probe instead — the selector is unread there.
             let shade = if matches!(d.light, PropLight::Interior { .. }) {
                 ShadeSel::Matte // interior lane; the selector is unread
             } else {
@@ -1078,9 +1077,9 @@ fn tag_world_object(commands: &mut Commands, ents: &[Entity], object: &Arc<World
 /// The reference tests one volume per doodad *object* and derives it from these same header fields:
 /// `0x683700` calls `0x682ef0(ecx = &[rec+0x5c] centre, [rec+0x68] radius)` → `0x686b80`, a 6-plane
 /// frustum **sphere** test, where `rec+0x5c` is the transformed `(min+max)/2` and `rec+0x68` is
-/// `bounding_sphere_radius × scale` (wow-5875-re `terrain/scratch/doodad-emitter-drawset-gate.md`
-/// §1c/§2a, VERIFIED; the same two fields [`m2_fade`] already reads). We keep the **box** rather than
-/// its circumsphere: it bounds the same geometry more tightly, and Bevy's cull is an OBB test anyway.
+/// `bounding_sphere_radius × scale` (the same two fields [`m2_fade`] already reads). We keep the
+/// **box** rather than its circumsphere: it bounds the same geometry more tightly, and Bevy's cull
+/// is an OBB test anyway.
 pub fn m2_anim_bound(bounds: &Option<M2Bounds>) -> Option<Aabb> {
     let b = bounds.as_ref()?;
     // The basis swap permutes and negates axes, so min/max have to be re-derived, not mapped.
