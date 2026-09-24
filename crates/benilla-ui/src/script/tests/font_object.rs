@@ -1,9 +1,5 @@
-//! Font objects as first-class Lua objects ([`crate::script::font`]).
-//!
-//! Every test here is driven **the way the 218-addon corpus drives it** — the bare-global argument,
-//! the no-arg `CreateFontString`, `CreateFont` — rather than the way our own shipped XML does,
-//! because the string-name form our XML uses was the only one we accepted and it is the form
-//! almost nobody writes (6 corpus sites against 3,180).
+//! Font objects as first-class Lua objects ([`crate::script::font`]), driven as addons drive them:
+//! the bare global, the no-argument `CreateFontString`, `CreateFont`.
 
 use super::common::script;
 use crate::script::{FontObject, JustifyH, JustifyV, Outline, QuadContent, UiScript};
@@ -36,14 +32,8 @@ fn painted(s: &UiScript, text: &str) -> (Option<String>, Option<f32>, Option<[f3
         .unwrap_or_else(|| panic!("no text quad reading {text:?}"))
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// Publication
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── Publication ──
 
-/// A `<Font name="X">` in FrameXML becomes the **global `X`**, an object of type `Font`.
-///
-/// This is the whole gap: we registered the resolved record and never named it, so every
-/// `SetFontObject(GameFontNormal)` in the ecosystem was handed nil.
 #[test]
 fn a_declared_font_is_published_as_a_global_object() {
     let s = script();
@@ -69,13 +59,11 @@ fn a_declared_font_is_published_as_a_global_object() {
         s.eval::<String>("return GameFontNormal:GetName()").unwrap(),
         "GameFontNormal"
     );
-    // Object identity is stable: two reads of the global are the same object, which is what makes
-    // `if fs:GetFontObject() == GameFontNormal` work at all.
+    // Two reads of the global are one object, which `fs:GetFontObject() == GameFontNormal` needs.
     assert!(s
         .eval::<bool>("return GameFontNormal == GameFontNormal")
         .unwrap());
 
-    // The declared paint reads back through the FontInstance getters.
     assert_eq!(
         s.eval::<(String, f32, String)>("return GameFontNormal:GetFont()")
             .unwrap(),
@@ -102,9 +90,7 @@ fn a_declared_font_is_published_as_a_global_object() {
     );
 }
 
-/// **`Tablet-2.0.lua:289`, verbatim.** `_, headerSize = GameTooltipHeaderText:GetFont()` — the
-/// single most-called font-object read in the corpus (268 sites across the four embedded Ace
-/// libraries). Until the global existed, Tablet fell to its hardcoded 14/12 guard branch.
+/// The header-size read at `Tablet-2.0.lua:289`, verbatim.
 #[test]
 fn tablet_reads_the_tooltip_header_size_off_the_global() {
     let s = script();
@@ -140,9 +126,8 @@ fn tablet_reads_the_tooltip_header_size_off_the_global() {
     assert_eq!((header, normal), (14.0, 12.0));
 }
 
-/// **Requirement 5: publishing must not change what `inherits=` resolves to.** The chain is still
-/// flattened once, at load, and the published object carries the *flattened* values — the derived
-/// font sees the parent's face and its own height override.
+/// `inherits=` is flattened once, at load, where the reference links it live (`0x770c60`), and
+/// the published object carries the flattened values.
 #[test]
 fn an_inheriting_font_still_flattens_to_the_same_values() {
     let s = script();
@@ -159,7 +144,6 @@ fn an_inheriting_font_still_flattens_to_the_same_values() {
              </Font>
            </Ui>"#,
     );
-    // The Rust-side record — unchanged by publication.
     let derived = s.font_object("DerivedFont").expect("registered");
     assert_eq!(derived.font.as_deref(), Some("Fonts\\FRIZQT__.TTF"));
     assert_eq!(derived.height, Some(18.0));
@@ -167,7 +151,6 @@ fn an_inheriting_font_still_flattens_to_the_same_values() {
     assert_eq!(derived.outline, Outline::Normal);
     assert_eq!(derived.justify_h, Some(JustifyH::Center));
     assert!(derived.shadow.is_some(), "the shadow inherits too");
-    // …and the same values through the published object.
     assert_eq!(
         s.eval::<(String, f32, String)>("return DerivedFont:GetFont()")
             .unwrap(),
@@ -179,16 +162,10 @@ fn an_inheriting_font_still_flattens_to_the_same_values() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// SetFontObject / GetFontObject
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── SetFontObject and GetFontObject ──
 
-/// **`Gratuity-2.0.lua:47-59`, verbatim** — the block that took five corpus addons down at load
-/// with `bad argument #2: error converting Lua nil to String`.
-///
-/// Three separate things have to hold for it: `CreateFontString()` with **no arguments**,
-/// `SetFontObject` taking the **object**, and `AddFontStrings` existing at all (fixing only the
-/// first two moves the death one line down).
+/// The tooltip build at `Gratuity-2.0.lua:47-59`: it needs a no-argument `CreateFontString`,
+/// `SetFontObject` taking the object, and `AddFontStrings`.
 #[test]
 fn gratuity_builds_its_thirty_line_scan_tooltip() {
     let s = script();
@@ -218,7 +195,6 @@ fn gratuity_builds_its_thirty_line_scan_tooltip() {
     .expect("Gratuity's CreateTooltip must not raise");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // The font object actually landed on the lines it made.
     assert_eq!(
         s.eval::<(String, f32)>("return vars.Llines[7]:GetFont()")
             .unwrap(),
@@ -229,13 +205,10 @@ fn gratuity_builds_its_thirty_line_scan_tooltip() {
             .unwrap(),
         "GameFontNormal"
     );
-    // And Gratuity's own next move — `ClearLines` over the grown stack — still works.
+    // Gratuity's next call: `ClearLines` over the grown line stack.
     s.run("vars.tooltip:ClearLines()").unwrap();
 }
 
-/// The object form and the string form must resolve to **the same paint**. Both are kept: the
-/// object is what 3,180 of 3,186 corpus sites pass, the string is what our own `assets/ui` and 6
-/// corpus sites pass.
 #[test]
 fn set_font_object_takes_the_object_or_the_name() {
     let mut s = script();
@@ -275,14 +248,12 @@ fn set_font_object_takes_the_object_or_the_name() {
             Some([0.25, 0.5, 0.75, 1.0])
         )
     );
-    // …and both name the same object back.
     assert!(s
         .eval::<bool>("return byObject:GetFontObject() == byName:GetFontObject()")
         .unwrap());
 
-    // nil is the THIRD form the reference's own usage string names
-    // (`SetFontObject(font or "font" or nil)`, `.rdata 0x87c5cc`): it severs the link and leaves
-    // the paint standing.
+    // nil, the third form in the reference's usage string (`.rdata 0x87c5cc`), unlinks the object
+    // and leaves the paint.
     s.run("byName:SetFontObject(nil)").unwrap();
     assert!(s
         .eval::<bool>("return byName:GetFontObject() == nil")
@@ -293,14 +264,11 @@ fn set_font_object_takes_the_object_or_the_name() {
         Some(11.0),
         "unlinking must not repaint"
     );
-    // A frame or an unknown name is still an ERROR, never a silent no-op (1203/1205/1211's class).
     assert!(s.run("byName:SetFontObject(f)").is_err());
     assert!(s.run("byName:SetFontObject('NoSuchFont')").is_err());
 }
 
-/// `GetFontObject` returns the **object**, not a name — because `Dewdrop-2.0.lua:2181` indexes the
-/// result immediately: `button.text:SetTextColor(button.text:GetFontObject():GetTextColor())`.
-/// 65 sites across 62 corpus addons do exactly this.
+/// `GetFontObject` returns the object, not a name, which `Dewdrop-2.0.lua:2181` indexes at once.
 #[test]
 fn dewdrop_recolors_a_row_from_its_own_font_object() {
     let mut s = script();
@@ -332,17 +300,10 @@ fn dewdrop_recolors_a_row_from_its_own_font_object() {
     assert_eq!(painted(&s, "row").2, Some([1.0, 1.0, 1.0, 1.0]));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// Mutability — the decision, pinned
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── Mutability ──
 
-/// **The mutability decision.** A font object is a shared record with a **live** link: mutating it
-/// re-paints every FontString that inherits it, which is why addons mutate one at all. What a
-/// FontString set *for itself* since its own `SetFontObject` survives that re-paint — our
-/// `FONTINSTANCE+0x038 explicitlySetMask`.
-///
-/// If this ever regresses to a one-shot copy, `inherited` stops moving and the test says so; if the
-/// mask is dropped, `overridden` loses its red.
+/// A font object is a live link: mutating it repaints every FontString that inherits it, except
+/// what a FontString set for itself, whose setter cleared that property's inherit-mask bit.
 #[test]
 fn mutating_a_font_object_repaints_everything_that_inherits_it() {
     let mut s = script();
@@ -375,7 +336,6 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
     assert_eq!(painted(&s, "inherited").1, Some(12.0));
     assert_eq!(painted(&s, "overridden").2, Some([1.0, 0.0, 0.0, 1.0]));
 
-    // The mutation the whole feature exists for.
     s.run(
         r#"
         ThemeFont:SetFont("Fonts\\MORPHEUS.TTF", 20)
@@ -385,7 +345,6 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
     .unwrap();
     s.resolve();
 
-    // Both followed the face and size…
     assert_eq!(
         painted(&s, "inherited"),
         (
@@ -399,17 +358,14 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
         Some("Fonts\\MORPHEUS.TTF".into())
     );
     assert_eq!(painted(&s, "overridden").1, Some(20.0));
-    // …but the one that had set its own colour kept it.
     assert_eq!(
         painted(&s, "overridden").2,
         Some([1.0, 0.0, 0.0, 1.0]),
         "an explicitly-set property must survive a font-object mutation"
     );
 
-    // Severance SURVIVES a re-point. The reference's inheritMask bit (`+0x2c`,
-    // FontString `+0xd4`) is cleared by the local setter and never restored, so "a FontString that
-    // set its own colour stays severed even across a later SetFontObject". Our first cut reset the
-    // mask here and this assertion was its inverse.
+    // Severance survives a re-point: the local setter clears the reference's inheritMask bit
+    // (`+0x2c`, FontString `+0xd4`) and nothing restores it.
     s.run("b:SetFontObject(ThemeFont)").unwrap();
     s.resolve();
     assert_eq!(
@@ -417,16 +373,13 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
         Some([1.0, 0.0, 0.0, 1.0]),
         "a re-point must not restore inheritance of a severed property"
     );
-    // Dewdrop still works, because it re-reads the colour off the new object explicitly every
-    // refresh (`Dewdrop-2.0.lua:2181`) rather than relying on inheritance.
+    // Dewdrop re-reads the colour off the object every refresh (`Dewdrop-2.0.lua:2181`).
     s.run("b:SetTextColor(b:GetFontObject():GetTextColor())")
         .unwrap();
     s.resolve();
     assert_eq!(painted(&s, "overridden").2, Some([0.0, 1.0, 0.0, 1.0]));
 }
 
-/// A mutation of a font object nobody inherits touches nothing, and a FontString that inherits a
-/// *different* object is not caught in the sweep.
 #[test]
 fn propagation_is_scoped_to_the_object_that_changed() {
     let mut s = script();
@@ -458,14 +411,10 @@ fn propagation_is_scoped_to_the_object_that_changed() {
     assert_eq!(painted(&s, "two").1, Some(12.0));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// CreateFont
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── CreateFont ──
 
-/// **`_Nameplates.lua:149` + `:129` + `:212`, end to end** — mint a font object at runtime, set it
-/// up, then paint a FontString with it. Plus `!OmniCC/main.lua:40-41`'s half: the name is published
-/// as a global even when the return value is thrown away, and `SetFont`'s return is the font-file
-/// validity probe OmniCC uses it as.
+/// `_Nameplates.lua:149`, `:129` and `:212`, then `!OmniCC/main.lua:40-41`: the name is published
+/// even when the return is dropped, and `SetFont`'s return says whether the face loaded.
 #[test]
 fn create_font_mints_publishes_and_paints() {
     let mut s = script();
@@ -494,7 +443,6 @@ fn create_font_mints_publishes_and_paints() {
         )
     );
 
-    // The return value and the published global are the SAME object — OmniCC reads only the global.
     assert!(s
         .eval::<bool>("return _NameplatesNameplateFont == Nameplate.Font")
         .unwrap());
@@ -504,8 +452,7 @@ fn create_font_mints_publishes_and_paints() {
         "Font"
     );
 
-    // `!OmniCC/main.lua:40-41` verbatim: create, discard the return, use the global, and branch on
-    // SetFont's return to detect a saved font path that is no longer usable.
+    // `!OmniCC/main.lua:40-41`: create, drop the return, then branch on the global's `SetFont`.
     let reverted = s
         .eval::<bool>(
             r#"
@@ -528,9 +475,7 @@ fn create_font_mints_publishes_and_paints() {
         ("Fonts\\FRIZQT__.TTF".to_string(), 20.0, String::new())
     );
 
-    // A name that already names a font object hands the existing one back UNCHANGED — the
-    // non-destructive reading (see `create_font`'s doc). The alternative would let
-    // `CreateFont("GameFontNormal")` blank the shipped registry entry the whole UI inherits.
+    // A name that already names a font object returns that object unchanged (`0x7839ab`).
     s.run("again = CreateFont('_NameplatesNameplateFont')")
         .unwrap();
     assert!(s.eval::<bool>("return again == Nameplate.Font").unwrap());
@@ -540,14 +485,12 @@ fn create_font_mints_publishes_and_paints() {
         ("Fonts\\SKURRI.TTF".to_string(), 10.0, String::new())
     );
 
-    // A nameless CreateFont is an error: the name IS the publication. The EMPTY name is not —
-    // the reference's `lua_isstring` gate takes it (unlike the XML path), so we do too.
+    // A nameless `CreateFont` raises; the empty name passes the reference's `lua_isstring` gate.
     assert!(s.run("CreateFont()").is_err());
     s.run("CreateFont('')").unwrap();
 }
 
-/// **`FonzAppraiser/mods/gui/gui.lua:27-30`** — `CreateFont` then `CopyFontObject(<a shipped
-/// object>)` then override the face. The corpus's only Font-on-Font call.
+/// The sequence at `FonzAppraiser/mods/gui/gui.lua:27-30`.
 #[test]
 fn fonz_appraiser_copies_a_shipped_object_then_overrides_the_face() {
     let s = script();
@@ -571,7 +514,6 @@ fn fonz_appraiser_copies_a_shipped_object_then_overrides_the_face() {
     "#,
     )
     .expect("FonzAppraiser's font setup must not raise");
-    // The copy brought the colour and justification over; the SetFont replaced the face and size.
     assert_eq!(
         s.eval::<(String, f32, String)>("return small_number_font:GetFont()")
             .unwrap(),
@@ -587,7 +529,6 @@ fn fonz_appraiser_copies_a_shipped_object_then_overrides_the_face() {
             .unwrap(),
         "RIGHT"
     );
-    // …and the object it copied FROM is untouched.
     assert_eq!(
         s.eval::<(String, f32, String)>("return GameFontHighlightSmall:GetFont()")
             .unwrap(),
@@ -595,10 +536,8 @@ fn fonz_appraiser_copies_a_shipped_object_then_overrides_the_face() {
     );
 }
 
-/// The `Spacing` pair is **deliberately absent** (we model no line spacing, and a stored-but-never
-/// drawn setter is this codebase's recurring silent-drop bug). It must fail LOUDLY rather than
-/// quietly accept a number nobody honours — this test is the tripwire on that choice, and it flips
-/// the day spacing becomes real.
+/// Line spacing is not built: the reference's `SetSpacing` is absent here, so a call raises rather
+/// than store a number nothing draws.
 #[test]
 fn the_unmodelled_spacing_pair_fails_loudly() {
     let s = script();
@@ -607,9 +546,8 @@ fn the_unmodelled_spacing_pair_fails_loudly() {
     assert!(s.eval::<bool>("return SomeFont.SetSpacing == nil").unwrap());
 }
 
-/// A button's per-state label fonts take the object or the name too (the corpus splits 5 to 4
-/// across the trio), and — because they are stored as NAMES and re-resolved at every extract — a
-/// later mutation of that font object reaches the label with no further call.
+/// A button's state fonts take the object or the name; they are stored as names and re-resolved at
+/// every extract, so a later mutation of the object reaches the label.
 #[test]
 fn button_state_fonts_take_the_object_and_follow_its_mutation() {
     let mut s = script();
@@ -647,15 +585,11 @@ fn button_state_fonts_take_the_object_and_follow_its_mutation() {
         )
     );
 
-    // The string form still works alongside it.
     s.run("b:SetHighlightFontObject('GameFontNormal')").unwrap();
 }
 
-/// **A `CreateFont` object holds nothing, so pointing a FontString at it copies nothing.**
-/// The reference gates every merge (`0x770910`/`0x770800`) on the source's own has-a-value mask,
-/// and a fresh font has `mask == 0` — the FontString keeps exactly what it had, no blanking and no
-/// fallback to a default. Our first cut wrote face/height through unconditionally and would have
-/// wiped it.
+/// The reference gates every merge (`0x770910`/`0x770800`) on the source's has-a-value mask, and a
+/// fresh `CreateFont` object's mask is 0, so the FontString keeps what it had.
 #[test]
 fn an_empty_font_object_copies_nothing_onto_a_fontstring() {
     let mut s = script();
@@ -691,7 +625,7 @@ fn an_empty_font_object_copies_nothing_onto_a_fontstring() {
         ),
         "an unset property must copy nothing, not blank the region"
     );
-    // The link still moved, so once the blank font is dressed the string follows it.
+    // The link still moves: once the blank font is dressed, the string follows it.
     assert_eq!(
         s.eval::<String>("return fs:GetFontObject():GetName()")
             .unwrap(),
@@ -702,8 +636,7 @@ fn an_empty_font_object_copies_nothing_onto_a_fontstring() {
     assert_eq!(painted(&s, "keep").0, Some("Fonts\\MORPHEUS.TTF".into()));
 }
 
-/// `SetFont` returns **1 or nil**, not a boolean — the reference's exact return shape, and what
-/// `!OmniCC/main.lua:41` branches on.
+/// The reference's return shape, not a boolean; `!OmniCC/main.lua:41` branches on it.
 #[test]
 fn set_font_returns_one_or_nil() {
     let s = script();
@@ -716,15 +649,8 @@ fn set_font_returns_one_or_nil() {
     assert!(s.eval::<bool>("return f:SetFont('', 12) == nil").unwrap());
 }
 
-/// The justify law is **one** table in the binary (`.rdata 0x811ad0`) and must be one
-/// transcription here: a `FontString` and a `<Font>` object have to answer identically, token for
-/// token and raise for raise.
-///
-/// They did not. Both sides were written separately from the same law and each drifted its own
-/// way — the FontString had no `GetJustifyH`/`GetJustifyV` at all (real entries `0x79e5f0` /
-/// `0x79e7f0`), the Font object silently `.trim()`ed its argument where `SStrCmpI` compares the
-/// whole string, and both quietly answered CENTER for a string the reference raises on. Every
-/// test on both sides passed throughout. This is the net that makes the next drift fail.
+/// The justify tokens are one reference table (`.rdata 0x811ad0`) matched whole and case-blind by
+/// `SStrCmpI`; a FontString (getters `0x79e5f0`/`0x79e7f0`) and a `<Font>` object answer alike.
 #[test]
 fn both_tables_speak_one_justify_law() {
     let s = script();
@@ -736,7 +662,7 @@ fn both_tables_speak_one_justify_law() {
     .unwrap();
 
     for obj in ["fs", "fo"] {
-        // The client's ctor default `0x212` = CENTER | MIDDLE | 0x200, read through each mask.
+        // The reference's constructor default `0x212`, CENTER | MIDDLE | 0x200, read per axis.
         let h = s
             .eval::<String>(&format!("return {obj}:GetJustifyH()"))
             .unwrap();
@@ -759,7 +685,7 @@ fn both_tables_speak_one_justify_law() {
             }
         }
 
-        // A non-token raises the reference's own usage string rather than coercing to CENTER.
+        // A non-token raises the reference's usage string rather than coercing to CENTER.
         for verb in ["SetJustifyH", "SetJustifyV"] {
             let err = s
                 .run(&format!("{obj}:{verb}('MIDDLE_LEFT')"))
@@ -771,27 +697,21 @@ fn both_tables_speak_one_justify_law() {
             );
         }
 
-        // Whole-string: a trailing space is a miss. The Font object used to trim it away.
+        // The match is whole-string: a trailing space is a miss.
         assert!(
             s.run(&format!("{obj}:SetJustifyH('LEFT ')")).is_err(),
             "{obj}:SetJustifyH must not trim its argument"
         );
 
-        // A cross-axis token matches the table, so it is accepted with no error — the one place
-        // we knowingly stop short of the law (the reference clears the axis; see `script::justify`).
+        // A cross-axis token is in the table and raises nothing. The reference then clears the
+        // axis; the FontString does too, the `<Font>` object leaves it as it was.
         s.run(&format!("{obj}:SetJustifyH('TOP')")).unwrap();
         s.run(&format!("{obj}:SetJustifyV('LEFT')")).unwrap();
     }
 }
 
-/// `SetFont` is one routine (`0x79f210`) with three entry points — Font `0x7a0270`, FontString
-/// `0x79d4f0`, EditBox `0x797210` — so all three must answer identically, and none of them did.
-///
-/// The FontString's hand-written copy answered the boolean `true` for *everything*, including the
-/// empty-path load failure that `!OmniCC/main.lua:41`'s `if not f:SetFont(saved, size)` probes;
-/// the `<Font>` object's took `Option` arguments and so answered **nil** for `SetFont()` where the
-/// reference raises `Usage: %s:SetFont("font", fontHeight [, flags])` (`0x87c69c`). A behavioural
-/// differential across both tables is what surfaced it — arity alone had matched.
+/// `SetFont` is one routine (`0x79f210`) behind three entries, Font `0x7a0270`, FontString
+/// `0x79d4f0` and EditBox `0x797210`; a bad argument raises its usage string (`0x87c69c`).
 #[test]
 fn set_font_is_one_routine_on_both_tables() {
     let s = script();
@@ -799,7 +719,6 @@ fn set_font_is_one_routine_on_both_tables() {
         .unwrap();
 
     for obj in ["fs", "fo"] {
-        // Success is the NUMBER 1 — never a boolean, and never zero values.
         let n = s
             .eval::<f32>(&format!(
                 "return {obj}:SetFont('Fonts\\\\FRIZQT__.TTF', 12)"
@@ -814,15 +733,14 @@ fn set_font_is_one_routine_on_both_tables() {
             "{obj}:SetFont must answer the number 1, not true"
         );
 
-        // An empty path is the LOAD FAILURE edge: nil, falsey, and nothing raised.
+        // An empty path is a load failure: nil, and nothing raised.
         assert!(
             s.eval::<bool>(&format!("return {obj}:SetFont('', 12) == nil"))
                 .unwrap(),
             "{obj}:SetFont('') must answer nil"
         );
 
-        // A missing or non-string path, or a missing height, is an ARGUMENT error — it raises,
-        // which is a different thing from the nil above and used to be conflated with it.
+        // A missing or non-string path, or a missing height, is an argument error and raises.
         for bad in ["", "'Fonts\\\\FRIZQT__.TTF'", "nil, 12", "{}, 12"] {
             let err = s
                 .run(&format!("{obj}:SetFont({bad})"))
@@ -833,7 +751,7 @@ fn set_font_is_one_routine_on_both_tables() {
             );
         }
 
-        // Both `lua_isstring` and `lua_isnumber` coerce, so a numeric string is accepted for either.
+        // Both `lua_isstring` and `lua_isnumber` coerce, so either accepts a numeric string.
         assert!(
             s.eval::<bool>(&format!(
                 "return {obj}:SetFont('Fonts\\\\FRIZQT__.TTF', '14') == 1"
@@ -844,17 +762,9 @@ fn set_font_is_one_routine_on_both_tables() {
     }
 }
 
-/// A cross-axis token **erases** its axis, and the two readers then disagree — faithfully.
-///
-/// `SetJustifyH("TOP")` parses (`0x08`), contributes nothing to mask `0x07`, and raises nothing.
-/// `GetJustifyH()` afterwards answers the literal `"UNKNOWN"` (`0x6f1a00` → `.data 0x838044`),
-/// while the glyphs keep drawing **centred**: the ui→gx translator `0x44d420` is a priority ladder
-/// whose per-axis register is pre-set to `1` between the `test` and the `jcc`, so an all-clear axis
-/// exits with CENTER still in it. Reading the getter's answer into the draw path — or mapping the
-/// bitmask onto the gx enum with a `0` default — inverts the axis to LEFT.
-///
-/// Reached by 13 corpus sites (`FonzAppraiser` ×12, `Roid-Macros`) writing
-/// `SetJustifyV("CENTER")` when they mean MIDDLE.
+/// `SetJustifyH("TOP")` parses (`0x08`), sets nothing in the axis mask `0x07` and raises nothing;
+/// `GetJustifyH` then answers `"UNKNOWN"` (`0x6f1a00`, `.data 0x838044`), yet the ui-to-gx
+/// translator `0x44d420` pre-sets each axis to 1, so the text still draws centred, not LEFT.
 #[test]
 fn a_cross_axis_token_erases_the_axis_but_still_draws_centred() {
     let mut s = script();
@@ -867,13 +777,13 @@ fn a_cross_axis_token_erases_the_axis_but_still_draws_centred() {
     )
     .unwrap();
 
-    // A real token lands, so the erase below is visibly an erase and not a no-op.
+    // A real token first, so the erase below is not a no-op.
     s.run("fs:SetJustifyH('LEFT') fs:SetJustifyV('TOP')")
         .unwrap();
     assert_eq!(s.eval::<String>("return fs:GetJustifyH()").unwrap(), "LEFT");
     assert_eq!(s.eval::<String>("return fs:GetJustifyV()").unwrap(), "TOP");
 
-    // The cross-axis pair: each erases the OTHER axis it was aimed at, raising nothing.
+    // Each setter gets the other axis's token: it clears its own axis and raises nothing.
     s.run("fs:SetJustifyH('TOP')").unwrap();
     s.run("fs:SetJustifyV('CENTER')").unwrap();
     assert_eq!(
@@ -886,7 +796,6 @@ fn a_cross_axis_token_erases_the_axis_but_still_draws_centred() {
         "UNKNOWN"
     );
 
-    // ...and the draw path answers CENTER/MIDDLE for that same state.
     s.resolve();
     let (h, v) = s
         .extract()
@@ -908,17 +817,9 @@ fn a_cross_axis_token_erases_the_axis_but_still_draws_centred() {
     );
 }
 
-/// The font block is a **per-table membership fact**, and the shared shadow-accessor (`0x79f910`,
-/// FontString's own `0x79dbe0`) names the six: *"Exposed on: FontString, Font object, EditBox,
-/// MessageFrame, ScrollingMessageFrame, SimpleHTML. NOT on Button."* We shipped it on two; these
-/// are the third and fourth.
-///
-/// `BigWigs/Plugins/Messages.lua:212` — `self.msgframe:SetFontObject(GameFontNormalLarge)` on a
-/// frame it has just given `SetInsertMode("TOP")` — died there every session.
-///
-/// The second assertion is the trap: a message frame's lines fall back to **LEFT** when it has no
-/// declared `<FontString>`, while a freshly created `RegionData` defaults to the FontString's own
-/// CENTER. Creating the style region on demand must not silently re-justify the frame.
+/// The shared font block (`0x79f910`, FontString's `0x79dbe0`) is on six tables: FontString, Font,
+/// EditBox, MessageFrame, ScrollingMessageFrame and SimpleHTML, not Button. A message frame with no
+/// `<FontString>` draws LEFT, and creating its style region (CENTER by default) must keep it LEFT.
 #[test]
 fn the_font_block_reaches_both_message_frame_tables() {
     let mut s = script();
@@ -940,7 +841,7 @@ fn the_font_block_reaches_both_message_frame_tables() {
             "MsgBlockFont",
             "{obj}:GetFontObject must answer the OBJECT it was given"
         );
-        // The shared `0x79f210` contract, same as every other table that carries it.
+        // The shared `SetFont` contract (`0x79f210`).
         assert!(
             s.eval::<bool>(&format!(
                 "return {obj}:SetFont('Fonts\\\\MORPHEUS.TTF', 16) == 1"
@@ -952,11 +853,10 @@ fn the_font_block_reaches_both_message_frame_tables() {
             .eval::<(mlua::Value, f32, String)>(&format!("return {obj}:GetFont()"))
             .unwrap();
         assert_eq!(height, 16.0, "{obj}:GetFont reads back what SetFont wrote");
-        // The four-value getters pin at 4 for every one of the six tables (`0x79f9b3`).
+        // The four-value getters return four values on all six tables (`0x79f9b3`).
         assert_eq!(s.arity(&format!("{obj}:GetShadowColor()")).unwrap(), 4);
     }
 
-    // Styling the frame must not move its text: the lines still run flush LEFT.
     s.run("mf:AddMessage('flush left please')").unwrap();
     s.resolve();
     let j = s
@@ -978,18 +878,8 @@ fn the_font_block_reaches_both_message_frame_tables() {
     );
 }
 
-/// `CreateFontString`'s **third argument** applies a font object — the argument we accepted and
-/// then dropped on the floor.
-///
-/// 49 corpus call sites across 5 distinct addons pass one, and every one names a font object:
-/// AckisRecipeList (28), CustomNameplates (10), _LazyPig (6), LibAboutPanel (4), ColorPickerPlus.
-/// Five separate addons, so this is not one library file replicated. Ignoring it was 1203's class —
-/// the addon asks for a font, the call succeeds, and the text comes out in the default with no
-/// failure anywhere to point at.
-///
-/// The **order** is the part a reimplementation loses: the font-object registry is tried FIRST and
-/// the template registry only on a font miss (`0x773d39` then `0x773d47`). A template-first
-/// resolver would miss all 49 of these, because `inherits=` is one argument over two namespaces.
+/// The third argument is looked up as a font object first, and as a template only on a miss
+/// (`0x773d39`, then `0x773d47`).
 #[test]
 fn create_font_string_applies_the_font_object_named_by_its_third_argument() {
     let s = script();
@@ -1004,7 +894,7 @@ fn create_font_string_applies_the_font_object_named_by_its_third_argument() {
            </Ui>"#,
     );
 
-    // Exactly `_LazyPig/LazyPigMenu.lua:88`'s line.
+    // The call at `_LazyPig/LazyPigMenu.lua:88`.
     s.run(r#"FS = Host:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")"#)
         .expect("the font-object form must be accepted");
     let (face, height, _flags) = s
@@ -1013,8 +903,7 @@ fn create_font_string_applies_the_font_object_named_by_its_third_argument() {
     assert_eq!(face, "Fonts\\FRIZQT__.TTF");
     assert_eq!(height, 12.0);
 
-    // A name in NEITHER registry raises — the same contract 1253 set for CreateFrame, and the same
-    // bytes (`luaL_error`, which never returns).
+    // A name in neither registry raises (`luaL_error`), as an unknown `CreateFrame` template does.
     let err = s
         .run(r#"Bad = Host:CreateFontString(nil, "ARTWORK", "NoSuchFontOrTemplate")"#)
         .expect_err("a name in neither registry must raise");
@@ -1023,22 +912,13 @@ fn create_font_string_applies_the_font_object_named_by_its_third_argument() {
         "the raise must name what was looked up: {err}"
     );
 
-    // Texture takes the same argument through the same resolver (1 real corpus site).
+    // `CreateTexture` takes the same third argument through the same resolver.
     s.run(r#"TX = Host:CreateTexture(nil, "OVERLAY")"#)
         .expect("the two-argument form still works");
 }
 
-/// **`SetFont`'s nil is a LOAD failure, and only the host knows**.
-///
-/// The reference answers the number 1 or nil (`0x79f345`/`0x79f361`), and the nil originates in
-/// the font factory at `0x5c1ae0` — a path that names no readable file. `!OmniCC/main.lua:41`
-/// reads it exactly that way (`if not Font:SetFont(saved, size) then revert end`), and an addon
-/// that ships its own faces (MSBT ships thirty-one, under `Interface\Addons\…\Fonts\`) is the
-/// case that makes the answer depend on a store rather than on the string.
-///
-/// The engine-less default is the other half: with no probe a non-empty path answers 1, because a
-/// VM with no font backend has nothing for a load to fail against. That is the opposite default to
-/// `SetTexture`'s (1322) and the reason is in `Model::font_probe`.
+/// The reference answers 1 or nil (`0x79f345`/`0x79f361`), nil when the font factory (`0x5c1ae0`)
+/// finds no readable file; with no host probe, any non-empty path answers 1.
 #[test]
 fn set_font_answers_the_hosts_load_verdict_when_there_is_a_host() {
     let mut s = script();
@@ -1051,8 +931,7 @@ fn set_font_answers_the_hosts_load_verdict_when_there_is_a_host() {
         .unwrap());
     assert!(s.eval::<bool>("return FS:SetFont('', 12) == nil").unwrap());
 
-    // With one, the store decides — and the face it refused is NOT adopted, so the region keeps
-    // the last font that did load.
+    // With a probe the store decides, and a refused face is not adopted.
     s.set_font_probe(Box::new(|path| {
         path.eq_ignore_ascii_case("interface\\addons\\msbt\\fonts\\porky.ttf")
             || path.eq_ignore_ascii_case("fonts\\frizqt__.ttf")
@@ -1080,19 +959,8 @@ fn set_font_answers_the_hosts_load_verdict_when_there_is_a_host() {
     assert_eq!(height, 18.0, "…while the height, which never fails, is set");
 }
 
-/// **Mik's Scrolling Battle Text, end to end** — the exact sequence the addon runs per event,
-/// pinned because it is the shape a whole class of "the addon's font did not take" reports wears.
-///
-/// MSBT's twenty scroll-area FontStrings are declared `inherits="MasterFont"` — the reference's
-/// root font object, which carries a `<Shadow>` and **nothing else**: no face, no height, no
-/// outline. Each animation then does, in this order, on the string it recycles:
-/// `ClearAllPoints · SetFont(<its own TTF>, 18, "OUTLINE") · SetTextColor · SetText · SetAlpha ·
-/// SetPoint`. Every one of those five paint axes has to reach the extracted quad *unmodified* by
-/// the object the string inherits — the addon's face over the object's absent one, the addon's
-/// height over the renderer default, the addon's outline over the object's `NONE` (which is
-/// indistinguishable from "unset", see [`Outline`]), its colour over the object's absent one, and
-/// the animation's fade as the quad's own alpha. The `<Shadow>` is the one thing that IS inherited,
-/// and it must still be there.
+/// MSBT's per-event sequence over the stock `MasterFont` (`Fonts.xml:55`, a `<Shadow>` only): its
+/// own face, size, outline, colour and fade reach the quad, and the shadow is inherited.
 #[test]
 fn msbt_paints_its_own_face_size_outline_and_fade_over_the_font_object_it_inherits() {
     let mut s = script();
@@ -1160,7 +1028,6 @@ fn msbt_paints_its_own_face_size_outline_and_fade_over_the_font_object_it_inheri
         }
         ref other => panic!("expected a Text quad, got {other:?}"),
     }
-    // The Lua-visible echo agrees with the quad — the readback an addon branches on.
     assert_eq!(
         s.eval::<(String, f32, String)>("return MSBTFrameIncomingText1:GetFont()")
             .unwrap(),

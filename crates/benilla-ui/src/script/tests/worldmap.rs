@@ -1,21 +1,19 @@
-//! The world-map bindings (decision 0203 phase 2): catalog/feed pushes, the engine-owned
-//! selection, and the deferred WORLD_MAP_UPDATE queue.
+//! The world-map bindings: catalog and feed pushes, the engine-owned selection, and the deferred
+//! `WORLD_MAP_UPDATE` queue.
 
 use super::common::script;
 use crate::script::*;
 
-/// A two-continent catalog shaped like the real 5875 one (Kalimdor first — the app's push order
-/// defines every Lua-visible index; the sheet rects are the real disjoint kernel outputs). The
-/// EK zone grid is sparse: exactly the real Goldshire cell (12735, verified against the shipped
-/// Azeroth.zmp) marked as zone 1.
+/// A two-continent catalog shaped like the real one: Kalimdor first, since the push order defines
+/// every Lua-visible index, with the real disjoint sheet rects. The sparse EK grid marks the real
+/// Goldshire cell (12735 in `Azeroth.zmp`) as zone 1.
 fn push_catalog(s: &mut UiScript) {
     let mut ek_grid = vec![0u16; 128 * 128];
     ek_grid[12735] = 1;
-    // Cell 8801 = the child (0.5, 0.5) resolves to through Elwynn's OWN loc rect — a "Stormwind
-    // City" peer child. Clicking it from the Elwynn zone map drills into the city (`0x4a67a0`).
+    // Cell 8801 is where (0.5, 0.5) lands through Elwynn's own loc rect: the Stormwind City peer,
+    // which a click on the Elwynn map drills into (`0x4a67a0`).
     ek_grid[8801] = 2;
-    // Cell 9060 = the child (0.82, 0.82) resolves to through Elwynn's own rect — Elwynn itself,
-    // the case the zone-level hover must stay silent on (the displayed zone never names itself).
+    // Cell 9060, where (0.82, 0.82) lands: Elwynn itself, which the zone-level hover never names.
     ek_grid[9060] = 1;
     s.set_world_map_catalog(vec![
         WorldMapContinentView {
@@ -52,15 +50,11 @@ fn push_catalog(s: &mut UiScript) {
                     name: "Elwynn Forest".into(),
                     area_id: 12,
                     map_file: "Elwynn".into(),
-                    // A clean synthetic loc rect inside the EK continent rect: w=2000, h=1500 → the
-                    // continent-highlight formula lands on round-ish expected coords (asserted below).
+                    // Synthetic, inside EK's rect: w=2000, h=1500, for round highlight coords.
                     loc_rect: (-8000.0, -10000.0, -400.0, -1900.0),
-                    // Three overlays. Two are shaped like real Elwynn rows: Northshire reveals
-                    // on explore bit 125, Goldshire on bit 124 (the real AreaTable exploreFlags);
-                    // their hit rects (top, left, bottom, right; px of 1002×668) sit apart so a
-                    // point is in at most one. The first is a row whose first area slot resolves
-                    // to nothing (bit 126; its rect overlaps Northshire's) — the zone-level hover
-                    // must walk past it, not stop at it.
+                    // Northshire (bit 125) and Goldshire (124) carry the real exploreFlags; hit
+                    // rects are (top, left, bottom, right) in px of 1002×668. The first row's area
+                    // is unresolvable (bit 126) and overlaps Northshire: the hover walks past it.
                     overlays: vec![
                         WorldMapOverlayView {
                             texture: "Interface\\WorldMap\\Elwynn\\STONECAIRNLAKE".into(),
@@ -94,8 +88,7 @@ fn push_catalog(s: &mut UiScript) {
                         },
                     ],
                 },
-                // A city peer of Elwynn — a WorldMapArea child of the continent with its own art
-                // folder, indistinguishable from a zone in code (`0x4a67a0`).
+                // A city peer of Elwynn, which the reference treats as a zone (`0x4a67a0`).
                 WorldMapZoneView {
                     name: "Stormwind City".into(),
                     area_id: 1519,
@@ -108,19 +101,16 @@ fn push_catalog(s: &mut UiScript) {
     ]);
 }
 
-/// The **orphan list** — `0x4a5d00`'s third array, and in 5875 its entire population: the three
-/// battlegrounds, with the real row ids, map ids, area ids and art folders, in `WorldMapArea.dbc`
-/// **file order** (the fill pass appends with no sort). Alterac Valley carries one of its three
-/// real `WorldMapOverlay` rows over its real AreaBit 954 — the only battleground art the
-/// explored-bit gate has anything to say about (WSG and AB key zero overlay rows).
+/// The orphan list, `0x4a5d00`'s third array: in 1.12 exactly the three battlegrounds, with their
+/// real row, map and area ids and art folders, in `WorldMapArea.dbc` file order (no sort). Alterac
+/// Valley carries one of its real `WorldMapOverlay` rows (AreaBit 954); WSG and AB have none.
 fn push_direct_areas(s: &mut UiScript) {
     let row = |name: &str, area_id: u32, folder: &str, overlays: Vec<WorldMapOverlayView>| {
         WorldMapZoneView {
             name: name.into(),
             area_id,
             map_file: folder.into(),
-            // A synthetic rect: nothing engine-side projects through it (the app owns every
-            // projection), it is carried because the row is the row.
+            // A synthetic rect: the app owns every projection, so nothing here reads it.
             loc_rect: (1500.0, 500.0, 1600.0, 600.0),
             overlays,
         }
@@ -149,20 +139,17 @@ fn push_direct_areas(s: &mut UiScript) {
     ]);
 }
 
-/// **The direct-area selection** — the third state, and the whole of what a battleground map is
-/// (`[0x845074]`). Inside Warsong Gulch the
-/// reference selects `(continent = -2, direct = WorldMapArea 443)`, and `GetMapInfo()` answers the
-/// art folder that `Blizzard_BattlefieldMinimap.lua:83-86` needs before it will draw anything at
-/// all; a client that models the selection as `(continent, zone)` answers nil there and draws an
-/// empty battle map.
+/// The direct-area selection (`[0x845074]`) is a third state: inside Warsong Gulch the reference
+/// selects `(continent = -2, direct = WorldMapArea 443)`, and `GetMapInfo()` answers the art
+/// folder `Blizzard_BattlefieldMinimap.lua:83` needs before it draws.
 #[test]
 fn a_direct_area_is_the_third_selection_state() {
     let mut s = script();
     push_catalog(&mut s);
     push_direct_areas(&mut s);
 
-    // The player is in Warsong Gulch: `0x4a6650`'s continent loop misses (map 489 is no
-    // continent's) and only then does the orphan loop match, selecting the row's own id.
+    // In Warsong Gulch `0x4a6650`'s continent loop misses (map 489 is no continent's) and the
+    // orphan loop selects the row's own id.
     s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0, None, Vec::new(), Vec::new());
     s.set_world_map_player_direct_area(Some(443));
     s.run("SetMapToCurrentZone()").unwrap();
@@ -188,9 +175,8 @@ fn a_direct_area_is_the_third_selection_state() {
          row id has no entries to fire from"
     );
 
-    // Hover and click are refused. Both matter: there is no `.zmp` bitmap for a battleground
-    // (`0x4a6ec0`/`0x4a7620`/`0x4a7540` each test `-2` explicitly), and the world sheet's
-    // continent walk must not run just because the direct state shares its `continent == 0` cell.
+    // Hover and click are refused: a battleground has no `.zmp` bitmap (`0x4a6ec0`, `0x4a7620`,
+    // `0x4a7540` each test `-2`), and the world sheet's walk must not run on `continent == 0`.
     assert!(s
         .eval::<Option<String>>("return UpdateMapHighlight(0.5, 0.5)")
         .unwrap()
@@ -203,10 +189,9 @@ fn a_direct_area_is_the_third_selection_state() {
         "a click cannot drill off an instance map"
     );
 
-    // ── THE REFRESH TRAP. All five of the reference's in-place refresh sites re-pass
-    // `direct != -1 ? direct : zone` (`0x48f9f6`, `0x4a6460`, `0x6d93d8`, `0x6d9a17`, `0x6dac72`);
-    // one that re-passed the zone alone would drop the instance map back to the world view on the
-    // next world-state push or exploration update — silently, and only inside a battleground.
+    // All five of the reference's refresh sites re-pass `direct != -1 ? direct : zone`
+    // (`0x48f9f6`, `0x4a6460`, `0x6d93d8`, `0x6d9a17`, `0x6dac72`); passing the zone alone would
+    // drop an instance map to the world view on the next refresh.
     s.set_world_map_explored(vec![u32::MAX; 64]);
     s.set_world_map_landmarks(Vec::new());
     s.run("SetMapToCurrentZone()").unwrap();
@@ -218,8 +203,8 @@ fn a_direct_area_is_the_third_selection_state() {
         "a refresh re-selects the DIRECT cell, never the (0, 0) pair beside it"
     );
 
-    // Selecting a continent or a zone CLEARS the direct cell: `0x4a67a0`'s other legs all fall
-    // into `0x4a67ea mov [0x845074],-1`, and only `ecx == -2` jumps past it.
+    // Selecting a continent or zone clears the direct cell: `0x4a67a0`'s other legs all reach
+    // `0x4a67ea`, which writes -1 to `[0x845074]`; only `ecx == -2` jumps past it.
     s.run("SetMapZoom(2, 1)").unwrap();
     assert_eq!(
         s.eval::<(String, i64, i64)>(
@@ -230,8 +215,8 @@ fn a_direct_area_is_the_third_selection_state() {
         "the instance map does not shadow later navigation"
     );
 
-    // And the stock zoom-out button's own path off a battleground map: its `else` arm fires
-    // because `GetCurrentMapZone()` is 0 there, and `SetMapZoom(0)` is the world view.
+    // The stock zoom-out button off a battleground map: `GetCurrentMapZone()` is 0 there, so its
+    // `else` arm runs `SetMapZoom(0)`, the world view (`WorldMapFrame.lua:257`).
     s.run("SetMapToCurrentZone()").unwrap();
     s.run("SetMapZoom(0)").unwrap();
     assert_eq!(
@@ -242,10 +227,8 @@ fn a_direct_area_is_the_third_selection_state() {
     );
 }
 
-/// An instance map's overlays are **admitted**, keyed by the direct area, under exactly the zone's
-/// explored-bit gate (`0x4a67a0`'s overlay half, `0x4a6b10 jl 0x4a6b3d`) — no free reveal for a
-/// battleground. On 5875 data that means Alterac Valley's three rows and nothing at all for the
-/// other two.
+/// An instance map's overlays, keyed by the direct area, pass the zone's explored-bit gate
+/// (`0x4a67a0`'s overlay half, `0x4a6b10` to `0x4a6b3d`), with no free reveal for a battleground.
 #[test]
 fn an_instance_map_reveals_its_overlays_under_the_zone_gate() {
     let mut s = script();
@@ -270,18 +253,15 @@ fn an_instance_map_reveals_its_overlays_under_the_zone_gate() {
         "Interface\\WorldMap\\AlteracValley\\DUNBALDAR"
     );
 
-    // Warsong Gulch keys zero `WorldMapOverlay` rows — a fully explored character still sees bare
-    // detail tiles there.
+    // Warsong Gulch keys no `WorldMapOverlay` rows, so even fully explored it shows none.
     s.set_world_map_player_direct_area(Some(443));
     s.run("SetMapToCurrentZone()").unwrap();
     s.set_world_map_explored(vec![u32::MAX; 64]);
     assert_eq!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 0);
 }
 
-/// The navigation surface: lists come from the catalog, SetMapZoom's selection reads back
-/// synchronously in the same Lua breath (the reference's dropdown-click contract), zone/continent
-/// arguments clamp, and GetMapInfo names the displayed art folder (nil at the world level — the
-/// reference Lua's own "World" fallback).
+/// Lists come from the catalog, `SetMapZoom` reads back in the same call stack as the reference's
+/// dropdown expects, arguments clamp, and `GetMapInfo` names the art folder (nil at world level).
 #[test]
 fn worldmap_navigation_and_map_info() {
     let mut s = script();
@@ -306,7 +286,6 @@ fn worldmap_navigation_and_map_info() {
         ("Durotar".into(), "The Barrens".into())
     );
 
-    // World level by default: continent 0, nil map info.
     assert_eq!(
         s.eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
             .unwrap(),
@@ -314,7 +293,6 @@ fn worldmap_navigation_and_map_info() {
     );
     assert!(s.eval::<bool>("return GetMapInfo() == nil").unwrap());
 
-    // The synchronous read-back the reference relies on, and the art-folder name per level.
     s.run("SetMapZoom(2)").unwrap();
     assert_eq!(
         s.eval::<(i64, i64, String)>(
@@ -330,7 +308,6 @@ fn worldmap_navigation_and_map_info() {
         "a zone selection names the ZONE's art folder"
     );
 
-    // Out-of-range arguments clamp (never a Lua error — addons pass garbage).
     s.run("SetMapZoom(9, 9)").unwrap();
     assert_eq!(
         s.eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
@@ -340,9 +317,9 @@ fn worldmap_navigation_and_map_info() {
     );
 }
 
-/// SetMapToCurrentZone lands on the app-fed player zone; the feed's projection + facing surface
-/// through GetPlayerMapPosition/GetPlayerFacing — for `"player"` and, since report B320, for the
-/// `party1..4` slots too. A `raid` token still answers the off-map sentinel.
+/// `SetMapToCurrentZone` lands on the app-fed player zone, and the feed surfaces through
+/// `GetPlayerFacing` and `GetPlayerMapPosition` for the player and `party1..4`. A `raid` token
+/// answers the off-map sentinel; the reference reads raid positions (`WorldMapFrame.lua:379`).
 #[test]
 fn worldmap_current_zone_and_player_feed() {
     let mut s = script();
@@ -389,20 +366,14 @@ fn worldmap_current_zone_and_player_feed() {
     assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 0);
 }
 
-/// The **engine** moves the selection too, with no Lua in the loop — the reference's second
-/// writer of `[0x84506c]`/`[0x845070]`: `0x494780`'s `old == 0` side call to the resolver
-/// `0x4a6650`, which every exit of ends in the `SetMap` setter `0x4a67a0`.
-///
-/// We only ever had the Lua writers, so until something opened the map we sat at the world
-/// level — and there `GetPlayerMapPosition` answers a world-SHEET uv, which every addon built on
-/// Astrolabe rescales as a zone uv. This pins that a fresh session can be on the player's own
-/// zone before a single line of FrameXML or addon Lua has asked for it.
+/// The engine moves the selection with no Lua in the loop: the reference's second writer of
+/// `[0x84506c]`/`[0x845070]` is `0x494780`'s `old == 0` call to the resolver `0x4a6650`, whose
+/// every exit ends in the `SetMap` setter `0x4a67a0`.
 #[test]
 fn the_engine_can_select_a_zone_with_no_lua_call() {
     let mut s = script();
     push_catalog(&mut s);
 
-    // A fresh VM is the world sheet, and nothing Lua-side has run.
     assert_eq!(
         s.eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
             .unwrap(),
@@ -417,8 +388,7 @@ fn the_engine_can_select_a_zone_with_no_lua_call() {
         (1, 2),
         "the engine's own SetMap is what Lua reads back"
     );
-    // The WHOLE selection moved, not just the pair of globals: GetMapInfo names the zone sheet,
-    // which is what `WorldMapFrame_Update` loads art from and what Astrolabe keys its scale on.
+    // The whole selection moved: `GetMapInfo` names the zone sheet `WorldMapFrame_Update` loads.
     assert!(
         s.eval::<Option<String>>("return GetMapInfo()")
             .unwrap()
@@ -426,8 +396,7 @@ fn the_engine_can_select_a_zone_with_no_lua_call() {
         "a selected zone names its map file; the world level is the nil that mis-scales"
     );
 
-    // It clamps through the same tail as the Lua verbs — an out-of-range pair cannot corrupt
-    // the selection (`0x4a67a0` range-checks the zone against the continent's child count).
+    // It clamps through the same tail as the Lua verbs (`0x4a67a0` range-checks the zone).
     s.sync_world_map_to_player_zone(99, 99, None);
     let (c, _) = s
         .eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
@@ -435,9 +404,9 @@ fn the_engine_can_select_a_zone_with_no_lua_call() {
     assert!(c > 0, "clamped into the catalog, never past it");
 }
 
-/// World-level ProcessMapClick picks the continent whose sheet-rect contains the click (the
-/// 0x4a7100 AABB walk — the real kernel rects are disjoint); continent-level clicks resolve
-/// through the 0x4a6ec0 zone grid; hover names ride the same cell law.
+/// A world-level `ProcessMapClick` picks the continent whose sheet rect contains it (`0x4a7100`,
+/// the real rects being disjoint); continent-level clicks and hovers resolve through the zone grid
+/// (`0x4a6ec0`).
 #[test]
 fn worldmap_click_containment_and_zone_grid() {
     let mut s = script();
@@ -460,10 +429,9 @@ fn worldmap_click_containment_and_zone_grid() {
     s.run("ProcessMapClick(0.72, 0.63)").unwrap();
     assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 2);
 
-    // Continent level: Goldshire's UV inside the EK rect lands on grid cell 12735 (the real
-    // Azeroth.zmp index for that world position) → zone 1. The zone lights up: name + fileName +
-    // the six geometry values (`0x4a8494`), all against the zone's loc rect
-    // within the continent. cont_w=35199.9, cont_h=23466.6; w=2000, h=1500.
+    // Continent level: Goldshire's uv lands on cell 12735, zone 1, which lights up with its name,
+    // file name and six geometry values (`0x4a8494`) against its loc rect in the continent:
+    // cont_w=35199.9, cont_h=23466.6; w=2000, h=1500.
     let (name, file, tpx, tpy, tx, ty, sx, sy) = s
         .eval::<(String, String, f64, f64, f64, f64, f64, f64)>(
             "return UpdateMapHighlight(0.452843, 0.720880)",
@@ -511,10 +479,8 @@ fn worldmap_click_containment_and_zone_grid() {
         "the grid click drills into the zone"
     );
 
-    // Now at the ZONE level (Elwynn): a click re-expressed through ELWYNN's own rect lands on cell
-    // 8801 = the Stormwind City peer child → drills into the city map. This is the path that was a
-    // no-op before (`0x4a75c9`: continent- and zone-level clicks run identical code, only the
-    // windowing rect differs).
+    // At zone level a click through Elwynn's own rect lands on cell 8801, the Stormwind City peer,
+    // and drills in: `0x4a75c9` runs continent- and zone-level clicks alike, windowed differently.
     s.run("ProcessMapClick(0.5, 0.5)").unwrap();
     assert_eq!(
         s.eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
@@ -529,12 +495,10 @@ fn worldmap_click_containment_and_zone_grid() {
     assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 0);
 }
 
-/// At ZONE level `UpdateMapHighlight` answers a NAME only (report B360; `0x4a812e`):
-/// a revealed overlay's sub-area when the cursor is inside its hit rect, else the neighbouring
-/// zone or city whose grid cell the cursor is in through the DISPLAYED zone's rect window — never
-/// the displayed zone itself — and always a nil fileName + six zeros, so the stock frame hides the
-/// highlight quad. Fogged sub-areas have no name; an overlay with no resolvable first area is
-/// walked past. The reference's own Duskwood shot: "Deadwind Pass" in the label, no highlight.
+/// At zone level `UpdateMapHighlight` answers a name only (`0x4a812e`): a revealed overlay's
+/// sub-area under the cursor, else the neighbouring zone or city whose cell the cursor is in
+/// through the displayed zone's rect, never that zone itself. The file name is nil and the
+/// geometry zeros, so the stock frame hides the quad.
 #[test]
 fn worldmap_zone_level_hover_names_without_highlight() {
     let mut s = script();
@@ -550,20 +514,18 @@ fn worldmap_zone_level_hover_names_without_highlight() {
         |name: &str| -> Answer { (Some(name.into()), None, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) };
     let miss: Answer = (None, None, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
-    // Nothing explored. (0.5, 0.5) through Elwynn's rect is cell 8801 = the Stormwind City peer:
-    // the neighbouring child is NAMED, and nothing else — the B360 answer, Deadwind Pass from
-    // Duskwood in the report.
+    // Nothing explored: (0.5, 0.5) is cell 8801, the Stormwind City peer, named and nothing else.
     assert_eq!(hover(&mut s, 0.5, 0.5), name_only("Stormwind City"));
     // Cell 9060 = Elwynn itself: the displayed zone never names itself.
     assert_eq!(hover(&mut s, 0.82, 0.82), miss);
     // An empty cell, no overlay: the tail.
     assert_eq!(hover(&mut s, 0.2, 0.2), miss);
-    // Inside Goldshire's hit rect but fogged (bit 124 clear): no name — the pre-search walks the
-    // REVEALED list, and cell 8929 under it is empty.
+    // Inside Goldshire's hit rect, fogged (bit 124 clear): the pre-search walks only revealed
+    // overlays, and cell 8929 under it is empty.
     assert_eq!(hover(&mut s, 0.42, 0.7), miss);
 
-    // Reveal Northshire (bit 125 = word 3, bit 29). Its rect contains (0.5, 0.5): the overlay
-    // pre-search runs BEFORE the grid, so the sub-area wins over the city under the same point.
+    // Reveal Northshire (bit 125 = word 3, bit 29): the overlay pre-search runs before the grid,
+    // so its sub-area wins over the city under (0.5, 0.5).
     let mut explored = vec![0u32; 64];
     explored[3] = 1 << 29;
     s.set_world_map_explored(explored.clone());
@@ -585,8 +547,7 @@ fn worldmap_zone_level_hover_names_without_highlight() {
     s.set_world_map_explored(explored);
     assert_eq!(hover(&mut s, 0.5, 0.5), name_only("Northshire Valley"));
 
-    // Control: back at the continent level the hovered zone still lights up — fileName is the art
-    // folder and the quad geometry is non-zero.
+    // Control: at continent level the hovered zone still lights up, with its art folder.
     s.run("SetMapZoom(2)").unwrap();
     let (name, file, tpx, _, tx, ty, _, _) = hover(&mut s, 0.452843, 0.720880);
     assert_eq!(
@@ -596,8 +557,8 @@ fn worldmap_zone_level_hover_names_without_highlight() {
     assert!(tx > 0.0 && ty > 0.0);
 }
 
-/// SetMapZoom queues WORLD_MAP_UPDATE through the pending-event queue: nothing fires inside the
-/// call (a binding can't re-enter dispatch), the registered frame hears it on the next tick.
+/// `SetMapZoom` queues `WORLD_MAP_UPDATE` rather than firing it, since a binding cannot re-enter
+/// dispatch; the registered frame hears it on the next tick.
 #[test]
 fn worldmap_update_event_fires_on_next_tick() {
     let mut s = script();
@@ -629,16 +590,14 @@ fn worldmap_update_event_fires_on_next_tick() {
     );
 }
 
-/// The exploration fog: overlays reveal per the pushed bitset — none before any push, the
-/// matching subset after (bit 125 = Northshire in the fixture), the full info tuple comes back,
-/// and re-pushing the same bitset queues no extra repaint.
+/// Overlays reveal per the pushed explored bitset: none before a push, the matching subset after,
+/// each with its full info tuple.
 #[test]
 fn worldmap_overlays_reveal_by_explored_bits() {
     let mut s = script();
     push_catalog(&mut s);
-    s.run("SetMapZoom(2, 1)").unwrap(); // the Elwynn zone map (EK's only fixture zone)
+    s.run("SetMapZoom(2, 1)").unwrap(); // the Elwynn zone map
 
-    // Nothing explored: the zone shows no overlays (all parchment).
     assert_eq!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 0);
 
     // Bit 125 set (word 3, bit 29): Northshire reveals, Goldshire stays fogged.
@@ -661,7 +620,7 @@ fn worldmap_overlays_reveal_by_explored_bits() {
         .eval::<bool>("return GetMapOverlayInfo(3) == nil")
         .unwrap());
 
-    // At the continent level the overlay family reads empty (fog is a zone-map thing).
+    // At continent level the overlay family reads empty: fog is a zone-map thing.
     s.run("SetMapZoom(2)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 0);
 }

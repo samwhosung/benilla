@@ -1,10 +1,9 @@
-//! Backdrop: Lua verbs + extract emission (the reference's Backdrop object, `0x77e5f0`).
+//! The backdrop Lua verbs and extract emission (the reference's Backdrop object, `0x77e5f0`).
 
 use super::common::script;
 use crate::script::*;
 
-// SetBackdrop installs the plate; SetBackdropColor tints the bg only, SetBackdropBorderColor all 8
-// border pieces; extract emits bg-then-border at the frame's own slot with those colors.
+// SetBackdropColor tints only the bg, SetBackdropBorderColor the 8 border pieces.
 #[test]
 fn backdrop_installs_and_extracts_pieces_with_colors() {
     let mut s = script();
@@ -35,24 +34,17 @@ fn backdrop_installs_and_extracts_pieces_with_colors() {
         .collect();
     // bg (1) + 8 border pieces.
     assert_eq!(pieces.len(), 9);
-    // First is the bg, tinted the tooltip background color — QUANTIZED. The reference's colour
-    // field is a packed `0xAARRGGBB` byte quad and the setter converts `×255 + 0.5` through
-    // `__ftol` (`SetBackdropColor 0x777d30`), so `0.09` stores as 23 and reads back
-    // as `23/255`. This assertion used to hold `0.09` exactly, which was our lossless `[f32; 4]`
-    // showing through a store the client cannot make.
+    // The colour is a packed `0xAARRGGBB` byte quad, stored as `×255 + 0.5` through `__ftol`
+    // (`SetBackdropColor 0x777d30`), so 0.09 reads back as 23/255.
     assert_eq!(pieces[0].0, "bg");
     let q = |x: f32| f32::from((x * 255.0 + 0.5) as u8) / 255.0;
     assert_eq!(pieces[0].1, [q(0.09), q(0.09), q(0.19), 1.0]);
-    // The remaining 8 are the border, white, from the edge file.
     assert!(pieces[1..]
         .iter()
         .all(|(p, c)| p == "edge" && *c == [1.0, 1.0, 1.0, 1.0]));
 }
 
-// `GetBackdrop()` — the four traps of `0x777370`, pinned
-// where an addon can observe them. The corpus caller is `BuffCheck2.lua:448`, which reads the table
-// back, edits `insets`, and feeds it straight to `SetBackdrop` — so a wrong `tile` type or a missing
-// ctor default does not just read wrong, it round-trips wrong.
+// The four traps of `GetBackdrop()` (`0x777370`), as an addon observes them.
 #[test]
 fn get_backdrop_reconstructs_from_the_struct() {
     let s = script();
@@ -123,8 +115,7 @@ fn get_backdrop_reconstructs_from_the_struct() {
     .unwrap();
 }
 
-// BuffCheck2.lua:448's exact shape: read the plate back, edit `insets`, push it straight back in.
-// It is the whole reason this method exists in our client, so it is the test that must not rot.
+// The shape of `BuffCheck2.lua:448`: read the plate back, edit `insets`, set it again.
 #[test]
 fn get_backdrop_round_trips_through_set_backdrop() {
     let mut s = script();
@@ -151,7 +142,7 @@ fn get_backdrop_round_trips_through_set_backdrop() {
     )
     .unwrap();
     s.resolve();
-    // The plate still draws: bg + 8 border pieces, unchanged by the round trip.
+    // bg (1) + 8 border pieces.
     assert_eq!(
         s.extract()
             .iter()
@@ -161,7 +152,6 @@ fn get_backdrop_round_trips_through_set_backdrop() {
     );
 }
 
-// SetBackdrop(nil) tears the plate down (no pieces after).
 #[test]
 fn set_backdrop_nil_tears_down() {
     let mut s = script();
@@ -183,17 +173,8 @@ fn set_backdrop_nil_tears_down() {
         .all(|q| !matches!(q.content, QuadContent::Backdrop { .. })));
 }
 
-/// **The colour setters' argument gating is asymmetric, and getting it backwards is worse than
-/// the bug it replaces** (`0x777d30` / `0x7780d0`).
-///
-/// r/g/b go through a bare `lua_tonumber` — a `nil` channel is `0.0` and the call COMPLETES.
-/// benilla typed them `f32` and raised, which killed ShaguTweaks at `helpers.lua:248`, where
-/// `color.r` comes off a table that does not always have one.
-///
-/// Alpha is different: `lua_isnumber`-gated at `0x778227` with `1.0f` staged at `0x778220`, so a
-/// missing **or nil** alpha is OPAQUE. The tempting blanket fix — "treat every nil as 0.0, like
-/// its neighbours" — would have turned every one of those borders transparent, which reads as a
-/// rendering fault rather than an API bug and is the reason this test names both halves.
+/// The colour setters (`0x777d30`, `0x7780d0`) read r/g/b with a bare `lua_tonumber` (nil is 0.0)
+/// and gate alpha on `lua_isnumber` (`0x778227`) over a staged 1.0 (`0x778220`).
 #[test]
 fn backdrop_colors_coerce_rgb_but_default_alpha_opaque() {
     let s = script();
@@ -205,7 +186,6 @@ fn backdrop_colors_coerce_rgb_but_default_alpha_opaque() {
     )
     .unwrap();
 
-    // A nil channel is 0.0 and the call completes — no raise.
     s.run("f:SetBackdropBorderColor(nil, 1, 1, 1)").unwrap();
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return f:GetBackdropBorderColor()")
@@ -213,7 +193,6 @@ fn backdrop_colors_coerce_rgb_but_default_alpha_opaque() {
         (0.0, 1.0, 1.0, 1.0)
     );
 
-    // A missing alpha is 1.0, and so is an explicit nil one — NOT 0.0.
     s.run("f:SetBackdropColor(0.2, 0.4, 0.6)").unwrap();
     let (_, _, _, a) = s
         .eval::<(f32, f32, f32, f32)>("return f:GetBackdropColor()")
@@ -234,7 +213,6 @@ fn backdrop_colors_coerce_rgb_but_default_alpha_opaque() {
         .eval::<(f32, f32, f32, f32)>("return f:GetBackdropColor()")
         .unwrap();
     assert_eq!((r, g, b), (1.0, 0.0, 0.0));
-    // Quantized `×255 + 0.5` through `__ftol`: 0.5 -> 128/255, not 0.5 exactly. The field is a
-    // packed 0xAARRGGBB byte quad and nothing finer survives the store.
+    // Stored as a byte: 0.5 reads back as 128/255.
     assert_eq!(a, 128.0 / 255.0);
 }

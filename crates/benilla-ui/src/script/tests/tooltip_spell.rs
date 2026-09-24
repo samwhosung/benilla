@@ -1,8 +1,6 @@
-//! The engine spell/aura tooltip channel (decision 0274 P2, law per 0276): the verified line
-//! shapes — name|rank, ONE cost|range line, ONE casttime|cooldown line, the passive omission,
-//! the aura variant (white description + the SetPlayerBuff-only remaining line, itself gold —
-//! B62), and SetAction's
-//! pure delegation.
+//! The engine spell and aura tooltips: name|rank, one cost|range line, one casttime|cooldown line,
+//! the passive omission, the aura variant (white description, and the gold remaining line on
+//! `SetPlayerBuff` only), and the selectors that delegate to them.
 
 use super::common::script;
 use crate::script::*;
@@ -20,7 +18,7 @@ fn fireball() -> SpellTooltipView {
     }
 }
 
-/// The spellbook hover: name|rank gray, cost|range one line, casttime line, gold description.
+/// The spellbook hover: no rank column, cost|range on one line, cast time, gold description.
 #[test]
 fn spellbook_hover_renders_the_verified_shape() {
     let mut s = script();
@@ -53,7 +51,6 @@ fn spellbook_hover_renders_the_verified_shape() {
     "#,
     )
     .unwrap();
-    // The description wears the byte-verified gold.
     s.resolve();
     let quads = s.extract();
     let gold = quads.iter().any(|q| {
@@ -64,13 +61,8 @@ fn spellbook_hover_renders_the_verified_shape() {
     assert!(s.take_errors().is_empty());
 }
 
-/// **`bookType` decides which book the hover reads** — the fork `SetSpell 0x532d10` makes at
-/// `0x532e1c`/`0x532e2a` (`[4*i + 0xb6f098]` for the pet, `[4*i + 0xb700f0]` otherwise).
-///
-/// The defect (1050): the binding took the argument and dropped it, so a pet-book hover indexed the
-/// PLAYER's slot list — the imp's first spell showed the player's first spell, "Attack" and its
-/// crit line, on the director's screen. Both books are populated here with a *different* spell at
-/// the same slot id, which is the only arrangement that can tell the two apart.
+/// `SetSpell`'s `bookType` picks the book (`0x532d10` forks at `0x532e1c`, `0x532e2a`: the pet's
+/// slots at `0xb6f098`, the player's at `0xb700f0`); both books hold a different spell at slot 1.
 #[test]
 fn a_pet_book_hover_reads_the_pets_book_not_the_players() {
     let mut s = script();
@@ -126,9 +118,8 @@ fn a_pet_book_hover_reads_the_pets_book_not_the_players() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The tracking icon's hover (SetTrackingSpell): a GOLD name over the white (aura-variant)
-/// description — the shape the director's reference A/B pinned (2026-07-20), distinct from
-/// SetPlayerBuff's white name. No cost/casttime lines, no duration-remaining line.
+/// `SetTrackingSpell`, as the reference draws it: a gold name over the white aura description,
+/// with no cost, cast time or remaining line.
 #[test]
 fn tracking_hover_renders_gold_name_over_white_description() {
     let mut s = script();
@@ -178,7 +169,7 @@ fn tracking_hover_renders_gold_name_over_white_description() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A passive spell omits the casttime|cooldown line whole — never a "Passive" text line.
+/// A passive spell omits the casttime|cooldown line whole, with no "Passive" text line.
 #[test]
 fn passive_omits_the_casttime_line() {
     let mut s = script();
@@ -220,8 +211,8 @@ fn passive_omits_the_casttime_line() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The buff hover: the aura variant — WHITE description + the duration-remaining line (only
-/// this entry point), computed off the aura's GetTime expiry.
+/// The buff hover is the aura variant: a white description and, on this entry point only, the
+/// remaining-time line computed off the aura's `GetTime` expiry.
 #[test]
 fn player_buff_hover_is_the_aura_variant() {
     let mut s = script();
@@ -272,7 +263,6 @@ fn player_buff_hover_is_the_aura_variant() {
     "#,
     )
     .unwrap();
-    // The aura description is WHITE (the byte-verified aura/spell difference).
     s.resolve();
     let quads = s.extract();
     let white = quads.iter().any(|q| {
@@ -280,18 +270,14 @@ fn player_buff_hover_is_the_aura_variant() {
             if t.starts_with("Intellect increased") && *c == [1.0, 1.0, 1.0, 1.0])
     });
     assert!(white, "aura description is white, not gold");
-    // …and the NAME is GOLD: the aura builder `0x52f880` writes it through the gold wrapper
-    // `0x530380`, where the spell builder uses the plain `0x530270`. Pinned against the
-    // reference's own buff hover (2026-07-25 report B53), which the white name did not match.
+    // The name is gold: the aura builder `0x52f880` writes it through the gold wrapper
+    // `0x530380`, where the spell builder uses the plain `0x530270`.
     let gold_name = quads.iter().any(|q| {
         matches!(&q.content, QuadContent::Text { text: Some(t), color: Some(c), .. }
             if t == "Arcane Intellect" && (c[1] - 210.0 / 255.0).abs() < 1e-6)
     });
     assert!(gold_name, "aura name is gold, not white");
-    // …and so is the DURATION-REMAINING line — the same `0xffffd200`, not the description's
-    // white. On a 1.12.1 reference shot the "29 minutes remaining" glyphs are exactly
-    // `(255, 210, 0)`, the same pixels as that shot's title row, while its description rows are
-    // `(255, 255, 255)`.
+    // So is the remaining line, the same `0xffffd200`, as in the reference's buff hover.
     let gold_remaining = quads.iter().any(|q| {
         matches!(&q.content, QuadContent::Text { text: Some(t), color: Some(c), .. }
             if t == "<2 mm>" && *c == [1.0, 210.0 / 255.0, 0.0, 1.0])
@@ -300,10 +286,8 @@ fn player_buff_hover_is_the_aura_variant() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The buff builder `0x52f880`'s right column: the buff hover names the DISPEL CLASS where the
-/// spell hover would put a gray "Rank N" — "Magic" on Ice Armor, the half of B53 the gold name
-/// didn't cover — and it is gold, sharing the aura name's wrapper. A `rank` on the same view must
-/// NOT displace it.
+/// The buff builder's (`0x52f880`) right column is the dispel class, gold through the aura name's
+/// wrapper, where the spell hover puts a gray rank; a `rank` on the view must not displace it.
 #[test]
 fn player_buff_hover_names_the_dispel_class_in_gold() {
     let mut s = script();
@@ -312,7 +296,7 @@ fn player_buff_hover_names_the_dispel_class_in_gold() {
         168,
         SpellTooltipView {
             name: "Ice Armor".into(),
-            rank: Some("Rank 1".into()), // the spell variant's column — never the aura's
+            rank: Some("Rank 1".into()), // the spell variant's column, never the aura's
             dispel_type: Some("Magic".into()),
             aura_description: "Encases the caster in a layer of ice.".into(),
             ..Default::default()
@@ -350,9 +334,8 @@ fn player_buff_hover_names_the_dispel_class_in_gold() {
     assert!(s.take_errors().is_empty());
 }
 
-/// `0x52e610`'s equipped-item line and its reagents line — the two lines the 2026-07-25 reports
-/// found missing. Order: cast|cooldown → requires-item → requires-form → reagents →
-/// description, each requirement red while unmet.
+/// `0x52e610`'s line order: cast|cooldown, requires-item, requires-form, reagents, description,
+/// each requirement red while unmet.
 #[test]
 fn requirement_and_reagent_lines_render_in_law_order() {
     let mut s = script();
@@ -401,10 +384,8 @@ fn requirement_and_reagent_lines_render_in_law_order() {
             if t == "Requires Wands" && *c == [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0])
     });
     assert!(red, "an unmet equipped-item requirement is red");
-    // The reagent's inline `|cffff2020` escape reaches the region VERBATIM: the engine paints
-    // the line's BASE colour white and the app's text layer resolves the escape into colour runs
-    // (`benilla::ui_text::markup`, covered by its own `color_runs_survive_the_wrap`). So what this
-    // layer owns is that the escape is neither stripped nor pre-flattened.
+    // The reagent's `|cffff2020` escape reaches the region verbatim over a white base colour; the
+    // app's text layer (`ui_text::markup`) turns it into colour runs.
     let verbatim = quads.iter().any(|q| {
         matches!(&q.content, QuadContent::Text { text: Some(t), color: Some(c), .. }
             if t == "Reagents: |cffff2020Light Feather|r" && *c == [1.0, 1.0, 1.0, 1.0])
@@ -416,9 +397,9 @@ fn requirement_and_reagent_lines_render_in_law_order() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The target-frame aura hover: SetUnitBuff/SetUnitDebuff render the aura variant for the token's
-/// sign-filtered list — WITHOUT the duration-remaining line (byte-verified: only SetPlayerBuff
-/// appends it, and no other unit carries a duration on the 1.12 wire anyway).
+/// `SetUnitBuff`/`SetUnitDebuff` render the aura variant from the unit's sign-filtered list, with
+/// no remaining line: only `SetPlayerBuff` appends it, and the 1.12 wire carries no other unit's
+/// durations.
 #[test]
 fn unit_buff_and_debuff_hover_render_the_aura_variant_without_remaining() {
     let mut s = script();
@@ -477,20 +458,9 @@ fn unit_buff_and_debuff_hover_render_the_aura_variant_without_remaining() {
     assert!(s.take_errors().is_empty());
 }
 
-/// **`SetPlayerBuff` reads a 1.12 cache position, not an Era ordinal** — the index space the whole
-/// `GetPlayerBuff*` family shares (`script::aura`'s header; pinned by `ref-BuffFrame.lua:105`,
-/// which passes `GetPlayerBuff`'s return straight in).
-///
-/// Every assertion here is a case the previous 1-based, sign-filtered reading got wrong, and got
-/// wrong *silently* — the plate still rendered, just for the wrong aura:
-///
-/// - position 1 is the SECOND aura, not the first again;
-/// - a debuff is reachable at all (the old sign filter defaulted to helpful, so no position ever
-///   resolved to one);
-/// - `-1` clears instead of showing the first buff. `BigWigs/Raids/Naxxramas/Loatheb.lua:260-271`
-///   feeds an unchecked `GetPlayerBuff(i, "HARMFUL")` in and breaks its scan when line 1 goes nil,
-///   so "shows something" there is an addon that never stops scanning;
-/// - a surplus filter argument is ignored (`CT_BuffMod/CT_BuffFrame.lua:151` passes one).
+/// `SetPlayerBuff` takes a 1.12 cache position, the `GetPlayerBuff` family's index space:
+/// `BuffFrame.lua:105` passes that return straight in. A miss, `-1` included, clears the plate,
+/// and a surplus filter argument is ignored.
 #[test]
 fn player_buff_hover_indexes_the_cache_position_not_a_filtered_ordinal() {
     let mut s = script();
@@ -509,7 +479,7 @@ fn player_buff_hover_indexes_the_cache_position_not_a_filtered_ordinal() {
             },
         );
     }
-    // The player's cache: two buffs then a debuff, ONE list, insertion-ordered.
+    // The player's cache: two buffs then a debuff, in one insertion-ordered list.
     s.set_auras(
         "player",
         Some(vec![
@@ -562,8 +532,8 @@ fn player_buff_hover_indexes_the_cache_position_not_a_filtered_ordinal() {
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
-/// SetAction delegates by payload kind: a SPELL slot renders the spell view; an empty slot shows
-/// nothing; a miss records the ask.
+/// `SetAction` delegates by payload kind: a spell slot renders the spell view, and a spell the
+/// store lacks shows no plate and records the ask.
 #[test]
 fn action_hover_delegates_by_kind() {
     let mut s = script();
@@ -581,7 +551,7 @@ fn action_hover_delegates_by_kind() {
         25,
         Some(ActionSlot {
             kind: 0x00,
-            action: 5143, // not in the store — the ask channel fires
+            action: 5143, // not in the store: the ask channel fires
             ..Default::default()
         }),
     );
@@ -603,10 +573,8 @@ fn action_hover_delegates_by_kind() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A MACRO slot's hover is the reference's `0x52b040`: ONE white line, the macro's name (the
-/// "normal" colour `0xc0cf60` = 0xffffffff), and a slot whose
-/// macro no longer exists shows no plate at all. The director's report after 1636 landed: a macro
-/// on the bar had no tooltip — the arm was a pre-0983 `_ => Ok(())`.
+/// A macro slot's hover is the reference's `0x52b040`: one line, the macro's name in the normal
+/// colour (`0xc0cf60` holds `0xffffffff`, white); a slot whose macro is gone shows no plate.
 #[test]
 fn action_hover_on_a_macro_slot_shows_its_name_in_white() {
     let mut s = script();
@@ -684,12 +652,8 @@ fn trainer_service(spell_id: u32, name: &str, tooltip: TrainerTooltip) -> Traine
     }
 }
 
-/// `SetTrainerService` is a SELECTOR: it renders no line of its own and routes to whichever shared
-/// builder the app-side law picked. All three arms are pinned here — the item arm, the spell arm
-/// (with `altCaster` suppressing the reagents block), and a header row, which is a no-op.
-///
-/// The index is a VISIBLE row index, so row 1 is the "Arms" header and the services start at 2 —
-/// the same interleave `SetTradeSkillItem` has, and the same way to get it wrong.
+/// `SetTrainerService` renders no line of its own: it routes to the item or spell builder the app
+/// picked (`altCaster` drops the reagents), and its index is a visible row, so row 1 is a header.
 #[test]
 fn set_trainer_service_selects_the_builder_and_never_renders_its_own_line() {
     let mut s = script();
@@ -701,8 +665,8 @@ fn set_trainer_service_selects_the_builder_and_never_renders_its_own_line() {
             quality: 1,
             class: 2,
             subclass: 7,
-            // The type cell's word is app-resolved off ItemSubClass.dbc, never composed in the
-            // renderer — a view that carries none prints no type cell.
+            // The app resolves the type cell's word from ItemSubClass.dbc; a view without one
+            // prints no type cell.
             sub_class_display: Some("Sword".into()),
             ..Default::default()
         },
@@ -759,7 +723,7 @@ fn set_trainer_service_selects_the_builder_and_never_renders_its_own_line() {
     )
     .unwrap();
 
-    // Row 3: the class-trainer service -> the SPELL builder on the TAUGHT spell, reagents shown.
+    // Row 3: the class-trainer service goes to the spell builder on the taught spell.
     s.run(
         r#"
         TT:SetOwner(AB1, "ANCHOR_RIGHT")
@@ -781,7 +745,7 @@ fn set_trainer_service_selects_the_builder_and_never_renders_its_own_line() {
         "the gold description is part of the shared builder's law: {texts:?}"
     );
 
-    // Row 4: the same view, altCaster set -> the reagents block is gone, everything else stays.
+    // Row 4: the same view with altCaster set loses only the reagents block.
     s.run(
         r#"
         TT:SetOwner(AB1, "ANCHOR_RIGHT")
@@ -801,11 +765,8 @@ fn set_trainer_service_selects_the_builder_and_never_renders_its_own_line() {
     assert!(s.take_errors().is_empty());
 }
 
-/// `SetCraftSpell` is `SetTrainerService`'s structural twin: a selector, not the two-line
-/// name/description stub it used to be. Both arms are pinned, and the assertion that matters most
-/// is the negative one — a rod recipe's hover shows the ROD's item tooltip while the same row's
-/// ICON is the spell's (Law D). Icon and tooltip disagreeing on one row is the
-/// verified shape, not a bug to reconcile.
+/// `SetCraftSpell` is a selector like `SetTrainerService`: a rod recipe hovers the rod's item
+/// tooltip while its row's icon is the spell's, which is the reference's shape, not a bug.
 #[test]
 fn set_craft_spell_selects_the_builder_like_the_trainer_hover_does() {
     let mut s = script();
@@ -893,10 +854,8 @@ fn set_craft_spell_selects_the_builder_like_the_trainer_hover_does() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The duration line's **gate**: `0x532b00` skips the duration block on `untilCancelled`
-/// (`532bda: 8b 46 0c` / `532bdf: 75 2d`) — never on "has this aura a duration yet". The three
-/// cases below are the ones that separate the two questions, and the middle two are what the old
-/// `duration > 0 && left > 0` gate got wrong.
+/// `0x532b00` skips the remaining line on `untilCancelled` (`0x532bda`, `0x532bdf`), never on
+/// whether the aura has a duration yet.
 #[test]
 fn the_remaining_line_is_gated_on_until_cancelled_not_on_the_duration() {
     let mut s = script();
@@ -943,8 +902,7 @@ fn the_remaining_line_is_gated_on_until_cancelled_not_on_the_duration() {
         ..Default::default()
     };
 
-    // 1 · Permanent — and carrying a duration anyway, so only the FLAG can be doing the work.
-    // Title + description, nothing else.
+    // 1 · Permanent, with a duration anyway, so only the flag can suppress the line.
     assert_eq!(
         show(AuraState {
             duration: 1800.0,
@@ -956,8 +914,7 @@ fn the_remaining_line_is_gated_on_until_cancelled_not_on_the_duration() {
         "untilCancelled suppresses the line even with a live duration on the record"
     );
 
-    // 2 · Timed, but no duration packet has landed yet — the frame an aura appears. The old gate
-    // blanked this; the reference shows the line, counting from zero.
+    // 2 · Timed, before any duration packet: the reference shows the line, counting from zero.
     assert_eq!(
         show(AuraState {
             duration: 0.0,
@@ -969,8 +926,7 @@ fn the_remaining_line_is_gated_on_until_cancelled_not_on_the_duration() {
         "a timed aura's first frames still carry the line"
     );
 
-    // 3 · Lapsed — the reading the reference's own truncating seconds arm produces, which the old
-    // gate hid entirely.
+    // 3 · Lapsed: the reference's truncating seconds arm reads 0.
     assert_eq!(
         show(AuraState {
             duration: 30.0,
@@ -982,8 +938,7 @@ fn the_remaining_line_is_gated_on_until_cancelled_not_on_the_duration() {
         "a lapsed aura reads 0, it does not lose the line"
     );
 
-    // Control: an ordinary live aura still counts, so none of the above is the line going missing
-    // for an unrelated reason.
+    // Control: an ordinary live aura still counts down.
     assert_eq!(
         show(AuraState {
             duration: 1800.0,
@@ -996,9 +951,9 @@ fn the_remaining_line_is_gated_on_until_cancelled_not_on_the_duration() {
     assert!(s.take_errors().is_empty());
 }
 
-/// `GetRewardSpell()` / `GetQuestLogRewardSpell()` answer `texture, name, isTradeskillSpell` —
-/// three nils when the quest teaches nothing (the reference's own `(nil,nil,nil)` kind) — and
-/// `GameTooltip:SetQuestRewardSpell()` / `SetQuestLogRewardSpell()` render that spell (1944).
+/// `GetRewardSpell()` and `GetQuestLogRewardSpell()` answer `texture, name, isTradeskillSpell`,
+/// three nils when the quest teaches nothing, and `SetQuestRewardSpell()` and
+/// `SetQuestLogRewardSpell()` render that spell.
 #[test]
 fn quest_reward_spell_getters_and_hovers() {
     let mut s = script();
@@ -1066,7 +1021,7 @@ fn quest_reward_spell_getters_and_hovers() {
         }],
         ..Default::default()
     });
-    // The detail hangs on the row now, so both readers go through the selection (2247).
+    // The detail hangs on the row, so both readers go through the selection.
     s.run("SelectQuestLogEntry(1)").unwrap();
     assert_eq!(
         s.eval::<(String, String, Option<i64>)>("return GetQuestLogRewardSpell()")

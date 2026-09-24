@@ -5,11 +5,9 @@ use crate::framexml::Element;
 use super::{abs_value, children_named, color_of, Loader};
 
 impl Loader<'_> {
-    /// `<Backdrop bgFile edgeFile tile>` + children `<EdgeSize>`/`<TileSize>`/`<BackgroundInsets>`/
-    /// `<Color>`/`<BorderColor>` (LoadXML `0x77e6c0`). Builds the same table Lua `SetBackdrop`
-    /// reads and installs it, then applies the two colors — the XML `<Color>` parser (`0x6f23d0`)
-    /// defaults a *present* element's missing channels to **black** (r=g=b=0, a=1 via
-    /// [`color_of`]), distinct from the ctor white a table `SetBackdrop` leaves.
+    /// `<Backdrop>` (LoadXML `0x77e6c0`): the table Lua `SetBackdrop` takes, then the two colours.
+    /// A present `<Color>` defaults a missing channel to black, alpha 1 (`0x6f23d0`), not the
+    /// white a table `SetBackdrop` leaves.
     pub(super) fn apply_backdrop(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         let Some(bd) = children_named(el, "Backdrop").next() else {
             return;
@@ -32,10 +30,8 @@ impl Loader<'_> {
         }
     }
 
-    /// Build the `SetBackdrop` table from a `<Backdrop>` element: `bgFile`/`edgeFile`/`tile` attrs,
-    /// `<EdgeSize>`/`<TileSize>` scalars ([`abs_value`]), and `<BackgroundInsets>` (an `<AbsInset>`
-    /// child or inline `left`/`right`/`top`/`bottom` attrs). Missing keys are simply absent — the
-    /// object-model `SetBackdrop` leaves the ctor default (tileSize 0, edgeSize 32, insets 0).
+    /// The `SetBackdrop` table for a `<Backdrop>`. A key the element omits stays absent, so
+    /// `SetBackdrop` keeps the ctor's default (tileSize 0, edgeSize 32, insets 0).
     pub(super) fn build_backdrop_table(&self, bd: &Element) -> mlua::Result<Table> {
         let t = self.lua().create_table()?;
         if let Some(f) = bd.attr("bgFile") {

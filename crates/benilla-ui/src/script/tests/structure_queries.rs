@@ -1,30 +1,9 @@
-//! **`GetChildren` / `GetNumChildren` / `GetRegions` / `GetNumRegions`** — the four structure
-//! queries, and the properties an addon walking a frame it did not build depends on.
-//!
-//! The consumer that motivated them is `pfUI.api.StripTextures`, embedded in four separate top-20
-//! addons (pfUI, pfQuest, pfQuest-turtle, ShaguDPS):
-//!
-//! ```lua
-//! for _, v in ipairs({ frame:GetRegions() }) do
-//!   if v.SetTexture then ... end
-//! end
-//! ```
-//!
-//! so the shape under test is the one that idiom needs: **multiple return values**, in the
-//! structure's own order, each a usable widget object.
-//!
-//! Every claim here is confirmed against the reference (`0x773f60`/`0x774180`): the lists are
-//! `[frame+0x300]` and `[frame+0x1b8]`, both linkers APPEND AT THE TAIL so the values come back
-//! oldest-first with no reversal, hidden nodes
-//! are returned and counted, a detached region and the title region are both absent, a Button's
-//! label and state textures are present, and an empty frame returns zero values while `GetNum*`
-//! returns the number `0`.
+//! The structure queries `GetChildren`, `GetNumChildren`, `GetRegions` and `GetNumRegions`
+//! (`0x773f60`/`0x774180`): they walk `[frame+0x300]` and `[frame+0x1b8]`, whose linkers append at
+//! the tail, so values come back oldest first as multiple returns, hidden ones included.
 
 use super::common::script;
 
-/// The whole contract in one document: both lists, their order, the counts agreeing with them, the
-/// empty case, and — the one that is a behaviour rather than a plumbing detail — that a region
-/// detached by `SetParent(nil)` leaves both region verbs.
 #[test]
 fn the_structure_queries_report_the_structure() {
     let mut s = script();
@@ -48,8 +27,7 @@ fn the_structure_queries_report_the_structure() {
     )
     .unwrap();
 
-    // ── The lists, by name and IN ORDER. Named rather than counted, so a walk that returned the
-    //    right number of the wrong things (or the right things reversed) cannot pass.
+    // ── The lists, by name and in order.
     assert_eq!(
         s.eval::<String>(
             "local n = '' for _, v in ipairs({ SQHost:GetChildren() }) do \
@@ -69,9 +47,7 @@ fn the_structure_queries_report_the_structure() {
         "regions come back in CREATION order, not draw order — the OVERLAY fontstring stays second"
     );
 
-    // ── The counts are the same walk. A count that disagrees with the list is an off-by-one deep
-    //    inside a loop the addon did not write, so the two verbs share one function by construction
-    //    and this pins it.
+    // ── The counts are the same walk.
     assert_eq!(
         s.eval::<(usize, usize)>(
             "return SQHost:GetNumChildren(), table.getn({ SQHost:GetChildren() })"
@@ -87,8 +63,7 @@ fn the_structure_queries_report_the_structure() {
         (3, 3)
     );
 
-    // ── The objects are USABLE, not opaque handles: `StripTextures` feature-tests `v.SetTexture`
-    //    to tell a texture from a fontstring, then calls it. Both halves have to hold.
+    // ── Usable objects: pfUI's `StripTextures` tests `v.SetTexture`, then calls it.
     assert_eq!(
         s.eval::<String>(
             "local out = '' for _, v in ipairs({ SQHost:GetRegions() }) do \
@@ -100,8 +75,7 @@ fn the_structure_queries_report_the_structure() {
         "a texture answers SetTexture and a fontstring does not — the StripTextures branch"
     );
 
-    // ── A childless, regionless frame yields NOTHING, and counts zero. `ipairs` over it must run
-    //    zero times rather than once over a nil.
+    // ── An empty frame returns no values and counts zero.
     assert_eq!(
         s.eval::<(usize, usize, usize)>(
             "local e = CreateFrame(\"Frame\", \"SQEmpty\", UIParent) \
@@ -111,10 +85,8 @@ fn the_structure_queries_report_the_structure() {
         (0, 0, 0)
     );
 
-    // ── DETACHED REGIONS LEAVE BOTH VERBS. `Region:SetParent(nil)` unlinks from the parent's draw
-    //    layer AND its region list in the client (`0x77fd10`). We keep the entry so the arena can
-    //    still free the slot — a representation choice that must not be observable here, or a
-    //    StripTextures-shaped walk would "strip" a region that is already off the screen.
+    // ── A detached region leaves both verbs: `Region:SetParent(nil)` unlinks it from the draw
+    //    layer and the region list (`0x77fd10`); our arena keeps the entry, unseen here.
     s.run("SQFontB:SetParent(nil)").unwrap();
     assert_eq!(
         s.eval::<String>(
@@ -131,12 +103,8 @@ fn the_structure_queries_report_the_structure() {
         "...and from the count, which is the same walk"
     );
 
-    // ── THE TITLE REGION IS NOT IN THE LIST, and this is the assertion that corrected us. Its two
-    //    creation paths in the client dispatch a vtable slot that is a bare `[this+0x9c] = parent`
-    //    and never reach the region linker, so it was never in the list `GetRegions` walks —
-    //    corroborated by `Hide`/`Show` carrying an explicit extra `[frame+0xa8]` case *because* the
-    //    walk misses it (`0x768060`). Ours lives in `Frame::regions` so the arena can still free
-    //    it, which makes that a representation detail this walk must not leak.
+    // ── The title region is not in the list: its creation sets `[this+0x9c] = parent` without
+    //    the region linker, and `Hide`/`Show` handle `[frame+0xa8]` separately (`0x768060`).
     s.run("SQHost:CreateTitleRegion()").unwrap();
     assert_eq!(
         s.eval::<usize>("return SQHost:GetNumRegions()").unwrap(),
@@ -153,8 +121,7 @@ fn the_structure_queries_report_the_structure() {
         "...and does not appear in it"
     );
 
-    // ── A child reparented away leaves its old parent's child list too (the frame twin of the
-    //    above, and the case an addon hits when it re-hosts a default-UI frame).
+    // ── A reparented child leaves its old parent's list.
     s.run("SQChildB:SetParent(UIParent)").unwrap();
     assert_eq!(
         s.eval::<String>(

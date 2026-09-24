@@ -1,11 +1,8 @@
-//! TexCoords + Font objects.
+//! `SetTexCoord` and font objects.
 
 use super::common::script;
 use crate::script::*;
 
-/// `SetTexCoord(l, r, t, b)` writes the region's UV sub-rect; it surfaces on the extracted quad,
-/// `GetTexCoord` reads it back; the 8-arg affine form carries per-corner UVs (the route-line
-/// draw's rotated quads).
 #[test]
 fn set_tex_coord_changes_extracted_uv() {
     let mut s = script();
@@ -32,14 +29,12 @@ fn set_tex_coord_changes_extracted_uv() {
         tex.content
     );
 
-    // EIGHT values, per corner, in `SetTexCoord`'s own usage order — `ULx, ULy, LLx, LLy, URx,
-    // URy, LRx, LRy` (decision 1840). A Rect stored as `[l, r, t, b]` comes back out as its four
-    // corners, which is the only shape the reference has: there is no 4-value getter.
+    // `GetTexCoord` returns eight values in `SetTexCoord`'s corner order, `ULx, ULy, LLx, LLy,
+    // URx, URy, LRx, LRy`: the reference has no 4-value getter.
     let got: (f32, f32, f32, f32, f32, f32, f32, f32) = s.eval("return t:GetTexCoord()").unwrap();
     assert_eq!(got, (0.1, 0.2, 0.1, 0.8, 0.6, 0.2, 0.6, 0.8));
 
-    // The 8-arg affine form (arg order UL, LL, UR, LR) lands as per-corner UVs in screen order
-    // [TL, TR, BR, BL] — here a 90° rotation of the full texture.
+    // The 8-argument form (UL, LL, UR, LR) lands in screen order [TL, TR, BR, BL]; a 90° turn here.
     s.run("t:SetTexCoord(0,1, 1,1, 0,0, 1,0)").unwrap();
     s.resolve();
     let tex = s
@@ -73,9 +68,6 @@ fn set_tex_coord_changes_extracted_uv() {
     ));
 }
 
-/// `SetFontObject("Name")` copies a registered [`FontObject`]'s face/height/color onto the
-/// FontString; `GetFontObject` hands back the OBJECT (whose `GetName` round-trips); a later call
-/// re-points it (the resolved paint on the extracted quad follows). An unknown name errors.
 #[test]
 fn set_font_object_repoints_fontstring() {
     let mut s = script();
@@ -144,7 +136,6 @@ fn set_font_object_repoints_fontstring() {
         )
     );
 
-    // Re-point.
     s.run("fs:SetFontObject('Small')").unwrap();
     s.resolve();
     assert_eq!(
@@ -156,13 +147,10 @@ fn set_font_object_repoints_fontstring() {
         )
     );
 
-    // An unknown font object errors (never a silent no-op).
     assert!(s.run("fs:SetFontObject('Nope')").is_err());
 }
 
-/// `justifyV`: MIDDLE is the default (the client's own FontString default — what seats the money
-/// numbers on their coins' centerline), `SetJustifyV` overrides it, and a font object carrying one
-/// applies it on `SetFontObject`.
+/// A FontString's `justifyV` defaults to MIDDLE, the client's default.
 #[test]
 fn justify_v_defaults_middle_and_overrides() {
     let mut s = script();
@@ -192,15 +180,9 @@ fn justify_v_defaults_middle_and_overrides() {
     s.resolve();
     assert_eq!(justify_v(&s), JustifyV::Bottom);
 
-    // A font object carrying justify_v applies it — but ONLY on the axis this string has not
-    // already claimed for itself. `SetJustifyV` above severed the V axis, and that severance is
-    // permanent: the reference clears the axis's inheritMask bit (`+0x124`, the per-axis justify
-    // mask) and never restores it, so a later `SetFontObject` cannot take the axis back.
-    //
-    // This assertion used to read `Top`. That was our copy-everything model, not the client's; the
-    // shipped XML path is unaffected either way, because the loader applies `inherits=` BEFORE the
-    // element's own `justifyV=` (`Loader::apply_fontstring_font`), so the explicit attribute still
-    // wins.
+    // A font object's justification applies only on an axis the string has not set itself: a
+    // local setter clears that axis's inherit bit (`+0x124`) for good. XML is unaffected, as the
+    // loader applies `inherits=` before the element's own `justifyV=`.
     s.register_font_object(
         "TopFont",
         FontObject {
@@ -217,7 +199,7 @@ fn justify_v_defaults_middle_and_overrides() {
     s.resolve();
     assert_eq!(justify_v(&s), JustifyV::Bottom, "severance is permanent");
 
-    // A string that never claimed the axis DOES take the object's justification.
+    // A string that never set the axis takes the object's justification.
     s.run(
         r#"
         fresh = f:CreateFontString(nil, "ARTWORK")

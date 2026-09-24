@@ -1,141 +1,86 @@
-//! The guild-charter **Era API surface** — the guild registrar and the petition window
-//! (**re-derived against the byte law in 1678**).
-//!
-//! [`super::guild`] is *being* in a guild; this is *founding* one, which 1257 §2 deliberately left
-//! out and named as the next slice. Fifteen registered globals across two windows (the three tabard
-//! ones are the adjacent family and are not built), and the same shape as every other domain here:
-//! the app pushes a [`PetitionState`] snapshot ([`UiScript::set_petition`]) and the getters read
-//! that plain data; every verb queues a [`PetitionRequest`] the app drains
-//! ([`UiScript::take_petition_requests`]). No ECS or net reach from the engine.
-//!
-//! Every contract below is byte-verified against the whole `PetitionInfo.cpp` TU (`0x84cfb8`).
-//! Where it corrected what this file first shipped, the correction is named on the binding.
-//!
-//! **The snapshot mirrors the module's own `.data` state, and that is why it looks split.** The
-//! real client keeps the signature list (`[0xbdce20]` + the `0x10`-stride signer array) and the
-//! cached `CGPetition` record (`[0xbdce28]`) as two independent things, because the bindings read
-//! them independently: `GetNumPetitionNames`/`GetPetitionNameInfo` answer off the *packet's* list
-//! while `GetPetitionInfo` answers off the *record*, and either can exist without the other. So
-//! [`PetitionState`] carries them separately rather than as one "is the window open" struct — a
-//! collapsed model cannot express `CanSignPetition`'s no-record leg below, and gets it wrong.
-//!
-//! **This client has no `lua_pushboolean`.** Every predicate is the number `1` or `nil`
-//! (`0x6f3810` / `0x6f37f0`), and a name the `NameCache` has not resolved is **`nil`**, not `""`.
-//!
-//! **`PETITION_SHOW` is deferred, which is what makes the partial states below unreachable in
-//! practice.** The event fires only when no signer name is still resolving *and* the record has
-//! arrived (`0x4f419b`-`0x4f41ad`), so the window never paints a blank title or a blank row. The
-//! deferral lives app-side in `crate::ui_petition`; the getters here still answer honestly at any
-//! moment, because an addon may call them whenever it likes.
+//! The guild-charter globals of the guild registrar and the petition window. The snapshot keeps
+//! the signer list (`[0xbdce20]`) and the cached `CGPetition` record (`[0xbdce28]`) apart, as the
+//! reference does, since the bindings read them independently. Predicates are `1` or nil (no
+//! `lua_pushboolean`: `0x6f3810`, `0x6f37f0`) and an unresolved name is nil. `PETITION_SHOW` waits
+//! for every signer name and the record (`0x4f419b`), a deferral `crate::ui_petition` owns.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
 
-/// `GetPetitionInfo`'s first return when the record's `"charter"` bit is SET — `0x84cf8c`, selected
-/// by `0x4f43fb test BYTE PTR [edi+0x1110],0x1`. The literal the reference compares against
-/// (`PetitionFrame.lua:22`).
+/// `GetPetitionInfo`'s first return when the record's charter bit is set (`0x84cf8c`, selected at
+/// `0x4f43fb`): the literal `PetitionFrame.lua:21` compares against.
 pub const PETITION_TYPE_CHARTER: &str = "charter";
 
-/// …and when it is clear — `0x84b8f8`. **Reachable**, not dead: the bit is the record's own, so a
-/// server that sent a non-charter petition would land here, and `CanSignPetition`'s guild-membership
-/// and full-charter refusals are *both* gated on the same bit. 1.12 servers only ever send charters,
-/// which is why the reference's `else` arm merely writes the bare word.
+/// `GetPetitionInfo`'s first return when the charter bit is clear (`0x84b8f8`). 1.12 servers send
+/// only charters, but `CanSignPetition`'s guild and full-charter refusals test the same bit.
 pub const PETITION_TYPE_PETITION: &str = "petition";
 
-/// The cached `CGPetition` record, as [`GetPetitionInfo`] reads it — `[0xbdce28]`'s six fields.
-///
-/// `None` on [`PetitionState::record`] is the no-record leg, which is a real state with its own
-/// return tuple; see [`GetPetitionInfo`].
+/// The cached `CGPetition` record `[0xbdce28]`, as `GetPetitionInfo` reads it; `None` in
+/// [`PetitionState::record`] is the no-record leg.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PetitionRecordView {
-    /// [`PETITION_TYPE_CHARTER`] or [`PETITION_TYPE_PETITION`] — the record's `+0x1110` bit 0.
+    /// [`PETITION_TYPE_CHARTER`] or [`PETITION_TYPE_PETITION`], from the record's `+0x1110` bit 0.
     pub petition_type: String,
-    /// The record's inline `char[0x100]` title (`+0x10`) — the proposed guild's name.
+    /// The proposed guild's name, the record's `char[0x100]` at `+0x10`.
     pub title: String,
-    /// The record's inline `char[0x1000]` body text (`+0x110`). Empty on every 1.12 server.
+    /// The record's `char[0x1000]` body at `+0x110`; empty on every 1.12 server.
     pub body_text: String,
-    /// The record's `+0x1118`, pushed as a **signed** i32 (`fild DWORD`, not the zero-extending
-    /// `fild QWORD` the two counters use).
-    ///
-    /// **That this field is the signature cap is settled inside the binary rather than inferred
-    /// from the packet's field order**: `CanSignPetition` refuses at `0x4f4634 cmp ecx,[esi+0x1118]`
-    /// against the live signature count. It is *not* the nine name rows — see the module doc of
-    /// `crate::ui_petition`.
+    /// The record's signature cap (`+0x1118`), which `CanSignPetition` tests (`0x4f4634`), not the
+    /// nine name rows; pushed signed (`fild DWORD`).
     pub max_signatures: i32,
-    /// The owner's name through the `NameCache` — **`nil` when uncached** (`0x4f446d`), never `""`.
+    /// The owner's name from the `NameCache`, nil while uncached (`0x4f446d`), never `""`.
     pub originator: Option<String>,
-    /// Whether the active player's guid equals the record's owner (`0x4f447a`/`0x4f4481`).
+    /// Whether the active player owns the record (`0x4f447a`, `0x4f4481`).
     pub is_originator: bool,
 }
 
-/// What the two charter windows read — the module's `.data` state, in the same three pieces.
+/// What the two charter windows read, mirroring the reference module's `.data` state.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PetitionState {
-    /// `GetGuildCharterCost()` — showlist **entry\[0\]**'s fourth dword (`[0xbdce50]`), in copper.
-    ///
-    /// **Unsigned**, because the binding pushes it through the `fild QWORD` idiom with the high
-    /// dword forced to zero (`0x4f5245`): a negative `charterCost` on the wire surfaces in Lua as
-    /// ~4.29e9, not as a negative number. `0` before any showlist has arrived, and after the
-    /// world-enter clear.
-    ///
-    /// That it is **copper** is settled without going through the UI: `0x4f50ed` compares this cell
-    /// directly against `PLAYER_FIELD_COINAGE` and refuses with `ERR_NOT_ENOUGH_MONEY`.
+    /// `GetGuildCharterCost()`: showlist entry 0's cost (`[0xbdce50]`) in copper, which `0x4f50ed`
+    /// compares against `PLAYER_FIELD_COINAGE`. Unsigned, as the binding zero-extends it
+    /// (`0x4f5245`), so a negative wire cost reads ~4.29e9; 0 before any showlist.
     pub charter_cost: u32,
-    /// The open petition's signers in wire order, each resolved through the `NameCache` — `None`
-    /// where the name has not landed. Its length is `GetNumPetitionNames()`, which counts
-    /// **signatures only**: the petition's owner is not among them.
-    ///
-    /// Independent of [`Self::record`] on purpose (module doc): the packet fills this, the cache
-    /// fills that, and the bindings read one each.
+    /// The signers in wire order, `None` until the `NameCache` resolves one; filled by the packet,
+    /// apart from [`Self::record`]. `GetNumPetitionNames()` counts these, never the owner.
     pub signers: Vec<Option<String>>,
-    /// The cached record, or `None` — the no-record leg.
+    /// The cached record; `None` is the no-record leg.
     pub record: Option<PetitionRecordView>,
-    /// `CanSignPetition()`, computed app-side because three of its four refusals need state the
-    /// engine does not hold. See [`PetitionState::can_sign`]'s own note in `crate::ui_petition`;
-    /// the shape to remember here is that **it is `1` when nothing is open at all**.
+    /// `CanSignPetition()`, computed app-side as three of its four refusals need state the engine
+    /// lacks; it is `1` with nothing open, as in the reference.
     pub can_sign: bool,
 }
 
-/// A charter intent queued from Lua, drained by the app into its send.
-///
-/// **Almost every one is fire-and-forget, and that is the wire's shape**: buying is answered only by
-/// the item appearing, offering is answered to the *target*, and a refusal comes back on the guild
-/// family's own error channel. Nothing here may update local state optimistically.
+/// A charter intent queued from Lua for the app to send. Most get no answer of their own (a
+/// purchase shows only as the item, an offer answers the target, a refusal comes on the guild error
+/// channel), so none may update local state optimistically.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PetitionRequest {
-    /// `BuyGuildCharter(name)` — the registrar's Purchase button, **after** the name passed
-    /// [`validate_guild_name`]. The app supplies the NPC guid from the latched registrar, which is
-    /// the petition module's own `[0xbdceb0]` and *not* `CGGameUI`'s interaction pair.
+    /// `BuyGuildCharter(name)`, after [`validate_guild_name`]; the app adds the registrar NPC
+    /// latched at `[0xbdceb0]`, not `CGGameUI`'s interaction pair.
     Buy(String),
-    /// `TurnInGuildCharter()` — no argument. The app scans the bags, because the real client does
-    /// (`0x5ef2b0`, and it latches nothing: it re-scans on every call).
+    /// `TurnInGuildCharter()`: the app scans the bags on every call, as the reference does
+    /// (`0x5ef2b0`).
     TurnIn,
-    /// `CloseGuildRegistrar()` — **sends nothing of its own**, VERIFIED by a closure walk over
-    /// `0x4f5010` that finds no `CDataStore` build and no send, with this TU's own four sends as
-    /// the positive control.
+    /// `CloseGuildRegistrar()`: sends nothing (`0x4f5010`).
     CloseRegistrar,
-    /// `SignPetition([n])` — the optional argument is a **byte on the wire** and defaults to `1`
-    /// (`0x4f46d9`), not to `0`. vmangos skips it, so only a golden can tell the difference.
+    /// `SignPetition([n])`: a wire byte defaulting to 1, not 0 (`0x4f46d9`); vmangos skips it.
     Sign(i8),
-    /// `OfferPetition()` — no argument; the app resolves the **current target** (`CGGameUI`'s
-    /// *selection* pair, not its interaction pair) and runs the eight guards.
+    /// `OfferPetition()`: the app resolves the current target (`CGGameUI`'s selection pair, not its
+    /// interaction pair) and runs the eight guards.
     Offer,
-    /// `RenamePetition(name)` — after [`validate_guild_name`].
+    /// `RenamePetition(name)`, after [`validate_guild_name`].
     Rename(String),
-    /// `ClosePetition()` — **and this one can put bytes on the wire.** `0x4f3f60`'s decline leg
-    /// sends `MSG_PETITION_DECLINE` whenever a petition was open, no sign is in flight, a record is
-    /// cached, and we are **not** its owner. The app decides that; the verb just says "close".
+    /// `ClosePetition()`: `0x4f3f60` sends `MSG_PETITION_DECLINE` when a petition was open, no sign
+    /// is in flight, a record is cached and we do not own it; the app decides.
     ClosePetition,
-    /// A name the client itself refused ([`validate_guild_name`]) — carries the GlobalStrings key
-    /// of the message to show. **No packet is built**: the real client's validator runs before the
-    /// send and emits through the message catalog on its own.
+    /// A name [`validate_guild_name`] refused, with the GlobalStrings key to show; no packet.
     NameRefused(&'static str),
 }
 
 impl super::UiScript {
-    /// Push the charter snapshot, replacing whatever was there. A bare setter — firing the four
-    /// events on their edges (and *deferring* `PETITION_SHOW`) is the app's job.
+    /// Replace the charter snapshot; the app fires the four events and defers `PETITION_SHOW`.
     pub fn set_petition(&mut self, state: PetitionState) {
         self.model_mut().petition = state;
     }
@@ -145,19 +90,10 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().petition_requests)
     }
 
-    /// Drop any queued close intent, reporting how many went — **the close-intent consumption
-    /// decision 0096 named**, and the one thing a window switch cannot work without.
-    ///
-    /// Firing `PETITION_CLOSED` runs the frame's `OnHide` synchronously, and that handler calls
-    /// `ClosePetition()`, which queues a close. On a *switch* — a charter offered to us while ours
-    /// is open — the feed fires `PETITION_CLOSED` then `PETITION_SHOW` for the new charter, and the
-    /// close queued by the first would be drained onto the session the second just opened: the new
-    /// charter's window flashes and shuts. **And here it would also put a `MSG_PETITION_DECLINE` on
-    /// the wire for a charter we did not decline**, which is the sharper reason it must go.
-    ///
-    /// It cannot eat a *user's* close by mistake, and the ordering is what guarantees that rather
-    /// than a flag: the feed runs `before(UiInput)`, so a click's own `OnHide` queues its close
-    /// after this has already run.
+    /// Drop the queued close intents, returning how many. Firing `PETITION_CLOSED` runs `OnHide`,
+    /// whose `ClosePetition()` queues a close; on a switch to a newly offered charter that close
+    /// would shut the new window and decline it on the wire. A user's close survives, as the feed
+    /// runs `before(UiInput)` and a click's `OnHide` queues after this.
     pub fn drop_petition_close_intents(&mut self) -> usize {
         let requests = &mut self.model_mut().petition_requests;
         let before = requests.len();
@@ -170,40 +106,18 @@ impl super::UiScript {
         before - requests.len()
     }
 
-    /// Queue one charter intent directly — the test seam.
+    /// Queue one charter intent directly: the test seam.
     #[cfg(test)]
     pub fn queue_petition_request(&mut self, request: PetitionRequest) {
         self.model_mut().petition_requests.push(request);
     }
 }
 
-/// The client-side guild-name check `BuyGuildCharter` and `RenamePetition` **share** — `0x4f5160`,
-/// which runs the name through the locale-aware string checker `0x6c9b70` and maps its code to one
-/// of seven messages, accepting **only** code `0xd`. `Ok(())` is that acceptance; `Err(key)` is the
-/// GlobalStrings key of the line to show, and **no packet is built**.
-///
-/// **Partial, deliberately, and here is exactly how far it goes.** The code space belongs to
-/// `0x6c9b70`, which is not read in full, so only the checks whose meaning is unambiguous from
-/// the message keys are implemented — empty, a leading or trailing space, and consecutive spaces.
-/// The three that need data we do not have (`ERR_GUILD_NAME_TOO_SHORT`'s minimum,
-/// `ERR_GUILD_NAME_PROFANE`'s word list, `ERR_GUILD_NAME_MIXED_LANGUAGES`' script rules) **pass**
-/// rather than guess: refusing a name the server would have accepted is the worse failure, and the
-/// server re-checks every one of them anyway (`ObjectMgr::IsValidCharterName`). What this buys over
-/// sending blindly is the case the reference makes loudest and the server answers with silence —
-/// clicking Purchase with an empty box.
-///
-/// The reference's full table of codes, with what each maps to:
-///
-/// | code | key | implemented |
-/// |---|---|---|
-/// | 0 | `ERR_GUILD_ENTER_NAME` | **yes** — the empty string |
-/// | 1 | `ERR_GUILD_NAME_TOO_SHORT` | no — the minimum is inside `0x6c9b70` |
-/// | 4 | `ERR_GUILD_NAME_MIXED_LANGUAGES` | no |
-/// | 5 | `ERR_GUILD_NAME_PROFANE` | no |
-/// | 6 | `ERR_GUILD_NAME_RESERVED` | no |
-/// | 10 | `ERR_GUILD_NAME_INVALID_SPACE` | **yes** — a leading or trailing space |
-/// | 11 | `ERR_GUILD_NAME_NAME_CONSECUTIVE_SPACES` | **yes** |
-/// | 2,3,7,8,9,>0xb | `ERR_GUILD_NAME_INVALID` | no |
+/// The guild-name check `BuyGuildCharter` and `RenamePetition` share (`0x4f5160`), which maps the
+/// checker `0x6c9b70`'s code to a message and accepts only `0xd`; `Err` carries the GlobalStrings
+/// key to show, and no packet is built. Only codes 0 (empty), 10 (an edge space) and 11
+/// (consecutive spaces) are built; the rest pass, as the checker's rules are untraced and the
+/// server re-checks every name (`ObjectMgr::IsValidCharterName`).
 pub fn validate_guild_name(name: &str) -> Result<(), &'static str> {
     if name.is_empty() {
         return Err("ERR_GUILD_ENTER_NAME");
@@ -217,7 +131,7 @@ pub fn validate_guild_name(name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// 1.12's `1`/`nil`, never `true`/`false` — this client has no `lua_pushboolean`.
+/// 1.12's `1` or nil, never `true`/`false`: this client has no `lua_pushboolean`.
 fn era_bool(on: bool) -> Value {
     if on {
         Value::Integer(1)
@@ -226,7 +140,7 @@ fn era_bool(on: bool) -> Value {
     }
 }
 
-/// A cached name pushes as a string; an uncached one pushes **nil**.
+/// A cached name as a string, an uncached one as nil.
 fn name_value(lua: &Lua, name: Option<&String>) -> mlua::Result<Value> {
     match name {
         Some(n) => Ok(Value::String(lua.create_string(n)?)),
@@ -239,14 +153,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // ── The petition window ──────────────────────────────────────────────────────────────────
-    // GetPetitionInfo() (`0x4f43d0`) — **exactly six values on BOTH legs** (`mov eax,0x6` at
-    // `0x4f4493` and `0x4f44d4`), in the order the reference destructures them
-    // (`PetitionFrame.lua:10`).
-    //
-    // The no-record leg is NOT "return nothing": it is `nil, nil, nil, 0, nil, nil`, with the
-    // fourth pushed as the *number* zero (`0x4f44b4 push 0; push 0; call 0x6f3810`). This file
-    // first shipped an empty return, which reads identically through the reference's own
-    // destructure and differently to anything that counts its arguments.
+    // GetPetitionInfo() (`0x4f43d0`): six values on both legs (`0x4f4493`, `0x4f44d4`), in the
+    // order `PetitionFrame.lua:9` destructures them; with no record, `nil, nil, nil, 0, nil, nil`,
+    // the fourth the number 0 (`0x4f44b4`).
     g.set(
         "GetPetitionInfo",
         lua.create_function(|lua, ()| {
@@ -272,9 +181,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetNumPetitionNames() (`0x4f44e0`, 44 bytes — one field read) — `[0xbdce20]`, pushed
-    // UNSIGNED. It counts **signatures only**; the owner is painted separately by the window and is
-    // never in this list.
+    // GetNumPetitionNames() (`0x4f44e0`): `[0xbdce20]`, unsigned; signatures only, never the owner.
     g.set(
         "GetNumPetitionNames",
         lua.create_function(|lua, ()| {
@@ -283,13 +190,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetPetitionNameInfo(index) (`0x4f4510`) — **1-based** (`0x4f4569 dec eax`), one value on
-    // every leg. The bound test `0x4f456c jae` is UNSIGNED, so index `< 1` wraps to `0xffffffff`
-    // and fails the same comparison — which is why a zero or negative index answers nil rather
-    // than the last row. An uncached name is **nil**, not `""`.
-    //
-    // A non-numeric argument is `luaL_error("Usage: GetPetitionNameInfo(index)")`, which longjmps;
-    // mlua's coercion raises for us on the same input, so the shape is preserved.
+    // GetPetitionNameInfo(index) (`0x4f4510`): 1-based, one value on every leg. The bound test is
+    // unsigned (`0x4f456c`), so 0 or a negative index wraps and answers nil. A non-numeric
+    // argument raises, through mlua's coercion as through the reference's `Usage:`.
     g.set(
         "GetPetitionNameInfo",
         lua.create_function(|lua, index: i64| {
@@ -305,13 +208,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CanSignPetition() (`0x4f45e0`) — the Sign button's only gate.
-    //
-    // **It returns `1` with NO petition open**, and that is the reference's own asymmetry rather
-    // than a reading error: `0x4f45f7 je 0x4f4655` jumps past the three record-dependent refusals
-    // straight into the signer scan, over an array the close path has already zeroed. A client that
-    // treats this as a sufficient precondition lets the user click Sign with nothing to sign — so
-    // the window's own `isOriginator` branch is what actually keeps the button off screen.
+    // CanSignPetition() (`0x4f45e0`), the Sign button's only gate, is `1` with no petition open:
+    // `0x4f45f7` jumps past the three record refusals into a scan of the zeroed signer array. The
+    // window's `isOriginator` branch is what hides the button.
     g.set(
         "CanSignPetition",
         lua.create_function(|lua, ()| {
@@ -321,7 +220,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The registrar window ─────────────────────────────────────────────────────────────────
-    // GetGuildCharterCost() (`0x4f5230`) — copper, unsigned, `0` before any showlist.
+    // GetGuildCharterCost() (`0x4f5230`): copper, unsigned, 0 before any showlist.
     g.set(
         "GetGuildCharterCost",
         lua.create_function(|lua, ()| {
@@ -331,8 +230,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The verbs ────────────────────────────────────────────────────────────────────────────
-    // The four that carry nothing and push nothing. None may touch the snapshot: none of them is
-    // acknowledged, so a local update would show a charter as signed that the server refused.
+    // The four that carry and push nothing; none may touch the snapshot, which the server owns.
     for (global, request) in [
         ("TurnInGuildCharter", PetitionRequest::TurnIn),
         ("CloseGuildRegistrar", PetitionRequest::CloseRegistrar),
@@ -349,10 +247,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // SignPetition([n]) (`0x4f46d0`) — the argument is OPTIONAL and rides the wire as a byte,
-    // defaulting to **1**, not 0 (`0x4f46d9 edi = 1`, `0x4f4749 Put8`). The server skips the byte,
-    // so nothing observable depends on it — which is exactly why it is easy to ship as 0 and never
-    // find out.
+    // SignPetition([n]) (`0x4f46d0`): the optional argument rides the wire as a byte defaulting to
+    // 1, not 0 (`0x4f46d9`, `0x4f4749 Put8`); the server skips it.
     g.set(
         "SignPetition",
         lua.create_function(|lua, n: Option<f64>| {
@@ -364,10 +260,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // BuyGuildCharter(guildName) (`0x4f5260`) — **returns the number `1` or `nil`**, and what it
-    // reports is NAME VALIDITY, not that a packet was sent: `0x4f5294` runs the shared validator and
-    // only its non-zero return reaches the action, which then has five silent refusals of its own.
-    // Nothing in the shipped FrameXML reads the return; an addon can.
+    // BuyGuildCharter(guildName) (`0x4f5260`) returns 1 or nil for name validity, not for a send:
+    // `0x4f5294` runs the shared validator, and the action behind it has five silent refusals.
     g.set(
         "BuyGuildCharter",
         lua.create_function(|lua, name: String| {
@@ -387,11 +281,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // RenamePetition(name) (`0x4f4930`) — **0 values**, the SAME validator, and silent on refusal
-    // beyond the validator's own message. (Its usage string is literally
-    // `Usage(RenamePetition("name")` in the binary — Blizzard's own unbalanced parenthesis. It is
-    // unreachable from our binding, which raises through mlua's coercion instead, and is recorded
-    // here rather than reproduced.)
+    // RenamePetition(name) (`0x4f4930`): zero values, the same validator, silent beyond its
+    // message. A bad argument raises mlua's coercion error; the reference's usage string is
+    // `Usage(RenamePetition("name")`, unbalanced.
     g.set(
         "RenamePetition",
         lua.create_function(|lua, name: String| {
@@ -465,13 +357,6 @@ mod tests {
         );
     }
 
-    /// **The no-record leg is six values, not none** — `nil, nil, nil, 0, nil, nil`, with the
-    /// fourth the *number* zero.
-    ///
-    /// This file first shipped an empty return, which the reference's own six-way destructure
-    /// cannot tell apart (both give six nils… except the fourth, which is `0` here and `nil`
-    /// there). The COUNT is what separates them — [`UiScript::arity`] — and it is the whole point
-    /// of the test.
     #[test]
     fn the_no_record_leg_is_six_values_with_a_numeric_zero() {
         let s = UiScript::new().unwrap();
@@ -494,8 +379,7 @@ mod tests {
         );
     }
 
-    /// The name list is 1-based and bounded, an uncached name is **nil**, and the count excludes
-    /// the owner. The zero/negative cases matter because the binary's bound test is *unsigned*.
+    /// The zero and negative indices matter because the reference's bound test is unsigned.
     #[test]
     fn petition_names_are_one_based_and_uncached_reads_nil() {
         let mut s = UiScript::new().unwrap();
@@ -534,8 +418,7 @@ mod tests {
         }
     }
 
-    /// `CanSignPetition()` is era-boolean **and answers `1` with nothing open** — the reference's
-    /// own asymmetry, pinned so nobody "fixes" it into a nil.
+    /// The `1` with nothing open is the reference's own asymmetry, not a bug to fix.
     #[test]
     fn can_sign_petition_answers_one_with_nothing_open() {
         let s = UiScript::new().unwrap();
@@ -557,7 +440,6 @@ mod tests {
         );
     }
 
-    /// The cost is copper, unsigned, and belongs to the registrar rather than to any petition.
     #[test]
     fn charter_cost_is_unsigned_copper_and_the_registrars() {
         let mut s = UiScript::new().unwrap();
@@ -567,7 +449,7 @@ mod tests {
         });
         assert_eq!(s.eval::<i64>("return GetGuildCharterCost()").unwrap(), 1000);
 
-        // A negative wire cost surfaces as ~4.29e9, not as a negative — the `fild QWORD` idiom.
+        // A negative wire cost reads ~4.29e9: the binding zero-extends it (`fild QWORD`).
         s.set_petition(PetitionState {
             charter_cost: (-1i32) as u32,
             ..PetitionState::default()
@@ -581,7 +463,6 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetGuildCharterCost()").unwrap(), 0);
     }
 
-    /// `SignPetition`'s optional argument rides the wire as a byte and **defaults to 1**.
     #[test]
     fn sign_petition_defaults_its_wire_byte_to_one() {
         let mut s = UiScript::new().unwrap();
@@ -598,8 +479,7 @@ mod tests {
         );
     }
 
-    /// `BuyGuildCharter` reports **name validity** as `1`/`nil`, and a refused name queues its
-    /// message instead of a packet. `RenamePetition` shares the validator and returns nothing.
+    /// A refused name queues its message instead of a packet.
     #[test]
     fn the_name_validator_gates_both_verbs_and_only_buy_reports_it() {
         let mut s = UiScript::new().unwrap();
@@ -631,8 +511,6 @@ mod tests {
         );
     }
 
-    /// The validator's three implemented codes, and — just as load-bearing — the names it lets
-    /// through rather than guessing at.
     #[test]
     fn the_validator_refuses_only_what_it_can_prove() {
         assert_eq!(validate_guild_name(""), Err("ERR_GUILD_ENTER_NAME"));
@@ -648,9 +526,8 @@ mod tests {
             validate_guild_name("Legacy  of Steel"),
             Err("ERR_GUILD_NAME_NAME_CONSECUTIVE_SPACES")
         );
-        // Passed through on purpose: the minimum length, the profanity list and the script rules
-        // all live inside `0x6c9b70`, which is not read in full, and refusing a name the server
-        // would accept is the worse failure. The server re-checks every one of them.
+        // Passed through: the length, profanity and script rules live in the untraced `0x6c9b70`,
+        // and the server re-checks them.
         for ok in ["Legacy of Steel", "A", "Ab", "Éclair", "x y z"] {
             assert_eq!(
                 validate_guild_name(ok),
@@ -660,8 +537,6 @@ mod tests {
         }
     }
 
-    /// The close-intent consumption removes exactly the two close verbs and preserves the order of
-    /// everything else.
     #[test]
     fn dropping_close_intents_leaves_the_other_verbs_untouched() {
         let mut s = UiScript::new().unwrap();

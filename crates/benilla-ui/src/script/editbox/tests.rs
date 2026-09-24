@@ -1,8 +1,4 @@
-//! Rust-driven tests of the EditBox runtime: focus acquisition + routing, text/cursor/
-//! selection editing, the specialized script fires, caps, numeric/password, and text-region sync.
-//! Frames are built programmatically via `CreateFrame("EditBox", …)` and driven through the public
-//! keyboard API (`char_input`/`key_input`/`editbox_action`/`has_keyboard_focus`) and the Lua
-//! method surface.
+//! EditBox runtime tests, driven through the public keyboard API and the Lua methods.
 
 use crate::script::{EditAction, EditUnit, QuadContent, UiScript};
 
@@ -10,7 +6,6 @@ fn script() -> UiScript {
     UiScript::new().expect("construct UiScript")
 }
 
-/// The display text of the (single) text quad an extract produces, if any.
 fn text_quad(s: &UiScript) -> Option<String> {
     s.extract().into_iter().find_map(|q| match q.content {
         QuadContent::Text { text, .. } => text,
@@ -20,21 +15,16 @@ fn text_quad(s: &UiScript) -> Option<String> {
 
 // ── focus acquisition + routing ─────────────────────────────────────────────────────────────
 
-/// **The self-acquire path**, path 2 of the two: a box that has had no show TRANSITION (created
-/// already visible, so `visibility_focus` never runs for it) still takes the keyboard on the first
-/// key or char event, and processes that same event. Path 1, focus-on-show, is
-/// [`an_autofocus_box_takes_the_keyboard_when_it_is_shown`] below — this test's name used to assert
-/// its absence, which stopped being true at.
+/// A box created visible has had no show transition, yet with autoFocus it takes the keyboard on
+/// the first key or char and processes that event.
 #[test]
 fn an_autofocus_box_self_acquires_on_the_first_event() {
     let mut s = script();
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetAutoFocus(true)"#)
         .unwrap();
-    // No show transition has run for this box, so nothing owns the keyboard yet.
     assert!(!s.has_keyboard_focus());
     assert_eq!(s.focused_editbox_name(), None);
 
-    // The first char self-acquires focus AND processes that same event.
     assert!(
         s.char_input("a"),
         "an autoFocus box consumes the acquiring event"
@@ -44,9 +34,8 @@ fn an_autofocus_box_self_acquires_on_the_first_event() {
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "a");
 }
 
-/// **An `autoFocus` box takes the keyboard when it is shown** — the OnShow vtable override
-/// (`0x81c910` slot +0x30, `0x77a750`), missing here until. Gated on nothing else
-/// holding focus, and the gate is the whole of it — no topmost/best choice.
+/// The OnShow override (`0x77a750`, vtable `0x81c910` slot +0x30) focuses an autoFocus box when
+/// nothing holds focus; there is no topmost or best choice.
 #[test]
 fn an_autofocus_box_takes_the_keyboard_when_it_is_shown() {
     let s = script();
@@ -67,7 +56,7 @@ fn an_autofocus_box_takes_the_keyboard_when_it_is_shown() {
         "showing an autoFocus box focuses it",
     );
 
-    // Hiding the box that holds the keyboard releases it (the mirror override, slot +0x34).
+    // Hiding the focused box releases the keyboard (the mirror override, slot +0x34).
     s.run("E:Hide()").unwrap();
     assert!(
         !s.has_keyboard_focus(),
@@ -76,9 +65,8 @@ fn an_autofocus_box_takes_the_keyboard_when_it_is_shown() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The two gates, each shown to bite. A box that opted out does not take the keyboard on show; and
-/// a box that would have is refused while another still holds it — the reference's
-/// `if ([0xcf4dc8] == 0 && (flags & 1))`, both halves.
+/// Focus on show takes both halves of `[0xcf4dc8] == 0 && (flags & 1)`: no focus held, and
+/// autoFocus.
 #[test]
 fn the_show_focus_is_refused_without_autofocus_or_with_the_keyboard_taken() {
     let s = script();
@@ -97,7 +85,6 @@ fn the_show_focus_is_refused_without_autofocus_or_with_the_keyboard_taken() {
         "autoFocus=false is an opt-out that holds on show",
     );
 
-    // Now give the keyboard away, and show an autoFocus box into an occupied focus.
     s.run(
         r#"
         HOLDER = CreateFrame("EditBox", "Holder")
@@ -114,9 +101,7 @@ fn the_show_focus_is_refused_without_autofocus_or_with_the_keyboard_taken() {
         "a shown autoFocus box does not steal a focus that is already held",
     );
 
-    // And hiding a box that does NOT hold the keyboard leaves it where it is — `0x77e410`'s own
-    // per-box guard (`cmp ecx,eax; jne ret`), which is what makes the override's unconditional
-    // tail-jmp harmless.
+    // Hiding a box without the keyboard leaves focus alone (`0x77e410`'s per-box guard).
     s.run("LATE:Hide()").unwrap();
     assert_eq!(
         s.focused_editbox_name().as_deref(),
@@ -129,9 +114,7 @@ fn the_show_focus_is_refused_without_autofocus_or_with_the_keyboard_taken() {
 #[test]
 fn non_autofocus_unfocused_box_ignores_input() {
     let mut s = script();
-    // `SetAutoFocus(false)` explicitly: the ctor's `flags = 1` leaves autoFocus **ON** by default
-    // (`0x779a29`/`0x779a2e`), so a bare `CreateFrame("EditBox")` is an autoFocus
-    // box and would self-acquire on the first char. This test is about the other kind.
+    // The ctor leaves autoFocus on (`0x779a29`/`0x779a2e`), so a bare box would self-acquire.
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetAutoFocus(false)"#)
         .unwrap();
     assert!(!s.char_input("a"), "no focus, no autoFocus → not consumed");
@@ -149,7 +132,6 @@ fn focused_box_consumes_everything() {
     let mut s = script();
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetFocus()"#)
         .unwrap();
-    // Empty text: these do nothing, but a focused box still consumes them.
     assert!(s.editbox_action(EditAction::Move {
         unit: EditUnit::Char,
         back: true,
@@ -210,7 +192,6 @@ fn click_focuses_regardless_of_autofocus_and_transition_order_is_lost_then_gaine
     .unwrap();
     s.resolve();
 
-    // Neither box has autoFocus, yet a click focuses each.
     s.mouse_button(50.0, 10.0, "LeftButton", true);
     s.mouse_button(50.0, 10.0, "LeftButton", false);
     assert_eq!(s.focused_editbox_name().as_deref(), Some("A"));
@@ -226,10 +207,8 @@ fn click_focuses_regardless_of_autofocus_and_transition_order_is_lost_then_gaine
 
 // ── text buffer + editing + OnTextChanged/OnTextSet ─────────────────────────────────────────
 
-/// **`OnTextChanged` is deferred and coalesced**. An edit only raises the
-/// `textChanged` dirty bit; the fire belongs to the drain (`0x77d3e0`) that the box's own OnUpdate
-/// runs. So three typed characters are three marks on ONE box and produce exactly ONE fire — this
-/// test asserted three before the law was checked.
+/// An edit only raises the box's `textChanged` bit; `OnTextChanged` fires once, at the drain its
+/// OnUpdate runs (`0x77d3e0`).
 #[test]
 fn typing_coalesces_into_one_deferred_ontextchanged() {
     let mut s = script();
@@ -261,15 +240,12 @@ fn typing_coalesces_into_one_deferred_ontextchanged() {
     );
     assert_eq!(s.eval::<String>("return seen").unwrap(), "abc");
 
-    // Nothing is pending now, so a second drain fires nothing.
     s.tick(0.0);
     assert_eq!(s.eval::<i64>("return changed").unwrap(), 1);
 }
 
-/// The two fires part company: **`OnTextSet` is synchronous, inside `SetText`
-/// itself** (`0x77be6b`), while `OnTextChanged` waits for the drain. The equality short-circuit
-/// still suppresses both. So writing "hi", "hi", "bye" before any drain logs two `set`s and then a
-/// SINGLE `changed` carrying only the last value — `A → B` coalesces.
+/// `OnTextSet` fires inside `SetText` (`0x77be6b`), `OnTextChanged` at the drain; an unchanged
+/// text fires neither.
 #[test]
 fn set_text_fires_ontextset_at_once_and_ontextchanged_at_the_drain() {
     let mut s = script();
@@ -356,14 +332,13 @@ fn paste_inserts_at_the_cursor_and_replaces_the_selection() {
     "#,
     )
     .unwrap();
-    // Cursor sits at end after SetText → paste appends.
+    // SetText leaves the cursor at the end, so the paste appends.
     assert!(s.paste("CD"), "focused box consumes the paste");
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "abCD");
-    // Select-all then paste replaces the whole selection.
     s.run("E:HighlightText(0, -1)").unwrap();
     assert!(s.paste("xyz"));
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "xyz");
-    // Both pastes marked the same box, so the drain owes exactly one fire — not one per paste.
+    // Both pastes marked the one box, so the drain fires once.
     assert_eq!(s.eval::<i64>("return changed").unwrap(), 0);
     s.tick(0.0);
     assert_eq!(s.eval::<i64>("return changed").unwrap(), 1);
@@ -390,7 +365,6 @@ fn paste_strips_newlines_in_a_single_line_box_but_keeps_them_when_multiline() {
         "onetwothree"
     );
 
-    // Multi-line box: the newline survives (a tab is still a dropped control char).
     let mut s = script();
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetMultiLine(true); E:SetFocus()"#)
         .unwrap();
@@ -400,14 +374,12 @@ fn paste_strips_newlines_in_a_single_line_box_but_keeps_them_when_multiline() {
 
 #[test]
 fn paste_honors_max_letters_and_numeric() {
-    // maxLetters trims the paste from the end.
     let mut s = script();
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetMaxLetters(3); E:SetFocus()"#)
         .unwrap();
     assert!(s.paste("abcdef"));
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "abc");
 
-    // numeric aborts a paste that carries any non-digit (matching the typed-insert rule).
     let mut s = script();
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetNumeric(true); E:SetFocus()"#)
         .unwrap();
@@ -473,7 +445,7 @@ fn enter_escape_tab_space_fire_their_slots() {
     )
     .unwrap();
     assert!(s.key_input("ENTER")); // single-line → OnEnterPressed
-    assert!(s.key_input("ESCAPE")); // fires, does NOT release focus
+    assert!(s.key_input("ESCAPE"));
     assert_eq!(
         s.focused_editbox_name().as_deref(),
         Some("E"),
@@ -484,7 +456,7 @@ fn enter_escape_tab_space_fire_their_slots() {
 
     let log: Vec<String> = s.eval("return log").unwrap();
     assert_eq!(log, vec!["enter", "escape", "tab", "space"]);
-    // ENTER on a single-line box must NOT insert; only the space landed.
+    // Enter on a single-line box inserts nothing; only the space landed.
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), " ");
 }
 
@@ -506,23 +478,10 @@ fn multiline_enter_inserts_a_newline_without_onspacepressed() {
     assert_eq!(s.eval::<i64>("return spaces").unwrap(), 0);
 }
 
-/// **Alt-arrow mode: the two real verbs, and the flag they share with the XML attribute.**
-///
-/// The reference settles four things this pins:
-///
-///  · 5875 has **no `SetIgnoreArrows`** — the 48-entry EditBox method table
-///    `[0x87bb68, 0x87bce8)` carries `SetAltArrowKeyMode`/`GetAltArrowKeyMode` at 46/47 and no
-///    entry whose name contains "Ignore". benilla published the invented name for two rounds and
-///    was missing both real ones.
-///  · The XML attribute `ignoreArrows` and the Lua verbs drive **one** flag (`[E+0x318] & 0x10`).
-///  · The setter's argument is `GetBoolOrDefault(L, 2, default = 1)` (`0x6f1c10`), not Lua
-///    truthiness — an **absent** argument ENABLES, `""` ENABLES, `0` and `"0"` disable.
-///  · The getter answers the **number 1 or nil**, never a boolean.
-///
-/// And the negative that matters: the engine core no longer swallows anything. The gate is on the
-/// KEY and lives in the host (`UiKeyboardCapture::arrows_fall_through`), so an `EditAction` that
-/// arrives here moves the caret whatever the flag says — it only ever arrives when ALT was held or
-/// the key was not an arrow.
+/// The method table `[0x87bb68, 0x87bce8)` has `SetAltArrowKeyMode`/`GetAltArrowKeyMode` at 46/47
+/// and no `SetIgnoreArrows`; the XML `ignoreArrows` is the same flag (`[E+0x318] & 0x10`). The
+/// gate is on the key, in the host (`UiKeyboardCapture::arrows_fall_through`), so an `EditAction`
+/// that arrives here acts whatever the flag says.
 #[test]
 fn alt_arrow_key_mode_is_the_flag_and_the_engine_core_no_longer_swallows_moves() {
     let mut s = script();
@@ -535,13 +494,11 @@ fn alt_arrow_key_mode_is_the_flag_and_the_engine_core_no_longer_swallows_moves()
     )
     .unwrap();
 
-    // The invented name is gone.
     assert!(
         s.eval::<bool>("return E.SetIgnoreArrows == nil").unwrap(),
         "5875 has no SetIgnoreArrows — publishing it was decision 1189's error"
     );
 
-    // The getter: a number or nil, never a boolean.
     assert_eq!(
         s.eval::<Option<i64>>("return E:GetAltArrowKeyMode()")
             .unwrap(),
@@ -559,10 +516,10 @@ fn alt_arrow_key_mode_is_the_flag_and_the_engine_core_no_longer_swallows_moves()
         "the set arm pushes the double 1.0 (0x6f3810), not a boolean"
     );
 
-    // `GetBoolOrDefault(default = 1)`, arm by arm — three of these are backwards under Lua
-    // truthiness, which is why the coercion has its own helper.
+    // `GetBoolOrDefault` (`0x6f1c10`, default 1), arm by arm; three are backwards under Lua
+    // truthiness.
     for (arg, want) in [
-        ("", Some(1)),      // ABSENT -> the default 1 -> enabled
+        ("", Some(1)),      // absent -> the default 1 -> enabled
         ("nil", None),      // nil -> 0
         ("0", None),        // __ftol(0) -> false
         ("-1", Some(1)),    // __ftol(-1) != 0 -> true
@@ -579,8 +536,8 @@ fn alt_arrow_key_mode_is_the_flag_and_the_engine_core_no_longer_swallows_moves()
         );
     }
 
-    // The engine core does NOT swallow a Char move any more — the gate is on the key, upstream.
-    // `SetText` leaves the caret at the end, so one back-Char move puts it between 'b' and 'c'.
+    // A flagged box still acts on a Char move. `SetText` leaves the caret at the end, so one back
+    // move puts it between 'b' and 'c'.
     s.run(r#"E:SetAltArrowKeyMode(1) E:SetText("abc")"#)
         .unwrap();
     assert!(s.editbox_action(EditAction::Move {
@@ -599,8 +556,8 @@ fn alt_arrow_key_mode_is_the_flag_and_the_engine_core_no_longer_swallows_moves()
     );
 }
 
-/// The XML attribute is the same flag under its other name (`ignoreArrows` occurs once in the
-/// image, at `0x879b78`, with one xref: the attribute push at `0x77a13a`).
+/// The XML `ignoreArrows` is the same flag: its string (`0x879b78`) has one use, the attribute
+/// read at `0x77a13a`.
 #[test]
 fn the_ignore_arrows_xml_attribute_is_alt_arrow_key_mode() {
     let s = script();
@@ -640,20 +597,17 @@ fn get_number_parses_the_text() {
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetText("12.5")"#)
         .unwrap();
     assert_eq!(s.eval::<f64>("return E:GetNumber()").unwrap(), 12.5);
-    // Non-numeric text → 0.
     s.run(r#"E:SetText("hello")"#).unwrap();
     assert_eq!(s.eval::<f64>("return E:GetNumber()").unwrap(), 0.0);
 }
 
-// ── the EditBox override never fires generic OnChar/OnKeyDown ─────────────────────────────────
+// ── the generic OnChar and OnKeyDown ─────────────────────────────────────────────────────────
 
 #[test]
 fn typing_fires_the_generic_on_char_with_what_was_inserted() {
-    // **The half of the old law that was wrong** (corrected 2026-08-29).
-    // `CSimpleEditBox` has its own input vtable which does not chain to the base — but Insert
-    // itself fires the generic `OnChar` slot (`+0x180`) at `0x77c13c`, through the **varargs**
-    // firer `0x7026f0` with fmt `"%s"` and the spliced string as the argument; the family's
-    // other member is the fixed-arity firer `0x702690`.
+    // The box's input vtable does not chain to the base, but Insert fires the generic `OnChar`
+    // (`+0x180`) at `0x77c13c`, through the varargs firer `0x7026f0` (not the fixed-arity
+    // `0x702690`) with the inserted string.
     let mut s = script();
     s.run(
         r#"
@@ -673,7 +627,7 @@ fn typing_fires_the_generic_on_char_with_what_was_inserted() {
         "OnChar fires once, with the inserted string",
     );
 
-    // `SetText` is NOT an insert path and fires nothing — the seam the reference has too.
+    // `SetText` is not an insert and fires no `OnChar`, as in the reference.
     s.run(r#"E:SetText("zzz")"#).unwrap();
     assert_eq!(
         s.eval::<String>("return table.concat(got, ',')").unwrap(),
@@ -685,10 +639,8 @@ fn typing_fires_the_generic_on_char_with_what_was_inserted() {
 
 #[test]
 fn key_paths_never_fire_the_generic_on_key_down() {
-    // The surviving half: the box's own key-down vtable (`0x77b160`) handles the event and never
-    // chains to the base, so a focused box's typing does not also run a generic `OnKeyDown` bound
-    // on that same box. Only the `OnChar` half of the original claim was corrected — this one
-    // stands.
+    // The box's key-down handler (`0x77b160`) never chains to the base, so a generic `OnKeyDown`
+    // on the focused box does not fire.
     let mut s = script();
     s.run(
         r#"
@@ -710,7 +662,7 @@ fn key_paths_never_fire_the_generic_on_key_down() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-// ── history recall (`historyLines` / AddHistoryLine — decision 0288 P2) ──────────────────────
+// ── history recall (`historyLines`, AddHistoryLine) ──────────────────────────────────────────
 
 #[test]
 fn history_recall_walks_up_and_down_and_restores_the_draft() {
@@ -758,8 +710,8 @@ fn typing_ends_the_history_browse() {
     .unwrap();
     s.editbox_action(EditAction::HistoryPrev);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "newer");
-    // A typed char turns the recalled line into an ordinary draft: the next UP starts a FRESH
-    // browse from the newest entry (stashing the edited line as the new draft).
+    // A typed char turns the recalled line into a draft: the next UP starts a fresh browse from
+    // the newest entry, stashing the edited line as the draft.
     s.char_input("!");
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "newer!");
     s.editbox_action(EditAction::HistoryPrev);
@@ -781,9 +733,8 @@ fn programmatic_set_text_keeps_the_browse_and_focus_gain_resets_it() {
     "#,
     )
     .unwrap();
-    // Recall the newest, then rewrite the box the way the chat live parse does on a slash
-    // recall ("/g two" → Guild + "two"). The browse walk must survive: the next UP lands on
-    // the OLDER entry, not back on the newest (the "history only goes back 1" bug).
+    // Rewrite the recalled line as the chat parser does ("/g two" → Guild + "two"); the next UP
+    // must reach the older entry, not the newest again.
     s.editbox_action(EditAction::HistoryPrev);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "/g two");
     s.run(r#"E:SetText("two")"#).unwrap();
@@ -824,14 +775,14 @@ fn history_off_by_default_and_up_is_still_consumed() {
     let mut s = script();
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetText("t"); E:SetFocus()"#)
         .unwrap();
-    // No historyLines: AddHistoryLine is a no-op, UP consumed but inert (a focused box eats every
-    // key — both handlers `return 1` past the guard, `0x77a900`/`0x77b160`).
+    // No historyLines: AddHistoryLine does nothing, and UP is consumed but inert, since a focused
+    // box eats every key (both handlers return 1, `0x77a900`/`0x77b160`).
     s.run(r#"E:AddHistoryLine("x")"#).unwrap();
     assert!(s.editbox_action(EditAction::HistoryPrev));
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "t");
 }
 
-// ── SetTextInsets (0288 P2 — the header-driven text-rect shrink) ─────────────────────────────
+// ── SetTextInsets ────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn text_insets_shrink_the_text_region_rect() {
@@ -869,16 +820,13 @@ fn text_insets_shrink_the_text_region_rect() {
         (rect.bottom - 53.0).abs() < 0.01,
         "bottom inset 3: {rect:?}"
     );
-    // The getter echoes.
     let (l, r_, t, b) = s
         .eval::<(f32, f32, f32, f32)>("return E:GetTextInsets()")
         .unwrap();
     assert_eq!((l, r_, t, b), (15.0, 13.0, 2.0, 3.0));
 }
 
-// The FontInstance half an EditBox inherits in the client: SetTextColor tints the box's text
-// region (`ChatEdit_UpdateHeader` colors the typed text this way — its absence killed the chat
-// header chunk mid-run and left the /w insets stale, the caret-in-the-header bug).
+// SetTextColor tints the box's text region, as `ChatEdit_UpdateHeader` colours the typed text.
 #[test]
 fn set_text_color_tints_the_text_region() {
     let mut s = script();
@@ -912,8 +860,8 @@ fn set_text_color_tints_the_text_region() {
 
 // ── the host text-UI seam: advances, caret/selection geometry, mouse, clipboard ─────────────
 
-/// Build a focused 200×32 box at BOTTOMLEFT(100,50), resolve it, type `text`, and answer its
-/// advance table with a synthetic monospace 7 px/byte — the standard rig for the geometry tests.
+/// A focused 200×32 box at BOTTOMLEFT(100, 50) holding `text`, its advances answered at 7 px per
+/// byte.
 fn seam_rig(s: &mut UiScript, text: &str) {
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -940,8 +888,7 @@ fn answer_advances(s: &mut UiScript) {
     }
 }
 
-/// The seam reports caret geometry from the advance table, and vanishes with focus or
-/// visibility — the old prefix-string seam's laws, now in pixels.
+/// Caret geometry comes from the advance table, and there is none without focus or visibility.
 #[test]
 fn text_ui_reports_caret_geometry_and_focus() {
     let mut s = script();
@@ -953,7 +900,6 @@ fn text_ui_reports_caret_geometry_and_focus() {
     assert_eq!(ui.caret_x, 0.0);
     assert_eq!(ui.display_from, 0);
     assert!(ui.selection.is_empty());
-    // The empty box still emits its Text quad (Some("")) — the caret's ride-along.
     assert!(
         s.extract().iter().any(|q| matches!(
             (&q.target, &q.content),
@@ -996,11 +942,10 @@ fn click_places_cursor_and_drag_selects() {
     let ui = s.focused_editbox_text_ui().unwrap();
     assert_eq!(ui.selection, vec![(0, 21.0, 49.0)]);
     assert_eq!(ui.caret_x, 49.0);
-    // Drag back LEFT past the anchor to x=107 (byte 1): the selection flips to 1..3.
+    // Drag back left past the anchor to x=107 (byte 1): the selection flips to 1..3.
     s.mouse_move(107.0, 60.0);
     let ui = s.focused_editbox_text_ui().unwrap();
     assert_eq!(ui.selection, vec![(0, 7.0, 21.0)]);
-    // Release ends the drag: further moves change nothing.
     s.mouse_button(107.0, 60.0, "LeftButton", false);
     s.mouse_move(170.0, 60.0);
     assert_eq!(
@@ -1065,8 +1010,8 @@ fn ctrl_arrows_jump_words() {
     );
 }
 
-/// Copy needs a selection; cut copies then deletes; the password box yields the mask run, never
-/// the real text (the client's fixed placeholder `0x882748`, mask stand-in).
+/// Copy needs a selection, cut copies then deletes, and a password box copies its mask run, never
+/// the text (the client copies the empty string, `0x882748`).
 #[test]
 fn copy_cut_and_the_password_placeholder() {
     let mut s = script();
@@ -1090,15 +1035,13 @@ fn copy_cut_and_the_password_placeholder() {
     );
 }
 
-/// The OS-native delete family (no 1.12 counterpart — the host keymap's Option/Cmd/Ctrl
-/// Backspace-Delete chords): a word delete takes the adjacent alnum run (+ the separators toward
-/// it), an edge delete clears to the line end — and both collapse to "delete the selection" when
-/// one exists, like every deletion gesture.
+/// Word and edge deletes, the host's OS-native chords with no 1.12 counterpart: a word delete
+/// takes the adjacent alphanumeric run and the separators toward it, an edge delete clears to the
+/// line's end, and either deletes a live selection instead.
 #[test]
 fn word_and_edge_deletes() {
     let mut s = script();
     seam_rig(&mut s, "abc def ghi");
-    // Word-delete back from the end: "ghi" goes (boundary at 8).
     s.editbox_action(EditAction::Delete {
         unit: EditUnit::Word,
         back: true,
@@ -1122,7 +1065,6 @@ fn word_and_edge_deletes() {
     });
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), " ");
 
-    // Selection-first: with a live selection, a word delete removes exactly it.
     s.run(r#"E:SetText("hello world"); E:HighlightText(2, 5)"#)
         .unwrap();
     s.editbox_action(EditAction::Delete {
@@ -1131,7 +1073,7 @@ fn word_and_edge_deletes() {
     });
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "he world");
 
-    // Edge-delete back (macOS Cmd+Backspace): clears to the start — the whole line from the end.
+    // Edge-delete back (macOS Cmd+Backspace) from the end clears the whole line.
     s.run(r#"E:SetText("clear me")"#).unwrap();
     s.editbox_action(EditAction::Delete {
         unit: EditUnit::Edge,
@@ -1148,8 +1090,8 @@ fn word_and_edge_deletes() {
     assert_eq!(s.eval::<i64>("return n").unwrap(), 0);
 }
 
-/// SelectAll (the ref's Ctrl+A → `HighlightText(0, -1)` law): whole text selected, caret to the
-/// end; typing replaces the lot.
+/// SelectAll, the reference's Ctrl+A (`HighlightText(0, -1)`): the whole text selected, the caret
+/// at the end, and typing replaces it all.
 #[test]
 fn select_all_action() {
     let mut s = script();
@@ -1166,9 +1108,8 @@ fn select_all_action() {
     );
 }
 
-/// The scroll window follows the cursor: typing past the box edge advances `display_from`
-/// (whole chars); HOME snaps it back (`0x77da80`'s stay-visible invariant, the char-granular
-/// `E+0x348` window).
+/// The scroll window keeps the cursor visible (`0x77da80`) in whole chars: typing past the edge
+/// advances `display_from`, HOME snaps it back.
 #[test]
 fn scroll_window_keeps_the_cursor_visible() {
     let mut s = script();
@@ -1182,7 +1123,6 @@ fn scroll_window_keeps_the_cursor_visible() {
         (40 - ui.display_from) as f32 * 7.0,
         "caret x measures from the window origin"
     );
-    // HOME: the window snaps back to 0.
     s.editbox_action(EditAction::Move {
         unit: EditUnit::Edge,
         back: true,
@@ -1193,7 +1133,7 @@ fn scroll_window_keeps_the_cursor_visible() {
     assert_eq!(ui.caret_x, 0.0);
 }
 
-/// The blink law (`0x77a790`): 0.5 s half-period toggle, reset shown by every edit.
+/// The caret blink (`0x77a790`): a 0.5 s half-period, reset to shown by every edit.
 #[test]
 fn caret_blinks_on_tick_and_resets_on_edit() {
     let mut s = script();
@@ -1205,19 +1145,15 @@ fn caret_blinks_on_tick_and_resets_on_edit() {
     assert!(s.focused_editbox_text_ui().unwrap().caret_on);
     s.tick(0.6);
     assert!(!s.focused_editbox_text_ui().unwrap().caret_on);
-    // An edit shows the caret immediately (blink reset).
     s.char_input("b");
     answer_advances(&mut s);
     assert!(s.focused_editbox_text_ui().unwrap().caret_on);
 }
 
-// ── A hyperlink is ONE keypress (`AdvanceTokens 0x77bb30`) ─────────────────────
+// ── a hyperlink is one keypress (`AdvanceTokens 0x77bb30`) ─────────────────────
 //
-// The engine-level law lives in `markup`; these drive it the way a player does — through the
-// focused box's public keyboard API — because that is the level the reported defect lived at:
-// backspacing a shift-clicked item link chewed it one invisible byte at a time, and the byte that
-// went first was the `r` of its trailing `|r`, which turned everything typed afterwards the item's
-// colour.
+// Driven through the keyboard API: a Backspace that took only the link's trailing `|r` would
+// colour everything typed after it.
 
 /// An epic link exactly as the client's own builder formats one (`0x52adb0`).
 const LINK: &str = "|cffa335ee|Hitem:11684:0:0:0|h[Ironfoe]|h|r";
@@ -1243,8 +1179,7 @@ fn one_backspace_deletes_a_whole_item_link() {
     }));
     assert_eq!(text_of(&s), "", "colour prefix and trailing |r go with it");
 
-    // And from the far side of following text: the link survives until the text is gone, then goes
-    // whole — never half-eaten, which is what left a dangling `|c` colouring the rest of the line.
+    // Behind following text: the text goes first, then the whole link, never leaving a `|c`.
     let mut s = box_with_link("ab");
     for expected in ["|cffa335ee|Hitem:11684:0:0:0|h[Ironfoe]|h|ra", LINK, ""] {
         s.editbox_action(EditAction::Delete {
@@ -1271,8 +1206,7 @@ fn one_arrow_crosses_a_whole_item_link() {
         });
     };
     cursor(&mut s);
-    // One RIGHT from the start lands past the entire link — so typing there appends, and does not
-    // land between the `]` and its `|h`.
+    // One RIGHT from the start passes the whole link, so typing there appends.
     s.char_input("x");
     assert_eq!(text_of(&s), format!("{LINK}x"));
 }
@@ -1305,8 +1239,7 @@ fn typing_strictly_inside_a_link_is_refused() {
         LINK,
         "the client swallows it rather than splitting the link"
     );
-    // The same keystroke at the link's leading edge is allowed — the guard tests the PREVIOUS
-    // token too, which is what keeps the boundary usable.
+    // At the link's leading edge the keystroke lands: the guard also tests the previous token.
     s.run("E:HighlightText(0, 0)").unwrap();
     s.char_input("x");
     assert_eq!(text_of(&s), format!("x{LINK}"));
@@ -1332,20 +1265,13 @@ fn max_letters_counts_visible_letters_not_escape_bytes() {
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetFocus(); E:SetMaxLetters(20)"#)
         .unwrap();
     s.run(&format!("E:Insert(\"{LINK}\")")).unwrap();
-    // 43 bytes, but "[Ironfoe]" is 9 letters — comfortably under a 20-letter cap that a raw char
-    // count would have blown through, trimming the link's own tail off.
+    // 43 bytes, but "[Ironfoe]" is 9 letters, under the 20-letter cap.
     assert_eq!(text_of(&s), LINK);
     assert_eq!(s.eval::<i64>("return E:GetNumLetters()").unwrap(), 9);
 }
 
-/// **Creating a box is not showing it** — and that is what keeps the on-show self-focus safe now
-/// that autoFocus defaults ON. A frame born visible is not an effective-visibility
-/// *transition*, so it never runs the OnShow override; only a real `Show()` does. Without this,
-/// loading the shipped chain would hand the keyboard to whichever edit box happened to be
-/// constructed first, and typing would go into it instead of to the game.
-///
-/// Pinned because it is load-bearing by *absence*: nothing in the on-show path mentions creation,
-/// so the day frame construction starts firing OnShow, this is the test that says what it costs.
+/// A box born visible has had no show transition, so the OnShow focus never runs for it; if it
+/// did, loading the UI would hand the keyboard to the first edit box built.
 #[test]
 fn creating_a_box_does_not_focus_it_the_way_showing_one_does() {
     let s = script();
@@ -1358,16 +1284,8 @@ fn creating_a_box_does_not_focus_it_the_way_showing_one_does() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **`SetMaxLetters` gates the COUNT and not the type** — one of four widget bindings in the whole
-/// registrar that calls `lua_gettop` (`0x6f3070`), and its gate is exact (`cmp eax,2`), while the
-/// value goes through a bare `lua_tonumber` (`0x6f3620`) with no `isnumber` guard.
-///
-/// That pairing is the opposite of the usual one, which is why it earns a test: benilla typed the
-/// argument `i64` and so raised on `SetMaxLetters(nil)` — aux-addon's `gui/core.lua:288` writes
-/// exactly that, and died at load on it — while accepting the wrong *number* of arguments
-/// silently.
-///
-/// And `0` is **no limit**, not "no letters".
+/// `SetMaxLetters` gates the exact count (`lua_gettop`, `0x6f3070`) and reads the value with a bare
+/// `lua_tonumber` (`0x6f3620`); 0 is no limit.
 #[test]
 fn set_max_letters_gates_the_argument_count_and_coerces_the_value() {
     let s = script();
@@ -1378,7 +1296,7 @@ fn set_max_letters_gates_the_argument_count_and_coerces_the_value() {
     s.run("E:SetMaxLetters(12)").unwrap();
     assert_eq!(max(&s), 12);
 
-    // nil is 0 is UNLIMITED — the call completes, which is the whole point.
+    // nil stores 0, which is unlimited.
     s.run("E:SetMaxLetters(nil)").unwrap();
     assert_eq!(max(&s), 0);
     s.run(r#"E:SetMaxLetters(5) E:SetText("abcdefgh")"#)
@@ -1398,7 +1316,6 @@ fn set_max_letters_gates_the_argument_count_and_coerces_the_value() {
     s.run("E:SetMaxLetters({})").unwrap();
     assert_eq!(max(&s), 0);
 
-    // The COUNT is exact — too few AND too many both raise.
     assert!(s.run("E:SetMaxLetters()").is_err(), "too few raises");
     assert!(
         s.run("E:SetMaxLetters(50, 60)").is_err(),
@@ -1406,17 +1323,9 @@ fn set_max_letters_gates_the_argument_count_and_coerces_the_value() {
     );
 }
 
-/// **A `CSimpleEditBox` is born with FIVE regions, and `GetRegions` hands them to Lua before any
-/// authored one.** The ctor builds the text FontString (`E+0x328`, `0x779bee`), three
-/// selection-highlight `CSimpleTexture`s (`E+0x350/0x354/0x358`, loop `0x779c41`–`0x779c72`) and
-/// the caret (`E+0x368`, `0x779c86`) — in that order. `GetRegions 0x773f60` walks
-/// `[frame+0x1b8]`, one flat creation-ordered list, oldest first, no filter, and insertion is at
-/// the TAIL. So the authored `<Layers>` regions start at index 6.
-///
-/// The report is pfUI's `skins/blizzard/friends.lua` l.379 —
-/// `local _,_,_,_,_,left,right = GuildControlPopupFrameEditBox:GetRegions()` — which skips exactly
-/// those five and takes the box's two border textures. It died on a nil `left` for as long as
-/// benilla returned only the authored regions.
+/// The ctor builds five regions in order, the text FontString (`0x779bee`), three selection
+/// textures (`0x779c41`-`0x779c72`) and the caret (`0x779c86`), and `GetRegions` (`0x773f60`)
+/// walks one creation-ordered list, so authored regions start at index 6.
 #[test]
 fn an_editbox_is_born_with_the_ctors_five_regions_ahead_of_its_authored_ones() {
     let s = script();
@@ -1439,9 +1348,7 @@ fn an_editbox_is_born_with_the_ctors_five_regions_ahead_of_its_authored_ones() {
     let report = crate::loader::load(&s, &doc, &|_| None);
     assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
 
-    // Five engine regions, then the two authored textures — and NOT a sixth from the embedded
-    // `<FontString>`, which declares the ctor's object rather than adding one (the reference's
-    // EditBox LoadXML, `0x779fb0`).
+    // The embedded `<FontString>` declares the ctor's text region, not a sixth (`0x779fb0`).
     assert_eq!(
         s.eval::<i64>("return Box:GetNumRegions()").unwrap(),
         7,
@@ -1453,7 +1360,6 @@ fn an_editbox_is_born_with_the_ctors_five_regions_ahead_of_its_authored_ones() {
         "GetNumRegions is exactly the length GetRegions enumerates"
     );
 
-    // pfUI's own read, verbatim in shape: skip five, take the authored pair.
     let (left, right) = s
         .eval::<(String, String)>(
             "local _,_,_,_,_,l,r = Box:GetRegions() return l:GetTexture(), r:GetTexture()",
@@ -1465,7 +1371,6 @@ fn an_editbox_is_born_with_the_ctors_five_regions_ahead_of_its_authored_ones() {
     );
     assert_eq!(right, r"Interface\Right", "region 7 is the second");
 
-    // The first is the text FontString the box actually types into.
     s.run(r#"Box:SetText("typed")"#).unwrap();
     assert_eq!(
         s.eval::<String>("local t = Box:GetRegions() return t:GetText()")
@@ -1473,8 +1378,7 @@ fn an_editbox_is_born_with_the_ctors_five_regions_ahead_of_its_authored_ones() {
         "typed",
         "region 1 is the ctor's embedded text FontString"
     );
-    // 2..5 are the three selection quads and the caret: real regions, carrying no art of their own
-    // (benilla paints both host-side — the gap named on EditBoxState).
+    // 2..5, the selection quads and the caret, carry no art: benilla paints both host-side.
     assert!(
         s.eval::<bool>(
             "local a,b,c,d,e = Box:GetRegions() \
@@ -1486,9 +1390,8 @@ fn an_editbox_is_born_with_the_ctors_five_regions_ahead_of_its_authored_ones() {
     );
 }
 
-/// `SetNumber` is `SetText` with Lua's own `%.14g` in front of it — the two bindings are
-/// byte-identical in the reference (`0x798690` / `0x7984c0`), so the numeric verb does no numeric
-/// work of its own. Decision 1831; the expected strings are the reference's executed output.
+/// `SetNumber` is `SetText` (`0x798690` and `0x7984c0` are byte-identical), so a number arrives
+/// through Lua's `%.14g`; the expected strings are the reference's own output.
 #[test]
 fn set_number_formats_like_the_references_printf() {
     let s = UiScript::new().unwrap();
@@ -1519,12 +1422,11 @@ fn set_number_formats_like_the_references_printf() {
         );
     }
 
-    // A STRING is accepted and passed through verbatim — the gate is `lua_isstring`, so the
-    // argument is never parsed as a number.
+    // A string passes verbatim: the gate is `lua_isstring`, and nothing parses it.
     s.run(r#"box:SetNumber("abc")"#).unwrap();
     assert_eq!(s.eval::<String>("return box:GetText()").unwrap(), "abc");
 
-    // Everything else raises, including an ABSENT argument. `luaL_error` does not return.
+    // Anything else raises, no argument included.
     for bad in [
         "box:SetNumber()",
         "box:SetNumber(nil)",
@@ -1534,10 +1436,8 @@ fn set_number_formats_like_the_references_printf() {
     }
 }
 
-/// A `numeric` box takes the reference's wholesale abort: the clear-all has already run when the
-/// insert fails the digit test, so the box is left EMPTY rather than partly filled. The money
-/// boxes (`MoneyInputFrame.xml`) are numeric, which is why this matters — though the money path
-/// itself only ever passes non-negative integers.
+/// A numeric box aborts the whole insert after the clear has run, so text that fails the digit
+/// test leaves it empty, not partly filled.
 #[test]
 fn set_number_on_a_numeric_box_empties_it_when_the_text_is_not_all_digits() {
     let s = UiScript::new().unwrap();
@@ -1547,7 +1447,6 @@ fn set_number_on_a_numeric_box_empties_it_when_the_text_is_not_all_digits() {
     s.run("box:SetNumber(1234)").unwrap();
     assert_eq!(s.eval::<String>("return box:GetText()").unwrap(), "1234");
 
-    // The minus sign fails the digit test, and the abort is wholesale.
     s.run("box:SetNumber(-5)").unwrap();
     assert_eq!(
         s.eval::<String>("return box:GetText()").unwrap(),
@@ -1556,8 +1455,8 @@ fn set_number_on_a_numeric_box_empties_it_when_the_text_is_not_all_digits() {
     );
 }
 
-/// `SetMaxBytes` (1960): the exact count gate and raw coerce of its sibling, a BYTE cap on the
-/// buffer, and -1 as the no-limit sentinel where `SetMaxLetters` reads 0.
+/// `SetMaxBytes`: `SetMaxLetters`'s exact count gate and raw coercion, a byte cap, and -1 as the
+/// no-limit sentinel.
 #[test]
 fn set_max_bytes_caps_the_buffer_in_bytes_with_minus_one_unlimited() {
     let s = script();
@@ -1585,14 +1484,10 @@ fn set_max_bytes_caps_the_buffer_in_bytes_with_minus_one_unlimited() {
     assert!(s.run("E:SetMaxBytes(1, 2)").is_err(), "too many raises");
 }
 
-/// **`OnCursorChanged(x, y, w, h)` fires when the caret moves** — the edge the shipped
-/// `MailFrame.xml` and `HelpFrame.xml` wire `ScrollingEdit_OnCursorChanged` to, and the reason a
-/// multiline box follows its caret as you type past the bottom.
-///
-/// The four args are the reference's (`0x77dd5f`, each scaled by `f`): `x` the caret's
-/// advance along its line, `y` **negative-downward** by row (which is what
-/// `ScrollingEdit_OnCursorChanged`'s `cursorOffset = y` then `-this.cursorOffset` reads back as a
-/// positive distance), `w` the constant `4.0`, `h` the line height.
+/// `OnCursorChanged(x, y, w, h)` fires when the caret moves, with the reference's args
+/// (`0x77dd5f`, each scaled): `x` the advance along the line, `y` negative downward by row, `w`
+/// the constant 4, `h` the line height. Stock `ScrollingEdit_OnCursorChanged` reads `-y` as the
+/// distance down.
 #[test]
 fn the_caret_flush_fires_on_cursor_changed_with_the_references_four_args() {
     let mut s = script();
@@ -1612,14 +1507,13 @@ fn the_caret_flush_fires_on_cursor_changed_with_the_references_four_args() {
     )
     .unwrap();
     s.resolve();
-    // Three bytes on row 0, then a wrap onto row 1 — the host answers the rows and the pitch.
+    // Three bytes on row 0, then a wrap onto row 1; the host answers the rows and the pitch.
     for ch in "abcdef".chars() {
         s.char_input(&ch.to_string());
     }
     s.resolve();
     if let Some(req) = s.editbox_advances_request() {
-        // A plain monotonic 7 px/byte table (the rig's own), wrapped into two rows at byte 3 —
-        // `caret_row_x` subtracts the row start's cumulative advance, which is the whole point.
+        // 7 px per byte, wrapped into two rows at byte 3: `x` must count from the row's start.
         let cum: Vec<f32> = (0..=req.text.len()).map(|i| i as f32 * 7.0).collect();
         s.set_editbox_advances(req.id, req.key, cum, vec![0, 3], 12.0);
     }
@@ -1643,9 +1537,8 @@ fn the_caret_flush_fires_on_cursor_changed_with_the_references_four_args() {
     assert_eq!(w, 4.0, "w is the reference's constant, not a measurement");
     assert_eq!(h, 12.0, "h is the line height");
 
-    // **The edge is a CHANGE.** A tick that moves nothing fires nothing — which is what makes
-    // `ScrollingEdit_OnUpdate`'s `if (this.cursorOffset)` loop terminate instead of re-scrolling
-    // every frame.
+    // It fires on a change only, which lets `ScrollingEdit_OnUpdate`'s `if (this.cursorOffset)`
+    // settle instead of scrolling every frame.
     let before: i64 = s.eval("return table.getn(fires)").unwrap();
     s.tick(0.016);
     s.tick(0.016);
@@ -1655,7 +1548,6 @@ fn the_caret_flush_fires_on_cursor_changed_with_the_references_four_args() {
         "two quiet ticks fire nothing"
     );
 
-    // …and a caret move fires again.
     s.editbox_action(EditAction::Move {
         unit: EditUnit::Char,
         back: true,

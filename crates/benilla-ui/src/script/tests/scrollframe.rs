@@ -1,13 +1,11 @@
-//! ScrollFrame (the ScrollFrame mechanism): the scroll-child layout override, the
-//! live vertical-scroll range, the ScrollFrame clip on `extract`, and the clip-gated `hit_test`.
+//! ScrollFrame: the scroll-child layout override, the live scroll ranges, the clip on `extract`
+//! and the clip-gated `hit_test`.
 
 use super::common::script;
 use crate::layout::Rect;
 use crate::script::QuadContent;
 
-/// The rect of the first Texture quad whose path equals `marker` (a bare texture with no anchors of
-/// its own draws at exactly its owner frame's resolved rect — the cheapest way to read a frame's
-/// resolved rect back out through the public `extract` surface).
+/// The rect of the first Texture quad whose path is `marker`.
 fn marker_rect(quads: &[crate::script::ExtractedQuad], marker: &str) -> Option<Rect> {
     quads.iter().find_map(|q| match &q.content {
         QuadContent::Texture { path: Some(p), .. } if p == marker => q.rect,
@@ -15,8 +13,7 @@ fn marker_rect(quads: &[crate::script::ExtractedQuad], marker: &str) -> Option<R
     })
 }
 
-/// `Some(clip)` when a marker quad was found (`clip` itself `Option<Rect>`); `None` if no such
-/// marker quad exists at all (a test-authoring mistake, not a legitimate "unclipped").
+/// The clip of the first Texture quad whose path is `marker`; `None` if there is no such quad.
 fn marker_clip(quads: &[crate::script::ExtractedQuad], marker: &str) -> Option<Option<Rect>> {
     quads.iter().find_map(|q| match &q.content {
         QuadContent::Texture { path: Some(p), .. } if p == marker => Some(q.clip),
@@ -72,11 +69,8 @@ fn get_scroll_child_roundtrips_wrapper_and_name_and_clears_on_nil() {
     .unwrap();
 }
 
-/// The sign convention (verified against the design's own worked example): frame top 500, vertical
-/// 40 ⇒ child top 540. Also covers 0, an offset PAST the range and one below zero — both stored and
-/// applied verbatim, since the reference's `0x786db0` never reads the range — and
-/// that `SetScrollChild(nil)` restores the child's own authored anchor (never mutated — the
-/// override is a local map).
+/// A positive offset lifts the child; offsets past the range or below zero are stored and applied
+/// as given, since `0x786db0` never reads the range.
 #[test]
 fn scroll_child_top_tracks_vertical_scroll_unclamped_then_restores_on_clear() {
     let mut s = script();
@@ -119,9 +113,7 @@ fn scroll_child_top_tracks_vertical_scroll_unclamped_then_restores_on_clear() {
         "vertical=40 -> child top = frame top + 40 (a positive offset lifts the child)"
     );
 
-    // range = child_h(600) - frame_h(200) = 400, and the offset is NOT clamped to it: 450 is
-    // stored and applied as 450. (Keeping the bar inside the range is FrameXML's job, through the
-    // Slider's [min, max] — the engine has no opinion.)
+    // The range is 600 - 200 = 400; keeping the bar inside it is the FrameXML slider's job.
     s.run("SF:SetVerticalScroll(450)").unwrap();
     s.resolve();
     assert_eq!(
@@ -135,7 +127,6 @@ fn scroll_child_top_tracks_vertical_scroll_unclamped_then_restores_on_clear() {
         Some(950.0),
         "applied verbatim: frame top 500 + 450"
     );
-    // Nor at zero.
     s.run("SF:SetVerticalScroll(-30)").unwrap();
     s.resolve();
     assert_eq!(
@@ -149,8 +140,7 @@ fn scroll_child_top_tracks_vertical_scroll_unclamped_then_restores_on_clear() {
         "a negative offset lowers the child: frame top 500 - 30"
     );
 
-    // SetScrollChild(nil): the override stops being computed — the child's own authored anchor
-    // (TOPLEFT, screen, +20,-20) re-applies with no restore step needed (it was never touched).
+    // Clearing the child stops the override, and its own untouched anchor applies again.
     s.run("SF:SetScrollChild(nil)").unwrap();
     s.resolve();
     let quads = s.extract();
@@ -161,11 +151,8 @@ fn scroll_child_top_tracks_vertical_scroll_unclamped_then_restores_on_clear() {
     );
 }
 
-/// The reference's `0x786db0` is gated on the offset actually CHANGING (a compare against the
-/// stored value, nothing else): a `SetVerticalScroll` to the value already held re-lays nothing out
-/// and fires no `OnVerticalScroll`. The same shape as the Slider's `SetValue` change-gate (decision
-/// 0250) — the other half of what keeps the bar ↔ frame wiring from ringing — and a value past the
-/// range is a change like any other.
+/// `0x786db0` acts only when the offset differs from the stored one; a value past the range is
+/// still a change.
 #[test]
 fn set_vertical_scroll_fires_on_vertical_scroll_only_on_a_change() {
     let mut s = script();
@@ -211,7 +198,6 @@ fn vertical_scroll_range_is_live_and_zero_when_unresolved_or_childless_or_shorte
     "#,
     )
     .unwrap();
-    // Before resolve: no resolved rects yet -> 0.
     assert_eq!(
         s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap(),
         0.0,
@@ -225,7 +211,6 @@ fn vertical_scroll_range_is_live_and_zero_when_unresolved_or_childless_or_shorte
         "600 - 200"
     );
 
-    // A child shorter than the frame: 0, not negative.
     s.run("Child:SetWidth(300); Child:SetHeight(150)").unwrap();
     s.resolve();
     assert_eq!(
@@ -234,7 +219,6 @@ fn vertical_scroll_range_is_live_and_zero_when_unresolved_or_childless_or_shorte
         "child shorter than frame -> 0, not negative"
     );
 
-    // No child at all: 0.
     s.run("SF:SetScrollChild(nil)").unwrap();
     assert_eq!(
         s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap(),
@@ -243,11 +227,8 @@ fn vertical_scroll_range_is_live_and_zero_when_unresolved_or_childless_or_shorte
     );
 }
 
-/// The range is in LOCAL units, not screen px — `child:GetHeight() - self:GetHeight()`, the
-/// contract the method states. It has to be: `SetVerticalScroll` becomes the child's anchor
-/// y-offset, which the solver multiplies by the child's scale, so a screen-px range against a
-/// local-unit offset makes a SCALED frame stop short of its own end and strand the tail of its
-/// content. (Found on the era-scaled options window's page scroll, which lost 22% of its travel.)
+/// The range is `child:GetHeight() - self:GetHeight()` in local units, like the offset, which
+/// becomes the child's anchor y-offset and is scaled with it.
 #[test]
 fn vertical_scroll_range_is_local_units_on_a_scaled_frame() {
     let mut s = script();
@@ -276,8 +257,6 @@ fn vertical_scroll_range_is_local_units_on_a_scaled_frame() {
         400.0,
         "…which is exactly what the widget contract says it is"
     );
-    // And the clamp agrees, so scrolling to the range really reaches the end: the child's bottom
-    // lands on the frame's.
     s.run("SF:SetVerticalScroll(400)").unwrap();
     s.resolve();
     assert_eq!(
@@ -293,10 +272,8 @@ fn vertical_scroll_range_is_local_units_on_a_scaled_frame() {
     );
 }
 
-/// `OnVerticalScroll` carries the value AS STORED — past the range too (the
-/// reference's `0x786db0` fires with `[+0x328]`, which it never clamps) — under the reference's
-/// handler-firing conventions (`0x704f10`), and `UpdateScrollChildRect` fires
-/// `OnScrollRangeChanged` with the live range.
+/// `0x786db0` fires `OnVerticalScroll` with the unclamped stored value `[+0x328]`, under the
+/// handler conventions of `0x704f10`.
 #[test]
 fn vertical_scroll_fires_as_given_and_update_rect_fires_range_changed() {
     let mut s = script();
@@ -337,12 +314,8 @@ fn vertical_scroll_fires_as_given_and_update_rect_fires_range_changed() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The Era idiom `UpdateScrollChildRect` exists to serve — resize the content, then immediately ask
-/// for the new range, in ONE script tick with no intervening [`UiScript::resolve`] call in between
-/// (exactly how the app's own drive loop runs Lua: `ui_script/mod.rs` resolves once per FRAME, not
-/// once per script statement) — must see the JUST-set size, not the last frame's stale `resolved`
-/// rect. Before `UpdateScrollChildRect` forced its own fresh resolve, this fired the OLD (here,
-/// zero) range on the very call whose whole job is reporting the new one.
+/// `UpdateScrollChildRect` resolves for itself, so a resize earlier in the same tick counts; the
+/// app resolves only once per frame.
 #[test]
 fn update_scroll_child_rect_sees_a_same_tick_resize_with_no_intervening_resolve() {
     let mut s = script();
@@ -376,17 +349,12 @@ fn update_scroll_child_rect_sees_a_same_tick_resize_with_no_intervening_resolve(
         "UpdateScrollChildRect must resolve the JUST-set height itself, not report the stale \
          (pre-resize) range from the last full UiScript::resolve"
     );
-    // GetVerticalScrollRange() also benefits (same fresh `resolved`), and a same-tick
-    // SetVerticalScroll now clamps against the true, current range instead of the stale one.
     assert_eq!(
         s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap(),
         400.0
     );
 }
 
-/// The clip on `extract`: the scroll child's own quads, and a grandchild region nested arbitrarily
-/// deep under it, carry `clip = Some(the scrollframe's resolved rect)`; a sibling outside the
-/// ScrollFrame entirely carries `None`.
 #[test]
 fn extract_clips_the_scroll_childs_whole_subtree_and_leaves_a_sibling_unclipped() {
     let mut s = script();
@@ -436,9 +404,6 @@ fn extract_clips_the_scroll_childs_whole_subtree_and_leaves_a_sibling_unclipped(
     );
 }
 
-/// Nested ScrollFrames intersect their rects: an inner ScrollFrame living inside
-/// an outer one's scroll child clips its own content to the intersection of both rects, not just
-/// the innermost.
 #[test]
 fn nested_scrollframes_intersect_their_clip_rects() {
     let mut s = script();
@@ -474,8 +439,7 @@ fn nested_scrollframes_intersect_their_clip_rects() {
     let quads = s.extract();
 
     let outer_rect = Rect::new(250.0, 0.0, 550.0, 400.0);
-    // Inner's OWN rect (unclipped by itself): TOPLEFT anchored to C1 (top 550) at (350,-30) -> top
-    // 520, left 350; size 200x150 -> bottom 370, right 550.
+    // Inner's own rect: TOPLEFT at C1's (350, -30), so top 520 and left 350, sized 200x150.
     let inner_rect = Rect::new(370.0, 350.0, 520.0, 550.0);
     let intersection = Rect::new(
         inner_rect.bottom.max(outer_rect.bottom),
@@ -483,8 +447,7 @@ fn nested_scrollframes_intersect_their_clip_rects() {
         inner_rect.top.min(outer_rect.top),
         inner_rect.right.min(outer_rect.right),
     );
-    // A genuine intersection, not just "pick the smaller rect": inner's right edge (550) is cut
-    // back to outer's (400), while inner's tighter bottom/left/top edges win.
+    // Outer cuts inner's right edge from 550 to 400; inner's other edges are tighter.
     assert_eq!(intersection, Rect::new(370.0, 350.0, 520.0, 400.0));
 
     assert_eq!(
@@ -509,9 +472,6 @@ fn nested_scrollframes_intersect_their_clip_rects() {
     );
 }
 
-/// Hit-testing: a button inside the scroll child, scrolled out of the frame's
-/// rect, must not hit even though its own resolved rect contains the cursor; scrolled into view, it
-/// hits normally.
 #[test]
 fn hit_test_denies_a_button_clipped_out_and_admits_it_once_scrolled_into_view() {
     let mut s = script();
@@ -535,16 +495,14 @@ fn hit_test_denies_a_button_clipped_out_and_admits_it_once_scrolled_into_view() 
     .unwrap();
     s.resolve();
 
-    // vertical=0: child top 500, button top 500-400=100, bottom 80 — its OWN rect contains (25,90),
-    // but that's well outside the frame's clip [300,500].
+    // At 0 the button spans 80..100, outside the frame's clip of 300..500.
     assert_eq!(
         s.hit_test(25.0, 90.0),
         None,
         "the button's own rect contains the point, but the ScrollFrame's clip excludes it"
     );
 
-    // Scroll 250px: button top 500+250-400=350, bottom 330 — now inside both its own rect AND the
-    // frame's clip window.
+    // Scrolled by 250 the button spans 330..350, inside the clip.
     s.run("SF:SetVerticalScroll(250)").unwrap();
     s.resolve();
     assert!(
@@ -553,9 +511,7 @@ fn hit_test_denies_a_button_clipped_out_and_admits_it_once_scrolled_into_view() 
     );
 }
 
-/// `UpdateScrollChildRect` right after the SetTexts that fill a pane reads a range that already
-/// counts the wrapped text — the reference's measure is synchronous, and with a font engine
-/// installed so is ours (1944; stock `QuestLog_UpdateQuestDetails` is the caller that found it).
+/// The reference measures text synchronously, as stock `QuestLog_UpdateQuestDetails` relies on.
 #[test]
 fn update_scroll_child_rect_measures_the_childs_text_before_it_reads_the_range() {
     struct Rows;
@@ -593,16 +549,9 @@ fn update_scroll_child_rect_measures_the_childs_text_before_it_reads_the_range()
     );
 }
 
-/// The horizontal axis is the vertical one's byte-clone (`0x786d30` against `0x786db0`), so this is
-/// the vertical trio's test on the other axis: the offset is stored VERBATIM and re-anchors the
-/// child, `OnHorizontalScroll` fires only on a real change, and the range is
-/// `max(0, subtreeWidth - frameWidth)`.
-///
-/// **The sign is the point.** `0x787100` hands both offsets to `SetPoint(TOPLEFT, self, TOPLEFT,
-/// +hScroll, +vScroll)` unnegated, and x grows right — so a positive horizontal pushes the child
-/// RIGHT where a positive vertical lifts it. `aux-addon/tabs/search/filter.lua:315-322` corroborates
-/// it from the caller's side (it bounds x into `[frameWidth - contentWidth - 10, 0]` and y into
-/// `[0, contentHeight - frameHeight]`), which is why it is asserted here rather than assumed.
+/// The horizontal axis clones the vertical (`0x786d30` against `0x786db0`); `0x787100` passes both
+/// offsets to `SetPoint(TOPLEFT, self, TOPLEFT, +h, +v)` unnegated, so a positive horizontal
+/// offset pushes the child right.
 #[test]
 fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
     let mut s = script();
@@ -640,7 +589,6 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
         "horizontal=0 -> child left = frame left"
     );
 
-    // Positive pushes the child RIGHT (the reference's unnegated xOff) …
     s.run("HSF:SetHorizontalScroll(40)").unwrap();
     s.resolve();
     assert_eq!(
@@ -648,7 +596,6 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
         Some(40.0),
         "a positive horizontal offset moves the child right"
     );
-    // … and it is the NEGATIVE direction that scrolls right, which is the half aux-addon relies on.
     s.run("HSF:SetHorizontalScroll(-60)").unwrap();
     s.resolve();
     assert_eq!(
@@ -657,8 +604,7 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
         "a negative horizontal offset scrolls right"
     );
 
-    // No clamp — the range is 500-300 = 200 and 450 is stored and applied whole (decision 2017's
-    // law, which is `0x786d30`'s as much as `0x786db0`'s: neither reads the range).
+    // Neither `0x786d30` nor `0x786db0` reads the range, so 450 is stored whole.
     assert_eq!(
         s.eval::<f32>("return HSF:GetHorizontalScrollRange()")
             .unwrap(),
@@ -673,7 +619,6 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
         "stored verbatim, past the range"
     );
 
-    // Arity/kind, the way the shape gate measures them.
     assert_eq!(s.arity("HSF:GetHorizontalScroll()").unwrap(), 1);
     assert_eq!(s.arity("HSF:GetHorizontalScrollRange()").unwrap(), 1);
     assert_eq!(
@@ -692,7 +637,7 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
         "the setter answers nothing"
     );
 
-    // The change-gate: four setter calls moved the value (40, -60, 450, and 450 again is not one).
+    // Four setter calls, but the second 450 is no change.
     let fired: Vec<f32> = (1..=s.eval::<i64>("return table.getn(hfired)").unwrap())
         .map(|i| s.eval::<f32>(&format!("return hfired[{i}]")).unwrap())
         .collect();
@@ -702,7 +647,6 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
         "OnHorizontalScroll fires once per ACTUAL change, with the new offset"
     );
 
-    // The two axes are independent state, not one offset behind two names.
     s.run("HSF:SetVerticalScroll(25)").unwrap();
     assert_eq!(
         s.eval::<f32>("return HSF:GetHorizontalScroll()").unwrap(),
@@ -714,11 +658,8 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
     );
 }
 
-/// `UpdateScrollChildRect` notifies `OnScrollRangeChanged(self, xRange, yRange)` — **horizontal
-/// first**. Byte-derived, not guessed: the vertical result leaves `0x786e30` on top of the x87
-/// stack, is `fstp`'d first and so pushed deepest, landing as `arg2` (easy to read the other way
-/// round, which is why it is asserted here). `arg1` was a hardcoded `0.0` for as long as
-/// there was no horizontal range to put in it.
+/// The vertical range leaves `0x786e30` on top of the x87 stack and is `fstp`'d first, so it is
+/// pushed deepest and lands as `arg2`.
 #[test]
 fn update_scroll_child_rect_reports_both_ranges_horizontal_first() {
     let mut s = script();

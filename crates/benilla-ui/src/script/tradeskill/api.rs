@@ -1,5 +1,4 @@
-//! The Lua globals (`GetTradeSkillInfo`, `DoTradeSkill`, the filter family, …) — [`install`] wires
-//! the Era `TradeSkillFrame.lua` API surface onto [`super::view`]'s display-tree/filter machinery.
+//! The tradeskill Lua globals over [`super::view`]'s visible rows and filters.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -20,7 +19,7 @@ fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
     })
 }
 
-/// A `bool` as the Era `1`/`nil` shape.
+/// A `bool` as the 1.12 API's `1` or `nil`.
 fn era_bool(b: bool) -> Value {
     if b {
         Value::Integer(1)
@@ -33,8 +32,7 @@ fn era_bool(b: bool) -> Value {
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetTradeSkillLine() → lineName, rank, maxRank; ("UNKNOWN", 0, 0) with no window open (the
-    // ref's own no-tradeskill shape).
+    // GetTradeSkillLine(): ("UNKNOWN", 0, 0) with no window open, as the reference answers.
     g.set(
         "GetTradeSkillLine",
         lua.create_function(|lua, ()| {
@@ -51,8 +49,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // → the number of VISIBLE rows the open window offers — headers + the recipes of uncollapsed
-    // groups (0 when closed).
+    // GetNumTradeSkills(): the visible rows, headers included.
     g.set(
         "GetNumTradeSkills",
         lua.create_function(|lua, ()| {
@@ -61,12 +58,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The two link verbs.
-    //
-    // GetTradeSkillItemLink(index) — `0x4ff410`: the number gate raises its Usage; then ZERO
-    // values on every miss — an index off the list, a header row, a recipe with no product, an
-    // uncached product template (no query is ever sent; the app pre-asks when the list lands) —
-    // and otherwise ONE string, the product's `|Hitem:` link in its quality colour.
+    // GetTradeSkillItemLink(index) (`0x4ff410`): zero values on any miss (a header, no product, an
+    // uncached template, which is never queried here), else the product's item link.
     g.set(
         "GetTradeSkillItemLink",
         lua.create_function(|lua, index: Value| {
@@ -94,10 +87,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillReagentItemLink(index, reagentIndex) — `0x4ff800`: both arguments through the
-    // number gate, raising `Usage: GetTradeReagentSkillItemLink(…)` — Blizzard's own typo, kept.
-    // `reagentIndex` is 1-based over the NON-EMPTY reagent slots and never range-checked in the
-    // client; ALWAYS exactly one value: the reagent's link, or nil on any miss.
+    // GetTradeSkillReagentItemLink(index, reagentIndex) (`0x4ff800`): always one value, the link
+    // or nil; `reagentIndex` counts the non-empty reagent slots, and the usage error's
+    // `GetTradeReagentSkillItemLink` is the reference's own typo.
     g.set(
         "GetTradeSkillReagentItemLink",
         lua.create_function(|lua, (index, reagent): (Value, Value)| {
@@ -128,10 +120,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillInfo(index) → name, type, numAvailable, isExpanded. `index` 1-based into the
-    // VISIBLE row list (the module doc's grouped-list law, `0x4fca20`). A header row:
-    // (groupName, "header", 0, isExpanded 1/nil). A recipe row: (name, difficulty color key,
-    // numAvailable, nil). Out of range → a single nil.
+    // GetTradeSkillInfo(index): (name, "header", 0, isExpanded) for a header, (name, difficulty,
+    // numAvailable, nil) for a recipe, one nil out of range.
     g.set(
         "GetTradeSkillInfo",
         lua.create_function(|lua, index: usize| {
@@ -169,7 +159,6 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetFirstTradeSkill() → the first NON-header visible index (0 when none).
     g.set(
         "GetFirstTradeSkill",
         lua.create_function(|lua, ()| {
@@ -178,9 +167,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillSubClasses() → the current group names, in group order (`0x4ffb60`: the
-    // filter-dropdown vocabulary IS the header list) — though v1 ships no
-    // filter dropdown to consume it yet (the SubClass/InvSlot filter family below stays inert).
+    // GetTradeSkillSubClasses(): the group names in order, unfiltered (`0x4ffb60`).
     g.set(
         "GetTradeSkillSubClasses",
         lua.create_function(|lua, ()| {
@@ -195,8 +182,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ExpandTradeSkillSubClass(i) / CollapseTradeSkillSubClass(i) — fold a group by its header's
-    // VISIBLE index (i == 0 = ALL groups, the CollapseAll semantics — see [`set_collapsed`]).
+    // Expand/CollapseTradeSkillSubClass(i): the group whose header is visible row i; 0 is all.
     g.set(
         "ExpandTradeSkillSubClass",
         lua.create_function(|lua, id: usize| {
@@ -216,7 +202,6 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillIcon(index) → icon texture path (nil while in flight / OOB / a header row).
     g.set(
         "GetTradeSkillIcon",
         lua.create_function(|lua, index: usize| {
@@ -225,7 +210,6 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillNumMade(index) → minMade, maxMade (0, 0 when OOB / no window / a header row).
     g.set(
         "GetTradeSkillNumMade",
         lua.create_function(|lua, index: usize| {
@@ -239,8 +223,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillCooldown(index) → remaining cooldown seconds, or nil when ready / OOB / a header
-    // row (the ref Lua tests this return for truthiness).
+    // GetTradeSkillCooldown(index): nil when ready, which the stock Lua tests for truthiness
+    // (Blizzard_TradeSkillUI.lua:215).
     g.set(
         "GetTradeSkillCooldown",
         lua.create_function(|lua, index: usize| {
@@ -254,8 +238,6 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillNumReagents(index) → this recipe's reagent count (0 when OOB / no window / a
-    // header row).
     g.set(
         "GetTradeSkillNumReagents",
         lua.create_function(|lua, index: usize| {
@@ -264,10 +246,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillReagentInfo(index, reagentIndex) → name, icon, need, have (a single nil when the
-    // recipe/reagent index is OOB or `index` is a header row). name/icon are themselves nil while
-    // the ask-once template answer is in flight — the ref grays/counts the row off exactly these
-    // four.
+    // GetTradeSkillReagentInfo(index, reagentIndex): one nil on a miss; name and icon are nil
+    // until the item template arrives.
     g.set(
         "GetTradeSkillReagentInfo",
         lua.create_function(|lua, (index, reagent_index): (usize, usize)| {
@@ -286,9 +266,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillTools(index) → an alternating (name, has) multivalue, one pair per Requirements
-    // tool (e.g. "Anvil", 1, "Mining Pick", nil) — the ref feeds this straight into
-    // BuildColoredListString. Empty when the recipe has no tools / index is OOB / a header row.
+    // GetTradeSkillTools(index): alternating (name, has) pairs, which the stock Lua feeds to
+    // `BuildColoredListString` (Blizzard_TradeSkillUI.lua:274).
     g.set(
         "GetTradeSkillTools",
         lua.create_function(|lua, index: usize| {
@@ -304,8 +283,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeskillRepeatCount() → the remaining Create All repeats (note the lowercase "s" in
-    // "Tradeskill" — that IS the real 1.12 API name). 0 with no window open.
+    // GetTradeskillRepeatCount(): the lowercase "s" is the 1.12 name.
     g.set(
         "GetTradeskillRepeatCount",
         lua.create_function(|lua, ()| {
@@ -316,9 +294,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SelectTradeSkill(index) / GetTradeSkillSelectionIndex() — the engine-held selection, VISIBLE
-    // index in ([`select`]: a header index is IGNORED, not cleared), VISIBLE index out
-    // ([`selected_visible_index`]), held internally as a stable flat-recipe position (module doc).
+    // SelectTradeSkill and GetTradeSkillSelectionIndex take and answer visible indices.
     g.set(
         "SelectTradeSkill",
         lua.create_function(|lua, index: u32| {
@@ -335,9 +311,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // DoTradeSkill(index, count) — queue the recipe's SPELL ID for `count` crafts (default 1, never
-    // less than 1) — the app's repeat machine turns this into that many CMSG_CAST_SPELL sends. Out
-    // of range / a header index → ignored.
+    // DoTradeSkill(index, count): queues the recipe's spell for `count` crafts, which the app sends
+    // as one `CMSG_CAST_SPELL` each.
     g.set(
         "DoTradeSkill",
         lua.create_function(|lua, (index, count): (usize, Option<i64>)| {
@@ -345,8 +320,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             if let Some((spell_id, avail)) =
                 recipe_at(&model, index).map(|r| (r.spell_id, r.num_available))
             {
-                // The client clamps the repeat to numAvailable at the latch
-                // (`DoTradeSkill 0x500280`).
+                // The client clamps the repeat to numAvailable, at least 1 (`0x500280`).
                 let n = (count.unwrap_or(1).max(1) as u32).min(avail.max(1));
                 model.trade_skill_dos.push((spell_id, n));
             }
@@ -354,8 +328,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseTradeSkill() — client-side close (no packet, vanilla): flag it so the app clears its
-    // local state.
+    // CloseTradeSkill(): client-side only, no packet; the app clears its state.
     g.set(
         "CloseTradeSkill",
         lua.create_function(|lua, ()| {
@@ -365,16 +338,12 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The sub-class/inv-slot FILTER family — real now (the dropdowns ship, ref
-    // Blizzard_TradeSkillUI.lua l.314-414). Indexing follows the C originals: the SubClass index
-    // is 1-based into the CURRENT GetTradeSkillSubClasses order (`0x4ffc70` bounds-checks against
-    // the live header count), the InvSlot index 1-based into the GetTradeSkillInvSlots order;
-    // index 0 is the "All" pseudo-entry on both. `Set*(0, 1, …)` = everything back on (the ref's
-    // "All Subclasses"/"All Slots" menu row); `Set*(i, 1, 1)` = EXCLUSIVE — only entry i shown
-    // (every ref menu click passes exactly this shape); `Set*(i, 1)` un-hides i; `Set*(i, 0)`
-    // hides it. Each set re-lists + fires TRADE_SKILL_UPDATE via the touched flag (the `0x4fd710`
-    // re-sort + event 0x139 shape). `Get*(0)` answers "is everything shown" — the ref's
-    // all-checked probe.
+    // The subclass and inv-slot filters (Blizzard_TradeSkillUI.lua:314-414): index i is 1-based
+    // into `GetTradeSkillSubClasses` (`0x4ffc70` bounds-checks it) or `GetTradeSkillInvSlots`, and
+    // 0 is all. `Set*(i, 1, 1)` shows only i, as every menu click does; `Set*(i, 1)` shows i and
+    // `Set*(i, 0)` hides it. Each set fires TRADE_SKILL_UPDATE through the touched flag
+    // (`0x4fd710`), and `Get*(0)` asks whether everything is shown. The reference's per-header
+    // subclass flag (`+0xc`, mask `0x84dd60`) is kept here as hidden group keys.
     g.set(
         "GetTradeSkillSubClassFilter",
         lua.create_function(|lua, index: usize| {
@@ -432,17 +401,14 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             },
         )?,
     )?;
-    // GetTradeSkillInvSlots() → the distinct slot words of the open window's products, ascending
-    // slot-bit order (the `0xbde058` bit walk — [`present_inv_slots`]).
+    // GetTradeSkillInvSlots(): the products' slot names in ascending bit order (`0xbde058`).
     g.set(
         "GetTradeSkillInvSlots",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let mut out = Vec::new();
-            // Each word is its `0x84dd70` token resolved off the player's own string table.
-            // A token the table does not carry answers the empty string rather
-            // than being dropped: the list is POSITIONAL — `GetTradeSkillInvSlotFilter(index)`
-            // indexes the same order — so a hole would shift every filter after it.
+            // A token (`0x84dd70`) missing from the string table answers "" rather than being
+            // dropped: the filter verbs index this list by position.
             for bit in present_inv_slots(&model) {
                 let word = inv_slot_token(bit)
                     .and_then(|k| crate::strings::global(lua, k))
@@ -452,9 +418,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(MultiValue::from_vec(out))
         })?,
     )?;
-    // The InvSlot pair reads/writes the shown-mask (`0x84dd64`) with the index resolving to the
-    // (index-1)-th SET bit of the accumulated present-slots mask — present slots only, ascending
-    // (`0x4ffe60`'s enumeration; `GetTradeSkillInvSlots` returns exactly that order).
+    // The inv-slot pair works on the shown mask (`0x84dd64`); index i is the i-th present slot bit
+    // (`0x4ffe60`).
     g.set(
         "GetTradeSkillInvSlotFilter",
         lua.create_function(|lua, index: usize| {
@@ -464,7 +429,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             let bits = present_inv_slots(&model);
             Ok(match index.checked_sub(1) {
-                // The "all shown?" probe: (present & mask) == present (`0x4fffd0`).
+                // Everything shown: (present & mask) == present (`0x4fffd0`).
                 None => era_bool(
                     bits.iter()
                         .all(|&b| model.trade_skill_invslot_mask & (1 << b) != 0),
@@ -487,8 +452,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 let bits = present_inv_slots(&model);
                 let on = on.unwrap_or(1) != 0;
                 let exclusive = exclusive.unwrap_or(0) != 0;
-                // The exact mask math per path (the recovered `0x4fd730` args): all →
-                // 0xffffffff · off → old & ~(1<<b) · exclusive → 1<<b · add → old | (1<<b).
+                // The mask each path writes, as `0x4fd730` is called.
                 match index.checked_sub(1) {
                     None => model.trade_skill_invslot_mask = u32::MAX,
                     Some(n) => {

@@ -1,103 +1,50 @@
-//! The **five camera views** — `SetView` / `SaveView` / `ResetView` / `NextView` / `PrevView`,
-//! plus `FlipCameraYaw`: the outbound half of the reference's `UIUtil\Camera.cpp` Lua surface.
+//! The camera-view verbs from the reference's Lua table at `0x84f7a0`: `SetView`, `SaveView`,
+//! `ResetView`, `NextView`, `PrevView` and `FlipCameraYaw`. Each acts on engine state the VM does
+//! not hold, so each call queues a [`CameraViewRequest`] for the app's camera rig.
 //!
-//! Six globals, no state — [`super::follow`]'s shape exactly. Nothing here reads the camera: every
-//! one of these is an **engine action** over state this VM does not hold (the orbit arm, the pitch,
-//! the character's facing, the zoom ceiling), so each call queues a [`CameraViewRequest`] the app
-//! drains ([`super::UiScript::take_camera_view_requests`]) and applies to the rig
-//! (`benilla_app::player::camera_view`). The alternative — reaching into the ECS from inside the
-//! VM — is the thing decision 0068 §3 exists to forbid.
-//!
-//! **Where they come from.** The reference registers them in one table, `0x84f7a0` (`{const char*
-//! name; handler}` pairs, dumped from `WoW.exe` 5875): rows 15…20 are `SetView 0x50b5b0`,
-//! `SaveView 0x50b600`, `ResetView 0x50b640`, `NextView 0x50b680`, `PrevView 0x50b690`,
-//! `FlipCameraYaw 0x50b6a0`. Sixteen 1.12 binding commands have one of these as their whole body
-//! (`SETVIEW1`…`5`, `SAVEVIEW2`…`5`, `RESETVIEW2`…`5`, `NEXTVIEW`, `PREVVIEW`, `FLIPCAMERAYAW`).
-//!
-//! ## The argument ABI is a third shape, and it is neither of [`super::binding_abi`]'s two
-//!
-//! The four indexed entry points share one prologue, byte-identical across `0x50b5b0` /
-//! `0x50b600` / `0x50b640`:
-//!
-//! ```text
-//! 50b5b8  call 0x6f34d0          ; is-number(L, 1)  — a number, or a coercible string
-//! 50b5bf  je   <exit>            ; NOT a number -> xor eax,eax ; ret   (silent, zero Lua values)
-//! 50b5c8  call 0x6f3620          ; tonumber(L, 1)
-//! 50b5cd  call 0x40a2b0          ; double -> int32, truncating toward zero
-//! 50b5d4  jle  <exit>            ; n <= 0  -> silent
-//! 50b5d9  jg   <exit>            ; n >  5  -> silent
-//! 50b5e5  dec  eax               ; Lua 1..5  ->  internal view 0..4
-//! ```
-//!
-//! So the failure edge **returns without raising** — it never reaches `luaL_error 0x6f4940`, which
-//! is the discriminator [`super::binding_abi`]'s header sets out. A macro doing `SetView(0)`,
-//! `SetView(9)`, `SetView("left")` or `SetView()` is a silent no-op in the real client, and is one
-//! here. That rules out `binding_abi::number_arg` (shape A — raises) and makes
-//! `binding_abi::coerced_number` (shape C — no guard, defaults to `0.0`) merely *accidentally*
-//! right, so the guard is written out rather than borrowed.
-//!
-//! `FlipCameraYaw` takes the same is-number guard and then the raw float — `0x6f3620` straight to
-//! `fstp [ebp-4]`, with no `0x40a2b0` — so its argument is **not** truncated to an integer.
-//!
-//! ## Two verified facts that a reader will expect to be otherwise
-//!
-//! - **The range is 1…5 for all three of Set/Save/Reset.** `SaveView(1)` and `ResetView(1)` are
-//!   accepted by the engine and act on `FIRST_PERSON`; `0x50fa30` (SaveView's body) has no view-0
-//!   gate at all. 1.12 ships no `SAVEVIEW1`/`RESETVIEW1` *binding*, which is a `Bindings.xml`
-//!   decision, not an engine one — a macro reaches what the keybinding cannot.
-//! - **`NextView`/`PrevView` do not wrap.** `0x50faa0` is `eax = view + 1; cmp eax,5; jge <ret>`
-//!   and `0x50fac0` is `test eax,eax; jle <ret>; dec eax` — each is a hard stop at its end of the
-//!   range, so holding `END` walks 1→2→3→4→5 and stays there. The app enforces it (this side only
-//!   queues the verb).
+//! The indexed verbs share one prologue and return silently, never reaching `luaL_error`
+//! (`0x6f4940`), on anything but a number that truncates to 1 to 5; `FlipCameraYaw` keeps its
+//! argument's fraction. `SaveView(1)` and `ResetView(1)` act on first person (`0x50fa30` has no
+//! view-0 gate; only `Bindings.xml` lacks the bindings). `NextView` and `PrevView` stop at the
+//! ends and never wrap (`0x50faa0`, `0x50fac0`).
 
 use mlua::{Lua, Value};
 
 use super::Model;
 
-/// The number of camera views — the reference's default-string table `0x84f488` is five rows, and
-/// every entry point above is bounded by it.
+/// The number of camera views, the rows of the reference's default-string table `0x84f488`.
 pub const CAMERA_VIEW_COUNT: u8 = 5;
 
-/// One camera-view intent queued by the Lua surface, drained by the app
-/// ([`super::UiScript::take_camera_view_requests`]). Plain data — [`super::follow::FollowRequest`]'s
-/// twin.
-///
-/// The indices are the **internal** ones, `0..CAMERA_VIEW_COUNT`, already range-checked here
-/// exactly where the reference range-checks them (its Lua handler, `dec eax`). The app applies
-/// them; it never re-validates a number that cannot be out of range.
+/// A camera-view intent for the app. Indices are internal, `0..CAMERA_VIEW_COUNT`, range-checked
+/// here where the reference checks them, in the Lua handler.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CameraViewRequest {
-    /// `SetView(n)` — make view `n-1` the live one (distance, pitch and the saved yaw offset).
+    /// `SetView(n)`: make view `n-1` live (distance, pitch and the saved yaw offset).
     Set(u8),
-    /// `SaveView(n)` — store the live pose into view `n-1`.
+    /// `SaveView(n)`: store the live pose into view `n-1`.
     Save(u8),
-    /// `ResetView(n)` — put view `n-1` back to its shipped default.
+    /// `ResetView(n)`: put view `n-1` back to its shipped default.
     Reset(u8),
-    /// `NextView()` — the view above the current one, if there is one (no wrap).
+    /// `NextView()`: the view above the current one, if any.
     Next,
-    /// `PrevView()` — the view below the current one, if there is one (no wrap).
+    /// `PrevView()`: the view below the current one, if any.
     Prev,
-    /// `FlipCameraYaw(degrees)` — add this many **degrees** to the camera's yaw. The binding body
-    /// 1.12 ships is `FlipCameraYaw(180)`.
+    /// `FlipCameraYaw(degrees)`: add degrees to the camera's yaw; `Bindings.xml:795` passes 180.
     FlipYaw(f32),
 }
 
 impl super::UiScript {
-    /// Drain the camera-view intents queued since the last call — the app applies each to the
-    /// camera rig.
+    /// Drain the camera-view intents queued since the last call.
     pub fn take_camera_view_requests(&mut self) -> Vec<CameraViewRequest> {
         std::mem::take(&mut self.model_mut().camera_view_requests)
     }
 }
 
-/// The shared prologue of `SetView`/`SaveView`/`ResetView`: `is-number` → `tonumber` → truncate to
-/// `i32` → the `1 ..= 5` window → the internal index. `None` is every silent-return edge in one.
+/// The indexed verbs' shared prologue: the internal index, or `None` for a silent return.
 fn view_arg(lua: &Lua, v: Value) -> Option<u8> {
-    // `0x6f34d0` is-number, then `0x6f3620` tonumber, then `0x40a2b0`'s chop-toward-zero cast —
-    // `lua.coerce_number` is the first two (Lua coerces a numeric string), `as i64 as i32` the
-    // third (see `binding_abi::number_arg`, whose only difference from this is that it raises).
+    // Is-number (`0x6f34d0`) and `tonumber` (`0x6f3620`) take a numeric string; the cast
+    // truncates toward zero, as `0x40a2b0` does.
     let n = lua.coerce_number(v).ok().flatten()? as i64 as i32;
-    // `test eax,eax; jle` then `cmp eax,5; jg` — both silent.
     (1..=i32::from(CAMERA_VIEW_COUNT))
         .contains(&n)
         .then(|| (n - 1) as u8)
@@ -107,9 +54,8 @@ fn view_arg(lua: &Lua, v: Value) -> Option<u8> {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // SetView(n) — `0x50b5b0`. Load view n (1..5). The reference then calls `0x512e90(view,
-    // cameraViewBlendStyle)`, which also writes the `cameraView` CVar so the active view survives
-    // a restart; the app does both halves.
+    // SetView(n), `0x50b5b0`. The reference's `0x512e90` also writes the `cameraView` CVar, so
+    // the view survives a restart; the app does both.
     g.set(
         "SetView",
         lua.create_function(|lua, n: Value| {
@@ -123,9 +69,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SaveView(n) — `0x50b600` → `0x50fa30`, which reads the camera's three TARGET fields
-    // (`+0x198` distance, `+0x1e0` pitch, `+0x210` yaw) into the slot array and writes each to its
-    // archived CVar. Accepts n = 1 (see the module header).
+    // SaveView(n), `0x50b600` → `0x50fa30`: the camera's target distance, pitch and yaw go into
+    // the slot and each to its archived CVar.
     g.set(
         "SaveView",
         lua.create_function(|lua, n: Value| {
@@ -139,8 +84,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ResetView(n) — `0x50b640` → `0x50fae0`, which re-parses the shipped default strings at
-    // `0x84f488 + 12·view` into the slot and re-applies the view if it is the live one.
+    // ResetView(n), `0x50b640` → `0x50fae0`: re-parses the view's default string (`0x84f488`)
+    // into the slot and re-applies the view if it is live.
     g.set(
         "ResetView",
         lua.create_function(|lua, n: Value| {
@@ -154,8 +99,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // NextView() / PrevView() — `0x50b680` → `0x50faa0` and `0x50b690` → `0x50fac0`. No arguments
-    // at all: neither handler touches the Lua stack. Neither wraps.
+    // NextView() and PrevView(), `0x50b680` and `0x50b690`: neither reads the Lua stack.
     g.set(
         "NextView",
         lua.create_function(|lua, ()| {
@@ -173,9 +117,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // FlipCameraYaw(degrees) — `0x50b6a0`, the whole body being
-    // `cam[+0x100] += arg × 0.01745329238474369`. Its argument keeps its fraction (no `0x40a2b0`),
-    // and the is-number guard's failure edge is the same silent return the four above take.
+    // FlipCameraYaw(degrees), `0x50b6a0`: adds `degrees × π/180` to the camera's yaw, fraction
+    // kept; a non-number returns silently.
     g.set(
         "FlipCameraYaw",
         lua.create_function(|lua, degrees: Value| {

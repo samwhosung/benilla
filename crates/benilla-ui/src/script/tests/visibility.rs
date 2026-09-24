@@ -1,4 +1,4 @@
-//! Show/Hide fire OnShow/OnHide exactly on effective transitions; OnUpdate ticks gate on visibility.
+//! Show and Hide fire OnShow/OnHide only on effective transitions; OnUpdate runs only when visible.
 
 use super::common::script;
 

@@ -1,6 +1,4 @@
-//! The trainer tree's tests — the per-`trainerType` ordering laws pinned
-//! against emulated runs of the real finalizer, plus the filter/collapse/intent
-//! surface. Split out of `mod.rs` when the four comparators pushed it past the file budget.
+//! Tests for the trainer tree: the per-type row orders, the filter, the collapse and the intents.
 
 use super::*;
 use crate::script::UiScript;
@@ -14,8 +12,6 @@ fn svc(
 ) -> TrainerService {
     TrainerService {
         spell_id,
-        // The fixture's default subject: the wire spell, no hop (the "no learn wrapper"
-        // fallback); the tooltip tests set the arm they mean explicitly.
         tooltip: TrainerTooltip::Spell {
             spell_id,
             alt_caster: false,
@@ -36,10 +32,8 @@ fn svc(
     }
 }
 
-/// A two-line warrior trainer (type 0). Groups sort by name (Arms < Fury); within Arms, the level
-/// keys order Heroic Strike (level 1) before Cleave (level 20). The default-expanded tree is thus:
-/// `[H:Arms, Heroic Strike(avail), Cleave(used), H:Fury, Bloodrage(unavail)]` — a 5-row list whose
-/// service rows sit at indices 2, 3, 5.
+/// A class trainer whose tree is `[H:Arms, Heroic Strike, Cleave, H:Fury, Bloodrage]`, the three
+/// services available, used and unavailable.
 fn trainer() -> TrainerState {
     let mut hs = svc(
         78,
@@ -66,7 +60,7 @@ fn trainer() -> TrainerState {
     }
 }
 
-/// Every visible row as `(name, serviceType)` — the shape the ported XML actually renders.
+/// Every visible row as `(name, serviceType)`.
 fn visible(s: &mut UiScript) -> Vec<(String, String)> {
     let n = s.eval::<i64>("return GetNumTrainerServices()").unwrap();
     (1..=n)
@@ -88,10 +82,8 @@ fn tree_interleaves_headers_and_ordered_services() {
         .unwrap());
 
     s.set_trainer(Some(trainer()));
-    // 2 headers + 3 services = 5 visible rows.
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 5);
 
-    // Row 1 is the "Arms" header: name, nil subtext, "header", isExpanded=1.
     let (hn, hsub, ht, hexp) = s
         .eval::<(String, Option<String>, String, Option<i64>)>(
             "local n,s,t,e = GetTrainerServiceInfo(1) return n,s,t,e",
@@ -100,7 +92,6 @@ fn tree_interleaves_headers_and_ordered_services() {
     assert_eq!((hn.as_str(), ht.as_str()), ("Arms", "header"));
     assert_eq!((hsub, hexp), (None, Some(1)));
 
-    // Rows 2..5: services (name/state) then the Fury header then its service — the sorted tree.
     let info = |s: &mut UiScript, i: i64| {
         s.eval::<(String, String)>(&format!(
             "local n,_,t = GetTrainerServiceInfo({i}) return n,t"
@@ -120,7 +111,7 @@ fn tree_interleaves_headers_and_ordered_services() {
 fn service_getters_read_the_row_at_a_visible_index() {
     let mut s = UiScript::new().unwrap();
     let mut t = trainer();
-    // Heroic Strike (services[0], the row at index 2) carries a full gate set.
+    // Heroic Strike, row 2, gets a full gate set.
     t.services[0].skill_req = Some(TrainerSkillReq {
         name: "Blacksmithing".into(),
         rank: 100,
@@ -132,7 +123,6 @@ fn service_getters_read_the_row_at_a_visible_index() {
     }];
     s.set_trainer(Some(t));
 
-    // Cost/level/desc/reqs all resolve at the SERVICE index 2 (not the header at 1).
     assert_eq!(
         s.eval::<(i64, i64, i64)>("return GetTrainerServiceCost(2)")
             .unwrap(),
@@ -161,7 +151,7 @@ fn service_getters_read_the_row_at_a_visible_index() {
         .eval::<bool>("local l,p = IsTrainerServiceLearnSpell(2) return l==1 and p==nil")
         .unwrap());
 
-    // A HEADER row (index 1) has no service data — the getters no-op to defaults.
+    // Row 1 is a header, so the getters answer their defaults.
     assert_eq!(
         s.eval::<i64>("return GetTrainerServiceLevelReq(1)")
             .unwrap(),
@@ -175,17 +165,13 @@ fn service_getters_read_the_row_at_a_visible_index() {
         .unwrap());
 }
 
-/// The state filter takes a group's **header with it** once it hides the group's last service — the
-/// finalizer's `[+0x1c]` hide has no header-row exemption (`0x4d8528`/`0x4d8535`).
-/// This asserted the opposite until 1124: benilla rendered bare headers over empty groups, and an
-/// all-boxes-off filter left a window full of headings and nothing else.
+/// The reference's filter hide exempts no header (`0x4d8528`, `0x4d8535`).
 #[test]
 fn state_filter_takes_a_groups_header_with_its_last_service() {
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(trainer()));
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 5);
 
-    // Hide "used": Cleave drops (5 → 4), and BOTH headers stay — Arms still has Heroic Strike.
     s.run("SetTrainerServiceTypeFilter('used', 0)").unwrap();
     assert_eq!(
         visible(&mut s)
@@ -195,8 +181,6 @@ fn state_filter_takes_a_groups_header_with_its_last_service() {
         ["header", "available", "header", "unavailable"]
     );
 
-    // Now hide "available" too: Arms loses its last row, so the ARMS HEADER GOES WITH IT — only
-    // Fury's header and its unavailable service remain.
     s.run("SetTrainerServiceTypeFilter('available', 0)")
         .unwrap();
     assert_eq!(
@@ -207,17 +191,12 @@ fn state_filter_takes_a_groups_header_with_its_last_service() {
         ]
     );
 
-    // Every box off renders NOTHING — not a list of bare headings.
     s.run("SetTrainerServiceTypeFilter('unavailable', 0)")
         .unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 0);
 
-    // …but the *rows* are still there behind it, and the getters still serve them (2231). This line
-    // asserted `GetTrainerServiceInfo(1) == nil` until the accessor gate was confirmed: the single
-    // one every service getter shares, `0x4d89b0`, bounds against the TOTAL `ds:0xb73a10`, and the
-    // visible count `ds:0xb73a18` has exactly five references image-wide — the finalizer seeding and
-    // decrementing it, the buy-ALL loop, and `GetNumTrainerServices`. No getter reads it. An empty
-    // window is empty because the Lua stops iterating, not because the rows stopped existing.
+    // The rows remain: the getters bound on the total `ds:0xb73a10` (`0x4d89b0`), not the visible
+    // count `ds:0xb73a18`.
     assert_eq!(
         s.eval::<String>("return (GetTrainerServiceInfo(1))")
             .unwrap(),
@@ -231,15 +210,12 @@ fn state_filter_takes_a_groups_header_with_its_last_service() {
     );
 }
 
-/// Collapse is the *asymmetric* case, and deliberately so: it hides a group's services but keeps the
-/// header — a different field (`hdr[+0x20]`) tested three instructions after the filter's, with a
-/// header-row exemption the filter's lacks (`0x4d853d`). Without it a collapsed group could never be
-/// re-expanded, having no header left to click.
+/// The reference's collapse test exempts headers (`0x4d853d`), where the filter's does not.
 #[test]
 fn collapse_keeps_the_header_the_filter_would_remove() {
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(trainer()));
-    s.run("CollapseTrainerSkillLine(1)").unwrap(); // fold Arms — both its services hide
+    s.run("CollapseTrainerSkillLine(1)").unwrap(); // fold Arms
     assert_eq!(
         visible(&mut s),
         [
@@ -248,7 +224,6 @@ fn collapse_keeps_the_header_the_filter_would_remove() {
             ("Bloodrage".to_string(), "unavailable".to_string()),
         ]
     );
-    // Collapse-all keeps every header; the filter's empty case keeps none.
     s.run("CollapseTrainerSkillLine(0)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 2);
 }
@@ -258,8 +233,6 @@ fn collapse_by_header_index_and_collapse_all() {
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(trainer()));
 
-    // Collapse the Arms group by its header's display index (1): its two services vanish, the
-    // header stays and now reports isExpanded=nil. 5 → 3 (H:Arms, H:Fury, Bloodrage).
     s.run("CollapseTrainerSkillLine(1)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 3);
     assert!(s
@@ -272,14 +245,11 @@ fn collapse_by_header_index_and_collapse_all() {
         "Arms' services are folded; Fury's header is now row 2"
     );
 
-    // Expand it back by the same header index.
     s.run("ExpandTrainerSkillLine(1)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 5);
 
-    // Collapse-all (id 0): both groups fold → just the two headers.
     s.run("CollapseTrainerSkillLine(0)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 2);
-    // Expand-all (id 0): back to the full tree.
     s.run("ExpandTrainerSkillLine(0)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 5);
 }
@@ -291,7 +261,7 @@ fn collapse_survives_a_content_update_and_resets_on_close() {
     s.run("CollapseTrainerSkillLine(1)").unwrap(); // fold Arms
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 3);
 
-    // A re-list (same skill lines) keeps the fold — a buy re-lists and the tree shouldn't jump open.
+    // A content update over the same groups keeps the fold.
     s.set_trainer(Some(trainer()));
     assert_eq!(
         s.eval::<i64>("return GetNumTrainerServices()").unwrap(),
@@ -299,31 +269,23 @@ fn collapse_survives_a_content_update_and_resets_on_close() {
         "Arms stays collapsed across a content update"
     );
 
-    // Close → the collapse set resets; a re-open is fully expanded.
     s.set_trainer(None);
     s.set_trainer(Some(trainer()));
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 5);
 }
 
-/// A buy queues the row's **spell id**, and only a green row can be bought — the single-row path
-/// `0x4d89d0` resolves the index through the shared total-bounded gate and then refuses on the state
-/// byte (`0x4d89e5 cmp byte ptr [esi+0x30], bl; jne`), so red and gray rows are silently dropped on
-/// the floor rather than sent to the server (2231). This used to queue whatever the index resolved
-/// to, which is how a `used` row could still put a `CMSG_TRAINER_BUY_SPELL` on the wire.
+/// The reference's buy refuses any state byte but 0 (`0x4d89d0`, `0x4d89e5`).
 #[test]
 fn buy_queues_an_available_services_spell_id_and_refuses_every_other_row() {
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(trainer()));
-    // Row 2 is Heroic Strike (spell 78, available). Buying it queues its spell id, not its index.
     s.run("BuyTrainerService(2)").unwrap();
     assert_eq!(s.take_trainer_buys(), vec![78]);
     assert!(s.take_trainer_buys().is_empty(), "drained");
 
-    // Buying a HEADER row (index 1) queues nothing.
     s.run("BuyTrainerService(1)").unwrap();
     assert!(s.take_trainer_buys().is_empty(), "a header is not buyable");
 
-    // Nor does a gray row (Cleave, already known) or a red one (Bloodrage, gated).
     s.run("BuyTrainerService(3)").unwrap();
     s.run("BuyTrainerService(5)").unwrap();
     assert!(
@@ -345,7 +307,7 @@ fn selection_and_close_intents() {
         s.eval::<i64>("return GetTrainerSelectionIndex()").unwrap(),
         2
     );
-    s.run("SelectTrainerService(9)").unwrap(); // OOB (past the 5 rows) clears
+    s.run("SelectTrainerService(9)").unwrap(); // past the 5 rows: clears
     assert_eq!(
         s.eval::<i64>("return GetTrainerSelectionIndex()").unwrap(),
         0
@@ -357,9 +319,7 @@ fn selection_and_close_intents() {
     assert!(!s.take_trainer_close(), "drained");
 }
 
-/// The two whole-trainer predicates fork on the wire `trainer_type` — `IsTradeskillTrainer` on
-/// `== 2` (`0x4d8ea0`), `IsTalentTrainer` on `== 1` (`0x4d8ed0`) — so at most one is ever true, and
-/// at a class trainer neither is.
+/// `IsTradeskillTrainer` tests type 2 (`0x4d8ea0`), `IsTalentTrainer` type 1 (`0x4d8ed0`).
 #[test]
 fn tradeskill_and_talent_flags() {
     let mut s = UiScript::new().unwrap();
@@ -367,13 +327,12 @@ fn tradeskill_and_talent_flags() {
         .eval::<bool>("return IsTradeskillTrainer() == nil")
         .unwrap());
 
-    // A class trainer: neither predicate.
     s.set_trainer(Some(trainer()));
     assert!(s
         .eval::<bool>("return IsTradeskillTrainer() == nil and IsTalentTrainer() == nil")
         .unwrap());
 
-    // A tradeskill trainer — one "Recipes" group, so its one service is the row at index 2.
+    // One "Recipes" group, so its service is row 2.
     let mut recipe = svc(
         2743,
         "Copper Chain Pants",
@@ -395,7 +354,6 @@ fn tradeskill_and_talent_flags() {
         .eval::<bool>("return IsTrainerServiceTradeSkill(2) == 1")
         .unwrap());
 
-    // A mount trainer — the "talent" predicate, which used to be a hardcoded nil.
     s.set_trainer(Some(TrainerState {
         greeting: String::new(),
         trainer_type: 1,
@@ -417,7 +375,6 @@ fn tradeskill_and_talent_flags() {
 fn unresolved_skill_line_is_dropped() {
     let mut s = UiScript::new().unwrap();
     let mut t = trainer();
-    // A service whose skill line didn't resolve (0) is dropped from the tree entirely.
     t.services.push(svc(
         999,
         "Orphan Spell",
@@ -426,19 +383,11 @@ fn unresolved_skill_line_is_dropped() {
         "",
     ));
     s.set_trainer(Some(t));
-    // Still 5 rows — the orphan contributes neither a header nor a service row.
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 5);
 }
 
-/// **The selection is the service, never the row it sits on** — and a hidden service keeps a row.
-///
-/// `SelectTrainerService` stores the record's spell id (`ds:0xb73a0c`, `0x4d74f0`) and
-/// `GetTrainerSelectionIndex` finds it again by scanning the **whole** array (`0x4d7520`, bounded by
-/// the total `ds:0xb73a10`, not the visible `ds:0xb73a18`). Filtering and collapsing only clear a
-/// record's visible flag `[+0x34]` and sort it into a tail, so the answer for an off-screen
-/// selection is an index *past* `GetNumTrainerServices()` — never a clamp, and never a live row
-/// number belonging to some other service. benilla stored the row number and clamped it, which is
-/// the director's "the info and img below don't update" report: see [`super::selected_row`].
+/// The reference stores the selection as a spell id (`0x4d74f0`) and scans the whole array for it
+/// (`0x4d7520`), so a hidden selection reads past the visible count.
 #[test]
 fn the_selection_follows_its_service_and_lands_in_the_tail_when_it_is_hidden() {
     let mut s = UiScript::new().unwrap();
@@ -450,13 +399,11 @@ fn the_selection_follows_its_service_and_lands_in_the_tail_when_it_is_hidden() {
             .unwrap()
     };
 
-    // Bloodrage sits at row 5 of `[H:Arms, Heroic Strike, Cleave, H:Fury, Bloodrage]`.
     s.run("SelectTrainerService(5)").unwrap();
     assert_eq!(sel(&mut s), 5);
     assert_eq!(at(&mut s, 5), "Bloodrage");
 
-    // Hide the already-known state: Cleave leaves and everything under it slides up one. The row
-    // number 5 now names nothing on screen; the selection is still Bloodrage, at row 4.
+    // Hiding Cleave moves Bloodrage up to row 4.
     s.run("SetTrainerServiceTypeFilter('used', 0)").unwrap();
     assert_eq!(at(&mut s, 4), "Bloodrage");
     assert_eq!(
@@ -465,9 +412,7 @@ fn the_selection_follows_its_service_and_lands_in_the_tail_when_it_is_hidden() {
         "it followed its service, it did not stay put"
     );
 
-    // Fold Bloodrage's group away. It is off screen but not gone: its record goes to the tail, so
-    // the answer is an index past the visible count — which is what sends the stock window down its
-    // "the selection is not on screen" path instead of silently repainting someone else's row.
+    // Row 3 is now the Fury header.
     s.run("CollapseTrainerSkillLine(3)").unwrap();
     let folded = sel(&mut s);
     assert!(
@@ -478,8 +423,7 @@ fn the_selection_follows_its_service_and_lands_in_the_tail_when_it_is_hidden() {
     s.run("ExpandTrainerSkillLine(3)").unwrap();
     assert_eq!(sel(&mut s), 4, "and back on screen when the group unfolds");
 
-    // He learns it. The re-list brings it back gray and the filter hides it — the tail again, never
-    // the row number of whatever moved up into its place.
+    // Learned, it comes back gray and the filter hides it.
     let mut learned = trainer();
     learned.services[2].category = TrainerServiceCategory::Used;
     s.set_trainer(Some(learned));
@@ -488,23 +432,18 @@ fn the_selection_follows_its_service_and_lands_in_the_tail_when_it_is_hidden() {
         "the learned spell is off screen, not at some live row"
     );
 
-    // A service that has left the trainer's list altogether is the one case that reads 0.
     let mut shorter = trainer();
     shorter.services.remove(2);
     s.set_trainer(Some(shorter));
     assert_eq!(sel(&mut s), 0);
 
-    // A header row is not a selection, and neither is a row past the end.
     s.set_trainer(Some(trainer()));
     s.run("SelectTrainerService(1)").unwrap();
     assert_eq!(sel(&mut s), 0, "row 1 is the Arms header");
 }
 
-/// A new `SMSG_TRAINER_LIST` resets the selection with the rest of the builder's state — `0x4d7560`
-/// selects record 0 after the sort (`0x4d7b40 xor ecx,ecx` → `0x4d7b42 call 0x4d74f0`), which is
-/// always a group header and so reads back as 1. Clearing is the same answer to the only question
-/// the stock window asks (`GetTrainerSelectionIndex() > 1`, which 0 and 1 both fail); what matters
-/// is that a re-opened trainer cannot inherit the last visit's selection.
+/// The reference's list builder re-selects a header (`0x4d7560`, `0x4d7b42`), so a re-opened
+/// trainer never keeps the last visit's selection.
 #[test]
 fn a_new_list_packet_clears_the_selection() {
     let mut s = UiScript::new().unwrap();
@@ -536,23 +475,12 @@ fn clearing_empties_and_resets_selection() {
     );
 }
 
-/// **The tradeskill order, pinned against an emulated run of the real finalizer** (decision
-/// 1124). The fixture is creature 957 "Dane Lindgren" — the blacksmithing trainer in the director's
-/// report — with his 19 real `npc_trainer` rows: 18 recipes on skill line 164 with ascending
-/// `reqSkillValue`, plus the profession-learn service 2020 ("Apprentice Blacksmith", `reqLevel 5`,
-/// no skill gate). This exact set was fed through the builder `0x4d7560` + finalizer `0x4d8410`
-/// with `0xb73a08 = 2` and the real `qsort`/collator, and got the 21 rows asserted below.
-///
-/// Two things this pins that benilla had wrong, and one it never had:
-/// - the learn row is **first among services**, under its own `Development Skills` header — placed
-///   by the `SKILL_STEP` group partition, *not* by any level key;
-/// - `reqLevel` is **inert** at type 2 (the class comparator's first key, which used to sink 2020 to
-///   the bottom of the list);
-/// - recipes ascend by `reqSkillValue`, ties broken by name.
+/// Creature 957's 19 vmangos `npc_trainer` rows, in the order the reference's builder `0x4d7560`
+/// and finalizer `0x4d8410` give them at type 2: the `SKILL_STEP` learn row first under its own
+/// header, `reqLevel` inert, the recipes by `reqSkillValue` then name.
 #[test]
 fn tradeskill_trainer_matches_the_emulated_reference_order() {
-    // (wire spell, name, reqSkillValue) — the recipes, in wire order (ascending here, but the
-    // fixture is shuffled below to prove the order is the comparator's and not the input's).
+    // (wire spell, name, reqSkillValue), reversed below so the order must come from the sort.
     let recipes: &[(u32, &str, u32)] = &[
         (2743, "Copper Chain Pants", 1),
         (2754, "Copper Mace", 15),
@@ -576,7 +504,7 @@ fn tradeskill_trainer_matches_the_emulated_reference_order() {
     let mut services: Vec<TrainerService> = recipes
         .iter()
         .map(|&(id, name, req)| {
-            // Group key 2 = TRADESKILL_SERVICE_LEARN: no SKILL_STEP effect on the wire spell.
+            // Group key 2, `TRADESKILL_SERVICE_LEARN`: the wire spell has no `SKILL_STEP` effect.
             let mut s = svc(id, name, TrainerServiceCategory::Unavailable, 2, "Recipes");
             s.subtext = None;
             s.level_req = 0;
@@ -588,8 +516,8 @@ fn tradeskill_trainer_matches_the_emulated_reference_order() {
             s
         })
         .collect();
-    services.reverse(); // wire order is not display order — and must not be
-                        // Group key 1 = TRADESKILL_SERVICE_STEP: spell 2020 carries Effect 44 SKILL_STEP.
+    services.reverse();
+    // Group key 1, `TRADESKILL_SERVICE_STEP`: spell 2020 has effect 44, `SKILL_STEP`.
     let mut learn = svc(
         2020,
         "Apprentice Blacksmith",
@@ -598,7 +526,7 @@ fn tradeskill_trainer_matches_the_emulated_reference_order() {
         "Development Skills",
     );
     learn.subtext = None;
-    learn.level_req = 5; // the key that used to decide everything, and decides nothing here
+    learn.level_req = 5; // inert at type 2
     learn.prof_first_rank = true;
     services.insert(services.len() / 2, learn);
 
@@ -638,10 +566,7 @@ fn tradeskill_trainer_matches_the_emulated_reference_order() {
     assert_eq!(got, expected);
 }
 
-/// **The mount (type 1, the client's "talent") order, pinned against an emulated run**:
-/// the already-known services fold into the `-1` "My Talents" group, which the
-/// header comparator puts **first**, ahead of the name-ordered skill-line headers; within a group
-/// the state byte sorts available → unavailable → used, then the name.
+/// At a mount trainer the known group's header sorts first (`0x4d7b90`), the rest by name.
 #[test]
 fn mount_trainer_folds_known_services_into_my_talents() {
     let known = |id: u32, name: &str| {
@@ -700,16 +625,13 @@ fn mount_trainer_folds_known_services_into_my_talents() {
         ],
         "the -1 group leads; every other header is name-ordered"
     );
-    // And the type predicates fork on the same dword the sort does.
     assert!(s.eval::<bool>("return IsTalentTrainer() == 1").unwrap());
     assert!(s
         .eval::<bool>("return IsTradeskillTrainer() == nil")
         .unwrap());
 }
 
-/// The **state byte is a sort key at type 1 and only there** — the same three services, ordered by
-/// state (available → unavailable → used) inside one group, where the class cascade would order
-/// them by level and the tradeskill one by skill value.
+/// Only at type 1 is the state byte a sort key (`0x4d8850`).
 #[test]
 fn talent_order_sorts_on_state_within_a_group() {
     let one = |id: u32, name: &str, cat: TrainerServiceCategory| svc(id, name, cat, 762, "Riding");
@@ -728,8 +650,7 @@ fn talent_order_sorts_on_state_within_a_group() {
     let got: Vec<String> = visible(&mut s).into_iter().map(|(n, _)| n).collect();
     assert_eq!(got, ["Riding", "Cee", "Bee", "Aye"]);
 
-    // The same three at a CLASS trainer sort by name instead (equal levels, no skill gates) — the
-    // proof that the comparator really is selected by the type and not shared.
+    // At a class trainer the same three sort by name: equal levels, no skill gates.
     s.set_trainer(Some(TrainerState {
         greeting: String::new(),
         trainer_type: 0,

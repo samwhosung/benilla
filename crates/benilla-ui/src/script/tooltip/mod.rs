@@ -1,28 +1,14 @@
-//! The `GameTooltip` method surface + engine behavior: the line stack, the
-//! owner/anchor law, auto-size, and the fade — the modeled behavior of the client's game-layer
-//! tooltip class over `CSimpleFrame` (the reference's full 38-binding Lua surface, plus its
-//! money/cooldown internals; the *content* builders land per 0274's phases on top of these
-//! mechanics).
+//! The `GameTooltip` method surface and engine behaviour: the line stack, owner and anchor,
+//! auto-size and the fade.
 //!
-//! **Lines are real named FontString regions**, engine-created on demand and published as Lua
-//! globals (`<name>TextLeft1` …) — reference Lua addresses them by name
-//! (`GameTooltipTextLeft1:SetTextColor`, UnitFrame.lua), so they cannot be private state. The
-//! real template pre-declares 30 pairs and the class grows past them with `AddFontStrings`;
-//! benilla uses the one growth mechanism for all of them.
+//! Lines are named FontString regions published as Lua globals (`<name>TextLeft1` …), since
+//! FrameXML addresses them by name (`GameTooltipTextLeft1:SetTextColor`, `UnitFrame.lua:76`). The
+//! template declares 30 pairs, which are adopted; the reference grows past them through
+//! `AddFontStrings`, and this also creates pairs on demand.
 //!
-//! **Layout is a `resolve` pre-pass** ([`layout_tooltips`]): frame size = max measured line width
-//! (+ the double-line gap) + 2·pad × summed line heights + gaps, with `SetMinimumWidth` as a
-//! floor, and each double line's right column re-pointed flush to the text inset — the job the
-//! real client's C++ line layout does over the template's static anchors. It reads the measure
-//! round-trip's cached extents, so a fresh tooltip converges in ~2 frames (same as the retired
-//! Lua `OnUpdate` measure loop it replaces).
-//!
-//! `AddLine` accepts both shipped-FrameXML shapes — `(text, r, g, b[, wrap])` and the archaic
-//! `(text, "", r, g, b)` (both appear across the real 1.12 corpus; the non-number second slot is
-//! skipped). A wrap-flagged line has [`crate::widget::TOOLTIP_WRAP_WIDTH`] pinned onto its
-//! region at APPEND time, so its very first measure comes back wrapped — one round-trip, stable
-//! under the hover re-enter loop's per-frame content clears (the item description /
-//! trigger-effect lines).
+//! Layout is a pre-pass of every `resolve` ([`layout_tooltips`]): the width is the widest line (a
+//! double line adds the column gap) plus padding, floored by `SetMinimumWidth`; the height is the
+//! summed line heights and gaps; each right column sits flush with the text inset.
 
 use mlua::{Lua, Table, Value};
 
@@ -37,11 +23,10 @@ use crate::widget::{
     TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD,
 };
 
-/// Registry key of the GameTooltip method table (the MAXCSTACK discipline: named registry root).
+/// Registry key of the GameTooltip method table, a named registry root (the MAXCSTACK discipline).
 pub(super) const REG_TOOLTIP_METHODS: &str = "__benilla_tooltip_methods";
 
-/// Run `f` over a frame's tooltip state under one short write borrow. Errors if `this` is not a
-/// live GameTooltip (unreachable through the kind dispatcher, but the table is a plain Lua value).
+/// Runs `f` over a GameTooltip's state under one short write borrow.
 fn with_tip<T>(lua: &Lua, this: &Table, f: impl FnOnce(&mut TooltipState) -> T) -> mlua::Result<T> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -55,17 +40,12 @@ pub(super) fn tip_mut(model: &mut Model, h: FrameHandle) -> mlua::Result<&mut To
     }
 }
 
-/// Copy a named font object's resolved paint onto a line region (the `SetFontObject` copy,
-/// minus the error on a missing name: engine tests load file subsets where Fonts.xml may be
-/// absent — an unregistered name leaves the renderer's default face rather than failing the
-/// hover).
+/// `SetFontObject` onto a line cell, except that a missing font object keeps the default face
+/// rather than raising (a VM loaded without Fonts.xml).
 fn apply_font(d: &mut RegionData, name: &str, fo: Option<&FontObject>) {
     d.font_object = Some(name.to_string());
-    // The severance mask is left standing — a re-point does NOT restore inheritance in the
-    // reference (see `super::font`'s module doc on the `+0x2c` inheritMask). A freshly created
-    // line has a clean mask anyway; an adopted XML-declared line keeps whatever its own attributes
-    // severed. Either way the line inherits the object LIVE from here: a later
-    // `GameTooltipText:SetFont(…)` re-paints every tooltip line through `font::propagate`.
+    // The inherit mask (`+0x2c`) stays: a re-point does not restore inheritance in the reference.
+    // From here the line follows the font object live, through `font::propagate`.
     if let Some(f) = fo {
         d.font_path = f.font.clone();
         d.font_height = f.height;
@@ -77,14 +57,9 @@ fn apply_font(d: &mut RegionData, name: &str, fo: Option<&FontObject>) {
     }
 }
 
-/// Ensure the line-pair pool holds at least `n` pairs — ADOPTING XML-declared pairs
-/// (`<name>TextLeft<i>`/`TextRight<i>`, the ref template's pre-declared ladder: their faces
-/// ride, the engine owns justify/visibility/anchors) and creating the rest (faces cloned from
-/// the previous pair when a ladder exists, else the header/text defaults).
-/// Pair `i` (1-based): left at TOPLEFT (pad,−pad) of the frame (i = 1) or the previous left's
-/// BOTTOMLEFT (0,−gap); right at RIGHT→left RIGHT (its x offset is [`layout_tooltips`]'s to
-/// recompute). Line 1 wears `GameTooltipHeaderText`, the rest `GameTooltipText` — the real
-/// template's fonts.
+/// Grows the line-pair pool to `n` pairs: XML-declared pairs (`<name>TextLeft<i>`) are adopted
+/// with their fonts, and created pairs clone the previous pair's fonts past a declared ladder, or
+/// else wear the template's `GameTooltipHeaderText` (line 1) and `GameTooltipText`.
 fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     // (id, global name) pairs to publish once the model borrow is dropped.
@@ -113,10 +88,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
             }
             let i = have + 1;
 
-            // An XML-declared pair for this index? The ref template mechanism: FrameXML declares
-            // the leading pairs (ShoppingTooltipTemplate's small-font ladder, TextLeft1..N), the
-            // class ADOPTS them and, past the ladder, grows lines that clone the previous pair's
-            // faces. GameTooltip declares none, so the header/text defaults hold there.
+            // The template's declared pair for this index (ShoppingTooltipTemplate's ladder).
             let declared = |model: &Model, cell: &str| -> Option<crate::widget::RegionHandle> {
                 if frame_name.is_empty() {
                     return None;
@@ -128,8 +100,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                 let rh = model.id_to_region.get(&id).copied()?;
                 (model.arena.region(rh)?.owner == h).then_some(rh)
             };
-            // Font source for a CREATED cell: the previous line's declared/cloned faces when the
-            // frame carries an XML ladder, else the engine defaults.
+            // A created cell's fonts: the previous line's under an XML ladder, else the defaults.
             let seed_font =
                 |model: &mut Model,
                  d: &mut RegionData,
@@ -179,9 +150,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                     d
                 };
                 d.hidden = true;
-                // Left-justified like the template's line stack — invisible while the rect hugs
-                // the measured text, load-bearing once the wrap consumer pins a region to the
-                // wrap column.
+                // Left-justified as in the template; it shows once a wrap line pins its width.
                 d.justify.set_h(super::JustifyH::Left);
                 d.anchors = vec![match prev_left {
                     None => Anchor::new(
@@ -204,7 +173,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                 }];
                 model.region_data.insert(left, d);
                 model.touch_measure(left); // an adopted cell can arrive text-in-hand
-                model.touch_layout(); // a line row entered the layout graph (decision 0740)
+                model.touch_layout(); // a line row entered the layout graph
             }
             let left_id = model.region_id(left);
 
@@ -232,12 +201,12 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                 d.anchors = vec![Anchor::new(Point::Right, left_id, Point::Right, 0.0, 0.0)];
                 model.region_data.insert(right, d);
                 model.touch_measure(right); // an adopted cell can arrive text-in-hand
-                model.touch_layout(); // a line row entered the layout graph (decision 0740)
+                model.touch_layout(); // a line row entered the layout graph
             }
             let right_id = model.region_id(right);
 
             if !frame_name.is_empty() {
-                // Adopted pairs are already named + published by the loader.
+                // Adopted pairs are already named and published by the loader.
                 if adopted_left.is_none() {
                     let ln = format!("{frame_name}TextLeft{i}");
                     model.region_names.entry(ln.clone()).or_insert(left_id);
@@ -265,7 +234,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
     Ok(())
 }
 
-/// One text cell's write: text + color + shown. `color` alpha defaults opaque.
+/// Writes a line cell's text and colour and shows it.
 pub(super) fn write_cell(
     model: &mut Model,
     rh: crate::widget::RegionHandle,
@@ -275,18 +244,15 @@ pub(super) fn write_cell(
     let d = model.region_data.entry(rh).or_default();
     d.text = Some(text.to_string());
     d.vertex_color = Some(color);
-    // `AddLine("…", r, g, b)`'s colour is this line's OWN colour, exactly as if Lua had called
-    // `SetTextColor` on the cell — so it must survive a later mutation of the font object the
-    // line inherits ([`super::types::FontExplicit`]). Without the mark, one
-    // `GameTooltipText:SetTextColor(…)` would repaint every red/green line in the tooltip.
+    // The line's own colour, as if set by `SetTextColor`: a later
+    // `GameTooltipText:SetTextColor` must not repaint it.
     d.font_explicit.color = true;
     d.hidden = false;
     model.touch_measure(rh);
 }
 
-/// Hide + blank every line cell and zero the counters. The caller fires `OnTooltipCleared`
-/// (outside the model borrow) — the engine-fired widget script the reference wires to its
-/// money-row clear.
+/// Hides and blanks every line cell and resets the counters; the caller fires `OnTooltipCleared`
+/// outside the model borrow.
 pub(super) fn clear_content(model: &mut Model, h: FrameHandle) {
     let (lefts, rights) = match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::Tooltip(t)) => (t.left_lines.clone(), t.right_lines.clone()),
@@ -296,30 +262,10 @@ pub(super) fn clear_content(model: &mut Model, h: FrameHandle) {
         if let Some(d) = model.region_data.get_mut(&rh) {
             d.text = None;
             d.hidden = true;
-            // `measured` is deliberately KEPT. It is a cache whose validity gate is its own
-            // content hash ([`RegionData::measure_key`] over text/font/wrap/outline), so wiping
-            // it here invalidates nothing the key would not — while destroying the one thing that
-            // makes the hover re-enter loop affordable. That loop
-            // (`ContainerFrameItemButton_OnUpdate`, unthrottled in 1.12 and shipped verbatim as
-            // the reference's `ContainerFrameItemButton_OnUpdate`) clears and rebuilds the SAME content
-            // every frame: keeping the cache lets each rebuilt line re-validate against its own
-            // key, so nothing re-shapes, the measure list stays empty, its forced second resolve
-            // never happens, and the layout gate's fingerprint — which exists precisely to
-            // "absorb idempotent writes for free" (layout.rs) — closes over the whole loop.
-            // Wiping it cost +10 CPU ms/frame on a live bag hover (measured 13.2 → 23.9 cpu_ms,
-            // `WOW_CAPTURE=ui-bag` vs `ui-tooltip`); the gate is
-            // `layout_gate::the_hover_re_enter_loop_neither_re_measures_nor_re_solves`.
-            //
-            // The wrap pin (`size`) is likewise KEPT, and for the stronger reason: wiping it here
-            // was the last write that made the hover re-enter loop differ from itself. The wipe
-            // and `append_line`'s re-pin are a round trip inside ONE frame — same cell, same
-            // width, no observable state between them — but each half bumped the layout epoch, so
-            // tier 1 went dirty every hover frame and tier 2 hashed the whole UI to conclude
-            // nothing had moved (~0.65 ms/frame, `WOW_UI_COST=1` on `WOW_CAPTURE=ui-tooltip`, at
-            // solves=0). The pin is now written from the line's own wrap flag at append time —
-            // set for a wrap line, cleared for a plain one — which covers the case this wipe
-            // existed for (a cell whose new content doesn't wrap) without a write per frame.
-            // A hidden, textless cell contributes nothing to layout in between either way.
+            // `measured` and the wrap pin (`size`) stay: the measure cache is keyed by content
+            // ([`RegionData::measure_key`]) and `append_line` rewrites the pin, so the hover
+            // loop's per-frame clear and rebuild (`ContainerFrameItemButton_OnUpdate`) re-measures
+            // and re-lays out nothing.
         }
     }
     if let Ok(t) = tip_mut(model, h) {
@@ -328,9 +274,8 @@ pub(super) fn clear_content(model: &mut Model, h: FrameHandle) {
         t.unit_token = None;
         t.world_owned = false;
     }
-    // The mouseover health bar is UNIT content: it hides with the lines (the ref bar exists
-    // only while a unit shows; the byte law's watcher re-shows it on the next unit render).
-    // Without this, the bar from the last mob hover rode under every ITEM tooltip.
+    // The `<name>StatusBar` health bar is unit content: it hides with the lines, and the next
+    // unit render re-shows it.
     let bar = model
         .arena
         .frame(h)
@@ -341,7 +286,7 @@ pub(super) fn clear_content(model: &mut Model, h: FrameHandle) {
     }
 }
 
-/// Fire `OnTooltipCleared` on the tooltip frame (errors → [`Model::errors`], never propagated).
+/// Fires `OnTooltipCleared`; a script error is recorded, never propagated.
 pub(super) fn fire_cleared(lua: &Lua, h: FrameHandle) {
     let id = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -354,11 +299,9 @@ pub(super) fn fire_cleared(lua: &Lua, h: FrameHandle) {
     }
 }
 
-/// A content `Set*`'s tail: show when it rendered lines, hide when it rendered none. The real
-/// client's uncached path leaves a CLEARED tooltip whose size collapses to nothing — with our
-/// declared-size plate the visible equivalent is a hide; the hover's re-enter repaints the
-/// moment the app answers the ask. Hiding through the arena directly (not [`hide_tooltip`])
-/// keeps the owner: IsOwned must stay true for the re-enter loop.
+/// A content `Set*`'s tail: shown with lines, hidden without. The reference leaves an uncached
+/// tooltip cleared and collapsed to nothing; this plate keeps its declared size, so it hides. It
+/// hides without [`hide_tooltip`] to keep the owner, which the hover loop's `IsOwned` needs.
 pub(super) fn show_or_hide_empty(lua: &Lua, h: FrameHandle) {
     let lines = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -370,10 +313,8 @@ pub(super) fn show_or_hide_empty(lua: &Lua, h: FrameHandle) {
     set_shown(lua, h, lines > 0);
 }
 
-/// Cancel a running fade and restore full alpha (fresh CONTENT does this — re-hovering during
-/// the fade-out resurrects the tooltip at full strength). Conditional on a fade actually running,
-/// because an addon that lowered the plate's alpha itself and then added a line keeps its alpha:
-/// only the three sites in [`full_alpha`] are documented to stamp it back.
+/// New content cancels a running fade at full alpha; with no fade running, an alpha the addon set
+/// stays, since only the paths in [`full_alpha`] reset it.
 fn cancel_fade(model: &mut Model, h: FrameHandle) {
     if let Ok(t) = tip_mut(model, h) {
         if t.fade_start.take().is_some() {
@@ -382,14 +323,8 @@ fn cancel_fade(model: &mut Model, h: FrameHandle) {
     }
 }
 
-/// `SetAlpha(255)` — **UNCONDITIONAL**, and the FIRST thing the SetOwner core `0x52ffe0` does
-/// (`0x52fff4`), before the five stores; `0x530a80`'s show arm does it too, and its self-hide arm
-/// reaches it through `0x530a60` → `0x52ffe0(0, 0, 0, 0)`. So all three of SetOwner, Show and the
-/// effective-hide leave the plate at full strength whether or not one of OUR fades was running
-/// (`0x52ffe0` / `0x530a80`).
-///
-/// [`cancel_fade`] is not this: it only restores the alpha a fade of ours took away, so a plate
-/// left dim by any other path never recovered where the reference recovers on the next SetOwner.
+/// `SetAlpha(255)`, unconditional: the SetOwner core `0x52ffe0` does it first (`0x52fff4`), and
+/// Show (`0x530a80`) and its self-hide (`0x530a60`, the core with no owner) reach it too.
 fn full_alpha(model: &mut Model, h: FrameHandle) {
     if let Ok(t) = tip_mut(model, h) {
         t.fade_start = None;
@@ -397,12 +332,12 @@ fn full_alpha(model: &mut Model, h: FrameHandle) {
     model.arena.set_alpha(h, 1.0);
 }
 
-/// The engine's `GetTime` clock (the `__benilla_now` global [`super::UiScript::tick`] advances).
+/// The engine's `GetTime` clock, which [`super::UiScript::tick`] advances.
 fn now(lua: &Lua) -> f64 {
     lua.globals().get("__benilla_now").unwrap_or(0.0)
 }
 
-/// Show/hide through the arena with the visibility events fired (the shared Show/Hide's path).
+/// Shows or hides through the arena and fires the visibility events.
 pub(super) fn set_shown(lua: &Lua, h: FrameHandle, shown: bool) {
     let changed = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -411,37 +346,15 @@ pub(super) fn set_shown(lua: &Lua, h: FrameHandle, shown: bool) {
     event::fire_visibility_changes(lua, changed);
 }
 
-/// The engine tooltip's default text colour — the byte constant `0xc0d3e8` = `0xffffd200` gold
-/// every no-colour `AddLine`/`SetText` renders with. This is why the reference's zone tooltip is
-/// GOLD despite Minimap.lua's `AddLine(text, "", 1.0, 1.0, 1.0)`: 1.12's binding reads the colour
-/// at its fixed positions, the `""` in the r-slot is not a number, and the whole colour tail is
-/// dropped in favour of this default — the trailing 1.0s never shift into place (the last one is
-/// consumed as the truthy wrap flag). Byte-pinned: the static-init writer `0x528e50` stores
-/// `0xffffd200` at `0xc0d3e8`.
+/// The default line colour, gold `0xffffd200` (stored at `0xc0d3e8` by `0x528e50`). The zone
+/// tooltip's `AddLine(text, "", 1.0, 1.0, 1.0)` (`Minimap.lua:40`) renders in it: the `""` r-slot
+/// drops the whole colour, and the last `1.0` lands in the wrap slot.
 pub(in crate::script) const DEFAULT_TEXT_GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
 
-/// The client's duration-string formatter, `0x52fa50` — the one that turns a millisecond count into
-/// "2 hours remaining" / "45 seconds remaining". Its parameter vector is the binary's: `(V_ms,
-/// keyPrefix, roundUp)`, minus the `extraArg` slot only the enchant line fills.
-///
-/// **The ladder, with the thresholds decoded from the compare instructions** (`52fa76`, `52fab4`,
-/// `52fb03`, falling through to `0x52fb4f`): `≥ 86_400_000` → `_DAYS` · `≥ 3_600_000` → `_HOURS` ·
-/// `≥ 60_000` → `_MIN` · else `_SEC`. Each arm divides by its own threshold, so the number shown is
-/// always in the unit the arm names.
-///
-/// **`roundUp` ceils — but only in the top three arms; `_SEC` always truncates.** That asymmetry is
-/// the whole reason this is a shared function and not four `format!`s, and it is what produces the
-/// reference's three surprising readings: 61 s is "2 minutes remaining" (ceil, not "1"), 3 599 999 ms
-/// is "60 minutes remaining" (the hour arm needs the full hour, so there is no "1 hour" until
-/// exactly 3 600 000), and the final second before an aura lapses reads "**0** seconds remaining"
-/// (truncation, not "1").
-///
-/// **The text is the player's own `GlobalStrings.lua`, never ours.** `get` is the VM-global lookup
-/// (`load_global_strings` runs the shipped file into this VM at boot, off the patch chain); the
-/// template arrives as `"%d minutes remaining"` and the count fills its one `%d`. A key the string
-/// table doesn't carry yields **no line at all** rather than an invented one — the same disposition
-/// 0620 §5 took for a reagent whose template hasn't streamed. That is also why this house ships no
-/// copy of the eight strings: on an install they are read, and off one there is nothing to render.
+/// The client's duration formatter (`0x52fa50`): days, hours, minutes or seconds by threshold,
+/// each dividing by its own unit. `round_up` ceils every arm but seconds, which truncates, so 61 s
+/// reads "2 minutes" and 3 599 999 ms "60 minutes". The text is the player's own
+/// `GlobalStrings.lua` through `get`; a missing key renders no line.
 pub(in crate::script) fn duration_text(
     ms: u32,
     key_prefix: &str,
@@ -462,8 +375,6 @@ pub(in crate::script) fn duration_text(
     } else {
         ("SEC", SEC_MS)
     };
-    // `roundUp` reaches the day/hour/minute arms only — the seconds arm has no rounding branch at
-    // all, so it truncates whatever `roundUp` says.
     let n = if round_up && divisor != SEC_MS {
         ms.div_ceil(divisor)
     } else {
@@ -473,19 +384,9 @@ pub(in crate::script) fn duration_text(
     Some(template.replacen("%d", &n.to_string(), 1))
 }
 
-/// [`crate::strings::plural`] for this module's callers — the `_P1` pick behind
-/// `GetText(token, gender, n)`, whose byte law (and the refuted `> 1` reading: `703c89` is a
-/// *signed* test, so a zero ordinal takes the plural arm and a lapsing aura reads "0 seconds
-/// remaining") now lives with the primitive rather than in a fourth private copy of it. Four
-/// copies of one rule is the shape decision 2045 wrote about; `fill` had eight.
-///
-/// **Gender is not modelled, and that is faithful, not a gap:** `0x52fa50` pushes a literal `0`
-/// on both arms (`52fb8d: 6a 00`, `52fbaa: 6a 00`), which `0x703bf0` turns into nil, and enUS
-/// folds nil to no suffix.
-///
-/// (When BOTH the twin and the bare token are absent the reference renders an EMPTY line, off its
-/// pre-seeded `0x882748`; we render no line at all. Unreachable with shipped data — all eight of
-/// the aura family's keys ship — and off an install there is no string table to be faithful to.)
+/// [`crate::strings::plural`], the `_P1` pick of `GetText(token, gender, n)`. There is no gender:
+/// the formatter passes a literal 0 (`0x52fa50`), which `0x703bf0` reads as nil. With neither key
+/// present the lookup yields "" (`0x882748`), which the line core drops, so no line either way.
 pub(in crate::script) fn plural_template(
     token: &str,
     n: u32,
@@ -494,8 +395,7 @@ pub(in crate::script) fn plural_template(
     crate::strings::plural(token, Some(n), get)
 }
 
-/// A colour-component argument — `lua_tonumber`'s coercion (a numeric string counts, `""` and
-/// other strings don't).
+/// A colour component by `lua_tonumber`'s coercion: a numeric string counts, other strings do not.
 fn color_num(v: Option<&Value>) -> Option<f32> {
     match v {
         Some(Value::Number(n)) => Some(*n as f32),
@@ -505,8 +405,9 @@ fn color_num(v: Option<&Value>) -> Option<f32> {
     }
 }
 
-/// The bindings' boolean-argument read (`GetBoolOrDefault 0x6f1c10`): nil/absent, false, numeric 0,
-/// and the strings `"0"`/`"off"`/`"disabled"` are false; everything else is true.
+/// A wrap flag: nil, false, 0 and the strings "0", "off" and "disabled" are false, anything else
+/// true. The reference reads it with `GetBoolOrDefault` (`0x6f1c10`,
+/// `binding_abi::bool_or_default`), where "false", "no" and 0.5 are false too.
 fn bool_arg(v: Option<&Value>) -> bool {
     match v {
         None | Some(Value::Nil) | Some(Value::Boolean(false)) => false,
@@ -519,12 +420,8 @@ fn bool_arg(v: Option<&Value>) -> bool {
     }
 }
 
-/// The colour block of an `AddLine`-family tail (the values at the r/g/b positions): applied
-/// only when the r-slot is a number (`lua_isnumber 0x6f34d0` — the sole gate);
-/// anything else drops the WHOLE block to the default gold [`DEFAULT_TEXT_GOLD`] — the ref's
-/// gold zone tooltip, whose `(text, "", 1.0, 1.0, 1.0)` shape has `""` at the r-slot. When the
-/// gate passes, g/b are UNGATED `lua_tonumber` reads: a missing/non-number component is **0.0**
-/// (byte-pinned). Alpha is forced opaque (the bindings pack `0xFF`).
+/// An `AddLine`-family colour, gated on the r-slot alone (`lua_isnumber`, `0x6f34d0`), else
+/// [`DEFAULT_TEXT_GOLD`]; past the gate a non-number g or b reads 0, and alpha is always opaque.
 fn parse_line_color(r: Option<&Value>, g: Option<&Value>, b: Option<&Value>) -> [f32; 4] {
     match color_num(r) {
         Some(r) => [
@@ -537,9 +434,8 @@ fn parse_line_color(r: Option<&Value>, g: Option<&Value>, b: Option<&Value>) -> 
     }
 }
 
-/// Parse an `AddLine` tail (the args after `text`): positional `r, g, b, wrapText` — the
-/// byte-pinned `0x531630` signature. The wrap flag is read at its position REGARDLESS of the
-/// colour gate (the ref's zone-tooltip shape wraps: its trailing `1.0` lands in the wrap slot).
+/// An `AddLine` tail, positional `r, g, b, wrap` (`0x531630`); the wrap flag is read whatever the
+/// colour gate decides.
 fn parse_line_tail(args: &[Value]) -> ([f32; 4], bool) {
     (
         parse_line_color(args.first(), args.get(1), args.get(2)),
@@ -547,8 +443,7 @@ fn parse_line_tail(args: &[Value]) -> ([f32; 4], bool) {
     )
 }
 
-/// A Lua text argument → the line's string: strings pass through, numbers stringify (Lua
-/// coercion), nil/absent is an empty line (`GameTooltip:AddLine()` ships in the corpus).
+/// A text argument as a line's string: numbers stringify as Lua does, and nil is empty.
 fn text_of(v: Option<&Value>) -> String {
     match v {
         Some(Value::String(s)) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
@@ -565,10 +460,9 @@ fn text_of(v: Option<&Value>) -> String {
     }
 }
 
-/// Append one line (both columns; `right = None` leaves the right cell hidden). Grows the pool,
-/// writes the cells, bumps `num_lines` (+ the line's wrap flag), cancels any fade. Does NOT show
-/// the tooltip — `AddLine` leaves showing to the caller (the corpus' `AddLine … Show()`),
-/// `SetText`/the content builders show themselves.
+/// Appends one line and cancels any fade, without showing the tooltip: `AddLine` callers call
+/// `Show`. The reference's line core drops a line whose sides are both empty (`0x530270`); this
+/// appends it.
 pub(super) fn append_line(
     lua: &Lua,
     this: &Table,
@@ -585,30 +479,14 @@ pub(super) fn append_line(
         _ => return Err(mlua::Error::runtime("not a GameTooltip")),
     };
     write_cell(&mut model, lh, &left.0, left.1);
-    // A wrap-flagged line PINS its wrap column at write time, so its very first measure ask
-    // carries the width and comes back WRAPPED (multi-row height) in the same frame. The old
-    // shape — layout re-pinning after an overflowing single-line measure — needed a second
-    // round-trip that the bag re-enter loop's per-frame content clear kept wiping out: wrapped
-    // lines never converged live (the plate under-counted their rows forever — the bread/
-    // hearthstone spill). One step, no oscillation.
-    // The wrap pin is written from the LINE's own flag every append — set for a wrap line,
-    // cleared for a plain one — so a cell that changes role can never keep a stale pin, and
-    // `clear_content` needs no wipe of its own (which is what used to make this write differ
-    // every frame). The epoch bump is gated on a REAL change: in the hover re-enter loop the
-    // rebuilt line pins the same width it already carried, so tier 1 stays clean and the
-    // whole-UI fingerprint (tier 2) never runs — see `clear_content`'s note.
+    // The wrap width is pinned at append, so the first measure already comes back wrapped. It is
+    // written from this line's own flag every time, and layout is touched only on a change.
     let pin = wrap.then_some((crate::widget::TOOLTIP_WRAP_WIDTH, 0.0));
     if let Some(d) = model.region_data.get_mut(&lh) {
         if d.size != pin {
             d.size = pin;
-            // NAMED, not conservative. This writes one region's EXPLICIT SIZE and
-            // nothing else — no anchor target, no roster membership — which is the exact shape
-            // 1388 migrated every size setter to. It was missed because it is an internal write
-            // rather than a `SetWidth` binding, and the miss is expensive in the one place it can
-            // least afford to be: the pin flips whenever a line changes ROLE between wrapped and
-            // plain, which is what every hover from one item or spell to a differently-shaped one
-            // does. A conservative touch there re-derives the whole layout graph — every live
-            // frame's scale re-synced, every anchored region re-hashed — on each hover.
+            // A size-only write takes the named touch: a conservative one would re-derive the
+            // whole layout graph on every hover that turns a line between wrapped and plain.
             model.touch_layout_region(lh);
             // The wrap pin is the measure key's wrap-width input.
             model.touch_measure(lh);
@@ -627,8 +505,7 @@ pub(super) fn append_line(
 mod verbs;
 pub(super) use verbs::install;
 
-/// The full hide: drop the owner, cancel the fade, clear the content, hide the frame, fire
-/// `OnTooltipCleared`. Shared by the `Hide` method and the fade's end-of-ramp.
+/// The full hide shared by `Hide`, a `Show` with no owner or no lines, and the end of a fade.
 pub(super) fn hide_tooltip(lua: &Lua, h: FrameHandle) {
     {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -642,14 +519,8 @@ pub(super) fn hide_tooltip(lua: &Lua, h: FrameHandle) {
     fire_cleared(lua, h);
 }
 
-/// One line cell's layout input: `Some((w, h))` once the cell is shown with text AND the measure
-/// round-trip has answered; one floored unit each way for a shown but EMPTY cell (the reference's
-/// `AddLine("")` adds no line at all, and its virtual `GetHeight` never reads back `0.0`); `None`
-/// for hidden/cleared cells and for PENDING measures. A pending cell contributes nothing — no
-/// width, no height, and (in the caller) no gaps — so a fresh tooltip holds its declared default
-/// size until real extents land, instead of collapsing to a gaps-only rect (the guard the first
-/// cut got wrong: it summed LINE_GAP/DOUBLE_GAP for unmeasured rows, caught by the migration
-/// pass).
+/// A line cell's measured extent; `None` for a hidden or unmeasured cell, which adds no size and
+/// no gap, so a fresh tooltip keeps its declared size until its lines are measured.
 type Cell = Option<(f32, f32)>;
 
 fn cell(model: &Model, rh: crate::widget::RegionHandle) -> Cell {
@@ -659,11 +530,8 @@ fn cell(model: &Model, rh: crate::widget::RegionHandle) -> Cell {
         return None;
     }
     if text.is_empty() {
-        // The same floor the sweep applies to the line's own rect (`layout::FONTSTRING_MIN_SPAN`):
-        // the reference's `GetHeight 0x772a60` is virtual and ends in a one-unit clamp, so `0.0` is
-        // not a height any caller — plate arithmetic included — can read back off a FontString.
-        // Reporting zero here while the chain below the row resolved one unit is the B309 shape at
-        // 1/14th the size, and the point of one constant is that the two cannot drift apart.
+        // One unit each way, the floor of the line's own rect: the reference's `GetHeight`
+        // (`0x772a60`) clamps to one unit, so no FontString reads back 0.
         return Some((
             super::layout::FONTSTRING_MIN_SPAN,
             super::layout::FONTSTRING_MIN_SPAN,
@@ -672,52 +540,13 @@ fn cell(model: &Model, rh: crate::widget::RegionHandle) -> Cell {
     d.measured.map(|m| (m.w, m.h))
 }
 
-/// The auto-size + right-flush pre-pass, run at the top of every layout resolve:
-/// for each live GameTooltip, frame size = max measured line width (a double line is
-/// left + gap + right) + 2·pad, floored by `SetMinimumWidth`, × summed line heights + gaps; each
-/// visible right column's anchor re-points so its right edge sits at the text inset. Skips
-/// frames whose lines haven't been measured yet — the XML default size holds until the extents
-/// land. With a [`TextMeasure`](super::TextMeasure) installed that is the SAME `resolve`
-/// (`resolve` solves, fills the pending measures inline, and solves again, so this pre-pass runs
-/// a second time with real extents); without one it is the host's batch round-trip, one frame
-/// later, which is the engine-less path every measurer-free VM still takes.
-/// **ANCHOR_CURSOR — mode 6, re-anchored to the live cursor every frame** (`0x530b20`, the
-/// `CGameTooltip` override of `vtable+0x38` on `0x808f60`). Nine corpus files ask for it — `pfUI`'s
-/// tooltip, xpbar and chat modules, `pfQuest/browser.lua`, `TipBuddy` — and until decision 2176
-/// benilla warned and placed them by some other mode.
-///
-/// The whole of the re-anchor is one `SetPoint`:
-///
-/// ```text
-/// 530b32  cmp [this+0x318],6 ; jne                    -- every other mode skips
-/// 530b3b  eax = [this+0xa0]                           -- the CSimpleTop root == [0xcf0bd8]
-/// 530b4f  ecx = [eax+0x111c] ; edx = [eax+0x1118]     -- the SAVED cursor, normalised [0,1]
-/// 530b63  call 0x41ad80                               -- x *= G44 (screen w), y *= G48 (screen h)
-/// 530b68  fld [this+0x7c] ; fdivr 1.0f                -- 1 / the tooltip's own effective scale
-/// 530b97  call 0x767c70(BOTTOM=7, [0xcf0bd8], BOTTOMLEFT=6, x/scale, y/scale, doResolve=1)
-/// ```
-///
-/// So **the plate's BOTTOM-centre is pinned to the screen's BOTTOMLEFT plus the cursor's absolute
-/// position** — centred horizontally on the cursor and sitting directly above it. Four details are
-/// worth keeping because none is guessable from the name:
-///
-/// * The `relativeTo` is the screen root passed **raw**, not `+0x24` like every other anchor — the
-///   `CSimpleTop`'s `CLayoutFrame` base sits at offset 0. Ours is [`SCREEN`](super::SCREEN), which
-///   is the same object.
-/// * The **divide by the tooltip's own effective scale** is the "cursor box recip": an anchor
-///   offset is stored raw and multiplied by the child's scale at resolve time, so dividing here is
-///   what makes the result land at the cursor's *absolute* position. Ours does the same divide,
-///   against the same scale [`GetWidth`](super::object::eff_scale) reads.
-/// * **The `SetOwner`-time offsets `+0x3c4/+0x3c8` do not participate** — 12 reads of them, every
-///   one on a modes-0..5 arm of `0x52fe90`.
-/// * There is **no `ClearAllPoints` here** (earned zero over the function's complete call set): one
-///   anchor slot is overwritten, and `0x767c70`'s own no-op gate — same target, same
-///   `relativePoint`, both offsets within 2⁻²² — is what keeps a still cursor free.
-///
-/// It runs from the per-frame update pump, which a hidden tooltip is not in (`0x76ad9d`
-/// deregisters on hide), and in the **same frame** as the placement it produces: the layout drain
-/// `0x768ed0` runs at `0x765799`, right after the `+0x38` loop and before the draw. Hence its home
-/// here, at the top of the resolve, beside the auto-size pass.
+/// `ANCHOR_CURSOR` (mode 6), re-anchored every frame by the update override `0x530b20`: one
+/// `SetPoint` (`0x767c70`) pins the plate's BOTTOM to the screen root's BOTTOMLEFT (`0xcf0bd8`)
+/// at the cursor position divided by the tooltip's own effective scale, so it sits centred above
+/// the cursor. There is no `ClearAllPoints`, and `SetPoint`'s no-op gate keeps a still cursor
+/// free. The `SetOwner` offsets play no part (only `0x52fe90` reads them). Only a shown tooltip is
+/// in the update pump (`0x76ad9d`), and the placement lands the same frame, before the layout
+/// drain (`0x768ed0`).
 fn cursor_anchor(model: &mut Model, h: FrameHandle) {
     let scale = crate::script::object::eff_scale(model, h);
     let (cx, cy) = model.cursor_pos;
@@ -729,7 +558,7 @@ fn cursor_anchor(model: &mut Model, h: FrameHandle) {
         cy / scale,
     );
     let input = model.layout_inputs.entry(h).or_default();
-    // `0x767c70`'s change-detect, in our own terms: one slot, replaced only on a real change.
+    // `0x767c70`'s change detect: the one slot is replaced only on a real change.
     let same =
         input.anchors.len() == 1 && crate::script::object::anchor_bits_eq(&input.anchors[0], &new);
     if same {
@@ -741,10 +570,8 @@ fn cursor_anchor(model: &mut Model, h: FrameHandle) {
 }
 
 pub(super) fn layout_tooltips(model: &mut Model) {
-    // The arena's tooltip registry, not the resolve's whole frame roster: this pre-pass runs at
-    // the top of EVERY resolve, and finding two or three tooltips by scanning ~4000 ids was most
-    // of what it cost. `frame_to_id` still gates each one — a tooltip outside the
-    // resolve's roster would mint an id here and take the ledger's conservative branch with it.
+    // Only tooltips in the resolve's roster: one outside it would mint an id here and take the
+    // layout ledger's conservative branch.
     let tips: Vec<FrameHandle> = model
         .arena
         .tooltip_kinds()
@@ -753,9 +580,7 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         .filter(|h| model.frame_to_id.contains_key(h))
         .collect();
     for h in tips {
-        // Mode 6 first, and **before the line gate below**: the reference's per-frame update is
-        // not gated on content at all, only on the plate being in the pump's list — which is the
-        // shown list. See [`cursor_anchor`].
+        // Mode 6 runs before the line gate: the reference re-anchors any shown plate, lines or not.
         let cursor_mode = match model.arena.frame(h).map(|f| (&f.kind_state, f.shown)) {
             Some((KindState::Tooltip(t), shown)) => shown && t.anchor == TooltipAnchor::Cursor,
             _ => false,
@@ -776,13 +601,6 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         if num == 0 {
             continue;
         }
-        // (Wrap columns are pinned at append time — append_line — so every measure here is
-        // already the wrapped one; no second round-trip.)
-        // Per-line metrics next (one read pass), then the size + right-flush writes. Only
-        // measured cells contribute — a row with no measured cell adds no height and no gap, and
-        // a tooltip with nothing measured yet is skipped whole (its declared size holds until the
-        // extents land — this resolve's own `fill_measures` with a measurer installed, the host's
-        // batch round-trip a frame later without one).
         let n = num.min(lefts.len()).min(rights.len());
         let rows: Vec<(Cell, Cell)> = (0..n)
             .map(|i| (cell(model, lefts[i]), cell(model, rights[i])))
@@ -804,22 +622,20 @@ pub(super) fn layout_tooltips(model: &mut Model) {
             maxw = maxw.max(lw + rw);
         }
         if counted == 0 {
-            continue; // nothing measured yet — hold the declared size
+            continue; // nothing measured yet: the declared size holds
         }
         maxw = maxw.max(min_w);
         if maxw <= 0.0 || totalh <= 0.0 {
             continue;
         }
         let input = model.layout_inputs.entry(h).or_default();
-        // `pad_w` = SetPadding's extra width (ref ItemRefTooltip: room for the close button).
+        // `pad_w` is `SetPadding`'s extra width (ItemRefTooltip's room for its close button).
         input.width = maxw + 2.0 * TOOLTIP_PAD + pad_w;
         input.height = totalh + 2.0 * TOOLTIP_PAD;
-        // This pre-pass runs INSIDE the resolve, so it must not open tier 1 (see the note method's
-        // own doc) — but the per-node ledger decision 1388's incremental pass seeds from still has
-        // to hear that these two inputs were written by something other than a Lua setter.
+        // Inside the resolve, so a note and not a touch; the incremental pass still has to hear
+        // that these inputs changed.
         model.note_layout_frame_write(h);
-        // Right-flush each double line: right edge = left.right + (maxw − left.width)
-        // = frame.left + pad + maxw = the text inset's right.
+        // Right-flush each double line: left.right + (maxw - left.width) is the text inset.
         for (i, (l, r)) in rows.iter().enumerate() {
             if r.is_none() {
                 continue;
@@ -839,19 +655,15 @@ pub(super) fn layout_tooltips(model: &mut Model) {
     }
 }
 
-/// Advance every fading tooltip (called from [`super::UiScript::tick`], the ScrollingMessage/
-/// Cooldown pattern): alpha ramps 1→0 over [`TOOLTIP_FADE_SECS`]; at the end the tooltip hides
-/// for real (owner dropped, content cleared, `OnTooltipCleared` fired).
+/// Advances every fading tooltip: alpha ramps from 1 to 0 over [`TOOLTIP_FADE_SECS`], then the
+/// full hide.
 pub(super) fn tick_fades(lua: &Lua) {
     let t = now(lua);
     let mut ramping: Vec<(FrameHandle, f32)> = Vec::new();
     let mut finished: Vec<FrameHandle> = Vec::new();
     {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        // The arena's tooltip registry (1634) — this runs every tick, and the roster it used to
-        // walk is ~4000 entries at a corpus UI. The `frame_to_id` gate is kept: `hide_tooltip`
-        // below writes layout, and a frame outside the resolve's roster takes the ledger's
-        // conservative branch.
+        // Roster-gated as in `layout_tooltips`, since `hide_tooltip` below writes layout.
         for &h in model.arena.tooltip_kinds() {
             if !model.frame_to_id.contains_key(&h) {
                 continue;
@@ -866,7 +678,7 @@ pub(super) fn tick_fades(lua: &Lua) {
                 continue;
             };
             if !frame.shown {
-                finished.push(h); // hidden mid-fade by other means — just tidy the state
+                finished.push(h); // hidden mid-fade by other means: just tidy the state
                 continue;
             }
             let a = 1.0 - ((t - start) / TOOLTIP_FADE_SECS) as f32;

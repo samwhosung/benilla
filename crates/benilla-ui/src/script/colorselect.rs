@@ -1,53 +1,10 @@
-//! The `ColorSelect` method surface — the `CSimpleColorSelect` widget behavior over the kind tag
-//! (factory `0x6eef90`; LoadXML `0x78b3f0`, script-map `0x78b4f0`). The widget holds one colour and
-//! fires `OnColorSelect` (its own
-//! script slot, `+0x338`) when that colour is set.
-//!
-//! **Why this is engine-side and not four lines of Lua on `ColorPickerFrame`.** The corpus creates
-//! its own: `TipBuddy.xml` declares two `<ColorSelect>` frames (`TBColorPickerFrame`,
-//! `TBColorPickerFrame_Text`), each with its own `<OnColorSelect>` handler, and drives them with
-//! `SetColorRGB`/`GetColorRGB`. A method table hung on the one frame `assets/ui` ships would leave
-//! those two with a widget that has no methods — the "privileged built-in" failure the `.toc`
-//! header names. So it lives with `Slider`/`StatusBar`, in the per-kind dispatcher.
-//!
-//! **The colour law is byte-verified, and it is not what it looks like.** This module was first
-//! written against the obvious model — store three RGB bytes, hand them back — which is wrong.
-//! Two corrections, both load-bearing:
-//!
-//! 1. **The state is HSV `f32`, not RGB** — see [`ColorSelectState`] for the members and why.
-//! 2. **The round trip is not the identity.** Inbound and outbound use *different* quantizers
-//!    (round-half-up vs floor), so `SetColorRGB` → `GetColorRGB` returns a channel one step low on
-//!    **9.7527 % of all 256³ reachable colours** — and, because the map is idempotent-free, the
-//!    FrameXML idiom `r,g,b = f:GetColorRGB() … f:SetColorRGB(r,g,b)` **ratchets** a channel
-//!    downward one step per cycle. `SetColorRGB(0, 1, 1)` fires `OnColorSelect(0, 254/255, 1)`.
-//!    Every Ace2/Dewdrop colour option is that idiom, once per open-and-accept, so this is visible
-//!    behaviour, not a curiosity — it is transcribed because it is what the client computes, and
-//!    [`ColorSelectState`]'s docs record the one-line change that would undo it if it ever must go.
-//!
-//! **`SetColorRGB` fires `OnColorSelect`, synchronously, on every call.** VERIFIED at the bytes:
-//! `0x78ed01 call 0x78bae0` is a plain fall-through of the last basic block, and inside it the only
-//! conditional (`0x78bafd`) tests whether a handler is *bound*. There is deliberately **no
-//! change-gate** — the contrast with [`crate::widget::SliderState::store_value`] is real and was
-//! verified the other way in the same pass (`CSimpleSlider::SetValue 0x789930` skips on equal at
-//! `0x789a16`): two sibling widgets in one band, opposite gating. It matters here because a caller
-//! re-setting the colour it already holds still expects its `func` to run — which is exactly how a
-//! Dewdrop colour row opens, and how the reference's own `ColorPickerFrame.xml` paints its preview
-//! swatch (nothing else ever writes it).
-//!
-//! **The four texture accessors are carried** (`SetColorWheelTexture` `0x78de90` /
-//! `SetColorWheelThumbTexture` `0x78e160` / `SetColorValueTexture` `0x78e450` /
-//! `SetColorValueThumbTexture` `0x78e720`, plus the getters `0x78dd80`/`0x78e070`). They had zero
-//! callers in the 218-addon corpus and waited for one under decision 1195; the customer that
-//! arrived is our own `ColorPickerFrame.xml`, whose four elements the XML loader installs through
-//! exactly these — two of them with **no file at all**, because the disc and the strip are pixels
-//! the client computes and the app renderer now computes too (the wheel `0x78b580`
-//! and the value strip `0x78b8a0` generate them).
-//!
-//! **NOT carried, still waiting for a customer:** `SetColorHSV`/`GetColorHSV`
-//! (`0x78e920`/`0x78ea00`) — zero corpus callers, though the state they would read and write is
-//! now the right shape for them, and [`ColorSelectState::set_hsv`] is already the store they'd
-//! use (three *raw* `f32` — no clamp, no quantize, zero `fcom` in its body), because the drag path
-//! needs exactly that.
+//! The `ColorSelect` methods: the `CSimpleColorSelect` widget (factory `0x6eef90`, XML load
+//! `0x78b3f0`), one colour held as HSV floats. `SetColorRGB` fires `OnColorSelect` (script map
+//! `0x78b4f0`, slot `+0x338`) on every call: `0x78ed01` calls `0x78bae0`, whose only test
+//! (`0x78bafd`) is for a bound handler, while `CSimpleSlider::SetValue` (`0x789930`) skips an equal
+//! value. The RGB round trip loses a step on 9.75 % of colours, as in the reference: in and out use
+//! different quantizers (round-half-up, then floor), so reading back and setting ratchets a channel
+//! down; see [`ColorSelectState`].
 
 use mlua::{Lua, Table, Value};
 
@@ -59,13 +16,11 @@ use crate::layout::Rect;
 use crate::order::DrawLayer;
 use crate::widget::{ColorSelectState, FrameHandle, KindState, RegionHandle, RegionKind};
 
-/// Registry key of the ColorSelect method table (the MAXCSTACK discipline: Lua-side root, named
-/// key).
+/// Registry key of the ColorSelect method table (the MAXCSTACK discipline: a Lua-side root).
 pub(super) const REG_COLORSELECT_METHODS: &str = "__benilla_colorselect_methods";
 
-/// Run `f` over a frame's ColorSelect state under one short write borrow. Errors if `this` is not a
-/// live ColorSelect (unreachable through the kind dispatcher, but the method table is a plain Lua
-/// value — a caller could fish it out and misapply it).
+/// Run `f` over a frame's ColorSelect state under one short write borrow; errors if `this` is not
+/// a live ColorSelect, as the method table is a plain Lua value a caller can misapply.
 fn with_colorselect<T>(
     lua: &Lua,
     this: &Table,
@@ -83,9 +38,8 @@ fn with_colorselect<T>(
     }
 }
 
-/// One of the widget's four texture sub-objects. The wheel and the strip are the two the press
-/// handler (`0x78bf10`) hit-tests (`[+0x318]+0x24` and `[+0x320]+0x24`);
-/// the two thumbs are pure output, positioned from the HSV at extract.
+/// One of the widget's four texture sub-objects: the press handler (`0x78bf10`) hit-tests the
+/// wheel (`+0x318`) and the strip (`+0x320`); the thumbs are output only, placed at extract.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Slot {
     Wheel,
@@ -114,8 +68,8 @@ impl Slot {
         *slot = Some(rh);
     }
 
-    /// The layer a slot's region is born on: the wheel is bound at layer 2 (ARTWORK) through
-    /// `0x77fd10`, with the two markers on OVERLAY above the art they ride.
+    /// The layer a slot's region is born on: ARTWORK for the art (the wheel's layer 2, through
+    /// `0x77fd10`), OVERLAY for the two markers above it.
     fn layer(self) -> DrawLayer {
         match self {
             Slot::Wheel | Slot::ValueStrip => DrawLayer::Artwork,
@@ -124,8 +78,7 @@ impl Slot {
     }
 }
 
-/// Get-or-create one slot's texture region; `layer` re-layers an existing one. Returns the region
-/// id (for wrapper lookup). The Slider's `ensure_thumb` is the same function one slot wider.
+/// Get-or-create one slot's texture region, `layer` re-layering an existing one; returns its id.
 fn ensure_slot(lua: &Lua, this: &Table, slot: Slot, layer: Option<DrawLayer>) -> mlua::Result<u32> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -153,7 +106,7 @@ fn ensure_slot(lua: &Lua, this: &Table, slot: Slot, layer: Option<DrawLayer>) ->
                 .create_region(h, RegionKind::Texture, layer.unwrap_or(slot.layer()), 0)
                 .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
             model.region_data.insert(rh, RegionData::default());
-            model.touch_layout(); // a region entered the layout gate's read set (decision 0740)
+            model.touch_layout(); // a region entered the layout gate's read set
             if let Some(frame) = model.arena.frame_mut(h) {
                 if let KindState::ColorSelect(s) = &mut frame.kind_state {
                     slot.set(s, rh);
@@ -165,10 +118,9 @@ fn ensure_slot(lua: &Lua, this: &Table, slot: Slot, layer: Option<DrawLayer>) ->
     Ok(model.region_id(rh))
 }
 
-/// `Set<Slot>Texture([path [, drawLayer]] | r, g, b [, a])`, the Slider's `SetThumbTexture` two-form
-/// plus a **third**: called with nothing at all it just creates the region. That empty form is not a
-/// convenience — it is the only one the two file-less elements can use, and it is what
-/// `<ColorWheelTexture/>` means. A slot left file-less is where the app renderer paints.
+/// `Set<Slot>Texture([path [, drawLayer]] | r, g, b [, a])`, plus an empty form that only creates
+/// the region: what `<ColorWheelTexture/>` means. A file-less slot is where the app renderer paints
+/// the disc and strip the reference computes (`0x78b580`, `0x78b8a0`).
 fn install_slot_texture(
     lua: &Lua,
     m: &Table,
@@ -232,7 +184,6 @@ fn install_slot_texture(
     Ok(())
 }
 
-/// A Lua number argument as `f32`, 0 for anything else — the Slider's own colour-form helper.
 fn num_f32(v: &Value) -> f32 {
     match v {
         Value::Number(n) => *n as f32,
@@ -246,16 +197,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     m.set(
         "SetColorRGB",
-        // Shape C on r, g, b (`ColorSelect:SetColorRGB 0x78eae0`, `2=C 3=C 4=C 5=B`): bare
-        // `lua_tonumber`, nil → 0.0, no raise.
+        // Shape C on r, g, b (`ColorSelect:SetColorRGB 0x78eae0`, `2=C 3=C 4=C 5=B`).
         lua.create_function(|lua, (this, r, g, b): (Table, Value, Value, Value)| {
             let (r, g, b) = (
                 crate::script::object::as_f64(&r),
                 crate::script::object::as_f64(&g),
                 crate::script::object::as_f64(&b),
             );
-            // Store through the client's quantize, then fire with what the widget now *holds* —
-            // the round-tripped values, identical to the next GetColorRGB, not the raw arguments.
+            // Store through the client's quantizer, then fire with what the widget now holds: the
+            // round-tripped values, identical to the next `GetColorRGB`, not the raw arguments.
             let (qr, qg, qb) = with_colorselect(lua, &this, |s| {
                 s.set_rgb(r, g, b);
                 s.rgb_f64()
@@ -268,10 +218,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| with_colorselect(lua, &this, |s| s.rgb_f64()))?,
     )?;
 
-    // The four texture accessors (`0x78de90`/`0x78e160`/`0x78e450`/`0x78e720` and the getters
-    // `0x78dd80`/`0x78e070`). They had zero corpus callers and waited for one; the
-    // customer that arrived is our own `ColorPickerFrame.xml`, whose four elements the XML loader
-    // installs through exactly these.
+    // The four texture accessors (`0x78de90`, `0x78e160`, `0x78e450`, `0x78e720`; getters
+    // `0x78dd80`, `0x78e070`), through which the XML loader installs a ColorSelect's elements.
     install_slot_texture(
         lua,
         &m,
@@ -305,9 +253,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Fire `OnColorSelect(self, r, g, b)` — the widget's own script slot (`+0x338`). Fired
-/// outside the model borrow; a handler error goes to [`Model::errors`] rather than back to the
-/// setter's caller, the same posture as the Slider's `OnValueChanged`.
+/// Fire `OnColorSelect(self, r, g, b)`; a handler error goes to [`Model::errors`], not the caller.
 fn fire_color_select(lua: &Lua, this: &Table, r: f64, g: f64, b: f64) -> mlua::Result<()> {
     let id = {
         let h = frame_handle_of(lua, this)?;
@@ -327,27 +273,21 @@ fn fire_color_select(lua: &Lua, this: &Table, r: f64, g: f64, b: f64) -> mlua::R
     Ok(())
 }
 
-/// The wheel's normalised coordinates for a cursor at `(x, y)`: the offset from the wheel rect's
-/// centre, scaled by its **half-extents** — so a non-square wheel normalises to a disc, not an
-/// ellipse (`0x78bdd0`..: `nx=(x−cx)/((right−left)·0.5)`, `ny=(y−cy)/((top−bottom)·0.5)`). y is up,
-/// this arena's convention and the client's.
+/// The wheel's normalised coordinates for `(x, y)`: the offset from its centre over its
+/// half-extents, so a non-square wheel normalises to a disc (`0x78bdd0`); y is up, as the client's.
 fn wheel_norm(r: Rect, x: f32, y: f32) -> (f32, f32) {
     let hw = (r.right - r.left) * 0.5;
     let hh = (r.top - r.bottom) * 0.5;
     let cx = (r.left + r.right) * 0.5;
     let cy = (r.bottom + r.top) * 0.5;
-    // A degenerate rect (an unresolved region) would divide by zero; the client cannot reach that
-    // state because it only hit-tests a laid-out texture, and neither can we — but 0/0 is NaN, and
-    // NaN in the HSV would poison every colour after it.
+    // A zero-size rect gives 0, not NaN, which would poison every colour after it.
     let nx = if hw != 0.0 { (x - cx) / hw } else { 0.0 };
     let ny = if hh != 0.0 { (y - cy) / hh } else { 0.0 };
     (nx, ny)
 }
 
-/// The hue/saturation a press or drag at `(x, y)` writes, given the wheel's rect. `H` runs from
-/// `atan2(ny, nx) + π` in degrees — so the wheel's **left** edge is 0°/360° (red) and its right edge
-/// 180° (cyan) — and `S` is the radius, clamped at the rim. Raw f32 the whole way: the drag path
-/// never touches a quantizer.
+/// The hue and saturation a press or drag at `(x, y)` writes: the wheel's left edge is 0° (red)
+/// and its right 180° (cyan), `S` is the radius clamped at the rim, and nothing is quantized.
 fn wheel_hs(r: Rect, x: f32, y: f32) -> (f32, f32) {
     let (nx, ny) = wheel_norm(r, x, y);
     let radius = (nx * nx + ny * ny).sqrt();
@@ -355,9 +295,8 @@ fn wheel_hs(r: Rect, x: f32, y: f32) -> (f32, f32) {
     (hue, radius.min(1.0))
 }
 
-/// The brightness a press or drag at `y` writes, given the strip's rect: the fraction of the way up
-/// it, clamped — `V = clamp((y − bottom) / (top − bottom), 0, 1)` (`0x78beed`). x is ignored, which
-/// is why a drag that wanders sideways off the strip keeps working.
+/// The brightness a press or drag at `y` writes: the clamped fraction of the way up the strip
+/// (`0x78beed`); x is ignored, so a drag may wander sideways off it.
 fn strip_value(r: Rect, y: f32) -> f32 {
     let span = r.top - r.bottom;
     if span == 0.0 {
@@ -366,22 +305,11 @@ fn strip_value(r: Rect, y: f32) -> f32 {
     ((y - r.bottom) / span).clamp(0.0, 1.0)
 }
 
-/// The wheel thumb's rect: the marker seated at the point the current `(H, S)` *came from*. It is
-/// the inverse of [`wheel_hs`], which is the whole invariant — click a pixel, the marker lands on
-/// that pixel.
-///
-/// Byte-exact to `0x78bc20`, which does
-/// `SetPoint(CENTER, wheel, CENTER, −m·cos θ, −m·sin θ)` with `θ = H·π/180` and
-/// `m = GetWidth(wheel)·0.5·S`. Its two `fchs` are the pick law's `+π` seen from the other side:
-/// drop either sign and the marker sits diametrically opposite the colour it marks.
-///
-/// **The width is used on both axes**, deliberately — the client reads `GetWidth` for the vertical
-/// offset too, while the pick law divides `y` by half-*height*. On a non-square wheel the two
-/// therefore disagree, and that asymmetry is reproduced rather than fixed. The reference's wheel is
-/// square, so it costs nothing there and would cost fidelity anywhere else.
-///
-/// `S == 0` puts it dead centre whatever the hue is, which is what makes the `-1` grey sentinel
-/// (`ColorSelectState::hsv`) harmless here: it is multiplied by a zero radius.
+/// The wheel marker's rect, seated where the current `(H, S)` came from, the inverse of
+/// [`wheel_hs`]: `0x78bc20` sets its `CENTER` at `(−m·cos θ, −m·sin θ)` from the wheel's, with
+/// `m = GetWidth(wheel)·0.5·S`, the negations being the pick's `+π`. The width serves both axes,
+/// as in the reference, though the pick divides y by half the height. `S == 0` centres it, so the
+/// `-1` grey hue sentinel is harmless.
 pub(super) fn wheel_thumb_rect(wheel: Rect, thumb_size: Option<(f32, f32)>, hsv: [f32; 3]) -> Rect {
     let (tw, th) = thumb_size.unwrap_or((0.0, 0.0));
     let cx = (wheel.left + wheel.right) * 0.5;
@@ -392,16 +320,10 @@ pub(super) fn wheel_thumb_rect(wheel: Rect, thumb_size: Option<(f32, f32)>, hsv:
     Rect::new(y - th * 0.5, x - tw * 0.5, y + th * 0.5, x + tw * 0.5)
 }
 
-/// The value thumb's rect: centred on the strip horizontally (the reference's marker is 48 wide
-/// over a 32-wide strip, so it deliberately overhangs) and seated `V` of the way up from its
-/// BOTTOM — `0x78bcf0`'s `SetPoint(CENTER, strip, BOTTOM, 0, V·GetHeight)`.
-///
-/// **The height it scales by is the WHEEL's, not the strip's** — `0x78bcf0` dereferences
-/// `[this+0x318]`, the wheel, with no null guard of its own, while anchoring to the strip. The two
-/// are both 128 tall in the reference, so it is invisible there; it is reproduced because a client
-/// that "fixed" it would place the marker somewhere the real one does not the moment an addon
-/// declares a strip of its own height. A widget with no wheel falls back to the strip, which is the
-/// nearest thing to the client's unguarded read that does not put a NaN in a rect.
+/// The value marker's rect: centred on the strip and `V` of the way up from its bottom
+/// (`0x78bcf0`), scaled by the wheel's height, not the strip's, as the reference reads
+/// `[this+0x318]`. Deviation: with no wheel it scales by the strip's, because the reference reads
+/// the missing wheel unguarded.
 pub(super) fn value_thumb_rect(
     strip: Rect,
     wheel: Option<Rect>,
@@ -415,11 +337,8 @@ pub(super) fn value_thumb_rect(
     Rect::new(y - th * 0.5, cx - tw * 0.5, y + th * 0.5, cx + tw * 0.5)
 }
 
-/// The in-flight colour drag. The client keeps **two independent flags** (`+0x314` wheel, `+0x315`
-/// strip), both set by the same press if the rects overlap at the cursor, and its cursor-position
-/// handler applies whichever are set — so this is a pair of bools, not an enum. It also explains the
-/// feel: a drag that starts on the wheel keeps writing hue and saturation no matter where the cursor
-/// wanders, because the flag, not the current position, decides.
+/// The in-flight colour drag: the reference's two independent flags (`+0x314` wheel, `+0x315`
+/// strip), both set when a press hits both; the flag, not the cursor, decides what a move writes.
 #[derive(Clone, Copy)]
 pub(crate) struct ColorDrag {
     pub(crate) frame: FrameHandle,
@@ -427,8 +346,7 @@ pub(crate) struct ColorDrag {
     strip: bool,
 }
 
-/// The two hit rects of a ColorSelect frame — its wheel region's and its value strip's, as resolved
-/// by layout. `None` for a slot with no region, which is every ColorSelect that never declared one.
+/// The laid-out rects of a ColorSelect's wheel and value strip.
 fn hit_rects(model: &Model, h: FrameHandle) -> (Option<Rect>, Option<Rect>) {
     let (wheel, strip) = match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::ColorSelect(s)) => (s.wheel, s.value_strip),
@@ -438,10 +356,8 @@ fn hit_rects(model: &Model, h: FrameHandle) -> (Option<Rect>, Option<Rect>) {
     (rect(wheel), rect(strip))
 }
 
-/// On a LeftButton press at `(x, y)` whose hit frame is `hit`: if that frame is a ColorSelect and
-/// the cursor is inside its wheel or its value strip, capture the drag and **apply it immediately**
-/// — `0x78bf10` calls the cursor-position handler through `[eax+0x3c]` before it returns, so a
-/// single click jumps the colour to the click point and fires. Returns what the caller must fire.
+/// On a LeftButton press inside a wheel or strip, capture the drag and apply it at once, as
+/// `0x78bf10` does, so a click jumps the colour; returns the id and colour the caller fires.
 pub(super) fn begin_drag(
     model: &mut Model,
     hit: Option<FrameHandle>,
@@ -463,11 +379,8 @@ pub(super) fn begin_drag(
     drag_move(model, x, y)
 }
 
-/// On a pointer move at `(x, y)` while a colour drag is captured: rewrite whichever of H/S and V the
-/// capture owns, straight into the widget's HSV floats, and hand the caller the frame id plus the
-/// colour to fire `OnColorSelect` with. Returns `Some` on **every** captured move, with no
-/// change-gate — the widget deliberately has none (`0x78bafd` tests only whether a handler is
-/// bound), which is the opposite of the Slider next door.
+/// On a pointer move during a drag, write the captured H/S and V into the widget's HSV and return
+/// the frame id and colour to fire with, on every move: there is no change gate (`0x78bafd`).
 pub(super) fn drag_move(model: &mut Model, x: f32, y: f32) -> Option<(u32, f64, f64, f64)> {
     let ColorDrag {
         frame,
@@ -506,15 +419,12 @@ pub(super) fn drag_move(model: &mut Model, x: f32, y: f32) -> Option<(u32, f64, 
     Some((model.frame_id(frame), rgb.0, rgb.1, rgb.2))
 }
 
-/// Release any in-flight colour drag (LeftButton up, or the pointer leaving the window) — the
-/// widget's `0x78bf90`, which clears both flags.
+/// Release a colour drag (LeftButton up or the pointer leaving): `0x78bf90` clears both flags.
 pub(super) fn end_drag(model: &mut Model) {
     model.color_drag = None;
 }
 
-/// Fire `OnColorSelect` for a frame the pointer path just recoloured. The setter's own
-/// [`fire_color_select`] needs the caller's `this` table; the pointer has only an id, so this is the
-/// same two lines against [`event::fire_widget_handler`] directly.
+/// Fire `OnColorSelect` by frame id, for the pointer path, which has no `this` table.
 pub(super) fn fire_by_id(lua: &Lua, id: u32, r: f64, g: f64, b: f64) -> mlua::Result<()> {
     event::fire_widget_handler(
         lua,
@@ -529,8 +439,7 @@ mod tests {
     use crate::script::UiScript;
     use crate::widget::ColorSelectState;
 
-    /// A `ColorSelect` starts **white** (the ctor's `H=0, S=0, V=1`), not black. A zero-init store
-    /// would have made it black, which is the tell that the state is HSV and not RGB.
+    /// White, not black: the constructor sets `H=0, S=0, V=1`.
     #[test]
     fn a_fresh_color_select_is_white() {
         let s = UiScript::new().unwrap();
@@ -540,9 +449,7 @@ mod tests {
         assert_eq!((r, g, b), (1.0, 1.0, 1.0));
     }
 
-    /// **The round trip is not the identity, and the deviation is the client's.** `(0, 1, 1)` — cyan,
-    /// a two-channel tie at the maximum — comes back with green one step low, exactly as the
-    /// reference does. Greys are its control class and never lose.
+    /// Cyan, a two-channel tie at the maximum, loses one step of green, as in the reference.
     #[test]
     fn the_round_trip_loses_exactly_one_step_on_the_witness_colour() {
         let s = UiScript::new().unwrap();
@@ -563,10 +470,7 @@ mod tests {
         }
     }
 
-    /// **And it ratchets.** The FrameXML idiom — read the colour back, hand it straight to
-    /// `SetColorRGB` — re-applies the same lossy map instead of settling. `(0, 8, 132)`
-    /// walks to `(0, 0, 132)` in eight cycles. Every Ace2/Dewdrop colour option is that idiom, once
-    /// per open-and-accept, so this is the shape of a real player-visible drift and it is deliberate.
+    /// Reading back and setting walks `(0, 8, 132)` to `(0, 0, 132)`, as in the reference.
     #[test]
     fn the_read_back_ratchets_a_channel_downward() {
         let s = UiScript::new().unwrap();
@@ -585,7 +489,7 @@ mod tests {
             vec![7, 6, 5, 4, 3, 2, 1, 0],
             "one step down per cycle, to a fixed point at 0"
         );
-        // The fixed point holds — it is a ratchet, not a runaway.
+        // 0 is a fixed point: a ratchet, not a runaway.
         let g: f64 = s
             .eval("local r, g, b = cs:GetColorRGB() cs:SetColorRGB(r, g, b) return g")
             .unwrap();
@@ -595,7 +499,7 @@ mod tests {
     /// The two quantizers, directly. A is round-half-up and clamps; B is a floor with no clamp.
     #[test]
     fn the_two_quantizers_disagree_in_the_verified_way() {
-        // A — inbound. The clamp is part of it, so `2` is white and `-1` is black, not a wrapped byte.
+        // A, inbound, clamps: `2` is white and `-1` black, not a wrapped byte.
         assert_eq!(ColorSelectState::quantize_a(-1.0), 0);
         assert_eq!(ColorSelectState::quantize_a(0.0), 0);
         assert_eq!(ColorSelectState::quantize_a(1.0), 255);
@@ -603,7 +507,7 @@ mod tests {
         // The half-up bias: 0.5·255 = 127.5, +0.5 = 128.0, truncated = 128.
         assert_eq!(ColorSelectState::quantize_a(0.5), 128);
 
-        // B — outbound. Endpoints agree with A; a value a hair below a boundary does NOT.
+        // B, outbound: the endpoints agree with A, a half step does not.
         assert_eq!(ColorSelectState::quantize_b(0.0), 0);
         assert_eq!(ColorSelectState::quantize_b(1.0), 255);
         assert_eq!(ColorSelectState::quantize_b(0.5), 127, "floor, not half-up");
@@ -612,12 +516,11 @@ mod tests {
             ColorSelectState::quantize_a(0.5),
             "the disagreement IS the mechanism behind the drift"
         );
-        // No clamp on B — out of range wraps mod 256 (reachable only through SetColorHSV).
+        // B has no clamp: out of range wraps mod 256 (reachable only through `SetColorHSV`).
         assert_eq!(ColorSelectState::quantize_b(-0.001), 255);
     }
 
-    /// `SetColorRGB` fires `OnColorSelect` with the colour the widget now holds, and fires **again**
-    /// when the same colour is set — no change-gate (the module doc's byte-verified reason).
+    /// It fires with the colour the widget now holds, and again on the same colour: no change gate.
     #[test]
     fn set_color_rgb_fires_on_color_select_every_time() {
         let s = UiScript::new().unwrap();
@@ -637,8 +540,7 @@ mod tests {
         assert_eq!(s.eval::<usize>("return table.getn(fired)").unwrap(), 2);
         assert_eq!(s.eval::<String>("return fired[1]").unwrap(), "1,0,0");
 
-        // The handler's arguments are bit-identical to a GetColorRGB() on the next line — the
-        // binary reaches them through literally the same two calls, and so do we.
+        // The handler's arguments equal the next `GetColorRGB()` bit for bit, as in the reference.
         s.run("fired = {} cs:SetColorRGB(0, 1, 1)").unwrap();
         let (from_handler, from_getter): (String, String) = s
             .eval("local r, g, b = cs:GetColorRGB() return fired[1], r .. \",\" .. g .. \",\" .. b")
@@ -646,8 +548,6 @@ mod tests {
         assert_eq!(from_handler, from_getter);
     }
 
-    /// The methods are the ColorSelect's alone — a plain frame duck-types as *not* one, which is how
-    /// `if frame.SetColorRGB then` reads in an addon.
     #[test]
     fn the_methods_do_not_leak_onto_other_kinds() {
         let s = UiScript::new().unwrap();
@@ -657,13 +557,11 @@ mod tests {
         assert!(s.eval::<bool>("return plain.GetColorRGB == nil").unwrap());
     }
     // ─────────────────────────────────────────────────────────────────────────────────────────
-    // The wheel and the strip — the pick, the drag, and the two markers
+    // The wheel and the strip: the pick, the drag and the two markers
     // ─────────────────────────────────────────────────────────────────────────────────────────
 
-    /// A `ColorSelect` with the reference's own geometry, laid out and ready to click: a 128×128
-    /// wheel at the frame's top-left and a 32×128 strip to its right. Built through the XML loader
-    /// so the four elements' whole install path — `apply_colorselect`, the file-less setter form,
-    /// the getter round-trip that carries `<Size>`/`<Anchors>` — is what these tests exercise.
+    /// A ColorSelect with the reference's geometry, laid out: a 128×128 wheel at the top-left and a
+    /// 32×128 strip to its right, built through the XML loader so the elements' install path runs.
     fn picker() -> UiScript {
         let mut s = UiScript::new().unwrap();
         let xml = r#"<Ui>
@@ -698,7 +596,6 @@ mod tests {
         s
     }
 
-    /// The wheel's rect, from the region the loader published as a global.
     fn wheel_rect(s: &mut UiScript) -> (f32, f32, f32, f32) {
         let (l, b, w, h): (f32, f32, f32, f32) = s
             .eval(
@@ -709,8 +606,7 @@ mod tests {
         (l, b, w, h)
     }
 
-    /// The four elements install as real regions with the authored geometry, and the wheel's name
-    /// publishes as a global — which is what `<ColorValueTexture>`'s own anchor resolves against.
+    /// The wheel's name is a global, which `<ColorValueTexture>`'s anchor resolves against.
     #[test]
     fn the_four_elements_install_with_their_authored_geometry() {
         let mut s = picker();
@@ -734,11 +630,8 @@ mod tests {
         assert!(file.contains("UI-ColorPicker-Buttons"), "got {file}");
     }
 
-    /// **A click on the wheel picks the colour that pixel shows.** The disc's law and the pick law
-    /// are inverses (`0x78b580` draws it, `0x78bdd0` picks it), so
-    /// this is stated at the four cardinal points, where the hue is nameable: LEFT is red, RIGHT
-    /// cyan, TOP violet, BOTTOM chartreuse. A sign error anywhere in the chain mirrors one axis and
-    /// two of these four flip.
+    /// The disc (`0x78b580`) and the pick (`0x78bdd0`) are inverses: left is red, right cyan, top
+    /// violet, bottom chartreuse, and a sign error flips two of the four.
     #[test]
     fn a_click_on_the_wheel_picks_the_hue_under_the_cursor() {
         let mut s = picker();
@@ -763,8 +656,7 @@ mod tests {
         }
     }
 
-    /// The centre is saturation 0 — white — and it stays white however the hue would have come out,
-    /// because the `-1` grey sentinel is inert on the way back through `hsv_to_rgb`.
+    /// White whatever the hue, as the `-1` grey sentinel is inert in `hsv_to_rgb`.
     #[test]
     fn the_wheels_centre_is_unsaturated() {
         let mut s = picker();
@@ -777,17 +669,15 @@ mod tests {
         );
     }
 
-    /// **The press IS the first move of the gesture**, and the drag keeps writing the wheel even
-    /// after the cursor leaves it — the capture is a flag on the widget, not a hit test per move
-    /// (`0x78bd80` is gated on `+0x314`, never re-tested). Dragging from red round to cyan without
-    /// lifting proves both.
+    /// The press is the first move, and the capture is a flag, not a hit test per move (`0x78bd80`
+    /// is gated on `+0x314`); dragging from red to cyan without lifting proves both.
     #[test]
     fn a_wheel_drag_keeps_the_capture_when_the_cursor_wanders_off() {
         let mut s = picker();
         let (l, b, w, h) = wheel_rect(&mut s);
         let cy = b + h * 0.5;
         s.mouse_button(l + 1.0, cy, "LeftButton", true);
-        // Straight across and well past the right rim — outside the wheel's rect entirely.
+        // Well past the right rim, outside the wheel's rect.
         s.mouse_move(l + w + 200.0, cy);
         let (r, g, bl): (f64, f64, f64) = s.eval("return TestPicker:GetColorRGB()").unwrap();
         assert!(
@@ -806,8 +696,6 @@ mod tests {
         );
     }
 
-    /// The strip writes **only** brightness: dragging it down to black and back up leaves the hue
-    /// exactly where the wheel put it.
     #[test]
     fn a_strip_drag_writes_brightness_and_leaves_the_hue_alone() {
         let mut s = picker();
@@ -830,7 +718,7 @@ mod tests {
         s.mouse_move(sx, sb - 50.0); // dragged below the strip: clamps to black
         let black: (f64, f64, f64) = s.eval("return TestPicker:GetColorRGB()").unwrap();
         assert_eq!(black, (0.0, 0.0, 0.0), "V clamps at 0");
-        // (Black is exact whatever the hue: `hsv_to_rgb` scales every channel by V.)
+        // Black is exact whatever the hue: `hsv_to_rgb` scales every channel by V.
         s.mouse_move(sx, sb + sh + 50.0); // and above it: clamps to full
         let full: (f64, f64, f64) = s.eval("return TestPicker:GetColorRGB()").unwrap();
         assert!(
@@ -841,9 +729,7 @@ mod tests {
         let _ = (w, l);
     }
 
-    /// `OnColorSelect` fires on **every** step of a drag, including one that lands on the colour
-    /// the widget already holds — the widget has no change-gate (`0x78bafd` tests only whether a
-    /// handler is bound), which is the opposite of the Slider next door.
+    /// Even a step onto the colour already held fires (`0x78bafd`).
     #[test]
     fn the_drag_fires_on_every_move_with_no_change_gate() {
         let mut s = picker();
@@ -855,33 +741,24 @@ mod tests {
         let after_press: i64 = s.eval("return fires").unwrap();
         assert_eq!(after_press, 1, "the press itself fires once");
         for _ in 0..3 {
-            s.mouse_move(cx, cy); // the SAME point — no change, still fires
+            s.mouse_move(cx, cy); // the same point: no change, still fires
         }
         let after_moves: i64 = s.eval("return fires").unwrap();
         assert_eq!(after_moves, 4, "no change-gate: every captured move fires");
     }
 
-    /// A press that lands on neither the wheel nor the strip captures nothing — the surrounding
-    /// window is not a giant colour surface.
     #[test]
     fn a_press_outside_both_rects_captures_nothing() {
         let mut s = picker();
         let before: (f64, f64, f64) = s.eval("return TestPicker:GetColorRGB()").unwrap();
         s.mouse_button(340.0, 20.0, "LeftButton", true); // inside the frame, below both
-        s.mouse_move(20.0, 150.0); // ... and now over the wheel, uncaptured
+        s.mouse_move(20.0, 150.0); // then over the wheel, uncaptured
         let after: (f64, f64, f64) = s.eval("return TestPicker:GetColorRGB()").unwrap();
         assert_eq!(after, before, "no capture, no colour change");
     }
 
-    /// The two markers sit where the colour came from. Checked through **extract**, not `GetLeft`:
-    /// the markers carry no anchors — the client `ClearAllPoints`es them and re-`SetPoint`s from
-    /// C++, and benilla derives their rects at extract for the same reason — so the layout resolver
-    /// has nothing to answer with. That is the same shape as the Slider thumb's, and it is the one
-    /// place a corpus addon could tell the difference; nothing in the 218 reads a picker marker's
-    /// rect.
-    ///
-    /// The wheel marker is checked by round trip — click a point, the marker's centre lands back on
-    /// it — which is the invariant that matters and the one either `fchs` breaks.
+    /// Checked through extract: the client places the markers from C++ with no anchors, so the
+    /// resolver has nothing to answer. A click lands the wheel marker's centre on the point.
     #[test]
     fn the_markers_land_where_the_colour_came_from() {
         let mut s = picker();
@@ -900,8 +777,8 @@ mod tests {
                 cy + dy
             );
         }
-        // The value marker rides V from the strip's bottom — and scales by the WHEEL's height,
-        // which is the client's own unguarded `[this+0x318]` read. Both are 128 here.
+        // The value marker rides V from the strip's bottom, scaled by the wheel's height (the
+        // reference's `[this+0x318]` read); both are 128 here.
         let (sb, sh): (f32, f32) = s
             .eval(
                 "local r = TestPicker:GetColorValueTexture(); return r:GetBottom(), r:GetHeight()",
@@ -921,9 +798,8 @@ mod tests {
         }
     }
 
-    /// The extracted rect of the marker whose authored width is `width` — the two markers share
-    /// one BLP and are told apart by their size (10 for the wheel's, 48 for the strip's), which is
-    /// also the assertion that they kept it.
+    /// The extracted rect of the marker `width` wide: the two share one BLP and differ by size, 10
+    /// for the wheel's and 48 for the strip's.
     fn marker_rect(s: &UiScript, width: f32) -> Option<crate::layout::Rect> {
         s.extract().into_iter().find_map(|q| {
             let r = q.rect?;

@@ -1,58 +1,25 @@
-//! The battleground **list and queue** family: the fourteen
-//! verbs the stock `BattlefieldFrame.lua` and `Minimap.xml` call, over the instance list and the
-//! three queue slots the app pushes. The scoreboard half of the same TU is
-//! [`super::battlefield_score`]; `AcceptBattlefieldPort` is [`super::dialog_verbs`]'s.
-//!
-//! ## What is the app's and what is the VM's
-//!
-//! The reference keeps three caches in `BattlefieldInfo.cpp`: the instance-id vector the
-//! `SMSG_BATTLEFIELD_LIST` handler fills (`0xb6e860`, `0x4aa6c0`), the fixed three-slot queue array
-//! `SMSG_BATTLEFIELD_STATUS` writes (`0xb6e9d0`, `0x4aa850`), and four scalars beside them — the
-//! battlemaster guid, the listed map, the bracket-adjusted level pair, and the **selected instance
-//! id**. Every
-//! verb below reads those and nothing else. The app owns the wire, the clock and the Map.dbc
-//! resolves, so it pushes the list ([`BattlefieldListView`]) when a list lands and the slots
-//! ([`BattlefieldQueueSlot`], with every clock-shaped value already in milliseconds) every frame;
-//! the VM owns the selection (`[0xb6eba0]`), the index arithmetic and the getters' shapes.
-//!
-//! ## The selection is a value, not an index
-//!
-//! `SetSelectedBattlefield(n)` stores the **instance id** at list position `n`, and
-//! `GetSelectedBattlefield()` scans the current list for that id — so a fresh list between the
-//! two calls can move or drop the selection, which the stock window's `zoneIndex − 1 ==
-//! GetSelectedBattlefield()` highlight then follows. A client that remembered an index would
-//! diverge the moment a list reorders.
-//!
-//! ## Shapes
-//!
-//! Every required index is shape A (`lua_isnumber`, so a numeric string passes; truncated toward
-//! zero; a non-number raises the binding's own `Usage:`), 1-based with the reference's unsigned
-//! `dec; cmp; jae` gate that rejects 0 and negatives in one branch. `GetBattlefieldStatus`
-//! answers **five values on every leg** — `(nil, nil, 0, 0, 0)` off the three slots.
-//! `GetBattlefieldInfo` answers nine or none. `GetBattlefieldInstanceInfo` raises with
-//! `GetBattlefieldInfo`'s usage string — the shipped client's own mislabel, reproduced.
-//! `CloseBattlefield` does nothing (`xor eax,eax; ret`).
+//! The battleground list and queue verbs of `BattlefieldFrame.lua` and `Minimap.xml`. They read
+//! the reference's instance list (`0xb6e860`, filled by `0x4aa6c0`), its three queue slots
+//! (`0xb6e9d0`, written by `0x4aa850`) and the selected instance id (`[0xb6eba0]`); the app pushes
+//! the list and the slots, clock values in ms, and the VM owns the selection.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag, number_arg};
 use super::Model;
 
-/// One queue slot as the app pushes it — the reference's `0x20`-byte slot (`0xb6e9d0`) plus the map
-/// name its `GetBattlefieldStatus` resolves off Map.dbc, and the three clock-shaped fields
-/// already reduced against the app's clock.
+/// One queue slot: the reference's `0x20`-byte slot (`0xb6e9d0`) plus its Map.dbc name.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct BattlefieldQueueSlot {
-    /// `+0x00` — the Map.dbc row id; `0` for a cleared slot. The name is resolved for that id too
-    /// (the reference looks map 0 up like any other row).
+    /// `+0x00`, the Map.dbc row id; 0 is a cleared slot, its name looked up like any other.
     pub map_id: u32,
     /// The localized map name, or `None` when the id has no row (a real `nil`).
     pub map_name: Option<String>,
-    /// `+0x04` — `0` none, `1` queued, `2` confirm, `3` active; anything else answers `"error"`.
+    /// `+0x04`: `0` none, `1` queued, `2` confirm, `3` active; anything else answers `"error"`.
     pub status: u32,
-    /// `+0x10` — the instance id.
+    /// `+0x10`.
     pub instance_id: u32,
-    /// `+0x08`/`+0x0c` — the bracket-adjusted level pair.
+    /// `+0x08`/`+0x0c`: the bracket-adjusted level pair.
     pub min_level: u32,
     pub max_level: u32,
     /// `GetBattlefieldPortExpiration`: `deadline − now` in ms, 0 when unset or past.
@@ -66,15 +33,12 @@ pub struct BattlefieldQueueSlot {
 /// The Map.dbc half of `GetBattlefieldInfo` (`0x4ab0b0`), resolved by the app for the listed map.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct BattlefieldMapInfo {
-    /// The localized map name (value 1).
     pub name: String,
-    /// The faction-side description (value 2) — `None` on the reference's `-1` faction leg, where
-    /// it pushes nothing at all and Lua reads a stack slot below the tuple; here that leg answers
-    /// `nil`, the one shape this binding does not reproduce (the leg is data-unreachable: every
-    /// playable race carries a faction bit).
+    /// The description for the player's faction. Deviation: `None` answers `nil` where the
+    /// reference's `-1` faction leg pushes nothing (Lua reads below the tuple), because no
+    /// playable race reaches that leg.
     pub description: Option<String>,
-    /// The row's raw `MinLevel`/`MaxLevel` columns (values 3 and 4 — the stock Lua names them
-    /// `minLevel, maxLevel`; the bracket-adjusted pair is values 8 and 9).
+    /// The row's raw `MinLevel`/`MaxLevel` (values 3 and 4), not the bracket-adjusted pair.
     pub min_level: u32,
     pub max_level: u32,
     /// Values 5–7: `[row+0x40]` signed, `[row+0x44]` and `[row+0x48]` f32.
@@ -83,7 +47,7 @@ pub struct BattlefieldMapInfo {
     pub field_18: f32,
 }
 
-/// The instance list and its scalars as the app pushes them ([`super::UiScript::set_battlefield_list`]).
+/// The instance list and the scalars beside it, as the app pushes them.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct BattlefieldListView {
     /// The instance ids in wire order (`[0xb6e868]`).
@@ -91,15 +55,13 @@ pub struct BattlefieldListView {
     /// The bracket-adjusted level pair the list handler derived (`[0xb6eba8]`/`[0xb6ebac]`).
     pub bracket_min: u32,
     pub bracket_max: u32,
-    /// The listed map's row, `None` when the id resolves to no row (the second zero-values gate).
+    /// The listed map's row; `None` when the id has no row, which answers no values.
     pub info: Option<BattlefieldMapInfo>,
-    /// The listed map row's group-queue flag (`[row+0xa0]`, `0x4ac380`) —
-    /// `CanJoinBattlefieldAsGroup`.
+    /// The map row's group-queue flag, `[row+0xa0]`.
     pub group_queue: bool,
 }
 
-/// The reference's 1-based index gate: `dec eax; cmp eax,n; jae bail` — an unsigned compare, so
-/// `0` and every negative fall out in the same branch as `> n`.
+/// The reference's 1-based gate (`dec; cmp; jae`), unsigned: 0 and negatives fail as too large.
 fn slot_index(index: i32, n: usize) -> Option<usize> {
     usize::try_from(index)
         .ok()?
@@ -107,15 +69,13 @@ fn slot_index(index: i32, n: usize) -> Option<usize> {
         .filter(|&i| i < n)
 }
 
-/// The local-player gate `GetBattlefieldInfo` and `GetBattlefieldInstanceInfo` answer zero values
-/// behind (`0x468550` + `0x468460(ecx = 0x10)`: the player object, read at call time) — here the
-/// unit model's `"player"` token, the same answer `UnitExists("player")` gives.
+/// The local-player gate of `GetBattlefieldInfo` and `GetBattlefieldInstanceInfo`, read at call
+/// time (`0x468550`, `0x468460` with `ecx = 0x10`): the answer `UnitExists("player")` gives.
 fn player_exists(model: &Model) -> bool {
     model.unit("player").is_some_and(|u| u.exists)
 }
 
-/// `[slot+0x04]` → the status string, through the reference's four-entry jump table with its
-/// `"error"` default (`0x4ab604`).
+/// The reference's four-entry status jump table with its `"error"` default (`0x4ab604`).
 fn status_text(status: u32) -> &'static str {
     match status {
         0 => "none",
@@ -127,21 +87,19 @@ fn status_text(status: u32) -> &'static str {
 }
 
 impl super::UiScript {
-    /// Push the instance list. The selection (`[0xb6eba0]`) is left alone — a new list does not
-    /// clear it, it only decides whether `GetSelectedBattlefield` still finds it (`0x4ab360`).
+    /// Push the instance list. A new list leaves the selection (`[0xb6eba0]`) alone; it only
+    /// decides whether `GetSelectedBattlefield` still finds it (`0x4ab360`).
     pub fn set_battlefield_list(&mut self, list: BattlefieldListView) {
         self.model_mut().battlefield_list = list;
     }
 
-    /// The world-enter reset's half of this family (`0x4a9db0`): the selection cleared with the
-    /// list.
+    /// The world-enter reset (`0x4a9db0`) clears the selection with the list.
     pub fn reset_battlefield_selection(&mut self) {
         self.model_mut().battlefield_selected = 0;
     }
 
-    /// Push the three queue slots (clock-shaped values already reduced) and the instance
-    /// expiration (`[0xb6ebb8]`, `deadline − now`, 0 when unset or past) — every frame, since
-    /// three of the getters move with the clock.
+    /// Push the queue slots and the instance expiration (`[0xb6ebb8]`) every frame, since the
+    /// clock getters move.
     pub fn set_battlefield_queue(
         &mut self,
         slots: Vec<BattlefieldQueueSlot>,
@@ -152,15 +110,13 @@ impl super::UiScript {
         model.battlefield_instance_expiration_ms = instance_expiration_ms;
     }
 
-    /// `JoinBattlefield` calls since the last drain: `(instance id, 0 = first available; as a
-    /// group)`. The app adds the map, the cached battlemaster guid (which picks the opcode) and
-    /// the group-size refusal (`0x4a9f60`).
+    /// `JoinBattlefield` calls since the last drain, `(instance, as group)`; instance 0 is first
+    /// available. The app adds the map, the opcode and the group-size refusal (`0x4a9f60`).
     pub fn take_battlefield_join_requests(&mut self) -> Vec<(u32, bool)> {
         std::mem::take(&mut self.model_mut().battlefield_join_requests)
     }
 
-    /// `ShowBattlefieldList` calls that passed their gates since the last drain: the queued
-    /// slot's map id, `CMSG_BATTLEFIELD_LIST`'s payload.
+    /// `ShowBattlefieldList` calls since the last drain: the map ids for `CMSG_BATTLEFIELD_LIST`.
     pub fn take_battlefield_list_requests(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().battlefield_list_requests)
     }
@@ -169,7 +125,6 @@ impl super::UiScript {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // `GetNumBattlefields()` — 0 args, never raises: the instance count.
     g.set(
         "GetNumBattlefields",
         lua.create_function(|lua, ()| {
@@ -178,8 +133,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetBattlefieldInfo()` — 0 args, never raises; ZERO values behind either gate (no player, no
-    // map row), else nine (`0x4ab0b0`).
+    // No values without a player or a map row, else nine (`0x4ab0b0`).
     g.set(
         "GetBattlefieldInfo",
         lua.create_function(|lua, ()| {
@@ -206,9 +160,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetBattlefieldInstanceInfo(index)` — raises with GetBattlefieldInfo's usage string (the
-    // shipped mislabel, `0x845c48`); no player or out of range → zero values; else the instance id,
-    // pushed SIGNED (`fild dword`).
+    // Raises with `GetBattlefieldInfo`'s usage string, the reference's own mislabel (`0x845c48`).
+    // No values without a player or out of range, else the instance id pushed signed (`fild`).
     g.set(
         "GetBattlefieldInstanceInfo",
         lua.create_function(|lua, index: Value| {
@@ -227,11 +180,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `JoinBattlefield(index [, asGroup])` — arg 1 shape A, arg 2 the never-raising optional
-    // boolean reader; the instance is `index−1 < count ? list[index−1] : 0` (0 = first
-    // available, and what an out-of-range index — 0 included — degrades to), `0x4a9f60`. The
-    // refusal
-    // leg and the opcode choice are the app's and invisible to Lua.
+    // An out-of-range index, 0 included, joins instance 0, the first available (`0x4a9f60`).
     g.set(
         "JoinBattlefield",
         lua.create_function(|lua, (index, as_group): (Value, Value)| {
@@ -245,11 +194,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `CloseBattlefield()` — `xor eax,eax; ret`: nothing, and the stock window calls it on hide.
+    // A no-op in the reference (`xor eax,eax; ret`); the stock window calls it on hide.
     g.set("CloseBattlefield", lua.create_function(|_, ()| Ok(()))?)?;
 
-    // `SetSelectedBattlefield(index)` — stores the instance id at that position, or 0 when out
-    // of range (`0x4ab300`).
+    // Stores the instance id at that position, 0 when out of range (`0x4ab300`).
     g.set(
         "SetSelectedBattlefield",
         lua.create_function(|lua, index: Value| {
@@ -261,8 +209,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetSelectedBattlefield()` — the 1-based position of the stored id in the CURRENT list, or
-    // 0 on a miss (which is also what a stored 0 answers: the "first available" row).
+    // The stored id's 1-based position in the current list; 0 on a miss, as for a stored 0.
     g.set(
         "GetSelectedBattlefield",
         lua.create_function(|lua, ()| {
@@ -277,8 +224,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetBattlefieldStatus(index)` — five values on EVERY leg (`0x4ab5c7`): off 1..3 it is
-    // `(nil, nil, 0, 0, 0)`, never a raise and never zero values.
+    // Five values on every leg (`0x4ab5c7`): `(nil, nil, 0, 0, 0)` off slots 1..3.
     g.set(
         "GetBattlefieldStatus",
         lua.create_function(|lua, index: Value| {
@@ -308,9 +254,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The three per-slot clock-shaped getters (`0x4ab620`/`0x4ab790`/`0x4ab820`): shape A index,
-    // 0 off 1..3, one number always. The app reduces each against its clock; the values arrive
-    // in ms.
+    // The per-slot clock getters (`0x4ab620`, `0x4ab790`, `0x4ab820`), in ms; 0 off slots 1..3.
     for (name, usage, read) in [
         (
             "GetBattlefieldPortExpiration",
@@ -342,7 +286,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // `GetBattlefieldInstanceExpiration()` — 0 args: `[0xb6ebb8] − now`, 0 when unset or past.
+    // `[0xb6ebb8] − now`, 0 when unset or past.
     g.set(
         "GetBattlefieldInstanceExpiration",
         lua.create_function(|lua, ()| {
@@ -351,8 +295,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `ShowBattlefieldList(index)` — shape A; silent off 1..3, on an empty slot, and on any
-    // status but "queued"; else the slot's map goes out as `CMSG_BATTLEFIELD_LIST`. No event.
+    // Silent unless the slot is queued; fires no event.
     g.set(
         "ShowBattlefieldList",
         lua.create_function(|lua, index: Value| {
@@ -369,8 +312,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `CanJoinBattlefieldAsGroup()` — `1` or nil off the listed map's `+0xa0` flag (`0x4ac380`).
-    // The join-time size check reads a different column and lives with the sender.
+    // `1` or nil (`0x4ac380`); the join-time group-size check reads another column, in the app.
     g.set(
         "CanJoinBattlefieldAsGroup",
         lua.create_function(|lua, ()| {
@@ -387,7 +329,7 @@ mod tests {
     use super::*;
     use crate::script::UiScript;
 
-    /// A VM with a local player — the state every in-world call is made in.
+    /// A VM with a local player, as every in-world call has.
     fn vm() -> UiScript {
         let mut s = UiScript::new().unwrap();
         s.set_unit(
@@ -433,7 +375,6 @@ mod tests {
         }
     }
 
-    /// The reference's 1-based gate: 0 and negatives fall out with the too-large ones.
     #[test]
     fn the_index_gate_is_unsigned_and_one_based() {
         assert_eq!(slot_index(1, 3), Some(0));
@@ -444,8 +385,6 @@ mod tests {
         assert_eq!(slot_index(1, 0), None);
     }
 
-    /// Nine values past both gates, none behind either; the two raw row levels sit at 3 and 4
-    /// and the bracket pair at 8 and 9.
     #[test]
     fn get_battlefield_info_answers_nine_or_none() {
         let mut s = vm();
@@ -478,7 +417,6 @@ mod tests {
         assert_eq!(got, "Arathi Basin|20|60|-1|20|29");
     }
 
-    /// The instance verb: the wrong usage string, the silent out-of-range leg, the signed push.
     #[test]
     fn get_battlefield_instance_info_raises_with_the_mislabel_and_bails_silently() {
         let mut s = vm();
@@ -507,7 +445,6 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetNumBattlefields()").unwrap(), 2);
     }
 
-    /// The selection round-trips by VALUE: a reordered list moves it, a shortened one drops it.
     #[test]
     fn the_selection_is_an_instance_id_not_a_position() {
         let mut s = vm();
@@ -542,8 +479,6 @@ mod tests {
         );
     }
 
-    /// `JoinBattlefield`: the instance at the position, 0 for "first available" and for any
-    /// out-of-range index, the optional group flag through the never-raising reader.
     #[test]
     fn join_battlefield_resolves_the_instance_and_the_group_flag() {
         let mut s = vm();
@@ -560,7 +495,6 @@ mod tests {
         s.run("CloseBattlefield()").unwrap();
     }
 
-    /// Five values on every leg of the status verb; the four status strings and the default.
     #[test]
     fn get_battlefield_status_answers_five_values_on_every_leg() {
         let mut s = UiScript::new().unwrap();
@@ -606,8 +540,6 @@ mod tests {
         );
     }
 
-    /// The clock-shaped getters read the pushed ms and answer 0 off the slots; the instance
-    /// expiration is the singleton.
     #[test]
     fn the_time_getters_read_the_pushed_milliseconds() {
         let mut s = UiScript::new().unwrap();
@@ -659,8 +591,6 @@ mod tests {
         }
     }
 
-    /// `ShowBattlefieldList` sends only for a queued, non-empty slot; the group predicate is
-    /// `1` or nil.
     #[test]
     fn show_battlefield_list_gates_on_a_queued_slot() {
         let mut s = UiScript::new().unwrap();

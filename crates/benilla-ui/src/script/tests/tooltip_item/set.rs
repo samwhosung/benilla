@@ -1,19 +1,12 @@
-//! The item-SET block (`ITEM_SET_NAME 0x854b1c`): order (blank, gold header, skill line, member
-//! ladder, blank, bonuses), the threshold-ascending sort, the skill gate, member cream/gray, and
-//! the ask-once for unseen set ids.
+//! The item-set block (`ITEM_SET_NAME` `0x854b1c`): a blank, the gold header, the skill line, the
+//! member ladder, a blank, then the bonuses by ascending threshold; and the quest reward hovers.
 
 use super::{lines_of, script};
 use crate::script::*;
 
-/// The SET block, byte-read: a blank gold line, the gold `ITEM_SET_NAME` header, the skill
-/// line (white/red) between header and the member ladder (cream when equipped / gray; in-flight
-/// names wait), a second blank, then the threshold bonuses SORTED ascending — green only when the
-/// skill requirement is met AND owned ≥ threshold — plus the ask-once for an unseen set id.
-///
-/// **The two bonus arms are two different keys** (`0x52e056..0x52e0d6`): an ACTIVE bonus formats
-/// `ITEM_SET_BONUS` = "Set: %s" with no count at all, and only an inactive one formats
-/// `ITEM_SET_BONUS_GRAY` = "(%d) Set: %s". Watching the (2) bonus move between them as the skill
-/// gate opens and closes is what these assertions are for.
+/// Members are cream when equipped and gray otherwise; a bonus is green only with the skill met
+/// and enough owned. The bonus arms are two keys (`0x52e056..0x52e0d6`): an active bonus formats
+/// `ITEM_SET_BONUS` ("Set: %s", no count), an inactive one `ITEM_SET_BONUS_GRAY` ("(%d) Set: %s").
 #[test]
 fn item_set_block_counts_and_colors() {
     let mut s = script();
@@ -29,7 +22,7 @@ fn item_set_block_counts_and_colors() {
     };
     vest.stats.clear();
     s.set_item_template(6303, vest);
-    // Two members equipped (the chest itself + the belt).
+    // Two members equipped: the chest itself and the belt.
     let mut slots: InventorySlots = Default::default();
     slots[4] = Some(InvSlotView {
         item_id: 6303,
@@ -46,11 +39,10 @@ fn item_set_block_counts_and_colors() {
             (6303, Some("Defias Mark".into())),
             (6304, Some("Defias Belt".into())),
             (6305, Some("Defias Gloves".into())),
-            (6306, None), // template still in flight — no line yet
+            (6306, None), // template still in flight: no line yet
             (6307, Some("Defias Boots".into())),
         ],
-        // Stored high-first (the catalog keeps DBC slot order — The Gladiator ships
-        // 3,2,5,4): the renderer must sort ascending at print time.
+        // Stored high-first in DBC slot order (The Gladiator ships 3,2,5,4); the renderer sorts.
         bonuses: vec![
             (4, "+10 Attack Power.".into()),
             (2, "Increases movement speed slightly.".into()),
@@ -120,8 +112,7 @@ fn item_set_block_counts_and_colors() {
         gray,
         "inactive bonus is gray"
     );
-    // The skill gate (`0x5eaae0`): an unmet set-level skill reds its line — seated between
-    // the header and the first member — and grays every bonus, met thresholds included.
+    // The skill gate (`0x5eaae0`): an unmet skill reds its line and grays every bonus.
     let mut gated = set_view;
     gated.required_skill = 165;
     gated.required_skill_rank = 250;
@@ -138,7 +129,7 @@ fn item_set_block_counts_and_colors() {
     .unwrap();
     let lines = lines_of(&mut s);
     assert_eq!(color(&lines, "[MIN_SKILL Leatherworking 250]"), red);
-    // The gate also moves it onto the OTHER key: an inactive bonus is the counted spelling.
+    // Grayed, the (2) bonus takes the counted key.
     assert_eq!(
         color(
             &lines,
@@ -162,7 +153,6 @@ fn item_set_block_counts_and_colors() {
         green,
         "meeting the skill restores the green — and the countless key with it"
     );
-    // An unseen set id records the ask-once.
     s.set_item_template(
         9999,
         ItemTemplateView {
@@ -177,10 +167,8 @@ fn item_set_block_counts_and_colors() {
     assert!(s.take_errors().is_empty());
 }
 
-/// `GameTooltip:SetQuestItem(type, index)` and `SetQuestLogItem(type, index)` — the quest-giver
-/// panels' and the quest log's reward hovers (stock QuestFrameTemplates.xml:148,
-/// QuestLogFrame.xml:113): the row's item by id through the shared renderer; a row that is not
-/// there leaves the tooltip empty (1944).
+/// `SetQuestItem` and `SetQuestLogItem`, the reward hovers (`QuestFrameTemplates.xml:148`,
+/// `QuestLogFrame.xml:113`), render the row's item by id; a missing row leaves the tooltip empty.
 #[test]
 fn quest_item_hovers_render_the_rows_item_by_id() {
     let mut s = script();
@@ -236,7 +224,7 @@ fn quest_item_hovers_render_the_rows_item_by_id() {
         }],
         ..Default::default()
     });
-    // The detail hangs on the row now, so the tooltip reads it through the selection (2247).
+    // The detail hangs on the selected row, so select it first.
     s.run("SelectQuestLogEntry(1)").unwrap();
     s.run(r#"TT:SetOwner(Q1, "ANCHOR_RIGHT"); TT:SetQuestLogItem("reward", 1)"#)
         .unwrap();

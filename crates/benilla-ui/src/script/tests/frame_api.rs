@@ -1,18 +1,12 @@
-//! Small frame-API wins: GetLocale, SetAllPoints, and GetPoint readback.
+//! Frame-API basics: `GetLocale`, `SetAllPoints` and `GetPoint` readback.
 
 use super::common::script;
 
-/// Two era names, asserted together because neither earns a file of its own.
-///
-/// This test carried two more legs until decision 2142, `SetFormattedText` and `SetShown`, and
-/// both went with the verbs: neither is in a 1.12 method table. What the first of them actually
-/// proved — that `%N$s` reorders rather than consumes — is `string.format`'s own behaviour and is
-/// pinned where it lives, in [`crate::strings`].
 #[test]
 fn get_locale_and_set_all_points() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    // GetLocale — benilla is enUS-data-only.
+    // `GetLocale`: benilla is enUS-only.
     assert_eq!(s.eval::<String>("return GetLocale()").unwrap(), "enUS");
 
     s.run(
@@ -28,7 +22,6 @@ fn get_locale_and_set_all_points() {
     .unwrap();
     s.resolve();
 
-    // SetAllPoints pins the full target rect, parent-default and by-name forms alike.
     let ok: bool = s
         .eval(
             r#"
@@ -53,7 +46,7 @@ fn getpoint_reads_back_anchors() {
     "#,
     )
     .unwrap();
-    // Screen-anchored: relativeTo is nil (no UIParent wrapper yet — stated).
+    // Screen-anchored: `relativeTo` reads nil.
     let ok: bool = s
         .eval(
             r#"
@@ -63,7 +56,7 @@ fn getpoint_reads_back_anchors() {
         )
         .unwrap();
     assert!(ok, "screen anchor reads back");
-    // Frame-anchored: relativeTo is the same wrapper table (stable identity).
+    // Frame-anchored: `relativeTo` is the same wrapper table.
     let ok: bool = s
         .eval(
             r#"

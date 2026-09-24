@@ -1,29 +1,7 @@
-//! The player-to-player trade bindings (decision 0592 P1) — the two-sided trade-window surface, the
-//! same push/intent seam as [`super::mail`]/[`super::merchant`]: the app pushes a **trade snapshot**
-//! ([`UiScript::set_trade`] — both sides' slots already resolved from the wire to name/icon/quality
-//! by the app's item-template + display caches, and the partner's name from the name cache) and the
-//! Lua `InitiateTrade`/`AcceptTrade`/`CloseTrade`/… calls queue outbound **intents** the app drains.
-//! The engine holds no trade knowledge — a slot is a resolved item view, a side is seven slots + a
-//! gold amount, and the accept-glow is a fired event, never read state.
-//!
-//! ## The 5875 API shape (VERIFIED against the extracted `TradeFrame.lua`)
-//!
-//! `id` is **1-based** everywhere (slots 1..=7; slot 7 is the non-traded / enchant slot); an
-//! out-of-range or empty slot answers `nil`. The read getters:
-//! `GetTradePlayerItemInfo(id)` → `name, texture, numItems, isUsable, enchantment` (our own offer),
-//! `GetTradeTargetItemInfo(id)` → `name, texture, numItems, quality, isUsable, enchantment` (the
-//! partner's offer — the extra `quality` drives its slot's colour + the red not-usable tint),
-//! `GetPlayerTradeMoney()`/`GetTargetTradeMoney()` → the two gold amounts in copper, and
-//! `GetTradePartnerName()` → the partner's name (benilla's getter for the window header, in place of
-//! the reference's `UnitName("NPC")`; the partner's *portrait* rides the `"npc"` token the app points
-//! at the partner entity — decision 0592, [`crate::script`] has no engine-side unit for it).
-//! `enchantment` is `nil` in P1 (the enchant-slot spell name is decision 0592 P3).
-//!
-//! The intents: `InitiateTrade(unit)` queues the right-click menu's trade offer (the app resolves the
-//! unit token → guid → `CMSG_INITIATE_TRADE`); `AcceptTrade()`/`CancelTradeAccept()`/`CloseTrade()`
-//! flag the accept / un-accept / cancel verbs the app maps to `CMSG_ACCEPT_TRADE` /
-//! `CMSG_UNACCEPT_TRADE` / `CMSG_CANCEL_TRADE`. Setting items/gold onto the window (the drag-drop
-//! slots + the money widget) is decision 0592 P2.
+//! The trade bindings: the app pushes both sides of the open trade ([`UiScript::set_trade`]), and
+//! the trade verbs queue intents it drains. Slots are 1-based, 1..=7, the seventh the non-traded
+//! enchant slot; an empty or out-of-range slot answers nil. The partner rides the `"npc"` unit,
+//! which the app points at them.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -31,63 +9,48 @@ use super::binding_abi::flag;
 use super::cursor::{self, CursorPayload};
 use super::Model;
 
-/// The seven trade slots per side (`TRADE_SLOT_COUNT`, vmangos `TradeData.h`) — six tradeable
-/// (1..=6) plus the seventh non-traded / enchant slot. Mirrors the wire's fixed count without a
-/// `benilla-protocol` dependency (this crate is engine-only).
+/// Slots per side, six traded and the non-traded enchant slot: vmangos `TRADE_SLOT_COUNT`
+/// (`TradeData.h`), kept equal to the protocol crate's, which this crate does not depend on.
 pub const TRADE_SLOTS: usize = 7;
 
-/// One resolved trade slot, as the app pushes it — the wire `TradeItem`'s
-/// entry/display resolved through the shared item-template + display caches. Plain data; an empty
-/// slot is `None` in [`TradeSideState::slots`], never a zeroed `Some`.
+/// One filled trade slot, resolved by the app; an empty slot is `None`, never a zeroed `Some`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TradeSlotItem {
-    /// The item template entry (`0` never stored — an empty slot is `None`) — the `isUsable` gate's
-    /// key over the shared item-template store, and the slot tooltip's identity (decision 0592 P2).
+    /// The item entry, the key for `isUsable` and the tooltip.
     pub item_id: u32,
-    /// The item name (from the template); `None` while the ask-once template answer is in flight.
+    /// `None` while the item template is in flight.
     pub name: Option<String>,
-    /// The item icon (from the wire `display_id` via `ItemDisplayInfo.dbc`); `None` while in flight.
     pub texture: Option<String>,
-    /// The stack count in this slot (`>= 1` for a filled slot).
     pub count: u32,
-    /// The item quality (0..=6); `None` while the template is in flight. Read only for the target
-    /// side (the recipient slot's quality colour + red not-usable tint — `TradeFrame.lua` l.84).
+    /// `None` while the template is in flight; only the target side's info returns it
+    /// (`TradeFrame.lua:84`).
     pub quality: Option<u32>,
-    /// The enchant-slot spell name (slot 7 only) — `None` in P1 (the applied-spell path is
-    /// decision 0592 P3).
+    /// The name of the enchant being applied to slot 7, which stock shows in green
+    /// (`TradeFrame.lua:62`); the app always sends `None`.
     pub enchantment: Option<String>,
-    /// The slot's full escaped `|cff…|Hitem:…|h[Name]|h|r` link — `GetTradePlayerItemLink` /
-    /// `GetTradeTargetItemLink`'s answer, and `None` while the ask-once template answer is in
-    /// flight (the link embeds the name and the quality colour).
-    ///
-    /// The same shape as [`super::merchant::MerchantItem::link`] and for the same reason: 1.12's
-    /// own `TradeFrame.lua` hands it straight to `DressUpItemLink` on a ctrl-click and to
-    /// `ChatFrameEditBox:Insert` on a shift-click, so it is a string the app already knows rather
-    /// than anything the engine composes.
+    /// The escaped item link the link verbs answer; `None` while the template is in flight, since
+    /// it embeds the name and the quality.
     pub link: Option<String>,
 }
 
-/// One side of the trade window — the seven slots (1-based in the API) plus the gold offered on
-/// this side, in copper. `player` is our own offer, `target` the partner's ([`TradeState`]).
+/// One side's offer.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TradeSideState {
-    /// The seven slots (index 0 = trade slot 1 … index 6 = the enchant slot); `None` = empty.
+    /// Index 0 is trade slot 1, index 6 the enchant slot.
     pub slots: [Option<TradeSlotItem>; TRADE_SLOTS],
-    /// Gold offered on this side, in copper.
+    /// In copper.
     pub gold: u32,
 }
 
-/// The open trade window's snapshot. Pushed whole by the app; `None` = no trade open (the window is
-/// closed). The accept-glow state is **not** here — it rides the fired `TRADE_ACCEPT_UPDATE` event,
-/// never a getter (the reference `TradeFrame_SetAcceptState`, `TradeFrame.lua` l.116).
+/// The open trade, pushed whole by the app. The accept highlight is not here: it rides the
+/// `TRADE_ACCEPT_UPDATE` event (`TradeFrame.lua:35`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TradeState {
-    /// Our own offer (the wire's `their_window == false` snapshot).
+    /// Our offer.
     pub player: TradeSideState,
-    /// The partner's offer (the wire's `their_window == true` snapshot).
+    /// The partner's offer, the wire's `their_window` snapshot.
     pub target: TradeSideState,
-    /// The partner's name, resolved by the app through the name cache; `None` while in flight. The
-    /// window header reads this (benilla's `GetTradePartnerName()` in place of `UnitName("NPC")`).
+    /// The partner's name for `GetTradePartnerName()`, `None` while in flight.
     pub partner_name: Option<String>,
 }
 
@@ -97,65 +60,55 @@ impl super::UiScript {
         self.model_mut().trade = state;
     }
 
-    /// Drain the unit tokens `InitiateTrade` queued since the last drain — the app resolves each
-    /// token → player guid and sends `CMSG_INITIATE_TRADE`.
+    /// Drain the tokens `InitiateTrade` queued; the app sends `CMSG_INITIATE_TRADE` for each.
     pub fn take_trade_initiates(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().trade_initiates)
     }
 
-    /// Whether `AcceptTrade` was called since the last drain (and clear the flag) — the app maps it
-    /// to `CMSG_ACCEPT_TRADE`.
+    /// Whether `AcceptTrade` was called since the last drain: `CMSG_ACCEPT_TRADE`.
     pub fn take_trade_accept(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().trade_accept)
     }
 
-    /// Whether `CancelTradeAccept` was called since the last drain — the app maps it to
-    /// `CMSG_UNACCEPT_TRADE` (drop your accept, stay in the trade).
+    /// Whether `CancelTradeAccept` was called since the last drain: `CMSG_UNACCEPT_TRADE`.
     pub fn take_trade_unaccept(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().trade_unaccept)
     }
 
-    /// Whether `CloseTrade` was called since the last drain — the app maps it to `CMSG_CANCEL_TRADE`
-    /// and clears its local trade session (the window's OnHide close verb).
+    /// Whether `CloseTrade`, the window's OnHide verb, was called since the last drain; the app
+    /// sends `CMSG_CANCEL_TRADE` and ends its session.
     pub fn take_trade_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().trade_close)
     }
 
-    /// Whether `BeginTrade()` was called since the last drain — `CMSG_BEGIN_TRADE`, empty
-    /// (the TRADE dialog that calls it can never show in 1.12.1, so this is an
-    /// addon's reach).
+    /// Whether `BeginTrade()` was called since the last drain: an empty `CMSG_BEGIN_TRADE`.
     pub fn take_trade_begin(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().trade_begin)
     }
 
-    /// Whether `CancelTrade()` was called since the last drain — the BARE `CMSG_CANCEL_TRADE`,
-    /// where `CloseTrade` wraps the same opcode in the window's teardown.
+    /// Whether `CancelTrade()` was called since the last drain: the bare `CMSG_CANCEL_TRADE`.
     pub fn take_trade_cancel(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().trade_cancel)
     }
 
-    /// The copper amount `SetTradeMoney` last offered since the last drain (and clear it) — the app
-    /// maps it to `CMSG_SET_TRADE_GOLD` (decision 0592 P2).
+    /// The copper `SetTradeMoney` last offered since the last drain: `CMSG_SET_TRADE_GOLD`.
     pub fn take_trade_money(&mut self) -> Option<u32> {
         std::mem::take(&mut self.model_mut().trade_set_money)
     }
 
-    /// The `(trade_id, bag, slot)` placements `ClickTradeButton` queued since the last drain — the app
-    /// maps each `(bag, slot)` through its wire-position map to `CMSG_SET_TRADE_ITEM` (decision 0592 P2).
-    /// `trade_id` is 1-based (1..=7); `bag`/`slot` are the engine's cursor space (0 backpack …).
+    /// The `(trade_id, bag, slot)` placements `ClickTradeButton` queued, for `CMSG_SET_TRADE_ITEM`:
+    /// `trade_id` 1..=7, `bag` and `slot` in the cursor's space.
     pub fn take_trade_set_items(&mut self) -> Vec<(u32, i64, u32)> {
         std::mem::take(&mut self.model_mut().trade_set_items)
     }
 
-    /// The 1-based trade slot ids `ClickTradeButton` queued to clear (empty-cursor click on a filled
-    /// slot) — the app maps each to `CMSG_CLEAR_TRADE_ITEM` (decision 0592 P2).
+    /// The 1-based slots `ClickTradeButton` queued to clear, for `CMSG_CLEAR_TRADE_ITEM`.
     pub fn take_trade_clear_items(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().trade_clear_items)
     }
 }
 
-/// Fetch a cloned slot for a 1-based index off one side, or `None` (out of range / empty / no trade
-/// open). `pick` selects the side from the pushed [`TradeState`].
+/// The slot at a 1-based index on the side `pick` selects.
 fn slot_at(
     model: &Model,
     index: usize,
@@ -170,20 +123,16 @@ fn slot_at(
         .flatten()
 }
 
-/// The gold on one side (copper), or `0` if no trade is open.
 fn gold(model: &Model, pick: impl Fn(&TradeState) -> &TradeSideState) -> u32 {
     model.trade.as_ref().map(pick).map_or(0, |side| side.gold)
 }
 
-/// A click on OUR trade slot `id` (1-based) as a cursor drop target (decision 0592 P2, ref
-/// `ClickTradeButton`, TradeFrame.xml l.135): a held bag item drops in — queue a `(id, bag, slot)`
-/// placement the app maps to `CMSG_SET_TRADE_ITEM` — and the cursor is **cleared** (the 0218
-/// plain-clear: no local held copy, the filled slot reads back from `SMSG_TRADE_STATUS_EXTENDED`). An
-/// empty cursor on a filled slot queues a clear (`CMSG_CLEAR_TRADE_ITEM`; the item never left the bag,
-/// the server just un-references it). A spell/action payload is refused, put back untouched.
+/// `ClickTradeButton(id)` on our slot (`TradeFrame.xml:135`): a held bag item is queued for
+/// `CMSG_SET_TRADE_ITEM` and the cursor cleared, the app filling our column itself since vmangos
+/// echoes a placement only to the partner (`TradeData.cpp:81`); an empty cursor on a filled slot
+/// queues a clear. Any other payload stays on the cursor.
 fn click_trade_button(model: &mut Model, id: u32) {
-    // The money arm runs first and never reads the index (`0x4bfe34`): coins on
-    // the cursor go into the offer as `AddTradeMoney` puts them, and that is the whole click.
+    // Coins on the cursor go into the offer, the index unread (`0x4bfe34`).
     if matches!(model.cursor, Some(CursorPayload::Money(_))) {
         cursor::money::add_trade_money(model);
         return;
@@ -217,8 +166,7 @@ fn click_trade_button(model: &mut Model, id: u32) {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetTradePlayerItemInfo(id) → name, texture, numItems, isUsable, enchantment (our own offer;
-    // TradeFrame.lua l.55). An empty/out-of-range slot answers nil.
+    // GetTradePlayerItemInfo(id): the five values `TradeFrame.lua:55` reads.
     g.set(
         "GetTradePlayerItemInfo",
         lua.create_function(|lua, id: usize| {
@@ -249,13 +197,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradePlayerItemLink(id) / GetTradeTargetItemLink(id) → the slot's escaped item link, or
-    // nil for an empty slot / one whose template answer is still in flight.
-    //
-    // 1.12's `TradeFrame.lua` reaches for these on a modified click of a trade slot — ctrl hands
-    // the link to `DressUpItemLink`, shift inserts it into the chat box — the same pair of arms
-    // the merchant rows have, which is why this mirrors `GetMerchantItemLink` exactly rather than
-    // composing anything here.
+    // The link verbs, for a slot's ctrl and shift clicks (`TradeFrame.xml:129`, `:95`).
     for (name, side) in [
         ("GetTradePlayerItemLink", true),
         ("GetTradeTargetItemLink", false),
@@ -280,8 +222,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // GetTradeTargetItemInfo(id) → name, texture, numItems, quality, isUsable, enchantment (the
-    // partner's offer; TradeFrame.lua l.84 — the extra `quality` is the recipient-only colour).
+    // GetTradeTargetItemInfo(id): the six values `TradeFrame.lua:84` reads.
     g.set(
         "GetTradeTargetItemInfo",
         lua.create_function(|lua, id: usize| {
@@ -317,8 +258,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetPlayerTradeMoney() / GetTargetTradeMoney() → the two gold amounts, copper (TradeFrame.lua
-    // l.165/l.585). 0 when no trade is open.
     g.set(
         "GetPlayerTradeMoney",
         lua.create_function(|lua, ()| {
@@ -334,8 +273,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradePartnerName() → the partner's name (benilla's header getter, in place of the
-    // reference's UnitName("NPC") — see the module doc). nil while in flight / no trade open.
+    // `GetTradePartnerName()` is not a 1.12 global; the stock header reads `UnitName("NPC")`
+    // (`TradeFrame.lua:43`).
     g.set(
         "GetTradePartnerName",
         lua.create_function(|lua, ()| {
@@ -349,8 +288,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // InitiateTrade(unit) — queue the right-click menu's trade offer against a unit token; the app
-    // resolves it → player guid → CMSG_INITIATE_TRADE (the UnitPopup TRADE row, decision 0592 P1).
+    // InitiateTrade(unit): the unit menu's TRADE row.
     g.set(
         "InitiateTrade",
         lua.create_function(|lua, unit: String| {
@@ -362,8 +300,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // AcceptTrade() / CancelTradeAccept() / CloseTrade() — the Trade / un-accept / cancel verbs the
-    // app maps to CMSG_ACCEPT_TRADE / CMSG_UNACCEPT_TRADE / CMSG_CANCEL_TRADE (decision 0592 P1).
     g.set(
         "AcceptTrade",
         lua.create_function(|lua, ()| {
@@ -391,10 +327,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // BeginTrade() / CancelTrade() — the TRADE dialog's pair (`0x48aa60`/`0x48aa70`:
-    // 0 args, 0 returns, no gate; `0x117` and `0x11C`, both empty). The dialog itself can never
-    // show in 1.12.1 (TRADE_REQUEST is signalled by nothing), so both are an addon's reach;
-    // CancelTrade is the bare packet, CloseTrade above the same opcode wrapped in the teardown.
+    // BeginTrade() and CancelTrade() (`0x48aa60`, `0x48aa70`): no arguments, no returns, no gate,
+    // and an empty `0x117` or `0x11C`. They are the `TRADE` popup's Yes and No
+    // (`StaticPopup.lua:517-522`), which never shows in 1.12 as nothing signals `TRADE_REQUEST`.
     g.set(
         "BeginTrade",
         lua.create_function(|lua, ()| {
@@ -414,14 +349,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetTradeMoney(copper) — offer this many copper on our side (the money input's value-changed
-    // callback); the app maps it to CMSG_SET_TRADE_GOLD (decision 0592 P2). `i64` in, clamped, so a
-    // fractional/negative Lua number can never panic the coercion.
+    // SetTradeMoney(copper): the money input's callback (`TradeFrame.lua:173`).
     g.set(
         "SetTradeMoney",
         lua.create_function(|lua, copper: Value| {
-            // `0x4c0820`: a non-number RAISES; the low dword goes on the wire as an
-            // absolute offer, gated on the purse covering it — a refusal is silent at every level.
+            // `0x4c0820`: a non-number raises; the low dword is the whole offer, sent only when the
+            // purse covers it, and a refusal is silent.
             let n = crate::script::binding_abi::number_arg(
                 lua,
                 copper,
@@ -436,8 +369,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ClickTradeButton(id) — drop a held bag item into / clear our trade slot `id` (1..=7); the app
-    // maps it to CMSG_SET_TRADE_ITEM / CMSG_CLEAR_TRADE_ITEM (decision 0592 P2).
     g.set(
         "ClickTradeButton",
         lua.create_function(|lua, id: u32| {
@@ -447,14 +378,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ClickTargetTradeButton(id) — the partner's column is read-only (their offer is server-driven);
-    // inert in P2 (the shift-click item link is decision 0592 P3). Registered so the shared slot
-    // handler can call it for the recipient side without erroring.
+    // ClickTargetTradeButton(id) (`TradeFrame.xml:101`): the partner's column takes nothing.
     g.set(
         "ClickTargetTradeButton",
         lua.create_function(|lua, _id: u32| {
-            // The same money arm as `ClickTradeButton` (`0x4c00a3`): coins on the
-            // cursor go into OUR offer whichever side's slot was clicked, the index unread.
+            // Coins on the cursor still go into our offer, the index unread (`0x4c00a3`).
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             cursor::money::add_trade_money(&mut model);
             Ok(())
@@ -502,12 +430,6 @@ mod tests {
         }
     }
 
-    /// **The two link verbs**, and the two absences they share with every other item-link reader
-    /// here: an empty slot, and a slot whose ask-once template answer has not landed.
-    ///
-    /// 1.12's `TradeFrame.lua` reaches for these on a modified click of a trade slot — ctrl hands
-    /// the link to `DressUpItemLink`, shift inserts it into the chat box. They were two of the four
-    /// engine verbs the readiness probe reports against stock `TradeFrame.xml`.
     #[test]
     fn the_trade_slots_answer_their_item_links() {
         let mut s = UiScript::new().unwrap();
@@ -520,7 +442,7 @@ mod tests {
             .unwrap());
 
         let mut st = state();
-        // A slot whose template is still in flight carries no link — the string embeds the name.
+        // A slot whose template is in flight has no link.
         st.target.slots[1] = Some(TradeSlotItem {
             item_id: 4306,
             name: None,
@@ -542,7 +464,7 @@ mod tests {
                 .unwrap(),
             "|cffffffff|Hitem:4306:0:0:0|h[Linen Cloth]|h|r"
         );
-        // …the in-flight slot, and an empty one, and one past the seven.
+        // The in-flight slot, an empty one, and one past the seven.
         assert!(s
             .eval::<bool>("return GetTradeTargetItemLink(2) == nil")
             .unwrap());
@@ -565,7 +487,6 @@ mod tests {
 
         s.set_trade(Some(state()));
 
-        // Player slot 1: name, texture, count 5, isUsable 1, enchantment nil.
         let (name, tex, count, usable): (String, String, i64, i64) = s
             .eval(
                 "local n,t,c,u,e = GetTradePlayerItemInfo(1)\n\
@@ -577,12 +498,11 @@ mod tests {
         assert!(s
             .eval::<bool>("local n,t,c,u,e = GetTradePlayerItemInfo(1)\nreturn e == nil")
             .unwrap());
-        // An empty player slot → nil.
         assert!(s
             .eval::<bool>("return GetTradePlayerItemInfo(2) == nil")
             .unwrap());
 
-        // Target slot 1 carries the extra quality (index 4 of the 6-tuple).
+        // The target side adds quality as the fourth return.
         let (name, _tex, count, quality, usable): (String, String, i64, i64, i64) =
             s.eval("return GetTradeTargetItemInfo(1)").unwrap();
         assert_eq!(
@@ -643,13 +563,12 @@ mod tests {
         assert!(s.take_trade_close());
         assert!(!s.take_trade_close(), "drained");
 
-        // SetTradeMoney folds gold/silver/copper into a copper total the app ships as SET_TRADE_GOLD,
-        // gated on the purse covering it (1965).
+        // An offer is sent only when the purse covers it.
         s.set_money(20_000);
         s.run("SetTradeMoney(1 * 10000 + 23 * 100 + 45)").unwrap();
         assert_eq!(s.take_trade_money(), Some(12_345));
         assert_eq!(s.take_trade_money(), None, "drained");
-        // The low dword of -5 is an unsigned 0xFFFFFFFB, past any purse: refused silently (1965).
+        // The low dword of -5 is 0xFFFFFFFB, past any purse: refused silently.
         s.run("SetTradeMoney(-5)").unwrap();
         assert_eq!(s.take_trade_money(), None);
         s.run("SetTradeMoney(30000)").unwrap();
@@ -682,8 +601,7 @@ mod tests {
         assert!(s.take_trade_set_items().is_empty());
         assert!(s.take_trade_clear_items().is_empty());
 
-        // A held backpack item (bag 0, slot 3) dropped on our slot 2 → a (2, 0, 3) placement, and the
-        // cursor is cleared (0218 plain-clear — no local held copy).
+        // A held backpack item dropped on our slot 2 queues (2, 0, 3) and clears the cursor.
         s.model_mut().cursor = Some(item(0, 3));
         s.run("ClickTradeButton(2)").unwrap();
         assert_eq!(s.take_trade_set_items(), vec![(2, 0, 3)]);
@@ -692,7 +610,7 @@ mod tests {
             "the drop clears the cursor"
         );
 
-        // Empty cursor on a FILLED player slot → clear it; on an empty slot → nothing.
+        // An empty cursor clears a filled slot and does nothing on an empty one.
         let mut st = TradeState::default();
         st.player.slots[0] = Some(TradeSlotItem {
             item_id: 2589,
@@ -708,7 +626,7 @@ mod tests {
             "an empty slot clears nothing"
         );
 
-        // The partner column is read-only — ClickTargetTradeButton never queues and never eats the cursor.
+        // The partner's column queues nothing and leaves the cursor alone.
         s.model_mut().cursor = Some(item(0, 3));
         s.run("ClickTargetTradeButton(1)").unwrap();
         assert!(s.take_trade_set_items().is_empty());
@@ -717,7 +635,7 @@ mod tests {
             "a partner-side click leaves the cursor untouched"
         );
 
-        // A spell payload is refused — put back untouched, nothing queued.
+        // A spell payload is refused and stays on the cursor.
         s.model_mut().cursor = Some(CursorPayload::Spell(crate::script::cursor::CursorSpell {
             passive: false,
             book_slot: 1,

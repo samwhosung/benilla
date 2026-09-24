@@ -1,9 +1,6 @@
-//! The movable-frame family — `SetMovable`/`StartMoving`/`StopMovingOrSizing`/`SetUserPlaced`/
-//! `SetResizable` (the mechanism and its addresses are in `script::object::movable`).
-//!
-//! Every test here drives the PRODUCTION path: the Lua bindings, and the real
-//! `mouse_button`/`mouse_move` entry points, so the drag gesture that fires `OnDragStart` is the
-//! same one an addon gets.
+//! The movable-frame family (`SetMovable`, `StartMoving`, `StopMovingOrSizing`, `SetUserPlaced`,
+//! `SetResizable`), title regions and the user-placed layout cache, driven through the Lua
+//! bindings and the real mouse entry points.
 
 use super::common::script;
 use crate::script::UiScript;
@@ -38,16 +35,13 @@ fn corner(s: &mut UiScript) -> (f32, f32) {
     (left, bottom)
 }
 
-/// The whole point of the family: the four-line addon idiom actually moves the frame, and the
-/// position it was dragged to SURVIVES the stop — nothing snaps it back to the `SetPoint` it was
-/// born with, and nothing keeps moving it after the button is up.
 #[test]
 fn the_canonical_addon_idiom_moves_a_frame_and_the_position_survives_the_stop() {
     let mut s = movable_panel();
     assert_eq!(corner(&mut s), (100.0, 100.0), "born where SetPoint put it");
 
     s.mouse_button(150.0, 140.0, "LeftButton", true); // press inside the panel
-    s.mouse_move(152.0, 140.0); // 2 px — under the drag threshold, nothing yet
+    s.mouse_move(152.0, 140.0); // 2 px, under the drag threshold
     assert_eq!(s.eval::<i64>("return starts").unwrap(), 0);
     assert_eq!(corner(&mut s), (100.0, 100.0));
 
@@ -64,27 +58,23 @@ fn the_canonical_addon_idiom_moves_a_frame_and_the_position_survives_the_stop() 
     assert_eq!(s.eval::<i64>("return stops").unwrap(), 1);
     assert_eq!(corner(&mut s), (200.0, 150.0), "the position survives");
 
-    // And the move is really over: further cursor motion moves nothing.
     s.mouse_move(500.0, 400.0);
     assert_eq!(corner(&mut s), (200.0, 150.0), "no longer following");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 
-    // GetPoint reads back the frame's OWN point with the dragged offsets — the reference writes
-    // the anchors in place rather than rewriting them, so what an addon saves is what it set.
+    // The reference moves the anchors in place, so GetPoint reads the frame's own point, dragged.
     let (point, x, y) = s
         .eval::<(String, f64, f64)>("local p, _, _, x, y = MovePanel:GetPoint() return p, x, y")
         .unwrap();
     assert_eq!((point.as_str(), x, y), ("BOTTOMLEFT", 200.0, 150.0));
 }
 
-/// A moving frame follows SUCCESSIVE moves, each one applying only that step's delta (the pump
-/// re-centers its sample — a bug that integrated from the grab instead would double the second
-/// step, and one that forgot to re-center would freeze after the first).
+/// Each move applies only its own delta: the pump re-centers its sample after every step.
 #[test]
 fn a_moving_frame_follows_successive_mouse_moves() {
     let mut s = movable_panel();
     s.mouse_button(150.0, 140.0, "LeftButton", true);
-    s.mouse_move(160.0, 140.0); // the move that STARTS the drag
+    s.mouse_move(160.0, 140.0); // the move that starts the drag
     assert_eq!(
         corner(&mut s),
         (100.0, 100.0),
@@ -102,9 +92,7 @@ fn a_moving_frame_follows_successive_mouse_moves() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `StartMoving` on a frame that is not `SetMovable(true)` RAISES and moves nothing — the
-/// reference's own guard (`0x776700`'s movable-bit test). The error is a real Lua error, so an
-/// addon's `pcall` sees it.
+/// The reference's `StartMoving` raises on a frame that is not movable (`0x776700`).
 #[test]
 fn start_moving_on_a_frame_that_is_not_movable_raises_and_moves_nothing() {
     let mut s = script();
@@ -128,13 +116,11 @@ fn start_moving_on_a_frame_that_is_not_movable_raises_and_moves_nothing() {
         "the refusal names why"
     );
 
-    // Nothing is in flight, so the cursor moves nothing.
     s.mouse_move(400.0, 400.0);
     s.resolve();
     let left = s.eval::<f64>("return FixedPanel:GetLeft()").unwrap();
     assert_eq!(left, 100.0, "a refused StartMoving started no move");
 
-    // The same frame, once made movable, moves — proving the guard was the only thing stopping it.
     s.run("FixedPanel:SetMovable(true) FixedPanel:StartMoving()")
         .unwrap();
     s.mouse_move(450.0, 400.0);
@@ -142,10 +128,8 @@ fn start_moving_on_a_frame_that_is_not_movable_raises_and_moves_nothing() {
     assert_eq!(s.eval::<f64>("return FixedPanel:GetLeft()").unwrap(), 150.0);
 }
 
-/// `StopMovingOrSizing` with nothing moving is harmless — the double call, the OnDragStop that
-/// never had a StartMoving, the addon that also wires it to OnMouseUp. And it only stops the
-/// frame that is actually in the drag slot (the reference's `[root+0xcfc] == self` compare), so
-/// one frame's stop cannot end another's move.
+/// `StopMovingOrSizing` is harmless with nothing moving, and stops only the frame in the drag slot
+/// (the reference compares `[root+0xcfc]` with self).
 #[test]
 fn stop_moving_or_sizing_is_harmless_with_nothing_moving_and_stops_only_its_own_frame() {
     let mut s = movable_panel();
@@ -163,7 +147,6 @@ fn stop_moving_or_sizing_is_harmless_with_nothing_moving_and_stops_only_its_own_
     assert!(s.errors().is_empty(), "{:?}", s.errors());
     assert_eq!(corner(&mut s), (100.0, 100.0), "nothing moved");
 
-    // Now start a real move and have the OTHER frame try to stop it.
     s.run("MovePanel:StartMoving()").unwrap();
     s.mouse_move(50.0, 50.0); // cursor_pos was (0,0) ⇒ +50, +50
     assert_eq!(corner(&mut s), (150.0, 150.0));
@@ -180,10 +163,7 @@ fn stop_moving_or_sizing_is_harmless_with_nothing_moving_and_stops_only_its_own_
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A frame stretched between two anchors — no explicit size at all — moves RIGIDLY and keeps its
-/// derived size. This is the case a single-point rewrite gets wrong (it would drop the opposing
-/// anchor and leave the frame under-constrained, i.e. gone), and the case that decides between
-/// translating one anchor and translating the set.
+/// A move translates every anchor, so a frame sized by two anchors keeps its size.
 #[test]
 fn a_frame_stretched_between_two_anchors_moves_rigidly() {
     let mut s = script();
@@ -219,8 +199,8 @@ fn a_frame_stretched_between_two_anchors_moves_rigidly() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A SCALED frame moves with the cursor 1:1 on screen — the anchor offsets it writes are in local
-/// units, so they carry the inverse of the frame's own scale (`0x768710`'s `dx/scale`).
+/// A scaled frame tracks the cursor 1:1 on screen: the offsets it writes are in local units
+/// (`0x768710` divides by the frame's scale).
 #[test]
 fn a_scaled_frame_tracks_the_cursor_one_to_one_on_screen() {
     let mut s = script();
@@ -244,7 +224,7 @@ fn a_scaled_frame_tracks_the_cursor_one_to_one_on_screen() {
     );
     s.mouse_move(40.0, 0.0);
     s.resolve();
-    // GetLeft reports LOCAL units: 40 screen px is 20 local, on top of the local 100.
+    // GetLeft reports local units: 40 screen px is 20 local, on top of the local 100.
     assert_eq!(
         s.eval::<f64>("return ScaledPanel:GetLeft()").unwrap(),
         120.0
@@ -256,9 +236,8 @@ fn a_scaled_frame_tracks_the_cursor_one_to_one_on_screen() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The flags: default off, round-trip through their setters, and `SetUserPlaced`'s guard — the
-/// reference refuses it unless the frame is movable OR resizable (`776adb: test ah,0x3`).
-/// `StartMoving` sets the bit itself, which is the reference's drag-start doing it, not us.
+/// The reference refuses `SetUserPlaced` unless the frame is movable or resizable (`0x776adb`),
+/// and its drag start sets the bit itself (`0x7652b0`).
 #[test]
 fn the_three_flags_default_off_round_trip_and_user_placed_is_guarded() {
     let mut s = script();
@@ -282,7 +261,6 @@ fn the_three_flags_default_off_round_trip_and_user_placed_is_guarded() {
         "no frame is born flagged"
     );
 
-    // SetUserPlaced before either flag: refused, exactly like the reference.
     assert!(
         !s.eval::<bool>("return (pcall(function() FlagPanel:SetUserPlaced(true) end))")
             .unwrap(),
@@ -305,7 +283,6 @@ fn the_three_flags_default_off_round_trip_and_user_placed_is_guarded() {
         "truthy 1 sets, false clears"
     );
 
-    // The drag start sets userPlaced itself (`0x7652b0`).
     s.resolve();
     s.run("FlagPanel:StartMoving()").unwrap();
     assert!(
@@ -316,9 +293,6 @@ fn the_three_flags_default_off_round_trip_and_user_placed_is_guarded() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `movable="true"` / `resizable="true"` in XML land on the real methods — they were a warn-once
-/// gap in the loader until this family existed, which left every reference window authored
-/// movable undraggable while `SetMovable` worked fine from Lua.
 #[test]
 fn the_xml_movable_and_resizable_attributes_reach_the_methods() {
     let s = script();
@@ -349,17 +323,9 @@ fn the_xml_movable_and_resizable_attributes_reach_the_methods() {
     );
 }
 
-/// **`StartSizing(grip)` moves the gripped edges and plants the opposite ones.**
-///
-/// `0x776830`; the reference's own caller is
-/// `FloatingChatFrame.lua:600`. Four corpus addons reach it through ONE line —
-/// `FuBar_Panel.lua:980`, replicated into FuBar_CorkFu, FuBar_FuXPFu, FuBar_SpellStatusFu and oRA2
-/// (1207: one library, not four votes).
-///
-/// What is not settled anywhere is which edges a grip moves — the verb only orchestrates, with no
-/// inline math. Taken here as the plain meaning of an anchor point, which is how the reference's
-/// caller uses it. This test is where that reading is pinned, so a finding that contradicts it
-/// fails here first.
+/// `StartSizing(grip)` (`0x776830`, called from `FloatingChatFrame.lua:600`) moves the gripped
+/// edges and plants the opposite ones. Which edges a grip moves is untraced in the reference, whose
+/// verb has no inline math; this takes the anchor point's plain meaning, as that caller does.
 #[test]
 fn start_sizing_moves_the_gripped_edge_and_plants_the_other() {
     let mut s = crate::script::UiScript::new().unwrap();
@@ -375,7 +341,7 @@ fn start_sizing_moves_the_gripped_edge_and_plants_the_other() {
     .unwrap();
     s.resolve();
 
-    // Grip the RIGHT edge and drag 40 right: width grows, the left edge stays planted.
+    // Grip the right edge and drag 40 right: the width grows, the left edge stays planted.
     s.mouse_move(300.0, 100.0);
     s.run("Sizer:StartSizing(\"RIGHT\")").unwrap();
     s.mouse_move(340.0, 100.0);
@@ -384,8 +350,7 @@ fn start_sizing_moves_the_gripped_edge_and_plants_the_other() {
     assert_eq!(s.eval::<f32>("return Sizer:GetLeft()").unwrap(), 100.0);
     s.run("Sizer:StopMovingOrSizing()").unwrap();
 
-    // Grip the LEFT edge and drag 30 right: width SHRINKS and the left edge follows the cursor,
-    // so the right edge is the one that stays put.
+    // Grip the left edge and drag 30 right: the width shrinks and the right edge stays put.
     let right_before = s.eval::<f32>("return Sizer:GetRight()").unwrap();
     s.run("Sizer:StartSizing(\"LEFT\")").unwrap();
     s.mouse_move(370.0, 100.0);
@@ -398,13 +363,11 @@ fn start_sizing_moves_the_gripped_edge_and_plants_the_other() {
         "the ungripped edge must not move"
     );
 
-    // StopMovingOrSizing ends it: further motion changes nothing.
     s.run("Sizer:StopMovingOrSizing()").unwrap();
     s.mouse_move(500.0, 100.0);
     s.resolve();
     assert_eq!(s.eval::<f32>("return Sizer:GetWidth()").unwrap(), 210.0);
 
-    // A frame that is not resizable refuses, like the movable family's siblings.
     s.run("g = CreateFrame(\"Frame\", \"NotSizer\", UIParent)")
         .unwrap();
     assert!(
@@ -413,9 +376,7 @@ fn start_sizing_moves_the_gripped_edge_and_plants_the_other() {
     );
 }
 
-/// **`CreateTitleRegion` / `GetTitleRegion` — the object half** (`0x773910` / `0x773820`).
-///
-/// Four details, each one a coin-flip a reimplementation loses, and each one asserted.
+/// `CreateTitleRegion` (`0x773910`) and `GetTitleRegion` (`0x773820`): the object half.
 #[test]
 fn a_title_region_is_a_plain_region_and_creating_it_twice_is_destructive() {
     let mut s = script();
@@ -429,15 +390,14 @@ fn a_title_region_is_a_plain_region_and_creating_it_twice_is_destructive() {
     )
     .unwrap();
 
-    // GetTitleRegion answers ONE value and it is nil — not zero values, which is the asymmetry
-    // against `GetBackdrop 0x777370`.
+    // With none, it returns one nil, where `GetBackdrop` (`0x777370`) returns no value at all.
     assert_eq!(s.arity("TFrame:GetTitleRegion()").unwrap(), 1);
     assert!(s
         .eval::<Option<bool>>("return TFrame:GetTitleRegion() ~= nil and true or nil")
         .unwrap()
         .is_none());
 
-    // It is a plain REGION — not a Texture wearing a hat.
+    // A plain Region, not a Texture.
     s.run("TR = TFrame:CreateTitleRegion()").unwrap();
     assert_eq!(
         s.eval::<String>("return TR:GetObjectType()").unwrap(),
@@ -455,14 +415,12 @@ fn a_title_region_is_a_plain_region_and_creating_it_twice_is_destructive() {
         .eval::<bool>("return TFrame:GetTitleRegion() == TR")
         .unwrap());
 
-    // **It takes NO argument**: `CreateTitleRegion(frame)` is the no-arg call, which is exactly
-    // what `CustomNameplates/options.lua:73` writes.
+    // It takes no argument: `CreateTitleRegion(frame)` is the no-argument call.
     assert!(s
         .eval::<bool>("return TFrame:CreateTitleRegion(TFrame) == TR")
         .unwrap());
 
-    // **Idempotent, and DESTRUCTIVELY so.** A second call returns the same object after clearing
-    // its anchors — so it silently wipes the points a caller already set.
+    // A second call returns the same region with its anchors cleared.
     s.run("TR:SetAllPoints(TFrame)").unwrap();
     s.resolve();
     assert_eq!(s.eval::<i64>("return TR:GetNumPoints()").unwrap(), 2);
@@ -475,10 +433,8 @@ fn a_title_region_is_a_plain_region_and_creating_it_twice_is_destructive() {
         "the second call ran ClearAllPoints on the region it returned"
     );
 
-    // **It answers the 19 Region methods and NOTHING else** — 1250 §5's named divergence, closed.
-    // (`0x81c554`/`0x81c528`): no Show/Hide, no scripts, no textures. Ours used to share one
-    // metatable with Texture and FontString, so a title region answered `SetTexture` where the
-    // reference raises.
+    // It answers the 19 Region methods and nothing else (`0x81c554`, `0x81c528`): no Show/Hide,
+    // no scripts, no textures.
     for name in crate::script::REGION_MAP_METHODS {
         assert_eq!(
             s.eval::<String>(&format!("return type(TR.{name})"))
@@ -521,8 +477,7 @@ fn a_title_region_is_a_plain_region_and_creating_it_twice_is_destructive() {
         "a title region emits no quad of its own (the frame's own quad is not one): {region_quads:?}"
     );
 
-    // The full region kinds are untouched by the split — asserted LAST, because creating a real
-    // texture would otherwise put a legitimate quad into the check above.
+    // Checked last: a real texture would add a legitimate quad to the check above.
     s.run("TTex = TFrame:CreateTexture(nil, 'ARTWORK')")
         .unwrap();
     assert_eq!(
@@ -532,10 +487,8 @@ fn a_title_region_is_a_plain_region_and_creating_it_twice_is_destructive() {
     );
 }
 
-/// **The drag half — and the three things that make it not just `StartMoving`.**
-///
-/// A mouse-down inside the title region starts a move that (1) SWALLOWS `OnMouseDown`, (2) ends on
-/// release where a scripted move persists, and (3) does not consult `SetMovable`.
+/// A press in the title region starts a move that, unlike `StartMoving`, swallows `OnMouseDown`,
+/// ends on release and skips the movable check.
 #[test]
 fn a_title_region_drag_swallows_the_press_and_ends_on_release() {
     let mut s = script();
@@ -559,7 +512,6 @@ fn a_title_region_drag_swallows_the_press_and_ends_on_release() {
     };
     assert_eq!(corner(&mut s), 100.0);
 
-    // Press inside the title region: the move starts and OnMouseDown never runs.
     s.mouse_button(150.0, 150.0, "LeftButton", true);
     assert_eq!(
         s.eval::<i64>("return downs").unwrap(),
@@ -569,7 +521,7 @@ fn a_title_region_drag_swallows_the_press_and_ends_on_release() {
     s.mouse_move(250.0, 150.0);
     assert_eq!(corner(&mut s), 200.0, "the frame followed the cursor");
 
-    // **Release ends it** — mode 2 auto-cancels. Moving the cursor afterwards must not drag it.
+    // Release ends it: the title-region move (mode 2) cancels itself.
     s.mouse_button(250.0, 150.0, "LeftButton", false);
     s.mouse_move(400.0, 150.0);
     assert_eq!(
@@ -578,16 +530,12 @@ fn a_title_region_drag_swallows_the_press_and_ends_on_release() {
         "the move ended at the release; a scripted StartMoving would still be running"
     );
 
-    // **No `SetMovable` gate on this path** — TP was never made movable, and it dragged. The
-    // movable bit is simply not read on 0x7662c0->0x765320->0x7652b0->0x768430; a title region on a
-    // non-movable frame is the case that tells it apart from `StartMoving`, which raises "Frame %s
-    // is not movable".
+    // The movable bit is not read on this path (`0x7662c0`, `0x765320`, `0x7652b0`, `0x768430`).
     assert!(!s.eval::<bool>("return TP:IsMovable()").unwrap());
 }
 
-/// A region's rect getters answer in its OWNER's units — screen ÷ the owner's effective scale —
-/// exactly as the frame getters do: a texture inside a frame scaled to 0.5 that
-/// covers the frame answers the frame's own width, not half of it.
+/// A region's rect getters answer in its owner's units, screen ÷ the owner's effective scale, as
+/// the frame getters do.
 #[test]
 fn region_getters_answer_in_the_owners_units_under_scale() {
     let mut s = UiScript::new().unwrap();
@@ -616,14 +564,9 @@ fn region_getters_answer_in_the_owners_units_under_scale() {
     assert!((cx - (fl + fr) * 0.5).abs() < 1e-3);
 }
 
-/// **The layout cache's filter is the flags AND the bit, at both ends**.
-///
-/// `SetUserPlaced` is already guarded by `movable|resizable` at its own setter (`0x776adb`), but
-/// the drag entry (`0x7652b0` @`0x7652e5`) and the cache's own apply stamp the bit without going
-/// through it — so a frame can carry the stamp while carrying neither flag, and the reference's
-/// writer tests for both: `0x490e8e test ah,0x10` (userPlaced) AND `0x490e97 test ah,0x3`
-/// (`movable|resizable`). Clearing the flags is how a window stops being persisted, which is what
-/// an addon's `:OnDisable` does on the way out.
+/// The layout cache writes a frame only when it is user-placed (`0x490e8e`) and movable or
+/// resizable (`0x490e97`): the drag start (`0x7652b0` at `0x7652e5`) and the cache's own apply
+/// set the bit past `SetUserPlaced`'s guard (`0x776adb`), so clearing the flags stops the save.
 #[test]
 fn the_write_filter_is_user_placed_and_movable_or_resizable() {
     let mut s = script();
@@ -659,11 +602,9 @@ fn the_write_filter_is_user_placed_and_movable_or_resizable() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The apply is gated per ARM**: position behind `movable` (`0x490600 test
-/// ah,0x1`), size behind `resizable` (`0x490689 test ah,0x2`), and each arm stamps the userPlaced
-/// bit itself (`0x49067e` / `0x490706`) only if it ran. A stock frame carrying neither flag is
-/// left entirely alone, however old its row — which is what stops one addon's stamp from seating
-/// a window forever.
+/// The cache's apply seats position only when movable (`0x490600`) and size only when resizable
+/// (`0x490689`), and each arm that runs sets userPlaced (`0x49067e`, `0x490706`); a frame with
+/// neither flag is left alone.
 #[test]
 fn the_apply_seats_position_behind_movable_and_size_behind_resizable() {
     use crate::script::{FrameLayout, LayoutPoint};

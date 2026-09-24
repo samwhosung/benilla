@@ -1,13 +1,8 @@
-//! The frame keyboard delivery law (the walk `0x765f10`, the existence gate
-//! `0x76b7d0`).
-//!
-//! Each test pins one clause that a plausible-but-wrong implementation gets backwards.
+//! Frame keyboard delivery: the walk (`0x765f10`) and its existence gate (`0x76b7d0`).
 
 use super::common::script;
 
-/// The bucket gate (`0x76af00`): membership is the **keyboard-enabled flag**, not the presence of a
-/// script. A Lua-created frame auto-enables nothing (the reference's `SetScript` doesn't either),
-/// so its handler is unreachable until `EnableKeyboard(true)` puts it in the walk.
+/// Bucket membership (`0x76af00`) is the keyboard-enabled flag, which `SetScript` never sets.
 #[test]
 fn a_key_script_alone_does_not_put_a_frame_in_the_walk() {
     let mut s = script();
@@ -37,9 +32,8 @@ fn a_key_script_alone_does_not_put_a_frame_in_the_walk() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The existence gate's asymmetry (`0x76b7d0`): a frame carrying **only** an `OnKeyUp` consumes
-/// every key-down and runs nothing. This is the clause an implementation "tidies away" — and doing
-/// so silently un-suppresses that frame's keybindings.
+/// The existence gate (`0x76b7d0`) takes either key slot, so a frame with only an `OnKeyUp`
+/// consumes every key-down and runs nothing.
 #[test]
 fn only_an_onkeyup_still_swallows_the_key_down() {
     let mut s = script();
@@ -59,15 +53,12 @@ fn only_an_onkeyup_still_swallows_the_key_down() {
         "…and fires nothing"
     );
 
-    // Neither slot: declines outright.
     s.run("f:SetScript(\"OnKeyUp\", nil)").unwrap();
     assert!(!s.key_input("ESCAPE"), "no key slot at all: declines");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The walk order (`0x765f10`, `0x764ae2`): **strata descending first**, and only then level. A LOW
-/// frame can never take a key from a HIGH one, however high its level — the same "a raise never
-/// changes stratum" shape the toplevel law has.
+/// The walk (`0x765f10`, `0x764ae2`) runs strata descending, then level, then registration order.
 #[test]
 fn the_walk_is_strata_then_level_then_registration() {
     let mut s = script();
@@ -95,7 +86,6 @@ fn the_walk_is_strata_then_level_then_registration() {
         "strata beats level"
     );
 
-    // Within one stratum: higher level wins, and equal levels keep registration order.
     s.run(
         r#"
         winner = nil
@@ -113,8 +103,7 @@ fn the_walk_is_strata_then_level_then_registration() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **At most one frame consumes** (`0x765f10`): the walk stops at the first consumer, so a second
-/// keyboard frame below it never sees the key.
+/// The walk stops at the first consumer (`0x765f10`).
 #[test]
 fn the_first_consumer_ends_the_walk() {
     let mut s = script();
@@ -138,8 +127,7 @@ fn the_first_consumer_ends_the_walk() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A hidden frame is in no bucket (the link gate the walk shares with the draw order), so it
-/// neither fires nor consumes — and the frame below it gets the key instead.
+/// The walk shares the draw order's link gate, so a hidden frame is in no bucket.
 #[test]
 fn a_hidden_frame_is_not_in_the_walk() {
     let mut s = script();
@@ -164,8 +152,7 @@ fn a_hidden_frame_is_not_in_the_walk() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A raising handler must not eat the key or abort the walk's caller: the error is recorded, the
-/// frame still consumed (consumption is the C++ gate's, never the handler's — `0x7026f0`).
+/// Consumption is the gate's decision, never the handler's (`0x7026f0`).
 #[test]
 fn a_raising_handler_still_consumes_and_is_recorded() {
     let mut s = script();
@@ -185,16 +172,9 @@ fn a_raising_handler_still_consumes_and_is_recorded() {
     );
 }
 
-/// **A `CSimpleEditBox` in the walk is asked about FOCUS, never about a script slot** (the vtable
-/// slot `0x77a900`). Its ctor registers it in both key buckets, and vtable `0x81c910` replaces
-/// `+0x5c`/`+0x60` with overrides that *never chain to the base* — "there is no `call 0x76b760`
-/// anywhere in it, so the generic `OnChar` slot `+0x180` is unreachable on an editbox". An
-/// unfocused box therefore takes the `0x77a956 xor eax,eax` leg: decline, walk continues.
-///
-/// Modelling the box as a plain frame here is not a subtle divergence. Stock
-/// `SendMailNameEditBox` carries an XML `<OnChar>` (`SendMailFrame_SendeeAutocomplete`), which
-/// auto-enables it, and it registers first in the mail window — so it consumed every keystroke and
-/// the send tab's other four boxes took no input at all.
+/// An editbox in the walk is asked about focus, never a script slot (`0x77a900`): vtable
+/// `0x81c910` overrides `+0x5c`/`+0x60` without calling the base gate `0x76b760`, so an unfocused
+/// box declines at `0x77a956` and the walk continues.
 #[test]
 fn an_unfocused_editbox_declines_rather_than_eating_its_neighbours_keys() {
     let mut s = script();
@@ -223,8 +203,7 @@ fn an_unfocused_editbox_declines_rather_than_eating_its_neighbours_keys() {
         "the unfocused box's own OnChar is unreachable from the walk — it declines"
     );
 
-    // Give the decoy the focus and its handler is reachable again — through the INSERT, which is
-    // where an editbox's `OnChar` is fired from (`0x77c200`), not through the walk's base gate.
+    // Focused, the decoy's `OnChar` fires from the insert (`0x77c200`), not from the walk's gate.
     s.run("KbDecoyBox:SetFocus()").unwrap();
     assert!(s.char_input("j"), "…and now it is the one that consumes");
     assert_eq!(s.eval::<i64>("return decoyChars").unwrap(), 1);
@@ -240,10 +219,8 @@ fn an_unfocused_editbox_declines_rather_than_eating_its_neighbours_keys() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The same clause on the key-down channel (`+0x60` → `0x77b160`, focus guard at `0x77b1c7`), which
-/// is the [`super::super::keyboard::frame_key_input`] walk: an unfocused box carrying only an
-/// `OnKeyUp` must not swallow a BACKSPACE the focused box is waiting for. The plain-frame
-/// asymmetry above is real *for plain frames*; on a box the base gate is not reached at all.
+/// The same on the key-down channel (`+0x60` is `0x77b160`, focus guard at `0x77b1c7`): an
+/// editbox never reaches the base gate, so an `OnKeyUp` alone does not make it consume.
 #[test]
 fn an_unfocused_editbox_does_not_swallow_a_focused_boxs_editing_key() {
     let mut s = script();

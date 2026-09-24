@@ -1,14 +1,6 @@
-//! **The tree's one civil-time conversion** — broken-down UTC from an epoch second.
-//!
-//! It lives here because this crate already had to have one: 1.12's `date()` global is Lua 5.0's
-//! `os.date` hoisted, and the sandbox strips `os` ([`crate::script`]'s stdlib), so the calendar
-//! had to be written by hand. The screenshot writer is its second caller, and one
-//! correct closed form with two callers beats two hand-rolled loops.
-//!
-//! **UTC, deliberately, and it is a stated divergence wherever a caller wanted local time.** The
-//! workspace has no date dependency at all — every format crate in it is in-repo — and resolving a
-//! local offset needs a timezone source, not a different algorithm. `date()` records the same
-//! divergence for the same reason.
+//! Broken-down UTC time from an epoch second, the calendar behind `date()` and screenshot names.
+//! Deviation: UTC where the reference's callers use local time, because the workspace has no
+//! timezone source.
 
 /// Broken-down UTC time.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -27,12 +19,8 @@ pub struct Civil {
     pub yearday: u32,
 }
 
-/// Break an epoch second down into UTC fields.
-///
-/// The civil-from-days conversion is Howard Hinnant's, shifted to a March-based year so the leap
-/// day lands at the end and no month-length table is needed. Chosen over a hand-rolled loop
-/// because it is a known-correct closed form with no accumulation error, which matters for the
-/// "persisted last session, compared this session" use every corpus `date()` caller has.
+/// Break an epoch second down into UTC fields, by Howard Hinnant's civil-from-days: years count
+/// from month 3, so the leap day falls last and no month-length table is needed.
 pub fn from_unix(secs: i64) -> Civil {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
@@ -55,7 +43,6 @@ pub fn from_unix(secs: i64) -> Civil {
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let year = if month <= 2 { y + 1 } else { y };
 
-    // Day of the year, from the same conversion applied to Jan 1.
     let yearday = (days - days_from_civil(year, 1, 1) + 1) as u32;
     Civil {
         year,
@@ -69,7 +56,6 @@ pub fn from_unix(secs: i64) -> Civil {
     }
 }
 
-/// Days since the epoch for a civil date — the inverse of the above, used only for `yearday`.
 fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
@@ -80,8 +66,7 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// Wall-clock seconds since the Unix epoch. Before the epoch is not a state a game client is in; a
-/// clock that somehow reports it clamps to 0 rather than raising inside an addon's file scope.
+/// Wall-clock seconds since the Unix epoch; a clock set before 1970 reads 0 rather than raising.
 pub fn unix_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -93,8 +78,7 @@ pub fn unix_seconds() -> i64 {
 mod tests {
     use super::*;
 
-    /// Four instants that between them cover the epoch itself, a leap day, a century boundary and
-    /// an ordinary afternoon — the cases a closed-form conversion gets wrong when it is wrong.
+    /// The epoch, an ordinary afternoon, a leap day and the eve of 2000.
     #[test]
     fn known_instants_break_down() {
         let cases = [
@@ -121,8 +105,7 @@ mod tests {
         }
     }
 
-    /// Before 1970 is not a state a client is in, but the arithmetic must not wrap into nonsense
-    /// if a clock reports it — `div_euclid`/`rem_euclid` are load-bearing here, not stylistic.
+    /// `div_euclid`/`rem_euclid` keep a second before 1970 from wrapping into nonsense.
     #[test]
     fn negative_seconds_stay_civil() {
         assert_eq!(

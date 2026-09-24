@@ -1,24 +1,11 @@
-//! **A widget NAME argument is a Lua GLOBAL, not a frame name** — the one rule behind every
-//! binding that takes "a frame or its name": `SetPoint`'s `relativeTo`, `SetAllPoints`,
-//! `SetParent`, `SetScrollChild`.
-//!
-//! The client has a single widget namespace and it is `_G`. The wrapper binder `0x701bd0`
-//! publishes `_G[name] = T` for a named widget (non-overwriting), and the by-name resolvers read
-//! that table back and nothing else — `0x76c760` (FrameScript globals **rawget** + Lua-type-5 +
-//! the `vtbl+0x10` tag check) and its geometry-vtable `+0x28` twin `0x76c700`
-//! (`_G[name]` → `t[0]` userdata → `IsA`).
-//!
-//! A frame's published name is therefore only the commonest way such a global comes to exist —
-//! **an alias is just as good a name**, and 1.12 addons lean on that. Bartender2 2.0 aliases every
-//! stock button (`Bar8Button1 = CharacterBag3Slot`, file scope, `Alias.lua`) and then lays each bar
-//! out by anchoring button *i* to the string `"Bar8Button"..(i-1)`. Resolving those against a
-//! private frame-name registry finds nothing, every anchor falls back to the parent, and all five
-//! bag buttons land in one spot on the bar's far corner.
+//! A widget name argument (`SetPoint`'s `relativeTo`, `SetAllPoints`, `SetParent`,
+//! `SetScrollChild`) is a Lua global, so an alias resolves too: the binder `0x701bd0` publishes
+//! `_G[name]` without overwriting, and the resolvers `0x76c760` (rawget, type 5, `vtbl+0x10` tag)
+//! and `0x76c700` (`_G[name]`, `t[0]`, `IsA`) read `_G` and nothing else.
 
 use super::common::script;
 
-/// Bartender2's exact shape: stock buttons, addon alias globals that no frame is named, a row laid
-/// out through those aliases alone. The row must come out at the addon's pitch.
+/// Bartender2's shape: a row laid out through alias globals that are no frame's own name.
 #[test]
 fn setpoint_relative_to_resolves_an_alias_global() {
     let mut s = script();
@@ -73,8 +60,7 @@ fn setpoint_relative_to_resolves_an_alias_global() {
     );
 }
 
-/// The namespace is ONE: a **region** published under a global resolves as a `relativeTo` exactly
-/// as a frame does (the real XML anchors frames to FontStrings by name — gossip option rows).
+/// One namespace: stock XML anchors frames to FontStrings by name (the gossip option rows).
 #[test]
 fn setpoint_relative_to_resolves_a_region_alias_global() {
     let mut s = script();
@@ -106,9 +92,7 @@ fn setpoint_relative_to_resolves_a_region_alias_global() {
     assert_eq!(bottom, 20.0);
 }
 
-/// A global that is not a widget resolves to nothing — the reference's type-5 + tag check — and
-/// the binding then takes its unresolved-name leg, which **raises** (`0x87ccd4`).
-/// The value is never used, and no anchor is left behind.
+/// The type-5 and tag check reject it, and the unresolved-name leg raises (`0x87ccd4`).
 #[test]
 fn setpoint_relative_to_ignores_a_non_widget_global() {
     let mut s = script();
@@ -136,11 +120,9 @@ fn setpoint_relative_to_ignores_a_non_widget_global() {
     assert_eq!(n, 0, "the raise leaves no anchor behind");
 }
 
-/// **`$parent` is expanded at RUNTIME, on the anchor path only.** `0x76c5b0` has exactly two call
-/// sites — `SetName 0x76c691` and `0x76c71c` *inside* the layout resolver `0x76c700` — so
-/// `SetPoint`/`SetAllPoints` run the token against the anchoring frame's first **named** ancestor
-/// (skipping anonymous links, `"Top"` when there is none), while `SetParent` and `SetScrollChild`,
-/// which call `0x76c760` directly, do not.
+/// The expander `0x76c5b0` is called only from `SetName` (`0x76c691`) and the layout resolver
+/// (`0x76c71c` in `0x76c700`), so anchors expand `$parent` against the first named ancestor
+/// (`"Top"` if none); `SetParent` and `SetScrollChild` call `0x76c760` directly and do not.
 #[test]
 fn setpoint_relative_to_expands_parent_against_the_first_named_ancestor() {
     let mut s = script();
@@ -174,8 +156,6 @@ fn setpoint_relative_to_expands_parent_against_the_first_named_ancestor() {
     assert!(s.take_warnings().is_empty());
 }
 
-/// The other half of the same fact: the reparent bindings never see the token, so a
-/// `$parent`-prefixed name reaches them literally and fails to resolve.
 #[test]
 fn setparent_does_not_expand_parent() {
     let s = script();
@@ -196,8 +176,7 @@ fn setparent_does_not_expand_parent() {
     );
 }
 
-/// `SetParent` takes the same namespace (`0x7a1550`'s NAME-string path → `0x76c760`) — Bartender2
-/// re-parents every stock button by alias before it anchors it.
+/// `SetParent`'s name path (`0x7a1550`) resolves through `0x76c760` too.
 #[test]
 fn setparent_resolves_an_alias_global() {
     let s = script();
@@ -217,7 +196,6 @@ fn setparent_resolves_an_alias_global() {
     );
 }
 
-/// `SetAllPoints` shares the resolver, so it shares the rule.
 #[test]
 fn setallpoints_resolves_an_alias_global() {
     let mut s = script();
@@ -242,15 +220,8 @@ fn setallpoints_resolves_an_alias_global() {
     assert_eq!((l, b, w, h), (30.0, 40.0, 120.0, 60.0));
 }
 
-/// **A leading `$parent` in a Lua constructor's NAME argument is expanded**, exactly as in XML —
-/// `CreateFrame 0x7060b0`, `CreateTexture 0x773a20` and `CreateFontString 0x773c30` all build a
-/// synthetic node carrying `name=` and read it back through `CScriptRegion::SetName 0x76c650`,
-/// which is one of the expander `0x76c5b0`'s two call sites.
-///
-/// Found by decision 2176's raise, which is the point of a raise: the unexpanded name had been
-/// there all along, degrading quietly into a parent-anchored fallback. `FonzAppraiser` names
-/// roughly thirty widgets this way and `pfQuest/browser.lua:723` builds its search icon as
-/// `input:CreateTexture("$parentSearchIcon", "OVERLAY")`.
+/// `CreateFrame 0x7060b0`, `CreateTexture 0x773a20` and `CreateFontString 0x773c30` read their
+/// `name=` back through `CScriptRegion::SetName 0x76c650`, which calls the expander `0x76c5b0`.
 #[test]
 fn a_constructor_name_expands_parent() {
     let s = script();
@@ -268,7 +239,7 @@ fn a_constructor_name_expands_parent() {
         "RootKid",
         "the base is the first NAMED ancestor of the frame's parent, not the parent itself"
     );
-    // …and the expanded name is what reached `_G`, which is the only widget namespace (2105).
+    // The expanded name is what reached `_G`.
     assert_eq!(
         s.eval::<String>("return RootKid:GetName()").unwrap(),
         "RootKid"
@@ -278,12 +249,12 @@ fn a_constructor_name_expands_parent() {
             .unwrap(),
         "the raw token names nothing"
     );
-    // A region's `$parent` is its OWNER frame, so the walk starts one link lower.
+    // A region's `$parent` is its owner frame.
     assert_eq!(
         s.eval::<String>("return RootKidIcon:GetName()").unwrap(),
         "RootKidIcon"
     );
-    // The payoff: an anchor by the built name resolves instead of raising.
+    // An anchor by the built name resolves.
     s.run(r#"Icon:SetPoint("TOPLEFT", "RootKid", "TOPLEFT", 0, 0)"#)
         .unwrap();
 }

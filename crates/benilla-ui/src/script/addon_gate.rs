@@ -1,42 +1,19 @@
-//! **The one load law — `AddOn_CanLoad 0x51e780`, as a pure function**.
+//! `AddOn_CanLoad` (`0x51e780`) as a pure function: the one load law every surface consults.
+//! The first check that fires decides, in the reference's order: missing, the visiting guard (a
+//! cycle is loadable), enabled, banned, corrupt, version, dependencies, demand.
 //!
-//! Every question of the form "can this addon load, and if not, why" has exactly one answer in
-//! the reference: a single arbiter whose checks run in a fixed order, whose version gate and
-//! CVar read re-run on every query, and whose two out-params (`reasonOut`, `depReasonOut`)
-//! render through one formatter. benilla had three partial copies of it — the API verbs'
-//! `not_loadable`, `LoadAddOn`'s inline checks, and the startup walk's disabled set — and the
-//! screens were about to become a fourth. This module is the one copy they all consult.
+//! The version gate is an exact `==` against a hard-coded 11200 (`0x51d7d0`), so 11201 is out of
+//! date and a missing `## Interface` compares as 0. With `checkAddonVersion` off the reason is
+//! reset to none, so force-load falls through to the dependency and demand checks.
 //!
-//! The check order: **missing → visiting-guard (returns loadable — a cycle resolves
-//! optimistically) → enabled → banned → corrupt → the version gate → required-deps recursion →
-//! demand gate**. The first check that fires decides.
-//!
-//! ## The version gate, byte for byte
-//!
-//! `cmp [rec+0x1c], 11200` — an **exact `==` against a hard-coded immediate** (`0x51d7d0` is
-//! `mov eax,0x2bc0; ret`, one caller image-wide). `## Interface: 11201` is as out of date as
-//! `10000`, and a manifest with **no** `## Interface` line compares as `0` — out of date, not
-//! "unknown". On mismatch the reason `7` is written and then, when the check is OFF
-//! (`checkAddonVersion`, the *Load out of date AddOns* checkbox inverted), **actively reset to
-//! `0`** — an out-of-date addon under force-load is byte-indistinguishable from an up-to-date
-//! one; there is no "loadable but flagged" state. Force-load is a fall-through, not a success:
-//! the dependency and demand checks still run.
-//!
-//! ## The reason rendering (`0x51e930`)
-//!
-//! `reason != 0` → its token; `reason == 0 && depReason != 0` → `DEP_<token>`, applied
-//! **exactly once at any nesting depth** (the recursion passes the caller's `depReasonOut` as
-//! the callee's *both* out-params, so the deepest failure's raw token lands in the parent's dep
-//! slot); both zero → nil (all three callers guard it — `LOADABLE` is unreachable as a reason).
-//! `BANNED`/`CORRUPT`/`INSECURE` gate on the server's `SMSG_ADDON_INFO` signature state, which
-//! benilla does not model (nothing a player installs is Blizzard-signed) — the arms exist in
-//! the table for honesty and are never produced.
+//! The reason renders once (`0x51e930`): the addon's own token, else `DEP_` and the deepest failing
+//! dependency's token, else nil. `BANNED`, `CORRUPT` and `INSECURE` read the server's
+//! `SMSG_ADDON_INFO` signature state, which is not modelled; they are never produced.
 
-/// The `## Interface` this client implements — the reference's own hard-coded `0x2bc0`.
+/// The `## Interface` this client implements, the reference's hard-coded `0x2bc0`.
 pub const CLIENT_INTERFACE: u32 = 11200;
 
-/// One addon as the gate reads it — the adapter shape every registry (the VM's `AddOnInfo`
-/// rows, the app's discovered manifests, the glue screen's folder view) lowers into.
+/// One addon as the gate reads it; every addon registry lowers into this.
 pub struct GateRow<'a> {
     pub name: &'a str,
     /// This character's enable state (`AddOns.txt`; an addon nobody disabled is enabled).
@@ -45,12 +22,9 @@ pub struct GateRow<'a> {
     /// the leading integer, `0` when absent.
     pub interface: u32,
     pub load_on_demand: bool,
-    /// Loaded this session. A loaded dependency satisfies the recursion outright: the short-circuit
-    /// lives inside `AddOn_CanLoad` itself (`0x51e8ba call AddOn_IsLoaded; jne` skips the
-    /// recursion), and the recursion propagates the caller's own `demandOnly` (`0x51e790` spill →
-    /// `0x51e8c9` reload). The reference's concrete answers match this implementation exactly: a
-    /// LoadOnDemand addon over a loaded ordinary dep is loadable/nil; over an enabled-but-UNLOADED
-    /// ordinary dep it reports `DEP_NOT_DEMAND_LOADED`.
+    /// Loaded this session. A loaded dependency satisfies the recursion outright (`0x51e8ba`),
+    /// which otherwise passes on the caller's `demandOnly` (`0x51e790`, `0x51e8c9`): in game, an
+    /// ordinary dependency enabled but not loaded reports `DEP_NOT_DEMAND_LOADED`.
     pub loaded: bool,
     /// `## Dependencies` / `## RequiredDeps` / any `## Dep*` (one list in the reference).
     pub dependencies: Vec<&'a str>,
@@ -61,10 +35,9 @@ pub struct GateRow<'a> {
 pub enum Verdict {
     Loadable,
     Refused {
-        /// The addon's own reason token (`DISABLED`, `INTERFACE_VERSION`, …), when the failure
-        /// is its own.
+        /// The addon's own reason token (`DISABLED`, `INTERFACE_VERSION`, …).
         reason: Option<&'static str>,
-        /// The dependency's raw token when the failure is a dep's — rendered as `DEP_<token>`.
+        /// A failing dependency's raw token, rendered as `DEP_<token>`.
         dep: Option<&'static str>,
     },
 }
@@ -74,8 +47,7 @@ impl Verdict {
         self == Verdict::Loadable
     }
 
-    /// The formatter (`0x51e930`) plus its callers' nil-guard: the reason token, else
-    /// `DEP_<dep>`, else `None` (loadable — `LOADABLE` is unreachable as a reason).
+    /// The formatter (`0x51e930`) with its callers' nil guard, so `LOADABLE` never renders.
     pub fn token(self) -> Option<String> {
         match self {
             Verdict::Loadable => None,
@@ -88,16 +60,14 @@ impl Verdict {
 
 /// `AddOn_CanLoad` over a registry: can `rows[index]` load right now?
 ///
-/// `demand_only` is the in-game flavour (`dl=1`): an enabled, up-to-date, **non**-LoadOnDemand
-/// addon that has not loaded reports `NOT_DEMAND_LOADED` — a state the glue (`dl=0`) never
-/// produces. `version_check` is the live `checkAddonVersion` read; both re-run per query, which
-/// is why toggling the checkbox needs no rescan (`0x51e780`).
+/// `demand_only` is the in-game query (`dl=1`), where an unloaded addon that is not LoadOnDemand
+/// reports `NOT_DEMAND_LOADED`; `version_check` is the live `checkAddonVersion`, read per query.
 pub fn can_load(rows: &[GateRow], index: usize, demand_only: bool, version_check: bool) -> Verdict {
     let mut visiting = vec![false; rows.len()];
     walk(rows, index, demand_only, version_check, &mut visiting)
 }
 
-/// One level of the arbiter — the checks in the reference's evaluation order.
+/// One level of the arbiter, its checks in the reference's order.
 fn walk(
     rows: &[GateRow],
     i: usize,
@@ -105,39 +75,38 @@ fn walk(
     version_check: bool,
     visiting: &mut [bool],
 ) -> Verdict {
-    // Check 2: the in-progress guard — a cycle resolves optimistically (`[rec+0x2d]` → TRUE).
+    // Check 2: the visiting guard; a cycle resolves as loadable.
     if visiting[i] {
         return Verdict::Loadable;
     }
     let row = &rows[i];
-    // Check 3: this character's enable state.
+    // Check 3: enabled.
     if !row.enabled {
         return Verdict::Refused {
             reason: Some("DISABLED"),
             dep: None,
         };
     }
-    // Checks 4/5 (banned / corrupt): no server signature state to read — never produced.
-    // Check 6: the version gate — exact ==, then refuse or actively fall through (`0x51e876`).
+    // Checks 4 and 5, banned and corrupt: no signature state, never produced.
+    // Check 6: the version gate, exact `==`; with the check off it falls through (`0x51e876`).
     if row.interface != CLIENT_INTERFACE && version_check {
         return Verdict::Refused {
             reason: Some("INTERFACE_VERSION"),
             dep: None,
         };
     }
-    // Check 7: required dependencies, recursively; the first failure decides, and the deepest
-    // failure's raw token is the one `DEP_` wraps (`0x51e8ce`'s shared out-param).
+    // Check 7: the dependencies, recursively; a shared out-param makes the deepest failure's raw
+    // token the one `DEP_` wraps (`0x51e8ce`).
     visiting[i] = true;
     for dep in &row.dependencies {
         let found = rows.iter().position(|r| r.name.eq_ignore_ascii_case(dep));
         let verdict = match found {
-            // The recursion's check 1: a name not in the registry is MISSING.
+            // Check 1, in the recursion: a name not in the registry is `MISSING`.
             None => Verdict::Refused {
                 reason: Some("MISSING"),
                 dep: None,
             },
-            // A loaded dependency satisfies the walk outright — `0x51e8ba`, before the
-            // recursion (see the row doc).
+            // A loaded dependency satisfies the walk before any recursion (`0x51e8ba`).
             Some(d) if rows[d].loaded => Verdict::Loadable,
             Some(d) => walk(rows, d, demand_only, version_check, visiting),
         };
@@ -150,7 +119,7 @@ fn walk(
         }
     }
     visiting[i] = false;
-    // Check 8: the demand gate — reachable only from the in-game surface (`dl=1`).
+    // Check 8: the demand gate, in game only (`dl=1`).
     if demand_only && !row.load_on_demand && !row.loaded {
         return Verdict::Refused {
             reason: Some("NOT_DEMAND_LOADED"),
@@ -175,13 +144,12 @@ mod tests {
         }
     }
 
-    /// The check ORDER is the law: a disabled addon reports only DISABLED, whatever else is
-    /// wrong with it — the glue colours that row grey, never red (1197's precedence).
+    /// Enabled comes before every later check, so the glue shows a disabled row grey, never red.
     #[test]
     fn a_disabled_addon_reports_only_disabled() {
         let mut a = row("A", vec!["Ghost"]);
         a.enabled = false;
-        a.interface = 0; // out of date too — and still invisible behind DISABLED
+        a.interface = 0; // out of date too
         let rows = vec![a];
         assert_eq!(
             can_load(&rows, 0, false, true).token().as_deref(),
@@ -189,9 +157,6 @@ mod tests {
         );
     }
 
-    /// The version gate (`0x51e876`) byte for byte: exact `==` (11201 is out of date), missing
-    /// `## Interface` is 0 and out of date, and force-load RESETS the reason — indistinguishable
-    /// from up to date.
     #[test]
     fn the_version_gate_is_exact_and_force_load_erases_it() {
         let mut a = row("A", vec![]);
@@ -212,8 +177,6 @@ mod tests {
         );
     }
 
-    /// `DEP_` is applied exactly once at any depth (`0x51e8ce`) — the deepest failure's raw token
-    /// is what the top level wraps.
     #[test]
     fn dep_prefix_applies_once_at_any_depth() {
         let a = row("A", vec!["B"]);
@@ -226,7 +189,7 @@ mod tests {
             Some("DEP_DISABLED"),
             "not DEP_DEP_DISABLED — the shared out-param collapses the nesting"
         );
-        // And a dep that is not installed at all is the recursion's own check 1.
+        // A dependency not installed fails the recursion's check 1.
         let rows = vec![row("A", vec!["Ghost"])];
         assert_eq!(
             can_load(&rows, 0, false, true).token().as_deref(),
@@ -234,8 +197,6 @@ mod tests {
         );
     }
 
-    /// Check 2: a dependency cycle resolves optimistically (the visiting guard returns TRUE),
-    /// so neither side reports a failure from the query side.
     #[test]
     fn a_cycle_is_loadable_to_the_query() {
         let a = row("Ping", vec!["Pong"]);
@@ -244,8 +205,6 @@ mod tests {
         assert_eq!(can_load(&rows, 0, false, true), Verdict::Loadable);
     }
 
-    /// Check 8 is in-game only (`dl=1`), runs AFTER the dep loop, and force-load does not skip
-    /// it — an out-of-date addon under force-load can still be NOT_DEMAND_LOADED.
     #[test]
     fn the_demand_gate_is_in_game_only_and_survives_force_load() {
         let mut a = row("A", vec![]);
@@ -259,9 +218,6 @@ mod tests {
         );
     }
 
-    /// A LoadOnDemand addon whose required dep already loaded at startup is loadable from the
-    /// in-game surface — the loaded short-circuit at `0x51e8ba` (inside `AddOn_CanLoad`,
-    /// before the recursion; the reference's own concrete A/B verdict is this assertion).
     #[test]
     fn a_loaded_dependency_satisfies_the_demand_query() {
         let mut a = row("A", vec!["B"]);

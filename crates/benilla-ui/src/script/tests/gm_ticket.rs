@@ -1,9 +1,4 @@
 //! The Help window's seven engine globals ([`crate::script::gm_ticket`]).
-//!
-//! Two claims carry the whole feature and each has a test named after it: the category list is
-//! **flat pairs consumed by Lua 5.0 varargs** (that is what `HelpFrameGM_UpdateCategories` reads),
-//! and the four payload-free verbs **count** rather than latch (that is what keeps the window's
-//! 10-minute ticket poll alive).
 
 use super::common::script;
 use crate::script::{GmTicketIntent, GmTicketWrite, UiScript};
@@ -19,9 +14,7 @@ fn with_categories() -> UiScript {
     s
 }
 
-/// **`GetGMTicketCategories()` returns a FLAT (id, name) vararg list**, which the shipped window
-/// walks as `arg[i]` / `arg[i+1]` pairs with `arg.n` — the Lua 5.0 convention. A table here, or a
-/// list of names alone, would leave every category button unlabelled or unclickable.
+/// The stock window walks it as `arg[i]`, `arg[i+1]` pairs up to `arg.n`.
 #[test]
 fn the_categories_come_back_as_a_flat_id_name_vararg_list() {
     let s = with_categories();
@@ -37,17 +30,14 @@ fn the_categories_come_back_as_a_flat_id_name_vararg_list() {
         )
         .unwrap();
     assert_eq!((id1, name1.as_str()), (1, "Stuck"));
-    // The THIRD pair is at 5/6 — pairs, not a parallel pair of lists.
     assert_eq!((id3, name3.as_str()), (3, "Guild"));
 }
 
-/// **The ids are the DBC's, not indices.** `HelpFrameGM_UpdateCategories` stores `arg[index]` as
-/// both `button.key` (an index into `HELPFRAME_FRAMES`) and `button.ticketType` (what goes on the
-/// wire), so a renumbered list would misfile every ticket under the wrong heading.
+/// `HelpFrameGM_UpdateCategories` stores the id as `button.key` and as the wire `ticketType`.
 #[test]
 fn the_ids_are_the_dbc_ids_not_list_positions() {
     let mut s = script();
-    // A deliberately gappy, unsorted catalog — nothing may re-index it.
+    // Gappy and unsorted on purpose.
     s.set_gm_ticket_categories(vec![(10, "Character".into()), (4, "Item".into())]);
     let (a, b): (i64, i64) = s
         .eval("local f = function(...) return arg[1], arg[3] end return f(GetGMTicketCategories())")
@@ -55,8 +45,7 @@ fn the_ids_are_the_dbc_ids_not_list_positions() {
     assert_eq!((a, b), (10, 4), "ids and order pass through untouched");
 }
 
-/// No catalog is not an error: the window paints no category rows and cannot raise. This is the
-/// bare-XML harness, and a run with no client data.
+/// The bare-XML harness and a run with no client data have no catalog.
 #[test]
 fn an_absent_catalog_returns_nothing_rather_than_erroring() {
     let s = script();
@@ -66,9 +55,7 @@ fn an_absent_catalog_returns_nothing_rather_than_erroring() {
     assert_eq!(n, 0);
 }
 
-/// **The verbs queue, they do not latch.** Two `GetGMTicket()` calls are two packets, because the
-/// ticket toast re-polls every 10 minutes from `TicketStatus_OnUpdate` — a latch would collapse the
-/// second poll into the first and the window would look hung.
+/// Two `GetGMTicket()` calls are two packets: `TicketStatus_OnUpdate` re-polls every 10 minutes.
 #[test]
 fn the_payload_free_verbs_queue_rather_than_latch() {
     let mut s = script();
@@ -84,15 +71,11 @@ fn the_payload_free_verbs_queue_rather_than_latch() {
         ]
     );
     assert_eq!(s.take_stuck_casts(), 3, "Stuck is not a ticket verb");
-    // Drained means drained — the next frame must not re-send.
     assert!(s.take_gm_ticket_intents().is_empty());
     assert_eq!(s.take_stuck_casts(), 0);
 }
 
-/// **Call order is wire order.** A chunk that abandons and then re-asks must reach the server in
-/// that order — reversed, the get answers with the state *before* the delete and the window is
-/// told it still has the ticket it just abandoned. Per-verb drains cannot express this, which is
-/// why there is one queue.
+/// Call order is wire order: reversed, the get would answer with the ticket just deleted.
 #[test]
 fn the_queue_preserves_call_order_across_different_verbs() {
     let mut s = script();
@@ -103,15 +86,13 @@ fn the_queue_preserves_call_order_across_different_verbs() {
         "delete first, exactly as Lua called them"
     );
 
-    // And the other way round, so the test cannot pass on a fixed per-verb ordering that merely
-    // happens to match one of the two cases.
+    // The other way round, so a fixed per-verb order cannot pass.
     s.run("GetGMTicket() DeleteGMTicket()").unwrap();
     assert_eq!(
         s.take_gm_ticket_intents(),
         vec![GmTicketIntent::Ask, GmTicketIntent::Delete]
     );
 
-    // Writes interleave with the bare verbs on the same queue.
     s.run("NewGMTicket(1, \"a\") GetGMTicket()").unwrap();
     assert!(matches!(
         s.take_gm_ticket_intents().as_slice(),
@@ -119,9 +100,7 @@ fn the_queue_preserves_call_order_across_different_verbs() {
     ));
 }
 
-/// **The window's verb survives to the app.** `NewGMTicket` and `UpdateGMTicket` share a signature
-/// but not an opcode, and the shipped window picks between them from its own `hasTicket` flag —
-/// so the choice is carried, never re-derived from what the client believes.
+/// Same signature, different opcodes; the stock window picks one from its own `hasTicket` flag.
 #[test]
 fn new_and_update_are_distinguishable_and_keep_their_order() {
     let mut s = script();
@@ -144,10 +123,9 @@ fn new_and_update_are_distinguishable_and_keep_their_order() {
     );
 }
 
-/// The Era arity is `(number, string)` — the reference's own usage string is
-/// `Usage: UpdateGMTicket(type, text)`. An empty ticket is the *window's* refusal to make, not
-/// ours: the binding queues whatever it is handed, and the engine's own emptiness check sits
-/// upstream of the send.
+/// The reference's usage string is `Usage: UpdateGMTicket(type, text)`. The binding queues any
+/// text; the reference refuses an empty one before the send (`ERR_TICKET_NO_TEXT`, `0x5ef808`,
+/// `0x5efae7`).
 #[test]
 fn an_empty_ticket_body_is_queued_not_swallowed() {
     let mut s = script();

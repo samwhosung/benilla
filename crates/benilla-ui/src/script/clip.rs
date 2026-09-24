@@ -1,6 +1,4 @@
-//! The ScrollFrame clip (decision 0112 §4/§5) — shared by [`UiScript::extract`](super::UiScript::extract)
-//! and [`pointer`](super::pointer)'s hit-test. Both need the same answer to "which ScrollFrame rects
-//! does this frame draw/hit within?", so the walk lives here once and mod.rs re-exports it.
+//! The ScrollFrame clip, shared by `extract` and the pointer hit-test so drawing and hitting agree.
 
 use std::collections::HashMap;
 
@@ -10,11 +8,8 @@ use crate::widget::{FrameKind, KindState};
 use super::model::Model;
 use super::FrameHandle;
 
-/// Every live ScrollFrame with a resolved rect and a live child, as `child handle → the
-/// scrollframe's resolved rect`. The map [`effective_clip`] walks against; built fresh per
-/// `extract`/`hit_test` call (cheap — one pass over the arena, same cost class as
-/// [`crate::order::traversal`]), never cached, so a `SetScrollChild`/`SetVerticalScroll` between
-/// calls is picked up with no invalidation to track.
+/// Scroll child → its ScrollFrame's resolved rect, for every live ScrollFrame with a rect and a
+/// live child. Rebuilt per call and never cached, so no scroll change needs invalidating.
 pub(super) fn scroll_clip_sources(model: &Model) -> HashMap<FrameHandle, Rect> {
     let mut sources = HashMap::new();
     for (h, frame) in model.arena.iter_frames() {
@@ -35,13 +30,8 @@ pub(super) fn scroll_clip_sources(model: &Model) -> HashMap<FrameHandle, Rect> {
     sources
 }
 
-/// The effective clip a frame `h` draws/hits within: intersecting the resolved rect of every
-/// ScrollFrame whose registered child is `h` itself **or** an ancestor of `h` (walking `h` up
-/// through its parent chain) — so both the scroll child's own quads and every descendant's quads
-/// (a grandchild region, a button nested arbitrarily deep) are clipped, and nested ScrollFrames
-/// (an inner ScrollFrame's child living inside an outer one's) intersect their rects rather than
-/// the inner overriding the outer. `None` = unclipped (the common case — no ancestor is a
-/// registered scroll child).
+/// The clip `h` draws and hits within: the intersection of every ScrollFrame rect whose scroll
+/// child is `h` or an ancestor of it, so nested ScrollFrames intersect; `None` is unclipped.
 pub(super) fn effective_clip(
     model: &Model,
     sources: &HashMap<FrameHandle, Rect>,
@@ -63,10 +53,8 @@ pub(super) fn effective_clip(
     clip
 }
 
-/// Axis-aligned rect intersection (y-up: `top`/`right` shrink to the tighter bound, `bottom`/`left`
-/// grow to the tighter bound). Two ScrollFrame clips that don't overlap collapse to an inverted
-/// (empty) rect — `point_in_rect` ([`pointer`](super::pointer)) then never hits it and the CPU clip
-/// in `ui_pass` already treats a degenerate intersection as "nothing to draw" (see its `clip_quad`).
+/// Rect intersection, y-up. Disjoint rects give an inverted rect, which the pointer never hits
+/// and the app's `clip_quad` draws nothing in.
 pub(super) fn intersect_rect(a: Rect, b: Rect) -> Rect {
     Rect::new(
         a.bottom.max(b.bottom),

@@ -1,44 +1,9 @@
-//! The auction-house bindings — the Era-shaped auctioneer surface, the same two-way
-//! seam as [`super::merchant`]/[`super::mail`]: the app pushes an **auction snapshot** (three lists
-//! of rows, already resolved from the wire to name/icon/quality/owner and already in display order)
-//! and the Lua `QueryAuctionItems`/`PlaceAuctionBid`/`StartAuction`/… calls queue outbound
-//! **intents** the app drains. The engine holds no auction knowledge: a row is a header, the sort
-//! is a pushed ordering, and the category tree is a pushed table.
+//! The auction-house bindings: the app pushes a snapshot of three lists, rows already resolved and
+//! in display order, and the Lua calls queue intents the app drains. Getters are keyed by `"list"`
+//! (Browse), `"bidder"` (Bids) or `"owner"` (Auctions), with `index` 1-based in the 50-row batch.
 //!
-//! ## Three lists, one API
-//!
-//! Every getter is keyed by a list type string — `"list"` (Browse), `"bidder"` (Bids) and
-//! `"owner"` (Auctions) — and `index` is **1-based within the current 50-row batch**, not within
-//! the whole result set. `GetNumAuctionItems` returns the pair `numBatchAuctions, totalAuctions`;
-//! when `total > batch` the window is paging, and the page turners re-query rather than scroll.
-//!
-//! ## The two null shapes that are load-bearing
-//!
-//! `GetAuctionSellItemInfo()` **always returns six values, never zero** — an empty sell slot pushes
-//! `nil, nil, 1, -1, nil, 0`, with a hard `count = 1` and `quality = -1` rather than nils. The
-//! reference Lua reads that count unguarded (`if count > 1`), so a nil there throws the moment the
-//! player pulls the item back out of the slot. `GetAuctionItemInfo` answers a lone `nil` for an
-//! out-of-range index, which is the shape its callers test.
-//!
-//! ## Sorting is ours, and it is not a three-state cycle
-//!
-//! The wire carries no sort field, so the ordering is entirely client-side over the ≤50 rows the
-//! server returned. Each list owns an **8-deep most-recently-clicked key stack** of
-//! `(key, reversed)` pairs: clicking the column that is already primary toggles its direction;
-//! clicking any other promotes it to primary **keeping the direction it remembers**. That is why
-//! `IsAuctionSortReversed` can answer "reversed" for a column that is not currently sorting
-//! anything. [`super::UiScript::take_auction_sorts`] hands the click to the app, which owns the
-//! stacks and pushes both the reordered rows and the stack back. The selection rides through all
-//! of it untouched, because it is stored as an auction **id** and only resolved to a row position
-//! when something asks (`0x4cfda0`/`0x4cfec0`).
-//!
-//! ## The deposit is computed here, and it is the *client's* arithmetic
-//!
-//! `CalculateAuctionDeposit(minutes)` reproduces the real client's formula —
-//! `floor(rate × stackValue / 100) × floor(minutes / 120)` — including the intermediate truncation
-//! that makes it disagree with what the server actually charges on cheap items. Decision 1511 §7
-//! records why the label follows the client rather than the server: it is a client artifact, and
-//! benilla renders what the director's client renders.
+//! The wire carries no sort: each list keeps an 8-deep stack of `(key, reversed)`, where clicking
+//! the primary column toggles it and another column is promoted with the direction it remembers.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -46,26 +11,21 @@ use super::binding_abi::flag;
 use super::cursor::{self, CursorPayload};
 use super::Model;
 
-/// The three list types, in the order the app pushes them. The wire calls them nothing at all —
-/// this is purely the Lua API's own keying.
+/// The three list types, in the order the app pushes them.
 pub const LIST: usize = 0;
 pub const BIDDER: usize = 1;
 pub const OWNER: usize = 2;
 
-/// The eight sort keys the reference's headers pass. Order here is the API's, not the comparator's
-/// (decision 1511's INTERIM: the comparator's own mode order is pinned to an in-flight
-/// investigation).
+/// The eight sort keys the reference's column headers pass, in the API's order.
 pub const SORT_KEYS: [&str; 8] = [
     "level", "quality", "bid", "duration", "buyout", "status", "name", "seller",
 ];
 
-/// `"list"` / `"bidder"` / `"owner"` → the index the snapshot stores them at, for the other
-/// modules that key off the same three names (the tooltip's `SetAuctionItem`).
+/// A list type's snapshot index, for the other modules (the tooltip's `SetAuctionItem`).
 pub(super) fn list_index_of(kind: &str) -> Option<usize> {
     list_index(kind)
 }
 
-/// `"list"` / `"bidder"` / `"owner"` → the index the snapshot stores them at.
 fn list_index(kind: &str) -> Option<usize> {
     match kind {
         "list" => Some(LIST),
@@ -75,58 +35,46 @@ fn list_index(kind: &str) -> Option<usize> {
     }
 }
 
-/// One auction row, resolved by the app from a wire record. Plain data — its
-/// 1-based order in the window is its position in [`AuctionListState::rows`], which is already the
-/// sorted display order.
+/// One auction row, resolved by the app from a wire record.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuctionItemRow {
-    /// The wire auction id — what a bid or a cancel addresses. Never shown; the app maps a clicked
-    /// row index back through this.
+    /// The wire auction id a bid or a cancel addresses; never shown.
     pub auction_id: u32,
-    /// The item's template entry — the tooltip store's key and the link's identity.
     pub item_id: u32,
-    /// The listed item's **random-suffix roll** (the wire's `randomPropertyId`) — what the row
-    /// hover resolves its enchant lines from, and the id whose suffix [`Self::name`] already
-    /// carries. `0` = unrolled. The reference's `SetAuctionItem` writes exactly this into the
-    /// tooltip's `+0x424`.
+    /// The wire's `randomPropertyId`, 0 when unrolled; [`Self::name`] already carries its suffix,
+    /// and the reference's `SetAuctionItem` writes it into the tooltip's `+0x424`.
     pub random_property_id: u32,
-    /// `None` while the item template answer is in flight (the row shows a placeholder and fills
-    /// in when it lands, the merchant/mail pattern).
+    /// `None` while the item template query is in flight.
     pub name: Option<String>,
     pub texture: Option<String>,
     pub count: u32,
     pub quality: Option<u32>,
-    /// `RequiredLevel` — printed red when it exceeds the player's own level.
+    /// `RequiredLevel`, printed red above the player's level.
     pub level: u32,
-    /// The seller's opening price. This is what the row shows as the current bid while
-    /// [`Self::bid_amount`] is 0.
+    /// The seller's opening price, shown as the current bid while [`Self::bid_amount`] is 0.
     pub min_bid: u32,
-    /// The minimum step above the current bid — `0` while nobody has bid.
+    /// The minimum step above the current bid; 0 before any bid.
     pub min_increment: u32,
     /// `0` = no buyout.
     pub buyout_price: u32,
-    /// The current high bid; `0` = no bids yet.
+    /// The current high bid; 0 before any bid.
     pub bid_amount: u32,
-    /// Whether *the player* holds the high bid — a flag, not a name. The Browse row's "Your bid:"
-    /// caption and both action-button gates read it.
+    /// Whether the player holds the high bid: a flag, not a name.
     pub high_bidder: bool,
     /// The seller's name; `None` while the name query is in flight.
     pub owner: Option<String>,
-    /// The time-left bucket, `1..=4` (Short/Medium/Long/Very Long); `0` = not known yet.
+    /// The time-left bucket, `1..=4` (Short, Medium, Long, Very Long); 0 when not known yet.
     pub time_left: u32,
-    /// The full item link, built app-side from the row's entry + enchant + random-property +
-    /// suffix (auction rows carry all four on the wire, so the link is the complete one).
+    /// The full item link: auction rows carry entry, enchant, random property and suffix.
     pub link: Option<String>,
 }
 
-/// One of the three lists: the batch the server sent, the pre-cap match count, and the sort stack
-/// that ordered it.
+/// One of the three lists: the batch the server sent, the pre-cap match count and its sort stack.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuctionListState {
-    /// The current batch, already in display order (≤50 — the server's own page cap).
+    /// The current batch in display order, at most 50 (the server's page cap).
     pub rows: Vec<AuctionItemRow>,
-    /// `totalAuctions` — how many matched *before* the 50-row cap, so the pager can say
-    /// "( %d total )". Equal to `rows.len()` when everything fits on one page.
+    /// `totalAuctions`: the match count before the 50-row cap.
     pub total: u32,
     /// The most-recently-clicked sort stack, primary first: `(key, reversed)`.
     pub sort: Vec<(String, bool)>,
@@ -142,21 +90,18 @@ impl AuctionListState {
     }
 }
 
-/// One row of the Browse tab's category tree, pushed by the app from the player's own
-/// `ItemClass.dbc` / `ItemSubClass.dbc` (the set and order of classes is a
-/// structural fact; every string here comes off the player's install).
+/// One class of the Browse tab's category tree, from the player's `ItemClass.dbc`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuctionCategory {
-    /// The wire's `mainCategory` — an item class id, **not** the menu position.
+    /// The wire's `mainCategory`: an item class id, not the menu position.
     pub class_id: u32,
     pub name: String,
-    /// The `0x807060` table's second column: whether the class offers subclass rows at all.
-    /// `false` (Consumable, Trade Goods, Reagent, Miscellaneous) makes `GetAuctionItemSubClasses`
-    /// and `GetAuctionInvTypes` answer nothing — but `QueryAuctionItems` never reads it, so
-    /// [`Self::subclasses`] is still the class's full non-excluded list either way.
+    /// The `0x807060` table's second column. False (Consumable, Trade Goods, Reagent,
+    /// Miscellaneous) empties `GetAuctionItemSubClasses` and `GetAuctionInvTypes`, but
+    /// `QueryAuctionItems` never reads it.
     pub has_subclass_filter: bool,
-    /// The class's `ItemSubClass.dbc` rows whose `DisplayFlags & 2` is clear, in file order —
-    /// the list both the menu and the query's index scan walk.
+    /// The class's `ItemSubClass.dbc` rows with `DisplayFlags & 2` clear, in file order: what both
+    /// the menu and the query's index scan walk.
     pub subclasses: Vec<AuctionSubCategory>,
 }
 
@@ -165,58 +110,53 @@ pub struct AuctionSubCategory {
     /// The wire's `subCategory`.
     pub sub_id: u32,
     pub name: String,
-    /// Whether selecting this subclass offers the 14 inventory-slot rows beneath it
-    /// (`GetAuctionInvTypes`) — the row's `ItemSubClass.Flags & 0x200` (`0x4cfb63`), read
-    /// app-side off the player's own DBC.
+    /// `ItemSubClass.Flags & 0x200` (`0x4cfb63`): whether the subclass offers the 14
+    /// inventory-slot rows.
     pub has_inv_types: bool,
 }
 
-/// The open auction house's snapshot. Pushed whole by the app; `None` means no auctioneer session
-/// is open (the window is closed).
+/// The open auction house's snapshot, pushed whole by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuctionState {
     /// Browse / Bids / Auctions, indexed by [`LIST`], [`BIDDER`], [`OWNER`].
     pub lists: [AuctionListState; 3],
-    /// `GetAuctionHouseDepositRate()` — the percentage this house charges, read from
-    /// `AuctionHouse.dbc` at the `houseId` the hello reply carried.
+    /// `GetAuctionHouseDepositRate()`: the house's `AuctionHouse.dbc` deposit percentage.
     pub deposit_percent: u32,
 }
 
-/// A drained `QueryAuctionItems` — the Browse search, exactly as the reference builds it: every
-/// filter is already the wire's item-template id (the binding maps the Lua's menu positions, as
-/// `0x4ce980` does). The app copies this into `CMSG_AUCTION_LIST_ITEMS` (decision 1511 P1).
+/// A drained `QueryAuctionItems`, the `CMSG_AUCTION_LIST_ITEMS` filters: each is already a wire id,
+/// mapped from the Lua's menu position as `0x4ce980` does.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuctionQuery {
     pub name: String,
     /// `0` = no filter, for both.
     pub min_level: u32,
     pub max_level: u32,
-    /// `None` = no filter (the wire's `0xFFFFFFFF` sentinel). Ids, never menu positions: an
-    /// `InventoryType`, an item class, a subclass of that class.
+    /// `None` = no filter (the wire's `0xFFFFFFFF`), for all three.
     pub inv_type: Option<u32>,
     pub class: Option<u32>,
     pub sub_class: Option<u32>,
-    /// A **minimum** quality, not an equality. `None` = no filter (the dropdown's `All`, −1).
+    /// A minimum quality, not an equality; `None` = no filter (the dropdown's All, -1).
     pub quality: Option<u32>,
-    /// The page, 0-based. The app multiplies by 50 for the wire's item offset.
+    /// 0-based; the app multiplies by 50 for the wire's item offset.
     pub page: u32,
     pub usable_only: bool,
 }
 
-/// A drained `StartAuction` (decision 1511 P2).
+/// A drained `StartAuction`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AuctionStartRequest {
     pub min_bid: u32,
     /// `0` = no buyout.
     pub buyout: u32,
-    /// Minutes — only 120, 480 or 1440 are legal, and the reference refuses to send anything else.
+    /// Minutes: 120, 480 or 1440, the only values the reference sends.
     pub duration: u32,
 }
 
 /// A drained `PlaceAuctionBid`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AuctionBid {
-    /// The list the index addresses ([`LIST`] or [`BIDDER`] — the Auctions tab has no bid button).
+    /// [`LIST`] or [`BIDDER`]: the Auctions tab has no bid button.
     pub list: usize,
     /// 1-based row within the current batch; the app maps it to the wire auction id.
     pub index: u32,
@@ -224,32 +164,23 @@ pub struct AuctionBid {
 }
 
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open auction house's snapshot. Replacing a list's rows
-    /// **clears that list's selection**, which is why this is one call and not two: the reference's
-    /// selection is C-side state that cannot survive the batch it indexes into, and a stale index
-    /// would silently address a different auction.
-    /// Push the Browse tab's class tree — `GetAuctionItemClasses` and its two siblings read it.
-    /// Login-scoped, not the session's: the stock `AuctionFrameBrowse_OnLoad` reads the classes at
-    /// the addon's LOAD, before any auctioneer, and in the client they are `ItemClass.dbc` names
-    /// with no session behind them (1971).
+    /// Push the Browse tab's class tree. Login-scoped: the stock `AuctionFrameBrowse_OnLoad` reads
+    /// the classes when the addon loads, before any auctioneer session.
     pub fn set_auction_item_classes(&mut self, classes: Vec<AuctionCategory>) {
         self.model_mut().auction_item_classes = classes;
     }
 
     pub fn set_auction(&mut self, state: Option<AuctionState>) {
         let mut model = self.model_mut();
-        // Only opening or closing the session drops the selection. A new PAGE does not, and
-        // neither does a re-sort: the selection is an auction **id**, so it survives the row
-        // moving and simply stops resolving if the auction leaves the page (`0x4cfda0`/`0x4cfec0`).
+        // Only opening or closing the session drops the selection: it is an auction id, so it
+        // survives a new page or a re-sort and stops resolving when the auction leaves the page.
         if model.auction.is_none() || state.is_none() {
             model.auction_selected = [0; 3];
         }
         model.auction = state;
     }
 
-    /// Push `CanSendAuctionQuery()`'s answer — the app's throttle, read by the Search button's
-    /// every-frame `OnUpdate`. Separate from the snapshot precisely because it changes every frame
-    /// while throttled and would otherwise churn the snapshot's diff.
+    /// Push `CanSendAuctionQuery()`'s answer, the app's query throttle.
     pub fn set_auction_can_query(&mut self, can: bool) {
         self.model_mut().auction_can_query = can;
     }
@@ -294,8 +225,7 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().auction_close)
     }
 
-    /// The item currently in the sell slot — the app resolves its `(bag, slot)` to the wire item
-    /// guid when `StartAuction` fires (the lazy resolve mail's send uses).
+    /// The sell slot's `(bag, slot)`, resolved by the app to the item guid on `StartAuction`.
     pub fn auction_sell_item(&mut self) -> Option<(i64, u32)> {
         self.model_mut()
             .auction_sell_item
@@ -303,14 +233,12 @@ impl super::UiScript {
             .map(|it| (it.bag, it.slot))
     }
 
-    /// Empty the sell slot — the app calls this once the auction is away, and on session close.
+    /// Empty the sell slot, once the auction is sent and on session close.
     pub fn clear_auction_sell_item(&mut self) {
         self.model_mut().auction_sell_item = None;
     }
 }
 
-/// Fetch a cloned row for a list type + 1-based index, or `None` (unknown type / out of range /
-/// no session open).
 fn row_at(model: &Model, kind: &str, index: usize) -> Option<AuctionItemRow> {
     let i = list_index(kind)?;
     model
@@ -320,12 +248,11 @@ fn row_at(model: &Model, kind: &str, index: usize) -> Option<AuctionItemRow> {
         .cloned()
 }
 
-/// The sell slot's `(name, texture, count, quality, canUse, stackValue)`, or `None` when empty.
-/// `stackValue` is the item's vendor sell price **times the stack**, which is what the reference's
-/// suggested opening price and the deposit are both computed from.
+/// The sell slot's `(name, texture, count, quality, canUse, stackValue)`, `stackValue` being the
+/// vendor price times the stack: the base of the suggested opening price and the deposit.
 fn sell_item_info(model: &Model) -> Option<(String, Option<String>, u32, i64, bool, u32)> {
     let it = model.auction_sell_item.as_ref()?;
-    // The TRUE stack size, not the split-carry field — the deposit is per stack.
+    // The real stack size, not the split-carry field: the deposit is per stack.
     let count = cursor::held_count(model, it);
     let template = model.item_templates.get(&it.item_id);
     let name = cursor::item_link_name(it.link.as_deref());
@@ -342,10 +269,8 @@ fn sell_item_info(model: &Model) -> Option<(String, Option<String>, u32, i64, bo
     ))
 }
 
-/// The real client's deposit arithmetic, reproduced including its intermediate truncation:
-/// `floor(rate × stackValue / 100) × floor(minutes / 120)`. Both floors matter
-/// — the inner one is what makes a cheap stack deposit zero here while the server still charges a
-/// few copper, and the outer is why 120/480/1440 minutes scale as 1/4/12 rather than continuously.
+/// The reference client's deposit, `floor(rate × stackValue / 100) × floor(minutes / 120)`: the
+/// inner floor zeroes a cheap stack the server still charges a few copper for.
 fn deposit_for(rate: u32, stack_value: u32, minutes: u32) -> u32 {
     let per_unit = u64::from(rate).saturating_mul(u64::from(stack_value)) / 100;
     let units = u64::from(minutes) / 120;
@@ -355,8 +280,7 @@ fn deposit_for(rate: u32, stack_value: u32, minutes: u32) -> u32 {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetNumAuctionItems(type) → numBatchAuctions, totalAuctions. The pair is the whole paging
-    // model: batch is what this packet carried (≤50), total is what matched before the cap.
+    // GetNumAuctionItems(type) → numBatchAuctions (at most 50), totalAuctions (before the cap).
     g.set(
         "GetNumAuctionItems",
         lua.create_function(|lua, kind: String| {
@@ -379,8 +303,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionItemInfo(type, index) → the 12-tuple. `highBidder` is a FLAG, not a name — the
-    // seller's name is the last return, and it is what the Browse "Seller" column shows.
+    // GetAuctionItemInfo(type, index) → twelve values; `highBidder` is a flag, not the seller.
     g.set(
         "GetAuctionItemInfo",
         lua.create_function(|lua, (kind, index): (String, usize)| {
@@ -389,10 +312,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 row_at(&model, &kind, index)
             };
             let Some(r) = row else {
-                // The null tail is TWELVE values, not a lone nil — an unknown type string, an
-                // out-of-range index and an item-cache miss all share it, with a hard `count = 1`
-                // and `quality = -1` (one shared exit at `0x4cf1ec`). Callers
-                // destructure all twelve unguarded, so a short return throws.
+                // A miss (unknown type, out of range, not cached) still answers twelve values, with
+                // `count = 1` and `quality = -1` (one shared exit, `0x4cf1ec`), read unguarded.
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,         // name
                     Value::Nil,         // texture
@@ -408,9 +329,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Value::Nil,         // owner
                 ]));
             };
-            // `canUse` is computed HERE rather than pushed with the row: it depends on the
-            // player's own level, class and spellbook, which move independently of the auction
-            // snapshot. A pushed flag would go stale the moment the player dinged mid-browse.
+            // `canUse` is per call, not pushed: it follows the player's level, class and spellbook.
             let can_use = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 super::item_stats::item_usable_by_id(&model, r.item_id)
@@ -441,9 +360,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionItemTimeLeft(type, index) → 1..4, the bucket the row's text and tooltip key off.
-    // 0 for a row we have no answer for yet; the reference has no live countdown (its ticking
-    // version is commented out), so this only moves when a fresh list lands.
+    // GetAuctionItemTimeLeft(type, index) → the 1..4 bucket, 0 when unknown. The reference has no
+    // live countdown: it moves only when a new list lands.
     g.set(
         "GetAuctionItemTimeLeft",
         lua.create_function(|lua, (kind, index): (String, usize)| {
@@ -452,9 +370,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionItemLink(type, index) → the full item link. Auction rows carry enchant, random
-    // property and suffix on the wire, so the app builds the complete link rather than the
-    // zeroed-tail one the bag path settles for.
     g.set(
         "GetAuctionItemLink",
         lua.create_function(|lua, (kind, index): (String, usize)| {
@@ -462,8 +377,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row_at(&model, &kind, index).and_then(|r| r.link)
             };
-            // A miss returns NO values at all — not nil (`0x4cf45b`). `DressUpItemLink(nil)`
-            // and `nil` reaching a chat insert behave differently from an empty argument list.
+            // A miss returns no values at all, not nil (`0x4cf45b`).
             Ok(match link {
                 Some(l) => MultiValue::from_vec(vec![Value::String(lua.create_string(&l)?)]),
                 None => MultiValue::new(),
@@ -471,13 +385,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSelectedAuctionItem(type) → the 1-based selected row, or 0 for none.
-    //
-    // Stored as the **auction id**, resolved to a row position on the way out
-    // (`0x4cfda0`/`0x4cfec0`).
-    // That indirection is the whole reason a re-sort cannot silently move the selection onto a
-    // different auction: the id follows the row wherever the comparator puts it, and an auction
-    // that has left the page simply stops resolving instead of pointing at its neighbour.
+    // GetSelectedAuctionItem(type) → the selected row, 0 for none. Stored as the auction id and
+    // resolved on the way out (`0x4cfda0`/`0x4cfec0`), so it follows its auction through a re-sort.
     g.set(
         "GetSelectedAuctionItem",
         lua.create_function(|lua, kind: String| {
@@ -499,8 +408,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetSelectedAuctionItem(type, index) — takes a row position and remembers the auction it
-    // names. An out-of-range index clears the selection rather than remembering a phantom.
+    // SetSelectedAuctionItem(type, index): remembers the auction at that row; out of range clears.
     g.set(
         "SetSelectedAuctionItem",
         lua.create_function(|lua, (kind, index): (String, usize)| {
@@ -518,9 +426,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SortAuctionItems(type, key) — queue the header click; the app owns the stacks and pushes the
-    // reordered rows back. The reference raises on a bad type, and that Usage string is recorded,
-    // so it is reproduced here rather than swallowed.
+    // SortAuctionItems(type, key): queue the header click for the app, which pushes the reordered
+    // rows back. The reference raises this `Usage:` only for an argument neither string nor number
+    // (`0x6f3510`) and matches both strings case-insensitively (`0x64a4c0`), an unknown one sorting
+    // nothing (`0x4cfd90`); here an unknown or differently cased type or column raises.
     g.set(
         "SortAuctionItems",
         lua.create_function(|lua, (kind, key): (String, String)| {
@@ -540,8 +449,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // IsAuctionSortReversed(type, key) → 1/nil. Answers for ANY key the stack remembers, not just
-    // the primary one — which is the whole reason a non-primary column's arrow can point down.
+    // IsAuctionSortReversed(type, key) → 1/nil, for any key the stack remembers.
     g.set(
         "IsAuctionSortReversed",
         lua.create_function(|lua, (kind, key): (String, String)| {
@@ -553,8 +461,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CanSendAuctionQuery() → 1/nil. Polled every frame by the Search button's OnUpdate, because
-    // a throttled query is dropped silently and there is no failure event to react to.
+    // CanSendAuctionQuery() → 1/nil; a throttled query is dropped silently.
     g.set(
         "CanSendAuctionQuery",
         lua.create_function(|lua, ()| {
@@ -563,10 +470,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionItemClasses() → the class names, in the reference's own menu order. The ORDER and
-    // the set are structural (ten auctionable classes); every string is the player's own
-    // ItemClass.dbc row, so none of Blizzard's text ships with us. Static —
-    // pushed at login, read by the stock addon at its load (1971), no session required.
+    // GetAuctionItemClasses() → the ten auctionable class names in the reference's menu order, off
+    // the player's ItemClass.dbc; pushed at login, no session needed.
     g.set(
         "GetAuctionItemClasses",
         lua.create_function(|lua, ()| {
@@ -586,9 +491,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionItemSubClasses(classIndex) → the subclass names under a 1-based menu class. An
-    // out-of-range index, or a class whose `0x807060` flag is 0, returns nothing — the
-    // reference's own bound-with-no-error (`0x4cfa00`, `0x4cfa0e`).
+    // GetAuctionItemSubClasses(classIndex) → the subclass names; an out-of-range index or a class
+    // whose `0x807060` flag is 0 returns nothing, without an error (`0x4cfa00`, `0x4cfa0e`).
     g.set(
         "GetAuctionItemSubClasses",
         lua.create_function(|lua, class_index: usize| {
@@ -610,12 +514,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionInvTypes(classIndex, subclassIndex) → the 14 inventory-slot GlobalString KEYS, or
-    // nothing. The pair only decides WHETHER the list is offered — the list itself is fixed.
-    // `0x4cfab0`: no class (index out of range, or its `0x807060` flag 0) → nothing; a FOUND
-    // subclass offers the list only with `ItemSubClass.Flags & 0x200` (pushed as
-    // `has_inv_types`); and a subclass index the scan runs off the end of skips that gate and
-    // offers all fourteen (the exhaust edge at `0x4cfb61` lands past the gate at `0x4cfb63`).
+    // GetAuctionInvTypes(classIndex, subclassIndex) → the fixed 14 inventory-slot GlobalString
+    // keys, or nothing (`0x4cfab0`): nothing without a class (or with its `0x807060` flag 0); a
+    // found subclass needs `Flags & 0x200`, but an index the scan runs past skips that gate (the
+    // exhaust edge at `0x4cfb61` lands past the test at `0x4cfb63`).
     g.set(
         "GetAuctionInvTypes",
         lua.create_function(|lua, (class_index, sub_index): (usize, usize)| {
@@ -644,12 +546,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // QueryAuctionItems(name, minLevel, maxLevel, invTypeIndex, classIndex, subclassIndex, page,
-    // isUsable, qualityIndex) — nine arguments (TBC's tenth, exactMatch, does not exist on 5875).
-    // The level boxes hand us strings. Every filter argument is a 1-based MENU POSITION, and —
-    // exactly as the reference's `0x4ce980` does — it is turned into the wire's item-template id
-    // here, before anything is queued: invType through the `0x8070b0` rows, class through the
-    // `0x807060` table, subclass as the Nth non-excluded subclass row of that class (a scan that
-    // never reads the class's filter flag). Anything that does not resolve is the wire's "any".
+    // isUsable, qualityIndex): nine arguments, no `exactMatch` in 1.12. Each filter is a 1-based
+    // menu position mapped to the wire id as `0x4ce980` does: invType through the `0x8070b0` rows,
+    // class through `0x807060`, subclass as the class's Nth non-excluded row (a scan that never
+    // reads the class's filter flag). Anything unresolved is the wire's "any".
     g.set(
         "QueryAuctionItems",
         lua.create_function(|lua, args: MultiValue| {
@@ -679,7 +579,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(Value::Number(n)) if *n >= 0.0 => Some(*n as u32),
                 _ => None,
             };
-            // A 1-based position into a table, `None` for a missing, zero or negative argument.
             let position = |i: usize| num(i).and_then(|n| (n as usize).checked_sub(1));
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let inv_type = position(3)
@@ -707,8 +606,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetOwnerAuctionItems([page]) / GetBidderAuctionItems([page]) — the other two tabs' fetches.
-    // Neither is throttled the way Browse is; both default to page 0.
+    // GetOwnerAuctionItems([page]) / GetBidderAuctionItems([page]): unthrottled, page 0 by default.
     g.set(
         "GetOwnerAuctionItems",
         lua.create_function(|lua, page: Option<u32>| {
@@ -726,8 +624,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // PlaceAuctionBid(type, index, bidAmount). A buyout is not a distinct verb — it is a bid of
-    // exactly the buyout price, which is why the confirmation popup calls straight into this.
+    // PlaceAuctionBid(type, index, bidAmount); a buyout is a bid of exactly the buyout price.
     g.set(
         "PlaceAuctionBid",
         lua.create_function(|lua, (kind, index, amount): (String, u32, u32)| {
@@ -744,7 +641,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // StartAuction(minBid, buyoutPrice, runTime) — runTime in minutes.
+    // StartAuction(minBid, buyoutPrice, runTime), runTime in minutes.
     g.set(
         "StartAuction",
         lua.create_function(|lua, (min_bid, buyout, duration): (u32, u32, u32)| {
@@ -758,7 +655,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CancelAuction(index) — always an "owner" row.
+    // CancelAuction(index), always an "owner" row.
     g.set(
         "CancelAuction",
         lua.create_function(|lua, index: u32| {
@@ -768,8 +665,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionHouseDepositRate() → the percentage, off AuctionHouse.dbc at this session's house.
-    // The shipped reference addon never calls it; third-party addons may, so we ship it.
     g.set(
         "GetAuctionHouseDepositRate",
         lua.create_function(|lua, ()| {
@@ -781,8 +676,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CalculateAuctionDeposit(runTime) → copper. See `deposit_for` — this is the client's own
-    // arithmetic, truncation included, not the server's charge.
+    // CalculateAuctionDeposit(runTime) → copper, by the client's arithmetic (`deposit_for`).
     g.set(
         "CalculateAuctionDeposit",
         lua.create_function(|lua, minutes: u32| {
@@ -793,9 +687,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionSellItemInfo() → name, texture, count, quality, canUse, price. SIX values ALWAYS —
-    // the empty slot pushes a hard count of 1 and a quality of -1, never nils, because the
-    // reference Lua reads that count unguarded the moment the slot empties.
+    // GetAuctionSellItemInfo() → name, texture, count, quality, canUse, price: six values always.
+    // An empty slot answers count 1 and quality -1: the stock Lua reads `count > 1` unguarded.
     g.set(
         "GetAuctionSellItemInfo",
         lua.create_function(|lua, ()| {
@@ -831,9 +724,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ClickAuctionSellItemButton() — attach the cursor's item, or take back the attached one. The
-    // mail send slot's exact shape (decision 0216's rails): every cursor write is followed by both
-    // queues, which is the law that keeps CURSOR_UPDATE and ITEM_LOCK_CHANGED honest.
+    // ClickAuctionSellItemButton(): attach the cursor's item, or pick the attached one back up;
+    // every cursor write queues both CURSOR_UPDATE and ITEM_LOCK_CHANGED.
     g.set(
         "ClickAuctionSellItemButton",
         lua.create_function(|lua, ()| {
@@ -843,7 +735,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseAuctionHouse() — the client-side close. Vanilla sends nothing; the session simply ends.
+    // CloseAuctionHouse(): the client-side close; nothing goes on the wire.
     g.set(
         "CloseAuctionHouse",
         lua.create_function(|lua, ()| {
@@ -856,10 +748,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The fourteen inventory-slot rows the reference offers — the `0x8070b0` table's
-/// `{u32 invTypeId; char name[0x20]}` rows, in its own order. The name is a GlobalString **key**
-/// the Lua resolves through the player's own strings, so no English ships here; the id is what
-/// `QueryAuctionItems` puts on the wire for the row's 1-based position.
+/// The `0x8070b0` table's fourteen `{u32 invTypeId; char name[0x20]}` rows, in its order: the id
+/// goes on the wire, the name is a GlobalString key.
 const AUCTION_INV_TYPES: [(u32, &str); 14] = [
     (1, "INVTYPE_HEAD"),
     (2, "INVTYPE_NECK"),
@@ -877,9 +767,8 @@ const AUCTION_INV_TYPES: [(u32, &str); 14] = [
     (23, "INVTYPE_HOLDABLE"),
 ];
 
-/// Attach the cursor's held item to the sell slot, or — with an empty cursor — pick the attached
-/// one back up. A spell or action payload is refused and put back untouched, exactly as the mail
-/// send slot refuses it.
+/// Attach the cursor's item to the sell slot, or with an empty cursor pick the attached one back
+/// up; any other payload stays on the cursor.
 fn click_auction_sell_item(model: &mut Model) {
     match model.cursor.take() {
         Some(CursorPayload::Item(item)) => {
@@ -927,12 +816,6 @@ mod tests {
         state
     }
 
-    /// The selection is an auction id, not a row position — so a re-sort moves the row under it
-    /// and the selection follows, rather than coming to mean whatever took that slot.
-    ///
-    /// This is the case an index would get silently wrong: pick row 2, re-sort, and an
-    /// index-based selection is now pointing at a *different auction* that the Bid button would
-    /// happily bid on.
     #[test]
     fn the_selection_follows_its_auction_through_a_resort() {
         let mut s = UiScript::new().unwrap();
@@ -955,7 +838,7 @@ mod tests {
             "auction 22 moved to row 1 and the selection went with it"
         );
 
-        // It leaves the page entirely (outbid, bought, or filtered out by a new search).
+        // It leaves the page.
         s.set_auction(Some(page(&[33, 44])));
         assert_eq!(
             s.eval::<i64>(r#"return GetSelectedAuctionItem("list")"#)
@@ -976,17 +859,12 @@ mod tests {
         );
     }
 
-    /// A WHOLE-STACK pickup carries no count of its own, so the sell slot has to read the real
-    /// stack size back off the source slot. Reading the cursor field directly answers 1 for a
-    /// stack of twenty — and since the deposit is charged per stack, the pane would quote a
-    /// twentieth of what the server then takes.
     #[test]
     fn the_sell_slot_reads_a_whole_stacks_real_size() {
         use crate::script::container::{ContainerSlot, ContainerState};
         use crate::script::cursor::CursorItem;
 
         let mut s = UiScript::new().unwrap();
-        // Twenty of item 2589 sitting in backpack slot 1.
         let mut slots = std::collections::HashMap::new();
         slots.insert(
             1u32,
@@ -1004,7 +882,7 @@ mod tests {
                 slots,
             }),
         );
-        // Picked up whole — `count: None` is the "whole stack" signal, not "one".
+        // Picked up whole: `count: None` means the whole stack, not one.
         {
             let mut model = s.model_mut();
             model.auction_sell_item = Some(CursorItem {
@@ -1025,9 +903,6 @@ mod tests {
         assert_eq!(count, 20, "the whole stack, not one of it");
     }
 
-    /// The null tail is twelve values with a hard `count = 1` and `quality = -1`. The reference
-    /// Lua destructures all twelve unguarded, so a short return throws rather than showing an
-    /// empty row.
     #[test]
     fn a_missing_row_still_answers_twelve_values() {
         let s = UiScript::new().unwrap();
@@ -1038,18 +913,14 @@ mod tests {
             .unwrap();
         assert_eq!((count, quality), (1, -1));
 
-        // The link, by contrast, answers with NO values on a miss — not a nil.
+        // The link answers no values on a miss, not a nil.
         let n = s.arity(r#"GetAuctionItemLink("list", 99)"#).unwrap();
         assert_eq!(n, 0, "zero values, not one nil");
     }
 
-    /// The client's own deposit arithmetic, including the intermediate truncation that makes it
-    /// disagree with the server. The cheap-stack case is the one that matters:
-    /// a 9-copper vendor value at 5% over 24h floors to 0 here while vmangos still charges 5, and
-    /// that divergence is deliberate — the label is a client artifact.
+    /// A 9-copper stack at 5% over 24 h deposits 0 here, where vmangos charges 5.
     #[test]
     fn the_deposit_is_the_clients_arithmetic_truncation_and_all() {
-        // 5% of 9c = 0 after the inner floor, so no duration can lift it off zero.
         assert_eq!(deposit_for(5, 9, 1440), 0);
         // Once the inner floor clears, the duration scales it 1 / 4 / 12.
         assert_eq!(deposit_for(5, 10_000, 120), 500);
@@ -1057,14 +928,11 @@ mod tests {
         assert_eq!(deposit_for(5, 10_000, 1440), 6_000);
         // Blackwater's 25% on the same stack.
         assert_eq!(deposit_for(25, 10_000, 120), 2_500);
-        // A duration under the two-hour unit floors the whole thing away — the reference refuses
-        // to send such a duration at all, so this is a shape check, not a reachable state.
+        // Under the two-hour unit it floors to 0; the reference never sends such a duration.
         assert_eq!(deposit_for(5, 10_000, 60), 0);
     }
 
-    /// The browse tree as the reference's `0x807060` table shapes it: Weapon (filterable) first,
-    /// then Armor, then Consumable (flag 0 — no subclass rows offered, but its subclasses still
-    /// exist for the query's own scan).
+    /// Weapon and Armor, then Consumable (flag 0: no subclass rows, but the query scans them).
     fn tree() -> Vec<AuctionCategory> {
         let sub = |sub_id: u32, name: &str, has_inv_types: bool| AuctionSubCategory {
             sub_id,
@@ -1093,10 +961,6 @@ mod tests {
         ]
     }
 
-    /// `QueryAuctionItems` takes menu POSITIONS and puts item-template IDS on the wire — the
-    /// reference does the mapping itself (`0x4ce980`: invType through `0x8070b0`, class through
-    /// `0x807060`, subclass as the Nth non-excluded `ItemSubClass.dbc` row of that class). Sending
-    /// the position instead asked vmangos for class 1 (Container) when the player picked Weapon.
     #[test]
     fn query_sends_ids_not_menu_positions() {
         let mut s = UiScript::new().unwrap();
@@ -1110,7 +974,7 @@ mod tests {
         assert_eq!(q.class, Some(2), "Weapon is item class 2, not position 1");
         assert_eq!(q.sub_class, Some(0), "the first weapon subclass is id 0");
 
-        // Armor / its SECOND subclass skips the id gap: Shield is 6, not 2.
+        // Armor / its second subclass skips the id gap: Shield is 6, not 2.
         s.run(r#"QueryAuctionItems("", "", "", 14, 2, 2, 0, nil, -1)"#)
             .unwrap();
         let q = s.take_auction_query().expect("queued");
@@ -1119,8 +983,7 @@ mod tests {
             (Some(23), Some(4), Some(6))
         );
 
-        // The query's scan ignores the class's filter flag: Consumable offers no subclass rows,
-        // yet an index still resolves against its (non-excluded) subclasses.
+        // The scan ignores the filter flag: Consumable offers no subclass rows, yet resolves one.
         s.run(r#"QueryAuctionItems("", "", "", 0, 3, 1, 0, nil, -1)"#)
             .unwrap();
         let q = s.take_auction_query().expect("queued");
@@ -1137,10 +1000,7 @@ mod tests {
         assert_eq!((q.inv_type, q.class, q.sub_class), (None, Some(2), None));
     }
 
-    /// `0x4cf9c0` / `0x4cfab0` return nothing for a class whose `0x807060` flag is 0, and
-    /// `0x4cfab0` gates a FOUND subclass on `ItemSubClass.Flags & 0x200` but pushes all fourteen
-    /// when the scan runs off the end (the exhaust edge at `0x4cfb61` lands past the gate at
-    /// `0x4cfb63`).
+    /// The gates of `0x4cf9c0` (subclasses) and `0x4cfab0` (inventory types).
     #[test]
     fn subclass_and_inv_type_menus_follow_the_reference_gates() {
         let mut s = UiScript::new().unwrap();
@@ -1162,8 +1022,6 @@ mod tests {
         );
     }
 
-    /// The sort stack answers for any key it remembers, not just the primary — the reason a
-    /// non-primary column's arrow can still point down.
     #[test]
     fn reversed_answers_for_any_remembered_key() {
         let list = AuctionListState {

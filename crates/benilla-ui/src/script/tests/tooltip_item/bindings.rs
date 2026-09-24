@@ -1,22 +1,16 @@
-//! The Set* entry points: the vendor compare's CURRENTLY_EQUIPPED shape,
-//! SetInventoryItem outside compare, and SetHyperlink's item-link filter.
+//! The `Set*` entry points: the vendor compare, `SetInventoryItem` outside it, `SetHyperlink`'s
+//! item filter, and the tradeskill and merchant-compare row indexing.
 
 use std::collections::HashMap;
 
 use super::script;
 use crate::script::*;
 
-/// The compare SHAPE, driven the only way 1.12.1 drives it: the vendor row's
-/// `SetMerchantCompareItem` (`MerchantFrame.xml:63-80`). The armed render is the equipped item's
-/// ORDINARY tooltip plus ONE line, first — the gray CURRENTLY_EQUIPPED header (p5). Both compare
-/// call sites pass p4 (compact) ZERO, so the two things that are easy to get wrong here are
-/// pinned as negatives: the name keeps its QUALITY color (this worn ring is epic, so the assert
-/// bites), and nothing is cut at `0x52e14c` — the description still prints (2216).
-///
-/// **And the negative control that keeps this engine out of it** (2210): a bag hover seats
-/// nothing, with shift or without, because the reference has no hover compare at all —
-/// `SHOW_COMPARE_TOOLTIP` has zero fire sites in 5875, so nothing may reach a listener for it
-/// either. The plates belong to whatever FrameXML raises them, and this engine raises none.
+/// The compare as 1.12.1 drives it, from the vendor row's `SetMerchantCompareItem`
+/// (`MerchantFrame.xml:63-80`): the worn item's ordinary tooltip under a gray
+/// `CURRENTLY_EQUIPPED` header (p5). Both callers pass p4 zero, so the name keeps its quality
+/// colour and nothing is cut at `0x52e14c`. A bag hover seats no plate, shift or not:
+/// `SHOW_COMPARE_TOOLTIP` has no fire site in the reference.
 #[test]
 fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
     let mut s = script();
@@ -26,8 +20,7 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
         durability: None,
         item_id: 7000,
         name: Some("Old Loop".into()),
-        // EPIC — a white name and a quality name are the same pixel at quality 1, which is how
-        // the conflated flag survived a green test for as long as it did.
+        // Epic: at quality 1 a white name and a quality name are the same pixel.
         quality: 4,
         ..Default::default()
     });
@@ -98,8 +91,7 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
             slots,
         }),
     );
-    // The plates are ordinary GameTooltip frames the FrameXML owns — the engine knows nothing
-    // about them (`ShoppingTooltip` does not occur in the image at all).
+    // The plates are ordinary GameTooltips the FrameXML owns; the reference never names them.
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("LEFT", 0, 0); a:SetWidth(10); a:SetHeight(10)
@@ -175,7 +167,6 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
     "#,
     )
     .unwrap();
-    // The compare colors: gray header, and the name in its own QUALITY color — the byte law.
     s.resolve();
     let quads = s.extract();
     let color_of = |txt: &str| {
@@ -206,16 +197,11 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
     assert!(s.take_errors().is_empty());
 }
 
-/// **`nameOnly`** — `SetInventoryItem`'s optional third argument, p4 of the builder, and the ONLY
-/// door onto the compact render in 1.12.1 (27 of `0x52b650`'s 31 call sites pass a provable zero,
-/// one forwards, and the three that carry a flag are all this binding's). No stock FrameXML caller
-/// passes it — all 8 stock call sites are two-argument — so this is addon surface, and it is live
-/// code, not a dead arm.
-///
-/// The mode is **trimmed, not bare**, and that is the half a plausible implementation gets wrong:
-/// two non-contiguous cuts plus an early return. Gone: the bind/lock region, the whole stat body,
-/// and everything past the cooldown line. Kept: the name (white), the slot/type cell, durability,
-/// every requirement line and the spell triggers.
+/// `SetInventoryItem`'s third argument, `nameOnly`, is the builder's p4 and the one way to the
+/// compact render: of `0x52b650`'s 31 call sites, 27 pass zero, one forwards and three are this
+/// binding's, and no stock caller passes it. The render is trimmed, not bare: the bind and lock
+/// lines, the stat body and everything past the cooldown line go; the white name, the slot and
+/// type cell, durability, the requirements and the spell triggers stay.
 #[test]
 fn set_inventory_item_name_only_is_the_trimmed_build() {
     let mut s = script();
@@ -237,9 +223,7 @@ fn set_inventory_item_name_only_is_the_trimmed_build() {
             class: 2,
             subclass: 7,
             inventory_type: 13,
-            // One line from each of the three regions p4 treats differently: CONJURED / the bind
-            // line / UNIQUE / LOCKED are CUT, ARMOR is CUT, and the type cell, durability, the
-            // level requirement and the trigger all SURVIVE.
+            // A line from each region p4 treats differently.
             flags: 0x2,
             bonding: 1,
             max_count: 1,
@@ -312,8 +296,7 @@ fn set_inventory_item_name_only_is_the_trimmed_build() {
     assert!(s.take_errors().is_empty());
 }
 
-/// `SetInventoryItem` outside a compare: the FULL line law (quality name, description — no cut),
-/// return 1 on an occupied slot, nil on empty/foreign units.
+/// Outside a compare: the full render, 1 for an occupied slot, nil for an empty or foreign one.
 #[test]
 fn set_inventory_item_renders_full_outside_compare() {
     let mut s = script();
@@ -377,8 +360,6 @@ fn set_inventory_item_renders_full_outside_compare() {
     assert!(s.take_errors().is_empty());
 }
 
-/// `SetHyperlink`: the full escaped chat link and the bare `item:` form both render through the
-/// shared law; non-item links no-op without touching the current content.
 #[test]
 fn set_hyperlink_renders_items_and_ignores_other_links() {
     let mut s = script();
@@ -410,8 +391,7 @@ fn set_hyperlink_renders_items_and_ignores_other_links() {
     assert!(s.take_errors().is_empty());
 }
 
-/// One tradeskill recipe fixture — the product id is `spell_id + 10_000`, so the tooltip's own
-/// name names which recipe the channel actually landed on.
+/// A recipe whose product id is `spell_id + 10_000`, so the tooltip's name shows which row it hit.
 fn ts_recipe(spell_id: u32, name: &str, group: (u32, u32, &str)) -> TradeSkillRecipe {
     TradeSkillRecipe {
         group: Some((group.0, group.1, group.2.to_string())),
@@ -437,13 +417,8 @@ fn ts_recipe(spell_id: u32, name: &str, group: (u32, u32, &str)) -> TradeSkillRe
     }
 }
 
-/// `SetTradeSkillItem`'s index is a **VISIBLE** row index, not a position in `recipes` — headers
-/// interleave with rows, so the two differ the moment any group precedes the recipe. This is the
-/// exact mis-index the tradeskill module doc once carried as a known gap: with one header above it,
-/// visible row 4 is the SECOND group's recipe, and a raw `recipes[4-1]` lookup would land on the
-/// first group's second recipe instead. Both the product channel and the reagent channel are
-/// pinned, since the detail-icon and reagent-slot hovers are the two callers that pass a genuine
-/// visible index straight through. A HEADER row is a no-op, not a shifted hit.
+/// `SetTradeSkillItem` takes a visible row index, headers included, not a position in `recipes`;
+/// the product and reagent hovers both pass one, and a header row is a no-op.
 #[test]
 fn set_trade_skill_item_indexes_visible_rows_not_raw_recipes() {
     let mut s = script();
@@ -468,11 +443,7 @@ fn set_trade_skill_item_indexes_visible_rows_not_raw_recipes() {
     }));
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 6);
 
-    // Visible row 5 is "Alpha Cloak" (spell 4) — its product is 10_004. A raw recipes[5-1] lookup
-    // would land on recipe index 4 (out of range, a silent no-op); recipes[4-1] on "Beta Cloak".
-    // `TTTextLeft1` need not exist when a call renders nothing (what an out-of-range RAW index
-    // does), so read it defensively — that case must surface as an assert_eq naming the row, not
-    // as a Lua nil-index panic three lines away from the claim.
+    // `TTTextLeft1` may not exist when nothing renders, so it is read defensively.
     let name_at = |s: &mut UiScript, row: i64, reagent: &str| -> String {
         s.run(&format!("TT:SetTradeSkillItem({row}{reagent})"))
             .unwrap();
@@ -483,26 +454,20 @@ fn set_trade_skill_item_indexes_visible_rows_not_raw_recipes() {
     assert_eq!(name_at(&mut s, 6, ""), "Beta Cloak");
     assert_eq!(name_at(&mut s, 2, ""), "Alpha Bolt");
 
-    // The reagent channel takes the same mapping.
     assert_eq!(name_at(&mut s, 5, ", 1"), "Alpha Cloak Reagent");
 
-    // A header row resolves to nothing — the hover is a no-op, so the previous render stands
-    // rather than a neighbouring recipe's tooltip appearing under the cursor.
+    // A header row is a no-op: the previous render stands.
     assert_eq!(name_at(&mut s, 4, ""), "Alpha Cloak Reagent");
 }
 
-/// `SetMerchantCompareItem(index [, offset])` — the shopping tooltip the stock vendor row raises.
-///
-/// The contract that decides ghost tooltips versus none is the RETURN, so that is what this pins:
-/// the **number** 1 on success, `nil` on every failure, one value always. Stock's
-/// `if ( ShoppingTooltip1:SetMerchantCompareItem(id, 1) ) then … end` reads it directly, so a
-/// boolean `false` where nil belongs shows an empty tooltip and a truthy nil-case shows two.
+/// `SetMerchantCompareItem(index [, offset])` returns the number 1 or nil, one value, and the stock
+/// vendor row shows each plate on it (`MerchantFrame.xml:67`).
 #[test]
 fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
 
-    // Both finger slots worn, both class 4 (ARMOR) like the ring on the shelf.
+    // Both finger slots worn, class 4 (armor) like the ring on the shelf.
     let mut inv: InventorySlots = Default::default();
     for (slot, id, name) in [(11usize, 7000u32, "Old Loop"), (12, 7001, "Older Loop")] {
         inv[slot] = Some(InvSlotView {
@@ -522,7 +487,7 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
             },
         );
     }
-    // …and a shield, class 4, in the off hand — the case that makes offset 2 nil for a WEAPON.
+    // A shield, class 4, in the off hand makes offset 2 nil for a weapon.
     inv[17] = Some(InvSlotView {
         item_id: 7100,
         name: Some("Battered Buckler".into()),
@@ -571,7 +536,7 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
             },
             MerchantItem {
                 name: Some("Unseen Thing".into()),
-                item_id: 8999, // no template — the uncached leg
+                item_id: 8999, // no template: the uncached leg
                 ..Default::default()
             },
         ],
@@ -583,7 +548,7 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
             name: "Shiny Loop".into(),
             quality: 3,
             class: 4,
-            inventory_type: 11, // finger — two candidate slots
+            inventory_type: 11, // finger: two candidate slots
             ..Default::default()
         },
     );
@@ -593,13 +558,11 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
             name: "Sharp Sword".into(),
             quality: 3,
             class: 2,
-            inventory_type: 13, // one-hand — main hand then off hand
+            inventory_type: 13, // one-hand: main hand, then off hand
             ..Default::default()
         },
     );
 
-    // The two shopping tooltips are ordinary GameTooltip frames — the engine knows nothing about
-    // them (the substring `ShoppingTooltip` does not occur in the image at all).
     s.run(
         r#"
         CreateFrame("GameTooltip", "ShoppingTooltip1"):Hide()
@@ -611,7 +574,6 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
     let call =
         |s: &mut UiScript, expr: &str| s.eval::<String>(&format!("return type({expr})")).unwrap();
 
-    // A ring against two worn rings: both offsets answer, and the answer is the NUMBER 1.
     assert_eq!(
         s.eval::<String>(r#"return tostring(ShoppingTooltip1:SetMerchantCompareItem(1, 1))"#)
             .unwrap(),
@@ -622,7 +584,6 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
         call(&mut s, "ShoppingTooltip2:SetMerchantCompareItem(1, 2)"),
         "number"
     );
-    // …and it filled with the WORN item, headed by the gray compare line.
     assert!(
         s.eval::<bool>(
             r#"local n = ShoppingTooltip1:NumLines()
@@ -637,9 +598,7 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
         "the fill is the equipped item's own tooltip with the CURRENTLY_EQUIPPED header"
     );
 
-    // A one-hand weapon: main hand matches (class 2), the off-hand SHIELD does not (class 4), so
-    // offset 2 is nil. This is the reference's class test doing the work, and it is the case a
-    // slot-only reading would get wrong.
+    // A one-hand weapon: the main hand (class 2) matches, the off-hand shield (class 4) does not.
     assert_eq!(
         call(&mut s, "ShoppingTooltip1:SetMerchantCompareItem(2, 1)"),
         "number"
@@ -650,12 +609,12 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
         "a shield is not a candidate for a weapon — class, not slot"
     );
 
-    // Offset defaults to 1 when absent, and does NOT raise.
+    // An absent offset is 1, not a raise.
     assert_eq!(
         call(&mut s, "ShoppingTooltip1:SetMerchantCompareItem(1)"),
         "number"
     );
-    // An explicit 0 or a negative is nil — the counter starts below zero and only decrements.
+    // An offset of 0 or less is nil: the counter starts below zero and only decrements.
     for bad in ["0", "-1"] {
         assert_eq!(
             call(
@@ -666,7 +625,6 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
             "offset {bad}"
         );
     }
-    // Out of range, and the uncached template, are both nil — never an error.
     for expr in [
         "ShoppingTooltip1:SetMerchantCompareItem(0, 1)",
         "ShoppingTooltip1:SetMerchantCompareItem(99, 1)",
@@ -674,20 +632,18 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
     ] {
         assert_eq!(call(&mut s, expr), "nil", "{expr}");
     }
-    // 2.7 re-bases in f64 and THEN truncates: 2.7 - 1 = 1.7 -> row 1, the sword. Doing it the
-    // other way round would land on row 2.
+    // 2.7 re-bases in f64, then truncates: 1.7 is row 1, the sword.
     assert_eq!(
         call(&mut s, "ShoppingTooltip1:SetMerchantCompareItem(2.7, 1)"),
         "number"
     );
 
-    // A non-number index RAISES, with the client's own usage text.
     let e = s
         .run(r#"ShoppingTooltip1:SetMerchantCompareItem({}, 1)"#)
         .unwrap_err()
         .to_string();
     assert!(e.contains("Usage: SetMerchantCompareItem"), "{e}");
-    // …but a numeric STRING is a number to `lua_isnumber`.
+    // A numeric string passes `lua_isnumber`.
     assert_eq!(
         call(&mut s, r#"ShoppingTooltip1:SetMerchantCompareItem("1", 1)"#),
         "number"

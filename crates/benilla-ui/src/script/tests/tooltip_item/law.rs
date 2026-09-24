@@ -1,14 +1,11 @@
-//! The emission-order law and the red requirement checks: the verified line families, the
-//! player-state-tracked reds (level/class/rep), and the slot|type cells' independent
-//! proficiency reds (hard miss on TYPE; alternate/dual-wield on SLOT).
+//! Line order and the red requirement checks: level, class and reputation against player state,
+//! and the slot and type cells' separate proficiency reds.
 
 use std::collections::HashMap;
 
 use super::{axe, lines_of, right_color, script};
 use crate::script::*;
 
-/// The full line law over a rich weapon + the red checks: a level-25 warrior fails the level
-/// requirement (red) but passes the class list (white).
 #[test]
 fn item_line_law_and_red_requirements() {
     let mut s = script();
@@ -16,7 +13,7 @@ fn item_line_law_and_red_requirements() {
     s.set_item_template(871, axe());
     s.set_player_req_state(PlayerReqState {
         level: 25,
-        class_id: 1, // Warrior — allowed
+        class_id: 1, // Warrior: allowed
         race_id: 1,
         skills: HashMap::new(),
         ..Default::default()
@@ -39,14 +36,12 @@ fn item_line_law_and_red_requirements() {
             "Ravager",
             "[ITEM_BIND_ON_EQUIP]",
             "[INVTYPE_2HWEAPON]",
-            // School 0 is physical: the reference names no school word for it either.
-            // The first emitted slot takes the plain key, a later one the `PLUS_` twin, and a
-            // school'd slot the `_WITH_SCHOOL` arm — the word sits INSIDE the template.
+            // School 0 has no school word. The first damage line takes the plain key, later ones
+            // `PLUS_`, and a slot with a school the `_WITH_SCHOOL` arm, the word inside it.
             "[DMG 68 - 103]",
             "[+DMGS 2 - 4 [SCHOOL5]]",
             "[DPS 25.3]",
-            // Display order, NOT wire order: the fixture feeds (Stamina, Strength) but the
-            // 0x808e88 table prints Strength first (STR,AGI,STA,INT,SPI,HP,MANA).
+            // Display order, not field order: `0x808e88` prints STR, AGI, STA, INT, SPI, HP, MANA.
             "[MOD_STRENGTH +9]",
             "[MOD_STAMINA +12]",
             "[RESIST_SINGLE +10 [SCHOOL5]]",
@@ -58,7 +53,6 @@ fn item_line_law_and_red_requirements() {
         ],
         "the verified line order (0276)"
     );
-    // The name wears the Rare blue; the failed level line is red; the passed class line white.
     assert_eq!(lines[0].1, [0.0, 0.439, 0.867, 1.0], "rare-blue name");
     let class_line = &lines[10];
     assert_eq!(
@@ -72,17 +66,13 @@ fn item_line_law_and_red_requirements() {
         [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0],
         "level 25 < 37 → red"
     );
-    // The right column of the slot|type pair carries the subclass.
     let ty: String = s.eval("return TTTextRight3:GetText()").unwrap();
     assert_eq!(ty, "Axe");
-    // The speed column of the damage pair.
     let speed: String = s.eval("return TTTextRight4:GetText()").unwrap();
     assert_eq!(speed, "Speed 3.50");
     assert!(s.take_errors().is_empty());
 }
 
-/// The red law flips with player state: leveling past the requirement turns the line white; a
-/// class outside the list turns the class line red.
 #[test]
 fn red_lines_track_player_state() {
     let mut s = script();
@@ -90,7 +80,7 @@ fn red_lines_track_player_state() {
     s.set_item_template(871, axe());
     s.set_player_req_state(PlayerReqState {
         level: 60,
-        class_id: 8, // Mage — not in {Warrior, Rogue}
+        class_id: 8, // Mage: not in {Warrior, Rogue}
         race_id: 1,
         skills: HashMap::new(),
         ..Default::default()
@@ -121,12 +111,10 @@ fn red_lines_track_player_state() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The families folded back 2026-07-10 (`0x52b650`): SIGNABLE green,
-/// UNIQUE before STARTS_QUEST, LOCKED red, six-equal resistances collapse to the ALL line (and
-/// Holy never prints singly), a known taught spell reds "Already known", the description gold —
-/// and NO openable line: `BenillaSetItemById` is a template source, and the whole openable/readable/
-/// creator tail rides the ref's item-OBJECT gate (`0x52e1c7`/`0x52e2e0` — byte-read 2026-07-20;
-/// the instance-tail law itself is in [`instance_tail_creator_and_readable`]).
+/// The gated families (`0x52b650`): SIGNABLE green, UNIQUE before STARTS_QUEST, LOCKED red, six
+/// equal resistances as one ALL line (Holy never prints alone), a known taught spell's red
+/// "Already known", the gold description, and no openable line: the openable, readable and creator
+/// tail needs an item object (`0x52e1c7`, `0x52e2e0`), and a template has none.
 #[test]
 fn verified_families_signable_locked_resists_known() {
     let mut s = script();
@@ -146,7 +134,6 @@ fn verified_families_signable_locked_resists_known() {
             ..Default::default()
         },
     );
-    // The player already knows the taught spell 2020.
     s.set_spellbook(SpellBookState {
         tabs: Vec::new(),
         slots: vec![SpellSlotView {
@@ -197,7 +184,6 @@ fn verified_families_signable_locked_resists_known() {
         [1.0, 210.0 / 255.0, 0.0, 1.0],
         "the description is the byte-verified gold"
     );
-    // Holy exclusion: a lone Holy resist prints nothing.
     s.set_item_template(
         5519,
         ItemTemplateView {
@@ -215,10 +201,8 @@ fn verified_families_signable_locked_resists_known() {
     "#,
     )
     .unwrap();
-    // …and the five that DO print come out in the builder's own order, which is not the field
-    // order: `0x52c8ad` runs `edi` 1..5 reading school `(edi == 1) ? 6 : edi`, so **Arcane leads**
-    // and Holy is displaced rather than skipped (decision 2080 named this; we printed plain field
-    // order, Fire first and Arcane last).
+    // The five that print follow the builder, not the fields: `0x52c8ad` runs `edi` 1..5 reading
+    // school `(edi == 1) ? 6 : edi`, so Arcane leads.
     s.set_item_template(
         5520,
         ItemTemplateView {
@@ -246,13 +230,10 @@ fn verified_families_signable_locked_resists_known() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The slot|type line's independent cell reds (byte-read at the builder's coloring legs
-/// against the AddLine-CORE signature): a hard
-/// proficiency miss (`0xc4d4a0[class]` bit `1 << subclass`) reds the TYPE cell; the SLOT cell
-/// reds when the weapon is usable only via its alternate subclass (ItemSubClass
-/// prereq/postreq) or is an off-hand weapon without Dual Wield (`0x5eab70`). Plus the
-/// reputation-requirement red (`0xc0d390` while the player's standing is below the required
-/// rank) and the hidden-type suppression.
+/// The slot and type cells red separately: a hard proficiency miss (`0xc4d4a0[class]` bit
+/// `1 << subclass`) reds the type; usable only through the alternate subclass, or an off-hand
+/// weapon without Dual Wield (`0x5eab70`), reds the slot. The reputation line takes the red
+/// (`0xc0d390`) below the required rank, and a hidden subclass prints no type cell.
 #[test]
 fn proficiency_and_reputation_reds() {
     let mut s = script();
@@ -306,8 +287,7 @@ fn proficiency_and_reputation_reds() {
         white,
         "met reputation is white"
     );
-    // 1H-axes-only mask, no alternate on the view: the hard miss reds the TYPE cell and the
-    // slot stays white. Friendly standing reds the rep line.
+    // A 1H-axes mask, no alternate: the type cell reds, not the slot; Friendly reds the rep line.
     let mut req2 = req;
     req2.proficiency.insert(2, 1 << 0);
     req2.rep_ranks.insert(72, 4);
@@ -326,8 +306,7 @@ fn proficiency_and_reputation_reds() {
         red,
         "unmet reputation is red"
     );
-    // The same mask with the view's alternate resolved to 1H axes (the real (2,1) row's
-    // prerequisite): usable-via-alternate reds the SLOT cell instead; the type goes white.
+    // With the alternate set to 1H axes, as the real (2, 1) row has it, the slot reds instead.
     let mut alt = item;
     alt.proficiency_alt = Some(0);
     s.set_item_template(871, alt);
@@ -344,8 +323,7 @@ fn proficiency_and_reputation_reds() {
         white,
         "the alternate covers the type"
     );
-    // An off-hand weapon with its dagger bit set still reds the SLOT cell without Dual
-    // Wield; learning it (an effect-40 spell) clears the red.
+    // An off-hand dagger reds the slot until Dual Wield (an effect-40 spell) is known.
     s.set_item_template(
         872,
         ItemTemplateView {
@@ -363,8 +341,7 @@ fn proficiency_and_reputation_reds() {
     s.run(r#"TT:SetOwner(Slot9, "ANCHOR_RIGHT"); TT:BenillaSetItemById(872)"#)
         .unwrap();
     let lines = lines_of(&mut s);
-    // `INVTYPE_WEAPONOFFHAND`, NOT `INVTYPE_SHIELD` — one enUS sentence, two keys, and only the
-    // weapon one belongs on an InventoryType 22.
+    // Type 22 takes `INVTYPE_WEAPONOFFHAND`, not `INVTYPE_SHIELD`, though both read "Off Hand".
     assert_eq!(
         color(&lines, "[INVTYPE_WEAPONOFFHAND]"),
         red,
@@ -385,13 +362,12 @@ fn proficiency_and_reputation_reds() {
         white,
         "Dual Wield clears it"
     );
-    // An item class with NO proficiency entry never reds (the map only ever holds classes
-    // the server sent masks for).
+    // A class with no proficiency entry never reds: the map holds only what the server sent.
     s.set_item_template(
         118,
         ItemTemplateView {
             name: "Tattered Cloth Vest".into(),
-            class: 4,    // armor — but req2 carries no class-4 entry
+            class: 4,    // armor, with no class-4 entry in req2
             subclass: 1, // cloth
             inventory_type: 5,
             ..Default::default()
@@ -405,7 +381,7 @@ fn proficiency_and_reputation_reds() {
         white,
         "a class with no mask entry stays white"
     );
-    // A hidden subclass (displayFlags bit 0 — the Miscellaneous family) prints no type cell.
+    // A hidden subclass (displayFlags bit 0, the Miscellaneous family) prints no type cell.
     s.set_item_template(
         889,
         ItemTemplateView {
@@ -429,9 +405,8 @@ fn proficiency_and_reputation_reds() {
     assert!(s.take_errors().is_empty());
 }
 
-/// ITEM_MIN_LEVEL's `> 1` gate (byte-VERIFIED `0x52d2cf`: `cmp esi,0x1 / jle skip`): a level-1
-/// requirement — every starter consumable's shape (bread/water carry `RequiredLevel 1`) —
-/// prints NO line, exactly like no requirement at all; level 2 is the first that prints.
+/// `ITEM_MIN_LEVEL` prints only above 1 (`0x52d2cf`): a level-1 requirement, as starter food and
+/// water carry, prints nothing.
 #[test]
 fn required_level_one_is_hidden() {
     let mut s = script();
@@ -463,28 +438,9 @@ fn required_level_one_is_hidden() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The instance tail (byte-read 2026-07-20, `0x52e1b1`–`0x52e358`): a REAL-instance hover
-/// (`SetBagItem`) appends the creator line — "Written by %s"
-/// (white) when the instance carries letter text, the green-escaped "<Made by %s>" otherwise —
-/// then READABLE off the instance text id (its template's PageText is 0 — the
-/// director-reported gap). An unresolved creator (name query in flight) emits no line. LOCKED
-/// yields to the instance UNLOCKED bit — which is also what un-gates ITEM_OPENABLE: a bag hover
-/// on an openable instance shows the green `<Right Click to Open>` (director-observed on a clam;
-/// the `p6` leg selector, `0x6e2ed0`, gates it).
-/// A **running cooldown** takes SetBagItem's other leg and suppresses the line — the two are
-/// structurally exclusive on this binding.
-/// **Line 3 — the charter's guild name and master**, between the NAME and the green
-/// `ITEM_SIGNABLE` (the builder `0x52b650`'s emission order: 2 NAME, 3 the petition
-/// triple, 4 SIGNABLE).
-///
-/// The director's report was that our charter tooltip showed the name and the green line with
-/// nothing between them, where the real client prints "Guild Name: BTC" / "Guild Master:
-/// Twowarrior". The ORDER is the half a text-only assertion would miss: these lines sit above the
-/// green one, not below it.
-///
-/// Also pinned: the two key families (a plain petition reads "Petition:" / "Created by"), and that
-/// an unresolved owner withholds only its own line — the creator line's rule, and the reason a
-/// first hover of an unopened charter is not blank but partial.
+/// A charter's guild name and master sit between the item name and the green `ITEM_SIGNABLE`
+/// (`0x52b650` emits the name, the petition lines, then SIGNABLE). A plain petition takes the
+/// "Petition:" and "Created by" keys, and an owner still in flight withholds only its own line.
 #[test]
 fn charter_lines_sit_between_the_name_and_the_signable_line() {
     let mut s = script();
@@ -494,7 +450,7 @@ fn charter_lines_sit_between_the_name_and_the_signable_line() {
         ItemTemplateView {
             name: "Guild Charter".into(),
             quality: 1,
-            flags: 0x2000, // ITEM_FLAG_CHARTER — the green line's own gate
+            flags: 0x2000, // ITEM_FLAG_CHARTER, the green line's own gate
             max_count: 1,
             bonding: 1,
             ..Default::default()
@@ -517,7 +473,6 @@ fn charter_lines_sit_between_the_name_and_the_signable_line() {
             owner: Some("Twowarrior".into()),
         })),
     );
-    // The owner's name still in flight — the title line stands, its own does not.
     slots.insert(
         2,
         charter(Some(PetitionSlotView {
@@ -526,9 +481,7 @@ fn charter_lines_sit_between_the_name_and_the_signable_line() {
             owner: None,
         })),
     );
-    // No record yet at all: the plate is the name and the green line, as it was before this.
     slots.insert(3, charter(None));
-    // A non-charter petition takes the OTHER key family.
     slots.insert(
         4,
         charter(Some(PetitionSlotView {
@@ -663,9 +616,6 @@ fn instance_tail_creator_and_readable() {
     slots.insert(3, slot(2589, false, Some("Geoffrey"), 0)); // crafted, still locked
     slots.insert(4, slot(2589, false, None, 0x4)); // unlocked → LOCKED gone, open line on
     slots.insert(5, slot(7973, false, None, 0)); // the clam: lockless, openable outright
-                                                 // The same clam with a RUNNING cooldown — `SetBagItem`'s p6=1 leg, which skips the openable
-                                                 // tree entirely (the ITEM_COOLDOWN_TIME line takes its place in the reference; that line has
-                                                 // no feed here yet, so this slot renders bare).
     slots.insert(
         6,
         ContainerSlot {
@@ -698,12 +648,12 @@ fn instance_tail_creator_and_readable() {
     );
     assert_eq!(lines[1].1, [1.0, 1.0, 1.0, 1.0], "WRITTEN_BY is white");
     assert_eq!(lines[2].1, [0.0, 1.0, 0.0, 1.0], "READABLE is green");
-    // Creator unresolved → no writer line, READABLE stays (the re-push repaints later).
+    // The instance tail (`0x52e1b1`-`0x52e358`): a creator still in flight prints no writer line,
+    // and READABLE stays.
     s.run(r#"TT:SetOwner(getglobal("SlotL"), "ANCHOR_RIGHT"); TT:SetBagItem(0, 2)"#)
         .unwrap();
     let texts: Vec<String> = lines_of(&mut s).into_iter().map(|(t, _)| t).collect();
     assert_eq!(texts, vec!["Plain Letter", "[ITEM_READABLE]"]);
-    // Crafted + locked: the green-escaped Made-by; no open line while LockID gates it.
     s.run(r#"TT:SetOwner(getglobal("SlotL"), "ANCHOR_RIGHT"); TT:SetBagItem(0, 3)"#)
         .unwrap();
     let texts: Vec<String> = lines_of(&mut s).into_iter().map(|(t, _)| t).collect();
@@ -716,22 +666,19 @@ fn instance_tail_creator_and_readable() {
         ],
         "CREATED_BY carries the string's own green escape; locked chest hides OPENABLE"
     );
-    // The instance UNLOCKED bit retires the LOCKED line AND satisfies the openable lock sub-gate.
+    // The instance's UNLOCKED bit drops the LOCKED line and satisfies the openable lock gate.
     s.run(r#"TT:SetOwner(getglobal("SlotL"), "ANCHOR_RIGHT"); TT:SetBagItem(0, 4)"#)
         .unwrap();
     let lines = lines_of(&mut s);
     let texts: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
     assert_eq!(texts, vec!["Heavy Chest", "[ITEM_OPENABLE]"]);
     assert_eq!(lines[1].1, [0.0, 1.0, 0.0, 1.0], "OPENABLE is green");
-    // The director's case: a lockless LOOTABLE template (a clam) is openable outright — name +
-    // the green line, nothing between them.
     s.run(r#"TT:SetOwner(getglobal("SlotL"), "ANCHOR_RIGHT"); TT:SetBagItem(0, 5)"#)
         .unwrap();
     let texts: Vec<String> = lines_of(&mut s).into_iter().map(|(t, _)| t).collect();
     assert_eq!(texts, vec!["Small Barnacled Clam", "[ITEM_OPENABLE]"]);
-    // The same clam mid-cooldown takes SetBagItem's OTHER leg (p6=1) — the openable tree is
-    // skipped wholesale, so the green line is gone (the reference prints ITEM_COOLDOWN_TIME in
-    // its place; unfed here). `hasCooldown`, the binding's own return, is the same boolean.
+    // Mid-cooldown the clam takes `SetBagItem`'s other leg (p6 = 1, picked at `0x6e2ed0`), which
+    // skips the openable tree; the reference prints `ITEM_COOLDOWN_TIME` there, unfed here.
     let has_cd: bool = s
         .eval(r#"TT:SetOwner(getglobal("SlotL"), "ANCHOR_RIGHT"); return TT:SetBagItem(0, 6)"#)
         .unwrap();
@@ -745,25 +692,15 @@ fn instance_tail_creator_and_readable() {
     assert!(s.take_errors().is_empty());
 }
 
-/// **The bind line's Soulbound override** — the bind line reads the INSTANCE, not only the template
-/// (an equipped Maiden's Circle reads *Soulbound*, not *Binds when equipped*; equipped pants
-/// likewise, not *Binds when picked up*).
-///
-/// The reference's rule: Bonding `[record+0x194]` ∈ {1..5}
-/// decides whether a line prints at all; a **runtime-bound instance** (`0x5da2c0` — soulbound
-/// flag, or a live enchant slot that binds) overrides it to `ITEM_SOULBOUND`, and to
-/// `ITEM_BIND_QUEST` for the quest kinds; only then does the jump table `0x52e4fc` pick
-/// 1→picked up · 2→equipped · 3→used · 4/5→Quest Item.
-///
-/// Four claims, three of them controls: the override fires on a bound instance, an UNbound
-/// instance of the same item still reads *Binds when equipped*, a template hover (no instance at
-/// all) still reads *Binds when equipped*, and a bound QUEST item stays *Quest Item* — the
-/// override's other arm is the same text 4|5 print anyway.
+/// Bonding `[record+0x194]` in 1..5 decides whether a bind line prints; a runtime-bound instance
+/// (`0x5da2c0`: the soulbound flag, or a live enchant slot that binds) prints `ITEM_SOULBOUND`,
+/// or `ITEM_BIND_QUEST` for the quest kinds; else the jump table `0x52e4fc` picks 1 picked up,
+/// 2 equipped, 3 used, 4 and 5 Quest Item.
 #[test]
 fn a_runtime_bound_instance_overrides_the_bind_line_to_soulbound() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    s.set_item_template(871, axe()); // bonding 2 — Binds when equipped
+    s.set_item_template(871, axe()); // bonding 2: Binds when equipped
     let ring = ItemTemplateView {
         name: "Maiden's Circle".into(),
         quality: 2,
@@ -789,9 +726,9 @@ fn a_runtime_bound_instance_overrides_the_bind_line_to_soulbound() {
         ..Default::default()
     };
     let mut slots = HashMap::new();
-    slots.insert(1, slot(942, true)); // bound: the reported case
+    slots.insert(1, slot(942, true)); // bound
     slots.insert(2, slot(942, false)); // the same ring, not yet bound
-    slots.insert(3, slot(4913, true)); // a bound QUEST item
+    slots.insert(3, slot(4913, true)); // a bound quest item
     s.set_container(
         0,
         Some(ContainerState {
@@ -831,25 +768,22 @@ fn a_runtime_bound_instance_overrides_the_bind_line_to_soulbound() {
     );
     assert_eq!(color, [1.0, 1.0, 1.0, 1.0], "the bind line is white");
 
-    // Control 1: the SAME item, instance not bound — the template's bonding stands.
+    // Controls: the same ring unbound, and a template hover, which has no instance.
     s.run(r#"TT:SetBagItem(0, 2)"#).unwrap();
     assert_eq!(bind_line(&mut s).0, "[ITEM_BIND_ON_EQUIP]");
 
-    // Control 2: a TEMPLATE hover carries no instance at all, so nothing can override.
     s.run(r#"TT:BenillaSetItemById(871)"#).unwrap();
     assert_eq!(bind_line(&mut s).0, "[ITEM_BIND_ON_EQUIP]");
 
-    // Control 3: the override's other arm is ITEM_BIND_QUEST — the same text 4|5 already print.
+    // A bound quest item stays `ITEM_BIND_QUEST`, the text 4 and 5 print anyway.
     s.run(r#"TT:SetBagItem(0, 3)"#).unwrap();
     assert_eq!(bind_line(&mut s).0, "[ITEM_BIND_QUEST]");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The damage block's five-arm template matrix** (the loop at `0x52c22b`; decision 2080 named
-/// this cell and 2158 converted it). Each arm here names the leg it takes: the school predicate is
-/// the slot's school NUMBER, the ammo predicate is `ItemClass == 6` alone, the single predicate
-/// compares the two ROUNDED bounds, and the first/`PLUS_` flag is per-item — a skipped slot does
-/// not consume it. The rounding is `floor(min)` / `ceil(max)`, not a round-half pair.
+/// The damage templates (`0x52c22b`): the school arm goes by the slot's school number, the ammo
+/// arm by `ItemClass == 6` alone, the single arm by equal rounded bounds, and the first/`PLUS_`
+/// flag is per item, kept past a skipped slot. Bounds round as `floor(min)`, `ceil(max)`.
 #[test]
 fn damage_matrix_arms_and_the_first_flag() {
     let mut s = script();
@@ -875,9 +809,7 @@ fn damage_matrix_arms_and_the_first_flag() {
         ..Default::default()
     };
 
-    // The plain two-number arm, the SKIP, and the PLUS_ twin — the skipped middle slot does not
-    // consume the first flag, so slot 2 still prints as a later line, and only the FIRST emitted
-    // line carries the Speed cell.
+    // A zero middle slot is skipped; only the first line carries the Speed cell.
     let lines = show(
         &mut s,
         900,
@@ -898,29 +830,24 @@ fn damage_matrix_arms_and_the_first_flag() {
         .expect("right cell 4");
     assert_eq!(later, "", "a later damage line renders left-only");
 
-    // floor(min) / ceil(max) on fractional bounds — Fang of the Mystics' real numbers. A
-    // round-half pair would say "39 - 86"; the biased pair says 38.
+    // Fang of the Mystics' real bounds: `floor`/`ceil` give 38 - 86, where rounding gives 39.
     let lines = show(&mut s, 901, weapon(vec![(38.7, 85.7, 0)]));
     assert_eq!(lines[2], "[DMG 38 - 86]", "{lines:?}");
 
-    // The SINGLE arm — the two ROUNDED bounds equal. It is a no-school, non-ammo leaf only.
+    // The single arm: equal rounded bounds, no school, not ammo.
     let lines = show(&mut s, 902, weapon(vec![(7.0, 7.0, 0)]));
     assert_eq!(lines[2], "[DMG1 7]", "{lines:?}");
-    // …and a school'd slot with equal bounds still takes the WITH_SCHOOL arm, two identical
-    // numbers and all: there is no SINGLE_…_WITH_SCHOOL template.
+    // A slot with a school and equal bounds takes `WITH_SCHOOL`: no single school template exists.
     let lines = show(&mut s, 903, weapon(vec![(7.0, 7.0, 4)]));
     assert_eq!(lines[2], "[DMGS 7 - 7 [SCHOOL4]]", "{lines:?}");
 
-    // AMMO is `ItemClass == 6` alone. The `%g` value is the two rounded bounds averaged and is
-    // NOT divided by anything — Rough Arrow's 1–2 reads 1.5 — and ammo gets neither a Speed
-    // cell nor a DPS line, because both gate on class 2.
+    // Ammo's `%g` is the rounded bounds' average, undivided (Rough Arrow's 1-2 reads 1.5), with
+    // no Speed cell or DPS line, both gated on class 2.
     let arrow = ItemTemplateView {
         name: "Rough Arrow".into(),
         class: 6,
         subclass: 2,
         sub_class_display: Some("Arrow".into()),
-        // `ItemClass.dbc` row 6's own name — the LEFT cell for a class-6 item, which never
-        // consults the InventoryType key table.
         item_type: Some("Projectile".into()),
         inventory_type: 24,
         damages: vec![(1.0, 2.0, 0)],
@@ -928,9 +855,8 @@ fn damage_matrix_arms_and_the_first_flag() {
         ..Default::default()
     };
     let lines = show(&mut s, 904, arrow.clone());
-    // The slot|type line above it reads "Projectile | Arrow": a class-6 item takes
-    // `ItemClass.dbc`'s own row-6 name on the LEFT (`0x52c0bc`, read verbatim — never a
-    // GlobalString), not the empty `INVTYPE_AMMO` key.
+    // The type line reads "Projectile | Arrow": the left cell is the DBC name (`0x52c0bc`),
+    // never a GlobalString such as the absent `INVTYPE_AMMO`.
     assert_eq!(lines[1], "Projectile", "{lines:?}");
     let ty: String = s
         .eval("return TTTextRight2:GetText() or ''")
@@ -984,9 +910,8 @@ fn damage_matrix_arms_and_the_first_flag() {
     );
 }
 
-/// **The bag line** (`0x52b754`): its gate is `InventoryType == 0x12` alone — never the
-/// slot count — and its second hole is the same `ItemSubClass` DisplayName the type cell reads, so
-/// the noun is per-subclass. A container whose row names nothing prints no slot line at all.
+/// The bag line (`0x52b754`) gates on `InventoryType == 0x12` alone, and its noun is the
+/// subclass's DisplayName; a row with no name prints no line.
 #[test]
 fn container_slots_line_names_its_subclass() {
     let mut s = script();
@@ -1020,17 +945,15 @@ fn container_slots_line_names_its_subclass() {
         "[SLOTS 24 Soul Bag]",
         "the noun is the subclass's, not a constant"
     );
-    // A quiver is InventoryType 18 like every other container — INVTYPE_QUIVER is a dead slot
-    // name in 1.12 — so it reaches this line and names itself.
+    // A quiver is InventoryType 18 like any container, so it names itself here.
     let mut quiver = bag(2, Some("Quiver"), 8);
     quiver.class = 11;
     assert_eq!(show(&mut s, 912, quiver)[1], "[SLOTS 8 Quiver]");
-    // The gate never tests the slot count.
     assert_eq!(
         show(&mut s, 913, bag(0, Some("Bag"), 0))[1],
         "[SLOTS 0 Bag]"
     );
-    // No row name: NEITHER this line nor the ordinary slot|type one.
+    // No row name: neither this line nor the slot and type line.
     let lines = show(&mut s, 914, bag(0, None, 16));
     assert_eq!(lines.len(), 1, "name line only: {lines:?}");
 }

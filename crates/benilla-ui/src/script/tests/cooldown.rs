@@ -1,17 +1,14 @@
-//! The cooldown **bindings**: the per-action dynamic-state read API and the `GetTime`-space
-//! cooldown triples the stock `Cooldown.lua` machine consumes (the widget itself is the
-//! reference's own `<Model>` since decision 2019 — `tests::model_clock` runs that file verbatim).
+//! The cooldown bindings: per-action state and the `GetTime`-space triples stock `Cooldown.lua`
+//! consumes (its `<Model>` widget runs in `tests::model_clock`).
 
 use super::common::script;
 use crate::script::*;
 
-/// The per-action dynamic-state API: the 1/nil conventions, IsActionInRange's tri-state, and
-/// GetActionCooldown's GetTime-space triple that goes cold at expiry.
+/// The 1/nil conventions, `IsActionInRange`'s tri-state, and a cooldown that goes cold at expiry.
 #[test]
 fn action_state_bindings_answer_the_reference_conventions() {
     let mut s = script();
 
-    // No state pushed: everything nil / cold.
     assert!(s.eval::<bool>("return IsUsableAction(3) == nil").unwrap());
     assert!(s.eval::<bool>("return IsActionInRange(3) == nil").unwrap());
     assert!(s
@@ -35,7 +32,6 @@ fn action_state_bindings_answer_the_reference_conventions() {
         }),
     );
 
-    // The 1/nil pairs, exactly as the transcribed `if` reads them.
     assert!(s
         .eval::<bool>("local u, oom = IsUsableAction(3); return u == nil and oom == 1")
         .unwrap());
@@ -45,8 +41,7 @@ fn action_state_bindings_answer_the_reference_conventions() {
     assert!(s
         .eval::<bool>("return IsAutoRepeatAction(3) == nil")
         .unwrap());
-    // IsConsumableAction reads the SLOT, not this map — it is a pure query over
-    // the item template, so it arrives with the icon it gates the count beside.
+    // `IsConsumableAction` reads the slot, not this state: it arrives with the icon.
     assert!(s
         .eval::<bool>("return IsConsumableAction(3) == nil")
         .unwrap());
@@ -62,7 +57,6 @@ fn action_state_bindings_answer_the_reference_conventions() {
     );
     assert!(s.eval::<bool>("return IsConsumableAction(3) == 1").unwrap());
 
-    // GetActionCooldown: the pushed absolute start, verbatim in seconds.
     assert!(s
         .eval::<bool>(
             "local st, d, e = GetActionCooldown(3); \
@@ -70,9 +64,8 @@ fn action_state_bindings_answer_the_reference_conventions() {
         )
         .unwrap());
 
-    // 5 s later the same stored pair still answers (4 s window has 0 left → but 100+? no: it
-    // expires at start+10 = now+4) …after the remaining 4 s pass, the read goes cold — the
-    // stale-refeed guard (a re-fed finished pair must not replay the sweep/flash).
+    // It ends at 94 + 10 = 104: live at 103.9 and cold after, so a re-fed finished pair cannot
+    // replay the sweep.
     s.tick(3.9);
     assert!(s
         .eval::<bool>("local st, d = GetActionCooldown(3); return d == 10")
@@ -82,7 +75,7 @@ fn action_state_bindings_answer_the_reference_conventions() {
         .eval::<bool>("local st, d, e = GetActionCooldown(3); return st == 0 and d == 0 and e == 1")
         .unwrap());
 
-    // An on-hold (enable == 0) cooldown never goes cold on its own — parked until the event.
+    // An on-hold cooldown (enable 0) never goes cold on its own; it waits for the event.
     s.set_action_state(
         3,
         Some(ActionState {
@@ -95,17 +88,12 @@ fn action_state_bindings_answer_the_reference_conventions() {
         .eval::<bool>("local st, d, e = GetActionCooldown(3); return d == 30 and e == 0")
         .unwrap());
 
-    // Clearing the state clears the reads.
     s.set_action_state(3, None);
     assert!(s.eval::<bool>("return IsCurrentAction(3) == nil").unwrap());
 }
 
-/// The absolute-start triple is the anchor — both director regressions pin here. Reset-on-kill
-/// ("the cooldown indicator resets when you kill a mob"): an unrelated field flip re-pushes the
-/// same running cooldown, whose triple carries the SAME start, so the sweep holds. The vanished
-/// GCD pie ("spamming Rend during Charge never shows the pie"): a fail-clear + re-arm between
-/// feeds pushes a triple with a NEW start — under the old `(remaining, duration)` shape the two
-/// arms read byte-identical and the seam kept the first, long-elapsed anchor.
+/// The absolute start anchors the sweep: re-pushing a running cooldown (a kill flipping `usable`)
+/// keeps it, so the sweep does not reset, and a re-arm moves it even at the same duration.
 #[test]
 fn the_absolute_start_triple_holds_the_anchor_and_a_rearm_moves_it() {
     let mut s = script();
@@ -120,8 +108,6 @@ fn the_absolute_start_triple_holds_the_anchor_and_a_rearm_moves_it() {
         .eval::<bool>("local st = GetActionCooldown(3); return math.abs(st - 100) < 1e-3")
         .unwrap());
 
-    // 8 s later the kill drops combat and `usable` flips; the re-push carries the same start.
-    // The anchor holds at 100 — the sweep never restarts (the reset-on-kill invariant).
     s.tick(8.0);
     s.set_action_state(3, Some(cooling(true)));
     assert!(s
@@ -131,8 +117,6 @@ fn the_absolute_start_triple_holds_the_anchor_and_a_rearm_moves_it() {
         )
         .unwrap());
 
-    // A RE-ARM carries a fresh start and moves the anchor — even with the same duration (the
-    // vanished-pie shape: same spell, same 15 s, armed again at t=107).
     s.set_action_state(
         3,
         Some(ActionState {
@@ -145,8 +129,6 @@ fn the_absolute_start_triple_holds_the_anchor_and_a_rearm_moves_it() {
         .unwrap());
 }
 
-/// The same absolute-start law on the other two converters: the stance bar's form cooldown and
-/// the bag slot's item cooldown hold their anchors across unchanged re-pushes.
 #[test]
 fn shapeshift_and_container_cooldowns_keep_their_anchors_too() {
     let mut s = script();
@@ -177,7 +159,7 @@ fn shapeshift_and_container_cooldowns_keep_their_anchors_too() {
         .eval::<bool>("local st = GetContainerItemCooldown(0, 1); return math.abs(st - 50) < 1e-3")
         .unwrap());
 
-    // Re-push both with the SAME raw triples 5 s later: the anchors hold at 50.
+    // The same triples re-pushed 5 s later: the anchors hold at 50.
     s.tick(5.0);
     s.set_shapeshift_forms(vec![form()]);
     s.set_container(0, Some(bag()));

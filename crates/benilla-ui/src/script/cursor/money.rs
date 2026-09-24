@@ -1,28 +1,6 @@
-//! The money cursor — payload mode 2: coins picked up off a money frame,
-//! and everything the reference does with them. VERIFIED at the bytes throughout:
-//!
-//! * **The purse is never debited.** Nothing on this path writes `PLAYER_FIELD_COINAGE`; the
-//!   backpack's figure is `GetMoney() − GetCursorMoney() − GetPlayerTradeMoney()`, FrameXML
-//!   arithmetic. Dropping credits nothing back because nothing was taken.
-//! * `PickupPlayerMoney(amount)` raises on a non-number, truncates, and refuses SILENTLY on a zero
-//!   amount, on lost player control, and on more than the purse holds (unsigned). It clears the
-//!   cursor first — whose tail fires `CURSOR_UPDATE` before the money lands — then installs mode 2,
-//!   plays `LOOTWINDOWCOINSOUND`, sets the coin bitmap by magnitude and fires `PLAYER_MONEY`.
-//! * `DropCursorMoney()` is an absolute no-op without money on the cursor; otherwise the coin
-//!   sound, `PLAYER_MONEY`, then mode 0 and `CURSOR_UPDATE`. No drop kit, no packet.
-//! * `CursorHasMoney()` answers the number `1` or `nil`, never a boolean.
-//! * `AddTradeMoney()` (0 args) folds the coins into the trade offer as an ABSOLUTE
-//!   `CMSG_SET_TRADE_GOLD` of `offer + cursor`, gated on the purse covering the total; a refusal
-//!   leaves the money held. Success clears the cursor with no `PLAYER_MONEY`.
-//! * `PickupTradeMoney(amount)` raises on a non-number; `amount <= 0` or `> offer` (both SIGNED)
-//!   refuse silently; else `0x11F` with `offer − amount`, then the coins onto the cursor with
-//!   `PLAYER_MONEY`.
-//! * `GetCoinIcon(amount)` raises on a non-number and answers `INV_Misc_Coin_0N` by the signed
-//!   thresholds of [`coin_icon`] — the cursor's own bitmap goes by the same table.
-//!
-//! One thing this engine's deferred event lane cannot reproduce: the reference's `CURSOR_UPDATE`
-//! handler runs synchronously inside the clear, before the coins land, so `CursorHasMoney()` is
-//! nil there; ours runs at the next dispatch and sees the coins. Named, not hidden.
+//! The money cursor, payload mode 2: coins taken off a money frame; the purse is never debited.
+//! Deviation: a `CURSOR_UPDATE` handler already sees the coins, because events are queued; the
+//! reference runs it inside the clear, before they land.
 
 use mlua::{Lua, Value};
 
@@ -30,9 +8,8 @@ use super::{queue_cursor_update, CursorMoney, CursorPayload};
 use crate::script::binding_abi::{flag, number_arg};
 use crate::script::Model;
 
-/// The coin icon for an amount of copper — `GetCoinIcon 0x48d4e0`'s table, SIGNED thresholds
-/// (a negative amount reads as the smallest coin). The loot window's coin slot and the money
-/// cursor's bitmap use the same table.
+/// The coin icon for an amount of copper: `GetCoinIcon`'s table (`0x48d4e0`), thresholds signed.
+/// The loot window's coin slot and the money cursor use it too.
 pub fn coin_icon(copper: i64) -> &'static str {
     if copper < 10 {
         "Interface\\Icons\\INV_Misc_Coin_05"
@@ -49,7 +26,6 @@ pub fn coin_icon(copper: i64) -> &'static str {
     }
 }
 
-/// The copper on the cursor, `0` when it holds anything else or nothing.
 pub(crate) fn cursor_money(model: &Model) -> u32 {
     match &model.cursor {
         Some(CursorPayload::Money(m)) => m.copper,
@@ -57,17 +33,15 @@ pub(crate) fn cursor_money(model: &Model) -> u32 {
     }
 }
 
-/// Queue `PLAYER_MONEY` — the purse frames' repaint, which is how the held coins leave the
-/// backpack's figure without the purse moving.
+/// Queue `PLAYER_MONEY`, which repaints the money frames less the held coins.
 fn queue_player_money(model: &mut Model) {
     model
         .pending_events
         .push(("PLAYER_MONEY".to_string(), Vec::new()));
 }
 
-/// Put `copper` on the cursor the way `0x494cc0` does: the inner clear (whose tail fires
-/// `CURSOR_UPDATE`, and which fires a `PLAYER_MONEY` of its own when the cursor already held
-/// coins), then the payload, then `PLAYER_MONEY`.
+/// Put coins on the cursor as `0x494cc0` does: the inner clear's `CURSOR_UPDATE`, after its own
+/// `PLAYER_MONEY` if coins were already held, then the payload and `PLAYER_MONEY`.
 fn install_money(model: &mut Model, copper: u32) {
     if matches!(model.cursor, Some(CursorPayload::Money(_))) {
         queue_player_money(model);
@@ -78,7 +52,7 @@ fn install_money(model: &mut Model, copper: u32) {
     queue_player_money(model);
 }
 
-/// `PickupPlayerMoney`'s body after the argument gate.
+/// `PickupPlayerMoney` after the argument gate; each refusal is silent.
 pub(crate) fn pickup_player_money(model: &mut Model, copper: u32) -> bool {
     if copper == 0 || !model.player_control || u64::from(copper) > model.money {
         return false;
@@ -87,7 +61,7 @@ pub(crate) fn pickup_player_money(model: &mut Model, copper: u32) -> bool {
     true
 }
 
-/// `DropCursorMoney`'s body.
+/// `DropCursorMoney`: `PLAYER_MONEY`, then the clear's `CURSOR_UPDATE`, and no packet.
 pub(crate) fn drop_cursor_money(model: &mut Model) -> bool {
     if !matches!(model.cursor, Some(CursorPayload::Money(_))) || !model.player_control {
         return false;
@@ -98,9 +72,8 @@ pub(crate) fn drop_cursor_money(model: &mut Model) -> bool {
     true
 }
 
-/// `AddTradeMoney`'s body, and the money arm `ClickTradeButton` / `ClickTargetTradeButton` and
-/// the trade window's open leg run first: the coins into the offer as an absolute total, gated
-/// on the purse covering it; a refusal leaves them held. Returns whether the coins moved.
+/// `AddTradeMoney`, also run first by `ClickTradeButton`, `ClickTargetTradeButton` and the trade
+/// window's open: the offer becomes offer plus cursor, if the purse covers it.
 pub(crate) fn add_trade_money(model: &mut Model) -> bool {
     let copper = cursor_money(model);
     if copper == 0 {
@@ -122,8 +95,8 @@ pub(crate) fn add_trade_money(model: &mut Model) -> bool {
     true
 }
 
-/// `PickupTradeMoney`'s body after the argument gate: signed gates, the trimmed offer on the
-/// wire first, then the coins onto the cursor.
+/// `PickupTradeMoney` after the argument gate: signed gates, then `CMSG_SET_TRADE_GOLD` (`0x11F`)
+/// with the trimmed offer, then the coins onto the cursor.
 pub(crate) fn pickup_trade_money(model: &mut Model, amount: i32) -> bool {
     let offer = model.trade.as_ref().map_or(0, |t| t.player.gold) as i32;
     if amount <= 0 || amount > offer {
@@ -139,8 +112,7 @@ pub(crate) fn pickup_trade_money(model: &mut Model, amount: i32) -> bool {
 }
 
 impl crate::script::UiScript {
-    /// The trade window's open leg (`SetTradePartner 0x4bf4e0`): coins held on the cursor
-    /// fold into the offer before anything else. Answers the new offer when they did.
+    /// The trade window's open (`SetTradePartner`, `0x4bf4e0`) folds held coins into the offer.
     pub fn fold_cursor_money_into_trade(&mut self) -> Option<u32> {
         let mut model = self.model_mut();
         add_trade_money(&mut model).then(|| model.trade.as_ref().map_or(0, |t| t.player.gold))
@@ -238,7 +210,6 @@ mod tests {
         );
         assert_eq!(s.eval::<i64>("return GetMoney()").unwrap(), 12_345);
         assert!(s.cursor_item().is_none(), "coins are not an item cursor");
-        // The drop: coin sound and PLAYER_MONEY (the app's), mode 0, CURSOR_UPDATE — no packet.
         s.run("DropCursorMoney()").unwrap();
         assert_eq!(s.eval::<i64>("return GetCursorMoney()").unwrap(), 0);
         assert_eq!(s.eval::<i64>("return GetMoney()").unwrap(), 12_345);

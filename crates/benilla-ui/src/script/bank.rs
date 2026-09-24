@@ -1,54 +1,22 @@
-//! The bank bindings (decision 0604 phase 4) — the Era-shaped bank surface, the same two-way seam
-//! as [`super::merchant`]: the app pushes a **bank snapshot** ([`UiScript::set_bank`] — the
-//! purchased-slot count off the descriptor's `PLAYER_BYTES_2` byte 2 plus the next slot's
-//! `BankBagSlotPrices.dbc` cost), and the Lua `PurchaseSlot`/`CloseBankFrame` calls queue outbound
-//! **intents** the app drains ([`UiScript::take_bank_purchase`] / [`UiScript::take_bank_close`]).
+//! The bank bindings: the app pushes the open bank's snapshot ([`UiScript::set_bank`]), and
+//! `PurchaseSlot` and `CloseBankFrame` queue intents it drains.
 //!
-//! The bank's *contents* never pass through here: bank slots are player-array slots the container
-//! seam already carries — the app feeds them as container `-1` (`BANK_CONTAINER`, the 24 generic
-//! slots) and containers `5..=10` (the six bank bags), the reference client's own id space
-//! (`BankFrame.lua:1-4`), so the container verbs, the cursor drag-drop, and the stack split all
-//! work on bank slots with no bank-specific surface.
-//!
-//! Nor do the six bank BAGS — the bag items themselves, as opposed to what is inside them. Those
-//! are inventory slots at live ids 64..=69, fed beside the paper doll's
-//! ([`super::char_stats::BankBagSlots`]) and read through the ordinary `GetInventoryItem*` /
-//! `PickupBagFromSlot` surface, which is exactly how the reference's own bank reads them
-//! (`BankFrame.lua:28`, `ButtonInventorySlot`). They stream in the player descriptor whether or
-//! not a banker is open, so they are not part of the window's snapshot.
-//!
-//! ## The 5875 API shape (the reference `BankFrame.lua`, read as behavior spec this session)
-//!
-//! - `GetNumBankSlots()` → `numSlots, full` — purchased count 0..6, `full` as `1`/`nil`
-//!   (`UpdateBagSlotStatus` destructures exactly this pair; `full` hides the purchase frame).
-//! - `GetBankSlotCost(numSlots)` → the NEXT slot's cost in copper. The real binding reads
-//!   `BankBagSlotPrices.dbc` — whose rows 7+ hold a 999999999 sentinel, so the call answers even
-//!   when the bank is full (the purchase frame is already hidden then). The argument is ignored
-//!   here as it is there: the cost of "the next slot" is a fact of the pushed state.
-//! - `PurchaseSlot()` — the confirm popup's accept (`StaticPopup.lua` `CONFIRM_BUY_BANK_SLOT`):
-//!   queue the buy intent; the app sends `CMSG_BUY_BANK_SLOT`. No packet on success — the
-//!   descriptor's byte-2 delta is the confirmation (`PLAYERBANKBAGSLOTS_CHANGED`).
-//! - `CloseBankFrame()` — client-side close, **no packet exists** for it: flag the
-//!   app to clear its session, the merchant/gossip pattern.
-//! - `BankButtonIDToInvSlotID(id, isBag)` — the pure button→live-inventory-slot map: item button
-//!   `i` (1..24) → live `39 + i` (wire 39..62 + 1), bag button — whose id is the **container id**
-//!   5..10, not a bag number — → live `59 + id` (wire 63..68 + 1); the same "live id − 1 = wire
-//!   slot" law as the doll (`crate::script::container`'s `EQUIPMENT_BAG` space). See the binding
-//!   for the four places the reference's own file pins the bag arm's numbering.
+//! The vault is container `-1` (24 slots) and containers 5..=10 (the six bags), the reference's
+//! own ids (`BankFrame.lua:1-4`), so the container verbs work on it unchanged. The bag items
+//! themselves are inventory slots 64..=69, read through `GetInventoryItem*` as the reference's bank
+//! reads them (`BankFrame.lua:28`); they stream whether or not a banker is open.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
 
-/// The open bank window's snapshot: what the purchase row and the six bag buttons need. Pushed
-/// whole by the app while the bank session is open; `None` = no bank open (the window is closed).
-/// The bank's item contents ride the container seam (module doc), not this.
+/// The open bank's purchase row, pushed whole by the app.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BankState {
-    /// Purchased bank-bag slots (0..=6) — the descriptor's `PLAYER_BYTES_2` byte 2.
+    /// Purchased bag slots, 0..=6: `PLAYER_BYTES_2` byte 2.
     pub num_purchased: u32,
-    /// The NEXT slot's price in copper (`BankBagSlotPrices.dbc` row `num_purchased + 1`; the DBC's
-    /// own 999999999 sentinel past slot 6). 0 only if the DBC row is genuinely absent.
+    /// The next slot's price in copper, `BankBagSlotPrices.dbc` row `num_purchased + 1`; the rows
+    /// past 6 hold 999999999, and 0 means the row is absent.
     pub next_cost: u32,
 }
 
@@ -58,14 +26,14 @@ impl super::UiScript {
         self.model_mut().bank = state;
     }
 
-    /// Whether `PurchaseSlot()` was called since the last drain (and clear the flag). The app
-    /// sends `CMSG_BUY_BANK_SLOT` to the open session's banker.
+    /// Whether `PurchaseSlot()` was called since the last drain; the app sends
+    /// `CMSG_BUY_BANK_SLOT`. Success has no reply packet, only the `PLAYER_BYTES_2` byte-2 change
+    /// (`ItemHandler.cpp:934`).
     pub fn take_bank_purchase(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().bank_purchase)
     }
 
-    /// Whether `CloseBankFrame()` was called since the last drain (and clear the flag). No packet
-    /// — the app just clears its local bank session (the merchant pattern).
+    /// Whether `CloseBankFrame()` was called since the last drain; no packet exists for it.
     pub fn take_bank_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().bank_close)
     }
@@ -75,8 +43,8 @@ impl super::UiScript {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetNumBankSlots() → numSlots, full (1/nil — the client's boolean shape; the reference
-    // destructures `local numSlots, full = GetNumBankSlots()`). 0, nil with no bank open.
+    // GetNumBankSlots() → numSlots, full: `full` is 1 from six slots up, else nil (`0x4f85b0`:
+    // `cmp esi,6; jl`).
     g.set(
         "GetNumBankSlots",
         lua.create_function(|lua, ()| {
@@ -96,8 +64,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetBankSlotCost(numSlots) → the next slot's cost in copper (module doc: the argument is
-    // decorative — the pushed state already names the next slot). 0 with no bank open.
+    // GetBankSlotCost(numSlots): the argument is unread; the pushed state names the next slot.
     g.set(
         "GetBankSlotCost",
         lua.create_function(|lua, _n: Option<u32>| {
@@ -106,10 +73,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // BenillaGetBankBagTexture(i) → the bank bag slot's held-bag icon path | nil (empty slot, or
-    // no bank open) — benilla-named (module doc: the snapshot carries what the reference read
-    // through the inventory-item API).
-    // PurchaseSlot() — queue the bank-slot buy intent (the CONFIRM_BUY_BANK_SLOT popup's accept).
+    // PurchaseSlot(): the `CONFIRM_BUY_BANK_SLOT` popup's accept (`StaticPopup.lua:52`).
     g.set(
         "PurchaseSlot",
         lua.create_function(|lua, ()| {
@@ -119,7 +83,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseBankFrame() — client-side close (no packet exists): flag the app.
     g.set(
         "CloseBankFrame",
         lua.create_function(|lua, ()| {
@@ -129,39 +92,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // BankButtonIDToInvSlotID(id, isBag) — the pure button→live-slot map (module doc).
-    //
-    // `0x4f8530` (118 bytes). Three findings, and two of them corrected
-    // this binding:
-    //
-    // 1 · **The arithmetic is `+59` / `+39`, and the bag arm takes the CONTAINER id 5..10** — not
-    //   a bag number 1..6, which is what this used to compute. `0x4f8575 dec esi` runs BEFORE the
-    //   branch and `0x4f8587 inc esi` AFTER it, so the pair cancels and the constants stand as
-    //   written (`0x4f857f add esi,0x3b` / `0x4f8584 add esi,0x27`). The bag arm is numerically
-    //   identical to `ContainerIDToInventoryID 0x4f94e0`'s own `id >= 5` arm — two functions, two
-    //   instruction sequences, one constant. The reference's file pins the same numbering four
-    //   times over: `BankFrame.xml` gives `BankFrameBag1` `id="5"`, `ButtonInventorySlot` hands
-    //   `this:GetID()` straight in, and `UpdateBagButtonHighlight`/`BankFrameItemButton_UpdateLock`
-    //   both subtract 4 from it to get back to 1..6.
-    //
-    // 2 · **`isBag` is a TYPE test, not a truthiness test.** `0x4f8576 call 0x6f34d0` is
-    //   `lua_isnumber(L, 2)`, which accepts tag 3 or a tag-4 string `luaO_str2d` fully consumes,
-    //   and refuses every other tag at `0x6f7c35` without ever loading the value. So **`true`
-    //   takes the same arm as `nil`, `false` and a missing argument**, while `0` and `"1"` take
-    //   the BAG arm. `BankFrame.lua:24` writes `this.isBag = 1` — a NUMBER — so the stock UI is
-    //   correct either way; a client that models the flag as a boolean diverges the moment an
-    //   addon passes `true`, and would then resolve the six bank bags to 44..49, colliding with
-    //   `BankFrameItem5..10`.
-    //
-    // 3 · **Total, with no range check of any kind.** The only `test`/`cmp` in all 118 bytes are
-    //   on `lua_isnumber`'s return value: no clamp, no mask, no `nil`. This used to answer 0
-    //   outside 1..24 / 5..10 as a "wired wrong" tell; that was our invention, and the reference
-    //   simply returns the arithmetic. Its immediate neighbour `GetNumBankSlots 0x4f85b0` carries
-    //   a real `cmp esi,6; jl`, so a bound would have been visible here if one existed.
-    //
-    // Argument 1 is shape A ([`binding_abi::number_arg`]): `lua_isnumber` gated, truncated toward
-    // zero by the `0x40a2b0` ftol, low dword only, and raising the `.data` usage string verbatim
-    // — which names only `buttonID`, the reference's own omission of the second parameter.
+    // BankButtonIDToInvSlotID(id, isBag) (`0x4f8530`): `id + 39` for an item button, `id + 59`
+    // for a bag button, whose id is the container id 5..=10 (`BankFrame.xml:372`), the same
+    // arithmetic as `ContainerIDToInventoryID`'s bank-bag arm (`0x4f94e0`). There is no range
+    // check. `isBag` is `lua_isnumber(L, 2)` (`0x4f8576`), not truthiness: `true` takes the item
+    // arm, `0` and `"1"` the bag arm; stock sets `this.isBag = 1` (`BankFrame.lua:24`). Argument 1
+    // truncates toward zero (`0x40a2b0`), and its usage string names only `buttonID`.
     g.set(
         "BankButtonIDToInvSlotID",
         lua.create_function(|lua, (id, is_bag): (Value, Option<Value>)| {
@@ -170,7 +106,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 id,
                 "Usage: BankButtonIDToInvSlotID(buttonID)",
             )?;
-            // Finding 2: `lua_isnumber(L, 2)`, asked of the VALUE's type — never its truthiness.
             let is_bag = is_bag
                 .and_then(|v| lua.coerce_number(v).ok().flatten())
                 .is_some();
@@ -187,8 +122,6 @@ mod tests {
     use super::BankState;
     use crate::script::UiScript;
 
-    /// The purchase-row reads: closed → (0, nil)/0; open → the pushed count + next cost; six
-    /// purchased → `full` = 1 (the reference hides the purchase frame on it).
     #[test]
     fn bank_snapshot_reads() {
         let mut s = UiScript::new().unwrap();
@@ -206,7 +139,7 @@ mod tests {
             .unwrap());
         assert_eq!(s.eval::<i64>("return GetBankSlotCost(2)").unwrap(), 100_000);
 
-        // Six purchased: full = 1; the cost read still answers (the DBC's own sentinel row).
+        // Six purchased: full = 1, and 999999999 is the DBC's sentinel row.
         s.set_bank(Some(BankState {
             num_purchased: 6,
             next_cost: 999_999_999,
@@ -215,17 +148,14 @@ mod tests {
             .eval::<bool>("local n, full = GetNumBankSlots()\nreturn n == 6 and full == 1")
             .unwrap());
 
-        // Clearing empties it.
         s.set_bank(None);
         assert!(s
             .eval::<bool>("local n, full = GetNumBankSlots()\nreturn n == 0 and full == nil")
             .unwrap());
     }
 
-    /// The six bank BAGS are inventory slots at live ids 64..=69, read through the ordinary
-    /// inventory API — the band the reference's own bank uses (`ButtonInventorySlot` →
-    /// `BankButtonIDToInvSlotID(id, this.isBag)`, BankFrame.lua:28). Empty slots answer nil, and
-    /// the band does not bleed into the equipment array below it.
+    /// The bank bags are inventory slots 64..=69, as the reference's bank reads them
+    /// (`BankFrame.lua:28`).
     #[test]
     fn bank_bag_slots_read_through_the_inventory_api() {
         let mut s = UiScript::new().unwrap();
@@ -260,7 +190,7 @@ mod tests {
                 .unwrap(),
             4500
         );
-        // Bag slot 2 is empty, and slot 70 is past the band — neither falls through to the doll.
+        // Slot 65 is empty and 70 is past the band; neither falls through to the doll.
         assert!(s
             .eval::<bool>("return GetInventoryItemTexture(\"player\", 65) == nil")
             .unwrap());
@@ -283,14 +213,8 @@ mod tests {
         assert!(!s.take_bank_close(), "drained");
     }
 
-    /// **The bank's inventory BAND answers from the container feed** — the map decision 1751's
-    /// bank swap turns on. The reference's bank paints every slot through the inventory API
-    /// (`BankFrameItemButton_OnUpdate` → `GetInventoryItemTexture("player", BankButtonIDToInv
-    /// SlotID(id))`, BankFrame.lua:35) while benilla feeds the same items as container `-1`. If
-    /// those two ever disagree the bank draws empty, which is exactly the failure this pins.
-    ///
-    /// Asserted through the live API rather than the model, because the API is what the
-    /// reference's file calls, and the tooltip must agree with the icon under it.
+    /// The reference paints the vault through the inventory API (`BankFrame.lua:35`) while the app
+    /// feeds it as container `-1`; if the two disagree the bank draws empty.
     #[test]
     fn the_bank_band_reads_the_vault_through_the_inventory_api() {
         let mut s = UiScript::new().unwrap();
@@ -315,7 +239,7 @@ mod tests {
             }),
         );
 
-        // Vault slot 3 is live-API inventory id 42 (BankButtonIDToInvSlotID(3)).
+        // Vault slot 3 is inventory id 42.
         assert_eq!(
             s.eval::<i64>("return BankButtonIDToInvSlotID(3)").unwrap(),
             42
@@ -335,8 +259,7 @@ mod tests {
                 .unwrap(),
             4496
         );
-        // …and an empty vault slot answers nil, not the equipment slot that shares no numbering
-        // with it — the band must not fall through to `inventory_slots`.
+        // An empty vault slot answers nil rather than falling through to `inventory_slots`.
         assert!(s
             .eval::<bool>("return GetInventoryItemTexture(\"player\", 43) == nil")
             .unwrap());
@@ -346,13 +269,8 @@ mod tests {
             .unwrap());
     }
 
-    /// The button→live-slot map: item buttons 1..24 → 40..63; bag buttons — **whose ids are the
-    /// container ids 5..10, not bag numbers** — → 64..69 (live id − 1 = the wire slot: bank items
-    /// 39..62, bank bags 63..68).
-    ///
-    /// The bag arm's numbering is checked here because getting it wrong reads six slots off the
-    /// end of the band and draws an empty bag row — which is what this binding did before
-    /// `0x4f8530` was read.
+    /// Item buttons 1..=24 map to 40..=63 and bag buttons, whose ids are the container ids 5..=10,
+    /// to 64..=69; the wire slot is one less.
     #[test]
     fn bank_button_to_inv_slot() {
         let s = UiScript::new().unwrap();
@@ -376,9 +294,8 @@ mod tests {
             69,
             "BankFrameBag6 carries id 10"
         );
-        // It is the SAME map `ContainerIDToInventoryID` computes for a bank bag — one arithmetic
-        // under two names, and a drift between them would put the bag row and the bag windows on
-        // different slots.
+        // The same map as `ContainerIDToInventoryID` for a bank bag; a drift would put the bag row
+        // and the bag windows on different slots.
         for id in 5..=10 {
             assert_eq!(
                 s.eval::<i64>(&format!("return BankButtonIDToInvSlotID({id}, 1)"))
@@ -389,16 +306,12 @@ mod tests {
         }
     }
 
-    /// The three things `0x4f8530` corrected, each of which this binding had wrong or invented.
     #[test]
     fn bank_button_to_inv_slot_follows_the_carved_abi() {
         let s = UiScript::new().unwrap();
 
-        // **`isBag` is a TYPE test** (`lua_isnumber(L,2)`), not a truthiness test. `true` is not a
-        // number, so it takes the ITEM arm exactly as nil and false do; `0` and `"1"` are numbers
-        // and take the BAG arm. The stock UI is safe either way — `BankFrame.lua:24` writes
-        // `this.isBag = 1` — but an addon passing `true` would otherwise land the six bank bags on
-        // 44..49, on top of `BankFrameItem5..10`.
+        // `isBag` is `lua_isnumber(L, 2)`: `true` takes the item arm as nil and false do, while
+        // `0` and `"1"` take the bag arm.
         for (call, want) in [
             ("BankButtonIDToInvSlotID(5, true)", 44),
             ("BankButtonIDToInvSlotID(5, false)", 44),
@@ -415,8 +328,7 @@ mod tests {
             );
         }
 
-        // **Total — no range check of any kind.** Answering 0 outside the button ranges was ours,
-        // not the reference's; the only compares in the body are on `lua_isnumber`'s result.
+        // No range check: the only compares in `0x4f8530` test `lua_isnumber`'s result.
         assert_eq!(
             s.eval::<i64>("return BankButtonIDToInvSlotID(25)").unwrap(),
             64
@@ -427,9 +339,8 @@ mod tests {
             -61
         );
 
-        // Argument 1 is shape A: `lua_isnumber` gated, truncated toward ZERO by the `0x40a2b0`
-        // ftol (not floored), and raising the `.data` usage string — which names only `buttonID`,
-        // the reference's own omission of the second parameter.
+        // Argument 1 truncates toward zero (`0x40a2b0`), and the usage string names only
+        // `buttonID`.
         assert_eq!(
             s.eval::<i64>("return BankButtonIDToInvSlotID(-2.9)")
                 .unwrap(),

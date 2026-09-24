@@ -1,58 +1,40 @@
-//! The shapeshift/stance bar seam — the ref's four bindings
-//! (`GetNumShapeshiftForms`/`GetShapeshiftFormInfo`/`GetShapeshiftFormCooldown`/
-//! `CastShapeshiftForm`, consumed by `BonusActionBarFrame.lua`'s `ShapeshiftBar_*` family) over
-//! an app-pushed form list, the [`super::spellbook`]/[`super::action`] two-way shape: the app
-//! resolves everything (which known spells are forms, their icon/name/active/castable/cooldown —
-//! the mechanism lives app-side), pushes a snapshot
-//! ([`super::UiScript::set_shapeshift_forms`]), and drains the click intents
-//! ([`super::UiScript::take_shapeshift_casts`]) onto the wire. The engine holds no form
-//! KNOWLEDGE — a form is "a spell id, a texture, a name, two bits, and a cooldown triple".
-//!
-//! Return conventions are the 1.12 API's own, matching [`super::action`]: 1/nil booleans, and
-//! the cooldown pushed as `(start_ms on the GetTime clock, duration_ms, enabled)` (the
-//! [`super::action::ActionState::cooldown`] pattern — absolute start, app-converted at feed
-//! time) so `GetShapeshiftFormCooldown` answers the ref's `(start, duration, enable)`.
+//! The stance bar's four bindings, which `BonusActionBarFrame.lua`'s `ShapeshiftBar_*` calls, over
+//! a form list the app resolves and pushes; flags answer 1/nil and the cooldown is the reference's
+//! `(start, duration, enable)`.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
 
-/// One stance-bar button, fully resolved by the app before pushing.
+/// One stance-bar button, resolved by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShapeshiftFormView {
-    /// The form spell (the app resolves a queued cast/cancel from it at drain time).
+    /// The form spell a click queues.
     pub spell_id: u32,
     /// The icon texture path; `None` shows the slot's fallback.
     pub texture: Option<String>,
-    /// The spell name (`GetShapeshiftFormInfo`'s second return — the ref's tooltip/debug read).
+    /// The spell name, `GetShapeshiftFormInfo`'s second return.
     pub name: String,
-    /// This form is the player's CURRENT form (the checked ring).
+    /// The player's current form (the checked ring).
     pub active: bool,
-    /// Castable right now (the ref greys the icon 0.4 when not).
+    /// Castable now; the reference greys the icon to 0.4 when not.
     pub castable: bool,
-    /// The form spell's cooldown as `(start_ms on the GetTime clock, duration_ms, enabled)`
-    /// ([`super::action::ActionState::cooldown`]'s exact shape); `None` = no cooldown.
+    /// `(start_ms on the GetTime clock, duration_ms, enabled)`, as an action's cooldown.
     pub cooldown: Option<(i64, u32, bool)>,
 }
 
-/// [`ShapeshiftFormView`] as stored: the cooldown converted to the `GetTime` clock at push time
-/// (the [`super::action::StoredActionState`] pattern).
+/// A pushed form with its cooldown in `GetTime` seconds.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct StoredShapeshiftForm {
     pub(crate) view: ShapeshiftFormView,
-    /// `(start_s, duration_s, enabled)` in `GetTime` seconds; `None` = no cooldown.
+    /// `(start_s, duration_s, enabled)`.
     pub(crate) cooldown: Option<(f64, f64, bool)>,
 }
 
 impl super::UiScript {
-    /// Push the whole form list (bar order = list order), replacing whatever was there. A bare
-    /// setter — firing `UPDATE_SHAPESHIFT_FORMS` (and the state-refresh events the transcribed
-    /// bar listens to) is the app's own diff-and-fire job, mirroring `set_spellbook`.
+    /// Replace the form list, in bar order; the app fires `UPDATE_SHAPESHIFT_FORMS` itself.
     pub fn set_shapeshift_forms(&mut self, forms: Vec<ShapeshiftFormView>) {
         let mut model = self.model_mut();
-        // The cooldown arrives with its absolute start already on the `GetTime` clock (ms) —
-        // storing is a pure unit conversion, the same seam shape as
-        // [`super::UiScript::set_action_state`].
         model.shapeshift_forms = forms
             .into_iter()
             .map(|view| {
@@ -68,21 +50,20 @@ impl super::UiScript {
             .collect();
     }
 
-    /// Drain the form spell ids `CastShapeshiftForm` queued since the last call. Whether a queued
-    /// id becomes a cast or a cancel (clicking the ACTIVE form) is the app's call at drain time.
+    /// Drain the form spells `CastShapeshiftForm` queued; the app casts each, or cancels it when it
+    /// is the active form.
     pub fn take_shapeshift_casts(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().shapeshift_casts)
     }
 }
 
-/// The 1-based button index → stored form, the ref's own indexing.
+/// A 1-based button index, as the reference indexes.
 fn form_at(model: &Model, i: u32) -> Option<&StoredShapeshiftForm> {
     usize::try_from(i.checked_sub(1)?)
         .ok()
         .and_then(|n| model.shapeshift_forms.get(n))
 }
 
-/// Register the shapeshift globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -94,8 +75,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetShapeshiftFormInfo(i) → texture, name, isActive (1/nil), isCastable (1/nil); out of
-    // range → a single nil (the spellbook bindings' out-of-range shape).
     g.set(
         "GetShapeshiftFormInfo",
         lua.create_function(|lua, i: u32| {
@@ -117,9 +96,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetShapeshiftFormCooldown(i) → start, duration, enable — GetActionCooldown's exact triple
-    // and elapsed-goes-cold rule (an elapsed/absent cooldown answers (0, 0, 1) so a re-feed never
-    // replays the sweep).
+    // As `GetActionCooldown`: an elapsed or absent cooldown answers `(0, 0, 1)`, so a re-feed never
+    // replays the sweep.
     g.set(
         "GetShapeshiftFormCooldown",
         lua.create_function(|lua, i: u32| {
@@ -134,7 +112,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CastShapeshiftForm(i) — queues the form's spell id; an out-of-range index is a no-op.
     g.set(
         "CastShapeshiftForm",
         lua.create_function(|lua, i: u32| {
@@ -154,8 +131,6 @@ mod tests {
     use super::ShapeshiftFormView;
     use crate::script::UiScript;
 
-    /// A warrior mid-career: Battle Stance (active, castable), Defensive Stance (castable, on a
-    /// 1.5 s cooldown started at GetTime 9.4 s).
     fn forms() -> Vec<ShapeshiftFormView> {
         vec![
             ShapeshiftFormView {
@@ -200,7 +175,6 @@ mod tests {
                 Some(1)
             )
         );
-        // Form 2: not active (nil), castable (1).
         assert!(s
             .eval::<bool>("local _, _, a, c = GetShapeshiftFormInfo(2) return a == nil and c == 1")
             .unwrap());
@@ -215,13 +189,11 @@ mod tests {
         s.tick(10.0); // GetTime == 10
         s.set_shapeshift_forms(forms());
 
-        // No cooldown → the cold (0, 0, 1).
         assert_eq!(
             s.eval::<(f64, f64, i32)>("return GetShapeshiftFormCooldown(1)")
                 .unwrap(),
             (0.0, 0.0, 1)
         );
-        // The pushed absolute start (9400 ms) reads back verbatim in seconds.
         let (start, duration, enable) = s
             .eval::<(f64, f64, i32)>("return GetShapeshiftFormCooldown(2)")
             .unwrap();
@@ -229,7 +201,6 @@ mod tests {
         assert!((duration - 1.5).abs() < 1e-9);
         assert_eq!(enable, 1);
 
-        // Past the end the read goes cold.
         s.tick(2.0); // now == 12 > 9.4 + 1.5
         assert_eq!(
             s.eval::<(f64, f64, i32)>("return GetShapeshiftFormCooldown(2)")

@@ -1,21 +1,6 @@
-//! **The 1.12 surface is the contract** — enforced here rather than
-//! trusted to memory.
-//!
-//! benilla targets the 1.12.1 API. Anything beyond it is a *listed, justified* exception, and the
-//! point of this file is that the list cannot go unknown: every global our VM exposes must either
-//! be one 1.12 has, or appear below with a reason. A session that adds an Era-shaped verb has to
-//! delete or extend an assertion that says why not — which is exactly what did not happen when
-//! 1187 shipped eight Era globals on Era's authority and 1189 had to take them back out.
-//!
-//! **Why a superset is not free.** Lua branches on presence. An addon writing `if strmatch then`
-//! takes a path we cannot honour, and the failure surfaces far from the cause. Extra functions are
-//! harmless only if nothing feature-detects, which is not true of this ecosystem.
-//!
-//! The reference side is `reference/1.12-globals.tsv` — the running 1.12.1 client's own in-world
-//! `_G` (see `reference/README.md`). This test reads the `engine` and `lua` rows: the surface a VM
-//! is responsible for. It deliberately does **not** assert the converse — that we have everything
-//! 1.12 has — because that is a multi-year backlog, not a regression gate;
-//! `scripts/api-coverage.sh` is where that number is read.
+//! The 1.12 surface as a gate: every global benilla's VM exposes is one the 1.12.1 client has
+//! (`reference/1.12-globals.tsv`) or a listed exception, since addons branch on a global's
+//! presence; what 1.12 has and benilla lacks is `scripts/api-coverage.sh`'s count.
 
 use std::collections::HashSet;
 
@@ -39,72 +24,17 @@ fn reference() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Names benilla exposes that 1.12 does not, each with the reason it is allowed to stay.
-///
-/// **`Benilla*` and `__benilla_*` are covered by prefix**, not enumerated: the first is our host
-/// bridge (verbs only our own transcribed FrameXML calls — a paperdoll model's facing, an item's
-/// stat block) and the second is the tick's pushed state. Neither is an API-target claim, and
-/// neither is reachable by accident from an addon that means to call a WoW function.
+/// Globals benilla exposes that 1.12 does not. `Benilla*` (the host bridge our own UI files call)
+/// and `__benilla_*` (the tick's pushed state) pass by prefix.
 fn allowed_beyond_1_12() -> HashSet<&'static str> {
     [
-        // ── our Lua runtime is 5.1 where 1.12's is 5.0 ────────────────────────────────────────
-        // `_G` is the last of these inherited rather than chosen: 1.12's base library does not
-        // export it (an addon reaches the globals with `getfenv(0)`, which is what AceLibrary
-        // does), but our own `getglobal`/`setglobal` are written over it. Closing it means
-        // rewriting those against the registry first.
-        //
-        // **This list has been shrinking as the dialect got measured**: `coroutine` left in 1194
-        // with the 5.1-only members of `string`/`table`/`math`; `print` and `_VERSION` left in
-        // 1197, when the base library's 36-entry table `0x811e28` was found to hold neither.
-        // `select` left last, and it is the one that shows what a written reason is worth — it
-        // carried two and outlived both. The first ("our transcribed FrameXML uses it in 16 files
-        // as the 5.1 spelling of 5.0's implicit `arg` table") was retired by 1751's migration and
-        // caught by 2142's census at *zero* sites. The second, written in its place, was that
-        // removing it meant giving up the 5.1 varargs it comes with — which 2101 had already given
-        // up, three days earlier, in the parser. A reason nobody re-derives is a reason with an
-        // expiry date; this list's job is to make the expiry visible, and twice it did not.
-        // The list only ever covered globals — the members needed `dump_globals --members` before
-        // anyone could see them at all.
+        // ── our Lua runtime is 5.1 where 1.12's is 5.0 ──
+        // 1.12's base library does not export `_G` (an addon reaches the globals with
+        // `getfenv(0)`); ours does, as our `getglobal`/`setglobal` are written over it.
         "_G",
-        // ── WoW API past 1.12 — 1188 phase 5's list, and the reason that phase exists ─────────
-        // **The reason written here was "every one of these is used by our own transcribed
-        // FrameXML today", and as of 2026-09-09 that is true of exactly ONE of the sixteen**
-        // (`SubmitChatInput`, in the dev-only `ScriptLogFrame.xml`) — a corpus census measured it
-        // and this file's own claim was checked against `assets/ui`'s seven remaining files, name
-        // by name, before this comment was rewritten. 1751's migration retired the
-        // windows that used the rest; the list outlived its justification, which is exactly how
-        // 2118 found the modifier keys still answering booleans years after 0068's reason for it
-        // had gone.
-        //
-        // **What they are NOT is load-bearing for the addon corpus, and 2143 corrects 2142 for
-        // saying so.** The claim written here was that the vanilla ecosystem assumes several of
-        // these exist — `pfUI/modules/loot.lua` calling `wipe` 25 times and defining it nowhere,
-        // so ours "makes that module run at all". That is wrong twice over, and the error is
-        // instructive: **a "1.12 addon" in that corpus is usually a MULTI-CLIENT addon**. pfUI
-        // ships one codebase for three clients and gates per module —
-        // `pfUI:RegisterModule("loot", "vanilla:tbc", …)`, matched by
-        // `strfind(version, pfUI.expansion)` at `pfUI.lua:250` — so a TBC-era habit sits in code
-        // the vanilla client reaches. The `wipe` calls are in `RequestRolls`,
-        // `BuildSpecialRecipientsMenu` and `ClearRolls`: the master-looter's roll helper, not the
-        // loot window, and that path throws on a real 1.12 client too. And `strsplit` was worse —
-        // pfUI has its own `pfUI.api.strsplit` (`api/api.lua:16`) and ShaguTweaks its own
-        // `ShaguTweaks.strsplit`; the bare calls are inside the vendored `libs/libpredict.lua`,
-        // which has TBC branches of its own.
-        //
-        // So our superset was HIDING those latent nil-calls, never enabling anything. The one
-        // real interaction left is the other direction: `AtlasLoot/Core/AtlasLoot.lua:2119`/`:2148`
-        // define GLOBAL `strsplit`/`strtrim` unconditionally, with incompatible pattern-based
-        // two-return semantics, and clobber ours for everything loaded after them — so ours is not
-        // authoritative at runtime either.
-        //
-        // Resolving each means replacing it with its 1.12 equivalent (`UnitPower` → `UnitMana`,
-        // which 1.12 has and we do not), deleting it, or recording why it stays.
-        //
-        // Three left with 1751's gossip work: `GetNumGossipQuests`, `GetGossipQuestInfo` and
-        // `SelectGossipQuest` were benilla's own single-list shape over the gossip packet's quest
-        // rows, and 1.12 has none of them — it publishes `GetGossipAvailableQuests` /
-        // `GetGossipActiveQuests` and a select for each, which is what this client answers now.
-        // The window that needed them is ours until it migrates; it calls the reference's four.
+        // ── WoW API past 1.12 ──
+        // Only `SubmitChatInput` is called from our UI files (`ScriptLogFrame.xml`'s slash
+        // commands); each of the rest awaits its 1.12 equivalent, removal or a reason.
         "CancelUnitBuff",
         "GetCursorInfo",
         "GetInventoryItemID",
@@ -121,9 +51,6 @@ fn allowed_beyond_1_12() -> HashSet<&'static str> {
 }
 
 /// Every global benilla's VM exposes is one 1.12 has, or a listed exception.
-///
-/// The failure message is the point: it names what is new and tells you the two ways out, so the
-/// next session cannot resolve it by deleting a bare assertion.
 #[test]
 fn our_globals_stay_inside_the_1_12_surface() {
     let reference = reference();
@@ -164,10 +91,7 @@ fn our_globals_stay_inside_the_1_12_surface() {
     );
 }
 
-/// The exception list is exact — no entry outlives the global it excuses.
-///
-/// Without this, a removed global leaves its excuse behind, and the list slowly stops describing
-/// the code. That is how a "listed, justified exception" decays into residue nobody can explain.
+/// The exception list is exact: no entry outlives its global, and none excuses a 1.12 name.
 #[test]
 fn the_exception_list_has_no_dead_entries() {
     let known: HashSet<String> = reference().into_iter().map(|(n, _)| n).collect();
@@ -193,7 +117,6 @@ fn the_exception_list_has_no_dead_entries() {
         dead.join(" ")
     );
 
-    // An entry that 1.12 turns out to have is a different bug: the excuse is wrong, not stale.
     let mut wrong: Vec<&str> = allowed_beyond_1_12()
         .into_iter()
         .filter(|n| known.contains(*n))
@@ -207,16 +130,8 @@ fn the_exception_list_has_no_dead_entries() {
     );
 }
 
-/// **`Texture:GetTexture()` — the three contract details that a plausible implementation gets
-/// silently wrong.** Verified at `0x79ba70`/`0x79baf0`/`0x835708`.
-///
-/// Four corpus addons reach it: `AtlasQuest.lua:228` is `AQATLASMAP = AtlasMap:GetTexture()` and
-/// `FuBarPlugin-2.0.lua:343` is `return self.iconFrame:GetTexture()`, each behind two addons.
-///
-/// The colour case is the one worth a test of its own. `SetTexture(r,g,b)` synthesizes an 8x8 solid
-/// and the getter reports the literal name `"Solid Texture"` — so an addon's `if not tex then`
-/// guard passes straight through. Returning nil there would read as tidier and would be wrong in
-/// exactly the direction callers test for.
+/// `Texture:GetTexture()` (`0x79ba70`/`0x79baf0`/`0x835708`): one value, nil when unset, the path
+/// without its extension, and the literal `"Solid Texture"` for a colour fill.
 #[test]
 fn get_texture_returns_the_stripped_path_and_solid_texture_for_a_fill() {
     let s = crate::script::UiScript::new().unwrap();
@@ -229,22 +144,17 @@ fn get_texture_returns_the_stripped_path_and_solid_texture_for_a_fill() {
     )
     .unwrap();
 
-    // Never set: nil, and exactly one value.
     assert_eq!(
         s.eval::<Option<String>>("return GTFTex:GetTexture()")
             .unwrap(),
         None
     );
     assert_eq!(
-        // `.unwrap()`, not the `.unwrap_or(1)` this carried while it was spelled with `select`:
-        // that default made a raise indistinguishable from the answer being asserted, which is the
-        // one thing an arity check must not do (2171).
         s.arity("GTFTex:GetTexture()").unwrap(),
         1,
         "exactly one return value"
     );
 
-    // A path with no extension comes back unchanged.
     s.run(r#"GTFTex:SetTexture("Interface\\Icons\\Spell_Fire_FlameBolt")"#)
         .unwrap();
     assert_eq!(
@@ -252,8 +162,6 @@ fn get_texture_returns_the_stripped_path_and_solid_texture_for_a_fill() {
         "Interface\\Icons\\Spell_Fire_FlameBolt"
     );
 
-    // ...and one WITH an extension is stripped at the last `.` — the loader appends it, the getter
-    // takes it back off.
     s.run(r#"GTFTex:SetTexture("Interface\\Icons\\Foo.blp")"#)
         .unwrap();
     assert_eq!(
@@ -261,7 +169,6 @@ fn get_texture_returns_the_stripped_path_and_solid_texture_for_a_fill() {
         "Interface\\Icons\\Foo"
     );
 
-    // The colour form: the literal name, NOT nil.
     s.run("GTFFill:SetTexture(1, 0, 0, 1)").unwrap();
     assert_eq!(
         s.eval::<String>("return GTFFill:GetTexture()").unwrap(),
@@ -269,7 +176,6 @@ fn get_texture_returns_the_stripped_path_and_solid_texture_for_a_fill() {
         "a colour-filled region reports a NAME — `if not tex then` must not fire"
     );
 
-    // And a plain SetTexture makes it ordinary again.
     s.run(r#"GTFFill:SetTexture("Interface\\Buttons\\UI-Quickslot2")"#)
         .unwrap();
     assert_eq!(
@@ -278,17 +184,8 @@ fn get_texture_returns_the_stripped_path_and_solid_texture_for_a_fill() {
     );
 }
 
-/// **The shadow accessors on a REGION, and `GetShadowColor`'s four values.**
-///
-/// They existed on the font-object table; a FontString from `CreateFontString` had none, which is
-/// exactly where the corpus calls them. `FuBar_NavigatorFu/NavigatorFu.lua:31` is
-/// `coordText:SetShadowColor(GameFontNormal:GetShadowColor())` — getter on a font object, setter on
-/// a fresh region, in one line — and `KLHThreatMeter/.../KTM_Gui.lua:404` is
-/// `fontstring:SetShadowColor(0,0,0,0.3)`.
-///
-/// **Four values, not three** (`0x79dd2f`, `mov eax,0x4`). Three is
-/// the plausible wrong answer and it silently drops the alpha NavigatorFu round-trips: the whole
-/// point of its line is that whatever `GameFontNormal` carries arrives intact.
+/// A FontString's shadow accessors; `GetShadowColor` returns four values, alpha included
+/// (`0x79dd2f`, `mov eax,0x4`).
 #[test]
 fn region_shadow_accessors_round_trip_four_values() {
     let s = crate::script::UiScript::new().unwrap();
@@ -302,7 +199,6 @@ fn region_shadow_accessors_round_trip_four_values() {
     );
     assert_eq!(s.arity("SHFText:GetShadowOffset()").unwrap(), 2);
 
-    // NavigatorFu's line, in shape: a font object's shadow piped straight into a region's.
     s.run("SHFText:SetShadowColor(0, 0, 0, 0.3) SHFText:SetShadowOffset(1, -1)")
         .unwrap();
     let (r, g, b, a) = s
@@ -315,7 +211,6 @@ fn region_shadow_accessors_round_trip_four_values() {
         (1.0, -1.0)
     );
 
-    // Either half may be set first: setting only the offset must not blank the colour.
     s.run("SHFText:SetShadowOffset(2, -2)").unwrap();
     assert_eq!(
         s.eval::<f32>("local _,_,_,a = SHFText:GetShadowColor() return a")
@@ -325,18 +220,9 @@ fn region_shadow_accessors_round_trip_four_values() {
     );
 }
 
-/// **`Region:SetParent(frame)` — it exists on a Texture/FontString, and we were the ones missing
-/// it.** `SetParent` is in the Region method table (`0x7a1550`) and both leaf lookups fall back to
-/// Region's (`0x79c650` / `0x79ee50`), so `FuBar_FuXPFu.lua:210`'s
-/// `self.Spark:SetParent(self.XPBar)` — a texture from `XPBar:CreateTexture` — is a working line on
-/// the real client.
-///
-/// The two traps pinned here are the ones a plausible implementation gets wrong in opposite
-/// directions. **A non-Frame argument RAISES** (`IsA(FrameTag)` at `0x7a16ea`, message
-/// `"…Wrong parent object type, expected frame"`) rather than no-opping; and **anchors are NOT
-/// touched** by the re-link, which moves draw-layer/region-list membership only — so a re-parented
-/// texture keeps resolving against whatever `SetPoint` named, and FuXPFu's re-point on the next
-/// line is the correct pattern rather than a workaround.
+/// `Region:SetParent` (`0x7a1550`, reached by both leaf lookups' fallback: `0x79c650`, `0x79ee50`)
+/// moves the region's draw-list membership and leaves its anchors alone; a non-Frame argument
+/// raises (`IsA(FrameTag)` at `0x7a16ea`).
 #[test]
 fn region_set_parent_relinks_the_draw_owner_and_leaves_anchors_alone() {
     /// The resolved rect of the one texture quad whose path contains `needle`, if it draws at all.
@@ -369,7 +255,6 @@ fn region_set_parent_relinks_the_draw_owner_and_leaves_anchors_alone() {
     let before = tex_rect(&s, "SPGlow").expect("the spark draws under A");
     assert_eq!(before, crate::layout::Rect::new(22.0, 4.0, 46.0, 28.0));
 
-    // FuXPFu's line, and it returns nothing at all.
     assert_eq!(
         s.arity("Spark:SetParent(B)").unwrap(),
         0,
@@ -382,8 +267,6 @@ fn region_set_parent_relinks_the_draw_owner_and_leaves_anchors_alone() {
         "the anchors are untouched — the spark still resolves against A, 300px from B"
     );
 
-    // …and the re-link is real, not merely recorded: the spark now draws with B. Hiding B takes it
-    // off the screen; hiding A (which it is still anchored to) does not.
     s.run("B:Hide()").unwrap();
     assert_eq!(
         tex_rect(&s, "SPGlow"),
@@ -398,8 +281,6 @@ fn region_set_parent_relinks_the_draw_owner_and_leaves_anchors_alone() {
         "and not with the frame it is merely anchored to"
     );
 
-    // A non-Frame argument raises. A texture is the case the reference names, and it is the one an
-    // addon actually hits (a mixed table of frames and textures walked in a loop).
     for bad in ["Spark:SetParent(Spark)", "Spark:SetParent(5)"] {
         let e = s
             .run(bad)
@@ -410,11 +291,10 @@ fn region_set_parent_relinks_the_draw_owner_and_leaves_anchors_alone() {
             "wanted the reference's 'expected frame' rejection, got: {e}"
         );
     }
-    // A MISSING argument is not the nil form: TNONE never reaches the nil branch.
+    // A missing argument is `TNONE`, which never reaches the nil branch.
     assert!(s.run("Spark:SetParent()").is_err(), "no argument raises");
 
-    // The nil form detaches without error: orphaned and unrendered, not destroyed — a later
-    // re-parent brings the same region back.
+    // nil detaches the region without destroying it.
     s.run("A:Show() Spark:SetParent(nil)").unwrap();
     s.resolve();
     assert_eq!(
@@ -431,19 +311,9 @@ fn region_set_parent_relinks_the_draw_owner_and_leaves_anchors_alone() {
     );
 }
 
-/// **`Button:SetFont(file, height [, flags])` — it exists, it returns NOTHING, and it never
-/// touches the label.** `0x780880`.
-/// `_LazyPig/LazyPigMenu.lua:214` calls it straight on a `CreateFrame("Button", …)` and is blocked
-/// on it today.
-///
-/// Three traps, each pinned here because each is a plausible implementation's silent divergence.
-/// **Zero return values**: the shared impl pushes `1`/nil (a real font-load probe on a Font object)
-/// and Button *discards* it (`xor eax,eax`), so answering `true` would hand an addon a probe the
-/// client does not have. **`GetFont` returns three values**, off the normal embedded font — which
-/// resolves through what that state inherits when nothing set it locally. And **a bare Button with
-/// no `<ButtonText>` is a silent no-op**: `SetFont`/`GetFont` never dereference the FontString
-/// pointer `+0x338`, so there is no error and — the observable half — **no lazy label creation**,
-/// which `GetFontString()` would report.
+/// `Button:SetFont` (`0x780880`) returns nothing, discarding the shared impl's `1`/nil
+/// (`xor eax,eax`), and sets the button's normal font without touching the label pointer
+/// (`+0x338`), so a bare Button makes no label; `GetFont` returns three values off that font.
 #[test]
 fn button_set_font_returns_nothing_and_is_a_no_op_without_a_label() {
     let s = crate::script::UiScript::new().unwrap();
@@ -456,7 +326,6 @@ fn button_set_font_returns_nothing_and_is_a_no_op_without_a_label() {
     )
     .unwrap();
 
-    // _LazyPig's line, on a Button that has no label at all.
     assert_eq!(
         s.arity(r#"SFBare:SetFont("Fonts\\FRIZQT__.TTF", 8)"#)
             .unwrap(),
@@ -479,13 +348,12 @@ fn button_set_font_returns_nothing_and_is_a_no_op_without_a_label() {
             .unwrap(),
         ("Fonts\\FRIZQT__.TTF".to_string(), 8.0, String::new())
     );
-    // Still three when nothing has ever set a font — path and height are nil, not absent.
+    // Nothing set: still three values, the path and height nil.
     assert_eq!(s.arity("SFLabelled:GetFont()").unwrap(), 3);
     assert!(s
         .eval::<bool>("local f = SFLabelled:GetFont() return f == nil")
         .unwrap());
 
-    // The flags argument is normalized to its OUTLINETYPE token, like every other GetFont.
     s.run(r#"SFBare:SetFont("Fonts\\SKURRI.TTF", 12, "THICKOUTLINE")"#)
         .unwrap();
     assert_eq!(
@@ -496,8 +364,7 @@ fn button_set_font_returns_nothing_and_is_a_no_op_without_a_label() {
     // Both arguments are required (`lua_isstring` + `lua_isnumber`, else the usage error).
     assert!(s.run(r#"SFBare:SetFont("Fonts\\SKURRI.TTF")"#).is_err());
 
-    // Unset locally, GetFont reads through what the NORMAL state inherits — how a
-    // GameMenuButtonTemplate button answers its template's face before anything calls SetFont.
+    // Unset locally, GetFont reads through the normal state's font object.
     s.run(
         r#"
         CreateFont("SFInherited")
@@ -512,8 +379,7 @@ fn button_set_font_returns_nothing_and_is_a_no_op_without_a_label() {
         ("Fonts\\MORPHEUS.TTF".to_string(), 14.0)
     );
 
-    // …and a local SetFont outranks that inherited object on the label's PAINT, not only in the
-    // getter — the whole point of the call `_LazyPig` makes.
+    // A local SetFont outranks that object on the label's paint too.
     s.run(r#"SFLabelled:SetFont("Fonts\\SKURRI.TTF", 9)"#)
         .unwrap();
     let (font, height) = s
@@ -536,21 +402,14 @@ fn button_set_font_returns_nothing_and_is_a_no_op_without_a_label() {
     );
 }
 
-/// **`SetNonSpaceWrap` / `CanNonSpaceWrap`** — FontString only (`0x79e9f0`/`0x79ead0`).
-/// `oRA2/Leader/Item.lua:561` is `f.textname:SetNonSpaceWrap(false)`, reached
-/// by two addons.
-///
-/// Two contract details, both easy to get wrong and both pinned here: the getter is
-/// **`CanNonSpaceWrap`**, not `GetNonSpaceWrap`, and it answers **`1` or nil** rather than a
-/// boolean — 1.12 predates that convention and an addon may compare against 1. And a **no-argument
-/// call ENABLES** it; the default is on, so it is not a query.
+/// FontString's `SetNonSpaceWrap`/`CanNonSpaceWrap` (`0x79e9f0`/`0x79ead0`): on by default, the
+/// getter answers `1` or nil, and a bare `SetNonSpaceWrap()` turns it on.
 #[test]
 fn non_space_wrap_defaults_on_and_answers_one_or_nil() {
     let s = crate::script::UiScript::new().unwrap();
     s.run(r#"f = CreateFrame("Frame", "NSF") fs = f:CreateFontString("NSFText", "ARTWORK")"#)
         .unwrap();
 
-    // Default is ON, and the answer is the NUMBER 1 — not `true`.
     assert_eq!(
         s.eval::<Option<i64>>("return NSFText:CanNonSpaceWrap()")
             .unwrap(),
@@ -563,7 +422,6 @@ fn non_space_wrap_defaults_on_and_answers_one_or_nil() {
         "it must NOT be a boolean — an addon comparing against 1 would break"
     );
 
-    // oRA2's line.
     s.run("NSFText:SetNonSpaceWrap(false)").unwrap();
     assert_eq!(
         s.eval::<Option<i64>>("return NSFText:CanNonSpaceWrap()")
@@ -572,7 +430,6 @@ fn non_space_wrap_defaults_on_and_answers_one_or_nil() {
         "off answers nil, not 0 and not false"
     );
 
-    // A no-argument call ENABLES rather than querying.
     s.run("NSFText:SetNonSpaceWrap()").unwrap();
     assert_eq!(
         s.eval::<Option<i64>>("return NSFText:CanNonSpaceWrap()")
@@ -582,23 +439,10 @@ fn non_space_wrap_defaults_on_and_answers_one_or_nil() {
     );
 }
 
-/// **The EditBox font block — the first sixteen entries of its own registrar table, and the largest
-/// single gap the per-kind widget-method census found** (whose ranking opens
-/// `63  EditBox:SetFontObject   (on Texture, FontString)`).
-///
-/// `EditBox`'s table is `.data 0x87bb68`, **48 entries** — the count read from the `mov edx,0x30`
-/// at the registering site `0x799ab5`, never from a run-length scan. There is no `FontInstance`
-/// class in the 1.12 Lua chain (the shared C++ impl `0x79f210`): each of the six text-bearing types
-/// re-declares the block in its own flat table, so membership is a per-table fact and **a name we
-/// add that the table does not carry is exactly as wrong as one we miss**.
-///
-/// The two halves pinned here are therefore both directions. Present: the fourteen we wire.
-/// Absent: `SetSpacing`/`GetSpacing`, which the table *does* carry (#10–#11) and we deliberately
-/// withhold because nothing here models line spacing — a stored-but-undrawn setter is the silent
-/// divergence of 1203/1205/1211, while a nil-value call names itself, and corpus demand is zero.
-/// Absent too: the names that belong to *other* tables and must not leak onto an EditBox through
-/// ours — `CopyFontObject` (Font object only), `SetNonSpaceWrap`/`CanNonSpaceWrap` and
-/// `SetTextHeight`/`GetStringWidth` (FontString only).
+/// EditBox's registrar table (`.data 0x87bb68`, 48 entries, `mov edx,0x30` at `0x799ab5`) opens
+/// with the font block each text-bearing type re-declares over the shared impl `0x79f210`: its
+/// fourteen font verbs answer, its `SetSpacing`/`GetSpacing` (#10, #11) are not installed as
+/// nothing models line spacing, and other tables' names do not leak onto it.
 #[test]
 fn editbox_carries_the_font_block_its_registrar_table_declares() {
     let s = crate::script::UiScript::new().unwrap();
@@ -629,10 +473,10 @@ fn editbox_carries_the_font_block_its_registrar_table_declares() {
     }
 
     for name in [
-        // On EditBox's real table, withheld on purpose (nothing models spacing).
+        // On EditBox's table, not installed: nothing models line spacing.
         "SetSpacing",
         "GetSpacing",
-        // Not on EditBox's table at all — adding one is the same class of error as missing one.
+        // Not on EditBox's table.
         "CopyFontObject",
         "SetNonSpaceWrap",
         "CanNonSpaceWrap",
@@ -647,21 +491,10 @@ fn editbox_carries_the_font_block_its_registrar_table_declares() {
     }
 }
 
-/// **Every EditBox font binding is a type-guard shim that returns whatever the shared implementation
-/// returned**, so the arities below are the shared ones verbatim — verified at the bytes: each
-/// binding ends `call <shared>` then `pop edi; pop esi; pop ebx; ret`, with **no `mov eax,N` and no
-/// `xor eax,eax`** after the call.
-///
-/// The trap is `SetFont`, and it points the opposite way to the one already pinned for Button.
-/// `Button:SetFont` (`0x780880`) ends `xor eax,eax` and returns **nothing** —
-/// [`button_set_font_returns_nothing_and_is_a_no_op_without_a_label`]. `EditBox:SetFont`
-/// (`0x797210` → `0x79f210`) does not discard, so the shared `lua_pushnumber(1.0)` (`0x79f345`) /
-/// `lua_pushnil` (`0x79f361`) passes straight through: **one value, the number `1`, not `true` and
-/// not zero values**. A probe written `if not eb:SetFont(f, s) then` needs the nil half; a probe
-/// written `== 1` needs the number half.
-///
-/// `GetShadowColor` returns **four** values (`0x79f9b3 mov eax,0x4`); three is the plausible wrong
-/// answer and silently drops the alpha.
+/// Each EditBox font binding returns what the shared implementation returns (no `mov eax,N` or
+/// `xor eax,eax` after the call), so unlike `Button:SetFont` (`0x780880`), `EditBox:SetFont`
+/// (`0x797210` → `0x79f210`) answers the number `1` or nil (`0x79f345`/`0x79f361`), and
+/// `GetShadowColor` returns four values (`0x79f9b3 mov eax,0x4`).
 #[test]
 fn editbox_font_block_return_shapes_are_the_shared_implementations() {
     let s = crate::script::UiScript::new().unwrap();
@@ -674,7 +507,6 @@ fn editbox_font_block_return_shapes_are_the_shared_implementations() {
     )
     .unwrap();
 
-    // The mutators push nothing at all.
     for call in [
         "SetFontObject(EBProbeFont)",
         "SetTextColor(1, 0, 0)",
@@ -690,7 +522,6 @@ fn editbox_font_block_return_shapes_are_the_shared_implementations() {
         );
     }
 
-    // The getters' exact widths.
     for (call, want) in [
         ("GetFontObject()", 1),
         ("GetFont()", 3),
@@ -707,7 +538,6 @@ fn editbox_font_block_return_shapes_are_the_shared_implementations() {
         );
     }
 
-    // SetFont: ONE value, and it is the number 1 — not `true`, and not nothing (the Button shape).
     assert_eq!(
         s.arity(r#"EBShape:SetFont("Fonts\\SKURRI.TTF", 12)"#)
             .unwrap(),
@@ -723,14 +553,13 @@ fn editbox_font_block_return_shapes_are_the_shared_implementations() {
     assert!(s
         .eval::<bool>(r#"return EBShape:SetFont("Fonts\\SKURRI.TTF", 12) == 1"#)
         .unwrap());
-    // An unloadable (empty) path is the FALSEY answer, not an error — `!OmniCC`'s probe idiom.
+    // An unloadable (empty) path answers nil, not an error.
     assert!(s
         .eval::<bool>(r#"return EBShape:SetFont("", 12) == nil"#)
         .unwrap());
     // Both arguments are gated (`lua_isstring` + `lua_isnumber`, else the usage error).
     assert!(s.run(r#"EBShape:SetFont("Fonts\\SKURRI.TTF")"#).is_err());
 
-    // The shadow round-trips all four channels — three would drop the alpha.
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return EBShape:GetShadowColor()")
             .unwrap(),
@@ -741,7 +570,7 @@ fn editbox_font_block_return_shapes_are_the_shared_implementations() {
             .unwrap(),
         (1.0, -1.0)
     );
-    // GetFontObject answers the OBJECT, never its name — the corpus indexes the result immediately.
+    // GetFontObject answers the object, not its name.
     assert_eq!(
         s.eval::<String>("return type(EBShape:GetFontObject())")
             .unwrap(),
@@ -749,20 +578,8 @@ fn editbox_font_block_return_shapes_are_the_shared_implementations() {
     );
 }
 
-/// **The real `Dewdrop-2.0` shape, which is the whole reason this landed.**
-///
-/// `Dewdrop-2.0.lua:1673-1675` is verbatim:
-/// ```lua
-/// local editBox = CreateFrame("EditBox", nil, editBoxFrame)
-/// editBoxFrame.editBox = editBox
-/// editBox:SetFontObject(ChatFontNormal)
-/// ```
-/// — an **anonymous** EditBox parented to a frame, then `SetFontObject` on it two lines later. That
-/// file is vendored into **63 addon folders** of the 218-addon corpus (65 copies: `FuBar` plus ~50
-/// FuBar plugins, `BigWigs`, `AtlasLoot`, `oRA2`, `SnaFu`, …), so the census's `63` is **one library
-/// replicated**, not 63 independent addons.
-///
-/// `AceGUIWidget-Slider.lua:204-210` is the same shape with `SetJustifyH("CENTER")` on the end.
+/// `Dewdrop-2.0.lua:1673-1675`'s shape: an anonymous EditBox under a frame, then
+/// `SetFontObject(ChatFontNormal)`.
 #[test]
 fn the_dewdrop_editbox_font_shape_resolves_and_paints() {
     let s = crate::script::UiScript::new().unwrap();
@@ -782,12 +599,10 @@ fn the_dewdrop_editbox_font_shape_resolves_and_paints() {
     )
     .unwrap();
 
-    // The link is live and readable back as the object.
     assert!(s
         .eval::<bool>("return DewdropEBFrame.editBox:GetFontObject() == ChatFontNormal")
         .unwrap());
-    // …and the object's paint really reached the box's implicit FontString (the `[this+0x324]` the
-    // reference's shim hands the shared implementation).
+    // The object's paint reaches the box's own FontString (`[this+0x324]`, what the shim passes).
     assert_eq!(
         s.eval::<(String, f32)>("local p, h = DewdropEBFrame.editBox:GetFont() return p, h")
             .unwrap(),
@@ -798,32 +613,22 @@ fn the_dewdrop_editbox_font_shape_resolves_and_paints() {
         .unwrap();
     assert_eq!((r, g, b), (0.9, 0.9, 0.9));
 
-    // The AceGUI slider's tail, on the same box.
+    // `AceGUIWidget-Slider.lua:204-210` ends the same shape with this.
     s.run(r#"DewdropEBFrame.editBox:SetJustifyH("CENTER")"#)
         .unwrap();
 }
 
-/// **`SetJustifyH`/`SetJustifyV` mask to their own axis, and a token from the other axis silently
-/// clears rather than erroring.** The enum is `.rdata 0x811ad0`, `{bits, token}`: `LEFT` 0x01,
-/// `CENTER` 0x02, `RIGHT` 0x04, `TOP` 0x08, `MIDDLE` 0x10, `BOTTOM` 0x20, stored in one dword with
-/// bits 0–2 horizontal and 3–5 vertical.
-///
-/// Two traps, both of which our older FontString/Font copies of these verbs get wrong by coercing
-/// anything unrecognised to CENTER/MIDDLE:
-///  · **an unknown token RAISES** `Usage: %s:SetJustifyH("justify")` (`0x87c77c`);
-///  · **a valid token from the wrong axis parses and then masks to nothing** — `SetJustifyH("TOP")`
-///    yields 0x08 and `0x08 & 0x07 == 0`, so justifyH is CLEARED and `GetJustifyH()` answers the
-///    literal `"UNKNOWN"` (`0x6f1a00`, `.data 0x838044`). No error is raised either way.
+/// The justify enum (`.rdata 0x811ad0`) keeps both axes in one dword, bits 0-2 horizontal and 3-5
+/// vertical: an unknown token raises (`0x87c77c`), and a token from the other axis masks to
+/// nothing, so `GetJustifyH()` answers `"UNKNOWN"` (`0x6f1a00`, `.data 0x838044`).
 #[test]
 fn editbox_justify_masks_to_its_axis_and_answers_unknown() {
     let s = crate::script::UiScript::new().unwrap();
     s.run(r#"EB = CreateFrame("EditBox", "EBJustify")"#)
         .unwrap();
 
-    // **LEFT, not the generic font default CENTER.** The `CSimpleFont` ctor really does default to
-    // `0x212` (CENTER | MIDDLE | 0x200), but the EditBox ctor overrides the horizontal axis right
-    // after linking its font instance (`0x779bcd … and eax,~6; or eax,1;` stored at `0x779be4`), so
-    // a fresh box starts at `0x211`. Taking the generic default is the plausible wrong answer.
+    // A fresh EditBox is LEFT: its ctor turns the font default `0x212` (CENTER | MIDDLE | 0x200)
+    // into `0x211` (`0x779bcd`, stored at `0x779be4`).
     assert_eq!(
         s.eval::<String>("return EBJustify:GetJustifyH()").unwrap(),
         "LEFT"
@@ -833,7 +638,6 @@ fn editbox_justify_masks_to_its_axis_and_answers_unknown() {
         "MIDDLE"
     );
 
-    // Each axis is replaced independently — setting V leaves H alone.
     s.run(r#"EBJustify:SetJustifyH("LEFT") EBJustify:SetJustifyV("BOTTOM")"#)
         .unwrap();
     assert_eq!(
@@ -842,7 +646,6 @@ fn editbox_justify_masks_to_its_axis_and_answers_unknown() {
         ("LEFT".to_string(), "BOTTOM".to_string())
     );
 
-    // The cross-axis trap: "TOP" parses, masks to 0, and CLEARS justifyH.
     s.run(r#"EBJustify:SetJustifyH("TOP")"#).unwrap();
     assert_eq!(
         s.eval::<String>("return EBJustify:GetJustifyH()").unwrap(),
@@ -855,23 +658,13 @@ fn editbox_justify_masks_to_its_axis_and_answers_unknown() {
         "and it leaves the vertical axis untouched"
     );
 
-    // An unrecognised token is the usage error, never a silent fallback to CENTER.
     assert!(s.run(r#"EBJustify:SetJustifyH("SIDEWAYS")"#).is_err());
 }
 
-/// **`EditBox:SetJustifyV` echoes through its getter and never reaches the pixels — on the real
-/// client too, permanently and by construction.** `CSimpleFontString+0x124` is a per-bit *inherit*
-/// mask over the rendered justify `+0x120`, and `SetMultiLine 0x77a4a0` clears the whole vertical
-/// group `0x38` from it on **both** legs while writing the V bits locally — multi-line → TOP,
-/// single-line → MIDDLE. The
-/// EditBox ctor calls `SetMultiLine` unconditionally at birth (`0x779c2f`, with the ctor's zero
-/// register), and a census of all 256 `+0x124` operands image-wide found every `CSimpleFontString`
-/// writer to be an AND: **nothing ever ORs an inherit bit back in.** So the value written by
-/// `SetJustifyV` is masked out at `0x77086e`, while `GetJustifyV` reads the font *instance*
-/// (`0x79fd73`) and answers it faithfully.
-///
-/// This pins the shape rather than the accident: a future change that "fixes" the getter by wiring
-/// V justify through to the region would match neither the client nor our own draw law.
+/// `EditBox:SetJustifyV` reaches the getter (`0x79fd73` reads the font instance) but never the
+/// pixels: `SetMultiLine 0x77a4a0`, which the ctor always calls (`0x779c2f`), clears the vertical
+/// inherit bits (`CSimpleFontString+0x124`, over the drawn justify `+0x120`) and writes TOP or
+/// MIDDLE itself; nothing sets those bits back, so `0x77086e` masks the setter's value out.
 #[test]
 fn editbox_justify_v_echoes_but_multiline_alone_decides_the_pixels() {
     let mut s = crate::script::UiScript::new().unwrap();
@@ -903,55 +696,38 @@ fn editbox_justify_v_echoes_but_multiline_alone_decides_the_pixels() {
     // A single-line box renders MIDDLE, the `0x77a599` leg.
     assert_eq!(drawn_v(&s), crate::script::JustifyV::Middle);
 
-    // SetJustifyV("TOP") is echoed by the getter…
     s.run(r#"EBJV:SetJustifyV("TOP")"#).unwrap();
     assert_eq!(
         s.eval::<String>("return EBJV:GetJustifyV()").unwrap(),
         "TOP",
         "the getter reads the font instance and echoes faithfully"
     );
-    // …and does NOT move the pixels. This is the disagreement, and it is faithful.
     assert_eq!(
         drawn_v(&s),
         crate::script::JustifyV::Middle,
         "SetJustifyV is masked out of the rendered justify — multiLine alone decides it"
     );
 
-    // multiLine is what actually moves it, on the `0x77a509` leg.
+    // Multi-line moves it, the `0x77a509` leg.
     s.run("EBJV:SetMultiLine(true)").unwrap();
     assert_eq!(drawn_v(&s), crate::script::JustifyV::Top);
-    // …and the getter still echoes whatever was last set, unaffected.
     assert_eq!(
         s.eval::<String>("return EBJV:GetJustifyV()").unwrap(),
         "TOP"
     );
 }
 
-/// **`Texture:SetDesaturated(flag)` answers `shaderSupported`, and since 1327 ours says yes.**
-///
-/// `0x79c1e0`. The reference's own `ItemButtonTemplate.lua:69` is
-/// `local shaderSupported = icon:SetDesaturated(desaturated)`, and lines 70-78 fall back to a 0.5
-/// grey vertex tint when that answer is falsy — 1.12 shipped on cards without the shader, so the
-/// verb reporting "no" is a real machine's answer, not a stub.
-///
-/// benilla answered nil for exactly as long as nothing greyed. Decision 1327 gave the renderer the
-/// luminance fold, so the honest answer flipped: a caller that asks for grey now gets grey, and
-/// keeps its own tint instead of having it overwritten by the 0.5 fallback. The test pins the
-/// return SHAPE, because the return is what callers branch on — `1`, not `true`, because the C
-/// answer is `1|nil` and every reference consumer writes `not shaderSupported`.
-///
-/// 98 of the 109 draw-then-raise addons in the corpus die on this one verb, via
-/// `FuBar_Panel.lua:43` → Dewdrop `AddLine` → `button.arrow:SetDesaturated(true)`, unguarded.
+/// `Texture:SetDesaturated` (`0x79c1e0`) answers `shaderSupported`, `1` or nil; benilla's renderer
+/// greys, so it answers `1`, and stock `ItemButtonTemplate.lua:69` keeps the caller's tint rather
+/// than its 0.5 fallback.
 #[test]
 fn set_desaturated_reports_shader_support_and_does_not_raise() {
     let s = crate::script::UiScript::new().unwrap();
     s.run(r#"f = CreateFrame("Frame", "DsF") tex = f:CreateTexture("DsTex", "ARTWORK")"#)
         .unwrap();
 
-    // Dewdrop's exact call — the one 98 addons reach. It must not raise.
     s.run("DsTex:SetDesaturated(true)").unwrap();
 
-    // ...and it answers truthy, so the reference's shader arm is taken.
     assert!(
         s.eval::<bool>("return DsTex:SetDesaturated(true) == 1")
             .unwrap(),
@@ -963,9 +739,7 @@ fn set_desaturated_reports_shader_support_and_does_not_raise() {
         "one return value"
     );
 
-    // The reference's own consumer, transcribed: a truthy answer keeps the CALLER's tint, and the
-    // 0.5 fallback never fires. This is the half B162 turned on — the talent tree asks for
-    // `(1, 0.65, 0.65, 0.65)` and must get 0.65, greyscale, not a flat 0.5 colour multiply.
+    // `SetItemButtonDesaturated`'s branch, transcribed: a truthy answer keeps the caller's tint.
     s.run(
         r#"
         local shaderSupported = DsTex:SetDesaturated(true)
@@ -983,18 +757,12 @@ fn set_desaturated_reports_shader_support_and_does_not_raise() {
         "the shader arm keeps the caller's tint, got {r},{g},{b}"
     );
 
-    // Both spellings of "off" are off — nil and false.
     s.run("DsTex:SetDesaturated(nil) DsTex:SetDesaturated(false)")
         .unwrap();
 }
 
-/// `UnitCreatureType(unit)` — `0x51a280`'s three-stage resolver, of which we model stages 2 and 3.
-///
-/// The load-bearing assertion is the **player** one. `0x605570` falls through the (never populated)
-/// creature record to a `ChrRaces.dbc` col-9 lookup that is **7 for all nine shipped races**, and
-/// `CreatureType[7]` is `"Humanoid"` — so a player answers a word, not nil. Reading only the
-/// creature record, which is what our data alone suggested, would have been wrong for every
-/// `UnitCreatureType("player")` call in the corpus.
+/// `UnitCreatureType` (`0x51a280`, stages 2 and 3 of three built): a creature's cached record,
+/// else (`0x605570`) the race's `ChrRaces.dbc` column 9, which is 7, "Humanoid", for every race.
 #[test]
 fn unit_creature_type_answers_the_record_then_falls_back_to_humanoid() {
     let mut s = script();
@@ -1015,24 +783,20 @@ fn unit_creature_type_answers_the_record_then_falls_back_to_humanoid() {
         }),
     );
 
-    // Stage 2: a creature's cached record wins.
     assert_eq!(
         s.eval::<String>(r#"return UnitCreatureType("target")"#)
             .unwrap(),
         "Beast"
     );
-    // Stage 3: a player has no record and falls through to race -> Humanoid.
     assert_eq!(
         s.eval::<String>(r#"return UnitCreatureType("player")"#)
             .unwrap(),
         "Humanoid"
     );
-    // An unresolved TOKEN is nil — not a raise.
+    // An unresolved token is nil; a missing argument fails `lua_isstring` and raises.
     assert!(s
         .eval::<bool>(r#"return UnitCreatureType("party4") == nil"#)
         .unwrap());
-    // A non-string ARGUMENT is a raise, which is a different failure from the nil above:
-    // `lua_isstring` gates it and `luaL_error` longjmps, so a missing arg abandons the statement.
     let err = s
         .run("UnitCreatureType()")
         .expect_err("a missing arg must raise");
@@ -1042,23 +806,13 @@ fn unit_creature_type_answers_the_record_then_falls_back_to_humanoid() {
     );
 }
 
-/// `GetInventorySlotInfo(slotName)` — `0x4c81b0`, three returns and a **case-insensitive**,
-/// full-string name match.
-///
-/// The case-insensitivity is the whole point: two 1.12-era corpus addons died at session start on
-/// case variants of real names — `FuBar_AmmoFu` passes `"ammoSlot"`, `FuBar_PoisonFu`
-/// `"MAINHANDSLOT"` — and both worked on the real client, because `0x4c8215` reaches the CRT
-/// `_strnicmp`, which folds both operands.
-///
-/// The other two assertions are things a plausible implementation gets wrong and nothing notices:
-/// the third return is the **number 1**, only for `RangedSlot`, never a boolean; and a miss
-/// **raises** with the reference's own message, which carries no `Usage:` prefix and does not
-/// interpolate the offending name.
+/// `GetInventorySlotInfo` (`0x4c81b0`) matches the whole name case-insensitively (`0x4c8215`,
+/// `_strnicmp`) and returns three values, the third the number 1 for `RangedSlot` alone; a miss
+/// raises the reference's message, with no `Usage:` and no name.
 #[test]
 fn get_inventory_slot_info_folds_case_and_flags_only_the_ranged_slot() {
     let s = script();
 
-    // The exact spelling, and the two case variants the corpus actually ships.
     for name in ["AmmoSlot", "ammoSlot", "AMMOSLOT"] {
         assert_eq!(
             s.eval::<i64>(&format!("return GetInventorySlotInfo('{name}')"))
@@ -1073,18 +827,14 @@ fn get_inventory_slot_info_folds_case_and_flags_only_the_ranged_slot() {
         16
     );
 
-    // Three values, and the second is the empty-slot background art the paper-doll buttons use.
     assert_eq!(s.arity("GetInventorySlotInfo('HeadSlot')").unwrap(), 3);
     let (id, art) = s
         .eval::<(i64, String)>("return GetInventorySlotInfo('HeadSlot')")
         .unwrap();
     assert_eq!(id, 1);
-    // The DBC string verbatim: LOWERCASE directory and the `.blp` extension. The binding pushes
-    // `[esi+4]` with no normalisation, so a caller that keys a table by this sees these bytes.
+    // The DBC string verbatim, lowercase directory and `.blp`: the binding pushes `[esi+4]` as is.
     assert_eq!(art, "interface\\paperdoll\\UI-PaperDoll-Slot-Head.blp");
 
-    // checkRelic: the NUMBER 1 for the ranged slot alone, nil everywhere else — not `false`, which
-    // is falsey like nil but the wrong type for a caller that compares it against 1.
     assert!(s
         .eval::<bool>("local _,_,r = GetInventorySlotInfo('RangedSlot') return r == 1")
         .unwrap());
@@ -1092,9 +842,8 @@ fn get_inventory_slot_info_folds_case_and_flags_only_the_ranged_slot() {
         .eval::<bool>("local _,_,r = GetInventorySlotInfo('HeadSlot') return r == nil")
         .unwrap());
 
-    // The twelve rows this table was short of — `Bag1`..`Bag12` at SlotNumbers 64..75, of which
-    // 64..69 is the bank-bag band. They share ONE string offset with Bag0Slot..Bag3Slot, so all
-    // sixteen bag rows answer the same art.
+    // `Bag1`..`Bag12` are SlotNumbers 64..75 (64..69 the bank bags) and share one string offset
+    // with `Bag0Slot`..`Bag3Slot`, so all sixteen answer the same art.
     assert_eq!(
         s.eval::<i64>("return GetInventorySlotInfo('Bag1')")
             .unwrap(),
@@ -1113,14 +862,13 @@ fn get_inventory_slot_info_folds_case_and_flags_only_the_ranged_slot() {
             .unwrap(),
         "all sixteen bag rows share one string-block offset"
     );
-    // ...and `Bag1` (64) is NOT `Bag1Slot` (21): different names, different ids, both real rows.
+    // `Bag1` (64) and `Bag1Slot` (21) are different rows.
     assert_eq!(
         s.eval::<i64>("return GetInventorySlotInfo('Bag1Slot')")
             .unwrap(),
         21
     );
 
-    // A miss raises — there is no nil path — with the reference's own string.
     let err = s
         .run("GetInventorySlotInfo('NoSuchSlot')")
         .expect_err("an unknown slot name must raise");
@@ -1135,33 +883,12 @@ fn get_inventory_slot_info_folds_case_and_flags_only_the_ranged_slot() {
     );
 }
 
-/// **The whole Region method map, on both leaves that chain to it.**
-///
-/// `SetParent` above landed as one name because one addon line named it. That is how this table has
-/// always grown, and it is why `GetParent` — its own getter — was still absent while `SetParent`
-/// worked. The reference exposes it as a SET, not as names: FontString's lookup `0x79ee20` chains
-/// its own map `0xcf5400` to the Region map `0xcf54b4`, whose 19 entries are
-///
-/// ```text
-/// GetObjectType IsObjectType GetName GetParent SetParent GetCenter GetLeft GetRight GetTop
-/// GetBottom GetWidth SetWidth GetHeight SetHeight GetNumPoints GetPoint SetPoint SetAllPoints
-/// ClearAllPoints
-/// ```
-///
-/// (the reference's Font lookup `0x7a1100` has no fallback — a `<Font>` object does NOT chain and
-/// so has none of these. Texture reaches the identical map through its own leaf lookup, which is
-/// why both are asserted here.)
-///
-/// So this asserts membership rather than behaviour: each name is *present and callable* on a
-/// Texture and on a FontString. Behaviour belongs in the focused tests around it — what is pinned
-/// here is that the set cannot quietly lose a member again, which is the failure `GetParent` was.
+/// Every Region-map name (`0xcf54b4`, 19 entries) is callable on a Texture and a FontString, whose
+/// lookups fall back to it (FontString's `0x79ee20` chains its own `0xcf5400`); a Font object's
+/// lookup (`0x7a1100`) has no fallback.
 #[test]
 fn every_region_map_method_is_callable_on_a_texture_and_a_fontstring() {
-    /// All 19. `GetObjectType`/`IsObjectType` were held out of this list when 1244 landed the other
-    /// four — dispatched rather than guessed — and joined it once `0x7a11d0`/`0x7a1290` were
-    /// confirmed on the Region map. The list is the whole map again.
-    // The one list, shared with the title region's narrower table (`script::REGION_MAP_METHODS`)
-    // so the two can never disagree about what "the Region map" is.
+    /// All 19, `GetObjectType`/`IsObjectType` (`0x7a11d0`/`0x7a1290`) among them.
     const REGION_MAP: [&str; 19] = crate::script::REGION_MAP_METHODS;
     let mut s = crate::script::UiScript::new().unwrap();
     s.set_screen_size(800.0, 600.0);
@@ -1192,11 +919,8 @@ fn every_region_map_method_is_callable_on_a_texture_and_a_fontstring() {
     );
 }
 
-/// **The four Region-map readers, on the cases a frame-shaped copy gets wrong.**
-///
-/// `TheoryCraftUI.lua:720` is the line that found them: `buttontext:GetParent():GetID()`, where
-/// `buttontext` is a FontString — a working line on the real client, and `attempt to call method
-/// 'GetParent' (a nil value)` here, every session.
+/// The Region-map readers where a region differs from a frame: `GetParent` is the owner frame
+/// (`TheoryCraftUI.lua:720` calls it on a FontString), and `GetPoint` answers a sibling region.
 #[test]
 fn the_region_map_readers_answer_the_way_the_edges_do() {
     let mut s = crate::script::UiScript::new().unwrap();
@@ -1215,7 +939,6 @@ fn the_region_map_readers_answer_the_way_the_edges_do() {
     .unwrap();
     s.resolve();
 
-    // GetParent is the OWNER frame — the identity TheoryCraft then calls :GetID() on.
     assert!(
         s.eval::<bool>("return RRPlate:GetParent() == RRFrame")
             .unwrap(),
@@ -1227,15 +950,13 @@ fn the_region_map_readers_answer_the_way_the_edges_do() {
         "…and it is a real frame handle, not a bare id"
     );
 
-    // GetCenter agrees with the edge readers BY CONSTRUCTION — the invariant that forbids scaling
-    // one and not the others.
+    // GetCenter agrees with the edge readers by construction, so none of them is scaled alone.
     let (cx, cy): (f64, f64) = s.eval("return RRPlate:GetCenter()").unwrap();
     let (l, r, t, b): (f64, f64, f64, f64) = s
         .eval("return RRPlate:GetLeft(), RRPlate:GetRight(), RRPlate:GetTop(), RRPlate:GetBottom()")
         .unwrap();
     assert_eq!((cx, cy), ((l + r) * 0.5, (t + b) * 0.5));
 
-    // GetNumPoints counts what SetPoint wrote, and ClearAllPoints takes it back to 0.
     assert_eq!(s.eval::<i64>("return RRPlate:GetNumPoints()").unwrap(), 1);
     assert_eq!(
         s.eval::<i64>("return RRLabel:GetNumPoints()").unwrap(),
@@ -1243,8 +964,8 @@ fn the_region_map_readers_answer_the_way_the_edges_do() {
         "the sibling-anchored label carries its one point"
     );
 
-    // GetPoint's relativeTo must come back as the SIBLING REGION, not a frame wrapper onto the same
-    // id — the one place regions genuinely differ from frames, since both share an id space.
+    // Frames and regions share an id space, so `relativeTo` must come back as the region handle,
+    // not a frame wrapper onto its id.
     let (p, rp, x, y): (String, String, f64, f64) = s
         .eval("local p, _, rp, x, y = RRLabel:GetPoint(1) return p, rp, x, y")
         .unwrap();
@@ -1254,7 +975,6 @@ fn the_region_map_readers_answer_the_way_the_edges_do() {
             .unwrap(),
         "relativeTo is the sibling REGION handle itself"
     );
-    // Out of range is five nils, like the frame twin.
     assert_eq!(
         s.arity("RRPlate:GetPoint(7)").unwrap(),
         5,
@@ -1266,12 +986,7 @@ fn the_region_map_readers_answer_the_way_the_edges_do() {
     );
 }
 
-/// **`GetObjectType`/`IsObjectType` — every detail confirmed at the bytes, asserted.**
-///
-/// 1244 shipped four Region-map members and left these two out rather than guess them, because each
-/// of the four traps below is a coin-flip a reimplementation loses (1203/1205/1211 are three
-/// records of losing it). This test turns that reading into a gate, so the next person to touch
-/// these has to disagree with the binary rather than with me.
+/// A region's `GetObjectType`/`IsObjectType` (`0x7a11d0`/`0x7a1290`).
 #[test]
 fn the_type_identity_verbs_answer_what_the_binary_answers() {
     let s = crate::script::UiScript::new().unwrap();
@@ -1285,7 +1000,7 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
     )
     .unwrap();
 
-    // The leaf names, one value each (`lua_pushstring`, no arity check on extra args).
+    // One value each (`lua_pushstring`); extra arguments are ignored.
     assert_eq!(
         s.eval::<String>("return TITex:GetObjectType()").unwrap(),
         "Texture"
@@ -1300,7 +1015,7 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
         "one value, and a stray argument is ignored rather than an arity error"
     );
 
-    // The chain is TWO deep and stops there.
+    // The chain is two deep: the leaf, then Region.
     for (obj, leaf) in [("TITex", "Texture"), ("TIStr", "FontString")] {
         assert_eq!(
             s.eval::<i64>(&format!("return {obj}:IsObjectType('{leaf}')"))
@@ -1314,9 +1029,7 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
             1,
             "{obj} is a Region"
         );
-        // **The invented root.** 1.12.1 has no LayoutFrame/ScriptObject/Object type at all — those
-        // strings live only in __FILE__ paths and allocator tags. Knowing later clients is exactly
-        // what would put them here.
+        // 1.12.1 has no LayoutFrame, ScriptObject or Object type at all.
         for absent in ["LayoutFrame", "ScriptObject", "Object", "Frame", "Font"] {
             assert!(
                 s.eval::<Option<i64>>(&format!("return {obj}:IsObjectType('{absent}')"))
@@ -1326,14 +1039,12 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
             );
         }
     }
-    // …and the two leaves are not each other.
     assert!(s
         .eval::<Option<i64>>("return TITex:IsObjectType('FontString')")
         .unwrap()
         .is_none());
 
-    // Case-INSENSITIVE and WHOLE-string (SStrCmpI folds both operands; the compare stops at the
-    // first NUL, so no prefix or substring match either).
+    // Case-insensitive and whole-string (`SStrCmpI`).
     for spelling in ["texture", "TEXTURE", "TeXtUrE", "region", "REGION"] {
         assert_eq!(
             s.eval::<i64>(&format!("return TITex:IsObjectType('{spelling}')"))
@@ -1351,7 +1062,6 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
         );
     }
 
-    // A hit is the NUMBER 1, never a boolean; a miss is nil. Both paths push exactly one value.
     assert_eq!(
         s.eval::<String>("return type(TITex:IsObjectType('Texture'))")
             .unwrap(),
@@ -1366,8 +1076,7 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
         );
     }
 
-    // A NUMBER is accepted (lua_isstring takes tags 4 and 3) and stringified in place — it simply
-    // never matches, because no type name is numeric.
+    // A number passes `lua_isstring` and never matches a type name.
     assert!(
         s.eval::<Option<i64>>("return TITex:IsObjectType(5)")
             .unwrap()
@@ -1375,8 +1084,6 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
         "a number argument is accepted and quietly answers nil, NOT a raise"
     );
 
-    // Everything else RAISES with the reference's own Usage text, naming the region — or
-    // `<unnamed>` for one declared anonymously.
     for bad in ["", "nil", "true", "{}", "print"] {
         let err = s
             .run(&format!("TITex:IsObjectType({bad})"))
@@ -1397,18 +1104,8 @@ fn the_type_identity_verbs_answer_what_the_binary_answers() {
     );
 }
 
-/// **`GetFrameType`/`IsFrameType` — 1.12's own names for the pair above, on the FRAME side**.
-///
-/// The client registers type identity twice: `CScriptRegion` publishes
-/// `GetObjectType`/`IsObjectType` (the test above), and `CSimpleFrameScript.cpp` publishes
-/// `GetFrameType 0x773640` / `IsFrameType 0x773700`. Later clients kept the first pair and dropped
-/// the second; we had shipped only the first, which is the inverse of 1189's usual failure — a
-/// real 1.12 name we were *missing*, not an invented one we offered.
-///
-/// It cost the world map. Cartographer 2.02's `LookNFeel.lua:368` finds the map's player arrow
-/// with `v:GetFrameType() == "Model" and not v:GetName()`; with the verb nil that raised inside
-/// `OnEnable`, AceAddon swallowed it, and every map open then put
-/// `LookNFeel.lua:737: attempt to index field 'playerModel'` on screen.
+/// Frames also carry 1.12's frame-side pair, `GetFrameType 0x773640`/`IsFrameType 0x773700`
+/// (`CSimpleFrameScript.cpp`), beside `CScriptRegion`'s `GetObjectType`/`IsObjectType`.
 #[test]
 fn the_frame_side_type_identity_verbs_are_1_12s_own_names() {
     let s = crate::script::UiScript::new().unwrap();
@@ -1422,8 +1119,7 @@ fn the_frame_side_type_identity_verbs_are_1_12s_own_names() {
     )
     .unwrap();
 
-    // `GetFrameType` reads the same per-class type-name slot `GetObjectType` does (`[edx+0x1c]`),
-    // so the two agree by construction — one value, extra arguments ignored.
+    // Both read the same per-class type-name slot (`[edx+0x1c]`).
     for (obj, leaf) in [
         ("FTFrame", "Frame"),
         ("FTButton", "Button"),
@@ -1442,15 +1138,13 @@ fn the_frame_side_type_identity_verbs_are_1_12s_own_names() {
         );
     }
 
-    // The exact line Cartographer walks the world map with.
+    // How Cartographer's `LookNFeel.lua:368` finds the world map's player arrow.
     assert!(
         s.eval::<bool>(r#"return FTModel:GetFrameType() == "Model" and not FTModel:GetName()"#)
             .unwrap(),
         "an anonymous Model must answer its type AND a nil name — LookNFeel.lua:368"
     );
 
-    // `IsFrameType` walks the same chain: the leaf, every base, the number 1 on a hit and nil on
-    // a miss, case-insensitive and whole-string.
     assert_eq!(
         s.eval::<i64>("return FTButton:IsFrameType('Button')")
             .unwrap(),
@@ -1475,18 +1169,13 @@ fn the_frame_side_type_identity_verbs_are_1_12s_own_names() {
         );
     }
 
-    // A REGION does not get the frame-side pair — the two registrars are distinct, and offering
-    // both names on everything would be the superset 1189 forbids.
+    // A region has no frame-side pair: the two registrars are distinct.
     assert!(s.eval::<bool>("return FTTex.GetFrameType == nil").unwrap());
     assert!(s.eval::<bool>("return FTTex.IsFrameType == nil").unwrap());
 }
 
-/// **The frame side of the type identity, and the three chains a guess gets wrong.**
-///
-/// `_Nameplates.lua` is why this half exists: it asks `Region:GetObjectType()` (the region twin)
-/// AND `Nameplate:GetObjectType() ~= "Button"` / `Frame:GetObjectType() == "StatusBar"` in the same
-/// file. The chains come from the reference's own 23-class roster, which is a hardcoded
-/// straight-line list per class in the binary rather than a runtime parent walk.
+/// A frame's type chain follows the reference's 23-class roster, a hardcoded list per class rather
+/// than a runtime parent walk.
 #[test]
 fn a_frames_type_chain_matches_the_roster() {
     let s = crate::script::UiScript::new().unwrap();
@@ -1494,7 +1183,6 @@ fn a_frames_type_chain_matches_the_roster() {
     let cases: &[(&str, &str, &[&str])] = &[
         ("Frame", "Frame", &["Frame", "Region"]),
         ("Button", "Button", &["Button", "Frame", "Region"]),
-        // Depth 4 — the longest chain we can build.
         (
             "CheckButton",
             "CheckButton",
@@ -1513,14 +1201,13 @@ fn a_frames_type_chain_matches_the_roster() {
             "MessageFrame",
             &["MessageFrame", "Frame", "Region"],
         ),
-        // **NOT via MessageFrame**, despite the name (roster `0x787940`).
+        // Not via MessageFrame, despite the name (roster `0x787940`).
         (
             "ScrollingMessageFrame",
             "ScrollingMessageFrame",
             &["ScrollingMessageFrame", "Frame", "Region"],
         ),
-        // **Capital HTML** — the enum variant is `SimpleHtml`, and `GetObjectType` is compared with
-        // `==` by addons, so a variant-derived string would be silently wrong here.
+        // Capital HTML, unlike the `SimpleHtml` variant; addons compare the string with `==`.
         (
             "SimpleHTML",
             "SimpleHTML",
@@ -1537,10 +1224,9 @@ fn a_frames_type_chain_matches_the_roster() {
             &["GameTooltip", "Frame", "Region"],
         ),
         ("Minimap", "Minimap", &["Minimap", "Frame", "Region"]),
-        // `PlayerModel` derives from `Model`, which is why `SetUnit` on a portrait pane finds
-        // `SetCamera` too (`0x505830`/`0x5057c0`) — and `DressUpModel`
-        // derives from it in turn: the roster's maximum depth, 5 (1969; `TabardModel` is the
-        // other depth-5 chain — built by 1977).
+        // `PlayerModel` derives from `Model` (`0x505830`/`0x5057c0`), so a `SetUnit` portrait pane
+        // has `SetCamera` too; `DressUpModel`, like `TabardModel`, derives from `PlayerModel`: the
+        // roster's maximum depth, 5.
         (
             "PlayerModel",
             "PlayerModel",
@@ -1568,8 +1254,6 @@ fn a_frames_type_chain_matches_the_roster() {
                 "{kind} must be a {want}"
             );
         }
-        // Every OTHER leaf in the roster must be absent from this chain — the assertion that
-        // catches a chain built by "sounds related".
         for (other, other_leaf, _) in cases {
             if chain.contains(other_leaf) {
                 continue;
@@ -1583,8 +1267,6 @@ fn a_frames_type_chain_matches_the_roster() {
         }
     }
 
-    // The frame verbs share the region twin's contract: number 1 / nil, one value, and a raise
-    // naming the frame.
     s.run(r#"TCNamed = CreateFrame("Button", "TCNamed")"#)
         .unwrap();
     assert_eq!(
@@ -1603,16 +1285,8 @@ fn a_frames_type_chain_matches_the_roster() {
     );
 }
 
-/// **Every region method belongs to a leaf — no name may be installed and invisible to both.**
-///
-/// The split (`script::region`) copies names out of the full table into a Texture leaf and a
-/// FontString leaf. A name in neither list is still installed, still costs a closure, and is
-/// reachable from NOTHING — the silent half of a wrong partition.
-///
-/// This is not hypothetical: the partition was first built from a grep, and that grep missed
-/// `SetGradient`/`SetGradientAlpha` because they are installed from a LOOP rather than a literal
-/// `m.set("…")`. One test caught one of them; this gate catches the whole class, and it reads the
-/// table the VM actually holds rather than the source that builds it.
+/// Every name on the full region table the VM holds is in a leaf list: `script::region` copies
+/// names out of it into the Texture and FontString leaves, and one in neither is unreachable.
 #[test]
 fn every_installed_region_method_lands_in_a_leaf() {
     use crate::script::{
@@ -1644,10 +1318,7 @@ fn every_installed_region_method_lands_in_a_leaf() {
     );
 }
 
-/// **The Environment Detail pair — `SetWorldDetail 0x488dd0` / `GetWorldDetail 0x488d70`.**
-///
-/// Every assertion below is a byte read out of `WoW.exe`, not a shape chosen here; decision 2163
-/// carries the carve and `script::cvars::install_world_detail_verbs` the reasoning.
+/// The Environment Detail pair, `SetWorldDetail 0x488dd0`/`GetWorldDetail 0x488d70`.
 #[test]
 fn set_world_detail_writes_the_stop_table_and_validates_like_the_reference() {
     let s = script();
@@ -1678,8 +1349,7 @@ fn set_world_detail_writes_the_stop_table_and_validates_like_the_reference() {
         "the table is the reference's, not a transcription that can drift"
     );
 
-    // **Truncation is toward zero** (`0x40a2b0` forces RC = chop), so a fractional stop floors
-    // toward 0 from both sides — and -0.5 is therefore stop 0, ACCEPTED.
+    // Truncation is toward zero (`0x40a2b0` sets RC = chop), so -0.5 is stop 0 and accepted.
     s.run("SetWorldDetail(2.9)").unwrap();
     assert_eq!(frill(&s).as_deref(), Some("48"));
     s.run("SetWorldDetail(-0.5)").unwrap();
@@ -1689,11 +1359,10 @@ fn set_world_detail_writes_the_stop_table_and_validates_like_the_reference() {
         "-0.5 truncates to 0, which is in range: only <= -1 raises"
     );
 
-    // **`lua_isnumber` accepts a numeric string.**
+    // `lua_isnumber` accepts a numeric string.
     s.run(r#"SetWorldDetail("2")"#).unwrap();
     assert_eq!(frill(&s).as_deref(), Some("48"));
 
-    // Both raise paths, with the reference's own strings.
     for bad in [
         "SetWorldDetail(3)",
         "SetWorldDetail(-1)",
@@ -1718,7 +1387,6 @@ fn set_world_detail_writes_the_stop_table_and_validates_like_the_reference() {
         );
     }
 
-    // Zero return values from the setter; exactly one number from the getter.
     s.run("SetWorldDetail(1)").unwrap();
     assert_eq!(
         s.arity("SetWorldDetail(1)").unwrap(),
@@ -1730,17 +1398,13 @@ fn set_world_detail_writes_the_stop_table_and_validates_like_the_reference() {
         s.eval::<String>("return type(GetWorldDetail())").unwrap(),
         "number"
     );
-    // The getter reads no argument — pfUI declares its replacement `function(arg)` and the stock
-    // one it chains to is called with one.
+    // The getter ignores an argument; pfUI's hook passes one.
     assert_eq!(s.eval::<i64>("return GetWorldDetail(7)").unwrap(), 1);
     assert_eq!(stop(&s).as_deref(), Some("1"));
 }
 
-/// **pfUI's `hdgraphic` module, run against the real bindings.**
-///
-/// The module hooks both verbs and drives `frillDensity` past the panel's top stop; this is that
-/// arm executed verbatim (`modules/hdgraphic.lua` l.4-39), because "the verbs exist" and "the
-/// module works" are different claims and only the second one is the point.
+/// pfUI's `hdgraphic` module (`modules/hdgraphic.lua:4-39`), which hooks both verbs to drive
+/// `frillDensity` past the top stop, run against the bindings.
 #[test]
 fn the_pfui_hdgraphic_extended_arm_runs() {
     let s = script();
@@ -1765,8 +1429,6 @@ fn the_pfui_hdgraphic_extended_arm_runs() {
     )
     .unwrap();
 
-    // The hook's own precondition: `local Hook... = SetWorldDetail` captured a FUNCTION. Before
-    // 2163 both were nil and this line took the module down with it.
     assert_eq!(
         s.eval::<i64>("SetWorldDetail(9); return GetWorldDetail()")
             .unwrap(),
@@ -1778,7 +1440,7 @@ fn the_pfui_hdgraphic_extended_arm_runs() {
         Some("160"),
         "(9+1)*16 — inside the reference's own [1, 256], which is why its range is wider than its slider"
     );
-    // ...and the low arm falls through to the stock getter, which is where a nil hook used to bite.
+    // The low arm falls through to the stock getter.
     assert_eq!(
         s.eval::<i64>("SetWorldDetail(2); return GetWorldDetail()")
             .unwrap(),
@@ -1786,19 +1448,9 @@ fn the_pfui_hdgraphic_extended_arm_runs() {
     );
 }
 
-/// **The four nameplate verbs take no argument and return nothing.**
-///
-/// `ShowNameplates 0x489450` / `HideNameplates 0x489460` / `ShowFriendNameplates 0x489470` /
-/// `HideFriendNameplates 0x489480` — four 10-byte bodies over two setters, differing only in an
-/// `or`/`and` mask.
-///
-/// Both halves of the shape are asserted because both are easy to invent differently:
-///
-/// - **No argument is read.** `ShowNameplates(false)` still shows — there is no `lua_gettop` and
-///   no `lua_toboolean` in any of the four. That is *why* there are four verbs instead of two
-///   taking a flag, and a binding typed `fn(bool)` would reject a call the reference accepts.
-/// - **Zero return values, not nil.** The return-list count is 0, which is observably different
-///   from one nil for a caller that counts.
+/// `ShowNameplates 0x489450`, `HideNameplates 0x489460`, `ShowFriendNameplates 0x489470` and
+/// `HideFriendNameplates 0x489480` read no argument and return nothing: four 10-byte bodies over
+/// two setters, differing only in an `or`/`and` mask.
 #[test]
 fn the_nameplate_verbs_ignore_their_arguments_and_return_nothing() {
     let s = script();
@@ -1813,7 +1465,6 @@ fn the_nameplate_verbs_ignore_their_arguments_and_return_nothing() {
         Some("1")
     );
 
-    // Each verb writes its own bit and leaves the other alone.
     s.run("HideNameplates()").unwrap();
     assert_eq!(
         get(&s, crate::script::CVAR_NAMEPLATE_ENEMIES).as_deref(),
@@ -1835,8 +1486,6 @@ fn the_nameplate_verbs_ignore_their_arguments_and_return_nothing() {
         "...and back the other way"
     );
 
-    // **An argument is accepted and IGNORED.** `ShowNameplates(false)` shows, which is the whole
-    // reason the reference ships four verbs rather than two taking a flag.
     s.run("ShowNameplates(false)").unwrap();
     assert_eq!(
         get(&s, crate::script::CVAR_NAMEPLATE_ENEMIES).as_deref(),
@@ -1848,7 +1497,6 @@ fn the_nameplate_verbs_ignore_their_arguments_and_return_nothing() {
             .unwrap_or_else(|e| panic!("{call} must not raise: {e}"));
     }
 
-    // ZERO return values, not one nil.
     assert_eq!(
         s.arity("ShowNameplates()").unwrap(),
         0,

@@ -1,31 +1,19 @@
-//! The innkeeper-bind **Era API surface** — two globals, no snapshot.
-//!
-//! These are the whole Lua side of setting a hearthstone, and they exist because the reference's
-//! `CONFIRM_BINDER` dialog is written against exactly them (`StaticPopup.lua:1308-1322`):
-//! `OnAccept` calls [`ConfirmBinder`], and `OnUpdate` hides the dialog the moment
-//! [`CheckBinderDist`] goes false. Both are engine bindings in 1.12 (`reference/1.12-globals.tsv`
-//! lists `ConfirmBinder` and `CheckBinderDist` as `function`/`engine`), and there are no others in
-//! the family — the question itself arrives as the `CONFIRM_BINDER` event's argument, so there is
-//! nothing to read back, exactly like [`super::duel`].
-//!
-//! The app owns the innkeeper's guid ([`crate::script::UiScript::set_binder_pending`]'s writer),
-//! which is why `ConfirmBinder()` takes no arguments and queues only a count.
+//! `ConfirmBinder` and `CheckBinderDist`, the engine globals the `CONFIRM_BINDER` dialog calls
+//! (`StaticPopup.lua:1321-1335`): Accept binds, and the dialog hides once the distance check
+//! fails. The question arrives as the event's argument, so there is nothing to read back.
 
 use mlua::Lua;
 
 use super::Model;
 
 impl super::UiScript {
-    /// Drain the `ConfirmBinder()` calls queued since the last drain — each one is a
-    /// `CMSG_BINDER_ACTIVATE`. [`super::UiScript::take_played_time_asks`]'s shape, and a count for
-    /// the same reason: the intent has no payload of its own.
+    /// `ConfirmBinder()` calls since the last drain, each a `CMSG_BINDER_ACTIVATE`; a count, since
+    /// the app holds the innkeeper's guid.
     pub fn take_binder_confirms(&mut self) -> u32 {
         std::mem::take(&mut self.model_mut().binder_confirms)
     }
 
-    /// Push whether an innkeeper's bind question is live and still in range — the host's half of
-    /// `CheckBinderDist()`. Idempotent; `false` covers both "no question pending" and "you walked
-    /// away", which is all the dialog's OnUpdate needs to decide to hide.
+    /// Push whether a bind question is pending with the innkeeper still in range.
     pub fn set_binder_pending(&mut self, pending: bool) {
         let mut model = self.model_mut();
         if model.binder_pending != pending {
@@ -34,12 +22,11 @@ impl super::UiScript {
     }
 }
 
-/// Register the two binder globals (the style [`super::duel`] registers its four).
+/// Register the two binder globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // ConfirmBinder() — the CONFIRM_BINDER dialog's Accept. The one call in the client that binds
-    // a hearthstone: everything before it is a question.
+    // `ConfirmBinder()`: the dialog's Accept, the one call that binds a hearthstone.
     g.set(
         "ConfirmBinder",
         lua.create_function(|lua, ()| {
@@ -49,7 +36,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CheckBinderDist() — polled from the dialog's OnUpdate; false hides it.
+    // `CheckBinderDist()`, polled by the dialog's OnUpdate. This answers a boolean; the
+    // reference (`0x48d210`) answers 1 or nil.
     g.set(
         "CheckBinderDist",
         lua.create_function(|lua, ()| {

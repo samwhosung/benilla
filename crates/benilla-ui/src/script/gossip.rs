@@ -1,72 +1,49 @@
-//! The gossip bindings (decision 0081 phase 3) — the Era-shaped NPC-dialog surface, the same
-//! two-way seam as [`super::container`]: the app pushes a **gossip menu snapshot**
-//! ([`UiScript::set_gossip`] — the greeting + option rows already resolved from the wire), and the
-//! Lua `SelectGossipOption`/`CloseGossip` calls queue outbound **intents** the app drains
-//! ([`UiScript::take_gossip_selects`] / [`UiScript::take_gossip_close`]). The engine holds no NPC
-//! knowledge — an option is "a label, an icon type, and whether it's coded".
+//! The gossip bindings: the app pushes the open menu ([`UiScript::set_gossip`]), and
+//! `SelectGossipOption` and `CloseGossip` queue intents it drains.
 //!
-//! ## The Era API shape
+//! `GetGossipOptions()` returns flat `(text, type)` pairs, `type` the lowercase icon name the app
+//! maps from the wire `GOSSIP_ICON`. A coded option is not built: the app drops its select, where
+//! the reference opens a password box (`UIParent.lua:563`). `IsGossipOptionCoded(i)` is benilla's
+//! own, not a 1.12 global, and no stock file calls it.
 //!
-//! 1.12's `GetGossipOptions()` returns a flat vararg of `(text, type)` pairs — the FrameXML's
-//! `GossipFrameUpdate` walks it two-at-a-time, `SetText`ing each `GossipTitleButton` and mapping the
-//! `type` string to an `Interface\GossipFrame\<Type>GossipIcon` texture. Benilla keeps that exact
-//! shape: `GetGossipOptions()` returns `label1, type1, label2, type2, …`, where `type` is the
-//! lowercase Era icon name (`"gossip"`/`"vendor"`/`"taxi"`/`"trainer"`/…) the app derived from the
-//! wire `GOSSIP_ICON` byte. The one addition is `IsGossipOptionCoded(i)` — a benilla-local
-//! predicate the XML uses to grey password-gated options (decision 0081 v1: coded options are
-//! parsed and greyed, never selected; the real client pops a password box, out of scope here).
-//! `GetGossipText()` returns the greeting body (`SMSG_NPC_TEXT_UPDATE`), `nil` when no menu is
-//! open. There is no "menu open, text pending" state: while a greeting is in flight the app
-//! pushes nothing and fires nothing — the VM keeps its last menu (or none), exactly as the
-//! reference's frame keeps its last paint (its handler returns on a cache miss without an event,
-//! and its greeting write and `GOSSIP_SHOW` are adjacent and unconditional on one success path —
-//! `0x4e2010`, `0x4e22b0`; B292, benilla decisions 1508/1994), which is why
-//! [`GossipMenu::greeting`] is a plain `String`.
+//! A menu is pushed only once its greeting (`SMSG_NPC_TEXT_UPDATE`) has arrived; until then the
+//! VM keeps its last menu, as the reference's frame keeps its last paint: its handler returns on a
+//! cache miss without an event, and the greeting write and `GOSSIP_SHOW` share one success path
+//! (`0x4e2010`, `0x4e22b0`).
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
 
-/// One gossip menu option, resolved by the app from the wire `GossipOption`. Plain
-/// data — 1-based order in the menu is its position in [`GossipMenu::options`].
+/// One gossip option; its 1-based index is its place in [`GossipMenu::options`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GossipOptionView {
-    /// The option label (`SetText` on its row button).
+    /// The option's label.
     pub label: String,
-    /// The Era `GetGossipOptions()` second value — the lowercase icon *type* the app mapped from
-    /// the wire `GOSSIP_ICON` byte (`"gossip"`/`"vendor"`/`"taxi"`/`"trainer"`/…). The XML resolves
-    /// it to a `Interface\GossipFrame\<Type>GossipIcon` texture.
+    /// The lowercase icon type (`"gossip"`, `"vendor"`, `"taxi"`, …); `GossipFrame.lua:123` draws
+    /// `Interface\GossipFrame\<Type>GossipIcon`.
     pub icon_type: String,
-    /// A password-gated (`coded`) option — greyed and unselectable in v1.
+    /// A password-gated option, which the app never selects.
     pub coded: bool,
 }
 
-/// One quest row riding a gossip menu (`SMSG_GOSSIP_MESSAGE`'s quest-option block). A gossip NPC
-/// that also gives quests lists them above the gossip options; a click sends
-/// `CMSG_QUESTGIVER_QUERY_QUEST`. `active` splits the row into the "current quests"
-/// vs "available quests" headers (the app derives it from the wire dialog-status icon); the app maps
-/// the clicked 1-based row back to its quest id.
+/// One quest row of `SMSG_GOSSIP_MESSAGE`; a click sends `CMSG_QUESTGIVER_QUERY_QUEST`. `active`,
+/// from the wire icon, puts it under current quests rather than available ones.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GossipQuestRow {
     pub title: String,
-    /// The quest's level — `SMSG_GOSSIP_MESSAGE`'s own third field per quest row.
-    ///
-    /// The app parsed it and dropped it until 1751's twenty-first window, because the invented
-    /// `GetGossipQuestInfo` had nowhere to put it. The reference's two verbs return the rows as
-    /// `(title, level)` PAIRS, and stock `GossipFrame.lua` strides its walk by 2 over them — so
-    /// the level is load-bearing for the stride even though 1.12's own FrameXML never reads it.
+    /// The row's third wire field. 1.12 never shows it, but the verbs return `(title, level)` pairs
+    /// and `GossipFrame.lua:66` strides by 2 over them.
     pub level: u32,
     pub active: bool,
 }
 
-/// One open gossip menu: the greeting body, the quest rows, and the option rows. Pushed whole by
-/// the app; `None` means no menu is open.
+/// One open gossip menu, pushed whole by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GossipMenu {
-    /// The NPC greeting, always resolved: a menu is only pushed once its `SMSG_NPC_TEXT_UPDATE`
-    /// answered — an open gossip frame with a blank page is not a reachable state (module doc).
+    /// The NPC greeting, always resolved.
     pub greeting: String,
-    /// Quest rows the NPC offers/has active, riding the same packet.
+    /// Quest rows from the same packet.
     pub quests: Vec<GossipQuestRow>,
     pub options: Vec<GossipOptionView>,
 }
@@ -82,14 +59,12 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().gossip_selects)
     }
 
-    /// Whether `CloseGossip` was called since the last drain (and clear the flag). vanilla's
-    /// client-side close sends no packet — the app just clears its local menu state.
+    /// Whether `CloseGossip` was called since the last drain; the 1.12 close sends no packet.
     pub fn take_gossip_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().gossip_close)
     }
 
-    /// Drain the 1-based quest-row positions queued by `SelectGossipQuest` since the last call. The
-    /// app maps each to the row's quest id + the open NPC and sends `CMSG_QUESTGIVER_QUERY_QUEST`.
+    /// Drain the queued 1-based whole-menu quest-row positions.
     pub fn take_gossip_quest_selects(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().gossip_quest_selects)
     }
@@ -99,8 +74,6 @@ impl super::UiScript {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // → the greeting body, or nil while there is no menu (an open menu always has one — the
-    // app-side hold, module doc).
     g.set(
         "GetGossipText",
         lua.create_function(|lua, ()| {
@@ -115,11 +88,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // → flat (label, type) pairs, the Era `GetGossipOptions()` vararg shape.
     g.set(
         "GetGossipOptions",
         lua.create_function(|lua, ()| {
-            // Collect owned data under one short borrow, then build the Lua values with none held.
+            // Copy out under one short borrow; build the Lua values with none held.
             let pairs: Vec<(String, String)> = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.gossip.as_ref().map_or_else(Vec::new, |m| {
@@ -138,8 +110,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // IsGossipOptionCoded(i) — benilla-local: the XML greys a coded (password) option (decision
-    // 0081). `i` is 1-based; an out-of-range index is `false`.
     g.set(
         "IsGossipOptionCoded",
         lua.create_function(|lua, i: usize| {
@@ -152,9 +122,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SelectGossipOption(i [, ...]) — queue the 1-based option position; the app maps it to the
-    // wire option index + guid. Extra Era args (the code / a confirm flag) are ignored: v1 never
-    // sends a code.
+    // SelectGossipOption(i [, ...]): queue the 1-based position. Further arguments, a code among
+    // them, are ignored: coded options are not built, so no code is ever sent.
     g.set(
         "SelectGossipOption",
         lua.create_function(|lua, (i, _rest): (u32, mlua::MultiValue)| {
@@ -164,7 +133,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseGossip() — client-side close (no packet, vanilla): flag it so the app clears its menu.
     g.set(
         "CloseGossip",
         lua.create_function(|lua, ()| {
@@ -174,22 +142,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ══ THE TWO QUEST LISTS, and why there are two ══════════════════════════════════════════
-    //
-    // 1.12 splits the gossip packet's quest rows by their WIRE ICON — `{3,4}` are "active", every
-    // other value "available" — and publishes each list through its own vararg
-    // verb. The reference runs that same test lazily behind these two bindings
-    // (`0x4e2430`/`0x4e2580`); we run it at parse time and keep the answer on the row.
-    //
-    // **Each row is a PAIR: `(title, level)`.** Stock `GossipFrameAvailableQuestsUpdate` /
-    // `…ActiveQuestsUpdate` walk `for i = 1, arg.n, 2` and read only `arg[i]`, so the level is
-    // never displayed in 1.12 — but it is what makes the stride land, and an addon reading the
-    // second slot gets the number the server sent rather than a nil.
-    //
-    // These four REPLACE `GetNumGossipQuests` / `GetGossipQuestInfo` / `SelectGossipQuest`, which
-    // were benilla's own single-list shape and appear nowhere in `reference/1.12-globals.tsv`.
-    // 1189's rule: a superset is not free — an addon that feature-detects on a name the client
-    // does not have takes a branch we cannot honour.
+    // ══ The two quest lists ══
+    // The reference splits the quest rows by wire icon, 3 and 4 active and the rest available,
+    // behind two vararg verbs (`0x4e2430`, `0x4e2580`); the app splits them at parse time.
     fn quest_rows(lua: &Lua, active: bool) -> mlua::Result<MultiValue> {
         let rows: Vec<(String, u32)> = {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -218,14 +173,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| quest_rows(lua, true))?,
     )?;
 
-    // The two selects. Each index is 1-based **within its own list**, which is what
-    // `GossipTitleButton_OnClick` passes: the reference re-numbers the rows per list as it lays
-    // them out (`titleIndex`), so a menu with two available and one active quest hands the active
-    // row a 1, not a 3.
-    //
-    // The queue the app drains is one list, so the index is mapped back to the WHOLE row order
-    // here — the app's own `take_gossip_quest_selects` contract is unchanged, and the two verbs
-    // stay a pure re-expression of it rather than a second drain to wire up.
+    // A select's index is 1-based within its own list, as `GossipFrame.lua:73` numbers the
+    // buttons; it maps back to the whole-menu position the app's queue holds.
     fn select_quest(lua: &Lua, active: bool, index: usize) {
         let whole = {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -291,7 +240,6 @@ mod tests {
     #[test]
     fn gossip_snapshot_reads_and_selects_queue() {
         let mut s = UiScript::new().unwrap();
-        // No menu: text nil, no options.
         assert!(s.eval::<bool>("return GetGossipText() == nil").unwrap());
         assert_eq!(s.arity("GetGossipOptions()").unwrap(), 0);
 
@@ -300,7 +248,6 @@ mod tests {
             s.eval::<String>("return GetGossipText()").unwrap(),
             "Greetings, traveler."
         );
-        // Flat (label, type) pairs: 2 options → 4 return values.
         let (l1, t1, l2, t2) = s
             .eval::<(String, String, String, String)>(
                 "local a,b,c,d = GetGossipOptions()\n\
@@ -314,12 +261,10 @@ mod tests {
         );
         assert_eq!(l2, "I would like to sign the petition.");
         assert_eq!(t2, "gossip");
-        // The coded (petition) option is flagged for greying; the vendor one isn't.
         assert!(!s.eval::<bool>("return IsGossipOptionCoded(1)").unwrap());
         assert!(s.eval::<bool>("return IsGossipOptionCoded(2)").unwrap());
         assert!(!s.eval::<bool>("return IsGossipOptionCoded(9)").unwrap()); // out of range
 
-        // Selecting queues the 1-based position; closing flags the intent.
         s.run("SelectGossipOption(1)").unwrap();
         s.run("SelectGossipOption(2, 'unused-code')").unwrap(); // extra arg ignored
         assert_eq!(s.take_gossip_selects(), vec![1, 2]);
@@ -331,22 +276,11 @@ mod tests {
         assert!(!s.take_gossip_close(), "drained");
     }
 
-    /// **The two quest lists the reference publishes, and the two selects that index INTO them.**
-    ///
-    /// This replaces a test of `GetNumGossipQuests`/`GetGossipQuestInfo`/`SelectGossipQuest` —
-    /// benilla's own single-list shape, and three names that appear nowhere in
-    /// `reference/1.12-globals.tsv`. 1189's rule is why they had to go rather than sit beside the
-    /// real four: an addon that feature-detects on a name this client does not have takes a branch
-    /// we cannot honour.
-    ///
-    /// The row shape is a `(title, level)` PAIR because stock `GossipFrameAvailableQuestsUpdate`
-    /// walks `for i = 1, arg.n, 2` and reads `arg[i]`. 1.12 never displays the level; it is the
-    /// stride that needs it, and an addon reading the second slot should get the server's number.
     #[test]
     fn the_two_gossip_quest_lists_split_by_active_and_select_within_themselves() {
         use super::GossipQuestRow;
         let mut s = UiScript::new().unwrap();
-        // No menu → both lists are empty, and that is `arg.n == 0`, not a nil.
+        // No menu: `arg.n == 0`, not a nil.
         assert_eq!(s.arity("GetGossipAvailableQuests()").unwrap(), 0);
         assert_eq!(s.arity("GetGossipActiveQuests()").unwrap(), 0);
 
@@ -370,7 +304,6 @@ mod tests {
         ];
         s.set_gossip(Some(m));
 
-        // Two available, in menu order, each a pair.
         assert_eq!(
             s.eval::<(String, i64, String, i64)>("return GetGossipAvailableQuests()")
                 .unwrap(),
@@ -381,24 +314,18 @@ mod tests {
                 9
             )
         );
-        // One active, and the active row does NOT appear in the available list even though it
-        // comes first in the menu — the split is the wire icon, not the position.
+        // The active row comes first in the menu but splits by icon, not position.
         assert_eq!(
             s.eval::<(String, i64)>("return GetGossipActiveQuests()")
                 .unwrap(),
             ("Report to Goldshire".to_string(), 5)
         );
 
-        // **Each select is 1-based within its OWN list**, which is what
-        // `GossipTitleButton_OnClick` passes (the reference re-numbers per list as it lays the
-        // rows out). Available #2 is "Kobold Camp Cleanup", the THIRD row of the menu — and the
-        // queue the app drains is still whole-menu positions, so it must come back as 3.
+        // Available #2 is the menu's third row.
         s.run("SelectGossipAvailableQuest(2)").unwrap();
         assert_eq!(s.take_gossip_quest_selects(), vec![3]);
-        // …and the single active row is #1 in its list, the FIRST of the menu.
         s.run("SelectGossipActiveQuest(1)").unwrap();
         assert_eq!(s.take_gossip_quest_selects(), vec![1]);
-        // Out of range queues nothing rather than a wrong row.
         s.run("SelectGossipAvailableQuest(9) SelectGossipActiveQuest(0)")
             .unwrap();
         assert!(s.take_gossip_quest_selects().is_empty(), "drained");

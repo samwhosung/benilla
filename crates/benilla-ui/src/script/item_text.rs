@@ -1,45 +1,32 @@
-//! The item-text reader seam — the `ItemTextFrame` (letters, books, plaques) Lua surface.
-//!
-//! The app owns the read session (`crate::ui_item_text` on the benilla side): right-clicking a bag
-//! item whose `ITEM_FIELD_ITEM_TEXT_ID` is set opens a read instead of a `CMSG_USE_ITEM`, fetches
-//! the text over the ask-once `CMSG_ITEM_TEXT_QUERY` cache (the same wire mail letter bodies ride),
-//! then pushes an [`ItemTextState`] here and fires the reference event pair `ITEM_TEXT_BEGIN` →
-//! `ITEM_TEXT_READY` (ItemTextFrame.lua l.11/38). This module is only the Lua-facing mirror:
-//!
-//! - Getters over the pushed state: `ItemTextGetItem()` (the title), `ItemTextGetCreator()`,
-//!   `ItemTextGetText()`, `ItemTextGetPage()`, `ItemTextHasNextPage()`, `ItemTextGetMaterial()`
-//!   (`nil` → the Lua's own "Parchment" default, l.19-21).
-//! - Intents the app drains: `CloseItemText()` (the frame's OnHide, l.349 — the app clears the
-//!   session and fires `ITEM_TEXT_CLOSED`), `ItemTextPrevPage()`/`ItemTextNextPage()` (multi-page
-//!   `PageText` books — a named follow-up; single-page letters never show the buttons).
+//! The `ItemTextFrame` Lua surface (letters, books, plaques) over the read session the app owns:
+//! getters over the pushed [`ItemTextState`], and the close and page-turn intents. The app fires
+//! `ITEM_TEXT_BEGIN` then `ITEM_TEXT_READY` (`ItemTextFrame.lua:11`, `:38`), and `ITEM_TEXT_CLOSED`
+//! after `CloseItemText()`, the frame's OnHide (`ItemTextFrame.xml:349`).
 
 use mlua::{Lua, Value};
 
 use super::Model;
 
-/// The open read session's Lua-visible snapshot, pushed whole by the app.
+/// The open read session as Lua sees it, pushed whole by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ItemTextState {
-    /// The read item's name (`ItemTextGetItem()` — the window title, e.g. "Plain Letter").
+    /// `ItemTextGetItem()`: the item's name, the window title.
     pub item: String,
-    /// The letter's author (`ItemTextGetCreator()` — `ITEM_FIELD_CREATOR` resolved through the
-    /// name cache); `None` for an authorless text (books) — the Lua skips the "From," tail.
+    /// `ItemTextGetCreator()`: `ITEM_FIELD_CREATOR`'s name, `None` for an authorless text.
     pub creator: Option<String>,
-    /// The current page's text (`ItemTextGetText()`).
+    /// `ItemTextGetText()`: the current page's text.
     pub text: String,
     /// The 1-based page (`ItemTextGetPage()`); letters are always page 1.
     pub page: u32,
     /// Whether a next page exists (`ItemTextHasNextPage()`); always `false` for letters.
     pub has_next: bool,
-    /// The page material basename (`ItemTextGetMaterial()`, e.g. "Stone"); `None` = the default
-    /// parchment (the Lua substitutes "Parchment" and hides the material corners).
+    /// `ItemTextGetMaterial()`, e.g. "Stone"; `None` reads nil, which the frame shows as
+    /// parchment (`ItemTextFrame.lua:19-21`).
     pub material: Option<String>,
 }
 
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open read session. The app pairs the push with the
-    /// reference event flow: set → `ITEM_TEXT_BEGIN` → (text fetched) → `ITEM_TEXT_READY`;
-    /// clear → `ITEM_TEXT_CLOSED`.
+    /// Push the open read session, or clear it with `None`.
     pub fn set_item_text(&mut self, state: Option<ItemTextState>) {
         self.model_mut().item_text = state;
     }
@@ -173,7 +160,7 @@ mod tests {
     #[test]
     fn getters_mirror_the_pushed_state() {
         let mut s = UiScript::new().unwrap();
-        // No session: benign defaults (the frame only reads these while shown anyway).
+        // No session: empty defaults; the frame reads these only while shown.
         assert_eq!(s.eval::<String>("return ItemTextGetItem()").unwrap(), "");
         assert!(s
             .eval::<bool>("return ItemTextGetCreator() == nil")

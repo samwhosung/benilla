@@ -1,28 +1,10 @@
-//! The `Slider` method surface — the `CSimpleSlider` widget behavior over the kind tag (factory
-//! `0x6eee40`). A value in `[min, max]` with a step and orientation, driving a thumb texture along
-//! the track.
-//!
-//! Grounded in the byte-verified LoadXML table (`Slider::LoadXML 0x789580`): the
-//! `<ThumbTexture>` sub-element (default layer OVERLAY=3), `minValue`/`maxValue`/`valueStep`/
-//! `defaultValue`, the `orientation` shared enum (HORIZONTAL=0/VERTICAL=1, `0x811b00`), and the
-//! widget's own `OnValueChanged` script slot (`+0x330`). The **thumb-position** mechanism — the
-//! thumb's rect placed at the value fraction along the orientation axis, applied at extract — is
-//! faithful to the *documented* widget model, not byte-pinned (same posture as StatusBar's fill and
-//! ScrollFrame's scroll).
-//!
-//! `SetValue` fires `OnValueChanged` on the **first-ever** value and after that **only on an
-//! actual change** ([`SliderState::store_value`] — the client's `+0x314` bit2, `SetValue
-//! 0x789930`'s `0x789a06 test bl,4` gate). The change-gate is load-bearing, not an optimization:
-//! the real scrollbar template wires `OnValueChanged →
-//! this:GetParent():SetVerticalScroll(arg1)` and the ScrollFrame's `OnVerticalScroll →
-//! scrollbar:SetValue(arg1)` back the other way, so a fire-always `SetValue` would recurse
-//! forever (`UIPanelTemplates.xml`); the gate breaks the loop after one hop. `SetMinMaxValues`
-//! re-clamps through the same gate only once a value exists, so a range set from `<OnLoad>` never
-//! runs a handler the addon has not armed yet.
-//!
-//! The methods live in their own registry table, consulted by the frame `__index` dispatcher only
-//! for Slider frames — so duck-typing addons (`if frame:GetThumbTexture() then …`) see `nil` on
-//! every other kind, exactly as against the client's per-class method sets.
+//! The `Slider` methods of `CSimpleSlider` (factory `0x6eee40`, `Slider::LoadXML` `0x789580`): a
+//! value in `[min, max]` with a step and an orientation (`0x811b00`), driving a thumb texture along
+//! the track, whose placement follows the documented widget model, untraced in the reference.
+//! `SetValue` fires `OnValueChanged` (slot `+0x330`) on the first value and then only on a change
+//! (`+0x314` bit 2, `0x789a06` in `SetValue` `0x789930`), which ends the loop between the stock
+//! scrollbar's `OnValueChanged` and its ScrollFrame's `OnVerticalScroll`. The methods exist only on
+//! Slider frames, as in the client's per-class method sets.
 
 use mlua::{Lua, Table, Value};
 
@@ -36,12 +18,10 @@ use crate::widget::{
     slider_fraction, slider_grab, FrameHandle, KindState, RegionKind, SliderState,
 };
 
-/// Registry key of the Slider method table (the MAXCSTACK discipline: Lua-side root, named key).
 pub(super) const REG_SLIDER_METHODS: &str = "__benilla_slider_methods";
 
-/// Run `f` over a frame's Slider state under one short write borrow. Errors if `this` is not a live
-/// Slider (unreachable through the kind dispatcher, but the method table is a plain Lua value — a
-/// caller could fish it out and misapply it).
+/// Run `f` over a frame's Slider state under one short write borrow; errors unless `this` is a live
+/// Slider, since a caller can lift the method table onto another frame.
 fn with_slider<T>(
     lua: &Lua,
     this: &Table,
@@ -59,10 +39,8 @@ fn with_slider<T>(
     }
 }
 
-/// Get-or-create the thumb texture region (`SetThumbTexture`/`<ThumbTexture>`); `layer` re-layers an
-/// existing thumb. Returns the region's id (for wrapper lookup). The widget default layer is OVERLAY
-/// (`Slider::LoadXML 0x789580` — the Slider's `drawLayer` attr defaults OVERLAY=3, unlike
-/// StatusBar's ARTWORK bar).
+/// Get or create the thumb texture region and return its id; `layer` re-layers an existing thumb,
+/// and a new one defaults to OVERLAY (`0x789580`).
 fn ensure_thumb(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Result<u32> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -95,7 +73,7 @@ fn ensure_thumb(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Resu
                 )
                 .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
             model.region_data.insert(rh, RegionData::default());
-            model.touch_layout(); // a region entered the layout gate's read set (decision 0740)
+            model.touch_layout(); // a region entered the layout gate's read set
             if let Some(frame) = model.arena.frame_mut(h) {
                 if let KindState::Slider(s) = &mut frame.kind_state {
                     s.thumb = Some(rh);
@@ -113,11 +91,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetMinMaxValues",
         lua.create_function(|lua, (this, min, max): (Table, f32, f32)| {
-            // Unlike StatusBar, a reversed pair is NOT swapped (the Slider LoadXML `0x789580`
-            // stores min + (max−min) and does no swap). A held value re-clamps into the new
-            // range and a move fires OnValueChanged — but only once a value EXISTS
-            // (`SliderState::set_min_max`, the client's bit2): on a fresh slider this sets the
-            // range and fires nothing.
+            // A reversed pair is kept, not swapped (`0x789580`). A held value re-clamps and fires
+            // on a move; a fresh slider with no value yet fires nothing (bit 2).
             let changed = with_slider(lua, &this, |s| s.set_min_max(min, max))?;
             fire_value_changed(lua, &this, changed)
         })?,
@@ -139,9 +114,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetValueStep",
-        // Not a field write (2143): past the step store it re-pushes the range through
-        // `SetMinMaxValues`, which re-clamps and re-quantises the held value onto the new lattice
-        // and fires `OnValueChanged` if it moved — so this binding fires like the other two.
+        // Stores the step, then re-pushes the range as `SetMinMaxValues` does, so a held value
+        // moved onto the new step fires `OnValueChanged`.
         lua.create_function(|lua, (this, step): (Table, f32)| {
             let changed = with_slider(lua, &this, |s| s.set_value_step(step))?;
             fire_value_changed(lua, &this, changed)
@@ -174,27 +148,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `Enable`/`Disable`/`IsEnabled` WERE here and are GONE, with the `enabled` state they drove.
-    // **A 1.12 Slider has no enabled state at all**: the three names are registered once each, in
-    // the BUTTON table `0x879d00` (`0x77fef0`/`0x77ffd0`/`0x7800b0`), and the Slider's own LoadXML
-    // `0x789580` takes `drawLayer`/`minValue`/`maxValue`/`valueStep`/`defaultValue`/`orientation`
-    // and nothing else — so there was no way in
-    // from Lua *or* from XML, and the flag could only ever read `true`.
-    //
-    // They were a superset in PRESENCE, which is what 1189 records the cost of: a duck-typing addon
-    // that branches on `if widget.IsEnabled then` reads a Slider as a Button. Ours also answered a
-    // Lua BOOLEAN, which the reference has no query that does — `IsEnabled 0x7800b0`
-    // is number-1/number-0 and never even nil.
-    //
-    // Removed rather than corrected because nothing calls them on a Slider receiver: a
-    // receiver-typed grep over this repo, `assets/ui`, the stock FrameXML/GlueXML and both addon
-    // corpora (110 top-20 + 219 vanilla) finds zero `slider*:Enable/Disable/IsEnabled` sites.
-    // `begin_drag` below lost its `enabled` gate with them — behaviour-neutral, since no caller
-    // could clear the flag.
+    // A 1.12 Slider has no enabled state: `Enable`/`Disable`/`IsEnabled` exist only in the Button
+    // table (`0x879d00`: `0x77fef0`, `0x77ffd0`, `0x7800b0`), so a Slider must not answer them.
 
-    // SetThumbTexture(path [, drawLayer]) | SetThumbTexture(r, g, b [, a]) — the same two forms as a
-    // region's SetTexture, targeting the thumb region (created on first use). Mirrors
-    // SetStatusBarTexture; the thumb defaults to the OVERLAY layer.
+    // `SetThumbTexture(path [, layer])` or `(r, g, b [, a])`, a region's two `SetTexture` forms, on
+    // the thumb region, created on first use.
     m.set(
         "SetThumbTexture",
         lua.create_function(
@@ -215,7 +173,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         data.texture = Some(s.to_str()?.to_string());
                         data.fill = None;
                     }
-                    // A solid thumb writes the same slot the path form does — each clears the other.
+                    // A solid thumb and a path share one slot; each clears the other.
                     Value::Number(_) | Value::Integer(_) => {
                         data.texture = None;
                         data.fill = Some([
@@ -253,9 +211,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Fire `OnValueChanged(self, value)` if `changed` carries the new value (`Slider::LoadXML
-/// 0x789580`: the Slider's own script slot `+0x330`). Fired outside any model borrow; errors go
-/// to [`Model::errors`].
+/// Fire `OnValueChanged` (slot `+0x330`) when `changed` carries a new value, outside any model
+/// borrow; errors are recorded in [`Model::errors`].
 fn fire_value_changed(lua: &Lua, this: &Table, changed: Option<f32>) -> mlua::Result<()> {
     let Some(value) = changed else { return Ok(()) };
     let id = {
@@ -276,7 +233,6 @@ fn fire_value_changed(lua: &Lua, this: &Table, changed: Option<f32>) -> mlua::Re
     Ok(())
 }
 
-/// A Lua number-ish → f32 (nil/other → 0.0), for the color-form arguments.
 fn num_f32(v: &Value) -> f32 {
     match v {
         Value::Number(n) => *n as f32,
@@ -285,18 +241,11 @@ fn num_f32(v: &Value) -> f32 {
     }
 }
 
-// ── Thumb geometry + drag (decision 0250 §4/§5) ──────────────────────────────────────────────
+// ── Thumb geometry and drag ──────────────────────────────────────────────────────────────────
 
-/// A Slider's thumb rect: the thumb of size `thumb_size` placed at `fraction` along the slider `r`'s
-/// track and centered on the cross-axis. The thumb stays **inset** within the track (travel =
-/// trackLen − thumbLen), the way WoW scrollbar knobs visibly do. VERTICAL runs y-up-inverted —
-/// `fraction` 0 (value=min) sits the thumb flush at the **top** (a scrollbar at 0 is scrolled to the
-/// top), `fraction` 1 flush at the bottom. This is the single geometry source shared by `extract`
-/// (render) and [`begin_drag`] (hit-test), so render and input never disagree. Returns a [`Rect`] as
-/// `(bottom, left, top, right)`.
-///
-/// `thumb_size` is [`thumb_extent`]'s — the thumb region's OWN size getters, never its authored
-/// `<Size>` alone.
+/// The thumb's rect at `fraction` along the track, centred across it and inset so it travels
+/// `trackLen - thumbLen`; vertical puts fraction 0 at the top. Render and [`begin_drag`] both use
+/// it, so they never disagree. `thumb_size` is [`thumb_extent`]'s.
 pub(super) fn thumb_rect(r: Rect, thumb_size: (f32, f32), vertical: bool, fraction: f32) -> Rect {
     let (tw, th) = thumb_size;
     if vertical {
@@ -312,51 +261,27 @@ pub(super) fn thumb_rect(r: Rect, thumb_size: (f32, f32), vertical: bool, fracti
     }
 }
 
-/// The thumb's extent along both axes — **the thumb region's own `GetWidth`/`GetHeight`**, which
-/// is what the client asks for and is not the same thing as its authored `<Size>`.
-///
-/// `CSimpleSlider`'s pixel→value law reads the thumb through its geometry vtable
-/// (`0x789ba0`: `ff 50 1c call [eax+0x1c]` for the horizontal branch, `+0x20` for the vertical), and
-/// on a `CSimpleTexture` those slots are `0x770720`/`0x770790` — the **native-texel fallback**:
-/// authored span when it is non-zero on that axis, else the art's own texel span through the same
-/// `<AbsDimension>` converter, else `0.0` when there is no art at all (ours is
-/// [`super::region::virtual_span`]).
-///
-/// Reading `RegionData::size` instead is what broke every Lua-built slider: `SetThumbTexture(path)`
-/// authors no size, all four stock `<ThumbTexture>`s declare one, and the old fallback — *the thumb
-/// fills the track* — is not a client behaviour at all. It smeared the knob over the whole bar and
-/// left `trackLen − thumbLen == 0`, i.e. a slider that cannot move (Dewdrop-2.0's popout, B-report).
-/// A thumb with **no region at all** is `None`: `0x789ba0` gates the value math on `+0x328` being
-/// non-null, so a thumbless slider takes the press and the capture but never warps.
+/// The thumb region's own width and height, as `0x789ba0` reads them through the texture's
+/// geometry slots (`[vtable+0x1c]`/`+0x20`, `0x770720`/`0x770790`): the authored span, else the
+/// art's texel span, else 0. `None` without a thumb region: `0x789ba0` gates the value math on
+/// `+0x328`, so a thumbless slider captures a press but never moves.
 fn thumb_extent(model: &Model, thumb: Option<crate::widget::RegionHandle>) -> Option<(f32, f32)> {
     Some(super::region::virtual_span(model, thumb?))
 }
 
-/// The in-flight thumb drag: the slider being dragged + the grab offset
-/// [`slider_grab`] returned, so the thumb tracks the cursor without jumping. Engine C++-equivalent
-/// — no Lua, like the real client's scrollbar.
+/// The in-flight thumb drag and the grab offset [`slider_grab`] returned, so the thumb tracks the
+/// cursor without jumping.
 #[derive(Clone, Copy)]
 pub(crate) struct SliderDrag {
     pub(crate) slider: FrameHandle,
-    /// The grab, in **distance from the track's leading edge** — the axis-neutral frame
-    /// [`slider_grab`]/[`slider_fraction`] are stated in, so this arena's y-up rects and the glue
-    /// screens' y-down nodes run the identical arithmetic.
+    /// The grab as distance from the track's leading edge, the axis-neutral frame [`slider_grab`]
+    /// and [`slider_fraction`] share with the glue screens.
     pub(crate) grab_offset: f32,
 }
 
-/// On a LeftButton press at `(x, y)` whose hit frame is `hit`: if that frame is a Slider with a
-/// resolved rect, begin a drag capture (records [`Model::slider_drag`]). Where the press grabs is
-/// [`slider_grab`]'s to say — one law, shared with the glue lane's scrollbars, so an in-game bar
-/// and a character-screen bar cannot drift apart on feel.
-///
-/// There is no enabled gate: 1.12 gives a Slider no enabled state to gate on (see `install`'s note
-/// where `Enable`/`Disable`/`IsEnabled` used to be). A slider that should not take the press is
-/// kept off it the way the reference keeps anything off it — `EnableMouse(false)`, upstream of here
-/// in the hit test.
-///
-/// Returns `Some((frame id, new value))` when the press itself changed the value (the track jump)
-/// — the caller fires `OnValueChanged` outside the model borrow, exactly like [`drag_move`]'s
-/// changes — else `None`.
+/// On a LeftButton press on a Slider `hit`, capture a drag at the [`slider_grab`] offset, with no
+/// enabled gate since a 1.12 Slider has no enabled state. Returns `(frame id, new value)` when the
+/// press jumps the value, for the caller to fire `OnValueChanged` outside the model borrow.
 pub(super) fn begin_drag(
     model: &mut Model,
     hit: Option<FrameHandle>,
@@ -369,8 +294,8 @@ pub(super) fn begin_drag(
         Some(KindState::Slider(s)) => (s.vertical, s.fraction(), s.thumb),
         _ => return None,
     };
-    // No thumb region → `0x789ba0`'s `+0x328` gate: the press still captures (the dispatcher's
-    // `mov [ebx+0x80],esi` is unconditional), the value never moves.
+    // No thumb region: the press still captures, the dispatcher's store being unconditional, but
+    // the value never moves (`0x789ba0`, `+0x328`).
     let Some(size) = thumb_extent(model, thumb) else {
         model.slider_drag = Some(SliderDrag {
             slider: h,
@@ -380,9 +305,8 @@ pub(super) fn begin_drag(
     };
     let trect = thumb_rect(r, size, vertical, fraction);
     let on_thumb = point_in_rect(trect, x, y);
-    // Everything below is stated as distance from the TRACK'S LEADING EDGE — the end the thumb
-    // sits at when the value is `min`. Vertical tracks run downward from `r.top` in this y-up
-    // arena, so that distance is `top − y`; horizontal ones run rightward from `r.left`.
+    // Distances from the track's leading edge, where the thumb sits at `min`: `top - y` on a
+    // vertical track in this y-up arena, `x - left` on a horizontal one.
     let (cursor, thumb_lead, thumb_len) = if vertical {
         (r.top - y, r.top - trect.top, trect.top - trect.bottom)
     } else {
@@ -398,11 +322,8 @@ pub(super) fn begin_drag(
     drag_move(model, x, y)
 }
 
-/// On a pointer move at `(x, y)` while a thumb is captured: recompute the value from the cursor
-/// position via [`slider_fraction`] (absolute, drift-free — the grab offset keeps the same thumb
-/// point under the cursor) and store it. Returns `Some((frame id, new value))` if the value
-/// actually changed — the caller fires `OnValueChanged` outside the model borrow — else `None` (no
-/// capture, no travel, or no change).
+/// On a pointer move during a capture, set the value from the cursor through [`slider_fraction`];
+/// returns `(frame id, new value)` when it changed, for the caller to fire.
 pub(super) fn drag_move(model: &mut Model, x: f32, y: f32) -> Option<(u32, f32)> {
     let SliderDrag {
         slider,
@@ -414,13 +335,13 @@ pub(super) fn drag_move(model: &mut Model, x: f32, y: f32) -> Option<(u32, f32)>
         _ => return None, // slider destroyed mid-drag
     };
     let (tw, th) = thumb_extent(model, thumb)?;
-    // The same leading-edge frame [`begin_drag`] stored the grab in.
+    // The leading-edge frame `begin_drag` stored the grab in.
     let (cursor, track_extent, thumb_len) = if vertical {
         (r.top - y, r.height(), th)
     } else {
         (x - r.left, r.width(), tw)
     };
-    // `None` = nothing to scroll (a thumb as long as its track).
+    // `None` when the thumb is as long as its track.
     let fraction = slider_fraction(cursor, grab_offset, track_extent, thumb_len)?;
     let value = min + fraction * (max - min);
     let changed = match model.arena.frame_mut(slider).map(|f| &mut f.kind_state) {

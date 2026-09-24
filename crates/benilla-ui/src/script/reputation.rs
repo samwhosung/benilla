@@ -1,74 +1,12 @@
-//! The reputation-pane bindings — the twelve `ReputationFrame` globals, driving a faithful port of
-//! the real 1.12 Reputation tab (reference FrameXML `ReputationFrame.{xml,lua}`).
-//!
-//! **The display law here is byte-pinned**, not inferred, across the client's whole reputation TU
-//! (`[0x4d5200, 0x4d6d80)`).
-//!
-//! Same split as [`super::skills`]: the app pushes a flat, unordered snapshot
-//! ([`UiScript::set_reputation`], each row already resolved from `Faction.dbc` + the player's live
-//! wire slot) and the ENGINE groups, sorts and folds. Every index the Lua API takes or returns is
-//! 1-based into the resulting visible row list.
-//!
-//! ## The tree: a header is a FLAG, the parent pointer is only the key
-//!
-//! Two separate facts, and conflating them is what this module was written wrong for once:
-//!
-//! - **A row is a header because the server said so** — flag bit `0x08`, tested as
-//!   `entry.isHeader = (flags >> 3) & 1` at `0x4d5acb`. Every emulator names that bit
-//!   `INVISIBLE_FORCED`; the binary disagrees, and the binary wins. The two readings select the
-//!   *same five factions* on 1.12's data (Alliance, Horde, Steamwheedle Cartel and the two
-//!   battleground blocs all carry it), which is exactly why the wrong one survives a screenshot.
-//! - **`Faction.dbc`'s `team` is the grouping key** — which header a row files under. An `INACTIVE`
-//!   row (flag `0x20`) is re-parented under the key `-1` instead of its own.
-//!
-//! A key whose header row is absent gets one **synthesized** (`0x4d5a70`) carrying that faction's
-//! real id, so `GetFactionInfo` names it the ordinary way. Two keys name no faction at all and take
-//! their text from global strings: `0` → `FACTION_OTHER`, `-1` → `FACTION_INACTIVE`.
-//!
-//! **A childless header is not drawn.** `GetNumFactions` (`ds:0xb73764`) is the total minus each
-//! collapsed child *and each empty header*, over an array re-sorted so `[0, visible)` is exactly the
-//! visible prefix — a flattened materialized view, not a skip.
-//!
-//! ## Ordering (the two real `qsort`s in `0x4d5c40`)
-//!
-//! Headers (`0x4d5dc0`): localized name ascending, with the two unresolved keys last and the
-//! **larger raw key first**, so `0` "Other" precedes `-1` "Inactive". Rows (`0x4d5e70`): within a
-//! header, the header row itself, then its children by localized name ascending.
-//!
-//! ## Collapse
-//!
-//! Client-side only — no opcode carries it, and it is persisted nowhere. The client's mask
-//! (`ds:0x84a0a4`) stores **expanded** bits, so `isCollapsed` is its negation. **Every rebuild
-//! resets it to all-expanded and then collapses the "Inactive" header**, which is why a fold here
-//! does not survive a push (the skills pane's `expandedMask = 0xFFFFFFFF`, one door along).
-//! `CollapseFactionHeader`/`ExpandFactionHeader` given `0` — or any non-header row — act on **every**
-//! header.
-//!
-//! ## Where the numbers come from — all of them, the app
-//!
-//! This crate is engine-free by design (roxmltree + mlua, no DBC, no wire), so every
-//! fidelity number arrives already computed, the same division [`super::skills`] draws.
-//! `crates/benilla-app/src/ui_reputation.rs` owns: the race/class slot pick that gates membership,
-//! adding `Faction.dbc`'s base to the wire standing (`wire + base` at `0x4d6370`), ranking the
-//! total, and the rank's absolute window (`.rdata 0x80928c` — the same nine edges
-//! `benilla_formats::reputation_rank` thresholds against).
-//!
-//! `standing_id` is `rank + 1`, 1..=8 (`FACTION_STANDING_LABEL<n>`, `FACTION_BAR_COLORS[1..8]`).
-//! `barMin`/`barMax`/`barValue` are **absolute**; the reference normalizes them itself (ref l.80-82).
-//! `GetWatchedFactionInfo`'s `reaction` is that **same** 1..8 scale (`0x4d68a0` is `0x4d658a`'s
-//! instruction), not the three-way unit-reaction one.
-//!
-//! ## The three sends, and which are optimistic
-//!
-//! `FactionToggleAtWar` (`0x4d6950` → `CMSG 0x125`) and `SetFactionInactive`/`SetFactionActive`
-//! (`0x4d69b0`/`0x4d6a00` → `CMSG 0x317`) write the local flag **first** and then send; the inactive
-//! pair also re-sorts locally, since the row changes header. `SetWatchedFactionIndex` (`0x4d6b60` →
-//! `CMSG 0x318`) is **not** optimistic: the watched slot is `PLAYER_FIELD_WATCHED_FACTION_INDEX`, a
-//! server field with no client mirror, so the bar moves only once the descriptor update lands.
-//!
-//! The at-war *toggle* enforces more than `canToggleAtWar` reports (`0x4d5fd0`): it also refuses
-//! while the player is in combat, and applies the −3000 floor only when moving toward peace. Only
-//! the reported predicate lives here; the combat half needs state this crate cannot see.
+//! The reputation pane's twelve `ReputationFrame` globals: the app pushes a flat snapshot, and
+//! the engine groups, sorts and folds it as the reference does (`[0x4d5200, 0x4d6d80)`); every
+//! index the API takes or returns is 1-based into the visible rows. A row is a header by flag
+//! `0x08` (`0x4d5acb`), which emulators name `INVISIBLE_FORCED`, and files under its
+//! `Faction.dbc` `team`, or under `-1` while inactive (flag `0x20`); key `0` reads `FACTION_OTHER`
+//! and `-1` `FACTION_INACTIVE`. A childless header is not a row (`GetNumFactions`, `0xb73764`).
+//! Headers sort by name with the synthetic keys last, `0` first (`0x4d5dc0`); children sort by
+//! name (`0x4d5e70`). The at-war toggle also refuses in combat and applies the -3000 floor only
+//! toward peace (`0x4d5fd0`); only `canToggleAtWar`, what the pane reports, lives here.
 
 use std::collections::HashMap;
 
@@ -78,55 +16,51 @@ use super::Model;
 
 /// The synthetic header key for factions the player moved to the inactive bucket.
 const KEY_INACTIVE: i64 = -1;
-/// The synthetic header key for factions with no parent — the "Other" bucket.
+/// The synthetic header key for factions with no parent, the "Other" bucket.
 const KEY_OTHER: i64 = 0;
 
-/// One reputation faction, app-resolved from `Faction.dbc` plus the player's live wire slot.
-/// EXACT shape the app feed (`crates/benilla-app/src/ui_reputation.rs`) is written against — do not
-/// rename.
+/// One reputation faction, resolved app-side from `Faction.dbc` and the player's wire slot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FactionEntry {
-    /// `Faction.dbc` id — the row's identity, and what a child's [`Self::parent_id`] names.
+    /// `Faction.dbc` id: the row's identity, and what a child's [`Self::parent_id`] names.
     pub faction_id: u32,
-    /// `reputationIndex` — the slot every send addresses and the selection is held by.
+    /// `reputationIndex`: the slot every send addresses and the selection is held by.
     pub rep_list_id: u32,
-    /// `Faction.dbc`'s `team`: the header key this row files under, `0` being the "Other" bucket.
-    /// Overridden to the "Inactive" bucket while [`Self::inactive`] is set.
+    /// `Faction.dbc`'s `team`: the header key this row files under, `0` the "Other" bucket, and
+    /// "Inactive" instead while [`Self::inactive`] is set.
     pub parent_id: u32,
-    /// The localized `Faction.dbc` name — the bar's left-hand label, or a header's text.
+    /// The localized name: the bar's label, or a header's text.
     pub name: String,
-    /// The localized `Faction.dbc` description — the detail popup's paragraph. Often empty.
+    /// The localized description, for the detail popup; often empty.
     pub description: String,
-    /// Total standing: the DBC race/class base plus the wire standing (the app adds them) —
-    /// `GetFactionInfo`'s `barValue`, absolute.
+    /// The DBC race/class base plus the wire standing (`0x4d6370`): `barValue`, absolute.
     pub standing: i32,
-    /// The 1-based standing rank, `1`..=`8` (`FACTION_STANDING_LABEL<n>`), app-ranked.
+    /// The rank, 1..=8 (`FACTION_STANDING_LABEL<n>`); `GetWatchedFactionInfo`'s `reaction` is this
+    /// same scale (`0x4d68a0`), not the unit-reaction one.
     pub standing_id: u8,
-    /// The rank's absolute floor and ceiling — `GetFactionInfo`'s `barMin`/`barMax`.
+    /// The rank's absolute bounds (`.rdata 0x80928c`), `barMin`/`barMax`; the stock pane
+    /// normalizes them itself (`ReputationFrame.lua:80-82`).
     pub bar_min: i32,
     pub bar_max: i32,
-    /// Flag `0x01` — whether the pane lists this faction at all. The **only** flag gating list
-    /// membership; off until the player first meets them.
+    /// Flag `0x01`, the only flag gating list membership: off until the player meets the faction.
     pub visible: bool,
-    /// Flag `0x08` — **this row is a header**, not "force-invisible" (see the module doc).
+    /// Flag `0x08`: this row is a header.
     pub is_header: bool,
-    /// Flag `0x02`. **Engine-mutable**: the toggle flips it here, optimistically, unacked.
+    /// Flag `0x02`; the toggle flips it here, unacked.
     pub at_war: bool,
-    /// Flag `0x10` clear **and** `standing >= -3000` — what `GetFactionInfo` reports. The toggle
-    /// itself is stricter; see the module doc.
+    /// Flag `0x10` clear and `standing >= -3000`: what `GetFactionInfo` reports.
     pub can_toggle_at_war: bool,
-    /// Flag `0x20`. **Engine-mutable**, same reason as [`Self::at_war`]; it re-parents the row under
-    /// the "Inactive" header rather than hiding it.
+    /// Flag `0x20`; flipped here like [`Self::at_war`], it moves the row under "Inactive" rather
+    /// than hiding it.
     pub inactive: bool,
 }
 
-/// A flat, unordered push of every reputation faction the player has a slot for — the ENGINE groups
-/// and sorts (see the module doc). EXACT shape the app feed is written against.
+/// A flat, unordered push of every faction the player has a slot for; the engine groups and sorts.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ReputationState {
     pub entries: Vec<FactionEntry>,
-    /// `PLAYER_FIELD_WATCHED_FACTION_INDEX` as a reputation-list slot, or `None` for none. A server
-    /// field with no client mirror, so it rides the push and is never written here.
+    /// `PLAYER_FIELD_WATCHED_FACTION_INDEX` as a slot, `None` for none: a server field with no
+    /// client mirror, never written here.
     pub watched: Option<u32>,
 }
 
@@ -137,25 +71,24 @@ pub enum ReputationSend {
     AtWar { rep_list_id: u32, at_war: bool },
     /// `CMSG_SET_FACTION_INACTIVE`.
     Inactive { rep_list_id: u32, inactive: bool },
-    /// `CMSG_SET_WATCHED_FACTION`; `None` is the wire's `-1`, NOT slot 0.
+    /// `CMSG_SET_WATCHED_FACTION`; `None` is the wire's `-1`, not slot 0.
     Watch(Option<u32>),
 }
 
-/// One header group: its key, its header text, and the positions of its children.
-/// Engine-internal; `pub(crate)` only because [`super::model::Model`] stores a `Vec` of them.
+/// One header group; `pub(crate)` only because [`super::model::Model`] stores them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FactionGroup {
-    /// The header key — a `Faction.dbc` id, or [`KEY_OTHER`] / [`KEY_INACTIVE`].
+    /// A `Faction.dbc` id, or [`KEY_OTHER`] or [`KEY_INACTIVE`].
     key: i64,
-    /// The header row's text. Empty for the two synthetic keys, whose text is resolved against the
-    /// VM's own global strings when read.
+    /// The header row's text; empty for the two synthetic keys, resolved against the VM's global
+    /// strings when read.
     name: String,
     /// Positions into [`ReputationState::entries`], sorted by [`collate`]d name.
     entries: Vec<usize>,
 }
 
-/// One visible row: a **header** (carrying its group index) or a faction **bar** (carrying its
-/// position into [`ReputationState::entries`]).
+/// One visible row: a header (its group index) or a faction bar (its position in
+/// [`ReputationState::entries`]).
 #[derive(Clone, Copy)]
 enum Row {
     Header(usize),
@@ -163,11 +96,9 @@ enum Row {
 }
 
 impl super::UiScript {
-    /// Push the player's reputation snapshot, rebuilding the display tree.
-    ///
-    /// A rebuild resets the folds to **all expanded** and then collapses the "Inactive" header — the
-    /// client's own behaviour, and the reason a fold does not survive a standing tick. The selection
-    /// is re-anchored by reputation-list slot, dropped only if that faction left the push.
+    /// Push the reputation snapshot and rebuild the tree: as in the reference, whose fold mask
+    /// (`0x84a0a4`) holds expanded bits, every header expands and then "Inactive" collapses, so a
+    /// fold does not survive a standing tick. The selection is kept by slot.
     pub fn set_reputation(&mut self, state: ReputationState) {
         let mut model = self.model_mut();
         let groups = build_groups(&state.entries);
@@ -182,13 +113,12 @@ impl super::UiScript {
         model.reputation = state;
     }
 
-    /// Drain the reputation verbs the pane queued since the last call — the app's outbound seam.
+    /// Drain the reputation verbs the pane queued since the last call.
     pub fn take_reputation_sends(&mut self) -> Vec<ReputationSend> {
         std::mem::take(&mut self.model_mut().reputation_sends)
     }
 }
 
-/// The header key a row files under: its parent, or the inactive bucket while that flag is set.
 fn header_key(e: &FactionEntry) -> i64 {
     if e.inactive {
         KEY_INACTIVE
@@ -197,8 +127,7 @@ fn header_key(e: &FactionEntry) -> i64 {
     }
 }
 
-/// The VM's own text for a synthetic header key, so a localized client gets its own word. Falls back
-/// to the enUS literals when the strings are absent (a bare test VM).
+/// The VM's text for a synthetic header key; the enUS literal in a bare test VM.
 fn synthetic_header(lua: &Lua, key: i64) -> String {
     let (global, fallback) = if key == KEY_INACTIVE {
         ("FACTION_INACTIVE", "Inactive")
@@ -210,16 +139,14 @@ fn synthetic_header(lua: &Lua, key: i64) -> String {
         .unwrap_or_else(|_| fallback.into())
 }
 
-/// Case-insensitive name ordering, raw bytes breaking a tie — the client's own `stricmp`.
-/// Per-module copy, as every seam module here keeps one.
+/// Case-insensitive name order, raw bytes breaking a tie: the client's `stricmp`.
 fn collate(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase()
         .cmp(&b.to_lowercase())
         .then_with(|| a.as_bytes().cmp(b.as_bytes()))
 }
 
-/// Era booleans: `1` / `nil`, never `0` — `0` is truthy in Lua and every ref branch here is a bare
-/// `if ( atWarWith )`. Per-module copy, as every seam module here keeps one.
+/// `1` or nil, never `0`: `0` is truthy in Lua, and the stock pane tests `if ( atWarWith )`.
 fn era_bool(b: bool) -> Value {
     if b {
         Value::Integer(1)
@@ -228,15 +155,9 @@ fn era_bool(b: bool) -> Value {
     }
 }
 
-/// Build the header groups (the module doc's law).
-///
-/// Children are the **visible, non-header** rows, grouped by [`header_key`] and sorted by collated
-/// name. A group's text comes from the header ROW carrying that key when there is one, and is left
-/// empty for the two synthetic keys, resolved against the VM's global strings at read time.
-/// **A childless header is not a group at all** — the client's own count drops it.
-///
-/// Group order: named headers by collated name ascending, then the synthetic keys last with the
-/// larger raw key first, so "Other" (`0`) precedes "Inactive" (`-1`).
+/// Build the header groups: the visible non-header rows by [`header_key`], sorted by name. A group
+/// is named by its pushed header row (the reference synthesizes a missing one, `0x4d5a70`), or left
+/// empty for a synthetic key; a childless header is no group, as the client's count drops it.
 fn build_groups(entries: &[FactionEntry]) -> Vec<FactionGroup> {
     let name_of: HashMap<i64, &str> = entries
         .iter()
@@ -275,7 +196,6 @@ fn build_groups(entries: &[FactionEntry]) -> Vec<FactionGroup> {
     groups
 }
 
-/// The visible row list: every group's header, plus the children of the expanded ones.
 fn rows(model: &Model) -> Vec<Row> {
     let mut out = Vec::new();
     for (gi, g) in model.reputation_groups.iter().enumerate() {
@@ -293,7 +213,6 @@ fn num_rows(model: &Model) -> usize {
     rows(model).len()
 }
 
-/// The entry at a 1-based visible index, or `None` on a header or out of range.
 fn entry_at(model: &Model, index: usize) -> Option<&FactionEntry> {
     match rows(model).get(index.checked_sub(1)?)? {
         Row::Entry(ei) => model.reputation.entries.get(*ei),
@@ -301,7 +220,6 @@ fn entry_at(model: &Model, index: usize) -> Option<&FactionEntry> {
     }
 }
 
-/// The mutable twin of [`entry_at`] — the at-war/inactive flips write through it.
 fn entry_at_mut(model: &mut Model, index: usize) -> Option<&mut FactionEntry> {
     let row = *rows(model).get(index.checked_sub(1)?)?;
     match row {
@@ -310,9 +228,8 @@ fn entry_at_mut(model: &mut Model, index: usize) -> Option<&mut FactionEntry> {
     }
 }
 
-/// Fold or unfold by 1-based visible index. Index `0` — **or any index that is not a header** — acts
-/// on every header, which is the client's own fall-through (`0x4d6a50`/`0x4d6aa0`), not a tolerance
-/// invented here.
+/// Fold or unfold by 1-based visible index; `0` or any non-header index acts on every header, the
+/// reference's own fall-through (`0x4d6a50`, `0x4d6aa0`).
 fn set_collapsed(model: &mut Model, index: usize, collapse: bool) {
     let one = index
         .checked_sub(1)
@@ -334,10 +251,8 @@ fn set_collapsed(model: &mut Model, index: usize, collapse: bool) {
     }
 }
 
-/// `GetFactionInfo`'s out-of-range answer — **eleven values, not one nil** (`0x4d5fa0`'s miss path):
-/// `nil, nil, 1, 0, 0, 0, nil, nil, nil, nil, nil`. The `1` in the `standingID` slot is the
-/// client's, and it is load-bearing: the reference indexes `FACTION_BAR_COLORS[standingID]`
-/// unguarded, so a `nil` there would be an error rather than a blank row.
+/// `GetFactionInfo`'s miss (`0x4d5fa0`): eleven values, standingID 1, which the stock pane indexes
+/// `FACTION_BAR_COLORS` with unguarded.
 fn unknown_faction() -> MultiValue {
     let mut out = vec![Value::Nil, Value::Nil, Value::Integer(1)];
     out.extend(std::iter::repeat_n(Value::Integer(0), 3));
@@ -346,7 +261,6 @@ fn unknown_faction() -> MultiValue {
     MultiValue::from_vec(out)
 }
 
-/// Register the reputation-pane globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -359,9 +273,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetFactionInfo(index) → the ref's own eleven (ref-ReputationFrame.lua l.51):
-    // name, description, standingID, barMin, barMax, barValue, atWarWith, canToggleAtWar,
-    // isHeader, isCollapsed, isWatched. 1-based; ELEVEN wide on every path, a miss included.
+    // GetFactionInfo(index) → the stock pane's eleven (`ReputationFrame.lua:51`): name,
+    // description, standingID, barMin, barMax, barValue, atWarWith, canToggleAtWar, isHeader,
+    // isCollapsed, isWatched; eleven wide on every path, a miss included.
     g.set(
         "GetFactionInfo",
         lua.create_function(|lua, index: usize| {
@@ -415,8 +329,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSelectedFaction() → the selected row's VISIBLE index, or 0 for none (the ref compares
-    // against 0 outright). The selection is HELD by slot, so this re-finds the row each call.
+    // GetSelectedFaction() → the selected row's visible index, or 0 for none, as
+    // `ReputationFrame.lua:146` tests; re-found each call, since the selection is held by slot.
     g.set(
         "GetSelectedFaction",
         lua.create_function(|lua, ()| {
@@ -432,7 +346,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetSelectedFaction(index) — a VISIBLE index; a header or an out-of-range index clears it.
+    // SetSelectedFaction(index): a visible index; a header or an out-of-range index clears it.
     g.set(
         "SetSelectedFaction",
         lua.create_function(|lua, index: usize| {
@@ -442,16 +356,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CollapseFactionHeader(index) / ExpandFactionHeader(index) — a VISIBLE header index; `0` or a
-    // non-header row acts on EVERY header (the client's own fall-through).
-    // **Both fire `UPDATE_FACTION`, and that is the engine's own doing, not a convenience.**
-    // `CollapseFactionHeader 0x4d6a50` and `ExpandFactionHeader 0x4d6aa0` both reach `0x4d6400`,
-    // which tail-jumps to `0x4d5c40` — and `0x4d5dab`, inside that function, is one of the FOUR
-    // whole-image fire sites of `UPDATE_FACTION`. The stock pane has no other repaint path after a
-    // fold: its header `<OnClick>`
-    // calls the binding and nothing else (ReputationFrame.xml:9-15), and `ReputationFrame_OnEvent`
-    // repaints on `UPDATE_FACTION` alone. Our own retired file repainted itself, which is why this
-    // was invisible until the pane went stock (1875).
+    // CollapseFactionHeader(index) / ExpandFactionHeader(index): a visible header index. Both fire
+    // `UPDATE_FACTION`, as the reference's do (`0x4d6a50`, `0x4d6aa0` → `0x4d6400` → `0x4d5c40`,
+    // fire site `0x4d5dab`): the stock header's `OnClick` only calls the binding
+    // (`ReputationFrame.xml:9-15`), and the pane repaints on `UPDATE_FACTION` alone.
     g.set(
         "CollapseFactionHeader",
         lua.create_function(|lua, index: usize| {
@@ -475,8 +383,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // FactionToggleAtWar(index) — flip our own AT_WAR bit and queue the send, optimistically
-    // (`0x4d6950` writes locally first, and nothing acks it).
+    // FactionToggleAtWar(index): flip the at-war bit and queue the send; `0x4d6950` writes locally
+    // first, and nothing acks it.
     g.set(
         "FactionToggleAtWar",
         lua.create_function(|lua, index: usize| {
@@ -497,10 +405,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // IsFactionInactive(index) / SetFactionInactive(index) / SetFactionActive(index) — optimistic
-    // too, and the flip RE-PARENTS the row under the "Inactive" header, so the tree is rebuilt
-    // locally (`0x4d69b0`'s own `0x4d5c40` call). The folds are kept across that regroup: it is not
-    // a server rebuild, which is the thing that resets them.
+    // IsFactionInactive / SetFactionInactive / SetFactionActive (`0x4d69b0`, `0x4d6a00`): the flip
+    // is local first too, and moves the row under "Inactive", so the tree regroups here
+    // (`0x4d69b0` calls `0x4d5c40`); the folds survive, as only a server rebuild resets them.
     g.set(
         "IsFactionInactive",
         lua.create_function(|lua, index: usize| {
@@ -531,8 +438,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // GetWatchedFactionInfo() → name, reaction, min, max, value — or a single nil when nothing is
-    // watched (the ref's `if ( name )` gate). `reaction` is the SAME 1-based standingID scale.
+    // GetWatchedFactionInfo() → name, reaction, min, max, value; `reaction` is the standingID
+    // scale, and a nil name is `ReputationFrame.lua:167`'s nothing-watched gate.
     g.set(
         "GetWatchedFactionInfo",
         lua.create_function(|lua, ()| {
@@ -545,14 +452,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .find(|e| e.rep_list_id == slot)
             });
             let Some(e) = watched else {
-                // FIVE values on the nothing-watched branch too — `0x4d6820` has four guards onto
-                // one label and no raise, so the shape is `nil, 0, 0, 0, 0`.
-                //
-                // Worth carrying with it: the `[0, 64)` bound is **not in the binding**.
-                // `0x4d5620` maps an out-of-range index to `0`, so the "nothing watched" sentinel
-                // passes the `< 0` and `> max` guards and dies at the NULL-DBC-row guard instead.
-                // A port that range-checks inside the binding implements a branch the reference
-                // does not have.
+                // Five values here too, `nil, 0, 0, 0, 0`: `0x4d6820`'s four guards share one exit
+                // and none raises. `0x4d5620` maps the out-of-range sentinel to 0, so it is refused
+                // at the null-row guard, not by a range check.
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,
                     Value::Integer(0),
@@ -571,10 +473,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetWatchedFactionIndex(index) — a VISIBLE index, `0` meaning "stop watching". **Not
-    // optimistic** (`0x4d6b60`): the watched slot lives in PLAYER_FIELD_WATCHED_FACTION_INDEX with
-    // no client mirror, so the bar only moves once the descriptor update comes back. The `0` → `-1`
-    // translation happens at the app's wire edge, since slot 0 is a real faction.
+    // SetWatchedFactionIndex(index): a visible index, 0 to stop watching. Not local first
+    // (`0x4d6b60`): the watched slot is a server field with no client mirror, so the bar moves when
+    // the descriptor update returns. The app sends none as `-1`, since slot 0 is a real faction.
     g.set(
         "SetWatchedFactionIndex",
         lua.create_function(|lua, index: usize| {
@@ -613,9 +514,8 @@ mod tests {
         }
     }
 
-    /// A header row as the real wire delivers one: flag `0x08` set, and **not** `VISIBLE` — the
-    /// Steamwheedle Cartel's actual byte is `0x08` alone. A header is used for its name, never
-    /// drawn as a bar, so its own visibility is irrelevant and this fixture proves it.
+    /// A header row as the wire delivers one: flag `0x08` without `VISIBLE`, as the Steamwheedle
+    /// Cartel's byte is; a header is never drawn as a bar, so its own visibility is irrelevant.
     fn header(faction_id: u32, rep_list_id: u32, name: &str) -> FactionEntry {
         FactionEntry {
             visible: false,
@@ -624,10 +524,9 @@ mod tests {
         }
     }
 
-    /// Two named groups and the bucket, pushed OUT of order so the engine's own sort is what shows:
-    /// Alliance (469) over Stormwind + Ironforge, Steamwheedle (169) over Booty Bay, and two
-    /// parentless factions. Bloodsail Buccaneers is here because it really does hold slot **0** —
-    /// the value that must never be confused with "watch nothing".
+    /// Pushed out of order so the engine's sort shows: Alliance (469) over Stormwind and Ironforge,
+    /// Steamwheedle (169) over Booty Bay, and two parentless factions. Bloodsail Buccaneers holds
+    /// slot 0, which must never read as "watch nothing".
     fn state() -> ReputationState {
         ReputationState {
             entries: vec![
@@ -649,7 +548,6 @@ mod tests {
         s
     }
 
-    /// Every visible row's name, in order — the shape assertion the rest lean on.
     fn names(s: &UiScript) -> Vec<String> {
         s.eval::<Vec<String>>(
             "local t = {} for i = 1, GetNumFactions() do t[i] = (GetFactionInfo(i)) end return t",
@@ -657,12 +555,8 @@ mod tests {
         .expect("names")
     }
 
-    /// **The tree.** Headers are the rows the server FLAGGED as headers (`0x08`), grouped by the
-    /// children's `team`; a header is never also a bar; groups and children sort by name; and the
-    /// parentless bucket comes last under `FACTION_OTHER`.
-    ///
-    /// The fixture's headers are pushed WITHOUT the visible flag, which is what the real wire
-    /// sends — so this also pins that a header's own visibility does not gate its group.
+    /// The fixture's headers lack the visible flag, as on the wire, so this also pins that a
+    /// header's own visibility does not gate its group.
     #[test]
     fn the_header_flag_builds_the_tree_and_other_comes_last() {
         let s = seated();
@@ -692,8 +586,6 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
-    /// **A childless header is not a row at all** — the client's own count drops it, so a header
-    /// whose children are all unmet must not leave an empty group behind.
     #[test]
     fn a_header_with_no_visible_children_is_dropped() {
         let mut s = UiScript::new().expect("VM");
@@ -714,9 +606,6 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
-    /// **`GetFactionInfo`'s eleven, on a bar** — and eleven on a MISS too, which is the client's own
-    /// shape (`nil, nil, 1, 0, 0, 0, nil×5`). The `1` matters: the reference indexes
-    /// `FACTION_BAR_COLORS[standingID]` unguarded, so a nil there would raise rather than blank.
     #[test]
     fn a_bar_row_returns_the_references_eleven_and_so_does_a_miss() {
         let s = seated();
@@ -755,8 +644,6 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
-    /// **Folding hides a group's children and shrinks the count**, and index `0` (or any non-header
-    /// row) acts on EVERY header — the client's own fall-through, not a tolerance invented here.
     #[test]
     fn folding_shrinks_the_list_and_index_zero_folds_everything() {
         let s = seated();
@@ -781,14 +668,14 @@ mod tests {
         s.run("ExpandFactionHeader(1)").unwrap();
         assert_eq!(names(&s).len(), 8, "expanded again");
 
-        // A BAR row is not a header, so it takes the same fall-through: index 2 is Ironforge.
+        // A bar row is not a header, so it takes the same fall-through: index 2 is Ironforge.
         s.run("CollapseFactionHeader(2)").unwrap();
         assert_eq!(
             names(&s),
             ["Alliance", "Steamwheedle Cartel", "Other"],
             "a non-header index folds every header"
         );
-        // …and so does index 0, and so does an index off the end of the list.
+        // So do index 0 and an index past the end.
         s.run("ExpandFactionHeader(0)").unwrap();
         assert_eq!(names(&s).len(), 8, "index 0 unfolds every header");
         s.run("CollapseFactionHeader(99)").unwrap();
@@ -796,8 +683,6 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
-    /// **A push RESETS the folds** — all expanded, then "Inactive" collapsed. The client rebuilds
-    /// its expand mask on every server refresh, so a fold cannot survive a standing tick.
     #[test]
     fn a_push_resets_the_folds() {
         let mut s = seated();
@@ -810,8 +695,6 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
-    /// **Inactive re-parents a row under the synthetic "Inactive" header, which starts collapsed.**
-    /// It does not hide the faction, and it does not touch the bucket the row came from.
     #[test]
     fn an_inactive_faction_moves_under_the_inactive_header() {
         let mut s = UiScript::new().expect("VM");
@@ -838,8 +721,6 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
-    /// **Selection is held by reputation slot, not by row.** `GetSelectedFaction` answers `0` for
-    /// none — what the ref's own teardown compares against — and re-finds the row after a reorder.
     #[test]
     fn selection_follows_the_faction_not_the_row_index() {
         let mut s = seated();
@@ -851,7 +732,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetSelectedFaction()").unwrap(), 0);
         s.run("ExpandFactionHeader(1)").unwrap();
         assert_eq!(s.eval::<i64>("return GetSelectedFaction()").unwrap(), 3);
-        // Selecting a HEADER clears the selection rather than selecting the group.
+        // Selecting a header clears the selection rather than selecting the group.
         s.run("SetSelectedFaction(1)").unwrap();
         assert_eq!(s.eval::<i64>("return GetSelectedFaction()").unwrap(), 0);
         // A push that drops the faction entirely drops the selection with it.
@@ -863,9 +744,8 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
-    /// **The two unacked toggles flip locally and queue their sends**; a peace-forced faction
-    /// refuses (the ref disables the box, but an addon can still call the global), and going
-    /// inactive re-groups on the spot without waiting for a server rebuild.
+    /// A peace-forced faction refuses: the stock pane disables the box, but an addon can still call
+    /// the global.
     #[test]
     fn the_war_and_inactive_toggles_flip_locally_and_queue_their_sends() {
         let mut s = seated();
@@ -910,10 +790,6 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
-    /// **The watch bar's five, the `0` that means "nothing", and the fact that watching is NOT
-    /// optimistic.** The watched slot is a server field with no client mirror, so the pane shows a
-    /// new bar only after the descriptor update comes back as a fresh push — clicking alone must
-    /// change nothing on screen.
     #[test]
     fn watching_queues_a_send_but_does_not_move_the_bar_itself() {
         let mut s = seated();
@@ -933,7 +809,7 @@ mod tests {
         );
         assert_eq!(s.take_reputation_sends(), [ReputationSend::Watch(Some(19))]);
 
-        // The descriptor update arrives as the next push, and NOW the bar reads.
+        // The descriptor update arrives as the next push, and now the bar reads.
         let mut watched = state();
         watched.watched = Some(19);
         s.set_reputation(watched);
@@ -949,7 +825,7 @@ mod tests {
             "and the row reports itself watched"
         );
 
-        // Watching the row that IS slot 0, then clearing — the two must not collapse together.
+        // Watching slot 0, then clearing: the two must stay distinct.
         s.run("SetWatchedFactionIndex(8)").unwrap(); // Bloodsail Buccaneers, rep slot 0
         assert_eq!(s.take_reputation_sends(), [ReputationSend::Watch(Some(0))]);
         s.run("SetWatchedFactionIndex(0)").unwrap();

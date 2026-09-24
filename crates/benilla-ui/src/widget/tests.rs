@@ -1,8 +1,4 @@
-//! Rust-driven tests of [`super::WidgetArena`]'s propagation mutators: effective visibility,
-//! strata subtree-force, level delta-shift, scale propagation, reparenting, the named registry, and
-//! the byte-verified alpha overwrite-cascade. Split out alongside the propagation mutators purely
-//! for size — the tests exercise both `super` (create/destroy) and `super::propagation` (the
-//! mutators) through the one public `WidgetArena` surface.
+//! Tests of [`super::WidgetArena`]'s mutators and registries.
 
 use super::*;
 
@@ -22,7 +18,6 @@ fn hide_show_toggles_effective_visibility_and_reports_changes() {
     assert_eq!(changed, vec![root]);
     assert!(!a.frame(root).unwrap().effective_visible);
 
-    // Hiding again is a no-op (already hidden).
     assert!(a.set_shown(root, false).is_empty());
 
     let changed = a.set_shown(root, true);
@@ -38,7 +33,6 @@ fn mid_tree_hide_blocks_a_shown_grandchild() {
     let grand = a.create(FrameKind::Frame, None, Some(child));
     assert!(a.frame(grand).unwrap().effective_visible);
 
-    // Hide the middle frame: child + grand lose effective visibility, though both are `shown`.
     let changed = a.set_shown(child, false);
     assert_eq!(changed, vec![child, grand]); // pre-order
     assert!(a.frame(root).unwrap().effective_visible);
@@ -49,7 +43,6 @@ fn mid_tree_hide_blocks_a_shown_grandchild() {
         "grandchild's own shown bit is untouched"
     );
 
-    // Re-show the middle: both come back.
     let changed = a.set_shown(child, true);
     assert_eq!(changed, vec![child, grand]);
     assert!(a.frame(grand).unwrap().effective_visible);
@@ -62,13 +55,12 @@ fn hidden_grandchild_stays_hidden_when_ancestor_reshows() {
     let child = a.create(FrameKind::Frame, None, Some(root));
     let grand = a.create(FrameKind::Frame, None, Some(child));
 
-    a.set_shown(grand, false); // grand's own shown = false
-    let changed = a.set_shown(root, false); // hide the top
-                                            // grand was already effectively invisible, so it does NOT re-report on the hide.
+    a.set_shown(grand, false);
+    let changed = a.set_shown(root, false);
+    // grand is already invisible, so the hide does not report it.
     assert_eq!(changed, vec![root, child]);
 
-    let changed = a.set_shown(root, true); // re-show top
-                                           // child comes back; grand stays hidden (its own shown is false).
+    let changed = a.set_shown(root, true);
     assert_eq!(changed, vec![root, child]);
     assert!(a.frame(child).unwrap().effective_visible);
     assert!(!a.frame(grand).unwrap().effective_visible);
@@ -97,13 +89,11 @@ fn set_level_delta_shifts_same_strata_children_only() {
     let root = a.create(FrameKind::Frame, None, None);
     let same = a.create(FrameKind::Frame, None, Some(root));
     let cross = a.create(FrameKind::Frame, None, Some(root));
-    // root level 0; give the children distinct levels to prove the *delta* (relative offset) is
-    // preserved, not the absolute value.
+    // Distinct child levels show the delta is kept, not the absolute level.
     a.set_frame_level(same, 5, true);
     a.set_frame_level(cross, 2, true);
-    a.set_frame_strata(cross, Strata::High); // move `cross` to another strata
+    a.set_frame_strata(cross, Strata::High);
 
-    // Raise root by +10 with propagation.
     a.set_frame_level(root, 10, true);
     assert_eq!(a.frame(root).unwrap().level, 10);
     assert_eq!(
@@ -124,8 +114,8 @@ fn level_shift_saturates_at_zero() {
     let root = a.create(FrameKind::Frame, None, None);
     let child = a.create(FrameKind::Frame, None, Some(root));
     a.set_frame_level(root, 10, true);
-    a.set_frame_level(child, 12, true); // child two above root
-                                        // Drop root to 0 (delta -10): child would be 2.
+    a.set_frame_level(child, 12, true);
+    // Root drops by 10, taking the child from 12 to 2.
     a.set_frame_level(root, 0, true);
     assert_eq!(a.frame(child).unwrap().level, 2);
 }
@@ -154,12 +144,10 @@ fn scale_epsilon_gate_skips_subthreshold_change() {
     let mut a = arena();
     let root = a.create(FrameKind::Frame, None, None);
     let child = a.create(FrameKind::Frame, None, Some(root));
-    // Set a marker on the child's effective scale we can detect being (not) overwritten.
     a.set_scale(child, 4.0);
     assert_eq!(a.frame(child).unwrap().effective_scale, 4.0);
 
-    // Nudge root by less than ε: effective scale of root barely moves, so the recursion into the
-    // child is pruned and the child keeps its exact prior value.
+    // A sub-ε change to the root prunes the recursion, so the child keeps its exact value.
     let tiny = 1.0 + (SCALE_EPS as f32) / 4.0;
     a.set_scale(root, tiny);
     assert_eq!(
@@ -184,7 +172,6 @@ fn reparent_reinherits_visibility_and_scale() {
     assert!(a.frame(child).unwrap().effective_visible);
     assert_eq!(a.frame(child).unwrap().effective_scale, 3.0);
 
-    // Move under the hidden parent: child loses visibility and re-inherits scale 2.0.
     let changed = a.set_parent(child, Some(hidden));
     assert_eq!(changed, vec![child]);
     assert!(!a.frame(child).unwrap().effective_visible);
@@ -201,7 +188,6 @@ fn reparent_cycle_is_rejected() {
     let mut a = arena();
     let root = a.create(FrameKind::Frame, None, None);
     let child = a.create(FrameKind::Frame, None, Some(root));
-    // Making root a child of its own child would cycle — rejected, no-op.
     let changed = a.set_parent(root, Some(child));
     assert!(changed.is_empty());
     assert_eq!(a.frame(root).unwrap().parent, None);
@@ -216,7 +202,6 @@ fn named_registry_is_non_overwriting() {
     let first = a.create(FrameKind::Frame, Some("MyFrame".into()), None);
     let second = a.create(FrameKind::Frame, Some("MyFrame".into()), None);
     assert_ne!(first, second);
-    // The first writer owns the name; the duplicate still carries its own `name` field.
     assert_eq!(a.lookup("MyFrame"), Some(first));
     assert_eq!(a.frame(second).unwrap().name.as_deref(), Some("MyFrame"));
 }
@@ -243,13 +228,12 @@ fn generational_handle_detects_reuse() {
     let mut a = arena();
     let h = a.create(FrameKind::Frame, None, None);
     a.destroy(h);
-    // A new frame may reuse the slot; the old handle must not resolve to it.
     let h2 = a.create(FrameKind::Frame, None, None);
     assert!(a.frame(h).is_none());
     assert!(a.frame(h2).is_some());
 }
 
-// ── Alpha (the byte-verified overwrite-cascade, SetAlpha 0x76a690) ───────────────────────────
+// ── Alpha ────────────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn set_alpha_overwrites_the_subtree() {
@@ -258,27 +242,23 @@ fn set_alpha_overwrites_the_subtree() {
     let child = a.create(FrameKind::Frame, None, Some(root));
     let grandchild = a.create(FrameKind::Frame, None, Some(child));
     a.set_alpha(root, 0.5);
-    // The same raw value lands on every descendant frame (a flatten, not a product).
     for h in [root, child, grandchild] {
         assert_eq!(a.frame(h).unwrap().alpha, 0.5);
         assert_eq!(a.frame(h).unwrap().effective_alpha, 0.5);
     }
-    // Last write wins: a child's own later SetAlpha diverges until the parent sets again…
+    // Last write wins: the child's own SetAlpha holds until the parent sets again.
     a.set_alpha(child, 1.0);
     assert_eq!(a.frame(root).unwrap().effective_alpha, 0.5);
     assert_eq!(a.frame(child).unwrap().effective_alpha, 1.0);
     assert_eq!(a.frame(grandchild).unwrap().effective_alpha, 1.0);
-    // …and a frame created under a dimmed parent starts at 1.0 (creation doesn't re-push).
+    // A frame created under a dimmed parent starts at 1.0.
     let late = a.create(FrameKind::Frame, None, Some(root));
     assert_eq!(a.frame(late).unwrap().effective_alpha, 1.0);
 }
 
 // ── The per-kind registries ──────────────────────────────────────────────────────────────────
 
-/// The tooltip registry is exactly the live GameTooltips — including when one dies as somebody
-/// else's child, which is the case a registry maintained only at the explicit `destroy` call site
-/// would miss. Three hot paths read it instead of scanning the resolve's roster, so
-/// a stale entry is a dangling handle in the layout pre-pass, not a cosmetic drift.
+/// Includes a tooltip destroyed as another frame's child.
 #[test]
 fn the_tooltip_registry_tracks_live_gametooltips() {
     let mut a = arena();
@@ -287,11 +267,9 @@ fn the_tooltip_registry_tracks_live_gametooltips() {
     let holder = a.create(FrameKind::Frame, None, None);
     let loose = a.create(FrameKind::GameTooltip, None, None);
     let child = a.create(FrameKind::GameTooltip, None, Some(holder));
-    // A non-tooltip kind never enters the list.
     let _plain = a.create(FrameKind::Button, None, None);
     assert_eq!(a.tooltip_kinds(), &[loose, child]);
 
-    // Destroying the PARENT takes its tooltip child with it.
     a.destroy(holder);
     assert_eq!(a.tooltip_kinds(), &[loose]);
 

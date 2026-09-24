@@ -1,12 +1,9 @@
-//! The taxi seam: the app-pushed snapshot surfaces through the Era bindings the
-//! reference `TaxiFrame.lua` reads, and the click/close intents drain back out.
+//! The taxi bindings stock `TaxiFrame.lua` reads over a pushed snapshot, and the node and close
+//! intents.
 
 use super::common::script;
 use crate::script::*;
 
-/// The full round trip: push a two-node snapshot, read it back exactly as the reference Lua does
-/// (count, type, position, name, cost, route segments), click a node + close, drain both intents,
-/// and `SetTaxiMap` paints the pushed art onto the target texture region.
 #[test]
 fn taxi_snapshot_surfaces_and_intents_drain() {
     let mut s = script();
@@ -62,7 +59,6 @@ fn taxi_snapshot_surfaces_and_intents_drain() {
     assert!(s.take_taxi_close());
     assert!(!s.take_taxi_close(), "the close flag drains");
 
-    // SetTaxiMap assigned the pushed art onto the texture region.
     s.resolve();
     assert!(
         s.extract().iter().any(|q| matches!(
@@ -72,7 +68,6 @@ fn taxi_snapshot_surfaces_and_intents_drain() {
         "the continent art draws on the SetTaxiMap target"
     );
 
-    // The ride flag reaches UnitOnTaxi.
     s.set_on_taxi(true);
     s.run(r#"assert(UnitOnTaxi("player") == 1)"#).unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

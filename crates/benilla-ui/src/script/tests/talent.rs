@@ -1,6 +1,5 @@
-//! The talent engine seam: the Era binding tuples over a pushed snapshot, the
-//! learn-click queue, and the `SetTalent` tooltip — the spell builder with the talent
-//! interleave (rank line white, req lines red, next-rank block, learn hint green).
+//! The talent bindings over a pushed snapshot, the learn queue, and `SetTalent`: the spell tooltip
+//! with the talent lines interleaved.
 
 use super::common::script;
 use crate::script::*;
@@ -62,8 +61,6 @@ fn one_tab_state() -> TalentUiState {
     }
 }
 
-/// The Era tuples read back exactly what the app pushed — including the 1-based grid seats,
-/// the flat prereq triplets, and the points pair.
 #[test]
 fn bindings_read_the_pushed_snapshot() {
     let mut s = script();
@@ -95,7 +92,6 @@ fn bindings_read_the_pushed_snapshot() {
     assert!(s.take_errors().is_empty());
 }
 
-/// LearnTalent queues (tab, index) verbatim for the app's wire drain.
 #[test]
 fn learn_talent_queues_for_the_app_drain() {
     let mut s = script();
@@ -106,9 +102,8 @@ fn learn_talent_queues_for_the_app_drain() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A stand-in string table for the talent tail's three keys — **deliberately not the shipped
-/// wording**, because what is under test is which key each line reaches and what fills it, never
-/// what the sentence says.
+/// Stand-in values for the three talent keys, not the shipped wording: the tests check which key
+/// each line reaches.
 fn seed_talent_strings(s: &mut UiScript) {
     s.run(
         r#"
@@ -120,9 +115,8 @@ fn seed_talent_strings(s: &mut UiScript) {
     .unwrap();
 }
 
-/// SetTalent = the spell builder + the talent interleave: name, TOOLTIP_TALENT_RANK white, cost
-/// line, gold description, TOOLTIP_TALENT_NEXT_RANK + the next rank's gold description, green
-/// TOOLTIP_TALENT_LEARN.
+/// `SetTalent`'s lines: name, `TOOLTIP_TALENT_RANK` (white), cost, gold description,
+/// `TOOLTIP_TALENT_NEXT_RANK` and the next rank's gold description, green `TOOLTIP_TALENT_LEARN`.
 #[test]
 fn set_talent_renders_the_interleaved_tooltip() {
     let mut s = script();
@@ -162,7 +156,6 @@ fn set_talent_renders_the_interleaved_tooltip() {
     "#,
     )
     .unwrap();
-    // The learn hint wears the tooltip green; the requirement red is exercised below.
     s.resolve();
     let quads = s.extract();
     let green = quads.iter().any(|q| {
@@ -173,14 +166,13 @@ fn set_talent_renders_the_interleaved_tooltip() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A locked talent shows its red requirement line; a missing spell view falls back to the rank
-/// line alone and records the ask for the app resolver (the shared ask-once channel).
+/// A missing spell view renders the rank line alone and asks for the view once.
 #[test]
 fn set_talent_locked_reqs_and_the_ask_once_miss() {
     let mut s = script();
     seed_talent_strings(&mut s);
     s.set_talents(one_tab_state());
-    // No spell view pushed for Ignite (11119): the render falls back, the ask is recorded.
+    // No spell view pushed for Ignite (11119).
     s.run(
         r#"
         local a = CreateFrame("Button", "TB2"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
@@ -198,7 +190,6 @@ fn set_talent_locked_reqs_and_the_ask_once_miss() {
         "the display spell was asked: {asks:?}"
     );
 
-    // With the view landed, the full render carries the red requirement line.
     s.set_spell_tooltip(
         11119,
         SpellTooltipView {

@@ -1,18 +1,7 @@
-//! The action bar (slice 4; byte-verified 0218 §2/§4): `PickupAction`/
-//! `PlaceAction` join the ONE payload space as the [`CursorAction`] arm. Two things set this
-//! surface apart from bags/doll:
-//!
-//! - **The bar is client-authoritative and actions HOP** (`PlaceAction 0x4e62e0`) — the
-//!   opposite of the post-0218 item swap: placing onto an occupied slot puts the DISPLACED action
-//!   on the cursor rather than clearing, because there is no server round-trip to wait on (the
-//!   120-slot table is ours; [`place_action`] IS the mutation, not a request for one).
-//! - **The engine owns the payload + transition, the app owns the 120-table** (0216 §7's
-//!   ownership split): `model.actions` here is the engine's own OPTIMISTIC mirror of the app's
-//!   authoritative store, kept only so `HasAction`/`GetActionTexture`/&c. read right the instant a
-//!   local pickup/place happens, without waiting a frame for the app to re-feed. Every mutation
-//!   also queues `(lua id, packed)` onto [`Model::action_sets`] — the wire intent the app drains
-//!   into `CMSG_SET_ACTION_BUTTON`, one send per queued entry (a drag-swap is two sends,
-//!   never atomic — this module never coalesces them).
+//! The action-bar cursor verbs. The bar is client-authoritative: placing onto an occupied slot
+//! hops the displaced action onto the cursor (`PlaceAction`, `0x4e62e0`). `model.actions` is an
+//! optimistic mirror of the app's table; each change queues one `CMSG_SET_ACTION_BUTTON`, so a
+//! drag-swap is two sends.
 
 use mlua::Lua;
 
@@ -21,30 +10,18 @@ use crate::script::{ActionSlot, Model};
 
 use super::{queue_cursor_update, CursorAction, CursorPayload};
 
-/// The GlobalStrings key the reference's passive-spell refusal shows — errorId `0x9e`'s entry in
-/// the errorId→key table (`0xb4b498 + 0x9e*0x14 = 0xb4c0f0` ← key ptr `0x84133c`), i.e.
-/// `ERR_PASSIVE_ABILITY` = "You can't put a passive ability in the action bar.". Queued onto
-/// `Model::ui_errors` for the app's action feed to resolve and fire.
+/// The passive-spell refusal's error, errorId `0x9e`: entry `0xb4c0f0` of the table at `0xb4b498`
+/// (stride `0x14`) names this key (`0x84133c`).
 const PASSIVE_ON_BAR_ERROR: &str = "ERR_PASSIVE_ABILITY";
 
-/// Pack `(kind, action)` into the wire's `u32` slot word (`kind<<24 | action`).
+/// The `CMSG_SET_ACTION_BUTTON` slot word.
 fn pack(kind: u8, action: u32) -> u32 {
     (u32::from(kind) << 24) | (action & 0x00FF_FFFF)
 }
 
-/// `PickupAction(id)` — the action-bar slot's shift-click/drag-start entry point (ref
-/// `ActionBarFrame.xml:12-38`'s `IsShiftKeyDown()` fork, `OnDragStart`).
-///
-/// - **A payload is already held** → falls through to [`place_action`] (the reference's own
-///   contract: a shift-click while carrying just places, `ActionButtonTemplate`'s `OnClick` never
-///   special-cases it).
-/// - **Empty cursor, an occupied slot** → picks it up: payload `Action { src_slot: id, kind,
-///   action, texture }`, the slot removed from `model.actions` (optimistic — the app re-pushes an
-///   agreeing snapshot once `action_sets` lands), and `action_sets.push((id, 0))` queued — picking
-///   an action OFF the bar empties it immediately on the wire too (the classic drag-off).
-/// - **Empty cursor, an empty slot** → no-op (nothing to pick up).
-///
-/// Returns whether the caller should repaint (mirrors the container/doll pickup contract).
+/// `PickupAction(id)`, the slot's shift-click and drag start (`ActionBarFrame.xml:12-38`). With a
+/// payload held it places instead; a pickup also clears the slot on the wire at once. Returns
+/// whether to repaint.
 pub(super) fn pickup_action(model: &mut Model, id: u32) -> bool {
     if model.cursor.is_some() {
         return place_action(model, id);
@@ -65,40 +42,14 @@ pub(super) fn pickup_action(model: &mut Model, id: u32) -> bool {
     true
 }
 
-/// `PlaceAction(id)` — the action-bar slot's click-with-payload/`OnReceiveDrag` entry point (ref
-/// `UseAction(id, checkCursor=1)`'s place fork, `ActionBarFrame.xml`'s `OnReceiveDrag`).
-///
-/// Every arm writes the held action into `model.actions[id]` optimistically and queues
-/// `action_sets.push((id, packed))`; what happens to the cursor afterward is the byte-verified
-/// divergence from every other surface: an OCCUPIED destination puts the DISPLACED
-/// action on the cursor (referencing `id` as its new `src_slot` — the slot it can now be placed
-/// FROM), an empty destination just clears.
-///
-/// - Payload **Action** → `(kind, action)` straight off the held payload.
-/// - Payload **Item** → `packed = item_id | ITEM<<24`; the item came from a BAG and STAYS there —
-///   a bar item action is a reference, not a move, so no container move is queued here (the app's
-///   `drain_action_sets` never touches `container_moves` either).
-/// - Payload **Spell** → `packed = spell_id | SPELL<<24` (the producer, `PickupSpell`, lands in
-///   slice 5 — this arm already works once something populates the payload).
-/// - **Empty cursor** → no-op.
-///
-/// Returns whether the caller should repaint.
+/// `PlaceAction(id)`, the slot's `OnReceiveDrag` and `UseAction(id, 1)`'s place fork. An occupied
+/// slot's action hops onto the cursor with `id` as its source; an item stays in its bag, since a
+/// bar item is a reference, not a move. Returns whether to repaint.
 pub(crate) fn place_action(model: &mut Model, id: u32) -> bool {
-    // The two accept filters, byte-read (`PlaceAction 0x4e62e0`). Both
-    // reject with a **bare return**: no store, no clear, no packet — mechanically identical to
-    // clicking with an empty cursor, and the refused payload STAYS on the cursor.
-    //
-    // - ITEM: placeable iff it has an on-use spell OR is equippable (`4e6571`–`4e6598`). There is
-    //   no quality, bind, class/subclass, container or level test anywhere on that path — a BAG
-    //   is placeable; a grey trade good with neither is silently refused.
-    // - SPELL: a passive (`Attributes & 0x40`) is refused (`4e63ad`), and — unlike the ITEM
-    //   refusal, which is mute — it ALSO raises errorId `0x9e` through `CGGameUI::DisplayError`
-    //   (`4e63ad: push 0x9e; call 0x496720`). That id resolves through the errorId→key table at
-    //   base `0xb4b498`, stride `0x14`: entry `0xb4b498 + 0x9e*0x14 = 0xb4c0f0`, whose static-init
-    //   `4861ff: mov [0xb4c0f0], 0x84133c` names [`PASSIVE_ON_BAR_ERROR`] — "You can't put a
-    //   passive ability in the action bar." (The same arithmetic reproduces the independently
-    //   recorded `ERR_ATTACK_MOUNTED` anchor: `0xa4` → `0xb4c168`.) Closes 0666's named
-    //   divergence, which refused silently while the key was unpinned.
+    // The two accept filters (`0x4e62e0`) refuse with a bare return: nothing stored or sent, and
+    // the payload stays held. An item needs an on-use spell or an equip slot (`0x4e6571`), so a
+    // bag is placeable; a passive spell (`Attributes & 0x40`) also raises errorId `0x9e` through
+    // `DisplayError` (`0x4e63ad`, `0x496720`), where the item refusal is mute.
     match &model.cursor {
         Some(CursorPayload::Item(i)) if !i.bar_placeable => return false,
         Some(CursorPayload::Spell(s)) if s.passive => {
@@ -114,24 +65,13 @@ pub(crate) fn place_action(model: &mut Model, id: u32) -> bool {
         CursorPayload::Action(a) => Some((a.kind, a.action, a.texture.clone())),
         CursorPayload::Item(i) => Some((ACTION_KIND_ITEM, i.item_id, i.texture.clone())),
         CursorPayload::Spell(s) => Some((ACTION_KIND_SPELL, s.spell_id, s.texture.clone())),
-        // Mode 8 — the one non-item/non-spell payload the reference's `PlaceAction` accepts
-        // (`0x4e62e0`'s accept table: pet actions and class abilities are refused,
-        // macros are not). It packs the bare macro id under the MACRO tag, exactly as the SPELL
-        // and ITEM arms pack theirs.
+        // `PlaceAction` accepts modes 1, 3, 7 and 8 (`0x4e62e0`): a macro, mode 8, packs its id
+        // under the macro tag. Pet actions (4), coins (2), stabled pets (10) and vendor rows (5)
+        // are refused and stay held.
         CursorPayload::Macro(m) => Some((ACTION_KIND_MACRO, m.index, m.texture.clone())),
-        // Mode 4 — the other half of that same table's refusal. A pet action has
-        // no `CMSG_SET_ACTION_BUTTON` encoding at all, so there is nothing to pack: the payload
-        // goes straight back on the cursor, where the pet bar can still take it.
         CursorPayload::PetAction(_) => None,
-        // Mode 10 — a stabled pet has no `CMSG_SET_ACTION_BUTTON` encoding either,
-        // so the action bar refuses it and it goes back on the cursor.
         CursorPayload::StablePet(_) => None,
-        // Mode 2 (1962) — `PlaceAction`'s table takes modes 1, 2 and 8 … where its mode 2 is the
-        // BAR-slot pickup, not coins; the money payload has no encoding and goes back.
         CursorPayload::Money(_) => None,
-        // Mode 5 — a vendor row is not a bar action. `PlaceAction`'s payload table takes modes
-        // 1, 2 and 8 only, and the merchant grab is none of them, so it goes back on the cursor
-        // where the vendor window can still take it.
         CursorPayload::Merchant(_) => None,
     };
     let Some((kind, action, texture)) = placeable else {
@@ -144,9 +84,7 @@ pub(crate) fn place_action(model: &mut Model, id: u32) -> bool {
             texture,
             kind,
             action,
-            // The engine holds no item knowledge, so neither half of the Count pair can be
-            // answered here: the app's next-frame re-feed resolves the real bag count and the
-            // `IsConsumableAction` gate together, off the item template.
+            // Count and consumable wait for the app's next-frame re-feed, which knows the item.
             count: 0,
             consumable: false,
         },
@@ -164,9 +102,7 @@ pub(crate) fn place_action(model: &mut Model, id: u32) -> bool {
     true
 }
 
-/// Register the action-bar's cursor globals — top-level, matching the reference
-/// (`PickupAction`/`PlaceAction` are not namespaced any more than `PickupContainerItem`'s cursor
-/// siblings are).
+/// Register `PickupAction` and `PlaceAction` as globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -249,9 +185,6 @@ mod tests {
         assert_eq!(s.take_action_sets(), vec![(7, 133)]);
     }
 
-    /// The byte-verified divergence from bags/doll: placing onto an OCCUPIED action
-    /// slot HOPS the displaced action onto the cursor — two `action_sets` entries across the
-    /// gesture (the pickup's clear, then the place's write), never a container move.
     #[test]
     fn place_action_onto_occupied_hops_the_displaced_action() {
         let mut s = UiScript::new().unwrap();
@@ -262,12 +195,10 @@ mod tests {
         assert_eq!(s.take_action_sets(), vec![(1, 0)]);
 
         assert!(s.eval::<bool>("return PlaceAction(2)").unwrap());
-        // Slot 2 now shows the placed action (111).
         assert_eq!(
             s.eval::<String>("return GetActionTexture(2)").unwrap(),
             "Interface\\Icons\\Spell_A"
         );
-        // The displaced action (222) is now the held payload, sourced from slot 2.
         let (kind, src) = s
             .eval::<(String, i64)>("local k, slot = GetCursorInfo() return k, slot")
             .unwrap();
@@ -282,9 +213,6 @@ mod tests {
             }))
         );
         assert_eq!(s.take_action_sets(), vec![(2, 111)]);
-
-        // A hop is Some→Some: no HIDE+SHOW churn out of one gesture.
-        // (Exercised directly by the SHOWGRID/HIDEGRID test below.)
     }
 
     #[test]
@@ -336,8 +264,6 @@ mod tests {
         assert!(s.take_action_sets().is_empty());
     }
 
-    /// Shift-click while ALREADY holding just places (the reference's own `OnClick` never
-    /// special-cases it): `PickupAction` on a held cursor routes straight to [`super::place_action`].
     #[test]
     fn pickup_action_with_a_payload_held_falls_through_to_place() {
         let mut s = UiScript::new().unwrap();
@@ -353,9 +279,6 @@ mod tests {
         assert_eq!(s.take_action_sets(), vec![(5, 111)]);
     }
 
-    /// `ACTIONBAR_SHOWGRID`/`ACTIONBAR_HIDEGRID` fire on the cursor's None↔Some edges (decision
-    /// 0216 §7) — a pickup shows the grid, a place-onto-empty hides it, and a HOP (Some→Some)
-    /// fires neither (no HIDE+SHOW churn out of one gesture).
     #[test]
     fn showgrid_hidegrid_fire_on_gain_and_loss_not_on_a_hop() {
         let mut s = UiScript::new().unwrap();
@@ -391,9 +314,6 @@ mod tests {
         assert_eq!(s.eval::<i64>("return hides").unwrap(), 1);
     }
 
-    /// `PlaceAction`'s ITEM filter: an item with neither an on-use spell nor an
-    /// equip slot — a grey trade good — is refused, and the refusal is a **bare return**: nothing
-    /// stored, nothing sent, and the payload is still on the cursor afterwards.
     #[test]
     fn a_non_usable_non_equippable_item_is_refused_and_stays_held() {
         let mut s = UiScript::new().unwrap();
@@ -423,10 +343,6 @@ mod tests {
         );
     }
 
-    /// The SPELL twin: a passive cannot go on the bar (`Attributes & 0x40`) — and unlike the item
-    /// arm this one SPEAKS, raising errorId `0x9e` = `ERR_PASSIVE_ABILITY` (see
-    /// [`super::place_action`]). The refusal and the toast are separate halves: the refusal is
-    /// still a bare return, so nothing is stored, nothing is sent, and the spell stays held.
     #[test]
     fn a_passive_spell_is_refused_with_the_refs_error_and_stays_held() {
         let mut s = UiScript::new().unwrap();
@@ -453,8 +369,6 @@ mod tests {
         );
     }
 
-    /// The other half of the same law: an ACTIVE spell places normally and raises nothing. Guards
-    /// the obvious over-correction — a toast on every spell drop.
     #[test]
     fn an_active_spell_places_without_an_error() {
         let mut s = UiScript::new().unwrap();
@@ -471,8 +385,6 @@ mod tests {
         assert!(s.take_ui_errors().is_empty());
     }
 
-    /// The positive control on the other side of both filters — a BAG (`InventoryType` 18, no
-    /// on-use spell) IS placeable, which is the one answer people find surprising.
     #[test]
     fn a_bag_is_placeable() {
         let mut s = UiScript::new().unwrap();

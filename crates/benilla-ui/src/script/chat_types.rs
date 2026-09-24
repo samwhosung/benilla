@@ -1,30 +1,6 @@
-//! The chat-type colour registry — `GetChatTypeIndex`, `ChangeChatColor`, `ResetChatColors`.
-//!
-//! The reference keeps one runtime table of chat types (`0xb4e518`, stride 0x43: a 0x40-byte
-//! name and three RGB bytes), seeded at boot from the 94-entry static table at `0x804710` and
-//! then extended with ten extras `CHANNEL1`…`CHANNEL10`, each coloured from the live `CHANNEL`
-//! entry (`0x4982c0`). The `chat-cache.txt`
-//! `COLORS` block overwrites matched entries in place at load — absent names keep the compiled
-//! defaults — and the app owns that file; here the table is state the app feeds and drains
-//! ([`super::UiScript::set_chat_colors`], [`super::UiScript::take_chat_color_changes`]).
-//!
-//! The Lua surface, from the same node:
-//!
-//! - `GetChatTypeIndex(name)` — a case-insensitive linear scan of the 94 fixed entries, **1-based**
-//!   (`4a0adf: inc ebx` before the match test); no fixed match → the extras, numbered **95, 96, …**
-//!   (`count_before_match + 0x5f`); no match at all → **0**.
-//! - `ChangeChatColor(name, r, g, b)` — `r,g,b` are 0.0–1.0 floats, each `fmul 255.0` then
-//!   `__ftol` (**truncate**, no rounding, bytes `4a085f–4a08a3`), written into the matched entry.
-//!   On success fires `UPDATE_CHAT_COLOR` with `"%s%f%f%f"`: the name and the three
-//!   **just-written bytes re-normalised** by `f32 1/255` — so an addon that passed `0.5` hears
-//!   `127/255`, not `0.5`. (The event's symbolic name is the node's one INFERRED item — it is
-//!   `0xe2` in a runtime-populated listener table; `ChatFrame.lua:1349` registers and reads it
-//!   as `UPDATE_CHAT_COLOR` with exactly those four args.)
-//! - `ResetChatColors()` — the boot seed again: the 94 defaults copied back, then every extra
-//!   recoloured from the live `CHANNEL` entry.
-//!
-//! What the line colours *mean* to a message frame is `ScrollingMessageFrame:UpdateColorByID`,
-//! which lives with the frame (`messageframe/scrolling.rs`); this file is only the registry.
+//! The chat-type colour registry behind `GetChatTypeIndex`, `ChangeChatColor` and
+//! `ResetChatColors`: the reference's runtime table (`0xb4e518`), which the `COLORS` block of
+//! `chat-cache.txt` overwrites in place at load; the app owns that file.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -32,11 +8,11 @@ use super::Model;
 
 /// The fixed segment: 94 entries, in the reference's order (index = position + 1).
 pub const FIXED_CHAT_TYPES: usize = 94;
-/// The extras seeded at boot: `CHANNEL1`…`CHANNEL10`, indices 95–104.
+/// The extras seeded at boot: `CHANNEL1` to `CHANNEL10`, indices 95 to 104.
 pub const EXTRA_CHAT_TYPES: usize = 10;
 
-/// `0x804710` — name and default RGB, verbatim. The order is load-bearing: it *is* the index
-/// `GetChatTypeIndex` answers.
+/// The reference's table at `0x804710`, verbatim; its order is the index `GetChatTypeIndex`
+/// answers.
 const DEFAULTS: [(&str, [u8; 3]); FIXED_CHAT_TYPES] = [
     ("SAY", [255, 255, 255]),
     ("PARTY", [170, 170, 255]),
@@ -134,7 +110,7 @@ const DEFAULTS: [(&str, [u8; 3]); FIXED_CHAT_TYPES] = [
     ("BATTLEGROUND_LEADER", [255, 219, 183]),
 ];
 
-/// The 1-based index of the `CHANNEL` entry — the extras' colour source at seed and reset.
+/// The 1-based index of `CHANNEL`, the extras' colour source at seed and reset.
 const CHANNEL_INDEX: usize = 15;
 
 /// One registry entry: the type's name and its live colour bytes.
@@ -144,7 +120,7 @@ pub struct ChatTypeColor {
     pub rgb: [u8; 3],
 }
 
-/// The boot seed: the 94 defaults, then `CHANNEL1`…`CHANNEL10` coloured from the live `CHANNEL`.
+/// The boot seed: the defaults, then the extras coloured from `CHANNEL` (`0x4982c0`).
 pub(super) fn seed() -> Vec<ChatTypeColor> {
     let mut table: Vec<ChatTypeColor> = DEFAULTS
         .iter()
@@ -163,7 +139,7 @@ pub(super) fn seed() -> Vec<ChatTypeColor> {
     table
 }
 
-/// `ResetChatColors`' copy loop: the fixed segment back to `0x804710`, the extras from `CHANNEL`.
+/// `ResetChatColors`: the defaults back first, then the extras from the restored `CHANNEL`.
 fn reset(table: &mut [ChatTypeColor]) {
     for (entry, (_, rgb)) in table.iter_mut().zip(DEFAULTS.iter()) {
         entry.rgb = *rgb;
@@ -174,13 +150,13 @@ fn reset(table: &mut [ChatTypeColor]) {
     }
 }
 
-/// The reference's compare (`0x64a4c0` → `0x414310`): an `'A'–'Z' + 0x20` fold, i.e. ASCII
-/// case-insensitive and nothing wider.
+/// ASCII case-insensitive and nothing wider: the reference's compare folds only `A` to `Z`
+/// (`0x64a4c0`, `0x414310`).
 fn position(table: &[ChatTypeColor], name: &str) -> Option<usize> {
     table.iter().position(|e| e.name.eq_ignore_ascii_case(name))
 }
 
-/// `fmul 255.0; __ftol` — truncation toward zero, then the low byte is what the `mov` stores.
+/// Truncates, never rounds: the reference's `fmul 255.0; __ftol` (`0x4a085f`-`0x4a08a3`).
 fn to_byte(x: f64) -> u8 {
     if !x.is_finite() {
         return 0;
@@ -188,15 +164,15 @@ fn to_byte(x: f64) -> u8 {
     ((x * 255.0).trunc() as i64) as u8
 }
 
-/// `fmul dword [0x8026c8]` — the f32 reciprocal, so the event carries `byte / 255` in single
-/// precision, widened.
+/// `UPDATE_CHAT_COLOR`'s value: the stored byte times the f32 reciprocal of 255 (`0x8026c8`), so
+/// an addon that passed `0.5` hears `127/255`.
 fn from_byte(b: u8) -> f64 {
     f64::from(b as f32 * (1.0f32 / 255.0f32))
 }
 
 impl super::UiScript {
-    /// The `COLORS` block of `chat-cache.txt`, applied the way the loader applies it: each named
-    /// entry overwritten in place, unknown names ignored, absent names left at their defaults.
+    /// Apply the `COLORS` block of `chat-cache.txt` as the loader does: matched entries
+    /// overwritten in place, unknown names ignored.
     pub fn set_chat_colors(&mut self, colors: impl IntoIterator<Item = (String, [u8; 3])>) {
         let mut model = self.model_mut();
         for (name, rgb) in colors {
@@ -211,8 +187,7 @@ impl super::UiScript {
         self.model_mut().chat_colors.clone()
     }
 
-    /// Whether a Lua-side write (`ChangeChatColor`, `ResetChatColors`) has landed since the last
-    /// drain — the app's persist cue.
+    /// Whether Lua changed a colour since the last drain, the app's cue to persist.
     pub fn take_chat_color_changes(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().chat_colors_changed)
     }
@@ -371,8 +346,7 @@ mod tests {
         let s = UiScript::new().unwrap();
         s.run("ChangeChatColor('CHANNEL', 0.0, 0.0, 0.0) ChangeChatColor('CHANNEL2', 1, 1, 1)")
             .unwrap();
-        // Reset copies the fixed defaults first, so CHANNEL is back to FFC0C0 by the time the
-        // extras are recoloured from it.
+        // The defaults come back first, so the extras take `CHANNEL`'s default, not the black.
         s.run("ResetChatColors()").unwrap();
         assert_eq!(s.chat_colors()[FIXED_CHAT_TYPES + 1].rgb, [255, 192, 192]);
     }

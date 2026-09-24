@@ -1,37 +1,26 @@
-//! The duel **Era API surface** — four globals, no state.
-//!
-//! Duels are the smallest possible shape of the [`super::party`] seam: everything the UI needs to
-//! *read* arrives as event arguments (the challenger's name on `DUEL_REQUESTED`), so there is no
-//! snapshot to push — only the outbound half. Each call queues a [`DuelRequest`] the app drains
-//! ([`UiScript::take_duel_requests`]) and turns into its send, keeping the engine free of ECS/net
-//! reach.
-//!
-//! The four are exactly the reference's own duel bindings, registered adjacent in its Lua API
-//! table (`0x849fc8`..`0x849ff0`) and each a one-liner over the same TU: `AcceptDuel` `0x4d4ce0`
-//! → `0x4d4830`, `CancelDuel` `0x4d4cf0` → `0x4d48b0`, `StartDuelUnit` `0x4d4c40` (unit token →
-//! guid, gated on typemask `0x10` = player), `StartDuel` `0x4d4c90` (name → guid). The two
-//! `StartDuel*` calls do **not** send a duel opcode — they cast the duel spell at the guid; the
-//! app owns that resolution.
+//! The four duel globals, registered together at `0x849fa8`. What the UI reads arrives as event
+//! arguments, so each call only queues a [`DuelRequest`] for the app to send. `AcceptDuel`
+//! (`0x4d4ce0`) and `CancelDuel` (`0x4d4cf0`) call `0x4d4830` and `0x4d48b0`; `StartDuel`
+//! (`0x4d4c40`) and `StartDuelUnit` (`0x4d4c90`) send no duel opcode but cast the duel spell at
+//! the guid they resolve (`0x4d4810`).
 
 use mlua::Lua;
 
 use super::Model;
 
-/// Outbound duel intents queued by the Era API calls, drained by the app
-/// ([`UiScript::take_duel_requests`]). Plain data — [`super::party::PartyRequest`]'s twin.
+/// A duel intent queued by the globals, drained by `UiScript::take_duel_requests`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DuelRequest {
-    /// `AcceptDuel()` — accept the pending challenge (`CMSG_DUEL_ACCEPTED`).
+    /// `AcceptDuel()`, the `DUEL_REQUESTED` popup's Accept: `CMSG_DUEL_ACCEPTED`.
     Accept,
-    /// `CancelDuel()` — decline, cancel, or forfeit (`CMSG_DUEL_CANCELLED`); which one it means
-    /// is the server's read of the duel state, not ours.
+    /// `CancelDuel()`: `CMSG_DUEL_CANCELLED`, which the server reads by duel state as a decline,
+    /// a cancel or a forfeit.
     Cancel,
-    /// `StartDuel(name)` — challenge a player found by name. The app resolves the name to a guid
-    /// and casts the duel spell at it; an unresolvable name is dropped (the reference errors the
-    /// Lua call instead — the deviation is noted in the app-side drain).
+    /// `StartDuel(name)`: the reference resolves the name through `0x493aa0`, players only, and
+    /// does nothing on a miss.
     StartByName(String),
-    /// `StartDuelUnit(unit)` — challenge whoever a unit token points at. The app resolves the
-    /// token to a guid and rejects a non-player (the reference's typemask `0x10` gate).
+    /// `StartDuelUnit(unit)`, the unit popup's Duel row. The app casts only at a player; the
+    /// reference resolves the token (`0x515970`) with no player gate of its own.
     StartByUnit(String),
 }
 
@@ -41,20 +30,17 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().duel_requests)
     }
 
-    /// Queue an intent from the app side — the slash commands. In the reference these ARE Lua
-    /// (`SlashCmdList["DUEL"]` calls `StartDuel`, `SlashCmdList["DUEL_CANCEL"]` calls
-    /// `CancelDuel`); benilla parses slash lines in Rust, so the same intents enter the same
-    /// queue here rather than through the globals.
+    /// Queue an intent from the app's Rust slash parser: `/duel` and `/forfeit`, which the
+    /// reference's `SlashCmdList` handlers send through `StartDuel` and `CancelDuel`.
     pub fn queue_duel_request(&mut self, request: DuelRequest) {
         self.model_mut().duel_requests.push(request);
     }
 }
 
-/// Register the duel globals (the same style/place [`super::party`] registers its actions).
+/// Register the duel globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // AcceptDuel() — the DUEL_REQUESTED popup's Accept.
     g.set(
         "AcceptDuel",
         lua.create_function(|lua, ()| {
@@ -64,7 +50,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CancelDuel() — the popup's Decline, and /forfeit //concede //yield once under way.
+    // `CancelDuel()`: the popup's Decline, and `/forfeit` (`/concede`, `/yield`) once under way.
     g.set(
         "CancelDuel",
         lua.create_function(|lua, ()| {
@@ -74,7 +60,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // StartDuel(name) — /duel <name>.
     g.set(
         "StartDuel",
         lua.create_function(|lua, name: String| {
@@ -84,7 +69,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // StartDuelUnit(unit) — the unit popup's Duel row.
     g.set(
         "StartDuelUnit",
         lua.create_function(|lua, unit: String| {

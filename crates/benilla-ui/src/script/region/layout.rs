@@ -1,5 +1,4 @@
-//! Region method-table cluster: **layout** — size, anchors and the resolved-rect readers.
-//! Split out of `region.rs` at the 0716 file-size budget.
+//! The Region layout methods: size, anchors and the resolved-rect readers.
 
 use mlua::{Lua, MultiValue, Table, Value};
 
@@ -9,16 +8,15 @@ use crate::script::object::{anchor_bits_eq, frame_wrapper, point_name};
 use crate::script::region_map::{set_shared, Side};
 use crate::script::{Model, SCREEN};
 
-/// Resolve `self` (a region wrapper) to its live [`RegionHandle`].
 use super::{
     measured_wh, region_handle_of, region_ladder_context, region_owner_id, region_set_point,
     size_bits_eq,
 };
 
-/// Populate `m`'s layout methods (see the module doc).
+/// Install the layout methods into `m`.
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
-    // Region explicit size — fills the axes the region's anchors don't pin (unread under an
-    // implicit SetAllPoints's two corners).
+    // The explicit size fills the axes the anchors do not pin, so SetAllPoints's two corners
+    // leave it unread.
     set_shared(
         lua,
         m,
@@ -32,9 +30,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let changed = !size_bits_eq(d.size, new);
             d.size = new;
             if changed {
-                // A size write moves no edge and no roster membership — and on
-                // a FontString the width is the WRAP width, a measure-key input, so it names
-                // itself on the measure ledger too.
+                // No edge or roster change; the width, as wrap width, keys a FontString's measure.
                 model.touch_layout_region(rh);
                 model.touch_measure(rh);
             }
@@ -55,9 +51,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let changed = !size_bits_eq(d.size, new);
             d.size = new;
             if changed {
-                // A size write moves no edge and no roster membership — and on
-                // a FontString the width is the WRAP width, a measure-key input, so it names
-                // itself on the measure ledger too.
+                // No edge or roster change; the width, as wrap width, keys a FontString's measure.
                 model.touch_layout_region(rh);
                 model.touch_measure(rh);
             }
@@ -65,8 +59,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         },
     )?;
 
-    // **No `SetSize`** — the frame twin's note in `object/layout_methods.rs` applies here
-    // unchanged: an Era verb 1.12's Region map does not carry.
+    // No `SetSize`: not a 1.12 verb.
 
     set_shared(lua, m, Side::Region, "GetWidth", |lua, this: Table| {
         Ok(measured_wh(lua, &this)?.0)
@@ -76,13 +69,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         Ok(measured_wh(lua, &this)?.1)
     })?;
 
-    // GetLeft/GetRight/GetTop/GetBottom — the region's RESOLVED edges in its OWNER's units (y-up;
-    // screen ÷ the owner's effective scale, the frame twin's law in `object/layout_methods.rs` —
-    // a region shares its owner's scale, and a texture inside the scaled world map answered
-    // screen units here while its owner answered local ones). Every drawable
-    // region carries anchors (authored or the creation-path implicit anchor) and
-    // reads its resolved rect; a templateless Lua region nobody anchored never resolves → nil,
-    // same as pre-resolve.
+    // GetLeft/GetRight/GetTop/GetBottom: the resolved edges in the owner's units (y up, screen
+    // over the owner's effective scale, which a region shares); nil for a region never resolved.
     for (name, pick) in [
         ("GetLeft", 0u8),
         ("GetRight", 1u8),
@@ -104,10 +92,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?;
     }
 
-    // Region anchors: SetPoint/ClearAllPoints/SetAllPoints mirror the frame versions
-    // ([`super::object`]) but write [`super::RegionData::anchors`]. An unspecified `relativeTo`
-    // defaults to the **owner frame**; a named one may be a frame or a sibling region (the real
-    // XML anchors regions to sibling regions everywhere — merchant label plate → `$parentSlot`).
+    // SetPoint, ClearAllPoints and SetAllPoints write the region's anchors. `relativeTo` defaults
+    // to the owner frame, and a named one may be a frame or a sibling region, as stock XML uses.
     set_shared(
         lua,
         m,
@@ -125,9 +111,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();
-            // Names its node, the frame twin's rule and for the frame twin's reason (decision
-            // 2114): clearing every anchor is a retarget onto an EMPTY target list, so the cached
-            // graph's edges are unlinked rather than the whole graph re-derived.
+            // A retarget onto no targets: the cached graph unlinks the edges, no re-derive.
             let old: Option<Vec<u32>> =
                 (!d.anchors.is_empty()).then(|| d.anchors.iter().map(|a| a.relative_to).collect());
             d.anchors.clear();
@@ -145,7 +129,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetAllPoints",
         |lua, (this, rest): (Table, MultiValue)| {
             let rh = region_handle_of(lua, &this)?;
-            // `who`/`$parent` first, then the `_G` read, then the guard — `region_ladder_context`.
+            // `who` and `$parent` first, then the `_G` read, then the guard.
             let (who, base) = region_ladder_context(lua, rh);
             let target = parse_set_all_points(lua, rest.front(), &base);
             let mut model = lua.app_data_mut::<Model>().expect("model");
@@ -172,17 +156,11 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         },
     )?;
 
-    // ── The rest of the Region map `0xcf54b4` ───────────────────────────────────────────────────
+    // ── the rest of the Region map (`0xcf54b4`) ─────────────────────────────────────────────────
     //
-    // These four landed together because the MAP is the unit, not the name. `SetParent` shipped
-    // alone when one addon line named it, and its own getter stayed missing for months — which is
-    // how `TheoryCraft\TheoryCraftUI.lua:720` (`buttontext:GetParent()`, a FontString) died every
-    // session, and how the per-kind census came to read `115 GetParent (missing on Texture,
-    // FontString)`. The set is closed and byte-verified, so it is asserted as a set in
-    // `tests/reference_surface.rs` rather than grown a name at a time.
+    // The map is a closed set, `script::REGION_MAP_METHODS`, and a test asserts it whole.
 
-    // GetParent() → the OWNER frame's wrapper. A region always has one (`region_owner_id` falls
-    // back to the owner for every unresolved case), so unlike the frame twin this never answers nil.
+    // GetParent: the owner frame, which a region always has, so never nil.
     set_shared(lua, m, Side::Region, "GetParent", |lua, this: Table| {
         let rh = region_handle_of(lua, &this)?;
         let owner = {
@@ -192,13 +170,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         frame_wrapper(lua, owner)
     })?;
 
-    // GetCenter() → the resolved rect's midpoint, or a nil PAIR before the first resolve — the same
-    // contract, and the same source, as the GetLeft/GetRight/GetTop/GetBottom readers above.
-    //
-    // **Deliberately unscaled, where the frame twin divides by GetEffectiveScale.** The region edge
-    // readers report raw resolved units; scaling only the centre would make `GetCenter()` disagree
-    // with `(GetLeft() + GetRight()) / 2` on any scaled subtree — a contradiction inside one method
-    // table is worse than a missing division, and regions have no scale of their own to divide by.
+    // GetCenter: the resolved rect's midpoint in the owner's units, as the edge readers answer, or
+    // two nils before the first resolve.
     set_shared(lua, m, Side::Region, "GetCenter", |lua, this: Table| {
         let rh = region_handle_of(lua, &this)?;
         let model = lua.app_data_ref::<Model>().expect("model");
@@ -212,8 +185,6 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })
     })?;
 
-    // GetNumPoints() → how many anchors this region carries. Absent on our FRAMES too, which is the
-    // same drift one table up; this side is what the corpus named.
     set_shared(lua, m, Side::Region, "GetNumPoints", |lua, this: Table| {
         let rh = region_handle_of(lua, &this)?;
         let model = lua.app_data_ref::<Model>().expect("model");
@@ -223,14 +194,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             .map_or(0, |d| d.anchors.len() as i64))
     })?;
 
-    // GetPoint([n]) → point, relativeTo, relativePoint, xOfs, yOfs — the n-th (1-based, default
-    // first) anchor, mirroring the frame twin including its out-of-range answer (five nils).
-    //
-    // **The relativeTo dispatch is the part a frame-shaped copy gets wrong.** Region anchors live in
-    // ONE id space with frames and may target a sibling REGION — the real XML does it everywhere
-    // (`region.rs`'s `resolve_target`: frames first, then the region-name registry). So the id is
-    // matched against both tables and answered with the matching wrapper kind; handing back a frame
-    // wrapper for a region id would be a working-looking handle onto the wrong object.
+    // GetPoint([n]): the n-th anchor (1-based, default 1) as point, relativeTo, relativePoint, x
+    // and y, or five nils. Frames and regions share one id space and a region may anchor to a
+    // sibling region, so relativeTo is answered with the matching wrapper kind.
     set_shared(
         lua,
         m,
@@ -275,8 +241,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The region's owner frame's effective scale (1 for an orphan) — the divisor that turns a
-/// resolved screen rect into the owner's units, the space every region getter answers in.
+/// The owner frame's effective scale (1 for an orphan), the divisor from a resolved screen rect to
+/// the owner's units every region getter answers in.
 fn owner_scale(model: &Model, rh: crate::widget::RegionHandle) -> f32 {
     model
         .arena

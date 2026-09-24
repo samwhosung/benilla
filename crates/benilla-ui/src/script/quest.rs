@@ -1,80 +1,48 @@
-//! The questgiver bindings — the Era-shaped quest-dialog surface, the same two-way
-//! seam as [`super::gossip`]/[`super::merchant`]: the app pushes a **quest panel snapshot**
-//! ([`UiScript::set_quest`] — the greeting/detail/progress/reward text + item rows already resolved
-//! from the wire), and the Lua `AcceptQuest`/`CompleteQuest`/`GetQuestReward`/`SelectActiveQuest`/…
-//! calls queue outbound **intents** the app drains ([`UiScript::take_quest_selects`] /
-//! [`UiScript::take_quest_actions`]). The engine holds no quest knowledge — a row is "a name, an
-//! icon, a count, a quality, and whether it's usable"; a button press is a bare intent the app maps
-//! to `(npc, questId)` from its own live state.
-//!
-//! ## The Era API shape
-//!
-//! 1.12's `QuestFrame.lua` reads flat getters positionally, one panel at a time: the greeting panel
-//! walks `GetNumActiveQuests()`/`GetActiveTitle(i)` (+ the available twins), the detail panel reads
-//! `GetTitleText()`/`GetQuestText()`/`GetObjectiveText()`, the progress panel reads
-//! `GetProgressText()`/`IsQuestCompletable()`/`GetNumQuestItems()`/`GetQuestItemInfo("required",i)`,
-//! the reward panel reads `GetRewardText()`/`GetNumQuestChoices()`/`GetNumQuestRewards()`/
-//! `GetRewardMoney()`/`GetQuestItemInfo("choice"|"reward",i)`. Benilla keeps those exact names on a
-//! single pushed [`QuestState`]; which panel is live is [`QuestState::panel`], surfaced to the XML
-//! through the `QUEST_GREETING`/`QUEST_DETAIL`/`QUEST_PROGRESS`/`QUEST_COMPLETE` events the app
-//! fires. `GetRewardSpell()` returns `nil` in v1 (spell-reward rows are out of scope).
+//! The questgiver bindings: the app pushes the open panel ([`UiScript::set_quest`]), and the panel
+//! verbs queue selects and button intents it drains. One [`QuestState`] serves the flat getters
+//! `QuestFrame.lua` reads on each panel; the app fires `QUEST_GREETING`, `QUEST_DETAIL`,
+//! `QUEST_PROGRESS` or `QUEST_COMPLETE` for the live one.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
 use super::Model;
 
-/// Which of the four questgiver sub-panels a [`QuestState`] is for (the app sets it from the wire
-/// packet; the XML's event routing mirrors it).
+/// Which questgiver panel a [`QuestState`] is for, set from the wire packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuestPanel {
-    /// `SMSG_QUESTGIVER_QUEST_LIST` — the multi-quest greeting (active + available lists).
+    /// `SMSG_QUESTGIVER_QUEST_LIST`: the greeting, with the active and available lists.
     Greeting,
-    /// `SMSG_QUESTGIVER_QUEST_DETAILS` — the accept panel.
+    /// `SMSG_QUESTGIVER_QUEST_DETAILS`: the accept panel.
     Detail,
-    /// `SMSG_QUESTGIVER_REQUEST_ITEMS` — the turn-in progress panel.
+    /// `SMSG_QUESTGIVER_REQUEST_ITEMS`: the turn-in progress panel.
     Progress,
-    /// `SMSG_QUESTGIVER_OFFER_REWARD` — the reward panel.
+    /// `SMSG_QUESTGIVER_OFFER_REWARD`: the reward panel.
     Reward,
 }
 
-/// One quest item row (choice reward / fixed reward / required item), resolved by the app from the
-/// wire triple + its item stores. Plain data — 1-based order is its position in the owning vector.
+/// One choice, reward or required item row; its 1-based index is its place in its list.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QuestItemView {
-    /// Item name (`GetQuestItemInfo`'s first return); `None` while the ask-once template query is in
-    /// flight (the API reports `nil`, the XML shows a placeholder).
+    /// `None`, answered as nil, while the item template is in flight.
     pub name: Option<String>,
-    /// Icon texture path (`Interface\Icons\…`); `None` while the template answer is in flight (the
-    /// icon comes from the wire display id, so it's usually present immediately).
     pub texture: Option<String>,
-    /// Stack count for the row (`numItems`).
     pub count: u32,
-    /// Item quality (0 poor .. 5 legendary); colours the reward name. `1` (common/white) when the
-    /// template hasn't landed.
+    /// 0 poor to 5 legendary; 1 until the template lands.
     pub quality: u32,
-    /// The item id — the shared item-tooltip store's key (`BenillaGetItemStats`); `0` while the
-    /// wire row hasn't resolved. A benilla extension: the era 5-tuple never carried it (tooltip
-    /// content was C++'s alone), so it rides as a TRAILING 6th return, invisible to era callers.
+    /// The item id the quest tooltips render by; 0 until the wire row resolves.
     pub item_id: u32,
-    /// Whether the reward is usable by the player's class/race — v1 always `true` (soft gray only,
-    /// the server stays authoritative).
+    /// Whether the player can use the item; stock tints the row red when not
+    /// (`QuestFrame.lua:393`). The app always sends `true`.
     pub usable: bool,
-    /// The full escaped `|cff…|Hitem:…|h[Name]|h|r` link (`GetQuestItemLink` /
-    /// `GetQuestLogItemLink` serve it) — the ctrl/shift click arms' payload.
-    /// `None` until the ask-once item template lands: the link is built from the name **and** the
-    /// quality, and neither is known before then, exactly like [`super::InvSlotView::link`].
+    /// The escaped item link `GetQuestItemLink` and `GetQuestLogItemLink` serve; `None` until the
+    /// template lands, since it embeds the name and the quality.
     pub link: Option<String>,
 }
 
-/// One open questgiver panel: the active sub-panel plus every field the four panels might read.
-/// Pushed whole by the app; `None` means no quest window is open.
-/// The quest's reward spell — `rewSpell` on `SMSG_QUESTGIVER_QUEST_DETAILS` /
-/// `SMSG_QUESTGIVER_OFFER_REWARD` and on `SMSG_QUEST_QUERY_RESPONSE` — resolved by the app to
-/// the name and icon `GetRewardSpell` / `GetQuestLogRewardSpell` answer (stock
-/// `QuestFrameItems_Update` counts it as one more reward slot, `rewardType = "spell"`, and the
-/// slot's hover is `GameTooltip:SetQuestRewardSpell()`). `tradeskill` is the third return the
-/// reference derives from the spell itself (1944 — the derivation is not yet pinned).
+/// The reward spell, `rewSpell` on the giver packets and `SMSG_QUEST_QUERY_RESPONSE`, as
+/// `GetRewardSpell` and `GetQuestLogRewardSpell` answer it; stock counts it as one more reward slot
+/// (`QuestFrame.lua:332`). `tradeskill` is the third return, `isTradeskillSpell`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QuestRewardSpell {
     pub spell_id: u32,
@@ -83,6 +51,7 @@ pub struct QuestRewardSpell {
     pub tradeskill: bool,
 }
 
+/// One open questgiver panel, with every field the four panels read; pushed whole by the app.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuestState {
     pub panel: QuestPanel,
@@ -90,31 +59,25 @@ pub struct QuestState {
     pub greeting: String,
     pub active_titles: Vec<String>,
     pub available_titles: Vec<String>,
-    // Detail / progress / reward.
-    /// The quest title (`GetTitleText`).
+    // Detail, progress and reward panels.
     pub title: String,
-    /// The panel body text: quest description (detail), request text (progress), or reward text
-    /// (reward). One field — only one of the three panels is live at a time.
+    /// The text of whichever panel is live: quest, progress or reward.
     pub body: String,
-    /// The quest objectives line (`GetObjectiveText`, detail panel only).
     pub objectives: String,
-    /// Choice rewards (the player picks one) — reward/detail panel.
+    /// Rewards the player picks one of.
     pub choices: Vec<QuestItemView>,
-    /// Fixed rewards (all granted) — reward/detail panel.
+    /// Rewards all granted.
     pub rewards: Vec<QuestItemView>,
-    /// Required items — progress panel.
+    /// Items the progress panel asks for.
     pub required: Vec<QuestItemView>,
-    /// Reward money in copper (`GetRewardMoney`, detail/reward panels).
+    /// In copper.
     pub reward_money: u32,
-    /// Required money in copper (`GetQuestMoneyToGet`, progress panel).
+    /// In copper.
     pub required_money: u32,
-    /// Whether the turn-in is completable (`IsQuestCompletable`, progress panel).
     pub completable: bool,
-    /// The reward spell, if the quest teaches one (`GetRewardSpell`; detail/reward panels).
     pub reward_spell: Option<QuestRewardSpell>,
-    /// The panel's background material (`GetQuestBackgroundMaterial` — nil is the reference's own
-    /// "Parchment" fallback in `QuestFrame_GetMaterial`). What fills it on the wire is 1944's
-    /// open question; until the binary says, nothing does, and the verb answers nil honestly.
+    /// `GetQuestBackgroundMaterial`, which the app fills from an item or GameObject source, never
+    /// from the wire; nil reads as "Parchment" (`QuestFrame.lua:598-604`).
     pub background_material: Option<String>,
 }
 
@@ -140,45 +103,31 @@ impl Default for QuestState {
     }
 }
 
-/// A greeting-panel row click queued by `SelectActiveQuest`/`SelectAvailableQuest`: the 1-based row
-/// in its list. `active` picks between the active and available lists (the app maps the index to the
-/// quest id).
+/// A greeting row picked by `SelectActiveQuest` or `SelectAvailableQuest`, 1-based in its list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuestSelect {
     pub active: bool,
     pub index: u32,
 }
 
-/// A questgiver button intent queued by the Lua panel verbs; the app maps each to `(npc, questId)`
-/// from its own live state and the matching `CMSG_QUESTGIVER_*`.
+/// A questgiver button intent; the app sends the matching message for its NPC and quest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuestAction {
     /// Detail panel Accept → `CMSG_QUESTGIVER_ACCEPT_QUEST`.
     Accept,
-    /// Progress panel Continue → `CMSG_QUESTGIVER_REQUEST_REWARD` (advance to the reward panel).
+    /// Progress panel Continue → `CMSG_QUESTGIVER_REQUEST_REWARD`.
     Continue,
-    /// Reward panel Complete → `CMSG_QUESTGIVER_CHOOSE_REWARD` with the chosen choice index (0 when
-    /// the quest has no choice rewards).
+    /// Reward panel Complete → `CMSG_QUESTGIVER_CHOOSE_REWARD` with the 0-based choice.
     Reward(u32),
-    /// `DeclineQuest()` — the detail panel's Decline and the progress/reward panels' Cancel
-    /// (stock `QuestFrame.lua`: `QuestDetailDeclineButton_OnClick`, `QuestGoodbyeButton_OnClick`,
-    /// `QuestRewardCancelButton_OnClick`). Its binding `0x501d30` calls `0x5013f0`, the ONLY
-    /// routine that re-opens the giver: a four-way fork on the source's object type — a
-    /// gossip-flagged unit → `CMSG_GOSSIP_HELLO`, a plain unit → `CMSG_QUESTGIVER_HELLO`, an
-    /// item/player (or the `0xbe0824` latch set) → the teardown `0x501130(0,1)`, a GameObject →
-    /// its interact virtual. The app owns the fork, because only it knows the giver.
+    /// `DeclineQuest()`: the detail panel's Decline and the progress and reward panels' Cancel.
+    /// Its binding (`0x501d30`) re-opens the giver through `0x5013f0`: `CMSG_GOSSIP_HELLO` for a
+    /// gossip unit, `CMSG_QUESTGIVER_HELLO` for another unit, the teardown `0x501130(0,1)` for an
+    /// item or a player (or with `0xbe0824` set), a GameObject's interact call. The app owns this.
     Decline,
-    /// `CloseQuest()` — the window's own `QuestFrame_OnHide`: ESC, the close button, the
-    /// greeting's Goodbye (`HideUIPanel(QuestFrame)`), a UIPanel eviction. Its binding `0x501a10`
-    /// calls the teardown `0x501130(0,1)` and **nothing else**; that routine's one send is
-    /// `MSG_QUEST_PUSH_RESULT{DECLINE}` for a PLAYER source, so closing an NPC's window is
-    /// network-silent.
-    ///
-    /// **Two actions, because the reference has two routines.** 1738 merged this into
-    /// `DeclineQuest`'s action on the reading that both verbs are one routine; the reference's
-    /// callers show they share only the teardown, and the HELLO re-open lives in `DeclineQuest`'s
-    /// fork alone. The merge made ESC on an NPC re-open its list — a multi-quest greeting could
-    /// not be closed.
+    /// `CloseQuest()`, from `QuestFrame_OnHide`: ESC, the close button, the greeting's Goodbye, a
+    /// panel eviction. Its binding (`0x501a10`) calls only the teardown `0x501130(0,1)`, whose one
+    /// send is `MSG_QUEST_PUSH_RESULT` DECLINE for a player source, so closing an NPC's window
+    /// sends nothing. It stays apart from `Decline`: the re-open is `DeclineQuest`'s alone.
     Close,
 }
 
@@ -199,9 +148,7 @@ impl super::UiScript {
     }
 }
 
-/// `GetQuestItemInfo(type, index)` reads from this vector by `type`; unknown types → `None`.
-/// The three returns of `GetRewardSpell` / `GetQuestLogRewardSpell`: `texture, name,
-/// isTradeskillSpell` — the third a 1/nil boolean in the reference's convention.
+/// `GetRewardSpell`'s three returns: `texture, name, isTradeskillSpell`, the third 1 or nil.
 pub(super) fn reward_spell_returns(
     lua: &Lua,
     spell: Option<QuestRewardSpell>,
@@ -229,6 +176,7 @@ pub(super) fn reward_spell_returns(
     Ok(MultiValue::from_vec(vec![texture, name, tradeskill]))
 }
 
+/// The list `GetQuestItemInfo(type, index)` reads for `type`.
 pub(super) fn item_vec<'a>(state: &'a QuestState, kind: &str) -> Option<&'a Vec<QuestItemView>> {
     match kind {
         "choice" => Some(&state.choices),
@@ -242,7 +190,7 @@ pub(super) fn item_vec<'a>(state: &'a QuestState, kind: &str) -> Option<&'a Vec<
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // ── Text getters (one per panel field; nil/"" when no window is open) ─────────────────────────
+    // ── Text getters ──
     fn install_text(lua: &Lua, name: &str, pick: fn(&QuestState) -> String) -> mlua::Result<()> {
         lua.globals().set(
             name,
@@ -262,7 +210,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_text(lua, "GetRewardText", |q| q.body.clone())?;
     install_text(lua, "GetObjectiveText", |q| q.objectives.clone())?;
 
-    // ── Count + money getters ─────────────────────────────────────────────────────────────────────
+    // ── Count and money getters ──
     fn install_count(lua: &Lua, name: &str, pick: fn(&QuestState) -> i64) -> mlua::Result<()> {
         lua.globals().set(
             name,
@@ -282,7 +230,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_count(lua, "GetRewardMoney", |q| i64::from(q.reward_money))?;
     install_count(lua, "GetQuestMoneyToGet", |q| i64::from(q.required_money))?;
 
-    // IsQuestCompletable() → 1/nil (progress panel gate for the Continue button).
     g.set(
         "IsQuestCompletable",
         lua.create_function(|lua, ()| {
@@ -291,7 +238,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetActiveTitle(i) / GetAvailableTitle(i) — 1-based; "" when out of range.
     fn install_title(lua: &Lua, name: &str, active: bool) -> mlua::Result<()> {
         lua.globals().set(
             name,
@@ -314,8 +260,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_title(lua, "GetActiveTitle", true)?;
     install_title(lua, "GetAvailableTitle", false)?;
 
-    // GetQuestItemInfo(type, index) → name, texture, numItems, quality, isUsable (the Era tuple).
-    // `type` is "choice" / "reward" / "required"; `index` 1-based; out of range → nil.
+    // GetQuestItemInfo(type, index) → name, texture, numItems, quality, isUsable.
     g.set(
         "GetQuestItemInfo",
         lua.create_function(|lua, (kind, index): (String, usize)| {
@@ -344,18 +289,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(i64::from(it.count)),
                 Value::Integer(i64::from(it.quality)),
                 Value::Boolean(it.usable),
-                // Benilla extension (6th): the item id, the shared tooltip store's key.
+                // Not 1.12's: a sixth return, the item id, after its five; nothing reads it.
                 Value::Integer(i64::from(it.item_id)),
             ]))
         })?,
     )?;
 
-    // GetQuestItemLink(type, index) → the full escaped `|cff…|Hitem:…|h[Name]|h|r` | nil. The
-    // questgiver panels' ctrl/shift click arms read it — `DressUpItemLink(GetQuestItemLink(
-    // this.type, this:GetID()))` (ref QuestFrame.lua:118/130) and the shift-click
-    // `ChatFrameEditBox:Insert(...)` beside it (l.122/134). Same `type`/`index` addressing as
-    // `GetQuestItemInfo` above; nil for an out-of-range row, an unknown type, or a row whose
-    // template answer is still in flight (see [`QuestItemView::link`]).
+    // GetQuestItemLink(type, index), for a row's ctrl and shift clicks (`QuestFrame.lua:118`).
     g.set(
         "GetQuestItemLink",
         lua.create_function(|lua, (kind, index): (String, usize)| {
@@ -374,10 +314,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetRewardSpell() → texture, name, isTradeskillSpell (three returns, 0x501df0; three nils on
-    // every empty path, the reference's own `(nil,nil,nil)` kind — 1842). Real since 1944: the
-    // app resolves `rewSpell` off the giver packets; stock's `if ( GetRewardSpell() ) then` counts
-    // the slot.
+    // GetRewardSpell() (`0x501df0`): three nils without a spell.
     g.set(
         "GetRewardSpell",
         lua.create_function(|lua, ()| {
@@ -389,8 +326,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ── Intents ───────────────────────────────────────────────────────────────────────────────────
-    // SelectActiveQuest(i) / SelectAvailableQuest(i) — queue a greeting-row select (1-based).
+    // ── Intents ──
     fn install_select(lua: &Lua, name: &str, active: bool) -> mlua::Result<()> {
         lua.globals().set(
             name,
@@ -416,18 +352,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             })?,
         )
     }
-    // AcceptQuest → Accept; DeclineQuest → Decline (the re-opening fork `0x5013f0`); CloseQuest →
-    // Close (the teardown `0x501130` alone — see `QuestAction::Close`); CompleteQuest (the
-    // progress panel's Continue) → Continue.
     install_action(lua, "AcceptQuest", super::QuestAction::Accept)?;
     install_action(lua, "DeclineQuest", super::QuestAction::Decline)?;
     install_action(lua, "CloseQuest", super::QuestAction::Close)?;
     install_action(lua, "CompleteQuest", super::QuestAction::Continue)?;
 
-    // GetQuestBackgroundMaterial() → nil | string (0x502230; 0 args, 1 return). The reference's
-    // `QuestFrame_GetMaterial` (QuestFrame.lua:597-603) treats nil as "Parchment" and any string
-    // as the name of a material whose four `$parentMaterial*` quadrants and text colours
-    // (`GetMaterialTextColors`) the panel switches to. Answered from the pushed panel state.
+    // GetQuestBackgroundMaterial() → nil or a material name (`0x502230`).
     g.set(
         "GetQuestBackgroundMaterial",
         lua.create_function(|lua, ()| {
@@ -445,14 +375,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // QuestChooseRewardError() — 0x5021a0, 0 args, 0 returns: the Complete button pressed with
-    // choices on offer and none picked (stock `QuestRewardCompleteButton_OnClick`,
-    // QuestFrame.lua:96-100). Sixteen bytes — `push 0x98; call 0x496720` — the game-error row
-    // `ERR_QUEST_MUST_CHOOSE`: the row's sound
-    // cue `igQuestFailed` plays first, then kind 2 routes the GlobalStrings text through
-    // `UI_ERROR_MESSAGE` — synchronously, as SignalEvent is — and UIErrorsFrame prints it. The
-    // text is read from the same global the FrameXML shows, so a localised chain shows its own
-    // string; the shipped English is the fallback when no GlobalStrings is loaded.
+    // QuestChooseRewardError() (`0x5021a0`), no returns: Complete pressed with choices and none
+    // picked (`QuestFrame.lua:98`). It shows game error `0x98` through `0x496720`: the sound
+    // `igQuestFailed`, then `ERR_QUEST_MUST_CHOOSE` through `UI_ERROR_MESSAGE`, synchronously.
     g.set(
         "QuestChooseRewardError",
         lua.create_function(|lua, ()| {
@@ -475,9 +400,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ConfirmAcceptQuest() — the escort confirm's Yes (ref StaticPopup.lua:731-733, raised by
-    // QUEST_ACCEPT_CONFIRM). No argument and no quest id: the client answers whichever confirm it
-    // is holding, so the engine counts the calls and the app supplies the id.
+    // ConfirmAcceptQuest(): the escort confirm's Yes (`StaticPopup.lua:731-733`). It takes no quest
+    // id, as the client answers the confirm it holds, so calls are counted and the app adds the id.
     g.set(
         "ConfirmAcceptQuest",
         lua.create_function(|lua, ()| {
@@ -487,12 +411,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetQuestReward(choice) — the reward panel's Complete button. FrameXML passes the 1-based row
-    // (`QuestFrameRewardPanel.itemChoice = this:GetID()`, stock QuestFrame.lua:97-101) and the
-    // wire wants the 0-based choice (`CMSG_QUESTGIVER_CHOOSE_REWARD`'s reward index — vmangos
-    // indexes `RewChoiceItemId[reward]` with it), so the conversion is the binding's, as it is the
-    // client's; our own Lua used to do the -1 itself (1944). A quest with no choice rewards
-    // passes 0, which stays 0.
+    // GetQuestReward(choice): stock passes the 1-based row (`QuestFrame.lua:100`), and the wire
+    // takes it less one, floored at 0, as in the reference (`0x501d80`); vmangos indexes
+    // `RewChoiceItemId` with it.
     g.set(
         "GetQuestReward",
         lua.create_function(|lua, choice: Option<u32>| {
@@ -609,7 +530,6 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetNumQuestRewards()").unwrap(), 1);
         assert_eq!(s.eval::<i64>("return GetRewardMoney()").unwrap(), 1234);
 
-        // Row 1 (resolved): the Era tuple.
         let (name, texture, count, quality, usable) = s
             .eval::<(String, String, i64, i64, bool)>("return GetQuestItemInfo(\"reward\", 1)")
             .unwrap();
@@ -617,14 +537,14 @@ mod tests {
         assert_eq!(texture, "Interface\\Icons\\INV_Boots_01");
         assert_eq!((count, quality, usable), (1, 2, true));
 
-        // Choice row 2 (in flight): name + texture nil, the rest present.
+        // Choice row 2 is in flight: name and texture nil, the rest present.
         assert!(s
             .eval::<bool>(
                 "local n, t, c = GetQuestItemInfo(\"choice\", 2)\n\
                  return n == nil and t == nil and c == 1"
             )
             .unwrap());
-        // Out of range / unknown type → nil.
+        // Out of range, and an unknown type: nil.
         assert!(s
             .eval::<bool>("return GetQuestItemInfo(\"reward\", 9) == nil")
             .unwrap());
@@ -632,9 +552,7 @@ mod tests {
             .eval::<bool>("return GetQuestItemInfo(\"bogus\", 1) == nil")
             .unwrap());
 
-        // GetQuestItemLink: the resolved row's full escaped link; nil for a row still waiting on
-        // its template (choice 2 has no name yet, so no link either), and nil out of range /
-        // unknown type — the three nils the ref's ctrl/shift arms hand to DressUpItemLink.
+        // The link is nil for the in-flight row, out of range, and for an unknown type.
         assert_eq!(
             s.eval::<String>("return GetQuestItemLink(\"reward\", 1)")
                 .unwrap(),
@@ -755,9 +673,6 @@ mod tests {
         assert!(s.eval::<bool>("return GetRewardSpell() == nil").unwrap());
     }
 
-    /// `DeclineQuest` and `CloseQuest` are TWO intents — two reference routines (`0x5013f0` and
-    /// `0x501a10`) that share only the teardown `0x501130`; the giver re-open is `DeclineQuest`'s
-    /// alone.
     #[test]
     fn decline_and_close_are_two_intents() {
         let mut s = UiScript::new().unwrap();
@@ -770,8 +685,6 @@ mod tests {
         );
     }
 
-    /// `ConfirmAcceptQuest` counts rather than carrying a quest id — the reference's verb takes no
-    /// argument and answers whichever confirm the client holds.
     #[test]
     fn confirm_accept_quest_counts_and_drains() {
         let mut s = UiScript::new().unwrap();

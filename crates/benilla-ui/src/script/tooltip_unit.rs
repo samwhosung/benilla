@@ -1,40 +1,12 @@
-//! The engine **unit tooltip builder** (decision 0274 P3) — the byte-verified line law of
-//! `0x529fe0` (the 0276 fold-back):
-//!
-//! - NAME (gold — FrameXML recolors `TextLeft1` by reaction on `UPDATE_MOUSEOVER_UNIT`, exactly
-//!   like the reference's `GameTooltip_UnitColor`; the guild line is likewise FrameXML's and
-//!   joins when guild data streams). A name still in flight reads `UNKNOWNOBJECT`, never an
-//!   empty line — the builder's name read is `0x609210`, the same resolver `UnitName` uses, and
-//!   its miss tail is the same string;
-//! - the creature SUBTITLE ("Stable Master") — white;
-//! - the LEVEL line, filled from three slots into one of the four `TOOLTIP_UNIT_LEVEL*` templates
-//!   the player's own `GlobalStrings.lua` carries (the keys are the builder's,
-//!   read off `0x52a622`/`0x52a64d`/`0x52a682`/`0x52a6ac`, never matched on their English):
-//!   level text (`"??"` for a world boss, a much-higher hostile, or level ≤ 0 — the hostile
-//!   delta is INTERIM at +10 pending a byte pin of the comparison), the class slot (the creature
-//!   TYPE word for hostile/neutral creatures, `"Race Class"` for players, `CORPSE` when dead),
-//!   and the type slot (the rank key table `{"", ELITE, ELITE, BOSS, ""}`; `PLAYER` for players);
-//! - the FACTION NAME ("Stormwind", white) — the builder-tail block `0x52a7a0..`, which our
-//!   emission order originally omitted: the app resolves it (`faction_name`), every gate applied;
-//! - "PvP" (white) · "Skinnable" (**red**) · "Civilian" (green, `0x612550`: PvP-flagged +
-//!   query-civilian + HOSTILE + GREY/trivial — the dishonorable-kill warning) · "Leader"
-//!   (white, `0x6125c0`: PvP-flagged + query racial_leader);
-//! - health on the attached status bar (`<name>StatusBar`, the template child below the plate),
-//!   refreshed by every `set_unit` push for the live token — the byte law's HEALTH watcher.
-//!
-//! The world mouseover drives this through [`super::UiScript::world_tooltip_unit`] (the engine
-//! shows the tooltip at the default anchor by firing `OnTooltipSetDefaultAnchor`, renders, and
-//! fires `UPDATE_MOUSEOVER_UNIT` for the Lua recolor) and [`super::UiScript::world_tooltip_fade`]
-//! (the byte law ARMS a fade on hover loss, not an instant hide). Unit-frame hovers call the
-//! same `SetUnit` from Lua.
+//! The engine unit tooltip, in `0x529fe0`'s line order: the name (gold; FrameXML recolours it by
+//! reaction), the creature subtitle, the level line, the faction name, then "PvP", "Skinnable",
+//! "Civilian" and "Leader", with health on the `<name>StatusBar` child. The world mouseover drives
+//! it through [`super::UiScript::world_tooltip_unit`]; unit-frame hovers call `SetUnit` from Lua.
 
 use mlua::{Lua, Table};
 
 use super::object::frame_handle_of;
 use super::tooltip::{append_line, clear_content, fire_cleared, show_or_hide_empty, tip_mut};
-// The grey band + trivial/GREY check (`0x5f0700`, the CIVILIAN line's last gate: a green-or-
-// better con never warns of a dishonorable kill) and the "??" gate live in one shared home
-// (`unit.rs`), alongside `UnitLevel`'s −1 return and the `GetQuestGreenRange` binding.
 use super::unit::{is_civilian_kill, level_reads_unknown, unknownobject};
 use super::{KindState, Model, UnitState};
 use crate::layout::{Anchor, Point};
@@ -44,35 +16,29 @@ use crate::widget::FrameHandle;
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 const RED: [f32; 4] = [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0];
-/// `0xc0d420` = `0xff40c040` — the satisfiable-lock green (see [`TooltipTint::LockOpen`]).
+/// `0xc0d420` = `0xff40c040`, the satisfiable-lock green.
 const LOCK_OPEN: [f32; 4] = [64.0 / 255.0, 192.0 / 255.0, 64.0 / 255.0, 1.0];
-/// Unit names render gold (byte-verified `0xffffd200`); FrameXML recolors line 1 by reaction.
+/// `0xffffd200`, the unit name's colour until FrameXML recolours it by reaction.
 const GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
 
-/// A GameObject tooltip line's colour, as the builder `0x52aa20` picks it. The
-/// app half decides *which* line gets which tint from the lock law; this enum is only the
-/// crate-boundary spelling, so the colour constants stay private to the UI engine.
+/// A GameObject tooltip line's colour, as the builder `0x52aa20` picks it; the app picks the tint
+/// for each line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TooltipTint {
-    /// `0xc0cf60` — the requirement line's normal colour (the key-item "Requires %s").
+    /// `0xc0cf60`: a requirement line's normal colour (the key item's "Requires %s").
     White,
-    /// The "Locked" line's UNMET colour `0xc0d3a8` = `0xffff2020`, and the unknown-skill
-    /// "Requires %s" (whose own red is `0xffff0000` — a difference of 32/255 in G and B that no
-    /// eye resolves, so one slot serves both).
+    /// `0xc0d3a8` = `0xffff2020`, the unmet "Locked" line. Deviation: the unknown-skill
+    /// "Requires %s" shares it, though its reference red is `0xffff0000`, because a 32/255
+    /// difference in G and B does not show.
     Red,
-    /// The "Locked" line when the lock **is** satisfiable — `0xc0d420` = `0xff40c040`
-    /// (64,192,64). Deliberately NOT the tooltip's ordinary green `0xc0d3ac` = `0xff00ff00`: this
-    /// is the second rung of the skill-difficulty ramp `0x529fa0` (grey/green/yellow/orange/red,
-    /// static-init writers at `0x5290d0` &c.), which the lock line borrows wholesale, and it is a
-    /// visibly softer green than the one every other tooltip line uses.
+    /// The satisfiable "Locked" line: `0xc0d420` = `0xff40c040`, the green rung of the
+    /// skill-difficulty ramp `0x529fa0`, not the ordinary green `0xc0d3ac` = `0xff00ff00`.
     LockOpen,
 }
 
-/// The rank word's GlobalString **key** — byte-verified `0x854158[]`, the pointer table the
-/// builder indexes by rank at `0x52a5bd`/`0x52a5d4`. Its entries are key names, not words: index 0
-/// and 4 are the pre-seeded empty string `0x882748`, 1 and 2 are both `ELITE` (rare-elite prints
-/// ELITE, rare prints nothing — there is no distinct "Rare Elite" word in 1.12's builder), 3 is
-/// `BOSS`.
+/// The rank word's GlobalString key, from the builder's table `0x854158` (indexed at `0x52a5bd`
+/// and `0x52a5d4`): ranks 1 and 2 (elite, rare elite) are `ELITE`, 3 is `BOSS`, and 0 and 4 (rare)
+/// are the empty string `0x882748`.
 fn rank_key(rank: u32) -> Option<&'static str> {
     match rank {
         1 | 2 => Some("ELITE"),
@@ -81,31 +47,19 @@ fn rank_key(rank: u32) -> Option<&'static str> {
     }
 }
 
-/// The level line — three slots over the four `TOOLTIP_UNIT_LEVEL*` templates, each resolved off
-/// the player's own `GlobalStrings.lua`. The keys are the builder's own, pushed at
-/// `0x52a622` (`_CLASS_TYPE`), `0x52a64d` (`_CLASS`), `0x52a682` (`_TYPE`) and `0x52a6ac` (the
-/// bare one) — which matters, because `TOOLTIP_UNIT_LEVEL_CLASS`'s enUS "Level %s %s" is also the
-/// wording of `FRIENDS_LEVEL_TEMPLATE`, `UNIT_TYPE_LEVEL_TEMPLATE` and `CHARACTER_SELECT_INFO`,
-/// and the bare one collides with `ITEM_LEVEL`, `LEVEL_GAINED` and `UNIT_LEVEL_TEMPLATE`. Seven
-/// wrong keys are reachable by matching the English here; none by reading the builder.
-///
-/// `None` = the install's string table carries no template for the slot combination in hand, and
-/// the plate shows no level row rather than a composed one.
+/// The level line: level, class and type slots in one of the four `TOOLTIP_UNIT_LEVEL*`
+/// GlobalStrings, keyed as the builder keys them (`0x52a622` `_CLASS_TYPE`, `0x52a64d` `_CLASS`,
+/// `0x52a682` `_TYPE`, `0x52a6ac` bare), never by their English, which other keys share. `None`
+/// when the install has no template for the combination, and then no row shows.
 fn level_line(lua: &Lua, u: &UnitState, player_level: u32) -> Option<String> {
     let get = |key: &str| crate::strings::global(lua, key);
-    // The "??" gate, byte-pinned (`0x529fe0`): much-higher HOSTILE — internal reaction
-    // ≤ 1 = hated/hostile = UnitReaction ≤ 2 on our 1..8 API scale (the UnitIsEnemy mapping) —
-    // with playerLevel ≤ targetLevel−10; OR WorldBoss; OR level ≤ 0. Players NEVER read "??".
-    // Shared with `UnitLevel`'s −1 return, so the tooltip and the target frame can never
-    // disagree on who reads "??" ([`level_reads_unknown`]).
+    // "??" by the gate `UnitLevel`'s -1 shares (`0x529fe0`), so tooltip and target frame agree.
     let level_text = if level_reads_unknown(u, player_level) {
         "??".to_string()
     } else {
         u.level.to_string()
     };
-    // The class slot: "Race Class" for players; the creature TYPE word for hostile/neutral
-    // creatures (a friendly creature shows none — the byte law's hostile/neutral-only gate);
-    // "Corpse" when dead.
+    // `CORPSE` when dead, "Race Class" for a player, the creature type only if hostile or neutral.
     let class_slot = if u.dead {
         get("CORPSE")
     } else if u.is_player {
@@ -120,7 +74,6 @@ fn level_line(lua: &Lua, u: &UnitState, player_level: u32) -> Option<String> {
     } else {
         None
     };
-    // The type slot: the rank word, or PLAYER for players.
     let type_slot = if u.is_player {
         get("PLAYER")
     } else {
@@ -160,23 +113,13 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     }
     fire_cleared(lua, h);
     let Some(u) = unit else {
-        // No unit: drop the live token and leave the tooltip hidden-empty.
         set_live_token(lua, h, None);
         show_or_hide_empty(lua, h);
         return Ok(false);
     };
-    // The NAME line. A unit whose name query has not answered yet does NOT title an empty plate:
-    // the builder resolves the name through `CGUnit_C::GetUnitName 0x609210` (`0x52a187`), and
-    // every one of that function's misses — a creature whose `creaturecache.wdb` record
-    // (`CGUnit+0xb30`) is still null, a pet whose `petnamecache.wdb` row is absent or stale, a
-    // player row `namecache.wdb` has not answered — falls to the SAME
-    // `FrameScript_GetText("UNKNOWNOBJECT")` tail `UnitName` falls to. One seam, one resolver
-    // ([`unknownobject`]), so the verb and the plate can never disagree.
-    //
-    // The builder has no counterpart to `UnitName`'s two nils: the `"player"` fast path is the
-    // *binding's* (`0x517083`, before any resolve), and a token resolving to GUID 0 never reaches
-    // a builder at all — the entry gate `0x468460(typemask 8)` hands back no object, `SetUnit`
-    // answers nil and no plate is drawn (the `unit` early-return above).
+    // The name: `CGUnit_C::GetUnitName` `0x609210` (`0x52a187`), whose every miss falls to
+    // `UNKNOWNOBJECT`, as `UnitName`'s does. A token with no object never reaches the builder
+    // (`0x468460`): no plate, and `SetUnit` answers nil.
     let title = match &u.name {
         Some(n) => n.clone(),
         None => unknownobject(lua)?.to_str()?.to_string(),
@@ -188,8 +131,7 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     if let Some(level) = level_line(lua, &u, player_level) {
         append_line(lua, this, (level, WHITE), None, false)?;
     }
-    // The faction-name line ("Stormwind", white) sits between the level line and "PvP" — the
-    // builder-tail block at `0x52a7a0`. The app resolved every gate into `faction_name`.
+    // The faction name, between the level line and "PvP" (`0x52a7a0`); the app applied its gates.
     if let Some(faction) = &u.faction_name {
         append_line(lua, this, (faction.clone(), WHITE), None, false)?;
     }
@@ -199,15 +141,11 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     if u.skinnable {
         append_line(lua, this, ("Skinnable".into(), RED), None, false)?;
     }
-    // CIVILIAN (green) — `0x612550`, whole: the unit's PvP bit + the query civilian flag + the
-    // unit is HOSTILE to the player (UnitReaction ≤ 2 — internal reaction < 2) + the kill would
-    // be GREY/trivial. PVP_RANK_CIVILIAN = "Civilian" (extracted GlobalStrings). The predicate
-    // itself lives in `unit` because `UnitPVPName` gates its own civilian arm on the same call.
+    // "Civilian" (`0x612550`): PvP-flagged, a civilian, hostile, and grey to kill (`0x5f0700`).
     if is_civilian_kill(&u, player_level) {
         append_line(lua, this, ("Civilian".into(), GREEN), None, false)?;
     }
-    // LEADER (white) — `0x6125c0`: the PvP bit + the query racial_leader flag, no other gate.
-    // PVP_RANK_LEADER = "Leader" (extracted GlobalStrings).
+    // "Leader" (`0x6125c0`): PvP-flagged and a racial leader, no other gate.
     if u.racial_leader && u.pvp {
         append_line(lua, this, ("Leader".into(), WHITE), None, false)?;
     }
@@ -227,7 +165,7 @@ fn set_world_owned(lua: &Lua, h: FrameHandle) {
     }
 }
 
-/// Remember (or drop) the tooltip's live unit token — the health watcher's key.
+/// Remember (or drop) the tooltip's live unit token, the health watcher's key.
 fn set_live_token(lua: &Lua, h: FrameHandle, token: Option<String>) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     if let Some(f) = model.arena.frame_mut(h) {
@@ -237,8 +175,8 @@ fn set_live_token(lua: &Lua, h: FrameHandle, token: Option<String>) {
     }
 }
 
-/// Drive the `<name>StatusBar` child from a unit snapshot (`None` hides it) — the engine pushes
-/// health, FrameXML's `HealthBar_OnValueChanged` colors the fill.
+/// Drive the `<name>StatusBar` child from a unit snapshot (`None` hides it); FrameXML's
+/// `HealthBar_OnValueChanged` colours the fill.
 fn update_bar(lua: &Lua, h: FrameHandle, unit: Option<&UnitState>) {
     let bar = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -289,13 +227,12 @@ fn update_bar(lua: &Lua, h: FrameHandle, unit: Option<&UnitState>) {
     }
 }
 
-/// The `set_unit` push hook: a fresh snapshot for the tooltip's LIVE token re-drives the health
-/// bar (the byte law's HEALTH UpdateField watcher — the bar tracks without a line rebuild).
+/// A `set_unit` push for a tooltip's live token updates its health bar without rebuilding the
+/// lines, as the reference's HEALTH field watcher does.
 pub(super) fn on_unit_push(lua: &Lua, token: &str) {
     let hits: Vec<FrameHandle> = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
-        // The arena's tooltip registry (1634), gated by the resolve's roster exactly as the walk
-        // it replaces was — `update_bar` writes layout.
+        // Registered frames only, as `update_bar` writes layout.
         model
             .arena
             .tooltip_kinds()
@@ -320,11 +257,9 @@ pub(super) fn on_unit_push(lua: &Lua, token: &str) {
 }
 
 impl super::UiScript {
-    /// Show the world-mouseover unit tooltip (the engine-driven flow the byte law describes):
-    /// fire `OnTooltipSetDefaultAnchor` (FrameXML seats the plate at the default corner), render
-    /// `token`'s snapshot, fire `UPDATE_MOUSEOVER_UNIT` (FrameXML recolors the name line by
-    /// reaction). Call on hover-target CHANGE — the health bar tracks pushes in between; a
-    /// re-show mid-fade resurrects at full alpha. `false` = no tooltip frame / no such unit.
+    /// Show the world-mouseover unit tooltip: fire `OnTooltipSetDefaultAnchor`, render `token`,
+    /// fire `UPDATE_MOUSEOVER_UNIT`. Call on a hover-target change; a re-show mid-fade returns to
+    /// full alpha. `false` when there is no tooltip frame or no such unit.
     pub fn world_tooltip_unit(&mut self, token: &str) -> bool {
         let h = {
             let mut model = self.model_mut();
@@ -356,7 +291,6 @@ impl super::UiScript {
         };
         if shown {
             set_world_owned(&self.lua, h);
-            // Cancel any running fade at full alpha (a re-hover resurrects).
             let mut model = self.model_mut();
             if let Some(f) = model.arena.frame_mut(h) {
                 if let KindState::Tooltip(t) = &mut f.kind_state {
@@ -371,25 +305,12 @@ impl super::UiScript {
         shown
     }
 
-    /// Show the world-mouseover GAMEOBJECT tooltip — the byte-verified GO builder `0x52aa20`
-    /// (decisions 0276 / **0756**): the NAME (gold) followed by the lock lines the caller
-    /// resolved, each with its own tint.
-    ///
-    /// **The anchor FORKS per object — it is not uniform** (correcting 0756). The
-    /// publisher's GameObject leg calls the picked object's `[obj->vtbl+0x5c]` and branches:
-    ///
-    /// - **true** (`0x492a01`) → `0x52ffe0(owner, 6, 0, 0)` — anchor-state **6**, the *cursor*
-    ///   anchor. Corroborated by the loss path: `0x530ae0` hides an anchor-state-6 tooltip
-    ///   **immediately** instead of arming the fade, which is how a pointer-following label behaves.
-    /// - **false** (`0x492a42`) → no `SetOwner` at all; the plate keeps its default corner seat.
-    ///
-    /// The **unit** leg (`0x492983`) never consults `+0x5c` — units are always corner-seated, which
-    /// is why the fork went unnoticed when 0756 made every GameObject corner-seated too. `cursor`
-    /// carries the caller's verdict: `Some(ui_xy)` = the cursor arm (and then
-    /// [`Self::world_tooltip_move`] follows the pointer), `None` = the corner.
-    ///
-    /// Same fade lifecycle as the unit flow (no `UPDATE_MOUSEOVER_UNIT` — that recolor is the
-    /// unit line's).
+    /// Show the world-mouseover GameObject tooltip (builder `0x52aa20`): the name in gold, then
+    /// the caller's lock lines. The anchor forks on the object's `[vtbl+0x5c]`: true (`0x492a01`)
+    /// seats it at the cursor, anchor state 6 (`0x52ffe0(owner, 6, 0, 0)`); false (`0x492a42`)
+    /// keeps the default corner, as units (`0x492983`) always do. `cursor` is that verdict, and
+    /// [`Self::world_tooltip_move`] follows a cursor-seated plate. Hover loss arms the unit flow's
+    /// fade, where the reference's loss path (`0x530ae0`) hides an anchor-state-6 plate at once.
     pub fn world_tooltip_gameobject(
         &mut self,
         name: &str,
@@ -408,31 +329,15 @@ impl super::UiScript {
             (h, id, root, root_id)
         };
         match cursor {
-            // The cursor arm: seated centred above the pointer, clamped by the tooltip frame's own
-            // flag. Compare-then-touch so a still pointer never re-layouts.
+            // The cursor arm: centred above the pointer; compare-then-touch, so a still pointer
+            // never re-layouts.
             Some((ui_x, ui_y)) => {
                 let mut model = self.model_mut();
-                // **The OWNER, which this arm used to skip**. The
-                // reference's cursor arm is `0x492a01 → 0x52ffe0(owner, 6, 0, 0)` — the SetOwner
-                // CORE, not a bare re-anchor — and the core's `0x53000c` stores that owner into
-                // `+0x314`. Every OTHER world plate we build reaches an owner by accident: the
-                // corner arm below and the unit flow both fire `OnTooltipSetDefaultAnchor`, whose
-                // FrameXML handler calls `GameTooltip:SetOwner(UIParent, …)` in Lua. This arm
-                // fires nothing, so `+0x314` stayed NULL on exactly the cursor-seated objects —
-                // a signpost, a mailbox, every GENERIC(5).
-                //
-                // A null owner is not cosmetic, because **`:Show()` is an existence gate**:
-                // `0x530a80` shows only when `+0x314` AND `+0x31c` are both non-zero, and
-                // otherwise takes the effective-hide `0x530a60` — which we implement faithfully
-                // (see the `Show` verb). So any Lua that reached `GameTooltip:Show()` while one of
-                // these plates was up HID IT, and hid it through our own correct code.
-                //
-                // That is not hypothetical: `!Questie` hooks GameTooltip's `OnShow` at
-                // PLAYER_LOGIN (`Questie:hookTooltip`, installed because stock GameTooltip has no
-                // OnShow of its own) and its handler ends in `GameTooltip:Show()`. So the plate's
-                // own show event hid the plate, ~26 ms after the engine built it, on every
-                // signpost, for the whole session — the director's report. The reference cannot
-                // reach that state: `0x492a01` writes the owner before the plate is ever shown.
+                // The owner: this arm is the SetOwner core (`0x52ffe0`), which stores it at
+                // `+0x314` (`0x53000c`); the other arms get theirs from FrameXML's
+                // `OnTooltipSetDefaultAnchor`. Without one, any Lua `GameTooltip:Show()` hides the
+                // plate: `0x530a80` shows only when `+0x314` and `+0x31c` are both set, else it
+                // takes `0x530a60`.
                 if let Ok(t) = tip_mut(&mut model, h) {
                     t.owner = Some(root);
                 }
@@ -445,7 +350,7 @@ impl super::UiScript {
                     model.touch_layout();
                 }
             }
-            // The corner arm: the same default-anchor handler the unit flow fires.
+            // The corner arm: the default-anchor handler the unit flow fires too.
             None => {
                 if let Err(e) = super::event::fire_widget_handler(
                     &self.lua,
@@ -500,13 +405,10 @@ impl super::UiScript {
         true
     }
 
-    /// Show the minimap BLIP tooltip — a landmark's `AreaPOI` name or a quest-dot NPC's name,
-    /// one GOLD line (the reference's engine SetText gold; a cross-interior dot renders FAINT
-    /// gold — the byte law's `|cffb0b0b0` wrap modulating the gold base, director-matched),
-    /// seated centred ABOVE the cursor: the tooltip's BOTTOM at the given UI-space point. The
-    /// plate FOLLOWS the pointer — `Self::minimap_tooltip_move` re-seats it as the cursor
-    /// drifts within one blip. Same world-owned fade lifecycle as the mouseover tooltip:
-    /// hover loss arms [`Self::world_tooltip_fade`].
+    /// Show the minimap blip tooltip (an `AreaPOI` or quest-dot name): one gold line, faint gold
+    /// for a cross-interior dot, its bottom at the given UI point above the cursor.
+    /// [`Self::world_tooltip_move`] follows the pointer, and hover loss arms
+    /// [`Self::world_tooltip_fade`].
     pub fn minimap_tooltip(&mut self, text: &str, ui_x: f32, ui_y: f32, grey: bool) -> bool {
         let (h, id, root_id) = {
             let mut model = self.model_mut();
@@ -530,13 +432,10 @@ impl super::UiScript {
             let mut model = self.model_mut();
             clear_content(&mut model, h);
             let input = model.layout_inputs.entry(h).or_default();
-            // Anchor only — the screen clamp (G flags bit4: a cursor-seated plate near the window
-            // edge slides back in instead of clipping, director's report at the screen-right
-            // minimap) is the tooltip FRAME's own flag (`Frame::clamped_to_screen`), synced with
-            // live extents at every resolve.
+            // Anchor only: the frame's own clamp flag (`Frame::clamped_to_screen`, G flags bit 4)
+            // slides a plate near the window edge back on screen.
             let new = Anchor::new(Point::Bottom, root_id, Point::BottomLeft, ui_x, ui_y);
-            // Compare-then-touch: a still cursor re-seats the plate at the same point every
-            // frame — tier 1 of the layout gate stays quiet unless the pointer actually moved.
+            // Compare-then-touch, so a still cursor does not dirty the layout.
             let same =
                 input.anchors.len() == 1 && super::object::anchor_bits_eq(&input.anchors[0], &new);
             if !same {
@@ -545,10 +444,7 @@ impl super::UiScript {
             }
         }
         fire_cleared(&self.lua, h);
-        // The blip name renders GOLD like the reference (the engine tooltip's SetText line —
-        // the same 0xffffd200 the unit-name line uses); a cross-interior entry renders the
-        // byte law's `|cffb0b0b0` wrap MODULATING that gold — faint gold, not flat grey
-        // (director-matched against the reference, 2026-07-13).
+        // A cross-interior entry's `|cffb0b0b0` wrap modulates the gold: faint gold, not grey.
         let dim = 0xb0 as f32 / 255.0;
         let color = if grey {
             [GOLD[0] * dim, GOLD[1] * dim, GOLD[2] * dim, 1.0]
@@ -574,9 +470,7 @@ impl super::UiScript {
         true
     }
 
-    /// Re-seat the showing cursor-anchored tooltip at a new pointer point (the follow half of
-    /// [`Self::minimap_tooltip`] and [`Self::world_tooltip_gameobject`]): anchor-only — no
-    /// content rebuild, no fade churn. No-op when the tooltip isn't the world-owned shown plate.
+    /// Re-seat the shown world-owned tooltip at a new pointer point, anchor only; else a no-op.
     pub fn world_tooltip_move(&mut self, ui_x: f32, ui_y: f32) {
         let mut model = self.model_mut();
         let Some(h) = model.arena.lookup("GameTooltip") else {
@@ -595,11 +489,8 @@ impl super::UiScript {
         }
         let root_id = model.frame_id(root);
         let input = model.layout_inputs.entry(h).or_default();
-        // Anchor only — the frame's own clamp flag keeps the plate on screen (see
-        // `Frame::clamped_to_screen`).
         let new = Anchor::new(Point::Bottom, root_id, Point::BottomLeft, ui_x, ui_y);
-        // Compare-then-touch, as in the seat/blip paths above: the follow fires per pointer
-        // event, and a still cursor must not dirty the layout gate's tier 1.
+        // Compare-then-touch: this runs on every pointer event.
         let same =
             input.anchors.len() == 1 && super::object::anchor_bits_eq(&input.anchors[0], &new);
         if !same {
@@ -608,12 +499,8 @@ impl super::UiScript {
         }
     }
 
-    /// **Is `GameTooltip` still the plate a world hover put up?** — world-owned (no Lua
-    /// `SetOwner`, no content `Set*` and no `Hide` has taken it since) and still shown.
-    ///
-    /// The world-hover driver keeps a host-side memo of which plate it put up so it does not
-    /// rebuild one per frame; that memo is about the HOVER, and this is the other half of the
-    /// question — whether the plate that memo describes is still on the screen.
+    /// Whether `GameTooltip` is still the shown plate a world hover put up, with no Lua
+    /// `SetOwner`, content `Set*` or `Hide` since.
     pub fn world_tooltip_up(&mut self) -> bool {
         let model = self.model_mut();
         let Some(h) = model.arena.lookup("GameTooltip") else {
@@ -626,8 +513,8 @@ impl super::UiScript {
             .unwrap_or(false)
     }
 
-    /// Arm the mouseover tooltip's fade-out (hover loss — the byte law arms a timestamped fade,
-    /// never an instant hide). No-op when the tooltip isn't showing a world unit.
+    /// On hover loss, arm the world tooltip's timed fade (the reference's unit plate fades rather
+    /// than hiding); a no-op unless a world-owned plate is shown.
     pub fn world_tooltip_fade(&mut self) {
         let now = self.now();
         let mut model = self.model_mut();
@@ -646,15 +533,12 @@ impl super::UiScript {
 
 /// Register the unit content channel into the GameTooltip kind method table.
 pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
-    // GameTooltip:SetUnit(token) → 1/nil — the unit-frame hover (ref UnitFrame_OnEnter reads
-    // the return to arm its re-poll).
+    // GameTooltip:SetUnit(token) → 1 or nil, which `UnitFrame_OnEnter` reads to arm its re-poll.
     m.set(
         "SetUnit",
         lua.create_function(|lua, (this, token): (Table, String)| {
-            // Same gate as every `Unit*` verb: `SetUnit` resolves its argument through the client's
-            // one token resolver, so an unrecognised name raises here too rather than drawing an
-            // empty tooltip. NOT inside `render_unit` — the app's own push calls that with a
-            // canonical token and must never be gated against itself.
+            // The token gate every `Unit*` verb uses: an unknown token raises. Not in
+            // `render_unit`, which the app calls with canonical tokens.
             crate::script::unit::check_unit_token(&Some(token.clone()))?;
             let ok = render_unit(lua, &this, &token)?;
             Ok(if ok {

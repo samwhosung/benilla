@@ -1,52 +1,28 @@
-//! The taxi-map bindings — the Era-shaped flight-master surface driving a faithful
-//! port of the real 1.12 `TaxiFrame` (extracted from the patch chain:
-//! `Interface\FrameXML\TaxiFrame.{xml,lua}`). Same two-way seam as [`super::trainer`]: the app
-//! pushes a **taxi snapshot** ([`UiScript::set_taxi`] — the known-node mask, DBC positions, route
-//! and cost computation already resolved app-side to a flat node list), and the Lua
-//! `TakeTaxiNode`/`CloseTaxiMap` calls queue outbound **intents** the app drains
-//! ([`UiScript::take_taxi_node`] / [`UiScript::take_taxi_close`]). The engine holds no taxi
-//! knowledge — a node is name/type/position/cost/route-segments, all app-resolved.
-//!
-//! ## The Era API shape (matched to the real `TaxiFrame.lua`)
-//!
-//! The reference window's `.lua` runs verbatim on these bindings: `NumTaxiNodes`,
-//! `TaxiNodeGetType(i) → "CURRENT"/"REACHABLE"/"DISTANT"/"NONE"`, `TaxiNodePosition(i) → x, y`
-//! (normalized 0..1, **BOTTOMLEFT** origin — the Lua multiplies by the 316×352 map size and anchors
-//! from the map's BOTTOMLEFT), `TaxiNodeName(i)`, `TaxiNodeCost(i)` (copper),
-//! `GetNumRoutes(i)` + `TaxiGetSrcX/Y(i, hop)`/`TaxiGetDestX/Y(i, hop)` (the hover route's
-//! per-hop segment endpoints, same normalized space), `TakeTaxiNode(i)`, `CloseTaxiMap()`,
-//! `SetTaxiMap(texture)` (assigns the continent art onto the given Texture region),
-//! `TaxiNodeSetCurrent(i)` (a no-op here: the real client computes the hovered node's route arrays
-//! behind it; the app precomputes every node's route, so there is nothing to arm), and
-//! `UnitOnTaxi(unit)`. Indices are 1-based into the pushed node list.
-//!
-//! Node classification, projection, and the route metric are the app's job — and are INTERIM
-//! behind decision 0484's in-flight §5 (I1/I2); this seam only carries the results.
+//! The taxi-map bindings the stock `TaxiFrame.lua` runs on, over a node list the app resolves
+//! and pushes (types, positions, fares and routes); `TakeTaxiNode` and `CloseTaxiMap` queue
+//! intents the app drains. Positions are normalized 0..1 from the map's bottom-left, which the Lua
+//! scales by the 316x352 map.
 
 use mlua::{Lua, Table};
 
 use super::region::region_handle_of;
 use super::Model;
 
-/// A visible node's icon state (`TaxiNodeGetType`) — the reference maps these to the green
-/// (current) / white (reachable) / yellow (distant) icons.
+/// A visible node's icon state (`TaxiNodeGetType`): green, white or yellow in the reference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TaxiNodeType {
-    /// The flight master's own node ("You are here" — green).
+    /// The flight master's own node, "You are here".
     Current,
-    /// Known, and a route from the current node exists (white; clickable).
+    /// Known and routable from the current node; clickable.
     #[default]
     Reachable,
-    /// Known, but no route connects it to the current node (yellow). **Never produced**: the real
-    /// client's DISTANT classification is a dead branch (byte-verified — decision 0496 §TU-3; an
-    /// unroutable node simply doesn't render), so the app drops such nodes instead. The variant
-    /// stays because the reference Lua's `TaxiButtonTypes` table names it — a faithful surface
-    /// with no live writer.
+    /// Known but unroutable. Never produced: the reference's DISTANT branch is dead and an
+    /// unroutable node does not render; the variant stays because `TaxiButtonTypes` names it.
     Distant,
 }
 
 impl TaxiNodeType {
-    /// The Era type string (`TaxiFrame.lua`'s `TaxiButtonTypes` keys).
+    /// The type string, a `TaxiButtonTypes` key.
     fn era_str(self) -> &'static str {
         match self {
             TaxiNodeType::Current => "CURRENT",
@@ -56,24 +32,23 @@ impl TaxiNodeType {
     }
 }
 
-/// One node on the open taxi map — everything the window shows for it, app-resolved.
+/// One node on the open taxi map, resolved by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TaxiUiNode {
-    /// `TaxiNodeName` (the DBC's localized name, e.g. `"Stormwind, Elwynn"`).
+    /// `TaxiNodeName`, the DBC's localized name.
     pub name: String,
-    /// `TaxiNodeGetType`. A node the reference would type `"NONE"` (hidden) is simply not pushed.
+    /// `TaxiNodeGetType`; a node the reference types `"NONE"` is not pushed.
     pub node_type: TaxiNodeType,
-    /// `TaxiNodePosition` — normalized `(x, y)` on the map art, 0..1, BOTTOMLEFT origin.
+    /// `TaxiNodePosition`: normalized `(x, y)` on the map art, from the bottom-left.
     pub pos: (f32, f32),
-    /// `TaxiNodeCost` — the route's fare in copper (0 for the current node / an unroutable one).
+    /// `TaxiNodeCost`: the fare in copper, 0 for the current node.
     pub cost: u32,
-    /// The hover route's per-hop segments, `[src_x, src_y, dest_x, dest_y]` each, in the same
-    /// normalized space (`GetNumRoutes` / `TaxiGetSrcX…DestY`). Empty for current/distant nodes.
+    /// The hover route's hops as `[src_x, src_y, dest_x, dest_y]` in the same space, for
+    /// `GetNumRoutes` and `TaxiGetSrcX` to `TaxiGetDestY`; empty for the current node.
     pub routes: Vec<[f32; 4]>,
 }
 
-/// The open taxi map: the continent art and the visible nodes. Pushed whole by the app; `None`
-/// means no taxi map is open.
+/// The open taxi map: the continent art and the visible nodes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TaxiUiState {
     /// The map art `SetTaxiMap` assigns (e.g. `Interface\TaxiFrame\TAXIMAP1`).
@@ -88,21 +63,18 @@ impl super::UiScript {
         self.model_mut().taxi = state;
     }
 
-    /// Whether our own player is currently riding a taxi (`UnitOnTaxi("player")` — the action-bar
-    /// dim and the reference's flight-state checks read it).
+    /// Whether the player is riding a taxi, for `UnitOnTaxi("player")`.
     pub fn set_on_taxi(&mut self, riding: bool) {
         self.model_mut().taxi_riding = riding;
     }
 
-    /// Drain the **1-based node indices** `TakeTaxiNode` queued since the last call (the app maps
-    /// each back to its node id and sends the activate packet).
+    /// Drain the 1-based indices `TakeTaxiNode` queued; the app sends the activate for each.
     pub fn take_taxi_node(&mut self) -> Vec<usize> {
         std::mem::take(&mut self.model_mut().taxi_takes)
     }
 
-    /// Whether `CloseTaxiMap` was called since the last drain (and clear the flag). The window
-    /// closed client-side; the app clears its taxi state (no packet — the server holds no
-    /// open-window session for the map).
+    /// Whether `CloseTaxiMap` was called since the last drain; it sends no packet, as the server
+    /// holds no window session for the map.
     pub fn take_taxi_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().taxi_close)
     }
@@ -117,11 +89,9 @@ fn node(model: &Model, i: i64) -> Option<&TaxiUiNode> {
         .and_then(|i| nodes.get(i))
 }
 
-/// Register the taxi globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // → how many nodes the open map shows (0 when closed).
     g.set(
         "NumTaxiNodes",
         lua.create_function(|lua, ()| {
@@ -130,7 +100,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // → the node's icon-state string; "NONE" out of range (the reference hides that button).
+    // "NONE" out of range, a button the reference hides.
     g.set(
         "TaxiNodeGetType",
         lua.create_function(|lua, i: i64| {
@@ -139,7 +109,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // → the node's normalized map position (x, y; BOTTOMLEFT origin).
     g.set(
         "TaxiNodePosition",
         lua.create_function(|lua, i: i64| {
@@ -157,7 +126,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // → the fare to fly there, in copper (`SetTooltipMoney` renders it).
     g.set(
         "TaxiNodeCost",
         lua.create_function(|lua, i: i64| {
@@ -166,14 +134,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The real client arms the hovered node's route computation here; the app pushes every node's
-    // route precomputed, so this is a faithful no-op (kept so the reference Lua runs verbatim).
+    // The reference computes the hovered node's route here; the app precomputes every route.
     g.set(
         "TaxiNodeSetCurrent",
         lua.create_function(|_, _: i64| Ok(()))?,
     )?;
 
-    // → the hover route's hop count for node `i`.
     g.set(
         "GetNumRoutes",
         lua.create_function(|lua, i: i64| {
@@ -182,8 +148,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // → one endpoint coordinate of route hop `hop` (1-based) of node `i` — the four accessors the
-    // reference's `DrawRouteLine` loop reads.
+    // One coordinate of 1-based hop `hop`, for the reference's `DrawRouteLine` loop.
     for (name, pick) in [
         ("TaxiGetSrcX", 0usize),
         ("TaxiGetSrcY", 1),
@@ -203,7 +168,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // Queue the click — the app maps the index to a node id and sends the activate packet.
     g.set(
         "TakeTaxiNode",
         lua.create_function(|lua, i: i64| {
@@ -225,8 +189,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetTaxiMap(textureRegion) — assign the open map's continent art onto the given Texture
-    // region (the engine picked `TAXIMAP<map>`, app-side; the region draws it like any SetTexture).
+    // The open map's continent art (`TAXIMAP<map>`, the app's pick) onto the given texture.
     g.set(
         "SetTaxiMap",
         lua.create_function(|lua, this: Table| {
@@ -240,19 +203,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `UnitOnTaxi(unit)` (`0x517a40`) → **the number 1 or nil**, never a Lua boolean — the unit
-    // predicate family's one return shape (the push law is
-    // `crate::script::binding_abi::flag`). It lives here rather than beside its 22 siblings
-    // because the ride flag it reads is this module's, not `UnitState`'s — which is exactly how it
-    // came to be the one predicate still answering a `bool` after the family was fixed.
-    //
-    // Only our own player is tracked (the reference UI only ever asks about `"player"`); any other
-    // token reads nil.
-    //
-    // The token argument is `Value`, not `String`, so the miss is the reference's own message: the
-    // binding carries an `lua_isstring` gate at `0x517a48` whose failure arm is
-    // `luaL_error("Usage: UnitOnTaxi(\"unit\")")`. A Rust `String` parameter raised mlua's
-    // own type-conversion error there instead.
+    // `0x517a40`: the number 1 or nil, never a boolean; an argument neither string nor number
+    // raises the reference's usage (`0x517a48`). Only the player is tracked, as the stock UI asks
+    // about no other unit.
     g.set(
         "UnitOnTaxi",
         lua.create_function(|lua, unit: mlua::Value| {

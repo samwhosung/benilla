@@ -1,19 +1,13 @@
-//! The drag gesture — `RegisterForDrag`/`OnDragStart`/`OnDragStop`/
-//! `OnReceiveDrag`'s mechanics: arm on press, start past a threshold, resolve on release. Split
-//! out of [`super`] purely for size — [`super::pointer`](crate::script::pointer) is the only
-//! external caller (via [`super`]'s re-exports), and the payload types/transition seam this
-//! drives live one level up.
+//! The `RegisterForDrag` gesture: armed on a press, started past a threshold, ended on release.
 
 use crate::script::Model;
 use crate::widget::FrameHandle;
 
-/// INTERIM pixel drag-start threshold (0216 §5 (d) is the byte-verified trigger; the reference
-/// almost certainly uses a small OS/engine drag-distance constant, not this one). Compared with
-/// **strict** `>` — a move exactly at the threshold does not start the gesture.
+/// The drag-start distance in pixels, exceeded strictly; the reference starts at 0.01 frame units
+/// or more from the press (`0x81c468`, squared by `0x76b300`).
 pub(crate) const DRAG_START_THRESHOLD: f32 = 4.0;
 
-/// An in-flight drag gesture: armed at mouse-down on a [`Model::drag_registered`] frame,
-/// `started` once the cursor has moved past [`DRAG_START_THRESHOLD`] from the press point.
+/// A drag armed at a press on a [`Model::drag_registered`] frame, `started` past the threshold.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DragGesture {
     pub(crate) button: String,
@@ -22,22 +16,15 @@ pub(crate) struct DragGesture {
     pub(crate) started: bool,
 }
 
-/// A resolved drag release (a gesture whose button matched the release) — [`Model::drag`] is
-/// always cleared alongside this, win or lose.
+/// A gesture whose button matched the release; [`Model::drag`] is cleared either way.
 pub(crate) struct DragRelease {
-    /// Whether the gesture crossed [`DRAG_START_THRESHOLD`] (so `OnDragStart` fired). A released
-    /// gesture that never started fires nothing — the normal click path proceeds untouched.
+    /// `OnDragStart` fired; an unstarted release fires nothing and the click proceeds.
     pub(crate) started: bool,
     pub(crate) source: FrameHandle,
 }
 
-/// Arm (or clear) the drag gesture on a mouse-DOWN. `hit` is the pressed frame (`None` = the
-/// press hit nothing); a press always REPLACES any leftover in-flight gesture — its matching
-/// release should already have cleared it, but a press is the one moment we know for certain no
-/// gesture should still be armed against a *different* earlier press.
-///
-/// **The replaced gesture is abandoned, not forgotten**: the caller runs [`abandon_drag`] first
-/// and fires `OnDragStop` for a started one. See that function for why a silent drop is the bug.
+/// Arm or clear the gesture on a press, replacing any leftover one; the caller runs
+/// [`abandon_drag`] first so a started gesture still gets its `OnDragStop`.
 pub(crate) fn arm_drag(model: &mut Model, hit: Option<FrameHandle>, button: &str, pos: (f32, f32)) {
     model.drag = hit
         .filter(|&h| {
@@ -54,10 +41,8 @@ pub(crate) fn arm_drag(model: &mut Model, hit: Option<FrameHandle>, button: &str
         });
 }
 
-/// Advance the armed gesture on a mouse-move: once the cursor has moved past
-/// [`DRAG_START_THRESHOLD`] from the press point, mark it started. Returns `(source id, button)`
-/// to fire `OnDragStart` with, exactly once per gesture (already-started and no-gesture both
-/// answer `None`); a source that died before starting fires nothing.
+/// Start the armed gesture once the cursor passes the threshold, returning the `OnDragStart`
+/// source id and button once per gesture; a source that died fires nothing.
 pub(crate) fn maybe_start_drag(model: &mut Model, pos: (f32, f32)) -> Option<(u32, String)> {
     let (source, button) = {
         let g = model.drag.as_ref()?;
@@ -72,11 +57,8 @@ pub(crate) fn maybe_start_drag(model: &mut Model, pos: (f32, f32)) -> Option<(u3
         (g.source, g.button.clone())
     };
     model.drag.as_mut().expect("checked Some above").started = true;
-    // **The button's drag-start edge** — `CSimpleButton` overrides `+0x74` with `0x7793f0`, which
-    // un-presses (`0x779410`, guarded on `locked == 0 && state != DISABLED`) and then forwards to
-    // the base notify that fires `<OnDragStart>`. So a button you drag off releases its pushed art
-    // at the THRESHOLD crossing, which is here — not when the cursor leaves its rect, and not for
-    // a frame that never registered for drag.
+    // A dragged button un-presses at the threshold, not on leaving its rect: `CSimpleButton`'s
+    // `+0x74` override (`0x7793f0`) un-presses (`0x779410`) before firing `OnDragStart`.
     super::super::button::edge(model, source, crate::widget::ButtonState::on_drag_start);
     let id = model
         .arena
@@ -86,26 +68,14 @@ pub(crate) fn maybe_start_drag(model: &mut Model, pos: (f32, f32)) -> Option<(u3
     Some((id, button))
 }
 
-/// **Abandon** an in-flight gesture that will never see its release, and report whether anything
-/// has to be told. Returns the source of a gesture that had **started**, so the caller fires the
-/// same `OnDragStop` a real release would; an armed-but-unstarted press answers `None`, exactly as
-/// releasing one does.
-///
-/// Two callers, and both are situations the reference simply cannot be in: the OS captures the
-/// pointer for the whole of a button-held drag there, so the release always arrives. Ours does
-/// not — the cursor can walk out of the window, and a second button can be pressed mid-gesture —
-/// and dropping the gesture *silently* in either case is what leaves the UI stuck rather than
-/// merely cancelled: the addon's `OnDragStop → StopMovingOrSizing` never runs, so the engine's
-/// single [`Model::moving`] slot stays taken, [`super::super::object::movable::advance_move`]
-/// keeps gluing that frame to the cursor for the rest of the session, and it swallows every press
-/// aimed at anything underneath. (the raid grid, where one drag off the window edge cost
-/// every later drag.)
+/// Drop a gesture whose release will never come, because the pointer left the window or a second
+/// button was pressed; the reference cannot lose one, as the OS captures the pointer. Returns a
+/// started one's source, which must get `OnDragStop` or a frame it is moving follows the cursor.
 pub(crate) fn abandon_drag(model: &mut Model) -> Option<FrameHandle> {
     model.drag.take().filter(|g| g.started).map(|g| g.source)
 }
 
-/// Resolve (and clear) the in-flight drag gesture matching a mouse-button release's `button`, if
-/// any (case-insensitive, the `RegisterForClicks` precedent).
+/// Take the gesture whose button matches the release.
 pub(crate) fn take_drag(model: &mut Model, button: &str) -> Option<DragRelease> {
     let g = model
         .drag
@@ -151,10 +121,10 @@ mod tests {
         s.resolve();
 
         s.mouse_button(100.0, 300.0, "LeftButton", true); // press inside A
-        s.mouse_move(102.0, 300.0); // 2px — under the threshold
+        s.mouse_move(102.0, 300.0); // 2px: under the threshold
         assert_eq!(s.eval::<i64>("return drag_starts").unwrap(), 0);
 
-        s.mouse_move(110.0, 300.0); // 10px from the press point — starts
+        s.mouse_move(110.0, 300.0); // 10px from the press: starts
         assert_eq!(s.eval::<i64>("return drag_starts").unwrap(), 1);
         assert_eq!(
             s.eval::<String>("return drag_button").unwrap(),
@@ -192,9 +162,7 @@ mod tests {
 
     #[test]
     fn drag_release_on_the_source_still_suppresses_onclick() {
-        // Without the suppression, a same-frame press+release Up would normally fire OnClick
-        // (a plain Frame's OnClick fires on any same-frame release — see `input.rs`'s click
-        // tests) — proving the drag path takes precedence over that default.
+        // A plain Frame fires OnClick on a same-frame release; a started drag suppresses it.
         let mut s = drag_script();
         s.run(
             r#"
@@ -231,7 +199,7 @@ mod tests {
         s.resolve();
 
         s.mouse_button(100.0, 300.0, "LeftButton", true);
-        s.mouse_move(101.0, 300.0); // 1px — never starts
+        s.mouse_move(101.0, 300.0); // 1px: never starts
         s.mouse_button(100.0, 300.0, "LeftButton", false);
         assert_eq!(
             s.eval::<i64>("return clicks").unwrap(),
@@ -241,9 +209,7 @@ mod tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
-    /// A drag released over the world does NOTHING to the payload — no popup, no clear (decision
-    /// 0218, byte-verified: `0x495300` runs on the WorldFrame click release only; a drag release
-    /// routes as a drag, never a click — the director's "it should require an outside up+down").
+    /// The world drop (`0x495300`) runs on a world click's release, never on a drag release.
     #[test]
     fn drag_release_over_nothing_keeps_carrying_no_popup() {
         let mut s = drag_script();
@@ -279,7 +245,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return heard").unwrap(), 0, "no popup");
         assert!(s.cursor_item().is_some(), "the payload keeps carrying");
 
-        // The follow-up CLICK on the world (down + up, both over nothing) is the trigger.
+        // The trigger is a full click on the world, down and up over nothing.
         s.mouse_button(-50.0, -50.0, "LeftButton", true);
         assert_eq!(
             s.eval::<i64>("return heard").unwrap(),
@@ -332,17 +298,8 @@ mod tests {
         assert!(s.cursor_item().is_some(), "the payload stays held");
     }
 
-    /// **The world frame IS the world** — B380 / decision 2089, the regression this file's
-    /// other world-drop tests were structurally blind to.
-    ///
-    /// Every one of them clicks at `(-50, -50)`, where the hit test answers `None`, and the gate
-    /// used to be spelled `hit_id.is_none() && pressed.is_none()`. Decision 1983 put the stock
-    /// `WorldFrame` on the manifest — full-screen, mouse-enabled, `SetAllPoints` — so from that
-    /// day every click a player makes on the world hits a frame, the gate went permanently false
-    /// and dropping an item on the ground stopped doing anything at all. It is exactly the
-    /// reference's own click target for a world click (1984: "the press runs the frame's Lua
-    /// `OnMouseDown` (never consuming), then the `BUTTON1`/`BUTTON2` binding — which **is** the
-    /// world click"), so it belongs on the yes side of the predicate.
+    /// A click on the full-screen stock `WorldFrame` is a world click: in the reference, its press
+    /// runs the frame's `OnMouseDown` without consuming, then the `BUTTON1`/`BUTTON2` binding.
     #[test]
     fn a_click_on_the_world_frame_is_a_world_drop() {
         let mut s = drag_script();
@@ -369,7 +326,7 @@ mod tests {
             equip_slots: Vec::new(),
         }));
 
-        // The fixture's own premise: the click really does land on the world frame.
+        // The premise: the click lands on the world frame.
         let hit = s
             .hit_test(400.0, 300.0)
             .expect("the world frame is full-screen");
@@ -383,9 +340,6 @@ mod tests {
         assert!(s.cursor_item().is_some(), "the payload stays held");
     }
 
-    /// …and a UI frame ON TOP of the world frame is still the UI: press and release both land on
-    /// the plate, so no drop — the other half of [`super::over_world`]'s gate, which a predicate
-    /// that merely asked "is a world frame anywhere under the cursor" would get wrong.
     #[test]
     fn a_click_on_a_frame_above_the_world_frame_is_not_a_world_drop() {
         let mut s = drag_script();
@@ -424,8 +378,7 @@ mod tests {
             "the plate ate the click — that IS the UI consuming it"
         );
 
-        // The mixed pair, both ways round: a press on the plate released over the world, and a
-        // press on the world released over the plate. Neither is a completed world click.
+        // A press and release split across the plate and the world, either way: no world click.
         s.mouse_button(100.0, 300.0, "LeftButton", true);
         s.mouse_button(600.0, 300.0, "LeftButton", false);
         s.mouse_button(600.0, 300.0, "LeftButton", true);
@@ -435,9 +388,6 @@ mod tests {
         assert!(s.cursor_item().is_some());
     }
 
-    /// A click on the world frame with an EMPTY cursor is not the UI consuming anything — the
-    /// return the app's arbiter would read if it ever asked. 1984: the world frame's press
-    /// "never consum[es]".
     #[test]
     fn a_world_frame_click_with_no_payload_consumes_nothing() {
         let mut s = drag_script();
@@ -451,10 +401,7 @@ mod tests {
         );
     }
 
-    /// A world object (unit/GameObject) under the cursor suppresses the world drop entirely:
-    /// the reference's object-leg dispatcher (`0x492ce0`) keeps every
-    /// real payload and runs SELECT — no `DELETE_ITEM_CONFIRM`, payload untouched. The app
-    /// feeds the pick (`set_world_pick`); tests/captures default `Nothing`.
+    /// Over a world object the reference's object leg (`0x492ce0`) selects and keeps the payload.
     #[test]
     fn world_click_over_a_world_object_is_not_a_world_drop() {
         let mut s = drag_script();
@@ -492,8 +439,6 @@ mod tests {
         assert!(s.cursor_item().is_some(), "the item payload survives");
     }
 
-    /// A press over a FRAME whose release lands on the world is neither a click on the frame nor
-    /// a world click — the payload is untouched.
     #[test]
     fn frame_press_world_release_is_not_a_world_drop() {
         let mut s = drag_script();
@@ -528,8 +473,7 @@ mod tests {
         assert!(s.cursor_item().is_some());
     }
 
-    /// A spell/action payload world-CLICK clears silently (`0x495300`'s non-item arms); a drag
-    /// release over the world keeps it carrying, same as an item.
+    /// A non-item payload's world click clears it silently (`0x495300`); a drag release keeps it.
     #[test]
     fn world_click_with_a_spell_payload_clears_silently() {
         let mut s = drag_script();
@@ -570,15 +514,6 @@ mod tests {
         assert!(s.cursor_payload().is_none(), "cleared silently");
     }
 
-    /// **A drag the pointer carries out of the window ENDS, and the frame it was moving stops
-    /// following the cursor**.
-    ///
-    /// The reference cannot reach this state — the OS holds the pointer for a button-held drag, so
-    /// the release always arrives — which is exactly why nothing in FrameXML defends against it and
-    /// why the engine has to. Abandoning the gesture *silently* (what this used to do) skips the
-    /// canonical `OnDragStop → StopMovingOrSizing`, so the single move slot stays taken and
-    /// `advance_move` glues the frame to the cursor for the rest of the session, on top of whatever
-    /// the player is trying to click next.
     #[test]
     fn a_gesture_the_pointer_carries_out_of_the_window_still_fires_its_stop() {
         let mut s = drag_script();
@@ -597,10 +532,8 @@ mod tests {
         s.resolve();
 
         s.mouse_button(150.0, 150.0, "LeftButton", true);
-        s.mouse_move(200.0, 200.0); // past the threshold ⇒ OnDragStart ⇒ StartMoving
-                                    // `StartMoving` samples the cursor where it is CALLED, so the starting move moves nothing
-                                    // (`tests::movable`'s own note) — this is the one that carries the frame.
-        s.mouse_move(250.0, 250.0);
+        s.mouse_move(200.0, 200.0); // past the threshold: OnDragStart, StartMoving
+        s.mouse_move(250.0, 250.0); // StartMoving anchors on its call; this move carries
         s.resolve();
         let carried: f32 = s.eval("return A:GetLeft()").unwrap();
         assert_eq!(carried, 150.0, "the frame followed the cursor's 50px");
@@ -612,7 +545,7 @@ mod tests {
             "the abandon fires the same OnDragStop a release would"
         );
 
-        // …and the move slot is free, so nothing follows the cursor any more.
+        // The move slot is free: nothing follows the cursor.
         s.mouse_move(600.0, 500.0);
         s.resolve();
         assert_eq!(
@@ -626,9 +559,6 @@ mod tests {
         assert_eq!(s.eval::<i64>("return stops").unwrap(), 1);
     }
 
-    /// The same abandon, by the other door: a fresh press REPLACES an in-flight gesture, and a
-    /// started one has to be told. Pressing a second button mid-drag is an ordinary slip of the
-    /// hand, and it used to leave the same stuck move slot.
     #[test]
     fn a_press_that_replaces_an_in_flight_gesture_stops_it_first() {
         let mut s = drag_script();
@@ -657,8 +587,7 @@ mod tests {
             "the left drag the right press displaced was stopped, not forgotten"
         );
 
-        // An armed-but-UNSTARTED press fires nothing when it is replaced — the same silence a
-        // release of one gets.
+        // Replacing an unstarted press fires nothing, as releasing it would not.
         s.mouse_button(150.0, 150.0, "LeftButton", true);
         s.mouse_button(150.0, 150.0, "MiddleButton", true);
         assert_eq!(s.eval::<i64>("return stops").unwrap(), 1);

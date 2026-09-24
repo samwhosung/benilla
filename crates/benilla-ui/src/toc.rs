@@ -1,37 +1,24 @@
-//! The `.toc` manifest parser — the load list + metadata of every addon, including Blizzard's own
-//! (`FrameXML.toc` and the `Blizzard_*` AddOns are ordinary manifests; third-party addons are the
-//! identical mechanism).
-//!
-//! Grammar, shared by 1.12 and Era manifests (Era only adds directive *keys*, not syntax):
-//! - `## Key: Value` — a directive. Keys compare case-insensitively; localized variants carry a
-//!   locale suffix (`## Title-deDE: …`). Era manifests list several client builds in one
-//!   `## Interface: 11507, 11508`.
-//! - `#` (not followed by another `#`) — a comment.
-//! - anything else non-blank — a file to load, in order (`.lua`/`.xml`, `\` or `/` separators).
-//!
-//! The parser is lossless about order (directives keep file order for duplicate keys; files keep
-//! load order) and byte-tolerant: UTF-8 BOM, `\r\n`, and stray whitespace are the norm in shipped
-//! manifests, not the exception.
+//! The `.toc` manifest parser, for FrameXML, the `Blizzard_*` addons and third-party ones alike:
+//! `## Key: Value` is a directive, any other `#` line a comment, and any other non-blank line a
+//! file to load, in order. A BOM, `\r\n` and stray whitespace are tolerated.
 
-/// A parsed `.toc` manifest: ordered directives + the ordered file load list.
+/// A parsed `.toc` manifest.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Toc {
-    /// `## Key: Value` directives in file order, keys as written (compare via [`Toc::directive`]).
+    /// `## Key: Value` pairs in file order, keys as written.
     pub directives: Vec<(String, String)>,
-    /// Files to load, in order, exactly as written (path separators are normalized at *load* time,
-    /// not here — the manifest is quoted verbatim in errors and tooling).
+    /// Files to load, in order, as written; separators are normalized at load time.
     pub files: Vec<String>,
 }
 
-/// Case-insensitive ASCII prefix test — the reference's `SStrCmpI(line, key, SStrLen(key))`.
+/// Case-insensitive ASCII prefix test, the reference's `SStrCmpI(line, key, SStrLen(key))`.
 fn starts_with_ci(s: &str, prefix: &str) -> bool {
     let (s, p) = (s.as_bytes(), prefix.as_bytes());
     s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p)
 }
 
 impl Toc {
-    /// Parse manifest text. Never fails: unrecognizable lines are file entries by definition of
-    /// the grammar, and an empty input is an empty manifest.
+    /// Parse manifest text; never fails, since any unrecognized line is a file entry.
     pub fn parse(text: &str) -> Self {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let mut toc = Toc::default();
@@ -41,8 +28,7 @@ impl Toc {
                 continue;
             }
             if let Some(directive) = line.strip_prefix("##") {
-                // `##` alone (or without a colon) is treated as a comment, matching the client's
-                // tolerance for malformed directives.
+                // `##` with no colon is a comment, as the client tolerates it.
                 if let Some((key, value)) = directive.split_once(':') {
                     let key = key.trim();
                     if !key.is_empty() {
@@ -57,17 +43,8 @@ impl Toc {
         toc
     }
 
-    /// The directive whose key matches `key` case-insensitively — **the LAST one, when a manifest
-    /// writes the key twice**.
-    ///
-    /// This read the first for as long as the doc here said "shipped manifests don't duplicate
-    /// keys", which two of them do: `MoveAnything.toc` has `## Notes` on lines 3 and 5, and
-    /// `AtlasLoot.toc` has `## Author` on lines 6 and 9. The reference hashes each directive into
-    /// the metadata map at `[rec+0x98]` (`0x51d580`) and, on an existing entry, **frees the old
-    /// value and stores the new** (`0x51d77b`) — a hash insert, so the last line written wins.
-    ///
-    /// Note the asymmetry with [`Self::list`] one function down, and that both halves were wrong
-    /// here in the same direction: a **scalar** replaces, a **list** appends.
+    /// The directive matching `key` case-insensitively, the last one when a key repeats: the
+    /// reference's hash insert into `[rec+0x98]` (`0x51d580`) replaces the old value (`0x51d77b`).
     pub fn directive(&self, key: &str) -> Option<&str> {
         self.directives
             .iter()
@@ -76,20 +53,15 @@ impl Toc {
             .map(|(_, v)| v.as_str())
     }
 
-    /// `## Interface:` as client build numbers. Era manifests list several (`11507, 11508`);
-    /// 1.12's lists one (`11200`). Unparseable entries are skipped, not errors.
+    /// `## Interface:` as build numbers, for display; Era manifests list several (`11507, 11508`).
     pub fn interface_versions(&self) -> Vec<u32> {
         self.directive("Interface")
             .map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect())
             .unwrap_or_default()
     }
 
-    /// `## Interface:` **as the 1.12 client reads it**: the leading integer of the
-    /// value, and a manifest with no `## Interface` line (or a non-numeric one) is `0`.
-    /// `Toc_Parse 0x51c9b0` stores `SStrToInt` of the value at `[rec+0x1c]`, the record ctor
-    /// leaves it `0`, and the version gate compares that single dword — so an Era manifest's
-    /// `11507, 11508` reads as `11507`, exactly as the reference would read it.
-    /// [`Toc::interface_versions`] stays for display; the GATE runs on this.
+    /// `## Interface:` as the version gate reads it: `Toc_Parse 0x51c9b0` stores `SStrToInt` of
+    /// the value at `[rec+0x1c]` (else the ctor's `0`), so `11507, 11508` reads `11507`.
     pub fn interface_version(&self) -> u32 {
         self.directive("Interface")
             .map(|v| {
@@ -99,29 +71,14 @@ impl Toc {
             .unwrap_or(0)
     }
 
-    /// A list directive (`SavedVariables`, `OptionalDeps`, `Dependencies`, …), tokenized the way
-    /// the reference tokenizes it. Missing directive = empty list.
-    ///
-    /// **Two departures from the obvious read, both byte-derived, both of which were losing real
-    /// data**:
-    ///
-    /// * **A repeated directive APPENDS.** The reference `strdup`s each item (`0x64a620`) into a
-    ///   `0x40`-granular array at `[rec+0x80]` with a running count at `[rec+0x7c]`, so a second
-    ///   `## SavedVariables:` line continues the first rather than being ignored. Reading only the
-    ///   first line cost `CT_RaidAssist` 18 of
-    ///   its 25 saved globals — it declares them across four lines and got seven, so raid
-    ///   positions, menu state, boss timers, debuff templates, the loot method and the squelch
-    ///   list were never written and never restored.
-    /// * **A space separates as surely as a comma.** The tokenizer is `SStrTokenize 0x64ae50` over
-    ///   the delimiter SET `" ,"` at `0x8537c4` — readable in the image's own `.rdata`, sitting
-    ///   between the `RequiredDep` and `OptionalDep` literals. `SpecialTalentUI` writes
-    ///   `## SavedVariables: SpecialTalentPlannedSaved SpecialTalentFrameSaved` and we registered
-    ///   one "global" whose name contained a space.
+    /// A list directive (`SavedVariables`, `OptionalDeps`, …) as the reference tokenizes it: a
+    /// repeated line appends (`0x64a620` into the array at `[rec+0x80]`, count at `[rec+0x7c]`),
+    /// and a space separates like a comma (`SStrTokenize 0x64ae50`, delimiters `" ,"` at
+    /// `0x8537c4`).
     pub fn list(&self, key: &str) -> Vec<&str> {
         self.list_where(|k| k.eq_ignore_ascii_case(key))
     }
 
-    /// [`Self::list`] over every directive whose key satisfies `pick`, in file order.
     fn list_where(&self, mut pick: impl FnMut(&str) -> bool) -> Vec<&str> {
         self.directives
             .iter()
@@ -131,64 +88,29 @@ impl Toc {
             .collect()
     }
 
-    /// Hard dependencies — **every directive whose key STARTS WITH `Dep` or `RequiredDep`**.
-    ///
-    /// The three dependency keys are the only ones in the reference's directive table that carry
-    /// **no colon**: the `.rdata` cluster reads
-    /// `SavedVariablesPerCharacter:\0 SavedVariables:\0 LoadWith:\0 \0\0 Dep\0 RequiredDep\0 " ,"\0\0 OptionalDep\0 Revision:\0`,
-    /// and a whole-key compare against `"Dep"` could never match a line reading `Dependencies:`.
-    /// So the compare is a PREFIX compare — `SStrCmpI(line, key, SStrLen(key))` at
-    /// `0x51cd4e`-`0x51cd5f` — and `## Dependencies`, `## RequiredDependencies` and
-    /// `## Dependency` all land here.
-    ///
-    /// Both keys feed the SAME array in the reference (`[rec+0x50]`), so a manifest writing both
-    /// gets their union rather than whichever this function happened to test first.
+    /// Hard dependencies: every directive whose key starts with `Dep` or `RequiredDep`. The
+    /// reference stores these keys without a colon and prefix-compares them
+    /// (`0x51cd4e`-`0x51cd5f`), so `## Dependencies` and `## RequiredDependencies` both land in
+    /// its one array at `[rec+0x50]`.
     pub fn dependencies(&self) -> Vec<&str> {
         self.list_where(|k| starts_with_ci(k, "RequiredDep") || starts_with_ci(k, "Dep"))
     }
 
-    /// Soft dependencies — every directive whose key starts with `OptionalDep`, on the same
-    /// prefix rule as [`Self::dependencies`].
-    ///
-    /// **They load FIRST and their failures are ignored** — `AddOn_Load 0x51f240`'s own order,
-    /// quoted in 1191 §2 — which is what lets `## OptionalDeps: FuBar, Ace2` mean "if Ace2 is
-    /// installed, its libraries are already global by the time my files run". **130 corpus addons
-    /// declare them**, and the whole FuBar family leans on exactly that: `FuBar_BagFu`'s `.toc`
-    /// lists `FuBarPlugin-2.0.lua` BEFORE `AceLibrary.lua`, which only works because the `Ace2`
-    /// addon went first.
-    ///
-    /// The long form `## OptionalDependencies:` — which 4 corpus addons write — used to be
-    /// refused here, on the reasoning that it was "verified for the required half and merely
-    /// plausible for this one, left open". The premise was wrong: the reference
-    /// matches all three dependency keys by the same colon-less prefix, so the long form was never
-    /// a separate question.
+    /// Soft dependencies: every directive whose key starts with `OptionalDep`, the long form
+    /// included. `AddOn_Load 0x51f240` loads them first and ignores their failures.
     pub fn optional_dependencies(&self) -> Vec<&str> {
         self.list_where(|k| starts_with_ci(k, "OptionalDep"))
     }
 
-    /// `## LoadOnDemand: 1` (Era loader; absent in 1.12 manifests).
+    /// `## LoadOnDemand: 1`, which stock 1.12 addons such as `Blizzard_TalentUI` carry.
     pub fn load_on_demand(&self) -> bool {
         self.directive("LoadOnDemand").map(str::trim) == Some("1")
     }
 
-    /// `## DefaultState:` — what this addon's enable state is for a character who has never
-    /// expressed one. The reference's `[rec+0x2b]`, stored by `Toc_Parse` at `0x51d204` from the
-    /// two literals `"enabled"` (`0x853764`) → `1` and `"disabled"` (`0x853758`) → `0`.
-    ///
-    /// It is load-bearing well beyond a manifest that writes it: the enable query `0x51e470`
-    /// falls back to this byte whenever the characters disagree, and whenever *none* of them has
-    /// an opinion at all — which is every addon on a fresh install.
-    ///
-    /// **A manifest that does not write the line is enabled** — which is what makes a folder
-    /// dropped into `AddOns/` just work, and is the record's initial byte, read at the bytes and
-    /// not inferred from the two literals' fall-through. The ctor `0x520550` seeds
-    /// this one field to 1 explicitly — `0x5205b9 mov [esi+0x2b],al` with `eax = 1`, where its five
-    /// neighbours take `bl = 0` — over an allocation that does zero-fill, which is exactly what
-    /// made "the ctor zeroes it" read as true.
-    ///
-    /// Two consequences this function depends on, both verified: a value matching **neither**
-    /// literal leaves the 1 (`0x51d21a jne`, no store — there is no "unrecognised means disabled"),
-    /// and a duplicated directive is **last-wins**, which is [`Self::directive`]'s own rule.
+    /// `## DefaultState:`, the byte at `[rec+0x2b]` the enable query `0x51e470` falls back to when
+    /// characters disagree or none has chosen. `Toc_Parse` stores `"enabled"` (`0x853764`) as 1 and
+    /// `"disabled"` (`0x853758`) as 0 at `0x51d204` and any other value not at all (`0x51d21a`);
+    /// the ctor `0x520550` seeds 1 (`0x5205b9`), so only `disabled` disables.
     pub fn default_state(&self) -> bool {
         !self
             .directive("DefaultState")
@@ -228,13 +150,6 @@ mod tests {
         assert_eq!(toc.directives.len(), 4);
     }
 
-    /// **`## DefaultState:` and its three non-obvious answers**: an absent line is *enabled*
-    /// because the record's ctor seeds `[rec+0x2b]` to 1, a value matching neither literal leaves
-    /// that 1 rather than meaning disabled, and a duplicated line is last-wins.
-    ///
-    /// Only `disabled` disables, in other words — which is the same asymmetry `AddOns.txt`'s own
-    /// value grammar has, and worth a falsifier because "unrecognised means off" is the reading
-    /// anyone would write by hand.
     #[test]
     fn default_state_is_enabled_unless_the_manifest_says_disabled() {
         let d = |body: &str| Toc::parse(body).default_state();
@@ -253,7 +168,7 @@ mod tests {
             d("## DefaultState:\n"),
             "empty value is not `disabled` either"
         );
-        // Last-wins, the reference's hash insert — not first-wins, and not an append.
+        // Last-wins, the reference's hash insert.
         assert!(!d("## DefaultState: enabled\n## DefaultState: disabled\n"));
         assert!(d("## DefaultState: disabled\n## DefaultState: enabled\n"));
     }
@@ -273,10 +188,6 @@ mod tests {
         assert_eq!(toc.files.len(), 2);
     }
 
-    /// **A scalar directive REPLACES on a repeat; a list directive APPENDS** — the reference's two
-    /// stores, and this file had both backwards. `MoveAnything.toc` writes
-    /// `## Notes` twice and `AtlasLoot.toc` writes `## Author` twice, so the scalar half is not
-    /// hypothetical either.
     #[test]
     fn a_scalar_directive_replaces_and_a_list_directive_appends() {
         let toc = Toc::parse(
@@ -290,13 +201,6 @@ mod tests {
         assert!(toc.load_on_demand());
     }
 
-    /// **`CT_RaidAssist`'s own manifest, in shape** — 25 saved globals across four lines, of which
-    /// we registered the first seven. The rest (raid positions, menu state, boss timers, debuff
-    /// templates, the loot method, the squelch list) were never written and never restored.
-    ///
-    /// Plus `SpecialTalentUI`'s: two names separated by a SPACE, which we read as one global whose
-    /// name contained a space. The tokenizer is `SStrTokenize 0x64ae50` over the delimiter set
-    /// `" ,"` at `0x8537c4`.
     #[test]
     fn a_repeated_list_directive_accumulates_across_lines_and_splits_on_space() {
         let toc = Toc::parse(
@@ -308,15 +212,6 @@ mod tests {
         assert_eq!(toc.list("SavedVariablesPerCharacter"), vec!["E", "F"]);
     }
 
-    /// **The three dependency keys are matched by PREFIX**, because they are the only directives in
-    /// the reference's table with no colon: the `.rdata` cluster is
-    /// `… LoadWith:\0 \0\0 Dep\0 RequiredDep\0 " ,"\0\0 OptionalDep\0 Revision:\0 …`, and a
-    /// whole-key compare against `"Dep"` could never match a line reading `Dependencies:`.
-    ///
-    /// Four corpus addons write the long optional form (`FuBar_CRDelayFu`, `FuBar_PetInFu`,
-    /// `FuBar_ToFu`, `FuBar_WeaponRebuffFu`), which this file used to refuse on the reasoning that
-    /// the long form was "merely plausible" for the optional half. It was never a separate
-    /// question.
     #[test]
     fn the_dependency_keys_match_by_prefix_and_both_required_spellings_union() {
         let toc = Toc::parse(
@@ -331,8 +226,7 @@ mod tests {
             vec!["LibC", "LibD", "LibE"],
             "the long and short optional spellings are the same key"
         );
-        // And the prefixes do not bleed into each other: `OptionalDependencies` does not start
-        // with `Dep`, so it never lands in the required list.
+        // `OptionalDependencies` does not start with `Dep`.
         assert!(!toc.dependencies().contains(&"LibC"));
     }
 

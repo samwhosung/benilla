@@ -1,11 +1,7 @@
-//! **The `index or "name"` prologue every in-game addon verb opens with, and its two raises**
-//! (2139's "left open", closed at the bytes).
-//!
-//! Eight bindings — `GetAddOnInfo 0x48e390`, `GetAddOnMetadata 0x48e530`,
+//! The `index or "name"` prologue of `GetAddOnInfo 0x48e390`, `GetAddOnMetadata 0x48e530`,
 //! `GetAddOnDependencies 0x48e5e0`, `EnableAddOn 0x48e690`, `DisableAddOn 0x48e760`,
-//! `IsAddOnLoadOnDemand 0x48e840`, `IsAddOnLoaded 0x48e8e0`, `LoadAddOn 0x48e980` — share one
-//! eleven-instruction prologue, and `luaL_error 0x6f4940` does not return from either of its
-//! failure arms. We answered a placeholder, a `nil` or a silent no-op for all of them.
+//! `IsAddOnLoadOnDemand 0x48e840`, `IsAddOnLoaded 0x48e8e0` and `LoadAddOn 0x48e980`; both its
+//! raises are `luaL_error` (`0x6f4940`), which does not return.
 
 use crate::script::{AddOnInfo, UiScript};
 
@@ -31,15 +27,11 @@ fn seeded() -> UiScript {
         None,
         None,
     );
-    // **The index space exists only once the server has answered**. These tests
-    // are about the prologue's bounds and raises, and a bound of zero would make every one of
-    // them pass vacuously — so the fixture seats the reply an in-world VM has always had, hiding
-    // nothing.
+    // The index space exists only once the server answers; with no reply every bound is zero.
     s.note_addon_info_reply(&[]);
     s
 }
 
-/// The message of a raise, or `"<no raise>"` if the call completed.
 fn raised(s: &UiScript, call: &str) -> String {
     s.eval::<String>(&format!(
         "local ok, e = pcall(function() {call} end) \
@@ -48,9 +40,7 @@ fn raised(s: &UiScript, call: &str) -> String {
     .unwrap()
 }
 
-/// **Every verb raises its own `Usage:` literal on a non-number, non-string argument.** Read out
-/// of `.data` (`0x842d68` … `0x842e98`) rather than reconstructed: the message reaches an addon's
-/// error handler, so the spelling is the contract.
+/// The client's own literals (`.data` `0x842d68` to `0x842e98`); addons see the spelling.
 #[test]
 fn a_bad_argument_type_raises_each_verbs_own_usage_string() {
     let s = seeded();
@@ -82,8 +72,7 @@ fn a_bad_argument_type_raises_each_verbs_own_usage_string() {
             "{call} must raise `{usage}`, got: {got}"
         );
     }
-    // `nil` and a missing argument fail the same two tests a table does — `lua_isnumber` reports
-    // NULL past `L->top` as "not a number" — so they take the same raise.
+    // `lua_isnumber` reports a slot past `L->top` as not a number, so nil or no argument raises.
     for call in ["LoadAddOn(nil)", "LoadAddOn()", "IsAddOnLoaded(true)"] {
         assert!(
             raised(&s, call).contains("index or \"name\""),
@@ -91,16 +80,12 @@ fn a_bad_argument_type_raises_each_verbs_own_usage_string() {
             raised(&s, call)
         );
     }
-    // The second argument has its own `lua_isstring` (`0x48e59c`) onto the SAME raise.
+    // The second argument's own `lua_isstring` (`0x48e59c`) fails onto the same raise.
     assert!(raised(&s, "GetAddOnMetadata(1)").contains("Usage: GetAddOnMetadata"));
 }
 
-/// **An out-of-range numeric index raises, on every verb, with the count in the message** —
-/// `"AddOn index must be in the range of 1 to %d"` (`0x837d70`), `%d` from `0x51def0()`.
-///
-/// The bound is **unsigned** (`0x51df00 cmp ecx,[0xbe1b90]; jb`), so `f(0)` decrements to
-/// `0xFFFFFFFF` and raises by the same route as `f(count+1)`. Only three of the eight raised at
-/// all before this, and those three said something the image does not.
+/// `"AddOn index must be in the range of 1 to %d"` (`0x837d70`, `%d` from `0x51def0()`). The
+/// bound is unsigned (`0x51df00 cmp ecx,[0xbe1b90]; jb`): 0 wraps to `0xFFFFFFFF` and raises.
 #[test]
 fn an_out_of_range_index_raises_with_the_registrys_own_count() {
     let s = seeded();
@@ -115,8 +100,7 @@ fn an_out_of_range_index_raises_with_the_registrys_own_count() {
         "LoadAddOn",
     ] {
         for arg in ["0", "3", "-1", "2.9"] {
-            // 2.9 truncates toward zero (`_ftol 0x40a2b0` chops) to 2, which is IN range — the
-            // one of the four that must NOT raise.
+            // 2.9 truncates to 2 (`_ftol 0x40a2b0`), which is in range.
             let got = raised(&s, &format!("{verb}({arg})"));
             if arg == "2.9" {
                 assert!(!got.contains("must be in the range"), "{verb}(2.9): {got}");
@@ -128,8 +112,7 @@ fn an_out_of_range_index_raises_with_the_registrys_own_count() {
     assert!(raised(&s, "GetAddOnMetadata(3, \"Version\")").contains(want));
 }
 
-/// **A numeric STRING is an index, not a name** — `lua_isnumber 0x6f34d0` coerces one, so the
-/// number arm claims it before `lua_isstring` is ever reached.
+/// `lua_isnumber` (`0x6f34d0`) coerces a numeric string, so the index arm claims it first.
 #[test]
 fn a_numeric_string_takes_the_index_arm() {
     let s = seeded();
@@ -141,11 +124,7 @@ fn a_numeric_string_takes_the_index_arm() {
     assert!(raised(&s, r#"GetAddOnInfo("9")"#).contains("must be in the range"));
 }
 
-/// **`GetAddOnInfo`'s string miss echoes the caller's own name back** (`0x48e401`, non-NULL by
-/// `lua_isstring`), then five metadata misses, `"MISSING"` and `"INSECURE"`. We answered the
-/// literal `"NoSuchAddon"` — an arbitrary choice, not a constant in the image.
-///
-/// The name form is never existence-checked by the prologue; only the numeric one is.
+/// A name miss echoes the caller's string (`0x48e401`); only an index is existence-checked.
 #[test]
 fn an_unknown_name_echoes_itself_rather_than_a_placeholder_literal() {
     let s = seeded();
@@ -165,7 +144,7 @@ fn an_unknown_name_echoes_itself_rather_than_a_placeholder_literal() {
             "INSECURE".into(),
         ]
     );
-    // The other name-miss answers are each verb's own, and they do not agree with GetAddOnInfo's.
+    // Each verb has its own name-miss answer.
     assert_eq!(
         s.eval::<String>(r#"return tostring(IsAddOnLoaded("Nope"))"#)
             .unwrap(),

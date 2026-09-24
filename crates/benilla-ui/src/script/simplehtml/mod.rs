@@ -1,64 +1,23 @@
-//! The **`SimpleHTML` widget** (`CSimpleHTML`, class size `0x374`, ctor `0x789dd0`) — its markup
-//! engine, its block layout, its four element fonts, and its 19-entry Lua method table.
+//! The `SimpleHTML` widget (`CSimpleHTML`, size `0x374`, ctor `0x789dd0`): the blocks [`parse`]
+//! produces, built as regions, its four element fonts, and its Lua method table.
 //!
-//! Ground truth: byte-verified against `WoW.exe`. The parse itself is [`parse`]; this module is
-//! the half that touches the model — turning a block list into real FontString/Texture regions
-//! anchored bottom-to-top, and exposing the widget's Lua surface.
+//! `SetText` drops the previous blocks and builds the parsed ones. A text block is a FontString at
+//! the frame's declared width with no height; block 0 hangs from the frame's TOPLEFT and block N
+//! from block N-1's BOTTOMLEFT, `spacing` lower (0 by default).
 //!
-//! ## What the widget is, in one paragraph
+//! A block is LEFT unless its `align` says otherwise, never the FontString ctor's CENTER
+//! (`0x78a7c8`, `0x78ae78`). An element font starts empty, and `H1` to `H3` use `P`'s while their
+//! path is empty (`0x78ae30`), with no header scaling. There is no `GetContentHeight`: the hosting
+//! ScrollFrame measures the blocks as regions (`0x786e30`).
 //!
-//! `SetText(s)` throws away every block of the previous parse, runs `s` through a **strict XML**
-//! parser, and — if and only if the document is well-formed, rooted at `HTML`, and has a `BODY`
-//! child — walks that BODY emitting one block per `<H1>`/`<H2>`/`<H3>`/`<P>`/`<BR/>`/`<IMG>`.
-//! Anything else falls to the plain-text path: the **raw** string as one `P` block, left-aligned,
-//! whitespace intact. Each text block is one `CSimpleFontString` at the frame's declared width
-//! with **no height set**, so its rect is the intrinsic height of the wrapped text; block 0 hangs
-//! from the frame's TOPLEFT and block *N* from block *N−1*'s BOTTOMLEFT at `−spacing`. Spacing
-//! defaults to 0, so blocks are flush.
+//! Deviation: the block step is not pixel-snapped (`0x766750`), because layout here is in logical
+//! units; the two differ by under a pixel, and not at all at the default spacing of 0. Line spacing
+//! inside a block is not applied, as nothing here models line spacing; `SetSpacing` sets the step
+//! between blocks. Deviation: a block of width 0, in a frame sized by anchors, gets its text's
+//! natural width where the reference keeps 0, because every width-less FontString here does.
 //!
-//! ## Three defaults a re-implementation gets wrong, and this one does not
-//!
-//! - **Block justifyH is LEFT**, never the `CSimpleFontString` ctor's CENTER: `align` is
-//!   pre-loaded with `1` before the attribute is read (`0x78a7c8`) and `0x78ae78` writes it into
-//!   the block after `SetFontObject`, so the element font's own `justifyH` can never reappear.
-//! - **Element fonts start with no font at all**, and `H1`/`H2`/`H3` fall back to `P`'s whenever
-//!   their own resolved path is empty (`0x78ae30` measures `SStr::Length(&font->path)`). **Nothing
-//!   in this TU scales a header** — no height multiply, no size table — so an `<H1>` under a
-//!   single `<FontString>` declaration renders at exactly the `<P>` size. That is the reference
-//!   `ItemTextFrame` render, not an approximation of it.
-//! - **`GetContentHeight` does not exist in 1.12.1.** The method table has no height getter and
-//!   nothing in the TU aggregates one; the hosting ScrollFrame measures the subtree generically
-//!   instead (`0x786e30`'s subtree union), which is what ours does too — the blocks are real
-//!   regions of the SimpleHTML, so `GetVerticalScrollRange` sees them without SimpleHTML
-//!   publishing anything.
-//!
-//! ## Where this diverges from the reference, deliberately
-//!
-//! - **`nextYOffset` is not pixel-snapped.** The reference stores
-//!   `−pixelSnap(spacing)` (`0x766750`, quantising to whole *device* pixels). Our layout is in
-//!   logical units and the solver has no device-pixel quantiser to reach for; at the default
-//!   spacing of 0 the two agree exactly, and at any other value they differ by under a pixel.
-//! - **Intra-block line spacing is not modelled**, because nothing in this engine models line
-//!   spacing at all (see `script::font_block`'s own note on the withheld `Set/GetSpacing`). What
-//!   `SimpleHTML:SetSpacing` *does* honour here is the half SimpleHTML itself owns and computes:
-//!   the inter-block step. That is a real, drawn effect rather than a stored-and-ignored number,
-//!   which is why this pair ships where the FontString/Font ones do not.
-//! - **A block's wrap width of 0** (a SimpleHTML sized only by anchors) lets the measure
-//!   round-trip supply the natural text width, where the reference leaves the block at width 0.
-//!   That is this engine's standing law for every height-less/width-less FontString, and inverting
-//!   it here would make a SimpleHTML the one widget whose text vanishes when it is anchor-sized.
-//!
-//! ## The Lua table, and the one name that is NOT on it
-//!
-//! The method table `.data 0x87ba80` dumps as **19 `{name, fn}` pairs**, and all 19 are installed
-//! here. The first sixteen take an **optional leading element-name string** resolved by
-//! `0x795d80`; the last
-//! three (`SetText`, `SetHyperlinkFormat`, `GetHyperlinkFormat`) do not.
-//!
-//! **There is no `GetText`.** Later clients grew one; build 5875's table does not have it, and
-//! adding a name a table does not carry is exactly as wrong as missing one (`script::font_block`'s
-//! module doc states the same law for the font block). A caller that wants the source string keeps
-//! it — the reference's own `ItemTextFrame` calls `ItemTextGetText()`.
+//! The method table (`0x87ba80`) has 19 entries, all installed; the first sixteen take an optional
+//! leading element name (`0x795d80`). Build 5875 has no `GetText`.
 
 use std::collections::HashMap;
 
@@ -76,30 +35,22 @@ mod parse;
 pub(crate) use parse::Block;
 use parse::{ELEMENT_NAMES, ELEM_P};
 
-/// Registry key of the SimpleHTML method table (the MAXCSTACK discipline: Lua-side root, named key).
+/// Registry key of the SimpleHTML method table (the MAXCSTACK discipline).
 pub(super) const REG_SIMPLEHTML_METHODS: &str = "__benilla_simplehtml_methods";
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// State
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── State ────────────────────────────────────────────────────────────────────────────────────
 
-/// One of the four **element fonts** (`CSimpleHTML+0x350`…`+0x35c`, index `0 = P, 1 = H1, 2 = H2,
-/// 3 = H3`), each a `0x80`-byte subclass of `CSimpleFont` the ctor loop `0x789e61`–`0x789ea3`
-/// allocates.
-///
-/// Modelled as "the named object it points at, plus the properties it set for itself" rather than
-/// as a flattened snapshot, so a later `GameFontNormal:SetFont(…)` reaches the *next* parse — the
-/// live `parentFontObject` link the real `CFontInstance` carries. The explicit mask is the same
-/// `FONTINSTANCE+0x038` severance record a region keeps ([`super::FontExplicit`]); reusing it is
-/// what lets a block inherit the mask and stay correct under `script::font::propagate`.
+/// One of the four element fonts (`CSimpleHTML+0x350`, P, H1, H2, H3; made at
+/// `0x789e61`-`0x789ea3`): the font object it inherits, a live link as the reference's
+/// `parentFontObject` is, plus what it set itself.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ElementFont {
-    /// `inherits=` / `SetFontObject(elem, obj)` — the object this element resolves through.
+    /// `inherits=` or `SetFontObject`: the object this element resolves through.
     pub(crate) font_object: Option<String>,
-    /// Which properties this element set for **itself** (and so must survive a re-read of the
-    /// object above).
+    /// What this element set itself, the region's severance mask (`FONTINSTANCE+0x038`), which a
+    /// block inherits.
     pub(crate) explicit: super::FontExplicit,
-    /// `FieldBlock.path +0x3c`, ctor `""` — the field `0x78ae30` measures for the H1→P fallback.
+    /// `+0x3c`, empty at the ctor: the path `0x78ae30` tests for the fallback to `P`.
     pub(crate) font_path: Option<String>,
     /// `FieldBlock` height.
     pub(crate) font_height: Option<f32>,
@@ -109,26 +60,21 @@ pub(crate) struct ElementFont {
     pub(crate) color: Option<[f32; 4]>,
     /// `SetShadowColor`/`SetShadowOffset` / `<Shadow>`.
     pub(crate) shadow: Option<FontShadow>,
-    /// `CSimpleFont+0x54`, ctor `0x212` (`0x783a98`) — CENTER | MIDDLE | the one-to-one bit.
+    /// `CSimpleFont+0x54`, ctor `0x212` (`0x783a98`): CENTER, MIDDLE and the one-to-one bit.
     pub(crate) justify: Justify,
-    /// `FieldBlock.spacing +0x50`, ctor **0** (`0x783a81`). Both the inter-block step
-    /// (`nextYOffset = −pixelSnap(spacing)`) and, in the reference, the intra-block line gap.
+    /// `+0x50`, ctor 0 (`0x783a81`): the step between blocks and, in the reference, the line gap.
     pub(crate) spacing: f32,
 }
 
-/// A `SimpleHTML` frame's runtime state — the members `CSimpleHTML` adds over `CSimpleFrame`.
-///
-/// Held in a [`Model`]-side map rather than in [`crate::widget::KindState`] for the reason
-/// `Model::backdrops` is: its contents are script-layer types ([`FontObject`], [`FontShadow`],
-/// [`Outline`]), and `widget::kinds` is the layer *below* `script` and does not depend on it.
+/// A `SimpleHTML` frame's state, the members `CSimpleHTML` adds; in a [`Model`] map, not
+/// [`crate::widget::KindState`], because it holds script-layer types.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SimpleHtmlState {
-    /// `+0x350`…`+0x35c`.
+    /// `+0x350` to `+0x35c`.
     pub(crate) fonts: [ElementFont; 4],
     /// `+0x360`, ctor `"|H%s|h%s|h"` (`0x87a838`).
     pub(crate) hyperlink_format: String,
-    /// The CONTENTNODE list `+0x340` — every region the last `SetText` built, in emission order,
-    /// text blocks and images alike. This is the free list the next `SetText` walks.
+    /// The content list (`+0x340`): every region the last `SetText` built, freed by the next.
     pub(crate) blocks: Vec<RegionHandle>,
 }
 
@@ -142,9 +88,8 @@ impl Default for SimpleHtmlState {
     }
 }
 
-/// The paint one block copies out of its element font — the result of `CFontInstance::
-/// SetFontObject 0x770c60`, which forces all five property groups changed (`0x770d06 or …,0x1F`)
-/// and pulls immediately, with the element's own explicit sets layered back on top.
+/// The paint a block copies from its element font: `SetFontObject` (`0x770c60`) pulls all five
+/// property groups at once (`0x770d06`), with the element's own sets on top.
 #[derive(Clone, Debug, Default)]
 struct BlockPaint {
     font_object: Option<String>,
@@ -209,17 +154,13 @@ fn resolve_font(model: &Model, ef: &ElementFont) -> BlockPaint {
     p
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// SetText — the rebuild
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── SetText, the rebuild ─────────────────────────────────────────────────────────────────────
 
-/// `CSimpleHTML::SetText 0x78a3a0`, whole: free the old blocks, parse, and build the new ones.
-///
-/// Returns `usedMarkup` (`0x78a519`'s `al`) — the Lua shim discards it, our tests do not.
+/// `CSimpleHTML::SetText` (`0x78a3a0`): free the old blocks, parse, build. Returns `usedMarkup`
+/// (`0x78a519`), which the Lua shim drops.
 pub(crate) fn set_text(model: &mut Model, fh: FrameHandle, raw: &str) -> bool {
-    // `0x78a3a0`'s first step. The reference pool-frees the previous parse's widgets; ours must
-    // too, or a second `SetText` leaves the first one's FontStrings standing behind the new
-    // ones — the failure a book with a "next page" button hits on its very first turn.
+    // Free the previous parse's regions first, as the reference does, or a book's next page
+    // draws over the last.
     let old = model
         .simple_html
         .get_mut(&fh)
@@ -243,8 +184,8 @@ pub(crate) fn set_text(model: &mut Model, fh: FrameHandle, raw: &str) -> bool {
         (name, fmt)
     };
     let parsed = parse::parse_markup(raw, &frame_name, &hyperlink_format);
-    // The reference pushes these through the frame's error sink to the console. Ours are host
-    // warnings: a malformed page is the player's content being wrong, not a script raising.
+    // Deviation: the reference prints these to the console; here they are host warnings, because
+    // a malformed page is bad content, not a script error.
     for e in &parsed.errors {
         model.record_warning(e.clone());
     }
@@ -253,20 +194,18 @@ pub(crate) fn set_text(model: &mut Model, fh: FrameHandle, raw: &str) -> bool {
     parsed.used_markup
 }
 
-/// `AddTextBlock 0x78adb0`/the `<IMG>` handler `0x78ab40`'s loop — the anchor chain, the fonts,
-/// and the `nextY` bookkeeping.
+/// The block loop of `AddTextBlock` (`0x78adb0`) and the `<IMG>` handler (`0x78ab40`): anchors,
+/// fonts and the running `nextY`.
 fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
     let frame_id = model.frame_id(fh);
-    // `0x78ae19 call [CLayoutFrame vtbl + 0x1c]` = `0x768420`, `fld [ecx+0x50]` — the frame's
-    // **declared** width, not its resolved rect. Every block is exactly that wide, which is what
-    // makes each one word-wrap at the frame width; `OnRectChanged 0x78a320`'s corollary is that a
-    // later resize does NOT re-wrap, because each block snapshotted the width at creation.
+    // The frame's declared width, not its resolved rect (`0x78ae19`, `0x768420`); a later resize
+    // does not re-wrap (`OnRectChanged` `0x78a320`), as each block keeps the width it was built at.
     let width = model
         .layout_inputs
         .get(&fh)
         .map_or(0.0, |input| input.width);
 
-    // `+0x348 prevBlock` — the last **text** block, and `+0x34c nextYOffset` (always <= 0).
+    // `prevBlock` (`+0x348`), the last text block, and `nextYOffset` (`+0x34c`), never positive.
     let mut prev_block: Option<u32> = None;
     let mut next_y = 0.0f32;
     let mut made: Vec<RegionHandle> = Vec::with_capacity(blocks.len());
@@ -274,10 +213,8 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
     for block in blocks {
         match block {
             Block::Text { text, elem, align } => {
-                // The empty-path fallback (`0x78ae29`–`0x78ae54`): `elementFont[elem]`, unless its
-                // resolved path is empty, in which case `elementFont[0]` — so a declaration that
-                // supplies only `<FontString>` supplies the font for every element, headers
-                // included.
+                // An element with an empty path uses `P`'s font (`0x78ae29`-`0x78ae54`), so a
+                // lone `<FontString>` serves every element.
                 let paint = {
                     let st = model.simple_html.entry(fh).or_default().clone();
                     let own = resolve_font(model, &st.fonts[*elem]);
@@ -292,18 +229,14 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                         .arena
                         .create_region(fh, RegionKind::FontString, DrawLayer::Artwork, 0)
                 else {
-                    // The frame died under us — unreachable (we hold its handle and just made
-                    // regions on it), but stop rather than orphan what is already built: the
-                    // blocks so far are still recorded below, so the next `SetText` frees them.
+                    // Unreachable; stop, keeping what was built recorded for the next `SetText`.
                     break;
                 };
                 let id = model.region_id(rh);
                 let mut d = RegionData {
                     anchors: vec![anchor_for(prev_block, frame_id, Point::TopLeft, next_y)],
-                    // `SetWidth(frame.GetWidth())` and **no height** — the block's rect height is
-                    // the FontString's intrinsic wrapped height, which the engine's measure
-                    // round-trip supplies exactly as the client's font engine supplies
-                    // `0x7729b0` → `0x5c2070`.
+                    // No height: the rect takes the wrapped text's height from the measure round
+                    // trip, as the client's font engine gives it (`0x7729b0`, `0x5c2070`).
                     size: Some((width, 0.0)),
                     text: Some(text.clone()),
                     font_object: paint.font_object.clone(),
@@ -315,21 +248,15 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                     font_shadow: paint.shadow,
                     ..RegionData::default()
                 };
-                // `block->+0x120 = (block->+0x120 & ~7) | (align & 7)` (`0x78ae78`), written
-                // AFTER `SetFontObject`, so the tag's `align` always wins over the element font's
-                // own justifyH. justifyV is left alone and keeps whatever the element font
-                // supplied (ctor MIDDLE) — visually inert here, because the block's rect height IS
-                // its text height.
+                // The tag's `align` is written after `SetFontObject` (`0x78ae78`), so it beats
+                // the font's justifyH; justifyV stays the font's, inert in a rect its text fills.
                 d.justify = Justify(justify::set_axis(paint.justify.0, justify::H_MASK, *align));
-                // …and it can never be RE-inherited: `0x78ae68` clears the per-bit justifyH
-                // inherit mask (`+0x124 &= ~7`) and `0x78ae95` the whole CFontInstance justify
-                // group bit (`+0xd4 &= ~2`). Marking both axes explicit is what that pair means
-                // here — it is what stops `script::font::propagate` from re-centering a built
-                // block the moment somebody mutates the font object it drew from.
+                // Neither axis is inherited again (`0x78ae68`, `0x78ae95` clear the inherit bits),
+                // so a later font-object change never re-justifies a built block.
                 d.font_explicit.justify_h = true;
                 d.font_explicit.justify_v = true;
                 model.region_data.insert(rh, d);
-                model.touch_measure(rh); // a text block arrives text-in-hand
+                model.touch_measure(rh); // a text block arrives with its text
                 prev_block = Some(id);
                 next_y = -paint.spacing;
                 made.push(rh);
@@ -346,15 +273,12 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                         .arena
                         .create_region(fh, RegionKind::Texture, DrawLayer::Artwork, 0)
                 else {
-                    break; // as above
+                    break; // unreachable, as above
                 };
-                // Minted even though nothing anchors TO an image (`prevBlock` is never written by
-                // the image path): the id is what the resolve seats the region's rect under, and
-                // what `free_block` unmaps on the next `SetText`.
+                // Minted though nothing anchors to an image; the resolve and `free_block` use it.
                 model.region_id(rh);
-                // The anchor corner is selected by `align`, and 8/16/32 get **no
-                // `SetPoint` at all** (`0x78ac61 jne 0x78ace8`). An anchorless region never
-                // resolves here either, so it draws nothing, which is the same outcome.
+                // `align` picks the corner; 8, 16 and 32 get no anchor at all (`0x78ac61`, a jump
+                // to `0x78ace8`), so the image draws nothing, here as there.
                 let point = match *align {
                     parse::ALIGN_LEFT => Some(Point::TopLeft),
                     parse::ALIGN_CENTER => Some(Point::Top),
@@ -373,16 +297,10 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                         ..RegionData::default()
                     },
                 );
-                // An unfloated image reserves its own height in the flow (`0x78ad07`–`0x78ad1b`),
-                // and `prevBlock` is **never** written by the image path (three reads of `+0x348`
-                // in the whole function, zero writes) — the next block still hangs off the last
-                // TEXT block, only lower.
-                //
-                // The height it reserves is `texture.GetHeight()`, which is `CSimpleTexture`'s
-                // **override**: a `<IMG>` with no `height=` reserves its art's own texel height,
-                // not nothing (one texel is one FrameXML unit). Asked of the same
-                // host oracle the resolve derives the region's rect from, so the space the flow
-                // leaves and the space the image fills are one number.
+                // An unfloated image moves the flow down by its height (`0x78ad07`-`0x78ad1b`), but
+                // the next block still hangs off the last text block: the image path never writes
+                // `prevBlock`. Without `height=` it reserves its texture's texel height
+                // (`CSimpleTexture`'s `GetHeight`), from the probe the resolve sizes it by.
                 if !*floated {
                     let reserved = if *h == 0.0 {
                         src.as_deref()
@@ -404,8 +322,8 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
     model.touch_layout();
 }
 
-/// The two anchor forms of `AddTextBlock 0x78adb0`'s `SetPoint 0x767c70` step: block 0 pins to the
-/// frame, block *N* to its predecessor's bottom edge at `nextYOffset` (negative, i.e. downward).
+/// A block's anchor (`SetPoint` `0x767c70`): block 0 to the frame, block N to the previous text
+/// block's bottom edge, `nextYOffset` lower.
 fn anchor_for(prev_block: Option<u32>, frame_id: u32, point: Point, next_y: f32) -> Anchor {
     match prev_block {
         None => Anchor::new(point, frame_id, point, 0.0, 0.0),
@@ -421,26 +339,15 @@ fn anchor_for(prev_block: Option<u32>, frame_id: u32, point: Point, next_y: f32)
     }
 }
 
-/// Free one block region — [`crate::script::region::free_region`], which is where this function's
-/// body went when the button's label swap needed the same five-map teardown. Kept as a name
-/// because `set_text`'s call sites read better with it, and because the doc that explains *why* a
-/// destroyed region must answer stale rather than linger lives on the shared law now.
 fn free_block(model: &mut Model, rh: RegionHandle) {
     crate::script::region::free_region(model, rh);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The loader's seam
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The loader's seam ────────────────────────────────────────────────────────────────────────
 
-/// Apply the font parts an **XML** `<FontString>`/`<FontStringHeaderN>` child of a `<SimpleHTML>`
-/// supplies — `font=`, `<FontHeight>`, `outline=` — any subset of which may be absent.
-///
-/// The region-side twin of this is [`super::apply_font_parts`], and it exists for the same reason:
-/// the reference applies XML font attributes in C++ (`CSimpleFont::LoadXML 0x783c30`, reached from
-/// `0x78a1fe`…`0x78a26e`), never through the Lua `SetFont`, whose usage string *requires* both a
-/// path and a height. Routing the loader through the binding is what forces the binding to be
-/// lenient; keeping them separate lets each be right.
+/// Apply the `font=`, `<FontHeight>` and `outline=` an XML `<FontString>` or `<FontStringHeaderN>`
+/// child supplies, any of them absent. The reference applies these in C++ (`CSimpleFont::LoadXML`
+/// `0x783c30`, from `0x78a1fe`), not through `SetFont`, which requires both path and height.
 pub(crate) fn apply_element_font_parts(
     lua: &Lua,
     this: &Table,
@@ -467,8 +374,9 @@ pub(crate) fn apply_element_font_parts(
     Ok(())
 }
 
-/// The element index an XML child tag names: `<FontString>` → `P`, `<FontStringHeader1|2|3>` →
-/// `H1`/`H2`/`H3` (`0x8786cc`, `0x87a8b4`/`0x87a8a0`/`0x87a88c`; assigned at `0x78a1fe`…`0x78a26e`).
+/// The element index an XML child tag names: `<FontString>` is `P`, `<FontStringHeader1|2|3>`
+/// `H1`, `H2`, `H3` (names `0x8786cc`, `0x87a8b4`, `0x87a8a0`, `0x87a88c`; read at `0x78a1fe` to
+/// `0x78a26e`).
 pub(crate) fn element_of_xml_tag(tag: &str) -> Option<usize> {
     if tag.eq_ignore_ascii_case("FontString") {
         Some(0)
@@ -483,13 +391,9 @@ pub(crate) fn element_of_xml_tag(tag: &str) -> Option<usize> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The Lua surface
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The Lua surface ──────────────────────────────────────────────────────────────────────────
 
-/// Resolve `this` to a live `SimpleHTML` frame. Reached through the kind dispatcher, so the guard
-/// only fires when a caller fishes the method table out and misapplies it — the same posture
-/// `script::scrollframe`'s `with_scroll` takes.
+/// Resolve `this` to a live `SimpleHTML` frame; only a misapplied method table fails.
 fn html_handle(lua: &Lua, this: &Table) -> mlua::Result<FrameHandle> {
     let h = frame_handle_of(lua, this)?;
     let model = lua.app_data_ref::<Model>().expect("model");
@@ -499,22 +403,9 @@ fn html_handle(lua: &Lua, this: &Table) -> mlua::Result<FrameHandle> {
     }
 }
 
-/// `0x795d80` — the **optional leading element-name string**, consumed by the first sixteen
-/// methods.
-///
-/// ```text
-/// if (lua_type(L, 2) != LUA_TSTRING)      return 0;          ; 0x795d91
-/// if (SStrCmpI(s,"P" )==0) { lua_remove(L,2); return 0; }    ; 0x795db3
-/// if (SStrCmpI(s,"H1")==0) { lua_remove(L,2); return 1; }    ; 0x795ddb
-/// if (SStrCmpI(s,"H2")==0) { lua_remove(L,2); return 2; }    ; 0x795e06
-/// if (SStrCmpI(s,"H3")==0) { lua_remove(L,2); return 3; }    ; 0x795e2e
-/// return 0;                                                   ; 0x795e50 (NO lua_remove)
-/// ```
-///
-/// Two silent behaviours fall out and are reproduced exactly: omitting the name addresses **`P`**,
-/// and a *string* first argument that is not one of the four is **not** an error and is **not**
-/// removed — it stays and is consumed as the shared implementation's first real argument, so
-/// `SetFont("h4", path, 15)` targets `P` and hands `"h4"` to `SetFont` as the path.
+/// The optional leading element name of the first sixteen methods (`0x795d80`). `P`, `H1`, `H2`
+/// or `H3`, in any case, is removed and selects that element; anything else selects `P` and stays
+/// (`0x795e50`), so `SetFont("h4", path, 15)` sets `P`'s font with `"h4"` as the path.
 fn take_element(args: &mut MultiValue) -> usize {
     let matched = match args.front() {
         Some(Value::String(s)) => s.to_str().ok().and_then(|s| {
@@ -538,8 +429,7 @@ fn arg(args: &MultiValue, i: usize) -> Value {
     args.get(i).cloned().unwrap_or(Value::Nil)
 }
 
-/// Run `f` over one element font under a short write borrow, then dirty the layout — every one of
-/// these can change what the *next* `SetText` draws with, and several change nothing until then.
+/// Run `f` over one element font under a short borrow; it shapes the next `SetText`'s blocks.
 fn edit_font<T>(
     lua: &Lua,
     this: &Table,
@@ -551,8 +441,7 @@ fn edit_font<T>(
     Ok(f(&mut model.simple_html.entry(h).or_default().fonts[elem]))
 }
 
-/// Read one element font's **resolved** paint (the object it inherits, with its own sets on top) —
-/// what the getters answer and what a block would be built with.
+/// One element font's resolved paint: what the getters answer and a block would be built with.
 fn read_font(lua: &Lua, this: &Table, elem: usize) -> mlua::Result<BlockPaint> {
     let h = html_handle(lua, this)?;
     let model = lua.app_data_ref::<Model>().expect("model");
@@ -566,10 +455,9 @@ fn read_font(lua: &Lua, this: &Table, elem: usize) -> mlua::Result<BlockPaint> {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
-    // ── 0/1 · the font object, and the live link to it ──────────────────────────────────────
-    // `SetFontObject([element,] font | "font" | nil)` → 0 values. Unlike a region's, this cannot
-    // repaint anything already on screen: the element fonts are prototypes, and only the next
-    // `SetText` copies them into blocks (a built block is never re-fonted, `0x795d3e`).
+    // ── 0/1 · the font object ────────────────────────────────────────────────────────────────
+    // SetFontObject([element,] font | "font" | nil) returns nothing and changes only the next
+    // `SetText`'s blocks; a built block is never re-fonted (`0x795d3e`).
     m.set(
         "SetFontObject",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
@@ -583,11 +471,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     )));
                 }
             }
-            // The **nil form severs the link and leaves the paint standing** — the reference
-            // stores a null parent and nothing re-reads or clears the resolved values. A region
-            // gets that for free (its paint was copied into `RegionData`); an element font
-            // resolves its object lazily, so the standing paint has to be pinned down here or the
-            // sever would blank the element instead.
+            // nil severs the link and keeps the paint, as the reference stores a null parent; an
+            // element font resolves its object lazily, so the standing paint is pinned here.
             let standing = name
                 .is_none()
                 .then(|| read_font(lua, &this, elem))
@@ -610,12 +495,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         justify_v: true,
                     };
                 }
-                // The severance mask is deliberately **not** reset on a re-point — true for
-                // the region side too (`script::font_block`'s `SetFontObject`): the real "stop
-                // inheriting this property" signal is a CLEARED bit in the inheritMask
-                // (`FONTINSTANCE+0x2c`), cleared by each local setter and never restored — so a
-                // property this element set for itself stays severed across a later
-                // `SetFontObject`. The two sides of one law must not disagree.
+                // A re-point keeps the severance mask, as on a region: each local setter clears
+                // its bit of the inherit mask (`FONTINSTANCE+0x2c`) for good.
                 ef.font_object = name;
             })
         })?,
@@ -641,9 +522,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── 2/3 · the face ──────────────────────────────────────────────────────────────────────
-    // `SetFont([element,] file, height [, flags])` → the NUMBER 1, or nil on an empty path (the
-    // load-failure probe shape); the argument gate is the shared `0x79f210` entry, so a numeric
-    // string is accepted for either and anything else raises `0x87c69c`'s usage string.
+    // SetFont([element,] file, height [, flags]) returns 1, or nil on an empty path; the shared
+    // gate (`0x79f210`) takes numeric strings and raises `0x87c69c`'s usage line on anything else.
     m.set(
         "SetFont",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
@@ -663,8 +543,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 ef.font_height = Some(height);
                 ef.explicit.height = true;
                 if let Some(f) = flags {
-                    // The **Lua** flags spelling ("OUTLINE"/"THICKOUTLINE"), a different
-                    // vocabulary from the XML `outline=` attribute — see [`Outline::flags`].
+                    // The Lua flags spelling, not XML's `outline=` ([`Outline::flags`]).
                     ef.outline = Outline::flags(&f);
                     ef.explicit.outline = true;
                 }
@@ -672,7 +551,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(if ok { Value::Number(1.0) } else { Value::Nil })
         })?,
     )?;
-    // `GetFont([element])` → 3 values: path, height, flags string (`""`, never nil).
+    // GetFont([element]): path, height and a flags string, `""` rather than nil.
     m.set(
         "GetFont",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
@@ -710,8 +589,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── 6..9 · the shadow ───────────────────────────────────────────────────────────────────
-    // `GetShadowColor` returns **four** values (`0x79f9b3 mov eax,0x4`), `GetShadowOffset` two.
-    // Either half may be set before the other, so each starts from whatever is already there.
+    // `GetShadowColor` returns four values (`0x79f9b3`), `GetShadowOffset` two; each setter keeps
+    // the other half.
     m.set(
         "SetShadowColor",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
@@ -734,8 +613,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok((c[0], c[1], c[2], c[3]))
         })?,
     )?;
-    // Both arguments are required — the shared impl raises `Usage: %s:SetShadowOffset(x, y)`
-    // (`0x87c6e8`) rather than defaulting the missing one.
+    // Both arguments are required: the shared code raises its usage line (`0x87c6e8`).
     m.set(
         "SetShadowOffset",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
@@ -764,10 +642,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── 10/11 · spacing ─────────────────────────────────────────────────────────────────────
-    // `SetSpacing([element,] n)` — `0x772240` clamps a negative argument to 0 before storing
-    // (`0x772246 fcomp [0x7ffd74 = 0.0]`). This is the ONE way to open a gap between blocks: the
-    // ctor default is 0, so out of the box they stack perfectly flush, with no per-element
-    // constant, no half-line and no margin anywhere.
+    // SetSpacing([element,] n) clamps a negative to 0 (`0x772240`, `0x772246`); it is the only gap
+    // between blocks, which stack flush at the ctor default of 0.
     m.set(
         "SetSpacing",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
@@ -785,13 +661,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── 12..15 · justification ──────────────────────────────────────────────────────────────
-    // Both resolve through the same `0x811ad0` table as `align`, masked `&7` / `&0x38`, so a
-    // cross-axis token CLEARS its axis and a non-token raises (see [`crate::justify`]).
-    //
-    // **`SetJustifyH` is inert for rendered text**, and that is the byte law rather than a gap:
-    // it writes the element font's justify, which `0x78adb0` overwrites on every block it builds
-    // with the tag's own `align`. It is installed because the table has it and `GetJustifyH` must
-    // answer what was stored.
+    // Both parse through `align`'s table (`0x811ad0`), masked `&7` or `&0x38` ([`crate::justify`]).
+    // `SetJustifyH` never shows: `0x78adb0` overwrites it with each block's `align`.
     m.set(
         "SetJustifyH",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
@@ -833,15 +704,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ── 16..18 · the three with NO element argument ─────────────────────────────────────────
-    // `SetText(s)` → 0 values (`0x796a90` discards the shared implementation's `usedMarkup`).
-    // A nil argument reaches `lua_tostring` as NULL; an empty string is the closest thing to that
-    // this engine can hand a parser, and it takes the same fallback route a NULL would.
+    // ── 16..18 · the three without an element argument ──────────────────────────────────────
+    // SetText(s) returns nothing (`0x796a90` drops `usedMarkup`); nil parses as an empty string,
+    // which takes the fallback a NULL takes.
     m.set(
         "SetText",
         lua.create_function(|lua, (this, text): (Table, Value)| {
             let raw = match &text {
-                // Bytes, lossily — never a raise (2138).
+                // Bytes, lossily; never a raise.
                 Value::String(s) => s.to_string_lossy(),
                 Value::Number(_) | Value::Integer(_) => super::object::as_f32(&text).to_string(),
                 _ => String::new(),
@@ -852,8 +722,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // `SetHyperlinkFormat(s)` raises `Usage: %s:SetHyperlinkFormat("format")` (`0x87bb40`) if
-    // argument 2 is not a string (`0x796bcc`–`0x796c29`). It takes effect on the NEXT parse.
+    // SetHyperlinkFormat(s) raises its usage line (`0x87bb40`) on a non-string
+    // (`0x796bcc`-`0x796c29`); it applies from the next parse.
     m.set(
         "SetHyperlinkFormat",
         lua.create_function(|lua, (this, fmt): (Table, Value)| {
@@ -886,8 +756,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// `(r, g, b [, a])` off the post-element argument list — alpha `lua_isnumber`-gated with the
-/// default `1.0`, r/g/b required, exactly as the shared colour setters take them.
+/// `(r, g, b [, a])` after the element argument, as the shared colour setters take it: r, g and b
+/// required, alpha 1 unless a number.
 fn rgba(lua: &Lua, rest: &MultiValue) -> mlua::Result<[f32; 4]> {
     let r = f32::from_lua(arg(rest, 0), lua)?;
     let g = f32::from_lua(arg(rest, 1), lua)?;
@@ -899,5 +769,5 @@ fn rgba(lua: &Lua, rest: &MultiValue) -> mlua::Result<[f32; 4]> {
     Ok([r, g, b, a])
 }
 
-/// The per-frame state store — `Model`'s side of this module (see [`SimpleHtmlState`]).
+/// The per-frame [`SimpleHtmlState`] store `Model` holds.
 pub(crate) type SimpleHtmlStates = HashMap<FrameHandle, SimpleHtmlState>;

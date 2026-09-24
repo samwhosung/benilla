@@ -1,36 +1,16 @@
-//! **benilla's widget METHOD surface, asked of a running VM** — the shared measurement behind
-//! the `dump_widget_methods` example and the widget-surface gate
-//! (`script::tests::widget_surface`).
-//!
-//! It exists for the same reason `dump_globals` does: **it is a run, not a
-//! grep**. `_G` is not the whole surface an addon can tell apart — most of what an addon touches
-//! is reached through a *widget*, and an addon's test for "does this client have X" is
-//! `if frame.SetBackdrop then`, i.e. what the `__index` chain answers on a live instance. A regex
-//! over `m.set("Name", …)` cannot answer that: it cannot see which registry table a kind actually
-//! chains to, it cannot see the Texture/FontString leaf split ([`super::region`]), and it reads a
-//! name registered under a `format!` family as one method.
-//!
-//! So every row is one live object being asked `type(obj.Name) == "function"`, exactly as an addon
-//! asks it. The only thing **not** asked of the VM is the *candidate name list* — a metatable whose
-//! `__index` is a Rust dispatcher is not enumerable from Lua, so the candidates are the union of
-//! the keys of the VM's own method tables ([`METHOD_TABLES`]), read out of the Lua registry at
-//! runtime rather than out of the source. A key that no longer resolves to a table is a hard error
-//! rather than a silent loss of candidates: a quietly-missing candidate source would under-report
-//! the surface, which is the exact failure this measurement exists to prevent.
+//! benilla's widget method surface asked of a running VM, shared by the `dump_widget_methods`
+//! example and the widget-surface gate (`script::tests::widget_surface`). Each row is a live
+//! instance asked `type(obj.Name) == "function"`, as an addon asks it; only the candidate names
+//! come from elsewhere, the keys of the VM's method tables ([`METHOD_TABLES`]), since a Rust
+//! `__index` dispatcher cannot be enumerated from Lua.
 use std::collections::BTreeSet;
 
 use mlua::{Table, Value};
 
 use super::UiScript;
 
-/// The named-registry method tables the VM installs — the **candidate name source**, read from the
-/// live registry.
-///
-/// This is not the class chain (the chain is `object::kind_method_registries`' business and this
-/// instrument deliberately does not model it — it asks the instance instead). It is only the
-/// universe of names worth probing: every name benilla registers on any widget appears as a key in
-/// one of these, so the union is a superset of our surface and the per-instance probe decides
-/// membership.
+/// The VM's named-registry method tables: every widget method benilla registers is a key in one,
+/// and the per-instance probe decides which a class answers.
 const METHOD_TABLES: &[&str] = &[
     "__benilla_frame_methods",
     "__benilla_region_methods",
@@ -57,14 +37,9 @@ const METHOD_TABLES: &[&str] = &[
     "__benilla_tooltip_methods",
 ];
 
-/// Every widget/region/font class benilla can hand an addon, and one Lua expression that makes one.
-///
-/// **Ordered, and the order is load-bearing**: the region and font rows are made *by* the plain
-/// frame the first row creates, so `Frame` comes first. Each instance is published as the global
-/// `DW_<Class>`; the frame kinds also publish their own `CreateFrame` name, which is harmless.
-///
-/// `TaxiRouteFrame` is absent on purpose — it is a registered `CreateFrame` type that *is* a
-/// `Frame` and nothing else, so it would be the `Frame` row twice.
+/// Every class benilla can hand an addon, with a Lua expression making one, published as
+/// `DW_<Class>`. `Frame` must come first: the region and font rows are made by it.
+/// `TaxiRouteFrame` is left out, being a plain `Frame` to Lua.
 const CLASSES: &[(&str, &str)] = &[
     ("Frame", r#"CreateFrame("Frame", "DWFrameN", UIParent)"#),
     (
@@ -137,12 +112,8 @@ const CLASSES: &[(&str, &str)] = &[
     ("Font", r#"CreateFont("DWFontN")"#),
 ];
 
-/// Every `(class, method)` pair this VM answers — one live instance per class, probed with the
-/// membership test an addon writes.
-///
-/// **A class that cannot be instantiated is REPORTED, never skipped**: its row is
-/// `(class, "!NOT-INSTANTIABLE")`. A census that silently drops a class reads as "that class has
-/// no methods", which is the wrong answer to a different question.
+/// Every `(class, method)` pair this VM answers, one live instance per class. A class that cannot
+/// be made reports `(class, "!NOT-INSTANTIABLE")` rather than dropping out.
 pub fn widget_method_census(script: &UiScript) -> mlua::Result<Vec<(String, String)>> {
     let mut candidates: BTreeSet<String> = BTreeSet::new();
     for key in METHOD_TABLES {

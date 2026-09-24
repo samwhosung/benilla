@@ -1,9 +1,5 @@
-//! The paper doll (decision 0208 phase 1b): equipment joins the ONE payload space via
-//! [`super::EQUIPMENT_BAG`]. One extra transition ([`pickup_inventory_item`]) plus four small
-//! satellites ([`equip_cursor_item`], [`cursor_can_go_in_slot`], [`auto_equip_cursor_item`],
-//! [`use_inventory_item`], [`is_inventory_item_locked`]) — everything else (cancel, clear, the
-//! world drop, `SplitContainerItem`) already generalizes from [`super`] because it only ever
-//! matches on the `CursorPayload` enum, never on `bag`.
+//! The paper-doll cursor verbs: an equipped slot is an item source under
+//! [`super::EQUIPMENT_BAG`], so the shared cursor code handles its cancel, clear and world drop.
 
 use mlua::Lua;
 
@@ -13,45 +9,18 @@ use crate::script::Model;
 
 use super::{queue_cursor_update, queue_lock_changed, CursorItem, CursorPayload, EQUIPMENT_BAG};
 
-/// `PickupInventoryItem(id)` — the paper-doll slot's left-click entry point (decision 0208 phase
-/// 1b). Mirrors `container::pickup_container_item`'s click model exactly, keyed on the sentinel
-/// [`EQUIPMENT_BAG`] rather than a real bag id (decision 0216 §1's ONE payload space, extended to
-/// equipment). `id` is the 1-based live-API inventory slot (`GetInventorySlotInfo`'s own
-/// numbering — HeadSlot=1 … TabardSlot=19, the four equipped-bag icons Bag0Slot=20 … Bag3Slot=23).
-/// The bag icons ride the SAME transition (a bag's `equip_slots` is `[20,21,22,23]` from
-/// `find_equip_slot(INVTYPE_BAG)`, so the fit rule already routes a bag onto any bag slot, and
-/// `wire_pos`'s `EQUIPMENT_BAG` arm maps live id 20..23 → the wire's equipped-bag inventory slots
-/// 19..22); ammo (0) stays a named deferral — refused outright, cursor untouched.
-///
-/// **The bank-bag band (64..=69) rides this too**, and only through one door: `PutItemInBag`'s
-/// empty-slot leg IS this function in the reference (`0x4c7c00` calls `0x4c7300` there), which is
-/// how a held bag reaches a bank bag slot at all. Its fit rule is one band wider than
-/// `equip_slots` alone — see [`super::bag_verbs::fits_slot`].
-///
-/// - empty cursor + an occupied, UNLOCKED doll slot → picks it up (payload `Item { bag:
-///   EQUIPMENT_BAG, slot: id, … }`), the same lock/event pair as a bag pickup.
-/// - holding + the SAME slot → cancel (mirrors `pickup_container_item`'s own same-slot branch).
-/// - holding an Item payload whose `equip_slots` contains `id` (the fit rule — `equip_slots` rides
-///   the payload from wherever it was picked up, doll or bag alike) → queues the move (dst =
-///   `(EQUIPMENT_BAG, id)`) and CLEARS (a plain clear, no hop) — UNLESS it's a
-///   split carry (`count: Some(_)`): refused outright, kept (you can't equip a partial stack).
-/// - holding a non-fitting Item, or any Spell/Action payload → no-op, kept (mirrors
-///   `pickup_container_item`'s own refusal of a payload a bag slot can't take).
-///
-/// Returns whether the caller should repaint (the source lock, or the held payload, changed).
+/// `PickupInventoryItem(id)` (`0x4c7300`), the doll slot's click, on the bag click's model: a
+/// fitting whole item moves in and the cursor clears, with no hop; a split or a misfit stays
+/// held. Returns whether to repaint.
 pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
-    // Equipment slots (1..=19) + the four equipped-bag icons (20..=23) + the six BANK bag slots
-    // (64..=69, reached only through `PutItemInBag`); ammo (0) is out of scope.
+    // Head 1 to Tabard 19, the bag slots 20-23, and the bank bag slots, which only `PutItemInBag`
+    // reaches (`0x4c7c00` calls `0x4c7300`). Ammo (0) is refused; its leg is not built.
     if !(1..=23).contains(&id) && !super::bag_verbs::BANK_BAG_INV_SLOTS.contains(&id) {
         return false;
     }
-    // The targeting cursor's item half, on the doll. The reference's doll pickup
-    // `0x4c7300` carries the byte-IDENTICAL rung to the bag one — `4c76df: call 0x6e48a0`
-    // (IsTargeting), `4c76e8: call 0x6e6330` (TargetingWantsItem), `4c76fb: call 0x495d60` (bind
-    // this item), then return with nothing picked up — and it is what makes poisoning or
-    // sharpening the weapon you are *wearing* possible at all. Reported in the ONE bag space
-    // ([`EQUIPMENT_BAG`] + the 1-based slot), so the app's drain resolves both seams identically.
-    // A held payload wins, exactly as in the bag path (the ref's own `4c73af` pair precedes it).
+    // An item-targeting spell binds this slot instead of picking it up, as the bag click does
+    // (`0x4c76df`: `0x6e48a0` IsTargeting, `0x6e6330` TargetingWantsItem, `0x495d60` bind), so a
+    // worn weapon can be poisoned. A held payload wins: `0x4c73af` tests it first.
     if model.item_pick_armed && model.cursor.is_none() {
         model.item_picks.push((EQUIPMENT_BAG, id));
         return false;
@@ -88,9 +57,7 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
             true
         }
         Some(CursorPayload::Item(held)) => {
-            // A split carry can't equip a partial stack, and a non-fitting item has nowhere to
-            // land on this slot — both refuse, kept exactly as picked up (no event: nothing
-            // transitioned).
+            // A split or a misfit stays held, with no event: nothing changed.
             if held.count.is_some() || !super::bag_verbs::fits_slot(&held, id) {
                 model.cursor = Some(CursorPayload::Item(held));
                 return false;
@@ -106,14 +73,9 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
             queue_lock_changed(model, held.bag, held.slot);
             true
         }
-        // Mode 5 — the buy, aimed at an equipment slot. `0x4c78fd` tests `[0xb4d900] == 5` inside
-        // the paper-doll click and sends the same `CMSG_BUY_ITEM_IN_SLOT 0x1a3` the bag drop does;
-        // the server equips it or refuses. Reported in the ONE bag space ([`EQUIPMENT_BAG`] + the
-        // 1-based inventory slot), the seam this file already uses for every other doll intent.
-        //
-        // Of the reference's three drop consumers this is the one that handles a stale vendor row
-        // correctly — the other two dereference it (`0x4f9f35`, `0x4c7ea5`) — so its refusal is
-        // what we reproduce in all three.
+        // Mode 5, a buy into this slot: `0x4c78fd` sends `CMSG_BUY_ITEM_IN_SLOT` (`0x1a3`) and the
+        // server equips or refuses. A stale row buys nothing: of the reference's three drop sites
+        // only this one checks it; the other two (`0x4f9f35`, `0x4c7ea5`) dereference it.
         Some(CursorPayload::Merchant(held)) => {
             let entry = model
                 .merchant
@@ -132,10 +94,11 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
             | CursorPayload::Action(_)
             | CursorPayload::Macro(_)
             | CursorPayload::PetAction(_)
-            // Mode 10 — a stabled pet refuses a bag/doll slot exactly as the
-            // spell/action family does, and stays on the cursor for the stable window to take.
+            // Mode 10: a stabled pet stays held for the stable window.
             | CursorPayload::StablePet(_)
-            // Mode 2 (1962) — coins have no slot to land in; a money frame's DropFunc takes them.
+            // Mode 2: coins stay held for a money frame's drop. On an occupied slot the reference
+            // picks the item up over either, as it tests only for a held item (`0x4c769a`) or a
+            // preview row (`0x4c76a5`) before the pickup (`0x4c7838`).
             | CursorPayload::Money(_)),
         ) => {
             model.cursor = Some(other);
@@ -144,27 +107,15 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
     }
 }
 
-/// `EquipCursorItem(id)` — the ref's item-context "Equip" popup entry (not built this slice: no
-/// context menu ships yet). Same transition as placing the held item directly onto doll slot
-/// `id` — [`pickup_inventory_item`]'s place arm already IS that transition, so this simply routes
-/// there (decision 0208 phase 1b: "route both through the same transition").
+/// `EquipCursorItem(id)`: placing the held item on doll slot `id`.
 pub(super) fn equip_cursor_item(model: &mut Model, id: u32) -> bool {
     pickup_inventory_item(model, id)
 }
 
-/// `CursorCanGoInSlot(id)` — whether the held payload could be dropped on doll slot `id`
-/// (decision 0208 phase 1b; the reference's `CURSOR_UPDATE` → `LockHighlight`/`UnlockHighlight`
-/// driver, `PaperDollFrame.lua:609-615`). An Item payload whose `equip_slots` contains `id`;
-/// empty cursor or a Spell/Action payload both answer `false` (the same fit-blind refusal
-/// [`pickup_inventory_item`] gives them — asking a hypothetical doesn't relax the rule).
-///
-/// INTERIM: the byte body's terminal equip-fit check (`0x5da1d0`) was left unresolved by 0216 §5
-/// (0218's own residual, §4 "confirmed as built" — everything else on that list is pinned, this
-/// one function wasn't among the byte-verified findings). `equip_slots` derives from the item
-/// template's `inventoryType` via the SERVER's own mapping instead (`ui_items::find_equip_slot`,
-/// transcribed from vmangos `Player::FindEquipSlot`/`ItemPrototype::GetAllowedEquipSlots`) — a
-/// verifiable authority `SMSG_INVENTORY_CHANGE_FAILURE` referees either way, corrected if a
-/// future pin disagrees with the client's own table.
+/// `CursorCanGoInSlot(id)`, the doll slot's highlight on `CURSOR_UPDATE`
+/// (`PaperDollFrame.lua:609-615`): `equip_slots`, which follows vmangos `Player::FindEquipSlot`,
+/// where the reference's `IsValidForSlot` (`0x5da1d0`) tests a static slot mask per
+/// `InventoryType`.
 pub(super) fn cursor_can_go_in_slot(model: &Model, id: u32) -> bool {
     match &model.cursor {
         Some(CursorPayload::Item(item)) => super::bag_verbs::fits_slot(item, id),
@@ -172,17 +123,10 @@ pub(super) fn cursor_can_go_in_slot(model: &Model, id: u32) -> bool {
     }
 }
 
-/// `AutoEquipCursorItem()` — the model-pane's click-with-payload path (decision 0208 phase 1b,
-/// ref `PaperDollFrame.xml`'s frame-level `OnReceiveDrag`/`OnMouseUp`): an Item payload picked up
-/// from a CONTAINER (`bag >= 0`, a whole stack) queues its `(bag, slot)` source as a NEW
-/// `container_autoequips` intent (the app sends `CMSG_AUTOEQUIP_ITEM` — the server picks the
-/// destination slot itself and swaps any displaced piece back, vmangos `ItemHandler.cpp:138-228`)
-/// and clears the cursor — a plain clear, the same contract as every other placement since
-/// decision 0218. A payload already carried FROM the equipment (`bag == EQUIPMENT_BAG` — a
-/// doll→doll re-drop has nothing for the server to "auto" pick) or a split carry (can't
-/// auto-equip a partial stack) is a no-op, kept; so is any Spell/Action payload.
-///
-/// Returns whether the caller should repaint.
+/// `AutoEquipCursorItem()`, a click or drop on the doll's model (`PaperDollFrame.lua:31-35`): a
+/// whole stack from a bag becomes `CMSG_AUTOEQUIP_ITEM`: the server picks the slot and swaps
+/// the displaced piece back (`ItemHandler.cpp:138-228`); an equipped item or a split stays held.
+/// Returns whether to repaint.
 pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     match model.cursor.take() {
         Some(CursorPayload::Item(item)) if item.bag >= 0 && item.count.is_none() => {
@@ -198,25 +142,15 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     }
 }
 
-/// `UseInventoryItem(id)` — the doll slot's right-click entry point (ref
-/// `PaperDollItemSlotButton_OnClick`, `PaperDollFrame.lua:658-659`): queues `id` for the app to
-/// resolve to the equipped item's guid and send (`CMSG_USE_ITEM`, bag 255 + the 0-based wire slot
-/// — vmangos `HandleUseItemOpcode` takes equipped positions the same as bag ones). No engine-side
-/// refusal — an empty/out-of-range slot is a harmless no-op the app's drain silently drops
-/// (mirrors `UseContainerItem`'s own contract: it never checks the slot either).
+/// `UseInventoryItem(id)`, the doll slot's right-click (`PaperDollFrame.lua:658-659`): the app
+/// sends `CMSG_USE_ITEM` with bag 255 and the 0-based slot, and drops an empty slot unsent.
 pub(super) fn use_inventory_item(model: &mut Model, id: u32) {
     model.inventory_uses.push(id);
 }
 
-/// `IsInventoryItemLocked(id)` — true while `id` is the ACTIVE cursor payload's source (the
-/// picked-up slot dims immediately, no server round-trip — the doll twin of
-/// `GetContainerItemInfo`'s `held_here` derivation) OR the app's fed `InvSlotView.locked` says so
-/// (an outstanding pending op the app's `PendingItemOps` tracks).
-///
-/// Reads through [`Model::inv_slot`], not the doll array, so it answers over the WHOLE live-id
-/// space that binding covers — the reference's `BankFrameItemButton_UpdateLock` calls it with
-/// `BankButtonIDToInvSlotID(...)` for every bank slot, and a lock the vault feed reports has to
-/// dim the button the same as an equipped one.
+/// `IsInventoryItemLocked(id)`: true while `id` is the held item's source or the app reports a
+/// pending operation on it. Reads [`Model::inv_slot`], since `BankFrameItemButton_UpdateLock`
+/// asks about bank slots too.
 pub(super) fn is_inventory_item_locked(model: &Model, id: u32) -> bool {
     let held_here = matches!(&model.cursor, Some(CursorPayload::Item(c)) if c.bag == EQUIPMENT_BAG && c.slot == id);
     let fed = usize::try_from(id)
@@ -226,9 +160,7 @@ pub(super) fn is_inventory_item_locked(model: &Model, id: u32) -> bool {
     held_here || fed
 }
 
-/// Register the paper-doll's cursor globals — all top-level, matching the reference
-/// (`PickupInventoryItem` &c. are not namespaced any more than `PickupContainerItem`'s cursor
-/// siblings are).
+/// Register the paper-doll verbs as globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -284,8 +216,7 @@ mod tests {
     use crate::script::cursor::{CursorAction, CursorPayload, CursorSpell, EQUIPMENT_BAG};
     use crate::script::{ContainerMove, ContainerSlot, ContainerState, InvSlotView, UiScript};
 
-    /// Slots 1 (Head) and 19 (Tabard) occupied, plus the two finger rings (11/12) — a doll
-    /// fixture wide enough to exercise the fit rule, the same-slot cancel, and a doll↔doll swap.
+    /// Head (1), a ring in finger slot 11 that also fits 12, and Tabard (19).
     fn doll_slots() -> crate::script::InventorySlots {
         let mut slots: crate::script::InventorySlots = Default::default();
         slots[1] = Some(InvSlotView {
@@ -320,7 +251,7 @@ mod tests {
             name: Some("Test Ring".into()),
             link: Some("|cffffffff|Hitem:555:0:0:0|h[Test Ring]|h|r".into()),
             locked: false,
-            equip_slots: vec![11, 12], // FINGER1|FINGER2 — the doll↔doll swap fixture
+            equip_slots: vec![11, 12], // either finger: the doll-to-doll swap
             creator: None,
             enchants: Vec::new(),
         });
@@ -513,7 +444,7 @@ mod tests {
         });
         s.set_inventory_slots(slots);
 
-        // Ammo (0) is still refused; the bag icon (20) now picks up the equipped bag.
+        // Ammo (0) is refused; Bag0Slot (20) picks up the equipped bag.
         assert!(!s.eval::<bool>("return PickupInventoryItem(0)").unwrap());
         assert!(s.eval::<bool>("return PickupInventoryItem(20)").unwrap());
         let held = s.cursor_item().expect("bag picked up from the bar");
@@ -523,9 +454,6 @@ mod tests {
         );
     }
 
-    /// Drag-to-equip: a bag carried from the backpack drops onto an empty bag slot (id 21), queuing
-    /// the move to `(EQUIPMENT_BAG, 21)` — the same transition the paper doll uses, and the wire the
-    /// app maps onto equipped-bag inventory slot 20.
     #[test]
     fn place_a_bag_onto_a_bag_slot_queues_the_equip_move() {
         let mut s = UiScript::new().unwrap();
@@ -583,17 +511,14 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_inventory_slots(doll_slots());
 
-        // Empty cursor: false everywhere.
         assert!(!s.eval::<bool>("return CursorCanGoInSlot(1)").unwrap());
 
-        // Item arm: true only for a slot its equip_slots names.
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(s.eval::<bool>("return CursorCanGoInSlot(1)").unwrap());
         assert!(!s.eval::<bool>("return CursorCanGoInSlot(2)").unwrap());
         s.run("ClearCursor()").unwrap();
 
-        // Spell/Action arms: always false (the fit-blind refusal).
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             passive: false,
             book_slot: 1,
@@ -627,14 +552,12 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_inventory_slots(doll_slots());
 
-        // From the doll itself: nothing for the server to "auto" pick.
         s.run("PickupInventoryItem(1)").unwrap();
         assert!(!s.eval::<bool>("return AutoEquipCursorItem()").unwrap());
         assert!(s.cursor_item().is_some(), "kept");
         assert!(s.take_container_autoequips().is_empty());
         s.run("ClearCursor()").unwrap();
 
-        // A split carry: can't auto-equip a partial stack.
         let mut state = one_fitting_bag_item();
         state.slots.get_mut(&1).unwrap().count = 5;
         s.set_container(0, Some(state));
@@ -694,11 +617,8 @@ mod tests {
         );
     }
 
-    /// The targeting cursor's item half reroutes BOTH pickup seams, and the
-    /// held-payload check precedes it in both — the reference's own order (`4f9c38` before
-    /// `4f9c54`; `4c73af` before `4c76df`). Without the doll seam a rogue could not poison the
-    /// weapon they are wearing; without the payload gate, dragging an item across a bag while a
-    /// poison is armed would silently fire the cast at whatever you dropped it on.
+    /// The held-payload test runs first in both seams: `0x4f9c38` before `0x4f9c54` in the bag,
+    /// `0x4c73af` before `0x4c76df` on the doll.
     #[test]
     fn the_armed_item_half_reroutes_bag_and_doll_clicks() {
         let mut s = UiScript::new().unwrap();
@@ -710,7 +630,7 @@ mod tests {
         assert!(s.cursor_item().is_some());
         assert!(s.take_item_picks().is_empty());
 
-        // Armed but HOLDING: the payload wins, exactly as the reference orders it.
+        // Armed but holding: the payload wins.
         s.set_item_pick_armed(true);
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(
@@ -718,8 +638,7 @@ mod tests {
             "a click while carrying an item is a place, not a bind"
         );
 
-        // Armed with an empty cursor: both seams bind instead of picking up, and neither
-        // disturbs the cursor.
+        // Armed with an empty cursor: both seams bind and leave the cursor empty.
         s.run("ClearCursor()").unwrap();
         assert!(s.cursor_item().is_none());
         assert!(!s.eval::<bool>("return PickupInventoryItem(1)").unwrap());

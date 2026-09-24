@@ -1,20 +1,4 @@
-//! The EditBox mouse/selection interaction law — click→char-index, drag-select, the clipboard
-//! pair, and the caret blink — a child module over the mother's focus/editing primitives.
-//!
-//! Byte law:
-//!
-//! - **Click `0x77b800`**: on a hit — blink reset, click→index (`0x77d0d0`) places the cursor and
-//!   collapses the selection, the drag flag raises (`E+0x364 = 1`), then `SetFocus`
-//!   UNCONDITIONALLY. No shift+click branch exists in the handler (INFERRED by absence — 1.12
-//!   predates extend-on-click).
-//! - **Drag `0x77a860`** (mouse move while `+0x364`): map x→index, extend the selection there via
-//!   the same helper Shift+arrow uses (`0x77cd10`), cursor following.
-//! - **Release** (`0x77afc0` case 1): `+0x364 = 0`.
-//! - **Clipboard**: Ctrl+C/X act only with a non-empty selection (`0x77e1d0`); X then
-//!   deletes = cut. A password box copies a FIXED placeholder (`0x882748`, runtime literal
-//!   unresolved — flagged live-capture), never the real text; benilla stands in the mask run.
-//! - **Blink `0x77a790`**: the focused box's accumulator (`E+0x374`) advances by dt; crossing the
-//!   period (`E+0x370`, ctor default 0.5 s) toggles the caret and zeroes the accumulator.
+//! EditBox mouse and clipboard interaction: click, drag-select, copy, cut and the caret blink.
 
 use mlua::Lua;
 
@@ -22,13 +6,10 @@ use super::{set_focus_handle, sync_text_region, with_eb};
 use crate::script::Model;
 use crate::widget::{FrameHandle, FrameKind, KindState};
 
-/// Map a screen point (the engine's y-up UI space — the same space resolved rects and the
-/// pointer API live in) to the box's TEXT byte index: x relative to the text region's left edge,
-/// shifted into advance space by the scroll window's origin, nearest char boundary (`0x77d0d0`;
-/// the rounding is INFERRED nearest). A multiline box also reads y — px down from the region's
-/// top pick the wrapped row ([`crate::widget::EditBoxState::index_at_pos`]). Ends up at
-/// end-of-text while the advance table is unanswered — the pre-seam behavior, degrading
-/// gracefully.
+/// A UI-space point (y up) to the box's text byte index at the nearest cursor stop (`0x77d0d0`,
+/// whose own rounding is untraced): x from the text region's left edge plus the scroll origin, and
+/// in a multi-line box y from its top picks the wrapped row. The end of the text until the advance
+/// table is answered.
 fn index_at_screen_pos(lua: &Lua, h: FrameHandle, x: f32, y: f32) -> usize {
     let corner = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -36,8 +17,7 @@ fn index_at_screen_pos(lua: &Lua, h: FrameHandle, x: f32, y: f32) -> usize {
             Some(KindState::EditBox(eb)) => eb.text_region,
             _ => None,
         };
-        // The text region's resolved corner; an unanchored region (no insets) draws over its
-        // owner, so the frame's own edges stand in.
+        // An unanchored text region draws over its owner, so the frame's own corner stands in.
         rh.and_then(|rh| model.region_resolved.get(&rh))
             .or_else(|| model.resolved.get(&h))
             .map(|r| (r.left, r.top))
@@ -53,8 +33,8 @@ fn index_at_screen_pos(lua: &Lua, h: FrameHandle, x: f32, y: f32) -> usize {
     .unwrap_or(0)
 }
 
-/// A LeftButton press landed on frame `id` (`0x77b800`): if it is an EditBox — blink reset, the
-/// cursor to the clicked char (collapsing any selection), drag begins, focus UNCONDITIONALLY.
+/// A LeftButton press on EditBox `id` (`0x77b800`) places the cursor at the clicked char,
+/// collapsing the selection, starts a drag and takes focus unconditionally; no shift+click branch.
 pub(in crate::script) fn click(lua: &Lua, id: u32, x: f32, y: f32) {
     let Some(h) = editbox_of(lua, id) else { return };
     let idx = index_at_screen_pos(lua, h, x, y);
@@ -65,8 +45,8 @@ pub(in crate::script) fn click(lua: &Lua, id: u32, x: f32, y: f32) {
     set_focus_handle(lua, h);
 }
 
-/// Mouse move while the press is held (`0x77a860`): the focused, drag-active box extends its
-/// selection to the hovered index; the cursor follows.
+/// Mouse move with the button held (`0x77a860`): a dragging focused box extends its selection to
+/// the hovered index through the Shift+arrow helper (`0x77cd10`).
 pub(in crate::script) fn drag_update(lua: &Lua, x: f32, y: f32) {
     let Some(h) = focused(lua) else { return };
     if with_eb(lua, h, |eb| eb.drag_active) != Some(true) {
@@ -80,30 +60,27 @@ pub(in crate::script) fn drag_update(lua: &Lua, x: f32, y: f32) {
     });
 }
 
-/// The press released (`0x77afc0` case 1): the drag ends. Fires for any release — a box that
-/// never started a drag ignores it.
+/// Any button release ends the drag (`0x77afc0` case 1).
 pub(in crate::script) fn drag_end(lua: &Lua) {
     if let Some(h) = focused(lua) {
         with_eb(lua, h, |eb| eb.drag_active = false);
     }
 }
 
-/// Ctrl+LEFT/RIGHT — the word-granular cursor move (the client walks its per-byte class array on
-/// the Ctrl branch, `0x41f8f0(1)`; benilla's alnum-run approximation is INFERRED): `shift` extends
-/// the selection from the fixed anchor like the char move; else the caret collapses there.
+/// Ctrl+Left/Right, the word move: the client walks its per-byte class array (`0x41f8f0(1)`),
+/// benilla stops at alphanumeric runs. `shift` extends the selection from its anchor.
 pub(in crate::script) fn move_word(lua: &Lua, h: FrameHandle, right: bool, shift: bool) {
     with_eb(lua, h, |eb| eb.move_by_word(right, shift));
 }
 
-/// Ctrl+C (`0x77e1d0`): the focused box's selected substring, `None` with no selection. A
-/// password box yields the mask run — the client copies a fixed placeholder, NEVER the text.
+/// Ctrl+C (`0x77e1d0`): the focused box's selection. A password box never yields its text: the
+/// client copies the image's empty string (`0x882748`), benilla the mask run.
 pub(in crate::script) fn copy_selection(lua: &Lua) -> Option<String> {
     let h = focused(lua)?;
     with_eb(lua, h, |eb| eb.selected_text()).flatten()
 }
 
-/// Ctrl+X: copy, then delete the selection (an ordinary edit — the region syncs and
-/// `OnTextChanged` fires).
+/// Ctrl+X (`0x77e1d0`): copy, then delete the selection as an ordinary edit.
 pub(in crate::script) fn cut_selection(lua: &Lua) -> Option<String> {
     let h = focused(lua)?;
     let copied = with_eb(lua, h, |eb| eb.cut_selection()).flatten()?;
@@ -112,9 +89,8 @@ pub(in crate::script) fn cut_selection(lua: &Lua) -> Option<String> {
     Some(copied)
 }
 
-/// The blink tick (`0x77a790`, run from the host's frame tick): the focused box's accumulator
-/// advances; crossing the period toggles the caret and resets. Non-positive period never blinks
-/// (a solid caret).
+/// The caret blink (`0x77a790`), each frame: past the period (0.5 s by default) the focused box's
+/// caret toggles and the accumulator resets; a non-positive period keeps the caret solid.
 pub(in crate::script) fn tick_blink(lua: &Lua, dt: f32) {
     if let Some(h) = focused(lua) {
         with_eb(lua, h, |eb| {
@@ -129,14 +105,12 @@ pub(in crate::script) fn tick_blink(lua: &Lua, dt: f32) {
     }
 }
 
-/// The focused EditBox handle, if any.
 fn focused(lua: &Lua) -> Option<FrameHandle> {
     lua.app_data_ref::<Model>()
         .expect("model app_data")
         .focused_editbox
 }
 
-/// Resolve a frame id to a live EditBox handle.
 fn editbox_of(lua: &Lua, id: u32) -> Option<FrameHandle> {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     let h = model.id_to_frame.get(&id).copied()?;

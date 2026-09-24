@@ -1,16 +1,5 @@
-//! **The model pane's clock, arm, and two handlers** (`0x76d7f0`, `0x7121a0`,
-//! `0x76cac0`).
-//!
-//! A `<Model>` widget owns a private scene whose clock its own `OnUpdate` advances while the
-//! frame is visible; `SetSequence`/`SetSequenceTime` arm a sequence with an anchor the sampler
-//! re-reads; `OnUpdateModel` fires at the top of every paint and `OnAnimFinished` from the
-//! completion of a clamped sequence. Every one of those is Lua-observable — the shipped cooldown
-//! sweep is nothing but those handlers driving `SetSequenceTime` — so the law is tested here
-//! against the stock `Cooldown.lua`, transcribed verbatim.
-//!
-//! The engine parses no M2, so a file's sequences and bounds are **facts** the host hands over
-//! ([`ModelFileFacts`]); these tests hand over the facts `benilla-extract m2seq` reads off the
-//! shipped files.
+//! The model pane's clock, sequence arm and handlers (`0x76d7f0`, `0x7121a0`, `0x76cac0`). The
+//! engine parses no M2: a file's sequences and bounds are [`ModelFileFacts`] the host hands over.
 
 use super::common::script;
 use crate::script::{Model, UiScript};
@@ -32,15 +21,13 @@ fn facts(rows: &[(u16, u32, bool)]) -> ModelFileFacts {
     }
 }
 
-/// `UI-Cooldown-Indicator.m2` (`m2seq`): seq 0 = id 0, 1000 ms, clamp; seq 1 = id 1, 1000 ms,
-/// clamp.
+/// `UI-Cooldown-Indicator.m2`'s sequences as `m2seq` reads them.
 const COOLDOWN_FILE: &str = r"Interface\Cooldown\UI-Cooldown-Indicator.mdx";
 fn cooldown_facts() -> ModelFileFacts {
     facts(&[(0, 1000, false), (1, 1000, false)])
 }
 
-/// `MinimapPing.m2` (`m2seq`): seq 0 = id 127, 1333 ms, clamp; seq 1 = id 0, 833 ms, LOOP; seq
-/// 2 = id 1, 333 ms, clamp. `SetSequence(0)` is the looping one.
+/// `MinimapPing.m2`'s sequences as `m2seq` reads them; `SetSequence(0)` is the looping one.
 const PING_FILE: &str = r"Interface\MiniMap\Ping\MinimapPing.mdx";
 fn ping_facts() -> ModelFileFacts {
     facts(&[(127, 1333, false), (0, 833, true), (1, 333, false)])
@@ -64,9 +51,7 @@ fn play_head(s: &UiScript, name: &str, path: &str) -> Option<(u16, u32)> {
     m.play_head(facts).map(|p| (p.anim_id, p.cursor_ms))
 }
 
-/// The widget's `OnUpdate` (`0x76d7f0`) advances the scene clock by `trunc(elapsed · 1000)` —
-/// only while the frame is visible (the UI pump walks visible frames), so a hidden pane's clock
-/// stands still and a re-shown pane resumes where it stopped.
+/// `OnUpdate` (`0x76d7f0`) adds `trunc(elapsed · 1000)` ms, for visible frames only.
 #[test]
 fn the_clock_runs_only_while_the_pane_is_shown_and_truncates() {
     let mut s = script();
@@ -97,20 +82,18 @@ fn the_clock_runs_only_while_the_pane_is_shown_and_truncates() {
         "re-shown: resumes where it stopped"
     );
 
-    // The looping sequence wraps on its 833 ms and never completes.
+    // The looping sequence wraps on its 833 ms.
     assert_eq!(play_head(&s, "Ping", PING_FILE), Some((0, 616)));
     s.tick(0.5); // clock 1116 → 1116 mod 833
     assert_eq!(play_head(&s, "Ping", PING_FILE), Some((0, 283)));
 }
 
-/// `SetModel` runs the loader's completion (`0x70ebd0`) — arm **Stand** (id 0 if the file owns
-/// it, else `animations[0]`'s id), variation 0 — synchronously when the facts are known, and when
-/// they land otherwise; until then the pane is a waiter and the host is asked for the file.
+/// The loader's completion (`0x70ebd0`) arms Stand (id 0 if the file owns it, else
+/// `animations[0]`'s id), at `SetModel` when the facts are known or when they land.
 #[test]
 fn set_model_seeds_stand_now_or_when_the_facts_land() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    // Facts first: the arm is immediate.
     s.set_model_facts(COOLDOWN_FILE, cooldown_facts());
     s.run(&format!(
         r#"a = CreateFrame("Model", "Known", UIParent) a:SetModel("{}")"#,
@@ -126,7 +109,6 @@ fn set_model_seeds_stand_now_or_when_the_facts_land() {
     );
     assert_eq!(play_head(&s, "Known", COOLDOWN_FILE), Some((0, 0)));
 
-    // Facts unknown: a waiter, and the file goes on the host's list once.
     s.run(&format!(
         r#"b = CreateFrame("Model", "Waiting", UIParent) b:SetModel("{0}")
            c = CreateFrame("Model", "Waiting2", UIParent) c:SetModel("{0}")"#,
@@ -142,7 +124,6 @@ fn set_model_seeds_stand_now_or_when_the_facts_land() {
     );
     assert!(s.model_facts_wanted().is_empty(), "drained");
 
-    // The facts land: every waiter holding the file arms its Stand at its own clock.
     s.tick(0.25);
     s.set_model_facts(PING_FILE, ping_facts());
     for name in ["Waiting", "Waiting2"] {
@@ -155,7 +136,6 @@ fn set_model_seeds_stand_now_or_when_the_facts_land() {
         );
     }
 
-    // A file that does not own id 0 seeds `animations[0]`'s own id.
     s.set_model_facts(
         r"Interface\Odd.mdx",
         facts(&[(204, 500, true), (166, 500, true)]),
@@ -165,9 +145,7 @@ fn set_model_seeds_stand_now_or_when_the_facts_land() {
     assert_eq!(pane(&s, "Odd").armed.map(|a| a.anim_id), Some(204));
 }
 
-/// `SetSequence(id)` with an id the file does not own **stops what was playing and arms
-/// nothing** — `0x7121a0`'s interrupt runs before its bounds check. A queued arm on a
-/// file still loading is kept until the facts say otherwise.
+/// `0x7121a0` interrupts the track before its bounds check; a queued arm waits for the facts.
 #[test]
 fn an_unowned_id_stops_the_track_and_arms_nothing() {
     let mut s = script();
@@ -183,7 +161,6 @@ fn an_unowned_id_stops_the_track_and_arms_nothing() {
     assert_eq!(pane(&s, "P").sequence, 42, "the raw id is still recorded");
     assert!(pane(&s, "P").armed.is_none(), "…but nothing plays");
 
-    // Queued on an unloaded file, then refused when the facts land.
     s.run(r#"q = CreateFrame("Model", "Q", UIParent) q:SetModel("Interface\\Late.mdx") q:SetSequence(7)"#)
         .unwrap();
     assert_eq!(
@@ -198,8 +175,7 @@ fn an_unowned_id_stops_the_track_and_arms_nothing() {
          own — nothing plays"
     );
 
-    // The other order of the same replay: a queued arm the file DOES own wins over the seed,
-    // at its original offset, re-anchored on the clock the file landed on.
+    // A queued arm the file owns wins over the seed, re-anchored on the landing clock.
     s.run(r#"r = CreateFrame("Model", "R", UIParent) r:SetModel("Interface\\Later.mdx") r:SetSequenceTime(5, 40)"#)
         .unwrap();
     s.tick(0.3);
@@ -211,17 +187,13 @@ fn an_unowned_id_stops_the_track_and_arms_nothing() {
     assert_eq!((a.anim_id, a.armed_at_ms, a.anchor_ms), (5, 300, 300 - 40));
 }
 
-/// The shipped cooldown, on the two handlers and nothing else — `Cooldown.lua` verbatim:
-/// `SetTimer` arms sequence 0 and shows; every paint `OnUpdateModel` scrubs
-/// `SetSequenceTime(0, elapsed/duration · 1000)` until done, then flips to sequence 1 at 0; the
-/// flash's completion (`OnAnimFinished`, 1000 ms later) hides the frame.
+/// The stock `Cooldown.lua`, which runs on `OnUpdateModel` and `OnAnimFinished` alone.
 #[test]
 fn the_cooldown_machine_runs_on_the_two_handlers() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.set_model_facts(COOLDOWN_FILE, cooldown_facts());
-    // `SetTimer`'s gate is `start > 0`: a session clock still at 0 refuses the timer, as the
-    // reference's would — so the session is a second old before the button is pressed.
+    // `SetTimer` gates on `start > 0`, so the session clock must be past 0.
     s.tick(1.0);
     s.run(&format!(
         r#"
@@ -272,22 +244,18 @@ fn the_cooldown_machine_runs_on_the_two_handlers() {
     assert!(s.frame_visible("CD"));
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((0, 0)));
 
-    // The sweep: each paint scrubs sequence 0 to the elapsed fraction.
     s.tick(0.5);
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((0, 250)));
     s.tick(1.0);
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((0, 750)));
-    // A scrub is an ANCHOR, not a freeze: between two paints the clock runs on from it. The
-    // cooldown never sees that (it re-scrubs every paint), the ping relies on it.
+    // A scrub is an anchor, not a freeze: between paints the clock runs on from it.
     assert_eq!(pane(&s, "CD").armed.map(|a| a.anchor_ms), Some(1500 - 750));
 
-    // Done: the flip to the flash, sequence 1 at 0.
     s.tick(0.6);
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((1, 0)));
     assert!(s.frame_visible("CD"));
     assert_eq!(s.eval::<i64>("return cd.stopping").unwrap(), 1);
 
-    // The flash runs its 1000 ms; the completion fires once, and the handler hides the frame.
     s.tick(0.5);
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((1, 500)));
     assert!(s.eval::<bool>("return table.getn(fired) == 0").unwrap());
@@ -301,15 +269,13 @@ fn the_cooldown_machine_runs_on_the_two_handlers() {
         !s.frame_visible("CD"),
         "…which the stock handler turns into Hide()"
     );
-    // Hidden: no paint, no second completion, the cursor holds at the end.
     s.tick(1.0);
     assert_eq!(s.eval::<i64>("return table.getn(fired)").unwrap(), 1);
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((1, 1000)));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `OnUpdateModel` runs with `this` set, once per paint of a **visible** pane, before the
-/// completion is read — so a handler that re-arms in the same paint completes nothing.
+/// `OnUpdateModel` runs before the completion is read, so re-arming each paint completes nothing.
 #[test]
 fn on_update_model_fires_per_visible_paint_with_this() {
     let mut s = script();
@@ -342,7 +308,6 @@ fn on_update_model_fires_per_visible_paint_with_this() {
         2,
         "no paint while hidden"
     );
-    // Re-arming every paint keeps the clamped sequence from ever completing.
     s.run("M:Show() M:SetScript(\"OnUpdateModel\", function() this:SetSequenceTime(1, 0) end)")
         .unwrap();
     for _ in 0..30 {
@@ -351,9 +316,8 @@ fn on_update_model_fires_per_visible_paint_with_this() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A LOOPING sequence fires `OnAnimFinished` once too — at the end of its first pass — and keeps
-/// looping (`0x719370` enqueues the completion before it tests the loop flag). And a pane with no
-/// file fires no `OnUpdateModel` at all (`76d24c`'s gate), however visible.
+/// `0x719370` enqueues the completion before it tests the loop flag, so a loop's first pass fires
+/// `OnAnimFinished`; a pane with no file fails `0x76d24c`'s gate and never paints.
 #[test]
 fn a_loop_completes_once_and_a_fileless_pane_paints_nothing() {
     let mut s = script();
@@ -409,9 +373,8 @@ fn a_loop_completes_once_and_a_fileless_pane_paints_nothing() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The implicit rect**: a model pane that authored no size takes its file's
-/// bounding-box extent in LAYOUT units — `768·√(a²+1)` FrameXML units per unit, `1280` at 4:3
-/// — the moment the facts are known; it follows the screen's aspect; an authored size wins.
+/// A pane with no authored size takes its file's bounding box in layout units, `768·√(a²+1)`
+/// FrameXML units each (1280 at 4:3), following the screen's aspect.
 #[test]
 fn a_size_less_pane_takes_its_files_rect_in_layout_units() {
     let mut s = script();
@@ -463,7 +426,7 @@ fn a_size_less_pane_takes_its_files_rect_in_layout_units() {
     assert_eq!((bw, bh), (50.0, 20.0), "an authored size is untouched");
     assert!(pane(&s, "Sized").implicit_size && !pane(&s, "Authored").implicit_size);
 
-    // 16:9 — a layout unit is 768·√((16/9)²+1) = 1566.4 FrameXML units.
+    // At 16:9 a layout unit is 768·√((16/9)²+1) = 1566.4 FrameXML units.
     s.set_screen_size(1600.0, 900.0);
     s.resolve();
     let w: f32 = s.eval("return Sized:GetWidth()").unwrap();
@@ -477,9 +440,7 @@ fn a_size_less_pane_takes_its_files_rect_in_layout_units() {
     assert_eq!(s.eval::<f32>("return Sized:GetWidth()").unwrap(), 10.0);
 }
 
-/// `ReplaceIconTexture` is the type-14 texture override on the INSTANCE: stored over a file
-/// (queued and replayed while it streams), dropped with no file, released by `SetModel` and
-/// `ClearModel`.
+/// The type-14 texture override belongs to the model instance and dies with it.
 #[test]
 fn replace_icon_texture_lives_and_dies_with_the_instance() {
     let mut s = script();
@@ -523,8 +484,7 @@ fn replace_icon_texture_lives_and_dies_with_the_instance() {
     );
 }
 
-/// The XML `scale=` on a model pane is the MODEL's scale (`0x76cac0` → `+0x3a0`), never the
-/// frame's — the cooldown template's 0.75 must not shrink the widget's rect.
+/// A model pane's XML `scale=` is the model's scale (`0x76cac0`, `+0x3a0`), never the frame's.
 #[test]
 fn the_model_scale_attribute_is_the_models_own() {
     let mut s = script();

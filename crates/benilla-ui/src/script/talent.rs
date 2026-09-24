@@ -1,126 +1,98 @@
-//! The talent window's engine seam — the same two-way shape as
-//! [`super::spellbook`]: the app pushes a **talent snapshot** ([`UiScript::set_talents`] — the
-//! class's tabs + each tab's talents, already resolved to name/icon/rank/availability by the
-//! app's `Talent.dbc` × `Spell.dbc` join), the Era bindings below read it verbatim, and
-//! `LearnTalent(tab, index)` queues outbound intents the app drains
-//! ([`UiScript::take_talent_learns`]) into `CMSG_LEARN_TALENT`. The engine holds no talent
-//! KNOWLEDGE — grid seats, ranks, prerequisites, and availability are the app's resolve.
+//! The talent bindings: the app pushes the class's pages and talents, resolved from `Talent.dbc`
+//! and `Spell.dbc` ([`UiScript::set_talents`]), and `LearnTalent(tab, index)` queues clicks for
+//! `CMSG_LEARN_TALENT`. Grid seats, ranks, prerequisites and availability are the app's.
 //!
-//! The **respec** pair rides here too and is the binder question's twin, not a
-//! talent-window affordance: `ConfirmTalentWipe()` answers a class trainer's
-//! `CONFIRM_TALENT_WIPE`, and `CheckTalentMasterDist()` is the range poll that takes the dialog
-//! away when you walk off. Both are 1.12 engine bindings (`reference/1.12-globals.tsv`), and
-//! neither reads the snapshot above — the question arrives as the event's argument.
+//! The tuples are what `Blizzard_TalentUI.lua` reads (`:154`, `:180`): `GetTalentTabInfo(i)` gives
+//! name, texture, pointsSpent, fileName; `GetTalentInfo(tab, i)` name, icon, tier, column, rank,
+//! maxRank, isExceptional, meetsPrereq. Tiers and columns are 1-based, as the stock frame indexes
+//! `TALENT_BRANCH_ARRAY[tier][column]`. The respec pair answers a class trainer's
+//! `CONFIRM_TALENT_WIPE` and reads no snapshot.
 //!
-//! The Era tuple shapes are the 1.12 addon's own reads (`Blizzard_TalentUI.lua`, extracted from
-//! the patch chain — decision 0304's pin §3):
-//! `GetTalentTabInfo(i) → name, texture, pointsSpent, fileName`;
-//! `GetTalentInfo(tab, i) → name, icon, tier, column, rank, maxRank, isExceptional, meetsPrereq`;
-//! `GetTalentPrereqs(tab, i) → tier, column, isLearnable, …` (flat triplets);
-//! `UnitCharacterPoints(unit) → cp1, cp2`. Tiers/columns are **1-based** Lua-facing (the
-//! reference indexes `TALENT_BRANCH_ARRAY[tier][column]` directly) — the app pushes them
-//! 1-based; `isExceptional` is pushed but unused by the reference frame's own render.
-//!
-//! ## The tooltip (`GameTooltip:SetTalent(tab, index)`)
-//!
-//! The 1.12 talent tooltip IS the spell builder `0x52e610` with the talent params: line 2
-//! `TOOLTIP_TALENT_RANK 0x854a2c` "Rank %d/%d" white iff `param7≠0 && param8==0`; line 13
-//! `TOOLTIP_TALENT_LEARN 0x8549f8` "Click to learn" green on a learnable higher rank — so
-//! `SetTalent` renders THROUGH the spell channel: the talent's display-rank
-//! spell view comes from the same ask-once store `SetSpell` uses (a miss queues the id for the
-//! app's resolver), interleaved with the talent lines ([`TalentLines`]). The red requirement
-//! lines' position (here: after the rank line) is CONFIRMED — decision 0305's residue: it
-//! matches the builder law. Still open: the "Next rank:" block's composition (here:
-//! `TOOLTIP_TALENT_NEXT_RANK` white + the next rank spell's description gold — its view from the
-//! same store) — 0305 didn't walk it.
+//! `GameTooltip:SetTalent` is the spell builder (`0x52e610`) with talent lines: the rank line
+//! (`TOOLTIP_TALENT_RANK`, `0x854a2c`), the red requirement lines after it, and "Click to learn"
+//! (`TOOLTIP_TALENT_LEARN`, `0x8549f8`) in green on a learnable rank. The "Next rank:" block,
+//! `TOOLTIP_TALENT_NEXT_RANK` in white and the next rank's description in gold, is untraced in
+//! the reference.
 
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::tooltip_spell::{spell_view_of, TalentLines};
 use super::Model;
 
-/// One talent page (`TalentTab.dbc` row, app-resolved) — `GetTalentTabInfo`'s source.
+/// One talent page, a `TalentTab.dbc` row: `GetTalentTabInfo`'s source.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TalentTabView {
     pub name: String,
-    /// The `Interface\TalentFrame\<base>-` art base (`fileName` in the Era tuple).
+    /// The `Interface\TalentFrame\<base>-` art base, the tuple's `fileName`.
     pub background: String,
-    /// Points spent across this page's talents (the app's sum of ranks).
     pub points_spent: u32,
 }
 
-/// One prerequisite edge for the branch drawing — `GetTalentPrereqs`' triplet.
+/// One prerequisite edge, a `GetTalentPrereqs` triplet.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TalentPrereqView {
-    /// 1-based, Lua-facing (module doc).
     pub tier: u32,
     pub column: u32,
-    /// The prereq is learned to its required rank (drives arrow color + availability).
+    /// The prerequisite is learned to its required rank.
     pub learnable: bool,
 }
 
-/// One talent button's full render state — `GetTalentInfo`'s source plus the tooltip context.
+/// One talent button: `GetTalentInfo`'s source and the tooltip's context.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TalentView {
     pub name: String,
     pub texture: Option<String>,
-    /// 1-based, Lua-facing (module doc).
     pub tier: u32,
     pub column: u32,
-    /// Current rank (0 = unlearned) / the talent's own rank count.
+    /// Current rank, 0 when unlearned.
     pub rank: u32,
     pub max_rank: u32,
-    /// `Talent.dbc` flags bit 0 — the Era tuple's `isExceptional` (byte-verified
-    /// `TalentRec+0x4c` bit0; the reference frame reads and ignores it).
+    /// `Talent.dbc` flags bit 0 (`TalentRec+0x4c`), the tuple's `isExceptional`; the stock frame
+    /// ignores it.
     pub exceptional: bool,
-    /// The non-prereq requirements hold — the required-spell known-check only, prereqs live in
-    /// the triplets (`meetsPrereq`'s derivation, confirmed as built).
+    /// The required spell is known; prerequisite talents live in the triplets.
     pub meets_prereq: bool,
     pub prereqs: Vec<TalentPrereqView>,
-    /// The tooltip's spell part: the display rank's spell id (rank max(1, rank)) — its view
-    /// rides the spell channel's ask-once store.
+    /// The spell id of rank `max(1, rank)`, the tooltip's spell part.
     pub display_spell: u32,
-    /// The next rank's spell id when `0 < rank < max_rank` (the "Next rank:" block); 0 = none.
+    /// The next rank's spell id when `0 < rank < max_rank`, else 0.
     pub next_spell: u32,
-    /// App-composed red requirement lines (`TOOLTIP_TALENT_TIER_POINTS`/`_PREREQ[_P1]`), shown
-    /// while the talent is locked.
+    /// Red requirement lines (`TOOLTIP_TALENT_TIER_POINTS`, `TOOLTIP_TALENT_PREREQ`), shown while
+    /// the talent is locked.
     pub req_lines: Vec<String>,
-    /// The green `TOOLTIP_TALENT_LEARN` hint: a learnable higher rank (tier unlocked, prereqs
-    /// met, points available) — the same gate the frame's green border wears.
+    /// A higher rank is learnable now: the green `TOOLTIP_TALENT_LEARN` line and border.
     pub learnable: bool,
 }
 
-/// The pushed snapshot: the player's own pages + unspent points.
+/// The pushed snapshot: the player's own pages and unspent points.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TalentUiState {
     pub tabs: Vec<TalentTabView>,
-    /// `talents[t]` = tab `t+1`'s talents, in the enumeration order the app pinned.
+    /// `talents[t]` holds tab `t+1`'s talents, in the app's enumeration order.
     pub talents: Vec<Vec<TalentView>>,
-    /// `UnitCharacterPoints("player")`: (unspent talent points, free primary professions).
+    /// `UnitCharacterPoints("player")`: unspent talent points, free primary professions.
     pub points: (u32, u32),
 }
 
 impl super::UiScript {
-    /// Push the whole talent snapshot (the app's feed on SPELLS_CHANGED/points change).
+    /// Push the whole talent snapshot.
     pub fn set_talents(&mut self, state: TalentUiState) {
         self.model_mut().talents = state;
     }
 
-    /// Drain the queued `LearnTalent(tab, index)` clicks (both 1-based, as the Lua passed them).
+    /// Drain the queued `LearnTalent(tab, index)` clicks, both 1-based.
     pub fn take_talent_learns(&mut self) -> Vec<(u32, u32)> {
         std::mem::take(&mut self.model_mut().talent_learns)
     }
 
-    /// Drain the `ConfirmTalentWipe()` calls queued since the last drain — each one is an outbound
-    /// `MSG_TALENT_WIPE_CONFIRM` ([`Self::take_binder_confirms`]'s shape, and a count for the same
-    /// reason: the app holds the trainer's guid).
+    /// Drain the count of `ConfirmTalentWipe()` calls, each an outbound `MSG_TALENT_WIPE_CONFIRM`;
+    /// a count, since the app holds the trainer's guid.
     pub fn take_talent_wipe_confirms(&mut self) -> u32 {
         std::mem::take(&mut self.model_mut().talent_wipe_confirms)
     }
 
-    /// Push whether a trainer's respec question is live and still in range — the host's half of
-    /// `CheckTalentMasterDist()`. Idempotent; `false` covers both "no question pending" and "you
-    /// walked away", which is all the dialog's OnUpdate needs in order to decide to hide.
+    /// Push whether a trainer's respec question is live and in range, which
+    /// `CheckTalentMasterDist()` answers; false for none pending or walked away.
     pub fn set_talent_master_pending(&mut self, pending: bool) {
         let mut model = self.model_mut();
         if model.talent_master_pending != pending {
@@ -129,7 +101,7 @@ impl super::UiScript {
     }
 }
 
-/// Look up one talent by the Lua-facing (tab, index) pair (both 1-based).
+/// One talent by its 1-based (tab, index).
 fn talent_at(model: &Model, tab: usize, index: usize) -> Option<&TalentView> {
     model
         .talents
@@ -150,8 +122,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTalentTabInfo(i) -> name, texture, pointsSpent, fileName. `texture` is nil — the
-    // reference frame never reads it (module doc); out of range -> a single nil.
+    // `texture` is nil: the stock frame never reads it. Out of range answers a single nil.
     g.set(
         "GetTalentTabInfo",
         lua.create_function(|lua, i: usize| {
@@ -180,8 +151,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTalentInfo(tab, i) -> name, icon, tier, column, rank, maxRank, isExceptional,
-    // meetsPrereq. `isExceptional` is 0 (pushed nowhere; the reference render ignores it).
     g.set(
         "GetTalentInfo",
         lua.create_function(|lua, (tab, i): (usize, usize)| {
@@ -206,8 +175,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTalentPrereqs(tab, i) -> tier, column, isLearnable per prerequisite, flattened (the
-    // reference walks `for i=5, arg.n, 3`); none -> empty.
+    // Flat (tier, column, isLearnable) triplets, as `Blizzard_TalentUI.lua:385` walks them.
     g.set(
         "GetTalentPrereqs",
         lua.create_function(|lua, (tab, i): (usize, usize)| {
@@ -224,9 +192,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // LearnTalent(tab, i): queue the click for the app's wire drain. The availability gate is
-    // the app's at send time (mirroring its own pushed `learnable`) — the server re-validates
-    // regardless (vmangos Player::LearnTalent).
+    // The app gates the send on its own `learnable`; the server re-validates
+    // (vmangos `Player::LearnTalent`).
     g.set(
         "LearnTalent",
         lua.create_function(|lua, (tab, i): (u32, u32)| {
@@ -236,10 +203,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ConfirmTalentWipe() — the CONFIRM_TALENT_WIPE dialog's Accept, and the one call in the
-    // client that unlearns talents: the trainer's question changed nothing.
-    // Zero-arg because the guid it sends is one the client latched from that question — the
-    // reference's own `0xc4d7a0`; here the app holds it.
+    // ConfirmTalentWipe(): the `CONFIRM_TALENT_WIPE` Accept, the one call that unlearns talents.
+    // No argument: the reference sends the trainer guid it latched (`0xc4d7a0`); the app holds it.
     g.set(
         "ConfirmTalentWipe",
         lua.create_function(|lua, ()| {
@@ -249,10 +214,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CheckTalentMasterDist() — polled from that dialog's OnUpdate; false hides it. The reference
-    // re-runs its interact-range test against the latched trainer (`0x5df980`, the same
-    // `d² <= [0xc4c28c]` gate `CheckBinderDist` runs), so walking away takes the question off
-    // screen with no packet either way.
+    // CheckTalentMasterDist(): polled by that dialog's OnUpdate, false hides it. The reference
+    // re-runs its interact-range test on the latched trainer (`0x5df980`, `d² <= [0xc4c28c]`);
+    // no packet either way.
     g.set(
         "CheckTalentMasterDist",
         lua.create_function(|lua, ()| {
@@ -261,9 +225,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitCharacterPoints(unit) -> cp1 (unspent talent points), cp2 (free professions). The
-    // pair is our own player's (PLAYER_CHARACTER_POINTS1/2 are PRIVATE fields) — any other
-    // unit token answers the same store, matching the fields only we ever receive.
+    // Every unit token answers the player's own pair: `PLAYER_CHARACTER_POINTS1/2` are private
+    // fields only we receive.
     g.set(
         "UnitCharacterPoints",
         lua.create_function(|lua, _unit: String| {
@@ -276,8 +239,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Register `GameTooltip:SetTalent(tab, index)` into the tooltip kind method table (module doc:
-/// the spell builder with talent lines).
+/// Register `GameTooltip:SetTalent(tab, index)` into the tooltip method table.
 pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetTalent",
@@ -287,8 +249,7 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let Some(t) = talent_at(&model, tab, i) else {
                     return Ok(());
                 };
-                // The "Next rank:" block needs the next rank's description — from the same
-                // ask-once spell store (a miss shows the block on the hover's re-enter).
+                // From the ask-once spell store; a miss shows on the next hover.
                 let next_desc = (t.next_spell != 0)
                     .then(|| {
                         model
@@ -297,9 +258,8 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             .map(|v| v.description.clone())
                     })
                     .flatten();
-                // `TOOLTIP_TALENT_RANK` = "Rank %d/%d" (`0x854a2c`, pushed at `0x52b213`) —
-                // the key, filled with the two counts, never a sentence of ours.
-                // An install whose string table lacks it shows no rank line at all.
+                // `TOOLTIP_TALENT_RANK`, "Rank %d/%d" (`0x854a2c`, pushed at `0x52b213`); an
+                // install without it shows no rank line.
                 let rank_line = crate::strings::global(lua, "TOOLTIP_TALENT_RANK").map(|tmpl| {
                     crate::strings::fill(
                         &tmpl,
@@ -326,9 +286,7 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The spell-store ask for the next-rank description (kept beside [`install_tooltip_method`] so
-/// the ask-once discipline stays in one place): a `SetTalent` render whose next-rank view is
-/// missing queues it exactly like a primary-view miss.
+/// Ask the spell store for the next rank's description; a miss queues it as a primary view's does.
 pub(super) fn ask_next_rank(lua: &Lua, next_spell: u32) {
     if next_spell != 0 {
         let _ = spell_view_of(lua, next_spell); // a miss records the ask as a side effect

@@ -37,9 +37,8 @@ fn end_to_end_two_frame_tree_extracts_in_zkey_order() {
     s.resolve();
     let quads = s.extract();
 
-    // The renderable content, in painter order: parent's bg, child's bg, child's text — parent frame
-    // draws before child (earlier insertion, same strata/level), each frame's regions grouped behind
-    // it (order.rs ZKey).
+    // Painter order: the parent draws before the child (earlier insertion, same strata and level),
+    // each frame's regions with it.
     let content: Vec<String> = quads
         .iter()
         .filter_map(|q| match &q.content {
@@ -57,14 +56,13 @@ fn end_to_end_two_frame_tree_extracts_in_zkey_order() {
         ]
     );
 
-    // SetAllPoints resolves each region to its owner frame's rect. Parent → Rect(300,0,600,400);
-    // child (TOPLEFT+10,-10 of parent, 100×50) → Rect(540,10,590,110).
+    // `SetAllPoints` gives each region its frame's rect: the parent Rect(300, 0, 600, 400), the
+    // child (TOPLEFT +10, -10 of the parent, 100×50) Rect(540, 10, 590, 110).
     let child_text = quads
         .iter()
         .find(|q| matches!(&q.content, QuadContent::Text { text: Some(t), .. } if t == "Hello"))
         .unwrap();
     assert_eq!(child_text.rect, Some(Rect::new(540.0, 10.0, 590.0, 110.0)));
-    // The fontstring got a red vertex color via SetVertexColor(1,0,0,1).
     assert!(
         matches!(&child_text.content, QuadContent::Text { color: Some(c), .. } if *c == [1.0, 0.0, 0.0, 1.0])
     );
@@ -75,7 +73,6 @@ fn end_to_end_two_frame_tree_extracts_in_zkey_order() {
         .unwrap();
     assert_eq!(parent_bg.rect, Some(Rect::new(300.0, 0.0, 600.0, 400.0)));
 
-    // ZKey order is ascending and strictly increasing across the emitted list.
     let zs: Vec<u64> = quads.iter().map(|q| q.z).collect();
     let mut sorted = zs.clone();
     sorted.sort_unstable();

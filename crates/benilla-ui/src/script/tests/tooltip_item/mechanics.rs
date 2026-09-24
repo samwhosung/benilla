@@ -1,15 +1,13 @@
-//! Render mechanics around the line law: the sell-price money protocol (OnTooltipAddMoney +
-//! ITEM_UNSELLABLE), wrapped-line measurement through the re-enter loop, and the unit health
-//! bar hiding on an item render.
+//! Render mechanics around the line order: sell price, wrapped lines, the unit health bar,
+//! durability, enchant lines and random-property rolls.
 
 use std::collections::HashMap;
 
 use super::script;
 use crate::script::*;
 
-/// The sell-price money protocol: SetBagItem at an open merchant fires OnTooltipAddMoney with
-/// SellPrice × stack; price 0 prints the ITEM_UNSELLABLE line; no merchant → neither; the
-/// in-flight template renders the link-name fallback and records the ask.
+/// `SetBagItem` at an open merchant fires `OnTooltipAddMoney` with SellPrice × stack, and price 0
+/// prints `ITEM_UNSELLABLE`; with no merchant, neither. A template in flight renders the link name.
 #[test]
 fn bag_item_money_law_and_fallback() {
     let mut s = script();
@@ -80,7 +78,6 @@ fn bag_item_money_law_and_fallback() {
     )
     .unwrap();
     assert_eq!(s.take_item_stat_asks(), vec![9999], "the miss asked");
-    // Zero sell price at a merchant: the ITEM_UNSELLABLE line, no money.
     s.set_item_template(
         9999,
         ItemTemplateView {
@@ -104,13 +101,8 @@ fn bag_item_money_law_and_fallback() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A wrap-flagged line carries its wrap column on the VERY FIRST measure ask (append_line pins
-/// the region width at write time), so ONE round-trip answers the wrapped extent — and the
-/// plate height/width converge even when the hover's re-enter loop clears + rebuilds the
-/// content every frame. The old two-step (layout re-pinning after an overflowing unwrapped
-/// measure) never converged under that loop: the wrapped re-measure was wiped before it could
-/// land, wrap lines contributed no height, and everything after them spilled below the plate
-/// (the live bread/hearthstone bug).
+/// A wrap line's first measure asks with the wrap column, so one pass answers the wrapped size,
+/// and the size holds while the hover clears and rebuilds the content every frame.
 #[test]
 fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
     let mut s = script();
@@ -137,8 +129,7 @@ fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
     )
     .unwrap();
     s.resolve();
-    // ONE measure pass, the frame loop's shape: the wrap-flagged description asks WITH the
-    // wrap column; plain lines ask unconstrained.
+    // One measure pass: the wrap-flagged description asks with the wrap column, others without.
     let answer = |s: &mut UiScript| {
         let reqs = s.fontstrings_needing_measure();
         let answers: Vec<(u32, f32, f32, u64)> = reqs
@@ -168,8 +159,7 @@ fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
     "#,
     )
     .unwrap();
-    // The re-enter loop: clear + rebuild + one measure pass per frame, three frames — the size
-    // must HOLD (the oscillation regression).
+    // Clear, rebuild and measure once per frame for three frames: the size holds.
     for _ in 0..3 {
         s.run(
             r#"
@@ -191,8 +181,7 @@ fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The mouseover health bar is UNIT content: an item render on the same tooltip HIDES it (the
-/// live bug: the bar from the last mob hover rode under every item tooltip).
+/// The mouseover health bar is unit content: an item render on the same tooltip hides it.
 #[test]
 fn item_render_hides_the_unit_health_bar() {
     let mut s = script();
@@ -241,9 +230,8 @@ fn item_render_hides_the_unit_health_bar() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A REAL-INSTANCE hover renders the instance's LIVE durability pair, not the template's full
-/// max/max — the wire updates `ITEM_FIELD_DURABILITY` on damage (death 10%, spirit healer 25%;
-/// director-reported: the 25% loss showed nowhere). A plain template/link hover keeps max/max.
+/// A bag hover shows the instance's live `ITEM_FIELD_DURABILITY` (a death costs 10%, the spirit
+/// healer 25%); a template or link hover shows max/max.
 #[test]
 fn real_instance_hover_renders_live_durability() {
     let mut s = script();
@@ -302,10 +290,8 @@ fn real_instance_hover_renders_live_durability() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// FULLY BROKEN gear renders its true `0 / max` pair (director-caught: gear ground to durability
-/// 0 by repeated spirit rezzes read as 100% — the create block omits the zero `DURABILITY` field,
-/// and the sparse `None` fell back to the template's max/max; `ObjectFields`' created semantics
-/// now feed the explicit 0 through).
+/// Broken gear shows its true `0 / max`: a create block omits a zero `DURABILITY`, which must not
+/// read as the template's max.
 #[test]
 fn broken_instance_hover_renders_zero_durability() {
     let mut s = script();
@@ -353,8 +339,7 @@ fn broken_instance_hover_renders_zero_durability() {
     )
     .unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    // Red iff broken (`0x854bc4`, colour `0xc0d390`): the 0/40
-    // line paints the requirement red, never white.
+    // Red only when broken (`0x854bc4`, colour `0xc0d390`).
     let lines = super::lines_of(&mut s);
     let dur = lines
         .iter()
@@ -367,12 +352,8 @@ fn broken_instance_hover_renders_zero_durability() {
     );
 }
 
-/// The **enchant lines** (law line 17) — the director's report: an axe carrying
-/// Enchant Weapon - Agility showed its green glow in the world and said nothing in the tooltip.
-///
-/// Three claims at once: the line renders from the instance's resolved enchant text, it sits
-/// **between the resistances and the durability line** (the law's 16 → 17 → 18), and it is green.
-/// The control is the template/link hover of the same item — no instance, no enchant, no line.
+/// An instance's enchant prints from its resolved text, in green, between the resistances and
+/// durability; a template hover of the same item has no instance and so no enchant line.
 #[test]
 fn an_enchanted_instance_renders_its_enchant_line_before_durability() {
     let mut s = script();
@@ -384,8 +365,7 @@ fn an_enchanted_instance_renders_its_enchant_line_before_durability() {
             quality: Some(4),
             item_id: 22816,
             durability: Some((105, 105)),
-            // What the app resolved from `ITEM_FIELD_ENCHANTMENT` slot 0 → enchant 2564 →
-            // `SpellItemEnchantment`'s own name string. Slot 0 = permanent, positive id.
+            // `ITEM_FIELD_ENCHANTMENT` slot 0 (permanent) → enchant 2564 → its name string.
             enchants: vec![EnchantView {
                 slot: 0,
                 name: "Agility +15".into(),
@@ -441,7 +421,6 @@ fn an_enchanted_instance_renders_its_enchant_line_before_durability() {
         "the enchant line is green"
     );
 
-    // The control: the same item as a TEMPLATE hover has no instance, so no enchant line.
     s.run(r#"TT:BenillaSetItemById(22816)"#).unwrap();
     let lines = super::lines_of(&mut s);
     assert!(
@@ -451,11 +430,8 @@ fn an_enchanted_instance_renders_its_enchant_line_before_durability() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **enchant colour bands** (`0x52ca29`). The colour is per SLOT, not per
-/// family: only slots 0 (permanent) and 1 (temporary) are ever coloured — green for a positive id,
-/// the tooltip's OTHER red (`0xc0d398 = ffff0000`, distinct from the requirement lines' `ffff2020`)
-/// for a negative one — and the random-property slots 2..6 are always white whatever the sign. Our
-/// first cut painted every slot green.
+/// Enchant colour goes by slot (`0x52ca29`): slots 0 and 1 are green for a positive id and pure
+/// red (`0xc0d398`, `ffff0000`, not the requirement `ffff2020`) for a negative one; 2..6 are white.
 #[test]
 fn enchant_line_colour_is_per_slot_and_sign() {
     let mut s = script();
@@ -483,7 +459,6 @@ fn enchant_line_colour_is_per_slot_and_sign() {
                     name: "Stamina +7".into(),
                     ..Default::default()
                 },
-                // A suffix slot with a NEGATIVE id is still white — the band, not the sign, rules.
                 EnchantView {
                     slot: 4,
                     name: "Spirit +3".into(),
@@ -546,10 +521,8 @@ fn enchant_line_colour_is_per_slot_and_sign() {
     );
 }
 
-/// The temporary enchant's countdown REPLACES the name in the same line (never a second one), and
-/// the charges suffix rides after it — the `0x52fa50` bucket ladder and the `" (%s)"` join. The
-/// countdown's source is `SMSG_ITEM_ENCHANT_TIME_UPDATE`, so a slot with no packet shows the bare
-/// name: that is the control here.
+/// A temporary enchant prints one line, its countdown template (`0x52fa50`) around the name, then
+/// the charges joined by `" (%s)"`; with no `SMSG_ITEM_ENCHANT_TIME_UPDATE` it is the bare name.
 #[test]
 fn temporary_enchant_line_carries_its_countdown_and_charges() {
     let mut s = script();
@@ -615,15 +588,11 @@ fn temporary_enchant_line_carries_its_countdown_and_charges() {
     );
 }
 
-/// **The loot hover shows the ROLL, never the placeholder**. `SetLootItem 0x533470`
-/// writes an instance block (p6=1) whose `+0x424` is the wire's randomPropertyId and whose seven
-/// enchant slots are zeroed, and passes an all-zero item GUID — so there is never an object, the
-/// builder takes the suffix-row copy (`0x52b7e0`) into slots 2..6, and the `ITEM_RANDOM_ENCHANT`
-/// arm is unreachable (the entry fork, `0x52c991`). The row's name is the suffix-joined one
-/// (`0x5d8b00`, the same string `GetLootSlotInfo` returns), so the plate reads "… of the Monkey".
-///
-/// This is the reported bug's exact shape: through the template path (`BenillaSetItemById`) the same
-/// hover printed the ITEM_RANDOM_ENCHANT placeholder until the item reached a bag.
+/// A loot hover shows the roll, never the placeholder: `SetLootItem` (`0x533470`) builds an
+/// instance block (p6 = 1) with the roll at `+0x424`, zeroed enchant slots and no object, so the
+/// builder copies the suffix row into slots 2..6 (`0x52b7e0`) and never reaches
+/// `ITEM_RANDOM_ENCHANT` (`0x52c991`). The name is the suffixed one `GetLootSlotInfo` returns
+/// (`0x5d8b00`).
 #[test]
 fn a_looted_roll_shows_its_lines_and_never_the_placeholder() {
     let mut s = script();
@@ -633,8 +602,7 @@ fn a_looted_roll_shows_its_lines_and_never_the_placeholder() {
             name: "Bloodrazor".into(),
             quality: 2,
             class: 2,
-            // The template CAN roll — the placeholder's own gate, so its absence below is the law
-            // and not an accident of the fixture.
+            // The template can roll, so the placeholder's absence below is the rule at work.
             random_property: 42,
             ..Default::default()
         },
@@ -649,8 +617,7 @@ fn a_looted_roll_shows_its_lines_and_never_the_placeholder() {
             is_coin: false,
             item_id: 8888,
             link: Some("|cff1eff00|Hitem:8888:0:584:0|h[Bloodrazor of the Monkey]|h|r".into()),
-            // The row carries the ROLL, not resolved lines — the engine resolves it, like the
-            // reference reading its own DBC store off the block's `+0x424`.
+            // The row carries the roll id; the engine resolves it, as the reference reads `+0x424`.
             random_property_id: 584,
         })],
         fishing: false,
@@ -702,15 +669,12 @@ fn a_looted_roll_shows_its_lines_and_never_the_placeholder() {
             .iter()
             .find(|(t, _)| t == line)
             .unwrap_or_else(|| panic!("the roll's slot line {line} — got {texts:?}"));
-        // Slots 2..6 are always WHITE, whatever the sign (`0x52ca29`).
         assert_eq!(l.1, [1.0, 1.0, 1.0, 1.0], "{line} is white");
     }
 }
 
-/// The other half of the same law: a loot row with **no** roll shows no enchant line AND no
-/// placeholder, even though the template can roll. The fork tests the block's presence, not its
-/// contents (`0x52c9a3`) — which is why this cannot be expressed as "print the placeholder when the
-/// slots are empty".
+/// A loot row with no roll shows neither enchant lines nor the placeholder, though the template can
+/// roll: the fork tests the block's presence, not its contents (`0x52c9a3`).
 #[test]
 fn a_looted_item_with_no_roll_shows_neither_line_nor_placeholder() {
     let mut s = script();
@@ -754,11 +718,8 @@ fn a_looted_item_with_no_roll_shows_neither_line_nor_placeholder() {
     );
 }
 
-/// A **chat link** is a block source too (`SetHyperlink 0x532181`, p6=1): its `|Hitem:` token 2 is
-/// the roll, which `0x52b7e0` expands into slots 2..6, and the placeholder arm is unreachable.
-/// Decision 0920's prose said a hyperlink hover shows the placeholder; `0x52c9a3` says otherwise,
-/// and this is the case that proves it — the same drop, linked in chat instead of hovered in the
-/// loot window, must read identically.
+/// A chat link is a block source too (`SetHyperlink` `0x532181`, p6 = 1): its `|Hitem:` token 2 is
+/// the roll, `0x52b7e0` expands it into slots 2..6, and `0x52c9a3` never reaches the placeholder.
 #[test]
 fn a_linked_roll_shows_its_lines_and_never_the_placeholder() {
     let mut s = script();
@@ -815,10 +776,8 @@ fn a_linked_roll_shows_its_lines_and_never_the_placeholder() {
     );
 }
 
-/// `ITEM_RANDOM_ENCHANT` (`0x52cc33`) — the template-only placeholder: a random-property item with
-/// NO instance to read a roll from prints it, green, and the per-slot lines and this one are
-/// mutually exclusive by construction. The control is the same template hovered as a real enchanted
-/// instance: the roll is known, so the placeholder gives way to the slot lines.
+/// `ITEM_RANDOM_ENCHANT` (`0x52cc33`) prints, green, only for a random-property item with no
+/// instance to read a roll from; an instance's known roll prints its slot lines instead.
 #[test]
 fn random_property_template_hover_shows_the_placeholder() {
     let mut s = script();
@@ -848,7 +807,6 @@ fn random_property_template_hover_shows_the_placeholder() {
         .expect("the template hover shows the placeholder");
     assert_eq!(placeholder.1, [0.0, 1.0, 0.0, 1.0], "green");
 
-    // With a real instance (the roll is known) the placeholder is gone and the slots print.
     let mut slots = HashMap::new();
     slots.insert(
         1,

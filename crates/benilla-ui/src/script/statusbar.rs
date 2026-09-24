@@ -1,17 +1,8 @@
-//! The `StatusBar` method surface — the first *per-kind* widget behavior over the kind tag
-//! (`CSimpleStatusBar`, factory `0x6eef20`).
-//!
-//! Grounded in the reference's StatusBar `LoadXML 0x782ef0`:
-//! a reversed `min > max` pair is swapped, `defaultValue` routes through SetValue, orientation is
-//! the shared enum HORIZONTAL=0/VERTICAL=1 (`0x811b00`), the bar texture's layer defaults ARTWORK,
-//! and the widget adds the `OnValueChanged` script slot (`+0x32c`). The **fill** mechanism is
-//! byte-pinned too (`0x770410`): `SetValue` writes the bar region's 4-corner UV block with
-//! `u1 = GetValue()` *and* recomputes `right = left + frac·width`, so the fill is a left-anchored
-//! **crop** — the art is sliced, never squeezed. Applied at extract (`bar_fill_rect`/`bar_fill_uv`).
-//!
-//! The methods live in their own registry table, consulted by the frame `__index` dispatcher only
-//! for StatusBar frames — so duck-typing addons (`if frame.SetValue then …`) see `nil` on every
-//! other kind, exactly as against the client's per-class method sets.
+//! The `StatusBar` methods (`CSimpleStatusBar`, factory `0x6eef20`, `LoadXML` `0x782ef0`,
+//! orientations `0x811b00`). The fill is a left-anchored crop, the art sliced and never squeezed:
+//! `SetValue` sets the UV's `u1` to the fill fraction and the right edge with it (`0x770410`),
+//! applied at extract.
+//! Only StatusBar frames answer these, so a duck-typing addon sees nil on every other kind.
 
 use mlua::{Lua, Table, Value};
 
@@ -21,12 +12,11 @@ use super::{event, Model, RegionData};
 use crate::order::DrawLayer;
 use crate::widget::{KindState, RegionKind, StatusBarState};
 
-/// Registry key of the StatusBar method table (the MAXCSTACK discipline: Lua-side root, named key).
+/// Registry key of the StatusBar method table.
 pub(super) const REG_STATUSBAR_METHODS: &str = "__benilla_statusbar_methods";
 
-/// Run `f` over a frame's StatusBar state under one short write borrow. Errors if `this` is not a
-/// live StatusBar (unreachable through the kind dispatcher, but the method table is a plain Lua
-/// value — a caller can fish it out and misapply it).
+/// Run `f` over a frame's StatusBar state; errors on any other receiver, since the method table
+/// is a plain Lua value a caller can misapply.
 fn with_bar<T>(
     lua: &Lua,
     this: &Table,
@@ -44,8 +34,8 @@ fn with_bar<T>(
     }
 }
 
-/// Store a (clamped) value; returns `Some(new_value)` if it actually changed — the caller fires
-/// `OnValueChanged`. Degenerate range (`max <= min`) pins to `min` (zero-init members).
+/// Store the value clamped to the range, `Some` when it changed (the caller fires
+/// `OnValueChanged`); a degenerate range pins to `min`.
 fn store_value(sb: &mut StatusBarState, v: f32) -> Option<f32> {
     let clamped = v.clamp(sb.min, sb.max.max(sb.min));
     (clamped != sb.value).then(|| {
@@ -54,8 +44,8 @@ fn store_value(sb: &mut StatusBarState, v: f32) -> Option<f32> {
     })
 }
 
-/// Get-or-create the bar-fill texture region (`SetStatusBarTexture`/`<BarTexture>`); `layer`
-/// re-layers an existing bar. Returns the region's id (for wrapper lookup).
+/// Get or create the bar texture region, `ARTWORK` by default as in the reference; `layer`
+/// re-layers an existing one.
 fn ensure_bar(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Result<u32> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -88,7 +78,7 @@ fn ensure_bar(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Result
                 )
                 .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
             model.region_data.insert(rh, RegionData::default());
-            model.touch_layout(); // a region entered the layout gate's read set (decision 0740)
+            model.touch_layout(); // a region entered the layout gate's read set
             if let Some(frame) = model.arena.frame_mut(h) {
                 if let KindState::StatusBar(sb) = &mut frame.kind_state {
                     sb.bar = Some(rh);
@@ -106,9 +96,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetMinMaxValues",
         lua.create_function(|lua, (this, min, max): (Table, f32, f32)| {
-            // A reversed pair is swapped (`LoadXML 0x782ef0` does the same) — one behavior for the
-            // XML and API paths. The held value re-clamps into the new range; a move fires
-            // OnValueChanged, as a value change the caller didn't make explicitly is still a change.
+            // A reversed pair is swapped, as `LoadXML` does; the held value re-clamps, and a move
+            // fires `OnValueChanged`.
             let changed = with_bar(lua, &this, |sb| {
                 (sb.min, sb.max) = if min <= max { (min, max) } else { (max, min) };
                 store_value(sb, sb.value)
@@ -154,8 +143,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetStatusBarTexture(path [, drawLayer]) | SetStatusBarTexture(r, g, b [, a]) — the same two
-    // forms as a region's SetTexture, targeting the bar region (created on first use).
+    // A region's two `SetTexture` forms, `(path [, layer])` and `(r, g, b [, a])`, on the bar.
     m.set(
         "SetStatusBarTexture",
         lua.create_function(
@@ -176,9 +164,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         data.texture = Some(s.to_str()?.to_string());
                         data.fill = None;
                     }
-                    // A solid bar writes the same slot the path form does — each clears the other.
-                    // `SetStatusBarColor` is the TINT (the fill region's vertex colour) and is a
-                    // separate slot entirely: a bar can carry art AND a colour, and they multiply.
+                    // A solid fill and a path clear each other; `SetStatusBarColor` is a separate
+                    // tint that multiplies either.
                     Value::Number(_) | Value::Integer(_) => {
                         data.texture = None;
                         data.fill = Some([
@@ -211,12 +198,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
         })?,
     )?;
-    // **Shape C on r, g, b** (`StatusBar:SetStatusBarColor `0x78fc20``, `2=C 3=C 4=C 5=B`): a bare
-    // `lua_tonumber` with no `lua_isnumber` gate, so a nil, a table or a string is **0.0** and the
-    // call never raises. Taking them as `f32` made mlua's
-    // converter the gate instead — the 2176 class — and the stock
-    // `QuestLogFrame.lua:337` idiom hands three nils (`titleButton.r/g/b` are only assigned in
-    // `QuestLog_Update`) on any path that selects a quest-log entry before the window has painted.
+    // `0x78fc20` reads r, g, b by a bare `lua_tonumber`, so nil, a table or a non-numeric string
+    // is 0.0 and the call never raises (a numeric string also reads 0.0 here). Stock hands colour
+    // setters nils: `QuestLogFrame.lua:337` passes three to `SetVertexColor`.
     m.set(
         "SetStatusBarColor",
         lua.create_function(
@@ -252,8 +236,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Fire `OnValueChanged(self, value)` if `changed` carries the new value (the StatusBar's own
-/// script slot `+0x32c`). Fired outside any model borrow; errors go to [`Model::errors`].
+/// Fire `OnValueChanged` (the StatusBar's script slot, `+0x32c`) for a changed value, outside any
+/// model borrow.
 fn fire_value_changed(lua: &Lua, this: &Table, changed: Option<f32>) -> mlua::Result<()> {
     let Some(value) = changed else { return Ok(()) };
     let id = {
@@ -274,14 +258,9 @@ fn fire_value_changed(lua: &Lua, this: &Table, changed: Option<f32>) -> mlua::Re
     Ok(())
 }
 
-/// `OnValueChanged` for a bar the ENGINE moved rather than Lua — the nameplate health bars, whose
-/// value the plate driver re-sets from the unit's descriptor each time it changes.
-///
-/// The reference fires the same script from the same place: the plate's bar is driven by a
-/// GUID-watch callback (`0x7cc570`, registered `0x467e70`) that re-reads health and re-sets the bar
-/// synchronously on every server update, and `SetValue` is `SetValue`. pfUI hooks this
-/// (`nameplates.lua:393` `HookScript(healthbar, "OnValueChanged", …)`) and reads `this:GetParent()`
-/// inside the handler, so a driver that moved the value silently would leave it blind.
+/// `OnValueChanged` for a bar the engine moved, the nameplate health bars: the reference re-sets
+/// them from a GUID-watch callback (`0x7cc570`, registered at `0x467e70`) on every server update,
+/// and that `SetValue` fires the script as any other does.
 pub(super) fn fire_engine_value_changed(lua: &Lua, bar: crate::widget::FrameHandle, value: f32) {
     let id = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -299,7 +278,6 @@ pub(super) fn fire_engine_value_changed(lua: &Lua, bar: crate::widget::FrameHand
     }
 }
 
-/// A Lua number-ish → f32 (nil/other → 0.0), for the color-form arguments.
 fn num_f32(v: &Value) -> f32 {
     match v {
         Value::Number(n) => *n as f32,

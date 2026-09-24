@@ -1,7 +1,7 @@
 use super::*;
 use crate::script::UiScript;
 
-/// One recipe fixture — a single-reagent, single-tool row, distinct spell/product ids per name.
+/// A single-reagent, single-tool recipe fixture.
 fn recipe(
     spell_id: u32,
     name: &str,
@@ -20,9 +20,8 @@ fn recipe(
         max_made: 1,
         cooldown_secs: None,
         product_item: spell_id + 10_000,
-        product_inv_type: 20, // Robe — folds to the Chest slot bit (4)
-        // Neutral by default (0 everywhere = the tie falls through to the name, the pre-verdict
-        // order every other test pins); the ItemLevel tie-break test overrides it explicitly.
+        product_inv_type: 20, // Robe: folds to the Chest slot bit (4)
+        // 0 everywhere, so ties fall through to the name; the ItemLevel test sets it.
         product_item_level: 0,
         reagents: vec![TradeSkillReagent {
             item: 2589,
@@ -35,9 +34,7 @@ fn recipe(
     }
 }
 
-/// A two-recipe, SINGLE-group Tailoring window (the original v1 fixture, now grouped under one
-/// "Cloth" header): row 1 is the header, rows 2-3 are the recipes, tier-sorted — Simple Robe
-/// (Optimal, tier 0) before Bolt of Linen Cloth (Trivial, tier 3).
+/// One "Cloth" group: row 1 the header, then Simple Robe (tier 0) and Bolt of Linen Cloth (tier 3).
 fn two_recipe_state() -> TradeSkillState {
     TradeSkillState {
         line: 197,
@@ -64,11 +61,8 @@ fn two_recipe_state() -> TradeSkillState {
     }
 }
 
-/// Four groups (`0x4fca20`): class 1 "Bolts" (two Optimal-tier recipes — a NAME
-/// tie within a tier), class 2 "Armor Kit"/"Zephyr Cloak" (a CLASS tie broken by group NAME, not
-/// subclass id — "Zephyr Cloak"'s subclass id 1 is LOWER than "Armor Kit"'s 5, yet "Armor Kit"
-/// sorts first), and one recipe whose product template hasn't resolved yet (`group: None`),
-/// bucketed trailing under an empty header.
+/// Four groups: "Bolts" (class 1, a name tie within a tier); "Armor Kit" and "Zephyr Cloak"
+/// (class 2, ordered by name against their subclass ids 5 and 1); a recipe with no group yet.
 fn state() -> TradeSkillState {
     TradeSkillState {
         line: 197,
@@ -137,7 +131,7 @@ fn grouped_visible_rows_ordered_by_class_then_name_tie_then_tier_then_name() {
         ("Bolts", "header"),
         ("Alpha Bolt", "optimal"), // tier tie -> name
         ("Beta Bolt", "optimal"),
-        ("Armor Kit", "header"), // class tie -> NAME, not subclass id (5 > 1)
+        ("Armor Kit", "header"), // class tie -> name, not subclass id (5 > 1)
         ("Alpha Plate", "optimal"), // tier 0 before...
         ("Zinc Chain", "trivial"), // ...tier 3
         ("Zephyr Cloak", "header"),
@@ -160,8 +154,7 @@ fn collapse_hides_a_groups_entries_and_remaps_indices_incl_collapse_all() {
     let mut s = UiScript::new().unwrap();
     s.set_trade_skill(Some(state()));
 
-    // Collapse "Armor Kit" (header at visible index 4): its two recipes vanish, 10 -> 8, and it
-    // now reports isExpanded=nil.
+    // "Armor Kit" is header 4: its two recipes go, 10 -> 8, and it reports isExpanded nil.
     s.run("CollapseTradeSkillSubClass(4)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 8);
     let (name, _, _, expanded) = s
@@ -170,20 +163,18 @@ fn collapse_hides_a_groups_entries_and_remaps_indices_incl_collapse_all() {
         )
         .unwrap();
     assert_eq!((name.as_str(), expanded), ("Armor Kit", None));
-    // "Zephyr Cloak" is now row 5 (was row 7) — the two hidden entries shift everything after.
+    // "Zephyr Cloak" moves up from row 7 to row 5.
     assert_eq!(
         row_kind(&mut s, 5),
         ("Zephyr Cloak".into(), "header".into())
     );
 
-    // Expand it back.
     s.run("ExpandTradeSkillSubClass(4)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 10);
 
-    // Collapse-all (id 0): only the 4 headers remain.
+    // Id 0 folds every group: the 4 headers remain.
     s.run("CollapseTradeSkillSubClass(0)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 4);
-    // Expand-all (id 0).
     s.run("ExpandTradeSkillSubClass(0)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 10);
 }
@@ -193,8 +184,7 @@ fn pending_recipes_bucket_trailing_under_an_empty_header() {
     let mut s = UiScript::new().unwrap();
     s.set_trade_skill(Some(state()));
 
-    // The pending header (row 9): empty name, "header", numAvailable 0, expanded by default —
-    // a real group like any other (nothing has collapsed it).
+    // Row 9 is the pending group's header.
     let (name, kind, avail, expanded) = s
         .eval::<(String, String, i64, Option<i64>)>(
             "local n,t,a,e = GetTradeSkillInfo(9) return n,t,a,e",
@@ -204,10 +194,8 @@ fn pending_recipes_bucket_trailing_under_an_empty_header() {
         (name.as_str(), kind.as_str(), avail, expanded),
         ("", "header", 0, Some(1))
     );
-    // Its one recipe (row 10) reads normally.
     assert_eq!(row_kind(&mut s, 10), ("Mystery Item".into(), "easy".into()));
 
-    // It folds/unfolds exactly like a named group.
     s.run("CollapseTradeSkillSubClass(9)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 9);
 }
@@ -217,7 +205,6 @@ fn header_and_entry_tuple_shapes() {
     let mut s = UiScript::new().unwrap();
     s.set_trade_skill(Some(state()));
 
-    // Header row 1 ("Bolts"): (name, "header", 0, expanded=1).
     let (name, kind, avail, expanded) = s
         .eval::<(String, String, i64, Option<i64>)>(
             "local n,t,a,e = GetTradeSkillInfo(1) return n,t,a,e",
@@ -228,7 +215,6 @@ fn header_and_entry_tuple_shapes() {
         ("Bolts", "header", 0, Some(1))
     );
 
-    // Recipe row 2 ("Alpha Bolt", optimal, numAvailable 5): (name, "optimal", 5, nil).
     let (name, kind, avail, expanded) = s
         .eval::<(String, String, i64, Option<i64>)>(
             "local n,t,a,e = GetTradeSkillInfo(2) return n,t,a,e",
@@ -245,8 +231,7 @@ fn do_trade_skill_and_getters_no_op_on_a_header_index() {
     let mut s = UiScript::new().unwrap();
     s.set_trade_skill(Some(state()));
 
-    // Header row 1 ("Bolts"): every per-recipe getter reads nil/zero/empty rather than
-    // misreading through to whatever recipe happens to sit at that raw position.
+    // Row 1 is a header: every per-recipe getter reads nil, zero or empty.
     assert!(s
         .eval::<bool>("return GetTradeSkillIcon(1) == nil")
         .unwrap());
@@ -273,7 +258,7 @@ fn do_trade_skill_and_getters_no_op_on_a_header_index() {
         "a header index queues no craft"
     );
 
-    // SelectTradeSkill on a header index is IGNORED — the prior selection is untouched.
+    // A header index leaves the selection as it was.
     s.run("SelectTradeSkill(2)").unwrap(); // "Alpha Bolt", row 2
     assert_eq!(
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")
@@ -324,8 +309,7 @@ fn selection_persists_across_collapse_and_a_regroup() {
         8
     );
 
-    // Collapsing an EARLIER group ("Bolts", header 1) shifts every later row up two — the
-    // selection follows Wind Cloak to its new visible position, not the stale numeric index.
+    // Folding "Bolts" above it moves Wind Cloak up two rows, and the selection follows.
     s.run("CollapseTradeSkillSubClass(1)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 8);
     assert_eq!(
@@ -335,15 +319,14 @@ fn selection_persists_across_collapse_and_a_regroup() {
     );
     s.run("ExpandTradeSkillSubClass(1)").unwrap();
 
-    // Collapsing Wind Cloak's OWN group ("Zephyr Cloak", back at row 7) hides the selected row:
-    // the index reads 0 without discarding the underlying selection...
+    // Folding its own group (row 7) hides it: the index reads 0, but the selection stays...
     s.run("CollapseTradeSkillSubClass(7)").unwrap();
     assert_eq!(
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")
             .unwrap(),
         0
     );
-    // ...expanding it again brings the SAME recipe right back into view at row 8.
+    // ...and comes back at row 8.
     s.run("ExpandTradeSkillSubClass(7)").unwrap();
     assert_eq!(
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")
@@ -361,8 +344,7 @@ fn selection_persists_across_collapse_and_a_regroup() {
         8
     );
 
-    // A re-push that drops the selected recipe entirely (its whole group along with it) clears
-    // the selection.
+    // A re-push without the recipe clears the selection.
     let mut without_wind_cloak = state();
     without_wind_cloak.recipes.remove(4);
     s.set_trade_skill(Some(without_wind_cloak));
@@ -383,8 +365,7 @@ fn snapshot_feeds_the_api_tuples_through_the_visible_mapping() {
             .unwrap(),
         ("Tailoring".into(), 57, 75)
     );
-    // 1 header + 2 recipes = 3 visible rows; the first NON-header row is 2 (Simple Robe, the
-    // group's tier-0 recipe).
+    // 1 header + 2 recipes; the first recipe row is 2 (Simple Robe, tier 0).
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 3);
     assert_eq!(s.eval::<i64>("return GetFirstTradeSkill()").unwrap(), 2);
 
@@ -437,7 +418,7 @@ fn selection_persists_across_a_repush_by_spell_id() {
     let mut s = UiScript::new().unwrap();
     s.set_trade_skill(Some(two_recipe_state()));
 
-    // Select "Bolt of Linen Cloth" (spell 2963), the group's tier-3 row (row 3).
+    // Bolt of Linen Cloth (spell 2963) is row 3.
     s.run("SelectTradeSkill(3)").unwrap();
     assert_eq!(
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")
@@ -445,9 +426,7 @@ fn selection_persists_across_a_repush_by_spell_id() {
         3
     );
 
-    // Re-push with the flat array reordered (a reagent-count re-list from the app) — the
-    // ENGINE re-sorts regardless of push order, so Bolt of Linen Cloth stays visible row 3; the
-    // selection follows it there by SPELL ID, not by its (now different) flat array position.
+    // A reordered re-push: the engine re-sorts, and the selection follows the spell id to row 3.
     let mut reordered = two_recipe_state();
     reordered.recipes.swap(0, 1);
     s.set_trade_skill(Some(reordered));
@@ -457,7 +436,7 @@ fn selection_persists_across_a_repush_by_spell_id() {
         3
     );
 
-    // A re-push that drops the selected recipe entirely clears the selection.
+    // A re-push without the recipe clears the selection.
     let mut without_2963 = two_recipe_state();
     without_2963.recipes.remove(0);
     s.set_trade_skill(Some(without_2963));
@@ -478,17 +457,14 @@ fn do_trade_skill_drains_spell_id_and_count() {
     assert_eq!(s.take_trade_skill_dos(), vec![(2963, 5)]);
     assert!(s.take_trade_skill_dos().is_empty(), "drained");
 
-    // Row 2 = Simple Robe (spell 3919, numAvailable 0). No count arg defaults to 1; a
-    // non-positive count clamps up to 1 (the `DoTradeSkill 0x500280` latch floor —
-    // `max(avail, 1)`).
+    // Row 2 = Simple Robe (spell 3919, numAvailable 0): a missing or zero count is 1 (`0x500280`).
     s.run("DoTradeSkill(2) DoTradeSkill(2, 0)").unwrap();
     assert_eq!(s.take_trade_skill_dos(), vec![(3919, 1), (3919, 1)]);
 
-    // An out-of-range index is ignored.
     s.run("DoTradeSkill(99)").unwrap();
     assert!(s.take_trade_skill_dos().is_empty());
 
-    // A HEADER index (row 1, "Cloth") queues nothing either.
+    // Row 1 is the "Cloth" header.
     s.run("DoTradeSkill(1, 5)").unwrap();
     assert!(s.take_trade_skill_dos().is_empty());
 }
@@ -533,7 +509,6 @@ fn no_snapshot_shapes_unknown_line_and_nil_info() {
     s.run("DoTradeSkill(1, 1)").unwrap();
     assert!(s.take_trade_skill_dos().is_empty(), "no window, no intent");
 
-    // Collapse/expand/select on an empty pane are harmless no-ops.
     s.run("CollapseTradeSkillSubClass(0) ExpandTradeSkillSubClass(1) SelectTradeSkill(1)")
         .unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 0);
@@ -557,24 +532,22 @@ fn get_trade_skill_tools_multivalue_shape() {
         ("Anvil", Some(1), "Mining Pick", None)
     );
 
-    // A recipe with no tools returns an empty multivalue (arity 0, not one nil).
+    // No tools: zero values, not one nil.
     let mut t2 = two_recipe_state();
     t2.recipes[0].tools.clear();
     s.set_trade_skill(Some(t2));
     assert_eq!(s.arity("GetTradeSkillTools(3)").unwrap(), 0);
 
-    // A HEADER index (row 1) also returns an empty multivalue.
+    // A header row: zero values too.
     assert_eq!(s.arity("GetTradeSkillTools(1)").unwrap(), 0);
 }
 
-/// The verified persistence story (`0x4fc910`, the `0xbde064` cache key):
-/// collapse/filter/selection state SURVIVES a same-profession close→reopen and resets only
-/// when a DIFFERENT skill line opens.
+/// Persistence keyed by skill line (`0x4fc910`, `0xbde064`).
 #[test]
 fn close_reopen_keeps_state_for_the_same_line_and_resets_on_a_switch() {
     let mut s = UiScript::new().unwrap();
     s.set_trade_skill(Some(two_recipe_state()));
-    s.run("SelectTradeSkill(2)").unwrap(); // Simple Robe (the tier-0 row under the header)
+    s.run("SelectTradeSkill(2)").unwrap(); // Simple Robe, the tier-0 row
     s.run("CollapseTradeSkillSubClass(1)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 1);
 
@@ -591,10 +564,10 @@ fn close_reopen_keeps_state_for_the_same_line_and_resets_on_a_switch() {
         0
     );
 
-    // Reopen the SAME line: the fold survives the round trip (header only, still collapsed)…
+    // The same line: the fold survives...
     s.set_trade_skill(Some(two_recipe_state()));
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 1);
-    // …and so does the selection, by spell id: expand and it's visible index 2 again.
+    // ...and so does the selection, by spell id.
     s.run("ExpandTradeSkillSubClass(1)").unwrap();
     assert_eq!(
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")
@@ -602,7 +575,7 @@ fn close_reopen_keeps_state_for_the_same_line_and_resets_on_a_switch() {
         2
     );
 
-    // A DIFFERENT line resets everything: fully expanded, nothing selected.
+    // A different line resets everything.
     s.run("CollapseTradeSkillSubClass(1)").unwrap();
     let mut other = two_recipe_state();
     other.line = 164; // Blacksmithing
@@ -615,9 +588,7 @@ fn close_reopen_keeps_state_for_the_same_line_and_resets_on_a_switch() {
     );
 }
 
-/// The SubClass filter (ref Blizzard_TradeSkillUI.lua l.406-408): an exclusive set shows only
-/// that group; the vocabulary (`GetTradeSkillSubClasses`) never shrinks; `Get(0)` answers the
-/// all-shown probe; `Set(0, 1, 1)` (the "All Subclasses" row) restores everything.
+/// The subclass filter as the stock menu drives it (`Blizzard_TradeSkillUI.lua:406-409`).
 #[test]
 fn subclass_filter_exclusive_narrows_list_but_not_vocabulary() {
     let mut s = UiScript::new().unwrap();
@@ -652,7 +623,7 @@ fn subclass_filter_exclusive_narrows_list_but_not_vocabulary() {
         1
     );
 
-    // The "All Subclasses" row's own call shape restores everything.
+    // The "All Subclasses" row's call restores everything.
     s.run("SetTradeSkillSubClassFilter(0, 1, 1)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 10);
     assert_eq!(
@@ -662,12 +633,9 @@ fn subclass_filter_exclusive_narrows_list_but_not_vocabulary() {
     );
 }
 
-/// A stand-in string table for the `0x84dd70` token family — **deliberately not the shipped
-/// wording**, because what these tests establish is *which token* each slot bit reaches, never
-/// what the word says ("assert the identifier, not the sentence"). Naming each
-/// value after its own key is the point: `SECONDARYHANDSLOT`, `INVTYPE_SHIELD` and
-/// `INVTYPE_WEAPONOFFHAND` all read "Off Hand" in enUS, so an assertion on the English could not
-/// tell a correct table from one wired to the item tooltip's family.
+/// Stand-in slot strings named after their tokens (`0x84dd70`): `SECONDARYHANDSLOT`,
+/// `INVTYPE_SHIELD` and `INVTYPE_WEAPONOFFHAND` all read "Off Hand" in enUS, so only the token
+/// shows which one a bit reaches.
 fn seed_slot_tokens(s: &mut UiScript) {
     s.run(
         r#"
@@ -687,9 +655,6 @@ fn seed_slot_tokens(s: &mut UiScript) {
     .unwrap();
 }
 
-/// The InvSlot filter: the vocabulary is the distinct slot words ascending by slot bit; an
-/// exclusive set drops every recipe on other slots AND any group that empties — header
-/// included.
 #[test]
 fn invslot_filter_drops_recipes_and_emptied_groups() {
     let mut s = UiScript::new().unwrap();
@@ -728,9 +693,7 @@ fn invslot_filter_drops_recipes_and_emptied_groups() {
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 10);
 }
 
-/// WEAPON (InventoryType 13) is the one multi-bit contribution (`0x18000`): a
-/// one-hand weapon lists BOTH hand slots in the vocabulary and stays visible under either
-/// hand's exclusive filter.
+/// A one-hand weapon (InventoryType 13, `0x18000`) lists both hand slots and passes either.
 #[test]
 fn one_hand_weapon_spans_both_hand_slots() {
     let mut s = UiScript::new().unwrap();
@@ -758,8 +721,8 @@ fn one_hand_weapon_spans_both_hand_slots() {
     );
 }
 
-/// Every engine-side list mutator raises the touched flag exactly once per drain — the app's
-/// cue to fire TRADE_SKILL_UPDATE (the `0x4fd710`/`0x4fd750` in-call event, module doc).
+/// Each filter or fold raises the flag the app answers with TRADE_SKILL_UPDATE (`0x4fd710`,
+/// `0x4fd750`).
 #[test]
 fn filter_and_fold_mutators_raise_the_touched_flag() {
     let mut s = UiScript::new().unwrap();
@@ -779,10 +742,7 @@ fn filter_and_fold_mutators_raise_the_touched_flag() {
     assert!(s.take_trade_skill_touched());
 }
 
-/// The sort's SECONDARY key is the product's ItemLevel, ascending — between the difficulty tier
-/// and the name (the `record+0x14` = item template ItemLevel identity, pinned 2026-07-17). Two
-/// same-tier recipes whose ALPHABETICAL order contradicts their item levels must order by level;
-/// equal levels fall through to the name.
+/// ItemLevel (`record+0x14`) sorts between tier and name.
 #[test]
 fn same_tier_recipes_order_by_product_item_level_before_name() {
     let mut s = UiScript::new().unwrap();
@@ -828,17 +788,12 @@ fn same_tier_recipes_order_by_product_item_level_before_name() {
     assert_eq!(names, ["Cloth", "Mmm Robe", "Zzz Robe", "Aaa Robe"]);
 }
 
-/// The link pair (`0x4ff410`/`0x4ff800`): the product's link in its
-/// quality colour with zero tokens; ZERO values for a header, a missing product or an uncached
-/// template; the reagent link nil on the same misses and always exactly one value; the typo'd
-/// reagent Usage; the number gate.
+/// The two link verbs' shapes (`0x4ff410`, `0x4ff800`).
 #[test]
 fn the_link_verbs_answer_the_clients_shapes() {
     let mut s = UiScript::new().unwrap();
     s.set_trade_skill(Some(state()));
-    // Row 1 is a header; row 2 the first VISIBLE recipe — found by the name the API answers for
-    // it, since the visible order is the grouped one, not the pushed one. Seed its product's and
-    // one reagent's templates.
+    // Row 2 is the first recipe, found by name since the visible order is the sorted one.
     let st = state();
     let row2 = s.eval::<String>("return (GetTradeSkillInfo(2))").unwrap();
     let r = st

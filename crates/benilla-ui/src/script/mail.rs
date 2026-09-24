@@ -1,32 +1,6 @@
-//! The mail bindings (decision 0544 P1/P2) — the Era-shaped mailbox surface, the same two-way seam
-//! as [`super::merchant`]/[`super::loot`]: the app pushes a **mail snapshot**
-//! ([`UiScript::set_mail`] — the inbox rows already resolved from the wire to
-//! name/icon/sender/body by the app's item-template + name caches) and the Lua
-//! `CheckInbox`/`TakeInboxItem`/`SendMail`/… calls queue outbound **intents** the app drains. The
-//! engine holds no mail knowledge — a row is a header (sender/subject/money/COD/expiry/flags), an
-//! optional enclosed item (id/name/icon/quality), an ask-once letter body, and a stationery
-//! basename.
-//!
-//! ## The 5875 API shape (VERIFIED against the extracted `MailFrame.lua`)
-//!
-//! `index` is **1-based** everywhere; an out-of-range index answers `nil`/`0`. The inbox getters:
-//! `GetInboxNumItems()`, `GetInboxHeaderInfo(index)` → the reference 13-tuple
-//! `packageIcon, stationeryIcon, sender, subject, money, CODAmount, daysLeft, hasItem(count|nil),
-//! wasRead, wasReturned, textCreated, canReply, isGM` (MailFrame.lua l.105/265/279),
-//! `GetInboxText(index)` → `body, stationeryTexture, isTakeable, isInvoice` (l.292 — a body cache
-//! miss queues the `CMSG_ITEM_TEXT_QUERY` fetch and returns `""`), `GetInboxItem(index)` →
-//! `name, texture, count, quality, canUse` (l.379), `InboxItemCanDelete(index)` → 1/nil (the
-//! delete-vs-return law, l.417/450). `HasNewMail()` reads the app-pushed login-scoped flag
-//! ([`UiScript::set_has_new_mail`], decision 0544 P3) — `nil` (false) until the app's first
-//! `MSG_QUERY_NEXT_MAIL_TIME` answer lands.
-//!
-//! The send tab: `GetSendMailItem()` → `name, texture, stackCount, quality` off the attached cursor
-//! item (l.511), `GetSendMailPrice()` → the flat **30c** postage (vmangos's fee), `SendMail(target,
-//! subject, body)` fires the send, `SetSendMailMoney`/`SetSendMailCOD(copper)` push the money/COD
-//! amounts the app reads at send time, `ClickSendMailItemButton()` attaches (or detaches) the
-//! cursor's held bag item as the send attachment (l.719). Intents `CheckInbox`, `TakeInboxItem`,
-//! `TakeInboxMoney`, `DeleteInboxItem`, `ReturnInboxItem`, `CloseMail` are 1-based row indices /
-//! flags the app maps to the wire.
+//! The mail bindings. The app pushes the open mailbox's inbox, already resolved from the wire
+//! (`UiScript::set_mail`), and the Lua verbs queue intents the app drains and sends. Indices are
+//! 1-based, as `MailFrame.lua` uses them.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -34,143 +8,107 @@ use super::binding_abi::flag;
 use super::cursor::{self, CursorPayload};
 use super::Model;
 
-/// One inbox row, resolved by the app from a wire `MailListEntry`. Plain data — its
-/// 1-based order in the window is its position in [`MailState::inbox`].
+/// One inbox row, resolved by the app from a wire `MailListEntry`; its 1-based index is its
+/// position in [`MailState::inbox`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MailInboxRow {
-    /// The enclosed item's icon (`GetInboxHeaderInfo`'s `packageIcon`); `None` when the mail carries
-    /// no item, or while its template answer is in flight.
+    /// `packageIcon`, the enclosed item's icon; `None` with no item or while its template loads.
     pub package_icon: Option<String>,
-    /// The letter icon (`stationeryIcon`) — the app derives it from the stationery id/GM flag; the
-    /// row shows this when there's no package (or it's GM mail).
     pub stationery_icon: Option<String>,
-    /// The sender name (`sender`), resolved through the name cache; `None` while in flight or for a
-    /// non-player sender (the Lua shows `UNKNOWN`).
+    /// `sender`, from the name cache; `None` while in flight or for a non-player sender.
     pub sender: Option<String>,
     pub subject: String,
     pub money: u32,
     pub cod: u32,
-    /// Days remaining before the mail is deleted/returned (`daysLeft`, the wire `expire_days`).
     pub days_left: f32,
-    /// The enclosed item's stack count (`GetInboxHeaderInfo`'s `hasItem` returns this, or `nil` when
-    /// `0`). `0` = no item.
+    /// The enclosed stack's count, answered as `hasItem`; 0 (nil) is no item.
     pub item_count: u32,
     /// `checked & READ(0x1)`.
     pub was_read: bool,
     /// `checked & RETURNED(0x2)`.
     pub was_returned: bool,
-    /// `checked & COPIED(0x4)` — the letter body was materialized as a text item (`textCreated`).
+    /// `checked & COPIED(0x4)`: the letter was copied to an item (`textCreated`).
     pub text_created: bool,
-    /// `sender_guid.is_some() && !was_returned` — the Reply button gate (l.281).
+    /// `sender_guid.is_some() && !was_returned`, the Reply button's gate (`MailFrame.lua:281`).
     pub can_reply: bool,
-    /// `stationery == 61` — a GM mail (l.108).
+    /// `stationery == 61`: a GM mail (vmangos `MAIL_STATIONERY_GM`, `Mail.h:85`).
     pub is_gm: bool,
-    /// The letter body (`GetInboxText`'s first return); `None` = not fetched yet (the getter returns
-    /// `""` and queues the ask-once `CMSG_ITEM_TEXT_QUERY` when [`Self::has_body`]).
+    /// The letter body; `None` until fetched, while `GetInboxText` answers `""`.
     pub body: Option<String>,
-    /// The stationery texture basename (`GetInboxText`'s second return) — the Lua wraps it as
-    /// `Interface\Stationery\<basename>1`/`2` for the open-letter backdrop.
     pub stationery_texture: String,
-    /// `GetInboxText`'s fourth return. **Narrower than "an auction mail"**: the reference answers
-    /// `1` iff the record carries the three fields its subject parser persisted (`[rec+0x250] != 0`,
-    /// `0x4af2eb`), and the parser persists them *only* for result code 1 (won) or 2 (sold). An
-    /// outbid or expiry notice is an auction mail that is **not** an invoice.
+    /// `isInvoice`: only an auction won (result 1) or sold (2), not an outbid or expiry notice
+    /// (`0x4af2eb`).
     pub is_invoice: bool,
-    /// The auction invoice this mail carries, once it can be answered — `GetInboxInvoiceInfo`'s
-    /// seven values. `None` is the reference's **miss tail**, and it covers four different states
-    /// that all read the same from Lua: not an auction mail at all; an auction mail whose result
-    /// code is not won(1)/sold(2) (an outbid or expiry notice carries no body and no invoice); the
-    /// body not fetched yet; or the counterparty's name still in flight.
+    /// `GetInboxInvoiceInfo`'s answer; `None`, the reference's miss, also while the body or the
+    /// counterparty's name is in flight.
     pub invoice: Option<MailInvoice>,
-    /// The mail carries a fetchable letter body (`item_text_id != 0`) — gates the body ask.
+    /// `item_text_id != 0`: the mail has a letter body to fetch.
     pub has_body: bool,
-    /// The enclosed item's template entry (`0` = none) — the shared item-tooltip store's key
-    /// (`GameTooltip:SetInboxItem`) and `GetInboxItem`'s identity.
+    /// The enclosed item's template entry, 0 for none; the key `SetInboxItem`'s tooltip reads.
     pub item_id: u32,
-    /// The enclosed item's **random-suffix roll** (`SMSG_MAIL_LIST`'s per-item `randomPropId`) —
-    /// what the hover resolves its enchant lines from, and the id whose suffix
-    /// [`Self::item_name`] already carries. `0` = unrolled. The reference's `SetInboxItem` writes
-    /// exactly this into the tooltip's `+0x424`.
+    /// The enclosed item's random-suffix id (the wire `randomPropId`), 0 for none, which the
+    /// reference's `SetInboxItem` hands the tooltip (`+0x424`); `item_name` carries its suffix.
     pub item_random_property_id: u32,
-    /// The enclosed item's name (`GetInboxItem`'s first return); `None` while the template is in
-    /// flight.
+    /// The enclosed item's name; `None` while its template is in flight.
     pub item_name: Option<String>,
-    /// The enclosed item's icon; `None` while in flight.
     pub item_texture: Option<String>,
-    /// The enclosed item's quality (0..6); `None` while in flight.
     pub item_quality: Option<u32>,
-    /// `InboxItemCanDelete` — the delete-vs-return law (`!can_reply`: a not-yet-returned mail from a
-    /// player is returnable, everything else is deletable — l.417/450).
+    /// `InboxItemCanDelete`: `!can_reply`, as a player's unreturned mail is returned instead
+    /// (`MailFrame.lua:417`, `:450`).
     pub can_delete: bool,
 }
 
-/// One auction mail's invoice — what `GetInboxInvoiceInfo(index)` hands back, already parsed.
-///
-/// The invoice is **TEXT**, not wire data: the auction house writes the numbers into the mail's
-/// subject and body and the client `sscanf`s them back out (`GetInboxInvoiceInfo 0x4af360`).
-/// The app owns that parse; this is its result.
+/// One auction invoice, `GetInboxInvoiceInfo`'s answer, parsed by the app from the mail's subject
+/// and body text as the reference `sscanf`s them (`0x4af360`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MailInvoice {
-    /// `true` → the literal token `"seller"` (your auction sold), `false` → `"buyer"` (you won).
-    /// A bare ASCII token in the reference too, not a GlobalString — the Lua compares it as one.
+    /// `"seller"` (your auction sold) or `"buyer"` (you won), literal tokens, not global strings.
     pub seller: bool,
-    /// The auctioned item's name, composed from the subject's item entry.
     pub item_name: String,
     /// The counterparty: who bought it (seller invoice) or who sold it (buyer invoice).
     pub player_name: String,
-    /// The winning bid. `bid == buyout` is how the window knows it was a buyout rather than a bid.
+    /// The winning bid; the window reads `bid == buyout` as a buyout (`MailFrame.lua:307`).
     pub bid: u32,
     pub buyout: u32,
-    /// Seller invoices only (`0` on a buyer invoice — the body carries three fields, not five).
+    /// Seller invoices only; 0 on a buyer's, whose body carries three fields, not five.
     pub deposit: u32,
     /// The auction house's cut, seller invoices only.
     pub consignment: u32,
 }
 
-/// The open mailbox's inbox snapshot. Pushed whole by the app; `None` means no mailbox is open (the
-/// window is closed).
+/// The open mailbox's inbox, pushed whole by the app; `set_mail(None)` means no mailbox is open.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MailState {
     pub inbox: Vec<MailInboxRow>,
 }
 
-/// One usable stationery, as the send tab's picker lists it (`GetNumStationeries` /
-/// `GetStationeryInfo`, 1970) — the app computes the usable set off `Stationery.dbc` and the
-/// player's bags, sorted by price, and pushes it whole ([`super::UiScript::set_mail_stationeries`]).
+/// One usable stationery in the send tab's picker; the app builds the list from `Stationery.dbc`
+/// and the bags, sorted by price.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StationeryView {
-    /// The `Stationery.dbc` row id — what `SelectStationery` stores and `CMSG_SEND_MAIL` carries.
+    /// The `Stationery.dbc` row id, which `SelectStationery` stores and `CMSG_SEND_MAIL` carries.
     pub id: u32,
-    /// The stationery item's name (`GetStationeryInfo`'s first return).
     pub name: String,
-    /// The item's icon as a FULL path (`Interface\Icons\…`) — `GetStationeryInfo`'s second
-    /// return is used raw by `SetTexture` (MailFrame.lua l.671), unlike the bare basename below.
+    /// The item's icon as a full `Interface\Icons\` path, which `MailFrame.lua:671` sets as is.
     pub icon: String,
-    /// The item's BuyPrice in copper, or `None` when the player already carries the item
-    /// (`GetStationeryInfo`'s third return is nil then).
+    /// The item's BuyPrice in copper; `None` (nil) when the player carries one.
     pub cost: Option<u32>,
-    /// The bare texture basename (`GetSelectedStationeryTexture`), wrapped by the Lua as
-    /// `STATIONERY_PATH..texture.."1"/"2"`.
+    /// The bare texture basename that `GetSelectedStationeryTexture` answers.
     pub texture: String,
 }
 
-/// A drained `SendMail` intent — the app resolves the attachment `(bag, slot)` to an item guid and
-/// builds `CMSG_SEND_MAIL` from this (decision 0544 P2).
+/// A drained `SendMail` intent, which the app turns into `CMSG_SEND_MAIL`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MailSendRequest {
     pub target: String,
     pub subject: String,
     pub body: String,
-    /// The selected `Stationery.dbc` id — `CMSG_SEND_MAIL`'s sixth field (never 0 here: a send with
-    /// no selection aborts before it is queued, `0x4ae8dd`).
+    /// The selected `Stationery.dbc` id; never 0, as a send with none aborts (`0x4ae8dd`).
     pub stationery: u32,
-    /// Money to enclose (copper) — `SetSendMailMoney`'s last value.
     pub money: u32,
-    /// COD amount (copper) — `SetSendMailCOD`'s last value; `0` when not a COD send.
     pub cod: u32,
-    /// The attached bag item's `(live-API bag, 1-based slot)`; `None` = no attachment. The app
-    /// resolves it to the wire's `u64 itemGuid` at send time (the reference re-reads the bag slot
-    /// when the send fires, so the resolve is lazy).
+    /// The attached item's `(bag, 1-based slot)`; the app resolves its guid when the send fires,
+    /// as the reference re-reads the slot then.
     pub item: Option<(i64, u32)>,
 }
 
@@ -180,14 +118,12 @@ impl super::UiScript {
         self.model_mut().mail = state;
     }
 
-    /// Whether `CheckInbox` was called since the last drain (and clear the flag) — the app maps it to
-    /// a fresh `CMSG_GET_MAIL_LIST`.
+    /// Take the `CheckInbox` flag; the app answers it with `CMSG_GET_MAIL_LIST`.
     pub fn take_mail_check_inbox(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().mail_check_inbox)
     }
 
-    /// Drain the 1-based indices of mails **opened** (`GetInboxText` was called on them) since the
-    /// last drain — the app marks each read and fetches its body ask-once.
+    /// Drain the 1-based indices `GetInboxText` opened; the app marks each read, fetches its body.
     pub fn take_mail_opens(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().mail_opens)
     }
@@ -212,22 +148,18 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().mail_returns)
     }
 
-    /// Drain the 1-based `TakeInboxTextItem` row picks — the letter button's "permanent copy"
-    /// verb; the app maps each to `CMSG_MAIL_CREATE_TEXT_ITEM`.
+    /// Drain the 1-based `TakeInboxTextItem` row picks, each a `CMSG_MAIL_CREATE_TEXT_ITEM`.
     pub fn take_mail_take_texts(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().mail_take_texts)
     }
 
-    /// Whether `CloseMail` was called since the last drain (and clear the flag). vanilla's
-    /// client-side close sends no packet — the app clears its local mail session.
+    /// Take the `CloseMail` flag; 1.12 has no close opcode, so the app only ends its mail session.
     pub fn take_mail_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().mail_close)
     }
 
-    /// Drain the `SendMail` intent, if one was queued since the last drain — folds in the last
-    /// `SetSendMailMoney`/`SetSendMailCOD` amounts and the attached item's `(bag, slot)`. The
-    /// attachment is left in place (a failed send keeps it; [`Self::reset_compose_tab`] drops it
-    /// on success).
+    /// Drain the `SendMail` intent with the current money, COD and attachment. The attachment
+    /// stays until [`Self::reset_compose_tab`], so a failed send keeps it.
     pub fn take_mail_send(&mut self) -> Option<MailSendRequest> {
         let mut model = self.model_mut();
         let (target, subject, body) = model.mail_send.take()?;
@@ -243,21 +175,10 @@ impl super::UiScript {
         })
     }
 
-    /// **`0x4acdc0(1)` — the client's compose-tab reset**, whole. Zeroes the send tab's attachment
-    /// (`0xb6ef90/94`), money (`0xb6efa4`) and COD (`0xb6efa8`) globals and then **tail-fires its
-    /// three events**, in this order: `SEND_MAIL_MONEY_CHANGED`, `SEND_MAIL_COD_CHANGED`,
-    /// `MAIL_SEND_SUCCESS` (`@0x4ace14/1e/28`).
-    ///
-    /// **The fire belongs to the reset, and that is the whole point of this shape.** Both call
-    /// sites used to fire `MAIL_SEND_SUCCESS` themselves, and the send-result one fired it
-    /// *before* clearing — so the stock `SendMailFrame_Reset` ran while `GetSendMailItem()` still
-    /// answered with the item that had just been sent, and its own `SendMailFrame_Update()` tail
-    /// put the item's name straight back into the subject box and its texture back on
-    /// `SendMailPackageButton`. Nothing re-ran the update after the clear landed, so a sent letter
-    /// left its subject and its icon sitting in the form (director's report).
-    ///
-    /// `MAIL_SEND_SUCCESS` is **overloaded** — it means "the compose form is now clean", not "a
-    /// mail was sent" — opening a mailbox fires it too.
+    /// The reference's compose-tab reset (`0x4acdc0`): clear the attachment, money and COD, then
+    /// fire `SEND_MAIL_MONEY_CHANGED`, `SEND_MAIL_COD_CHANGED` and `MAIL_SEND_SUCCESS` in that
+    /// order. The events must follow the clear, as `SendMailFrame_Reset` re-reads
+    /// `GetSendMailItem`. `MAIL_SEND_SUCCESS` means the form is clean: opening a mailbox fires it.
     pub fn reset_compose_tab(&mut self) {
         {
             let mut model = self.model_mut();
@@ -265,19 +186,15 @@ impl super::UiScript {
             model.mail_send_money = 0;
             model.mail_send_cod = 0;
         }
-        // Fired here, immediately, rather than queued on `pending_events`: this is a host-side
-        // edge (the mail system driving the VM), not a Lua binding queueing work for the next
-        // tick, and its order against the caller's own `MAIL_SHOW`/`MAIL_FAILED` is the law.
-        // Spelled out one call each — the three are a fixed sequence at three addresses, and the
-        // chain-file event census (`ui_script::reference_ui`) reads producers as literals.
+        // Fired now, not queued: the order against the caller's `MAIL_SHOW`/`MAIL_FAILED` matters.
+        // One literal call each, as the event census (`ui_script::reference_ui`) reads them.
         self.fire_event("SEND_MAIL_MONEY_CHANGED", Vec::new()); // 0x4ace14
         self.fire_event("SEND_MAIL_COD_CHANGED", Vec::new()); // 0x4ace1e
         self.fire_event("MAIL_SEND_SUCCESS", Vec::new()); // 0x4ace28
     }
 
-    /// Drop the attachment alone — `SendMail`'s attached-item-gone abort (`ERR_ITEM_NOT_FOUND`, no
-    /// packet, `MAIL_SEND_INFO_UPDATE` at `0x4ae98d`): the bag slot no longer holds the item the
-    /// send tab shows. The money and COD amounts stay, as the reference leaves them.
+    /// `SendMail`'s abort when the attached item left its slot (`ERR_ITEM_NOT_FOUND`, no packet,
+    /// `MAIL_SEND_INFO_UPDATE` at `0x4ae98d`): drop the attachment, keep the money and COD.
     pub fn drop_send_mail_item(&mut self) {
         let mut model = self.model_mut();
         if model.mail_send_item.take().is_some() {
@@ -287,28 +204,25 @@ impl super::UiScript {
         }
     }
 
-    /// Push the usable stationery list, in the picker's order (1970; see [`StationeryView`]).
+    /// Push the usable stationery list, in the picker's order.
     pub fn set_mail_stationeries(&mut self, list: Vec<StationeryView>) {
         self.model_mut().mail_stationeries = list;
     }
 
-    /// Clear the stationery selection — the client does it at `0x4ace07` on BOTH opening and
-    /// closing the mailbox, which is why the stock `SendMailFrame_Reset` re-selects row 1 on show.
+    /// Clear the stationery selection, as the reference does on mailbox open and close
+    /// (`0x4ace07`).
     pub fn clear_stationery(&mut self) {
         self.model_mut().mail_stationery = 0;
     }
 
-    /// Push `HasNewMail()`'s answer (decision 0544 P3) — login-scoped, independent of whether a
-    /// mailbox window is open. The app computes this off its `MSG_QUERY_NEXT_MAIL_TIME`/
-    /// `SMSG_RECEIVED_MAIL`-fed countdown and calls this on every value change, right before firing
-    /// `UPDATE_PENDING_MAIL` (the reference `MiniMapMailFrame`'s only listened event, Minimap.xml
-    /// l.278-289 — its `OnEvent` just re-reads `HasNewMail()` and shows/hides).
+    /// Push `HasNewMail()`'s answer, independent of any open mailbox. The app sets it before each
+    /// `UPDATE_PENDING_MAIL`, on which the minimap icon re-reads it (`Minimap.xml:278-289`).
     pub fn set_has_new_mail(&mut self, has: bool) {
         self.model_mut().has_new_mail = has;
     }
 }
 
-/// Fetch a cloned inbox row for a 1-based index, or `None` (out of range / no mailbox open).
+/// A clone of the inbox row at a 1-based index.
 fn row_at(model: &Model, index: usize) -> Option<MailInboxRow> {
     model
         .mail
@@ -321,7 +235,6 @@ fn row_at(model: &Model, index: usize) -> Option<MailInboxRow> {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetInboxNumItems() → the number of inbox rows (0 when no mailbox is open).
     g.set(
         "GetInboxNumItems",
         lua.create_function(|lua, ()| {
@@ -330,8 +243,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetInboxHeaderInfo(index) → the 13-tuple (see the module doc). An out-of-range index answers
-    // nil (the reference callers only read within GetInboxNumItems, but the null shape is faithful).
+    // GetInboxHeaderInfo(index): the 13 values `MailFrame.lua:105` reads; nil out of range.
     g.set(
         "GetInboxHeaderInfo",
         lua.create_function(|lua, index: usize| {
@@ -348,7 +260,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     None => Value::Nil,
                 })
             };
-            // packageIcon shows only for a non-GM mail that carries an item (MailFrame.lua l.108).
+            // packageIcon only for a non-GM mail with an item (`MailFrame.lua:108`).
             let package_icon = if r.item_id != 0 && !r.is_gm {
                 opt_str(&r.package_icon)?
             } else {
@@ -362,7 +274,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(i64::from(r.money)),
                 Value::Integer(i64::from(r.cod)),
                 Value::Number(f64::from(r.days_left)),
-                // hasItem: the stack count, or nil when there's no item.
                 if r.item_count > 0 {
                     Value::Integer(i64::from(r.item_count))
                 } else {
@@ -377,12 +288,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetInboxText(index) → body, stationeryTexture, isTakeable, isInvoice (MailFrame.lua l.292).
-    // Opening a mail is the ask-once trigger: queue the open intent (the app marks it read + fetches
-    // the body when has_body). A cache miss returns "" until the body lands and a fresh snapshot
-    // arrives. isTakeable = the mail carries a fetchable body (`item_text_id != 0`) — with
-    // `not textCreated` it gates the letter button (the "permanent copy" verb, ref l.366; vmangos
-    // `HandleMailCreateTextItem` requires the same pair: an `itemTextId` and no COPIED bit).
+    // GetInboxText(index): body, stationeryTexture, isTakeable, isInvoice (`MailFrame.lua:292`);
+    // reading a mail queues its open. isTakeable with `not textCreated` gates the copy button
+    // (`MailFrame.lua:366`), the pair vmangos requires (`MailHandler.cpp:863`).
     g.set(
         "GetInboxText",
         lua.create_function(|lua, index: usize| {
@@ -390,7 +298,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let row = row_at(&model, index);
                 if row.is_some() {
-                    // Ask-once dedup: don't re-queue an already-pending open this drain window.
+                    // Queued once per drain.
                     let i = index as u32;
                     if !model.mail_opens.contains(&i) {
                         model.mail_opens.push(i);
@@ -402,13 +310,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(MultiValue::from_vec(vec![Value::Nil]));
             };
             Ok(MultiValue::from_vec(vec![
-                // **An invoice's body is `nil`, and that is an explicit carve-out in the reference,
-                // not an accident** (`0x4af1cf cmp [esi+0x4],2` / `je` → `lua_pushnil`, decision
-                // 1527). The auction house's raw `<guid>:<n>:<n>:…` bookkeeping really does sit in
-                // the shared text cache — `GetInboxInvoiceInfo` `sscanf`s exactly that string — but
-                // this binding refuses to hand it back. Two bindings, one cache, opposite purposes.
-                // It is what lets MailFrame lay the invoice pane over the letter page without the
-                // bookkeeping showing through above it.
+                // An invoice's body is nil (`0x4af1cf`): its text is the auction house's
+                // bookkeeping, which only `GetInboxInvoiceInfo` parses.
                 if r.is_invoice {
                     Value::Nil
                 } else {
@@ -421,13 +324,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetInboxInvoiceInfo(index) → invoiceType, itemName, playerName, bid, buyout, deposit,
-    // consignment (MailFrame.lua l.302). **SEVEN values, always** — the reference's own `mov eax,7`
-    // (`0x4af5a1`), with the miss tail `nil, nil, nil, 0, 0, 0, 0` (`0x4af559`): three nils then
-    // four zeros. MailFrame.lua guards on the third
-    // (`if playerName then`), so the shape of the miss is what keeps the invoice pane hidden —
-    // returning one bare nil instead would leave the four numeric destructures nil and the pane's
-    // arithmetic would run on them.
+    // GetInboxInvoiceInfo(index) (`MailFrame.lua:302`): always seven values (`0x4af5a1`), a miss
+    // being three nils and four zeros (`0x4af559`).
     g.set(
         "GetInboxInvoiceInfo",
         lua.create_function(|lua, index: usize| {
@@ -461,10 +359,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetInboxItem(index) → name, texture, count, quality, canUse (MailFrame.lua l.379). name/quality
-    // are nil while the item-template answer is in flight; a mail with no item answers all-nil name.
-    // canUse is the shared item-usable gate over the enclosed item's template (merchant's isUsable
-    // path) — usable while the template is still in flight (the null-record skip).
+    // GetInboxItem(index): name, texture, count, quality, canUse (`MailFrame.lua:379`); canUse is
+    // the shared item-usable gate, true while the template is in flight.
     g.set(
         "GetInboxItem",
         lua.create_function(|lua, index: usize| {
@@ -476,11 +372,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .is_none_or(|r| super::item_stats::item_usable_by_id(&model, r.item_id));
                 (row, usable)
             };
-            // **Five values on every path**, and the empty leg is `(nil, nil, 0, 0, nil)` —
-            // `GetInboxItem 0x4af5d0`, the sibling of the `GetSendMailItem` block above (decision
-            // 2129). This answered ONE value, which a caller
-            // destructuring five reads as four nils — and the reference's own row
-            // (`(nil,nil,number,number,nil) | …`) has no one-value alternative at all.
+            // Five values on every path; with no item, `nil, nil, 0, 0, nil` (`0x4af5d0`).
             let Some(r) = row.filter(|r| r.item_id != 0) else {
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,
@@ -498,7 +390,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(t) => Value::String(lua.create_string(t)?),
                 None => Value::Nil,
             };
-            // A number on every path, like the send tab's.
+            // A number on every path, as in `GetSendMailItem`.
             let quality = Value::Integer(i64::from(r.item_quality.unwrap_or(0)));
             Ok(MultiValue::from_vec(vec![
                 name,
@@ -510,7 +402,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // InboxItemCanDelete(index) → 1/nil (MailFrame.lua l.417/450): the delete-vs-return law.
     g.set(
         "InboxItemCanDelete",
         lua.create_function(|lua, index: usize| {
@@ -519,8 +410,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // HasNewMail() → 1/nil off the app's login-scoped countdown flag (decision 0544 P3; see
-    // `UiScript::set_has_new_mail`'s doc for the wire behind it).
     g.set(
         "HasNewMail",
         lua.create_function(|lua, ()| {
@@ -529,7 +418,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CheckInbox() — flag the inbox-refresh intent (the app sends CMSG_GET_MAIL_LIST).
     g.set(
         "CheckInbox",
         lua.create_function(|lua, ()| {
@@ -540,7 +428,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The five 1-based row-pick intents (take item / take money / delete / return / copy letter).
     for (name, field) in [
         ("TakeInboxItem", 0u8),
         ("TakeInboxMoney", 1),
@@ -564,7 +451,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // CloseMail() — client-side close (no packet): flag it so the app clears its mail session.
     g.set(
         "CloseMail",
         lua.create_function(|lua, ()| {
@@ -575,23 +461,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SendMail(target, subject, body) — queue the send; the app folds in money/COD + the attachment.
     g.set(
         "SendMail",
         lua.create_function(|lua, (target, subject, body): (String, String, String)| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // `SendMail 0x4ae800`: money and COD are exclusive AT SEND TIME — both
-            // set is a silent abort, no packet — and a COD with no attached item aborts the same
-            // way. 0 returns on every path, so Lua cannot tell.
+            // `SendMail` (`0x4ae800`) aborts silently, no packet and no return value, on money
+            // with COD or on COD with no attached item.
             if model.mail_send_money != 0 && model.mail_send_cod != 0 {
                 return Ok(());
             }
             if model.mail_send_cod != 0 && model.mail_send_item.is_none() {
                 return Ok(());
             }
-            // No stationery selected — `0x4ae8dd je`: the send silently aborts, no packet, 0
-            // returns (1970). The selection is cleared on mailbox open and close, and the stock
-            // `SendMailFrame_Reset` re-selects row 1, so a send from the stock tab always has one.
+            // The same silent abort with no stationery selected (`0x4ae8dd`).
             if model.mail_stationery == 0 {
                 return Ok(());
             }
@@ -600,11 +482,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetSendMailMoney(copper) → 1 (the SEND_MONEY popup's OnAccept gates SendMail on the truthy
-    // return, StaticPopup.lua l.252). Stores the enclose-money amount the app reads at send time.
-    // SetSendMailMoney(copper) — `0x4ae0f0` → `0x4adbe0`: a non-number RAISES;
-    // more than the purse (unsigned) shows ERR_NOT_ENOUGH_MONEY and answers nil; else the store,
-    // SEND_MAIL_MONEY_CHANGED, and the number 1 — StaticPopup.lua l.257 branches on that value.
+    // SetSendMailMoney(copper) (`0x4ae0f0`): a non-number raises; more than the purse shows
+    // ERR_NOT_ENOUGH_MONEY and answers nil; else it stores, fires SEND_MAIL_MONEY_CHANGED and
+    // answers 1, which `StaticPopup.lua:257` branches on.
     g.set(
         "SetSendMailMoney",
         lua.create_function(|lua, copper: Value| {
@@ -626,9 +506,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSendMailMoney() / GetSendMailCOD() → the two amounts as stored (`0x4ae150` / `0x4ae1c0`,
-    // one number each — `reference/1.12-shapes.tsv`): what the stock money kit's SEND_MAIL and
-    // SEND_MAIL_COD types display (1962).
+    // GetSendMailMoney() and GetSendMailCOD() (`0x4ae150`, `0x4ae1c0`): the stored amounts.
     g.set(
         "GetSendMailMoney",
         lua.create_function(|lua, ()| {
@@ -650,10 +528,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetSendMailCOD(copper) — store the COD amount the app reads at send time (MailFrame.lua l.497).
-    // SetSendMailCOD(copper) — `0x4ae180` → `0x4adc70`: a non-number RAISES;
-    // without an attached item nothing happens at all — no store, no event, no message — and
-    // there is no affordability or sign check; 0 returns on every path.
+    // SetSendMailCOD(copper) (`0x4ae180`): a non-number raises; with no attached item nothing
+    // happens; there is no purse or sign check and no return value.
     g.set(
         "SetSendMailCOD",
         lua.create_function(|lua, copper: Value| {
@@ -674,27 +550,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSendMailItem() → name, texture, stackCount, quality off the attached cursor item
-    // (MailFrame.lua l.511).
-    //
-    // **The empty leg is `(nil, nil, 0, 0)`** — four values, and slots 3 and 4 are NUMBERS. Read at
-    // `0x4ae590`: `0x4ae6d3`/`0x4ae6da` push nil, then two `push 0; push 0; lua_pushnumber` pairs
-    // at `0x4ae6df`/`0x4ae6ea`, `eax = 4`. All three of the reference's failure
-    // guards share that one block, so "nothing attached" and "the item template has not loaded
-    // yet" are indistinguishable to a script.
-    //
-    // The `1` this used to push in slot 3 was borrowed from the wrong binding: it is
-    // `GetAuctionSellItemInfo 0x4ce590`'s empty leg (`1.0`/`-1.0`), not this one's.
-    //
-    // **Still not faithful, and stated rather than implied:** on the LOADED leg the reference reads
-    // quality from `[rec+0x1c]` gated on `[rec+0x2c] != 0` = InventoryType, so a **non-equippable**
-    // item answers quality `-1` (`0x4ae6bf`). We do not carry an inventory type here, so an item
-    // whose quality we have not cached answers 0 rather than -1.
+    // GetSendMailItem(): name, texture, stackCount, quality (`MailFrame.lua:511`). The reference
+    // answers `nil, nil, 0, 0` both with nothing attached and before the template loads
+    // (`0x4ae590`). It answers quality -1 for an item whose InventoryType is 0 (`0x4ae6bf`); this
+    // answers the cached quality, or 0.
     g.set(
         "GetSendMailItem",
         lua.create_function(|lua, ()| {
-            // The stack count is read while the model is borrowed: a whole-stack pickup records
-            // no count of its own, so the true size comes back from the source slot.
+            // A whole-stack pickup records no count, so the size comes from the source slot.
             let item = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.mail_send_item.clone().map(|it| {
@@ -720,7 +583,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(t) => Value::String(lua.create_string(t)?),
                 None => Value::Nil,
             };
-            // A number on every path — the reference's row has no nil alternative in this slot.
+            // A number on every path, as in the reference.
             let quality = Value::Integer(i64::from(it.quality.unwrap_or(0)));
             Ok(MultiValue::from_vec(vec![
                 name,
@@ -731,15 +594,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSendMailPrice() → the flat 30c postage (vmangos's fee; the reference reads a C constant).
+    // GetSendMailPrice(): 30 copper, vmangos's fee (`MailHandler.cpp:243`). The reference's is 30
+    // (`0x4ae756`) plus an uncarried stationery's price, the package's and the enclosed money
+    // (`0x4ae7a0`-`0x4ae7d2`); those are not added here.
     g.set(
         "GetSendMailPrice",
         lua.create_function(|_, ()| Ok(Value::Integer(30)))?,
     )?;
 
-    // ClickSendMailItemButton() — attach the cursor's held bag item as the send attachment, or, with
-    // an empty cursor and a filled slot, pick the attachment back onto the cursor (MailFrame.lua
-    // l.719, mirroring pickup_container_item's swap). A spell/action cursor is refused (no-op).
     g.set(
         "ClickSendMailItemButton",
         lua.create_function(|lua, ()| {
@@ -749,12 +611,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ── The stationery family (1970) ──
-    // The list is the app's (`Stationery.dbc` × the player's bags × the template cache); the
-    // client rebuilds it from `GetNumStationeries` (`0x4ae202` → `0x4ad970`), on world enter and
-    // on the last item-query answer — the app's per-frame recompute covers all three moments.
+    // ── The stationery family ──
+    // The reference rebuilds the list (`0x4ad970`) in `GetNumStationeries` (`0x4ae1f0`), on world
+    // entry and on the last item-query answer; the app recomputes it every frame.
 
-    // `GetNumStationeries()` — 0 args, 1 number: the usable count.
     g.set(
         "GetNumStationeries",
         lua.create_function(|lua, ()| {
@@ -763,9 +623,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetStationeryInfo(index)` — shape A (`lua_isnumber`, truncate), raising its Usage on a
-    // non-number; 1-based, unsigned bound; exactly 3 returns on every exit: name, the FULL icon
-    // path, BuyPrice in copper — cost nil when the player carries the item; 3 nils out of range.
+    // `GetStationeryInfo(index)` (`0x4ae230`): a non-number raises its Usage; three values
+    // always, three nils out of range.
     g.set(
         "GetStationeryInfo",
         lua.create_function(|lua, index: Value| {
@@ -795,8 +654,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `SelectStationery(index)` — shape A, raising its Usage on a non-number; 0 returns. In range
-    // it stores the row's DBC id; **out of range is not an error — it writes 0**, a deselect.
+    // `SelectStationery(index)` (`0x4ae380`): out of range is not an error, it stores 0.
     g.set(
         "SelectStationery",
         lua.create_function(|lua, index: Value| {
@@ -815,8 +673,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetSelectedStationeryTexture()` — 0 args, 1 return: the BARE `Stationery.dbc` texture name
-    // of the selection; nil for no selection (id 0) or an id the table does not carry.
+    // `GetSelectedStationeryTexture()` (`0x4ae3f0`): nil for no selection or an unknown id.
     g.set(
         "GetSelectedStationeryTexture",
         lua.create_function(|lua, ()| {
@@ -835,27 +692,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The attach/detach swap of `ClickSendMailItemButton` — the mail send slot as a cursor drop
-/// target (decision 0216's payload rails). Every `model.cursor` mutation is followed by
-/// [`cursor::queue_cursor_update`]/[`cursor::queue_lock_changed`] so `CURSOR_UPDATE`/
-/// `ITEM_LOCK_CHANGED` fire, exactly like a bag slot.
+/// `ClickSendMailItemButton`: the send slot as a cursor drop target, firing `CURSOR_UPDATE` and
+/// `ITEM_LOCK_CHANGED` like a bag slot.
 fn click_send_mail_item(model: &mut Model) {
     match model.cursor.take() {
-        // Cursor holds a bag item → attach it (the item leaves nothing in the bag until send).
+        // A held bag item attaches; it stays in its bag slot until the send.
         Some(CursorPayload::Item(item)) => {
             let (bag, slot) = (item.bag, item.slot);
-            // If a different item was already attached, it returns to nowhere client-side (the
-            // reference simply overwrites); its slot was never locked, so nothing to unlock.
+            // An earlier attachment is overwritten, as in the reference; its slot has no lock.
             model.mail_send_item = Some(item);
             cursor::queue_cursor_update(model);
             cursor::queue_lock_changed(model, bag, slot);
-            // The attachment changed — `MAIL_SEND_INFO_UPDATE` at `0x4ae0de` (0 args, 1970); the
-            // stock tab re-reads `GetSendMailItem` and the postage on it.
+            // `MAIL_SEND_INFO_UPDATE` (`0x4ae0de`): the stock tab re-reads the item and postage.
             model
                 .pending_events
                 .push(("MAIL_SEND_INFO_UPDATE".to_string(), Vec::new()));
         }
-        // Empty cursor, a filled slot → pick the attachment back onto the cursor (detach).
         None => {
             if let Some(item) = model.mail_send_item.take() {
                 let (bag, slot) = (item.bag, item.slot);
@@ -867,7 +719,6 @@ fn click_send_mail_item(model: &mut Model) {
                     .push(("MAIL_SEND_INFO_UPDATE".to_string(), Vec::new()));
             }
         }
-        // A spell/action payload is refused — put it back untouched (container.rs's refuse arm).
         Some(other) => {
             model.cursor = Some(other);
         }
@@ -879,8 +730,7 @@ mod tests {
     use super::*;
     use crate::script::UiScript;
 
-    /// A send needs a stationery selected (1970): seat the default and select it, the way the
-    /// stock `SendMailFrame_Reset` does on MAIL_SHOW.
+    /// A send needs a stationery: select the default, as the stock `SendMailFrame_Reset` does.
     fn select_default_stationery(s: &mut UiScript) {
         s.set_mail_stationeries(vec![super::StationeryView {
             id: 41,
@@ -917,7 +767,7 @@ mod tests {
             item_texture: (item_id != 0)
                 .then(|| "Interface\\Icons\\INV_Fabric_Linen_01".to_string()),
             item_quality: (item_id != 0).then_some(1),
-            can_delete: false, // from a player, not returned → returnable (not deletable)
+            can_delete: false, // a player's unreturned mail is returned, not deleted
             item_random_property_id: 0,
         }
     }
@@ -928,10 +778,6 @@ mod tests {
         }
     }
 
-    /// `GetInboxInvoiceInfo` answers **seven values, always** — the reference's own `mov eax,7`.
-    /// The miss tail is the part that matters and the part that is easy to get wrong: three nils
-    /// then four ZEROS, not one bare nil. MailFrame.lua destructures all seven unguarded and only
-    /// then tests the third, so a short return leaves its arithmetic running on nils.
     #[test]
     fn the_invoice_answers_seven_values_or_a_three_nil_four_zero_miss() {
         let mut s = UiScript::new().unwrap();
@@ -972,7 +818,7 @@ mod tests {
             "a seller invoice, in the reference's own order"
         );
 
-        // Row 2 carries no invoice — and neither does an index off the end.
+        // Row 2 has no invoice, and index 99 is off the end.
         for idx in [2, 99] {
             assert_eq!(
                 s.arity(&format!("GetInboxInvoiceInfo({idx})")).unwrap(),
@@ -992,11 +838,6 @@ mod tests {
         }
     }
 
-    /// `GetInboxText` returns **four** values always, and for an INVOICE the first is `nil`.
-    /// That is the reference's own carve-out (`0x4af1cf cmp [esi+0x4],2` → `lua_pushnil`), and it
-    /// is what lets MailFrame lay the invoice pane over the letter page: the auction house's raw
-    /// bookkeeping is in the text cache — `GetInboxInvoiceInfo` parses exactly that string — and
-    /// this binding refuses to hand it back.
     #[test]
     fn an_invoice_has_no_letter_body() {
         let mut s = UiScript::new().unwrap();
@@ -1016,7 +857,6 @@ mod tests {
             "nil",
             "the bookkeeping is never handed back as a letter body"
         );
-        // Row 2 is an ordinary letter and keeps its text.
         assert_eq!(
             s.eval::<String>("return tostring((GetInboxText(2)))")
                 .unwrap(),
@@ -1024,8 +864,6 @@ mod tests {
         );
     }
 
-    /// A BUYER invoice says so with the bare ASCII token the Lua compares against — not a
-    /// GlobalString, not localized.
     #[test]
     fn a_buyer_invoice_is_the_literal_token_buyer() {
         let mut s = UiScript::new().unwrap();
@@ -1058,8 +896,6 @@ mod tests {
         s.set_mail(Some(state()));
         assert_eq!(s.eval::<i64>("return GetInboxNumItems()").unwrap(), 2);
 
-        // Row 1 (has item): the leading strings + money/COD/days, then the flags — asserted in two
-        // smaller evals so the harness never destructures the whole 13-tuple in one Rust type.
         let (pkg, sta, sender, subject, money, cod, days): (
             String,
             String,
@@ -1079,7 +915,6 @@ mod tests {
         );
         assert_eq!((money, cod), (5000, 0));
         assert!((days - 29.5).abs() < 1e-3);
-        // hasItem = count 3, wasRead nil, wasReturned nil, textCreated nil, canReply 1, isGM nil.
         assert!(s
             .eval::<bool>(
                 "local a,b,c,d,e,f,g, has, read, ret, tc, reply, gm = GetInboxHeaderInfo(1)\n\
@@ -1087,7 +922,6 @@ mod tests {
             )
             .unwrap());
 
-        // Row 2 (no item): hasItem nil, packageIcon nil.
         assert!(s
             .eval::<bool>(
                 "local pkg, sta, s, subj, m, c, d, has = GetInboxHeaderInfo(2)\n\
@@ -1104,9 +938,9 @@ mod tests {
             s.eval("return GetInboxText(1)").unwrap();
         assert_eq!(body, "Lok'tar.");
         assert_eq!(tex, "STATIONERYTEST");
-        assert_eq!(takeable, Value::Integer(1)); // has a fetchable body
+        assert_eq!(takeable, Value::Integer(1)); // has a body to fetch
         assert!(matches!(invoice, Value::Nil));
-        // Opening queued the row for the mark-read/body ask; deduped within the drain window.
+        // The open is queued once per drain.
         s.run("GetInboxText(1)").unwrap();
         assert_eq!(s.take_mail_opens(), vec![1]);
         assert!(s.take_mail_opens().is_empty(), "drained");
@@ -1122,9 +956,8 @@ mod tests {
             (name.as_str(), count, quality, canuse),
             ("Linen Cloth", 3, 1, 1)
         );
-        // Row 2 has no item → nil.
         assert!(s.eval::<bool>("return GetInboxItem(2) == nil").unwrap());
-        // Row 1 is from a player, not returned → returnable, NOT deletable.
+        // A player's unreturned mail is returnable, not deletable.
         assert!(s
             .eval::<bool>("return InboxItemCanDelete(1) == nil")
             .unwrap());
@@ -1156,7 +989,6 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_money(5_000);
         assert!(s.take_mail_send().is_none());
-        // The purse gate (1965): more than the purse answers nil and names the refusal.
         assert!(s
             .eval::<bool>("return SetSendMailMoney(9999) == nil")
             .unwrap());
@@ -1164,7 +996,7 @@ mod tests {
         assert!(s
             .eval::<bool>("return SetSendMailMoney(1234) == 1")
             .unwrap());
-        // A COD with no attached item is completely silent: no store, no event (1965).
+        // COD with no attached item: no store, no event.
         s.run("SetSendMailCOD(50)").unwrap();
         assert_eq!(s.eval::<i64>("return GetSendMailCOD()").unwrap(), 0);
         select_default_stationery(&mut s);
@@ -1188,12 +1020,10 @@ mod tests {
     fn attach_from_cursor_and_get_send_item() {
         use crate::script::cursor::{CursorItem, CursorPayload};
         let mut s = UiScript::new().unwrap();
-        // Nothing attached → nil name, stack 1.
         assert!(s
             .eval::<bool>("local n = GetSendMailItem()\nreturn n == nil")
             .unwrap());
 
-        // Put a bag item on the cursor, then click the send slot: it attaches.
         s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
             bar_placeable: true,
             bag: 0,
@@ -1206,18 +1036,16 @@ mod tests {
             equip_slots: Vec::new(),
         }));
         s.run("ClickSendMailItemButton()").unwrap();
-        // Cursor is now empty; the send item reads the attachment.
         assert!(s.eval::<bool>("return not CursorHasItem()").unwrap());
         let (name, _tex, count, quality): (String, String, i64, i64) =
             s.eval("return GetSendMailItem()").unwrap();
         assert_eq!((name.as_str(), count, quality), ("Linen Cloth", 7, 1));
 
-        // A send folds in the attachment's (bag, slot).
         select_default_stationery(&mut s);
         s.run("SendMail('Alt', 'stuff', '')").unwrap();
         assert_eq!(s.take_mail_send().unwrap().item, Some((0, 5)));
 
-        // Clicking again with an empty cursor detaches (back onto the cursor).
+        // Clicking with an empty cursor detaches.
         s.run("ClickSendMailItemButton()").unwrap();
         assert!(s.eval::<bool>("return CursorHasItem()").unwrap());
         assert!(s
@@ -1295,11 +1123,6 @@ mod stationery_tests {
         s
     }
 
-    /// The four verbs, shape by shape (`GetNumStationeries 0x4ae1f0`, `GetStationeryInfo 0x4ae230`,
-    /// `SelectStationery 0x4ae380`, `GetSelectedStationeryTexture 0x4ae3f0`): the count; the info
-    /// triple with a nil cost for a carried paper and three nils past the end; a numeric string
-    /// passes the number gate and a non-number raises the Usage; the selection stores the DBC id,
-    /// out of range deselects, and the texture is the bare basename or nil.
     #[test]
     fn the_stationery_family_answers_like_the_client() {
         let s = seated();
@@ -1350,8 +1173,6 @@ mod stationery_tests {
         );
     }
 
-    /// A send with no stationery selected aborts silently — no request, no error; with one
-    /// selected the request carries the DBC id. Opening/closing the mailbox clears it.
     #[test]
     fn a_send_needs_a_stationery_and_carries_its_id() {
         let mut s = seated();

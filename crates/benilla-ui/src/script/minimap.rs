@@ -1,30 +1,7 @@
-//! The `Minimap` method surface — the zoom API the FrameXML zoom buttons drive
-//! (`MinimapZoomIn`/`MinimapZoomOut` → `Minimap:SetZoom(Minimap:GetZoom() ± 1)`).
-//!
-//! `get_zoom_levels` (`0x6da9a0`) returns the constant 6, `set_zoom` clamps at 5 and marks the tile
-//! grid dirty, and the zoom index feeds the zoom-to-scale tables (`0x6da9b0`). The engine core
-//! carries only the index
-//! ([`MinimapState`]); the app renderer maps it to a world radius and draws the tiles.
-//! The two model attrs (`minimapArrowModel=`/`minimapPlayerModel=`) are modeled
-//! only as far as the Lua surface can see them: [`apply_model_attrs`] names the nine engine
-//! children the ctor built, and the app still draws every arrow from its own art.
-//!
-//! **The ping** is the same split, one rung further out: the two methods here are
-//! pure seam — `PingLocation` parks a click and `GetPingPosition` reads back what the app
-//! published — because the ping's only stored form is a WORLD point the app pins it to, and the
-//! engine core has no world. Nothing here holds the ping's position, its lifetime, or its art;
-//! putting any of that in Lua is what made the first attempt flaky.
-//!
-//! **The level persists**. The client keeps two halves: the live indices
-//! (`0x86f698` outdoor / `0x86f69c` indoor — our [`MinimapState`]) and the two CVar objects
-//! `minimapZoom`/`minimapInsideZoom` (both registered default `"3"`), which are what `Config.wtf`
-//! actually stores. `set_zoom` writes *both*; the minimap reset path (`0x6d9008`–`0x6d901f`)
-//! re-seeds the live index from the CVar's parsed int. benilla runs the same two halves at the same
-//! seam: `SetZoom` below writes the index and the CVar, and the app seeds the widget from the CVar
-//! table once, when the in-game UI materializes ([`super::UiScript::set_minimap_zoom`]).
-//!
-//! The methods live in their own registry table, consulted by the frame `__index` dispatcher only
-//! for Minimap frames — the same duck-typing posture as StatusBar's.
+//! The `Minimap` methods: zoom, the mask, the ping and the model attributes. The reference has six
+//! levels (`0x6da9a0`), a live index per mode (`0x86f698` outdoor, `0x86f69c` indoor) and the
+//! `minimapZoom`/`minimapInsideZoom` CVars (default `"3"`) that re-seed it (`0x6d9008`); the app
+//! maps the index to a radius (`0x6da9b0`) and holds the ping as a world point.
 
 use mlua::{Lua, Table};
 
@@ -32,12 +9,11 @@ use super::object::frame_handle_of;
 use super::Model;
 use crate::widget::{KindState, MinimapState, MINIMAP_ZOOM_LEVELS};
 
-/// Registry key of the Minimap method table (the MAXCSTACK discipline: Lua-side root, named key).
+/// Registry key of the Minimap method table.
 pub(super) const REG_MINIMAP_METHODS: &str = "__benilla_minimap_methods";
 
-/// Run `f` over a frame's Minimap state under one short write borrow. Errors if `this` is not a
-/// live Minimap (unreachable through the kind dispatcher, but the method table is a plain Lua
-/// value — a caller can fish it out and misapply it).
+/// Run `f` over a frame's Minimap state; errors on any other receiver, since the method table is
+/// a plain Lua value a caller can misapply.
 fn with_minimap<T>(
     lua: &Lua,
     this: &Table,
@@ -55,18 +31,9 @@ fn with_minimap<T>(
     }
 }
 
-/// `CMinimap::LoadXML 0x4ee2b0`'s model half: assign the two `<Minimap>` model attributes to the
-/// nine engine children the ctor already built. `minimapArrowModel` (engine default
-/// [`crate::widget::MINIMAP_DEFAULT_ARROW_MODEL`]) goes to children **1–8** via `0x4ee170`'s two loops
-/// (`0x4ee1b7` over the five at `+0x320`, `0x4ee204` over the three at `+0x314`);
-/// `minimapPlayerModel` (default [`crate::widget::MINIMAP_DEFAULT_PLAYER_MODEL`]) goes to child **9 alone**, via
-/// `0x4ee260`.
-///
-/// The split is what makes the nine *distinguishable* from Lua: without it `GetModel()` is `""` on
-/// all nine and nothing in the tuple says which one is the player arrow.
-///
-/// Runs before the `<Frames>` descent, because `0x4ee2b0` does its own work and only then chains to
-/// `CSimpleFrame::LoadXML 0x76a2f0`, which is what recurses into the children.
+/// The model half of `CMinimap::LoadXML` (`0x4ee2b0`): `minimapArrowModel` to engine children 1
+/// to 8 (`0x4ee170`), `minimapPlayerModel` to child 9 alone (`0x4ee260`). Runs before the
+/// `<Frames>` descent, as the reference chains to `CSimpleFrame::LoadXML` (`0x76a2f0`) after.
 pub(crate) fn apply_model_attrs(
     lua: &Lua,
     this: &Table,
@@ -102,26 +69,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     m.set(
         "GetZoom",
-        // Reads whichever index is live — the indoor one (`0x86f69c`) while inside a WMO, else the
-        // outdoor one (`0x86f698`). The client's `get_zoom_index` routes on the same flag.
+        // The indoor index while inside a WMO, else the outdoor one, as the reference routes.
         lua.create_function(|lua, this: Table| with_minimap(lua, &this, |m| m.active_zoom()))?,
     )?;
     m.set(
         "SetZoom",
         lua.create_function(|lua, (this, zoom): (Table, f64)| {
-            // The client's set_zoom clamps into [0, levels-1] (`0x6daa10`: clamp at 5). A negative
-            // or fractional Lua number truncates like lua_tonumber → int. It writes the index the
-            // inside flag selects, so the +/- buttons zoom the map you're actually looking at and
-            // each mode keeps its own level.
+            // Truncated and clamped to 0..=5 (`0x6daa10`), into the current mode's index.
             let clamped = (zoom.max(0.0) as u8).min(MINIMAP_ZOOM_LEVELS - 1);
             let inside = with_minimap(lua, &this, |m| {
                 m.set_active_zoom(clamped);
                 m.inside
             })?;
-            // …and it persists the level in the same breath: `set_zoom` writes the live index AND
-            // `CVar::Set`s the matching CVar (`minimapInsideZoom` indoors, `minimapZoom` out), which
-            // is the whole reason a zoom level survives a restart. The borrow above is released
-            // before this one — both reach the same `Model` app_data.
+            // The reference also sets the mode's CVar, which is what survives a restart. The borrow
+            // above is released first: both reach the same `Model`.
             super::cvars::set_from_engine(
                 &mut lua.app_data_mut::<Model>().expect("model app_data"),
                 if inside {
@@ -135,13 +96,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     m.set(
-        // SetMaskTexture(path) — the disc's mask art. A real 1.12 method (the name is in the 5875
-        // image) with no getter beside it, so this is write-only from Lua, exactly as there.
-        //
-        // An absent or empty path restores the engine default rather than leaving the map
-        // unmasked: `SetMaskTexture` is how a UI replaces the circle, never how it removes one,
-        // and a nil-means-square reading would hand every mistyped path a square minimap with no
-        // error. (pfUI passes a real path; this is about the failure mode, not about pfUI.)
+        // The disc's mask art, write-only as in the reference. An absent or empty path restores
+        // the default circle rather than unmasking the map; what the reference's `0x4ee4a0` does
+        // with one is untraced.
         "SetMaskTexture",
         lua.create_function(|lua, (this, path): (Table, Option<String>)| {
             let path = path.filter(|p| !p.is_empty());
@@ -151,21 +108,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "GetZoomLevels",
         lua.create_function(|lua, this: Table| {
-            // Validate the receiver like every kind method (the constant is per the client's
-            // `get_zoom_levels`, but a non-Minimap receiver is still a caller bug).
+            // The reference's constant, with the receiver still validated.
             with_minimap(lua, &this, |_| MINIMAP_ZOOM_LEVELS)
         })?,
     )?;
     m.set(
         "PingLocation",
-        // The minimap click (our own `Minimap_OnClick`, and any addon that replaced it): centre-
-        // relative offsets in **UI units**, x right / y up — exactly `GetCursorPosition()` minus
-        // `Minimap:GetCenter()`, both of which are UI-space. Parked, not converted: the app owns
-        // the view scale, and it drains this in the SAME frame it draws the map so the click
-        // resolves against the geometry the player actually clicked on.
-        //
-        // The receiver is validated but the value lives on the model — one pending click, not one
-        // per Minimap widget.
+        // Centre-relative offsets in UI units, x right and y up, parked for the app to resolve in
+        // the frame it draws the map; one pending click, not one per widget.
         lua.create_function(|lua, (this, x, y): (Table, f32, f32)| {
             with_minimap(lua, &this, |_| ())?;
             lua.app_data_mut::<Model>()
@@ -176,16 +126,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "GetPingPosition",
-        // The ping's normalized offsets from the widget centre (fractions of the widget side,
-        // x right / y up — the `MINIMAP_PING` event's own arg2/arg3 space), recomputed by the app
-        // from the stored world point every frame. So a caller polling this while walking sees
-        // the value MOVE, which is the whole point: the ping is pinned to the world, not to the
-        // map.
-        //
-        // **Two numbers, always** (`0x4eefd0`): the reference
-        // recomputes from statics nothing ever clears, and the stock `Minimap_OnUpdate` feeds the
-        // answer straight into `x * Minimap:GetWidth()` for the whole of its 5 s timer — a nil
-        // here is a Lua error on every frame of that window (1974).
+        // Fractions of the widget side from its centre (`MINIMAP_PING`'s arg2/arg3 space), which
+        // the app recomputes from the world point each frame. Always two numbers (`0x4eefd0`): the
+        // stock `Minimap_OnUpdate` multiplies them for 5 s, so a nil would error every frame.
         lua.create_function(|lua, this: Table| {
             with_minimap(lua, &this, |_| ())?;
             let (x, y) = lua

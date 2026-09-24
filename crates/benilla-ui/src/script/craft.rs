@@ -1,73 +1,11 @@
-//! The craft bindings (decision 0437 phase 3) — the Era-shaped Enchanting-window surface driving a
-//! faithful port of the real 1.12 `CraftFrame` (extracted from `interface.MPQ`:
-//! `Interface\FrameXML\Blizzard_CraftUI\CraftFrame.{xml,lua}`). The exact twin of [`super::tradeskill`]
-//! (same two-way seam, same "no wire" law, same FLAT-list INTERIM): the app pushes a **craft
-//! snapshot** ([`UiScript::set_craft`] — the recipes already resolved to name/subname/icon/
-//! description/reagents/tools/color by the app from `Spell.dbc`/`SkillLineAbility.dbc`/bag counts),
-//! and the Lua `DoCraft`/`CloseCraft` calls queue outbound **intents** the app drains
-//! ([`UiScript::take_craft_dos`] returns spell ids / [`UiScript::take_craft_close`]). The engine holds
-//! no recipe knowledge — a recipe is name/subname/icon/description/difficulty/reagents/tools, all
-//! app-resolved (0437 §"The decision" item 1). `CraftRecipe` reuses [`super::TradeSkillDifficulty`]
-//! outright (0437's own framing: "one solved pattern") rather than a second color enum — the Era
-//! `CraftTypeColor`/`TradeSkillTypeColor` tables are byte-identical (ref `Blizzard_CraftUI.lua:6-13` vs
-//! `Blizzard_TradeSkillUI.lua`'s own table), so the four color keys really are one vocabulary.
+//! The craft bindings the stock `Blizzard_CraftUI` window calls, over the recipe snapshot the app
+//! pushes ([`UiScript::set_craft`]); `DoCraft` and `CloseCraft` queue intents the app drains. The
+//! window has one action button, `DoCraft(GetCraftSelectionIndex())` (`Blizzard_CraftUI.xml:667`),
+//! and no Create All, so a craft intent is a bare spell id.
 //!
-//! ## Where Craft actually differs from TradeSkill (verified against the ref, not assumed)
-//!
-//! - **No Create All.** The 1.12 `CraftFrame` ships one action button (`DoCraft(GetCraftSelectionIndex())`,
-//!   ref `Blizzard_CraftUI.xml:667`) — no repeat-count EditBox, no `GetCraftskillRepeatCount`. `DoCraft`
-//!   therefore queues a bare spell id, never a `(spell id, count)` pair — [`UiScript::take_craft_dos`]
-//!   returns `Vec<u32>`.
-//! - **`GetCraftInfo` is a 7-tuple, not TradeSkill's 4-tuple**: `craftName, craftSubSpellName, craftType,
-//!   numAvailable, isExpanded, trainingPointCost, requiredLevel` (ref l.37/168/289) — the trailing three
-//!   are Beast Training's own fields (a pet ability's training-point cost + the pet's required level).
-//!   Beast Training is out of scope (0437's own line — the pet arc owns it), so v1 hardcodes
-//!   `trainingPointCost = 0` and `requiredLevel = 0` — never nonzero, so every ref branch gated on them
-//!   (`Craft_UpdateTrainingPoints`, the per-row Cost text, the red/green pet-level Requirements line) is
-//!   unreachable and dropped from the ported XML, not merely stubbed (this file's job is the tuple
-//!   shape; the XML's job is not painting dead branches).
-//! - **A recipe carries a `sub_name`** (`craftSubSpellName`) TradeSkill's own recipes never have — the
-//!   ref's row paints it in parens beside the name (`format(TEXT(PARENS_TEMPLATE), craftSubSpellName)`,
-//!   ref l.218) when non-empty. Enchanting itself rarely uses it (most enchant spells have no sub-rank
-//!   text), but the field is real in the ref's own tuple, so it ships in v1 rather than being folded away.
-//! - **A recipe carries a pre-resolved `description`** (`GetCraftDescription`, ref l.312) TradeSkill's
-//!   own recipe never exposes to Lua at all — Enchanting's detail pane shows the spell's flavor/effect
-//!   text above the reagent grid (ref `CraftDescription`), a region TradeSkill's own detail pane has no
-//!   analogue for.
-//! - **No product-item concept.** TradeSkill's `product_item`/`min_made`/`max_made`/`cooldown_secs`
-//!   have no Craft equivalent: an enchant recipe doesn't "create" a bag item the way a tradeskill recipe
-//!   does (it modifies an item in place, or resolves as a pure effect) — `CraftIcon`'s hover shows the
-//!   **spell**, not a product item (`GameTooltip:SetCraftSpell`, ref l.566, vs TradeSkill's
-//!   `SetTradeSkillItem` with no reagent index) — see [`super::tooltip_item`]'s `SetCraftSpell`.
-//! - **`needs_item_target` has no Lua getter.** It is pure app-side bookkeeping (0437 §"What scoping
-//!   verified": `TARGET_FLAG_ITEM` enchant casts need a client-side item pick after `DoCraft`) — the
-//!   ref XML plays no part in that flow (no such concept exists in the real client's item-target UX
-//!   either; it's the cursor/target machinery, not FrameXML). See `CraftFrame.xml`'s own header note.
-//!
-//! ## v1 is FLAT — no header rows (the law landed for TradeSkill; Craft is a named divergence)
-//!
-//! Exactly [`super::tradeskill`]'s own v1 law: [`CraftState::recipes`] renders as one flat row per
-//! recipe, `index` 1-based straight into the list — though the ORDER of that list is now this
-//! module's, not the app's ([`recipe_order`], the craft type's own byte-verified
-//! comparator, applied in [`UiScript::set_craft`]). `GetCraftInfo` therefore never
-//! returns the `"header"` `craftType` the ref Lua also checks for (ref l.38/77/199/252/292). The
-//! header/grouping law itself is no longer pending — decision 0446 confirmed it byte-exact
-//! (`0x4f60c0`) and TradeSkill grew the real tree engine ([`super::tradeskill`]'s `build_groups`)
-//! on it. Craft never got the same port and stays on this v1 flat render; `Expand/CollapseCraftSkillLine`
-//! are still literal no-ops, wired only so the ported XML's header-click handlers don't error
-//! (TradeSkill's `Expand/CollapseTradeSkillSubClass` precedent). 0446 also confirmed the one live case
-//! (Enchanting) renders flat either way — a single group's header suppresses under TradeSkill's own law
-//! too — so the divergence is currently unobservable, but it is real and named as a follow-up in
-//! decision 0530.
-//!
-//! ## The tooltip channels
-//!
-//! `GameTooltip:SetCraftItem(craftIndex, reagentIndex)` is registered in [`super::tooltip_item`],
-//! beside `SetTradeSkillItem`. `GameTooltip:SetCraftSpell(craftIndex)` lives in
-//! [`super::tooltip_spell`] beside `SetTrainerService`, its structural twin: both are SELECTORS
-//! into the shared spell/item builders rather than renderers of their own. The v1 two-line
-//! "name white, description gold" render is gone — `SetCraftSpell 0x533e90` funnels into the same
-//! `0x52e610`/`0x52b650` pair every other content binding does, so two lines were eight-plus short.
+//! Not built: the reference's header rows (`0x4f60c0`). The list is flat, `GetCraftInfo` never
+//! answers `"header"` and `Expand`/`CollapseCraftSkillLine` do nothing; Enchanting, with a single
+//! group, renders flat in the reference too.
 
 use mlua::{Lua, MultiValue, Value, Variadic};
 
@@ -75,35 +13,28 @@ use super::binding_abi::number_arg;
 use super::item_stats::item_link;
 use super::Model;
 
-/// One reagent a recipe consumes (`GetCraftReagentInfo`): the bag-counted need/have plus the resolved
-/// name/icon — both `None` until the app's ask-once item-template answer lands, the same miss path as
-/// [`super::tradeskill::TradeSkillReagent`] (this struct's exact twin).
+/// One reagent a recipe consumes (`GetCraftReagentInfo`); name and icon are `None` until the item
+/// template answer lands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CraftReagent {
-    /// The reagent's item entry — the tooltip channel key (`GameTooltip:SetCraftItem(i, j)` resolves
-    /// through this, never through `name`/`icon`).
+    /// The item entry `GameTooltip:SetCraftItem` resolves through.
     pub item: u32,
-    /// The resolved display name, or `None` while the ask-once template answer is still in flight.
     pub name: Option<String>,
-    /// The resolved icon texture path, or `None` while still in flight.
     pub icon: Option<String>,
-    /// How many this recipe consumes.
     pub need: u32,
-    /// How many the player's bags currently hold (`count_of`).
     pub have: u32,
 }
 
-/// What `GameTooltip:SetCraftSpell` describes for one row — the pre-resolved output of the
-/// app-side law (`ui_craft::craft_tooltip`, transcribing `SetCraftSpell 0x533e90`).
-/// [`super::TrainerTooltip`]'s twin in shape and its opposite in law: this one tests the recipe's
-/// **own** `Effect[i]` (24 `CREATE_ITEM` → the item, 36 `LEARN_SPELL` → the taught spell), never
-/// `57`, never sets `altCaster`, and does **not** validate that the hop resolves before taking it.
+/// What `GameTooltip:SetCraftSpell` (`0x533e90`) describes for a row, resolved by the app from the
+/// recipe's own `Effect[i]`: 24 `CREATE_ITEM` picks the item, 36 `LEARN_SPELL` the taught spell.
+/// Unlike the trainer's, it never tests 57 (`LEARN_PET_SPELL`), sets no altCaster and never checks
+/// that the target resolves.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CraftTooltip {
-    /// The ITEM builder, on `EffectItemType[i]` of the matched `CREATE_ITEM` slot.
+    /// The item builder (`0x52b650`) on the matched `CREATE_ITEM` slot's `EffectItemType`.
     Item(u32),
-    /// The SPELL builder, on `EffectTriggerSpell[i]` of the matched `LEARN_SPELL` slot — or on the
-    /// recipe spell itself when no slot matched, which is every enchant.
+    /// The spell builder (`0x52e610`) on the matched `LEARN_SPELL` slot's `EffectTriggerSpell`, or
+    /// on the recipe itself when no slot matches, as for every enchant.
     Spell(u32),
 }
 
@@ -113,98 +44,62 @@ impl Default for CraftTooltip {
     }
 }
 
-/// One recipe row (`GetCraftInfo` + its detail-pane getters): a known spell carrying attr
-/// `SPELL_ATTR_IS_TRADESKILL`, resolved by the app from `Spell.dbc`/`SkillLineAbility.dbc`/bag counts —
-/// [`super::tradeskill::TradeSkillRecipe`]'s twin, minus the product-item concept, plus `sub_name` +
-/// `description` (module doc, "Where Craft actually differs").
+/// One recipe row: a known `SPELL_ATTR_IS_TRADESKILL` spell, resolved by the app.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CraftRecipe {
-    /// The recipe spell id — what `DoCraft` queues as the `CMSG_CAST_SPELL` target.
+    /// What `DoCraft` queues for `CMSG_CAST_SPELL`.
     pub spell_id: u32,
     pub name: String,
-    /// The rank subtext (`craftSubSpellName`, ref `GetCraftInfo`'s 2nd return) — `""` for most
-    /// enchants; painted in parens beside the name when non-empty (ref l.217-221).
+    /// The rank subtext (`craftSubSpellName`), usually empty for an enchant; the stock window
+    /// paints it in parentheses when set (`Blizzard_CraftUI.lua:217-221`).
     pub sub_name: String,
-    /// The color band `GetCraftInfo`'s `craftType` reports — [`super::TradeSkillDifficulty`] REUSED
-    /// outright (module doc) for the four shared keys. The REAL client's Craft string table is
-    /// WIDER (`0x807e00`, pinned 2026-07-17): tier codes shifted 1..4 with `0 → "none"`, plus a
-    /// 5th `"used"` tier — a still-optimal recipe teaching a learnable `SPELL_EFFECT_LEARN_SPELL`,
-    /// which only Beast Training recipes carry. An Enchanting book (this window's one occupant)
-    /// can never produce either extra key, so the shared enum stays honest until the
-    /// beast-training arc feeds one (that arc grows the vocabulary).
+    /// `GetCraftInfo`'s `craftType`: one of the four keys `CraftTypeColor` colours as
+    /// `TradeSkillTypeColor` does (`Blizzard_CraftUI.lua:6-13`). The reference's table
+    /// (`0x807e00`) adds `"none"` and `"used"` (a still-optimal Beast Training recipe teaching a
+    /// learnable spell); Enchanting never produces either, and neither is built.
     pub difficulty: super::TradeSkillDifficulty,
-    /// `min` over reagents of `floor(have/need)` — `0` when any reagent is short; the count
-    /// `GetCraftInfo` reports as `numAvailable`.
+    /// `numAvailable`: the least `floor(have / need)` over the reagents.
     pub num_available: u32,
-    /// The recipe's own icon (there is no separate "product" icon concept for Craft — module doc);
-    /// `None` only while still in flight.
     pub icon: Option<String>,
-    /// The pre-substituted spell description (`GetCraftDescription`) — app-resolved (the $-token
-    /// engine lives app-side, [`super::tooltip_spell`]'s own law). `None` renders as a blank line (ref
-    /// l.316: `CraftDescription:SetText(" ")`, never hidden).
+    /// `GetCraftDescription`, `$`-tokens substituted by the app; `None` paints a blank line
+    /// (`Blizzard_CraftUI.lua:316`).
     pub description: Option<String>,
-    /// An `ENCHANT_ITEM`-family effect: `DoCraft` on this recipe arms an app-side item-target pick
-    /// (0437 §"What scoping verified": `TARGET_FLAG_ITEM`/`TARGET_FLAG_TRADE_ITEM`) — pure app-side
-    /// bookkeeping, no Lua getter (module doc).
+    /// An `ENCHANT_ITEM` effect (`TARGET_FLAG_ITEM`, `TARGET_FLAG_TRADE_ITEM`): `DoCraft` then arms
+    /// an app-side item pick. No Lua getter reads it.
     pub needs_item_target: bool,
-    /// Consumed reagents, in display order (`GetCraftNumReagents`/`GetCraftReagentInfo`).
     pub reagents: Vec<CraftReagent>,
-    /// The Requirements line's tool list — `(tool name, have)` pairs (e.g. `("Runed Copper Rod", true)`);
-    /// exposed to Lua as `GetCraftSpellFocus`'s alternating multivalue
-    /// ([`super::tradeskill::TradeSkillRecipe::tools`]'s twin).
+    /// The Requirements line's `(tool name, have)` pairs (`GetCraftSpellFocus`).
     pub tools: Vec<(String, bool)>,
-    /// What the detail-icon hover describes ([`CraftTooltip`]) — resolved app-side, because the law
-    /// reads `Spell.dbc` effect columns the engine cannot see.
     pub tooltip: CraftTooltip,
-    /// `Spell.dbc spellLevel` (`+0x74`) — the **rank-ordering key** of the Beast Training comparator
-    /// ([`recipe_order`]). Also what `GetCraftInfo`'s `requiredLevel` return is built from, though
-    /// that surface is still hardcoded `0` here (module doc).
+    /// `Spell.dbc` `spellLevel` (`+0x74`), the Beast Training comparator's rank key. The
+    /// reference's `requiredLevel` return comes from it; here that return is 0.
     pub spell_level: u32,
 }
 
-/// One open craft window: the skill line's name/rank, the craft type, and its recipe list. Pushed
-/// whole by the app ([`UiScript::set_craft`]); `None` means the window is closed.
+/// The open craft window, pushed whole by the app.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CraftState {
-    /// The window's title (`GetCraftName`) — e.g. `"Enchanting"`. Also the skill line's display name
-    /// for the rank StatusBar (`GetCraftDisplaySkillLine`'s first return) — Craft has only the one
-    /// name, unlike TradeSkill's separately-fetched `GetTradeSkillLine`.
+    /// The title `GetCraftName` answers, also `GetCraftDisplaySkillLine`'s name.
     pub name: String,
     pub rank: u32,
     pub max_rank: u32,
-    /// The **craft type** — the opener spell's `EffectMiscValue[0]`, which the client stores at
-    /// `ds:0xbdcfb8` (1 Beast Training · 3 Enchanting). It is the comparator switch: `cmp
-    /// ds:0xbdcfb8,1` @ `0x4f6765` picks `0x4f6920` for Beast Training, `0x4f67a0` otherwise.
+    /// The opener spell's `EffectMiscValue[0]`, stored at `ds:0xbdcfb8`: 1 Beast Training, 3
+    /// Enchanting. It picks the row comparator (`0x4f6765`).
     pub craft_type: u32,
-    /// The window's recipe rows in ANY order — [`UiScript::set_craft`] sorts them ([`recipe_order`]);
-    /// `index` is 1-based into the sorted list.
+    /// In any order; [`UiScript::set_craft`] sorts them.
     pub recipes: Vec<CraftRecipe>,
 }
 
-/// The craft type whose comparator carries the extra `spellLevel` key ([`recipe_order`]) — the
-/// opener spell 5149 "Beast Training"'s `EffectMiscValue[0]`. The only other type this window ever
-/// opens with is Enchanting's **3**, which takes the shorter comparator `0x4f67a0`.
+/// Beast Training's craft type, the `EffectMiscValue[0]` of spell 5149.
 const CRAFT_TYPE_BEAST_TRAINING: u32 = 1;
 
-/// The Craft window's **row order** — `0x4f6920` (craft type 1, Beast Training) / `0x4f67a0` (every
-/// other type, i.e. Enchanting). Both are the same cascade and
-/// the Beast Training one has one extra key:
+/// The craft row order: difficulty tier (`[+0xc]`) ascending, then name (collator `0x64a4c0`),
+/// then, at Beast Training only (`0x4f6920`; every other type uses `0x4f67a0`), `spellLevel`
+/// ascending, which orders a pet ability's ranks.
 ///
-/// 1. the **difficulty tier** `[+0xc]` ascending ([`super::TradeSkillDifficulty::tier`]);
-/// 2. the localized **name** (collator `0x64a4c0`);
-/// 3. **`Spell.dbc spellLevel`** (`+0x74`) ascending — **only** in `0x4f6920`. This is the key that
-///    orders a pet ability's ranks, and the whole reason Beast Training needs its own comparator.
-///
-/// What benilla had instead was `SkillLineAbility.req_skill_value`, descending — a column the client
-/// never reads anywhere in its craft TU, and which is a constant `1` on every row of skill line 261
-/// *and* 333 in the shipped DBC. So the primary key was inert and the order collapsed to the name.
-///
-/// The trailing `spell_id` key is **ours, not the client's**: its cascade ends at `spellLevel`, so
-/// rows tying on everything above (Charge's six ranks all carry `spellLevel = 0`) fall through to its
-/// qsort's residue over an array benilla doesn't reproduce. Something must break that tie, and a
-/// deterministic key is the only honest choice — benilla's was a `HashSet`'s iteration order, which
-/// re-shuffled the pane between runs. Ascending spell id is also ascending rank across every 1.12
-/// pet-ability family, so it agrees with the reference wherever the reference is defined.
+/// Deviation: a last `spell_id` key breaks the remaining ties (Charge's six ranks all have
+/// `spellLevel` 0), because the reference leaves them to its qsort over an array benilla does not
+/// reproduce; ascending id is ascending rank in every 1.12 pet-ability family.
 fn recipe_order(a: &CraftRecipe, b: &CraftRecipe, craft_type: u32) -> std::cmp::Ordering {
     a.difficulty
         .tier()
@@ -220,9 +115,8 @@ fn recipe_order(a: &CraftRecipe, b: &CraftRecipe, craft_type: u32) -> std::cmp::
         .then_with(|| a.spell_id.cmp(&b.spell_id))
 }
 
-/// The WoW enUS collator (`0x64a4c0` — the case-**insensitive** one the craft comparators use, unlike
-/// the trainer rows' `0x64a480`), approximated: case-insensitive alphabetical, with the raw bytes as
-/// a stable tie-break so equal-when-folded names keep a deterministic order.
+/// Approximates the case-insensitive enUS collator the craft comparators call (`0x64a4c0`; the
+/// trainer rows use `0x64a480`): case-folded order, raw bytes breaking ties.
 fn collate(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase()
         .cmp(&b.to_lowercase())
@@ -230,14 +124,8 @@ fn collate(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open craft window's recipe snapshot. Snapshots re-push every
-    /// time a resolved field changes — no diffing happens here. On a push, the engine **sorts the
-    /// rows** into the craft type's own order ([`recipe_order`] — the ordering is the engine's, like
-    /// the trainer tree's and the tradeskill list's, so one binding's verified comparator lives in
-    /// exactly one place) and then **preserves the selection across the replace**: if the previously
-    /// selected recipe's spell id still appears in the new list, the selection follows it to its new
-    /// index; otherwise it clears to `0` ([`super::tradeskill::set_trade_skill`]'s own
-    /// selection-survival law, verbatim). Clearing (`None`) always resets the selection.
+    /// Push the open craft window's snapshot, or clear it with `None`. A push sorts the rows and
+    /// keeps the selection on its spell id, clearing it when that recipe is gone.
     pub fn set_craft(&mut self, state: Option<CraftState>) {
         let mut model = self.model_mut();
         match state {
@@ -261,33 +149,27 @@ impl super::UiScript {
         }
     }
 
-    /// Drain the spell id intents `DoCraft` queued since the last call — the engine resolves each
-    /// clicked recipe's INDEX to its spell id, so the app sends `CMSG_CAST_SPELL` without needing the
-    /// index mapping. NO count: unlike [`super::tradeskill::take_trade_skill_dos`], the 1.12 CraftFrame
-    /// has no Create All (module doc) — one `DoCraft` call, one queued spell id.
+    /// Drain the spell ids `DoCraft` queued, one per call, with no count.
     pub fn take_craft_dos(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().craft_dos)
     }
 
-    /// Whether `CloseCraft` was called since the last drain (and clear the flag). Like
-    /// [`super::tradeskill::take_trade_skill_close`], the client-side close sends no packet.
+    /// Whether `CloseCraft` was called since the last drain; the close sends no packet.
     pub fn take_craft_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().craft_close)
     }
 }
 
-/// The recipe at a 1-based index, or `None` when out of range / no window is open.
+/// The recipe at a 1-based index.
 fn recipe(model: &Model, index: usize) -> Option<&CraftRecipe> {
     let n = index.checked_sub(1)?;
     model.craft.as_ref()?.recipes.get(n)
 }
 
-/// The recipe count of the open window (`0` when none is open).
 fn num_recipes(model: &Model) -> usize {
     model.craft.as_ref().map_or(0, |c| c.recipes.len())
 }
 
-/// An optional string as a Lua value (`nil` when absent).
 fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
     Ok(match s {
         Some(s) => Value::String(lua.create_string(s)?),
@@ -295,7 +177,7 @@ fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
     })
 }
 
-/// A `bool` as the Era `1`/`nil` shape.
+/// A `bool` as the reference's `1` or nil.
 fn era_bool(b: bool) -> Value {
     if b {
         Value::Integer(1)
@@ -308,9 +190,8 @@ fn era_bool(b: bool) -> Value {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetCraftName() → the window's title ("UNKNOWN" when closed — TradeSkill's own
-    // GetTradeSkillLine no-window convention, since the ref gives Craft no documented closed shape of
-    // its own; CraftFrameTitleText:SetText(GetCraftName()) is called unconditionally, ref l.101).
+    // GetCraftName() → the title, or "UNKNOWN" when closed (the reference's closed answer is
+    // untraced); the stock window sets its title unconditionally (`Blizzard_CraftUI.lua:101`).
     g.set(
         "GetCraftName",
         lua.create_function(|lua, ()| {
@@ -323,9 +204,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftDisplaySkillLine() → name, rank, maxRank; name is NIL when closed (ref l.108-109 tests
-    // it for truthiness to Show/Hide the whole rank StatusBar) — unlike GetCraftName above, which
-    // always returns a string.
+    // GetCraftDisplaySkillLine() → name, rank, maxRank; the name is nil when closed, which hides
+    // the rank bar (`Blizzard_CraftUI.lua:108-109`).
     g.set(
         "GetCraftDisplaySkillLine",
         lua.create_function(|lua, ()| {
@@ -342,7 +222,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // → the number of recipes the open window offers (0 when closed).
+    // GetNumCrafts() → the recipe count, 0 when closed.
     g.set(
         "GetNumCrafts",
         lua.create_function(|lua, ()| {
@@ -351,19 +231,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftInfo(index) → craftName, craftSubSpellName, craftType, numAvailable, isExpanded,
-    // trainingPointCost, requiredLevel (ref l.37/168/289's own 7-tuple — module doc). `craftType` is
-    // the difficulty color key, never "header"; `isExpanded` is always nil; the trailing two are
-    // Beast Training's own fields, hardcoded 0 (out of scope, module doc). OOB → a single nil.
-    // The two link verbs (1973).
-    //
-    // GetCraftItemLink(index) — `0x4f72a0`: the number gate raises its Usage; then the spell's
-    // Spell.dbc `castUI` decides. An Enchanting recipe (`castUI == 3` — this window's craft type,
-    // and the only shipped input: every castUI-3 row, including the twenty that create an item
-    // such as Runed Copper Rod) takes the ENCHANT leg, which cannot fail:
-    // `|cffffffff|Henchant:<spellId>|h[<spell name>]|h|r` — fixed white, the spell's id and name.
-    // Any other craft type would scan the effects for CREATE_ITEM, which no shipped row carries,
-    // and answer ZERO values — Beast Training's rows do.
+    // GetCraftItemLink(index) (`0x4f72a0`): a non-number raises its usage. The reference keys on
+    // the spell's `castUI`: 3, Enchanting's craft type, for which the type stands in here, answers
+    // `|cffffffff|Henchant:<spell id>|h[<spell name>]|h|r` and cannot miss, even for the twenty
+    // recipes that create an item; any other type scans for a `CREATE_ITEM` effect no shipped row
+    // has, so Beast Training answers zero values.
     g.set(
         "GetCraftItemLink",
         lua.create_function(|lua, index: Value| {
@@ -381,9 +253,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftReagentItemLink(index, reagentIndex) — `0x4f7730`, a byte-clone of the trade-skill
-    // one with its own Usage: both arguments number-gated, `reagentIndex` 1-based over the
-    // non-empty slots, ALWAYS one value — the reagent's `|Hitem:` link or nil.
+    // GetCraftReagentItemLink(index, reagentIndex) (`0x4f7730`): both arguments number-gated,
+    // `reagentIndex` counting the non-empty slots from 1; always one value, the item link or nil.
     g.set(
         "GetCraftReagentItemLink",
         lua.create_function(|lua, (index, reagent): (Value, Value)| {
@@ -409,6 +280,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // GetCraftInfo(index) → craftName, craftSubSpellName, craftType, numAvailable, isExpanded,
+    // trainingPointCost, requiredLevel (`Blizzard_CraftUI.lua:168`); one nil past the end.
+    // `isExpanded` is always nil; Beast Training's cost and level answer 0, not built.
     g.set(
         "GetCraftInfo",
         lua.create_function(|lua, index: usize| {
@@ -428,7 +302,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftIcon(index) → icon texture path (nil while in flight / OOB).
+    // GetCraftIcon(index) → the icon path, nil while in flight or past the end.
     g.set(
         "GetCraftIcon",
         lua.create_function(|lua, index: usize| {
@@ -437,8 +311,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftDescription(index) → the pre-substituted description, or nil (no description / OOB) —
-    // ref l.312 tests this return for truthiness before painting it.
+    // GetCraftDescription(index) → the description or nil, which the stock window tests before
+    // painting (`Blizzard_CraftUI.lua:312`).
     g.set(
         "GetCraftDescription",
         lua.create_function(|lua, index: usize| {
@@ -450,7 +324,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftNumReagents(index) → this recipe's reagent count (0 when OOB / no window).
+    // GetCraftNumReagents(index) → the reagent count, 0 past the end or when closed.
     g.set(
         "GetCraftNumReagents",
         lua.create_function(|lua, index: usize| {
@@ -459,8 +333,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftReagentInfo(index, reagentIndex) → name, icon, need, have (a single nil when the
-    // recipe/reagent index is OOB) — TradeSkill's own GetTradeSkillReagentInfo shape, verbatim.
+    // GetCraftReagentInfo(index, reagentIndex) → name, icon, need, have; one nil past the end.
     g.set(
         "GetCraftReagentInfo",
         lua.create_function(|lua, (index, reagent_index): (usize, usize)| {
@@ -479,9 +352,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftSpellFocus(index) → an alternating (name, has) multivalue, one pair per Requirements
-    // tool (e.g. "Runed Copper Rod", 1) — fed into BuildColoredListString (ref l.361), TradeSkill's
-    // own GetTradeSkillTools shape. Empty when the recipe has no tools / index is OOB.
+    // GetCraftSpellFocus(index) → name, has for each required tool, alternating, the shape
+    // `BuildColoredListString` takes (`Blizzard_CraftUI.lua:361`); nothing when there are none.
     g.set(
         "GetCraftSpellFocus",
         lua.create_function(|lua, index: usize| {
@@ -497,17 +369,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftButtonToken() → "CREATE" (v1 constant): the ref resolves the Create button's label via
-    // getglobal(GetCraftButtonToken()) (ref l.106), swapping to a "TRAIN" token for Beast Training —
-    // out of scope (module doc), so this always returns the one token.
+    // GetCraftButtonToken() → "CREATE", the global naming the button's label
+    // (`Blizzard_CraftUI.lua:106`); Beast Training's "TRAIN" is not built.
     g.set(
         "GetCraftButtonToken",
         lua.create_function(|lua, ()| Ok(Value::String(lua.create_string("CREATE")?)))?,
     )?;
 
-    // GetCraftSelectionIndex() / SelectCraft(index) — the engine-held selection (1-based, 0 = none).
-    // Out-of-range selects clear it; the getter clamps to the current recipe count — TradeSkill's own
-    // selection contract, verbatim.
+    // SelectCraft(index) / GetCraftSelectionIndex(): the selection, 1-based with 0 for none; an
+    // out-of-range select clears it, and the getter answers 0 past the recipe count.
     g.set(
         "SelectCraft",
         lua.create_function(|lua, index: u32| {
@@ -531,7 +401,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // DoCraft(index) — queue the recipe's SPELL ID (no count, module doc). Out of range → ignored.
+    // DoCraft(index): queue the row's spell id; out of range is ignored.
     g.set(
         "DoCraft",
         lua.create_function(|lua, index: usize| {
@@ -543,8 +413,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseCraft() — client-side close (no packet, vanilla): flag it so the app clears its local
-    // state.
+    // CloseCraft(): no packet; the flag tells the app to clear its state.
     g.set(
         "CloseCraft",
         lua.create_function(|lua, ()| {
@@ -554,10 +423,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Expand/CollapseCraftSkillLine(index) — no-ops in v1: the recipe list is flat (the header law
-    // landed for TradeSkill, decision 0446, but was never ported here — module doc), so the ported
-    // XML's header-click handlers have nothing to fold — TradeSkill's own
-    // Expand/CollapseTradeSkillSubClass precedent.
+    // Expand/CollapseCraftSkillLine(index): no-ops over the flat list (module doc).
     g.set(
         "ExpandCraftSkillLine",
         lua.create_function(|_, _args: Variadic<Value>| Ok(()))?,
@@ -575,10 +441,9 @@ mod tests {
     use super::*;
     use crate::script::UiScript;
 
-    /// Enchanting's `EffectMiscValue[0]` — the craft type whose comparator has no `spellLevel` key.
+    /// Enchanting's craft type, whose comparator has no `spellLevel` key.
     const CRAFT_TYPE_ENCHANTING: u32 = 3;
 
-    /// One recipe fixture — a single-reagent, single-tool row, distinct spell ids per name.
     fn recipe(
         spell_id: u32,
         name: &str,
@@ -587,8 +452,6 @@ mod tests {
     ) -> CraftRecipe {
         CraftRecipe {
             spell_id,
-            // The fixture's default subject: the recipe itself (the enchant case — no matching
-            // effect slot), so a test that cares about the item arm sets it explicitly.
             tooltip: CraftTooltip::Spell(spell_id),
             name: name.into(),
             sub_name: String::new(),
@@ -609,10 +472,7 @@ mod tests {
         }
     }
 
-    /// A two-recipe Enchanting window: Minor Beastslaying (trivial, craftable) and Minor Health
-    /// (optimal, out of reagents). Declared trivial-first on purpose — the engine sorts by
-    /// difficulty tier ascending ([`recipe_order`]), so the window renders **Minor Health at index 1**
-    /// and Beastslaying at 2, whatever order the app pushed.
+    /// Two Enchanting recipes, pushed trivial first; the sort puts Minor Health at index 1.
     fn state() -> CraftState {
         CraftState {
             name: "Enchanting".into(),
@@ -709,11 +569,10 @@ mod tests {
             "CREATE"
         );
 
-        // A header row never appears in v1 — GetCraftInfo's type is always a difficulty band.
         assert!(s
             .eval::<bool>("local _,_,t = GetCraftInfo(1) return t ~= 'header'")
             .unwrap());
-        // Expand/CollapseCraftSkillLine are wired but do nothing observable.
+        // Expand and collapse do nothing.
         s.run("ExpandCraftSkillLine(1) CollapseCraftSkillLine(1)")
             .unwrap();
         assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), 2);
@@ -727,15 +586,13 @@ mod tests {
         s.run("SelectCraft(2)").unwrap();
         assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 2);
 
-        // A re-list that turns 7418 optimal moves it to index 1 — the selection FOLLOWS the spell
-        // id, not the index (and this is the case the engine-side sort makes reachable).
+        // Turning 7418 optimal moves it to index 1, and the selection follows the spell id.
         let mut promoted = state();
         promoted.recipes[0].difficulty = super::super::TradeSkillDifficulty::Optimal;
         promoted.recipes[0].name = "Aaa Beastslaying".into();
         s.set_craft(Some(promoted));
         assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 1);
 
-        // A re-push that drops the selected recipe entirely clears the selection.
         let mut without_7418 = state();
         without_7418.recipes.remove(0);
         s.set_craft(Some(without_7418));
@@ -755,7 +612,6 @@ mod tests {
         );
         assert!(s.take_craft_dos().is_empty(), "drained");
 
-        // An out-of-range index is ignored.
         s.run("DoCraft(9)").unwrap();
         assert!(s.take_craft_dos().is_empty());
     }
@@ -807,7 +663,7 @@ mod tests {
             ("Runed Copper Rod", Some(1), "Arcanite Rod", None)
         );
 
-        // A recipe with no tools returns an empty multivalue (arity 0, not one nil).
+        // No tools: zero values, not one nil.
         let mut c2 = state();
         c2.recipes[1].tools.clear();
         s.set_craft(Some(c2));
@@ -830,15 +686,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 0);
     }
 
-    /// **Beast Training's rank order**, pinned against an emulated run of the
-    /// real `0x4f6920` over real `Spell.dbc` values — and the regression for the director's report
-    /// that "Beast Training lists a skill's ranks out of ascending order" (ledger B229).
-    ///
-    /// The fixture is the reported pane: four Arcane Resistance ranks and four Fire Resistance
-    /// ranks, pushed **shuffled** (as a `HashSet`'s iteration order used to deliver them), all on
-    /// one difficulty tier because pet abilities carry no trivial ranks. Name groups them; the
-    /// `spellLevel` key — 20/30/40/50 per rank — is what orders the ranks inside a group, and it is
-    /// the key the old `req_skill_value`-descending sort did not have.
+    /// The expected order is an emulated run of `0x4f6920` over the shipped `Spell.dbc` values.
     #[test]
     fn beast_training_orders_ranks_by_spell_level() {
         let rank = |spell_id: u32, name: &str, level: u32| CraftRecipe {
@@ -855,7 +703,7 @@ mod tests {
             tools: vec![],
             spell_level: level,
         };
-        // Shuffled on purpose — the exact shape of the report (Arcane read 1, 4, 3, 5).
+        // Shuffled on purpose.
         let recipes = vec![
             rank(24508, "Arcane Resistance", 30),
             rank(24441, "Fire Resistance", 30),
@@ -895,10 +743,8 @@ mod tests {
             ]
         );
 
-        // The falsifiable control: the SAME rows at the Enchanting craft type select
-        // `0x4f67a0`, which has no `spellLevel` key — so the ranks fall to the trailing spell-id
-        // tie-break instead. That they still come out ascending here is benilla's determinism, not
-        // the reference's order; what matters is that the two types differ at all.
+        // The same rows at the Enchanting type take `0x4f67a0`, with no `spellLevel` key: the ranks
+        // fall to the spell-id tie-break, benilla's order rather than the reference's.
         s.set_craft(Some(CraftState {
             name: "Beast Training".into(),
             rank: 0,
@@ -920,15 +766,11 @@ mod tests {
         );
     }
 
-    /// The craft link pair (`0x4f72a0`; 1973): an Enchanting recipe
-    /// answers the ENCHANT link — fixed white, the spell's id and name — and cannot miss; another
-    /// craft type answers zero values (no shipped CREATE_ITEM input); the reagent link is nil
-    /// until its template is in the store, then the item link in its quality colour; the raises.
     #[test]
     fn the_craft_link_verbs_answer_the_clients_shapes() {
         let mut s = UiScript::new().unwrap();
         s.set_craft(Some(state()));
-        // Row 1 is whichever recipe the window's own order puts first: the link names THAT spell.
+        // Row 1 is whichever recipe sorts first.
         let first = s.eval::<String>("return (GetCraftInfo(1))").unwrap();
         let spell = state()
             .recipes

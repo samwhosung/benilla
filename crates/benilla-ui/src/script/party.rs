@@ -1,257 +1,167 @@
-//! The party/raid **Era API surface** (phase 2) — the engine-free seam mirroring
-//! [`super::unit`]: the app pushes a roster **snapshot** ([`UiScript::set_party`]) built from its own
-//! `GroupState` wire mirror, and the `GetNumPartyMembers`/`GetPartyLeaderIndex`/`GetLootMethod`/…
-//! globals here read that plain data. The invite/uninvite/promote/loot-config calls are the outbound
-//! half: they queue a [`PartyRequest`] the app drains ([`UiScript::take_party_requests`]) and turns
-//! into the matching `CMSG_GROUP_*`/`CMSG_LOOT_METHOD` send — no ECS/net reach from the engine,
-//! exactly [`super::unit`]'s split.
+//! The party and raid bindings. The app pushes a roster snapshot ([`UiScript::set_party`]) that
+//! the getters read; the verbs queue a [`PartyRequest`] the app drains
+//! ([`UiScript::take_party_requests`]) into the send. Per-member game state is the unit snapshot
+//! under `party1`..`party4` ([`super::unit::UnitState`]).
 //!
-//! Per-member game state (health/mana/level/reaction/…) does **not** live here — it rides the
-//! existing per-unit snapshots under the `"party1"`..`"party4"` tokens, the same
-//! feed `"player"`/`"target"` use ([`super::unit::UnitState`]). This module owns only the
-//! roster-level facts a unit snapshot can't carry: how many members, who leads, the loot
-//! configuration. `PartyState::default()` is "not in a group" — every getter then answers the
-//! solo-player shape a fresh client reports (`GetNumPartyMembers()` `0`, `GetLootMethod()`
-//! `("group", nil)`, …).
-//!
-//! The **raid roster** ([`PartyState::raid`]) is the same shape one level out: the app pushes the
-//! whole array — the player included, which is why `UnitInRaid("player")` needs no token special
-//! case the way `UnitInParty` does — and `GetNumRaidMembers`/`GetRaidRosterInfo`/`UnitInRaid` read
-//! it. It is deliberately ONE list rather than a count beside a list: the reference indexes the
-//! array `0xb712a8` bounded by the count `0xb713e0`, and two of the three bindings walk exactly
-//! that pair, so a client whose count and array can disagree hands an addon looping
-//! `for i = 1, GetNumRaidMembers()` a miss tuple it will then index. The per-member grid/UI is
-//! the RaidFrame, which reads exactly this array.
-//!
-//! The **raid management verbs** are the outbound half again, and they address
-//! members three different ways because the reference's own bindings do: by **raid index**
-//! (`SetRaidSubgroup`, `SwapRaidSubgroup`, `UninviteFromRaid` — the RaidFrame has the index in
-//! hand), by **name** (`PromoteByName`, `PromoteToAssistant`, `DemoteAssistant` — UnitPopup
-//! carries a name, never an index), and by **nothing at all** (`ConvertToRaid`, `DoReadyCheck`,
-//! `RequestRaidInfo`). Resolving index/name to whatever the wire wants is the app's job at the
-//! drain, exactly as `InviteToParty`'s token resolution already is: this side stays plain data.
-//!
-//! The **saved-instance list** ([`SavedInstanceInfo`]) is a second app-pushed snapshot, separate
-//! from [`PartyState`] because it arrives on its own packet (`SMSG_RAID_INSTANCE_INFO`) and
-//! outlives every roster change — folding it into the roster push would clear it every time the
-//! group moved.
+//! The raid roster ([`PartyState::raid`]) is one list, the player included, because the
+//! reference's count (`0xb713e0`) bounds the very array `GetRaidRosterInfo` indexes (`0xb712a8`).
+//! The saved-instance list ([`SavedInstanceInfo`]) is a separate push, as a roster push replaces
+//! [`PartyState`] whole.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::number_arg;
 use super::Model;
 
-/// One roster member's engine-owned facts (decision 0434 §2/§3) — deliberately thin: everything else
-/// (health, class, reaction, …) is the unit snapshot under its `"partyN"` token.
+/// One party member; everything else about them is the unit snapshot under their `partyN` token.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PartyMemberInfo {
     pub name: String,
-    /// The member's GUID — the identity `UnitInParty` matches arbitrary tokens (the target)
-    /// against (decision 0434 §5's popup menu pick). `0` = unknown, never matches.
+    /// The identity `UnitInParty` matches any token against; `0` never matches.
     pub guid: u64,
 }
 
-/// One saved raid lockout — `GetSavedInstanceInfo`'s three returns. Pushed whole
-/// by the app ([`UiScript::set_saved_instances`]) from `SMSG_RAID_INSTANCE_INFO`, with the map
-/// **name** already resolved: the wire carries a `Map.dbc` id and the DBC is the app's to read.
+/// One saved raid lockout, `GetSavedInstanceInfo`'s three returns, from `SMSG_RAID_INSTANCE_INFO`
+/// with the `Map.dbc` name resolved by the app ([`UiScript::set_saved_instances`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SavedInstanceInfo {
-    /// The instance's display name (`Map.dbc`'s own), e.g. `"Molten Core"`.
+    /// The `Map.dbc` name, e.g. `"Molten Core"`.
     pub name: String,
-    /// The instance id — what the panel prints in its ID column.
     pub instance: u32,
-    /// Seconds remaining until the lockout resets; the panel runs it through `SecondsToTime`.
+    /// Seconds until the lockout resets.
     pub reset: u32,
 }
 
-/// One **raid roster** row — `GetRaidRosterInfo`'s nine returns, as the app resolved them
-/// (`0x4bb560`). Field order is the push order of the reference's success tuple.
-///
-/// The row is the *record*, not the answer: two of the nine are computed at the binding
-/// ([`Self::subgroup`]'s 1-based exposure, [`Self::zone`]'s offline substitution), because both
-/// adjustments live in the binding's own bytes and doing them at the feed would put a Lua-facing
-/// convention in the app.
+/// One raid roster row, `GetRaidRosterInfo`'s nine returns in push order (`0x4bb560`). The
+/// binding, not the row, applies the subgroup's +1 and the offline zone.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RaidMemberInfo {
-    /// Return 1 — the member's name, from the guid-keyed name cache (`0x4bb5ee`).
-    ///
-    /// **Empty means "not cached yet", and that is not a cosmetic difference**: the reference
-    /// sends a cache miss to the *same* arm an out-of-range index takes (`0x4bb5f8 je 0x4bb7b9`),
-    /// so an occupied slot whose name has not arrived is indistinguishable from no slot at all.
-    /// Reproduced — [`raid_roster_info`] answers the miss tuple for an empty name.
+    /// Return 1, from the name cache (`0x4bb5ee`). Empty means not cached, which the reference
+    /// answers with the miss tuple, as for an empty slot (`0x4bb5f8 je 0x4bb7b9`).
     pub name: String,
-    /// The member's GUID — what `UnitInRaid` matches an arbitrary token against. `0` = unknown,
-    /// never matches (the reference's membership helper `0x4baee0` short-circuits GUID `0:0` to
-    /// false at its entry).
+    /// The identity `UnitInRaid` matches a token against; `0` never matches, as the reference's
+    /// membership test rejects a zero guid (`0x4baee0`).
     pub guid: u64,
-    /// Return 2 — the rank, **exposed exactly as stored** (`0x4bb607 fild [edi+0xc]`, no
-    /// adjustment). The numeric convention is not derivable from the binding alone; the corpus
-    /// does, consistently: `ChatLog.lua:351-353` prints `@` for `2` and `*`
-    /// for `1`, i.e. **0 member · 1 assistant · 2 leader**, which is what the app fills.
+    /// Return 2, exposed as stored (`0x4bb607 fild [edi+0xc]`): 0 member, 1 assistant, 2 leader,
+    /// the convention addons read (`ChatLog.lua:351-353`).
     pub rank: u32,
-    /// Return 3 — the subgroup **as stored, 0-based**. The binding exposes `subgroup + 1`
-    /// (`0x4bb61a inc eax`, a VERIFIED adjustment); keeping the record 0-based means the wire's
-    /// own value (`GroupMemberEntry::flags` bits 0-2) lands here unconverted and the +1 has one
-    /// home.
+    /// Return 3, stored 0-based as the wire's `GroupMemberEntry::flags` bits 0-2 carry it; the
+    /// binding exposes it 1-based (`0x4bb61a inc eax`).
     pub subgroup: u32,
-    /// Return 4 — the member's level. `0` when neither a streamed object nor a stats packet has
-    /// carried one (the reference's own third arm pushes `0` there too).
+    /// Return 4, `0` until an object or a stats packet carries it, as in the reference's third arm.
     pub level: u32,
-    /// Return 5 — the **localized** class name ("Warrior"), `None` → `nil`.
+    /// Return 5, the localized class name.
     pub class: Option<String>,
-    /// Return 6 — the class file/token ("WARRIOR"), the one non-localized string in the tuple.
+    /// Return 6, the class token (`"WARRIOR"`), the one unlocalized string.
     pub class_file: Option<String>,
-    /// Return 7 — the member's zone name while [`Self::online`]; `None` → `nil`. **When offline
-    /// this field is not read at all**: the reference's third arm pushes the localized global
-    /// `PLAYER_OFFLINE` in the zone slot rather than `nil`, and the binding does that itself.
+    /// Return 7 while [`Self::online`]; offline, the binding pushes the `PLAYER_OFFLINE` global
+    /// instead and never reads this.
     pub zone: Option<String>,
-    /// Return 8 — connected. Also the switch for return 7's two arms, because it is in the
-    /// reference: return 8 is `1` on exactly the two arms that produced a real zone and `nil` on
-    /// the `PLAYER_OFFLINE` one.
+    /// Return 8, which also picks return 7's offline arm.
     pub online: bool,
-    /// Return 9 — **deliberately unlabelled.** The mechanism is confirmed: a streamed member
-    /// answers `1` iff `[obj+0x110 +0x40] <= 0` (UNIT_FIELD_HEALTH by the descriptor line this
-    /// repo already anchors), and an unstreamed one iff the roster record's `[+0x18]` carries
-    /// **both** bits `0x4` and `0x1`. The name itself is a guess, not settled: two independent
-    /// reads proposed "isDead" positionally, but it is not adopted here.
-    ///
-    /// Three things corroborate that guess without settling it, recorded here so whoever settles
-    /// it starts ahead: the whole corpus destructures position 9 as `isDead`
-    /// (`ChatLog.lua:347`, `CT_RaidAssist/CT_RAOptions.lua:89`, `oRA2/Leader/Ready.lua:241`);
-    /// health ≤ 0 is this client's own dead test; and our wire's status byte —
-    /// `benilla_protocol::messages::member_status`, from vmangos `Group.cpp:45-63` — spells
-    /// `ONLINE = 0x01` and `DEAD = 0x04`, which is *exactly* the bit pair the second arm tests.
-    /// The app fills this from that pair, so we reproduce the mechanism whatever it turns out to
-    /// be called.
+    /// Return 9, unnamed: `1` for a streamed member whose health (`[obj+0x110 +0x40]`) is 0 or
+    /// below, or an unstreamed one whose roster status (`[+0x18]`) has both `0x1` and `0x4`,
+    /// vmangos's `ONLINE` and `DEAD`, from which the app fills it. Addons read it as `isDead`.
     pub ninth: bool,
 }
 
-/// The party/raid roster snapshot, pushed whole by the app each frame it changes
-/// ([`UiScript::set_party`]) — the `GroupState` merged view's roster-level facts.
-/// `PartyState::default()` = not in a group.
+/// The party and raid roster snapshot the app pushes whole when it changes
+/// ([`UiScript::set_party`]); the default is ungrouped.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PartyState {
-    /// The other party members, `"party1"`..`"party4"` order (the recipient never appears in its own
-    /// list, matching `SMSG_GROUP_LIST`); empty = not in a group. Never more than 4 — in a raid
-    /// this is our own subgroup's slice and the whole roster is [`Self::raid`].
+    /// The other party members in `party1`..`party4` order, empty when ungrouped. The player is
+    /// never in it, as in `SMSG_GROUP_LIST`; in a raid it is our own subgroup's slice.
     pub members: Vec<PartyMemberInfo>,
-    /// The party leader, on the Lua `GetPartyLeaderIndex` scale: `0` the player leads, `1..=4` that
-    /// `members` slot (1-based) leads.
+    /// `GetPartyLeaderIndex`: `0` the player, `1..=4` that `members` slot.
     pub leader_index: u32,
-    /// **The cached group-leader GUID** — the reference's `[0xbc75f8]:[0xbc75fc]` pair, `0` when
-    /// ungrouped. Fed straight from the wire's leader GUID, not derived from
-    /// [`Self::leader_index`].
-    ///
-    /// It exists because `UnitIsPartyLeader`'s second leg is a GUID compare and an index cannot
-    /// stand in for it: the leg has to answer for a member whose object the client does **not**
-    /// hold — an out-of-range `party3`, any `raidN` — where there is no descriptor to read the
-    /// flag from, and it has to answer for the *resolved token's* GUID rather than for a slot.
-    ///
-    /// **Compared WITHOUT a zero guard**, which is the load-bearing part and reads like a bug:
-    /// `IsPartyLeader 0x4e9130` short-circuits on a `0:0` cached leader, and
-    /// `UnitIsPartyLeader 0x516210` does not. So an unresolvable-but-non-raising argument (none,
-    /// `nil`, `""`, `"target"` with no target) resolves to `0:0`, matches the zeroed leader, and
-    /// the reference answers **`1` while solo**. A client that answers `nil` there is not
-    /// reproducing 1.12.
+    /// The cached group-leader guid (the reference's `[0xbc75f8]:[0xbc75fc]`), `0` when
+    /// ungrouped, fed from the wire rather than derived from [`Self::leader_index`].
+    /// `UnitIsPartyLeader` (`0x516210`) compares a resolved token's guid with it and, unlike
+    /// `IsPartyLeader` (`0x4e9130`), has no zero guard, so an unresolvable token answers `1` while
+    /// solo.
     pub leader_guid: u64,
-    /// **The active player's own GUID** — the reference's `0x468550` read (`[0xb41414]+0xc0`),
-    /// `0` out of world. Fed by the app beside the leader; the pair is the leader gate the
-    /// ready-check timeout runs on (`CheckReadyCheckTime`): the reference compares
-    /// the two guids and nothing else, so a solo player (leader `0`, own non-zero) never matches.
+    /// The player's own guid (`0x468550`, `[0xb41414]+0xc0`), `0` out of world. With
+    /// [`Self::leader_guid`] it is the ready-check timeout's leader gate, a bare guid compare, so a
+    /// solo player never matches.
     pub own_guid: u64,
-    /// The **whole raid roster**, `GetRaidRosterInfo`'s 1-based array — empty outside a raid,
-    /// and **including the player** (the reference's array does; it is why `UnitInRaid("player")`
-    /// answers `1` in a raid and why this list is not `members`'s recipient-excluded shape).
-    /// `GetNumRaidMembers()` is its length: one list, no count beside it (module doc).
+    /// The whole raid roster, 1-based for `GetRaidRosterInfo`, empty outside a raid. It includes
+    /// the player, as the reference's array does, so `UnitInRaid("player")` answers `1`;
+    /// `GetNumRaidMembers()` is its length.
     pub raid: Vec<RaidMemberInfo>,
-    /// `GetLootMethod`'s method string: `"freeforall"` | `"roundrobin"` | `"master"` | `"group"` |
-    /// `"needbeforegreed"`. `Default::default()` is `""` — the *native* reports it as `"group"` (the
-    /// live shape for a solo/fresh player) when empty; the app is expected to always push a real
-    /// method once grouped.
+    /// `GetLootMethod`'s method: `"freeforall"`, `"roundrobin"`, `"master"`, `"group"` or
+    /// `"needbeforegreed"`. Empty, the default, reads as `"freeforall"`, the reference's answer
+    /// before any group.
     pub loot_method: String,
-    /// The master looter, as a party index (`0` the player, `1..=4` that `members` slot) — the loot
-    /// method's second return, `masterlooterPartyID`. `None` = no master looter (any method but
-    /// `"master"`, or a master-loot group with none assigned yet).
+    /// The master looter as a party index (`0` the player, `1..=4` a `members` slot),
+    /// `GetLootMethod`'s second return.
     pub master_looter: Option<u32>,
-    /// `GetLootThreshold`'s quality floor (`2..=4`) below which non-leader loot isn't round-robin/
-    /// master gated. `0` (the default) is fine while ungrouped — the getter has nothing to floor.
+    /// `GetLootThreshold`'s item quality, `2..=4` once grouped.
     pub loot_threshold: u32,
 }
 
-/// Outbound party/loot intents queued by the Era API's action calls, drained by the app
-/// ([`UiScript::take_party_requests`]) into the matching `CMSG_*` send. Plain data — no mlua/ECS
-/// types, [`super::unit::UnitState`]'s `TargetUnit` seam's twin.
+/// Outbound party and raid intents, drained by the app ([`UiScript::take_party_requests`]) into
+/// the matching send.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PartyRequest {
-    /// `AcceptGroup()` — accept the pending invite.
+    /// `AcceptGroup()`.
     Accept,
-    /// `DeclineGroup()` — decline the pending invite.
+    /// `DeclineGroup()`.
     Decline,
-    /// `LeaveParty()` — leave the current group (no confirmation popup).
+    /// `LeaveParty()`.
     Leave,
-    /// `InviteByName(name)` — invite by character name.
+    /// `InviteByName(name)`.
     InviteName(String),
-    /// `InviteToParty(unit)` — invite by unit TOKEN (e.g. `"target"`); the app resolves it to a name.
+    /// `InviteToParty(unit)`, by unit token; the app resolves it to a name.
     InviteUnit(String),
-    /// `UninviteFromParty(unit)` — kick a roster member, addressed by unit token (e.g. `"party2"`).
+    /// `UninviteFromParty(unit)`, by unit token.
     UninviteUnit(String),
-    /// `PromoteToPartyLeader(unit)` — hand leadership to a roster member, by unit token.
+    /// `PromoteToPartyLeader(unit)`, by unit token.
     PromoteUnit(String),
-    /// `SetLootMethod(method[, masterName])` — the master-looter argument is a character NAME (the
-    /// reference's own shape); the app resolves it to a roster member for the send.
+    /// `SetLootMethod(method[, masterName][, threshold])`; the app resolves the master looter's
+    /// name to a roster member.
     LootMethod {
         method: String,
         master_name: Option<String>,
-        /// `SetLootMethod`'s optional THIRD argument. The binding reads it whatever the method is
-        /// (`0x4e92a0`, presence-checked via `0x6f34d0`), unlike the master-looter argument, which
-        /// it reads only for `"master"`.
+        /// The reference reads it for every method (`0x4e92a0`, presence-checked by `0x6f34d0`),
+        /// the master looter's name only for `"master"`.
         threshold: Option<u32>,
     },
-    /// `SetLootThreshold(n)` — the new quality floor.
+    /// `SetLootThreshold(n)`.
     LootThreshold(u32),
-    /// `SetRaidTarget(unit, index)` — mark (1..=8) or clear (0) the raid-target icon on a
-    /// unit, addressed by token; the app resolves the token to a guid for the
-    /// `MSG_RAID_TARGET_UPDATE` send (decision 0434 §5's submenu, §6's board law).
+    /// `SetRaidTarget(unit, index)`: icon 1 to 8, or 0 to clear; the app resolves the token to a
+    /// guid for `MSG_RAID_TARGET_UPDATE`.
     SetRaidTarget { unit: String, index: u8 },
-    // ── The raid-management verbs (decision 1549's RaidFrame) ───────────────────────────────
-    /// `ConvertToRaid()` — the Raid tab's own button (`CMSG_GROUP_RAID_CONVERT`, leader only).
+    // ── The raid-management verbs ───────────────────────────────────────────────────────────
+    /// `ConvertToRaid()`, leader only (`CMSG_GROUP_RAID_CONVERT`).
     ConvertToRaid,
-    /// `SetRaidSubgroup(index, group)` — move raid row `index` (1-based) into subgroup `group`
-    /// (1-based). The wire (`CMSG_GROUP_CHANGE_SUB_GROUP`) takes a NAME and a 0-based subgroup;
-    /// resolving both is the app's, because only it holds the roster the index means.
+    /// `SetRaidSubgroup(index, group)`, both 1-based. The wire (`CMSG_GROUP_CHANGE_SUB_GROUP`)
+    /// takes a name and a 0-based subgroup, which the app resolves.
     SetSubgroup { index: u32, group: u32 },
-    /// `SwapRaidSubgroup(index, other)` — trade two raid rows' subgroups
-    /// (`CMSG_GROUP_SWAP_SUB_GROUP`, two names on the wire). The drag's "dropped on an occupied
-    /// slot" arm; [`Self::SetSubgroup`] is its "dropped on an empty one".
+    /// `SwapRaidSubgroup(index, other)`: trade two raid rows' subgroups
+    /// (`CMSG_GROUP_SWAP_SUB_GROUP`, two names on the wire).
     SwapSubgroup { index: u32, other: u32 },
-    /// `PromoteByName(name)` — hand leadership over, addressed by name rather than by token
-    /// (`CMSG_GROUP_SET_LEADER`, whose body is a guid — the app resolves it). UnitPopup's
-    /// RAID_LEADER row; [`Self::PromoteUnit`] is the same send from a party token.
+    /// `PromoteByName(name)` (`CMSG_GROUP_SET_LEADER`, whose guid the app resolves).
     PromoteName(String),
-    /// `PromoteToAssistant(name)` / `DemoteAssistant(name)` — the raid assistant flag
-    /// (`CMSG_GROUP_ASSISTANT_LEADER`: guid + grant byte).
+    /// `PromoteToAssistant(name)` / `DemoteAssistant(name)` (`CMSG_GROUP_ASSISTANT_LEADER`).
     AssistantLeader { name: String, grant: bool },
-    /// `UninviteFromRaid(index)` — kick raid row `index` (1-based). The reference's own row-index
-    /// form; `CMSG_GROUP_UNINVITE` takes a name, which the app resolves from the same roster the
-    /// index addresses.
+    /// `UninviteFromRaid(index)`: a 1-based raid row the app resolves to the name
+    /// `CMSG_GROUP_UNINVITE` takes.
     UninviteRaid(u32),
-    /// `DoReadyCheck()` — start one (`MSG_RAID_READY_CHECK`, empty body; leader only).
+    /// `DoReadyCheck()`, leader only (`MSG_RAID_READY_CHECK`, empty body).
     ReadyCheckStart,
-    /// `ConfirmReadyCheck(ready)` — answer one (`MSG_RAID_READY_CHECK`, one byte).
+    /// `ConfirmReadyCheck(ready)` (`MSG_RAID_READY_CHECK`, one byte).
     ReadyCheckAnswer(bool),
-    /// `RequestRaidInfo()` — ask for the saved-instance list (`CMSG_REQUEST_RAID_INFO`).
+    /// `RequestRaidInfo()` (`CMSG_REQUEST_RAID_INFO`).
     RequestRaidInfo,
 }
 
 impl super::UiScript {
-    /// Push the roster snapshot, replacing whatever was there. A bare setter (the `spellbook`/
-    /// `action` shape) — firing any `PARTY_*`/roster-changed event is the app's own diff-and-fire
-    /// job, never auto-fired here.
+    /// Push the roster snapshot, replacing it, and run `SMSG_GROUP_LIST`'s ready-check leg over the
+    /// new roster. The app fires the `PARTY_*` events.
     pub fn set_party(&mut self, state: PartyState) {
         self.model_mut().party = state;
-        // `SMSG_GROUP_LIST`'s ready-check leg (`0x4ba5f0`, reached only from the `0x7d` handler):
-        // the roster scan over the NEW roster — a member who left took their pending flag with
-        // them — and when nobody is left pending, a forced close.
+        // The ready-check leg (`0x4ba5f0`, from the `0x7d` handler): a member who left drops their
+        // pending flag, and nobody left pending force-closes the check.
         let lua = self.lua();
         let mut model = self.model_mut();
         if model.ready_check.deadline.is_some() {
@@ -263,12 +173,9 @@ impl super::UiScript {
         }
     }
 
-    /// The `MSG_RAID_READY_CHECK` open form arrived. The handler `0x4ba360` splits
-    /// on the leader guid: the **leader** takes the response-collection arm — reads the per-member
-    /// records the body carries (none, on vmangos) and force-closes if nobody is left pending;
-    /// everyone **else** arms the 30 s deadline (`0x4ba535`) that the leader-gated tick never
-    /// acts on for them, and gets the `READY_CHECK` popup — which the app fires on its own
-    /// ticket edge, so this method carries only the state half.
+    /// The `MSG_RAID_READY_CHECK` open form arrived (handler `0x4ba360`). The leader force-closes
+    /// if nobody is left pending; anyone else arms the 30 s deadline (`0x4ba535`), which their
+    /// leader-gated tick never acts on. The app fires the `READY_CHECK` popup.
     pub fn ready_check_request(&mut self, we_lead: bool) {
         let lua = self.lua();
         let now = clock(lua);
@@ -282,17 +189,11 @@ impl super::UiScript {
         }
     }
 
-    /// One member's answer, forwarded to the leader (`{guid, status}`).
-    /// The handler's leader arm (`0x4ba360`): the record's guid is matched against the roster
-    /// entry in full (`0x4ba3f9`/`0x4ba405`),
-    /// and a match stores **the constant 0** into the "has not answered" flag whatever the status
-    /// byte says (`0x4ba40e`; `ecx` is zeroed before the loop and never written) — so any answer,
-    /// ready or not, clears the member. The status byte gates one thing: a `0` prints
-    /// `RAID_MEMBER_NOT_READY` ("%s is not ready") for that member at arrival (`0x4ba414`), the
-    /// same raw-`_G` → format → `CHAT_MSG_SYSTEM` path as the summary. Then the close test: once
-    /// no member is both pending and ONLINE the check closes at once (`0x4ba4ce` → the worker)
-    /// rather than at the deadline — an offline member who never answered does not hold the
-    /// check open, and is still listed as AFK when it closes.
+    /// One member's answer, relayed to the leader (handler `0x4ba360`, guid matched in full at
+    /// `0x4ba3f9`/`0x4ba405`). Any answer clears the member's pending flag, as the handler stores a
+    /// constant 0 whatever the status byte (`0x4ba40e`); a `0` also prints `RAID_MEMBER_NOT_READY`
+    /// for them (`0x4ba414`). Once no member is both pending and online the check closes at once
+    /// (`0x4ba4ce`), so an offline member never holds it open but is still listed as AFK.
     pub fn ready_check_answered(&mut self, guid: u64, ready: bool) {
         let lua = self.lua();
         let mut model = self.model_mut();
@@ -316,9 +217,8 @@ impl super::UiScript {
         }
     }
 
-    /// The summary lines the timeout worker composed since the last drain — the reference's
-    /// `0x49a870(text, 10)` = a `CHAT_MSG_SYSTEM` line the client prints itself; the app pushes
-    /// them into the chat log the way every other client-composed system line goes.
+    /// Drain the ready-check lines composed since the last call; the reference prints each as a
+    /// `CHAT_MSG_SYSTEM` line (`0x49a870(text, 10)`).
     pub fn take_ready_check_lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().ready_check.lines)
     }
@@ -328,54 +228,33 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().party_requests)
     }
 
-    /// Push the saved raid-lockout list, replacing whatever was there. A bare
-    /// setter like [`Self::set_party`] — firing `UPDATE_INSTANCE_INFO` is the app's diff-and-fire
-    /// job, never auto-fired here.
+    /// Push the saved raid-lockout list, replacing it; the app fires `UPDATE_INSTANCE_INFO`.
     pub fn set_saved_instances(&mut self, saved: Vec<SavedInstanceInfo>) {
         self.model_mut().saved_instances = saved;
     }
 
-    /// Drain the whisper targets `ChatFrame_SendTell` queued since the last call — the app opens
-    /// its chat edit box prefilled `/w <name> ` for each (in practice the popup queues one).
+    /// Drain the names `ChatFrame_SendTell` queued; the app opens the chat edit box on
+    /// `/w <name> ` for each.
     pub fn take_tell_requests(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().tell_requests)
     }
 }
 
-/// **The leader predicate — ONE function, because the reference has one.**
-///
-/// `IsRaidLeader 0x4bb8c0` opens `mov esi,[0xbc75f8]` · `mov edi,[0xbc75fc]` and compares the pair
-/// against the local player's own GUID (`0x468550`). `IsPartyLeader 0x4e9130` opens
-/// `mov eax,[0xbc75fc]` · `mov esi,[0xbc75f8]` and compares **the same two globals** against the
-/// same GUID; its only extra instruction is an `or ecx,eax; je` short-circuit on a `0:0` cached
-/// leader, which is behaviourally inert (a zero GUID can never equal a live player's), and both
-/// prologues are byte-identical in the globals they load.
-///
-/// **So `IsRaidLeader()` is TRUE for an ordinary 5-man party leader**, and its body reads no
-/// raid-vs-party flag and never touches the roster array/count the other two raid bindings use.
-/// Stubbing it `nil` "because there is no raid" would be a divergence — which is exactly why the
-/// two registrations below share this function rather than each growing their own rule.
+/// Whether the player leads the group. `IsRaidLeader` (`0x4bb8c0`) and `IsPartyLeader`
+/// (`0x4e9130`) both compare the cached leader guid (`[0xbc75f8]`, `[0xbc75fc]`) with the player's
+/// own (`0x468550`) and read no raid flag, so `IsRaidLeader()` is true for a party leader.
 fn leads_the_group(model: &Model) -> bool {
-    // Our stand-in for "the cached leader GUID equals mine": the app's leader index is `0` when
-    // the player leads. The `members.is_empty()` guard is the reference's `0:0` case — ungrouped,
-    // the cached pair is zero and matches nobody, whereas our `leader_index` defaults to `0`.
+    // Stand-in for that compare: `leader_index` is `0` when we lead but also when ungrouped, where
+    // the reference's zero leader guid matches nobody, hence the empty-roster guard. In a raid both
+    // cover only our subgroup: a leader elsewhere also reads `0`, and a leader alone in theirs has
+    // no `members`, so there it can differ from the guid compare.
     !model.party.members.is_empty() && model.party.leader_index == 0
 }
 
-/// `GetRaidRosterInfo`'s nine values for a **1-based** index — the whole binding's behaviour,
-/// pulled out of the registration so the arity and the miss tuple are testable as one unit.
-///
-/// **Nine values on every path** (`0x4bb560`, every return site `mov eax,9`): there is no arm that
-/// returns fewer and none that returns nothing. Out of range, index ≤ 0, a null slot and a
-/// name-cache miss all converge on `0x4bb7b9`, which pushes — in order — `nil`, the number `0`,
-/// the number `1`, the number `1`, then five `nil`s. A client that models "no such member" as zero
-/// values breaks `local name = GetRaidRosterInfo(i)` differently from the real client, and one
-/// that models it as `nil, nil, …` breaks `ChatLog.lua:346`'s `for i = 1, MAX_RAID_MEMBERS` sweep
-/// in the subgroup slot.
-///
-/// Takes the row **by value**, not the model: every arm below re-enters Lua (`create_string`, and
-/// the `PLAYER_OFFLINE` global read), and this crate's rule is that a callback drops its `app_data`
-/// borrow before it does (the module doc's MAXCSTACK/borrow discipline).
+/// `GetRaidRosterInfo`'s values for one row, or the miss tuple for `None`. Nine on every path
+/// (`0x4bb560`, every return `mov eax,9`): out of range, an empty slot and a name-cache miss all
+/// reach `0x4bb7b9`, which pushes `nil, 0, 1, 1` and five `nil`s. Takes the row by value because
+/// every arm re-enters Lua, and a callback drops its `app_data` borrow before that.
 fn raid_roster_info(lua: &Lua, row: Option<RaidMemberInfo>) -> mlua::Result<MultiValue> {
     let Some(m) = row else {
         return Ok(MultiValue::from_vec(vec![
@@ -394,10 +273,9 @@ fn raid_roster_info(lua: &Lua, row: Option<RaidMemberInfo>) -> mlua::Result<Mult
         Some(s) => lua.create_string(s).map(Value::String),
         None => Ok(Value::Nil),
     };
-    // Return 7: a real zone while online, else the **localized global** `PLAYER_OFFLINE` — read
-    // out of the VM exactly as `0x703bf0` reads it, so a translated GlobalStrings.lua translates
-    // this too. A missing global lands on `0x6f3890`'s NULL guard, which pushes `nil` and still
-    // reports one value; `Value::Nil` here is that.
+    // Return 7: the zone while online, else the `PLAYER_OFFLINE` global read from the VM
+    // (`0x703bf0`), so a translated GlobalStrings.lua translates it; a missing global pushes `nil`
+    // (`0x6f3890`).
     let zone = if m.online {
         opt_str(&m.zone)?
     } else {
@@ -410,7 +288,7 @@ fn raid_roster_info(lua: &Lua, row: Option<RaidMemberInfo>) -> mlua::Result<Mult
     Ok(MultiValue::from_vec(vec![
         lua.create_string(&m.name).map(Value::String)?,
         Value::Integer(i64::from(m.rank)),
-        // `0x4bb61a inc eax` — stored 0-based, exposed 1-based (VERIFIED adjustment).
+        // Stored 0-based, exposed 1-based (`0x4bb61a inc eax`).
         Value::Integer(i64::from(m.subgroup) + 1),
         Value::Integer(i64::from(m.level)),
         opt_str(&m.class)?,
@@ -421,13 +299,11 @@ fn raid_roster_info(lua: &Lua, row: Option<RaidMemberInfo>) -> mlua::Result<Mult
     ]))
 }
 
-/// Register the party/raid globals reading the roster snapshot store (the same style/place `unit`
-/// registers the `Unit*` globals).
+/// Register the party and raid globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetNumPartyMembers() → the roster's member count (0 = not in a group; never counts the player
-    // themself, matching SMSG_GROUP_LIST's recipient-excluded array).
+    // GetNumPartyMembers() → the other members, never counting the player; 0 when ungrouped.
     g.set(
         "GetNumPartyMembers",
         lua.create_function(|lua, ()| {
@@ -436,9 +312,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetNumRaidMembers() → the raid roster's length (0 outside a raid). The count the reference
-    // reads (`0xb713e0`) bounds the very array `GetRaidRosterInfo` indexes (`0xb712a8`), so it is
-    // the same list here, not a number beside one.
+    // GetNumRaidMembers() → the raid roster's length, 0 outside a raid.
     g.set(
         "GetNumRaidMembers",
         lua.create_function(|lua, ()| {
@@ -447,21 +321,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetRaidRosterInfo(index) → name, rank, subgroup, level, class, fileName, zone, online, <9th>
-    //
-    // 1-BASED, and **exactly nine values on every path** — see [`raid_roster_info`] for the arity
-    // law and the fixed miss tuple. The ONLY raise in `0x4bb560` is a non-number argument
-    // (`0x4bb582 call 0x6f34d0` → `0x4bb591 call 0x6f4940`, usage string `0x8474a0`); an index of
-    // 0, of −1, of 500, or of a live-but-uncached member all return the tuple.
+    // GetRaidRosterInfo(index) → name, rank, subgroup, level, class, fileName, zone, online and an
+    // unnamed ninth, 1-based. Its only raise is a non-number argument (`0x4bb582 call 0x6f34d0`,
+    // `0x4bb591 call 0x6f4940`, usage string `0x8474a0`).
     g.set(
         "GetRaidRosterInfo",
         lua.create_function(|lua, index: Value| {
             let index = number_arg(lua, index, "Usage: GetRaidRosterInfo(index)")?;
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                // `0x4bb5bb dec eax` then `0x4bb5be jae` — an UNSIGNED compare after the
-                // decrement, so ONE branch catches index ≤ 0 and index > count together (and the
-                // `dec` wraps rather than trapping, which `wrapping_sub` keeps true of `i32::MIN`).
+                // One unsigned compare after the decrement (`0x4bb5bb dec eax`, `0x4bb5be jae`)
+                // catches an index of 0 or below and one past the count; `dec` wraps, and
+                // `wrapping_sub` keeps that true of `i32::MIN`.
                 usize::try_from(index.wrapping_sub(1))
                     .ok()
                     .and_then(|i| model.party.raid.get(i))
@@ -473,8 +344,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // IsRaidLeader() → 1 / nil, and TRUE FOR A PARTY LEADER — the shared predicate's whole point
-    // ([`leads_the_group`]). No arguments, never raises.
+    // IsRaidLeader() → 1 or nil, true for a party leader too (`leads_the_group`).
     g.set(
         "IsRaidLeader",
         lua.create_function(|lua, ()| {
@@ -487,7 +357,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetPartyMember(id) → 1 if id is a live 1-based roster slot, else nil (era 1/nil shape).
+    // GetPartyMember(id) → 1 for a filled 1-based slot, else nil.
     g.set(
         "GetPartyMember",
         lua.create_function(|lua, id: i64| {
@@ -510,8 +380,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // IsPartyLeader() → 1 iff we're grouped AND lead it, else nil (a solo player doesn't "lead").
-    // Shares [`leads_the_group`] with `IsRaidLeader` because the reference shares the globals.
+    // IsPartyLeader() → 1 when grouped and leading, else nil; the same predicate as IsRaidLeader.
     g.set(
         "IsPartyLeader",
         lua.create_function(|lua, ()| {
@@ -524,16 +393,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetLootMethod() → lootmethod, masterlooterPartyID (the era 2-tuple return; later clients add
-    // a raid index third return we don't carry). An unset method (never pushed) reports the
-    // fresh-player shape: "group", nil.
+    // GetLootMethod() → lootmethod, masterlooterPartyID: two returns in 1.12.
     g.set(
         "GetLootMethod",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            // **`freeforall`, not `group`.** The three cells this reads sit past `.data`'s raw end
-            // in the zero-filled tail, so a client that has never been in a group answers the
-            // zeroth method — which is `freeforall`.
+            // Never grouped, the reference reads zero-filled cells past `.data`'s end, and method
+            // 0 is `freeforall`.
             let method = if model.party.loot_method.is_empty() {
                 "freeforall"
             } else {
@@ -547,7 +413,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetLootThreshold() → the quality floor (0 while ungrouped is fine — nothing to floor).
+    // GetLootThreshold() → the loot quality threshold.
     g.set(
         "GetLootThreshold",
         lua.create_function(|lua, ()| {
@@ -556,8 +422,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The outbound half: each call queues a PartyRequest, the app drains and sends. No-return, era
-    // shape (fire-and-forget, like TargetUnit/CastSpell).
+    // The party verbs queue a `PartyRequest` and return nothing.
     g.set(
         "AcceptGroup",
         lua.create_function(|lua, ()| {
@@ -614,9 +479,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // SetLootMethod("method" [,master] [,threshold]) — the reference's own usage string
-    // (`0x84c42c`). The master-looter argument is read ONLY for "master"; the threshold argument
-    // is optional for every method.
+    // SetLootMethod("method" [,master] [,threshold]), the reference's usage string (`0x84c42c`).
     g.set(
         "SetLootMethod",
         lua.create_function(
@@ -639,13 +502,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // SetRaidTarget(unit, index) — the ENGINE verb. `SetRaidTargetIcon` is NOT one: it is FrameXML,
-    // `function SetRaidTargetIcon(unit, index)` at `TargetFrame.lua:486`, a toggle wrapper that
-    // calls this with 0 when the unit already wears `index`. We had registered the wrapper's name on
-    // this body, which behaved correctly and so never showed — until 1751 put `TargetFrame.lua` on
-    // the chain and the wrapper started calling a `SetRaidTarget` that did not exist. Proof both
-    // ways: no `function SetRaidTarget(` anywhere in the reference's FrameXML, and both
-    // `TargetFrame.lua:488`/`:490` and `Bindings.xml:1160` call it bare.
+    // SetRaidTarget(unit, index) is the engine verb. `SetRaidTargetIcon` is FrameXML's toggle
+    // around it (`TargetFrame.lua:486`), and `TargetFrame.lua:488`, `:490` and `Bindings.xml:1160`
+    // call it bare.
     g.set(
         "SetRaidTarget",
         lua.create_function(|lua, (unit, index): (String, u8)| {
@@ -657,28 +516,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // IsRaidOfficer() → nil, always: a 1.12 PARTY has no officer rank (the assistant flag is a
-    // raid concept). The popup's leader-or-assistant gates read this and fall back to the leader
-    // half. The roster now carries the assistant rank ([`RaidMemberInfo::rank`], `1`), so the
-    // *data* to answer this exists — what does not is a reading of `IsRaidOfficer`'s own body,
-    // and "it is probably rank ≥ 1 for the player's row" is a guess, not a mechanism. Left nil
-    // until someone reads the bytes.
+    // IsRaidOfficer() → always nil: its reference body (`0x4bb910`) is untraced. So the RaidFrame
+    // enables its add-member button for the leader only, where the reference also enables it for
+    // an assistant.
     g.set(
         "IsRaidOfficer",
         lua.create_function(|_, ()| Ok(Value::Nil))?,
     )?;
 
     // ── The raid-management verbs ────────────────────────────────────────────
-    //
-    // All nine share the same shape (`ConvertToRaid 0x4bbc90`, `SetRaidSubgroup 0x4bb990`,
-    // `SwapRaidSubgroup 0x4bbb00`, `PromoteToAssistant 0x4bbd20`, `RequestRaidInfo 0x4a1850`,
-    // `GetSavedInstanceInfo 0x4a1920`, `UninviteFromRaid 0x48a580`, `SetRaidRosterSelection
-    // 0x4bb820`): each marshals and delegates to a C++ method or net-send, with no inline
-    // fidelity math. So the *binding* has no law of its own to reproduce: the law is the wire's,
-    // which `benilla-protocol`'s `group` family already carries byte-golden, and the marshalling
-    // is the queue below. Nothing here is a guess about a body nobody has read.
-    //
-    // They queue rather than send for the module doc's reason: this crate cannot reach the net.
+    // Each only marshals its arguments into a client call or a send (`ConvertToRaid 0x4bbc90`,
+    // `SetRaidSubgroup 0x4bb990`, `SwapRaidSubgroup 0x4bbb00`, `PromoteToAssistant 0x4bbd20`,
+    // `RequestRaidInfo 0x4a1850`, `GetSavedInstanceInfo 0x4a1920`, `UninviteFromRaid 0x48a580`,
+    // `SetRaidRosterSelection 0x4bb820`), so the verbs here queue a request.
     g.set(
         "ConvertToRaid",
         lua.create_function(|lua, ()| {
@@ -687,9 +537,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // SetRaidSubgroup(index, group) / SwapRaidSubgroup(index, other) — the drag's two landings.
-    // Both take numbers through the shared argument gate, so a non-number raises the reference's
-    // usage error rather than silently queueing a zero.
+    // SetRaidSubgroup(index, group) / SwapRaidSubgroup(index, other), the drag's two drops: a
+    // non-number raises the usage error rather than queueing a zero.
     g.set(
         "SetRaidSubgroup",
         lua.create_function(|lua, (index, group): (Value, Value)| {
@@ -752,10 +601,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let now = clock(lua);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // The worker `0x4bb1d0`: every roster member except the caller is
-            // flagged "has not answered" (`0x4bb24c`), the caller cleared (`0x4bb258`), the 30 s
-            // deadline armed (`0x4bb2b6`) — then the packet. A party has no raid roster, so the
-            // flags are empty there and the leader's own echo closes the check at once.
+            // The worker `0x4bb1d0` flags every roster member but the caller as pending
+            // (`0x4bb24c`, `0x4bb258`) and arms the 30 s deadline (`0x4bb2b6`), then sends. A
+            // party has no raid roster, so nothing is flagged and the leader's echo closes it.
             let own = model.party.own_guid;
             model.ready_check.unanswered = model
                 .party
@@ -769,16 +617,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // `CheckReadyCheckTime` (`0x4bc120` → `0x4bb310`) — the ready-check timeout tick, called from
-    // the stock `UIParent.xml`'s `<OnUpdate>` every frame and driving the 30-second expiry alone
-    // (nothing in the engine polls it). Four conjuncts, any failure writing nothing: a deadline is
-    // armed, it has been reached, and the active player's guid equals the group leader's — a
-    // LEADER gate, so it is observably inert for anyone else. On expiry it disarms the deadline
-    // (the only clear-to-zero outside module init), lists every roster member still flagged as
-    // unanswered, and prints `RAID_MEMBERS_AFK` with the `", "`-joined names — or
-    // `READY_CHECK_NO_AFK` — as a `CHAT_MSG_SYSTEM` line. Both keys are read raw off `_G`
-    // (`0x704350`: `lua_gettable` on GLOBALSINDEX, empty-string default), never through
-    // `GetText`. Sends no packet, raises nothing, returns nothing.
+    // CheckReadyCheckTime() (`0x4bc120` → `0x4bb310`), called every frame from stock
+    // `UIParent.xml`'s `OnUpdate`, alone drives the 30 s expiry. Once an armed deadline passes, and
+    // only on the leader's client, it disarms and prints `RAID_MEMBERS_AFK` with the pending names
+    // joined by `", "`, or `READY_CHECK_NO_AFK`, as a `CHAT_MSG_SYSTEM` line. Both strings are read
+    // raw from `_G` with an empty default (`0x704350`), not through `GetText`; nothing is sent.
     g.set(
         "CheckReadyCheckTime",
         lua.create_function(|lua, ()| {
@@ -788,9 +631,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // ConfirmReadyCheck(ready) — the popup's two buttons, and the argument is read for TRUTH, not
-    // for a number: the reference's own No button calls it with no argument at all
-    // (`ConfirmReadyCheck()`) while Yes passes `1`, so "absent" has to mean "not ready".
+    // ConfirmReadyCheck(ready) reads its argument as truth: the reference's No button passes no
+    // argument, Yes passes `1`.
     g.set(
         "ConfirmReadyCheck",
         lua.create_function(|lua, ready: Value| {
@@ -811,9 +653,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetNumSavedInstances() / GetSavedInstanceInfo(index) — the Raid Info panel's pair, over the
-    // app-pushed list. 1-based like every other indexed getter here, and a miss answers a plain
-    // `nil` (the panel's own loop only ever indexes inside the count it just read).
+    // GetNumSavedInstances() / GetSavedInstanceInfo(index), 1-based over the pushed list; a miss
+    // returns nothing.
     g.set(
         "GetNumSavedInstances",
         lua.create_function(|lua, ()| {
@@ -843,9 +684,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetRaidRosterSelection(index) / GetRaidRosterSelection() — a purely CLIENT-SIDE cursor (the
-    // reference's `0x4bb820` writes a global; nothing is sent). The RaidFrame sets it when a row
-    // is picked up so the menu and the drag agree on who is being acted on.
+    // SetRaidRosterSelection(index) / GetRaidRosterSelection(): a client-side cursor; the
+    // reference's `0x4bb820` writes a global and sends nothing.
     g.set(
         "SetRaidRosterSelection",
         lua.create_function(|lua, index: Value| {
@@ -863,10 +703,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ChatFrame_SendTell(name) — the popup's WHISPER action. In the ref this is ChatFrame.lua
-    // filling the edit box with "/w name "; our chat edit is app-side (ui_chat), so the call
-    // queues the name for the app to open the edit box prefilled (UiScript::take_tell_requests
-    // drains — the PartyRequest seam's chat sibling).
+    // ChatFrame_SendTell(name) is FrameXML in the reference (`ChatFrame.lua:1606`, opening the
+    // edit box on `/w name `); the chat edit box is app-side here, so this queues the name for
+    // `UiScript::take_tell_requests`.
     g.set(
         "ChatFrame_SendTell",
         lua.create_function(|lua, name: String| {
@@ -882,11 +721,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 /// The ready-check deadline, `0x7530` ms after the arm (`0x4ba535`, `0x4bb2b6`).
 const READY_CHECK_SECONDS: f64 = 30.0;
 
-/// The client's ready-check state (`RaidInfo.cpp`): the armed deadline
-/// (`[0xb713f4]`, `None` = disarmed) and the roster members whose "has not answered yet" flag
-/// (`[entry+0x158]`) is set, plus the summary lines the timeout worker composed and the app has
-/// not yet pushed into chat. Outside [`PartyState`] because a roster push replaces that whole
-/// snapshot and this survives one — the reference keeps the two in different tables too.
+/// The ready-check state: the armed deadline (`[0xb713f4]`), the members whose pending flag
+/// (`[entry+0x158]`) is set, and summary lines not yet pushed to chat. Outside [`PartyState`]
+/// because a roster push replaces that and this survives it.
 #[derive(Debug, Default)]
 pub(crate) struct ReadyCheckState {
     pub(crate) deadline: Option<f64>,
@@ -894,12 +731,12 @@ pub(crate) struct ReadyCheckState {
     pub(crate) lines: Vec<String>,
 }
 
-/// `GetTime()`'s clock — the session seconds `UiScript::tick` advances.
+/// `GetTime()`'s clock, the session seconds `UiScript::tick` advances.
 fn clock(lua: &Lua) -> f64 {
     lua.globals().get("__benilla_now").unwrap_or(0.0)
 }
 
-/// The timeout worker `0x4bb310` — see `CheckReadyCheckTime`'s note for the contract.
+/// The timeout worker `0x4bb310`.
 fn ready_check_tick(lua: &Lua, model: &mut Model, now: f64) {
     let Some(deadline) = model.ready_check.deadline else {
         return;
@@ -911,8 +748,7 @@ fn ready_check_tick(lua: &Lua, model: &mut Model, now: f64) {
         return;
     }
     model.ready_check.deadline = None;
-    // The roster walk: an unresolved name is silently skipped (`0x55f080` with its query arm
-    // off), so a flagged member the roster cannot name contributes nothing to the list.
+    // A pending member the roster cannot name is skipped (`0x55f080`, its query arm off).
     let names: Vec<&str> = model
         .ready_check
         .unanswered
@@ -930,9 +766,9 @@ fn ready_check_tick(lua: &Lua, model: &mut Model, now: f64) {
     model.ready_check.lines.push(text);
 }
 
-/// The `0x322` handler's close predicate (`0x4ba498`–`0x4ba4cc`): a member still
-/// holds the check open only while they are BOTH flagged unanswered AND online (`[entry+0x18]`
-/// bit 0, the `SMSG_GROUP_LIST` online byte). An empty roster closes at once (`0x4ba3ea`).
+/// The `0x322` handler's close test (`0x4ba498`-`0x4ba4cc`): a member holds the check open only
+/// while pending and online (`[entry+0x18]` bit 0, `SMSG_GROUP_LIST`'s online bit). An empty
+/// roster closes at once (`0x4ba3ea`).
 fn ready_check_pending_online(model: &Model) -> bool {
     model
         .ready_check
@@ -941,8 +777,8 @@ fn ready_check_pending_online(model: &Model) -> bool {
         .any(|g| model.party.raid.iter().any(|m| m.guid == *g && m.online))
 }
 
-/// The two C-side force-close sites (`0x4ba4d4`, `0x4bacb4`): the deadline is set to `now − 1`
-/// and the worker runs at once. The arm test is theirs too — both force only an armed check.
+/// The force-close sites (`0x4ba4d4`, `0x4bacb4`): an armed deadline becomes `now - 1` and the
+/// worker runs at once.
 fn ready_check_force_close(lua: &Lua, model: &mut Model) {
     if model.ready_check.deadline.is_none() {
         return;
@@ -990,7 +826,6 @@ mod tests {
         assert!(s.eval::<bool>("return GetPartyMember(3) == nil").unwrap());
         assert!(s.eval::<bool>("return GetPartyMember(0) == nil").unwrap());
         assert_eq!(s.eval::<i64>("return GetPartyLeaderIndex()").unwrap(), 1);
-        // Alice (party1) leads, not us.
         assert!(s.eval::<bool>("return IsPartyLeader() == nil").unwrap());
         let (method, master) = s
             .eval::<(String, Option<i64>)>("return GetLootMethod()")
@@ -1030,18 +865,12 @@ mod tests {
         let (method, master) = s
             .eval::<(String, Option<i64>)>("return GetLootMethod()")
             .unwrap();
-        // **`freeforall` is the UNGROUPED answer**, not `group`: the cells the reference reads
-        // sit in `.data`'s zero-filled tail, so a client that has never been in a group reports
-        // the zeroth method. The `group` above is a real party's, and stays.
+        // Never grouped reads method 0, `freeforall`; the `group` above is a real party's.
         assert_eq!(method, "freeforall");
         assert_eq!(master, None);
     }
 
     // ── The raid trio (`UnitInRaid`, `GetRaidRosterInfo`, `IsRaidLeader`) ────────────────────
-    //
-    // One test per return-shape trap, in `item_stats`'s `get_item_info_tests` style: the ARITY
-    // assertion is half of each, because a signature regression is the failure every individual
-    // read still survives.
 
     fn raider(name: &str, guid: u64) -> crate::script::RaidMemberInfo {
         crate::script::RaidMemberInfo {
@@ -1064,16 +893,14 @@ mod tests {
             .collect();
         raid[0].rank = 2; // the leader
         raid[0].name = "Me".into();
-        raid[3].subgroup = 1; // stored 0-based — the binding exposes 2
+        raid[3].subgroup = 1; // stored 0-based, exposed 2
         PartyState {
             raid,
             ..Default::default()
         }
     }
 
-    /// **Nine values on every path**, including the paths that have no member to describe. Every
-    /// return site in `0x4bb560` is `mov eax,9`; the out-of-range arm `0x4bb7b9` pushes nine
-    /// values of its own rather than returning nothing.
+    /// Every return site in `0x4bb560` is `mov eax,9`, the miss arm `0x4bb7b9` included.
     #[test]
     fn get_raid_roster_info_returns_nine_values_on_every_path() {
         let mut s = UiScript::new().unwrap();
@@ -1086,13 +913,11 @@ mod tests {
                 "index {index} must still be a nine-value answer"
             );
         }
-        // And with no raid at all — the shape does not depend on being in one.
         let s = UiScript::new().unwrap();
         assert_eq!(s.arity("GetRaidRosterInfo(1)").unwrap(), 9);
     }
 
-    /// The miss tuple is `(nil, 0, 1, 1, nil, nil, nil, nil, nil)` — **not** nine nils, and not
-    /// nothing. `0x4bb7b9` pushes nil, then the number 0, then 1, then 1, then five nils.
+    /// `0x4bb7b9` pushes `nil, 0, 1, 1` and five nils.
     #[test]
     fn get_raid_roster_info_misses_with_the_fixed_tuple() {
         let mut s = UiScript::new().unwrap();
@@ -1109,8 +934,7 @@ mod tests {
         );
         assert!(e && f && g && h && i, "the last five are nil");
 
-        // An in-range member whose NAME has not been cached takes the same arm — the reference's
-        // `0x4bb5f8 je 0x4bb7b9`, which is why a client must not model this as "returns nothing".
+        // An in-range member with no cached name takes the same arm (`0x4bb5f8 je 0x4bb7b9`).
         let mut party = ten_player_raid();
         party.raid[1].name = String::new();
         s.set_party(party);
@@ -1120,8 +944,6 @@ mod tests {
         assert!(name_nil && rank == 0, "an uncached name is a full miss");
     }
 
-    /// The success tuple, destructured positionally exactly as `ChatLog.lua:347` and
-    /// `oRA2/Leader/Ready.lua:241` destructure it.
     #[test]
     fn get_raid_roster_info_reports_the_pushed_row() {
         let mut s = UiScript::new().unwrap();
@@ -1155,8 +977,7 @@ mod tests {
         );
     }
 
-    /// An OFFLINE member's zone slot carries the localized `PLAYER_OFFLINE` global, never nil —
-    /// and return 8 goes nil on that same arm (`0x4bb705`).
+    /// Return 8 goes nil on the same arm (`0x4bb705`).
     #[test]
     fn get_raid_roster_info_puts_player_offline_in_the_zone_slot() {
         let mut s = UiScript::new().unwrap();
@@ -1164,7 +985,7 @@ mod tests {
         party.raid[1].online = false;
         party.raid[1].zone = Some("Molten Core".into()); // ignored on the offline arm
         s.set_party(party);
-        // GlobalStrings.lua is the app's to load; the binding reads whatever the VM has.
+        // The binding reads whatever `PLAYER_OFFLINE` the VM holds.
         s.run(r#"PLAYER_OFFLINE = "Offline""#).unwrap();
         let (zone, online): (String, Option<i64>) = s
             .eval("local _,_,_,_,_,_,g,h = GetRaidRosterInfo(2) return g, h")
@@ -1173,8 +994,7 @@ mod tests {
         assert_eq!(online, None);
     }
 
-    /// A non-number argument is the ONLY raise in the whole function (`0x4bb591`), and it raises
-    /// rather than returning nil or nothing — `0x6f4940` never returns.
+    /// The raise at `0x4bb591` goes through `0x6f4940`, which never returns.
     #[test]
     fn get_raid_roster_info_raises_only_on_a_non_number() {
         let s = UiScript::new().unwrap();
@@ -1183,12 +1003,11 @@ mod tests {
             format!("{err}").contains("Usage: GetRaidRosterInfo(index)"),
             "got {err}"
         );
-        // A numeric string coerces (Lua 5.1's `lua_isnumber`) and does NOT raise.
+        // A numeric string coerces (`lua_isnumber`) and does not raise.
         assert_eq!(s.arity(r#"GetRaidRosterInfo("3")"#).unwrap(), 9);
     }
 
-    /// `UnitInRaid` answers the **constant 1**, not a roster index — the value is the hard-coded
-    /// double at `0x51637e`, and the helper underneath never exposes a counter.
+    /// The 1 is the constant double at `0x51637e`.
     #[test]
     fn unit_in_raid_answers_one_not_an_index() {
         let mut s = UiScript::new().unwrap();
@@ -1206,21 +1025,16 @@ mod tests {
         assert!(s
             .eval::<bool>(r#"return UnitInRaid("mouseover") == nil"#)
             .unwrap());
-        // **The input partition, and it is NOT "never raises".** A quiet nil covers a missing,
-        // wrong-typed, or a recognised-but-unmatched token; a token matching none of the
-        // resolver's prefixes raises instead.
-        //
-        // Quiet nil: `0x6f3690` returns NULL for a missing or uncoercible argument, `0x515970` maps
-        // NULL/empty to GUID `0:0`, and `0x4baee0` short-circuits `0:0` to false at entry.
+        // Nil for a missing, wrong-typed or unmatched token: `0x6f3690` gives NULL, `0x515970` maps
+        // it to guid 0, and `0x4baee0` rejects guid 0.
         for call in ["UnitInRaid()", "UnitInRaid(nil)", r#"UnitInRaid("party3")"#] {
             assert!(
                 s.eval::<bool>(&format!("return {call} == nil")).unwrap(),
                 "{call} must answer nil"
             );
         }
-        // Raise: a token matching none of the nine prefixes reaches
-        // `luaL_error("Unknown unit name: %s")` and longjmps — and a NUMBER is coerced to a string
-        // first, so it raises too. `UnitInRaid("bogus")` never returns on the real client.
+        // A token matching none of the nine prefixes raises `Unknown unit name: %s`, and a number
+        // is coerced to a string first.
         for call in ["UnitInRaid(7)", r#"UnitInRaid("nosuchtoken")"#] {
             assert!(
                 s.run(call).is_err(),
@@ -1229,15 +1043,12 @@ mod tests {
         }
     }
 
-    /// **`IsRaidLeader()` is true for an ordinary 5-man party leader.** Its body reads the same
-    /// two leader-GUID globals `IsPartyLeader` does and carries no raid-vs-party flag at all
-    /// (`0x4bb8c0` vs `0x4e9130`). Answering nil
-    /// "because there is no raid" would be the divergence.
+    /// `0x4bb8c0` reads the same leader guid as `0x4e9130`, and no raid flag.
     #[test]
     fn is_raid_leader_is_true_for_a_party_leader() {
         let mut s = UiScript::new().unwrap();
         let mut party = two_member_party();
-        party.leader_index = 0; // we lead — a PARTY, with an empty raid roster
+        party.leader_index = 0; // we lead a party, with no raid roster
         s.set_party(party);
         assert!(
             s.eval::<i64>("return GetNumRaidMembers()").unwrap() == 0,
@@ -1246,18 +1057,15 @@ mod tests {
         assert_eq!(s.eval::<i64>("return IsRaidLeader()").unwrap(), 1);
         assert_eq!(s.eval::<i64>("return IsPartyLeader()").unwrap(), 1);
 
-        // Somebody else leads: both go nil, together.
         s.set_party(two_member_party()); // leader_index 1 = Alice
         assert!(s.eval::<bool>("return IsRaidLeader() == nil").unwrap());
         assert!(s.eval::<bool>("return IsPartyLeader() == nil").unwrap());
 
-        // Ungrouped: nil (the reference's cached leader pair is `0:0` and matches nobody).
+        // Ungrouped: the cached leader guid is 0 and matches nobody.
         let s = UiScript::new().unwrap();
         assert!(s.eval::<bool>("return IsRaidLeader() == nil").unwrap());
     }
 
-    /// One list, not a count beside one: `GetNumRaidMembers` and `GetRaidRosterInfo` cannot
-    /// disagree about how many members there are.
     #[test]
     fn get_num_raid_members_bounds_the_roster_it_indexes() {
         let mut s = UiScript::new().unwrap();
@@ -1274,7 +1082,6 @@ mod tests {
     #[test]
     fn intent_natives_queue_the_exact_request_sequence() {
         let mut s = UiScript::new().unwrap();
-        // Nothing queued until a call lands.
         assert!(s.take_party_requests().is_empty());
 
         s.run("AcceptGroup()").unwrap();
@@ -1305,7 +1112,6 @@ mod tests {
                 PartyRequest::LootThreshold(3),
             ]
         );
-        // The drain is a take — a second read is empty.
         assert!(s.take_party_requests().is_empty());
     }
 
@@ -1322,8 +1128,7 @@ mod tests {
             }]
         );
 
-        // The optional THIRD argument, which the real binding reads for every method — not only
-        // for "master", the way the master-looter argument is read.
+        // The third argument is read for every method.
         s.run(r#"SetLootMethod("group", nil, 4)"#).unwrap();
         assert_eq!(
             s.take_party_requests(),
@@ -1355,13 +1160,7 @@ mod tests {
         );
     }
 
-    /// `IsRaidOfficer()` still answers nil, and the raid arc landing did NOT
-    /// change that — it is not waiting on a feature, it is waiting on a reading of `0x4bb910`'s
-    /// own body. The binding's doc carries the refusal; this pins the behaviour so a later
-    /// "surely it is just rank >= 1" edit has to argue with a test.
-    ///
-    /// What it costs today, stated where someone will find it: `RaidFrameAddMemberButton` is
-    /// enabled for the raid LEADER only, where the reference also enables it for an assistant.
+    /// Nil until `0x4bb910`'s body is traced; "rank >= 1" would be a guess.
     #[test]
     fn is_raid_officer_is_still_nil_and_that_is_a_missing_carve_not_a_missing_feature() {
         let s = UiScript::new().unwrap();
@@ -1377,7 +1176,7 @@ mod tests {
         assert!(s.take_tell_requests().is_empty());
     }
 
-    // ── The identity predicates (the popup's menu pick + gating) ─────────────
+    // ── The identity predicates ─────────────────────────────────────────────
 
     fn unit(exists: bool, guid: u64) -> crate::script::UnitState {
         crate::script::UnitState {
@@ -1393,7 +1192,6 @@ mod tests {
         s.set_unit("player", Some(unit(true, 0x10)));
         s.set_unit("target", Some(unit(true, 0x10)));
         s.set_unit("party1", Some(unit(true, 0x20)));
-        // Same guid across tokens; same token trivially; different guids nil.
         assert_eq!(
             s.eval::<i64>(r#"return UnitIsUnit("target", "player")"#)
                 .unwrap(),
@@ -1407,21 +1205,19 @@ mod tests {
         assert!(s
             .eval::<bool>(r#"return UnitIsUnit("party1", "player") == nil"#)
             .unwrap());
-        // Zero guids never match across tokens (unknown identity is not identity).
+        // Zero guids never match across tokens.
         s.set_unit("target", Some(unit(true, 0)));
         s.set_unit("mouseover", Some(unit(true, 0)));
         assert!(s
             .eval::<bool>(r#"return UnitIsUnit("target", "mouseover") == nil"#)
             .unwrap());
-        // A missing token is nil.
         assert!(s
             .eval::<bool>(r#"return UnitIsUnit("pet", "player") == nil"#)
             .unwrap());
     }
 
-    /// `UnitPlayerOrPetInParty`/`InRaid` (1958): a member's own guid, or a unit whose OWNER is a
-    /// member — the party's for the one, the raid roster's for the other; a stranger's pet is
-    /// nobody's; ungrouped is nil.
+    /// A member's own guid, or a unit whose owner is a member: the party's for
+    /// `UnitPlayerOrPetInParty`, the raid roster's for `UnitPlayerOrPetInRaid`.
     #[test]
     fn unit_player_or_pet_in_party_reads_the_owner() {
         let mut s = UiScript::new().unwrap();
@@ -1454,7 +1250,6 @@ mod tests {
                 .unwrap(),
             1
         );
-        // The raid twin over the raid roster.
         s.set_party(ten_player_raid());
         let mut raiders_pet = unit(true, 0xC0FFEE);
         raiders_pet.owner = ten_player_raid().raid[0].guid;
@@ -1476,11 +1271,9 @@ mod tests {
         s.set_party(two_member_party());
         s.set_unit("player", Some(unit(true, 0x10)));
         s.set_unit("party1", Some(unit(true, 0xA11CE)));
-        // The target IS Alice (guid match through an arbitrary token).
         s.set_unit("target", Some(unit(true, 0xA11CE)));
         assert_eq!(s.eval::<i64>(r#"return UnitInParty("target")"#).unwrap(), 1);
         assert_eq!(s.eval::<i64>(r#"return UnitInParty("party1")"#).unwrap(), 1);
-        // A stranger's guid is nil.
         s.set_unit("target", Some(unit(true, 0xDEAD)));
         assert!(s
             .eval::<bool>(r#"return UnitInParty("target") == nil"#)
@@ -1504,7 +1297,6 @@ mod tests {
                 .unwrap(),
             1
         );
-        // A hostile player, and a friendly NPC, both fail the gate.
         let mut hostile = friendly.clone();
         hostile.reaction = 2;
         s.set_unit("target", Some(hostile));
@@ -1519,8 +1311,6 @@ mod tests {
             .unwrap());
     }
 
-    /// Every raid-management verb queues the request it names, with its arguments in the order
-    /// the reference's binding takes them — the seam the whole pane acts through.
     #[test]
     fn the_raid_verbs_queue_what_they_name() {
         let mut s = UiScript::new().unwrap();
@@ -1564,9 +1354,7 @@ mod tests {
         assert!(s.take_party_requests().is_empty(), "the drain empties");
     }
 
-    /// `ConfirmReadyCheck` reads its argument for TRUTH, not for a number — the reference's No
-    /// button calls it with **no argument at all** while Yes passes `1`, so "absent" has to be the
-    /// not-ready answer or every declined ready check reads as accepted.
+    /// The reference's No button passes no argument, Yes passes `1`.
     #[test]
     fn confirm_ready_check_treats_an_absent_argument_as_not_ready() {
         let mut s = UiScript::new().unwrap();
@@ -1578,14 +1366,12 @@ mod tests {
                 PartyRequest::ReadyCheckAnswer(true),
                 PartyRequest::ReadyCheckAnswer(false),
                 PartyRequest::ReadyCheckAnswer(false),
-                // `0` is TRUTHY in Lua, and the binding is a truth test — so this is ready.
+                // `0` is true in Lua.
                 PartyRequest::ReadyCheckAnswer(true),
             ]
         );
     }
 
-    /// The saved-lockout pair: 1-based, three returns, and a miss is a plain nothing (the panel's
-    /// own loop only ever indexes inside the count it just read).
     #[test]
     fn saved_instance_info_reads_the_pushed_list() {
         use crate::script::SavedInstanceInfo;
@@ -1619,13 +1405,11 @@ mod tests {
                 "index {miss} is a miss"
             );
         }
-        // A non-number still raises, like every other indexed getter here.
         assert!(s
             .eval::<i64>(r#"return GetSavedInstanceInfo("x")"#)
             .is_err());
     }
 
-    /// `SetRaidRosterSelection` is purely client-side: it moves a cursor and sends nothing.
     #[test]
     fn the_raid_roster_selection_is_a_local_cursor() {
         let mut s = UiScript::new().unwrap();
@@ -1660,7 +1444,7 @@ mod tests {
 
     // ── The ready-check timeout ─────────────────────────────────────────────
 
-    /// A raid we lead: us, Alice and Bob on the roster; the two strings the summary reads raw.
+    /// Us, Alice and Bob, with the two summary strings set.
     fn raid_we_lead(s: &UiScript) -> PartyState {
         s.run(
             r#"RAID_MEMBERS_AFK = "The following players are AFK: %s"
@@ -1698,9 +1482,6 @@ mod tests {
         }
     }
 
-    /// `DoReadyCheck` flags every roster member but the caller and arms 30 s; the tick is a no-op
-    /// before the deadline, prints the `", "`-joined unanswered names on it, and — the only
-    /// clear-to-zero — disarms, so the next tick prints nothing.
     #[test]
     fn the_leaders_check_times_out_into_the_afk_list_and_disarms() {
         let mut s = UiScript::new().unwrap();
@@ -1727,9 +1508,7 @@ mod tests {
         );
     }
 
-    /// An answer clears its member's flag; the answer that leaves nobody pending (and online)
-    /// closes the check at once (`0x4ba4d9`), well before the deadline. (A "not ready" answer
-    /// does the same and prints its line first — the test below.)
+    /// The answer that leaves nobody pending closes the check at once (`0x4ba4d9`).
     #[test]
     fn an_answer_clears_its_member_and_the_last_one_closes_the_check_at_once() {
         let mut s = UiScript::new().unwrap();
@@ -1751,10 +1530,7 @@ mod tests {
         assert!(s.take_ready_check_lines().is_empty());
     }
 
-    /// A "not ready" answer prints `RAID_MEMBER_NOT_READY` for that member the moment it arrives —
-    /// and clears their flag all the same, because the leader arm stores the constant 0 whatever
-    /// the byte says (`0x4ba40e`). A guid the roster does
-    /// not hold writes nothing.
+    /// The leader arm stores a constant 0 whatever the status byte (`0x4ba40e`).
     #[test]
     fn a_not_ready_answer_prints_its_line_and_still_clears_the_member() {
         let mut s = UiScript::new().unwrap();
@@ -1781,9 +1557,8 @@ mod tests {
         );
     }
 
-    /// An OFFLINE member who never answers does not hold the check open (`0x4ba4a7 test byte
-    /// [eax+0x18],dl`), but the summary that closes it still lists them: the worker walks the
-    /// flags with no online test (`0x4bb3a8`).
+    /// The close tests online (`0x4ba4a7 test byte [eax+0x18],dl`); the summary's walk does not
+    /// (`0x4bb3a8`).
     #[test]
     fn an_offline_member_never_blocks_the_close_but_is_still_listed() {
         let mut s = UiScript::new().unwrap();
@@ -1802,9 +1577,7 @@ mod tests {
         );
     }
 
-    /// The tick is leader-gated: a member's client arms the same 30 s on the open form and the
-    /// four conjuncts fail on the guid compare, every frame, forever — the deadline stays armed
-    /// (nothing on the member's side ever clears it) and nothing is ever printed.
+    /// A member's client arms the deadline, never clears it, and never prints.
     #[test]
     fn the_tick_is_inert_for_a_non_leader() {
         let mut s = UiScript::new().unwrap();
@@ -1818,8 +1591,6 @@ mod tests {
         assert_eq!(s.model_mut().ready_check.deadline, Some(130.0));
     }
 
-    /// `SMSG_GROUP_LIST`'s leg: a member who left took their pending flag with them, and a roster
-    /// scan that finds nobody pending force-closes the check.
     #[test]
     fn a_roster_change_with_nobody_left_pending_closes_the_check() {
         let mut s = UiScript::new().unwrap();
@@ -1827,7 +1598,6 @@ mod tests {
         s.set_party(party.clone());
         s.run("__benilla_now = 100 DoReadyCheck()").unwrap();
         s.ready_check_answered(0xA11CE, true);
-        // Bob leaves: the roster without him.
         let mut without_bob = party;
         without_bob.raid.retain(|m| m.guid != 0xB0B);
         without_bob.members.retain(|m| m.guid != 0xB0B);
@@ -1838,8 +1608,7 @@ mod tests {
         );
     }
 
-    /// A plain party has no raid roster, so `DoReadyCheck` flags nobody — and the leader's own
-    /// echo of the open form, taking the response-collection arm, closes it on the spot.
+    /// A party has no raid roster, so `DoReadyCheck` flags nobody.
     #[test]
     fn the_leaders_own_echo_closes_an_empty_check_at_once() {
         let mut s = UiScript::new().unwrap();
@@ -1854,8 +1623,7 @@ mod tests {
         );
     }
 
-    /// The two keys are read raw off `_G` with an empty-string default — a missing GlobalStrings
-    /// prints an empty line and never raises.
+    /// Both keys are read raw from `_G` with an empty default.
     #[test]
     fn a_missing_summary_string_prints_an_empty_line() {
         let mut s = UiScript::new().unwrap();

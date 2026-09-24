@@ -1,18 +1,12 @@
-//! The `SimpleHTML` widget end to end — the markup engine's *model* half.
-//!
-//! The parse itself (strict XML, the three fallback routes, the collapse, the splices) is unit
-//! tested in `script::simplehtml::parse`, against the byte law directly. What is asserted here is
-//! everything that only exists once the blocks are real regions: the anchor chain, the width
-//! snapshot, the element-font resolution and its H1→P fallback, the spacing step, the free on
-//! rebuild, and the 19-name Lua table.
+//! The `SimpleHTML` widget once its blocks are regions: the anchor chain, block widths, element
+//! fonts and their `P` fallback, spacing, the free on rebuild and the 19-name Lua table.
 
 use super::common::script;
 use crate::layout::Point;
 use crate::script::{Model, UiScript};
 use crate::widget::RegionKind;
 
-/// One block as a reader would describe it: what it says, how it is justified, what face it is in,
-/// how wide it was told to be, and where it hangs from.
+/// One block as a reader would describe it.
 #[derive(Clone, Debug, PartialEq)]
 struct Blk {
     text: Option<String>,
@@ -20,21 +14,18 @@ struct Blk {
     justify_h: &'static str,
     font: Option<String>,
     font_height: Option<f32>,
-    /// The `size` the widget wrote: `(frame width, 0)` for a text block — a zero height is how the
-    /// measure round-trip is asked for the intrinsic one.
+    /// `(frame width, 0)` for a text block: a 0 height takes the measured one.
     size: Option<(f32, f32)>,
-    /// `(own point, relative point, x, y, target)`, `None` when the block carries no anchor at all.
+    /// `(own point, relative point, x, y, target)`.
     anchor: Option<(Point, Point, f32, f32, Rel)>,
 }
 
 /// What a block's single anchor points at.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Rel {
-    /// The SimpleHTML frame itself — only block 0 ever does this.
+    /// The SimpleHTML frame; only block 0 anchors to it.
     Frame,
-    /// A previous block, by index in the block list.
     Block(usize),
-    /// Something else entirely (never expected; a failure would print it).
     Other,
 }
 
@@ -73,8 +64,6 @@ fn blocks(s: &UiScript, name: &str) -> Vec<Blk> {
                 font_height: d.font_height,
                 size: d.size,
                 anchor,
-                // A texture block has no text; keeping the kind out of the struct and asserting it
-                // here keeps the expected-value literals readable.
             }
             .tap_kind(kind)
         })
@@ -82,9 +71,7 @@ fn blocks(s: &UiScript, name: &str) -> Vec<Blk> {
 }
 
 impl Blk {
-    /// A tiny consistency check folded into the read: a text block is a FontString, an image block
-    /// is a Texture. A regression that made blocks the wrong region kind would otherwise pass
-    /// every text assertion below.
+    /// Asserts a text block is a FontString and an image block a Texture.
     fn tap_kind(self, kind: RegionKind) -> Blk {
         match (&self.text, &self.texture) {
             (Some(_), None) => assert_eq!(kind, RegionKind::FontString),
@@ -95,7 +82,6 @@ impl Blk {
     }
 }
 
-/// Just the strings, for the tests that only care about the walk.
 fn texts(s: &UiScript, name: &str) -> Vec<String> {
     blocks(s, name)
         .into_iter()
@@ -103,8 +89,7 @@ fn texts(s: &UiScript, name: &str) -> Vec<String> {
         .collect()
 }
 
-/// How many regions the frame owns in total — the free-on-rebuild check's instrument. A block that
-/// was orphaned rather than destroyed still sits in its owner's region list and still draws.
+/// The frame's region count, which still counts a block orphaned rather than freed.
 fn region_count(s: &UiScript, name: &str) -> usize {
     let lua = s.lua();
     let model = lua.app_data_ref::<Model>().expect("model");
@@ -112,8 +97,8 @@ fn region_count(s: &UiScript, name: &str) -> usize {
     model.arena.frame(fh).expect("live frame").regions.len()
 }
 
-/// A `SimpleHTML` named `Page`, 270×304 like the reference's `ItemTextPageText`, with one font
-/// object behind it (the `<FontString inherits="ItemTextFontNormal"/>` shape).
+/// A `SimpleHTML` named `Page`, 270×304 and in `ItemTextFontNormal` like the stock
+/// `ItemTextPageText` (`ItemTextFrame.xml:203`).
 fn page(s: &UiScript) {
     s.run(
         r#"
@@ -129,13 +114,9 @@ fn page(s: &UiScript) {
     .unwrap();
 }
 
-/// Answer every pending measure at 16px a line and 100 wide, so the resolved rects below are
-/// arithmetic a reader can check.
-///
-/// The line count is the client's own kernel `0x5c2070`, not "breaks + 1": it counts a line per
-/// class-2 token consumed and exits at the terminator, so a **trailing** break opens no new line
-/// and the one-byte `"\n"` a `<BR/>` block carries is **one** line, not two. An empty string
-/// never enters the loop body at all and measures 0 — the empty-`<P>` edge.
+/// Answer every pending measure at 16 px a line and 100 wide, with the reference's line count
+/// (`0x5c2070`): a trailing break opens no line, so a `<BR/>` block's `"\n"` is one line, and an
+/// empty string is none.
 fn measure_at_16px(s: &mut UiScript) {
     s.resolve();
     let reqs = s.fontstrings_needing_measure();
@@ -160,12 +141,9 @@ fn client_lines(text: &str) -> usize {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The walk, as blocks on the frame
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The walk, as blocks on the frame ──
 
-/// A well-formed body: one block per tag, each carrying the tag's own `align` and — because only
-/// `<FontString>` was declared — every one of them in `P`'s face, the `<H1>` included.
+/// Each tag's block carries its `align`, and with only `P` declared every block is in `P`'s face.
 #[test]
 fn a_well_formed_body_is_one_block_per_tag() {
     let mut s = script();
@@ -192,20 +170,18 @@ fn a_well_formed_body_is_one_block_per_tag() {
             ("Right body.".to_string(), "RIGHT"),
         ]
     );
-    // `elementFont[1]`'s path is empty, so `0x78ae30` substitutes `elementFont[0]`. There
-    // is NO header scaling anywhere in the TU: the H1 is the same 15px as the paragraphs.
+    // `elementFont[1]` has no path, so `0x78ae30` substitutes `elementFont[0]`; nothing scales a
+    // header.
     for blk in &b {
         assert_eq!(blk.font.as_deref(), Some("Fonts\\MORPHEUS.TTF"));
         assert_eq!(blk.font_height, Some(15.0));
-        // `SetWidth(frame.GetWidth())`, and NO height — the intrinsic one comes from the measure.
         assert_eq!(blk.size, Some((270.0, 0.0)));
     }
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The anchor chain (`CLayoutFrame::SetPoint 0x767c70`) and the flush default (`0x770d89` zeroes
-/// spacing): block 0 pins TOPLEFT→frame TOPLEFT, every later block TOPLEFT→**the previous block's**
-/// BOTTOMLEFT at `−spacing` — which is `0` out of the box, so the blocks touch.
+/// Block 0 pins TOPLEFT to the frame's TOPLEFT and each later block TOPLEFT to the previous one's
+/// BOTTOMLEFT at `-spacing` (`0x767c70`); spacing starts at 0 (`0x770d89`), so the blocks touch.
 #[test]
 fn blocks_chain_bottom_to_top_and_are_flush_at_spacing_zero() {
     let mut s = script();
@@ -224,15 +200,13 @@ fn blocks_chain_bottom_to_top_and_are_flush_at_spacing_zero() {
         ]
     );
 
-    // …and the resolved rects really do stack with no gap. Frame top is 600 (screen top, TOPLEFT
-    // at 0,0); three 16px lines run 600→584→568→552.
+    // The frame top is the screen top, 600; three 16 px lines run down to 552.
     measure_at_16px(&mut s);
     let tops = resolved_tops(&s, "Page");
     assert_eq!(tops, [(600.0, 584.0), (584.0, 568.0), (568.0, 552.0)]);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `SetSpacing` is the only thing that opens a gap, and it opens it by exactly its own value.
 #[test]
 fn spacing_steps_the_blocks_apart() {
     let mut s = script();
@@ -264,8 +238,7 @@ fn spacing_steps_the_blocks_apart() {
     );
 }
 
-/// `<BR/>` at BODY level is its own `"\n"` block, and `0x5c2070` counts **one** line for it — one
-/// blank line, not two and not a paragraph gap.
+/// A BODY-level `<BR/>` is its own `"\n"` block, which `0x5c2070` counts as one line.
 #[test]
 fn a_body_level_br_is_exactly_one_blank_line() {
     let mut s = script();
@@ -282,8 +255,7 @@ fn a_body_level_br_is_exactly_one_blank_line() {
     );
 }
 
-/// Inline `<BR/>` is a different animal: it splices the two bytes `|n` into the SAME block, which
-/// the font engine turns into a line break within it.
+/// An inline `<BR/>` splices `|n` into the enclosing block, a line break within it.
 #[test]
 fn an_inline_br_stays_inside_its_block() {
     let s = script();
@@ -293,8 +265,8 @@ fn an_inline_br_stays_inside_its_block() {
     assert_eq!(texts(&s, "Page"), ["a|nb"]);
 }
 
-/// All three fallback routes land on ONE block holding the RAW string — no collapse, so embedded
-/// newlines survive as real line breaks. This is the common case for a vmangos `page_text`.
+/// Each fallback route is one block holding the raw, uncollapsed string; most vmangos `page_text`
+/// rows are plain text and take it.
 #[test]
 fn the_three_fallback_routes_each_land_on_one_raw_block() {
     let s = script();
@@ -317,7 +289,6 @@ fn the_three_fallback_routes_each_land_on_one_raw_block() {
     }
 }
 
-/// Malformed markup **falls back**; it never raises and never renders half a document.
 #[test]
 fn malformed_markup_falls_back_rather_than_erroring() {
     let s = script();
@@ -333,8 +304,7 @@ fn malformed_markup_falls_back_rather_than_erroring() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **A second `SetText` destroys the first parse's blocks.** Not hides, not orphans — the regions
-/// are gone from the frame, so nothing of the old page can draw behind the new one.
+/// A second `SetText` frees the first parse's regions, so nothing of the old page draws.
 #[test]
 fn a_second_set_text_replaces_the_blocks() {
     let mut s = script();
@@ -363,9 +333,8 @@ fn a_second_set_text_replaces_the_blocks() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The real `page_text` shape `ItemTextFrame.xml`'s ItemTextPageText renders, driven through the
-/// widget: the `<H1>` at the `<P>` size, every block centred, each `<BR/>` one blank line, and the
-/// body's own inter-tag newlines adding nothing at all.
+/// A real `page_text` body: the `<H1>` at the `<P>` size, each `<BR/>` one blank line, and the
+/// newlines between tags adding nothing.
 #[test]
 fn the_page_text_body_renders_the_block_list_a_reader_would_draw() {
     let mut s = script();
@@ -406,7 +375,7 @@ fn the_page_text_body_renders_the_block_list_a_reader_would_draw() {
         ],
         "the H1 renders at the P size — nothing in the TU scales a header"
     );
-    // Five blocks flush at 16px each: 600 → 520.
+    // Five flush 16 px blocks: 600 down to 520.
     measure_at_16px(&mut s);
     let tops = resolved_tops(&s, "Page");
     assert_eq!(tops.first(), Some(&(600.0, 584.0)));
@@ -414,14 +383,9 @@ fn the_page_text_body_renders_the_block_list_a_reader_would_draw() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The exact string the reader builds**, on the exact body B240 reports — `ItemTextFrame.xml`'s
-/// READY handler pads an authorless page as `"\n" .. ItemTextGetText() .. "\n"`, and that padding
-/// is the one thing standing between a formatted page and its raw markup.
-/// Whitespace before and after the root element is legal XML, so this must take the MARKUP path;
-/// if it ever takes the fallback, every book in the world silently renders as its own source.
-///
-/// The body is vmangos `page_text` 2676 verbatim — the *Alliance Military Ranks* plaque in
-/// Stormwind's Old Town, `GameObject` 3011, the object in the report's screenshots.
+/// `ItemTextFrame.lua:44` pads an authorless page as `"\n" .. ItemTextGetText() .. "\n"`, and
+/// whitespace around the root element is legal XML, so it still takes the markup path. The body is
+/// vmangos `page_text` 2676, the Alliance Military Ranks plaque (`GameObject` 3011).
 #[test]
 fn the_readers_own_newline_padding_still_parses_as_markup() {
     let mut s = script();
@@ -460,7 +424,7 @@ fn the_readers_own_newline_padding_still_parses_as_markup() {
         "the padded page took the markup path — one block per tag, one blank line per <BR/>, and \
          BODY's own inter-tag newlines adding nothing"
     );
-    // The falsification, stated: the fallback would put the WHOLE source in one block.
+    // The fallback would put the whole source in one block.
     assert!(
         !texts[0].contains('<'),
         "a fallback would render the markup itself — the reported symptom"
@@ -468,10 +432,8 @@ fn the_readers_own_newline_padding_still_parses_as_markup() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The other half of the same guard: `page_text` **1510** (the Crystal Pylon manual) ends
-/// `</HTML.` — a typo in Blizzard's own shipped data. Strict XML rejects it, so it falls back to
-/// raw markup **on the reference client too**, and ours must do the same rather than paper over
-/// it. This is the one of the world's 62 HTML bodies that is not well-formed.
+/// `page_text` 1510, the Crystal Pylon manual, ends `</HTML.`, so strict XML rejects it and the
+/// reference shows the raw markup too; it is the only malformed one of the 62 HTML bodies.
 #[test]
 fn blizzards_own_malformed_page_falls_back_exactly_as_the_reference_does() {
     let s = script();
@@ -490,8 +452,6 @@ fn blizzards_own_malformed_page_falls_back_exactly_as_the_reference_does() {
     );
 }
 
-/// A declared header font **is** honoured — the fallback fires only on an element with no font
-/// from any source, so this is the control for the test above.
 #[test]
 fn a_declared_header_font_wins_over_the_p_fallback() {
     let s = script();
@@ -516,8 +476,7 @@ fn a_declared_header_font_wins_over_the_p_fallback() {
     );
 }
 
-/// An `<IMG>` sizes itself, anchors by `align`, and — when it is NOT floated — reserves its own
-/// height in the flow while leaving `prevBlock` pointing at the last **text** block.
+/// An unfloated `<IMG>` reserves its height in the flow, but `prevBlock` stays the last text block.
 #[test]
 fn an_unfloated_image_reserves_height_without_becoming_the_anchor() {
     let s = script();
@@ -542,19 +501,9 @@ fn an_unfloated_image_reserves_height_without_becoming_the_anchor() {
     );
 }
 
-/// **B342, at the engine.** The symptom: the Alliance crest on *A Treatise on Military Ranks*
-/// draws several times the reference's size, with the page's text over the top of it.
-///
-/// The body is `page_text` 2654 and its `<IMG>` carries **no `width=` and no `height=`**, so the
-/// block is sized `0 × 0`. In the reference that is not "no size": the resolver's size call is
-/// VIRTUAL, and `CSimpleTexture::GetWidth 0x770720` / `GetHeight 0x770790` answer an authored `0.0`
-/// with the loaded texture's own texel extent, through bit-for-bit the converter `<AbsDimension>`
-/// uses — **one texel is one FrameXML unit**.
-/// `PvPRankAlliance.blp` is 128×128, so the crest is a 128-unit square.
-///
-/// The falsification is the reported shape itself, asserted below: a zero span leaves the opposite
-/// edge unresolved (`combine_edge`'s `span != 0.0` leg), and the region sweep's owner-edge fallback
-/// then hands the image the rest of the **270-wide** page.
+/// The `<IMG>` in `page_text` 2654 has no `width=` or `height=`, and the reference's
+/// `CSimpleTexture::GetWidth 0x770720`/`GetHeight 0x770790` answer an authored 0 with the art's
+/// texel size, a texel to a FrameXML unit: the 128×128 crest is a 128-unit square.
 #[test]
 fn the_books_unsized_crest_is_its_arts_texel_square_not_the_whole_page() {
     const CREST: &str = "Interface\\PvPRankBadges\\PvPRankAlliance";
@@ -596,18 +545,15 @@ fn the_books_unsized_crest_is_its_arts_texel_square_not_the_whole_page() {
         (128.0, 128.0),
         "a texel is a FrameXML unit: the 128x128 crest is a 128-unit square, not the page"
     );
-    // The reported symptom, stated as the thing that must not come back: the page is 270 wide and
-    // 304 tall, and the crest used to take all of the first and everything left of the second.
+    // The page is 270 wide; the crest must not span it.
     assert!(
         rect.right - rect.left < 270.0,
         "the crest is stretched across the page width again"
     );
 }
 
-/// The flow half of the same law (`0x78ad07`): an **unfloated** image reserves
-/// `texture.GetHeight()` — `CSimpleTexture`'s override — so one with no `height=` reserves
-/// its art's texel height, and the next text block hangs that far lower. A floated one (the book's
-/// `align="left"`) still reserves nothing, which is why its text overlaps it in both clients.
+/// An unfloated image reserves `GetHeight()` in the flow (`0x78ad07`), its art's texel height when
+/// it has no `height=`; a floated one reserves nothing, so text runs over it in the reference too.
 #[test]
 fn an_unsized_image_reserves_its_arts_texel_height_unless_it_is_floated() {
     let mut s = script();
@@ -641,12 +587,8 @@ fn an_unsized_image_reserves_its_arts_texel_height_unless_it_is_floated() {
     );
 }
 
-/// A VM with no host oracle has no art to measure, so a zero-size image has **no span on either
-/// axis** — and with one corner pinned and nothing to add to it, it does not resolve at all. That
-/// is the reference's own answer for a texture with no `CGxTex*`: `combineEdge`'s legs both fail
-/// their `span != 0.0` test, `assemble 0x767a20` returns 0, and the texture emits a degenerate
-/// all-zero quad. Stated so the
-/// engine-less path cannot quietly go back to borrowing the page's width.
+/// With no size oracle a zero-size image has no span and does not resolve, as in the reference for
+/// a texture with no `CGxTex*`: `assemble 0x767a20` returns 0 and the quad is all zeros.
 #[test]
 fn without_a_size_oracle_an_unsized_image_does_not_resolve() {
     let mut s = script();
@@ -666,12 +608,9 @@ fn without_a_size_oracle_an_unsized_image_does_not_resolve() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The Lua table
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The Lua table ──
 
-/// The 19 names of `.data 0x87ba80`, and only those 19 — `GetText` is **not** one of them in
-/// build 5875, and a name a table does not carry is as wrong as a missing one.
+/// The 19 names of `.data 0x87ba80`, and only those: there is no `GetText`.
 #[test]
 fn the_method_table_is_the_nineteen_names() {
     let s = script();
@@ -706,16 +645,15 @@ fn the_method_table_is_the_nineteen_names() {
         !s.eval::<bool>("return H.GetText ~= nil").unwrap(),
         "1.12.1's SimpleHTML table has no GetText"
     );
-    // The names are the SimpleHTML's own — no other widget kind answers them.
+    // The names are the SimpleHTML's own: a Frame does not answer them.
     s.run(r#"F = CreateFrame("Frame")"#).unwrap();
     assert!(!s
         .eval::<bool>("return F.SetHyperlinkFormat ~= nil")
         .unwrap());
 }
 
-/// The optional element-name argument (`0x795d80`): omitting it addresses `P`, the four names are
-/// case-insensitive, and a **string that is not one of the four is not removed** — it becomes the
-/// shared implementation's first real argument.
+/// The optional element name (`0x795d80`): absent means `P`, the four names match in any case, and
+/// any other string stays as the first real argument.
 #[test]
 fn the_element_name_argument_is_optional_case_insensitive_and_non_matching_falls_through() {
     let s = script();
@@ -737,8 +675,7 @@ fn the_element_name_argument_is_optional_case_insensitive_and_non_matching_falls
             .unwrap(),
         ("Fonts\\B.TTF".to_string(), 20.0)
     );
-    // "h4" is not an element: it stays on the stack and is consumed as SetFont's PATH, so this
-    // targets P and sets the face to the literal "h4".
+    // "h4" is no element, so it is `SetFont`'s path and the call targets `P`.
     s.run(r#"H:SetFont("h4", 12)"#).unwrap();
     assert_eq!(
         s.eval::<(String, f32)>("local p, h = H:GetFont(); return p, h")
@@ -747,7 +684,6 @@ fn the_element_name_argument_is_optional_case_insensitive_and_non_matching_falls
     );
 }
 
-/// `SetHyperlinkFormat` governs how an `<A>` is spliced, and takes effect on the next parse.
 #[test]
 fn the_hyperlink_format_shapes_the_a_splice() {
     let s = script();
@@ -767,12 +703,10 @@ fn the_hyperlink_format_shapes_the_a_splice() {
         .unwrap();
     assert_eq!(texts(&s, "Page"), ["see |cff33ff99|Hitem:1|h[this]|h|r"]);
 
-    // A non-string argument raises the reference's own usage string rather than no-opping.
+    // A non-string argument raises the reference's usage string.
     assert!(s.run("Page:SetHyperlinkFormat(7)").is_err());
 }
 
-/// The colour/shadow/justify getters answer per element, and `SetTextColor` reaches the blocks the
-/// next parse builds.
 #[test]
 fn the_paint_setters_land_on_the_element_and_reach_the_next_parse() {
     let s = script();
@@ -791,7 +725,7 @@ fn the_paint_setters_land_on_the_element_and_reach_the_next_parse() {
             .unwrap(),
         (1.0, 0.0, 0.0, 1.0)
     );
-    // P keeps the font object's own colour — the element arg really did scope the write.
+    // `P` keeps the font object's colour: the element argument scoped the write.
     let (r, g, b, _) = s
         .eval::<(f32, f32, f32, f32)>("return Page:GetTextColor(\"P\")")
         .unwrap();
@@ -808,13 +742,9 @@ fn the_paint_setters_land_on_the_element_and_reach_the_next_parse() {
     );
 }
 
-/// **The empty-path fallback substitutes the WHOLE element font, colour included** — so an `H1`
-/// given a colour and nothing else renders in `P`'s colour, and its own red is never drawn.
-///
-/// That is the shape of `0x78ae29`–`0x78ae54`: the register holding `elementFont[elem]` is
-/// *replaced* by `elementFont[0]` before the single `SetFontObject` call, so the test is on the
-/// path and the consequence is on everything. Surprising, faithful, and exactly the sort of thing
-/// a re-implementation gets wrong by merging property-by-property instead.
+/// An element with no font path takes `elementFont[0]` whole, colour included: `0x78ae29` to
+/// `0x78ae54` swap the register before the one `SetFontObject`, so an `H1` given only a colour
+/// draws in `P`'s.
 #[test]
 fn an_element_with_no_font_of_its_own_loses_its_own_colour_too() {
     let s = script();
@@ -826,8 +756,8 @@ fn an_element_with_no_font_of_its_own_loses_its_own_colour_too() {
     "#,
     )
     .unwrap();
-    // The getter still answers the red — the element font really does hold it (`0x795d3e` reads
-    // `[this + idx*4 + 0x350]`, never a block).
+    // The getter still answers red: it reads the element font, never a block (`0x795d3e` reads
+    // `[this + idx*4 + 0x350]`).
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return Page:GetTextColor(\"H1\")")
             .unwrap(),
@@ -839,7 +769,7 @@ fn an_element_with_no_font_of_its_own_loses_its_own_colour_too() {
         "the block took elementFont[0] wholesale, so H1's red never reaches it"
     );
 
-    // Give H1 a path of its own and the fallback stops firing — now the red draws.
+    // With a path of its own, `H1` draws its red.
     s.run(
         r#"
         Page:SetFont("H1", "Fonts\\SKURRI.TTF", 24)
@@ -850,8 +780,7 @@ fn an_element_with_no_font_of_its_own_loses_its_own_colour_too() {
     assert_eq!(block_color(&s, "Page", 0), Some([1.0, 0.0, 0.0, 1.0]));
 }
 
-/// The `vertex_color` of block `i` — a FontString has no texel, so its vertex colour IS the colour
-/// it draws.
+/// Block `i`'s `vertex_color`, which for a FontString is the colour it draws.
 fn block_color(s: &UiScript, name: &str, i: usize) -> Option<[f32; 4]> {
     let lua = s.lua();
     let model = lua.app_data_ref::<Model>().expect("model");
@@ -860,14 +789,9 @@ fn block_color(s: &UiScript, name: &str, i: usize) -> Option<[f32; 4]> {
     model.region_data.get(&st.blocks[i])?.vertex_color
 }
 
-/// The two halves of `SetFontObject`'s severance law, which the element font has to reproduce by
-/// hand because it resolves its object lazily rather than copying the paint at the call:
-///
-/// - a **re-point does not reset** the explicit mask (`CSimpleFont+0x2c`/`CSimpleFontString+0xD4`:
-///   the inheritMask bit a local setter clears is never restored), so a face set on the element
-///   survives being pointed at a different object;
-/// - the **nil form severs the link and leaves the paint standing** — it does not blank the
-///   element.
+/// `SetFontObject` on an element font: a re-point keeps what a local setter set (the inheritMask
+/// bit at `CSimpleFont+0x2c`/`CSimpleFontString+0xD4` is never restored), and nil unlinks the
+/// object but leaves the paint.
 #[test]
 fn set_font_object_keeps_local_overrides_and_the_nil_form_leaves_the_paint_standing() {
     let s = script();
@@ -904,8 +828,8 @@ fn set_font_object_keeps_local_overrides_and_the_nil_form_leaves_the_paint_stand
     );
 }
 
-/// `SetJustifyH` is **inert for rendered text** — the byte law, not a gap: `0x78adb0` overwrites
-/// every block's justifyH with the tag's `align`. The getter still answers what was stored.
+/// `0x78adb0` gives every block its tag's `align`, so `SetJustifyH` is stored and answered but
+/// never drawn.
 #[test]
 fn set_justify_h_is_stored_and_answered_but_never_drawn() {
     let s = script();
@@ -926,13 +850,11 @@ fn set_justify_h_is_stored_and_answered_but_never_drawn() {
         "LEFT",
         "the tag's absent align (LEFT) wins over the element font's justify"
     );
-    // A non-token raises, exactly as `0x87c77c`'s usage arm does.
+    // A non-token raises the usage string (`0x87c77c`).
     assert!(s.run(r#"Page:SetJustifyH("sideways")"#).is_err());
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// Helpers that need the resolve
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── Helpers that need the resolve ──
 
 /// Every block's resolved `(top, bottom)`, in block order.
 fn resolved_tops(s: &UiScript, name: &str) -> Vec<(f32, f32)> {
@@ -949,7 +871,6 @@ fn resolved_tops(s: &UiScript, name: &str) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// One block's resolved rect if it HAS one — the shape a region with no span reaches.
 fn maybe_resolved_rect(s: &UiScript, name: &str, block: usize) -> Option<crate::layout::Rect> {
     let lua = s.lua();
     let model = lua.app_data_ref::<Model>().expect("model");
@@ -958,7 +879,6 @@ fn maybe_resolved_rect(s: &UiScript, name: &str, block: usize) -> Option<crate::
     model.region_resolved.get(&st.blocks[block]).copied()
 }
 
-/// One block's resolved rect, by index in the block list.
 fn resolved_rect(s: &UiScript, name: &str, block: usize) -> crate::layout::Rect {
     let lua = s.lua();
     let model = lua.app_data_ref::<Model>().expect("model");
@@ -970,7 +890,7 @@ fn resolved_rect(s: &UiScript, name: &str, block: usize) -> crate::layout::Rect 
         .expect("block rect")
 }
 
-/// The text of every quad the extract emits for the page — what is actually on screen.
+/// The text of every quad the extract emits: what is on screen.
 fn page_texts_on_screen(s: &UiScript) -> Vec<String> {
     s.extract()
         .into_iter()
@@ -981,8 +901,7 @@ fn page_texts_on_screen(s: &UiScript) -> Vec<String> {
         .collect()
 }
 
-/// A Rust string as a Lua long-bracket literal — the bodies here are full of quotes and
-/// backslashes, and escaping them twice is how a test asserts on the wrong string.
+/// A Rust string as a Lua long-bracket literal, so quotes and backslashes need no second escape.
 fn lua_str(s: &str) -> String {
     format!("[==[{s}]==]")
 }

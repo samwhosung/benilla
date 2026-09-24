@@ -1,21 +1,17 @@
-//! The EditBox text-UI seam — the `impl UiScript` surface the host drives each frame: the
-//! advance-table round trip (request → host measures → answer), the caret/selection/scroll
-//! geometry derived from it, and the clipboard pair. Split beside its concern per the layout.rs
-//! pattern (the measure-seam siblings live there).
+//! The EditBox seam the host drives each frame: the advance-table round trip, the caret,
+//! selection and scroll geometry derived from it, and the clipboard pair.
 
 use crate::script::{types, UiScript};
 use crate::widget::KindState;
 
 impl UiScript {
-    /// The focused EditBox's advance-table request (the metrics half of the mouse/selection law):
-    /// `Some` when the box's DISPLAY string needs its per-byte cumulative widths measured (text or
-    /// font changed since the last answer). Answer via [`Self::set_editbox_advances`] before
-    /// [`Self::focused_editbox_text_ui`] — an empty display settles engine-side without a trip.
+    /// The focused EditBox's request to measure its display string's per-byte cumulative widths,
+    /// when its text, font, scale or wrap width changed; an empty display needs no trip. Answer it
+    /// with [`Self::set_editbox_advances`] before [`Self::focused_editbox_text_ui`].
     pub fn editbox_advances_request(&mut self) -> Option<types::EditBoxAdvanceRequest> {
         use std::hash::{Hash, Hasher};
         let h = self.model_mut().focused_editbox?;
-        // Materialize the lazy text region first — its resolved font is the table's identity
-        // (a just-focused CreateFrame'd box has none until here).
+        // The lazy text region first: its font keys the table, and a new box has none until now.
         let rh = super::ensure_text_region(self.lua(), h)?;
         let mut model = self.model_mut();
         let (display, multi_line) = match model.arena.frame(h).map(|f| &f.kind_state) {
@@ -26,15 +22,13 @@ impl UiScript {
         let font = d.and_then(|d| d.font_path.clone());
         let height = d.and_then(|d| d.font_height);
         let outline = d.map(|d| d.outline).unwrap_or_default();
-        // The box's effective_scale rides the request ([`types::EditBoxAdvanceRequest::scale`]):
-        // the host measures at the drawn raster size so the advances land on the drawn glyphs.
+        // The host measures at the drawn raster size, so the advances land on the drawn glyphs.
         let scale = model
             .arena
             .frame(h)
             .map(|f| f.effective_scale)
             .unwrap_or(1.0);
-        // A multiline box also needs its wrap rows — at the text region's resolved width, the
-        // same width the draw wraps at. Folded into the cache key: a resize re-wraps.
+        // A multi-line box wraps at the text region's width, as the draw does; a resize re-keys.
         let wrap_width = multi_line
             .then(|| {
                 model
@@ -79,10 +73,8 @@ impl UiScript {
         })
     }
 
-    /// Answer an [`Self::editbox_advances_request`]: the per-byte cumulative laid-out widths of
-    /// the requested display string (len+1 entries, `[0] = 0`), plus the wrapped-row starts and
-    /// row pitch (single-line: `rows = [0]`, `cell_h` the line em — only a multiline box reads
-    /// them, but the answer is uniform).
+    /// Answer an [`Self::editbox_advances_request`]: the cumulative widths (len+1 entries from 0),
+    /// the wrapped-row starts and the row pitch, which only a multi-line box reads.
     pub fn set_editbox_advances(
         &mut self,
         id: u32,
@@ -103,13 +95,9 @@ impl UiScript {
         }
     }
 
-    /// The focused EditBox's text-UI geometry for this frame (caret/highlight geometry is left to
-    /// the host): which Text quad is the box's (`target`), the scroll window to draw
-    /// (`display_from`), and the caret/selection x-spans within it — all advance-table-derived.
-    /// Clamps the scroll window against the text region's resolved width first (the
-    /// scroll-into-view invariant, `0x77da80`). `None` when nothing is focused, the box is
-    /// off-screen, or the advance table hasn't been answered yet (text still draws; the caret and
-    /// highlight sit that frame out).
+    /// The focused EditBox's text geometry this frame: its text quad, the scroll window and the
+    /// caret and selection spans in it, after scrolling the caret into view (`0x77da80`). `None`
+    /// until the advance table is answered: the text draws, without caret or highlight.
     pub fn focused_editbox_text_ui(&mut self) -> Option<types::EditBoxTextUi> {
         let h = {
             let model = self.model_mut();
@@ -120,12 +108,10 @@ impl UiScript {
             }
             h
         };
-        // Focus means "about to type": materialize the lazy text region (the same lazy
-        // constructor `sync_text_region` uses), so an empty just-focused box has a caret home.
+        // Materialize the lazy text region, so an empty, just-focused box has a caret home.
         let rh = super::ensure_text_region(self.lua(), h)?;
         let mut model = self.model_mut();
-        // The text region's resolved width; an unanchored region (a CreateFrame'd box without
-        // insets) draws over its owner, so the frame's own rect is its width.
+        // An unanchored text region draws over its owner, so the frame's own width stands in.
         let avail = model
             .region_resolved
             .get(&rh)
@@ -141,12 +127,11 @@ impl UiScript {
             return None;
         }
         if display.is_empty() {
-            // Trivial table — no host trip needed for an empty box.
             eb.advances = vec![0.0];
             eb.rows = vec![0];
         }
-        // Keep the caret inside the window, leaving it a pixel to stand in at the right edge
-        // (multiline: pins the window to 0 — the box wraps instead).
+        // Keep the caret inside the window with room at the right edge; a multi-line box wraps
+        // instead, its window pinned at 0.
         eb.clamp_scroll((avail - 2.0).max(0.0));
         let from = eb.scroll_start.min(display.len());
         let origin = eb.advances[from];
@@ -158,8 +143,7 @@ impl UiScript {
         );
         let (caret_row, caret_x, selection) = if eb.multi_line {
             let (row, x) = eb.caret_row_x(cursor_d);
-            // The selection as per-row spans: each touched row contributes the intersection of
-            // its byte range with [da, db), x-measured from the row's own origin.
+            // One span per touched row, its overlap with [da, db), measured from the row's origin.
             let mut spans = Vec::new();
             if da != db {
                 for i in 0..eb.rows.len() {
@@ -197,9 +181,8 @@ impl UiScript {
         })
     }
 
-    /// Ctrl/Cmd+C for the focused EditBox: the selected substring for the OS clipboard (`None` =
-    /// no selection; a password box yields its mask run, never the real text — the client's fixed
-    /// placeholder `0x882748`).
+    /// Ctrl/Cmd+C: the focused EditBox's selection for the OS clipboard; a password box yields its
+    /// mask run, never the text, where the client copies the empty string (`0x882748`).
     pub fn editbox_copy(&mut self) -> Option<String> {
         super::copy_selection(self.lua())
     }
@@ -209,11 +192,9 @@ impl UiScript {
         super::cut_selection(self.lua())
     }
 
-    /// Push one submitted line into the named box's recall history — the ref's
-    /// `ChatEdit_AddHistory` slot (the canonical slash line, added by the app's router AFTER it
-    /// parses the send). By name, not focus: the submit pipeline is asynchronous,
-    /// so by the time the router runs, the box has already cleared and dropped focus. Returns
-    /// `false` when `box_name` names no live EditBox.
+    /// Push a sent line, as its canonical slash line, into the named box's history where the
+    /// reference calls `ChatEdit_AddHistory`. By name: the router runs after the box has cleared
+    /// and lost focus. `false` when `box_name` is no live EditBox.
     pub fn editbox_add_history(&mut self, box_name: &str, line: &str) -> bool {
         let lua = self.lua();
         let Ok(t) = lua.globals().get::<mlua::Table>(box_name) else {

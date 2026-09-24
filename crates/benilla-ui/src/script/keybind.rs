@@ -1,33 +1,7 @@
-//! The **key-binding table** — the client's chord→command store, engine side.
-//!
-//! In the reference every rebindable action is a *binding*: a command name (`MOVEFORWARD`)
-//! carrying a category header and up to two bound key chords, stored key→command and saved to
-//! `bindings-cache.wtf`. 1.12 exposes the whole system to Lua (`Blizzard_BindingUI` is plain
-//! FrameXML over it): `GetNumBindings`/`GetBinding(i)`, `SetBinding(key[, command])` with its
-//! steal-the-key law, `GetBindingKey`/`GetBindingAction`, and the three-set model —
-//! `LoadBindings(0 default | 1 account | 2 character)`, `SaveBindings(which)`,
-//! `GetCurrentBindingSet()`.
-//!
-//! benilla keeps the same shape at the same seam, split like the CVar table: the **host
-//! registers** the commands it actually implements (honest-tree — no row without a real engine
-//! action) with their 1.12 default chords, **this table is the string-domain truth** the window's
-//! Lua reads and writes synchronously, and the app derives its dispatch view (parsed chords →
-//! latched commands) whenever [`super::UiScript::keybinds_generation`] moves, persisting on the
-//! queued [`KeybindRequest::Save`]. Chord strings are the reference's own canon —
-//! `[ALT-][CTRL-][SHIFT-]<TOKEN>` (`W`, `SPACE`, `NUMPAD0`, `BUTTON4`, `MOUSEWHEELUP`) — matched
-//! by string equality exactly as the client does (decision 0585's law, now engine-wide).
-//!
-//! The stored account/character sets live here too (seeded by the app from
-//! `benilla-config/bindings/…`, re-snapshotted on save), so `LoadBindings` is **synchronous** like the
-//! reference's — the window calls it and repaints in the same tick, no host round-trip.
-//!
-//! **Addons register into the same table** (decision 1188 phase 4). An addon's `Bindings.xml`
-//! ([`crate::bindings_xml`]) arrives through [`super::UiScript::register_addon_bindings`] and
-//! becomes ordinary rows: same names, same chords, same window, same save file. The one thing an
-//! addon row carries that a host row does not is a **body** — the Lua chunk the app's dispatch
-//! runs on the press (and, for `runOnUp`, again on the release with `keystate = "up"`) — because a
-//! host command's action is engine-side and has no Lua to hold. That body is the *only* asymmetry;
-//! everything downstream of registration treats the two identically.
+//! The key-binding table behind `GetBinding`, `SetBinding`, `LoadBindings` and their kin: per
+//! command, a category header and its chords, spelled `[ALT-][CTRL-][SHIFT-]<TOKEN>` and matched by
+//! string equality as the reference does. Host commands carry their 1.12 defaults; an addon's
+//! `Bindings.xml` adds ordinary rows that also carry a Lua body.
 
 use std::collections::HashMap;
 
@@ -37,10 +11,9 @@ use crate::bindings_xml::AddonBinding;
 
 use super::Model;
 
-/// One host-registered command: the 1.12 name, its category header's global-string key
-/// (`BINDING_HEADER_MOVEMENT`), whether it has press+release semantics (`runOnUp` — the
-/// release half of a press rides this — `RunCommand 0x4b7bf1`, and nothing else: it is NOT a
-/// bindability rule, see [`normalize_binding_key`]), and the 1.12 default chords.
+/// One host-registered command: the 1.12 name, its category header's global string
+/// (`BINDING_HEADER_MOVEMENT`), whether it also runs on release (`runOnUp`, read only by
+/// `RunCommand` at `0x4b7bf1`, never a bindability rule), and the 1.12 default chords.
 #[derive(Clone, Copy, Debug)]
 pub struct KeybindCommand {
     pub name: &'static str,
@@ -50,17 +23,10 @@ pub struct KeybindCommand {
     pub default2: Option<&'static str>,
 }
 
-/// One addon-declared binding's **runnable half** — what the app's dispatch needs to fire a row
-/// it cannot find in its own `SPECS` registry (decision 1188 phase 4).
-///
-/// The dispatch view is re-derived whenever [`super::UiScript::keybinds_generation`] moves, so
-/// this is a snapshot like [`super::UiScript::keybind_snapshot`] rather than a borrow — same
-/// reason: the app holds it across frames while Lua keeps editing the table underneath.
+/// An addon binding's runnable half: what the app's dispatch needs to fire it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AddonBindingBody {
-    /// The command name, exactly as registered — what a [`keybind_snapshot`] row is keyed by.
-    ///
-    /// [`keybind_snapshot`]: super::UiScript::keybind_snapshot
+    /// The command name as registered, the key of a `keybind_snapshot` row.
     pub name: String,
     /// Run the body a second time on the release, with `keystate = "up"` (`runOnUp="true"`).
     pub run_on_up: bool,
@@ -68,36 +34,22 @@ pub struct AddonBindingBody {
     pub body: String,
 }
 
-/// A host request queued by Lua: persist the live table as set `1`/`2` (`Save`), on which the
-/// app writes `benilla-config/bindings/…` — and, for `Save(1)` issued while the character set was
-/// active, deletes the character file (the reference's confirmed delete-on-switch); or fire a
-/// named binding's action outright (`Run`).
+/// A host request queued by Lua. `Save(set)` persists set 1 or 2 under `benilla-config/bindings/`;
+/// `Save(1)` also deletes the character set's file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeybindRequest {
     Save(u32),
-    /// `RunBinding("SCREENSHOT")` — run the command's action as if its chord had been pressed.
-    /// It is a *request* rather than something the VM can do itself because a host command's
-    /// action is engine-side by construction (see this module's header): the VM holds the command
-    /// name and its chords, never its body.
+    /// `RunBinding(command)`: the app runs the command's action as if its chord were pressed.
     Run(String),
 }
 
-/// The reference's key-string gate — the whole of `SetBinding`'s refusal, in its
-/// two halves: the alias normalization at the head of `CBindings::SetBinding 0x4b7490`, and the
-/// validator `IsValidBindingKeyString 0x4b7890` it then calls.
-///
-/// `Some` is the string to STORE — upper-cased, because the table's hash and its bucket compare
-/// both fold case (`0x64b3f0` / `0x64a4c0`), so `"shift-w"` and `"SHIFT-W"` are one key. `None` is
-/// the refusal, and it is the *only* one the reference has: no command is ever consulted.
-///
-/// The two halves disagree about case on purpose, and that is verified, not a guess: the alias
-/// compare is case-insensitive, the validator is case-SENSITIVE at all three of its sites
-/// (`0x64a480` → `0x40de80`). So `SetBinding("mousewheelup", …)` answers nil while
-/// `SetBinding("MOUSEWHEELUP", …)` binds — and a *lookup* for either finds it.
+/// `SetBinding`'s only refusal: the alias step of `CBindings::SetBinding` (`0x4b7490`), then
+/// `IsValidBindingKeyString` (`0x4b7890`); no command is consulted. `Some` is the key to store,
+/// upper-cased because the table's hash and compare fold case (`0x64b3f0`, `0x64a4c0`). The alias
+/// step ignores case but the validator does not (`0x64a480`), so `"mousewheelup"` is refused.
 pub fn normalize_binding_key(key: &str) -> Option<String> {
-    // Eleven punctuation NAMES become their literal character. A WHOLE-STRING compare, so
-    // `SHIFT-LEFTBRACKET` is not normalized — and then fails the validator, where the accepted
-    // spelling `SHIFT-[` passes.
+    // Eleven punctuation names become their character on a whole-string match only, so
+    // `SHIFT-LEFTBRACKET` is refused where `SHIFT-[` passes.
     const ALIASES: [(&str, &str); 11] = [
         ("LEFTBRACKET", "["),
         ("RIGHTBRACKET", "]"),
@@ -120,9 +72,7 @@ pub fn normalize_binding_key(key: &str) -> Option<String> {
 
 /// `IsValidBindingKeyString 0x4b7890`, arm for arm.
 fn is_valid_binding_key(key: &str) -> bool {
-    // 1. Strip `SHIFT-`/`CTRL-`/`ALT-` repeatedly — the loop restarts while any matched
-    //    (`0x4b78a0`–`0x4b78d0`), so the validator takes modifiers in ANY order and REPEATED,
-    //    unlike the fixed ALT-CTRL-SHIFT order the chord builder emits.
+    // 1. Modifier prefixes, in any order and any number of times (`0x4b78a0`-`0x4b78d0`).
     let mut rest = key;
     while let Some(next) = ["SHIFT-", "CTRL-", "ALT-"]
         .iter()
@@ -130,14 +80,11 @@ fn is_valid_binding_key(key: &str) -> bool {
     {
         rest = next;
     }
-    // 2. One character passes (`0x41aab0` decode, `0x4b78e6`) — which is how every letter, digit
-    //    and punctuation key is bindable without being named anywhere. The empty string lands in
-    //    the same arm and passes too; `SHIFT-` alone is therefore a legal (unpressable) key.
+    // 2. One character or none passes (`0x4b78e6`): `SHIFT-` alone is a legal key.
     if rest.chars().count() <= 1 {
         return true;
     }
-    // 3. `F`/`NUMPAD`/`BUTTON` (the table at `0x846c04`) followed by digits and nothing else.
-    //    `NUMPADPLUS` falls through here to arm 4, its remainder not being digits.
+    // 3. `F`, `NUMPAD` or `BUTTON` (`0x846c04`) followed by digits only.
     for prefix in ["F", "NUMPAD", "BUTTON"] {
         if let Some(digits) = rest.strip_prefix(prefix) {
             if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
@@ -145,9 +92,7 @@ fn is_valid_binding_key(key: &str) -> bool {
             }
         }
     }
-    // 4. The 26 names at `0x846c20`…`0x846c84`. `SHIFT`/`CTRL`/`ALT`/`UNKNOWN` are in none of the
-    //    arms, which is why a lone modifier can never be bound — and `SCROLLLOCK`/`PAUSE` are in
-    //    none either, matching the namer that calls their key codes `UNKNOWN` (`0x210`/`0x211`).
+    // 4. The 26 names at `0x846c20`-`0x846c84`: no lone modifier, `SCROLLLOCK` or `PAUSE`.
     const NAMES: [&str; 26] = [
         "SPACE",
         "NUMPADPLUS",
@@ -185,83 +130,49 @@ struct Entry {
     category: String,
     run_on_up: bool,
     defaults: [Option<String>; 2],
-    /// The live bound chords, in bind order (the reference's per-command key list; the first two
-    /// are what `GetBindingKey` and the window's Key 1/Key 2 columns show).
+    /// The live chords in bind order; `GetBindingKey` and the window show the first two.
     keys: Vec<String>,
-    /// `hidden="true"` on an addon's `<Binding>` — bindable, saved and dispatched like any other
-    /// row, but absent from the window's enumeration ([`KeybindState::visible`]). Always `false`
-    /// for a host command: the registry is an honest tree, so there is nothing in it to hide.
+    /// An addon's `hidden="true"`: a full binding, left out of `GetNumBindings`/`GetBinding`.
     hidden: bool,
-    /// An addon binding's Lua chunk; `None` for a host command, whose action is engine-side. This
-    /// is what makes a row an addon's — see the module doc.
+    /// An addon binding's Lua chunk; `None` for a host command, whose action is engine-side.
     body: Option<String>,
 }
 
-/// The table + the stored sets + the Lua→host seams. Lives in [`Model`].
+/// The table, the stored sets and the queued host requests; lives in [`Model`].
 #[derive(Default)]
 pub(crate) struct KeybindState {
     entries: Vec<Entry>,
     by_name: HashMap<String, usize>,
-    /// Saved snapshots: `stored[0]` = account (set 1), `stored[1]` = character (set 2, `None`
-    /// when no character-specific bindings exist). Each is per-entry key lists, entry order.
+    /// Stored sets in entry order: `[0]` account (set 1), `[1]` character (set 2, if any).
     stored: [Option<Vec<Vec<String>>>; 2],
-    /// The same two stored sets **by command name**.
-    ///
-    /// [`Self::stored`] is positional over [`Self::entries`], which is exactly right for the
-    /// commands that exist when a set is seeded and useless for the ones that do not: an addon's
-    /// `Bindings.xml` registers at world entry, long after the account set was seeded at boot, so
-    /// its row in the stored file had no slot to land in and its chord was silently dropped. The
-    /// binding registered, listed in the window, dispatched — and forgot its key every restart
-    /// (the defect 1192 §4 recorded). Keyed by the UPPERCASED name, like `by_name`.
+    /// The same sets by uppercased name, for addon commands registered after the seed.
     stored_by_name: [HashMap<String, Vec<String>>; 2],
-    /// `1` account, `2` character — which set the live table edits (`GetCurrentBindingSet`).
+    /// The set the live table edits (`GetCurrentBindingSet`): 1 account, 2 character.
     current_set: u32,
-    /// Bumped by every live-table mutation and every seed — the app's re-derive-dispatch signal.
+    /// Bumped by every change to the live table: the app's signal to re-derive dispatch.
     generation: u64,
     requests: Vec<KeybindRequest>,
-    /// The Keybindings page's capture arm (`BenillaBindCapture(armed)`): while set, the host
-    /// swallows raw input and calls the page back with the canonical chord string.
+    /// Set by `BenillaBindCapture`: the host swallows raw input and hands the page the chord.
     capture_armed: bool,
 }
 
 impl KeybindState {
-    /// The rows the Key Bindings window enumerates — everything except the `hidden="true"` ones
-    /// (decision 1188 phase 4).
-    ///
-    /// The filter lives at the *Lua enumeration* (`GetNumBindings`/`GetBinding`) rather than at
-    /// registration, because a hidden binding is a real binding everywhere else: `SetBinding` can
-    /// bind it, `GetBindingAction` reports it, the app dispatches it, and the save file carries
-    /// it. That is 1.12's own split — the shipped `Blizzard_BindingUI.lua` filters on nothing but
-    /// the `HEADER` prefix (l.87), so `hidden` can only be the engine's own exclusion from the
-    /// enumeration it walks, and the twelve hidden rows (the debug toggles, `TURNORACTION`,
-    /// `CAMERAORSELECTORMOVE`…) are exactly the ones no 1.12 Key Bindings window shows.
-    ///
-    /// Inert for everything shipped today: no host command is hidden, so the enumeration is
-    /// entry-for-entry what it was before addons could register.
+    /// The rows `GetNumBindings`/`GetBinding` enumerate: all but `hidden="true"`, since the stock
+    /// window skips only `HEADER` rows (`Blizzard_BindingUI.lua:87`).
     fn visible(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter().filter(|e| !e.hidden)
     }
 
-    /// The reference's `SetBinding(key[, command])`: unbind `key` wherever it is, then (with a
-    /// command) append it to that command's key list.
-    ///
-    /// **The only thing it refuses is a key string that is not a key**. We used to
-    /// refuse a mousewheel chord on a press+release (`runOnUp`) command — the reading everyone
-    /// takes from `Blizzard_BindingUI`'s `if not SetBinding(…) then … KEYBINDINGFRAME_MOUSEWHEEL_
-    /// ERROR`. It is wrong: `CBindings::SetBinding 0x4b7490` never reads a command node at all
-    /// (neither the target's nor the incumbent's), and its one reachable falsey return is the
-    /// validator at `0x4b762c`. `"runOnUp"` has exactly one reader image-wide — `0x4b7bf1`, in
-    /// `RunCommand`, gating the up half. So 1.12 binds the wheel to an action button happily, and
-    /// B265 was ours.
+    /// `SetBinding(key[, command])`: unbind `key` everywhere, then append it to the command's
+    /// list. The reference refuses only an invalid key (`0x4b762c`) and never reads the command
+    /// (`0x4b7490`), so the wheel binds to a `runOnUp` command despite the stock window's
+    /// MOUSEWHEEL_ERROR branch.
     fn set_binding(&mut self, key: &str, command: Option<&str>) -> bool {
         let Some(key) = normalize_binding_key(key) else {
             return false;
         };
-        // The one divergence left here (1295): the reference stores the action string verbatim,
-        // so `SetBinding("K", "NOSUCHCOMMAND")` answers 1 there and nil here. Our table is
-        // command-centric — a key list per registered command — and has nowhere to put a binding
-        // whose command does not exist. Nothing reachable today can hit it: the window offers
-        // only registered rows, and an addon's own names register from its `Bindings.xml`.
+        // Deviation: an unregistered command answers nil where the reference stores the string
+        // and answers 1, because this table only holds key lists of registered commands.
         let cmd_idx = match command {
             Some(name) => match self.by_name.get(&name.to_ascii_uppercase()) {
                 Some(&i) => Some(i),
@@ -279,14 +190,12 @@ impl KeybindState {
         true
     }
 
-    /// Snapshot the live key lists (entry order) — the stored-set payload.
+    /// The live key lists in entry order, as a stored set holds them.
     fn snapshot(&self) -> Vec<Vec<String>> {
         self.entries.iter().map(|e| e.keys.clone()).collect()
     }
 
-    /// Replace the live key lists from a snapshot (entry-count mismatch pads/truncates — a
-    /// stored set from before a command was registered simply leaves the new command on its
-    /// live value).
+    /// Replace the live key lists from a snapshot; an entry past the snapshot's end keeps its keys.
     fn apply(&mut self, snap: &[Vec<String>]) {
         for (i, e) in self.entries.iter_mut().enumerate() {
             if let Some(keys) = snap.get(i) {
@@ -303,10 +212,9 @@ impl KeybindState {
             .collect()
     }
 
-    /// The reference's `LoadBindings(set)`: 0 = defaults, 1 = account, 2 = character (falling
-    /// back to the account snapshot when no character set exists — the reference's character
-    /// set starts as a copy). Loading 1/2 also moves `current_set`; loading defaults does not
-    /// (you are still *editing* the set you had, as in the window's Reset To Default).
+    /// `LoadBindings(set)`: 0 defaults, 1 account, 2 character, which falls back to the account
+    /// set (the reference's starts as a copy). Loading defaults keeps the current set, as the
+    /// window's Reset To Default does.
     fn load(&mut self, set: u32) {
         match set {
             0 => {
@@ -332,9 +240,8 @@ impl KeybindState {
         }
     }
 
-    /// The reference's `SaveBindings(which)`: snapshot live into set `which`, make it current,
-    /// and — saving account while character bindings exist — drop the character set (the
-    /// window's confirmed permanent delete). Queues the host persist.
+    /// `SaveBindings(which)`: store the live table as set `which` and make it current. Saving the
+    /// account set drops the character set, the window's confirmed delete.
     fn save(&mut self, which: u32) {
         if which != 1 && which != 2 {
             return;
@@ -347,45 +254,19 @@ impl KeybindState {
         self.requests.push(KeybindRequest::Save(which));
     }
 
-    /// Append one addon's parsed `Bindings.xml` (decision 1188 phase 4).
-    ///
-    /// **Append-only and idempotent per uppercased name**, exactly like [`super::UiScript::
-    /// register_bindings`] — which is also what makes a host command win outright: `MOVEFORWARD`
-    /// is already in the table when an addon declares it, so the addon's row is skipped and the
-    /// engine's real action keeps the name. Nothing is ever replaced, so an index handed out
-    /// earlier (the dispatch view's, the window's row) stays valid.
-    ///
-    /// **The section carry-forward** is applied here, where the addon's identity is known: a
-    /// `header` attribute opens a section that runs until the next one (the reference's list is
-    /// flat with `HEADER_*` pseudo-entries in it, so 13 headers cover its 228 bindings — and our
-    /// own `SPECS` table already encodes exactly that reading, giving `MOVEBACKWARD` the
-    /// `MOVEMENT` header its `<Binding>` never states).
-    ///
-    /// **A file whose first bindings declare no header at all gets the addon's own name** as
-    /// their section token, and that is a deliberate divergence: the reference would continue
-    /// whatever section the *previous file* ended in, which under our per-entry category (0997's
-    /// era-shaped `GetBinding`) would file an addon's keys under `BINDING_HEADER_CAMERA` and make
-    /// them unfindable. The window renders an unknown token literally
-    /// (`KeyBindings_String(token, token)`), so the section simply reads as the addon's name —
-    /// which is the honest answer to "where did these come from". A declared header keeps the
-    /// ecosystem's convention (`header="MYADDON"` → `BINDING_HEADER_MYADDON`, the global string
-    /// the addon defines in its own Lua).
+    /// Append one addon's parsed `Bindings.xml`, skipping a name already registered, so a host
+    /// command keeps it and no handed-out index moves. A `header` opens a section
+    /// (`BINDING_HEADER_<header>`) until the next one, as in the reference's flat list.
+    /// Deviation: rows before a file's first header take the addon's name as their section, not
+    /// the previous file's, because under a foreign header the player could not find them.
     fn register_addon(&mut self, addon: &str, bindings: &[AddonBinding]) {
         let mut section = addon.to_string();
         for b in bindings {
-            // **`platform` skips the whole NODE, header and all** — `0x4b70c3`-`0x4b70e5` bails
-            // out of the element before anything on it is read. It matters here and nowhere else:
-            // `header="ITUNES_REMOTE"` rides on `ITUNES_PLAYPAUSE`, the first of the five
-            // `platform="mac"` rows, so on a build that is not the Mac one that category does not
-            // merely come up empty — it never exists. Keeping the header of a skipped row would
-            // leave its section open over whatever followed.
+            // A foreign `platform` skips the whole node, header included (`0x4b70c3`-`0x4b70e5`).
             if b.platform.as_deref().is_some_and(|p| p != THIS_PLATFORM) {
                 continue;
             }
-            // Before the duplicate skip below: a duplicate name still *closes* a section the same
-            // way, because the header is a property of the file's order, not of the row that
-            // survived it. (Not the platform case above — a duplicate is a node the loader read
-            // and rejected; a foreign-platform node it never read at all.)
+            // Before the duplicate skip: a duplicate's header still opens its section.
             if let Some(h) = &b.header {
                 section = format!("BINDING_HEADER_{h}");
             }
@@ -394,9 +275,7 @@ impl KeybindState {
                 continue;
             }
             let idx = self.entries.len();
-            // The player's stored chord for this command, if they ever set one.
-            // The CURRENT set first, then the account set behind it — the same precedence `load`
-            // applies, so an addon binding restores exactly like a shipped one.
+            // The stored chord: the current set first, then the account set, as `load` falls back.
             let stored = {
                 let cur = if self.current_set == 2 { 1 } else { 0 };
                 self.stored_by_name[cur]
@@ -409,9 +288,7 @@ impl KeybindState {
                 name: b.name.clone(),
                 category: section.clone(),
                 run_on_up: b.run_on_up,
-                // 1.12's `<Binding>` carries no default chord — the shipped defaults live in the
-                // engine's own table, which is why every addon binding starts unbound and the
-                // player binds it in the window.
+                // 1.12's `<Binding>` carries no default chord.
                 defaults: [None, None],
                 keys: stored.unwrap_or_default(),
                 hidden: b.hidden,
@@ -422,11 +299,8 @@ impl KeybindState {
     }
 }
 
-/// What `platform="…"` has to equal for a binding to register here — the reference's own two
-/// spellings, read out of both binaries: the Windows build compares against `"windows"`
-/// (`0x846f98`, tested at `0x4b70c3`-`0x4b70e5`) and the Mac slice against `"mac"` (`0x4e28f8`).
-/// Every other OS benilla runs on takes the `"windows"` name rather than inventing a third — the
-/// only thing this attribute has ever distinguished is a 2006 Carbon app from everything else.
+/// The `platform="…"` value that registers here: the Windows client compares against `"windows"`
+/// (`0x846f98`), the Mac client against `"mac"` (`0x4e28f8`); every other OS takes `"windows"`.
 const THIS_PLATFORM: &str = if cfg!(target_os = "macos") {
     "mac"
 } else {
@@ -434,8 +308,7 @@ const THIS_PLATFORM: &str = if cfg!(target_os = "macos") {
 };
 
 impl super::UiScript {
-    /// Register the host-implemented commands (boot-time, order = the 1.12 `Bindings.xml`
-    /// order). Idempotent per name; live keys seed from the defaults.
+    /// Register the host's commands at boot, in 1.12 `Bindings.xml` order, keys from the defaults.
     pub fn register_bindings(&mut self, commands: &[KeybindCommand]) {
         let mut model = self.model_mut();
         for c in commands {
@@ -460,25 +333,13 @@ impl super::UiScript {
         model.keybinds.generation += 1;
     }
 
-    /// Register one addon's parsed `Bindings.xml` — the runtime-`String` sibling of
-    /// [`Self::register_bindings`] (decision 1188 phase 4), called at the reference's own position
-    /// in the addon load: after that addon's `.toc` files, before its saved variables
-    /// (`0x51f400`).
-    ///
-    /// Two methods rather than one because the two payloads are genuinely different: a host
-    /// command is `&'static str` all the way down (it names a Rust action and ships default
-    /// chords), an addon's is owned text read off disk this session (it names nothing and carries
-    /// a Lua body). The rules they register under are identical — see
-    /// [`KeybindState::register_addon`].
+    /// Register one addon's parsed `Bindings.xml`, at the reference's point in the addon load:
+    /// after its `.toc` files, before its saved variables (`0x51f400`).
     pub fn register_addon_bindings(&mut self, addon: &str, bindings: &[AddonBinding]) {
         self.model_mut().keybinds.register_addon(addon, bindings);
     }
 
-    /// Every addon-declared binding's runnable half, in registration order — the app's dispatch
-    /// derivation reads this beside [`Self::keybind_snapshot`] and indexes into it.
-    ///
-    /// Host commands are absent by construction (they have no body), which is what lets the app's
-    /// dispatch target be a two-armed enum rather than an index space with a sentinel in it.
+    /// Every addon binding's runnable half, in registration order; host commands have none.
     pub fn addon_binding_bodies(&self) -> Vec<AddonBindingBody> {
         self.model_mut()
             .keybinds
@@ -494,17 +355,12 @@ impl super::UiScript {
             .collect()
     }
 
-    /// Host-side seed of a stored set (`1` account / `2` character) — the loaded
-    /// `benilla-config/bindings/…` state, already resolved to full per-command key lists by the app's
-    /// diff layer. Passing the character set marks it existing (the window's checkbox state);
-    /// `seed_binding_set(2, None)` clears it. Does not touch the live table — call
-    /// [`Self::load_binding_set`] after seeding to activate one.
+    /// Seed stored set 1 (account) or 2 (character) from `benilla-config/bindings/`; `None` clears
+    /// it. The live table is untouched until [`Self::load_binding_set`].
     pub fn seed_binding_set(&mut self, set: u32, keys: Option<Vec<(String, Vec<String>)>>) {
         let mut model = self.model_mut();
         let kb = &mut model.keybinds;
-        // Keep the pairs BY NAME as well as positionally: a command that does not exist yet
-        // (an addon's, registered at world entry) has no position to occupy, and the by-name map
-        // is what `register_addon` consults when it finally does.
+        // By name as well: an addon command registered later has no position yet.
         let mut by_name_owned: HashMap<String, Vec<String>> = HashMap::new();
         let snap = keys.map(|pairs| {
             let by_name: HashMap<_, _> = pairs.into_iter().collect();
@@ -540,8 +396,7 @@ impl super::UiScript {
         self.model_mut().keybinds.load(set);
     }
 
-    /// The live table as `(command, bound chords)` in registration order — the app's dispatch
-    /// derivation and the save diff read this.
+    /// The live table as `(command, chords)` in registration order, for dispatch and the save.
     pub fn keybind_snapshot(&self) -> Vec<(String, Vec<String>)> {
         self.model_mut()
             .keybinds
@@ -551,13 +406,12 @@ impl super::UiScript {
             .collect()
     }
 
-    /// Bumped by every table mutation (Lua or host) — cheap to poll; re-derive dispatch when it
-    /// moves (the macros-generation pattern).
+    /// Bumped by every table change; re-derive dispatch when it moves.
     pub fn keybinds_generation(&self) -> u64 {
         self.model_mut().keybinds.generation
     }
 
-    /// Drain the queued host requests (persist-on-save).
+    /// Drain the queued host requests.
     pub fn take_keybind_requests(&mut self) -> Vec<KeybindRequest> {
         std::mem::take(&mut self.model_mut().keybinds.requests)
     }
@@ -567,23 +421,19 @@ impl super::UiScript {
         self.model_mut().keybinds.current_set
     }
 
-    /// Whether a character-specific stored set exists (the checkbox's persisted truth).
+    /// Whether a character-specific stored set exists (the window's checkbox).
     pub fn character_bindings_exist(&self) -> bool {
         self.model_mut().keybinds.stored[1].is_some()
     }
 
-    /// The Keybindings page's capture arm — while true, the host swallows raw input and
-    /// calls `KeyBindings_OnHostKey("<chord>")` instead of dispatching it.
+    /// While true, the host swallows raw input and calls `KeyBindings_OnHostKey("<chord>")`.
     pub fn bind_capture_armed(&self) -> bool {
         self.model_mut().keybinds.capture_armed
     }
 }
 
-/// Register one addon's parsed `Bindings.xml` from a bare `&Lua` — the `LoadAddOn` path
-/// ([`super::addon::load_addon`]) runs *inside* a Lua binding, synchronously, and has no
-/// [`super::UiScript`] to reach. The exact shape `load_saved_variables` already uses next door,
-/// and for the same reason: both halves of the addon load must do the same thing at the same
-/// position, whichever entered.
+/// Register one addon's `Bindings.xml` from a bare `&Lua`: `LoadAddOn` runs inside a Lua binding
+/// with no `UiScript` to reach.
 pub(crate) fn register_addon_bindings(lua: &Lua, addon: &str, bindings: &[AddonBinding]) {
     lua.app_data_mut::<Model>()
         .expect("model app_data")
@@ -591,12 +441,9 @@ pub(crate) fn register_addon_bindings(lua: &Lua, addon: &str, bindings: &[AddonB
         .register_addon(addon, bindings);
 }
 
-/// Register the binding globals (1.12 names; `GetBinding` returns the era 4-tuple —
-/// command, category token, key1, key2 — the categorized window's shape).
-///
-/// `GetNumBindings`/`GetBinding` walk [`KeybindState::visible`] — the table minus the
-/// `hidden="true"` rows — while every other verb here keys on name or chord and so sees the whole
-/// table (a hidden binding is bindable, saved and dispatched, just not listed).
+/// The binding globals. `GetBinding` returns command, category, key1, key2, which is not 1.12's
+/// shape: 1.12 returns command, key1, key2, with each header a `HEADER_*` row
+/// (`Blizzard_BindingUI.lua:84`). Only `GetNumBindings` and `GetBinding` skip hidden rows.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetNumBindings",
@@ -633,11 +480,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(if ok { Some(1) } else { None })
         })?,
     )?;
-    // `RunBinding(command)` — the reference's own passthrough verb. Its live caller is
-    // `CinematicFrame`'s `OnKeyDown`, which hands the SCREENSHOT chord back to its binding while
-    // swallowing every other key, so a player can still photograph a fly-by. Anything the VM
-    // holds a body for it could run itself; a host command's action is engine-side, so this
-    // queues and the app fires it in the same frame.
+    // `RunBinding(command)`, as `CinematicFrame.xml:42` passes SCREENSHOT through: a host
+    // command's action is engine-side, so this queues it and the app runs it in the same frame.
     lua.globals().set(
         "RunBinding",
         lua.create_function(|lua, command: String| {
@@ -756,7 +600,7 @@ mod tests {
     fn the_table_reads_like_the_reference() {
         let s = script();
         assert_eq!(s.eval::<usize>("return GetNumBindings()").unwrap(), 3);
-        // Era 4-tuple: command, category token, key1, key2 — defaults seeded live.
+        // Command, category, key1, key2 (not 1.12's three values), the defaults seeded live.
         assert!(s
             .eval::<bool>(
                 r#"local c, cat, k1, k2 = GetBinding(1)
@@ -780,8 +624,7 @@ mod tests {
     fn set_binding_steals_and_refuses_only_a_key_string_that_is_not_a_key() {
         let s = script();
         let g0 = s.keybinds_generation();
-        // Bind W to JUMP: stolen from MOVEFORWARD (its slot 1 empties, UP slides up), appended
-        // to JUMP's list after its defaults.
+        // W leaves MOVEFORWARD (UP slides up) and joins the end of JUMP's list.
         assert!(s
             .eval::<bool>(r#"return SetBinding("W", "JUMP") == 1"#)
             .unwrap());
@@ -794,26 +637,20 @@ mod tests {
             s.eval::<String>(r#"return GetBindingAction("W")"#).unwrap(),
             "JUMP"
         );
-        // Unbind by key: SetBinding(key) with no command.
         s.run(r#"SetBinding("SPACE")"#).unwrap();
         assert_eq!(
             s.eval::<String>(r#"return GetBindingAction("SPACE")"#)
                 .unwrap(),
             ""
         );
-        // **The wheel binds to a press+release command**. This assertion
-        // used to read `== nil`, on the universal misreading of `Blizzard_BindingUI`'s
-        // `if not SetBinding(…) then … KEYBINDINGFRAME_MOUSEWHEEL_ERROR`. `0x4b7490` never looks
-        // at a command node, so 1.12 takes it — and the notch runs both halves.
+        // The wheel binds to a `runOnUp` command: `0x4b7490` never reads the command.
         assert!(s
             .eval::<bool>(r#"return SetBinding("SHIFT-MOUSEWHEELUP", "MOVEFORWARD") == 1"#)
             .unwrap());
         assert!(s
             .eval::<bool>(r#"return SetBinding("MOUSEWHEELDOWN", "CAMERAZOOMIN") == 1"#)
             .unwrap());
-        // The refusal that IS there: `IsValidBindingKeyString 0x4b7890`. A lone modifier, a name
-        // in none of its four arms, and an alias that is not the whole string all fail; the
-        // pure unbind runs the same validator, so it fails on the same strings.
+        // Refused by `IsValidBindingKeyString` (`0x4b7890`), on the pure unbind too.
         for bad in ["SHIFT", "ALT", "UNKNOWN", "SCROLLLOCK", "SHIFT-LEFTBRACKET"] {
             assert!(
                 s.eval::<bool>(&format!(r#"return SetBinding("{bad}", "JUMP") == nil"#))
@@ -826,8 +663,6 @@ mod tests {
                 "{bad} fails the same validator on the pure unbind"
             );
         }
-        // …and the ones that pass: one character (with modifiers in any order and repeated),
-        // F/NUMPAD/BUTTON + digits, the 26 names, and a whole-string punctuation alias.
         for good in [
             "SHIFT-CTRL-ALT-K",
             "CTRL-SHIFT-K",
@@ -852,8 +687,7 @@ mod tests {
             "JUMP",
             "the alias is normalized to its literal character before it is stored"
         );
-        // The validator is case-SENSITIVE where the lookup behind it is not: a lower-case key
-        // string never reaches the table at all.
+        // The validator is case-sensitive: a lower-case key string is refused.
         assert!(s
             .eval::<bool>(r#"return SetBinding("shift-w", "JUMP") == nil"#)
             .unwrap());
@@ -868,52 +702,31 @@ mod tests {
         let mut s = script();
         assert_eq!(s.current_binding_set(), 1);
         assert!(!s.character_bindings_exist());
-        // Rebind, save as character: stored set 2 exists, current set moves.
         s.run(r#"SetBinding("F", "JUMP")"#).unwrap();
         s.run("SaveBindings(2)").unwrap();
         assert_eq!(s.current_binding_set(), 2);
         assert!(s.character_bindings_exist());
         assert_eq!(s.take_keybind_requests(), vec![KeybindRequest::Save(2)]);
-        // Reset To Default: LoadBindings(0) restores defaults but stays on the character set.
+        // Reset To Default keeps the character set current.
         s.run("LoadBindings(0)").unwrap();
         assert_eq!(
             s.eval::<String>(r#"return GetBindingAction("F")"#).unwrap(),
             ""
         );
         assert_eq!(s.current_binding_set(), 2);
-        // Cancel's revert: LoadBindings(current) restores the saved character set.
+        // Cancel reloads the saved character set.
         s.run("LoadBindings(2)").unwrap();
         assert_eq!(
             s.eval::<String>(r#"return GetBindingAction("F")"#).unwrap(),
             "JUMP"
         );
-        // Okay back to general: SaveBindings(1) drops the character set — the confirmed
-        // permanent delete — and the app is asked to persist (and unlink the character file).
+        // Saving the account set drops the character set, the confirmed delete.
         s.run("SaveBindings(1)").unwrap();
         assert_eq!(s.current_binding_set(), 1);
         assert!(!s.character_bindings_exist());
         assert_eq!(s.take_keybind_requests(), vec![KeybindRequest::Save(1)]);
     }
 
-    /// **An addon's `Bindings.xml` becomes ordinary rows** (decision 1188 phase 4) — same table,
-    /// same window, same `SetBinding` laws — with exactly two things that only an addon row has:
-    /// a Lua body, and the `hidden` bit.
-    ///
-    /// What each assertion would catch, since this is the seam a real addon's keys arrive
-    /// through:
-    /// - **the count and the tuple**: a registration that lands somewhere the window cannot see
-    ///   (the whole symptom 1188 phase 4 exists to remove);
-    /// - **the carried header**: a per-row reading of `header`, which would leave 215 of the
-    ///   reference's own 228 bindings in a nameless category, and a doubled `BINDING_HEADER_`
-    ///   prefix if the parser's job were done twice;
-    /// - **the addon-name fallback**: a header-less file whose rows land in whatever section
-    ///   happened to be last — unfindable in the window, which is why we diverge here;
-    /// - **`MOVEFORWARD`**: an addon quietly *replacing* a host command by declaring its name,
-    ///   which would swap a real engine action for a Lua body;
-    /// - **the hidden row**: `hidden="true"` read as "do not register" rather than "do not list",
-    ///   which would make the binding unbindable and undispatchable;
-    /// - **the bodies**: a host row leaking into [`super::UiScript::addon_binding_bodies`], which
-    ///   is what makes the app's dispatch target a two-armed enum instead of a sentinel index.
     #[test]
     fn an_addons_bindings_xml_registers_as_ordinary_rows() {
         let mut s = script();
@@ -935,8 +748,8 @@ mod tests {
             "registration must move the generation — it is the app's re-derive-dispatch signal"
         );
 
-        // Three host commands + the two listable addon rows. `MOVEFORWARD` did not register
-        // twice, and `PROBEHIDDEN` is registered but not listed.
+        // Three host rows and two addon rows: the addon's `MOVEFORWARD` is skipped and
+        // `PROBEHIDDEN` is not listed.
         assert_eq!(s.eval::<usize>("return GetNumBindings()").unwrap(), 5);
         assert!(s
             .eval::<bool>(
@@ -952,14 +765,13 @@ mod tests {
             .unwrap(),
             "a row with no header of its own belongs to the section the last header opened"
         );
-        // The host's own command kept its row, its keys and its engine action.
         assert!(s
             .eval::<bool>(
                 r#"local k1, k2 = GetBindingKey("MOVEFORWARD"); return k1 == "W" and k2 == "UP""#
             )
             .unwrap());
 
-        // The hidden row is absent from the enumeration…
+        // The hidden row is not enumerated, but binds and is found by key.
         assert!(s
             .eval::<bool>(
                 r#"for i = 1, GetNumBindings() do
@@ -968,7 +780,6 @@ mod tests {
                    return true"#
             )
             .unwrap());
-        // …and is a binding in every other respect: bindable, and found by key.
         assert!(s
             .eval::<bool>(r#"return SetBinding("H", "PROBEHIDDEN") == 1"#)
             .unwrap());
@@ -976,8 +787,7 @@ mod tests {
             s.eval::<String>(r#"return GetBindingAction("H")"#).unwrap(),
             "PROBEHIDDEN"
         );
-        // And it rides the same laws: `runOnUp` decides whether the body runs again on the
-        // release, never whether the row may take a wheel chord (1295) — so both bind.
+        // `runOnUp` never refuses a wheel chord.
         assert!(s
             .eval::<bool>(r#"return SetBinding("MOUSEWHEELUP", "PROBEHOLD") == 1"#)
             .unwrap());
@@ -985,7 +795,7 @@ mod tests {
             .eval::<bool>(r#"return SetBinding("MOUSEWHEELDOWN", "PROBEEDGE") == 1"#)
             .unwrap());
 
-        // A second addon, declaring no header at all: its rows are its own section, named for it.
+        // A file with no header: its rows' section is the addon's name.
         let parsed = crate::bindings_xml::parse(
             r#"<Bindings><Binding name="LIBKEY">Lib();</Binding></Bindings>"#,
         )
@@ -997,8 +807,7 @@ mod tests {
             )
             .unwrap());
 
-        // The runnable halves the app's dispatch indexes — addon rows only, in registration
-        // order, hidden included.
+        // Addon rows only, in registration order, hidden included.
         let bodies = s.addon_binding_bodies();
         let names: Vec<&str> = bodies.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(names, ["PROBEHOLD", "PROBEEDGE", "PROBEHIDDEN", "LIBKEY"]);
@@ -1006,11 +815,6 @@ mod tests {
         assert!(bodies[0].body.contains(r#"keystate == "down""#));
     }
 
-    /// **The file's own OS gate.** `platform="mac"` is 1.12's one OS-specific device in
-    /// `Bindings.xml` — five `ITUNES_REMOTE` rows in the Mac build and nowhere else — and a row
-    /// for the other build is not registered at all. Not hidden, not registered-and-inert:
-    /// registering it would list a command in the Key Bindings window whose body calls functions
-    /// this build does not have, and let the player spend a key on it.
     #[test]
     fn a_binding_for_another_platform_does_not_register() {
         let mut s = script();
@@ -1033,7 +837,6 @@ mod tests {
             !names.iter().any(|n| n == "PROBEELSEWHERE"),
             "a foreign-platform row registered: {names:?}"
         );
-        // …and it is not merely hidden from the window either: nothing can bind it.
         assert!(!s
             .addon_binding_bodies()
             .iter()
@@ -1049,8 +852,7 @@ mod tests {
             s.eval::<String>(r#"return GetBindingAction("F")"#).unwrap(),
             "JUMP"
         );
-        // Commands absent from the seed keep their live keys (a stored set from before a
-        // command was registered leaves the new command alone).
+        // A command the seed lacks keeps its live keys.
         assert_eq!(
             s.eval::<String>(r#"return GetBindingAction("W")"#).unwrap(),
             "MOVEFORWARD"
@@ -1083,18 +885,11 @@ mod addon_persistence_tests {
         }
     }
 
-    /// **An addon's binding remembers its key across a restart** — the defect decision 1192 §4
-    /// recorded and left open: "the binding registers, lists, dispatches, and forgets its key."
-    ///
-    /// The shape is the whole point, so it is reproduced literally: at BOOT the stored set is
-    /// seeded while only the host's own commands exist, and the addon's `Bindings.xml` registers
-    /// hours later at world entry. The stored row therefore has no slot to land in, which is why
-    /// the positional snapshot alone could never carry it.
+    /// The stored set is seeded at boot, before the addon's `Bindings.xml` registers at world
+    /// entry, so its row has no position to land in.
     #[test]
     fn an_addon_binding_restores_its_stored_chord_registered_after_the_seed() {
         let mut s = UiScript::new().unwrap();
-        // Boot: the host's commands, then the account set off disk — which already carries the
-        // player's chord for a command that does not exist in this VM yet.
         s.register_bindings(&[KeybindCommand {
             name: "JUMP",
             category: "BINDING_HEADER_MOVEMENT",
@@ -1111,7 +906,6 @@ mod addon_persistence_tests {
         );
         s.load_binding_set(1);
 
-        // World entry: the addon's Bindings.xml registers.
         s.register_addon_bindings("MyAddon", &[binding("MYADDONTOGGLE")]);
 
         let bound = s
@@ -1126,8 +920,6 @@ mod addon_persistence_tests {
         );
     }
 
-    /// A command the stored set says nothing about still registers **unbound**, which is 1.12's
-    /// own rule for an addon binding (its `<Binding>` carries no default chord).
     #[test]
     fn an_addon_binding_with_no_stored_chord_registers_unbound() {
         let mut s = UiScript::new().unwrap();
@@ -1142,8 +934,6 @@ mod addon_persistence_tests {
         assert!(bound.1.is_empty());
     }
 
-    /// The character set wins over the account set for an addon command too — the same precedence
-    /// `load` applies to every other command, so an addon binding restores like a shipped one.
     #[test]
     fn the_character_set_wins_for_an_addon_command() {
         let mut s = UiScript::new().unwrap();

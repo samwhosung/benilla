@@ -1,25 +1,9 @@
-//! The `MessageFrame` method surface — `CSimpleMessageFrame` (ctor `0x785640`), the class
-//! `UIErrorsFrame` is and the one `CreateFrame("MessageFrame")` makes.
-//!
-//! Three facts decide this whole file, and each is one an implementation would otherwise get wrong
-//! in a way nothing would catch:
-//!
-//! 1. **`AddMessage(text [, r, g, b [, a]])` — the fifth argument is ALPHA and there is no sixth.**
-//!    Three corpus addons pass six (`EasyCopy.lua:12`, `QuestHistory.lua:1678`, `QuestItem.lua:300`,
-//!    all `UIErrorsFrame:AddMessage(msg, r, g, b, a, holdTime)`), and the real 1.12.1 binding
-//!    `0x795590` reads five and stops. Honouring that trailing number as a per-message hold time
-//!    would be **unfaithful, not generous** — the client shows the message for the *frame's*
-//!    `displayDuration` and nothing else. It is ignored here, deliberately.
-//! 2. **This `AddMessage` is not the scrolling class's.** `0x792900` takes an **id** in the same
-//!    slot and forces alpha `0xFF` (`792add: or edi,0xffffff00`); `0x795590` packs a real
-//!    `0xAARRGGBB` with a default of 1.0. Two bindings, two tables, no sharing.
-//! 3. **`SetInsertMode`/`GetInsertMode` (`0x794ed0`/`0x794ff0`) live on this class only** — the
-//!    scrolling class has neither, and no `insertMode` XML attribute either.
-//!
-//! The state (display lines, fade phases, the vertical cap) is
-//! [`MessageFrameState`](crate::widget::MessageFrameState) in `crate::widget`; this is the thin Lua
-//! binding over it. The band emit and the wrapped-row measure round-trip are shared with the
-//! scrolling class and live in [`super`].
+//! The `MessageFrame` methods over [`MessageFrameState`](crate::widget::MessageFrameState):
+//! `CSimpleMessageFrame` (ctor `0x785640`), `UIErrorsFrame`'s class and what
+//! `CreateFrame("MessageFrame")` makes. Its `AddMessage(text [, r, g, b [, a]])` (`0x795590`) takes
+//! a real alpha and reads nothing after it, where the scrolling class's (`0x792900`) takes an id
+//! there and forces alpha opaque. `SetInsertMode` and `GetInsertMode` (`0x794ed0`, `0x794ff0`)
+//! exist on this class only.
 
 use mlua::{Lua, Table, Value};
 
@@ -27,13 +11,11 @@ use crate::script::object::frame_handle_of;
 use crate::script::Model;
 use crate::widget::{InsertMode, KindState, MessageFrameState};
 
-/// Registry key of the MessageFrame method table (the MAXCSTACK discipline: Lua-side root, named
-/// key).
+/// Registry key of the MessageFrame method table (the MAXCSTACK discipline).
 pub(crate) const REG_MESSAGEFRAME_METHODS: &str = "__benilla_plain_messageframe_methods";
 
-/// Run `f` over a frame's MessageFrame state under one short write borrow. Errors if `this` is not
-/// a live MessageFrame (unreachable through the kind dispatcher, but the method table is a plain
-/// Lua value — a caller could fish it out and misapply it).
+/// Run `f` over a MessageFrame's state under one short borrow; any other frame, reachable only
+/// through a misapplied method table, is an error.
 fn with_mf<T>(
     lua: &Lua,
     this: &Table,
@@ -51,7 +33,7 @@ fn with_mf<T>(
     }
 }
 
-/// A Lua number-ish → f32 (nil/other → 0.0), for the colour args.
+/// A colour argument as f32, 0 for anything but a number.
 fn num_f32(v: &Value) -> f32 {
     match v {
         Value::Number(n) => *n as f32,
@@ -63,30 +45,14 @@ fn num_f32(v: &Value) -> f32 {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
-    // The justify quartet, shared with the sibling class — see [`super::install_justify`] for the
-    // method-table bytes that put all four on BOTH tables.
+    // The justify quartet, on both classes ([`super::install_justify`]).
     super::install_justify(lua, &m, "MessageFrame")?;
 
-    // AddMessage(text [, r, g, b [, a]]) — binding 0x795590.
-    //
-    // The TEXT is `super::message_text` — an `lua_isstring` gate whose failure is a silent jump to
-    // this function's own epilogue, not a raise, and the same for a NULL coercion and for the
-    // empty string. Its doc carries the bytes and the reason it matters; the short version is that
-    // stock `ContainerFrame.lua` really does reach `AddMessage(nil, …)` on a full keyring, and
-    // taking a `String` here (which this did until 1751's fourth window) put a script-error dialog
-    // on a gesture the reference answers with a dead click.
-    //
-    // r/g/b are required **as a trio** (three presence checks ANDed at 0x7956xx); absent ⇒ hard
-    // 0xFFFFFFFF white. The fourth numeric is a real alpha, `lua_isnumber`-gated with a default of
-    // 1.0 (`795752: mov [ebp-0x18],0x3f800000`). **Deliberately NOT the same shape as the text:** a
-    // bad colour jumps to `0x79581c`, which still enqueues the line in opaque white. Only a bad
-    // text shows nothing.
-    //
-    // **The signature stops there, and the closure's arity is the enforcement.** The corpus's three
-    // blocked callers all pass a sixth argument they believe is a hold time; mlua hands us the
-    // first five and drops the rest, exactly as the real binding does by reading five stack slots.
-    // Adding a `holdTime` parameter here would make benilla show those messages for a duration no
-    // 1.12 client ever showed them for.
+    // AddMessage(text [, r, g, b [, a]]) (`0x795590`). An unusable text is a silent no-op
+    // ([`super::message_text`]). r, g and b count only as a trio, else white, and a bad colour
+    // still adds the line in white (`0x79581c`); the alpha defaults to 1.0 (`0x795752`). The
+    // closure's arity drops a sixth argument, as the binding reads five: addons that pass a hold
+    // time there get the frame's `displayDuration`, as on the reference.
     m.set(
         "AddMessage",
         lua.create_function(
@@ -103,9 +69,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 } else {
                     (1.0, 1.0, 1.0)
                 };
-                // Alpha only counts when rgb came with it — the client reads arg 5 off the same
-                // parse that required the trio, and a lone `AddMessage(text, nil, nil, nil, 0.5)`
-                // has no colour to apply it to.
+                // The alpha counts only with the trio, read in the same parse.
                 let a = match (&a, has_rgb) {
                     (Value::Number(_) | Value::Integer(_), true) => num_f32(&a),
                     _ => 1.0,
@@ -120,9 +84,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| with_mf(lua, &this, MessageFrameState::clear))?,
     )?;
 
-    // SetInsertMode("TOP"|"BOTTOM") / GetInsertMode — 0x794ed0 / 0x794ff0, THIS CLASS ONLY. The
-    // client compares the string against "BOTTOM" (0x871404) and stores `streq-BOTTOM`, so anything
-    // that is not literally BOTTOM lands on TOP; the ctor default is 1 = BOTTOM.
+    // SetInsertMode (`0x794ed0`) compares against "BOTTOM" (`0x871404`), so anything else is
+    // TOP; the ctor default is BOTTOM.
     m.set(
         "SetInsertMode",
         lua.create_function(|lua, (this, mode): (Table, Value)| {
@@ -134,8 +97,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         InsertMode::Top
                     }
                 }
-                // A non-string argument fails the streq and therefore reads as TOP, like the
-                // client's own comparison against a string it never got.
+                // A non-string fails the compare too.
                 _ => InsertMode::Top,
             };
             with_mf(lua, &this, |mf| mf.insert_mode = mode)
@@ -151,8 +113,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The fade trio — the same names and the same field the scrolling class exposes (the XML attr
-    // is `displayDuration`, the Lua accessors call it `TimeVisible`), over this class's own state.
+    // The fade accessors, as on the scrolling class; XML's `displayDuration` is `TimeVisible`.
     m.set(
         "SetFading",
         lua.create_function(|lua, (this, on): (Table, Value)| {
@@ -160,8 +121,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             with_mf(lua, &this, |mf| mf.fading_enabled = on)
         })?,
     )?;
-    // 1/nil, the reference's predicate shape (`0x795170`): `(nil) | (number)`, like every other
-    // 1.12 predicate.
+    // 1 or nil, the 1.12 predicate shape (`0x795170`).
     m.set(
         "GetFading",
         lua.create_function(|lua, this: Table| {
@@ -192,19 +152,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── the shared font block ───────────────────────────────────────────────────────────────
-    //
-    // `Set/GetFontObject · Set/GetFont · Set/GetTextColor · Set/GetShadowColor ·
-    // Set/GetShadowOffset` are real entries on this class's table, not a courtesy. The
-    // registrar map is explicit about the membership — *"Exposed on: FontString, Font object,
-    // EditBox, MessageFrame, ScrollingMessageFrame, SimpleHTML. NOT on Button"* (table
-    // `0x879d00` has none) — and names this class's own shims calling the shared
-    // implementations (`GetShadowColor 0x794810`). All six carry the block now —
-    // `SimpleHTML`'s is its own copy rather than `font_block::install`'s
-    // (`script/simplehtml/mod.rs`), because that class computes its own inter-block step.
-    //
-    // Demand is observed, not counted: `BigWigs/Plugins/Messages.lua:212` is
-    // `self.msgframe:SetFontObject(GameFontNormalLarge)` on a frame it has just given
-    // `SetInsertMode("TOP")`, and BigWigs dies there every session.
+    // The ten font verbs are on this class's own table (`GetShadowColor` `0x794810`), as on
+    // FontString, Font, EditBox, ScrollingMessageFrame and SimpleHTML; Button's (`0x879d00`) has
+    // none.
     crate::script::font_block::install(
         lua,
         &m,
@@ -224,10 +174,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use crate::script::UiScript;
 
-    /// How many display lines a named message frame holds. Read off the state rather than through
-    /// Lua on purpose: `GetNumMessages` is a **ScrollingMessageFrame** binding, and inventing one
-    /// on this class to make its tests convenient is exactly the drift these tests are pinning
-    /// against.
+    /// A named frame's line count, off the state: `GetNumMessages` is not a MessageFrame method.
     fn num_messages(s: &UiScript, name: &str) -> usize {
         let m = s.model_ref();
         let h = m.arena.lookup(name).expect("named frame");
@@ -237,23 +184,18 @@ mod tests {
             .map_or(0, |l| l.len())
     }
 
-    /// The whole point of the arity, pinned: the sixth argument three corpus addons pass is a hold
-    /// time the real client never had, and it must change **nothing**. The frame's own
-    /// `displayDuration` is what governs, so the message with a "hold time" of 999 fades on exactly
-    /// the same tick as the one without.
+    /// A sixth argument, which some addons pass as a hold time, changes nothing.
     #[test]
     fn the_sixth_addmessage_argument_is_ignored_not_a_holdtime() {
         let mut s = UiScript::new().unwrap();
         s.run("CreateFrame('MessageFrame', 'MF')").unwrap();
         s.run("MF:SetTimeVisible(1)").unwrap();
         s.run("MF:SetFadeDuration(0)").unwrap();
-        // The exact shape of EasyCopy.lua:12 / QuestItem.lua:300 / QuestHistory.lua:1678.
         s.run("MF:AddMessage('held', 1.0, 1.0, 1.0, 1.0, 999)")
             .unwrap();
         s.run("MF:AddMessage('plain', 1.0, 1.0, 1.0, 1.0)").unwrap();
         assert_eq!(num_messages(&s, "MF"), 2);
-        // Past timeVisible with no ramp: both retire together. A honoured holdTime would keep the
-        // first alive here, which is exactly the divergence this test exists to catch.
+        // Past timeVisible with no ramp, both retire together.
         s.tick(1.1);
         s.tick(0.1);
         assert_eq!(
@@ -263,31 +205,19 @@ mod tests {
         );
     }
 
-    /// **A text `AddMessage` cannot use is swallowed whole — silently, with nothing added and
-    /// nothing raised** (`0x795590`'s three jumps to its own epilogue; see [`super::super`]'s
-    /// `message_text`).
-    ///
-    /// The defect this pins is not hypothetical and not ours to have guessed at: our binding took
-    /// its text as an mlua `String`, which raises on nil, and 1.12's own `ContainerFrame.lua:753`
-    /// reports a full keyring through `UIErrorsFrame:AddMessage(NO_EMPTY_KEYRING_SLOTS, …)` — a
-    /// GlobalString the shipped `GlobalStrings.lua` never defines. So dropping a key onto a full
-    /// keyring put a script-error dialog on screen where the reference gives a dead click. It
-    /// surfaced the moment 1751's third window made the bag bar the reference's own file.
-    ///
-    /// The three silent cases and the two that are NOT silent are pinned together, because the
-    /// pair is the finding: a bad **colour** still adds the line (opaque white), and the receiver
-    /// guards still raise. Reading the text gate as a general argument law is exactly 1717's error.
+    /// Only an unusable text is silent (`0x795590` jumps to its epilogue): a bad colour still adds
+    /// the line, and the receiver check still raises.
     #[test]
     fn addmessage_swallows_a_text_it_cannot_use_and_only_the_text() {
         let s = UiScript::new().unwrap();
         s.run("CreateFrame('MessageFrame', 'MF')").unwrap();
 
-        // `lua_isstring 0x6f3510` accepts tags 4 and 3 only — everything else jumps to 0x79582b.
+        // `lua_isstring` (`0x6f3510`) passes strings and numbers only; the rest jump to `0x79582b`.
         for bad in ["nil", "", "true", "{}", "print"] {
             s.run(&format!("MF:AddMessage({bad})"))
                 .unwrap_or_else(|e| panic!("AddMessage({bad}) must not raise: {e}"));
         }
-        // …and so does the empty string, on its own `cmp byte ptr [ebx],0` at 0x79564b.
+        // The empty string has its own check (`0x79564b`).
         s.run("MF:AddMessage('')").unwrap();
         assert_eq!(
             num_messages(&s, "MF"),
@@ -295,14 +225,12 @@ mod tests {
             "nil, absent, boolean, table, function and \"\" each add NOTHING"
         );
 
-        // A number IS a usable text — tag 3 passes the gate and `0x6f7c80` retags the slot in
-        // place, so it renders as its decimal form.
+        // A number is a text, retagged in place (`0x6f7c80`).
         s.run("MF:AddMessage(42)").unwrap();
         assert_eq!(num_messages(&s, "MF"), 1, "a number is a text");
 
-        // The colour arguments are the OPPOSITE shape and that is the load-bearing negative: a bad
-        // r/g/b jumps to 0x79581c, which still enqueues with the 0xffffffff white staged at
-        // 0x795658. Suppressing the line here would be the same over-generalisation in reverse.
+        // A bad colour jumps to `0x79581c`, which still adds the line in the white staged at
+        // `0x795658`.
         s.run("MF:AddMessage('kept', {}, nil, 'x')").unwrap();
         assert_eq!(
             num_messages(&s, "MF"),
@@ -310,16 +238,13 @@ mod tests {
             "a bad colour still adds the line"
         );
 
-        // The receiver guards are upstream of all of it and DO raise (0x847ef8 — "used '.' instead
-        // of ':'").
+        // The receiver check still raises (`0x847ef8`).
         assert!(
             s.run("MF.AddMessage('dot')").is_err(),
             "a '.'-instead-of-':' call still raises"
         );
     }
 
-    /// `SetInsertMode` is a MessageFrame method and **only** a MessageFrame method — a plain Frame
-    /// and a ScrollingMessageFrame both resolve it to nil, which is what a duck-typing addon reads.
     #[test]
     fn set_insert_mode_is_messageframe_only() {
         let s = UiScript::new().unwrap();
@@ -344,7 +269,6 @@ mod tests {
             "nil",
             "the scrolling class has no SetInsertMode binding at all"
         );
-        // Default BOTTOM (ctor 1), and the round trip.
         assert_eq!(
             s.eval::<String>("return MF:GetInsertMode()").unwrap(),
             "BOTTOM"
@@ -356,9 +280,7 @@ mod tests {
         );
     }
 
-    /// The two `AddMessage`s are different functions, and the observable tell is the fifth argument:
-    /// on a MessageFrame it is alpha (0.5 ⇒ a half-transparent line), on a ScrollingMessageFrame it
-    /// is an id and the line stays opaque.
+    /// The fifth argument is alpha on a MessageFrame and an id on a ScrollingMessageFrame.
     #[test]
     fn messageframe_addmessage_is_not_the_scrolling_ones() {
         let s = UiScript::new().unwrap();
@@ -398,8 +320,6 @@ mod tests {
         );
     }
 
-    /// `insertMode` decides which edge the stack grows from: TOP hangs the newest message off the
-    /// frame's top, BOTTOM (the default) stacks up from its bottom. Same three messages, mirrored.
     #[test]
     fn insert_mode_picks_the_growth_edge() {
         let bands = |mode: &str| {
@@ -450,8 +370,7 @@ mod tests {
         );
     }
 
-    /// The class has no `maxLines` — its cap is what fits vertically, applied at the tick. A frame
-    /// 3 rows tall holds 3 messages however many arrive.
+    /// No `maxLines`: the cap is what fits vertically, applied at the tick.
     #[test]
     fn the_cap_is_what_fits_vertically() {
         let mut s = UiScript::new().unwrap();
@@ -470,7 +389,6 @@ mod tests {
         s.resolve();
         s.tick(0.1);
         assert_eq!(num_messages(&s, "MF"), 3, "42px / 14px pitch = 3 rows");
-        // ...and it is the OLDEST that went.
         s.resolve();
         let texts: Vec<String> = s
             .extract()
@@ -483,8 +401,7 @@ mod tests {
         assert!(texts.contains(&"m8".to_string()) && !texts.contains(&"m0".to_string()));
     }
 
-    /// A faded line on this class is **freed**, not left blank holding its rows — the difference
-    /// from the scrolling class, whose ring slots persist. `Clear` is the immediate form.
+    /// A faded line is freed, where the scrolling class keeps its rows.
     #[test]
     fn a_finished_line_is_retired_and_clear_empties_now() {
         let mut s = UiScript::new().unwrap();
@@ -505,8 +422,7 @@ mod tests {
         assert_eq!(num_messages(&s, "MF"), 0);
     }
 
-    /// The ctor defaults (`0x81cc2c`/`0x81cc30`: timeVisible, fadeDuration), plus the setters'
-    /// round trip.
+    /// The ctor defaults: timeVisible (`0x81cc2c`) and fadeDuration (`0x81cc30`).
     #[test]
     fn ctor_defaults_and_the_fade_accessors() {
         let s = UiScript::new().unwrap();

@@ -1,7 +1,4 @@
-//! Frame method-table cluster: anchoring and size — `SetPoint`/`ClearAllPoints`/`GetPoint`/
-//! `SetAllPoints`/`SetWidth`/`SetHeight`/`GetWidth`/`GetHeight` and the resolved-edge readers
-//! (`GetLeft`/`GetRight`/`GetTop`/`GetBottom`). Split out of [`super`] purely for size — see
-//! its module doc for the shared id/handle plumbing and method-table wiring.
+//! Frame methods: anchors, size, and the resolved geometry readers.
 
 use mlua::{Lua, MultiValue, Table, Value};
 
@@ -13,9 +10,8 @@ use crate::widget::FrameHandle;
 use super::anchor_args::{parse_set_all_points, parse_set_point, resolve_rel_target, UNNAMED};
 use super::{frame_handle_of, frame_parent_token_base, frame_wrapper, point_name};
 
-/// The two things the shared ladder needs off the receiver, read under **one short** `Model`
-/// borrow that is dropped before the `_G` read: the name the reference puts in its error strings
-/// (`GetName`, else the literal `"<unnamed>"`), and the name a leading `$parent` expands to.
+/// The receiver's name for the error strings and its `$parent` base, read under one short `Model`
+/// borrow that ends before the ladder's `_G` read.
 fn frame_ladder_context(lua: &Lua, h: FrameHandle) -> (String, String) {
     let model = lua.app_data_ref::<Model>().expect("model");
     let who = model
@@ -26,7 +22,7 @@ fn frame_ladder_context(lua: &Lua, h: FrameHandle) -> (String, String) {
     (who, frame_parent_token_base(&model, h))
 }
 
-/// Populate `m`'s layout (anchor/size) methods (see the module doc).
+/// Populate `m`'s anchor and size methods.
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // Layout: SetPoint / ClearAllPoints / SetWidth / SetHeight / GetWidth / GetHeight
     set_shared(
@@ -39,19 +35,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     set_shared(lua, m, Side::Frame, "ClearAllPoints", |lua, this: Table| {
         let h = frame_handle_of(lua, &this)?;
         let mut model = lua.app_data_mut::<Model>().expect("model");
-        // Every layout setter here follows one law: mutate ONLY on an actual value change,
-        // and report the change to the tier-1 epoch (`touch_layout`). The compare is what
-        // keeps an idempotent per-frame caller (the classic OnUpdate re-SetPoint idiom) from
-        // pinning the gate open — the same absorption the fingerprint gives, paid once at
-        // the write instead of per-frame over the whole model.
-        //
-        // **And it NAMES its node** (completing 1625's migration). Dropping
-        // every anchor is a retarget whose NEW target list is empty, and both lists are right
-        // here — so the cached graph's edges get unlinked instead of thrown away. Left on the
-        // conservative touch, this was the one recurring `[layout-derive]` site in a live
-        // hover sweep: `Bagnon_AnchorTooltip` opens with `GameTooltip:ClearAllPoints()` and
-        // then asks `frame:GetLeft()`, so the whole graph was re-derived INSIDE the handler,
-        // once per hovered item, and billed to `[ui-handlers]`' `OnEnter`.
+        // Every layout setter mutates only on a real change, so a per-frame caller setting the
+        // same value never reopens the layout gate. Clearing is a retarget to no targets.
         let old: Option<Vec<u32>> = match model.layout_inputs.get_mut(&h) {
             Some(input) if !input.anchors.is_empty() => {
                 let old = input.anchors.iter().map(|a| a.relative_to).collect();
@@ -65,10 +50,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         }
         Ok(())
     })?;
-    // GetPoint([n]) → point, relativeTo, relativePoint, xOfs, yOfs — the n-th (1-based, default
-    // first) anchor. relativeTo is nil when the target is the screen root (the client returns
-    // UIParent there; ours is the distinct `script::SCREEN` sentinel, which has no wrapper of its
-    // own — the arena's `UIParent` frame is a different handle — stated, a consensus-list call).
+    // GetPoint([n]) → point, relativeTo, relativePoint, x, y of the n-th anchor (default 1);
+    // relativeTo is nil for a screen-root anchor, since `SCREEN` has no wrapper.
     set_shared(
         lua,
         m,
@@ -102,10 +85,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             ))
         },
     )?;
-    // GetNumPoints() → how many anchors this frame carries. On the Region map (`0x87c9b8`), so
-    // every widget answers it — the region twin shipped first and noted this side was missing;
-    // collapsing the map to one implementation each is what made the gap fatal
-    // rather than merely absent, and this is the arm it was missing.
+    // GetNumPoints(): on the Region method table (`0x87c9b8`), so every widget answers it.
     set_shared(lua, m, Side::Frame, "GetNumPoints", |lua, this: Table| {
         let h = frame_handle_of(lua, &this)?;
         let model = lua.app_data_ref::<Model>().expect("model");
@@ -114,8 +94,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             .get(&h)
             .map_or(0, |i| i.anchors.len() as i64))
     })?;
-    // SetAllPoints([relativeTo]) — pin TOPLEFT+BOTTOMRIGHT to the target (default: the parent),
-    // the XML `setAllPoints="true"` behavior as a method (`0x767800`'s SetAllPoints path).
+    // SetAllPoints([relativeTo]): pins TOPLEFT and BOTTOMRIGHT to the target, default the parent,
+    // as XML `setAllPoints="true"` does (`0x767800`).
     set_shared(
         lua,
         m,
@@ -123,8 +103,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetAllPoints",
         |lua, (this, rest): (Table, MultiValue)| {
             let h = frame_handle_of(lua, &this)?;
-            // `who`/`$parent` first, then the `_G` read, then the guard — see `set_point` and
-            // `object::NamedTarget`.
+            // `who` and `$parent`, then the `_G` read, then the model guard, as in `set_point`.
             let (who, base) = frame_ladder_context(lua, h);
             let target = parse_set_all_points(lua, rest.front(), &base);
             let mut model = lua.app_data_mut::<Model>().expect("model");
@@ -188,9 +167,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             Ok(())
         },
     )?;
-    // **No `SetSize`.** It is an Era geometry verb, in neither the Frame nor the Region method
-    // table of 1.12 — and neither the stock chain nor either addon corpus writes it (decision
-    // 2142's census). The two setters above are the era's whole size surface.
+    // No `SetSize`: neither 1.12 method table has it.
     set_shared(lua, m, Side::Frame, "GetWidth", |lua, this: Table| {
         let h = frame_handle_of(lua, &this)?;
         settle(lua);
@@ -204,11 +181,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         Ok(size_read(&model, h, false))
     })?;
 
-    // GetCenter() → centerX, centerY — the resolved rect's center in LOCAL units (y-up; screen ÷
-    // the frame's effective scale — the client's convention: coordinate getters report the frame's
-    // own scaled space, and callers divide GetCursorPosition (screen px) by GetEffectiveScale to
-    // meet them there; the ref world map's hover math does exactly that). nil pair before the
-    // first resolve, like the edge readers.
+    // GetCenter(): the resolved rect's centre in the frame's own units (screen ÷ effective scale,
+    // y-up), as the reference's coordinate getters report; nil before the first resolve.
     set_shared(lua, m, Side::Frame, "GetCenter", |lua, this: Table| {
         let h = frame_handle_of(lua, &this)?;
         settle(lua);
@@ -223,14 +197,11 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })
     })?;
 
-    // GetEffectiveScale() — the frame's real effective scale (parentScale · ownScale, the arena's
-    // propagated product). The ROOT factor is 1, and that is not because benilla lacks a `uiScale`
-    // CVar (it has one, `cvars.rs`, default 0.9): the dial is applied at the RASTER seam — it sets
-    // how many UI units tall the virtual screen is, `768/uiScale` (`ui_script::seam_scale`) —
-    // rather than as a scale on UIParent. So every coordinate the VM hands Lua is already in those
-    // units, `GetCursorPosition()` included, and the reference's
-    // `GetCursorPosition()/GetEffectiveScale()` transcriptions convert screen→local correctly with
-    // a root of 1; a SetScale'd subtree (the windowed world map) still reports its true factor.
+    // GetEffectiveScale(): parent scale times own scale, from a root of 1: `uiScale` is applied at
+    // the raster seam (a screen `768/uiScale` units tall), so every coordinate Lua sees,
+    // `GetCursorPosition()` included, is already in UI units. The reference instead makes
+    // `uiScale` `UIParent`'s own scale (`0x494550` calls `SetScale`), so there
+    // `UIParent:GetEffectiveScale()` answers it.
     m.set(
         "GetEffectiveScale",
         lua.create_function(|lua, this: Table| {
@@ -240,11 +211,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetLeft/GetRight/GetTop/GetBottom — the frame's RESOLVED edges in LOCAL units (y-up, so
-    // GetBottom is height-from-screen-bottom, the era semantics; `GetRect 0x768320`'s Lua faces,
-    // layout.rs's module doc; screen ÷ effective scale like GetCenter). `nil` before the first
-    // resolve — callers treat that as "not laid out yet" (the ref's own FauxScrollFrame code
-    // nil-checks these too).
+    // GetLeft/GetRight/GetTop/GetBottom: the resolved edges in the frame's own units, y-up from
+    // the screen bottom (`GetRect 0x768320`); nil before the first resolve.
     for (name, pick) in [
         ("GetLeft", 0u8),
         ("GetRight", 1u8),
@@ -269,39 +237,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The frame's effective scale, ε-guarded (a zero would poison the local-unit division).
-/// **Resolve the layout graph NOW if anything has moved since the last pass.**
-///
-/// The client answers a geometry query against current layout; ours cached rects in a per-frame
-/// `resolve()` pass, so a query made EARLIER IN THE SAME CALL STACK than that pass read nil. That
-/// is not an edge case — it is what every menu does. `Dewdrop-2.0.lua` (embedded in ~65 corpus
-/// addons) creates its menu frame, anchors it, shows it and then measures it inside one `OnClick`:
-///
-/// ```lua
-/// local left = frame:GetLeft()                                              -- l.1942, nil for us
-/// frame:SetPoint(point, parent, relativePoint, curX - left - width / 2, 0)  -- l.1960, dies
-/// ```
-///
-/// **97 of the 108 addons that drew and then raised on being touched died on that one line.** No
-/// missing verb: `GetLeft` was always there, and always answered nil.
-///
-/// Cheap on a SETTLED tree: `resolve_layout`'s tier-1 gate is one epoch comparison that returns
-/// immediately when nothing has been touched, so a run of getters pays a compare each.
-///
-/// **The interleaved case is not, and this is measured rather than asserted.** A write bumps the
-/// epoch, so `SetPoint; GetLeft; SetPoint; GetLeft; …` resolves the whole graph once per iteration.
-/// Timed on a 200-frame tree: 30 alternating pairs cost **1.41 ms** against **54 µs** for the same
-/// writes with a single read at the end — ~26x, about 47 µs per settle, and the per-settle half
-/// scales with the GRAPH, not the loop.
-///
-/// That is exactly the shape Dewdrop's menu builder has, so opening a menu pays it once. It buys a
-/// menu that works at all, which is the trade taken here. If it ever reads as a hitch, the fix is a
-/// narrower resolve (the queried frame's subtree), not a return to the stale cache.
-///
-/// **It deliberately does NOT fire `OnSizeChanged`.** That drain runs Lua handlers, and re-entering
-/// Lua from inside a binding is how a borrow panic or an unbounded recursion happens. The
-/// size-change queue is drained by the next real `UiScript::resolve`, one tick later than the
-/// reference's per-rect-application fire (`ApplyRect 0x76b580`). Stated rather than hidden.
+/// Resolve the layout now if anything moved, as the reference answers a geometry query against
+/// current layout; a settled tree costs one epoch compare. Deviation: `OnSizeChanged` fires at the
+/// next `UiScript::resolve`, a tick after the reference's (`ApplyRect 0x76b580`), because running
+/// Lua handlers inside a binding risks a borrow panic or unbounded recursion.
 fn settle(lua: &Lua) {
     let mut model = lua.app_data_mut::<Model>().expect("model");
     crate::script::UiScript::resolve_layout(&mut model);
@@ -320,10 +259,8 @@ pub(crate) fn eff_scale(model: &Model, h: FrameHandle) -> f32 {
     }
 }
 
-/// `GetWidth`/`GetHeight`: the resolved rect's span in LOCAL units (screen ÷ effective scale — the
-/// client returns the value as authored, and `SetWidth(w)` on a scaled frame resolves to `w·scale`
-/// screen px) if `resolve` has produced one, else the explicit size the frame was given
-/// (`SetWidth`/`SetHeight`, already local) — matching the client's "0 = derive".
+/// `GetWidth`/`GetHeight`: the resolved span in the frame's own units (screen ÷ effective scale),
+/// else the size it was given, where 0 means derived, as in the reference.
 fn size_read(model: &Model, h: FrameHandle, width: bool) -> f32 {
     if let Some(r) = model.resolved.get(&h) {
         let span = if width { r.width() } else { r.height() };
@@ -336,15 +273,13 @@ fn size_read(model: &Model, h: FrameHandle, width: bool) -> f32 {
         .unwrap_or(0.0)
 }
 
-/// `SetPoint(point [, relativeTo [, relativePoint]] [, x, y])` — `0x7a2540`, whose argument ladder
-/// (and whose five raises) live in [`super::anchor_args`] because the reference runs **one**
-/// function for frames and regions alike. What is this side's own is only what the reference reads
-/// off a *frame*: the layout parent's default id, and the anchor list the commit writes.
+/// `SetPoint` (`0x7a2540`) for a frame: the argument ladder is [`super::anchor_args`], shared with
+/// regions; this side supplies the default parent and commits the anchor.
 fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let (who, base) = frame_ladder_context(lua, h);
-    // The `_G` read inside the ladder runs with NO model guard alive — the reference's read is a
-    // gettable, so an `__index` on `_G` can run Lua that calls back in (`object::NamedTarget`).
+    // No model guard is alive across the ladder: its `_G` read is a `lua_gettable`, and an
+    // `__index` can call back in.
     let p = parse_set_point(lua, args, &who, &base)?;
 
     let mut model = lua.app_data_mut::<Model>().expect("model");
@@ -355,12 +290,8 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
 
     let input = model.layout_inputs.entry(h).or_default();
     let new = Anchor::new(point, rel_to_id, rel_point, x, y);
-    // No-op detection must mirror the retain+push below EXACTLY (the fingerprint hashes the vec
-    // in order, so a same-anchor call that would still REORDER the vec is a real change): a call
-    // is idempotent only when the identical anchor already sits at the tail and no earlier entry
-    // carries this point. Anchor's derived PartialEq compares f32 by value, which calls -0.0 ==
-    // 0.0 where the fingerprint's bit-compare would not — compare bits, or the verify assert
-    // trips on that (authored-XML-real) edge.
+    // A no-op only when the identical anchor is already last and no earlier one has this point,
+    // mirroring the retain and push below; bits compared, as the fingerprint tells -0.0 from 0.0.
     let same_at_tail = input
         .anchors
         .last()
@@ -369,14 +300,8 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
             .iter()
             .any(|a| a.point == point);
     if !same_at_tail {
-        // Value-only unless the target moved — the per-frame `SetPoint` idiom
-        // (a dragged window, a moving spark) re-points the SAME anchor at the SAME target with new
-        // offsets, so it names its node and the cached graph survives the frame.
-        //
-        // A retarget names its node too now: the edge set is not derivable from a
-        // per-node hash, but it IS derivable from the anchors, and both lists are right here. The
-        // target lists are collected only on the structural path — the value-only one is the hot
-        // idiom and must stay allocation-free.
+        // Target lists are collected only for a retarget: the value-only change is the per-frame
+        // idiom (a dragged window) and must stay allocation-free.
         let structural = anchor_retarget_is_structural(&input.anchors, &new);
         let old_targets: Option<Vec<u32>> =
             structural.then(|| input.anchors.iter().map(|a| a.relative_to).collect());
@@ -397,24 +322,8 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Would this `SetPoint` change the node's set of anchor TARGETS — i.e. is it structural?
-///
-/// The layout scope's reverse edges are built from `Anchor::relative_to`: "this
-/// node reads that node's rect". An anchor whose OFFSETS moved is a value change — the node
-/// re-solves and nothing else does, which is exactly what a precise touch claims. An anchor whose
-/// TARGET moved is not: an edge has to disappear and another to appear, and no per-node hash can
-/// say so.
-///
-/// 1388 answered that by throwing the cached graph away. **Since decision 1625 it does not have
-/// to be**: the write site holds both target lists, so the node's edges are re-pointed in place
-/// (`Model::touch_layout_retarget_frame`) and the roster and every other node's hash survive.
-/// What this predicate decides is therefore no longer "value change or catastrophe" but which of
-/// two precise touches to use — and it still earns its place, because the value-only answer is
-/// the hot per-frame idiom and must stay allocation-free.
-///
-/// Mirrors the `retain(point) + push` the setters do. It is value-only in exactly one shape — one
-/// existing anchor carries this point and keeps the same target. Zero (an edge appears) and two or
-/// more (edges disappear) are both structural, and so is any change of target.
+/// Whether this `SetPoint` changes the node's anchor targets, mirroring the setters' retain and
+/// push: value-only exactly when one existing anchor has this point and keeps its target.
 pub(crate) fn anchor_retarget_is_structural(anchors: &[Anchor], new: &Anchor) -> bool {
     let mut same_point = anchors.iter().filter(|a| a.point == new.point);
     match (same_point.next(), same_point.next()) {
@@ -423,9 +332,7 @@ pub(crate) fn anchor_retarget_is_structural(anchors: &[Anchor], new: &Anchor) ->
     }
 }
 
-/// Bit-exact anchor equality — the same lens the layout gate's fingerprint reads anchors through
-/// (`InputFingerprint::anchors` feeds `f32::to_bits`), so the setters' no-op detection and the
-/// gate can never disagree about whether a write "changed" something.
+/// Bit-exact anchor equality, as the layout gate's fingerprint compares, so the two always agree.
 pub(crate) fn anchor_bits_eq(a: &Anchor, b: &Anchor) -> bool {
     a.point == b.point
         && a.relative_to == b.relative_to
@@ -434,8 +341,7 @@ pub(crate) fn anchor_bits_eq(a: &Anchor, b: &Anchor) -> bool {
         && a.y_off.to_bits() == b.y_off.to_bits()
 }
 
-/// The default `relativeTo` id for a `SetPoint` with no explicit target: the frame's parent id, or
-/// [`SCREEN`] if it is top-level (the client anchors top-level frames to `UIParent`/the screen root).
+/// The default `relativeTo`: the parent, or [`SCREEN`] for a top-level frame (`0x76c6e0`).
 fn default_parent_id(model: &mut Model, h: FrameHandle) -> u32 {
     match model.arena.frame(h).and_then(|f| f.parent) {
         Some(p) => model.frame_id(p),

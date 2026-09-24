@@ -1,21 +1,7 @@
-//! The world map's **arrow frames** (`0x4a8bb0`): the seven bindings the stock
-//! `WorldMapFrame.lua` and `Blizzard_BattlefieldMinimap.lua` call to put the player's arrow on
-//! the map.
-//!
-//! The reference keeps **two singletons per UI session** — the world map's and the battlefield
-//! minimap's — each a stock `Model` widget (the same class `CreateFrame("Model")` makes) born as a
-//! child of the frame the first `Create…` was given, loaded with `Interface\Minimap\MinimapArrow.mdx`,
-//! shown, and never freed: every later `Create…` is a no-op even with a different parent. Its
-//! rect is the model's bounding box (no authored size), its model is re-centred on that rect by
-//! every `Update…`, and its facing is the camera-tracked object's — the player's. `Position…` is
-//! literally `arrow:SetPoint(...)` with the generic binder's three error strings and two silent
-//! legs; `Show…` is `arrow:Show()`/`Hide()` under the never-raising boolean coercion.
-//!
-//! Here the singleton is an anonymous `Model` frame this module creates through the same factory
-//! `CreateFrame` uses, sized to the arrow's byte-measured footprint, and the app draws it: a
-//! `Model` frame whose file is the minimap arrow extracts as [`QuadContent::ModelPane`] with the
-//! path and the facing, and the app's model-pane arm paints the arrow sprite there
-//! (`ui_script/extract`).
+//! The world map's arrow frames (`0x4a8bb0`), the seven bindings `WorldMapFrame.lua` and
+//! `Blizzard_BattlefieldMinimap.lua` call. The reference keeps two singletons per UI session, the
+//! world map's and the battlefield minimap's: stock `Model` frames made by the first `Create`,
+//! never freed, their rect the arrow file's bounding box and their facing the player's.
 
 use mlua::{Lua, MultiValue, ObjectLike, Table, Value};
 
@@ -23,15 +9,11 @@ use super::binding_abi::bool_or_default;
 use super::object::{create_frame, decode_id, frame_handle_of, frame_wrapper, point_from_str};
 use super::Model;
 
-/// The arrow's model — `0x8453c0`, and NOT `Rotating-MinimapArrow`.
+/// The arrow's model (`0x8453c0`), not `Rotating-MinimapArrow`.
 pub const ARROW_MODEL: &str = "Interface\\Minimap\\MinimapArrow.mdx";
 
-/// The arrow's rect is the file's own bounding box — the implicit rect of a size-less pane
-/// (`MinimapArrow.mdx`'s `0.0262 × 0.0263` model units read as layout units,
-/// `1280·extent = 33.5 × 33.7` FrameXML units at 4:3). The world-map arrow's model scale is
-/// `G48 · 5/3` (`= 1.0` at 4:3, `G48 = 1/√(aspect² + 1)`) and the mini's `G48 · 10/9`, so the
-/// quad holds a constant apparent size as the window's shape changes while its rect grows with
-/// `√(a²+1)` (`0x4a7ad8`).
+/// Half the file's bounding box, which is the size-less pane's rect in layout units (33.5 x 33.7
+/// FrameXML units at 4:3); `0x4a7b20` centres the model there.
 fn centre_of(facts: Option<&crate::widget::ModelFileFacts>) -> (f32, f32, f32) {
     facts.map_or((0.0, 0.0, 0.0), |f| {
         let (x, y) = f.extent();
@@ -59,7 +41,8 @@ impl Arrow {
             Arrow::Mini => model.worldmap.arrow_mini = Some(id),
         }
     }
-    /// The model-scale numerator: `5/3` for the world map's arrow, `10/9` for the mini's.
+    /// The model scale over `G48`: `5/3` for the world map, `10/9` for the mini, so the arrow keeps
+    /// its apparent size as the window's shape changes (`0x4a7ad8`).
     fn scale_over_g48(self) -> f32 {
         match self {
             Arrow::World => 5.0 / 3.0,
@@ -96,15 +79,15 @@ impl Arrow {
     }
 }
 
-/// `[0x832a48]` — the Y half-extent of the reference's layout space, `1/√(A² + 1)` for the
-/// screen's aspect `A`; `0.6` at 4:3.
+/// `G48` (`0x832a48`), the Y half-extent of the reference's layout space: `1/√(A² + 1)` for the
+/// screen's aspect `A`, 0.6 at 4:3.
 fn g48(model: &Model) -> f32 {
     let (w, h) = (model.screen.width(), model.screen.height());
     let a = if h > 0.0 { w / h } else { 4.0 / 3.0 };
     1.0 / (a * a + 1.0).sqrt()
 }
 
-/// The arrow's model scale for this screen, and the footprint that scale gives it.
+/// The arrow's model scale for this screen.
 fn arrow_scale(model: &Model, which: Arrow) -> f32 {
     g48(model) * which.scale_over_g48()
 }
@@ -153,13 +136,8 @@ fn create(lua: &Lua, which: Arrow, parent: Value) -> mlua::Result<()> {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         arrow_scale(&model, which)
     };
-    // `SetModel("Interface\Minimap\MinimapArrow.mdx")` in C++ (`0x4a7a80` → `0x76c8e0`): the
-    // same file set every pane takes, seeded with the file's facts when the host has them
-    // (the arrow's Stand loops its 3.333 s with no bone keyed, so nothing
-    // moves; the arm is the reference's, not a look). No authored size: the widget's rect is
-    // the file's bounding box, and `0x4a7b20`'s `SetPosition(½·GetWidth,
-    // ½·GetHeight, 0)` — the geometry override's bbox extent, in layout units — centres the
-    // model on it.
+    // The reference's `SetModel` (`0x4a7a80` calls `0x76c8e0`) with no authored size: the rect is
+    // the file's bounding box, and `0x4a7b20` centres the model on it.
     let facts = lua
         .app_data_mut::<Model>()
         .expect("model app_data")
@@ -176,7 +154,6 @@ fn create(lua: &Lua, which: Arrow, parent: Value) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The singleton's wrapper, or `None` while it does not exist.
 fn arrow_wrapper(lua: &Lua, which: Arrow) -> mlua::Result<Option<Table>> {
     let id = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -185,10 +162,8 @@ fn arrow_wrapper(lua: &Lua, which: Arrow) -> mlua::Result<Option<Table>> {
     id.map(|id| frame_wrapper(lua, id)).transpose()
 }
 
-/// `UpdateWorldMapArrowFrames()` (`0x4a8d10`/`0x4a7c20`): for each existing arrow, re-centre the
-/// model on its rect and copy the camera-tracked object's facing — the player's, which the app
-/// pushes with the world-map feed — into its rotation about +Z. No player → neither facing
-/// moves.
+/// `UpdateWorldMapArrowFrames()` (`0x4a8d10`, `0x4a7c20`): re-centre each arrow and copy the
+/// camera-tracked object's facing, the player's; with no player the facing stays.
 fn update(lua: &Lua) -> mlua::Result<()> {
     for which in [Arrow::World, Arrow::Mini] {
         let Some(wrapper) = arrow_wrapper(lua, which)? else {
@@ -212,13 +187,9 @@ fn update(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// `Position…("point", "frame" [, relativePoint] [, offsetX, offsetY])` (`0x4a8d20`/`0x4a8f20`):
-/// silent with no arrow; args 1 and 2 must be strings (a number is one) else the usage raise;
-/// the point through the same table `SetPoint` reads, else `Unknown frame point`; the frame by
-/// name — `$parent` expanded against the arrow's parent, then `_G` — else `Couldn't find frame
-/// named '%s'`, and the arrow itself `Error: %s is anchored to itself`; a non-string third
-/// argument means `relativePoint = point` and zero offsets with no error; offsets only when both
-/// are numbers.
+/// `Position...("point", "frame" [, relativePoint] [, offsetX, offsetY])` (`0x4a8d20`,
+/// `0x4a8f20`): `SetPoint` on the arrow, silent with no arrow. A non-string third argument means
+/// the same point and zero offsets, with no error; offsets apply only when both are numbers.
 fn position(lua: &Lua, which: Arrow, args: [Value; 5]) -> mlua::Result<()> {
     let Some(arrow) = arrow_wrapper(lua, which)? else {
         return Ok(());
@@ -233,7 +204,9 @@ fn position(lua: &Lua, which: Arrow, args: [Value; 5]) -> mlua::Result<()> {
     }
     let frame_name = as_string(&frame)?;
     let resolved = if let Some(rest) = frame_name.strip_prefix("$parent") {
-        // The first NAMED ancestor of the arrow — its parent frame, or that frame's own parent.
+        // The reference (`0x76c5b0`) matches `$parent` in any case and takes the first named
+        // ancestor's name, else "Top"; here the prefix matches as spelled and only the direct
+        // parent's name is tried.
         let parent_name: Option<String> = arrow
             .call_method::<Option<Table>>("GetParent", ())?
             .and_then(|p| {
@@ -279,15 +252,14 @@ fn position(lua: &Lua, which: Arrow, args: [Value; 5]) -> mlua::Result<()> {
     )
 }
 
-/// `Show…([shown])` (`0x4a9120`/`0x4a9170`): silent with no arrow; the never-raising boolean
-/// coercion with a default of true (absent → show, `nil` → hide).
+/// `Show...([shown])` (`0x4a9120`, `0x4a9170`): silent with no arrow; the never-raising boolean
+/// coercion, true by default.
 fn show(lua: &Lua, which: Arrow, args: MultiValue) -> mlua::Result<()> {
     let Some(arrow) = arrow_wrapper(lua, which)? else {
         return Ok(());
     };
-    // An ABSENT argument is not nil at the C API (`LUA_TNONE`, which the binding's nil test does
-    // not match), so the bare call shows; an explicit nil hides; anything else is the boolean
-    // coercion with its true default.
+    // An absent argument is `LUA_TNONE`, which the binding's nil test does not match, so a bare
+    // call shows and an explicit nil hides.
     let on = match args.front() {
         None => true,
         Some(Value::Nil) => false,
@@ -341,8 +313,8 @@ mod tests {
     use super::*;
     use crate::script::UiScript;
 
-    /// The arrow file's facts, as the host hands them over (2007/2015): the header box the
-    /// implicit rect and the re-centring read.
+    /// The arrow file's facts as the host hands them over: the header box the rect and the
+    /// centring read.
     fn arrow_facts(s: &mut UiScript) {
         s.set_model_facts(
             ARROW_MODEL,
@@ -370,8 +342,6 @@ mod tests {
         s
     }
 
-    /// The three raise strings, then the singleton: an anonymous Model child of the parent,
-    /// loaded with the arrow, born shown, sized to its footprint; a second create a no-op.
     #[test]
     fn create_validates_its_parent_and_makes_one_arrow_per_session() {
         let mut s = vm();
@@ -413,11 +383,9 @@ mod tests {
         assert_eq!(kind, "Model");
         assert!(shown, "born shown");
         assert_eq!(w, 0.0, "no authored size, no facts yet: no rect");
-        // The file lands: the rect is its box in layout units — 0.0262 × 1280 at 4:3 — and the
-        // model is centred on it (`0x4a7b20`, half the box, in layout units).
+        // The rect is the box in layout units, 0.0262 x 1280 at 4:3, with the model centred on it.
         arrow_facts(&mut s);
-        // The C++ re-centres on create and on every `UpdateWorldMapArrowFrames` (`0x4a7b20`);
-        // a file that lands after the create is picked up by the next update.
+        // Facts that land after the create are picked up by the next update, which re-centres.
         s.run("UpdateWorldMapArrowFrames()").unwrap();
         s.resolve();
         let w: f32 = s.eval("return ({WM:GetChildren()})[2]:GetWidth()").unwrap();
@@ -442,8 +410,6 @@ mod tests {
         );
     }
 
-    /// `Position…` anchors the arrow like SetPoint, with the reference's three strings and its
-    /// two silent legs; `Show…` follows the boolean coercion; `Update…` copies the facing.
     #[test]
     fn position_show_and_update_drive_the_arrow() {
         let mut s = vm();
@@ -488,7 +454,7 @@ mod tests {
             (cx - (dl + 100.0)).abs() < 0.01 && (cy - (dt - 50.0)).abs() < 0.01,
             "{cx} {cy}"
         );
-        // A non-string third argument: relativePoint = point, offsets ignored, no error.
+        // A non-string third argument: the same point, offsets ignored, no error.
         s.run("PositionWorldMapArrowFrame('TOPLEFT', 'WorldMapDetailFrame', nil, 100, -50)")
             .unwrap();
         s.resolve();

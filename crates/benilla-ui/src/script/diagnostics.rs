@@ -1,61 +1,12 @@
-//! The **script error log** — what went wrong, kept where the player can read it.
+//! The script error log: this session's script errors, addon load failures and warnings, kept
+//! for the player to read. The reference has no such log: its `_ERRORMESSAGE` shows only the first
+//! message of a burst, and a load failure that never raises reaches no screen. Dispatch and
+//! `_ERRORMESSAGE` are unchanged by it.
 //!
-//! ## Why this exists
-//!
-//! 1305 gave script errors a *screen*: the engine dispatches every caught error to
-//! `geterrorhandler()`, and FrameXML's `_ERRORMESSAGE` puts the red `ScriptErrors` dialog up. That
-//! is the reference's behaviour and it stays exactly as it is. It is also, on its own, not enough,
-//! and it leaves two asks: a Lua error frame that says which addons still fail, and a
-//! BugGrabber-style collector that keeps their stack traces for a bug report.
-//!
-//! Both asks are the same three gaps, and all three are about *memory*:
-//!
-//! 1. **`_ERRORMESSAGE` shows a burst's FIRST message only** — its own `ScriptErrors:IsVisible()`
-//!    guard, faithfully transcribed. A world entry that raises 1,113 times (1305 measured exactly
-//!    that) shows one string. This is precisely why BugGrabber exists in the real world.
-//! 2. **An addon can fail to load without ever raising**, and those failures had no channel at all
-//!    — a manifest entry the package does not ship, a document that will not parse, a dependency
-//!    cycle, a missing hard dependency, a broken `Bindings.xml`. They logged to the terminal and
-//!    stopped; the addon simply was not there and the client said nothing.
-//! 3. **Nothing retained anything.** [`super::UiScript::take_errors`] drains to the host log every
-//!    frame, so once a frame passed, the terminal held the only copy. A player cannot read a
-//!    terminal, and a bug report written from one is what B271 was debugged off.
-//!
-//! ## What this is, and what it deliberately is not
-//!
-//! A bounded, deduplicating, ordered log of everything that went wrong this session, written at
-//! the two choke points every failure already passes ([`super::model::Model::record_script_error`]
-//! and [`super::UiScript::report_load_failure`]) and read by whatever wants to show it.
-//!
-//! **"Session" means one world session, not one process.** The log lives on the `Model`, and the
-//! in-game UI is rebuilt onto a fresh VM at every world entry (1290) — so a logout or a `ReloadUI`
-//! starts an empty log. That is the right boundary and it self-heals: the load walk runs again on
-//! the way back in and re-records whatever is still broken. What it is *not* is a place to look for
-//! what happened before the reload you just did.
-//!
-//! It is **purely additive**: no dispatch changes, no `_ERRORMESSAGE` change, no divergence from
-//! the reference's own behaviour. The reference simply never had this instrument, and *"a modern,
-//! idiomatic client"* covers building one.
-//!
-//! It is **not** a transcription of BugGrabber, which is somebody else's addon (and not Blizzard's
-//! either). It is our own equivalent, and an addon that installs its own `seterrorhandler` still
-//! wins outright for the dispatch half exactly as 1195/1305 leave it.
-//!
-//! ## Dedupe, order, and the bound
-//!
-//! **Repeats collapse onto the first occurrence and bump a count.** An `OnUpdate` that raises
-//! every frame is one row reading `×1113`, not 1,113 rows — without that the log is useless within
-//! seconds, and unbounded besides.
-//!
-//! **Order is first-occurrence, oldest first.** The load-time failures are the causes and the
-//! later runtime errors are usually their consequences, so a chronological read is the one that
-//! explains itself. A repeat does *not* move its row to the end: a row that jumps around while you
-//! read it is worse than a stale position.
-//!
-//! **[`DIAGNOSTIC_LOG_CAP`] distinct rows**, evicting oldest-first. `seq` is monotonic and never
-//! reused, so an evicted prefix is visible as a gap rather than silently rewriting history — a
-//! surface can say "showing #251-#500" honestly. The cap binds *distinct* messages, which after
-//! dedupe is a much higher ceiling than it looks: 1305's 1,113-raise run produces **one** row.
+//! A repeat bumps its row's count and keeps its place, rows are oldest first, and past
+//! [`DIAGNOSTIC_LOG_CAP`] distinct messages the oldest is evicted; `seq` is never reused, so an
+//! eviction shows as a gap. The log lives on the `Model`, and every world entry and `ReloadUI`
+//! builds a fresh VM, so each starts an empty log.
 
 use std::collections::VecDeque;
 
@@ -63,43 +14,25 @@ use mlua::{IntoLua, Lua, MultiValue, Value};
 
 use super::Model;
 
-/// How many **distinct** messages the log retains before evicting the oldest.
-///
-/// Sized against the worst real load we have measured rather than a round number: the 218-addon
-/// corpus behind 1306, loaded at once, is the widest set of distinct failures this client has ever
-/// produced. Dedupe means repeats cost nothing, so this bounds *kinds* of problem, not events.
+/// Distinct messages retained before the oldest is evicted, sized for the whole 218-addon corpus
+/// loaded at once.
 pub const DIAGNOSTIC_LOG_CAP: usize = 256;
 
-/// What a retained row *is* — and the split is by **consequence**, not by where it was caught,
-/// because that is the only distinction the player can act on.
+/// What a row reports, split by its consequence to the player.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticKind {
-    /// **Code ran and raised.** The addon is loaded and working apart from this; the failure may
-    /// be harmless, may be one frame's bad luck, may be constant. This is the class that already
-    /// reaches the red dialog.
+    /// Code ran and raised; the addon is otherwise loaded.
     Error,
-    /// **An addon did not load.** Definitely broken, definitely worth telling somebody about, and
-    /// before 1495 invisible unless you were reading the terminal. Both the raising kind (a file
-    /// scope that blew up) and the silent kind (a missing file, an unparseable document, a
-    /// dependency that isn't there) land here — from the player's side they are one thing: *the
-    /// addon isn't running*.
+    /// An addon did not load, whether its file scope raised or a file, document or dependency
+    /// was missing or broken.
     Load,
-    /// **The call was accepted and did not do what it said.** Nothing raised and nothing failed to
-    /// load: an `inherits=` argument that was not a template name and got dropped, a `SetPoint`
-    /// whose `relativeTo` did not resolve and re-anchored to the owner, a `SetCVar` on a name
-    /// nothing registered, a saved variable that could not be serialised, a `CreateMacro` that
-    /// was refused. The addon runs on, believing it got what it asked for.
-    ///
-    /// **This kind exists because the channel was a dead end**. These messages had
-    /// one consumer — a `warn!` line in the host's terminal, drained and discarded every frame —
-    /// so they reached neither the player (who cannot read a terminal, which is the whole
-    /// argument of 1495 above) nor the addon survey (whose columns read `errors`). A warning is
-    /// exactly the class an instrument is *for*: it is the failure that does not announce itself.
+    /// A call was accepted and did not do what it said (a dropped `inherits=`, an unresolved
+    /// `SetPoint` target, a `SetCVar` on an unregistered name, a refused `CreateMacro`).
     Warning,
 }
 
 impl DiagnosticKind {
-    /// The one-word tag a surface prints. Stable — a surface may key colour off it.
+    /// The one-word tag a surface prints; stable, as a surface may key colour off it.
     pub fn tag(self) -> &'static str {
         match self {
             Self::Error => "error",
@@ -112,41 +45,31 @@ impl DiagnosticKind {
 /// One retained row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
-    /// Monotonic, 1-based, **never reused** — the "#N" a surface shows. Survives eviction, so a
-    /// gap in the numbers is an honest report that older rows were dropped.
+    /// The "#N" a surface shows: 1-based, monotonic and never reused.
     pub seq: u64,
     pub kind: DiagnosticKind,
-    /// The message exactly as the host logged it — same string, same spelling, so a player's
-    /// screenshot and our terminal line are greppable against each other.
+    /// The message exactly as the host logged it.
     pub message: String,
-    /// How many times this exact `(kind, message)` has occurred. Starts at 1.
+    /// Occurrences of this `(kind, message)`, from 1.
     pub count: u32,
 }
 
-/// The log itself. Lives on the model; see the module header for the shape and the why.
+/// The log, held on the model.
 #[derive(Debug, Default)]
 pub(crate) struct DiagnosticLog {
     rows: VecDeque<Diagnostic>,
-    /// The last `seq` handed out. Kept separately from `rows.len()` precisely so eviction cannot
-    /// renumber anything.
+    /// The last `seq` handed out; kept apart from `rows.len()` so eviction never renumbers.
     seq: u64,
 }
 
 impl DiagnosticLog {
-    /// Record one failure, collapsing it onto an existing identical row if there is one.
-    ///
-    /// The dedupe scan is linear over at most [`DIAGNOSTIC_LOG_CAP`] rows and runs on the failure
-    /// path only. The pathological caller is an `OnUpdate` raising at frame rate, where the scan
-    /// hits its row and returns — cheaper by far than the `String` allocation it saves, and
-    /// arithmetic beside the `mlua` error formatting that produced the message in the first place.
+    /// Record one failure, or bump the count of its identical row.
     pub(crate) fn record(&mut self, kind: DiagnosticKind, message: &str) {
         if let Some(row) = self
             .rows
             .iter_mut()
             .find(|r| r.kind == kind && r.message == message)
         {
-            // Saturating rather than wrapping: a count that rolls over to 0 reads as "this never
-            // happened", which is the one answer that is never true here.
             row.count = row.count.saturating_add(1);
             return;
         }
@@ -172,83 +95,54 @@ impl DiagnosticLog {
         self.rows.len()
     }
 
-    /// Distinct failures **ever** recorded this session, including rows since evicted. The
-    /// difference from [`Self::len`] is how many the cap ate.
+    /// Distinct failures recorded this session, evicted and cleared rows included.
     pub(crate) fn total(&self) -> u64 {
         self.seq
     }
 
-    /// Forget everything — the player's own "I've read these" act. Deliberately does **not** reset
-    /// `seq`: after a clear, the next row is still #N+1, so a screenshot taken before the clear and
-    /// one taken after cannot claim the same number for different failures.
+    /// Forget the rows but not the numbering, so no `#N` ever names two failures.
     pub(crate) fn clear(&mut self) {
         self.rows.clear();
     }
 }
 
 impl super::UiScript {
-    /// Every retained row, oldest first — a clone, because the caller is the app's UI and the
-    /// model is behind `app_data`. The log is capped at [`DIAGNOSTIC_LOG_CAP`] rows, so this is a
-    /// bounded copy of a list nothing reads at frame rate.
+    /// Every retained row, oldest first, cloned out of the model.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         self.model_ref().diagnostics.rows().cloned().collect()
     }
 
-    /// `(retained rows, distinct failures ever recorded)`. The two differ once the cap has evicted.
+    /// `(retained rows, distinct failures ever recorded)`.
     pub fn diagnostic_counts(&self) -> (usize, u64) {
         let m = self.model_ref();
         (m.diagnostics.len(), m.diagnostics.total())
     }
 
-    /// Forget the retained rows (the player's "I've read these"). See [`DiagnosticLog::clear`] for
-    /// why the numbering is deliberately *not* reset.
+    /// Forget the retained rows; the numbering carries on.
     pub fn clear_diagnostics(&self) {
         self.model_mut().diagnostics.clear();
     }
 
-    /// Record an addon that **did not load** for a reason that never raised — a manifest entry the
-    /// package does not ship, a document that will not parse, a dependency cycle, a hard
-    /// dependency that is missing, a broken `Bindings.xml`.
-    ///
-    /// **Deliberately does not dispatch.** These are not Lua errors: nothing raised, there is no
-    /// traceback, and handing them to `geterrorhandler()` would put non-errors through
-    /// `_ERRORMESSAGE` and through every addon handler that ever replaces it — a divergence from
-    /// the reference for no gain, since the reference's own answer to an unparseable document is a
-    /// line in `FrameXML.log` and silence on screen. What 1495 changes is that the silence is no
-    /// longer *total*: the failure is retained and readable, it just does not seize the screen.
-    ///
-    /// The caller still logs its own line; this is the retention half, not a replacement for it.
+    /// Retain an addon load failure that never raised (a missing file, an unparseable document, a
+    /// dependency cycle or missing dependency, a broken `Bindings.xml`). It is not dispatched to
+    /// `geterrorhandler()`: the reference logs such a failure and shows nothing. The caller still
+    /// writes its own log line.
     pub fn report_load_failure(&self, msg: &str) {
         record_load_failure(&self.lua, msg);
     }
 
-    /// Retain one non-fatal warning the HOST caught and has already logged — a loader warning off
-    /// an addon's XML, carrying the `<Addon>/<file>` prefix only the caller knows.
-    ///
-    /// The retention half alone, exactly like [`Self::report_script_error`]: the caller writes its
-    /// own `warn!` line, and putting the message on [`Model::warnings`] as well would double it at
-    /// the app's next per-frame drain. For a warning the ENGINE raises, the door is
-    /// [`Model::record_warning`], which owns both halves.
+    /// Retain a warning the host has already logged (a loader warning with its `<Addon>/<file>`
+    /// prefix). Queuing it on `Model::warnings` too would log it twice; an engine-raised warning
+    /// goes through `Model::record_warning`, which does both.
     pub fn report_warning(&self, msg: &str) {
         record_warning(&self.lua, msg);
     }
 }
 
-/// **THE rule for "an addon file did not load"** — one implementation, both loaders (decision
-/// 2107).
-///
-/// The startup walk reaches it through [`super::UiScript::report_load_failure`]; `LoadAddOn`'s
-/// demand load reaches it directly, because it runs inside a Lua binding and holds only `&Lua`
-/// (1191 §4). That was the whole defect 2107 fixes: the two paths had **two copies** of the rule
-/// and the demand-load copy classified a missing manifest entry as a script error, so an addon the
-/// reference loads (logging `Couldn't open %s` and continuing) came back as a session failure here.
-///
-/// The reference's own shape: a failed open is **non-fatal** — `0x6edaa0` logs
-/// `"Couldn't open %s"` (`0x846ff4`) to the log sink at severity 2 and returns null; every failure
-/// leg "reports through the sink and returns normally, with no throw, no `longjmp` and no abort",
-/// and the enclosing `.toc`/document keeps loading. Nothing on that path reaches the Lua error
-/// handler, which is why this never dispatches (1495) and why 1450 made it a WARN: a broken
-/// package is the *package's* defect, and ERROR means "the client is broken".
+/// Retain an addon file that did not load: the one rule for the startup walk and for `LoadAddOn`,
+/// which holds only `&Lua`. The reference's failed open is non-fatal: `0x6edaa0` logs
+/// `Couldn't open %s` (`0x846ff4`) at severity 2 and loading goes on, never reaching the Lua
+/// error handler.
 pub(crate) fn record_load_failure(lua: &Lua, msg: &str) {
     lua.app_data_mut::<Model>()
         .expect("model app_data set")
@@ -256,13 +150,8 @@ pub(crate) fn record_load_failure(lua: &Lua, msg: &str) {
         .record(DiagnosticKind::Load, msg);
 }
 
-/// **THE rule for "something was accepted and did not do what it said"** — the retention half of
-/// the warning channel, for a caller that holds `&Lua`.
-///
-/// Its `&UiScript` face is [`super::UiScript::report_warning`] and its engine-internal sibling is
-/// [`Model::record_warning`]; the difference is only which of the two channels the caller still
-/// owes. A host caller has already written its own log line and wants retention only; an engine
-/// caller wants both.
+/// Retain a warning its caller, holding `&Lua`, has already logged; `Model::record_warning` also
+/// queues it for the host log.
 pub(crate) fn record_warning(lua: &Lua, msg: &str) {
     lua.app_data_mut::<Model>()
         .expect("model app_data set")
@@ -270,14 +159,10 @@ pub(crate) fn record_warning(lua: &Lua, msg: &str) {
         .record(DiagnosticKind::Warning, msg);
 }
 
-/// Register the error-log reads the `BenillaScriptLogFrame` polls.
-///
-/// **`Benilla`-prefixed because they are ours**, not 1.12's — the prefix rule as
-/// `tests::reference_surface` enforces it (1254: a name we invent must not collide, a name the
-/// reference owns must not be hidden). 1.12 has no error-log API to shadow, so there is nothing
-/// here an addon could have meant by a bare name.
+/// Register the error-log reads `BenillaScriptLogFrame` polls, `Benilla`-prefixed as they are not
+/// 1.12 API (`tests::reference_surface` enforces the prefix).
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
-    // BenillaGetNumScriptErrors() -> retained, totalEverRecorded
+    // BenillaGetNumScriptErrors() → retained, totalEverRecorded
     lua.globals().set(
         "BenillaGetNumScriptErrors",
         lua.create_function(|lua, ()| {
@@ -285,9 +170,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok((model.diagnostics.len(), model.diagnostics.total()))
         })?,
     )?;
-    // BenillaGetScriptErrorInfo(index) -> seq, kind, message, count   (1-based, oldest first;
-    // nil for an out-of-range index, so a stale row index during a repaint reads as "gone"
-    // rather than erroring inside the very frame that lists errors.)
+    // BenillaGetScriptErrorInfo(index) → seq, kind, message, count; 1-based, oldest first, and
+    // nothing for an out-of-range index, so a row gone mid-repaint reads as gone.
     lua.globals().set(
         "BenillaGetScriptErrorInfo",
         lua.create_function(|lua, index: i64| {
@@ -307,7 +191,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             ]))
         })?,
     )?;
-    // BenillaClearScriptErrors()
     lua.globals().set(
         "BenillaClearScriptErrors",
         lua.create_function(|lua, ()| {
@@ -339,9 +222,6 @@ mod tests {
 
     #[test]
     fn a_warning_reaches_the_retained_log_and_the_host_drain() {
-        // 2135's whole subject. Before it, a warning existed for exactly as long as one terminal
-        // line: `take_warnings` drained it and nothing kept a copy, so neither the player's
-        // `/errors` window nor the addon survey could see one.
         let mut s = crate::script::UiScript::new().expect("vm");
         s.run(r#"SetCVar("thisCVarDoesNotExist", "1")"#).unwrap();
 
@@ -357,7 +237,6 @@ mod tests {
             .unwrap_or_else(|| panic!("…and it is RETAINED: {kept:#?}"));
         assert_eq!(row.kind, DiagnosticKind::Warning, "under its own kind");
 
-        // The drain is a drain; the log is a memory. A second frame does not lose the row.
         assert!(s.take_warnings().is_empty());
         assert!(s
             .diagnostics()
@@ -367,10 +246,8 @@ mod tests {
 
     #[test]
     fn a_text_sink_takes_bytes_rather_than_raising_on_them() {
-        // Decision 2138, and 1193's rule finally applied at the boundary 1193 named. `strsub` is
-        // byte-indexed by design, so a slice through a multi-byte character is a string an addon
-        // really does hand to `SetText` — and mlua's `String` conversion raised on it, killing the
-        // handler. A stray byte costs a glyph.
+        // `strsub` is byte-indexed, so an addon can hand `SetText` half a UTF-8 character; that
+        // costs a glyph, never a raise.
         let s = crate::script::UiScript::new().expect("vm");
         s.run(
             r#"

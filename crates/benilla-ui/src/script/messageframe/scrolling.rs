@@ -1,22 +1,8 @@
-//! The `ScrollingMessageFrame` method surface — the chat window's per-kind widget behavior
-//! (`CSimpleMessageScrollFrame`, ctor `0x787670`).
-//!
-//! A **true ring** of `maxLines` (drop-oldest, `SetMaxLines` destructive),
-//! `AddMessage(text[,r,g,b[,id]])` with the `trunc(x*255+0.5)` color quantization + forced-opaque
-//! alpha, per-line fade snapshots ticked only while **AtBottom** (scrolled up freezes every alpha),
-//! 1-slot scrollback, and — the other half of that fade — **every scroll entry re-arming the
-//! displayed lines** (`0x788b80` direct when the scroll is refused at an end, `0x788af0` via the
-//! relayout when it moves), which is what brings a faded-out chat back. The heavy lifting
-//! (the ring, the fade phases, the scroll clamps) lives on [`ScrollingMessageState`]
-//! (`crate::widget`), unit-tested there; this module is the thin Lua binding over it, plus the
-//! host-facing [`UiScript::add_chat_message`]/fade advance the app drives.
-//!
-//! The methods live in their own registry table, consulted by the frame `__index` dispatcher only
-//! for ScrollingMessageFrame frames — so duck-typing addons (`if frame.AddMessage then …`) see `nil`
-//! on every other kind, exactly as against the client's per-class method sets. **Its sibling class
-//! `MessageFrame` has its own table next door** ([`super::plain`]) carrying a *different*
-//! `AddMessage`: merging the two would hand a chat frame a `SetInsertMode` it does not have, and a
-//! MessageFrame an id argument where its alpha belongs.
+//! The `ScrollingMessageFrame` methods over [`ScrollingMessageState`]: `CSimpleMessageScrollFrame`
+//! (ctor `0x787670`), the chat window's class. A ring of `maxLines` that drops the oldest, colours
+//! quantized `trunc(x*255+0.5)` with alpha forced opaque, a fade that ticks only at the bottom, and
+//! every scroll call re-arming the displayed lines' fade (`0x788b80` when refused at an end,
+//! `0x788af0` when it moves), which is what brings a faded chat back.
 
 use mlua::{Lua, Table, Value};
 
@@ -24,14 +10,12 @@ use crate::script::object::frame_handle_of;
 use crate::script::{Model, UiScript};
 use crate::widget::{KindState, ScrollingMessageState};
 
-/// Registry key of the ScrollingMessageFrame method table (the MAXCSTACK discipline: Lua-side root,
-/// named key).
+/// Registry key of the ScrollingMessageFrame method table (the MAXCSTACK discipline).
 pub(crate) const REG_SCROLLINGMESSAGEFRAME_METHODS: &str =
     "__benilla_scrollingmessageframe_methods";
 
-/// Run `f` over a frame's message-frame state under one short write borrow. Errors if `this` is not a
-/// live ScrollingMessageFrame (unreachable through the kind dispatcher, but the method table is a
-/// plain Lua value — a caller could fish it out and misapply it).
+/// Run `f` over a ScrollingMessageFrame's state under one short borrow; any other frame, reachable
+/// only through a misapplied method table, is an error.
 fn with_smf<T>(
     lua: &Lua,
     this: &Table,
@@ -49,9 +33,7 @@ fn with_smf<T>(
     }
 }
 
-/// `lua_isnumber` semantics — a number, or a string Lua would coerce to one. The rgb trio's
-/// presence test is three of these, so a caller passing `"1"` still colours the
-/// line and a caller passing `nil` or a table does not.
+/// `lua_isnumber`: a number or a numeric string. The rgb presence test is three of these.
 fn is_number(v: &Value) -> bool {
     match v {
         Value::Integer(_) | Value::Number(_) => true,
@@ -60,7 +42,7 @@ fn is_number(v: &Value) -> bool {
     }
 }
 
-/// A Lua number-ish → f32 (nil/other → 0.0), for the color args.
+/// A colour argument as f32, 0 for anything but a number.
 fn num_f32(v: &Value) -> f32 {
     match v {
         Value::Number(n) => *n as f32,
@@ -69,12 +51,8 @@ fn num_f32(v: &Value) -> f32 {
     }
 }
 
-/// Run a scroll entry over a frame's state with the viewport's row budget in hand.
-///
-/// Every scroll method needs it, not just the pages: each one re-arms the **displayed** lines'
-/// fade ([`ScrollingMessageState::reset_all_fade_times`]), and which lines those are depends on the
-/// row budget. It comes from the frame's last resolved rect at the ring font's pitch (the
-/// font-height line-step law, the emit pass's basis); an unresolved frame reads as one row.
+/// Run a scroll call with the viewport's row count, which every scroll needs: each re-arms the
+/// fade of the lines on display ([`ScrollingMessageState::reset_all_fade_times`]).
 fn scroll(
     lua: &Lua,
     this: &Table,
@@ -99,27 +77,16 @@ fn scroll(
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
-    // The justify quartet, shared with the sibling class — see [`super::install_justify`] for the
-    // method-table bytes that put all four on BOTH tables.
+    // The justify quartet, on both classes ([`super::install_justify`]).
     super::install_justify(lua, &m, "ScrollingMessageFrame")?;
 
-    // AddMessage(text [, r, g, b [, id]]) — binding 0x792900. rgb absent ⇒ white; the state
-    // quantizes round-half-up and forces the line opaque, then the fade drives its alpha.
-    //
-    // **The rgb gate is three separate `lua_isnumber` calls on indices 3/4/5, and the id's index
-    // is LEG-DEPENDENT**: 6 when rgb are
-    // present (`0x792b13 mov edx,6`), **3** when they are absent (`0x792b48 mov edx,3`) — which is
-    // what makes the documented `AddMessage(text, id)` shorthand work. So `AceConsole-2.0`'s
-    // `AddMessage(text, nil, nil, nil, nil, 5)` fails the R gate at index 3, takes the absent leg,
-    // re-reads index 3 as the id — still nil — and stores **0**; its trailing `5` sits at index 7
-    // and is never read at all.
-    //
-    // Absent or non-numeric is id 0, and 0 is a line `UpdateColorByID` can never find: that guard
-    // is the reference's own, at `0x788250`'s first branch.
-    //
-    // The TEXT gate is the sibling class's, verbatim — gate `0x79299c`, `je 0x792b81` = this
-    // function's own epilogue — so `DEFAULT_CHAT_FRAME:AddMessage(nil)` is silent too. See
-    // `super::message_text`.
+    // AddMessage(text [, r, g, b [, id]]) (`0x792900`): white without rgb; the state quantizes
+    // the colour and makes the line opaque. The rgb test is three `lua_isnumber` checks; the id
+    // is stack index 6 when they pass (`0x792b13`) and index 3, `r`'s, when they fail
+    // (`0x792b48`), which makes `AddMessage(text, id)` work and gives
+    // `AddMessage(text, nil, nil, nil, nil, 5)` id 0. A missing id is 0, which `UpdateColorByID`
+    // never matches (`0x788250`). The text gate (`0x79299c`) is the plain class's
+    // ([`super::message_text`]).
     m.set(
         "AddMessage",
         lua.create_function(
@@ -128,10 +95,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return Ok(());
                 };
                 let has_rgb = is_number(&r) && is_number(&g) && is_number(&b);
-                // The id is the chat-type index (`GetChatTypeIndex`) the line is printed under —
-                // `ChatFrame.lua` passes `info.id` — read from the leg's OWN stack slot: the
-                // sixth argument when rgb are present, the third (i.e. where `r` would be) when
-                // they are not.
+                // The chat-type index (`ChatFrame.lua` passes `info.id`), stack index 6 or 3.
                 let id = match if has_rgb { &id } else { &r } {
                     Value::Integer(i) => u32::try_from(*i).unwrap_or(0),
                     Value::Number(n) if n.is_finite() && *n >= 0.0 => *n as u32,
@@ -147,9 +111,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?,
     )?;
 
-    // UpdateColorByID(id, r, g, b) — `0x7932b0`. `ChatFrame_OnEvent`'s UPDATE_CHAT_COLOR arm
-    // calls it with the type's index and the event's floats so the lines already in the
-    // window take the new colour; lines printed under another id are untouched.
+    // UpdateColorByID(id, r, g, b) (`0x7932b0`) recolours the lines printed under `id`; stock
+    // `ChatFrame_OnEvent` calls it on `UPDATE_CHAT_COLOR`.
     m.set(
         "UpdateColorByID",
         lua.create_function(
@@ -214,7 +177,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| with_smf(lua, &this, |smf| smf.at_bottom()))?,
     )?;
 
-    // SetMaxLines is destructive (`0x7938a0`) — the state handles the wipe.
+    // SetMaxLines wipes the ring (`0x7938a0`).
     m.set(
         "SetMaxLines",
         lua.create_function(|lua, (this, n): (Table, i64)| {
@@ -237,8 +200,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             with_smf(lua, &this, |smf| smf.fading_enabled = on)
         })?,
     )?;
-    // 1/nil, the reference's predicate shape (`0x793a40`): `(nil) | (number)`, like every other
-    // 1.12 predicate.
+    // 1 or nil, the 1.12 predicate shape (`0x793a40`).
     m.set(
         "GetFading",
         lua.create_function(|lua, this: Table| {
@@ -247,8 +209,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             })
         })?,
     )?;
-    // The XML attr is `displayDuration`; the Lua accessors call the same field `TimeVisible`
-    // (`0x788090`).
+    // XML's `displayDuration` is the Lua `TimeVisible` (`0x788090`).
     m.set(
         "SetTimeVisible",
         lua.create_function(|lua, (this, s): (Table, f32)| {
@@ -271,19 +232,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── the shared font block ───────────────────────────────────────────────────────────────
-    //
-    // `Set/GetFontObject · Set/GetFont · Set/GetTextColor · Set/GetShadowColor ·
-    // Set/GetShadowOffset` are real entries on this class's table, not a courtesy. The
-    // registrar map is explicit about the membership — *"Exposed on: FontString, Font object,
-    // EditBox, MessageFrame, ScrollingMessageFrame, SimpleHTML. NOT on Button"* (table
-    // `0x879d00` has none) — and names this class's own shims calling the shared
-    // implementations (`GetShadowColor 0x792240`). All six carry the block now —
-    // `SimpleHTML`'s is its own copy rather than `font_block::install`'s
-    // (`script/simplehtml/mod.rs`), because that class computes its own inter-block step.
-    //
-    // Demand is observed, not counted: `BigWigs/Plugins/Messages.lua:212` is
-    // `self.msgframe:SetFontObject(GameFontNormalLarge)` on a frame it has just given
-    // `SetInsertMode("TOP")`, and BigWigs dies there every session.
+    // The ten font verbs are on this class's own table (`GetShadowColor` `0x792240`), as on
+    // FontString, Font, EditBox, MessageFrame and SimpleHTML; Button's (`0x879d00`) has none.
     crate::script::font_block::install(
         lua,
         &m,
@@ -297,12 +247,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.set_named_registry_value(REG_SCROLLINGMESSAGEFRAME_METHODS, m)?;
 
-    // SubmitChatInput(text) — the chat input EditBox's OnEnterPressed hands the typed line here; it
-    // queues into the model for the app to parse into a chat command (the outbound Lua→app seam, the
-    // twin of loot's LootSlot). Empty/whitespace lines are queued as-is; the app treats them as a
-    // cancel. Not an EditBox method — a bare global, called with the line the handler read.
-    // BenillaChatTabPressed() — the chat edit box's OnTabPressed queues a flag the app's
-    // whisper-cycle system drains (UiScript::take_chat_tab), the SubmitChatInput pattern.
+    // BenillaChatTabPressed(): the chat edit box's OnTabPressed sets a flag for the app's whisper
+    // cycle (`UiScript::take_chat_tab`).
     lua.globals().set(
         "BenillaChatTabPressed",
         lua.create_function(|lua, ()| {
@@ -311,6 +257,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    // SubmitChatInput(text): the chat edit box's OnEnterPressed queues the line for the app to
+    // parse as a chat command; an empty line is queued too, and the app takes it as a cancel.
     lua.globals().set(
         "SubmitChatInput",
         lua.create_function(|lua, text: Option<String>| {
@@ -341,7 +289,6 @@ mod tests {
             let (t, r, g, b) = white(&format!("line {n}"));
             s.add(t, r, g, b);
         }
-        // Only the last 3 survive, oldest→newest.
         assert_eq!(s.lines.len(), 3);
         let texts: Vec<&str> = s.lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, ["line 2", "line 3", "line 4"]);
@@ -363,10 +310,10 @@ mod tests {
     #[test]
     fn color_is_quantized_round_half_up() {
         let mut s = ScrollingMessageState::default();
-        // 0.5*255 = 127.5 → +0.5 → 128.0 → trunc 128 (round-half-up); 1.0 → 255; clamp past 1.0.
+        // trunc(0.5 * 255 + 0.5) = 128; 1.0 is 255, and past 1.0 clamps.
         s.add("q".into(), 0.5, 1.0, 2.0);
         assert_eq!(s.lines[0].color, [128, 255, 255]);
-        // FF8040 (EMOTE) from 1.0, 0.5019.., 0.2509.. → 255,128,64 (spot the table's byte round-trip).
+        // EMOTE's FF8040 survives the byte round trip.
         s.add("e".into(), 1.0, 128.0 / 255.0, 64.0 / 255.0);
         assert_eq!(s.lines[1].color, [255, 128, 64]);
     }
@@ -382,7 +329,7 @@ mod tests {
         // Phase 1: full alpha while timeVisible remains.
         s.tick(0.5);
         assert_eq!(s.lines[0].alpha, 1.0);
-        // Cross into phase 2: 0.5 more spends the last of timeVisible; next ticks ramp fadeDuration.
+        // 0.5 more spends timeVisible; the ticks after ramp over fadeDuration.
         s.tick(0.5);
         assert_eq!(s.lines[0].alpha, 1.0, "phase 1 just expired, ramp not yet");
         s.tick(1.0); // fade_left 2.0 → 1.0 → alpha = trunc(1.0/2.0*255)/255 = 127/255
@@ -399,15 +346,13 @@ mod tests {
             ..Default::default()
         };
         s.add("x".into(), 1.0, 1.0, 1.0);
-        s.tick(0.6); // spends timeVisible (per-tick phase check: still full this tick)
+        s.tick(0.6); // spends timeVisible, still full this tick
         assert_eq!(s.lines[0].alpha, 1.0);
-        s.tick(0.1); // now past phase 1, no ramp ⇒ straight to 0
+        s.tick(0.1); // past phase 1 with no ramp: straight to 0
         assert_eq!(s.lines[0].alpha, 0.0);
     }
 
-    /// The tick's AtBottom gate, isolated from the scroll re-arm that now sits next to it: with a
-    /// one-row viewport only the newest displayed line is re-armed, so the two lines either side of
-    /// it are the ones that show the freeze.
+    /// With a one-row viewport the scroll re-arms one line; the lines either side show the freeze.
     #[test]
     fn scrolled_up_freezes_the_fade() {
         let mut s = ScrollingMessageState {
@@ -422,8 +367,7 @@ mod tests {
         s.tick(2.0); // half-way down the ramp: trunc(2.0/4.0*255) = 127
         let half = 127.0 / 255.0;
         assert_eq!(s.lines[0].alpha, half);
-        // Scroll up one line — no longer AtBottom, so ticks must not advance any alpha. The line
-        // that lands in the one-row viewport (l1) is re-armed by the scroll; l0 and l2 are not.
+        // Scrolled up, ticks stop; the scroll re-arms only l1, the line now in view.
         s.scroll_up(1);
         assert!(!s.at_bottom());
         assert_eq!(s.lines[1].alpha, 1.0, "the displayed line was re-armed");
@@ -431,15 +375,14 @@ mod tests {
         assert_eq!(s.lines[0].alpha, half, "frozen while scrolled up");
         assert_eq!(s.lines[2].alpha, half);
         assert_eq!(s.lines[1].alpha, 1.0);
-        // Back to bottom → the fade resumes (from the re-arm this scroll performs).
+        // Back at the bottom, the fade resumes.
         s.scroll_to_bottom(1);
         s.tick(2.0);
         assert!(s.lines[2].alpha < 1.0);
     }
 
-    /// **The director's bug (2026-08-29): a fully-faded chat could never be brought back.** Every
-    /// scroll entry re-arms the displayed lines — including the ones that move no cursor at all,
-    /// which is what clicking the arrows on an already-at-bottom chat does.
+    /// Every scroll call re-arms the displayed lines, even one that moves no cursor, as clicking
+    /// the arrows on a chat already at the bottom does.
     #[test]
     fn any_scroll_brings_faded_lines_back() {
         let armed = |op: fn(&mut ScrollingMessageState, usize)| {
@@ -453,7 +396,7 @@ mod tests {
                 s.add(format!("l{n}"), 1.0, 1.0, 1.0);
             }
             s.tick(1.5); // spend phase 1
-            s.tick(1.5); // spend phase 2 — everything is gone
+            s.tick(1.5); // spend phase 2: all gone
             assert!(s.lines.iter().all(|l| l.alpha == 0.0), "faded out first");
             op(&mut s, 8);
             s
@@ -470,8 +413,7 @@ mod tests {
             ("PageDown", ScrollingMessageState::page_down),
         ] {
             let s = armed(op);
-            // Whatever the op left in view is what the engine re-arms — `ScrollUp` carries the
-            // newest line off the bottom of the viewport, so the set is the op's, not the ring.
+            // The re-armed set is what the op left in view, not the whole ring.
             let shown = s.displayed_range(8);
             assert!(!shown.is_empty(), "{name} displayed nothing");
             for i in shown {
@@ -483,8 +425,7 @@ mod tests {
         }
     }
 
-    /// `0x788b80` walks the display vector, not the ring: a line scrolled out of view keeps
-    /// whatever fade state it had.
+    /// `0x788b80` walks the lines on display, not the ring.
     #[test]
     fn the_re_arm_reaches_only_the_displayed_lines() {
         let mut s = ScrollingMessageState {
@@ -514,7 +455,7 @@ mod tests {
             s.add(format!("l{n}"), 1.0, 1.0, 1.0);
         }
         assert!(s.at_bottom());
-        s.scroll_down(8); // already at bottom — no cursor move
+        s.scroll_down(8); // already at the bottom: no move
         assert!(s.at_bottom());
         // 3 lines → max_scroll = 2; scroll past it clamps.
         for _ in 0..10 {
@@ -537,7 +478,7 @@ mod tests {
         }
         s.scroll_up(8); // viewing one line back (bottom row = l2)
         let off = s.scroll_offset;
-        s.add("l4".into(), 1.0, 1.0, 1.0); // a new line arrives at the bottom
+        s.add("l4".into(), 1.0, 1.0, 1.0);
         assert_eq!(
             s.scroll_offset,
             off + 1,
@@ -554,14 +495,12 @@ mod tests {
         for n in 0..3 {
             s.add(format!("l{n}"), 1.0, 1.0, 1.0);
         }
-        // Middle line wraps into 3 rows.
         s.lines[1].rows = 3;
-        // Viewport of 4 rows from the bottom: newest (1 row) + middle (3 rows) fill it exactly —
-        // the oldest is off the top. A partially-fitting message counts (it draws, clipped).
+        // 4 rows: the newest (1) and the middle (3) fill it; a partly fitting message counts.
         assert_eq!(s.displayed_count(4), 2);
         assert_eq!(s.displayed_count(3), 2, "partial middle line still counts");
         assert_eq!(s.displayed_count(1), 1);
-        // Page = displayed − 1 (one message of overlap), never 0.
+        // A page is displayed − 1, one message of overlap, never 0.
         s.page_up(4);
         assert_eq!(s.scroll_offset, 1);
         s.page_up(1); // displayed 1 → page clamps to 1 message
@@ -587,11 +526,9 @@ mod tests {
         s.run("CF:AddMessage('wrapped', 1, 1, 1)").unwrap();
         s.run("CF:AddMessage('new', 1, 1, 1)").unwrap();
         s.resolve();
-        // The measure round-trip: every fresh line requests its row count at the resolved width.
         let reqs = s.message_lines_needing_measure();
         assert_eq!(reqs.len(), 3);
         assert!(reqs.iter().all(|r| (r.wrap_width - 430.0).abs() < 0.5));
-        // Host answers: the middle line wraps to 2 rows.
         let answers: Vec<(u32, u32, u16, u64)> = reqs
             .iter()
             .map(|r| (r.frame, r.index, if r.index == 1 { 2 } else { 1 }, r.key))
@@ -601,9 +538,8 @@ mod tests {
             s.message_lines_needing_measure().is_empty(),
             "answered keys satisfy the cache"
         );
-        // Default font (no FontString child) ⇒ pitch 14. Frame [90, 124): 'new' band [90,104),
-        // 'wrapped' 2-row band [104,132) — starts inside, overflows the top, still emitted
-        // (clipped); 'old' would start at 132 ≥ 124 — not emitted.
+        // Default font, pitch 14. Frame [90, 124): 'new' is [90, 104), 'wrapped' [104, 132)
+        // overflows and draws clipped, and 'old' would start at 132, outside, so does not draw.
         let quads = s.extract();
         let texts: Vec<(String, f32, f32)> = quads
             .iter()
@@ -623,7 +559,6 @@ mod tests {
         assert!((texts[0].1 - 90.0).abs() < 0.01 && (texts[0].2 - 104.0).abs() < 0.01);
         assert_eq!(texts[1].0, "wrapped");
         assert!((texts[1].1 - 104.0).abs() < 0.01 && (texts[1].2 - 132.0).abs() < 0.01);
-        // Both clip to the frame rect, so the overflow never inks outside it.
         let clip = quads
             .iter()
             .find_map(|q| match &q.content {
@@ -634,10 +569,8 @@ mod tests {
         assert!((clip.top - 124.0).abs() < 0.01 && (clip.bottom - 90.0).abs() < 0.01);
     }
 
-    /// The ring lines are the frame's ARTWORK content, not its bare draw slot: a BACKGROUND
-    /// texture of the same frame draws BEHIND them, an OVERLAY one in front. The chat window's
-    /// hover box is that background texture — at the bare slot it painted over the messages and
-    /// dimmed them (director, 2026-07-26).
+    /// The lines draw at the frame's ARTWORK layer: a BACKGROUND texture, such as the chat
+    /// window's hover box, behind them, an OVERLAY one in front.
     #[test]
     fn ring_lines_draw_above_the_frames_background_and_below_its_overlay() {
         let mut s = UiScript::new().unwrap();
@@ -732,7 +665,7 @@ mod tests {
         )
         .unwrap();
         s.run("CF:AddMessage('doomed', 1, 1, 1)").unwrap();
-        // Two ticks retire 'doomed' (phase-1 spend, then the no-ramp snap), then fresh lines land.
+        // Two ticks retire 'doomed' (phase 1, then the snap with no ramp); then fresh lines land.
         s.tick(0.1);
         s.tick(0.1);
         s.run("CF:SetTimeVisible(120)").unwrap();
@@ -749,8 +682,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // 'doomed' draws nothing but its band (the oldest, topmost) still holds its place: the two
-        // live lines sit at the two bottom bands, nothing re-packs into the faded slot.
+        // 'doomed' draws nothing but keeps its band at the top; the live lines hold the bottom two.
         assert_eq!(texts.len(), 2);
         assert_eq!(texts[0].0, "b");
         assert!((texts[0].1 - 0.0).abs() < 0.01);
@@ -774,7 +706,6 @@ mod tests {
         .unwrap();
         s.run("CF:AddMessage('x', 1, 1, 1)").unwrap();
         s.resolve();
-        // Find the frame handle the extract loop would hand the app (the message line's target).
         let fh = s
             .extract()
             .iter()
@@ -786,8 +717,8 @@ mod tests {
                 _ => None,
             })
             .expect("the ring line extracts");
-        // The app feeds a span (y-up rect) covering [10..60]x[20..34]; a release inside fires the
-        // handler with (link, markup, button); one outside does not.
+        // The app feeds a span (a y-up rect) over [10..60]x[20..34]; a release inside fires the
+        // handler with (link, markup, button), one outside does not.
         s.set_link_spans(vec![(
             fh,
             crate::layout::Rect::new(20.0, 10.0, 34.0, 60.0),
@@ -826,14 +757,8 @@ mod tests {
         assert!(!s.add_chat_message("PlainFrame", "x", 1.0, 1.0, 1.0));
     }
 
-    /// **`AddMessage`'s id lives at a different stack index on each leg**: the
-    /// sixth argument when r,g,b are present, the THIRD when they are not — which is what makes
-    /// the `AddMessage(text, id)` shorthand work at all (`0x792b13 mov edx,6` /
-    /// `0x792b48 mov edx,3`).
-    ///
-    /// `AceConsole-2.0`'s `Print` is the case that matters: `AddMessage(text, nil, nil, nil, nil,
-    /// 5)` fails the R gate at index 3, takes the absent leg, re-reads index 3 as the id — still
-    /// nil — and stores 0. Its trailing `5` sits at index 7 and is never read.
+    /// The id is stack index 6 with rgb and index 3 without (`0x792b13`, `0x792b48`), so
+    /// `AceConsole-2.0`'s `AddMessage(text, nil, nil, nil, nil, 5)` stores 0.
     #[test]
     fn the_addmessage_id_index_follows_the_rgb_leg() {
         let s = UiScript::new().unwrap();
@@ -856,8 +781,6 @@ mod tests {
         );
     }
 
-    /// `UpdateColorByID` recolours exactly the lines printed under that id — the stock
-    /// `ChatFrame_OnEvent` repaints a type's history when its colour changes, and nothing else.
     #[test]
     fn update_color_by_id_recolours_only_that_ids_lines() {
         let mut smf = ScrollingMessageState::default();
@@ -880,10 +803,8 @@ mod tests {
         assert_ne!(smf.lines_gen, gen, "a recolour is a redraw");
         assert_eq!(smf.update_color_by_id(11, 0.0, 0.5, 1.0), 0, "idempotent");
         assert_eq!(smf.update_color_by_id(99, 0.0, 0.0, 0.0), 0, "no such id");
-        // **Id 0 matches nothing** — `0x788250`'s own opening guard. Line "d" was
-        // printed with no id, so it carries 0; so does `ChatTypeInfo["REPLY"]`, which the
-        // `UPDATE_CHAT_COLOR` handler mirrors WHISPER into. Without the guard that pair repainted
-        // every colourless line in the window whisper-pink at every login.
+        // Id 0 matches nothing (`0x788250`). REPLY's chat type has id 0 and `UPDATE_CHAT_COLOR`
+        // mirrors WHISPER into it, so without the guard every id-less line turns whisper pink.
         assert_eq!(
             smf.update_color_by_id(0, 1.0, 0.5, 1.0),
             0,
@@ -895,7 +816,7 @@ mod tests {
             "the colourless line stays the frame's own colour"
         );
 
-        // And the Lua surface: the fifth argument tags, the method recolours, silently.
+        // Through Lua: argument 5 tags the line, and a bad id is silent.
         let s = UiScript::new().unwrap();
         s.run(
             "local f = CreateFrame('ScrollingMessageFrame') \
@@ -923,11 +844,8 @@ mod tests {
         assert_eq!(s.eval::<i64>("return CF:GetNumMessages()").unwrap(), 0);
     }
 
-    /// The W4 skip token: a settled message frame's sweep hashes ZERO lines (the counter is the
-    /// claim — 0735's counts rule), and each side of the token catches its own change class:
-    /// text through the generation, the resolved width through the environment hash. The token
-    /// is only stored by a zero-request sweep, so an UNANSWERED request keeps re-requesting —
-    /// the region ledger's own rule (1410), inherited.
+    /// A settled frame's sweep hashes no lines; a text change reopens it through the line
+    /// generation, a width change through the environment hash.
     #[test]
     fn a_settled_message_frame_hashes_no_lines_until_something_moves() {
         let mut s = UiScript::new().unwrap();
@@ -951,7 +869,7 @@ mod tests {
             again.iter().map(|r| (r.frame, r.index, 1, r.key)).collect();
         s.set_message_line_rows(&answers);
         assert!(s.message_lines_needing_measure().is_empty());
-        // Settled: the NEXT sweep must skip the frame whole — zero lines hashed.
+        // Settled: the next sweep skips the frame whole.
         let hashed_before = s.model_mut().msg_lines_hashed;
         assert!(s.message_lines_needing_measure().is_empty());
         assert_eq!(
@@ -959,7 +877,7 @@ mod tests {
             hashed_before,
             "a settled frame's sweep must hash no lines"
         );
-        // Text change reopens through the GENERATION…
+        // A text change reopens through the generation.
         s.run("CF:AddMessage('three', 1, 1, 1)").unwrap();
         let reqs = s.message_lines_needing_measure();
         assert_eq!(reqs.len(), 1, "the new line re-surfaces");
@@ -968,7 +886,7 @@ mod tests {
             reqs.iter().map(|r| (r.frame, r.index, 1, r.key)).collect();
         s.set_message_line_rows(&answers);
         assert!(s.message_lines_needing_measure().is_empty());
-        // …and a resolved-width change reopens through the ENVIRONMENT: every line re-keys.
+        // A width change reopens through the environment: every line re-keys.
         s.run("CF:SetWidth(300)").unwrap();
         s.resolve();
         let reqs = s.message_lines_needing_measure();

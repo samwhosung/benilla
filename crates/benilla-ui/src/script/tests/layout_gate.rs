@@ -1,9 +1,6 @@
-//! The layout change gate: a resolve whose inputs are byte-identical to the last converged one is
-//! skipped outright (`script::layout::InputFingerprint`).
-//!
-//! These assert on `Model::layout_solves` — the count of times the fixpoint actually ran — rather
-//! than on the rects, because rect equality alone cannot distinguish "the gate skipped" from "the
-//! gate re-solved and got the same answer". The value of the gate is precisely the difference.
+//! The layout change gate: a resolve whose inputs match the last converged one is skipped
+//! (`script::layout::InputFingerprint`). The tests count solves (`Model::layout_solves`), since
+//! equal rects cannot tell a skip from a re-solve.
 
 use super::common::script;
 use crate::script::{Model, UiScript};
@@ -24,8 +21,7 @@ fn solves(s: &UiScript) -> u64 {
         .layout_solves
 }
 
-/// A frame anchored to the screen, plus a child hanging off it — enough that a move has to
-/// propagate, so a wrongly-skipped resolve would be visible in the child too.
+/// A screen-anchored frame and a child off it, so a move has to propagate.
 fn setup(s: &UiScript) {
     s.run(
         r#"
@@ -50,7 +46,6 @@ fn an_unchanged_resolve_does_not_run_the_fixpoint() {
     let after_first = solves(&s);
     assert_eq!(after_first, 1, "the first resolve must run");
 
-    // Nothing touched in between: every further resolve is a no-op.
     for _ in 0..5 {
         s.resolve();
     }
@@ -84,7 +79,6 @@ fn moving_a_frame_reopens_the_gate_and_propagates() {
         child_left(&s)
     );
 
-    // And it closes again once the move has settled.
     let after = solves(&s);
     s.resolve();
     assert_eq!(
@@ -94,7 +88,6 @@ fn moving_a_frame_reopens_the_gate_and_propagates() {
     );
 }
 
-/// Resizing the window moves every top-level frame — the gate must never swallow it.
 #[test]
 fn a_screen_resize_reopens_the_gate() {
     let mut s = script();
@@ -113,8 +106,7 @@ fn a_screen_resize_reopens_the_gate() {
     );
 }
 
-/// A region's own `SetPoint` writes `region_data`, not `layout_inputs` — the half of the read set
-/// that is easiest to leave out of a change gate, and the one the region sweep consumes.
+/// A region's `SetPoint` writes `region_data`, not `layout_inputs`; the region sweep reads it.
 #[test]
 fn moving_a_region_reopens_the_gate() {
     let mut s = script();
@@ -142,10 +134,8 @@ fn moving_a_region_reopens_the_gate() {
     );
 }
 
-/// Hiding a frame does NOT move any rect (the client resolves hidden frames too — visibility is an
-/// extract-time filter), so the gate is right to stay closed. Pinned deliberately: it is the one
-/// place where "nothing to re-solve" is surprising, and a future reader tempted to dirty on
-/// show/hide should see that the current model does not need it.
+/// Hidden frames still resolve (visibility is an extract-time filter), so a hide moves no rect and
+/// the gate stays closed.
 #[test]
 fn hiding_a_frame_does_not_reopen_the_gate() {
     let mut s = script();
@@ -164,22 +154,9 @@ fn hiding_a_frame_does_not_reopen_the_gate() {
     );
 }
 
-/// The hover re-enter loop must be FREE while the content is unchanged.
-///
 /// `ContainerFrameItemButton_OnUpdate` re-runs `OnEnter` every frame while the tooltip is the
-/// button's own — faithful, and UNTHROTTLED in 1.12 (its `updateTooltip` throttle is commented
-/// out; the reference's `ContainerFrameItemButton_OnUpdate` ships the same loop). So a bag hover clears and
-/// rebuilds the SAME tooltip 60×/sec, and the engine must absorb that: identical content re-derives
-/// an identical model, so the measure cache re-validates on its content key and the gate stays shut.
-///
-/// This is the regression gate for the live report (a bag hover cost +10 CPU ms/frame, ~2 full
-/// arena solves + a re-shape of every line, every frame): `clear_content` wiped
-/// `RegionData::measured` — an invalidation the content-hash key already performs — so every
-/// re-enter re-measured every line, and the non-empty measure list forced a second full resolve
-/// that the gate could never close over.
-///
-/// It drives the app's real per-frame order (`ui_script::extract::tick_script`): Lua tick →
-/// resolve → measure round-trip → resolve.
+/// button's, its throttle commented out (`ContainerFrame.lua:645`), so rebuilding identical
+/// tooltip content must neither re-measure nor re-solve.
 #[test]
 fn the_hover_re_enter_loop_neither_re_measures_nor_re_solves() {
     let mut s = script();
@@ -206,8 +183,7 @@ fn the_hover_re_enter_loop_neither_re_measures_nor_re_solves() {
     )
     .expect("setup");
 
-    // The host's font engine: every distinct string has one deterministic size. Counts every
-    // string it is asked to shape, so the test can assert on shaping work directly.
+    // The host's font engine: one fixed size per string.
     let sizes: &[(&str, f32, f32)] = &[
         ("Small Shield", 80.0, 14.0),
         ("Shield", 50.0, 12.0),
@@ -216,8 +192,8 @@ fn the_hover_re_enter_loop_neither_re_measures_nor_re_solves() {
         ("Restores 243 health over 21 sec.", 118.0, 24.0),
         ("Durability 45 / 45", 96.0, 12.0),
     ];
-    // One frame of `tick_script`: tick (the re-enter) → resolve → measure round-trip → resolve.
-    // Returns how many strings the font engine was asked to shape this frame.
+    // One frame in the app's order (`ui_script::extract::tick_script`): tick, resolve, measure
+    // round-trip, resolve. Returns how many strings were shaped.
     let frame = |s: &mut UiScript| -> usize {
         s.run("reenter()").expect("re-enter");
         s.resolve();
@@ -241,8 +217,7 @@ fn the_hover_re_enter_loop_neither_re_measures_nor_re_solves() {
         shaped
     };
 
-    // Settle: the first frames legitimately shape the five strings and re-solve as the auto-size
-    // pre-pass converges on the fresh measures.
+    // The first frames shape the strings and re-solve while the auto-size pre-pass converges.
     for _ in 0..4 {
         frame(&mut s);
     }
@@ -264,12 +239,7 @@ fn the_hover_re_enter_loop_neither_re_measures_nor_re_solves() {
         solves_before,
         "a re-enter with identical content must not reopen the layout gate"
     );
-    // …and it must not even reach tier 2. Tier 1 (the mutation epoch) is what makes a quiet frame
-    // FREE; tier 2 still hashes the whole UI's read set to decide "quiet" (~0.65 ms/frame measured
-    // with `WOW_UI_COST=1` on `WOW_CAPTURE=ui-tooltip`, at solves=0). The re-enter loop used to
-    // pay that on every single hover frame, because `clear_content` wiped each line's wrap pin and
-    // `append_line` re-pinned the same width — a round trip inside one frame, two epoch bumps.
-    // Idempotent content must be epoch-silent, not merely fingerprint-absorbed.
+    // Nor may it reach tier 2, which hashes the whole UI: identical content leaves the epoch alone.
     let epoch_before = epoch(&s);
     for _ in 0..10 {
         frame(&mut s);
@@ -281,9 +251,8 @@ fn the_hover_re_enter_loop_neither_re_measures_nor_re_solves() {
          hold, or every hover frame pays the whole-UI fingerprint"
     );
 
-    // The gate is shut because nothing MOVED — not because the tooltip went stale. Changed content
-    // must still re-measure exactly its own line, and a measure that resizes the auto-sized plate
-    // (this one overtakes the double line as the widest) must reopen the gate.
+    // Changed content re-measures only its own line, and a measure that widens the auto-sized
+    // plate reopens the gate.
     s.run(
         r#"function reenter()
             TT:SetOwner(Slot, "ANCHOR_RIGHT")
@@ -328,28 +297,16 @@ fn the_hover_re_enter_loop_neither_re_measures_nor_re_solves() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// Tier 1 of the gate: the mutation epoch. **Any CONVERGED resolve closes it**
-/// — the fingerprint is hashed over inputs alone, so a solve cannot outgrow the
-/// value it stores — and from then on a quiet frame skips at a `u64` compare without computing
-/// the fingerprint at all.
+/// Whether tier 1, the mutation epoch, is closed: any converged resolve closes it, and a quiet
+/// frame then skips at a `u64` compare without hashing the fingerprint.
 fn tier_one_closed(s: &UiScript) -> bool {
     let m = s.lua().app_data_ref::<Model>().expect("model app_data");
     m.layout_epoch_resolved == Some(m.layout_epoch)
 }
 
-/// **The castbar law** (ledger B283): a region that MOVES every frame — the classic
-/// OnUpdate animation idiom, our own `CastingBarSpark:SetPoint`, and every addon that slides a
-/// texture — must cost exactly **one** let-through resolve per frame.
-///
-/// It used to cost three. The fingerprint was hashed over the 0294 SEEDS as well as the inputs, so
-/// a solve necessarily outgrew the fingerprint it had just stored: neither that pass nor the
-/// settling pass behind it could close tier 1, and the frame paid solve + settle + skip — three
-/// whole-roster walks at ~1.0–1.4 ms each. Measured live at the Stormwind pin: **+4.2 ms of CPU
-/// per frame for one 32×32 spark**, on a default UI with no addons loaded.
-///
-/// This is the regression guard for that whole bug class. `solves` is the honest counter — a
-/// wasted walk that concludes "nothing moved" still costs the full preamble — so the assertion is
-/// on the count, never on a duration (milliseconds are not evidence of a scope regression).
+/// A region moved every frame, as `CastingBarSpark:SetPoint` does (`CastingBarFrame.lua:114`),
+/// costs exactly one solve per frame: the fingerprint hashes inputs alone, so that solve closes
+/// tier 1.
 #[test]
 fn a_region_moving_every_frame_costs_exactly_one_solve_per_frame() {
     let mut s = script();
@@ -366,13 +323,8 @@ fn a_region_moving_every_frame_costs_exactly_one_solve_per_frame() {
     s.resolve();
     assert!(tier_one_closed(&s), "the setup must settle in one resolve");
 
-    // Ten frames of the castbar's own inner loop: one region re-pointed to a NEW offset, then the
-    // host's per-frame resolve. Nothing else in the model moves.
-    //
-    // The offsets start at 1.7, not 0 — a `frame * 1.7` sequence opens with a re-write of the
-    // seed value, which the setters' bit-exact compare absorbs (no epoch bump, no solve at all).
-    // That is the *right* answer and `an_idempotent_setter_call_leaves_tier_one_closed` pins it;
-    // here it would have measured the guard instead of the gate.
+    // Ten castbar frames: the spark re-pointed to a new offset, then the per-frame resolve. The
+    // offsets start at 1.7, not 0, since the setters' compare absorbs a write of the seed value.
     for frame in 0..10 {
         let before = solves(&s);
         s.run(&format!(
@@ -396,8 +348,7 @@ fn a_region_moving_every_frame_costs_exactly_one_solve_per_frame() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The other half of the same law: once it has settled, an untouched frame costs NOTHING — no
-/// solve, and (tier 1) not even the fingerprint walk that would decide so.
+/// A settled, untouched frame costs no solve, and tier 1 spares it the fingerprint walk too.
 #[test]
 fn a_quiet_frame_after_a_move_costs_no_solve_at_all() {
     let mut s = script();
@@ -421,9 +372,7 @@ fn a_settled_resolve_closes_tier_one_and_a_real_write_reopens_it() {
     s.set_screen_size(800.0, 600.0);
     setup(&s);
 
-    // ONE resolve closes the epoch: the fingerprint is hashed over inputs alone,
-    // and the rounds just drove those inputs to their fixpoint, so there is nothing left for a
-    // settling pass to discover. This used to need two.
+    // One resolve closes the epoch: the fingerprint hashes inputs alone, now at their fixpoint.
     s.resolve();
     assert!(
         tier_one_closed(&s),
@@ -448,9 +397,7 @@ fn an_idempotent_setter_call_leaves_tier_one_closed() {
     s.resolve();
     assert!(tier_one_closed(&s));
 
-    // The classic per-frame OnUpdate idiom: re-assert the exact same geometry every frame. The
-    // setters' compare-before-write keeps the epoch untouched, so an idle UI never re-enters
-    // the fingerprint path at all.
+    // The OnUpdate idiom of re-setting the same geometry: the setters compare before writing.
     s.run(
         r#"
         parent:SetWidth(100); parent:SetHeight(40)
@@ -473,8 +420,8 @@ fn a_paint_only_write_leaves_tier_one_closed() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     setup(&s);
-    // A paint region with NO anchors: its region_data entry is created by a paint setter and
-    // must stay invisible to the layout gate (the resolve sweep skips anchor-less entries).
+    // A region with no anchors: a paint setter creates its `region_data` entry, which the resolve
+    // sweep skips, so the gate must ignore it.
     s.run(r#"tex = parent:CreateTexture(nil, "ARTWORK")"#)
         .expect("region");
     s.resolve();
@@ -491,17 +438,8 @@ fn a_paint_only_write_leaves_tier_one_closed() {
     assert_eq!(solves(&s), before);
 }
 
-/// **The retarget falsifier**: after a node is re-pointed from target A to target
-/// B, the cached graph's EDGES must describe the new shape — moving B must move the node.
-///
-/// This is the one direction that can be silently wrong. 1625 keeps the cached graph across an
-/// anchor retarget by patching one node's edges instead of re-deriving all of them, and a patch
-/// that dropped the *new* edge would under-dirty: the node would sit at a stale rect while the
-/// thing it is anchored to moved. (The other direction — a leftover edge to the OLD target — only
-/// costs a needless re-solve, so it is asserted second and separately.)
-///
-/// It asserts on RECTS, not on counts, because a wrong edge set is a wrong picture: the failure
-/// this guards against is a tooltip left behind at the last button's position.
+/// A retarget patches one node's edges in the cached graph instead of re-deriving it, so the new
+/// edge must land: moving the new target moves the node, and moving the old one does not.
 #[test]
 fn a_retargeted_anchor_follows_its_new_target() {
     let mut s = script();
@@ -521,8 +459,7 @@ fn a_retargeted_anchor_follows_its_new_target() {
     s.resolve();
     s.resolve();
 
-    // The retarget: the plate now hangs off B, exactly as `GameTooltip:SetOwner` re-points the
-    // plate at the next button under the cursor.
+    // The plate now hangs off B, as `GameTooltip:SetOwner` re-points it at the next button.
     s.run(r#"plate:SetPoint("TOPLEFT", b, "TOPRIGHT", 0, 0)"#)
         .expect("retarget");
     s.resolve();
@@ -532,9 +469,6 @@ fn a_retargeted_anchor_follows_its_new_target() {
         "the retargeted plate must sit at B's right edge (110), not {after_retarget}"
     );
 
-    // …and it must keep following B. This is the assertion the edge patch exists to satisfy: the
-    // graph was NOT re-derived across the retarget, so if the new edge never made it into the
-    // cached edge set, B moving reaches nothing and the plate stays put.
     s.run(r#"b:SetPoint("TOPLEFT", nil, "TOPLEFT", 300, 0)"#)
         .expect("move B");
     s.resolve();
@@ -545,7 +479,6 @@ fn a_retargeted_anchor_follows_its_new_target() {
          retarget's edge patch dropped the new edge and the node is under-dirtied (decision 1625)"
     );
 
-    // …and it must NOT follow the old one any more.
     s.run(r#"a:SetPoint("TOPLEFT", nil, "TOPLEFT", 0, -50)"#)
         .expect("move A");
     s.resolve();

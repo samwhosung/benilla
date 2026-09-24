@@ -1,10 +1,5 @@
-//! Regions join the anchor layout.
-//!
-//! The smeared-merchant root cause: region `<Size>`/`<Anchors>` used to be dropped — a region either
-//! filled its owner or (with a size) drew centered, and its anchors were ignored. Regions now resolve
-//! through the same leaf math as frames, off their own anchors and their own span; an edge nothing
-//! pins does NOT fall back to the owner's (decision 1664 retired that — the owner supplies scale and
-//! nothing else), because the span is content-derived and a pinned edge plus a span is a rect.
+//! Regions in the anchor layout: they resolve through the frames' leaf math, off their own anchors
+//! and content-derived span; the owner supplies scale, never a fallback edge.
 
 use super::common::script;
 use crate::layout::Rect;
@@ -56,11 +51,8 @@ fn region_texture_anchored_topleft_resolves_exact_rect() {
     );
 }
 
-/// A FontString's implicit extent is its measured TEXT, **floored at one FrameXML unit**
-/// (`CSimpleFontString::GetWidth 0x772930` / `GetHeight 0x772a60`). So a
-/// single-anchored FontString whose measure has not landed is a 1×1 box seated on its anchor,
-/// not a collapse onto the pinned edge and not the owner's rect: the floor is what makes such a
-/// FontString **always resolve**, and it is why the resolver needs no owner-edge fallback at all.
+/// A FontString's extent is its measured text floored at one unit (`GetWidth 0x772930`,
+/// `GetHeight 0x772a60`), so an unmeasured one is a 1x1 box on its anchor.
 #[test]
 fn region_fontstring_span_floors_at_one_unit_until_measured() {
     let mut s = script();
@@ -78,8 +70,7 @@ fn region_fontstring_span_floors_at_one_unit_until_measured() {
     )
     .unwrap();
     s.resolve();
-    // Pending measure: both spans floor at one unit. x runs right from the pinned left (5→6);
-    // a LEFT point pins the y-CENTER only (25), so y is the centre ± half a unit.
+    // Unmeasured: x runs 5..6 from the pinned left; LEFT pins the y centre (25), so y is ±0.5.
     assert_eq!(
         region_text_rect(&s, "Name"),
         Rect::new(24.5, 5.0, 25.5, 6.0)
@@ -98,16 +89,9 @@ fn region_fontstring_span_floors_at_one_unit_until_measured() {
     );
 }
 
-/// `ExhaustionLevelFillBar`'s exact shape, both ways: authored width **0**, one TOPLEFT anchor,
-/// and a `<Color>`.
-///
-/// The colour form installs a real 8×8 texture before any resolve (`0x7700a9` → `0x770360` →
-/// `0x44a900`), so `CSimpleTexture::GetWidth 0x770720` answers **8** for the authored zero and
-/// `combineEdge`'s first leg fires: RIGHT = LEFT + 8, and `assemble 0x767a20` returns 1. Strip the
-/// colour and there is no `CGxTex*` at all — the getter answers `0.0`, both `combineEdge` legs
-/// fail their `span != 0.0` test, and the rect never resolves. Our owner-edge fallback used to
-/// turn that second case into the owner's **full width** (1348's 1024-point white band); it is
-/// gone, so the two cases now differ by 8 points and a rect, exactly as they do on the reference.
+/// `ExhaustionLevelFillBar`'s shape, width 0 and one TOPLEFT anchor: its `<Color>` installs an 8x8
+/// texture (`0x7700a9` → `0x770360` → `0x44a900`), so `GetWidth 0x770720` answers 8; with no art
+/// it answers 0.0, and `assemble 0x767a20` leaves the rect unresolved.
 #[test]
 fn a_zero_width_solid_spans_eight_units_and_its_artless_twin_gets_no_rect() {
     let mut s = script();
@@ -142,11 +126,8 @@ fn a_zero_width_solid_spans_eight_units_and_its_artless_twin_gets_no_rect() {
 
 #[test]
 fn templateless_lua_region_without_anchors_never_draws() {
-    // Decision 1310 (`CreateTexture 0x773a20`): the creation-path implicit
-    // anchor fires from Lua CreateTexture only on a template-registry hit — a templateless region
-    // gets NOTHING, stays rect-less (the resolver has no zero-anchor fallback), and never renders,
-    // its explicit size notwithstanding. This replaced the old draws-centered-at-its-size
-    // fallback, which was refuted at the bytes (it was B180's squashed stack-split dialog).
+    // `CreateTexture 0x773a20` anchors a new texture only on a template hit, so a templateless one
+    // has no anchor, no rect and no draw, whatever its size.
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -193,11 +174,8 @@ fn region_set_all_points_fills_owner() {
     );
 }
 
-/// A region anchored to a **sibling region by name** resolves against the sibling's rect — the
-/// merchant label-plate shape (`plate LEFT → $parentSlot RIGHT −9`), which the old owner-fallback
-/// mis-anchored to the row's right edge (the jutting-plates bug the director's A/B caught). The
-/// plate is declared BEFORE the slot so only the resolve fixpoint (not declaration order) can
-/// order the chain; the slot itself is region-anchored to the row, one deeper than owner-direct.
+/// A region anchored by name to a sibling declared after it: `MerchantItemTemplate`'s label plate
+/// (`LEFT` to `$parentSlotTexture`'s `RIGHT`, -9, -18), ordered by the resolve alone.
 #[test]
 fn region_anchors_to_sibling_region_by_name() {
     let mut s = script();
@@ -232,7 +210,7 @@ fn region_anchors_to_sibling_region_by_name() {
             .and_then(|q| q.rect)
             .unwrap_or_else(|| panic!("no rect for {name}"))
     };
-    // Slot: row TOPLEFT (100..253, 100..144) → slot at (87, 157)-(151, 93)… y-up: top = 144+13 = 157.
+    // The row's TOPLEFT (100, 144) plus (-13, 13): the slot spans 87..151 by 93..157.
     let slot = rect("RowSlot");
     assert_eq!(
         (slot.left, slot.top),
@@ -240,24 +218,20 @@ fn region_anchors_to_sibling_region_by_name() {
         "slot at row TOPLEFT (-13,13)"
     );
     assert_eq!(slot.right, 151.0);
-    // Plate LEFT anchors to the SLOT's RIGHT (151) − 9 = 142 — NOT the row's right edge (253),
-    // which is where the old owner-fallback shoved it (253 − 9 + 128 = jutting past everything).
+    // The plate's LEFT is the slot's RIGHT (151) - 9 = 142, not the row's right edge (253).
     let plate = rect("RowPlate");
     assert_eq!(plate.left, 142.0, "plate.LEFT = slot.RIGHT − 9");
     assert_eq!(
         plate.right, 270.0,
         "plate spans its 128 width from the slot edge"
     );
-    // The LEFT single-point anchor centers the plate vertically on the target point (y-up):
-    // slot center-y = (93+157)/2 = 125, −18 → 107; ±39.
+    // A LEFT point centres the plate vertically: the slot's centre 125, -18 = 107, ±39.
     assert_eq!((plate.bottom, plate.top), (68.0, 146.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `SetPortraitTexture(region, unit)` (the live model-bake portrait) binds a Texture region to a unit
-/// token, carried out through [`QuadContent::Texture::portrait_unit`] with no BLP path/color of its
-/// own (the app supplies the off-screen bake). A later `SetTexture` makes it an ordinary texture again,
-/// dropping the binding.
+/// `SetPortraitTexture` binds a Texture to a unit token, carried on the quad as `portrait_unit`
+/// with no path or colour (the app supplies the bake); a later `SetTexture` drops the binding.
 #[test]
 fn set_portrait_texture_binds_unit_token_then_settexture_clears_it() {
     let mut s = script();
@@ -291,7 +265,6 @@ fn set_portrait_texture_binds_unit_token_then_settexture_clears_it() {
     assert_eq!(color, None, "the model bake carries no vertex color");
     assert!(circular, "the frame-ring portrait is the round stencil");
 
-    // SetTexture reverts the region to an ordinary texture — the live-unit binding drops.
     s.run(r#" PFramePortrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark") "#)
         .unwrap();
     s.resolve();
@@ -308,9 +281,8 @@ fn set_portrait_texture_binds_unit_token_then_settexture_clears_it() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `BenillaSetBoothTexture(region, token)` — the paper doll's **square** booth binding (decision
-/// 0208 §5): the same `portrait_unit` carriage as `SetPortraitTexture`, but `circular` stays
-/// false (the model pane samples the body bake edge to edge, no frame ring to mask for).
+/// `BenillaSetBoothTexture`, the paper doll's square booth binding: `SetPortraitTexture`'s
+/// carriage with `circular` false, as the model pane has no ring to mask for.
 #[test]
 fn benilla_set_booth_texture_binds_square() {
     let mut s = script();
@@ -344,13 +316,8 @@ fn benilla_set_booth_texture_binds_square() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The quest-log detail pane's shape (the 0109 look fix): a LONG region anchor chain — the real
-/// client's QuestLogFrame chains ~15 regions deep (title → objectives → obj1..10 → description →
-/// rewards) — with a frame (the reward item button) anchored to the chain's tail. The resolver
-/// must run to a true fixpoint: the old bounded rounds (2 frame × 3 region passes) left links past
-/// ~6 on silent owner-edge fallbacks and dropped the tail-anchored FRAME to the screen origin —
-/// decision 0088 §2's "button anchored to a chained region falls to the screen origin" finding,
-/// which forced every window into invented fixed offsets instead of ref-verbatim chains.
+/// The quest log detail pane's shape: a region anchor chain about 15 deep (title, objectives,
+/// description, rewards) with a frame anchored to its tail, which the resolve runs to a fixpoint.
 #[test]
 fn long_region_chain_resolves_and_a_frame_binds_to_its_tail() {
     let mut s = script();
@@ -402,10 +369,7 @@ fn long_region_chain_resolves_and_a_frame_binds_to_its_tail() {
     );
 }
 
-/// Decision 0088 §2 pinned "a child frame shown at runtime does not draw its own `<Layers>`
-/// FontStrings" — the engine constraint that forced every window FLAT. Re-tested after the
-/// resolver fixpoint: a child frame created and SHOWN at runtime, carrying its own
-/// text + texture regions, must extract both quads at the child's resolved position.
+/// A child frame created and shown at runtime draws its own regions where it resolves.
 #[test]
 fn child_frame_layers_regions_render_after_the_fixpoint() {
     let mut s = script();
@@ -449,11 +413,9 @@ fn child_frame_layers_regions_render_after_the_fixpoint() {
     );
 }
 
-/// `SetAlpha`/`GetAlpha` on a Texture/FontString — the region's *own* alpha, distinct from its
-/// owner frame's. A region draws at `ownAlpha × ownerFrame.alpha`: a single hop to the immediate
-/// owner (`SetAlpha 0x76a690` overwrite-cascades onto child *frames* and only invalidates child
-/// regions). The getter must return the region's value, never the frame's: the ref kit ramps a
-/// texture by reading it back (`CastingBarFlash:SetAlpha(GetAlpha() + step)`).
+/// A region draws at its own alpha times its owner frame's, one hop (`SetAlpha 0x76a690` cascades
+/// onto child frames, not regions), and `GetAlpha` answers its own: stock `CastingBarFrame.lua:133`
+/// ramps `CastingBarFlash` by reading it back.
 #[test]
 fn region_alpha_is_its_own_and_multiplies_the_owner_frames() {
     let mut s = script();
@@ -480,12 +442,10 @@ fn region_alpha_is_its_own_and_multiplies_the_owner_frames() {
     };
     assert_eq!(quad_alpha(&s), 1.0);
 
-    // The region's own alpha alone.
     s.run("tex:SetAlpha(0.5)").unwrap();
     assert_eq!(s.eval::<f32>("return tex:GetAlpha()").unwrap(), 0.5);
     assert_eq!(quad_alpha(&s), 0.5);
 
-    // …times the owner frame's. The frame's SetAlpha does NOT overwrite the region's own value.
     s.run("f:SetAlpha(0.5)").unwrap();
     assert_eq!(
         s.eval::<f32>("return tex:GetAlpha()").unwrap(),
@@ -494,7 +454,6 @@ fn region_alpha_is_its_own_and_multiplies_the_owner_frames() {
     );
     assert_eq!(quad_alpha(&s), 0.25, "0.5 region × 0.5 frame");
 
-    // A hidden region draws nothing regardless of alpha.
     s.run("tex:SetAlpha(1); tex:Hide()").unwrap();
     assert!(
         !s.extract()
@@ -504,14 +463,9 @@ fn region_alpha_is_its_own_and_multiplies_the_owner_frames() {
     );
 }
 
-/// **The texture-colour composition law**: a region's own solid colour is a real *texel*
-/// (`SetTexture(r,g,b,a)` → `0x770360` generates an 8×8 block at `+0xcc`), its vertex colour is a
-/// *separate* slot (`SetVertexColor 0x77f750`, `+0xb8`), and the draw **multiplies** them per
-/// channel, alpha included — it does not replace.
-///
-/// This is the reference `SkillFrame` row trough, verbatim: declared `<Color 1,1,1,0.2>`, then
-/// `SetVertexColor(0, 0, 0.75, 0.5)`'d. It draws at alpha `0.2 × 0.5 = 0.1`. benilla stored ONE
-/// colour slot until this test, which made the second call replace the first and drew it at 0.5.
+/// A solid colour is a texel (`0x770360`, an 8x8 block at `+0xcc`) and the vertex colour a
+/// separate slot (`SetVertexColor 0x77f750`, `+0xb8`); the draw multiplies them, alpha included,
+/// as stock `SkillFrame`'s row trough needs (`SkillFrame.xml:35`, `SkillFrame.lua:158`).
 #[test]
 fn a_solid_colour_texel_multiplies_with_the_vertex_colour() {
     let mut s = script();
@@ -551,15 +505,14 @@ fn a_solid_colour_texel_multiplies_with_the_vertex_colour() {
         Some([0.0, 0.0, 0.75, 0.1]),
         "texel x vertex, alpha included: 0.2 x 0.5 = 0.1, NOT 0.5"
     );
-    // The API readback is the vertex slot itself, not the product — the two are distinct storage.
+    // `GetVertexColor` reads the vertex slot, not the product.
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return trough:GetVertexColor()")
             .unwrap(),
         (0.0, 0.0, 0.75, 0.5)
     );
 
-    // Art and a solid colour share the `+0xcc` slot: setting a path releases the generated texel,
-    // and what is left is the tint alone for the renderer to modulate the sample by.
+    // Art and a solid colour share `+0xcc`: a path releases the texel and leaves the tint.
     s.run(r#"trough:SetTexture("Interface\\Bar.blp")"#).unwrap();
     let tinted = s
         .extract()
@@ -580,14 +533,8 @@ fn a_solid_colour_texel_multiplies_with_the_vertex_colour() {
     );
 }
 
-/// **`SetDesaturated` rides the extract, and only against real ART**.
-///
-/// The state was stored from the day the verb landed and read by nobody, which is why every
-/// greyed-out affordance in the UI was a brightness tint (B162's talent tree). The flag now travels
-/// on the quad, so this pins the two ends of that wire — set/clear — plus the one carve-out: a
-/// PATHLESS solid has its colour folded into the quad's tint and draws against a 1x1 white texel,
-/// so a shader that greys the texel would grey white and change nothing. Carrying the flag there
-/// would read as honoured while doing nothing at all, so extract drops it.
+/// The desaturate flag rides an art quad only: a pathless solid draws its colour as the quad's tint
+/// over a white texel, which greying leaves white, so extract drops the flag there.
 #[test]
 fn desaturation_rides_the_extract_for_art_and_never_for_a_solid() {
     let mut s = script();
@@ -628,17 +575,12 @@ fn desaturation_rides_the_extract_for_art_and_never_for_a_solid() {
         "a pathless solid never carries it — greying a white texel is a no-op dressed as a feature"
     );
 
-    // And it clears — the reference's own `SetItemButtonDesaturated(button, nil)` restore.
     s.run("art:SetDesaturated(nil)").unwrap();
     assert!(!grey(&s, true), "clearing the flag restores full colour");
 }
 
-/// Read a Texture region's desaturation state straight off the model, by name.
-///
-/// It has no getter in Lua on purpose — `IsDesaturated` (`0x79c2c0`) exists, but its return shape
-/// is unconfirmed, and inventing one to make a test convenient is how an unverified API
-/// gets shipped (decision 1327's own residual). The extract quad is the other way to see it, but a
-/// cleared texture emits no quad at all, which is exactly the case these tests need to observe.
+/// A Texture region's desaturation state, read off the model by name: `IsDesaturated`
+/// (`0x79c2c0`) is not built, and a cleared texture emits no quad to read it from.
 fn desaturated(s: &UiScript, name: &str) -> bool {
     let lua = s.lua();
     let model = lua.app_data_ref::<crate::script::Model>().expect("model");
@@ -647,14 +589,8 @@ fn desaturated(s: &UiScript, name: &str) -> bool {
     model.region_data.get(&h).is_some_and(|d| d.desaturated)
 }
 
-/// **`SetTexture` clears the desaturation — except when the path does not actually change**.
-///
-/// `+0x128` is a `CGxShader*`, and `CSimpleTexture::SetTexture` writes it from a shader index the
-/// Lua binding always passes as slot 0 (permanently NULL). Storing a desaturate boolean *beside*
-/// the texture handle — which is what benilla did on 1327 — diverges on the single most common
-/// FrameXML shape there is: a repaint that re-sets the icon and expects the grey to follow the art.
-/// The same-path early-out (`0x770225`) is what makes the *idempotent* repaint keep its grey, and
-/// it is the half a plausible implementation drops.
+/// The desaturation is the shader slot `+0x128`, which `CSimpleTexture::SetTexture` rewrites with
+/// the binding's always-NULL slot 0, except that the same path returns early (`0x770225`).
 #[test]
 fn set_texture_clears_desaturation_unless_the_path_is_unchanged() {
     let s = script();
@@ -669,34 +605,28 @@ fn set_texture_clears_desaturation_unless_the_path_is_unchanged() {
     .unwrap();
     let grey = |s: &UiScript| desaturated(s, "ClrIcon");
 
-    // The idempotent repaint: same file, so the client returns before it can clear anything.
     s.run(r#"icon:SetTexture("Interface\\Icons\\Spell_Nature_Sleep")"#)
         .unwrap();
     assert!(grey(&s), "re-setting the SAME art keeps the grey");
 
-    // A different file reaches the write and zeroes the slot.
     s.run(r#"icon:SetTexture("Interface\\Icons\\Spell_Fire_Fireball")"#)
         .unwrap();
     assert!(!grey(&s), "a texture CHANGE clears the desaturation");
 
-    // The clear forms take the same leg (`test esi,esi` falls through to the write).
+    // nil takes the same leg (`test esi,esi` falls through to the write).
     s.run("icon:SetDesaturated(1) icon:SetTexture(nil)")
         .unwrap();
     assert!(!grey(&s), "SetTexture(nil) clears it too");
 
-    // The COLOUR form is a different function (`0x770360`) and is not one of the field's writers.
+    // The colour form (`0x770360`) does not write the shader slot.
     s.run(r#"icon:SetTexture("Interface\\Icons\\Spell_Nature_Sleep") icon:SetDesaturated(1)"#)
         .unwrap();
     s.run("icon:SetTexture(1, 0, 0)").unwrap();
     assert!(grey(&s), "the colour form does not touch the shader slot");
 }
 
-/// **`SetDesaturated`'s argument truth table has two arms that read backwards**
-/// (`0x6f1c10`'s jump table).
-///
-/// `0x6f1c10(L, 2, default=1)` takes its DEFAULT on `LUA_TNONE`, so a bare `SetDesaturated()` greys
-/// — the opposite of the `if flag then` an implementation writes without looking. And a number is
-/// truncated to an int, so `SetDesaturated(0)` clears where truthiness would have greyed.
+/// `SetDesaturated` reads its flag with `0x6f1c10(L, 2, default=1)`: no argument (`LUA_TNONE`)
+/// greys, and a number is truncated to an int, so 0 and 0.5 clear.
 #[test]
 fn set_desaturated_takes_the_clients_argument_truth_table() {
     let s = script();
@@ -704,7 +634,6 @@ fn set_desaturated_takes_the_clients_argument_truth_table() {
         .unwrap();
     let grey = |s: &UiScript| desaturated(s, "ArgTex");
 
-    // NO ARGUMENT is ON — the LUA_TNONE default arm, not the nil arm.
     s.run("ArgTex:SetDesaturated()").unwrap();
     assert!(
         grey(&s),
@@ -714,26 +643,20 @@ fn set_desaturated_takes_the_clients_argument_truth_table() {
     s.run("ArgTex:SetDesaturated(nil)").unwrap();
     assert!(!grey(&s), "nil clears");
 
-    // A number truncating to zero clears; a non-zero one greys.
     s.run("ArgTex:SetDesaturated(1) ArgTex:SetDesaturated(0)")
         .unwrap();
     assert!(!grey(&s), "0 clears — the number arm truncates to int");
     s.run("ArgTex:SetDesaturated(0.5)").unwrap();
     assert!(!grey(&s), "0.5 truncates to 0 and clears");
 
-    // Both booleans, and Dewdrop's `true` (the call 98 corpus addons reach).
     s.run("ArgTex:SetDesaturated(true)").unwrap();
     assert!(grey(&s), "true greys");
     s.run("ArgTex:SetDesaturated(false)").unwrap();
     assert!(!grey(&s), "false clears");
 }
 
-/// The draw gate is the TEXTURE slot, never the colour: `0x7706e0` tests `+0xcc` and emits NOTHING
-/// when it is empty, whatever the vertex colour holds. Since the tint deliberately survives
-/// `SetTexture(nil)` ("a tint outlives the art it was tinting"), a cleared region used to leak its
-/// tint out of extract as a solid plate — an occupied action button going empty on a character
-/// switch drew its surviving 1/1/1 usable-tint as a solid WHITE square (the
-/// 2026-07-10 grey wells were the same class).
+/// The draw gate is the texture slot, never the colour: `0x7706e0` emits nothing when `+0xcc` is
+/// empty, though the tint survives `SetTexture(nil)`.
 #[test]
 fn a_vertex_colour_without_a_texture_draws_nothing() {
     let mut s = script();
@@ -761,7 +684,6 @@ fn a_vertex_colour_without_a_texture_draws_nothing() {
     };
     assert_eq!(drawn(&s), 1, "tinted art draws");
 
-    // The slot empties: the art clears, the tint stays (distinct storage) — and nothing draws.
     s.run("icon:SetTexture(nil)").unwrap();
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return icon:GetVertexColor()")
@@ -776,21 +698,8 @@ fn a_vertex_colour_without_a_texture_draws_nothing() {
     );
 }
 
-/// **`SetTexture` ignores arguments past the path**, because the client's does.
-///
-/// The path form reads ONE argument (`0x770200`); only the colour form (`0x770360`) reads up to
-/// four, and a C function takes what it wants off the Lua stack and ignores the rest. We typed the
-/// trailing three as `Option<f32>` and so RAISED on a stray extra — `bad argument #3: error
-/// converting Lua boolean to f32` — where the client silently accepts.
-///
-/// The live case is `_LazyPig/LazyPigMenu.lua:182`:
-/// `texture_title:SetTexture("Interface\DialogFrame\UI-DialogBox-Header", true)`. The `true` is
-/// meaningless in 1.12; the addon reached us only once the survey began seating the addon registry.
-///
-/// Asserted as "does not raise", which is the whole claim — there is no `GetTexture` binding to read
-/// the path back through, and inventing one to satisfy a test would be the tail wagging the dog.
-/// The colour form is exercised alongside so the fix cannot have made it lax: a non-numeric channel
-/// must take the same default a missing one does, exactly as `lua_tonumber` of a non-number is 0.
+/// `SetTexture`'s path form reads one argument (`0x770200`) and its colour form up to four
+/// (`0x770360`), ignoring the rest; a non-numeric channel reads as `lua_tonumber` reads it, 0.
 #[test]
 fn set_texture_ignores_arguments_past_the_path_like_the_client_does() {
     let s = script();
@@ -803,25 +712,15 @@ fn set_texture_ignores_arguments_past_the_path_like_the_client_does() {
     )
     .expect("a stray extra argument must not raise — the client ignores it");
 
-    // The colour form, with a boolean and a numeric string among the channels.
     s.run("t:SetTexture(0.25, '0.5', true)")
         .expect("the colour form must tolerate what lua_tonumber tolerates");
 
-    // And the ordinary shapes still work.
     s.run("t:SetTexture(nil) t:SetTexture('') t:SetTexture(1, 0, 0, 1)")
         .expect("clear, blank and the plain colour form are unaffected");
 }
 
-/// **`SetGradientAlpha` / `SetGradient` exist, store both stops, and paint.**
-///
-/// These were the single wall in front of the corpus's largest family: `FuBar\FuBar_Panel.lua:144`
-/// calls `SetGradientAlpha` while building the bar, so all 20 FuBar plugins died there — right after
-/// the chunk-name/`debugstack` fix got them that far.
-///
-/// Asserted on the region PAINTING (a gradient-only region must emit a quad, because the client
-/// generates the gradient into the same texture slot the colour form fills) and on the midpoint
-/// being what a one-tint quad shows. The full gradient stays on the region for a renderer that
-/// grows a second stop.
+/// A gradient fills the texture slot the colour form fills, so a gradient-only region paints;
+/// both stops are stored, and the quad paints their midpoint, not the gradient.
 #[test]
 fn a_gradient_is_stored_whole_and_painted_as_its_midpoint() {
     let mut s = script();
@@ -849,7 +748,7 @@ fn a_gradient_is_stored_whole_and_painted_as_its_midpoint() {
         "a region carrying only a gradient must paint, at the midpoint of its two stops"
     );
 
-    // The alpha-less twin: both stops opaque, and a non-"VERTICAL" token is horizontal.
+    // Any orientation token but "VERTICAL" is horizontal.
     s.run("t:SetGradient('HORIZONTAL', 1, 0, 0, 0, 0, 1)")
         .expect("SetGradient takes six colour arguments and no alpha");
     s.resolve();
@@ -864,11 +763,8 @@ fn a_gradient_is_stored_whole_and_painted_as_its_midpoint() {
     );
 }
 
-/// **The split itself: a Texture answers texture verbs and NOT text ones, and vice versa.**
-///
-/// Until this landed, one shared table meant a Texture answered `SetText` and a FontString answered
-/// `SetTexture` — a superset in both directions (Texture's map `0x87c128` is 22 entries,
-/// FontString's `0xcf5400` is 32, both tail-calling the Region map and stopping there).
+/// Texture's map (`0x87c128`, 22 entries) and FontString's (`0xcf5400`, 32) each answer their own
+/// verbs, then fall back to the Region map and stop there.
 #[test]
 fn the_two_region_leaves_answer_their_own_maps() {
     let s = crate::script::UiScript::new().unwrap();
@@ -886,8 +782,7 @@ fn the_two_region_leaves_answer_their_own_maps() {
             == "function"
     };
 
-    // Texture-only, and an asymmetry worth noting: `SetVertexColor` is on BOTH leaves while
-    // `GetVertexColor` is Texture-only. No reasonable partition invents that.
+    // Texture-only; `GetVertexColor` is here though `SetVertexColor` is on both leaves.
     for m in [
         "SetTexture",
         "GetTexture",
@@ -901,8 +796,7 @@ fn the_two_region_leaves_answer_their_own_maps() {
         assert!(has(&s, "Tex", m), "a Texture answers {m}");
         assert!(!has(&s, "Str", m), "a FontString must NOT answer {m}");
     }
-    // `SetRotation` is 1.12's PLAYERMODEL verb (`0x84f1fc`/`0x505f00`), not a region one — it is in
-    // neither leaf map, and ours used to put it on Texture.
+    // `SetRotation` is 1.12's PlayerModel verb (`0x84f1fc`/`0x505f00`), in neither leaf map.
     for leaf in ["Tex", "Str"] {
         assert!(
             !has(&s, leaf, "SetRotation"),
@@ -920,8 +814,7 @@ fn the_two_region_leaves_answer_their_own_maps() {
         assert!(has(&s, "Str", m), "a FontString answers {m}");
         assert!(!has(&s, "Tex", m), "a Texture must NOT answer {m}");
     }
-    // On BOTH — and each leaf registers its own copy in the client, so these are NOT on the Region
-    // map and must not be hoisted into it.
+    // On both leaves, each registering its own copy, so not on the Region map.
     for m in [
         "SetVertexColor",
         "SetAlpha",
@@ -935,19 +828,13 @@ fn the_two_region_leaves_answer_their_own_maps() {
             "{m} is on both leaves"
         );
     }
-    // The Region map reaches both, through each leaf's own fallback.
     for m in crate::script::REGION_MAP_METHODS {
         assert!(
             has(&s, "Tex", m) && has(&s, "Str", m),
             "{m} is the Region map"
         );
     }
-    // **`GetStringHeight` is GONE and must stay gone.** 1.12 has no such method on any table (0
-    // hits in every encoding; the control `GetStringWidth` has 1), Blizzard's own FrameXML calls it
-    // 0 times, and ours was a byte-identical duplicate of `GetHeight` — which is the method the
-    // reference itself uses for this, falling through to the same cached measurement
-    // `GetStringWidth` reads. Keeping the width and dropping the height is not an oversight: the
-    // client really is asymmetric here.
+    // 1.12 has no `GetStringHeight` on any table; `GetHeight` reads the same measurement.
     assert!(
         !has(&s, "Str", "GetStringHeight"),
         "1.12 has no GetStringHeight"
@@ -966,12 +853,8 @@ fn the_two_region_leaves_answer_their_own_maps() {
     assert!(has(&s, "Str", "SetAlphaGradient") && !has(&s, "Tex", "SetAlphaGradient"));
 }
 
-/// **`SetPortraitToTexture` is a GLOBAL in 1.12, not a Texture method.**
-///
-/// `reference/1.12-globals.tsv` marks it `engine`, and both of the reference's own call sites pass a
-/// texture NAME: `ContainerFrame.lua:419` and `MailFrame.lua:174`. The first is the one that binds
-/// us — we SOURCE `ContainerFrame.lua` off the patch chain, so the client's own file calls this
-/// global inside our VM.
+/// `SetPortraitToTexture` is a 1.12 global, not a Texture method; stock `ContainerFrame.lua:419`
+/// and `MailFrame.lua:174` pass it a texture name.
 #[test]
 fn set_portrait_to_texture_is_a_global_taking_a_name() {
     let s = crate::script::UiScript::new().unwrap();
@@ -987,33 +870,23 @@ fn set_portrait_to_texture_is_a_global_taking_a_name() {
         s.eval::<String>("return Port:GetTexture()").unwrap(),
         "Interface\\ContainerFrame\\KeyRing-Bag-Icon"
     );
-    // The Texture METHOD is gone — 1.12's Texture map has no such entry.
     assert_eq!(
         s.eval::<String>("return type(Port.SetPortraitToTexture)")
             .unwrap(),
         "nil",
         "1.12 has no Texture:SetPortraitToTexture — it is a global"
     );
-    // An unknown name is not an error: the reference's callers compose names that may not exist
-    // yet, and nothing here may raise on the sourced file's behalf.
+    // An unknown name does not raise here; the reference raises "Couldn't find texture named"
+    // (`0x48d7db`).
     s.run(r#"SetPortraitToTexture("NoSuchPortrait", "Interface\\X")"#)
         .unwrap();
     assert!(s.errors().is_empty());
 }
 
-/// **`Region:GetWidth`/`GetHeight` are the VIRTUAL getters** — the same content-derived law the
-/// rect resolver calls, because the Lua bindings dispatch through the same geometry-vtable slots
-/// (`GetWidth 0x7a1e00` ends `ff 52 1c`, `GetHeight 0x7a2030` ends `ff 52 20`).
-///
-/// Both halves of the FontString row, each of which we had backwards:
-///
-/// * the **authored** value wins per axis — `0x772930`'s `jp 0x77294a` skips the measure entirely
-///   when the authored width is not `0.0`, so `<Size x="300" y="0"/>` reports 300 from the author
-///   and the height from the text (`CharacterNameText` is exactly that, in the reference's own
-///   file), where we used to report the 37-point measure;
-/// * on an axis authored `0` the **width** is the NATURAL, unwrapped extent — the very cell
-///   `GetStringWidth` returns (`0x772890`'s `[fs+0xfc]`) — while the **height** is the *wrapped*
-///   one (`0x7729b0`'s `[fs+0x100]`). We used to report the laid-out width for both.
+/// `Region:GetWidth`/`GetHeight` (`0x7a1e00`/`0x7a2030`) call the virtual size getters the rect
+/// resolver uses: a FontString's authored axis wins (`0x772930` skips the measure, `jp 0x77294a`),
+/// else its width is the unwrapped extent `GetStringWidth` reads (`0x772890`, `[fs+0xfc]`) and its
+/// height the wrapped one (`0x7729b0`, `[fs+0x100]`).
 #[test]
 fn the_size_getters_take_the_author_first_then_the_natural_width_and_wrapped_height() {
     let mut s = script();
@@ -1050,12 +923,8 @@ fn the_size_getters_take_the_author_first_then_the_natural_width_and_wrapped_hei
     assert!(s.take_errors().is_empty());
 }
 
-/// The floor, and the state the reference does not have. `0x772930`/`0x772a60` end in a one-unit
-/// clamp, so a genuinely empty string reads back **1**, never `0.0`. But a measure that has not
-/// LANDED is not an extent at all — it is the host round-trip a VM with **no measurer installed**
-/// still takes, which the reference has no equivalent of. A caller that guards
-/// `if h <= 0 then return end` reads that zero as "not yet"; flooring it would tell them to stop
-/// waiting. So: floor a known extent, not the absence of one.
+/// `0x772930`/`0x772a60` clamp to one unit, so an empty string reads 1. A host measure still in
+/// flight, a state the reference does not have, reads 0, so an `if h <= 0` guard keeps waiting.
 #[test]
 fn an_empty_string_reads_back_one_unit_and_a_pending_measure_reads_back_zero() {
     let mut s = script();
@@ -1077,10 +946,8 @@ fn an_empty_string_reads_back_one_unit_and_a_pending_measure_reads_back_zero() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A TEXTURE's getters are the same virtual law with the other override behind them
-/// (`0x770720`/`0x770790`): the authored value when it is not exactly `0.0`, else the art's own
-/// texel extent, else `0.0` — and **no floor**, which only the FontString override carries. This
-/// is the getter half of 1662; before it, Lua saw `0` for a size the screen was already drawing.
+/// A Texture's size getters (`0x770720`/`0x770790`): the authored value unless exactly `0.0`, else
+/// the art's texel extent, else `0.0`, with no floor.
 #[test]
 fn a_textures_getters_report_its_texel_span_on_an_unsized_axis() {
     let mut s = script();
@@ -1105,21 +972,12 @@ fn a_textures_getters_report_its_texel_span_on_an_unsized_axis() {
     assert!(s.take_errors().is_empty());
 }
 
-/// **The three constructors' string arguments are FOUR different shapes, not one rule.**
-///
-/// The discriminator is **not** the argument's type — it is whether the binding *tests* its
-/// parser's return:
-///
-/// | position | fetch | a table there | a number there |
-/// |---|---|---|---|
-/// | `CreateFontString`/`CreateTexture` `name`, `layer` | `0x6f3510` → `0x6f3690`, untested | absent | **accepted, stringified** |
-/// | `CreateFontString`/`CreateTexture` `inherits` | raw `lua_type == LUA_TSTRING`, no coercion | ignored | **ignored** |
-/// | `CreateFrame` `name`, `inherits` | `0x6f3690` **unguarded** | absent | **accepted, stringified** |
-/// | `CreateFrame` `kind` | `0x6f3510`, tested | **raises** | accepted |
-///
-/// The last two rows are the same value taking opposite paths from argument order alone:
-/// `CreateFrame` coerces at `0x70613f` *before* its `cmp 4`, and `0x6f7cb1` retags the number's
-/// stack slot **in place**, so a number arrives at the gate already a string.
+/// The constructors' string arguments take four shapes, by whether the binding tests its parser's
+/// return: a region constructor's `name` and `layer` (`0x6f3510` → `0x6f3690`, untested) and
+/// `CreateFrame`'s `name` and `inherits` (`0x6f3690`, unguarded) read a table as absent and
+/// stringify a number; a region constructor's `inherits` (a raw `lua_type == LUA_TSTRING`) ignores
+/// both; `CreateFrame`'s `kind` (`0x6f3510`, tested) raises on a table and takes a number, which
+/// `CreateFrame` coerces in place before its gate (`0x70613f`, `0x6f7cb1`).
 #[test]
 fn the_constructors_string_arguments_are_four_shapes_not_one() {
     let mut s = script();
@@ -1127,10 +985,7 @@ fn the_constructors_string_arguments_are_four_shapes_not_one() {
     s.run(r#"host = CreateFrame("Frame", "ArgHost", UIParent)"#)
         .unwrap();
 
-    // ── pfUI's line, verbatim. `f.buffs[i]:CreateFontString(nil, "OVERLAY", f.buffs[i])` passes
-    //    the BUTTON as `inheritsFrom`. The real client constructs it, ignores the argument, and
-    //    logs nothing — this raised `bad argument #4` until 2026-08-30 and stopped pfUI, and with
-    //    it pfQuest, pfQuest-turtle and ShaguDPS.
+    // ── A table in `inherits` is ignored and the string still built; pfUI passes a button there.
     s.run(r#"fs = ArgHost:CreateFontString(nil, "OVERLAY", ArgHost)"#)
         .unwrap_or_else(|e| panic!("a table in `inherits` must be ignored, not raise: {e}"));
     assert_eq!(
@@ -1138,7 +993,6 @@ fn the_constructors_string_arguments_are_four_shapes_not_one() {
         "table",
         "...and the FontString is really constructed"
     );
-    // Every other non-string in every region-constructor position: also silent, also constructed.
     for pos in ["{}, \"OVERLAY\"", "nil, {}", "true, false"] {
         for ctor in ["CreateFontString", "CreateTexture"] {
             s.run(&format!("r = ArgHost:{ctor}({pos})"))
@@ -1147,15 +1001,14 @@ fn the_constructors_string_arguments_are_four_shapes_not_one() {
         }
     }
 
-    // ── A NUMBER is a string to `lua_isstring` — so it NAMES the region.
+    // ── A number passes `lua_isstring`, so it names the region.
     s.run("named = ArgHost:CreateTexture(4242)").unwrap();
     assert_eq!(
         s.eval::<String>("return named:GetName()").unwrap(),
         "4242",
         "a number in `name` is stringified, not dropped"
     );
-    // ...but NOT in `inherits`, whose gate reads the raw tag and never coerces. A number there is
-    // ignored, where the same number in CreateFrame's fourth argument would raise.
+    // `inherits` reads the raw tag, so a number there is ignored.
     s.run("ArgHost:CreateTexture(nil, nil, 5)")
         .unwrap_or_else(|e| panic!("a number in a region ctor's `inherits` is ignored: {e}"));
 
@@ -1166,21 +1019,15 @@ fn the_constructors_string_arguments_are_four_shapes_not_one() {
         "77",
         "CreateFrame reads `name` through an UNGUARDED lua_tostring"
     );
-    // ...and an unresolvable `inherits` still raises, which is the pre-existing contract and the
-    // control for the changes above: loosening the OTHER positions must not have loosened this.
     assert!(
         s.run(r#"CreateFrame("Frame", nil, nil, "NoSuchTemplateAnywhere")"#)
             .is_err(),
         "an unresolvable template name still raises — the miss branch is luaL_error"
     );
 
-    // ── The layer argument is PERMISSIVE, and an unrecognised one is ARTWORK, not an error.
-    //    `0x6f18b0` returns 0 with its out-param unwritten and neither constructor reads the
-    //    result, so the pre-staged ARTWORK (2) stands. Matching is case-insensitive.
+    // ── The layer: case-insensitive, and an unrecognised one leaves the pre-staged ARTWORK.
     s.run(r#"lay = ArgHost:CreateTexture(nil, "not-a-layer")"#)
         .unwrap_or_else(|e| panic!("an unrecognised layer must not raise: {e}"));
-    // Read off the arena — 1.12 publishes no `GetDrawLayer`, so there is no Lua getter to ask,
-    // the same reason the sequence scrub is read this way in `modelframe`'s tests.
     let layer_of = |s: &UiScript, name: &str| {
         let lua = s.lua();
         let model = lua.app_data_ref::<crate::script::Model>().expect("model");
@@ -1208,12 +1055,9 @@ fn the_constructors_string_arguments_are_four_shapes_not_one() {
     );
 }
 
-/// The token is CANONICAL on the way out — `"NPC"`, which the stock merchant, guild registrar
-/// and trade windows all write (`MerchantFrame.lua:68`, `GuildRegistrarFrame.lua:4`,
-/// `TradeFrame.lua:41`), binds as `"npc"`. The reference resolves every unit token
-/// case-insensitively (`0x515970`'s ten compares are all `_strnicmp`), and the app samples the
-/// booth by this exact string — a raw `"NPC"` matched no slot and left the ring empty on all
-/// three windows.
+/// `SetPortraitTexture` lowercases the token, which the app matches exactly: the reference reads
+/// unit tokens case-insensitively (`0x515970`, `_strnicmp`), and stock `MerchantFrame.lua:68`
+/// passes `"NPC"`.
 #[test]
 fn set_portrait_texture_folds_the_token_to_lowercase() {
     let mut s = script();
@@ -1242,31 +1086,9 @@ fn set_portrait_texture_folds_the_token_to_lowercase() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **`FontString:GetText` substitutes nil for an EMPTY string, and that substitution is the
-/// getter's own** — `0x79d690` reads the cell, and eleven bytes before the pushstring it does a
-/// FIRST-BYTE test and zeroes the pointer on `'\0'`:
-///
-/// ```text
-/// 79d735 test eax,eax / je 0x79d740     ; NULL      -> substitute
-/// 79d73b cmp byte ptr [eax],0x0         ; the first-byte test
-/// 79d73e jne 0x79d742                   ; non-empty -> keep
-/// 79d740 xor eax,eax                    ; EMPTY     -> NULL
-/// 79d746 call 0x6f3890                  ; NULL -> pushnil
-/// ```
-///
-/// So it cannot return `""`, whatever the cell holds — and the cell really does hold non-NULL
-/// empty strings, because `SetText 0x771d80` never writes NULL to `+0xf0` on any leg: NULL and
-/// `""` share one leg that truncates the buffer in place. Per binding, not per family:
-/// `Button:GetText 0x780e10` carries the same substitution (`0x780ec5`), `EditBox:GetText
-/// 0x7985c0` carries none (decision 2110).
-///
-/// The director's shape (Cartographer 2.02, the world map's hover label): the stock
-/// `WorldMapFrameAreaDescription` is blanked with `SetText("")` by `WorldMapPOI_OnEnter`/`_OnLeave`
-/// on **every** POI hover, and Cartographer's ZoneInfo reads
-/// `if WorldMapFrameAreaDescription:GetText() then` as "this POI has a status line, so put the
-/// zone's level range there instead of on the label". Answering `""` made that true forever after
-/// the first POI touch — the name lost its faction colour, the range moved to the description's own
-/// line beneath it, and nothing ever cleared it again.
+/// `FontString:GetText` (`0x79d690`) pushes nil for an empty string by a first-byte test
+/// (`0x79d73b`), though `SetText 0x771d80` keeps an empty buffer; `Button:GetText 0x780e10` does
+/// the same (`0x780ec5`), and `EditBox:GetText 0x7985c0` returns `""`.
 #[test]
 fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
     let s = script();
@@ -1283,15 +1105,12 @@ fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
             .unwrap()
     };
 
-    // Never written, and every shape of an empty write, all nil.
     assert_eq!(text_of(&s, "fresh"), None);
     for write in [r#"fresh:SetText("")"#, r#"fresh:SetText(nil)"#] {
         s.run(write).unwrap();
         assert_eq!(text_of(&s, "fresh"), None, "after `{write}`");
     }
 
-    // A string that HAS held text still reads nil once blanked — the substitution is the getter's,
-    // so it does not matter that the cell keeps a (truncated) buffer.
     s.run(r#"held:SetText("In Conflict")"#).unwrap();
     assert_eq!(text_of(&s, "held").as_deref(), Some("In Conflict"));
     s.run(r#"held:SetText("")"#).unwrap();
@@ -1303,7 +1122,7 @@ fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
     s.run(r#"held:SetText("back"); held:SetText(nil)"#).unwrap();
     assert_eq!(text_of(&s, "held"), None);
 
-    // Button:GetText carries the SAME substitution; Button:SetText(nil) is its own no-op guard.
+    // `Button:SetText(nil)` leaves the label alone.
     s.run(
         r#"
         local b = CreateFrame("Button", "TextCellButton")
@@ -1320,8 +1139,7 @@ fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
     s.run(r#"TextCellButton:SetText("")"#).unwrap();
     assert_eq!(text_of(&s, "TextCellButton"), None, "an empty label is nil");
 
-    // And the EditBox is the counter-example that keeps this from being hoisted: stock
-    // `MailFrame.lua` compares `GetText() == ""` and calls `strlen(GetText())` on one.
+    // Stock `MailFrame.lua:521` compares an EditBox's `GetText() == ""`.
     s.run(
         r#"
         local e = CreateFrame("EditBox", "TextCellEdit")
@@ -1337,18 +1155,8 @@ fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **A `SetTexture` the host cannot resolve leaves the region's art alone** — it does not overwrite
-/// it with the path that failed.
-///
-/// The reference's load-failure arm is explicit about it: `0x770288 cmp [ebp-4],2; jl` →
-/// `0x77028e`–`0x7702b2` releases the handle it just built and returns 0 **without ever touching
-/// `+0xcc`**. Ours stored the path first and used the
-/// probe's verdict only for the return value, so a mistyped or not-yet-shipped path erased the art
-/// it failed to replace — `GetTexture()` echoed the miss, and the extract dropped the quad, so the
-/// region went blank with nothing said anywhere.
-///
-/// The control that must not change is the second half: a resolvable path still replaces, and a VM
-/// with **no probe at all** still stores, because it has no backend to ask.
+/// A path that fails to load leaves the art alone (`0x770288` → `0x77028e`-`0x7702b2` returns 0
+/// without touching `+0xcc`); with no probe installed, every path is stored.
 #[test]
 fn an_unresolvable_set_texture_keeps_the_art_the_region_had() {
     let mut s = script();
@@ -1366,7 +1174,6 @@ fn an_unresolvable_set_texture_keeps_the_art_the_region_had() {
         "Interface\\Real"
     );
 
-    // The miss: nil back, and the art it could not replace is still there.
     assert!(
         s.eval::<bool>(r#"return t:SetTexture("Interface\\Nope") == nil"#)
             .unwrap(),
@@ -1378,7 +1185,6 @@ fn an_unresolvable_set_texture_keeps_the_art_the_region_had() {
         "the failed load overwrote the art the region was holding"
     );
 
-    // The control: a hit still replaces, and an explicit clear still clears.
     assert!(s
         .eval::<bool>(r#"return t:SetTexture("Interface\\Other") == 1"#)
         .unwrap());
@@ -1390,15 +1196,8 @@ fn an_unresolvable_set_texture_keeps_the_art_the_region_had() {
     assert!(s.eval::<bool>("return t:GetTexture() == nil").unwrap());
 }
 
-/// `Texture:GetBlendMode()` — ONE string, the reference's own spelling, round-tripping whatever
-/// `SetBlendMode` was given (`0x79a890`/`0x79a950`, table `0x87c128`, argc 1, arity 1, kinds
-/// `(string?)`).
-///
-/// The untouched default is asserted alongside the round trip because it is the load-bearing half:
-/// `ShaguTweaks/mods/dark-ui-elements.lua:169` guards a recolour with
-/// `region.GetBlendMode and region:GetBlendMode() == "ADD"`, so the answer an ordinary texture gives
-/// decides whether the reference's additive art is left alone. `"BLEND"` is the CSimpleTexture
-/// ctor's `[+0xd0] = 2` (`0x76fc64`).
+/// `Texture:GetBlendMode` (`0x79a890`, table `0x87c128`) answers one string, the mode
+/// `SetBlendMode` (`0x79a950`) set, `"BLEND"` by default (the ctor's `[+0xd0] = 2`, `0x76fc64`).
 #[test]
 fn get_blend_mode_answers_one_string_and_defaults_to_the_ctors_blend() {
     let s = crate::script::UiScript::new().unwrap();
@@ -1410,7 +1209,6 @@ fn get_blend_mode_answers_one_string_and_defaults_to_the_ctors_blend() {
     )
     .unwrap();
 
-    // Arity 1 and kind string, measured the way the shape gate measures it.
     assert_eq!(s.arity("BTex:GetBlendMode()").unwrap(), 1, "arity 1");
     assert_eq!(
         s.eval::<String>("return type(BTex:GetBlendMode())")
@@ -1424,7 +1222,6 @@ fn get_blend_mode_answers_one_string_and_defaults_to_the_ctors_blend() {
         "an untouched texture is the ctor's mode 2"
     );
 
-    // Every one of the enum's five round-trips, including the three the renderer flattens.
     for mode in ["DISABLE", "ALPHAKEY", "BLEND", "ADD", "MOD"] {
         s.run(&format!(r#"BTex:SetBlendMode("{mode}")"#)).unwrap();
         assert_eq!(
@@ -1433,13 +1230,12 @@ fn get_blend_mode_answers_one_string_and_defaults_to_the_ctors_blend() {
             "round trip through the setter"
         );
     }
-    // Case-insensitive in, canonical out — the setter coerces, the getter answers the table's name.
+    // Case-insensitive in, canonical out.
     s.run(r#"BTex:SetBlendMode("add")"#).unwrap();
     assert_eq!(
         s.eval::<String>("return BTex:GetBlendMode()").unwrap(),
         "ADD"
     );
-    // A name outside the enum leaves the mode alone rather than inventing one.
     s.run(r#"BTex:SetBlendMode("NOT_A_MODE")"#).unwrap();
     assert_eq!(
         s.eval::<String>("return BTex:GetBlendMode()").unwrap(),
@@ -1447,7 +1243,6 @@ fn get_blend_mode_answers_one_string_and_defaults_to_the_ctors_blend() {
         "an unknown name changes nothing"
     );
 
-    // A FontString is not a Texture: neither half of the pair is on its map.
     assert!(s
         .eval::<bool>(
             r#"local fs = BlendOwner:CreateFontString("BStr", "ARTWORK")
@@ -1456,14 +1251,8 @@ fn get_blend_mode_answers_one_string_and_defaults_to_the_ctors_blend() {
         .unwrap());
 }
 
-/// `Texture:GetTexCoordModifiesRect()` — the 1.12 predicate return, `1`/`nil` and never a Lua
-/// boolean (`0x79c120`, table `0x87c128`, argc 1, arity 1, kinds `(nil) | (number)`).
-/// `pfUI/modules/thirdparty-tbc.lua:319` calls it bare on a Texture.
-///
-/// The flag's effect on the region's rect is deliberately NOT wired (see
-/// `RegionData::tex_coord_modifies_rect`), so this asserts the state and the shape — and asserts
-/// the un-wiring too, by checking that setting the flag moves no rect: a future change that wires
-/// the geometry will fail here and have to say so.
+/// `Texture:GetTexCoordModifiesRect` (`0x79c120`, table `0x87c128`) answers `1` or nil. The flag is
+/// stored, not applied: on the reference it makes `SetTexCoord` re-derive the rect (`0x770462`).
 #[test]
 fn tex_coord_modifies_rect_is_one_slash_nil_and_moves_no_rect_yet() {
     let mut s = crate::script::UiScript::new().unwrap();
@@ -1507,8 +1296,7 @@ fn tex_coord_modifies_rect_is_one_slash_nil_and_moves_no_rect_yet() {
         "kind number, never boolean"
     );
 
-    // The flag is state only: a SetTexCoord under it still leaves the rect where the anchors and
-    // the size put it. When the geometry leg is built, this assertion is the one that must change.
+    // The assertion that changes when the rect re-derivation is built.
     s.run("TCMTex:SetTexCoord(0, 0.25, 0, 0.5)").unwrap();
     s.resolve();
     assert_eq!(

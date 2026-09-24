@@ -1,9 +1,5 @@
-//! RegisterEvent + fire_event via BOTH conventions (`0x704d50` / `0x704f10`).
-//!
-//! The handler's extra arguments are read through 5.0's implicit `arg` table, not `select(n, ...)`:
-//! `...` as a value is not in this VM's grammar, because it is not in the 1.12
-//! client's. The point of the test is unchanged — the same handler sees the legacy globals
-//! (`this`, `event`, `arg1`) AND the positional arguments.
+//! Event registration and dispatch (`0x704d50`, `0x704f10`). Handlers read varargs through Lua
+//! 5.0's implicit `arg` table: `...` is not a value in the 1.12 client's grammar.
 
 use super::common::script;
 use crate::script::*;
@@ -57,7 +53,7 @@ fn globals_are_restored_after_firing_nesting_safe() {
     )
     .unwrap();
     s.fire_event("E", vec![ScriptValue::Str("x".into())]);
-    // After firing, the prior global values must be restored (`0x704f10`'s set-then-restore).
+    // `0x704f10` sets the globals for the handler and restores the prior values after.
     let (t, e, a): (String, String, String) = s.eval("return this, event, arg1").unwrap();
     assert_eq!(
         (t.as_str(), e.as_str(), a.as_str()),
@@ -82,11 +78,8 @@ fn handler_errors_are_collected_not_panicked() {
     assert!(errs[0].contains("boom"), "{errs:?}");
 }
 
-/// The cross-frame dispatch ORDER law: the client's
-/// per-event listener list is tail-appended (`0x7052d0`) and walked head-first (`0x703e50`) —
-/// **FIFO: registration order = firing order**. Duplicate registration keeps the original
-/// position (`0x702264` dup ret); unregister+re-register moves to the tail. The ZoneText frames
-/// depend on this: both write PVPInfoTextString on one event — the last writer decides.
+/// Each event's listener list is tail-appended (`0x7052d0`) and walked head-first (`0x703e50`);
+/// a duplicate registration returns early (`0x702264`).
 #[test]
 fn events_fire_in_registration_order_fifo() {
     let mut s = script();
@@ -106,43 +99,26 @@ fn events_fire_in_registration_order_fifo() {
     s.fire_event("E", vec![]);
     assert_eq!(s.eval::<String>("return order").unwrap(), "ABC");
 
-    // Duplicate registration keeps A's position (the client's dup early-ret).
+    // A duplicate registration keeps A's position.
     s.run("FA:RegisterEvent('E'); order = ''").unwrap();
     s.fire_event("E", vec![]);
     assert_eq!(s.eval::<String>("return order").unwrap(), "ABC");
 
-    // Unregister + re-register moves B to the TAIL (the node is freed, the re-add appends).
+    // Unregistering frees B's node, so re-registering appends it at the tail.
     s.run("FB:UnregisterEvent('E'); FB:RegisterEvent('E'); order = ''")
         .unwrap();
     s.fire_event("E", vec![]);
     assert_eq!(s.eval::<String>("return order").unwrap(), "ACB");
 }
 
-/// **`HasScript` answers "can this widget CARRY that kind", not "does it have one set".**
-///
-/// That distinction is the verb's whole purpose, and every corpus caller depends on it: they ask
-/// before hooking, precisely when nothing is set yet.
-///
-/// ```lua
-/// if parent:HasScript("OnMouseDown") then          -- Tablet-2.0.lua:2409
-///     local script = parent:GetScript("OnMouseDown")
-///     parent:SetScript("OnMouseDown", function() … end)
-/// end
-/// ```
-///
-/// It was the top session-start blocker — 32 of 39 `attempt to call method` failures were this one
-/// name — and implementing it took survivors from 41 to 69.
-///
-/// The known over-permission is asserted too, so it is a recorded divergence rather than a
-/// discovery: our table is flat where the reference's is per widget type, so a plain Frame answers
-/// true for a Button-only kind. Exact for the base kinds, which is what the corpus asks about.
+/// Callers ask before hooking, when nothing is set yet (`Tablet-2.0.lua:2409`). Our kind table is
+/// flat where the reference's is per widget type, so a Frame also answers true for `OnClick`.
 #[test]
 fn has_script_reports_the_kind_is_supported_not_that_one_is_set() {
     let s = script();
     s.run(r#"f = CreateFrame("Frame", "HasScriptProbe")"#)
         .unwrap();
 
-    // True with NOTHING set — the case every caller is actually in.
     assert!(
         s.eval::<bool>(r#"return f:HasScript("OnMouseDown")"#)
             .unwrap(),
@@ -154,7 +130,7 @@ fn has_script_reports_the_kind_is_supported_not_that_one_is_set() {
         "an unknown kind is false, not true"
     );
 
-    // Tablet's exact idiom, run end to end: guard, read the (absent) handler, install one, fire it.
+    // Tablet's idiom, end to end.
     let fired: bool = s
         .eval(
             r#"
@@ -170,19 +146,15 @@ fn has_script_reports_the_kind_is_supported_not_that_one_is_set() {
         .unwrap();
     assert!(fired, "the guarded hook must install and run");
 
-    // The recorded divergence: flat table, so a Frame says true for a Button-only kind. The
-    // reference says false. Pinned so making SCRIPT_KINDS per-type has to come here and decide.
+    // The flat table: a Frame says true for a Button-only kind, where the reference says false.
     assert!(
         s.eval::<bool>(r#"return f:HasScript("OnClick")"#).unwrap(),
         "over-permissive by design today — see the comment at the binding"
     );
 }
 
-/// **The walk steps by a next saved BEFORE the handler runs** (`0x703ee8`): a
-/// handler that unregisters ITSELF mid-dispatch cannot rob its successor. This is AceEvent-2.0's
-/// fire-once idiom for `PLAYER_LOGIN`/`VARIABLES_LOADED` — its frame unregisters inside the
-/// handler, and the index-walk this replaces skipped whichever addon registered right after it
-/// (Bagnon_Forever's DB never initialized; the director's SaveBagData error dialogs).
+/// The walk saves the next node before the handler runs (`0x703ee8`); AceEvent-2.0's fire-once
+/// idiom unregisters inside its own handler.
 #[test]
 fn a_self_unregistering_handler_does_not_rob_its_successor() {
     let mut s = script();
@@ -208,15 +180,13 @@ fn a_self_unregistering_handler_does_not_rob_its_successor() {
         vec!["WalkA", "WalkB", "WalkC"],
         "the once-idiom's self-removal must not skip the next listener"
     );
-    // The removal held: a second fire reaches only A and C.
     s.fire_event("E", vec![]);
     let log: Vec<String> = s.eval("return log").unwrap();
     assert_eq!(log, vec!["WalkA", "WalkB", "WalkC", "WalkA", "WalkC"]);
 }
 
-/// A handler that unregisters the walk's SAVED next ends the dispatch there — the reference frees
-/// that node and walks into zeroed links (an accident we render as a deterministic stop) — while a
-/// frame registered mid-dispatch tail-appends and is still visited.
+/// Unregistering the walk's saved next ends the dispatch, as the reference frees that node and
+/// walks into its zeroed links; a frame registered mid-dispatch tail-appends and is still visited.
 #[test]
 fn mid_dispatch_removal_of_the_next_stops_and_append_is_visited() {
     let mut s = script();
@@ -271,16 +241,9 @@ fn mid_dispatch_removal_of_the_next_stops_and_append_is_visited() {
     );
 }
 
-/// `Frame:RegisterAllEvents()` — the frame's `OnEvent` receives every event dispatched
-/// (`0x774c20`, table `0x878ec0`, argc 1, arity 0), and `UnregisterAllEvents` clears that state
-/// along with the per-event ones.
-///
-/// **The clearing half is the load-bearing one.** AceEvent-2.0 — shipped by 63 vanilla addons and
-/// 6 of the top 20 — turns all-events on once (`AceEvent.frame:RegisterAllEvents()`), deliberately
-/// stops calling `frame:UnregisterEvent(event)` while it is on, and gets back to per-event
-/// registration by calling `frame:UnregisterAllEvents()` and then re-registering each event it
-/// still wants. A `RegisterAllEvents` that survived that call would leave every Ace2 addon on the
-/// whole event stream for the session.
+/// `RegisterAllEvents` (`0x774c20`, table `0x878ec0`, argc 1, arity 0) sends every event to the
+/// frame's `OnEvent`; `UnregisterAllEvents` clears it too, which is how AceEvent-2.0 gets back to
+/// per-event registration.
 #[test]
 fn register_all_events_takes_every_event_and_unregister_all_clears_it() {
     let mut s = script();
@@ -293,10 +256,8 @@ fn register_all_events_takes_every_event_and_unregister_all_clears_it() {
     )
     .unwrap();
 
-    // Arity 0 — the verb answers nothing.
     assert_eq!(s.arity("All:RegisterAllEvents()").unwrap(), 0);
 
-    // Anything dispatched now reaches it, including an event no name list could have enumerated.
     for ev in [
         "PLAYER_LOGIN",
         "UNIT_HEALTH",
@@ -314,9 +275,7 @@ fn register_all_events_takes_every_event_and_unregister_all_clears_it() {
         "SOME_SERVER_EVENT_NOBODY_LISTED"
     );
 
-    // Registering twice is a no-op, and a frame holding BOTH an all-events registration and a
-    // RegisterEvent for the same event is one listener, not two — the same rule `RegisterEvent`'s
-    // own `if not already in the list` holds one level down.
+    // All-events plus an explicit registration of the same event is still one listener.
     s.run(r#"seen = {}; All:RegisterAllEvents(); All:RegisterEvent("UNIT_HEALTH")"#)
         .unwrap();
     s.fire_event("UNIT_HEALTH", vec![]);
@@ -326,7 +285,7 @@ fn register_all_events_takes_every_event_and_unregister_all_clears_it() {
         "fired once, not twice"
     );
 
-    // UnregisterAllEvents clears BOTH: the explicit UNIT_HEALTH registration and the all-events one.
+    // UnregisterAllEvents clears both registrations.
     s.run("seen = {}; All:UnregisterAllEvents()").unwrap();
     for ev in ["UNIT_HEALTH", "PLAYER_LOGIN"] {
         s.fire_event(ev, vec![]);
@@ -337,7 +296,7 @@ fn register_all_events_takes_every_event_and_unregister_all_clears_it() {
         "the all-events registration does not outlive UnregisterAllEvents"
     );
 
-    // …and the AceEvent path back: re-register the individual events it still wants.
+    // AceEvent's way back: re-register the events it still wants.
     s.run(r#"All:RegisterEvent("UNIT_HEALTH")"#).unwrap();
     for ev in ["UNIT_HEALTH", "PLAYER_LOGIN"] {
         s.fire_event(ev, vec![]);
@@ -350,10 +309,6 @@ fn register_all_events_takes_every_event_and_unregister_all_clears_it() {
     assert!(s.take_errors().is_empty());
 }
 
-/// An all-events frame dispatches AFTER the event's own listeners — where it would sit if the
-/// registration were expanded into every per-event list, since it joined later than they did.
-/// Cross-frame order is a law consumers depend on (the two ZoneText frames writing one FontString);
-/// it does not stop being one because a listener asked for everything.
 #[test]
 fn an_all_events_listener_runs_after_the_events_own() {
     let mut s = script();

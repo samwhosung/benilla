@@ -1,42 +1,8 @@
-//! Per-handler cost attribution (`WOW_UI_HANDLERS=<secs>`) — *which* FrameXML handler is spending
-//! the frame. An `impl UiScript` block beside its concern, the `layout.rs` pattern.
-//!
-//! ## Why it exists
-//!
-//! Three perf hunts in a row — 1383's autocast shine, 1385's cast bar, 1388's layout graph — each
-//! opened with the same question and each answered it **by hand**: read the shipped Lua, guess the
-//! busy handler, add a temporary print, re-run. `[ui-cost] tick=` is one aggregate over the whole
-//! `OnUpdate` sweep, so it can say *that* the sweep got expensive and never *who*. This is the
-//! missing decomposition, and it sits one layer below the one that landed beside it: 1389's HUD
-//! measures the frame's cost and latches its tail (`cpu`/`main` ms, the spike badge), which is
-//! **when** and **how much**; this is **who**, inside the UI's share of it.
-//!
-//! ## What it measures
-//!
-//! Every handler fired through [`super::event::fire`] — the single firing path for `OnUpdate`,
-//! `OnEvent`, `OnShow`/`OnHide`, `OnSizeChanged`, and the whole widget set (`OnClick`, `OnEnter`,
-//! `OnValueChanged`, …). Not just the tick's `OnUpdate` sweep, deliberately: an event storm (the
-//! combat log at 40 lines a second) costs frames the same way a hot `OnUpdate` does, and a `by
-//! script:` rollup on the report line is what tells the two apart at a glance.
-//!
-//! **Self and total, because handler firing nests.** A handler that calls `Show()` fires `OnShow`
-//! inside itself, and a handler that resizes something fires `OnSizeChanged`; charging the parent
-//! for its children would name the wrong frame, which is the one failure this instrument cannot
-//! afford. A stack of per-level child nanos gives both: `total` is what the call cost, `self` is
-//! what it cost *itself*. Sorted by `self`.
-//!
-//! Engine work a handler provokes synchronously **is** its self time, and that is the point — a
-//! geometry getter inside an `OnUpdate` calls `settle()`, which is a whole layout resolve
-//! (1388's opening finding: `OptionsScroll_Fit` does four per frame). That cost belongs to the
-//! handler that asked for it.
-//!
-//! ## What it costs when off
-//!
-//! One relaxed atomic load and a not-taken branch per handler fire ([`armed`]). The state lives in
-//! its own `app_data` slot rather than in [`super::Model`]: mlua keys `app_data` by `TypeId` with a
-//! **`RefCell` per entry** (`mlua-0.11.6`, `types/app_data.rs`), so the profiler's borrow can never
-//! collide with a model borrow held across a fire — a hazard that would otherwise be a panic in the
-//! hottest path in the client, armed only in the sessions where we are already chasing something.
+//! Per-handler cost attribution (`WOW_UI_HANDLERS=<secs>`): self and total time for every handler
+//! fired through [`super::event::fire`], since firing nests; engine work a handler provokes, such
+//! as a layout resolve, is its self time. Off, it costs a relaxed atomic load per fire ([`armed`]).
+//! Its state has its own `app_data` slot, not the model's: mlua keeps a `RefCell` per entry, so the
+//! profiler's borrow cannot collide with a model borrow held across a fire.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,12 +15,8 @@ use super::UiScript;
 /// How many rows the periodic report prints before rolling the rest into a `… N more` line.
 const REPORT_ROWS: usize = 12;
 
-/// The fast gate: is *any* VM in this process profiling handlers?
-///
-/// Process-wide and not per-VM on purpose — the check runs per handler fire, and a per-VM answer
-/// would cost the `app_data` lookup this is here to avoid. A false positive (one VM armed, another
-/// not) costs the unarmed VM a hash lookup that finds `on == false`, which is the only case where
-/// the two answers differ and is not a case that ships.
+/// Whether any VM in the process profiles handlers: process-wide, so the per-fire check needs no
+/// `app_data` lookup.
 static ARMED: AtomicBool = AtomicBool::new(false);
 
 #[inline]
@@ -62,9 +24,7 @@ pub(super) fn armed() -> bool {
     ARMED.load(Ordering::Relaxed)
 }
 
-/// `WOW_UI_HANDLERS=<secs>` — the report period, read once. `WOW_UI_HANDLERS=3` reports every three
-/// seconds; anything unparseable or non-positive leaves the instrument off, the `[ui-cost]` /
-/// `[layout-prof]` posture.
+/// The report period from `WOW_UI_HANDLERS=<secs>`, read once; unparseable or non-positive is off.
 fn env_period() -> Option<f32> {
     static PERIOD: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
     *PERIOD.get_or_init(|| {
@@ -83,37 +43,30 @@ struct Slot {
     self_ns: u64,
 }
 
-/// The profiler's state, one per VM, in its own `app_data` slot (see the module header).
-///
-/// Keyed by frame **id**, not by name: the name is a `String` clone and a two-map walk, so it is
-/// resolved once at report time rather than on every fire. A frame destroyed before the report
-/// reads back as `#<id>` — its cost still counted, which is what a churning pool of frames needs.
+/// The profiler's state, one per VM, keyed by frame id: names resolve at report time, and a frame
+/// destroyed before then still counts, as `#<id>`.
 #[derive(Default)]
 pub(crate) struct HandlerProf {
-    /// Is *this* VM recording? [`armed`] is the process-wide gate; this is the per-VM answer.
+    /// Whether this VM records; [`armed`] is the process-wide gate.
     on: bool,
-    /// Seconds between reports; `0.0` records forever and never prints (what a test wants).
+    /// Seconds between reports; `0.0` records and never prints.
     period: f32,
-    /// Wall seconds and frames since the last report — the window every printed rate divides by.
+    /// Wall seconds and frames since the last report, the divisor of every printed rate.
     window: f32,
     frames: u32,
-    /// Fires that had at least one nested fire inside them. Printed as the one-number answer to
-    /// "should I be reading `self` or `total` here?".
+    /// Fires that had a nested fire inside them.
     nested: u32,
-    /// Nanos already charged to *nested* fires, one entry per open fire. See the module header.
+    /// Nanos already charged to nested fires, one entry per open fire.
     stack: Vec<u64>,
     rows: HashMap<u32, Vec<Slot>>,
 }
 
-/// An open fire, closed by its `Drop` — the balance of the nesting stack is then a property of the
-/// borrow checker rather than of the call site remembering to close what it opened. It also holds
-/// under an unwind, which a hand-written enter/exit pair does not: a panic through a handler would
-/// otherwise leak a stack level and silently inflate every parent attribution after it.
+/// An open fire, closed by its `Drop`, so the nesting stack stays balanced through an unwind too.
 pub(super) struct Fire<'a> {
     lua: &'a Lua,
     id: u32,
     script: &'a str,
-    /// `None` while this VM is not recording — the whole guard is then a no-op.
+    /// `None` while this VM is not recording, which makes the guard a no-op.
     started: Option<Instant>,
 }
 
@@ -138,7 +91,7 @@ impl<'a> Fire<'a> {
 
 impl Drop for Fire<'_> {
     /// Charge `total` to `(id, script)`, `total - children` to its self time, and hand `total` up
-    /// to the enclosing fire as *its* child time.
+    /// to the enclosing fire as its child time.
     fn drop(&mut self) {
         let Some(started) = self.started else {
             return;
@@ -154,9 +107,7 @@ impl Drop for Fire<'_> {
         if children > 0 {
             prof.nested += 1;
         }
-        // `saturating_sub`: children are measured strictly inside this fire, so the subtraction
-        // cannot go negative by construction — but a construction argument is not a reason to hand
-        // a wrapped `u64` to a report if a clock ever disagrees.
+        // Children run inside this fire; saturating only matters if a clock disagrees.
         let self_ns = total.saturating_sub(children);
         let slots = prof.rows.entry(self.id).or_default();
         match slots.iter_mut().find(|s| s.script == self.script) {
@@ -165,8 +116,6 @@ impl Drop for Fire<'_> {
                 slot.total_ns += total;
                 slot.self_ns += self_ns;
             }
-            // The only allocation on this path, and only on a `(frame, script)` pair's first fire
-            // of the window — steady state is a linear scan over one frame's handful of slots.
             None => slots.push(Slot {
                 script: self.script.to_string(),
                 calls: 1,
@@ -180,23 +129,20 @@ impl Drop for Fire<'_> {
 /// One `(frame, script)` pair's cost over the profiler's current window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HandlerRow {
-    /// The frame's name, or `#<id>` for an anonymous or already-destroyed frame.
+    /// The frame's name, else where its handler was defined, else `#<id>`.
     pub frame: String,
     pub script: String,
     pub calls: u32,
-    /// Microseconds spent in this handler *excluding* handlers it fired — what to sort by.
+    /// Microseconds in this handler, excluding the handlers it fired.
     pub self_us: f64,
-    /// Microseconds spent in this handler *including* handlers it fired.
+    /// Microseconds in this handler, including the handlers it fired.
     pub total_us: f64,
 }
 
 impl UiScript {
-    /// Arm or disarm handler attribution for this VM, reporting every `period_secs` (`0.0` records
-    /// with no periodic report — read it with [`UiScript::handler_profile`] instead).
-    ///
-    /// Call it between ticks. An open [`Fire`] is inert either way (it decided once, at `open`),
-    /// but this clears the nesting stack, so a disarm from *inside* a handler would drop a level
-    /// its enclosing fires are still counting on.
+    /// Arm or disarm attribution for this VM, reporting every `period_secs` (`0.0`: no report, read
+    /// [`UiScript::handler_profile`]). Call it between ticks: it clears the nesting stack that open
+    /// fires count on.
     pub fn profile_handlers(&self, on: bool, period_secs: f32) {
         if on {
             ARMED.store(true, Ordering::Relaxed);
@@ -213,13 +159,9 @@ impl UiScript {
         prof.rows.clear();
     }
 
-    /// This VM's handler costs over the current window, heaviest **self** time first.
-    ///
-    /// Window totals, not per-frame rates — the frame count is [`UiScript::handler_profile_frames`],
-    /// so a caller that wants a rate divides by the number it also has to report.
+    /// This VM's handler costs over the current window as totals, heaviest self time first.
     pub fn handler_profile(&self) -> Vec<HandlerRow> {
-        // Snapshot under the profiler's borrow and then let it go: labelling reaches into the model
-        // *and* back into Lua, neither of which may be touched with a borrow of anything open.
+        // Snapshot, then release the borrow: labelling reaches into the model and back into Lua.
         let raw: Vec<(u32, String, u32, u64, u64)> = match self.lua.app_data_ref::<HandlerProf>() {
             Some(prof) => prof
                 .rows
@@ -257,15 +199,14 @@ impl UiScript {
         rows
     }
 
-    /// Frames ticked since the last report — [`UiScript::handler_profile`]'s denominator.
+    /// Frames ticked since the last report, [`UiScript::handler_profile`]'s denominator.
     pub fn handler_profile_frames(&self) -> u32 {
         self.lua
             .app_data_ref::<HandlerProf>()
             .map_or(0, |prof| prof.frames)
     }
 
-    /// Advance the profiler's window by one tick and print the report if it is due. Called at the
-    /// end of [`UiScript::tick`], so "a frame" means a ticked frame whatever else fired in it.
+    /// Count a ticked frame and print the report when due, at the end of [`UiScript::tick`].
     pub(super) fn report_handler_profile(&mut self, elapsed: f32) {
         if !armed() {
             return;
@@ -281,8 +222,7 @@ impl UiScript {
         if !due {
             return;
         }
-        // The rows first, so the model borrow the label walk takes is released before the profiler
-        // is borrowed mutably to reset it.
+        // The rows first: the label walk's model borrow must end before the profiler's mutable one.
         let rows = self.handler_profile();
         let mut prof = self
             .lua
@@ -297,14 +237,8 @@ impl UiScript {
 }
 
 impl UiScript {
-    /// A row's label: the frame's name, else **where the handler was written**, else `#<id>`.
-    ///
-    /// The definition site is not a nicety. `CreateFrame("Frame")` + `OnUpdate` with no name is
-    /// *the* addon timer idiom, so the anonymous case is not the rare one — it is exactly the set
-    /// of handlers an attribution table exists to catch, and `#4127` is not something anyone can
-    /// act on. `Function::info()` hands back the chunk and line, and every addon chunk is named
-    /// `@Interface\AddOns\<Folder>\<File>` (see [`super::addon_chunk_name`]), so the label reads as
-    /// the addon and the line to open.
+    /// A row's label: the frame's name, else the handler's `<file>:<line>` (an unnamed frame is the
+    /// common addon timer), else `#<id>`.
     fn handler_label(&self, id: u32, script: &str) -> String {
         let named = {
             let model = self.model_ref();
@@ -319,11 +253,9 @@ impl UiScript {
             .unwrap_or_else(|| format!("#{id}"))
     }
 
-    /// `<short_src>:<line>` for the function bound at `(id, script)`, or `None` if there is no such
-    /// binding or the VM cannot say (a C function, a stripped chunk).
+    /// `<short_src>:<line>` of the function bound at `(id, script)`, when the VM can say.
     fn handler_defined_at(&self, id: u32, script: &str) -> Option<String> {
-        // `raw_get` throughout: the registry's script tables are plain data, and a report must not
-        // be able to run a metamethod — that would re-enter Lua from inside an instrument.
+        // `raw_get`, so a report can never run a metamethod.
         let scripts: mlua::Table = self.lua.named_registry_value(super::REG_SCRIPTS).ok()?;
         let per: mlua::Table = scripts.raw_get(id).ok()?;
         let func: mlua::Function = per.raw_get(script).ok()?;
@@ -332,12 +264,8 @@ impl UiScript {
     }
 }
 
-/// The `[ui-handlers]` block: the window's shape, the per-script rollup, then the heaviest
-/// [`REPORT_ROWS`] handlers by self time with the remainder folded into one line.
-///
-/// Everything is **per frame**, because that is the unit every other cost in this client is quoted
-/// in (`[ui-cost] tick=`, the HUD's `cpu ms`) and the whole use of this instrument is comparing
-/// against those.
+/// The `[ui-handlers]` block, per frame like the client's other costs: the window, the per-script
+/// rollup, then the heaviest [`REPORT_ROWS`] handlers by self time and the rest in one line.
 fn print_report(rows: &[HandlerRow], window: f32, frames: u32, nested: u32) {
     let per_frame = f64::from(frames.max(1));
     let total_self: f64 = rows.iter().map(|r| r.self_us).sum();
@@ -379,11 +307,8 @@ fn print_report(rows: &[HandlerRow], window: f32, frames: u32, nested: u32) {
     }
 }
 
-/// Install the profiler's `app_data` slot, and arm it from the environment.
-///
-/// Unconditional (an empty `HandlerProf` is a few words) because mlua refuses to *insert* app data
-/// while any app data is borrowed — so the slot has to exist before the VM starts running, or
-/// [`UiScript::profile_handlers`] would carry a panic that only fires in the sessions using it.
+/// Install the profiler's `app_data` slot, armed from the environment. Unconditional: mlua refuses
+/// to insert app data while any is borrowed, so the slot must exist before the VM runs.
 pub(super) fn install(lua: &Lua) {
     let period = env_period();
     lua.set_app_data(HandlerProf {

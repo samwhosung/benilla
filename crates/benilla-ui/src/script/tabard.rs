@@ -1,22 +1,7 @@
-//! The guild tabard designer's engine surface: the `TabardModel` kind's own method
-//! table (`0x84ee40`, ten verbs) and the window's two globals.
-//!
-//! **The designer's whole state is five ints on the frame** — emblem style, emblem colour,
-//! border style, border colour, background colour — bounded by a `.rdata` constant table
-//! (`0x808220`: 170 · 17 · 6 · 17 · 51) that no DBC feeds. A `TabardModel` is well-defined only
-//! once `InitializeTabardColors()` has run: the constructor writes nothing.
-//!
-//! **What is the app's.** The guild record the seed reads and the save-in-flight latch
-//! `CanSaveTabardNow` tests are pushed by the app ([`TabardHost`]); `Save()` and
-//! `CloseTabardCreation()` queue [`TabardIntent`]s the app drains — the fourteen pre-flight checks
-//! of the save (`0x5e03f0`) need the purse, the guild rank and the interaction target, none of
-//! which this crate holds. The two `…EmblemTexture(texture)` methods are **setters**: the reference
-//! decodes the emblem BLP and installs a white-carrying-its-alpha 128×64 / 128×32 texture into the
-//! passed Texture widget. Here they set the region's texture to an [`EMBLEM_MASK_TOKEN`] path the
-//! app resolves to exactly that image (`ui_script::extract`).
-//!
-//! `GetTabardCreationCost()` is a **hard-coded constant**: `0x6d6de0` is `mov eax,0x186a0; ret`
-//! — 100 000 copper, ten gold, no `.data` cell and no server input.
+//! The guild tabard designer: the `TabardModel` method table (`0x84ee40`) and the window's two
+//! globals. Its state is five ints on the frame, which the constructor leaves unwritten until
+//! `InitializeTabardColors()` seeds them; the app pushes the guild record and save latch and runs
+//! the save's fourteen checks (`0x5e03f0`).
 
 use mlua::{Lua, Value};
 
@@ -26,21 +11,18 @@ use super::region::region_handle_of;
 use super::Model;
 use crate::widget::{FrameHandle, FrameKind, RegionKind};
 
-/// Registry key of the TabardModel method table — probed before PlayerModel's and Model's
-/// (`object.rs`'s kind chain).
+/// Registry key of the TabardModel method table, probed before PlayerModel's and Model's.
 pub(super) const REG_TABARDMODEL_METHODS: &str = "__benilla_tabardmodel_methods";
 
-/// `0x6d6de0`: the designer's price, in copper.
+/// The designer's price in copper, a constant in the reference (`0x6d6de0`).
 pub const TABARD_CREATION_COST: u32 = 100_000;
 
-/// `0x808220`, the five slot counts in `CycleVariation` order: emblem style, emblem colour, border
-/// style, border colour, background colour. A constant — the client consults no DBC.
+/// The five slot counts in `CycleVariation` order (emblem style and colour, border style and
+/// colour, background colour): the reference's constant table at `0x808220`, not a DBC.
 pub const TABARD_COUNTS: [i32; 5] = [170, 17, 6, 17, 51];
 
-/// The token a Texture region carries after `Get{Upper,Lower}EmblemTexture(texture)`: the prefix
-/// plus the emblem path (`Textures\GuildEmblems\Emblem_%02d_%02d_T{U,L}_U`). The app draws
-/// it as the reference's generated image — white RGB carrying the emblem's own alpha, a tintable
-/// mask (`0x503431`: `(a << 24) | 0x00FFFFFF`).
+/// The prefix a Texture carries before the emblem path after `Get{Upper,Lower}EmblemTexture`; the
+/// app draws the reference's generated mask, white carrying the emblem's alpha (`0x503431`).
 pub const EMBLEM_MASK_TOKEN: &str = "benilla:emblem-mask:";
 
 /// The BLP path inside an [`EMBLEM_MASK_TOKEN`] texture, or `None` for an ordinary path.
@@ -48,21 +30,19 @@ pub fn emblem_mask_path(texture: &str) -> Option<&str> {
     texture.strip_prefix(EMBLEM_MASK_TOKEN)
 }
 
-/// What the app pushes for the designer's two host-side facts.
+/// The designer's two host-side facts, pushed by the app.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct TabardHost {
-    /// The local player's guild record as the DBCache holds it — `Some` once cached (its five
-    /// emblem fields, `-1` each for an undesigned tabard), `None` while it has not arrived or the
-    /// player has no guild.
+    /// The cached guild record's emblem fields, `-1` each when undesigned; `None` until cached.
     pub guild_record: Option<[i32; 5]>,
-    /// `[0xc4d780]`, the save-in-flight latch: set when the save is sent, cleared by the reply.
+    /// The save-in-flight latch (`0xc4d780`): set when the save is sent, cleared by the reply.
     pub save_pending: bool,
 }
 
 /// What the designer asks the app to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabardIntent {
-    /// `TabardModel:Save()` — the five values, for the fourteen pre-flight checks and the send.
+    /// `Save()`: the five values, for the checks and the send.
     Save([i32; 5]),
     /// `CloseTabardCreation()`.
     Close,
@@ -74,8 +54,7 @@ impl super::UiScript {
         self.model_mut().tabard_host = host;
     }
 
-    /// The designer's current five values — the preview the app dresses the player's body in
-    /// while the frame is up — or `None` before `InitializeTabardColors()` has seeded them.
+    /// The design the app previews on the player's body, `None` before the seed.
     pub fn tabard_design(&self) -> Option<[i32; 5]> {
         self.model_ref().tabard_preview
     }
@@ -86,8 +65,7 @@ impl super::UiScript {
     }
 }
 
-/// The three `this` raises every method shares (`0x847ef8` / `0x847ec0` / `0x847e98`), then the
-/// frame handle of a `TabardModel`.
+/// The three `this` raises every method shares (`0x847ef8`, `0x847ec0`, `0x847e98`).
 fn this_tabard(lua: &Lua, this: &Value) -> mlua::Result<FrameHandle> {
     let Value::Table(t) = this else {
         return Err(mlua::Error::runtime(
@@ -113,9 +91,8 @@ fn this_tabard(lua: &Lua, this: &Value) -> mlua::Result<FrameHandle> {
     Ok(h)
 }
 
-/// The five values of a designer that has been seeded, else nothing — the file-name getters and
-/// the texture setters read the raw fields, which the reference leaves uninitialised before the
-/// seed; here an unseeded designer reads as all zeros, the first legal design.
+/// The seeded design, or all zeros. Deviation: the reference reads uninitialised fields before
+/// the seed; we answer the first legal design because that value is undefined.
 fn design(model: &Model, h: FrameHandle) -> [i32; 5] {
     model.tabard_designs.get(&h).copied().unwrap_or([0; 5])
 }
@@ -126,12 +103,12 @@ fn store(lua: &Lua, h: FrameHandle, five: [i32; 5]) {
     model.tabard_preview = Some(five);
 }
 
-/// `0x455c70`: `(count · rand) >> 32` — a draw in `[0, count)` (INFERRED uniform, VERIFIED scaling).
+/// `(count * rand) >> 32`, a draw in `[0, count)` (`0x455c70`).
 fn draw(rand: u32, count: i32) -> i32 {
     ((u64::from(count as u32) * u64::from(rand)) >> 32) as i32
 }
 
-/// A clock-seeded generator standing in for the client's table-driven one (`0x4531e0`); only the
+/// A clock-seeded generator in place of the reference's table-driven one (`0x4531e0`); only the
 /// range law above is the reference's.
 fn random_words() -> impl Iterator<Item = u32> {
     let nanos = std::time::SystemTime::now()
@@ -147,8 +124,8 @@ fn random_words() -> impl Iterator<Item = u32> {
     })
 }
 
-/// `InitializeTabardColors()`'s worker `0x5028e0`: the guild record's five when the record is
-/// cached and none is `-1`, else five random draws — never zeros.
+/// `InitializeTabardColors()`'s worker (`0x5028e0`): the cached guild record unless a field is
+/// `-1`, else five random draws.
 fn seed(host: TabardHost) -> [i32; 5] {
     match host.guild_record {
         Some(rec) if rec.iter().all(|v| *v != -1) => rec,
@@ -159,8 +136,8 @@ fn seed(host: TabardHost) -> [i32; 5] {
     }
 }
 
-/// `0x502ac0`: `v ← (v + count + delta) mod count`, a signed `idiv`; `|delta| ≥ count` is a silent
-/// no-op (no repaint either). Returns whether anything changed.
+/// `(v + count + delta) mod count`, a signed `idiv` (`0x502ac0`); `|delta| >= count` is a silent
+/// no-op, with no repaint.
 fn cycle(five: &mut [i32; 5], slot: usize, delta: i32) -> bool {
     let count = TABARD_COUNTS[slot];
     if delta.wrapping_abs() >= count {
@@ -170,9 +147,8 @@ fn cycle(five: &mut [i32; 5], slot: usize, delta: i32) -> bool {
     true
 }
 
-/// The emblem path for a half (`TU` upper, `TL` lower) — `0x47a520`'s format. The reference's
-/// setters append `.BLP` before decoding (`0x503396`); here the path stays extensionless, the
-/// form every region texture carries and the app's resolver completes.
+/// The emblem path for a half (`TU` upper, `TL` lower) in `0x47a520`'s format, left without the
+/// `.BLP` the reference appends (`0x503396`), as every region texture path is.
 fn emblem_path(five: [i32; 5], half: &str) -> String {
     format!(
         "Textures\\GuildEmblems\\Emblem_{:02}_{:02}_{half}_U",
@@ -180,8 +156,8 @@ fn emblem_path(five: [i32; 5], half: &str) -> String {
     )
 }
 
-/// `Get{Upper,Lower}EmblemTexture(texture)` — the Texture-widget argument's three raises
-/// (`0x84efc8` / `0x84f050` / `0x84f010` and the lower twins), then the install.
+/// `Get{Upper,Lower}EmblemTexture(texture)`: the argument's three raises (`0x84efc8`,
+/// `0x84f050`, `0x84f010` for the upper), then the install.
 fn emblem_texture(lua: &Lua, this: Value, texture: Value, upper: bool) -> mlua::Result<()> {
     let h = this_tabard(lua, &this)?;
     let (name, half) = if upper {
@@ -225,7 +201,7 @@ fn emblem_texture(lua: &Lua, this: Value, texture: Value, upper: bool) -> mlua::
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
-    // `InitializeTabardColors()` — `0x502b10`: the active player gates the seed; zero returns.
+    // `0x502b10`: the seed needs an active player.
     m.set(
         "InitializeTabardColors",
         lua.create_function(|lua, this: Value| {
@@ -242,7 +218,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `Save()` — `0x502bd0`: the intent carries the five; the app does the fourteen checks.
+    // `0x502bd0`: the app runs the fourteen checks on the queued five.
     m.set(
         "Save",
         lua.create_function(|lua, this: Value| {
@@ -257,9 +233,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `CycleVariation(variationIndex, delta)` — `0x502ca0`: both args `lua_isnumber` else the
-    // usage raise; the index 1..5 (unsigned-checked, so 0 is out) else its own raise; both
-    // `ftol`-truncated; the worker's silent no-op for a delta past the count.
+    // `0x502ca0`: a non-number raises the usage, an index off 1..=5 its own error; both truncate.
     m.set(
         "CycleVariation",
         lua.create_function(|lua, (this, index, delta): (Value, Value, Value)| {
@@ -283,8 +257,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The four `…FileName` getters (`0x502dc0` / `0x502ea0` / `0x502f80` / `0x503070`): one
-    // string each, no extension — the loader appends `.blp`.
+    // `0x502dc0`, `0x502ea0`, `0x502f80`, `0x503070`: one string each, without `.blp`.
     for (name, upper, background) in [
         ("GetUpperBackgroundFileName", true, true),
         ("GetLowerBackgroundFileName", false, true),
@@ -312,7 +285,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // The two texture SETTERS (`0x503160` / `0x503540`), zero returns.
+    // Setters despite their names (`0x503160`, `0x503540`): the reference installs a 128x64 or
+    // 128x32 mask into the passed texture.
     m.set(
         "GetUpperEmblemTexture",
         lua.create_function(|lua, (this, texture): (Value, Value)| {
@@ -326,8 +300,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `CanSaveTabardNow()` — `0x503910` never resolves `this`: the number 1, or nil, from
-    // `player && guildRecordCached && !savePending` (`0x5f0800`). Not a would-it-succeed test.
+    // `0x503910` never resolves `this`: the number 1 or nil, from a player, a cached record and
+    // no save pending (`0x5f0800`), not a would-it-succeed test.
     m.set(
         "CanSaveTabardNow",
         lua.create_function(|lua, _: mlua::MultiValue| {
@@ -342,13 +316,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.set_named_registry_value(REG_TABARDMODEL_METHODS, m)?;
 
     let g = lua.globals();
-    // `GetTabardCreationCost()` — 0 args, one number, the constant.
     g.set(
         "GetTabardCreationCost",
         lua.create_function(|_, ()| Ok(i64::from(TABARD_CREATION_COST)))?,
     )?;
-    // `CloseTabardCreation()` — `0x4f5900`: zero args, zero returns, no packet; the close core
-    // (`0x4f58a0`) and its `CLOSE_TABARD_FRAME` are the app's, gated on a stored vendor.
+    // `0x4f5900`, no packet: the app runs the close (`0x4f58a0`) and its `CLOSE_TABARD_FRAME`,
+    // gated on a stored vendor.
     g.set(
         "CloseTabardCreation",
         lua.create_function(|lua, _: mlua::MultiValue| {

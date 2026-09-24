@@ -1,73 +1,42 @@
-//! Player **macros** — the one seam in this crate that owns its game state
-//! outright, because the 1.12 macro system has no server side at all: there is no macro opcode on
-//! the wire (vmangos has none, and the client's own `UIMacros.cpp` persists to
-//! `WTF/…/macros-cache.txt`), so the macro table *is* client state. Contrast [`super::action`],
-//! whose 120-slot table the app owns because the server hands it back at login.
+//! Player macros. 1.12 keeps them client-side with no opcode (`macros-cache.txt`), and
+//! `CreateMacro` must return the new index at once, so the table lives here: the app seeds it
+//! ([`UiScript::set_macros`]), saves it when [`UiScript::take_macros_dirty`] says, and pushes the
+//! icon list ([`UiScript::set_macro_icons`]).
 //!
-//! That ownership is forced by the reference's own API shape, not chosen for convenience:
-//! `MacroPopupOkayButton_OnClick` does `index = CreateMacro(…)` and immediately selects `index`,
-//! so the mutation must be synchronous and must return the new slot — a queue-an-intent-and-wait
-//! seam cannot answer it. The app therefore **seeds** the table once ([`UiScript::set_macros`],
-//! from `benilla-config/macros/…`), **reads** it back to persist ([`UiScript::macros`]) whenever
-//! [`UiScript::take_macros_dirty`] says something moved, and pushes the icon-chooser list
-//! ([`UiScript::set_macro_icons`]) it builds off `SpellIcon.dbc`.
-//!
-//! ## The index space (VERIFIED, the shipped `Blizzard_MacroUI`)
-//!
-//! `MAX_MACROS = 18` per tab; `MacroFrame.macroBase` is `0` for the account tab and `18` for the
-//! character tab, and every binding takes `macroBase + i`. So **1..=18 are the account macros and
-//! 19..=36 the character macros**, each list dense from its base — `MacroFrame_Update` draws
-//! `i <= numMacros` and disables the rest, so a gap is not representable. [`MacroIndex`] is that
-//! split, made once at the boundary.
-//!
-//! ## What the engine does NOT know
-//!
-//! A macro's **bound spell** — the spell whose cooldown/usability/range a macro action-bar slot
-//! reports (`0x4e5a50`'s macro arm returns `[rec+0x564]`) — is the app's derivation, because
-//! resolving a name to a spell id needs the catalog and the player's book. The engine stores the
-//! body; `benilla::ui_macro` parses it. Same split as everywhere else in this crate: data and
-//! layout here, game knowledge
-//! there.
+//! Indices 1..=18 are the account macros and 19..=36 the character macros, each list dense from
+//! its base (`MacroFrame.macroBase`). A macro's bound spell (`0x4e5a50`'s macro arm returns
+//! `[rec+0x564]`) is the app's to derive: it needs the spell catalog and the player's book.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::cursor::{queue_cursor_update, CursorMacro, CursorPayload};
 use super::Model;
 
-/// Macros per tab — the shipped `Blizzard_MacroUI.lua`'s own `MAX_MACROS = 18`, and the account
-/// tab's size *and* the character tab's base (`MacroFrame_SetCharacterMacros` sets
-/// `macroBase = MAX_MACROS`).
+/// Macros per tab (`Blizzard_MacroUI.lua:1`), and so the character tab's base.
 pub const MAX_MACROS: usize = 18;
 
-/// The macro **name** length cap — `MacroPopupEditBox`'s `letters="16"` and its label
-/// `MACRO_POPUP_TEXT = "Enter Macro Name (Max 16 Characters):"`. Enforced here as well as in the
-/// box, because `CreateMacro`/`EditMacro` are callable from any script.
+/// The name cap, `MacroPopupEditBox`'s `letters="16"`.
 pub const MAX_MACRO_NAME: usize = 16;
 
-/// The macro **body** length cap — `MacroFrameText`'s `letters="255"` and its counter
-/// `MACROFRAME_CHAR_LIMIT = "%d/255 Characters Used"`.
+/// The body cap, `MacroFrameText`'s `letters="255"`.
 pub const MAX_MACRO_BODY: usize = 255;
 
 /// One macro, as `GetMacroInfo` reports it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MacroView {
-    /// The player's name for it (≤ [`MAX_MACRO_NAME`] characters).
     pub name: String,
-    /// The chosen icon's **texture path** (`Interface\Icons\Ability_Ambush`). Stored resolved
-    /// rather than as an index into the chooser list: the reference's own save format writes the
-    /// icon by NAME (`MACRO %d "%s" %s`, byte-verified at `0x44cb60`), so a name is what survives
-    /// a restart — an index would silently re-point if the list ever changed.
+    /// The icon's texture path, kept by name because the reference saves the icon by name
+    /// (`MACRO %d "%s" %s`, `0x44cb60`).
     pub texture: Option<String>,
-    /// The macro body: the lines run when the macro is used, `\n`-separated, ≤ [`MAX_MACRO_BODY`].
+    /// The macro's lines, `\n`-separated.
     pub body: String,
-    /// `GetMacroInfo`'s fourth return (`isLocal`) and `CreateMacro`/`EditMacro`'s `local`
-    /// argument. The 1.12 client keeps a second file for these (`macros-local.txt` beside
-    /// `macros-cache.txt`, both byte-verified strings at `0x45de74`/`0x45de88`); the shipped macro
-    /// UI never passes the flag, so it is carried faithfully and is otherwise inert.
+    /// `isLocal` and the `local` argument, carried but not saved here. The 1.12 client saves these
+    /// to `macros-local.txt` beside `macros-cache.txt` (`0x45de74`, `0x45de88`); the stock UI never
+    /// sets it.
     pub local_only: bool,
 }
 
-/// The whole macro table: the two dense lists behind the frame's two tabs (module docs).
+/// The macro table: the account and character lists.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MacroState {
     /// Indices 1..=18.
@@ -76,19 +45,16 @@ pub struct MacroState {
     pub character: Vec<MacroView>,
 }
 
-/// A 1-based Lua macro index resolved into `(which list, position in it)` — the one place the
-/// 1..36 space is split, so no binding re-derives the base.
+/// A 1-based Lua macro index split into its list and 0-based position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MacroIndex {
-    /// True for 19..=36 (the character tab).
+    /// True for 19..=36.
     per_character: bool,
-    /// 0-based position within that tab's list.
     pos: usize,
 }
 
 impl MacroIndex {
-    /// Split a 1-based Lua index; `None` outside 1..=36. Deliberately NOT range-checked against
-    /// the live lists — callers that need an occupied slot go through [`MacroState::get`].
+    /// `None` outside 1..=36; not checked against the lists, which [`MacroState::get`] does.
     fn split(index: usize) -> Option<Self> {
         let zero = index.checked_sub(1)?;
         match zero {
@@ -104,14 +70,13 @@ impl MacroIndex {
         }
     }
 
-    /// The 1-based Lua index this position occupies.
     fn lua_index(self) -> usize {
         self.pos + 1 + if self.per_character { MAX_MACROS } else { 0 }
     }
 }
 
 impl MacroState {
-    /// The macro at a 1-based Lua index, or `None` for an empty/out-of-range slot.
+    /// The macro at a 1-based Lua index.
     pub fn get(&self, index: usize) -> Option<&MacroView> {
         let at = MacroIndex::split(index)?;
         self.list(at.per_character).get(at.pos)
@@ -133,10 +98,7 @@ impl MacroState {
         }
     }
 
-    /// `GetMacroIndexByName`'s search — case-insensitive, account list first (the reference walks
-    /// the one flat 1..36 space, and the account half is its low end). `0` when nothing matches,
-    /// which is the reference's own miss value (a number, never nil — the shipped
-    /// `Usage: GetMacroIndexByName(name)` binding pushes a number).
+    /// `GetMacroIndexByName`: case-insensitive, account list first; 0 on a miss, as in 1.12.
     pub fn index_by_name(&self, name: &str) -> usize {
         for per_character in [false, true] {
             for (i, m) in self.list(per_character).iter().enumerate() {
@@ -153,16 +115,14 @@ impl MacroState {
     }
 }
 
-/// Clamp a player-supplied string to a character (not byte) cap — the EditBox's own
-/// `max_letters` rule, applied again at the API so a script cannot store what the box refuses.
+/// Clamp to a count of characters, not bytes, as the edit boxes do, so a script cannot store more.
 fn clamp_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
 impl super::UiScript {
-    /// Seed the whole macro table, replacing whatever was there — the app's load path
-    /// (`benilla-config/macros/…`). Does **not** mark the table dirty: the app already has what it just
-    /// handed over, and a save triggered by its own load would be a write-back loop.
+    /// Seed the whole table from the app's load. It does not mark the table dirty, or the load
+    /// would trigger a save.
     pub fn set_macros(&mut self, state: MacroState) {
         let mut model = self.model_mut();
         model.macros = state;
@@ -170,43 +130,33 @@ impl super::UiScript {
         model.macros_generation += 1;
     }
 
-    /// Read the live macro table — the app's save path, taken when [`Self::take_macros_dirty`]
-    /// reports a change.
+    /// The live table, for the app's save.
     pub fn macros(&self) -> MacroState {
         self.model_mut().macros.clone()
     }
 
-    /// Did a script mutate the table since the last call (`CreateMacro`/`EditMacro`/`DeleteMacro`)?
-    /// The app persists on a `true` and fires `UPDATE_MACROS` — the reference's own event for
-    /// exactly this transition (byte-verified string at `0x452460`).
+    /// Whether a script changed the table since the last call; the app then saves it and fires
+    /// `UPDATE_MACROS` (`0x452460`).
     pub fn take_macros_dirty(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().macros_dirty)
     }
 
-    /// Push the icon-chooser list — the full texture paths `GetMacroIconInfo` serves, in the order
-    /// the popup's grid shows them. Built by the app off `SpellIcon.dbc` (`benilla::ui_macro`).
+    /// Push the icon chooser's texture paths in grid order, built by the app from `SpellIcon.dbc`.
     pub fn set_macro_icons(&mut self, icons: Vec<String>) {
         self.model_mut().macro_icons = icons;
     }
 
-    /// The macro table's **generation** — bumped by every seed and every mutation, so a per-frame
-    /// consumer can gate an expensive re-resolve on a `u64` compare instead of cloning the table
-    /// to diff it. The action bar's identity feed reads it as a third input beside its `dirty`
-    /// flag and the item-template epoch (the same shape decision 0660 gave that one): a macro's
-    /// icon changes when the macro is edited, which touches neither of the other two.
-    ///
-    /// Distinct from [`Self::take_macros_dirty`] on purpose — that one is a *drained* edge with
-    /// exactly one owner (the save), and a second consumer draining it would silently eat the
-    /// other's save.
+    /// Bumped by every seed and every change, so a per-frame reader such as the action bar compares
+    /// a `u64` instead of diffing the table. Not [`Self::take_macros_dirty`]: that drain has one
+    /// owner, the save, and a second reader would steal its edge.
     pub fn macros_generation(&self) -> u64 {
         self.model_mut().macros_generation
     }
 }
 
-/// `CreateMacro(name, iconIndex, body, local, perCharacter)` — the shipped binding's own argument
-/// list (byte-verified usage string at `0x44cb74`). Returns the new macro's 1-based index, or
-/// `None` on the two failures the client names in its own log lines (`0x44cbb4`/`0x44cbdc`):
-/// an empty name, and a full tab.
+/// `CreateMacro(name, iconIndex, body, local, perCharacter)` (usage string `0x44cb74`): the new
+/// 1-based index, or `None` on the two failures the client logs (`0x44cbb4`, `0x44cbdc`), an empty
+/// name and a full tab.
 fn create_macro(
     model: &mut Model,
     name: &str,
@@ -239,11 +189,9 @@ fn create_macro(
     Some(MacroIndex { per_character, pos }.lua_index())
 }
 
-/// `EditMacro(index, name, icon, body, local)` — every argument is optional past the index, and an
-/// omitted one leaves that field alone. That is load-bearing, not defensive: the shipped UI calls
-/// it **twice with disjoint halves** — `EditMacro(sel, name, icon)` from the rename popup and
-/// `EditMacro(sel, nil, nil, text)` from `MacroFrame_SaveMacro` — so a nil that overwrote would
-/// blank the body every time the name changed.
+/// `EditMacro(index, name, icon, body, local)`: an omitted argument leaves its field alone, since
+/// the stock UI calls it with disjoint halves, `(sel, name, icon)` from the rename popup and
+/// `(sel, nil, nil, text)` from `MacroFrame_SaveMacro`.
 fn edit_macro(
     model: &mut Model,
     index: usize,
@@ -256,8 +204,7 @@ fn edit_macro(
     let entry = model.macros.list_mut(at.per_character).get_mut(at.pos)?;
     if let Some(name) = name {
         let name = clamp_chars(name.trim(), MAX_MACRO_NAME);
-        // An explicit blank is refused rather than stored: `MacroPopupOkayButton_Update` already
-        // keeps OKAY disabled on an empty box, so reaching here means a script did it.
+        // A blank name is ignored; the stock popup cannot send one (`MacroPopupOkayButton_Update`).
         if !name.is_empty() {
             entry.name = name;
         }
@@ -276,11 +223,8 @@ fn edit_macro(
     Some(index)
 }
 
-/// `DeleteMacro(index)` — removes the slot and **closes the gap**, which is why every action-bar
-/// slot holding a higher macro index would now point at the wrong macro. The reference has the
-/// same property (its own list is dense, and `MacroFrame_Update` draws it densely); the app's
-/// action feed re-resolves against the shifted table, so a bar button follows the slot, not the
-/// macro. Named in decision 0983 as faithful-and-surprising rather than fixed.
+/// `DeleteMacro(index)` closes the gap, as the reference's dense list does, so an action-bar
+/// button holding a higher index then shows the next macro.
 fn delete_macro(model: &mut Model, index: usize) -> bool {
     let Some(at) = MacroIndex::split(index) else {
         return false;
@@ -295,14 +239,9 @@ fn delete_macro(model: &mut Model, index: usize) -> bool {
     true
 }
 
-/// `PickupMacro(index)` — the macro button's `OnDragStart` and the selected-macro button's
-/// `OnClick` (both in the shipped `Blizzard_MacroUI.xml`). Loads the cursor with the macro
-/// payload (the client's mode **8**, `[0xb4e2fc]`), which `PlaceAction 0x4e62e0` then packs as
-/// `macroId | 0x40000000`.
-///
-/// Refuses while the cursor already holds something, matching `PickupSpell`'s precedent: a macro
-/// button is a SOURCE, never a fit-checked drop target, so silently discarding the held payload
-/// would be worse than doing nothing.
+/// `PickupMacro(index)`: the macro payload (cursor mode 8, `[0xb4e2fc]`), which `PlaceAction`
+/// (`0x4e62e0`) packs as `macroId | 0x40000000`. Refused while the cursor holds anything; the
+/// reference's setter (`0x494f80`) clears the cursor first instead.
 fn pickup_macro(model: &mut Model, index: usize) -> bool {
     if model.cursor.is_some() {
         return false;
@@ -319,7 +258,6 @@ fn pickup_macro(model: &mut Model, index: usize) -> bool {
     true
 }
 
-/// Coerce a Lua argument that the shipped UI passes as either a real value or `nil`/`false`.
 fn opt_string(v: Option<&Value>) -> Option<String> {
     match v {
         Some(Value::String(s)) => Some(s.to_string_lossy()),
@@ -327,10 +265,9 @@ fn opt_string(v: Option<&Value>) -> Option<String> {
     }
 }
 
-/// The reference's own truthiness for the `local`/`perCharacter` flags: `MacroPopupOkayButton_OnClick`
-/// passes the Lua boolean `(MacroFrame.macroBase > 0)`, and the shipped `local` argument is always
-/// `nil`. `0` reads falsy here (the numeric convention `UseAction`'s `checkCursor` established —
-/// `super::action::truthy_nonzero`'s law, shared so the two cannot drift).
+/// The `local` and `perCharacter` flags: `nil`, `false` and `0` are false, as in `UseAction`. The
+/// reference reads them with `GetBoolOrDefault` (`0x6f1c10`), which also takes `"0"` and any
+/// number that truncates to 0 as false; the stock popup passes a Lua boolean and never `local`.
 fn flag(v: Option<&Value>) -> bool {
     v.is_some_and(super::action::truthy_nonzero)
 }
@@ -339,7 +276,6 @@ fn flag(v: Option<&Value>) -> bool {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetNumMacros() -> numAccountMacros, numCharacterMacros.
     g.set(
         "GetNumMacros",
         lua.create_function(|lua, ()| {
@@ -351,8 +287,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetMacroInfo(index) -> name, texture, body, isLocal. An empty/out-of-range slot answers a
-    // single nil (the out-of-range shape every list binding in this crate uses).
     g.set(
         "GetMacroInfo",
         lua.create_function(|lua, index: usize| {
@@ -377,7 +311,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetMacroIndexByName(name) -> index (0 = no match).
     g.set(
         "GetMacroIndexByName",
         lua.create_function(|lua, name: String| {
@@ -386,7 +319,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetNumMacroIcons() -> the chooser list's length.
     g.set(
         "GetNumMacroIcons",
         lua.create_function(|lua, ()| {
@@ -395,7 +327,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetMacroIconInfo(index) -> texture path; 1-based, out of range -> nil.
     g.set(
         "GetMacroIconInfo",
         lua.create_function(|lua, index: usize| {
@@ -413,10 +344,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CreateMacro(name, iconIndex, body, local, perCharacter) -> index | nil.
-    // `iconIndex` is an index into the chooser list (the shipped popup passes
-    // `MacroPopupFrame.selectedIcon`), resolved to a path HERE so the stored macro keeps a name
-    // that survives a restart.
+    // CreateMacro stores `iconIndex`, an index into the chooser list, as its path.
     g.set(
         "CreateMacro",
         lua.create_function(|lua, args: MultiValue| {
@@ -435,8 +363,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // EditMacro(index, name, icon, body, local) -> index | nil. Absent arguments leave their
-    // field alone (see `edit_macro` — the shipped UI relies on it).
     g.set(
         "EditMacro",
         lua.create_function(|lua, args: MultiValue| {
@@ -445,8 +371,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(Value::Nil);
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // An icon argument that is present-and-resolvable replaces; an absent/nil one leaves
-            // the icon alone. (`MacroFrame_SaveMacro` passes nil here on every body-only save.)
+            // A nil icon leaves the icon alone: `MacroFrame_SaveMacro` passes nil on every save.
             let texture = match a.get(2) {
                 None | Some(Value::Nil) => None,
                 other => Some(icon_path(&model, other)),
@@ -485,8 +410,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Resolve a chooser-list **index** argument to a texture path. A string is taken as a path
-/// already (nothing shipped does that, but a script may, and the store holds paths anyway).
+/// Resolve a chooser-list index to its texture path; a string is taken as a path already.
 fn icon_path(model: &Model, v: Option<&Value>) -> Option<String> {
     match v {
         Some(Value::String(s)) => Some(s.to_string_lossy()),
@@ -514,8 +438,6 @@ mod tests {
         s
     }
 
-    /// The whole create → read → edit → delete round trip through the reference's own signatures,
-    /// including the index space's account/character split.
     #[test]
     fn the_macro_api_round_trip_over_the_two_tabs() {
         let s = seeded();
@@ -525,12 +447,10 @@ mod tests {
             (0, 0)
         );
 
-        // Account tab: perCharacter falsy -> index 1.
         let i = s
             .eval::<i64>(r#"return CreateMacro("Ambush", 1, "/cast Ambush", nil, nil)"#)
             .unwrap();
         assert_eq!(i, 1);
-        // Character tab: perCharacter truthy -> the 19 base.
         let j = s
             .eval::<i64>(r#"return CreateMacro("Bolt", 3, "/cast Fireball", nil, true)"#)
             .unwrap();
@@ -541,7 +461,6 @@ mod tests {
             (1, 1)
         );
 
-        // GetMacroInfo's four returns, with the icon index resolved to a path at create time.
         let (name, tex, body, is_local) = s
             .eval::<(String, String, String, Value)>(
                 "local n, t, b, l = GetMacroInfo(1) return n, t, b, l",
@@ -553,7 +472,6 @@ mod tests {
         );
         assert_eq!(is_local, Value::Nil);
 
-        // By-name is case-insensitive and searches the account list first; a miss is 0.
         assert_eq!(
             s.eval::<i64>(r#"return GetMacroIndexByName("ambush")"#)
                 .unwrap(),
@@ -570,7 +488,7 @@ mod tests {
             0
         );
 
-        // Delete closes the gap: the character macro keeps its own base.
+        // The character macro keeps its own base after the delete.
         assert!(s.eval::<bool>("return DeleteMacro(1)").unwrap());
         assert_eq!(
             s.eval::<(i64, i64)>("local a, c = GetNumMacros() return a, c")
@@ -581,14 +499,12 @@ mod tests {
         assert_eq!(s.eval::<String>("return GetMacroInfo(19)").unwrap(), "Bolt");
     }
 
-    /// `EditMacro`'s partial-update law — the shipped UI's two disjoint calls. A rename must not
-    /// blank the body, and a body save must not blank the name or icon.
     #[test]
     fn edit_macro_leaves_omitted_fields_alone() {
         let s = seeded();
         s.run(r#"CreateMacro("Old", 1, "/cast Ambush")"#).unwrap();
 
-        // MacroPopupOkayButton_OnClick's edit form: name + icon, no body.
+        // MacroPopupOkayButton_OnClick's form: name and icon.
         s.run(r#"EditMacro(1, "New", 2)"#).unwrap();
         let (name, tex, body) = s
             .eval::<(String, String, String)>("local n, t, b = GetMacroInfo(1) return n, t, b")
@@ -597,7 +513,7 @@ mod tests {
         assert_eq!(tex, "Interface\\Icons\\Ability_BackStab");
         assert_eq!(body, "/cast Ambush", "the body survives a rename");
 
-        // MacroFrame_SaveMacro's form: body only, name and icon nil.
+        // MacroFrame_SaveMacro's form: the body alone.
         s.run(r#"EditMacro(1, nil, nil, "/cast Backstab")"#)
             .unwrap();
         let (name, tex, body) = s
@@ -614,7 +530,6 @@ mod tests {
         );
     }
 
-    /// The two refusals the client names in its own log lines, and the caps the edit boxes carry.
     #[test]
     fn create_refuses_a_blank_name_and_a_full_tab_and_clamps_the_caps() {
         let s = seeded();
@@ -636,14 +551,13 @@ mod tests {
                 .unwrap(),
             "the 19th account macro is refused"
         );
-        // …and the character tab is a separate 18.
+        // The character tab is a separate 18.
         assert_eq!(
             s.eval::<i64>(r#"return CreateMacro("c", 1, "", nil, 1)"#)
                 .unwrap(),
             19
         );
 
-        // The caps are the shipped boxes' own letters= values, enforced at the API too.
         let s = seeded();
         s.run(&format!(
             r#"CreateMacro("{}", 1, "{}")"#,
@@ -658,8 +572,6 @@ mod tests {
         assert_eq!(body.chars().count(), MAX_MACRO_BODY);
     }
 
-    /// The dirty flag is the app's save trigger: every mutation raises it, a seed never does, and
-    /// the drain clears it.
     #[test]
     fn mutations_raise_the_dirty_flag_and_a_seed_does_not() {
         let mut s = seeded();
@@ -675,11 +587,9 @@ mod tests {
         s.run("DeleteMacro(1)").unwrap();
         assert!(s.take_macros_dirty());
 
-        // A no-op delete changes nothing and raises nothing.
         s.run("DeleteMacro(7)").unwrap();
         assert!(!s.take_macros_dirty());
 
-        // The app's own seed must not trigger a save (a write-back loop).
         s.set_macros(MacroState {
             account: vec![MacroView {
                 name: "loaded".into(),
@@ -691,7 +601,6 @@ mod tests {
         assert_eq!(s.macros().account.len(), 1);
     }
 
-    /// `PickupMacro` loads the cursor with the macro payload, and refuses while holding.
     #[test]
     fn pickup_macro_loads_the_cursor_and_refuses_while_holding() {
         use crate::script::cursor::CursorPayload;
@@ -712,7 +621,6 @@ mod tests {
                 texture: Some("Interface\\Icons\\Ability_Ambush".into()),
             }))
         );
-        // GetCursorInfo's Era shape for a macro: the kind word + the index.
         assert_eq!(
             s.eval::<(String, i64)>("local k, i = GetCursorInfo() return k, i")
                 .unwrap(),
@@ -724,8 +632,6 @@ mod tests {
         );
     }
 
-    /// The chooser list is the app's, served 1-based, and an out-of-range index is nil rather
-    /// than an error (`MacroPopupFrame_Update` indexes past the end on the last row every time).
     #[test]
     fn the_icon_chooser_list_is_one_based_with_a_nil_tail() {
         let s = seeded();

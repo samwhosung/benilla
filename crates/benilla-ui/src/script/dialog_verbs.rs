@@ -1,31 +1,13 @@
-//! The dialog engine's own verbs — the bindings the stock `StaticPopup.lua`
-//! bodies call that no window of ours had ever needed, each built to the reference's own shape
-//! (VERIFIED at the bytes unless a line here says INFERRED):
-//!
-//! | binding | args → returns | here |
-//! |---|---|---|
-//! | `GetInstanceBootTimeRemaining()` | 0 → 1 number, whole seconds, 0 idle | reads the app's deadline |
-//! | `AcceptAreaSpiritHeal()` | 0 → 0 | queues the cached healer for the app to send `0x2E3`; SILENT with none cached |
-//! | `CancelAreaSpiritHeal()` | 0 → 0 | the generic cancel-aura of spell 2584 plus `AREA_SPIRIT_HEALER_OUT_OF_RANGE` |
-//! | `GetAreaSpiritHealerTime()` | 0 → 1 number, whole seconds | reads the app's deadline |
-//! | `AcceptBattlefieldPort(index, accept)` | 2 → 0 | raises on a non-number index, silent off 1..3; the optional-bool answer |
-//! | `CancelMeetingStoneRequest()` | 0 → 0 | queued; the app applies the leadership gate |
-//! | `IsInMeetingStoneQueue()` | 0 → the number `1` or `nil`, one value always | `[0xb72038] != 0` (1974) |
-//! | `GetMeetingStoneStatusText()` | 0 → string or `nil` | the cached text `[0xb7203c]`, `nil` while empty |
-//! | `CheckPetUntrainerDist()` | 0 → `1` or `nil` | the app's latch-and-range flag |
-//! | `ConfirmPetUnlearn()` | 0 → 0 | counted; the app holds the latch and the money gate |
-//!
-//! The pet pair is the talent-wipe pair's twin (`talent.rs`), latch for latch. `ForceLogout` is
-//! `session.rs`'s. `ReplaceTradeEnchant` is not here: it rides the trade-slot enchant targeting
-//! this engine does not build yet, and stays a named gap.
+//! The verbs the stock `StaticPopup.lua` dialogs call: the instance-boot and area spirit healer
+//! clocks, the battlefield port answer, the meeting stone pair and the pet untrain pair.
 
 use mlua::{Lua, Value};
 
 use super::binding_abi::{bool_or_default, coerced_number, flag};
 use super::Model;
 
-/// The area spirit healer's aura, `0xA18` — the one spell id `CancelAreaSpiritHeal` cancels, and
-/// the only cancel-aura argument that also fires `AREA_SPIRIT_HEALER_OUT_OF_RANGE` (`0x6e70b6`).
+/// The area spirit healer's aura (`0xA18`), the only cancel-aura spell that also fires
+/// `AREA_SPIRIT_HEALER_OUT_OF_RANGE` (`0x6e70b6`).
 pub const AREA_SPIRIT_HEALER_SPELL: u32 = 2584;
 
 impl super::UiScript {
@@ -51,7 +33,7 @@ impl super::UiScript {
         model.area_spirit_secs = secs;
     }
 
-    /// `AcceptAreaSpiritHeal()` calls since the last drain (each one a `0x2E3` to send).
+    /// `AcceptAreaSpiritHeal()` calls since the last drain, each a `0x2E3` to send.
     pub fn take_area_spirit_accepts(&mut self) -> u32 {
         std::mem::take(&mut self.model_mut().area_spirit_accepts)
     }
@@ -66,9 +48,8 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().meeting_stone_cancels)
     }
 
-    /// The meeting stone's two globals (1974): the queued area id (`[0xb72038]`, `0` = none) and
-    /// the cached status text (`[0xb7203c]`, `None` from process start to world enter and after
-    /// world leave). The app rebuilds the text; the VM only hands it back.
+    /// The meeting stone's two globals: the queued area id (`0xb72038`, 0 for none) and the
+    /// cached status text (`0xb7203c`, `None` outside the world), which the app rebuilds.
     pub fn set_meeting_stone(&mut self, area: u32, status_text: Option<String>) {
         let mut model = self.model_mut();
         model.meeting_stone_area = area;
@@ -79,8 +60,7 @@ impl super::UiScript {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // 0 args → 1 number: `max(deadline − now, 0) / 1000`, truncated (`GetInstanceBootTimeRemaining
-    // 0x48b620`).
+    // `0x48b620`: `max(deadline - now, 0) / 1000`, truncated.
     g.set(
         "GetInstanceBootTimeRemaining",
         lua.create_function(|lua, ()| {
@@ -89,8 +69,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `AcceptAreaSpiritHeal 0x48df20`: `if (cached healer == 0:0) return;` — SILENT — else `0x2E3`
-    // + the cached guid.
+    // `0x48df20`: silent with no healer cached, else `0x2E3` with the cached guid.
     g.set(
         "AcceptAreaSpiritHeal",
         lua.create_function(|lua, ()| {
@@ -101,11 +80,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // `CancelAreaSpiritHeal 0x48df30`: `0x6e7040(0xA18)` — the generic cancel-aura routine: the
-    // event fires (only for this spell), then `0x136` + `u32 2584`, no guid. The routine's refusal
-    // — AttributesEx bit 13 set, bit 2 clear, and `0x5ee290(player)` — never reaches its third leg
-    // for spell 2584: the shipped Spell.dbc fails the first two, checked against the data by the
-    // app's `spell_2584_never_trips_the_cancel_gate`. So the send is unconditional here.
+    // `0x48df30` runs the generic cancel-aura (`0x6e7040`): the event, then `0x136` with
+    // `u32 2584`, no guid. Its refusal gate (`AttributesEx` bit 13 set, bit 2 clear, then
+    // `0x5ee290`) never trips for 2584 in the shipped `Spell.dbc` (the app's
+    // `spell_2584_never_trips_the_cancel_gate`), so the send is unconditional.
     g.set(
         "CancelAreaSpiritHeal",
         lua.create_function(|lua, ()| {
@@ -117,7 +95,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // 0 → 1 number, whole seconds: `max(0, [0xb4e338] − now) / 1000`.
+    // Whole seconds: `max(0, [0xb4e338] - now) / 1000`.
     g.set(
         "GetAreaSpiritHealerTime",
         lua.create_function(|lua, ()| {
@@ -126,9 +104,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `AcceptBattlefieldPort 0x4ab3b0`: arg 1 must satisfy `lua_isnumber` (a number or a numeric
-    // string) or the binding RAISES `Usage:`; truncated, 1-based, off 1..=3 SILENT. Arg 2 is the
-    // reference's optional-boolean coercion (`0x6f1c10`, default 0), normalised to one byte.
+    // `0x4ab3b0`: an index failing `lua_isnumber` raises, one off 1..=3 is silent; the answer takes
+    // the reference's optional-boolean coercion (`0x6f1c10`, default no).
     g.set(
         "AcceptBattlefieldPort",
         lua.create_function(|lua, (index, accept): (Value, Value)| {
@@ -156,8 +133,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `CancelMeetingStoneRequest 0x4ca5a0`: `0x293`, empty; gated only on party leadership (the
-    // app's, which holds the party) — it clears nothing, the server's reply does.
+    // `0x4ca5a0`: an empty `0x293` gated on party leadership (the app's); only the reply clears.
     g.set(
         "CancelMeetingStoneRequest",
         lua.create_function(|lua, ()| {
@@ -167,9 +143,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `IsInMeetingStoneQueue()` (`0x4ca570`): `mov eax,1` on BOTH legs — the number `1` when the
-    // queued area is non-zero, else nil; never `0` (truthy in Lua — it would pin the icon shown),
-    // never a boolean.
+    // `0x4ca570`: the number `1` or nil, never `0` (truthy, it would pin the icon) or a boolean.
     g.set(
         "IsInMeetingStoneQueue",
         lua.create_function(|lua, ()| {
@@ -178,8 +152,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetMeetingStoneStatusText()` (`0x4ca5b0`): `lua_pushstring([0xb7203c])`, whose NULL leg
-    // tail-jumps to `lua_pushnil` — a string or nil, one value, never `""` for "nothing".
+    // `0x4ca5b0`: a string or nil, never `""` for nothing.
     g.set(
         "GetMeetingStoneStatusText",
         lua.create_function(|lua, ()| {
@@ -191,8 +164,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `CheckPetUntrainerDist 0x48d1c0`: `1` or `nil` — never `0`. The range test
-    // (`d² <= INTERACT_DISTANCE²`, a NaN OUT) is the app's, on the latched trainer.
+    // `0x48d1c0`: `1` or nil, never `0`; the app tests the range to the latched trainer.
     g.set(
         "CheckPetUntrainerDist",
         lua.create_function(|lua, ()| {
@@ -200,8 +172,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(flag(model.pet_untrainer_pending))
         })?,
     )?;
-    // `ConfirmPetUnlearn 0x48dca0`: the confirm arm — the latch's guid, the money gate
-    // (`ERR_NOT_ENOUGH_MONEY`, no packet) and `0x2F0`, all the app's; here the call is counted.
+    // `0x48dca0`: the app holds the latch and the money gate, and sends `0x2F0`.
     g.set(
         "ConfirmPetUnlearn",
         lua.create_function(|lua, ()| {
@@ -300,7 +271,6 @@ mod tests {
         );
     }
 
-    /// The meeting stone pair: `1`/nil on the area, string/nil on the text — one value each.
     #[test]
     fn the_meeting_stone_pair_answers_one_or_nil_and_string_or_nil() {
         let mut s = UiScript::new().unwrap();

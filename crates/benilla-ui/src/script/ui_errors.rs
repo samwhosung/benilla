@@ -1,24 +1,16 @@
-//! **The Lua-callable half of the client-local error-display family** — FrameXML-facing globals
-//! whose whole body, in the reference binary, is "push one catalog id at
-//! `CGGameUI::DisplayError`'s dispatcher". The engine-side half (a Rust system raising a key
-//! directly, e.g. the passive-on-bar refusal) pushes onto the same [`Model::ui_errors`] queue;
-//! the app drains it, resolves each key against the VM's own GlobalStrings and fires
-//! `UI_ERROR_MESSAGE` (`ui_action/feed.rs`) — which is byte-for-byte the reference route: catalog
-//! row → GlobalStrings text → FrameScript event `0xe0`, rendered by UIErrorsFrame.
+//! Lua globals whose whole body pushes one catalog id at `CGGameUI::DisplayError`'s dispatcher.
+//! Engine-side refusals share the [`Model::ui_errors`] queue, which the app resolves against
+//! GlobalStrings and fires as `UI_ERROR_MESSAGE` (event `0xe0`), the reference's route.
 //!
-//! First tenant: `NotWhileDeadError` (decision 1507's open item): registration pair `0x83e398`,
-//! C body `0x48d340` = `push 0x7e; call 0x496720; xor eax,eax; ret` — no argument read, no
-//! dead-check of its own, 0 return values, and its catalog row (`0xb4be70`, key
-//! `ERR_PLAYER_DEAD`) names sound `"NONE"`, so the toast is silent. FrameXML decides *when* to
-//! call it (ShowUIPanel's `whileDead` refusal, UIParent.lua l.663-666; ContainerFrame.lua l.147
-//! and l.190); the binding only displays.
+//! `NotWhileDeadError` (`0x48d340`, registered at `0x83e398`) is `push 0x7e; call 0x496720`: no
+//! argument, no dead check, no return, and a silent catalog row (`0xb4be70`). FrameXML decides
+//! when to call it (`UIParent.lua:663-666`, `ContainerFrame.lua:147` and `:190`).
 
 use mlua::Lua;
 
 use super::model::Model;
 
-/// The GlobalStrings key of catalog id `0x7e` — the row `NotWhileDeadError`'s pushed id resolves
-/// to ("You can't do that when you're dead.").
+/// Catalog id `0x7e`'s GlobalStrings key ("You can't do that when you're dead.").
 const NOT_WHILE_DEAD_KEY: &str = "ERR_PLAYER_DEAD";
 
 /// Register the error-display globals.

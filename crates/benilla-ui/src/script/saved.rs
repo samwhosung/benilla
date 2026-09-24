@@ -1,31 +1,15 @@
-//! **Saved variables** — the Lua-level settings that survive a restart.
+//! Saved variables: the Lua settings that survive a restart. The reference saves FrameXML's
+//! `RegisterForSave` globals to one file read back by a line parser (`0x4913b0`, strings and
+//! numbers only), and an addon's `## SavedVariables` to its own file, executed as a chunk before
+//! `ADDON_LOADED` (`AddOn_Load` `0x51f240`). Deviation: the `RegisterForSave` file is executed as a
+//! chunk too, because the line parser cannot carry a table. The app owns the files (`ui_saved`).
 //!
-//! The reference client has *two* mechanisms for this, byte-verified:
-//!
-//! 1. **`RegisterForSave("NAME")`** — the Lua API FrameXML uses for its **38** globals
-//!    (`LOCK_ACTIONBAR`, `CHAT_LOCKED`, the eleven `COMBAT_TEXT_*`, …), written to the flat
-//!    `WTF/Account/<ACC>/SavedVariables.lua` and read back by a hand-rolled line parser
-//!    (`0x4913b0`, strings and numbers only) before `VARIABLES_LOADED` fires.
-//! 2. **`## SavedVariables` in a `.toc`** — one file per addon, *executed as a Lua chunk*
-//!    (`AddOn_Load 0x51f240` step 4, before `ADDON_LOADED` at step 6). Exactly one stock addon
-//!    uses it: `Blizzard_TrainerUI`, for the trainer window's three filter globals.
-//!
-//! benilla's ported UI is **one FrameXML tree, not addons** ([`crate::script`]'s manifest), so the
-//! two collapse into one here: the *declaration* API is (1) — the one our XML can call — and the
-//! *load* is (2)'s, a real chunk, because we already have a Lua VM and executing beats a line
-//! parser that cannot carry a table. One file, install-scoped (the `benilla/` folder is already
-//! per-install, so it IS the reference's account scope). The host side — path,
-//! load seam, write triggers — is the app's `ui_saved` module's.
-//!
-//! **Deliberate divergences from the reference's serializer**, all recorded in 1128: LF and no
-//! leading blank line (its `"\r\n"`-per-variable prefix means every file it writes *starts* with a
-//! blank line); Rust's shortest round-tripping float formatting instead of `%.16g` (which loses a
-//! double needing 17 digits); table entries emitted in a **sorted** order instead of raw `pairs`
-//! order, so a settings file diffs cleanly; `\r` escaped rather than written raw (raw CR inside a
-//! quoted string is what the reference emits and it does not re-parse); and a cycle is dropped
-//! rather than cut by writing a lightuserdata sentinel *into the caller's table*. What is faithful
-//! is the grammar — `NAME = value`, `nil` written out, bracketed keys, TAB indent, trailing comma —
-//! so a file is readable by, and swappable with, the reference's own.
+//! The grammar is the reference's: `NAME = value`, `nil` written out, bracketed keys, tab indent,
+//! trailing comma. Deviations, so a file diffs cleanly and reloads exactly: LF line ends with no
+//! leading blank line, the shortest round-tripping float where the reference's `%.16g` can lose a
+//! digit, entries sorted rather than in `pairs` order, `\r` escaped where the reference writes it
+//! raw and cannot read it back, and a cycle dropped where the reference writes a sentinel into the
+//! caller's table.
 
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -34,21 +18,14 @@ use mlua::{Lua, Table, Value};
 
 use super::Model;
 
-/// How deep a table may nest before the serializer gives up. The reference recurses uncapped (only
-/// its indent saturates at `0x80`); a settings file is not a place where 32 levels is anything but
-/// a bug, and a bound is what keeps a hostile or accidental structure from eating the stack.
+/// Deviation: nesting stops at 32 where the reference recurses uncapped (its indent saturates at
+/// `0x80`), so a hostile structure cannot exhaust the stack.
 const MAX_DEPTH: usize = 32;
 
 impl super::UiScript {
-    /// **Hold a saved-variables file that did not load** — the shutdown write must leave it alone.
-    ///
-    /// A file that fails as a chunk (a hand edit with a typo; a database past Lua's 262,143
-    /// constants per chunk) leaves its globals at the defaults the code assigned, and the write at
-    /// logout would then replace the player's whole file with those defaults. The reference does
-    /// exactly that — it discards an unparseable file and writes whole from live values
-    /// (`0x51f865`–`0x51f970`) — and both load sites here already promised otherwise ("left on
-    /// disk untouched"); this is what makes the promise true. The cost is this
-    /// session's changes to that one file, which is the trade the promise named.
+    /// Hold a saved-variables file that failed to load, so the shutdown write leaves it alone.
+    /// Deviation: the reference rewrites it from the live defaults (`0x51f865`–`0x51f970`), which
+    /// would cost the player the whole file for one typo in a hand edit.
     pub fn hold_saved_file(&self, path: &std::path::Path) {
         let mut model = self.model_mut();
         if !model.held_saved_files.iter().any(|p| p == path) {
@@ -56,38 +33,26 @@ impl super::UiScript {
         }
     }
 
-    /// Did this session's load fail on `path`? ([`Self::hold_saved_file`].)
+    /// Whether this session's load failed on `path`.
     pub fn saved_file_held(&self, path: &std::path::Path) -> bool {
         self.model_ref().held_saved_files.iter().any(|p| p == path)
     }
 
-    /// The registered names, in registration order — what the host writes out (the reference's
-    /// own emission order, and stable across runs because the load order is).
+    /// The registered names in registration order, the reference's own write order.
     pub fn saved_variable_names(&self) -> Vec<String> {
         self.model_mut().saved_names.clone()
     }
 
-    /// Serialize every registered global into the settings file's body, `NAME = value` per line.
-    ///
-    /// A name whose value cannot round-trip through a Lua chunk (a function, a widget reference,
-    /// any userdata — and `inf`/`NaN`, which are not Lua literals) is **skipped with a warning**
-    /// rather than written as something that would fail to load; the reference loses the same set,
-    /// silently. `nil` IS written (`NAME = nil`), which is how the reference records a toggle that
-    /// has never been touched.
-    ///
-    /// **Bytes, not text**: a Lua string is a byte string, and the file is executed as a chunk
-    /// that reads bytes (1193), so the writer is the one place that could change a value — and it
-    /// did. Values and keys went through `to_string_lossy`, so a string an addon cut mid-codepoint
-    /// or packed with high bytes (a compression library's output) came back from the next login as
-    /// U+FFFD, and two such keys could fold into one entry. The reference writes the bytes raw.
+    /// Serialize every registered global as `NAME = value` lines, in bytes, since a Lua string is
+    /// bytes and the reference writes them raw. A value with no literal (a function, userdata,
+    /// `inf`, `NaN`) is skipped with a warning where the reference drops it silently; `nil` is
+    /// written, as the reference records an untouched toggle.
     pub fn saved_variables_bytes(&self) -> Vec<u8> {
         self.saved_variables_bytes_for(&self.saved_variable_names())
     }
 
-    /// [`UiScript::saved_variables_bytes`] over an explicit name list — an addon's own
-    /// `## SavedVariables` set (1188 phase 3), which is declared in its manifest rather than
-    /// through `RegisterForSave`. Same grammar, same skip rules; only the source of the names
-    /// differs, which is exactly the difference between the reference's two mechanisms.
+    /// [`UiScript::saved_variables_bytes`] over an explicit name list, an addon's own
+    /// `## SavedVariables` set.
     pub fn saved_variables_bytes_for(&self, names: &[String]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut unwritable = Vec::new();
@@ -120,12 +85,9 @@ impl super::UiScript {
     }
 }
 
-/// One Lua value as the text of a Lua expression, or `None` when it cannot be one.
-///
-/// `depth` is the indent level of the *contents* of a table at this position (so a top-level value
-/// starts at 1); `seen` carries the table identities on the current path — a repeat is a cycle and
-/// drops that entry. Note it is the *path*, not every table ever visited: a shared subtable is
-/// legitimately written twice (as it must be, since the file has no way to express aliasing).
+/// One Lua value as Lua expression text, or `None` when it has none. `depth` is the indent of a
+/// table's contents here (1 at top level); `seen` holds the tables on the current path, so a repeat
+/// is a cycle and drops, while a shared subtable is written each time it appears.
 fn serialize(v: &Value, depth: usize, seen: &mut HashSet<*const c_void>) -> Option<Vec<u8>> {
     match v {
         Value::Nil => Some(b"nil".to_vec()),
@@ -134,16 +96,14 @@ fn serialize(v: &Value, depth: usize, seen: &mut HashSet<*const c_void>) -> Opti
         Value::Number(n) => number(*n).map(String::into_bytes),
         Value::String(s) => Some(quote(&s.as_bytes())),
         Value::Table(t) => table(t, depth, seen),
-        // Functions, threads, userdata (every widget reference is one — a frame's Lua value is a
-        // table whose `[0]` is a lightuserdata handle, written at `0x701bd0`) cannot be written as
-        // a literal.
+        // Functions, threads and userdata have no literal; a frame's `[0]` handle is a
+        // lightuserdata (`0x701bd0`).
         _ => None,
     }
 }
 
-/// A Lua number literal. Integral values print without a fractional part (`1`, not `1.0` — the
-/// reference's `%.16g` does the same, and our XML compares these against integers); everything
-/// else takes Rust's shortest form that round-trips exactly. `inf`/`NaN` have no literal at all.
+/// A Lua number literal: integral values bare, as the reference's `%.16g` prints them, others in
+/// the shortest form that round-trips; `inf` and `NaN` have none.
 fn number(n: f64) -> Option<String> {
     if !n.is_finite() {
         return None;
@@ -154,10 +114,8 @@ fn number(n: f64) -> Option<String> {
     Some(format!("{n}"))
 }
 
-/// A quoted Lua string. The reference escapes exactly four characters (`\000`, `\n`, `\"`, `\\`)
-/// and writes CR and every high byte raw; we add `\r` (raw CR in a quoted string is not something
-/// its own loader could read back) and keep every other byte raw, so localized text stays legible
-/// and a byte string that is not UTF-8 round-trips unchanged.
+/// A quoted Lua string: the reference's four escapes (`\000`, `\n`, `\"`, `\\`) plus `\r`, every
+/// other byte raw.
 fn quote(s: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len() + 2);
     out.push(b'"');
@@ -175,20 +133,10 @@ fn quote(s: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A table constructor: `{\n<tabs>[key] = value,\n<tabs-1>}`. Keys are always bracketed (the
-/// reference's shape — its writer emits `[key] = value` for **every** table shape and never a bare
-/// positional entry, byte-verified (no branch in `[0x704607, 0x704989)` writes a value without a
-/// bracketed key, for any table shape — and it sidesteps every reserved-word and non-identifier
-/// question); entries are **sorted**
-/// — integer keys ascending, then strings alphabetically — so the file is stable across runs
-/// instead of following Lua's hash order.
-///
-/// **A list written this way still reloads as a list**, and that is a property of the *parser*, not
-/// of this emitter: 1.12's `recfield` gives a `[expr] = v` field neither size hint, so the table is
-/// born on the dummy node, the first store rehashes, and the dense integer keys land in an array
-/// part that `next` walks ascending. Our vendored parser was restored to that placement in decision
-/// 2111 — before it, this exact file shape came back keyed 1..n in the *hash* part and Bagnon's
-/// keyring drew first.
+/// A table constructor, `{\n<tabs>[key] = value,\n<tabs-1>}`: every key bracketed, as the
+/// reference writes for every table shape (`[0x704607, 0x704989)`), integer keys ascending, then
+/// strings. It reloads a list as a list through the 1.12 parser: `recfield` gives a `[k] = v` field
+/// no size hint, so dense integer keys land in the array part, which `next` walks in order.
 fn table(t: &Table, depth: usize, seen: &mut HashSet<*const c_void>) -> Option<Vec<u8>> {
     if depth > MAX_DEPTH || !seen.insert(t.to_pointer()) {
         return None;
@@ -210,7 +158,7 @@ fn table(t: &Table, depth: usize, seen: &mut HashSet<*const c_void>) -> Option<V
     }
     seen.remove(&t.to_pointer());
     ints.sort_by_key(|(k, _)| *k);
-    // Byte order — the same order `str`'s `Ord` gave every UTF-8 key before.
+    // Byte order, the same as `str` order for UTF-8 keys.
     strs.sort_by(|a, b| a.0.cmp(&b.0));
 
     let indent = "\t".repeat(depth);
@@ -235,14 +183,8 @@ fn table(t: &Table, depth: usize, seen: &mut HashSet<*const c_void>) -> Option<V
     Some(out)
 }
 
-/// Register the `RegisterForSave` global.
-///
-/// Divergence, disclosed: the reference's binding is **taint-gated to Blizzard code**
-/// (`0x4884e0`), because a third-party addon writing into the shared account file would be a
-/// security surface. benilla has no taint model yet and loads no third-party addons, so the gate
-/// has nothing to gate; when addon loading lands, this is one of the bindings that needs it (and
-/// an addon's own `## SavedVariables` file is the mechanism it should use instead — the `.toc`
-/// directive [`crate::toc::Toc::list`] already parses).
+/// Register `RegisterForSave`, with no taint gate: the reference refuses it outside Blizzard code
+/// (`0x4884e0`), and benilla has no taint model.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "RegisterForSave",
@@ -260,17 +202,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use crate::script::UiScript;
 
-    /// **A saved LIST comes back a list** — Bagnon's inventory grid, at 1:1 scale, and the
-    /// round-trip half of decision 2111 (the dialect half is `lua50`'s own tests).
-    ///
-    /// `Bagnon_Core` keeps its frame's bag order in a saved table, sorts it so the keyring
-    /// (`KEYRING_CONTAINER` = -2) lands last, and then lays the grid out by walking it with
-    /// **`pairs`** (`BagnonFrame_Generate`'s `for _, bagID in pairs(BagnonSets[frameName].bags)`).
-    /// Session one has no file: the table is the literal `{-2,0,1,2,3,4}`, an array table, and
-    /// `pairs` walks it 1..6 — keyring last, as the reference shows it. Session two reads the
-    /// serializer's `[k] = v` form back, and before 2111 that came back keyed 1..6 in the **hash**
-    /// part, walked in slot order, with key 6 — the keyring — **first**, ahead of the backpack.
-    /// That is the director's report; the writer is unchanged and the parser is what was wrong.
+    /// Bagnon's shape: a saved bag list sorted with the keyring (-2) last, laid out by `pairs`.
     #[test]
     fn a_saved_list_still_walks_in_index_order_after_a_restart() {
         let s = UiScript::new().unwrap();
@@ -305,8 +237,6 @@ mod tests {
         );
     }
 
-    /// The round trip that is the whole point: what the writer emits, the loader's own chunk
-    /// restores — through a fresh VM, exactly as a restart does.
     #[test]
     fn the_declared_globals_round_trip_through_a_fresh_vm() {
         let mut s = UiScript::new().unwrap();
@@ -342,8 +272,6 @@ mod tests {
         );
         let bytes = s.saved_variables_bytes();
         let text = String::from_utf8(bytes).expect("every value here is UTF-8");
-        // The grammar: one statement per line, `nil` written out, integral numbers bare, keys
-        // bracketed and SORTED (integers ascending, then strings), tab-indented, trailing comma.
         assert_eq!(
             text,
             "TRAINER_FILTER_AVAILABLE = 1\n\
@@ -362,7 +290,6 @@ mod tests {
         );
         assert!(s.take_warnings().is_empty(), "nothing was unserializable");
 
-        // A fresh VM (the restart), the file's chunk, and every value is back.
         let fresh = UiScript::new().unwrap();
         fresh.run(&text).unwrap();
         assert_eq!(
@@ -388,8 +315,6 @@ mod tests {
             .unwrap());
     }
 
-    /// A value with no Lua literal is skipped and named, never written as something that would
-    /// break the next load — the one place we improve on the reference, which loses these silently.
     #[test]
     fn unserializable_values_are_skipped_with_one_warning() {
         let mut s = UiScript::new().unwrap();
@@ -413,14 +338,9 @@ mod tests {
         let warns = s.take_warnings();
         assert_eq!(warns.len(), 1, "one line, not one per name: {warns:?}");
         assert!(warns[0].contains("A_FUNCTION") && warns[0].contains("NOT_A_NUMBER"));
-        // And what it wrote is loadable.
         UiScript::new().unwrap().run_chunk(&text).unwrap();
     }
 
-    /// **A byte string comes back as the same bytes.** A Lua string is bytes; an addon that cuts
-    /// a UTF-8 name mid-codepoint with `string.sub`, or packs data with `string.char(≥128)` (a
-    /// compression library's output), stores something that is not UTF-8. The writer used to
-    /// decode lossily, so the next login read U+FFFD — and two such keys folded into one entry.
     #[test]
     fn a_byte_string_that_is_not_utf8_round_trips_unchanged() {
         let s = UiScript::new().unwrap();

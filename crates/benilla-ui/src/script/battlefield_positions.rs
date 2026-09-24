@@ -1,31 +1,22 @@
-//! The battleground **position** family (fed by the wire handler `0x4aad40` for
-//! opcode `0x2E9`): the six verbs the stock
-//! `WorldMapFrame.lua` and `Blizzard_BattlefieldMinimap.lua` poll to place teammates and the
-//! flag carrier on the map.
-//!
-//! The wire carries raw world floats for the teammates outside the requester's group; the
-//! reference filters out itself, its four party slots and its raid roster, prefers the live
-//! object's position over the packet's, and normalizes through the world-map projection under the
-//! active queue slot's map — all app-side facts here, so the app pushes the finished list every
-//! frame ([`BattlefieldPositionView`], already filtered and projected) and the VM owns the getters'
-//! shapes: three values on every non-raising leg, `(0, 0, nil)` off the list.
+//! The battleground position verbs `WorldMapFrame.lua` and `Blizzard_BattlefieldMinimap.lua` poll
+//! to place teammates and the flag carrier (opcode `0x2E9`, handler `0x4aad40`). The reference
+//! drops itself, its party and its raid, prefers a live object's position and projects onto the
+//! active slot's map; the app does all that and pushes the finished list here.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::number_arg;
 use super::Model;
 
-/// One teammate as the app resolved it: the map-normalized pair (`(0, 0)` = off the displayed
-/// map) and the name, `None` while the name cache has not answered.
+/// One teammate: map-normalized position, `(0, 0)` off the displayed map, and name if known.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct BattlefieldPositionView {
     pub uv: (f32, f32),
     pub name: Option<String>,
 }
 
-/// The flag carrier as the app resolved it: the pair, and the token the local player's faction
-/// selects (`"HordeFlag"` for an Alliance viewer, `"AllianceFlag"` for a Horde one, `None` for
-/// neither).
+/// The flag carrier: the position and the token the viewer's faction picks, `"HordeFlag"` for an
+/// Alliance viewer and `"AllianceFlag"` for a Horde one.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct BattlefieldFlagView {
     pub uv: (f32, f32),
@@ -33,7 +24,7 @@ pub struct BattlefieldFlagView {
 }
 
 impl super::UiScript {
-    /// Push the resolved positions, the carrier (or none) and the active map's icon scale.
+    /// Push the positions, the carrier and the active map's icon scale.
     pub fn set_battlefield_positions(
         &mut self,
         players: Vec<BattlefieldPositionView>,
@@ -46,8 +37,8 @@ impl super::UiScript {
         model.battlefield_icon_scale = icon_scale;
     }
 
-    /// `RequestBattlefieldPositions()` calls since the last drain — the app throttles to 5000 ms
-    /// and sends only with an active slot.
+    /// `RequestBattlefieldPositions()` calls since the last drain; the app sends at most every
+    /// 5000 ms, and only with an active slot.
     pub fn take_battlefield_position_requests(&mut self) -> u32 {
         std::mem::take(&mut self.model_mut().battlefield_position_requests)
     }
@@ -67,7 +58,6 @@ fn three(lua: &Lua, uv: (f32, f32), third: Option<&str>) -> mlua::Result<MultiVa
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // `GetNumBattlefieldPositions()` — the survivors of the filter, one number.
     g.set(
         "GetNumBattlefieldPositions",
         lua.create_function(|lua, ()| {
@@ -76,8 +66,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetBattlefieldPosition(index)` — the usage raise; 1-based over the survivors; three values
-    // on every leg, `(0, 0, nil)` off the list and for 0 or a negative.
+    // Three values on every leg that does not raise: `(0, 0, nil)` off the list, 0 and below too.
     g.set(
         "GetBattlefieldPosition",
         lua.create_function(|lua, index: Value| {
@@ -94,7 +83,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetNumBattlefieldFlagPositions()` — one carrier slot: 1 or 0.
     g.set(
         "GetNumBattlefieldFlagPositions",
         lua.create_function(|lua, ()| {
@@ -103,8 +91,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetBattlefieldFlagPosition(index)` — the usage raise; selected only for index 1 with a
-    // carrier; three values always.
     g.set(
         "GetBattlefieldFlagPosition",
         lua.create_function(|lua, index: Value| {
@@ -117,8 +103,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetBattlefieldMapIconScale()` — the active map's `MinimapIconScale` (map 0's with no slot,
-    // 1.0 on a missing row), pushed by the app.
+    // The active map's `MinimapIconScale`: map 0's with no slot, 1.0 for a missing row.
     g.set(
         "GetBattlefieldMapIconScale",
         lua.create_function(|lua, ()| {
@@ -127,7 +112,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `RequestBattlefieldPositions()` — counted; the app's 5000 ms throttle and slot gate decide.
     g.set(
         "RequestBattlefieldPositions",
         lua.create_function(|lua, ()| {

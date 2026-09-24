@@ -1,15 +1,5 @@
-//! **The Region map is ONE function per name, reached by frames and regions alike** — the
-//! [`crate::script::region_map`] law, and the regression guard for bug B267.
-//!
-//! Its header carries the byte evidence (`Frame ∩ Region = ∅`, parsed out of the two `.data`
-//! method tables). What is pinned here is the two things a reader of the code could not otherwise
-//! check: that the sharing is real *by identity*, and that it stops exactly at the 19.
-//!
-//! The reported symptom this file exists for: Quiver's `Api/Index.wow.lua` opens
-//! `_Height = WorldFrame.GetHeight`, applies it to a Texture and a FontString, and benilla raised
-//! `stale or invalid frame handle` — inside the addon's `VARIABLES_LOADED` handler, four lines
-//! before it published `Quiver.CastPetAction`. The addon's own field was nil at macro time because
-//! the handler never finished, which is what got filed.
+//! The Region map ([`crate::script::region_map`]): one function per name for frames and regions
+//! alike, shared by identity and stopping at the 19.
 
 use crate::script::UiScript;
 
@@ -34,12 +24,7 @@ fn vm() -> UiScript {
     s
 }
 
-/// Every one of the 19 is the **same Lua value** on a Frame, a Texture and a FontString.
-///
-/// Not a stand-in for the behaviour tests below: identity is what makes the pulled-off-method
-/// idiom work *for a method the test author never thought of*. In the client it holds because
-/// Frame's table does not carry any of the 19 and its lookup tail-calls Region's; here it holds
-/// because one function is written into every table that chain reaches.
+/// In the client, Frame's table carries none of the 19 and its lookup tail-calls Region's.
 #[test]
 fn the_region_map_is_one_function_on_every_widget() {
     let s = vm();
@@ -56,12 +41,10 @@ fn the_region_map_is_one_function_on_every_widget() {
     }
 }
 
-/// **The bug, reduced to its four lines.** A method pulled off a frame and applied to a region.
 #[test]
 fn a_method_pulled_off_a_frame_works_on_a_texture_and_a_fontstring() {
     let s = vm();
-    // Quiver's own shape: `Api._Height = WorldFrame.GetHeight`, applied to `r.Icon` (a Texture)
-    // and `r.Label` (a FontString), from a table built at file scope.
+    // Quiver's shape: `Api._Height = WorldFrame.GetHeight`, applied to a Texture and a FontString.
     let (th, sh): (f32, f32) = s
         .eval(
             r#"
@@ -82,13 +65,10 @@ fn a_method_pulled_off_a_frame_works_on_a_texture_and_a_fontstring() {
         .unwrap();
     assert_eq!((tw, sw), (64.0, 50.0));
 
-    // …and the setter half, which is the same split and would have been the next wall.
     s.run("local _SetW = Host.SetWidth _SetW(Tex, 99)").unwrap();
     assert_eq!(s.eval::<f32>("return Tex:GetWidth()").unwrap(), 99.0);
 }
 
-/// The other direction — a method pulled off a **region** and applied to a **frame**. Same one
-/// function, so this cannot be made to work by special-casing the reported direction.
 #[test]
 fn a_method_pulled_off_a_texture_works_on_a_frame() {
     let s = vm();
@@ -102,9 +82,7 @@ fn a_method_pulled_off_a_texture_works_on_a_frame() {
     assert_eq!(kind, "Frame");
 }
 
-/// Each receiver keeps its OWN behaviour behind the shared name — the per-kind arms are not
-/// collapsed into one. `GetObjectType` is the cleanest witness (three different answers), and
-/// `GetParent` is the one whose two arms genuinely differ (a region's owner is never nil).
+/// The shared function keeps a per-kind arm; a region's `GetParent` is its owner, never nil.
 #[test]
 fn one_name_still_dispatches_per_kind() {
     let s = vm();
@@ -115,14 +93,12 @@ fn one_name_still_dispatches_per_kind() {
         (f.as_str(), t.as_str(), g.as_str()),
         ("Frame", "Texture", "FontString")
     );
-    // The region arm answers its OWNER; the frame arm answers nil for a parentless top frame.
     let owner: String = s.eval("return Tex:GetParent():GetName()").unwrap();
     assert_eq!(owner, "Host");
     assert!(s.eval::<bool>("return Host:GetParent() == nil").unwrap());
 }
 
-/// `GetNumPoints` — on the Region map, so **every** widget answers it. The frame arm did not
-/// exist until the map was collapsed to one implementation; the region arm shipped alone.
+/// `GetNumPoints` is on the Region map, so every widget answers it.
 #[test]
 fn get_num_points_answers_on_a_frame_too() {
     let s = vm();
@@ -135,11 +111,8 @@ fn get_num_points_answers_on_a_frame_too() {
     assert_eq!(s.eval::<i64>("return Host:GetNumPoints()").unwrap(), 0);
 }
 
-/// **The negative case, and the control that keeps it honest.** These six look like they belong to
-/// the Region map and do not: Frame, Texture and FontString each register their *own* at different
-/// addresses — Texture `SetAlpha 0x79b580` vs FontString `0x79cb70`, and Frame's own `0x774e90`
-/// twin. So `WorldFrame.Show(someTexture)` fails on the real client, and hoisting them here to make
-/// more addon code work would be the superset decision 1189 had to take back out.
+/// Frame, Texture and FontString each register their own copy of these six (Texture `SetAlpha`
+/// `0x79b580`, FontString's `0x79cb70`, Frame's `0x774e90`), so `WorldFrame.Show(tex)` fails.
 #[test]
 fn the_six_look_alikes_are_not_shared() {
     let s = vm();
@@ -159,8 +132,7 @@ fn the_six_look_alikes_are_not_shared() {
     }
 }
 
-/// A receiver that is not a widget at all raises, and says *why* — the bridge resolves the
-/// receiver before either arm runs, so this error must not be flattened into a generic one.
+/// The bridge resolves the receiver before either arm runs, and its error names the reason.
 #[test]
 fn a_non_widget_receiver_raises_and_names_the_reason() {
     let s = vm();

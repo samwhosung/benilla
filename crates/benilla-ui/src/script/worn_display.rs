@@ -1,81 +1,52 @@
-//! The **equipment-display** API surface — `ShowHelm`/`ShowingHelm`, `ShowCloak`/`ShowingCloak`:
-//! the player's two "don't draw this piece of my gear" preferences.
-//!
-//! Two bits, and they are not the UI's to keep. The preference lives server-side in the character's
-//! own `PLAYER_FLAGS` (`HIDE_HELM 0x400` / `HIDE_CLOAK 0x800`), which is a **public** descriptor
-//! field — so it dresses our body on every client that can see us, and every other player's on
-//! ours. That is why there is no CVar and no saved variable behind this row: the wire flag is the
-//! single source of truth, it is per-character rather than per-install, and it is already persisted
-//! by whoever we are logged into.
-//!
-//! **The setter is a set; the wire verb is a flip.** `CMSG_TOGGLE_HELM`/`CMSG_TOGGLE_CLOAK` carry no
-//! body and have no target-state form at all (vmangos `HandleShowingHelmOpcode` is a bare
-//! `ToggleFlag`), so `ShowHelm(v)` compares `v` against what we currently believe and queues a flip
-//! only on a difference. The belief is updated **optimistically at the call** and overwritten only
-//! when the *wire* bit actually moves ([`super::UiScript::set_worn_display`], pushed on the
-//! descriptor edge and not per frame) — without that, the value would snap back to the stale
-//! descriptor for the length of the round trip and a second click inside that window would compute
-//! the wrong flip.
-//!
-//! The 1.12 panel calls the setter with the **strings** `"1"` / `"0"` (`UIOptionsFrame_Save`
-//! l.286-297, `value.setFunc(value.value)`), so the argument is read *numerically* — plain Lua
-//! truthiness would make `"0"` mean "show" and the reference's own Options panel could never turn
-//! a helm off. See [`shown_arg`].
+//! `ShowHelm`/`ShowingHelm` and `ShowCloak`/`ShowingCloak`, over the `PLAYER_FLAGS` bits
+//! `HIDE_HELM` (`0x400`) and `HIDE_CLOAK` (`0x800`), which the server keeps per character, so no
+//! CVar backs them. The wire verbs are bodiless flips (vmangos `HandleShowingHelmOpcode` is a bare
+//! `ToggleFlag`), so a set queues a flip only when it differs from a belief that moves at the call
+//! and is overwritten when the wire bit moves.
 
 use mlua::{Lua, Value};
 
 use super::Model;
 
-/// Which of the two worn-display preferences a queued flip is for. One entry per
-/// `CMSG_TOGGLE_HELM`/`CMSG_TOGGLE_CLOAK` the app should send.
+/// A queued flip: one `CMSG_TOGGLE_HELM` or `CMSG_TOGGLE_CLOAK` for the app to send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WornDisplay {
-    /// The head slot — `PLAYER_FLAGS_HIDE_HELM`.
+    /// The head slot, `PLAYER_FLAGS_HIDE_HELM`.
     Helm,
-    /// The back slot — `PLAYER_FLAGS_HIDE_CLOAK`.
+    /// The back slot, `PLAYER_FLAGS_HIDE_CLOAK`.
     Cloak,
 }
 
 impl super::UiScript {
-    /// Drain the worn-display flips queued since the last call — one `CMSG_TOGGLE_HELM` /
-    /// `CMSG_TOGGLE_CLOAK` each. A list rather than a count because the two slots are distinct
-    /// packets; within one slot, two flips in a frame are two sends, exactly like the PvP toggle.
+    /// Drain the queued flips, one packet each; two flips of one slot in a frame are two sends.
     pub fn take_worn_display_toggles(&mut self) -> Vec<WornDisplay> {
         std::mem::take(&mut self.model_mut().worn_display_toggles)
     }
 
-    /// Push the wire truth for both preferences — the app calls this **on a `PLAYER_FLAGS` edge**,
-    /// never per frame, so an optimistic flip made by [`install`]'s setters survives until the
-    /// server's answer actually arrives (see the module doc).
+    /// Push the wire truth, only on a `PLAYER_FLAGS` edge: pushed per frame, it would undo an
+    /// optimistic flip before the server answers, and a second click would flip the wrong way.
     pub fn set_worn_display(&mut self, helm_shown: bool, cloak_shown: bool) {
         let mut model = self.model_mut();
         model.helm_shown = helm_shown;
         model.cloak_shown = cloak_shown;
     }
 
-    /// What the VM currently believes — the app's own read, for the drain's compare and for tests.
+    /// What the VM currently believes, `(helm_shown, cloak_shown)`.
     pub fn worn_display(&self) -> (bool, bool) {
         let model = self.model_ref();
         (model.helm_shown, model.cloak_shown)
     }
 }
 
-/// The setter's argument convention: **numeric**, not Lua-truthy. `nil`/`false`/`0`/`"0"` read as
-/// "hide"; `true`, any non-zero number and any non-numeric string read as "show".
-///
-/// The distinction is load-bearing rather than pedantic. 1.12's own Interface panel hands this
-/// binding the *string* `"0"` to mean off (`UIOptionsFrame_Save`), and in Lua 5.0 `"0"` is truthy —
-/// so a plain `lua_toboolean` reading would make the reference's own Show Helm checkbox a one-way
-/// switch. Numeric-string coercion is what makes it work, and it is the same shape
-/// [`super::action::truthy_nonzero`] already carries for `UseAction`'s `checkCursor`.
+/// Numeric, not Lua-truthy: the stock panel passes the string `"0"` for off
+/// (`UIOptionsFrame_Save`), which Lua 5.0 holds truthy. Nil, false, 0 and `"0"` hide.
 fn shown_arg(v: &Value) -> bool {
     match v {
         Value::Nil => false,
         Value::Boolean(b) => *b,
         Value::Integer(i) => *i != 0,
         Value::Number(n) => *n != 0.0,
-        // A numeric string coerces like Lua's own arithmetic does; a non-numeric one is not a
-        // value this API is ever handed, and reads as "show" rather than silently hiding gear.
+        // A non-numeric string is never handed to this API; it shows rather than hiding gear.
         Value::String(s) => s
             .to_str()
             .ok()
@@ -94,11 +65,10 @@ fn want(model: &mut Model, which: WornDisplay, show: bool) {
     if *held == show {
         return;
     }
-    *held = show; // optimistic — the wire edge overwrites it when the server answers
+    *held = show; // optimistic: the wire edge overwrites it when the server answers
     model.worn_display_toggles.push(which);
 }
 
-/// Register the equipment-display globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -116,8 +86,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // The getters the Options row reads its checked state from — `1`/`nil`, the 1.12 boolean
-    // return the panel feeds straight into `SetChecked`.
+    // `1` or nil, which the Options row feeds straight into `SetChecked`.
     for (name, which) in [
         ("ShowingHelm", WornDisplay::Helm),
         ("ShowingCloak", WornDisplay::Cloak),
@@ -142,10 +111,6 @@ mod tests {
     use super::WornDisplay;
     use crate::script::UiScript;
 
-    /// The argument convention, and the one that would silently break the feature: 1.12's own
-    /// Options panel calls the setter with the **string** `"0"` to mean "hide", and in Lua 5.0 that
-    /// string is truthy. A plain truthiness reading would make Show Helm a one-way switch — on
-    /// forever, off never — with no error anywhere to say so.
     #[test]
     fn the_setter_reads_its_argument_numerically_so_the_string_zero_hides() {
         let mut s = UiScript::new().unwrap();
@@ -175,9 +140,8 @@ mod tests {
         );
     }
 
-    /// The wire verb is a blind flip, so **asking for the state we are already in must send
-    /// nothing** — otherwise the Options window's Defaults button, which writes every row on the
-    /// page unconditionally, would invert whichever preference was already at its default.
+    /// The Options window's Defaults button writes every row, so a flip on no difference would
+    /// invert a preference already at its default.
     #[test]
     fn asking_for_the_state_we_are_already_in_sends_nothing() {
         let mut s = UiScript::new().unwrap();
@@ -196,8 +160,6 @@ mod tests {
         );
     }
 
-    /// The descriptor is the truth: a wire push overrides whatever the VM believed. This is the
-    /// edge the app feeds — it is why the app pushes on a `PLAYER_FLAGS` CHANGE and not per frame.
     #[test]
     fn the_wire_push_overrides_the_optimistic_belief() {
         let mut s = UiScript::new().unwrap();
@@ -205,8 +167,7 @@ mod tests {
         let _ = s.take_worn_display_toggles();
         assert_eq!(s.worn_display(), (false, true));
 
-        // The server answers something else entirely (another client toggled it, or our flip
-        // crossed a login) — the descriptor wins, and the next ask is computed from it.
+        // The server answers otherwise; the descriptor wins and the next ask is computed from it.
         s.set_worn_display(true, false);
         assert_eq!(s.worn_display(), (true, false));
         s.run("ShowHelm(0)").unwrap();

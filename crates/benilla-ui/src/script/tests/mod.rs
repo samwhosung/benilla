@@ -1,8 +1,5 @@
-//! Rust-driven tests of the Lua host: the object model, layout+size reads, show/hide + event + tick
-//! firing (both `0x704d50`/`0x704f10` conventions), the WoW stdlib (positional `format`, the
-//! aliases, `getglobal`), the sandbox holes, and an end-to-end extract in ZKey order.
-//!
-//! Split by subject; the shared `script()` fixture lives in [`common`].
+//! Rust-driven tests of the Lua host, one module per subject; the shared `script()` fixture lives
+//! in [`common`].
 
 mod addon_argument_abi;
 mod addon_index_space;
@@ -58,11 +55,6 @@ mod widget_surface;
 mod worldframe;
 mod worldmap;
 
-/// **A bounded chunk reports instead of hanging** — the guard decision 1247's hang called for.
-///
-/// Without it, a `while true do end` inside an addon takes the whole process with it, and every
-/// instrument downstream produces nothing at all: no roster, no columns, no error row. The bound
-/// turns that into an ordinary Lua error, which every caller already knows how to report.
 #[test]
 fn an_instruction_budget_turns_a_runaway_loop_into_an_error() {
     let s = crate::script::UiScript::new().unwrap();
@@ -81,9 +73,6 @@ fn an_instruction_budget_turns_a_runaway_loop_into_an_error() {
         s.instructions_used()
     );
 
-    // **The VM survives it.** The bound must not poison the interpreter — a survey has 217 more
-    // addons to run after the one that looped, and each gets its own VM only because this one
-    // returned at all.
     assert_eq!(
         s.eval::<i64>("return 2 + 3").unwrap(),
         5,
@@ -98,16 +87,10 @@ fn an_instruction_budget_turns_a_runaway_loop_into_an_error() {
     assert_eq!(t.eval::<i64>("return BudgetOk").unwrap(), 500_500);
 }
 
-/// **`GetBindLocation()` — the hearth location's name, `""` before the packet lands.**
-///
-/// Three corpus addons read it (FuBar_TransporterFu `TransporterFu.lua:456`, Necrosis
-/// `Necrosis.lua:1089`, _LazyPig `LazyPig.lua:623`), and the reference's own hearth confirmation
-/// formats it straight into the dialog (`StaticPopup.lua:1742`).
+/// The hearth location's name, `""` before the packet; `StaticPopup.lua:1742` formats it.
 #[test]
 fn get_bind_location_answers_the_pushed_name_and_never_nil() {
     let mut s = crate::script::UiScript::new().unwrap();
-    // Before the app pushes anything: the empty string, NOT nil. Necrosis concatenates the result,
-    // so nil would be a raise rather than a blank — the same choice `GetRealmName` beside it makes.
     assert_eq!(s.eval::<String>("return GetBindLocation()").unwrap(), "");
     assert_eq!(
         s.eval::<String>("return type(GetBindLocation())").unwrap(),
@@ -120,13 +103,11 @@ fn get_bind_location_answers_the_pushed_name_and_never_nil() {
         s.eval::<String>("return GetBindLocation()").unwrap(),
         "Stormwind City"
     );
-    // Concatenation is the idiom that matters, so it is the one asserted.
     assert_eq!(
         s.eval::<String>(r#"return "Bound: " .. GetBindLocation()"#)
             .unwrap(),
         "Bound: Stormwind City"
     );
-    // A re-bind replaces it rather than accumulating.
     s.set_bind_location("Ironforge");
     assert_eq!(
         s.eval::<String>("return GetBindLocation()").unwrap(),
@@ -134,19 +115,13 @@ fn get_bind_location_answers_the_pushed_name_and_never_nil() {
     );
 }
 
-/// **`RequestTimePlayed()` queues the ask; `TIME_PLAYED_MSG` carries the answer.**
-///
-/// The two halves are one feature: `QuestHistory` calls the verb and then waits on the event, so
-/// shipping the request alone would be 1203 — an addon waiting forever is quieter and worse than
-/// the `attempt to call global` it got before.
+/// `RequestTimePlayed()` queues the ask; `TIME_PLAYED_MSG` carries the answer.
 #[test]
 fn request_time_played_queues_an_ask_and_the_answer_arrives_as_an_event() {
     let mut s = crate::script::UiScript::new().unwrap();
 
-    // The verb returns NOTHING — the answer is an event, never a return value.
     assert_eq!(s.arity("RequestTimePlayed()").unwrap(), 0);
-    // …and that call queued one ask. A COUNT, not a payload: the packet is empty, so two asks in a
-    // frame are two sends rather than one collapsed intent (the pvp queue's rule).
+    // A count, not a latch: the packet is empty, so two asks in a frame are two sends.
     s.run("RequestTimePlayed() RequestTimePlayed()").unwrap();
     assert_eq!(
         s.take_played_time_asks(),
@@ -155,7 +130,6 @@ fn request_time_played_queues_an_ask_and_the_answer_arrives_as_an_event() {
     );
     assert_eq!(s.take_played_time_asks(), 0, "the drain empties the queue");
 
-    // The answer half: the app fires the event with (total, level) in seconds.
     s.run(
         r#"
         TPSeen = nil
@@ -179,9 +153,7 @@ fn request_time_played_queues_an_ask_and_the_answer_arrives_as_an_event() {
     );
 }
 
-/// **The engine hands caught script errors to the CHOSEN Lua error handler** —
-/// the reference's `seterrorhandler` contract, which is how `_ERRORMESSAGE`'s dialog (or an
-/// addon's own ImprovedErrorFrame-style handler) ever hears about a failure the engine caught.
+/// `seterrorhandler`'s contract: an engine-caught script error goes to the chosen handler.
 #[test]
 fn a_chosen_error_handler_hears_engine_caught_errors_and_the_default_does_not_duplicate() {
     let mut s = crate::script::UiScript::new().unwrap();
@@ -193,8 +165,7 @@ fn a_chosen_error_handler_hears_engine_caught_errors_and_the_default_does_not_du
     )
     .unwrap();
 
-    // Nobody chose a handler: the error lands on the host channel ONCE, and the dispatch —
-    // recognising the stdlib default by identity — adds nothing.
+    // With the stdlib default handler, recognised by identity, the dispatch adds nothing.
     s.fire_event("B271_PROBE", vec![]);
     s.dispatch_script_errors_to_handler();
     let errors = s.take_errors();
@@ -204,8 +175,7 @@ fn a_chosen_error_handler_hears_engine_caught_errors_and_the_default_does_not_du
         "one error, once — the default handler must not double-report: {errors:?}"
     );
 
-    // An addon chose one: the dispatch fires it with the message, and the host channel STILL
-    // records the error (the dual channel is what keeps the harness's instruments sighted).
+    // A chosen handler gets the message, and the host channel still records it.
     s.run("caught = {} seterrorhandler(function(msg) table.insert(caught, msg) end)")
         .unwrap();
     s.fire_event("B271_PROBE", vec![]);
@@ -226,11 +196,6 @@ fn a_chosen_error_handler_hears_engine_caught_errors_and_the_default_does_not_du
     );
 }
 
-/// **Every handler path reaches the chosen handler, not only `OnEvent`.** The widget scripts —
-/// `OnClick`, `OnValueChanged`, the edit box's and keyboard's, the tooltip's — pushed their errors
-/// onto the host channel alone, so an addon's broken click handler was a terminal line and never
-/// the dialog, while the same error from `OnEnter` did pop it (decision 1305's "every
-/// engine-caught script error", which these paths had never joined).
 #[test]
 fn a_widget_handler_error_reaches_the_chosen_error_handler() {
     let mut s = crate::script::UiScript::new().unwrap();
@@ -254,11 +219,7 @@ fn a_widget_handler_error_reaches_the_chosen_error_handler() {
     assert!(caught.contains("slide boom"), "OnValueChanged: {caught}");
 }
 
-/// **A listener that unregisters itself does not rob the next one** — on the engine-internal
-/// dispatch too (`fire_global`: `ADDON_LOADED` for a `LoadAddOn`, `UPDATE_FACTION` from the
-/// faction-header verbs). That walk stepped an index over the live list, so the hook-once idiom
-/// (`this:UnregisterEvent(event)` inside the handler) shifted the successor into the slot just
-/// visited and it never heard the event — the 1324 bug, fixed in `fire_event` and not here.
+/// `fire_global` carries `UPDATE_FACTION` from the faction-header verbs.
 #[test]
 fn a_self_unregistering_listener_does_not_rob_its_successor_on_the_internal_dispatch() {
     let s = crate::script::UiScript::new().unwrap();
@@ -274,8 +235,7 @@ fn a_self_unregistering_listener_does_not_rob_its_successor_on_the_internal_disp
     assert_eq!(s.eval::<String>("return log").unwrap(), "ab");
 }
 
-/// **A handler that itself raises cannot recurse the error path** — its failure is recorded on
-/// the host channel only, never re-queued, and the batch stops on the first handler failure.
+/// The handler's own failure goes to the host channel only, never re-queued; the batch stops.
 #[test]
 fn an_error_handler_that_errors_does_not_recurse() {
     let mut s = crate::script::UiScript::new().unwrap();
@@ -300,7 +260,6 @@ fn an_error_handler_that_errors_does_not_recurse() {
             .any(|e| e.contains("error handler itself failed")),
         "and so is the handler's own failure, named as such: {errors:?}"
     );
-    // A second dispatch finds an EMPTY queue — the handler's failure was never re-queued.
     s.dispatch_script_errors_to_handler();
     assert!(
         s.take_errors().is_empty(),

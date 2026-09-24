@@ -1,87 +1,63 @@
-//! The death-arc Lua surface: the release/reclaim/resurrect/self-res verbs
-//! and the state getters the reference's DEATH / RECOVER_CORPSE / RESURRECT* / XP_LOSS dialogs
-//! call.
-//!
-//! Engine-free seam like [`super::unit`]: the app pushes a [`DeathUiState`] snapshot per frame
-//! (the countdowns + offer bits it computes from the wire) and drains the queued
-//! [`DeathAction`]s into `ClientCommand`s. The predicates return Lua booleans rather than the
-//! client's `1`/nil — truthy either way, the branch shape callers use is identical (the
-//! [`super::unit`] convention).
+//! The release, reclaim, resurrect and self-res verbs and the getters the `DEATH`,
+//! `RECOVER_CORPSE`, `RESURRECT` and `XP_LOSS` dialogs call, over a snapshot the app pushes.
+//! The three predicates answer Lua booleans where the reference answers `1` or nil
+//! (`ResurrectHasSickness` `0x48aa00`, `ResurrectHasTimer` `0x48aa30`, `CheckSpiritHealerDist`
+//! `0x48d120`).
 
 use mlua::{Lua, Value};
 
 use super::Model;
 
-/// The death snapshot the app pushes each frame ([`super::UiScript::set_death`]). Plain data —
-/// no mlua handles, no ECS types.
+/// The death snapshot the app pushes each frame.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DeathUiState {
-    /// Seconds until the server force-releases — the client-side mirror of the 6:00
-    /// `CORPSE_REPOP_TIME` the wire never carries, counted from the death
-    /// edge. `None` = no release timer (`PLAYER_FIELD_BYTES` bit 0x08 clear — an instanceable
-    /// map): `GetReleaseTimeRemaining` returns **−1** and the DEATH dialog shows the no-timer
-    /// text.
+    /// Seconds until the server force-releases, counted from death against the 6-minute
+    /// `CORPSE_REPOP_TIME` the wire never carries. `None` (`PLAYER_FIELD_BYTES` bit `0x08` clear,
+    /// an instanceable map) answers -1, which picks the no-timer text (`StaticPopup.lua:380-387`).
     pub release_remaining: Option<f32>,
-    /// Seconds until the corpse becomes reclaimable (`SMSG_CORPSE_RECLAIM_DELAY` anchored at
-    /// arrival; `0` = reclaimable now). `GetCorpseRecoveryDelay`'s value — the RECOVER_CORPSE /
-    /// RESURRECT StartDelay gate.
+    /// Seconds until the corpse is reclaimable, from `SMSG_CORPSE_RECLAIM_DELAY` at arrival; the
+    /// `StartDelay` gate of `RECOVER_CORPSE` and `RESURRECT`.
     pub recovery_delay: f32,
     /// The pending resurrect offer warns of resurrection sickness (`ResurrectHasSickness`).
     pub resurrect_sickness: bool,
     /// The pending offer still honors the reclaim-delay gate (`ResurrectHasTimer`).
     pub resurrect_has_timer: bool,
-    /// The confirm-owning spirit healer is within dialog range (`CheckSpiritHealerDist` — the
-    /// XP_LOSS dialogs' OnUpdate auto-hide).
+    /// The confirming spirit healer is in dialog range (`CheckSpiritHealerDist`).
     pub spirit_healer_in_range: bool,
-    /// The "N minutes"/"N seconds" sickness-duration string a spirit-healer res would apply, or
-    /// `None` below the sickness level (`GetResSicknessDuration` → nil — picks XP_LOSS vs
-    /// XP_LOSS_NO_SICKNESS, ref UIParent.lua's CONFIRM_XP_LOSS arm).
+    /// The sickness duration a spirit-healer res would apply ("N minutes"); `None` below the
+    /// sickness level picks `XP_LOSS_NO_SICKNESS` (`UIParent.lua:399-408`).
     pub sickness_duration: Option<String>,
-    /// What `HasSoulstone()` answers: the **label** of the self-resurrect available right now, or
-    /// `None` for nil (`HasSoulstone 0x48ac80`).
-    ///
-    /// A string, not an id, because that is the whole of what the API returns: the DEATH dialog
-    /// stamps it straight onto its second button (`Button2:SetText(HasSoulstone())`) and uses the
-    /// same call as `DisplayButton2`. The app resolves it, because the script VM has no
-    /// spell-catalog or item-cache binding (the `ui_cast`/`ui_mirror` idiom).
-    ///
-    /// Two sources, and the client's own fork picks between them
-    /// ([`crate::script::death`]'s app-side resolver): `PLAYER_SELF_RES_SPELL` named through
-    /// `Spell.dbc` (3026/20758-20761 are all literally **"Use Soulstone"**, 21169
-    /// **"Reincarnation"**, 23700 **"Twisting Nether"** — Blizzard named those effect spells *as
-    /// button labels*), else a carried item whose on-use spell self-resurrects, named by the
-    /// **item**.
+    /// `HasSoulstone()`'s label (`0x48ac80`), stamped on the DEATH dialog's second button:
+    /// `PLAYER_SELF_RES_SPELL`'s `Spell.dbc` name (3026 and 20758-20761 "Use Soulstone", 21169
+    /// "Reincarnation", 23700 "Twisting Nether"), else a carried self-resurrect item's name.
     pub self_res_label: Option<String>,
 }
 
-/// One drained death intent (the app's [`super::UiScript::take_death_actions`] maps each to its
-/// `ClientCommand`).
+/// One drained death intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeathAction {
-    /// `RepopMe()` — release the spirit (`CMSG_REPOP_REQUEST`).
+    /// `RepopMe()`: `CMSG_REPOP_REQUEST`.
     Repop,
-    /// `RetrieveCorpse()` — reclaim the corpse (`CMSG_RECLAIM_CORPSE`).
+    /// `RetrieveCorpse()`: `CMSG_RECLAIM_CORPSE`.
     RetrieveCorpse,
-    /// `AcceptResurrect()` — accept the pending offer (`CMSG_RESURRECT_RESPONSE` accept).
+    /// `AcceptResurrect()`: `CMSG_RESURRECT_RESPONSE`, accepting.
     AcceptResurrect,
-    /// `DeclineResurrect()` — decline it (`CMSG_RESURRECT_RESPONSE` decline).
+    /// `DeclineResurrect()`: `CMSG_RESURRECT_RESPONSE`, declining.
     DeclineResurrect,
-    /// `AcceptXPLoss()` — take the spirit healer's res (`CMSG_SPIRIT_HEALER_ACTIVATE`).
+    /// `AcceptXPLoss()`: `CMSG_SPIRIT_HEALER_ACTIVATE`.
     AcceptXpLoss,
-    /// `UseSoulstone()` — spend the self-resurrect. **Which wire that is, is the app's to decide
-    /// at drain time**, exactly as the binding decides it at call time: a non-zero
-    /// `PLAYER_SELF_RES_SPELL` sends `CMSG_SELF_RES`, and a zero one falls through to using the
-    /// carried item instead.
+    /// `UseSoulstone()`: `CMSG_SELF_RES` when `PLAYER_SELF_RES_SPELL` is non-zero, else a use of
+    /// the carried item, decided at drain time as the reference decides it at call time.
     UseSoulstone,
 }
 
 impl super::UiScript {
-    /// Push this frame's death snapshot (the app's per-frame feed, before the event dispatch).
+    /// Push this frame's death snapshot, before the event dispatch.
     pub fn set_death(&mut self, state: DeathUiState) {
         self.model_mut().death = state;
     }
 
-    /// Drain the queued death intents (the app's per-frame drain).
+    /// Drain the queued death intents.
     pub fn take_death_actions(&mut self) -> Vec<DeathAction> {
         std::mem::take(&mut self.model_mut().death_actions)
     }
@@ -107,8 +83,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_action(lua, "AcceptXPLoss", DeathAction::AcceptXpLoss)?;
     install_action(lua, "UseSoulstone", DeathAction::UseSoulstone)?;
 
-    // GetReleaseTimeRemaining() → seconds until the forced release, or −1 = no timer (the DEATH
-    // dialog's no-timer text pick, ref StaticPopup.lua:380-387).
     g.set(
         "GetReleaseTimeRemaining",
         lua.create_function(|lua, ()| {
@@ -120,7 +94,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCorpseRecoveryDelay() → whole seconds until reclaimable (0 = now) — the StartDelay gate.
     g.set(
         "GetCorpseRecoveryDelay",
         lua.create_function(|lua, ()| {
@@ -151,8 +124,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetResSicknessDuration() → the duration string, or nil below the sickness level (the
-    // CONFIRM_XP_LOSS variant pick, ref UIParent.lua:399-408).
     g.set(
         "GetResSicknessDuration",
         lua.create_function(|lua, ()| {
@@ -164,12 +135,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // HasSoulstone() → the self-resurrect's label, or nil. The DEATH dialog
-    // uses the one call three ways — `DisplayButton2` (show the button at all), `OnShow`
-    // (`Button2:SetText(text)`) and `OnCancel`'s clicked arm (soulstone vs release) — so the
-    // falsey return has to be **nil** and not `0`: Lua's `0` is truthy, and a `0` here would both
-    // show the button forever and stamp "0" on it. The whole answer is computed app-side; this is
-    // a pure read of the pushed snapshot.
+    // Nil, never `0`, when there is none: the DEATH dialog shows its second button on any truthy
+    // answer, stamps the answer on it and picks soulstone over release by it.
     g.set(
         "HasSoulstone",
         lua.create_function(|lua, ()| {

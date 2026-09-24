@@ -1,4 +1,4 @@
-//! Loader tests — split from `mod.rs` (file-size budget); same `super::*` view.
+//! Loader tests.
 
 mod loader_tests {
     use crate::framexml;
@@ -6,7 +6,6 @@ mod loader_tests {
     use crate::order::ZTarget;
     use crate::script::{QuadContent, UiScript};
 
-    /// No-provider `files` closure (for docs with no `<Include>`/`<Script file=>`).
     fn no_files(_: &str) -> Option<Vec<u8>> {
         None
     }
@@ -15,16 +14,9 @@ mod loader_tests {
         framexml::parse(text).expect("valid FrameXML")
     }
 
-    /// **`<Minimap>`'s two model attributes name the nine engine children** — the model half of
-    /// `CMinimap::LoadXML 0x4ee2b0`. `minimapArrowModel` goes to children 1–8 through `0x4ee170`'s
-    /// two loops (the five at `[+0x320]`, the three POI arrows at `[+0x314]`);
-    /// `minimapPlayerModel` goes to `[Minimap+0x338]` — child **9** — alone, through `0x4ee260`.
-    /// Without the split all nine read back `GetModel() == ""` and nothing in the tuple says which
-    /// one is the player arrow.
-    ///
-    /// Both halves in one document: the shipped spelling (`Minimap.xml:97` sets both explicitly)
-    /// and an attribute-less `<Minimap>`, which takes the engine defaults `0x84c768` / `0x8453c0`
-    /// rather than staying file-less.
+    /// `CMinimap::LoadXML 0x4ee2b0`: `minimapArrowModel` goes to engine children 1-8 (`0x4ee170`),
+    /// `minimapPlayerModel` to child 9 alone (`[Minimap+0x338]`, `0x4ee260`); without the
+    /// attributes the defaults are `0x84c768` and `0x8453c0`. `Minimap.xml:97` sets both.
     #[test]
     fn the_minimap_model_attributes_name_the_nine_engine_children() {
         let mut s = UiScript::new().unwrap();
@@ -49,7 +41,6 @@ mod loader_tests {
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
 
-        // 1–8 wear the arrow, 9 wears the player model — the authored spelling, unchanged.
         for i in 1..=8 {
             assert_eq!(
                 s.eval::<String>(&format!(
@@ -67,16 +58,14 @@ mod loader_tests {
             "child 9 — [Minimap+0x338] — takes minimapPlayerModel alone"
         );
 
-        // The `<Frames>` child lands PAST the nine, because the factory runs before the descent
-        // (`0x6ee408` before `0x6ee4ea`) and both linkers append at the tail. This is the whole
-        // reason `[9]` is a stable address for an addon.
+        // The `<Frames>` child comes after the nine: the factory runs before the descent
+        // (`0x6ee408` before `0x6ee4ea`) and both append at the tail.
         assert_eq!(
             s.eval::<String>("return ({Minimap:GetChildren()})[10]:GetName()")
                 .unwrap(),
             "MiniMapPingHost"
         );
 
-        // No attributes: the engine defaults, not nothing.
         assert_eq!(
             s.eval::<String>("return ({BareMinimap:GetChildren()})[1]:GetModel()")
                 .unwrap(),
@@ -89,13 +78,7 @@ mod loader_tests {
         );
     }
 
-    /// **`parent="Name"` attaches a top-level element** — the reference's own way of doing it,
-    /// because its FrameXML is flat. 79 corpus addons, 708 sites.
-    ///
-    /// Three claims in one document: the attribute supplies the parent when there is no lexical
-    /// one; an anchor with no `relativeTo` then measures from THAT parent rather than the screen
-    /// (the silent half — a frame in the wrong place with nothing to report); and a name that
-    /// resolves to nothing warns and falls back instead of raising.
+    /// The stock FrameXML attaches with `parent=`; a `relativeTo`-less anchor measures from it.
     #[test]
     fn a_top_level_parent_attribute_attaches_and_anchors() {
         let mut s = UiScript::new().unwrap();
@@ -142,7 +125,6 @@ mod loader_tests {
             "a relativeTo-less anchor measures from the PARENT, not the screen"
         );
 
-        // The miss: a warning, a usable frame, and no parent — never an error.
         assert!(s.eval::<bool>("return Orphan ~= nil").unwrap());
         assert!(s.eval::<bool>("return Orphan:GetParent() == nil").unwrap());
         assert!(
@@ -151,10 +133,7 @@ mod loader_tests {
             report.warnings
         );
 
-        // And a name that exists but is NOT a frame is the same miss, not a raise. `_G` is one
-        // namespace and an addon's own `MyAddon = {}` lives in it — the corpus writes
-        // `parent="TheoryCraft"` where the addon owns that name. Handing a plain table to
-        // CreateFrame would kill the element and its whole subtree.
+        // A global that is not a frame is the same miss, not a raise.
         s.run("NotAFrame = { some = 'table' }").unwrap();
         let doc2 = parse(
             r#"<Ui>
@@ -177,16 +156,8 @@ mod loader_tests {
         );
     }
 
-    /// **A `parent=` that resolves to nothing leaves the frame PARENTLESS** — it does not fall back
-    /// to the enclosing frame. `0x6ee280` seeds `[ebp-0x8]` with the incoming
-    /// default parent and then writes the lookup's result back **unconditionally** at
-    /// `0x6ee3ef`, so a miss stores 0 over the seed and `0x6ee408` constructs with `ecx = 0`. And
-    /// an **empty** `parent=""` short-circuits
-    /// at `0x6ee3c7` before any of that: the default parent is kept, silently.
-    ///
-    /// Only the nested case can tell these apart — at top level there is no enclosing frame to
-    /// fall back to, which is why
-    /// [`Self::a_top_level_parent_attribute_attaches_and_anchors`] passed either way.
+    /// A miss stores 0 over the default parent (`0x6ee3ef`), so the frame is built parentless; an
+    /// empty `parent=""` keeps the default silently (`0x6ee3c7`).
     #[test]
     fn a_parent_attribute_that_misses_leaves_the_frame_parentless() {
         let mut s = UiScript::new().unwrap();
@@ -213,15 +184,13 @@ mod loader_tests {
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         s.resolve();
 
-        // The miss: parentless, NOT re-attached to Enclosing.
         assert!(s.eval::<bool>("return TopMissed ~= nil").unwrap());
         assert!(
             s.eval::<bool>("return TopMissed:GetParent() == nil")
                 .unwrap(),
             "a parent= that names nothing nulls the parent; it does not fall back"
         );
-        // …and with no parent, the `$parent` chain walk finds nothing, so the "Top" seed survives
-        // (`0x76c5b0`) — hence `TopMissed`, not `EnclosingMissed`.
+        // With no parent, `$parent` falls to the `"Top"` seed (`0x76c5b0`): `TopMissed`.
         assert!(s.eval::<bool>("return EnclosingMissed == nil").unwrap());
         assert!(
             report
@@ -232,7 +201,6 @@ mod loader_tests {
             report.warnings
         );
 
-        // The empty attribute: the enclosing frame is kept, and nothing is logged.
         assert_eq!(
             s.eval::<String>("return EnclosingEmpty:GetParent():GetName()")
                 .unwrap(),
@@ -246,18 +214,8 @@ mod loader_tests {
         );
     }
 
-    /// **A top-level `name="$parent…"` resolves against the `parent=` attribute** — the
-    /// reference attaches the parent *first* (`0x6ee280` resolves it at `0x6ee3e8` and passes it to
-    /// the constructor at `0x6ee408`) and only then runs the node-apply step that reads `name=` and
-    /// calls `SetName` (`0x6ee4d6`), whose expander walks the frame's **actual** parent chain
-    /// (`0x76c5b0`). We resolved the name first, against the lexical ancestor, so ClassIcons'
-    /// `<Frame name="$parentClassIcon" parent="PlayerFrame"/>` was published as `TopClassIcon` and
-    /// every `PlayerFrameClassIcon` lookup in the addon indexed a nil.
-    ///
-    /// Four claims: the name takes the attribute parent's name; that frame's own children compose
-    /// off the corrected name; a top-level `$parent` with no attribute still falls to the `"Top"`
-    /// seed; and the `parent=` attribute itself is NOT expanded (`0x6ee3e8` calls the by-name
-    /// resolver direct, bypassing `0x76c5b0`).
+    /// The reference attaches the parent (`0x6ee408`) before it applies `name=` (`0x6ee4d6`), and
+    /// `$parent` walks the real parent chain (`0x76c5b0`); `parent=` itself is never expanded.
     #[test]
     fn a_dollar_parent_name_resolves_against_the_parent_attribute() {
         let mut s = UiScript::new().unwrap();
@@ -310,11 +268,10 @@ mod loader_tests {
             "a nested child composes off the CORRECTED name"
         );
 
-        // No attribute, no lexical parent: the expander's `"Top"` seed survives (`0x76c5b0`).
+        // No attribute, no lexical parent: the `"Top"` seed.
         assert!(s.eval::<bool>("return TopLoose ~= nil").unwrap());
 
-        // `parent="$parentPlayerFrame"` is taken LITERALLY — `0x6ee3e8` hands the raw string to
-        // `0x76c760`, so no frame of that name exists and the element falls back (and warns).
+        // `parent=` is taken literally (`0x6ee3e8` hands it to `0x76c760`), so this one misses.
         assert!(s.eval::<bool>("return Literal:GetParent() == nil").unwrap());
         assert!(
             report
@@ -326,15 +283,11 @@ mod loader_tests {
         );
     }
 
-    /// End-to-end: a virtual template, an instance inheriting it (with `<Size>`, screen `<Anchors>`,
-    /// a `<Layers>` coloured `<Texture>`, a nested child `<Frame>` in `<Frames>`, and `<OnLoad>`
-    /// handlers on both) — proving name publication, bottom-up OnLoad, `$parent`, and that
-    /// resolve()+extract() places the texture at the anchored rect.
+    /// Names, `$parent`, bottom-up `OnLoad` and the anchored texture rect, end to end.
     #[test]
     fn synthetic_full_document_materializes() {
         let mut s = UiScript::new().unwrap();
         s.set_screen_size(800.0, 600.0);
-        // Seed the ordering witness before the load runs any OnLoad.
         s.run("loadorder = {}").unwrap();
 
         let doc = parse(
@@ -373,13 +326,11 @@ mod loader_tests {
         assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
         assert_eq!(report.frames, 2, "parent + child materialized");
 
-        // Frame exists by name; the child's $parent resolved to MyFrameChild; the texture published
-        // its $parent-resolved name.
         assert!(s.eval::<bool>("return MyFrame ~= nil").unwrap());
         assert!(s.eval::<bool>("return MyFrameChild ~= nil").unwrap());
         assert!(s.eval::<bool>("return MyFrameTex ~= nil").unwrap());
 
-        // OnLoad fired for both (modern `self` in child, legacy `this` in parent — both work).
+        // The child's handler uses `self`, the parent's `this`; both work.
         assert_eq!(
             s.eval::<String>("return ChildLoaded").unwrap(),
             "MyFrameChild"
@@ -390,9 +341,7 @@ mod loader_tests {
         let order: Vec<String> = s.eval("return loadorder").unwrap();
         assert_eq!(order, vec!["child".to_string(), "parent".to_string()]);
 
-        // resolve()+extract(): the texture quad sits at MyFrame's anchored rect.
-        // Screen [0,0,600,800], TOPLEFT+(10,-20), size 200x100 → Rect(bottom 480, left 10, top 580,
-        // right 210). Region rect = its owner frame's resolved rect (v1).
+        // TOPLEFT+(10,-20), 200x100 on 800x600: bottom 480, left 10, top 580, right 210.
         s.resolve();
         let quads = s.extract();
         let tex = quads
@@ -408,11 +357,8 @@ mod loader_tests {
         );
     }
 
-    /// An instance's own `<Size>` beats its template's: expansion appends the instance's children
-    /// after the template's, and `apply_size` walks EVERY `<Size>` in document order so the last
-    /// write wins — exactly the client's process-each-child behavior. (Regression: `.next()` here
-    /// once pinned every templated button to the TEMPLATE's size; the quest log's Abandon button
-    /// declared 125×21 and rendered 80×22, wrapping its label onto two lines.)
+    /// Expansion appends the instance's children after the template's and every `<Size>` applies
+    /// in order, as the client processes each child, so the last wins.
     #[test]
     fn instance_size_overrides_template_size() {
         let s = UiScript::new().unwrap();
@@ -438,10 +384,6 @@ mod loader_tests {
         );
     }
 
-    /// A `<Frame setAllPoints="true">` (no `<Size>`/`<Anchors>` of its own) resolves to its
-    /// parent's rect — the frame path honors the shorthand like the region path does.
-    /// (Regression: only regions applied it; the world map's chrome frames carried the attribute,
-    /// never resolved, and their whole subtrees — backdrop, title, buttons — silently vanished.)
     #[test]
     fn frame_set_all_points_pins_to_parent() {
         let mut s = UiScript::new().unwrap();
@@ -470,16 +412,8 @@ mod loader_tests {
         assert_eq!(s.eval::<f32>("return PinChild:GetHeight()").unwrap(), 200.0);
     }
 
-    /// **`<Include file="X.lua">` RUNS the file** — the client's `<Include>` is a recursion into
-    /// its load-one-file routine `0x6ede10`, whose first act is a case-insensitive `.lua` suffix
-    /// test on the resolved path. It never sniffs content; it never parses a `.lua` as XML.
-    ///
-    /// We parsed every target as FrameXML, so a `.lua` target died `unknown token at 1:1` and took
-    /// the whole library set with it. Three corpus addons load nothing but these lines —
-    /// FonzAppraiser, AckisRecipeList, FonzSummon — and `embeds.xml` is the whole of their Ace
-    /// dependency chain.
-    ///
-    /// The mixed document is the point: one `<Include>` of each kind, in one file, both landing.
+    /// `<Include>` recurses into `0x6ede10`, which runs a path with a case-insensitive `.lua`
+    /// suffix and parses anything else as XML; it never sniffs content.
     #[test]
     fn include_runs_a_lua_target_and_still_parses_an_xml_one() {
         let s = UiScript::new().unwrap();
@@ -511,16 +445,13 @@ mod loader_tests {
             s.eval::<bool>("return ShoutyLua").unwrap(),
             "case-insensitive suffix"
         );
-        // ...and the XML arm is untouched: both frames still exist.
         assert_eq!(report.frames, 2);
         assert!(s
             .eval::<bool>("return FromXmlInclude ~= nil and FromMain ~= nil")
             .unwrap());
     }
 
-    /// A raise inside an `.lua` Include is reported and the enclosing document CONTINUES — the
-    /// reference logs at severity 2 and falls through (`0x6ee00d` -> `0x6ee012` is unconditional,
-    /// `eax` never read), so one bad library must not cost the frames declared after it.
+    /// The reference logs the raise and falls through unconditionally (`0x6ee00d`-`0x6ee012`).
     #[test]
     fn a_raising_lua_include_does_not_take_the_rest_of_the_document() {
         let s = UiScript::new().unwrap();
@@ -550,7 +481,6 @@ mod loader_tests {
         );
     }
 
-    /// `<Include>` resolved through an in-memory provider closure.
     #[test]
     fn include_resolves_through_provider() {
         let s = UiScript::new().unwrap();
@@ -574,15 +504,8 @@ mod loader_tests {
             .unwrap());
     }
 
-    /// **An unrecognised `frameStrata=` warns and skips; the frame keeps the stratum it had, and
-    /// the rest of the document loads**.
-    ///
-    /// The two doors differ in the reference and this is the quiet one. `CSimpleFrame::LoadXML
-    /// 0x769820` resolves through `0x6f17d0`, whose miss returns 0 without writing the out-param;
-    /// the miss leg pushes `"Frame %s: Unknown frame strata: %s"` at severity 1 into the document
-    /// sink (`0x7699a4`, a call that returns) and reconverges with the hit path at `0x7699ad`,
-    /// never reaching `SetFrameStrata 0x76a470`. `EQL3`'s `EQL3_Log.xml` carries the literal case:
-    /// `<Frame frameStrata="ARTWORK">`, a draw-LAYER name where a strata belongs.
+    /// `CSimpleFrame::LoadXML 0x769820`: a strata `0x6f17d0` does not know logs at severity 1
+    /// (`0x7699a4`) and skips `SetFrameStrata 0x76a470`.
     #[test]
     fn an_unknown_xml_frame_strata_warns_and_leaves_the_stratum_alone() {
         let mut s = UiScript::new().unwrap();
@@ -617,10 +540,7 @@ mod loader_tests {
         );
     }
 
-    /// **The Lua door is the LOUD one and stays that way.** `SetFrameStrata 0x774360`'s miss
-    /// reaches `0x774456 call 0x6f4940` (`luaL_error`), whose chain `luaG_errormsg 0x6fc780` /
-    /// `luaD_throw 0x6f5d80` contains no `ret` at all — the epilogue after it is dead code. Pinned
-    /// beside its XML twin so the asymmetry is a test rather than a comment.
+    /// The Lua `SetFrameStrata 0x774360` raises on the same value (`luaL_error` at `0x774456`).
     #[test]
     fn the_lua_setframestrata_still_raises_on_the_same_value() {
         let s = UiScript::new().unwrap();
@@ -632,10 +552,8 @@ mod loader_tests {
         assert!(err.contains("ARTWORK"), "{err}");
     }
 
-    /// **`FrameXML_Debug` is a get-or-set whose SET arm turns on the loader's trace lines**
-    /// — and `0` takes the SET arm, because the number zero is Lua-truthy and only
-    /// `nil`/`false` are not (`0x48845d`, after `lua_toboolean 0x6f34d0`). That is the half a
-    /// re-implementation gets backwards, so it is the half asserted first.
+    /// The reference sets the flag from a number, `0` included, and only reads it for any other
+    /// argument (`0x48845d`, after `lua_isnumber 0x6f34d0`).
     #[test]
     fn framexml_debug_is_a_get_or_set_and_gates_the_loader_traces() {
         let s = UiScript::new().unwrap();
@@ -660,7 +578,6 @@ mod loader_tests {
             "{on:?}"
         );
 
-        // The two arms that are easy to get wrong.
         assert_eq!(
             s.eval::<i32>("return FrameXML_Debug(nil)").unwrap(),
             1,
@@ -672,19 +589,11 @@ mod loader_tests {
             "…but 0 is TRUTHY in Lua, so it really does disable it"
         );
         assert!(load(&s, &doc(), &no_files).traces.is_empty());
-        // …and the stored value is truncated toward zero, `0x40a2b0`'s conversion.
+        // The stored value truncates toward zero (`0x40a2b0`).
         assert_eq!(s.eval::<i32>("return FrameXML_Debug(1.9)").unwrap(), 1);
     }
 
-    /// A missing include is **reported, not raised**, and the rest of the load still proceeds.
-    ///
-    /// It was a warning until 1186 and an error from 1186 to 2155; it is now its own list. Both of
-    /// the findings behind those moves are asserted here, because each undid the other:
-    /// **1186's** — a document that resolved *nothing* must not report success (Bagnon missed all
-    /// eleven of its references and came back with zero errors) — so the row is in the report; and
-    /// **2155's** — the reference logs `Couldn't open %s` (`0x6edaa0`, `0x846ff4`) and carries on
-    /// with nothing raised — so the row is *not* in `errors`, which is the list whose entries
-    /// reach the player's red error dialog.
+    /// The reference logs `Couldn't open %s` (`0x6edaa0`, `0x846ff4`) and carries on.
     #[test]
     fn missing_include_is_a_missing_file_not_an_error_and_continues() {
         let s = UiScript::new().unwrap();
@@ -705,9 +614,7 @@ mod loader_tests {
         );
     }
 
-    /// So is a missing `<Script file=>` — it drops every handler the file would have defined, and
-    /// the reference's own leg for it (`"Error loading %s"`, `0x872e50`) returns
-    /// normally rather than throwing.
+    /// The reference logs `"Error loading %s"` (`0x872e50`) for it and returns normally.
     #[test]
     fn missing_script_file_is_a_missing_file_not_an_error_and_continues() {
         let s = UiScript::new().unwrap();
@@ -721,9 +628,6 @@ mod loader_tests {
         assert!(s.eval::<bool>("return Still ~= nil").unwrap());
     }
 
-    /// **A `<Script file=>` whose chunk RAISES is still an error** — the half `missing_files` must
-    /// not swallow. The two arms sit one line apart in `load_in`, and folding a miss into the
-    /// quiet list is only correct because the raise keeps its own.
     #[test]
     fn a_script_file_that_raises_is_still_an_error() {
         let s = UiScript::new().unwrap();
@@ -740,7 +644,6 @@ mod loader_tests {
         assert!(s.eval::<bool>("return Still ~= nil").unwrap());
     }
 
-    /// `$parent` resolves in a child's *name* and in an anchor's `relativeTo`.
     #[test]
     fn parent_token_in_child_name_and_anchor_relative_to() {
         let mut s = UiScript::new().unwrap();
@@ -765,10 +668,8 @@ mod loader_tests {
         );
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
-        // Child $parent-name resolved to PFInner and published.
         assert!(s.eval::<bool>("return PFInner ~= nil").unwrap());
 
-        // relativeTo="$parent" resolved to PF, so the child sits exactly on the parent's TOPLEFT.
         s.resolve();
         let quads = s.extract();
         let rects: Vec<_> = quads
@@ -778,8 +679,7 @@ mod loader_tests {
                 _ => None,
             })
             .collect();
-        // Parent: screen [0,0,600,800] TOPLEFT+(50,-50), 100x100 → Rect(450,50,550,150). The child,
-        // anchored TOPLEFT→parent TOPLEFT with no offset, resolves to the same rect.
+        // The parent is Rect(450,50,550,150); the child, pinned TOPLEFT to TOPLEFT, matches it.
         let expected = crate::layout::Rect::new(450.0, 50.0, 550.0, 150.0);
         assert!(
             rects.iter().filter(|r| **r == expected).count() >= 2,
@@ -787,9 +687,8 @@ mod loader_tests {
         );
     }
 
-    /// A named state texture and a named `<ButtonText>` are anchor targets by NAME, not only
-    /// globals: the stock trainer row hangs its label off `$parentHighlight`'s RIGHT, and a name
-    /// published only into `_G` sent the label to the button's own edge (1957).
+    /// The stock trainer row's shape: its label hangs off `$parentHighlight`'s RIGHT
+    /// (`ClassTrainerFrameTemplates.xml:67`).
     #[test]
     fn a_named_state_texture_is_an_anchor_target_for_its_sibling_label() {
         let mut s = UiScript::new().unwrap();
@@ -841,8 +740,6 @@ mod loader_tests {
         );
     }
 
-    /// A handler with a syntax error yields an `errors[]` entry, the load continues, and the other
-    /// frame is still built with a working handler.
     #[test]
     fn bad_handler_is_an_error_and_load_continues() {
         let s = UiScript::new().unwrap();
@@ -863,19 +760,11 @@ mod loader_tests {
             "expected a compile error, got {:?}",
             report.errors
         );
-        // The broken frame exists but its OnLoad never ran; the good frame's did.
         assert!(s.eval::<bool>("return Broken ~= nil").unwrap());
         assert!(s.eval::<bool>("return FineRan == true").unwrap());
     }
 
-    /// Unsupported handler names are warn-once gaps, not hard errors, and don't stop the frame
-    /// from building. The example is `OnAttributeChanged` — 2.0's secure-frame system, which no
-    /// 1.12 resolver has a slot for, so it is the one name on that list that is out permanently.
-    ///
-    /// It has been three names now, and each move is the rule working: `OnKeyDown` left when 1319
-    /// built the delivery walk, `OnCursorChanged` when 2141 built the caret flush's fire. A name
-    /// is accepted only once something fires it, so this test's subject is whatever is still
-    /// waiting.
+    /// `OnAttributeChanged` is 2.0's; no 1.12 handler resolver has a slot for it.
     #[test]
     fn unsupported_script_name_is_a_warning() {
         let s = UiScript::new().unwrap();
@@ -891,13 +780,8 @@ mod loader_tests {
             .any(|w| w.contains("OnAttributeChanged")));
     }
 
-    /// **An unknown frame type at the XML door is LOGGED, and its node is skipped — nothing
-    /// raises**.
-    ///
-    /// `Instantiate 0x6ee280` prints `"Unknown frame type: %s"` (`0x871124`) at `0x6ee356` and makes
-    /// no object for that node; only the Lua `CreateFrame` binding raises (`0x872fa8` via
-    /// `luaL_error`). The node's own `<Frames>` go with it — there is no object to parent them —
-    /// and the walk carries on to the next sibling.
+    /// `Instantiate 0x6ee280` logs `"Unknown frame type: %s"` (`0x871124`) and builds nothing for
+    /// the node or its `<Frames>`; only the Lua `CreateFrame` raises (`0x872fa8`).
     #[test]
     fn an_unknown_xml_frame_type_is_logged_and_its_node_skipped() {
         let s = UiScript::new().unwrap();
@@ -924,16 +808,13 @@ mod loader_tests {
         assert_eq!(report.frames, 1, "only the real frame built");
         assert!(s.eval::<bool>("return X == nil and Inside == nil").unwrap());
         assert!(s.eval::<bool>("return Real ~= nil").unwrap());
-        // …and the Lua door still raises, on the same lookup.
+        // The Lua door raises on the same lookup.
         let err = s.run(r#"CreateFrame("Bogus")"#).unwrap_err().to_string();
         assert!(err.contains("unknown frame type 'Bogus'"), "{err}");
     }
 
-    /// **A `.toc`-listed `Bindings.xml` loads as XML and costs nothing but log lines** (decision
-    /// 2191) — MonkeyDev's shape, the director's live report. The `.toc` line runner hands every
-    /// non-`.lua` entry to the same file loader (`0x6edd51` → `0x6ede10`), whose walk ignores the
-    /// root's own tag (`<Bindings>`, tolerated) and sees three `<Binding>` elements: three unknown
-    /// frame types, logged. The file's real reading as bindings is `0x51f400`'s, which runs anyway.
+    /// A `.toc` line hands a listed `Bindings.xml` to `0x6ede10` (from `0x6edd51`), so each
+    /// `<Binding>` logs as an unknown frame type; `0x51f400` reads the bindings regardless.
     #[test]
     fn a_bindings_document_loaded_as_framexml_raises_nothing() {
         let s = UiScript::new().unwrap();
@@ -961,8 +842,7 @@ mod loader_tests {
         );
     }
 
-    /// The WorldFrame's one-shot record, at the XML door: a second `<WorldFrame>` is an unknown
-    /// type, so it logs and builds nothing where `CreateFrame` raises.
+    /// The WorldFrame type is one-shot, so a second `<WorldFrame>` is an unknown type.
     #[test]
     fn a_second_xml_world_frame_is_logged_not_raised() {
         let s = UiScript::new().unwrap();
@@ -980,8 +860,7 @@ mod loader_tests {
         assert!(s.eval::<bool>("return Another == nil").unwrap());
     }
 
-    /// `<StatusBar>` LoadXML extras (`0x782ef0`): value attributes, `<BarTexture>` + `<BarColor>`
-    /// children, orientation — landing in the widget state and scaling the extracted bar quad.
+    /// `<StatusBar>` LoadXML extras (`0x782ef0`).
     #[test]
     fn statusbar_xml_extras_apply() {
         let mut s = UiScript::new().unwrap();
@@ -1034,10 +913,8 @@ mod loader_tests {
         );
     }
 
-    /// The creation-path implicit anchor, XML half (`0x7701c0`): a `<Texture>` with
-    /// zero anchors gets SetAllPoints(parent) right after its LoadXML — two corner anchors that pin
-    /// all four edges, so an authored `<Size>` is structurally unread. This is B180's engine shape:
-    /// the reference stack-split plate authors a vestigial 256×32 and renders 172×96, the frame.
+    /// An anchorless `<Texture>` gets `SetAllPoints` after its LoadXML (`0x7701c0`), so its
+    /// `<Size>` goes unread: `StackSplitFrame.xml:10` authors 256×32 and draws 172×96.
     #[test]
     fn sized_anchorless_layer_texture_fills_its_frame() {
         let mut s = UiScript::new().unwrap();
@@ -1076,9 +953,8 @@ mod loader_tests {
         );
     }
 
-    /// The FontString half of the same law: zero anchors ⇒ ONE middle-row SetPoint chosen by the
-    /// live justify word (`&7`: 1→LEFT, 4→RIGHT, else CENTER) — and the authored `<Size>` stays
-    /// LIVE (single anchor + W/H sizes the opposite edges), unlike the texture's.
+    /// A FontString with no anchors gets one middle-row point from its justify word (`&7`: 1 LEFT,
+    /// 4 RIGHT, else CENTER), so unlike a texture's its `<Size>` stays live.
     #[test]
     fn anchorless_fontstring_seats_at_its_justify_point() {
         let mut s = UiScript::new().unwrap();
@@ -1101,8 +977,7 @@ mod loader_tests {
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
         s.resolve();
-        // LEFT→LEFT at (0,0): left edge at the page's left, vertically on the page's centerline
-        // (middle-row point), 80×20 from the size. Page [0,0]..[200,100] → [0,40]..[80,60].
+        // LEFT to LEFT on the page's centreline, 80×20 from the size: [0,40]..[80,60].
         let (l, r, t, b) = s
             .eval::<(f64, f64, f64, f64)>(
                 "return SeatLeft:GetLeft(), SeatLeft:GetRight(), SeatLeft:GetTop(), SeatLeft:GetBottom()",
@@ -1115,10 +990,8 @@ mod loader_tests {
         );
     }
 
-    /// The XML state-texture ordering (decision 1310's loader half): an authored `<Anchors>` on a
-    /// `<NormalTexture>` wins outright — the materializing setter's implicit SetAllPoints is
-    /// cleared before the authored layout applies, so no implicit corner survives to weld the
-    /// region to the button (the merchant row's icon-scoped highlight is the live consumer).
+    /// The setter's implicit `SetAllPoints` is cleared before the authored anchors apply, so no
+    /// implicit corner survives to weld the state texture to the button.
     #[test]
     fn anchored_state_texture_keeps_its_authored_anchors() {
         let mut s = UiScript::new().unwrap();
@@ -1159,17 +1032,8 @@ mod loader_tests {
         );
     }
 
-    /// **An XML handler body's chunk name is `"<GetName()>:<Handler>"`, and its lines are the
-    /// body's own.** `0x7025fd` calls the script object's `GetName` through its vtable, falls back
-    /// to `<unnamed>` (`0x84c7f0`) at `0x702611`, formats `"%s:%s"` (`0x872a28`) at `0x70261b`,
-    /// and hands that to `0x704c70` at `0x70263c` — which `luaL_loadbuffer`s the raw body, so body
-    /// line *n* is chunk line *n*.
-    ///
-    /// Three producers, because they used to disagree. A named element was already right; an
-    /// unnamed one wrote `<Button>` where the image writes `<unnamed>`; and a `CreateFrame` off a
-    /// template wrote the *whole call* —
-    /// `CreateFrame("Button", "Made", inherits="ProbeTmpl"):OnClick` — into every error message
-    /// and every `debugstack` frame that handler produced.
+    /// `0x7025fd` names a handler chunk `"%s:%s"` (`0x872a28`) from the object's `GetName`, or
+    /// `<unnamed>` (`0x84c7f0`), and `0x704c70` loads the raw body, so body line n is chunk line n.
     #[test]
     fn an_xml_handler_chunk_is_named_by_its_frame_and_handler() {
         let s = UiScript::new().unwrap();
@@ -1203,22 +1067,18 @@ mod loader_tests {
                 .unwrap()
         };
 
-        // A named element. The body sits on the element's SECOND line, and the reference numbers a
-        // handler chunk from the body's own first line — so `:2:`, never `:3:`. Our wrapper used
-        // to end with a newline, which pushed every body line down by one.
+        // The `error` is on the body's second line: `:2:`.
         let named = raised(r#"NamedBtn:GetScript("OnClick")"#);
         assert!(
             named.starts_with(r#"[string "NamedBtn:OnClick"]:2: boom"#),
             "{named}"
         );
-        // A `CreateFrame` instance is named by the INSTANCE — what `GetName()` answers — not by
-        // the call that made it and not by the template it wore.
+        // A `CreateFrame` instance is named by its own `GetName()`, not by its template.
         let made = raised(r#"Made:GetScript("OnClick")"#);
         assert!(
             made.starts_with(r#"[string "Made:OnClick"]:1: tmpl"#),
             "{made}"
         );
-        // The nameless element takes the image's own fallback literal.
         let anon = raised(r#"BenillaAnon:GetScript("OnClick")"#);
         assert!(
             anon.starts_with(r#"[string "<unnamed>:OnClick"]:1: anon"#),
@@ -1226,14 +1086,8 @@ mod loader_tests {
         );
     }
 
-    /// **An inline `<Script>` body is `"<xml path>:<Scripts>"`, with no `@`** — `0x6ee0ed push ebx`
-    /// (the document's own path) / `0x6ee0ee push 0x871074` (`"%s:<Scripts>"`) → `0x6ee0ff` sprintf
-    /// → `0x6ee10f call 0x704cd0`. `luaO_chunkid` therefore takes its *third* branch and the frame
-    /// reads `[string "…"]`, not a bare path — which is how a reader (and every addon that splits a
-    /// `debugstack` frame on `\AddOns\`) tells an inline block from the `.lua` file beside it.
-    ///
-    /// `<Script file="…">` keeps the file form, `"@%s"` (`0x8716e0`), and both are asserted here so
-    /// the two arms cannot drift into each other.
+    /// An inline `<Script>` is `"%s:<Scripts>"` (`0x871074`, at `0x6ee0ff`) over the document's
+    /// path with no `@`, so it reads `[string "…"]`; a `<Script file=>` is `"@%s"` (`0x8716e0`).
     #[test]
     fn an_inline_script_chunk_is_named_for_the_document_not_as_a_file() {
         let s = UiScript::new().unwrap();
@@ -1305,7 +1159,6 @@ mod loader_tests {
             .unwrap();
         assert!(ok, "button XML attrs + textures landed");
 
-        // The checked CheckButton draws its check mark; the idle Button draws only its normal.
         s.resolve();
         let texs: Vec<String> = s
             .extract()
@@ -1320,16 +1173,12 @@ mod loader_tests {
         assert!(!texs.contains(&"Interface\\B-Hi".into()));
         assert!(texs.contains(&"Interface\\CB-Check".into()));
 
-        // A physical click fires the XML OnClick.
         s.mouse_button(30.0, 10.0, "LeftButton", true);
         s.mouse_button(30.0, 10.0, "LeftButton", false);
         assert!(s.eval::<bool>("return xml_clicked == true").unwrap());
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
-    /// A state texture's own `<Size>` + `<Anchors>` scope it to less than its button (the merchant
-    /// row's icon-scoped highlight): hovering the 100px-wide button, the highlight quad renders at
-    /// the anchored 20px square, not stretched over the button.
     #[test]
     fn button_state_texture_takes_size_and_anchors() {
         let mut s = UiScript::new().unwrap();
@@ -1353,8 +1202,7 @@ mod loader_tests {
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
 
-        // Hover the button's far-right end — the highlight still sits at the anchored TOPLEFT.
-        // (Resolve first: hit-testing reads the resolved-rect cache.)
+        // Resolve first: hit-testing reads the resolved-rect cache.
         s.resolve();
         s.mouse_move(90.0, 15.0);
         s.resolve();
@@ -1375,9 +1223,7 @@ mod loader_tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
-    /// `<EditBox>` LoadXML extras (`0x779fb0`): `letters` → SetMaxLetters and the config flags land
-    /// in the widget state; a click focuses it and the `<OnTextChanged>` handler fires on a typed
-    /// char.
+    /// `<EditBox>` LoadXML extras (`0x779fb0`).
     #[test]
     fn editbox_xml_extras_apply() {
         let mut s = UiScript::new().unwrap();
@@ -1400,7 +1246,6 @@ mod loader_tests {
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
 
-        // letters=5 landed; numeric abort rejects a non-digit insert wholesale.
         assert_eq!(s.eval::<i64>("return XmlEdit:GetNumLetters()").unwrap(), 0);
         s.run(r#"XmlEdit:Insert("12x")"#).unwrap(); // numeric: aborts
         s.run(r#"XmlEdit:Insert("123456")"#).unwrap(); // digits, capped at 5
@@ -1409,8 +1254,7 @@ mod loader_tests {
             "12345"
         );
 
-        // A click focuses the box (mouse-enabled by construction); a typed char marks it changed,
-        // and the drain on the next tick is what actually fires OnTextChanged.
+        // A typed char marks the box changed; `OnTextChanged` fires on the next tick's drain.
         s.resolve();
         s.mouse_button(50.0, 10.0, "LeftButton", true);
         s.mouse_button(50.0, 10.0, "LeftButton", false);
@@ -1422,15 +1266,8 @@ mod loader_tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
-    /// **`autoFocus="false"` is an opt-OUT, and the only reason the attribute is ever written.**
-    ///
-    /// The ctor leaves `flags = 1` — autoFocus ON — so every one of the ten places the shipped
-    /// 1.12.1 chain names the attribute names it to turn the flag *off* (MailFrame ×3,
-    /// MoneyInputFrame ×3, FriendsFrame ×3, AddonList ×1). The flag loop used to call the setter
-    /// only when an attribute parsed as `true`, which made all ten a no-op: harmless while our own
-    /// default was off, and exactly backwards once it matches the client's.
-    ///
-    /// Both directions asserted, because a presence-blind reader passes the `true` half.
+    /// The EditBox ctor leaves autoFocus on (`flags = 1`), so the stock UI writes the attribute
+    /// only as `autoFocus="false"`: ten times across FrameXML and GlueXML.
     #[test]
     fn an_editbox_flag_written_false_in_xml_turns_the_flag_off() {
         let s = UiScript::new().unwrap();
@@ -1444,8 +1281,7 @@ mod loader_tests {
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
 
-        // The box is hidden first so the Show() is a real transition; an autoFocus box takes the
-        // keyboard on show, which is the observable the flag actually drives.
+        // Hidden first so `Show()` is a real transition: an autoFocus box takes focus on show.
         for (name, want) in [("OptOut", false), ("OptIn", true), ("Silent", true)] {
             s.run(&format!(
                 "{name}:Hide(); {name}:ClearFocus(); {name}:Show()"
@@ -1461,10 +1297,9 @@ mod loader_tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
-    // ── TexCoords + Font objects (decision 0084 engine slice) ───────────────────────────────────
+    // ── TexCoords and font objects ──────────────────────────────────────────────────────────────
 
-    /// `<TexCoords left right top bottom>` on a `<Texture>` parses into the region's UV rect and
-    /// surfaces on the extracted quad as `[left, right, top, bottom]`.
+    /// The extracted quad carries the UV rect as `[left, right, top, bottom]`.
     #[test]
     fn texcoords_parse_to_uv_on_extracted_quad() {
         let mut s = UiScript::new().unwrap();
@@ -1501,8 +1336,6 @@ mod loader_tests {
         );
     }
 
-    /// A `<Font>` `inherits=` chain resolves height + color through two levels: the leaf inherits its
-    /// face + one value from the root and overrides another mid-chain (last-wins merge).
     #[test]
     fn font_inherits_chain_resolves_height_and_color_two_levels() {
         let s = UiScript::new().unwrap();
@@ -1528,15 +1361,13 @@ mod loader_tests {
         assert_eq!(base.height, Some(12.0));
         assert_eq!(base.color, Some([1.0, 0.82, 0.0, 1.0]));
 
-        // Leaf: face inherited from Base (through Mid), color from Mid (white), height overridden (10).
+        // Leaf: Base's face through Mid, Mid's white, its own height of 10.
         let leaf = s.font_object("Leaf").expect("Leaf registered");
         assert_eq!(leaf.font.as_deref(), Some("Fonts\\FRIZQT__.TTF"));
         assert_eq!(leaf.height, Some(10.0));
         assert_eq!(leaf.color, Some([1.0, 1.0, 1.0, 1.0]));
     }
 
-    /// A `<FontString inherits="GameFontNormalSmall">` reports the *smaller* resolved height (and the
-    /// inherited face + color) on the extracted quad — the per-FontString size the renderer bakes at.
     #[test]
     fn fontstring_inherits_reports_smaller_resolved_height() {
         let mut s = UiScript::new().unwrap();
@@ -1582,7 +1413,6 @@ mod loader_tests {
             "the *Small font object resolves to the smaller height"
         );
 
-        // The inherited face + color also flow through.
         let small = s
             .extract()
             .into_iter()
@@ -1595,8 +1425,6 @@ mod loader_tests {
         ));
     }
 
-    /// An explicit `<Color>` on a FontString overrides its font object's color; an `inherits=` naming
-    /// no registered font object is a warn-once gap, not a dropped region.
     #[test]
     fn fontstring_color_overrides_object_and_unknown_inherits_warns() {
         let mut s = UiScript::new().unwrap();
@@ -1627,7 +1455,7 @@ mod loader_tests {
             report.warnings
         );
         s.resolve();
-        // A's explicit <Color> wins over GameFontNormal's gold; its height still comes from the object.
+        // A's own <Color> wins over the object's gold; its height still comes from the object.
         let a = s
             .extract()
             .into_iter()
@@ -1638,19 +1466,14 @@ mod loader_tests {
             QuadContent::Text { color: Some(c), font_height: Some(h), .. }
                 if *c == [0.1, 0.2, 0.3, 1.0] && *h == 12.0
         ));
-        // B still materialized (the unknown inherits didn't drop it).
         assert!(s
             .extract()
             .into_iter()
             .any(|q| matches!(&q.content, QuadContent::Text { text: Some(t), .. } if t == "B")));
     }
 
-    /// The chat edit box's shape: an EditBox with BOTH a `<Layers>` FontString (the "Say:" header)
-    /// and the special direct-child `<FontString>` (the engine's text-font slot). The box must
-    /// adopt the SPECIAL one as its text region — the engine ASSIGNS that slot at LoadXML, it
-    /// never searches. (The old find-first adoption grabbed the header: typing then overwrote
-    /// "Say:", and the `<TextInsets>` re-anchor clobbered the header's LEFT anchor into a
-    /// full-width rect — the centered-header + invisible-typing chat bug.)
+    /// The chat edit box's shape. The engine assigns the text slot from the direct-child
+    /// `<FontString>` at LoadXML; it never searches the regions, so the header stays its own.
     #[test]
     fn editbox_adopts_special_fontstring_not_a_layers_header() {
         let mut s = UiScript::new().unwrap();
@@ -1681,13 +1504,11 @@ mod loader_tests {
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
 
-        // Type into the focused box.
         s.run("EB:SetFocus()").unwrap();
         assert!(s.char_input("h"));
         assert!(s.char_input("i"));
 
-        // Resolve; answer every fontstring measure with a stand-in extent (30×12), resolve again
-        // (the round-trip's second solve).
+        // Answer every text measure with a stand-in 30×12, then solve again.
         s.resolve();
         let answers: Vec<(u32, f32, f32, u64)> = s
             .fontstrings_needing_measure()
@@ -1698,8 +1519,6 @@ mod loader_tests {
         s.resolve();
 
         let quads = s.extract();
-        // The header still reads "Say:" — typing lands in the box's own text region, never the
-        // header. Both strings render.
         let header = quads
             .iter()
             .find(|q| matches!(&q.content, QuadContent::Text { text: Some(t), .. } if t == "Say:"))
@@ -1709,8 +1528,7 @@ mod loader_tests {
             .find(|q| matches!(&q.content, QuadContent::Text { text: Some(t), .. } if t == "hi"))
             .expect("the typed text renders in the box's text region");
 
-        // Header rect: its own LEFT+13 anchor + the measured 30×12 extent (left-flush against the
-        // box's left edge at x=100, v-centered on the 100..132 box) — NOT the insets rect.
+        // The header: its own LEFT+13 anchor and the 30×12 extent, centred on the 100..132 box.
         assert_eq!(
             header.rect,
             Some(crate::layout::Rect::new(110.0, 113.0, 122.0, 143.0)),
@@ -1724,11 +1542,7 @@ mod loader_tests {
         );
     }
 
-    /// `<TitleRegion setAllPoints="true"/>` builds the frame's drag handle over its whole rect —
-    /// the stock `TutorialFrame.xml`'s (1976): a press inside it moves the frame with the cursor,
-    /// exactly as `frame:CreateTitleRegion():SetAllPoints()` from Lua does
-    /// (`script::tests::movable::a_title_region_drag_swallows_the_press_and_ends_on_release`);
-    /// the same frame without the element does not move.
+    /// Stock `TutorialFrame.xml:15`; drags like `CreateTitleRegion():SetAllPoints()` from Lua.
     #[test]
     fn title_region_element_builds_the_drag_handle_over_the_frame() {
         let mut s = UiScript::new().unwrap();
@@ -1794,9 +1608,7 @@ mod loader_tests {
         );
     }
 
-    /// `<HitRectInsets>` reaches SetHitRectInsets, and the inset band stops capturing the mouse
-    /// while the frame's own geometry is untouched — the ref micro-button shape (a 29x58 frame whose
-    /// art fills only the lower ~40, `top="18"`).
+    /// The stock micro-button: 29x58, `top="18"` insets (`MainMenuBarMicroButtons.xml:9`).
     #[test]
     fn hit_rect_insets_element_shrinks_the_mouse_rect() {
         let mut s = UiScript::new().unwrap();
@@ -1818,7 +1630,6 @@ mod loader_tests {
             .eval::<(f64, f64, f64, f64)>("return Micro:GetHitRectInsets()")
             .unwrap();
         assert_eq!((l, r, t, b), (0.0, 0.0, 18.0, 0.0));
-        // Geometry untouched: still a 58-tall button.
         assert_eq!(s.eval::<f64>("return Micro:GetHeight()").unwrap(), 58.0);
         // A button is mouse-enabled by construction, so the hit test is live.
         assert!(
@@ -1828,13 +1639,9 @@ mod loader_tests {
         assert!(s.hit_test(14.0, 20.0).is_some(), "the art band still hits");
     }
 
-    /// **The `<Scripts>` walker auto-enables the mouse kind when it attaches a mouse handler**
-    /// (`0x769ef0` → `0x76af00(2,-1)` per handler name) — the reference's GameTimeFrame declares
-    /// `<OnEnter>`/`<OnLeave>` and no
-    /// `enableMouse`, yet its tooltip hovers in the real client. The kind-2 name set is exactly
-    /// {OnEnter, OnLeave, OnMouseDown, OnMouseUp, OnDragStart}: `OnDragStop`/`OnReceiveDrag` are
-    /// NOT in it, and the law is XML-load-time only — the Lua SetScript binding (`0x7748d0`)
-    /// never auto-enables (verified negative there).
+    /// The `<Scripts>` walker enables the mouse for `OnEnter`, `OnLeave`, `OnMouseDown`,
+    /// `OnMouseUp` and `OnDragStart` (`0x769ef0` calls `0x76af00(2,-1)`), which is how the stock
+    /// `GameTimeFrame` hovers; the Lua `SetScript` (`0x7748d0`) never does.
     #[test]
     fn scripts_block_mouse_handlers_auto_enable_mouse() {
         let s = UiScript::new().unwrap();
@@ -1859,7 +1666,6 @@ mod loader_tests {
                 .unwrap(),
             "OnDragStop is outside the kind-2 name set"
         );
-        // Runtime SetScript never auto-enables — the law is the XML walker's, not SetScript's.
         s.run("rt = CreateFrame('Frame', 'Rt'); rt:SetScript('OnEnter', function() end)")
             .unwrap();
         assert!(
@@ -1868,26 +1674,9 @@ mod loader_tests {
         );
     }
 
-    /// **`<NormalText>` is the Button's label under its second name** — the spelling the reference
-    /// FrameXML never writes and a third-party template reaches for constantly.
-    ///
-    /// `CSimpleButton::LoadXML 0x7788c0` gives this tag strictly more than `<ButtonText>` does: it
-    /// constructs the label `CSimpleFontString` (`0x778b6c call 0x770d30`), clears its
-    /// `ownsFontAttrs` (`0x778b7b`, the one site image-wide that clears it) so its own `LoadXML`
-    /// skips the whole font-attribute surface, and feeds the SAME node to the button's persistent
-    /// Normal-state `CSimpleFont` at `+0x33c` (`0x778ba9`/`0x778baf call 0x783c30`). One owner per
-    /// attribute: the label pass reads the element's name and geometry, the state-font pass reads
-    /// its `inherits=`, and neither reads the other's.
-    ///
-    /// **Why this could sit broken indefinitely.** The reference writes `<ButtonText>` 31 times and
-    /// `<NormalText>` never, so our own FrameXML could not notice the tag was unhandled — and an
-    /// unhandled child element is silent: the button loads, paints, and simply has no label and no
-    /// global. KLHThreatMeter's column-header template is exactly this shape, and the addon died at
-    /// `PLAYER_LOGIN` indexing the `nil` global, six frames deep, naming nothing about XML.
-    ///
-    /// The document is that template, reduced: a virtual `Button` carrying a named `<NormalText>`,
-    /// reached through `inherits=` (never directly), so this covers the template path the addon
-    /// actually takes.
+    /// `CSimpleButton::LoadXML 0x7788c0` builds the label from `<NormalText>` (`0x778b6c`), clears
+    /// its `ownsFontAttrs` (`0x778b7b`) and feeds the node to the Normal-state font (`0x783c30`,
+    /// at `0x778baf`): the label takes the name and geometry, the state font the `inherits=`.
     #[test]
     fn a_button_normal_text_is_the_label_names_it_and_fonts_it() {
         let mut s = UiScript::new().unwrap();
@@ -1919,16 +1708,13 @@ mod loader_tests {
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
 
-        // 1 · THE GLOBAL. `$parent` resolved against the instantiated button and published in `_G`
-        // — this single read is the one KLHThreatMeter died on.
+        // 1 · The global, `$parent` resolved against the instance.
         assert!(
             s.eval::<bool>("return KtmSelfHeaderNameText ~= nil")
                 .unwrap(),
             "a named <NormalText> must publish its global"
         );
-        // 2 · ...and it is the BUTTON'S label, not a loose FontString that merely shares the name.
-        // Naming a region and publishing a global are two different things (the `<ButtonText>` path
-        // learned that the expensive way), so both directions are asserted.
+        // 2 · It is the button's label, not a loose FontString with the same name.
         assert_eq!(
             s.eval::<String>("return KtmSelfHeaderNameText:GetName()")
                 .unwrap(),
@@ -1940,16 +1726,14 @@ mod loader_tests {
             "KtmSelfHeaderNameText",
             "the <NormalText> region must BE the button's label"
         );
-        // 3 · The element's own geometry landed on the label — the label pass's half.
+        // 3 · The element's geometry landed on the label.
         assert_eq!(
             s.eval::<f64>("return KtmSelfHeaderNameText:GetWidth()")
                 .unwrap(),
             70.0
         );
-        // 4 · ...and its `inherits=` landed on the button's NORMAL-STATE font, which is the half a
-        // plain `<ButtonText>` alias would have missed. Read off the painted quad rather than a
-        // getter: the state font is applied at extract, so what is on screen is the only reading
-        // that proves the link is live.
+        // 4 · Its `inherits=` reached the Normal-state font, read off the painted quad because the
+        // state font applies at extract.
         s.resolve();
         let label = s
             .extract()
@@ -1970,40 +1754,11 @@ mod loader_tests {
         );
     }
 
-    /// **The two spellings of a Button's label are two different legs, and only `<NormalText>` is
-    /// disowned of its own font attributes — so its `justifyH` never reaches the label and the
-    /// implicit anchor stays CENTER, while a `<ButtonText>`'s does and still seats LEFT.**
-    ///
-    /// `CSimpleButton::LoadXML 0x7788c0`'s child chain routes them apart:
-    /// `<ButtonText>` (tag `0x8799f0`, compared `0x7789c1`) goes to `0x7789d0 call 0x6f2780`, the
-    /// ordinary `<FontString>` region builder the `<Layers>` walker uses, which never writes
-    /// `+0x12c`; `<NormalText>` (tag `0x879978`, `0x778b43`) goes to the inline build
-    /// `[0x778b4c, 0x778bb6)` carrying `0x778b7b mov byte [edi+0x12c],0` — the one site image-wide
-    /// that clears the gate. Cleared, gate B (`0x7710d3 → je 0x771468`) makes the label's own
-    /// `CSimpleFontString::LoadXML 0x770f40` skip `0x7710e1`–`0x771467` wholesale: `font=`,
-    /// `<FontHeight>`, `outline=`, `monochrome=`, the file load, `spacing=`, **`justifyV=`,
-    /// `justifyH=`**, `<Color>` and `<Shadow>`. That node is fed instead to the button's
-    /// Normal-state `CSimpleFont` at `+0x33c` (`0x778ba9`/`0x778baf call 0x783c30`).
-    ///
-    /// So the creation post-step `0x771480` reads the `<NormalText>` label's **untouched ctor
-    /// default** `0x212` = CENTER|MIDDLE (`0x770dd3`) and seats a single CENTER→CENTER anchor
-    /// (point 4, `0x7714dc`/`0x7714e4`). The authored `justifyH="LEFT"` still reaches the *paint*
-    /// and `GetJustifyH()` — `0x783c30`'s tail notify writes the resolved word into the label's own
-    /// `+0x120` (`0x784111` → `0x784180` → `0x773530` → `0x770800` at `0x770876`) — but that runs
-    /// downstream of the anchor, and a FontString pinned at one point is exactly as wide as its
-    /// text, so a left justify inside it has nothing to move.
-    ///
-    /// The live case is Gatherer 1.0.0's minimap quick-menu, transcribed here: every row is a
-    /// `GathererUI_PopupButtonTemplate`, all rows are `SetWidth` to one common width and stacked
-    /// TOP-to-BOTTOM so they share a centreline, and the template's only alignment statement is
-    /// `<NormalText inherits=… justifyH="LEFT"/>`. Applying that word to the label seated all
-    /// seven rows LEFT→LEFT and the menu read as a left-aligned list against the reference's
-    /// centred one.
-    ///
-    /// Two controls, and the second is why this test carries both spellings: an ordinary
-    /// `<Layers>` `<FontString justifyH="LEFT">` still seats LEFT
-    /// (`anchorless_fontstring_seats_at_its_justify_point` above), and so does a
-    /// `<ButtonText justifyH="LEFT"/>` — the gate is the `<NormalText>` leg's alone.
+    /// Only the `<NormalText>` leg clears the label's `+0x12c` gate (`0x778b7b`), so the label's
+    /// `LoadXML 0x770f40` skips its font attributes, `justifyH` among them (`0x7710d3`), and
+    /// `0x771480` seats the ctor's CENTER (`0x212`, `0x770dd3`). `<ButtonText>` goes through the
+    /// ordinary FontString builder (`0x6f2780`) and seats LEFT. The justify still reaches the
+    /// paint and `GetJustifyH()` through the state font (`0x783c30`), after the anchor is set.
     #[test]
     fn a_button_label_element_does_not_own_its_justify() {
         let mut s = UiScript::new().unwrap();
@@ -2042,7 +1797,7 @@ mod loader_tests {
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
 
-        // 1 · The anchor — the whole mechanism, read straight off the label.
+        // 1 · The label's anchor.
         let (point, rel_point, x, y) = s
             .eval::<(String, String, f64, f64)>(
                 "local p, rel, rp, x, y = GathererUI_PopupButton1:GetFontString():GetPoint(1) \
@@ -2055,8 +1810,7 @@ mod loader_tests {
             "<NormalText>'s justifyH is disowned, so 0x771480 seats the ctor's CENTER"
         );
 
-        // 2 · ...and the authored word still reaches the label's PAINT and its getter, through the
-        // Normal-state font's link. Only the anchor was ever the reference's answer here.
+        // 2 · The justify still reaches the label's getter through the state font.
         assert_eq!(
             s.eval::<String>("return GathererUI_PopupButton1:GetFontString():GetJustifyH()")
                 .unwrap(),
@@ -2064,9 +1818,7 @@ mod loader_tests {
             "the state font's justify still reaches the label"
         );
 
-        // 3 · The CONTROL, and the half the byte round corrected: `<ButtonText>` is built by the
-        // ordinary FontString builder (`0x6f2780`), which never clears `+0x12c`, so its own
-        // justifyH lands on the label and the same post-step seats it LEFT.
+        // 3 · The control: `<ButtonText>` keeps its justify, so it seats LEFT.
         let (point, rel_point) = s
             .eval::<(String, String)>(
                 "local p, rel, rp = OwnLabelButton:GetFontString():GetPoint(1) return p, rp",
@@ -2078,9 +1830,8 @@ mod loader_tests {
             "<ButtonText> owns its font attributes — the gate is the <NormalText> leg's alone"
         );
 
-        // 4 · The visible consequence, in resolved coordinates. The popup is [0,0]..[120,60] and
-        // the rows are 64 wide, centred on x=60 → [28,92]. A 40-wide label centred in that is
-        // [40,80]; seated LEFT it is [28,68] — the left edge every Gatherer row shared before this.
+        // 4 · Rows 64 wide centred on x=60 span [28,92]: a 40-wide label centred is [40,80],
+        // seated LEFT [28,68].
         s.run(
             "GathererUI_PopupButton1:GetFontString():SetWidth(40) \
              OwnLabelButton:GetFontString():SetWidth(40)",
@@ -2106,17 +1857,13 @@ mod loader_tests {
         );
     }
 
-    /// **`text=` is a GLOBAL-STRING LOOKUP, not a literal** (`FrameScript_GetText 0x703bf0`). Every
-    /// arm of [`Loader::resolve_text`] in one document:
-    /// a `<Button text=>`, a `<ButtonText text=>` and a `<FontString text=>` all resolve through
-    /// the VM's globals; a value with no matching global falls back to the LITERAL (benilla's own
-    /// divergence, so its plain-English FrameXML keeps working); and a **key-shaped** miss warns,
-    /// which is the tripwire that "CREATE_MACROS" across a title bar never had.
+    /// `text=` resolves as a global (`FrameScript_GetText 0x703bf0`) on all three element shapes;
+    /// a miss shows the raw value, as the reference's readers do, and a key-shaped miss warns.
     #[test]
     fn a_text_attribute_resolves_through_the_global_strings() {
         let mut s = UiScript::new().unwrap();
         s.set_screen_size(800.0, 600.0);
-        // The reference boots GlobalStrings.lua before any XML; so does the app.
+        // GlobalStrings.lua runs before any XML.
         s.run(r#"DELETE = "Delete" EXIT_GAME = "Exit Game" TITLE = "The Title""#)
             .unwrap();
 
@@ -2152,17 +1899,14 @@ mod loader_tests {
         assert_eq!(
             texts,
             vec![
-                // The key's VALUE, on all three element shapes…
                 "The Title",
-                // …a non-key literal untouched (the divergence that keeps our own XML working)…
                 "No results found.",
                 "Delete",
                 "Exit Game",
-                // …and a key-shaped MISS keeps its key on screen rather than blanking.
                 "NO_SUCH_KEY",
             ]
         );
-        // Exactly one warning, and it names the miss — the plain-English literal must not warn.
+        // Only the key-shaped miss warns.
         assert_eq!(
             report
                 .warnings
@@ -2176,8 +1920,6 @@ mod loader_tests {
         assert!(report.warnings.iter().any(|w| w.contains("NO_SUCH_KEY")));
     }
 
-    /// The key SHAPE test itself: `SCREAMING_SNAKE`, two characters or more. The floor is what
-    /// keeps a close button's `text="X"` from being reported as a missing string.
     #[test]
     fn key_shape_is_screaming_snake_of_two_or_more() {
         for yes in ["DELETE", "EXIT_GAME", "CHARACTER_POINTS1_COLON", "AB", "A1"] {
@@ -2188,15 +1930,11 @@ mod loader_tests {
         }
     }
 
-    // ── <SimpleHTML> (the markup widget's XML element) ───────────────────────────────────────
+    // ── <SimpleHTML> ─────────────────────────────────────────────────────────────────────────
 
-    /// **`<SimpleHTML>`'s `<FontString>` child is a font DECLARATION, not a region** — the shape
-    /// stock `ItemTextFrame.xml` uses, and the whole reason its `<H1>` renders at the `<P>` size.
-    ///
-    /// Four claims in one document: the element materializes as a real `SimpleHTML` frame with its
-    /// `<Size>`/`<Anchors>`/`<Scripts>` applied like any frame; the direct-child `<FontString
-    /// inherits=>` lands on `elementFont[0]` rather than creating a FontString region; a
-    /// `<FontStringHeader1>` lands on `elementFont[1]`; and `hyperlinkFormat=` reaches `+0x360`.
+    /// A direct-child `<FontString>` declares `elementFont[0]` and `<FontStringHeader1>`
+    /// `elementFont[1]`, neither a region, and `hyperlinkFormat=` lands at `+0x360`; stock
+    /// `ItemTextFrame.xml:214` uses the first.
     #[test]
     fn simplehtml_xml_declares_element_fonts_not_regions() {
         let mut s = UiScript::new().unwrap();
@@ -2232,7 +1970,6 @@ mod loader_tests {
                 .unwrap(),
             "|H%s|h[%s]|h"
         );
-        // The two declarations landed on their own elements…
         assert_eq!(
             s.eval::<(String, f32)>("local p, h = PageText:GetFont(); return p, h")
                 .unwrap(),
@@ -2243,8 +1980,7 @@ mod loader_tests {
                 .unwrap(),
             ("Fonts\\SKURRI.TTF".to_string(), 24.0)
         );
-        // …and NEITHER became a region. A `<FontString>` handled by the generic special-fontstring
-        // pass would leave an unanchored, textless string on the frame here.
+        // Neither declaration became a region.
         let regions = {
             let lua = s.lua();
             let model = lua
@@ -2255,7 +1991,7 @@ mod loader_tests {
         };
         assert_eq!(regions, 0, "the font declarations created no regions");
 
-        // Now drive it: three blocks, the H1 in its OWN declared face, at the frame's width.
+        // Two blocks, the H1 in its declared face, at the frame's width.
         s.run(
             r#"PageText:SetText("<HTML><BODY><H1>Title</H1><P align=\"center\">Body</P></BODY></HTML>")"#,
         )
@@ -2292,17 +2028,8 @@ mod loader_tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
-    /// A state-texture element with **no `file=`, no `<Color>` and no `name=`** still builds its
-    /// region: `<NormalTexture/>` is the reference's own form on `SpellBookSkillLineTabTemplate`
-    /// (ref SpellBookFrame.xml l.36), and the real client creates from the ELEMENT, not from any
-    /// attribute on it — `Button::LoadXML 0x7788c0` routes all four `<...Texture>` children through
-    /// the same texture adder the `<Layers>` walker uses (`0x6f26f0`), each followed only by the slot
-    /// store, which does no geometry.
-    ///
-    /// The report is pfUI's spellbook skin, which takes `SpellBookSkillLineTab<i>:GetNormalTexture()`
-    /// and immediately `:SetTexCoord()`s it; the corpus carries 38 bare `<DisabledTexture />` besides.
-    /// Before this, the loader materialized only on `file=`/`<Color>`/`name=`, so the getter answered
-    /// nil where the real client answers a live blank texture.
+    /// `CSimpleButton::LoadXML 0x7788c0` builds any `<...Texture>` child through the `<Layers>`
+    /// texture adder (`0x6f26f0`); `SpellBookFrame.xml:36` writes a bare `<NormalTexture/>`.
     #[test]
     fn a_bare_state_texture_element_still_builds_its_region() {
         let mut s = UiScript::new().unwrap();
@@ -2330,8 +2057,7 @@ mod loader_tests {
                 .unwrap(),
             "a bare <DisabledTexture /> builds its region"
         );
-        // Created, not painted: the region is live enough to take SetTexCoord (pfUI's next call) and
-        // still carries no art of its own.
+        // Live enough for `SetTexCoord`, with no art of its own.
         s.run("BareBtn:GetNormalTexture():SetTexCoord(0.07, 0.93, 0.07, 0.93)")
             .unwrap();
         assert!(
@@ -2351,9 +2077,6 @@ mod layer_blend_tests {
         None
     }
 
-    /// `alphaMode="ADD"` on a `<Layers>` texture reaches the extracted quad's blend flag — the
-    /// state-texture path always applied it, the layer path silently dropped it (the quest log's
-    /// selection glow rendered as an opaque gray bar — the 0109 look fix).
     #[test]
     fn layers_texture_alpha_mode_add_reaches_the_quad() {
         let s = UiScript::new().unwrap();
@@ -2401,10 +2124,7 @@ mod region_template_tests {
         None
     }
 
-    /// A `<Texture inherits="…">` layer region splices its virtual template — file, `<Size>`,
-    /// `<Anchors>` — with the instance's own nodes winning (the talent branch/arrow art pool's
-    /// shape; before this, the template was silently ignored and every pooled texture sat at
-    /// 0×0 with no file: shown, positioned by the runtime SetPoint, and invisible).
+    /// The instance's own nodes win over the template's.
     #[test]
     fn layers_texture_inherits_a_virtual_texture_template() {
         let s = UiScript::new().unwrap();
@@ -2436,7 +2156,6 @@ mod region_template_tests {
         );
         let mut s = s;
         s.set_screen_size(800.0, 600.0);
-        // The template's size/file landed; the instance's own <Size> wins over the template's.
         assert_eq!(
             s.eval::<(f64, f64)>("return Branch1:GetWidth(), Branch1:GetHeight()")
                 .unwrap(),
@@ -2464,8 +2183,6 @@ mod region_template_tests {
         );
     }
 
-    /// A `<FontString inherits="GameFontNormal">` names a FONT OBJECT, not an element template —
-    /// the region-template gate must pass it through untouched (no "unknown template" warning).
     #[test]
     fn fontstring_font_object_inherits_stays_out_of_the_template_path() {
         let s = UiScript::new().unwrap();
@@ -2492,11 +2209,6 @@ mod region_template_tests {
             report.warnings
         );
         assert_eq!(s.eval::<String>("return Label:GetText()").unwrap(), "hello");
-        // …and the font it inherited is READABLE BACK, which is the half this test did not ask.
-        // `EQL3_Options.lua:1086` is the corpus line that needs it: it reads the tracker line's
-        // font with `t1, _, t2 = EQL3_QuestWatchLine1:GetFont()` and feeds `t1` straight into
-        // `temp:SetFont(t1, height, t2)` — so a nil path there is not a cosmetic gap, it is our own
-        // faithful `Usage: <FontString>:SetFont(...)` raise firing on our own nil.
         assert_eq!(
             s.eval::<(String, f32)>("local f, h = Label:GetFont() return f, h")
                 .unwrap(),
@@ -2505,12 +2217,7 @@ mod region_template_tests {
         );
     }
 
-    /// **A font-object name resolves case-INSENSITIVELY**, because the client's font registry
-    /// compares its keys with `SStrCmpI` (`0x783870`/`0x7838c7`).
-    ///
-    /// `Recap/RecapOptions.xml:32` inherits `GameFontHighLightSmall`; the shipped font is
-    /// `GameFontHighlightSmall`, one letter's case apart. On the real client that resolves, and it
-    /// used to be a warn-once gap here — a NARROWING fix, like the unit-token fold (1247).
+    /// The reference's font registry compares names with `SStrCmpI` (`0x783870`/`0x7838c7`).
     #[test]
     fn a_font_object_inherits_resolves_whatever_its_case() {
         let s = UiScript::new().unwrap();
@@ -2544,11 +2251,7 @@ mod region_template_tests {
         );
     }
 
-    /// **EQL3's actual shape: FontString -> virtual FontString TEMPLATE -> Font object.** One hop
-    /// works (above); this is the two-hop chain every "define a line template once, stamp it N
-    /// times" addon writes, and `EQL3_Tracker.xml:6/32` is the corpus instance —
-    /// `EQL3_QuestWatch_FontTemplate` inherits `GameFontHighlight`, and each
-    /// `EQL3_QuestWatchLine<i>` inherits the template.
+    /// Two hops: a FontString inherits a virtual FontString template, which inherits a font object.
     #[test]
     fn a_fontstring_template_carries_the_font_object_it_inherits() {
         let s = UiScript::new().unwrap();
@@ -2581,7 +2284,7 @@ mod region_template_tests {
     }
 }
 
-/// Chunk naming — which FILE and which LINE a `<Script>` raise reports.
+/// Chunk naming: the file and line a `<Script>` raise reports.
 mod chunk_name_tests {
     use crate::framexml;
     use crate::loader::*;
@@ -2595,21 +2298,11 @@ mod chunk_name_tests {
         framexml::parse(text).expect("valid FrameXML")
     }
 
-    /// **A raise inside a `<Script>` block names the file it came from, and the file's own line.**
-    ///
-    /// Both halves are load-bearing and both were wrong. `Loader::run` loaded every chunk with no
-    /// name, and mlua's `load` is `#[track_caller]` — so the chunk was named after the *Rust* line
-    /// that ran it, and a corpus read-back of 70 failures had 26 rows saying
-    /// `crates/benilla-ui/src/loader/mod.rs:327` where the addon's file belonged.
-    ///
-    /// Naming it is only half. A Lua chunk starts at line 1, so an inline block 40 lines down a
-    /// file would report `File.xml:3` for its third line — a lie you can go and check, which is
-    /// strictly worse than the Rust path that was at least obviously not yours. The chunk is padded
-    /// to the block's own offset, so the number is the number you scroll to.
+    /// An inline block is padded to its line in the file, so a raise reports the file's line.
     #[test]
     fn a_script_raise_names_its_own_file_and_line() {
         let s = UiScript::new().unwrap();
-        // `error()` with no level prefixes "chunkname:line:" — exactly what a real raise carries.
+        // `error()` with no level prefixes `chunkname:line:`, as a real raise does.
         let doc = parse(
             "<Ui>\n\
              <Frame name=\"Pad\"/>\n\
@@ -2621,24 +2314,18 @@ mod chunk_name_tests {
         );
         let report = load_in(&s, &doc, "Bagnon/src/main.xml", &no_files);
         let err = report.errors.join("\n");
-        // The file, in the shape an addon's own `debugstack()` matches (backslashes, no `@`).
-        // The `:<Scripts>` suffix and the `[string "…"]` wrapper are the reference's own
-        // (`"%s:<Scripts>"` `0x871074`, `luaO_chunkid`'s third branch), not decoration of ours.
+        // Backslashes, and the reference's `"%s:<Scripts>"` form (`0x871074`).
         assert!(
             err.contains("Bagnon\\src\\main.xml:"),
             "the raise must name the document, got: {err}"
         );
-        // Line 5 of the literal above is `error("boom")` — the body starts on line 4 and the
-        // padding carries it there. Without the pad this reads `:2:`.
+        // `error("boom")` is line 5 of the literal; unpadded it would read `:2:`.
         assert!(
             err.contains("main.xml:<Scripts>\"]:5:"),
             "the line must be the FILE's line, not the block's, got: {err}"
         );
     }
 
-    /// The same, one level down: an `<Include>`d document's inline script names **its own** file,
-    /// not the includer's. The path is saved and restored around the recursion exactly as the
-    /// directory used to be, so depth-1 and depth-5 each report themselves.
     #[test]
     fn an_included_documents_script_names_the_included_file() {
         let s = UiScript::new().unwrap();
@@ -2659,11 +2346,8 @@ mod chunk_name_tests {
         );
     }
 
-    /// **The CDATA shape, which is the only shape our own FrameXML uses.** `<![CDATA[` sits
-    /// between the element's start and the body's first byte, so taking the line from the
-    /// *element* would be short by however much of the opening tag precedes it — and a
-    /// single-line-offset lie is the hardest kind to notice. The line comes from the text child's
-    /// own range instead, which is what this pins.
+    /// The line comes from the text child's own range, not the element's, which the `<![CDATA[`
+    /// opener would offset.
     #[test]
     fn a_cdata_script_block_reports_the_files_line() {
         let s = UiScript::new().unwrap();
@@ -2685,7 +2369,6 @@ mod chunk_name_tests {
         );
     }
 
-    /// A `<Script file=>` chunk is named after the file it loaded, not the document that named it.
     #[test]
     fn a_script_file_chunk_is_named_after_that_file() {
         let s = UiScript::new().unwrap();
@@ -2701,17 +2384,8 @@ mod chunk_name_tests {
         );
     }
 
-    /// **A captured script, called back the reference's way, still knows its frame.**
-    ///
-    /// This is *the* 1.12 hook idiom and the whole reason `GetScript` exists: an addon takes the
-    /// client's handler, installs its own, and calls the original with **no arguments**, because
-    /// the reference's contract passes the frame as the `this` global and nothing else. Our
-    /// wrapper is `function(self, ...)` and our own FrameXML is written against `self`, so before
-    /// the fallback in [`super::Loader::compile_handler`] that re-entry handed every body a nil
-    /// frame. The director met it as `bad argument #2: error converting Lua nil to table` out of
-    /// `GameTooltip:SetOwner`, from a handler that works perfectly when the engine calls it.
-    ///
-    /// Both spellings are asserted, because the fallback must not cost the engine's own call.
+    /// The 1.12 hook idiom: an addon captures a handler with `GetScript` and calls it with no
+    /// arguments, the frame passed only as `this`; `Loader::compile_handler` falls back to `this`.
     #[test]
     fn a_script_captured_and_called_with_no_arguments_still_sees_its_frame() {
         let s = UiScript::new().unwrap();
@@ -2727,12 +2401,11 @@ mod chunk_name_tests {
         let report = load_in(&s, &doc, "Test.xml", &no_files);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
 
-        // The engine's own call: `self` is passed and `this` is set — the modern spelling.
+        // The engine's call passes `self` and sets `this`.
         s.run("SEEN = nil Hooked:Show()").unwrap();
         assert_eq!(s.eval::<String>("return SEEN").unwrap(), "Hooked");
 
-        // The addon's: capture the script, then call it back bare with only `this` standing in for
-        // the frame — exactly `Bagnon.lua:87`'s `bMainBag_OnEnter()`.
+        // The addon's: the captured script called bare, with only `this` set.
         s.run(
             "SEEN = nil \
              local original = Hooked:GetScript(\"OnShow\") \
@@ -2749,30 +2422,20 @@ mod chunk_name_tests {
     }
 }
 
-/// [`super::join_ref`] — the FrameXML path rule.
-///
-/// A reference is relative to the directory of the file containing it, `\` and `/` are the same
-/// separator, and `..` walks up. The escape case is the load-bearing one: a `..` above the root is
-/// KEPT as a leading `..` rather than clamped away, because the provider has to be able to SEE the
-/// escape to refuse it. Clamping would silently hand it a path that looks contained.
 #[test]
 fn join_ref_resolves_relative_framexml_paths() {
     use super::join_ref;
-    // Relative to the including file's own directory.
     assert_eq!(
         join_ref("Bagnon/src", "templates.xml"),
         "Bagnon/src/templates.xml"
     );
-    // Backslashes are separators, and `..` walks up — this is how a library addon is reached.
     assert_eq!(
         join_ref("Bagnon/src", "..\\..\\BagBrother\\core\\core.xml"),
         "BagBrother/core/core.xml"
     );
-    // At the root, a bare name stays bare (the builtin's flat tree).
     assert_eq!(join_ref("", "Fonts.xml"), "Fonts.xml");
-    // `.` is a no-op; redundant separators collapse.
     assert_eq!(join_ref("a/b", "./c//d.xml"), "a/b/c/d.xml");
-    // An escape above the root SURVIVES, so the provider can refuse it.
+    // An escape above the root survives, so the provider can refuse it.
     assert_eq!(join_ref("a", "../../secret"), "../secret");
     assert_eq!(join_ref("", "../secret"), "../secret");
     // A leading `/` re-roots rather than meaning the filesystem root.

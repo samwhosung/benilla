@@ -1,52 +1,13 @@
-//! The spellbook (slice 5) — the spell **source** for the cursor payload
-//! system: a read-only book model the app builds from `PlayerActions.spells`
-//! (`SMSG_INITIAL_SPELLS`), the same two-way seam shape as [`super::merchant`]/[`super::action`]:
-//! the app pushes a **book snapshot** ([`UiScript::set_spellbook`] — tabs + the flat slot list,
-//! already resolved to name/rank/icon/passive by the app's `benilla_formats::SpellCatalog` ×
-//! skill-line join), and `CastSpell`/`PickupSpell` queue outbound intents the app drains
-//! ([`UiScript::take_spell_casts`] / the cursor seam's own `CursorPayload::Spell` arm — decision
-//! 0216 §1). The engine holds no spell KNOWLEDGE (icons/ranks/skill lines are the app's job) — a
-//! slot is "a spell id, a name, a rank, a texture, and a passive bit".
+//! The spellbook bindings, over a book the app pushes (tabs and a flat slot list, already resolved
+//! to name, rank, icon and passive); `CastSpell` and `PickupSpell` queue intents the app drains.
 //!
-//! ## The book-id seam (decision 0218 §4's byte-verified 0-based book slot)
+//! FrameXML passes every binding a 1-based book id (`SpellBook_GetSpellID`), and the reference's
+//! marshaller (`0x4b3ec0`) subtracts 1, as [`slot_index`] does. `BOOKTYPE_PET` selects the pet's
+//! slot list, fed from `SMSG_PET_SPELLS`, where `PickupSpell` and `CastSpell` produce a pet action
+//! word and a `CMSG_PET_ACTION` instead.
 //!
-//! The ref's own FrameXML computes a **1-based, per-tab-cumulative "book id"**
-//! (`SpellBookFrame.lua`'s `SpellBook_GetSpellID`: `buttonId + tabOffset + 12*(page-1)`, where
-//! `buttonId` is a spell button's own 1..12 `id=` attribute and `tabOffset` is
-//! `GetSpellTabInfo`'s own `offset` return) and passes that SAME id, unmodified, to every one of
-//! `GetSpellName`/`GetSpellTexture`/`IsSpellPassive`/`CastSpell`/`PickupSpell`. 0218 §4 byte-read
-//! `PickupSpell`'s own argument as a **0-based book slot** — so the real client's Lua↔C++ glue
-//! does the `-1` itself, invisibly to FrameXML. This engine keeps the ref's exact Lua-facing
-//! convention (every binding below takes the SAME 1-based-cumulative `id` a transcribed
-//! `SpellBookFrame.xml` computes and passes verbatim, so the transcription needs no special
-//! casing) and does the byte-verified `-1` at THIS one seam ([`slot_index`]) before indexing
-//! [`SpellBookState::slots`] (0-based, flat, tab order). `GetSpellTabInfo`'s pushed `offset` is
-//! therefore exactly each tab's 0-based START index into `slots` — the app computes it as the
-//! running sum of every earlier tab's `num_spells` (tab 1's is `0`, so its first spell's book id
-//! is `1`, matching the ref's own "first tab's first spell is id 1").
-//!
-//! ## The pet book (live; 0216 §8's deferral is retired)
-//!
-//! `BOOKTYPE_PET` selects a **second slot list** ([`PetBookState`]), fed from `SMSG_PET_SPELLS`'
-//! own spell tail. Every `bookType`-taking binding is a two-way fork ([`book_slot`]) exactly as the
-//! reference's are — `isPet ? [0xb6f098 + 4*i] : [0xb700f0 + 4*i]`, written out once per binding —
-//! and the three pet-only bindings (`HasPetSpells`, `GetSpellAutocast`, `ToggleSpellAutocast`) live
-//! here with them.
-//!
-//! Two asymmetries are the API and not tidiable away:
-//!
-//! - `GetNumSpellTabs`/`GetSpellTabInfo` take **no** `bookType` and only ever answer the player's
-//!   skill lines. That is the reference's own signature: the pet book has no tabs, and
-//!   `SpellBookFrame_Update` hides the whole skill-line strip while it is up.
-//! - `PickupSpell` and `CastSpell` produce a **different kind of thing** on the pet side — a pet
-//!   action word on the cursor (`0x494e20`, cursor modes 1-7) and a `CMSG_PET_ACTION` on the wire
-//!   (`0x4b34ce`) — rather than a spell payload and a player cast. See each binding.
-//!
-//! `BOOKTYPE_SPELL`/`BOOKTYPE_PET` are installed as plain Lua globals here rather than left to the
-//! transcribed XML's own `<Script>` block (the ref's actual home for them, `SpellBookFrame.lua:
-//! 5-6`, and this crate's usual house rule for Era top-level constants) — the one deliberate
-//! exception, so this module's OWN engine-level tests can drive the pet-deferral path without
-//! loading a real `SpellBookFrame.xml`.
+//! Deviation: `BOOKTYPE_SPELL`/`BOOKTYPE_PET` are engine globals here, where the reference defines
+//! them in `SpellBookFrame.lua:5-6`, so this module's tests run without the stock file.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -57,14 +18,13 @@ use super::Model;
 const BOOKTYPE_SPELL: &str = "spell";
 const BOOKTYPE_PET: &str = "pet";
 
-/// `HasPetSpells`' second return when the app has not resolved a token — the reference's own
-/// literal at `0x846a40`, pushed by `0x4b44a6` whenever the player object fails to resolve. Never
-/// nil: FrameXML concatenates it (`"PET_TYPE_"..token`), which would error on one.
+/// `HasPetSpells`' second return when no token is resolved: the reference's literal (`0x846a40`),
+/// pushed at `0x4b44a6` when the player object does not resolve. FrameXML concatenates it, so
+/// never nil.
 const PET_TOKEN_FALLBACK: &str = "PET";
 
-/// One skill-line tab (`GetSpellTabInfo`'s own Era tuple shape). `offset` is the tab's 0-based
-/// START index into [`SpellBookState::slots`] (module docs' book-id seam) — pushed by the app,
-/// trusted here (the engine holds no spell knowledge to derive it from itself).
+/// One skill-line tab as `GetSpellTabInfo` returns it; `offset` is the tab's 0-based start in
+/// [`SpellBookState::slots`], computed by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpellTabView {
     pub name: String,
@@ -73,72 +33,49 @@ pub struct SpellTabView {
     pub num_spells: u32,
 }
 
-/// One spell in the flat book (0-based [`SpellBookState::slots`] index; module docs' book-id
-/// seam). Every field is pre-resolved by the app — the engine draws whatever it's given.
+/// One spell in the flat book, every field resolved by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpellSlotView {
     pub spell_id: u32,
     pub name: String,
-    /// The rank/subtext line (`Spell.dbc`'s `NameSubtext`, `benilla-formats`' own pin); `None`
-    /// shows no second line.
+    /// The rank line, `Spell.dbc`'s `NameSubtext`; `None` shows no second line.
     pub rank: Option<String>,
     pub texture: Option<String>,
-    /// `SPELL_ATTR_PASSIVE` (`benilla-formats`' `SpellDisplay::passive`) — grays the name in the
-    /// transcribed XML and refuses both [`CastSpell`]-family casts (this module) and, faithfully,
-    /// nothing else: a passive can still be picked up/placed on a bar (the ref never blocks that).
+    /// `SPELL_ATTR_PASSIVE`: grays the name and refuses `CastSpell` and `CastSpellByName`, never
+    /// a pickup (the reference does not block one).
     pub passive: bool,
-    /// The `IsCurrentCast` verdict for this slot — the checked ring (`SpellButton_UpdateSelection`'s
-    /// gold glow). The delegate `0x4b3600` has exactly two arms: a shapeshift spell whose form is
-    /// the player's current form byte, or the open trade-skill window's own spell — never an
-    /// ordinary in-flight cast.
-    /// App-resolved (`benilla::ui_spellbook`), pushed with the book; the app fires
-    /// `CURRENT_SPELL_CAST_CHANGED` on its edges.
+    /// `IsCurrentCast`, the checked ring: the reference (`0x4b3600`) answers it only for a
+    /// shapeshift into the player's current form or the open trade-skill window's spell, never an
+    /// ordinary cast.
     pub current: bool,
-    /// The spell's running cooldown as `(start_ms on the GetTime clock, duration_ms, enabled)` —
-    /// the same app-computed triple [`super::ActionState::cooldown`] and the container slots
-    /// carry, resolved by the ONE cooldown store (`benilla::cooldowns::Cooldowns::info` — id,
-    /// category and GCD reads alike); `GetSpellCooldown` answers the reference's
-    /// `(start, duration, enable)`. `None` = cold. Frame-stable per arm (the absolute start), so
-    /// a running cooldown never churns the book diff.
+    /// `(start_ms on the GetTime clock, duration_ms, enabled)`, the triple the action bar carries;
+    /// `None` is cold. The start is absolute, so a running cooldown never churns the book diff.
     pub cooldown: Option<(i64, u32, bool)>,
-    /// `GetSpellAutocast`'s `(allowed, enabled)` pair — **pet-book only**, and `None` is not
-    /// "neither": it is the reference's own player-book answer, `(nil, nil)`, because `0x4b4180`
-    /// short-circuits on the book flag (`0x4b41cb`/`0x4b41d6`) before it looks a spell up at all.
-    /// Read off the pet's **raw** word (`0x4bd160` → bits 31/30), never off the filtered book.
+    /// `GetSpellAutocast`'s `(allowed, enabled)`, pet book only, read off the pet's raw word
+    /// (`0x4bd160`, bits 31 and 30).
     pub autocast: Option<(bool, bool)>,
-    /// The pet slot's packed word **verbatim** — what `PickupSpell(id, "pet")` puts on the cursor.
-    /// `0x4b3260`'s pet arm hands `0x494e20` a *pointer* to this very word, so the payload is the
-    /// server's own dword, type byte and autocast bits included, not a synthesized one. `0` for a
-    /// player-book slot, which has no word.
+    /// The pet slot's packed word as the server sent it, which `PickupSpell(id, "pet")` puts on the
+    /// cursor (`0x4b3260` hands `0x494e20` a pointer to it); 0 in the player book.
     pub packed: u32,
 }
 
-/// The **pet's** book — the reference's second flat array (`0xb6f098`, count `0xb71174`), which is
-/// a genuinely different object from the player's rather than a variant of it:
+/// The pet's book, the reference's second flat array (`0xb6f098`, count `0xb71174`):
 ///
-/// - **no tabs.** `GetNumSpellTabs`/`GetSpellTabInfo` take no `bookType` and only ever answer the
-///   player's skill lines; `SpellBookFrame_Update` hides every skill-line tab while the pet book is
-///   up (`SpellBookFrame.lua:124`), and `SpellBook_GetSpellID` returns the button's own 1..12 id
-///   with no tab offset at all (`l.460-462`).
-/// - **a different add-gate.** `0x4b2f90` admits a spell iff it resolves in `Spell.dbc` **and**
-///   `Attributes & 0x80` (DO_NOT_DISPLAY) is clear — `0x4b2fa8 mov dl,[rec+0x18]; test dl,dl; js`.
-///   That is *one* of the three tests the player book's own gate makes: no `IS_TRADESKILL` leg and
-///   no `castUI == 0` leg. Reusing the player book's gate here would be the same class of mistake
-///   as reusing its tab routing.
-/// - **the same order.** `0x4b2fd0(ecx = 0, edx = 1)` sorts it with `0x4b30c0`, the player book's
-///   own comparator (name, then parsed rank), and tail-jumps `SPELLS_CHANGED`.
+/// - no tabs, so `GetNumSpellTabs` and `GetSpellTabInfo` take no book type: `SpellBookFrame_Update`
+///   hides the skill-line tabs for it (`SpellBookFrame.lua:124`) and `SpellBook_GetSpellID` adds
+///   no tab offset (`SpellBookFrame.lua:460-462`);
+/// - its own add gate (`0x4b2f90`): in `Spell.dbc` with `Attributes & 0x80` (DO_NOT_DISPLAY)
+///   clear, without the player book's tradeskill and `castUI` tests;
+/// - the player book's order: `0x4b2fd0` sorts it with `0x4b30c0` (spell-line group, name, rank).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PetBookState {
-    /// `HasPetSpells`'s second return: `ChrClasses.dbc` field 4 for the player's class — `"PET"`
-    /// or `"DEMON"` (`benilla_formats::PetNameTokens`). A **key**, not display text: FrameXML does
-    /// `getglobal("PET_TYPE_"..token)`. `None` only while there is no book at all.
+    /// `HasPetSpells`' second return, `ChrClasses.dbc` field 4 (`"PET"` or `"DEMON"`), a key
+    /// FrameXML looks up as `PET_TYPE_<token>`; `None` only while there is no book.
     pub token: Option<String>,
     pub slots: Vec<SpellSlotView>,
 }
 
-/// The player's known-spell book: tabs (skill lines) + the flat slot list every tab indexes into
-/// (module docs). Durable player state, not a session window (like [`super::action`]'s
-/// `actions` map) — never `Option`; "no known spells yet" is simply empty vectors.
+/// The player's book: the skill-line tabs and the flat slot list they index into.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpellBookState {
     pub tabs: Vec<SpellTabView>,
@@ -146,99 +83,75 @@ pub struct SpellBookState {
 }
 
 impl super::UiScript {
-    /// Push the whole book snapshot (tabs + flat slots), replacing whatever was there. A bare
-    /// setter — firing `SPELLS_CHANGED` is the app's own diff-and-fire job (mirroring
-    /// `set_action`/`set_container`; never auto-fired here).
+    /// Replace the book; the app fires `SPELLS_CHANGED` on its own diff.
     pub fn set_spellbook(&mut self, state: SpellBookState) {
         self.model_mut().spellbook = state;
     }
 
-    /// Push the pet's book ([`PetBookState`]), replacing whatever was there. A bare setter for the
-    /// same reason as its sibling: the reference fires `SPELLS_CHANGED` for **both** books off the
-    /// one re-sort (`0x4b2fd0` → `SignalEvent(0x104)`), and whose diff moved is the app's to know.
+    /// Replace the pet's book; the app fires `SPELLS_CHANGED`, which the reference fires for both
+    /// books off one re-sort (`0x4b2fd0`).
     pub fn set_pet_book(&mut self, state: PetBookState) {
         self.model_mut().pet_book = state;
     }
 
-    /// Drain the pet spell ids `CastSpell(id, "pet")` queued. Separate from
-    /// [`Self::take_spell_casts`] because the wire verb is different in kind: the dispatcher's pet
-    /// arm sends **`CMSG_PET_ACTION`** with a synthesized type-1 word (`0x4b34ce`), not a player
-    /// cast, so folding them into one queue would lose which end of the leash the cast came from.
+    /// Drain the pet spell ids `CastSpell(id, "pet")` queued: each is a `CMSG_PET_ACTION` with a
+    /// type-1 word (`0x4b34ce`), not a player cast.
     pub fn take_pet_spell_casts(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().pet_spell_casts)
     }
 
-    /// Drain the pet spell ids `ToggleSpellAutocast` queued — the pet **book**'s autocast verb,
-    /// which is a different opcode from the pet **bar**'s ([`super::pet::UiScript::…`]'s
-    /// `take_pet_autocast_toggles` → `CMSG_PET_SET_ACTION`): this one is
-    /// `CMSG_PET_SPELL_AUTOCAST 0x2F3` and names a spell id rather than a bar slot
-    /// (`0x4b4291` → `0x4bccb0`).
+    /// Drain the spell ids `ToggleSpellAutocast` queued: `CMSG_PET_SPELL_AUTOCAST` (0x2F3, sent by
+    /// `0x4bccb0`) names a spell id, where the pet bar's toggle sends `CMSG_PET_SET_ACTION`.
     pub fn take_pet_spell_autocasts(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().pet_spell_autocasts)
     }
 
-    /// Read the book back — for the ONE app-side consumer that must resolve a spell name by the
-    /// same law `CastSpellByName` does: a macro's bound spell (`benilla::ui_macro`, decision
-    /// 0983). Going through the pushed book rather than re-deriving from the catalog is what
-    /// stops the bar's cooldown swirl and the macro's own cast disagreeing about which rank a
-    /// bare `/cast Fireball` means.
+    /// The pushed book, for resolving a macro's spell by the rule `CastSpellByName` uses, so the
+    /// bar and the cast agree on which rank a bare `/cast` means.
     pub fn spellbook(&self) -> SpellBookState {
         self.model_mut().spellbook.clone()
     }
 
-    /// Drain the spell ids `CastSpell` queued since the last call.
+    /// Drain the spell ids `CastSpell` and `CastSpellByName` queued.
     pub fn take_spell_casts(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().spell_casts)
     }
 
-    /// Push whether the app's cast lifecycle holds something `SpellStopCasting()` can stop — a
-    /// running auto-repeat or an in-flight cast, but NOT a channel (the ref's `0x6e6e80` reads
-    /// only the auto-repeat key `0xceac30` and the inflight id `0xceca88`, and the inflight id
-    /// is already 0 during a channel). Pushed each frame by the
-    /// app's cast feed (`benilla::ui_cast`), before the input pass runs the ESC chain.
+    /// Whether `SpellStopCasting()` has something to stop: an auto-repeat or an in-flight cast,
+    /// never a channel (`0x6e6e80` reads only the auto-repeat key `0xceac30` and the in-flight
+    /// id `0xceca88`, which is 0 mid-channel). Pushed each frame before the ESC chain runs.
     pub fn set_casting(&mut self, casting: bool) {
         self.model_mut().casting = casting;
     }
 
-    /// Drain the `SpellStopCasting()` trigger: `true` if it fired on a stoppable state since
-    /// the last call — the ESC leg of the local self-cancel (`benilla::ui_cast` resolves WHICH
-    /// thing dies: auto-repeat first, else the in-flight cast — the ref's branch order).
+    /// Drain the `SpellStopCasting()` trigger; the app stops the auto-repeat first, else the
+    /// in-flight cast, the reference's order.
     pub fn take_spell_stop(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().spell_stop)
     }
 
-    /// Push whether the app's spell-targeting cursor mode is active — what
-    /// `SpellIsTargeting()` reads and `SpellStopTargeting()` gates on. Pushed each frame by the
-    /// app's targeting feed (`benilla::ui_action`), before the input pass runs the ESC chain.
+    /// Whether the spell-targeting cursor is up, for `SpellIsTargeting()` and
+    /// `SpellStopTargeting()`; pushed each frame before the input pass runs the ESC chain.
     pub fn set_spell_targeting(&mut self, targeting: bool) {
         self.model_mut().spell_targeting = targeting;
     }
 
-    /// Drain the `SpellStopTargeting()` trigger: `true` if it fired while targeting since the
-    /// last call — the ESC-chain rung (`UIParent.lua:1490`); the app clears its targeting mode.
+    /// Drain the `SpellStopTargeting()` trigger, the ESC chain's rung (`UIParent.lua:1490`); the
+    /// app clears its targeting mode.
     pub fn take_stop_targeting(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().spell_stop_targeting)
     }
 }
 
-/// Which book a `bookType` argument names — the reference's own one-line test, and it is a
-/// **case-insensitive compare against `"pet"` alone** (`0x4b3f27` → `SStrCmpI(arg2, "pet")`), so
-/// every other string, `"spell"` included, is the player's book. Reproduced rather than tightened:
-/// the shared parser also *requires* a string second argument (`0x4b3ee8 lua_isstring(2)`), which
-/// is why these bindings take `String` and not `Option<String>`.
+/// Whether `bookType` names the pet book: a case-insensitive compare with `"pet"` alone
+/// (`0x4b3f27`), so any other string, `"spell"` included, is the player's book.
 fn is_pet_book(book_type: &str) -> bool {
     book_type.eq_ignore_ascii_case(BOOKTYPE_PET)
 }
 
-/// The shared argument marshaller of the reference's spell-slot bindings (`0x4b3ec0` —
-/// `GetSpellName`, `GetSpellTexture`, `IsCurrentCast`,
-/// `GetSpellCooldown`, `IsSpellPassive`, `CastSpell`, `PickupSpell` and the two autocast verbs all
-/// call it): arg 1 must be a number and arg 2 a number or string — the book type is **not**
-/// optional; the index is `trunc(arg1 - 1)` and must land in `[0, 0x400)`, else the binding
-/// raises `Invalid spell slot in <Verb>` and abandons the caller's statement. `"pet"`
-/// (case-insensitively) selects the pet list; any other book type, `"spell"` included, reads the
-/// player's. Answers the 1-based id the rest of this module indexes by ([`slot_index`]), and the
-/// book type normalised to the two names the model knows.
+/// The reference's shared spell-slot marshaller (`0x4b3ec0`): arg 1 a number, arg 2 a number or
+/// string (`0x4b3ee8`), and the index `trunc(arg1 - 1)` in `[0, 0x400)`, else the binding raises
+/// `Invalid spell slot in <Verb>`. Answers the 1-based id and the normalised book type.
 fn spell_slot_args(id: Value, book_type: Value, verb: &str) -> mlua::Result<(u32, String)> {
     let invalid = || mlua::Error::runtime(format!("Invalid spell slot in {verb}"));
     // `lua_isnumber` + `lua_tonumber` (`0x6f34d0`/`0x6f3620`): a numeric string is a number.
@@ -269,18 +182,14 @@ fn spell_slot_args(id: Value, book_type: Value, verb: &str) -> mlua::Result<(u32
     Ok((index as u32 + 1, book.to_string()))
 }
 
-/// The book-id → 0-based slot-list index seam (module docs).
+/// The 1-based book id as a 0-based slot index.
 fn slot_index(id: u32) -> Option<usize> {
     usize::try_from(id.checked_sub(1)?).ok()
 }
 
-/// The one lookup every `bookType`-taking binding shares: pick the book, then the slot. This is
-/// literally the reference's shape — `isPet ? [0xb6f098 + 4*i] : [0xb700f0 + 4*i]`, one fork
-/// repeated verbatim inside each binding (`0x4b3f5d`, `0x4b40e6`, `0x4b3735`, `0x4b3339`, …).
-///
-/// Shared with the tooltip channel (`super::tooltip_spell`'s `SetSpell`), which is a `GameTooltip`
-/// method rather than a global but repeats the identical fork at `0x532e1c`/`0x532e2a` — and which
-/// read the player's book for a pet hover until 1050, because it took the argument and dropped it.
+/// The slot a `bookType` binding reads. The reference forks `isPet ? [0xb6f098 + 4*i] :
+/// [0xb700f0 + 4*i]` in each binding (`0x4b3f5d`, `0x4b40e6`, `0x4b3735`, `0x4b3339`) and in
+/// `GameTooltip:SetSpell` (`0x532e1c`/`0x532e2a`), which shares this.
 pub(super) fn book_slot<'a>(
     model: &'a Model,
     id: u32,
@@ -294,28 +203,17 @@ pub(super) fn book_slot<'a>(
     slots.get(slot_index(id)?)
 }
 
-/// Resolve a spell **by name** against the player's book — the law behind `CastSpellByName` and,
-/// through it, `/cast` and every macro's `/cast` line.
+/// Resolve a spell by name against the player's book, for `CastSpellByName` and so `/cast`, whose
+/// grammar the client's help text gives as `/cast <name> (<subtext>)` (`MACRO_HELP_TEXT_LINE4`):
 ///
-/// The grammar is the one the client documents in its own help text:
-/// `MACRO_HELP_TEXT_LINE4 = "- To cast a spell from a macro use the following syntax:
-/// /cast <name> (<subtext>)"`. So:
+/// - `Fireball`: the highest known rank, by the subtext's leading number (unranked is 0, and a tie
+///   goes to the later slot, the order the book lists ranks in);
+/// - `Fireball(Rank 1)` or `Fireball (Rank 1)`: that subtext, case-insensitively.
 ///
-/// - **`Fireball`** — the highest-ranked *known* Fireball. Rank order is the book's own
-///   `NameSubtext` number (`"Rank 8"` → 8) through the reference's own leading-number parse
-///   ([`super::super::…`]'s twin lives in `benilla::ui_spellbook`); an unranked subtext sorts as 0,
-///   and ties fall to the later book slot, which is the order the book itself lists ranks in.
-/// - **`Fireball(Rank 1)`** / **`Fireball (Rank 1)`** — that exact subtext, case-insensitively.
-///   Both spacings, because vanilla macros in the wild are written both ways and the reference's
-///   own help text prints the spaced form while its FrameXML never re-spaces the argument.
-///
-/// Name matching is case-insensitive and whole-name — a *prefix* rule would silently cast
-/// "Frostbolt" for "Frost" and there is nothing in the reference suggesting one. A spell the
-/// player does not know resolves to `None` and the cast simply does not happen: the reference has
-/// no error line for it either (`SlashCmdList["CAST"]` discards the binding's result).
-///
-/// Passives are skipped, matching [`pickup_spell`]'s sibling rule in `CastSpell`: a passive is
-/// permanent player state, never something a macro casts.
+/// Names match whole and case-insensitively; passives never match. An unknown spell casts nothing
+/// and prints no error, as in the reference (`SlashCmdList["CAST"]` discards the result). The
+/// reference cuts the name at `(` untrimmed (`0x4b3950`), so its spaced form keeps a trailing space
+/// and misses, and it matches name and rank alone, across the pet's book too (`0x4b3a10`).
 pub fn resolve_spell_by_name<'a>(
     book: &'a SpellBookState,
     query: &str,
@@ -334,15 +232,13 @@ pub fn resolve_spell_by_name<'a>(
                 .is_some_and(|r| r.eq_ignore_ascii_case(want)),
             None => true,
         })
-        // Highest rank wins when no subtext pinned one; the book's own later slot breaks a tie.
         .enumerate()
         .max_by_key(|(i, s)| (rank_number(s.rank.as_deref()), *i))
         .map(|(_, s)| s)
 }
 
-/// `Name(Subtext)` / `Name (Subtext)` → `("Name", Some("Subtext"))`; a bare name → `(name, None)`.
-/// An unclosed parenthesis is not a subtext — the whole string stays the name, so a spell whose
-/// own name holds a `(` cannot be silently truncated.
+/// `Name(Subtext)` or `Name (Subtext)` to `("Name", Some("Subtext"))`; without a closing
+/// parenthesis after the opening one, the whole string is the name.
 fn split_subtext(query: &str) -> (&str, Option<&str>) {
     let q = query.trim();
     let Some(open) = q.find('(') else {
@@ -357,9 +253,8 @@ fn split_subtext(query: &str) -> (&str, Option<&str>) {
     (q[..open].trim(), Some(q[open + 1..close].trim()))
 }
 
-/// The rank number inside a `NameSubtext` (`"Rank 8"` → 8), by the reference's own leading-number
-/// parse: skip to the first digit, fold the digit run. A subtext with no digits (`"Racial"`,
-/// `"Passive"`) and an absent one both read 0.
+/// The rank in a `NameSubtext` (`"Rank 8"` is 8) by the reference's parse, the first digit run;
+/// a subtext without digits, or none, reads 0.
 fn rank_number(subtext: Option<&str>) -> u32 {
     subtext
         .unwrap_or("")
@@ -369,13 +264,9 @@ fn rank_number(subtext: Option<&str>) -> u32 {
         .fold(0u32, |acc, c| acc * 10 + c.to_digit(10).unwrap_or(0))
 }
 
-/// `PickupSpell(id, bookType)` — the drag/shift-click entry point (ref `SpellButton_OnClick`'s
-/// other two forks, `SpellBookFrame.lua:263-290`). The book is a SOURCE, never a placement
-/// target — the ref's plain click always casts unconditionally, never checking `GetCursorInfo`
-/// first (unlike `UseAction`'s `checkCursor` fork) — so this refuses outright when the cursor
-/// already holds ANYTHING rather than silently discarding it: the doll's own refusal precedent
-/// (`cursor::doll::pickup_inventory_item`) for a payload with nowhere faithful to go, since a
-/// spell button is not a fit-checked drop target the way a doll slot or bar button is.
+/// `PickupSpell(id, bookType)`, the spell button's drag and shift-click
+/// (`SpellBookFrame.lua:266-290`). It refuses while the cursor holds anything, where the
+/// reference's setters clear the cursor first (`0x495190`, called at `0x494dab` and `0x494f00`).
 fn pickup_spell(model: &mut Model, id: u32, book_type: &str) -> bool {
     if model.cursor.is_some() {
         return false;
@@ -383,22 +274,16 @@ fn pickup_spell(model: &mut Model, id: u32, book_type: &str) -> bool {
     let Some(slot) = book_slot(model, id, book_type) else {
         return false;
     };
-    // **The pet book's payload is a different KIND**, not a Spell payload with a flag on it: the
-    // pet arm of `0x4b3260` calls `0x494e20` with a pointer to the pet's raw word (cursor modes
-    // 1-7), while the player arm calls `0x494d20` with a spell id (mode 9). That is why a pet
-    // spell can be dropped onto the pet bar and a player spell cannot — the bar's drop accepts
-    // exactly one payload kind, and the book is the *second* place that kind is produced.
+    // The pet arm of `0x4b3260` puts the pet's raw word on the cursor (`0x494e20`, cursor mode 4),
+    // the player arm a spell id (`0x494d20`, mode 3); only the pet word drops on the pet bar.
     let payload = if is_pet_book(book_type) {
-        // `0x494e20`'s own jump table refuses type 0 and type >= 8, so a word that could not sit
-        // on the bar cannot ride the cursor either (`cursor::pet::payload_word`, same rule).
+        // `0x494e20` refuses type 0 and types 8 and up.
         let packed = slot.packed;
         if !(1..=7).contains(&((packed >> 24) & 0x3F)) {
             return false;
         }
         CursorPayload::PetAction(super::cursor::CursorPetAction {
-            // No source slot: this word came out of the BOOK, not off the bar, so there is
-            // nothing to blank behind it and nothing to swap back to. The reference is the same
-            // shape — its cursor holds a pointer into the raw spell array, not into the bar.
+            // No source slot: the word comes from the book, not the bar.
             src_slot: 0,
             packed,
             passive: slot.passive,
@@ -425,31 +310,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set("BOOKTYPE_SPELL", BOOKTYPE_SPELL)?;
     g.set("BOOKTYPE_PET", BOOKTYPE_PET)?;
 
-    // `UpdateSpells()` — twelve bytes in the reference (`[0x4b43e0,0x4b43ec)`), and its entire
-    // content is a bare `SignalEvent(SPELLS_CHANGED)`: event 260, **no arguments**, and NO state
-    // mutation whatsoever. Entered with both sort flags zero the worker
-    // performs exactly one memory write — a `push esi` undone nine instructions later — and
-    // `0x4b302f` is the sole fire site for event 260 image-wide.
-    //
-    // **`argc = 0` is PROVEN, not observed**: the binding overwrites `ecx` at its second
-    // instruction, so an extra argument is structurally unobservable. Zero return values.
-    //
-    // **It is NOT a no-op, and it is not a repaint.** Two readings were tried and both are wrong.
-    // A no-op breaks the five stock call sites (`ToggleSpellBook`, `SpellBookFrame_Update`'s
-    // showing leg, both page-turn OnClicks, `SpellBookSkillLineTab_OnClick`). And our old
-    // `BenillaUpdateSpells` stand-in — a loop repainting `SpellButton1..N` — was wrong in BOTH
-    // directions: narrower (it missed the skill-line tab strip, the pet/spell tab buttons,
-    // `SpellBook_UpdatePageArrows` and every other registrant) and wider (the reference gates the
-    // frame update on `IsVisible()`). The repaint is FrameXML's, reached through the event; there
-    // is no native listener mechanism at all.
-    //
-    // Fired SYNCHRONOUSLY, through [`super::tick::fire_event_into`] — the reference's
-    // `SignalEvent` is synchronous, so queueing it for the next tick would be a real divergence.
-    //
-    // Firing `SPELLS_CHANGED` from the other six reference sites (spell learned/removed/
-    // superseded, `SMSG_PET_SPELLS`, the bring-up rebuild, two UpdateFields reflexes) is a
-    // SEPARATE obligation and is where the spell-list re-sort lives; `UpdateSpells` is the one
-    // caller of the seven that never performed that recompute.
+    // `UpdateSpells()` (`[0x4b43e0,0x4b43ec)`) only signals `SPELLS_CHANGED` (event 260, whose one
+    // fire site is `0x4b302f`): no arguments read, no returns, no state change, and no re-sort,
+    // which the other `SPELLS_CHANGED` sites do. The repaint is FrameXML's, through the event.
+    // `SignalEvent` is synchronous, so this fires now, not on the next tick.
     g.set(
         "UpdateSpells",
         lua.create_function(|lua, ()| {
@@ -458,10 +322,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `PlayerHasSpells()` — a hard-coded `1` in the reference: `push 0x3ff00000; push 0;
-    // lua_pushnumber; mov eax,1; ret`. No branch, no store read, so it cannot answer anything else
-    // (1924, found by the same dispatch). `MainMenuBarMicroButtons.lua` gates the spellbook micro
-    // button on it, which is the only reason it exists here.
+    // `PlayerHasSpells()` is a constant 1 in the reference (it pushes 1.0 with no branch);
+    // `MainMenuBarMicroButtons.xml:80` picks the spellbook micro button's tooltip by it.
     g.set("PlayerHasSpells", lua.create_function(|_, ()| Ok(1_i64))?)?;
 
     g.set(
@@ -472,41 +334,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSpellTabInfo(i) -> name, texture, offset, numSpells. **FOUR values on every path that
-    // returns** — `0x4b3ce0` has two live `ret`s and both `mov eax,4`; the `eax=0` one at `0x4b3d0d`
-    // is dead code after `luaL_error` longjmps.
-    //
-    // **OUT OF RANGE IS `nil, nil, 0, 0` — LITERAL zeros, not a single nil.** This comment used to say
-    // "out of range -> a single nil (GetMerchantItemInfo's own out-of-range shape)", i.e. one
-    // binding's shape copied onto another on the assumption that they generalise. They do not
-    // (1919 proved it for GetSkillLineInfo; this is the same bug one verb over). Leg `0x4b3e12`
-    // pushes nil, nil, then `push 0; push 0; lua_pushnumber` twice — `0x6f3810` copies its two
-    // stack dwords VERBATIM, so that is exactly +0.0, not a stale offset and nothing off the array
-    // base. Index 0, a negative, past-the-count and the empty/no-player registry all reach it via
-    // ONE unsigned branch (`0x4b3d26 dec ebx / cmp ebx,eax / jae`).
-    //
-    // Why the zeros are load-bearing rather than cosmetic: `SpellBookFrame_OnLoad` runs
-    // `SpellBookSkillLineTab_OnClick(1)` -> `GetSpellTabInfo(1)` UNCONDITIONALLY at load, and
-    // `SpellBookFrame_Update` can pass `SpellBookFrame:GetID()`, which is 0. The stock file then
-    // does `id > (offset + numSpells)` unguarded (l.295) — a nil there raises, and `(0+0)` makes it
-    // true, so the reference HIDES EVERY BUTTON ON THE PAGE. That is the behaviour to match.
-    //
-    // **The argument RAISES when absent or not number-coercible** — `luaL_error(L, "Usage:
-    // GetSpellTabInfo(index)")`, a numeric string accepted. [`number_arg`] is that exact shape
-    // (coerce, truncate toward zero, raise the usage string), and the decrement happens AFTER it.
-    // Do NOT share `GetSpellName`'s marshaller: `0x4b3ec0` does `fsub 1.0` BEFORE truncating, and
-    // the two disagree below 1 (`0.5` is out-of-range here and index 0 there).
-    //
-    // Slot 1 is also nil on an IN-RANGE tab whose skillLineId has no DBC row (`0x4b3dbd`), and
-    // `(string?, nil, num, num)` is live in shipped data (SkillLine.dbc 733/753/754 have
-    // spellIconID 0) — both already the shape the in-range arm below produces.
+    // GetSpellTabInfo(i) -> name, texture, offset, numSpells, four values on every path
+    // (`0x4b3ce0`). Out of range, 0 and negatives included (`0x4b3d26`), is `nil, nil, 0, 0`
+    // (`0x4b3e12`): `SpellBookFrame.lua:295` and `:328` compare `id > (offset + numSpells)`
+    // unguarded, so the zeros hide every button where a nil would raise. In range, the reference
+    // answers a nil name and texture for a skill line with no DBC row (`0x4b3dbd`) and a nil
+    // texture for one with no icon (SkillLine 733, 753, 754); here the name is always a string.
+    // The index is truncated before the decrement, unlike in `0x4b3ec0`, so 0.5 is out of range.
     g.set(
         "GetSpellTabInfo",
         lua.create_function(|lua, i: Value| {
             let i = super::binding_abi::number_arg(lua, i, "Usage: GetSpellTabInfo(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            // Truncate (done), THEN decrement, then the unsigned compare: a negative or zero
-            // index lands below 0 and `usize::try_from` refuses it — the `jae` leg.
+            // Zero or a negative fails `usize::try_from`, as the unsigned compare fails it.
             let tab = usize::try_from(i64::from(i) - 1)
                 .ok()
                 .and_then(|n| model.spellbook.tabs.get(n));
@@ -531,42 +371,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSpellName(id, bookType) -> name, rank. **Always TWO values, never one, and the rank of a
-    // rankless spell is the EMPTY STRING, never nil** — derived from the bytes alone, below.
-    //
-    // Both returns go through the same push helper with **no rank-specific branch anywhere in the
-    // binding** — a ranked and a rankless spell run byte-identical code: `0x4b4063 call 0x6f3890`
-    // pushes `SpellRec.Name[locale]`, `0x4b4076` pushes `NameSubtext[locale]`, and the single
-    // DBC-resolved exit is `mov eax,0x2` at `0x4b407c`. `0x6f3890` decides on **pointer nullity
-    // alone** (`test edx,edx`), and the DBC pointer is never NULL: `SpellRec::Read 0x583750` fixes
-    // up every string column with an unconditional `add offset, stringBlockBase`, so an on-disk
-    // offset of 0 materializes as a pointer to the string block's own byte 0 — a NUL. `0x6f3840`
-    // then writes tag 4 (`LUA_TSTRING`) unconditionally; `len == 0` is not a special case. So the
-    // rankless rank is a real, interned, zero-length Lua string.
-    //
-    // This is not an edge case: **14,403 of the shipped Spell.dbc's 22,357 rows carry NameSubtext
-    // offset 0** — 64%, `Attack` (6603) among them. Our `Option<String>::None` pushed nil there,
-    // and two 1.12 corpus addons walking the whole book die on it in two different idioms:
-    // `Roid-Macros/Generic.lua:35` uses the rank as a TABLE KEY (nil is illegal), and
-    // `CT_MasterMod/CT_Master.lua:16` passes it straight to `string.find` (nil raises). Both were
-    // invisible until the survey seated a spellbook.
-    //
-    // The `Option` is still the right shape for the MODEL — it records "this spell has no
-    // NameSubtext", which is a fact about the DBC row. What was wrong was rendering that absence
-    // as nil at the Lua boundary; the reference renders it as the empty string the pointer targets.
+    // GetSpellName(id, bookType) -> name, rank, always two values; a rankless spell's rank is "",
+    // never nil: `0x4b4076` pushes `NameSubtext` through `0x6f3890`, which tests only pointer
+    // nullity, and `SpellRec::Read` (`0x583750`) makes every string offset a pointer. 14,403 of
+    // the 22,357 `Spell.dbc` rows have an empty one, `Attack` (spell 6603) among them.
     g.set(
         "GetSpellName",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
             let (id, book_type) = spell_slot_args(id, book_type, "GetSpellName")?;
-            // An out-of-range index RAISES rather than answering nil (`spell_slot_args`); the
-            // in-binding bound check at `0x4b4018` is unreachable-as-taken. This file previously
-            // assumed the bound was "enforced by our slot lists being shorter than that anyway" —
-            // a short list answers nil, which is a different thing entirely.
+            // Out of `[0, 0x400)` already raised in `spell_slot_args`; the binding's own bound
+            // check (`0x4b4018`) is never taken.
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(slot) = book_slot(&model, id, &book_type) else {
-                // An unfilled slot inside the range answers **two** nils (`0x4b4086` → `mov eax,0x2`
-                // at `0x4b4095`), not one — which a return-list count and a two-name assignment can
-                // both tell apart.
+                // An empty slot inside the range answers two nils (`0x4b4086`).
                 return Ok(MultiValue::from_vec(vec![Value::Nil, Value::Nil]));
             };
             Ok(MultiValue::from_vec(vec![
@@ -589,17 +406,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // IsCurrentCast(id, bookType) — the spellbook button's checked ring (binding `0x4b4370` →
-    // delegate `0x4b3600`; ref
-    // `SpellButton_UpdateSelection` SetChecks on it). The verdict itself is app-resolved per slot
-    // ([`SpellSlotView::current`]); this only reads it back.
+    // IsCurrentCast(id, bookType) (`0x4b4370`) reads back the app's per-slot verdict,
+    // `SpellSlotView::current`.
     g.set(
         "IsCurrentCast",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
             let (id, book_type) = spell_slot_args(id, book_type, "IsCurrentCast")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let current = book_slot(&model, id, &book_type).is_some_and(|s| s.current);
-            // The ref's binding convention: 1 or nil, never false.
+            // 1 or nil, never false, as the reference's bindings answer.
             match current {
                 true => Ok(Value::Integer(1)),
                 false => Ok(Value::Nil),
@@ -607,11 +422,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSpellCooldown(id, bookType) → start, duration, enable — the book twin of
-    // `GetActionCooldown`/`GetContainerItemCooldown`, identical conventions: `GetTime`-clock
-    // `(seconds, seconds, 0/1)`, enable 0 = an on-hold record (parked, full duration), and the
-    // cold-at-expiry guard so an event-driven re-feed can never replay the finish flash. Pet or
-    // out-of-range answers the cold `(0, 0, 1)` — the ref's own no-cooldown shape.
+    // GetSpellCooldown(id, bookType) -> start, duration, enable in `GetTime` seconds, as
+    // `GetActionCooldown`: enable 0 for an on-hold cooldown; an expired or empty one answers the
+    // reference's no-cooldown `(0, 0, 1)`, so a re-feed cannot replay the finish flash.
     g.set(
         "GetSpellCooldown",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
@@ -645,17 +458,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CastSpell(id, bookType) — the plain click (ref SpellButton_OnClick's `else` branch): queues
-    // the resolved spell id UNLESS the slot is passive (module doc: a passive is permanent player
-    // state, never something the player casts) or bookType/id resolve to nothing.
-    //
-    // **The pet arm is a different verb, not a flag.** `0x4b3300`'s tail forks on the book byte
-    // one instruction before the send (`0x4b34c8 cmp ecx, 0; je` → the player's own cast
-    // `0x6e5a90`), and the pet side builds `CMSG_PET_ACTION 0x175` by hand:
-    // `{ u64 [0xb714a0], u32 (spellId & 0xFFFF) | 0x01000000, u64 target }` (`0x4b34ce`-`0x4b3524`)
-    // — a **synthesized type-1 word**, which is why the pet book can cast a spell that is not on
-    // the bar at all. The target is the passed one, falling back to the current selection
-    // (`0x4b34af`-`0x4b34bb`), exactly as `CastPetAction` does; the app supplies it at the drain.
+    // CastSpell(id, bookType), the plain click, queues the slot's spell unless it is passive. On
+    // the pet book `0x4b3300` forks at `0x4b34c8` (the player's cast is `0x6e5a90`) to send
+    // `CMSG_PET_ACTION` (0x175), `{ u64 [0xb714a0], u32 (spellId & 0xFFFF) | 0x01000000, u64
+    // target }` (`0x4b34ce`), so the pet book casts a spell not on the bar; the target falls back
+    // to the selection (`0x4b34af`), as in `CastPetAction`. The app sends both at the drain.
     g.set(
         "CastSpell",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
@@ -675,12 +482,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // HasPetSpells() → numPetSpells, petToken — no arguments, and **always exactly two returns**
-    // (`0x4b4410`, `EAX = 2` on every path). Zero spells answers `(nil, nil)` (`0x4b4420`), which
-    // is the gate `ToggleSpellBook` and `SpellBookFrame_Update` both read: no pet book, no tab row.
-    //
-    // Return 1 is the **count as a number**, not a boolean — `SpellBook_GetCurrentPage` divides by
-    // it (`ceil(numPetSpells/12)`), so answering 1/nil would silently pin the pet book to one page.
+    // HasPetSpells() -> numPetSpells, petToken: always two returns (`0x4b4410`), `(nil, nil)` with
+    // no pet spells (`0x4b4420`). The count is a number: `SpellBook_GetCurrentPage` divides by it.
     g.set(
         "HasPetSpells",
         lua.create_function(|lua, ()| {
@@ -691,20 +494,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             let token = match &model.pet_book.token {
                 Some(t) => Value::String(lua.create_string(t)?),
-                // The reference's own unresolved-player arm pushes the literal "PET"
-                // (`0x4b44a6`), never nil — a nil here would make `"PET_TYPE_"..token` error.
                 None => Value::String(lua.create_string(PET_TOKEN_FALLBACK)?),
             };
             Ok(MultiValue::from_vec(vec![Value::Integer(n as i64), token]))
         })?,
     )?;
 
-    // GetSpellAutocast(id, bookType) → autoCastAllowed, autoCastEnabled (1/nil each) — the
-    // AutoCastable overlay and the sparkle model on a pet book button.
-    //
-    // **Pet-only, and it fails to (nil, nil) rather than (nil) for the player book**: `0x4b4180`
-    // tests the book flag twice (`0x4b41cb`, `0x4b41d6`) and falls into the same two nil pushes the
-    // no-record path uses, so the arity is 2 on every path including a bad index.
+    // GetSpellAutocast(id, bookType) -> autoCastAllowed, autoCastEnabled, 1 or nil each: always
+    // two returns, `(nil, nil)` for the player book (`0x4b4180` tests the book at `0x4b41cb` and
+    // `0x4b41d6`) and for an empty slot.
     g.set(
         "GetSpellAutocast",
         lua.create_function(move |lua, (id, book_type): (Value, Value)| {
@@ -718,16 +516,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ToggleSpellAutocast(id, bookType) — the pet book's right click (ref `SpellButton_OnClick`'s
-    // `arg1 ~= "LeftButton"` fork). **A different binding and a different opcode from the pet
-    // BAR's `TogglePetAutocast`**: `0x4b4240` indexes the pet spellbook and calls `0x4bccb0`, which
-    // sends `CMSG_PET_SPELL_AUTOCAST 0x2F3` naming a **spell id**, where the bar's verb sends
-    // `CMSG_PET_SET_ACTION` naming a slot. Confusing them is a wire bug that looks like a UI one.
-    //
-    // The gate here is the same one `0x4bccb0` applies before it sends: the word must be
-    // autocast-ALLOWED (`0x4bccf5 test cl,1`). Everything else the sender does — flipping bit 30
-    // in place and mirroring it onto every bar slot carrying the same action — is state the app
-    // owns, so it happens at the drain.
+    // ToggleSpellAutocast(id, bookType), the pet book's right click (`0x4b4240`): queued only for
+    // an autocast-allowed word, the gate `0x4bccb0` applies before sending (`0x4bccf5`). The app
+    // sends `CMSG_PET_SPELL_AUTOCAST` and flips bit 30 on the book and the bar at the drain.
     g.set(
         "ToggleSpellAutocast",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
@@ -744,14 +535,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CastSpellByName(name [, onSelf]) — the reference binding `0x4b4ab0`, whose only two callers
-    // share the `0x4b3300` dispatcher with `CastSpell` above, so this queues onto
-    // the same `spell_casts` list and the app's one cast tail handles both. `SlashCmdList["CAST"]`
-    // is literally `CastSpellByName(msg)`, which is why `/cast` needs nothing else, and it is the
-    // command the whole macro system is built to run.
-    //
-    // `onSelf` is accepted and carried no further (benilla has no self-cast modifier yet — the
-    // same named gap `UseAction`'s third argument already has).
+    // CastSpellByName(name [, onSelf]) (`0x4b4ab0`) shares the dispatcher `0x4b3300` with
+    // `CastSpell`, so it queues on the same list; `SlashCmdList["CAST"]` calls it. `onSelf` is
+    // accepted and ignored: self-cast is not built.
     g.set(
         "CastSpellByName",
         lua.create_function(|lua, (name, _on_self): (String, MultiValue)| {
@@ -773,18 +559,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellStopCasting() — the ref's Script::SpellStopCasting (`0x6e6e80`): stop the FIRST of
-    // {running auto-repeat (`0x6ea080`,
-    // CMSG_CANCEL_AUTO_REPEAT_SPELL), in-flight cast (`AbortCast` → CMSG_CANCEL_CAST)} and
-    // return 1; nil when neither runs. A CHANNEL is nil — the body's whole callee closure
-    // never reaches the channel canceler `0x6e9b70`, and the inflight id `0xceca88` it gates
-    // on is already 0 mid-channel (the launch CAST_RESULT(OKAY) clears it at `0x6e7408`) —
-    // the vanilla "/stopcasting can't stop a channel" quirk, kept faithfully. The falsy leg is
-    // load-bearing ground truth from the artifact: `ToggleGameMenu`'s ESC chain (extracted
-    // `UIParent.lua:1489`, `elseif ( SpellStopCasting() ) then`) only reaches
-    // `CloseAllWindows()`/the game menu through nil, so an unconditional true would eat every
-    // ESC press forever. The host feeds the stoppable mirror (`set_casting`) and resolves the
-    // branch order at the drain (`benilla::ui_cast::local_self_cancel`).
+    // SpellStopCasting() (`0x6e6e80`) stops the first of a running auto-repeat (`0x6ea080`,
+    // `CMSG_CANCEL_AUTO_REPEAT_SPELL`) or an in-flight cast (`CMSG_CANCEL_CAST`) and answers 1,
+    // else nil. A channel answers nil: the channel canceler `0x6e9b70` is never reached, and the
+    // in-flight id `0xceca88` is 0 mid-channel (cleared at `0x6e7408`). The nil matters: the ESC
+    // chain (`UIParent.lua:1489`) reaches the game menu only through it.
     g.set(
         "SpellStopCasting",
         lua.create_function(|lua, ()| {
@@ -798,9 +577,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellIsTargeting() — the ref's Script::SpellIsTargeting (`0x6e6cd0`): true while the
-    // targeting cursor is up (`flag_word != 0`), nil otherwise.
-    // Read by FrameXML (PetFrame's right-click bind fork) and by the ESC chain's callers.
+    // SpellIsTargeting() (`0x6e6cd0`): true while the targeting cursor is up, else nil.
     g.set(
         "SpellIsTargeting",
         lua.create_function(|lua, ()| {
@@ -813,16 +590,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellCanTargetUnit("unit") — the ref's `0x6e6d00`: resolve the token, then ask `0x6e6460`'s
-    // UNIT leg whether the standing word can bind it. Its one shipped caller is
-    // `UnitFrame_OnEnter`, and it is what picks CAST_CURSOR over CAST_ERROR_CURSOR — the only
-    // lit/grey cursor split over a UI element in 1.12.
-    //
-    // The token is not consulted yet, and that is honest rather than lazy: the answer is `false`
-    // for **every** unit while any word benilla can arm is standing (location / item / gameobject —
-    // no unit satisfies those), so no token can change it. The app derives the flag from the word
-    // itself, so this starts discriminating by unit the moment the residual unit-word machine
-    // lands rather than silently staying wrong.
+    // SpellCanTargetUnit("unit") (`0x6e6d00`) asks `0x6e6460`'s unit leg whether the targeting
+    // word can take the unit. The token is not read: no word benilla can arm (location, item,
+    // gameobject) takes a unit, and unit words are not built.
     g.set(
         "SpellCanTargetUnit",
         lua.create_function(|lua, _unit: Option<String>| {
@@ -835,12 +605,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellStopTargeting() — the ref's Script::SpellStopTargeting (`0x6e6e30`: if IsTargeting →
-    // StopTargeting `0x6e4900` → AbortCast(0x1c), which in targeting mode just clears the word,
-    // no packet). The 1/nil return is load-bearing exactly like SpellStopCasting's above: the
-    // ESC chain's rung (`UIParent.lua:1490`, `elseif ( SpellStopTargeting() ) then`) must fall
-    // through to the game menu when nothing was targeting. The host drains the trigger
-    // (`benilla::spell::targeting`) and clears its mode.
+    // SpellStopTargeting() (`0x6e6e30`): while targeting, `0x6e4900` clears the word with no
+    // packet and the binding answers 1, else nil, so the ESC chain (`UIParent.lua:1490`) falls
+    // through to the game menu.
     g.set(
         "SpellStopTargeting",
         lua.create_function(|lua, ()| {
@@ -863,8 +630,7 @@ mod tests {
     use crate::script::cursor::{CursorAction, CursorPayload};
     use crate::script::UiScript;
 
-    /// Two tabs: "Fire" (2 spells: Fireball rank1 active, Fire Blast PASSIVE — an artificial
-    /// fixture just to exercise the gray/refuse gate) and "Frost" (1 spell).
+    /// Two tabs: Fire (Fireball, and Fire Blast marked passive) and Frost (Frost Armor).
     fn book() -> SpellBookState {
         SpellBookState {
             tabs: vec![
@@ -897,7 +663,7 @@ mod tests {
                     name: "Fire Blast".into(),
                     rank: Some("Rank 1".into()),
                     texture: Some("Interface\\Icons\\Spell_Fire_FireBolt02".into()),
-                    passive: true, // artificial: exercises the refusal gate
+                    passive: true, // not really passive: exercises the refusal
                     current: false,
                     cooldown: None,
                     ..Default::default()
@@ -916,7 +682,6 @@ mod tests {
         }
     }
 
-    /// `IsCurrentCast` reads the app-resolved per-slot verdict back as the ref's 1-or-nil.
     #[test]
     fn is_current_cast_reads_the_slot_verdict() {
         let mut s = UiScript::new().unwrap();
@@ -942,17 +707,13 @@ mod tests {
             .unwrap());
     }
 
-    /// `GetSpellCooldown` reads the app-pushed per-slot triple back as the ref's GetTime-clock
-    /// `(start, duration, enable)` — cold `(0, 0, 1)` for absent/pet/out-of-range, enable 0 for
-    /// an on-hold record regardless of expiry, and the cold-at-expiry guard once
-    /// `start + duration` passes (`GetActionCooldown`'s own conventions, the book twin).
     #[test]
     fn get_spell_cooldown_reads_the_slot_triple() {
         let mut s = UiScript::new().unwrap();
         s.set_spellbook(book());
         s.tick(20.0); // GetTime = 20
 
-        // Cold slot: the ref's no-cooldown shape.
+        // Cold slot: the reference's no-cooldown shape.
         assert_eq!(
             s.eval::<(f64, f64, i64)>("return GetSpellCooldown(1, BOOKTYPE_SPELL)")
                 .unwrap(),
@@ -962,26 +723,26 @@ mod tests {
         let mut b = book();
         b.slots[0].cooldown = Some((14_000, 10_000, true)); // running: 4 s elapsed of 10
         b.slots[1].cooldown = Some((2_000, 8_000, false)); // on hold: parked since t=2
-        b.slots[2].cooldown = Some((5_000, 10_000, true)); // elapsed at t=15 — cold
+        b.slots[2].cooldown = Some((5_000, 10_000, true)); // elapsed at t=15: cold
         s.set_spellbook(b);
         assert_eq!(
             s.eval::<(f64, f64, i64)>("return GetSpellCooldown(1, BOOKTYPE_SPELL)")
                 .unwrap(),
             (14.0, 10.0, 1)
         );
-        // On hold survives the expiry guard (enable 0 = the parked "hasn't begun").
+        // On hold survives the expiry guard.
         assert_eq!(
             s.eval::<(f64, f64, i64)>("return GetSpellCooldown(2, BOOKTYPE_SPELL)")
                 .unwrap(),
             (2.0, 8.0, 0)
         );
-        // Elapsed goes cold — an event-driven re-feed can never replay the finish flash.
+        // Elapsed goes cold.
         assert_eq!(
             s.eval::<(f64, f64, i64)>("return GetSpellCooldown(3, BOOKTYPE_SPELL)")
                 .unwrap(),
             (0.0, 0.0, 1)
         );
-        // The pet deferral and out-of-range answer cold too.
+        // No pet book, and past the book, answer cold too.
         assert_eq!(
             s.eval::<(f64, f64, i64)>("return GetSpellCooldown(1, BOOKTYPE_PET)")
                 .unwrap(),
@@ -998,8 +759,7 @@ mod tests {
     fn tab_info_shapes_and_book_id_offsets() {
         let mut s = UiScript::new().unwrap();
         assert_eq!(s.eval::<i64>("return GetNumSpellTabs()").unwrap(), 0);
-        // `== nil` reads true either way — Lua compares only the first value. The ARITY is the
-        // load-bearing half and lives in `out_of_range_answers_four_values` below (1931).
+        // Lua compares only the first value; `out_of_range_answers_four_values` checks the arity.
         assert!(s
             .eval::<bool>("return (GetSpellTabInfo(1)) == nil")
             .unwrap());
@@ -1019,13 +779,11 @@ mod tests {
             .unwrap();
         assert_eq!((name2.as_str(), offset2, num2), ("Frost", 2, 1));
 
-        // Out of range -> nil.
+        // Out of range: nil first.
         assert!(s.eval::<bool>("return GetSpellTabInfo(3) == nil").unwrap());
     }
 
-    /// The shared marshaller's law (`0x4b3ec0`): the index is `trunc(arg - 1)` gated to
-    /// `[0, 0x400)` and a miss RAISES; the book type is mandatory and `"pet"` is matched without
-    /// case; anything else is the player's book.
+    /// The reference's marshaller, `0x4b3ec0`.
     #[test]
     fn the_slot_marshaller_gates_the_index_and_names_the_book() {
         let mut s = UiScript::new().unwrap();
@@ -1048,8 +806,7 @@ mod tests {
                 .contains("Invalid spell slot in GetSpellTexture"),
             "the book type is not optional"
         );
-        // Inside the range but past the book: nil, not an error — the bound is the marshaller's,
-        // the emptiness is the slot's.
+        // Inside the range but past the book: nil, not an error.
         assert!(s
             .eval::<bool>("return GetSpellTexture(1024, BOOKTYPE_SPELL) == nil")
             .unwrap());
@@ -1102,7 +859,7 @@ mod tests {
             .unwrap();
         assert_eq!(name3, "Frost Armor");
 
-        // Out of range and the pet deferral both answer nil.
+        // Past the book, and an absent pet book, answer nil.
         assert!(s
             .eval::<bool>(r#"return GetSpellName(99, BOOKTYPE_SPELL) == nil"#)
             .unwrap());
@@ -1129,9 +886,8 @@ mod tests {
             ("spell", 1, "spell", 133)
         );
 
-        // CURSOR_UPDATE fired (the shared cursor seam, not duplicated here) — a listener sees it.
-        // Tick first to flush the FIRST pickup's already-queued CURSOR_UPDATE before the listener
-        // registers, so the count below is purely about the second (refused) call.
+        // Tick first to flush the first pickup's `CURSOR_UPDATE`, so the count below is the
+        // refused call's alone.
         s.tick(0.0);
         s.run(
             r#"
@@ -1149,8 +905,7 @@ mod tests {
             0,
             "refused pickup fires no CURSOR_UPDATE"
         );
-        // Still holding spell 133 (book slot 1) from the first pickup — a refusal never clobbers
-        // it (GetCursorInfo's Spell arm: kind, book_slot, book_type, spell_id).
+        // Still holding the first pickup: a refusal never clobbers it.
         assert_eq!(
             s.eval::<(String, i64, String, i64)>(
                 "local k, slot, book, id = GetCursorInfo() return k, slot, book, id"
@@ -1201,9 +956,8 @@ mod tests {
             .unwrap());
     }
 
-    /// **With no pet book fed, every pet arm answers nothing** — the old deferral's behaviour,
-    /// which is also the reference's whenever `[0xb71174] == 0`. Kept as its own case so the
-    /// pet-book tests below can never pass by the player book leaking into them.
+    /// With no pet book, as when the reference's count `[0xb71174]` is 0, every pet arm answers
+    /// nothing.
     #[test]
     fn an_absent_pet_book_answers_empty_everywhere() {
         let mut s = UiScript::new().unwrap();
@@ -1232,8 +986,8 @@ mod tests {
         assert!(s.cursor_payload().is_none(), "pet pickup is a no-op");
     }
 
-    /// A hunter's pet book: Growl (autocastable, ON, on cooldown), Claw (autocastable, OFF) and
-    /// Avoidance (a passive — no autocast, `ACT_PASSIVE 0x01`).
+    /// A hunter's pet book: Growl (autocastable, on, cooling down), Claw (autocastable, off) and
+    /// Avoidance (a passive, no autocast, `ACT_PASSIVE` 0x01).
     fn pet_book() -> PetBookState {
         PetBookState {
             token: Some("PET".into()),
@@ -1270,8 +1024,6 @@ mod tests {
         }
     }
 
-    /// `HasPetSpells` is **the count and a token**, always two returns, and the count is a NUMBER
-    /// — `SpellBook_GetCurrentPage` divides by it, so a 1/nil boolean would pin the page count.
     #[test]
     fn has_pet_spells_answers_a_count_and_a_class_token() {
         let mut s = UiScript::new().unwrap();
@@ -1280,8 +1032,7 @@ mod tests {
             .eval::<bool>(r#"local n, t = HasPetSpells() return n == 3 and t == "PET""#)
             .unwrap());
 
-        // A warlock's book carries the other token, which is the whole of what makes the tab read
-        // "Demon" — FrameXML does `getglobal("PET_TYPE_"..token)`.
+        // A warlock's token, which FrameXML reads as `PET_TYPE_DEMON`.
         let mut demon = pet_book();
         demon.token = Some("DEMON".into());
         s.set_pet_book(demon);
@@ -1291,8 +1042,7 @@ mod tests {
             "DEMON"
         );
 
-        // No token resolved (no ChrClasses.dbc) still answers a STRING, never nil — a nil would
-        // make the reference's own concatenation error.
+        // No token resolved (no `ChrClasses.dbc`) still answers a string.
         let mut untokened = pet_book();
         untokened.token = None;
         s.set_pet_book(untokened);
@@ -1303,8 +1053,6 @@ mod tests {
         );
     }
 
-    /// The two books are separate lists reached by the SAME id — the reference's `isPet ? petArray
-    /// : playerArray` fork. Book id 1 means Fireball in one and Growl in the other.
     #[test]
     fn one_id_reads_two_different_books() {
         let mut s = UiScript::new().unwrap();
@@ -1321,8 +1069,7 @@ mod tests {
                 .unwrap(),
             "Growl"
         );
-        // The book type is a case-insensitive compare against "pet" ALONE (`0x4b3f27`), so every
-        // other string is the player's book — including a typo'd one.
+        // `"pet"` alone, without case (`0x4b3f27`); any other string, a typo too, is the player's.
         assert_eq!(
             s.eval::<String>(r#"return GetSpellName(1, "PeT")"#)
                 .unwrap(),
@@ -1333,15 +1080,12 @@ mod tests {
                 .unwrap(),
             "Fireball"
         );
-        // Past the pet book's end: one nil, the out-of-range shape.
+        // Past the pet book's end: nil.
         assert!(s
             .eval::<bool>(r#"return GetSpellName(4, BOOKTYPE_PET) == nil"#)
             .unwrap());
     }
 
-    /// `GetSpellAutocast` is **pet-only and always two returns**: the player book short-circuits
-    /// to `(nil, nil)` before it looks anything up (`0x4b41cb`/`0x4b41d6`), and so does an
-    /// out-of-range pet index.
     #[test]
     fn autocast_is_a_pet_only_pair() {
         let mut s = UiScript::new().unwrap();
@@ -1381,9 +1125,6 @@ mod tests {
         );
     }
 
-    /// `ToggleSpellAutocast` queues only what `0x4bccb0` would actually send: a pet-book slot whose
-    /// word is autocast-ALLOWED. A passive, a player-book id and an out-of-range id all queue
-    /// nothing — and none of them may leak into the player's cast queue.
     #[test]
     fn only_an_autocastable_pet_slot_queues_a_toggle() {
         let mut s = UiScript::new().unwrap();
@@ -1402,8 +1143,6 @@ mod tests {
         assert!(s.take_spell_casts().is_empty());
     }
 
-    /// A pet cast is a **different queue** from a player cast, because it is a different opcode at
-    /// the far end (`CMSG_PET_ACTION`, not a player cast). A passive still refuses on both.
     #[test]
     fn a_pet_cast_queues_apart_from_a_player_cast() {
         let mut s = UiScript::new().unwrap();
@@ -1421,9 +1160,6 @@ mod tests {
         assert!(s.take_pet_spell_casts().is_empty(), "drain empties");
     }
 
-    /// A pet-book pickup puts a **pet action word** on the cursor, not a spell payload — which is
-    /// exactly what makes it droppable on the pet bar (`cursor::pet`'s payload). The word is the
-    /// server's own, autocast bits and all.
     #[test]
     fn a_pet_book_pickup_carries_the_packed_word() {
         let mut s = UiScript::new().unwrap();
@@ -1442,7 +1178,7 @@ mod tests {
         assert_eq!(p.packed, 0xC100_0000 | 2649);
         assert_eq!(p.src_slot, 0, "it came out of the book, not off the bar");
 
-        // The player book still produces a SPELL payload — the two are not interchangeable.
+        // The player book still produces a spell payload.
         s.run("ClearCursor()").unwrap();
         assert!(s
             .eval::<bool>(r#"return PickupSpell(1, BOOKTYPE_SPELL)"#)
@@ -1450,9 +1186,8 @@ mod tests {
         assert!(matches!(s.cursor_payload(), Some(CursorPayload::Spell(_))));
     }
 
-    /// `GetSpellCooldown(id, "pet")` reads the PET's slot — the reference reaches bank 1 with the
-    /// same `0x6e2ea0(edx = isPet)` `GetPetActionCooldown` uses, so a spell on the bar and the same
-    /// spell in the book must never disagree. The elapsed-goes-cold rule is the player book's.
+    /// The reference reads a pet book cooldown through `0x6e2ea0` (`edx = isPet`), as
+    /// `GetPetActionCooldown` does, so the book and the bar agree.
     #[test]
     fn the_pet_books_cooldown_is_the_pets_own() {
         let mut s = UiScript::new().unwrap();
@@ -1466,7 +1201,7 @@ mod tests {
         assert!((start - 9.4).abs() < 1e-9, "start {start}");
         assert!((duration - 5.0).abs() < 1e-9);
         assert_eq!(enable, 1);
-        // The player book's slot 1 has none — proof the fork reached the right list.
+        // The player book's slot 1 has none.
         assert_eq!(
             s.eval::<(f64, f64, i32)>(r#"return GetSpellCooldown(1, BOOKTYPE_SPELL)"#)
                 .unwrap(),
@@ -1481,16 +1216,6 @@ mod tests {
         );
     }
 
-    /// **A rankless spell's rank is the empty string, not nil** — and the arity is always two.
-    ///
-    /// Both returns go through one push helper with no rank-specific branch (`0x4b4063`/`0x4b4076`,
-    /// single exit `mov eax,0x2` at `0x4b407c`), and the DBC pointer is never NULL, so an on-disk
-    /// NameSubtext offset of 0 becomes a pointer to the string block's byte 0 — a real zero-length
-    /// Lua string. 64% of the shipped Spell.dbc's rows are in that state, `Attack` among them.
-    ///
-    /// The two corpus idioms this was breaking are both asserted here, because "falsey either way"
-    /// is exactly the reasoning that made nil look acceptable: a nil is an ILLEGAL TABLE KEY
-    /// (Roid-Macros) and an ILLEGAL `string.find` argument (CT_MasterMod), while `""` is neither.
     #[test]
     fn a_rankless_spell_answers_an_empty_rank_and_still_two_values() {
         let mut s = UiScript::new().unwrap();
@@ -1522,7 +1247,7 @@ mod tests {
                 .unwrap(),
             "the rankless rank must be a STRING, not nil"
         );
-        // Roid-Macros/Generic.lua:35 and CT_MasterMod/CT_Master.lua:16, in miniature.
+        // Two addon idioms that a nil rank breaks: a table key and a `string.find` argument.
         s.run(r#"local _, r = GetSpellName(1, "spell") local t = {} t[r] = 1"#)
             .expect("a rankless rank must be a legal table key");
         s.run(r#"local _, r = GetSpellName(1, "spell") string.find(r, "(%d+)")"#)
@@ -1534,14 +1259,13 @@ mod tests {
             ("Heroic Strike".to_string(), "Rank 1".to_string())
         );
 
-        // An unfilled slot INSIDE the range is two nils, not one — distinguishable by the count.
+        // An empty slot inside the range is two nils.
         assert_eq!(s.arity(r#"GetSpellName(9, "spell")"#).unwrap(), 2);
         assert!(s
             .eval::<bool>(r#"local a, b = GetSpellName(9, "spell") return a == nil and b == nil"#)
             .unwrap());
 
-        // Past the reference's [0, 0x400) gate — an id of 1025 is index 1024 — it RAISES rather
-        // than answering nil.
+        // Id 1025 is index 1024, past the `[0, 0x400)` gate: it raises.
         let err = s
             .run(r#"GetSpellName(1025, "spell")"#)
             .expect_err("an out-of-range slot must raise");
@@ -1549,18 +1273,11 @@ mod tests {
             format!("{err}").contains("Invalid spell slot in GetSpellName"),
             "got {err}"
         );
-        // ...and 1023 is inside it, so it answers rather than raising.
+        // Id 1023 is inside it and answers.
         assert_eq!(s.arity(r#"GetSpellName(1023, "spell")"#).unwrap(), 2);
     }
 
-    /// **`UpdateSpells()` fires `SPELLS_CHANGED` and does nothing else** — decision 1924, from a
-    /// byte read of `[0x4b43e0,0x4b43ec)`.
-    ///
-    /// The assertion is that a registered handler RAN, not that any frame repainted: the reference
-    /// verb mutates no state at all, and the repaint is FrameXML's, reached only through the event.
-    /// Asserting a repaint here would re-encode the `BenillaUpdateSpells` guess this replaces —
-    /// which was both narrower than the reference (it repainted `SpellButton1..N` and nothing else)
-    /// and wider (the reference gates its frame update on `IsVisible()`).
+    /// The assertion is that a handler ran, not that a frame repainted: the repaint is FrameXML's.
     #[test]
     fn update_spells_fires_spells_changed_and_touches_nothing() {
         let s = UiScript::new().unwrap();
@@ -1580,16 +1297,12 @@ mod tests {
             1,
             "UpdateSpells must fire SPELLS_CHANGED synchronously, as SignalEvent does"
         );
-        // Zero return values — `arity = 0 (exact)` in `reference/1.12-shapes.tsv`.
+        // Zero returns, `reference/1.12-shapes.tsv`'s `arity = 0 (exact)`.
         assert_eq!(s.arity("UpdateSpells()").unwrap(), 0);
         assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
     }
 
-    /// **`PlayerHasSpells()` is a hard-coded `1`** (1924): `push 0x3ff00000; push 0;
-    /// lua_pushnumber; mov eax,1; ret` — no branch and no store read, so it cannot answer anything
-    /// else. Asserted on an EMPTY spellbook precisely because that is the state where a
-    /// plausible-looking "does the player have any spells?" implementation would answer 0 and
-    /// diverge silently.
+    /// On an empty book, where a "has any spells" reading would answer 0.
     #[test]
     fn player_has_spells_is_one_even_with_an_empty_book() {
         let s = UiScript::new().unwrap();
@@ -1598,11 +1311,7 @@ mod tests {
         assert_eq!(s.arity("PlayerHasSpells()").unwrap(), 1);
     }
 
-    /// **Out of range answers `nil, nil, 0, 0` — four values, the last two NUMBERS** (1931). The
-    /// count is the assertion: `GetSpellTabInfo(0) == nil` is true either way, which is exactly how
-    /// the old one-nil shape passed. Stock `SpellBookFrame.lua:295` does `id > (offset + numSpells)`
-    /// unguarded straight off `SpellBookFrame_OnLoad`, so slots 3+4 nil is a raise on load, and
-    /// `(0+0)` is what makes the reference hide every button — the behaviour this pins.
+    /// The count is the assertion: `(GetSpellTabInfo(0)) == nil` holds for a single nil too.
     #[test]
     fn out_of_range_answers_four_values() {
         let s = UiScript::new().unwrap();
@@ -1626,9 +1335,6 @@ mod tests {
         }
     }
 
-    /// The argument is shape A (1931): absent or non-numeric RAISES the reference's own usage
-    /// string; a numeric STRING is coerced; a negative is truncated and falls to the fallback
-    /// rather than raising. `-1` and `0.5` are covered by the test above.
     #[test]
     fn tab_index_raises_when_absent_and_coerces_a_numeric_string() {
         let mut s = UiScript::new().unwrap();
@@ -1645,7 +1351,7 @@ mod tests {
             );
         }
         s.set_spellbook(book());
-        // "1" coerces exactly as 1 does — same name comes back.
+        // "1" coerces as 1 does.
         assert_eq!(
             s.eval::<String>("return (GetSpellTabInfo('1'))").unwrap(),
             s.eval::<String>("return (GetSpellTabInfo(1))").unwrap()
