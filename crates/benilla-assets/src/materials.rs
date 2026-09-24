@@ -78,7 +78,7 @@ pub type WowModelMaterial = ExtendedMaterial<StandardMaterial, WowModelExt>;
 /// - `fade` (`model_flags.y`) = the **M2-doodad** fade blend twin: `AlphaMode::Blend` (transparent pass,
 ///   depth-write normally OFF) → `specialize` forces depth-write back ON so a fading haystack's near
 ///   cross-quads occlude its far ones. Silhouette stable for an AlphaKey source (the shader re-applies
-///   the 224/255 cutout via `clutter_fade.z` bit 10 — an Opaque source never alpha-tests; 0842).
+///   the 224/255 cutout via `clutter_fade.z` bit 10 — an Opaque source never alpha-tests).
 /// - `clutter` (`clutter_fade.w`) = ground clutter: an `AlphaMode::Mask` (alpha-mask pass, depth-write
 ///   already ON) that the reference also **blends** (prog 201: `SRC_ALPHA/ONE_MINUS_SRC_ALPHA`) so the
 ///   ~70 yd ramp fades opacity. `specialize` forces that over-blend on in place; the 128/255 discard +
@@ -95,7 +95,7 @@ pub struct WowModelKey {
     no_depth_write: bool,
     /// M2 render flag 0x08 — disable depth TEST (packed into `clutter_fade.z` bit 1).
     no_depth_test: bool,
-    /// The MULTIPLY blends (clutter_fade.z bits 7/8; decision 0528) — `specialize` swaps the blend
+    /// The MULTIPLY blends (clutter_fade.z bits 7/8) — `specialize` swaps the blend
     /// state to the reference's factors: Mod `DST_COLOR/ZERO`, Mod2x `DST_COLOR/SRC_COLOR`
     /// (`0x70c190`). Exact on the 0161 gamma lane — the framebuffer holds gamma values, so the
     /// hardware multiply IS the reference's byte multiply.
@@ -123,7 +123,7 @@ pub struct WowModelKey {
     sky_depth: bool,
     // NB: the WMO authored batch order is deliberately NOT a key axis. It used to be (a
     // per-batch-index `DepthBiasState` constant), which made every batch index its own pipeline —
-    // the city first-sight compile stall (decision 0837). The coplanar-layering nudge now rides
+    // the city first-sight compile stall. The coplanar-layering nudge now rides
     // `sun_scale.y` into `wow_model.wgsl`'s vertex stage as uniform data; `model_render::MatKey`
     // still dedups materials per order, so per-batch identity is intact.
 }
@@ -200,13 +200,13 @@ pub struct WowModelExt {
     /// (ambient +16/255) — the warm pane seen from inside a building.
     #[uniform(100)]
     pub sidn: Vec4,
-    /// The shared mat-anim TABLE slots (decision 1381): `x` = the UV-scroll slot + 1, `y` = the
+    /// The shared mat-anim TABLE slots: `x` = the UV-scroll slot + 1, `y` = the
     /// animated-tint slot + 1 — `0` = not table-animated, and the shader uses the static lanes
     /// (`sun_scale.zw` / `tint.xyz`) exactly as before. Baked when the batch registers its
     /// sampler; the per-frame samples live in the shared light buffer's `matanim` region, so an
     /// animating material is never mutated again (no per-frame `Modified`, no bind-group
     /// rebuild, no whole-population `AssetChanged` walks — B131's chain, severed at the root).
-    /// `z` = the **affine** slot (decision 2019): its row is the texture transform's rotation
+    /// `z` = the **affine** slot: its row is the texture transform's rotation
     /// and scale as deltas from the identity, `[cos − 1, sin, sx − 1, sy − 1]`
     /// (`mat_anim_table::affine_row`), composed about the pivot `(½, ½)` after the translation —
     /// the reference's `uv' = R((uv + t − p) ⊙ s) + p`. Row 0 is the identity, so a material
@@ -219,7 +219,7 @@ pub struct WowModelExt {
     /// sun/spec + fog + the 7 Model2.bls SH-probe coeffs) the old `apply_wow_lighting` re-pushed every
     /// frame (re-creating every bind group). `wow_model.wgsl` reads it as `var<storage, read> wow_light`
     /// (rows 0-12 + the point-light table). Both stages: the fragment does the custom shading, the
-    /// vertex evaluates the Gouraud point-light term from the appended table (decision 0278 — bevy's
+    /// vertex evaluates the Gouraud point-light term from the appended table (bevy's
     /// own clusterable buffer is fragment-only in the view layout, so the lights ride our buffer).
     /// Set once, never mutated.
     #[storage(90, read_only, buffer, visibility(vertex, fragment))]
@@ -227,7 +227,7 @@ pub struct WowModelExt {
 }
 
 impl MaterialExtension for WowModelExt {
-    /// Custom vertex stage (decision 0278): bevy's mesh vertex verbatim plus the GOURAUD point-light
+    /// Custom vertex stage: bevy's mesh vertex verbatim plus the GOURAUD point-light
     /// term — the dynamic light sum evaluates per VERTEX like the reference FFP and interpolates,
     /// which is what spreads a fixture's floor pool and keeps the forge hood dim.
     fn vertex_shader() -> ShaderRef {
@@ -250,7 +250,7 @@ impl MaterialExtension for WowModelExt {
         layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        // The owned-palette skinning path (decision 0720): a mesh carrying the WOW joint
+        // The owned-palette skinning path: a mesh carrying the WOW joint
         // attributes (the skinned twin — `crate::build_skinned_submesh_mesh`) compiles
         // the WOW_RIG_SKIN vertex path, which skins from the shared buffer's palette region by
         // the instance's MeshTag rig field. The base mesh pipeline built the vertex buffer
@@ -276,7 +276,7 @@ impl MaterialExtension for WowModelExt {
             attrs.push(crate::ATTRIBUTE_WOW_JOINT_WEIGHT.at_shader_location(11));
             descriptor.vertex.buffers = vec![layout.0.get_layout(&attrs)?];
         }
-        // The merged fader blob (decisions 1418/1420): a mesh carrying the per-vertex fade
+        // The merged fader blob: a mesh carrying the per-vertex fade
         // sphere compiles the WOW_MERGED_FADE path — the faithful doodad fade curve computed
         // per vertex (folded into the tag fade the fragment already consumes) and a clip-space
         // collapse at zero (the Hidden channel). The blob's material is its blend TWIN, so the
@@ -349,7 +349,7 @@ impl MaterialExtension for WowModelExt {
         // The WMO authored-batch-order depth nudge (the coplanar MOBA layering determinism) is NOT
         // here any more: as a fixed-function `DepthBiasState` constant it made every batch index its
         // own PIPELINE — Stormwind alone queued ~3000 variants of this one shader, each a
-        // synchronous render-thread compile on macOS (the city first-sight stall, decision 0837).
+        // synchronous render-thread compile on macOS (the city first-sight stall).
         // The nudge now lives in `wow_model.wgsl`'s vertex stage, an exact relative scale of clip z
         // driven by `sun_scale.y` (uniform DATA, no pipeline axis) — same one-ULP-per-index
         // semantics, intent unchanged (the file-order batch walks `0x6b4f10`/`0x6b5190`).
@@ -424,7 +424,7 @@ impl MaterialExtension for WowModelExt {
                 ds.depth_write_enabled = true;
             }
         }
-        // The straddle split's waterline clip (decision 2188 — `benilla_world::straddle`): only a
+        // The straddle split's waterline clip (`benilla_world::straddle`): only a
         // transparent-pass batch is ever classified against the water plane, so only its
         // pipelines carry the clip. Keyed on the blend pass Bevy already specializes on, so it
         // mints no pipeline of its own; the fragment clips nothing unless the instance's slot
@@ -440,10 +440,10 @@ impl MaterialExtension for WowModelExt {
         }
         let key = &key.bind_group_data;
         if key.modulate || key.modulate2x {
-            // The MULTIPLY blends (decision 0528, `0x70c190`):
+            // The MULTIPLY blends (`0x70c190`):
             // Mod (M2 mode 5 / WMO 4) = DST_COLOR/ZERO → out = src·dst; Mod2x (M2 6 / WMO 5) =
             // DST_COLOR/SRC_COLOR → out = 2·src·dst — the ARMORREFLECT weapon/armor sheen (neutral
-            // at mid-grey, brightening at the streak). The framebuffer holds gamma (0161), so these
+            // at mid-grey, brightening at the streak). The framebuffer holds gamma, so these
             // factors reproduce the reference's byte math exactly. Alpha: the equation reads no
             // source alpha — keep the destination's.
             if let Some(target) = descriptor
@@ -475,7 +475,7 @@ impl MaterialExtension for WowModelExt {
 }
 
 /// Distant low-detail terrain (WDL): unlit white geometry under a saturated fog of its own — flat
-/// scene-fog colour, the "fog hull" (decision 1521) — the horizon hills the reference draws beyond the
+/// scene-fog colour, the "fog hull" — the horizon hills the reference draws beyond the
 /// streamed detailed tiles. Both shader stages are custom (`shaders/wdl.wgsl`): white verts × the
 /// scene fog COLOUR with the hull pass's own start-0 / end-1.0 pair (never the scene's distances),
 /// opaque (`AlphaMode::Opaque` ⇒ depth-LEQUAL + depth-write, no blend — the verified WoW.8 state).
@@ -527,7 +527,7 @@ pub struct LiquidExt {
     /// None of them is a light value; all four are fixed at material creation.
     ///
     /// - `x` = **fullbright** (>0.5 ⇒ magma/slime): the animated texture IS the opaque body — skip
-    ///   the depth swatch and the N·L term. Not "skip the fog"; see `liquid.wgsl` and decision 0691.
+    ///   the depth swatch and the N·L term. Not "skip the fog"; see `liquid.wgsl` and.
     /// - `y` = **ocean** (>0.5): read the ocean water swatch (shared-light rows 15/16, `Light.dbc`
     ///   IntBand 14/15) instead of the river/lake one (rows 13/14, IntBand 16/17).
     /// - `z` = **interior fog** (>0.5): this surface is a WMO *interior* group's own liquid, so it
@@ -662,7 +662,7 @@ mod tests {
     /// half lives here because the shader does. Without it a skybox silently goes back to being
     /// occluded by its own 94-yard shell radius instead of by world geometry (the regression
     /// decision 0588 fixed) — or, the other way, a `frag_depth` write comes back and every
-    /// doodad, creature and wall in the frame loses its early-Z with it (decision 2016).
+    /// doodad, creature and wall in the frame loses its early-Z with it.
     #[test]
     fn the_sky_lane_pins_the_far_depth_at_the_vertex() {
         let src = include_str!("shaders/wow_model.wgsl");

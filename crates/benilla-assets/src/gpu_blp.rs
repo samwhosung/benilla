@@ -7,7 +7,7 @@
 //! benilla used to decode every one of them to `Rgba8Unorm` on the CPU and upload that: **8x the
 //! bytes of DXT1, 4x of DXT3/DXT5**, on the whole resident working set and on every texture fetch
 //! that misses the cache. On a bandwidth-starved integrated GPU that is the frame's dominant cost,
-//! and a Steam Deck is one (decision 1626).
+//! and a Steam Deck is one.
 //!
 //! Two things have to be true before the blocks can go straight over, and this module owns both:
 //!

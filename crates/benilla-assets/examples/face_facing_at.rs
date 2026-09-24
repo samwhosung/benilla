@@ -3,7 +3,7 @@
 //! `cargo run -p benilla-assets --example face_facing_at -- <map> <x> <y> <z> [wmo-substring]`
 //! e.g. `face_facing_at Kalimdor -8137.9 -4897.2 2.0 caverns`.
 //!
-//! The reference's movement collision is **one-sided** (decision 0967): `0x671cc0` emits each
+//! The reference's movement collision is **one-sided**: `0x671cc0` emits each
 //! candidate face's plane at the **unflipped file winding**, and `0x632700` then processes it
 //! only if `n·dir <= -1e-5`. A player falling straight down has `dir` = −up, so **a face blocks
 //! the fall iff its authored normal points up**. Ours is a parry trimesh — two-sided — so it

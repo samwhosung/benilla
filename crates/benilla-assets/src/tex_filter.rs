@@ -37,7 +37,7 @@
 //!
 //! **`trilinear` is 1 on rows 169 and 170, at both CPU tiers, and carries no CPU bias term.** So
 //! the mode a real machine gets from a virgin install is **4**, not 3, and that is what benilla
-//! registers (decision 1645, superseding 1642's `"0"`). Measured, not only derived: the reference
+//! registers (superseding 1642's `"0"`). Measured, not only derived: the reference
 //! client's own `WoW/Logs/gx.log` on the director's machine reads `VID: 106b` (unlisted) →
 //! `DeviceAdapterInfer … DID: 2` → `DetectHardware(): videoID: 170`.
 //!
@@ -70,7 +70,7 @@
 //! The cost is not incidental. Mode 3 takes one bilinear tap per sample. Mode 5 at aniso 8 takes up
 //! to **sixteen** — eight along the anisotropy axis, doubled by the trilinear mip blend — and the
 //! worst case for the anisotropy axis is a tiling surface at a grazing angle, which is what ground
-//! is from a third-person camera. On the GPU-bound Steam Deck frame behind 1624 (B329) the texture
+//! is from a third-person camera. On the GPU-bound Steam Deck frame behind 1624 the texture
 //! path is where the frame already lives.
 //!
 //! ## Why a process global here too
@@ -81,7 +81,7 @@
 //! can read the other's resource. This is exactly the shape [`crate::gpu_blp`]'s `bc_supported`
 //! already has, for exactly the same reason.
 //!
-//! **Latched, like `gxMultisample`** (decision 1629): read once at boot and never again, because a
+//! **Latched, like `gxMultisample`**: read once at boot and never again, because a
 //! sampler already baked into an uploaded texture cannot be changed without rebuilding it — which
 //! is also why the reference's own UI says "enabled upon restart". The CVar holds the pending
 //! value; the textures keep what they were born with.
@@ -117,7 +117,7 @@ impl Default for TexFilterSetting {
     /// in one session, and a value pinned into `config.toml` would make a measurement sticky.
     ///
     /// `trilinear` is `true` here and not the registrar's `"0"` because `hwDetect` sets it on both
-    /// fallback rows a real GPU can reach — see the module doc, and decision 1645.
+    /// fallback rows a real GPU can reach — see the module doc, and.
     fn default() -> Self {
         let env_flag = |k: &str| {
             std::env::var(k)
@@ -200,7 +200,7 @@ mod tests {
     use super::*;
 
     /// **What benilla actually ships** — `hwDetect`'s row-170 outcome, not the registrar's string:
-    /// trilinear on, anisotropy off, mode 4 (decision 1645). If this ever reads mode 5, we are
+    /// trilinear on, anisotropy off, mode 4. If this ever reads mode 5, we are
     /// shipping the divergence 1642 removed; if it reads mode 3, we are back to reading the
     /// registrar's string as if `hwDetect` did not exist.
     ///

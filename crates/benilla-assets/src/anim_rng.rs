@@ -9,7 +9,7 @@
 //! dependencies can be reached by everything; an owner at the top of the stack cannot be reached by
 //! the engine at all.
 //!
-//! **Why one stream and not one per consumer** (decision 0768, and 2301 which found the drift):
+//! **Why one stream and not one per consumer** (and 2301 which found the drift):
 //! a shared sequence is what de-syncs a stand of identical props. Not a per-placement seed — just
 //! consecutive draws. benilla had four independent streams for a while, three of them seeded 0
 //! against the fourth's 1, while all four docstrings claimed to be this one; interleaving is the

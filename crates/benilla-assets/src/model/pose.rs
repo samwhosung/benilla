@@ -1,4 +1,4 @@
-//! The pose source — the direct M2 pose evaluator's baked data (decision 0712).
+//! The pose source — the direct M2 pose evaluator's baked data.
 //!
 //! Bevy's `animate_targets` prices every bone at graph-walk + hash-lookup + boxed-curve rates
 //! (~1.9 µs/bone — 0711's second lane). These types hold the *same* Bevy-space keyframes as the
@@ -127,7 +127,7 @@ pub struct PoseNode {
     pub mask: u64,
 }
 
-/// A model's baked pose source (decision 0712): everything the runtime evaluator needs, filled by
+/// A model's baked pose source: everything the runtime evaluator needs, filled by
 /// the same code that builds the `AnimationGraph` so the two cannot drift.
 #[derive(Clone, Default)]
 pub struct PoseSource {
@@ -163,7 +163,7 @@ mod tests {
     use bevy::animation::animation_curves::AnimatableKeyframeCurve;
     use bevy::math::curve::Curve;
 
-    /// The channel golden (decision 0712): [`PoseTrack::sample`] must equal
+    /// The channel golden: [`PoseTrack::sample`] must equal
     /// `AnimatableKeyframeCurve::sample_clamped` — the exact curve the twin `AnimationClip`
     /// carries — over a dense time sweep spanning before-first, between-keys, exact-hit, and
     /// past-last, for both Vec3 (lerp) and Quat (slerp) channels.

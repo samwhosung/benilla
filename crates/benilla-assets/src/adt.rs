@@ -96,7 +96,7 @@ impl Default for ChunkShading {
 /// app a few cells per frame, never by the loader (see the module doc: a loader-built set lands
 /// atomically, and the landing IS the B181 first-contact spike).
 ///
-/// **Per chunk, not per tile, because the cull's unit is the chunk** (decision 0780): the
+/// **Per chunk, not per tile, because the cull's unit is the chunk**: the
 /// exterior-scene cull tests one AABB per drawn object, and the reference's object there is the
 /// 33.333 yd cell (`0x683bf0`), never the 533 yd tile — a slab the camera stands on intersects
 /// every portal window, so it could never be hidden from inside a building. Nothing is duplicated
@@ -192,7 +192,7 @@ impl AssetLoader for AdtLoader {
         // Layer array: a solid-green fallback at index 0, then each unique referenced layer texture.
         // The layers are collected in their **authored** form and packed only once the tile is fully
         // read — one `texture_2d_array` has one format, so whether this tile's DXT blocks go up
-        // untouched is a question about the whole set (`terrain::pack_layers`, decision 1646).
+        // untouched is a question about the whole set (`terrain::pack_layers`).
         let mut layers: Vec<RawLayer> = Vec::new();
         let mut layer_index: HashMap<String, u32> = HashMap::new();
 

@@ -42,7 +42,7 @@ pub fn repeat_texture_authored(upload: crate::gpu_blp::UploadChain, wrap: (bool,
     }
     // Taking an `UploadChain` rather than a bare chain is deliberate: the format and the bytes are
     // decided together by `gpu_blp::for_upload`, so this function cannot be handed blocks under an
-    // uncompressed descriptor. It was, once — see `UploadChain`'s doc (decision 1626).
+    // uncompressed descriptor. It was, once — see `UploadChain`'s doc.
     let mut image = Image::new_uninit(
         Extent3d {
             width: chain.width,
@@ -321,7 +321,7 @@ pub fn sprite_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
     image
 }
 
-/// A coverage **mask** image (the minimap's `MinimapMask.blp`, decision 0203): identical sampling
+/// A coverage **mask** image (the minimap's `MinimapMask.blp`): identical sampling
 /// to [`sprite_image`] (clamp, linear filtering, no mips) but uploaded **`Rgba8Unorm`** (not
 /// sRGB) — the shader reads coverage, not color, so no gamma decode belongs anywhere in the path.
 /// The coverage itself rides the ALPHA channel (`MinimapMask.blp` is DXT3: white color plane, the
@@ -385,8 +385,7 @@ pub fn portrait_image(width: u32, height: u32, mut rgba: Vec<u8>) -> Image {
 ///
 /// Both axes wrap — the backdrop's bg tiles both ways, and its edge strips are atlas crops on
 /// their bounded axis, kept off the image edge by `inset_atlas_bleed`. A texture that tiles
-/// along ONE axis and spans the whole image on the other takes [`sprite_image_wrapped`] instead
-/// (decision 2000).
+/// along ONE axis and spans the whole image on the other takes [`sprite_image_wrapped`] instead.
 pub fn sprite_image_tiled(width: u32, height: u32, rgba: Vec<u8>) -> Image {
     sprite_image_wrapped(width, height, rgba, (true, true))
 }
@@ -401,7 +400,7 @@ pub fn sprite_image_tiled(width: u32, height: u32, rgba: Vec<u8>) -> Image {
 /// the stance shelf's middle piece (`ShapeshiftBarMiddle.blp`: rows 0-7 transparent, row 31
 /// opaque grey) wore a one-device-px grey line across the top of the strip at every four-form
 /// bar, over the world. Wrapping only the axis that actually tiles is the fix at the root: the
-/// bounded axis clamps at its edge, exactly as a stand-alone clamped sprite would (decision 2000).
+/// bounded axis clamps at its edge, exactly as a stand-alone clamped sprite would.
 pub fn sprite_image_wrapped(width: u32, height: u32, rgba: Vec<u8>, wrap: (bool, bool)) -> Image {
     let mut image = Image::new(
         Extent3d {

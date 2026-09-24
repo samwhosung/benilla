@@ -48,8 +48,8 @@ fn color_format() -> TextureFormat {
     TextureFormat::Rgba8Unorm
 }
 
-/// The block form's albedo format — the same **non-sRGB** gamma-byte lane [`color_format`] is in
-/// (0161). `Bc*RgbaUnormSrgb` would linearize on sample and is the one wrong answer here.
+/// The block form's albedo format — the same **non-sRGB** gamma-byte lane [`color_format`] is in.
+/// `Bc*RgbaUnormSrgb` would linearize on sample and is the one wrong answer here.
 fn block_color_format(texels: BlpTexels) -> TextureFormat {
     match texels {
         BlpTexels::Bc1 => TextureFormat::Bc1RgbaUnorm,

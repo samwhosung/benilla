@@ -4,7 +4,7 @@
 //!
 //! WoW is right-handed with **+X north, +Y west, +Z up**, 1 unit = 1 yard. Bevy is right-handed
 //! with **+Y up, −Z forward**. The map is the pure rotation `bevy = (−y, z, −x)` — determinant +1,
-//! so it never mirrors (winding/normals are preserved) and 1 unit stays 1 yard. See decision 0002.
+//! so it never mirrors (winding/normals are preserved) and 1 unit stays 1 yard. See.
 //!
 //! Extracted from `main.rs` into its own module so the transform — including the quaternion
 //! conjugation used for model placement, historically the trickiest part — is unit-tested in

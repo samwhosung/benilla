@@ -91,7 +91,7 @@ pub struct WmoModel {
     pub group_collision_tris: Vec<Vec<[[f32; 3]; 3]>>,
     /// Per-group **camera-only** triangles (parallel to [`Self::group_collision_tris`]): the faces
     /// the camera gather keeps but the walking gather drops — DETAIL (`0x04`) set, NOCAMCOLLIDE
-    /// (`0x02`) clear. The down-ray's **camera-void fallback** (decision 0692) races this set only
+    /// (`0x02`) clear. The down-ray's **camera-void fallback** races this set only
     /// after the faithful walking Leg A and portal Leg B both miss AND no terrain surface sits at or
     /// below the eye: an eye held between camera-collidable surfaces (the Deadmines entrance pocket,
     /// whose floor is all-DETAIL) then still names its room instead of blanking the building.
@@ -128,7 +128,7 @@ pub struct WmoModel {
     /// The doodad sets (MODS) — ranges into [`Self::doodads`]; set 0 is global, a placement picks one more.
     pub doodad_sets: Vec<WmoDoodadSet>,
     /// The root's MOLT lights (the interior fixture lights — fireplaces, forge, candles, chandeliers),
-    /// in WMO model space. Spawned as dynamic point lights (decisions 0016/0273) that warm nearby
+    /// in WMO model space. Spawned as dynamic point lights that warm nearby
     /// doodads/NPCs, terrain, and the building's own walls/floor over their baked MOCV.
     pub lights: Vec<WmoLight>,
     /// Per-group interior flag + bounding box (MOGI), WMO model space — classifies which placed doodads
@@ -137,7 +137,7 @@ pub struct WmoModel {
     /// Per-MODD lighting base, parallel to [`Self::doodads`] — resolved ONCE at load (placements are
     /// fixed in the root). See [`DoodadBase`]: an interior-group doodad's base is its own MODD
     /// entry's baked colour, and its point light comes only from its owning group's MOLR list. The
-    /// footprint down-ray this replaced (decision 0290) is byte-real code, but it is the ADT-MDDF
+    /// footprint down-ray this replaced is byte-real code, but it is the ADT-MDDF
     /// attach path — a WMO MODD doodad never reaches it (create `0x694e90` never calls SetMatrix
     /// `0x698d20`).
     pub doodad_base: Vec<DoodadBase>,
@@ -157,7 +157,7 @@ pub struct WmoModel {
     /// from the visible-group walk `0x698720` — so a group the portal flood culled draws none
     /// of its furniture, and a prop **any** of whose referrers is visible is drawn. Without the key
     /// at all, props outlive their own building: cull every group of a dungeon and its lanterns,
-    /// crates and cobwebs hang in the void (decision 0689). With the key collapsed to one owner, a
+    /// crates and cobwebs hang in the void. With the key collapsed to one owner, a
     /// prop that hangs through several rooms — a lava fall — blinks out on every camera angle whose
     /// flood reaches a different one of its referrers.
     pub doodad_groups: Vec<Arc<[u16]>>,
@@ -169,7 +169,7 @@ pub struct WmoModel {
     pub group_footprints: Vec<Option<FootprintTris>>,
     /// Root MOMT `ground_type` per material — the `TerrainType.dbc` id a face's
     /// `FootprintTris::mopy_material` resolves to. Shared by every group (MOMT lives on the root),
-    /// and the tail of the footstep chain's WMO leg (decision 1161).
+    /// and the tail of the footstep chain's WMO leg.
     pub material_ground_type: Vec<u32>,
     /// Root MOMT `diffColor` per material, RGB 0..1 — the body colour an **interior** MLIQ pool
     /// takes, indexed by its `LiquidMesh::material_id`. MOMT lives in the root, so a group file
@@ -181,7 +181,7 @@ pub struct WmoModel {
     /// [`Self::group_collision_bounds`]: a probe column outside a group's face bounds in XY, or
     /// wholly below its lowest vertex, can hit none of its faces. Without it every re-rayed
     /// entity scanned EVERY interior group of the whole model — at Stormwind (one WMO, all
-    /// districts) that was the live-session frame (decision 0364).
+    /// districts) that was the live-session frame.
     pub group_footprint_bounds: Vec<Option<([f32; 3], [f32; 3])>>,
     /// Per-group column index over [`Self::group_footprints`] (parallel; `None` = not indexed).
     /// The footprint sample is the heavier of the two column rays — it walks render faces, not
@@ -438,7 +438,7 @@ fn modr_refs(doodad_count: usize, group_doodad_refs: &[Vec<u16>]) -> Vec<Arc<[u1
 /// exterior group names is sky-lit from the first frame that group is walked, and never goes back.
 /// Taking the first referrer instead pinned Booty Bay's entrance arch — named by g22 (interior) and
 /// g42 (exterior) — to the interior lane, whose whole base is the MODD colour: `#000000` there, i.e.
-/// a pure black silhouette at the town gate (decision 0969; `benilla-extract darkpropscan` is the
+/// a pure black silhouette at the town gate (`benilla-extract darkpropscan` is the
 /// corpus census).
 ///
 /// `owner` is [`modr_owners`]' inversion and `refs` is [`modr_refs`]' — the latter shared with the
@@ -543,7 +543,7 @@ impl AssetLoader for WmoModelLoader {
         let mut group_collision_tris: Vec<Vec<[[f32; 3]; 3]>> =
             vec![Vec::new(); root.group_count() as usize];
         // Per-group camera-only triangles (DETAIL set, NOCAMCOLLIDE clear) — the down-ray's
-        // camera-void fallback set (decision 0692), disjoint from the walking gather above.
+        // camera-void fallback set, disjoint from the walking gather above.
         let mut group_camera_only_tris: Vec<Vec<[[f32; 3]; 3]>> =
             vec![Vec::new(); root.group_count() as usize];
         // Collidable triangles flattened across every group (raw WMO-local coords), accumulated as we
@@ -600,7 +600,7 @@ impl AssetLoader for WmoModelLoader {
             col_idx.extend(gidx.iter().map(|i| i + base));
             accumulate_wmo_group_camera_collision(&gbytes, &mut cam_pos, &mut cam_idx);
             // Camera-only gather (the walking gather's DETAIL complement) — kept per group for the
-            // down-ray's camera-void fallback (decision 0692).
+            // down-ray's camera-void fallback.
             let (mut dpos, mut didx): (Vec<[f32; 3]>, Vec<u32>) = (Vec::new(), Vec::new());
             accumulate_wmo_group_camera_only_collision(&gbytes, &mut dpos, &mut didx);
             if let Some(tris) = group_camera_only_tris.get_mut(gi as usize) {
@@ -631,7 +631,7 @@ impl AssetLoader for WmoModelLoader {
                 *slot = wmo_group_liquid_mesh(&gbytes);
             }
             for sub in subs {
-                // No meshes built here (decision 0834): a city root's ~thousands of group batches
+                // No meshes built here: a city root's ~thousands of group batches
                 // as labeled sub-assets landed in ONE frame — the geometry ships on the submesh
                 // and the app builds each batch's mesh paced (`benilla`'s `model_forms`).
                 //
@@ -850,7 +850,7 @@ mod doodad_base_tests {
                                            // rather than setting it (`6a78a5 fild thresh · 6a78ab fidiv max · 6a78b1 fmul V`), and
                                            // `V·thresh/max` is 0 when V is. `6a780e cmp dl,1 / 6a7813 mov bl,1` forces max to 1 only
                                            // to keep that `fidiv` finite. So a zero-colour interior prop commits black in the real
-                                           // client too, and the black Booty Bay arch was a LANE bug, never this (decision 0969).
+                                           // client too, and the black Booty Bay arch was a LANE bug, never this.
         assert_eq!(as_bytes(floor112([0, 0, 0])), [0, 0, 0]);
     }
 
@@ -883,7 +883,7 @@ mod doodad_base_tests {
         let molr = vec![vec![7u16, 9u16], vec![3u16]];
         let owner = modr_owners(doodads.len(), &modr);
         let refs = modr_refs(doodads.len(), &modr);
-        // The same inversion the portal cull keys props on (decision 0689): owned props name their
+        // The same inversion the portal cull keys props on: owned props name their
         // group, the unreferenced one names none — so it is the one prop the cull can't hide.
         assert_eq!(owner, vec![Some(0), Some(1), None]);
         let bases = resolve_doodad_bases(&doodads, &groups, &owner, &refs, &molr);
@@ -904,7 +904,7 @@ mod doodad_base_tests {
     /// `695ba2 jne` refuses to re-mark interior, `695bbd/695bc3` clears interior and sets exterior).
     /// Booty Bay's entrance arch is the live case: g22 (interior) names it FIRST and g42 (exterior)
     /// second, its MODD colour is `#000000`, and first-referrer-wins therefore drew it as a pure
-    /// black silhouette at the town gate (decision 0969).
+    /// black silhouette at the town gate.
     #[test]
     fn one_exterior_referrer_makes_the_whole_prop_exterior() {
         let doodads = vec![
@@ -947,7 +947,7 @@ mod doodad_base_tests {
     /// first) and g42 (exterior), and its MODD colour is `#000000` — so first-referrer-wins put it
     /// on the interior lane with an all-zero base and drew it as a pure black silhouette over the
     /// town gate. This reads the real root + group files through the same inversions the loader
-    /// calls, so it fails the moment the lane law regresses (decision 0969).
+    /// calls, so it fails the moment the lane law regresses.
     #[test]
     fn booty_bays_entrance_arch_is_sky_lit_not_a_black_silhouette() {
         let data = benilla_formats::wow_data_or_skip!();

@@ -5,8 +5,8 @@
 //! report ("it snaps when I land") can be read across all of them.
 //!
 //! **The two wire tags are `in` and `out`, and between them every packet is accounted for by
-//! name.** `in` is the full inbound opcode stream (decision 0624); `out` is the full outbound one
-//! (decision 1901), written by the write thread from the writer's own post-write log — so an `out`
+//! name.** `in` is the full inbound opcode stream; `out` is the full outbound one,
+//! written by the write thread from the writer's own post-write log — so an `out`
 //! line is a *transmission*, where the mover's `snd` line is a decision taken before the command is
 //! even queued and `wire` carries only failures. Each file opens with a
 //! `# t0=<unix epoch>` header so **two clients' traces align with each other**, which is what a
@@ -20,7 +20,7 @@
 //!
 //! **`WOW_MOVE_TRACE_TAGS="move,snd,in"` narrows it to those tags** (unset = everything). This is
 //! not tidiness: every line is an unbuffered `write` under one global mutex on the main thread, so a
-//! busy tag distorts the run it is meant to measure. A 600-yd fall probe (decision 0880) wrote
+//! busy tag distorts the run it is meant to measure. A 600-yd fall probe wrote
 //! ~4,200 lines/s, nearly all of them `card`, and the `move` line's own `t=` then carried whatever
 //! the queue ahead of it cost — frames read back as 0.011 s with 2.86 yd of travel, or 0.040 s with
 //! 0.96 yd, against a physics integration that was exact. A trace whose clock cannot be trusted for
@@ -45,8 +45,8 @@ fn sink() -> Option<&'static Mutex<Sink>> {
             .map_err(|e| eprintln!("dbg-trace: cannot create {path}: {e}"))
             .ok()?;
         // The wall-clock epoch of this file's `t=0`, so **two traces can be read against each other**
-        // — a sender's `snd` lines beside an observer's `rly`/`run` lines from a different process
-        // (decision 0619). `t=` alone is per-process seconds and says nothing across clients; with
+        // — a sender's `snd` lines beside an observer's `rly`/`run` lines from a different process.
+        // `t=` alone is per-process seconds and says nothing across clients; with
         // this header, wall time is `t0 + t`.
         let t0_wall = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

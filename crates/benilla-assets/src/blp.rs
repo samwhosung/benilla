@@ -79,10 +79,10 @@ impl AssetLoader for BlpImageLoader {
         let to_io = |e: anyhow::Error| std::io::Error::other(format!("{e:#}"));
         Ok(match settings.variant {
             BlpVariant::WorldArt => world_art_image(
-                // The blocks go straight to the GPU where it can take them (decision 1626);
+                // The blocks go straight to the GPU where it can take them;
                 // `for_upload` decodes only when it cannot, and hands back the matching format.
                 for_upload(blp_bytes_to_native_chain(&bytes).map_err(to_io)?),
-                // The address mode rides the asset path (`crate::texture_url`, decision 0763): the
+                // The address mode rides the asset path (`crate::texture_url`): the
                 // sampler is a property of this upload, and one `.blp` legitimately has two.
                 crate::sampler_mode_of(&ctx.path().to_string()),
             ),

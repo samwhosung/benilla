@@ -11,7 +11,7 @@
 //! What stayed up in the client is the 115-line plugin shell that drives it: opening the chain at
 //! startup needs the shared light buffer, evicting on a map change needs the world-map message, and
 //! the residency sweep needs the art-scope instrument. Those three are the only upward reaches the
-//! module ever had (decision 1164) — the data core below has none.
+//! module ever had — the data core below has none.
 //!
 //! Deduping by path/material means each unique BLP is decoded + uploaded once, and submeshes sharing
 //! a texture+blend share a material handle — which is what lets Bevy batch draws.
@@ -49,8 +49,8 @@ pub struct WorldAssets {
     /// Decoded GPU textures by normalized path.
     /// Keyed by `(normalized path, wrap_u, wrap_v)`: the SAME BLP is legitimately sampled both
     /// ways by different models (a sheet that tiles on a wall and clamps on a cutout card), and the
-    /// address mode lives on the Bevy `Image`'s sampler — so each mode needs its own upload
-    /// (decision 0763). Before that key existed, whichever model loaded the texture first decided
+    /// address mode lives on the Bevy `Image`'s sampler — so each mode needs its own upload.
+    /// Before that key existed, whichever model loaded the texture first decided
     /// the mode for every later one.
     pub textures: SpatialCache<(String, bool, bool), Handle<Image>>,
     /// Decoded UI sprite textures by resolved path (`None` = a miss, cached so a bad path never
@@ -76,8 +76,8 @@ pub struct WorldAssets {
     /// alpha mask baked in ([`portrait_image`]). Its own cache, like `tiled_sprites`: the mask bakes
     /// into the GPU image, so the same BLP wanted as a plain icon and as a portrait needs two images.
     portraits: HashMap<String, Option<Handle<Image>>>,
-    /// Decoded coverage **masks** ([`mask_image`] — linear, not sRGB): the minimap's circular clip
-    /// (decision 0203). Its own cache for the same reason as the others: the format is baked into
+    /// Decoded coverage **masks** ([`mask_image`] — linear, not sRGB): the minimap's circular clip.
+    /// Its own cache for the same reason as the others: the format is baked into
     /// the GPU image.
     masks: HashMap<String, Option<Handle<Image>>>,
     /// **Generated** UI sprites — pixels this client computes rather than decodes, keyed by a
@@ -92,7 +92,7 @@ pub struct WorldAssets {
     /// Addon art never lives in an MPQ: the reference's Storm open reads loose files from the game
     /// directory, which is how `<Texture file="Interface\AddOns\Atlas\Images\…"/>` works at all.
     /// Our equivalent maps that virtual prefix onto the one addon root (decision 1185's single
-    /// folder; decision 1322). Only the UI-sprite decoders consult it — world art has no business
+    /// folder). Only the UI-sprite decoders consult it — world art has no business
     /// under `AddOns\`.
     loose_root: Option<PathBuf>,
     /// Materials deduped by their identity (texture path + blend, or the untextured fallback).
@@ -111,7 +111,7 @@ pub struct WorldAssets {
 pub enum MaterialKey {
     /// `(texture, blend, two_sided, alpha_key_u8, fade_far_yd_u16, is_wmo, is_fade_variant,
     /// wrap_u, wrap_v)` — the address mode is part of the identity because it selects a different
-    /// `Image` upload (decision 0763).
+    /// `Image` upload.
     Textured(String, ModelBlend, bool, u8, u16, bool, bool, bool, bool),
     Fallback(bool),
 }
@@ -214,7 +214,7 @@ pub fn sprite_dimensions(
 /// can't poison the second.
 ///
 /// Each candidate is asked of **two stores**: the patch chain, then — for `Interface\AddOns\`
-/// paths — the loose addon folder ([`loose_addon_file`], decision 1322). The chain never holds an
+/// paths — the loose addon folder ([`loose_addon_file`]). The chain never holds an
 /// `AddOns\` path (Blizzard's own `Blizzard_*` stubs aside, addon art only exists on disk), so the
 /// order between the stores is unobservable; chain-first keeps every non-addon path on exactly the
 /// code it always ran.
@@ -243,7 +243,7 @@ fn decode_sprite(
     // **"Not there" and "there but would not decode" are different faults, and saying only the
     // first sends the reader hunting a path that is sitting on disk.** Three colour-mapped TGAs in
     // the addon corpus read fine and failed to decode for years while this line asserted they did
-    // not resolve (decision 2128).
+    // not resolve.
     let found_but_undecodable: Vec<&String> = candidates
         .iter()
         .filter(|c| {
@@ -291,7 +291,7 @@ fn decode_sprite_bytes(bytes: &[u8]) -> anyhow::Result<(u32, u32, Vec<u8>)> {
 /// backslashed — [`normalize_path`] has run) onto a file under the loose addon root, or `None` if
 /// it is not an `Interface\AddOns\` path or nothing is there.
 ///
-/// **Not sprite-specific, and named for that** (decision 2103): 1322 built this for addon-shipped
+/// **Not sprite-specific, and named for that**: 1322 built this for addon-shipped
 /// Read one file from the **two stores the client's file layer has**: the patch chain, then — for
 /// an `Interface\AddOns\` path — the loose addon folder ([`loose_addon_file`]).
 ///
@@ -411,7 +411,7 @@ impl WorldAssets {
     /// handle — and not as the client's `SharedLightBuffer`. That is the whole reason this crate can
     /// sit under the renderer: the store's only use of it is `clone()` into every deduped model
     /// material's `light_buf`, so the parameter severs what would otherwise be a dependency on the
-    /// lighting layout and, through it, the rig-palette regions (decision 1164).
+    /// lighting layout and, through it, the rig-palette regions.
     pub fn open(chain: Chain, shared_light: Buffer) -> Self {
         Self {
             chain: Arc::new(Mutex::new(chain)),
@@ -462,7 +462,7 @@ impl WorldAssets {
         if let Some(handle) = self.textures.fetch(&key) {
             return Some(handle);
         }
-        // Passthrough: world art is uploaded in the form the BLP stores it (decision 1626).
+        // Passthrough: world art is uploaded in the form the BLP stores it.
         // Nothing reads a world texture main-side — the same reasoning that already makes this
         // lane `RenderAssetUsages::RENDER_WORLD` — so there are no CPU texels to lose.
         let chain = read_texture_native_chain(&mut self.chain.lock_recover(), &key.0).ok()?;
@@ -507,7 +507,7 @@ impl WorldAssets {
     }
 
     /// A UI sprite **resampled to an exact pixel size** by the caller's own kernel, cached by that
-    /// size — the nameplate border (decision 0188).
+    /// size — the nameplate border.
     ///
     /// The plate's frame art is a 128 × 32 BLP drawn at whatever size the plate is, which past the
     /// 1024×768 knee (and always on a retina framebuffer) is a magnification: the GPU's bilinear
@@ -553,7 +553,7 @@ impl WorldAssets {
     /// A UI sprite decoded with **repeat** addressing on the axes `wrap` names and clamp on the
     /// rest — the reference's one-axis tiling idiom (`SetTexCoord(0, n, 0, 1)` on the stance
     /// shelf's middle strip) wraps along its length and must clamp across it, or the strip's
-    /// bottom row bleeds into its top edge (decision 2000; [`sprite_image_wrapped`]). Same
+    /// bottom row bleeds into its top edge ([`sprite_image_wrapped`]). Same
     /// sRGB/no-mip decode + extensionless→`.blp` resolve as [`Self::sprite_texture`], but its
     /// own cache keyed by the wrap pair (the sampler is baked into the `Image`, so a path wanted
     /// under two address modes needs two GPU images). Cached hits **and** misses.
@@ -618,7 +618,7 @@ impl WorldAssets {
         loaded
     }
 
-    /// The tabard designer's emblem cell (decision 1977): the emblem BLP decoded and rewritten to
+    /// The tabard designer's emblem cell: the emblem BLP decoded and rewritten to
     /// **white carrying its own alpha** — `(a << 24) | 0x00FFFFFF` per texel, the reference's
     /// `0x503431` loop — as an ordinary clamped sprite the caller tints. Cached per path like a
     /// sprite; a file that fails to open yields `None` (the reference installs its static array's
@@ -646,7 +646,7 @@ impl WorldAssets {
     }
 
     /// A coverage **mask** ([`mask_image`] — linear/clamp, the texel bytes handed to the shader
-    /// 1:1): the minimap's `MinimapMask.blp` circle (decision 0203, [`crate::ui_pass::UiQuadMask`]).
+    /// 1:1): the minimap's `MinimapMask.blp` circle ([`crate::ui_pass::UiQuadMask`]).
     /// Same extensionless→`.blp` resolve as [`Self::sprite_texture`]; its own cache, hits AND misses.
     pub fn mask_texture(
         &mut self,
@@ -737,7 +737,7 @@ impl WorldAssets {
         // Per-submesh blend (opaque trunk/wall vs alpha-cut leaves/windows). This builder serves
         // ground clutter, which never authors the multiply modes — Mod/Mod2x fall to plain Blend
         // here rather than growing this path the marker bits `model_render::model_material` packs
-        // (that builder is the one every Mod-capable consumer uses; decision 0528).
+        // (that builder is the one every Mod-capable consumer uses).
         let alpha_mode = match blend {
             ModelBlend::Opaque => AlphaMode::Opaque,
             ModelBlend::AlphaTest => AlphaMode::Mask(cutoff),
@@ -798,7 +798,7 @@ impl WorldAssets {
 ///
 /// How far terrain streams is deliberately **not** here: the residency window derives from the
 /// live `farclip` view distance (`benilla_world::view::ViewDistance` — the player's Terrain
-/// Distance setting), as the reference derives it (decision 1513).
+/// Distance setting), as the reference derives it.
 #[derive(Resource, Clone, Copy)]
 pub struct RenderConfig {
     /// Stale tiles released per frame on a within-map window shift (`$WOW_TILE_UNLOAD`,

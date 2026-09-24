@@ -10,7 +10,7 @@
 //! It lives here, below the renderer, because it is the cache the asset foundation itself is built
 //! out of (`WorldAssets`' textures and model materials) and because it knows nothing about a world:
 //! [`SpatialCache::scope`] is handed the focus, the radius and the clock as three plain scalars and
-//! never asks anyone for them. Decision 1164. The *instrumentation* around it — which caches exist,
+//! never asks anyone for them. The *instrumentation* around it — which caches exist,
 //! what a census row is, where the focus comes from — stayed up in `art_scope`, which is the half
 //! that reads the camera and the character roster.
 

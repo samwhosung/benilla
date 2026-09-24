@@ -44,7 +44,7 @@ pub struct ClipEvent {
     pub point: Vec3,
 }
 
-/// One animation in a model's [`ModelAnimations`] graph (decision 0019): its `AnimationData.dbc` id,
+/// One animation in a model's [`ModelAnimations`] graph: its `AnimationData.dbc` id,
 /// the graph node an `AnimationPlayer` plays to run it, and whether it loops.
 #[derive(Clone)]
 pub struct AnimClip {
@@ -65,7 +65,7 @@ pub struct AnimClip {
     ///
     /// **Signed, and the sign is load-bearing — never `abs()` it.** A backwards gait is authored
     /// NEGATIVE (`RidingKodo.m2` seq 14, WalkBackwards: `-2.5`), and the client's rate guard is a
-    /// strict `divisor > 0` (`0x5fe2f0` — decisions 0903/0910/0912). So an authored
+    /// strict `divisor > 0` (`0x5fe2f0`). So an authored
     /// backwards clip plays at a flat 1×, while a model that has *no* WalkBackwards and falls back
     /// to Walk (`+2.5`) gets speed-scaled. That asymmetry is the reference's behaviour; taking the
     /// magnitude here — an inviting-looking tidy-up — inverts it on every model authoring a reverse
@@ -101,7 +101,7 @@ pub struct AnimClip {
     pub arm_nodes: Option<(AnimationNodeIndex, AnimationNodeIndex)>,
     /// The **upper-body masked variant** of this clip: a graph node that animates only the
     /// SpineLow-subtree ([`upper_subtree_root`] — keyBoneLookup[4]/[6], the legs excluded), for the
-    /// one-shot route's masked destination (decision 0087 — a swing/emote played *over* a live base:
+    /// one-shot route's masked destination (a swing/emote played *over* a live base:
     /// legs keep running/sitting/jumping while the torso swings or emotes). The general form of the
     /// per-arm [`Self::arm_nodes`] ceremony machinery, one subtree wider. `None` for a model with no
     /// split key-bone (the −1 sentinel) — the route falls back to full-body on the base node.
@@ -132,7 +132,7 @@ pub struct AnimClip {
     pub poses_bones: bool,
 }
 
-/// A model's animations as a playable bundle (decision 0019): one shared `AnimationGraph` holding every
+/// A model's animations as a playable bundle: one shared `AnimationGraph` holding every
 /// sequence's clip, plus the per-sequence node/id/loop info. Built once per M2 asset and shared across
 /// instances; each creature instance drives this graph with its own `AnimationPlayer`. Also attached to
 /// the creature **as a component**, so the model bench can scrub `clips` and gameplay (Milestone C) can
@@ -148,7 +148,7 @@ pub struct ModelAnimations {
     /// forearm-mounted shield or an empty hand stays open). `None` per hand for a model with no finger
     /// key-bones or no `HandsClosed` clip (beasts, props — they never grip).
     pub hand_close: [Option<AnimationNodeIndex>; 2],
-    /// The model's baked **PlayableAnimationLookup** (decision 0082, M2 header `+0x2c/+0x30`, see
+    /// The model's baked **PlayableAnimationLookup** (M2 header `+0x2c/+0x30`, see
     /// [`PlayableAnim`]): row `i` is the model's own precomputed substitute for requested
     /// `AnimationData.dbc` id `i`. Empty for a model whose header carries no table (a boneless
     /// doodad-shaped cube fallback, a malformed M2) — [`Self::resolve`] then degrades to identity.
@@ -167,7 +167,7 @@ pub struct ModelAnimations {
     /// Index into [`Self::clips`] of the model's **loader-idle seed** — the sequence the client's
     /// M2-instance loader arms once at load and plays forever (`0x71019b`): **animation id 0
     /// ("Stand")**, resolved through the model's own `playableAnimationLookup`. NOT the
-    /// file-order-first sequence (0637). The two coincide for almost every model and diverge
+    /// file-order-first sequence. The two coincide for almost every model and diverge
     /// exactly on one whose first sequence is a Spawn: `DuelingFlag.m2` is Spawn/Stand/Despawn,
     /// and arming file-order-0 looped its Spawn band, leaving the duel flag hanging 9 yards in the
     /// air on a 3.3 s cycle.
@@ -177,7 +177,7 @@ pub struct ModelAnimations {
     /// content gate, decision 0130; the ~90% of placed doodads `doodadscan` measured). A *constant
     /// but non-rest* pose does NOT qualify for that skip — see `m2::idle_pose_differs`.
     pub first_seq: Option<usize>,
-    /// The direct pose evaluator's baked data (decision 0712): the pose twin of every clip above,
+    /// The direct pose evaluator's baked data: the pose twin of every clip above,
     /// the node → (clip, mask) table, and the per-bone mask bits — filled by the same code that
     /// builds [`Self::graph`], so it mirrors the graph by construction. `Arc`: the component is
     /// cloned per instance; the bake is shared.
@@ -227,7 +227,7 @@ impl ModelAnimations {
     /// **Not the file-order-first slot**, which is what this used to be: the two differ on 583
     /// models corpus-wide (`benilla-extract fxlifescan`), and arming slot 0 hands
     /// `Spells\LightningShield_State_Base` its `Decay` sequence from frame one. It is the same
-    /// correction `first_seq` already carries for the placed-doodad lane (0637, the duel flag) —
+    /// correction `first_seq` already carries for the placed-doodad lane (the duel flag) —
     /// but taken *without* that field's bind-pose content gate, because an effect's emitters read
     /// the posed joints even when the mesh would render identically.
     ///
@@ -244,7 +244,7 @@ impl ModelAnimations {
     /// *without* its bind-pose content gate, and expressed as the slot the per-sequence bakes are
     /// keyed on rather than as a `clips` index.
     ///
-    /// The two fields answer different questions and must not be conflated (decision 0936). The
+    /// The two fields answer different questions and must not be conflated. The
     /// reference arms this sequence on **every** M2 instance the moment it goes LIVE (`0x70ebd0`'s
     /// tail — no instance in the client ever exists with nothing armed), so "which sequence is this
     /// model playing" always has an answer. `first_seq` answers the narrower *rendering* question
@@ -264,7 +264,7 @@ impl ModelAnimations {
 
     /// The loader-idle seed's **clip** — [`Self::idle_seq`]'s selection, before it is reduced to a
     /// slot number. What a spawn site plays to put an instance on that sequence: since every
-    /// sequence builds a clip (decision 0941), a model whose bones never move still has one to arm,
+    /// sequence builds a clip, a model whose bones never move still has one to arm,
     /// and arming it is what gives its emitters/material loops a running clock instead of a frozen
     /// slot-0 read. Distinct from [`Self::first_seq`], which stays the *rendering* question.
     pub fn idle_clip(&self) -> Option<&AnimClip> {
@@ -364,7 +364,7 @@ impl ModelAnimations {
 mod tests {
     use super::*;
 
-    // ── ModelAnimations::resolve (decision 0082) ──────────────────────────────────────────────
+    // ── ModelAnimations::resolve ──────────────────────────────────────────────
 
     use bevy::animation::graph::AnimationNodeIndex;
 
@@ -623,7 +623,7 @@ mod tests {
     }
 
     /// The idle id is resolved through the model's own `playableAnimationLookup` — the same
-    /// `0x711bf0(reqId = 0)` chain `first_seq` takes (0637). 268 models corpus-wide remap requested
+    /// `0x711bf0(reqId = 0)` chain `first_seq` takes. 268 models corpus-wide remap requested
     /// id 0 (`Cripple_State_Base` → 158 Hold), and slot 0 is not their idle either.
     #[test]
     fn idle_seq_resolves_id_zero_through_the_playable_lookup() {

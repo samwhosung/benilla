@@ -2,7 +2,7 @@
 //!
 //! Decodes a WoW M2 (`*.m2`) into an [`M2Model`]: one [`ModelSubmesh`] per render batch, each
 //! carrying the batch's **decoded geometry** plus its texture as a `Handle<Image>` **dependency**
-//! (through the `mpq://` source). **The loader ships no meshes** (decision 0834, the model-lane
+//! (through the `mpq://` source). **The loader ships no meshes** (the model-lane
 //! twin of 0832's terrain rule): a labeled mesh sub-asset lands the whole model's render form in
 //! ONE frame — the city first-contact spike — so the app builds each batch's `Mesh` paced at the
 //! spawn side (`benilla`'s `model_forms`, via [`submesh_to_static_mesh`](crate::submesh_to_static_mesh)
@@ -62,17 +62,17 @@ pub struct M2Model {
     pub ribbons: Vec<ModelRibbon>,
     /// M2 light blocks (raw WoW model space + the host bone's rest pivot). The spawn site turns each
     /// casting `type==1` (point) light into a Bevy `PointLight` that lays the faithful dynamic
-    /// hot-spot on every lit surface (decisions 0016/0273). Empty for nearly all models; one on fire
+    /// hot-spot on every lit surface. Empty for nearly all models; one on fire
     /// props (campfire/firepit/cooker/forge) — and one on the held torch every torch-bearing NPC
     /// carries.
     pub lights: Vec<ModelLight>,
-    /// The model's rest skeleton in Bevy space (decision 0019) — the joint tree the skinned creature
+    /// The model's rest skeleton in Bevy space — the joint tree the skinned creature
     /// path spawns one entity per bone from. Empty for a boneless model.
     pub skeleton: ModelSkeleton,
     /// The matching inverse bind poses (`translate(−pivot)` per bone), shared across every instance of
     /// this model; each skinned submesh references it from its `SkinnedMesh`. A labeled sub-asset.
     pub inverse_bindposes: Handle<SkinnedMeshInverseBindposes>,
-    /// The model's animations, ready to play (decision 0019) — one shared `AnimationGraph` with every
+    /// The model's animations, ready to play — one shared `AnimationGraph` with every
     /// sequence's clip. `None` for a model with no animated sequences (static props, boneless models).
     /// Built once here; each creature instance drives it with its own `AnimationPlayer`.
     pub animations: Option<ModelAnimations>,
@@ -87,13 +87,13 @@ pub struct M2Model {
     /// all.
     pub first_seq_span: Option<f32>,
     /// **Every sequence the file owns, in file order** — id, slot, length, loop — whatever
-    /// [`Self::animations`] kept a clip for. The UI model pane's clock needs exactly this
-    /// (decision 2008): which `AnimationData` ids the file answers to, how long each runs and
+    /// [`Self::animations`] kept a clip for. The UI model pane's clock needs exactly this:
+    /// which `AnimationData` ids the file answers to, how long each runs and
     /// whether it clamps — for sequences that key no bone too, which `ModelAnimations` drops
     /// (the cooldown indicator's sweep keys a constant on its one bone; its texture transforms
     /// and colour tracks are what move). Empty for a file with no sequences.
     pub sequences: Vec<M2SequenceInfo>,
-    /// The model's attachment points (decision 0072 — held items): weapon/shield hand slots, sheath
+    /// The model's attachment points (held items): weapon/shield hand slots, sheath
     /// points, etc. Each carries the bone it rides + its bind-pose-relative offset (see
     /// [`ModelAttachment`]). Empty for a model with no attachment table (most doodads/WMO props).
     pub attachments: Vec<ModelAttachment>,
@@ -121,7 +121,7 @@ pub struct M2Model {
     /// (transcribed at the framing site). Same Bevy-space conversion as `portrait_camera`.
     pub pane_camera: Option<PortraitCamera>,
     /// The **whole camera table**, in file order — the raw index space a `<Model>` widget's
-    /// `SetCamera(n)` walks (decision 2027). `camera0` and `pane_camera` above are the two fixed
+    /// `SetCamera(n)` walks. `camera0` and `pane_camera` above are the two fixed
     /// indices two other paths take; this is the general one, and it is the only one that can
     /// answer "how many cameras does this file have", which is the question that decides whether
     /// a pane renders through the perspective leg at all (an index past the count installs a NULL
@@ -174,7 +174,7 @@ pub struct PortraitCamera {
     /// The record's FOV (radians), verbatim — a **diagonal** angle in the client's convention;
     /// the consumer builds the client's diagonal-FOV projection from it at whichever aspect its
     /// path uses (`benilla`'s `WowPortraitProjection`) — `1.0` for the round portrait bake, so
-    /// `fovy = fov/√2` (decision 1543), the pane's own rect for a `<PlayerModel>` (1089).
+    /// `fovy = fov/√2`, the pane's own rect for a `<PlayerModel>` (1089).
     pub fov: f32,
     pub near: f32,
     pub far: f32,
@@ -293,7 +293,7 @@ pub struct ModelEmitter {
     /// The OWNER model's **loader-idle file sequence slot**
     /// ([`crate::ModelAnimations::idle_seq`]) — the sequence every M2 instance is playing when no
     /// rig has armed anything, and therefore the slot this emitter's per-sequence rate/gate/param
-    /// bakes sample against by default (decision 0936). Baked onto the emitter, not asked of the
+    /// bakes sample against by default. Baked onto the emitter, not asked of the
     /// spawn site, because the lanes that need it most are exactly the ones with no rig to ask:
     /// a content-gated GameObject (`spawn_emitter`'s `EmitClock::Host` whose player armed nothing)
     /// and an unrigged placed doodad (`EmitClock::Pinned`). `0` for a model with no sequences —
@@ -302,7 +302,7 @@ pub struct ModelEmitter {
 }
 
 /// Whether looping `anim` would look like anything other than the **static mesh** — the doodad
-/// content gate (decision 0130, premise corrected by 0637).
+/// content gate (premise corrected by 0637).
 ///
 /// The original gate asked "does some track have >1 key", reasoning that a constant pose renders
 /// identically to the un-rigged mesh. That premise is false: the static mesh is the **bind** pose,
@@ -317,8 +317,8 @@ pub struct ModelEmitter {
 /// static path, so that optimization survives intact.
 ///
 /// The predicate itself is `ModelAnimation::is_rest_pose`, beside the parse, so
-/// `benilla-extract idleslotscan`'s corpus census of this gate's reach can't drift from the gate
-/// (decision 0936). What it decides is **whether to build a rig**, and nothing else — the sequence
+/// `benilla-extract idleslotscan`'s corpus census of this gate's reach can't drift from the gate.
+/// What it decides is **whether to build a rig**, and nothing else — the sequence
 /// the instance is playing is [`ModelAnimations::idle_seq`], which has an answer either way.
 fn idle_pose_differs(anim: &benilla_formats::ModelAnimation) -> bool {
     !anim.is_rest_pose()
@@ -350,7 +350,7 @@ pub struct ModelRibbon {
     /// [`ModelEmitter::owner_reach`]. A trail is one of its model's emitters and takes the same
     /// owner-last draw-order rung: measured on the wisp (14 blend batches, 3 streamers), its
     /// trails otherwise interleave with its own body, 6 batches deep, and which batches are over
-    /// which streamer *changes frame to frame* as they whip (decision 0721).
+    /// which streamer *changes frame to frame* as they whip.
     pub owner_reach: f32,
     /// The owner model's bound sphere for the water-plane side — same field, same law as
     /// [`ModelEmitter::water_bound`]: the ribbon leg reads the MODEL's side-A boolean verbatim
@@ -416,7 +416,7 @@ impl AssetLoader for M2ModelLoader {
 
         let mut submeshes = Vec::with_capacity(subs.len());
         for sub in subs {
-            // No meshes built here (decision 0834): the geometry ships on the submesh and the app
+            // No meshes built here: the geometry ships on the submesh and the app
             // builds the render form paced — the static mesh on demand, the skinned twin only for
             // the lanes that rig (which also retires the old always-built, mostly-unused twin).
             //
@@ -426,7 +426,7 @@ impl AssetLoader for M2ModelLoader {
             // type-based resolution — which is ambiguous with Bevy's built-in image loader and spams a
             // "Multiple AssetLoaders found" warning per texture. Lowercasing also dedupes case variants.
             // The URL carries the batch's authored sampler address mode, because two modes of one
-            // `.blp` are two different `Image` uploads (decision 0763 — `crate::texture_url`).
+            // `.blp` are two different `Image` uploads (`crate::texture_url`).
             let texture = sub
                 .texture
                 .as_deref()
@@ -466,7 +466,7 @@ impl AssetLoader for M2ModelLoader {
         // The bone-pivot bake is below, once the skeleton is parsed.
         let light_defs = parse_m2_lights(&bytes);
 
-        // The rest skeleton (decision 0019): bake the raw bone tree to Bevy-space joints + the matching
+        // The rest skeleton: bake the raw bone tree to Bevy-space joints + the matching
         // inverse bind poses. A boneless model yields an empty skeleton + an empty bindpose set (the
         // skinned mesh then carries no joint attributes, so it never takes the SKINNED path).
         let skeleton_raw = parse_m2_skeleton(&bytes).unwrap_or_default();
@@ -565,7 +565,7 @@ impl AssetLoader for M2ModelLoader {
             SkinnedMeshInverseBindposes::from(inverse_bindposes),
         );
 
-        // The attachment-point table (decision 0072 — held items): the same bind-pose pivots
+        // The attachment-point table (held items): the same bind-pose pivots
         // `build_skeleton` used above, so a held item's offset is exactly consistent with the joint
         // it's spawned under. Empty for a boneless/attachment-less model.
         let attachments = build_attachments(
@@ -581,7 +581,7 @@ impl AssetLoader for M2ModelLoader {
         // so a fired key's point is bake-consistent with the joint it composes through.
         let pivots = skeleton_pivots(&skeleton_raw);
 
-        // The animations (decision 0019): build each sequence's clip into one shared `AnimationGraph`
+        // The animations: build each sequence's clip into one shared `AnimationGraph`
         // (the bench scrubs them; gameplay plays Stand). All as labeled sub-assets. `None` unless at
         // least one sequence produced an animated clip.
         let sequences = parse_m2_animations(&bytes);
@@ -599,7 +599,7 @@ impl AssetLoader for M2ModelLoader {
         let animations = {
             let mut graph = AnimationGraph::new();
             let root = graph.root;
-            // The direct pose evaluator's bake (decision 0712) — filled beside every graph
+            // The direct pose evaluator's bake — filled beside every graph
             // mutation below so the table mirrors the graph by construction: `bone_masks` beside
             // each `add_target_to_mask_group`, `set_node` beside each `add_clip*`.
             let mut pose = crate::model::PoseSource {
@@ -626,7 +626,7 @@ impl AssetLoader for M2ModelLoader {
                     }
                 }
             }
-            // The upper-body one-shot mask group (decision 0087): group 2 collects every joint
+            // The upper-body one-shot mask group: group 2 collects every joint
             // *outside* the SpineLow subtree (the legs + pelvis), so a clip masked with it animates
             // only the upper body — the general form of the per-arm ceremony above, one subtree wider.
             let upper_root = upper_subtree_root(&skeleton_raw);
@@ -662,7 +662,7 @@ impl AssetLoader for M2ModelLoader {
                     pose.bone_masks[i] |= 1 << 4;
                 }
             }
-            // The model's baked PlayableAnimationLookup (decision 0082): parsed straight off the M2
+            // The model's baked PlayableAnimationLookup: parsed straight off the M2
             // header alongside the sequences above, so a model lacking a requested clip can resolve
             // to its own baked substitute at play time (`ModelAnimations::resolve`) instead of the
             // creature driver silently doing nothing. Read BEFORE the clip walk because the
@@ -674,7 +674,7 @@ impl AssetLoader for M2ModelLoader {
             let animation_lookup =
                 benilla_formats::parse_m2_animation_lookup(&bytes).unwrap_or_default();
             let mut clips = Vec::new();
-            // The loader-idle seed (decision 0637, `0x71019b`): the loader arms **animation id 0
+            // The loader-idle seed (`0x71019b`): the loader arms **animation id 0
             // ("Stand")** resolved through the model's own `playableAnimationLookup`, NOT the
             // file-order-first sequence. For the overwhelming majority of models those coincide,
             // which is why the old file-order read survived; they diverge exactly on models whose
@@ -686,7 +686,7 @@ impl AssetLoader for M2ModelLoader {
             let mut first_seq = None;
             for (i, anim) in sequences.iter().enumerate() {
                 // EVERY sequence becomes a clip — the clip carries the instance's sequence CLOCK,
-                // not just a bone pose (decision 0941, [`build_animation_clip`]). `poses_bones`
+                // not just a bone pose ([`build_animation_clip`]). `poses_bones`
                 // separates the two meanings: the clock is free, the rig is not.
                 {
                     let (clip, pose_clip, poses_bones) = build_animation_clip(anim, &skeleton);
@@ -801,12 +801,12 @@ impl AssetLoader for M2ModelLoader {
             }
             // Global-sequence channels alone are enough to carry `ModelAnimations`: a model whose
             // sequences produced no clips can still pulse/flicker on its free-running loops (the
-            // doodad `GlobalSeqOnly` tier, decision 0130) — dropping them because `clips` came up
+            // doodad `GlobalSeqOnly` tier) — dropping them because `clips` came up
             // empty would silently freeze it.
             let global_bones =
                 build_global_bones(&parse_m2_global_sequence_bones(&bytes), &skeleton);
             // The gate is "does ANYTHING in this model vary with the sequence clock" — and its
-            // consumer list was incomplete (decision 0941). A bone-posing clip and a global
+            // consumer list was incomplete. A bone-posing clip and a global
             // sequence were counted; the **per-sequence samplers** were not: the emitters'
             // rate/enable/params tracks, a ribbon's, and the material alpha/colour/UV loops all
             // resolve through the instance's playing sequence. 807 corpus models animate ONLY
@@ -838,7 +838,7 @@ impl AssetLoader for M2ModelLoader {
             })
         };
 
-        // Stamp every emitter with the model's loader-idle slot (decision 0936) — the sequence a
+        // Stamp every emitter with the model's loader-idle slot — the sequence a
         // rig-less instance is playing, and so the slot its rate/gate/param bakes sample by
         // default. Done here rather than in the map above because the selection needs the built
         // clips (their `seq_index` + the `playableAnimationLookup` resolve), and only `None` when

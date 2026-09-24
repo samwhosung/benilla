@@ -45,7 +45,7 @@ pub struct BillboardInfo {
 
 /// One render batch of a loaded model (an M2 batch or a WMO group batch): the decoded geometry,
 /// the batch's albedo texture (WorldArt), and its blend/sidedness. Carries data + metadata only —
-/// **no `Mesh` assets** (decision 0834, the model-lane twin of 0832's terrain rule): a labeled
+/// **no `Mesh` assets** (the model-lane twin of 0832's terrain rule): a labeled
 /// mesh sub-asset lands the instant the decode completes and the render world ingests the whole
 /// model in ONE frame, which is the city first-contact spike. The app builds each batch's render
 /// form paced (`benilla`'s `model_forms`) via [`submesh_to_static_mesh`] /
@@ -70,7 +70,7 @@ pub struct ModelSubmesh {
     pub geoset_id: u16,
     /// The character runtime texture slot this batch carries (see
     /// [`benilla_formats::RenderSubmesh::char_slot`]) — the spawn site fills its texture per-player from
-    /// the appearance (decisions 0041 / 0044 / 0045). `None` for everything with its own texture.
+    /// the appearance. `None` for everything with its own texture.
     pub char_slot: Option<CharSkinSlot>,
     pub blend: ModelBlend,
     pub two_sided: bool,
@@ -128,7 +128,7 @@ pub struct ModelSubmesh {
     /// because which loop applies depends on the sequence the *instance* is playing (decision
     /// 1408). Like [`Self::uv_anim`], the `Arc` doubles as a material-dedup identity.
     pub uv_seq: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 2]>>>,
-    /// The batch's texture-transform **rotation** loop per file sequence slot (decision 2019)
+    /// The batch's texture-transform **rotation** loop per file sequence slot
     /// — the UI model tiles sample it off the pane's play head into the material's affine row;
     /// no world lane reads it (no placed doodad authors one). `None` for the rest.
     pub uv_rot_seq: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 4]>>>,
@@ -158,7 +158,7 @@ pub struct ModelSubmesh {
 /// foliage); recomputes flat ones only when absent. WMO per-vertex MOCV colour is folded in when
 /// present (M2 has none). The WoW→Bevy map is a pure rotation, so it applies to normals too.
 ///
-/// `usages` is the caller's lane split (decision 0834): the **static** form is `RENDER_WORLD`-only
+/// `usages` is the caller's lane split: the **static** form is `RENDER_WORLD`-only
 /// (nothing reads it main-side; the render world takes the buffers at extract, no resident CPU
 /// copy), while the **skinned** twin keeps the default `MAIN_WORLD | RENDER_WORLD` because the
 /// mouseover picker rays its vertices on the main world (`target::hover::ray_posed_mesh`).
@@ -182,7 +182,7 @@ fn build_submesh_mesh(sub: &RenderSubmesh, usages: RenderAssetUsages) -> Mesh {
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, sub.vertex_colors.clone());
     }
     if sub.normals.len() == sub.positions.len() {
-        // A billboard CARD is lit on the face it PRESENTS (decision 0788): a card authored
+        // A billboard CARD is lit on the face it PRESENTS: a card authored
         // back-to-front against the law's `+X`-at-the-viewer gets its plane's normals turned round
         // here, so its shading stops swinging with the camera (the shape, the reference's own
         // behaviour and the 279-batch population are on
@@ -208,7 +208,7 @@ fn build_submesh_mesh(sub: &RenderSubmesh, usages: RenderAssetUsages) -> Mesh {
 }
 
 /// The skinned twin's per-vertex joint indices (`Uint16x4` — M2 bone indices, used directly as
-/// palette indices). **Deliberately NOT `Mesh::ATTRIBUTE_JOINT_INDEX`** (decision 0720): Bevy's
+/// palette indices). **Deliberately NOT `Mesh::ATTRIBUTE_JOINT_INDEX`**: Bevy's
 /// `SKINNED` pipeline path triggers on the standard attributes being in the mesh LAYOUT — while
 /// its draw-time skin bind group resolves per ENTITY registration — so a mesh carrying them can
 /// only ever render through Bevy's skin lane. Our own attribute ids keep Bevy's `is_skinned()`
@@ -253,7 +253,7 @@ pub const ATTRIBUTE_WOW_MERGED_SLOT: bevy::mesh::MeshVertexAttribute =
         bevy::render::render_resource::VertexFormat::Uint32,
     );
 
-/// The app-facing **static** mesh build (decision 0834): geometry only, `RENDER_WORLD`-only
+/// The app-facing **static** mesh build: geometry only, `RENDER_WORLD`-only
 /// usages — the render world takes the vertex buffers at extract and the main world keeps no
 /// copy. Consumers must pair it with an explicit `Aabb` computed at build time (the exterior
 /// cull fails OPEN on a missing bound, and `RENDER_WORLD` races Bevy's `calculate_bounds` —
@@ -264,7 +264,7 @@ pub fn submesh_to_static_mesh(sub: &RenderSubmesh) -> Mesh {
 
 /// Build the **skinned** twin of [`submesh_to_static_mesh`]: the same baked geometry plus the
 /// per-vertex [`ATTRIBUTE_WOW_JOINT_INDEX`] + [`ATTRIBUTE_WOW_JOINT_WEIGHT`]. These two
-/// attributes are the entire trigger for the owned-palette skinning path (decisions 0019/0720).
+/// attributes are the entire trigger for the owned-palette skinning path.
 /// When the submesh carries no skin (WMO / a boneless batch) this is identical to the static
 /// mesh — harmless, but the rigged paths are the only consumers regardless. Keeps the default
 /// `MAIN_WORLD | RENDER_WORLD` usages: the mouseover picker skins these vertices on the CPU
@@ -284,7 +284,7 @@ pub fn submesh_to_skinned_mesh(sub: &RenderSubmesh) -> Mesh {
     mesh
 }
 
-/// One joint of a model's rest skeleton, baked to Bevy space (decision 0019): its parent joint index
+/// One joint of a model's rest skeleton, baked to Bevy space: its parent joint index
 /// (`-1` = root → parented to the entity) and its **local** rest translation. The skinned creature
 /// path spawns one entity per joint carrying this translation; animation later drives each joint's TRS.
 #[derive(Clone, Copy)]
@@ -309,7 +309,7 @@ pub struct ModelJoint {
     pub parent_arm: Option<benilla_formats::ParentArm>,
 }
 
-/// A model's rest skeleton in Bevy space (decision 0019). Built once per M2 asset; the creature path
+/// A model's rest skeleton in Bevy space. Built once per M2 asset; the creature path
 /// spawns a joint-entity hierarchy per instance from `joints` and shares the matching inverse bind
 /// poses ([`build_skeleton`]'s second return) across instances.
 #[derive(Clone, Default)]
@@ -382,7 +382,7 @@ pub(crate) fn skeleton_pivots(skel: &Skeleton) -> Vec<Vec3> {
     skel.bones.iter().map(|b| wow_to_bevy(b.pivot)).collect()
 }
 
-/// One M2 attachment point (decision 0072 — held items), baked to a **Bevy-space bone-local
+/// One M2 attachment point (held items), baked to a **Bevy-space bone-local
 /// offset**: a child spawned under the bone's joint entity at `Transform::from_translation(offset)`
 /// sits exactly at the attach point at bind pose and rides the bone's animation thereafter.
 /// `offset` is `≈ Vec3::ZERO` on character models (the attach bones are leaves sitting exactly at
@@ -524,7 +524,7 @@ pub(crate) fn build_markers(
         .collect()
 }
 
-/// A stable [`AnimationTargetId`] for bone index `bone` (decision 0019). The idle clip's curves and the
+/// A stable [`AnimationTargetId`] for bone index `bone`. The idle clip's curves and the
 /// joint entities' target ids both derive from the bone index (via a synthetic name), so they match
 /// without a real `Name` hierarchy. Scoped to one creature's joints + its shared clip.
 pub fn bone_target_id(bone: u16) -> AnimationTargetId {
@@ -560,8 +560,8 @@ fn keyframe_curve<T: Animatable + Clone>(
     }
 }
 
-/// Build one sequence's [`AnimationClip`] — **and its [`PoseClip`] twin** (decision 0712, one walk
-/// so the two cannot drift) — from parsed raw-WoW keyframes (decision 0019), transforming each
+/// Build one sequence's [`AnimationClip`] — **and its [`PoseClip`] twin** (one walk
+/// so the two cannot drift) — from parsed raw-WoW keyframes, transforming each
 /// channel into the joints' Bevy-space `Transform`:
 /// - **translation** = the bone's rest local (`pivot − pivot_parent`) **plus** `wow_to_bevy(track)` —
 ///   the M2 translation track is a delta on the pivot offset;
@@ -574,8 +574,8 @@ fn keyframe_curve<T: Animatable + Clone>(
 /// instance's **sequence clock** (which slot is playing, and how far into it), which the emitter
 /// rate/params tracks, the material-alpha loops and the GameObject state arm all resolve through.
 /// Dropping the track-less ones left 807 corpus models — the ones whose animation is authored
-/// entirely in the *emitter* tracks — with no clock at all, frozen on slot 0 at t=0 for ever
-/// (decision 0941). The flag is what the doodad content gate reads instead (`poses_bones`): a clip
+/// entirely in the *emitter* tracks — with no clock at all, frozen on slot 0 at t=0 for ever.
+/// The flag is what the doodad content gate reads instead (`poses_bones`): a clip
 /// with no curves can only ever render the bind-pose mesh, so it must not spawn a rig.
 pub(crate) fn build_animation_clip(
     anim: &ModelAnimation,
@@ -831,7 +831,7 @@ pub(crate) fn build_global_bones(
 /// ALL transparent content with the twin's depth-write ON, so a feathering blob's translucent
 /// pixels depth-killed every transparent entity drawn after it (a per-entity fader behind a
 /// 20 %-alpha merged fence vanished outright, popping in only when the sightline cleared the
-/// segment — decision 1422). Centre-sort restores the same location-sort semantics every
+/// segment). Centre-sort restores the same location-sort semantics every
 /// per-entity draw has (whose sort key is its placement origin). The fade spheres stay
 /// WORLD-space — the shader compares them against the camera, never against mesh-local
 /// positions — so the recentring does not touch them.
@@ -973,7 +973,7 @@ mod tests {
 
     /// A sequence whose bones hold bind pose still becomes a clip — an EMPTY one carrying the
     /// sequence's own duration — because the clip is this model's carrier for the instance's
-    /// **sequence clock** (decision 0941). Dropping it left 807 corpus models whose animation is
+    /// **sequence clock**. Dropping it left 807 corpus models whose animation is
     /// authored purely in their emitter tracks with no clock at all: no player, so no slot and no
     /// time, so every per-sequence track read file slot 0 at t = 0 for ever. The duration is the
     /// load-bearing half — Bevy derives a clip's period from its curves, and a 0-second period
@@ -1082,7 +1082,7 @@ mod tests {
         assert!(id.dot(Quat::IDENTITY).abs() > 0.9999, "got {id:?}");
     }
 
-    /// **A welded billboard bone still reaches the palette with its arm** (decision 0945,
+    /// **A welded billboard bone still reaches the palette with its arm** (
     /// superseding 0935's gate) — on the real shipped asset, the director's own pauldron.
     ///
     /// `LShoulder_Plate_PVPAlliance_A_01.m2` authors 3 bones: a plain root and two spherical
@@ -1094,7 +1094,7 @@ mod tests {
     /// is skipped.
     ///
     /// The predicate itself is still live and still correct where it belongs: the per-batch **card
-    /// split** refuses to lift a welded bone's geometry into its own draw (0839). This test pins
+    /// split** refuses to lift a welded bone's geometry into its own draw. This test pins
     /// that the two lanes now disagree *on purpose* — welded for the card split, faced by the
     /// palette. Skips when the client isn't installed (the repo ships no assets).
     #[test]

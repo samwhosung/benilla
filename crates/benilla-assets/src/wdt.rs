@@ -1,9 +1,9 @@
 //! WDT → map tile-index asset loader.
 //!
 //! Decodes a map's tiny `.wdt` into a [`WdtIndex`] — the 64×64 `MAIN` tile-existence grid the
-//! terrain streamer consults before requesting any `.adt` (decision 0476): open ocean authors no
+//! terrain streamer consults before requesting any `.adt`: open ocean authors no
 //! tiles, and probing them wholesale spammed asset-server NotFound errors on every boat crossing.
-//! It also carries the map's **global WMO** where there is one (decision 0688): on the 20 shipped
+//! It also carries the map's **global WMO** where there is one: on the 20 shipped
 //! maps that author no terrain at all, that single placement is the entire world.
 //! The parse itself is `benilla-wdt`'s [`WdtReader`] (oracle-tested in the 0021 migration); this
 //! module only wraps it in the Bevy asset machinery.

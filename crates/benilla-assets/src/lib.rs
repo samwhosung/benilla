@@ -4,7 +4,7 @@
 //! [`benilla_formats::Chain`], so every WoW asset loads through the standard
 //! [`AssetServer`](bevy::asset::AssetServer) as a `Handle<T>` — gaining async loading, handle dedup,
 //! a dependency graph, and hot-reload for free, instead of the bespoke caches and hand-rolled
-//! worker/finalize pipeline the old client carried (decision 0005). The per-format
+//! worker/finalize pipeline the old client carried. The per-format
 //! [`AssetLoader`](bevy::asset::AssetLoader)s (BLP→`Image`, M2/WMO→model, ADT→tile, DBC→catalog)
 //! build on this foundation.
 
@@ -160,7 +160,7 @@ pub fn texture_url(internal: &str, wrap: (bool, bool)) -> String {
 /// The newtype exists because the orphan rule forbids `Resource` on a foreign type, and it lives
 /// here rather than in the client for the same reason the rest of this crate does: a `.dbc` table
 /// turned into something Bevy can hold is exactly this layer's job, and the three readers are the
-/// WDL streamer, the world-map UI and the loading screen — one engine, two game (decision 1164).
+/// WDL streamer, the world-map UI and the loading screen — one engine, two game.
 /// The *loader* stays up top with the patch chain's plugin shell, which is what inserts it.
 #[derive(Resource)]
 pub struct MapCatalogRes(pub benilla_formats::MapCatalog);
@@ -172,7 +172,7 @@ pub struct MapCatalogRes(pub benilla_formats::MapCatalog);
 /// makes the handle dedup work (a path differing only in case or slash would load twice). The WMO and
 /// skin builders are the same rewrite for their own extensions. They sit beside [`texture_url`]
 /// because they are the same act: turning a path the game files wrote into the one URL this crate's
-/// asset source answers to (decision 1164).
+/// asset source answers to.
 /// A model reference path (`.mdx`/`.mdl`, mixed case, backslashes) → its `mpq://…m2` load URL.
 /// Lowercased so case variants share one `AssetServer` handle; the physical archive file is `.m2`.
 pub fn m2_url(raw: &str) -> String {
@@ -243,7 +243,7 @@ pub fn register_asset_loaders(app: &mut App) {
     app.init_asset::<WmoModel>();
     app.init_asset::<AdtTile>();
     app.init_asset::<WdtIndex>();
-    // Publishes whether this device can eat DXT blocks (decision 1626). A plugin, because the
+    // Publishes whether this device can eat DXT blocks. A plugin, because the
     // answer only exists after `RenderPlugin::finish` — see `BlpGpuSupportPlugin`.
     app.add_plugins(BlpGpuSupportPlugin);
     app.register_asset_loader(BlpImageLoader);
@@ -252,7 +252,7 @@ pub fn register_asset_loaders(app: &mut App) {
     app.register_asset_loader(AdtLoader);
     app.register_asset_loader(WdtIndexLoader);
     // The render materials' WGSL, compiled in rather than served off the host binary's asset root
-    // (decision 1164) — same "after AssetPlugin" requirement as the loaders above, so it rides here.
+    // — same "after AssetPlugin" requirement as the loaders above, so it rides here.
     materials::register_shaders(app);
 }
 
@@ -263,7 +263,7 @@ mod tests {
     use bevy::tasks::block_on;
 
     /// The sampler-mode URL round-trips, and repeat/repeat stays byte-identical to the old bare
-    /// path — so the common case keeps ONE upload and no pre-existing URL changed (decision 0763).
+    /// path — so the common case keeps ONE upload and no pre-existing URL changed.
     #[test]
     fn sampler_mode_rides_the_asset_path_and_round_trips() {
         let tex = "World\\KhazModan\\Ironforge\\PassiveDoodads\\Trees\\IronForgeleaves01.blp";
@@ -458,7 +458,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default());
         app.init_asset::<Image>();
         app.init_asset::<Mesh>();
-        // The M2 loader emits labeled sub-assets the skinned + animated path needs (decision 0019): the
+        // The M2 loader emits labeled sub-assets the skinned + animated path needs: the
         // inverse bind poses, plus the idle `AnimationClip` + `AnimationGraph`. The real app registers
         // these via `DefaultPlugins` (bevy_mesh's `MeshPlugin` + `AnimationPlugin`); the minimal harness
         // registers them here so the campfire's M2 (which has bones + a Stand sequence) loads.
@@ -493,7 +493,7 @@ mod tests {
         assert!(has_bounds, "M2 carries authored bounds");
         assert!(textured > 0, "campfire batches reference embedded textures");
 
-        // The loader ships geometry, no meshes (decision 0834) — the app builds the render form.
+        // The loader ships geometry, no meshes — the app builds the render form.
         // Exercise both builders per batch: non-empty, and the static form must yield the Aabb
         // the spawn side inserts explicitly (RENDER_WORLD meshes race `calculate_bounds`).
         for g in &geometries {
@@ -545,7 +545,7 @@ mod tests {
         );
         assert!(textured > 0, "WMO batches reference textures");
 
-        // Geometry, no meshes (decision 0834): the static build is the WMO's one render form.
+        // Geometry, no meshes: the static build is the WMO's one render form.
         for g in &geometries {
             let mesh = submesh_to_static_mesh(g);
             assert!(mesh.count_vertices() > 0, "group submesh has vertices");
@@ -601,7 +601,7 @@ mod tests {
         let (cells, n_shading, layer_h, alpha_h, shadow_h, n_doodads) =
             info.expect("the ADT tile should load via mpq:// + AdtLoader");
 
-        // One drawn mesh per MCNK cell, never one merged slab (decision 0780) — the exterior-scene
+        // One drawn mesh per MCNK cell, never one merged slab — the exterior-scene
         // cull's unit is the chunk, and a tile that loads as a single object cannot be culled from
         // inside a building. The loader ships the shading (index-parallel with the chunks); the
         // mesh itself is the app's paced `chunk_to_mesh` build — exercised per cell here. Every
