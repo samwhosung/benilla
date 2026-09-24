@@ -61,7 +61,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The two link verbs (wow-re `tradeskill/scratch/tradeskill-craft-item-links.md`, 1973).
+    // The two link verbs (decision 1973).
     //
     // GetTradeSkillItemLink(index) — `0x4ff410`: the number gate raises its Usage; then ZERO
     // values on every miss — an index off the list, a header row, a recipe with no product, an
@@ -129,7 +129,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetTradeSkillInfo(index) → name, type, numAvailable, isExpanded. `index` 1-based into the
-    // VISIBLE row list (the module doc's grouped-list law, wow-re `tradeskill` TU-B). A header row:
+    // VISIBLE row list (the module doc's grouped-list law, `0x4fca20`). A header row:
     // (groupName, "header", 0, isExpanded 1/nil). A recipe row: (name, difficulty color key,
     // numAvailable, nil). Out of range → a single nil.
     g.set(
@@ -178,8 +178,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillSubClasses() → the current group names, in group order (VERIFIED, wow-re
-    // `tradeskill` TU-B: the filter-dropdown vocabulary IS the header list) — though v1 ships no
+    // GetTradeSkillSubClasses() → the current group names, in group order (`0x4ffb60`: the
+    // filter-dropdown vocabulary IS the header list) — though v1 ships no
     // filter dropdown to consume it yet (the SubClass/InvSlot filter family below stays inert).
     g.set(
         "GetTradeSkillSubClasses",
@@ -345,8 +345,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             if let Some((spell_id, avail)) =
                 recipe_at(&model, index).map(|r| (r.spell_id, r.num_available))
             {
-                // The client clamps the repeat to numAvailable at the latch (byte-VERIFIED —
-                // wow-re `tradeskill` TU-D, `DoTradeSkill 0x500280`).
+                // The client clamps the repeat to numAvailable at the latch
+                // (`DoTradeSkill 0x500280`).
                 let n = (count.unwrap_or(1).max(1) as u32).min(avail.max(1));
                 model.trade_skill_dos.push((spell_id, n));
             }
@@ -454,7 +454,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     // The InvSlot pair reads/writes the shown-mask (`0x84dd64`) with the index resolving to the
     // (index-1)-th SET bit of the accumulated present-slots mask — present slots only, ascending
-    // (TU-G §4's enumeration; `GetTradeSkillInvSlots` returns exactly that order).
+    // (`0x4ffe60`'s enumeration; `GetTradeSkillInvSlots` returns exactly that order).
     g.set(
         "GetTradeSkillInvSlotFilter",
         lua.create_function(|lua, index: usize| {
@@ -464,7 +464,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             let bits = present_inv_slots(&model);
             Ok(match index.checked_sub(1) {
-                // The "all shown?" probe: (present & mask) == present (TU-G §4, `0x4fffd0`).
+                // The "all shown?" probe: (present & mask) == present (`0x4fffd0`).
                 None => era_bool(
                     bits.iter()
                         .all(|&b| model.trade_skill_invslot_mask & (1 << b) != 0),
@@ -487,7 +487,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 let bits = present_inv_slots(&model);
                 let on = on.unwrap_or(1) != 0;
                 let exclusive = exclusive.unwrap_or(0) != 0;
-                // The exact mask math per path (TU-G §4, the recovered `0x4fd730` args): all →
+                // The exact mask math per path (the recovered `0x4fd730` args): all →
                 // 0xffffffff · off → old & ~(1<<b) · exclusive → 1<<b · add → old | (1<<b).
                 match index.checked_sub(1) {
                     None => model.trade_skill_invslot_mask = u32::MAX,

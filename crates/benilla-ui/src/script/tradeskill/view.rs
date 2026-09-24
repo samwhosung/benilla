@@ -1,6 +1,6 @@
 //! The display-tree + filter machinery: grouping/sorting the flat `TradeSkillRecipe` list into the
 //! visible-row tree the Era API indexes (see the parent module doc — the grouped-list law and the
-//! byte-VERIFIED `SubClassFilter`/`InvSlot` filter family, wow-re `tradeskill` TU-B/TU-G).
+//! byte-VERIFIED `SubClassFilter`/`InvSlot` filter family, `0x4fca20`/`0x4fd180`).
 
 use std::collections::HashMap;
 
@@ -10,7 +10,7 @@ use super::TradeSkillRecipe;
 
 /// Fold a product's `InventoryType` to its InvSlot-filter contribution (`record+0x10`) — the
 /// real client's 29-entry `DAT_00809200` table with its build-time overrides, dumped in full and
-/// byte-VERIFIED (wow-re `tradeskill` TU-G §1): FINGER/TRINKET/BAG collapse to their first slot's
+/// byte-VERIFIED (`0x809200`): FINGER/TRINKET/BAG collapse to their first slot's
 /// single bit (`0xb → 0x400`, `0xc → 0x1000`, `0x12 → 0x80000` — the raw table's multi-slot
 /// entries are dead, overwritten before use), zero contributions (NON_EQUIP/AMMO/QUIVER) take the
 /// `0x800000` catch-all (bit 23), and **WEAPON (13) is the one multi-bit survivor** — `0x18000`,
@@ -41,7 +41,7 @@ fn inv_slot_mask(inv_type: u32) -> u32 {
 }
 
 /// The InvSlot dropdown's per-bit GlobalString **token** — the real client's 24-entry table
-/// (`0x84dd70`, byte-VERIFIED — wow-re `tradeskill` TU-G §2), dumped entry by entry. The caller
+/// (`0x84dd70`), dumped entry by entry. The caller
 /// resolves it against the player's own `GlobalStrings.lua` (decision 2045); these are the
 /// paper-doll `*SLOT` family, **not** the `INVTYPE_*` family the item tooltip's slot line uses,
 /// and that distinction is exactly why the word cannot be stored here: `SECONDARYHANDSLOT`,
@@ -83,7 +83,7 @@ pub(super) fn inv_slot_token(bit: u32) -> Option<&'static str> {
 }
 
 /// The InvSlot filter vocabulary: the set bits of the accumulated slot mask, ascending — the real
-/// client's bits-0..23 walk over `0xbde058` (`GetTradeSkillInvSlots 0x4ffc20`, TU-G §2).
+/// client's bits-0..23 walk over `0xbde058` (`GetTradeSkillInvSlots 0x4ffc20`).
 /// Accumulated over ALL recipes, unfiltered — the mask ORs up at list build, before any filter
 /// applies.
 pub(super) fn present_inv_slots(model: &Model) -> Vec<u32> {
@@ -97,7 +97,7 @@ pub(super) fn present_inv_slots(model: &Model) -> Vec<u32> {
     (0..24).filter(|b| accum & (1 << b) != 0).collect()
 }
 
-/// Whether a recipe passes the current filters (the recompute's own row test, TU-G §5): its slot
+/// Whether a recipe passes the current filters (the recompute's own row test, `0x4fd180`): its slot
 /// contribution overlaps the shown-mask (`record+0x10 & 0x84dd64 != 0`) and its group isn't
 /// subclass-hidden.
 fn passes_filters(model: &Model, r: &TradeSkillRecipe) -> bool {
@@ -109,7 +109,7 @@ fn passes_filters(model: &Model, r: &TradeSkillRecipe) -> bool {
         && inv_slot_mask(r.product_inv_type) & model.trade_skill_invslot_mask != 0
 }
 
-/// One recipe group in the synthesized display tree (wow-re `tradeskill` TU-B): the created item's
+/// One recipe group in the synthesized display tree (`0x4fca20`): the created item's
 /// `(ItemClass, ItemSubClass)` key (the collapse key) + resolved display name, and the positions
 /// (into [`TradeSkillState::recipes`]) of the group's recipes, pre-sorted by tier, product
 /// ItemLevel, then name.
@@ -135,8 +135,8 @@ fn collate(a: &str, b: &str) -> std::cmp::Ordering {
         .then_with(|| a.cmp(b))
 }
 
-/// Build the display tree from the flat recipes (the module doc's grouped-list law, wow-re
-/// `tradeskill` TU-B): group by the created item's `(ItemClass, ItemSubClass)` — a recipe with no
+/// Build the display tree from the flat recipes (the module doc's grouped-list law,
+/// `0x4fca20`): group by the created item's `(ItemClass, ItemSubClass)` — a recipe with no
 /// group yet (`group: None`, its product template still in flight) buckets into the trailing
 /// `(u32::MAX, u32::MAX)`/`""` group; sort each group's recipes by tier, then the product's
 /// **ItemLevel ascending** (the `record+0x14` secondary key — field identity pinned 2026-07-17,
@@ -196,7 +196,7 @@ pub(super) enum Row {
 /// collapsed — its recipes that pass the filters ([`passes_filters`]). A subclass-hidden group,
 /// or one whose every recipe the InvSlot filter drops, contributes NO rows at all — header
 /// included (the real window never shows an empty header under a filter — the visibility law
-/// decision 0452 landed byte-exact, wow-re `tradeskill` TU-G: filtered recipes and emptied/
+/// decision 0452 landed byte-exact, `0x4fd180`: filtered recipes and emptied/
 /// filtered headers drop out of the numbered list; a merely-collapsed header stays). The Lua's
 /// 1-based `index` is a position in *this* list. Empty when no window is open.
 pub(super) fn rows(model: &Model) -> Vec<Row> {
@@ -236,7 +236,7 @@ pub(super) fn num_rows(model: &Model) -> usize {
 }
 
 /// The recipe at a 1-based VISIBLE index, or `None` when that row is a header (or OOB) — so every
-/// per-recipe getter/`DoTradeSkill` safely no-ops on a header row (wow-re `tradeskill` TU-B).
+/// per-recipe getter/`DoTradeSkill` safely no-ops on a header row (`0x4fca20`).
 ///
 /// `pub(crate)`: the tooltip channel (`super::tooltip_item`'s `SetTradeSkillItem`) SHOULD route
 /// through this too — a header index, or the header rows preceding a real recipe, would otherwise

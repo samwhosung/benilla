@@ -1,5 +1,5 @@
 //! The trainer tree's tests — the per-`trainerType` ordering laws (decisions 0247/1124) pinned
-//! against wow-re's own emulated runs of the real finalizer, plus the filter/collapse/intent
+//! against emulated runs of the real finalizer, plus the filter/collapse/intent
 //! surface. Split out of `mod.rs` when the four comparators pushed it past the file budget.
 
 use super::*;
@@ -213,8 +213,8 @@ fn state_filter_takes_a_groups_header_with_its_last_service() {
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 0);
 
     // …but the *rows* are still there behind it, and the getters still serve them (2231). This line
-    // asserted `GetTrainerServiceInfo(1) == nil` until the accessor gate was carved: the single one
-    // every service getter shares, `0x4d89b0`, bounds against the TOTAL `ds:0xb73a10`, and the
+    // asserted `GetTrainerServiceInfo(1) == nil` until the accessor gate was confirmed: the single
+    // one every service getter shares, `0x4d89b0`, bounds against the TOTAL `ds:0xb73a10`, and the
     // visible count `ds:0xb73a18` has exactly five references image-wide — the finalizer seeding and
     // decrementing it, the buy-ALL loop, and `GetNumTrainerServices`. No getter reads it. An empty
     // window is empty because the Lua stops iterating, not because the rows stopped existing.
@@ -536,11 +536,11 @@ fn clearing_empties_and_resets_selection() {
     );
 }
 
-/// **The tradeskill order, pinned against wow-re's emulated run of the real finalizer** (decision
+/// **The tradeskill order, pinned against an emulated run of the real finalizer** (decision
 /// 1124). The fixture is creature 957 "Dane Lindgren" — the blacksmithing trainer in the director's
 /// report — with his 19 real `npc_trainer` rows: 18 recipes on skill line 164 with ascending
 /// `reqSkillValue`, plus the profession-learn service 2020 ("Apprentice Blacksmith", `reqLevel 5`,
-/// no skill gate). wow-re fed exactly this set through the builder `0x4d7560` + finalizer `0x4d8410`
+/// no skill gate). This exact set was fed through the builder `0x4d7560` + finalizer `0x4d8410`
 /// with `0xb73a08 = 2` and the real `qsort`/collator, and got the 21 rows asserted below.
 ///
 /// Two things this pins that benilla had wrong, and one it never had:
@@ -638,7 +638,7 @@ fn tradeskill_trainer_matches_the_emulated_reference_order() {
     assert_eq!(got, expected);
 }
 
-/// **The mount (type 1, the client's "talent") order, pinned against wow-re's emulated run**
+/// **The mount (type 1, the client's "talent") order, pinned against an emulated run**
 /// (decision 1124): the already-known services fold into the `-1` "My Talents" group, which the
 /// header comparator puts **first**, ahead of the name-ordered skill-line headers; within a group
 /// the state byte sorts available → unavailable → used, then the name.

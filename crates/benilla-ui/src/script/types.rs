@@ -119,13 +119,13 @@ pub enum QuadContent {
         facing: f32,
         /// `SetModelScale`'s factor (1 default).
         model_scale: f32,
-        /// `SetPosition`'s offset, in the ortho leg's layout units (render law §2: the root is
+        /// `SetPosition`'s offset, in the ortho leg's layout units (`0x76d1a0`: the root is
         /// `T(pos · layoutScale) · R(facing) · S(…)`).
         position: (f32, f32, f32),
         /// The frame's **own** alpha — what the model instance draws at. The reference re-pushes
         /// `[widget+0xc8]/255` into the instance on every `Frame:SetAlpha` (`0x76d120`), and
         /// nothing folds the parent chain in: a pane under a faded parent draws at its own
-        /// alpha (render law §4.4). [`ExtractedQuad::alpha`] carries the effective one.
+        /// alpha. [`ExtractedQuad::alpha`] carries the effective one.
         own_alpha: f32,
         /// `ReplaceIconTexture`'s path — the type-14 texture override, or `None` for the file's
         /// own textures.
@@ -189,8 +189,8 @@ pub enum QuadContent {
     /// renderer the rect and the widget's HSV and the app makes the pixels — the same division the
     /// [`QuadContent::Minimap`] slot uses, for the same reason.
     ///
-    /// The disc it must draw is fixed by the *pick* law it has to invert (wow-re
-    /// `colorselect-color-law.md` §5): at normalised offset `(nx, ny)` from the rect's centre the
+    /// The disc it must draw is fixed by the *pick* law it has to invert (`0x78bd80`): at
+    /// normalised offset `(nx, ny)` from the rect's centre the
     /// pixel is `HSV(atan2(ny, nx)·180/π + 180, min(|n|, 1), …)`, so clicking a pixel selects the
     /// colour that pixel shows.
     ///
@@ -296,15 +296,14 @@ pub enum JustifyV {
 }
 
 /// A Texture's blend mode — the client's shared `alphaMode` enum, the `{value, name}` table at
-/// `0x811aa8`: `DISABLE=0 · ALPHAKEY=1 · BLEND=2 · ADD=3 · MOD=4` (wow-re
-/// `system/ui/ui.md:1383`, `scratch/rf28-typed-widget-loadxml.md:22`). It is one enum reached two
+/// `0x811aa8`: `DISABLE=0 · ALPHAKEY=1 · BLEND=2 · ADD=3 · MOD=4`. It is one enum reached two
 /// ways — the XML `alphaMode=` attribute and `Texture:SetBlendMode` — and read back by
 /// `Texture:GetBlendMode`.
 ///
 /// **`Blend` is the default because the CSimpleTexture ctor writes it**: `0x76fc64 mov
 /// [esi+0xd0],2`, which `ActionButtonTemplate.xml`'s `<NormalTexture>` keeps by declaring no
-/// `alphaMode` (wow-re `scratch/button-state-texture-path-setter.md`, where the value is
-/// load-bearing for a different question and therefore evidence rather than assertion — mode 1
+/// `alphaMode` (`0x76fb82` gates on the value for a different question, and it is therefore
+/// evidence rather than assertion — mode 1
 /// would alpha-test a half-alpha vertex colour away entirely, mode 2 ghosts it). It is the answer
 /// every ordinary texture gives `ShaguTweaks/mods/dark-ui-elements.lua:169`'s
 /// `region:GetBlendMode() == "ADD"` guard, so getting it wrong is the same recolouring bug one
@@ -384,8 +383,8 @@ impl Outline {
     /// [`Outline::parse`] matches nothing and lands on `NONE`.
     ///
     /// The reference reads the argument as a *set* of substrings against
-    /// `{0x1 OUTLINE, 0x4 THICKOUTLINE, 0x2 MONOCHROME}` (`0x811b10`, wow-re
-    /// `system/ui/scratch/widget-api-batch-benilla.md` Q8), which is why this is `contains` and not
+    /// `{0x1 OUTLINE, 0x4 THICKOUTLINE, 0x2 MONOCHROME}` (`0x811b10`), which is why this is
+    /// `contains` and not
     /// equality — `"OUTLINE, MONOCHROME"` is a real thing addons write. MONOCHROME has no field
     /// here (we model no glyph AA mode) and is ignored; `THICK` is checked first because
     /// `"THICKOUTLINE"` contains `"OUTLINE"`.
@@ -474,7 +473,7 @@ pub struct ExtractedQuad {
     /// frame is a ScrollFrame's scroll child, or any descendant of one — nested ScrollFrames
     /// intersect (see [`UiScript::extract`](super::UiScript::extract)'s `effective_clip`). `None` = unclipped, the common case.
     pub clip: Option<Rect>,
-    /// The owning frame's `effective_scale` (`propagation.md`: `parentScale · ownScale`). The
+    /// The owning frame's `effective_scale` (`0x76ac90`: `parentScale · ownScale`). The
     /// `rect` above already carries it — the layout solver multiplies every placement by the
     /// owner's scale — but glyph METRICS don't live in the rect: the renderer must rasterize a
     /// `Text` quad's font at `font_height × scale` (and scale the shadow offset with it) or a
@@ -518,7 +517,7 @@ pub(crate) struct RegionData {
     /// The region's own alpha (`SetAlpha`/`GetAlpha`, XML `alpha=`); `None` = never set = 1.0.
     ///
     /// A region draws at `ownAlpha × ownerFrame.alpha` — a **single hop** to its immediate owner,
-    /// never a product up the tree (wow-re `propagation.md`, VERIFIED: frame `SetAlpha 0x76a690`
+    /// never a product up the tree (frame `SetAlpha 0x76a690`
     /// overwrite-cascades onto child *frames* and only *invalidates* child regions, which re-read
     /// the owner's `+0xc8` at draw). [`UiScript::extract`](super::UiScript::extract) folds this into
     /// [`ExtractedQuad::alpha`] alongside that owner alpha.
@@ -561,7 +560,7 @@ pub(crate) struct RegionData {
     /// `SetStatusBarColor`; a FontString's `SetTextColor` and its font object's colour) — storage
     /// distinct from [`Self::fill`]/[`Self::texture`]'s `+0xcc`.
     ///
-    /// **Draw law** (wow-re `system/ui/scratch/texture-color-composition.md`, VERIFIED):
+    /// **Draw law** (`0x77f750`):
     /// `drawn = texel × vertexColour`, per channel, **alpha included**. `None` = never set = the
     /// untinted white every region draws at by default. This is why the reference `SkillFrame`'s
     /// row trough — declared `<Color 1,1,1,0.2>`, then `SetVertexColor(0, 0, 0.75, 0.5)`'d — draws
@@ -612,13 +611,13 @@ pub(crate) struct RegionData {
     /// never draws. Non-empty ⇒ resolved in [`UiScript::resolve`], any edge the anchors leave
     /// unset inherited from the owner frame's rect.
     pub(crate) anchors: Vec<Anchor>,
-    /// `Texture:SetDesaturated(flag)` — the shader desaturation state (`0x79c1e0`, verified in
-    /// wow-re's ledger). Rides the extract as [`QuadContent::Texture::desaturated`] and the
+    /// `Texture:SetDesaturated(flag)` — the shader desaturation state (`0x79c1e0`).
+    /// Rides the extract as [`QuadContent::Texture::desaturated`] and the
     /// renderer greys the texel by it (decision 1327), so the binding answers "shader supported"
     /// — see `region/paint.rs`'s `SetDesaturated`.
     pub(crate) desaturated: bool,
-    /// `SetNonSpaceWrap` / `CanNonSpaceWrap` — FontString only (`0x79e9f0`/`0x79ead0`, wow-re's
-    /// widget-method batch). **State only here.** The real client's gx flag `0x40` feeds a
+    /// `SetNonSpaceWrap` / `CanNonSpaceWrap` — FontString only (`0x79e9f0`/`0x79ead0`).
+    /// **State only here.** The real client's gx flag `0x40` feeds a
     /// mid-word wrap carry and the fit-count terminator whose one consumer is the ellipsis
     /// truncate at `0x771ec0`; our text layout has no ellipsis path, so honouring the value in
     /// layout would mean inventing one. Stored and answered faithfully, unread by the renderer —
@@ -637,11 +636,10 @@ pub(crate) struct RegionData {
     pub(crate) tex_coords: Option<TexCoords>,
     /// `Texture:SetTexCoordModifiesRect(flag)` / `GetTexCoordModifiesRect()` — the reference's
     /// `[texture+0x124]`, whose sole writer is `SetTexCoordModifiesRect 0x79c080`
-    /// (`0x79c113 mov [edi+0x124],eax`) and which is BSS-zero otherwise (wow-re
-    /// `scratch/taxiroute-widget-type.md`, `ui.md:5594`).
+    /// (`0x79c113 mov [edi+0x124],eax`) and which is BSS-zero otherwise.
     ///
     /// **State only, and the geometry half is NOT wired.** In the reference the flag gates a
-    /// rect-recompute leg (`ui.md:4619`, `0x770462`): with it set, a `SetTexCoord` re-derives the
+    /// rect-recompute leg (`0x770462`): with it set, a `SetTexCoord` re-derives the
     /// region's own rect from the UV quad rather than leaving the rect alone and merely resampling
     /// inside it. Honouring that here means `region::layout`'s resolve reading this flag and
     /// deriving the region's rect from [`Self::tex_coords`] instead of from its anchors and size —
@@ -668,8 +666,8 @@ pub(crate) struct RegionData {
     pub(crate) font_path: Option<String>,
     /// Resolved font height in logical px (`SetFont`/`SetFontObject`/`<FontHeight>`). `None` = default.
     pub(crate) font_height: Option<f32>,
-    /// A `SetTextHeight` scale override — the client's two text-size regimes (§5-verified,
-    /// wow-re `fontstring-overflow.md`): a FontString defaults to **one-to-one** (bit `0x200`,
+    /// A `SetTextHeight` scale override — the client's two text-size regimes:
+    /// a FontString defaults to **one-to-one** (bit `0x200`,
     /// drawn at the raster px, subject to the 32-px raster cap); `SetTextHeight 0x771600` is the
     /// ONLY clearer — the literal size then flows through UNCAPPED, magnified from the raster.
     /// `Some` = that regime; the renderer draws at this height and skips the one-to-one cap.
@@ -681,12 +679,12 @@ pub(crate) struct RegionData {
     /// The host-measured wrapped text size for a FontString with no explicit height — the engine's
     /// side of the measure round-trip ([`UiScript::fontstrings_needing_measure`] →
     /// [`UiScript::set_measured_text`]): the real client's layout asks its font engine for string
-    /// metrics exactly like this (`fontstring.md`). `key` invalidates on text/font/wrap changes.
+    /// metrics exactly like this. `key` invalidates on text/font/wrap changes.
     pub(crate) measured: Option<MeasuredText>,
 }
 
 /// The per-property "this region set it itself, so it does not inherit" record — the real client's
-/// `FONTINSTANCE+0x038 explicitlySetMask` (wow-re `system/ui/scratch/fontstring.md`).
+/// `FONTINSTANCE+0x038 explicitlySetMask`.
 ///
 /// It exists for exactly one job: when a **font object is mutated**
 /// (`GameFontNormal:SetTextColor(…)`), every region inheriting it re-reads the object, and a
@@ -729,9 +727,8 @@ pub(crate) struct MeasuredText {
     ///
     /// The reference keeps only this one (`GetStringWidth 0x79e510` → `0x772890`, cached at
     /// `+0xfc`): it measures the raw text with **no wrap constraint**, so "Lua sees the natural,
-    /// unwrapped, un-truncated width at the DRAWN size" (wow-re `fontstring-overflow.md`, "The
-    /// measurement echo", VERIFIED). benilla needs both, because its auto-size path reads the
-    /// laid-out extent off this same cache.
+    /// unwrapped, un-truncated width at the DRAWN size". benilla needs both, because its auto-size
+    /// path reads the laid-out extent off this same cache.
     ///
     /// Serving the laid-out width to `GetStringWidth` instead is a **feedback loop**, not a rounding
     /// difference: any kit that sizes a box from `GetStringWidth` and then sets a width on the string
@@ -810,7 +807,7 @@ impl RegionData {
 /// via [`UiScript::set_editbox_advances`](super::UiScript::set_editbox_advances) with the
 /// per-byte cumulative laid-out widths of `text` (len+1 entries, `[0] = 0`, a continuation byte
 /// repeating its lead's value). The metrics seam that makes click→char-index, drag-select, and
-/// the caret scroll window engine-local (RF-0082's mouse/caret leaves).
+/// the caret scroll window engine-local (the click handler `0x77b800` and its caret leaves).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditBoxAdvanceRequest {
     /// Opaque frame id of the box — pass back verbatim.

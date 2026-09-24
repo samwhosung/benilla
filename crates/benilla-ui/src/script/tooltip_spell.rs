@@ -1,6 +1,5 @@
 //! The engine **spell/aura tooltip channel** (decision 0274 P2) — the verified line law of the
-//! spell builder `0x52e610` and the aura builder `0x52f880` (wow-re
-//! `ui/scratch/tooltip-content-law.md`, the 0276 fold-back):
+//! spell builder `0x52e610` and the aura builder `0x52f880` (the 0276 fold-back):
 //!
 //! - name | rank (gray) — one double line. The name's colour is the BUILDER's: **white** from
 //!   the spell builder (`0x530270`), **gold** from the aura builder (`0x530380`, the gold
@@ -41,7 +40,7 @@ pub struct SpellTooltipView {
     pub name: String,
     /// "Rank N" — the gray right column of the name line, on the SPELL variant only.
     pub rank: Option<String>,
-    /// "Magic" / "Curse" / "Disease" / "Poison" — the AURA variant's right column (law §3-BUFF),
+    /// "Magic" / "Curse" / "Disease" / "Poison" — the AURA variant's right column (`0x52f8e5`),
     /// the `SpellDispelType.dbc` name of the spell's dispel class gated by that table's `[+0x28]`
     /// flag, so an undispellable aura (Stealth) carries `None`. Rendered GOLD, like the aura name
     /// it shares its line with — not the spell variant's gray.
@@ -55,29 +54,30 @@ pub struct SpellTooltipView {
     /// "Channeled" — `None` = a passive spell: the whole casttime|cooldown line is omitted
     /// (the verified law; never a "Passive" text line).
     pub cast_time: Option<String>,
-    /// "15 sec cooldown" — the cooldown cell: `max(RecoveryTime, CategoryRecoveryTime)` (the
-    /// 0276 line law §3.4 — Charge's 15 s lives in the CATEGORY column).
+    /// "15 sec cooldown" — the cooldown cell: `max(RecoveryTime, CategoryRecoveryTime)` (the 0276
+    /// line law, `SPELL_RECAST_TIME_SEC 0x854ed4` — Charge's 15 s lives in the CATEGORY column).
     pub cooldown: Option<String>,
-    /// "Requires Wands" — the equipped-item-class half of law §3.6, over
+    /// "Requires Wands" — the equipped-item-class half (`SPELL_EQUIPPED_ITEM 0x854e94`), over
     /// `EquippedItemClass`/`EquippedItemSubClassMask`: white when [`Self::item_met`], red when
     /// not. Sits ABOVE [`Self::requires_form`] (the law's tool-then-form order).
     pub requires_item: Option<String>,
     /// Whether some WORN item satisfies the class + subclass mask (the app re-pushes views when
     /// the equipped set changes, so the color tracks live swaps).
     pub item_met: bool,
-    /// "Requires Battle Stance" — the required-form line (law §3.6, `SPELL_REQUIRED_FORM` over
+    /// "Requires Battle Stance" — the required-form line (`SPELL_REQUIRED_FORM 0x854e64` over
     /// the `Stances` mask): white when [`Self::form_met`], red when not.
     pub requires_form: Option<String>,
     /// Whether the player's CURRENT shapeshift form satisfies the mask (the app re-pushes views
     /// on a form change, so the color tracks live stance switches).
     pub form_met: bool,
-    /// "Reagents: Light Feather" — law §3.8, `SPELL_REAGENTS` ("Reagents: ", no format slot) +
+    /// "Reagents: Light Feather" — `SPELL_REAGENTS 0x854e54` ("Reagents: ", no format slot) +
     /// the 8 reagent slots. Rendered WHITE and wrapped; a reagent the player is short of carries
     /// the builder's own **inline** `|cffff2020` escape (the spell builder is the one builder
     /// that colors mid-line), so the composed string arrives paint-ready from the app.
     pub reagents: Option<String>,
-    /// "2.62% chance to dodge" — the law's line 10 (§3-CHANCE), selected by the spell's `Effect[0]`
-    /// and rendered white and unwrapped, BELOW the reagents and ABOVE the description. The
+    /// "2.62% chance to dodge" — `CHANCE_TO_DODGE 0x854e44` and its siblings, selected by the
+    /// spell's `Effect[0]` and rendered white and unwrapped, BELOW the reagents and ABOVE the
+    /// description. The
     /// percentage is the player's own live avoidance/crit field, so the app re-pushes as it moves.
     pub chance: Option<String>,
     /// The $-substituted description — gold + wrapped for spells.
@@ -114,9 +114,9 @@ pub(super) fn spell_view_of(lua: &Lua, spell_id: u32) -> Option<SpellTooltipView
 }
 
 /// The talent interleave for [`render_spell`] (decision 0304; the builder's own talent params —
-/// wow-re tooltip-content-law §3 lines 2/13): the white "Rank r/m" after the name, the red
-/// requirement lines while locked (position CONFIRMED — decision 0305's residue: matches the
-/// builder law, after the rank line), the "Next rank:" block, and the green learn hint.
+/// `TOOLTIP_TALENT_RANK 0x854a2c` / `TOOLTIP_TALENT_LEARN 0x8549f8`): the white "Rank r/m" after
+/// the name, the red requirement lines while locked (position CONFIRMED — decision 0305's residue:
+/// matches the builder law, after the rank line), the "Next rank:" block, and the green learn hint.
 #[derive(Clone, Debug, Default)]
 pub(super) struct TalentLines {
     /// `TOOLTIP_TALENT_RANK` = "Rank %d/%d", already filled by the caller off the player's own
@@ -131,8 +131,8 @@ pub(super) struct TalentLines {
     pub learn: bool,
 }
 
-/// `TOOLTIP_TALENT_LEARN`'s green — the shared talent-learn green of the tooltip color table
-/// (byte-verified `0xff00ff00`, wow-re tooltip-content-law).
+/// `TOOLTIP_TALENT_LEARN 0x8549f8`'s green — the shared talent-learn green of the tooltip color
+/// table (`0xff00ff00`).
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 /// The unmet-requirement red — `0xc0d390 = ffff2020` (the item builder's own RED value).
 const RED: [f32; 4] = [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0];
@@ -140,8 +140,8 @@ const RED: [f32; 4] = [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0];
 /// Render one spell view — the verified law (module doc). `aura` renders the aura variant:
 /// white description, plus the caller-supplied duration-remaining line (`SetPlayerBuff` only).
 /// `talent` interleaves the talent lines ([`TalentLines`] doc).
-/// The builder's parameter vector, named as the byte law names it (`0x52e610`'s param3..param8 —
-/// wow-re `ui/scratch/tooltip-content-law.md` §3). These were three positional `bool`s at a
+/// The builder's parameter vector, named as the byte law names it (`0x52e610`'s param3..param8).
+/// These were three positional `bool`s at a
 /// 7-argument call site, which is exactly the shape that gets silently transposed; `Default` is the
 /// plain spell hover every caller but two wants.
 #[derive(Clone, Copy, Default)]
@@ -174,13 +174,14 @@ fn render_spell(
     } = opts;
     // The name colour splits by BUILDER, byte-verified: the spell builder `0x52e610` writes its
     // name line through `0x530270` (white), the aura builder `0x52f880` through `0x530380` — the
-    // GOLD wrapper (wow-re tooltip-content-law §3 line 1 vs §3-BUFF). SetTrackingSpell's gold,
+    // GOLD wrapper. SetTrackingSpell's gold,
     // already pinned by the director's own A/B, is the same wrapper.
     let name_color = if aura { GOLD } else { WHITE };
     // The name line's RIGHT column splits by builder too. The spell builder's is the gray "Rank N",
     // and it shows only when the CALLER asks (byte-verified: SetSpell passes param6=0 — the
     // spellbook hover never shows "Rank N"; SetAction passes 1). The aura builder's is the dispel
-    // class ("Magic" on Ice Armor — §3-BUFF), and it is GOLD, not gray: a buff never shows a rank.
+    // class ("Magic" on Ice Armor — `0x52f8e5`), and it is GOLD, not gray: a buff never shows a
+    // rank.
     let right = if aura {
         v.dispel_type.clone().map(|t| (t, GOLD))
     } else {
@@ -224,8 +225,9 @@ fn render_spell(
                 None => append_line(lua, this, (ct.clone(), WHITE), None, false)?,
             }
         }
-        // Required tool / form (law §3.6): the equipped-item-class line first, then the stance
-        // line. Each white when met, red when not.
+        // Required tool / form (`SPELL_EQUIPPED_ITEM 0x854e94` / `SPELL_REQUIRED_FORM 0x854e64`):
+        // the equipped-item-class line first, then the stance line. Each white when met, red when
+        // not.
         if let Some(req) = &v.requires_item {
             let color = if v.item_met { WHITE } else { RED };
             append_line(lua, this, (req.clone(), color), None, false)?;
@@ -234,14 +236,15 @@ fn render_spell(
             let color = if v.form_met { WHITE } else { RED };
             append_line(lua, this, (req.clone(), color), None, false)?;
         }
-        // Reagents (law §3.8): white + wrapped, the missing entries inline-red inside the text.
+        // Reagents (`SPELL_REAGENTS 0x854e54`): white + wrapped, the missing entries inline-red
+        // inside the text.
         // Suppressed wholesale by altCaster — the same gate that hides the totems block, which we
         // have no feed for yet, so this is the only half of it that is observable here.
         if let Some(reagents) = v.reagents.as_ref().filter(|_| !alt_caster) {
             append_line(lua, this, (reagents.clone(), WHITE), None, true)?;
         }
-        // Chance to dodge/parry/block/crit (law line 10, §3-CHANCE) — white, NOT wrapped, and it
-        // sits here: below the reagents, above the description.
+        // Chance to dodge/parry/block/crit (`CHANCE_TO_DODGE 0x854e44` and its siblings) — white,
+        // NOT wrapped, and it sits here: below the reagents, above the description.
         if let Some(chance) = &v.chance {
             append_line(lua, this, (chance.clone(), WHITE), None, false)?;
         }
@@ -450,7 +453,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // GameTooltip:SetPlayerBuff(buffIndex) — the buff-bar hover: the aura variant (white
     // AuraDescription) + the duration-remaining line only this entry point appends (byte-verified;
     // remaining computed live off the aura's GetTime expiry). The line's TEXT is no longer interim:
-    // §3-BUFF-TIME-FORMAT pinned `0x52fa50`'s four-arm ladder and its rounding, and
+    // `0x52fa50`'s four-arm ladder and its rounding pin it, and
     // `tooltip::duration_text` is it.
     //
     // **The argument is a 1.12 CACHE POSITION, not a filtered ordinal** — the same 0-based handle
@@ -485,7 +488,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 match hit {
                     Some(a) => {
                         // The gate is `untilCancelled`, NOT "does this aura have a duration yet".
-                        // §3-BUFF-DURATION: `0x532b00` skips the whole duration block when the
+                        // `0x532b00` skips the whole duration block when the
                         // cache record's `+0xc` is set (`532bda: 8b 46 0c` / `532bdf: 75 2d`), so
                         // a permanent aura shows title + description and nothing more. That flag
                         // is DBC-derived, so it is already right on the frame an aura appears —
@@ -588,7 +591,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // (aura-)description, pinned by the director's reference A/B (2026-07-20: "Find Minerals"
     // gold over white "Finding Minerals."). That is just the AURA builder's shape — its name line
     // rides the gold wrapper `0x530380` too — so this is no longer a one-off; `0x532c50`'s body
-    // still isn't carved, so carve it in wow-re before extending BEYOND that shape. No
+    // is still unconfirmed in the binary, so read it before extending BEYOND that shape. No
     // duration-remaining line (only SetPlayerBuff appends one), and no tracking active clears +
     // hides, like the SetUnitBuff miss path.
     m.set(
@@ -634,13 +637,13 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     // GameTooltip:SetAction(slot) — the action-bar hover: pure delegation by payload kind
     // (`0x5322a0`, byte-verified: SPELL 0x00 → the spell builder `0x52e610`, ITEM 0x80 → the item
-    // builder `0x52b650`, MACRO 0x40 → `0x52b040`; wow-re `ui.md`'s SetAction dispatch).
+    // builder `0x52b650`, MACRO 0x40 → `0x52b040`).
     //
     // The MACRO arm is the reference's whole `0x52b040`: fetch the record (`0x4f0f40`), and either
     // hide (no record) or render ONE line — the macro's NAME (`rec+0x24`) — through the
     // single-coloured-line wrapper `0x5303b0` in the "normal" colour `0xc0cf60`, which is WHITE
-    // (`0xffffffff`, VERIFIED never rewritten — wow-re `tooltip-content-law.md` §1's colour
-    // table). Not the spell title's gold, and nothing about the bound spell: 1.12 has no
+    // (`0xffffffff`, never rewritten). Not the spell title's gold, and nothing about the bound
+    // spell: 1.12 has no
     // `#showtooltip`. This arm was a `_ => Ok(())` left from before 0983 shipped macros, which is
     // why a macro on the bar hovered to nothing (the director, 2026-08-27, after 1636).
     // GameTooltip:SetQuestRewardSpell() / SetQuestLogRewardSpell() — the hover of the reward
@@ -723,7 +726,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // GameTooltip:SetTrainerService(index) — the trainer detail-icon hover (ref
     // `Blizzard_TrainerUI.xml:452`, whose OnEnter is SetOwner(this,"ANCHOR_RIGHT") +
     // SetTrainerService(ClassTrainerFrame.selectedService) + Show(); the LIST ROWS carry no tooltip
-    // at all). Byte-verified whole in wow-re `ui/scratch/trainer-service-tooltip-law.md`.
+    // at all).
     //
     // The binding is a **selector, not a renderer**: `0x5338b0` emits no line of its own (verified
     // negative — none of the four AddLine helpers appears in its extent) and hands one of the two
@@ -770,7 +773,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     // GameTooltip:SetCraftSpell(craftIndex) — the Craft window's detail-icon hover (ref
     // `CraftIcon`'s OnEnter, `Blizzard_CraftUI.xml:566`). `SetTrainerService`'s structural twin and
-    // its law's opposite (wow-re `ui/scratch/trainer-service-tooltip-law.md` §4.1): a selector into
+    // its law's opposite (`SetCraftSpell 0x533e90`): a selector into
     // the same two shared builders, deciding on the RECIPE's own effect columns rather than a
     // taught spell's attributes. The subject arrives pre-resolved as `CraftRecipe::tooltip`.
     //

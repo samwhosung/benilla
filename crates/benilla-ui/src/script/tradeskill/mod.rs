@@ -20,7 +20,7 @@
 //! `CloseTradeSkill` is the client-side close (vanilla sends no packet here either, matching
 //! [`super::trainer`]'s `CloseTrainer` precedent).
 //!
-//! ## The grouped list — wow-re `tradeskill` TU-B, VERIFIED
+//! ## The grouped list (`0x4fca20`)
 //!
 //! Unlike v1's flat render, the engine now owns the WHOLE display tree, built fresh from
 //! [`TradeSkillState::recipes`] on every query ([`build_groups`]) — [`TradeSkillState::recipes`] is
@@ -33,8 +33,8 @@
 //! ties broken alphabetically by group name (case-insensitive, never by subclass id); within a
 //! group, recipes order by difficulty tier ascending (Optimal < Medium < Easy < Trivial — the byte
 //! tiers 0..3, [`TradeSkillDifficulty::tier`]), ties broken alphabetically by recipe name. The
-//! client's own middle tiebreak (an item-template field) is SKIPPED — the one INFERRED remainder of
-//! TU-B, named and pinned like [`TradeSkillDifficulty`]'s own INTERIM color law once was.
+//! client's own middle tiebreak (an item-template field) is SKIPPED — the one INFERRED remainder,
+//! named and pinned like [`TradeSkillDifficulty`]'s own INTERIM color law once was.
 //!
 //! Visible rows are each group's header (always shown) plus — for an uncollapsed group — its
 //! recipes; every index the Era API takes/returns is 1-based into THAT list (mirrors
@@ -46,8 +46,8 @@
 //! ([`Model::trade_skill_collapsed`]) and survives a `set_trade_skill` content re-push (pruned to
 //! still-live groups). `GetTradeSkillSubClasses()` returns the current group names in group
 //! order — the VERIFIED filter-dropdown vocabulary IS the header list, and it never shrinks
-//! under a filter — and the `SubClassFilter`/`InvSlot` filter family is byte-VERIFIED (wow-re
-//! `tradeskill` TU-G): the subclass filter is hidden group keys (the client's per-header
+//! under a filter — and the `SubClassFilter`/`InvSlot` filter family: the subclass filter is
+//! hidden group keys (the client's per-header
 //! `+0xc` flag, position mask `0x84dd60` derived), the inv-slot filter is a shown-bit mask
 //! (`0x84dd64`) over the accumulated slot vocabulary, [`rows`] drops filtered recipes and any
 //! group left empty (a merely-collapsed group keeps its header), and every engine-side mutator
@@ -82,8 +82,9 @@
 //!
 //! `skillIndex` is a **VISIBLE** index and is resolved through [`recipe_at`] (`pub(crate)` for
 //! exactly this), never a raw [`TradeSkillState::recipes`] position — headers interleave with rows
-//! since the TU-B grouping landed, so a raw index would show the wrong item the moment any group
-//! precedes the selected recipe's own. A header index resolves to `None` and the hover is a no-op.
+//! since the grouped build (`0x4fca20`) landed, so a raw index would show the wrong item the moment
+//! any group precedes the selected recipe's own. A header index resolves to `None` and the hover is
+//! a no-op.
 
 use std::collections::HashSet;
 
@@ -101,7 +102,7 @@ pub(crate) use view::recipe_at;
 /// The recipe difficulty band (the color law, computed app-side): the Lua color-table key
 /// `GetTradeSkillInfo` returns as its `type`. These four names ARE the real client's own
 /// `TradeSkillTypeColor` keys (`TradeSkillFrame.lua`); WHICH recipes land in which band (the
-/// trivial-rank cut points) is CONFIRMED at the bytes (decision 0446, wow-re `tradeskill` TU-C:
+/// trivial-rank cut points) is CONFIRMED at the bytes (decision 0446, `0x4fca20`:
 /// gray ≥ trivialHigh, green ≥ the low/high midpoint, yellow ≥ trivialLow, orange below) — this
 /// enum is the verified Era vocabulary the app's law picks from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +129,7 @@ impl TradeSkillDifficulty {
         }
     }
 
-    /// The byte tier a group sorts recipes by, ascending (wow-re `tradeskill` TU-B, VERIFIED):
+    /// The byte tier a group sorts recipes by, ascending (`0x4fd380`):
     /// Optimal < Medium < Easy < Trivial, 0..3. The **Craft** window's row comparators key on the
     /// same tier byte first (`row[+0xc]`, decision 1124), which is why this is `pub(crate)` and not
     /// private to this module: the client's two code tables are one vocabulary shifted by one
@@ -169,7 +170,7 @@ pub struct TradeSkillReagent {
 /// `Spell.dbc`/`SkillLineAbility.dbc`/bag counts into everything the window shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TradeSkillRecipe {
-    /// The VERIFIED header key (wow-re `tradeskill` TU-B): the created item's `(ItemClass,
+    /// The header key (`0x55ba30`): the created item's `(ItemClass,
     /// ItemSubClass)` + the resolved `ItemSubClass.dbc` display name; `None` while the product's
     /// template is still in flight (the client's own one-frame header deferral) — [`build_groups`]
     /// buckets those trailing under a synthesized empty-named group.
@@ -196,13 +197,13 @@ pub struct TradeSkillRecipe {
     pub product_item: u32,
     /// The product's `InventoryType` (item template) — the InvSlot filter's raw input, folded to
     /// its slot-bit contribution by [`inv_slot_mask`] (the real client's
-    /// `DAT_00809200[InventoryType]` OR-accumulate + overrides, wow-re `tradeskill` TU-G §1).
+    /// `DAT_00809200[InventoryType]` OR-accumulate (`0x4fcee6`) + overrides).
     /// `0` (non-equip, or the template still in flight) folds to the `0x800000` catch-all bit.
     pub product_inv_type: u32,
     /// The product's `ItemLevel` (item template `+0x38`) — the sort's SECONDARY key, ascending,
-    /// between the difficulty tier and the name (wow-re `tradeskill` sort law, the `record+0x14`
-    /// field identity pinned by the 2026-07-17 dispatch: the dbcache `ItemStats_C::Read 0x7c9640`
-    /// write order). `0` while the template is in flight — moot, since a template-less recipe has
+    /// between the difficulty tier and the name (the `record+0x14` field identity: the dbcache
+    /// `ItemStats_C::Read 0x7c9640` write order). `0` while the template is in flight — moot,
+    /// since a template-less recipe has
     /// no group yet and buckets trailing anyway.
     pub product_item_level: u32,
     /// Consumed reagents, in display order (`GetTradeSkillNumReagents`/`GetTradeSkillReagentInfo`).
@@ -217,8 +218,8 @@ pub struct TradeSkillRecipe {
 /// app ([`UiScript::set_trade_skill`]); `None` means the window is closed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TradeSkillState {
-    /// The skill line id (`SkillLine.dbc`) — the persistence cache key (`0xbde064`, wow-re
-    /// `tradeskill` TU-G §6): a push for a different line than the last resets the filters, the
+    /// The skill line id (`SkillLine.dbc`) — the persistence cache key (`0xbde064`): a push
+    /// for a different line than the last resets the filters, the
     /// collapse set, and the selection; the same line keeps them, across close/reopen too.
     pub line: u32,
     /// The skill line's display name (`SkillLine.dbc`) — e.g. `"Tailoring"`.
@@ -226,13 +227,13 @@ pub struct TradeSkillState {
     pub rank: u32,
     pub max_rank: u32,
     /// The window's recipe rows — the app's FLAT, UNORDERED input; the engine owns ALL ordering
-    /// (group + tier + name, the module doc's grouped-list law, wow-re `tradeskill` TU-B) and
+    /// (group + tier + name, the module doc's grouped-list law, `0x4fca20`) and
     /// builds the display tree fresh from this on every query ([`build_groups`]), so push order
     /// carries no meaning. The Era API's `index` is 1-based into the synthesized VISIBLE list, never
     /// straight into this slice — see [`recipe_at`].
     pub recipes: Vec<TradeSkillRecipe>,
     /// Remaining Create All repeats (`GetTradeskillRepeatCount`) — the client-side repeat machine's
-    /// own counter (TU-D, byte-confirmed — decision 0446), not engine-driven: the app decrements
+    /// own counter (`0x500230`, decision 0446), not engine-driven: the app decrements
     /// and re-pushes as each repeat's cast resolves.
     pub repeat_count: u32,
 }
@@ -242,7 +243,7 @@ impl super::UiScript {
     /// every time a resolved field changes (reagent counts, ask-once answers landing, …) — no
     /// diffing happens here.
     ///
-    /// Persistence is the real client's, byte-VERIFIED (wow-re `tradeskill` TU-G §6, keyed by the
+    /// Persistence is the real client's (`0x4fc910`, keyed by the
     /// `0xbde064` last-built-line cache): a push for a **different skill line** resets the two
     /// filters, the collapse set, and the selection; the **same line** keeps all of them — and
     /// because a close (`None`) touches none of that state either, they survive a close→reopen
@@ -290,9 +291,9 @@ impl super::UiScript {
 
     /// Drain the **(spell id, count)** intents `DoTradeSkill` queued since the last call — the engine
     /// resolves each clicked recipe's INDEX to its spell id, so the app sends `CMSG_CAST_SPELL`
-    /// without needing the index mapping; `count` is the total the app's own client-side repeat loop
-    /// (decision 0437 §5, TU-D) turns into that many sequential sends, one per item — "Create" queues
-    /// `1`, "Create All" queues [`TradeSkillState::repeat_count`].
+    /// without needing the index mapping; `count` is the total the app's own client-side repeat
+    /// loop (decision 0437 §5, `0x4fd7b0`) turns into that many sequential sends, one per item —
+    /// "Create" queues `1`, "Create All" queues [`TradeSkillState::repeat_count`].
     pub fn take_trade_skill_dos(&mut self) -> Vec<(u32, u32)> {
         std::mem::take(&mut self.model_mut().trade_skill_dos)
     }
@@ -307,7 +308,7 @@ impl super::UiScript {
     /// Whether an engine-side list mutator ran since the last drain (a filter set, an
     /// expand/collapse) — the real client answers those from inside the C call with a
     /// recompute+resort + `TRADE_SKILL_UPDATE` (the `0x4fd710`/`0x4fd730`/`0x4fd750` writer trio
-    /// → event 0x13a, wow-re `tradeskill` TU-G §3); the app drains this and fires the event the
+    /// → event 0x13a); the app drains this and fires the event the
     /// same frame (the ref's `CollapseAllButton_OnClick` and the filter-menu clicks repaint ONLY
     /// off that event — no direct `TradeSkillFrame_Update()` call).
     pub fn take_trade_skill_touched(&mut self) -> bool {

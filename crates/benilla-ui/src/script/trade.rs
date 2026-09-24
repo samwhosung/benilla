@@ -391,8 +391,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // BeginTrade() / CancelTrade() — the TRADE dialog's pair (wow-re `staticpopup-dialog-bindings.md`
-    // §2: 0 args, 0 returns, no gate; `0x117` and `0x11C`, both empty). The dialog itself can never
+    // BeginTrade() / CancelTrade() — the TRADE dialog's pair (`0x48aa60`/`0x48aa70`:
+    // 0 args, 0 returns, no gate; `0x117` and `0x11C`, both empty). The dialog itself can never
     // show in 1.12.1 (TRADE_REQUEST is signalled by nothing), so both are an addon's reach;
     // CancelTrade is the bare packet, CloseTrade above the same opcode wrapped in the teardown.
     g.set(

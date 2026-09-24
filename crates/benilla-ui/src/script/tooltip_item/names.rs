@@ -16,7 +16,7 @@
 //! the bag line both read `ItemSubClass.dbc`'s own DisplayName off the app-resolved view now,
 //! rather than a hand-typed copy of it.
 
-/// The client's 7-entry quality→color table (wow-re RF-0055, VERIFIED at `0xc0d3c8` behind
+/// The client's 7-entry quality→color table (`0xc0d3c8` behind
 /// `GetItemQualityColor 0x48dfb0`): Poor gray, Common white, Uncommon green, Rare blue, Epic
 /// purple, Legendary orange, Artifact gold.
 pub(super) const QUALITY_RGB: [[f32; 3]; 7] = [
@@ -29,15 +29,14 @@ pub(super) const QUALITY_RGB: [[f32; 3]; 7] = [
     [0.902, 0.8, 0.502],   // 6 Artifact  e6cc80
 ];
 
-// The tooltip color constants — BYTE-VERIFIED (wow-re `ui/scratch/tooltip-content-law.md` §1's
-// pointer table): white `0xc0cf60=ffffffff`, red `0xc0d390=ffff2020` (255,32,32), green
-// `0xc0d3ac=ff00ff00`, gold `0xc0d3e8=ffffd200` (255,210,0), gray `0xc0d3c4=ff808080`.
+// The tooltip color constants: white `0xc0cf60=ffffffff`, red `0xc0d390=ffff2020` (255,32,32),
+// green `0xc0d3ac=ff00ff00`, gold `0xc0d3e8=ffffd200` (255,210,0), gray `0xc0d3c4=ff808080`.
 pub(super) const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 pub(super) const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 pub(super) const RED: [f32; 4] = [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0];
 /// The tooltip's OTHER red — `0xc0d398 = ffff0000`, a pure red distinct from the (255,32,32) the
 /// requirement lines wear. Two lines use it, both in the enchant family: a **negative** enchant id
-/// in slot 0/1, and ITEM_ENCHANT_DISCLAIMER (wow-re §1-ENCHANT §E3/§E4).
+/// in slot 0/1, and ITEM_ENCHANT_DISCLAIMER (`0x52ca29`, `0x52cc13`).
 pub(super) const ENCHANT_RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 pub(super) const GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
 pub(super) const GRAY: [f32; 4] = [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0];
@@ -45,8 +44,8 @@ pub(super) const GRAY: [f32; 4] = [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 
 pub(super) const CREAM: [f32; 4] = [1.0, 1.0, 151.0 / 255.0, 1.0];
 
 /// InventoryType → the slot line's GlobalString **key** — the builder's own 30-entry pointer
-/// table at `0x83ddb0`, indexed by `[record+0x2c]` directly (`0x52c103: mov ecx,[ecx*4+0x83ddb0]`,
-/// the read the law's §10 names), dumped entry by entry rather than matched by English.
+/// table at `0x83ddb0`, indexed by `[record+0x2c]` directly (`0x52c103: mov ecx,[ecx*4+0x83ddb0]`),
+/// dumped entry by entry rather than matched by English.
 ///
 /// **Index 0 and index 29 are the pre-seeded empty string `0x882748`** — a non-equip item and an
 /// out-of-range type name nothing, which is the `None` here. 18 (bag) and 27 (quiver) *do* have
@@ -117,7 +116,7 @@ pub(super) fn ceil_max(m: f32) -> i32 {
 
 /// A damage/resistance school's name key — `SPELL_SCHOOL%d_CAP`, the one string the builder
 /// composes at runtime rather than naming outright (`0x84e4cc`, pushed at `0x52c2a8` for the
-/// damage line and `0x52c8d1` for the resistance line; law §11/§16).
+/// damage line and `0x52c8d1` for the resistance line).
 ///
 /// The index is the school itself: `SPELL_SCHOOL0_CAP` is "Physical" and 1..6 are
 /// Holy/Fire/Nature/Frost/Shadow/Arcane. **School 0 answers `None`** because the reference
@@ -129,7 +128,7 @@ pub(super) fn school_key(s: u32) -> Option<String> {
 
 /// Stat-mod type → its `ITEM_MOD_*` key. Not a *name*: the key resolves to the whole line
 /// template, sign hole and all (`ITEM_MOD_AGILITY = "%c%d Agility"`), which is why 2 has no arm —
-/// the builder's 8-way jump table `0x52e510` skips it (law §15, keys byte-read at
+/// the builder's 8-way jump table `0x52e510` skips it (keys byte-read at
 /// `0x52c6eb..0x52c777`).
 pub(super) fn stat_key(t: u32) -> Option<&'static str> {
     Some(match t {

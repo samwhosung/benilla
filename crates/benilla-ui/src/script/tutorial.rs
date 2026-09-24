@@ -1,5 +1,4 @@
-//! The tutorial system's four Lua verbs (decision 1976; wow-re
-//! `system/ui/scratch/tutorial-flags.md` §6): the registrar table at `.data 0x846b04` —
+//! The tutorial system's four Lua verbs (decision 1976): the registrar table at `.data 0x846b04` —
 //! `TutorialsEnabled`, `FlagTutorial`, `ClearTutorials`, `ResetTutorials`.
 //!
 //! The banks are the app's (they are wire state, and the fire-once trigger law lives beside the

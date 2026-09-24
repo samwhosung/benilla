@@ -47,9 +47,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // So the three arms below are: 0..5 clear-and-point, **6 and 7 clear**, 8 nothing. Decision
     // 2176 replaces 2142's open thread 1, which had it backwards on both counts — it read the
-    // core's pre-store as the Lua default and read "no SetPoint" as "no clear", and a wow-re §5
-    // dispatched for the CURSOR mechanism refuted both at the bytes (`system/ui/scratch/`
-    // `tooltip-cursor-anchor-law.md` §0.2/§0.3/§2).
+    // core's pre-store as the Lua default and read "no SetPoint" as "no clear"; the bytes refute
+    // both.
     m.set(
         "SetOwner",
         lua.create_function(
@@ -284,10 +283,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // LINE 1's left cell, appended in place, keeping its colour: the escape codes in the argument
     // are what colour the suffix, which only works if it lands INSIDE an existing line. A tooltip
-    // with no lines yet is a no-op rather than a raise — the reference's own callers always
-    // SetText first, and nothing is carved about the empty case.
+    // with no lines yet is a no-op rather than a raise — the reference's own callers always SetText
+    // first, and the empty case is unconfirmed in the binary.
     //
-    // INFERRED, pending the byte carve of `0x531e30`: that it is line 1 rather than the last line
+    // INFERRED, unconfirmed in the binary: that `0x531e30` targets line 1 rather than the last line
     // added. Every attested call site sets exactly one line before appending, so the two readings
     // are indistinguishable from the corpus alone; line 1 is chosen because the reference's own
     // name for the target is `GameTooltipTextLeft1`. Re-measure is unconditional either way.
@@ -363,8 +362,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| with_tip(lua, &this, |t| t.num_lines as i64))?,
     )?;
     // AddFontStrings(left, right) — adopt two caller-made FontStrings as the next line pair
-    // (`0x530c40`, wow-re `system/ui/scratch/bindings.md`; the parent module's doc already names it
-    // as how the real class grows past its template's 30 declared pairs).
+    // (`0x530c40`; the parent module's doc already names it as how the real class grows past its
+    // template's 30 declared pairs).
     //
     // The scan-tooltip idiom, and the reason this landed with the font-object work rather than
     // separately: `Gratuity-2.0.lua:56-59` builds its whole 30-line hidden tooltip out of
@@ -464,8 +463,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // owner) and `+0x31c` (the line count) are non-zero; otherwise it calls its own `vtbl+0x84`
     // effective-hide `0x530a60`, which is the SetOwner core with a NULL owner, so the plate is
     // hidden AND un-owned and OnTooltipCleared fires. Evaluated at Show time only — it is never a
-    // visibility poll. (wow-re `system/ui/ledger.tsv` row `0x530a80`, verified, and
-    // `scratch/hover-hide-and-tooltip-owner-law.md` §4.)
+    // visibility poll (`0x530a80`).
     //
     // Without the gate an addon that reaches `Show()` having added no lines leaves a VISIBLE
     // empty plate — and, because `layout_tooltips` skips a zero-line plate rather than collapsing

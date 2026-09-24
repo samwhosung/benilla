@@ -1,8 +1,8 @@
 //! The `GameTooltip` method surface + engine behavior (decision 0274): the line stack, the
 //! owner/anchor law, auto-size, and the fade — the modeled behavior of the client's game-layer
-//! tooltip class over `CSimpleFrame` (wow-re `ui/scratch/bindings.md` pins the full 38-binding
-//! Lua surface; `tooltip-money.md` the money/cooldown internals; the *content* builders land per
-//! 0274's phases on top of these mechanics).
+//! tooltip class over `CSimpleFrame` (the reference's full 38-binding Lua surface, plus its
+//! money/cooldown internals; the *content* builders land per 0274's phases on top of these
+//! mechanics).
 //!
 //! **Lines are real named FontString regions**, engine-created on demand and published as Lua
 //! globals (`<name>TextLeft1` …) — reference Lua addresses them by name
@@ -386,8 +386,7 @@ fn cancel_fade(model: &mut Model, h: FrameHandle) {
 /// (`0x52fff4`), before the five stores; `0x530a80`'s show arm does it too, and its self-hide arm
 /// reaches it through `0x530a60` → `0x52ffe0(0, 0, 0, 0)`. So all three of SetOwner, Show and the
 /// effective-hide leave the plate at full strength whether or not one of OUR fades was running
-/// (wow-re `system/ui/ledger.tsv` rows `0x52ffe0` / `0x530a80`, both verified, and
-/// `scratch/hover-hide-and-tooltip-owner-law.md` §4).
+/// (`0x52ffe0` / `0x530a80`).
 ///
 /// [`cancel_fade`] is not this: it only restores the alpha a fade of ours took away, so a plate
 /// left dim by any other path never recovered where the reference recovers on the next SetOwner.
@@ -418,13 +417,12 @@ pub(super) fn set_shown(lua: &Lua, h: FrameHandle, shown: bool) {
 /// at its fixed positions, the `""` in the r-slot is not a number, and the whole colour tail is
 /// dropped in favour of this default — the trailing 1.0s never shift into place (the last one is
 /// consumed as the truthy wrap flag). Byte-pinned: the static-init writer `0x528e50` stores
-/// `0xffffd200` at `0xc0d3e8` (§0-BINDINGS verdict, 2026-07-14).
+/// `0xffffd200` at `0xc0d3e8`.
 pub(in crate::script) const DEFAULT_TEXT_GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
 
-/// The client's duration-string formatter, `0x52fa50` — the one that turns a millisecond count
-/// into "2 hours remaining" / "45 seconds remaining" (wow-re `ui/scratch/tooltip-content-law.md`
-/// §3-BUFF-TIME-FORMAT, the 2026-08-14 carve). Its parameter vector is the binary's:
-/// `(V_ms, keyPrefix, roundUp)`, minus the `extraArg` slot only the enchant line fills.
+/// The client's duration-string formatter, `0x52fa50` — the one that turns a millisecond count into
+/// "2 hours remaining" / "45 seconds remaining". Its parameter vector is the binary's: `(V_ms,
+/// keyPrefix, roundUp)`, minus the `extraArg` slot only the enchant line fills.
 ///
 /// **The ladder, with the thresholds decoded from the compare instructions** (`52fa76`, `52fab4`,
 /// `52fb03`, falling through to `0x52fb4f`): `≥ 86_400_000` → `_DAYS` · `≥ 3_600_000` → `_HOURS` ·
@@ -507,9 +505,8 @@ fn color_num(v: Option<&Value>) -> Option<f32> {
     }
 }
 
-/// The bindings' boolean-argument read (`GetBoolOrDefault`, byte-pinned in the §0-BINDINGS
-/// verdict): nil/absent, false, numeric 0, and the strings `"0"`/`"off"`/`"disabled"` are
-/// false; everything else is true.
+/// The bindings' boolean-argument read (`GetBoolOrDefault 0x6f1c10`): nil/absent, false, numeric 0,
+/// and the strings `"0"`/`"off"`/`"disabled"` are false; everything else is true.
 fn bool_arg(v: Option<&Value>) -> bool {
     match v {
         None | Some(Value::Nil) | Some(Value::Boolean(false)) => false,
@@ -523,7 +520,7 @@ fn bool_arg(v: Option<&Value>) -> bool {
 }
 
 /// The colour block of an `AddLine`-family tail (the values at the r/g/b positions): applied
-/// only when the r-slot is a number (`lua_isnumber` — the sole gate, §0-BINDINGS verdict);
+/// only when the r-slot is a number (`lua_isnumber 0x6f34d0` — the sole gate);
 /// anything else drops the WHOLE block to the default gold [`DEFAULT_TEXT_GOLD`] — the ref's
 /// gold zone tooltip, whose `(text, "", 1.0, 1.0, 1.0)` shape has `""` at the r-slot. When the
 /// gate passes, g/b are UNGATED `lua_tonumber` reads: a missing/non-number component is **0.0**
@@ -662,13 +659,11 @@ fn cell(model: &Model, rh: crate::widget::RegionHandle) -> Cell {
         return None;
     }
     if text.is_empty() {
-        // The same floor the sweep applies to the line's own rect
-        // (`layout::FONTSTRING_MIN_SPAN`): the reference's `GetHeight` is virtual and ends in a
-        // one-unit clamp, so `0.0` is not a height any caller — plate arithmetic included — can
-        // read back off a FontString (wow-re `region-size-fallback.md` §3,
-        // `tooltip-blank-line-height.md` §3). Reporting zero here while the chain below the row
-        // resolved one unit is the B309 shape at 1/14th the size, and the point of one constant
-        // is that the two cannot drift apart.
+        // The same floor the sweep applies to the line's own rect (`layout::FONTSTRING_MIN_SPAN`):
+        // the reference's `GetHeight 0x772a60` is virtual and ends in a one-unit clamp, so `0.0` is
+        // not a height any caller — plate arithmetic included — can read back off a FontString.
+        // Reporting zero here while the chain below the row resolved one unit is the B309 shape at
+        // 1/14th the size, and the point of one constant is that the two cannot drift apart.
         return Some((
             super::layout::FONTSTRING_MIN_SPAN,
             super::layout::FONTSTRING_MIN_SPAN,
@@ -687,11 +682,9 @@ fn cell(model: &Model, rh: crate::widget::RegionHandle) -> Cell {
 /// a second time with real extents); without one it is the host's batch round-trip, one frame
 /// later, which is the engine-less path every measurer-free VM still takes.
 /// **ANCHOR_CURSOR — mode 6, re-anchored to the live cursor every frame** (`0x530b20`, the
-/// `CGameTooltip` override of `vtable+0x38` on `0x808f60`; wow-re
-/// `system/ui/scratch/tooltip-cursor-anchor-law.md` §1, three independent derivations agreeing
-/// instruction-for-instruction). Nine corpus files ask for it — `pfUI`'s tooltip, xpbar and chat
-/// modules, `pfQuest/browser.lua`, `TipBuddy` — and until decision 2176 benilla warned and placed
-/// them by some other mode.
+/// `CGameTooltip` override of `vtable+0x38` on `0x808f60`). Nine corpus files ask for it — `pfUI`'s
+/// tooltip, xpbar and chat modules, `pfQuest/browser.lua`, `TipBuddy` — and until decision 2176
+/// benilla warned and placed them by some other mode.
 ///
 /// The whole of the re-anchor is one `SetPoint`:
 ///

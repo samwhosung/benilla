@@ -1,5 +1,5 @@
 //! The engine **unit tooltip builder** (decision 0274 P3) — the byte-verified line law of
-//! `0x529fe0` (wow-re `ui/scratch/tooltip-content-law.md`, the 0276 fold-back):
+//! `0x529fe0` (the 0276 fold-back):
 //!
 //! - NAME (gold — FrameXML recolors `TextLeft1` by reaction on `UPDATE_MOUSEOVER_UNIT`, exactly
 //!   like the reference's `GameTooltip_UnitColor`; the guild line is likewise FrameXML's and
@@ -14,8 +14,8 @@
 //!   delta is INTERIM at +10 pending a byte pin of the comparison), the class slot (the creature
 //!   TYPE word for hostile/neutral creatures, `"Race Class"` for players, `CORPSE` when dead),
 //!   and the type slot (the rank key table `{"", ELITE, ELITE, BOSS, ""}`; `PLAYER` for players);
-//! - the FACTION NAME ("Stormwind", white) — the builder-tail block `0x52a7a0..` the law's §2
-//!   order originally omitted: the app resolves it (`faction_name`), every gate applied;
+//! - the FACTION NAME ("Stormwind", white) — the builder-tail block `0x52a7a0..`, which our
+//!   emission order originally omitted: the app resolves it (`faction_name`), every gate applied;
 //! - "PvP" (white) · "Skinnable" (**red**) · "Civilian" (green, `0x612550`: PvP-flagged +
 //!   query-civilian + HOSTILE + GREY/trivial — the dishonorable-kill warning) · "Leader"
 //!   (white, `0x6125c0`: PvP-flagged + query racial_leader);
@@ -93,7 +93,7 @@ fn rank_key(rank: u32) -> Option<&'static str> {
 /// the plate shows no level row rather than a composed one.
 fn level_line(lua: &Lua, u: &UnitState, player_level: u32) -> Option<String> {
     let get = |key: &str| crate::strings::global(lua, key);
-    // The "??" gate, byte-pinned (0x529fe0 §2-LEVEL): much-higher HOSTILE — internal reaction
+    // The "??" gate, byte-pinned (`0x529fe0`): much-higher HOSTILE — internal reaction
     // ≤ 1 = hated/hostile = UnitReaction ≤ 2 on our 1..8 API scale (the UnitIsEnemy mapping) —
     // with playerLevel ≤ targetLevel−10; OR WorldBoss; OR level ≤ 0. Players NEVER read "??".
     // Shared with `UnitLevel`'s −1 return, so the tooltip and the target frame can never

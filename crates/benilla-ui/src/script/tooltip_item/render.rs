@@ -54,12 +54,12 @@ pub(super) struct ItemInstance {
     /// join, so the whole predicate arrives app-resolved
     /// ([`crate::script::ContainerSlot::already_bound`]) rather than being re-derived here off
     /// [`Self::enchants`] — that list is a *display* view and drops rows the line law hides.
-    /// Drives §6's Soulbound override; `false` on every template/link source.
+    /// Drives the Soulbound override; `false` on every template/link source.
     pub already_bound: bool,
     /// The petition this charter names — **line 3**, between the NAME and `ITEM_SIGNABLE`. See
     /// [`crate::script::PetitionSlotView`], which carries the reason its third line is unbuilt.
     pub petition: Option<crate::script::PetitionSlotView>,
-    /// The instance's enchant slots, app-resolved and in slot order (law line 17 / §1-ENCHANT,
+    /// The instance's enchant slots, app-resolved and in slot order (`0x52c991`,
     /// decisions 0915/0920) — see [`crate::script::EnchantView`]. Empty on an unenchanted item and
     /// on every template/link source (no instance, nothing enchanted).
     pub enchants: Vec<crate::script::EnchantView>,
@@ -67,13 +67,13 @@ pub(super) struct ItemInstance {
     /// carries **no** caller-supplied instance block" (`[this+0x440]`, tested at `0x52e2e8`: when
     /// it is set, the builder evaluates only READABLE and skips the openable tree entirely).
     ///
-    /// **This is not a per-binding constant.** wow-re's earlier §1-OPENABLE said `SetBagItem`
-    /// passes `p6=1` and so could *never* show the line — which is why our bag hover had no green
-    /// line at all, and which the director's screenshot of a clam falsified. The re-derivation
-    /// (wow-re `right-click-open.md` §1, §5 pair 2026-08-02) found the cause: the old p6 table was
-    /// enumerated per *binding* from the instance-block **writers**, so it only ever saw the p6=1
-    /// leg. A per-**call-site** census of all 31 `0x52b650` sites finds five callers with two or
-    /// more legs, and `SetBagItem 0x534620` is one: `0x534900` p6=1 and `0x53493e` p6=0.
+    /// **This is not a per-binding constant**, though it looks like one: the old p6 table treated
+    /// `SetBagItem` as passing `p6=1` unconditionally, and so never showed the line — which is why
+    /// our bag hover had no green line at all, and which the director's screenshot of a clam
+    /// falsified. The cause: the old p6 table was enumerated per *binding* from the instance-block
+    /// **writers**, so it only ever saw the p6=1 leg. A per-**call-site** census of all 31
+    /// `0x52b650` sites finds five callers with two or more legs, and `SetBagItem 0x534620` is one:
+    /// `0x534900` p6=1 and `0x53493e` p6=0.
     ///
     /// What selects the leg is the item-cooldown query `0x6e2ed0` at `0x53483a` — p6=1 iff
     /// **enable, start and duration are all non-zero**, i.e. iff the item has a *running
@@ -100,7 +100,7 @@ pub(super) struct ItemInstance {
 /// The SET block's blank gold spacer — the reference's own literal `0x854b2c`, and it is **not**
 /// the empty string. It is a SPACE followed by a newline, and the difference is a whole row.
 ///
-/// Both halves are byte-verified (wow-re, `tooltip-content-law.md` §22 + this arc's re-derivation):
+/// Both halves:
 /// `AddLine`'s core `0x530270` takes an empty left text with no right text and **bails before it
 /// ever increments the line count** (`5302a9: test ebx,ebx; 5302ab: je 0x530378`, the shared exit,
 /// which never reaches the `inc [esi+0x31c]` at `0x530372`) — an empty string here is silently
@@ -128,8 +128,7 @@ pub(super) struct BuilderFlags {
     /// **p4 `[arg+0x14]`** — the compact mode the binary itself calls `nameOnly`
     /// (`0x8552dc`: `"Usage: SetInventoryItem(unit, slot [, nameOnly])"`). Reachable from exactly
     /// one binding — `SetInventoryItem`'s optional third argument, a number `> 0` — and from no
-    /// stock FrameXML caller at all, but it is live code an addon can ask for (wow-re
-    /// `ui/scratch/tooltip-nameonly-p4-census.md`, §5 trio + orchestrator, 2026-09-13; benilla
+    /// stock FrameXML caller at all, but it is live code an addon can ask for (benilla
     /// decision 2224).
     ///
     /// It is *trimmed*, not bare, and the trim is two non-contiguous jumps plus an early return:
@@ -139,12 +138,9 @@ pub(super) struct BuilderFlags {
     pub name_only: bool,
 }
 
-/// Render one item template into the tooltip — the BYTE-VERIFIED emission law of the shared
-/// renderer `0x52b650` (wow-re `ui/scratch/tooltip-content-law.md`, §5-cross-checked 2026-07-10;
-/// the proficiency-cell and SET legs byte-read directly 2026-07-11; the creator/readable
-/// instance tail byte-read 2026-07-20; the enchant lines of line 17 fed 2026-08-03, decision
-/// 0915), minus the instance-only families still unfed (soulbound override, cooldown-remaining,
-/// the gift-wrap family).
+/// Render one item template into the tooltip — the emission law of the shared
+/// renderer `0x52b650` (the enchant lines are decision 0915's), minus the instance-only families
+/// still unfed (soulbound override, cooldown-remaining, the gift-wrap family).
 pub(super) fn render_view(
     lua: &Lua,
     this: &Table,
@@ -204,10 +200,9 @@ pub(super) fn render_view(
     // equipped item, one extra line, first, is the whole difference**: the two callers that set
     // the header (`SetMerchantCompareItem`'s arg vector at `0x5362d4`, `SetAuctionCompareItem`'s
     // at `0x53603e`) pass **p4 = 0**, so compact/compare mode is OFF — the NAME keeps its quality
-    // color, the stat body is not jumped, and nothing is cut at `0x52e14c`. wow-re
-    // `merchant-compare-item-law.md` §6 says it in as many words ("a downstream client that
-    // renders a 'compare mode' abbreviated tooltip here is wrong"), and `tooltip-content-law.md`
-    // §1's per-call-site census over all 31 sites of `0x52b650` is what settles it: those two are
+    // color, the stat body is not jumped, and nothing is cut at `0x52e14c`. A downstream client
+    // that renders a "compare mode" abbreviated tooltip here is wrong — the per-call-site census
+    // over all 31 sites of `0x52b650` is what settles it: those two are
     // the only sites in the image passing a literal non-zero p5, and both pass p4 zero.
     if flags.currently_equipped {
         keyed("CURRENTLY_EQUIPPED", &[], GRAY, false)?;
@@ -257,7 +252,7 @@ pub(super) fn render_view(
         if v.flags & 0x2 != 0 {
             keyed("ITEM_CONJURED", &[], WHITE, false)?;
         }
-        // The bind line (§6, white, one line). Bonding `[record+0x194]` ∈ {1..5} is what decides
+        // The bind line (white, one line). Bonding `[record+0x194]` ∈ {1..5} is what decides
         // whether a line prints at ALL — a Bonding-0 item says nothing here however it is held.
         // Within that, a **runtime-bound instance** (`0x5da2c0` — [`ItemInstance::already_bound`])
         // overrides the whole line to ITEM_SOULBOUND, and to ITEM_BIND_QUEST for the two quest
@@ -296,8 +291,8 @@ pub(super) fn render_view(
     // cell is suppressed for cloaks (InventoryType 16) and displayFlags-hidden subclasses
     // (rings/trinkets/shirts — the "Miscellaneous" family), both builder gates. The two cells
     // recolor independently (byte-read at the builder's `0x52c143..0x52c1f9` legs against the
-    // verified `0x530270(this, left, right, leftColor, rightColor, wrap)` signature — NB the
-    // law §10 prose has the cells swapped): a proficiency-mask miss (`0xc4d4a0[class]` bit
+    // verified `0x530270(this, left, right, leftColor, rightColor, wrap)` signature — NB the cells
+    // are swapped): a proficiency-mask miss (`0xc4d4a0[class]` bit
     // `1 << subclass`; our SMSG_SET_PROFICIENCY-fed map; no mask entry never reds) reds the
     // TYPE cell — unless a weapon's alternate subclass (ItemSubClass prereq/postreq) is
     // proficient, which reds the SLOT cell instead. Independently, an off-hand weapon
@@ -306,8 +301,8 @@ pub(super) fn render_view(
     // The bag line's gate is `InventoryType == 0x12` **alone** (`0x52b754 sete`, read at
     // `0x52bffe`) — never the slot count, which the gate does not test at all: a 0-slot bag
     // prints "0 Slot Bag". Every shipped container carries 18, quivers and ammo pouches
-    // included, which is why `INVTYPE_QUIVER` is a dead slot name in 1.12 (wow-re §D2.4:
-    // InventoryType 27 occurs in none of the 848 records of the reference install's own
+    // included, which is why `INVTYPE_QUIVER` is a dead slot name in 1.12 (InventoryType 27
+    // occurs in none of the 848 records of the reference install's own
     // `itemcache.wdb`, and `0x809200[27]` maps to no equipment slot at all).
     if v.inventory_type == 18 {
         // `%d` is `ContainerSlots`; `%s` is the SAME `ItemSubClass` DisplayName the type cell
@@ -336,7 +331,7 @@ pub(super) fn render_view(
         // 27 quiver) draw no slot cell — but 15 `INVTYPE_RANGED` *does* ship, so a bow reads
         // "Ranged | Bow" while a gun reads "Gun" alone. Decision 2080 removed three invented
         // words here and was right about the KEYS; an arrow's cell is nonetheless not empty,
-        // because ammunition never reaches them (wow-re §D2.5j, VERIFIED).
+        // because ammunition never reaches them.
         let slot = if v.class == 6 {
             v.item_type.clone()
         } else {
@@ -384,8 +379,7 @@ pub(super) fn render_view(
     // The two cuts are not contiguous: the slot/type cell between them is emitted either way.
     if !flags.name_only {
         // **The damage block** — five slots, a five-arm template matrix and a first/PLUS_ flag
-        // (wow-re `tooltip-damage-matrix-and-container-slots.md` §D1, VERIFIED at
-        // `[0x52c22b, 0x52c5a1)`; §5 trio). Every arm is a key, and every hole's shape is the
+        // (`[0x52c22b, 0x52c5a1)`). Every arm is a key, and every hole's shape is the
         // binary's own push list — this block composed its English in Rust until it was converted.
         //
         // The three predicates and the flag: **hasSchool** is the slot's school field being nonzero
@@ -472,7 +466,7 @@ pub(super) fn render_view(
         // (its arms require class 6), so an arrow gets no DPS line and no Speed cell.
         if !first && v.class == 2 {
             // The precision is DPS_TEMPLATE's own `%.1f`, not ours — a locale that respells it gets
-            // its own number of decimals with no code change (law §12: "the print precision is
+            // its own number of decimals with no code change (`0x854c4c`: "the print precision is
             // FRAMEXML-DATA"). There is no divide-by-zero guard in the reference either.
             let secs = f64::from(v.delay_ms) * f64::from(0.001_f32);
             keyed(
@@ -549,31 +543,32 @@ pub(super) fn render_view(
                 )?;
             }
         }
-        // **Line 17 — the enchant family** (wow-re `tooltip-content-law.md` §1-ENCHANT, byte-carved
-        // 2026-08-03 on this lane's dispatch; decisions 0915/0920). One contiguous block
+        // **Line 17 — the enchant family** (decisions 0915/0920). One contiguous block
         // `[0x52c991, 0x52cc69)` between the resistances and the durability precompute, and three arms
         // that are mutually exclusive by construction — the per-slot loop falls through to the
         // proposed-enchant pair and jumps the block's end, so RANDOM_ENCHANT is reachable only when
-        // there was no id source at all (§E1).
+        // there was no id source at all.
         //
-        // The **colour is per slot**, and this is the correction the carve landed (§E3): the value is a
+        // The **colour is per slot** — the value is a
         // computed local, defaulting to WHITE, overwritten **only for slots 0 and 1** — green
         // `0xc0d3ac` for a positive id, pure-red `0xc0d398` for a negative one. Slots 2..6 — the
         // random-property suffix enchants — are **always white**, whatever the sign. (Our first cut
         // painted every slot green.) The sign never picks a different DBC row; the app already
         // resolved that off `abs(id)`.
         //
-        // Two gates sit above the loop. **ITEM_SIGNABLE** (template Flags bit `0x2000`, a petition or
-        // guild charter) forces every id to 0 with no fallback (`0x52c9e0: test ah,0x20`) — such an
-        // item shows no enchant line even if its instance carries ids. And with **no id source at all**
-        // the block instead prints the template-only `ITEM_RANDOM_ENCHANT` placeholder (§E5).
+        // Two gates sit above the loop. **ITEM_SIGNABLE** (template Flags bit `0x2000`, a petition
+        // or guild charter) forces every id to 0 with no fallback (`0x52c9e0: test ah,0x20`) — such
+        // an item shows no enchant line even if its instance carries ids. And with **no id source
+        // at all** the block instead prints the template-only `ITEM_RANDOM_ENCHANT` placeholder
+        // (`0x52cc33`).
         let signable = v.flags & 0x2000 != 0;
         let enchant_slots = match signable {
             true => &[][..],
             false => inst.map(|i| i.enchants.as_slice()).unwrap_or_default(),
         };
-        // "No id source" is the reference's own three-way fork (§E1): a wrapped gift, or no item
-        // object AND no caller-supplied instance block (`+0x440 == 0`). Ours reads the same: a hover
+        // "No id source" is the reference's own three-way fork (`0x52c991`): a wrapped gift, or no
+        // item object AND no caller-supplied instance block (`+0x440 == 0`). Ours reads the same: a
+        // hover
         // that passes NO [`ItemInstance`] is a p6=0 leg — the template sources (merchant, quest,
         // craft, buyback, send-mail, the compare legs, `BenillaSetItemById`) — plus the wrapped-gift bit.
         //
@@ -581,7 +576,7 @@ pub(super) fn render_view(
         // fork tests the block's presence, not its contents, so `SetLootItem`/`SetHyperlink`/
         // `SetInboxItem`/`SetAuctionItem`/`SetLootRollItem`/the trade legs fall into the slot loop and
         // print whatever their slots hold — nothing, when the roll is absent. Decision 0920's prose
-        // put a hyperlink hover on the placeholder arm; §E1's `0x52c9a3` fork says otherwise, and
+        // put a hyperlink hover on the placeholder arm; the `0x52c9a3` fork says otherwise, and
         // that is the drift 1547 corrects (a linked or looted "of the Monkey" showed the placeholder
         // where the reference shows the rolled lines).
         let no_id_source = inst.is_none_or(|i| i.flags & 0x8 != 0);
@@ -594,8 +589,9 @@ pub(super) fn render_view(
                 (true, true) => ENCHANT_RED,
                 (false, _) => WHITE,
             };
-            // A TEMPORARY enchant's countdown REPLACES the plain name in the same line and keeps that
-            // colour — it is never a second line (§E3). The bucket ladder (day/hour/min/sec) and its
+            // A TEMPORARY enchant's countdown REPLACES the plain name in the same line and keeps
+            // that colour — it is never a second line (`0x52ca49`). The bucket ladder
+            // (day/hour/min/sec) and its
             // ceil-vs-truncate split are [`enchant_time_left`]'s; its source is
             // `SMSG_ITEM_ENCHANT_TIME_UPDATE`, never the item's own duration field.
             let mut text = match e.remaining_ms {
@@ -621,9 +617,8 @@ pub(super) fn render_view(
         }
     }
     if let Some((cur, max)) = inst.and_then(|i| i.durability).filter(|&(_, max)| max > 0) {
-        // Red iff BROKEN (durability 0) — the byte law (wow-re ui.md tooltip content law:
-        // "durability (red iff broken==0)", the AddLine colour pointer `0xc0d390`, the same
-        // red as the unmet-requirement lines).
+        // Red iff BROKEN (durability 0) — the byte law ("durability (red iff broken==0)", the
+        // AddLine colour pointer `0xc0d390`, the same red as the unmet-requirement lines).
         let color = if cur == 0 { RED } else { WHITE };
         keyed(
             "DURABILITY_TEMPLATE",
@@ -641,10 +636,10 @@ pub(super) fn render_view(
         )?;
     }
     // **ITEM_DURATION `0x854bb4` — the item's own expiry countdown** (`0x52ce0d`, one of the four
-    // sites that set the builder's `[ebp-0x38]` return, wow-re `tooltip-content-law.md` §E3's
-    // census). It sits here by that address: after the durability precompute the note pins at
-    // `0x52cd0e–0x52cd22` (law line 18) and well before `ITEM_COOLDOWN_TIME` at `0x52e140` (line
-    // 23) — the numbered law list omits the line entirely, which is the gap decision 1933 names.
+    // sites that set the builder's `[ebp-0x38]` return). It sits here by that address: after the
+    // durability precompute, pinned at `0x52cd0e–0x52cd22`, and well before `ITEM_COOLDOWN_TIME` at
+    // `0x52e140` — the reference's own numbered emission order omits the line entirely, which is
+    // the gap decision 1933 names.
     // Formatted through the same `0x52fa50` ladder as the enchant countdown, with key prefix
     // `ITEM_DURATION`; unlike its siblings that prefix ships **no `_P1` plural twin**, so every
     // count reads "days"/"hrs" (`GlobalStrings.lua:2401-2404`) — which `plural_template`'s
@@ -735,8 +730,8 @@ pub(super) fn render_view(
         }
     }
     if let Some(rep) = &v.required_rep_line {
-        // Red when the player's rank with the faction is below the requirement (the §1-RED rep
-        // leg: standing `< [+0x58]`); an unfed faction reads as unmet, like the real client's
+        // Red when the player's rank with the faction is below the requirement (`0xc0d390`;
+        // standing `< [+0x58]`); an unfed faction reads as unmet, like the real client's
         // empty store at login (INITIALIZE_FACTIONS lands before the world does).
         let rank = req
             .rep_ranks
@@ -769,7 +764,7 @@ pub(super) fn render_view(
     if let Some(charges) = charges_phrase(v.charges.max(0) as u32, &get) {
         add((charges, WHITE))?;
     }
-    // The item-SET block (§22, above the binary's p4 cut at `0x52e14c`), byte-read at the builder's
+    // The item-SET block (above the binary's p4 cut at `0x52e14c`), byte-read at the builder's
     // `0x52d8a0..0x52e0f5`: a blank gold line ([`SET_SPACER`]), the gold "name (owned/total)"
     // header, the set-level skill line (white, red when short), the member ladder ("  name" —
     // pale-cream `0xc0d368` when equipped, gray otherwise; a member whose template is still in
@@ -849,7 +844,7 @@ pub(super) fn render_view(
     // hover emits no creator line and no openable/readable line — you can't right-click a
     // hyperlink open.
     let Some(inst) = inst else { return Ok(()) };
-    // The creator line (`0x52e1b1..0x52e2db`, wow-re §1-CREATOR CONFIRMED): the resolved
+    // The creator line (`0x52e1b1..0x52e2db`): the resolved
     // `ITEM_FIELD_CREATOR` name — a letter (instance text id) is ITEM_WRITTEN_BY, anything
     // else ITEM_CREATED_BY, both the literal 1.12 GlobalStrings (the Made-by green is the
     // string's OWN `|cff00ff00` escape; the AddLine color pointer is white `0xc0cf60`, wrap 0).
@@ -868,8 +863,7 @@ pub(super) fn render_view(
         }
     }
     // ITEM_OPENABLE / ITEM_READABLE — ONE line, openable wins outright (the `jmp 0x52e35d` past
-    // the READABLE test; `0x52e2f2..0x52e35d`, wow-re `right-click-open.md` §1.4, re-verified
-    // unchanged by the 2026-08-02 §5 pair): openable = a p6=0 source ([`ItemInstance::
+    // the READABLE test; `0x52e2f2..0x52e35d`): openable = a p6=0 source ([`ItemInstance::
     // openable_source`]) AND the template loot flag `0x4` behind its lock sub-gate (LockID set →
     // only once the instance carries UNLOCKED `0x4`), or a wrapped gift (template WRAPPER `0x200`
     // + instance WRAPPED `0x8`); readable = template PageText (the CGItem vtable `+0x74` getter
@@ -891,7 +885,7 @@ pub(super) fn render_view(
 }
 
 /// A temporary enchant's line text — the name with its countdown, the reference's own bucket
-/// ladder (wow-re `tooltip-content-law.md` §E3 → `0x52fa50`, byte-verified): a runtime key
+/// ladder (`0x52fa50`): a runtime key
 /// `ITEM_ENCHANT_TIME_LEFT_<DAYS|HOURS|MIN|SEC>` chosen by the largest unit that fits, with the
 /// count taken as **ceil** in the day/hour/minute arms and **truncated** in the seconds arm, and
 /// the `_P1` plural twin picked by [`plural_template`]'s byte-pinned rule. The day and hour keys
@@ -934,7 +928,7 @@ fn time_bucket(ms: u64) -> (&'static str, u32) {
 
 /// `ITEM_SPELL_CHARGES` and its `_P1` plural twin (`0x84e3b4`, pushed at `0x52cae8` for the
 /// enchant suffix and `0x52db61` for the standalone line). One rule for both consumers: the
-/// charges line (law line 21) and the enchant line's ` (…)` suffix (§E3).
+/// charges line and the enchant line's ` (…)` suffix.
 ///
 /// Zero answers `None` — the reference never reaches this with a zero count, and neither
 /// consumer here has a line to draw without one.
@@ -971,7 +965,7 @@ mod tests {
         )
     }
 
-    /// The countdown's bucket ladder (wow-re §1-ENCHANT §E3 → `0x52fa50`): the largest unit that
+    /// The countdown's bucket ladder (`0x52fa50`): the largest unit that
     /// fits wins, the count is **ceil** in the day/hour/minute arms and **truncated** in seconds,
     /// and the day/hour arms have `_P1` twins while minutes and seconds do not — so those two
     /// suffixes reach the same key at every count.

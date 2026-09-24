@@ -64,7 +64,7 @@ fn two_recipe_state() -> TradeSkillState {
     }
 }
 
-/// Four groups (wow-re `tradeskill` TU-B): class 1 "Bolts" (two Optimal-tier recipes — a NAME
+/// Four groups (`0x4fca20`): class 1 "Bolts" (two Optimal-tier recipes — a NAME
 /// tie within a tier), class 2 "Armor Kit"/"Zephyr Cloak" (a CLASS tie broken by group NAME, not
 /// subclass id — "Zephyr Cloak"'s subclass id 1 is LOWER than "Armor Kit"'s 5, yet "Armor Kit"
 /// sorts first), and one recipe whose product template hasn't resolved yet (`group: None`),
@@ -479,8 +479,8 @@ fn do_trade_skill_drains_spell_id_and_count() {
     assert!(s.take_trade_skill_dos().is_empty(), "drained");
 
     // Row 2 = Simple Robe (spell 3919, numAvailable 0). No count arg defaults to 1; a
-    // non-positive count clamps up to 1 (the byte-VERIFIED latch floor, wow-re `tradeskill`
-    // TU-D — `max(avail, 1)`).
+    // non-positive count clamps up to 1 (the `DoTradeSkill 0x500280` latch floor —
+    // `max(avail, 1)`).
     s.run("DoTradeSkill(2) DoTradeSkill(2, 0)").unwrap();
     assert_eq!(s.take_trade_skill_dos(), vec![(3919, 1), (3919, 1)]);
 
@@ -567,7 +567,7 @@ fn get_trade_skill_tools_multivalue_shape() {
     assert_eq!(s.arity("GetTradeSkillTools(1)").unwrap(), 0);
 }
 
-/// The verified persistence story (wow-re `tradeskill` TU-G §6, the `0xbde064` cache key):
+/// The verified persistence story (`0x4fc910`, the `0xbde064` cache key):
 /// collapse/filter/selection state SURVIVES a same-profession close→reopen and resets only
 /// when a DIFFERENT skill line opens.
 #[test]
@@ -728,7 +728,7 @@ fn invslot_filter_drops_recipes_and_emptied_groups() {
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 10);
 }
 
-/// WEAPON (InventoryType 13) is the one multi-bit contribution (`0x18000`, TU-G §1): a
+/// WEAPON (InventoryType 13) is the one multi-bit contribution (`0x18000`): a
 /// one-hand weapon lists BOTH hand slots in the vocabulary and stays visible under either
 /// hand's exclusive filter.
 #[test]
@@ -828,7 +828,7 @@ fn same_tier_recipes_order_by_product_item_level_before_name() {
     assert_eq!(names, ["Cloth", "Mmm Robe", "Zzz Robe", "Aaa Robe"]);
 }
 
-/// The link pair (wow-re `tradeskill-craft-item-links.md`, 1973): the product's link in its
+/// The link pair (`0x4ff410`/`0x4ff800`, decision 1973): the product's link in its
 /// quality colour with zero tokens; ZERO values for a header, a missing product or an uncached
 /// template; the reagent link nil on the same misses and always exactly one value; the typo'd
 /// reagent Usage; the number gate.

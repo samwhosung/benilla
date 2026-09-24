@@ -70,7 +70,7 @@
 //! `0x4d8528`–`0x4d8549`) — which is how a type-1 trainer whose every service is `used` shows one
 //! "My Talents" header and no skill-line headers at all. benilla always keeps a header. The case
 //! that is *reachable* here (does the state-filter dropdown emptying a group also take its header?)
-//! is an open question with wow-re; the build-time case above cannot arise, because benilla builds
+//! is an open question; the build-time case above cannot arise, because benilla builds
 //! a group only from services that exist.
 
 use mlua::{Lua, MultiValue, Value};
@@ -156,8 +156,8 @@ pub struct TrainerAbilityReq {
 /// is a three-way selector into the shared spell builder `0x52e610` or item builder `0x52b650`.
 ///
 /// This is deliberately **not** derivable from [`TrainerService::texture`]: the tooltip and the icon
-/// disagree, by design and in both directions (wow-re `ui/scratch/trainer-service-tooltip-law.md`
-/// §6 — the icon needs a trainer-type gate the tooltip does not have, and the icon pins the *wire*
+/// disagree, by design and in both directions (`0x4d8f50` gates on trainer-type, `0x5338b0` does
+/// not — the icon needs a trainer-type gate the tooltip does not have, and the icon pins the *wire*
 /// wrapper where the tooltip hops to the *taught* spell). On ~806 of the shipped corpus's trainer
 /// services the reference client visibly shows one spell's icon above another spell's tooltip.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -288,8 +288,8 @@ impl super::UiScript {
     /// **Reset what one `SMSG_TRAINER_LIST` arriving resets — the state filter, the collapse set,
     /// and the selection.**
     ///
-    /// Byte-verified (wow-re `system/ui/scratch/trainer-service-suppression.md`, decision 1128): the
-    /// list builder writes the filter mask itself on every packet — `0x4d75d9 mov ds:0xb73a1c,3`
+    /// Byte-verified (decision 1128): the list builder writes the filter mask itself on every
+    /// packet — `0x4d75d9 mov ds:0xb73a1c,3`
     /// (available|unavailable, "already known" OFF), or `5` (available|used) when `trainerType == 1`
     /// — alongside `ds:0xb73a20 = ds:0xb73a24 = 0xffffffff`, which is "no group collapsed". So the
     /// player's filter choice does NOT live in the engine across trainer visits in the reference: it
@@ -612,10 +612,9 @@ fn selected_row(model: &Model) -> Option<usize> {
 ///
 /// `SetTrainerServiceTypeFilter`'s four legs all commit through `0x4d8c90`, whose whole body is
 /// `mov ds:0xb73a1c,ecx; call 0x4d8410; mov ecx,0x136; jmp 0x703e50` — write the mask, re-run the
-/// finalizer, **fire event `0x136` = `TRAINER_UPDATE`** (wow-re `system/ui/ledger.tsv`'s `0x4d8c90`
-/// row; the id is `ui.md`'s own event table). Its siblings `0x4d8cb0` (the skill-line mask) and
-/// `0x4d8cd0` (the expand mask, which is what Collapse/ExpandTrainerSkillLine commit) are recorded
-/// there as the same shape.
+/// finalizer, **fire event `0x136` = `TRAINER_UPDATE`**. Its siblings `0x4d8cb0` (the skill-line
+/// mask) and `0x4d8cd0` (the expand mask, which is what Collapse/ExpandTrainerSkillLine commit)
+/// follow `0x4d8c90`'s same shape.
 ///
 /// That matters because **nothing in the stock window repaints after a filter click**:
 /// `ClassTrainerFrameFilterDropDown_OnClick` sets the saved global, calls the filter verb, and then
@@ -738,7 +737,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // trainer types 0/1/3, 1124's builder law). The stock window's one caller is the
     // CONFIRM_PROFESSION dialog, which formats "learn <profession>?" with it
     // (Blizzard_TrainerUI.lua l.19-24). A header row or an out-of-range index answers nil. The
-    // binding is registered (`0x4d9160`, 399 bytes) but its return law is not carved beyond
+    // binding is registered (`0x4d9160`, 399 bytes) but its return law is not confirmed beyond
     // "delegates"; this is the call site's reading (1957).
     g.set(
         "GetTrainerServiceSkillLine",
