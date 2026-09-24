@@ -35,7 +35,7 @@ use super::Model;
 /// (`0x4899d0`), `AssistUnit` (`0x489b80`), `TargetLastEnemy` and `TargetLastTarget` all reach
 /// selection through the "select if it resolves" helper `0x489a40`, whose three arms are the same
 /// for every caller — resolve the guid and commit, else fall back to the group roster, else a
-/// **silent return** (wow-re `object-layer/scratch/selection-attack-seam.md` §1). Splitting them
+/// **silent return**. Splitting them
 /// into a queue each would also lose their relative order, which a macro can observe
 /// (`TargetUnit("party1"); AssistUnit("target")` is not the same as the reverse).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,8 +71,7 @@ pub enum SelectionRequest {
 /// One writer image-wide — `0x5abd9e` (`rep movsd`, 0x44 dwords) inside `CGlueMgr::EnterWorld`,
 /// at the character-select commit — and **no instruction anywhere clears it**. It is filled before
 /// FrameXML loads and before `CMSG_PLAYER_LOGIN` is sent, which is why the reference can run addon
-/// `OnUpdate` for many frames with no local player object and still answer all four (wow-re
-/// `ui/scratch/unitname-player-seed-window.md` §6).
+/// `OnUpdate` (`0x765650`) for many frames with no local player object and still answer all four.
 ///
 /// **`UnitLevel` is deliberately NOT here.** The record carries the level at `+0x108` and the
 /// client ships an accessor for it, `0x5abe00`, that **nothing calls** — so `UnitLevel("player")`
@@ -121,8 +120,7 @@ pub struct UnitState {
     /// (`!(UNIT_FIELD_FLAGS & 0x02000000) || UNIT_FIELD_CREATEDBY == you`) — falling back to the
     /// GUID-only roster test on a miss. We model the fallback and not the conjunct, so a
     /// not-selectable unit created by someone else reads `exists` here and `nil` there. No corpus
-    /// caller reaches it; recorded rather than folded in (wow-re
-    /// `ui/scratch/unitisvisible-object-presence.md`).
+    /// caller reaches it; recorded rather than folded in.
     pub exists: bool,
     /// **`UnitIsVisible` — the client holds a live object for this token, and nothing else.**
     ///
@@ -150,8 +148,7 @@ pub struct UnitState {
     /// `UnitIsTapped` — `UNIT_DYNAMIC_FLAGS` (UpdateField **143**) bit `0x4`: this unit is
     /// someone's kill credit. `0x519c90` is `test BYTE PTR [eax+0x224],0x4` behind the same
     /// object-presence check [`Self::has_object`] carries, and **nothing else** — no ownership, no
-    /// GUID compare, no party/raid or health conjunct anywhere in the body (wow-re
-    /// `ui/scratch/tapped-bits-and-unit-faction.md`).
+    /// GUID compare, no party/raid or health conjunct anywhere in the body.
     ///
     /// Set only on the live-descriptor leg, so an out-of-range unit reads `false` — which is the
     /// object-presence conjunct, for free, by the same route `has_object` gets it.
@@ -163,8 +160,7 @@ pub struct UnitState {
     /// Not derived client-side, and not the same question as "leads MY group": it is true for a
     /// stranger who leads their own party, which no comparison against our group's leader GUID can
     /// express. The second leg is that comparison, in `script::party` — the two cover disjoint
-    /// failures and the reference ORs them (wow-re
-    /// `ui/scratch/party-leader-and-nameplate-verbs.md`).
+    /// failures and the reference ORs them (`0x516210`).
     pub group_leader: bool,
     /// `UnitIsTappedByPlayer` — the same field's bit `0x8` (`0x519d00`, a masked-byte clone of its
     /// sibling: 108 bytes each, differing only in the mask and the `Usage:` string).
@@ -200,7 +196,6 @@ pub struct UnitState {
     /// at all). The field means *"who charms me"*; its mirror `UNIT_FIELD_CHARM` (*"whom I charm"*)
     /// is never read here. So a **charmer** answers nil, a **charmed** pet answers 1, and an
     /// ordinary **summoned** pet answers nil — `"pet"` is itself charm-else-summon in the resolver.
-    /// (wow-re `system/ui/scratch/unit-verbs-controlled-charmed-creaturetype.md`.)
     pub charmed: bool,
     /// Whether the unit is a released ghost (`UnitIsGhost` — `PLAYER_FLAGS` bit 0x10, decision
     /// 0308 §1). Only meaningful for player tokens; creatures stay `false`.
@@ -423,18 +418,17 @@ pub struct UnitState {
     /// The player can attack this unit (`UnitCanAttack("player", unit)`) — app-fed from the
     /// byte-confirmed `CanAttack 0x606980` predicate (decision 0172; the flag disqualifiers +
     /// reaction ≤ neutral legs TAB and the combat flash share; the Lua binding `0x516c50` is
-    /// pure delegation to it, §5-VERIFIED). Like [`Self::reaction`], the feed resolves it for
+    /// pure delegation to it). Like [`Self::reaction`], the feed resolves it for
     /// the `"target"` token; other tokens leave the default `false` (→ nil), which is right for
     /// every current caller (`TargetFrame_CheckLevel`'s difficulty-color gate).
     pub can_attack: bool,
     /// This token resolves to a **TYPEID_CORPSE world object** — `UnitIsCorpse`'s whole
-    /// predicate (`0x5161c0`, §5-VERIFIED: a pure object-type check, no health test; a dead
+    /// predicate (`0x5161c0`: a pure object-type check, no health test; a dead
     /// mob/player is NOT a corpse). No feed sets it yet — corpse objects (a released player's
     /// remains) aren't selectable in benilla — a stated gap, not an oversight.
     pub corpse_object: bool,
     /// In combat (`UnitAffectingCombat`) — `UNIT_FIELD_FLAGS` (descriptor index 46) **bit 19**,
-    /// mask `0x00080000` (`0x517e10`, wow-re `bag-language-combat-action-bindings.md` §3,
-    /// §5-cross-checked: `mov ecx,[eax+0xa0]; shr ecx,0x13; test cl,1`).
+    /// mask `0x00080000` (`0x517e10`: `mov ecx,[eax+0xa0]; shr ecx,0x13; test cl,1`).
     ///
     /// **There is no player-specific combat latch**, stated as the explicit negative because it
     /// is precisely what a client is tempted to invent: a whole-image census of the
@@ -496,7 +490,7 @@ const GREY_BAND: [u32; 20] = [
 ];
 
 /// The band value for a player level — `GREY_BAND[min(playerLevel/5, 19)]` (the
-/// `GetQuestGreenRange` return, §5-VERIFIED 2026-07-17: the binding `0x4e17d0` reads the
+/// `GetQuestGreenRange` return: the binding `0x4e17d0` reads the
 /// byte-identical `0x8076c0` twin with exactly this index clamp).
 pub fn grey_band(player_level: u32) -> u32 {
     GREY_BAND
@@ -505,7 +499,7 @@ pub fn grey_band(player_level: u32) -> u32 {
         .unwrap_or(12)
 }
 
-/// The trivial/GREY check (`0x5f0700`, §5-VERIFIED 2026-07-17 — was INFERRED): a unit enough
+/// The trivial/GREY check (`0x5f0700`): a unit enough
 /// levels *below* the player that it cons grey — `playerLevel − unitLevel >
 /// GREY_BAND[playerLevel/5]`, **strict >** (diff == band is still green). The binary's full
 /// predicate also requires not-player-controlled; every consumer here applies this to creatures.
@@ -524,22 +518,21 @@ pub fn unit_is_grey(player_level: u32, unit_level: u32) -> bool {
 /// name). The engine gates both on the same call; a second copy here would let the tooltip and the
 /// name disagree about whether the same mob is a civilian.
 ///
-/// **Scope of the verification.** wow-re's honor carve leaves `0x612550` itself uncarved (its §12,
-/// "named by its use here"); the four terms are decision 0276's tooltip-line law, which is where
-/// this composition was verified. So this is the tooltip's gate reused at the second call site the
-/// carve proves shares it — not an independently byte-checked predicate.
+/// **Scope of the verification.** `0x612550` is named by its use here, not independently
+/// confirmed at the bytes; the four terms are decision 0276's tooltip-line law, which is where
+/// this composition was verified. So this is the tooltip's gate reused at the second call site —
+/// not an independently byte-checked predicate.
 pub fn is_civilian_kill(u: &UnitState, player_level: u32) -> bool {
     u.civilian && u.pvp && u.reaction != 0 && u.reaction <= 2 && unit_is_grey(player_level, u.level)
 }
 
-/// The "level reads ??" gate — the engine tooltip's byte-pinned leg set (`0x529fe0` §2-LEVEL):
-/// never players; level 0 (unstreamed), world-boss rank 3, or a much-higher hostile (reaction
-/// ≤ 2 on the 1..8 API scale, unit ≥ player + 10 — **inclusive**, byte-confirmed). The Lua
-/// `UnitLevel`'s −1 law was §5-VERIFIED against this (wow-re `ui/scratch/
-/// level-assess-bindings.md`, 2026-07-17): its two −1 legs are exactly the boss + hostile-≥10
-/// legs here (no trivial-gray term exists in `0x517fc0`, and none is possible at ≥ +10), with
-/// ONE divergence the binding handles itself — a raw level ≤ 0 returns VERBATIM, not −1
-/// (same skull outcome in FrameXML; the tooltip's "??" keeps the level-0 leg per its own law).
+/// The "level reads ??" gate — the engine tooltip's byte-pinned leg set (`0x529fe0`): never
+/// players; level 0 (unstreamed), world-boss rank 3, or a much-higher hostile (reaction ≤ 2 on the
+/// 1..8 API scale, unit ≥ player + 10 — **inclusive**, byte-confirmed). The Lua `UnitLevel`'s −1
+/// law agrees with this: its two −1 legs are exactly the boss + hostile-≥10 legs here (no
+/// trivial-gray term exists in `0x517fc0`, and none is possible at ≥ +10), with ONE divergence the
+/// binding handles itself — a raw level ≤ 0 returns VERBATIM, not −1 (same skull outcome in
+/// FrameXML; the tooltip's "??" keeps the level-0 leg per its own law).
 pub fn level_reads_unknown(u: &UnitState, player_level: u32) -> bool {
     let much_higher_hostile =
         u.reaction != 0 && u.reaction <= 2 && u.level >= player_level.saturating_add(10);
@@ -824,19 +817,19 @@ pub(crate) fn token_recognised(token: &str) -> bool {
 /// The gate every `Unit*` binding puts an addon-supplied token through.
 ///
 /// **An unrecognised token RAISES and does not return** — `0x515970` falls off the end of its nine
-/// compares into `luaL_error(L, "Unknown unit name: %s")`, which longjmps (wow-re
-/// `system/ui/scratch/unit-token-grammar.md`). Ours answered nil for everything unknown, which is
-/// 1203's shape pointed the other way: a failure the client reports, silently swallowed.
+/// compares into `luaL_error(L, "Unknown unit name: %s")`, which longjmps. Ours answered nil for
+/// everything unknown, which is 1203's shape pointed the other way: a failure the client reports,
+/// silently swallowed.
 ///
-/// The split is THREE-way, not two, and the two quiet legs are as carved:
+/// The split is THREE-way, not two, and the two quiet legs are as follows:
 ///   * **absent argument** — quiet nil *here*, because this helper is only the resolver's half.
 ///     Whether a nil ever reaches it is the BINDING's question, and it is settled per binding:
-///     wow-re's census of all 83 entries at `0x850438` found 53 that gate the token position with
-///     `lua_isstring` and raise `Usage:`, against 13 unit-token bindings with no gate at all
-///     (decision 1834). The gated ones call `binding_abi::string_arg` before they get here, so a
-///     nil never arrives; the quiet 13 pass it straight through. This comment used to say the
-///     gates were "NOT uniform … only those two poles are verified" and decline to guess, which
-///     was the right call at the time — the table now exists, so it is applied rather than feared;
+///     all 83 entries at `0x850438` gate the token position with `lua_isstring` and raise `Usage:`
+///     in 53 cases, against 13 unit-token bindings with no gate at all (decision 1834). The gated
+///     ones call `binding_abi::string_arg` before they get here, so a nil never arrives; the quiet
+///     13 pass it straight through. This comment used to say the gates were "NOT uniform … only
+///     those two poles are verified" and decline to guess, which was the right call at the time —
+///     the table now exists, so it is applied rather than feared;
 ///   * **`""`** — quiet nil;
 ///   * a **recognised** token naming nothing (`"party5"` solo, `"playerfoo"`) — quiet nil.
 pub(crate) fn check_unit_token(token: &Option<String>) -> mlua::Result<()> {

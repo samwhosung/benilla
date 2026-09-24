@@ -1,6 +1,5 @@
 //! The `/who` list's sort — the reference's seven-slot key chain, its promote-and-flip rule, and
-//! the comparator that walks it (`SortWho 0x5ad890`, comparator `0x5ada00`; wow-re
-//! `system/net/scratch/who-list-sort-law.md`, §5-crossed 2026-09-05, benilla decision 2030).
+//! the comparator that walks it (`SortWho 0x5ad890`, comparator `0x5ada00`; benilla decision 2030).
 //!
 //! **A `/who` sort is not "order by the clicked column".** The reference keeps a *chain* of seven
 //! `{key, dir}` slots at `0xc2817c`/`0xc28180`, seeded once per process to `key[i] = i`
@@ -205,7 +204,7 @@ fn ascii_ci_cmp(a: &str, b: &str) -> Ordering {
 /// disagree on purpose.** `GetWhoInfo 0x5ad6e0` substitutes the localized `"UNKNOWN"` on the same
 /// three legs, so a row can read UNKNOWN in the cell while sorting as though that column did not
 /// exist. Anything that starts showing UNKNOWN here has to carry the miss to this comparator by
-/// some route other than the string (wow-re `who-list-sort-law.md` §11.1–§11.2).
+/// some route other than the string.
 fn dbc_name_cmp(a: &str, b: &str) -> Ordering {
     if a.is_empty() || b.is_empty() {
         return Ordering::Equal;

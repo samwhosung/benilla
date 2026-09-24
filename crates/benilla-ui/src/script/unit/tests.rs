@@ -190,7 +190,7 @@ fn unit_level_reads_minus_one_when_the_level_cant_be_told() {
         }),
     );
     assert_eq!(s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(), 60);
-    // A raw level 0 (unstreamed) returns VERBATIM — never −1 (§5: `0x517fc0` pushes the
+    // A raw level 0 (unstreamed) returns VERBATIM — never −1 (`0x517fc0` pushes the
     // raw field; only the boss/hostile legs substitute). Same skull outcome via `<= 0`.
     s.set_unit(
         "target",
@@ -208,7 +208,7 @@ fn unit_level_reads_minus_one_when_the_level_cant_be_told() {
 fn corpse_can_attack_and_green_range_bindings() {
     use crate::script::PlayerReqState;
     let mut s = UiScript::new().unwrap();
-    // UnitIsCorpse: a pure TYPEID_CORPSE object check (§5) — a DEAD unit is NOT a corpse…
+    // UnitIsCorpse: a pure TYPEID_CORPSE object check (`0x5161c0`) — a DEAD unit is NOT a corpse…
     s.set_unit(
         "target",
         Some(UnitState {
@@ -410,7 +410,7 @@ fn a_dead_unit_reports_dead_and_zero_health() {
 /// `UnitName`'s value 1 is nil in exactly two cases — a zero GUID, and the `"player"` fast path
 /// over an empty local-name buffer — and a STRING everywhere else: the cached name, or
 /// `FrameScript_GetText("UNKNOWNOBJECT")` for a unit that resolved but whose name the cache has not
-/// answered (`0x517020` §2.1; `0x609324`). The stock stable window concatenates the answer on
+/// answered (`0x517020`; `0x609324`). The stock stable window concatenates the answer on
 /// `UNIT_PET` (`PetStable.lua:129`), the instant a called pet's name is still in flight — the
 /// director's `attempt to concatenate a nil value` dialog (decision 2002).
 #[test]
@@ -631,9 +631,8 @@ fn unit_race_class_sex_report_the_snapshot_or_the_absent_shape() {
     assert_eq!(s.eval::<i64>(r#"return UnitSex("player")"#).unwrap(), 3);
     // An absent token: the two string pairs go nil, nil — but **`UnitSex` answers the number 2**,
     // not nil. It is a numeric getter, and `0x517f9f` pushes the constant double 2.0 on the
-    // unresolved leg exactly as `UnitLevel`/`UnitMana`/`GetMoney` push 0.0 on theirs (wow-re
-    // `unit-predicate-return-shape.md` §4; decision 2118). The shapes table has no nil alternative
-    // for this row at all.
+    // unresolved leg exactly as `UnitLevel`/`UnitMana`/`GetMoney` push 0.0 on theirs (decision
+    // 2118). The shapes table has no nil alternative for this row at all.
     assert!(s
         .eval::<bool>(r#"local a, b = UnitRace("target") return a == nil and b == nil"#)
         .unwrap());
@@ -809,8 +808,7 @@ fn unit_affecting_combat_is_one_or_nil_and_hides_the_missing_unit() {
     // `0x6f3510` is number-OR-string, so `5` is coerced via `%.14g` to the token `"5"`; `"5"` then
     // matches none of the resolver's nine prefixes and falls into
     // `luaL_error("Unknown unit name: %s")`. This assertion read `== nil` and "it does not raise"
-    // until wow-re's own §5 cross-check refuted the no-error-path claim it rested on
-    // (`raid-roster-bindings.md` §1) — the acceptance was right, the conclusion was not.
+    // until corrected: the acceptance was right, the conclusion was not.
     assert!(
         s.run("UnitAffectingCombat(5)").is_err(),
         "a number is coerced to a token that matches nothing, so it raises"
@@ -928,8 +926,7 @@ fn unit_is_charmed_answers_one_or_nil_and_only_for_the_charmed_side() {
 /// Decision 2209. The name says "elite" and its table neighbour `UnitClassification` answers off
 /// the gated rank, so the natural implementation is `rank > 0`. The binary's is not: it takes
 /// `UNIT_FIELD_FLAGS` and tests bit 6 (`UNIT_FLAG_PLUS_MOB 0x40`), never calling the rank getter
-/// `0x605620` (wow-re `9f84e7e4`,
-/// `system/ui/scratch/unit-verbs-controlled-charmed-creaturetype.md` §4.2). The two normally
+/// `0x605620`). The two normally
 /// agree because the server derives the bit from the rank — so **rare** answers 1 here, not just
 /// elite — and they part on the unit whose creature-cache record has not arrived, which still
 /// carries its own flags while its rank reads 0.
@@ -1014,9 +1011,9 @@ fn unit_is_plus_mob_reads_the_flag_bit_and_not_the_rank() {
 /// **Unit tokens fold case, because the client's resolver does.**
 ///
 /// `0x515970` compares every one of its literals with `SStrCmpI` → `_strnicmp`, whose fold is
-/// `'A'..'Z' += 0x20`; not one of its ten compares reaches the case-sensitive sibling (wow-re
-/// `system/ui/scratch/unit-token-grammar.md`, §5 trio). So this is a NARROWING fix — the real
-/// client resolves these and we did not — rather than the superset 1189 had to take back out.
+/// `'A'..'Z' += 0x20`; not one of its ten compares reaches the case-sensitive sibling. So this is
+/// a NARROWING fix — the real client resolves these and we did not — rather than the superset 1189
+/// had to take back out.
 ///
 /// `Accountant.lua:107` is the corpus line that paid for it: `UnitFactionGroup("Player")`, capital
 /// P, whose nil made `Accountant_SaveData[realm][faction]` a nil table index at l.192 and ended the
@@ -1107,9 +1104,8 @@ fn seating_a_token_folds_its_key_too() {
 /// **An unrecognised token RAISES; a recognised one that names nothing is a quiet nil.**
 ///
 /// `0x515970` falls off the end of its nine compares into `luaL_error(L, "Unknown unit name: %s")`,
-/// which longjmps and never returns (wow-re `system/ui/scratch/unit-token-grammar.md`). Ours
-/// answered nil for everything unknown — 1203's shape pointed the other way, a failure the client
-/// reports and we swallowed.
+/// which longjmps and never returns. Ours answered nil for everything unknown — 1203's shape
+/// pointed the other way, a failure the client reports and we swallowed.
 ///
 /// The split is THREE-way, and the two quiet legs are the ones a "raise on nil" implementation gets
 /// wrong.
@@ -1169,8 +1165,8 @@ fn an_unrecognised_unit_token_raises_and_a_recognised_empty_one_does_not() {
     // `UnitName 0x517020` gates its token position at `0x517048` and raises
     // `Usage: UnitName("unit")` (`0x850ee0`); `luaL_error` does not return. The comment this
     // replaces said the per-binding gates were "not uniform … only two poles verified", which was
-    // true when it was written — wow-re has since censused all 83 entries of the table at
-    // `0x850438`: 53 gate and raise, and only 13 unit-token bindings are quiet. Decision 1834.
+    // true when it was written — all 83 entries of the table at `0x850438` gate and raise in 53
+    // cases, and only 13 unit-token bindings are quiet. Decision 1834.
     assert!(s.run("UnitName()").is_err(), "absent argument raises");
     assert!(s.run("UnitName(nil)").is_err(), "nil argument raises");
     // A NUMBER passes the gate — `lua_isstring` admits tag 3 — and is handed to the resolver as
@@ -1240,7 +1236,7 @@ fn a_multibyte_unit_token_raises_rather_than_panicking() {
 /// `ClntObjMgrObjectPtr(resolve(token), TYPEMASK_UNIT) != NULL`. No field read, no comparison
 /// beyond `test eax,eax`, no float opcode — so no distance, no radius, no visibility flag. The
 /// range test is the *server's*: the out-of-range demotion unlinks the object from the very
-/// manager index this query searches (wow-re `ui/scratch/unitisvisible-object-presence.md`).
+/// manager index this query searches.
 ///
 /// The state that backs it is [`UnitState::has_object`], which `ui_party::feed`'s
 /// `member_unit_state` has always branched on — its `store: Option<&ObjectStore>` argument, whose
@@ -1311,8 +1307,7 @@ fn unit_is_visible_is_object_presence_not_existence() {
 /// `UnitIsTapped 0x519c90` / `UnitIsTappedByPlayer 0x519d00` are a masked-byte pair — 108 bytes
 /// each, differing only in the `UNIT_DYNAMIC_FLAGS` mask (`0x4`/`0x8`, UpdateField 143) and the
 /// `Usage:` string. Each is `object present && (flags & mask)` and nothing else: no ownership, no
-/// GUID compare, no party/raid or health conjunct (wow-re
-/// `ui/scratch/tapped-bits-and-unit-faction.md`).
+/// GUID compare, no party/raid or health conjunct.
 ///
 /// Asserted here because both are easy to get wrong in a way that still looks right:
 ///
@@ -1423,9 +1418,8 @@ fn the_tapped_pair_is_two_masks_of_one_field_and_raises_on_a_bad_argument() {
 /// ```
 ///
 /// and it is **not** derivable from `IsPartyLeader()` + `GetPartyLeaderIndex()` however arranged —
-/// the two legs cover disjoint failures (wow-re
-/// `ui/scratch/party-leader-and-nameplate-verbs.md`, G1 REFUTED). Each leg is asserted with the
-/// other one dead, because either alone looks sufficient until the case it cannot reach.
+/// the two legs cover disjoint failures. Each leg is asserted with the other one dead, because
+/// either alone looks sufficient until the case it cannot reach.
 #[test]
 fn unit_is_party_leader_ors_two_legs_and_answers_one_when_solo() {
     let mut s = UiScript::new().unwrap();
@@ -1575,10 +1569,10 @@ fn unit_has_relic_slot_answers_one_or_nil() {
 /// **The two-token predicates gate BOTH positions** — decision 1836, closing the half 1834 left
 /// open on purpose.
 ///
-/// 1834 applied the `lua_isstring` gate only where wow-re's partial list named a single-token
-/// binding, because a census that finds "a gate somewhere in this body" cannot say *which*
-/// argument carries it. The complete 83-row table (`nil-unit-token-arg-law.md` §10) resolves it:
-/// these seven each carry **two** `lua_isstring` sites, so either argument being nil raises.
+/// 1834 applied the `lua_isstring` gate only where a partial census named a single-token binding,
+/// because a census that finds "a gate somewhere in this body" cannot say *which* argument carries
+/// it. The complete 83-row table (`0x850438`) resolves it: these seven each carry **two**
+/// `lua_isstring` sites, so either argument being nil raises.
 #[test]
 fn a_two_token_predicate_raises_on_either_nil_argument() {
     let mut s = UiScript::new().unwrap();
@@ -1635,11 +1629,9 @@ fn a_two_token_predicate_raises_on_either_nil_argument() {
 /// The reference cannot produce a boolean here. Its pushes are `lua_pushnumber 0x6f3810` (tag 3,
 /// the double `1.0`) and `lua_pushnil 0x6f37f0` (tag 0); `lua_pushboolean 0x6f39f0` has seven call
 /// sites image-wide and not one is a registered binding body, so **tag 1 is never written**
-/// (wow-re `ui/scratch/binding-shape-arity-law.md`, `ui/scratch/button-enabled-state.md`, restated
-/// `ui.md` l.4700 and l.7348; the per-binding carves for `UnitExists 0x515fb0`,
-/// `UnitIsVisible 0x516030`, `UnitIsTapped 0x519c90`, `UnitAffectingCombat 0x517e10`,
-/// `UnitPlayerControlled 0x516410`, `UnitInRaid 0x516350`, `UnitIsCharmed 0x516cf0` and
-/// `UnitHasRelicSlot 0x519e50` each state it outright).
+/// (`UnitExists 0x515fb0`, `UnitIsVisible 0x516030`, `UnitIsTapped 0x519c90`, `UnitAffectingCombat
+/// 0x517e10`, `UnitPlayerControlled 0x516410`, `UnitInRaid 0x516350`, `UnitIsCharmed 0x516cf0` and
+/// `UnitHasRelicSlot 0x519e50` each confirm it individually).
 ///
 /// **Truthiness is exactly why this needs a test rather than a reading.** `if UnitIsDead(u)` and
 /// `if not UnitIsDead(u)` are identical under either shape, and mlua's `bool` conversion maps

@@ -1,5 +1,4 @@
-//! The world map's **arrow frames** (decision 1980; wow-re
-//! `system/ui/scratch/worldmap-arrow-and-positions.md` §2): the seven bindings the stock
+//! The world map's **arrow frames** (decision 1980, `0x4a8bb0`): the seven bindings the stock
 //! `WorldMapFrame.lua` and `Blizzard_BattlefieldMinimap.lua` call to put the player's arrow on
 //! the map.
 //!
@@ -32,7 +31,7 @@ pub const ARROW_MODEL: &str = "Interface\\Minimap\\MinimapArrow.mdx";
 /// `1280·extent = 33.5 × 33.7` FrameXML units at 4:3). The world-map arrow's model scale is
 /// `G48 · 5/3` (`= 1.0` at 4:3, `G48 = 1/√(aspect² + 1)`) and the mini's `G48 · 10/9`, so the
 /// quad holds a constant apparent size as the window's shape changes while its rect grows with
-/// `√(a²+1)` (render law §2, the worked arrow).
+/// `√(a²+1)` (`0x4a7ad8`).
 fn centre_of(facts: Option<&crate::widget::ModelFileFacts>) -> (f32, f32, f32) {
     facts.map_or((0.0, 0.0, 0.0), |f| {
         let (x, y) = f.extent();
@@ -142,7 +141,7 @@ fn create(lua: &Lua, which: Arrow, parent: Value) -> mlua::Result<()> {
     {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         if which.slot(&model).is_some() {
-            return Ok(()); // the singleton exists: the parent is not even read (§2.1)
+            return Ok(()); // the singleton exists: the parent is not even read (`0x4a7a80`)
         }
     }
     let wrapper = create_frame(
@@ -158,7 +157,7 @@ fn create(lua: &Lua, which: Arrow, parent: Value) -> mlua::Result<()> {
     // same file set every pane takes, seeded with the file's facts when the host has them
     // (decision 2007 — the arrow's Stand loops its 3.333 s with no bone keyed, so nothing
     // moves; the arm is the reference's, not a look). No authored size: the widget's rect is
-    // the file's bounding box (§2.2, decision 2015), and `0x4a7b20`'s `SetPosition(½·GetWidth,
+    // the file's bounding box (decision 2015), and `0x4a7b20`'s `SetPosition(½·GetWidth,
     // ½·GetHeight, 0)` — the geometry override's bbox extent, in layout units — centres the
     // model on it.
     let facts = lua
@@ -186,9 +185,10 @@ fn arrow_wrapper(lua: &Lua, which: Arrow) -> mlua::Result<Option<Table>> {
     id.map(|id| frame_wrapper(lua, id)).transpose()
 }
 
-/// `UpdateWorldMapArrowFrames()` (§2.3): for each existing arrow, re-centre the model on its
-/// rect and copy the camera-tracked object's facing — the player's, which the app pushes with
-/// the world-map feed — into its rotation about +Z. No player → neither facing moves.
+/// `UpdateWorldMapArrowFrames()` (`0x4a8d10`/`0x4a7c20`): for each existing arrow, re-centre the
+/// model on its rect and copy the camera-tracked object's facing — the player's, which the app
+/// pushes with the world-map feed — into its rotation about +Z. No player → neither facing
+/// moves.
 fn update(lua: &Lua) -> mlua::Result<()> {
     for which in [Arrow::World, Arrow::Mini] {
         let Some(wrapper) = arrow_wrapper(lua, which)? else {
@@ -212,12 +212,13 @@ fn update(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// `Position…("point", "frame" [, relativePoint] [, offsetX, offsetY])` (§2.4): silent with no
-/// arrow; args 1 and 2 must be strings (a number is one) else the usage raise; the point through
-/// the same table `SetPoint` reads, else `Unknown frame point`; the frame by name — `$parent`
-/// expanded against the arrow's parent, then `_G` — else `Couldn't find frame named '%s'`, and
-/// the arrow itself `Error: %s is anchored to itself`; a non-string third argument means
-/// `relativePoint = point` and zero offsets with no error; offsets only when both are numbers.
+/// `Position…("point", "frame" [, relativePoint] [, offsetX, offsetY])` (`0x4a8d20`/`0x4a8f20`):
+/// silent with no arrow; args 1 and 2 must be strings (a number is one) else the usage raise;
+/// the point through the same table `SetPoint` reads, else `Unknown frame point`; the frame by
+/// name — `$parent` expanded against the arrow's parent, then `_G` — else `Couldn't find frame
+/// named '%s'`, and the arrow itself `Error: %s is anchored to itself`; a non-string third
+/// argument means `relativePoint = point` and zero offsets with no error; offsets only when both
+/// are numbers.
 fn position(lua: &Lua, which: Arrow, args: [Value; 5]) -> mlua::Result<()> {
     let Some(arrow) = arrow_wrapper(lua, which)? else {
         return Ok(());
@@ -278,8 +279,8 @@ fn position(lua: &Lua, which: Arrow, args: [Value; 5]) -> mlua::Result<()> {
     )
 }
 
-/// `Show…([shown])` (§2.5): silent with no arrow; the never-raising boolean coercion with a
-/// default of true (absent → show, `nil` → hide).
+/// `Show…([shown])` (`0x4a9120`/`0x4a9170`): silent with no arrow; the never-raising boolean
+/// coercion with a default of true (absent → show, `nil` → hide).
 fn show(lua: &Lua, which: Arrow, args: MultiValue) -> mlua::Result<()> {
     let Some(arrow) = arrow_wrapper(lua, which)? else {
         return Ok(());

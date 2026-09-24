@@ -7,7 +7,7 @@
 //! other feed uses; what the reference keeps in a process global (`0xb71e7c`, an array of DBC row
 //! ids re-walked on demand) we keep as the resolved answer.
 //!
-//! **Return shape VERIFIED** at `0x4c5a70` (wow-re `system/ui/scratch/worldstate-ui-law.md`).
+//! **Return shape** at `0x4c5a70`.
 //! Worth stating what it is *not*: this is a **ten**-value return, and it carries **no `uiType` and
 //! no `hidden`** — those are a later expansion of the API, and a client that answered twelve values
 //! here would hand `WorldStateFrame` its icon path where it expects a number.

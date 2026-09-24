@@ -10,16 +10,16 @@
 //! model's pending-event queue (fired at the next tick — the reference's synchronous fire is a
 //! repaint trigger, and one tick is invisible at frame rate).
 //!
-//! Selection encoding (the Lua-visible one, wow-re-confirmed — the client's internal indices
-//! `+1`): continent `0` = the world sheet, `1..` = the catalog's continents; zone `0` = the
+//! Selection encoding (the Lua-visible one, the client's internal indices `+1` — `0x4a7ed0`/
+//! `0x4a7f00`): continent `0` = the world sheet, `1..` = the catalog's continents; zone `0` = the
 //! whole continent, `1..` = that continent's zone list. The catalog's *order* defines those
 //! indices everywhere (dropdowns, `SetMapZoom`, the feed) — the app builds it under the
-//! verified rules (WorldMapArea file order for continents, case-insensitive display-name sort
-//! for zones; wow-re Q1(d)/Q3(b) verdicts, 2026-07-07).
+//! verified rules (WorldMapArea file order for continents, `0x4a5d00`; case-insensitive
+//! display-name sort for zones, `0x4a6390`).
 //!
 //! …and a **third** selection state beside that pair: the **direct area**, the map of an
 //! instance — a battleground, a dungeon — which is no continent's child and so falls out of both
-//! lists (wow-re `system/ui/scratch/worldmap-direct-area-selection.md`). The reference does not
+//! lists (`0x4a67a0`). The reference does not
 //! encode it inside `(continent, zone)`: it carries THREE `.data` cells, and `continent == -2`
 //! with a `WorldMapArea` row **ID** in the third one IS that state ([`WorldMapState::direct_area`]).
 //! Inside Warsong Gulch a client without it answers `GetMapInfo() == nil`, and the stock
@@ -28,10 +28,10 @@
 //!
 //! Continent-level hover/click resolve through the pushed **zone grid** — the 128×128 area
 //! bitmap (`Interface\WorldMap\<Continent>.zmp`, remapped app-side to 1-based zone indices; the
-//! source + cell law are wow-re-verified, `0x4a6ec0` / the Q1 §5 verdict 2026-07-07). The cell
+//! source + cell law read at `0x4a5feb`/`0x4a6ec0`). The cell
 //! law itself is transcribed here ([`area_grid_cell`]) rather than in the app's `map_proj`
 //! because its only callers are these bindings. `UpdateMapHighlight` answers per level exactly
-//! as `0x4a7fa0` does (wow-re 15b2a8ea): at continent level the hovered zone's name **and** its
+//! as `0x4a7fa0` does: at continent level the hovered zone's name **and** its
 //! highlight quad; at zone level a **name only** — a revealed overlay's sub-area when the cursor
 //! is inside its `WorldMapOverlay` hit rect, else the neighbouring zone or city whose grid cell
 //! the cursor is in through the displayed zone's rect window, never the displayed zone itself —
@@ -60,7 +60,7 @@ pub struct WorldMapZoneView {
     pub map_file: String,
     /// This zone's WorldMapArea loc rect `(left, right, top, bottom)` — the window the continent
     /// highlight sizes/seats against, and the rect the zone-level `ProcessMapClick` un-lerps
-    /// through (wow-re 15b2a8ea: the zone is a rect window onto the one per-continent bitmap).
+    /// through (`0x4a6ec0`: the zone is a rect window onto the one per-continent bitmap).
     pub loc_rect: (f32, f32, f32, f32),
     /// The zone's discovery overlays (WorldMapOverlay rows) — the art that fills the parchment
     /// as sub-areas are explored (`GetNumMapOverlays`/`GetMapOverlayInfo`).
@@ -70,8 +70,7 @@ pub struct WorldMapZoneView {
 /// One **map landmark** — a POI icon on the displayed map (`GetNumMapLandmarks` /
 /// `GetMapLandmarkInfo`). The app projects it, so what arrives here is already map UV.
 ///
-/// Two sources feed it, in the reference's own order (its builder `0x4a67a0`, VERIFIED in wow-re
-/// `system/ui/scratch/gossip-poi-marker.md` §8):
+/// Two sources feed it, in the reference's own order (its builder `0x4a67a0`):
 ///
 /// - the **`AreaPOI.dbc` rows** that survive the builder's level-flag, exploration and
 ///   world-state gates — the town and capital icons, the capitals' "Under Attack" markers, and the
@@ -110,8 +109,8 @@ pub struct WorldMapOverlayView {
     pub explore_bits: Vec<u32>,
     /// The hover hit rect `(top, left, bottom, right)`, px of the 1002×668 detail frame — the
     /// DBC's own `HitRect*` fields. The zone-level `UpdateMapHighlight` scales it by 1/1002 and
-    /// 1/668 and tests the normalized cursor against it, both edges inclusive (wow-re 15b2a8ea
-    /// §1d, `0x4a7ffc..0x4a80ea`).
+    /// 1/668 and tests the normalized cursor against it, both edges inclusive
+    /// (`0x4a7ffc..0x4a80ea`).
     pub hit_rect: (u32, u32, u32, u32),
     /// The name that hover shows inside the rect: the localized AreaTable name of the overlay's
     /// FIRST area slot (`0x4a7fa0` reads `+0x8` only). `None` when that slot resolves to no row —
@@ -123,8 +122,7 @@ pub struct WorldMapOverlayView {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorldMapContinentView {
     /// The display name — Map.dbc's localized MapName ("Eastern Kingdoms", "Kalimdor"), the
-    /// client's own dropdown-label source (`0x4a65a0`; wow-re Q3(a) verdict), never the art
-    /// folder string.
+    /// client's own dropdown-label source (`0x4a65a0`), never the art folder string.
     pub name: String,
     /// The `Interface\WorldMap\<file>\` art folder.
     pub map_file: String,
@@ -184,11 +182,11 @@ fn area_grid_cell(loc: (f32, f32, f32, f32), u: f32, v: f32) -> Option<usize> {
 /// cell's 1-based index into the continent's `zones`, or `None` off-land / off-grid / at world
 /// level. The rect that windows the one per-continent 128×128 bitmap is the continent's own loc
 /// rect at continent level, the CURRENT zone's loc rect at zone level — there is no per-zone
-/// bitmap, a zone/city is just a different rect window (wow-re 15b2a8ea, FUN_004a6ec0 §1c). This
+/// bitmap, a zone/city is just a different rect window (`0x4a6ec0`). This
 /// is what lets a click on a city's footprint from its neighbouring zone map drill into the city.
 fn grid_area(state: &WorldMapState, u: f32, v: f32) -> Option<u16> {
     // The direct-area state has no bitmap and is refused before the cell law runs: `0x4a6ec0`
-    // opens `cmp esi,-2; je 0x4a70ed` (wow-re `worldmap-direct-area-selection.md` §6) — the chain
+    // opens `cmp esi,-2; je 0x4a70ed` — the chain
     // ships exactly three `.zmp` files and none of them is a battleground's. Explicit rather than
     // left to `c == 0` below, because "the world sheet" and "an instance map" are different
     // states that happen to share that cell.
@@ -215,7 +213,7 @@ fn grid_area(state: &WorldMapState, u: f32, v: f32) -> Option<u16> {
     }
 }
 
-/// Power-of-two round-up (≥ n, ≥ 1) — the client's `worldmap_pot_dim` round-up, used for the
+/// Power-of-two round-up (≥ n, ≥ 1) — the client's round-up at `0x4a833c`, used for the
 /// continent highlight's vertical texcoord crop (`texPercentageY = dim / potdim`).
 fn next_pow2(n: i64) -> i64 {
     let mut p = 1i64;
@@ -245,11 +243,11 @@ pub struct WorldMapState {
     /// The **direct-area selection**: the `WorldMapArea` row **ID** of an instance map, or `None`
     /// at every continent/zone/world selection.
     ///
-    /// The reference's selection is THREE `.data` cells, not two (wow-re
-    /// `worldmap-direct-area-selection.md` §1): `[0x84506c]` continent, `[0x845070]` zone,
-    /// `[0x845074]` direct. `continent == -2` IS this state, and the third cell then holds the
-    /// row's own id — **not** an index into [`Self::direct_areas`], which is only ever a lookup
-    /// table. The setter `0x4a67a0` keeps the two exclusive (`0x4a67c1` stores the id only on the
+    /// The reference's selection is THREE `.data` cells, not two: `[0x84506c]` continent,
+    /// `[0x845070]` zone, `[0x845074]` direct. `continent == -2` IS this state, and the third cell
+    /// then holds the row's own id — **not** an index into [`Self::direct_areas`], which is only
+    /// ever a lookup table.
+    /// The setter `0x4a67a0` keeps the two exclusive (`0x4a67c1` stores the id only on the
     /// `ecx == -2` leg and jumps past `0x4a67ea`'s `= -1`; every other leg reaches it), so
     /// `direct_area.is_some()` ⇒ `selection == (0, 0)` — enforced in [`store_selection`], the one
     /// writer.
@@ -310,7 +308,7 @@ fn explored_bit(explored: &[u32], n: u32) -> bool {
 const OVERLAY_RECIP_X: f32 = 1.0 / 1002.0;
 const OVERLAY_RECIP_Y: f32 = 1.0 / 668.0;
 
-/// The zone-level **overlay pre-search** (`0x4a7ffc..0x4a80ea`, wow-re 15b2a8ea §1d): the first
+/// The zone-level **overlay pre-search** (`0x4a7ffc..0x4a80ea`): the first
 /// REVEALED overlay whose hit rect contains the cursor names its first area. Both edges are
 /// inclusive; a rect with a zero-width edge never hits; a NaN cursor never hits; an overlay whose
 /// first area resolves to no AreaTable row is walked past, not stopped at. The list is the one
@@ -391,7 +389,7 @@ fn continent_hover(cont: &WorldMapContinentView, zone: &WorldMapZoneView) -> Opt
     })
 }
 
-/// `0x4a7fa0`'s level dispatch (wow-re 15b2a8ea §1a). Continent level: the grid cell's zone lights
+/// `0x4a7fa0`'s level dispatch. Continent level: the grid cell's zone lights
 /// up. Zone level: the overlay pre-search first, then the same grid re-windowed by the displayed
 /// zone's own rect (`0x4a7620`), which returns nothing for the displayed zone itself — and only the
 /// name-only tail is reachable from there (`0x4a812e`). World level: the continent highlight is
@@ -440,7 +438,7 @@ fn direct_row(state: &WorldMapState) -> Option<&WorldMapZoneView> {
 /// The displayed map's `WorldMapArea` row, if one is displayed: the selected zone, or — in the
 /// direct-area state — the instance map's own row. `0x4a6cf0` resolves both through the same id
 /// lookup, and `0x4a67a0`'s overlay half admits the `-2` state with the displayed key
-/// `= [0x845074]` (wow-re `worldmap-overlay-reveal-gate.md` §2), so a battleground's overlays
+/// `= [0x845074]`, so a battleground's overlays
 /// reveal under the explored-bit gate exactly as a zone's do — no free reveal.
 fn current_zone(state: &WorldMapState) -> Option<&WorldMapZoneView> {
     if state.direct_area.is_some() {
@@ -690,7 +688,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // unsigned bound, so `GetCurrentMapContinent()`'s `-1` on an instance map takes the empty
     // exit. That emptiness is load-bearing: it is what leaves `WorldMapZoneButton_OnClick` with
     // no button to fire, and so what stops a `SetMapZoom(-1, id)` from writing a bogus row id
-    // into the direct cell (wow-re §5.4).
+    // into the direct cell.
     g.set(
         "GetMapZones",
         lua.create_function(|lua, c: i64| {
@@ -761,7 +759,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetMapInfo() → mapFileName (the Interface\WorldMap\<name>\ folder). World level → nil —
     // the reference Lua's own `"World"` fallback exists because the client returned nil there
-    // (wow-re `worldmap-direct-area-selection.md` §5.1/§5.3).
+    // (`0x4a6cf0`).
     //
     // The name is `WorldMapArea` field[3], the **art-folder identifier** — "WarsongGulch", never
     // the localized "Warsong Gulch": `0x4a6cf0` reads `[row+0xc]` with no locale multiplier, in
@@ -790,15 +788,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // THREE values, always: `0x4a7e30` pushes all three unconditionally and returns
             // `mov eax,3` from its single `ret`, so the world-level answer is `nil, 0, 0` rather
             // than one nil. (Its four conditional jumps all sit inside slot 3's power-of-two
-            // round and none gates a push — wow-re §10 corrects the "no conditional jump at all"
-            // absolute this comment used to carry, without touching the conclusion.
-            // `arity_conf = exact`; decision 1845.)
+            // round and none gates a push. `arity_conf = exact`; decision 1845.)
             //
             // The two zeros are the map art's texture dimensions, which no caller reads: both
             // consumers bind slot 2 to a `textureHeight` local they never read again. They are
             // **0 on every instance map** in the reference too — `0x4a6d50` scans
             // `WorldMapContinent.dbc` for the row's mapID and that table ships only mapIDs
-            // {0, 1}, so the scan exhausts (§5.2).
+            // {0, 1}, so the scan exhausts.
             let file = match file {
                 Some(f) => Value::String(lua.create_string(&f)?),
                 None => Value::Nil,
@@ -853,7 +849,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ProcessMapClick(x, y) — normalized click within WorldMapButton (wow-re 15b2a8ea, Part 2).
+    // ProcessMapClick(x, y) — normalized click within WorldMapButton (`0x4a7f30`).
     // World level: pick the first continent whose sheet-rect contains the click (the 0x4a7100
     // AABB walk; the 5875 rects are disjoint). Continent OR zone level: identical instructions —
     // the 0x4a6ec0 grid cell through the CURRENT selection's rect (the continent's, or the current
@@ -888,7 +884,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UpdateMapHighlight(x, y) → name, fileName, texPctX, texPctY, textureX, textureY,
-    // scrollChildX, scrollChildY (wow-re 15b2a8ea, 0x4a7fa0) — the per-level law is [`hover`].
+    // scrollChildX, scrollChildY (`0x4a7fa0`) — the per-level law is [`hover`].
     // Eight values always: the frame reads `fileName` to decide whether a quad is drawn at all,
     // so a name-only answer carries a nil there and six zeros behind it.
     g.set(
@@ -933,7 +929,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetMapLandmarkInfo(i) → name, description, textureIndex, x, y — the i-th (1-based) landmark
-    // (return shape VERIFIED at `0x4a8740`, wow-re `system/ui/scratch/gossip-poi-marker.md`).
+    // (return shape at `0x4a8740`).
     // `textureIndex` indexes `Interface\Minimap\POIIcons`' 8×8 grid, already resolved app-side
     // through the reference's own leg (`0x4a8848`): a row's `Icon`, or the constant 15 at zone
     // level unless it carries `Flags & 0x80`; the guard's marker is its packet `Icon` verbatim.

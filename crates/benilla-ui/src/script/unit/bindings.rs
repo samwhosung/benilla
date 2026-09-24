@@ -111,9 +111,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // The gate is the BINDING's, not `with_unit`'s: `check_unit_token` lets a nil through by
     // design, because that is right for `UnitExists`, `UnitIsVisible` and eleven others. **"and
     // most of this family" is what this comment used to say, and it was the wrong way round** —
-    // wow-re has since censused all 83 entries of the table at `0x850438` and 53 of them gate and
-    // raise, with only 13 unit-token bindings quiet (decision 1834). These two were never the
-    // exception; they were an early instance of the rule.
+    // all 83 entries of the table at `0x850438` gate and raise in 53 cases, with only 13 unit-token
+    // bindings quiet (decision 1834). These two were never the exception; they were an early
+    // instance of the rule.
     for (name, usage, by_player) in [
         ("UnitIsTapped", r#"Usage: UnitIsTapped("unit")"#, false),
         (
@@ -154,7 +154,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // for a group member whose object the client does not hold (an out-of-range `party3`, any
     // `raidN`), where there is no descriptor to read. Neither is sufficient alone, which is why
     // this is not derivable from `IsPartyLeader()` + `GetPartyLeaderIndex()` however it is
-    // arranged (wow-re `ui/scratch/party-leader-and-nameplate-verbs.md`, G1 REFUTED).
+    // arranged.
     //
     // **No zero guard, and that is deliberate.** `IsPartyLeader 0x4e9130` short-circuits on a
     // `0:0` cached leader; this one does not. An unresolvable-but-non-raising token resolves to
@@ -205,18 +205,18 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // argument. The engine's real second argument is a strict `LUA_TBOOLEAN` and is not
             // modelled — no consumer passes it.
             //
-            // Value 1 — and the ONLY two nils a recognised token can produce (`0x517020`, wow-re
-            // `ui/scratch/binding-shape-arity-law.md` §2.1): the `"player"` fast path reads the
-            // local name buffer and pushes nil when it is empty (`0x51708c` → `0x5abdc0`; the
-            // `0x517083` this used to cite is the token's string *compare*, `call 0x64a4c0` —
-            // corrected 2261), and a token that resolves to GUID 0 pushes nil (`0x5170c0`).
+            // Value 1 — and the ONLY two nils a recognised token can produce (`0x517020`): the
+            // `"player"` fast path reads the local name buffer and pushes nil when it is empty
+            // (`0x51708c` → `0x5abdc0`; the `0x517083` this used to cite is the token's string
+            // *compare*, `call 0x64a4c0` — corrected 2261), and a token that resolves to GUID 0
+            // pushes nil (`0x5170c0`).
             // The empty-buffer nil is not an explicit push either: `0x517095` is
             // `lua_pushstring`, which falls through on NULL at `0x6f3895` into `lua_pushnil`. EVERY other path ends in a
             // string — the cached name, or `FrameScript_GetText("UNKNOWNOBJECT")`: `0x517220` for
             // a GUID with no object and no cache row, `0x609324` inside `CGUnit_C::GetUnitName`
             // for a unit whose name cache has not answered or is stale (a pet's is
-            // `petnamecache.wdb`, keyed by `UNIT_FIELD_PETNUMBER`, `pet-action-bar-api.md`
-            // §11c.6). A freshly called pet is that case by construction: `UNIT_PET` fires off the
+            // `petnamecache.wdb` (`0x554e10`), keyed by `UNIT_FIELD_PETNUMBER` (`0x6092b2`)). A
+            // freshly called pet is that case by construction: `UNIT_PET` fires off the
             // descriptor and the name lands a `CMSG_PET_NAME_QUERY` round-trip later, and stock
             // `PetStable.lua:129` concatenates the answer in between.
             //
@@ -279,7 +279,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitLevel (`0x517fc0`, §5-VERIFIED 2026-07-17): the raw UNIT_FIELD_LEVEL — a raw ≤ 0
+    // UnitLevel (`0x517fc0`): the raw UNIT_FIELD_LEVEL — a raw ≤ 0
     // VERBATIM (never −1) — or **−1** iff world-boss rank 3 (unconditional) / hostile
     // (reaction ≤ 1 internal) AND ≥ 10 levels above the player (inclusive). The FrameXML
     // target frame branches its skull on `<= 0` (`TargetFrame_CheckLevel`), so a level-0
@@ -309,7 +309,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitIsCorpse (`0x5161c0`, §5-VERIFIED 2026-07-17) → 1/nil: a pure OBJECT-TYPE check —
+    // UnitIsCorpse (`0x5161c0`) → 1/nil: a pure OBJECT-TYPE check —
     // the token resolves to a live TYPEID_CORPSE world object (a released player's remains).
     // NO health test: a dead mob or dead player is NOT a corpse (the ref target frame shows a
     // dead mob's level number, not the skull). Reads [`UnitState::corpse_object`], which no
@@ -322,7 +322,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitCanAttack (`0x516c50`, §5-VERIFIED 2026-07-17) → 1/nil: pure delegation to the
+    // UnitCanAttack (`0x516c50`) → 1/nil: pure delegation to the
     // `CanAttack 0x606980` predicate (decision 0172), read from the non-player token's app-fed
     // snapshot ([`UnitState::can_attack`]). Directional in the live API; our snapshot carries
     // the player→unit direction, the only order the shipped FrameXML calls
@@ -347,7 +347,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetQuestGreenRange (`0x4e17d0`, §5-VERIFIED 2026-07-17) — the green→grey boundary the
+    // GetQuestGreenRange (`0x4e17d0`) — the green→grey boundary the
     // FrameXML `GetDifficultyColor` buckets by (ref QuestLogFrame.lua l.593):
     // `GRAYBAND[min(playerLevel/5, 19)]` off the binary's `0x8076c0` table, byte-identical to
     // the `0x81dda8`/`0x80ae98` twins [`grey_band`] transcribes. No args; 0 with no player.
@@ -555,9 +555,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // No stock FrameXML file calls it, which is why nothing shipped ever raised on its absence;
     // addons do (`FuBar_DakSmak` colours its tooltip with it), and calling the nil global is what
-    // B385 reported. Last of the three verbs decision 1834 left loudly absent.
-    // Decision 2209 (wow-re `9f84e7e4`,
-    // `system/ui/scratch/unit-verbs-controlled-charmed-creaturetype.md` §4.2).
+    // B385 reported. Last of the three verbs decision 1834 left loudly absent. Decision 2209.
     g.set(
         "UnitIsPlusMob",
         lua.create_function(|lua, token: Option<String>| {
@@ -627,7 +625,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UnitInRaid(unit) → **the constant number 1** on a hit, nil on a miss. NOT an index, and
-    // never a raise (`0x516350`, wow-re `raid-roster-bindings.md` §1, §5-cross-checked).
+    // never a raise (`0x516350`).
     //
     // Three things about this binding are the opposite of the obvious guess, and all three are
     // read off its 83 bytes:
@@ -644,9 +642,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //    string, unlike its `GetRaidRosterInfo` sibling.
     //  * **The player is in the roster array**, so no `t == "player"` special case is needed here
     //    — unlike `UnitInParty` below, whose roster excludes the recipient.
-    // HasFullControl() → 1 | nil: the reference's `[0xb4b3e4]` read at `0x51a158` (wow-re
-    // `control-loss-and-restore.md`) — the control flag `SMSG_CLIENT_CONTROL_UPDATE` writes for
-    // the local player, which the stock unit menu greys its follow/trade rows on (1958).
+    // HasFullControl() → 1 | nil: the reference's `[0xb4b3e4]` read at `0x51a158` — the control
+    // flag `SMSG_CLIENT_CONTROL_UPDATE` writes for the local player, which the stock unit menu
+    // greys its follow/trade rows on (1958).
     g.set(
         "HasFullControl",
         lua.create_function(|lua, ()| {
@@ -658,7 +656,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // UnitPlayerOrPetInParty(unit) / UnitPlayerOrPetInRaid(unit) → 1 | nil: the unit is a
     // member of the group, or a member's pet — its owner (`UNIT_FIELD_SUMMONEDBY`, else the
     // charmer, else the creator: `UnitState::owner`) is. The bindings are registered
-    // (`0x5162f0` / `0x5163b0`) and delegate to a C++ predicate wow-re has not carved; the
+    // (`0x5162f0` / `0x5163b0`) and delegate to a C++ predicate not yet identified; the
     // owner reading is this file's, flagged in 1958.
     for (name, raid) in [
         ("UnitPlayerOrPetInParty", false),
@@ -797,13 +795,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // flags. All 1/nil, through the family's one push site (2043).
     //
     // **`UnitIsAFK`/`UnitIsDND` are OURS, not the reference's** — this comment used to claim they
-    // "follow the era shape from the start", which named the wrong authority. wow-re's raw byte
-    // census over the whole image finds ZERO occurrences of `UnitIsAFK`, `UnitIsDND`, `IsAFK` or
-    // `IsDND`, as bindings or as strings (positive control: `UnitIsPVP\0` and `UnitIsGhost\0`
-    // each return exactly 1) — `ui/scratch/nil-unit-token-arg-law.md` §11. 1.12 surfaces a
-    // member's AFK/DND state through `GetGuildRosterInfo` and the `CHAT_FLAG_AFK`/`CHAT_FLAG_DND`
-    // GlobalStrings; there is no unit predicate for it. They wear the family's shape because that
-    // is the right shape for an invention of ours to wear, not because a binding was read.
+    // "follow the era shape from the start", which named the wrong authority. A raw byte census
+    // over the whole image finds ZERO occurrences of `UnitIsAFK`, `UnitIsDND`, `IsAFK` or `IsDND`,
+    // as bindings or as strings (positive control: `UnitIsPVP\0` and `UnitIsGhost\0` each return
+    // exactly 1). 1.12 surfaces a member's AFK/DND state through `GetGuildRosterInfo` and the
+    // `CHAT_FLAG_AFK`/`CHAT_FLAG_DND` GlobalStrings; there is no unit predicate for it. They wear
+    // the family's shape because that is the right shape for an invention of ours to wear, not
+    // because a binding was read.
     g.set(
         "UnitIsConnected",
         lua.create_function(|lua, token: Value| {
@@ -998,9 +996,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // UnitSex(unit) → 2 male, 3 female (1 = neuter — no 1.12 unit feed produces it).
     //
     // **The absent/unstreamed leg is the NUMBER 2, not nil** — `UnitSex 0x517f9f` pushes the
-    // constant double 2.0 (`push 0x40000000; push 0`), which wow-re's
-    // `unit-predicate-return-shape.md` §4 carves as the numeric-getter contrast to the predicate
-    // family's `1.0`/nil: the numeric getters in this same table answer a number on the
+    // constant double 2.0 (`push 0x40000000; push 0`) — the numeric-getter contrast to the
+    // predicate family's `1.0`/nil: the numeric getters in this same table answer a number on the
     // unresolved leg, never nil. The shapes table agrees — this row is `(number)`, with no nil
     // alternative anywhere (decision 2118).
     g.set(
@@ -1039,11 +1036,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // Stage 3 is why **a PLAYER answers `"Humanoid"`, not nil**: `ChrRaces` col 9 is **7 for all
     // nine shipped race rows** and `CreatureType[7]` is `"Humanoid"`, while `[player+0xb30]` is
-    // never populated (§5-verified by a 4-hit writer census — the ctor zeroes it, two writers
-    // early-out on `key==0`, and the third is hard-gated on `OBJECT_FIELD_TYPE == 0x9`, an
-    // equality a player's `0x19` fails structurally). A creature-record-only reading answers nil
-    // there, which would have been wrong for every `UnitCreatureType("player")` and every
-    // `("target")` aimed at a player.
+    // never populated (a 4-hit writer census: the ctor zeroes it (`0x5fae1a`), two writers
+    // early-out on `key==0`, and the third is hard-gated on `OBJECT_FIELD_TYPE == 0x9`
+    // (`0x60b131`), an equality a player's `0x19` fails structurally). A creature-record-only
+    // reading answers nil there, which would have been wrong for every `UnitCreatureType("player")`
+    // and every `("target")` aimed at a player.
     //
     // **Stage 1 is NOT modelled, and it is the one divergence to know about.** A druid in Cat,
     // Bear, Dire Bear, Travel or Aquatic form — and a shaman in Ghost Wolf — answers `"Beast"` on
@@ -1223,7 +1220,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // token — the 1.12 binding takes no arguments). `ComboFrame` shows/hides on it, and the
     // combat-text COMBO_POINTS arm reads it.
     //
-    // TWO gates before the byte, transcribed from `0x51a190` (§5 byte-read, decision 0875) — the
+    // TWO gates before the byte, transcribed from `0x51a190` (decision 0875) — the
     // reference `ComboFrame.lua` carries no class check at all, so BOTH of them live here or
     // nowhere:
     //
@@ -1260,9 +1257,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // The rest-state trio (decisions 1082/1087) — player-level globals over the app's rest feed
     // ([`UiScript::set_rest_state`]), the MainMenuBar exhaustion tick's and the player frame's
-    // whole wire. Byte-VERIFIED, wow-re `system/ui/scratch/rested-xp-bindings.md` (a §5 pair +
-    // orchestrator arbitration): the surface is Exhaustion.dbc DATA, not client constants — the
-    // rows live in the model ([`UiScript::set_exhaustion_rows`]; shipped-table fallback).
+    // whole wire: the surface is Exhaustion.dbc DATA, not client constants — the rows live in the
+    // model ([`UiScript::set_exhaustion_rows`]; shipped-table fallback).
     //
     // GetRestState() → (stateID, stateName, multiplier) — `0x48d350`: the raw `PLAYER_BYTES_2`
     // byte 3 indexes Exhaustion.dbc DIRECTLY (the `[0xc0dd78]` ID→row array) and the triple is
@@ -1379,9 +1375,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // AssistUnit(unit) — select the *token's own* target (`0x489b80`; wow-re
-    // `object-layer/scratch/targeting-by-name.md` PART C, §5-cross-checked). The ASSISTTARGET
-    // binding's body is `AssistUnit("target")`, and `/assist`'s bare form is the same call.
+    // AssistUnit(unit) — select the *token's own* target (`0x489b80`). The ASSISTTARGET binding's
+    // body is `AssistUnit("target")`, and `/assist`'s bare form is the same call.
     //
     // The shared assist tail (`0x489bb2`–`0x489c07`, byte-identical to `AssistByName`'s) is three
     // steps and no more: read `UNIT_FIELD_TARGET` off the basis (`[[obj+0x110]+0x28]`), bail
@@ -1402,7 +1397,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // A nil/absent unit is ignored here rather than queued, like `TargetUnit`'s: the reference
     // emits game-message `0xb8` for the token it cannot parse, and that id→string table is
-    // runtime-populated BSS wow-re could not statically recover — the same known deviation
+    // runtime-populated BSS, not statically recoverable — the same known deviation
     // `TargetByName` already carries, and silence is better than an invented line.
     g.set(
         "AssistUnit",
@@ -1462,9 +1457,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // TargetByName(name [, exactMatch]) — select by NAME through the shared resolver `0x493aa0`
-    // (`0x489d60`; wow-re `object-layer/scratch/targeting-by-name.md`, a §5 trio + two pairs).
-    // The app already owns that resolver for `/target` (decision 0886, `crate::target::by_name`);
-    // this is the binding half, which 11 corpus addons call and the slash command bypassed.
+    // (`0x489d60`). The app already owns that resolver for `/target` (decision 0886,
+    // `crate::target::by_name`); this is the binding half, which 11 corpus addons call and the
+    // slash command bypassed.
     //
     // The four things this signature is not:
     //
@@ -1483,7 +1478,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     //  * **not silent on a miss** — the reference emits game-message `0x127` (named, nothing
     //    matched) or `0xb8` (null/empty name) and leaves the current target untouched. We keep
     //    the target untouched and say nothing: the id→string table is runtime-populated BSS that
-    //    wow-re could not statically recover, and inventing a line is worse than omitting one.
+    //    cannot be statically recovered, and inventing a line is worse than omitting one.
     //    Same known deviation the slash path already carries.
     //
     // A missing or wrong-typed first argument RAISES (`0x489d69 call 0x6f3510` → `0x489de1` →

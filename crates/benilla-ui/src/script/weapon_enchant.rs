@@ -4,7 +4,7 @@
 //! (`BuffFrame.lua:162-233`): the row polls this verb every frame, shows an icon per enchanted
 //! weapon, and counts its expiry down. Eight corpus addons call it as well.
 //!
-//! # The byte-verified signature (`0x4c9790`, `system/ui/ledger.tsv:1972`)
+//! # The byte-verified signature (`0x4c9790`)
 //!
 //! Zero arguments — the function never touches the Lua stack for input; `edi` is the state. **Six**
 //! return values on **every** path (`mov eax,0x6` at `0x4c993a`, `0x4c995b` and `0x4c998f`, the
@@ -49,11 +49,10 @@
 //!
 //! # The expiration is NOT the wire field
 //!
-//! The trap, and the reason this went through wow-re rather than being read off the update fields:
-//! `[D+0x50]`, the item's own enchantment **duration** dword, is read *only* as a non-zero presence
-//! gate (`0x4c981b test ecx,ecx`) — **its value is never returned**. The number comes from a
-//! client-local **absolute deadline** at `item+0x324[slot]`, written only by `0x5d9cc0` out of
-//! `SMSG_ITEM_ENCHANT_TIME_UPDATE` as `now_ms + seconds*1000`, and read back as
+//! The trap: `[D+0x50]`, the item's own enchantment **duration** dword, is read *only* as a
+//! non-zero presence gate (`0x4c981b test ecx,ecx`) — **its value is never returned**. The number
+//! comes from a client-local **absolute deadline** at `item+0x324[slot]`, written only by
+//! `0x5d9cc0` out of `SMSG_ITEM_ENCHANT_TIME_UPDATE` as `now_ms + seconds*1000`, and read back as
 //! `max(0, deadline − now)` (`0x5d9d00`: `0x5d9d15` clock, `0x5d9d2a sub`). **The wire carries
 //! seconds; this API returns milliseconds.** So a host stores a deadline and subtracts on read — it
 //! never ticks a countdown. `benilla::items::Countdowns` does exactly that, and

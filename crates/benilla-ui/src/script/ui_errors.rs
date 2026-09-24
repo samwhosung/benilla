@@ -6,8 +6,7 @@
 //! `UI_ERROR_MESSAGE` (`ui_action/feed.rs`) — which is byte-for-byte the reference route: catalog
 //! row → GlobalStrings text → FrameScript event `0xe0`, rendered by UIErrorsFrame.
 //!
-//! First tenant: `NotWhileDeadError` (decision 1507's open item, closed by the wow-re §5
-//! cross-check of 2026-08-21, recorded in wow-re `system/ui`): registration pair `0x83e398`,
+//! First tenant: `NotWhileDeadError` (decision 1507's open item): registration pair `0x83e398`,
 //! C body `0x48d340` = `push 0x7e; call 0x496720; xor eax,eax; ret` — no argument read, no
 //! dead-check of its own, 0 return values, and its catalog row (`0xb4be70`, key
 //! `ERR_PLAYER_DEAD`) names sound `"NONE"`, so the toast is silent. FrameXML decides *when* to
