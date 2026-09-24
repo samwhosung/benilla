@@ -24,7 +24,7 @@
 //! readers). WoW UI space is **y-up**: `top > bottom`, the screen root's rect is the
 //! physical screen (the anchor chain bottoms out at the `CSimpleTop` root), and `width = right −
 //! left`, `height = top − bottom`. Coordinates are screen pixels throughout; `scale` (layoutScale =
-//! effective scale, `effective_scale 0x76ac90`) scales only the per-anchor offsets and the
+//! effective scale, `0x76ac90`) scales only the per-anchor offsets and the
 //! `width/height` span.
 
 use std::collections::VecDeque;
@@ -199,8 +199,8 @@ pub struct LayoutInput {
     pub width: f32,
     /// Explicit height (`G+0x54`); `0.0` ⇒ derive from opposing anchors.
     pub height: f32,
-    /// `layoutScale` = effective scale (`parentScale · ownScale`, ε-gated; `effective_scale
-    /// 0x76ac90`); the px↔coord multiplier applied to offsets and the size span. Default `1.0`.
+    /// `layoutScale` = effective scale (`parentScale · ownScale`, ε-gated; `0x76ac90`); the
+    /// px↔coord multiplier applied to offsets and the size span. Default `1.0`.
     pub scale: f32,
     /// Clamp the assembled rect into `[0, extent]` per axis (`G` flags bit4; `assemble 0x767a20`).
     pub clamp: bool,

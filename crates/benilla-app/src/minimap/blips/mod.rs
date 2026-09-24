@@ -500,8 +500,8 @@ pub(crate) fn party_member_pos(
         .map(|(x, y)| (f32::from(x), f32::from(y)))
 }
 
-/// The party/corpse **rim arrows** — the out-of-range half of `place_party_raid_blips`
-/// (`0x6dad10`, VERIFIED): `d = √(dx²+dy²)`; over `0.8·radius` the member rides the 0.8 rim,
+/// The party/corpse **rim arrows** — the out-of-range half of the party blip placement
+/// (`0x6dad10`): `d = √(dx²+dy²)`; over `0.8·radius` the member rides the 0.8 rim,
 /// rotated to the atan2 bearing (the 5-slot sibling array `this+0x320`). Drawn with the POI arrows
 /// — before the player arrow; the in-range members become dots in [`emit_party_dots`], drawn last
 /// with the object dots.

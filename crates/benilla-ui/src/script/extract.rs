@@ -522,7 +522,7 @@ impl UiScript {
                         }
                     };
                     // A region draws at its owner's scale — same single hop as alpha (a region
-                    // has no scale of its own; the `effective_scale 0x76ac90` product lives on
+                    // has no scale of its own; the effective-scale product (`0x76ac90`) lives on
                     // frames).
                     let scale = owner_frame.map(|f| f.effective_scale).unwrap_or(1.0);
                     (rect, alpha, content, clip, scale)

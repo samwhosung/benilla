@@ -284,7 +284,7 @@ struct MinimapAssets {
     mask: Option<Handle<Image>>,
     arrow: Option<Handle<Image>>,
     /// The shared POI atlas (`Interface\Minimap\POIIcons`) — the corpse blip's skull cell
-    /// (decision 0308 §5) and any later POI rides it.
+    /// (decision 0308) and any later POI rides it.
     poi: Option<Handle<Image>>,
     /// The **four** rim-arrow arts — the flat `.blp` stand-ins for the one `minimapArrowModel`
     /// (`Rotating-MinimapArrow.mdx`) the reference re-animates per blip source. See
@@ -813,8 +813,8 @@ fn emit_minimap(
                 &mut quads,
                 &mut hover,
             );
-            // The party/corpse rim arrows (0434 phase 6b, `place_party_raid_blips`' out-of-range
-            // half) draw with the POI arrows — before the player arrow, per the client's order.
+            // The party/corpse rim arrows (0434 phase 6b, the out-of-range half of `0x6dad10`)
+            // draw with the POI arrows — before the player arrow, per the client's order.
             let corpse = death_net
                 .corpse
                 .filter(|cp| cp.display_map == map.0 as i32)
@@ -894,10 +894,10 @@ fn emit_minimap(
     }
     *blip_hover = hover;
 
-    // The corpse blip (decision 0308 §5): in range, the POIIcons skull cell (the same art the
+    // The corpse blip (decision 0308): in range, the POIIcons skull cell (the same art the
     // ref's world-map corpse uses; the engine-drawn in-range minimap corpse art is INTERIM until
     // named) at the corpse's true position, through the same north-up point mapping as the
-    // tiles. OUT of range the corpse is the fifth `place_party_raid_blips` slot — the rotating
+    // tiles. OUT of range the corpse is the fifth slot of `0x6dad10`'s placement — the rotating
     // rim arrow drawn with the party arrows above (the byte law replaced the old 0.92
     // edge-clamped skull). Same-map only (the display coords are the entrance for a dungeon
     // corpse).

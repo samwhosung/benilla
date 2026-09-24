@@ -346,10 +346,10 @@ enum DotName {
     Known(String),
 }
 
-/// The party **dots** — the in-range half of `place_party_raid_blips`: the blue `ObjectIcons`
-/// cell 4 at the member's true position, at the cell table's 1.3× scale (10.4 px on the frozen
-/// basis). Drawn last with the object dots (`0x4ed7b7`'s order: above the arrows and the player
-/// arrow).
+/// The party **dots** — the in-range half of the party blip placement `0x6dad10`: the blue
+/// `ObjectIcons` cell 4 at the member's true position, at the cell table's 1.3× scale (10.4 px on
+/// the frozen basis). Drawn last with the object dots (`0x4ed7b7`'s order: above the arrows and the
+/// player arrow).
 pub(in crate::minimap) fn emit_party_dots(
     ctx: &BlipCtx,
     group: &crate::ui_party::GroupState,
