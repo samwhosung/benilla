@@ -1,19 +1,8 @@
-//! What can this model move, at all? Print the [`M2AnimSummary`](benilla_formats::M2AnimSummary)
-//! — every animation channel family — plus the texture-transform (UV-scroll) tracks, for one M2 or
-//! for every M2 whose path matches a substring:
-//!
-//! ```text
-//! cargo run -p benilla-formats --example dump_model_anim -- 'World\...\RubyCrystalLarge01.m2'
-//! cargo run -p benilla-formats --example dump_model_anim -- maraudon      # every match
-//! ```
-//!
-//! This is the **falsifier for a flicker report**: if the summary says a model is
-//! fully static and the screen shows it changing every frame, the change is not coming from the
-//! model, and the hunt moves to what is drawn *over* it (particles, a second doodad) or to the
-//! renderer. Answering that for the Maraudon crystal took one run of this and one of
-//! `WOW_NO_PARTICLES=1`.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! Every animation channel family a model has ([`M2AnimSummary`](benilla_formats::M2AnimSummary))
+//! and its texture-transform tracks, for one M2 or each animated M2 matching a substring. A fully
+//! static model that changes on screen is being changed by something drawn over it, or by the
+//! renderer. Output is Blizzard data: never commit it.
+//! `cargo run -p benilla-formats --example dump_model_anim -- <m2 path | substring>`
 
 use std::io::Cursor;
 
@@ -24,8 +13,7 @@ fn main() -> anyhow::Result<()> {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;
 
-    // An exact path dumps in full; anything else is a substring sweep that prints only the models
-    // with something to say (a listing of "all static" is noise when you asked about a zone).
+    // An exact path dumps in full; a substring sweep skips fully static models.
     let exact = chain.contains(&arg);
     let names: Vec<String> = if exact {
         vec![arg]

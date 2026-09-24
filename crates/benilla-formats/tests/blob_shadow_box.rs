@@ -1,11 +1,5 @@
-//! Pins the unit blob shadow's box source against real build-5875 assets: the shadow sizes from
-//! the **current animation's** `M2Sequence` CAaBox (`0x711a20` — the
-//! same sequence-record box the pick volume and the ring's Stand-footprint read), so
-//! `ModelAnimation::bounds_min/max` must round-trip the raw record. The Stand-box horizontal
-//! extents of the four reference-traced creatures are already pinned by
-//! `selection_ring_radius.rs` *through* the nested-sqrt footprint; this asserts the **box itself**
-//! (the shadow consumes it raw: clamp ±5, scale, AA-bound — no compression). Skips when the
-//! gitignored client data isn't present.
+//! The unit blob shadow sizes from the Stand sequence's `M2Sequence` box (`0x711a20`), used raw
+//! (clamped to ±5, then scaled), so `ModelAnimation::bounds_min/max` must round-trip the record.
 
 use benilla_formats::{open_chain, parse_m2_animations};
 
@@ -14,8 +8,7 @@ fn stand_box_extents_match_reference() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = open_chain(&data).expect("open chain");
 
-    // (model, Stand-box horizontal extents (dx, dy) — measured straight off the real sequence
-    // records).
+    // (model, Stand box dx, dy), measured off the real sequence records.
     let cases = [
         ("Creature\\Chicken\\Chicken.m2", 0.532_f32, 0.382_f32),
         ("Character\\Human\\Male\\HumanMale.m2", 0.913, 1.080),
@@ -23,7 +16,7 @@ fn stand_box_extents_match_reference() {
     for (path, dx, dy) in cases {
         let bytes = chain.read_file(path).expect(path);
         let anims = parse_m2_animations(&bytes);
-        // Stand (anim id 0)'s head variation — the box the idle shadow projects.
+        // Stand's first variation: the box the shadow always projects.
         let stand = anims
             .iter()
             .find(|a| a.anim_id == 0)
@@ -39,12 +32,10 @@ fn stand_box_extents_match_reference() {
             "{path}: Stand box dy {:.3} != reference {dy}",
             bmax[1] - bmin[1]
         );
-        // The box is a real volume: a degenerate Z extent would zero the shadow's vertical reach.
         assert!(
             bmax[2] > bmin[2],
             "{path}: Stand box has no vertical extent"
         );
-        // And the centre derives from the same corners (the sphere fields already shipped).
         for i in 0..3 {
             assert!(
                 ((bmin[i] + bmax[i]) * 0.5 - stand.bounds_center[i]).abs() < 1e-4,

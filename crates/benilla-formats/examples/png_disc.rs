@@ -1,6 +1,6 @@
-//! TEMP: what fraction of a captured minimap disc is the composite's black clear.
-//! `cargo run -p benilla-formats --example png_disc -- <png> [cx cy r]` — defaults to the whole
-//! image's inscribed circle, which is what the `WOW_MM_PROBE` crop is.
+//! The share of a captured minimap disc that is the composite's black clear; the default circle is
+//! the image's inscribed one, which is the `WOW_MM_PROBE` crop.
+//! `cargo run -p benilla-formats --example png_disc -- <png> [cx cy r]`
 fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let img = image::open(&a[0])?.to_rgb8();

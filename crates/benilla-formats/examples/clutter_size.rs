@@ -1,28 +1,17 @@
-//! **How big is one tuft, and how much DEPTH does it span?** — the geometry half of the
-//! "why does the fade cut leaf-by-leaf instead of pixel-by-pixel" question.
-//!
-//! `cargo run -p benilla-formats --example clutter_size`
-//!
-//! The fade boundary is a **plane** at a fixed view depth (the reference texgens camera-space Z).
-//! Whether that plane *slices* a tuft — some of it drawn, the rest gone, a per-pixel cut — or
-//! passes it by in a single frame depends on how much view depth one tuft occupies. A tuft that
-//! spans 1 yd of depth is sliced for as long as it takes the player to walk 1 yd. A tuft that
-//! spans 5 cm is, for practical purposes, either wholly in or wholly out: it pops.
-//!
-//! So this prints, per detail model: the world-space bounding box, the tuft's **depth span at the
-//! worst yaw** (its horizontal diagonal — the widest it can present to the camera), and the
-//! screen-space size that implies at the 61.11 yd cutout crossing.
+//! Each detail model's size and the view depth one tuft spans. The fade boundary is a plane at a
+//! fixed view depth (the reference texgens camera-space Z), so a deep tuft is sliced and a thin
+//! one pops. `cargo run -p benilla-formats --example clutter_size`
 
 use std::collections::BTreeSet;
 
-/// Vertical FOV benilla's camera runs at (Bevy's `PerspectiveProjection` default, ≈ the
-/// reference's 44.1°) over a 1080-tall viewport — the same basis `clutter_state` uses.
+/// Pixels per yard at `distance` for benilla's 45° vertical FOV (the reference's is ≈44.1° at
+/// 16:9) on a 1080-tall viewport, the same basis as `clutter_state`.
 fn px_per_yard(distance: f32) -> f32 {
     let fov: f32 = std::f32::consts::PI / 4.0;
     (1080.0 / 2.0) / ((fov / 2.0).tan() * distance)
 }
 
-/// Where the `detailDoodadAlpha` = 128 cutout erases even a fully-opaque texel.
+/// The view depth where the 128/255 cutout erases even an opaque texel.
 const CROSSING: f32 = 61.113;
 
 fn main() -> anyhow::Result<()> {
@@ -109,17 +98,10 @@ fn main() -> anyhow::Result<()> {
          the per-pixel slice. Below roughly a tenth of a yard it is a single-frame pop instead."
     );
 
-    // **Which mip a tuft is sampled at, and why the answer moves with the window.** This is the
-    // number the whole look turns on: the shipped Elwynn/Westfall/AeriePeaks atlases carry a binary
-    // alpha pyramid, and a fragment can only hold full alpha — and so die at the same depth as
-    // every other fragment of its leaf — inside a 2x2 all-opaque texel neighbourhood. Those run out
-    // between mip 2 and mip 3 (179/56/10/0/0/0 for levels 0-5, counted on the dominant Elwynn
-    // cell), so sampling past ~3 erodes continuously and sampling below it takes leaves whole.
-    //
-    // The reference's `+0.25` stage-0 LOD bias buys a quarter of a mip toward that cliff — but the
-    // sample LOD falls as the viewport grows, so the SAME bias lands differently on a bigger
-    // window. The reference itself was measured at lambda 2.9-3.3 in a 1152x648 capture and
-    // lambda ~2.45 at 1920x1080, i.e. the reference pops leaf-by-leaf at a modern resolution too.
+    // The sampled mip decides the cut: on the binary-alpha atlases a fragment keeps full alpha only
+    // inside an all-opaque 2x2 neighbourhood, which runs out between mip 2 and 3, so past ~3 a tuft
+    // erodes and below it leaves cross whole. The reference biases stage 0 by +0.25 (`0x6813d0`);
+    // its lambda was measured at 2.9-3.3 at 1152x648, and ~2.45 at 1920x1080 is computed from that.
     const DENSITY: f32 = 100.0; // texels per yard, the median from `clutter_state`
     println!("\nsampled mip at the {CROSSING:.1} yd crossing (median {DENSITY:.0} texels/yd art):");
     for height in [648.0f32, 1080.0, 1440.0, 2160.0] {

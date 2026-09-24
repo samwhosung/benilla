@@ -1,21 +1,10 @@
-//! Lock.dbc — the requirements a lockable GameObject (or item) carries. A
-//! GameObject's template `lockId` (a type-specific slot of its query `data[]`) indexes this table;
-//! each lock has up to 8 requirement **slots**. Interacting with a locked object casts a *known*
-//! spell whose `SPELL_EFFECT_OPEN_LOCK` `EffectMiscValue` matches a **skill** slot's `LockType`
-//! index (mining / herbalism / lockpicking), or consumes the **item** slot's key. A `lockId` of 0,
-//! or a row whose every slot is empty, means "no lock" — the object opens by `CMSG_GAMEOBJ_USE`
-//! instead of a cast (the split in the use handler `0x5f33e0`).
+//! `Lock.dbc`: the requirements of a lockable GameObject or item, up to 8 slots per lock. Opening
+//! casts a known spell whose `SPELL_EFFECT_OPEN_LOCK` `EffectMiscValue` matches a skill slot's
+//! `LockType` index, or uses an item slot's key. A `lockId` of 0, or a row of empty slots, is no
+//! lock: the object opens by `CMSG_GAMEOBJ_USE` instead (the use handler `0x5f33e0`).
 //!
-//! Layout verified against build 5875 (mangos `LockEntry`, `DBCStructure.h`, and the reference's
-//! `[lockRec+0x24]` = `Index[0]` = column 9 at `0x5f84af`): **33 fields** — `ID@0`,
-//! `Type[8]@1..8`, `Index[8]@9..16`, `Skill[8]@17..24`, `Action[8]@25..32`.
-//!
-//! **`Action` is a gate, not a label**. Before the client's lock resolver
-//! (`0x5f83d0`) will even *consider* a slot, it asks `0x5f81d0(gameObject, Action[i])` — a
-//! predicate over the GameObject's own **state** and its `GO_FLAG_LOCKED` wire bit. See
-//! [`LockSlot::available`]. Skipping it is why "any locked door opens on right-click": nearly every
-//! keyed door in 5875 carries a spare `Quick Open` slot with `Action = 0`, and Action 0 means
-//! *"only when the object is NOT flagged locked"*.
+//! 33 fields: `ID`, `Type[8]`, `Index[8]`, `Skill[8]`, `Action[8]` (vmangos `LockEntry`; the
+//! reference reads `Index[0]` at `[lockRec+0x24]`, `0x5f84af`).
 
 use std::collections::HashMap;
 
@@ -26,70 +15,58 @@ use benilla_dbc::{FieldType, Schema, SchemaField};
 use crate::dbc::{parse, u32_at};
 
 const LOCK: &str = "DBFilesClient\\Lock.dbc";
-/// The file's column count (must equal the DBC header `field_count` — `benilla-dbc` enforces it).
+/// The column count, which `benilla-dbc` checks against the header.
 const LOCK_FIELDS: usize = 33;
 /// A lock has up to 8 requirement slots (`MAX_LOCK_CASE`).
 pub const MAX_LOCK_SLOTS: usize = 8;
 
-/// `Lock.dbc` `Type[i]` — a slot's key kind (mangos `LockKeyType`).
+/// `Type[i]`, a slot's key kind (vmangos `LockKeyType`): an empty slot.
 pub const LOCK_KEY_NONE: u32 = 0;
-/// The slot is opened by holding a **key item**; `LockSlot::index` is that item's entry.
+/// A key-item slot; `LockSlot::index` is the item's entry.
 pub const LOCK_KEY_ITEM: u32 = 1;
-/// The slot is opened by a **skill** (mining / herbalism / lockpicking); `LockSlot::index` is the
-/// `LockType.dbc` index the opener spell's `EffectMiscValue` must match, `LockSlot::skill` the
-/// required skill value.
+/// A skill slot; `LockSlot::index` is the `LockType.dbc` index the opening spell's
+/// `EffectMiscValue` must match, `LockSlot::skill` the skill value it needs.
 pub const LOCK_KEY_SKILL: u32 = 2;
 
-/// One of a lock's up-to-8 requirement slots. An all-zero slot is empty (unused).
+/// One requirement slot; an all-zero slot is empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LockSlot {
-    /// `LOCK_KEY_NONE` / `LOCK_KEY_ITEM` / `LOCK_KEY_SKILL`.
+    /// `LOCK_KEY_NONE`, `LOCK_KEY_ITEM` or `LOCK_KEY_SKILL`.
     pub key_type: u32,
-    /// Key item entry (ITEM) or `LockType` index (SKILL); `0` when empty.
+    /// Key item entry (item) or `LockType` index (skill); 0 when empty.
     pub index: u32,
-    /// Required skill value (SKILL slots); `0` otherwise — and `0` does **not** mean "free": the
-    /// client substitutes `GAMEOBJECT_LEVEL × 5` for it (`0x5f84be`).
+    /// The skill value a skill slot needs. 0 is not free: the reference substitutes
+    /// `GAMEOBJECT_LEVEL * 5` (`0x5f84be`).
     pub skill: u32,
-    /// `Action[i]` — which *operation* this slot performs, and the gate on when it applies.
-    /// See [`LockSlot::available`].
+    /// The slot's operation, which gates when it applies ([`LockSlot::available`]).
     pub action: u32,
 }
 
-/// `GAMEOBJECT_STATE` (vmangos `GOState`) — the client mirrors it at `go+0x27c` and every gate
-/// below reads that mirror, not the wire (a chest's lid is opened client-side, so the two differ).
+/// `GAMEOBJECT_STATE` (vmangos `GOState`). The gates read the client's mirror at `go+0x27c`, not
+/// the wire: a chest's lid opens client-side, so the two differ.
 pub const GO_STATE_ACTIVE: u32 = 0;
 pub const GO_STATE_READY: u32 = 1;
 pub const GO_STATE_ACTIVE_ALTERNATIVE: u32 = 2;
 
 impl LockSlot {
-    /// Whether this slot applies to a GameObject right now — the client's per-slot gate
-    /// **`0x5f81d0(this = GO, Action[i])`**, byte-transcribed. Both legs of the
-    /// lock resolver `0x5f83d0` call it (`0x5f8450` for a SKILL slot, `0x5f8547` for a KEY slot)
-    /// and **skip the slot** when it answers false, so a gated-out slot can neither satisfy the
-    /// lock nor be opened.
-    ///
-    /// `go_state` is the client's stored state (`go+0x27c`, our `GoAnim::state`); `flag_locked` is
-    /// `GAMEOBJECT_FLAGS & GO_FLAG_LOCKED (0x2)`. The `Action` values are operations:
+    /// Whether this slot applies to a GameObject now: the reference's per-slot gate `0x5f81d0`.
+    /// Both legs of the lock resolver `0x5f83d0` skip a slot it refuses (`0x5f8450` for a skill
+    /// slot, `0x5f8547` for a key), so that slot can neither satisfy the lock nor open it.
+    /// `go_state` is the client's stored state (`go+0x27c`); `flag_locked` is `GO_FLAG_LOCKED`
+    /// (`0x2`) in `GAMEOBJECT_FLAGS`.
     ///
     /// | Action | operation | applies when |
     /// |--------|-----------|--------------|
-    /// | 0 | open | state READY **and** `GO_FLAG_LOCKED` **clear** (`0x5f8212..0x5f8220`) |
-    /// | 1 | unlock | state READY **and** `GO_FLAG_LOCKED` **set** (`0x5f822d..0x5f823a`) |
-    /// | 2 | close | state ACTIVE (`0x5f8247`) |
-    /// | 3 | (state-only) | state READY |
-    /// | 4 | (alt-state) | state ALTERNATIVE (`0x5f81ff`) |
-    /// | other | — | any state but ALTERNATIVE |
+    /// | 0 | open | READY and `GO_FLAG_LOCKED` clear (`0x5f8212`-`0x5f8220`) |
+    /// | 1 | unlock | READY and `GO_FLAG_LOCKED` set (`0x5f822d`-`0x5f823a`) |
+    /// | 2 | close | ACTIVE (`0x5f8247`) |
+    /// | 3 | | READY |
+    /// | 4 | | ALTERNATIVE (`0x5f81ff`) |
+    /// | other | | any state but ALTERNATIVE |
     ///
-    /// ALTERNATIVE (2) blocks every action but 4 (`0x5f81e1`).
-    ///
-    /// **This is the whole of the "any locked door opens on right-click" report.** The keyed doors
-    /// (Scholomance 1159, Shadowforge 680, Stratholme 879, SM 299, Deadmines 202 …) each carry a
-    /// spare `Quick Open` SKILL slot — `LockType 10`, `Skill 0`, **`Action 0`** — and *every*
-    /// character knows spell 6247 "Opening", which opens LockType 10 with an effect value of 100.
-    /// Without this gate that slot satisfies the lock and the door opens. With it, Action 0 is
-    /// refused the moment `GO_FLAG_LOCKED` is set — which every one of those doors sets. The
-    /// Searing Gorge gate (lock 84) was the reporter's counter-example precisely because it has no
-    /// `Action 0` slot at all: only the key (Action 1) and Pick Lock (Action 1).
+    /// ALTERNATIVE blocks every action but 4 (`0x5f81e1`). Without this gate a locked door opens
+    /// on right-click: keyed doors carry a spare Quick Open skill slot (`LockType` 10, skill 0,
+    /// Action 0) that spell 6247, Opening, which every character knows, satisfies.
     pub fn available(&self, go_state: u32, flag_locked: bool) -> bool {
         if self.action == 4 {
             return go_state == GO_STATE_ACTIVE_ALTERNATIVE;
@@ -109,30 +86,27 @@ impl LockSlot {
     }
 }
 
-/// `lockId → its 8 requirement slots`, from Lock.dbc.
+/// `lockId` to its 8 requirement slots.
 pub struct LockCatalog {
     locks: HashMap<u32, [LockSlot; MAX_LOCK_SLOTS]>,
 }
 
 impl LockCatalog {
-    /// Build a catalog from explicit rows — tests and tools; the game path is
-    /// [`load_lock_catalog`].
+    /// A catalog from explicit rows, for tests and tools.
     pub fn from_rows(rows: impl IntoIterator<Item = (u32, [LockSlot; MAX_LOCK_SLOTS])>) -> Self {
         Self {
             locks: rows.into_iter().collect(),
         }
     }
 
-    /// The 8 requirement slots for a `lockId`, or `None` if the id isn't in the table (treat as no
-    /// lock). A returned row may still be all-empty — [`LockCatalog::is_locked`] is the "must cast"
-    /// test.
+    /// A `lockId`'s slots; an absent id is no lock, and a row may still be all empty:
+    /// [`LockCatalog::is_locked`] is the must-cast test.
     pub fn slots(&self, lock_id: u32) -> Option<&[LockSlot; MAX_LOCK_SLOTS]> {
         self.locks.get(&lock_id)
     }
 
-    /// Whether a `lockId` names a real lock (present, with at least one non-empty slot) — i.e. the
-    /// object opens by a cast, not `CMSG_GAMEOBJ_USE`. A `0` id or an absent/all-empty row is "no
-    /// lock".
+    /// Whether the object opens by a cast rather than `CMSG_GAMEOBJ_USE`: a present row with at
+    /// least one non-empty slot.
     pub fn is_locked(&self, lock_id: u32) -> bool {
         lock_id != 0
             && self
@@ -158,7 +132,7 @@ fn schema() -> Schema {
     s
 }
 
-/// Load Lock.dbc from the patch chain into a [`LockCatalog`].
+/// Load `Lock.dbc` off the patch chain.
 pub fn load_lock_catalog(chain: &mut Chain) -> Result<LockCatalog> {
     let bytes = chain
         .read_file(LOCK)
@@ -183,9 +157,6 @@ pub fn load_lock_catalog(chain: &mut Chain) -> Result<LockCatalog> {
 mod tests {
     use super::*;
 
-    /// The Type/Index/Skill column offsets on the real build-5875 `Lock.dbc` — a column slip fails
-    /// loudly. Anchors: Copper Vein (lockId 38, a Mining node) and Silverleaf (lockId 29, an
-    /// Herbalism node), both skill 1 — the lowest of their profession. Skips without client data.
     #[test]
     fn real_lock_catalog_reads_skill_slots() {
         let data = crate::wow_data_or_skip!();
@@ -193,11 +164,8 @@ mod tests {
         let cat = load_lock_catalog(&mut chain).expect("load Lock.dbc");
         assert!(!cat.is_empty(), "Lock.dbc parsed empty");
 
-        // Copper Vein (gameobject_template 1731, chest.data0 = lockId 38): a MINING skill lock. The
-        // real row is `{Type[0]=2 SKILL, Index[0]=3 (Mining LockType), Skill[0]=0}` — `Type[0]` at
-        // col 1, `Index[0]` at col 9, `Skill[0]` at col 17; a column slip lands elsewhere. (Lock.dbc
-        // stores 0 in `Skill` for gathering nodes — the profession *spell* is the gate, not a value
-        // here; the server enforces the node's grey level.)
+        // Copper Vein (gameobject 1731, lock 38), Mining: `Type[0]` 2 at column 1, `Index[0]` 3 at
+        // column 9, and `Skill[0]` 0 at column 17, as on every gathering node.
         let vein = cat.slots(38).expect("lockId 38 (Copper Vein)");
         assert_eq!(
             vein[0].key_type, LOCK_KEY_SKILL,
@@ -217,8 +185,7 @@ mod tests {
             "a mining vein is a real lock (must cast, not USE)"
         );
 
-        // Silverleaf (gameobject_template 1617, lockId 29): an HERBALISM skill lock — LockType index
-        // 2, distinct from mining's 3.
+        // Silverleaf (gameobject 1617, lock 29), a Herbalism lock: `LockType` index 2.
         let herb = cat.slots(29).expect("lockId 29 (Silverleaf)");
         assert_eq!(
             herb[0].key_type, LOCK_KEY_SKILL,
@@ -227,14 +194,11 @@ mod tests {
         assert_eq!(herb[0].index, 2, "Herbalism is LockType index 2");
         assert_ne!(herb[0].index, vein[0].index, "herbalism ≠ mining LockType");
 
-        // A lockId of 0 is never a lock (opens by USE, not a cast).
         assert!(!cat.is_locked(0));
     }
 
-    /// The keyless-chest path: lockId 43 (Sunken Chest, Storage Chest, Worn Wooden Chest, …) is a
-    /// single SKILL slot naming LockType **13** — the one spell 6478 "Opening" opens, and "Opening"
-    /// is a default-known player spell, so any character can loot these. Confirms the routing matches
-    /// keyless chests (not just gathering nodes) to a spell the player already has. Skips without data.
+    /// Lock 43, the keyless chests: one skill slot naming `LockType` 13, which spell 6478, Opening,
+    /// known to every character, opens.
     #[test]
     fn real_lock_catalog_reads_keyless_chest() {
         let data = crate::wow_data_or_skip!();
@@ -246,32 +210,27 @@ mod tests {
             cat.is_locked(43),
             "even a keyless chest is a real lock (cast, not USE)"
         );
-        // The requirement sits in slot 1 here (slot 0 empty) — the routing must scan all 8 slots,
-        // not just slot 0. LockType 13 = the "Opening" the default spell 6478 provides.
+        // The requirement sits in slot 1, slot 0 empty: the routing must scan all 8 slots.
         assert_eq!(chest[1].key_type, LOCK_KEY_SKILL);
         assert_eq!(
             chest[1].index, 13,
             "the keyless-chest LockType spell 6478 opens"
         );
-        // …and it is an `Action 0` (open) slot, so it applies only to an unflagged object: the
-        // chest opens because chests do NOT carry GO_FLAG_LOCKED, not because Action is ignored.
+        // An Action 0 slot: the chest opens because chests carry no `GO_FLAG_LOCKED`.
         assert_eq!(chest[1].action, 0);
         assert!(chest[1].available(GO_STATE_READY, false));
         assert!(!chest[1].available(GO_STATE_READY, true));
     }
 
-    /// The `Action` column on the real 5875 `Lock.dbc`, on the two rows the "any locked door opens"
-    /// report turns on. A column slip here re-opens the bug silently, so both rows
-    /// are pinned by value. Skips without client data.
+    /// The `Action` column pinned by value on two door rows: a slip would let locked doors open.
     #[test]
     fn real_lock_catalog_reads_the_action_column() {
         let data = crate::wow_data_or_skip!();
         let mut chain = crate::open_chain(&data).expect("open chain");
         let cat = load_lock_catalog(&mut chain).expect("load Lock.dbc");
 
-        // Scholomance Door (gameobject_template 174626, door.data1 = lockId 1159; wire flags 34 =
-        // GO_FLAG_LOCKED|NODESPAWN). Five slots: the Skeleton Key, Pick Lock 280, and the three
-        // spares — `Quick Open`/`Quick Close`/`Blasting`.
+        // Scholomance Door (gameobject 174626, lock 1159, flags 34: `GO_FLAG_LOCKED | NODESPAWN`):
+        // the Skeleton Key, Pick Lock 280, and the spares Quick Open, Quick Close and Blasting.
         let scholo = cat.slots(1159).expect("lockId 1159 (Scholomance Door)");
         assert_eq!(
             (scholo[0].key_type, scholo[0].index, scholo[0].action),
@@ -298,9 +257,8 @@ mod tests {
             (LOCK_KEY_SKILL, 10, 0, 0),
             "slot 2 = Quick Open, no skill, Action 0 (open) — THE bug's slot"
         );
-        // The gate: on a GO_FLAG_LOCKED door, the Quick Open slot does not apply — so the
-        // universally-known "Opening" (6247) never gets to satisfy it. The key and Pick Lock legs
-        // do apply, which is exactly the pair the reference asks the player for.
+        // On a locked door Quick Open does not apply, so spell 6247 cannot satisfy it; the key and
+        // Pick Lock do.
         assert!(
             !scholo[2].available(GO_STATE_READY, true),
             "Quick Open is gated out by the flag"
@@ -314,9 +272,7 @@ mod tests {
             "Pick Lock still applies"
         );
 
-        // The Searing Gorge gate (gameobject_template 150137/150138, lockId 84) — the reporter's
-        // counter-example, and the reason the bug looked like "almost all doors". It carries no
-        // Action-0 slot at all, so it refused even before the gate existed.
+        // The Searing Gorge gate (gameobject 150137 and 150138, lock 84) has no Action 0 slot.
         let gorge = cat.slots(84).expect("lockId 84 (Searing Gorge gate)");
         assert_eq!(
             (gorge[0].key_type, gorge[0].index, gorge[0].action),
@@ -348,22 +304,17 @@ mod tests {
             skill: 0,
             action,
         };
-        // Action 0 (open): READY + not flagged locked.
         assert!(slot(0).available(GO_STATE_READY, false));
         assert!(!slot(0).available(GO_STATE_READY, true));
         assert!(!slot(0).available(GO_STATE_ACTIVE, false));
-        // Action 1 (unlock): READY + flagged locked — the exact mirror.
         assert!(slot(1).available(GO_STATE_READY, true));
         assert!(!slot(1).available(GO_STATE_READY, false));
         assert!(!slot(1).available(GO_STATE_ACTIVE, true));
-        // Action 2 (close): only while ACTIVE, flag irrelevant.
         assert!(slot(2).available(GO_STATE_ACTIVE, false));
         assert!(slot(2).available(GO_STATE_ACTIVE, true));
         assert!(!slot(2).available(GO_STATE_READY, false));
-        // Action 3: READY, flag irrelevant.
         assert!(slot(3).available(GO_STATE_READY, true));
         assert!(!slot(3).available(GO_STATE_ACTIVE, false));
-        // Action 4 is the ONLY action an ALTERNATIVE-state object admits, and it admits nothing else.
         assert!(slot(4).available(GO_STATE_ACTIVE_ALTERNATIVE, false));
         assert!(!slot(4).available(GO_STATE_READY, false));
         for action in [0, 1, 2, 3, 5, 19] {
@@ -372,7 +323,6 @@ mod tests {
                 "action {action} must not apply in the ALTERNATIVE state"
             );
         }
-        // An unmodelled action (≥5) falls through to "applies", in any state but ALTERNATIVE.
         assert!(slot(5).available(GO_STATE_ACTIVE, false));
         assert!(slot(5).available(GO_STATE_READY, true));
     }

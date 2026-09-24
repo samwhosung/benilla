@@ -1,14 +1,7 @@
-//! What is actually standing at a world coordinate:
+//! The WMO and M2 doodad placements within a radius of a pin, nearest first. Two batches of one WMO
+//! share its authored MOBA order; a WMO and a nearby doodad have no ordering relationship.
+//! Output is Blizzard data: never commit it.
 //! `cargo run -p benilla-formats --example what_is_here -- <map> <x> <y> [radius_yd]`
-//! e.g. `what_is_here Kalimdor 295.72 -3689.61 60`.
-//!
-//! A bug report names a *place* — a `.go xyz` pin — and every scene-render diagnosis starts by
-//! turning that pin into the **placements** behind it: which WMOs and which M2 doodads, with their
-//! distance from the pin. The distinction is load-bearing for draw-order defects: two batches of one
-//! WMO share the authored MOBA order the pipeline biases by, while a WMO and a nearby M2 doodad are
-//! separate lanes with no ordering relationship at all.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -24,8 +17,7 @@ fn main() -> anyhow::Result<()> {
     let (tx, ty) = tiles.tile_at(x, y);
     println!("{map}: pin ({x}, {y}) is tile {tx}_{ty}; scanning r={radius} yd across 3x3");
 
-    // The pin can sit near a tile seam and the building it names be authored in the neighbour, so
-    // sweep the 3x3 — a placement is deduped by uniqueId, which is stable across the tiles it spans.
+    // Sweep the 3x3 tiles; a placement spanning several is deduped by its uniqueId.
     let mut seen_wmo = std::collections::HashSet::new();
     let mut seen_doodad = std::collections::HashSet::new();
     let mut wmos: Vec<(f32, String, [f32; 3], u32)> = Vec::new();

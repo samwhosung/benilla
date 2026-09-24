@@ -1,7 +1,5 @@
-//! M2 portrait-camera parse — byte-level check against real character/creature models. Pins the
-//! vanilla camera record stride (`0x7c`, built at `0x70f270`) + the `cameraLookup[0]` selection
-//! (`0x713540`): the unit-frame portrait renders through exactly this authored camera. Skips when
-//! the client isn't present.
+//! M2 cameras: `0x7c` bytes a record (built at `0x70f270`); the unit-frame portrait renders
+//! through `cameraLookup[0]` (`0x713540`).
 
 use benilla_formats::{parse_m2_portrait_camera, Chain};
 
@@ -18,10 +16,7 @@ fn character_and_creature_portrait_cameras_parse_sane() {
         let cam = parse_m2_portrait_camera(&bytes)
             .unwrap_or_else(|| panic!("{path}: no portrait camera"));
         eprintln!("{path}: {cam:?}");
-        // Structural sanity that a garbled stride/offset could not land on: a usable perspective
-        // (fov in a plausible authored range, near < far), the camera off the target, and the rig
-        // in front of the model (WoW models author facing +X; a portrait camera sits +X of its
-        // subject looking back).
+        // Models face +X, so a portrait camera sits +X of its subject, looking back.
         assert!(
             cam.fov > 0.1 && cam.fov < 1.6,
             "{path}: fov {} outside plausible authored range",
@@ -39,9 +34,8 @@ fn character_and_creature_portrait_cameras_parse_sane() {
             "{path}: camera not in front of the model (Δx {dx})"
         );
     }
-    // Numeric regression pin — HumanMale's authored rig (fov exactly π/4; eye head-height, in
-    // front and off to the model's right — why the ref portrait faces viewer-left; target on the
-    // head center). A wrong stride or a swapped base/track offset cannot land on all nine.
+    // HumanMale's authored rig: fov π/4, the eye at head height, in front and to the model's
+    // right (so the portrait faces viewer-left), the target on the head's centre.
     let bytes = reader
         .read("Character\\Human\\Male\\HumanMale.m2")
         .expect("read HumanMale.m2");
@@ -65,17 +59,11 @@ fn character_and_creature_portrait_cameras_parse_sane() {
 
 #[test]
 fn too_short_yields_no_camera() {
-    // No MD20 camera array header → None, no panic.
     assert!(parse_m2_portrait_camera(&[0u8; 16]).is_none());
 }
 
-/// **The model-frame pane camera** — raw `cameras[1]`, the rig a 1.12 `<PlayerModel>` widget renders
-/// through (`0x505b30` → the chooser `0x505890` takes a literal index 1, NOT `cameraLookup`;
-/// decision 1089).
-///
-/// Byte-level regression pin against the shipped records, read here independently through our
-/// own parser — matching the reference's own read is the cross-check. The universal clips
-/// (`near = 8/36`, `far = 1000/36`) come along because a wrong stride would land on neither.
+/// A `<PlayerModel>` pane renders through raw `cameras[1]`: the chooser `0x505890`, from
+/// `0x505b30`, takes index 1, not `cameraLookup`. Every record's clips are 8/36 and 1000/36.
 #[test]
 fn pane_cameras_match_the_authored_records() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -127,9 +115,7 @@ fn pane_cameras_match_the_authored_records() {
         assert!(close(cam.roll, 0.0), "{path}: roll {}", cam.roll);
     }
 
-    // The standoff is AUTHORED per model, which is the whole point: nothing normalizes a pane, so a
-    // gnome's camera sits ~2.2yd out and a boar's ~4.9. If these ever converged, some engine-side
-    // fit would have crept back in.
+    // The standoff is authored per model, never normalized: a gnome's ~2.2 yd, a boar's ~4.9.
     let x = |path: &str| {
         let bytes = reader.read(path).expect("read model");
         benilla_formats::parse_m2_camera(&bytes, 1)

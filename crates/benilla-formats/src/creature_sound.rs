@@ -1,27 +1,7 @@
-//! Creature voice: **CreatureDisplayInfo.SoundID → CreatureSoundData.dbc** (decision 0070
-//! slice 3) — the per-display voice kit set (exertion/wound/death/aggro/fidgets…).
-//!
-//! Layouts — VERIFIED against build 5875 (header + row decode, 2026-07-02):
-//! `CreatureSoundData` **406 × 30 × 120 B**: `ID, ExertionID, ExertionCriticalID, InjuryID,
-//! InjuryCriticalID, InjuryCrushingBlowID, DeathID, StunID, StandID, FootstepID (a
-//! FootstepTerrainLookup **class**, NOT a kit), AggroID, WingFlapID, WingGlideID, AlertID,
-//! Fidget[4], CustomAttack[4], NPCSoundID, LoopSoundID, CreatureImpactType (0 flesh · 1 stone ·
-//! 2 wood · 3 ethereal), JumpStartID, JumpEndID, PetAttackID, PetOrderID, PetDismissID`.
-//! Columns **27/28/29** are the pet's own voice: 27 and 28 are what the bark
-//! dispatcher `0x623a40` reaches at states 2 and 1 — `SMSG_PET_ACTION_SOUND`'s two selectors —
-//! and 29 is `SMSG_PET_DISMISS_SOUND`'s, resolved fresh by model id at `0x604140` rather than off
-//! the cached row, which is why a census over the cache's consumers missed it. The **names** here
-//! are the community's and stay INFERRED — a DBC carries no column names — but the shipped kits
-//! corroborate them: the four rows that populate 27/28 name `A_<demon>_KILL` and `A_<demon>_ORDER`.
-//! The column nothing reads is **22**, which is also empty on all 406 rows.
-//! Spot-check row 26: exertion 312/313, injury 315/316/0, death 314, stun 690, stand 317,
-//! footstep class 8, aggro 694, alert 1107 — all coherent kit-id ranges.
-//! The chain is `UNIT_FIELD_DISPLAYID` → `CreatureDisplayInfo.SoundID`, **falling back to
-//! `CreatureModelData.SoundID`** (col 13 of the 430 × 16 × 64 B table) when the display's own FK
-//! is 0 — the client's generic resolution (the earlier "no model fallback in 1.12" note here was
-//! wrong). The fallback is load-bearing: 10 261 of 10 534
-//! displays carry SoundID 0, and with the model link 10 533/10 534 resolve a row (byte-census
-//! 2026-07-03) — character displays reach footstep class 7 this way, as data, not client logic.
+//! Creature voice: `CreatureDisplayInfo.SoundID` to `CreatureSoundData.dbc`, 30 `u32` columns of
+//! per-display voice kits whose names are the community's, since a DBC carries none. Column 22
+//! (`NPCSoundID`) is empty on every row and unread. A display whose own `SoundID` is 0, nearly
+//! every one, resolves through `CreatureModelData.SoundID` (col 13), as the client does.
 
 use std::collections::HashMap;
 
@@ -31,8 +11,7 @@ use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::dbc::{parse, u32_at};
 
-/// One `CreatureSoundData` row — every field is a SoundEntries kit id (0 = none) except where
-/// noted.
+/// One `CreatureSoundData` row; every field is a `SoundEntries` kit id (0 for none) unless noted.
 pub struct CreatureVoice {
     /// Attack grunt `[normal, critical]`.
     pub exertion: [u32; 2],
@@ -42,8 +21,7 @@ pub struct CreatureVoice {
     pub stun: u32,
     /// Fired by the `$FDX` anim event.
     pub stand: u32,
-    /// `FootstepTerrainLookup.CreatureFootstepID` — the creature's footstep **class**, joined
-    /// against the terrain type (NOT a kit id).
+    /// The footstep class (`FootstepTerrainLookup.CreatureFootstepID`), not a kit id.
     pub footstep_class: u32,
     pub aggro: u32,
     /// Fired by `$WNG` / `$WGG`.
@@ -56,29 +34,23 @@ pub struct CreatureVoice {
     pub custom_attack: [u32; 4],
     /// A looping body sound (SoundEntries type 27).
     pub loop_sound: u32,
-    /// Melee impact material: 0 flesh · 1 stone · 2 wood · 3 ethereal (WeaponImpactSounds slot
-    /// class — consumed with combat impacts).
+    /// Melee impact material (`WeaponImpactSounds`): 0 flesh, 1 stone, 2 wood, 3 ethereal.
     pub impact_type: u32,
     pub jump_start: u32,
     pub jump_end: u32,
-    /// **Column 27** — the bark a pet gives when it takes an attack order
-    /// (`SMSG_PET_ACTION_SOUND` selector `PET_TALK_ATTACK`, the reference's bark state **2**,
-    /// read at `0x623ad3` as `[row+0x6c]`).
+    /// Column 27, the bark on an attack order: `SMSG_PET_ACTION_SOUND`'s `PET_TALK_ATTACK`, bark
+    /// state 2 of `0x623a40` (`0x623ad3` reads `[row+0x6c]`).
     pub pet_attack: u32,
-    /// **Column 28** — the bark a pet gives when it acknowledges an ordered spell
-    /// (`SMSG_PET_ACTION_SOUND` selector `PET_TALK_SPECIAL_SPELL`, the reference's bark state
-    /// **1**, read at `0x623ac8` as `[row+0x70]`).
+    /// Column 28, the bark acknowledging an ordered spell: `PET_TALK_SPECIAL_SPELL`, bark state 1
+    /// (`0x623ac8` reads `[row+0x70]`).
     pub pet_order: u32,
-    /// **Column 29** — what a dismissed pet says as it goes (`SMSG_PET_DISMISS_SOUND`'s handler
-    /// `0x604140`, read at `0x6041c4`/`0x6041dc` as `[row+0x74]`).
-    ///
-    /// Not a bark: it is off `0x623a40`'s table entirely, played at a bare world position with no
-    /// unit, no latch and no attach point — because by the time it sounds the pet is gone.
+    /// Column 29, `SMSG_PET_DISMISS_SOUND`'s parting line: `0x604140` reads `[row+0x74]`
+    /// (`0x6041c4`, `0x6041dc`) and plays it at a bare world position, since the pet is gone.
     pub pet_dismiss: u32,
 }
 
-/// display id → voice rows, joined through `CreatureDisplayInfo.SoundID`, plus the raw
-/// `CreatureModelData.SoundID` join the dismiss sound needs on its own.
+/// Voice rows by display id through `CreatureDisplayInfo.SoundID`, and by model id through
+/// `CreatureModelData.SoundID` for the dismiss sound.
 pub struct CreatureVoiceCatalog {
     display_to_sound: HashMap<u32, u32>,
     model_to_sound: HashMap<u32, u32>,
@@ -86,18 +58,14 @@ pub struct CreatureVoiceCatalog {
 }
 
 impl CreatureVoiceCatalog {
-    /// The voice set for a creature **display id** (the `NetEntity.display_id` the wire gives us).
+    /// The voice set for a creature display id (`UNIT_FIELD_DISPLAYID`).
     pub fn for_display(&self, display_id: u32) -> Option<&CreatureVoice> {
         self.rows.get(self.display_to_sound.get(&display_id)?)
     }
 
-    /// The voice set for a **`CreatureModelData` id**, through that table's own `SoundID`
-    /// (col 13) with no display in between.
-    ///
-    /// The odd one out, and deliberately so: every other caller starts from
-    /// `UNIT_FIELD_DISPLAYID`, but `SMSG_PET_DISMISS_SOUND` names a model directly and the
-    /// reference resolves it exactly this way (`0x604140`: `[[0xc0de68] + id*4] + 0x34` →
-    /// `[[0xc0de54] + sound*4]`) — no display step, no fallback.
+    /// The voice set for a `CreatureModelData` id through its own `SoundID` (col 13), with no
+    /// display step and no fallback: `SMSG_PET_DISMISS_SOUND` names a model, and `0x604140`
+    /// resolves it so (`[[0xc0de68] + id*4] + 0x34`, then `[[0xc0de54] + sound*4]`).
     pub fn for_model(&self, model_id: u32) -> Option<&CreatureVoice> {
         self.rows.get(self.model_to_sound.get(&model_id)?)
     }
@@ -135,7 +103,7 @@ fn cmd_schema() -> Schema {
     s
 }
 
-/// Read both tables off the patch chain into the joined catalog.
+/// Read the three tables off the patch chain into the joined catalog.
 pub fn load_creature_voice_catalog(chain: &mut Chain) -> Result<CreatureVoiceCatalog> {
     let bytes = chain
         .read_file("DBFilesClient\\CreatureSoundData.dbc")
@@ -194,7 +162,7 @@ pub fn load_creature_voice_catalog(chain: &mut Chain) -> Result<CreatureVoiceCat
         else {
             continue;
         };
-        // The display's own FK wins; 0 falls back to the model's (module docs).
+        // The display's own `SoundID` wins; 0 falls back to the model's.
         let sound = if sound != 0 {
             Some(sound)
         } else {
@@ -215,8 +183,6 @@ pub fn load_creature_voice_catalog(chain: &mut Chain) -> Result<CreatureVoiceCat
 mod tests {
     use super::*;
 
-    /// The join works on the real 5875 tables: display 26 resolves the byte-decoded row (death
-    /// kit 314, footstep class 8), and a majority of sound-linked displays resolve to a real row.
     #[test]
     fn real_creature_voice_resolves() {
         let data = crate::wow_data_or_skip!();
@@ -230,9 +196,7 @@ mod tests {
         assert_eq!(v.footstep_class, 8);
         assert_eq!(v.aggro, 694);
 
-        // The CreatureModelData fallback: the Elwynn wolf display (903) has
-        // CreatureDisplayInfo.SoundID 0 and resolves through its model's SoundID (43);
-        // the human-male character display (49) reaches footstep class 7 the same way.
+        // The model fallback: the Elwynn wolf (903) and a human male (49) have display `SoundID` 0.
         let wolf = cat.for_display(903).expect("wolf resolves via the model");
         assert_eq!(wolf.footstep_class, 8);
         let human = cat
@@ -240,19 +204,8 @@ mod tests {
             .expect("human male resolves via the model");
         assert_eq!(human.footstep_class, 7);
     }
-    /// **The pet voice columns are a warlock-demon surface, and the shipped data names them.**
-    ///
-    /// Exactly **four** of the 406 rows carry columns 27/28/29 — the Imp, Succubus, Doomguard and
-    /// Voidwalker voice rows — and the kits they name are `A_<demon>_KILL`, `A_<demon>_ORDER` and
-    /// `A_<demon>_DISMISS`. That naming is an *independent* confirmation of which column is
-    /// which: the reference sends `PET_TALK_ATTACK` to bark state 2 = column 27,
-    /// `PET_TALK_SPECIAL_SPELL` to state 1 = column 28, and `SMSG_PET_DISMISS_SOUND` to column 29
-    /// — and the data calls those three `_KILL`, `_ORDER` and `_DISMISS`, in that order, three
-    /// times over (`0x623a40` maps the states to the columns).
-    ///
-    /// **A hunter pet is therefore silent on all three, faithfully** — its row's columns are 0,
-    /// so the reference reads a zero kit and plays nothing. The Felhunter has no kit in the file
-    /// at all. Skips without client data.
+    /// Only four rows carry columns 27-29, and their kits are named `_KILL`, `_ORDER` and
+    /// `_DISMISS` in column order; a hunter pet's are 0, so it is silent, as in the reference.
     #[test]
     fn only_the_four_demon_voices_carry_pet_barks() {
         let data = crate::wow_data_or_skip!();
@@ -275,8 +228,7 @@ mod tests {
             })
             .collect();
         carrying.sort_unstable();
-        // Casing is the file's own — `A_Imp_Dismiss` and `A_DOOMGUARD_DISMISS01` are how those two
-        // rows are written, and the lookup is case-insensitive anyway.
+        // Casing is the file's own; the kit lookup is case-insensitive.
         assert_eq!(
             carrying,
             vec![
@@ -307,8 +259,6 @@ mod tests {
             ],
         );
 
-        // Reachable from real displays, not orphan rows: the Imp's voice is the one 25 of them
-        // share, and the wolf a hunter tames carries none of the three.
         let imp = cat.for_display(904).expect("an imp display resolves");
         assert_eq!(
             (imp.pet_attack, imp.pet_order, imp.pet_dismiss),
@@ -320,9 +270,7 @@ mod tests {
             (0, 0, 0)
         );
 
-        // The dismiss sound's own join — `CreatureModelData.SoundID` with **no display step**
-        // (`0x604140`). The imp's model must reach the same row its displays do, or the packet
-        // would be silent for the one pet it exists for.
+        // The dismiss sound's model join (`0x604140`) reaches the imp's row too.
         let by_model = cat
             .for_model(
                 *cat.model_to_sound

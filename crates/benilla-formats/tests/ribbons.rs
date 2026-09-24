@@ -1,5 +1,4 @@
-//! Difftest the vanilla M2 ribbon-emitter parser against real trail-carrying models, per the
-//! reference's field map. Skips (passes) when the client isn't present.
+//! The M2 ribbon-emitter parser against shipped trail-carrying models.
 
 use benilla_formats::{open_chain, parse_m2_ribbon_emitters};
 
@@ -8,7 +7,6 @@ fn ribbon_records_match_real_bytes() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = open_chain(&data).expect("open vanilla patch chain");
 
-    // The red wisp — three streamers trailing an animated creature.
     let wisp =
         parse_m2_ribbon_emitters(&chain.read_file("Creature\\WISP\\WispRed.m2").unwrap()).unwrap();
     assert_eq!(wisp.len(), 3, "WispRed authors three ribbons");
@@ -43,7 +41,7 @@ fn ribbon_records_match_real_bytes() {
         }
     }
 
-    // The Thunderblade — a weapon whose enchant trail rides the item root.
+    // A weapon whose enchant trail rides the item root.
     let blade = parse_m2_ribbon_emitters(
         &chain
             .read_file("ITEM\\ObjectComponents\\WEAPON\\Sword_1H_Thunderblade_A_01.m2")
@@ -53,7 +51,6 @@ fn ribbon_records_match_real_bytes() {
     assert_eq!(blade.len(), 3, "Thunderblade authors three ribbons");
     assert!(blade.iter().all(|r| r.texture.is_some()));
 
-    // A ribbon-less model parses to empty (the overwhelming majority).
     let torch = parse_m2_ribbon_emitters(
         &chain
             .read_file("World\\Generic\\PassiveDoodads\\Lights\\Torch.m2")

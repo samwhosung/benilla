@@ -1,7 +1,5 @@
-//! WMO MLIQ liquid-surface build — byte check against Stormwind's canals (the reference building
-//! for WMO-embedded water; its city is one 306-group WMO, 22 of whose groups carry `MLIQ`). Pins
-//! the SMOLiquidHeader decode, the `xtiles = xverts − 1` grid, the per-tile hole nibble (`0xf`), and
-//! the lake_a (nibble 4) type resolution. Skips when the client isn't present.
+//! WMO MLIQ liquid surfaces: an `xverts × yverts` grid with one tile fewer each way, and a per-tile
+//! type nibble where `0xf` is a hole and 4 is lake_a.
 
 use benilla_formats::{wmo_group_liquid_mesh, Chain, LiquidKind};
 
@@ -10,8 +8,7 @@ fn stormwind_canal_group_builds_still_water() {
     let data = benilla_formats::wow_data_or_skip!();
     let reader = Chain::open(&data).expect("open vanilla patch chain");
 
-    // Group 099 is a canal segment: MLIQ header xverts=12 yverts=9 (12×9 = 108 verts), 11×8 = 88
-    // tiles of which 52 are wet (nibble 4 = lake_a) and 36 are holes (nibble 0xf).
+    // A canal segment: 12×9 vertices, 11×8 tiles, 52 of them wet and 36 holes.
     let g099 = reader
         .read("World\\wmo\\Azeroth\\Buildings\\Stormwind\\Stormwind_099.wmo")
         .expect("read Stormwind_099.wmo");
@@ -25,7 +22,6 @@ fn stormwind_canal_group_builds_still_water() {
         52 * 6,
         "52 wet tiles → 2 tris each; the 36 hole tiles are skipped"
     );
-    // Every index is in range and every vertex height is a sane, finite value (flat canal water).
     assert!(mesh
         .indices
         .iter()
@@ -37,7 +33,6 @@ fn stormwind_canal_group_builds_still_water() {
         );
     }
 
-    // Group 000 is dry masonry — no MLIQ, so no liquid mesh.
     let g000 = reader
         .read("World\\wmo\\Azeroth\\Buildings\\Stormwind\\Stormwind_000.wmo")
         .expect("read Stormwind_000.wmo");
@@ -47,15 +42,9 @@ fn stormwind_canal_group_builds_still_water() {
     );
 }
 
-/// A hole corner's authored height is not a height, and it must not reach the mesh AABB.
-///
-/// MLIQ carries a full `xverts × yverts` height array whether or not a tile is wet, and the shipped
-/// files leave the hole interiors at a literal `0.0`. Emitted verbatim those are invisible in the
-/// draw — no triangle references them — but they stretch the Bevy mesh AABB from the flat sheet all
-/// the way to model z 0. Measured on the two files below: Blackfathom's Pool of Ask'ar had 186 of
-/// 868 such vertices and an AABB spanning 58.28 yd around a sheet with **zero** vertical extent;
-/// Stormwind's canal g099 had 36 of 108 and spanned 6.48 yd. The builder now fills every
-/// undrawn vertex with the lowest drawn height, so both collapse to flat.
+/// MLIQ carries a height for every vertex, wet or not, and the shipped files leave hole interiors
+/// at `0.0`; the builder gives every undrawn vertex the lowest drawn height, so the mesh bounds
+/// stay on the sheet (186 of 868 such vertices in Blackfathom's pool, 36 of 108 in the canal).
 #[test]
 fn hole_corner_heights_never_reach_the_mesh_bounds() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -76,7 +65,7 @@ fn hole_corner_heights_never_reach_the_mesh_bounds() {
             .unwrap_or_else(|e| panic!("read {path}: {e}"));
         let mesh = wmo_group_liquid_mesh(&group).unwrap_or_else(|| panic!("{path} carries water"));
 
-        // Both pools are dead flat, so EVERY emitted vertex — drawn or not — must sit on the sheet.
+        // Both pools are flat, so every vertex, drawn or not, sits on the sheet.
         let (lo, hi) = mesh
             .positions
             .iter()
@@ -89,7 +78,6 @@ fn hole_corner_heights_never_reach_the_mesh_bounds() {
             "{path}: mesh z spans [{lo}..{hi}], expected the flat sheet at {surface_z}"
         );
 
-        // …and the drawn geometry is unchanged by the substitution: the sheet is still the sheet.
         for &i in &mesh.indices {
             let z = mesh.positions[i as usize][2];
             assert!(
@@ -100,17 +88,9 @@ fn hole_corner_heights_never_reach_the_mesh_bounds() {
     }
 }
 
-/// The two reported sites take **different** water arms, and each carries the inputs its arm reads.
-///
-/// `0x6b62e0`'s category 0 splits on the owning group's `MOGP.flags & 0x48`, and the two halves are
-/// genuinely different renderers — the exterior one binds `MapObjExtWater0.bls` and lights a vertex
-/// normal, the interior one is fixed-function, unlit, and takes its whole body colour from
-/// `MOMT[materialId].diffColor`. B136 (Blackfathom) and the director's "Stormwind water seems too
-/// rough" land on opposite arms, which is the whole reason one shader could not be right for both.
-///
-/// Pins the two inputs a wrong offset would silently corrupt: the pool's `materialId` (so the body
-/// colour is looked up in the right MOMT slot) and the per-vertex opacity byte (which we read as
-/// nothing at all until 2026-08-20, rendering every WMO pool at a pinned, fully-opaque 1.0).
+/// `0x6b62e0`'s category 0 splits on the group's `MOGP.flags & 0x48`: the exterior arm binds
+/// `MapObjExtWater0.bls` and lights a vertex normal; the interior arm is fixed-function, unlit, and
+/// takes its body colour from `MOMT[materialId].diffColor`. Each pool carries a per-vertex opacity.
 #[test]
 fn the_two_water_arms_carry_their_own_inputs() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -149,9 +129,7 @@ fn the_two_water_arms_carry_their_own_inputs() {
              from exactly this index"
         );
 
-        // The opacity channel is per-vertex and really varies: a constant here would mean we were
-        // reading a byte nothing authors (or the wrong byte). Blackfathom's pool spans 202 distinct
-        // values; Stormwind's canals are 91% a single one, so only the range is asserted in common.
+        // Blackfathom's opacity spans 202 values, the canal's is 91% one: only the range is shared.
         let (lo, hi) = mesh
             .depths
             .iter()
@@ -167,12 +145,8 @@ fn the_two_water_arms_carry_their_own_inputs() {
     }
 }
 
-/// One texture repeat per grid cell — the WMO water UV scale, and the fix for "too rough".
-///
-/// The reference's `0x6b6630` writes `u = (float)i, v = (float)j`, raw tile indices from loop
-/// counters that start at a literal 0, so one repeat spans one 4.167 yd cell. We had a quarter of
-/// that: a texture 4x too large, which is exactly two mip levels, so the near field never reached
-/// the authored chain that flattens the ripple with distance.
+/// WMO water repeats its texture once per 4.167-yd grid cell: `0x6b6630` writes `u = i, v = j`
+/// from loop counters that start at 0.
 #[test]
 fn wmo_water_repeats_once_per_grid_cell() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -181,7 +155,7 @@ fn wmo_water_repeats_once_per_grid_cell() {
         .read("World\\wmo\\Azeroth\\Buildings\\Stormwind\\Stormwind_099.wmo")
         .expect("read Stormwind_099.wmo");
     let mesh = wmo_group_liquid_mesh(&g099).expect("group 099 carries water");
-    // Adjacent columns of the 12-wide grid are one cell apart, so exactly one repeat apart.
+    // The grid is 12 vertices wide, so index 12 starts the next row.
     let du = mesh.uvs[1][0] - mesh.uvs[0][0];
     assert!(
         (du - 1.0).abs() < 1e-4,

@@ -1,21 +1,11 @@
-//! The **entity** corpus's material animation — the four shapes the unit /
-//! GameObject / held-item lane has to serve, each pinned on the asset that makes it unavoidable.
-//!
-//! Decision 0130 phase 3 built the texture transform for placed doodads and left every other lane
-//! off it; 2282 put the spell effects on; this file is the entity lane's turn, and it exists for
-//! the same reason 2282's does — *the premise that a lane needs no channel is a measurement, and an
-//! unmeasured one is how a channel gets quietly dropped.* `benilla-extract entityuvscan` is the
-//! census; these are the four rows of it a reader has to be able to check by hand.
-//!
-//! Skips (passes) when the client isn't present at `<repo>/WoW/Data`.
+//! The material animation shapes the unit, GameObject and held-item lane serves, each on the asset
+//! that needs it.
 
 use benilla_formats::{open_chain, parse_m2_render_submeshes};
 
-/// The whole entity corpus's widest case: **a creature, on a global sequence.** Every wind
-/// elemental in the game is this model, and 26 of its 32 batches slide a full sheet across
-/// themselves on a free-running clock — which is the one case where a shared material uniform is
-/// not a compromise but exactly what the reference does (0136 choice 1: the reference clocks a
-/// global-sequence loop on one per-scene ms cursor).
+/// Every wind elemental is this model, and 26 of its 32 batches slide a full sheet on a global
+/// sequence. The reference clocks a global sequence on one per-scene ms cursor, so a shared
+/// material is exact.
 #[test]
 fn a_creature_scrolls_on_a_global_sequence() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -35,8 +25,6 @@ fn a_creature_scrolls_on_a_global_sequence() {
         live.iter().all(|a| a.gseq),
         "every one rides a GLOBAL sequence — no host, no play head, a shared clock is faithful"
     );
-    // A full sheet per loop: the batches slide u by 1.0 over their period, which is what makes the
-    // shell read as moving air rather than as a painted band.
     for a in &live {
         let (lo, hi) = a
             .keys
@@ -44,21 +32,18 @@ fn a_creature_scrolls_on_a_global_sequence() {
             .fold((f32::MAX, f32::MIN), |(lo, hi), (_, v)| {
                 (lo.min(v[0]), hi.max(v[0]))
             });
-        // A whole sheet, to the key quantization the exporter left behind (one batch ends at
-        // 1.0017): what matters is that a full repeat passes under the geometry each loop.
+        // To the keys' quantization: one batch ends at 1.0017.
         assert!(
             (hi - lo - 1.0).abs() < 5e-3,
             "a whole sheet of U per loop: [{lo}, {hi}]"
         );
     }
-    // Nothing here is per-sequence, so these batches keep the shared, deduped material.
+    // Nothing is per-sequence, so the shared material serves.
     assert!(subs.iter().all(|s| s.uv_seq.is_none()));
 }
 
-/// **A batch that rotates and never translates.** Both of the corpus's two live on GameObjects,
-/// and both answer `None` on the channel a reader checks first — so a lane whose predicate is
-/// `uv_anim.is_some()`, or whose row carries only a translation, drops them without a trace. This
-/// is `UvLoops::animates`' whole reason for existing, and 2019's affine row's.
+/// The corpus's two batches that rotate and never translate, both on GameObjects: `uv_anim` alone
+/// misses them.
 #[test]
 fn a_gameobject_batch_rotates_with_no_translation_at_all() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -85,11 +70,8 @@ fn a_gameobject_batch_rotates_with_no_translation_at_all() {
     }
 }
 
-/// **The slots disagree, so no shared material can be right.** `BloodOfHeroes` authors its five
-/// bubble sheets twice over one animation id — file slot 0 holds them still, slot 1 sweeps them —
-/// at `freq` 16384/16383, so its 114 placements bubble independently of each other. That is
-/// 1408's population reached from the entity side: the instance needs a material of its own, and
-/// the row has to read whichever slot the instance is playing.
+/// `BloodOfHeroes` authors its five bubble sheets in two slots of one animation id, slot 0 still
+/// and slot 1 sweeping, so each instance needs its own material reading the slot it plays.
 #[test]
 fn a_gameobjects_slots_bake_different_loops() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -119,8 +101,6 @@ fn a_gameobjects_slots_bake_different_loops() {
             live.period
         );
     }
-    // The pool itself is a sixth batch with no transform at all — so what was missing was never
-    // "the blood pool", it was the bubbling.
     assert_eq!(
         subs.iter().filter(|s| s.uv_seq.is_none()).count(),
         1,
@@ -128,21 +108,10 @@ fn a_gameobjects_slots_bake_different_loops() {
     );
 }
 
-/// **And slot 1 is REACHABLE — the other half of the same asset's story.** A per-sequence UV loop
-/// only ever runs if the arm picks that sequence, so "slot 1 sweeps the sheet" is half a fact: the
-/// bubbling is live exactly as often as the weighted variation walk lands on take 1.
-///
-/// The pool's two takes are one `Stand` (`AnimationData.dbc` id 0) chain — and a GameObject whose
-/// model owns *none* of the door-family ids collapses its substate to Stand and re-arms it every
-/// window, with a fresh `variationIdx = -1` roll each time (`0x5f3a52`, `0x5f4167`;
-/// `crate::go_anim`'s rest arm). So these two frequencies are the duty cycle of every
-/// blood pool in the Plaguelands: `roll < 16384` takes the still sheet, `16384..=32766` takes the
-/// bubbling one, and the single leftover draw (`32767`) exhausts the chain back to the head — the
-/// authored convention, frequencies summing to 32767 against 32768 outcomes.
-///
-/// It is pinned here rather than left to arithmetic because the failure it guards is silent: an
-/// asset re-read that dropped `frequency` to 0, or a walk that took the head, would leave this
-/// file's neighbour above passing unchanged while every pool in the game went still.
+/// Slot 1 plays as often as the variation walk lands on it. A GameObject owning none of the
+/// door-family ids re-arms Stand every window with a fresh roll (`0x5f3a52`, `0x5f4167`), so the
+/// two frequencies are the duty cycle: `roll < 16384` is still, `16384..=32766` bubbles, and the
+/// leftover 32767 exhausts the chain back to the head.
 #[test]
 fn the_bubbling_take_is_half_the_pools_duty_cycle() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -167,8 +136,7 @@ fn the_bubbling_take_is_half_the_pools_duty_cycle() {
         vec![16_384, 16_383],
         "the still sheet and the bubbling one, at even odds"
     );
-    // The walk is `roll < freq` (strict, unsigned) node by node, else `roll -= freq` — so the
-    // counts below ARE the duty cycle, not an approximation of it.
+    // The walk: `roll < freq`, strict and unsigned, node by node, else `roll -= freq`.
     let bubbling = (0u32..32_768)
         .filter(|&roll| {
             let mut roll = roll;
@@ -185,11 +153,8 @@ fn the_bubbling_take_is_half_the_pools_duty_cycle() {
     );
 }
 
-/// **The same shape on the TINT channel**, and worse: four of the corpus's five animated entity
-/// tints bake *nothing* in file slot 0, so `rgb_anim` is `None` for them and a shared material can
-/// only ever seed white however faithfully it is ticked. `G_FreezingTrap` is the one with play
-/// frequency — the hunter's trap, whose glow card is meant to pulse blue-white as it arms, on the
-/// `Custom0` clip the server rings.
+/// Four of the corpus's five animated entity tints key nothing in slot 0, so `rgb_anim` is `None`:
+/// the hunter's freezing trap pulses its glow card only on the `Custom0` clip the server plays.
 #[test]
 fn a_gameobjects_tint_is_keyed_in_a_later_slot_alone() {
     let data = benilla_formats::wow_data_or_skip!();

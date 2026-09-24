@@ -1,16 +1,5 @@
-//! Model loading — the shared `models` module face.
-//!
-//! Parsing is delegated to `benilla-m2` (M2) / `benilla-wmo` (WMO). Both produce a list of
-//! [`RenderSubmesh`] — one per render batch, each with its own (remapped) vertices, texture, and blend
-//! mode. M2 models and WMO groups are split into batches that each have their own material (a tree =
-//! opaque trunk + alpha leaves; a building = many wall/floor/roof textures), so they render separately
-//! or the wrong texture/blend lands on parts of the model. Vertices are model space (Z-up ≈ WoW axes).
-//!
-//! Split by concern: this file keeps the top-level dispatch ([`load_object_model`]) + the byte/remap
-//! helpers the submodules share; [`types`] holds the shared render types ([`RenderSubmesh`],
-//! [`ModelBlend`], billboard/light data), [`m2_batches`] the M2 render-batch assembly loop, [`bounds`]
-//! the authored-bounds/selection-ring reads, [`anim`] skeleton + animation, [`wmo`] the WMO parse, and
-//! [`collision`] the collision hulls.
+//! Model loading over `benilla-m2` and `benilla-wmo`: a model becomes one [`RenderSubmesh`] per
+//! render batch, each with its own vertices, texture and blend, in model space (Z up, WoW axes).
 
 use std::collections::HashMap;
 
@@ -44,11 +33,8 @@ pub use tex_anim::{rotation_2x2, uv_transform, UvAnim, UvRotAnim};
 pub use types::*;
 pub use wmo::*;
 
-/// Build a submesh from a stream of global vertex indices, remapping to a local vertex subset so
-/// each batch is a compact standalone mesh. `vertex` fetches `(position, normal, uv, colour)` for a
-/// global index. Also returns, parallel to the submesh's local vertices, each one's **global** index
-/// — so the M2 path can fill the per-vertex skin binding ([`RenderSubmesh::joints`]) afterward (the
-/// skin lives on the M2 vertex, not in the geometry closure, and WMO has none).
+/// Build a compact submesh from global vertex indices. Also returns each local vertex's global
+/// index, from which the M2 path fills [`RenderSubmesh::joints`].
 fn remap_submesh(
     global_indices: impl Iterator<Item = u32>,
     vertex: impl Fn(u32) -> ([f32; 3], [f32; 3], [f32; 2], [f32; 4]),
@@ -81,45 +67,45 @@ fn remap_submesh(
             uvs,
             indices,
             texture,
+            // The per-batch fields start at their defaults; the M2 and WMO paths set their own.
             skin_slot: None,
-            geoset_id: 0, // set by the caller per batch (the M2 path; WMO leaves it 0)
-            char_slot: None, // set by the caller per batch (M2 only)
-            icon_slot: false, // set by the caller per batch (M2 texture type 14)
+            geoset_id: 0,
+            char_slot: None,
+            icon_slot: false,
             blend,
-            // Repeat is the pre-0763 behaviour and stays WMO's; the M2 batch loop overrides both
-            // from the texture record's own flags.
+            // WMO keeps repeat; the M2 batch loop sets both from the texture record's flags.
             wrap_x: true,
             wrap_y: true,
             two_sided,
             vertex_colors,
-            joints: Vec::new(), // M2 path fills these from `globals`; WMO leaves them empty
-            weights: Vec::new(), //
+            joints: Vec::new(),
+            weights: Vec::new(),
             interior,
             emissive,
-            sidn: None, // set by the WMO path from MOMT SIDN (0x10) + its authored colour
-            window: false, // set by the WMO path from MOMT WINDOW (0x20)
-            additive: false, // set by the M2 path from the blend mode (3/4)
-            no_depth_write: false, // set by the M2 path from render flag 0x10 (WMO keeps standard depth)
-            no_depth_test: false,  // set by the M2 path from render flag 0x08
-            fog_policy: FogPolicy::Scene, // refined by the M2 path (flag 0x02 + the blend table); WMO batches fog with the scene
-            billboard: None,              // set by the M2 path after detecting the batch's bone
-            welded_billboard: false,      // set by the M2 path from the separability gate (0839)
-            alpha_anim: None, // set by the M2 path from the batch's colour/weight tracks
-            uv_anim: None,    // set by the M2 path from the batch's texture transform
-            uv_seq: None,     // …and its per-sequence set, when the slots disagree (1408)
+            sidn: None,
+            window: false,
+            additive: false,
+            no_depth_write: false,
+            no_depth_test: false,
+            fog_policy: FogPolicy::Scene,
+            billboard: None,
+            welded_billboard: false,
+            alpha_anim: None,
+            uv_anim: None,
+            uv_seq: None,
             uv_rot_seq: None,
             uv_scale_seq: None,
-            rgb_anim: None,  // set by the M2 path from the batch's colour RGB track
-            rgb_seq: None,   // …ditto (1408)
-            wmo_batch: None, // set by the WMO path from the MOGP batch-section counts
-            env_map: false,  // set by the M2 path from texture_unit_lookup[texCoordSet] > 2
-            section: None,   // set by the M2 path from the batch's skin_section_index
+            rgb_anim: None,
+            rgb_seq: None,
+            wmo_batch: None,
+            env_map: false,
+            section: None,
         },
         globals,
     )
 }
 
-/// Normalize a model path for the chain: lowercase (case-insensitive lookup), `.mdx`/`.mdl` → `.m2`.
+/// Normalize a model path for the chain: lowercase, with `.mdx`/`.mdl` as `.m2`.
 pub(crate) fn model_path(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
     match lower
@@ -131,9 +117,8 @@ pub(crate) fn model_path(raw: &str) -> String {
     }
 }
 
-/// Panicking little-endian readers, kept **only** for raw offset walks that predate the decision-0064
-/// migration to `benilla_bytes::ByteExt` — [`anim`]'s bone/track walk, [`anim_summary`]'s header
-/// reads, and [`m2_batches`]'s sequence-0 time-band lookup all still import these three.
+/// Panicking little-endian reads at a byte offset, for the raw walks not on
+/// `benilla_bytes::ByteExt`.
 pub(crate) fn le_u16(b: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([b[o], b[o + 1]])
 }
@@ -144,9 +129,7 @@ pub(crate) fn le_f32(b: &[u8], o: usize) -> f32 {
     f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
 }
 
-/// Load a world model by path, dispatching on extension: `.wmo` → [`load_wmo`], otherwise
-/// (`.mdx`/`.mdl`/`.m2`) → [`load_m2_mesh`]. Used for GameObject display models, which are mostly M2
-/// with a few WMO.
+/// Load a GameObject display model by path: a `.wmo` through [`load_wmo`], anything else as an M2.
 pub fn load_object_model(chain: &mut Chain, raw_path: &str) -> Result<Vec<RenderSubmesh>> {
     if raw_path.to_ascii_lowercase().ends_with(".wmo") {
         load_wmo(chain, raw_path)

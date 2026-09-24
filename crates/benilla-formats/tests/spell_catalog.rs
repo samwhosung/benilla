@@ -1,7 +1,5 @@
-//! Asset-gated fixture: the Spell/SpellIcon join against the real 5875 data — pins the derived
-//! columns (SpellIconID = 117, SpellName enUS = 120, SpellVisualID = 115, Speed = 37; see
-//! `src/spells.rs` docs) to known spells, so a schema drift or column slip fails loudly. Skips
-//! (passes) without `<repo>/WoW/Data`.
+//! `Spell.dbc` columns pinned on known spells: SpellIconID 117, the enUS SpellName 120,
+//! SpellVisualID 115 and Speed 37.
 
 use benilla_formats::{load_spell_catalog, open_chain};
 
@@ -16,7 +14,6 @@ fn spell_catalog_resolves_known_spells() {
         catalog.len()
     );
 
-    // The column-derivation probes, now as regressions.
     let hs = catalog.get(78).expect("Heroic Strike");
     assert_eq!(hs.name, "Heroic Strike");
     assert_eq!(
@@ -35,14 +32,8 @@ fn spell_catalog_resolves_known_spells() {
     assert_eq!(attack.name, "Attack");
     assert!(attack.icon.is_some(), "auto-attack has an icon");
 
-    // The visual/speed column pins (decision 0107 data plane), cross-checked against the local
-    // vmangos `spell_template` (`spellVisual1`/`speed`) — see `src/spells.rs` docs for the method.
-    // **`PreventionType` (column 165)** — which crowd-control flag refuses the spell LOCALLY:
-    // 1 silence, 2 pacify, 0 neither. Pinned here because the column has an
-    // adjacent look-alike: 164 is `DmgClass`, which takes the same 0/1/2 on every one of these
-    // rows. **Auto Shot separates them decisively** — it is `DmgClass = 3` (RANGED), a value
-    // `PreventionType` never takes, so a one-column slip fails this test rather than passing
-    // quietly. (The byte offset `SpellRec+0x294 / 4 = 165` is the other half of the pin.)
+    // `PreventionType`, column 165 (`SpellRec+0x294`): 1 silence, 2 pacify, 0 neither. Column
+    // 164, `DmgClass`, also runs 0 to 2 on these rows, except Auto Shot's 3.
     assert_eq!(
         catalog.get(133).expect("Fireball").prevention_type,
         1,
@@ -65,10 +56,7 @@ fn spell_catalog_resolves_known_spells() {
          distinguishable from 165 at all"
     );
 
-    // **The crowd-control exemption's three columns**: `School` 1, `Mechanic` 5,
-    // `EffectMechanic[0..2]` 79–81. Pinned against spells whose values are common knowledge, and
-    // the per-effect pair is the convincing half — Frostbolt carries its SNARE on effect 0 and
-    // Frost Nova its ROOT on effect 1, which no neighbouring column would reproduce.
+    // The crowd-control exemption's columns: `School` 1, `Mechanic` 5, `EffectMechanic` 79-81.
     assert_eq!(catalog.get(133).expect("Fireball").school, 2, "fire");
     assert_eq!(catalog.get(116).expect("Frostbolt").school, 4, "frost");
     assert_eq!(catalog.get(585).expect("Smite").school, 1, "holy");
@@ -105,6 +93,7 @@ fn spell_catalog_resolves_known_spells() {
         "Frost Nova's root is MECHANIC_ROOT, on effect 1 — not effect 0"
     );
 
+    // Visual and speed as vmangos `spell_template` has them (`spellVisual1`, `speed`).
     let fireball = catalog.get(133).expect("Fireball");
     assert_eq!(fireball.visual, 67, "Fireball's SpellVisual id");
     assert_eq!(fireball.speed, 24.0, "Fireball's projectile speed");
@@ -123,8 +112,7 @@ fn shapeshift_bonus_bars_match_the_verified_table() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = benilla_formats::open_chain(&data).expect("open vanilla patch chain");
     let forms = benilla_formats::load_shapeshift_forms(&mut chain).expect("load shapeshift rows");
-    // The complete 5875 non-zero BonusActionBar set (`0x4e4fc0`: SpellShapeshiftForm
-    // field 1, the exact lookup GetBonusBarOffset's cached global is filled from).
+    // Every non-zero BonusActionBar, field 1, which GetBonusBarOffset reads (`0x4e4fc0`).
     let expect = [(1, 1), (5, 3), (8, 3), (17, 1), (18, 2), (19, 3), (30, 1)];
     let nonzero = forms.values().filter(|f| f.bonus_bar != 0).count();
     assert_eq!(nonzero, expect.len(), "exactly the seven non-zero rows");
@@ -135,16 +123,13 @@ fn shapeshift_bonus_bars_match_the_verified_table() {
             "form {form}"
         );
     }
-    // flags1 (the form gate's stance bit): warrior stances + stealth are stances; cat is a
-    // true shapeshift.
+    // flags1's stance bit: warrior stances and stealth are stances, cat is a shapeshift.
     for stance in [17u32, 18, 19, 30] {
         assert!(forms.get(&stance).unwrap().is_stance(), "form {stance}");
     }
     assert!(!forms.get(&1).unwrap().is_stance(), "cat is a shapeshift");
-    // flags1 bit 0x2 (the stance bar's toggle-cancel BLOCK, `0x4b4963`): the
-    // three warrior stances carry it (0x7 — clicking the active stance is a silent no-op); the
-    // cancelable forms don't (Cat 0x70, Bear/DireBear 0x50, Ghost Wolf 0x40, Shadowform 0x9,
-    // Stealth 0x1, Moonkin 0x41 — probed on the extracted file).
+    // flags1 bit 0x2 blocks the stance bar's toggle-cancel (`0x4b4963`): the warrior stances
+    // (0x7) carry it, so clicking the active one does nothing.
     for stance in [17u32, 18, 19] {
         assert!(
             !forms.get(&stance).unwrap().cancelable(),
@@ -159,10 +144,8 @@ fn shapeshift_bonus_bars_match_the_verified_table() {
     }
 }
 
-/// The stance-bar Spell.dbc columns (`0x4b2bb0` orders by StanceBarOrder, `0x4b45c0` reads
-/// ActiveIconID; column pins probed on the extracted 5875 file): the
-/// MOD_SHAPESHIFT form id, the signed StanceBarOrder (Stealth's −1 sorts last), and the druid
-/// forms' ActiveIconID. Skips without client data.
+/// The stance bar's Spell.dbc columns: the MOD_SHAPESHIFT form id, the signed StanceBarOrder that
+/// `0x4b2bb0` sorts by (Stealth's -1 last), and the ActiveIconID `0x4b45c0` reads.
 #[test]
 fn stance_bar_spell_columns_match_the_probed_values() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -182,17 +165,15 @@ fn stance_bar_spell_columns_match_the_probed_values() {
         assert_eq!(d.shapeshift_form, Some(form), "spell {spell} form");
         assert_eq!(d.stance_bar_order, order, "spell {spell} order");
     }
-    // ActiveIconID: druid forms carry the dismiss-paw (icon 122 resolves); warrior stances 0.
+    // Druid forms carry the dismiss-paw ActiveIconID, 122; warrior stances carry 0.
     assert!(catalog.get(5487).unwrap().active_icon.is_some(), "bear");
     assert!(catalog.get(2457).unwrap().active_icon.is_none(), "battle");
-    // A non-form spell reads none of it.
     let fireball = catalog.get(133).unwrap();
     assert_eq!(fireball.shapeshift_form, None);
 }
 
-/// AttributesEx3 (column 9) bit 15 — `SPELL_ATTR3_NORMAL_RANGED_ATTACK`, the combat-text
-/// melee-white flip: set on exactly the ranged basic shots, clear on melee
-/// abilities and true spells.
+/// AttributesEx3 (column 9) bit 15, `SPELL_ATTR3_NORMAL_RANGED_ATTACK`, turns combat text
+/// melee-white: it is set on the ranged basic shots only.
 #[test]
 fn melee_white_damage_marks_the_ranged_basic_shots() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -205,8 +186,7 @@ fn melee_white_damage_marks_the_ranged_basic_shots() {
             "spell {id} should carry AttributesEx3 & 0x8000"
         );
     }
-    // Heroic Strike (a melee ability — its yellow rides the ATTACKERSTATEUPDATE spell-id rider,
-    // not this bit), Fireball, and Attack itself: all clear.
+    // Heroic Strike, Fireball, Attack. A melee ability's yellow rides the spell id, not this bit.
     for id in [78u32, 133, 6603] {
         assert!(
             !catalog.get(id).unwrap().melee_white_damage(),

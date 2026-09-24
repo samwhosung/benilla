@@ -1,10 +1,5 @@
-//! M2 anim-event regression test against real vanilla creatures (decision 0070 slice 3).
-//!
-//! Guards the event-track parse (events @MD20 0x114, stride 44, timestamps on the global
-//! sequence timeline — byte-verified on DireWolf.m2): every event key must land inside its
-//! sequence's `[0, duration]` window after the rebase, footstep tags must exist on walking
-//! creatures, and the identifier bytes must be forward-stored printable `$xxx` tags (a reversed
-//! read would produce `xxx$`). Skips when the client isn't present.
+//! M2 events: the table at MD20 `0x114`, 44 bytes a record, its keys timed on the global sequence
+//! timeline and rebased into each sequence; tags are stored forward, `$xxx`.
 
 use benilla_formats::{open_chain, parse_m2_animations};
 
@@ -49,17 +44,9 @@ fn creature_anim_events_parse_within_sequences() {
     }
 }
 
-/// **A fired key carries its OWN record's `(bone, position)`, not the tag's first match**.
-/// The reference's M2 event kernel `0x719370` snapshots
-/// `placementMatrix · (boneMatrix[event.bone] · event.position)` by value into the callback record
-/// every dispatcher reads, so *where* a key fires is a property of the record, and a consumer that
-/// re-finds the tag in the marker table by 4CC answers the wrong point wherever a model authors
-/// that tag twice.
-///
-/// It authors it twice a lot: **every player character model carries six `$CSD` records**, one per
-/// emote clip, each on its own bone. Pinned against `HumanMale.m2` — if the parse ever collapsed
-/// the records (or dropped the two new fields back to zero), the emote voices would all speak from
-/// the first one's bone.
+/// A fired key carries its own record's bone and position, not the tag's first match: the event
+/// kernel `0x719370` snapshots `placementMatrix · (boneMatrix[event.bone] · event.position)` into
+/// the callback record. Every player model authors six `$CSD` records, one per emote clip.
 #[test]
 fn a_fired_key_carries_its_own_records_bone_and_point() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -67,7 +54,6 @@ fn a_fired_key_carries_its_own_records_bone_and_point() {
     let model = "Character\\Human\\Male\\HumanMale.m2";
     let bytes = chain.read(model).expect("model bytes");
 
-    // The table's own records, and the per-sequence keys that fire them.
     let markers = benilla_formats::parse_m2_event_markers(&bytes).expect("event markers");
     let csd_records: Vec<_> = markers.iter().filter(|m| &m.ident == b"$CSD").collect();
     assert_eq!(
@@ -83,8 +69,6 @@ fn a_fired_key_carries_its_own_records_bone_and_point() {
         "{model}: the six records are distinct — a first-match lookup cannot stand in for them"
     );
 
-    // Every fired `$CSD` key must name one of those records, and across the model's sequences the
-    // keys must reach MORE THAN ONE of them — which is exactly what a by-4CC resolve could not do.
     let anims = parse_m2_animations(&bytes);
     let mut fired: std::collections::BTreeSet<(u16, [u32; 3])> = Default::default();
     for a in &anims {

@@ -1,26 +1,8 @@
-//! `charatlas` — composite one character's body atlas off the chain and report **what painted
-//! what**.
-//!
-//! The instrument the two "outfit texture" reports needed and nobody had. A dressed character's
-//! body is one 256² atlas of ten fixed tiles (bbox table `0xb42450`), and every visible defect in
-//! that class — a garment that stops early, a boot repainting a robe's hem, a bare band below the
-//! knee — is one tile receiving the wrong contribution. Reading that off a screenshot means
-//! guessing; reading it off the atlas means measuring.
-//!
-//! Three things it prints, all derived from the composite's own law
-//! ([`benilla_formats::equip_blits`]), never a second transcription:
-//!
-//! 1. **The plan** — every equipment contribution in blit order, with the file each name actually
-//!    resolved to (or `MISSING`, which is the silent skip that reads as "the texture ends early").
-//! 2. **The per-tile diff** vs the same character composited naked, per atlas ROW. A tile whose
-//!    lower rows go unpainted is a garment that stops early; a row count that changes when one slot
-//!    is added is that slot's footprint.
-//! 3. **The geosets** the same equipment selects, with the atlas rows each one samples — so "which
-//!    tile does the robe's skirt read?" is answered next to "what is in that tile".
-//!
-//! The tile↔geoset pairing is the whole diagnosis: geoset 1302 (the robe skirt) samples atlas rows
-//! 112–223, which straddles the LegUpper **and LegLower** tiles — so a boot's LegLower contribution
-//! lands on a robe's hem even though the boot's own geometry is disabled under a robe.
+//! `charatlas`: composite one character's body atlas off the chain and report what painted what:
+//! the equipment blits in [`benilla_formats::equip_blits`] order with the file each resolved to
+//! (`MISSING` leaves base skin), the rows each tile repaints against the naked body, and the
+//! geosets the equipment selects. Geoset 1302, the robe skirt, samples atlas rows 112-223 across
+//! the LegUpper and LegLower tiles, so a boot's LegLower blit shows on a robe's hem.
 
 use anyhow::{Context, Result};
 use benilla_formats::{
@@ -28,8 +10,7 @@ use benilla_formats::{
     CharSections, CharacterGeosets, EmblemLayer, EquipGeosets, GuildEmblem, ItemDisplay,
 };
 
-/// The ten atlas tiles by group, for the per-tile report — the five head/left-column ones included,
-/// so a head-section regression shows up in the same table as an equipment one.
+/// The body's ten fixed tiles in its 256² atlas (the reference's bbox table `0xb42450`).
 const TILES: [(&str, u32, u32, u32, u32); 10] = [
     ("g0 ArmUpper", 0, 0, 128, 64),
     ("g1 ArmLower", 0, 64, 128, 64),
@@ -43,13 +24,12 @@ const TILES: [(&str, u32, u32, u32, u32); 10] = [
     ("g7 Foot", 128, 224, 128, 32),
 ];
 
-/// The worn bodyslots the composite takes, in `equipment` order (bodyslot − 2).
+/// The worn bodyslots the composite takes, in `equipment` order (bodyslot - 2).
 const SLOT_NAMES: [&str; 8] = [
     "shirt", "chest", "belt", "pants", "boots", "wrist", "gloves", "tabard",
 ];
 
-/// One character appearance + what it wears — the whole input, so a report is reproducible from the
-/// command line that made it.
+/// One appearance and what it wears: the whole input, so its command line reproduces a report.
 pub struct Look {
     pub race: u8,
     pub sex: u8,
@@ -58,17 +38,13 @@ pub struct Look {
     pub facial_hair: u8,
     pub hair_style: u8,
     pub hair_color: u8,
-    /// The eight worn display ids in `equipment` order; `0` = the slot is empty.
+    /// The eight worn display ids in `equipment` order; 0 is an empty slot.
     pub slots: [u32; 8],
-    /// The wearer's guild tabard, or `None` for "no guild" — the same input the world composite
-    /// takes. It only paints over a tabard whose display asks for it, so passing
-    /// one without a guild-emblem tabard in the tabard slot is a no-op, on purpose.
+    /// The guild tabard; it paints only over a tabard display that asks for an emblem.
     pub emblem: Option<GuildEmblem>,
 }
 
-/// A BLP's header as the composite cares about it: the dimensions it blits at and the alpha depth
-/// that picks REPLACE (0) / 1-bit key (1) / blend (≥2) — the three that decide whether a
-/// contribution *covers* the one under it or lets it through.
+/// A BLP2's size and alpha depth, which picks the blit: replace (0), 1-bit key (1) or blend (2+).
 fn blp_shape(chain: &mut Chain, path: &str) -> Option<(u32, u32, u8)> {
     let b = chain.read_file(path).ok()?;
     if b.len() < 20 || &b[0..4] != b"BLP2" {
@@ -112,9 +88,7 @@ pub fn charatlas(chain: &mut Chain, look: &Look, out: Option<&std::path::Path>) 
         }
     }
 
-    // (1) The plan — the composite's own order, with what each name resolved to. Worn garments and
-    // the guild tabard's three layers come through the same list, because they land in the same
-    // rows and the question ("what repainted this cell?") is the same one.
+    // (1) The plan, in the composite's order; worn garments and the three emblem layers share it.
     println!("\nequipment blits (by ascending cell; later covers earlier within a tile):");
     for step in equip_blits(&equipment, look.emblem, false) {
         let (_x, y, w, h) = equip_tile(step.layer).expect("layer < 8");
@@ -222,7 +196,6 @@ pub fn charatlas(chain: &mut Chain, look: &Look, out: Option<&std::path::Path>) 
             })
             .collect();
         let rows = painted.iter().filter(|n| **n > 0).count();
-        // Where a tile stops is the diagnosis, so name the run rather than dumping 64 numbers.
         let first = painted.iter().position(|n| *n > 0);
         let last = painted.iter().rposition(|n| *n > 0);
         let span = match (first, last) {
@@ -235,18 +208,15 @@ pub fn charatlas(chain: &mut Chain, look: &Look, out: Option<&std::path::Path>) 
         );
     }
 
-    // (3) The geosets this same equipment selects. The atlas rows each samples are the model's
-    // (`benilla-extract m2batch <the race model>` prints the UV extents these come from), so the
-    // two halves of "which art lands on which geometry" sit in one report.
+    // (3) The geosets this equipment selects; `m2batch` on the race model prints their UV extents.
     let mut eq = EquipGeosets::default();
     for (i, d) in equipment.iter().enumerate() {
         if let Some(d) = d {
             eq.bodyslots[i] = Some(d.geoset_groups);
         }
     }
-    // B3's gate is the ArmLower tile's occupancy — read off the same plan printed above (1864).
+    // The shirt-cuff geoset's gate is the ArmLower tile's occupancy, read off the same plan.
     eq.forearm_dressed = forearm_dressed(&equipment);
-    // Sorted + deduplicated at the source (`visible_geosets`).
     let ids = geosets.visible_geosets(look.race, look.sex, look.hair_style, look.facial_hair, &eq);
     println!("\nvisible geosets: {ids:?}");
 

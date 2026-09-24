@@ -1,7 +1,6 @@
-//! Dump any file from the 5875 patch chain to stdout — the generic MPQ extractor for
-//! reference reads (FrameXML sources, DBC layouts): `cargo run -p benilla-formats
-//! --example dump_file -- 'Interface\FrameXML\TradeSkillFrame.lua'`. Output is Blizzard
-//! data — pipe it to the scratchpad, never into the repo.
+//! Any file from the patch chain to stdout, such as a FrameXML source or a DBC.
+//! `cargo run -p benilla-formats --example dump_file -- 'Interface\FrameXML\TradeSkillFrame.lua'`
+//! Output is Blizzard data: never commit it.
 
 use std::io::Write;
 

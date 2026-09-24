@@ -1,9 +1,6 @@
-//! One-off extraction helper (session tool, not shipped): `mpqx <data-dir> <virtual-path> <out>`.
-//! Reads through the SAME patch chain as the runtime ([`benilla_formats::Chain`], the full vanilla
-//! mount law) — it used to hand-roll a partial archive list in `benilla-mpq` and silently
-//! miss whole archives (`wmo.MPQ`: "not found" for every building/ship). A path the top archive
-//! **delete-marks** is reported as DELETED (exit 2) — the client doesn't load it; look for a
-//! `Blizzard_*` addon replacement.
+//! Extraction helper, not shipped: `mpqx <data-dir> <virtual-path> <out>`, read through the
+//! runtime's patch chain ([`benilla_formats::Chain`]). It exits 2 on a path the top archive
+//! delete-marks, which the client does not load.
 
 use std::path::Path;
 
@@ -32,7 +29,7 @@ fn main() {
                 from
             );
         }
-        // Chain::read distinguishes the tombstone in its message; surface it with the old exit code.
+        // `Chain::read` names a delete-marked path in its error message.
         Err(e) if e.to_string().contains("deleted from patch chain") => {
             eprintln!("{e} — the client does not load this path (see decision 0246)");
             std::process::exit(2);

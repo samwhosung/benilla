@@ -1,5 +1,4 @@
-//! Difftest the vanilla M2 particle-emitter parser against the real `ElwynnCampfire.m2` (the
-//! Goldshire-area campfire). Skips (passes) when the client isn't present at `<repo>/WoW/Data`.
+//! The M2 particle-emitter parser against shipped models.
 
 use benilla_formats::{
     open_chain, parse_m2_particle_emitters, CellRamp, OverLife, ParticleBlend, ParticleShape,
@@ -15,8 +14,7 @@ fn campfire_emitters_match_real_bytes() {
 
     let emitters = parse_m2_particle_emitters(&bytes).expect("parse emitters");
 
-    // The campfire has exactly two additive plane emitters: a wide slow glow/smoke plume and a fast
-    // narrow flame with a 4×4 cell flicker. These values are read straight off the real file.
+    // Two additive plane emitters, a slow glow plume and a fast 4×4-flipbook flame, off the file.
     assert_eq!(emitters.len(), 2, "campfire has two emitters");
 
     for e in &emitters {
@@ -30,7 +28,6 @@ fn campfire_emitters_match_real_bytes() {
             .expect("ambient prop rates are constant tracks");
         assert!(rate > 0.0 && rate.is_finite());
         assert!(now.horizontal_range > 6.0, "campfire emits in a full ring");
-        // Texture resolves to a real .blp via the M2 textures table.
         assert!(
             e.texture.as_deref().is_some_and(|t| !t.is_empty()),
             "emitter texture resolves, got {:?}",
@@ -38,7 +35,6 @@ fn campfire_emitters_match_real_bytes() {
         );
     }
 
-    // Glow/smoke plume: wide 20° cone, long life, low rate, single cell.
     let glow = &emitters[0];
     let glow_now = glow.params.sample(None, 0.0, 0.0);
     assert!(
@@ -54,7 +50,6 @@ fn campfire_emitters_match_real_bytes() {
     assert_eq!((glow.tile_rows, glow.tile_cols), (1, 1));
     assert!(glow_now.vertical_range > 0.3, "glow has a wide cone");
 
-    // Flame: short life, high rate, narrow cone, 4×4 cell animation.
     let flame = &emitters[1];
     let flame_now = flame.params.sample(None, 0.0, 0.0);
     assert!(
@@ -77,10 +72,7 @@ fn campfire_emitters_match_real_bytes() {
         "flame is a tight upward jet"
     );
 
-    // Drag (file +0x194): the velocity-decay term the verified integrator applies as
-    // `vel −= min(dt·drag, 1)·vel`. The campfire's smoke/glow plume carries a gentle 0.5 (contained
-    // column); its short-lived flame carries 0.0 (a free upward jet). Read straight off the real
-    // bytes — the candelabra props instead author a strong 10.0 and rely on it to stay a flicker.
+    // Drag, file `+0x194`, decays velocity as `vel -= min(dt·drag, 1)·vel`.
     assert!(
         (glow.drag - 0.5).abs() < 1e-3,
         "campfire glow drag ~0.5, got {}",
@@ -92,8 +84,6 @@ fn campfire_emitters_match_real_bytes() {
         flame.drag
     );
 
-    // Over-life ramps (verified tail). Dump the sampled color/size/cell across life, and assert the
-    // believability invariants: a fading additive weight (A) and a sensible size in yards.
     eprintln!("campfire emitters OK:");
     for (i, e) in emitters.iter().enumerate() {
         let ol = &e.over_life;
@@ -120,14 +110,12 @@ fn campfire_emitters_match_real_bytes() {
             );
         }
 
-        // Sizes are finite, non-negative, and small (campfire props are ~sub-yard to a couple yards).
         for s in ol.scale {
             assert!(
                 s.is_finite() && (0.0..8.0).contains(&s),
                 "emitter {i} scale {s} sane"
             );
         }
-        // Color/alpha keys are valid 0..1.
         for k in ol.color {
             for ch in k {
                 assert!(
@@ -142,7 +130,6 @@ fn campfire_emitters_match_real_bytes() {
         );
     }
 
-    // The glow/smoke plume fades out: its additive weight (alpha) at end-of-life is below its peak.
     let glow_ol = &emitters[0].over_life;
     let a_start = glow_ol.sample(0.0).color[3];
     let a_end = glow_ol.sample(1.0).color[3];
@@ -151,7 +138,6 @@ fn campfire_emitters_match_real_bytes() {
         "glow alpha should not rise over life ({a_start} -> {a_end})"
     );
 
-    // The flame's cell index advances across its 4×4 atlas over life (the flicker animation).
     let flame_ol = &emitters[1].over_life;
     let cell_start = flame_ol.sample(0.0).head_cell;
     let cell_end = flame_ol.sample(1.0).head_cell;
@@ -161,27 +147,20 @@ fn campfire_emitters_match_real_bytes() {
     );
 }
 
-/// The flipbook **cell ramp**, against the reference's own emulated output (`0x7b9da0` builds the
-/// record, `0x7b9b10` samples it). Two properties, and the second is the one that crashed us:
-///
-/// 1. **The endpoint law** — `cell(0) == begin` and `cell(1) == end`, EXACTLY, in both directions.
-///    That is what the `±1` in the build arms and the evaluator's `0.99·t + 0.005` inset exist to
-///    buy; either one alone is off by one at an endpoint.
-/// 2. **A DECREASING pair plays the flipbook backwards** — it is not swapped, not clamped, not
-///    sign-normalized. Shipped data authors it, so a `clamp(begin, end)` here is both wrong and
-///    (in Rust) a panic.
+/// The flipbook cell ramp against the reference's output (`0x7b9da0` builds it, `0x7b9b10` samples
+/// it): `cell(0) == begin` and `cell(1) == end` exactly, by the build's `±1` and the
+/// `0.99·t + 0.005` inset together, and a decreasing pair plays backwards.
 #[test]
 fn cell_ramp_matches_the_reference_including_backwards() {
     let at = |begin: u16, end: u16| {
         let r = CellRamp::new(begin, end);
-        // The sample points, through the same inset the evaluator
-        // applies (u = 0, ¼, ½, ¾, 1 of the segment).
+        // u = 0, ¼, ½, ¾ and 1, through the evaluator's inset.
         [0.0_f32, 0.25, 0.5, 0.75, 1.0]
             .map(|t| r.sample(t * 0.99 + 0.005))
             .to_vec()
     };
 
-    // Forward, and the three inverted pairs the shipped corpus actually authors.
+    // Forward, and the three inverted pairs the shipped corpus authors.
     assert_eq!(at(0, 15), vec![0, 4, 8, 11, 15], "ascending 0..15");
     assert_eq!(at(6, 5), vec![6, 6, 6, 5, 5], "DwarvenBrazier01 (6,5)");
     assert_eq!(
@@ -191,17 +170,13 @@ fn cell_ramp_matches_the_reference_including_backwards() {
     );
     assert_eq!(at(15, 0), vec![15, 11, 8, 4, 0], "ShadowWordSilence (15,0)");
 
-    // The endpoint law over every direction and the degenerate equal pair.
     for (b, e) in [(0, 15), (8, 16), (31, 16), (15, 0), (6, 5), (7, 7), (0, 63)] {
         let r = CellRamp::new(b, e);
         assert_eq!(r.sample(0.005), b, "cell(u=0) == begin for ({b},{e})");
         assert_eq!(r.sample(0.995), e, "cell(u=1) == end for ({b},{e})");
     }
 
-    // …and END-TO-END through `OverLife::sample`, which is where the inset is actually applied.
-    // Asserting the law on `CellRamp` alone passes even with the inset deleted (it feeds one in
-    // itself) — a mutation check caught exactly that hole. The reference has ONE normalized time
-    // and every consumer reloads it, so the endpoints must land on a whole-life sample too.
+    // Through `OverLife::sample`, where the inset is applied.
     let ol = OverLife {
         mid: 0.5,
         color: [[1.0; 4]; 3],
@@ -222,11 +197,8 @@ fn cell_ramp_matches_the_reference_including_backwards() {
     );
 }
 
-/// Colour and size ride the **same inset** as the cells — `0x7b9b10` computes `t·0.99 + 0.005`
-/// once, into its own `age` slot, and all four colour channels and the size reload that slot.
-/// So a particle never sits exactly on an authored key:
-/// it starts 0.5 % into the ramp and ends 0.5 % short. Lerping on a raw `t` is wrong at both ends
-/// of both segments — a small error, but a systematic one, and free to get right.
+/// Colour and size ride the cells' inset: `0x7b9b10` stores `t·0.99 + 0.005` once and every
+/// channel reloads it, so a particle starts 0.5% into its ramp and ends 0.5% short.
 #[test]
 fn colour_and_size_ride_the_same_inset() {
     let ol = OverLife {
@@ -237,7 +209,7 @@ fn colour_and_size_ride_the_same_inset() {
         tail_cells: [CellRamp::new(0, 0); 2],
         repeat: [1.0; 2],
     };
-    // Segment A runs 0 → 100 over u ∈ [0, 0.5]; at u=0 the inset puts us 0.5 % along it.
+    // Segment A runs 0 to 100 over u in [0, 0.5].
     let start = ol.sample(0.0);
     assert!(
         (start.size - 0.5).abs() < 1e-4,
@@ -249,7 +221,6 @@ fn colour_and_size_ride_the_same_inset() {
         "colour takes the same inset: got {}",
         start.color[0]
     );
-    // …and 99.5 % of the way at the segment's end, not 100 %.
     let end = ol.sample(0.5);
     assert!(
         (end.size - 99.5).abs() < 1e-3,
@@ -258,9 +229,7 @@ fn colour_and_size_ride_the_same_inset() {
     );
 }
 
-/// The crash reported from Winterspring: `DwarvenBrazier01`'s settling flame authors the
-/// inverted segment-B pair `(6,5)`, which the old `idx.clamp(begin, end)` met with a panic —
-/// `clamp` requires `min <= max`. Sampling the real record across life must simply work.
+/// `DwarvenBrazier01`'s settling flame authors the inverted segment-B pair `(6, 5)`.
 #[test]
 fn inverted_ramp_on_real_data_does_not_panic() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -287,10 +256,8 @@ fn inverted_ramp_on_real_data_does_not_panic() {
     }
 }
 
-/// The per-segment flipbook **repeat count** (file +0x16c/+0x172): `fmod(t·repeat, 1.0)` cycles the
-/// cell ramp that many times across the segment. 18 shipped emitters author one — all of them the
-/// druid Insect Swarm visuals, whose insects flap by cycling a 5- or 8-pass flipbook. A reader that
-/// ignores the field runs the sheet exactly once and the swarm never flaps.
+/// The per-segment flipbook repeat count (file `+0x16c`, `+0x172`) cycles the cell ramp by
+/// `fmod(t·repeat, 1.0)`; the 18 shipped emitters that author one are the Insect Swarm visuals.
 #[test]
 fn repeat_count_cycles_the_flipbook() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -302,7 +269,6 @@ fn repeat_count_cycles_the_flipbook() {
     let ol = &emitters[0].over_life;
     assert_eq!(ol.repeat, [5.0, 5.0], "the swarm authors a 5× cycle");
 
-    // Five passes across segment A means the cell index resets five times: count the drops.
     let mid = ol.mid;
     let mut drops = 0;
     let mut prev = ol.sample(0.0).head_cell;
@@ -319,17 +285,14 @@ fn repeat_count_cycles_the_flipbook() {
     );
 }
 
-/// The record-tail **twinkle** fields (`0x7b2a50`): file +0x188/+0x18c are twinkleScale
-/// **{min, max}** — a GATED per-frame size flicker, skipped
-/// when the range is degenerate — NOT a spawn-time size multiplier. The discriminating real-data
-/// case is the kobold candle: it authors `{0, 0}` and burns in the reference client, which the old
-/// `base + rand·variation` reading collapsed to size zero (the director's "candles not burning").
+/// File `+0x188` and `+0x18c` are twinkleScale `{min, max}`, a per-frame size flicker skipped when
+/// the range is degenerate (`0x7b2a50`), not a spawn-time multiplier: the kobold candle authors
+/// `{0, 0}` and burns in the reference.
 #[test]
 fn twinkle_fields_gate_not_scale() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = open_chain(&data).expect("open vanilla patch chain");
 
-    // Kobold candle: twinkle {0,0} — degenerate range, the multiplier must be identity.
     let kobold = parse_m2_particle_emitters(
         &chain
             .read_file("Creature\\Kobold\\Kobold.m2")
@@ -344,13 +307,11 @@ fn twinkle_fields_gate_not_scale() {
         1.0,
         "degenerate {{0,0}} twinkle is identity — the candle burns at ramp size"
     );
-    // Its base size is the over-life ramp alone — nonzero at mid-life.
     assert!(
         candle.over_life.sample(0.5).size > 0.0,
         "the candle flame's over-life size ramp is nonzero"
     );
 
-    // Campfire glow plume: twinkle {0, 1} — an active flicker range; samples lerp min..max.
     let campfire = parse_m2_particle_emitters(
         &chain
             .read_file("World\\Azeroth\\Elwynn\\PassiveDoodads\\Campfire\\ElwynnCampfire.m2")
@@ -360,16 +321,12 @@ fn twinkle_fields_gate_not_scale() {
     let glow = &campfire[0];
     assert_eq!((glow.twinkle_min, glow.twinkle_max), (0.0, 1.0));
     assert_eq!(glow.twinkle(0.25), 0.25, "active range lerps min..max");
-    // A degenerate NON-ZERO range is also identity ({1,1} torches burn steady, not 1–2× inflated).
     assert!(glow.twinkle_percent.is_finite() && glow.twinkle_speed.is_finite());
 }
 
-/// The file→runtime flag remap (`0x70faf8`–`0x70fc44`): the space switch is FILE bit 0x10
-/// (→ rt 0x100), the size-by-scale
-/// enable FILE 0x20 (→ rt 0x200) — pinned on real content whose behavior the reference shows:
-/// the kobold candle (0x01) is carried with no trail and un-flagged for both; the swinging
-/// chandelier's candle flames (0x11/0x15) are model-space (they rigidly ride the swing); the
-/// campfire (0x21/0x29) scales its flame size with the placement.
+/// The file-to-runtime flag remap (`0x70faf8`-`0x70fc44`): file bit 0x10 (runtime 0x100) is model
+/// space, file 0x20 (runtime 0x200) scales size by the placement. The chandelier's flames (0x11,
+/// 0x15) ride its swing; the campfire (0x21, 0x29) scales.
 #[test]
 fn flag_remap_reads_the_file_bits() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -406,12 +363,8 @@ fn flag_remap_reads_the_file_bits() {
     );
 }
 
-/// **The B27 pin, at the real bytes** — `G_BarrelExplode.m2` (GameObject 20737, "Keenly
-/// Disguised Barrel"): all 7 emitters author their explosion inside the one-shot clips
-/// (slot 0 = anim 157, slot 3 = anim 150 Destroy) and an OFF window in both idle sequences
-/// (slot 1 = Stand, slot 2 = anim 147 Closed). The reference shows a quiet barrel at rest; the
-/// old seq-0-only rebase parked the clamped explode clock at its end value and the barrel
-/// burned permanently at 748 live particles.
+/// `G_BarrelExplode.m2` (GameObject 20737): all 7 emitters fire inside the one-shot clips (slot 0,
+/// anim 157; slot 3, anim 150 Destroy) and are off in both idles (slot 1 Stand, slot 2 Closed).
 #[test]
 fn barrel_explode_emitters_are_off_at_rest_and_fire_in_their_clips() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -425,7 +378,6 @@ fn barrel_explode_emitters_are_off_at_rest_and_fire_in_their_clips() {
     assert_eq!(emitters.len(), 7, "the barrel authors seven emitters");
     for (i, e) in emitters.iter().enumerate() {
         assert!(e.timing.peak_rate() > 0.0, "emitter {i} can emit");
-        // OFF through both idle windows — Stand (slot 1) and Closed (slot 2), at any time.
         for slot in [1usize, 2] {
             for t in [0.0f32, 0.1, 0.3, 5.0] {
                 assert!(
@@ -434,12 +386,9 @@ fn barrel_explode_emitters_are_off_at_rest_and_fire_in_their_clips() {
                 );
             }
         }
-        // The one-shot explode clip (slot 0, anim 157, 1 s clamped): the choreography fires
-        // somewhere inside it…
+        // The explode clip, slot 0, runs 1 s and clamps.
         let fires = (0..100).any(|k| e.timing.emitting(Some(0), k as f32 * 0.01, 0.0));
         assert!(fires, "emitter {i} fires inside the explode clip");
-        // …and the clamped clock PARKS OFF at/after the clip end — the exact end state the old
-        // rebase got wrong (it clamped a later clip's ON key onto the band end).
         assert!(
             !e.timing.emitting(Some(0), 1.0, 0.0),
             "emitter {i} must be off at the clip end"
@@ -449,21 +398,15 @@ fn barrel_explode_emitters_are_off_at_rest_and_fire_in_their_clips() {
             "emitter {i} must stay off parked past the clip"
         );
     }
-    // The Destroy clip (slot 3, anim 150) fires the explosion too — the quest's actual payoff.
     let destroy_fires = emitters
         .iter()
         .any(|e| (0..100).any(|k| e.timing.emitting(Some(3), k as f32 * 0.01, 0.0)));
     assert!(destroy_fires, "the Destroy clip plays the explosion");
 }
 
-/// The debris family's blend: file `blendingType` **1 is AlphaKey**, not Opaque — the fold that
-/// painted the Lesser Rock Elemental's rock chips as flat pale squares.
-///
-/// Pinned on the elemental because it is the one CREATURE in the corpus that authors mode 1 (a
-/// `partcensus` sweep finds 26 such emitters in 8 models, the other 7 all `Spells\`). The
-/// distinction is load-bearing: mode 1 draws with blending OFF but under `glAlphaFunc(GEQUAL,
-/// 224/255)`, which carves `PARTROCK.BLP`'s silhouette out of the quad; mode 0 has no alpha test
-/// at all, and nothing in 1.12.1 authors it.
+/// Particle `blendingType` 1 is AlphaKey, not Opaque: blending off under `glAlphaFunc(GEQUAL,
+/// 224/255)`, which cuts `PARTROCK.BLP`'s silhouette. The earth elemental is the one creature that
+/// authors it, and nothing in 1.12.1 authors mode 0.
 #[test]
 fn earth_elemental_debris_is_alphakey_not_opaque() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -486,7 +429,6 @@ fn earth_elemental_debris_is_alphakey_not_opaque() {
     assert_eq!(emitters[12].blend, ParticleBlend::AlphaKey);
     assert_eq!(emitters[11].blend, ParticleBlend::Alpha);
 
-    // Nothing on this model — nor anywhere in the shipped corpus — is mode 0.
     assert!(
         !emitters.iter().any(|e| e.blend == ParticleBlend::Opaque),
         "no emitter here folds to Opaque"

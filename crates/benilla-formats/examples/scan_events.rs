@@ -1,12 +1,7 @@
-//! Which models author a given M2 animation event? `cargo run -p benilla-formats --example
-//! scan_events -- '$CCH' weapon` — scans every `.m2` in the 5875 chain whose path contains the
-//! (optional, case-insensitive) substring and prints each model authoring the 4CC, with the
-//! event's bone and raw WoW position. The sibling of `dump_attach`: that answers "what does THIS
-//! model author", this answers "who else authors THIS event" — the question every event-keyed
-//! consumer (bowstring `$WTT`, fishing line `$CCH`, GO sound slots `$GC0`) eventually asks when
-//! deciding whether the ident alone is a safe gate.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! Every M2 authoring a given animation-event 4CC, with the event's bone and raw position, to
+//! check whether the ident alone is a safe gate (`$WTT` bowstring, `$CCH` fishing line).
+//! `cargo run -p benilla-formats --example scan_events -- '$CCH' [path-substring]`
+//! Output is Blizzard data: never commit it.
 
 fn le_u32(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes(b[o..o + 4].try_into().unwrap())

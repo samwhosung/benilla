@@ -1,34 +1,17 @@
-//! The real client's own MO_TRANSPORT cycle-period bookkeeping (`WoW.exe` `0x5f4cc0` + its
-//! arc-time solver `0x5f9120`), transcribed step-for-step: this recipe reproduces **all nine**
-//! live transport paths' server-sniff periods bit-exact. The wire anchor is a raw
-//! server-uptime-scale clock, so the `% period` amplifies any Δms by the whole cycle count — the
-//! period must be *exact*, not close. vmangos pins its DB periods to sniffs of
-//! THIS computation, so matching the client is matching the server.
+//! The reference's `MO_TRANSPORT` cycle period (`0x5f4cc0` with its arc-time solver `0x5f9120`),
+//! transcribed step for step: it reproduces all nine transport paths' sniffed periods bit-exact,
+//! and must, as the wire anchor is a server-uptime clock whose `% period` multiplies any error by
+//! the cycle count. vmangos's periods are sniffs of this computation.
 //!
-//! Layout facts this transcription rests on:
-//! - Legs split when the row's map changes OR the previous row has `Flags & 1`; **every** row of
-//!   the path lands in a leg — the leg's first and last points are Catmull-Rom guard points the
-//!   travel never lands on (curve eval samples segment `seg` over `P[seg..seg+4]`, interpolating
-//!   `P[seg+1] → P[seg+2]` (`0x453580`); `n_seg = count − 3`, built only when `count > 3`
-//!   (`0x4532e0`).
-//! - Per-segment arc length = 20 sub-chords of the cubic eval, **f32-narrowing accumulate**, the
-//!   sample parameter itself an f32 stepped by 0.05 (`0x453760`); cumulative distance = f64 sum
-//!   of the f32 segment lengths (`0x453300`); the cached leg total narrows to f32 (`0x4532e0`'s
-//!   `fstp dword`).
-//! - Span times: a span runs stop→stop *including leg start/end as mid-cruise boundaries* — the
-//!   first span charges one ramp (the decel into the first stop), interior spans two (the full
-//!   trapezoid), the final span one (the accel out); a leg with no stops is pure cruise `d/v`.
-//!   Each span's time is rounded to ms **individually** (`round_ftol`) and accumulated as
-//!   integer — the per-span rounding is exactly what a whole-path float accumulation misses.
-//! - `period = Σ leg durations + Σ stop delays (Delay × 1000, integer)`; stops are counted once,
-//!   and a stop flag on a leg's *first* row is ignored (the point list is still empty when the
-//!   stop check runs — `0x5f4cc0`'s `local_1c != 0` gate).
+//! A leg ends where the map changes or the previous row has `Flags & 1`; its first and last points
+//! are Catmull-Rom guards the travel never reaches. A span runs stop to stop, a leg's ends counting
+//! as mid-cruise, and each span rounds to ms on its own before the integer sum, which a float sum
+//! over the path would miss. The period adds every stop's `Delay × 1000`.
 
 use crate::taxi::TaxiPathNode;
 
-/// The client's position-basis matrix `0xb05e10` — the uniform Catmull-Rom (tension 0.5) basis,
-/// rows as Horner coefficients highest-degree-first (row `i` weights control point `P[seg+i]`).
-/// Decoded from the static-init immediates at `0x453fa0`.
+/// The reference's basis `0xb05e10` (set at `0x453fa0`): uniform Catmull-Rom, tension 0.5, row
+/// `i` the Horner coefficients, highest degree first, that weight `P[seg+i]`.
 const CR_BASIS: [[f32; 4]; 4] = [
     [-0.5, 1.0, -0.5, 0.0],
     [1.5, -2.5, 0.0, 1.0],
@@ -36,8 +19,7 @@ const CR_BASIS: [[f32; 4]; 4] = [
     [0.5, -0.5, 0.0, 0.0],
 ];
 
-/// `0x453620` `BasisWeight`: the cubic basis polynomial in Horner form, f64-internal, returned
-/// unrounded to the evaluator.
+/// `0x453620`: the basis cubic in Horner form, computed in f64 and returned unrounded.
 fn basis_weight(coeff: &[f32; 4], t: f32) -> f64 {
     let t = f64::from(t);
     let mut w = f64::from(coeff[0]);
@@ -47,10 +29,9 @@ fn basis_weight(coeff: &[f32; 4], t: f32) -> f64 {
     w
 }
 
-/// `0x453580` cubic point evaluator: `out = Σ wᵢ·Pᵢ` over 4 consecutive control points, with the
-/// **asymmetric** per-component narrowing the bytes show — the x product stays f64 into its add,
-/// the y/z products narrow to f32 first (`fstp dword` temp), and every component's accumulator
-/// re-narrows to f32 each step.
+/// `0x453580`: `Σ wᵢ·Pᵢ` over 4 control points, narrowing asymmetrically: the x product stays f64
+/// into its add, the y and z products narrow to f32 first, and every accumulator narrows to f32
+/// each step.
 fn eval_point_cubic(cps: &[[f32; 3]], t: f32) -> [f32; 3] {
     let mut out = [0.0f32; 3];
     for (i, p) in cps.iter().take(4).enumerate() {
@@ -64,8 +45,8 @@ fn eval_point_cubic(cps: &[[f32; 3]], t: f32) -> [f32; 3] {
     out
 }
 
-/// `0x453760` arc-length integrator: 20 sub-chords at an f32 parameter stepped by 0.05, chord
-/// length `sqrt((dz²+dy²)+dx²)` f64-internal, the accumulator narrowing to f32 every step.
+/// `0x453760`: 20 sub-chords at an f32 parameter stepped by 0.05, each `sqrt((dz²+dy²)+dx²)` in
+/// f64, the sum narrowing to f32 every step.
 fn seg_arc_length(cps: &[[f32; 3]]) -> f32 {
     let mut prev = eval_point_cubic(cps, 0.0);
     let mut acc = 0.0f32;
@@ -83,9 +64,8 @@ fn seg_arc_length(cps: &[[f32; 3]]) -> f32 {
     acc
 }
 
-/// `0x453300` knot-sum: the cumulative distance of point index `idx` from the leg's travel start
-/// = the pure-f64 sum of the first `idx − 1` per-segment f32 lengths (the guard-point shift makes
-/// this exactly point `idx`'s distance — segment 0 spans `P[1] → P[2]`).
+/// `0x453300`: point `idx`'s distance from the leg's start, the f64 sum of the first `idx - 1`
+/// f32 segment lengths (segment 0 spans `P[1]` → `P[2]`).
 fn knot_sum(seg_len: &[f32], idx: usize) -> f64 {
     let mut acc = 0.0f64;
     for &k in seg_len.iter().take(idx.saturating_sub(1)) {
@@ -94,8 +74,7 @@ fn knot_sum(seg_len: &[f32], idx: usize) -> f64 {
     acc
 }
 
-/// `·1000` then round-half-away-from-zero then truncate — the client's `__ftol` rounding idiom
-/// (`0x40a2b0`).
+/// Seconds to ms, rounded half away from zero: the reference's `__ftol` idiom (`0x40a2b0`).
 fn round_ftol(t: f64) -> i32 {
     let scaled = t * 1000.0;
     let adj = if scaled > 0.0 {
@@ -106,10 +85,9 @@ fn round_ftol(t: f64) -> i32 {
     adj.trunc() as i32
 }
 
-/// `0x5f9120` per-span arc time: the constant-acceleration solve over the span's distance
-/// `d = p − l`, with the client's own f32/f64 mixing (`A` and `B` stored f32, the discriminant
-/// compare on the *live* f64 `B`).
-/// `first` = the leg's first span (one ramp: leg start is mid-cruise); otherwise two ramps.
+/// `0x5f9120`: a span's constant-acceleration time over `d = p - l`, `A` and `B` stored as f32
+/// but compared on the live f64 `B`. A leg's `first` span has one ramp, as its start is
+/// mid-cruise; later spans have two.
 fn arc_time_ms(p: f64, l: f32, speed: f32, accel: f32, first: bool) -> i32 {
     let d = p - f64::from(l);
     let a = (f64::from(speed) / f64::from(accel)) as f32;
@@ -129,9 +107,8 @@ fn arc_time_ms(p: f64, l: f32, speed: f32, accel: f32, first: bool) -> i32 {
     round_ftol(t)
 }
 
-/// `0x5f9120` block 2, the leg's final span: with no stop
-/// processed the whole leg is pure cruise `d/v` (no ramps — both ends are mid-cruise); after a
-/// stop it's the one-ramp form (the accel out of the last stop).
+/// `0x5f9120` block 2, a leg's last span: pure cruise `d/v` when the leg had no stop, else one
+/// ramp out of the last stop.
 fn arc_time_ms_final(p: f32, l: f32, speed: f32, accel: f32, first: bool) -> i32 {
     let d = f64::from(p) - f64::from(l);
     let t: f64 = if first {
@@ -150,8 +127,7 @@ fn arc_time_ms_final(p: f32, l: f32, speed: f32, accel: f32, first: bool) -> i32
 
 /// One closed leg's contribution: `(span-time sum, Σ its stop delays)`.
 fn close_leg(points: &[[f32; 3]], stops: &[(usize, i32)], speed: f32, accel: f32) -> (i32, i32) {
-    // BuildArcLen only runs for count > 3 (`0x4532e0`'s gate); a shorter leg keeps a zero
-    // seg-table and zero cached total, so every span solves over d = 0.
+    // Segments exist only past 3 points (`0x4532e0`); a shorter leg solves every span over d = 0.
     let (seg_len, total) = if points.len() > 3 {
         let n_seg = points.len() - 3;
         let seg_len: Vec<f32> = (0..n_seg).map(|s| seg_arc_length(&points[s..])).collect();
@@ -163,27 +139,26 @@ fn close_leg(points: &[[f32; 3]], stops: &[(usize, i32)], speed: f32, accel: f32
 
     let mut duration = 0i32;
     let mut delays = 0i32;
-    let mut l = 0.0f32; // the running span-start distance ([ebp+0x10], an f32 slot)
+    let mut l = 0.0f32; // the span start, an f32 slot (`[ebp+0x10]`)
     let mut processed = 0usize;
     for &(pt_idx, delay_ms) in stops {
         delays += delay_ms;
-        // A stop on the leg's last point (or the guard) has no span of its own (`0x5f9120`'s
-        // `count − 1 <= idx` break) — its delay still counts in the period.
+        // A stop on the leg's last point or guard has no span (`0x5f9120`'s `count - 1 <= idx`
+        // break), but its delay counts.
         if pt_idx + 1 >= points.len() {
             break;
         }
         let p = knot_sum(&seg_len, pt_idx);
         duration += arc_time_ms(p, l, speed, accel, processed == 0);
-        l = p as f32; // the solver's `fst dword` — the next span's start narrows to f32
+        l = p as f32; // the next span's start narrows to f32 (`fst dword`)
         processed += 1;
     }
     duration += arc_time_ms_final(total, l, speed, accel, processed == 0);
     (duration, delays)
 }
 
-/// The full client period for one transport path, ms — `0x5f4cc0`'s `handler+0x3c`, bit-exact
-/// (gold-gated against the nine server-sniff values by `transports.rs`' calibration test).
-/// `None` for an empty path.
+/// One transport path's period in ms, `0x5f4cc0`'s `handler+0x3c`; the `transports` calibration
+/// test pins it to the nine sniffed values.
 pub(crate) fn client_period_ms(nodes: &[TaxiPathNode], speed: f32, accel: f32) -> Option<u32> {
     if nodes.is_empty() || accel <= 0.0 {
         return None;
@@ -201,9 +176,8 @@ pub(crate) fn client_period_ms(nodes: &[TaxiPathNode], speed: f32, accel: f32) -
             stops.clear();
             leg_map = node.map_id;
         }
-        // The stop check runs before the point append: a stop flag on the leg's first row is
-        // ignored (`0x5f4cc0`, the `local_1c != 0` gate). The client tests `Flags & 2` as a
-        // bitmask (`0x5f4e37`) and multiplies the delay as an integer.
+        // The stop check precedes the append, so a stop on a leg's first row is ignored
+        // (`0x5f4cc0`'s `local_1c != 0` gate); `Flags & 2` is a bitmask test (`0x5f4e37`).
         if node.flags & 2 != 0 && !points.is_empty() {
             stops.push((points.len(), node.delay as i32 * 1000));
         }

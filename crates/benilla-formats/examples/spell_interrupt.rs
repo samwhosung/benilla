@@ -1,5 +1,4 @@
-//! Throwaway: print the interrupt-flag columns for named spell ids, so a claim about what
-//! cancels a spell locally can be checked against the real shipped Spell.dbc.
+//! The interrupt-flag and attribute columns of `Spell.dbc` for the given spell ids.
 fn main() -> anyhow::Result<()> {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;

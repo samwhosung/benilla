@@ -1,11 +1,6 @@
-//! `BankBagSlotPrices.dbc` — the bank's purchase-ladder price table.
-//!
-//! 12 rows × 2 `u32` columns (`ID`, price in copper). Verified from the real 5875 `dbc.MPQ`
-//! (dumped this session): rows 1–6 = 1000, 10000, 100000, 250000, 500000, 1000000; rows 7–12 a
-//! `999999999` sentinel — only the first 6 bank bag slots are actually purchasable
-//! (`GetNumBankSlots()` reports `full` at 6; the sentinel rows exist but are unreachable).
-//! `CMSG_BUY_BANK_SLOT` carries no slot index — the server buys slot `purchased_count + 1` itself
-//! (`PLAYER_BYTES_2` byte 2) — so the client's only job is pricing that next slot.
+//! `BankBagSlotPrices.dbc`: the copper price of each bank bag slot. Rows 7-12 hold an unreachable
+//! `999999999` sentinel, as `GetNumBankSlots()` reports full at 6. `CMSG_BUY_BANK_SLOT` carries no
+//! index: the server buys the slot after the count in `PLAYER_BYTES_2` byte 2.
 
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
@@ -20,10 +15,7 @@ const BANK_BAG_SLOT_PRICES: &str = "DBFilesClient\\BankBagSlotPrices.dbc";
 pub struct BankBagSlotPrices(HashMap<u32, u32>);
 
 impl BankBagSlotPrices {
-    /// The cost of the *next* bank bag slot, given `purchased_count` already bought (slot
-    /// `purchased_count + 1`, 1-based to match the DBC's row ids). `None` past the table — no row
-    /// for that slot number at all, not merely the sentinel (the 6-purchasable-slot cap is a data
-    /// fact, not something this reader hardcodes).
+    /// The price of slot `purchased_count + 1`; a sentinel row still reads as its price.
     pub fn next_slot_price(&self, purchased_count: u8) -> Option<u32> {
         self.0.get(&(u32::from(purchased_count) + 1)).copied()
     }
@@ -52,7 +44,6 @@ pub fn load_bank_bag_slot_prices(chain: &mut Chain) -> Result<BankBagSlotPrices>
     table_from(&bytes)
 }
 
-/// The parse itself, split from the chain read so the golden test drives the identical path.
 fn table_from(bytes: &[u8]) -> Result<BankBagSlotPrices> {
     let rs = parse(bytes, schema(), "BankBagSlotPrices")?;
     let mut prices = HashMap::with_capacity(rs.records().len());
@@ -68,8 +59,7 @@ fn table_from(bytes: &[u8]) -> Result<BankBagSlotPrices> {
 mod tests {
     use super::*;
 
-    /// A hand-built WDBC with the real 5875 rows (verified against `dbc.MPQ` this session,
-    /// decision 0604): 6 real prices then the 6-row `999999999` sentinel.
+    /// A WDBC with the shipped rows: six prices, then six `999999999` sentinel rows.
     fn synthesize() -> Vec<u8> {
         let rows: &[[u32; 2]] = &[
             [1, 1_000],

@@ -1,27 +1,12 @@
-//! Footsteps: the terrain-type chain (decision 0070 slice 3) —
-//! `ground texture → GroundEffectTexture.TerrainType → TerrainType.SoundID ×
-//! CreatureSoundData.FootstepID → FootstepTerrainLookup → SoundEntries (dry | splash)`.
+//! Footsteps: ground texture → `GroundEffectTexture.TerrainType` → `TerrainType.SoundID`, joined
+//! with `CreatureSoundData.FootstepID` in `FootstepTerrainLookup` to a dry and a splash
+//! `SoundEntries` kit. `TerrainType.dbc` is `ID`, `Desc`, `FootstepSprayRun`, `FootstepSprayWalk`,
+//! `SoundID`, `Flags`: 11 rows, `SoundID` 1 to 9 (DustyGrass shares Grass's 6) and 0 for None.
 //!
-//! Layouts — VERIFIED against build 5875 (headers + row decodes, 2026-07-02):
-//! - `TerrainType` **11 × 6 × 24 B**: `ID, Desc(str), FootstepSprayRun, FootstepSprayWalk,
-//!   SoundID, Flags` — the full domain decoded: Dirt→1, Metallic→2, Stone→3, Snow→4, Wood→5,
-//!   Grass→6, Leaves→7, Sand→8, Soggy→9, DustyGrass→6, None→0.
-//! - `FootstepTerrainLookup` **179 × 5 × 20 B**: `ID, CreatureFootstepID, TerrainSoundID,
-//!   SoundID(dry), SoundIDSplash`. Spot-checks: class 8 × terrain-sound 2 (Metallic) →
-//!   650/1063; class 8 × 3 (Stone) → 653/1057.
-//! - `GroundEffectTexture` field 6 is the `TerrainType` FK (the clutter catalog reads the same
-//!   table for doodads and rightly skips doodad-less rows; footsteps need every row, so this
-//!   module re-reads it into its own map).
-//!
-//! Class semantics (data-verified 2026-07-02; class-0 gate at `0x6233ec`): **class 7 is the
-//! humanoid/character class** — its ten rows
-//! are exactly the `CharacterMediumLarge*` kits; characters reach it through the ordinary
-//! display→sound data chain (`creature_sound`, the model fallback), never a code default.
-//! **Class 0 means "no footstep sounds"** — the client bails before any lookup; the lookup's
-//! class-0 rows are the Ancient Protector's stomps (kit 661), reached only by a *nonzero* class
-//! on its own row. A position with **no ground-effect layer is silent** — the client's sentinel
-//! is −1 and the kit lookup's signed bounds check rejects it (`0x458450`; the
-//! audible fingerprint is vanilla's famously quiet dirt roads).
+//! Class 7 is the character class (its rows are the `CharacterMediumLarge*` kits), reached through
+//! the display's sound data, never a code default. Class 0 means no footsteps: the reference bails
+//! before any lookup (`0x6233ec`). A position with no ground-effect layer is silent: its sentinel
+//! is -1, which the kit lookup's signed bounds check rejects (`0x458450`).
 
 use std::collections::HashMap;
 
@@ -35,19 +20,17 @@ use crate::dbc::{parse, str_at, u32_at};
 pub struct FootstepCatalog {
     /// `GroundEffectTexture` id → `TerrainType` id (every row, including doodad-less ones).
     effect_terrain: HashMap<u32, u32>,
-    /// `TerrainType` id → its `SoundID` class (the lookup's `TerrainSoundID` axis).
+    /// `TerrainType` id → its `SoundID` (the lookup's `TerrainSoundID` axis).
     terrain_sound: HashMap<u32, u32>,
-    /// `TerrainType` id → its `Flags` word. In the shipped 5875 data bit 0 is set on exactly
-    /// Snow (3) and Sand (7) — the leaves-footprints surfaces (the reporter-visible pair).
+    /// `TerrainType` id → its `Flags`; bit 0, the footprint bit, is set on Snow (3) and Sand (7).
     terrain_flags: HashMap<u32, u32>,
     /// `(CreatureFootstepID, TerrainSoundID)` → `(dry kit, splash kit)`.
     lookup: HashMap<(u32, u32), (u32, u32)>,
 }
 
 impl FootstepCatalog {
-    /// The `(dry, splash)` SoundEntries kits for a creature footstep class standing on the given
-    /// ground-effect layer. `None` = silence: no/unknown effect layer (the client's −1 sentinel,
-    /// module docs), or no lookup row for `(class, terrain)`.
+    /// The `(dry, splash)` `SoundEntries` kits for a footstep class on a ground-effect layer;
+    /// `None`, silence, for no layer or no row.
     pub fn resolve(&self, footstep_class: u32, effect_id: Option<u32>) -> Option<(u32, u32)> {
         self.resolve_terrain(
             footstep_class,
@@ -55,44 +38,35 @@ impl FootstepCatalog {
         )
     }
 
-    /// The same `(dry, splash)` answer from a `TerrainType` id **directly**, skipping the
-    /// `GroundEffectTexture` hop. This is the tail both legs of the client's down-ray share: the
-    /// ADT leg reaches a terrain id through the ground-effect layer, the WMO leg carries one in
-    /// the surface itself.
+    /// The same kits from a `TerrainType` id: the reference's down-ray reaches one through the
+    /// ground-effect layer on terrain and reads it off the surface in a WMO.
     pub fn resolve_terrain(&self, footstep_class: u32, terrain: u32) -> Option<(u32, u32)> {
         let sound_class = self.terrain_sound.get(&terrain).copied()?;
         self.lookup.get(&(footstep_class, sound_class)).copied()
     }
 
-    /// Does the ground under this effect layer take footprint decals? `TerrainType.Flags` bit 0
-    /// through the same effect→terrain chain the sounds ride (INTERIM reading, decision 1006:
-    /// bit 0 fits the shipped data — set on exactly Snow and Sand — with the client's own gate
-    /// unconfirmed). No/unknown effect layer = no prints.
+    /// Whether the ground under an effect layer takes footprints: `TerrainType.Flags` bit 0, the
+    /// bit the reference's footprint gate tests (`0x699e8e`). No layer, no prints.
     pub fn leaves_footprints(&self, effect_id: Option<u32>) -> bool {
         effect_id
             .and_then(|e| self.effect_terrain.get(&e))
             .is_some_and(|&t| self.terrain_leaves_footprints(t))
     }
 
-    /// The same `TerrainType.Flags` bit 0 gate from a terrain id **directly** — the form both legs
-    /// of the down-ray share, since the WMO leg carries a terrain id rather than an effect layer.
-    /// Set on exactly Snow (3) and Sand (7) in the shipped data; the unauthored WMO default
-    /// `10 "None"` is clear, which is why a building's floor takes no prints.
+    /// The footprint bit from a terrain id; the WMO default, 10 "None", is clear, so a building's
+    /// floor takes no prints.
     pub fn terrain_leaves_footprints(&self, terrain: u32) -> bool {
         self.terrain_flags
             .get(&terrain)
             .is_some_and(|flags| flags & 1 != 0)
     }
 
-    /// The `TerrainType` id under a ground-effect layer — the chain's first hop on its own.
-    /// Exposed for the `surface_here` probe, which has to show *where* the chain lands, and where
-    /// it falls off, not just the kit it ends at.
+    /// The `TerrainType` id under a ground-effect layer, the chain's first hop.
     pub fn terrain_of(&self, effect_id: u32) -> Option<u32> {
         self.effect_terrain.get(&effect_id).copied()
     }
 
-    /// A `TerrainType`'s `SoundID` — the `FootstepTerrainLookup` axis the kit is chosen on.
-    /// Companion to [`Self::terrain_of`]; the same map [`Self::resolve`] walks.
+    /// A `TerrainType`'s `SoundID`, the `FootstepTerrainLookup` axis.
     pub fn sound_class_of(&self, terrain: u32) -> Option<u32> {
         self.terrain_sound.get(&terrain).copied()
     }
@@ -178,10 +152,8 @@ pub fn load_footstep_catalog(chain: &mut Chain) -> Result<FootstepCatalog> {
     })
 }
 
-/// `FootprintTextures.dbc` — id → texture path (extensionless, e.g.
-/// `textures\Footsteps\BaseFootprint`), the table `CreatureModelData.FootprintTextureID`
-/// indexes. Shipped 5875 data: 6 rows (1 Base, 3 Cloven, 4 Bare, 5 Claw, 6 Hoof, 7 Paw), all
-/// 32×32 pure-black-RGB BLPs under a soft alpha — the print decal's ink.
+/// `FootprintTextures.dbc`, id → extensionless texture path (`textures\Footsteps\BaseFootprint`),
+/// the table `CreatureModelData.FootprintTextureID` indexes.
 pub fn load_footprint_textures(chain: &mut Chain) -> Result<HashMap<u32, String>> {
     let bytes = chain
         .read_file("DBFilesClient\\FootprintTextures.dbc")
@@ -204,10 +176,7 @@ pub fn load_footprint_textures(chain: &mut Chain) -> Result<HashMap<u32, String>
 mod tests {
     use super::*;
 
-    /// The full chain resolves on real 5875 data: a Metallic-terrain effect under footstep
-    /// class 8 yields the byte-decoded kits (650 dry / 1063 splash); the humanoid class 7
-    /// resolves the `CharacterMediumLarge*` kits (560 Dirt with no effect, 562 Grass on a
-    /// grass-terrain effect — the character-in-Elwynn case); an unknown class stays silent.
+    /// The chain on 5875 data: class 8 on Metallic, and the character class on dirt and grass.
     #[test]
     fn real_footstep_chain_resolves() {
         let data = crate::wow_data_or_skip!();
@@ -215,7 +184,7 @@ mod tests {
         let cat = load_footstep_catalog(&mut chain).expect("load footstep catalog");
         assert_eq!(cat.len(), 179, "all lookup rows load");
 
-        // Some effect whose terrain is Metallic (TerrainType 1 → sound class 2).
+        // An effect over Metallic (`TerrainType` 1, sound 2).
         let metallic = cat
             .effect_terrain
             .iter()
@@ -228,8 +197,6 @@ mod tests {
                 "class 8 on metallic → the byte-decoded row"
             );
         }
-        // The humanoid class (7): the dirt kit on a dirt-terrain effect, the grass kit on a
-        // grass one (class 0 is the Ancient Protector, module docs).
         let effect_with_sound_class = |sc: u32| {
             cat.effect_terrain
                 .iter()
@@ -250,15 +217,12 @@ mod tests {
                 "class 7 on grass → CharacterMediumLargeGrass"
             );
         }
-        // No ground-effect layer = silence (the −1 sentinel, B5); unknown class too.
+        // No ground-effect layer, or an unknown class, is silent.
         assert_eq!(cat.resolve(7, None), None);
         assert_eq!(cat.resolve(9999, None), None);
     }
 
-    /// The footprint gate on the real data: `TerrainType.Flags` bit 0 is set on exactly Snow (3)
-    /// and Sand (7) — an effect layer over either takes prints, every other terrain (and the
-    /// no-layer sentinel) doesn't. And `FootprintTextures.dbc` decodes its six shipped rows to
-    /// the `textures\Footsteps\*` ink paths.
+    /// The footprint bit on 5875 data, Snow and Sand only, and the six `FootprintTextures` rows.
     #[test]
     fn footprint_gate_and_textures_on_real_data() {
         let data = crate::wow_data_or_skip!();

@@ -1,19 +1,7 @@
-//! `TaxiPathNode.dbc` — a taxi/transport path's ordered waypoints (map + world position, a
-//! station-stop flag, and a stop delay). Every flight path AND every `MO_TRANSPORT`
-//! (boat/zeppelin) is one `TaxiPath.dbc` id whose nodes live here, keyed by
-//! `TaxiPath.dbc`'s id (this table's `PathID` column) — `TaxiPath.dbc` itself only carries the
-//! `(fromNode, toNode, cost)` triple for the flight-master UI and is not adapted separately yet.
-//!
-//! **9 fields (verified this session, raw-parsed against build 5875):**
-//! `ID(0), PathID(1), NodeIndex(2), MapID(3), LocX(4), LocY(5), LocZ(6), Flags(7), Delay(8)` —
-//! matching vmangos's own `TaxiPathNodeEntry` column comments (`DBCStructure.h:696-707`,
-//! `m_ID/m_PathID/m_NodeIndex/m_ContinentID/m_LocX/m_LocY/m_LocZ/m_flags/m_delay`) field-for-field.
-//! A path's nodes are **not** confined to one continent: path 302 (Orgrimmar–Undercity) has 36
-//! nodes spanning `MapID` `{1, 0}` (Kalimdor, Azeroth) — the map-change itself is where the
-//! transport timetable builder (`crate::transports`) inserts a teleport keyframe, never a spline
-//! segment. `Flags == 2` marks a station stop (vmangos `KeyFrame::IsStopFrame`, exact equality,
-//! not a bitmask test) and pairs with a nonzero `Delay` (seconds) at that node: path 302 stops
-//! twice, 60 s each; path 285 (27 nodes) stops at node indexes 4 and 20.
+//! `TaxiPathNode.dbc`, the ordered waypoints of every flight path and every `MO_TRANSPORT` (boat,
+//! zeppelin), keyed by `TaxiPath.dbc` id; the layout is vmangos's `TaxiPathNodeEntry`
+//! (`DBCStructure.h:696-707`). A path can cross maps (302, Orgrimmar to Undercity, spans 1 and 0),
+//! and the transport timetable (`crate::transports`) turns a map change into a teleport keyframe.
 
 use std::collections::HashMap;
 
@@ -25,26 +13,23 @@ use crate::Chain;
 
 const TAXI_PATH_NODE: &str = "DBFilesClient\\TaxiPathNode.dbc";
 
-/// One `TaxiPathNode.dbc` row — a single waypoint on a taxi/transport path.
+/// One `TaxiPathNode.dbc` row, a waypoint on a taxi or transport path.
 #[derive(Clone, Copy, Debug)]
 pub struct TaxiPathNode {
-    /// The row's own id (`ID`) — a global waypoint id, not meaningful outside this table.
+    /// The row's own id, meaningless outside this table.
     pub id: u32,
-    /// `TaxiPath.dbc` id this node belongs to (the catalog's key).
+    /// The `TaxiPath.dbc` id this node belongs to.
     pub path_id: u32,
-    /// Ordinal position within the path, `0`-based — the catalog sorts each path's nodes by
-    /// this field, so the stored `Vec` order already matches path traversal order.
+    /// 0-based position in the path, the order the catalog stores each path in.
     pub node_index: u32,
     /// The map this node's `pos` is expressed in (`Map.dbc` id).
     pub map_id: u32,
     /// World position `(x, y, z)` on `map_id`.
     pub pos: [f32; 3],
-    /// Raw `actionFlag`. Bit `1` (`flags & 2`) marks a station stop — the client tests it as a
-    /// bitmask (`0x5f4e37`; vmangos's `IsStopFrame` uses `== 2`, identical on the live data);
-    /// bit `0` (`flags & 1`) marks a map-change/teleport trigger in the
-    /// transport timetable builder.
+    /// Raw `actionFlag`: `& 2` marks a station stop (the reference tests the bit at `0x5f4e37`,
+    /// vmangos `== 2`, the same on the shipped data) and `& 1` a teleport (`TransportMgr.cpp:134`).
     pub flags: u32,
-    /// Stop delay in whole seconds — only meaningful when `flags == 2`; `0` otherwise.
+    /// Stop delay in whole seconds, set on stops only.
     pub delay: u32,
 }
 
@@ -54,7 +39,7 @@ pub struct TaxiPathNodes {
 }
 
 impl TaxiPathNodes {
-    /// A path's nodes, in `NodeIndex` order, or `None` if the path id is unknown.
+    /// A path's nodes in `NodeIndex` order.
     pub fn path(&self, path_id: u32) -> Option<&[TaxiPathNode]> {
         self.paths.get(&path_id).map(Vec::as_slice)
     }
@@ -64,7 +49,7 @@ impl TaxiPathNodes {
         self.paths.iter().map(|(&id, nodes)| (id, nodes.as_slice()))
     }
 
-    /// Number of distinct paths (not the total node count).
+    /// The number of paths, not nodes.
     pub fn len(&self) -> usize {
         self.paths.len()
     }
@@ -74,7 +59,6 @@ impl TaxiPathNodes {
     }
 }
 
-/// 9 fields per the module doc.
 fn schema() -> Schema {
     let mut s = Schema::new("TaxiPathNode");
     for name in ["ID", "PathID", "NodeIndex", "MapID"] {
@@ -89,8 +73,7 @@ fn schema() -> Schema {
     s
 }
 
-/// Read `TaxiPathNode.dbc` off the patch chain into a [`TaxiPathNodes`], each path's `Vec`
-/// sorted by `NodeIndex`.
+/// Read `TaxiPathNode.dbc` off the patch chain into a [`TaxiPathNodes`].
 pub fn load_taxi_path_nodes(chain: &mut Chain) -> Result<TaxiPathNodes> {
     let bytes = chain
         .read_file(TAXI_PATH_NODE)
@@ -126,9 +109,7 @@ pub fn load_taxi_path_nodes(chain: &mut Chain) -> Result<TaxiPathNodes> {
 mod tests {
     use super::*;
 
-    /// The real 5875 table proves the layout and the two pinned paths from the module doc: path
-    /// 302 (Orgrimmar–Undercity, 36 nodes spanning maps `{0,1}`, two `Flags==2` stops at 60 s
-    /// each) and path 285 (27 nodes, stops at indexes 4 and 20). Skips without client data.
+    /// The 5875 layout on path 302 (Orgrimmar to Undercity, two 60 s stops) and path 285.
     #[test]
     fn real_taxi_path_node_layout_sanity() {
         let data = crate::wow_data_or_skip!();
@@ -142,7 +123,6 @@ mod tests {
 
         let path302 = cat.path(302).expect("path 302 exists");
         assert_eq!(path302.len(), 36, "path 302 has 36 nodes");
-        // sorted by node_index
         for w in path302.windows(2) {
             assert!(
                 w[0].node_index < w[1].node_index,

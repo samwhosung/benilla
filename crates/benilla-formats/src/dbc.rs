@@ -1,8 +1,5 @@
-//! Small shared helpers for our typed DBC catalog loaders (creatures, game objects).
-//!
-//! DBC files carry no column types, so each loader supplies a [`Schema`] (field count must match the
-//! file header) and reads fields by index. Layouts are verified clean-room against build 5875 (the
-//! file header's `fieldCount × 4 == recordSize`, cross-checked with wowdev.wiki).
+//! Shared helpers for the typed DBC loaders. A DBC carries no column types, so each loader supplies
+//! a [`Schema`] whose field count must match the file header, and reads fields by index.
 
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -12,7 +9,7 @@ use benilla_dbc::{DbcParser, FieldType, Record, RecordSet, Schema, SchemaField, 
 
 use crate::Chain;
 
-/// Parse a DBC's bytes with `schema` into an owned record set (`what` names it for error messages).
+/// Parse a DBC with `schema`; `what` names the file in errors.
 pub(crate) fn parse(bytes: &[u8], schema: Schema, what: &str) -> Result<RecordSet> {
     let parser = DbcParser::parse(&mut Cursor::new(bytes))
         .map_err(|e| anyhow!("parsing {what} header: {e}"))?;
@@ -24,7 +21,7 @@ pub(crate) fn parse(bytes: &[u8], schema: Schema, what: &str) -> Result<RecordSe
         .map_err(|e| anyhow!("parsing {what} records: {e}"))
 }
 
-/// An unsigned field (accepts the int variants).
+/// An unsigned field, from either int variant: the schema tag only picks the decoding.
 pub(crate) fn u32_at(r: &Record, i: usize) -> Option<u32> {
     match r.get_value(i)? {
         Value::UInt32(v) => Some(*v),
@@ -33,7 +30,6 @@ pub(crate) fn u32_at(r: &Record, i: usize) -> Option<u32> {
     }
 }
 
-/// A float field.
 pub(crate) fn f32_at(r: &Record, i: usize) -> Option<f32> {
     match r.get_value(i)? {
         Value::Float32(v) => Some(*v),
@@ -41,9 +37,7 @@ pub(crate) fn f32_at(r: &Record, i: usize) -> Option<f32> {
     }
 }
 
-/// A signed field (accepts either int variant, mirroring [`u32_at`]'s leniency: the schema tag
-/// just picks how the parser decodes the same 4 raw bytes, so a column read as `UInt32` still
-/// round-trips through here bit-for-bit).
+/// A signed field; either int variant reads, bit for bit.
 pub(crate) fn i32_at(r: &Record, i: usize) -> Option<i32> {
     match r.get_value(i)? {
         Value::Int32(v) => Some(*v),
@@ -52,7 +46,7 @@ pub(crate) fn i32_at(r: &Record, i: usize) -> Option<i32> {
     }
 }
 
-/// A non-empty string field, resolved through the record set's string block.
+/// A string field from the string block; an empty string reads as `None`.
 pub(crate) fn str_at(rs: &RecordSet, r: &Record, i: usize) -> Option<String> {
     match r.get_value(i)? {
         Value::StringRef(StringRef(off)) => {
@@ -63,10 +57,7 @@ pub(crate) fn str_at(rs: &RecordSet, r: &Record, i: usize) -> Option<String> {
     }
 }
 
-/// `SpellIcon.dbc`: id → texture path (`Interface\Icons\…`, extensionless). 1033 records × 2
-/// fields (`ID(0)`, `TextureFilename(1, str)`) — verified against build 5875 (`spells.rs`'s own
-/// module doc). Shared by [`crate::spells`] (the action-bar catalog) and [`crate::skill_lines`]
-/// (a skill line's own tab icon) — one load, not two, since both just want id → path.
+/// `SpellIcon.dbc`: id → extensionless texture path (`Interface\Icons\…`).
 pub(crate) fn load_spell_icon_map(chain: &mut Chain) -> Result<HashMap<u32, String>> {
     let bytes = chain
         .read_file("DBFilesClient\\SpellIcon.dbc")
@@ -84,10 +75,8 @@ pub(crate) fn load_spell_icon_map(chain: &mut Chain) -> Result<HashMap<u32, Stri
     Ok(icons)
 }
 
-/// A minimal `ID(0) … Name(name_col) …` schema of `cols` u32-wide columns — the shape every
-/// "id → localized name" DBC has, since a string column is itself one u32 offset into the string
-/// block. Enough for the id→name reads; the loc block's other 7 slots and its flag mask stay
-/// anonymous `cN` columns.
+/// An id → name schema of `cols` four-byte columns (a string column is one offset); the other
+/// locale slots and the locale flag mask stay anonymous `cN` columns.
 pub(crate) fn id_name_schema(what: &str, name_col: usize, cols: usize) -> Schema {
     let mut s = Schema::new(what);
     for i in 0..cols {
@@ -100,9 +89,7 @@ pub(crate) fn id_name_schema(what: &str, name_col: usize, cols: usize) -> Schema
     s
 }
 
-/// Read an `ID → name` DBC through the patch chain into a map, skipping rows whose name is empty.
-/// Shared by every such table ([`crate::quest_headers`]'s AreaTable/QuestSort,
-/// [`crate::quest_info`]'s QuestInfo) — the layout differences are the two column numbers.
+/// Read an id → name DBC into a map, skipping rows whose name is empty (a hole, not a name).
 pub(crate) fn load_id_name_table(
     chain: &mut Chain,
     file: &str,
@@ -116,8 +103,6 @@ pub(crate) fn load_id_name_table(
     let rs = parse(&bytes, id_name_schema(what, name_col, cols), what)?;
     let mut out = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
-        // `str_at` already drops an empty string — a row whose name slot points at the string
-        // block's leading NUL is a hole, not a name.
         if let (Some(id), Some(name)) = (u32_at(r, 0), str_at(&rs, r, name_col)) {
             out.insert(id, name);
         }

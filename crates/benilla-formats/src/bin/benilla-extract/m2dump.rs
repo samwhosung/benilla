@@ -1,7 +1,4 @@
-//! Per-model M2 dump printers: `m2coll`, `m2seq`, `m2attach`, `m2anim`, `m2bones`, `m2batch` —
-//! the single-model diagnostics that read one `.m2` and print everything a given concern
-//! (collision hull, sequences, attachment points, animation channels, bone table, render
-//! batches) actually carries.
+//! The single-model M2 dumps: each reads one `.m2` and prints all it carries for one concern.
 
 use anyhow::{Context, Result};
 use benilla_formats::{Chain, M2AnimSummary};
@@ -40,10 +37,8 @@ pub fn m2coll(chain: &mut Chain, internal_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Dump every sequence's EVENT keyframes: time (s from sequence start), 4CC ident, payload.
-/// The event-order instrument: on attack clips, whether `$CPP` (the victim
-/// defense dispatch) precedes `$AH0-3`/`$CAH` (the impact dispatch) decides which of the two
-/// mutually-exclusive victim reactions the shared swing record feeds.
+/// Dump every sequence's event keyframes. On an attack clip, whether `$CPP` (the victim's defense)
+/// precedes `$AH0-3`/`$CAH` (the impact) picks which exclusive reaction the swing record feeds.
 pub fn m2events(chain: &mut Chain, internal_path: &str) -> Result<()> {
     let name = normalize(internal_path);
     let data = chain
@@ -83,19 +78,13 @@ pub fn m2seq(chain: &mut Chain, internal_path: &str) -> Result<()> {
         .read_file(&name)
         .with_context(|| format!("reading '{name}' from chain"))?;
     let seqs = benilla_formats::parse_m2_animations(&data);
-    // `band` is the sequence's absolute window on the model's global keyframe timeline: every
-    // non-global-sequence track selects its keys from it, so it is what says whether a track is
-    // actually keyed HERE or is holding a clamped value from some other sequence's band.
-    // NB `idx` is this list's index, not the file's: zero-duration sequences are dropped.
+    // `band` is the window on the keyframe timeline every non-global-sequence track keys in. `idx`
+    // is not the file slot: zero-duration sequences are dropped.
     println!(
         "idx  anim   mode   dur(s)   mspd  blend   band(ms)          freq  replay   bones   keys"
     );
     for (i, s) in seqs.iter().enumerate() {
-        // How much data the sequence's own time band actually holds: bones with any
-        // keyed track, and total keys across T/R/S (clamp constants included — a bone
-        // unkeyed in this band pins to its nearest authored key, see `read_bone_track`).
-        // Uneven coverage across same-id variations is what exposed the task-#14 tilt
-        // (HumanMale Stand idx 136 keys 13 fewer bones than the head).
+        // Bones with any keyed track in this band, and total T/R/S keys, clamp constants included.
         let bones = s
             .bones
             .iter()
@@ -111,14 +100,11 @@ pub fn m2seq(chain: &mut Chain, internal_path: &str) -> Result<()> {
             s.anim_id,
             if s.looping { "loop " } else { "clamp" },
             s.duration,
-            // `mspd` = the sequence's authored design movement speed (yd/s) — the DIVISOR of the
-            // locomotion playback rate (`speed / (mspd · |modelScale|)`, `0x5fe2f0`
-            // @0x5fe4be..0x5fe550). `0.00` ⇒ not a locomotion sequence, so it plays at rate 1×.
+            // `mspd`: the authored move speed (yd/s) dividing the locomotion rate,
+            // `speed / (mspd · |modelScale|)` (`0x5fe2f0` at 0x5fe4be..0x5fe550); 0 plays at 1×.
             s.move_speed,
-            // `blend` = the sequence's authored blend-IN time (s) — how long the client cross-fades
-            // from the outgoing pose into this one on a blended arm (op4 `blendFlag != 0`, the
-            // `+0x98 -> +0xc4` snapshot decayed over `1/blendTime`). `0.000` = an instant cut, and
-            // that is what a doll's turn looks like without it.
+            // `blend`: the blend-in time (s) the client cross-fades over on a blended arm (op4
+            // `blendFlag != 0`, the `+0x98 -> +0xc4` snapshot decayed over `1/blendTime`); 0 cuts.
             s.blend_time,
             s.start_ms,
             s.end_ms,
@@ -138,9 +124,7 @@ pub fn m2attach(chain: &mut Chain, internal_path: &str) -> Result<()> {
         .read_file(&name)
         .with_context(|| format!("reading '{name}' from chain"))?;
     let attachments = benilla_formats::parse_m2_attachments(&data)?;
-    // The position is raw WoW model space (X forward, Y left, Z up), as the M2 stores it — "where
-    // on the model does this rider actually sit?" needs it as much as the bone does: an item glow
-    // hangs on ids 0..4, spread along a weapon's length.
+    // Raw WoW model space (X forward, Y left, Z up); item glows hang on ids 0..4 along a weapon.
     println!("id  bone  position (WoW model space)");
     for a in &attachments {
         let [x, y, z] = a.position;
@@ -150,8 +134,6 @@ pub fn m2attach(chain: &mut Chain, internal_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// One texture-transform track line for the `m2anim` dump: key count, interp/gseq tags, and the
-/// first/last keys (enough to read a scroll direction + rate off a waterfall).
 fn print_txfm_track<V: std::fmt::Debug + Copy + PartialEq>(name: &str, t: &benilla_m2::M2Track<V>) {
     if t.keys.is_empty() {
         println!("    {name}: -");
@@ -172,7 +154,6 @@ fn print_txfm_track<V: std::fmt::Debug + Copy + PartialEq>(name: &str, t: &benil
     );
 }
 
-/// The `m2anim` subcommand's dump — one section per channel family.
 fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
     println!("sequences: {}", s.sequence_count);
     println!(
@@ -204,10 +185,6 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
         s.texture_transform_count
     );
     println!("particle emitters:  {}", s.particle_emitter_count);
-    // The full defs (pos/blend/texture/shape/rate-keys/ramps) alongside the summary's bone links —
-    // which emitter is the flame and which the glow is unreadable from bone+flags alone (the
-    // blood-spurt starburst diagnosis, decision 0141; a flame that "doesn't burn" is usually
-    // visible right here: an unresolved texture, or a burst rate track whose first key is 0).
     let defs = benilla_formats::parse_m2_particle_emitters(bytes).unwrap_or_default();
     for (i, e) in s.emitter_bones.iter().enumerate() {
         println!(
@@ -222,13 +199,9 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
             }
         );
         let Some(d) = defs.get(i) else { continue };
-        // The emission MODEL first: a BURST emitter fires one ftol(rate) puff at its rate edge
-        // and never pours — reading its keys as a continuous rate is the exact misdiagnosis
-        // behind the Eviscerate 0.5s-vs-2s gap (`0x718ec8` → `0x7b5550`).
+        // A burst emitter fires one `ftol(rate)` puff at its rate edge and never pours
+        // (`0x718ec8` → `0x7b5550`).
         let burst = if d.burst() { "BURST " } else { "" };
-        // PER-SEQUENCE timing (the runtime's actual sampling unit — the old print showed the two
-        // tracks rebased onto sequence 0's band, which read as authoritative and was exactly the
-        // B27 misparse). The quiet case stays quiet: one constant rate, no gate anywhere.
         let views = d.timing.slot_views();
         let rate = match d.timing.constant_rate() {
             Some(r) => format!("{burst}rate {r:.1}/s"),
@@ -247,10 +220,9 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
                 format!("{burst}rate/seq [{}]", per.join("  "))
             }
         };
-        // The enabled gate, per sequence slot (seconds from the slot's band start) — a one-shot
-        // effect's choreography, and a state GameObject's "which clips actually fire this".
+        // The enabled gate per sequence slot, in seconds from the slot's band start.
         let rate = if views.iter().all(|(_, _, e)| e.is_none()) {
-            rate // no gate authored anywhere (the overwhelmingly common shape) — no noise
+            rate // no gate authored anywhere, the common case
         } else {
             let per: Vec<String> = views
                 .iter()
@@ -273,8 +245,7 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
                 .collect();
             format!("{rate}  enabled/seq [{}]", per.join("  "))
         };
-        // A tail's streak length is |velocity|·tail_time — without it "how long is this
-        // streak" needs a hand-parse of the raw record (the Eviscerate diagnosis gap).
+        // A tail's streak length is |velocity| · tail_time.
         let tail = if d.head_tail >= 1 {
             format!(
                 "  tail {:.2}s{}",
@@ -288,10 +259,7 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
         } else {
             String::new()
         };
-        // The parameter channels sample per frame ([`benilla_formats::EmitParams`]); the compact
-        // line shows their opening values, and any channel that actually MOVES prints its full
-        // keyed ramp below — the view whose absence hid Frost Nova's 0.19 → 13.2 yd emission-
-        // radius ride behind a flat "radius [0.19..0.19]".
+        // Each parameter channel's opening value; one that moves prints its keyed ramp below.
         let now = d.params.sample(None, 0.0, 0.0);
         println!(
             "             {:?} {:?} {}  {rate}  life {:.2}s  speed {:.2}  grav {:.2}  drag {:.1}{tail}  twinkle [{:.2}..{:.2}] spd {:.1} pct {:.2}  spin {:.2}",
@@ -323,16 +291,15 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
                 }
             }
         }
-        // The kernel spread (`0x7b8d70`, `0x7b8890`): a sphere's ranges are latitude/longitude
-        // about +X (area = min/max shell radius); a plane's are the ±θ/±φ cone about +Z (area =
-        // the spawn rectangle). `(lat ±π, lon ±0)` reads directly as the edge-on ring family.
+        // The kernel spread (`0x7b8d70`, `0x7b8890`): a sphere's ranges are latitude and longitude
+        // about +X, its area the shell radii; a plane's a cone about +Z, its area the rectangle.
         let spread = match d.shape {
             benilla_formats::ParticleShape::Sphere => format!(
                 "radius [{:.2}..{:.2}] lat ±{:.2} lon ±{:.2}",
                 now.area_length, now.area_width, now.vertical_range, now.horizontal_range
             ),
-            // Spline repurposing (loader `0x70fa5e`–`0x70fae5`): area = tMin/tMax,
-            // vRange = tangent-spin ψ, hRange = scatter.
+            // A spline repurposes them (loader `0x70fa5e`-`0x70fae5`): area is tMin/tMax, vRange
+            // the tangent spin, hRange the scatter.
             benilla_formats::ParticleShape::Spline => match &d.spline {
                 Some(s) => format!(
                     "spline {} pts [{:.2} {:.2} {:.2} ..], t [{:.2}..{:.2}] spin ±{:.2} scatter {:.2}",
@@ -357,16 +324,14 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
         } else {
             String::new()
         };
-        // The per-emitter model references: geometry (3-D model particles) and recursion
-        // (child emitters).
         if let Some(g) = &d.geometry_model {
             println!("             MODEL-PARTICLES: {g}");
         }
         if let Some(r) = &d.recursion_model {
             println!("             CHILD-EMITTERS: {r}");
         }
-        // The emitter-motion terms (`0x7b5230`): the follow-delta response
-        // line's authored (speed → fraction) samples, and the velocity-inherit scale.
+        // The emitter-motion terms (`0x7b5230`): the follow-delta response's (speed, fraction)
+        // samples and the velocity-inherit scale.
         let motion = match (d.follow_emitter(), d.inherits_emitter_motion()) {
             (false, false) => String::new(),
             (f, i) => {
@@ -400,9 +365,7 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
         );
     }
     println!("ribbon emitters:    {}", s.ribbon_emitter_count);
-    // A keyed look track prints its full `(ms, value)` ramp — the value[0]-only display once
-    // masked HolySmite's slash ribbons (height keyed 0 → 0.167 → 0 printed as `+0.00`, reading
-    // as "no ribbon" when the model authors a flare).
+    // A keyed ribbon track prints its whole `(ms, value)` ramp; its first value alone can read 0.
     let scalar = |t: &benilla_formats::ValueTrack| -> String {
         match t.keys.len() {
             0 | 1 => format!("{:.2}", t.first()),
@@ -466,8 +429,6 @@ pub fn m2anim(chain: &mut Chain, internal_path: &str) -> Result<()> {
         .with_context(|| format!("parsing M2 animation summary '{name}'"))?;
     print_m2anim_summary(&summary, &data);
 
-    // Texture-transform detail (0130 phase 3 grounding): the parsed TRS tracks plus the
-    // batch → lookup → transform wiring, straight from the full parser.
     let fmt = benilla_m2::parse_m2(&mut std::io::Cursor::new(&data[..]))
         .with_context(|| format!("parsing M2 '{name}'"))?;
     let m = fmt.model();
@@ -491,18 +452,13 @@ pub fn m2anim(chain: &mut Chain, internal_path: &str) -> Result<()> {
             }
         }
     }
-    // Color-alpha + texture-weight keys in full (they're tiny scalar tracks): the "how does this
-    // effect fade" instrument — the UI cooldown model's finish-flash ramp was pinned from exactly
-    // this dump (decision 0137 phase 4).
     if !m.color_alpha_tracks.is_empty() {
         println!("=== color alpha tracks (per M2Color) ===");
         for (i, t) in m.color_alpha_tracks.iter().enumerate() {
             println!("  color {i}: interp {}, keys {:?}", t.interp, t.keys);
         }
     }
-    // The RGB half of the same M2Colors: the per-batch tint the client multiplies into the vertex
-    // colour. An effect that reads white where the reference reads coloured is usually visible
-    // right here (the Frost Nova purple-mist diagnosis).
+    // The M2Colors' RGB half: the per-batch tint the client multiplies into the vertex colour.
     if m.color_rgb_tracks.iter().any(|t| t.keys.len() > 1) {
         println!("=== color rgb tracks (per M2Color) ===");
         for (i, t) in m.color_rgb_tracks.iter().enumerate() {
@@ -524,9 +480,6 @@ pub fn m2anim(chain: &mut Chain, internal_path: &str) -> Result<()> {
             println!("  weight {i}: interp {}, keys {:?}", t.interp, t.keys);
         }
     }
-    // Bone SCALE keys per sequence — the "how does this element grow" instrument (the cooldown
-    // star's finish-flash pulse is a bone-scale curve, decision 0263's INTERIM). Scale-keyed
-    // bones only; effect/UI models keep this tiny.
     let seqs = benilla_formats::parse_m2_animations(&data);
     let any_scaled = seqs
         .iter()
@@ -560,12 +513,8 @@ pub fn m2bones(chain: &mut Chain, internal_path: &str) -> Result<()> {
         .with_context(|| format!("parsing M2 '{name}'"))?;
     let m = fmt.model();
     let seqs = benilla_formats::parse_m2_animations(&data);
-    // `ign` is `flags & 0x7` spelled out — which of the parent's Translate/Scale/Rotate this bone
-    // REFUSES, taking the model root's instead. The raw flags hex could always be
-    // read for it and never was: three billboard rounds and a mount round each looked at
-    // `RidingHorse` bone 30's `0x00000006` and none read it as "the saddle discards the gallop",
-    // which decision 0932 then measured as a 21° rider swing and called faithful. A bone-table
-    // dump exists to answer "what does this bone actually inherit"; now it says so in words.
+    // `ign` spells out `flags & 0x7`: which of its parent's translation, scale and rotation the
+    // bone refuses, taking the model root's instead.
     println!(
         "idx  keybone  flags       bb  ign  parent  pivot                       \
          keyed (seq[idx] T/R/S counts)"
@@ -604,9 +553,7 @@ pub fn m2bones(chain: &mut Chain, internal_path: &str) -> Result<()> {
             b.pivot.z,
             keyed.join(" "),
         );
-        // Small tracks get their actual key values — two sequences can share a key COUNT while
-        // holding different values (the questgiver-marker seq 0 vs 190 lesson: counts alone
-        // mislabeled them "the same").
+        // Small tracks print their key values: equal key counts can hide different values.
         for (si, s) in seqs.iter().enumerate() {
             let Some(bk) = s.bones.iter().find(|bk| bk.bone as usize == i) else {
                 continue;
@@ -619,17 +566,9 @@ pub fn m2bones(chain: &mut Chain, internal_path: &str) -> Result<()> {
                     .collect();
                 println!("       seq{si} (anim {}) T: {}", s.anim_id, keys.join("  "));
             }
-            // Rotation keys as axis-angle (model-space WoW axes, Z up) — the "which way does
-            // this element actually turn" instrument: an emitter/billboard orientation bug
-            // needs the spin axis as ground truth, which a bare key COUNT never shows. Small
-            // tracks print every key; a long track (a swirl/rotor loop) prints first/last plus
-            // the axis of the first key-to-key increment — the spin axis itself.
-            //
-            // A long track also prints `swing` — the largest angle any key makes with the first,
-            // i.e. the track's actual AMPLITUDE. `step` is only the first increment, so a summary
-            // without this cannot answer "how far does this bone swing", which is the question a
-            // "does the rider inherit the mount's gallop pitch" investigation puts to it. Reading
-            // `step` as the amplitude under-reports a 20° swing as 1.5°.
+            // Rotation keys as axis-angle (WoW model axes, Z up). A long track prints its first and
+            // last keys, `step` (the first increment, whose axis is the spin axis) and `swing` (the
+            // largest angle any key makes with the first, the amplitude `step` is not).
             if !bk.rotation.is_empty() {
                 let aa = |q: &[f32; 4]| {
                     let w = q[3].clamp(-1.0, 1.0);
@@ -653,7 +592,7 @@ pub fn m2bones(chain: &mut Chain, internal_path: &str) -> Result<()> {
                     let (t0, q0) = &bk.rotation[0];
                     let (_t1, q1) = &bk.rotation[1];
                     let (tn, qn) = bk.rotation.last().unwrap();
-                    // increment = q1 · q0⁻¹ — its axis is the track's spin axis.
+                    // increment = q1 · q0⁻¹, whose axis is the spin axis.
                     let inv0 = [-q0[0], -q0[1], -q0[2], q0[3]];
                     let inc = [
                         q1[3] * inv0[0] + q1[0] * inv0[3] + q1[1] * inv0[2] - q1[2] * inv0[1],
@@ -661,9 +600,8 @@ pub fn m2bones(chain: &mut Chain, internal_path: &str) -> Result<()> {
                         q1[3] * inv0[2] + q1[0] * inv0[1] - q1[1] * inv0[0] + q1[2] * inv0[3],
                         q1[3] * inv0[3] - q1[0] * inv0[0] - q1[1] * inv0[1] - q1[2] * inv0[2],
                     ];
-                    // The amplitude: the largest angle any key makes with the first. `2·acos|⟨qi,q0⟩|`
-                    // is the geodesic angle between two unit quats, sign-folded so a double-cover
-                    // flip doesn't read as a 360° swing.
+                    // `2·acos|⟨qi,q0⟩|` is the angle between two unit quats, sign-folded so a
+                    // double-cover flip does not read as a 360° swing.
                     let swing = bk
                         .rotation
                         .iter()
@@ -682,12 +620,6 @@ pub fn m2bones(chain: &mut Chain, internal_path: &str) -> Result<()> {
                     );
                 }
             }
-            // Scale keys. A bone whose ONLY channel is scale — the pulsing card a spell
-            // effect hangs off a billboard, the freezing trap's ice shard — printed nothing
-            // here at all: the header row said `S2` and no detail line followed, so "how big
-            // does this thing actually get, and in which sequence" could not be answered from
-            // the dump. Non-uniform scale is exactly the interesting case (a square card
-            // stretched into a column), so all three components print.
             if !bk.scale.is_empty() && bk.scale.len() <= 8 {
                 let keys: Vec<String> = bk
                     .scale
@@ -702,14 +634,7 @@ pub fn m2bones(chain: &mut Chain, internal_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Dump an M2's render batches as the renderer sees them, preceded by the model-level material
-/// state the **static visibility cull** reads (`0x707680`: a batch is skipped
-/// when `colorAlpha · transparencyWeight ≤ 0`). Batches this dump *lists* are ones that survived
-/// that cull — when one of them turns out to be a stray primitive in game, these tables are where
-/// the answer has to be, so they print together.
-/// The facing readout for one batch (see the call site in [`m2batch`]): the first triangle's
-/// winding normal, the mean authored vertex normal, and their dot. `None` for a batch with no
-/// triangle to measure.
+/// One batch's facing: its first triangle's winding normal, its mean vertex normal and their dot.
 fn winding(s: &benilla_formats::RenderSubmesh) -> Option<String> {
     let tri = s.indices.get(..3)?;
     let p = |i: u32| s.positions.get(i as usize).copied();
@@ -724,8 +649,7 @@ fn winding(s: &benilla_formats::RenderSubmesh) -> Option<String> {
     };
     let norm = |v: [f32; 3]| {
         let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-        // A degenerate (zero-area) triangle has no direction to report — say so rather than
-        // printing NaNs that read like data.
+        // A zero-area triangle has no direction; say so rather than print NaNs that read as data.
         (l > 1e-9).then(|| [v[0] / l, v[1] / l, v[2] / l])
     };
     let facet = norm(cross(sub(b, a), sub(c, a)));
@@ -741,10 +665,8 @@ fn winding(s: &benilla_formats::RenderSubmesh) -> Option<String> {
         (Some(f), Some(n)) => format!("{:+.2}", f[0] * n[0] + f[1] * n[1] + f[2] * n[2]),
         _ => "-".to_string(),
     };
-    // A billboard card authored back-to-front against the law's `+X`-at-the-viewer: the renderer
-    // turns its normals round so the card is lit off the face it presents. `vnorm`
-    // alone cannot answer this — it is the MEAN, so a batch whose normals cancel reads the same as
-    // one flat plane — hence the shape's own verdict here rather than an eyeball off the numbers.
+    // A billboard card wound away from its `+X` viewer: the renderer turns its normals round so it
+    // is lit off the face it presents. The mean `vnorm` cannot show this, so the shape decides.
     let lit_face = if s.billboard_card_faces_away() {
         "  LIT-FACE-FLIP"
     } else {
@@ -757,23 +679,13 @@ fn winding(s: &benilla_formats::RenderSubmesh) -> Option<String> {
     ))
 }
 
-/// Which BONES a batch's vertices actually ride, and — for a billboard batch — whether the batch is
-/// a rigid card at all.
-///
-/// The reference skins **per vertex**: every vertex is placed by its own (up to four) bone matrices
-/// and weights, so a batch that straddles a billboard bone and a static one *deforms* — the static
-/// end stays welded to the body while the billboard end swings to the camera. benilla instead splits
-/// a batch into per-billboard-bone submeshes keyed on each **triangle's first vertex** and rotates
-/// each group rigidly about that bone's pivot. The two agree only when a group's vertices are all
-/// 100% on the one billboard bone; where they aren't, we tear geometry off the model that the
-/// reference keeps attached. `MIXED` is exactly that condition, and `SPLIT-W` the softer form (a
-/// vertex blended across bones, which a rigid group cannot express at all).
+/// The bones a batch's vertices ride and, for a billboard batch, whether it is a rigid card. The
+/// reference skins each vertex through its own bone weights, so only geometry wholly on the
+/// billboard bone turns as one card: `MIXED` counts vertices off it, `SPLIT-W` blended vertices.
 fn skin_census(s: &benilla_formats::RenderSubmesh) -> Option<String> {
     if s.joints.is_empty() {
         return None;
     }
-    // Vertices per PRIMARY bone (`bone_indices[0]` — the key our batch split groups on), in
-    // ascending bone order so two models' lines compare by eye.
     let mut per_bone: std::collections::BTreeMap<u16, usize> = std::collections::BTreeMap::new();
     for j in &s.joints {
         *per_bone.entry(j[0]).or_default() += 1;
@@ -802,9 +714,7 @@ fn skin_census(s: &benilla_formats::RenderSubmesh) -> Option<String> {
     if split > 0 {
         verdict.push_str(&format!("  SPLIT-W: {split} verts blended across bones"));
     }
-    // The distinct skin TUPLES with their vertex counts — a rigid group is one tuple at weight 1;
-    // anything else names the seam the split has to cut along. Capped so a 300-vert creature batch
-    // can't drown the dump (the question only ever has a handful of answers on a card-sized batch).
+    // Distinct skin tuples and their vertex counts, capped at 8; a rigid card is one at weight 1.
     let mut tuples: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for (j, w) in s.joints.iter().zip(&s.weights) {
         let key = (0..4)
@@ -871,13 +781,10 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
             m.transparency_lookup,
         );
         if let Ok(skin) = m.parse_embedded_skin(&data, 0) {
-            // One line per batch, because the batch → material/track mapping is the thing an alpha
-            // question turns on and it is NOT inferable from the render flags: `mat` indexes the
-            // materials list above, `color` the colour-alpha tracks (`ffff` = none), and `weight`
-            // indexes `transLookup` → the transparency track. The reference's combine is
+            // `mat` indexes the materials above, `color` the colour-alpha tracks (`ffff` for none)
+            // and `weight` `transLookup`. The reference skips a batch whose
             // `A = instanceAlpha × colors[color].alpha × transparency[transLookup[weight]].weight`
-            // (`0x707680`), so these three name every input to a batch's
-            // visibility.
+            // is 0 or less (`0x707680`).
             println!("skin batches ({}):", skin.batches().len());
             for (i, b) in skin.batches().iter().enumerate() {
                 let w = m
@@ -919,9 +826,7 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
         if s.billboard.is_some() {
             flags.push("BILLBOARD");
         }
-        // This batch's texcoords are GENERATED (`texture_unit_lookup > 2`), so the `uv` line below
-        // reports the authored UVs the runtime does *not* read — a degenerate span there is the
-        // asset saying "supply these", not a defect in the model.
+        // Texcoords generated at runtime (`texture_unit_lookup > 2`): the `uv` line is unused.
         if s.env_map {
             flags.push("ENV-MAP");
         }
@@ -931,16 +836,11 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
         if s.uv_anim.is_some() {
             flags.push("uv-anim");
         }
-        // A character runtime slot (body atlas / hair / object / extra skin) has no embedded path —
-        // name the slot rather than a misleading bare NONE.
         let tex = match (&s.texture, s.char_slot) {
             (Some(t), _) => t.clone(),
             (None, Some(slot)) => format!("<char:{slot:?}>"),
             (None, None) => "NONE".into(),
         };
-        // Model-space extent + centre: a batch that renders as a stray primitive is explained by
-        // where and how big it actually is (a degenerate zero-area batch is a different bug from a
-        // real card the reference hides some other way).
         let ext = |axis: usize| -> (f32, f32) {
             s.positions
                 .iter()
@@ -970,13 +870,8 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
             flags.join(" "),
             tex,
         );
-        // The batch's UV extent, and the texel-per-yard density it implies. Two questions this
-        // answers that nothing else did: does the batch tile (range outside 0..1 — the sampler
-        // repeats, and a wrap discontinuity across a triangle blows up the derivative and drags
-        // the sampled mip to the coarsest level), and is the authored density so far above the
-        // screen's that even mip 0 is a minification? A cutout batch is where either shows up
-        // first, because a coarser mip does not merely soften it — it dissolves the silhouette
-        // the alpha key cuts (the Dun Morogh snow-fir report).
+        // The UV extent and its density per yard. A range past 0..1 tiles, and a wrap across a
+        // triangle drags its mip to the coarsest level, which dissolves an alpha-keyed cutout.
         if !s.uvs.is_empty() && !s.positions.is_empty() {
             let uext = |axis: usize| {
                 s.uvs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), t| {
@@ -985,7 +880,6 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
             };
             let (u, v) = (uext(0), uext(1));
             let (du, dv) = (u.1 - u.0, v.1 - v.0);
-            // Model-space diagonal of the batch, as the yard scale the UV span stretches over.
             let diag = {
                 let (x, y, z) = (ext(0), ext(1), ext(2));
                 ((x.1 - x.0).powi(2) + (y.1 - y.0).powi(2) + (z.1 - z.0).powi(2)).sqrt()
@@ -1005,17 +899,11 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
                 if diag > 1e-6 { du.max(dv) / diag } else { 0.0 },
             );
         }
-        // Which way the geometry FACES, in model space — the question a single-sided batch that
-        // renders when it shouldn't (or doesn't when it should) turns on. `facet` is the winding
-        // normal of the first triangle (`(p1−p0)×(p2−p0)`, WoW model axes); `vnorm` is the mean
-        // authored vertex normal. `dot` compares them: a batch whose winding disagrees with its own
-        // authored normals is wound back-to-front, and single-sided (`two_sided` absent above) it is
-        // culled from the side the author lit.
+        // A batch whose winding (`facet`) disagrees with its authored normals (`vnorm`) is wound
+        // back to front: single-sided, it is culled from the side the author lit.
         if let Some(w) = winding(s) {
             println!("      {w}");
         }
-        // Which bones the batch's vertices ride — and whether a billboard group is a rigid card or
-        // a strip we tore off a static neighbour (see [`skin_census`]).
         if let Some(k) = skin_census(s) {
             println!("      {k}");
         }
@@ -1023,11 +911,9 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// One track's value across sequence `seq_idx`'s band, under the reference's own key-search law
-/// (`0x713d50`): the search window is `ranges[seq_idx]`, and a window that
-/// collapses (`lo >= hi`) resolves to the single key `keys[lo]`. Returns `(lo, hi, held)` — the
-/// value range the batch takes across the band, and whether the band keys nothing (so the value is
-/// the bracket hold rather than authored motion).
+/// A track's `(lo, hi, held)` over sequence `seq_idx`'s band, by the reference's key search
+/// (`0x713d50`): the window is `ranges[seq_idx]`, and a collapsed window (`lo >= hi`) holds
+/// `keys[lo]`, so `held` means the band keys nothing.
 fn band_span(
     track: &benilla_m2::M2ScalarTrack,
     seq_idx: usize,
@@ -1055,15 +941,9 @@ fn band_span(
     (held, held, true)
 }
 
-/// Dump an M2's **per-sequence material alpha**: every colour-alpha / transparency track's keys,
-/// then the combined per-batch factor (`colour.alpha × transparency.weight`, the reference's
-/// combine in `0x707680`) for **every sequence band**, not just the first.
-///
-/// This is the "which batches does the reference hide, and when" instrument. A batch whose factor
-/// is `0` in a band is one the real client **skips entirely** in that animation (`A ≤ 0` culls
-/// before the blend mode is read), so a row of zeros under Stand and ones under Death is a batch
-/// authored to appear only on death — exactly the voidwalker/banshee shape. `m2batch` gives the
-/// batch → track wiring this reads; `m2seq` gives the bands.
+/// Dump an M2's per-sequence material alpha: every colour-alpha and transparency track, then each
+/// batch's `colour.alpha × transparency.weight` (the reference's combine, `0x707680`) per sequence
+/// band. The reference skips a batch whose factor is 0 or less in that animation.
 pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
     let name = normalize(internal_path);
     let data = chain
@@ -1076,10 +956,9 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
         println!("no embedded skin — no batches to combine");
         return Ok(());
     };
-    // Sequences in **file order**, straight off the header array (count@0x1c/ofs@0x20, stride
-    // 0x44: anim id u16 @+0x00, band start/end u32 @+0x04/+0x08). Deliberately NOT
-    // `parse_m2_animations`, which drops zero-duration sequences and so renumbers the list — and
-    // the per-sequence `ranges` array below is indexed by the FILE slot.
+    // Sequences in file order off the header array (count at 0x1c, offset at 0x20, stride 0x44:
+    // u16 anim id at +0, u32 band start and end at +4 and +8), not `parse_m2_animations`, which
+    // drops zero-duration sequences: `ranges` is indexed by file slot.
     let seqs: Vec<(u16, (u32, u32))> = {
         let n = u32::from_le_bytes(data[0x1c..0x20].try_into().unwrap_or_default()) as usize;
         let o = u32::from_le_bytes(data[0x20..0x24].try_into().unwrap_or_default()) as usize;
@@ -1119,8 +998,7 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
                 .map(|&(ms, v)| format!("{ms}={v:.3}"))
                 .collect::<Vec<_>>()
                 .join(" "),
-            // The per-sequence key windows the reference indexes by the playing sequence's file
-            // slot — printed so the `*` hold cells below can be checked against the file itself.
+            // The key windows the reference indexes by the playing sequence's file slot.
             if t.ranges.is_empty() {
                 "none (whole-track search)".to_string()
             } else {
@@ -1142,10 +1020,9 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
         println!("  #{i:<3} {}", keys(t));
     }
 
-    // Each skin batch's two factor tracks, resolved exactly as the draw loop resolves them:
-    // colorIndex indexes `colors[]` DIRECTLY (out of range — incl. the 0xffff sentinel — means the
-    // factor doesn't apply); textureWeightComboIndex goes through `transLookup` (and applies only
-    // when the batch's textureCount is non-zero).
+    // As the draw loop resolves them: `colorIndex` indexes `colors[]` directly, and out of range
+    // (0xffff included) means no factor; the weight goes through `transLookup`, and only when
+    // `textureCount` is non-zero.
     let batches = skin.batches();
     let color_of = |b: &benilla_m2::SkinBatch| m.color_alpha_tracks.get(b.color_index as usize);
     let weight_of = |b: &benilla_m2::SkinBatch| {
@@ -1166,8 +1043,7 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
     for (i, &(anim_id, band)) in seqs.iter().enumerate() {
         print!("{i:>4} {anim_id:>5} {:>7}..{:<7}", band.0, band.1);
         for b in batches {
-            // A gseq-clocked track ignores the sequence band entirely (it runs on the global
-            // sequence's own clock), so report its full range rather than a band slice.
+            // A gseq track keeps its global sequence's clock, not the band: print its full range.
             let span = |t: Option<&benilla_m2::M2ScalarTrack>| match t {
                 None => (1.0, 1.0, false),
                 Some(t) if t.keys.is_empty() => (1.0, 1.0, false),
@@ -1187,8 +1063,7 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
             } else {
                 format!("{lo:.2}..{hi:.2}")
             };
-            // `HIDE` marks a batch the reference never draws in this sequence: the combine can
-            // only reach 0 there, and `A ≤ 0` skips the batch outright.
+            // `HIDE`: the combine stays at or below 0 here, and `A ≤ 0` skips the batch.
             let cell = if hi <= 0.0 {
                 format!("{cell} HIDE")
             } else {
@@ -1203,10 +1078,8 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
          reference's collapsed key window holds (`0x713d50`)"
     );
 
-    // The same question asked of OUR bake, per RENDER batch — which is not the same index space:
-    // a batch spanning several billboard bones splits into one submesh per bone, so `m2batch`'s
-    // render list runs longer than the skin list. This half is what the renderer will actually do,
-    // so a disagreement with the table above is a bug in the bake, not in the art.
+    // Our bake per render batch (a billboard batch may split per bone, lengthening the list);
+    // disagreeing with the table above is a bake bug, not the art's.
     let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
     let subs = benilla_formats::parse_m2_render_submeshes(&data, dir, &[])
         .with_context(|| format!("parsing M2 render submeshes '{name}'"))?;
@@ -1243,32 +1116,21 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Decode a particle emitter's file-flag word into the mechanism names the runtime keys off
-/// (each is a [`benilla_formats::ParticleEmitterDef`] predicate), plus any bit the loader maps
-/// to nothing — an unmapped bit on a model that looks wrong is a lead, not noise.
+/// An emitter's file flags as the mechanisms the runtime keys off, plus any unmapped bits.
 fn part_flags(flags: u32) -> String {
     const NAMED: [(u32, &str); 14] = [
-        // The reference has NO "lit" bit — 0x1 is the UNLIT flag, the inverse of the wiki lore
-        // (`0x70bb00`). Naming it the way the binary reads it is the
-        // point: an emitter WITHOUT this bit is the one that takes the scene's light, and that
-        // silent majority-of-one is what a dump has to make visible.
+        // 0x1 is unlit, not lit (`0x70bb00`): an emitter without it takes the scene's light.
         (0x0001, "unlit"),
-        // Runtime `rt+0x1ac` bit 0x10 (loader `0x70fd13` → `0x7b5d00`): the emitter's live
-        // particles are heap-sorted back-to-front on view depth before the quad writer runs
-        // (`0x7b3a10`), instead of drawn in pool order. NOT YET IMPLEMENTED — we draw pool
-        // order for every emitter; harmless where a cloud is one flat colour (alpha coverage is
-        // order-independent), visible where it is not.
+        // Runtime `rt+0x1ac` bit 0x10 (loader `0x70fd13` → `0x7b5d00`): the reference heap-sorts
+        // live particles back to front before the quad writer (`0x7b3a10`); we draw pool order.
         (0x0002, "depthSortParticles(TODO)"),
-        // NOT unmapped, and printing it as a lead sent one session hunting it as the ride switch
-        // (1578): file `0x8` feeds the SECOND runtime flag word, `rt+0x194` bit 1 = NOT(file 0x8)
-        // (loader `0x70fd01`), the vertex-format/blend word, orthogonal to simulation space.
-        // Bit 1's own reader is not identified; bit 0's (from file `0x1`) picks a 4- vs 8-word
-        // vertex stride. Half the corpus authors it.
+        // File 0x8 sets `rt+0x194` bit 1 = NOT(0x8) (loader `0x70fd01`), the vertex-format word,
+        // not the ride switch; bit 1's reader is untraced, and bit 0 (file 0x1) picks a 4- or
+        // 8-word vertex stride. Half the corpus authors 0x8.
         (0x0008, "vertexFormat(rt+0x194 b1, reader unread)"),
-        // **The ride-vs-trail switch** (spawn `0x7b8a9a`, draw `0x7b3e6f`): SET
-        // stores emitter-LOCAL and re-applies the live emitter matrix at draw (a rigid ride);
-        // CLEAR bakes the birth into WORLD and never re-applies it, so a moving host lays a trail
-        // `speed × lifetime` long. 30.4% of the corpus, 71% of `Item\ObjectComponents`.
+        // The ride-or-trail switch (spawn `0x7b8a9a`, draw `0x7b3e6f`): set keeps particles
+        // emitter-local, riding the live emitter; clear bakes birth into world space, so a moving
+        // host lays a trail `speed × lifetime` long.
         (0x0010, "modelSpace(ride)"),
         (0x0020, "sizeByInstanceScale"),
         (0x0040, "inheritEmitterMotion"),
@@ -1305,7 +1167,7 @@ fn keys_str(keys: &[(f32, f32)]) -> String {
         .join(" ")
 }
 
-/// Dump one M2's particle emitters in full — see the `M2part` command doc.
+/// Dump one M2's particle emitters in full.
 pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
     let name = normalize(internal_path);
     let data = chain
@@ -1344,9 +1206,7 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
                 1 => "tail",
                 _ => "head+tail",
             },
-            // The scene-light verdict the renderer will take (`ParticleEmitterDef::lit`) — the
-            // difference between "this sheet is shaded by the world" and "this sheet is a
-            // full-white cutout", which no other line here shows.
+            // Whether the renderer lights this emitter from the scene (`ParticleEmitterDef::lit`).
             if e.lit { "LIT" } else { "unlit" }
         );
         println!(
@@ -1364,13 +1224,8 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
             println!("     recursion model (child emitters): {r}");
         }
         if let Some(s) = &e.spline {
-            // EVERY control point, and at full precision. This used to print `first .. last`,
-            // which is actively misleading on a cubic Bézier: the path is `3K+1` points and the
-            // two INTERIOR handles of each segment are what bend it, so an emitter whose ends
-            // both sit at the origin can still fling its particles a long way — or not move them
-            // at all. Reading "(0,0,0) .. (0,0,0)" as "the particles never travel" is a guess
-            // the truncated line invites and cannot support (B228 nearly rested on it).
-            // Wrapped at 4 per line so a long path stays readable.
+            // Every control point at full precision: the path is `3K+1` points of cubic Bézier,
+            // bent by each segment's interior handles, so its ends alone say nothing of its reach.
             let pt = |p: &[f32; 3]| format!("({:.4},{:.4},{:.4})", p[0], p[1], p[2]);
             println!(
                 "     spline: {} control points ({} cubic segment(s)), model-local:",
@@ -1383,7 +1238,6 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
             }
         }
 
-        // Emission timing: the rate/gate pair, per file sequence slot.
         match e.timing.constant_rate() {
             Some(r) => println!("     rate {r:.2}/s (same in every sequence)"),
             None => {
@@ -1420,9 +1274,7 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
             }
         );
 
-        // The nine emission parameter tracks: the flat ones on one line, the moving ones spelled
-        // out per slot (a flattened track is exactly how a spread-out effect
-        // collapses to a point).
+        // The nine emission parameter tracks: flat ones on one line, moving ones per slot.
         let views = e.params.channel_views();
         let mut flat: Vec<String> = Vec::new();
         let mut animated: Vec<String> = Vec::new();
@@ -1481,10 +1333,7 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
                 c[0], c[1], c[2], c[3]
             );
         }
-        // 4 decimals, not 3: UI models author their sizes in thousandths, where `{:.3}` turns the
-        // autocast shine's 0.0015 mid-key into a printed "0.002" — a 33% error that a transcriber
-        // reads as authored truth. The colour ramp above stays at 3 because 0..1 channels
-        // do not have that problem.
+        // Four decimals: UI models author sizes in thousandths, as the autocast shine's 0.0015.
         println!(
             "       size    {:.4} -> {:.4} -> {:.4} yd (half-extent)",
             ol.scale[0], ol.scale[1], ol.scale[2]
@@ -1503,12 +1352,9 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
             ol.repeat[1]
         );
 
-        // The derived read: what this record actually puts on screen.
         let rate = e.timing.peak_rate();
-        // A burst emitter's count is NOT its peak rate: the burst fires on the rising edge of
-        // `enabled && rate > 0`, and an emitter whose gate closes on the same keyframe its rate
-        // opens fires nothing at all. Reading `peak_rate` here reported 50 phantom particles for
-        // `Strike_Impact_Chest`'s flare and sent a whole diagnosis 2.7x over on count.
+        // A burst's count is not its peak rate: it fires on the rising edge of
+        // `enabled && rate > 0`, and one whose gate closes as its rate opens fires nothing.
         let burst = e.timing.first_burst(Some(0));
         let life = e.params.peak_lifespan();
         let speed = views[0]
@@ -1517,8 +1363,7 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
             .flatten()
             .flat_map(|k| k.iter().map(|&(_, v)| v.abs()))
             .fold(0.0f32, f32::max);
-        // Drag caps total travel near `speed/drag` (the integrator's exponential decay); with no
-        // drag a particle simply coasts for its lifetime.
+        // Drag caps travel near `speed/drag`; without drag a particle coasts for its whole life.
         let reach = if e.drag > 1e-6 {
             (speed / e.drag).min(speed * life)
         } else {
@@ -1548,17 +1393,9 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Dump an M2's **camera table**, in raw file-index order — the index space a `<Model>` widget's
-/// `Model:SetCamera(n)` walks (the selection is raw, `cameraLookup` is not
-/// consulted there, so the table position IS the answer and the record's `type` is not).
-///
-/// Prints, per record: its `type` word, the eye and look-at target at rest (`base + key 0`, raw
-/// WoW model space), the diagonal fov in radians and degrees, near/far, the roll, and the key
-/// count of each of the three tracks — the last column being the one that says whether the camera
-/// is a still rig (every character/creature/interface camera in the chain) or an authored path
-/// (the `Cameras\*.m2` fly-bys). The `cameraLookup` table is printed beside it, because the
-/// portrait bake selects through it and the pane does not, and confusing the two is a one-line
-/// mistake with a wrong picture at the end of it.
+/// Dump an M2's camera table in raw file-index order, the index `Model:SetCamera(n)` selects by
+/// without `cameraLookup`, which prints beside it because the portrait bake selects through it.
+/// Key counts tell a still rig from an authored path (the `Cameras\*.m2` fly-bys).
 pub fn m2cam(chain: &mut Chain, internal_path: &str) -> Result<()> {
     let name = normalize(internal_path);
     let data = chain

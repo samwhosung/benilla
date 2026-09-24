@@ -1,39 +1,8 @@
-//! `PetPersonality.dbc` + `PetLoyalty.dbc` — the two tables behind a hunter pet's happiness and
-//! loyalty readouts.
-//!
-//! **`GetPetHappiness` does its own thresholding.** The client does not hand Lua a raw happiness
-//! number for the UI to bucket — it returns a **pre-bucketed 1/2/3** plus the two numbers that
-//! bucket implies, from a three-column-triple row (`0x4be947`–`0x4be9c3`):
-//!
-//! ```text
-//! rec = <table>[personalityId]           ; missing/out-of-range -> FALLBACK rec = <table>[1]
-//! raw = UNIT_FIELD_POWER5                ; the happiness power
-//! esi = 0; while (esi < 3 && raw >= rec[0x28 + 4*esi]) esi++      ; the three thresholds
-//! ret1 = esi                             ; 0..3
-//! ret2 = rec[0x30 + 4*esi] * 100.0f      ; damage percentage   (esi >= 1)
-//! ret3 = rec[0x3c + 4*esi]               ; loyalty rate        (esi >= 1, may be NEGATIVE)
-//! ```
-//!
-//! **Which `.dbc` backs it is NOT established from the bytes** — `[0xc0d9e0]`/`[0xc0d9e4]` is
-//! known only as an anonymous BSS `{indexTable, maxId}` pair. The index is not a *creature
-//! family*, and the file settles it: `CreatureFamily.dbc`
-//! has a **0x48-byte** record — the read at `rec+0x48` would run off the end — and every dword from
-//! `0x28` up is zero in all 23 rows. `PetPersonality.dbc` is a 0x4c-byte record whose last nine
-//! columns are exactly the three triples, at exactly those offsets:
-//!
-//! | id | thresholds `0x28` | damage `0x34` | loyalty rate `0x40` |
-//! |---|---|---|---|
-//! | 1 | 0 / 333000 / 666000 | 0.75 / 1.00 / 1.25 | −10 / 5 / 20 |
-//! | 3 | 0 / 250000 / 750000 | 0.00 / 1.00 / 1.25 | −1 / 0 / 2 |
-//!
-//! Row 1 is vanilla's documented pet-happiness behaviour on the nose — unhappy pets deal 75%
-//! damage, content 100%, happy 125%, against a happiness power that runs 0…1,000,000 in thirds —
-//! which is the independent corroboration that this is the table and row 1 is the row live pets
-//! use. (See [`PetPersonalities::for_pet`] for what is still open: *which field* selects the row.)
-//!
-//! `PetLoyalty.dbc` is the plain half: 8 rows, `ID` + the localized `Name` block, read at
-//! `[[0xc0d9f4][lvl] + 4*locale + 4]` — i.e. `Name` enUS is field 1, the same shape every other
-//! localized table here uses.
+//! `PetPersonality.dbc` and `PetLoyalty.dbc`, behind a hunter pet's happiness and loyalty
+//! readouts. `GetPetHappiness` buckets on its own (`0x4be947`-`0x4be9c3`), counting the row's
+//! thresholds the happiness power (`UNIT_FIELD_POWER5`) meets. Its store, `[0xc0d9e0]`/`[0xc0d9e4]`
+//! (rows and max id), is `PetPersonality.dbc` (loader `0x54bce0`), whose `0x4c`-byte rows end in
+//! the three triples; `GetPetLoyalty` reads `PetLoyalty.dbc` at `[[0xc0d9f4][lvl] + 4*locale + 4]`.
 
 use std::collections::HashMap;
 
@@ -46,61 +15,48 @@ use crate::dbc::{f32_at, parse, str_at, u32_at};
 const PET_PERSONALITY: &str = "DBFilesClient\\PetPersonality.dbc";
 const PET_LOYALTY: &str = "DBFilesClient\\PetLoyalty.dbc";
 
-/// `PetPersonality.dbc`'s column count (the DBC header's `field_count`; `benilla-dbc` enforces it).
+/// `PetPersonality.dbc`'s column count, which `benilla-dbc` checks against the header.
 const PERSONALITY_FIELDS: usize = 19;
-/// `PetLoyalty.dbc`'s column count.
 const LOYALTY_FIELDS: usize = 10;
-/// The localized `Name` block's enUS column — field 1 in both files, and the `+4` in the client's
-/// own `[row + 4*locale + 4]`.
+/// The enUS `Name` column in both files, the `+4` in the client's `[row + 4*locale + 4]`.
 const NAME_FIELD: usize = 1;
 
-/// The first threshold column: byte `0x28` = field 10.
 const THRESHOLD_FIELD: usize = 0x28 / 4;
-/// The first damage-percentage column: byte `0x34` = field 13.
 const DAMAGE_FIELD: usize = 0x34 / 4;
-/// The first loyalty-rate column: byte `0x40` = field 16.
 const LOYALTY_RATE_FIELD: usize = 0x40 / 4;
 
-/// The personality id the client falls back to when it cannot resolve one (`0x4be96c`: `rec` null
-/// or the index out of range ⇒ `rec = indexTable[1]`). Not a benilla convention — the reference's
-/// own second chance, and the row every live pet is observed to use.
+/// The personality the client falls back to when the id is out of range or its row is missing
+/// (`0x4be96c`), "Personality: Standard".
 pub const FALLBACK_PERSONALITY: u32 = 1;
 
-/// One `PetPersonality` row's three parallel triples, indexed by the happiness bucket.
-///
-/// The triples are **1-based against the bucket**: bucket 1 reads slot 0. Bucket 0 never indexes
-/// them at all — the client jumps straight to the shared `(100.0, 0.0)` tail — which is why
-/// [`PetHappiness`] carries the numbers rather than the caller doing the offset arithmetic.
+/// One `PetPersonality` row's triples, read 1-based: bucket 1 reads slot 0, bucket 0 reads none.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PetPersonality {
     /// The three ascending happiness thresholds the raw power is counted against.
     pub thresholds: [u32; 3],
-    /// Damage multiplier per bucket, as stored (`0.75` = 75%). The binding scales by 100.
+    /// Damage multiplier per bucket as stored (`0.75` is 75%).
     pub damage: [f32; 3],
-    /// Loyalty gain rate per bucket. **May be negative** — an unhappy pet loses loyalty.
+    /// Loyalty gain rate per bucket, negative for an unhappy pet.
     pub loyalty_rate: [f32; 3],
 }
 
 /// What `GetPetHappiness` answers: the bucket plus the two numbers it selects.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PetHappiness {
-    /// `0..=3`. **`0` is not the failure case** — the client pushes it as the number `0` and takes
-    /// the same tail as a gate failure, and the shipped `PetFrame.lua` has no branch for it, so the
-    /// icon keeps whatever texcoords it had. Keep it distinct from "no answer at all".
+    /// `0..=3`. `0` is a number, not the failure case: the client pushes `0` with the failure's
+    /// tail, and `PetFrame.lua`, with no branch for it, keeps the icon's old texcoords.
     pub bucket: u32,
-    /// Return 2 — the damage percentage, already scaled by the client's own `100.0f`
-    /// (`[0x806b10]`). `100.0` for bucket 0.
+    /// The damage percentage, times the client's `100.0f` (`[0x806b10]`); `100.0` for bucket 0.
     pub damage_percentage: f32,
-    /// Return 3 — the loyalty rate, unscaled and possibly negative. `0.0` for bucket 0.
+    /// The loyalty rate, unscaled and possibly negative; `0.0` for bucket 0.
     pub loyalty_rate: f32,
 }
 
 impl PetPersonality {
-    /// Bucket a raw happiness power and pick the row's two numbers — `0x4be981`'s count loop and
-    /// the two indexed reads after it, transcribed.
+    /// Bucket a raw happiness power and pick the row's two numbers (`0x4be981`).
     pub fn happiness(&self, raw: u32) -> PetHappiness {
         let bucket = self.thresholds.iter().take_while(|&&t| raw >= t).count();
-        // Bucket 0 shares the gate-failure tail (`0x4be9a8 je 0x4be9e9`) rather than indexing.
+        // Bucket 0 takes the gate-failure tail (`0x4be9a8 je 0x4be9e9`) instead of indexing.
         let Some(i) = bucket.checked_sub(1) else {
             return PetHappiness {
                 bucket: 0,
@@ -120,17 +76,9 @@ impl PetPersonality {
 pub struct PetPersonalities(HashMap<u32, PetPersonality>);
 
 impl PetPersonalities {
-    /// The row for a pet whose personality id is `id`, with the client's own fallback applied.
-    ///
-    /// **`id` is `None` today, always, and that is a recorded gap rather than an oversight.** The
-    /// client selects the row with `0x605600(pet)` = `[[pet+0xb30]+0x24]` — a field of its cached
-    /// creature template — and which template field `+0x24` is, and which table it indexes, are
-    /// both open. Passing `None` takes the reference's *own* out-of-range path
-    /// ([`FALLBACK_PERSONALITY`]), which is what every live pet is observed to land on: the file
-    /// ships two rows, ids 1 and 3, and row 1 alone reproduces vanilla's 75/100/125% damage.
-    ///
-    /// So the shape is right and the numbers are right; when the selector is identified, this call
-    /// gains an argument and nothing else moves.
+    /// The row for personality `id`, or the client's fallback row. The reference keys this table
+    /// by `[[pet+0xb30]+0x24]` (`0x605600`), a field of the cached creature-query record whose
+    /// wire source is untraced, so callers pass `None` and get row 1.
     pub fn for_pet(&self, id: Option<u32>) -> Option<&PetPersonality> {
         id.and_then(|i| self.0.get(&i))
             .or_else(|| self.0.get(&FALLBACK_PERSONALITY))
@@ -145,13 +93,12 @@ impl PetPersonalities {
     }
 }
 
-/// `PetLoyalty.dbc`: loyalty level → its localized name.
+/// `PetLoyalty.dbc`: loyalty level to its localized name.
 pub struct PetLoyaltyNames(HashMap<u32, String>);
 
 impl PetLoyaltyNames {
-    /// The name for a loyalty level, or `None` — which is `GetPetLoyalty`'s **nil**, and it is nil
-    /// for level `0` as well as for anything past the table (`0x4be700`'s bound against
-    /// `[0xc0d9f8]`, plus `lua_pushstring`'s own NULL→nil).
+    /// The name for a loyalty level. `None` is `GetPetLoyalty`'s nil, for level `0` and past the
+    /// table (`0x4be700` bounds it against `[0xc0d9f8]`).
     pub fn name(&self, level: u32) -> Option<&str> {
         (level != 0).then(|| self.0.get(&level).map(String::as_str))?
     }
@@ -172,8 +119,7 @@ fn personality_schema() -> Schema {
             NAME_FIELD => FieldType::String,
             i if (DAMAGE_FIELD..DAMAGE_FIELD + 3).contains(&i) => FieldType::Float32,
             i if (LOYALTY_RATE_FIELD..LOYALTY_RATE_FIELD + 3).contains(&i) => FieldType::Float32,
-            // ID, the rest of the localization block, and the three thresholds (which the client
-            // compares as integers against an integer power field).
+            // ID, the rest of the name block, and the thresholds, compared as integers.
             _ => FieldType::UInt32,
         };
         s.add_field(SchemaField::new(format!("F{i}"), ty));
@@ -242,9 +188,6 @@ mod tests {
         Some(crate::open_chain(&data).expect("open chain"))
     }
 
-    /// The real 5875 `PetPersonality.dbc`, byte-anchored. A column slip here is silent and
-    /// catastrophic — the thresholds and the damage triple are adjacent, so reading one for the
-    /// other yields plausible-looking numbers and a pet that is permanently "unhappy".
     #[test]
     fn the_real_personality_rows_carry_vanillas_own_happiness_numbers() {
         let Some(mut chain) = chain() else { return };
@@ -263,21 +206,18 @@ mod tests {
         let three = t.for_pet(Some(3)).expect("id 3");
         assert_eq!(three.thresholds, [0, 250_000, 750_000]);
 
-        // The client's own fallback, and the reason it is load-bearing for us: an unresolved
-        // personality is the ONLY path we take today, and it must land on row 1.
+        // The client's fallback, the path every caller takes, lands on row 1.
         assert_eq!(t.for_pet(None), t.for_pet(Some(1)));
         assert_eq!(t.for_pet(Some(999)), t.for_pet(Some(1)));
     }
 
-    /// The bucket loop against the shipped row 1, at the boundaries — and the ×100 scaling, which
-    /// is the client's and not the UI's.
     #[test]
     fn the_bucket_loop_counts_thresholds_met() {
         let Some(mut chain) = chain() else { return };
         let t = load_pet_personalities(&mut chain).expect("load");
         let p = *t.for_pet(None).expect("fallback row");
 
-        // Happiness runs 0..1_000_000 in thirds. Every reachable raw value buckets 1..3.
+        // Happiness runs 0..1_000_000 in thirds, so every reachable value buckets 1..3.
         for (raw, bucket, dmg) in [
             (0, 1, 75.0),
             (332_999, 1, 75.0),
@@ -297,9 +237,7 @@ mod tests {
         assert_eq!(p.happiness(1_000_000).loyalty_rate, 20.0);
     }
 
-    /// Bucket 0 is structurally reachable (a row whose first threshold is above the raw value) and
-    /// is NOT the failure case: it answers the number `0` with the same `(100.0, 0.0)` tail a gate
-    /// failure uses. A re-implementation that folded it into nil would hide the pet frame.
+    /// Bucket 0 is reachable only through a row whose first threshold is above the raw value.
     #[test]
     fn bucket_zero_is_a_number_not_a_failure() {
         let p = PetPersonality {
@@ -312,13 +250,7 @@ mod tests {
         assert_eq!((h.damage_percentage, h.loyalty_rate), (100.0, 0.0));
     }
 
-    /// The eight real loyalty names, verbatim, and the two nil cases the binding must reproduce.
-    ///
-    /// **The shipped strings carry a `"(Loyalty Level N) "` prefix** — developer annotation left in
-    /// the data, and the client pushes the column with no stripping whatsoever
-    /// (`lua_pushstring` of `[row + 4*locale + 4]`). So that prefix is what the pet paper doll
-    /// shows, and trimming it here would be a "tidier than the reference" divergence. Levels 7 and
-    /// 8 are `"Loyalty Cap"` and `"Unused"`: the ladder players actually climb is 1–6.
+    /// The paper doll shows the shipped `"(Loyalty Level N) "` prefix: the client never strips it.
     #[test]
     fn the_real_loyalty_levels_are_named_verbatim() {
         let Some(mut chain) = chain() else { return };

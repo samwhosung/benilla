@@ -1,13 +1,6 @@
-//! `$WOW_DATA` still wins — the one env read in [`benilla_formats::wow_data`], covered.
-//!
-//! **Why this is an integration test and not a unit test**: setting `$WOW_DATA` is
-//! process-global, and since the sweep every test in the workspace resolves its install through
-//! that one read. A unit test that mutates it poisons whatever else is running in the same test
-//! binary, and the victim moves around with the thread scheduling — which is exactly what happened
-//! before this was pulled out. Cargo gives each integration-test file its own process, and this
-//! file holds one test, so the mutation can only reach itself.
-//!
-//! The ladder itself is unit-tested purely, against `candidates_from`.
+//! `$WOW_DATA` leads the install ladder of [`benilla_formats::wow_data`]. Setting it is
+//! process-global and every test resolves its install through it, so this one test has a file, and
+//! so a process, of its own.
 
 #[test]
 fn the_override_is_read_and_wins() {

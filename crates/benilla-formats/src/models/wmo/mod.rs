@@ -1,7 +1,5 @@
-//! WMO (building) parsing, split along the file boundary the format itself draws: [`root`] parses
-//! the root file's shared tables (materials, doodads, group infos, portals, fogs), [`group`] parses
-//! a group file (header, refs, render batches) against a parsed root. This module keeps the shared
-//! chunk-finder and the chain-reading entry point.
+//! WMO (building) parsing: [`root`] parses the root file's shared tables, [`group`] a group file
+//! against a parsed root.
 
 mod group;
 mod root;
@@ -13,8 +11,7 @@ use anyhow::{Context, Result};
 
 use crate::Chain;
 
-/// Load a WMO (building) from the chain: its root + every group file, flattened into submeshes
-/// (one per group render batch). `raw_path` is the MWMO root path (`.wmo`).
+/// Load a WMO's root and every group file from the chain, one submesh per group render batch.
 pub fn load_wmo(chain: &mut Chain, raw_path: &str) -> Result<Vec<super::RenderSubmesh>> {
     let root_path = raw_path.to_ascii_lowercase();
     let bytes = chain
@@ -33,16 +30,9 @@ pub fn load_wmo(chain: &mut Chain, raw_path: &str) -> Result<Vec<super::RenderSu
     Ok(out)
 }
 
-/// Find a top-level WMO chunk's data slice by its **on-disk (reversed) magic** — WMO/ADT store the
-/// FourCC reversed (`MODN` → `NDOM`). Top-level root chunks are laid out flat from byte 0
-/// (`[magic:4][size:u32 LE][data:size]`), so a linear walk locates any of them.
-///
-/// **The last chunk clamps to EOF; it never rejects the file.** The reference's walk
-/// (`0x6c3a60`/`0x6c3f80`) "reads chunks while the 8-byte header is in-bounds and clamps the last
-/// chunk to EOF (never requires exact tiling)", and its worked example is the file this rule exists
-/// for: `Undercity_144.wmo`'s MOGP declares one byte more than the file holds.
-/// Abandoning the walk there cost that group its MOGP entirely — flags, portal-ref span, area, fog,
-/// doodad and light refs — which dead-ended the portal flood at B26's doorway.
+/// Find a top-level WMO chunk's data by its on-disk magic, which WMO stores reversed (`MODN` is
+/// `NDOM`). As in the reference's walk (`0x6c3a60`/`0x6c3f80`), the last chunk clamps to EOF and
+/// never rejects the file: `Undercity_144.wmo`'s MOGP declares one byte more than the file holds.
 pub(crate) fn find_wmo_chunk<'a>(bytes: &'a [u8], magic: &[u8; 4]) -> Option<&'a [u8]> {
     let mut off = 0usize;
     while off + 8 <= bytes.len() {
@@ -53,9 +43,7 @@ pub(crate) fn find_wmo_chunk<'a>(bytes: &'a [u8], magic: &[u8; 4]) -> Option<&'a
             bytes[off + 7],
         ]) as usize;
         let data_start = off + 8;
-        // Saturating, then clamped: a garbage size can overflow, and an over-declared one is real
-        // data the reference tolerates. Either way `data_end >= data_start`, so the slice is valid
-        // and `off` still advances by at least 8 — the walk terminates.
+        // Saturating, then clamped: `data_end >= data_start` for any size, so the walk advances.
         let data_end = data_start.saturating_add(size).min(bytes.len());
         if &bytes[off..off + 4] == magic {
             return Some(&bytes[data_start..data_end]);
@@ -68,7 +56,7 @@ pub(crate) fn find_wmo_chunk<'a>(bytes: &'a [u8], magic: &[u8; 4]) -> Option<&'a
 /// Synthetic-chunk builders shared by the [`root`]/[`group`] test modules.
 #[cfg(test)]
 mod test_bytes {
-    /// Build one top-level WMO chunk: the FourCC stored **reversed**, a `u32 LE` size, then `data`.
+    /// One top-level WMO chunk: the reversed FourCC, a `u32` LE size, then `data`.
     pub(super) fn chunk(reversed_magic: &[u8; 4], data: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(8 + data.len());
         out.extend_from_slice(reversed_magic);

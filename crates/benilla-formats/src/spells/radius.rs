@@ -1,8 +1,5 @@
-//! `SpellRadius.dbc` — the `$a` token's yard source (`EffectRadiusIndex` →
-//! [`crate::spells::SpellDisplay::effect_radius_index`]; the 0276 verdict pins the token's read
-//! as `[+0x160]` → SpellRadius.dbc). Pinned on the extracted 5875 file: 24 records × 4 fields
-//! `{id, radius f32, radiusPerLevel f32, radiusMax f32}` — row 13 = 10.0 yd (the classic
-//! Arcane Explosion radius), row 8 = 5.0, row 10 = 30.0.
+//! `SpellRadius.dbc`: the yards behind the `$a` token, by `EffectRadiusIndex`
+//! ([`crate::spells::SpellDisplay::effect_radius_index`]).
 
 use std::collections::HashMap;
 
@@ -31,8 +28,7 @@ impl SpellRadiusCatalog {
         self.rows.get(&index)
     }
 
-    /// Fixture constructor — tests (the [`crate::SpellCatalog::from_displays`] convention).
-    /// The live path is [`load_spell_radii`].
+    /// Fixture constructor for tests; the live path is [`load_spell_radii`].
     pub fn from_rows(rows: HashMap<u32, SpellRadius>) -> Self {
         Self { rows }
     }
@@ -76,8 +72,7 @@ pub fn load_spell_radii(chain: &mut Chain) -> Result<SpellRadiusCatalog> {
 mod tests {
     use super::*;
 
-    /// `SpellRadius.dbc` on the real data — the module doc's own probe rows. Skips without
-    /// client data.
+    /// Row 13 is Arcane Explosion's 10 yd.
     #[test]
     fn real_spell_radii_read_the_probed_rows() {
         let data = crate::wow_data_or_skip!();

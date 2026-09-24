@@ -1,11 +1,5 @@
-//! `ChrRaces.dbc` — the race-keyed **exploration sound**: the jingle the real
-//! client plays on every `SMSG_EXPLORATION_EXPERIENCE`, resolved race → `ChrRaces` row →
-//! column 3 (`+0xc`) → SoundEntries kit (handler case tail `0x5e41d2`, race byte
-//! → row `[0xc0dee0][race]` → `+0xc` → play tail `0x458850`); the column's canonical *name*
-//! ("ExplorationSoundID") is community lore, the offset and mechanism are the verified part.
-//!
-//! Layout — 29 columns (strings at 15, 26–28; the same schema
-//! [`crate::characters`]'s creation catalog parses): only `ID` (0) and column 3 are read here.
+//! `ChrRaces.dbc` column 3: the sound the client plays on `SMSG_EXPLORATION_EXPERIENCE`, by the
+//! player's race (`0x5e41d2`: row `[0xc0dee0][race]`, offset `0xc`, played at `0x458850`).
 
 use std::collections::HashMap;
 
@@ -17,14 +11,12 @@ use crate::dbc::{parse, u32_at};
 
 const CHR_RACES: &str = "DBFilesClient\\ChrRaces.dbc";
 
-/// Race id (`ChrRaces` row id — the descriptor's `UNIT_FIELD_BYTES_0` race byte) → the
-/// exploration-sound SoundEntries kit (rows with 0 are absent).
+/// Race (the `UNIT_FIELD_BYTES_0` race byte) → exploration `SoundEntries` id; a 0 is absent.
 pub struct ExplorationSoundCatalog {
     by_race: HashMap<u32, u32>,
 }
 
 impl ExplorationSoundCatalog {
-    /// The discovery jingle's kit for `race`, or `None` (unknown race, or a 0 field).
     pub fn kit(&self, race: u32) -> Option<u32> {
         self.by_race.get(&race).copied()
     }
@@ -68,8 +60,6 @@ pub fn load_exploration_sound_catalog(chain: &mut Chain) -> Result<ExplorationSo
 mod tests {
     use super::*;
 
-    /// The real 5875 table: every playable race (1–8) carries a nonzero exploration kit.
-    /// Skips without client data.
     #[test]
     fn real_chr_races_exploration_kits() {
         let data = crate::wow_data_or_skip!();
@@ -80,8 +70,7 @@ mod tests {
             eprintln!("race {race}: exploration kit {kit:?}");
             assert!(kit.is_some(), "race {race} has no exploration sound");
         }
-        // Frozen facts of the file: the playable races' kits are the contiguous SoundEntries
-        // block 4140–4147 (Human 4140, Orc 4141 — the misparse guard for the column position).
+        // The shipped kits run 4140-4147; Human and Orc guard the column position.
         assert_eq!(cat.kit(1), Some(4140));
         assert_eq!(cat.kit(2), Some(4141));
     }

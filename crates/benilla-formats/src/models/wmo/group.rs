@@ -1,5 +1,5 @@
-//! WMO **group**-file parsing: the MOGP header + sub-chunks (doodad/light refs, footprint faces)
-//! and the render-batch → [`RenderSubmesh`] build against a parsed root.
+//! WMO group-file parsing: the MOGP header and sub-chunks, and the render batches built into
+//! [`RenderSubmesh`]es against a parsed root.
 
 use std::io::Cursor;
 
@@ -10,113 +10,52 @@ use super::{find_wmo_chunk, WmoRoot};
 use crate::liquid::{LiquidKind, LiquidMesh};
 use crate::models::{remap_submesh, ModelBlend, RenderSubmesh, WmoBatchClass};
 
-/// The MLIQ grid vertex spacing (world yards between adjacent grid vertices) — the reference's
-/// `[0x810cc0]` = `4.166666507720947` (`0x40855555`). The liquid render dispatch `0x6b62e0`
-/// branches on the type nibble: **water** → `0x6b6420`/`0x6b6630`, magma/slime → `0x6b68f0`
-/// (`0x6b68f0` is the magma path, not a water kernel). Either kernel places grid vertex `(i, j)`
-/// at `base + (i·STEP, j·STEP)`.
+/// MLIQ grid spacing in yards, the reference's `[0x810cc0]` (`0x40855555`): the water
+/// (`0x6b6420`/`0x6b6630`) and magma/slime (`0x6b68f0`) kernels both place vertex `(i, j)` at
+/// `base + (i·STEP, j·STEP)`.
 const MLIQ_CELL_STEP: f32 = f32::from_bits(0x4085_5555);
 
-/// Yards per water-texture repeat: **one repeat per grid cell**, `MLIQ_CELL_STEP` ≈ 4.167 yd.
-///
-/// The reference's water kernel `0x6b6630` writes `u = (float)i`, `v = (float)j` — the raw integer
-/// tile indices, from loop counters that both start at a literal 0. One repeat per cell means
-/// every surface boundary lands on an exact repeat boundary, so a neighbour restarting at 0 is
-/// invisible: the seam-free look is the *scale*.
-///
-/// **This used to be `4 ×` that**, i.e. every WMO water surface in the game carried a texture four
-/// times too large, on a mechanism that was later refuted — seamlessness was credited to a
-/// world-anchored `GL_TEXTURE` matrix at transform index 8, but index 8 is the world/modelview
-/// transform and the water arms push no texture matrix at all. Decision 1271 carried
-/// the correction and deliberately did not apply it, the look being the director's call; B136 and
-/// the director's "Stormwind water seems too rough on the surface" are that call. The 4× cost more
-/// than size: it is exactly **two mip levels**, so the surface sat on mip 0 across the whole near
-/// field and never reached the authored chain that drops the sheet's peak ripple alpha 255 → 136 →
-/// 68 → a flat 51. Measured at the Stormwind canal before the fix, near water and mid-distance water
-/// had the same ripple contrast (σ 15.9 vs 15.2) — the ripple was not attenuating with distance at
-/// all.
-///
-/// We still anchor each vertex's UV to its **model-space position** rather than emitting the raw
-/// `(i, j)`. At one repeat per cell the two agree wherever surfaces are cell-aligned (they differ by
-/// a whole number of repeats, which `Repeat` wrapping erases), and where they are *not* aligned the
-/// position anchor is the one that does not seam.
-///
-/// Magma/slime have a separate correction still pending: the reference reads their `st` from the
-/// MLIQ vertex's authored `int16` pair × `1/256` (`movsx`, `0x6b6993`), which we do not parse at all
-/// and generate over this period instead.
+/// Yards per water-texture repeat: one per grid cell, as the reference's water kernel `0x6b6630`
+/// writes `u = (float)i`, `v = (float)j`. Deviation: the UV comes from the model-space position,
+/// not each surface's own `(i, j)`, because the two agree on cell-aligned surfaces and the position
+/// never seams where they are not. Magma and slime use this period too; the reference reads their
+/// UV from the vertex's authored `int16` pair × 1/256 (`0x6b6993`), which is not parsed.
 const MLIQ_UV_PERIOD: f32 = MLIQ_CELL_STEP;
 
-/// The **opacity ramp coordinate** fed to a WMO water vertex: its authored byte, normalised.
-///
-/// WMO liquid carries no bathymetry, so there is nothing to ramp by depth the way ADT MCLQ water is
-/// ramped — and the reference does not try. It indexes a 256-entry alpha ramp with the vertex's own
-/// byte 0 (`0x6b64c6 movzx`), and that ramp is a plain **linear** lerp between the zone's river
-/// shallow and deep alphas: `LUT[i] = (c0·256 + i·(c1 − c0)) >> 8`, rebuilt per frame, which for the
-/// static-init endpoints (0.5, 1.0) runs 127 → 191 → 254. **Not** the ADT path's
-/// `1.6·(i/63)^8` curve; the two systems do not even share a delivery mechanism (the ADT ramp is
-/// uploaded as a GPU texture and never CPU-indexed). The builder is `0x6b6b60`.
-///
-/// So `byte / 255` is exactly the lerp coordinate our shader already applies to the shallow/deep
-/// alpha pair off the shared light buffer, and passing it through the existing per-vertex channel
-/// reproduces the reference's LUT without a second mechanism.
-///
-/// This replaces a hard `1.0` — the deep, fully-opaque endpoint, pinned for every WMO pool in the
-/// game because we believed those bytes were flow data. That pin is why Blackfathom's Pool of
-/// Ask'ar rendered as a sheet you cannot see through where the real client shows 9–15 yd of bottom,
-/// and it was documented as "tunable; the exact shore LUT is deferred".
+/// A WMO water vertex's opacity-ramp coordinate, its authored byte 0 normalised: the reference
+/// indexes a linear LUT between the zone's river shallow and deep alphas with it (`0x6b64c6`,
+/// built by `0x6b6b60`), not the ADT `1.6·(i/63)^8` curve, and the shader's lerp reproduces it.
 fn wmo_water_alpha_v(opacity_byte: u8) -> f32 {
     f32::from(opacity_byte) / 255.0
 }
 
-/// MOGP `groupLiquid`'s sentinel: **this group holds no liquid of its own**. Any other value is the
-/// whole-group submersion override — see [`WmoGroupHeader::group_liquid`].
+/// MOGP `groupLiquid` for a group with no liquid of its own; any other value is the whole-group
+/// submersion override.
 pub const NO_GROUP_LIQUID: u32 = 0xf;
 
-/// The per-group fields the visibility pass reads from a **group file**'s MOGP header: the group
-/// `flags` (offset `0x08`) and the group's slice into [`super::WmoPortals::refs`]
-/// (`portal_ref_start` @ `0x24`, `portal_ref_count` @ `0x26`). VERIFIED layout (`grp+0x10` flags,
-/// `+0x2c`/`+0x30` ref span seeded from MOGP `+0x24`/`+0x26`). `None` if the bytes aren't a
-/// parseable group.
+/// A group's MOGP header fields. `flags` sits at `0x08` and the portal-ref slice at `0x24`/`0x26`,
+/// which the reference copies to `grp+0x10` and `+0x2c`/`+0x30`.
 #[derive(Debug, Clone, Copy)]
 pub struct WmoGroupHeader {
-    /// MOGP group flags. `& 0x8` = EXTERIOR (the outdoor bit the flood defers on); `& 0x48 == 0` =
-    /// a true interior group (see [`super::WmoGroupInfo`]).
+    /// `0x8` is exterior, the bit the portal flood defers on; `& 0x48 == 0` is interior.
     pub flags: u32,
-    /// First index into [`super::WmoPortals::refs`] for this group's portals.
+    /// First index of this group's portals in [`super::WmoPortals::refs`].
     pub portal_ref_start: u16,
-    /// Number of portal refs for this group.
     pub portal_ref_count: u16,
-    /// MOGP `uniqueID` @ `0x38` — this group's `WMOAreaTable.WMOGroupID` key (byte-verified
-    /// 2026-07-03: Chapel_000 interior → 478, matching its WMOAreaTable CAVE/ambience row).
-    /// `0` when the header is too short to carry it.
+    /// MOGP `uniqueID` at `0x38`, the group's `WMOAreaTable.WMOGroupID` key; 0 for a short header.
     pub area_table_id: u32,
-    /// MOGP fog indices @ `0x30` — four indices into the root's [`super::WmoFog`] table, walked by
-    /// the client's interior-fog selector (`0x69de20`). Offset pinned empirically against the
-    /// Goldshire inn (its groups carry `[1,0,0,0]` / `[0,0,0,0]` here — valid indices into its
-    /// 2-record MFOG — while `uniqueID @0x38` and the no-liquid sentinel `@0x34` self-validate the
-    /// layout; see `tests/wmo_fogs.rs`).
-    /// `[0; 4]` when the header is too short to carry them.
+    /// MOGP fog indices at `0x30` into the root's [`super::WmoFog`] records, walked by the
+    /// reference's interior-fog selector `0x69de20`; the offset is fixed empirically
+    /// (`tests/wmo_fogs.rs`). Zero if the header is short.
     pub fog_indices: [u8; 4],
-    /// MOGP `groupLiquid` @ `0x34` — and `0xf` on all but **13 of the 5220 shipped group files**,
-    /// where it means "this group holds no liquid of its own".
-    ///
-    /// The other value is the client's **whole-group submersion override**: `0x6b9f10` reads it
-    /// first and, when it is not `0xf`, returns an unconditional hit — the raw value as the liquid
-    /// type, height `FLT_MAX`, **no Z compare and no MLIQ test at all**. That is how a flooded
-    /// tunnel or an underwater cave reads wet with no liquid grid in the file, and all 13 carry no
-    /// `MLIQ` chunk (census with our own reader).
-    ///
-    /// [`super::wmo_group_liquid_mesh`] already reads the same word for a different purpose — it
-    /// overrides the *kind* of a grid that exists. This field is the other half: the groups where
-    /// there is no grid to override.
-    ///
-    /// `0xf` when the header is too short to carry it, which reads as "no liquid" — the safe way
-    /// round, since the override only ever adds water.
+    /// MOGP `groupLiquid` at `0x34`: [`NO_GROUP_LIQUID`] on all but 13 of the 5220 shipped group
+    /// files. Any other value makes the reference's `0x6b9f10` report the whole group submerged in
+    /// that liquid type, height `FLT_MAX`, with no Z or MLIQ test; none of the 13 has an MLIQ. A
+    /// short header reads as no liquid.
     pub group_liquid: u32,
 }
 
-/// Read one WMO **group** file's MOGP header fields used by the visibility pass (see
-/// [`WmoGroupHeader`]). The MOGP super-chunk's payload begins with the 68-byte group header.
+/// Read a group file's [`WmoGroupHeader`]; the MOGP payload opens with the 68-byte header.
 pub fn wmo_group_header(group_bytes: &[u8]) -> Option<WmoGroupHeader> {
     let mogp = find_wmo_chunk(group_bytes, b"PGOM")?; // MOGP
     if mogp.len() < 0x28 {
@@ -140,51 +79,33 @@ pub fn wmo_group_header(group_bytes: &[u8]) -> Option<WmoGroupHeader> {
     })
 }
 
-/// One interior WMO group's raw render triangles + per-vertex baked MOCV + per-triangle MOPY flags —
-/// the face set the interior FOOTPRINT sample walks. Its live consumer is the **GameObject M2**:
-/// the entity light node's env-update attach (`0x6717d0` → `0x69e4c0`, the entity twin of the
-/// ADT-MDDF `0x6a8410`) down-rays the group RENDER mesh (`MOVT`/`MOVI`/`MOPY`) under the object and
-/// bakes the hit's barycentric MOCV — floor-168/cap-96 — as its committed light (decisive in a
-/// reference trace of the abbey INNBENCH draws: diffuse max exactly 168).
-/// `None` for a non-group, an exterior group, or a group without baked colours (never a footprint
-/// source). (First built for decision 0290's MODD reading, deleted by 0306 when MODD props turned
-/// out to use their own baked colour — resurrected now that the chain's true consumer is pinned.)
+/// An interior group's render triangles, per-vertex MOCV and per-triangle MOPY: the faces a game
+/// object's light attach (`0x6717d0` → `0x69e4c0`) down-rays, taking the hit's barycentric MOCV
+/// (floor 168, cap 96) as its light.
 #[derive(Clone)]
 pub struct FootprintTris {
-    /// Vertex positions, WMO model space (WoW axes).
+    /// Vertex positions, WMO model space.
     pub positions: Vec<[f32; 3]>,
-    /// Triangle list into [`Self::positions`] (MOVI order — MOPY is parallel per triangle).
+    /// Triangle list in MOVI order; the MOPY vectors run parallel, one entry per triangle.
     pub indices: Vec<u16>,
-    /// Per-vertex baked MOCV as RGB bytes, parallel to positions (bytes, not 0–1: the floor/cap
-    /// arithmetic is exact u8 fixed-point).
+    /// Per-vertex MOCV RGB, kept as bytes because the floor/cap arithmetic is exact u8 fixed-point.
     pub mocv: Vec<[u8; 3]>,
-    /// Per-TRIANGLE MOPY flags (`indices.len() / 3` entries). Bit `0x1` on the hit face selects the
-    /// day/night exterior colours as the object's base instead of the MOCV sample (the binary
-    /// selector in `0x6b9a50`).
+    /// Per-triangle MOPY flags; `0x1` on the hit face selects the day/night exterior colours
+    /// instead of the MOCV sample (`0x6b9a50`).
     pub mopy_flags: Vec<u8>,
-    /// Per-TRIANGLE MOPY **material id** (parallel to [`Self::mopy_flags`]) — the index into the
-    /// ROOT's MOMT, and through it the face's `TerrainType` (`WmoRoot::material_ground_types`).
-    /// This is the footstep surface's WMO leg: the client's material ray reads exactly this byte
-    /// off the hit face (`0x6a26fc`).
-    ///
-    /// `0xFF` occurs on disk and is not an index — those faces all carry MOPY flag `0x08` and are
-    /// already dropped by [`FOOTPRINT_REJECT`] before anything can sample them. Consumers still
-    /// bounds-check: the client does not, the shipped assets simply never break the invariant.
+    /// Per-triangle MOPY material id, an index into the root's MOMT; the reference's footstep ray
+    /// reads it off the hit face (`0x6a26fc`). The on-disk `0xFF` non-index occurs only on faces
+    /// [`FOOTPRINT_REJECT`] drops; consumers still bounds-check.
     pub mopy_material: Vec<u8>,
 }
 
-/// The footprint ray's per-face MOPY reject mask (the BSP
-/// face walk `0x6b92b0`/`0x6bc370`): a face with COLLISION `0x08` or VISITED `0x80` set is never a
-/// footprint candidate. This is what keeps a floor authored as coplanar layers (a RENDER|DETAIL
-/// sheet over a COLLISION sheet, observed on the Goldshire forge + inn) from being a per-position
-/// coin toss: only the render layer survives, so the sample is deterministic and regional.
+/// The footprint ray's MOPY reject mask (the reference's BSP walk `0x6b92b0`/`0x6bc370`): a
+/// collision (`0x08`) or visited (`0x80`) face is never a candidate, so of a floor's coplanar
+/// render and collision sheets only the render one is sampled.
 const FOOTPRINT_REJECT: u8 = 0x88;
 
-/// Parse one WMO **group**'s bytes into its footprint-sample face set ([`FootprintTris`]).
-/// `None` unless the bytes are a group, the group is INTERIOR (`flags & 0x48 == 0`), and it carries
-/// MOCV parallel to its positions. Faces matching [`FOOTPRINT_REJECT`] are dropped here (the
-/// client rejects them per-ray inside the BSP walk; the set is static, so filtering at build is
-/// equivalent and free).
+/// A group's [`FootprintTris`], `None` unless it is an interior group with MOCV parallel to its
+/// positions. Rejected faces drop at build: the set is static, so this equals the per-ray reject.
 pub fn wmo_group_footprint_tris(group_bytes: &[u8]) -> Option<FootprintTris> {
     let Ok(ParsedWmo::Group(group)) = parse_wmo(&mut Cursor::new(group_bytes)) else {
         return None;
@@ -221,13 +142,8 @@ pub fn wmo_group_footprint_tris(group_bytes: &[u8]) -> Option<FootprintTris> {
     })
 }
 
-/// Find a sub-chunk of a group file's **MOGP** super-chunk by on-disk (reversed) magic. The MOGP
-/// payload is the 0x44-byte group header followed by ordinary `[magic][size][data]` sub-chunks
-/// (MOPY/MOVT/…/MODR/MOLR); this walks them.
-///
-/// Clamps the last sub-chunk to the payload end for the same reason [`find_wmo_chunk`] does — and it
-/// is the same file: once MOGP itself is clamped to EOF, the sub-chunk that ran to the old declared
-/// end is now the short one, so a break here would just move `Undercity_144`'s loss one level down.
+/// Find a MOGP sub-chunk by its reversed magic, past the `0x44`-byte header. The last one clamps to
+/// the payload end as in [`find_wmo_chunk`], since a clamped MOGP leaves its last sub-chunk short.
 fn find_mogp_subchunk<'a>(group_bytes: &'a [u8], magic: &[u8; 4]) -> Option<&'a [u8]> {
     let mogp = find_wmo_chunk(group_bytes, b"PGOM")?;
     let mut off = 0x44usize; // past the fixed group header
@@ -244,11 +160,8 @@ fn find_mogp_subchunk<'a>(group_bytes: &'a [u8], magic: &[u8; 4]) -> Option<&'a 
     None
 }
 
-/// A group's **MODR** doodad references: the MODD indices this group instantiates. This is the
-/// faithful doodad→group OWNERSHIP relation — the real client creates a WMO doodad per (MODD index,
-/// referencing group) from exactly this list (`0x695aa0` loops `group+0xe8`/count `+0x144`), and the
-/// owning group's interior class + MOLR light list decide the doodad's lighting. Empty when the
-/// group has no MODR (no doodads).
+/// A group's MODR list, the MODD indices it owns: the reference creates one doodad per (index,
+/// group) from it (`0x695aa0`), lit by that group's interior class and MOLR lights.
 pub fn wmo_group_doodad_refs(group_bytes: &[u8]) -> Vec<u16> {
     find_mogp_subchunk(group_bytes, b"RDOM")
         .map(|c| {
@@ -261,11 +174,8 @@ pub fn wmo_group_doodad_refs(group_bytes: &[u8]) -> Vec<u16> {
         .unwrap_or_default()
 }
 
-/// A group's **MOLR** light references: the MOLT indices whose lights this group folds into its own
-/// doodads' committed light (`0x695c00` builds the per-group active-light list from exactly this; a
-/// group WITHOUT an MOLR chunk provably lights its doodads with nothing — the abbey's group 3 has
-/// none, and the director's stand receives zero point light, its own flame 3.7 yd away included).
-/// Empty when the group has no MOLR.
+/// A group's MOLR list, the MOLT lights its doodads receive (`0x695c00`); a group without one
+/// gives its doodads no point light at all.
 pub fn wmo_group_light_refs(group_bytes: &[u8]) -> Vec<u16> {
     find_mogp_subchunk(group_bytes, b"RLOM")
         .map(|c| {
@@ -278,17 +188,9 @@ pub fn wmo_group_light_refs(group_bytes: &[u8]) -> Vec<u16> {
         .unwrap_or_default()
 }
 
-/// Build one WMO **group**'s MLIQ liquid surface as a [`LiquidMesh`] in **WMO model space** (WoW
-/// axes, yards) — the flat animated water/lava/slime the group embeds (Stormwind's canals, the
-/// Ironforge lava, dungeon pools). `None` when the group carries no `MLIQ`, or the grid has no wet
-/// tiles / an unmapped type. The placement transform lifts the mesh into the world at spawn.
-///
-/// Faithful model (the render dispatch is `0x6b62e0`, water kernels `0x6b6420`/`0x6b6630`): grid
-/// vertex `(i, j)` sits at `base + (i·STEP, j·STEP, heights[j·xverts + i])`; a
-/// tile renders iff its flag low nibble `!= 0xf` (`0xf` = hole); the type is the group's
-/// `groupLiquid` override when set, else the per-tile nibble, mapped to a texture via
-/// [`LiquidKind::from_nibble`]. The whole surface takes ONE resolved kind (the reference resolves a
-/// single type per surface — `0x6ba970`), with per-tile hole membership.
+/// A group's MLIQ surface as a [`LiquidMesh`] in WMO model space, as the reference's dispatch
+/// `0x6b62e0` draws it: vertex `(i, j)` at `base + (i·STEP, j·STEP, heights[j·xverts + i])`, a
+/// tile drawn unless its low nibble is `0xf`, and one kind for the whole surface (`0x6ba970`).
 pub fn wmo_group_liquid_mesh(group_bytes: &[u8]) -> Option<LiquidMesh> {
     let Ok(ParsedWmo::Group(group)) = parse_wmo(&mut Cursor::new(group_bytes)) else {
         return None;
@@ -297,8 +199,7 @@ pub fn wmo_group_liquid_mesh(group_bytes: &[u8]) -> Option<LiquidMesh> {
     build_wmo_liquid_mesh(&lq, group.group_liquid)
 }
 
-/// Build the [`LiquidMesh`] for a parsed [`WmoLiquid`] grid + its group's `groupLiquid` override.
-/// Split out so a unit test can exercise it without synthesising a full group file.
+/// The [`LiquidMesh`] for a parsed [`WmoLiquid`] grid and its group's `groupLiquid`.
 fn build_wmo_liquid_mesh(lq: &WmoLiquid, group_liquid: u32) -> Option<LiquidMesh> {
     let (xv, yv, xt, yt) = (
         lq.xverts as usize,
@@ -306,7 +207,6 @@ fn build_wmo_liquid_mesh(lq: &WmoLiquid, group_liquid: u32) -> Option<LiquidMesh
         lq.xtiles as usize,
         lq.ytiles as usize,
     );
-    // The grid must be tile-consistent (`xtiles = xverts − 1`) and carry its full vertex/tile arrays.
     if xv < 2 || yv < 2 || xt + 1 != xv || yt + 1 != yv {
         return None;
     }
@@ -314,8 +214,7 @@ fn build_wmo_liquid_mesh(lq: &WmoLiquid, group_liquid: u32) -> Option<LiquidMesh
         return None;
     }
 
-    // Resolve ONE kind for the whole surface: the `groupLiquid` override when set (`!= 0xf`), else
-    // the first wet tile's nibble (`0x6ba970` returns the first non-hole nibble). Unmapped ⇒ None.
+    // One kind per surface: the `groupLiquid` override, else the first wet nibble (`0x6ba970`).
     let type_nibble = if group_liquid != NO_GROUP_LIQUID {
         (group_liquid & 0xf) as u8
     } else {
@@ -323,24 +222,19 @@ fn build_wmo_liquid_mesh(lq: &WmoLiquid, group_liquid: u32) -> Option<LiquidMesh
         first_wet
     };
     let kind = LiquidKind::from_nibble(type_nibble)?;
-    // Fullbright kinds read no ramp at all (their sheet IS the body), and their leading four vertex
-    // bytes are an authored int16 UV pair rather than an opacity — so the byte is meaningless there
-    // and the channel stays 0, a statement rather than a value.
+    // Fullbright kinds read no ramp and their vertex bytes are a UV pair: the channel stays 0.
     let water = !kind.is_fullbright();
 
-    // 2 tris per wet tile (low nibble `!= 0xf`). Winding is irrelevant (drawn two-sided). Built
-    // BEFORE the vertices because which vertices the triangles actually reference is what decides
-    // the substitution below.
+    // Two triangles per wet tile, drawn two-sided; built first, as `drawn` decides the fill below.
     let mut indices = Vec::with_capacity(xt * yt * 6);
     let mut wet = vec![false; xt * yt];
-    // The `0x80` "a neighbour also claims this cell" bit — kept per cell, gated model-wide later
-    // (see `LiquidMesh::shared`).
+    // `0x80`: a neighbour also claims the cell (gated model-wide in `LiquidMesh::shared`).
     let mut shared = vec![false; xt * yt];
     let mut drawn = vec![false; xv * yv];
     for ty in 0..yt {
         for tx in 0..xt {
             if lq.tile_flags[ty * xt + tx] & 0xf == 0xf {
-                continue; // hole — no liquid on this tile
+                continue; // a hole
             }
             wet[ty * xt + tx] = true;
             shared[ty * xt + tx] = lq.tile_flags[ty * xt + tx] & 0x80 != 0;
@@ -358,9 +252,7 @@ fn build_wmo_liquid_mesh(lq: &WmoLiquid, group_liquid: u32) -> Option<LiquidMesh
         return None; // grid present but every tile a hole
     }
 
-    // The height every **unreferenced** vertex is filled with — see the loop below. The lowest
-    // drawn height, so the substitute can never push the AABB past the geometry that is really
-    // there. `indices` is non-empty by the check above, so at least one drawn height exists.
+    // An undrawn vertex takes the lowest drawn height, so it never stretches the AABB.
     let fill_z = (0..xv * yv)
         .filter(|&n| drawn[n] && lq.heights[n].is_finite())
         .map(|n| lq.heights[n])
@@ -371,21 +263,9 @@ fn build_wmo_liquid_mesh(lq: &WmoLiquid, group_liquid: u32) -> Option<LiquidMesh
         lq.base[2]
     };
 
-    // Grid vertices (row-major `j·xverts + i`), WMO model space. Every vertex is emitted — hole
-    // corners included — so the tile indices line up.
-    //
-    // **A hole corner's authored height is not a height.** MLIQ carries a full `xverts × yverts`
-    // height array whether or not a tile is wet, and the shipped files leave the hole interiors at
-    // a literal `0.0`: Blackfathom g007 has 186 of 868 (its water sits at model z −58.28) and even
-    // Stormwind's canal g099 has 36 of 108 (water at −6.48). Emitting those verbatim is invisible in
-    // the draw — no triangle references them — but it stretches the Bevy mesh AABB from the flat
-    // sheet all the way to model z 0, i.e. 58 yd of phantom vertical extent on that one pool, and
-    // every AABB consumer (frustum culling first) then reasons about a box that is mostly nothing.
-    // (The comment that used to sit here claimed the opposite — "the AABB stays tight because WMO
-    // liquid heights are real, flat values" — which is false on both files above. The MCLQ path has
-    // always substituted for its own `FLT_MAX` sentinel for exactly this reason; WMO liquid needed
-    // the same treatment against a different degenerate value, and the robust test is *is this
-    // vertex drawn*, not *does its height look wrong*.)
+    // Every grid vertex is emitted, row-major, so the tile indices line up. An undrawn vertex's
+    // authored height is not a height: shipped files leave hole interiors at 0.0 (Blackfathom g007
+    // has 186 of 868, its water at z −58.28), which would stretch the AABB to z 0.
     let mut positions = Vec::with_capacity(xv * yv);
     let mut uvs = Vec::with_capacity(xv * yv);
     let mut depths = Vec::with_capacity(xv * yv);
@@ -402,13 +282,7 @@ fn build_wmo_liquid_mesh(lq: &WmoLiquid, group_liquid: u32) -> Option<LiquidMesh
             } else {
                 0.0
             });
-            // UV from the vertex's MODEL-SPACE position, NOT its per-surface tile index. A per-surface
-            // `(i·¼, j·¼)` resets to 0 at each surface's origin; a surface's tile count is arbitrary
-            // (Stormwind g099 is 11 tiles = 2.75 repeats), so that reset lands mid-texture and SEAMS at
-            // every surface boundary. Dividing the shared model-space position by the repeat period
-            // ties all of a WMO's MLIQ surfaces to ONE continuous UV field, so grid-aligned neighbours
-            // tile seamlessly. (Same per-cell ¼ step as before — `i·STEP/period = i·¼` — plus the
-            // `base/period` offset that couples the surfaces.)
+            // UV from the model-space position, one field for all surfaces (`MLIQ_UV_PERIOD`).
             uvs.push([mx / MLIQ_UV_PERIOD, my / MLIQ_UV_PERIOD]);
         }
     }
@@ -420,40 +294,32 @@ fn build_wmo_liquid_mesh(lq: &WmoLiquid, group_liquid: u32) -> Option<LiquidMesh
         uvs,
         depths,
         indices,
-        // The `0x6ba970`-resolved nibble (groupLiquid override / first wet tile) IS the WMO
-        // surface's sound class — the ambient-loop key (see `LiquidMesh::sound_nibble`).
+        // The resolved nibble is also the surface's ambient-sound key.
         sound_nibble: type_nibble,
-        // How an interior pool finds its body colour: MOMT lives in the ROOT, so the group file
-        // cannot resolve it and the spawner does (see `liquid::surface::spawn_wmo_liquids`).
+        // The body colour's MOMT index; MOMT is in the root, so the spawner resolves it.
         material_id: Some(lq.material_id),
         kind,
     })
 }
 
-/// Where the bright-doorway fade stops: a vertex `≥ 6.6667` yd from every exterior-neighbour portal
-/// keeps its authored bake (`[0x811110]`, VERIFIED off `.rdata`).
+/// The bright-doorway fade's reach in yards (`[0x811110]`): a vertex farther from every exterior
+/// portal keeps its bake.
 const DOORWAY_FADE_REACH: f32 = 6.666_666_5;
 
-/// The per-yard fade slope: `t = 1 − 0.15·dist` (`[0x7ffd6c]`, VERIFIED).
+/// The fade's per-yard slope, `t = 1 − 0.15·dist` (`[0x7ffd6c]`).
 const DOORWAY_FADE_SLOPE: f64 = 0.15;
 
-/// The plane epsilon inside the distance kernel (`0x6c4240`): a vertex within `1/6` yd of a portal's
-/// plane reports distance **0** — the "standing in the doorway" case, which whitens outright.
+/// The distance kernel's plane epsilon in yards (`0x6c4240`): a vertex this close to a portal's
+/// plane, inside its outline, is at distance 0 and whitens outright.
 const PORTAL_PLANE_EPS: f32 = 1.0 / 6.0;
 
-/// The reference's float→fixed magic bias: the f32 sum's BIT pattern is shifted `>> 14`, never
-/// numerically converted, so the byte falls out of the mantissa's low byte (`[0x8029cc]`).
+/// The reference's float-to-fixed bias (`[0x8029cc]`): the f32 sum's bit pattern `>> 14` is the
+/// byte, never a numeric conversion.
 const FIXED_BIAS: f64 = 512.0;
 
-/// Distance from a model-space point to one portal polygon, the reference's kernel (`0x6c4240`):
-/// **0** when the point projects *through the opening* — inside the polygon and within
-/// [`PORTAL_PLANE_EPS`] of its plane — otherwise the minimum distance to the polygon's edge segments.
-///
-/// The containment half is what keeps a doorway's plane from reaching across a room. A portal plane is
-/// infinite; several of these openings are not doorways at all but whole ceilings (Dire Maul's sunken
-/// courtyard joins its sky through a 283×154 yd quad), so "on the plane" alone would whiten geometry
-/// tens of yards from any opening. Points on the plane but *outside* the outline fall through to the
-/// edge distance, which is the reference's own fallback and is never smaller than the truth.
+/// Distance from a point to a portal polygon, the reference's kernel `0x6c4240`: 0 inside the
+/// outline within [`PORTAL_PLANE_EPS`] of the plane, else the nearest edge distance. The outline
+/// test matters: some portals are whole ceilings (Dire Maul's courtyard, 283×154 yd).
 fn portal_distance(p: [f32; 3], poly: &[[f32; 3]], plane: [f32; 4]) -> f32 {
     let n = [plane[0], plane[1], plane[2]];
     let pd = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] + plane[3];
@@ -490,42 +356,20 @@ fn portal_distance(p: [f32; 3], poly: &[[f32; 3]], plane: [f32; 4]) -> f32 {
     }
 }
 
-/// One byte through the reference's fixed-point white-lerp: `((255 − ch)·t + ch + 512)` as f32, whose
-/// **bit pattern** shifted `>> 14` is the new byte (`0x6c43d0`, byte-verified against `WoW.exe`).
+/// One byte of the white-lerp (`0x6c43d0`): the bits of `(255 − ch)·t + ch + 512` as f32, `>> 14`.
 fn white_lerp_byte(ch: u8, t: f64) -> u8 {
     let chf = f64::from(ch);
     let s = ((255.0 - chf) * t + chf + FIXED_BIAS) as f32;
     ((s.to_bits() >> 14) & 0xff) as u8
 }
 
-/// **FixColorVertexAlpha** (`0x6c43d0`) — the bright-doorway portal
-/// fade, run once per group *before* it is ever drawn, in place over its MOCV buffer.
-///
-/// This is not a nicety: a WMO's short transition corridors are authored with **no usable bake at
-/// all** — Dire Maul's five entrance passages floor their walkway at MOCV `(10,10,40,α=0)`, a near-black
-/// navy — because the runtime fade is what lights them. Skip it and the interior TRANS law renders
-/// exactly what the file says: `tex × (10,10,40)` at lit-factor 1, a black floor between lit walls
-/// (the director's Dire Maul entrance report). The floor's four corners sit *on* the doorway portal
-/// polygons, so the fade takes them to white and the quad interpolates lit end to end.
-///
-/// The mechanism:
-/// 1. **Distance**: per vertex, the minimum [`portal_distance`] over this group's portal refs whose
-///    **neighbour group is exterior** (`MOGI.flags & 0x48 != 0`). Portals to interior neighbours
-///    whiten nothing — the fade is specific to interior↔exterior openings, observed live. A group
-///    with no such portal is untouched.
-/// 2. **Branches**: `dist == 0` ⇒ the slot goes white-opaque outright; `dist < 6.6667` **and** the
-///    authored alpha is 0 ⇒ RGB white-lerped by `t = 1 − 0.15·dist` with alpha `t·255`; else untouched.
-///
-/// **The MOPY pre-pass (`0x6c41e0`) is deliberately NOT run**, on live evidence over the static read.
-/// Statically it forces `alpha = 0xFF` on every triangle with `MOPY.flags & 1 == 0` — but it is
-/// gated (`DAT_00ca8064 == 0`), and the reference's own D3D capture of the abbey
-/// shows the uploaded MOCV pool **byte-exact against the
-/// file except for the whitened set** — 678/678 and 496/506 vertices identical, alphas included. A
-/// pre-pass that had run would have rewritten hundreds of alphas in that same buffer (372 of g003's
-/// 506 by this reader's count). It costs nothing here either way: the pre-pass can only *suppress* the
-/// partial-lerp branch, never the `dist == 0` whitening the dark corridors depend on.
-///
-/// A group without MOCV, or without an exterior-neighbour portal, is left exactly as authored.
+/// The reference's bright-doorway fade, FixColorVertexAlpha (`0x6c43d0`), run once per group in
+/// place over its MOCV before any draw; transition corridors are authored near-black and rely on
+/// it. Per vertex, `dist` is the nearest [`portal_distance`] over portals to exterior neighbours
+/// (`MOGI.flags & 0x48 != 0`): at 0 the vertex goes white-opaque, under [`DOORWAY_FADE_REACH`] with
+/// alpha 0 it is white-lerped by `t = 1 − 0.15·dist` with alpha `t·255`, else it is untouched. The
+/// MOPY pre-pass `0x6c41e0` is gated (`DAT_00ca8064`) and a reference capture shows it unrun, so it
+/// is not run here.
 fn fix_color_vertex_alpha(
     colors: &mut [Color],
     group: &WmoGroup,
@@ -535,7 +379,7 @@ fn fix_color_vertex_alpha(
     let portals = root.portals();
     let infos = root.group_infos();
     let (start, count) = (header_refs.0 as usize, header_refs.1 as usize);
-    // The doorway set: portals of THIS group whose far side is an exterior (daylit) group.
+    // This group's portals whose far side is an exterior group.
     let doors: Vec<(Vec<[f32; 3]>, [f32; 4])> = portals
         .refs
         .get(start..start + count)
@@ -585,12 +429,7 @@ fn fix_color_vertex_alpha(
     }
 }
 
-/// The group's MOCV **as the renderer uploads it** — the authored buffer with the bright-doorway fade
-/// already applied (see [`fix_color_vertex_alpha`]), BGRA bytes parallel to the group's vertices.
-/// `None` when the bytes aren't a group or carry no MOCV parallel to their positions.
-///
-/// The seam the `wmo_mocv` instrument reads: a batch that censuses black in the file and white here
-/// is a transition corridor the fade lights; black in both is a genuinely dark room.
+/// The group's MOCV as the renderer uploads it, BGRA, with the doorway fade applied.
 pub fn wmo_group_fixed_colors(group_bytes: &[u8], root: &WmoRoot) -> Option<Vec<[u8; 4]>> {
     let Ok(ParsedWmo::Group(group)) = parse_wmo(&mut Cursor::new(group_bytes)) else {
         return None;
@@ -599,9 +438,7 @@ pub fn wmo_group_fixed_colors(group_bytes: &[u8], root: &WmoRoot) -> Option<Vec<
     Some(colors.iter().map(|c| [c.b, c.g, c.r, c.a]).collect())
 }
 
-/// The group's MOCV **exactly as authored**, BGRA bytes parallel to its vertices — the before to
-/// [`wmo_group_fixed_colors`]'s after. `None` when the bytes aren't a group or carry no MOCV parallel
-/// to their positions.
+/// The group's MOCV as authored, BGRA.
 pub fn wmo_group_raw_colors(group_bytes: &[u8]) -> Option<Vec<[u8; 4]>> {
     let Ok(ParsedWmo::Group(group)) = parse_wmo(&mut Cursor::new(group_bytes)) else {
         return None;
@@ -610,32 +447,21 @@ pub fn wmo_group_raw_colors(group_bytes: &[u8]) -> Option<Vec<[u8; 4]>> {
     Some(colors.iter().map(|c| [c.b, c.g, c.r, c.a]).collect())
 }
 
-/// The group's MOCV as a buffer **parallel to its positions**, or `None` if it has no usable bake.
-///
-/// The length test cannot be plain equality. A WMO's last chunk is allowed to run past EOF and clamp,
-/// and when the clamped chunk is MOCV the buffer comes back a whole *record* short:
-/// `Undercity_144.wmo` holds 1159 of its declared 1160 colour bytes, so `chunks_exact(4)` yields 289
-/// colours for 290 vertices. Demanding equality threw away **289 good colours over one missing byte**
-/// and fell the whole group back to untinted white — a corridor lit `tex × 1.0` inside a city whose
-/// every other interior surface is multiplied by a dark bake.
-///
-/// So a shortfall inside one record's worth is padded from the last complete colour; anything larger
-/// is a genuinely broken bake and still reads `None`, because padding hundreds of vertices from one
-/// sample would invent lighting rather than recover it.
+/// The group's MOCV parallel to its positions. A MOCV clamped at EOF comes back one colour short
+/// (`Undercity_144.wmo` holds 1159 of 1160 bytes) and is padded from the last colour; a larger
+/// shortfall is a broken bake and reads `None`.
 fn parallel_colors(group: &WmoGroup) -> Option<Vec<Color>> {
     let (have, want) = (group.vertex_colors.len(), group.vertex_positions.len());
     if have == want {
         return Some(group.vertex_colors.clone());
     }
-    // `want - have == 1` is the clamped-tail case and the only shortfall we reconstruct.
     let last = (have + 1 == want).then(|| group.vertex_colors.last().copied())??;
     let mut colors = group.vertex_colors.clone();
     colors.push(last);
     Some(colors)
 }
 
-/// Shared body of [`wmo_group_fixed_colors`] and the submesh build: clone the authored MOCV and run
-/// the fade over it. `None` when the group carries no MOCV parallel to its positions.
+/// The authored MOCV with the doorway fade run over it.
 fn fixed_colors(group: &WmoGroup, group_bytes: &[u8], root: &WmoRoot) -> Option<Vec<Color>> {
     let mut colors = parallel_colors(group)?;
     let refs =
@@ -644,24 +470,19 @@ fn fixed_colors(group: &WmoGroup, group_bytes: &[u8], root: &WmoRoot) -> Option<
     Some(colors)
 }
 
-/// Build the render submeshes for one WMO **group** (its bytes), resolving textures/materials against
-/// `root`. Empty if the bytes aren't a parseable group. The bytes-in entry point for the Bevy
-/// `AssetLoader`; [`super::load_wmo`] is the chain-reading wrapper.
+/// Build one group's render submeshes against `root`; empty if the bytes are not a group.
 pub fn wmo_group_submeshes(group_bytes: &[u8], root: &WmoRoot) -> Result<Vec<RenderSubmesh>> {
     let Ok(ParsedWmo::Group(group)) = parse_wmo(&mut Cursor::new(group_bytes)) else {
         return Ok(Vec::new());
     };
-    // The bright-doorway fade runs ONCE per group, over the group's own MOCV buffer, before any draw
-    // reads it (`0x6b3f90` gates it on the group's `+0xbc` done-byte). We load a group once, so the
-    // once-gate is the load itself: fix the colours here and every batch below sees the fixed buffer.
+    // The reference fades once per group, gated on its `+0xbc` done-byte (`0x6b3f90`); a group
+    // loads once, so the load is the gate.
     let colors = fixed_colors(&group, group_bytes, root).unwrap_or_default();
     let ParsedWmo::Root(root) = &root.parsed else {
         anyhow::bail!("WmoRoot is not a root");
     };
-    // The MOGP batch-section counts (`+0x28/+0x2a/+0x2c`, after the byte-verified portal-ref span):
-    // MOBA batches are laid out TRANS, then INT, then EXT — the class decides an interior group's
-    // per-batch lighting law (see [`WmoBatchClass`]). Absent/short header ⇒ everything reads EXT
-    // (the conservative exterior law).
+    // MOGP `+0x28`/`+0x2a`: MOBA batches run TRANS, then INT, then EXT, the class deciding an
+    // interior group's lighting; a short header reads all EXT.
     let (trans_n, int_n) = find_wmo_chunk(group_bytes, b"PGOM")
         .filter(|m| m.len() >= 0x2c)
         .map_or((0usize, 0usize), |m| {
@@ -672,11 +493,9 @@ pub fn wmo_group_submeshes(group_bytes: &[u8], root: &WmoRoot) -> Result<Vec<Ren
         });
     let mut out = Vec::new();
     {
-        // WMO groups carry MONR normals + MOCV colours (parallel to positions); fall back when absent.
         let has_normals = group.vertex_normals.len() == group.vertex_positions.len();
         let has_colors = colors.len() == group.vertex_positions.len();
-        // Interior iff neither the EXTERIOR (0x8) nor exterior-lit (0x40) bit is set — the same
-        // `groupFlags & 0x48 == 0` test the real client branches on (RenderSubmesh::interior).
+        // Neither exterior (`0x8`) nor exterior-lit (`0x40`): the reference's interior test.
         let interior = (group.flags & 0x48) == 0;
         let vertex = |g: u32| {
             let p = &group.vertex_positions[g as usize];
@@ -688,10 +507,8 @@ pub fn wmo_group_submeshes(group_bytes: &[u8], root: &WmoRoot) -> Result<Vec<Ren
                 .texture_coords
                 .get(g as usize)
                 .map_or([0.0, 0.0], |t| [t.u, t.v]);
-            // MOCV is BGRA; RGB is the per-vertex shade multiplier, and the REAL alpha rides along —
-            // on an interior TRANS batch it is the lit↔bake lerp factor (the FixColorVertexAlpha
-            // product, applied above); every other batch class forces it opaque below (alpha encodes
-            // blend/unused there — the exterior alpha→0xFF fixup). Absent → white.
+            // MOCV RGB is the shade multiplier; the alpha rides along and is forced opaque below
+            // where it is not lighting data. No MOCV is white.
             let c = colors.get(g as usize).map_or([1.0, 1.0, 1.0, 1.0], |c| {
                 [
                     c.r as f32 / 255.0,
@@ -731,36 +548,21 @@ pub fn wmo_group_submeshes(group_bytes: &[u8], root: &WmoRoot) -> Result<Vec<Ren
             let blend = match material.map(|m| m.blend_mode) {
                 Some(0) | None => ModelBlend::Opaque,
                 Some(1) => ModelBlend::AlphaTest,
-                // MOMT.blendMode is a DIRECT EGxBlend index (no M2-style remap —
-                // `0x6b500f`): 4 = Mod (DST_COLOR/ZERO), 5 = Mod2x
-                // (DST_COLOR/SRC_COLOR).
+                // `MOMT.blendMode` indexes EGxBlend directly, no M2 remap (`0x6b500f`): 4 is Mod
+                // (DST_COLOR/ZERO), 5 Mod2x (DST_COLOR/SRC_COLOR).
                 Some(4) => ModelBlend::Mod,
                 Some(5) => ModelBlend::Mod2x,
                 Some(_) => ModelBlend::Blend,
             };
-            // The MOMT window/glass flags, each its own mechanism (the drawers
-            // `0x6b4f10`/`0x6b5190`, the SIDN updater `0x6b4090`):
-            //   UNLIT (0x01)  — the EXTERIOR drawer turns lighting off per material → `tex × white`
-            //                   fullbright (the inn's always-lit outside panes, MM_ELWYNN_WND_EXT).
-            //                   The INTERIOR drawer ignores it — lit/unlit there is dictated by the
-            //                   batch section alone, so `emissive` stays false on interior groups.
-            //   SIDN (0x10)   — the authored night-glow emissive colour, ramped by the night
-            //                   fraction and added inside the lit sum (the abbey's stained glass
-            //                   glowing after dusk). Lit lanes only; carried with its colour.
-            //   WINDOW (0x20) — interior-drawer batches swap to the brighter midpoint light (the
-            //                   warm pane seen from inside — MM_ELWYNN_WND_INT, MM_STAINED_01).
+            // MOMT flags (drawers `0x6b4f10`/`0x6b5190`, SIDN updater `0x6b4090`): UNLIT `0x01`
+            // draws an exterior batch fullbright and is ignored by the interior drawer; SIDN `0x10`
+            // adds the night-glow colour inside the lit sum; WINDOW `0x20` gives an interior batch
+            // the brighter midpoint light.
             let flags = material.map_or(0, |m| m.flags);
             let emissive = !interior && flags & 0x01 != 0;
-            // UNCULLED (0x04): the real client backface-culls every WMO batch unless this MOMT
-            // flag is set — at the render-state write (`0x6b4fd7`/`0x6b52bf`: bit 0x04
-            // inverted → EGxRs 0x14 GL_CULL_FACE; default cull ON, GL_BACK/CCW) — the same law the
-            // M2 path already honours. This used to be hardcoded two-sided ("buildings aren't the
-            // canopy issue"), and a building IS the canopy issue: 1.12 authors both-sides-visible
-            // cloth as the SAME faces twice with reversed winding (one copy per side — B38's tent
-            // awning, `wmo_doubled`), each meant to be culled from its wrong side. Drawing them
-            // two-sided rasterises both copies into an ulp-level depth tie, and the per-pixel
-            // winner is floating-point noise — the B38 flicker/latch.
-            // WMO has no skeleton, so the per-vertex skin (`_globals`) is unused.
+            // UNCULLED `0x04`: without it the reference back-face culls the batch (`0x6b4fd7`,
+            // `0x6b52bf`). Two-sided cloth is authored as the same faces twice with reversed
+            // winding, so drawing both sides z-fights. A WMO has no skeleton: the skin is unused.
             let (mut submesh, _globals) = remap_submesh(
                 global_indices.into_iter(),
                 vertex,
@@ -776,17 +578,14 @@ pub fn wmo_group_submeshes(group_bytes: &[u8], root: &WmoRoot) -> Result<Vec<Ren
                 .flatten();
             submesh.window = flags & 0x20 != 0;
             if !has_normals {
-                submesh.normals.clear(); // no MONR → let the renderer recompute flat normals
+                submesh.normals.clear(); // no MONR: the renderer computes flat normals
             }
             if !has_colors {
-                submesh.vertex_colors.clear(); // no MOCV → empty (white, no tint)
+                submesh.vertex_colors.clear(); // no MOCV: untinted
             }
-            // The MOCV **alpha** is per-vertex LIGHTING data on interior batches: a TRANS batch
-            // reads it as the lit↔bake lerp factor, an INT batch as the ×4 self-illumination mask
-            // (the reference's interior pixel shader `tex·MOCV·(1 + 4·a)` — the inn's fireplace
-            // surround bakes α≈100, the portal-seam whitening 255). Exterior batches encode
-            // blend/unused state there — force those opaque so bevy's vertex-colour fold can't
-            // perturb their alpha semantics (the shader un-folds coverage for the interior lanes).
+            // MOCV alpha is lighting data on interior batches: TRANS reads it as the lit-to-bake
+            // lerp factor, INT as the self-illumination mask (the reference's
+            // `tex·MOCV·(1 + 4·a)`). Elsewhere it is blend state, forced opaque.
             if !(interior && matches!(class, WmoBatchClass::Trans | WmoBatchClass::Int)) {
                 for c in &mut submesh.vertex_colors {
                     c[3] = 1.0;
@@ -814,7 +613,7 @@ mod tests {
             base: [100.0, 200.0, -3.0],
             material_id: 0,
             heights: vec![-3.0; 6],
-            // Byte 0 per vertex — the authored opacity index (see `wmo_water_alpha_v`).
+            // Byte 0 per vertex, the authored opacity index.
             opacity: vec![0, 51, 102, 153, 204, 255],
             tile_flags: vec![0x44, 0x0f], // wet (type 4 + fishable), hole
         };
@@ -822,11 +621,9 @@ mod tests {
         assert_eq!(m.kind, LiquidKind::Still);
         assert_eq!(m.positions.len(), 6); // full 3×2 grid emitted
         assert_eq!(m.indices.len(), 6); // one wet tile → 2 tris → 6 indices
-                                        // Grid vertex (i=1, j=0) sits at base + (1·STEP, 0, height).
         assert!((m.positions[1][0] - (100.0 + MLIQ_CELL_STEP)).abs() < 1e-3);
         assert_eq!(m.positions[0], [100.0, 200.0, -3.0]);
-        // Opacity is the vertex's OWN authored byte, normalised — not a pinned deep endpoint.
-        // Before this, every WMO pool in the game was rendered at a hard 1.0 (fully opaque).
+        // Opacity is the vertex's own authored byte, normalised.
         for (n, &v) in m.depths.iter().enumerate() {
             assert!(
                 (v - f32::from(lq.opacity[n]) / 255.0).abs() < 1e-6,
@@ -834,16 +631,11 @@ mod tests {
                 lq.opacity[n]
             );
         }
-        // The wet tile is the LEFT one (indices reference the left cell's 4 corners: 0,1,3,4).
+        // The wet tile is the left one, corners 0, 1, 3 and 4.
         assert!(m.indices.iter().all(|&i| [0u32, 1, 3, 4].contains(&i)));
     }
 
-    /// Two grid-aligned WMO liquid surfaces (a canal split across groups) must share ONE continuous
-    /// UV field, so the animated water texture doesn't seam at the boundary. Surface B begins exactly
-    /// where A's last column sits (base offset by 2·STEP in X), so the vertex they share in model space
-    /// must get the SAME UV in both — the property a per-surface `(i, j)` reset would break wherever
-    /// surfaces are NOT cell-aligned (each
-    /// surface restarted at UV 0, and an arbitrary tile count put that restart mid-texture → the seam).
+    /// Surface B starts at A's last column (2·STEP east), so their shared vertex must get one UV.
     #[test]
     fn adjacent_surfaces_share_a_continuous_uv_field() {
         let base = [100.0, 200.0, -3.0];
@@ -858,7 +650,6 @@ mod tests {
             opacity: Vec::new(),
             tile_flags: vec![0x44, 0x44], // both tiles wet
         };
-        // B's origin column coincides with A's rightmost column (one 2-tile span east).
         let b = WmoLiquid {
             xverts: 3,
             yverts: 2,
@@ -872,16 +663,13 @@ mod tests {
         };
         let ma = build_wmo_liquid_mesh(&a, 0xf).unwrap();
         let mb = build_wmo_liquid_mesh(&b, 0xf).unwrap();
-        // A's rightmost-bottom vertex (i=2, j=0 → index 2) and B's leftmost-bottom (i=0, j=0 → index 0)
-        // are the same model-space point; their UVs must match (no seam).
+        // A's vertex (2, 0) and B's (0, 0) are the same point.
         let (ua, ub) = (ma.uvs[2], mb.uvs[0]);
         assert!(
             (ua[0] - ub[0]).abs() < 1e-4 && (ua[1] - ub[1]).abs() < 1e-4,
             "seam: shared-vertex UVs differ A={ua:?} B={ub:?}"
         );
-        // The field is position-derived, and it steps exactly ONE repeat per cell — the reference's
-        // `u = (float)i` (`0x6b6630`). This used to assert ¼, i.e. a texture 4x too large; correcting
-        // it is what took the ripple off mip 0 across the whole near field (`MLIQ_UV_PERIOD`).
+        // One repeat per cell, the reference's `u = (float)i` (`0x6b6630`).
         assert!((ma.uvs[1][0] - ma.uvs[0][0] - 1.0).abs() < 1e-4);
     }
 
@@ -903,7 +691,6 @@ mod tests {
         assert_eq!(m.kind, LiquidKind::Magma);
         assert!(m.depths.iter().all(|&v| v == 0.0)); // fullbright ⇒ depth V unused
 
-        // A grid where every tile is a hole → no mesh.
         let all_holes = WmoLiquid {
             tile_flags: vec![0x0f],
             ..lq
@@ -913,13 +700,11 @@ mod tests {
 
     #[test]
     fn reads_group_header_flags_and_portal_ref_span() {
-        // A 68-byte MOGP header: flags @0x08, portal_ref_start @0x24, portal_ref_count @0x26.
         let mut hdr = vec![0u8; 68];
         hdr[8..12].copy_from_slice(&0x8u32.to_le_bytes()); // EXTERIOR
         hdr[0x24..0x26].copy_from_slice(&5u16.to_le_bytes());
         hdr[0x26..0x28].copy_from_slice(&3u16.to_le_bytes());
         hdr[0x30..0x34].copy_from_slice(&[2, 0, 0, 0]); // fog indices
-                                                        // Group file: MVER then MOGP(super-chunk = header + (no) sub-chunks).
         let mut group = Vec::new();
         group.extend(chunk(b"REVM", &17u32.to_le_bytes()));
         group.extend(chunk(b"PGOM", &hdr));
@@ -936,9 +721,7 @@ mod tests {
         );
     }
 
-    /// The whole-group submersion override at MOGP `0x34`, and the two ways a header can fail to
-    /// carry one. `0` is a live value (all 13 shipped groups that set it say `0` = water), so the
-    /// sentinel has to be spelled out rather than defaulted to zero.
+    /// All 13 shipped overrides are `0`, water, so the no-liquid sentinel cannot be zero.
     #[test]
     fn reads_the_whole_group_liquid_override() {
         let group_with = |liquid: u32| {
@@ -950,7 +733,7 @@ mod tests {
             group
         };
 
-        // The shipped case: water, over the whole group, with no MLIQ anywhere in the file.
+        // The shipped case: the whole group is water, with no MLIQ.
         let flooded = wmo_group_header(&group_with(0)).expect("group header");
         assert_eq!(flooded.group_liquid, 0);
         assert_ne!(flooded.group_liquid, NO_GROUP_LIQUID);
@@ -963,8 +746,7 @@ mod tests {
             NO_GROUP_LIQUID
         );
 
-        // A header truncated before 0x34 reads as "no liquid" — the safe way round, since the
-        // override only ever adds water and a short header is not evidence of a flooded room.
+        // A header short of 0x34 reads as no liquid.
         let mut short = Vec::new();
         short.extend(chunk(b"REVM", &17u32.to_le_bytes()));
         short.extend(chunk(b"PGOM", &[0u8; 0x30]));

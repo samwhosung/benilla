@@ -1,27 +1,14 @@
-//! What a WMO's surfaces are **baked** to — the per-group MOCV census behind a "this floor is black"
-//! report:
+//! Each WMO group's MOCV bake per batch, up-facing vertices apart from the rest, with its MOGP
+//! flags, batch class and the bake after the doorway fade. The reference lights an interior surface
+//! only from the bake: an INT batch draws `tex × MOCV` and a TRANS batch lerps to it by `MOCV.a`,
+//! and `FixColorVertexAlpha` (`0x6c43d0`) brightens interior vertices toward white within 6.67 yd
+//! of a portal to an exterior group. A model-space `x,y,z` keeps only the groups whose box holds
+//! it; `--survey` prints only the fade per group. Output is Blizzard data: never commit it.
 //! `cargo run -p benilla-formats --example wmo_mocv -- <wmo-path-or-substring> [gN | x,y,z]`
-//!
-//! An interior WMO surface takes no exterior light in the reference: an INT-class batch draws
-//! `tex × MOCV` and a TRANS-class batch lerps to it by `MOCV.a`, so the *only* thing between a black
-//! floor and a lit one is the bake in the file — plus the runtime portal fixup the client applies
-//! over it (`FixColorVertexAlpha` `0x6c43d0`, which brightens interior verts
-//! toward white within 6.67 yd of an exterior-neighbour portal). A "dark floor here" report therefore
-//! has exactly two shapes, told apart by numbers rather than by looking: either the file bakes it
-//! dark (and the fixup is what lights it), or our reader/classifier mislabels the batch. This prints
-//! both halves — the group's MOGP flags and per-batch class, and the MOCV spread of each batch's
-//! vertices split by facing, so a FLOOR (n.z up) reads apart from the walls sharing its batch.
-//!
-//! With a model-space `x,y,z` it reports only the groups whose bounding box contains the point (a
-//! `.gps` pin, inverse-transformed by the placement, names the group the director is standing in).
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
 
 use benilla_wmo::{parse_wmo, ParsedWmo};
 
-/// Walk a WMO file's top-level chunks for `magic` (FourCC reversed on disk), returning its payload.
-/// The examples can't use the crate-private reader, and a group file's MOGP header is the only thing
-/// here that isn't already on a parsed struct.
+/// The payload of a WMO file's top-level chunk `magic`, FourCC reversed as on disk.
 fn chunk<'a>(bytes: &'a [u8], magic: &[u8; 4]) -> Option<&'a [u8]> {
     let mut off = 0usize;
     while off + 8 <= bytes.len() {
@@ -93,11 +80,7 @@ fn main() -> anyhow::Result<()> {
     let filter = args.next();
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;
-    // A `.wmo` argument is taken as a literal chain path, but only if the chain HAS it: `stormwind.wmo`
-    // ends in `.wmo` and is not a path, and the old "ends_with ⇒ literal" rule turned that into a hard
-    // read error. Read as "no groups affected" from a grepped log, it cost a wrong all-clear on
-    // Stormwind, Ironforge and Stratholme. Falling back to the substring search cannot mislead: the
-    // resolved path is printed, and a genuine miss still errors.
+    // A `.wmo` argument is a literal path only if the chain has it; `stormwind.wmo` is a substring.
     let lower = pat.to_lowercase();
     let path = if lower.ends_with(".wmo") && chain.read_file(&lower).is_ok() {
         pat.clone()
@@ -205,8 +188,7 @@ fn main() -> anyhow::Result<()> {
             if has_colors { "yes" } else { "ABSENT" },
             group.render_batches.len(),
         );
-        // The fade's blast radius on this group: how many authored slots it rewrites, and by how much
-        // — the number that says whether the doorway fixup is a targeted lift or a wash over the room.
+        // How many authored slots the doorway fade rewrites on this group, and by how much.
         if let Some(fixed) = benilla_formats::wmo_group_fixed_colors(&gbytes, &wmo_root) {
             let lum = |c: [f32; 3]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
             let (mut changed, mut before, mut after) = (0usize, 0.0f32, 0.0f32);
@@ -251,7 +233,7 @@ fn main() -> anyhow::Result<()> {
                 .vertex_indices
                 .get(start..start + batch.count as usize)
                 .unwrap_or(&[]);
-            // Split by facing: a floor's up-facing verts are what a "dark floor" report is about.
+            // Split by facing, so a floor's up-facing verts read apart from its walls.
             let (mut up, mut other) = (Stat::new(), Stat::new());
             for &i in idx {
                 let i = i as usize;
@@ -274,10 +256,8 @@ fn main() -> anyhow::Result<()> {
             println!("        up-facing {}", up.line());
             println!("        other     {}", other.line());
         }
-        // The same census *after* the reader's bright-doorway fade — what the renderer actually
-        // uploads. A batch that reads black above and white here is a floor the file never baked and
-        // the runtime fixup lights (a WMO transition corridor); one that stays black in both is a
-        // genuinely dark room.
+        // The same census after the reader's doorway fade, as the renderer uploads it: black above
+        // and white here is a surface only the fade lights.
         let subs = benilla_formats::wmo_group_submeshes(&gbytes, &wmo_root)?;
         println!(
             "  --- after FixColorVertexAlpha ({} submeshes) ---",

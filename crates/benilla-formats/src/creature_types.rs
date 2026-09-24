@@ -1,14 +1,6 @@
-//! CreatureType.dbc — the 13-row creature-class table (Beast, Humanoid, Critter, Totem, …).
-//!
-//! The one consumer today: the TAB-target scan's critter rejection (the scorer `0x494200` looks
-//! the candidate's creature type up in the cached table `[0xc0de2c]` and rejects when
-//! `row[+0x28] & 1` — **flag bit 0**).
-//! In the shipped 1.12 data only **Critter (8)** carries the bit (the "critter/totem/non-combat
-//! pet" gloss is later-era; see the real-chain test). A unit's creature type itself comes off
-//! the wire (`SMSG_CREATURE_QUERY_RESPONSE`), cached with its name.
-//!
-//! Record layout (1.12, 11 × u32-slot fields): id@0, name(8 locales + flags = 9 slots)@1..9,
-//! flags@10.
+//! `CreatureType.dbc`: each creature type's flags word (column 10). The TAB-target scorer
+//! (`0x494200`) looks a unit's type up in its cached table (`[0xc0de2c]`) and rejects it when
+//! `row[+0x28] & 1`. A unit's type comes from `SMSG_CREATURE_QUERY_RESPONSE`.
 
 use std::collections::HashMap;
 
@@ -20,16 +12,13 @@ use crate::Chain;
 
 const CREATURE_TYPE: &str = "DBFilesClient\\CreatureType.dbc";
 
-/// creature-type id → the row's flags dword. Query through [`CreatureTypeFlags::no_tab_target`].
+/// Creature type id → the row's flags word.
 #[derive(Debug, Default, Clone)]
 pub struct CreatureTypeFlags(HashMap<u32, u32>);
 
 impl CreatureTypeFlags {
-    /// Whether this creature type is excluded from TAB/nearest-enemy targeting — the client's
-    /// `flags & 1` test. In the shipped **1.12** data exactly ONE row carries the bit:
-    /// **Critter (8)** (real-chain verified below — Totem 11 does NOT; the "can't tab totems"
-    /// lore is a later-era flag change, not 5875 data). An unknown or missing type is targetable
-    /// (the client's out-of-range index skips the check).
+    /// Whether TAB targeting skips this type (`flags & 1`): in 1.12 data only Critter (8), not
+    /// Totem (11). An unknown type is targetable, as the client skips an out-of-range index.
     pub fn no_tab_target(&self, creature_type: u32) -> bool {
         self.0.get(&creature_type).is_some_and(|f| f & 1 != 0)
     }
@@ -72,10 +61,6 @@ pub fn load_creature_type_flags(chain: &mut Chain) -> Result<CreatureTypeFlags> 
 mod tests {
     use super::*;
 
-    /// The shipped 1.12 data, read through the real chain when the install is present: **11**
-    /// rows (ids 1–11), and exactly one carries flag bit 0 — **Critter (8)**. Totem (11) does
-    /// NOT (verified against the real file; the critter/totem gloss from later expansions doesn't
-    /// hold for 5875 data). Beast (1) and Humanoid (7) are targetable.
     #[test]
     fn shipped_flags_mark_only_critter() {
         let data = crate::wow_data_or_skip!();

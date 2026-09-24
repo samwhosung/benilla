@@ -1,30 +1,13 @@
-//! Corpus scans over **how a batch is textured and blended** — the material side of a model's
-//! render submeshes.
-//!
-//! Blend modes (`blendscan`), per-sequence batch visibility through the alpha combine
-//! (`alphascan`), sampler address modes and the UVs that need them (`uvwrapscan`, `texmodescan`),
-//! generated-texcoord environment stages (`envmapscan`), and the batches whose animated
-//! texture-transform / tint loop is not the same in every sequence slot, which the bake routes to
-//! a per-placement material (`uvslotscan`).
-//!
-//! `fxuvscan` is the intersection of the first two, asked of one corpus: the spell-effect models,
-//! whose animated texture transform decides — through their CLAMP-authored UVs — whether a
-//! consumer that runs none of it loses the batch's motion or its whole existence. It sized
-//! decision 2282, which built the consumer; it stays the way that question is asked at all — and
-//! `entityuvscan` is that same question asked of the unit / GameObject / held-item corpus, which
-//! sized. Both lanes run their transform today; what the two scans are for is
-//! keeping "this lane needs no channel" a countable claim rather than an assumed one. They share
-//! their whole per-batch reader.
+//! Corpus scans over how a batch is textured and blended, and what the effect and entity corpora's
+//! animated texture transforms and tints render for a consumer that runs none of them.
 
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use benilla_formats::{Chain, KeyAnim, SeqLoops};
 
-/// Sweep every `.m2` (under `prefix`, if given) and list the models whose MATERIAL table authors
-/// blend mode 5 (Mod) / 6 (Mod2x) — the multiply-blend census. One line per
-/// matching model: its per-material `(flags, blend)` pairs and path. The raw header read (materials
-/// count/ofs at `0x84`, 4-byte `{u16 flags, u16 blend}` records) matches `benilla-m2`'s parse.
+/// List the models whose material table authors blend mode 5 (Mod) or 6 (Mod2x): materials at
+/// `0x84`/`0x88`, 4-byte `{u16 flags, u16 blend}` records.
 pub fn blendscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
     let (mut scanned, mut hits) = (0u32, 0u32);
@@ -58,17 +41,8 @@ pub fn blendscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` (under `prefix`, if given) and census the models whose batch visibility is
-/// **per sequence** — geometry the reference draws in one animation and skips in another, via the
-/// alpha combine (`A = colourAlpha × weight`, `A ≤ 0` culls; `0x707680`).
-///
-/// This is the population instrument for the class of bug where a client bakes the material tracks
-/// once and draws the result forever: every model listed here has at least one batch whose authored
-/// visibility CHANGES between sequences, so a single-sequence bake is guaranteed to be wrong for it
-/// in some animation. Per model it reports how many batches are **hidden in the model's first
-/// sequence** (what a doodad-shaped bake would show) versus hidden in *some* sequence, so the two
-/// failure directions — drawing geometry that should be hidden, and hiding geometry that should
-/// draw — are separated. `m2alpha` then explains one model in full.
+/// List the models whose batch visibility changes between sequences through the alpha combine
+/// (`A = colourAlpha × weight`, `A ≤ 0` culls; `0x707680`), which a single-sequence bake misses.
 pub fn alphascan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
     let (mut scanned, mut hits) = (0u32, 0u32);
@@ -87,8 +61,7 @@ pub fn alphascan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         if seq_count < 2 {
             continue; // a one-sequence model can't disagree with itself
         }
-        // A batch is "hidden in slot s" when its combined factor is 0 across that whole band. The
-        // sampling grid is coarse on purpose — a batch that so much as flickers non-zero is drawn.
+        // Hidden in slot s: the combined factor is 0 at every sample; any flicker above 0 draws.
         let hidden_in = |sub: &benilla_formats::RenderSubmesh, slot: usize| -> bool {
             sub.alpha_anim.as_ref().is_some_and(|a| {
                 (0..=16u16).all(|k| a.sample(Some(slot), f32::from(k) * 0.25, 0.0) <= 0.0)
@@ -122,7 +95,6 @@ pub fn alphascan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         *by_dir.entry(top.to_ascii_lowercase()).or_default() += 1;
         rows.push((name, varies, first, any));
     }
-    // Loudest first: the models where the most geometry changes hands between sequences.
     rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     println!(
         "model                                                        varies  hid@seq0  hid@any"
@@ -141,19 +113,9 @@ pub fn alphascan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` (optionally under a path prefix) and list the batches whose texture is
-/// authored **CLAMP** (`M2Texture.flags` bit 0/1 clear) while the batch's own UVs run **outside
-/// `0..1`** — the exact population a repeat-sampling renderer draws wrong.
-///
-/// The margin outside `0..1` is deliberate authoring: clamped, it samples the texture's transparent
-/// border and the card fades out to nothing. Sampled with repeat it wraps into the opposite edge —
-/// on a cutout sheet, the opaque middle — so the margin draws as solid geometry with a hard seam
-/// where u or v crosses the wrap. That is why a snow-fir grows pale plates with a crease down each
-/// bough, and why the artefact never looked like an extra primitive: it is the *same* card,
-/// sampling the wrong texels.
-///
-/// `over` is how far past the edge the batch reaches, in UV units — the width of the wrongly-drawn
-/// margin as a fraction of the sheet.
+/// List the clamp-authored batches (`M2Texture.flags` bit 0 or 1 clear) whose UVs leave `0..1`:
+/// clamped, the margin samples the transparent border, where repeat draws the opposite edge with a
+/// seam. `over` is how far past the edge the batch reaches, in UV units.
 pub fn uvwrapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
     let (mut scanned, mut batches, mut hits, mut models) = (0u32, 0u32, 0u32, 0u32);
@@ -179,9 +141,7 @@ pub fn uvwrapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 })
             };
             let (u, v) = (ext(0), ext(1));
-            // Only an axis authored CLAMP can be drawn wrong by repeat; a wrapping axis is meant
-            // to tile. A hair of float slop past the edge is not a margin — require 1/512 of a
-            // sheet, well under the thinnest authored border and well over rounding.
+            // Only a clamp axis draws wrong under repeat; under 1/512 of a sheet is float slop.
             const SLOP: f32 = 1.0 / 512.0;
             let bad_u = !s.wrap_x && (u.0 < -SLOP || u.1 > 1.0 + SLOP);
             let bad_v = !s.wrap_y && (v.0 < -SLOP || v.1 > 1.0 + SLOP);
@@ -234,13 +194,8 @@ pub fn uvwrapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` and report, per texture path, which sampler ADDRESS MODES the corpus asks of
-/// it — and how many paths are asked for **more than one**.
-///
-/// The design question behind it: the address mode lives on the GPU sampler, which in our asset
-/// layer is a property of the loaded `Image`, which is keyed by path. If a `.blp` is only ever
-/// asked for one mode, path-keying stays correct and the mode can simply ride the load. Every path
-/// asked for two needs two uploads, or one of its users renders wrong.
+/// List the texture paths the corpus asks for in more than one address mode: the mode rides the
+/// loaded `Image`, keyed by path, so such a path needs one upload per mode.
 pub fn texmodescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
     // texture path -> set of (wrap_x, wrap_y) asked for, as a 4-bit mask
@@ -285,36 +240,19 @@ pub fn texmodescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` (optionally under a path prefix) and census the batches whose texture
-/// coordinates are **GENERATED, not authored** — the sphere-map environment stages
-/// (`texture_unit_lookup[texCoordSet] > 2`, the reference's gate at `0x70b8bd`).
-///
-/// The population instrument for a silent class: such a batch carries no usable UVs *by design* —
-/// the artist collapses the whole mesh onto one point because the runtime is meant to supply the
-/// coordinates — so a renderer that reads the vertex UV draws the entire surface in **one texel**
-/// of a reflection sheet. Nothing about that failure is loud: no missing geometry, no error, just a
-/// flat wash of whatever colour happens to sit at that corner (`GnomeSubwayGlass.m2` → the Deeprun
-/// Tram tube's yellow, `AKGNOMEREFLECT.BLP` texel 0,0 = 225,221,142, doubled by its Mod2x blend).
-///
-/// **DEGENERATE** marks the batches where the authored UVs collapse to a single point — the ones
-/// that render as a flat colour field. The rest carry leftover UVs that merely go unused, so they
-/// misdraw as a static smear of the sheet instead: wrong, but not obviously so. Both are fixed by
-/// the same mechanism; the split says which reports a renderer's env support explains.
+/// List the batches whose texture coordinates are generated, not authored: the sphere-map
+/// environment stages (`texture_unit_lookup[texCoordSet] > 2`, gated at `0x70b8bd`). A
+/// `DEGENERATE` batch's authored UVs collapse to one point, so reading them draws one flat texel
+/// (`GnomeSubwayGlass.m2`: `AKGNOMEREFLECT.BLP` texel 0,0, doubled by Mod2x).
 pub fn envmapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
     let (mut scanned, mut batches, mut hits, mut models, mut degenerate) =
         (0u32, 0u32, 0u32, 0u32, 0u32);
-    // Which blend modes and which sheets the mechanism actually serves — a Mod2x env layer tints
-    // what is behind it (glass), an Add one lays a highlight over the surface (the metal sheen).
+    // The blend modes and sheets env stages use: Mod2x tints what is behind (glass), Add a sheen.
     let mut by_blend: BTreeMap<String, u32> = BTreeMap::new();
     let mut by_sheet: BTreeMap<String, u32> = BTreeMap::new();
-    // **The fallback census.** `stage_is_env_mapped` reads an OUT-OF-RANGE `texture_unit_lookup`
-    // index as env — the reference's own unguarded read, and the only safe direction. But that
-    // branch is the one way the gate can *invent* env-mapping on a model whose art never asked for
-    // it, so it is counted separately: a hit is trustworthy exactly when it came from a real
-    // `>= 3` entry. `empty_table` is the degenerate shape of the same thing (no table at all ⇒
-    // every batch falls through), broken out because it would tar a whole model rather than a
-    // stage.
+    // `stage_is_env_mapped` reads an out-of-range `texture_unit_lookup` index as env, as the
+    // reference's unguarded read does; those hits, and models with no table at all, count apart.
     let (mut from_oob, mut empty_table) = (0u32, 0u32);
     for name in names {
         let Ok(bytes) = chain.read_file(&name) else {
@@ -349,8 +287,6 @@ pub fn envmapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             *by_blend.entry(format!("{:?}", s.blend)).or_default() += 1;
             let sheet = s.texture.as_deref().unwrap_or("NONE").to_string();
             *by_sheet.entry(sheet.clone()).or_default() += 1;
-            // Does the authored UV set collapse to a point? Then the vertex data cannot even
-            // approximate the sheet and the batch renders as one flat colour.
             let span = |axis: usize| {
                 s.uvs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), t| {
                     (lo.min(t[axis]), hi.max(t[axis]))
@@ -407,15 +343,13 @@ pub fn envmapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// The two per-batch channels the bake resolves **per file sequence slot** — the pair
-/// `models::m2_batches` hands the runtime as `uv_seq` / `rgb_seq`. Both are `C3Vector` tracks, so
-/// one classifier serves both; only how many components survive the bake differs.
+/// The two per-batch channels the bake resolves per file sequence slot (`uv_seq`, `rgb_seq`),
+/// both `C3Vector` tracks, so one classifier serves both.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Channel {
-    /// The texture transform's **translation** track (`tex_anim::bake_uv_seqs`), read off
-    /// `RenderSubmesh::uv_seq` and its shared-lane twin `uv_anim`.
+    /// The texture transform's translation (`tex_anim::bake_uv_seqs`): `uv_seq`, or `uv_anim`.
     Uv,
-    /// The M2Color **RGB** tint track (`mat_anim::bake_rgb_seqs`), read off `rgb_seq` / `rgb_anim`.
+    /// The M2Color RGB tint (`mat_anim::bake_rgb_seqs`): `rgb_seq`, or `rgb_anim`.
     Rgb,
 }
 
@@ -434,7 +368,6 @@ impl Channel {
         }
     }
 
-    /// The field name the report quotes, so a reader can grep the struct the numbers came from.
     fn field(self) -> &'static str {
         match self {
             Self::Uv => "uv_seq",
@@ -442,9 +375,6 @@ impl Channel {
         }
     }
 
-    /// Axis names for the value-range cells — one per component the bake keeps. The UV pair stays
-    /// `x`/`y`: the bake carries the track's raw components and how the reference maps them onto
-    /// U/V is still under RE (`tex_anim`'s module doc).
     fn axes(self) -> &'static [&'static str] {
         match self {
             Self::Uv => &["x", "y"],
@@ -453,36 +383,22 @@ impl Channel {
     }
 }
 
-/// How far apart two baked loops may be and still be the **same authored function**. Tight on
-/// purpose: this is the noise floor of a `u32` millisecond key rebased through an `f32` divide, not
-/// an authoring tolerance — a disagreement anyone could see is orders of magnitude larger.
+/// How far apart two baked loops may be and still be one authored loop: the noise of a `u32` ms
+/// key rebased through an `f32` divide.
 const KEY_EPS: f32 = 1e-4;
 
-/// Why one batch's slots disagree — the sub-classification of every batch the bake routed to the
-/// per-placement lane, i.e. of every set whose [`SeqLoops::uniform`] came back `None`.
-///
-/// The question these four answer is whether that verdict is **earned**. `uniform()` compares
-/// `KeyAnim` by `PartialEq` — exact float equality on the clock flags, the period and every key —
-/// so two slots holding the same authored loop can still be split by a single flag or by
-/// sub-epsilon noise in a rebased timestamp. `Dead0` and `RealDiffers` are real divergence, where
-/// one material per placement is the only right answer; `WrapOnly` and `KeysEpsilon` are batches a
-/// coarser comparison would have left on the shared lane, and their count IS the over-application.
+/// Why a batch's slots disagree, for every set [`SeqLoops::uniform`] refused. `uniform()` is exact
+/// float equality, so `WrapOnly` and `KeysEpsilon` are sets a coarser test would share; `Dead0`
+/// and `RealDiffers` need a material per placement.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Why {
-    /// Slot 0 bakes nothing while a later slot bakes a loop — the B98 shape, the founding case, and
-    /// the only class a slot-0-pinned bake could not render at all.
+    /// Slot 0 bakes nothing while a later slot bakes a loop.
     Dead0,
-    /// Every slot bakes the same loop except [`KeyAnim::wrap`]: the sequences carrying it disagree
-    /// on their own loop flag, so one band clamps at its tail where another wraps. Visible only at
-    /// the very end of a one-shot band — and never at all on a placed doodad, which loops.
+    /// The slots differ only in [`KeyAnim::wrap`]: one band clamps at its tail where another wraps.
     WrapOnly,
-    /// Every slot agrees to within [`KEY_EPS`] on every number and on every flag — the slots differ
-    /// only by float noise in the rebased key times, and exact `PartialEq` is the whole reason they
-    /// are here.
+    /// The slots agree within [`KEY_EPS`] on every number and flag: float noise only.
     KeysEpsilon,
-    /// Genuinely different loops: a different key count, a different interpolation or clock law,
-    /// numbers apart by more than noise — or slot 0 alive against a later slot that holds still,
-    /// DEAD-0's mirror.
+    /// Different loops (key count, clock law or values), or slot 0 alive beside a dead later slot.
     RealDiffers,
 }
 
@@ -503,7 +419,6 @@ impl Why {
         }
     }
 
-    /// The one-line reading of the bucket, printed beside its counts.
     fn blurb(self) -> &'static str {
         match self {
             Self::Dead0 => {
@@ -529,16 +444,13 @@ impl Why {
 /// One batch-channel's read of the bake.
 struct Verdict {
     why: Why,
-    /// The largest numeric disagreement between slot 0 and any other slot. `0.0` means the slots
-    /// are bit-identical — which, for a set the bake kept, means only a *flag* differs.
+    /// The largest disagreement between slot 0 and another slot; 0 means only a flag differs.
     delta: f32,
-    /// The report line's detail cell.
     detail: String,
 }
 
-/// The largest absolute disagreement between two baked loops over everything a consumer reads: the
-/// period, and every key's time and value. `None` when they are not the same **shape** at all — a
-/// different key count or a different interpolation/clock law is a different function, not noise.
+/// The largest difference between two baked loops in period, key times and values; `None` when
+/// their key count or clock law differs.
 fn loop_delta<V: AsRef<[f32]>>(a: &KeyAnim<V>, b: &KeyAnim<V>) -> Option<f32> {
     if a.step != b.step || a.gseq != b.gseq || a.keys.len() != b.keys.len() {
         return None;
@@ -553,9 +465,7 @@ fn loop_delta<V: AsRef<[f32]>>(a: &KeyAnim<V>, b: &KeyAnim<V>) -> Option<f32> {
     Some(d)
 }
 
-/// `[.L]` — one character per **file** sequence slot: `L` where the slot bakes a loop, `.` where
-/// its key window moves nothing. Slot 0 is leftmost, so a leading `.` reads as the B98 shape at a
-/// glance. Long tables (a creature's fifty-odd sequences) are truncated to a readable head.
+/// `[.L]`, one character per file sequence slot from slot 0: `L` bakes a loop, `.` moves nothing.
 fn slot_cell<V>(slots: &[Option<KeyAnim<V>>]) -> String {
     const HEAD: usize = 28;
     let bits: String = slots
@@ -570,8 +480,7 @@ fn slot_cell<V>(slots: &[Option<KeyAnim<V>>]) -> String {
     }
 }
 
-/// `[Wc.]` — the per-slot clock law, the other half of what `PartialEq` compares: `W` wrap, `c`
-/// clamp, `.` dead. The whole content of a WRAP-ONLY row.
+/// `[Wc.]`, each slot's clock law: `W` wrap, `c` clamp, `.` dead.
 fn wrap_cell<V>(slots: &[Option<KeyAnim<V>>]) -> String {
     slots
         .iter()
@@ -583,8 +492,7 @@ fn wrap_cell<V>(slots: &[Option<KeyAnim<V>>]) -> String {
         .collect::<String>()
 }
 
-/// `1.500s wrap 28k x[+0.000..+0.938] y[…]` — one baked loop as its consumer sees it: the clock,
-/// the size, and the range it sweeps on every component the bake keeps.
+/// One baked loop as `1.500s wrap 28k x[+0.000..+0.938] y[…]`: period, clock, keys, ranges.
 fn loop_cell<V: AsRef<[f32]>>(l: &KeyAnim<V>, ch: Channel) -> String {
     let range = ch
         .axes()
@@ -610,13 +518,11 @@ fn loop_cell<V: AsRef<[f32]>>(l: &KeyAnim<V>, ch: Channel) -> String {
     )
 }
 
-/// Read one batch-channel's per-slot set exactly as the runtime does — [`SeqLoops::slots`], the
-/// same values [`SeqLoops::uniform`] compared — and say why they disagree.
+/// Why one batch-channel's slots disagree, read through [`SeqLoops::slots`] as the runtime does.
 fn classify<V: AsRef<[f32]> + PartialEq>(set: &SeqLoops<V>, ch: Channel) -> Verdict {
     let slots = set.slots();
     let cell = slot_cell(slots);
-    // A set exists only when SOME slot bakes, so a dead slot 0 is by construction a dead slot 0
-    // beside a live later one — no second test needed.
+    // A set exists only when some slot bakes, so a dead slot 0 has a live later one.
     let Some(base) = slots.first().and_then(Option::as_ref) else {
         let (s, live) = slots
             .iter()
@@ -638,9 +544,7 @@ fn classify<V: AsRef<[f32]> + PartialEq>(set: &SeqLoops<V>, ch: Channel) -> Verd
                 detail: format!("{cell} slot 0 {} vs slot {s} dead", loop_cell(base, ch),),
             };
         };
-        // Name WHAT diverges, not merely that something did: a value-range cell hides a timing
-        // difference (same extremes, different key times) behind identical-looking brackets, and
-        // that is exactly the ambiguity this scan exists to remove.
+        // Name what diverges: a value range hides a timing difference behind identical brackets.
         let reason = match loop_delta(base, l) {
             Some(d) if d <= KEY_EPS => {
                 delta = delta.max(d);
@@ -676,50 +580,36 @@ fn classify<V: AsRef<[f32]> + PartialEq>(set: &SeqLoops<V>, ch: Channel) -> Verd
     }
 }
 
-/// Per-channel corpus counters. Model counts are per bucket and count a model once if **any** of
-/// its batches lands there, so they overlap rather than partition.
+/// Per-channel corpus counters; a model counts once in each bucket any of its batches lands in.
 #[derive(Default)]
 struct Tally {
-    /// The set is `None`: every slot bakes the same loop, so the batch keeps the shared lane.
+    /// Batches whose slots all bake the same loop, which keep the shared lane.
     shared_b: u32,
-    /// …and of those, the ones that actually animate there (`uv_anim`/`rgb_anim` with `period > 0`).
+    /// Of those, the ones that animate there (`period > 0`).
     shared_live_b: u32,
     shared_live_m: u32,
-    /// The set is `Some` — batches and models routed to the per-placement lane, by [`Why`].
+    /// Batches and models on the per-placement lane, by [`Why`].
     per_b: [u32; 4],
     per_m: [u32; 4],
-    /// Models with at least one per-placement batch on this channel, whatever the reason.
     per_m_any: u32,
-    /// WRAP-ONLY batches whose slots are **bit-identical** apart from the flag; the rest carry
-    /// sub-epsilon key noise on top of it.
+    /// WRAP-ONLY batches bit-identical apart from the flag.
     wrap_exact: u32,
 }
 
-/// One model's per-placement batches in one (channel, bucket) — the row the family census and the
-/// worst-hit tail are both built from.
+/// One model's per-placement batches in one (channel, bucket).
 struct Hit {
     name: String,
     ch: Channel,
     why: Why,
     batches: u32,
-    /// The model's **file** sequence slot count, straight off the set the bake built.
     slots: usize,
 }
 
-/// How many rows of the worst-hit tail print (the rest are counted, never silently dropped).
 const TAIL_ROWS: usize = 25;
 
-/// Sweep every `.m2` (optionally under a path prefix) and census the batches the bake routes to a
-/// **per-placement material** because their UV / tint loop is not the same in every file sequence
-/// slot — see the `Uvslotscan` command doc for the why.
-///
-/// It reads the bake's own verdict (`RenderSubmesh::uv_seq` / `rgb_seq`, `Some` exactly when
-/// [`SeqLoops::uniform`] refused the shared lane) rather than re-deriving it: this scan used to
-/// carry a transcribed sampler because the fix it was sizing did not exist yet, and once it did the
-/// twin drifted from it — the very failure `idleslotscan`'s rule names ("beside the parse, so the
-/// census asks the renderer's own question instead of a hand-copied twin that can drift from it").
-/// Every number below is therefore what the runtime sees, and the four PER-PLACEMENT buckets say
-/// how much of it `uniform()`'s exact float equality is *earning*.
+/// Census the batches the bake gives a per-placement material because their UV or tint loop
+/// differs between file sequence slots, read off the bake's own verdict (`uv_seq`/`rgb_seq`,
+/// `Some` when [`SeqLoops::uniform`] refused the shared lane), with the `Why` of each.
 pub fn uvslotscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
     let (mut scanned, mut batches) = (0u32, 0u64);
@@ -737,9 +627,7 @@ pub fn uvslotscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         scanned += 1;
         batches += subs.len() as u64;
         let mut lines: Vec<String> = Vec::new();
-        // This model's own contribution, folded into the corpus tally once per channel below:
-        // (shared, shared-and-live) batch counts, per-bucket batch counts, and the file sequence
-        // slot count — which only a batch carrying a set can report, because the set IS the table.
+        // This model's counts per channel: (shared, shared and live), per bucket, its slot count.
         let mut shared = [(0u32, 0u32); 2];
         let mut per = [[0u32; 4]; 2];
         let mut slots = [0usize; 2];
@@ -855,9 +743,6 @@ pub fn uvslotscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 t.wrap_exact
             );
         }
-        // Where each bucket's population LIVES, and which models carry most of it. `World\` is a
-        // placed doodad or WMO prop — the only lane the per-placement material reaches — so a
-        // bucket that is mostly `Creature\`/`Spells\` costs nothing today whatever it says.
         for w in Why::ALL {
             let rows: Vec<&Hit> = hits
                 .iter()
@@ -894,50 +779,31 @@ pub fn uvslotscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// fxuvscan — what the SPELL-EFFECT corpus's animated texture transforms render
-// for a consumer that runs none of them.
-//
-// Everything down to `uv_batch` is shared with `entityuvscan` below, which asks
-// the identical question of the corpus 2282's fix did NOT reach. The sheet
-// decode, the two frozen states, the per-axis texel reasoning and the five
-// classes live here once on purpose: two sweeps that classified the same batch
-// by two slightly different rules would be worse than one sweep.
+// fxuvscan, and the per-batch reader down to `uv_batch` that `entityuvscan` shares
 // ---------------------------------------------------------------------------
 
-/// How many spells print per INVISIBLE model before the rest are counted.
 const FX_SPELL_ROWS: usize = 12;
 
-/// How many unreadable model paths print before the rest are counted.
 const FX_UNREAD_ROWS: usize = 20;
 
-/// How many time samples the animated sweep takes across each slot's loop — enough to bound a
-/// scroll that only crosses the sheet for part of its period (the reported box is the union, so
-/// it only ever over-states what the animation reaches, never under-states it).
+/// Time samples per slot's loop in the animated sweep; the reported box is their union.
 const FX_ANIM_SAMPLES: usize = 64;
 
-/// One texture's mip-0 channels, as the visibility question needs them.
-///
-/// Alpha decides it for the modes that read alpha — `Blend`/`AlphaTest`, and M2 mode 4 `Add`
-/// (`SRC_ALPHA/ONE`), which is most of the effect corpus. An `Opaque` batch paints whatever it
-/// covers and a `Mod`/`Mod2x` batch's equation reads no alpha at all, so neither
-/// is called from the sheet. The one mode that needs [`Self::rgb`] is **3, `NoAlphaAdd`**
-/// (`ONE/ONE`): it adds the texel's colour with the alpha channel untouched, so an alpha-0 border
-/// with non-zero RGB still puts light on the screen. `BloodSpurtSmall01`'s border column is
-/// exactly that shape — alpha 0, RGB up to 107 — so the distinction is not hypothetical.
+/// One texture's mip-0 alpha, plus [`Self::rgb`] for blend 3 `NoAlphaAdd` (`ONE/ONE`), which adds
+/// colour whatever the alpha (`BloodSpurtSmall01`'s border: alpha 0, RGB up to 107); `Opaque`,
+/// `Mod` and `Mod2x` batches are not judged from the sheet.
 struct Sheet {
     w: u32,
     h: u32,
     /// Row-major, one byte per texel.
     alpha: Vec<u8>,
-    /// Row-major `max(r, g, b)` — what an `ONE/ONE` add would put on the screen.
+    /// Row-major `max(r, g, b)`.
     rgb: Vec<u8>,
 }
 
 impl Sheet {
-    /// The inclusive texel index ranges one axis's UV span `[lo, hi]` reaches under the batch's own
-    /// address mode — clamped to the edge texel (`wrap == false`, the border-sampling case this
-    /// whole scan turns on) or folded back into `0..1`. A wrapping span of a full sheet or more
-    /// reaches every texel.
+    /// The inclusive texel ranges a UV span `[lo, hi]` reaches: clamped to the edge texel, or
+    /// folded into `0..1` when `wrap`.
     fn axis(lo: f32, hi: f32, n: u32, wrap: bool) -> Vec<(u32, u32)> {
         let last = n.saturating_sub(1);
         let texel = |t: f32| ((t * n as f32) as i64).clamp(0, i64::from(last)) as u32;
@@ -956,13 +822,8 @@ impl Sheet {
         }
     }
 
-    /// The most this sheet can PAINT anywhere in the UV box `u × v` — the greatest alpha, or, when
-    /// `with_rgb` (a batch that may be `NoAlphaAdd`), the greater of alpha and `max(r, g, b)`.
-    /// `0` exactly when every texel the box reaches contributes nothing.
-    ///
-    /// The box is the batch's UV **bounding box**, which is a superset of the texels its triangles
-    /// actually cover, so a `0` here is conservative in the one direction that matters: it cannot
-    /// call a batch invisible that in fact paints.
+    /// The most the sheet paints in the UV box `u × v`: its greatest alpha, and with `with_rgb`
+    /// its greatest `max(r, g, b)`. The box bounds the triangles, so a 0 is never a false one.
     fn paint(
         &self,
         u: (f32, f32),
@@ -993,8 +854,8 @@ impl Sheet {
     }
 }
 
-/// Decode one texture's mip-0 alpha channel, memoised by lowercased path. `None` for a path the
-/// chain has no BLP for, or one that will not decode — reported as `UNKNOWN`, never a silent pass.
+/// One texture's [`Sheet`], memoised by lowercased path; `None`, reported `UNKNOWN`, if it will
+/// not load.
 fn fx_sheet<'a>(
     cache: &'a mut BTreeMap<String, Option<Sheet>>,
     chain: &mut Chain,
@@ -1020,8 +881,7 @@ fn fx_sheet<'a>(
         .as_ref()
 }
 
-/// One effect model's place in the spell-visual chain: the `SpellVisualEffectName` rows that name
-/// it, and every spell that reaches it with the lifecycle stages it arrives through.
+/// An effect model's `SpellVisualEffectName` rows and the spells that reach it, by stage.
 #[derive(Default)]
 struct FxReach {
     /// The table's own spelling of the path (`.mdx`), for display.
@@ -1031,9 +891,8 @@ struct FxReach {
     spells: BTreeMap<u32, (String, std::collections::BTreeSet<&'static str>)>,
 }
 
-/// Fold one `SpellVisualEffectName` id's model into the corpus, and — when `spell` is given — note
-/// that that spell reaches it through that lifecycle stage. An id with no row or an empty path
-/// (the table's absent-model convention) folds to nothing, which is the client's own no-op.
+/// Fold one `SpellVisualEffectName` id's model into the corpus, noting `spell`'s stage when given;
+/// an id with no row or path adds nothing.
 fn fx_record(
     out: &mut BTreeMap<String, FxReach>,
     visuals: &benilla_formats::SpellVisualCatalog,
@@ -1043,11 +902,8 @@ fn fx_record(
     let Some(path) = visuals.effect_path(effect) else {
         return;
     };
-    // One shipped row spells its path with a LEADING separator
-    // (`\\spells\\HellFire_FirePuff_Caster_Base.mdx`, `SpellVisualEffectName` 1180). The chain has
-    // the model under the same name without it, so the key drops leading separators while the
-    // DISPLAY path keeps the table's own spelling — the quirk stays visible instead of being
-    // silently smoothed away.
+    // `SpellVisualEffectName` 1180 spells its path with a leading separator; the chain holds it
+    // without one, so the key drops it and the display path keeps it.
     let e = out
         .entry(crate::model_key(path.trim_start_matches(['\\', '/'])))
         .or_default();
@@ -1064,15 +920,9 @@ fn fx_record(
     }
 }
 
-/// Every model the spell-visual chain can reach, keyed by [`crate::model_key`] — walked from the
-/// **tables**, not from the spells, so a kit no shipped spell names is still swept (it is still
-/// content the lane can be asked to play); the spell join is the second pass over the same map.
-///
-/// The reachable set is every kit's ten effect slots (`VisualKit::effects` — the nine bone-attach
-/// slots plus the world/state plant), every `SpellVisual` row's missile model (field 7) and its
-/// dest-anchored model (field 12, the DynamicObject's own `.mdx`). The stage labels are the five
-/// lifecycle kit columns plus `missile` and `area`, the latter covering both dest-anchored columns
-/// (field 12's model and field 13's area kit) — one lane, one name.
+/// Every model the spell-visual tables reach, keyed by [`crate::model_key`], then joined to the
+/// spells: every kit's ten effect slots, and each `SpellVisual` row's missile model (field 7) and
+/// dest-anchored model (field 12). Stage `area` covers field 12 and the area kit (field 13).
 fn fx_corpus(
     visuals: &benilla_formats::SpellVisualCatalog,
     spells: &benilla_formats::SpellCatalog,
@@ -1125,24 +975,18 @@ fn fx_corpus(
     out
 }
 
-/// What a consumer that runs NO texture-transform animation renders for one batch whose transform
-/// the bake DID key.
+/// What a consumer that runs no texture-transform animation renders for a keyed batch.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum FxClass {
-    /// The transform moves, and frozen the batch samples no painted texel while the animation does:
-    /// the batch renders **nothing at all**. The `SwipeCaster` class.
+    /// Frozen, the batch samples no painted texel while the animation does: it draws nothing.
     Invisible,
-    /// The transform moves, and the batch paints nothing at any point of the loop — so the missing
-    /// UV animation is not what is wrong with it. Flagged, never counted as INVISIBLE.
+    /// It paints nothing at any point of the loop, so the frozen transform is not its fault.
     Never,
-    /// The transform moves and the batch draws — statically, where the scroll is the motion.
+    /// It draws, but statically.
     Frozen,
-    /// The transform is keyed but never moves within its band: a constant NON-identity offset the
-    /// bake carries as a `period == 0` hold. A lane that seeds no offset draws the batch at the
-    /// identity instead — a static mis-registration, not a missing scroll.
+    /// A constant non-identity offset (`period == 0`), which a lane seeding none draws misplaced.
     Held,
-    /// No call from the sheet: a `Mod`/`Mod2x` batch (its blend equation reads no alpha) or a
-    /// texture the chain will not hand over. Flagged.
+    /// No call from the sheet: a `Mod`/`Mod2x` batch, or a texture that will not load.
     Unknown,
 }
 
@@ -1187,9 +1031,8 @@ impl FxClass {
     }
 }
 
-/// The batch's texture-transform state at `(slot, t)` — the triple [`benilla_formats::uv_transform`]
-/// composes, read the way the one lane that RUNS it reads it (`ui_models::UvPart::write_rows`): the
-/// per-slot set when the bake built one, else the single shared loop.
+/// The texture-transform triple [`benilla_formats::uv_transform`] composes at `(slot, t)`: the
+/// per-slot set when the bake built one, else the shared loop.
 fn fx_state(
     sub: &benilla_formats::RenderSubmesh,
     slot: usize,
@@ -1213,8 +1056,7 @@ fn fx_state(
     (trans, rot, scale)
 }
 
-/// How many file sequence slots this batch's transform was baked across (1 when only the shared
-/// single-slot loop exists), and the longest loop period in slot `slot`.
+/// How many file sequence slots the batch's transform was baked across, at least 1.
 fn fx_slots(sub: &benilla_formats::RenderSubmesh) -> usize {
     let n = |v: Option<usize>| v.unwrap_or(0);
     n(sub.uv_seq.as_ref().map(|s| s.slots().len()))
@@ -1223,8 +1065,7 @@ fn fx_slots(sub: &benilla_formats::RenderSubmesh) -> usize {
         .max(1)
 }
 
-/// The longest period any of the batch's three transform channels loops on in slot `slot`;
-/// `0.0` when every one of them is a constant hold there.
+/// The longest transform period in slot `slot`; 0 when every channel holds.
 fn fx_period(sub: &benilla_formats::RenderSubmesh, slot: usize) -> f32 {
     let t = match (&sub.uv_seq, &sub.uv_anim) {
         (Some(s), _) => s.seq(Some(slot)).map_or(0.0, |l| l.period),
@@ -1244,8 +1085,7 @@ fn fx_period(sub: &benilla_formats::RenderSubmesh, slot: usize) -> f32 {
     t.max(r).max(s)
 }
 
-/// The batch's UV bounding box carried through [`benilla_formats::uv_transform`] — all four
-/// corners, so a rotation or scale is bounded rather than assumed away.
+/// The UV bounding box through [`benilla_formats::uv_transform`], all four corners.
 fn fx_box(
     u: (f32, f32),
     v: (f32, f32),
@@ -1264,9 +1104,7 @@ fn fx_box(
     out
 }
 
-/// Does this batch's texture transform animate? The UI lane's own test, verbatim: any of the three
-/// channels baked to something ([`benilla_formats::RenderSubmesh::uv_anim`] and the three
-/// per-sequence sets). Shared, so the two sweeps cannot drift into asking it differently.
+/// Whether the batch's texture transform is keyed: the shared loop or any per-sequence set.
 fn uv_keyed(sub: &benilla_formats::RenderSubmesh) -> bool {
     sub.uv_anim.is_some()
         || sub.uv_seq.is_some()
@@ -1274,14 +1112,8 @@ fn uv_keyed(sub: &benilla_formats::RenderSubmesh) -> bool {
         || sub.uv_scale_seq.is_some()
 }
 
-/// Does this model author M2 blend mode **3** (`NoAlphaAdd`, `ONE/ONE`) anywhere?
-///
-/// The bake folds modes 3 and 4 into one `Blend` + `additive` pair, and no `RenderSubmesh` carries
-/// the source material back (the billboard split means batches are not even 1:1 with skin batches),
-/// so the question is asked of the model's MATERIAL TABLE — the same raw read `blendscan` does
-/// (count/ofs at `0x84`, 4-byte `{u16 flags, u16 blend}`). A model with no mode-3 material has
-/// alpha-gated additives and the alpha test is exact; one that has any gets the stricter
-/// alpha-or-RGB test on its additive batches, which can only make INVISIBLE harder to claim.
+/// Whether the material table (read as `blendscan` does) authors blend 3 `NoAlphaAdd`: the bake
+/// folds modes 3 and 4 into `additive`, so such a model's additive batches are judged on RGB too.
 fn authors_no_alpha_add(bytes: &[u8]) -> bool {
     let at = |o: usize| -> Option<u32> {
         Some(u32::from_le_bytes(bytes.get(o..o + 4)?.try_into().ok()?))
@@ -1297,27 +1129,20 @@ fn authors_no_alpha_add(bytes: &[u8]) -> bool {
     }
 }
 
-/// One animating batch's whole texture-transform read — the per-batch body [`fxuvscan`] and
-/// [`entityuvscan`] share, so the two sweeps cannot answer the same question differently.
-///
-/// The caller supplies the sheet path because the two corpora do not resolve it the same way: an
-/// effect model's batch names its own `.blp`, while a CREATURE batch's `Monster1/2/3` slot is blank
-/// in the M2 and filled per display from `CreatureDisplayInfo.textureVariation` — so the same batch
-/// has as many sheets as the model has skins, and the visibility question has to be asked of each.
+/// One keyed batch's texture-transform read, shared by [`fxuvscan`] and [`entityuvscan`]. The
+/// caller supplies the sheet: a creature batch's `Monster1/2/3` slot is filled per display from
+/// `CreatureDisplayInfo`, so it has one sheet per skin.
 struct UvBatch {
-    /// The verdict under the seed a `play_uv = false` lane renders at (the identity).
+    /// The verdict at the identity, the offset a material built with `play_uv = false` seeds.
     class: FxClass,
-    /// The verdict under the track's first key — what the same batch becomes on a lane that hands
-    /// `model_material` the loop but never ticks it.
+    /// The verdict at the first key, where a lane that seeds the loop and never ticks it sits.
     key_class: FxClass,
-    /// `uv_anim.sample(0.0)` — the translation seed, `[0, 0]` when the shared loop is absent.
+    /// `uv_anim.sample(0.0)`, `[0, 0]` without a shared loop.
     seed: [f32; 2],
-    /// The report block, in print order.
     lines: Vec<String>,
 }
 
-/// Read one batch's texture transform — see [`UvBatch`]. The caller has already established that
-/// the transform is keyed ([`uv_keyed`]) and that the batch has UVs to transform.
+/// Read one batch's texture transform; the caller has checked [`uv_keyed`] and that it has UVs.
 fn uv_batch(
     sheets: &mut BTreeMap<String, Option<Sheet>>,
     chain: &mut Chain,
@@ -1335,27 +1160,15 @@ fn uv_batch(
     let slots = fx_slots(sub);
     let moves = (0..slots).any(|s| fx_period(sub, s) > 0.0);
 
-    // THE TWO FROZEN STATES, because our codebase has two seeding conventions and they
-    // are not the same picture:
-    //
-    // - **identity** — the offset an effect part actually renders at. Its material is
-    //   built by `model_render::batch::Materials::entity_variants`, whose `play_uv` is
-    //   `false`, so `model_material` is handed no loop and seeds `sun_scale.zw = (0, 0)`:
-    //   the batch draws its AUTHORED UVs, untransformed. This is the primary verdict.
-    // - **first key** — `uv_anim.sample(0.0)`, what the same builder seeds when a lane
-    //   DOES hand it the loop (the doodad and off-world lanes). Reported beside it,
-    //   because a fix that wires the loop in without ticking it lands the batch here.
-    //
-    // Rotation and scale are at the identity in both: the translation seed is the only
-    // transform channel a shared material carries at all (the affine pair is the UI
-    // lane's per-pane table row).
+    // Two frozen states: the identity, which a material built with `play_uv = false` seeds
+    // (`sun_scale.zw = (0, 0)`, the authored UVs), and the first key, which `model_material`
+    // seeds when handed the loop. Rotation and scale stay at the identity in both: a shared
+    // material carries only the translation seed.
     let seed = sub.uv_anim.as_ref().map_or([0.0, 0.0], |a| a.sample(0.0));
     let (fu, fv) = fx_box(au, av, [0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0, 1.0]);
     let (ku, kv) = fx_box(au, av, seed, [0.0, 0.0, 0.0, 1.0], [1.0, 1.0]);
 
-    // ANIMATED REACH. The union over every slot and a uniform sweep of its loop — an
-    // over-approximation by construction, so "nothing painted here either" is a claim the
-    // geometry cannot contradict.
+    // The animated reach: the union over every slot's sampled loop, an over-approximation.
     let mut ru = (f32::MAX, f32::MIN);
     let mut rv = (f32::MAX, f32::MIN);
     for slot in 0..slots {
@@ -1385,7 +1198,6 @@ fn uv_batch(
         ),
         None => (0, 0, 0, "—".to_string()),
     };
-    // One rule, run twice — once per frozen state, so the two verdicts cannot drift apart.
     let verdict = |painted: u8| {
         if !moves {
             FxClass::Held
@@ -1413,11 +1225,8 @@ fn uv_batch(
             n(sub.uv_scale_seq.is_some(), "S"),
         )
     };
-    // The per-axis reasoning, read off the TEXELS rather than off the span: a CLAMP axis
-    // whose frozen span runs past an edge samples that edge's texel for every bit of it
-    // past the edge, so a span like `[+0.951..+1.950]` over a 16-texel sheet is not
-    // "mostly outside" — it is column 15, alone, for its whole length. That collapse is the
-    // whole mechanism, so the line names it.
+    // Per axis, in texels: a clamp span past an edge samples the edge texel, so `[+0.951..+1.950]`
+    // over 16 texels is column 15 alone.
     let axis = |wrap: bool, a: (f32, f32), f: (f32, f32), n: u32| {
         let (texels, verdict) = match n {
             0 => ("—".to_string(), "no sheet"),
@@ -1503,21 +1312,18 @@ fn uv_batch(
     }
 }
 
-/// One classified batch — the row the class listings and the spell join are both built from.
 struct FxHit {
-    /// The corpus key (lowercased `.m2`), so the reach map joins straight onto it.
+    /// The corpus key (lowercased `.m2`) the reach map joins on.
     key: String,
     batch: usize,
-    /// The verdict under the seed the effect lane actually renders at (the identity).
+    /// The verdict at the identity seed.
     class: FxClass,
-    /// The verdict under the track's first key — what the same batch becomes on a lane that hands
-    /// `model_material` the loop but never ticks it.
+    /// The verdict at the first-key seed.
     key_class: FxClass,
 }
 
-/// Sweep every model the SPELL-VISUAL CHAIN can reach and census the batches whose **texture
-/// transform animates** — then classify each by what a consumer that runs none of it renders. See
-/// the `Fxuvscan` command doc for the why.
+/// Classify every keyed texture-transform batch the spell-visual chain reaches by what a consumer
+/// that runs none of it renders.
 pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let visuals = benilla_formats::load_spell_visual_catalog(chain)?;
     let spells = benilla_formats::load_spell_catalog(chain)?;
@@ -1530,14 +1336,9 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let mut per_class: BTreeMap<FxClass, u32> = BTreeMap::new();
     let mut per_key_class: BTreeMap<FxClass, u32> = BTreeMap::new();
     let mut hits: Vec<FxHit> = Vec::new();
-    // Every model the chain names that the archives do not carry, or will not parse — listed,
-    // never a silent hole in the sweep.
     let mut unread: Vec<String> = Vec::new();
-    // How many batches the two frozen states disagree about (see the classification below): the
-    // number that says whether "what does a no-UV-animation consumer render" has one answer here
-    // or two.
     let mut seed_disagrees = 0u32;
-    // Of the batches that DO draw frozen, how many draw at UVs the loop never opens at.
+    // Batches that draw frozen at UVs the loop never opens at.
     let mut misregistered = 0u32;
 
     for (key, reach) in &corpus {
@@ -1577,8 +1378,6 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             if read.class != read.key_class {
                 seed_disagrees += 1;
             }
-            // A batch that draws today but at a picture the loop never opens at: the identity is
-            // not the seed, so what is on screen is neither the animation nor its first frame.
             if read.class == FxClass::Frozen && (read.seed[0] != 0.0 || read.seed[1] != 0.0) {
                 misregistered += 1;
             }
@@ -1647,9 +1446,8 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     );
     if !unread.is_empty() {
         println!();
-        // Every one of these on the shipped 1.12 chain is a DEAD TABLE ROW, not a hole in the
-        // sweep: `SpellVisualEffectName` still carries the Warcraft-III-era `Particles\*.mdl`
-        // names the 1.12 archives never shipped. The extension split says so at a glance.
+        // On 1.12 each is a dead `SpellVisualEffectName` row, mostly `Particles\*.mdl` names the
+        // archives never shipped.
         let mdl = unread
             .iter()
             .filter(|u| u.to_ascii_lowercase().contains(".mdl "))
@@ -1720,9 +1518,7 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             c,
         );
     }
-    // The batches the first-key seed alone condemns: they draw today, and would stop drawing on a
-    // lane that seeds the loop's opening value without running it. Named, because that is exactly
-    // the shape of a half-finished fix.
+    // Batches invisible only at the first-key seed, where a lane that never ticks the loop sits.
     let key_only: Vec<&FxHit> = hits
         .iter()
         .filter(|h| h.key_class == FxClass::Invisible && h.class != FxClass::Invisible)
@@ -1750,9 +1546,7 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         }
     }
 
-    // The deliverable: the distinct spells that reach an INVISIBLE batch at all, named in full —
-    // the set a player can cast and see nothing for. `+` marks a spell that is only reached under
-    // the first-key seed, never under the one the lane renders at today.
+    // The spells that reach an invisible batch; `+` marks one reached only at the first-key seed.
     let mut reached: BTreeMap<u32, (String, std::collections::BTreeSet<&'static str>, bool)> =
         BTreeMap::new();
     for h in hits
@@ -1789,59 +1583,46 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// entityuvscan — what the UNIT / GAMEOBJECT / HELD-ITEM corpus's animated
-// texture transforms render on the lane that runs none of them.
+// entityuvscan: the unit, GameObject and held-item corpus
 // ---------------------------------------------------------------------------
 
-/// How many display ids print per model before the rest are counted.
 const ENTITY_ID_ROWS: usize = 12;
 
-/// How many unreadable model paths print before the rest are counted.
 const ENTITY_UNREAD_ROWS: usize = 20;
 
-/// The `Item\ObjectComponents\<dir>\` folders an `ItemDisplayInfo` **left** model column can land
-/// in, and the kind label each one carries. The directory is NOT a column of the table: it is
-/// chosen by the slot the item is worn in (`entities::equipment::ensure_item_model`), which is a
-/// property of the *item*, not of the display — so a census asks the archives which of them
-/// actually holds the file.
+/// The `Item\ObjectComponents\<dir>\` folders an `ItemDisplayInfo` left model can live in. The
+/// table has no folder column (the worn slot picks it), so the census asks the archives.
 const ITEM_DIRS_L: [&str; 4] = ["Weapon", "Shield", "Shoulder", "Quiver"];
 
-/// …and of a **right** model column: the right pauldron, or an arrow/bullet.
+/// The folders a right model can live in: the right pauldron, or an arrow or bullet.
 const ITEM_DIRS_R: [&str; 2] = ["Shoulder", "Ammo"];
 
-/// Helm files are per race and sex — `<stem>_<Ra><S>.m2`, prefix by race id, `M`/`F` by sex
-/// (`ensure_item_model`'s own table, pinned against the MPQ listing in decision 0074).
+/// Helm files are per race and sex, `<stem>_<Ra><S>.m2`: this prefix by race id, then `M` or `F`,
+/// as `ensure_item_model` spells them.
 const HELM_RACE_PREFIX: [&str; 8] = ["Hu", "Or", "Dw", "Ni", "Sc", "Ta", "Gn", "Tr"];
 
-/// One entity-lane model's place in the DBCs: every table row that can put it on screen, so a
-/// broken batch joins back to something a director can go and look at.
+/// Every table row that can put an entity-lane model on screen.
 #[derive(Default)]
 struct EntityReach {
     /// The table's own spelling of the path (`.mdx`), for display.
     path: String,
     /// The `CreatureModelData` row ids naming it (normally one).
     creature_models: std::collections::BTreeSet<u32>,
-    /// The `CreatureDisplayInfo` rows that reach it — the POPULATION number: one model reached by
-    /// 300 display rows is a different fix from one reached by 1.
+    /// The `CreatureDisplayInfo` rows that reach it, the population measure.
     creature_displays: Vec<u32>,
-    /// The playable `(race, sex)` bodies among those displays (`ChrRaces` cols 4/5 → the same
-    /// CreatureDisplayInfo chain a streamed unit takes), spelled as the glue does.
+    /// The playable `(race, sex)` bodies among those displays (`ChrRaces` columns 4 and 5).
     player_bodies: Vec<String>,
-    /// `GameObjectDisplayInfo` rows naming it.
     go_displays: Vec<u32>,
     /// `ItemDisplayInfo` rows naming it, and through which `Item\ObjectComponents\` join.
     item_displays: BTreeMap<u32, std::collections::BTreeSet<&'static str>>,
-    /// The bone-pile skeletons (`<Race><Sex>DeathSkeleton`) — the corpse lane's own models, which
-    /// no display table names.
+    /// The corpse lane's bone piles (`<Race><Sex>DeathSkeleton`), which no display table names.
     bones: Vec<String>,
-    /// Also named by the SPELL-VISUAL chain, i.e. already swept by `fxuvscan` and already running
-    /// its transform on the effect lane since 2282. Marked, never dropped: a model can be held in
-    /// a hand (this lane, frozen) and thrown as a missile (that lane, animated) on the same tick.
+    /// Also reached by the spell-visual chain, so also swept by `fxuvscan`.
     also_fx: bool,
 }
 
 impl EntityReach {
-    /// How many table rows can put this model on screen — the rough instance-population proxy.
+    /// Table rows that can put this model on screen, a rough population measure.
     fn rows(&self) -> usize {
         self.creature_displays.len()
             + self.go_displays.len()
@@ -1908,26 +1689,21 @@ impl EntityReach {
 #[derive(Default)]
 struct EntityCorpus {
     models: BTreeMap<String, EntityReach>,
-    /// `CreatureDisplayInfo` rows walked, and the `CreatureModelData` rows no display reaches
-    /// (unreachable content — counted, never swept).
+    /// `CreatureDisplayInfo` rows walked, and `CreatureModelData` rows no display reaches.
     creature_rows: usize,
     creature_orphan_models: usize,
     /// `GameObjectDisplayInfo` rows walked, and those naming a `.wmo` (no M2 batches to animate).
     go_rows: usize,
     go_wmo: usize,
-    /// `ItemDisplayInfo` model columns walked, and the two ways one can fail to reach a file: the
-    /// basename ships under an `Item\ObjectComponents\` folder this column is never joined to
-    /// (`item_other_dir` — every one of these is a thrown weapon named in BOTH columns, so the
-    /// model is already in the corpus through its left column and only the extra display-id join
-    /// is dropped), or nothing ships it at all (`item_absent` — a dead row, the shape `fxuvscan`
-    /// found in `SpellVisualEffectName`).
+    /// `ItemDisplayInfo` model columns walked; `item_other_dir` names a file under a folder its
+    /// column never joins (thrown weapons, swept through the left column), `item_absent` a file
+    /// nothing ships.
     item_rows: usize,
     item_other_dir: usize,
     item_absent: usize,
 }
 
-/// Fold one model path into the corpus under [`crate::model_key`], keeping the table's own
-/// spelling for display.
+/// Fold one model path into the corpus under [`crate::model_key`], keeping the table's spelling.
 fn entity_record<'a>(
     out: &'a mut BTreeMap<String, EntityReach>,
     path: &str,
@@ -1941,15 +1717,9 @@ fn entity_record<'a>(
     e
 }
 
-/// Every model the ENTITY lane can render, walked from the tables that name one — never from a
-/// path prefix, because reachability is the whole question ("the path looks broken" and "the path
-/// is reachable" are different questions, 2282's own closing note).
-///
-/// Four sources, one per `build_parts` caller that is not the spell-effect lane:
-/// `CreatureDisplayInfo` → `CreatureModelData` (every NPC, critter, mount — and every PLAYER body,
-/// which resolves through the same chain), `GameObjectDisplayInfo`,
-/// `ItemDisplayInfo`'s two model columns joined to the `Item\ObjectComponents\` folder the archives
-/// actually hold them in, and the corpse lane's `<Race><Sex>DeathSkeleton` bone piles.
+/// Every model the entity lane can render, walked from the tables: `CreatureDisplayInfo` →
+/// `CreatureModelData` (player bodies included), `GameObjectDisplayInfo`, `ItemDisplayInfo`'s two
+/// model columns joined to the folders that hold them, and the corpse lane's bone piles.
 fn entity_corpus(chain: &mut Chain) -> Result<EntityCorpus> {
     let mut out = EntityCorpus::default();
 
@@ -2016,15 +1786,12 @@ fn entity_corpus(chain: &mut Chain) -> Result<EntityCorpus> {
     }
 
     // --- held / worn item geometry ----------------------------------------------------------
-    // The archives decide which folder a display's basename lives in, because the table does not
-    // carry one: the equipment lane picks the directory from the slot the item is worn in.
     let item_files: Vec<String> = super::m2_names(chain, Some("item\\objectcomponents"))?
         .into_iter()
         .map(|n| n.to_ascii_lowercase())
         .collect();
     let files: std::collections::HashSet<&str> = item_files.iter().map(String::as_str).collect();
-    // …and the same listing keyed by BASENAME, so an unjoinable column can say which of the two
-    // failures it is rather than being counted as one lump.
+    // The same listing by basename, to tell `item_other_dir` from `item_absent`.
     let by_base: std::collections::HashSet<&str> = item_files
         .iter()
         .filter_map(|f| f.rsplit_once('\\').map(|(_, b)| b))
@@ -2053,8 +1820,7 @@ fn entity_corpus(chain: &mut Chain) -> Result<EntityCorpus> {
                     placed = true;
                 }
             }
-            // A HELM ships as sixteen per-race/sex files under one stem, and the display row names
-            // the stem alone — so the census expands it the way the attach does.
+            // A helm row names only the stem; the files are per race and sex.
             if col == 0 {
                 let stem = name.strip_suffix(".m2").unwrap_or(name);
                 for prefix in HELM_RACE_PREFIX {
@@ -2078,9 +1844,7 @@ fn entity_corpus(chain: &mut Chain) -> Result<EntityCorpus> {
         }
     }
 
-    // Every id list above is built by walking a HashMap, so it comes out in a different order
-    // every run. Sorted here, once, because an instrument whose report reshuffles cannot be
-    // diffed against its own previous output.
+    // The id lists come from HashMap walks: sort them so the report diffs run to run.
     for e in out.models.values_mut() {
         e.creature_displays.sort_unstable();
         e.go_displays.sort_unstable();
@@ -2088,7 +1852,7 @@ fn entity_corpus(chain: &mut Chain) -> Result<EntityCorpus> {
         e.bones.sort();
     }
 
-    // --- the mark: which of these the spell-effect lane already runs -------------------------
+    // --- the models the spell-visual chain also reaches -------------------------------------
     if let (Ok(visuals), Ok(spells)) = (
         benilla_formats::load_spell_visual_catalog(chain),
         benilla_formats::load_spell_catalog(chain),
@@ -2102,22 +1866,18 @@ fn entity_corpus(chain: &mut Chain) -> Result<EntityCorpus> {
     Ok(out)
 }
 
-/// Which clock one batch's keyed transform runs on — the question that decides the SHAPE of the
-/// fix, not just its size (0136 choice 1 versus 2282's per-instance lane).
+/// Which clock a batch's keyed transform runs on.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum UvClock {
-    /// Every live loop is clocked on a **global sequence**: a free-running per-scene ms clock the
-    /// reference anchors once per instance at attach (`0x70eae1`, `CM2Model+0x68`). One
-    /// shared uniform on a free-running clock is faithful here — 0136's lane, unchanged.
+    /// Every live loop runs on a global sequence, a free-running clock the reference anchors once
+    /// per instance at attach (`0x70eae1`, `CM2Model+0x68`), so one shared uniform serves it.
     Gseq,
-    /// Every live loop is clocked on its **sequence band**: the host's own playing-clip time, so
-    /// two instances playing different animations — or the same one at different phases — are at
-    /// different offsets. A shared uniform cannot be right for both.
+    /// Every live loop runs on its sequence band, the host's play head, which no shared uniform
+    /// serves.
     Band,
     /// The batch's three channels disagree: some global, some band.
     Mixed,
-    /// Keyed but never moving — a constant non-identity hold (`period == 0`), which needs a seed
-    /// and no clock at all.
+    /// A constant hold (`period == 0`): a seed, no clock.
     Hold,
 }
 
@@ -2154,20 +1914,20 @@ impl UvClock {
 /// One transform channel's read of the clock question.
 #[derive(Default)]
 struct ChannelClock {
-    /// `[L.L]` per file sequence slot — `None` when the channel carries no per-slot set.
+    /// `[L.L]` per file slot; `None` without a per-slot set.
     cell: Option<String>,
-    /// File slots whose loop is LIVE (`period > 0`).
+    /// File slots whose loop is live (`period > 0`).
     live: Vec<usize>,
     /// `true` for each live loop clocked on a global sequence.
     gseq: Vec<bool>,
     /// The leading live loop as the report prints it: `(period, wrap, gseq)`.
     lead: Option<(f32, bool, bool)>,
-    /// The channel's one loop is the SHARED slot-0 bake — every sequence plays the same one.
+    /// The channel's one loop is the shared slot-0 bake.
     uniform: bool,
 }
 
 impl ChannelClock {
-    /// `gseq 2.000s wrap` / `band 1.500s clamp` / `—`.
+    /// `gseq 2.000s wrap`, `band 1.500s clamp`, `held`, or a dash.
     fn cell_text(&self) -> String {
         match self.lead {
             None if self.cell.is_none() => "—".to_string(),
@@ -2181,8 +1941,7 @@ impl ChannelClock {
     }
 }
 
-/// Read one channel's per-slot set (or its shared slot-0 twin, for the translation channel which is
-/// the only one that has one) the way the runtime reads it.
+/// Read one channel's per-slot set, or the translation channel's shared slot-0 loop.
 fn channel_clock<V: AsRef<[f32]> + PartialEq>(
     set: Option<&SeqLoops<V>>,
     shared: Option<&KeyAnim<V>>,
@@ -2213,7 +1972,6 @@ fn channel_clock<V: AsRef<[f32]> + PartialEq>(
     out
 }
 
-/// One classified entity batch — the row every listing and the population tail are built from.
 struct EntityHit {
     key: String,
     batch: usize,
@@ -2222,22 +1980,18 @@ struct EntityHit {
     clock: UvClock,
     /// `T`/`R`/`S`, in that order, for the channels the bake keyed.
     chans: [bool; 3],
-    /// The batch's translation lane: `true` when it carries a per-sequence set (`uv_seq`), which is
-    /// `uvslotscan`'s PER-PLACEMENT population; `false` when it keeps the shared slot-0 loop.
+    /// The translation has a per-sequence set (`uv_seq`), `uvslotscan`'s per-placement population.
     per_seq_trans: bool,
-    /// …and whether that shared loop is LIVE — `uvslotscan`'s "carry a LIVE loop there" count, the
-    /// number this sweep's corpus must be a subset of.
+    /// The shared translation loop is live, `uvslotscan`'s live shared count.
     live_shared_trans: bool,
 }
 
-/// Sweep every model the UNIT / GAMEOBJECT / HELD-ITEM tables reach and census the batches whose
-/// texture transform animates — see the `Entityuvscan` command doc for the why.
+/// Classify the keyed texture-transform and tint batches the unit, GameObject and item tables
+/// reach.
 pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let corpus = entity_corpus(chain)?;
     let pfx = prefix.map(|p| p.to_ascii_lowercase().replace('/', "\\"));
     let anim_names = benilla_formats::load_anim_data_catalog(chain).ok();
-    // Loaded once, beside the corpus, because the per-batch sheet question asks it per MODEL: a
-    // creature batch's `Monster1/2/3` slot is filled from the display's own texture variations.
     let creatures = benilla_formats::load_creature_catalog(chain).unwrap_or_default();
 
     let mut sheets: BTreeMap<String, Option<Sheet>> = BTreeMap::new();
@@ -2254,20 +2008,17 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let mut misregistered = 0u32;
     // The `uvslotscan` cross-check: this corpus's share of the two whole-corpus translation counts.
     let (mut live_shared, mut per_seq) = (0u32, 0u32);
-    // Batches whose sheet is filled at RUNTIME (a creature skin variation, a character composite),
-    // and those where two of a model's skins disagree about what a frozen batch paints.
+    // Batches whose sheet is filled at runtime (a creature skin, a character composite), and
+    // those where two of a model's skins disagree about what a frozen batch paints.
     let (mut skin_filled, mut skin_disagrees) = (0u32, 0u32);
 
-    // --- the TINT half of the same sweep (the second dead channel on this lane) ---
+    // --- the tint half of the same sweep ---
     let (mut tint_models, mut tint_batches) = (0u32, 0u32);
     let mut tint_class: BTreeMap<TintClass, u32> = BTreeMap::new();
     let mut tint_clock: BTreeMap<UvClock, u32> = BTreeMap::new();
     let mut tint_hits: Vec<TintHit> = Vec::new();
     let mut tint_blocks: Vec<(String, Vec<String>)> = Vec::new();
     let (mut tint_live_shared, mut tint_per_seq) = (0u32, 0u32);
-    // …and the ALPHA channel beside them, which this lane DOES serve — counted so the report can
-    // say which of the three material-animation channels is a hole and which is not, rather than
-    // leaving the reader to assume all three are the same.
     let (mut alpha_models, mut alpha_batches, mut alpha_live) = (0u32, 0u32, 0u32);
 
     let keys: Vec<String> = corpus.models.keys().cloned().collect();
@@ -2294,9 +2045,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             continue;
         };
         batches += subs.len() as u64;
-        // Any of the three channels keeps the model: a batch can animate its tint and not its UVs
-        // (four do), and gating on `uv_keyed` alone is exactly the shape of predicate this sweep
-        // exists to catch.
+        // Any of the three channels keeps the model: a batch can animate its tint and not its UVs.
         if !subs
             .iter()
             .any(|sub| uv_keyed(sub) || tint_keyed(sub) || sub.alpha_anim.is_some())
@@ -2304,16 +2053,13 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             continue;
         }
         let no_alpha_add = authors_no_alpha_add(&bytes);
-        // File sequence slot -> its `AnimationData.dbc` id, so a BAND loop can be named by the
-        // animations that carry it rather than by an opaque slot number. A slot with no entry is a
-        // zero-duration sequence (`parse_m2_animations` drops those; the bake does not).
+        // File slot -> `AnimationData.dbc` id; a missing slot is a zero-duration sequence, which
+        // the parse drops and the bake keeps.
         let slot_anim: BTreeMap<usize, u16> = benilla_formats::parse_m2_animations(&bytes)
             .iter()
             .map(|a| (a.seq_index, a.anim_id))
             .collect();
-        // The creature skins this model is rendered with — `Monster1/2/3` is blank in the M2 and
-        // filled per display from `CreatureDisplayInfo.textureVariation`, so a batch on one of
-        // those slots has as many sheets as the model has skins.
+        // The creature skins per `Monster1/2/3` slot, from each display's `textureVariation`.
         let mut skins: [std::collections::BTreeSet<String>; 3] = Default::default();
         for d in &corpus.models[&key].creature_displays {
             let Some(m) = creatures.model(*d) else {
@@ -2326,8 +2072,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             }
         }
 
-        // WHICH BANDS carry the keys — the load-bearing half for a band loop, because it says
-        // whether the loop is one animation's or every animation's. Shared by both channels.
+        // Which bands carry the live loops, named by animation.
         let slot_line = |c: &ChannelClock| -> String {
             match (&c.cell, c.uniform) {
                 (Some(cell), _) => {
@@ -2350,7 +2095,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             }
         };
 
-        // --- the TINT + ALPHA pass over the same batches -----------------------------------
+        // --- the tint and alpha pass over the same batches ---------------------------------
         let mut tlines: Vec<String> = Vec::new();
         let mut model_has_alpha = false;
         for (bi, sub) in subs.iter().enumerate() {
@@ -2428,9 +2173,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             }
             anim_batches += 1;
 
-            // WHICH SHEET. An authored path where the batch carries one; otherwise the display's
-            // own skin variations, each asked separately — the frozen verdict is a property of the
-            // texture, and two skins of one model can answer differently.
+            // The sheet: the authored path, else each of the display's skins, which can differ.
             let candidates: Vec<String> = match (&sub.texture, sub.skin_slot, sub.char_slot) {
                 (Some(t), _, _) => vec![t.clone()],
                 (None, Some(slot), _) => {
@@ -2441,8 +2184,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                         .unwrap_or_default()
                 }
                 (None, None, Some(_)) => {
-                    // A runtime character composite (body atlas, object skin, hair): there is no
-                    // authored sheet to judge, and UNKNOWN is what that has to read as.
+                    // A runtime character composite has no sheet to judge: UNKNOWN.
                     skin_filled += 1;
                     Vec::new()
                 }
@@ -2463,7 +2205,6 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             }
             let read = &reads[0].1;
 
-            // THE CLOCK, per channel, exactly as the runtime resolves it.
             let t = channel_clock(sub.uv_seq.as_ref(), sub.uv_anim.as_ref());
             let r = channel_clock::<[f32; 4]>(sub.uv_rot_seq.as_ref(), None);
             let s = channel_clock::<[f32; 2]>(sub.uv_scale_seq.as_ref(), None);
@@ -2537,8 +2278,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             if s.cell.is_some() {
                 lines.push(format!("      slots  S {}", slot_line(&s)));
             }
-            // …and, when the translation set exists, WHY the bake refused the shared lane — the
-            // `uniform()` question `uvslotscan` asks, asked here of the same set.
+            // Why the bake refused the shared lane, as `uvslotscan` reports it.
             if let Some(set) = sub.uv_seq.as_ref() {
                 let v = classify(set, Channel::Uv);
                 lines.push(format!("      uv_seq {:<12} {}", v.why.label(), v.detail));
@@ -2621,9 +2361,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
          counts for the same two lanes (its `of those … carry a LIVE loop there` and \
          `PER-PLACEMENT` lines) — this corpus is a subset of that one by construction."
     );
-    // The two translation lanes NAMED, not just counted: `uvslotscan` prints the same two
-    // populations over the whole corpus, so listing the models here makes the subset claim
-    // checkable by eye instead of on trust.
+    // The two translation lanes by model, to check against `uvslotscan`'s listings.
     let mut shared_models: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     let mut per_seq_models: BTreeMap<&str, u32> = BTreeMap::new();
     for h in &hits {
@@ -2669,8 +2407,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         }
     }
 
-    // Every model carrying a batch of class `c`, with the rows that reach it — the join back from
-    // a verdict to something a director can go and stand in front of.
+    // Every model with a batch of class `c`, and the table rows that reach it.
     let listing = |title: &str, note: &str, pick: fn(&EntityHit) -> FxClass, c: FxClass| {
         let rows: Vec<&EntityHit> = hits.iter().filter(|h| pick(h) == c).collect();
         if rows.is_empty() {
@@ -2710,9 +2447,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             c,
         );
     }
-    // The batches the first-key seed alone condemns: they draw today, and would stop drawing on a
-    // lane that seeds the loop's opening value without running it. Named, because that is exactly
-    // the shape of a half-finished fix.
+    // Batches invisible only at the first-key seed, where a lane that never ticks the loop sits.
     let key_only: Vec<&EntityHit> = hits
         .iter()
         .filter(|h| h.key_class == FxClass::Invisible && h.class != FxClass::Invisible)
@@ -2740,8 +2475,6 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         }
     }
 
-    // The deliverable: every affected model, what it renders today, and how much of the world
-    // reaches it — sorted by POPULATION, because that is what sizes the fix.
     let mut models: BTreeMap<&str, (Vec<&EntityHit>, usize)> = BTreeMap::new();
     for h in &hits {
         let e = models.entry(h.key.as_str()).or_default();
@@ -2783,8 +2516,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     }
 
     // =====================================================================================
-    // The M2COLOR TINT half. Same corpus, same walk, a different dead channel — and a
-    // different failure mode, because a tint is a multiply and a UV offset is a lookup.
+    // The M2Color tint half: a tint multiplies, where a UV offset looks up.
     // =====================================================================================
     println!();
     println!(
@@ -2889,7 +2621,6 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
          already."
     );
 
-    // The join-back for the tint, by class — same shape as the UV listings.
     let tlisting = |title: &str, c: TintClass| {
         let rows: Vec<&TintHit> = tint_hits.iter().filter(|h| h.class == c).collect();
         if rows.is_empty() {
@@ -2930,7 +2661,6 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         tlisting(c.label(), c);
     }
 
-    // …and the population tail, sorted the same way the UV one is.
     let mut tmodels: BTreeMap<&str, (Vec<&TintHit>, usize)> = BTreeMap::new();
     for h in &tint_hits {
         let e = tmodels.entry(h.key.as_str()).or_default();
@@ -2963,20 +2693,16 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// The M2COLOR TINT half of the same census — the second dead channel on the
-// same lane, found by asking where `register_tint` is called from.
+// The M2Color tint half of the entity census
 // ---------------------------------------------------------------------------
 
-/// Does this batch's M2Color tint animate? The runtime's own test: the shared slot-0 bake, or the
-/// per-sequence set the bake keeps when the slots disagree. The twin of [`uv_keyed`], and written
-/// as a union for the same reason — a predicate spelled `rgb_anim.is_some()` silently skips a batch
-/// whose slot 0 is a dead hold beside a live later slot (the tint corpus has four of those).
+/// Whether the batch's tint is keyed: the shared slot-0 loop, or the per-sequence set, which
+/// alone carries a batch whose slot 0 is dead.
 fn tint_keyed(sub: &benilla_formats::RenderSubmesh) -> bool {
     sub.rgb_anim.is_some() || sub.rgb_seq.is_some()
 }
 
-/// How many file sequence slots this batch's tint was baked across (1 when only the shared
-/// single-slot loop exists) — [`fx_slots`]'s tint twin.
+/// How many file sequence slots the tint was baked across, at least 1.
 fn tint_slots(sub: &benilla_formats::RenderSubmesh) -> usize {
     sub.rgb_seq.as_ref().map_or(1, |s| s.slots().len()).max(1)
 }
@@ -2990,9 +2716,7 @@ fn tint_period(sub: &benilla_formats::RenderSubmesh, slot: usize) -> f32 {
     }
 }
 
-/// The tint at `(slot, t)`, read the way a consumer that RAN this channel would read it — the
-/// per-slot set when the bake built one, else the single shared loop ([`fx_state`]'s shape).
-/// White where neither exists, which is the tint identity.
+/// The tint at `(slot, t)`: the per-slot set, else the shared loop, else white.
 fn tint_state(sub: &benilla_formats::RenderSubmesh, slot: usize, t: f32) -> [f32; 3] {
     match (&sub.rgb_seq, &sub.rgb_anim) {
         (Some(s), _) => s.seq(Some(slot)).map_or([1.0; 3], |l| l.sample(t)),
@@ -3001,33 +2725,22 @@ fn tint_state(sub: &benilla_formats::RenderSubmesh, slot: usize, t: f32) -> [f32
     }
 }
 
-/// Rec.709 relative luminance — a reading aid for "how far apart are these two tints", not a
-/// perceptual model. The per-channel deltas beside it are the evidence; this is the single number
-/// that sorts a hue swap from a brightness swing.
+/// Rec.709 relative luminance, a reading aid beside the per-channel deltas.
 fn luma(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
-/// What a consumer that seeds the tint and never re-samples it renders.
-///
-/// A tint is a **multiply**, so the failure mode is never "invisible geometry" the way a UV freeze
-/// can be — it is the wrong colour, and how wrong is the only question worth asking. The bands are
-/// a reading aid over one measured number (the worst per-channel distance between the frozen value
-/// and anything the loop reaches, in 0..1 tint units); every batch prints that number, so the call
-/// is checkable and the thresholds are not load-bearing.
+/// What a consumer that seeds the tint and never re-samples it renders, banded by the worst
+/// per-channel distance between the seed and anything the loop reaches (0..1 tint units).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum TintClass {
-    /// The frozen tint is (near) BLACK while the loop reaches lit values: the multiply kills the
-    /// batch's colour outright, so it draws black — or, on an additive batch, not at all. The one
-    /// band where "wrong colour" becomes "wrong existence".
+    /// The seed is near black while the loop lights up: it draws black, or nothing if additive.
     Black,
-    /// The frozen value is a quarter of the tint range or more away from what the loop reaches —
-    /// a colour difference nobody has to look for.
+    /// 0.25 or more away.
     Strong,
     /// Between 0.05 and 0.25 away: visible side by side, easy to miss alone.
     Slight,
-    /// Under 0.05 away — the loop barely moves, or it moves and comes back. Frozen is
-    /// unobjectionable, and counting it as a bug would overstate the hole.
+    /// Under 0.05 away: the loop barely moves.
     Negligible,
 }
 
@@ -3060,38 +2773,28 @@ impl TintClass {
     }
 }
 
-/// One batch's whole tint read.
 struct TintBatch {
     class: TintClass,
-    /// What `model_material` actually bakes into `tint.xyz`: `rgb_anim.sample(0.0)` — the SHARED
-    /// slot-0 loop's first key — or identity white when there is no slot-0 bake at all.
+    /// What `model_material` seeds into `tint.xyz`: the shared loop's first key, else white.
     seed: [f32; 3],
-    /// …and which of those two it was. A white seed is the tint twin of the UV lane's DEAD-0: the
-    /// batch's live tint lives in a later sequence slot the shared material cannot see.
+    /// The seed is white: there is no shared loop, and the tint lives in a later slot.
     seed_is_white: bool,
     /// The worst per-channel distance between the seed and anything the loop reaches.
     delta: f32,
-    /// This batch carries a per-sequence set (`rgb_seq`) — `uvslotscan`'s PER-PLACEMENT population.
     per_seq: bool,
-    /// …and the shared slot-0 loop is live (`period > 0`) — its SHARED-live population.
     live_shared: bool,
     lines: Vec<String>,
 }
 
-/// Read one batch's animated tint — see [`TintBatch`]. The caller has established [`tint_keyed`].
+/// Read one batch's keyed tint; the caller has checked [`tint_keyed`].
 fn tint_batch(sub: &benilla_formats::RenderSubmesh, bi: usize) -> TintBatch {
     let slots = tint_slots(sub);
-    // THE SEED, read off the builder rather than assumed: `model_render::model_material` does
-    // `rgb_anim.map_or([1,1,1], |a| a.sample(0.0))` and writes it to `tint.xyz`, and
-    // `batch::Materials::build` hands it `sub.rgb_anim.as_ref()` UNCONDITIONALLY — there is no
-    // `play_rgb` gate to flip. So unlike the UV channel, which freezes at the identity, the tint
-    // freezes at the loop's OPENING COLOUR… except where slot 0 baked nothing, and then it freezes
-    // at white while every live slot tints.
+    // `model_material` seeds `tint.xyz` with `rgb_anim`'s first key, or white without one, and
+    // the builder always hands it the loop, so an unticked tint holds its opening colour.
     let seed = sub.rgb_anim.as_ref().map_or([1.0; 3], |a| a.sample(0.0));
     let seed_is_white = sub.rgb_anim.is_none();
 
-    // Everything the loop reaches, over every slot and a uniform sweep of each — the same
-    // over-approximating union `uv_batch` takes, for the same reason.
+    // Everything the loop reaches: the same sampled union `uv_batch` takes.
     let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
     let mut delta = 0.0f32;
     for slot in 0..slots {
@@ -3156,20 +2859,15 @@ fn tint_batch(sub: &benilla_formats::RenderSubmesh, bi: usize) -> TintBatch {
     }
 }
 
-/// One classified entity tint batch — the row the listings and the population tail are built from.
 struct TintHit {
     key: String,
     batch: usize,
     class: TintClass,
     clock: UvClock,
-    /// The colour the material is frozen at — printed in the listings, because "which wrong
-    /// colour" is the whole content of a tint bug.
+    /// The colour the material is seeded with.
     seed: [f32; 3],
-    /// **Is the freeze visible at REST?** True when file sequence slot 0 — the band a resting
-    /// instance plays — carries a live loop. False means the seed is the right colour in every
-    /// state but the ones a later slot keys, so the batch is wrong only *while that animation
-    /// plays*. Four of this corpus's five are that second shape, and reporting them as flatly
-    /// broken would overstate the hole.
+    /// Slot 0, the band a resting instance plays, carries a live loop; otherwise the seed holds
+    /// until a later slot's animation plays.
     rest_wrong: bool,
     seed_is_white: bool,
     delta: f32,

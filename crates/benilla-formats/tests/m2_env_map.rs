@@ -1,16 +1,6 @@
-//! Difftest the M2 **generated-texcoord** (environment-map) detection against real art — the
-//! `texCoordSet(+0x12) → texture_unit_lookup(0x9c)` two-hop the reference gates at `0x70b8bd`
-//! (`<= 2` = a vertex UV channel, higher = a generated env coordinate).
-//!
-//! Both halves matter, and only real art proves them. The Deeprun Tram's glass tube is the
-//! **positive**: it authors `texture_unit_lookup = [-1]` and, precisely because the runtime is
-//! meant to supply the coordinates, leaves **every one of its 330 vertices at exactly (0,0)** — so
-//! a renderer that misses the flag paints the whole tube in one corner texel of a reflection sheet
-//! (`AKGNOMEREFLECT.BLP` texel 0,0 = 225,221,142, doubled by the batch's Mod2x blend: the flat
-//! yellow). The weapon rack is the **discriminator**: the same model carries both kinds, so a
-//! parse that simply answered "env" everywhere would pass the first assert and fail here.
-//!
-//! Skips (passes) when the client isn't present at `<repo>/WoW/Data`.
+//! Generated (environment-map) texcoords: `texCoordSet` (`+0x12`) indexes `texture_unit_lookup`
+//! (`0x9c`), and the reference takes a value above 2 as generated (`0x70b8bd`). The Deeprun Tram's
+//! glass authors `[-1]` and leaves all 330 vertices' UVs at (0, 0).
 
 use benilla_formats::{load_m2_mesh, open_chain};
 
@@ -29,8 +19,6 @@ fn tram_glass_batches_generate_their_texcoords() {
         subs.iter().all(|s| s.env_map),
         "every GnomeSubwayGlass batch authors texture_unit_lookup = -1 (generated texcoords)"
     );
-    // The half that makes the flag load-bearing rather than cosmetic: there is no fallback here,
-    // because the authored UVs carry no information at all.
     for s in &subs {
         assert!(
             s.uvs.iter().all(|uv| uv[0] == 0.0 && uv[1] == 0.0),
@@ -49,8 +37,7 @@ fn weapon_rack_splits_env_from_uv_batches() {
     )
     .expect("load GeneralWeaponrack01");
 
-    // `texture_unit_lookup = [0, -1]`: the rack/blade batches name UV channel 0, the two
-    // ARMORREFLECT sheen layers (`texCoordSet 1`) generate theirs.
+    // `texture_unit_lookup = [0, -1]`: the body reads UV channel 0, the sheen layers generate.
     let env: Vec<&str> = subs
         .iter()
         .filter(|s| s.env_map)

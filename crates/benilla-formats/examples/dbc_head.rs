@@ -1,5 +1,4 @@
-//! Throwaway: dump a DBC's header (record count / field count / record size) and the first rows'
-//! raw dwords, so a claimed column offset can be checked against the real shipped file.
+//! Each named DBC's header and first rows' raw dwords, to check a column offset against the file.
 fn main() -> anyhow::Result<()> {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;

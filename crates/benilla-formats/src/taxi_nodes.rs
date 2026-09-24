@@ -1,22 +1,7 @@
-//! `TaxiNodes.dbc` — every flight-master node: its map + world position, display name, and the
-//! per-team taxi-mount creature template it rides (decision 0484 phase 1). Loaded whole at
-//! startup, id-keyed — the taxi map's node list and the "which node am I nearest" resolve
-//! through this catalog. `TaxiPath.dbc` (`crate::taxi_path`) carries the direct-hop fare table
-//! between node pairs; `TaxiPathNode.dbc` (`crate::taxi`) carries a path's actual waypoints —
-//! three different tables, three different jobs.
-//!
-//! **16 fields (verified this session, raw-parsed against build 5875, matching vmangos's own
-//! `TaxiNodesEntry`, `DBCStructure.h:789-799`):** `ID(0), MapID(1), X(2), Y(3), Z(4)`, the
-//! 9-dword localized-name block (`Name_lang` 8 locale strings, columns 5-12, + a flags dword at
-//! 13 — the same loc-string shape `AreaPOI`/`AreaTable` use), then `MountCreatureID[2]` at
-//! columns 14-15 — **horde first, alliance second** (vmangos's own field comment:
-//! "horde[14]-alliance[15]"). Both are `CreatureTemplate` **entries**, not display ids — the
-//! taxi mount's actual look resolves through the normal creature-template chain, same as any
-//! other NPC (NOT a `CreatureDisplayInfo` id directly).
-//!
-//! Verified against the live table: id 2 is "Stormwind, Elwynn" on map 0, with `mount_horde = 0`
-//! / `mount_alliance = 541` — a human-city node offers no Horde service and a nonzero Alliance
-//! one, exactly as expected.
+//! `TaxiNodes.dbc`, every flight-master node: its map and position, name, and the taxi mount each
+//! team rides from it. The layout is vmangos's `TaxiNodesEntry` (`DBCStructure.h:789-799`): `ID`,
+//! `MapID`, `X`, `Y`, `Z`, the `Name` loc-string (5-13), then `MountCreatureID[2]`, Horde first.
+//! The mounts are `creature_template` entries, not display ids, resolved like any NPC's.
 
 use std::collections::HashMap;
 
@@ -28,23 +13,20 @@ use crate::Chain;
 
 const TAXI_NODES: &str = "DBFilesClient\\TaxiNodes.dbc";
 
-/// One `TaxiNodes.dbc` row — a flight-master node.
+/// One `TaxiNodes.dbc` row, a flight-master node.
 #[derive(Clone, Debug)]
 pub struct TaxiNode {
-    /// The row's own id — what `SMSG_SHOWTAXINODES`'s known-mask and `CMSG_ACTIVATETAXI`'s
-    /// node fields name.
+    /// The id `SMSG_SHOWTAXINODES`'s known-mask and `CMSG_ACTIVATETAXI`'s nodes name.
     pub id: u32,
     /// The map this node's `pos` is expressed in (`Map.dbc` id).
     pub map_id: u32,
     /// World position `(x, y, z)` on `map_id`.
     pub pos: [f32; 3],
-    /// The enUS display name (locale slot 0) — the taxi map's node label.
+    /// The enUS name (locale slot 0), the taxi map's node label.
     pub name: String,
-    /// `CreatureTemplate` entry of the taxi mount a Horde rider takes off from this node, `0` =
-    /// no Horde service here (e.g. an Alliance city node).
+    /// The `creature_template` entry of a Horde rider's taxi mount here, `0` for no Horde service.
     pub mount_horde: u32,
-    /// `CreatureTemplate` entry of the taxi mount an Alliance rider takes off from this node,
-    /// `0` = no Alliance service here.
+    /// The `creature_template` entry of an Alliance rider's taxi mount here, `0` for none.
     pub mount_alliance: u32,
 }
 
@@ -58,8 +40,7 @@ impl TaxiNodes {
         self.rows.get(&id)
     }
 
-    /// Every row, in no particular order — the taxi map's node list iterates this, filtered by
-    /// the known-mask and continent.
+    /// Every row, in no particular order.
     pub fn rows(&self) -> impl Iterator<Item = &TaxiNode> {
         self.rows.values()
     }
@@ -73,7 +54,6 @@ impl TaxiNodes {
     }
 }
 
-/// 16 fields per the module doc.
 fn schema() -> Schema {
     let mut s = Schema::new("TaxiNodes");
     s.add_field(SchemaField::new("ID", FieldType::UInt32));
@@ -122,11 +102,7 @@ pub fn load_taxi_nodes(chain: &mut Chain) -> Result<TaxiNodes> {
 mod tests {
     use super::*;
 
-    /// The real 5875 table proves the layout and the pinned Stormwind row: 85 nodes total, id 2
-    /// is "Stormwind, Elwynn" on map 0 (Eastern Kingdoms), with a nonzero Alliance mount (541)
-    /// and no Horde mount (0) — a human-city node offers Alliance-only service. Values dumped
-    /// from the real DBC this session (`dbc_to_csv` + a raw byte cross-check), not guessed.
-    /// Skips without client data.
+    /// The 5875 layout on Stormwind's node, which serves the Alliance only.
     #[test]
     fn real_taxi_nodes_layout_sanity() {
         let data = crate::wow_data_or_skip!();
@@ -143,7 +119,7 @@ mod tests {
             "Stormwind's Alliance gryphon mount template"
         );
 
-        // Sentinel Hill (Westfall), the other end of the pinned TaxiPath test's hop.
+        // The other end of the hop the `TaxiPath` test pins.
         let sentinel_hill = cat.get(4).expect("node 4 exists");
         assert_eq!(sentinel_hill.name, "Sentinel Hill, Westfall");
     }

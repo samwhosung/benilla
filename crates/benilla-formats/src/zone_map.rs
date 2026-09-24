@@ -1,14 +1,7 @@
-//! `Interface\WorldMap\<Continent>.zmp` — the continent area bitmap: a 128×128 grid of
-//! `AreaTable.dbc` row ids (16384 little-endian u32, row-major, exactly 65536 bytes) covering the
-//! whole 64×64-ADT world at half-ADT granularity. The client's world-map hover/click resolves a
-//! cursor cell to a zone through it (`0x4a6ec0`; the loader `0x4a5d00` remaps cells to
-//! WorldMapArea ids at load — benilla's remap lives with the catalog build, `ui_world_map`).
-//!
-//! Mechanism VERIFIED against the 5875 binary (2026-07-07): path format string @0x845374
-//! (`Interface\WorldMap\%s.zmp`, `%s` = the continent WorldMapArea row's AreaName), 0x10000 bytes
-//! read raw into the record. Corroborated against the shipped file this session: Azeroth.zmp's
-//! cell at the recorded index law for Goldshire's world position holds 12 = Elwynn Forest.
-//! 5875 ships `Azeroth.zmp` + `Kalimdor.zmp` (and a dead `Expansion01.zmp`).
+//! `Interface\WorldMap\<AreaName>.zmp` (`0x845374`), named by the continent's `WorldMapArea` row:
+//! a 128×128 row-major grid of `AreaTable.dbc` ids over the 64×64-tile world, two cells per tile
+//! edge. The world map resolves the cell under the cursor to a zone through it (`0x4a6ec0`); the
+//! loader (`0x4a5d00`) remaps cells to `WorldMapArea` ids.
 
 use anyhow::{bail, Context, Result};
 
@@ -17,9 +10,8 @@ use crate::chain::Chain;
 /// Cells per grid edge (half-ADT: 128 cells over 64 tiles).
 pub const ZONE_MAP_EDGE: usize = 128;
 
-/// Load `Interface\WorldMap\<area_name>.zmp` — 16384 raw `AreaTable.dbc` ids, row-major.
-/// A continent without a shipped bitmap is an error (the client leaves its grid zeroed; callers
-/// decide whether that's tolerable).
+/// Load `Interface\WorldMap\<area_name>.zmp` as raw `AreaTable.dbc` ids. A missing file is an
+/// error here, where the client leaves its grid zeroed.
 pub fn load_zone_map(chain: &mut Chain, area_name: &str) -> Result<Vec<u32>> {
     let path = format!("Interface\\WorldMap\\{area_name}.zmp");
     let bytes = chain
@@ -44,9 +36,7 @@ pub fn load_zone_map(chain: &mut Chain, area_name: &str) -> Result<Vec<u32>> {
 mod tests {
     use super::*;
 
-    /// The real Azeroth bitmap: the Goldshire cell (index by the byte law: col from wy=60, row
-    /// from wx=−9450 ⇒ cell 12735) holds Elwynn Forest's AreaTable id — the end-to-end pin of
-    /// path, layout, and index law against shipped data. Skips without client data.
+    /// Cell 12735 is Goldshire: row from wx = -9450, column from wy = 60.
     #[test]
     fn real_azeroth_zone_map_goldshire_cell() {
         let data = crate::wow_data_or_skip!();

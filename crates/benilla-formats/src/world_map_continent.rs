@@ -1,16 +1,6 @@
-//! `WorldMapContinent.dbc` — one row per continent (Azeroth, Kalimdor) framing the continent-level
-//! map art: which ADT tile-grid span it covers, its placement offset/scale in the shared world-map
-//! coordinate space, and the taxi-map's own bounding rect (decision 0203 phase 2's continent view).
-//!
-//! **Client-only: vmangos carries no struct for this table** (never loaded server-side). Layout
-//! **VERIFIED against the 5875 binary** (2026-07-07): **2 × 13 × 52 B** —
-//! `ID(0), MapID(1)`; fields 2-5 = ADT tile bounds (ints; the world-map builder `0x4a5d00`
-//! converts them to each continent's normalized-UV sheet rect — the world-level click AABB;
-//! `map_proj::continent_sheet_rect` transcribes the kernel); fields 6/7 = the per-axis
-//! world-sheet offsets and field 8 = the scale, exactly the values `0x4a72b0`/`0x4a7360`
-//! world-mode read at record `+0x18/+0x1c/+0x20` (5875: EK `{14.5, −7.0, 0.75}`, Kalimdor
-//! `{−19.0, −0.32249799, 0.75}`); fields 9-12 = the taxi-map world rect, **unused** by all four
-//! projection functions.
+//! `WorldMapContinent.dbc`: each continent's ADT tile bounds and its place on the world map sheet,
+//! read by the builder `0x4a5d00` and the world-mode projections `0x4a72b0` and `0x4a7360`.
+//! vmangos does not load it.
 
 use std::collections::HashMap;
 
@@ -22,26 +12,24 @@ use crate::Chain;
 
 const WORLD_MAP_CONTINENT: &str = "DBFilesClient\\WorldMapContinent.dbc";
 
-/// One `WorldMapContinent.dbc` row (all fields decomp-verified — see the module doc).
+/// One `WorldMapContinent.dbc` row.
 #[derive(Clone, Debug)]
 pub struct WorldMapContinent {
-    /// `Map.dbc` id (`0` = Azeroth, `1` = Kalimdor in 5875).
+    /// `Map.dbc` id: 0 Azeroth, 1 Kalimdor.
     pub map_id: u32,
-    /// ADT tile-grid column bounds — the `0x4a5d00` sheet-rect kernel's inputs (see module doc).
+    /// ADT tile column bounds, which `0x4a5d00` turns into the continent's sheet rect.
     pub left_boundary: u32,
     pub right_boundary: u32,
-    /// ADT tile-grid row bounds.
+    /// ADT tile row bounds.
     pub top_boundary: u32,
     pub bottom_boundary: u32,
-    /// The continent's world-sheet offsets — the `f` terms of the world-mode projections
-    /// (`0x4a7360`: `u = offset_x/62.625 + 0.5 − wy·k·scale`), x → the u axis, y → v.
+    /// World-sheet offsets, x on the u axis and y on v
+    /// (`0x4a7360`: `u = offset_x/62.625 + 0.5 - wy·k·scale`).
     pub offset_x: f32,
     pub offset_y: f32,
-    /// The world-sheet scale the projections multiply by (`0.75` on both 5875 rows — there is
-    /// no separate world-level zoom variable).
+    /// The world-sheet scale, 0.75 on both rows; there is no separate world zoom.
     pub scale: f32,
-    /// The taxi-map's own bounding rect in world units — carried for the future taxi layer;
-    /// unused by the map projections.
+    /// The taxi map's rect in world units; no map projection reads it.
     pub taxi_min: (f32, f32),
     pub taxi_max: (f32, f32),
 }
@@ -65,8 +53,6 @@ impl WorldMapContinentCatalog {
     }
 }
 
-/// 13 fields: `ID, MapID, LeftBoundary, RightBoundary, TopBoundary, BottomBoundary, OffsetX,
-/// OffsetY, Scale, TaxiMinX, TaxiMinY, TaxiMaxX, TaxiMaxY` (see the module doc for confidence).
 fn schema() -> Schema {
     let mut s = Schema::new("WorldMapContinent");
     for name in [
@@ -147,8 +133,6 @@ pub fn load_world_map_continent_catalog(chain: &mut Chain) -> Result<WorldMapCon
 mod tests {
     use super::*;
 
-    /// The real 5875 table: exactly the two verified rows (Azeroth mapId 0, Kalimdor mapId 1),
-    /// byte-exact on every field. Skips without client data.
     #[test]
     fn real_world_map_continent_has_azeroth_and_kalimdor() {
         let data = crate::wow_data_or_skip!();

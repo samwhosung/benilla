@@ -1,23 +1,13 @@
-//! `chaincensus`: the whole-table view of the **beam/chain** system — every
-//! `SpellVisualKit` that draws a `SpellChainEffects` beam, the row it names, and the spells that
-//! reach it through which lifecycle stage.
-//!
-//! The scope instrument for B161 ("Chain Lightning has no chain effect"). It answers, from the
-//! shipped table rather than from expectation, the two questions that turned that one report into
-//! a system: *which* spells are affected (not just Chain Lightning — every drain, funnel and eye
-//! beam in the game), and whether the small-int decode of `CharParamZero` is the real mechanism —
-//! because if it is, **every** live slot must resolve to a real row of an 18-row table and name a
-//! texture that matches the spell. A decode that were merely plausible would scatter.
-//!
-//! Read the `stage` column with the flag: `channel` kits ship flag 1, `cast` kits flag 0, and that
-//! flag — not the type key's name — is the only thing the client distinguishes.
+//! `chaincensus`: every `SpellVisualKit` that draws a `SpellChainEffects` beam, the row it names
+//! and the spells that reach it by stage. Each live slot must name one of the table's 18 rows, or
+//! the small-int decode of `CharParamZero` is wrong. The client tells the two kinds apart by the
+//! flag alone, never the type key: `channel` kits ship flag 1, `cast` kits flag 0.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use benilla_formats::{char_proc_type, Chain, SpellVisualCatalog, VisualStages};
 
-/// A `SpellVisual` stage's column selector — one of the five lifecycle-kit fields.
 type StagePick = fn(&VisualStages) -> u32;
 
 const STAGES: [(&str, StagePick); 5] = [
@@ -35,7 +25,6 @@ struct Reach {
     stages: BTreeSet<&'static str>,
 }
 
-/// Every kit → the spells that reach it, and by which stage.
 fn kit_reachability(
     chain: &mut Chain,
     visuals: &SpellVisualCatalog,

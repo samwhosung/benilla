@@ -1,16 +1,6 @@
-//! SpellMechanic.dbc — the vocabulary that fills `SPELL_FAILED_PREVENTED_BY_MECHANIC`'s `%s`,
-//! turning "Can't do that while %s" into "Can't do that while stunned".
-//!
-//! It is the crowd-control ladder's other half: the exemption scan reports the
-//! blocking aura's mechanic as an **id**, and this names it. Without the table the arm's refusal
-//! displayed its template with the specifier unfilled, which is the loose end 1941 recorded.
-//!
-//! The reference reads the same store (`0xc0d7c4`) from `0x6e2190`, the `0x8d` argument arm.
-//!
-//! Layout byte-checked on the raw 5875 file (a struct-unpack dump: **27 records × 10 fields,
-//! record size 40**, string block 246) — the same shape as `SpellFocusObject.dbc`: `ID@0` · the
-//! 8-locale `Name` block (enUS first ⇒ **Name = column 1**) · its flags word (9). Anchor rows:
-//! 5 "fleeing" · 7 "rooted" · 12 "stunned" · 17 "polymorphed".
+//! `SpellMechanic.dbc`: the `%s` of `SPELL_FAILED_PREVENTED_BY_MECHANIC` ("Can't do that while
+//! %s"), naming the blocking aura's mechanic. The reference reads this table (`0xc0d7c4`) in
+//! `0x6e2190`, its `0x8d` argument arm.
 
 use std::collections::HashMap;
 
@@ -24,18 +14,13 @@ const SPELL_MECHANIC: &str = "DBFilesClient\\SpellMechanic.dbc";
 const SPELL_MECHANIC_FIELDS: usize = 10;
 const COL_NAME_ENUS: usize = 1;
 
-/// `SpellMechanic.Id → Name` — the "Can't do that while stunned" vocabulary.
-///
-/// The names are **lower-case and adjectival** in the shipped data ("stunned", "asleep",
-/// "polymorphed"), which is what makes them read as the tail of that sentence rather than as a
-/// title. Nothing here capitalises them; the reference does not either.
+/// Mechanic id → name, lower-case in the data ("stunned") and left so, as the reference does.
 pub struct SpellMechanicCatalog {
     names: HashMap<u32, String>,
 }
 
 impl SpellMechanicCatalog {
-    /// The display name for a mechanic id, or `None` for 0/unknown — which is exactly the case
-    /// the refusal treats as "no mechanic named", falling back to the arm's own reason.
+    /// The name for a mechanic id; `None` for 0, where the refusal falls back to its own reason.
     pub fn name(&self, mechanic_id: u32) -> Option<&str> {
         self.names.get(&mechanic_id).map(String::as_str)
     }
@@ -82,12 +67,7 @@ pub fn load_spell_mechanic_catalog(chain: &mut Chain) -> Result<SpellMechanicCat
 mod tests {
     use super::*;
 
-    /// The rows the crowd-control ladder actually names, on the real build-5875 file. A column
-    /// slip lands on another locale or the flags word and fails loudly. Skips without client data.
-    ///
-    /// The four ids here are the ones decision 1941's arms can report, cross-checked against the
-    /// `Spell.dbc` mechanic columns pinned in `spell_catalog`: Fear's `Mechanic` is 5, Frost Nova's
-    /// `EffectMechanic[1]` is 7, Polymorph's is 17.
+    /// Fear's `Mechanic` is 5, Frost Nova's `EffectMechanic[1]` 7, Polymorph's 17.
     #[test]
     fn real_spell_mechanic_names_the_crowd_control_rows() {
         let data = crate::wow_data_or_skip!();

@@ -1,43 +1,15 @@
-//! What the ADT liquid actually **is** under a pin — the shoreline instrument:
+//! The ADT liquid under a pin against the terrain it lies on: the MCLQ blocks, overlapping and
+//! stepped cells, and where the 4.167-yd wet-cell lattice ends short of or past the waterline.
+//! Output is Blizzard data: never commit it.
 //! `cargo run -p benilla-formats --example water_here -- <map> <x> <y> [radius_yd]`
-//! e.g. `water_here Azeroth -12512.69 -180.21 40`.
-//!
-//! A water-at-the-shore report ("there's a step in it", "the foam runs past the waterline") is a
-//! question about three surfaces that only ever agree in the middle of a lake: the MCLQ **wet-cell
-//! lattice** (4.167-yd cells, the granularity everything on the water path clips to), the liquid
-//! **surface height** on those cells, and the **terrain** underneath. This prints all three over one
-//! neighbourhood so the geometry can be read instead of guessed:
-//!
-//! - the **block census** — one line per MCLQ block: kind, wet cells, surface-height span, depth-byte
-//!   span. Where a step would be *authored*, this is where it shows: two blocks over one chunk, or a
-//!   block whose own plane has relief;
-//! - the **overlap** scan — cells claimed by two blocks at once, which would composite the
-//!   translucent water twice;
-//! - the **seam** scan — every pair of adjacent wet cells whose planes disagree, so an authored step
-//!   can be told apart from a rendered one before anyone opens the renderer;
-//! - the **lattice-vs-waterline** scan — dry cells the ground still runs under. Whole wet cells are
-//!   the only thing the renderer draws, so wherever the lattice runs out before the ground climbs
-//!   through the plane, the water ends on a 4.167-yd straight edge in open water: a shape no
-//!   shoreline has;
-//! - its **mirror** — wet cells the ground climbs out of, which is the skirt of liquid-lattice
-//!   geometry that lies over dry sand. Nothing renders there only because the terrain drew first
-//!   and won the depth test, so this is the exact budget a depth bias spends: a decal pulled `b`
-//!   yards toward the eye paints `b / slope` yards of that skirt;
-//! - the **shoreline slope** at the pin, and what a coplanarity *lift* costs there. A decal held `l`
-//!   yards above the water plane keeps painting for `l / slope` yards past the waterline, on dry
-//!   ground — the arithmetic behind B348's foam-on-the-sand, and the reason that settle is a depth
-//!   bias now and not a lift.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
 
 use std::collections::BTreeMap;
 
 use benilla_formats::{terrain_height_at, ChunkMesh, CHUNK_SIZE};
 
-/// One MCLQ cell edge, in yards — the granularity of `wet`, and of every clip on the water path.
+/// One MCLQ cell edge in yards, the granularity of `wet` and of every clip on the water path.
 const CELL: f32 = CHUNK_SIZE / 8.0;
-/// How far past the reported radius the block census still enumerates, so that a cell at the edge
-/// of the answer has its real neighbours to be judged against (one chunk clears it).
+/// How far past the radius the census enumerates, so an edge cell has its real neighbours.
 const MARGIN: f32 = CHUNK_SIZE;
 
 /// One seam between two adjacent wet cells whose surface planes disagree.
@@ -50,14 +22,13 @@ struct Seam {
 
 /// One MCLQ cell of one block, resolved into world terms.
 struct Cell {
-    /// Cell-centre world XY.
     x: f32,
     y: f32,
-    /// The block's surface height over the cell (bilinear at the centre, as the queries sample it).
+    /// Surface height at the cell centre, bilinear, as the queries sample it.
     surface: f32,
     /// Terrain height at the same point, `None` where the tile has a hole.
     ground: Option<f32>,
-    /// Which chunk/block this cell came from — `(chunk index, block index)`.
+    /// `(chunk index, block index)`.
     owner: (usize, usize),
     kind: benilla_formats::LiquidKind,
 }
@@ -86,10 +57,7 @@ fn main() -> anyhow::Result<()> {
         let Some(nw) = chunk.positions.first() else {
             continue;
         };
-        // The chunk's own footprint against the pin box (chunk spans south/east of its NW corner),
-        // widened by MARGIN so every cell inside the radius has its real neighbours loaded — a cell
-        // at the box edge would otherwise read as "the lattice stops here" when it is only the
-        // enumeration that stopped.
+        // The chunk's footprint (south and east of its NW corner) against the box plus `MARGIN`.
         if nw[0] - CHUNK_SIZE > x + radius + MARGIN
             || nw[0] < x - radius - MARGIN
             || nw[1] - CHUNK_SIZE > y + radius + MARGIN
@@ -158,8 +126,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // ── Overlap: two blocks claiming one patch of world, at two heights ──────────────────────
-    // Key a cell by its lattice index, floored — two DIFFERENT cells of one block must never
-    // collide, or the overlap report cries wolf on its own rounding.
+    // Key a cell by its floored lattice index, so two cells of one block never collide.
     let key = |c: &Cell| ((c.x / CELL).floor() as i32, (c.y / CELL).floor() as i32);
     let mut by_key: BTreeMap<(i32, i32), Vec<usize>> = BTreeMap::new();
     for (n, c) in cells.iter().enumerate() {
@@ -212,12 +179,9 @@ fn main() -> anyhow::Result<()> {
         println!("    {:?} -> {:?}  dz {:+.3} yd", s.from, s.to, s.dz);
     }
 
-    // ── Where the LATTICE stops vs where the WATERLINE is ────────────────────────────────────
-    // The renderer draws whole wet cells and nothing else, so the water's visible boundary is the
-    // *lattice* edge wherever the lattice runs out before the ground climbs through the plane. That
-    // edge is a 4.167-yd straight line in open water — the shape a shoreline never has. Sample every
-    // dry cell that touches a wet one on a 0.25-yd grid and report how deep the water would have
-    // been there.
+    // ── Where the lattice stops vs where the waterline is ────────────────────────────────────
+    // The renderer draws whole wet cells only, so where the lattice ends before the ground rises
+    // through the plane the water ends on a straight cell edge; sample each dry neighbour's depth.
     let mut short_cells: Vec<(f32, (i32, i32))> = Vec::new();
     for k in by_key.keys().copied().collect::<Vec<_>>() {
         for nb in [
@@ -260,13 +224,9 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // ── The mirror: WET cells the ground climbs out of ───────────────────────────────────────
-    // The scan above finds water that is missing; this one finds water geometry that is *over dry
-    // land*. Whole wet cells are the unit the renderer draws, so wherever the ground climbs through
-    // the plane inside a cell, the liquid mesh — and every decal built on the same lattice — carries
-    // a skirt of geometry up the beach. Nothing renders there only because the terrain drew first
-    // and won the depth test, which makes this number the exact **budget a depth bias spends**: a
-    // decal pulled `b` yards toward the eye paints `b / slope` yards of that skirt onto the sand.
+    // ── The mirror: wet cells the ground climbs out of ───────────────────────────────────────
+    // The liquid mesh and every decal on its lattice carry a skirt up the beach that only the depth
+    // test hides, so a decal pulled `b` yards toward the eye paints `b / slope` yards of it.
     let mut skirts: Vec<(f32, f32, (i32, i32))> = Vec::new(); // (height above plane, run inland, cell)
     for (k, idxs) in by_key.iter() {
         let c = &cells[idxs[0]];
@@ -319,9 +279,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     // ── The waterline's slope, and what a coplanarity lift costs horizontally ────────────────
-    // A decal on the water plane, lifted `l` yards to win the coplanar tie, keeps painting for
-    // `l / slope` yards past the waterline — up the beach, on dry ground. Measure the slope where
-    // the plane actually meets the ground nearest the pin.
+    // A decal lifted `l` yards off the water plane paints `l / slope` yards past the waterline; the
+    // slope is measured where the plane meets the ground nearest the pin.
     let mut best: Option<(f32, f32, f32, f32)> = None; // (dist to pin, x, y, slope)
     for c in &cells {
         let Some(g) = c.ground else { continue };

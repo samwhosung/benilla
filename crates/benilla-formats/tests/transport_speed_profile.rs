@@ -1,22 +1,7 @@
-//! The transport speed-profile probe (decision 0438's reconciliation instrument, director report
-//! 2026-07-17: "ship lagged a bit on the way into Booty Bay").
-//!
-//! Samples the Ratchet–Booty Bay boat's timetable at 60 Hz across its whole cycle and measures the
-//! finite-difference speed. Root-caused the report same day: ClientForms-mode u32 windows
-//! (distance-linear interior timestamps) fed the trapezoid easing — seconds of disagreement, so
-//! the boat pinned at segment ends and leapt on window flips (65 spikes, max 15,009 yd/s, one
-//! 59 s crawl). `build()` now uses the internally-consistent Vmangos accumulation for the sample
-//! table; this test stays as the smooth-motion regression gate. Anomaly classes:
-//! - **speed spikes ≫ cruise (30 yd/s)** at segment boundaries → inter-segment position
-//!   discontinuities (the integer arrive/depart times disagreeing with the float easing) — reads
-//!   as stutter;
-//! - **smooth but modulated speed** (swings well above/below cruise inside segments, worst on
-//!   curves) → the Catmull-Rom *parameter* fraction standing in for an *arc-length* fraction —
-//!   reads as the boat surging/dragging through bends;
-//! - **neither** → the lag wasn't the timetable (frame hitches from Booty Bay's asset streaming
-//!   are the next suspect).
-//!
-//! Run: `cargo test -p benilla-formats --test transport_speed_profile -- --nocapture`
+//! Samples the Ratchet-Booty Bay boat's timetable at 60 Hz over its whole cycle and measures the
+//! finite-difference speed against its 30 yd/s cruise. A spike at a segment boundary is a position
+//! discontinuity; a smooth swing through a bend is the spline parameter standing in for arc length.
+//! `--nocapture` prints the profile.
 
 use benilla_formats::{load_taxi_path_nodes, open_chain, TransportTimetable};
 
@@ -32,8 +17,7 @@ fn ratchet_booty_bay_speed_profile() {
     let nodes = load_taxi_path_nodes(&mut chain).expect("taxi nodes");
     let path = nodes.path(241).expect("path 241 (Ratchet–Booty Bay)");
     let tt = TransportTimetable::build(path, 30.0, 1.0).expect("timetable");
-    // The build self-pins its period to the client-transcribed bookkeeping (bit-exact); this
-    // cross-checks the pin landed for the path under measurement.
+    // The build pins its period to the reference's own bookkeeping, bit-exact.
     assert_eq!(tt.period_ms, 350_818, "path 241's self-pinned period");
 
     let step_ms = 16u32; // ~60 Hz
@@ -81,7 +65,7 @@ fn ratchet_booty_bay_speed_profile() {
             format!(" — first 10: {:?}", &spikes[..spikes.len().min(10)])
         }
     );
-    // Cluster the slow samples into runs so the report reads as "windows", not thousands of rows.
+    // Cluster the slow samples into runs.
     let mut slow_runs: Vec<(u32, u32, f32)> = Vec::new(); // (start, end, min_speed)
     for &(t, v) in &slow_underway {
         match slow_runs.last_mut() {
@@ -104,11 +88,9 @@ fn ratchet_booty_bay_speed_profile() {
         );
     }
 
-    // The structural assertion: a window/easing inconsistency reads as a position jump traversed
-    // in one 16 ms step — hundreds to thousands of yd/s (the pre-fix table measured 15,009).
-    // Healthy motion peaks ~51 yd/s (the Catmull-Rom parameter-vs-arc-length artifact through one
-    // sharp bend, ~1.5 s per cycle — a known, bounded residual pending the per-point-table
-    // verdict).
+    // A discontinuity crosses in one 16 ms step at hundreds of yd/s. Smooth motion peaks near
+    // 51 yd/s through one sharp bend: the table between stops is vmangos-mode, the spline parameter
+    // standing in for arc length, and the reference's per-leg evaluation is not ported.
     assert!(
         max_speed < 100.0,
         "position discontinuity: {max_speed:.1} yd/s at cycle {max_speed_at} ms"

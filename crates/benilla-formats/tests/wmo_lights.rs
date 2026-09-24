@@ -1,6 +1,5 @@
-//! WMO MOLT light parse — byte check against the Goldshire blacksmith's 3 warm forge lights. Pins the
-//! chunk walk *past* zero-size chunks (`MOVV(0)`/`MOVB(0)` sit right before MOLT — a walk that stops
-//! there finds nothing) and the SMOLight field offsets. Skips when the client isn't present.
+//! WMO MOLT lights, `0x30` bytes a record with a BGRA colour; the chunk walk steps past the
+//! zero-size `MOVV` and `MOVB` that precede MOLT.
 
 use benilla_formats::{parse_wmo_lights, Chain};
 
@@ -13,8 +12,6 @@ fn goldshire_blacksmith_has_three_warm_omni_lights() {
         .expect("read GoldshireBlacksmith.wmo");
 
     let lights = parse_wmo_lights(&bytes);
-    // 3 MOLT lights (the forge). A chunk walk that breaks at MOVV(0)/MOVB(0) — which precede MOLT —
-    // would find 0; this is the regression guard for that bug.
     assert_eq!(lights.len(), 3, "blacksmith should have 3 MOLT lights");
     for l in &lights {
         assert!(
@@ -22,8 +19,7 @@ fn goldshire_blacksmith_has_three_warm_omni_lights() {
             "forge MOLT lights are type 0 (omni), got {}",
             l.light_type
         );
-        // The forge glow is warm orange — RGB(255,140,37) ≈ (1.0, 0.55, 0.145). Pins the BGRA decode
-        // and the 0x30 stride (a garbled offset would not land on a warm colour).
+        // RGB (255, 140, 37).
         let c = l.color;
         assert!(
             c[0] > 0.9 && c[1] > 0.4 && c[1] < 0.7 && c[2] < 0.25,

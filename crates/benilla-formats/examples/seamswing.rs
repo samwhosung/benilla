@@ -1,26 +1,14 @@
-//! Where does a welded billboard bone's geometry SIT relative to its pivot — how far, and along
-//! which local axis?
-//!
-//! Two readings, and the second is the one that decides anything. **Distance** answers the seam
-//! question: a partially-weighted seam vertex is dragged by its weight times the re-orientation and
-//! linear-blend skinning shrinks it toward the pivot on the way (the candy-wrapper), so a seam ring
-//! sitting ON the pivot hinges cleanly and one sitting far out tears.
-//!
-//! **Direction answers whether the geometry moves at all.** A spherical billboard maps the bone's
-//! local axes onto fixed camera axes, so an offset lying along a single local axis lands on the same
-//! camera axis from every angle: it does not sweep, it only loses its roll and its foreshortening.
-//! Only an offset spread across the axes sweeps. Magnitude alone cannot tell those apart, and
-//! reading a 0.29 yd radius as a 0.29 yd arc is exactly how decision 0847 withdrew a correct change
-//! — the spikes it measured run **along** their bone (worst vertex 12° off axis), so the sweep it
-//! described never existed (the spherical basis `0x71547c`, and this tool's own output).
-//!
-//! Usage: `cargo run -p benilla-formats --example seamswing -- <WoW/Data> <internal\path.m2>`
+//! Where a welded billboard bone's geometry sits relative to its pivot: how far, and along which
+//! local axis. Distance decides the seam, since linear-blend skinning drags a partly weighted
+//! vertex toward the pivot. Direction decides whether the geometry moves at all: a spherical
+//! billboard (`0x71547c`) maps local axes onto fixed camera axes, so an offset along one axis only
+//! loses its roll and foreshortening, while one spread across the axes sweeps.
+//! `cargo run -p benilla-formats --example seamswing -- <WoW/Data> <internal\path.m2>`
 
 use benilla_formats::open_chain;
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    // An explicit dir still wins; with none, ask the one resolver.
     let data = args
         .next()
         .map(std::path::PathBuf::from)
@@ -37,8 +25,7 @@ fn main() -> anyhow::Result<()> {
     for &b in &denied {
         let bone = &model.bones[b as usize];
         let piv = [bone.pivot.x, bone.pivot.y, bone.pivot.z];
-        // Every vertex with any weight on this bone: its weight, and its distance from the pivot —
-        // which is the radius the re-orientation sweeps it around.
+        // Every vertex weighted to this bone, with its weight and its distance from the pivot.
         let (mut pure, mut seam) = (Vec::new(), Vec::new());
         for v in &model.vertices {
             for i in 0..4 {
@@ -83,12 +70,7 @@ fn main() -> anyhow::Result<()> {
         if let Some(&(w, _)) = seam.first() {
             println!("  seam weight on this bone: {w:.2}");
         }
-        // DIRECTION, which is what actually decides whether re-orientation moves the geometry.
-        // A spherical billboard maps the bone's local axes to fixed camera axes, so an offset that
-        // lies along ONE local axis lands on that camera axis from every angle: it does not sweep,
-        // it only loses its roll and its foreshortening. An offset spread across the axes does
-        // sweep. Magnitude alone cannot tell these apart — decision 0847 read a 0.29 yd radius as a
-        // 0.29 yd arc and withdrew a correct change on the strength of it.
+        // Direction: the local axis the offsets run along, and how far the worst vertex strays.
         if !pure.is_empty() {
             let mut lo = [f32::MAX; 3];
             let mut hi = [f32::MIN; 3];
@@ -98,10 +80,8 @@ fn main() -> anyhow::Result<()> {
                     hi[k] = hi[k].max(o[k]);
                 }
             }
-            // The DIRECTION axis is the one the offsets are largest along — NOT the one they are
-            // most spread across. Those differ here and confusing them inverts the reading: this
-            // spike runs along z (|z| ≈ 0.29) but is widest across y (spread 0.105, its cross
-            // section). Report both, named, so neither can be mistaken for the other.
+            // The axis the offsets are largest along is not the one they spread widest across (a
+            // spike's cross section); both print, named.
             let mean_abs =
                 |k: usize| pure.iter().map(|&(_, o)| o[k].abs()).sum::<f32>() / pure.len() as f32;
             let along = (0..3)
@@ -110,8 +90,6 @@ fn main() -> anyhow::Result<()> {
             let widest = (0..3)
                 .max_by(|&a, &c| (hi[a] - lo[a]).total_cmp(&(hi[c] - lo[c])))
                 .unwrap();
-            // How far the WORST vertex strays from that one axis — the number that decides whether
-            // "runs along a single axis" is a fair description of the whole batch or only its mean.
             let worst_deg = pure
                 .iter()
                 .filter(|&&(d, _)| d > 1e-6)

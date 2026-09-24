@@ -1,50 +1,36 @@
-//! Per-sequence **particle emission timing** — the key-window bake (`0x713d50`) of the emitter's
-//! per-frame-sampled M2Tracks: spawn rate `+0xdc` + enabled gate `+0x1dc` ([`EmitTiming`]) and the
-//! other nine emission parameters ([`EmitParams`]), one loop per FILE sequence slot. Split from
-//! [`crate::particles`] (the raw record parse) because it is the *runtime sampling* face:
-//! decision 0641's material-alpha structure, one channel over.
+//! Particle emitter tracks sampled per sequence: the spawn rate (`+0xdc`) and enabled gate
+//! (`+0x1dc`) in [`EmitTiming`], the other nine parameters in [`EmitParams`], each baked one loop
+//! per file sequence slot by the reference's key-window kernel (`0x713d50`).
 
 use benilla_m2::M2ScalarTrack;
 
 use crate::models::{bake_track, ScalarAnim, SeqSlot};
 
-/// Per-sequence **emission timing**: the emitter's two per-frame-sampled M2Tracks — spawn rate
-/// (`+0xdc`) and the enabled gate (`+0x1dc`) — baked one loop per FILE sequence slot through the
-/// key-window kernel `0x713d50` ([`crate::models::bake_track`]), exactly the material-alpha
-/// structure of decision 0641 one channel over. The emitter phase of the reference's animate
-/// kernel `0x714260` samples both through the **playing** sequence's key window every frame and
-/// forces the spawn rate to 0 while the gate is off (`0x717d90`/`0x718f32`).
-///
-/// The clock law rides the **baked loop** ([`crate::models::KeyAnim::wrap`]), decided from the
-/// slot at bake time: a **looping** sequence wraps its band (`t mod period` — a windowed gate
-/// re-fires every pass), a **clamped** one parks at the band end and holds the tail value (never
-/// aliasing back to the band start), and a gseq-tagged track always wraps on its own free clock
-/// whatever the playing sequence does. Consumers resolve `seq` from whatever clock they run: a
-/// placed doodad passes `None` (slot 0 — its one-time arm), an effect its armed slot, a
-/// unit/GameObject its live playing sequence.
+/// The spawn rate and enabled gate per file sequence slot. The reference's animate kernel
+/// (`0x714260`) samples both through the playing sequence's key window every frame, and the rate
+/// is 0 while the gate is off (`0x717d90`, `0x718f32`). A looping slot wraps its band, a clamped
+/// one holds its tail, a gseq-tagged track runs on its own clock; `None` or an unknown `seq` is
+/// slot 0.
 #[derive(Debug, Clone, Default)]
 pub struct EmitTiming {
-    /// Baked rate loop per file slot; `None` = the track keys nothing there (spawn rate 0).
+    /// Per file slot; `None` where the track keys nothing (rate 0).
     rate: Vec<Option<ScalarAnim>>,
-    /// Baked gate per file slot (step, 0/1); `None` = no gate authored — the loader default is
-    /// ON (`0x710092`: `block+0x14c = 1` for every emitter).
+    /// Per file slot, stepped 0 or 1; `None` is on, the loader default (`0x710092` sets
+    /// `block+0x14c = 1`).
     enabled: Vec<Option<ScalarAnim>>,
-    /// Per file slot: sequence flags bit 0 CLEAR = the band loops. Carried for [`Self::idx`]'s
-    /// slot count and the dump instruments' view — the *sampling* clock is the baked loop's own.
+    /// Per file slot: the band loops when sequence flags bit 0 is clear.
     looping: Vec<bool>,
 }
 
 impl EmitTiming {
-    /// Bake both tracks against every file sequence slot; `gseq` is the global-sequence duration
-    /// table. Each slot carries its own loop flag, which becomes the baked loop's clock.
+    /// Bake both tracks per file sequence slot; `gseq` is the global-sequence duration table.
     pub(crate) fn bake(
         rate: &M2ScalarTrack,
         enabled: &M2ScalarTrack,
         slots: &[SeqSlot],
         gseq: &[u32],
     ) -> Self {
-        // Keep every baked shape, constants included — this channel has no static fallback path,
-        // so a held value must survive the bake (`|_| false` on both predicates).
+        // Keep every shape, constants included (`|_| false` twice): there is no static fallback.
         let per_slot = |t: &M2ScalarTrack| -> Vec<Option<ScalarAnim>> {
             slots
                 .iter()
@@ -58,8 +44,6 @@ impl EmitTiming {
         }
     }
 
-    /// Resolve a consumer's sequence to a file slot: out-of-range / unknown degrades to slot 0
-    /// (the doodad lane's one-time arm, and the old single-band behaviour).
     fn idx(&self, seq: Option<usize>) -> usize {
         match seq {
             Some(i) if i < self.looping.len() => i,
@@ -67,9 +51,8 @@ impl EmitTiming {
         }
     }
 
-    /// Is the gate ON, `elapsed` seconds into sequence slot `seq`? A slot with no baked gate is
-    /// ON (the loader default). `shared_now` is the world's shared elapsed seconds — a
-    /// gseq-tagged gate routes to it ([`crate::models::KeyAnim::clock`]).
+    /// Whether the gate is on `elapsed` seconds into slot `seq`; `shared_now`, the world clock in
+    /// seconds, drives a gseq-tagged gate.
     pub fn emitting(&self, seq: Option<usize>, elapsed: f32, shared_now: f64) -> bool {
         self.enabled
             .get(self.idx(seq))
@@ -77,9 +60,8 @@ impl EmitTiming {
             .is_none_or(|a| a.sample_or(a.clock(elapsed, shared_now), 1.0) > 0.5)
     }
 
-    /// The spawn rate (particles/sec), `elapsed` seconds into sequence slot `seq`. A slot with no
-    /// baked rate spawns nothing. Floored at 0 (a track tail may legitimately go negative).
-    /// `shared_now` routes a gseq-tagged rate loop to the shared world clock.
+    /// Particles per second `elapsed` seconds into slot `seq`, floored at 0 as a track tail can go
+    /// negative; `shared_now` drives a gseq-tagged rate.
     pub fn rate(&self, seq: Option<usize>, elapsed: f32, shared_now: f64) -> f32 {
         self.rate
             .get(self.idx(seq))
@@ -88,8 +70,7 @@ impl EmitTiming {
             .max(0.0)
     }
 
-    /// The rate track's peak over every slot — the "can this emitter ever contribute" spawn gate
-    /// (a burst emitter keys `0 → peak → 0`, so its first key is 0 but it absolutely emits).
+    /// The rate's peak over every slot, for the spawn cull: a burst emitter's first key is 0.
     pub fn peak_rate(&self) -> f32 {
         self.rate
             .iter()
@@ -98,24 +79,10 @@ impl EmitTiming {
             .fold(0.0, f32::max)
     }
 
-    /// The **burst this emitter actually fires** on sequence slot `seq`, as
-    /// `(seconds into the slot, particle count)` — or `None` when it never fires one.
-    ///
-    /// The reference's burst gate is `enabled != 0 && sampledRate > 0`, both sampled from the
-    /// same clock in the same frame, and it triggers on that predicate's **rising edge**, emitting
-    /// `ftol(rate)` particles (`0x718ed2`–`0x718ef6`;
-    /// benilla's `particles::accumulate_emission` runs the same rule). Both tracks are STEP, so
-    /// this walks a 60 Hz grid over the slot's keyed span — the same resolution a running frame
-    /// gives it — and reports the first instant the predicate holds.
-    ///
-    /// **`None` is a real shipped shape, not a parse failure.** An emitter whose enabled track
-    /// falls to 0 on the very keyframe its rate track rises off 0 never emits anything: the two
-    /// conditions are never true together. `Spells\\Strike_Impact_Chest.m2`'s gold flare emitter
-    /// is exactly that, and reading its [`Self::peak_rate`] as a particle count overstates the
-    /// effect by 50 particles that neither client draws.
-    ///
-    /// A gseq-tagged track is sampled against `shared_now = 0` — this is a static dump/inspection
-    /// face, not a running clock.
+    /// The first burst on slot `seq` as `(seconds in, particle count)`, on a 60 Hz grid: the
+    /// reference fires `ftol(rate)` particles on the rising edge of `enabled != 0 && rate > 0`
+    /// (`0x718ed2`-`0x718ef6`). `None` is a shipped shape: `Spells\\Strike_Impact_Chest.m2`'s gold
+    /// flare turns its gate off on the key its rate rises.
     pub fn first_burst(&self, seq: Option<usize>) -> Option<(f32, f32)> {
         let i = self.idx(seq);
         let span = |o: &Option<ScalarAnim>| -> f32 {
@@ -139,8 +106,7 @@ impl EmitTiming {
         }
     }
 
-    /// `Some(rate)` when every slot bakes the same single-key rate — the overwhelmingly common
-    /// shape, and the dump instruments' quiet case.
+    /// `Some(rate)` when every slot bakes the same single-key rate, the common shape.
     pub fn constant_rate(&self) -> Option<f32> {
         let mut it = self.rate.iter();
         let first = it.next()?.as_ref()?;
@@ -149,9 +115,7 @@ impl EmitTiming {
             .then_some(v)
     }
 
-    /// Per-slot read view for the dump instruments: `(looping, rate keys, enabled keys)`, one per
-    /// file sequence slot (`None` = the track keys nothing in that slot). Times are seconds from
-    /// the slot's band start — the values the runtime actually samples, not the raw file keys.
+    /// `(looping, rate keys, enabled keys)` per file slot, in seconds from the band start.
     #[allow(clippy::type_complexity)] // a read-only tuple view for the dumps
     pub fn slot_views(&self) -> Vec<(bool, Option<&[(f32, f32)]>, Option<&[(f32, f32)]>)> {
         fn keys(list: &[Option<ScalarAnim>], i: usize) -> Option<&[(f32, f32)]> {
@@ -180,15 +144,10 @@ impl EmitTiming {
     }
 }
 
-/// One frame's sampled emitter **parameters** — the nine per-frame-sampled scalar M2Tracks of the
-/// emitter record (bases `+0x34..+0x130`, every one except the rate/enabled pair). The reference's
-/// animate kernel `0x714260` samples ALL ten scalar tracks into the per-emitter animation block
-/// (`[model+0x3d0]`, stride 0x16c — the rate channel, sampled at `0x71850d`, is the template) and
-/// pushes them onto the live emitter through its setters each frame. **These are NOT constants**:
-/// `Frost_Nova_area` ramps its emission-sphere radius
-/// 0.19 → 13.2 yd with the expanding ring, `ArcaneExplosion_Base` 0 → 7.2 yd with the growing
-/// dome — flatten either to `value[0]` and every birth lands at the centre (the "born way too
-/// close" bug this type exists to fix).
+/// One frame's sample of the emitter's nine parameter tracks (`+0x34..+0x130`, all but rate and
+/// gate). The reference samples them every frame into the emitter's animation block
+/// (`[model+0x3d0]`, stride 0x16c) as it does the rate (`0x71850d`), and they animate:
+/// `Frost_Nova_area`'s emission sphere grows from 0.19 to 13.2 yd.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParamsNow {
     /// Initial particle speed (yards/sec).
@@ -199,17 +158,16 @@ pub struct ParamsNow {
     pub vertical_range: f32,
     /// Azimuthal spread, radians (sphere: longitude range; spline: scatter jitter).
     pub horizontal_range: f32,
-    /// Downward acceleration (yards/sec²) — a live per-frame emitter field (the integrator reads
-    /// it every frame, `0x7b2680`), so it samples here rather than baking per particle.
+    /// Downward acceleration (yards/sec²), read live every frame by the integrator (`0x7b2680`).
     pub gravity: f32,
-    /// Particle lifetime (seconds). The reference passes the CURRENT value into each spawn
-    /// (`life_param`, the kernels' `ebp+0xc`), so a birth captures it for life.
+    /// Particle lifetime (seconds); a birth keeps the value current at its spawn (the spawn
+    /// kernels' `ebp+0xc`).
     pub lifespan: f32,
-    /// Plane: full x-extent (±½ rect); sphere: MIN radius; spline: tMin.
+    /// Plane: full x-extent (±½ rect); sphere: minimum radius; spline: tMin.
     pub area_length: f32,
-    /// Plane: full y-extent; sphere: MAX radius; spline: tMax.
+    /// Plane: full y-extent; sphere: maximum radius; spline: tMax.
     pub area_width: f32,
-    /// zSource — velocity pivot at `(0, 0, z)` (0 = unused).
+    /// zSource: velocity pivot at `(0, 0, z)`, 0 for none.
     pub z_source: f32,
 }
 
@@ -230,14 +188,11 @@ impl Default for ParamsNow {
     }
 }
 
-/// The nine emitter parameter tracks, baked one loop per FILE sequence slot — the exact
-/// bake/clock/sampling law of [`EmitTiming`]'s rate channel (byte-verified there), applied to its
-/// nine sibling tracks. Sample once per sim frame on the emitter's clock and feed births/kill/
-/// integration the result ([`ParamsNow`]).
+/// The nine parameter tracks, baked per file sequence slot under [`EmitTiming`]'s law; sampled
+/// once per frame on the emitter's clock.
 #[derive(Debug, Clone, Default)]
 pub struct EmitParams {
-    /// Per-channel, per-slot baked loops, in [`ParamsNow`] field order; `None` = keyless there
-    /// (the channel default stands).
+    /// Per channel in [`ParamsNow`] field order, per slot; `None` holds the channel default.
     channels: [Vec<Option<ScalarAnim>>; 9],
 }
 
@@ -254,9 +209,7 @@ impl EmitParams {
         }
     }
 
-    /// Sample every channel `elapsed` seconds into sequence slot `seq` (same slot resolution as
-    /// [`EmitTiming`]: out-of-range degrades to slot 0). `shared_now` routes gseq-tagged
-    /// channels to the shared world clock.
+    /// Every channel `elapsed` seconds into slot `seq`, resolved as [`EmitTiming`] resolves it.
     pub fn sample(&self, seq: Option<usize>, elapsed: f32, shared_now: f64) -> ParamsNow {
         let d = ParamsNow::default();
         let at = |i: usize, default: f32| -> f32 {
@@ -282,10 +235,8 @@ impl EmitParams {
         }
     }
 
-    /// The lifespan channel's peak over every slot — the spawn-cull gate (an animated lifespan
-    /// may open at 0; an emitter is dead only if it NEVER exceeds 0). A keyless channel reads
-    /// the loader default; a keyed one folds its own keys ONLY (folding from the default would
-    /// mask an authored sub-1.0 peak).
+    /// The lifespan's peak over every slot, for the spawn cull. A keyless channel is the loader
+    /// default; a keyed one folds only its keys, so an authored peak under 1.0 is not masked.
     pub fn peak_lifespan(&self) -> f32 {
         let mut keys = self.channels[5]
             .iter()
@@ -298,8 +249,7 @@ impl EmitParams {
         keys.fold(0.0, f32::max)
     }
 
-    /// Constant channels from one [`ParamsNow`] — the test/tool constructor, and the shape every
-    /// pre-track consumer had.
+    /// Constant channels from one [`ParamsNow`], for tests and tools.
     pub fn constant(now: ParamsNow) -> Self {
         let ch = |v: f32| {
             vec![Some(ScalarAnim {
@@ -325,9 +275,7 @@ impl EmitParams {
         }
     }
 
-    /// Per-channel dump view: `(name, per-slot keys)` — `None` = keyless in that slot. The dump
-    /// instruments print any channel whose keys actually move (the view that would have shown
-    /// Frost Nova's 0.19 → 13.2 yd radius ramp instead of hiding it behind `value[0]`).
+    /// `(name, per-slot keys)` per channel.
     #[allow(clippy::type_complexity)] // a read-only tuple view for the dumps, like `slot_views`
     pub fn channel_views(&self) -> [(&'static str, Vec<Option<&[(f32, f32)]>>); 9] {
         const NAMES: [&str; 9] = [
@@ -366,8 +314,6 @@ mod tests {
         }
     }
 
-    /// File sequence slots as `(band, loops)` — the loop flag is the slot's CLOCK, so these tests
-    /// spell it per slot rather than carry a parallel array beside the bands.
     fn slots(spec: &[((u32, u32), bool)]) -> Vec<SeqSlot> {
         spec.iter()
             .enumerate()
@@ -379,9 +325,6 @@ mod tests {
             .collect()
     }
 
-    /// The STEP rate law: a `{0:0, 67:30}` track is silent before its 67 ms key — the burst
-    /// fires AT the key, full-count — and holds 30 after (moved here from the runtime's
-    /// `accumulate_emission` tests when the sampling moved into the bake).
     #[test]
     fn step_rate_is_silent_before_its_key_and_holds_after() {
         let t = EmitTiming::bake(
@@ -400,8 +343,7 @@ mod tests {
         assert!(t.emitting(None, 0.5, 0.0), "no gate track = always on");
     }
 
-    /// The LINEAR ramp law (the BloodSpurt shape `0 → 100 → 0`, interp 1): mid-ramp pours the
-    /// interpolated rate, and the self-closing tail really falls back to 0.
+    /// BloodSpurt's linear `0, 100, 0` rate (interp 1).
     #[test]
     fn lerp_ramp_interpolates_and_self_closes() {
         let t = EmitTiming::bake(
@@ -421,10 +363,6 @@ mod tests {
         assert_eq!(t.rate(None, 0.500, 0.0), 0.0, "the ramp self-closes");
     }
 
-    /// The per-sequence window law — the B27 shape, synthesized: an enabled gate authored ON
-    /// inside a clamped one-shot clip (slot 0) whose window in the idle loop (slot 1) resolves
-    /// to OFF. The old seq-0-only rebase parked the clamped clock at its end value; the bake
-    /// must read OFF at idle, run slot 0's window, and HOLD (not wrap) slot 0's tail.
     #[test]
     fn idle_window_is_off_and_a_clamped_clip_holds_its_tail() {
         // Absolute timeline: clip A (one-shot) band 1000..2000, idle band 2333..2667.
@@ -444,13 +382,11 @@ mod tests {
             ]),
             &[],
         );
-        // Idle (slot 1): the collapsed window (1,1) resolves to keys[1] = OFF — at every time,
-        // wrap included.
+        // Idle (slot 1): the collapsed window (1,1) is keys[1], off at every time.
         assert!(!t.emitting(Some(1), 0.0, 0.0));
         assert!(!t.emitting(Some(1), 0.25, 0.0));
         assert!(!t.emitting(Some(1), 400.0, 0.0));
-        // The one-shot clip (slot 0): ON at its start, OFF from 333 ms — and the clamped clock
-        // HOLDS that tail at/after the band end instead of aliasing back to the ON start.
+        // The clip (slot 0): on, off from 333 ms, and held off past the band end.
         assert!(t.emitting(Some(0), 0.1, 0.0));
         assert!(!t.emitting(Some(0), 0.5, 0.0));
         assert!(
@@ -461,9 +397,8 @@ mod tests {
             !t.emitting(Some(0), 5.0, 0.0),
             "parked long past the end: still off"
         );
-        // The later clip (slot 2): its degenerate window is the ON key.
+        // The later clip (slot 2): its degenerate window is the on key.
         assert!(t.emitting(Some(2), 0.05, 0.0));
-        // Unknown/out-of-range degrades to slot 0 (the doodad law).
         assert!(t.emitting(None, 0.1, 0.0));
         assert!(!t.emitting(Some(9), 0.5, 0.0));
         // The rate is a whole-track constant: same in every slot.
@@ -471,10 +406,7 @@ mod tests {
         assert_eq!(t.peak_rate(), 20.0);
     }
 
-    /// The ANIMATED-parameter law — Frost Nova's authored shape: the emission-sphere radius
-    /// (areaLength = areaWidth) lerps 0.19 → 13.2 yd over 667 ms and holds, riding the ring
-    /// outward; lifespan ramps beside it. `value[0]` flattening (the bug this bakes away) reads
-    /// 0.19 for ever and births the whole mist at the caster's feet.
+    /// Frost Nova's authored shape: the sphere radius lerps 0.19 to 13.2 yd over 667 ms and holds.
     #[test]
     fn animated_area_ramp_samples_mid_flight() {
         let area = track(1, &[(0, 0.1944), (667, 13.1967), (867, 13.1967)], &[]);
@@ -498,12 +430,11 @@ mod tests {
         assert!((at(0.2).lifespan - 0.6127).abs() < 5e-3, "lifespan rides");
         assert_eq!(at(0.5).emission_speed, 0.0, "keyless channel: default");
         assert!((p.peak_lifespan() - 0.8008).abs() < 1e-4);
-        // The clamped one-shot parks at its tail, never aliasing back to the tight opening.
+        // The clamped clip holds its tail.
         assert!((at(5.0).area_length - 13.1967).abs() < 1e-3);
     }
 
-    /// A LOOPING slot wraps its band — a windowed gate re-fires every pass (the precast hold's
-    /// pulsing hand flash), where a clamped slot would have parked.
+    /// A windowed gate re-fires every pass, as the precast hold's pulsing hand flash does.
     #[test]
     fn a_looping_band_wraps_its_gate_window() {
         let gate = track(0, &[(0, 1.0), (200, 0.0)], &[]);
@@ -521,16 +452,9 @@ mod tests {
         );
     }
 
-    /// **The dead-slot-0 shape** — `BlastedLandsLightningbolt01.m2`'s emitter 2, synthesized
-    /// (bug B63). Two sequences, both anim id 0: a variation chain. Slot 0 keys a
-    /// single 0 — a flat silence for its whole band — while the strike itself, `0 → 30 → 0`, is
-    /// keyed only in slot 1, which the arm's frequency-weighted roll reaches ~5 % of the time.
-    ///
-    /// A consumer that PINS slot 0 therefore emits **nothing at all, for ever**, on every
-    /// placement: the emitter builds, pools and ticks, and never births a particle. That is what
-    /// the placed-doodad lane did until it started passing the slot its own arm actually rolled.
-    /// `peak_rate()` folding across all slots is why such an emitter survives the spawn cull — it
-    /// looks alive to the build and is dead to the clock. `partslotscan` counts 947 of these.
+    /// `BlastedLandsLightningbolt01.m2`'s emitter 2: two variations of anim 0, the strike keyed
+    /// only in slot 1, which the arm's weighted roll picks about 5% of the time. A consumer pinned
+    /// to slot 0 never emits, yet `peak_rate` keeps the emitter past the spawn cull.
     #[test]
     fn a_burst_keyed_only_in_a_later_variation_is_silent_in_slot_0() {
         // Absolute timeline: slot 0's band 0..1333, slot 1's band 1367..2667 (the real model's).
@@ -551,7 +475,7 @@ mod tests {
             &slots(&[((0, 1333), true), ((1367, 2667), true)]),
             &[],
         );
-        // Slot 0 — what the old pinned consumer sampled. Silent across its whole band.
+        // Slot 0 is silent across its whole band.
         for s in [0.0, 0.3, 0.6, 0.9, 1.2] {
             assert_eq!(
                 t.rate(Some(0), s, 0.0),
@@ -564,7 +488,7 @@ mod tests {
             0.0,
             "`None` degrades to slot 0 — also silent"
         );
-        // Slot 1 — what the arm actually rolled. The strike is here, and only here.
+        // Slot 1 carries the strike.
         assert_eq!(t.rate(Some(1), 0.0, 0.0), 0.0, "slot 1 opens closed");
         assert_eq!(
             t.rate(Some(1), 0.316, 0.0),
@@ -572,7 +496,7 @@ mod tests {
             "the burst fires mid-band"
         );
         assert_eq!(t.rate(Some(1), 0.5, 0.0), 0.0, "and self-closes");
-        // The trap that hid it: the build-time cull sees a live emitter either way.
+        // The build-time cull still sees a live emitter.
         assert_eq!(
             t.peak_rate(),
             30.0,

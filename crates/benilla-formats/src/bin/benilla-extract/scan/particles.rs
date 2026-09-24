@@ -1,9 +1,5 @@
-//! Corpus scans over **particle and ribbon emitters** — which of the emitter system's features
-//! the shipped data actually authors, and which shapes a consumer can get wrong.
-//!
-//! The feature census (`partcensus`), the flipbook ramps (`cellscan`), the per-slot emission
-//! windows (`partslotscan`), the 3-D geometry-model shards (`shardcensus`), and the draw-order
-//! population effects share with their owner's own transparent batches (`fxordercensus`).
+//! Corpus scans over particle and ribbon emitters: the features the data authors, and the shapes
+//! a consumer can get wrong.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -12,14 +8,9 @@ use benilla_formats::Chain;
 
 use crate::model_key;
 
-/// Sweep every `.m2` in the chain and list the models carrying RIBBON emitters, with each
-/// model's `+0xc0` **enable-gate** census beside the count — the population instrument for
-/// "which trails are state-dependent, and where does the gate actually key".
-///
-/// A `GATED` line names the sequences a trail is dark in; `MID-SEQ` marks the models whose gate
-/// flips *inside* a band rather than only at its start, which a band-start-only reader cannot
-/// express (`G_FrostTrap`'s streamers light 200 ms into the trigger and nowhere
-/// else, so a band-start read says "never" and an ungated consumer says "always").
+/// List the models with ribbon emitters and each ribbon's `+0xc0` enable gate per sequence;
+/// `MID-SEQ` marks a gate that flips inside a band, not only at its start (`G_FrostTrap`'s
+/// streamers light 200 ms into the trigger and nowhere else).
 pub fn ribbonscan(chain: &mut Chain) -> Result<()> {
     let names = super::m2_names(chain, None)?;
     let (mut scanned, mut hits, mut gated, mut mid_seq) = (0u32, 0u32, 0u32, 0u32);
@@ -35,7 +26,6 @@ pub fn ribbonscan(chain: &mut Chain) -> Result<()> {
         }
         hits += 1;
         let defs = benilla_formats::parse_m2_ribbon_emitters(&bytes).unwrap_or_default();
-        // Per ribbon: the sequences it can be dark in, and whether the gate keys mid-band.
         let mut notes: Vec<String> = Vec::new();
         let (mut any_gate, mut any_mid) = (false, false);
         for (i, d) in defs.iter().enumerate() {
@@ -55,12 +45,8 @@ pub fn ribbonscan(chain: &mut Chain) -> Result<()> {
             per.sort();
             notes.push(format!("    r{i}  {}", per.join("  ")));
         }
-        // The BLEND census beside the gate one. A ribbon takes its blend from a real M2 material
-        // (`materialIndices[0]` → render-flags `blend`), so unlike a particle emitter it can in
-        // principle author any mode — and the two the parse folds (`Opaque`, covering file modes
-        // 0/1/5/6) render with no alpha test at all, which is exactly what painted the particle
-        // side's AlphaKey debris as solid squares. Tallied here so the fold stays a MEASURED
-        // approximation instead of an assumed-empty one.
+        // A ribbon's blend is its material's (`materialIndices[0]` → render flags), so unlike a
+        // particle's it can be any mode; the tally shows what the parse folds each raw mode to.
         for d in &defs {
             let raw = d.blend_mode.map_or("?".into(), |m| m.to_string());
             *blends
@@ -89,9 +75,7 @@ pub fn ribbonscan(chain: &mut Chain) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` (under `prefix`, if given) and list the models whose particle emitters
-/// carry any bit of `mask` in their file flags — see the `Partscan` command doc. One line per
-/// matching emitter: its index, full flag word, shape/type, and the model path.
+/// List the particle emitters whose file flags carry any bit of `mask`.
 pub fn partscan(chain: &mut Chain, mask: u32, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
     let (mut scanned, mut hits, mut emitters) = (0u32, 0u32, 0u32);
@@ -130,11 +114,9 @@ pub fn partscan(chain: &mut Chain, mask: u32, prefix: Option<&str>) -> Result<()
     Ok(())
 }
 
-/// The census's raw-extras view of one on-disk emitter record: the fields the shipped
-/// [`benilla_formats::ParticleEmitterDef`] deliberately does not carry (yet). Read straight off
-/// the record bytes (stride/header per the parser's module doc): the two model-filename M2Arrays
-/// at `+0x18` (geometry model — 3-D "model particles") and `+0x20` (recursion model — per-particle
-/// child emitters), and the emission-rate track's interpolation word (`+0xdc`, 0 = step).
+/// Raw fields of one emitter record (stride `0x1f8`): the geometry-model (`+0x18`) and
+/// recursion-model (`+0x20`) path `M2Array`s, and the emission-rate track's interpolation word
+/// (`+0xdc`, 0 = step) and key count.
 struct RecordExtras {
     geometry_model: Option<String>,
     recursion_model: Option<String>,
@@ -142,7 +124,6 @@ struct RecordExtras {
     rate_keys: u32,
 }
 
-/// Read the raw extras for every emitter record in an M2 (empty if not an MD20 or no emitters).
 fn record_extras(bytes: &[u8]) -> Vec<RecordExtras> {
     const STRIDE: usize = 0x1f8;
     let u16_at = |o: usize| u16::from_le_bytes([bytes[o], bytes[o + 1]]);
@@ -215,8 +196,7 @@ fn spell_attribution(chain: &mut Chain) -> HashMap<String, Vec<(u32, String)>> {
     map
 }
 
-/// One census dimension's tally. `model_count` counts every distinct model exactly;
-/// `models` keeps the first 64 (sorted) for the example listings.
+/// One census dimension: `model_count` counts every model, `models` keeps the first 64, sorted.
 #[derive(Default)]
 struct Tally {
     emitters: u32,
@@ -239,8 +219,7 @@ impl Tally {
     }
 }
 
-/// Sweep every `.m2` (under `prefix`, if given) and census which particle-emitter FEATURES the
-/// corpus actually authors — see the `Partcensus` command doc.
+/// Census which particle-emitter features the corpus authors, with the spells behind rare ones.
 pub fn partcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let attribution = spell_attribution(chain);
     let names = super::m2_names(chain, prefix)?;
@@ -270,12 +249,8 @@ pub fn partcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 benilla_formats::ParticleShape::Sphere => hit("shape:sphere"),
                 benilla_formats::ParticleShape::Spline => hit("shape:SPLINE"),
             }
-            // ANISOTROPIC plane rectangles — the population on which the areaLength↔areaWidth axis
-            // pairing is observable at all (a SQUARE area renders identically either way). 0563 and
-            // 0566 both pre-named "a 90°-wrong ANISOTROPIC effect" as this lane's suspect, but no
-            // instrument could LIST that population, so the swapped pairing outlived both audits
-            // until Gressil's 0.1 × 1.1 blade smoke drew its curtain across the blade. Bucketed by
-            // aspect so a thin curtain (load-bearing) separates from a near-square (invisible).
+            // Anisotropic plane areas, the only ones where the areaLength/areaWidth axis pairing
+            // shows (a square renders the same either way), bucketed by aspect.
             let now = d.params.sample(None, 0.0, 0.0);
             if d.shape == benilla_formats::ParticleShape::Plane {
                 let lo = now.area_length.abs().min(now.area_width.abs());
@@ -289,10 +264,8 @@ pub fn partcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                     }
                 }
             }
-            // ANIMATED parameter channels: the population the value[0] flatten
-            // silently mis-rendered — Frost Nova's emission radius riding its ring out, Arcane
-            // Explosion's riding its dome. Tallied per channel so the census names WHICH knob
-            // actually moves in the corpus.
+            // Parameter channels that animate, per channel (Frost Nova's emission radius rides
+            // its ring out).
             const PARAM_KEYS: [&str; 9] = [
                 "param-anim:speed",
                 "param-anim:speedVar",
@@ -394,8 +367,8 @@ pub fn partcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 }
                 if x.rate_keys > 1 && x.rate_interp != 0 {
                     hit("rate:LERP-RAMP(interp!=0)");
-                    // A BURST emitter with a lerp rate track would arm a near-zero count at its
-                    // rising edge — if the corpus authored one, the burst edge law needs a re-look.
+                    // A burst emitter with a lerped rate would arm a near-zero count at its
+                    // rising edge.
                     if d.burst() {
                         hit("rate:BURST+LERP(suspect)");
                     }
@@ -418,8 +391,6 @@ pub fn partcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         );
     }
 
-    // The full model list — with spell attribution — for the dimensions that decide mechanism
-    // scope (the UPPERCASE keys: unimplemented or folded legs, plus the odd corners).
     let detail: &[&str] = &[
         "MODEL-PARTICLES(geometry)",
         "CHILD-EMITTERS(recursion)",
@@ -471,23 +442,11 @@ pub fn partcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` and census its particle emitters' over-life **flipbook** fields — the
-/// population instrument behind decision 0685 (the reverse-playing cell ramp).
-///
-/// One line per emitter that is interesting on any axis, then the totals. The axes are exactly the
-/// ways a flipbook reader can be wrong, each of which shipped data does exercise:
-///
-/// - `INVERTED` — a `begin > end` pair. Legal, and it means *play the sheet backwards*; a reader
-///   that clamps into `[begin, end]` mangles it (and in Rust panics outright).
-/// - `TAIL-RAMP` — the tail streak's own ramp differs from the head's, on an emitter that draws a
-///   tail. The two are independently authored (file +0x168.. vs +0x174..); handing the head's cell
-///   to the streak animates it through a sheet the author pinned to one cell.
-/// - `PAST-ATLAS` — a cell index beyond `rows·cols`. The reference masks the COLUMN and leaves the
-///   ROW unbounded, so the index wraps to row 0 rather than holding the last cell.
-/// - `REPEAT` — a per-segment repeat count ≠ 1, i.e. the sheet cycles more than once per segment.
-/// - `NON-POW2` / `MID` — the two shapes the reference itself degrades on (a 1×1 fallback, and a
-///   `mid` of 0/1 that walks its own sampler into a NaN). Both are empty in 1.12.1 and are here so
-///   that stays checkable.
+/// Census the emitters' over-life flipbook fields: `INVERTED` (`begin > end`) plays the sheet
+/// backwards, which a `clamp` into it panics on; `TAIL-RAMP`, a tail ramp (`+0x174`) unlike the
+/// head's (`+0x168`); `PAST-ATLAS`, a cell past `rows·cols`, which the reference wraps to row 0
+/// (it masks the column only); `REPEAT`, a segment repeat other than 1; `NON-POW2` and `MID`,
+/// shapes the reference degrades on (a 1×1 fallback, a NaN sampler), none in 1.12.1.
 pub fn cellscan(chain: &mut Chain) -> Result<()> {
     let names = super::m2_names(chain, None)?;
 
@@ -524,7 +483,7 @@ pub fn cellscan(chain: &mut Chain) -> Result<()> {
                     pair(&ol.head_cells[1])
                 );
             }
-            // Only a tail-drawing emitter (particleType 1/2) can show a tail-ramp difference.
+            // Only a tail-drawing emitter (particleType 1 or 2) shows a tail ramp.
             if e.head_tail >= 1 && ol.tail_cells != ol.head_cells {
                 tail_ramp += 1;
                 println!(
@@ -542,8 +501,7 @@ pub fn cellscan(chain: &mut Chain) -> Result<()> {
             let atlas = e.tile_rows * e.tile_cols;
             if ramps.iter().any(|r| r.begin >= atlas || r.end >= atlas) {
                 past_atlas += 1;
-                // On a 1×1 sheet every index resolves to the same texture, so only a real atlas
-                // can show the wrap.
+                // On a 1×1 sheet every index is the same texture: only a real atlas shows the wrap.
                 if atlas > 1 {
                     past_atlas_real += 1;
                     println!(
@@ -576,19 +534,10 @@ pub fn cellscan(chain: &mut Chain) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` (optionally under a path prefix) and list the emitters whose **file slot 0 is
-/// dead while another slot is alive** — the shape that makes a pinned-slot-0 consumer silently
-/// render nothing (found on `BlastedLandsLightningbolt01.m2`).
-///
-/// The reference samples the **playing** sequence's rate window every frame (`0x71850d`); a
-/// consumer that pins slot 0 instead is only correct while
-/// slot 0 carries the emitter's whole story. When an author keys the burst in a *later* variation —
-/// a lightning strike that fires on 5 % of arms, an ambient prop with a rare flourish — slot 0 is a
-/// flat zero and the pinned consumer emits nothing, for ever, on every placement. That is invisible
-/// from the outside: the emitter is built, pooled, and ticking; it just never births a particle.
-///
-/// `peak0` is slot 0's own peak rate, `peakN` the best any other slot reaches. A listed emitter has
-/// `peak0 <= 0 < peakN`. `slots` counts FILE sequence slots (the axis `EmitTiming` bakes on).
+/// List the emitters whose file slot 0 never emits while another slot does (`peak0 <= 0 <
+/// peakN`, the peak rates). The reference samples the playing sequence's rate window every frame
+/// (`0x71850d`), so a consumer pinned to slot 0 never births a particle from them. `slots` counts
+/// file sequence slots, the axis `EmitTiming` bakes on.
 pub fn partslotscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
     let (mut scanned, mut with_emitters, mut emitters, mut dead0) = (0u32, 0u32, 0u32, 0u32);
@@ -654,25 +603,15 @@ pub fn partslotscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` (optionally under a path prefix) and census the corpus's **3-D model
-/// particles**: the emitters whose record carries a geometry-model reference (`+0x18` — a shard
-/// instance renders that GEOMETRY model's own submeshes, not a billboard quad). Per OWNER model:
-/// the owner-last draw-order rung its shards are stamped with at runtime
-/// (`owner_last_rung(m2_owner_reach(owner submeshes))`); per referenced GEOMETRY model: the
-/// material family tuples its render submeshes author — (blend, two_sided, additive,
-/// no_depth_write, no_depth_test), the exact key the shard's material is built from.
-///
-/// This is the **ground truth for the pipeline-warm menagerie's shard rows**: warming a pipeline
-/// per (rung × family) cell is only worth its table if the corpus's cells are enumerable, and this
-/// census is what enumerates them — the rung histogram sizes the rung axis, the family-tuple set
-/// (split by transparent-pass membership, the renderer's own test) sizes the material axis, and
-/// the unresolved-path count bounds what the table can never cover.
+/// Census the 3-D model particles, emitters with a geometry model (`+0x18`) whose shards draw that
+/// model's submeshes: per owner the draw-order rung its shards are stamped with
+/// (`owner_last_rung(m2_owner_reach(..))`), per geometry model the material families its shards
+/// are built from. The rung and family sets size the pipeline-warm table's shard rows.
 pub fn shardcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
 
-    // A submesh's material family: the tuple the shard material is keyed by, rendered compactly
-    // (`Blend+2s+add`), plus its transparent-pass membership — the renderer's own test, where
-    // `additive` forces the pass whatever the authored blend says (`model_material`).
+    // A submesh's material family label and whether it draws in the transparent pass, which
+    // `additive` forces whatever the blend (`model_material`).
     let fam = |s: &benilla_formats::RenderSubmesh| {
         let transparent = s.additive
             || matches!(
@@ -692,8 +631,7 @@ pub fn shardcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         (label, transparent)
     };
 
-    // Each distinct geometry model is read, parsed, and tallied exactly once; the cache keeps its
-    // (family, transparent) list per submesh for the per-pair lines. `None` = unresolvable.
+    // Each geometry model is read and tallied once; `None` marks an unresolvable path.
     let mut geo_cache: BTreeMap<String, Option<Vec<(String, bool)>>> = BTreeMap::new();
     let mut fam_transparent: BTreeMap<String, u32> = BTreeMap::new();
     let mut fam_opaque: BTreeMap<String, u32> = BTreeMap::new();
@@ -709,9 +647,8 @@ pub fn shardcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         if benilla_formats::parse_m2_particle_emitters(&bytes).is_err() {
             continue;
         }
-        // Distinct geometry references, normalized the way the chain resolves model paths
-        // (lowercase, `\` separators, `.mdx`/`.mdl` → `.m2` — `model_key` mirrors the crate's own
-        // `model_path`).
+        // Distinct geometry paths, normalized as the chain resolves them (`model_key` mirrors
+        // the crate's `model_path`).
         let geos: BTreeSet<String> = record_extras(&bytes)
             .iter()
             .filter_map(|e| e.geometry_model.as_deref())
@@ -721,8 +658,7 @@ pub fn shardcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             continue;
         }
         owners += 1;
-        // The rung the owner's shards are stamped with: the renderer's own bound and rung, at
-        // placement scale 1 (a scaled placement multiplies the reach).
+        // The owner's rung at placement scale 1; a scaled placement multiplies the reach.
         let dir = name.rsplit_once('\\').map_or("", |(d, _)| d);
         let owner_subs =
             benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]).unwrap_or_default();
@@ -810,19 +746,12 @@ pub fn shardcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` (optionally under a path prefix) and count, per model, the two halves of the
-/// **owner-last draw-order** law: the EFFECTS a model authors (particle emitters + ribbon trails)
-/// and the TRANSPARENT-pass batches of its own body those effects must draw after (decisions
-/// 0719/0721). A model with both is one the rung actually changes; a model with effects and no
-/// transparent batch of its own never had the defect and is listed only in the totals.
-///
-/// This is the population instrument the two decisions were argued from. "Does this fix anything
-/// besides the voidwalker's eyes?" is not a question to answer by naming plausible creatures —
-/// it is a count, and the count is what says whether the mechanism closes a class or a case.
+/// Count per model the two halves of the owner-last draw order: the effects it authors (particle
+/// emitters and ribbons) and its own transparent-pass batches they must draw after. Only a model
+/// with both is changed by the rung, and only those are listed.
 pub fn fxordercensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
-    // Per top-level content family (Creature / Item / Spells / World / …), so the totals say
-    // WHERE the class lives rather than only how big it is.
+    // Top-level directory → (models with effects, of those at risk).
     let mut family: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     let (mut scanned, mut with_fx, mut at_risk) = (0u32, 0u32, 0u32);
     let mut rungs: BTreeMap<u32, u32> = BTreeMap::new();
@@ -839,9 +768,8 @@ pub fn fxordercensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             continue;
         }
         with_fx += 1;
-        // The occluders: batches the renderer puts in the one distance-sorted transparent list.
-        // `additive` forces that pass whatever the authored blend says (`model_material`), so the
-        // test mirrors the renderer's rather than reading the blend word alone.
+        // Batches in the distance-sorted transparent pass, which `additive` forces whatever the
+        // blend (`model_material`).
         let dir = name.rsplit_once('\\').map_or("", |(d, _)| d);
         let subs = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]).unwrap_or_default();
         let occluders: Vec<&benilla_formats::RenderSubmesh> = subs
@@ -857,7 +785,6 @@ pub fn fxordercensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             })
             .collect();
         let transparent = occluders.len();
-        // The renderer's own bound and the renderer's own rung — not a re-derivation of them.
         let reach = benilla_formats::m2_owner_reach(&subs);
         let fam = name.split('\\').next().unwrap_or("?").to_string();
         family.entry(fam).or_default().0 += 1;
@@ -869,7 +796,7 @@ pub fn fxordercensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             .entry(name.split('\\').next().unwrap_or("?").to_string())
             .or_default()
             .1 += 1;
-        // At placement scale 1 — the survey number; a scaled placement multiplies the reach.
+        // At placement scale 1; a scaled placement multiplies the reach.
         let rung = benilla_formats::owner_last_rung(reach);
         *rungs.entry(rung as u32).or_default() += 1;
         println!(

@@ -1,15 +1,7 @@
-//! `StableSlotPrices.dbc` — the hunter stable's purchase-ladder price table.
-//!
-//! **2 rows × 2 `u32` columns** (`ID`, price in copper), read out of the real 5875 `dbc.MPQ` this
-//! session: row 1 = `500` (5 silver), row 2 = `50000` (5 gold). That is the whole table — there is
-//! no sentinel tail and no third row, which is the [`super::bank_bag_slot_prices`] ladder's one
-//! structural difference from this one (that table ships 12 rows of which only 6 are reachable).
-//!
-//! **Two slots is corroborated three ways**, which is why nothing here hardcodes the cap: the DBC
-//! has two rows, vmangos's `MAX_PET_STABLES` is 2 (`src/game/Objects/Pet.h:37`), and the reference
-//! UI's `NUM_PET_STABLE_SLOTS` is 2 (`PetStable.lua:1`). The client's job is only to price the
-//! *next* slot; `CMSG_BUY_STABLE_SLOT` carries no index at all — the server buys
-//! `m_stableSlots + 1` itself (`NPCHandler.cpp:704-729`) — so a row id here IS a slot number.
+//! `StableSlotPrices.dbc`: the copper price of each hunter stable slot, two rows (5 silver, 5 gold)
+//! with no sentinel tail, matching vmangos `MAX_PET_STABLES` (`Objects/Pet.h:37`) and the stock
+//! `NUM_PET_STABLE_SLOTS` (`PetStable.lua:1`). `CMSG_BUY_STABLE_SLOT` carries no index: the server
+//! buys `m_stableSlots + 1` itself (`NPCHandler.cpp:704-729`), so a row id is a slot number.
 
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
@@ -24,11 +16,8 @@ const STABLE_SLOT_PRICES: &str = "DBFilesClient\\StableSlotPrices.dbc";
 pub struct StableSlotPrices(HashMap<u32, u32>);
 
 impl StableSlotPrices {
-    /// The cost of the *next* stable slot, given `purchased_count` already bought (slot
-    /// `purchased_count + 1`, 1-based to match the DBC's row ids). `None` past the table — which is
-    /// the "both slots owned" state the reference reads by comparing `GetNumStableSlots()` against
-    /// `NUM_PET_STABLE_SLOTS` and hiding the purchase button outright (`PetStable.lua:196-199`).
-    /// The absence is a data fact, not a cap this reader knows.
+    /// The price of slot `purchased_count + 1`; `None` once both are owned, where the stock UI
+    /// hides the purchase button (`PetStable.lua:196-199`).
     pub fn next_slot_price(&self, purchased_count: u8) -> Option<u32> {
         self.0.get(&(u32::from(purchased_count) + 1)).copied()
     }
@@ -57,7 +46,6 @@ pub fn load_stable_slot_prices(chain: &mut Chain) -> Result<StableSlotPrices> {
     table_from(&bytes)
 }
 
-/// The parse itself, split from the chain read so the golden test drives the identical path.
 fn table_from(bytes: &[u8]) -> Result<StableSlotPrices> {
     let rs = parse(bytes, schema(), "StableSlotPrices")?;
     let mut prices = HashMap::with_capacity(rs.records().len());
@@ -73,9 +61,7 @@ fn table_from(bytes: &[u8]) -> Result<StableSlotPrices> {
 mod tests {
     use super::*;
 
-    /// A hand-built WDBC carrying the real 5875 table, byte for byte as `dbc.MPQ` ships it
-    /// (extracted and dumped this session: 37 bytes total — a 20-byte header, two 8-byte records,
-    /// and a 1-byte string block holding the empty string).
+    /// The shipped 37-byte file: a 20-byte header, two 8-byte records, a 1-byte string block.
     fn synthesize() -> Vec<u8> {
         let rows: &[[u32; 2]] = &[[1, 500], [2, 50_000]];
         let mut dbc = Vec::new();
@@ -93,21 +79,15 @@ mod tests {
         dbc
     }
 
-    /// The shipped ladder, as the window prices it: a hunter who owns nothing is quoted 5 silver,
-    /// one who owns a slot is quoted 5 gold, and one who owns both is quoted nothing at all.
     #[test]
     fn the_shipped_ladder_prices_each_next_slot() {
         let t = table_from(&synthesize()).expect("parse");
         assert_eq!(t.len(), 2, "5875 ships exactly two stable slots");
         assert_eq!(t.next_slot_price(0), Some(500));
         assert_eq!(t.next_slot_price(1), Some(50_000));
-        // Past the table: the purchase button is hidden here, and a `None` is what says so.
         assert_eq!(t.next_slot_price(2), None);
     }
 
-    /// The real file, when there is an install to read it from. The synthesized golden above is
-    /// what the logic is tested against; this is the tripwire that the golden still *matches the
-    /// shipped bytes* — a silent divergence would otherwise price the window wrong forever.
     #[test]
     fn the_golden_matches_the_installed_table() {
         let data = crate::wow_data_or_skip!();

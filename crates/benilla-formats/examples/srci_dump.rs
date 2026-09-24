@@ -1,6 +1,6 @@
-//! Throwaway: dump `SkillRaceClassInfo.dbc` rows admitting a race/class, with the flags word in
-//! hex — the table the client's `GetSkillLineInfo` reads for its 0x400 single-rank cap and 0x20
-//! unlearnable bit. Usage: `cargo run -p benilla-formats --example srci_dump -- <race> <class>`.
+//! `SkillRaceClassInfo.dbc` rows admitting a race and class, flags in hex: `GetSkillLineInfo` reads
+//! its 0x400 single-rank cap and 0x20 unlearnable bit here.
+//! `cargo run -p benilla-formats --example srci_dump -- <race> <class>`
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let race: u32 = args.next().unwrap_or_else(|| "4".into()).parse()?;
@@ -8,7 +8,6 @@ fn main() -> anyhow::Result<()> {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;
 
-    // Skill line names, so the dump reads.
     let lines = chain.read_file("DBFilesClient\\SkillLine.dbc")?;
     let name_of = |id: u32| -> String {
         let g = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
@@ -48,7 +47,7 @@ fn main() -> anyhow::Result<()> {
             g(base + 20),
             g(base + 24),
         );
-        // race/class 0 = dump EVERY row (masks unfiltered, duplicates kept).
+        // Race or class 0 dumps every row, unfiltered, duplicates kept.
         let all = race == 0 || class == 0;
         if !all && (race_mask & rmask == 0 || class_mask & cmask == 0 || seen.contains(&skill)) {
             continue;

@@ -1,5 +1,4 @@
-//! Difftest M2 billboard-bone detection against the real Lamppost: its glow card (GLOW32.BLP) rides a
-//! spherical billboard bone (flag 0x08); its post does not. Skips when the client isn't present.
+//! The Lamppost's glow card rides a spherical billboard bone (flag 0x08); its post does not.
 
 use benilla_formats::{load_m2_mesh, open_chain, BillboardKind};
 
@@ -13,7 +12,6 @@ fn lamppost_glow_is_spherical_billboard() {
     )
     .expect("load Lamppost");
 
-    // The glow card is a billboard; at least one batch (the post) is not.
     let spherical = subs
         .iter()
         .filter_map(|s| s.billboard.as_ref())
@@ -30,9 +28,7 @@ fn lamppost_glow_is_spherical_billboard() {
     );
     eprintln!("lamppost billboard pivot = {:?}", bb.pivot);
 
-    // The glow card's spherical billboard bone carries a global-sequence SCALE pulse (the "breathe"):
-    // 5 keys oscillating ~0.86..1.04 over the 1333 ms global sequence. This is what makes the lamppost
-    // glow pulse in the reference. Verified against the real Lamppost.m2 (bone[4] scale track, gseq 0).
+    // The glow's pulse: bone 4's scale track on global sequence 0, 5 keys, 0.86..1.04.
     let anim = bb
         .scale_anim
         .as_ref()
@@ -40,7 +36,6 @@ fn lamppost_glow_is_spherical_billboard() {
     assert_eq!(anim.duration_ms, 1333, "global sequence loop length (ms)");
     assert_eq!(anim.keys.len(), 5, "scale keyframe count");
     assert!(anim.interp, "the scale track interpolates (interp != 0)");
-    // It is a genuine pulse: the sampled scale varies over the loop, and stays in a sane breathe range.
     let samples: Vec<f32> = (0..anim.duration_ms)
         .step_by(33)
         .map(|t| anim.sample(t)[0])
@@ -56,7 +51,6 @@ fn lamppost_glow_is_spherical_billboard() {
         hi - lo > 0.1,
         "the pulse has visible amplitude, got {lo}..{hi}"
     );
-    // Uniform scale (x == y == z) at an arbitrary phase — a billboard card scales evenly.
     let s = anim.sample(700);
     assert!(
         (s[0] - s[1]).abs() < 1e-6 && (s[1] - s[2]).abs() < 1e-6,

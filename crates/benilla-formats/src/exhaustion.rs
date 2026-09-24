@@ -1,17 +1,7 @@
-//! Exhaustion.dbc — the rest-state table behind the client's rested-XP surface.
-//!
-//! The whole client contract: `GetRestState 0x48d350` indexes this table
-//! **directly by the `PLAYER_BYTES_2` rest-state byte** (an ID→row-ptr array, `[0xc0dd78]`) and
-//! returns `(row.ID, row.name[locale], row.factor)`; `GetXPExhaustion 0x48d3f0` multiplies the
-//! rested pool by **row ID 1's factor, hard-coded** (2.0 in the shipped data — the "rested XP is
-//! double" law is this one f32, not a client constant). The names come from this file's string
-//! block, **not** GlobalStrings — which is why "Rested"/"Normal" localize with the install.
-//!
-//! Row layout (fieldCount 0xf / recordSize 0x3c, validated by the client loader `0x544da0`):
-//! `ID@0`, `Xp@1`, `Factor@2` (f32), `OutdoorHours@3`, `InnHours@4` (both unread by the
-//! bindings), `Name_Lang@5..12`, `NameFlags@13`, `Threshold@14`. Shipped 5875 rows: 1 "Rested"
-//! 2.0 · 2 "Normal" 1.0 · 3/4 "XXXTired" 1.0/0.5 · 5 "XXXExhausted" 0.25 — rows 3..5 are the
-//! never-shipped beta tiers FrameXML still carries dead branches for.
+//! `Exhaustion.dbc`: the rest states. `GetRestState` (`0x48d350`) indexes it by the
+//! `PLAYER_BYTES_2` rest-state byte (`[0xc0dd78]`) and returns the id, the name from this file's
+//! string block (not GlobalStrings) and the factor. `GetXPExhaustion` (`0x48d3f0`) scales the
+//! rested pool by row 1's factor, 2.0 in the data. Rows 3-5 are beta tiers never sent.
 
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
@@ -21,14 +11,13 @@ use crate::Chain;
 
 const EXHAUSTION: &str = "DBFilesClient\\Exhaustion.dbc";
 
-/// One Exhaustion.dbc row as the rest bindings consume it.
+/// One rest state, as `GetRestState` returns it.
 pub struct ExhaustionRow {
-    /// The row ID — also exactly the wire's rest-state byte (the client indexes by it).
+    /// Also the wire's rest-state byte, which the client indexes by.
     pub id: u32,
-    /// The localized state name (`GetRestState`'s second return; enUS slot of this install).
+    /// The state name, from the enUS slot.
     pub name: String,
-    /// The XP multiplier (`GetRestState`'s third return; row 1's value is `GetXPExhaustion`'s
-    /// scale).
+    /// The XP multiplier.
     pub factor: f32,
 }
 
@@ -47,7 +36,7 @@ fn exhaustion_schema() -> Schema {
     s
 }
 
-/// Load Exhaustion.dbc from the patch chain — the rows for `UiScript::set_exhaustion_rows`.
+/// Load Exhaustion.dbc from the patch chain.
 pub fn load_exhaustion(chain: &mut Chain) -> Result<Vec<ExhaustionRow>> {
     let bytes = chain
         .read_file(EXHAUSTION)
@@ -68,9 +57,6 @@ pub fn load_exhaustion(chain: &mut Chain) -> Result<Vec<ExhaustionRow>> {
 mod tests {
     use super::load_exhaustion;
 
-    /// The shipped 5875 table, read as data rather than assumed — five rows: the rested factor
-    /// really is 2.0-as-data, and the beta tiers really ship with placeholder names. Skips
-    /// without client data.
     #[test]
     fn the_shipped_rest_states_carry_the_rested_double() {
         let data = crate::wow_data_or_skip!();

@@ -1,9 +1,4 @@
-//! Corpus scans over **what lights a model** — the population instruments for the lighting
-//! lanes, on both sides of the WMO/M2 boundary.
-//!
-//! `darkpropscan` asks which placed WMO props the interior lane commits as literal black
-//! (decision 0969's census), `m2lightscan` which M2s author dynamic light blocks at all, and
-//! `shadeat` reads the terrain MCSH shadow bit that decides a doodad's sun gain.
+//! Corpus scans over what lights a model: dark WMO props, M2 light blocks, terrain shadow.
 
 use std::collections::BTreeMap;
 
@@ -12,23 +7,11 @@ use benilla_formats::{Chain, M2Light};
 
 use crate::model_key;
 
-/// Sweep every WMO **root** (under `prefix`, if given) and list the placed MODD props whose
-/// INTERIOR lighting lane commits **literal black**.
-///
-/// The interior lane's whole base light is the MODD entry's own baked colour field: ambient =
-/// `cap96(colour)`, diffuse = `floor112(colour)` (`0x694e90` create → `0x6a77e0`). The floor leg
-/// *raises* a dim colour to max 112 — but
-/// it is a hue-preserving scale by `112/max`, so a colour of exactly `#000000` has nothing to raise
-/// and both words come out zero. Such a prop is lit by nothing but its owning group's MOLR fixture
-/// lights, and a group carrying none (or none within its authored attenuation disk) leaves it a
-/// pure black silhouette.
-///
-/// The colour field is zero on ~3% of shipped MODDs — the baker leaves it unbaked for props it
-/// treats as exterior — so what decides the symptom is the **class of the groups that reference the
-/// prop**, and EXTERIOR WINS (the reference's def is per (MODD, placement) and
-/// `0x695aa0` makes the exterior bit absorbing). A prop any exterior group's MODR names is therefore
-/// sky-lit and never listed here; the `RESCUED` tally counts them, because taking the *first*
-/// referrer instead is exactly what drew Booty Bay's entrance arch as a black silhouette.
+/// List the placed MODD props that the interior lane lights literal black. Its base light is the
+/// MODD colour, ambient `cap96`, diffuse `floor112` (`0x694e90` → `0x6a77e0`), and the floor is a
+/// hue-preserving scale by `112/max`, so `#000000` stays black and only the owning group's MOLR
+/// lights reach the prop. Exterior wins: any exterior referrer makes the prop sky-lit
+/// (`0x695aa0`); `RESCUED` counts those an interior group names first.
 pub fn darkpropscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let roots = super::wmo_roots(chain, prefix)?;
 
@@ -44,7 +27,6 @@ pub fn darkpropscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         };
         roots_scanned += 1;
         modds_total += root.doodads().len() as u32;
-        // Nothing to classify without a zero-colour MODD — skip the group reads entirely.
         if !root.doodads().iter().any(|d| d.color[..3] == [0, 0, 0]) {
             continue;
         }
@@ -78,11 +60,10 @@ pub fn darkpropscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             }
             zero_colour += 1;
             let Some(referrers) = refs.get(&(i as u16)) else {
-                continue; // ORPHAN: no group names it — the exterior default
+                continue; // no group names it: lit as exterior
             };
             let owner = referrers[0];
-            // EXTERIOR WINS over every interior referrer — the MODD-colour lane is
-            // for props referenced by interior groups ONLY.
+            // Exterior wins over every interior referrer.
             if !referrers
                 .iter()
                 .all(|g| infos.get(*g as usize).is_some_and(|gi| gi.interior))
@@ -92,9 +73,8 @@ pub fn darkpropscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 }
                 continue;
             }
-            // The owning group's MOLR omni lights, gated by their own attenuation disk measured
-            // from the prop's origin (the spawn fold uses the loaded M2's bounds reference point;
-            // the origin is within a model radius of it, so this is the census approximation).
+            // The owning group's MOLR omni lights in range of the prop's origin; the spawn measures
+            // from the M2's bounds reference point, within a model radius of it.
             let in_range = light_refs
                 .get(&owner)
                 .map(|ls| {
@@ -156,11 +136,10 @@ pub fn darkpropscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// How many rows of the closing colour tally print (the rest are counted, never silently dropped).
+/// Rows of the closing colour tally that print; the rest are counted.
 const TALLY_ROWS: usize = 20;
 
-/// Cheap warm/cool/neutral hue classification of a `diffuse_color`, used only to eyeball the
-/// colour-tally section of `m2lightscan`'s summary — the warm-torch family vs anything unusual.
+/// A rough warm, cool or neutral tag for a light colour in `m2lightscan`'s tally.
 fn hue_tag(r: f32, g: f32, b: f32) -> &'static str {
     if r >= g && r > b * 1.15 {
         "warm"
@@ -171,9 +150,7 @@ fn hue_tag(r: f32, g: f32, b: f32) -> &'static str {
     }
 }
 
-/// Per-family tally for `m2lightscan`'s summary: how many models in this content family carry
-/// lights, how many `type==1` point lights they author in total, how many of those are dark
-/// (`visibility_off`), and a handful of example paths.
+/// One content family's row in `m2lightscan`'s summary; `dark` counts `visibility_off` lights.
 #[derive(Default)]
 struct FamilyStats {
     models: u32,
@@ -182,23 +159,14 @@ struct FamilyStats {
     examples: Vec<String>,
 }
 
-/// Sweep every `.m2` (optionally under a path prefix) and report which models author M2 dynamic
-/// LIGHT blocks — the population instrument for the mechanism (`0x718960`). Per
-/// model (only models with ≥1 light, printed
-/// sorted by path): its `type==1` point-light count vs directional (`type==0`, ambient-feed, not
-/// a discrete GL light) count, then per POINT light: bone, model-space position, `diffuse_color ×
-/// diffuse_intensity` (raw colour, intensity, and the product), authored attenuation start/end,
-/// and an `OFF` tag when [`M2Light::visibility_off`] — the one shape (a static `0` visibility
-/// key) that keeps a light dark (`0x71646d`). The closing summary is the real deliverable: totals,
-/// a breakdown by top-level content family ([`super::family_of`]) — benilla only spawns these
-/// lights for ADT-placed doodads and WMO props today, so this answers how much of the entity path
-/// (creatures, held items, GameObjects) is actually missing them — and a cheap diffuse
-/// colour×intensity tally ([`hue_tag`]).
+/// List the models that author M2 light blocks (`0x718960`): per point light (`type` 1) its bone,
+/// position, diffuse colour times intensity and attenuation, `OFF` when a static 0 visibility key
+/// keeps it dark (`0x71646d`); directional lights (`type` 0) feed ambient and are only counted.
+/// The summary totals them by content family and by colour.
 pub fn m2lightscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
 
-    // Rounded `(r, g, b) × 100` (int-keyed to stay orderable) — a cheap grouping key for the
-    // authored diffuse×intensity palette across point lights.
+    // Diffuse times intensity in hundredths, as integers so the key orders.
     type ColorKey = (i32, i32, i32);
 
     let (mut scanned, mut hits, mut total_point, mut total_dark) = (0u32, 0u32, 0u32, 0u32);
@@ -305,7 +273,6 @@ pub fn m2lightscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         let tag = hue_tag(r, g, b);
         println!("{count:>4}x  ({r:.2}, {g:.2}, {b:.2})  {tag:<5}  e.g. {example}");
     }
-    // Never let the top-20 read as "that's all of them".
     if let Some(rest) = ranked.len().checked_sub(TALLY_ROWS).filter(|n| *n > 0) {
         println!("      … and {rest} rarer colours (top {TALLY_ROWS} shown)");
     }
@@ -313,10 +280,9 @@ pub fn m2lightscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// The terrain MCSH shadow bit at a world position + an ASCII texel neighborhood (`#` shadowed,
-/// `.` lit, `?` off-tile/no-chunk). One MCSH texel is `TILE_SIZE/1024` ≈ 0.52 yd; the grid spans
-/// ±8 texels so a doodad base sitting one texel from a shadow edge — the 2.5-vs-0.5 intensity
-/// cliff — is visible at a glance.
+/// Print the terrain MCSH shadow bit, which sets a doodad's sun gain (2.5 lit, 0.5 shadowed), at
+/// a world position and the ±8 texels around it (`#` shadowed, `.` lit, `?` no chunk); a texel is
+/// `TILE_SIZE / 1024`, about 0.52 yd.
 pub fn shadeat(chain: &mut Chain, map: &str, x: f32, y: f32) -> Result<()> {
     let tiles = benilla_formats::load_tiles_around(chain, map, x, y, 0)
         .with_context(|| format!("loading the tile under ({x}, {y}) on {map}"))?;

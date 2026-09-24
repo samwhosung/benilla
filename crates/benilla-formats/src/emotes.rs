@@ -1,29 +1,7 @@
-//! Emote audio data (decision 0070 slice 4): **EmotesText** (the `/wave` command table) joined
-//! to **EmotesTextSound** (the race/sex voice kits) and **Emotes** (anim emotes + their
-//! `EventSoundID`).
-//!
-//! Layouts — VERIFIED against build 5875 (headers + row decodes, 2026-07-02):
-//! - `EmotesText` **169 × 19 × 76 B**: `ID, Name(str, e.g. "WAVE"), EmoteID (→Emotes),
-//!   EmoteText[16]`. Spot-check: WAVE = id 101, emote 3.
-//! - `EmotesTextSound` **418 × 5 × 20 B**: `ID, EmotesTextID, RaceID, SexID (0 male / 1 female),
-//!   SoundID (→SoundEntries)`.
-//! - `Emotes` **78 × 7 × 28 B**: `ID, SlashCommand(str), AnimID, EmoteFlags, EmoteSpecProc,
-//!   EmoteSpecProcParam, EventSoundID (→SoundEntries)`. Spot-check row 2: ONESHOT_BOW, anim 66
-//!   (VERIFIED against vmangos `SharedDefines.h`'s `Emote` enum: `EMOTE_ONESHOT_BOW = 2`).
-//!
-//! `AnimID` (column 2) feeds both the one-shot anim-emote path (`SMSG_EMOTE`'s `Emotes.dbc` id) and
-//! the looping state-emote idle (`UNIT_NPC_EMOTESTATE`, the same id space) — [`EmoteSoundCatalog::anim`].
-//!
-//! `EmoteSpecProc`/`EmoteSpecProcParam` (columns 4/5) carry the **posture** half of the client's
-//! `DoEmote`: proc `1` means "this emote sets a stand state", and the param IS that state
-//! ([`EmoteSoundCatalog::posture_state`]) — the mechanism behind `/sit` (proc `2` is the looping
-//! state emote whose `EventSoundID` the `$ESD` event rings).
-//!
-//! `EmoteFlags` (column 3) feeds the **send-side posture-eligibility gate** — the only `EmoteFlags`
-//! consumer, byte-verified at the real client's `CheckEmoteEligible` (`0x47db40`, called from
-//! `DoEmote` `0x5ef560`): before `CMSG_TEXT_EMOTE` goes out, bit `0x0001` combined with a non-zero
-//! stand-state aborts the *entire* emote (no packet, no anim — a seated `/bow` does nothing).
-//! [`EmoteSoundCatalog::emote_flags`] promotes the raw bits for `crate::chat`'s gate.
+//! Emote data: `EmotesText` (`ID, Name, EmoteID, EmoteText[16]`, the `/wave` command table)
+//! joined to `EmotesTextSound` (`ID, EmotesTextID, RaceID, SexID, SoundID`, the voice kits)
+//! and `Emotes`, the anim emotes:
+//! `ID, SlashCommand, AnimID, EmoteFlags, EmoteSpecProc, EmoteSpecProcParam, EventSoundID`.
 
 use std::collections::HashMap;
 
@@ -33,39 +11,28 @@ use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::dbc::{parse, str_at, u32_at};
 
-/// The joined emote-audio tables.
+/// The joined emote tables.
 pub struct EmoteSoundCatalog {
-    /// Uppercased `EmotesText.Name` ("WAVE") → text-emote id — the `/command` send key.
+    /// Uppercased `EmotesText.Name` ("WAVE") to text-emote id.
     by_name: HashMap<String, u32>,
-    /// text-emote id → `Emotes.dbc` id (the anim the emote plays; 0 = chat-only).
+    /// Text-emote id to the `Emotes.dbc` id it plays, 0 for chat-only.
     text_emote: HashMap<u32, u32>,
-    /// `(text-emote id, race, sex)` → voice kit.
+    /// `(text-emote id, race, sex)` to voice kit.
     voice: HashMap<(u32, u32, u32), u32>,
-    /// `Emotes.dbc` id → its `EventSoundID` kit (0 = none).
     event_sound: HashMap<u32, u32>,
-    /// `Emotes.dbc` id → its `AnimID` (`AnimationData.dbc` id; 0 = none).
     anim: HashMap<u32, u32>,
-    /// `Emotes.dbc` id → its `EmoteFlags` (the send-side posture-eligibility gate bits).
     emote_flags: HashMap<u32, u32>,
-    /// `Emotes.dbc` id → its `EmoteSpecProc` (column 4). `2` marks a looping STATE emote whose
-    /// `EventSoundID` the `$ESD` anim event rings (the client's `row[+0x10] == 2` gate at the
-    /// `$ESD` handler `0x6239f0`).
+    /// `Emotes.dbc` id to its `EmoteSpecProc`; `2` is a looping state emote whose `EventSoundID`
+    /// the `$ESD` anim event rings (`0x6239f0` tests `row[+0x10] == 2`).
     spec_proc: HashMap<u32, u32>,
-    /// `Emotes.dbc` id → its `EmoteSpecProcParam` (column 5). For `EmoteSpecProc == 1` this is the
-    /// **stand state** the emote sets — see [`EmoteSoundCatalog::posture_state`].
+    /// `Emotes.dbc` id to its `EmoteSpecProcParam`, the stand state when `EmoteSpecProc` is 1.
     spec_proc_param: HashMap<u32, u32>,
-    /// The five **chat/interact gesture slots**, in [`GESTURE_FLAG_BITS`] order — see
-    /// [`EmoteSoundCatalog::gesture`].
+    /// The five gesture slots, in [`GESTURE_FLAG_BITS`] order.
     gesture: [Option<u32>; GESTURE_FLAG_BITS.len()],
 }
 
-/// The five `EmoteFlags` bits the client hard-codes to build its gesture table (`0x603a60`), in
-/// slot order — **talk, question, exclamation,
-/// shout, laugh**. The *bits* are the fidelity fact: the client never names an `Emotes.dbc` id or an
-/// `AnimationData.dbc` id here, it scans the table for whichever row carries each bit. In the
-/// shipped 1.12.1 data each bit is carried by exactly one row (ids 1 / 6 / 5 / 22 / 11 → anims
-/// 60 / 65 / 64 / 81 / 70), but transcribing those numbers instead of the scan would bake content
-/// into code.
+/// The `EmoteFlags` bits the client scans `Emotes.dbc` for to build its gesture table
+/// (`0x603a60`), in slot order: talk, question, exclamation, shout, laugh. It names no row id.
 pub const GESTURE_FLAG_BITS: [u32; 5] = [0x08, 0x10, 0x20, 0x40, 0x100];
 
 impl EmoteSoundCatalog {
@@ -79,7 +46,7 @@ impl EmoteSoundCatalog {
         self.voice.get(&(text_id, race, sex)).copied()
     }
 
-    /// The anim emote a text emote plays (0/none for chat-only emotes).
+    /// The anim emote a text emote plays.
     pub fn text_emote(&self, text_id: u32) -> Option<u32> {
         self.text_emote.get(&text_id).copied().filter(|&e| e != 0)
     }
@@ -89,43 +56,33 @@ impl EmoteSoundCatalog {
         self.event_sound.get(&emote_id).copied().filter(|&k| k != 0)
     }
 
-    /// An `Emotes.dbc` id's `AnimID` (the `AnimationData.dbc` id it plays; `0`/absent = none).
-    /// Shared by the one-shot anim-emote path (`SMSG_EMOTE`) and the looping state-emote idle
-    /// (`UNIT_NPC_EMOTESTATE`) — both carry an `Emotes.dbc` id in the same id space.
+    /// The `AnimationData.dbc` id an `Emotes.dbc` id plays, for both `SMSG_EMOTE` one-shots and
+    /// the looping `UNIT_NPC_EMOTESTATE` idle, which share the id space.
     pub fn anim(&self, emote_id: u32) -> Option<u32> {
         self.anim.get(&emote_id).copied().filter(|&a| a != 0)
     }
 
-    /// The `Emotes.dbc` id in gesture slot `slot` — an index into [`GESTURE_FLAG_BITS`], which is
-    /// exactly the `code` the client's gesture dispatcher `0x60bb30` takes. `None` when no shipped
-    /// row carries that bit (the client's own "empty slot ⇒ no gesture" leg).
+    /// The `Emotes.dbc` id in gesture `slot`, the `code` the client's gesture dispatcher
+    /// `0x60bb30` takes; a slot no shipped row fills plays no gesture, as in the client.
     pub fn gesture(&self, slot: usize) -> Option<u32> {
         self.gesture.get(slot).copied().flatten()
     }
 
-    /// An `Emotes.dbc` id's raw `EmoteFlags` bits (`None` when the id isn't in the catalog; `0` is a
-    /// real, meaningful value — "no gate bits set" — so unlike [`Self::anim`]/[`Self::event_sound`]
-    /// it is *not* filtered out). Feeds `benilla::chat`'s send-side posture-eligibility gate — see
-    /// the module doc.
+    /// An `Emotes.dbc` id's raw `EmoteFlags`, `0` included. Bit `0x0001` with a non-zero stand
+    /// state aborts the whole emote before `CMSG_TEXT_EMOTE` is sent, so a seated `/bow` does
+    /// nothing (`0x47db40`, called from `DoEmote` `0x5ef560`).
     pub fn emote_flags(&self, emote_id: u32) -> Option<u32> {
         self.emote_flags.get(&emote_id).copied()
     }
 
-    /// An `Emotes.dbc` id's `EmoteSpecProc` (`None` when the id isn't in the catalog; `0` is a real
-    /// value, so not filtered). `2` = a looping state emote — the `$ESD` event-sound gate (see the
-    /// field doc).
+    /// An `Emotes.dbc` id's `EmoteSpecProc`, `0` included; `2` is a looping state emote.
     pub fn spec_proc(&self, emote_id: u32) -> Option<u32> {
         self.spec_proc.get(&emote_id).copied()
     }
 
-    /// The **stand state** a POSTURE emote sets: `EmoteSpecProcParam` gated on `EmoteSpecProc == 1`
-    /// (`None` for every other emote). This is the client's `DoEmote` (`0x5ef560`) state branch:
-    /// `if (rec.EmoteSpecProc == 1 && …) SetStandState(rec.SpecProcParam)`, the same `0x5ed430`
-    /// setter the sit key drives. The five
-    /// reachable rows: STATE_SIT(13)→1, STATE_SLEEP(12)→3, STATE_KNEEL(68)→8, STATE_STAND(26)→0,
-    /// STATE_AT_EASE(313)→2 — which is why `/sit` sits at all, since the *server* deliberately does
-    /// nothing for a STATE text emote (vmangos `ChatHandler.cpp` `HandleTextEmoteOpcode`: SIT /
-    /// SLEEP / KNEEL / NONE break out before `HandleEmote`).
+    /// The stand state a posture emote sets, `EmoteSpecProcParam` when `EmoteSpecProc` is 1, as
+    /// `DoEmote` (`0x5ef560`) feeds the sit key's setter `0x5ed430`. `/sit` rests on this alone:
+    /// the server does nothing for a state text emote (`ChatHandler.cpp` `HandleTextEmoteOpcode`).
     pub fn posture_state(&self, emote_id: u32) -> Option<u32> {
         (self.spec_proc.get(&emote_id).copied() == Some(1))
             .then(|| self.spec_proc_param.get(&emote_id).copied())
@@ -193,11 +150,9 @@ pub fn load_emote_sound_catalog(chain: &mut Chain) -> Result<EmoteSoundCatalog> 
     let mut emote_flags = HashMap::with_capacity(rs.records().len());
     let mut spec_proc = HashMap::with_capacity(rs.records().len());
     let mut spec_proc_param = HashMap::with_capacity(rs.records().len());
-    // The gesture slots. The client walks the record array from the LAST index DOWN and its bit
-    // tests are an else-if chain, so a row carrying two of the bits lands only in the first
-    // matching slot and a duplicated bit resolves to the LOWEST array index. Iterating forward and
-    // letting an earlier row win reproduces both, without depending on either: no shipped row
-    // carries more than one of these bits, and none of them is duplicated.
+    // The client walks the rows from the last down with an else-if chain over the bits, so a row
+    // lands only in its first matching slot and a shared bit goes to the lowest index; iterating
+    // forward with the earlier row winning gives the same table.
     let mut gesture: [Option<u32>; GESTURE_FLAG_BITS.len()] = [None; GESTURE_FLAG_BITS.len()];
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
@@ -240,10 +195,7 @@ pub fn load_emote_sound_catalog(chain: &mut Chain) -> Result<EmoteSoundCatalog> 
 mod tests {
     use super::*;
 
-    /// The five gesture slots resolve off the REAL shipped `Emotes.dbc` — the check that the
-    /// flag-bit scan finds the right rows, and that each bit really is carried by exactly one of
-    /// them. The expected ids/anims are the table `0x603a60` builds from the shipped data; the
-    /// *code* never names them.
+    /// The expected ids and anims are the table `0x603a60` builds from the shipped data.
     #[test]
     fn the_five_gesture_slots_scan_to_the_shipped_rows() {
         let data = crate::wow_data_or_skip!();
@@ -260,9 +212,7 @@ mod tests {
             assert_eq!(cat.gesture(slot), Some(emote_id), "{what} slot -> emote id");
             assert_eq!(cat.anim(emote_id), Some(anim_id), "{what} emote -> AnimID");
         }
-        // Each of the five bits is carried by exactly one shipped row, so the else-if chain and
-        // the walk direction cannot matter. If a patch ever broke this, the scan would silently
-        // pick a different row and the gestures would drift — so assert it, do not assume it.
+        // One shipped row per bit, so the walk order cannot matter.
         for bit in GESTURE_FLAG_BITS {
             let carriers = cat
                 .emote_flags
@@ -273,9 +223,6 @@ mod tests {
         }
     }
 
-    /// The joins hold on real 5875 data: WAVE resolves by name to the byte-decoded id 101 with
-    /// anim emote 3; some voice row exists for a human (race 1) male; the voice map carries the
-    /// male/female split (the survey's sample rows pair sexes per race).
     #[test]
     fn real_emote_chain_resolves() {
         let data = crate::wow_data_or_skip!();
@@ -284,9 +231,7 @@ mod tests {
         assert_eq!(cat.text_id("wave"), Some(101), "case-insensitive by name");
         assert_eq!(cat.text_emote(101), Some(3), "WAVE plays anim emote 3");
         assert_eq!(cat.anim(2), Some(66), "ONESHOT_BOW (id 2) plays AnimID 66");
-        // EmoteFlags for the director-verified posture-gate rows (`0x47db40`), ids
-        // from vmangos `SharedDefines.h`'s `Emote` enum: BOW=2, CHEER=4, LAUGH=11, RUDE=14,
-        // APPLAUD=21, SALUTE=66.
+        // The posture-gate rows (`0x47db40`), ids from vmangos `SharedDefines.h`'s `Emote` enum.
         assert_eq!(cat.emote_flags(2), Some(0x4801), "ONESHOT_BOW EmoteFlags");
         assert_eq!(cat.emote_flags(4), Some(0x0800), "ONESHOT_CHEER EmoteFlags");
         assert_eq!(
@@ -305,8 +250,7 @@ mod tests {
             Some(0x0800),
             "ONESHOT_SALUTE EmoteFlags"
         );
-        // The $ESD gathering chain: STATE_WORK_NOSHEATHE_MINING (233) is a
-        // spec-proc-2 state emote carrying the MiningHit kit; its one-shot cousins carry proc 0.
+        // STATE_WORK_NOSHEATHE_MINING (233), a proc-2 state emote carrying the mining kit.
         assert_eq!(cat.spec_proc(233), Some(2), "mining state EmoteSpecProc");
         assert_eq!(
             cat.event_sound(233),
@@ -315,15 +259,12 @@ mod tests {
         );
         assert_eq!(cat.anim(233), Some(136), "mining state plays anim 136");
         assert_eq!(cat.spec_proc(2), Some(0), "ONESHOT_BOW EmoteSpecProc");
-        // The posture branch (`DoEmote`'s `EmoteSpecProc == 1` → `SetStandState(param)`): the four
-        // stand states a slash emote can reach, byte-decoded off the shipped table. The values are
-        // vmangos `UnitStandStateType` (STAND 0 · SIT 1 · SLEEP 3 · KNEEL 8).
+        // Stand states are vmangos `UnitStandStateType` values (STAND 0, SIT 1, SLEEP 3, KNEEL 8).
         assert_eq!(cat.posture_state(13), Some(1), "STATE_SIT sets SIT");
         assert_eq!(cat.posture_state(12), Some(3), "STATE_SLEEP sets SLEEP");
         assert_eq!(cat.posture_state(68), Some(8), "STATE_KNEEL sets KNEEL");
         assert_eq!(cat.posture_state(26), Some(0), "STATE_STAND sets STAND");
-        // A proc-2 state emote and a one-shot are NOT posture emotes, however tempting their param
-        // looks: the gate is the proc column, not the param's presence.
+        // The gate is the proc column, not the param's presence.
         assert_eq!(cat.posture_state(233), None, "mining state is proc 2");
         assert_eq!(cat.posture_state(2), None, "ONESHOT_BOW is proc 0");
         assert!(

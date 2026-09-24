@@ -1,15 +1,6 @@
-//! `emdump <internal\path.m2>` — every particle emitter one model authors, one line each.
-//!
-//! The per-emitter counterpart to `benilla-extract partcensus`, which answers "which models in the
-//! corpus carry emitters matching this flag mask?" but never what an individual emitter *is*. B16
-//! needed the other direction — the voidwalker's eye glow is emitters 1 and 2 of four, bone 60/61,
-//! flags `0x0001` (plain anchored), `Add`/`GLOWBALL.BLP` — and reading that off a hex dump by hand
-//! is exactly the kind of asset fact that should be one command.
-//!
-//! The header line carries the model's **reach** (how far its own transparent-pass batches sort
-//! from its origin — `m2_owner_reach`) and the `Transparent3d` draw-order rung it produces
-//! (`owner_last_rung`): the rung is what keeps a model's effects drawing after its own transparent
-//! batches, and it is sized from that number, so the two belong on screen together.
+//! Every particle emitter one model authors, one line each, under the model's reach
+//! (`m2_owner_reach`) and the `Transparent3d` rung sized from it (`owner_last_rung`), which keeps
+//! its effects drawing after its own transparent batches. `emdump <internal\path.m2>`
 
 fn main() -> anyhow::Result<()> {
     let virt = std::env::args().nth(1).unwrap();
@@ -18,8 +9,7 @@ fn main() -> anyhow::Result<()> {
     let bytes = chain.read_file(&virt)?;
     let dir = virt.rsplit_once('\\').map_or("", |(d, _)| d);
     let subs = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]).unwrap_or_default();
-    // The renderer's own bound and rung, not a re-derivation of them: a survey tool has to print
-    // what the renderer will actually do.
+    // The renderer's own bound and rung, not a re-derivation of them.
     let reach = benilla_formats::m2_owner_reach(&subs);
     let rung = benilla_formats::owner_last_rung(reach);
     println!("{virt}: reach {reach:.3} yd -> draw-order rung {rung:.0}");

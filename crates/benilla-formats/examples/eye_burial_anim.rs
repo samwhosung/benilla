@@ -1,36 +1,16 @@
-//! **Is the eye emitter still proud of the face once the model ANIMATES?**
-//!
-//! `eye_quad_pass` answers the depth contest at *bind* pose, where benilla already matches the
-//! reference. Decision 0707 measured the failing case and found the split: benilla's freshest eye
-//! particle — born this frame at the current bone pose — sits **1.6–4.7 cm behind the face our
-//! renderer draws**, against **2.5–34 mm** at bind. "Faithful at rest" and "faithful in motion" are
-//! different claims, and this is the instrument for the second one.
-//!
-//! It builds the bone palette ourselves, from our own parse, at sampled times across a sequence:
-//! `palette[b] = parentPalette · T(pivot) · R(rot) · S(scale) · T(-pivot)`, the M2 skinning matrix.
-//! Then, per sample, it reports the two numbers that decide the contest:
-//!
-//! - `gap` — the distance from the animated eye-bone pivot (where our particles are born, verified
-//!   `birth == joint`) to the **nearest skinned vertex** of the depth-writing batches. At bind this
-//!   is 0.0162 for bone 60 (measured on the shipped `Voidwalker.m2`). If our animation swings the
-//!   skin centimetres past the bone, this grows — and that growth *is* the bug.
-//! - `pass%` — the constant-depth quad's surviving area against the animated shell, front view.
-//!
-//! `cargo run -p benilla-formats --example eye_burial_anim -- 'Creature\Voidwalker\Voidwalker.m2' 0`
-//!
-//! A `gap` that stays near its bind value across the cycle says our pose is self-consistent and 0707's
-//! centimetres came from somewhere else in the renderer. A `gap` that blows out says our skinning or
-//! our animation moved the face off the bone, and the fix is there.
+//! Whether an eye emitter stays in front of the face while the model animates; `eye_quad_pass`
+//! answers it at bind pose. At samples across one sequence it builds the M2 skinning palette from
+//! our own parse and prints `gap`, the emitter's distance to the nearest skinned vertex of the
+//! depth-writing batches (bone 60 of `Voidwalker.m2`: 0.0162 at bind), and `pass%`, the share of
+//! the constant-depth quad the animated shell leaves visible. A gap that grows over the cycle
+//! means our skinning or animation moves the face off the bone.
+//! `cargo run -p benilla-formats --example eye_burial_anim -- <m2 path> [seq slot]`
 
 use benilla_formats::{ModelAnimation, RenderSubmesh, Skeleton};
 use glam::{Mat4, Quat, Vec3};
 
-/// The M2 skinning palette at time `t` (seconds into `anim`), in file-bone order.
-///
-/// The pivot dance is the whole point: a bone's animated rotation/scale act **about its own pivot**,
-/// so the matrix is `T(pivot) · R · S · T(-pivot)` composed under the parent. At rest (no keys) every
-/// factor is identity and the palette is identity — which is why an emitter record `position` that
-/// equals its bone pivot maps to itself at bind.
+/// The M2 skinning palette at `t` seconds into `anim`, in file-bone order: rotation and scale act
+/// about the bone's pivot, `T(pivot + tr) · R · S · T(-pivot)` under the parent.
 fn palette(skel: &Skeleton, anim: &ModelAnimation, t: f32) -> Vec<Mat4> {
     let sample_v = |keys: &[(f32, [f32; 3])], t: f32, dflt: Vec3| -> Vec3 {
         if keys.is_empty() {
@@ -88,7 +68,6 @@ fn palette(skel: &Skeleton, anim: &ModelAnimation, t: f32) -> Vec<Mat4> {
     out
 }
 
-/// Skin one vertex by its 4 bone/weight pairs (weights already normalised by the parser).
 fn skin(p: [f32; 3], j: [u16; 4], w: [f32; 4], pal: &[Mat4]) -> Vec3 {
     let v = Vec3::from(p);
     let mut acc = Vec3::ZERO;
@@ -199,10 +178,8 @@ fn main() -> anyhow::Result<()> {
         anim.bones.len()
     );
 
-    // Which bones does the depth-writing shell actually skin to, and does any of them sit under a
-    // BILLBOARD bone? A billboard joint is re-aimed at the camera every frame and its children
-    // inherit that rotation, so shell geometry under one moves with the *camera* — which is exactly
-    // the signature of a burial that appears from one camera elevation and not another.
+    // Shell bones under a billboard bone: a billboard re-aims at the camera each frame and its
+    // children inherit that, so their skin moves with the camera.
     {
         let mut shell_bones: Vec<usize> = Vec::new();
         for s in &subs {
@@ -252,8 +229,7 @@ fn main() -> anyhow::Result<()> {
         if b >= skel.bones.len() {
             continue;
         }
-        // Only the additive quad emitters mounted flush in the shell are the B16 subject; the
-        // others are printed anyway so the contrast is on the same page.
+        // Every emitter prints; the eye quads are the additive ones mounted flush in the shell.
         println!(
             "\nemitter bone {b}  pos ({:.4},{:.4},{:.4})  blend {:?}",
             e.position[0], e.position[1], e.position[2], e.blend

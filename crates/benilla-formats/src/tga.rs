@@ -1,39 +1,17 @@
-//! TGA (Targa) decoder — the OTHER half of the reference's UI texture table.
+//! TGA decoding, the other half of the reference's UI texture lookup: `TextureCreate` tries
+//! `{".tga", ".blp"}` (`0x835248`), and while 1.12 ships its UI art as BLP, addons ship TGAs. The
+//! reference's `0x5a3a30` dispatches on `imageType`: 1 and 9 (colour-mapped, raw or RLE) to
+//! `0x5a39d0` through the palette at `0x5a3820`, 2 to `0x5a3c80`, 10 to `0x5a3d70`.
 //!
-//! `TextureCreate`'s extension table is `{".tga", ".blp"}` (`0x835248`; see
-//! `world_assets::sprite_candidates` in benilla-assets), so every UI sprite reference is two
-//! candidate files and one of them is a TGA. Inside the MPQs that arm is a near-no-op — 1.12 ships
-//! its UI art as BLP — but **addon folders are where TGAs actually live**: BLP tooling was rare in
-//! 2006 and the ecosystem shipped loose `.tga` art constantly, so the loose-file resolve
-//! is what finally makes this decoder load-bearing.
+//! Deviation: grayscale types 3 and 11 decode where the reference refuses them, because no shipped
+//! or addon file is one and removing working code would buy nothing.
 //!
-//! **The reference's own dispatch is the spec, and ours used to be its mirror image.** `0x5a3a30`
-//! forks on `imageType` as `{1/9 → 0x5a39d0 (colour-mapped, raw or RLE, expanded through the
-//! palette at 0x5a3820); 2 → 0x5a3c80; 10 → 0x5a3d70; 3/11 → unsupported}`.
-//! This decoder refused 1/9 — on a doc comment asserting *"none have
-//! surfaced in the corpus"*, which was false — and accepted the two the client refuses.
-//!
-//! Three colour-mapped TGAs are in the 219-addon corpus, all 8-bit indices into a 256-entry
-//! 24-bit palette: `FonzAppraiser/img/icon_disable.tga` (type 1, drawn by
-//! `mods/gui/minimap.lua:45`), `FuBar_WeaponRebuffFu/icon.tga` (type 9, RLE — the plugin's whole
-//! icon, reached through FuBarPlugin's `Interface\AddOns\%s\icon`) and
-//! `FonzSummon/img/icon_disable.tga` (type 1, shipped but unreferenced). Each drew **nothing**,
-//! with a `warn!` on a terminal, and `SetTexture` still answered `1` because the resolvability
-//! probe tests existence rather than decode — so the failure was invisible from Lua as well as on
-//! screen.
-//!
-//! Types 3/11 (grayscale, raw/RLE) stay supported although the reference refuses them: no corpus
-//! or client file is one, so this is a superset a decoder cannot be feature-detected on, and
-//! removing working code with zero demand buys nothing. Stated rather than implied.
-//!
-//! [`tga_to_rgba`] validates the header before touching pixels, so it is safe to use as a
-//! *fallback* decoder on bytes of uncertain format (TGA has no magic; the caller sniffs `BLP2`
-//! first and only then tries this — a non-TGA almost always fails the type/depth/size checks).
+//! [`tga_to_rgba`] checks the header before the pixels, so it can serve as the fallback after a
+//! failed `BLP2` sniff: TGA has no magic.
 
 use anyhow::{bail, Result};
 
-/// Decode a TGA to RGBA8: `(width, height, pixels)` — top-down row order, like
-/// [`crate::blp_to_rgba`].
+/// Decode a TGA to RGBA8 `(width, height, pixels)`, rows top-down like [`crate::blp_to_rgba`].
 pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let Some(header) = bytes.get(..18) else {
         bail!("TGA: truncated header ({} bytes)", bytes.len());
@@ -56,8 +34,7 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     };
     let paletted = matches!(image_type, 1 | 9);
     let grayscale = matches!(image_type, 3 | 11);
-    // A colour-mapped image's "pixel" is an INDEX; the palette entry's own width is separate, and
-    // both are needed before the stream can be read (`0x5a3b40`'s offset arithmetic uses each).
+    // A colour-mapped pixel is an index, its palette entry a width of its own (`0x5a3b40`).
     let bytes_per_pixel = match (bpp, paletted, grayscale) {
         (8, true, _) => 1,
         (24, false, false) => 3,
@@ -76,9 +53,8 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
         bail!("TGA: implausible dimensions {width}x{height}");
     }
 
-    // Skip the id field and (for a truecolor image that still carries one) the color map. For a
-    // colour-mapped image the map is not skipped past — it is READ, and the reference reads it at
-    // exactly this offset (`0x5a3b40`: `entryBytes*colorMapLength + idLength + 0x12`).
+    // The pixels start after the id field and any colour map, which a colour-mapped image reads
+    // on the way (`0x5a3b40`: `entryBytes * colorMapLength + idLength + 0x12`).
     let map_bytes = if color_map_type == 1 {
         color_map_len * map_entry_bytes
     } else {
@@ -100,8 +76,8 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let pixel_count = (width as usize) * (height as usize);
     let mut pixels = Vec::with_capacity(pixel_count * bytes_per_pixel);
     if rle {
-        // RLE packets: header bit 7 = run (one pixel, repeated count times), else raw
-        // (count pixels follow); count = low 7 bits + 1. Runs may NOT cross the image end.
+        // An RLE packet's bit 7 marks a run of one pixel, else `count` raw pixels follow; `count`
+        // is the low 7 bits plus 1.
         let mut at = 0usize;
         while pixels.len() < pixel_count * bytes_per_pixel {
             let Some(&packet) = data.get(at) else {
@@ -135,8 +111,8 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
         pixels.extend_from_slice(px);
     }
 
-    // BGR(A)/gray → RGBA, honouring the descriptor's origin bits (bit 5: top-origin, bit 4:
-    // right-origin — TGA's default is bottom-left, our output is top-down left-to-right).
+    // BGR(A) or gray → RGBA. Descriptor bit 5 is a top origin, bit 4 a right one; TGA's default
+    // is bottom-left.
     let top_down = descriptor & 0x20 != 0;
     let right_first = descriptor & 0x10 != 0;
     let mut rgba = vec![0u8; pixel_count * 4];
@@ -151,18 +127,16 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
             let s = (src_y * width as usize + src_x) * bytes_per_pixel;
             let d = (y * width as usize + x) * 4;
             if paletted {
-                // `0x5a3820`: `src = palette + (index - firstIndex) * entryBytes`, then a memcpy
-                // of one entry. `firstIndex` is the header's colour-map ORIGIN — almost always 0,
-                // and the arithmetic is wrong without it on the images where it is not.
+                // `0x5a3820`: `palette + (index - firstIndex) * entryBytes`, `firstIndex` being
+                // the header's colour-map origin (almost always 0).
                 let idx = (pixels[s] as usize).wrapping_sub(color_map_origin);
                 let e = idx * map_entry_bytes;
                 let Some(entry) = palette.get(e..e + map_entry_bytes) else {
                     bail!("TGA: colour index {} is outside the map", pixels[s]);
                 };
                 rgba[d..d + 4].copy_from_slice(&match map_entry_bytes {
-                    // 15/16-bit entries are ARRRRRGG GGGBBBBB little-endian; 16-bit spends the top
-                    // bit on alpha, 15-bit leaves it unused, and both replicate the high bits down
-                    // so that a full channel reads 0xff rather than 0xf8.
+                    // 15/16-bit entries are `ARRRRRGG GGGBBBBB` little-endian, the top bit alpha
+                    // only at 16; the high bits replicate down so a full channel reads 0xff.
                     2 => {
                         let v = u16::from_le_bytes([entry[0], entry[1]]);
                         let c = |shift: u32| {
@@ -207,7 +181,7 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
 mod tests {
     use super::*;
 
-    /// A minimal COLOUR-MAPPED TGA: header + palette + index stream.
+    /// A minimal colour-mapped TGA: header, palette, index stream.
     fn tga_paletted(
         image_type: u8,
         w: u16,
@@ -231,12 +205,8 @@ mod tests {
         out
     }
 
-    /// **Colour-mapped TGAs decode** — types 1 and 9, the two the reference's dispatch sends to
-    /// `0x5a39d0` and this decoder used to refuse outright.
-    ///
-    /// The shape is the corpus's own: 8-bit indices into a 24-bit palette, which is what all three
-    /// of `FonzAppraiser/img/icon_disable.tga`, `FuBar_WeaponRebuffFu/icon.tga` and
-    /// `FonzSummon/img/icon_disable.tga` are.
+    /// Types 1 and 9, which the reference sends to `0x5a39d0`, in the addons' shape: 8-bit
+    /// indices into a 24-bit palette.
     #[test]
     fn colour_mapped_images_decode_through_the_palette() {
         // Palette as BGR: entry 0 red, entry 1 green, entry 2 blue.
@@ -254,12 +224,11 @@ mod tests {
             ]
         );
 
-        // Type 9 is the same image RLE'd — the run operates on INDEX bytes, not on expanded
-        // pixels, which is the half a naive port gets wrong.
+        // Type 9 is the same image RLE'd; the runs are over index bytes, not expanded pixels.
         let rle = tga_paletted(9, 2, 2, &pal, 24, &[0x02, 0, 1, 2, 0x80, 0]);
         assert_eq!(tga_to_rgba(&rle).unwrap().2, rgba);
 
-        // An index the map cannot answer is LOUD, not a silent black pixel.
+        // An index outside the map is an error, not a black pixel.
         let bad = tga_paletted(1, 1, 1, &pal, 24, &[9]);
         assert!(tga_to_rgba(&bad)
             .unwrap_err()
@@ -267,7 +236,7 @@ mod tests {
             .contains("outside the map"));
     }
 
-    /// A minimal TGA: 18-byte header + pixels.
+    /// A minimal TGA: an 18-byte header and pixels.
     fn tga(image_type: u8, w: u16, h: u16, bpp: u8, descriptor: u8, data: &[u8]) -> Vec<u8> {
         let mut out = vec![0u8; 18];
         out[2] = image_type;
@@ -281,15 +250,14 @@ mod tests {
 
     #[test]
     fn uncompressed_32bit_bottom_origin_flips_and_swizzles() {
-        // 2 wide × 2 tall, bottom-up rows: file row 0 is the image's BOTTOM row.
-        // Bottom row: blue, green; top row: red, half-alpha white — as BGRA.
+        // Bottom-up rows, as BGRA: blue, green at the bottom; red, half-alpha white on top.
         let px = [
             255, 0, 0, 255, /* blue */ 0, 255, 0, 255, /* green */
             0, 0, 255, 255, /* red */ 255, 255, 255, 128, /* white a=128 */
         ];
         let (w, h, rgba) = tga_to_rgba(&tga(2, 2, 2, 32, 0, &px)).unwrap();
         assert_eq!((w, h), (2, 2));
-        // Top-down output: row 0 = red, white; row 1 = blue, green — as RGBA.
+        // Top-down output, as RGBA: red, white, then blue, green.
         assert_eq!(
             rgba,
             vec![
@@ -309,7 +277,7 @@ mod tests {
 
     #[test]
     fn rle_run_and_raw_packets_expand() {
-        // 4×1 top-origin: a run of 3 red + a raw packet of 1 green (BGR, 24-bit).
+        // 4×1 top-origin: a run of 3 red and a raw packet of 1 green (BGR, 24-bit).
         let data = [0x82, 0, 0, 255, 0x00, 0, 255, 0];
         let (w, _, rgba) = tga_to_rgba(&tga(10, 4, 1, 24, 0x20, &data)).unwrap();
         assert_eq!(w, 4);
@@ -332,7 +300,7 @@ mod tests {
     fn garbage_and_unsupported_types_are_loud_misses() {
         assert!(tga_to_rgba(b"BLP2xxxxxxxxxxxxxxxxxx").is_err()); // a BLP is not a TGA
         assert!(tga_to_rgba(&[0u8; 4]).is_err()); // truncated header
-        assert!(tga_to_rgba(&tga(1, 2, 2, 8, 0, &[0; 32])).is_err()); // color-mapped
+        assert!(tga_to_rgba(&tga(1, 2, 2, 8, 0, &[0; 32])).is_err()); // colour-mapped, no map
         assert!(tga_to_rgba(&tga(2, 2, 2, 16, 0, &[0; 32])).is_err()); // 16-bit
         assert!(tga_to_rgba(&tga(2, 2, 2, 32, 0, &[0; 4])).is_err()); // truncated pixels
     }

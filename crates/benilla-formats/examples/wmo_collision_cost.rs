@@ -1,34 +1,15 @@
-//! What a WMO's **collision** actually costs, and whether its walking gather has a floor at all:
+//! Each WMO's collision triangle counts, walking against camera gather, and the groups whose
+//! walking gather (MOPY DETAIL `0x04` dropped) has no walkable face where the camera's does. The
+//! triangle count drives how long a placement takes to turn solid, against the mover's
+//! `SETTLE_TIMEOUT`. Output is Blizzard data: never commit it.
 //! `cargo run -p benilla-formats --example wmo_collision_cost -- <wmo-path-or-substring>...`
-//! e.g. `wmo_collision_cost stratholme.wmo zulgurubcity`.
-//!
-//! The falsifier for a **fall-through** report, which has exactly two shapes and they take opposite
-//! fixes:
-//!
-//! * **No floor to stand on** — the walking gather (`flags & 0x04` DETAIL dropped) came back with no
-//!   upward-facing faces in a group the camera gather *does* see. Then the collider is present and
-//!   correct and still cannot hold you: the authored floor is flagged decal-only. A data fact, fixed
-//!   by widening the gather, and visible here without entering the game.
-//! * **A floor that arrives too late** — the faces are there, but the placement's trimesh is big
-//!   enough that its off-thread build plus the per-frame attach budget runs past the mover's settle
-//!   timeout, so gravity switches on over geometry that is not solid yet. A *timing* fact; this
-//!   prints the triangle count that drives it, so the margin can be compared against
-//!   `SETTLE_TIMEOUT` without guessing which buildings are the heavy ones.
-//!
-//! Both readings are properties of the shipped file, so read them here rather than inferring them
-//! from a fall you may or may not be able to reproduce on your own machine — the timing shape
-//! reproduces only on a machine slow enough, which is exactly why it reaches players and not us.
-//!
-//! Output is Blizzard-derived; pipe it to the scratchpad, never into the repo.
 
 use benilla_formats::{accumulate_wmo_group_camera_collision, accumulate_wmo_group_collision};
 
-/// Faces at least this upward-facing count as a **floor** — the mover's own walkable test
-/// (`GROUND_COS`, ~50° from vertical). A group with collidable faces but none of them walkable is
-/// a wall/ceiling shell you slide down, not something you can stand on.
+/// A face at least this upward-facing is a floor, as the mover's `GROUND_COS` (about 50° from
+/// vertical) judges it.
 const WALKABLE_COS: f32 = 0.64;
 
-/// One gather's shape: how many triangles, and how many of them you could stand on.
 struct Gather {
     tris: usize,
     walkable: usize,

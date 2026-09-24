@@ -1,7 +1,6 @@
-//! Session probe: which bones carry keys in a given sequence — `cargo run -p benilla-formats
-//! --example dump_bone_keys <file.m2> <anim_id> [bone ...]`. With bone indices, prints their
-//! key counts + first rotation keys; without, lists every keyed bone. Extract the file first
-//! via `mpqx` (benilla-mpq). Built for the nocked-ammo investigation (decision 2273 follow-up).
+//! Which bones carry keys in one sequence, with their first keys; bone indices narrow the list.
+//! `cargo run -p benilla-formats --example dump_bone_keys <file.m2> <anim_id> [bone ...]`, the
+//! file extracted first with `mpqx`.
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -64,9 +63,7 @@ fn main() {
                     q[0], q[1], q[2], q[3]
                 );
             }
-            // T/S values too, not just counts — for a flare or a rise the VALUES are the
-            // effect (the gseqdump lesson, here for sequence keys), and per-axis (non-)uniformity
-            // of a scale key is load-bearing for the billboard law's per-axis preserve.
+            // Translation and scale values, not only counts: a billboard preserves scale per axis.
             for (t, v) in bk.translation.iter().take(8) {
                 println!(
                     "    trans t={t:.3} ({:+.3},{:+.3},{:+.3})",

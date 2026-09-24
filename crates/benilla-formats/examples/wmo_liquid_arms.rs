@@ -1,38 +1,18 @@
-//! **Which WMO water ARM each pool takes**, over the whole shipped corpus:
-//! `cargo run -p benilla-formats --example wmo_liquid_arms`.
-//!
-//! The reference does not have *one* WMO water renderer. `0x6b62e0` dispatches the type nibble to a
-//! category, and category 0 (river/water — nibbles 0/4/8) then splits again on the owning group's
-//! `MOGP.flags & 0x48`:
-//!
-//! * `& 0x48 != 0` → **EXTERIOR**, kernel `0x6b6630`. A 9-float (`0x24`) vertex — position, an up
-//!   normal, a colour dword, `u,v` — and the kernel binds the pixel program
-//!   `Shaders\Pixel\MapObjExtWater0.bls` at `0x6b6654` (`GxRsSet(0x3f, …)`, gated on `[0xc9607c]`).
-//! * `& 0x48 == 0` → **INTERIOR**, kernel `0x6b6420`. A 6-float (`0x18`) vertex — position, a colour
-//!   dword, `u,v` — with **no normal at all**, the colour coming from the map object's own light
-//!   records (`CMapObj+0x1d8`).
-//!
-//! The arm split is **category 0 only**. Magma and slime (nibbles 2/3/6/7) go to category 1 and one
-//! shared kernel `0x6b68f0` whatever their group's flags say, so their rows below are context, not
-//! two arms — they are reported because the same building often holds both, and because a reader
-//! comparing group counts would otherwise assume the split is universal.
-//!
-//! Neither water arm is the **ADT** path (`0x6851b0`/`0x685010` → `ocean0_s.bls`), which is the only
-//! one with a depth-ramp texture on stage 0 and the only one whose vertex carries no colour.
-//!
-//! benilla renders all three through one material and one shader — the ADT one. This census says how
-//! much content each arm actually owns, so the divergence can be sized instead of guessed: the two
-//! reported sites (B136 Blackfathom Deeps, and Stormwind's canals) land on opposite arms, and
-//! neither is the path we implement.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! Which WMO water arm each shipped liquid group takes. The reference's dispatch `0x6b62e0` splits
+//! water (nibbles 0/4/8) on the owning group's `MOGP.flags & 0x48`: set runs the exterior kernel
+//! `0x6b6630`, a 9-float vertex with an up normal, binding `MapObjExtWater0.bls` at `0x6b6654`;
+//! clear runs the interior kernel `0x6b6420`, a 6-float vertex with no normal, coloured from the
+//! map object's lights (`CMapObj+0x1d8`). Magma and slime (nibbles 2/3/6/7) take `0x6b68f0`
+//! whatever the flags, and neither arm is the ADT path (`0x6851b0`, `0x685010`, `ocean0_s.bls`).
+//! Output is Blizzard data: never commit it.
+//! `cargo run -p benilla-formats --example wmo_liquid_arms`
 
 use std::collections::BTreeMap;
 
 use benilla_formats::{wmo_group_header, wmo_group_liquid_mesh, Chain};
 
-/// MOGP `flags & 0x48` — the reference's interior test (`0x6b3f90`, and the liquid dispatch's own
-/// `[owner+0x10] & 0x48` at `0x6b62e0`). Zero ⇒ interior.
+/// The reference's interior test, zero meaning interior (`0x6b3f90`; the liquid dispatch
+/// `0x6b62e0` tests `[owner+0x10] & 0x48`).
 const EXTERIOR_MASK: u32 = 0x48;
 
 #[derive(Default, Clone, Copy)]
@@ -46,11 +26,8 @@ fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("no 1.12.1 install found (set $WOW_DATA)"))?;
     let reader = Chain::open(&data)?;
 
-    // Group files are `<root stem>_NNN.wmo`; the roots are what the chain lists, so walk the listing
-    // once and keep the group files directly — a root's group count is not knowable without parsing
-    // it, and the names are self-describing.
     let mut by_arm: BTreeMap<(bool, String), Tally> = BTreeMap::new();
-    // Per building, so a site can be looked up rather than re-derived.
+    // Per building: (interior, exterior) water groups.
     let mut buildings: BTreeMap<String, (u32, u32)> = BTreeMap::new();
 
     for entry in reader.list()? {
@@ -125,7 +102,7 @@ fn main() -> anyhow::Result<()> {
             }
         );
         if !water {
-            continue; // the totals below are the WATER arms; fullbright takes neither
+            continue; // the totals below are the water arms; fullbright takes neither
         }
         if *interior {
             int_g += t.groups;
@@ -139,9 +116,7 @@ fn main() -> anyhow::Result<()> {
         "\nWATER arms — INTERIOR {int_g} groups / {int_t} wet tiles   EXTERIOR {ext_g} groups / {ext_t} wet tiles"
     );
 
-    // Buildings carrying WATER on both arms: a single-shader renderer cannot be right for the whole
-    // building. (Undercity holds both flags too, but its liquid is slime, which takes neither arm —
-    // hence the water-only filter.)
+    // Buildings with water on both arms; Undercity's liquid is slime, which takes neither.
     let mixed: Vec<_> = buildings
         .iter()
         .filter(|(_, (i, e))| *i > 0 && *e > 0)

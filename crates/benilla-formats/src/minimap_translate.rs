@@ -1,21 +1,9 @@
-//! `textures\Minimap\md5translate.trs` — the minimap tile hash catalog: a plain-text index mapping
-//! each authored minimap tile name to the content-hashed filename actually stored under
-//! `textures\Minimap\` (Blizzard's dedup scheme — many tiles across zones/instances share one hash;
-//! decision 0203 phase 0).
-//!
-//! Format — VERIFIED against build 5875 (727 561 B, extracted via `benilla-extract` this session,
-//! 2026-07-07): CRLF-terminated text, 235 `dir: <Dir>` section headers, 8401 tab-separated data
-//! lines `<Dir>\<file>.blp\t<hash>.blp`. Every data line already repeats its full left-hand
-//! directory (checked exhaustively: all 8401 left-hand paths start, case-insensitively, with the
-//! preceding `dir:` header) — the header is cosmetic for parsing, so keying straight off the left
-//! column needs no header-tracking state. Two path shapes share the file and the same table,
-//! un-special-cased: **ADT tiles** (`<MapDir>\map<X>_<Y>.blp`, one per streamed terrain tile — e.g.
-//! `AhnQiraj\map27_46.blp`) and **WMO icon tiles** (`WMO\...\<name>_<n>_<row>_<col>.blp`, the
-//! minimap building-corner icons). All 8401 left-hand paths are unique case-insensitively.
-//!
-//! Verified example: `Azeroth\map32_48.blp → ea283abc0bf9637c3fad5e840a65b38b.blp`, and that hash is
-//! itself readable at `textures\Minimap\ea283abc0bf9637c3fad5e840a65b38b.blp` (decodes as a 256×256
-//! BLP2 — confirmed this session).
+//! `textures\Minimap\md5translate.trs`, the minimap tile index: each authored tile name to the
+//! content-hashed `.blp` stored under `textures\Minimap\`, tiles with the same art sharing a hash.
+//! CRLF text of `dir: <Dir>` headers and tab-separated `<Dir>\<file>.blp\t<hash>.blp` lines; every
+//! line repeats its full directory, so the headers are skipped. ADT tiles
+//! (`<MapDir>\map<X>_<Y>.blp`) and WMO interior tiles (`WMO\...\<name>_<group>_<X>_<Y>.blp`)
+//! share the table.
 
 use std::collections::HashMap;
 
@@ -27,26 +15,19 @@ const MD5_TRANSLATE: &str = "textures\\Minimap\\md5translate.trs";
 
 /// The parsed `md5translate.trs`: every left-hand path (lowercased) to its hashed `.blp` filename.
 pub struct MinimapTranslate {
-    /// `"<dir>\<file>.blp"` (lowercased) → the hashed filename on disk under `textures\Minimap\`
-    /// (e.g. `"ea283abc0bf9637c3fad5e840a65b38b.blp"`).
     entries: HashMap<String, String>,
 }
 
 impl MinimapTranslate {
-    /// The hashed minimap tile filename for `map_dir`'s ADT tile `(x, y)`, or `None` if this tile
-    /// was never authored (open ocean / unstreamed tiles have no minimap art). `map_dir` is
-    /// case-insensitive (MPQ path convention) — e.g. `tile("Azeroth", 32, 48)` resolves the
-    /// verified `ea283abc0bf9637c3fad5e840a65b38b.blp`. Join the result onto
-    /// `textures\Minimap\<hash>` to read the tile itself.
+    /// The hashed filename, under `textures\Minimap\`, of `map_dir`'s ADT tile `(x, y)` in any
+    /// case; `None` where no art was authored, as over open ocean.
     pub fn tile(&self, map_dir: &str, x: u32, y: u32) -> Option<&str> {
         let key = format!("{map_dir}\\map{x}_{y}.blp").to_ascii_lowercase();
         self.entries.get(&key).map(String::as_str)
     }
 
-    /// The hashed filename for an arbitrary logical tile path (case-insensitive, `\`-separated), or
-    /// `None` if unauthored — e.g. the WMO interior tiles
-    /// `wmo\KhazModan\Cities\Ironforge\ironforge_001_00_00.blp`. The ADT [`Self::tile`] is the
-    /// `map<x>_<y>` special case of this.
+    /// The hashed filename for any tile path (`\`-separated, any case), such as the WMO interior
+    /// tile `wmo\KhazModan\Cities\Ironforge\ironforge_001_00_00.blp`.
     pub fn get(&self, logical_path: &str) -> Option<&str> {
         self.entries
             .get(&logical_path.to_ascii_lowercase())
@@ -62,8 +43,7 @@ impl MinimapTranslate {
     }
 }
 
-/// Parse `md5translate.trs`'s text body (CRLF or LF line endings; a `dir:` header line is skipped
-/// — see the module doc, every data line already carries its full directory).
+/// Parse the text body, CRLF or LF, skipping the `dir:` headers.
 fn parse_trs(text: &str) -> HashMap<String, String> {
     let mut entries = HashMap::new();
     for raw in text.split('\n') {
@@ -115,8 +95,7 @@ mod tests {
         assert_eq!(cat.tile("Azeroth", 99, 99), None);
     }
 
-    /// Real chain: the verified Azeroth tile resolves, and the hashed file it names is itself
-    /// readable in the chain as a 256×256 BLP2. Skips without client data.
+    /// The 5875 file: an Azeroth tile resolves to a hash that reads as a 256×256 BLP.
     #[test]
     fn real_md5translate_resolves_azeroth_tile_and_hash_is_readable() {
         let data = crate::wow_data_or_skip!();
@@ -134,9 +113,8 @@ mod tests {
             crate::read_texture_rgba(&mut chain, &tile_path).expect("hashed tile decodes as BLP");
         assert_eq!((w, h), (256, 256));
 
-        // The WMO interior tile key format the minimap builds (`<stem>_<group>_<X>_<Y>.blp`, the
-        // stem being the `.wmo` path minus `World\` + extension) resolves case-insensitively against
-        // the real trs — the end-to-end link the interior renderer's tile lookup depends on.
+        // The interior key the minimap builds: the `.wmo` path without `World\` or extension,
+        // then `_<group>_<X>_<Y>.blp`.
         assert!(
             cat.get("wmo\\KhazModan\\Cities\\Ironforge\\ironforge_001_00_00.blp")
                 .is_some(),

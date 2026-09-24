@@ -1,21 +1,9 @@
-//! **Every WMO in the chain that authors a surface too dark to render on its own** — the world sweep
-//! behind decision 0956's Dire Maul report:
+//! Every WMO surface baked near-black at `MOCV.α = 0` that only the doorway fade
+//! (`FixColorVertexAlpha`) lights: without the fade the TRANS and INT batches render the bake as
+//! is, a black floor. A vertex is dark at luminance < 48 and alpha 0 when the fade lifts it past
+//! 200; a triangle counts when all three are, and batches rank by that area.
+//! Output is Blizzard data: never commit it.
 //! `cargo run --release -p benilla-formats --example wmo_dark_floors [-- <substring>]`
-//!
-//! The bug 0956 fixed was never Dire Maul's: a WMO transition group may bake a surface at near-black
-//! with `MOCV.α = 0`, leaving the runtime bright-doorway fade (`FixColorVertexAlpha`) to light it.
-//! Skip the fade and the interior TRANS/INT law renders the bake literally — a black floor. One
-//! building was *reported*; this asks the question the report could not, which is how many others
-//! were sitting there unreported.
-//!
-//! Severity is **area, not vertex count**. A vertex is *dark* when the file bakes it near-black at
-//! zero alpha (luminance < 48, `α == 0`) and the fade lifts it past 200 — it would have drawn black
-//! and now draws lit. A **triangle** counts when all three of its vertices are, and its model-space
-//! area is summed: that is literally the square yardage of black floor a player would have walked
-//! over (floor, wall or ceiling alike). Batches are reported with their share of their own surface, so a wholly-black walkway
-//! (Dire Maul: 100%) sorts above a darkened seam.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
 
 use benilla_wmo::{parse_wmo, ParsedWmo};
 
@@ -36,9 +24,8 @@ struct Hit {
     batch: usize,
     class: &'static str,
     texture: String,
-    /// Square yards of triangle whose every vertex was dark.
+    /// Square yards of triangles whose every vertex is dark.
     area: f32,
-    /// That area as a share of the batch's own total.
     share: f32,
 }
 
@@ -100,7 +87,7 @@ fn main() -> anyhow::Result<()> {
             if !is_dark.iter().any(|&d| d) {
                 continue;
             }
-            // MOBA is laid out TRANS, INT, EXT — only the first two render the bake.
+            // MOBA runs TRANS, INT, EXT; only the first two render the bake.
             let (trans_n, int_n) = benilla_formats::wmo_group_header(&gbytes)
                 .map(|_| ())
                 .and_then(|()| {

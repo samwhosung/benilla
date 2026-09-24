@@ -1,30 +1,8 @@
-//! **How the ground-clutter fade boundary cuts** — pixel by pixel, or leaf by leaf?
-//!
+//! Whether the ground-clutter fade erodes a tuft or flips whole leaves, per detail atlas and mip.
 //! `cargo run -p benilla-formats --example clutter_cut [substring]`
 //!
-//! The detail-doodad draw alpha-tests `texel.a × ramp(view_depth)` against `detailDoodadAlpha`
-//! (128/255), so as the ramp falls the surviving set is `{ texel.a ≥ 0.502 / ramp }`. Whether that
-//! reads as a tuft *eroding* — the boundary sweeping through a leaf a pixel at a time — or as the
-//! leaf *flipping whole* is decided entirely by the alpha distribution **at the mip the tuft is
-//! sampled at**. The alpha arithmetic is settled and identical either way, so when the cut looks
-//! wrong the answer is in what is being cut, not in the cutting.
-//!
-//! Per atlas, per mip level, three numbers:
-//!
-//! * **`distinct`** — how many distinct alpha values the level carries. **`2` means binary**: the
-//!   product `a × ramp` is then either `0` or `ramp`, so the alpha test degenerates to a global
-//!   on/off and *every texel of every leaf crosses the threshold at the same view depth*. No
-//!   erosion is possible at such a level, at any distance, ever.
-//! * **coverage** across the fade band — the share of the atlas still drawn at each depth. Sliding
-//!   down = the tuft erodes. Holding flat then dropping to zero = the tuft pops.
-//! * **cliff** — how much of the still-drawn coverage goes in the last 0.2 yd before the crossing.
-//!   100% means everything that was left leaves in one step.
-//!
-//! The header line also prints the BLP's own `compression / alpha_bits / alpha_type / has_mips`,
-//! because the shipped art is not uniform: some detail atlases carry a properly averaged mip
-//! pyramid and some carry a **binary-thresholded** one, and the two behave completely differently
-//! at the boundary. Parsed inline from the documented BLP2 layout rather than through the decoder,
-//! so this reports what the *file* says independently of how we read it.
+//! The draw alpha-tests `texel.a × ramp(view_depth)` against 128/255, so the alpha distribution at
+//! the sampled mip decides the cut: a level with only 2 distinct alphas crosses all at once.
 
 use std::collections::BTreeSet;
 
@@ -39,14 +17,11 @@ fn ramp(view_depth: f32, far: f32) -> f32 {
 /// The detail-doodad alpha-test reference (`detailDoodadAlpha` = 128).
 const CUTOUT: f32 = 128.0 / 255.0;
 
-/// Where in the band to sample coverage — clustered at the 61.11 yd crossing, where even a fully
-/// opaque texel fails the test and the whole question lives.
+/// Depths to sample coverage at, clustered at 61.11 yd, where even an opaque texel fails the test.
 const BANDS: [f32; 8] = [52.5, 54.0, 56.0, 58.0, 60.0, 61.0, 61.1, 61.2];
 
-/// What the BLP2 header says about itself: `compression` (1 = palettized, 2 = DXT, 3 = BGRA8),
-/// `alpha_bits`, `alpha_type` (DXT sub-form: 1 = DXT3, 7 = DXT5) and the `has_mipmaps` byte at
-/// offset 0x0B — whose value tracks, in the shipped detail art, whether the mip chain is averaged
-/// or thresholded.
+/// The BLP2 header's `compression` (1 palettized, 2 DXT, 3 BGRA8), `alpha_bits`, `alpha_type`
+/// (1 DXT3, 7 DXT5) and `has_mips` (0x0B), which in the detail art tracks a thresholded chain.
 fn blp_header(bytes: &[u8]) -> Option<(u8, u8, u8, u8)> {
     (bytes.len() >= 20 && &bytes[0..4] == b"BLP2")
         .then(|| (bytes[8], bytes[9], bytes[10], bytes[11]))
@@ -58,7 +33,6 @@ fn main() -> anyhow::Result<()> {
     let mut chain = benilla_formats::open_chain(&data)?;
     let catalog = benilla_formats::load_ground_effect_catalog(&mut chain, true)?;
 
-    // Every distinct detail texture the catalog can place.
     let mut models: BTreeSet<String> = BTreeSet::new();
     for id in 0..4096u32 {
         if let Some(e) = catalog.effect(id) {
@@ -103,9 +77,7 @@ fn main() -> anyhow::Result<()> {
             None => println!("\n{name}"),
         }
 
-        // What an AVERAGED chain would carry, for comparison — mip0's alpha box-filtered down.
-        // This is the control for a binary chain: it says how much of the flat coverage is the
-        // art's own and how much is the authored mip pyramid throwing the gradient away.
+        // The control: mip0's alpha box-filtered down, what an averaged chain would carry.
         let mip0_alpha: Vec<u8> = mips.mips[0]
             .as_chunks::<4>()
             .0
@@ -174,8 +146,6 @@ fn main() -> anyhow::Result<()> {
                 "  mip{i} {w:3}x{h:3} distinct {distinct:<4} [{}]  cliff@61 {cliff:3.0}%",
                 covs.join(" ")
             );
-            // The averaged control, printed only where the authored level is binary — that is the
-            // only case where the two can disagree, and seeing them side by side is the point.
             if i > 0 && distinct <= 2 {
                 if let Some(avg) = averaged.get(i) {
                     let mut seen = [false; 256];

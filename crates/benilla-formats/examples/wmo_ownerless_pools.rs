@@ -1,49 +1,14 @@
-//! **Which buildings' embedded pools have no visibility authority**, over the whole shipped corpus:
-//! `cargo run -p benilla-formats --example wmo_ownerless_pools`.
+//! Which WMO roots have embedded pools but no `WmoPortalInstance` to own them. A placement gets an
+//! instance only with a portal graph or an authored `WMOAreaTable` identity, the spawn site's
+//! `has_portals || m.wmo_id != 0` (`terrain_stream::spawn`), and a pool's `WmoGroupVis`/`WmoRoom`
+//! scope is keyed to it. No shipped root is both portal-less and unnamed: the only `wmoID == 0`
+//! root, `pvp_alterac_ent01.wmo`, has portals.
+//! `cargo run -p benilla-formats --example wmo_ownerless_pools`
 //!
-//! A placed WMO gets a `WmoPortalInstance` only when it has a portal graph **or** an authored
-//! `WMOAreaTable` identity — `has_portals || m.wmo_id != 0`, the spawn site in
-//! `benilla-world/src/terrain_stream/spawn/mod.rs`. Everything about a building's *rooms* hangs off
-//! that instance: it is the per-placement entity the group-visible set lives on, and it is what a
-//! pool's `WmoGroupVis`/`WmoRoom` scope is keyed to.
-//!
-//! So a root that has **neither** portals **nor** a wmoID is instance-less — and until decision 1652
-//! that meant its embedded MLIQ pools were tagged with *neither* `WmoGroupVis` nor `ExteriorScene`,
-//! i.e. no system ever wrote their `Visibility` at all, while the same placement's walls were
-//! tagged `ExteriorScene` unconditionally and window-culled normally. A sealed well room drawing a
-//! disc of water in mid-air is what that *would* look like from outside.
-//!
-//! Whether any shipped root actually falls in that cell is the question — an unreachable branch and
-//! a widespread defect are the same code, and only the corpus tells them apart.
-//!
-//! **The answer is zero** (run 2026-08-27): of 815 roots, 448 carry no portal graph
-//! and exactly **one** carries `wmoID == 0` — `pvp_alterac_ent01.wmo` — and that one *does* have
-//! portals. The two conditions never coincide in shipped data, so the instance-less branch is dead
-//! and 1652's unconditional tag on pools closes a hole no building reaches. That is worth a census
-//! rather than a guess in either direction: it is the difference between a fix that earns a sighting
-//! and one that must never be credited with one.
-//!
-//! Two facts per root, both read from the bytes the runtime reads:
-//!
-//! * **instance** — `MOPT` and `MOPR` both non-empty (`benilla_assets::WmoModel::portal_infos` /
-//!   `portal_refs`), or `MOHD.wmoID @0x20 != 0` ([`benilla_formats::wmo_root_id`], the
-//!   `WMOAreaTable.WMOID` key).
-//! * **liquid** — any group file for which [`benilla_formats::wmo_group_liquid_mesh`] yields a
-//!   surface. That is the *same* call `WmoModel::group_liquids` makes, so a root counted wet here is
-//!   exactly a root that spawns pool entities at placement. (`resolve_shared_liquid_cells` can drop
-//!   one group's mesh afterwards, but only in favour of a sibling group of the same root, so it
-//!   cannot change a root's wet/dry verdict.) A group whose MOGP `groupLiquid` @`0x34` declares
-//!   whole-group submersion but carries no `MLIQ` grid (13 in the archive) is **not**
-//!   counted: it spawns no pool entity, so there is nothing for an instance to own. The liquid-group
-//!   total cross-checks against `wmo_liquid_arms`, which reaches the same groups from the other side
-//!   — the listfile's `_NNN` group files rather than `MOHD.nGroups` per root.
-//!
-//! Roots are also split by whether the world actually **places** them — an unplaced WMO can never be
-//! stood next to, so it cannot show the defect. Placements come from every ADT's `MODF` plus the
-//! WDT global-WMO of the 20 WMO-only maps (scanning only ADTs would call the Deeprun
-//! Tram and every instance-shaped dungeon unplaced).
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! A root has liquid when [`benilla_formats::wmo_group_liquid_mesh`] yields a surface for any of
+//! its groups, the call `WmoModel::group_liquids` makes; a group flooded by `groupLiquid` alone
+//! spawns no pool and is not counted. Placements come from every ADT's `MODF` and each WMO-only
+//! map's WDT global WMO. Output is Blizzard data: never commit it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
@@ -54,38 +19,35 @@ use benilla_formats::{
 
 /// What one root says about the two axes.
 struct Root {
-    /// `MOHD.wmoID @0x20` — the `WMOAreaTable.WMOID` key; `0` ⇒ the building has no authored identity.
+    /// `MOHD.wmoID` (`+0x20`), the `WMOAreaTable.WMOID` key; 0 means no authored identity.
     wmo_id: u32,
-    /// `MOPT` ∧ `MOPR` both non-empty — the spawn site's `has_portals`.
+    /// `MOPT` and `MOPR` both non-empty, the spawn site's `has_portals`.
     has_portals: bool,
     /// Group files the root declares (`MOHD.nGroups`).
     groups: u32,
     /// Groups whose MLIQ resolves to a liquid surface.
     liquid_groups: u32,
-    /// Wet cells across those surfaces — the size of what draws.
     wet_tiles: u32,
-    /// Maps the root is placed on (empty ⇒ never placed).
+    /// Maps the root is placed on; empty if never placed.
     maps: BTreeSet<String>,
 }
 
 impl Root {
-    /// The spawn site's test, verbatim: no instance ⇒ nothing owns this building's rooms.
+    /// The spawn site's test: without an instance nothing owns the building's rooms.
     fn has_instance(&self) -> bool {
         self.has_portals || self.wmo_id != 0
     }
 }
 
-/// Normalize a chain path the way the MPQ hash compares them, so ADT `MWMO` names and listfile
-/// names land on the same key.
+/// A chain path normalised as the MPQ hash compares it, so ADT `MWMO` and listfile names agree.
 fn key(name: &str) -> String {
     name.replace('/', "\\").to_ascii_lowercase()
 }
 
-/// Every WMO root the world actually places, mapped to the maps it appears on: ADT `MODF` first,
-/// then the WDT global-WMO that IS the world on a WMO-only map.
+/// Every placed WMO root and the maps it is on: ADT `MODF`s, then each WMO-only map's WDT global.
 fn placed_roots(chain: &Chain) -> anyhow::Result<BTreeMap<String, BTreeSet<String>>> {
     let mut placed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    // `World\Maps\<map>\<map>_XX_YY.adt` — the map name is the third path component.
+    // `World\Maps\<map>\<map>_XX_YY.adt`: the map name is the third path component.
     let map_of = |name: &str| key(name).split('\\').nth(2).unwrap_or("?").to_string();
 
     let names: Vec<String> = chain.list()?.into_iter().map(|e| e.name).collect();
@@ -137,13 +99,8 @@ fn main() -> anyhow::Result<()> {
     let placed = placed_roots(&chain)?;
     eprintln!("{} distinct WMO roots placed in the world", placed.len());
 
-    // A group file's stem ends `_NNN`; a root's does not. The chain lists both.
-    //
-    // The listfile is NOT a complete index (`Chain::list`'s own doc: a file absent from every
-    // archive's listfile is readable by name but not enumerated), so the scanned set is the UNION of
-    // the listed roots and every root an ADT/WDT actually references. A placed-but-unlisted root is
-    // exactly the one this census must not miss, and the two counts printed below say whether the
-    // union ever added anything.
+    // Roots are the listed `.wmo` files whose stem lacks `_NNN`, plus every placed root the
+    // listfile misses: a file absent from every listfile is readable but not enumerated.
     let listed: BTreeSet<String> = chain
         .list()?
         .into_iter()
@@ -177,8 +134,7 @@ fn main() -> anyhow::Result<()> {
         let Ok(bytes) = chain.read(k) else {
             continue;
         };
-        // `parse_wmo_root` is the group-count authority (`MOHD.nGroups`); a file that fails it is
-        // not a root and has no rooms to own.
+        // `parse_wmo_root` gives the group count (`MOHD.nGroups`); a file it rejects has no rooms.
         let Ok(root) = parse_wmo_root(&bytes) else {
             continue;
         };
@@ -243,9 +199,7 @@ fn main() -> anyhow::Result<()> {
         .count();
     let liquid_groups: u32 = census.values().map(|r| r.liquid_groups).sum();
 
-    // The two axes on their own. The cross-tab cannot say WHICH half of `has_portals || wmo_id != 0`
-    // carries a root, and "no root is instance-less" is a claim that has to be falsifiable from the
-    // same run rather than taken on the strength of one collapsed cell.
+    // Each axis alone: the cross-tab cannot say which half of `has_portals || wmo_id != 0` holds.
     let portal_less = census.values().filter(|r| !r.has_portals).count();
     let unnamed = census.values().filter(|r| r.wmo_id == 0).count();
     println!(
@@ -258,9 +212,7 @@ fn main() -> anyhow::Result<()> {
 {liquid_groups} liquid groups in all"
     );
 
-    // Every root on the rarer axis, named: `wmoID == 0` is what makes the instance depend on the
-    // portal graph at all, so the handful that have it are the whole falsifiable surface of the
-    // cross-tab's empty cell.
+    // Every `wmoID == 0` root by name: only these depend on their portal graph for an instance.
     println!("\nroots with wmoID 0:");
     for (path, r) in census.iter().filter(|(_, r)| r.wmo_id == 0) {
         println!(

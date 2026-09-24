@@ -1,16 +1,6 @@
-//! The vanilla patch chain — a priority-ordered set of MPQ archives, read through `benilla-mpq`.
-//!
-//! Replaces `wow-mpq`'s `PatchChain` *and* the old `ChainReader`. Those were two types
-//! because `wow-mpq`'s `Archive::open` re-parsed the hash/block (and the useless `(attributes)`) tables
-//! on every open, so `ChainReader` bolted a `Mutex<HashMap<…, Archive>>` handle-cache on top to avoid
-//! re-paying that per read. `benilla_mpq::Archive` now caches its parsed tables in an `Arc` and reads
-//! `&self` (a fresh OS handle per read, no seek-state sharing), so the cache is gone and one `Chain`
-//! serves both the `&self` concurrent Bevy `AssetReader` path and the `&mut` streaming-loader path.
-//!
-//! Later archives override earlier ones for files sharing an internal path (so a patch archive
-//! wins); a read resolves a name to the highest-priority archive that holds it. Base content
-//! archives carry no `(listfile)`, so resolution is by name **hash**, which works without one.
-//! Which archives mount, and in what order, is [`mount_order`]'s law.
+//! The vanilla patch chain: a priority-ordered set of MPQ archives, read through `benilla-mpq`. A
+//! read resolves a name to the highest-priority archive holding it, so a patch wins; base archives
+//! carry no `(listfile)`, so resolution is by name hash.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -28,13 +18,12 @@ pub struct ChainEntry {
 
 /// A priority-ordered patch chain of MPQ archives (`Send + Sync`; reads are `&self` and lock-free).
 pub struct Chain {
-    /// Ascending priority — later archives win. `resolve` scans back-to-front.
+    /// Ascending priority: later archives win.
     archives: Vec<Archive>,
 }
 
-/// `patch-?.MPQ` with the reference's FindFirstFileW semantics: `?` matches **exactly one**
-/// character, case-insensitively — `patch-3.MPQ` mounts, `patch-10.MPQ` does not (the glob
-/// template `0x82edbc` and its wrapper `0x42ad10`).
+/// `patch-?.MPQ` as the reference's `FindFirstFileW` glob matches it (template `0x82edbc`, wrapper
+/// `0x42ad10`): `?` is exactly one character, any case, so `patch-10.MPQ` never mounts.
 fn is_patch_glob_match(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     let Some(mid) = lower
@@ -46,14 +35,10 @@ fn is_patch_glob_match(name: &str) -> bool {
     mid.chars().count() == 1
 }
 
-/// The vanilla mount law over a `Data` directory listing, **ascending priority** (
-/// the mounter `0x403740`): the ten
-/// [`VANILLA_BASE_ORDER`] archives at their fixed priorities, then `patch.MPQ`, then every
-/// `patch-?.MPQ` sorted ascending by case-folded name — the binary sorts its glob matches
-/// *descending* (`strnicmp`) and walks the array backwards, so the order is deterministic, never
-/// filesystem enumeration; `patch-3` overrides `patch-2` — then `speech2.MPQ` above every patch.
-/// Names are matched case-insensitively (the reference runs on a case-insensitive filesystem) and
-/// returned as found on disk; absent archives are simply not in the result.
+/// The reference's mount order over a `Data` listing, ascending priority (`0x403740`): the ten
+/// [`VANILLA_BASE_ORDER`] archives, `patch.MPQ`, every `patch-?.MPQ` by case-folded name (the
+/// reference sorts descending with `strnicmp` and walks backwards), then `speech2.MPQ`. Names
+/// match case-insensitively and come back as found on disk.
 fn mount_order(dir_names: &[String]) -> Vec<String> {
     let find = |want: &str| {
         dir_names
@@ -75,13 +60,11 @@ fn mount_order(dir_names: &[String]) -> Vec<String> {
 }
 
 impl Chain {
-    /// Open a chain from a vanilla `Data` directory (every archive [`mount_order`] finds in it,
-    /// lowest priority first) or a single `.MPQ` file (just that archive).
+    /// Open a `Data` directory's archives in [`mount_order`], or a single `.MPQ` file.
     ///
-    /// An archive that exists but fails to open is a hard error, deliberately: the reference logs
-    /// `"Failed to open archive"` and continues, but a silent skip turns a corrupt `dbc.MPQ` — or a
-    /// modder's malformed `patch-3.MPQ` — into cryptic missing-file failures far downstream. Same
-    /// composite on a healthy install; a clear error instead of a quirk on a broken one (1300).
+    /// Deviation: an archive that fails to open is an error, where the reference logs
+    /// `"Failed to open archive"` and goes on, because a skipped corrupt archive surfaces only as
+    /// missing files far downstream.
     pub fn open(path: &Path) -> Result<Self> {
         let mut archives = Vec::new();
         if path.is_dir() {
@@ -113,34 +96,29 @@ impl Chain {
         Ok(Self { archives })
     }
 
-    /// The highest-priority archive with an *entry* for `name` (readable file **or** delete-marker),
-    /// if any. Stops at the winning archive — including a tombstone, which correctly shadows any
-    /// lower-priority copy. Callers that want "readable" must check
-    /// [`Archive::is_delete_marker`].
+    /// The highest-priority archive with an entry for `name`, a delete marker included, as a
+    /// tombstone shadows every lower copy: check [`Archive::is_delete_marker`] for a readable file.
     fn resolve(&self, name: &str) -> Option<&Archive> {
         self.archives.iter().rev().find(|a| a.contains(name))
     }
 
-    /// Whether the chain holds `name` as a **readable** file (accepts `/` or `\`; case-insensitive).
-    /// A path whose winning entry is a delete-marker is *not* present — the client deleted it.
+    /// Whether `name` (`/` or `\`, any case) is a readable file, not a delete marker.
     pub fn contains(&self, name: &str) -> bool {
         self.resolve(name)
             .is_some_and(|a| !a.is_delete_marker(name))
     }
 
-    /// The path of the archive `name` resolves to (the winning override) — for debugging / extract.
+    /// The path of the archive `name` resolves to, for debugging and extraction.
     pub fn find_file_archive(&self, name: &str) -> Option<&Path> {
         self.resolve(name).map(|a| a.path())
     }
 
-    /// Read a file by internal path (accepts `/` or `\`), from its winning archive. `&self`: safe to
-    /// call concurrently (the Bevy `AssetReader` does).
+    /// Read a file by internal path (`/` or `\`) from its winning archive.
     pub fn read(&self, name: &str) -> Result<Vec<u8>> {
         let archive = self
             .resolve(name)
             .ok_or_else(|| anyhow!("file not in patch chain: {name}"))?;
-        // A tombstone shadows every lower copy: the path is deleted from the composite, so this is a
-        // clean "not found", not a fall-through to a stale base version.
+        // A tombstone deletes the path from the composite: not found, never a stale lower copy.
         if archive.is_delete_marker(name) {
             bail!(
                 "file deleted from patch chain: {name} (tombstoned by {})",
@@ -152,19 +130,14 @@ impl Chain {
             .with_context(|| format!("reading {name} from {}", archive.path().display()))
     }
 
-    /// `&mut` alias of [`Chain::read`] — kept so the streaming-loader call sites that thread a
-    /// `&mut Chain` read exactly as they did against `wow-mpq`'s `PatchChain`.
+    /// `&mut` alias of [`Chain::read`] for call sites that thread a `&mut Chain`.
     pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>> {
         self.read(name)
     }
 
-    /// List the chain's named files with sizes. Dev/extract use only — files absent from every
-    /// listfile (most of `texture.MPQ`) are reachable by name but not enumerated.
-    ///
-    /// Unions the `(listfile)` of **every** archive that carries one: each archive's listfile names
-    /// only the files *it* holds, so resolving `(listfile)` like an ordinary overridden file (as this
-    /// used to) returns just the top patch archive's sliver — 92 names from `patch-2.MPQ` instead of
-    /// the chain's ~86k. Sizes still resolve per-name to the winning archive.
+    /// The chain's named files with sizes, for development and extraction; a file in no listfile
+    /// (most of `texture.MPQ`) is readable by name but not listed. Unions every archive's
+    /// `(listfile)`, as each names only its own files; sizes come from the winning archive.
     pub fn list(&self) -> Result<Vec<ChainEntry>> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
@@ -174,12 +147,12 @@ impl Chain {
             };
             for raw in String::from_utf8_lossy(&listfile).split([';', '\r', '\n']) {
                 let name = raw.trim();
-                // Dedupe across archives the way MPQ hashing compares names: case-insensitive, `/`≡`\`.
+                // Dedupe the way MPQ hashing compares names: any case, `/` and `\` alike.
                 if name.is_empty() || !seen.insert(name.replace('/', "\\").to_ascii_lowercase()) {
                     continue;
                 }
                 if let Some(a) = self.resolve(name) {
-                    // A tombstoned path isn't a file in the composite — don't list it.
+                    // A tombstoned path is not a file in the composite.
                     if a.is_delete_marker(name) {
                         continue;
                     }
@@ -207,11 +180,9 @@ mod tests {
         assert!(is_patch_glob_match("patch-2.MPQ"));
         assert!(is_patch_glob_match("patch-3.MPQ"));
         assert!(is_patch_glob_match("PATCH-A.mpq"));
-        // Zero or two-plus characters: FindFirstFileW's `?` is exactly one.
         assert!(!is_patch_glob_match("patch-.MPQ"));
         assert!(!is_patch_glob_match("patch-10.MPQ"));
         assert!(!is_patch_glob_match("patch-33.MPQ"));
-        // Not the glob's shape at all.
         assert!(!is_patch_glob_match("patch.MPQ"));
         assert!(!is_patch_glob_match("patch-2.MPQ.bak"));
         assert!(!is_patch_glob_match("mypatch-2.MPQ"));
@@ -219,8 +190,7 @@ mod tests {
 
     #[test]
     fn mount_order_is_the_carved_law() {
-        // A shuffled install with a custom patch, plus files the mounter must ignore:
-        // base.MPQ (telemetry-only in the reference), backup.MPQ, loose non-archives.
+        // base.MPQ is telemetry-only in the reference and never mounts.
         let dir = owned(&[
             "patch-2.MPQ",
             "backup.MPQ",
@@ -249,8 +219,6 @@ mod tests {
 
     #[test]
     fn patch_sort_is_ascending_and_case_folded() {
-        // Later wins in `Chain`, so ascending case-folded order makes patch-3 override patch-2
-        // and `patch-B` override `patch-a` ('a' < 'b' after the strnicmp-style fold).
         let dir = owned(&["patch-B.MPQ", "patch-3.MPQ", "patch-a.MPQ", "patch-2.MPQ"]);
         assert_eq!(
             mount_order(&dir),

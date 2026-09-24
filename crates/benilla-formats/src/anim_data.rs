@@ -1,32 +1,9 @@
-//! `AnimationData.dbc` — the per-animation policy row behind the sheath reconcile
-//! and, later, missing-clip fallback resolution.
-//!
-//! Layout — VERIFIED against build 5875 (header + full 208-row decode with name joins,
-//! 2026-07-03): **208 × 7 × 28 B**: `ID(0), Name(str, 1), WeaponFlags(2), BodyFlags(3), _col4(4),
-//! _col5(5), Fallback(6)`.
-//!
-//! - **WeaponFlags (col 2)** — the sheath-reconcile bits the client tests on every `PlayAnimation`
-//!   (`0x5fdf80`). The identification is the binary's: the reconcile indexes the
-//!   `WowClientDB<AnimationData>` cache (`0xc0e070`, loader-asserted 7 columns × 28 B against
-//!   `DBFilesClient\AnimationData.dbc`) by the current sequence's AnimationData id, and all three
-//!   flag tests read row offset `+0x8` = column 2.
-//!   The bits: `4` force-stow (casts, Swim 42–45, Mount 91,
-//!   SitChair 102–104, Loot 50), `0x10` force-stow (every Emote, AttackUnarmed 16/117,
-//!   SitGround 96–98, Kneel 114–116, AttackBow/Rifle/Thrown), `0x20` force-draw-melee (armed
-//!   attacks 17–19/85–88, Ready1H/2H/2HL 26–28, specials, FishingCast/Loop 133–134). The column's
-//!   exact 5875 value set is `{0, 4, 16, 20, 32}` — precisely the tested bit triple.
-//! - **Fallback (col 6)** — identified from the data (the chains are unambiguous:
-//!   Attack2H→Attack1H→AttackUnarmed, Sprint→Run, JumpLandRun→Run, Sleep→SleepDown, Drowned→Drown,
-//!   WalkBackwards→Walk, StealthWalk→Walk; col 5 read as a fallback yields nonsense — Attack2H→Stop,
-//!   Sleep→SpellCast). **Not the primary runtime missing-clip mechanism** (amending
-//!   this file's earlier reading): the real client's per-id fallback for ids `< 203` is a single
-//!   indexed read of the M2's own baked `PlayableAnimationLookup` (a per-model precomputed cache of
-//!   *this* column's walk against that model's actual sequence set — see
-//!   `benilla_formats::PlayableAnim` / `benilla_assets::ModelAnimations::resolve`). This column is
-//!   PATH 2 of that resolver (ids ≥ 203 only, `AnimationData.dbc`'s 208 rows) and the *source* the
-//!   baked tables were computed from. `0` = fall back to Stand.
-//! - Cols 4/5 are unidentified here (4 reads priority-like — 500 on Death/Dead/Drown, 10 on
-//!   locomotion; 5 flag-like) and are not exposed.
+//! `AnimationData.dbc`, the per-animation policy: 208 rows of `ID`, `Name`, `WeaponFlags`,
+//! `BodyFlags`, two unidentified columns and `Fallback`. The reference's sheath reconcile
+//! (`0x5fdf80`, on every `PlayAnimation`) reads `WeaponFlags` at row `+0x8` of the `0xc0e070` cache
+//! for the requested id, not a model's substitute: `4` and `0x10` stow, `0x20` draws melee, and
+//! 5875 sets no other bit. `Fallback` is walked only for ids past a model's baked
+//! `PlayableAnimationLookup` (203 and up), which was computed from it.
 
 use std::collections::HashMap;
 
@@ -39,7 +16,7 @@ use crate::Chain;
 /// One animation's policy row.
 #[derive(Clone, Copy)]
 pub struct AnimEntry {
-    /// The sheath-reconcile bits (see the module doc). `0` for most rows.
+    /// The sheath-reconcile bits (col 2).
     pub weapon_flags: u32,
     /// The substitute animation id when a model lacks this clip (`0` = Stand).
     pub fallback: u16,
@@ -48,15 +25,13 @@ pub struct AnimEntry {
 /// `AnimationData.dbc` id → its policy row.
 pub struct AnimDataCatalog {
     rows: HashMap<u16, AnimEntry>,
-    /// id → the row's Name string (col 1, `"Attack1H"`) — the human face for debug readouts
-    /// (the inspector's anim line). Beside [`AnimEntry`] so the policy row stays `Copy`.
+    /// The Name column (col 1, `"Attack1H"`) for debug readouts, kept apart so [`AnimEntry`]
+    /// stays `Copy`.
     names: HashMap<u16, String>,
 }
 
 impl AnimDataCatalog {
-    /// Build a catalog directly from rows — the synthetic-table entry point for tests exercising
-    /// missing-clip resolution's PATH 2 walk (`benilla_assets::ModelAnimations::resolve`)
-    /// without a real `AnimationData.dbc`.
+    /// A catalog of synthetic rows with no names, for tests without an `AnimationData.dbc`.
     pub fn from_rows(rows: impl IntoIterator<Item = (u16, AnimEntry)>) -> Self {
         Self {
             rows: rows.into_iter().collect(),
@@ -64,13 +39,13 @@ impl AnimDataCatalog {
         }
     }
 
-    /// The sheath-reconcile WeaponFlags for an animation id (`0` for an unknown id — no policy).
+    /// The WeaponFlags for an animation id, `0` (no policy) for an unknown one.
     pub fn weapon_flags(&self, id: u16) -> u32 {
         self.rows.get(&id).map_or(0, |r| r.weapon_flags)
     }
 
-    /// The fallback animation for a model lacking clip `id` — `None` when the row has none
-    /// (fallback 0 = Stand, left to the caller's own id-list fallbacks) or the id is unknown.
+    /// The fallback for a model lacking clip `id`; `None` for Stand (`0`), which the caller
+    /// resolves itself.
     pub fn fallback(&self, id: u16) -> Option<u16> {
         self.rows
             .get(&id)
@@ -78,8 +53,7 @@ impl AnimDataCatalog {
             .filter(|&f| f != 0 && f != id)
     }
 
-    /// The row's Name string (`"Run"`, `"Attack1H"`) — `None` for an unknown id or a
-    /// synthetic-table catalog ([`Self::from_rows`] keeps no names).
+    /// The row's Name (`"Run"`); a [`Self::from_rows`] catalog has none.
     pub fn name(&self, id: u16) -> Option<&str> {
         self.names.get(&id).map(String::as_str)
     }
@@ -134,9 +108,7 @@ pub fn load_anim_data_catalog(chain: &mut Chain) -> Result<AnimDataCatalog> {
 mod tests {
     use super::*;
 
-    /// The real 5875 table: the WeaponFlags value set is exactly the reconcile's tested bit
-    /// triple, the decision-0080 spot rows carry the recorded bits, and the fallback chains
-    /// resolve (Attack2H→Attack1H, Sprint→Run). Skips without client data.
+    /// The 5875 table: WeaponFlags within the reconcile's three bits, spot rows, fallback chains.
     #[test]
     fn real_animation_data_decodes() {
         let data = crate::wow_data_or_skip!();
@@ -144,7 +116,6 @@ mod tests {
         let cat = load_anim_data_catalog(&mut chain).expect("load AnimationData");
         assert_eq!(cat.len(), 208);
 
-        // The whole column stays within the tested bit triple {0, 4, 0x10, 0x14, 0x20}.
         for (&id, row) in &cat.rows {
             assert!(
                 matches!(row.weapon_flags, 0 | 4 | 0x10 | 0x14 | 0x20),
@@ -153,7 +124,6 @@ mod tests {
             );
         }
 
-        // Decision 0080's transcribed highlights.
         assert_eq!(cat.weapon_flags(42), 4, "Swim force-stows");
         assert_eq!(cat.weapon_flags(91), 4, "Mount force-stows");
         assert_eq!(cat.weapon_flags(102), 4, "SitChairLow force-stows");
@@ -169,18 +139,16 @@ mod tests {
         assert_eq!(cat.weapon_flags(133), 0x20, "FishingCast force-draws");
         assert_eq!(cat.weapon_flags(0), 0, "Stand carries no policy");
 
-        // The ranged-handling trio the reconcile exempts (0x69/0x6a/0x70).
+        // The ranged-handling trio the reconcile exempts.
         for id in [105, 106, 112] {
             assert_eq!(cat.weapon_flags(id), 0, "Load* anims carry no policy");
         }
 
-        // The name column (the inspector's anim line).
         assert_eq!(cat.name(0), Some("Stand"));
         assert_eq!(cat.name(5), Some("Run"));
         assert_eq!(cat.name(17), Some("Attack1H"));
         assert_eq!(cat.name(255), None, "unknown id has no name");
 
-        // The fallback chains.
         assert_eq!(cat.fallback(18), Some(17), "Attack2H → Attack1H");
         assert_eq!(cat.fallback(17), Some(16), "Attack1H → AttackUnarmed");
         assert_eq!(cat.fallback(143), Some(5), "Sprint → Run");

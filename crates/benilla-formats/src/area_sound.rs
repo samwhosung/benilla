@@ -1,19 +1,7 @@
-//! The zone→audio data plane: **AreaTable** (the zone/subzone row the MCNK `areaId` points at)
-//! joined to **ZoneMusic** / **SoundAmbience** / **ZoneIntroMusicTable** (slice 1).
-//!
-//! Layouts — VERIFIED against build 5875 (header + row decodes, 2026-07-02):
-//! - `AreaTable.dbc` **1081 × 25 × 100 B**: `ID(0), ContinentID(1), ParentAreaID(2), AreaBit(3),
-//!   Flags(4), SoundProviderPref(5), SoundProviderPrefUnderwater(6), AmbienceID(7), ZoneMusic(8),
-//!   IntroSound(9), ExplorationLevel(10), AreaName_lang(11..19), FactionGroupMask(20),
-//!   LiquidTypeID[4](21..24)`. Spot-check row 12: "Elwynn Forest", Ambience 35, ZoneMusic 1.
-//!   NOTE the wowdev-wiki 5875 struct appends TBC+ fields (28 cols) — **wrong**; 25 verified.
-//! - `ZoneMusic.dbc` **99 × 8 × 32 B**: `ID, SetName(str), SilenceMin[2], SilenceMax[2],
-//!   Sounds[2]` — the `[2]` arrays are `[day, night]`, intervals in **ms**, `Sounds` →
-//!   SoundEntries kits (type 28). Row 1: "Zone-Forest", 180 000–300 000 ms, kit 2523/2523.
-//! - `ZoneIntroMusicTable.dbc` **43 × 5 × 20 B**: `ID, Name(str), SoundID, Priority,
-//!   MinDelayMinutes`. Row 61: "Valley of Heroes", 2541, 1, 60.
-//! - `SoundAmbience.dbc` **68 × 3 × 12 B**: `ID, AmbienceID[2] = [day, night]` → looping
-//!   SoundEntries kits (type 50). Row 22: day 4163 / night 4204.
+//! The zone audio tables: `AreaTable` (the row an MCNK `areaId` names) joined to `ZoneMusic`,
+//! `SoundAmbience` and `ZoneIntroMusicTable`. `AreaTable.dbc` has 25 columns in 5875, not the 28
+//! of later builds: the eleven `area_schema` names, `AreaName_lang` (11-19), `FactionGroupMask`
+//! and `LiquidTypeID[4]`.
 
 use std::collections::HashMap;
 
@@ -26,19 +14,18 @@ use crate::dbc::{parse, str_at, u32_at};
 /// The audio-relevant slice of one `AreaTable` row.
 pub struct AreaEntry {
     pub id: u32,
-    /// Parent zone (subzone rows inherit unset audio fields from it; 0 = a top-level zone).
+    /// The parent zone, `0` for a top-level one; a subzone inherits its unset audio ids.
     pub parent: u32,
-    /// `SoundAmbience.dbc` FK (0 = inherit/none).
+    /// `SoundAmbience.dbc` id, `0` to inherit.
     pub ambience: u32,
-    /// `ZoneMusic.dbc` FK (0 = inherit/none).
+    /// `ZoneMusic.dbc` id, `0` to inherit.
     pub zone_music: u32,
-    /// `ZoneIntroMusicTable.dbc` FK (0 = inherit/none).
+    /// `ZoneIntroMusicTable.dbc` id, `0` to inherit.
     pub intro_sound: u32,
-    /// `SoundProviderPreferences.dbc` FK — the dry-land reverb preset (0 = inherit/none; only
-    /// 8 areas in 1.12, all dungeon floors — interiors carry theirs on `WMOAreaTable`).
+    /// `SoundProviderPreferences.dbc` id of the dry-land reverb preset, `0` to inherit;
+    /// interiors carry theirs on `WMOAreaTable`.
     pub sound_provider: u32,
-    /// `SoundProviderPreferences.dbc` FK while the listener is submerged (pref 11 "Underwater"
-    /// on 568 areas; 0 = inherit/none).
+    /// The preset while the listener is submerged (11 is "Underwater"), `0` to inherit.
     pub sound_provider_underwater: u32,
     /// The zone/subzone display name (enUS column).
     pub name: String,
@@ -48,24 +35,24 @@ pub struct AreaEntry {
 pub struct ZoneMusicEntry {
     pub id: u32,
     pub set_name: String,
-    /// Silence between tracks, milliseconds, uniform in `[min, max]`.
+    /// Silence between tracks in ms, uniform in `[min, max]`.
     pub silence_min: [u32; 2],
     pub silence_max: [u32; 2],
-    /// SoundEntries kits (type 28) — the track pool per phase.
+    /// `SoundEntries` kits (type 28), the track pool per phase.
     pub sounds: [u32; 2],
 }
 
-/// One `ZoneIntroMusicTable` row — the entry fanfare.
+/// One `ZoneIntroMusicTable` row, the fanfare on entering an area.
 pub struct ZoneIntroEntry {
     pub id: u32,
     pub sound_id: u32,
     /// Higher wins when nested areas compete.
     pub priority: u32,
-    /// Replay throttle, minutes.
+    /// Replay throttle in minutes.
     pub min_delay_minutes: u32,
 }
 
-/// One `SoundAmbience` row: the looping ambience kits, `[day, night]`.
+/// One `SoundAmbience` row: the looping ambience kits (type 50), `[day, night]`.
 pub struct SoundAmbienceEntry {
     pub id: u32,
     pub kits: [u32; 2],
@@ -79,7 +66,7 @@ pub struct AreaSoundCatalog {
     ambience: HashMap<u32, SoundAmbienceEntry>,
 }
 
-/// An area's fully-resolved audio identity (after the parent walk).
+/// An area's audio after the parent walk.
 pub struct AreaAudio<'a> {
     pub area_name: &'a str,
     pub music: Option<&'a ZoneMusicEntry>,
@@ -98,20 +85,18 @@ impl AreaSoundCatalog {
         self.zone_music.get(&id)
     }
 
-    /// A `ZoneIntroMusicTable` row by id (the WMO interior override path resolves intros
-    /// directly — `WMOAreaTable.IntroSound` — instead of through an area row).
+    /// A `ZoneIntroMusicTable` row by id, for a `WMOAreaTable.IntroSound` interior override.
     pub fn intro(&self, id: u32) -> Option<&ZoneIntroEntry> {
         self.intros.get(&id)
     }
 
-    /// A `SoundAmbience` row by id (the WMO interior override path).
+    /// A `SoundAmbience` row by id, for a WMO interior override.
     pub fn ambience_row(&self, id: u32) -> Option<&SoundAmbienceEntry> {
         self.ambience.get(&id)
     }
 
-    /// Resolve an `areaId` to its audio rows, walking `ParentAreaID` for any FK that is 0 on the
-    /// subzone row (the standard vanilla inheritance: a subzone without its own music plays the
-    /// zone's). Cycle-guarded; `None` fields mean "no music/ambience anywhere up the chain".
+    /// An `areaId`'s audio rows, each id left `0` taken from the nearest ancestor up
+    /// `ParentAreaID`: a subzone without its own music plays its zone's.
     pub fn resolve(&self, area_id: u32) -> Option<AreaAudio<'_>> {
         let first = self.areas.get(&area_id)?;
         let (mut music, mut intro, mut ambience) = (None, None, None);
@@ -324,10 +309,7 @@ pub fn load_area_sound_catalog(chain: &mut Chain) -> Result<AreaSoundCatalog> {
 mod tests {
     use super::*;
 
-    /// End-to-end on the **real** 5875 tables: Elwynn Forest (area 12) resolves to the
-    /// "Zone-Forest" music set (3–5 min silence, kit 2523) and ambience 35; a subzone with its
-    /// own row zeroes (Crystal Lake 87, parent 12) inherits Elwynn's music through the parent
-    /// walk. Skips without client data.
+    /// The 5875 tables: Elwynn Forest (area 12) and a subzone inheriting its music.
     #[test]
     fn real_area_chain_resolves_elwynn() {
         let data = crate::wow_data_or_skip!();
@@ -354,7 +336,6 @@ mod tests {
         assert_eq!(music.sounds, [2523, 2523]);
         assert!(elwynn.ambience.is_some(), "Elwynn has ambience");
 
-        // A subzone of Elwynn inherits through the parent walk when its own FKs are 0.
         let sub = cat
             .areas
             .values()

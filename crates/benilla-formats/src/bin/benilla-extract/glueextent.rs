@@ -1,14 +1,6 @@
-//! `glueextent` — how wide each shipped glue scene's art is, off the chain.
-//!
-//! The instrument behind the glue framing ceiling: for every `UI_*` diorama it prints the measured
-//! [`benilla_formats::ArtExtent`] (the same call the client makes at scene spawn), the authored
-//! 4:3 half-extents it is measured against, and the derived facts the framing law acts on — the
-//! window aspect at which the art runs out of **width** under 1587's hor+ (past it the law zooms
-//! in, holding the width) and the aspect at which it runs out of **height** for a narrow window.
-//!
-//! Beside the law's own reading (opaque batches, front faces) it prints two looser ones — opaque +
-//! alpha-tested, and every batch — so a scene whose measured edge looks wrong against a capture can
-//! be read for *which* batches sit at that edge without a second tool.
+//! `glueextent`: every shipped glue scene's [`benilla_formats::ArtExtent`], measured off the chain
+//! (the numbers `SHIPPED_GLUE_SCENES` transcribes), against its authored 4:3 half-extents, and the
+//! window aspects at which its art runs out of width and of height.
 
 use anyhow::{Context, Result};
 use benilla_formats::{
@@ -16,7 +8,7 @@ use benilla_formats::{
     parse_m2_render_submeshes, Chain, Coverage, CoverageReader, ModelBlend, GLUE_AUTHORED_ASPECT,
 };
 
-/// The seven shipped scenes: the login gate + the six race stages (Gnome→Dwarf, Troll→Orc share).
+/// The login gate and the six race stages (Gnome shares Dwarf's, Troll shares Orc's).
 const SCENES: [&str; 7] = [
     "MainMenu", "Human", "Orc", "Dwarf", "NightElf", "Scourge", "Tauren",
 ];
@@ -39,10 +31,8 @@ pub fn glueextent(chain: &mut Chain, batches: bool) -> Result<()> {
         };
         let t0 = authored_half_height(cam.fov);
         let h0 = t0 * GLUE_AUTHORED_ASPECT;
-        // The law's reading — every batch painting by its texels (the module's rule) — and the
-        // two readings on either side of it, so a scene whose measured edge looks wrong against
-        // a capture can be read for which rule moved it: opaque batches only, and every batch
-        // as if it painted fully.
+        // The texel rule the shipped table is measured by, bracketed by opaque batches only and
+        // by every batch painting fully.
         let mut reader = CoverageReader::new(chain);
         let mut paints: Vec<Option<Coverage>> = Vec::with_capacity(subs.len());
         for s in &subs {
@@ -76,8 +66,6 @@ pub fn glueextent(chain: &mut Chain, batches: bool) -> Result<()> {
             opaque_only,
             with_all,
         );
-        // Which batches sit at the measured edge: every opaque batch, with its blend, so a
-        // suspicious number can be traced to a card without a second command.
         let mut kinds = [0usize; 5];
         for s in &subs {
             kinds[match s.blend {
@@ -101,8 +89,7 @@ pub fn glueextent(chain: &mut Chain, batches: bool) -> Result<()> {
             cam.near_clip,
         );
         if batches {
-            // Every batch's footprint in the frame, in units of t0 (so `±1.333` is the authored
-            // 4:3 box's side, `±1.0` its top/bottom): which card sets the edge.
+            // Each batch's footprint in units of t0: ±1.333 is the 4:3 box's side, ±1.0 its top.
             println!(
                 "          {:>3} {:<9} {:<3} {:<6} {:>5} {:>5} {:>4}  {:>14}  {:>14}  tex",
                 "idx", "blend", "2s", "paints", "front", "back", "clip", "x'/t0", "y'/t0"

@@ -1,20 +1,11 @@
-//! Chunk-integrity census over WMO files: walk the top-level chunk list the way the loader's
-//! [`find_wmo_chunk`] walk does and report every file whose chunk stream does not tile exactly — a
-//! chunk whose declared size overruns EOF. The reference **clamps** such a chunk (`0x6c3a60` /
-//! `0x6c3f80` read chunks while the 8-byte header is in-bounds and clamp the last chunk to EOF —
-//! e.g. `Undercity_144.wmo`'s MOGP runs 1 B past EOF, tolerated), so an overrun here must cost us
-//! nothing; a file listed as losing a chunk is a bug.
-//!
-//! ```text
-//! cargo run -p benilla-formats --example wmo_chunk_census -- <root.wmo>   # one building
-//! cargo run -p benilla-formats --example wmo_chunk_census -- --all        # the whole corpus
-//! ```
-//!
-//! Output is Blizzard-derived — pipe it to the scratchpad, never into the repo.
+//! WMO files whose top-level chunk stream does not tile exactly, a chunk's declared size running
+//! past EOF, and whether our loader still reads them. The reference clamps the last chunk to EOF
+//! (`0x6c3a60`, `0x6c3f80`: chunks are read while the 8-byte header is in bounds), so
+//! `Undercity_144.wmo`'s MOGP one byte past EOF loads, and a file our loader loses is a bug.
+//! `cargo run -p benilla-formats --example wmo_chunk_census -- <root.wmo> | --all`
+//! Output is Blizzard data: never commit it.
 
-/// Walk `b`'s chunk stream as a pure **data** question: is it exactly tiled, or does some chunk
-/// declare more bytes than the file holds? Returns `(tag, declared_end, file_len)` for the first
-/// over-declared chunk. Whether the loader survives it is asked separately, of the loader itself.
+/// The first chunk declaring more bytes than the file holds, as `(tag, declared_end, file_len)`.
 fn overrun(b: &[u8]) -> Option<(String, usize, usize)> {
     let mut off = 0usize;
     while off + 8 <= b.len() {
@@ -66,8 +57,8 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
         checked += 1;
-        // The loader's own verdict, not a re-implementation of it: a group file must yield its MOGP
-        // header (flags + portal-ref span — losing it dead-ends the portal flood), a root must parse.
+        // The loader's own verdict: a group must yield its MOGP header, which the portal flood
+        // needs, and a root must parse.
         let is_group = b.len() > 16 && &b[12..16] == b"PGOM";
         let loads = if is_group {
             benilla_formats::wmo_group_header(&b).is_some()

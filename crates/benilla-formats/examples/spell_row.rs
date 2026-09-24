@@ -1,7 +1,5 @@
-//! Throwaway: print the cast-arm targeting facts for named spell ids — `Targets`,
-//! `EffectImplicitTargetA[0]`, the three effects, and the item-target gate columns — so a claim
-//! about which targeting seam a spell arms can be checked against the real shipped Spell.dbc
-//! instead of reasoned about.
+//! The targeting columns of `Spell.dbc` for the given spell ids: `Targets`,
+//! `EffectImplicitTargetA[0]`, the first effect and the equipped-item gate columns.
 fn main() -> anyhow::Result<()> {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;

@@ -1,22 +1,14 @@
-//! `charprocs`: census the `SpellVisualKit` **CharProc** columns (fields 15–34) — the character-half
-//! of a kit: what a kit does to the *body* (its alpha, its tint) rather than at an attach point.
-//!
-//! The scope instrument for the aura-state CharProc system ("Stealth shows nothing on the
-//! character"). It answers, from the shipped table rather than from expectation: which proc **types**
-//! exist, how many kits carry each, which **lifecycle stage** reaches them from a live spell, and —
-//! for the state stage, whose kits live for an aura's whole life — exactly which spells reach which
-//! proc with which parameter. A type that shows up only behind `cast`/`impact` is a discrete-play
-//! concern; a type behind `state` is an aura-lifetime one.
+//! `charprocs`: census the `SpellVisualKit` CharProc columns (fields 15-34), what a kit does to
+//! the body rather than at an attach point: which proc types exist, which stage reaches each from
+//! a live spell, and every state-stage proc, which lasts as long as its aura.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use benilla_formats::{char_proc_type, Chain, SpellVisualCatalog, TrailProc, VisualStages};
 
-/// A `SpellVisual` stage's column selector — one of the five lifecycle-kit fields.
 type StagePick = fn(&VisualStages) -> u32;
 
-/// The five `SpellVisual` lifecycle stages, in field order — the label plus its column selector.
 const STAGES: [(&str, StagePick); 5] = [
     ("precast", |s| s.precast),
     ("cast", |s| s.cast),
@@ -25,7 +17,6 @@ const STAGES: [(&str, StagePick); 5] = [
     ("channel", |s| s.channel),
 ];
 
-/// A human label for the proc types benilla models by name.
 fn type_name(ty: i32) -> &'static str {
     match ty {
         char_proc_type::TINT => "TINT (body RGB)",
@@ -38,12 +29,12 @@ fn type_name(ty: i32) -> &'static str {
     }
 }
 
-/// Census every kit's CharProc slots, then reachability per stage, then the state-stage detail.
+/// Census the CharProc slots, their reach by stage, the state-stage procs and the weapon trails.
 pub fn run(chain: &mut Chain) -> Result<()> {
     let spells = benilla_formats::load_spell_catalog(chain)?;
     let visuals = benilla_formats::load_spell_visual_catalog(chain)?;
 
-    // 1. The raw table census: proc type → the kits carrying it.
+    // 1. Every proc type and the kits carrying it.
     let mut by_type: BTreeMap<i32, BTreeSet<u32>> = BTreeMap::new();
     let mut kits_with_any = 0usize;
     for kit_id in visuals.kit_ids() {
@@ -70,8 +61,7 @@ pub fn run(chain: &mut Chain) -> Result<()> {
         );
     }
 
-    // 2. Reachability: which stage of which spell's visual actually reaches each proc type. A kit
-    //    nobody's visual chain names is authored-but-dead as far as the client is concerned.
+    // 2. Each proc type's reach by stage from a live spell; a kit no visual names never plays.
     let mut by_stage: BTreeMap<(&str, i32), BTreeSet<u32>> = BTreeMap::new();
     // The state stage's detail rows: (spell id, name, kit, proc type, params[0]).
     let mut state_rows: Vec<(u32, String, u32, i32, f32)> = Vec::new();
@@ -107,7 +97,7 @@ pub fn run(chain: &mut Chain) -> Result<()> {
         );
     }
 
-    // 3. The state stage in full — these are the aura-lifetime procs, one line per (spell, proc).
+    // 3. Every state-stage proc, which lasts its aura's life, one line per spell and proc.
     println!(
         "\nSTATE-stage CharProcs — the aura-lifetime set ({} spell/proc pair(s)):",
         state_rows.len()
@@ -120,10 +110,7 @@ pub fn run(chain: &mut Chain) -> Result<()> {
         );
     }
 
-    // 4. The TRAIL set in full. Its shape is unlike the others': the proc carries no model and no
-    //    emitter, so a kit whose slot list is EMPTY still has a visual — and 18 of these are exactly
-    //    that, which is the single fact that decides whether the proc is worth building. The census
-    //    prints the slot count beside every row so that number stays checkable rather than quoted.
+    // 4. The weapon-trail kits; a trail needs no effect slot, so it draws on a kit with none.
     let trail_kits: BTreeMap<u32, TrailProc> = visuals
         .kit_ids()
         .filter_map(|id| Some((id, visuals.kit(id)?.trail_proc()?)))
@@ -160,9 +147,8 @@ pub fn run(chain: &mut Chain) -> Result<()> {
         let anim = kit.and_then(|k| k.anim_id);
         let [r, g, b] = trail.rgb();
         let spells = reach.get(kit_id);
-        // `CharParamOne` is printed even though the type-8 arm never reads it (`0x60d80a`'s three
-        // `_ftol`s take Zero/Two/Three only). Not every shipped row carries `20.0` there, and a
-        // census that hides the column cannot catch that — Sinister Strike's kit 399 carries 15.0.
+        // The type-8 arm never reads `CharParamOne` (`0x60d80a`), but it is printed: not every row
+        // carries 20.0 there, and Sinister Strike's kit 399 carries 15.0.
         let unread = kit
             .and_then(|k| {
                 k.char_procs()
@@ -187,8 +173,7 @@ pub fn run(chain: &mut Chain) -> Result<()> {
     Ok(())
 }
 
-/// The kits a spell's visual chain reaches, printed as one line per stage — the per-spell view of
-/// the census above (used by `spellvis`'s CharProc lines; kept here beside the type names).
+/// Print one kit's CharProc slots, one line each.
 pub fn print_kit_procs(visuals: &SpellVisualCatalog, kit_id: u32, indent: &str) {
     let Some(kit) = visuals.kit(kit_id) else {
         return;

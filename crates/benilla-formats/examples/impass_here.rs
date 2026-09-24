@@ -1,35 +1,21 @@
-//! Where the ADT's impassable chunks are around a pin:
+//! A top-down map of the MCNK impassable flag (header flag bit 1) around a pin: north up, one
+//! glyph per 33.333 yd chunk, across tile seams, since a band crosses them. `what_is_here` covers
+//! models. Output is Blizzard data: never commit it.
 //! `cargo run -p benilla-formats --example impass_here -- <map> <x> <y> [radius_chunks]`
-//! e.g. `impass_here Azeroth -6601.98 -531.87 10`.
-//!
-//! An "invisible wall" report names a *place* — a `.go xyz` pin — and the first question is
-//! whether the wall is authored terrain at all: an MCNK with header flag bit 1 (`MCNK_IMPASSABLE`)
-//! set, or a WMO/M2 hull the reporter walked into. This prints
-//! the flag as a top-down chunk map — north up, west left, the in-game map's orientation, one
-//! glyph per 33.333 yd chunk — so the answer is a picture of the band rather than a guess, and the
-//! pin's own chunk is marked. `what_is_here` answers the other half (is there a model here).
-//!
-//! The map crosses tile seams on purpose: the flag is per chunk and a band runs across ADT
-//! boundaries, so a single-tile view is exactly how you miss the wall you are standing against —
-//! B129's pin sits 1.5 yd from its wall, with the flagged chunk in the *next* tile east.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
 
 use std::collections::HashMap;
 
 use benilla_formats::{impassable_at, world_to_tile, TileMesh, CHUNK_SIZE, TILE_SIZE};
 
-/// The map's NW origin: world x/y both run *down* from `+32 tiles` as the grid runs south/east.
+/// The map's NW corner: world x and y fall from 32 tiles as the grid runs south and east.
 const MAP_CENTER: f32 = 32.0 * TILE_SIZE;
 
-/// Global chunk index of a world coordinate on either axis — row from x (grows south), column from
-/// y (grows east). The same falling-from-`MAP_CENTER` addressing the client's per-chunk lookups use
-/// (the MCSH texel law, `0x69b350`).
+/// Global chunk index of a world coordinate on either axis, row from x and column from y, falling
+/// from `MAP_CENTER` as the client's per-chunk lookups do (`0x69b350`).
 fn chunk_index(coord: f32) -> i32 {
     ((MAP_CENTER - coord) / CHUNK_SIZE).floor() as i32
 }
 
-/// The world coordinate of a global chunk index's centre (inverse of [`chunk_index`], +½ chunk).
 fn chunk_centre(index: i32) -> f32 {
     MAP_CENTER - (index as f32 + 0.5) * CHUNK_SIZE
 }
@@ -67,7 +53,7 @@ fn main() -> anyhow::Result<()> {
     println!("  '#' impassable · '.' passable · '@' the pin's chunk · ' ' no tile");
     print!("      ");
     for dc in -radius..=radius {
-        // A tile seam every 16 chunks: mark it so a band's tile ownership is readable at a glance.
+        // A tile seam every 16 chunks.
         print!(
             "{}",
             if (pin_col + dc).rem_euclid(16) == 0 {
@@ -94,8 +80,7 @@ fn main() -> anyhow::Result<()> {
         println!();
     }
 
-    // The pin's own verdict, and how far the wall is in each cardinal direction — the number a
-    // retest needs ("walk east 1.5 yd and you should stop").
+    // The pin's own chunk, and the distance to the wall in each cardinal direction.
     let pin_flag = flag_at(&mut chain, x, y);
     println!(
         "\npin chunk: {}",
@@ -111,8 +96,7 @@ fn main() -> anyhow::Result<()> {
         ("west  (+y)", 0.0, 1.0),
         ("east  (-y)", 0.0, -1.0),
     ] {
-        // Step chunk by chunk from the pin until the flag flips, then report the distance to that
-        // chunk's *near boundary* — where a mover would actually be stopped.
+        // Step chunk by chunk until the flag flips; a mover stops at that chunk's near boundary.
         let hit = (1..=radius).find(|n| {
             let (sx, sy) = (
                 x + dx * *n as f32 * CHUNK_SIZE,

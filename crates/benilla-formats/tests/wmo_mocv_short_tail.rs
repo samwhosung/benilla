@@ -1,20 +1,9 @@
-//! **A MOCV one record short is still a bake.** The companion to `wmo_chunk_overrun`: clamping the
-//! last chunk to EOF is only half the tolerance, because the chunk that clamps in
-//! `Undercity_144.wmo` *is* MOCV — 1159 of its declared 1160 bytes, so the colour buffer parses to
-//! 289 entries for 290 vertices.
-//!
-//! The reader then demanded MOCV be exactly parallel to the positions and returned `None` otherwise,
-//! which threw away 289 good colours over one missing byte. An interior batch draws `tex × MOCV`, and
-//! absent colour renders as white, so that corridor lit at full brightness and untinted inside a city
-//! whose every other interior surface is multiplied by a dark bake — the pale, cold arch in the
-//! director's shot, against a reference that shows it warm and lantern-lit.
-//!
-//! Skips when the client isn't present.
+//! A MOCV one record short is still a bake: in `Undercity_144.wmo` the chunk that clamps to EOF is
+//! MOCV, 1159 of its declared 1160 bytes, and the reader pads its 289 colours to the 290 vertices.
 
 use benilla_formats::{parse_wmo_root, wmo_group_raw_colors, Chain};
 
-/// Walk a group file's MOGP sub-chunks (payload clamped to EOF, as the loader does) and return the
-/// declared byte length of `tag`, plus how many of those bytes the file actually holds.
+/// (declared, present) byte lengths of the MOGP sub-chunk `tag`, the payload clamped to EOF.
 fn subchunk(group: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {
     let mogp_size =
         u32::from_le_bytes([group[0x10], group[0x11], group[0x12], group[0x13]]) as usize;
@@ -40,8 +29,7 @@ fn subchunk(group: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {
     None
 }
 
-/// The file the tolerance exists for: MOCV is its clamped tail, and the bake it carries is the warm
-/// orange the reference renders — not the white an absent bake falls back to.
+/// The bake is the warm orange the reference renders, not the white of an absent bake.
 #[test]
 fn undercity_144_keeps_its_bake_despite_a_short_mocv() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -50,8 +38,6 @@ fn undercity_144_keeps_its_bake_despite_a_short_mocv() {
         .read("World\\wmo\\Lorderon\\Undercity\\Undercity_144.wmo")
         .expect("read Undercity_144");
 
-    // The data fact this rests on: MOVT holds 290 vertices; MOCV declares 290 colours and the file
-    // is one byte short of them. If the shipped file ever changes, this stops testing the tail.
     let (movt_declared, _) = subchunk(&g, b"TVOM").expect("MOVT");
     let (mocv_declared, mocv_present) = subchunk(&g, b"VCOM").expect("MOCV");
     assert_eq!(movt_declared / 12, 290, "MOVT vertex count");
@@ -72,8 +58,7 @@ fn undercity_144_keeps_its_bake_despite_a_short_mocv() {
         290,
         "the buffer must come back parallel to the vertices"
     );
-    // BGRA on the wire. The authored bake here is warm orange — the thing that was being replaced by
-    // white, and the whole visible symptom.
+    // BGRA on disk.
     let [b, gr, r, _a] = raw[0];
     assert!(
         r > 200 && gr > 100 && gr < 200 && b < 120,
@@ -81,10 +66,8 @@ fn undercity_144_keeps_its_bake_despite_a_short_mocv() {
     );
 }
 
-/// The tolerance must stay **narrow**. Exactly one group in the corpus has a MOCV that is not a whole
-/// number of records parallel to its positions; if that count grows, either the reader regressed or
-/// the padding is masking a real parse bug, and either way padding hundreds of vertices from one
-/// sample would invent lighting rather than recover it.
+/// Exactly one group in the corpus has a MOCV that is not whole and parallel to its positions, so
+/// the padding covers that one file.
 #[test]
 fn only_one_group_in_the_corpus_has_a_short_mocv() {
     let data = benilla_formats::wow_data_or_skip!();

@@ -1,34 +1,23 @@
-//! Which batches of a WMO are **coplanar with each other**, and by how much:
+//! Which batches of a WMO are coplanar, with each other or with themselves: per pair, the smallest
+//! plane gap between near-parallel overlapping faces. A `0.000` gap is a true tie the depth test
+//! cannot decide; anything else is a separation to set against the depth buffer's resolution at
+//! that range. Output is Blizzard data: never commit it.
 //! `cargo run -p benilla-formats --example wmo_coplanar -- <wmo-path-or-substring> [gap_yd]`
-//! e.g. `wmo_coplanar orctower 0.05`.
-//!
-//! The falsifier for a z-fighting report. Two surfaces that swap which one is in front do it for one
-//! of two reasons, and they take different fixes: a **true tie** (the author put both faces on the
-//! same plane, so the depth test has nothing to decide with and the winner is whoever drew last) or
-//! **depth precision** (a real but tiny separation that quantises away). The distinction is a
-//! property of the *file*, not of the frame — so read it here rather than inferring it from pixels.
-//!
-//! Prints, for every pair of batches whose geometry overlaps in space, the smallest plane gap between
-//! near-parallel faces that actually overlap. A `0.000` gap is a tie; anything else is a separation
-//! to compare against the depth buffer's resolution at that range.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
 
 use benilla_formats::RenderSubmesh;
 
 /// Faces this close to parallel are treated as the same plane orientation (≈2.6°).
 const PARALLEL_DOT: f32 = 0.999;
 
-/// One triangle reduced to its plane plus the box it occupies — everything the gap test needs.
+/// One triangle as its plane and bounding box.
 struct Face {
     normal: [f32; 3],
     /// Plane offset: `normal · vertex`.
     d: f32,
     min: [f32; 3],
     max: [f32; 3],
-    /// The triangle's own corners, kept so a batch can be compared against **itself**: two faces of
-    /// one flat quad share an edge and are trivially coplanar, which is not a defect. Real overlapping
-    /// sheets share no vertex.
+    /// The corners, so a batch can be compared with itself: two halves of one flat quad share a
+    /// vertex, overlapping sheets do not.
     verts: [[f32; 3]; 3],
 }
 
@@ -76,12 +65,10 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-/// Do the two boxes overlap, allowing `slack` of separation on every axis?
 fn boxes_touch(a: &Face, b: &Face, slack: f32) -> bool {
     (0..3).all(|c| a.min[c] - slack <= b.max[c] && b.min[c] - slack <= a.max[c])
 }
 
-/// Do the triangles share a corner? Two halves of a quad do; two stacked sheets do not.
 fn shares_a_vertex(a: &Face, b: &Face) -> bool {
     a.verts.iter().any(|p| {
         b.verts
@@ -90,9 +77,8 @@ fn shares_a_vertex(a: &Face, b: &Face) -> bool {
     })
 }
 
-/// The smallest plane gap between near-parallel, spatially-overlapping faces of `a` and `b`, or
-/// `None` if no such pair sits within `gap`. When `a` and `b` are the same batch, edge-sharing
-/// neighbours are skipped — they are how a flat surface is built, not a defect.
+/// The smallest plane gap within `gap` between near-parallel overlapping faces of `a` and `b`;
+/// within one batch, faces sharing a vertex are skipped.
 fn closest_coplanar(a: &[Face], b: &[Face], gap: f32, same_batch: bool) -> Option<f32> {
     let mut best: Option<f32> = None;
     for (i, fa) in a.iter().enumerate() {
@@ -122,8 +108,7 @@ fn main() -> anyhow::Result<()> {
     let pat = args
         .next()
         .ok_or_else(|| anyhow::anyhow!("usage: wmo_coplanar <wmo-path-or-substring> [gap_yd]"))?;
-    // Report pairs whose faces sit within this gap. The default is generous — a real z-fight needs a
-    // gap far under a centimetre, but seeing the near misses tells you where the margin actually is.
+    // Pairs within this gap; the default is wide enough to show near misses too.
     let gap: f32 = args.next().map_or(Ok(0.05), |g| g.parse())?;
 
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");

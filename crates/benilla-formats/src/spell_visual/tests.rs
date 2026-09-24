@@ -1,13 +1,8 @@
-//! Tests for the spell-visual DBC family — the tables `super` loads, exercised against
-//! synthetic WDBCs and against the real 5875 client data (those skip when it is absent).
-//! Lifted out of `mod.rs` whole when that file outgrew its budget; two `#[cfg(test)]`
-//! modules merged into this one file scope.
+//! Tests for the spell visual tables, on synthetic WDBCs and on the installed data.
 
 use super::*;
 
-/// A minimal synthetic WDBC (20-byte header + fixed-width u32 records, no strings — both
-/// tables are all-`u32`) — the same shape `benilla-dbc`'s own tests build (`items.rs`
-/// reproduces it too), so this adapter is testable without a real client install.
+/// A WDBC of u32 records with an empty string block.
 fn build_wdbc(record_count: u32, field_count: u32, records: &[u8]) -> Vec<u8> {
     let record_size = field_count * 4;
     assert_eq!(records.len(), (record_count * record_size) as usize);
@@ -25,8 +20,7 @@ fn u32le(v: u32) -> [u8; 4] {
     v.to_le_bytes()
 }
 
-/// One `SpellVisual` row: id, the five stage kits, then the missile block — field 7 (model
-/// effect id) and field 9 (dest-attach ordinal) live, the rest zeroed to fill 16 fields.
+/// One `SpellVisual` row: id, the five stage kits, fields 7 and 9; the rest zero.
 fn spell_visual_row(
     id: u32,
     precast: u32,
@@ -51,13 +45,11 @@ fn spell_visual_row(
     rec
 }
 
-/// One `SpellVisualKit` row: id, an unpinned field 1, anim (field 2), nine zeroed emitter
-/// slots (3..11), the world-effect slot (field 12), sound (field 13), then zeroed trailing
-/// columns to fill 35 fields.
+/// One `SpellVisualKit` row: id, anim (field 2), world effect (12), sound (13); the rest zero.
 fn spell_visual_kit_row(id: u32, anim: u32, sound: u32, world: u32) -> Vec<u8> {
     let mut rec = Vec::new();
     rec.extend(u32le(id));
-    rec.extend(u32le(0)); // field 1, unpinned
+    rec.extend(u32le(0)); // field 1
     rec.extend(u32le(anim)); // field 2
     for _ in 3..12 {
         rec.extend(u32le(0)); // fields 3..11 (9 emitter slots)
@@ -72,10 +64,7 @@ fn spell_visual_kit_row(id: u32, anim: u32, sound: u32, world: u32) -> Vec<u8> {
 
 #[test]
 fn header_shape_matches_the_pinned_layout() {
-    // A single-row file of each still has to satisfy the pinned field/record-size shape —
-    // exercises the schema's own field-count check against a header lying about it would be
-    // a separate (missing) test; this one just guards our row builders stay in lock-step with
-    // SPELL_VISUAL_FIELDS/SPELL_VISUAL_KIT_FIELDS.
+    // The row builders stay in step with the field counts.
     let sv = spell_visual_row(1, 0, 0, 0, 0, 0, 0, 0);
     assert_eq!(sv.len(), SPELL_VISUAL_FIELDS * 4, "64B record");
     let svk = spell_visual_kit_row(1, 0, 0, 0);
@@ -130,8 +119,7 @@ fn parses_stage_kits_and_zero_means_no_kit_at_that_stage() {
             missile_attach: 1,
             missile_sound: None,
             strike_sound: None,
-            // The synthetic row builder writes 0 into field 6 and the dest-anchored block
-            // (the REAL Fireball row's missile_gate = 1 is pinned in the real-data test).
+            // The builder writes 0 to field 6 and the dest-anchored block.
             ..Default::default()
         }
     );
@@ -182,12 +170,10 @@ fn kit_anim_and_sound_fold_both_none_sentinels_to_none() {
     assert_eq!(kits[&2], VisualKit::default(), "0xFFFFFFFF = none too");
 }
 
-/// The emitter-slot surface: kit-field order maps to [`KIT_SLOT_TAGS`], both none-sentinels
-/// fold out, and `effects()` yields only the populated pairs.
 #[test]
 fn kit_effect_slots_pair_with_their_attach_tags() {
     let kit = VisualKit {
-        // Fireball's precast shape: LeftHand (slot index 3) + RightHand (slot index 4).
+        // Fireball's precast: left hand (slot 3) and right hand (slot 4).
         effect_slots: [
             None,
             None,
@@ -209,13 +195,11 @@ fn kit_effect_slots_pair_with_their_attach_tags() {
     assert_eq!(VisualKit::default().effects().count(), 0);
 }
 
-/// The tenth slot (field 12) rides `effects()` after the nine, at the interim
-/// Base anchor — one iterator, so every kit consumer (the aura-state watcher, kit pushes,
-/// cast/impact plays) picks it up without knowing it exists.
+/// Field 12 follows the nine slots in `effects()`, at [`WORLD_EFFECT_TAG`].
 #[test]
 fn kit_world_effect_joins_effects_at_base() {
     let kit = VisualKit {
-        // Frost Nova's state-kit shape: Head sparkle (slot 0) + the feet ice in field 12.
+        // Frost Nova's state kit: the head sparkle (slot 0) and the feet ice in field 12.
         effect_slots: [Some(54), None, None, None, None, None, None, None, None],
         world_effect: Some(284),
         ..Default::default()
@@ -227,9 +211,6 @@ fn kit_world_effect_joins_effects_at_base() {
     );
 }
 
-/// End-to-end on the real build-5875 tables: the byte-verified header shape (2165×16/64B ·
-/// 1772×35/140B) and the full Fireball chain (module doc's "Verified chain") — a schema drift
-/// or column slip fails loudly. Skips without client data.
 #[test]
 fn real_spell_visual_chain_resolves_fireball() {
     let data = crate::wow_data_or_skip!();
@@ -238,7 +219,7 @@ fn real_spell_visual_chain_resolves_fireball() {
     assert_eq!(cat.len(), 2165, "all 5875 SpellVisual rows load");
     assert_eq!(cat.kit_len(), 1772, "all 5875 SpellVisualKit rows load");
 
-    // Fireball (spell 133) → visual 67 (spells.rs's column-115 pin).
+    // Fireball, spell 133, is visual 67.
     let stages = cat.stages(67).expect("Fireball's SpellVisual row");
     assert_eq!(
         *stages,
@@ -250,20 +231,16 @@ fn real_spell_visual_chain_resolves_fireball() {
             channel: 0,
             missile_model: 365,
             missile_attach: 1,
-            // Field 10: the fireball's in-flight loop (SoundEntries 3011 → FireMissileLoop.wav).
+            // SoundEntries 3011 is FireMissileLoop.wav.
             missile_sound: Some(3011),
             strike_sound: None,
-            // Field 6 set = a missile owns the arrival: the GO dest one-shot gate is closed;
-            // the dest-anchored columns are empty on a projectile nuke.
+            // Set: the missile owns the arrival, so there is no dest one-shot.
             missile_gate: 1,
             area_gate: 0,
             area_effect: 0,
             area_kit: 0,
         }
     );
-    // The gathering/work strike sounds: Mining's visual 93 carries the pick
-    // clang in field 14 (SoundEntries 1143 "Mining Impact" = MiningHitA-E), Herb's 91 the
-    // search rustle (1142) - the $TRD anim event's operands.
     assert_eq!(
         cat.stages(93).and_then(|s| s.strike_sound),
         Some(1143),
@@ -275,10 +252,7 @@ fn real_spell_visual_chain_resolves_fireball() {
         "Herb Gathering's visual carries the field-14 rustle"
     );
 
-    // A basic thrown attack borrows the equipped weapon's substitute visual (98 — the thrown
-    // dagger's ItemDisplayInfo col 10): no missile MODEL (it flies the weapon itself) but a
-    // flight loop in field 10 (SoundEntries 3318 → WeaponLoop.wav) — the whoosh the projectile
-    // carries while it travels.
+    // Visual 98 is the thrown dagger's `ItemDisplayInfo` column 10; 3318 is WeaponLoop.wav.
     let thrown = cat
         .stages(98)
         .expect("the thrown-weapon substitute SpellVisual");
@@ -291,8 +265,6 @@ fn real_spell_visual_chain_resolves_fireball() {
         Some(3318),
         "the thrown weapon's flight loop"
     );
-    // The missile chain (phase 4): field 7 → the projectile's own model, field 9 → the
-    // chest attach the missile homes to (ordinal 1 → 0x22).
     assert_eq!(
         cat.effect_path(stages.missile_model),
         Some("Spells\\Fireball_Missile_Low.mdx"),
@@ -303,8 +275,7 @@ fn real_spell_visual_chain_resolves_fireball() {
         "Fireball homes onto the target's chest"
     );
 
-    // The engine-spawned hardcoded set resolves by the client's own baked names — the ding
-    // (row 21, byte-verified `0x61f5b0`/`0x8618e0`, decision 0304's fold-back).
+    // The ding resolves by the client's baked name (`0x61f5b0`, `0x8618e0`).
     assert_eq!(
         cat.hardcoded_effect("HARDCODED Unit Level Up"),
         Some((21, "Spells\\LevelUp\\LevelUp.mdl")),
@@ -331,8 +302,6 @@ fn real_spell_visual_chain_resolves_fireball() {
     );
     assert_eq!(impact_kit.sound, Some(1507));
 
-    // The precast kit's emitter slots (phase 3): effect 287 on both hands, and its
-    // SpellVisualEffectName path — the glowing-hands chain end to end.
     let precast_kit = cat.kit(stages.precast).expect("precast kit");
     assert_eq!(
         precast_kit.effects().collect::<Vec<_>>(),
@@ -345,10 +314,6 @@ fn real_spell_visual_chain_resolves_fireball() {
         "SpellVisualEffectName field 2 = the effect model path"
     );
 
-    // The tenth slot (field 12) on the real table — the root/snare state
-    // family the nine slots miss. Frost Nova (spell 122 → visual 17): state kit 285's feet
-    // ice; Net (spell 6533 → visual 683): state kit 744's net wrap, a kit with NO ordinary
-    // slots at all.
     let frost_nova_state = cat
         .kit(cat.stages(17).expect("Frost Nova's visual").state)
         .expect("Frost Nova's state kit");
@@ -367,7 +332,6 @@ fn real_spell_visual_chain_resolves_fireball() {
         "the net wrap is the kit's ONLY effect — invisible without field 12"
     );
     assert_eq!(cat.effect_path(594), Some("Spells\\Net_State.mdx"));
-    // The impact kit's chest burst — the phase-4 arrival hand-off will play this.
     assert_eq!(
         cat.kit(stages.impact)
             .unwrap()
@@ -378,27 +342,21 @@ fn real_spell_visual_chain_resolves_fireball() {
     );
 }
 
-/// The real 5875 `SpellVisualEffectName`: the boot-time HARDCODED name matcher's one consumed
-/// row — `"HARDCODED Loot Art"` is id 14 → `Particles\LootFX.mdl` (values pre-checked against
-/// the raw DBC bytes), and the `.m2` it names ships in the chain, so the lootable-corpse
-/// sparkle (`0x6005d0`) can actually load. Skips without client data.
+/// The lootable-corpse sparkle's row (`0x6005d0`) names a model that ships.
 #[test]
 fn real_effect_name_table_resolves_the_loot_art_row() {
     let data = crate::wow_data_or_skip!();
     let mut chain = crate::open_chain(&data).expect("open chain");
     let cat = load_spell_visual_catalog(&mut chain).expect("load the visual catalog");
     assert_eq!(cat.loot_art_effect(), Some((14, "Particles\\LootFX.mdl")));
-    // The model the row names ships in the chain (consumers rewrite .mdl → .m2 to load it).
+    // Consumers load an `.mdl` path as `.m2`.
     assert!(
         chain.read_file("Particles\\LootFX.m2").is_ok(),
         "LootFX.m2 must ship in the chain"
     );
 }
 
-/// The dest-anchored chain on the REAL data — 0797's mandatory per-spell data check (the
-/// GATE is the binary's, `0x5d57c0`; whether each spell passes it is a table fact). Skips
-/// without client data. Every value here corroborates the live vmangos wire capture:
-/// Blizzard's dynobj RADIUS was 8.0 (row 14), Flamestrike's 5.0 (row 8).
+/// The gate is the client's (`0x5d57c0`); whether each spell passes it is data.
 #[test]
 fn ground_aoe_chain_reads_the_dest_anchored_block() {
     let data = crate::wow_data_or_skip!();
@@ -407,8 +365,7 @@ fn ground_aoe_chain_reads_the_dest_anchored_block() {
     let visuals = load_spell_visual_catalog(&mut chain).expect("visuals");
     let radii = crate::load_spell_radii(&mut chain).expect("radii");
 
-    // Blizzard 10 → visual 259: both visuals — its own model AND a type-9 shard emitter
-    // whose table index decodes to 0 (the same model), rate 5/s, sound 7.
+    // Blizzard (10, visual 259): its own model and a type-9 shard emitter, index 0, 5 per second.
     let d = catalog.get(10).unwrap();
     assert_eq!((d.visual, d.effect_radius_index), (259, [14, 0, 0]));
     assert_eq!(
@@ -430,8 +387,7 @@ fn ground_aoe_chain_reads_the_dest_anchored_block() {
     let proc = k.char_procs().find(|p| p.ty == 9).unwrap();
     assert_eq!((proc.params[0], proc.params[1]), (0.0, 5.0));
 
-    // Flamestrike 2120 → visual 33: its own model + sound, NO type-9 proc (a burning
-    // patch has no falling shards) — the emitter half is data-absent, not code-gated.
+    // Flamestrike (2120, visual 33): its own model and sound, and no type-9 emitter in the data.
     let d = catalog.get(2120).unwrap();
     assert_eq!((d.visual, d.effect_radius_index), (33, [8, 8, 0]));
     assert_eq!(radii.get(8).map(|r| r.radius), Some(5.0), "the wire radius");
@@ -448,7 +404,7 @@ fn ground_aoe_chain_reads_the_dest_anchored_block() {
     assert_eq!(k.sound, Some(3077));
     assert!(k.char_procs().all(|p| p.ty != 9));
 
-    // Rain of Fire 5740 → visual 329: shard-table index 1 (its own model again), rate 5/s.
+    // Rain of Fire (5740, visual 329): shard index 1, 5 per second.
     let v = visuals.stages(catalog.get(5740).unwrap().visual).unwrap();
     assert_eq!((v.missile_gate, v.area_gate, v.area_effect), (0, 1, 448));
     let proc = visuals
@@ -458,16 +414,11 @@ fn ground_aoe_chain_reads_the_dest_anchored_block() {
         .find(|p| p.ty == 9)
         .unwrap();
     assert_eq!((proc.params[0], proc.params[1]), (1.0, 5.0));
-
-    // All three pass the GO dest one-shot gate (field 6 == 0 ∧ field 12 ≠ 0) — the burst
-    // fires for each; Fireball (missile_gate 1, pinned in the loader test above) does not.
 }
 
 // ── The chain/beam table ──────────────────────────────────────────────────────
 
-/// The small-int decode, on the exact values the shipped table ships. This is the load-bearing
-/// arithmetic — get it wrong and every beam resolves to the wrong texture (or to none) — so it is
-/// pinned against hand-computed IEEE bits rather than against itself.
+/// Pinned against hand-computed IEEE bits, not against itself.
 #[test]
 fn char_proc_small_int_recovers_the_integer() {
     // 1.0 + 512.0 = 513.0 = 0x44004000; >>14 = 0x11001; &0xff = 1.
@@ -476,14 +427,11 @@ fn char_proc_small_int_recovers_the_integer() {
     for n in 0..=255u32 {
         assert_eq!(char_proc_small_int(n as f32), n, "round-trips every byte");
     }
-    // The decode truncates rather than rounds — it reads the integer part out of the mantissa.
+    // It truncates, reading the integer part out of the mantissa.
     assert_eq!(char_proc_small_int(3.9), 3);
 }
 
-/// `SpellChainEffects.dbc` as it actually ships: 18 rows, the gaps at 14/16, and the two rows the
-/// director's report turns on — id 1 (Chain Lightning's `Lightning`, the one row whose hops
-/// stagger by 300 ms rather than 200) and id 8 (Drain Life's `SoulBeam`, one of the four
-/// negative-period drains).
+/// Rows 1 (Chain Lightning) and 8 (Drain Life) as the file ships them.
 #[test]
 fn real_chain_effects_table() {
     let data = crate::wow_data_or_skip!();
@@ -533,19 +481,14 @@ fn real_chain_effects_table() {
     assert!(cat.chain_effect(21).is_none());
 }
 
-/// **The regression that IS decision 0955.** The chain `CharProc` reaches its beam on the real
-/// table, for both keys — and every live chain slot resolves to a real row.
-///
-/// The old `char_proc_slot` folded type `0` to "empty", so 34 of the 48 live beams (every channel
-/// beam in the game) never existed as far as this crate was concerned. A regression here reads as
-/// "Drain Life has no beam again".
+/// Both chain keys reach their beams; folding type 0 to empty would lose every channel beam.
 #[test]
 fn real_chain_procs_resolve_to_their_beams() {
     let data = crate::wow_data_or_skip!();
     let mut chain = crate::open_chain(&data).expect("open chain");
     let cat = load_spell_visual_catalog(&mut chain).expect("load spell visuals");
 
-    // Chain Lightning (spell 421 → visual 36) — cast kit 321, type 12, one beam, flag clear.
+    // Chain Lightning (spell 421, visual 36): cast kit 321, type 12, one beam, flag clear.
     let cl = cat.kit(321).expect("kit 321").chain_proc().expect("a beam");
     assert_eq!(cl.ty, char_proc_type::CHAIN_CAST);
     assert_eq!((cl.effect_id, cl.beams, cl.flag), (1, 1, false));
@@ -554,14 +497,12 @@ fn real_chain_procs_resolve_to_their_beams() {
         Some("Textures\\SpellChainEffects\\Lightning.blp")
     );
 
-    // Drain Life (spell 689 → visual 177) — channel kit 402, type 0, flag SET. This is the one
-    // the `<= 0` sentinel used to swallow whole.
+    // Drain Life (spell 689, visual 177): channel kit 402, type 0, flag set.
     let dl = cat.kit(402).expect("kit 402").chain_proc().expect("a beam");
     assert_eq!(dl.ty, char_proc_type::CHAIN_CHANNEL);
     assert_eq!((dl.effect_id, dl.beams, dl.flag), (8, 1, true));
 
-    // The named cast-stage others, each predicting its own texture — the corroboration that the
-    // decode is the mechanism and not a coincidence that fits Chain Lightning.
+    // Each kit's decoded id names its own texture.
     for (kit, effect, texture) in [
         (3169u32, 2u32, "HealBeam.blp"),     // Chain Heal
         (430, 4, "ManaBeam.blp"),            // Drain Mana / Mind Flay (channel)
@@ -570,7 +511,7 @@ fn real_chain_procs_resolve_to_their_beams() {
         (2509, 6, "ManaBurnBeam.blp"),       // Shrink Ray
         (6480, 18, "SoulBeam.blp"),          // C'Thun's Eye Beam
         (6567, 7, "ShockLightning.blp"),     // the Feugen/Stalagg chains
-        (6397, 3, "DrainManaLightning.blp"), // Chain Burn — the one 3-beam kit
+        (6397, 3, "DrainManaLightning.blp"), // Chain Burn, the one 3-beam kit
     ] {
         let p = cat
             .kit(kit)
@@ -594,8 +535,7 @@ fn real_chain_procs_resolve_to_their_beams() {
         "Chain Burn is the only kit asking for more than one beam"
     );
 
-    // The whole-table census — the shape the census instrument prints, asserted so a schema slip
-    // or a sentinel regression is a number that moved.
+    // The whole-table census, as `chaincensus` prints it.
     let (mut slots, mut live, mut padding) = (0, 0, 0);
     for id in cat.kit_ids() {
         let kit = cat.kit(id).expect("kit");
@@ -621,17 +561,13 @@ fn real_chain_procs_resolve_to_their_beams() {
     );
 }
 
-/// **Every live beam's texture actually exists on the patch chain.** The renderer
-/// loads these by path, and a path that resolves to nothing draws an invisible beam — a failure no
-/// geometry test can see and no gate can catch. Cheapest possible guard against "the whole lane is
-/// right and the screen is empty".
+/// A texture path that resolves to nothing draws an invisible beam.
 #[test]
 fn real_chain_effect_textures_resolve_on_the_patch_chain() {
     let data = crate::wow_data_or_skip!();
     let mut chain = crate::open_chain(&data).expect("open chain");
     let cat = load_spell_visual_catalog(&mut chain).expect("load spell visuals");
-    // Only the rows a shipped kit can actually reach: an unreachable row's texture is nobody's
-    // problem (id 15 is degenerate anyway).
+    // Only the rows a shipped kit reaches.
     let mut reached: Vec<u32> = cat
         .kit_ids()
         .filter_map(|id| Some(cat.kit(id)?.chain_proc()?.effect_id))
@@ -648,9 +584,7 @@ fn real_chain_effect_textures_resolve_on_the_patch_chain() {
     }
 }
 
-/// The padding case, isolated: a type-0 slot whose `CharParamZero` is `0` is not a beam — the
-/// client's own null-row test no-ops it, and so must we. Kit 2089 (Death & Decay, Ritual of Doom)
-/// ships four of them.
+/// A type-0 slot whose `CharParamZero` is 0 is no beam; kit 2089 (Death and Decay) ships four.
 #[test]
 fn real_zero_param_chain_slots_are_padding() {
     let data = crate::wow_data_or_skip!();
@@ -667,17 +601,15 @@ fn real_zero_param_chain_slots_are_padding() {
     assert!(kit.chain_proc().is_none(), "…but none of them is a beam");
 }
 
-/// [`VisualStages::merged_over_weapon`] — the `60d4d2`–`60d54c` fill, field by field: a populated
-/// slot survives, an empty one takes the weapon's, and the two the client pointedly skips
-/// (`state`/`channel`) stay empty however loud the weapon's row is.
+/// The client's fill (`60d4d2`-`60d54c`), field by field.
 #[test]
 fn the_weapon_merge_fills_only_the_empty_slots() {
     let weapon = VisualStages {
         precast: 7,
         cast: 164,
         impact: 1947,
-        state: 999,   // +0x10 — never merged
-        channel: 998, // +0x14 — never merged
+        state: 999,   // +0x10, never merged
+        channel: 998, // +0x14, never merged
         missile_gate: 1,
         missile_model: 42,
         missile_attach: 3,
@@ -719,30 +651,26 @@ fn the_weapon_merge_fills_only_the_empty_slots() {
         "neither is the dest-anchored block"
     );
 
-    // The missile pair's own arm: an own row with NO missile takes the weapon's — and the gate is
-    // written as the literal 1 (`60d50b`), not the weapon's value.
+    // A row with no missile takes the weapon's, the gate as a literal 1 (`60d50b`).
     let no_missile = VisualStages::default().merged_over_weapon(&VisualStages {
         missile_gate: 5,
         missile_model: 42,
         ..Default::default()
     });
     assert_eq!((no_missile.missile_gate, no_missile.missile_model), (1, 42));
-    // …and a weapon with no missile never plants one.
+    // A weapon with no missile gives none.
     let neither = VisualStages::default().merged_over_weapon(&VisualStages::default());
     assert_eq!((neither.missile_gate, neither.missile_model), (0, 0));
 }
 
-/// The real 5875 tables, end to end: every live hunter shot leaves both body-kit slots empty, so
-/// the bow's own visual 5 is the only source of a draw/release clip — and the merge lands
-/// **LoadBow (105) → AttackBow (46)** on each while its impact + missile survive untouched. The
-/// pin behind bug B153; a data change that filled these rows would make the merge a no-op and
-/// this test would say so.
+/// Every live hunter shot leaves both body kits empty, so its draw and release clips come from
+/// the bow's visual.
 #[test]
 fn real_hunter_shots_take_the_bows_load_and_release_clips() {
     let data = crate::wow_data_or_skip!();
     let mut chain = crate::open_chain(&data).expect("open chain");
     let cat = load_spell_visual_catalog(&mut chain).expect("load spell visuals");
-    // `ItemDisplayInfo` col 10 for every bow (measured on the shipped table).
+    // Visual 5, the `ItemDisplayInfo` column 10 of most bows.
     let bow = *cat.stages(5).expect("the bow's substitute visual 5");
     assert_eq!(
         (bow.precast, bow.cast),
@@ -779,14 +707,11 @@ fn real_hunter_shots_take_the_bows_load_and_release_clips() {
             "visual {spell_visual} keeps its own projectile"
         );
     }
-    // The kit ids resolve to the AnimationData rows the caster actually plays.
     assert_eq!(cat.kit(7).and_then(|k| k.anim_id), Some(105), "LoadBow");
     assert_eq!(cat.kit(164).and_then(|k| k.anim_id), Some(46), "AttackBow");
 }
 
-/// The type-8 arm's decode is **plain truncation** (`_ftol` at `0x40a2b0`), not the small-int
-/// idiom every other integer-carrying param uses — a slot decoded the wrong way yields a colour
-/// of 0 and a duration of 0, i.e. silently no trail at all.
+/// The type-8 arm truncates (`_ftol`, `0x40a2b0`); the small-int decode would give no trail.
 #[test]
 fn a_weapon_trail_proc_decodes_by_truncation() {
     // Kit 324's shipped row: Zero = 16263465 (`0xf82929`), One = 20, Two = 600, Three = 100.
@@ -809,7 +734,7 @@ fn a_weapon_trail_proc_decodes_by_truncation() {
     );
 }
 
-/// `0x5fe494 cmp eax,edi ; je` — a zero duration fires nothing, so it is not a trail.
+/// A zero duration fires nothing (`0x5fe494`).
 #[test]
 fn a_zero_duration_trail_proc_is_no_trail() {
     let proc = CharProc {
@@ -819,8 +744,6 @@ fn a_zero_duration_trail_proc_is_no_trail() {
     assert!(proc.as_weapon_trail().is_none());
 }
 
-/// Only type 8 reaches the arm — `VisualKit::trail_proc` must not answer for a tint or an alpha
-/// proc whose `params[2]` happens to be nonzero.
 #[test]
 fn only_type_eight_arms_a_trail() {
     for ty in [

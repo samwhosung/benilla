@@ -1,22 +1,6 @@
-//! The **burst gate**, pinned against a shipped asset whose gate never opens.
-//!
-//! A burst emitter fires on the rising edge of `enabled != 0 && sampledRate > 0`, both tracks
-//! sampled from the same clock in the same frame (`0x718ed2`–`0x718ef6`).
-//! `Spells\Strike_Impact_Chest.m2` — the gold flare every warrior ability
-//! impact plays (kit 437 → `SpellVisualEffectName` 416, attached at the target's chest `0x22`) —
-//! carries two burst emitters, and **only one of them ever emits**:
-//!
-//! - #0 (`WEAPON\FLARE.BLP`): the enabled track steps `1 → 0` at the exact keyframe the rate track
-//!   steps `0 → 50`. The two conditions are never true together, so it fires nothing, ever.
-//! - #1 (`FirePlume64.blp`): gate held ON by a single key, rate `0 → 30 → 0`. It fires once.
-//!
-//! This is here because the *instrument* got it wrong first: the `m2part` dump derived a burst
-//! count from `peak_rate()` alone and reported "burst of ~50 particles" for #0, which put a
-//! diagnosis of "our impact bursts are too big" 2.7x over on particle count before anyone noticed.
-//! An emitter that never fires is a real shipped shape, not a parse failure, and the reader must
-//! be able to see the difference.
-//!
-//! Skips (passes) when the client isn't present at `<repo>/WoW/Data`.
+//! A burst emitter fires on the rising edge of `enabled != 0 && sampledRate > 0`, both sampled on
+//! one clock in one frame (`0x718ed2`-`0x718ef6`). Of the warrior impact flare's two (kit 437),
+//! #0's enabled track steps to 0 on the key its rate steps to 50, so only #1 ever fires.
 
 use benilla_formats::{open_chain, parse_m2_particle_emitters};
 

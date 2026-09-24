@@ -1,27 +1,8 @@
-//! `AreaPOI.dbc` — the world-map's named points of interest: inns, flight masters, dungeon
-//! entrances, battleground nodes — everything the minimap's nearest-3 POI blips (decision 0203
-//! phase 3) and the world map's POI icons draw from.
-//!
-//! **Client-only: vmangos carries no struct for this table** (never loaded server-side). Layout
-//! pinned by inspection this session (header + full 339-row decode, cross-checked against a
-//! community reference struct for the same build, 2026-07-07): **339 × 29 × 116 B**:
-//! `ID(0), Importance(1), Icon(2), FactionID(3), Pos[3](4-6, world x/y/z), ContinentID(7),
-//! Flags(8), AreaID(9), Name_lang(10, enUS string) + 7 other-locale slots(11-17) + NameFlags(18),
-//! Description_lang(19, enUS string) + 7 other-locale slots(20-26) + DescriptionFlags(27),
-//! WorldStateID(28)` — the field the task brief's 28-column enumeration left unaccounted for.
-//!
-//! Every field past `Pos`/`Name`/`Description` was proven by scanning all 339 rows, not assumed:
-//! `Importance` ∈ `{0,2,3,4}` and `Icon` takes 43 distinct small values (both enum-shaped);
-//! `FactionID` ∈ `{0,83,84}` (a `FactionTemplate` FK used for only the faction-tinted rows);
-//! `ContinentID` ∈ `{0,1,30,37,529}` — Azeroth/Kalimdor plus three battleground map ids;
-//! `AreaID` ranges `−1..=3427` including both `−1` (raw, stored as `u32::MAX` — the
-//! `WMOAreaTable`-style "no group" sentinel) and a distinct `0`; every row's `Pos.x`/`Pos.y` falls
-//! well inside `±17066` (the world-map half-extent); every row's enUS `Name_lang` is non-empty;
-//! and **field 28 is `0` on 209 rows and a small nonzero id on the other 130**, each of those 130
-//! landing in one of a handful of tight numeric bands (`1301-1304`, `1325-1340`, …) — exactly the
-//! shape of a `WorldState` id, confirmed on a named example: id 1613 "Stables" (an Arathi Basin
-//! node, `ContinentID` 529) carries `WorldStateID` 1770 and `Description_lang` "In Conflict", the
-//! live capture-state label a BG node's map icon shows.
+//! `AreaPOI.dbc`, the named points of interest (inns, flight masters, dungeon entrances,
+//! battleground nodes) behind the minimap's landmark blips and the world map's icons. Client-only:
+//! vmangos never loads it. 339 rows of 29 columns (116 B): `ID`, `Importance`, `Icon`,
+//! `FactionID`, `Pos[3]`, `ContinentID`, `Flags`, `AreaID`, then `Name` and `Description` as
+//! 9-column loc-strings (enUS, 7 other locales, flags), then `WorldStateID`.
 
 use std::collections::HashMap;
 
@@ -33,40 +14,34 @@ use crate::Chain;
 
 const AREA_POI: &str = "DBFilesClient\\AreaPOI.dbc";
 
-/// One `AreaPOI.dbc` row — a named world-map point of interest.
+/// One `AreaPOI.dbc` row.
 #[derive(Clone, Debug)]
 pub struct AreaPoi {
-    /// Map-icon prominence tier (`{0,2,3,4}` in 5875 — higher shows at more zoomed-out levels).
+    /// Prominence tier, `{0, 2, 3, 4}` in 5875; the minimap ranks its landmark arrows by it.
     pub importance: u32,
-    /// The map-icon art index (43 distinct icons in 5875).
+    /// The map icon, a cell of `POIIcons.blp`.
     pub icon: u32,
-    /// `FactionTemplate.dbc` FK for a faction-tinted icon; `0` = untinted (the common case).
+    /// `FactionTemplate.dbc` id for a faction-tinted icon, `0` for none.
     pub faction_id: u32,
     /// World position `(x, y, z)`.
     pub pos: [f32; 3],
-    /// The map id this POI's `pos` is expressed in (Azeroth `0`, Kalimdor `1`, or a
-    /// battleground/instance map id).
+    /// The map `pos` is in: `0` Azeroth, `1` Kalimdor, or a battleground map.
     pub continent_id: u32,
     pub flags: u32,
-    /// `AreaTable.dbc` id, or `u32::MAX` (raw `−1`) for a continent-wide POI — distinct in this
-    /// data from a plain `0` (see the module doc).
+    /// `AreaTable.dbc` id, or `u32::MAX` (raw `-1`) for a continent-wide POI.
     pub area_id: u32,
-    /// enUS display name (locale slot 0) — non-empty on every 5875 row.
+    /// enUS display name (locale slot 0).
     pub name: String,
-    /// enUS description (locale slot 0) — empty on the ~2/3 of rows with no live status text.
+    /// enUS live status text (`"In Conflict"`), empty on most rows.
     pub description: String,
-    /// `WorldState` id driving this POI's live label/icon (e.g. a battleground node's capture
-    /// state); `0` = no live state (209 of 339 rows).
+    /// The `WorldState` id driving the live label and icon (a battleground node's capture
+    /// state), `0` for none.
     pub world_state_id: u32,
 }
 
-/// `AreaPOI.dbc` — every row in **file order**, plus the id index.
-///
-/// File order is not tidiness: the reference's world-map landmark builder `0x4a67a0` walks the
-/// whole table by record (`[0xc0e054]`, count `[0xc0e058]`, stride `0x74`) and appends survivors
-/// in that order, so the landmark *index* a Lua `GetMapLandmarkInfo(i)` reads is the DBC's own
-/// order. A hash iteration would also make our landmark list a different permutation every frame,
-/// which the world map's change-diff would read as a change and repaint on.
+/// Every `AreaPOI.dbc` row in file order, plus an id index. The order is the reference's: its
+/// landmark builder `0x4a67a0` walks the table by record (`[0xc0e054]`, count `[0xc0e058]`), so
+/// `GetMapLandmarkInfo(i)` indexes in DBC order.
 pub struct AreaPoiCatalog {
     rows: Vec<(u32, AreaPoi)>,
     by_id: HashMap<u32, usize>,
@@ -77,9 +52,7 @@ impl AreaPoiCatalog {
         self.by_id.get(&id).map(|&i| &self.rows[i].1)
     }
 
-    /// Every row in **file order** — the reference builder's walk (see the type doc). The
-    /// nearest-3 minimap selection (decision 0203 phase 3) filters this by `continent_id` +
-    /// distance itself; the world map's landmark pass runs the `0x4a67a0` gate chain over it.
+    /// Every row in file order.
     pub fn rows(&self) -> impl Iterator<Item = (u32, &AreaPoi)> {
         self.rows.iter().map(|(id, poi)| (*id, poi))
     }
@@ -93,9 +66,6 @@ impl AreaPoiCatalog {
     }
 }
 
-/// 29 fields per the module doc: the two loc-string blocks are 9 dwords each (a string + 7
-/// other-locale string slots + a flags dword), matching the `TaxiNodes` schema pattern
-/// (`crate::schema_for`).
 fn schema() -> Schema {
     let mut s = Schema::new("AreaPOI");
     for name in ["ID", "Importance", "Icon", "FactionID"] {
@@ -151,9 +121,7 @@ pub fn load_area_poi_catalog(chain: &mut Chain) -> Result<AreaPoiCatalog> {
 mod tests {
     use super::*;
 
-    /// The real 5875 table proves the layout: every row's enUS name is readable text, continent
-    /// ids and world positions land in the expected ranges, and the pinned Arathi Basin "Stables"
-    /// example resolves its `WorldStateID` + live status description. Skips without client data.
+    /// The 5875 layout: readable names, positions in range, and Arathi Basin's Stables node.
     #[test]
     fn real_area_poi_layout_sanity() {
         let data = crate::wow_data_or_skip!();
@@ -172,7 +140,6 @@ mod tests {
                 "world x/y within the map half-extent: {:?}",
                 poi.pos
             );
-            // 0/1 are the continents; the rest are battleground/instance map ids — all small.
             assert!(poi.continent_id < 10_000, "continentId is a small map id");
             if poi.world_state_id != 0 {
                 worldstate_nonzero += 1;
@@ -184,7 +151,6 @@ mod tests {
             "a meaningful share of rows carry a live WorldStateID: {worldstate_nonzero}"
         );
 
-        // The pinned Arathi Basin "Stables" node.
         let stables = cat.get(1613).expect("id 1613 (Stables)");
         assert_eq!(stables.name, "Stables");
         assert_eq!(stables.continent_id, 529, "Arathi Basin's map id");

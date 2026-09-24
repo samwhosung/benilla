@@ -1,34 +1,15 @@
-//! `kitanim`: census the `SpellVisualKit` **animation** column (field 2) — the half of a kit that
-//! plays a clip on the unit's *own body*, as opposed to the attach-point effect models
-//! (`spellvis`), the CharProcs (`charprocs`) or the camera shake (`shakecensus`).
-//!
-//! The scope instrument for "the spell landed on me and my character did nothing". A kit's anim is
-//! the only part of a visual that can be *invisible by omission*: an effect model that fails to
-//! spawn leaves a trace line, while an anim that is never asked for, or is asked for and instantly
-//! overwritten, leaves nothing at all. So the population has to be read off the shipped table:
-//!
-//! - **by stage**, because the stage decides the lifetime. A `cast`/`impact` anim is a one-shot on
-//!   the caster/victim; a **`state`** anim belongs to an aura's whole life, which is a different
-//!   consumer entirely (`creature_anim::spell_visual::arm_aura_state_fx`'s slot watcher, not
-//!   `play_impact`).
-//! - **anim-only kits are called out**, because they are the class an "does this kit do anything?"
-//!   test drops. That test is the B114 shape: the aura-state watcher used to arm only on effect
-//!   models, so Stealth — whose whole visual is one CharProc — showed nothing. A state kit whose
-//!   whole visual is an *anim* fails the same way one level over.
-//! - **wound-branch ids are marked**, because 8/9/10 (`StandWound`/`CombatWound`/`CombatCritical`)
-//!   do not play as themselves: the client's kit player hands them to the severity-0 flinch
-//!   (`0x60f3b8: push 0; call 0x60ea70`), so they are a different mechanism wearing the same
-//!   column.
+//! `kitanim`: census the `SpellVisualKit` animation column (field 2), the clip a kit plays on the
+//! unit's own body, by stage: a `cast` or `impact` anim is a one-shot on the caster or victim, a
+//! `state` anim lasts the aura's life. Anim-only kits are marked, as a consumer keyed on effect
+//! models never sees them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use benilla_formats::{AnimDataCatalog, Chain, VisualStages};
 
-/// A `SpellVisual` stage's column selector — one of the five lifecycle-kit fields.
 type StagePick = fn(&VisualStages) -> u32;
 
-/// The five `SpellVisual` lifecycle stages, in field order — the label plus its column selector.
 const STAGES: [(&str, StagePick); 5] = [
     ("precast", |s| s.precast),
     ("cast", |s| s.cast),
@@ -37,14 +18,13 @@ const STAGES: [(&str, StagePick); 5] = [
     ("channel", |s| s.channel),
 ];
 
-/// The kit-player's wound branch: ids 8–10 are handed to the severity-0 flinch instead of being
-/// played as themselves (`0x60f3b8`), so they are counted apart from the real body clips.
+/// Ids 8-10 (`StandWound`, `CombatWound`, `CombatCritical`): the kit player hands them to the
+/// severity-0 flinch instead of playing them (`0x60f3b8: push 0; call 0x60ea70`).
 fn is_wound_id(id: u16) -> bool {
     (8..=10).contains(&id)
 }
 
-/// One state-stage kit's row: everything that decides whether a consumer keyed on effect models
-/// alone would see it.
+/// One state-stage kit: what decides whether a consumer keyed on effect models sees it.
 struct StateKit {
     anim: u16,
     slots: usize,
@@ -55,19 +35,16 @@ struct StateKit {
 }
 
 impl StateKit {
-    /// Nothing but the anim — the class an effects/sound/proc test drops on the floor.
     fn anim_only(&self) -> bool {
         self.slots == 0 && !self.world && !self.sound && self.procs == 0
     }
 }
 
-/// Census the anim column: the raw table, then reachability per stage, then the two stages whose
-/// consumers differ — `state` (aura lifetime) in full, `impact` (the victim's one-shot) ranked.
+/// Census the anim column, its reach by stage, every `state` kit and the top `impact` kits.
 pub fn run(chain: &mut Chain) -> Result<()> {
     let spells = benilla_formats::load_spell_catalog(chain)?;
     let visuals = benilla_formats::load_spell_visual_catalog(chain)?;
-    // `AnimationData.dbc` is only the naming column here — a missing table degrades to bare ids
-    // rather than failing the census (the same optional shape every DBC consumer takes).
+    // `AnimationData.dbc` only names the ids, so a missing table prints `?` rather than failing.
     let anims = benilla_formats::load_anim_data_catalog(chain).ok();
     let name = |id: u16| -> String {
         anims
@@ -77,7 +54,7 @@ pub fn run(chain: &mut Chain) -> Result<()> {
             .to_string()
     };
 
-    // 1. The raw table: which anim ids the shipped kits ask for at all.
+    // 1. Which anim ids the shipped kits ask for.
     let mut by_anim: BTreeMap<u16, BTreeSet<u32>> = BTreeMap::new();
     for kit_id in visuals.kit_ids() {
         if let Some(anim) = visuals.kit(kit_id).and_then(|k| k.anim_id) {
@@ -104,8 +81,7 @@ pub fn run(chain: &mut Chain) -> Result<()> {
         );
     }
 
-    // 2. Reachability: a kit no spell's visual chain names is authored-but-dead, and the STAGE is
-    //    what picks the consumer, so both are counted here.
+    // 2. The reach by stage; a kit no spell's visual names never plays.
     let mut stage_kits: BTreeMap<&str, BTreeSet<u32>> = BTreeMap::new();
     let mut stage_spells: BTreeMap<&str, BTreeSet<u32>> = BTreeMap::new();
     let mut state: BTreeMap<u32, StateKit> = BTreeMap::new();
@@ -157,8 +133,7 @@ pub fn run(chain: &mut Chain) -> Result<()> {
         );
     }
 
-    // 3. The STATE stage in full — the aura-lifetime set, which is the whole reason this census
-    //    exists. `ANIM-ONLY` marks the kits an effects/sound/proc arm test never sees.
+    // 3. Every state kit; `ANIM-ONLY` marks those with no effect slot, world effect, sound or proc.
     let state_spells: usize = state
         .values()
         .flat_map(|k| k.spells.iter())
@@ -194,8 +169,7 @@ pub fn run(chain: &mut Chain) -> Result<()> {
         }
     }
 
-    // 4. The IMPACT stage, ranked — the VICTIM's body one-shot, the other consumer. Kept to a
-    //    ranked list rather than spelled out: the population is the whole damage table.
+    // 4. The impact kits, the victim's one-shot, ranked by spell count.
     let impact_spells: usize = impact
         .values()
         .flat_map(|(_, s)| s.iter())

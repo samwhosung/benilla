@@ -1,13 +1,6 @@
-//! LoadingScreens.dbc loader: resolves a `LoadingScreenID` (the FK in `Map.dbc` field 38, see
-//! [`crate::MapCatalog::loading_screen_id`]) to the full-screen load-art **BLP path**.
-//!
-//! Layout — VERIFIED against build 5875 (raw-byte decode of extracted `DBFilesClient\
-//! LoadingScreens.dbc`, 2026-06-02): the WDBC header reports **40 records · 3 fields · 12 B/record**
-//! (3 × 4 = 12, and `20 + 40·12 + 2926 == 3426` file bytes). Fields = `(ID, Name string, FileName
-//! string)`; field 0 = id, field 2 = BLP path (e.g. `Interface\Glues\LoadingScreens\
-//! LoadScreenEasternKingdom.blp`). Open-world art is continent-wide — id 3 = Kalimdor, id 4 =
-//! Azeroth/EasternKingdom — the other 38 rows are per-instance. The art is a 512×512 square scene
-//! with the WoW logo composited in; the client stretch/crop-fills it to the screen.
+//! `LoadingScreens.dbc`: a `Map.dbc` `LoadingScreenID` (column 38) → the loading art's BLP path
+//! (column 2). The open world has one per continent (3 Kalimdor, 4 Eastern Kingdoms); the other
+//! rows are per instance.
 
 use std::collections::HashMap;
 
@@ -19,14 +12,12 @@ use crate::dbc::{parse, str_at, u32_at};
 
 const LOADING_SCREENS: &str = "DBFilesClient\\LoadingScreens.dbc";
 
-/// Resolved `LoadingScreenID → BLP path` map, built once at startup off the client's
-/// LoadingScreens.dbc.
+/// `LoadingScreenID` → BLP path.
 pub struct LoadingScreenCatalog {
     paths: HashMap<u32, String>,
 }
 
 impl LoadingScreenCatalog {
-    /// The load-art BLP path for `id` (a `Map.dbc` `LoadingScreenID`), or `None` if absent.
     pub fn path(&self, id: u32) -> Option<&str> {
         self.paths.get(&id).map(String::as_str)
     }
@@ -40,7 +31,6 @@ impl LoadingScreenCatalog {
     }
 }
 
-/// 3 fields: ID (0), Name string (1, unused), FileName string (2 = BLP path).
 fn schema() -> Schema {
     let mut s = Schema::new("LoadingScreens");
     s.add_field(SchemaField::new("ID", FieldType::UInt32));
@@ -70,9 +60,6 @@ mod tests {
     use super::*;
     use crate::load_map_catalog;
 
-    /// Golden test of the full Map.dbc→LoadingScreens.dbc→BLP FK chain against the real client.
-    /// Verified pairs (decoded 2026-06-02): mapId 0 (Azeroth) → 4 → EasternKingdom art; mapId 1
-    /// (Kalimdor) → 3 → Kalimdor art. Skips when the client isn't present.
     #[test]
     fn resolves_open_world_loading_art() {
         let data = crate::wow_data_or_skip!();
@@ -80,11 +67,9 @@ mod tests {
         let maps = load_map_catalog(&mut chain).expect("Map.dbc");
         let screens = load_loading_screens(&mut chain).expect("LoadingScreens.dbc");
 
-        // FK values (Map.dbc field 38).
         assert_eq!(maps.loading_screen_id(0), Some(4), "Azeroth → 4");
         assert_eq!(maps.loading_screen_id(1), Some(3), "Kalimdor → 3");
 
-        // FK → BLP path (LoadingScreens.dbc field 2).
         assert_eq!(
             screens.path(4),
             Some("Interface\\Glues\\LoadingScreens\\LoadScreenEasternKingdom.blp")
@@ -94,7 +79,6 @@ mod tests {
             Some("Interface\\Glues\\LoadingScreens\\LoadScreenKalimdor.blp")
         );
 
-        // End-to-end resolution for both continents.
         let resolve = |map_id| {
             maps.loading_screen_id(map_id)
                 .and_then(|id| screens.path(id))

@@ -1,6 +1,5 @@
-//! Difftest the M2 UNLIT (0x01) → `emissive` detection against the real GeneralLantern03: its glass
-//! batch (ElwynnLantern01.blp, material flags 0x05) is self-lit; its body batch (flags 0x00) is not.
-//! Skips (passes) when the client isn't present at `<repo>/WoW/Data`.
+//! The M2 material flag UNLIT (0x01) is `emissive`: GeneralLantern03's glass (flags 0x05) is
+//! self-lit, its body (0x00) is not.
 
 use benilla_formats::{load_m2_mesh, open_chain};
 

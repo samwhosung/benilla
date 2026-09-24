@@ -1,14 +1,6 @@
-//! **EnvironmentalDamage.dbc** — the environmental-damage feedback table: damage type →
-//! `SpellVisualKit` id, played on the victim when `SMSG_ENVIRONMENTALDAMAGELOG` arrives (the
-//! fall-landing dust puff and its five siblings).
-//!
-//! The client shape: init `0x603900`
-//! zeroes a **6-slot table** (`[0xc4d8e4]`) and, for each record with `field1 < 6`, stores
-//! `slot[field1] = field2` — so field 1 is the `EnvironmentalDamageType` enum (0 exhausted ·
-//! 1 drowning · 2 fall · 3 lava · 4 slime · 5 fire; the wire's `damage_type`) and field 2 the
-//! kit id. Sole reader `0x624fcc` (in the 0x1FC consequence method `0x624f30`) bounds the kit id
-//! against `SpellVisualKit.dbc` and plays it. Build 5875 data: 0→871, 1→870, 2→**1066** (the
-//! "DustCloud Land" kit), 3→1064, 4→1065, 5→1067.
+//! `EnvironmentalDamage.dbc`: the `SpellVisualKit` played on the victim of
+//! `SMSG_ENVIRONMENTALDAMAGELOG` (read at `0x624fcc` in `0x624f30`), by the wire's `damage_type`:
+//! 0 exhausted, 1 drowning, 2 fall, 3 lava, 4 slime, 5 fire.
 
 use crate::Chain;
 use anyhow::{Context, Result};
@@ -18,14 +10,13 @@ use crate::dbc::{parse, u32_at};
 
 const ENVIRONMENTAL_DAMAGE: &str = "DBFilesClient\\EnvironmentalDamage.dbc";
 
-/// The 6-slot damage-type → `SpellVisualKit` table (the client's `[0xc4d8e4]`).
+/// The client's 6-slot damage type → kit table (`[0xc4d8e4]`).
 pub struct EnvironmentalDamageTable {
     kits: [u32; 6],
 }
 
 impl EnvironmentalDamageTable {
-    /// The `SpellVisualKit` id for a wire `damage_type` (0–5). `None` for an out-of-range type or
-    /// an empty slot — the client's `field1 < 6` init guard and zero-init respectively.
+    /// The kit for a wire `damage_type`; `None` past type 5 or for an empty slot.
     pub fn kit_id(&self, damage_type: u8) -> Option<u32> {
         self.kits
             .get(usize::from(damage_type))
@@ -34,7 +25,6 @@ impl EnvironmentalDamageTable {
     }
 }
 
-/// EnvironmentalDamage.dbc — 3 fields in build 5875: ID, the damage-type enum, the kit id.
 fn schema() -> Schema {
     let mut s = Schema::new("EnvironmentalDamage");
     for name in ["ID", "DamageType", "VisualKit"] {
@@ -43,8 +33,8 @@ fn schema() -> Schema {
     s
 }
 
-/// Load the table from the patch chain, exactly as the client's init `0x603900` fills its 6-slot
-/// store: zeroed slots, `slot[DamageType] = VisualKit` for each in-range record.
+/// Load the table as the client's init `0x603900` fills it: zeroed, then
+/// `slot[DamageType] = VisualKit` for each row whose type is below 6.
 pub fn load_environmental_damage(chain: &mut Chain) -> Result<EnvironmentalDamageTable> {
     let bytes = chain
         .read_file(ENVIRONMENTAL_DAMAGE)
@@ -52,7 +42,6 @@ pub fn load_environmental_damage(chain: &mut Chain) -> Result<EnvironmentalDamag
     table_from(&bytes)
 }
 
-/// The fill itself, split from the chain read so the golden test drives the identical path.
 fn table_from(bytes: &[u8]) -> Result<EnvironmentalDamageTable> {
     let rs = parse(bytes, schema(), "EnvironmentalDamage")?;
     let mut kits = [0u32; 6];
@@ -70,8 +59,7 @@ fn table_from(bytes: &[u8]) -> Result<EnvironmentalDamageTable> {
 mod tests {
     use super::*;
 
-    /// A hand-built WDBC with the real 5875 rows (verified via benilla-extract 2026-07-16) plus an
-    /// out-of-range type-9 row that must hit the `field1 < 6` init guard and load nowhere.
+    /// The shipped rows, plus a type-9 row that the range guard must skip.
     #[test]
     fn table_loads_by_damage_type_with_the_range_guard() {
         let rows: &[[u32; 3]] = &[

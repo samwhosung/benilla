@@ -1,16 +1,9 @@
-//! Global-sequence CONSTANT channel regression test (the floating-stowed-sword bug, 2026-07-03).
-//!
-//! Vanilla art authors the stowed-weapon attach-bone orientations as **global-sequence** tracks with a
-//! single key at t=0 (HumanMale bones 29/30 hips, 58–62 back family — the blade-down / shield-on-back
-//! quaternions), on global-seq 0, which is itself 0 ms long: a pure constant. The parser used to skip
-//! every global-sequence track ("deferred"), leaving those joints at identity, so a stowed sword lay
-//! horizontal through the body. The constant must now reach **every** sequence's keyframe set. Skips
-//! when the client isn't present.
+//! The stowed-weapon attach bones (HumanMale 29 and 30 at the hips, 58 to 62 on the back) are
+//! oriented by one key on global sequence 0, itself 0 ms long: a constant every sequence carries.
 
 use benilla_formats::{open_chain, parse_m2_animations};
 
-/// The hip-sheath attach bone (attachment id 32 → bone 29) and its authored constant rotation,
-/// verified by direct dump of the real file (decision 0072's attach survey).
+/// The hip-sheath attach bone (attachment 32) and its authored constant rotation.
 const HIP_BONE: u16 = 29;
 const HIP_QUAT: [f32; 4] = [0.382, 0.063, -0.922, 0.0];
 

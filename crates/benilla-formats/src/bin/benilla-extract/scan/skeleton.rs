@@ -1,8 +1,4 @@
-//! Corpus scans over the **bone tree and what addresses it** — the skeleton's own tracks, and
-//! the attachment table things hang off.
-//!
-//! `bonescan` measures our skeletal parse against the reference's sampler band by band;
-//! `attachscan` censuses where a table scan disagrees with the reference's `attachLookup`.
+//! Corpus scans over the bone tree and what addresses it: bone tracks, attachments, event markers.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,15 +7,9 @@ use benilla_formats::Chain;
 
 use crate::model_key;
 
-/// Sweep every `.m2` and census its **attachment addressing**: how many records it authors, how
-/// many attach ids its AttachLookup resolves, and — the point of the report — where the two
-/// disagree, i.e. where "scan the table for a record with this id" answers differently from the
-/// reference's `lookup[id]` (`0x710310`).
-///
-/// Built for decision 0805 (item glows hang on the item model's ids 0..4) to answer the question
-/// that decides whether the lookup can be adopted globally: which models change hands? One line
-/// per divergent model — `+id` = an id only the lookup reaches, `-id` = an id only a table scan
-/// reaches (a record the reference cannot address at all), `id:a→b` = same id, different record.
+/// List the models where a table scan for an attachment id and the reference's `lookup[id]`
+/// (`0x710310`) disagree: `+id` only the lookup reaches, `-id` only the scan reaches (the
+/// reference cannot address it), `id:a→b` a different record.
 pub fn attachscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
     let (mut scanned, mut with_points, mut divergent) = (0u32, 0u32, 0u32);
@@ -37,8 +27,6 @@ pub fn attachscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             continue;
         }
         with_points += 1;
-        // What a table scan would answer (first record per id — the pre-0805 rule) against what
-        // the lookup answers, compared by the record each id lands on.
         let mut scan: BTreeMap<u16, usize> = BTreeMap::new();
         for (i, a) in model.attachments.iter().enumerate() {
             scan.entry(a.id).or_insert(i);
@@ -85,12 +73,8 @@ pub fn attachscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// One bone `M2Track` read straight off the file bytes (v256 stride `0x1c`: interp@0, gseq@2,
-/// interpolation_ranges `M2Array`@0x04/0x08, timestamps@0x0c/0x10, values@0x14/0x18).
-///
-/// Deliberately raw rather than via `parse_m2_animations`: this instrument's whole job is to
-/// compare what the **file** says against what our parser currently emits, so it must not go
-/// through the parser under test.
+/// One bone `M2Track` read raw, so the check never goes through the parser it tests: v256 stride
+/// `0x1c`, interp@0, gseq@2, then `M2Array`s ranges@0x04, timestamps@0x0c, values@0x14.
 struct RawBoneTrack {
     interp: u16,
     gseq: u16,
@@ -151,12 +135,11 @@ impl RawBoneTrack {
         })
     }
 
-    /// The reference's sample at absolute time `t_ms` for sequence file slot `slot` — `0x713d50`
-    /// verbatim, then the sampler's own lerp/step leg (`0x713ea0`, `0x71af20`).
+    /// The reference's sample at absolute `t_ms` for file slot `slot`: `0x713d50`'s key search,
+    /// then the lerp or step of `0x713ea0`/`0x71af20`.
     fn reference(&self, slot: usize, t_ms: u32) -> Option<[f32; 4]> {
         let last = self.ts.len().checked_sub(1)?;
-        // `0x713d59`: the window is `ranges[slot]` when the array is present, else the whole
-        // key list.
+        // `0x713d59`: the window is `ranges[slot]` when present, else the whole key list.
         let (lo, hi) = match self.ranges.get(slot) {
             Some(&(lo, hi)) => (lo as usize, hi as usize),
             None => (0, last),
@@ -174,7 +157,7 @@ impl RawBoneTrack {
                 break;
             }
         }
-        // `0x713e45`: `k1 = k0+1`, bounded by the TOTAL key count — never by the window's `hi`.
+        // `0x713e45`: `k1 = k0 + 1`, bounded by the total key count, not the window's `hi`.
         if self.interp == 0 || k0 + 1 > last {
             return Some(self.vals[k0]);
         }
@@ -191,9 +174,8 @@ impl RawBoneTrack {
         Some(out)
     }
 
-    /// What `models::anim::read_bone_track` emits for this band today: the in-band keys, or — when
-    /// the band holds none — the single **nearest** out-of-band key (benilla decision 0133).
-    /// Returns `(value_at_band_start, value_at_band_end, band_was_empty)`.
+    /// A plain hold, the answer without the `ranges` window: the band's first and last own keys,
+    /// or the nearest out-of-band key when it has none, as `(start, end, band_was_empty)`.
     fn benilla_today(&self, start: u32, end: u32) -> Option<([f32; 4], [f32; 4], bool)> {
         let inb: Vec<usize> = (0..self.ts.len())
             .filter(|&k| self.ts[k] >= start && self.ts[k] <= end)
@@ -213,9 +195,8 @@ impl RawBoneTrack {
         Some((self.vals[k], self.vals[k], true))
     }
 
-    /// Distance between two sampled values in the channel's own units: **degrees** of rotation for
-    /// a quaternion (numerically stable near identity — `acos(dot)` has a ~0.04° floor in f32),
-    /// **model units** for a translation/scale vector.
+    /// Distance in the channel's units: degrees for a quaternion, by the chord form since
+    /// `acos(dot)` floors near 0.04° in f32; model units otherwise.
     fn delta(&self, a: [f32; 4], b: [f32; 4]) -> f32 {
         if self.comps == 4 {
             let norm = |q: [f32; 4]| {
@@ -246,30 +227,14 @@ impl RawBoneTrack {
     }
 }
 
-/// Sweep every `.m2` (optionally under a path prefix) and measure, per bone track and per sequence
-/// band, how far **our** skeletal parse sits from the **reference's** sampler — the population
-/// instrument behind benilla decision 0133's named residual ("an empty band clamps to the nearest
-/// authored key … a named approximation of the mid-gap lerp").
-///
-/// Three separately-reported disagreements, each a distinct mechanism:
-///
-/// - **EMPTY bands** — a band with no keys of its own. We hold the nearest authored key; the
-///   reference holds `keys[ranges[slot].lo]`, or lerps across the bracket when the window spans two
-///   keys. The 0133 residual proper.
-/// - **HELD edges** — a keyed band whose first key is late / last key is early. Bevy holds the edge
-///   key; the reference keeps interpolating toward the neighbouring **out-of-band** key, because
-///   `0x713d50`'s `k1 = k0+1` is bounded by the total key count and not by the window.
-/// - **STEP tracks** — `interpolation_type == 0`. The reference's samplers branch on it and copy
-///   `keys[k0]` with no interpolation; our bone parse emits keys and lets Bevy interpolate, so a
-///   snap becomes a glide.
-///
-/// Plus the safety check the whole idea rests on: whether any band's own keys fall **outside** the
-/// window `ranges[slot]` would search (they never do — if they did, adopting the window would
-/// reintroduce the garbage pose 0133 records).
+/// Measure, per bone track and sequence band, how far a plain key hold sits from the reference's
+/// sampler (`0x713d50`): an empty band samples the `ranges[slot]` window, past a band's last key
+/// the reference keeps lerping toward `k0 + 1` (bounded by the total key count, not the window),
+/// and a step track (`interp == 0`) copies `keys[k0]` where the emitted clips glide. It also
+/// checks that no band's keys fall outside its own window, which makes reading the window safe.
 pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let names = super::m2_names(chain, prefix)?;
-    // Above the f32 noise floor of the stable angle formula (~1e-4°) by two orders, and far below
-    // anything an eye could catch — a slot over this is a real authored difference.
+    // Two orders above the angle formula's f32 noise (about 1e-4°), far below what shows.
     const ROT_EPS: f32 = 0.01; // degrees
     const VEC_EPS: f32 = 1e-4; // model units
     let (mut scanned, mut models_step, mut models_empty_differ, mut models_edge_differ) =
@@ -283,7 +248,7 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     let mut gseq_orphan_models: BTreeSet<String> = BTreeSet::new();
     let mut gseq_restrict_models: BTreeSet<String> = BTreeSet::new();
     let mut emitted_extra = 0u64;
-    // (empty-band peak, keyed-edge peak) per channel kind — the bound, not a threshold count.
+    // (empty-band peak, keyed-edge peak) per channel kind.
     let (mut peak_rot, mut peak_vec) = ((0.0f32, 0.0f32), (0.0f32, 0.0f32));
     let mut emitted_models: BTreeSet<String> = BTreeSet::new();
     // Worst offender per class: (delta, model, bone, channel, slot).
@@ -304,7 +269,7 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 .map(|s| u32::from_le_bytes(s.try_into().unwrap()) as usize)
                 .unwrap_or(0)
         };
-        // Sequences in FILE order (count@0x1c/ofs@0x20, stride 0x44) — the order `ranges` indexes.
+        // Sequences in file order (count@0x1c, ofs@0x20, stride 0x44), the order `ranges` indexes.
         let (sn, so) = (u32_at(0x1c), u32_at(0x20));
         let seqs: Vec<(u32, u32)> = (0..sn)
             .map_while(|i| {
@@ -312,7 +277,7 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 (e + 0x44 <= b.len()).then(|| (u32_at(e + 4) as u32, u32_at(e + 8) as u32))
             })
             .collect();
-        // globalSequences @0x14/0x18 — a duration per entry; 0 means the loop has no period.
+        // globalSequences @0x14/0x18: a duration per entry, 0 for no period.
         let (gn, go) = (u32_at(0x14), u32_at(0x18));
         let gseq_period = |g: u16| -> u32 {
             let i = g as usize;
@@ -340,8 +305,7 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 if tr.interp == 0 {
                     step_tracks += 1;
                     m_step += 1;
-                    // The step deviation only becomes visible when a band holds TWO keys: that is
-                    // where the reference snaps and we glide. Measure the size of the snap.
+                    // A step shows only where a band holds two keys: the reference snaps there.
                     for (slot, &(start, end)) in seqs.iter().enumerate() {
                         if end <= start {
                             continue;
@@ -362,14 +326,10 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                         }
                     }
                 }
-                // A global-sequence track runs on its own clock. `read_bone_track` keeps the
-                // SINGLE-key case (a constant channel — the stowed-weapon rest quats) and leaves
-                // the multi-key case to `parse_m2_global_sequence_bones` → the `GlobalSeqDrive`
-                // lane, which needs a non-zero `globalSequences[gseq]` period. A multi-key channel
-                // on a ZERO-period global sequence falls between the two and is sampled by
-                // neither — census that gap, and the shape of the `ranges` window the reference
-                // would still apply here (`0x713d50` selects the window BEFORE it resolves the gseq
-                // clock, so a restrictive window would clip the loop).
+                // A global-sequence track runs on its own clock: one key is a constant in every
+                // clip, more go to `parse_m2_global_sequence_bones`, which needs a non-zero
+                // period, so a multi-key track on a zero period plays nowhere. `0x713d50` picks
+                // the `ranges` window before the gseq clock, so a narrow window clips the loop.
                 if tr.gseq != 0xffff {
                     gseq_tracks += 1;
                     if tr.ts.len() > 1 {
@@ -427,8 +387,7 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                     } else {
                         peak.1 = peak.1.max(d);
                         slots_keyed += 1;
-                        // Does this band's own key set sit inside the window the reference
-                        // searches? If not, adopting the window would drop playable keys.
+                        // Reading the window is safe only if the band's own keys sit inside it.
                         if let Some(&(lo, hi)) = tr.ranges.get(slot) {
                             let inb: Vec<usize> = (0..tr.ts.len())
                                 .filter(|&k| tr.ts[k] >= start && tr.ts[k] <= end)
@@ -448,9 +407,8 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 }
             }
         }
-        // The other half of the check: what our parser ACTUALLY emits. A band-slot whose emitted
-        // key count exceeds its own in-band key count is one where the head/tail sample differed
-        // from the edge key and had to be carried — the only slots this parse changes.
+        // What the parse emits: a band-slot with more keys than its own in-band count carries a
+        // head or tail sample from the window.
         for a in benilla_formats::parse_m2_animations(&b) {
             for bk in &a.bones {
                 for (off, comps, emitted) in [
@@ -487,7 +445,6 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         if m_edge > 0 {
             models_edge_differ += 1;
         }
-        // Keep the worst-offender lists bounded without losing the tail.
         for w in [&mut worst_empty, &mut worst_edge] {
             if w.len() > 4096 {
                 w.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -583,34 +540,19 @@ pub fn bonescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Sweep every `.m2` and census the **event table's positional half** — the `bone` and `position`
-/// fields every `M2Event` record carries beside its 4CC and timestamps.
-///
-/// The question it exists to answer: the reference's animation-event dispatchers hand their arms
-/// the event's **own** world point (`0x5f3e20`'s `[ebp+0x10]`, `&M2SceneCallback.position` — the
-/// authored `position` transformed by its bone's live matrix and the model's placement), while a
-/// consumer that plays every anim-event sound at the model root is using the placement alone. That
-/// difference is worth code only where the records are actually *off* the origin, or on a bone
-/// that *moves*; where every record of a tag sits at the origin on a static bone the two are the
-/// same point and the simpler consumer is not wrong.
-///
-/// So, per 4CC: how many records, how many sit more than [`OFF_ORIGIN`] from the model origin (the
-/// `position` field is already model-space — it is the marker's REST point, which is why
-/// `build_markers` subtracts the bone pivot to get a bone-local offset), how many ride a bone
-/// **whose chain any sequence keys** (the bone's own track being empty says nothing: it inherits
-/// its parent's matrix), and the largest offset seen with the model that authors it.
+/// Census each 4CC's `M2Event` records by `bone` and `position`. The reference hands an event's
+/// arm its own world point, the model-space rest `position` moved by its bone's live matrix and the
+/// placement (`0x5f3e20`'s `[ebp+0x10]`), which differs from the model root only for a record off
+/// the origin or on a bone whose chain any sequence keys.
 pub fn eventmarkerscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
-    /// Yards from the model origin past which a marker is "off the origin". Well under any
-    /// audible 3D difference, so it is a *presence* threshold, not a significance one.
+    /// Yards from the model origin past which a marker counts as off it: a presence threshold.
     const OFF_ORIGIN: f32 = 0.01;
     let names = super::m2_names(chain, prefix)?;
     // 4CC → (records, off-origin, on a keyed bone, max offset, the model + bone at that max)
     let mut per_tag: BTreeMap<String, (u32, u32, u32, f32, String)> = BTreeMap::new();
     let (mut scanned, mut carriers) = (0u32, 0u32);
-    // Models authoring the SAME 4CC more than once, and those whose duplicates disagree about
-    // where they are: the reference's kernel fires a specific RECORD and snapshots that record's
-    // point, so a consumer that resolves the tag by a first-match table scan answers the wrong
-    // point exactly here.
+    // Models that author a 4CC more than once, and those whose copies sit apart: the reference
+    // fires a specific record and takes its point, so a first-match lookup by tag is wrong there.
     let (mut dup_models, mut dup_split) = (0u32, 0u32);
     let mut dup_examples: Vec<String> = Vec::new();
     for name in names {
@@ -626,10 +568,7 @@ pub fn eventmarkerscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             continue;
         }
         carriers += 1;
-        // Which bones any sequence keys at all. A marker's own bone being unkeyed is NOT enough
-        // to make it static — the bone inherits its parent's matrix — so the test walks the
-        // ancestor chain, which is the difference between "sits still" and "sits still relative to
-        // something that moves".
+        // The bones any sequence keys; a marker moves if any bone up its parent chain is keyed.
         let keyed: BTreeSet<u16> = benilla_formats::parse_m2_animations(&bytes)
             .iter()
             .flat_map(|a| a.bones.iter().map(|b| b.bone))

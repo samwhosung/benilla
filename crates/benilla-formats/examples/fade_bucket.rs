@@ -1,12 +1,7 @@
-//! What distance-fade band does a doodad actually land in? Prints each matching M2's authored
-//! bounding-sphere radius (the reference's `rec+0x68` source) and the band the radius selects:
+//! Each matching M2's bounding-sphere radius (the reference's `rec+0x68` source) and the
+//! distance-fade band it selects, which depends on size alone. Radii are model-local; a
+//! placement's `scale` multiplies them. Output is Blizzard data: never commit it.
 //! `cargo run -p benilla-formats --example fade_bucket -- fence`
-//!
-//! The band is chosen by SIZE, never by what the thing is — so "fences fade at 40→50" is a claim
-//! about a radius, not about a fence. This prints the radius so the claim can be checked instead
-//! of remembered. Radii are model-local (pre-scale); a placement's `scale` multiplies them.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
 
 fn main() -> anyhow::Result<()> {
     let pat = std::env::args()
@@ -38,7 +33,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The `FUN_00683f80` size buckets, as `model_fade.rs` encodes them.
+/// The size buckets of `0x683f80`, in sync with `model_fade.rs`.
 fn band(r: f32) -> &'static str {
     match r {
         r if r > 7.0 => "never fades",

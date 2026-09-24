@@ -1,22 +1,11 @@
-//! `TransportAnimation.dbc` — the type-11 TRANSPORT (elevator/lift/tram) keyframe paths, and the
-//! client's own cycle evaluator. Pure math, no Bevy, **WoW coordinates throughout**.
-//!
-//! A type-11 GameObject never streams a position: the server sends one anchor (the create
-//! movement block's `UPDATE_FLAG_TRANSPORT` u32, its `time-since-GO-create % period` clock) and
-//! the client animates the car itself — `target = (anchor + local_elapsed) % period`, bracket the
-//! two keyframes around `target`, lerp their **local offsets**, rotate the offset by the spawn's
-//! `GAMEOBJECT_ROTATION` quaternion, and add the stationary spawn position. The mechanism is
-//! the client's path evaluator `0x5f6280` + the type-11 tick `0x5f5f10`; vmangos's
-//! `ElevatorTransport::Update` (`Transport.cpp:396-437`) is the same math on the server side,
-//! which is what keeps the two in sync. This module implements the *mechanism* idiomatically
-//! (f32, binary-search bracket), not the reference's x87 spill pattern.
-//!
-//! **7 fields:** `ID(0), TransportID(1), TimeIndex(2), PosX(3), PosY(4), PosZ(5), SequenceID(6)`
-//! — `TransportID` is the **gameobject_template entry** (not a display or path id), `TimeIndex`
-//! is cumulative ms, and the last frame's `TimeIndex` IS the cycle period (`0x5f6280` reads
-//! `segments[count-1].time` as its modulus; vmangos `TotalTime` likewise). `SequenceID` names the
-//! car M2's animation per span (162 moving / 164 stationary on the live rows) — not consumed
-//! here (deferred polish; the car still renders its idle).
+//! `TransportAnimation.dbc`, the keyframe paths of type-11 transports (elevators), and the
+//! reference's cycle evaluator over them, in WoW coordinates. The server sends one anchor, the
+//! create block's `UPDATE_FLAG_TRANSPORT` clock (time since creation, modulo the period), and the
+//! client animates the car: bracket the keyframes around `(anchor + elapsed) % period`, lerp their
+//! offsets, rotate by the spawn's `GAMEOBJECT_ROTATION` and add the spawn position (`0x5f6280`,
+//! ticked by `0x5f5f10`), as vmangos's `ElevatorTransport::Update` does (`Transport.cpp:396-435`).
+//! `TransportID` is the `gameobject_template` entry; `SequenceID`, the car's animation per span, is
+//! not read.
 
 use std::collections::HashMap;
 
@@ -28,29 +17,27 @@ use crate::Chain;
 
 const TRANSPORT_ANIMATION: &str = "DBFilesClient\\TransportAnimation.dbc";
 
-/// One `TransportAnimation.dbc` row — a keyframe on a type-11 transport's authored local path.
+/// One `TransportAnimation.dbc` row, a keyframe on a type-11 transport's local path.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ElevatorKeyframe {
-    /// Cumulative cycle time, ms. The path's last frame's `time_ms` is the cycle period.
+    /// Cumulative cycle time in ms; the last frame's is the period.
     pub time_ms: u32,
-    /// Local offset from the spawn point (WoW axes), **before** the spawn-rotation is applied.
+    /// Offset from the spawn point in WoW axes, before the spawn rotation.
     pub pos: [f32; 3],
 }
 
-/// `TransportAnimation.dbc` grouped by `TransportID` (= `gameobject_template` entry), each
-/// path's frames sorted by `TimeIndex`.
+/// `TransportAnimation.dbc` grouped by `TransportID`, each path's frames sorted by `TimeIndex`.
 pub struct ElevatorPaths {
     by_entry: HashMap<u32, Vec<ElevatorKeyframe>>,
 }
 
 impl ElevatorPaths {
-    /// A template entry's keyframes in time order, or `None` for a GO with no authored path.
-    /// A returned slice is never empty and always starts at `time_ms == 0` (load guarantees).
+    /// A template entry's keyframes in time order: at least two, the first at `time_ms == 0`.
     pub fn entry(&self, template_entry: u32) -> Option<&[ElevatorKeyframe]> {
         self.by_entry.get(&template_entry).map(Vec::as_slice)
     }
 
-    /// Number of distinct transport entries carrying a path.
+    /// The number of transport entries with a path.
     pub fn len(&self) -> usize {
         self.by_entry.len()
     }
@@ -60,7 +47,6 @@ impl ElevatorPaths {
     }
 }
 
-/// 7 fields per the module doc.
 fn schema() -> Schema {
     let mut s = Schema::new("TransportAnimation");
     for name in ["ID", "TransportID", "TimeIndex"] {
@@ -73,10 +59,9 @@ fn schema() -> Schema {
     s
 }
 
-/// Read `TransportAnimation.dbc` off the patch chain into an [`ElevatorPaths`]. Paths that could
-/// not drive a cycle (fewer than 2 frames, a zero period, or a first frame not at `t=0`) are
-/// dropped with the same silence the client affords them — a GO whose entry isn't here simply
-/// renders frozen at its spawn point.
+/// Read `TransportAnimation.dbc` off the patch chain, silently dropping, as the reference does, a
+/// path that cannot drive a cycle (under 2 frames, a zero period, a first frame past 0); its GO
+/// stays at its spawn point.
 pub fn load_elevator_paths(chain: &mut Chain) -> Result<ElevatorPaths> {
     let bytes = chain
         .read_file(TRANSPORT_ANIMATION)
@@ -103,21 +88,16 @@ pub fn load_elevator_paths(chain: &mut Chain) -> Result<ElevatorPaths> {
     Ok(ElevatorPaths { by_entry })
 }
 
-/// The path's cycle period, ms — the last keyframe's cumulative time (`0x5f6280`'s modulus).
+/// The cycle period in ms, the last keyframe's time (`0x5f6280`'s modulus).
 pub fn elevator_period_ms(frames: &[ElevatorKeyframe]) -> u32 {
     frames.last().map_or(1, |f| f.time_ms).max(1)
 }
 
-/// The client's type-11 cycle evaluator (`0x5f6280`, mechanism form):
-/// world position of the car at `cycle_ms ∈ [0, period)`, given the spawn's stationary position
-/// and its `GAMEOBJECT_ROTATION` quaternion `(x, y, z, w)`. Also reports whether the bracketing
-/// span is in motion (the dock/depart edge for consumers' instruments).
-///
-/// The rotation is a plain quaternion rotation of the local offset — the binary builds the
-/// standard 3×3 of `q` row-major and combines transposed, which IS `R(q)·d`. vmangos reproduces
-/// it as `(d * q)` + a y sign flip
-/// (`Transport.cpp:426-428` "magical sign flip but it works"); the two agree on every live 1.12
-/// row with `x = y = 0` offsets and on pure-yaw spawn quats — the tests pin one worked case.
+/// The reference's type-11 evaluator (`0x5f6280`): the car's world position at `cycle_ms`, from
+/// the spawn position and its `GAMEOBJECT_ROTATION` quaternion `(x, y, z, w)`, and whether the
+/// bracketing span moves. The offset turns by `R(q)`, as the reference's transposed 3×3 does;
+/// vmangos's `d * q` with a y sign flip (`Transport.cpp:425-426`) agrees on the 1.12 data's
+/// vertical paths and pure-yaw spawns.
 pub fn elevator_sample(
     frames: &[ElevatorKeyframe],
     spawn_pos: [f32; 3],
@@ -128,8 +108,7 @@ pub fn elevator_sample(
     let period = elevator_period_ms(frames);
     let target = cycle_ms % period;
 
-    // Bracket: the last frame with `time_ms <= target` and its successor. `partition_point` on
-    // the sorted times replaces the binary's ring-cursor scan (same bracket, stateless).
+    // The reference's bracket, found by search rather than its ring cursor.
     let hi = frames.partition_point(|f| f.time_ms <= target);
     let (prev, next) = (frames[hi - 1], frames[hi.min(frames.len() - 1)]);
 
@@ -155,7 +134,7 @@ pub fn elevator_sample(
     )
 }
 
-/// `R(q)·v` — rotate a vector by a unit quaternion `(x, y, z, w)`.
+/// `R(q)·v` for a unit quaternion `(x, y, z, w)`.
 fn rotate_by_quat(v: [f32; 3], q: [f32; 4]) -> [f32; 3] {
     let [x, y, z, w] = q;
     // t = 2·(q.xyz × v); v' = v + w·t + q.xyz × t
@@ -202,26 +181,22 @@ mod tests {
     fn dwell_then_lerp_then_wrap() {
         let f = frames();
         let base = [100.0, 200.0, 50.0];
-        // Dwell window: both bracketing frames at the same offset -> parked, not moving.
         let (p, moving) = elevator_sample(&f, base, IDENT, 2500);
         assert_eq!(p, base);
         assert!(!moving);
-        // Mid-descent: t=7500 is halfway through the 5000->10000 span -> z offset -5.
+        // 7500 is halfway through the 5000 to 10000 span: z offset -5.
         let (p, moving) = elevator_sample(&f, base, IDENT, 7500);
         assert_eq!(p, [100.0, 200.0, 45.0]);
         assert!(moving);
-        // The cycle wraps at period (30000): cycle 30000 IS cycle 0.
         let (p0, _) = elevator_sample(&f, base, IDENT, 0);
         let (pw, _) = elevator_sample(&f, base, IDENT, 30000);
         assert_eq!(p0, pw);
-        // Just before wrap: nearly back at the spawn offset.
         let (p, moving) = elevator_sample(&f, base, IDENT, 29999);
         assert!(moving);
         assert!((p[2] - 50.0).abs() < 0.01, "z = {}", p[2]);
     }
 
-    /// One worked rotation case: a pure-yaw spawn quat (the only kind on live 1.12 spawn rows)
-    /// turning a lateral offset. q = 90° about +Z: (x, y) -> (-y, x).
+    /// A 90° yaw (1.12 transport spawns only yaw) turns `(x, y)` into `(-y, x)`.
     #[test]
     fn spawn_yaw_rotates_the_local_offset() {
         let half = std::f32::consts::FRAC_PI_4; // 90°/2
@@ -243,22 +218,19 @@ mod tests {
         );
     }
 
-    /// The real 5875 table: the Mesa Elevator pair + the Undercity elevator prove layout and the
-    /// load guarantees (sorted, t0 = 0, period = last frame). Skips without client data.
+    /// The 5875 table: layout and load guarantees on three real paths.
     #[test]
     fn real_transport_animation_layout_sanity() {
         let data = crate::wow_data_or_skip!();
         let mut chain = Chain::open(&data).expect("open patch chain");
         let paths = load_elevator_paths(&mut chain).expect("load TransportAnimation.dbc");
-        // The two Thunder Bluff Mesa Elevator cars (gameobject_template 4170/4171) and the
-        // Undercity elevator (152614) — verified against the extracted table this session.
+        // Thunder Bluff's Mesa Elevator cars are templates 4170 and 4171, Undercity's 152614.
         let top = paths.entry(4170).expect("Mesa Elevator 4170");
         assert_eq!(elevator_period_ms(top), 30033);
         assert_eq!(top[0].time_ms, 0);
         assert_eq!(top[0].pos, [0.0, 0.0, 0.0]);
         assert!(top.windows(2).all(|w| w[0].time_ms <= w[1].time_ms));
-        // The car travels on z only — x/y are authoring noise at ~2e-6 yd (the rotation
-        // question is moot for pure-vertical paths). Full descent: 61.24 yd.
+        // The car moves on z only (x and y are ~2e-6 yd of noise), 61.24 yd down.
         assert!(top
             .iter()
             .all(|f| f.pos[0].abs() < 1e-3 && f.pos[1].abs() < 1e-3));
@@ -266,7 +238,6 @@ mod tests {
         let bottom = paths.entry(4171).expect("Mesa Elevator 4171");
         assert_eq!(elevator_period_ms(bottom), 30000);
         assert!(paths.entry(152614).is_some(), "Undercity elevator");
-        // A no-path entry answers None (999999 is no template).
         assert!(paths.entry(999_999).is_none());
     }
 }

@@ -1,11 +1,5 @@
-//! GameObject display resolution: `displayId` → world model path.
-//!
-//! A GameObject's `GAMEOBJECT_DISPLAYID` indexes **GameObjectDisplayInfo.dbc**, whose `modelName`
-//! column is a direct path — mostly `.mdx`/`.mdl` (M2: chests, mailboxes, doodads) with a few `.wmo`
-//! (large structures). Unlike creatures there's no model-data indirection or skins, so the catalog is
-//! just `displayId → path`; the renderer dispatches the path through [`crate::load_object_model`].
-//!
-//! Layout verified against build 5875: 12 fields (ID@0, modelName@1 string, Sound[10]@2..11).
+//! `GameObjectDisplayInfo.dbc`: a game object's `GAMEOBJECT_DISPLAYID` → a direct model path,
+//! with no model-data indirection or skins; mostly `.mdx`/`.mdl`, a few `.wmo`.
 
 use std::collections::HashMap;
 
@@ -23,29 +17,24 @@ pub struct GameObjectCatalog {
 }
 
 impl GameObjectCatalog {
-    /// The model path for a GameObject display id (`.mdx`/`.mdl`/`.wmo`), or `None`.
     pub fn model_path(&self, display_id: u32) -> Option<&str> {
         self.models.get(&display_id).map(String::as_str)
     }
 
-    /// Number of display entries (diagnostics).
     pub fn len(&self) -> usize {
         self.models.len()
     }
 
-    /// Whether the catalog is empty.
     pub fn is_empty(&self) -> bool {
         self.models.is_empty()
     }
 
-    /// Every `(displayId, model path)` pair, unordered — the corpus-sweep entry point for "which
-    /// models can a GameObject ever be, and which display ids reach each one".
+    /// Every `(displayId, model path)` pair, in no order.
     pub fn iter(&self) -> impl Iterator<Item = (u32, &str)> {
         self.models.iter().map(|(&id, p)| (id, p.as_str()))
     }
 }
 
-/// GameObjectDisplayInfo.dbc — 12 fields in build 5875: ID, modelName, then 10 sound refs.
 fn schema() -> Schema {
     let mut s = Schema::new("GameObjectDisplayInfo");
     s.add_field(SchemaField::new("ID", FieldType::UInt32));
@@ -71,23 +60,20 @@ pub fn load_gameobject_catalog(chain: &mut Chain) -> Result<GameObjectCatalog> {
     Ok(GameObjectCatalog { models })
 }
 
-/// The per-display **sound-kit slots** (`Sound0..9` — the other 10 columns of the same table):
-/// `{0 Stand, 1 Open, 2 Loop, 3 Close, 4 Destroy, 5 Opened, 6..9 Custom}` → SoundEntries.
-/// Loaded separately from the model catalog so the audio consumer doesn't reach into the
-/// renderer's cache; only displays with at least one non-zero slot are kept
-/// (most of the 1638 rows are silent props).
+/// Each display's ten `SoundEntries` slots (columns 2-11): 0 stand, 1 open, 2 loop, 3 close,
+/// 4 destroy, 5 opened, 6-9 custom. Only displays with a nonzero slot are kept.
 pub struct GameObjectSounds {
     sounds: HashMap<u32, [u32; 10]>,
 }
 
-/// The `Sound[10]` slot indices with recorded meanings (wowdev, vanilla family).
+/// `Sound[10]` slot indices, named as wowdev documents them.
 pub mod go_sound_slot {
     pub const OPEN: usize = 1;
     pub const CLOSE: usize = 3;
 }
 
 impl GameObjectSounds {
-    /// The 10 sound-kit slots for a display id; `None` when the display has no sounds at all.
+    /// A display's ten slots; `None` when every slot is zero.
     pub fn slots(&self, display_id: u32) -> Option<&[u32; 10]> {
         self.sounds.get(&display_id)
     }

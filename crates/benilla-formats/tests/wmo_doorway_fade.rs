@@ -1,20 +1,11 @@
-//! **FixColorVertexAlpha** — the bright-doorway portal fade, pinned to the reference's own live
-//! capture and to the building the fade is load-bearing for (Dire Maul's entrance corridors).
-//!
-//! The capture is an unusually exact oracle. It read the abbey's uploaded MOCV vertex buffers back
-//! off the D3D stream and diffed them against the file: **678/678 vertices byte-identical in group 1,
-//! 496/506 in group 3** — the fade is the whole difference, and it is exactly 10 vertices, all at the
-//! one portal whose far side is an EXTERIOR group, all hard-set to `(255,255,255,255)`. Interior↔
-//! interior portals whiten nothing, "including vertices AT portal corners".
-//!
-//! That single pair of counts pins every part of the mechanism at once — the exterior-neighbour gate,
-//! the containment half of the distance kernel (an infinite-plane test whitens 12 here, not 10), and
-//! the absence of the MOPY alpha pre-pass (which would rewrite 372 of group 3's alphas and blow the
-//! "byte-identical" finding apart). Skips when the client isn't present.
+//! FixColorVertexAlpha, the portal fade: MOCV vertices at a portal whose far side is an exterior
+//! group turn `(255, 255, 255, 255)`, interior-to-interior portals whiten nothing, and there is no
+//! MOPY alpha pre-pass. A capture of the reference's uploaded MOCV for the Northshire abbey matches
+//! the file in all 678 vertices of group 1 and in 496 of 506 in group 3.
 
 use benilla_formats::{parse_wmo_root, wmo_group_fixed_colors, Chain};
 
-/// How many of a group's MOCV slots the fade rewrites, and the mean luminance before → after.
+/// (slots the fade rewrites, slot count, mean luminance before, after) for one group.
 fn fade_census(reader: &Chain, stem: &str, gi: u32) -> (usize, usize, f32, f32) {
     let root_bytes = reader.read(&format!("{stem}.wmo")).expect("read root");
     let root = parse_wmo_root(&root_bytes).expect("parse root");
@@ -35,7 +26,6 @@ fn fade_census(reader: &Chain, stem: &str, gi: u32) -> (usize, usize, f32, f32) 
     )
 }
 
-/// The abbey, against the D3D capture: group 1 untouched, group 3 rewritten in exactly 10 slots.
 #[test]
 fn abbey_matches_the_reference_capture() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -56,18 +46,16 @@ fn abbey_matches_the_reference_capture() {
         "the capture read 496/506 byte-exact — the fade's whole footprint is 10 slots \
          (an infinite-plane distance test rewrites 12; the MOPY pre-pass would rewrite 372)"
     );
-    // Those 10 were already near-white in the file (225..254) — the fade is a seam touch-up here,
-    // not a lighting change. Anything that moves this group's mean has over-fired.
+    // Those 10 are near-white in the file already (225..254).
     assert!(
         (before - after).abs() < 0.5,
         "abbey g003 mean luminance moved {before} → {after}"
     );
 }
 
-/// Dire Maul's entrance corridors — why the fade is not optional. Each of the five short transition
-/// passages floors its walkway at MOCV `(10,10,40, α=0)`, a near-black navy the interior TRANS law
-/// renders literally: a black floor between lit walls (the director's report, 2026-08-04). The floor
-/// quad's corners sit *in* the doorway portals, so the fade takes them white.
+/// Dire Maul's five entrance corridors author their walkway at MOCV `(10, 10, 40)`, alpha 0, which
+/// the interior TRANS lighting renders near-black; its corners sit in the doorway portals, so the
+/// fade takes them white.
 #[test]
 fn dire_maul_entrance_corridor_floors_are_lit() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -83,16 +71,12 @@ fn dire_maul_entrance_corridor_floors_are_lit() {
         let raw = benilla_formats::wmo_group_raw_colors(&gbytes).expect("MOCV");
         let fixed = wmo_group_fixed_colors(&gbytes, &root).expect("MOCV");
 
-        // The authored walkway: the near-black navy, alpha 0 — the "unlit, the fade lights me" bake.
         let dark = raw.iter().filter(|c| **c == [40, 10, 10, 0]).count();
         assert!(
             dark >= 4,
             "g{gi:03} should author its walkway quad at BGRA (40,10,10,0); found {dark} such slots"
         );
-        // After the fade every one of them reads white: `tex × white` at full lit weight. Not always
-        // *exactly* 255 — a corner a couple of centimetres off the portal plane takes the partial
-        // lerp at `t ≈ 0.997` and lands on 254 — so the assertion is "no longer dark", which is the
-        // claim that matters. 13 → ~255 luminance is the whole bug.
+        // A corner just off the portal plane takes the partial lerp at t ≈ 0.997 and lands on 254.
         for (i, (r, f)) in raw.iter().zip(&fixed).enumerate() {
             if *r == [40, 10, 10, 0] {
                 assert!(

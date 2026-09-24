@@ -1,15 +1,8 @@
-//! Print every render batch's **lighting-relevant material state** — the UNLIT (0x01) / UNFOGGED
-//! (0x02) render flags as our reader resolves them, beside the blend mode and texture.
-//!
-//! `cargo run -p benilla-formats --example batch_lit -- 'Interface\Glues\Models\UI_Tauren\UI_Tauren.m2'`
-//!
-//! Built for B121: a glue scene's ground is a multi-layer stack whose overlay layers are authored
-//! **UNLIT** (drawn fullbright, `colour = c28[0]·E_SH + c28[1]` with `c28[0] = 0`, `0x70c190`),
-//! which is why UI_Tauren can author no ambient-fill light and still show a lit ground in the
-//! reference. The question this answers is the one a grep cannot: whether
-//! the flag survives *our* batch reader's render-flag indexing to the `RenderSubmesh` the material
-//! builder consumes. A batch printed `LIT` here that the asset authors UNLIT is a reader bug; the
-//! asset's own flag table is a separate read (the render-flag array at header 0x84).
+//! Every render batch's UNLIT (0x01) and UNFOGGED (0x02) flags as our reader resolves them, with
+//! blend mode and texture. A batch printed `lit` that the asset authors UNLIT (the render-flag
+//! array at header 0x84) is a reader bug. Glue-scene ground overlays are authored UNLIT and drawn
+//! fullbright (`0x70c190`), which is how UI_Tauren's ground is lit with no ambient light.
+//! `cargo run -p benilla-formats --example batch_lit -- <m2 path>`
 
 fn main() -> anyhow::Result<()> {
     let virt = std::env::args()

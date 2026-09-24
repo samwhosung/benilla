@@ -1,9 +1,6 @@
-//! `gseqdump <internal\path.m2>` — every global-sequence bone channel with its RAW KEYS.
-//!
-//! `benilla-extract m2anim` names which bones carry global-sequence channels and their periods,
-//! but never the key VALUES — and for a twinkle (a scale loop on a star card) the values ARE the
-//! effect: a 0→1 flicker and a 0→20 flare are the same one-line summary. Output is Blizzard
-//! data — pipe it to the scratchpad, never into the repo.
+//! Every global-sequence bone channel with its raw keys: for a twinkle the scale values are the
+//! effect, and a 0-1 flicker and a 0-20 flare can share a period. `gseqdump <internal\path.m2>`
+//! Output is Blizzard data: never commit it.
 
 fn main() -> anyhow::Result<()> {
     let virt = std::env::args()

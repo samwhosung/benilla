@@ -1,23 +1,7 @@
-//! `SoundProviderPreferences.dbc` — the zone reverb presets (EAX listener properties).
-//!
-//! Layout — VERIFIED against build 5875 (header + full row dump, 2026-07-03): **38 × 24 × 96 B**:
-//! `ID(0), Description(1,str), Flags(2), EAXEnvironmentSelection(3), EAXDecayTime(4,f),
-//! EAX2EnvironmentSize(5,f), EAX2EnvironmentDiffusion(6,f), EAX2Room(7,i), EAX2RoomHF(8,i),
-//! EAX2DecayHFRatio(9,f), EAX2Reflections(10,i), EAX2ReflectionsDelay(11,f), EAX2Reverb(12,i),
-//! EAX2ReverbDelay(13,f), EAX2RoomRolloff(14,f), EAX2AirAbsorption(15,f), EAX3RoomLF(16,i),
-//! EAX3DecayLFRatio(17,f), EAX3EchoTime(18,f), EAX3EchoDepth(19,f), EAX3ModulationTime(20,f),
-//! EAX3ModulationDepth(21,f), EAX3HFReference(22,f), EAX3LFReference(23,f)`.
-//! External cross-check: rows 66–92 are the canonical EAX preset table (`PRESET_GENERIC` decay
-//! 1.49 s, Room −1000 mB, Reflections −2602 mB @ 0.007 s, Reverb 200 mB @ 0.011 s — the published
-//! EAX SDK values, byte-exact), which pins every column's meaning independently of the wiki.
-//! Levels are **millibels** (dB × 100), times in seconds.
-//!
-//! Who references these: `AreaTable` cols 5/6 (dry/underwater — in 1.12 only 8 areas carry a dry
-//! pref, all dungeon floors; 568 carry underwater pref 11) and `WMOAreaTable` cols 4/5 (the real
-//! payload: ~4 000 interior group rows, CAVE/AUDITORIUM/ARENA — wired when WMO interior
-//! containment lands). The struct carries the EAX2 core the mixer's reverb consumes; the EAX3
-//! extras (cols 16–23) are near-constant defaults in 1.12 and stay unparsed until a backend uses
-//! them.
+//! `SoundProviderPreferences.dbc`: the EAX reverb presets that `AreaTable` columns 5 and 6 (dry,
+//! underwater) and `WMOAreaTable` columns 4 and 5 point at. Levels are millibels, times seconds;
+//! rows 66-92 carry the EAX SDK's published presets byte for byte, which pins the column meanings.
+//! The EAX3 columns (16-23) are near-constant in 1.12 and not parsed.
 
 use std::collections::HashMap;
 
@@ -27,27 +11,27 @@ use benilla_dbc::{FieldType, Schema, SchemaField};
 use crate::dbc::{f32_at, parse, str_at, u32_at};
 use crate::Chain;
 
-/// One reverb preset — EAX2 listener properties, in EAX units (mB levels, seconds).
+/// One reverb preset's EAX2 listener properties.
 pub struct SoundProvider {
     pub id: u32,
-    /// Preset name ("PRESET_CAVE", "Underwater", …) — debug/display only.
+    /// "PRESET_CAVE", "Underwater", …; for display only.
     pub name: String,
     pub flags: u32,
-    /// Reverberation decay time, seconds (EAX range 0.1–20).
+    /// Decay time in seconds (EAX range 0.1-20).
     pub decay_time: f32,
-    /// Master room effect level, mB (−10000..0).
+    /// Room effect level in mB (-10000..0).
     pub room: i32,
-    /// Room effect high-frequency level, mB (−10000..0) — the muffle of the wet signal.
+    /// Room high-frequency level in mB (-10000..0), the muffle of the wet signal.
     pub room_hf: i32,
-    /// High-frequency to overall decay ratio (0.1–2; <1 = highs die faster).
+    /// High-frequency to overall decay ratio (0.1-2); below 1 the highs die faster.
     pub decay_hf_ratio: f32,
-    /// Early-reflections level, mB (−10000..1000).
+    /// Early reflections level in mB (-10000..1000).
     pub reflections: i32,
-    /// Late-reverberation level, mB (−10000..2000).
+    /// Late reverberation level in mB (-10000..2000).
     pub reverb: i32,
-    /// Environment diffusion (0–1; low = echoey, high = smooth).
+    /// Environment diffusion (0-1): low is echoey, high is smooth.
     pub env_diffusion: f32,
-    /// Apparent room size, meters-ish (EAX environment size, 1–100).
+    /// EAX environment size (1-100), roughly metres.
     pub env_size: f32,
 }
 
@@ -143,9 +127,7 @@ pub fn load_sound_provider_catalog(chain: &mut Chain) -> Result<SoundProviderCat
 mod tests {
     use super::*;
 
-    /// The real 5875 table: PRESET_GENERIC (67) carries the published EAX SDK values and the
-    /// Underwater preset (11) the aggressive HF kill — the two rows the column map hangs on.
-    /// Skips without client data.
+    /// PRESET_GENERIC (67) carries the published EAX SDK values; Underwater (11) cuts all highs.
     #[test]
     fn real_provider_table_decodes() {
         let data = crate::wow_data_or_skip!();

@@ -1,12 +1,6 @@
-//! `benilla-formats` — adapters and CLI tooling over WoW 1.12.1 (build 5875) asset formats.
-//!
-//! Every asset format is **in-repo**: MPQ archives (`benilla-mpq`), BLP2 textures
-//! (`benilla-blp`), DBC tables (`benilla-dbc`), WDT tile tables (`benilla-wdt`), ADT terrain
-//! (`benilla-adt`), WMO buildings (`benilla-wmo`), and M2 models (`benilla-m2`). This crate adds our
-//! schema layer, the patch-chain helper ([`Chain`]), and the `benilla-extract` CLI, and keeps data in
-//! **raw WoW coordinates** (the Bevy transform lives in `benilla`).
-//!
-//! Phase 1: MPQ list/extract, BLP -> PNG, DBC -> CSV.
+//! `benilla-formats`: the schema layer over the 1.12.1 (build 5875) asset formats, the patch chain
+//! ([`Chain`]) and the `benilla-extract` CLI. Data stays in raw WoW coordinates; the Bevy transform
+//! lives in `benilla`.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -14,17 +8,15 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use benilla_dbc::{DbcParser, FieldType, Schema, SchemaField};
 
-/// The BLP texel forms, re-exported so a consumer of [`BlpMipChain`] can switch on
-/// [`BlpMipChain::texels`] without depending on `benilla-blp` directly.
+/// The BLP texel forms, re-exported for [`BlpMipChain::texels`].
 pub use benilla_blp::BlpTexels;
 
 mod chain;
 pub use chain::{Chain, ChainEntry};
-/// The UI texture table's other half — loose `.tga` art (addon folders).
+/// Loose `.tga` art, as addon folders ship it.
 mod tga;
 pub use tga::tga_to_rgba;
-/// Where the WoW install is — the one resolver. Paired with [`Chain`]: this says
-/// *where*, that opens it.
+/// Where the WoW install is; [`Chain`] opens it.
 mod install;
 pub use install::{addon_corpus, addon_corpus_candidates, candidates, skipped, wow_data};
 mod characters;
@@ -70,7 +62,7 @@ pub use factions::{
 };
 mod creature_types;
 pub use creature_types::{load_creature_type_flags, CreatureTypeFlags};
-/// The chat language scramble — the reference's `0x49b560`. Reads [`LanguageWords`].
+/// The chat language scramble, the reference's `0x49b560`.
 mod garble;
 pub use garble::{garble, garble_chat, Garble, FLUENT_SKILL};
 mod languages;
@@ -269,15 +261,13 @@ pub use terrain::{
     TERRAIN_LAYER_TILES, TILE_SIZE,
 };
 mod wdl;
-/// World (x, y) ↔ ADT tile `(col, row)` — the same mapping the streamer uses to pick tiles
-/// (and the minimap uses to place its tile art, decision 0203: minimap `map<X>_<Y>.blp` names
-/// share the ADT index order, chain-verified — `AhnQiraj_27_46.adt` exists, the swap doesn't).
+/// World (x, y) to ADT tile `(col, row)`; minimap `map<X>_<Y>.blp` names use the same order.
 pub use benilla_wdt::{
     tile_to_world, world_to_chunk, world_to_tile, GlobalWmo, WdtFile, WdtReader, WowVersion,
 };
 pub use wdl::{WdlFile, WdlTileMesh};
 
-// The map arc, phase 0: the minimap tile hash catalog + the world-map DBCs.
+// The minimap tile hash catalog and the world-map DBCs.
 mod minimap_translate;
 pub use minimap_translate::{load_minimap_translate, MinimapTranslate};
 mod world_map_area;
@@ -314,39 +304,29 @@ pub use race_pvp_team::load_race_pvp_teams;
 mod zone_map;
 pub use zone_map::{load_zone_map, ZONE_MAP_EDGE};
 
-// The transport arc, phase 0: the taxi/transport path DBC adapter + timetable.
+// Taxi and transport paths, and the transport timetable.
 mod taxi;
 pub use taxi::{load_taxi_path_nodes, TaxiPathNode, TaxiPathNodes};
 mod transport_period;
 mod transports;
 pub use transports::{TransportSample, TransportTimetable};
-// The transport arc phase 3's second consumer: type-11 elevator/lift keyframe paths.
+// Type-11 elevator and lift keyframe paths.
 mod elevators;
 pub use elevators::{
     elevator_period_ms, elevator_sample, load_elevator_paths, ElevatorKeyframe, ElevatorPaths,
 };
 
-// The taxi arc, phase 1: the flight-master catalogs — node identity/position/
-// per-team mount (`TaxiNodes.dbc`) and the direct-hop fare table (`TaxiPath.dbc`). Distinct from
-// `taxi`/`TaxiPathNode.dbc` above, which carries a path's waypoints, not its node list or price.
+// The flight-master catalogs: nodes (`TaxiNodes.dbc`) and direct-hop fares (`TaxiPath.dbc`).
+// `taxi` above holds a path's waypoints.
 mod taxi_nodes;
 pub use taxi_nodes::{load_taxi_nodes, TaxiNode, TaxiNodes};
 mod taxi_path;
 pub use taxi_path::{load_taxi_paths, TaxiPath, TaxiPaths};
 
-/// The ten vanilla base content archives, **lowest priority first** — the reference mounter's
-/// table (`0x82e12c`) at its fixed priorities (`dbc.MPQ` = 0x36 … `model.MPQ` = 0x3f),
-/// reversed so [`Chain`]'s later-wins order reproduces them.
-///
-/// This is only the *base* set: `patch.MPQ`, the `patch-?.MPQ` archives, and the optional
-/// `speech2.MPQ` are **discovered**, not listed — the whole mount law lives in [`Chain::open`].
-/// `base.MPQ` is deliberately absent: the reference opens it once for `telemetry.dat` and closes
-/// it before the mounter runs, so its contents are unreachable as assets (`0x5aa2d0`).
-///
-/// The base archives hold the bulk of the data but carry **no `(listfile)`**; the master
-/// `(listfile)` (and most overrides) live in the patch archives, which is why the chain — not a
-/// single archive — is the correct unit to read from. Verified against the build-5875 client
-/// (`patch.MPQ` listfile = 26,350 entries).
+/// The ten base archives, lowest priority first: the reference mounter's table (`0x82e12c`),
+/// priority 0x36 (`dbc.MPQ`) to 0x3f (`model.MPQ`), in [`Chain`]'s later-wins order. The patch
+/// archives and `speech2.MPQ` are found by [`Chain::open`]; `base.MPQ` is left out, as the
+/// reference closes it before mounting (`0x5aa2d0`).
 pub const VANILLA_BASE_ORDER: &[&str] = &[
     "dbc.MPQ",
     "speech.MPQ",
@@ -360,17 +340,12 @@ pub const VANILLA_BASE_ORDER: &[&str] = &[
     "model.MPQ",
 ];
 
-/// Open a [`Chain`] from either a single `.MPQ` file or a vanilla `Data` directory. Thin wrapper over
-/// [`Chain::open`], kept as the established entry point used across the crate and the CLI.
+/// [`Chain::open`] on one `.MPQ` file or a vanilla `Data` directory.
 pub fn open_chain(path: &Path) -> Result<Chain> {
     Chain::open(path)
 }
 
-/// Decode a BLP texture from raw archive bytes and write it as a PNG at `out`.
-///
-/// Returns the source `(width, height)`. Used by the `benilla-extract` CLI. **1.12 textures are BLP2**
-/// (DXT-compressed or paletted Raw1 — NOT BLP1; verified). Decoded in-repo by [`benilla_blp`];
-/// mip level 0 (full resolution) is written.
+/// Write a BLP2 texture's level 0 (1.12 ships no BLP1) as a PNG at `out`; returns its size.
 pub fn blp_to_png(blp_bytes: &[u8], out: &Path) -> Result<(u32, u32)> {
     let (w, h, rgba) = blp_to_rgba(blp_bytes)?;
     image::RgbaImage::from_raw(w, h, rgba)
@@ -380,10 +355,8 @@ pub fn blp_to_png(blp_bytes: &[u8], out: &Path) -> Result<(u32, u32)> {
     Ok((w, h))
 }
 
-/// One authored mip level's texel census — what a sampler minifying onto this level actually
-/// reads. Split by the alpha byte because the renderer's multiply lanes (Mod2x, `2·src·dst`) read
-/// **no alpha**: a texel the author left transparent still modulates the scene by its colour, so
-/// the "outside" colour of a cut-out is a look-bearing fact, not padding.
+/// One authored mip level's texel census, split by alpha: the multiply blends (Mod2x,
+/// `2·src·dst`) read no alpha, so a transparent texel's colour still modulates the scene.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlpMipStats {
     pub level: u32,
@@ -392,18 +365,15 @@ pub struct BlpMipStats {
     /// Texels with alpha 0 (the authored "outside") and with alpha > 0 (the "inside").
     pub outside: usize,
     pub inside: usize,
-    /// `(min, mean, max)` of the RGB **luma** (`(r+g+b)/3`) over the outside / inside texels;
-    /// `None` when that class is empty.
+    /// `(min, mean, max)` luma, `(r+g+b)/3`, over the outside and the inside texels.
     pub outside_luma: Option<(u8, f32, u8)>,
     pub inside_luma: Option<(u8, f32, u8)>,
-    /// Texels whose luma is below 128 — under Mod2x each of these DARKENS the scene.
+    /// Texels with luma below 128, each of which darkens the scene under Mod2x.
     pub below_128: usize,
 }
 
-/// Census every authored mip level of an in-memory BLP (see [`BlpMipStats`]), decoding through the
-/// same [`benilla_blp::decode`] every CPU consumer uses. The "what does the far sampler see"
-/// instrument: a texture whose mip 0 reads neutral can still carry dark tail levels, and the tail
-/// is all a minified streak or sprite ever samples.
+/// [`BlpMipStats`] for every authored level, decoded as CPU consumers decode: a neutral level 0
+/// can hide dark tail levels, which are all a minified sprite samples.
 pub fn blp_mip_stats(blp_bytes: &[u8]) -> Result<Vec<BlpMipStats>> {
     let decoded =
         benilla_blp::decode(blp_bytes).map_err(|e| anyhow::anyhow!("decoding BLP: {e}"))?;
@@ -447,8 +417,7 @@ pub fn blp_mip_stats(blp_bytes: &[u8]) -> Result<Vec<BlpMipStats>> {
         .collect())
 }
 
-/// Write **every** authored mip level of a BLP as `<stem>.mip<N>.png` beside `out` (whose own
-/// path receives level 0, exactly as [`blp_to_png`] does), and return the per-level census.
+/// Write every authored level as `<stem>.mip<N>.png` beside `out`, level 0 at `out` itself.
 pub fn blp_mips_to_png(blp_bytes: &[u8], out: &Path) -> Result<Vec<BlpMipStats>> {
     let decoded =
         benilla_blp::decode(blp_bytes).map_err(|e| anyhow::anyhow!("decoding BLP: {e}"))?;
@@ -469,9 +438,7 @@ pub fn blp_mips_to_png(blp_bytes: &[u8], out: &Path) -> Result<Vec<BlpMipStats>>
     blp_mip_stats(blp_bytes)
 }
 
-/// Decode a BLP texture (raw bytes) to RGBA8: `(width, height, pixels)`.
-///
-/// For feeding GPU textures (the renderer) without a disk round-trip; mip level 0.
+/// Decode a BLP's level 0 to RGBA8: `(width, height, pixels)`.
 pub fn blp_to_rgba(blp_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let decoded =
         benilla_blp::decode(blp_bytes).map_err(|e| anyhow::anyhow!("decoding BLP: {e}"))?;
@@ -492,47 +459,32 @@ pub fn read_texture_rgba(chain: &mut Chain, path: &str) -> Result<(u32, u32, Vec
     blp_to_rgba(&bytes)
 }
 
-/// A BLP's authored mip pyramid, mip-major, level 0 first.
-/// **Never empty**: the chain length is `BlpHeader::mipmaps_count().max(1)` — a no-mipmaps BLP (the
-/// count formula reports 0) still yields a 1-level chain (level 0), matching `benilla_blp::decode`'s
-/// own guarantee that `mips` is never empty (see [`blp_bytes_to_mip_chain`]).
-///
-/// [`texels`](Self::texels) says what the buffers hold. [`blp_bytes_to_mip_chain`] always decodes to
-/// `Rgba8Unorm`; [`blp_bytes_to_native_chain`] keeps DXTC blocks verbatim for a GPU that can eat
-/// them. A consumer that reads texels on the CPU must use the former (or check `texels`).
+/// A BLP's authored mip levels, level 0 first, never empty: a no-mipmaps BLP is one level.
+/// [`texels`](Self::texels) says whether they hold pixels or DXTC blocks.
 #[derive(Debug, Clone)]
 pub struct BlpMipChain {
-    /// Mip-0 dimensions; level i's dims are `(width >> i).max(1) × (height >> i).max(1)`.
+    /// Level 0's dimensions.
     pub width: u32,
     pub height: u32,
-    /// What every entry of `mips` holds — decoded pixels, or S3TC blocks.
+    /// What every level holds: decoded pixels or S3TC blocks.
     pub texels: BlpTexels,
-    /// One buffer per authored mip level, level 0 first. **Authored, not regenerated** —
-    /// the BLP's pre-baked mip levels are what the real 1.12 client uploads ("the BLP's own stored mip
-    /// chain is used verbatim — no client-side mip regeneration"). Using these instead of
-    /// CPU-resampling mip 0 in gamma byte space is the
-    /// C2 fix: gamma-byte averaging of texels darkens mid-tones (the historical "dim/cool"
-    /// terrain tone gap).
+    /// One buffer per authored level; the 1.12 client uploads the BLP's stored levels and never
+    /// regenerates them.
     pub mips: Vec<Vec<u8>>,
 }
 
 impl BlpMipChain {
-    /// Width × height of the mip level `i`, clamped to 1×1 minimum (wgpu / GL convention).
+    /// Level `i`'s size, at least 1×1.
     pub fn mip_size(&self, i: u32) -> (u32, u32) {
         ((self.width >> i).max(1), (self.height >> i).max(1))
     }
 
-    /// Are these levels CPU-readable `Rgba8Unorm` pixels? The guard for any consumer that indexes
-    /// into a level (resample, alpha stomp, colour read) — block bytes are not pixels.
+    /// Whether the levels are `Rgba8Unorm` pixels a CPU reader can index, not blocks.
     pub fn is_rgba8(&self) -> bool {
         !self.texels.is_block_compressed()
     }
 
-    /// This chain with every level decoded to `Rgba8Unorm`; a no-op if it already is.
-    ///
-    /// The escape hatch for a consumer that asked for the passthrough form and then could not use
-    /// it — it costs the decode it was trying to avoid, but it needs no second read of the file and
-    /// it cannot fail, so the caller is never left holding blocks it must not upload.
+    /// Every level decoded to `Rgba8Unorm` without rereading the file; a no-op if already so.
     pub fn into_rgba8(self) -> Self {
         if self.is_rgba8() {
             return self;
@@ -554,11 +506,7 @@ impl BlpMipChain {
     }
 }
 
-/// Decode every authored mip level of a BLP texture from the chain into `Rgba8Unorm` buffers.
-///
-/// One RGBA8 allocation per mip level (8 for a 256² with 8 mips). Caller is responsible for any
-/// further processing (concatenation, upload, BCn re-encode). The mip pyramid is the BLP's own,
-/// not regenerated — the C2-faithful behaviour.
+/// Read a texture from the chain and decode every authored level to `Rgba8Unorm`.
 pub fn read_texture_mip_chain(chain: &mut Chain, path: &str) -> Result<BlpMipChain> {
     let name = path.replace('/', "\\");
     let bytes = chain
@@ -567,8 +515,7 @@ pub fn read_texture_mip_chain(chain: &mut Chain, path: &str) -> Result<BlpMipCha
     blp_bytes_to_mip_chain(&bytes).with_context(|| format!("decoding texture '{name}'"))
 }
 
-/// Read a texture from the chain by internal path and keep its DXTC blocks verbatim —
-/// [`blp_bytes_to_native_chain`]'s chain-reading wrapper, the twin of [`read_texture_mip_chain`].
+/// Read a texture from the chain, keeping its DXTC blocks ([`blp_bytes_to_native_chain`]).
 pub fn read_texture_native_chain(chain: &mut Chain, path: &str) -> Result<BlpMipChain> {
     let name = path.replace('/', "\\");
     let bytes = chain
@@ -577,17 +524,10 @@ pub fn read_texture_native_chain(chain: &mut Chain, path: &str) -> Result<BlpMip
     blp_bytes_to_native_chain(&bytes).with_context(|| format!("decoding texture '{name}'"))
 }
 
-/// Decode every authored mip level of an **in-memory** BLP into `Rgba8Unorm` buffers — the BLP's own
-/// stored pyramid, used verbatim (no client-side regeneration; the C2-faithful behaviour). This is the
-/// bytes-in entry point used by the Bevy `AssetLoader`; [`read_texture_mip_chain`] is the
-/// chain-reading wrapper.
+/// Decode every authored level of an in-memory BLP to `Rgba8Unorm`, as stored.
 pub fn blp_bytes_to_mip_chain(bytes: &[u8]) -> Result<BlpMipChain> {
     let decoded = benilla_blp::decode(bytes).map_err(|e| anyhow::anyhow!("decoding BLP: {e}"))?;
-    // `decode` guarantees `mips` is never empty: it always decodes level 0 regardless of the
-    // authored mip-chain count (`benilla_blp::decode`, `n = chain.clamp(1, 16)`, so the loop that
-    // fills `mips` runs at least once) — a no-mipmaps BLP reports `mip_chain_count() == 0` but still
-    // carries `mips[0]`. Take at least that one level: the chain we return is never empty, so a
-    // mipmap-less BLP yields a 1-level chain here, not zero.
+    // A no-mipmaps BLP counts 0 levels, yet `decode` always fills `mips[0]`: take at least one.
     let (width, height, count) = (
         decoded.width,
         decoded.height,
@@ -607,17 +547,13 @@ pub fn blp_bytes_to_mip_chain(bytes: &[u8]) -> Result<BlpMipChain> {
     })
 }
 
-/// Every authored mip level of an in-memory BLP **with its DXTC blocks kept verbatim** — the form
-/// the reference client uploads (`glCompressedTexImage2DARB`, the OpenGL arm `0x59f5b0`).
-///
-/// Raw1/Raw3 BLPs have no block form and come back decoded, reporting
-/// [`BlpTexels::Rgba8Unorm`] — so a caller switches on [`BlpMipChain::texels`] rather than
-/// assuming. Levels are padded to whole blocks, so the concatenated chain is exactly what wgpu
-/// expects for the reported format.
+/// Every authored level of an in-memory BLP with its DXTC blocks kept, as the reference uploads
+/// them (`glCompressedTexImage2DARB`, `0x59f5b0`). Raw1 and Raw3 come back decoded; levels are
+/// padded to whole blocks.
 pub fn blp_bytes_to_native_chain(bytes: &[u8]) -> Result<BlpMipChain> {
     let decoded =
         benilla_blp::decode_native(bytes).map_err(|e| anyhow::anyhow!("decoding BLP: {e}"))?;
-    // Same floor-at-one reasoning as `blp_bytes_to_mip_chain`.
+    // At least one level, as in `blp_bytes_to_mip_chain`.
     let (width, height, count) = (
         decoded.width,
         decoded.height,
@@ -638,21 +574,12 @@ pub fn blp_bytes_to_native_chain(bytes: &[u8]) -> Result<BlpMipChain> {
     })
 }
 
-/// A hand-defined schema for a known 1.12 DBC, keyed by base filename, or `None`.
-///
-/// DBC files carry no column types, so the schema is ours to supply (from wowdev.wiki +
-/// the verified file header). Vanilla localized strings occupy **9 dwords** (8 locale
-/// offsets + 1 flags); only the enUS slot is populated in an enUS client. As we need more
-/// DBCs (Map, AreaTable, ...) add them here.
+/// Our schema for a known 1.12 DBC by base filename, as DBC files carry no column types. A
+/// localized string is 9 dwords: 8 locale offsets and a flags word.
 fn schema_for(dbc_name: &str) -> Option<Schema> {
     let base = dbc_name.rsplit(['/', '\\']).next().unwrap_or(dbc_name);
 
-    // Tables whose schema a typed loader in this crate already declares: reuse *that* constructor
-    // rather than re-transcribing the layout here, so a dump can never disagree with what the client
-    // actually reads (the six hand-written schemas below predate any loader for their table).
-    // The appearance family is registered because "which row does this NPC render from?" is a
-    // recurring question; the crate has ~30 more loader schemas that could join this list one line
-    // at a time as they are needed.
+    // A table with a typed loader reuses its schema, so a dump reads what the loader reads.
     for (name, ctor) in [
         (
             "CreatureDisplayInfo.dbc",
@@ -695,7 +622,7 @@ fn schema_for(dbc_name: &str) -> Option<Schema> {
     }
 
     if base.eq_ignore_ascii_case("TaxiNodes.dbc") {
-        // 16 fields (record_size 64), verified against build 5875.
+        // 16 fields, 64-byte records.
         let mut s = Schema::new("TaxiNodes");
         s.add_field(SchemaField::new("ID", FieldType::UInt32));
         s.add_field(SchemaField::new("MapID", FieldType::UInt32));
@@ -716,8 +643,7 @@ fn schema_for(dbc_name: &str) -> Option<Schema> {
     }
 
     if base.eq_ignore_ascii_case("AreaTable.dbc") {
-        // 25 fields (record_size 100), verified against build 5875 (the layout
-        // `area_table.rs` / `area_sound.rs` load from).
+        // 25 fields, 100-byte records, as `area_table.rs` and `area_sound.rs` load them.
         let mut s = Schema::new("AreaTable");
         s.add_field(SchemaField::new("ID", FieldType::UInt32));
         s.add_field(SchemaField::new("ContinentID", FieldType::UInt32));
@@ -747,8 +673,7 @@ fn schema_for(dbc_name: &str) -> Option<Schema> {
     }
 
     if base.eq_ignore_ascii_case("GameObjectDisplayInfo.dbc") {
-        // 12 fields (ID, ModelName, Sound[10]) — the layout `gameobjects.rs`'s own typed adapter
-        // loads from (verified build 5875).
+        // 12 fields, as `gameobjects.rs` loads them.
         let mut s = Schema::new("GameObjectDisplayInfo");
         s.add_field(SchemaField::new("ID", FieldType::UInt32));
         s.add_field(SchemaField::new("ModelName", FieldType::String));
@@ -760,7 +685,6 @@ fn schema_for(dbc_name: &str) -> Option<Schema> {
     }
 
     if base.eq_ignore_ascii_case("TaxiPath.dbc") {
-        // 4 fields: ID, FromTaxiNode, ToTaxiNode, Cost — verified build 5875.
         let mut s = Schema::new("TaxiPath");
         for name in ["ID", "FromTaxiNode", "ToTaxiNode", "Cost"] {
             s.add_field(SchemaField::new(name, FieldType::UInt32));
@@ -770,8 +694,7 @@ fn schema_for(dbc_name: &str) -> Option<Schema> {
     }
 
     if base.eq_ignore_ascii_case("TaxiPathNode.dbc") {
-        // 9 fields (ID, PathID, NodeIndex, MapID, LocX/Y/Z, Flags, Delay) — the layout
-        // `taxi.rs`'s own typed adapter loads from (decision 0438 phase 0, verified build 5875).
+        // 9 fields, as `taxi.rs` loads them.
         let mut s = Schema::new("TaxiPathNode");
         for name in ["ID", "PathID", "NodeIndex", "MapID"] {
             s.add_field(SchemaField::new(name, FieldType::UInt32));
@@ -787,10 +710,8 @@ fn schema_for(dbc_name: &str) -> Option<Schema> {
     }
 
     if base.eq_ignore_ascii_case("TransportAnimation.dbc") {
-        // 7 fields: ID, TransportID, TimeIndex, PosX, PosY, PosZ, SequenceID — matches vmangos's
-        // `TransportAnimationEntry` (`DBCStructure.h:709-718`), which only reads the middle five
-        // (TransportEntry/TimeSeg/X/Y/Z) but the row itself carries all 7 (its own `Id` and
-        // `MovementId` columns are commented out there, not absent from the file).
+        // 7 fields; vmangos's `TransportAnimationEntry` (`DBCStructure.h:709-718`) reads the
+        // middle five, leaving the first and last out.
         let mut s = Schema::new("TransportAnimation");
         s.add_field(SchemaField::new("ID", FieldType::UInt32));
         s.add_field(SchemaField::new("TransportID", FieldType::UInt32));
@@ -806,10 +727,8 @@ fn schema_for(dbc_name: &str) -> Option<Schema> {
     None
 }
 
-/// Parse a DBC (raw archive bytes) using our schema for it and write it as CSV with
-/// column headers. Returns `(record_count, field_count)`. Errors if we have no schema for
-/// the named DBC (with a hint), so a wrong/missing schema fails loudly rather than silently
-/// misaligning columns.
+/// Write a DBC as CSV through our schema for it, returning `(record_count, field_count)`; an error
+/// when there is no schema or its field count is wrong.
 pub fn dbc_to_csv(dbc_bytes: &[u8], dbc_name: &str, out: &Path) -> Result<(u32, u32)> {
     let mut cursor = Cursor::new(dbc_bytes);
     let parser =
@@ -844,8 +763,7 @@ pub fn dbc_to_csv(dbc_bytes: &[u8], dbc_name: &str, out: &Path) -> Result<(u32, 
 mod tests {
     use super::*;
 
-    /// A minimal, complete BLP2 header (magic..=mip_sizes[16], 148 bytes) — mirrors the private
-    /// builder in `benilla_blp`'s own tests (that crate's helper isn't exported).
+    /// A complete 148-byte BLP2 header, magic through `mip_sizes[16]`.
     fn blp2_header(
         compression: u8,
         alpha_bits: u8,
@@ -875,12 +793,7 @@ mod tests {
         b
     }
 
-    /// THE VERIFIED LATENT PANIC, regression-pinned: a no-mipmaps BLP2 (`has_mipmaps = 0`) makes
-    /// `benilla_blp::decode` report `mip_chain_count() == 0`, which `blp_bytes_to_mip_chain` used to
-    /// take literally (`.take(0)`), returning an **empty** `mips` — `benilla-assets`' `world_art_image`
-    /// then panics on `chain.mips[0]`. `decode` itself always keeps level 0 regardless of the count
-    /// (see the comment on `blp_bytes_to_mip_chain`), so the fix is to floor the take at 1: this must
-    /// yield a 1-level chain, never an empty one.
+    /// `has_mipmaps = 0` counts 0 levels, and consumers index `mips[0]`.
     #[test]
     fn no_mipmap_blp_yields_a_one_level_chain_not_empty() {
         const HEADER_SIZE: usize = 148;
@@ -912,16 +825,9 @@ mod tests {
         assert_eq!(chain.mips[0].len(), 2 * 2 * 4);
     }
 
-    /// **B358 / B225, "black rain", pinned on the shipped asset.** `RainDrop01.blp` (16×128
-    /// DXT3) under-stores its sub-block levels — 16 bytes for the 2×16 level where the block grid
-    /// needs 64, 16 for the 1×8 where it needs 32 — and a decoder that zero-fills the difference
-    /// makes those levels three-quarters and half BLACK (an all-zero BC2 block is colour 0 at
-    /// alpha 0). The rain streak draws that texture under Mod2x, which reads no alpha, so a far
-    /// streak minifying onto levels 3–4 multiplied the scene toward black. The reference completes
-    /// a short level from the bytes that follow it in the file (`0x5a5780`), which for this asset
-    /// are the next levels' own grey blocks. This is the census the fix was judged by: every level
-    /// the sampler can reach stays inside the texture's authored neutral band, and level 3's second
-    /// block IS level 4's first — the reference's copy, byte for byte. Skips without the client data.
+    /// `RainDrop01.blp` (16×128 DXT3) stores 16 bytes for its 2×16 and 1×8 levels, which need 64
+    /// and 32. The reference completes a short level from the bytes after it (`0x5a5780`); a zero
+    /// fill would darken the Mod2x rain streak toward black.
     #[test]
     fn the_rain_streak_texture_is_neutral_on_every_level_the_sampler_reaches() {
         let data = crate::wow_data_or_skip!();
@@ -937,8 +843,7 @@ mod tests {
             native.mips.len() >= 5,
             "the tail levels are what this is about"
         );
-        // Level 3 (2×16) is four blocks wide-grid; the file stores one. Blocks 2–4 are the
-        // following levels' — block 2 is level 4's own first block.
+        // Level 3 (2×16) needs four blocks and stores one; its second is level 4's first.
         assert_eq!(native.mips[3].len(), 64);
         assert_eq!(
             &native.mips[3][16..32],
@@ -949,8 +854,7 @@ mod tests {
             native.mips[3][16..].iter().any(|&x| x != 0),
             "level 3's completion is never zero-filled"
         );
-        // And the look-bearing fact, as the Mod2x lane reads it: no texel on any level darkens
-        // the scene by more than the authored grey does (luma ≥ 120; the authored band is 125–164).
+        // No texel on any level falls below luma 120; the authored band is 125 to 164.
         let stats = blp_mip_stats(&bytes).expect("census");
         for s in &stats {
             for (class, luma) in [("outside", s.outside_luma), ("inside", s.inside_luma)] {
@@ -968,10 +872,6 @@ mod tests {
         }
     }
 
-    /// Every table the CSV dumper claims in its error hint really has a schema, and each dumps
-    /// against the **shipped** file — which is the only check that matters, because `with_schema`
-    /// rejects a field-count mismatch and `dbc_to_csv` would otherwise fail only when a session
-    /// reached for it mid-investigation. Skips without the client data.
     #[test]
     fn registered_dbc_schemas_dump_the_shipped_tables() {
         let data = crate::wow_data_or_skip!();

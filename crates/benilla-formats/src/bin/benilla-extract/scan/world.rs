@@ -1,8 +1,4 @@
-//! Corpus scans over **placed world content** — what a WMO root or an ADT tile block puts in
-//! the world, and how much of it the reference would even draw.
-//!
-//! One `.wmo` root's own tables (`wmodoodads`, `skyboxscan`) and one map region's placements
-//! (`placescan`, `doodadscan`). How a placed prop is LIT is a separate question — [`super::lighting`].
+//! Corpus scans over placed world content: a WMO root's own tables and an ADT region's placements.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -11,12 +7,9 @@ use benilla_formats::{Chain, M2AnimSummary};
 
 use crate::{model_key, yn};
 
-/// Dump a WMO root's placed-prop tables: every MODD doodad with its MODS set membership and its
-/// OWNING group(s) read from the group files' MODR lists — the relation the reference instantiates
-/// from (`0x695aa0` loops a *visible* group's own refs). A prop referenced by NO group is never
-/// created by the real client at all — the
-/// divergence decision 0689 names and benilla still spawns. This answers "which props exist here,
-/// who owns them, and which would the reference even draw" in one read (the B30/B32 question).
+/// Dump a WMO root's MODD props with their MODS sets and owning groups, read from the group files'
+/// MODR lists. The reference creates a prop only from a visible group's refs (`0x695aa0`), so it
+/// never draws a prop no group names (`ORPHAN`); benilla spawns one with no room gate.
 pub fn wmodoodads(chain: &mut Chain, raw_path: &str, filter: Option<&str>) -> Result<()> {
     let root_path = raw_path.replace('/', "\\").to_ascii_lowercase();
     let bytes = chain
@@ -26,7 +19,7 @@ pub fn wmodoodads(chain: &mut Chain, raw_path: &str, filter: Option<&str>) -> Re
         .with_context(|| format!("parsing WMO root '{root_path}'"))?;
     let set_names = mods_set_names(&bytes);
 
-    // MODD index -> the groups whose MODR reference it (the ownership relation).
+    // MODD index -> the groups whose MODR names it.
     let stem = root_path.strip_suffix(".wmo").unwrap_or(&root_path);
     let mut owners: BTreeMap<u16, Vec<u32>> = BTreeMap::new();
     let mut groups_read = 0u32;
@@ -121,9 +114,8 @@ pub fn wmodoodads(chain: &mut Chain, raw_path: &str, filter: Option<&str>) -> Re
     Ok(())
 }
 
-/// The MODS set names (`char name[20]` per 32-byte record) — `WmoDoodadSet` keeps only the ranges,
-/// so read the names off the raw root bytes here (top-level chunks are `[magic][size][data]`, magic
-/// on disk reversed: MODS → `SDOM`).
+/// The MODS set names, `char name[20]` at the head of each 32-byte record, read off the raw root
+/// (chunk magics are reversed on disk: `SDOM`) since `WmoDoodadSet` keeps only the ranges.
 fn mods_set_names(bytes: &[u8]) -> Vec<String> {
     let mut off = 0usize;
     while off + 8 <= bytes.len() {
@@ -156,31 +148,14 @@ fn mods_set_names(bytes: &[u8]) -> Vec<String> {
     Vec::new()
 }
 
-/// Sweep every WMO **root** in the chain and report the two halves of the skybox mechanism: which
-/// roots author a **MOSB** skybox model, and which carry groups flagged `0x40000`
-/// ([`benilla_formats::WmoGroupInfo::show_skybox`]).
-///
-/// This is the instrument that *identifies* the flag — and **exactly how far that identification
-/// reaches is the point**. `0x40000` is undocumented, so the cross-tab is what establishes it means
-/// anything at all: the bit never appears on a group whose root names no skybox, across all 815
-/// roots. That is a one-way implication, `flag ⇒ MOSB`, and the summary prints it so the claim is
-/// re-checkable in one command rather than trusted from a decision record.
-///
-/// **It does not, and cannot, say which group the RENDERER tests** — and reading it as if it did is
-/// the mistake decision 0767 made (superseded by 0773). The law is that `0x40000` is tested
-/// inside the portal flood (`0x6b42e0` in `0x6b41c0`) on the group being *visited*, so the predicate
-/// is "any flood-reached group carries the bit". A census over static asset bytes has no way to see
-/// that distinction; only the binary did.
-///
-/// It is also the population instrument for the mechanism: which buildings in 1.12 replace the
-/// `Light.dbc` gradient dome with an authored sky, and how much of each one does it. Stratholme's
-/// city shell sets the bit on 61 of its 83 groups; the only other roots that set it at all are the
-/// four Caverns of Time shells, which ship in the 5875 data with no 1.12 instance to enter.
+/// Cross-tab every WMO root's MOSB skybox model against its groups flagged `0x40000`
+/// ([`benilla_formats::WmoGroupInfo::show_skybox`]): across the 815 roots the flag never appears
+/// without a MOSB. Which group counts is not in the assets: the reference tests the bit on each
+/// group its portal flood visits (`0x6b42e0` in `0x6b41c0`). Only Stratholme's shell (61 of 83
+/// groups) and the four unused Caverns of Time shells set it.
 pub fn skyboxscan(chain: &mut Chain) -> Result<()> {
-    // Roots only, because only the root carries MOSB/MOGI.
     let names = super::wmo_roots(chain, None)?;
 
-    // The cross-tab that identifies the flag: roots with/without a MOSB × groups with/without 0x40000.
     let (mut both, mut mosb_only, mut flag_only, mut neither) = (0u32, 0u32, 0u32, 0u32);
     let mut scanned = 0u32;
     let mut hits: Vec<(String, String, usize, usize)> = Vec::new();
@@ -251,10 +226,7 @@ pub fn skyboxscan(chain: &mut Chain) -> Result<()> {
     Ok(())
 }
 
-/// List individual doodad (MDDF) and WMO (MODF) placements around a world position whose model
-/// path contains `filter` (case-insensitive) — the per-placement position / Euler rotation /
-/// scale / uniqueId ground truth an orientation investigation needs (`doodadscan` only
-/// aggregates).
+/// List the MDDF and MODF placements near a world position whose model path contains `filter`.
 pub fn placescan(
     chain: &mut Chain,
     map: &str,
@@ -300,9 +272,8 @@ pub fn placescan(
     Ok(())
 }
 
-/// Bulk-scan placed doodads (MDDF) and WMO doodad-set-0 props (MODF → MODS/MODD) across a
-/// `(2·tile_radius+1)²` block of ADT tiles around a world position, and report how much of that
-/// content animates.
+/// Count the placed doodads (MDDF) and WMO set-0 props (MODF → MODS/MODD) in the
+/// `(2·tile_radius+1)²` tiles around a world position, and how much of that content animates.
 pub fn doodadscan(
     chain: &mut Chain,
     map: &str,
@@ -314,12 +285,10 @@ pub fn doodadscan(
         .with_context(|| format!("loading tiles around ({center_x}, {center_y}) on {map}"))?;
     eprintln!("{} tile(s) loaded", tiles.len());
 
-    // Direct M2 placements (MDDF) — deduped by uniqueId, which a tile-straddling doodad
-    // repeats identically across every tile it touches (decision-0021 terrain streamer's own
-    // dedup key; see `benilla_formats::Doodad::unique_id`).
+    // MDDF placements, deduped by uniqueId: a doodad straddling tiles repeats in each one.
     let mut seen_doodad_ids: HashSet<u32> = HashSet::new();
     let mut m2_instances: HashMap<String, u32> = HashMap::new();
-    // WMO placements (MODF) — same dedup, by their own uniqueId.
+    // MODF placements, deduped the same way.
     let mut seen_wmo_ids: HashSet<u32> = HashSet::new();
     let mut wmo_instances: HashMap<String, u32> = HashMap::new();
     for (_, tile) in &tiles {
@@ -345,10 +314,7 @@ pub fn doodadscan(
         wmo_instances.len()
     );
 
-    // Fold each unique WMO's doodad-set-**0** M2 props into the same instance table (set 0 is
-    // the WMO's always-on global set, per `WmoDoodadSet` doc), each multiplied by that WMO's
-    // own (deduped) placement count — one building placement = one instance of every set-0 prop
-    // it carries.
+    // Each WMO placement adds one instance of every set-0 prop, the always-on global set.
     let mut wmo_root_failures = 0u32;
     for (wmo_path, &count) in &wmo_instances {
         let root_path = wmo_path.to_ascii_lowercase(); // matches `load_wmo`'s own normalization
@@ -374,7 +340,6 @@ pub fn doodadscan(
         eprintln!("  ({wmo_root_failures} WMO root(s) failed to read/parse — skipped)");
     }
 
-    // Per-unique-model animation summary — one parse per model regardless of instance count.
     let mut summaries: HashMap<String, M2AnimSummary> = HashMap::new();
     let mut parse_failures: Vec<(String, String)> = Vec::new();
     for model in m2_instances.keys() {
@@ -453,9 +418,7 @@ pub fn doodadscan(
         }
     }
 
-    // The rare material channels by NAME (each is <1% of instances, so the top-30 table
-    // almost never surfaces them): the exact models the phase-2/3 material-animation work
-    // verifies against.
+    // The rare material channels by name: each is under 1% of instances, below the top 30.
     println!();
     println!("=== material-channel models (animated transparency / color / UV) ===");
     let mut rare: Vec<(&String, &u32)> = m2_instances
@@ -480,8 +443,7 @@ pub fn doodadscan(
         );
     }
 
-    // Moving-seq0 models with a variation chain, by NAME (the random-variation arm `0x695100`):
-    // the exact placed models where variationIdx −1 vs 0 is visible at all.
+    // Moving seq-0 models with a variation chain, where the random pick (`0x695100`) shows.
     println!();
     println!("=== moving-seq0 multi-variation models ===");
     let mut varied: Vec<(&String, &u32)> = m2_instances
@@ -501,9 +463,7 @@ pub fn doodadscan(
         );
     }
 
-    // Emitters hosted on a moving bone chain, by NAME (0130 phase 4 grounding): the exact
-    // placed models where emitter bone-follow is visible at all — an emitter on a static
-    // chain sits at its rest pose whether or not we attach it.
+    // Emitters on a moving bone chain: the placed models where emitter bone-follow shows.
     println!();
     println!("=== emitter-on-moving-bone models ===");
     let mut movers: Vec<(&String, &u32)> = m2_instances

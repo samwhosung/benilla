@@ -1,15 +1,8 @@
-//! Dump the **render state and texture alpha profile** of every ground-clutter (detail-doodad) model
-//! the `GroundEffect*` catalog resolves — the inputs benilla's clutter draw derives its material from.
-//!
+//! Every ground-clutter model's batch render state and each detail texture's alpha per mip, the
+//! inputs to the ~70 yd clutter fade. The reference's detail pass (`0x6b2b80`) ignores the batches'
+//! blend and two-sidedness and forces one state for every tuft; the fade multiplies the texture
+//! alpha, so its per-mip distribution is the fade's shape.
 //! `cargo run -p benilla-formats --example clutter_state`
-//!
-//! Two questions it answers, both load-bearing for the ~70 yd distance fade:
-//!   * what **blend mode / two-sidedness** each detail M2's batches author — the reference's
-//!     detail-doodad pass (`0x6b2b80`) ignores these and forces one state for every tuft, so a
-//!     per-batch value benilla passes through is a divergence to see, not to assume;
-//!   * how each detail texture's **alpha is distributed per mip level** — a cutout whose alpha is
-//!     binary (0/255) snaps out of an alpha test all at once, while a smoothly-distributed one
-//!     erodes gradually. The fade multiplies this alpha, so the distribution *is* the fade's shape.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,8 +11,7 @@ fn main() -> anyhow::Result<()> {
     let mut chain = benilla_formats::open_chain(&data)?;
     let catalog = benilla_formats::load_ground_effect_catalog(&mut chain, true)?;
 
-    // Every distinct model the catalog can place. `GroundEffectCatalog` exposes rows by id only, so
-    // sweep the id space the DBC uses (ids are small and dense; a miss costs one hash lookup).
+    // Every distinct model the catalog can place; it exposes rows by id only, so sweep the ids.
     let mut models: BTreeSet<String> = BTreeSet::new();
     for id in 0..4096u32 {
         if let Some(e) = catalog.effect(id) {
@@ -72,8 +64,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
     println!("\nbatch blend modes: {blends:?}");
-    // Screen-space mip level per distance: the vertical FOV benilla's camera uses (Bevy's
-    // `PerspectiveProjection` default, ~= the reference's 44.1 deg) over a 1080-tall viewport.
+    // Mip level per distance, for benilla's 45° vertical FOV on a 1080-tall viewport.
     let fov: f32 = std::f32::consts::PI / 4.0;
     let px_per_yard = |d: f32| (1080.0 / 2.0) / ((fov / 2.0).tan() * d);
     densities.sort_by(f32::total_cmp);
@@ -137,9 +128,8 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Texels-per-yard for a batch: the atlas footprint its UVs cover divided by the world size its
-/// geometry covers. With the screen-space pixels-per-yard at a distance this gives the mip level the
-/// GPU selects there — and the mip level decides the alpha the cutout test sees.
+/// Texels per yard for a batch, its UV span in atlas texels over its world span; against pixels per
+/// yard at a distance it gives the mip sampled there.
 fn texel_density(sub: &benilla_formats::RenderSubmesh, atlas: f32) -> Option<f32> {
     if sub.positions.is_empty() || sub.uvs.len() != sub.positions.len() {
         return None;

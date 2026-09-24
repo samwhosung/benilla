@@ -1,12 +1,7 @@
-//! Print every render batch's **animated material alpha** across a named sequence — the factor the
-//! renderer multiplies into the instance's render alpha (`A = instanceAlpha × colourAlpha × weight`).
-//!
+//! Every render batch's animated alpha over one sequence, `colourAlpha × weight` in
+//! `A = instanceAlpha × colourAlpha × weight`. A batch that never reaches exactly 1.0 stays on the
+//! fade blend twin, which writes depth even for a `no_depth_write` batch (M2 render flag 0x10).
 //! `cargo run -p benilla-formats --example batch_alpha -- 'Creature\Voidwalker\Voidwalker.m2' 0`
-//!
-//! The number that matters is whether a batch ever reads **exactly 1.0**: benilla swaps a faded
-//! entity onto its `AlphaMode::Blend` twin whenever `alpha < 1.0`, and that twin forces depth-write
-//! ON. A batch whose authored weight never reaches 1.0 therefore never returns to the steady
-//! material — so a `no_depth_write` batch (M2 flag 0x10) starts writing depth it must never write.
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);

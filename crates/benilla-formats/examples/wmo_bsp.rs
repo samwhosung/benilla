@@ -1,35 +1,20 @@
-//! Which WMO faces the reference's collision BSP can actually **reach** — and which ones we collide
-//! that it never tests:
+//! Which WMO faces the reference's collision BSP can reach, against the faces we collide.
 //! `cargo run -p benilla-formats --example wmo_bsp -- <wmo-path-or-substring>`
-//! e.g. `wmo_bsp cavernsoftime`.
 //!
-//! The reference never brute-forces a WMO's triangles. Every collision query descends the group's
-//! **MOBN** BSP and tests only the faces its leaves list in **MOBR**, then applies the per-face MOPY
-//! reject mask (leaf `0x6bc700`: a BSP-leaf face is skipped iff `(MOPY.flags & rejectMask) != 0`
-//! — walking `0x84`, camera `0x82`). We parse no BSP at all: `accumulate_wmo_group_faces` walks
-//! **every** MOPY-passing triangle. So the two agree only where MOBR happens to reference
-//! everything the mask keeps.
-//!
-//! This tool measures that gap per group — how many faces we collide that the reference's BSP cannot
-//! reach, and where they are — which would be the difference between "solid wall" and "walk straight
-//! through" at a WMO the file never asked to be solid. **Measured on CavernsOfTime:
-//! the gap is ZERO across all 35 groups** — MOBR's leaves reach every non-DETAIL face, so our
-//! brute-force set is exactly the reference's reachable set and the shortcut costs nothing but time.
-//! Re-run it on any WMO whose collision is under suspicion before assuming the same.
-//!
-//! `inward` is the other half of the same question, for *rendering*: the share of a group's faces
-//! whose winding normal points at the group's own centroid. A hollow room hull authored to be seen
-//! from inside runs high (CoT's 34 interior groups: 59–100%), which is why the reference — single-sided since
-//! MOMT `0x04` is clear — is see-through from outside, and why we were not until 0680.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! The reference tests only the faces a group's MOBN leaves list in MOBR, skipping one iff
+//! `MOPY.flags & rejectMask != 0`: walking's box query at leaf `0x6bca50` with mask `0x84`, the
+//! camera and LOS segment query at leaf `0x6bc700` with `0x82`. `accumulate_wmo_group_faces`
+//! walks every face the mask keeps, so the two agree only where MOBR reaches them all, as it does
+//! on CavernsOfTime. `inward` counts faces turned toward the centroid: with MOMT `0x04` clear the
+//! reference culls back faces, so a hull built to be seen from inside is see-through from outside.
+//! Output is Blizzard data: never commit it.
 
 use std::collections::HashSet;
 
 use benilla_wmo::{parse_wmo, ParsedWmo};
 
-/// The walking gather's persistent MOPY reject bit (DETAIL/decal) — mask `0x84` (`0x6315f0`) minus
-/// the transient `0x80` visited bit.
+/// Walking's persistent MOPY reject bit (DETAIL): mask `0x84` (`0x6315f0`) minus the transient
+/// `0x80` visited bit.
 const MOPY_DETAIL: u8 = 0x04;
 
 fn main() -> anyhow::Result<()> {
@@ -96,16 +81,12 @@ fn main() -> anyhow::Result<()> {
                     .collect()
             })
             .unwrap_or_default();
-        // Reachability, not mere presence: a face listed in MOBR but sitting under a leaf the
-        // descent never enters is never tested. Walk MOBN from node 0 and union the leaves' spans.
+        // Reachability, not presence: a face under a leaf the descent never enters is never tested.
         let (bsp_reach, bad) = descend(nodes, &mobr);
-        // What the reference's walking query can ever hit: a face the BSP lists AND whose MOPY
-        // clears DETAIL. What we hit: every face whose MOPY clears DETAIL.
+        // Walking in the reference hits reachable faces that clear DETAIL; ours hits all that do.
         let (mut bsp_hit, mut we_hit, mut gap) = (0usize, 0usize, 0usize);
         let mut gap_aabb = [[f32::MAX; 3], [f32::MIN; 3]];
-        // Which way the shell presents. A hollow interior hull is authored to be seen from INSIDE:
-        // its winding normals point at the group's own centroid, so single-sided it is invisible
-        // (and see-through) from outside. Counted over every face, render or not.
+        // Faces whose winding normal points at the group's centroid, over every face.
         let mut centroid = [0.0f64; 3];
         for p in &group.vertex_positions {
             for (c, v) in [p.x, p.y, p.z].into_iter().enumerate() {
@@ -182,7 +163,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A face's three positions, or `None` if any index is out of range.
 fn face_verts(group: &benilla_wmo::WmoGroup, f: usize) -> Option<[[f32; 3]; 3]> {
     let mut out = [[0.0f32; 3]; 3];
     for (k, slot) in out.iter_mut().enumerate() {
@@ -193,8 +173,8 @@ fn face_verts(group: &benilla_wmo::WmoGroup, f: usize) -> Option<[[f32; 3]; 3]> 
     Some(out)
 }
 
-/// The right-hand-rule normal of a face in its authored winding — the direction the face PRESENTS
-/// under the reference's `GL_BACK`/CCW cull (and ours: `wow_to_bevy` is a proper rotation).
+/// A face's right-hand normal in its authored winding: the side it presents under the reference's
+/// CCW back-face cull, and ours, since `wow_to_bevy` is a proper rotation.
 fn winding_normal(group: &benilla_wmo::WmoGroup, f: usize) -> Option<[f32; 3]> {
     let [a, b, c] = face_verts(group, f)?;
     let (u, v) = (
@@ -208,7 +188,6 @@ fn winding_normal(group: &benilla_wmo::WmoGroup, f: usize) -> Option<[f32; 3]> {
     ])
 }
 
-/// A face's centroid.
 fn face_centroid(group: &benilla_wmo::WmoGroup, f: usize) -> Option<[f32; 3]> {
     let vs = face_verts(group, f)?;
     let mut out = [0.0f32; 3];
@@ -218,13 +197,10 @@ fn face_centroid(group: &benilla_wmo::WmoGroup, f: usize) -> Option<[f32; 3]> {
     Some(out)
 }
 
-/// Walk the MOBN tree from node 0 and return the set of MOBR **face indices the descent can
-/// actually reach**, plus a count of malformed references (out-of-range children or face spans).
-///
-/// Node layout (wowdev, stride `0x10` — the stride itself is the client's, `0x692f20`):
-/// `u16 flags · i16 negChild · i16 posChild · u16 nFaces · u32 faceStart · f32 planeDist`.
-/// `flags & 0x4` = leaf. The `bad` counter is the falsifier: read the layout wrong and
-/// children/spans go out of range immediately rather than quietly.
+/// The MOBR face indices a descent from MOBN node 0 can reach, and the count of out-of-range
+/// children or spans, which a misread layout drives up at once. A node is `u16 flags, i16 negChild,
+/// i16 posChild, u16 nFaces, u32 faceStart, f32 planeDist`, stride `0x10` (`0x692f20`), and
+/// `flags & 0x4` marks a leaf.
 fn descend(nodes: &[u8], mobr: &[u16]) -> (HashSet<u16>, usize) {
     let n = nodes.len() / 0x10;
     let (mut seen, mut reach, mut bad) = (vec![false; n], HashSet::new(), 0usize);

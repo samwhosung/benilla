@@ -1,54 +1,8 @@
-//! The **art extent** of a glue scene — how far its art actually paints around its authored
-//! camera, measured off the geometry and the textures.
-//!
-//! Every `UI_<Race>` / `UI_MainMenu` diorama was composed for a 4:3 screen (1587: the Lua design
-//! space is `1024×768`), and its backdrop is *finite*: a sky card of some authored width, a ground
-//! plane that stops. A camera law that widens the view on a wide window (1587's hor+) keeps showing
-//! more of the diorama until the art runs out — and past that edge the frame is the render target's
-//! clear colour, which no taste calls a composition (`UI_MainMenu`'s backdrop edges show at
-//! 16:9, `UI_Tauren`'s at ~2.24:1). The reference never shows that void only because it never
-//! widens; it zooms instead (0116/1543's diagonal-FOV law) and crops the character at 21:9.
-//!
-//! So the framing law needs one more authored fact per scene: **how wide is the art**. This module
-//! measures it. In camera 0's own tan-space — `x' = x/z`, `y' = y/z` in a right-handed eye frame,
-//! the space a projection's half-extents live in — it rasterises every batch that paints into a
-//! coverage grid and asks:
-//!
-//! - across the authored **vertical** opening (`±tan(fovy/2)` at 4:3), what horizontal half-width
-//!   does *every* row reach, left and right of the axis? → [`ArtExtent::half_w`]
-//! - across the authored **horizontal** opening, what vertical half-height does every column
-//!   reach? → [`ArtExtent::half_h`]
-//!
-//! The minimum over rows is the point: a sky card seen in perspective is a trapezoid on screen, and
-//! the frame runs out of it at the *narrow* row first (MainMenu's edges slant inward toward the
-//! top).
-//!
-//! **What counts as painted is the texel, not the batch.** An `Opaque` batch paints every pixel it
-//! covers. A `Blend`/`AlphaTest` batch paints where its texture's alpha would pass the reference's
-//! own alpha test — **`≥ 224/255`**, the 1.12 alpha-key reference (`0x70c256`, not Cata's 128) —
-//! sampled per pixel through the batch's UVs, perspective-correct, with its wrap/clamp mode.
-//! Both halves of that rule matter on the real art: the artists drew `UI_Human`'s street and its
-//! sky card as *blend* batches over opaque textures (so "opaque batches only" measured that scene
-//! at half its authored box), and `UI_NightElf`'s edges are an alpha-tested wall of trees over a
-//! sky card that ends at exactly 4:3 (so "opaque textures only" measured it a full step narrower
-//! than what is on screen). A cloud, a canopy, a ground shadow, `UI_Tauren`'s 0.55 corner vignette
-//! paint only where their texels pass, which is nowhere at their soft edges — the void this
-//! measures for. `Mod`/`Mod2x` only tint what is already drawn. Backfaces of single-sided batches
-//! are skipped the way the renderer skips them (`Face::Back` cull, CCW front — the model's own
-//! winding survives the axis remap, a proper rotation), so a ground plane seen from below does not
-//! count as sky.
-//!
-//! Because the rule reads textures, the measurement runs **offline**, off the chain: `benilla-
-//! extract glueextent` prints every scene's numbers, and the client carries them as
-//! [`shipped_glue_art_extent`] — a transcription of the shipped 1.12.1 art's authored width,
-//! pinned by [`tests::the_shipped_table_matches_the_measurement`], which re-measures every scene
-//! against the table. (A runtime probe at scene spawn would have to wait for every batch texture
-//! to land before it could answer, and until it answered the login gate would open with its void
-//! edges showing, then snap.)
-//!
-//! Positions are the M2's own model space (WoW axes, Z up) and so is the camera — nothing here
-//! needs the engine's frame. The consumer ([`benilla`]'s glue framing) turns the two numbers into a
-//! ceiling on 1587's law.
+//! The art extent of a glue scene: how far its art paints around camera 0, texel by texel. The
+//! glue framing widens past 4:3 (hor+) where the reference zooms on its diagonal-FOV law, and a
+//! diorama's art is finite, so past its edge the frame would show the clear colour. Reading
+//! textures makes this an offline measurement (`benilla-extract glueextent`), shipped as
+//! [`SHIPPED_GLUE_SCENES`]. Model space throughout (WoW axes, Z up).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,53 +13,24 @@ use super::records::M2PortraitCamera;
 use super::types::{ModelBlend, RenderSubmesh};
 use crate::Chain;
 
-/// How far a scene's art paints around its authored camera, as projection-space half-extents
-/// (tan units — the same space `tan(fov/2)` lives in).
-///
-/// `half_w` is measured across the authored 4:3 **vertical** opening, `half_h` across the authored
-/// **horizontal** one: each is the widest symmetric box of *that* shape the art still fills. A scene
-/// whose art does not even fill the authored box (an axis row with no painted pixel over it)
-/// reports `0.0` on that axis — the consumer clamps to the authored extent, never below it.
+/// The tan-space half-extents the art fills: `half_w` across the authored 4:3 vertical opening,
+/// `half_h` across the horizontal one, `0.0` where it does not fill even the authored box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ArtExtent {
     pub half_w: f32,
     pub half_h: f32,
 }
 
-/// The authored aspect every glue composition was made for (1587, `1024×768`).
+/// The aspect every glue composition was made for, the `1024×768` design space.
 pub const GLUE_AUTHORED_ASPECT: f32 = 4.0 / 3.0;
 
-/// The 1.12 client's alpha-key reference: a texel passes its alpha test at `alpha ≥ 224`
-/// (`0x70c256` — `ALPHAREF` 224, `GEQUAL`). The one threshold this module paints by.
+/// The 1.12 client's alpha test passes a texel at `alpha ≥ 224` (`0x70c256`, `GEQUAL`).
 pub const ALPHA_KEY_REF: u8 = 224;
 
-/// The **shipped** scenes' measured extents and authored fovs — `benilla-extract glueextent` on
-/// the 1.12.1 (5875) chain, transcribed. Keyed by the scene token (`UI_<token>.m2`). The test
-/// re-measures them.
-///
-/// Read as aspects (`half_w / t0`, the window aspect past which the art runs out of width under
-/// the authored vertical): MainMenu 1.54 · Human 1.47 · Orc 1.57 · Dwarf 1.42 · NightElf 1.31 ·
-/// Scourge 1.57 · Tauren 1.46 — every one of the seven runs out **before 16:9**. Not one diorama
-/// was drawn wider than about 3:2; the reference never showed it because its diagonal law zooms
-/// from 4:3 onward.
-///
-/// `UI_NightElf` is the odd one on both axes, and honestly so: its sky card is exactly 4:3 wide,
-/// and its `half_h` is *inside* the authored box — the gaps between its tree-cutout leaves at the
-/// frame's sides paint nothing even at 4:3. Both are the artist's intent: it is a night scene, and
-/// what shows through is the page behind the scene, near-black, read as sky. The framing law never
-/// opens past the authored box on an axis the art does not reach, so the number costs nothing
-/// there.
-/// One degree in radians — the unit the `UI_*` cameras were dialled in. Every one of the seven
-/// authored fovs is a whole number of degrees, to the last bit of the `f32` the M2 carries
-/// (`benilla-extract glueextent`: 86°, 80°, 65°, 60°), so the table says so rather than
-/// transcribing decimals.
+/// One degree: every authored glue fov is a whole number of degrees, to the last `f32` bit.
 const DEG: f32 = std::f32::consts::PI / 180.0;
 
-/// One shipped glue scene, as the framing law needs it: the scene token, its authored camera-0
-/// **fov** ([`DEG`] — 86° on the gate, 80° on the human street, 65° on the four orc-family
-/// stages, 60° in the night elf grove), and the measured
-/// [`ArtExtent`]. The fov rides the table because the framing constant is derived from it
-/// ([`benilla`]'s `GLUE_BOX_ASPECT`) and both halves are re-measured by the same chain test.
+/// A shipped scene; its fov rides along because the app's `GLUE_BOX_ASPECT` derives from it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShippedGlueScene {
     pub token: &'static str,
@@ -113,8 +38,9 @@ pub struct ShippedGlueScene {
     pub art: ArtExtent,
 }
 
-/// The seven shipped scenes: the login gate plus the six race stages (Gnome shares Dwarf's,
-/// Troll shares Orc's). See [`ShippedGlueScene`].
+/// The seven shipped scenes (Gnome shares Dwarf's, Troll Orc's), re-measured by a chain test.
+/// Every one runs out of width before 16:9. `UI_NightElf`'s `half_h` is inside the authored box:
+/// the gaps between its tree cutouts paint nothing even at 4:3, and read as night sky.
 pub const SHIPPED_GLUE_SCENES: [ShippedGlueScene; 7] = [
     ShippedGlueScene {
         token: "MainMenu",
@@ -174,8 +100,7 @@ pub const SHIPPED_GLUE_SCENES: [ShippedGlueScene; 7] = [
     },
 ];
 
-/// The shipped scene's measured [`ArtExtent`] by token, `None` for a token that is not one of
-/// the seven `UI_*` dioramas (the consumer then keeps 1587's unbounded law).
+/// A shipped scene's measured [`ArtExtent`] by token; `None` for any other token.
 pub fn shipped_glue_art_extent(token: &str) -> Option<ArtExtent> {
     SHIPPED_GLUE_SCENES
         .iter()
@@ -183,8 +108,7 @@ pub fn shipped_glue_art_extent(token: &str) -> Option<ArtExtent> {
         .map(|s| s.art)
 }
 
-/// The authored **vertical** half-extent (tan units) of a glue camera's `fov` at 4:3 — the number
-/// 1587's law pins: `tan(fovy/2)` with `fovy = fov/√((4/3)²+1)`.
+/// A glue camera's authored vertical half-extent at 4:3, `tan(fovy/2)`, `fovy = fov/√((4/3)²+1)`.
 pub fn authored_half_height(fov: f32) -> f32 {
     (fov / (GLUE_AUTHORED_ASPECT * GLUE_AUTHORED_ASPECT + 1.0).sqrt() * 0.5).tan()
 }
@@ -192,10 +116,9 @@ pub fn authored_half_height(fov: f32) -> f32 {
 /// How a batch paints the pixels it covers.
 #[derive(Clone, Debug)]
 pub enum Coverage {
-    /// Every covered pixel is painted (an opaque batch, or a blend over a texture with no alpha
-    /// below the key).
+    /// Every covered pixel paints: an opaque batch, or a texture never below the key.
     Full,
-    /// Painted where the texture's alpha, sampled through the batch's UVs, is `≥` [`ALPHA_KEY_REF`].
+    /// Painted where the texture's alpha through the batch's UVs is `≥` [`ALPHA_KEY_REF`].
     Alpha(Arc<AlphaMap>),
 }
 
@@ -209,8 +132,7 @@ pub struct AlphaMap {
 }
 
 impl AlphaMap {
-    /// The alpha at `(u, v)` under the batch's wrap (`true`) or clamp-to-edge (`false`) modes,
-    /// nearest texel — the same texel the sampler's mip 0 would return at its centre.
+    /// The nearest texel's alpha at `(u, v)`, each axis wrapping (`true`) or clamping to the edge.
     fn sample(&self, u: f32, v: f32, wrap_x: bool, wrap_y: bool) -> u8 {
         let axis = |t: f32, n: u32, wrap: bool| -> u32 {
             let t = if wrap {
@@ -229,9 +151,8 @@ impl AlphaMap {
     }
 }
 
-/// The coverage rule with the chain in hand: `Opaque` → [`Coverage::Full`]; `Blend`/`AlphaTest`
-/// → the texture's alpha, read once per path (a texture that never dips below the key collapses
-/// to `Full`); no texture, or `Mod`/`Mod2x` → `None` (paints nothing that counts).
+/// The coverage rule off the chain: `Opaque` paints, `Blend`/`AlphaTest` paint by the texture's
+/// alpha (read once per path), and `Mod`/`Mod2x` or a missing texture count for nothing.
 pub struct CoverageReader<'c> {
     chain: &'c mut Chain,
     cache: HashMap<String, Option<Coverage>>,
@@ -245,7 +166,6 @@ impl<'c> CoverageReader<'c> {
         }
     }
 
-    /// How `sub` paints, or `None` when it counts for nothing.
     pub fn coverage(&mut self, sub: &RenderSubmesh) -> Result<Option<Coverage>> {
         match sub.blend {
             ModelBlend::Opaque => Ok(Some(Coverage::Full)),
@@ -277,11 +197,8 @@ impl<'c> CoverageReader<'c> {
     }
 }
 
-/// Measure a scene's [`ArtExtent`]: its batches, its authored camera, and how each batch paints
-/// (`coverage` — [`CoverageReader::coverage`] with the chain, or anything a test hands in).
-///
-/// Front faces only unless two-sided; triangles are clipped to the camera's own near plane,
-/// exactly as the render would clip them.
+/// Measure a scene's [`ArtExtent`]: the half-width every row reaches, the half-height every column
+/// does. The narrowest row decides, as a sky card in perspective is a trapezoid.
 pub fn glue_art_extent<'a>(
     subs: impl IntoIterator<Item = &'a RenderSubmesh>,
     cam: &M2PortraitCamera,
@@ -303,10 +220,8 @@ pub fn glue_art_extent<'a>(
     }
 }
 
-/// The coverage grid over the camera's tan-space: `x' ∈ ±X_SPAN·t0`, `y' ∈ ±Y_SPAN·t0`. The spans
-/// cover what the framing law can ask for — a wide window holds the width at the art's edge, and
-/// the widest edge any diorama has is under `2·t0`; a narrow window opens the height up to the
-/// art's, and `2.7·t0` is a 1:2 window.
+/// The coverage grid over tan-space, `x' ∈ ±X_SPAN·t0`, `y' ∈ ±Y_SPAN·t0`: no diorama's edge is
+/// as far out as `2·t0`, and `2.7·t0` of height is a 1:2 window.
 struct Grid {
     cells: Vec<bool>,
     /// Tan units per cell, both axes.
@@ -316,10 +231,7 @@ struct Grid {
     y_lo: f32,
 }
 
-/// Cells per axis. Even, so the axis (`x' = 0`, `y' = 0`) is a cell boundary and the run around
-/// it is read symmetrically. 2048 cells over `4.4·t0` is `0.0021·t0` per cell — 1.5 px at 1440p —
-/// and the reported extent is shortened by half a cell, so the quantisation only ever
-/// under-reports.
+/// Cells per axis, even so the axis is a cell boundary: `0.0021·t0` a cell, 1.5 px at 1440p.
 const CELLS: usize = 2048;
 const X_SPAN: f32 = 2.2;
 const Y_SPAN: f32 = 2.7;
@@ -337,7 +249,6 @@ impl Grid {
         }
     }
 
-    /// Rasterise every front-facing, near-clipped triangle of `sub` into the grid.
     fn paint_batch(&mut self, sub: &RenderSubmesh, frame: &EyeFrame, near: f32, cov: &Coverage) {
         for tri in sub.indices.as_chunks::<3>().0 {
             let Some(eye) = tri
@@ -421,9 +332,8 @@ impl Grid {
         }
     }
 
-    /// The largest half-extent along `axis` that every scanline across the authored opening
-    /// (`±opening` on the other axis) reaches on both sides of the axis. `0.0` if any scanline
-    /// leaves the axis unpainted. Shortened by half a cell, so quantisation under-reports.
+    /// The largest half-extent along `axis` that every scanline within `±opening` reaches on both
+    /// sides, `0.0` if any leaves the axis unpainted; half a cell short, so it never over-reports.
     fn half_extent(&self, axis: Axis, opening: f32) -> f32 {
         let (lines, cells_per_line, step, lo, line_step) = match axis {
             Axis::Row => (CELLS, CELLS, self.dx, self.y_lo, self.dy),
@@ -471,7 +381,6 @@ enum Axis {
     Column,
 }
 
-/// A projected vertex with what perspective-correct interpolation needs.
 #[derive(Clone, Copy)]
 struct Vert {
     x: f32,
@@ -486,26 +395,24 @@ fn edge(a: &Vert, b: &Vert, x: f32, y: f32) -> f32 {
     (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x)
 }
 
-/// Twice the signed area of a projected triangle — positive for counter-clockwise.
+/// Twice the signed area of a projected triangle, positive for counter-clockwise.
 fn signed_area(t: &[Vert; 3]) -> f32 {
     edge(&t[0], &t[1], t[2].x, t[2].y)
 }
 
-/// Where ONE batch lands in the camera's tan-space — the per-batch diagnostic beside
-/// [`glue_art_extent`]: how many of its triangles face the camera (and so can paint), how many
-/// face away, and the box its front faces cover. `benilla-extract glueextent --batches` prints it,
-/// so a measured edge can be traced to the card that sets it.
+/// Where one batch lands in the camera's tan-space, to trace a measured edge to the card that
+/// sets it (`benilla-extract glueextent --batches`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BatchFootprint {
     /// Triangles in front of the near plane that face the camera (or are two-sided).
     pub front: usize,
-    /// Single-sided triangles facing away — culled by the renderer, painting nothing.
+    /// Single-sided triangles facing away, which the renderer culls.
     pub back: usize,
     /// Clipped away entirely (behind the near plane).
     pub clipped: usize,
     /// The front faces' `x'` range, `None` with no front face.
     pub x: Option<(f32, f32)>,
-    /// …and `y'` range.
+    /// The front faces' `y'` range.
     pub y: Option<(f32, f32)>,
 }
 
@@ -561,11 +468,10 @@ pub fn batch_footprint(sub: &RenderSubmesh, cam: &M2PortraitCamera) -> BatchFoot
     fp
 }
 
-/// An eye-space vertex `(x, y, depth)` with its UV — the unit `clip_near` works on.
+/// An eye-space vertex `(x, y, depth)` with its UV.
 type EyeVert = ((f32, f32, f32), [f32; 2]);
 
-/// Clip an eye-space triangle against `depth = near` (keep `depth ≥ near`), fanning the resulting
-/// polygon (0, 3 or 4 vertices) back into triangles. UVs are interpolated with the position.
+/// Clip an eye-space triangle to `depth ≥ near`, fanning what is left back into triangles.
 fn clip_near(tri: &[EyeVert], near: f32) -> Vec<[EyeVert; 3]> {
     let inside = |p: &EyeVert| p.0 .2 >= near;
     let mut poly: Vec<EyeVert> = Vec::with_capacity(4);
@@ -592,12 +498,9 @@ fn clip_near(tri: &[EyeVert], near: f32) -> Vec<[EyeVert; 3]> {
     }
 }
 
-/// The camera's eye frame in model space: `right`, `up`, `forward` unit vectors + the eye.
-///
-/// Mirrors the engine's `Transform::looking_at(target, up)` with `up = roll about forward ⋅ +Z`
-/// (the glue booth's own rig): `forward = target − eye`, `right = forward × up`, `up' = right ×
-/// forward`. Model space is WoW's (Z up); the engine's remap is a proper rotation, so cross
-/// products — and with them winding — agree between the two frames.
+/// The camera's eye frame in model space, as the glue booth's `Transform::looking_at` rig builds
+/// it with `+Z` rolled about forward as up. The engine's axis remap is a proper rotation, so
+/// winding agrees between the two frames.
 struct EyeFrame {
     eye: [f32; 3],
     right: [f32; 3],
@@ -626,7 +529,6 @@ impl EyeFrame {
     }
 }
 
-/// WoW model space is Z-up.
 const WOW_UP: [f32; 3] = [0.0, 0.0, 1.0];
 
 // ---- small vector helpers (model space; no engine types in this crate) ----
@@ -683,12 +585,9 @@ mod tests {
         }
     }
 
-    /// An axis-aligned card facing the camera at depth `d`, spanning `±w` horizontally (world −Y
-    /// is screen right) and `±h` vertically (Z), wound CCW as seen from the camera, UVs
-    /// `(0,0)` at screen left-bottom to `(1,1)` at right-top.
+    /// A card facing the camera at depth `d`, `±w` wide (world −Y is screen right) and `±h` tall,
+    /// wound CCW from the camera, UVs `(0,0)` at screen left-bottom to `(1,1)` at right-top.
     fn card(d: f32, w: f32, h: f32, blend: ModelBlend, two_sided: bool) -> RenderSubmesh {
-        // Screen-right is −Y: corners in screen order (left-bottom, right-bottom, right-top,
-        // left-top) are y = +w, −w, −w, +w.
         RenderSubmesh {
             positions: vec![[d, w, -h], [d, -w, -h], [d, -w, h], [d, w, h]],
             uvs: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
@@ -731,8 +630,7 @@ mod tests {
 
     #[test]
     fn a_wide_card_reports_its_own_half_extents() {
-        // At depth 10, a card ±5 wide / ±4 tall projects to ±0.5 / ±0.4 — both larger than the
-        // authored box, so the measured extents are the card's.
+        // ±5 by ±4 at depth 10 projects to ±0.5 by ±0.4, both past the authored box.
         let sub = card(10.0, 5.0, 4.0, ModelBlend::Opaque, false);
         let ext = glue_art_extent([&sub], &cam(FOV), full);
         assert!((ext.half_w - 0.5).abs() < TOL, "half_w {}", ext.half_w);
@@ -741,7 +639,7 @@ mod tests {
 
     #[test]
     fn a_card_narrower_than_the_authored_box_reports_zero() {
-        // ±2 at depth 10 → ±0.2 < t0 = 0.309: the authored vertical opening is not even covered.
+        // ±2 at depth 10 is ±0.2, under t0 = 0.309: the authored opening is not even covered.
         let sub = card(10.0, 2.0, 2.0, ModelBlend::Opaque, false);
         let ext = glue_art_extent([&sub], &cam(FOV), full);
         assert_eq!(
@@ -770,9 +668,8 @@ mod tests {
 
     #[test]
     fn an_alpha_texture_paints_only_where_it_passes_the_key() {
-        // A ±5 card (±0.5 at depth 10) whose texture is opaque only across u ∈ [0.2, 0.8]: it
-        // paints ±0.3 — the rows read that band; and since ±0.3 is inside the authored ±0.413,
-        // a column of the box goes unpainted and the height reads 0.
+        // Opaque only across u ∈ [0.2, 0.8] of a ±0.5 card: ±0.3 wide, inside the authored
+        // ±0.413, so a column of the box goes unpainted and the height reads 0.
         let sub = card(10.0, 5.0, 4.0, ModelBlend::AlphaTest, false);
         let map = band(0.2, 0.8);
         let ext = glue_art_extent([&sub], &cam(FOV), |_| Some(Coverage::Alpha(map.clone())));
@@ -782,7 +679,6 @@ mod tests {
             ext.half_w
         );
         assert_eq!(ext.half_h, 0.0, "a column inside the box is unpainted");
-        // A band wider than the box (u ∈ [0.05, 0.95] → ±0.45) paints the full height.
         let map = band(0.05, 0.95);
         let ext = glue_art_extent([&sub], &cam(FOV), |_| Some(Coverage::Alpha(map.clone())));
         assert!((ext.half_h - 0.4).abs() < TOL, "half_h {}", ext.half_h);
@@ -795,9 +691,8 @@ mod tests {
 
     #[test]
     fn the_narrowest_row_wins() {
-        // A trapezoid: ±5 wide at the bottom, ±2.5 at the top (depth 10) — the frame's top row
-        // (y' = +t0 = 0.309, i.e. Z = 3.09) sees a half-width interpolated between the two:
-        // at Z = 3.09 of a ±4-tall card, w = 5 − 2.5·(3.09+4)/8 = 2.78 → 0.278.
+        // A trapezoid, ±5 wide at the bottom and ±2.5 at the top (depth 10): the frame's top row
+        // (y' = t0 = 0.309, Z = 3.09) sees w = 5 − 2.5·(3.09+4)/8 = 2.78, so 0.278.
         let mut sub = card(10.0, 5.0, 4.0, ModelBlend::Opaque, false);
         sub.positions[2] = [10.0, -2.5, 4.0];
         sub.positions[3] = [10.0, 2.5, 4.0];
@@ -815,10 +710,7 @@ mod tests {
     fn a_card_behind_the_camera_is_clipped_away_and_one_straddling_it_is_clipped_to_near() {
         let behind = card(-10.0, 5.0, 4.0, ModelBlend::Opaque, true);
         assert_eq!(glue_art_extent([&behind], &cam(FOV), full).half_w, 0.0);
-        // A ground plane running from behind the camera to far ahead, below the eye: its near
-        // clip leaves finite geometry, the projection stays finite, and the covered rows are the
-        // lower half only — so the *full* authored opening is not covered and the extent is 0,
-        // without any NaN or panic on the way.
+        // A ground plane from behind the eye to far ahead: finite, lower rows only, so 0.
         let mut ground = card(0.0, 50.0, 0.0, ModelBlend::Opaque, true);
         ground.positions = vec![
             [-5.0, 50.0, -1.0],
@@ -851,7 +743,6 @@ mod tests {
         assert!((ext.half_w - 0.5).abs() < TOL, "half_w {}", ext.half_w);
     }
 
-    /// Measure one shipped scene off the chain, the way the tool does.
     fn measure(chain: &mut Chain, token: &str) -> (ArtExtent, f32, f32) {
         let name = format!("Interface\\Glues\\Models\\UI_{token}\\UI_{token}.m2");
         let bytes = chain.read_file(&name).expect("read scene");
@@ -862,9 +753,6 @@ mod tests {
         (ext, cam.fov, authored_half_height(cam.fov))
     }
 
-    /// The transcription is the measurement: every shipped scene re-measures to the table's
-    /// numbers (within the grid's quantisation), every one covers (about) its authored 4:3 box
-    /// in width, and every one runs out of width before 16:9 — the fact the whole law rests on.
     #[test]
     fn the_shipped_table_matches_the_measurement() {
         let data = crate::wow_data_or_skip!();
@@ -878,7 +766,6 @@ mod tests {
                     && (ext.half_h - shipped.half_h).abs() < 2e-3,
                 "UI_{token}: measured {ext:?}, table {shipped:?}"
             );
-            // The fov rides the table because the glue framing constant is derived from it.
             assert!(
                 (fov - scene.fov).abs() < 1e-6,
                 "UI_{token}: camera 0 fov {fov}, table {}",
@@ -889,8 +776,6 @@ mod tests {
                 (GLUE_AUTHORED_ASPECT - 0.03..16.0 / 9.0).contains(&runs_out_at),
                 "UI_{token} covers up to aspect {runs_out_at:.3}"
             );
-            // Every stage but the night elves' fills its authored box top to bottom; theirs
-            // shows black night sky between the leaves at its sides (the table's doc).
             if token == "NightElf" {
                 assert!(
                     ext.half_h < t0,

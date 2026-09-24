@@ -1,7 +1,5 @@
-//! Regression: a BLP2 texture with an unknown `alpha_type` byte must still decode. Real 1.12-era
-//! particle/effect art (e.g. `particles/dust1.blp` — palettized, `alpha_bits == 0`, but a stale
-//! `alpha_type == 2`) used to abort the whole decode in `wow_blp`; our fork falls back to no-alpha.
-//! Skips (passes) when the client isn't present at `<repo>/WoW/Data`.
+//! A BLP2 with a stale `alpha_type` still decodes: `particles/dust1.blp` is palettized with
+//! `alpha_bits == 0` and `alpha_type == 2`, and `alpha_bits` alone governs its alpha.
 
 use benilla_formats::{blp_to_rgba, open_chain};
 

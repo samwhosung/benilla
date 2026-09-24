@@ -1,7 +1,5 @@
-//! The nine-golden calibration + gold gates for the transport timetable (decision 0438 phase
-//! 0): the mode × chord-steps period report against the server's effective (DB-pinned) periods,
-//! and the bit-exactness gate on the client-transcribed period (`crate::transport_period`) that
-//! lets [`TransportTimetable::build`] self-pin. Needs the vanilla client data (skips otherwise).
+//! Transport timetable tests against the nine live transports' server periods; they skip without
+//! client data.
 
 use super::*;
 use crate::taxi::load_taxi_path_nodes;
@@ -12,14 +10,12 @@ struct Golden {
     period_ms: u32,
     move_speed: f32,
     accel_rate: f32,
-    /// A real build sniff (vs. a `build 0` fallback row) — the task's distinguished subset.
+    /// A sniffed row, not a `build 0` fallback.
     sniffed: bool,
 }
 
-/// The nine live transports' server-effective (DB-pinned) periods — vmangos `transports`
-/// table, build-≤5875 row selected, and `gameobject_template` `data1`/`data2`, both read this
-/// session (decision 0438's data-model survey). All moveSpeed=30/accelRate=1 except Naxxramas
-/// (181056), moveSpeed=1/accelRate=1.
+/// The nine live transports' periods from vmangos's `transports` table (the build ≤ 5875 row) and
+/// their `gameobject_template` `data1`/`data2`.
 const GOLDENS: &[Golden] = &[
     Golden {
         entry: 20808,
@@ -98,11 +94,8 @@ const GOLDENS: &[Golden] = &[
 const MODES: &[(&str, TimeMode)] = &[("V", TimeMode::Vmangos), ("C", TimeMode::ClientForms)];
 const STEPS_VARIANTS: &[u32] = &[3, 10, 20, 100];
 
-/// Builds every one of the nine live transports' timetables under every (mode × arc-length
-/// chord-sampling) combination and reports computed-vs-golden period for each. This is the
-/// calibration report the phase-0 gate needs, not a pass/fail bit: the goldens pin **which**
-/// variant is the real client's algorithm (decision 0438 phase 0), so only loose sanity is
-/// asserted here — a period > 0, and the *best* variant per path within 5% of golden.
+/// A report of every mode and chord count against the goldens; it only asserts that each path's
+/// best variant is within 5%.
 #[test]
 fn nine_period_calibration_report() {
     let data = crate::wow_data_or_skip!();
@@ -194,10 +187,7 @@ fn nine_period_calibration_report() {
     }
 }
 
-/// The bit-exactness gate for the client-transcribed period (`transport_period`): all nine
-/// live transports must reproduce their server-sniff golden **exactly** — this is what lets
-/// [`TransportTimetable::build`] self-pin its cycle length instead of consulting a hardcoded
-/// server table (decision 0438 §3's exactness requirement).
+/// `transport_period` must reproduce every golden exactly, since `build` pins its period to it.
 #[test]
 fn client_period_bit_exact() {
     let data = crate::wow_data_or_skip!();
@@ -226,9 +216,7 @@ fn client_period_bit_exact() {
     );
 }
 
-/// [`TransportTimetable::touches_map`] answers exactly the raw path's map set — the cross-map
-/// worldport's spare predicate rests on it — and the premise itself holds: at
-/// least one of the nine live transports really does cross continents mid-cycle.
+/// Also proves that at least one live transport crosses continents.
 #[test]
 fn touches_map_matches_the_paths_map_set() {
     let data = crate::wow_data_or_skip!();
@@ -259,17 +247,8 @@ fn touches_map_matches_the_paths_map_set() {
     );
 }
 
-/// [`TransportTimetable::first_cycle_on_map`] — the seam's re-anchor target.
-///
-/// Two properties, on every cross-continent path in the fleet, because the fleet's seams are not
-/// alike: one path changes map mid-cycle, another only at the cycle wrap (path 241's map-1 legs are
-/// frames 0..22 and its map-0 legs are the tail, so "cross to Kalimdor" *is* the wrap), and a
-/// re-anchor that only handled the interior case would leave exactly the reported ferry broken.
-///
-/// 1. From anywhere in the cycle, the answer is an instant that really does sample on the asked-for
-///    map — that is the whole contract, and it is what the rider's world pose is composed through.
-/// 2. Asking from an instant already on that map returns an instant on it too (the caller's
-///    already-there short-circuit rests on the map agreeing, not on the number).
+/// From any instant, the answer samples on the asked-for map, on every cross-continent path:
+/// path 241 reaches map 1 only across the cycle wrap.
 #[test]
 fn first_cycle_on_map_lands_on_that_map() {
     let data = crate::wow_data_or_skip!();
@@ -288,8 +267,7 @@ fn first_cycle_on_map_lands_on_that_map() {
             continue;
         }
         crossed += 1;
-        // Probe from 64 instants spread across the whole cycle — every leg, both continents, and
-        // the frames either side of the wrap.
+        // 64 instants across the cycle, both sides of the wrap included.
         for k in 0..64u32 {
             let from = (u64::from(tt.period_ms) * u64::from(k) / 64) as u32;
             for &m in &maps {
@@ -314,7 +292,7 @@ fn first_cycle_on_map_lands_on_that_map() {
                 );
             }
         }
-        // A map the path never visits has no answer at all.
+        // A map the path never visits.
         assert_eq!(tt.first_cycle_on_map(0, 9999), None);
     }
     assert!(

@@ -1,29 +1,15 @@
-//! **Which M2 batches share their triangles with another batch** — the coplanar-sibling census:
-//! `cargo run -p benilla-formats --example m2_shared_section -- [path-substring]`.
-//!
-//! An M2 skin *section* is a run of triangles; a *batch* is one draw of one section. When two
-//! batches name the SAME section they rasterize the SAME triangles — a base layer and a shine /
-//! reflect layer authored on top of it (`ARMORREFLECT3`, `BALISTASHINE02`). The reference draws
-//! both from one vertex array under depth-write + LEQUAL, so the second always wins the tie
-//! exactly (`0x70b3f6`, `0x70c190`).
-//!
-//! We only match that if both batches take the SAME vertex-transform path. They do not when a
-//! consolidator (`static_gx`, `terrain_stream::merge`) admits one and refuses the other: the
-//! retained lane bakes world positions on the CPU and the entity lane rotates on the GPU, and the
-//! two agree only to the last few ULPs — enough, on coplanar triangles, to turn the depth test
-//! into a per-pixel coin flip that re-rolls whenever the camera moves. That is the ballista's
-//! flickering bolt heads and shields.
-//!
-//! So this prints, per model, every multi-batch section and whether its batches DISAGREE on the
-//! facts the consolidators exclude on (env-mapped UVs, render flags `0x10` no-depth-write / `0x08`
-//! no-depth-test, additive blend 3/4). A `SPLIT` line is a model that can z-fight against itself.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! M2 batches that share a skin section, and so the same triangles, with another batch. The
+//! reference draws both from one vertex array under depth-write and LEQUAL, so the later one wins
+//! the tie exactly (`0x70b3f6`, `0x70c190`). We match that only when both take the same vertex
+//! path: a consolidator (`static_gx`, `terrain_stream::merge`) bakes positions on the CPU, which
+//! differ from the GPU's in the last ULPs, so a section it splits z-fights (a `SPLIT` line).
+//! Output is Blizzard data: never commit it.
+//! `cargo run -p benilla-formats --example m2_shared_section -- [path-substring]`
 
 use std::io::Cursor;
 
-/// The facts every consolidator excludes on — a batch answering `true` can never ride the
-/// retained/merged lanes, so it stays on the entity path whatever its siblings do.
+/// What every consolidator excludes on: a `true` batch stays on the entity path whatever its
+/// siblings do.
 fn refusable(model: &benilla_m2::M2Model, batch: &benilla_m2::SkinBatch) -> bool {
     let mat = model.materials.get(batch.material_index as usize);
     let flags = mat.map_or(0, |m| m.flags.bits());

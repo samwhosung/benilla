@@ -1,6 +1,4 @@
-//! `spellvis`: dump a spell's visual chain — spell → SpellVisual stages → each kit's anim/sound/
-//! camera shake/attach effects, plus the missile block — decision 0099's phase-2 instrument
-//! (columns per decisions 0107 and 1849).
+//! `spellvis`: dump a spell's visual chain, every stage's kit and the missile.
 
 use anyhow::Result;
 use benilla_formats::Chain;
@@ -38,9 +36,7 @@ pub fn run(chain: &mut Chain, spell_id: u32) -> Result<()> {
                         kit.anim_id.map_or("—".into(), |a| a.to_string()),
                         kit.sound.map_or("—".into(), |s| s.to_string()),
                     );
-                    // The kit's CAMERA SHAKE (field 14): a
-                    // `SpellEffectCameraShakes` GROUP id, expanded to the presets it fires.
-                    // `benilla-extract … shakecensus` is the whole-table view.
+                    // Field 14: a `SpellEffectCameraShakes` group id, expanded to its presets.
                     if let Some(group) = kit.shake {
                         match shakes.group(group) {
                             Some(g) => println!(
@@ -55,11 +51,9 @@ pub fn run(chain: &mut Chain, spell_id: u32) -> Result<()> {
                             ),
                         }
                     }
-                    // The kit's CharProcs (fields 15-34): what it does to the BODY.
+                    // The kit's CharProcs (fields 15-34), what it does to the body.
                     crate::charprocs::print_kit_procs(&visuals, kit_id, "           ");
-                    // The kit's BEAM, if it draws one: the chain CharProc's
-                    // decoded `SpellChainEffects` row. `benilla-extract … chaincensus` is the
-                    // whole-table view.
+                    // The beam, if any: the chain CharProc's decoded `SpellChainEffects` row.
                     if let Some(c) = kit.chain_proc() {
                         match visuals.chain_effect(c.effect_id) {
                             Some(e) => println!(
@@ -81,7 +75,6 @@ pub fn run(chain: &mut Chain, spell_id: u32) -> Result<()> {
                             ),
                         }
                     }
-                    // The kit's attach-point emitter slots (phase 3): tag + effect model.
                     for (tag, effect) in kit.effects() {
                         println!(
                             "           attach {tag:#04x} effect {effect:<5} -> {}",
@@ -93,9 +86,8 @@ pub fn run(chain: &mut Chain, spell_id: u32) -> Result<()> {
             }
         }
     }
-    // The missile block (phase 4): the projectile exists whenever Speed > 0; its model is
-    // field 7's SpellVisualEffectName (else the ammo/ErrorCube fallbacks) and it homes to
-    // field 9's dest-attach ordinal on a live target.
+    // A missile exists whenever `Speed > 0`: its model is field 7's `SpellVisualEffectName`, else
+    // the ammo or ErrorCube fallback, and it homes on a live target's field-9 dest-attach ordinal.
     if spell.speed > 0.0 {
         let tag = benilla_formats::MISSILE_ATTACH_TABLE
             .get(stages.missile_attach as usize)

@@ -1,18 +1,10 @@
-//! WDL (low-detail distant terrain) loader + coarse mesher.
+//! WDL, the low-detail distant terrain: loader and coarse mesher. One `.wdl` per map holds the
+//! whole 64×64-tile world at one height per MCNK, the horizon the reference draws beyond the
+//! streamed tiles out to `horizonfarclip`, unlit, untextured, vertex-white and fogged.
 //!
-//! One `.wdl` per map holds the **whole 64×64-tile world** at a single height sample per MCNK — the
-//! horizon geometry the reference draws BEYOND the streamed high-detail tiles (out to `horizonfarclip`),
-//! unlit + untextured + vertex-white + fogged into the haze. RE'd from apitrace WoW.8 + the real file.
-//!
-//! Layout — VERIFIED against `World\Maps\Azeroth\Azeroth.wdl` (770730 B, 2026-05-30):
-//!   `MVER` (version **18**) · `MAOF` (4096 `u32` tile offsets, `[tile_y][tile_x]`) · per present tile
-//!   `MARE` (1090 B = 17×17 outer + 16×16 inner `int16` absolute heights, yards). No `MWMO`/`MWID`/
-//!   `MODF`, no `MAHO` in vanilla Azeroth (low-detail WMOs + holes are out of scope for v1).
-//!
-//! The mesh is in **raw WoW world coords** (X north, Y west, Z up, yards) like [`crate::terrain`], with
-//! the same per-cell 4-tri **center-fan** — but at `CHUNK_SIZE` (one MCNK) spacing instead of
-//! `UNIT_SIZE`, so one WDL tile = a single MCNK's topology scaled ×16 (545 verts / 3072 indices, the
-//! exact draw the apitrace shows). The renderer applies the WoW→Bevy transform.
+//! Layout: `MVER` (version 18), `MAOF` (4096 `u32` tile offsets, `[tile_y][tile_x]`), then per
+//! present tile a `MARE` of 17×17 outer and 16×16 inner `int16` heights; vanilla Azeroth has no
+//! `MWMO`/`MWID`/`MODF` or `MAHO`. The mesh is raw WoW world coordinates (X north, Y west, Z up).
 
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
@@ -21,35 +13,31 @@ use anyhow::{bail, Context, Result};
 
 use crate::terrain::TILE_SIZE;
 
-/// One MCNK's worth of horizon detail: 16 cells per tile edge, so the outer grid is 17×17 corners and
-/// the inner grid is 16×16 cell centers — identical to an MCNK but at tile scale.
+/// 16 cells a tile edge: 17×17 corners and 16×16 cell centres, an MCNK's grid at tile scale.
 const OUTER_EDGE: usize = 17;
 const INNER_EDGE: usize = 16;
-const OUTER_N: usize = OUTER_EDGE * OUTER_EDGE; // 289
-const INNER_N: usize = INNER_EDGE * INNER_EDGE; // 256
-/// MARE body = (289 + 256) `int16` = 1090 bytes (VERIFIED).
+const OUTER_N: usize = OUTER_EDGE * OUTER_EDGE;
+const INNER_N: usize = INNER_EDGE * INNER_EDGE;
 const MARE_BYTES: usize = (OUTER_N + INNER_N) * 2;
-/// One MCNK edge in yards (the WDL outer-grid spacing). `TILE_SIZE / 16`.
 const CHUNK_SIZE: f32 = TILE_SIZE / 16.0;
-/// World coord of tile (0,0)'s origin (max-X, max-Y) corner — the 64-tile map is centred on the origin.
+/// World coordinate of tile (0, 0)'s max-X, max-Y corner; the 64-tile map is centred on the origin.
 const MAP_OFFSET: f64 = 32.0 * (TILE_SIZE as f64);
 
 /// A map's parsed WDL: the present tiles' low-detail heightmaps, indexed by MAOF position.
 pub struct WdlFile {
-    /// 64×64, indexed `[tile_y * 64 + tile_x]` (the on-disk MAOF order); `None` where the map has no
-    /// tile. `tile_x`/`tile_y` match `Map_<tile_x>_<tile_y>.adt` and `benilla_wdt::world_to_tile`.
+    /// 64×64 in MAOF order, `[tile_y * 64 + tile_x]`, with `tile_x`/`tile_y` as in
+    /// `Map_<tile_x>_<tile_y>.adt` and `benilla_wdt::world_to_tile`; `None` where the map has none.
     tiles: Vec<Option<MareTile>>,
 }
 
-/// One tile's low-detail heightmap: 17×17 outer (corner) then 16×16 inner (cell-center) `int16`
-/// heights, in yards (absolute world Z). Both grids are row-major.
+/// One tile's absolute heights in yards: 17×17 corners, then 16×16 cell centres, row-major.
 struct MareTile {
     outer: [i16; OUTER_N],
     inner: [i16; INNER_N],
 }
 
-/// A coarse WDL tile mesh in raw WoW world coords: positions + a 4-tri-per-cell center-fan index
-/// buffer. No normals (unlit) and no UVs (untextured) — the reference draws this vertex-white + fogged.
+/// A coarse WDL tile mesh in raw WoW world coordinates, with no normals or UVs: the reference
+/// draws it unlit, vertex-white and fogged.
 pub struct WdlTileMesh {
     /// 545 verts: 289 outer (`[r*17+c]`) then 256 inner (`[289 + r*16+c]`).
     pub positions: Vec<[f32; 3]>,
@@ -57,8 +45,7 @@ pub struct WdlTileMesh {
     pub indices: Vec<u32>,
 }
 
-/// MAOF/tiles index for tile `(tile_x, tile_y)`. Row-major over `tile_y` (the on-disk `[y][x]` order),
-/// matching `benilla_wdt`'s tile addressing so the WDL present-set lines up with the WDT's.
+/// The MAOF index of a tile, row-major over `tile_y` as on disk and in `benilla_wdt`.
 fn tile_index(tile_x: u32, tile_y: u32) -> usize {
     tile_y as usize * 64 + tile_x as usize
 }
@@ -88,20 +75,10 @@ impl WdlFile {
         (0..4096u32).filter_map(move |i| self.tiles[i as usize].as_ref().map(|_| (i % 64, i / 64)))
     }
 
-    /// Present WDL tiles forming a Chebyshev **window** around a world `(x, y)`: every present tile
-    /// within `radius` tiles, **the centre one included** — the reference's far walk (`0x683040`)
-    /// visits a camera-centred ±3-tile window of the distant grid with no exclusion, and so must ours.
-    ///
-    /// There used to be a `skip_inner` parameter, and the renderer passed 0 — dropping the camera's
-    /// OWN tile, on the reasoning that a 533 yd tile sits entirely inside the far-clip wall and would
-    /// be discarded anyway. That holds only near the default `farclip` of 777. **Drop the view
-    /// distance below a tile — the vanilla range reaches down to 177 — and most of the camera's own
-    /// tile lies BEYOND the wall, where it is the only thing that can draw the near horizon.** Its
-    /// absence is then a gap between the detailed terrain and the distant hills, right above the
-    /// horizon line, through which the sky pours (the director's Weazel's Crater
-    /// report at view distance 320). The parameter is gone rather than defaulted so the hole cannot
-    /// come back: what bounds the band on the near side is the far band's near plane in `wdl.wgsl`,
-    /// and nothing else.
+    /// Present tiles within a Chebyshev `radius` of world `(x, y)`, the centre tile included, as
+    /// the reference's far walk (`0x683040`) visits a ±3-tile window. Below a tile of view distance
+    /// (vanilla goes down to 177) the camera's own tile draws the near horizon, and without it sky
+    /// shows through; the far band's near plane in `wdl.wgsl` alone bounds that side.
     pub fn tiles_in_ring(&self, world_x: f32, world_y: f32, radius: u32) -> Vec<(u32, u32)> {
         let (cx, cy) = benilla_wdt::world_to_tile(world_x, world_y);
         let r = radius as i32;
@@ -120,21 +97,18 @@ impl WdlFile {
         out
     }
 
-    /// Build the coarse center-fan mesh for tile `(tile_x, tile_y)`, or `None` if it's absent.
-    ///
-    /// Vertex X/Y are derived from the **global** lattice index (`tile·16 + local`) computed in `f64`,
-    /// so a shared edge between adjacent WDL tiles is bit-identical → watertight, no hairline seam.
+    /// The coarse centre-fan mesh of tile `(tile_x, tile_y)`. Vertex X/Y come from the global
+    /// lattice index in `f64`, so neighbouring tiles share bit-identical edges.
     pub fn tile_mesh(&self, tile_x: u32, tile_y: u32) -> Option<WdlTileMesh> {
         if tile_x >= 64 || tile_y >= 64 {
             return None;
         }
         let tile = self.tiles[tile_index(tile_x, tile_y)].as_ref()?;
         let cs = CHUNK_SIZE as f64;
-        // Lattice position for a global row/col index (X north decreases with row, Y west with col).
+        // Lattice position of a global row/col index (X north falls with row, Y west with col).
         let lat = |global: f64| (MAP_OFFSET - global * cs) as f32;
 
         let mut positions = Vec::with_capacity(OUTER_N + INNER_N);
-        // Outer 17×17 corners.
         for r in 0..OUTER_EDGE {
             for c in 0..OUTER_EDGE {
                 positions.push([
@@ -144,7 +118,6 @@ impl WdlFile {
                 ]);
             }
         }
-        // Inner 16×16 cell centers (+½ cell in both planar axes).
         for r in 0..INNER_EDGE {
             for c in 0..INNER_EDGE {
                 positions.push([
@@ -155,9 +128,8 @@ impl WdlFile {
             }
         }
 
-        // 4-triangle center-fan per cell, mirroring terrain.rs's winding (CCW from above → front-face
-        // up under the det-+1 WoW→Bevy transform). For cell (r, c) ∈ 0..16²:
-        //   TL=outer(r,c)  TR=outer(r,c+1)  BL=outer(r+1,c)  BR=outer(r+1,c+1)  CTR=inner(r,c)
+        // Four-triangle centre fan per cell, wound CCW from above like the terrain so it faces up
+        // after the WoW-to-Bevy transform.
         let inner_base = OUTER_N as u32;
         let mut indices = Vec::with_capacity(INNER_EDGE * INNER_EDGE * 12);
         for r in 0..INNER_EDGE as u32 {
@@ -178,15 +150,11 @@ impl WdlFile {
         Some(WdlTileMesh { positions, indices })
     }
 
-    /// The drawn WDL surface height (absolute WoW `z`) under world `(x, y)` — interpolated over the
-    /// SAME 4-triangle center-fan [`Self::tile_mesh`] builds, so a query agrees exactly with the
-    /// rendered horizon silhouette (`height_at` at a mesh vertex's `x, y` returns that vertex's
-    /// `z`). `None` where the map has no WDL tile. The far leg of the lens-flare occlusion march
-    /// (benilla `sun::follow`), beyond the detailed-terrain ring.
+    /// The drawn WDL height (absolute WoW `z`) under world `(x, y)`, interpolated over the same
+    /// centre fan [`Self::tile_mesh`] builds, so it matches the rendered horizon exactly.
     pub fn height_at(&self, world_x: f32, world_y: f32) -> Option<f32> {
         let cs = CHUNK_SIZE as f64;
-        // Global lattice coords — the inverse of `tile_mesh`'s `lat`: row grows along −X (north →
-        // south), col along −Y. 64 tiles × 16 cells = 1024 cells per axis.
+        // Global lattice coordinates, the inverse of `tile_mesh`'s `lat`: 1024 cells per axis.
         let gr = (MAP_OFFSET - f64::from(world_x)) / cs;
         let gc = (MAP_OFFSET - f64::from(world_y)) / cs;
         if !(0.0..1024.0).contains(&gr) || !(0.0..1024.0).contains(&gc) {
@@ -195,15 +163,11 @@ impl WdlFile {
         let (cell_r, cell_c) = (gr as usize, gc as usize);
         let tile = self.tiles[tile_index((cell_c / 16) as u32, (cell_r / 16) as u32)].as_ref()?;
         let (r, c) = (cell_r % 16, cell_c % 16);
-        // The cell's corner + center heights (outer 17×17, inner 16×16 — same addressing as the mesh).
         let h = |rr: usize, cc: usize| f64::from(tile.outer[rr * OUTER_EDGE + cc]);
         let (tl, tr) = (h(r, c), h(r, c + 1));
         let (bl, br) = (h(r + 1, c), h(r + 1, c + 1));
         let ctr = f64::from(tile.inner[r * INNER_EDGE + c]);
-        // Fractional position inside the cell: `v` down the rows (toward BL), `u` across the cols
-        // (toward TR). The center-fan splits the cell into 4 triangles meeting at (0.5, 0.5); pick
-        // the fan by which quadrant-diagonal region holds (u, v), then interpolate linearly along
-        // the outer edge and blend toward the center — the exact plane of that fan triangle.
+        // `v` runs down the rows, `u` across; the cell's diagonals pick the fan triangle.
         let (v, u) = (gr - cell_r as f64, gc - cell_c as f64);
         let (a, b, t, s) = if v <= u && v <= 1.0 - u {
             (tl, tr, u, v) // north fan (CTR, TR, TL): edge TL→TR at v = 0
@@ -214,10 +178,7 @@ impl WdlFile {
         } else {
             (tr, br, v, 1.0 - u) // east fan: edge TR→BR at u = 1
         };
-        // On the fan's plane: at edge distance `s` ∈ [0, 0.5] between the outer edge (s = 0) and the
-        // center (s = 0.5), the edge lerp `a→b` at parameter `t` blends toward CTR. The edge-parallel
-        // coordinate compresses toward the apex: lerp param `(t − s) / (1 − 2s)` spans the shrinking
-        // cross-section (degenerate only exactly at the apex, where the height is CTR).
+        // `s` runs 0 at the outer edge to 0.5 at the centre, where the edge parameter degenerates.
         let height = if s >= 0.5 {
             ctr
         } else {
@@ -228,12 +189,11 @@ impl WdlFile {
     }
 }
 
-/// Read one IFF chunk header: 4-byte magic (stored reversed on disk) + `u32` LE size. Returns the
-/// de-reversed magic (e.g. `b"MARE"`) and the body size.
+/// Read one IFF chunk header: the magic, stored reversed on disk, and the `u32` LE body size.
 fn read_chunk_header(cur: &mut Cursor<&[u8]>) -> Result<([u8; 4], u32)> {
     let mut magic = [0u8; 4];
     cur.read_exact(&mut magic)?;
-    magic.reverse(); // on-disk is little-endian fourCC, i.e. reversed
+    magic.reverse();
     let mut size = [0u8; 4];
     cur.read_exact(&mut size)?;
     Ok((magic, u32::from_le_bytes(size)))
@@ -242,7 +202,6 @@ fn read_chunk_header(cur: &mut Cursor<&[u8]>) -> Result<([u8; 4], u32)> {
 fn parse_wdl(bytes: &[u8]) -> Result<WdlFile> {
     let mut cur = Cursor::new(bytes);
 
-    // MVER (version 18 in vanilla).
     let (magic, size) = read_chunk_header(&mut cur)?;
     if &magic != b"MVER" {
         bail!("expected MVER first, got {:?}", magic);
@@ -255,7 +214,7 @@ fn parse_wdl(bytes: &[u8]) -> Result<WdlFile> {
     }
     cur.seek(SeekFrom::Current(size as i64 - 4))?; // skip any MVER tail (none in vanilla)
 
-    // Skip any optional low-detail-WMO chunks (MWMO/MWID/MODF — absent in vanilla Azeroth) until MAOF.
+    // Skip to MAOF past any low-detail WMO chunks.
     let offsets = loop {
         let (magic, size) = read_chunk_header(&mut cur)?;
         if &magic == b"MAOF" {
@@ -310,7 +269,7 @@ mod tests {
 
     #[test]
     fn tile_index_is_row_major_over_y() {
-        // The apitrace WDL tile was (tile_x=34, tile_y=48) -> 48*64+34.
+        // A tile from a trace of the reference: (tile_x=34, tile_y=48) -> 48*64+34.
         assert_eq!(tile_index(34, 48), 48 * 64 + 34);
         assert_eq!(tile_index(0, 0), 0);
         assert_eq!(tile_index(63, 63), 4095);
@@ -322,17 +281,13 @@ mod tests {
         assert_eq!(INNER_N, 256);
         assert_eq!(MARE_BYTES, 1090);
         assert_eq!(OUTER_N + INNER_N, 545); // verts per tile
-                                            // 16×16 cells × 4 tris × 3 indices = 3072 (the apitrace draw count).
+                                            // 16×16 cells × 4 tris × 3: the reference's draw count.
         assert_eq!(INNER_EDGE * INNER_EDGE * 12, 3072);
-        // One WDL cell spans one MCNK.
         assert!((CHUNK_SIZE - TILE_SIZE / 16.0).abs() < 1e-3);
     }
 
-    /// `height_at` must agree with the RENDERED surface — sample it at every `tile_mesh` vertex
-    /// position (outer corners + inner fan centers) of a synthetic bumpy tile and require the
-    /// vertex's own height back. Skips the tile's south/east boundary lattice lines (those verts
-    /// belong to the absent neighbour tile in this synthetic file; real MARE data duplicates
-    /// shared edges).
+    /// The tile's last corner row and column belong to the absent neighbour tile in this synthetic
+    /// file, so they are skipped.
     #[test]
     fn height_at_matches_the_drawn_mesh_exactly() {
         let mut tiles: Vec<Option<MareTile>> = (0..4096).map(|_| None).collect();
@@ -364,7 +319,6 @@ mod tests {
                 p[2]
             );
         }
-        // Unauthored tile → None (never "ground at 0").
         assert_eq!(wdl.height_at(0.0, 0.0), None);
     }
 }

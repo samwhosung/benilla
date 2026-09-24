@@ -1,6 +1,4 @@
-//! M2 light-block parse — byte-level check against a real Elwynn campfire, the dynamic point-light
-//! "hot-spot" caster. Pins the vanilla `0xd4` record stride and the diffuse-colour track
-//! offset. Skips when the client isn't present.
+//! The M2 light block: `0xd4` bytes a record, the diffuse-colour track at `0x48`.
 
 use benilla_formats::{parse_m2_lights, Chain};
 
@@ -21,8 +19,6 @@ fn elwynn_campfire_has_one_warm_point_light() {
         "campfire light is type 1 (point), got type {}",
         l.light_type
     );
-    // The authored warm-orange diffuse pins the 0xd4 record stride AND the 0x48 diffuse-colour track
-    // offset (independently cross-checked ≈ (0.71, 0.20, 0.00) — a garbled stride would not land here).
     let d = l.diffuse_color;
     assert!(
         (d[0] - 0.71).abs() < 0.03 && (d[1] - 0.20).abs() < 0.03 && d[2] < 0.05,
@@ -30,10 +26,8 @@ fn elwynn_campfire_has_one_warm_point_light() {
     );
 }
 
-/// The **held torch** — the light an NPC carries into the world (`Club_1H_Torch_A_01.m2`, the model
-/// `ItemDisplayInfo` 12236 / item 1906 "Monster - Torch" resolves to). Pins the one asset the entity
-/// carried-light path exists for: a `type==1` point light on bone 9, up the shaft, warm, `×3`
-/// intensity, and — the gate — a visibility track whose first key is nonzero, so it CASTS.
+/// The torch an NPC carries (`ItemDisplayInfo` 12236, item 1906 "Monster - Torch"): a point light
+/// on bone 9 up the shaft, at intensity 3, whose visibility track's first key is nonzero: it casts.
 #[test]
 fn held_torch_casts_one_warm_point_light_up_the_shaft() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -59,9 +53,8 @@ fn held_torch_casts_one_warm_point_light_up_the_shaft() {
     );
 }
 
-/// The **dark** shape (`0x716413`): a `type==1` light whose visibility track
-/// ships a static `0` key never casts. 11 of the corpus's 85 point lights are this — mostly spell
-/// impact VFX — so the gate is not academic; before it, every one of them lit the world.
+/// A point light whose visibility track is a static `0` key never casts (`0x716413`): 11 of the
+/// corpus's 85, mostly spell impacts.
 #[test]
 fn a_static_zero_visibility_key_reads_as_dark() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -86,6 +79,5 @@ fn a_static_zero_visibility_key_reads_as_dark() {
 
 #[test]
 fn too_short_yields_no_lights() {
-    // No MD20 lights array header → empty, no panic.
     assert!(parse_m2_lights(&[0u8; 16]).is_empty());
 }

@@ -1,12 +1,7 @@
-//! Print a model's particle-emitter records — the authored numbers to hold a live
-//! `WOW_PARTICLE_CENSUS` line against: `cargo run -p benilla-formats --example dump_emitters --
-//! 'World\...\RubyCrystalLarge01.m2'`.
-//!
-//! The pair is the check that matters: the census says how many particles are
-//! *live*, this says how many the file asks for (`rate × lifespan`), and the over-life ramp says
-//! how big they get. A mismatch is our sim's bug; a match moves the question to the look.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! A model's particle-emitter records, the authored side of a live `WOW_PARTICLE_CENSUS` line:
+//! the file asks for `rate × lifespan` live particles, and a census that disagrees is our bug.
+//! `cargo run -p benilla-formats --example dump_emitters -- 'World\...\RubyCrystalLarge01.m2'`
+//! Output is Blizzard data: never commit it.
 
 fn main() -> anyhow::Result<()> {
     let virt = std::env::args()

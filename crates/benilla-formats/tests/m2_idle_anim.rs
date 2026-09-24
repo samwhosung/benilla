@@ -1,14 +1,9 @@
-//! Animation-keyframe regression test against real vanilla creatures.
-//!
-//! Guards the bug that froze most creatures in Milestone B: a per-sequence keyframe window pulled in a
-//! keyframe from a *later* sequence (14–64 s away), which inflated the Bevy clip's duration and made
-//! the whole animation crawl. We now select keys by absolute timestamp within each sequence's band, so
-//! every keyframe of every sequence must land inside `[0, duration]`. Skips when the client isn't present.
+//! Keys are selected by absolute timestamp within each sequence's band, so every key of every
+//! sequence lands inside `[0, duration]`.
 
 use benilla_formats::{open_chain, parse_m2_animations, ModelAnimation};
 
-/// A spread of vanilla creatures: simple (rabbit/chicken) through rigged humanoid-ish (kobold/murloc),
-/// covering the ones that animated *and* the ones that froze before the fix.
+/// Simple rigs (rabbit, chicken) through humanoid ones (kobold, murloc).
 const CREATURES: &[&str] = &[
     "Creature\\Rabbit\\Rabbit.m2",
     "Creature\\Chicken\\Chicken.m2",
@@ -28,15 +23,14 @@ fn creature_animation_keyframes_stay_within_their_sequence() {
     let mut checked = 0;
     for path in CREATURES {
         let Ok(bytes) = chain.read_file(path) else {
-            continue; // a model not in this install — skip
+            continue; // not in this install
         };
         let anims = parse_m2_animations(&bytes);
         assert!(
             !anims.is_empty(),
             "{path}: a creature should have sequences"
         );
-        // Every creature must carry a Stand (AnimationData id 0) somewhere — the records are NOT
-        // ordered by id (e.g. Rabbit's record 0 is Walk), so the idle is found by id, not position.
+        // Records are not ordered by id (Rabbit's record 0 is Walk): the idle is found by id.
         let ids: Vec<u16> = anims.iter().map(|a| a.anim_id).collect();
         assert!(
             ids.contains(&0),
@@ -48,8 +42,6 @@ fn creature_animation_keyframes_stay_within_their_sequence() {
                 "{path}: anim {} has no duration",
                 anim.anim_id
             );
-            // No keyframe may sit past its sequence: a key beyond `duration` is the cross-sequence leak
-            // that froze creatures (it stretched a clip to many seconds). Small epsilon for rounding.
             let max_t = max_key_time(anim);
             assert!(
                 max_t <= anim.duration + 1e-3,
@@ -66,7 +58,6 @@ fn creature_animation_keyframes_stay_within_their_sequence() {
     );
 }
 
-/// The latest keyframe time across every bone/channel of the animation (0.0 if it has no keys).
 fn max_key_time(anim: &ModelAnimation) -> f32 {
     let mut max = 0.0_f32;
     for b in &anim.bones {

@@ -1,12 +1,6 @@
-//! `SoundWaterType.dbc` — the liquid-class → ambient-loop-kit map of the **above-water liquid
-//! ambient-loop system** (`0x462a40`, benilla decision 0506):
-//! the continuous ocean/river/lava/slime sound the client plays near liquid. The driver reads the
-//! nearest wet cell's MCLQ low nibble as `class = nibble & 3`, `speed = nibble >> 2`, and resolves
-//! the kit **data-driven** through this table (store `[0xc0d898]`; not hardcoded ids): 16-byte
-//! records `ID, SoundType(class), FluidSpeed(4·speed), SoundEntriesID`.
-//!
-//! 5875 content: river 0/4/8 → 1111 RiverStill / 1112 RiverSlow / 1113 RiverFast; ocean → 1114
-//! at every speed; magma 0→3072 LavaPoolLoop, 4/8→3052 LavaFlowLoop; slime → 3880 SlimeLoop.
+//! `SoundWaterType.dbc`: the loop the client plays near liquid (`0x462a40`, table `[0xc0d898]`),
+//! keyed by the nearest wet cell's MCLQ low nibble: class `nibble & 3` and `FluidSpeed`
+//! `nibble & 0xc`, four times the speed.
 
 use std::collections::HashMap;
 
@@ -22,9 +16,7 @@ pub struct WaterSoundCatalog {
 }
 
 impl WaterSoundCatalog {
-    /// The loop kit for an MCLQ/MLIQ cell low nibble (`class = nibble & 3`, `FluidSpeed =
-    /// nibble & 0xc` — the nibble packs `class + 4·speed`). `None` for a nibble the table
-    /// doesn't cover (incl. the `0xf` dry sentinel).
+    /// The loop for an MCLQ or MLIQ cell's low nibble; `None` for one the table lacks, like `0xf`.
     pub fn kit_for_nibble(&self, nibble: u8) -> Option<u32> {
         let n = u32::from(nibble & 0xf);
         self.by_key.get(&(n & 3, n & 0xc)).copied()
@@ -68,10 +60,6 @@ pub fn load_water_sound_catalog(chain: &mut Chain) -> Result<WaterSoundCatalog> 
 mod tests {
     use super::*;
 
-    /// The real 5875 table, end to end: every wet nibble resolves, and the mapping matches the
-    /// reference's dispatch (`0x462a40`: river split by authored speed, ocean uniform, magma
-    /// pool/flow).
-    /// Skips without client data.
     #[test]
     fn real_table_resolves_every_wet_nibble() {
         let data = crate::wow_data_or_skip!();

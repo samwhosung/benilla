@@ -1,18 +1,6 @@
-//! `WorldMapArea.dbc` — the world-map projection basis: for each map-UI "area" (a continent as a
-//! whole, or one zone/instance's own map), the art folder under `Interface\WorldMap\<name>\` and
-//! the world-coordinate rect that folder's texture covers (decision 0203's `map_proj`, phase 2,
-//! reads this rect to lerp between world space and normalized map UV space).
-//!
-//! Layout — VERIFIED against build 5875 (header + full 51-row decode, cross-checked against
-//! vmangos's `WorldMapAreaEntry` (`src/game/Database/DBCStructure.h:737`), 2026-07-07): **51 × 8 ×
-//! 32 B**: `ID(0), MapID(1), AreaID(2, 0 = the continent-wide row), AreaName(3, string — the
-//! `Interface\WorldMap\<name>\` folder), LocLeft(4), LocRight(5), LocTop(6), LocBottom(7)` (4×
-//! `f32`). vmangos's own struct skips `ID` (commented out, unused server-side) and names the loc
-//! quad `y1/y2/x1/x2`; every other field lines up 1:1. Byte-exact on the two rows that matter for
-//! phase 2's continent basis: id 14 → `(mapId 0, areaId 0, "Azeroth", [16000.0, -19199.9, 7466.6,
-//! -16000.0])`, id 13 → `(mapId 1, areaId 0, "Kalimdor", ...)`; a zone row, id 4 → `(mapId 1,
-//! areaId 14, "Durotar", [-1962.5, -7250.0, 1808.3, -1716.7])`, whose `AreaName` is confirmed (this
-//! session) to be a real `Interface\WorldMap\Durotar\Durotar1.blp` art folder in the chain.
+//! `WorldMapArea.dbc`, the world map's projection basis: for each continent or zone map, the art
+//! folder under `Interface\WorldMap\<name>\` and the world rect its texture covers (vmangos's
+//! `WorldMapAreaEntry`, `DBCStructure.h:737`).
 
 use std::collections::HashMap;
 
@@ -24,28 +12,26 @@ use crate::Chain;
 
 const WORLD_MAP_AREA: &str = "DBFilesClient\\WorldMapArea.dbc";
 
-/// One `WorldMapArea.dbc` row: a map-UI "area" (continent or zone) and the world rect its
-/// `Interface\WorldMap\<name>\` art covers.
+/// One `WorldMapArea.dbc` row: a continent or zone map and the world rect its art covers.
 #[derive(Clone, Debug)]
 pub struct WorldMapArea {
-    /// `Map.dbc` id this row belongs to.
+    /// The `Map.dbc` id.
     pub map_id: u32,
-    /// `AreaTable.dbc` id for a zone row; `0` for the continent-wide row (Azeroth/Kalimdor/…).
+    /// `AreaTable.dbc` id of a zone row, `0` for the continent-wide one.
     pub area_id: u32,
     /// The `Interface\WorldMap\<name>\` art folder (also the client-visible internal name).
     pub name: String,
-    /// World-coordinate rect this area's map art covers (vmangos: `y1/y2/x1/x2` — WoW's world X is
-    /// "top/bottom", world Y is "left/right"; see the module doc for the verified sample values).
+    /// The world rect the art covers: left and right are world Y, top and bottom world X (vmangos's
+    /// `y1/y2/x1/x2`).
     pub loc_left: f32,
     pub loc_right: f32,
     pub loc_top: f32,
     pub loc_bottom: f32,
 }
 
-/// `WorldMapArea.dbc` rows keyed by `ID` — the id `WorldMapOverlay.worldMapAreaId` joins against.
-/// File order is preserved ([`WorldMapAreaCatalog::iter`]): the client's continent index IS the
-/// on-disk order of the areaId==0 rows (Kalimdor before Azeroth in 5875; the builder `0x4a5d00`
-/// walks rows in file order).
+/// `WorldMapArea.dbc` rows keyed by `ID`, the id `WorldMapOverlay.worldMapAreaId` joins. File order
+/// is kept: the reference's continent index is the file order of the `AreaID` 0 rows (Kalimdor
+/// first in 5875), as its builder `0x4a5d00` walks them.
 pub struct WorldMapAreaCatalog {
     by_id: HashMap<u32, WorldMapArea>,
     /// Row ids in on-disk record order.
@@ -53,14 +39,12 @@ pub struct WorldMapAreaCatalog {
 }
 
 impl WorldMapAreaCatalog {
-    /// The row for `id` (the `WorldMapArea.dbc` primary key), or `None`.
+    /// The row for `id`.
     pub fn get(&self, id: u32) -> Option<&WorldMapArea> {
         self.by_id.get(&id)
     }
 
-    /// The continent-wide row (`area_id == 0`) for `map_id` — the "world" projection basis
-    /// (`map_proj`'s continent mode). Exactly one such row per continent in 5875
-    /// (Azeroth id 14, Kalimdor id 13).
+    /// The continent-wide row (`area_id == 0`) for `map_id`, one per continent in 5875.
     pub fn continent(&self, map_id: u32) -> Option<(u32, &WorldMapArea)> {
         self.by_id
             .iter()
@@ -68,8 +52,7 @@ impl WorldMapAreaCatalog {
             .map(|(&id, a)| (id, a))
     }
 
-    /// All rows as `(id, row)`, in **file order** — the order the client's continent index is
-    /// built in (see the struct doc). Zone consumers re-sort by display name anyway.
+    /// Every row as `(id, row)`, in file order.
     pub fn iter(&self) -> impl Iterator<Item = (u32, &WorldMapArea)> {
         self.file_order
             .iter()
@@ -85,7 +68,6 @@ impl WorldMapAreaCatalog {
     }
 }
 
-/// 8 fields: `ID, MapID, AreaID, AreaName, LocLeft, LocRight, LocTop, LocBottom`.
 fn schema() -> Schema {
     let mut s = Schema::new("WorldMapArea");
     for name in ["ID", "MapID", "AreaID"] {
@@ -149,9 +131,7 @@ pub fn load_world_map_area_catalog(chain: &mut Chain) -> Result<WorldMapAreaCata
 mod tests {
     use super::*;
 
-    /// The real 5875 table: the continent rows (Azeroth/Kalimdor) plus Durotar's verified rect,
-    /// and the zone row's `name` really is a `Interface\WorldMap\<name>\` art folder in the chain
-    /// (proving `AreaName` is the art folder, not just a label). Skips without client data.
+    /// The 5875 table: both continents, Durotar's rect, and `AreaName` naming a real art folder.
     #[test]
     fn real_world_map_area_has_continents_and_durotar_and_art_folder() {
         let data = crate::wow_data_or_skip!();
@@ -167,7 +147,6 @@ mod tests {
         assert_eq!((kalimdor.map_id, kalimdor.area_id), (1, 0));
         assert_eq!(kalimdor.name, "Kalimdor");
 
-        // `continent()` resolves the same two rows by map_id alone.
         let (azeroth_id, _) = cat.continent(0).expect("Azeroth via continent(0)");
         assert_eq!(azeroth_id, 14);
         let (kalimdor_id, _) = cat.continent(1).expect("Kalimdor via continent(1)");
@@ -181,7 +160,6 @@ mod tests {
         assert!((durotar.loc_top - 1808.3).abs() < 0.1);
         assert!((durotar.loc_bottom - (-1716.7)).abs() < 0.1);
 
-        // The zone row's name really is the `Interface\WorldMap\<name>\` art folder.
         let art = format!("Interface\\WorldMap\\{0}\\{0}1.blp", durotar.name);
         assert!(
             chain.contains(&art),

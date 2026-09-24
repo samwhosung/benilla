@@ -1,24 +1,5 @@
-//! Corpus-scan reports: the **population instruments** that sweep many models or placements to
-//! answer "how big is this class, and where does it live", rather than dumping one asset (that is
-//! [`crate::m2dump`]'s job). Every one of them is reached as `scan::<name>` from the dispatch in
-//! [`crate::main`]; the submodules group them by the question they answer, not by the file format
-//! they read:
-//!
-//! - [`world`] — placed content: a WMO root's own tables, an ADT block's placements.
-//! - [`lighting`] — what lights a model: the WMO prop lanes, M2 light blocks, terrain shadow.
-//! - [`geometry`] — what geometry a model draws: billboards, geosets, flat ground quads.
-//! - [`material`] — how a batch is textured and blended: blend modes, UV wrap, env stages,
-//!   the batches whose UV/tint loop differs between sequence slots, and what the spell-effect
-//!   (`fxuvscan`) and unit/GameObject/held-item (`entityuvscan`) corpora's animated texture
-//!   transforms render for a consumer that runs none of them.
-//! - [`particles`] — particle and ribbon emitters, and the features the corpus authors.
-//! - [`skeleton`] — the bone tree and the attachment table that addresses it.
-//! - [`sequence`] — which sequence an arm plays, what breaks when it is the wrong one, and
-//!   which of its event markers an arm can reach at all.
-//!
-//! Split out of a single 3.9k-line `scan.rs` once it had grown ~30 independent sweeps: the file
-//! was one *kind* of thing, but not one concern, and nothing in it was shared across families
-//! except the corpus listing below.
+//! Corpus-scan reports: sweeps over many models or placements that measure how big a class is
+//! and where it lives, grouped by the question they answer rather than the format they read.
 
 use anyhow::{Context, Result};
 use benilla_formats::Chain;
@@ -45,13 +26,8 @@ pub use sequence::{
 pub use skeleton::{attachscan, bonescan, eventmarkerscan};
 pub use world::{doodadscan, placescan, skyboxscan, wmodoodads};
 
-/// Every `.m2` in the chain, in listfile order, narrowed to a path `prefix` when one is given.
-///
-/// The opening line of nearly every sweep here, and — before the split — twenty-two copy-pasted
-/// copies of it. Names come back in their listfile casing (that is what a report prints and what
-/// [`Chain::read_file`] is handed); the `.m2` test and the prefix match are both done on a
-/// lowercased copy, and the prefix is normalized to the chain's own `\` separators, so a caller
-/// may pass either slash in either case.
+/// Every `.m2` in the chain in listfile order and casing, narrowed to a path `prefix` matched
+/// case-insensitively with either slash.
 pub(crate) fn m2_names(chain: &mut Chain, prefix: Option<&str>) -> Result<Vec<String>> {
     let pfx = prefix.map(|p| p.to_ascii_lowercase().replace('/', "\\"));
     Ok(chain
@@ -66,16 +42,8 @@ pub(crate) fn m2_names(chain: &mut Chain, prefix: Option<&str>) -> Result<Vec<St
         .collect())
 }
 
-/// Every WMO **root** in the chain, narrowed to a path `prefix` when one is given — same casing
-/// and matching rules as [`m2_names`].
-///
-/// A WMO ships as one root plus one file per group, named `<stem>_NNN.wmo`. Only the root carries
-/// the tables a sweep wants (MOHD/MODS/MODD/MOGI/MOLT/MOSB); a group file handed to
-/// [`benilla_formats::parse_wmo_root`] is just a parse failure to skip. Underscore then exactly
-/// three digits is the whole test — and it is here, once, because the two sweeps that used to
-/// spell it inline had drifted into spelling it *differently* (one guarded a stem shorter than
-/// four characters, the other did not, so a hypothetical `123.wmo` was a root to one and a group
-/// to the other).
+/// Every WMO root in the chain, narrowed like [`m2_names`]. Only a root carries the
+/// MOHD/MODS/MODD/MOGI/MOLT/MOSB tables; a group file is `<stem>_NNN.wmo`, exactly three digits.
 pub(crate) fn wmo_roots(chain: &mut Chain, prefix: Option<&str>) -> Result<Vec<String>> {
     let pfx = prefix.map(|p| p.to_ascii_lowercase().replace('/', "\\"));
     Ok(chain
@@ -96,9 +64,7 @@ pub(crate) fn wmo_roots(chain: &mut Chain, prefix: Option<&str>) -> Result<Vec<S
         .collect())
 }
 
-/// Capitalize an `Item\ObjectComponents\<sub>` path component for consistent family-key display
-/// regardless of how a given asset's listfile entry happened to be cased (`WEAPON`/`weapon`/
-/// `Weapon` all collapse to `Weapon`).
+/// Title-case an `Item\ObjectComponents\<sub>` component so its listfile casings share one key.
 fn title_case(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -109,17 +75,8 @@ fn title_case(s: &str) -> String {
     }
 }
 
-/// The top-level content-family bucket for an internal M2 path — the summary dimension for "how
-/// much content is affected, and of what KIND", shared by [`lighting::m2lightscan`] and
-/// [`material::uvslotscan`]. Derived from the path's first one or two components,
-/// case-insensitively.
-///
-/// The split that earns its keep is `World\` versus everything else: a `World\` model is a placed
-/// doodad or WMO prop, which reaches the screen through the shared-material lanes (the M2-light
-/// spawn, the `UvAnimMaterials`/`MatAnimTable` registries), while a `Creature\`/`Spells\` one
-/// reaches an entirely different consumer. `World\Goober\` (GameObject displays) splits off again
-/// because it is the hosted lane, not the ADT/WMO one; everything not otherwise named folds into
-/// `other`.
+/// The content family of an M2 path, a sweep's summary dimension: `World\` is placed doodads and
+/// WMO props, `World\Goober\` GameObject displays.
 pub(super) fn family_of(name: &str) -> String {
     let comps: Vec<&str> = name.split('\\').collect();
     let low = |s: &str| s.to_ascii_lowercase();

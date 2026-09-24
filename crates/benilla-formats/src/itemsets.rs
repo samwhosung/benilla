@@ -1,11 +1,6 @@
-//! ItemSet.dbc — the item-set catalog behind the tooltip's SET block (the item tooltip builder
-//! `0x52b650`: set name "(owned/total)" gold, per-member lines
-//! pale-cream/gray, threshold bonuses green/gray via the `$`-token engine).
-//!
-//! Record layout per vmangos `ItemSetEntry` (`DBCStructure.h`, the 1.12 branch): id@0, the 8+1
-//! localized name block @1..9, itemId[17]@10..26 (0-padded), setSpellID[8]@27..34,
-//! setThreshold[8]@35..42 (each spell's required equipped count), requiredSkill@43,
-//! requiredSkillRank@44 — 45 fields.
+//! `ItemSet.dbc`: the item sets behind the item tooltip's set block (builder `0x52b650`), laid out
+//! as vmangos `ItemSetEntry` (`DBCStructure.h`): 17 item ids, then 8 spells and each one's
+//! required equipped count.
 
 use std::collections::HashMap;
 
@@ -17,10 +12,8 @@ use crate::Chain;
 
 const ITEM_SET: &str = "DBFilesClient\\ItemSet.dbc";
 
-/// One set: display name, the member item ids (nonzero of the 17 slots), the threshold bonuses
-/// (`(required equipped count, spell id)`, nonzero spells only, in the DBC's stored slot order
-/// — the tooltip sorts threshold-ascending at print time, like the client's qsort `0x52e5c0`),
-/// and the set-level skill requirement.
+/// One set. `bonuses` is `(required equipped count, spell id)` in stored slot order; the tooltip
+/// sorts it by count at print time, as the client's qsort `0x52e5c0` does.
 #[derive(Debug, Clone)]
 pub struct ItemSetInfo {
     pub name: String,
@@ -36,17 +29,15 @@ pub struct ItemSetCatalog {
 }
 
 impl ItemSetCatalog {
-    /// The set row for an item template's `itemset` id, or `None` for an id the DBC lacks.
+    /// The set for an item template's `itemset` id.
     pub fn set(&self, id: u32) -> Option<&ItemSetInfo> {
         self.sets.get(&id)
     }
 
-    /// Number of rows (for logging/diagnostics).
     pub fn len(&self) -> usize {
         self.sets.len()
     }
 
-    /// Whether no rows loaded.
     pub fn is_empty(&self) -> bool {
         self.sets.is_empty()
     }
@@ -108,11 +99,6 @@ pub fn load_item_sets(chain: &mut Chain) -> Result<ItemSetCatalog> {
 mod tests {
     use super::*;
 
-    /// Data-gated on the real 5875 DBC (172 rows): Vestments of the Devout (182, the priest
-    /// dungeon set) carries 8 members + its bonus ladder; Defias Leather (161) carries 5.
-    /// Bonuses load in the DBC's stored slot order (The Gladiator stores 3,2,5,4 — the tooltip
-    /// sorts at print time). Every skill-gated set carries a nonzero rank (the builder's
-    /// rank-0 format leg is data-empty). Skips without client data.
     #[test]
     fn item_sets_load_from_the_chain() {
         let data = crate::wow_data_or_skip!();

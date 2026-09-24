@@ -1,16 +1,9 @@
-//! SoundEntries.dbc loader — the central **sound-kit** table every audio trigger resolves through:
-//! a kit = up to 10 weighted variation files + volume/flags/distance parameters.
-//! Kits are playable by id and **by name** (the client's `PlaySoundByName` (`0x458030`) is a
-//! name-hash into this table — the Lua `PlaySound("igMainMenuOpen")` path).
+//! `SoundEntries.dbc`, the sound-kit table every audio trigger resolves through: up to 10
+//! weighted variation files with volume, flags and distances. Kits play by id or by name:
+//! `PlaySoundByName` (`0x458030`), behind Lua's `PlaySound`, hashes the name into this table.
 //!
-//! Layout — VERIFIED against build 5875 (xxd + row decode of the extracted file, 2026-07-02): the
-//! WDBC header reports **4623 records · 29 fields · 116 B/record**. Fields:
-//! `ID(0), SoundType(1), Name(2, str), File[10](3..12, str), Freq[10](13..22),
-//! DirectoryBase(23, str), Volume(24, f32), Flags(25), MinDistance(26, f32),
-//! DistanceCutoff(27, f32), EAXDef(28)`. Spot-checked on row 3: `type 1 "Invisibility Impact",
-//! "Dispel_Low_Base.wav" ×1, dir "Sound\Spells", vol 1.0, flags 0, min 8, cutoff 45, EAX 2`.
-//! NOTE the wowdev-wiki 5875 struct claims a 30-column layout (separate `maxDistance` +
-//! `soundEntriesAdvancedID`) — it is **wrong**; trust this byte-verified one.
+//! 29 fields and 116-byte records in 5875. The wowdev wiki's 30-column layout, with separate
+//! `maxDistance` and `soundEntriesAdvancedID` columns, does not fit this build.
 
 use std::collections::HashMap;
 
@@ -22,12 +15,9 @@ use crate::dbc::{f32_at, parse, str_at, u32_at};
 
 const SOUND_ENTRIES: &str = "DBFilesClient\\SoundEntries.dbc";
 
-/// `Flags` bits observed in the 5875 data (domain: 0/1/0x20/0x21/0x22/0x200/0x201/0x220/0x400/
-/// 0x420). The DBC word is copied **raw** into the runtime kit flag word (`0x45c139`) and the
-/// two variation gates read separate bits: `0x400` =
-/// pitch variation (`0x458da0`), `0x800` = volume variation (`0x458c60`). No 5875 kit sets
-/// `0x800` — volume variation is dormant in this build's data. `0x20` no-duplicates, `0x200`
-/// looping (0.5.3-era wowdev meanings, behavior-consistent).
+/// `Flags` bits, copied raw into the runtime kit (`0x45c139`): `0x400` varies pitch (`0x458da0`),
+/// `0x800` volume (`0x458c60`), though no 5875 kit sets it. `0x20` no-duplicates and `0x200`
+/// looping are the wiki's 0.5.3 meanings, consistent with behaviour.
 pub mod sound_kit_flags {
     pub const NO_DUPLICATES: u32 = 0x20;
     pub const LOOPING: u32 = 0x200;
@@ -35,39 +25,35 @@ pub mod sound_kit_flags {
     pub const VARY_VOLUME: u32 = 0x800;
 }
 
-/// One sound kit: the resolved variation list + the playback parameters the kit player consumes.
+/// One sound kit: its resolved variations and playback parameters.
 pub struct SoundKit {
     pub id: u32,
-    /// `SoundType` — the kit's category (1 spells, 2 UI, 3 footsteps, … 28 zone music, 50 zone
-    /// ambience). Drives the volume-category pick and the specialized runtime caches.
+    /// The kit's category (1 spells, 2 UI, 3 footsteps, 28 zone music, 50 zone ambience), which
+    /// picks the volume category.
     pub sound_type: u32,
-    /// The `PlaySoundByName` key (e.g. `"igMainMenuOpen"`, `"LevelUp"`).
+    /// The `PlaySoundByName` key (`"igMainMenuOpen"`, `"LevelUp"`).
     pub name: String,
-    /// Variation files as `(full MPQ path, weight)` — `DirectoryBase\File[i]` joined here so
-    /// consumers never re-derive paths; only non-empty slots, weight from the matching `Freq[i]`.
+    /// Non-empty variations as `(MPQ path, Freq[i] weight)`, `DirectoryBase` and `File[i]` joined
+    /// as the reference joins them.
     pub files: Vec<(String, u32)>,
-    /// Base volume `[0,1]` (the per-shot variation math scales this — `0x458c60`).
+    /// Base volume in `[0, 1]`, scaled by the per-shot variation (`0x458c60`).
     pub volume: f32,
     pub flags: u32,
     /// Full-volume radius fed to the backend's min/max rolloff (FMOD `Sample_SetMinMaxDistance`).
     pub min_distance: f32,
-    /// Selection/cull radius: the `d² < cutoff²` audibility gate + per-frame virtualization
-    /// (`0x45cdf0`/`0x7a5000`). `0` = non-positional (no 3D cull).
+    /// The audibility radius, `d² < cutoff²`, also the per-frame virtualization cull (`0x45cdf0`,
+    /// `0x7a5000`); 0 is non-positional.
     pub distance_cutoff: f32,
-    /// `SoundSamplePreferences.dbc` FK — the per-channel EAX wet send (0/1/2 in the data;
-    /// 2 072 kits carry 0, 2 549 carry 2, 2 carry 1). **`0` means dry, not "default"**: that DBC
-    /// holds only ids 1 and 2, so the client's id-indexed slot lookup (`0x45cdc0`) returns NULL
-    /// and `FSOUND_Reverb_SetChannelProperties` (`0x7a5bf0`) skips before it even tests the
-    /// 3D-open flag. Authored dryness — and it is how NPC voice lines stay out of an interior's
-    /// reverb: **all 275 `SoundType 17` rows are `EAXDef 0`** (creature barks split 706 wet /
-    /// 285 dry). benilla.
+    /// The `SoundSamplePreferences.dbc` row for the channel's EAX send. 0 is dry, not a default:
+    /// that table holds only 1 and 2, so the slot lookup (`0x45cdc0`) returns null and
+    /// `FSOUND_Reverb_SetChannelProperties` (`0x7a5bf0`) skips. Every NPC voice kit is 0.
     pub eax_def: u32,
 }
 
-/// All kits, resolvable by id or (case-insensitively) by name.
+/// All kits, resolvable by id or, ignoring case, by name.
 pub struct SoundKitCatalog {
     kits: HashMap<u32, SoundKit>,
-    /// Lowercased `Name` → id — the client's name lookup is a case-insensitive hash.
+    /// Lowercased `Name` to id: the reference's name hash ignores case.
     by_name: HashMap<String, u32>,
 }
 
@@ -76,7 +62,7 @@ impl SoundKitCatalog {
         self.kits.get(&id)
     }
 
-    /// `PlaySoundByName` parity: resolve a kit by its `Name` column, case-insensitive.
+    /// A kit by its `Name`, ignoring case, as `PlaySoundByName` finds it.
     pub fn by_name(&self, name: &str) -> Option<&SoundKit> {
         self.by_name
             .get(&name.to_ascii_lowercase())
@@ -91,8 +77,7 @@ impl SoundKitCatalog {
         self.kits.is_empty()
     }
 
-    /// An empty catalog for consumers' pure-logic unit tests (selector state machines that need
-    /// a catalog-shaped owner but no data).
+    /// An empty catalog for consumers' unit tests.
     pub fn empty_for_tests() -> Self {
         Self {
             kits: HashMap::new(),
@@ -101,7 +86,6 @@ impl SoundKitCatalog {
     }
 }
 
-/// 29 fields — module docs carry the verified layout.
 fn sound_entries_schema() -> Schema {
     let mut s = Schema::new("SoundEntries");
     s.add_field(SchemaField::new("ID", FieldType::UInt32));
@@ -122,29 +106,15 @@ fn sound_entries_schema() -> Schema {
     s
 }
 
-/// Join one variation's `DirectoryBase` and `File[i]` into the path the archive is asked for —
-/// **the reference's own rule, byte-for-byte** (`0x45be10`, the sole caller `0x45c167` inside the
-/// `SOUNDDEFINITION` loader).
+/// `DirectoryBase` and `File[i]` joined as the reference does (`0x45be10`, called only from
+/// `0x45c167` in the `SOUNDDEFINITION` loader): `"%s%s%s"` over dir, separator and file, with no
+/// separator when the dir is empty or already ends in `\`. Nothing below normalizes further: the
+/// archive hash (`0x6549a0`) folds case and maps `/` to `\` but keeps leading and doubled
+/// separators, and there is no loose-file fallback for a single leading `\`.
 ///
-/// The client formats `"%s%s%s"` over `(dir, sep, file)` and chooses `sep` with exactly two tests:
-/// it is the empty string when `DirectoryBase` is **NULL/empty**, and when `SStrChrR(dir, '\')`
-/// says the directory **already ends in a separator**; otherwise it is `"\"`. That is the whole
-/// normalization in the client, at this layer or any other — and it has to be spelled here,
-/// because the archive layer below rescues nothing: `HashString` folds ASCII `a`–`z` to upper and
-/// maps `/` → `\` per character into the hash, and does **not** strip a leading separator, collapse
-/// a doubled one, or touch a trailing one (`0x6549a0`, an evidenced absence — the hash loop
-/// read end to end). There is no loose-file fallback either: `SFileOpenFileEx`'s disk diversion
-/// takes `\\`, `X:` and a flag WoW's own startup clears, never a single leading `\`.
-///
-/// **27 of the 5875 data's 8961 variations do not resolve, and the reference cannot play them
-/// either** — 17 are simply absent from the archives (`GhostMusic01/02`, `mOgreFidget3`, and ids
-/// 195/196, where `mHumanFemaleWoundVoxA.wav` was authored across two `File` cells as
-/// `mHumanFemaleWoundVoxA` and `wav`), and the other 10 are kit **8940 `Ashbringer`**, whose
-/// `DirectoryBase` is `\Sound\Creature\Ashbringer\`: the client suppresses the *trailing*
-/// separator and then emits the *leading* one verbatim, so the path it opens
-/// (`\Sound\Creature\Ashbringer\ASH_SPEAK_01.wav`) misses in every archive although the asset is
-/// there. The Ashbringer's speak lines are dead data in the real client, and are meant to stay
-/// dead here: a leading-separator strip would be a deviation, not a fix.
+/// So the reference cannot play 27 of the 8961 shipped variations, and neither does this: 17 are
+/// absent from the archives, and 10 are kit 8940 `Ashbringer`, whose `DirectoryBase` starts with
+/// `\`. Stripping that separator would be a deviation, not a fix.
 fn join_variation(dir: &str, file: &str) -> String {
     if dir.is_empty() || dir.ends_with('\\') {
         format!("{dir}{file}")
@@ -153,7 +123,7 @@ fn join_variation(dir: &str, file: &str) -> String {
     }
 }
 
-/// Read SoundEntries.dbc off the patch chain into a [`SoundKitCatalog`].
+/// Read `SoundEntries.dbc` off the patch chain.
 pub fn load_sound_kit_catalog(chain: &mut Chain) -> Result<SoundKitCatalog> {
     let bytes = chain
         .read_file(SOUND_ENTRIES)
@@ -199,10 +169,6 @@ pub fn load_sound_kit_catalog(chain: &mut Chain) -> Result<SoundKitCatalog> {
 mod tests {
     use super::*;
 
-    /// End-to-end on the **real** build-5875 table: the byte-verified 29-field layout parses all
-    /// 4623 kits; the spot-checked row (ID 3) reads back exactly; the `PlaySoundByName` lookup is
-    /// case-insensitive; and a kit's joined `DirectoryBase\File` path is a real, readable chain
-    /// file (guards the path join against a shifted column). Skips without client data.
     #[test]
     fn real_sound_entries_parse_and_resolve() {
         let data = crate::wow_data_or_skip!();
@@ -210,7 +176,7 @@ mod tests {
         let cat = load_sound_kit_catalog(&mut chain).expect("load sound kits");
         assert_eq!(cat.len(), 4623, "all 5875 SoundEntries rows load");
 
-        // The row decoded byte-by-byte while pinning the layout (module docs).
+        // Kit 3, decoded by hand from the file's bytes.
         let kit = cat.get(3).expect("kit 3 exists");
         assert_eq!(kit.name, "Invisibility Impact");
         assert_eq!(kit.sound_type, 1);
@@ -225,7 +191,7 @@ mod tests {
         assert_eq!(kit.distance_cutoff, 45.0);
         assert_eq!(kit.eax_def, 2);
 
-        // Name lookup, case-insensitive (the client name-hash ignores case).
+        // The name lookup ignores case.
         let ui = cat.by_name("IGMINIMAPZOOMIN").expect("UI kit by name");
         assert_eq!(ui.id, 823);
         assert_eq!(ui.sound_type, 2, "type 2 = UI");
@@ -240,18 +206,14 @@ mod tests {
         );
     }
 
-    /// The `EAXDef` census the reverb send is gated on (bug B236). `EAXDef 0` is a
-    /// NULL `SoundSamplePreferences` slot in the client, i.e. a channel that never receives reverb
-    /// properties — so this is the authored line between wet and dry, and it must not drift.
-    /// Skips without client data.
+    /// The `EAXDef` census the reverb send is gated on: 0 is the reference's null slot, a channel
+    /// that never gets reverb.
     #[test]
     fn real_sound_entries_eaxdef_census() {
         let data = crate::wow_data_or_skip!();
         let mut chain = crate::open_chain(&data).expect("open chain");
         let cat = load_sound_kit_catalog(&mut chain).expect("load sound kits");
 
-        // Only three values exist, and `SoundSamplePreferences.dbc` has rows 1 and 2 only — so 0
-        // is "no row", never "row zero".
         let mut n = [0usize; 3];
         for k in cat.kits.values() {
             assert!(k.eax_def <= 2, "kit {} has EAXDef {}", k.id, k.eax_def);
@@ -263,8 +225,8 @@ mod tests {
             "the 5875 EAXDef census"
         );
 
-        // The load-bearing one: NPC voice lines (`SoundType 17`, what `NPCSounds.dbc` references)
-        // are dry to a kit — this is why the Thunderbrew Distillery's NPCs carry no echo.
+        // NPC voice lines (`SoundType` 17, which `NPCSounds.dbc` names) are all dry, so NPCs in a
+        // reverberant interior carry no echo.
         let voices: Vec<_> = cat.kits.values().filter(|k| k.sound_type == 17).collect();
         assert_eq!(voices.len(), 275, "the type-17 NPC voice rows");
         assert!(
@@ -272,8 +234,7 @@ mod tests {
             "every NPC voice kit is authored dry"
         );
 
-        // The control: creature barks are a genuine mix, so the gate is not a no-op that happens
-        // to silence everything.
+        // The control: creature barks mix wet and dry.
         let barks: Vec<_> = cat.kits.values().filter(|k| k.sound_type == 10).collect();
         assert!(
             barks.iter().any(|k| k.eax_def != 0) && barks.iter().any(|k| k.eax_def == 0),
@@ -281,11 +242,8 @@ mod tests {
         );
     }
 
-    /// The join's three legs, in the reference's own order (`0x45be10`): an empty directory emits
-    /// the file verbatim (26 shipped rows, e.g. 1103 `WyvernWingFlap`, whose variations are
-    /// themselves full paths), a directory that already ends in a separator gets none added, and
-    /// everything else gets exactly one. A **leading** separator is carried through untouched —
-    /// the client normalizes nothing there, and neither do we.
+    /// An empty directory emits the file alone (26 shipped rows, 1103 `WyvernWingFlap` among them,
+    /// whose variations are full paths); a leading separator is kept, as the reference keeps it.
     #[test]
     fn the_variation_join_is_the_reference_s_separator_rule() {
         assert_eq!(
@@ -307,16 +265,10 @@ mod tests {
         );
     }
 
-    /// **Every kit path this loader builds, asked of the real chain.** The numbers are the
-    /// reference's own: the binary's join resolves 8934 of 8961 variations, and the 27 it does not
-    /// are authentic dead data. An unconditional `format!("{dir}\\{file}")` — what this loader did
-    /// before the join was derived — resolves exactly three fewer, and those three are whole kits:
-    /// 1519 `TaxiNodeDiscovered`, 2988 `Unarmed Small`, 3412 `Pirate Agro` each carry one variation
-    /// and a `DirectoryBase` that already ends in a separator, so every one of them was silent.
-    ///
-    /// The test pins both sides — what resolves and what is *meant* not to — so neither a
-    /// regression nor an over-eager "fix" of the Ashbringer can land quietly. Skips without client
-    /// data.
+    /// Every kit path asked of the real chain: the reference's join resolves 8934 of 8961
+    /// variations, and the 27 it misses are dead in the reference too. An unconditional separator
+    /// would also silence kits 1519, 2988 and 3412, each one variation under a `DirectoryBase`
+    /// that ends in `\`.
     #[test]
     fn real_sound_entries_paths_resolve_exactly_as_the_reference_s_do() {
         let data = crate::wow_data_or_skip!();
@@ -341,8 +293,7 @@ mod tests {
             "variations that resolve — the binary's own count; {dead:?}"
         );
 
-        // The ten that are one kit, and the one kit that is therefore silent — in the reference
-        // too (its `DirectoryBase` opens with a separator the client passes straight through).
+        // Ten belong to kit 8940, silent in the reference too.
         let ashbringer: Vec<_> = dead.iter().filter(|(id, ..)| *id == 8940).collect();
         assert_eq!(ashbringer.len(), 10, "every ASH_SPEAK line misses");
         assert!(
@@ -350,11 +301,10 @@ mod tests {
             "the asset ships — it is the authored path that cannot reach it"
         );
 
-        // …and the other 17 are ordinary absent assets, spread across kits that mostly still play.
+        // The other 17 are absent assets, in kits that mostly still play.
         assert_eq!(dead.len() - ashbringer.len(), 17, "absent assets: {dead:?}");
 
-        // No OTHER kit is fully silent through a path benilla built. 8588 is, and is meant to be:
-        // its single variation is simply not in the archives.
+        // Only 8588, whose one variation is absent, and 8940 have nothing playable.
         let silent: Vec<u32> = cat
             .kits
             .values()

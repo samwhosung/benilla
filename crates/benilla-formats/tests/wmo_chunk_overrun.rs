@@ -1,25 +1,11 @@
-//! **The last chunk clamps to EOF.** A WMO's chunk stream is not guaranteed to tile its file
-//! exactly, and the reference tolerates the slop: its walk (`0x6c3a60`) "reads chunks while the
-//! 8-byte header is in-bounds and clamps the last chunk to EOF (never requires exact tiling)",
-//! measured over the whole shipped corpus; the single file in the game that needs the rule is
-//! `Undercity_144.wmo`, whose MOGP declares one byte more than the file holds.
-//!
-//! We used to `break` there and hand the caller nothing. That cost g144 its whole MOGP — flags,
-//! portal-ref span, area id, fog, doodad and light refs — and since the portal flood reaches a
-//! neighbour only through a group's ref span, the group became a **dead end**: g144 is the short
-//! corridor joining g95 and g152, so the rooms past it culled from either side and you saw sky
-//! through the doorway.
-//!
-//! Two oracles, because the bug had two halves. The corpus sweep is the one that generalises: it is
-//! the same shape as the reference's own "0 rejected" oracle, and it fails for a *new* file as well
-//! as for this one. The byte pins on g144 catch a clamp that silently returns the wrong slice.
-//! Skips when the client isn't present.
+//! A WMO's last chunk clamps to EOF: the reference's walk (`0x6c3a60`) reads chunks while the
+//! 8-byte header is in bounds and never requires exact tiling. The one shipped file that needs it
+//! is `Undercity_144.wmo`, whose MOGP declares one byte past the end.
 
 use benilla_formats::{parse_wmo_root, wmo_group_header, Chain};
 
-/// The file the rule exists for. Its MOGP header must come back whole, with the exact values the
-/// raw bytes carry at MOGP+0x08 (flags) and MOGP+0x24/0x26 (the portal-ref span) — the two fields
-/// whose loss dead-ended the flood.
+/// g144 is the corridor joining g95 and g152, and its portal-ref span (MOGP `+0x24`, `+0x26`) is
+/// the portal flood's only way through.
 #[test]
 fn undercity_144_mogp_survives_its_one_byte_overrun() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -28,8 +14,6 @@ fn undercity_144_mogp_survives_its_one_byte_overrun() {
         .read("World\\wmo\\Lorderon\\Undercity\\Undercity_144.wmo")
         .expect("read Undercity_144");
 
-    // The overrun is a property of the shipped file — if this ever stops holding, the test below is
-    // no longer exercising the clamp and the rest of this file is decoration.
     let declared =
         u32::from_le_bytes([bytes[0x10], bytes[0x11], bytes[0x12], bytes[0x13]]) as usize;
     assert_eq!(
@@ -44,9 +28,8 @@ fn undercity_144_mogp_survives_its_one_byte_overrun() {
     assert_eq!(h.portal_ref_count, 2, "MOGP+0x26 portal-ref count");
 }
 
-/// The general oracle, mirroring the reference's own: **every** WMO in the corpus yields the chunk
-/// its loader needs — a root parses, a group gives up its MOGP header. This is what makes the rule a
-/// contract rather than a one-file patch; `wmo_chunk_census --all` is the same sweep with a readout.
+/// Every WMO in the corpus yields the chunk its loader needs: a root parses, a group gives up its
+/// MOGP header.
 #[test]
 fn every_wmo_in_the_corpus_yields_its_loader_chunk() {
     let data = benilla_formats::wow_data_or_skip!();

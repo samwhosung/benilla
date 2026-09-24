@@ -1,21 +1,12 @@
-//! B93 — a `HelmetGeosetVisData` hide mask only applies when the head display is a **worn helm**,
-//! i.e. it names a model. Real-data difftest against the shipped 1.12.1 DBCs, end to end from the
-//! NPC's `CreatureDisplayInfoExtra` row to the geosets her body renders. Skips when the client
-//! isn't present.
-//!
-//! The reported case is **Jubie Gadgetspring** (vmangos creature 8678 → `CreatureDisplayInfo`
-//! 7969 → extra **5503**): a gnome female whose head column names display **15676**, an
-//! `INV_Jewelry_Amulet_01` row with **no model** and a full hide mask (`HelmVisFemale` **306** =
-//! `[446, 478, 510, 222, 238]`, every column carrying the gnome bit `1 << 7`). 1.12.1 renders her
-//! pigtails, her long ears and her earrings; honouring the mask strips all three.
+//! A `HelmetGeosetVisData` hide mask applies only when the head display is a worn helm, one that
+//! names a model. Jubie Gadgetspring (display 7969, extra 5503) wears head display 15676, a
+//! model-less amulet row with a full gnome mask; the reference shows her hair, ears and earrings.
 
 use benilla_formats::{
     load_creature_catalog, load_item_display_catalog, open_chain, CharacterGeosets, EquipGeosets,
 };
 
-/// Jubie's `CreatureDisplayInfo` id — the chain's entry point.
 const JUBIE_DISPLAY: u32 = 7969;
-/// The amulet-shaped `ItemDisplayInfo` row her head column names.
 const AMULET_DISPLAY: u32 = 15676;
 
 #[test]
@@ -24,7 +15,6 @@ fn a_modelless_head_display_is_not_a_worn_helm() {
     let mut chain = open_chain(&data).expect("open vanilla patch chain");
     let items = load_item_display_catalog(&mut chain).expect("ItemDisplayInfo");
 
-    // 1. The defect only exists if the shipped row really is model-less AND masked.
     let amulet = items.get(AMULET_DISPLAY).expect("display 15676 exists");
     assert!(
         amulet.model.iter().all(Option::is_none),
@@ -36,14 +26,12 @@ fn a_modelless_head_display_is_not_a_worn_helm() {
         [248, 306],
         "display {AMULET_DISPLAY} still carries a HelmetGeosetVisData pair"
     );
-    // 2. …and we now refuse to read it as a helm.
     assert_eq!(
         amulet.worn_helm_vis(),
         None,
         "a model-less display is not a worn helm"
     );
 
-    // 3. A real helm still hides what it should — the change must not disarm the mechanism.
     let (_, helm) = items
         .iter()
         .find(|(_, d)| d.model[0].is_some() && d.helmet_vis != [0, 0])
@@ -54,9 +42,7 @@ fn a_modelless_head_display_is_not_a_worn_helm() {
         "a modelled helm keeps its vis pair"
     );
 
-    // 4. The blast radius, pinned: of the 1314 rows that author a vis pair, exactly 12 leave the
-    //    LEFT model slot empty. If the shipped data ever changes, this test says so rather than the
-    //    change silently growing.
+    // Of the 1314 rows with a vis pair, 12 leave the left model slot empty.
     let masked = items.iter().filter(|(_, d)| d.helmet_vis != [0, 0]).count();
     let masked_modelless = items
         .iter()
@@ -64,10 +50,8 @@ fn a_modelless_head_display_is_not_a_worn_helm() {
         .count();
     assert_eq!((masked, masked_modelless), (1314, 12));
 
-    // 5. The gate is `ModelName[0]` alone (`0x4799c1`), not "either slot". 41 rows
-    //    fill only the RIGHT slot; none of them carries a vis pair, so the two readings coincide on
-    //    the shipped table — assert that rather than assume it, because the day one diverges the
-    //    reference's answer is the left slot's.
+    // The reference gates on `ModelName[0]` alone (`0x4799c1`); the 41 rows that fill only the
+    // right slot carry no vis pair.
     let right_only = items
         .iter()
         .filter(|(_, d)| d.model[0].is_none() && d.model[1].is_some())
@@ -110,8 +94,7 @@ fn jubie_keeps_her_hair_ears_and_earrings() {
         ..EquipGeosets::default()
     };
     let set = geosets.visible_geosets(npc.race, npc.sex, npc.hair_style, npc.facial_hair, &eg);
-    // CharHairGeosets (7,1,1) → 3 · CharacterFacialHairStyles (7,1,2) geoset200 3 → 203 · the
-    // ear region keeps its 702 default. All three are what the reference shows.
+    // CharHairGeosets (7,1,1) gives 3, CharacterFacialHairStyles (7,1,2) gives 203, ears keep 702.
     for want in [3u16, 203, 702] {
         assert!(set.contains(&want), "geoset {want} is on, got {set:?}");
     }
@@ -122,9 +105,7 @@ fn jubie_keeps_her_hair_ears_and_earrings() {
         );
     }
 
-    // The counterfactual — the shipped mask, honoured — is exactly the reported picture: bare
-    // scalp, no earrings, tucked ears. This is what the bug looked like, asserted so a regression
-    // has to walk past it.
+    // The mask, honoured: a bare scalp, no earrings and tucked ears.
     let broken = geosets.visible_geosets(
         npc.race,
         npc.sex,

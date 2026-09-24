@@ -1,22 +1,14 @@
-//! The **rigid bone spin** collector (`m2_bone_spins`) and its sampler — the mechanism that turns
-//! Caverns of Time's asteroid belts without a skinning palette (decision 1264's deferred half).
-//!
-//! Two halves, deliberately separate: the sampler is pure arithmetic and is pinned on synthetic
-//! keys, and the collector is pinned against the real shipped art, because what it has to get right
-//! is not arithmetic — it is *which* bones qualify. Both shipped skyboxes are asserted, including
-//! the one that must yield nothing: a predicate that accidentally admitted every bone would still
-//! look correct on the model that has motion.
+//! The rigid bone spin collector (`m2_bone_spins`) and its sampler, which turn Caverns of Time's
+//! asteroid belts without a skinning palette.
 
 use benilla_formats::{load_m2_bone_spins, m2_bone_spins, BoneSpin, Chain};
 
-/// `[x, y, z, w]` for a rotation of `deg` about +Z — the axis-agnostic half of the sampler tests.
 fn about_z(deg: f32) -> [f32; 4] {
     let h = deg.to_radians() * 0.5;
     [0.0, 0.0, h.sin(), h.cos()]
 }
 
-/// The angle (degrees) of a quaternion about its axis, sign-normalised — what a test can compare
-/// without caring which of `q`/`−q` the slerp produced.
+/// A quaternion's angle about its axis in degrees, the same for `q` and `-q`.
 fn angle_deg(q: [f32; 4]) -> f32 {
     let w = q[3].abs().clamp(0.0, 1.0);
     2.0 * w.acos().to_degrees()
@@ -31,11 +23,8 @@ fn spin(keys: Vec<(f32, [f32; 4])>, duration: f32, interp: bool) -> BoneSpin {
     }
 }
 
-/// The sampler's four legs: hold before the first key, slerp between a bracket, clamp past the
-/// last, and wrap at the duration. The clamp is the one worth stating out loud — an M2 track's keys
-/// live inside the sequence band and the client interpolates within it, so a loop whose last key
-/// differs from its first *snaps* at the wrap. Inventing a wrap-around segment would be us
-/// animating rather than the file.
+/// Past the last key the sampler clamps: the reference interpolates only within the sequence band,
+/// so a loop whose last key differs from its first snaps at the wrap.
 #[test]
 fn the_sampler_holds_slerps_clamps_and_wraps() {
     let s = spin(
@@ -64,9 +53,7 @@ fn the_sampler_holds_slerps_clamps_and_wraps() {
     );
 }
 
-/// A step track (`interp_type == 0`) holds each key until the next. Our rig lane lerps these — a
-/// recorded divergence (`benilla-extract bonescan`) — and there is no reason to reproduce it in new
-/// code when the track's own header word is right there.
+/// A step track (`interp_type == 0`) holds each key until the next.
 #[test]
 fn a_step_track_holds_its_key() {
     let s = spin(
@@ -78,8 +65,7 @@ fn a_step_track_holds_its_key() {
     assert!((angle_deg(s.sample(2.0)) - 90.0).abs() < 1e-3);
 }
 
-/// The shortest-arc negation in the slerp. Without it a bracket whose keys dot negative takes the
-/// LONG way round — which on a belt authored as a full turn reads as a section spinning backwards.
+/// Keys whose quaternions dot negative slerp the short way round.
 #[test]
 fn the_slerp_takes_the_short_way_round() {
     // 350° and 0° are 10° apart, but their quaternions dot negative.
@@ -89,18 +75,14 @@ fn the_slerp_takes_the_short_way_round() {
         true,
     );
     let mid = angle_deg(s.sample(0.5));
-    // 355° about +Z is 5° about −Z — either reading is ≤10° from both ends. The long way round
-    // would put the midpoint ~175° away.
     assert!(
         !(15.0..=345.0).contains(&mid),
         "midpoint took the long arc: {mid}°"
     );
 }
 
-/// The real asset. `CavernsOfTimeSky.m2` authors exactly three spinning bones — the asteroid belts,
-/// one 66.667 s loop, 25° / 90° / 360° of turn — and bone 0, which carries the other 17 batches,
-/// must NOT be among them (it has no track at all, and a collector that admitted it would rotate the
-/// entire painted sky).
+/// `CavernsOfTimeSky.m2` spins three bones, the asteroid belts, over one 66.667 s loop (25°, 90°,
+/// 360°); bone 0, which carries the other 17 batches, has no track.
 #[test]
 fn the_caverns_of_time_sky_spins_exactly_its_three_belt_bones() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -131,16 +113,14 @@ fn the_caverns_of_time_sky_spins_exactly_its_three_belt_bones() {
             angle_deg(s.keys[0].1) < 1e-2,
             "bone {bone}: the loop opens unrotated"
         );
-        // The authored total turn, read at the last key. 360° comes back as 0° through `acos`
-        // (the quaternion is back at identity), which is itself the thing to assert.
+        // The total turn at the last key; 360° reads back as 0°, the identity.
         let last = angle_deg(s.keys.last().expect("keyed").1);
         let expect = if turn >= 360.0 { 0.0 } else { turn };
         assert!(
             (last - expect).abs() < 0.5,
             "bone {bone}: expected {expect}° at the final key, got {last}°"
         );
-        // The pivot is a few yards off the model origin — which is exactly why the placement has to
-        // conjugate by it rather than rotate about the origin (the eye sits AT the origin).
+        // The pivot sits yards off the origin, where the eye is, so the spin conjugates by it.
         let d = (s.pivot[0].powi(2) + s.pivot[1].powi(2) + s.pivot[2].powi(2)).sqrt();
         assert!(
             (2.0..5.0).contains(&d),
@@ -149,9 +129,7 @@ fn the_caverns_of_time_sky_spins_exactly_its_three_belt_bones() {
     }
 }
 
-/// The other shipped skybox has no animation at all, and the collector must say so. This is the
-/// half that catches a predicate gone loose: `StratholmeSkybox` is three static opaque batches, and
-/// anything it returns here is a bone the file never keys.
+/// `StratholmeSkybox` is three static opaque batches: nothing spins.
 #[test]
 fn the_stratholme_sky_spins_nothing() {
     let data = benilla_formats::wow_data_or_skip!();

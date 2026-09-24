@@ -1,16 +1,12 @@
-//! List every file in the 5875 patch chain whose path contains a substring (case-insensitive):
-//! `cargo run -p benilla-formats --example list_chain -- maraudon`. The "what is this thing
-//! actually called" tool — a report names a *place* ("the red crystal in Maraudon"), and finding
-//! the asset behind it is the first step of every scene-render diagnosis.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! Every file in the patch chain whose path contains a substring, case-insensitive, optionally of
+//! one extension. `cargo run -p benilla-formats --example list_chain -- maraudon [m2]`
+//! Output is Blizzard data: never commit it.
 
 fn main() -> anyhow::Result<()> {
     let pat = std::env::args()
         .nth(1)
         .ok_or_else(|| anyhow::anyhow!("usage: list_chain <substring> [ext]"))?
         .to_lowercase();
-    // An optional second argument filters by extension — `list_chain maraudon m2`.
     let ext = std::env::args()
         .nth(2)
         .map(|e| format!(".{}", e.to_lowercase()));

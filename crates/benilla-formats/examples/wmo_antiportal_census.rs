@@ -1,63 +1,13 @@
-//! **Do any 1.12.1 WMOs author an ANTIPORTAL group, and if so which MOGP bit says so?**
-//! `cargo run -p benilla-formats --example wmo_antiportal_census`.
+//! Whether any shipped WMO group has the wowdev `ANTIPORTAL` shape (no MOBA render batches, only a
+//! MOGI box) and which MOGP flag bit, if any, marks it: a histogram of every bit, the batch-less
+//! groups found without reading flags, and the two cross-tabulated.
+//! `cargo run -p benilla-formats --example wmo_antiportal_census`
 //!
-//! Later WoW documentation (wowdev.wiki `SMOGroupFlags`) names a high MOGP `flags` bit
-//! `ANTIPORTAL`: a group with **no render batches at all**, kept only for its bounding box, which
-//! the portal flood uses as an occluder rather than something it ever draws. Nothing confirms that
-//! bit for build 5875 — the portal flood
-//! ([`benilla_world::wmo_portal`]) only ever branches on `flags & 0x48` (EXTERIOR / EXTERIOR_LIT)
-//! and never treats any group as occlusion-only. So the question is purely empirical: does the
-//! shipped 5875 data contain such a group at all, and which bit(s) does it carry?
-//!
-//! **Bit-agnostic by construction.** Rather than assume the wowdev bit number applies unchanged to
-//! this build, this walks every group of every root WMO in the install and builds two independent
-//! signals, then cross-tabulates them:
-//!
-//! 1. A histogram of **every** MOGP flag bit (0..31) — how many groups set it, how many distinct
-//!    roots contain at least one.
-//! 2. The **batch-less set** — every group whose MOGP-owned MOBA chunk has zero render batches,
-//!    found without looking at flags at all. This is the wowdev ANTIPORTAL *shape*: no geometry to
-//!    draw, kept only for `MOGI`'s bounding box.
-//!
-//! If 1.12 ships any antiportal-shaped groups, they land in the batch-less set regardless of which
-//! bit (if any) names them, and the cross-tab against the flag histogram is what tells us — from
-//! the data, not a doc — which bit (if any) 5875 actually uses for it.
-//!
-//! **The run (2026-09-01, 815/815 roots, 5220/5220 groups, zero read/parse failures): yes, but no
-//! single bit names it.** 15 groups across 9 roots ship with zero MOBA render batches — Naxxramas'
-//! `frostwyrm_final01.wmo` (7 tiny connector groups), three of AQ40's boss-encounter "enterance"
-//! shells, and the three Hyjal `worldtreeroots` collision volumes among them (see the batch-less
-//! census below for the full list) — so the wowdev *shape* is real in 5875. But the cross-tab finds
-//! **no MOGP bit set by all 15 and rare among the other 5205**: bit 0 (`0x1`) is set on literally
-//! every group in the corpus (batch-less or not) and so distinguishes nothing; EXTERIOR (`0x8`)
-//! covers 13/15 but also 1052/5205 batch-having groups; every other bit covers fewer than a third of
-//! the batch-less set. Whatever these 15 groups are for — several read as pure collision volumes by
-//! name/folder (`collidabledoodads\hyjal\worldtreeroots`) rather than deliberate portal occluders —
-//! 5875 does not flag them with a dedicated ANTIPORTAL bit the way later clients' `SMOGroupFlags`
-//! documentation describes. That is a fact about the *data*, not yet about the *engine*: whether
-//! `WoW.exe` 5875's occluder pass (if it has one) singles these 15 out by shape rather than by flag
-//! is a question about the binary this census doesn't answer.
-//!
-//! Only three MOGP bits are named anywhere in benilla's own code today (verified by grep over
-//! `benilla-world/src/wmo_portal`, `benilla-assets/src/wmo.rs`, and
-//! `benilla-formats/src/models/wmo`, 2026-09-01): `0x8` EXTERIOR, `0x40` EXTERIOR_LIT
-//! ([`benilla_world::wmo_portal`]'s flood-defer/lighting-class bits), and `0x40000` SHOW_SKYBOX
-//! ([`benilla_formats::WmoGroupInfo::show_skybox`]). The other candidate bits a hypothetical
-//! ANTIPORTAL census might reach for — `0x1` (HAS_BSP/MOBN), `0x4` (VERTEXCOLOR), `0x200`
-//! (HAS_LIGHTS/MOLR), `0x800` (HAS_LIQUID/MLIQ), `0x2000` (INTERIOR), `0x800000`/`0x1000000`
-//! (second MOCV/MOTV) — are *not* named or tested anywhere in our reader: we discover MOLR/MLIQ/a
-//! second MOTV by the sub-chunk's presence, never by these flag bits, and INTERIOR is our own
-//! `flags & 0x48 == 0` derived test, not a single bit. None of those six get a name in the table
-//! below; only a bit our code already states gets one, per the census's own charter.
-//!
-//! Every field per group comes from the same bytes the runtime reads: [`wmo_group_header`]'s
-//! `flags` (MOGP `+0x08`, full 32 bits — **not** the two-bit-derived `interior`/`show_skybox` bools
-//! `parse_wmo_root`'s MOGI reader exposes), `benilla_wmo::parse_wmo`'s `render_batches`/
-//! `vertex_positions` (MOBA/MOVT), `wmo_group_header`'s `portal_ref_count` (MOPR, sliced from the
-//! group's own header span), and the root's [`WmoGroupInfo`] bounding box (MOGI, the same box the
-//! portal code treats as a loose AABB of the group's volume).
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
+//! 15 shipped groups are batch-less, and no bit singles them out. The 1.12 client has no antiportal
+//! branch on the group flags (the only bits above `0x10000` it tests are `0x40000` at `0x6b42e0`
+//! and `0x20000` at `0x6c46a6`), so a batch-less group is invisible geometry, not an occluder.
+//! Flags are MOGP's own 32 bits at `+0x08`, in every shipped group a superset of the MOGI copy.
+//! Output is Blizzard data: never commit it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
@@ -65,48 +15,39 @@ use std::io::Cursor;
 use benilla_formats::{parse_wmo_root, wmo_group_header, Chain};
 use benilla_wmo::{parse_wmo, ParsedWmo};
 
-/// A bit counts as "rare" — and earns an example listing — below this many groups. Chosen well
-/// above the size of any plausible antiportal set (a handful of buildings at most) and well below
-/// EXTERIOR/EXTERIOR_LIT, which sit in the thousands.
+/// Below this many groups a bit is rare and gets an example listing.
 const RARE_THRESHOLD: u32 = 200;
-/// Example rows kept per rare bit.
 const MAX_EXAMPLES: usize = 40;
-/// Batch-less rows printed in full before the report falls back to "N more, elided".
 const MAX_BATCHLESS_PRINTED: usize = 200;
-/// Root-failure examples kept for the audit trail.
 const MAX_FAILURE_EXAMPLES: usize = 20;
-/// Rows in the "most EXTERIOR groups" table (see its section for why that ranking is worth having).
 const MAX_EXTERIOR_RANK: usize = 25;
 
-/// MOGP EXTERIOR — the bit the deferred-window worklist and its Pass-2 replay key on.
+/// The MOGP EXTERIOR bit.
 const EXTERIOR: u32 = 0x8;
 
-/// One group's full fact row — what every example listing and the batch-less census print.
+/// One group's facts, as the listings print them.
 #[derive(Clone)]
 struct GroupRow {
-    /// The ROOT's chain path (e.g. `world\wmo\...\foo.wmo`); the group file is `{stem}_{NNN}.wmo`.
+    /// The root's chain path; the group file is `{stem}_{NNN}.wmo`.
     root_path: String,
     group_index: u32,
-    /// MOGP `flags` @ `+0x08`, all 32 bits, unfiltered.
+    /// MOGP `flags` at `+0x08`, all 32 bits.
     flags: u32,
     /// MOBA render-batch count.
     batches: usize,
     /// MOVT vertex count.
     vertices: usize,
-    /// MOPR portal-ref count (this group's slice, from its own MOGP header span).
+    /// MOPR portal-ref count, this group's slice from its own MOGP header.
     portal_refs: u16,
-    /// MOGI bounding box, WMO model space (WoW axes) — `None` if the root's MOGI table is shorter
-    /// than its declared group count (never observed, but not asserted away).
+    /// MOGI bounding box in model space; `None` if the MOGI table is shorter than the group count.
     bbox: Option<([f32; 3], [f32; 3])>,
 }
 
 impl GroupRow {
-    /// `{root}#{group}` for compact example rows.
     fn label(&self) -> String {
         format!("{}#{:03}", self.root_path, self.group_index)
     }
 
-    /// Bounding-box extent (max − min) per axis, or `?` if MOGI didn't carry one.
     fn bbox_str(&self) -> String {
         match self.bbox {
             Some((min, max)) => {
@@ -121,8 +62,7 @@ impl GroupRow {
     }
 }
 
-/// Per-bit tally: how many groups/roots set it, split by batch-less vs. batch-having, plus a
-/// bounded example list for the rare-bit report.
+/// Per-bit tally of groups and roots, batch-less against batch-having, with examples.
 #[derive(Default)]
 struct BitStat {
     groups: u32,
@@ -132,14 +72,12 @@ struct BitStat {
     examples: Vec<GroupRow>,
 }
 
-/// Normalize a chain path the way the MPQ hash compares them (matches `wmo_ownerless_pools`).
+/// A chain path normalised as the MPQ hash compares it.
 fn key(name: &str) -> String {
     name.replace('/', "\\").to_ascii_lowercase()
 }
 
-/// Bench a known-name label for a MOGP bit — filled in ONLY for bits benilla's own code already
-/// names as a flag test (verified 2026-09-01; see the module doc for what was checked and ruled
-/// out). Everything else prints blank: this census must not invent names the data alone can't back.
+/// A name only for the MOGP bits benilla's own code tests as flags; the rest print blank.
 fn known_name(bit: u32) -> &'static str {
     match bit {
         3 => "EXTERIOR (0x8)",
@@ -154,12 +92,8 @@ fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("no 1.12.1 install found (set $WOW_DATA)"))?;
     let chain = Chain::open(&data)?;
 
-    // Every ROOT `.wmo` the chain lists, across every mounted archive — a group file's stem ends
-    // `_NNN`, a root's does not (same heuristic as `wmo_ownerless_pools`). The listfile is not a
-    // provably complete index of every archive (`Chain::list`'s own doc), so a root reachable ONLY
-    // by name and absent from every listfile would be missed here; nothing in the corpus is known
-    // to do that, but the failure counts below exist so a gap like it would show up as a number
-    // rather than silence.
+    // Every root `.wmo` the chain lists (a group file's stem ends `_NNN`, a root's does not); a
+    // root absent from every listfile is missed.
     let roots: BTreeSet<String> = chain
         .list()?
         .into_iter()
@@ -219,10 +153,8 @@ fn main() -> anyhow::Result<()> {
                     continue;
                 }
             };
-            // Two independent reads of the same bytes, deliberately: `wmo_group_header` for the raw
-            // MOGP `flags`/MOPR span (the load-bearing 32 bits this census exists to histogram), and
-            // `benilla_wmo::parse_wmo` for MOBA/MOVT counts — the same split `wmo_group_submeshes`
-            // itself makes.
+            // `wmo_group_header` for the raw MOGP flags and MOPR span, `parse_wmo` for the MOBA and
+            // MOVT counts, the split `wmo_group_submeshes` makes.
             let Some(header) = wmo_group_header(&gbytes) else {
                 group_parse_fail += 1;
                 continue;
@@ -306,17 +238,10 @@ cross-tab below for which flag bit(s) the data implicates.",
         }
     }
 
-    // ==== which buildings own MANY exterior groups ================================================
-    //
-    // Not an antiportal question — a *consumer* one, and the reason it sits in this census rather
-    // than in a throwaway script. The reference draws a building's EXTERIOR groups only through the
-    // deferred portal windows the interior flood leaves behind, each group tested against its own
-    // window's sub-frustum (`0x6b3c73`–`0x6b3d6f`; benilla decision 1826).
-    // A building with ONE exterior group cannot show that law at work: a single whole-envelope shell
-    // has a box wide enough to intersect any window, so it draws from everywhere and looks identical
-    // either way — which is exactly why Stormwind (306 groups, one `0x8`) is the wrong subject to
-    // eyeball the behaviour on. The buildings below, whose shells are split into many groups, are
-    // where per-window culling is visible at all, and so where a retest belongs.
+    // ==== which buildings own many exterior groups ============================================
+    // The reference draws exterior groups only through the deferred portal windows the interior
+    // flood leaves, each against its own window's sub-frustum (`0x6b3c73`-`0x6b3d6f`); only a
+    // building whose shell is split into many groups shows that culling.
     println!("\n---- roots by EXTERIOR (0x8) group count, top {MAX_EXTERIOR_RANK} ----");
     let mut ranked: Vec<(&String, &u32)> = exterior_per_root.iter().collect();
     ranked.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
@@ -432,11 +357,7 @@ cross-tab below for which flag bit(s) the data implicates.",
     }
 
     // ==== cross-tab: which bit(s) does the batch-less set actually carry? =========================
-    // For every bit, how it splits across the batch-less/batch-having populations — the
-    // flag-agnostic and flag-based signals collide here. A bit set by (close to) ALL batch-less
-    // groups and by (close to) none of the batch-having ones is the data's own answer to "which bit
-    // means antiportal in 5875"; the reverse (never set on a batch-less group) rules a candidate out
-    // regardless of what later documentation calls it.
+    // A bit set by every batch-less group and rare among the rest would mark antiportals.
     let other_total = groups_scanned - batchless.len() as u32;
     println!(
         "\n---- cross-tab: bit occurrence, batch-less ({} groups) vs. batch-having ({} groups) ----",

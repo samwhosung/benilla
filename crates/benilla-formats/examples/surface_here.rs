@@ -1,28 +1,14 @@
-//! What surface the footstep chain resolves under a patch of world:
+//! The footstep surface the ADT leg resolves around a pin, as a top-down map of `TerrainType`s
+//! (north up, west left), and at the pin the whole chain to the sound kit. The client arbitrates
+//! this against a WMO probe and the nearer surface wins, so indoors this is the ground under the
+//! floor; `RUST_LOG=benilla_app::sound=debug` logs which leg answered in a live run. Output is
+//! Blizzard data: never commit it.
 //! `cargo run -p benilla-formats --example surface_here -- <map> <x> <y> [radius_yd] [class]`
-//! e.g. `surface_here Azeroth -5595.89 -529.48 24`.
-//!
-//! A footstep bug is reported as a *sound* ("I'm walking on snow indoors") but it is decided far
-//! upstream, by which surface the down-ray claims under the foot. This prints that claim as a
-//! top-down map — north up, west left — so the answer is a picture of the ground rather than an
-//! impression of the audio: per cell the `TerrainType` the chain lands on, and at the pin the full
-//! walk through to the `SoundEntries` kit that would actually play.
-//!
-//! **This is the ADT leg only** — deliberately. The client (and, since decision 1161, benilla)
-//! arbitrates this against a WMO probe and the nearer surface wins, so inside a building the live
-//! answer comes from the floor, not from here. What this map shows indoors is the ground *under*
-//! that floor: the counterfactual. That is what makes a wrong-surface report legible — B236's
-//! sequel was "snow indoors", and this printed 1681 of 1681 cells Snow beneath the Kharanos inn.
-//! To see which leg actually answered in a live run, use `RUST_LOG=benilla_app::sound=debug` and
-//! read the `footstep: wmo|adt terrain N` line.
-//!
-//! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
 
 use std::collections::HashMap;
 
-/// `TerrainType.SoundID` → its authored name and map glyph. The domain is closed and verified
-/// against build 5875 (`benilla_formats::footsteps` module docs): the eleven rows collapse to ten
-/// sound classes, `DustyGrass` sharing `Grass`'s.
+/// `TerrainType.SoundID` to its name and map glyph; the eleven shipped rows use ten sound classes,
+/// `DustyGrass` sharing `Grass`'s.
 fn class_glyph(sound_class: u32) -> (char, &'static str) {
     match sound_class {
         0 => ('.', "None"),
@@ -47,8 +33,7 @@ fn main() -> anyhow::Result<()> {
     let x: f32 = args.next().ok_or_else(usage)?.parse()?;
     let y: f32 = args.next().ok_or_else(usage)?.parse()?;
     let radius: f32 = args.next().map_or(Ok(20.0), |r| r.parse())?;
-    // 7 is the humanoid/character class (its ten rows are the `CharacterMediumLarge*` kits); 8 is
-    // the small-character class. Both reach it as ordinary data, never a code default.
+    // Class 7 is the character class (the `CharacterMediumLarge*` kits), 8 the small character.
     let class: u32 = args.next().map_or(Ok(7), |c| c.parse())?;
 
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
@@ -56,8 +41,7 @@ fn main() -> anyhow::Result<()> {
     let cat = benilla_formats::load_footstep_catalog(&mut chain)?;
     let tiles = benilla_formats::MapTiles::load(&mut chain, &map)?;
 
-    // One sample per cell of a square centred on the pin, north (+x) up and west (+y) left — the
-    // orientation the in-game map uses, so a spot on this grid is a spot on their screen.
+    // One sample per cell of a square on the pin, north (+x) up and west (+y) left, as the map.
     let cols = 41usize;
     let step = (radius * 2.0) / (cols - 1) as f32;
     let mut meshes: HashMap<(u32, u32), Option<benilla_formats::TileMesh>> = HashMap::new();
@@ -90,7 +74,7 @@ fn main() -> anyhow::Result<()> {
             *census.entry(terrain).or_default() += 1;
             let glyph = match terrain.and_then(|t| cat.sound_class_of(t)) {
                 Some(sc) => class_glyph(sc).0,
-                // No effect layer / unknown terrain — the client's −1 sentinel, a SILENT footfall.
+                // No effect layer or unknown terrain: the client's -1 sentinel, a silent footfall.
                 None => ' ',
             };
             line.push(glyph);
@@ -118,7 +102,7 @@ fn main() -> anyhow::Result<()> {
         println!("  {n:5}  {label}");
     }
 
-    // The pin itself, walked end to end — the line a bug report can be checked against.
+    // The pin itself, walked end to end.
     let effect = sample(&mut chain, &mut meshes, x, y);
     println!("\nat the pin exactly:");
     println!("  GroundEffectTexture: {effect:?}");

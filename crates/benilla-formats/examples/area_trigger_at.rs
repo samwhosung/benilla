@@ -1,23 +1,12 @@
-//! Where an area trigger actually **is**, and how to walk into it:
-//! `cargo run -p benilla-formats --example area_trigger_at -- <id|map> [id|map…]`
+//! Each area trigger's volume, with a `.go` spot outside it and the facing that walks you in.
+//! `cargo run -p benilla-formats --example area_trigger_at -- <id|map:N>...`
 //!
-//! The client's half of every portal is pure geometry (`crate::area_trigger`'s law), and that
-//! geometry lives only in `AreaTrigger.dbc` — the server's `areatrigger_teleport` row names the
-//! *destination* but never the volume you have to cross to reach it. So a probe that wants to
-//! reproduce a portal the way a player meets it — **walking in**, which the module's own warning
-//! says is not the same as a `.go` that lands inside — has no way to aim without this.
-//!
-//! Prints each row's volume (sphere radius, or the oriented box) plus a ready-made `.go` for a spot
-//! `APPROACH` yards **outside** it on the box's own axis, and the facing that then walks you
-//! through. An argument about whether a portal fired is otherwise unfalsifiable: landing inside the
-//! volume races the server's re-check and is silently ignored about one time in six (measured, see
-//! `crate::area_trigger`).
-//!
-//! Output is Blizzard-derived; pipe it to the scratchpad, never into the repo.
+//! The volume lives only in `AreaTrigger.dbc`; the server's teleport row holds the destination. A
+//! `.go` that lands inside races the server's re-check against its stored position and is
+//! sometimes ignored, so a portal is tested by walking in.
+//! Output is Blizzard data: never commit it.
 
-/// How far outside the volume to park the approach `.go`, in yards. Far enough that the trigger is
-/// unambiguously *not* yet entered (so the walk-in is a real crossing), close enough that a few
-/// seconds of held-forward covers it.
+/// Yards outside the volume for the approach spot.
 const APPROACH: f32 = 12.0;
 
 fn main() -> anyhow::Result<()> {
@@ -47,7 +36,7 @@ fn main() -> anyhow::Result<()> {
                     "id {:5}  map {:3}  SPHERE r={:.1} at ({x:.2}, {y:.2}, {z:.2})",
                     r.id, r.map_id, r.radius
                 );
-                // A sphere has no authored axis; approach along -Y, the arbitrary but stated choice.
+                // A sphere has no authored axis: approach along -Y, an arbitrary choice.
                 let sy = y + r.radius + APPROACH;
                 println!(
                     "        walk in:  .go xyz {x:.2} {sy:.2} {z:.2} {}   then face -Y (yaw {:.3}) and hold forward",

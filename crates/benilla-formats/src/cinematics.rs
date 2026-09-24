@@ -1,77 +1,18 @@
-//! `CinematicSequences.dbc` + `CinematicCamera.dbc` — the in-engine cinematic fly-bys, and the
+//! `CinematicSequences.dbc` and `CinematicCamera.dbc`: the in-engine cinematic fly-bys and the
 //! world-space camera path each one resolves to.
 //!
-//! A cinematic in 1.12 is **not** a movie file. `SMSG_TRIGGER_CINEMATIC` carries a
-//! `CinematicSequences.dbc` id; the row names up to eight `CinematicCamera.dbc` cameras; each of
-//! those names a `Cameras\*.m2` whose single [`M2Camera`](benilla_m2::M2Camera) record *is* the
-//! shot — an eye path, a look-at path and a roll, keyed over a timeline in the model's own local
-//! frame — plus the world origin and facing to plant that frame at. The client flies its view
-//! along it and the world renders normally underneath. (The pre-rendered `.avi` under
-//! `Data\<locale>\Interface\Cinematics` is the *other* thing, the opening movie; it is not this.)
+//! A cinematic is not a movie. `SMSG_TRIGGER_CINEMATIC` carries a sequence id, the sequence names
+//! up to eight camera rows, and each row names a `Cameras\*.m2` whose one
+//! [`M2Camera`](benilla_m2::M2Camera) record is the shot: eye, look-at and roll tracks in the
+//! model's local frame, planted at the row's world origin and facing. The world renders normally
+//! underneath. A shot ranges far from its origin (the Tauren intro starts 1741 yd out), and the
+//! server re-anchors object visibility to the flying camera while one runs (vmangos
+//! `Player::UpdateCinematic`), so the world streams from the camera, not the avatar.
 //!
-//! **The shipped tables, dumped 2026-08-29 (VERIFIED — the bytes, not a wiki):**
-//! `CinematicSequences.dbc` is `10 × 10 fields × 40 B`: `ID · soundId · camera[8]`. Every shipped
-//! row uses exactly **one** camera and authors `soundId = 0`. `CinematicCamera.dbc` is
-//! `10 × 7 × 28 B`: `ID · model (string) · soundId · originX · originY · originZ · originFacing`.
-//! The model column ships `.mdx`; the archive file is `.m2` ([`camera_model_path`]). The ten rows
-//! are the eight race intros plus `PalantirOfAzora` and `Scry_cam`. Facing is **radians** — the
-//! shipped values include `3.14159` and `4.71239` (π and 3π/2) to five decimals, which no degree
-//! table would.
-//!
-//! **The world transform** — `world = origin + Rz(+facing)·local`, `z` straight through — is the
-//! one non-obvious step, and it is now settled twice over.
-//!
-//! It was first checked against an independent oracle rather than assumed: vmangos walks its own
-//! server-side copy of these paths (`Player::UpdateCinematic`) off a hand-built
-//! `cinematic_waypoints` table of sampled world positions, and our evaluated path lands on those
-//! samples (tens of yards over ~600-yard offsets, on a table whose z column is ground-level, not
-//! camera-level). The three sign/axis alternatives miss by 700–1800 yards. See
-//! [`CinematicPath::sample`].
-//!
-//! The binary agrees, and an emulated run of its own bytes confirms it. The client applies affines
-//! as a **row vector on the left** (`out = in·M`, `0x7bca80`), and the stored 3×3 (`0x50c870`) is
-//! `[[cos,sin,0],[−sin,cos,0],[0,0,1]]`. Read as a diagram acting on a *column* vector that is
-//! `Rz(−facing)` — which is what a matrix picture invites. The client never applies it that way.
-//! The bytes and the oracle never actually disagreed.
-//!
-//! **The shipped corpus, read out of the ten `Cameras\*.m2` files** (`fov` radians, `d₀` = how far
-//! the shot's first eye position sits from its own origin, horizontally):
-//!
-//! | cam | model | fov | length | pos keys | roll | d₀ |
-//! |---|---|---|---|---|---|---|
-//! | 1 | PalantirOfAzora | 0.7854 | 14.9 s | 10 | const 0 | 205 yd |
-//! | 2 | FlybyUndead | **1.5708** | 102.0 s | 22 | 18 keys | 523 yd |
-//! | 122 | FlybyNightElf | 0.7854 | 102.0 s | 32 | 19 keys | 813 yd |
-//! | 142 | FlyByHuman | 0.7854 | 87.5 s | 20 | const 2π | 663 yd |
-//! | 162 | FlyByGnome | 0.7854 | 76.7 s | 27 | const 0 | 705 yd |
-//! | 182 | FlyByTroll | 0.7854 | 57.8 s | 21 | 12 keys | 39 yd |
-//! | 202 | FlyByTauren | 0.7854 | 70.3 s | 19 | 7 keys | 1741 yd |
-//! | 224 | Scry_cam | 0.7854 | 3.3 s | 1 | const 3π | 0 yd |
-//! | 234 | FlyByDwarf | 0.7854 | 59.6 s | 28 | const 2π | 652 yd |
-//! | 235 | FlybyOrc | 0.7854 | 70.2 s | 22 | 14 keys | 1100 yd |
-//!
-//! Three things there are load-bearing and none of them are guessable. **The Undead intro's FOV is
-//! 90°, not 45°** — a client that hard-coded the other nine's value would render that one shot at
-//! half the intended width. **Roll is authored around multiples of 2π rather than around 0**
-//! (`FlyByDwarf` holds a constant `6.2832`; `Scry_cam` holds `3π`), so it is an *angle to apply*,
-//! and a "roll is zero, skip it" shortcut happens to be right only by the identity `2π ≡ 0`; five
-//! of the ten genuinely animate it. And the shots **start far from their own origin** — a Tauren
-//! 1741 yards out — which is why the server re-anchors object visibility to the flying camera
-//! while one runs, and why the client has to stream the world from the *camera*
-//! and not the avatar for the duration.
-//!
-//! **The optics in this table are data, not the shot's framing**. A 24-site census
-//! settles it: the M2 camera
-//! record's `fov`, `nearClip` and `farClip` are written at model load and read only by `0x7ac640`,
-//! which is reachable solely from the portrait and `<Model>` frame paths. **On the cinematic path
-//! nothing reads any of the three.** A fly-by is rendered through the *world camera's own* optics,
-//! re-stamped every frame.
-//!
-//! That dissolves the puzzle this note used to record: the authored clips are `0.22222` / `27.7778`
-//! (8/36 and 1000/36, identical on every shipped shot), and a 27.8-yard far plane would render the
-//! dwarf intro's mountains as empty sky. They are not world clips because they are not clips at
-//! all here — which is what two floats nobody consumes look like. They stay parsed because they
-//! are genuinely in the record and the portrait path does read them.
+//! The plant is `world = origin + Rz(+facing)·local`, z unchanged. The reference applies affines
+//! to a row vector on the left (`out = in·M`, `0x7bca80`), so its stored 3×3
+//! `[[cos,sin,0],[−sin,cos,0],[0,0,1]]` (`0x50c870`) is `Rz(+facing)`, though it reads as
+//! `Rz(−facing)` on a column vector.
 
 use std::collections::HashMap;
 
@@ -88,37 +29,32 @@ const CAMERAS: &str = "DBFilesClient\\CinematicCamera.dbc";
 /// How many camera slots a `CinematicSequences.dbc` row carries (fields 2..=9).
 pub const SEQUENCE_CAMERAS: usize = 8;
 
-/// One `CinematicSequences.dbc` row — what a `SMSG_TRIGGER_CINEMATIC` id resolves to.
+/// One `CinematicSequences.dbc` row, what a `SMSG_TRIGGER_CINEMATIC` id resolves to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CinematicSequence {
     pub id: u32,
-    /// `soundId` (field 1). **Zero on every shipped row** — the sound a fly-by plays comes from
-    /// its *camera* row instead ([`CinematicCameraRow::sound_id`]).
+    /// `soundId` (field 1): 0 on every shipped row; a fly-by's sound is its camera row's.
     pub sound_id: u32,
     /// The camera ids to play, in order, trailing zeros dropped. Every shipped row holds one.
     pub cameras: Vec<u32>,
 }
 
-/// One `CinematicCamera.dbc` row — a shot: which path model, where to plant it, and the sound.
+/// One `CinematicCamera.dbc` row, a shot: its path model, where to plant it, and its sound.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CinematicCameraRow {
     pub id: u32,
-    /// The path model as the table ships it (`Cameras\FlyByDwarf.mdx`). Use
-    /// [`camera_model_path`] for the archive path.
+    /// The path model as the table ships it (`.mdx`); [`camera_model_path`] gives the archive path.
     pub model: String,
-    /// `SoundEntries.dbc` id for the shot's audio, `0` for none (`PalantirOfAzora` and `Scry_cam`
-    /// are the two silent rows).
+    /// `SoundEntries.dbc` id for the shot's audio, 0 for none.
     pub sound_id: u32,
     /// Where the path's local frame is planted, raw WoW world coordinates.
     pub origin: [f32; 3],
-    /// The local frame's yaw about `+Z`, **radians**.
+    /// The local frame's yaw about `+Z`, in radians.
     pub origin_facing: f32,
 }
 
-/// Both cinematic tables, keyed by row id.
-///
-/// `Default` is the **empty** catalog — what "the DBCs failed to load" already means to a caller
-/// (every lookup misses, and a trigger it cannot resolve is a trigger it skips).
+/// Both cinematic tables, keyed by row id. `Default` is the empty catalog: every lookup misses,
+/// so a trigger it cannot resolve is skipped.
 #[derive(Default)]
 pub struct CinematicCatalog {
     sequences: HashMap<u32, CinematicSequence>,
@@ -154,8 +90,7 @@ impl CinematicCatalog {
     }
 }
 
-/// The archive path for a camera row's model: the table's `.mdx` reference mapped to the `.m2` the
-/// MPQ actually holds (the same normalisation every other model reference in the client takes).
+/// The archive path for a camera row's model: the table ships `.mdx`, the MPQ holds `.m2`.
 pub fn camera_model_path(model: &str) -> String {
     let stem = model.rsplit_once('.').map_or(model, |(stem, ext)| {
         match ext.to_ascii_lowercase().as_str() {
@@ -201,8 +136,7 @@ pub fn load_cinematics(chain: &mut Chain) -> Result<CinematicCatalog> {
     let mut sequences = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
-        // Trailing zeros are "no camera", not camera 0 — the shipped rows are one camera then
-        // seven zeros. Stop at the first, so a hypothetical gap can't smuggle a zero in.
+        // A zero slot is "no camera", not camera 0; the list stops at the first one.
         let cameras = (0..SEQUENCE_CAMERAS)
             .map_while(|i| u32_at(r, 2 + i).filter(|&c| c != 0))
             .collect();
@@ -242,13 +176,13 @@ pub fn load_cinematics(chain: &mut Chain) -> Result<CinematicCatalog> {
     Ok(CinematicCatalog { sequences, cameras })
 }
 
-/// One instant of a cinematic: where the view is, what it looks at, and how it is banked — all in
-/// **raw WoW world coordinates** (X north, Y west, Z up), the convention this crate keeps.
+/// One instant of a cinematic: eye, look-at target and roll, in raw WoW world coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CinematicView {
     pub eye: [f32; 3],
     pub target: [f32; 3],
-    /// Roll about the view axis, radians. The authored sign, unconverted.
+    /// Roll about the view axis in radians, the authored sign unconverted: an angle to apply, never
+    /// tested for 0, as shots hold values such as 2π (`FlyByDwarf`) and 3π (`Scry_cam`).
     pub roll: f32,
 }
 
@@ -256,35 +190,19 @@ pub struct CinematicView {
 pub struct CinematicPath {
     /// The camera row this was built from.
     pub camera_id: u32,
-    /// The row's `SoundEntries.dbc` narration id, `0` for a silent shot — carried here so a
-    /// consumer that has the shot has everything the shot plays.
+    /// The row's `SoundEntries.dbc` narration id, 0 for a silent shot.
     pub sound_id: u32,
-    /// The authored field of view, radians — `0.7854` (45°) on fifteen of the sixteen shipped
-    /// shots and `1.5708` (90°) on the Undead intro.
-    ///
-    /// **The reference reads this from nothing on the cinematic path** (a 24-site census: the M2
-    /// camera's fov and the two clips are written at model load and read only by `0x7ac640`, which
-    /// is reachable
-    /// solely from the portrait and `<Model>` frame paths). A fly-by is rendered through the
-    /// **world camera's own** optics, re-stamped every frame. So this is a real field of the
-    /// record, and it is not what a fly-by is framed with — see decision 1711 for what benilla did
-    /// with it before that was known.
+    /// The authored field of view in radians: 45° on every shipped shot but the Undead intro's 90°.
+    /// Not the fly-by's framing: the reference reads the record's optics only in `0x7ac640`, on the
+    /// portrait and `<Model>` paths, and flies through the world camera's own, set every frame.
     pub fov: f32,
-    /// The authored near clip, radians-free yards — read by nothing on this path, like [`Self::fov`].
-    ///
-    /// It is carried because it is *there*, and because its value is the tell: every shipped shot
-    /// authors `8/36` or `1000/36` — `0.2222` and `27.7778` yards. As world clips those are
-    /// nonsense (a 27.8-yard far plane renders the dwarf intro's mountains as empty sky), which is
-    /// exactly what you would expect of two floats nothing consumes.
+    /// The authored near clip (8/36 on every shipped shot), unread on this path like [`Self::fov`].
     pub near_clip: f32,
-    /// The authored far clip — see [`Self::near_clip`].
+    /// The authored far clip (1000/36 on every shipped shot), unread on this path.
     pub far_clip: f32,
-    /// How long the shot runs, milliseconds — the *width* of the sequence band the tracks are
-    /// keyed inside (`end − start`), not its end. See [`Self::sample`] for why the two differ.
+    /// How long the shot runs in ms: the width of its sequence band (`end − start`), not its end.
     pub duration_ms: u32,
-    /// Where that band begins on the model's global timeline; added to the sample time so a shot
-    /// whose first key is not at zero (`FlybyNightElf`, `Scry_cam`) starts on its first key
-    /// instead of holding it.
+    /// The band's start on the model's global timeline, added to every sample time.
     band_start: u32,
     origin: [f32; 3],
     facing_sin_cos: (f32, f32),
@@ -292,8 +210,7 @@ pub struct CinematicPath {
 }
 
 impl CinematicPath {
-    /// Build a shot from its camera row: read the `.m2` off the chain, take its camera record, and
-    /// plant it at the row's origin/facing.
+    /// Build a shot from its camera row: the `.m2`'s camera record, planted at the row's origin.
     pub fn load(chain: &mut Chain, row: &CinematicCameraRow) -> Result<Self> {
         let path = camera_model_path(&row.model);
         let bytes = chain
@@ -304,22 +221,14 @@ impl CinematicPath {
 
     /// The same, from bytes already in hand (the test/tooling seam).
     pub fn from_m2_bytes(bytes: &[u8], row: &CinematicCameraRow) -> Result<Self> {
-        // The camera array alone, not a whole model parse: a `Cameras\*.m2` carries no geometry to
-        // parse and the shot is entirely in this one record.
+        // The camera array alone: a `Cameras\*.m2` has no geometry, and the shot is this record.
         let camera = benilla_m2::parse_cameras(bytes)
             .into_iter()
             .next()
             .ok_or_else(|| anyhow::anyhow!("model carries no camera record"))?;
-        // The shot's length is the model's own sequence band (stride 0x44 records at header
-        // 0x1c/0x20, band `[start, end]` at +0x04/+0x08 — the same walk the emitter-timing bake
-        // uses). The reference arms this as an ordinary M2 animation on sequence 0, so the shot
-        // runs the band: it *plays* for `end − start` and its tracks are keyed at absolute
-        // global-timeline stamps inside `[start, end]`. Eight of the ten shipped cameras band at
-        // `[0, end]` and the distinction is invisible on them — but `FlybyNightElf` bands at
-        // `[333, 102333]` and `Scry_cam` at `[33, 3333]`, and reading `end` as the duration
-        // played those two 333 ms / 33 ms too long with the opening frames frozen on the first
-        // key (which is what sampling `t = 0` against a track that starts at 333 returns).
-        // The fallback, for a file that authors no sequence at all, is the last key.
+        // The reference plays the shot as an ordinary M2 animation on sequence 0: it runs for
+        // `end − start`, its keys stamped on the global timeline inside `[start, end]`. A file
+        // with no sequence falls back to its last key.
         let (band_start, band_end) = sequence_band(bytes)
             .or_else(|| {
                 [
@@ -347,28 +256,8 @@ impl CinematicPath {
         })
     }
 
-    /// Sample the shot at `ms` from its start, **end-clamped** at both ends.
-    ///
-    /// `ms` is measured from the *shot's* start; the tracks are keyed on the model's global
-    /// timeline, so it is offset by [`Self::band_start`] before it reaches them. On eight of the
-    /// ten shipped cameras that offset is zero and the two are the same number; on
-    /// `FlybyNightElf` (band `[333, 102333]`) and `Scry_cam` (`[33, 3333]`) it is the difference
-    /// between opening on the authored first key and holding it for a third of a second first.
-    ///
-    /// Two steps, in this order. The reference's publish pass composes each track against its base
-    /// (`eye = position_base + positions(t)`, `target = target_position_base + target(t)`); then
-    /// the local frame is planted in the world by the camera row's origin and facing:
-    ///
-    /// ```text
-    /// world.x = origin.x + local.x·cos(facing) − local.y·sin(facing)
-    /// world.y = origin.y + local.x·sin(facing) + local.y·cos(facing)
-    /// world.z = origin.z + local.z
-    /// ```
-    ///
-    /// i.e. a plain yaw about `+Z` by the row's facing, then a translation — no scale, no
-    /// handedness flip. Checked against vmangos's independently sampled `cinematic_waypoints` for
-    /// the dwarf (41) and human (81) intros; the sign-flipped and axis-swapped alternatives are
-    /// off by an order of magnitude (module doc).
+    /// Sample the shot `ms` after its start, clamped at both ends: each track composed against its
+    /// base, then planted in the world by the row's origin and facing, with no scale or flip.
     pub fn sample(&self, ms: u32) -> CinematicView {
         let ms = self.band_start.saturating_add(ms);
         let eye = self.to_world(sample_against(
@@ -398,22 +287,15 @@ impl CinematicPath {
     }
 }
 
-/// A camera track sampled and composed against its base — the reference's publish form.
+/// A camera track sampled and composed against its base, the reference's publish form.
 fn sample_against(track: &M2Track<M2SplineKey<[f32; 3]>>, base: [f32; 3], ms: u32) -> [f32; 3] {
     let d = track.sample_ms(ms).unwrap_or([0.0; 3]);
     std::array::from_fn(|i| base[i] + d[i])
 }
 
-/// The model's **first** sequence band, `(start, end)` in global-timeline milliseconds (header
-/// `0x1c` count / `0x20` offset, entry stride `0x44`, band at `+0x04`/`+0x08`). `None` for a model
-/// with no sequences.
-///
-/// **`start` is not always zero, and the shipped corpus is its own proof of these offsets.** Eight
-/// of the ten cameras band at `[0, end]`, but `FlybyNightElf` bands at `[333, 102333]` and
-/// `Scry_cam` at `[33, 3333]` — and in both files the band's `start` is *exactly* the first
-/// timestamp on the position and target tracks, while `end` is exactly the last. Two fields that
-/// land on the first and last key of every file in the corpus are the first and last key, which
-/// is why this is read rather than assumed to be a duration.
+/// The model's first sequence band, `(start, end)` in global-timeline ms: count at header `0x1c`,
+/// offset at `0x20`, entries `0x44` apart, band at `+0x04`/`+0x08`. `start` is not always 0
+/// (`FlybyNightElf` bands at `[333, 102333]`).
 fn sequence_band(b: &[u8]) -> Option<(u32, u32)> {
     let le_u32 = |o: usize| -> Option<u32> {
         b.get(o..o + 4)
@@ -430,9 +312,8 @@ fn sequence_band(b: &[u8]) -> Option<(u32, u32)> {
 mod tests {
     use super::*;
 
-    /// The eight race intros, by `ChrRaces.dbc` `CinematicSequence` (field 16) — the ids a first
-    /// login actually sends (VERIFIED in the shipped `ChrRaces.dbc`, and matching vmangos's
-    /// `SendCinematicStart(rEntry->CinematicSequence)`).
+    /// The eight race intros, `ChrRaces.dbc` `CinematicSequence` (field 16), which vmangos sends
+    /// on a first login (`CharacterHandler.cpp:581`).
     const RACE_INTROS: [u32; 8] = [2, 21, 41, 61, 81, 101, 121, 141];
 
     #[test]
@@ -443,8 +324,7 @@ mod tests {
         );
         assert_eq!(camera_model_path("Cameras\\X.MDX"), "Cameras\\X.m2");
         assert_eq!(camera_model_path("Cameras\\X.m2"), "Cameras\\X.m2");
-        // A path with no extension at all still names an .m2, and a dot inside a directory name
-        // is not an extension.
+        // A path with no extension still names an `.m2`.
         assert_eq!(camera_model_path("Cameras\\X"), "Cameras\\X.m2");
     }
 
@@ -456,14 +336,13 @@ mod tests {
         assert_eq!(cat.sequence_count(), 10);
         assert_eq!(cat.camera_count(), 10);
 
-        // Every shipped sequence names exactly one camera and carries no sound of its own.
         for id in RACE_INTROS {
             let seq = cat.sequence(id).unwrap_or_else(|| panic!("sequence {id}"));
             assert_eq!(seq.cameras.len(), 1, "sequence {id} camera count");
             assert_eq!(seq.sound_id, 0, "sequence {id} sound");
         }
 
-        // The dwarf intro, end to end — the row decision 0196 captured live.
+        // The dwarf intro's shipped row, end to end.
         let dwarf = cat.shots(41);
         assert_eq!(dwarf.len(), 1);
         let cam = dwarf[0];
@@ -492,18 +371,10 @@ mod tests {
                 path.camera.positions.keys.len() >= 10,
                 "sequence {id} is richly keyed"
             );
-            // Cubic Bézier on both vector tracks — the case the four-way interp dispatch exists
-            // for, and the one a step/linear-only sampler would silently mangle.
+            // Interp 2 is cubic Bézier, on both vector tracks.
             assert_eq!(path.camera.positions.interp, 2, "sequence {id} position");
             assert_eq!(path.camera.target.interp, 2, "sequence {id} target");
-            // **The end condition, and the proof of the band offsets.** The authored sequence
-            // band brackets both vector tracks exactly: its `start` is the first key's timestamp
-            // and its `end` is the last one's, on every shipped fly-by. Two header fields that
-            // land on the first and last key of all eight files are the first and last key — and
-            // that is what licenses reading the playback length as `end − start` rather than as
-            // `end`, which is the bug this assertion now pins (`FlybyNightElf` bands at
-            // `[333, 102333]`, so the two readings differ by a third of a second and by whether
-            // the shot opens on its first key or holds it).
+            // The band brackets both tracks exactly: `start` is the first key, `end` the last.
             for (what, track) in [
                 ("position", &path.camera.positions),
                 ("target", &path.camera.target),
@@ -519,12 +390,7 @@ mod tests {
                     "sequence {id} {what} track ends on the band"
                 );
             }
-            // The clips are uniform across the corpus; the FOV is NOT — the Undead intro is 90°
-            // where the rest are 45°. Kept as a **data** assertion, and no longer as a reason to
-            // read it per shot: decision 1711 established that the reference's cinematic path
-            // reads none of these three, so the split is a fact about the files and not about how
-            // any shot is framed. It stays because a parser that silently started returning zeros
-            // for all three would otherwise pass every other test in this file.
+            // Data only: uniform clips, and a 90° fov on the Undead intro against 45° elsewhere.
             assert!((path.near_clip - 8.0 / 36.0).abs() < 1e-6);
             assert!((path.far_clip - 1000.0 / 36.0).abs() < 1e-4);
             let want_fov = if id == 2 {
@@ -540,14 +406,8 @@ mod tests {
         }
     }
 
-    /// The dwarf intro's world path, pinned at three instants.
-    ///
-    /// These numbers are the **transform's** golden: they were derived independently (a
-    /// hand-written evaluator over the raw bytes) and then cross-checked, time-independently,
-    /// against vmangos's `cinematic_waypoints` samples for this cinematic — our arc passes within
-    /// 59.6 yd horizontally of every one of the server's six samples (mean 35.5). The three
-    /// alternative conventions do far worse on the same measure: `Rz(−facing)` 436.8 yd,
-    /// axis-swapped 334.0, no rotation at all 859.9. So a sign flip here fails this test loudly.
+    /// The golden points come from a separate evaluator over the raw bytes; the arc passes within
+    /// 59.6 yd of all six of vmangos's `cinematic_waypoints` samples for this intro.
     #[test]
     fn real_dwarf_intro_flies_the_authored_arc() {
         let data = crate::wow_data_or_skip!();
@@ -575,11 +435,9 @@ mod tests {
         near(mid.target, [-5715.481, -427.434, 450.394], "mid target");
         let end = path.sample(path.duration_ms);
         near(end.eye, [-6246.921, 333.773, 384.187], "end eye");
-        // Past the end the path holds its last key — it does not wrap to the start.
+        // Past the end the path holds its last key; it does not wrap.
         assert_eq!(path.sample(u32::MAX).eye, end.eye);
-        // Roll here is a single key holding **2π**, not 0 — the authored angles sit around whole
-        // turns (`Scry_cam` holds 3π), so roll is applied as an angle and only *happens* to be an
-        // identity on this shot.
+        // One roll key, holding 2π rather than 0.
         assert!(
             (start.roll - std::f32::consts::TAU).abs() < 1e-4,
             "{}",
@@ -588,9 +446,6 @@ mod tests {
         assert_eq!(mid.roll, start.roll, "a single-key roll track is constant");
     }
 
-    /// The shots range far from their own origin — the reason the server re-anchors object
-    /// visibility to the flying camera while a cinematic runs, and the reason
-    /// benilla has to stream the world from the camera rather than the avatar for the duration.
     #[test]
     fn real_flyby_shots_range_far_from_their_origin() {
         let data = crate::wow_data_or_skip!();
@@ -599,8 +454,7 @@ mod tests {
         for id in RACE_INTROS {
             let row = cat.shots(id)[0].clone();
             let path = CinematicPath::load(&mut chain, &row).expect("path");
-            // The furthest the eye gets from the body's neighbourhood over the whole shot. The
-            // troll intro *starts* only 39 yd out, so this is the reach, not the first frame.
+            // The reach over the whole shot, not the first frame: the troll intro starts 39 yd out.
             let reach = (0..=path.duration_ms)
                 .step_by(500)
                 .map(|ms| {

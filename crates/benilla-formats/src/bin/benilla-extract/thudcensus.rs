@@ -1,29 +1,14 @@
-//! `thudcensus`: the whole-table view of the **death thud** — the body-fall sound a corpse makes
-//! as it lands (`$DTH` → `0x6236e0`), the sibling of the same event's camera shake.
-//!
-//! Two halves, because the report it exists for ("a big corpse hits the ground silently") has two
-//! possible causes and they look identical in game:
-//!
-//! 1. **The table** — the `DeathThudLookups.dbc` matrix in full, `SizeClass × TerrainTypeSoundID`
-//!    → the land and water `SoundEntries` kits, named. An empty cell here is *authored* silence
-//!    (Sand and Soggy have no water column at all), and telling that apart from a bug is the
-//!    whole point of printing the grid rather than the rows.
-//! 2. **The population** — which creature M2s actually key a `$DTH` at all, on which sequences,
-//!    and what size class each resolves to. A model that keys none is silent in the reference
-//!    too; a model that keys one and still sounds wrong is a runtime question, not a data one.
-//!
-//! The cross-check that validates the column map: every live `DeathThudLookups` sound id must
-//! land on a real `SoundEntries` row, every terrain axis value on a real `TerrainTypeSounds` row,
-//! and every model's `SizeClass` inside `0..=4` — a shifted field would scatter across the id
-//! space and hit holes, exactly as `shakecensus` checks fields 11/12.
+//! `thudcensus`: the death thud a corpse makes as it lands (`$DTH`, `0x6236e0`): the full
+//! `DeathThudLookups.dbc` grid, `SizeClass × TerrainTypeSoundID` to land and water `SoundEntries`
+//! kits, and the creature models that key a `$DTH`. An empty cell is authored silence (Sand and
+//! Soggy have no water column), as is a model with no `$DTH`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use benilla_formats::Chain;
 
-/// A model path reduced to a comparison key: lowercase, back-slashed, extension dropped. The DBCs
-/// name models `.mdx`; the archives hold them as `.m2`.
+/// A model path's comparison key: DBCs name models `.mdx`, the archives hold `.m2`.
 fn mdx_key(path: &str) -> String {
     let p = path.to_ascii_lowercase().replace('/', "\\");
     match p.rsplit_once('.') {
@@ -32,8 +17,7 @@ fn mdx_key(path: &str) -> String {
     }
 }
 
-/// The `SizeClass` names the shipped kits give themselves (`DeathThudSmallDirt` …
-/// `DeathThudColossalWood`).
+/// The `SizeClass` names the kits carry, `DeathThudSmallDirt` to `DeathThudColossalWood`.
 const SIZE_NAMES: [&str; 5] = ["Small", "Medium", "Large", "Giant", "Colossal"];
 
 fn size_name(class: i32) -> String {
@@ -50,8 +34,7 @@ pub fn thudcensus(chain: &mut Chain) -> Result<()> {
     let creatures = benilla_formats::load_creature_catalog(chain)?;
 
     // ── 1 · the table ────────────────────────────────────────────────────────────────────────
-    // The terrain axis, with the TerrainType rows that reach each id — a terrain sound nothing
-    // names is unreachable however well-populated its column is.
+    // The terrain axis with the TerrainType rows naming each id; an unnamed sound is unreachable.
     let mut terrain_names: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for terrain in 0..64 {
         if let Some(sound) = steps.sound_class_of(terrain) {
@@ -104,9 +87,7 @@ pub fn thudcensus(chain: &mut Chain) -> Result<()> {
     }
 
     // ── 2 · the population ───────────────────────────────────────────────────────────────────
-    // Which creature models key a `$DTH`, and the size class(es) the displays that reach each one
-    // resolve to. A model whose displays disagree is normal — 2 971 displays override their
-    // model's column — and the census prints the whole set so a mis-sized thud is visible.
+    // 2971 displays override their model's size class, so each model prints the whole set.
     let mut resolved: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
     for (display, model) in creatures.display_models() {
         if let Some(class) = creatures.size_class(display) {
@@ -204,16 +185,10 @@ pub fn thudcensus(chain: &mut Chain) -> Result<()> {
         off_axis.len()
     );
 
-    // ── 3 · where a corpse is SILENT ─────────────────────────────────────────────────────────
-    // The asymmetry the table half implies and only this sweep sizes. Both lookups are keyed on
-    // `TerrainType.SoundID`, and `TerrainType 10 "None"` — the unauthored default a WMO surface
-    // takes when its `MOMT+0x20` says nothing — has `SoundID = 0`. `FootstepTerrainLookup` has a
-    // **row at terrain sound 0** for 17 footstep classes; `DeathThudLookups` has **none at all**.
-    // So the same floor that creaks underfoot swallows the body that lands on it, and that is
-    // authored data in both directions, not a gap on either side.
-    //
-    // What this section measures is how much of the shipped building stock that covers, because
-    // "a corpse landed silently indoors" is a *correct* observation that looks exactly like a bug.
+    // ── 3 · where a corpse is silent ─────────────────────────────────────────────────────────
+    // Both lookups key on `TerrainType.SoundID`, and TerrainType 10 "None", the default of a WMO
+    // surface whose `MOMT+0x20` is unset, has `SoundID` 0. `FootstepTerrainLookup` has rows there
+    // for 17 footstep classes and `DeathThudLookups` none, so a corpse on such a floor is silent.
     let ftl_at_zero: Vec<u32> = (0..256)
         .filter(|c| steps.resolve_terrain(*c, 10).is_some())
         .collect();
@@ -244,9 +219,7 @@ pub fn thudcensus(chain: &mut Chain) -> Result<()> {
         for ground_type in root.material_ground_types() {
             materials += 1;
             *by_terrain.entry(ground_type).or_default() += 1;
-            // A material thuds iff its terrain id reaches a nonzero TerrainTypeSounds class that
-            // the thud table has a row for. Size class is irrelevant to *whether* — every class
-            // 0..=4 is populated on the same terrain axis.
+            // Size class 0 stands for all: every class 0..=4 has rows on the same terrain axis.
             if steps
                 .sound_class_of(ground_type)
                 .is_some_and(|ts| thuds.resolve(0, ts).is_some())
@@ -284,8 +257,7 @@ pub fn thudcensus(chain: &mut Chain) -> Result<()> {
         "\n{silent_roots} of {wmo_roots} WMO roots have NO surface that can thud; {} do",
         thudding.len()
     );
-    // All of them, not a head: the question this list answers is "does THIS building thud", and a
-    // truncated list cannot answer it. 121 lines is a census, not a flood.
+    // Untruncated: the list answers whether a given building thuds.
     for p in &thudding {
         println!("  thuds somewhere: {p}");
     }

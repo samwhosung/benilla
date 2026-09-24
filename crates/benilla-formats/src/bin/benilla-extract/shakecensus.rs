@@ -1,30 +1,7 @@
-//! `shakecensus`: the whole-table view of the **camera-shake** system — the
-//! 24 shipped `CameraShakes.dbc` presets, and everything that names one: the creature models
-//! (footstep + death thud), and the `SpellEffectCameraShakes.dbc` groups the spell side reaches
-//! them through.
-//!
-//! The scope instrument for B298 ("walking past an Ancient Protector shakes no screen"). It
-//! answers, from the shipped data rather than from expectation, the two questions that turn that
-//! one report into a system: *which* creatures are affected (not just the Ancients — every kodo,
-//! giant, titan and dragon in the game), and whether `CreatureModelData` fields 11/12 really are
-//! `CameraShakes` keys — because if they are, every live value must land on a real row of a
-//! 24-row table, and the amplitudes must rank by mass. A column map that were merely plausible
-//! would scatter across the id space and hit holes.
-//!
-//! Read the output beside the module doc of [`benilla_formats::CameraShakeCatalog`]: the creature
-//! rows and the spell rows are visibly different shapes (phase, duration, the direction triples),
-//! and that split is itself the check.
-//!
-//! The **group** half is the same instrument one indirection out: 58 of the 1772
-//! shipped `SpellVisualKit` rows name a group in field 14, every value must land on the 9-row
-//! table, and the census names the kits so a spell-side shake can be traced from a preset back to
-//! the kit that fires it. Then the `$SHK` sweep, whose **host** column is the one that matters —
-//! only a GameObject or DynamicObject decodes the tag, so a marker on a creature or spell-effect
-//! model, or on one nothing hosts at all, is authored-but-inert.
-//!
-//! The roll-up at the end is deliberately **two tiers**, because they answer different questions: a
-//! preset can be *named by a table* and still have nothing that fires it. Keeping them apart is
-//! what caught this census's own field-12 mistake (see the `$SHK` block).
+//! `shakecensus`: the 24 shipped `CameraShakes.dbc` presets and all that names one: creature
+//! models (`CreatureModelData` fields 11 and 12, footstep and death thud), the 9
+//! `SpellEffectCameraShakes.dbc` groups that `SpellVisualKit` field 14 names, and `$SHK` animation
+//! events. Every named id must land on a real row, or the column map is wrong.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,8 +15,7 @@ struct Users {
     death_thud: Vec<String>,
 }
 
-/// A model path reduced to a comparison key: lowercase, back-slashed, extension dropped. The DBCs
-/// name models `.mdx`; the archives hold them as `.m2`, and the casing is arbitrary in both.
+/// A model path's comparison key: DBCs name models `.mdx`, the archives hold `.m2`, in any case.
 fn mdx_key(path: &str) -> String {
     let p = path.to_ascii_lowercase().replace('/', "\\");
     match p.rsplit_once('.') {
@@ -48,7 +24,6 @@ fn mdx_key(path: &str) -> String {
     }
 }
 
-/// The model's own file name — the census reads better without the `Creature\\Foo\\` prefix.
 fn short(path: &str) -> String {
     path.rsplit('\\').next().unwrap_or(path).to_string()
 }
@@ -78,7 +53,7 @@ pub fn shakecensus(chain: &mut Chain) -> Result<()> {
         }
     }
 
-    // Which groups name each preset, and which kits name each group — the spell side's two hops.
+    // The spell side's two hops: the groups naming each preset, the kits naming each group.
     let mut group_users: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for g in shakes.groups() {
         for id in g.shakes() {
@@ -145,8 +120,7 @@ pub fn shakecensus(chain: &mut Chain) -> Result<()> {
         );
     }
 
-    // Every value the creature columns actually carry must resolve — a miss would say the column
-    // map is wrong, which is the whole point of running this.
+    // Every value the creature columns carry must resolve; a miss means the column map is wrong.
     let mut dangling = Vec::new();
     for (model_id, path, footstep, thud) in &models {
         for (col, id) in [
@@ -210,24 +184,13 @@ pub fn shakecensus(chain: &mut Chain) -> Result<()> {
         }
     }
 
-    // The third producer: the `$SHK` animation event, whose payload is a GROUP id (never a preset
-    // id). Only the GameObject and DynamicObject dispatchers decode it — `CGUnit_C::HandleAnimEvent`
-    // does not — so a `$SHK` on a creature M2 is inert, and this sweep is what says whether the
-    // shipped content authors any at all.
+    // The third producer, the `$SHK` animation event, whose payload is a group id, never a preset.
     println!("\n$SHK animation events — the third producer (GameObject / DynamicObject only)\n");
-    // The HOST column is what decides whether a marker is live at all: only the GameObject
-    // (typemask 0x20, `0x5f3e20`) and DynamicObject (0x40, `0x5d58c0`) dispatchers decode `$SHK`.
-    // A marker on a creature M2 reaches `CGUnit_C::HandleAnimEvent`, which does not decode the tag;
-    // one on a model that is only ever a bone-attached `CEffect` reaches the fixed
-    // `$SND`/`$HIT` router `0x61f6f0`. Both are authored-but-inert.
-    //
-    // The DynamicObject side is easy to get wrong and this census got it wrong once: the anchor's
-    // area model is `SpellVisual` **field 12**, gated by field 11 ([`VisualStages::area_effect`] /
-    // `area_gate` — `0x5d57c0`, benilla's `entities::dest_fx`). Judging
-    // the `Spells\*` carriers by "no display table names it" reported six presets dead that are
-    // not: Warlock **Inferno** (SpellVisual 4859 → effect 2362 `Infernal_Impact_Base`) and
-    // Ragnaros's **Meteor** (7479 → 3007 `Meteor_Impact_Base`) both plant one, and both models
-    // carry `$SHK` group 2. So the host set is three, not two.
+    // Only the GameObject (typemask 0x20, `0x5f3e20`) and DynamicObject (0x40, `0x5d58c0`)
+    // dispatchers decode `$SHK`; on a creature it reaches `CGUnit_C::HandleAnimEvent` and on a
+    // bone-attached `CEffect` the fixed `$SND`/`$HIT` router `0x61f6f0`, and neither decodes it.
+    // A DynamicObject's area model is `SpellVisual` field 12, gated by field 11 (`0x5d57c0`):
+    // Inferno's visual 4859 and Meteor's 7479 plant one (effects 2362, 3007) with `$SHK` group 2.
     let gos = benilla_formats::load_gameobject_catalog(chain)?;
     let go_models: BTreeSet<String> = gos.iter().map(|(_, path)| mdx_key(path)).collect();
     let creature_models: BTreeSet<String> = creatures.model_paths().map(mdx_key).collect();
@@ -316,10 +279,8 @@ pub fn shakecensus(chain: &mut Chain) -> Result<()> {
         tally(&shk_live_groups)
     );
 
-    // The roll-up, in two tiers, because they answer different questions. A preset can be NAMED by
-    // a table and still have nothing that fires it — presets 7/8/9 sit only in group 2, and a group
-    // no kit and no `$SHK` marker names is a dead row. A shipped-but-unreachable preset is a
-    // finding, not a bug; it is printed rather than inferred so nobody has to guess.
+    // Two tiers: a preset a table names can still have nothing that fires it, as a group no kit
+    // and no live `$SHK` marker names is dead.
     let named: BTreeSet<u32> = users
         .keys()
         .copied()

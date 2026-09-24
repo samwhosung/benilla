@@ -1,7 +1,5 @@
-//! Low-level `LightIntBand`/`LightFloatBand` table decode + time-of-day interpolation. A [`Band`] is
-//! one row's parallel `(time, value)` pairs across the day; [`sample_color`]/[`sample_float`] lerp it
-//! at a given time (wrapping across midnight). The meaning of each row is in [`super::atmosphere`];
-//! this module is purely "parse the band tables + interpolate", no lighting-domain knowledge.
+//! `LightIntBand`/`LightFloatBand` decoding and time-of-day interpolation, wrapping across
+//! midnight.
 
 use std::collections::HashMap;
 
@@ -20,8 +18,7 @@ pub(super) struct Band<T> {
     values: Vec<T>,
 }
 
-/// The shared `LightIntBand`/`LightFloatBand` record schema: `ID, num, time[16], value[16]` (34
-/// fields, 136 B). `value` is `UInt32` for the int band, `Float32` for the float band.
+/// The shared band record: `ID, num, time[16], value[16]`, 34 fields, 136 bytes.
 pub(super) fn band_schema(name: &str, value: FieldType) -> Schema {
     let mut s = Schema::new(name);
     s.add_field(SchemaField::new("ID", FieldType::UInt32));
@@ -44,14 +41,14 @@ fn decode_color(v: u32) -> [f32; 3] {
     ]
 }
 
-/// Find the segment of a band's time axis bracketing `t` (wrapping past the last entry to the
-/// first), returning `(i0, i1, frac)` for a lerp. Assumes `times` is non-empty and ascending.
+/// The `(i0, i1, frac)` segment bracketing `t`, wrapping from the last key to the first; `times`
+/// must be non-empty and ascending.
 fn segment(times: &[u32], t: u32) -> (usize, usize, f32) {
     let n = times.len();
     if n == 1 {
         return (0, 0, 0.0);
     }
-    // Wrap region: before the first or after the last entry interpolates last→first across midnight.
+    // Before the first key or after the last, interpolate last to first across midnight.
     if t < times[0] || t >= times[n - 1] {
         let span = times[0] + DAY - times[n - 1];
         if span == 0 {
@@ -145,8 +142,7 @@ mod tests {
 
     #[test]
     fn segment_wraps_across_midnight() {
-        // Two keyframes at 06:00 (720) and 18:00 (2160): a time before the first wraps from the
-        // last (interpolating across midnight), not clamps.
+        // Keys at 06:00 and 18:00 in half-minutes: 03:00 wraps from the last key, not clamps.
         let times = [720u32, 2160];
         let (i0, i1, f) = segment(&times, 360);
         assert_eq!((i0, i1), (1, 0));

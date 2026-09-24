@@ -1,6 +1,6 @@
-//! TEMP (B141/N05): what the WMO's liquid actually looks like around a pin — which groups hold
-//! water there, their MOGP flags/liquid type, their MLIQ base heights, and whether two surfaces
-//! abut, overlap or step. Run: `cargo run -p benilla-formats --example mm_water_pin -- x y z [r]`.
+//! The WMO liquid around a pin: the groups holding water there, their MOGP flags, liquid type and
+//! MLIQ heights, and how many surfaces claim each point.
+//! `cargo run -p benilla-formats --example mm_water_pin -- x y z [r]`
 use std::io::Cursor;
 
 const MAP_CENTER: f32 = 17066.666;
@@ -146,9 +146,7 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // How many DISTINCT groups claim each point as wet? Two coplanar surfaces over the same ground
-    // are drawn twice — a transparent water quad composited twice is visibly darker, and at equal
-    // depth they also z-fight. Sampled on a 0.25 yd lattice over the pin's window.
+    // Groups claiming each point as wet; a point claimed twice draws darker and z-fights.
     let step = 0.25f32;
     let n = (2.0 * r / step) as i32;
     let mut hist = std::collections::BTreeMap::<usize, usize>::new();
@@ -201,7 +199,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The cell index `(mx, my)` falls in, if it is inside the grid at all.
 fn cell_at(m: &benilla_formats::LiquidMesh, mx: f32, my: f32) -> Option<usize> {
     let (cols, rows) = (m.grid[0] as usize, m.grid[1] as usize);
     if cols < 2 || rows < 2 {

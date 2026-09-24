@@ -1,10 +1,7 @@
-//! Throwaway: the sort/admission inputs the trainer & craft windows key on. Two modes:
-//!
-//! * `line <skill-line-name-substring>...` — a line's abilities with their raw
-//!   `SkillLineAbility.dbc` columns (`req_skill_value` col 7, `reqtrainpoints` col 14), their
-//!   `Spell.dbc` name/rank, `castUI`, `attributes` and `spellLevel`.
-//! * `castui <n>` — every spell whose `castUI == n`, with the skill line (if any) its first
-//!   `SkillLineAbility` row names: the client's craft-admission key vs benilla's SLA join.
+//! The inputs the trainer and craft windows sort and admit on. `line <name-substring>...` prints a
+//! line's abilities with `SkillLineAbility.dbc` columns 7 (`req_skill_value`) and 14
+//! (`reqtrainpoints`) and their spell's `castUI`, attributes and level; `castui <n>` prints every
+//! spell with that `castUI`, the client's craft admission key, beside its skill line.
 fn main() -> anyhow::Result<()> {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;

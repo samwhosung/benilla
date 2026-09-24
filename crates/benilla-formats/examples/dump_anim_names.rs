@@ -1,6 +1,5 @@
-//! Session probe: print AnimationData.dbc rows (id, name, weapon flags, fallback) —
-//! `cargo run -p benilla-formats --example dump_anim_names <Data-dir> [id ...]`. Without ids,
-//! prints all 208 rows. Built for the bowstring round (which sequences do bow M2s carry).
+//! `AnimationData.dbc` rows (id, name, weapon flags, fallback), all of them without ids.
+//! `cargo run -p benilla-formats --example dump_anim_names <Data-dir> [id ...]`
 
 fn main() {
     let mut args = std::env::args().skip(1);

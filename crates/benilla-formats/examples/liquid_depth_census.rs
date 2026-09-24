@@ -1,26 +1,8 @@
-//! What the shipped MCLQ **depth byte** actually is, per liquid kind — the instrument behind the
-//! ocean depth-ramp settle:
+//! The shipped MCLQ depth byte per liquid kind over wet-cell vertices: its histogram, its slope
+//! against the real `surface - terrain` depth, mid-ramp shore pins and what each divisor does to
+//! the picture. The reference maps the byte to its depth swatch per kind, river `min(d/42, 1)` and
+//! ocean `min(d/255, 1)`. Output is Blizzard data: never commit it.
 //! `cargo run --release -p benilla-formats --example liquid_depth_census -- [map ...]`
-//! (default: `Azeroth Kalimdor`, i.e. every ADT ocean and river in the vanilla world.)
-//!
-//! The reference indexes its water depth-swatch by this one byte through a per-kind LUT — river
-//! `min(d/42, 1)`, ocean `min(d/255, 1)` — so the *look* of a sea is that LUT applied to whatever
-//! the artists authored into the byte. A divisor argued from the binary alone can still be wrong
-//! about the picture if the authored range never reaches it, so this measures the range, and the
-//! byte→yard slope that turns it into a distance a swimmer can feel:
-//!
-//! - the **depth-byte histogram** per kind, over vertices that touch a wet cell (dry-cell verts
-//!   carry the FLT_MAX height sentinel and no meaningful byte);
-//! - the **byte→yard slope**, least-squares through the origin against the real geometric depth
-//!   `surface − terrain` at each vertex, plus the correlation — which is also the check that byte 0
-//!   of the water/ocean union IS a depth at all;
-//! - a handful of **shore-band pins** — world coords where the depth byte is mid-ramp, i.e. the only
-//!   places the divisor is visible at all. Everything else is either the pale edge or the pinned-deep
-//!   open sea, and an A/B aimed anywhere else photographs two identical pictures;
-//! - **what each candidate divisor does to the picture**: the share of wet water that lands on the
-//!   deep swatch row (V ≥ 0.95), on the shallow row (V ≤ 0.05), and the mean V.
-//!
-//! Output is Blizzard-derived data — read it, pipe it to the scratchpad, never into the repo.
 
 use std::collections::BTreeMap;
 
@@ -28,34 +10,27 @@ use benilla_formats::{terrain_height_at, LiquidKind, CHUNK_SIZE};
 
 /// MCLQ vertex-grid pitch: the 9×9 grid spans one 8-cell chunk.
 const UNIT: f32 = CHUNK_SIZE / 8.0;
-/// MCLQ grid side (9 verts) and cell side (8).
 const GRID: usize = 9;
 const CELLS: usize = 8;
-/// Cell-flag low nibble meaning "dry".
 const DRY_NIBBLE: u8 = 0x0f;
 /// Verts under no liquid carry FLT_MAX; `is_finite()` is true for it, so gate on magnitude.
 const HEIGHT_SENTINEL: f32 = 1.0e9;
 
 /// The per-kind accumulator: the byte histogram plus the paired (byte, yard) samples.
 struct Kind {
-    /// Count per raw depth byte, 0..=255.
     hist: Box<[u64; 256]>,
-    /// Vertices whose terrain height resolved, for the byte→yard fit.
+    /// Vertices whose terrain height resolved, for the byte-to-yard fit.
     paired: u64,
-    /// Σ byte·yd, Σ byte², Σ yd², Σ byte, Σ yd — enough for a through-origin slope and an r.
+    /// Σ byte·yd, Σ byte², Σ yd², Σ byte, Σ yd, for the through-origin slope and r.
     sum_by: f64,
     sum_bb: f64,
     sum_yy: f64,
     sum_b: f64,
     sum_y: f64,
-    /// Blocks seen.
     blocks: u64,
-    /// A spread of mid-ramp sample points: `(zone, map, x, y, byte, yards)`, at most one per
-    /// 2000-yd neighbourhood, so the list names distinct coastlines instead of 200 vertices of one
-    /// bay. Named by `AreaTable`, because a pin you can walk to is worth more than a coordinate.
+    /// Mid-ramp points `(zone, map, x, y, byte, yards)`, at most one per 2000-yd neighbourhood.
     pins: Vec<(String, String, f32, f32, u8, f32)>,
-    /// Σ yards and count per depth byte — the empirical byte→depth curve, which the single
-    /// through-origin slope cannot show once a kind's byte saturates (the ocean's does, hard).
+    /// Σ yards and count per byte: the depth curve a single slope hides where the byte saturates.
     yd_sum: Box<[f64; 256]>,
     yd_n: Box<[u64; 256]>,
 }
@@ -98,7 +73,6 @@ impl Kind {
         self.hist.iter().sum()
     }
 
-    /// Byte at the given share of the distribution.
     fn percentile(&self, p: f64) -> u8 {
         let target = (self.total() as f64 * p) as u64;
         let mut seen = 0;
@@ -129,9 +103,8 @@ impl Kind {
         Some((slope, r))
     }
 
-    /// Least-squares `byte = k · yards` through the origin over a byte window only. The ocean
-    /// pins 83 % of its vertices at 255, which drags a whole-range fit toward the pile and hides
-    /// the ramp that actually paints the shore; this reads the ramp where it varies.
+    /// The through-origin slope over a byte window only: the ocean pins 83% of its vertices at
+    /// 255, and a whole-range fit hides the ramp that paints the shore.
     fn slope_in(&self, lo: u8, hi: u8) -> Option<(f64, u64)> {
         let (mut sby, mut syy, mut n) = (0.0, 0.0, 0u64);
         for b in lo..=hi {
@@ -180,7 +153,6 @@ fn main() -> anyhow::Result<()> {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;
 
-    // Names for the shore-band pins. Optional: a census still reads without a DBC.
     let areas = benilla_formats::load_area_table_catalog(&mut chain).ok();
 
     let mut kinds: BTreeMap<String, Kind> = BTreeMap::new();
@@ -194,8 +166,7 @@ fn main() -> anyhow::Result<()> {
             let Ok(bytes) = chain.read_file(&path) else {
                 continue;
             };
-            // The mesh is only the TERRAIN reference here — the depth bytes come off the raw parse,
-            // so the census can never be a restatement of the divisor it is measuring.
+            // The mesh gives only the terrain; the depth bytes come off the raw parse.
             let Ok(mesh) = benilla_formats::adt_to_tile_mesh(&bytes) else {
                 continue;
             };
@@ -209,8 +180,7 @@ fn main() -> anyhow::Result<()> {
                     if block.vertices.len() < GRID * GRID {
                         continue;
                     }
-                    // Kind from the majority WET cell nibble — the verified type source, and the
-                    // same rule `build_liquid_mesh` uses, so the census bins as the renderer draws.
+                    // Kind from the majority wet-cell nibble, the same rule as `build_liquid_mesh`.
                     let mut counts = [0u32; 16];
                     let mut wet = [false; CELLS * CELLS];
                     for (c, w) in wet.iter_mut().enumerate() {
@@ -256,13 +226,11 @@ fn main() -> anyhow::Result<()> {
                         }
                         let x = wx - row as f32 * UNIT;
                         let y = wy - col as f32 * UNIT;
-                        // Nudge off the exact lattice line so the terrain lookup lands inside a
-                        // triangle rather than on a chunk seam.
+                        // Nudge off the lattice so the terrain lookup lands inside a triangle.
                         let ground = terrain_height_at(&mesh.chunks, [x - 0.01, y - 0.01, 0.0]);
                         let yards = ground.map(|g| h - g).filter(|d| *d > 0.0 && *d < 500.0);
                         let byte = block.vertices[n].depth_byte();
-                        // One mid-ramp pin per tile: where the ramp is neither pinned deep nor at
-                        // the pale edge, which is the only band an A/B can see.
+                        // Mid-ramp pins, the only band where the divisor shows on screen.
                         if (40..=200).contains(&byte)
                             && acc.pins.len() < 64
                             && !acc.pins.iter().any(|p| {
@@ -342,7 +310,6 @@ fn main() -> anyhow::Result<()> {
                 println!("    {map} {x:9.1} {y:9.1}  byte {b:3}  depth {yd:5.1} yd  {zone}");
             }
         }
-        // The coarse shape, so a bimodal or pinned distribution shows without a plot.
         print!("  histogram (16 buckets of 16):");
         for b in 0..16 {
             let n: u64 = k.hist[b * 16..(b + 1) * 16].iter().sum();

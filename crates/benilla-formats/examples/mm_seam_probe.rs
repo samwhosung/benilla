@@ -1,11 +1,7 @@
-//! TEMP: rasterise the WMO-interior minimap **offline**, from the shipped tiles and the
-//! client's own placement + alpha test, so "where do the black lines come from" is a measurement on
-//! the data rather than a reading of a screenshot.
-//!
-//! Writes three PNGs: `colour` (what the composite would show), `cover` (white where SOME tile
-//! passes the 224/255 test), and `any` (white where some tile has alpha > 0 at all). A line that is
-//! black in `cover` but white in `any` is the alpha test cutting art that exists; black in both is
-//! a genuine hole in the bake — or a placement that never covers that spot.
+//! The WMO-interior minimap rasterised offline from the shipped tiles, with the client's placement
+//! and 224/255 alpha test, written as `mm_{colour,cover,any,owner,seam}.png` under `MM_OUT`. Black
+//! in `cover` (some tile passes the test) but white in `any` (some tile has alpha) is the test
+//! cutting art; black in both is a hole in the bake or a spot no placement covers.
 use std::collections::BTreeMap;
 use std::io::Cursor;
 
@@ -54,7 +50,6 @@ fn model_to_world(rot_deg: [f32; 3], p: [f32; 3]) -> [f32; 3] {
     let p = rot_y(p, ry - std::f32::consts::PI);
     rot_x(p, std::f32::consts::FRAC_PI_2)
 }
-/// Inverse of [`model_to_world`] (the rotation is orthonormal, so: same angles, reversed order).
 fn world_to_model(rot_deg: [f32; 3], p: [f32; 3]) -> [f32; 3] {
     let (rx, ry, rz) = (
         rot_deg[0].to_radians(),
@@ -81,7 +76,6 @@ fn world_to_model(rot_deg: [f32; 3], p: [f32; 3]) -> [f32; 3] {
 
 struct Tile {
     gi: usize,
-    /// The drawn rect (grid cell + outer-edge bleed).
     x0: f32,
     y0: f32,
     tw: f32,
@@ -106,7 +100,7 @@ fn main() -> anyhow::Result<()> {
     let mut chain = benilla_formats::open_chain(&data)?;
     let trs = benilla_formats::load_minimap_translate(&mut chain)?;
 
-    // Find the placement whose model bbox contains the pin, over every WMO placed in this ADT.
+    // The WMO placement in this ADT whose origin is nearest the pin.
     let (tc, tr) = benilla_formats::world_to_tile(pin[0], pin[1]);
     let adt_name = format!("World\\Maps\\Azeroth\\Azeroth_{tc}_{tr}.adt");
     let bytes = chain.read_file(&adt_name)?;
@@ -127,8 +121,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
     let (model, origin, rot, _) = best.expect("no WMO placement in this ADT");
-    // MM_MODEL="x,y[,z]" pins in the WMO's MODEL space instead — how a captured reference frame
-    // states the player's position, so a capture can be reproduced exactly.
+    // `MM_MODEL="x,y[,z]"` pins in the WMO's model space instead, as a reference capture states it.
     let pm = match std::env::var("MM_MODEL") {
         Ok(v) => {
             let n: Vec<f32> = v.split(',').map(|t| t.trim().parse().unwrap()).collect();
@@ -163,8 +156,7 @@ fn main() -> anyhow::Result<()> {
     }
     eprintln!("{} groups, model bbox {glo:?} .. {ghi:?}", infos.len());
 
-    // MM_AUDIT: our computed per-group tile grid against the one actually authored in the trs.
-    // A short grid leaves world the composite can never cover, whatever the group selection does.
+    // `MM_AUDIT`: our per-group tile grid against the one authored in the translate table.
     if std::env::var("MM_AUDIT").is_ok() {
         let (mut bad, mut tiles_ours, mut tiles_theirs) = (0usize, 0usize, 0usize);
         for (gi, info) in infos.iter().enumerate() {
@@ -203,10 +195,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // MM_BLP: what the tile art actually declares and holds — the alpha histogram of every tile
-    // near the pin, so "transparent" is a fact about the file rather than about our decoder.
-    // MM_FIT: the authored tile's PIXEL size against the group's world extent — i.e. what the bake's
-    // real yards-per-texel is, per group, instead of the 0.5 we assume.
+    // `MM_FIT`: each group's real yards per texel, from its authored tile size and its extent.
     if std::env::var("MM_FIT").is_ok() {
         println!("  gi  authored px   grid   extent yd        yd/texel (x, y)");
         let mut ratios: Vec<f32> = Vec::new();
@@ -237,7 +226,7 @@ fn main() -> anyhow::Result<()> {
                 info.bbox_max[0] - info.bbox_min[0],
                 info.bbox_max[1] - info.bbox_min[1],
             );
-            // Tile art is transposed vs the model axes: image WIDTH runs along model Y, HEIGHT along X.
+            // This read pairs model X with image height and rows: the layout below, transposed.
             let (nx, ny) = ((mc + 1) as f32, (mr + 1) as f32);
             let ypt_x = ex / (dim.1 as f32 * ny);
             let ypt_y = ey / (dim.0 as f32 * nx);
@@ -265,9 +254,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // MM_ANCHOR: where inside its power-of-two texture does a single-tile group's OPAQUE art sit,
-    // and how big is it — against the group's own extent at 0.5 yd/texel. This is what says whether
-    // the bake pads (art at one corner, transparent remainder) or stretches, and which corner.
+    // `MM_ANCHOR`: where a single-tile group's opaque art sits in its power-of-two texture.
     if std::env::var("MM_ANCHOR").is_ok() {
         println!("  gi   tex     opaque box (u0,u1)x(v0,v1)   extent/0.5 texels   fill");
         for (gi, info) in infos.iter().enumerate().take(40) {
@@ -311,8 +298,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // MM_MULTI: the same anchor read on MULTI-tile groups, which is what says which name index runs
-    // along which model axis and where the power-of-two padding lands across a row of tiles.
+    // `MM_MULTI`: the same on multi-tile groups, for which name index runs along which axis.
     if std::env::var("MM_MULTI").is_ok() {
         let mut shown = 0;
         for (gi, info) in infos.iter().enumerate() {
@@ -369,6 +355,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // `MM_BLP`: each tile's declared header and alpha histogram, as the file holds them.
     if std::env::var("MM_BLP").is_ok() {
         for gi in 0..infos.len() {
             for c in 0..4u32 {
@@ -414,14 +401,10 @@ fn main() -> anyhow::Result<()> {
         let (ny, twy) = group_axis_grid(info.bbox_max[1] - info.bbox_min[1]);
         for col in 0..nx {
             for row in 0..ny {
-                // MEASURED tile layout (MM_ANCHOR / MM_MULTI, read off the shipped art): image u
-                // runs along model +X with u_global = 0 at the group's bbox X-MIN, column index
-                // advancing with +X; image v runs along model Y INVERTED, the grid anchored at its
-                // BOTTOM so the last row's last texel sits at the group's Y anchor.
-                // The client's rect: cells stride `tw` and share their interior edges, and a cell
-                // on the grid's boundary is grown 1.0 yd on that side alone (`0x6a5270`).
-                // `MM_NOBLEED` drops the bleed, which is what B141 was: without it two groups' art
-                // abuts instead of overlapping by 2 yd.
+                // Measured off the shipped art: image u runs along model +X from the bbox X-min,
+                // columns advancing with +X; v runs along model Y inverted. Cells stride `tw` and
+                // share interior edges; a boundary cell grows 1.0 yd on its outer side
+                // (`0x6a5270`), and `MM_NOBLEED` drops that, so neighbouring groups only abut.
                 let bleed = if std::env::var("MM_NOBLEED").is_ok() {
                     0.0
                 } else {
@@ -474,7 +457,8 @@ fn main() -> anyhow::Result<()> {
     for k in cache.iter().filter(|(_, v)| v.is_none()).take(4) {
         eprintln!("  MISS {}", k.0);
     }
-    // Same order the app draws in: by group bbox Z-mid relative to the player, ascending.
+    // Farthest group Z-mid first. The reference paints ascending by signed `Zmid - playerZ`, the
+    // player's own group last (`0x4ebeb0`).
     tiles.sort_by(|a, b| {
         (a.midz - pm[2])
             .abs()
@@ -488,8 +472,7 @@ fn main() -> anyhow::Result<()> {
     let mut anyv = vec![0u8; (px * px) as usize];
     let mut owner = vec![0u8; (px * px * 3) as usize];
     let bilinear = std::env::var("MM_BILINEAR").is_ok();
-    // OPTIONAL UNDERLAY: the outdoor ADT minimap tiles (`Azeroth\\map<x>_<y>.blp`), sampled through
-    // the placement so they land under the WMO tiles in the same frame. `MM_TERRAIN=1`.
+    // `MM_TERRAIN`: an outdoor ADT tile underlay; the reference's interior composite has none.
     if std::env::var("MM_TERRAIN").is_ok() {
         let mut adt_cache: BTreeMap<(u32, u32), Option<Vec<u8>>> = BTreeMap::new();
         for iy in 0..px {
@@ -533,12 +516,8 @@ fn main() -> anyhow::Result<()> {
                 if mx < t.x0 || mx >= t.x0 + t.tw || my < t.y0 || my >= t.y0 + t.th {
                     continue;
                 }
-                // MM_BILINEAR reproduces the reference's LINEAR sampler (CLAMP_TO_EDGE), so the
-                // alpha the 224/255 test sees is the interpolated one — which is what decides how
-                // far a tile's opaque art actually reaches past its last opaque texel CENTRE
-                // (0.122 of a texel at ref 224, against nearest's half-texel to the texel EDGE).
-                // The client samples `[0.5/W, 1−0.5/W]` across the drawn rect, so the W texel
-                // CENTRES span it exactly: step = rect / (W−1), texel 0's centre on the rect edge.
+                // `MM_BILINEAR` is the reference's LINEAR, CLAMP_TO_EDGE sampler. The client
+                // samples `[0.5/W, 1-0.5/W]` across the drawn rect, so its W texel centres span it.
                 let fu = (mx - t.x0) / (t.tw / (t.w as f32 - 1.0));
                 let fv = (t.y0 + t.th - my) / (t.th / (t.h as f32 - 1.0));
                 let (u, v) = (
@@ -572,9 +551,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    // A HAIRLINE is an uncovered run at most 4 px wide with coverage on BOTH sides — a seam
-    // between two tiles, as opposed to the large unauthored gaps (streets, the exterior group)
-    // that are simply not part of any interior group's bake.
+    // A hairline is an uncovered run of at most 4 px with coverage on both sides: a tile seam.
     let mut seam = colour.clone();
     let mut hair = 0usize;
     let mut runs: BTreeMap<usize, usize> = BTreeMap::new();
@@ -620,8 +597,8 @@ fn main() -> anyhow::Result<()> {
         px,
         image::ColorType::Rgb8,
     )?;
-    // The VISIBLE DISC — what the blit actually shows: radius `MM_DISC` yards about the player.
-    // The reference capture reports 95.84% painted / 4.16% clear over exactly this.
+    // `MM_DISC`: the painted share of the visible disc of that radius in yards; the reference
+    // leaves 4.16% of it clear in its Stormwind capture.
     if let Ok(v) = std::env::var("MM_DISC") {
         let rd: f32 = v.parse().unwrap();
         let c0 = px as f32 * 0.5;
