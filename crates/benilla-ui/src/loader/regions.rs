@@ -4,9 +4,7 @@ use crate::framexml::{self, Element};
 
 use super::{abs_dim, abs_value, children_named, color_of, tex_coords_of, Loader};
 
-/// Whether a region parses **its own** font attributes — the reference's `FONTSTRING+0x12c`,
-/// which wow-re named `ownsFontAttrs` (`scratch/fontstring-loadxml-font-attrs.md` §3 and
-/// `scratch/button-label-build-and-anchor-order.md`, both VERIFIED).
+/// Whether a region parses **its own** font attributes — the reference's `FONTSTRING+0x12c`.
 ///
 /// It exists for exactly one element in the whole schema. The ctor sets it to 1
 /// (`0x770de7 mov byte [esi+0x12c],1`) and **one site image-wide clears it** — `0x778b7b`, inside
@@ -41,7 +39,7 @@ pub(super) enum FontAttrs {
 }
 
 impl Loader<'_> {
-    /// `<Layers>`/`<Layer level=>`/`<Texture>`/`<FontString>` (rf24 `0x769d70`): create each region
+    /// `<Layers>`/`<Layer level=>`/`<Texture>`/`<FontString>` (`0x769d70`): create each region
     /// via CreateTexture/CreateFontString on the draw layer, then apply its file/color/text.
     pub(super) fn apply_layers(
         &mut self,
@@ -56,7 +54,7 @@ impl Loader<'_> {
                 for region in &layer.children {
                     // A region's `inherits=` may name a virtual REGION template (the talent
                     // window's branch/arrow art pool) — splice it exactly like a frame's
-                    // (rf24's one template registry serves both). A FontString's `inherits=`
+                    // (`0x6ee500`'s one template registry serves both). A FontString's `inherits=`
                     // usually names a font OBJECT instead — a separate namespace this gate
                     // skips past to `apply_fontstring_font` below.
                     let region = &self.expand_region(region);
@@ -156,12 +154,12 @@ impl Loader<'_> {
             let rname: Option<String> = region
                 .name()
                 .map(|raw| framexml::resolve_name(raw, parent_name));
-            // **An EditBox's direct-child `<FontString>` creates NOTHING.** RF-0028
-            // (`scratch/rf28-typed-widget-loadxml.md`, "EditBox — LoadXML `0x779fb0`") lists it as
-            // the *embedded* font string, and its one attribute (`bytes`) writes the box's own
-            // `maxBytes` at `E+0x33c` — it is the declaration of the object the ctor already built
-            // at `0x779bee`, exactly as a `<SimpleHTML>`'s `<FontString>` declares that widget's
-            // element font (the guard at the top of this function). Creating a second region here
+            // **An EditBox's direct-child `<FontString>` creates NOTHING.** `LoadXML 0x779fb0`
+            // treats it as the *embedded* font string, and its one attribute (`bytes`) writes the
+            // box's own `maxBytes` at `E+0x33c` — it is the declaration of the object the ctor
+            // already built at `0x779bee`, exactly as a `<SimpleHTML>`'s `<FontString>` declares
+            // that widget's element font (the guard at the top of this function). Creating a
+            // second region here
             // would put an orphan on the frame AND push the authored `<Layers>` regions one place
             // down the list `GetRegions` hands Lua.
             let existing_text = el
@@ -307,7 +305,7 @@ impl Loader<'_> {
         if is_texture {
             if let Some(file) = region.attr("file") {
                 // A `<Texture file=…>` with a `<Color>` child DISCARDS the colour — it is not a
-                // tint (wow-re `system/ui/scratch/texture-color-composition.md`, VERIFIED).
+                // tint.
                 // `CSimpleTexture::LoadXML 0x76fe20` runs its child loop (`0x76fec1`-`0x7700fc`,
                 // where `<Color>` lands in `SetTexture(const CImVector*)` `0x770360`) to completion
                 // BEFORE it reads `file=` at `0x770102`, and a successful load overwrites the very
@@ -326,7 +324,7 @@ impl Loader<'_> {
             // the art because it lands in a different field: the child loop writes the vertex
             // colours (`+0xb8`, stride 4 — `0x77304d`-`0x77305f`, "4 iff count > 1") while `file=`
             // is read only afterwards into `+0xcc`
-            // (`texture-color-composition.md` §1-2). That is why `<Color>` beside a `file=` is
+            // (`0x770102`). That is why `<Color>` beside a `file=` is
             // discarded above and a `<Gradient>` beside one is not.
             //
             // Dropping this silently is what painted Bagnon's character-list popup as a WHITE SLAB:
@@ -335,10 +333,10 @@ impl Loader<'_> {
             //
             // MinColor → the first stop, MaxColor → the second, which is the natural reading and
             // the Lua binding's own argument order — but the XML arm's stop-to-vertex mapping is
-            // **not byte-read** (wow-re records the `<Gradient>` tag compare at `0x7700b0` and the
-            // stride, not the arm's body). It cannot matter yet: `RegionData::gradient` is folded to
-            // its midpoint by the paint (`script::extract`), which is symmetric in the two stops.
-            // Swapping them becomes visible the day a quad carries a real two-stop tint.
+            // **not byte-read** (the reference confirms the `<Gradient>` tag compare at `0x7700b0`
+            // and the stride, not the arm's body). It cannot matter yet: `RegionData::gradient` is
+            // folded to its midpoint by the paint (`script::extract`), which is symmetric in the
+            // two stops. Swapping them becomes visible the day a quad carries a real two-stop tint.
             if let Some(g) = children_named(region, "Gradient").next() {
                 let stop = |tag: &str| children_named(g, tag).next().map(color_of);
                 // A half-declared gradient is skipped whole rather than half-applied against an
@@ -376,7 +374,7 @@ impl Loader<'_> {
             }
         } else {
             if let Some(text) = region.attr("text") {
-                // `<FontString text=>` is a global-string lookup, not a literal — rf28 l.115
+                // `<FontString text=>` is a global-string lookup, not a literal
                 // (`0x703bf0`). See `Loader::resolve_text`.
                 let text = self.resolve_text(text, dbg);
                 self.call_region(region_wrapper, "SetText", Some(text), dbg);
@@ -412,7 +410,7 @@ impl Loader<'_> {
         //
         // Not folded HERE because the `framexml_fonts` element registry's other reader hands its
         // keys to `framexml::expand`, which is the SAME expansion templates go through — and
-        // whether the client matches TEMPLATE names case-insensitively is not carved. Folding this
+        // whether the client matches TEMPLATE names case-insensitively is unconfirmed. Folding this
         // registry would quietly extend a verified font fact to unverified template behaviour.
         const MAX_HOPS: usize = 8;
         let model = self.model();
@@ -462,8 +460,7 @@ impl Loader<'_> {
     /// that was missing, and a silent one. The reference tries the registry before the filesystem:
     /// `0x783d15 call 0x783870(value, create = 0)`, and on a hit takes the same live-link
     /// `0x770c60` that `SetFontObject` uses, skipping the file-path branch entirely
-    /// (wow-re `system/ui/scratch/font-object-lua-surface.md` §7 + its `LoadXML` surface table
-    /// row 2; `CSimpleFontString::LoadXML 0x770f40` at `0x7710e1`-`0x771114`).
+    /// (`CSimpleFontString::LoadXML 0x770f40` at `0x7710e1`-`0x771114`).
     ///
     /// Reading it as a path only is what made Bagnon's item-stack counts unreadable: its
     /// `<FontString name="$parentCount" font="NumberFontNormal">` (`Bagnon_Core/core/Item.xml:14`)
@@ -506,8 +503,7 @@ impl Loader<'_> {
             }
         }
         // **`font=` gates this whole block, and that is the shape of the bytes** — not a set of
-        // independent overrides (`0x7710e1`-`0x771254`, wow-re
-        // `system/ui/scratch/fontstring-loadxml-font-attrs.md`). Three outcomes, and only three:
+        // independent overrides (`0x7710e1`-`0x771254`). Three outcomes, and only three:
         //
         //  1. `font=` names a **registered font object** → `SetFontObject` (`0x771104` lookup,
         //     `0x771114 call 0x770c60` — the same live link `inherits=` takes) and then

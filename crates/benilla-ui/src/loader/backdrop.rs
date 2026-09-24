@@ -6,9 +6,9 @@ use super::{abs_value, children_named, color_of, Loader};
 
 impl Loader<'_> {
     /// `<Backdrop bgFile edgeFile tile>` + children `<EdgeSize>`/`<TileSize>`/`<BackgroundInsets>`/
-    /// `<Color>`/`<BorderColor>` (rf24 LoadXML `0x77e6c0`; backdrop-mechanism.md §1). Builds the same
-    /// table Lua `SetBackdrop` reads and installs it, then applies the two colors — the XML `<Color>`
-    /// parser defaults a *present* element's missing channels to **black** (r=g=b=0, a=1 via
+    /// `<Color>`/`<BorderColor>` (LoadXML `0x77e6c0`). Builds the same table Lua `SetBackdrop`
+    /// reads and installs it, then applies the two colors — the XML `<Color>` parser (`0x6f23d0`)
+    /// defaults a *present* element's missing channels to **black** (r=g=b=0, a=1 via
     /// [`color_of`]), distinct from the ctor white a table `SetBackdrop` leaves.
     pub(super) fn apply_backdrop(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         let Some(bd) = children_named(el, "Backdrop").next() else {

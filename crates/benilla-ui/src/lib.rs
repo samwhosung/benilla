@@ -9,7 +9,7 @@
 //! [`bindings_xml`] — the per-addon `Bindings.xml` parser (the third file format, feeding
 //! [`script::keybind`]'s table); [`layout`]
 //! — the anchor/layout resolver (anchor graph → resolved rects), transcribed bit-faithfully from
-//! wow-5875-re's binary-verified spec; [`widget`] — the frame arena and its show/hide/strata/level/
+//! the reference; [`widget`] — the frame arena and its show/hide/strata/level/
 //! scale/alpha propagation mutations; [`order`] — the strata/draw-layer vocabulary, the packed
 //! total-order key, and the visible-tree traversal that realizes the client's painter order;
 //! [`script`] — the engine-free Lua host (mlua 5.1) binding the arena/layout/order model to the

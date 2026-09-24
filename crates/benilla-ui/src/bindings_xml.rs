@@ -1,8 +1,8 @@
 //! **`Bindings.xml`** — an addon's key-binding declaration (decision 1188 phase 4).
 //!
-//! The reference loads one per addon, at a verified position inside `AddOn_Load 0x51f240`
-//! (wow-5875-re `system/ui/ui.md`): **after** that addon's `.toc`-listed files (`0x51f3fa`) and
-//! **before** its saved-variables files (`0x51f400` → `0x51f4b5`). Both of benilla's load paths
+//! The reference loads one per addon, at a verified position inside `AddOn_Load 0x51f240`:
+//! **after** that addon's `.toc`-listed files (`0x51f3fa`) and **before** its saved-variables
+//! files (`0x51f400` → `0x51f4b5`). Both of benilla's load paths
 //! attach there — the startup walk (`benilla_app::ui_script::addons`) and the demand load
 //! ([`crate::script::addon`]) — and what they parse here feeds the same table the Key Bindings
 //! window edits ([`crate::script::keybind`]).
@@ -67,9 +67,8 @@
 //! unreachable from the host's own load path without going through the VM, which is exactly the
 //! shape 1186 spent a decision untangling.
 //!
-//! XML *parsing* is delegated plumbing here for the same reason it is in [`crate::framexml`] (the
-//! RE spec's own split: "XML parsing is DELEGATED; the schema→op map is owned") — `roxmltree`
-//! reads the bytes, and only the schema→meaning map below is ours.
+//! XML *parsing* is delegated plumbing here for the same reason it is in [`crate::framexml`] —
+//! `roxmltree` reads the bytes, and only the schema→meaning map below is ours.
 
 use std::fmt;
 

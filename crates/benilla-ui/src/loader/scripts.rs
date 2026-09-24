@@ -5,7 +5,7 @@ use crate::framexml::Element;
 use super::{children_named, Loader};
 
 impl Loader<'_> {
-    /// `<Scripts>` → SetScript each handler (rf24 `0x769ef0`). Handler source comes from the element
+    /// `<Scripts>` → SetScript each handler (`0x769ef0`). Handler source comes from the element
     /// body (`<OnClick>lua…</OnClick>`) or a `function="Global"` attribute. Returns the compiled
     /// `OnLoad` handle (if any) so the caller can fire it bottom-up. A body that fails to *compile* is
     /// an error; an unsupported handler *name* (e.g. the keyboard-focus handlers `OnKeyDown`/`OnChar`,
@@ -36,8 +36,7 @@ impl Loader<'_> {
             for handler in &scripts.children {
                 let name = handler.tag.clone();
                 // **AN EMPTY BODY IS A CLEAR, AND WHITESPACE IS NOT EMPTY** — the two byte
-                // tests at `SetScript 0x7025c0`, reproduced rather than approximated (wow-5875-re
-                // `system/ui/scratch/xml-script-empty-element.md`, a 3-worker cross-check):
+                // tests at `SetScript 0x7025c0`, reproduced rather than approximated:
                 //
                 //     7025ec  call 0x702670      ; unref the PREVIOUS handler, unconditionally
                 //     7025f4  test ebx,ebx
@@ -80,17 +79,17 @@ impl Loader<'_> {
                     continue;
                 }
                 // The real `<Scripts>` walker auto-enables the matching input kind after each
-                // successful SetScript (`0x769ef0` → `0x76af00(kind,-1)` per handler name; wow-re
-                // `ui/scratch/scripts-auto-enable.md`, §5 cross-checked): the five MOUSE-kind
-                // handlers arm the same enable as the XML `enableMouse` attribute — `OnDragStart`
-                // is in the set, `OnDragStop`/`OnReceiveDrag` are NOT. This is XML-load-time
-                // ONLY: the Lua SetScript binding (`0x7748d0`) never auto-enables, so the law
+                // successful SetScript (`0x769ef0` → `0x76af00(kind,-1)` per handler name): the
+                // five MOUSE-kind handlers arm the same enable as the XML `enableMouse` attribute —
+                // `OnDragStart` is in the set, `OnDragStop`/`OnReceiveDrag` are NOT. This is
+                // XML-load-time ONLY: the Lua SetScript binding (`0x7748d0`) never auto-enables, so
+                // the law
                 // lives here and not in SetScript itself (a runtime-created frame still needs an
                 // explicit `EnableMouse(true)`, like the real client). The KEYBOARD kinds are
                 // modelled and armed just below, and the WHEEL kind (`OnMouseWheel` = kind 3) is
                 // armed the same way right after — it used to say "a separate index this engine
-                // doesn't model yet", and the hit-test carve
-                // (`ui/scratch/hittest-no-fallthrough-law.md`) is what made modelling it necessary:
+                // doesn't model yet", and the wheel dispatcher's own gate (`0x7664f0` →
+                // `0x76c180`) is what made modelling it necessary:
                 // the wheel plane is the ONE place the engine really does gate on a handler and
                 // continue past a frame that has none. Until it was its own flag, our wheel sweep
                 // had to accept any mouse-enabled frame as a stand-in, and the first such frame
@@ -222,12 +221,13 @@ impl Loader<'_> {
         None
     }
 
-    /// Fire a captured `OnLoad` with the frame wrapper as both the legacy `this` global (RF-0025,
-    /// set-then-restored) and the modern `self` argument — the same dual convention the host's event
-    /// path uses; we replicate only the `this` set/restore here because there is no public host API to
+    /// Fire a captured `OnLoad` with the frame wrapper as both the legacy `this` global
+    /// (`0x704d50`, set-then-restored) and the modern `self` argument — the same dual convention
+    /// the host's event path uses; we replicate only the `this` set/restore here because there is
+    /// no public host API to
     /// fire `OnLoad` directly (it is not an event). Handler errors are recorded, never propagated.
     pub(super) fn fire_onload(&mut self, wrapper: &Table, func: &Function, dbg: &str) {
-        // The RF-0025 `this`/`self` convention lives in one home (`UiScript::invoke_handler`); the
+        // The `this`/`self` convention lives in one home (`UiScript::invoke_handler`); the
         // loader doesn't re-implement the set/restore, it just supplies the wrapper + captured func.
         if let Err(e) = self.invoke_handler(wrapper, func) {
             self.report.errors.push(format!("{dbg}: OnLoad: {e}"));

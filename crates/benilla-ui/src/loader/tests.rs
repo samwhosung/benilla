@@ -180,8 +180,8 @@ mod loader_tests {
     /// **A `parent=` that resolves to nothing leaves the frame PARENTLESS** — it does not fall back
     /// to the enclosing frame (decision 2213). `0x6ee280` seeds `[ebp-0x8]` with the incoming
     /// default parent and then writes the lookup's result back **unconditionally** at
-    /// `0x6ee3ef`, so a miss stores 0 over the seed and `0x6ee408` constructs with `ecx = 0`
-    /// (wow-re `xml-parent-attach-order.md`, VERIFIED). And an **empty** `parent=""` short-circuits
+    /// `0x6ee3ef`, so a miss stores 0 over the seed and `0x6ee408` constructs with `ecx = 0`. And
+    /// an **empty** `parent=""` short-circuits
     /// at `0x6ee3c7` before any of that: the default parent is kept, silently.
     ///
     /// Only the nested case can tell these apart — at top level there is no enclosing frame to
@@ -221,7 +221,7 @@ mod loader_tests {
             "a parent= that names nothing nulls the parent; it does not fall back"
         );
         // …and with no parent, the `$parent` chain walk finds nothing, so the "Top" seed survives
-        // (rf27 §5) — hence `TopMissed`, not `EnclosingMissed`.
+        // (`0x76c5b0`) — hence `TopMissed`, not `EnclosingMissed`.
         assert!(s.eval::<bool>("return EnclosingMissed == nil").unwrap());
         assert!(
             report
@@ -250,14 +250,14 @@ mod loader_tests {
     /// reference attaches the parent *first* (`0x6ee280` resolves it at `0x6ee3e8` and passes it to
     /// the constructor at `0x6ee408`) and only then runs the node-apply step that reads `name=` and
     /// calls `SetName` (`0x6ee4d6`), whose expander walks the frame's **actual** parent chain
-    /// (rf27 `0x76c5b0`). We resolved the name first, against the lexical ancestor, so ClassIcons'
+    /// (`0x76c5b0`). We resolved the name first, against the lexical ancestor, so ClassIcons'
     /// `<Frame name="$parentClassIcon" parent="PlayerFrame"/>` was published as `TopClassIcon` and
     /// every `PlayerFrameClassIcon` lookup in the addon indexed a nil.
     ///
     /// Four claims: the name takes the attribute parent's name; that frame's own children compose
     /// off the corrected name; a top-level `$parent` with no attribute still falls to the `"Top"`
     /// seed; and the `parent=` attribute itself is NOT expanded (`0x6ee3e8` calls the by-name
-    /// resolver direct, bypassing `0x76c5b0` — rf27 §2).
+    /// resolver direct, bypassing `0x76c5b0`).
     #[test]
     fn a_dollar_parent_name_resolves_against_the_parent_attribute() {
         let mut s = UiScript::new().unwrap();
@@ -310,7 +310,7 @@ mod loader_tests {
             "a nested child composes off the CORRECTED name"
         );
 
-        // No attribute, no lexical parent: the expander's `"Top"` seed survives (rf27 §5).
+        // No attribute, no lexical parent: the expander's `"Top"` seed survives (`0x76c5b0`).
         assert!(s.eval::<bool>("return TopLoose ~= nil").unwrap());
 
         // `parent="$parentPlayerFrame"` is taken LITERALLY — `0x6ee3e8` hands the raw string to
@@ -386,7 +386,7 @@ mod loader_tests {
         );
         assert_eq!(s.eval::<String>("return ParentLoaded").unwrap(), "MyFrame");
 
-        // Bottom-up: the child's OnLoad ran before the parent's (rf26).
+        // Bottom-up: the child's OnLoad ran before the parent's (`0x76a060`).
         let order: Vec<String> = s.eval("return loadorder").unwrap();
         assert_eq!(order, vec!["child".to_string(), "parent".to_string()]);
 
@@ -682,9 +682,9 @@ mod loader_tests {
     /// the findings behind those moves are asserted here, because each undid the other:
     /// **1186's** — a document that resolved *nothing* must not report success (Bagnon missed all
     /// eleven of its references and came back with zero errors) — so the row is in the report; and
-    /// **2155's** — the reference logs `Couldn't open %s` and carries on with nothing raised
-    /// (wow-re `ui/scratch/xml-toc-path-resolution.md` §4, VERIFIED) — so the row is *not* in
-    /// `errors`, which is the list whose entries reach the player's red error dialog.
+    /// **2155's** — the reference logs `Couldn't open %s` (`0x6edaa0`, `0x846ff4`) and carries on
+    /// with nothing raised — so the row is *not* in `errors`, which is the list whose entries
+    /// reach the player's red error dialog.
     #[test]
     fn missing_include_is_a_missing_file_not_an_error_and_continues() {
         let s = UiScript::new().unwrap();
@@ -706,7 +706,7 @@ mod loader_tests {
     }
 
     /// So is a missing `<Script file=>` — it drops every handler the file would have defined, and
-    /// the reference's own leg for it (`"Error loading %s"`, `include-lua-dispatch.md` §7) returns
+    /// the reference's own leg for it (`"Error loading %s"`, `0x872e50`) returns
     /// normally rather than throwing.
     #[test]
     fn missing_script_file_is_a_missing_file_not_an_error_and_continues() {
@@ -980,7 +980,7 @@ mod loader_tests {
         assert!(s.eval::<bool>("return Another == nil").unwrap());
     }
 
-    /// `<StatusBar>` LoadXML extras (RF-28): value attributes, `<BarTexture>` + `<BarColor>`
+    /// `<StatusBar>` LoadXML extras (`0x782ef0`): value attributes, `<BarTexture>` + `<BarColor>`
     /// children, orientation — landing in the widget state and scaling the extracted bar quad.
     #[test]
     fn statusbar_xml_extras_apply() {
@@ -1034,11 +1034,10 @@ mod loader_tests {
         );
     }
 
-    /// The creation-path implicit anchor, XML half (decision 1310; wow-re
-    /// `region-implicit-anchor.md`, §5 VERIFIED): a `<Texture>` with zero anchors gets
-    /// SetAllPoints(parent) right after its LoadXML — two corner anchors that pin all four
-    /// edges, so an authored `<Size>` is structurally unread. This is B180's engine shape: the
-    /// reference stack-split plate authors a vestigial 256×32 and renders 172×96, the frame.
+    /// The creation-path implicit anchor, XML half (decision 1310; `0x7701c0`): a `<Texture>` with
+    /// zero anchors gets SetAllPoints(parent) right after its LoadXML — two corner anchors that pin
+    /// all four edges, so an authored `<Size>` is structurally unread. This is B180's engine shape:
+    /// the reference stack-split plate authors a vestigial 256×32 and renders 172×96, the frame.
     #[test]
     fn sized_anchorless_layer_texture_fills_its_frame() {
         let mut s = UiScript::new().unwrap();
@@ -1376,8 +1375,9 @@ mod loader_tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
-    /// `<EditBox>` LoadXML extras (RF-0082): `letters` → SetMaxLetters and the config flags land in
-    /// the widget state; a click focuses it and the `<OnTextChanged>` handler fires on a typed char.
+    /// `<EditBox>` LoadXML extras (`0x779fb0`): `letters` → SetMaxLetters and the config flags land
+    /// in the widget state; a click focuses it and the `<OnTextChanged>` handler fires on a typed
+    /// char.
     #[test]
     fn editbox_xml_extras_apply() {
         let mut s = UiScript::new().unwrap();
@@ -1829,8 +1829,8 @@ mod loader_tests {
     }
 
     /// **The `<Scripts>` walker auto-enables the mouse kind when it attaches a mouse handler**
-    /// (`0x769ef0` → `0x76af00(2,-1)` per handler name; wow-re `ui/scratch/scripts-auto-enable.md`,
-    /// §5 cross-checked) — the reference's GameTimeFrame declares `<OnEnter>`/`<OnLeave>` and no
+    /// (`0x769ef0` → `0x76af00(2,-1)` per handler name) — the reference's GameTimeFrame declares
+    /// `<OnEnter>`/`<OnLeave>` and no
     /// `enableMouse`, yet its tooltip hovers in the real client. The kind-2 name set is exactly
     /// {OnEnter, OnLeave, OnMouseDown, OnMouseUp, OnDragStart}: `OnDragStop`/`OnReceiveDrag` are
     /// NOT in it, and the law is XML-load-time only — the Lua SetScript binding (`0x7748d0`)
@@ -1877,9 +1877,7 @@ mod loader_tests {
     /// skips the whole font-attribute surface, and feeds the SAME node to the button's persistent
     /// Normal-state `CSimpleFont` at `+0x33c` (`0x778ba9`/`0x778baf call 0x783c30`). One owner per
     /// attribute: the label pass reads the element's name and geometry, the state-font pass reads
-    /// its `inherits=`, and neither reads the other's. (wow-re
-    /// `scratch/fontstring-loadxml-font-attrs.md` §3/§7 and
-    /// `scratch/resize-bounds-and-button-fontstring.md` §5.3 — VERIFIED off the bytes.)
+    /// its `inherits=`, and neither reads the other's.
     ///
     /// **Why this could sit broken indefinitely.** The reference writes `<ButtonText>` 31 times and
     /// `<NormalText>` never, so our own FrameXML could not notice the tag was unhandled — and an
@@ -1976,8 +1974,7 @@ mod loader_tests {
     /// disowned of its own font attributes — so its `justifyH` never reaches the label and the
     /// implicit anchor stays CENTER, while a `<ButtonText>`'s does and still seats LEFT.**
     ///
-    /// `CSimpleButton::LoadXML 0x7788c0`'s child chain routes them apart (wow-re
-    /// `scratch/button-label-build-and-anchor-order.md`, §5 + arbitration, VERIFIED):
+    /// `CSimpleButton::LoadXML 0x7788c0`'s child chain routes them apart:
     /// `<ButtonText>` (tag `0x8799f0`, compared `0x7789c1`) goes to `0x7789d0 call 0x6f2780`, the
     /// ordinary `<FontString>` region builder the `<Layers>` walker uses, which never writes
     /// `+0x12c`; `<NormalText>` (tag `0x879978`, `0x778b43`) goes to the inline build
@@ -2109,8 +2106,8 @@ mod loader_tests {
         );
     }
 
-    /// **`text=` is a GLOBAL-STRING LOOKUP, not a literal** (wow-re rf28 l.36/l.115 →
-    /// `FrameScript_GetText 0x703bf0`). Every arm of [`Loader::resolve_text`] in one document:
+    /// **`text=` is a GLOBAL-STRING LOOKUP, not a literal** (`FrameScript_GetText 0x703bf0`). Every
+    /// arm of [`Loader::resolve_text`] in one document:
     /// a `<Button text=>`, a `<ButtonText text=>` and a `<FontString text=>` all resolve through
     /// the VM's globals; a value with no matching global falls back to the LITERAL (benilla's own
     /// divergence, so its plain-English FrameXML keeps working); and a **key-shaped** miss warns,
@@ -2300,7 +2297,7 @@ mod loader_tests {
     /// (ref SpellBookFrame.xml l.36), and the real client creates from the ELEMENT, not from any
     /// attribute on it — `Button::LoadXML 0x7788c0` routes all four `<...Texture>` children through
     /// the same texture adder the `<Layers>` walker uses (`0x6f26f0`), each followed only by the slot
-    /// store, which does no geometry (wow-re `system/ui/scratch/region-implicit-anchor.md` §3).
+    /// store, which does no geometry.
     ///
     /// The report is pfUI's spellbook skin, which takes `SpellBookSkillLineTab<i>:GetNormalTexture()`
     /// and immediately `:SetTexCoord()`s it; the corpus carries 38 bare `<DisabledTexture />` besides.
@@ -2509,8 +2506,7 @@ mod region_template_tests {
     }
 
     /// **A font-object name resolves case-INSENSITIVELY**, because the client's font registry
-    /// compares its keys with `SStrCmpI` (`0x783870`/`0x7838c7`, wow-re
-    /// `font-object-lua-surface.md`: *"Font names are matched case-insensitively"*).
+    /// compares its keys with `SStrCmpI` (`0x783870`/`0x7838c7`).
     ///
     /// `Recap/RecapOptions.xml:32` inherits `GameFontHighLightSmall`; the shipped font is
     /// `GameFontHighlightSmall`, one letter's case apart. On the real client that resolves, and it

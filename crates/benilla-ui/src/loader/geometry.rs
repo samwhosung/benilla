@@ -6,7 +6,7 @@ use super::regions::FontAttrs;
 use super::{abs_dim, children_named, Loader};
 
 impl Loader<'_> {
-    /// LoadXML attribute handling (rf24 `0x769820`): the subset the v1 object model exposes, plus a
+    /// LoadXML attribute handling (`0x769820`): the subset the v1 object model exposes, plus a
     /// warn-once for the attributes whose methods don't exist yet (a next-phase gap, not a workaround).
     pub(super) fn apply_attrs(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         if el.attr_bool("hidden") {
@@ -28,8 +28,6 @@ impl Loader<'_> {
         // The **Lua** binding is the loud one and stays as it is: `0x774360`'s miss reaches
         // `0x774456 call 0x6f4940` (`luaL_error`), whose callee chain `luaG_errormsg 0x6fc780` /
         // `luaD_throw 0x6f5d80` contains no `ret` at all — the epilogue after it is dead code.
-        //
-        // (wow-re `ui/scratch/frame-strata-miss-law.md`, §5 trio + orchestrator arbitration.)
         //
         // Resolving here rather than letting `SetFrameStrata` raise is what reproduces that split:
         // routed through `self.call`, a bad value became a `report.errors` row, which is a script
@@ -57,11 +55,11 @@ impl Loader<'_> {
         // `scale=` on a MODEL pane is the model's own scale, not the frame's: `CSimpleModel::
         // LoadXML` (`0x76cac0`) writes it into `+0x3a0` at `76cb61` — the field `SetModelScale`
         // writes — and raises `Frame %s: Invalid model scale: %s` at `76cb92` for `≤ 0` (a raise,
-        // not a clamp; wow-re `modelframe-render-law.md` §2). Every `scale=` in the shipped
+        // not a clamp). Every `scale=` in the shipped
         // FrameXML sits on a model pane (the cooldown indicator's 0.75, the autocast shine's
         // 1.2/1.22, the pings' 0.4, the dressing room's 2.0), and until decision 2007 the loader
         // read none of them. Whether the generic frame loader (`0x769820`) reads a `scale`
-        // attribute of its own is not carved; a plain frame's `scale=` is left as it was.
+        // attribute of its own is unconfirmed; a plain frame's `scale=` is left as it was.
 
         // `file=` on a model pane is `SetModel` (`CSimpleModel::LoadXML` `0x76cac0` installs the
         // file into the widget, resident or streaming — decision 2013). Until 2013 no XML-declared
@@ -87,7 +85,7 @@ impl Loader<'_> {
             }
         }
         // The model pane's own fog attributes and `<FogColor>` child (`CSimpleModel::LoadXML`
-        // `0x76cac0`, render law §5.4). `fogNear`/`fogFar` are **clamped at `≥ 0`** here and only
+        // `0x76cac0`). `fogNear`/`fogFar` are **clamped at `≥ 0`** here and only
         // here (`76cbbb`-`76cbd2` / `76cbf3`-`76cc0a`: `0.0 fcomp value ; jne store ; else store
         // 0.0`) — the Lua setters store raw. The `<FogColor>` child writes the packed colour AND
         // arms the fog bit, so it is `SetFogColor` in every respect; nothing in XML touches the
@@ -117,7 +115,7 @@ impl Loader<'_> {
                 self.call(wrapper, "SetID", n, dbg);
             }
         }
-        // `clampedToScreen="true"` → SetClampedToScreen (rf24 `0x768cc0` — geometry flags bit4,
+        // `clampedToScreen="true"` → SetClampedToScreen (`0x768cc0` — geometry flags bit4,
         // the layout resolve's screen clamp; GameTooltip frames carry it by construction).
         if el.attr_bool("clampedToScreen") {
             self.call(wrapper, "SetClampedToScreen", true, dbg);
@@ -148,9 +146,8 @@ impl Loader<'_> {
             );
         }
         // `<ResizeBounds><minResize><AbsDimension x= y=/></minResize><maxResize>…` → the resize
-        // quad (rf24 `0x769820`'s child-loop arm at `0x769baa`; wow-re
-        // `system/ui/scratch/resize-bounds-and-button-fontstring.md` §4). Three clauses from that
-        // carve rather than from the shape of the element:
+        // quad (`0x769820`'s child-loop arm at `0x769baa`). Three clauses from the reference
+        // rather than from the shape of the element:
         //
         //  · **Both pairs are written unconditionally once `<ResizeBounds>` matches**, each side
         //    defaulting to `0` before its lookup — so a block carrying only `<minResize>` RESETS
@@ -173,8 +170,8 @@ impl Loader<'_> {
             }
         }
         // `movable`/`resizable` → SetMovable/SetResizable — the same flag word the methods write
-        // (`0x76a3c0` with mask 0x100 / 0x200; wow-re `rf24-framexml-loader.md` records the loader
-        // calling that very setter). Both were in the gap list below until the movable family
+        // (`0x76a3c0` with mask 0x100 / 0x200; the XML loader `0x769820` calls that very setter).
+        // Both were in the gap list below until the movable family
         // landed; leaving them there would have left every `movable="true"` reference window
         // undraggable while `SetMovable` worked from Lua.
         if el.attr_bool("movable") {
@@ -184,7 +181,7 @@ impl Loader<'_> {
             self.call(wrapper, "SetResizable", true, dbg);
         }
         // `toplevel` → SetToplevel — the third bit of that same flag word (`0x76a3c0` mask `0x1`,
-        // XML site `0x7698ec`; wow-re `ui/scratch/toplevel-raise.md`), and the third attribute to
+        // XML site `0x7698ec`), and the third attribute to
         // graduate out of the gap list below for the same reason: the raise law is built
         // (`script::object::toplevel`), so accepting the attribute now means the behaviour, not
         // silence. 82 corpus addons and thirteen of our own frames declare it.
@@ -192,14 +189,14 @@ impl Loader<'_> {
             self.call(wrapper, "SetToplevel", true, dbg);
         }
         // `enableKeyboard="true"` — the XML half of the flag, which enables BOTH key kinds
-        // (`scripts-auto-enable.md` §1-2). The flag is real, and `script::keyboard`'s delivery
+        // (`0x769ae8`/`0x769af3`). The flag is real, and `script::keyboard`'s delivery
         // walk is what reads it (1319).
         if el.attr_bool("enableKeyboard") {
             self.call(wrapper, "EnableKeyboard", true, dbg);
         }
     }
 
-    /// `<Size>` → SetWidth/SetHeight (rf24 `0x767800`). Accepts either `<Size><AbsDimension x= y=/>`
+    /// `<Size>` → SetWidth/SetHeight (`0x767800`). Accepts either `<Size><AbsDimension x= y=/>`
     /// or the inline `<Size x= y=/>` form; a dimension that's absent is left untouched (the client's
     /// "0 = derive"). ALL `<Size>` children apply, in document order — template expansion appends the
     /// instance's children after the template's ([`crate::framexml::expand`]), and the client simply
@@ -208,8 +205,9 @@ impl Loader<'_> {
     /// the quest log's Abandon button — 125×21 in the instance XML, 80×22 on screen.)
     /// `<TitleRegion setAllPoints="true"/>` (or one with its own `<Size>`/`<Anchors>`): the
     /// frame's drag handle, built through the same `CreateTitleRegion` the Lua API exposes — so
-    /// the element and a later `frame:CreateTitleRegion()` name ONE object (the verb is
-    /// idempotent; wow-re `widget-api-batch-benilla.md` Q6) — then laid out like any region.
+    /// the element and a later `frame:CreateTitleRegion()` name ONE object (XML site `0x769b2a`
+    /// is the same code path as `CreateTitleRegion 0x773910`, idempotent) — then laid out like
+    /// any region.
     /// The stock `TutorialFrame.xml` declares one over its whole plate (1976).
     pub(super) fn apply_title_region(
         &mut self,
@@ -246,9 +244,10 @@ impl Loader<'_> {
     }
 
     /// `<Anchors>` → SetPoint per `<Anchor point= relativeTo= relativePoint=><Offset .../></Anchor>`
-    /// (rf24 `0x767800`). `relativePoint` defaults to `point`; `relativeTo` is `$parent`-substituted
-    /// (rf27) and passed by name (the object model resolves it, falling back to the parent when
-    /// absent/unresolved); a missing `point` is skipped with a warning ("Invalid anchor point").
+    /// (`0x767800`). `relativePoint` defaults to `point`; `relativeTo` is `$parent`-substituted
+    /// (`0x76c5b0`) and passed by name (the object model resolves it, falling back to the parent
+    /// when absent/unresolved); a missing `point` is skipped with a warning ("Invalid anchor
+    /// point").
     /// The `setAllPoints="true"` shorthand applies first, like the region path — a frame carrying
     /// only the attribute (WorldMapFrame's chrome layers) pins TOPLEFT+BOTTOMRIGHT to its parent.
     pub(super) fn apply_anchors(

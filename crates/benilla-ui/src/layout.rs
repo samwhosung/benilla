@@ -1,13 +1,10 @@
 //! The frame anchor/layout resolver — anchor graph → resolved rects (decision 0068).
 //!
 //! This is a faithful transcription of the WoW 1.12.1 client's `CLayoutFrame` geometry resolver,
-//! whose math is reverse-engineered bit-exact against `WoW.exe` in the sibling repo `wow-5875-re`
-//! (`system/ui/scratch/layout.md`, `.../rf32-composed-resolver.md`, `.../frame-model.md`,
-//! `.../propagation.md`). The leaf float kernels and the recursion-guarded per-edge composition are
-//! transcribed from that repo's own verified `w5875-ui::layout` crate
-//! (`wow-5875-re/crates/ui/src/layout.rs`), which is gated bit-exact under a Unicorn/`WoW.exe`
-//! difftest harness (per-function diffs + the composed `assemble` over 6006 synthesized cases).
-//! Matching that crate's operations and their order — not "improving" the arithmetic — is the goal.
+//! reverse-engineered bit-exact against `WoW.exe`. The leaf float kernels and the
+//! recursion-guarded per-edge composition are transcribed from the reference, function by function
+//! and verified bit-exact. Matching the reference's operations and their order — not "improving"
+//! the arithmetic — is the goal.
 //!
 //! ## Precision — why `f64` intermediates, not naive `f32`
 //!
@@ -18,41 +15,41 @@
 //! (at the final store), whereas doing every operation in `f32` would round at each step and
 //! diverge. So "the client is f32" is true only at the storage boundaries: to be bit-faithful the
 //! chain of `+`/`-`/`*0.5` runs in `f64` (host-exact — every operand is `f32`-derived, so each op is
-//! exact in `f64`) with an explicit `as f32` at exactly the sites the RE pins. This mirrors
-//! `w5875-ui::layout` verbatim.
+//! exact in `f64`) with an explicit `as f32` at exactly the sites the reference pins.
 //!
 //! ## Coordinate space
 //!
 //! Rects are stored in the client's own convention: `[bottom, left, top, right]` (frame-absolute
-//! `+0x64/+0x68/+0x6c/+0x70`; VERIFIED via `GetRect 0x768320` + the Lua `GetBottom/Left/Top/Right`
-//! readers, `layout.md`). WoW UI space is **y-up**: `top > bottom`, the screen root's rect is the
+//! `+0x64/+0x68/+0x6c/+0x70`; `GetRect 0x768320` and the Lua `GetBottom/Left/Top/Right`
+//! readers). WoW UI space is **y-up**: `top > bottom`, the screen root's rect is the
 //! physical screen (the anchor chain bottoms out at the `CSimpleTop` root), and `width = right −
 //! left`, `height = top − bottom`. Coordinates are screen pixels throughout; `scale` (layoutScale =
-//! effective scale, `propagation.md`) scales only the per-anchor offsets and the `width/height` span.
+//! effective scale, `effective_scale 0x76ac90`) scales only the per-anchor offsets and the
+//! `width/height` span.
 
 use std::collections::VecDeque;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// Constants (objdump-VERIFIED in layout.md "Constants")
+// Constants (objdump-read from `WoW.exe`)
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// UNSET coordinate sentinel: `+Infinity` (the `.data` slot `0xcf550c`, runtime-initialized from
-/// `[0x81d56c] = 0x7f800000`, `layout.md`). "coordinate is set" ⇔ `x != +Inf`. Intermediates carry
+/// `[0x81d56c] = 0x7f800000`). "coordinate is set" ⇔ `x != +Inf`. Intermediates carry
 /// this in `f64`; the `f32` narrowing preserves it (`+Inf as f32 == +Inf`).
 const UNSET: f64 = f64::INFINITY;
 
-/// `OnSizeChanged` trigger ε — `_DAT_008029d4` = `0x34800000` ≈ 2.384e-7 (`layout.md` Constants;
-/// applied in `ApplyRect 0x76b580`). `OnSizeChanged(width,height)` fires iff `|Δwidth| ≥ ε` OR
+/// `OnSizeChanged` trigger ε — `_DAT_008029d4` = `0x34800000` ≈ 2.384e-7 (applied in
+/// `ApplyRect 0x76b580`). `OnSizeChanged(width,height)` fires iff `|Δwidth| ≥ ε` OR
 /// `|Δheight| ≥ ε` between the old and new resolved rect. See [`size_changed`].
 pub const SIZE_EPS: f64 = 2.384_185_791_015_625e-7;
 
-/// Recompute change threshold ε — `_DAT_0080c5c8` = `0x3727c5ac` ≈ 9.96e-6 (`layout.md`; applied in
+/// Recompute change threshold ε — `_DAT_0080c5c8` = `0x3727c5ac` ≈ 9.96e-6 (applied in
 /// `recompute 0x768d20`): an edge must move at least this far vs the cached rect for a re-store +
 /// `ApplyRect`. Benilla owns its own caching (the caller's dirty gate); this const records the client's
 /// documented threshold for fidelity work that needs it.
 pub const RESOLVE_EPS: f64 = f32::from_bits(0x3727_c5ac) as f64;
 
-/// point-id → X column (VERIFIED table `0x81c3b8`.., `layout.md` "Point-id → coordinate"):
+/// point-id → X column (table `0x81c3b8`..):
 /// `{0,3,6}` (LEFT column) → 0, `{1,4,7}` (center) → 1, `{2,5,8}` (RIGHT column) → 2.
 const X_COL: [u8; 9] = [0, 1, 2, 0, 1, 2, 0, 1, 2];
 /// point-id → Y row: `{0,1,2}` (TOP row) → 0, `{3,4,5}` (center) → 1, `{6,7,8}` (BOTTOM row) → 2.
@@ -62,8 +59,8 @@ const Y_ROW: [u8; 9] = [0, 0, 0, 1, 1, 1, 2, 2, 2];
 // Public types
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// The nine anchor points, with the client's exact discriminants (VERIFIED static tables
-/// `0x81c3b8–0x81c3fc`, `layout.md`): the id is the slot index in the client's `anchorPoints[9]`.
+/// The nine anchor points, with the client's exact discriminants (static tables
+/// `0x81c3b8–0x81c3fc`): the id is the slot index in the client's `anchorPoints[9]`.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Point {
@@ -138,7 +135,7 @@ impl Rect {
         Rect::new(a[0], a[1], a[2], a[3])
     }
 
-    /// `right − left` (`GetWidth` semantics, `layout.md`).
+    /// `right − left` (`GetWidth` semantics).
     #[inline]
     pub fn width(self) -> f32 {
         self.right - self.left
@@ -151,9 +148,10 @@ impl Rect {
     }
 }
 
-/// One anchor of a frame — a `CAnchor` record (`{xOff@4, yOff@8, relativeTo@0xc, relativePoint@0x10}`,
-/// `frame-model.md`). `point` is the point *on this frame* being pinned (its `anchorPoints[9]` slot);
-/// `relative_point` is the point *on the target* it pins to.
+/// One anchor of a frame — a `CAnchor` record
+/// (`{xOff@4, yOff@8, relativeTo@0xc, relativePoint@0x10}`). `point` is the point *on this frame*
+/// being pinned (its `anchorPoints[9]` slot); `relative_point` is the point *on the target* it
+/// pins to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Anchor {
     /// The point on *this* frame that is being anchored (its `anchorPoints[9]` slot index).
@@ -189,7 +187,7 @@ impl Anchor {
 
 /// A frame's full layout input: its anchors, its optional explicit size, its scale, and the
 /// clamp-to-screen flag + extents. Mirrors the client's geometry subobject fields consulted by the
-/// resolver (`frame-model.md`, `rf32-composed-resolver.md`): `anchorPoints[9]` (`G+0x28`), `width`
+/// resolver: `anchorPoints[9]` (`G+0x28`), `width`
 /// (`G+0x50`), `height` (`G+0x54`), `layoutScale` (`G+0x58`), flags bit4 = clamp (`G+0x3c`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutInput {
@@ -197,14 +195,14 @@ pub struct LayoutInput {
     /// a `point`, the *last* wins (the client's `SetPoint 0x767c70` overwrites the slot).
     pub anchors: Vec<Anchor>,
     /// Explicit width (`G+0x50`); **`0.0` ⇒ derive from opposing anchors** (the no-explicit-size
-    /// sentinel `DAT_007ffd74`, `layout.md`).
+    /// sentinel `DAT_007ffd74`).
     pub width: f32,
     /// Explicit height (`G+0x54`); `0.0` ⇒ derive from opposing anchors.
     pub height: f32,
-    /// `layoutScale` = effective scale (`parentScale · ownScale`, ε-gated, `propagation.md`); the
-    /// px↔coord multiplier applied to offsets and the size span. Default `1.0`.
+    /// `layoutScale` = effective scale (`parentScale · ownScale`, ε-gated; `effective_scale
+    /// 0x76ac90`); the px↔coord multiplier applied to offsets and the size span. Default `1.0`.
     pub scale: f32,
-    /// Clamp the assembled rect into `[0, extent]` per axis (`G` flags bit4, `layout.md` Assemble).
+    /// Clamp the assembled rect into `[0, extent]` per axis (`G` flags bit4; `assemble 0x767a20`).
     pub clamp: bool,
     /// Screen X extent, only consulted when `clamp` (client `0x41ae60` return, default `0.8`).
     pub extent_x: f32,
@@ -249,12 +247,11 @@ pub enum ResolveOutcome {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// Leaf float kernels — the owned-fidelity math (layout.md). Transcribed from w5875-ui::layout,
-// binary-diffed. Each returns its coordinate in `f64` (the un-narrowed x87 `st0` observable);
-// callers narrow to `f32` at the documented store sites.
+// Leaf float kernels — the owned-fidelity math. Each returns its coordinate in `f64` (the
+// un-narrowed x87 `st0` observable); callers narrow to `f32` at the documented store sites.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// `combineEdge 0x767440(center, opp, span)` (`layout.md`): resolve one edge from the opposite
+/// `combineEdge 0x767440(center, opp, span)`: resolve one edge from the opposite
 /// edge, the axis center, and the signed `size·scale` span, in that fallback order.
 ///
 /// - opposite known and non-zero span → `opp + span` (edge = opposite ± size·scale);
@@ -281,7 +278,7 @@ pub fn combine_edge(center: f32, opp: f32, span: f32) -> f64 {
     UNSET
 }
 
-/// `combineCenter 0x7672d0(lo, hi, span)` (`layout.md`): resolve an axis center from the low edge,
+/// `combineCenter 0x7672d0(lo, hi, span)`: resolve an axis center from the low edge,
 /// the high edge, and the signed `size·scale` span.
 ///
 /// - low known: high known → `(lo+hi)·0.5`; else non-zero span → `span·0.5 + lo`;
@@ -304,15 +301,15 @@ pub fn combine_center(lo: f32, hi: f32, span: f32) -> f64 {
     UNSET
 }
 
-/// `CAnchor::ResolveX 0x7a2f90(scale)` (`layout.md`): resolve this anchor's X coordinate against its
+/// `CAnchor::ResolveX 0x7a2f90(scale)`: resolve this anchor's X coordinate against its
 /// `relativeTo`'s cached rect.
 ///
 /// `rect` = the target's cached rect `[bottom, left, top, right]` when `GetRect` succeeded (cache
 /// valid), `None` when it failed ⇒ `+Inf`. `mirror` = the target's geometry-vtable `+0x24`
 /// normalize predicate (RTL/local-origin): when set, X edges are translated so `left → 0`,
 /// `right → right − left` (each stored back as `f32`, the binary's `fstp m32`). For an ordinary
-/// frame the predicate returns 0, so `mirror` is `false` (VERIFIED `0x46ff60 = xor eax,eax; ret`,
-/// `rf32-composed-resolver.md`). `coord = xOff·scale + edge` for the relativePoint's column
+/// frame the predicate returns 0, so `mirror` is `false` (`0x46ff60 = xor eax,eax; ret`).
+/// `coord = xOff·scale + edge` for the relativePoint's column
 /// (center = mid-X + xOff·scale). `rel_point > 8` ⇒ `+Inf`.
 pub fn anchor_resolve_x(
     scale: f32,
@@ -340,7 +337,7 @@ pub fn anchor_resolve_x(
     }
 }
 
-/// `CAnchor::ResolveY 0x7a3070(scale)` — the Y twin of [`anchor_resolve_x`] (`layout.md`). `mirror`
+/// `CAnchor::ResolveY 0x7a3070(scale)` — the Y twin of [`anchor_resolve_x`]. `mirror`
 /// normalizes the Y edges (`bottom → 0`, `top → top − bottom`); `coord = yOff·scale + edge` for the
 /// relativePoint's row (center = mid-Y + yOff·scale). `rect` = `[bottom, left, top, right]`.
 pub fn anchor_resolve_y(
@@ -377,7 +374,7 @@ pub struct AssembleRect {
     pub rect: [f32; 4],
 }
 
-/// `assemble 0x767a20` (`layout.md`): given the four resolved edge coordinates `[bottom, left, top,
+/// `assemble 0x767a20`: given the four resolved edge coordinates `[bottom, left, top,
 /// right]` (each `+Inf` ⇒ unresolvable), fail if any is `+Inf`; else optionally clamp into
 /// `[0, extent]` per axis.
 ///
@@ -420,7 +417,7 @@ pub fn assemble_rect(edges: [f32; 4], clamp: bool, extent_x: f32, extent_y: f32)
     }
 }
 
-/// `OnSizeChanged` fire test (`ApplyRect 0x76b580`, `layout.md`): fires iff `|Δwidth| ≥ [`SIZE_EPS`]`
+/// `OnSizeChanged` fire test (`ApplyRect 0x76b580`): fires iff `|Δwidth| ≥ [`SIZE_EPS`]`
 /// OR `|Δheight| ≥ SIZE_EPS`, with `width = right − left`, `height = top − bottom`. Deltas are `f64`
 /// of the `f32` edges (the binary's `fsub` of the `fld`'d rect components).
 pub fn size_changed(old: Rect, new: Rect) -> bool {
@@ -432,10 +429,10 @@ pub fn size_changed(old: Rect, new: Rect) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// The composed resolver — recursion-guarded per-edge sequencing over the leaves above.
-// Transcribed from w5875-ui::layout (RF-0032, rf32-composed-resolver.md): bit-exact over the
-// binary's `assemble 0x767a20` → six per-edge resolvers → anchor scans → leaf kernels. Adds NO new
-// arithmetic — only integer control flow + the documented `fstp m32` `f32` narrowing at each site.
+// The composed resolver — recursion-guarded per-edge sequencing over the leaves above,
+// bit-exact over the binary's `assemble 0x767a20` → six per-edge resolvers → anchor scans → leaf
+// kernels. Adds NO new arithmetic — only integer control flow + the documented `fstp m32` `f32`
+// narrowing at each site.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// A resolved anchor for the internal edge tree: like [`Anchor`] but with the target's rect already
@@ -461,7 +458,7 @@ struct EdgeInput {
     extent_y: f32,
 }
 
-// recursion-guard bits (the binary's `G+0x28` bitfield, layout.md).
+// recursion-guard bits (the binary's `G+0x28` bitfield).
 const G_LEFT: u32 = 0x01;
 const G_TOP: u32 = 0x02;
 const G_RIGHT: u32 = 0x04;
@@ -469,7 +466,7 @@ const G_BOTTOM: u32 = 0x08;
 const G_XC: u32 = 0x10;
 const G_YC: u32 = 0x20;
 
-// per-edge point-id scan tables (`.rdata` 0x81c3b8..0x81c3f4, rf32-composed-resolver.md).
+// per-edge point-id scan tables (`.rdata` 0x81c3b8..0x81c3f4).
 const IDS_LEFT: [usize; 3] = [0, 3, 6];
 const IDS_RIGHT: [usize; 3] = [2, 5, 8];
 const IDS_TOP: [usize; 3] = [0, 1, 2];
@@ -506,12 +503,12 @@ fn anchor_scan_y(ids: &[usize; 3], f: &EdgeInput) -> f64 {
     UNSET
 }
 
-/// `width·scale` / `height·scale` — the `layout_767_span` PRIMITIVE (`rf32-composed-resolver.md`):
-/// operands are `f32` fields, the product narrowed to `f32` at the `fstp [esp]` site, negated for
-/// LEFT/BOTTOM.
+/// `width·scale` / `height·scale` — the per-edge resolvers' shared span step (`LEFT 0x7673d0` et
+/// al.): operands are `f32` fields, the product narrowed to `f32` at the `fstp [esp]` site,
+/// negated for LEFT/BOTTOM.
 ///
-/// **`size` is not always the authored field, and this is the trap** (decision 1349, wow-re
-/// `region-size-fallback.md`): each caller's `call [eax+0x1c]` is **virtual**. A plain frame lands on
+/// **`size` is not always the authored field, and this is the trap** (decision 1349): each
+/// caller's `call [eax+0x1c]` is **virtual**. A plain frame lands on
 /// `0x768420 fld [G+0x50]` — the flat read this signature assumes — but a `CSimpleTexture` lands on
 /// `0x770720` and a `CSimpleFontString` on `0x772930`, both of which substitute a **content-derived**
 /// extent when the authored value is exactly `0.0` (the texture's own texel size, one texel per
@@ -674,7 +671,7 @@ fn resolve_edges(f: &EdgeInput) -> ResolveOutcome {
 /// later anchor wins (the client's `SetPoint` overwrite).
 ///
 /// This is the fidelity surface: it builds the client's `anchorPoints[9]` view and runs the
-/// verified composed `assemble` (`rf32-composed-resolver.md`).
+/// composed `assemble 0x767a20`.
 pub fn resolve_rect(
     frame: &LayoutInput,
     target_rect: impl FnMut(Handle) -> Option<Rect>,
@@ -696,7 +693,7 @@ fn build_edge_input(
             y_off: a.y_off,
             rel_point: a.relative_point.id() as u32,
             rel_rect: target_rect(a.relative_to).map(Rect::to_array),
-            // Ordinary frames' normalize predicate returns 0 (rf32-composed-resolver.md); RTL/mirror
+            // Ordinary frames' normalize predicate returns 0 (`0x46ff60`); RTL/mirror
             // frames are not modeled here (the leaf `anchor_resolve_*` covers that leg).
             mirror: false,
         });
@@ -736,8 +733,8 @@ pub fn resolve_rect_edges(
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // Graph driver — resolve a set of frames in dependency order (anchor targets before dependents),
 // detecting cycles. This is benilla's orchestration, not client fidelity math: the client resolves
-// lazily-on-read + per-frame-batched via a dependency-ordered deferred queue (layout.md "Resolve /
-// dirty / cache flow"); we express the same dependency ordering as an explicit topological pass.
+// lazily-on-read + per-frame-batched via a dependency-ordered deferred queue (`0x7680e0`, ordered
+// by `0x7681b0`); we express the same dependency ordering as an explicit topological pass.
 //
 // ## Why a dense, reusable solver rather than a fresh map-backed graph
 //
@@ -1010,9 +1007,8 @@ mod tests {
     }
 
     // ── Leaf kernels ─────────────────────────────────────────────────────────────────────────
-    // Input probes transcribed from wow-5875-re/crates/ui/tests/difftest/layout.rs (the explicit
-    // per-leg probes; binary-diffed there). Expected outputs are hand-computed from the layout.md
-    // formulas — this crate has no WoW.exe emulator, so these are spec-derived, not binary-diffed.
+    // Expected outputs are hand-computed from the formulas above — this crate has no `WoW.exe`
+    // emulator, so these are spec-derived, not binary-diffed.
 
     #[test]
     fn combine_edge_legs() {
@@ -1116,8 +1112,7 @@ mod tests {
 
     // ── Composed resolver ─────────────────────────────────────────────────────────────────────
 
-    /// VERIFIED numeric vector from wow-5875-re/system/ui/scratch/rf32-composed-resolver.md
-    /// "Worked oracle (probe 1)" — binary-diffed there against WoW.exe's `assemble 0x767a20`.
+    /// A numeric oracle for `assemble 0x767a20`, confirmed against a running `WoW.exe`.
     #[test]
     fn oracle_single_topleft_explicit_size() {
         let f = LayoutInput::sized(
@@ -1140,7 +1135,7 @@ mod tests {
     fn single_anchor_all_nine_points_explicit_size() {
         // For each own-point p, anchor p -> the same point on screen, xOff/yOff 0, w100 h40.
         // The anchored corner/edge pins directly; the rest derive from size. We assert the pinned
-        // coordinate and the resulting width/height, computed by hand from layout.md.
+        // coordinate and the resulting width/height, computed by hand from the formulas above.
         let screen = screen_rect();
         for &p in &[
             Point::TopLeft,

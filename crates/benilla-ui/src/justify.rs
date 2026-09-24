@@ -43,9 +43,8 @@
 //!   (`0x87c7a0`). Per `script::binding_abi`, that arm does not return: it abandons the caller's
 //!   statement.
 //!
-//! Recorded in wow-re `system/ui/scratch/font-object-lua-surface.md` §9.4 and, for the
-//! fall-through and the unconditional inherit clear, `system/ui/scratch/justify-fallthrough-law.md`
-//! (§5 quad, arbitrated).
+//! The setter also clears the inherit bit unconditionally, whether or not the axis value changed
+//! (`0x79fc7c`).
 
 use crate::script::{JustifyH, JustifyV};
 

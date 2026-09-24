@@ -9,7 +9,7 @@ use super::{
 };
 
 impl Loader<'_> {
-    /// `<StatusBar>` LoadXML extras (RF-28, byte-verified table `0x782ef0`): `minValue`/`maxValue`
+    /// `<StatusBar>` LoadXML extras (`0x782ef0`): `minValue`/`maxValue`
     /// (a reversed pair is swapped — SetMinMaxValues normalizes identically), `defaultValue` →
     /// SetValue, `orientation`, and the `<BarTexture>`/`<BarColor>` children; the element's
     /// `drawLayer` names the bar texture's layer (widget default ARTWORK). The Slider's parallel
@@ -64,7 +64,7 @@ impl Loader<'_> {
         }
     }
 
-    /// `<Button>`/`<CheckButton>` extras (RF-28 `0x7788c0`/`0x785170` — the checkbox loader runs
+    /// `<Button>`/`<CheckButton>` extras (`0x7788c0`/`0x785170` — the checkbox loader runs
     /// the button one first, which this shared body mirrors): the four state textures, CheckButton's
     /// two checked textures + `checked` attr, `<ButtonText text=>`, and the `text` attribute. Each
     /// texture child takes a `file` or a `<Color>` (the same two forms as the Set*Texture methods)
@@ -87,8 +87,7 @@ impl Loader<'_> {
         // `GetObjectType`, and the click virtual) and exactly ONE on the geometry table — slot 1,
         // the destructor's adjustor thunk. `LoadXML` is geometry slot 2 (`0x81c7c8[2]` for Button,
         // `0x804594[2]` for LootButton), and those two entries are the same pointer: a
-        // `<LootButton>` element is parsed by `CSimpleButton::LoadXML 0x7788c0` *verbatim* (wow-re
-        // `ui/scratch/lootbutton-widget-type.md` §4 + `button-disabled-state-texture-law.md`).
+        // `<LootButton>` element is parsed by `CSimpleButton::LoadXML 0x7788c0` *verbatim*.
         // Stock `LootButtonTemplate` inherits `ItemButtonTemplate`, whose whole art is three state
         // textures — so with the tag rejected here the rows lost their Quickslot border, their
         // depress art and the `ButtonHilight-Square` that lights a row under the cursor. It is the
@@ -119,13 +118,13 @@ impl Loader<'_> {
                     // name="$parentIcon">` on the ref's own MacroFrameButtonTemplate, whose art
                     // arrives later through `SetTexture`) or a BARE one (`<NormalTexture/>`, the
                     // ref's own SpellBookSkillLineTabTemplate l.36). **The ELEMENT is what creates
-                    // the region; `file=` is not a gate.** wow-re `system/ui/ui.md` + `scratch/
-                    // region-implicit-anchor.md` §3: `Button::LoadXML 0x7788c0` routes all four
-                    // `<...Texture>` children through the SAME texture adder the `<Layers>` walker
-                    // uses (`0x6f26f0` — `0x778903` <NormalTexture> tag `0x879a30`, `0x778935`
-                    // <PushedTexture>, `0x778967` <DisabledTexture>, `0x778999` <HighlightTexture>),
-                    // "each followed only by the slot store (`0x778fd0` state-texture family /
-                    // `0x779110` highlight install), which does no geometry". The adder constructs;
+                    // the region; `file=` is not a gate.** `Button::LoadXML 0x7788c0` routes all
+                    // four `<...Texture>` children through the SAME texture adder the `<Layers>`
+                    // walker uses (`0x6f26f0` — `0x778903` <NormalTexture> tag `0x879a30`,
+                    // `0x778935` <PushedTexture>, `0x778967` <DisabledTexture>, `0x778999`
+                    // <HighlightTexture>), each followed only by the slot store (`0x778fd0`
+                    // state-texture family / `0x779110` highlight install), which does no
+                    // geometry. The adder constructs;
                     // nothing in that path reads an attribute first.
                     //
                     // This arm used to require `t.name().is_some()`, so a bare element built
@@ -193,9 +192,7 @@ impl Loader<'_> {
         // **Both spellings of the label** (`ButtonText` | `NormalText`), in document order.
         //
         // `<NormalText>` is not a synonym bolted on here — it is the binary's own second name for
-        // this slot, and **it is a genuinely different leg** (wow-re
-        // `scratch/button-label-build-and-anchor-order.md`, §5 + arbitration, VERIFIED; it
-        // corrected the earlier reading this comment used to carry). `CSimpleButton::LoadXML
+        // this slot, and **it is a genuinely different leg**. `CSimpleButton::LoadXML
         // 0x7788c0`'s 15-comparison child chain routes the two label spellings apart:
         //
         // - `<ButtonText>` (tag `0x8799f0`, compared `0x7789c1`) → `0x7789d0 call 0x6f2780`, the
@@ -235,7 +232,7 @@ impl Loader<'_> {
             // greeting rows hang theirs at TOPLEFT+20 beside the bullet; without this every
             // labelled Button centered its text over the whole face).
             // `<ButtonText text=>` is a FontString's own attribute — the same global-string lookup
-            // rf28 l.115 gives every `<FontString text=>`. See `Loader::resolve_text`.
+            // `0x703bf0` gives every `<FontString text=>`. See `Loader::resolve_text`.
             let label = match bt.attr("text") {
                 Some(raw) => self.resolve_text(raw, dbg),
                 None => String::new(),
@@ -320,8 +317,8 @@ impl Loader<'_> {
             }
         }
         if let Some(text) = el.attr("text") {
-            // `<Button text=>` → the ButtonText fontstring, global-string resolved (rf28 l.36,
-            // `0x703bf0`). This is what makes the reference's `text="DELETE"` read "Delete".
+            // `<Button text=>` → the ButtonText fontstring, global-string resolved
+            // (`0x703bf0`). This is what makes the reference's `text="DELETE"` read "Delete".
             let text = self.resolve_text(text, dbg);
             self.call(wrapper, "SetText", text, dbg);
         }
@@ -349,8 +346,7 @@ impl Loader<'_> {
                 // These three are `<Font>`-TYPED elements — `CSimpleButton::LoadXML 0x7788c0`
                 // routes them at `0x778bf4` into the SAME `0x783c30` a top-level `<Font>` uses — so
                 // they take `inherits=` and `font=` alike, and `font=` wins: both land in one slot
-                // and `0x770c60` unlinks the previous parent (wow-re
-                // `fontstring-loadxml-font-attrs.md` C5; `font=`'s registry-first path is
+                // and `0x770c60` unlinks the previous parent (`font=`'s registry-first path is
                 // `0x783d15` → `0x783d22 call 0x770c60` → `0x783d27 jmp 0x783ee0`).
                 //
                 // Reading only `inherits=` here left every corpus button that writes `font=` on its
@@ -400,7 +396,7 @@ impl Loader<'_> {
         }
     }
 
-    /// `<EditBox>` extras (RF-0082 §"THE STRUCTURAL KEY"/§3): the `letters` cap → SetMaxLetters,
+    /// `<EditBox>` extras (`0x779fb0`): the `letters` cap → SetMaxLetters,
     /// `historyLines` → SetHistoryLines (the submitted-line recall ring), and the config flags
     /// `autoFocus`/`numeric`/`password`/`multiLine`/`ignoreArrows` → their setters.
     /// A flag absent from the XML stays at its ctor default, and the ctor's own value is
@@ -408,8 +404,7 @@ impl Loader<'_> {
     /// `0x779a2e mov [esi+0x318],eax`; LoadXML's `autoFocus` leg writes nothing for an absent or
     /// empty attribute, `0x77a0b3`/`0x77a0b8`). So the UI.xsd's `true` default is the client's too,
     /// and the divergence documented here — benilla applying `flags = 0` uniformly — is retired
-    /// (decision 1686). Its stated justification, "autoFocus never focuses on show", was wow-re's
-    /// own `call`-only-census error, corrected 2026-08-29.
+    /// (decision 1686).
     ///
     /// **The flags are read presence-aware.** This loop used to call the setter only when an
     /// attribute parsed as `true`, so `autoFocus="false"` was a no-op — harmless while the default
@@ -461,7 +456,7 @@ impl Loader<'_> {
             ("password", "SetPassword"),
             ("multiLine", "SetMultiLine"),
             // The XML spelling of the alt-arrow flag; the Lua spelling is `SetAltArrowKeyMode`,
-            // and there is one flag behind both (wow-re `ignorearrows-alt-arrow-gate.md`).
+            // and there is one flag behind both (`0x77a6b0`/`0x7996e0`, bit `0x10`).
             ("ignoreArrows", "SetAltArrowKeyMode"),
         ] {
             if let Some(on) = el.attr_bool_opt(attr) {
@@ -471,8 +466,8 @@ impl Loader<'_> {
     }
 
     /// The two message-frame classes' LoadXML extras — **`0x787b20` and `0x785910`, two separate
-    /// tables** (msgframe-runtime.md's XML-attribute section), which is why the shared attrs are
-    /// applied for either tag and the two divergent ones are gated on the tag that has them:
+    /// tables**, which is why the shared attrs are applied for either tag and the two divergent
+    /// ones are gated on the tag that has them:
     ///
     /// - both: `displayDuration`/`fadeDuration` (float, applied **iff `> 0`** — the client's own
     ///   gate) → SetTimeVisible/SetFadeDuration, and the `fade` bool → SetFading.
@@ -556,11 +551,11 @@ impl Loader<'_> {
         }
     }
 
-    /// `<Slider>` LoadXML extras (RF-28, byte-verified table `0x789580`): `orientation` →
+    /// `<Slider>` LoadXML extras (`0x789580`): `orientation` →
     /// SetOrientation (the ctor default is VERTICAL — decision 0250 — so an omitted attr leaves a
     /// vertical scrollbar); `minValue`/`maxValue` → SetMinMaxValues, with `valueStep` → SetValueStep
     /// and `defaultValue` → SetValue — the latter three **gated on BOTH minValue AND maxValue
-    /// present** (RF-28). Unlike StatusBar, a reversed `min > max` pair is NOT swapped. The
+    /// present** (`0x789580`). Unlike StatusBar, a reversed `min > max` pair is NOT swapped. The
     /// `<ThumbTexture>` child → SetThumbTexture (file or `<Color>`) plus the generic region layout
     /// (`<Size>`/`<Anchors>`/`<TexCoords>`/alphaMode); the element's `drawLayer` names the thumb's
     /// layer (widget default OVERLAY). The scrollbar template declares only the thumb + orientation;
@@ -630,7 +625,7 @@ impl Loader<'_> {
         }
     }
 
-    /// `<ColorSelect>`'s four texture sub-elements (RF-28 loader hooks `0x78b580`, `0x78b850`,
+    /// `<ColorSelect>`'s four texture sub-elements (loader hooks `0x78b580`, `0x78b850`,
     /// `0x78b8a0`, `0x78ba90`) — the hue wheel, the brightness strip, and a marker for each.
     /// Structurally `apply_slider`'s `<ThumbTexture>` loop, four times over.
     ///
@@ -711,7 +706,7 @@ impl Loader<'_> {
 
     /// `<SimpleHTML>` LoadXML extras — `CSimpleHTML::LoadXML 0x78a130`, whose whole job past the
     /// base `CSimpleFrame::LoadXML 0x769820` is to fill the four **element fonts** and the
-    /// hyperlink format (wow-re `simplehtml-markup-engine.md` §5.5):
+    /// hyperlink format:
     ///
     /// - attribute **`font="NAME"`** (`0x78a152`) — looked up as a font object and `SetFontObject`ed
     ///   onto **all four** elements at once (the `edi = 4` loop at `0x78a17a`), with
