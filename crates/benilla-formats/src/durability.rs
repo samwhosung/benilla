@@ -1,7 +1,7 @@
 //! `DurabilityCosts.dbc` + `DurabilityQualities.dbc` — the client-side repair-cost tables.
 //!
 //! The 5875 client computes the *displayed* repair price itself (`0x5da330`, wrapped by
-//! `0x4faf30` — §5-verified in wow-re `system/ui/scratch/repair-machinery.md`):
+//! `0x4faf30`):
 //!
 //! ```text
 //! perItem = round_nearest_even( max(1, round_half_away(
@@ -16,9 +16,10 @@
 //! (fields 22–29, byte `0x58 + subclass·4`). Anything else costs nothing (never has durability).
 //!
 //! ⚠ The client's `2·Quality + 1` quality-row key differs from vmangos's `(Quality+1)·2` — the
-//! server may *charge* a different amount than the client *displays* (flagged INFERRED-boundary
-//! in the wow-re note; a live A/B at repair bring-up settles whether the DBC rows make them
-//! equivalent). We implement the client's verified key — benilla displays what 5875 displays.
+//! server may *charge* a different amount than the client *displays* (inferred at the
+//! client/server boundary, unconfirmed; a live A/B at repair bring-up settles whether the DBC rows
+//! make them equivalent). We implement the client's verified key — benilla displays what 5875
+//! displays.
 
 use std::collections::HashMap;
 

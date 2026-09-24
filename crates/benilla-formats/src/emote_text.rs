@@ -6,9 +6,9 @@
 //! the localized-string table they point into, because the two are consumed by different arcs
 //! (audio+animation vs the chat log) and only one of them needs `EmotesTextData.dbc` at all.
 //!
-//! The law below is the real client's sole sentence composer, **`0x49b200`** — wow-re
-//! `system/ui/scratch/text-emote-composition.md`, re-read at the bytes for this implementation
-//! (`objdump 0x49b200..0x49b47c`), which is where the byte addresses in the comments come from.
+//! The law below is the real client's sole sentence composer, **`0x49b200`** — read at the bytes
+//! for this implementation (`objdump 0x49b200..0x49b47c`), which is where the byte addresses in
+//! the comments come from.
 //!
 //! # The composer, in three parts
 //!
@@ -245,7 +245,7 @@ pub fn load_emote_text_catalog(chain: &mut Chain) -> Result<EmoteTextCatalog> {
 mod tests {
     use super::*;
 
-    /// WAVE's five reachable enUS forms — the row wow-re's note pins, so a schema slip (a
+    /// WAVE's five reachable enUS forms — checked against the shipped DBC, so a schema slip (a
     /// column-index off-by-one, the wrong locale slot) shows up as the wrong sentence rather than
     /// as a silent empty.
     const WAVE: u32 = 101;

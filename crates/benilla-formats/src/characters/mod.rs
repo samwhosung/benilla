@@ -4,7 +4,7 @@
 //!
 //! **Geosets.** A character model contains *every* hairstyle, facial-hair piece, and body-option geoset;
 //! the real client renders only the selected ones. The selection is the compositor's geoset dispatch
-//! `0x477520` (wow-re charactermodel RF-0038). For a character with **no equipment** the 8 per-item
+//! `0x477520`. For a character with **no equipment** the 8 per-item
 //! branches all no-op (their `ItemDisplayInfo` records are null), leaving only the unconditional opening
 //! block: disable every geoset, enable geoset 0, then enable the 16 region-base entries of `cc+0x144` —
 //! entries 0–3 overwritten by the customization DBCs (the chosen hair + 3 facial-hair geosets), entries
@@ -14,10 +14,11 @@
 //! texture — the client supplies a runtime composite keyed on the appearance ([`CharSections::composite_body`],
 //! decision 0044). The **base skin** (`sectionType 0`) is a single full 256² body-layout BLP per (race,
 //! sex, skinColor); the face / facial-hair / hair / underwear overlays (`sectionTypes 1–4`) are region
-//! BLPs blended on top at fixed atlas tiles (the RF-0062 partition + RF-0067/0074 section→tile map).
+//! BLPs blended on top at fixed atlas tiles (the static partition `0x475c50` writes + the
+//! section→cell map of `0x4782e0`).
 //!
-//! DBC field maps byte-verified in wow-re charactermodel (RF-0073 geosets, RF-0042 CharSections); field
-//! counts + row semantics cross-checked against the build-5875 files.
+//! DBC field maps from the client's record readers (CharSections `0x575540`, the geoset tables
+//! `0x5753b0`/`0x575a80`); field counts + row semantics cross-checked against the build-5875 files.
 
 mod customization;
 mod geosets;

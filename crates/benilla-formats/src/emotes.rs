@@ -23,8 +23,7 @@
 //! consumer, byte-verified at the real client's `CheckEmoteEligible` (`0x47db40`, called from
 //! `DoEmote` `0x5ef560`): before `CMSG_TEXT_EMOTE` goes out, bit `0x0001` combined with a non-zero
 //! stand-state aborts the *entire* emote (no packet, no anim — a seated `/bow` does nothing).
-//! `wow-5875-re`'s `system/object-layer/scratch/emote-posture-gate.md` (commit `f9584b45`) is the
-//! authority; [`EmoteSoundCatalog::emote_flags`] promotes the raw bits for `crate::chat`'s gate.
+//! [`EmoteSoundCatalog::emote_flags`] promotes the raw bits for `crate::chat`'s gate.
 
 use std::collections::HashMap;
 
@@ -50,7 +49,7 @@ pub struct EmoteSoundCatalog {
     emote_flags: HashMap<u32, u32>,
     /// `Emotes.dbc` id → its `EmoteSpecProc` (column 4). `2` marks a looping STATE emote whose
     /// `EventSoundID` the `$ESD` anim event rings (the client's `row[+0x10] == 2` gate at the
-    /// `$ESD` handler `0x6239f0` — wow-re `sound/scratch/gather-sound-anim-events.md`).
+    /// `$ESD` handler `0x6239f0`).
     spec_proc: HashMap<u32, u32>,
     /// `Emotes.dbc` id → its `EmoteSpecProcParam` (column 5). For `EmoteSpecProc == 1` this is the
     /// **stand state** the emote sets — see [`EmoteSoundCatalog::posture_state`].
@@ -60,8 +59,8 @@ pub struct EmoteSoundCatalog {
     gesture: [Option<u32>; GESTURE_FLAG_BITS.len()],
 }
 
-/// The five `EmoteFlags` bits the client hard-codes to build its gesture table (`0x603a60`, wow-re
-/// `object-layer/scratch/chat-talk-gesture.md` §3), in slot order — **talk, question, exclamation,
+/// The five `EmoteFlags` bits the client hard-codes to build its gesture table (`0x603a60`), in
+/// slot order — **talk, question, exclamation,
 /// shout, laugh**. The *bits* are the fidelity fact: the client never names an `Emotes.dbc` id or an
 /// `AnimationData.dbc` id here, it scans the table for whichever row carries each bit. In the
 /// shipped 1.12.1 data each bit is carried by exactly one row (ids 1 / 6 / 5 / 22 / 11 → anims
@@ -120,9 +119,9 @@ impl EmoteSoundCatalog {
     }
 
     /// The **stand state** a POSTURE emote sets: `EmoteSpecProcParam` gated on `EmoteSpecProc == 1`
-    /// (`None` for every other emote). This is the client's `DoEmote` state branch — wow-re
-    /// `object-layer/scratch/emote-posture-gate.md` §1: `if (rec.EmoteSpecProc == 1 && …)
-    /// SetStandState(rec.SpecProcParam)`, the same `0x5ed430` setter the sit key drives. The five
+    /// (`None` for every other emote). This is the client's `DoEmote` (`0x5ef560`) state branch:
+    /// `if (rec.EmoteSpecProc == 1 && …) SetStandState(rec.SpecProcParam)`, the same `0x5ed430`
+    /// setter the sit key drives. The five
     /// reachable rows: STATE_SIT(13)→1, STATE_SLEEP(12)→3, STATE_KNEEL(68)→8, STATE_STAND(26)→0,
     /// STATE_AT_EASE(313)→2 — which is why `/sit` sits at all, since the *server* deliberately does
     /// nothing for a STATE text emote (vmangos `ChatHandler.cpp` `HandleTextEmoteOpcode`: SIT /
@@ -243,8 +242,8 @@ mod tests {
 
     /// The five gesture slots resolve off the REAL shipped `Emotes.dbc` — the check that the
     /// flag-bit scan finds the right rows, and that each bit really is carried by exactly one of
-    /// them. The expected ids/anims are the byte-verified table in wow-re
-    /// `object-layer/scratch/chat-talk-gesture.md` §3; the *code* never names them.
+    /// them. The expected ids/anims are the table `0x603a60` builds from the shipped data; the
+    /// *code* never names them.
     #[test]
     fn the_five_gesture_slots_scan_to_the_shipped_rows() {
         let data = crate::wow_data_or_skip!();
@@ -285,7 +284,7 @@ mod tests {
         assert_eq!(cat.text_id("wave"), Some(101), "case-insensitive by name");
         assert_eq!(cat.text_emote(101), Some(3), "WAVE plays anim emote 3");
         assert_eq!(cat.anim(2), Some(66), "ONESHOT_BOW (id 2) plays AnimID 66");
-        // EmoteFlags for the director-verified posture-gate rows (emote-posture-gate.md §3), ids
+        // EmoteFlags for the director-verified posture-gate rows (`0x47db40`), ids
         // from vmangos `SharedDefines.h`'s `Emote` enum: BOW=2, CHEER=4, LAUGH=11, RUDE=14,
         // APPLAUD=21, SALUTE=66.
         assert_eq!(cat.emote_flags(2), Some(0x4801), "ONESHOT_BOW EmoteFlags");

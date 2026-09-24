@@ -9,7 +9,7 @@
 //! - **Everything else names a GROUP** — `SpellEffectCameraShakes.dbc`, the 9-row indirection read
 //!   here too ([`SpellShakeGroup`]): up to three `CameraShakes` ids fired at one point. Both
 //!   `SpellVisualKit` field 14 and the `$SHK` animation event speak this id space and never the
-//!   preset one (wow-re `go-display-sound-events.md`: `[0xc0d814]`, bound `0xc0d818`).
+//!   preset one (`[0xc0d814]`, bound `0xc0d818`).
 //!
 //! **Layout — VERIFIED** against build 5875 (header + row decode, 2026-08-22): `24 × 8 × 32 B`,
 //! string block empty. The **column names** are the conventional map (wowdev.wiki + vmangos
@@ -32,7 +32,7 @@
 //! stronger than the footsteps.
 //!
 //! **The semantics** — what `ShakeType` and `Direction` select, and the distance attenuation the
-//! evaluator applies — were settled by the wow-re dispatch behind decision 1540 and live beside the
+//! evaluator applies — were settled against the reference in decision 1540 and live beside the
 //! evaluator, in `benilla-app`'s `camera_shake`. This module stays the shipped data and nothing
 //! more.
 //!

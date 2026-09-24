@@ -18,8 +18,8 @@
 //! footstep class 8, aggro 694, alert 1107 — all coherent kit-id ranges.
 //! The chain is `UNIT_FIELD_DISPLAYID` → `CreatureDisplayInfo.SoundID`, **falling back to
 //! `CreatureModelData.SoundID`** (col 13 of the 430 × 16 × 64 B table) when the display's own FK
-//! is 0 — the client's generic resolution (wow-re `benilla-pins.md` B11b; the earlier "no model
-//! fallback in 1.12" note here was wrong). The fallback is load-bearing: 10 261 of 10 534
+//! is 0 — the client's generic resolution (the earlier "no model fallback in 1.12" note here was
+//! wrong). The fallback is load-bearing: 10 261 of 10 534
 //! displays carry SoundID 0, and with the model link 10 533/10 534 resolve a row (byte-census
 //! 2026-07-03) — character displays reach footstep class 7 this way, as data, not client logic.
 
@@ -194,7 +194,7 @@ pub fn load_creature_voice_catalog(chain: &mut Chain) -> Result<CreatureVoiceCat
         else {
             continue;
         };
-        // The display's own FK wins; 0 falls back to the model's (module docs — B11b).
+        // The display's own FK wins; 0 falls back to the model's (module docs).
         let sound = if sound != 0 {
             Some(sound)
         } else {
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(v.footstep_class, 8);
         assert_eq!(v.aggro, 694);
 
-        // The CreatureModelData fallback (B11b): the Elwynn wolf display (903) has
+        // The CreatureModelData fallback: the Elwynn wolf display (903) has
         // CreatureDisplayInfo.SoundID 0 and resolves through its model's SoundID (43);
         // the human-male character display (49) reaches footstep class 7 the same way.
         let wolf = cat.for_display(903).expect("wolf resolves via the model");
@@ -248,8 +248,7 @@ mod tests {
     /// which: the reference sends `PET_TALK_ATTACK` to bark state 2 = column 27,
     /// `PET_TALK_SPECIAL_SPELL` to state 1 = column 28, and `SMSG_PET_DISMISS_SOUND` to column 29
     /// — and the data calls those three `_KILL`, `_ORDER` and `_DISMISS`, in that order, three
-    /// times over (decision 2039; it closes wow-re's open question about the names,
-    /// `feign-death-dyndead.md` §12).
+    /// times over (decision 2039; `0x623a40` maps the states to the columns).
     ///
     /// **A hunter pet is therefore silent on all three, faithfully** — its row's columns are 0,
     /// so the reference reads a zero kit and plays nothing. The Felhunter has no kit in the file

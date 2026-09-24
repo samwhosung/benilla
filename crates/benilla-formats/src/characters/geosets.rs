@@ -10,9 +10,10 @@ const CHAR_HAIR_GEOSETS: &str = "DBFilesClient\\CharHairGeosets.dbc";
 const CHAR_FACIAL_HAIR: &str = "DBFilesClient\\CharacterFacialHairStyles.dbc";
 const HELMET_GEOSET_VIS: &str = "DBFilesClient\\HelmetGeosetVisData.dbc";
 
-/// The default 16 region-base geosets (`cc+0x144`, RF-0038) — increments of 100 (group 7's base is the
-/// outlier 702). Entries 0–3 (hair + the 3 facial-hair groups) are overwritten by the customization;
-/// 4–15 (the equipment-group bases: glove/boot/sleeve/…/cloak) stay as these bare-skin defaults.
+/// The default 16 region-base geosets (`cc+0x144`, set by the ctors `0x476810`/`0x476960`) —
+/// increments of 100 (group 7's base is the outlier 702). Entries 0–3 (hair + the 3 facial-hair
+/// groups) are overwritten by the customization; 4–15 (the equipment-group bases:
+/// glove/boot/sleeve/…/cloak) stay as these bare-skin defaults.
 const REGION_BASES: [u16; 16] = [
     1, 101, 201, 301, 401, 501, 601, 702, 801, 901, 1001, 1101, 1201, 1301, 1401, 1501,
 ];
@@ -22,15 +23,15 @@ pub struct CharacterGeosets {
     /// (race, sex, hairStyle) → hair `GeosetID` (group 0).
     hair: HashMap<(u8, u8, u8), u32>,
     /// (race, sex, facialHair) → the 3 facial-hair geoset variations (DBC fields gA/gB/gC, in file
-    /// order — gA→group 1 (+100), gB→group 3 (+300), gC→group 2 (+200), per RF-0073's `0x478660`).
+    /// order — gA→group 1 (+100), gB→group 3 (+300), gC→group 2 (+200), per `0x478660`).
     facial: HashMap<(u8, u8, u8), [u32; 3]>,
-    /// HelmetGeosetVisData row id → its 5 **race** bitmasks (VERIFIED wow-re RF-0083, consumer
-    /// `0x4799a0`): a set bit `1 << race` in column *c* forces one region-base slot back to its
-    /// group base — hiding the styled hair/facial geoset (and the ears) under a worn helm.
+    /// HelmetGeosetVisData row id → its 5 **race** bitmasks (consumer `0x4799a0`): a set bit
+    /// `1 << race` in column *c* forces one region-base slot back to its group base — hiding the
+    /// styled hair/facial geoset (and the ears) under a worn helm.
     helmet_vis: HashMap<u32, [u32; 5]>,
 }
 
-/// The worn geoset selectors the RF-0038 equipment branches read (decisions 0074, 1864): per
+/// The worn geoset selectors the equipment branches of `0x477520` read (decisions 0074, 1864): per
 /// bodyslot 2–9 (shirt, chest, belt, pants, boots, wrist, gloves, tabard) the item's
 /// `geosetGroup[0..2]` (`None` = the slot is empty), plus the cloak's `geosetGroup[0]`, plus the
 /// worn helm's `HelmetGeosetVisData` row pair (`[male, female]` — ItemDisplayInfo cols 12/13).
@@ -48,16 +49,15 @@ pub struct EquipGeosets {
     /// [`forearm_dressed`](crate::forearm_dressed), which reads the one composite plan.
     pub forearm_dressed: bool,
     /// B6's gate: `[cc+0xc]`, "the guild registrar's tabard designer is open on this character"
-    /// (wow-re RF-0089 §7c). Set while that window is up so the body wears a previewable tabard
+    /// (its setter `0x5e07fb`). Set while that window is up so the body wears a previewable tabard
     /// with an **empty** tabard slot; nothing else in the client ever sets it.
     pub tabard_preview: bool,
 }
 
 impl CharacterGeosets {
-    /// The geoset IDs a character of this appearance renders — RF-0038's opening block (the naked
-    /// set) plus **all eight** equipment branches B1–B8 of `0x477520` (decisions 0074, 1864 —
-    /// implemented from the transcription's *arithmetic*; its prose labels were mislabels wow-re
-    /// corrected in RF-0088/RF-0089, and the branch comments below name each one at its address).
+    /// The geoset IDs a character of this appearance renders — the opening block (the naked set)
+    /// plus **all eight** equipment branches B1–B8 of `0x477520` (decisions 0074, 1864 —
+    /// implemented from its *arithmetic*; the branch comments below name each one at its address).
     /// A body submesh whose `skinSectionId` is in this set is drawn; all others hidden. Most
     /// branches gate on an ItemDisplayInfo `geosetGroup` field being non-zero ("section present");
     /// B3 and B6 do not, and read [`EquipGeosets::forearm_dressed`] / [`EquipGeosets::tabard_preview`].
@@ -86,7 +86,7 @@ impl CharacterGeosets {
             set[3] = (b + 300) as u16; // gB → group 3
             set[2] = (c + 200) as u16; // gC → group 2
         }
-        // A worn helm's vis row (VERIFIED wow-re RF-0083, `0x4799a0`): each of the 5 columns is a
+        // A worn helm's vis row (`0x4799a0`): each of the 5 columns is a
         // **race** bitmask; a set `1 << race` bit forces one region-base slot back to its group
         // base, dropping the styled geoset the customization just selected — hair to the bare scalp
         // (1), the facial groups to their bases, and the ears to **701** (over the 702 default no
@@ -117,7 +117,7 @@ impl CharacterGeosets {
         // flap and B6's preview. B7 is NOT gated on it: that branch reads the chest's bit alone.
         let robe = g(1, 2).or_else(|| g(3, 2));
         // B1/B2 (`0x477564`): gloves replace the glove group (401+v, own range disabled); else the
-        // chest's sleeves (the `else` arm wow-re numbers B2).
+        // chest's sleeves (the `else` arm, B2).
         if let Some(v) = g(6, 0) {
             disable(&mut set, 401, 499);
             set.push(401 + v as u16);
@@ -165,7 +165,7 @@ impl CharacterGeosets {
         }
         // B6 (`0x477752`): the tabard-designer preview. **No ItemDisplayInfo column feeds this
         // branch** — its gate is the flag `[cc+0xc]`, set only while the guild registrar's tabard
-        // designer is open (wow-re RF-0089 §7c; the branch's old "helm-skirt" label was a mislabel,
+        // designer is open (setter `0x5e07fb`; the branch's old "helm-skirt" label was a mislabel,
         // and no shipped head display carries a geoset group at all). It forces the tabard group on
         // with an EMPTY tabard slot: 1201, plus 1202 when neither the chest nor the legs carries the
         // robe bit. On shipped character models 1201 has no submesh (it is the group's "no tabard"
@@ -180,7 +180,7 @@ impl CharacterGeosets {
         // B7 (`0x477799`): the shirt's doublet + the pants' leg geoset (the recorded 1102 base — not
         // 1101). Skipped ENTIRELY when the CHEST is a robe (`0x4777a4` — the legs' own robe bit does
         // NOT gate here, unlike B4/B5/B6) or when a TABARD is worn (`0x4777b8`, bodyslot 9 sub 0;
-        // RF-0088 corrected this guard from "glove" to "tabard"). Decision 1864.
+        // the guard is the tabard, not the glove). Decision 1864.
         if g(1, 2).is_none() && g(7, 0).is_none() {
             if let Some(v) = g(0, 1) {
                 set.push(1001 + v as u16);
@@ -206,9 +206,9 @@ impl CharacterGeosets {
     ///
     /// **A duplicated `(race, sex, variation)` key resolves to the FIRST row** (decision 0682). Both
     /// consumers are *linear scans* of the loaded table — `0x478540` for the hair geoset, `0x478740`
-    /// for the facial-hair record (wow-re RF-0073; `object-layer/scratch/r1.md:358` calls `0x478540`
-    /// "a loaded-DBC linear scan, NOT a pool") — so the earliest matching record is the one the
-    /// reference returns, where a last-write `HashMap::insert` would take the latest.
+    /// for the facial-hair record (`0x478540` is a loaded-DBC linear scan, not a pool) — so the
+    /// earliest matching record is the one the reference returns, where a last-write
+    /// `HashMap::insert` would take the latest.
     ///
     /// It matters exactly once in the shipped data, and it was B11: `CharHairGeosets` carries **four**
     /// rows for **(race 9 goblin, sex 0, variation 0)** — ids 241–244, geosets 1 / 2 / 1 / 2, the only
@@ -264,8 +264,9 @@ impl CharacterGeosets {
             }
             m
         };
-        // HelmetGeosetVisData — the helm hide-masks (RF-0083). Soft-optional: a missing/undecodable
-        // table just means helms never hide hair (the pre-0083 behavior), like the other soft-fails.
+        // HelmetGeosetVisData — the helm hide-masks (read by `0x4799a0`). Soft-optional: a
+        // missing/undecodable table just means helms never hide hair (the pre-helm-vis behavior), like
+        // the other soft-fails.
         let helmet_vis = match chain.read_file(HELMET_GEOSET_VIS) {
             Ok(bytes) => {
                 let rs = parse(&bytes, helmet_vis_schema(), "HelmetGeosetVisData")?;
@@ -304,7 +305,8 @@ pub(crate) fn char_hair_geosets_schema() -> Schema {
 }
 
 /// HelmetGeosetVisData.dbc — 6 fields in build 5875 (verified: the loader `0x546f00` asserts
-/// fieldCount 6 / recordSize 0x18; the 5 mask columns are **race** bitmasks, RF-0083).
+/// fieldCount 6 / recordSize 0x18; the 5 mask columns are **race** bitmasks, as `0x4799a0` tests
+/// them).
 pub(crate) fn helmet_vis_schema() -> Schema {
     let mut s = Schema::new("HelmetGeosetVisData");
     for (name, ty) in [
@@ -343,7 +345,7 @@ pub(crate) fn char_facial_hair_schema() -> Schema {
 mod tests {
     use super::*;
 
-    /// The equipment geoset branches (decisions 0074/1864, from the RF-0038 arithmetic):
+    /// The equipment geoset branches (decisions 0074/1864, from the arithmetic of `0x477520`):
     /// gloves/boots/robe/cloak **replace** their groups, and a robe suppresses the tabard branch.
     #[test]
     fn equipment_geoset_branches() {
@@ -429,7 +431,7 @@ mod tests {
         );
     }
 
-    /// **B6 — the tabard-designer preview** (`0x477752`, wow-re RF-0089 §7c; decision 1864). The one
+    /// **B6 — the tabard-designer preview** (`0x477752`; decision 1864). The one
     /// branch of the eight with no ItemDisplayInfo column behind it: its gate is `[cc+0xc]`, "the
     /// guild registrar's tabard designer is open", and it wears the tabard flap (1202) with an
     /// **empty** tabard slot — unless a robe is on, which suppresses it exactly as it suppresses B5.
@@ -492,7 +494,7 @@ mod tests {
             "ungated: both on"
         );
 
-        // A worn tabard skips the whole branch (RF-0088 corrected this guard from "glove").
+        // A worn tabard skips the whole branch (`0x4777b8` guards on the tabard, not the glove).
         let mut eq = base;
         eq.bodyslots[7] = Some([1, 0, 0]);
         let set = cg.visible_geosets(1, 0, 0, 0, &eq);
@@ -523,7 +525,7 @@ mod tests {
         );
     }
 
-    /// The helm-vis force (VERIFIED wow-re RF-0083): each vis column is a **race** bitmask; a set
+    /// The helm-vis force (`0x4799a0`): each vis column is a **race** bitmask; a set
     /// `1 << race` bit forces the slot back to its group base — hair to the bare scalp (1), facial
     /// groups to 101/201/301, ears to 701 — dropping the styled geosets. The row is sex-selected
     /// (ItemDisplayInfo col 12 male / 13 female); a mask without our race bit leaves the style.

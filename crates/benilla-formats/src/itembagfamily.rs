@@ -4,8 +4,8 @@
 //!
 //! One consumer, and it is the reason this table exists here at all: the inventory error line's
 //! **reason 16** substitution (`ERR_WRONG_BAG_TYPE_SUBCLASS` = *"Only %s can be placed in
-//! that."*). wow-re `system/ui/scratch/inventory-change-failure-display.md` §6 carves the helper
-//! `0x5ede00(player, bagSlot)`: it resolves the named bag as an item, maps it through `0x5da050`
+//! that."*). The helper is `0x5ede00(player, bagSlot)`: it resolves the named bag as an item,
+//! maps it through `0x5da050`
 //! into the `[0xc0dc38]` row table (bound `[0xc0dc3c]`), reads the localized name at
 //! `[row + 4*[0xc0e080] + 4]` — i.e. field 1 at the active locale — and calls
 //! `DisplayError(0x118, thatName)` itself. **Despite the errorId's `_SUBCLASS` name this is not

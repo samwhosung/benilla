@@ -50,7 +50,7 @@
 //! Meat, Cat = Meat+Fish, Bear/Boar = all six, Gorilla = Fungus+Fruit, Wind Serpent = Fish+Cheese+
 //! Bread.
 //!
-//! **All of the above is now also byte-VERIFIED** (wow-re, 2026-08-06 — `GetPetFoodTypes 0x4bea10`
+//! **All of the above holds in the binary too** (2026-08-06 — `GetPetFoodTypes 0x4bea10`
 //! and `UnitCreatureFamily 0x51a310`), and the two dumps agree line for line with nothing left
 //! over: the mask is column 7, the bit map is `1 << (recordID - 1)`, the family name is column
 //! `8 + locale`, the food name is column `1 + locale`, the id space really does have null rows at
@@ -134,7 +134,7 @@ pub struct CreatureFamily {
 
 impl CreatureFamily {
     /// **A pet's render scale at a level** — the character-select pet's whole size law (decision
-    /// 1538, wow-re `glue/scratch/glue-select-pet.md`):
+    /// 1538):
     ///
     /// ```text
     /// S = minScale + (maxScale − minScale) · clamp(level − minScaleLevel, 0, range) / range
@@ -479,8 +479,8 @@ mod tests {
     /// **The join, on the real data** — the half neither file can check alone, and the one that
     /// would fail silently as "a bear eats fish and cheese".
     ///
-    /// Wolf, Bear, Boar and Turtle are **the binary's own positive controls** (wow-re's
-    /// `0x4bea10` carve, 2026-08-06); the rest are vanilla's documented diets, which is the
+    /// Wolf, Bear, Boar and Turtle are **the binary's own positive controls** (`0x4bea10`,
+    /// 2026-08-06); the rest are vanilla's documented diets, which is the
     /// independent corroboration that `bit b → row b+1` is right (vmangos's
     /// `1 << (FoodType - 1)` is the third).
     #[test]

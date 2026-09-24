@@ -5,12 +5,10 @@
 //! entirely the client's job (B262 — opposite-faction speech rendered perfectly readable because
 //! this step did not exist). This module is that step.
 //!
-//! **The mechanism is byte-verified** in wow-re `system/ui/scratch/chat-language-scramble.md` — a
-//! §5 trio on the kernel plus two independent pairs, with an emulated oracle that runs the binary's
-//! own bytes over the player's own `LanguageWords.dbc`. [`tests::the_reference_golden_vectors`]
-//! carries all 35 of that note's golden vectors verbatim; they are the oracle this file is graded
-//! against, and the note's own claim is that its prose is *sufficient* — a clean-room
-//! implementation written from it reproduced every vector byte for byte. So did this one.
+//! **The oracle is an emulated run of the binary's own bytes** (`0x49b560` over the player's own
+//! `LanguageWords.dbc`). [`tests::the_reference_golden_vectors`] carries all 35 of its golden
+//! vectors verbatim; they are the oracle this file is graded against, and this implementation
+//! reproduces every vector byte for byte.
 //!
 //! The shape, in one paragraph. The line is walked as an alternating sequence of separator runs and
 //! words. Each word is hashed once with `SStrHash` (case-folded, so `hello`/`Hello`/`HELLO` share a
@@ -168,7 +166,7 @@ fn decode(bytes: &[u8]) -> (u32, usize) {
 
 /// A Latin-1 letter as `0x6c9c60` classifies one.
 ///
-/// Transcribed from the note's reading of the table rather than from what Latin-1 "should" say:
+/// Transcribed from the binary's table rather than from what Latin-1 "should" say:
 /// `0xDE` (thorn) is **not** in the accepted set even though `0xC0..=0xDD`, `0xDF` and
 /// `0xE0..=0xFF` around it are. It cannot affect an ASCII line, and guessing the table is a worse
 /// error than transcribing it.
@@ -350,8 +348,7 @@ mod tests {
     use super::*;
     use crate::{load_language_words, Chain};
 
-    /// **The oracle.** Every one of the 35 golden vectors from wow-re
-    /// `system/ui/scratch/chat-language-scramble.md` §9, produced by emulating the reference's own
+    /// **The oracle.** Every one of the 35 golden vectors produced by emulating the reference's own
     /// `0x49b560` over the shipped `LanguageWords.dbc` — not transcribed from a description of the
     /// output, but the exact bytes the binary wrote.
     ///

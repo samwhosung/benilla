@@ -6,12 +6,10 @@
 //! the client animates the car itself — `target = (anchor + local_elapsed) % period`, bracket the
 //! two keyframes around `target`, lerp their **local offsets**, rotate the offset by the spawn's
 //! `GAMEOBJECT_ROTATION` quaternion, and add the stationary spawn position. The mechanism is
-//! byte-verified in `wow-5875-re` (`gameobject_path_eval` `0x5f6280` + the type-11 tick
-//! `0x5f5f10`, `system/object-layer/object-layer.md` §RF-0051 / `scratch/w2c1.md` §Q2-Q3;
-//! transcribed bit-exact in `crates/object-layer/src/gameobject.rs`); vmangos's
+//! the client's path evaluator `0x5f6280` + the type-11 tick `0x5f5f10`; vmangos's
 //! `ElevatorTransport::Update` (`Transport.cpp:396-437`) is the same math on the server side,
 //! which is what keeps the two in sync. This module implements the *mechanism* idiomatically
-//! (f32, binary-search bracket); the x87 spill-pattern fidelity lives in wow-re.
+//! (f32, binary-search bracket), not the reference's x87 spill pattern.
 //!
 //! **7 fields:** `ID(0), TransportID(1), TimeIndex(2), PosX(3), PosY(4), PosZ(5), SequenceID(6)`
 //! — `TransportID` is the **gameobject_template entry** (not a display or path id), `TimeIndex`
@@ -110,14 +108,14 @@ pub fn elevator_period_ms(frames: &[ElevatorKeyframe]) -> u32 {
     frames.last().map_or(1, |f| f.time_ms).max(1)
 }
 
-/// The client's type-11 cycle evaluator (`gameobject_path_eval` `0x5f6280`, mechanism form):
+/// The client's type-11 cycle evaluator (`0x5f6280`, mechanism form):
 /// world position of the car at `cycle_ms ∈ [0, period)`, given the spawn's stationary position
 /// and its `GAMEOBJECT_ROTATION` quaternion `(x, y, z, w)`. Also reports whether the bracketing
 /// span is in motion (the dock/depart edge for consumers' instruments).
 ///
 /// The rotation is a plain quaternion rotation of the local offset — the binary builds the
-/// standard 3×3 of `q` row-major and combines transposed, which IS `R(q)·d` (wow-re
-/// `gameobject.rs:106-137`). vmangos reproduces it as `(d * q)` + a y sign flip
+/// standard 3×3 of `q` row-major and combines transposed, which IS `R(q)·d`. vmangos reproduces
+/// it as `(d * q)` + a y sign flip
 /// (`Transport.cpp:426-428` "magical sign flip but it works"); the two agree on every live 1.12
 /// row with `x = y = 0` offsets and on pure-yaw spawn quats — the tests pin one worked case.
 pub fn elevator_sample(

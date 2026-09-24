@@ -1,18 +1,16 @@
 //! `ItemDisplayInfo.dbc` adapter — displayId → held-item / worn-equipment visual identity (decision
 //! 0072 slice 1: combat presence, held items via the display chain).
 //!
-//! Layout — **TRIPLE-VERIFIED** against build 5875 (`decisions/0072`: our raw dump
-//! `record_count=29604`; wow-re's `charactermodel` disasm; wow-re's independent dbc-node schema
-//! catalog): 23 fields / 92-byte records. Columns: `0` id (key) · `1`/`2` model name L/R (string) ·
+//! Layout — build 5875 (`decisions/0072`: our raw dump `record_count=29604`; the client's
+//! loader `0x547590` asserts the field count and record size): 23 fields / 92-byte records.
+//! Columns: `0` id (key) · `1`/`2` model name L/R (string) ·
 //! `3`/`4` model texture L/R (string) · `5` icon (string, unread — no consumer yet) · `6`-`8`
 //! geosetGroup[0..2] (u32) · `9` **flags** (u32 — the client's `ItemDisplayInfo_inmem[+0x24]`, of
 //! which only **bit 0** is read: the guild-emblem tabard, [`ItemDisplay::takes_guild_emblem`]) ·
 //! `10` the ranged-weapon `SpellVisual.dbc`
 //! id (u32 — the substitute visual a RANGED-attribute spell with no own visual borrows for its
-//! fire animation; byte-verified `0x60d493: mov eax,[eax+0x28]`, wow-re
-//! `throw-ranged-attack-anim.md`) · `11` the `ItemGroupSounds.dbc` id
-//! (u32 — the pickup/place sound group; byte-verified `0x458008: mov eax,[edx+0x2c]`, wow-re
-//! `system/sound/scratch/item-pickup-place-sound.md`, corroborated 20513/20513 valid ids on the
+//! fire animation; `0x60d493: mov eax,[eax+0x28]`) · `11` the `ItemGroupSounds.dbc` id (u32 — the
+//! pickup/place sound group; `0x458008: mov eax,[edx+0x2c]`, 20513/20513 valid ids on the
 //! real DBC) · `12`/`13` helm-vis (u32) · `14`-`21` the 8 body-region textures, in **ArmUpper,
 //! ArmLower, Hand, TorsoUpper, TorsoLower, LegUpper, LegLower, Foot** order (string) · `22` the
 //! **`ItemVisuals.dbc` id** — the item's intrinsic glow (i32; byte-verified `0x47a200: mov
@@ -56,8 +54,8 @@ pub struct ItemDisplay {
     /// TorsoUpper/TorsoLower/LegUpper/LegLower/Foot order. `None` per-slot where this display
     /// doesn't touch that region (most held-item rows: all 8 empty).
     pub region_textures: [Option<String>; 8],
-    /// A helm's `HelmetGeosetVisData` row ids — `[male, female]` (cols 12/13; VERIFIED wow-re
-    /// RF-0083: `ItemDisplayInfo_inmem[+0x30 + sex*4]`). `0` = no vis row (non-helm displays).
+    /// A helm's `HelmetGeosetVisData` row ids — `[male, female]` (cols 12/13; `0x4799a0` reads
+    /// `ItemDisplayInfo_inmem[+0x30 + sex*4]`). `0` = no vis row (non-helm displays).
     pub helmet_vis: [u32; 2],
     /// The inventory icon (col 5) as a ready `Interface\Icons\…` MPQ path, extensionless as the
     /// DBC stores names (the BLP loader appends it). Unlike the model columns there is no
@@ -74,7 +72,7 @@ pub struct ItemDisplay {
     pub group_sounds: u32,
     /// The ranged-weapon `SpellVisual.dbc` id (col 10) — the SUBSTITUTE visual a RANGED-attribute
     /// spell with no own visual borrows from the equipped ranged weapon (the client's `0x60d450`
-    /// fallback: how Throw/Auto Shot get their fire clips — wow-re `throw-ranged-attack-anim.md`).
+    /// fallback: how Throw/Auto Shot get their fire clips).
     /// `0` on every non-ranged display; only three distinct nonzero ids exist across the real
     /// table (thrown 98 · bow 5 · gun/rifle 224).
     pub spell_visual: u32,
@@ -106,8 +104,8 @@ impl ItemDisplay {
     /// extra 5503 → head display **15676** → vis row **306** = `[446,478,510,222,238]`, every
     /// column with the gnome bit `1<<7` set).
     ///
-    /// **The gate is `ModelName[0]` alone** — on-disk column 1, the LEFT slot — VERIFIED at the
-    /// bytes (wow-re RF-0085, `0x4799c1`): the head-slot handler `0x4799a0` loads
+    /// **The gate is `ModelName[0]` alone** — on-disk column 1, the LEFT slot (`0x4799c1`): the
+    /// head-slot handler `0x4799a0` loads
     /// `[[cc+0x4a8] + 4]` and `cmp byte ptr [ecx],0`, a **string-emptiness** test, jumping straight
     /// to the epilogue `0x479b33` past the whole geoset-vis tail. Column 2 (the right slot) is
     /// never consulted, and neither is the helm M2's load result — `0x4798c0`'s return is clobbered
@@ -324,8 +322,8 @@ mod tests {
     /// verified over every display a class-6 projectile item resolves to (17 rows, vmangos
     /// `item_template`) — while a thrown weapon fills the **left** slot (`Weapon\` dir; the weapon
     /// itself flies). The missile spawner keys its dir choice on that shape; the client keys the
-    /// same fork on the wire ammo block's InventoryType (`0x19`=THROWN, wow-re
-    /// `item-visual-enchant.md` §4) — identical output on every real row. Skips without client data.
+    /// same fork on the wire ammo block's InventoryType (`0x19`=THROWN, `0x60ba30`) — identical
+    /// output on every real row. Skips without client data.
     #[test]
     fn real_ammo_displays_carry_flight_models_right_thrown_left() {
         let data = crate::wow_data_or_skip!();

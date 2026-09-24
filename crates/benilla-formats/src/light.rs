@@ -58,7 +58,7 @@ const SLOT_CLEAR: usize = 0;
 const SLOT_CLEAR_UNDERWATER: usize = 1;
 const SLOT_STORM: usize = 2;
 const SLOT_STORM_UNDERWATER: usize = 3;
-/// The ghost-world profile — byte-VERIFIED (wow-re death-light.md): the client's ghost watcher
+/// The ghost-world profile: the client's ghost watcher `0x5de9c0`
 /// writes slot index 4 into the active-slot global `[0xce9bb0]` and the day/night color-table
 /// rebuild consumes it INSTANTLY (per-frame rebuild, no blend). Selected while `ghost`, taking
 /// priority over weather/underwater exactly as the single global slot does.
@@ -83,7 +83,7 @@ const OCEAN_RAMP_FLOOR: f32 = -30.0;
 /// The ramp's reciprocal, **as the binary stores it** — the f32 at `0x811628`, bit pattern
 /// `0xbd088889`.
 ///
-/// Written from the bits rather than as a decimal on purpose. The decimal wow-re quotes
+/// Written from the bits rather than as a decimal on purpose. The decimal form
 /// (`−0.0333333351`) carries more digits than an f32 holds, so spelling it out is both a clippy
 /// `excessive_precision` error and a small lie about what is in the file; and rounding it to
 /// `−0.033_333_335` would read as a value someone chose. `from_bits` says the true thing: this
@@ -142,21 +142,19 @@ impl Submersion {
         matches!(self, Submersion::Water | Submersion::Ocean)
     }
 
-    /// The **ocean depth ramp** — the one thing ocean does that water does not (wow-re
-    /// `lighting/scratch/submerged-atmosphere.md` §3, VERIFIED; decision 1829).
+    /// The **ocean depth ramp** — the one thing ocean does that water does not (the ramp at
+    /// `0x6d2823`, behind the ocean gate `0x6d2821`; decision 1829).
     ///
     /// Returns `(fac1, fac2)`, the multipliers on the committed light record's first and second
     /// colour triples — `DNState+0x178 × fac1` and `DNState+0x174 × fac2`. `fac1` runs `1.0 → 0.5`
     /// and `fac2` runs `1.0 → 0.75` over the first 30 yards of depth, so the fill darkens twice as
     /// fast as the direct term and a deep sea goes flat as well as dim.
     ///
-    /// **A multiply by the stored constant, not a divide by 30.** wow-re's note says
-    /// "`−0.0333333351f` is not exactly −1/30 — a bit-exact reimplementation must use the stored
-    /// f32, not `t/30.0`". The conclusion is right and the reason as stated is not, which matters
-    /// because it changes what you have to be careful about: `0xbd088889` **is** the nearest f32 to
-    /// −1/30, bit for bit. What differs is the *operation* — `t · recip` and `t / 30.0` round
-    /// differently, and they disagree inside the ramp's own range (at `t = −29` by 6e−8 in `k`).
-    /// So the thing to transcribe is the multiply, and the constant is incidental.
+    /// **A multiply by the stored constant, not a divide by 30.** A bit-exact reimplementation must
+    /// use the stored f32, not `t/30.0` — and not because of the operand: `0xbd088889` **is** the
+    /// nearest f32 to −1/30, bit for bit. What differs is the *operation* — `t · recip` and
+    /// `t / 30.0` round differently, and they disagree inside the ramp's own range (at `t = −29` by
+    /// 6e−8 in `k`). So the thing to transcribe is the multiply, and the constant is incidental.
     ///
     /// The boundaries are exact, not near-misses: `k` reaches exactly `0.0` at −30 yd, so `fac1`
     /// bottoms at exactly 0.5 and `fac2` at exactly 0.75.
@@ -204,7 +202,7 @@ fn weather_slot(ghost: bool, stormy: bool, underwater: bool) -> usize {
 }
 
 /// **The zero-match fallback record**, addressed by its `Light.dbc` **ID column** (not its row
-/// index) — wow-re `system/lighting/scratch/no-light-row-fallback.md`.
+/// index).
 ///
 /// The client builds a per-map light array in `dn_light_array_build 0x6d6170` (`0x6d61a9 cmp
 /// [row+4], mapId`), and when **no row matches the map at all** its tail (`0x6d62b2`–`0x6d62c9`)
@@ -298,7 +296,7 @@ fn light_schema() -> Schema {
 /// `LightParams.dbc` — 9 fields, 36 B/record. We only consume `glow` (field [`LP_GLOW`]); the rest are
 /// named for clarity (highlightSky flag, skybox/cloud ids, and the four water/ocean blend alphas we
 /// don't yet use). The `+0x0C` `cloudTypeID`/reserved slot is 0 in all 5875 records — the engine's glow
-/// is the *next* field (+0x10). Field types per wowdev + the byte-exact RE in `bloom-per-zone/`.
+/// is the *next* field (+0x10). Field types per wowdev + the client's reader `0x589030`.
 fn light_params_schema() -> Schema {
     let mut s = Schema::new("LightParams");
     for (n, t) in [
@@ -318,8 +316,8 @@ fn light_params_schema() -> Schema {
 }
 
 /// The client's distance→strength ramp for an area light: `1` within `start`, falling linearly to
-/// `0` at `end` (and `0` beyond). Byte-VERIFIED (`dn_light_select 0x6d2d00`, wow-re
-/// `system/lighting/scratch/ctb.md`): `w = dist ≤ inner ? 1 : 1 − (dist−inner)/(outer−inner)`, with
+/// `0` at `end` (and `0` beyond). `dn_light_select 0x6d2d00`:
+/// `w = dist ≤ inner ? 1 : 1 − (dist−inner)/(outer−inner)`, with
 /// the containment gate `dist ≤ outer` — so a sphere entering at its outer radius enters at **w = 0**.
 /// That is what makes the area blend continuous across a sphere boundary, and it is the invariant
 /// decision 1104's water fix rests on.
@@ -556,9 +554,8 @@ impl LightCatalog {
     /// profile, or `None` when the chain's data does not name one.
     ///
     /// The caller gates on the `PLAYER_FLAGS` ghost bit — that bit is the *whole* condition, and it
-    /// is the reference's too. Byte-VERIFIED (wow-re `lighting/scratch/wmo-skybox.md` §3 +
-    /// `death-light.md`): the DBC skybox slot `[0xce9bb4]` is filled inside `dn_color_table_build
-    /// 0x6d2260` at `0x6d26cb`, **gated on the override cell `[0xce9bb0] != -1`**, which only
+    /// is the reference's too: the DBC skybox slot `[0xce9bb4]` is filled in the colour-table build
+    /// `0x6d2260` at `0x6d26cb`, **gated on the override cell `[0xce9bb0] != -1`**, which only
     /// `0x6d4620` writes and only the ghost-bit selector `0x5de9c0` calls (`mov ecx,4` — param slot
     /// [`SLOT_DEATH`]). So: ghost ⇒ this skybox; alive ⇒ none, with no other path into the table.
     ///
@@ -641,10 +638,9 @@ impl LightCatalog {
         // Collect every local sphere CONTAINING `pos` (`dist ≤ outer`), then apply them
         // **farthest first** so the nearest lands last and dominates.
         //
-        // The order is by DISTANCE, not by blend weight — byte-VERIFIED (`dn_light_select 0x6d2d00`,
-        // wow-re `ctb.md` + `merge.md`, the latter's ordering corrected by an emulator difftest
-        // oracle): the client pushes the in-radius rows into a **max-heap keyed on distance** and
-        // drains it root-first, calling `dn_record_overblend 0x6d30e0(dst, row, w)` for **every**
+        // The order is by DISTANCE, not by blend weight (`dn_light_select 0x6d2d00`): the client
+        // pushes the in-radius rows into a **max-heap keyed on distance** and
+        // drains it root-first, calling `0x6d30e0(dst, row, w)` for **every**
         // entry including a lone one. Sorting by weight instead (what we did before decision 1104)
         // inverts the pair whenever a wide sphere out-weighs a tight near one, and then the near
         // zone's own palette gets *diluted* by its neighbour instead of overwriting it — the
@@ -893,9 +889,9 @@ impl LightCatalog {
         // this record takes the reference's zero-key constant instead.
         let d = Atmosphere::DEFAULT;
         // Fog distances carry the ×36 storage scale (yards = raw/36): Elwynn clear 18000→500 yd,
-        // storm 10000→278 yd. Byte-VERIFIED (0327, wow-re rf-weather-fog-veil Q2·LOAD): the client
-        // scales ONCE at DBC load — `0x53f504 → 0x6d6160 → 0x6d6100` runs `dn_array_scale_36`
-        // (`0x6d6090`, ×1/36 @0x7ff9d0) over each float-band record with `rowIndex % 6 == 0`, i.e.
+        // storm 10000→278 yd (decision 0327): the client scales ONCE at DBC load —
+        // `0x53f504 → 0x6d6160 → 0x6d6100` runs the band scaler `0x6d6090` (×1/36 @0x7ff9d0) over
+        // each float-band record with `rowIndex % 6 == 0`, i.e.
         // ONLY the sub-0 fog-END band; the sub-1 start FRACTION is never scaled. We apply the same
         // /36 at sample time (a time-interp of scaled values ≡ the scale of the interp).
         // A row with no keyframes commits the reference's own constant, never an invented one
@@ -956,7 +952,7 @@ impl LightCatalog {
             // Per-zone glow (static LightParams field, not a time band); fallback 0.5.
             glow: self.light_params_glow.get(&p).copied().unwrap_or(d.glow),
             // Cloud density C (float sub-3) + the three cloud palette rows (int sub-10/11/12) —
-            // the coverage threshold and the visible dome's colors (wow-re cloud pipeline §3c/§4).
+            // the coverage threshold and the visible dome's colors (the band gather `0x6d64d0`).
             cloud_density: fb(FB_CLOUD_DENSITY)
                 .and_then(|b| sample_float(b, t))
                 .unwrap_or(ZERO_KEY_SCALAR),
@@ -1001,9 +997,8 @@ mod ocean_tests {
 
     /// GOLDEN — the binary's own constant, and the reason it has to be a MULTIPLY.
     ///
-    /// wow-re's note warns that `−0.0333333351f` "is not exactly −1/30" and that a bit-exact port
-    /// must use the stored f32 rather than `t/30.0`. The warning is worth heeding and its stated
-    /// reason is not the real one: that bit pattern IS the nearest f32 to −1/30. The hazard is the
+    /// A bit-exact port must use the stored f32 rather than `t/30.0`, though its bit pattern IS the
+    /// nearest f32 to −1/30. The hazard is the
     /// operation, not the operand — `t · recip` and `t / 30.0` round differently, and they disagree
     /// *inside* the ramp's range, so a port that "simplifies" the multiply into a divide drifts.
     /// This test pins both halves so neither can be tidied away.

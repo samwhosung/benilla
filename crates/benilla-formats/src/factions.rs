@@ -2,7 +2,7 @@
 //!
 //! A unit's `UNIT_FIELD_FACTIONTEMPLATE` indexes **FactionTemplate.dbc**; the real client decides
 //! hostile/neutral/friendly by comparing two of those rows with one pure function — the reaction
-//! comparator at `0x606640` (wow-5875-re object-layer, byte-verified disasm, §5-cross-checked). Every
+//! comparator at `0x606640`. Every
 //! `UnitReaction`/`CanAttack`/`CanAssist` predicate bottoms out in it, and it's what colours nameplates
 //! and the ground selection ring (red/yellow/green). [`FactionTemplate::reaction_toward`] is that
 //! function, branch-for-branch.
@@ -71,7 +71,7 @@ pub enum Reaction {
 impl FactionTemplate {
     /// The real client's faction-template reaction comparator — `self`'s reaction toward `other`.
     ///
-    /// Branch-for-branch the byte-verified `0x606640` (wow-5875-re object-layer w2d1, §5): enemy
+    /// Branch-for-branch `0x606640`: enemy
     /// group mask, then the enemies id list, then friendship *both ways* (self's friend mask/list
     /// toward other, then other's friend mask/list toward self), else neutral. Hostility is only
     /// ever **self's** — and that asymmetry is load-bearing: a player template is enemy-masked
@@ -151,8 +151,7 @@ impl FactionInfo {
     /// client's list build calls its add inside this loop's accept block (`0x4d5555`), so a faction
     /// no slot fits is not in the player's list at all.
     ///
-    /// Byte-verified at `0x4d5500`–`0x4d5564` (wow-5875-re
-    /// `system/ui/scratch/reputation-panel-law.md`), and it differs from vmangos's `GetIndexFitTo`
+    /// This is `0x4d5500`–`0x4d5564`, and it differs from vmangos's `GetIndexFitTo`
     /// in **two** ways that this project got wrong first time by reading the emulator instead:
     ///
     /// 1. A slot with **both** masks zero is a **reject**, not a double wildcard (`0x4d550b`). Only
@@ -240,14 +239,13 @@ pub fn reputation_rank(total_standing: i32) -> u8 {
 /// The per-slot reputation flag byte the server keeps for each of the player's factions and sends
 /// as the first field of every `SMSG_INITIALIZE_FACTIONS` entry.
 ///
-/// **Named from the CLIENT's own reads, not from the emulators' enum** (wow-5875-re
-/// `system/ui/scratch/reputation-panel-law.md`, byte-verified: the thirteen accesses to the store at
-/// `0xb73294` are the complete image-wide population). That distinction is not pedantry — the two
-/// disagree on bit `0x08`, which every emulator calls `INVISIBLE_FORCED` and the client tests as
-/// **HEADER** (`entry.isHeader = (flags >> 3) & 1`, `0x4d5acb`). Believing the emulator's name gets
-/// the *right rows* on screen for the wrong reason (the five factions carrying it are exactly the
-/// pane's headers, so "hide these" and "these are headers" pick the same set) and then gets the
-/// header machinery wrong everywhere it matters.
+/// **Named from the CLIENT's own reads, not from the emulators' enum** (the thirteen accesses to
+/// the store at `0xb73294` are the complete image-wide population). That distinction is not
+/// pedantry — the two disagree on bit `0x08`, which every emulator calls `INVISIBLE_FORCED` and
+/// the client tests as **HEADER** (`entry.isHeader = (flags >> 3) & 1`, `0x4d5acb`). Believing the
+/// emulator's name gets the *right rows* on screen for the wrong reason (the five factions carrying
+/// it are exactly the pane's headers, so "hide these" and "these are headers" pick the same set)
+/// and then gets the header machinery wrong everywhere it matters.
 ///
 /// The same bit layout appears in `Faction.dbc`'s four `ReputationFlags` columns, which is where the
 /// **server** seeds a slot's initial byte from (`ReputationMgr::GetDefaultStateFlags`). The client
@@ -302,7 +300,7 @@ pub struct FactionCatalog {
     factions: HashMap<u32, FactionInfo>,
     /// `1 << FactionGroup.MaskID` → the localized group Name ("Alliance", "Horde") — what
     /// `GetZonePVPInfo`'s territory line formats (`0x48d540` reads FactionGroup.dbc Name of the
-    /// row whose bit ∈ the zone's FactionGroupMask; wow-re ui `zonetext-pvpinfo.md`).
+    /// row whose bit ∈ the zone's FactionGroupMask).
     group_names: HashMap<u32, String>,
     /// The same key → FactionGroup.dbc's **`InternalName`** (field 2), which is English on every
     /// locale where `Name0` is not. Kept beside the localized map rather than derived from it
@@ -443,7 +441,7 @@ fn faction_schema() -> Schema {
 
 /// FactionGroup.dbc — 12 fields in build 5875 (48-byte records: `ID`, `MaskID` (the bit index),
 /// an internal name, then the 8+1 localized Name block; layout per the `GetZonePVPInfo` reader
-/// `0x48d540` — MaskID@+0x4, Name@+0xc — wow-re ui `zonetext-pvpinfo.md`).
+/// `0x48d540` — MaskID@+0x4, Name@+0xc).
 fn faction_group_schema() -> Schema {
     let mut s = Schema::new("FactionGroup");
     s.add_field(SchemaField::new("ID", FieldType::UInt32));
@@ -638,8 +636,8 @@ mod tests {
     /// End-to-end on the **real** build-5875 DBC, in the direction the client colours by (the unit's
     /// reaction toward the player — verified in the binary: the nameplate resolver `0x7cbaa0` calls
     /// `unit->UnitReaction(activePlayer)`): a human player is faction template 1; Marshal Dughan (12)
-    /// reads friendly and the Chicken (31) neutral (the exact ring colours the wow-re apitrace
-    /// captured), a Defias Trapper (17) and mine Kobold Miner (26) hostile, and the starter-field
+    /// reads friendly and the Chicken (31) neutral (the exact ring colours a reference capture
+    /// recorded), a Defias Trapper (17) and mine Kobold Miner (26) hostile, and the starter-field
     /// Kobold Vermin (25) **neutral** — the famous non-aggro yellow level-1 mob. That last one also
     /// locks the direction: the *player's* template is enemy-masked against the whole Monster group,
     /// so the reverse direction would wrongly read every yellow beast as hostile. Template ids are
@@ -774,8 +772,8 @@ mod tests {
     }
 
     /// The real 5875 FactionGroup table: the territory-line names resolve by mask bit — Alliance
-    /// mask 2, Horde mask 4, nothing for an unowned 0 (the `GetZonePVPInfo` lookup, wow-re ui
-    /// `zonetext-pvpinfo.md`). Skips without client data.
+    /// mask 2, Horde mask 4, nothing for an unowned 0 (the `GetZonePVPInfo` lookup, `0x48d540`).
+    /// Skips without client data.
     #[test]
     fn real_faction_group_names_by_mask() {
         let data = crate::wow_data_or_skip!();

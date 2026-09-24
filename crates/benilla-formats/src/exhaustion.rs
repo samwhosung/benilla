@@ -1,7 +1,6 @@
 //! Exhaustion.dbc — the rest-state table behind the client's rested-XP surface.
 //!
-//! The whole client contract is byte-carved in wow-re `system/ui/scratch/rested-xp-bindings.md`
-//! (decision 1087 is the benilla fold-back): `GetRestState 0x48d350` indexes this table
+//! The whole client contract (decision 1087): `GetRestState 0x48d350` indexes this table
 //! **directly by the `PLAYER_BYTES_2` rest-state byte** (an ID→row-ptr array, `[0xc0dd78]`) and
 //! returns `(row.ID, row.name[locale], row.factor)`; `GetXPExhaustion 0x48d3f0` multiplies the
 //! rested pool by **row ID 1's factor, hard-coded** (2.0 in the shipped data — the "rested XP is
@@ -69,8 +68,7 @@ pub fn load_exhaustion(chain: &mut Chain) -> Result<Vec<ExhaustionRow>> {
 mod tests {
     use super::load_exhaustion;
 
-    /// The shipped 5875 table, read as data rather than assumed — the same five rows the wow-re
-    /// dispatch extracted from the MPQs independently (rested-xp-bindings.md): the rested factor
+    /// The shipped 5875 table, read as data rather than assumed — five rows: the rested factor
     /// really is 2.0-as-data, and the beta tiers really ship with placeholder names. Skips
     /// without client data.
     #[test]

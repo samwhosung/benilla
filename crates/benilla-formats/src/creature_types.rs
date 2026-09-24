@@ -1,8 +1,8 @@
 //! CreatureType.dbc — the 13-row creature-class table (Beast, Humanoid, Critter, Totem, …).
 //!
-//! The one consumer today: the TAB-target scan's critter rejection (wow-re
-//! `targeting-nearest-and-autoacquire.md`: the scorer `0x494200` looks the candidate's creature
-//! type up in the cached table `[0xc0de2c]` and rejects when `row[+0x28] & 1` — **flag bit 0**).
+//! The one consumer today: the TAB-target scan's critter rejection (the scorer `0x494200` looks
+//! the candidate's creature type up in the cached table `[0xc0de2c]` and rejects when
+//! `row[+0x28] & 1` — **flag bit 0**).
 //! In the shipped 1.12 data only **Critter (8)** carries the bit (the "critter/totem/non-combat
 //! pet" gloss is later-era; see the real-chain test). A unit's creature type itself comes off
 //! the wire (`SMSG_CREATURE_QUERY_RESPONSE`), cached with its name.

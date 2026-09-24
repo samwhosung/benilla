@@ -2,8 +2,8 @@
 //! race/class combos (CharBaseInfo), and the five appearance-dial *ranges* per (race, sex) derived
 //! from CharSections + CharHairGeosets + CharacterFacialHairStyles.
 //!
-//! **The ranges are data-derived, never hardcoded** (the RF-0071/73/74 grid law). Each dial cycles
-//! index `0..count-1`; the counts come from:
+//! **The ranges are data-derived, never hardcoded** (the client's CharSections grid, built at
+//! `0x476020`). Each dial cycles index `0..count-1`; the counts come from:
 //! - **skin color** = distinct `ColorIndex` of CharSections `SECTION_SKIN` (variation 0) for (race, sex);
 //! - **face** = distinct `VariationIndex` of `SECTION_FACE`;
 //! - **hair style** = distinct `VariationID` of **CharHairGeosets** for (race, sex), `max(1, …)` (the
@@ -35,10 +35,11 @@ const CHAR_HAIR_GEOSETS: &str = "DBFilesClient\\CharHairGeosets.dbc";
 const CHAR_FACIAL_HAIR_STYLES: &str = "DBFilesClient\\CharacterFacialHairStyles.dbc";
 const CHAR_SECTIONS: &str = "DBFilesClient\\CharSections.dbc";
 
-// CharSections `SectionType` values the range derivation reads (wow-re RF-0074; the same constants
-// `sections.rs` uses — kept local so the two concerns don't couple). `SECTION_FACIAL_HAIR` (2) isn't
-// here: the facial-hair *count* comes from CharacterFacialHairStyles, not CharSections (the test's
-// ValidateAppearance transcription defines it there, where it's used).
+// CharSections `SectionType` values the range derivation reads (the hair apply `0x4784c0` pushes
+// 3; the same constants `sections.rs` uses — kept local so the two concerns don't couple).
+// `SECTION_FACIAL_HAIR` (2) isn't here: the facial-hair *count* comes from
+// CharacterFacialHairStyles, not CharSections (the test's ValidateAppearance transcription defines
+// it there, where it's used).
 const SECTION_SKIN: u8 = 0;
 const SECTION_FACE: u8 = 1;
 const SECTION_HAIR: u8 = 3;
@@ -83,9 +84,9 @@ const KNOWN_COMBOS: [(u8, &[u8]); 8] = [
 /// data, not creatable content. Dwarf-Mage (3, 8) sits fully populated in both CharBaseInfo *and*
 /// CharStartOutfit, yet the real client hardcodes the skip: its class-list builder (`0x4706b0`)
 /// iterates CharBaseInfo and drops rows matching the literal `race == 3 && class == 8` — two x86
-/// immediates, the only such pair binary-wide, byte-confirmed by wow-5875-re §5 (decisions
-/// 0549/0550). Stripped here right after the raw-parse guard — the same mechanism, one layer down —
-/// so `allows`/`classes_for_race` answer what the real client offers.
+/// immediates, the only such pair binary-wide (decisions 0549/0550). Stripped here right after the
+/// raw-parse guard — the same mechanism, one layer down — so `allows`/`classes_for_race` answer
+/// what the real client offers.
 const UNUSED_COMBOS: [(u8, u8); 1] = [(3, 8)];
 
 /// One renderable item of a class's level-1 starting outfit (CharStartOutfit.dbc, decision 0527):
@@ -460,7 +461,7 @@ fn load_available_sections(chain: &mut Chain) -> Result<HashSet<SectionKey>> {
 }
 
 /// CharHairGeosets → (race, sex) → the set of hair-style `VariationID`s. 6 fields (ID, Race, Sex,
-/// Variation, GeosetID, unused); we key on cols 1/2/3 (wow-re RF-0073).
+/// Variation, GeosetID, unused); we key on cols 1/2/3, as the client's `0x478540` does.
 fn load_hair_geosets(chain: &mut Chain) -> Result<HashMap<(u8, u8), HashSet<u8>>> {
     let bytes = chain
         .read_file(CHAR_HAIR_GEOSETS)
@@ -482,7 +483,8 @@ fn load_hair_geosets(chain: &mut Chain) -> Result<HashMap<(u8, u8), HashSet<u8>>
 }
 
 /// CharacterFacialHairStyles → (race, sex) → the set of facial-hair `VariationID`s. 9 fields; the
-/// keys are cols 0/1/2 (Race, Sex, Variation — wow-re RF-0073, note col 0 is Race here, not an ID).
+/// keys are cols 0/1/2 (Race, Sex, Variation, as `0x478740` keys them — note col 0 is Race here,
+/// not an ID).
 fn load_facial_hair_styles(chain: &mut Chain) -> Result<HashMap<(u8, u8), HashSet<u8>>> {
     let bytes = chain
         .read_file(CHAR_FACIAL_HAIR_STYLES)

@@ -8,12 +8,12 @@
 //!   `ITEM_SUFFIX_TEMPLATE` (`"%s %s"`), so a rolled green reads "Chipped Claw of the Bear". Its
 //!   two exits ARE the gate: a `randomPropertyId` that is `0`, negative, past the store's max id,
 //!   or resolves to a null/empty suffix takes the plain-name exit (`0x5d8ba5`); anything else
-//!   takes the suffix exit (`0x5d8b84`). Byte-verified, wow-re `ui/scratch/auction-house.md`.
+//!   takes the suffix exit (`0x5d8b84`).
 //! - **the ENCHANTS.** The item tooltip's own suffix mechanism `0x52b7bf–0x52b7fb` resolves the
 //!   same row from the tooltip's `+0x424` randomPropertyId and copies **five dwords from
 //!   `row+0x8..+0x18`** into the tooltip's session enchant slots 2..6 — which the enchant family
-//!   then prints, in white, exactly as if the item object had carried them (wow-re
-//!   `ui/scratch/tooltip-content-law.md` §1-ENCHANT §E5). That is why a looted or linked
+//!   (`0x52c991`) then prints, in white, exactly as if the item object had carried them. That is
+//!   why a looted or linked
 //!   random-property item shows its real stat lines and *not* the `<Random enchantment>`
 //!   placeholder: the placeholder is the no-roll-known arm, and a known roll fills the slots.
 //!
@@ -48,8 +48,8 @@ const ITEM_RANDOM_PROPERTIES: &str = "DBFilesClient\\ItemRandomProperties.dbc";
 pub const RANDOM_PROPERTY_SLOTS: usize = 5;
 
 /// The item-enchant slot the first random-property enchant lands in (`ITEM_FIELD_ENCHANTMENT`
-/// slot 2 — wow-re §1-SESSION: the session block's `+0x3d8` is slot 2, and §E5 copies the row's
-/// five dwords into `+0x3d8..+0x3e8`).
+/// slot 2 — the session block's `+0x3d8` is slot 2, and `0x52b7e0–0x52b7fb` copies the row's five
+/// dwords into `+0x3d8..+0x3e8`).
 pub const RANDOM_PROPERTY_FIRST_SLOT: u8 = 2;
 
 /// One `ItemRandomProperties` row: the suffix the name takes, and the enchants the roll grants.

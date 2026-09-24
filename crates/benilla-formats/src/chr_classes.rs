@@ -66,8 +66,7 @@
 //! which the client caches in the global `[0xcecaac]`. That global has exactly one
 //! non-zeroing writer, `0x6e6ca0` (sole caller `0x5debcc`, the local-player create-finalise): it
 //! takes `UNIT_FIELD_BYTES_0` byte 1 — the class, the same walk both sections above make — and
-//! stores `ChrClasses[class] + 0x3c`, i.e. **field 15** (wow-re
-//! `system/spell/scratch/spellmod-table-law.md` §8).
+//! stores `ChrClasses[class] + 0x3c`, i.e. **field 15**.
 //!
 //! Anchored on the shipped 5875 file, which is also a could-have-failed control on the column: the
 //! nine rows read Warrior 4, Paladin 10, Hunter 9, Rogue 8, Priest 6, Shaman 11, Mage 3, Warlock 5,

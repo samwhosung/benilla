@@ -2,7 +2,7 @@
 //! `SpellVisualKit` id, played on the victim when `SMSG_ENVIRONMENTALDAMAGELOG` arrives (the
 //! fall-landing dust puff and its five siblings).
 //!
-//! The byte-verified client shape (wow-re `sound/scratch/uisound-tables.md`): init `0x603900`
+//! The client shape: init `0x603900`
 //! zeroes a **6-slot table** (`[0xc4d8e4]`) and, for each record with `field1 < 6`, stores
 //! `slot[field1] = field2` — so field 1 is the `EnvironmentalDamageType` enum (0 exhausted ·
 //! 1 drowning · 2 fall · 3 lava · 4 slime · 5 fire; the wire's `damage_type`) and field 2 the

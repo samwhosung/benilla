@@ -1,8 +1,7 @@
 //! `ItemGroupSounds.dbc` adapter — the per-item **pickup / put-down / use** sound groups
 //! (decision 0091: the bag-drag item sounds).
 //!
-//! Layout — VERIFIED byte-exact against build 5875 (wow-re
-//! `system/sound/scratch/item-pickup-place-sound.md`, §5 cross-checked): **5 fields × 4 = 20 B**
+//! Layout — build 5875: **5 fields × 4 = 20 B**
 //! per record (loader `0x5477d0` asserts fieldCount 5 @`0x547879`, recordSize 0x14 @`0x5478ae`):
 //! `{ id, kit[0], kit[1], kit[2], kit[3] }` — the kits are `SoundEntries.dbc` ids, indexed by the
 //! client's **gesture**: `kit[0]` pickup/grab, `kit[1]` put-down/place, `kit[2]` use/activate
@@ -22,7 +21,7 @@ use crate::dbc::{parse, u32_at};
 const ITEM_GROUP_SOUNDS: &str = "DBFilesClient\\ItemGroupSounds.dbc";
 
 /// The client's gesture index into an [`ItemGroupSoundsCatalog`] row (the `ecx` every
-/// `SndInterfacePlayItemSound` caller passes — wow-re `item-pickup-place-sound.md`).
+/// `SndInterfacePlayItemSound` caller passes, `0x457ff0`/`0x457fb0`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ItemGesture {
     /// `ecx = 0` — item grabbed onto the cursor.
@@ -84,9 +83,9 @@ pub fn load_item_group_sounds(chain: &mut Chain) -> Result<ItemGroupSoundsCatalo
 mod tests {
     use super::*;
 
-    /// The real 5875 rows match the RE's corroboration decode (`item-pickup-place-sound.md`):
-    /// 24 groups; id 1 → kits [273, 274, 275, 0] (a group with a use kit), id 7 → [1185, 1202, 0, 0]
-    /// (a weapon/armor group, no use kit — its `Use` gesture resolves silent).
+    /// The real 5875 rows: 24 groups; id 1 → kits [273, 274, 275, 0] (a group with a use kit),
+    /// id 7 → [1185, 1202, 0, 0] (a weapon/armor group, no use kit — its `Use` gesture resolves
+    /// silent).
     #[test]
     fn real_item_group_sounds_resolve() {
         let data = crate::wow_data_or_skip!();
@@ -103,8 +102,7 @@ mod tests {
     }
 
     /// The display→group→kit join holds on real data: every nonzero `ItemDisplayInfo.field11`
-    /// (`group_sounds`) is a valid group id — the RE's 20513/20513 corroboration, re-run through
-    /// our own two adapters.
+    /// (`group_sounds`) is a valid group id — 20513/20513, through our own two adapters.
     #[test]
     fn real_display_group_ids_all_resolve() {
         let data = crate::wow_data_or_skip!();

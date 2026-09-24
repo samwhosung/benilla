@@ -44,7 +44,8 @@ pub struct CreatureModel {
     /// resolves a used one to `<dir-of-model_path>\<name>.blp` for the model's `Monster1/2/3` slots.
     /// For a character-model NPC the body skin comes from [`Self::npc_appearance`]'s baked atlas
     /// regardless; these slots are empty on ~98% of such rows and unused for the body on the rest
-    /// (wow-re-confirmed — a `Monster`-slot binding on a character M2 is a separate, untraced mechanism).
+    /// (the body build `0x5fb200` never reads them — a `Monster`-slot binding on a character M2 is
+    /// a separate, untraced mechanism).
     pub textures: [Option<String>; 3],
     /// A character-model NPC's body appearance (from CreatureDisplayInfoExtra, via the display's
     /// `ExtendedDisplayInfoID`). `None` for a plain beast/monster (ExtendedDisplayInfoID 0) — those
@@ -110,8 +111,8 @@ struct DisplayRow {
     size_class: i32,
     /// `CreatureModelAlpha` (field 5, @+0x14) — the display's **base render opacity**, 0..=255.
     /// This is the `baseAlpha` of the reference's per-unit alpha product (`0x60d2d0`, the CGUnit
-    /// vtbl+0x6c getter: `CreatureDisplayInfo+0x14 × (1/255)`; wow-re `ghost-death-visuals.md`
-    /// §2.3) — an authored translucency 445 of the 10534 shipped displays carry (wisps, spirits,
+    /// vtbl+0x6c getter: `CreatureDisplayInfo+0x14 × (1/255)`) — an authored translucency 445 of
+    /// the 10534 shipped displays carry (wisps, spirits,
     /// ghosts; the modal non-opaque value is 128). Players are not on this chain (the getter
     /// returns a flat 1.0 for them).
     model_alpha: u32,
@@ -136,7 +137,7 @@ struct ModelRow {
     /// (133 of 430 shipped rows) marks a model that leaves no prints.
     footprint_texture: i32,
     /// `FootprintTextureLength`/`Width` (fields 7/8), authored in **inches** — the client caches
-    /// them ×(1/36) into yards (byte-verified at `0x607a00`, wow-re mount-composition.md).
+    /// them ×(1/36) into yards (`0x607a00`).
     footprint_length: f32,
     footprint_width: f32,
     /// `collisionHeight` (field 15), raw model units — see [`CreatureCatalog::collision_height`].
@@ -179,8 +180,8 @@ pub struct CreatureCatalog {
 }
 
 impl CreatureCatalog {
-    /// A display's own `creatureModelScale` column alone — the MOUNT scale law (byte-verified,
-    /// wow-re `mount-composition.md` / `0x613ef0`: a rendered mount = `OBJECT_FIELD_SCALE_X ×
+    /// A display's own `creatureModelScale` column alone — the MOUNT scale law (`0x613ef0`: a
+    /// rendered mount = `OBJECT_FIELD_SCALE_X ×
     /// CreatureDisplayInfo.creatureModelScale`; `CreatureModelData.modelScale` does NOT multiply
     /// in, unlike [`CreatureModel::scale`]'s spawned-creature product). `None` when the display
     /// id misses.
@@ -266,11 +267,11 @@ impl CreatureCatalog {
     ///
     /// Almost nothing in the world reads this: the server folds it into `OBJECT_FIELD_SCALE_X` and
     /// the client renders a unit at that field alone, so multiplying it again would square it
-    /// (`crate::entities::attach`'s note, wow-re `world_model_scale` `0x613ef0`). The **glue
+    /// (`crate::entities::attach`'s note, `0x613ef0`). The **glue
     /// screens are the exception** — the character-select pet has no wire object and therefore no
     /// server scale, and the reference sizes it with exactly this product (`0x472dc6`
-    /// `fld [x+0x10]; fmul [y+0x10]` → a uniform `diag(S,S,S,1)`, wow-re `glue-select-model.md`
-    /// §A4). `None` when either DBC lookup misses.
+    /// `fld [x+0x10]; fmul [y+0x10]` → a uniform `diag(S,S,S,1)`). `None` when either DBC lookup
+    /// misses.
     pub fn model_scale(&self, display_id: u32) -> Option<f32> {
         let row = self.display.get(&display_id)?;
         let model = self.models.get(&row.model_id)?;
@@ -289,7 +290,7 @@ impl CreatureCatalog {
 
     /// A display's **collision height** in raw model units — `CreatureModelData.collisionHeight`,
     /// the per-unit `h` every depth line in the client is a fraction of (swim at `0.75·h`, splash at
-    /// `0.4·h`, the foam gate at `2·h`; wow-re has each byte-pinned against `CMovement+0xb4`). World
+    /// `0.4·h`, the foam gate at `2·h`; the reference reads each against `CMovement+0xb4`). World
     /// yards = this × the unit's render scale (`OBJECT_FIELD_SCALE_X`, which the server has already
     /// folded the DBC scales into) — the caller multiplies, because only it knows the live scale.
     ///
@@ -327,8 +328,8 @@ impl CreatureCatalog {
     /// Does this display's model **breathe** — i.e. may it wear the `$BTH` hardcoded effects
     /// (cold vapour, underwater bubbles, inebriated bubbles)?
     ///
-    /// `CreatureModelData.Flags & 0x2` suppresses the whole family (wow-re
-    /// `object-layer/scratch/cold-breath-law.md` Q4, at `[unit+0xb3c]`): 99 of the 430 shipped
+    /// `CreatureModelData.Flags & 0x2` suppresses the whole family (`0x600003`, the row at
+    /// `[unit+0xb3c]`): 99 of the 430 shipped
     /// rows carry it — skeletons, ghosts, ghouls, zombies, banshees, every elemental, golems,
     /// slimes, infernals, voidwalkers, succubi, spiders, frogs, crocodiles, turtles, totems. The
     /// things that have no breath to see. Every player row is `0x4`, so players pass.

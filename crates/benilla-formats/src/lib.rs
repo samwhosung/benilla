@@ -335,13 +335,13 @@ mod taxi_path;
 pub use taxi_path::{load_taxi_paths, TaxiPath, TaxiPaths};
 
 /// The ten vanilla base content archives, **lowest priority first** — the reference mounter's
-/// table (`0x82e12c`) at its carved fixed priorities (`dbc.MPQ` = 0x36 … `model.MPQ` = 0x3f),
+/// table (`0x82e12c`) at its fixed priorities (`dbc.MPQ` = 0x36 … `model.MPQ` = 0x3f),
 /// reversed so [`Chain`]'s later-wins order reproduces them (decision 1300).
 ///
 /// This is only the *base* set: `patch.MPQ`, the `patch-?.MPQ` archives, and the optional
 /// `speech2.MPQ` are **discovered**, not listed — the whole mount law lives in [`Chain::open`].
 /// `base.MPQ` is deliberately absent: the reference opens it once for `telemetry.dat` and closes
-/// it before the mounter runs, so its contents are unreachable as assets (wow-re, VERIFIED).
+/// it before the mounter runs, so its contents are unreachable as assets (`0x5aa2d0`).
 ///
 /// The base archives hold the bulk of the data but carry **no `(listfile)`**; the master
 /// `(listfile)` (and most overrides) live in the patch archives, which is why the chain — not a
@@ -608,7 +608,7 @@ pub fn blp_bytes_to_mip_chain(bytes: &[u8]) -> Result<BlpMipChain> {
 }
 
 /// Every authored mip level of an in-memory BLP **with its DXTC blocks kept verbatim** — the form
-/// the reference client uploads (`glCompressedTexImage2DARB`; wow-re `system/image/image.md`).
+/// the reference client uploads (`glCompressedTexImage2DARB`, the OpenGL arm `0x59f5b0`).
 ///
 /// Raw1/Raw3 BLPs have no block form and come back decoded, reporting
 /// [`BlpTexels::Rgba8Unorm`] — so a caller switches on [`BlpMipChain::texels`] rather than

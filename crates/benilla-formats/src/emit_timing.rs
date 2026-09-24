@@ -1,6 +1,6 @@
-//! Per-sequence **particle emission timing** — the FN1 bake of the emitter's per-frame-sampled
-//! M2Tracks: spawn rate `+0xdc` + enabled gate `+0x1dc` ([`EmitTiming`]) and the other nine
-//! emission parameters ([`EmitParams`]), one loop per FILE sequence slot. Split from
+//! Per-sequence **particle emission timing** — the key-window bake (`0x713d50`) of the emitter's
+//! per-frame-sampled M2Tracks: spawn rate `+0xdc` + enabled gate `+0x1dc` ([`EmitTiming`]) and the
+//! other nine emission parameters ([`EmitParams`]), one loop per FILE sequence slot. Split from
 //! [`crate::particles`] (the raw record parse) because it is the *runtime sampling* face:
 //! decision 0641's material-alpha structure, one channel over.
 
@@ -10,10 +10,10 @@ use crate::models::{bake_track, ScalarAnim, SeqSlot};
 
 /// Per-sequence **emission timing**: the emitter's two per-frame-sampled M2Tracks — spawn rate
 /// (`+0xdc`) and the enabled gate (`+0x1dc`) — baked one loop per FILE sequence slot through the
-/// FN1 kernel ([`crate::models::bake_track`]), exactly the material-alpha structure of decision
-/// 0641 one channel over. The reference's emitter phase of `m2_animate` samples both through the
-/// **playing** sequence's key window every frame and forces the spawn rate to 0 while the gate is
-/// off (wow-re `part-emission-rate-animated.md` §2/§3, byte-verified `0x717d90`/`0x718f32`).
+/// key-window kernel `0x713d50` ([`crate::models::bake_track`]), exactly the material-alpha
+/// structure of decision 0641 one channel over. The emitter phase of the reference's animate
+/// kernel `0x714260` samples both through the **playing** sequence's key window every frame and
+/// forces the spawn rate to 0 while the gate is off (`0x717d90`/`0x718f32`).
 ///
 /// The clock law rides the **baked loop** ([`crate::models::KeyAnim::wrap`]), decided from the
 /// slot at bake time: a **looping** sequence wraps its band (`t mod period` — a windowed gate
@@ -103,7 +103,7 @@ impl EmitTiming {
     ///
     /// The reference's burst gate is `enabled != 0 && sampledRate > 0`, both sampled from the
     /// same clock in the same frame, and it triggers on that predicate's **rising edge**, emitting
-    /// `ftol(rate)` particles (wow-re `part-emission-burst-flag.md` §1, `0x718ed2`–`0x718ef6`;
+    /// `ftol(rate)` particles (`0x718ed2`–`0x718ef6`;
     /// benilla's `particles::accumulate_emission` runs the same rule). Both tracks are STEP, so
     /// this walks a 60 Hz grid over the slot's keyed span — the same resolution a running frame
     /// gives it — and reports the first instant the predicate holds.
@@ -182,10 +182,10 @@ impl EmitTiming {
 
 /// One frame's sampled emitter **parameters** — the nine per-frame-sampled scalar M2Tracks of the
 /// emitter record (bases `+0x34..+0x130`, every one except the rate/enabled pair). The reference's
-/// `m2_animate` emitter phase samples ALL ten scalar tracks into the per-emitter animation block
-/// (`[model+0x3d0]`, stride 0x16c — wow-re `part-emission-rate-animated.md` §1, the rate channel
-/// byte-verified as the template) and pushes them onto the live emitter through its setters each
-/// frame. **These are NOT constants**: `Frost_Nova_area` ramps its emission-sphere radius
+/// animate kernel `0x714260` samples ALL ten scalar tracks into the per-emitter animation block
+/// (`[model+0x3d0]`, stride 0x16c — the rate channel, sampled at `0x71850d`, is the template) and
+/// pushes them onto the live emitter through its setters each frame. **These are NOT constants**:
+/// `Frost_Nova_area` ramps its emission-sphere radius
 /// 0.19 → 13.2 yd with the expanding ring, `ArcaneExplosion_Base` 0 → 7.2 yd with the growing
 /// dome — flatten either to `value[0]` and every birth lands at the centre (the "born way too
 /// close" bug this type exists to fix).

@@ -13,14 +13,14 @@
 //!   table for doodads and rightly skips doodad-less rows; footsteps need every row, so this
 //!   module re-reads it into its own map).
 //!
-//! Class semantics (data-verified 2026-07-02; class-0 gate byte-confirmed at `0x6233ec`,
-//! wow-re `benilla-pins.md` B11a): **class 7 is the humanoid/character class** — its ten rows
+//! Class semantics (data-verified 2026-07-02; class-0 gate at `0x6233ec`): **class 7 is the
+//! humanoid/character class** — its ten rows
 //! are exactly the `CharacterMediumLarge*` kits; characters reach it through the ordinary
 //! display→sound data chain (`creature_sound`, the model fallback), never a code default.
 //! **Class 0 means "no footstep sounds"** — the client bails before any lookup; the lookup's
 //! class-0 rows are the Ancient Protector's stomps (kit 661), reached only by a *nonzero* class
 //! on its own row. A position with **no ground-effect layer is silent** — the client's sentinel
-//! is −1 and the kit lookup's signed bounds check rejects it (`0x458450`, B5-verified; the
+//! is −1 and the kit lookup's signed bounds check rejects it (`0x458450`; the
 //! audible fingerprint is vanilla's famously quiet dirt roads).
 
 use std::collections::HashMap;
@@ -66,8 +66,8 @@ impl FootstepCatalog {
 
     /// Does the ground under this effect layer take footprint decals? `TerrainType.Flags` bit 0
     /// through the same effect→terrain chain the sounds ride (INTERIM reading, decision 1006:
-    /// bit 0 fits the shipped data — set on exactly Snow and Sand — pending the wow-re byte
-    /// verdict on the client's own gate). No/unknown effect layer = no prints.
+    /// bit 0 fits the shipped data — set on exactly Snow and Sand — with the client's own gate
+    /// unconfirmed). No/unknown effect layer = no prints.
     pub fn leaves_footprints(&self, effect_id: Option<u32>) -> bool {
         effect_id
             .and_then(|e| self.effect_terrain.get(&e))

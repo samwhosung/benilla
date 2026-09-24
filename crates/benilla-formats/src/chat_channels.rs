@@ -5,9 +5,8 @@
 //! (`src/game/Objects/Player.cpp:5121`) is an empty function whose whole body is the comment
 //! `// Updated client-side`. The client walks this table at world entry **and on every zone
 //! change** and sends `CMSG_JOIN_CHANNEL` for each auto-join row with the zone's name spliced into
-//! the row's pattern — one function, `ZoneChannelRefresh 0x49a210`, VERIFIED in wow-re
-//! `system/ui/scratch/zone-chat-channel-autojoin.md` (decision 0288 phase 6; the walk itself is
-//! this crate's consumer, `benilla_app::ui_chat::channels`).
+//! the row's pattern — one function, `ZoneChannelRefresh 0x49a210` (decision 0288 phase 6; the
+//! walk itself is this crate's consumer, `benilla_app::ui_chat::channels`).
 //!
 //! Layout — the real 5875 file, decoded here (662 bytes, 6 records × **21 × u32** cols, 138-byte
 //! string block): `ChannelID(0), Flags(1), FactionGroup(2), Name[8](3..10), NameMask(11),
@@ -85,7 +84,7 @@ impl ChatChannelRow {
 
     /// Is this row **only joined inside a capital**? Gated on `CITY_ONLY` (`0x10`) alone — the
     /// client tests the zone's own capital flag under this bit and no other
-    /// (`0x49a3b8`/`0x49a512`; wow-re `system/ui/scratch/zone-chat-channel-autojoin.md` §4).
+    /// (`0x49a3b8`/`0x49a512`).
     pub fn is_city_only(&self) -> bool {
         self.flags & flags::CITY_ONLY != 0
     }
@@ -93,8 +92,7 @@ impl ChatChannelRow {
     /// Is this the row a **guild** decides about — `GUILD_REQ` (`0x20000`), `GuildRecruitment`
     /// alone in the 1.12 table? The client keys three things on it: the cascade's composer
     /// `0x49f140` finds the row by this bit, and a manual `JoinChannelByName`/`LeaveChannelByName`
-    /// on it forces the auto-join option off (`0x49ed3d`/`0x49ef8f`; wow-re
-    /// `guild-recruitment-mode.md` §3/§5).
+    /// on it forces the auto-join option off (`0x49ed3d`/`0x49ef8f`).
     pub fn is_guild_recruitment(&self) -> bool {
         self.flags & flags::GUILD_REQ != 0
     }
@@ -102,7 +100,7 @@ impl ChatChannelRow {
     /// Does this row's `%s` take the shared **city** word instead of the zone's name?
     ///
     /// A different bit from [`Self::is_city_only`] — `CITY_ONLY2` (`0x20`) — and a different test
-    /// in the client (`0x49a308`/`0x49a4ea` pick the substitution on it, §3). Rows 2 and 25 carry
+    /// in the client (`0x49a308`/`0x49a4ea` pick the substitution on it). Rows 2 and 25 carry
     /// both bits, so the two questions have the same answer on the 1.12 table; they are kept apart
     /// because the client keeps them apart.
     pub fn takes_city_name(&self) -> bool {
@@ -116,14 +114,13 @@ impl ChatChannelRow {
     /// ("General - Elwynn Forest") and `city_name` for a city-named one ("Trade - City") — one
     /// trade channel shared by every capital rather than one per city.
     ///
-    /// **"City" is DBC data, not a string literal**, VERIFIED at the bytes (wow-re
-    /// `zone-chat-channel-autojoin.md` §3): the client keeps the word at `0xb4e4f0`, whose single
-    /// writer `0x4985fd` is a load-time scan of `AreaTable.dbc` for the row with `Flags & 0x200`.
-    /// In the shipped 5875 table that is **exactly one row — id 3459, `AreaName[enUS] = "City"`**
-    /// (asserted in [`tests`] against the real file), which is precisely why searching `WoW.exe`
-    /// for `City\0` finds nothing at all. The caller passes the word in rather than this crate
-    /// re-reading `AreaTable.dbc`, because the auto-join walk already holds that catalog — and
-    /// passing it keeps the localized name localized.
+    /// **"City" is DBC data, not a string literal**: the client keeps the word at `0xb4e4f0`, whose
+    /// single writer `0x4985fd` is a load-time scan of `AreaTable.dbc` for the row with
+    /// `Flags & 0x200`. In the shipped 5875 table that is **exactly one row — id 3459,
+    /// `AreaName[enUS] = "City"`** (asserted in [`tests`] against the real file), which is
+    /// precisely why searching `WoW.exe` for `City\0` finds nothing at all. The caller passes the
+    /// word in rather than this crate re-reading `AreaTable.dbc`, because the auto-join walk
+    /// already holds that catalog — and passing it keeps the localized name localized.
     pub fn joinable_name(&self, zone_name: &str, city_name: &str) -> String {
         if !self.is_zone_dependent() {
             return self.pattern.clone();

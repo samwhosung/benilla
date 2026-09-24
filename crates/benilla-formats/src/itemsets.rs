@@ -1,5 +1,5 @@
-//! ItemSet.dbc — the item-set catalog behind the tooltip's SET block (wow-re
-//! `ui/scratch/tooltip-content-law.md` §22: set name "(owned/total)" gold, per-member lines
+//! ItemSet.dbc — the item-set catalog behind the tooltip's SET block (the item tooltip builder
+//! `0x52b650`: set name "(owned/total)" gold, per-member lines
 //! pale-cream/gray, threshold bonuses green/gray via the `$`-token engine).
 //!
 //! Record layout per vmangos `ItemSetEntry` (`DBCStructure.h`, the 1.12 branch): id@0, the 8+1

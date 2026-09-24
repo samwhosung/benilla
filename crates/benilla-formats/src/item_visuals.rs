@@ -24,8 +24,8 @@
 //! | `ItemVisualEffects` | 35 | 2 | 8 | id + model `.mdx` path (string) |
 //! | `SpellItemEnchantment` | 1460 | 24 | 96 | id · effect[3] · pointsMin[3] · pointsMax[3] · arg[3] · name[8]+mask · **ItemVisual (22)** · flags |
 //!
-//! The wow-re §5 note `object-layer/scratch/item-visual-enchant.md` byte-pins the same shapes from
-//! the loaders' own `cmp fieldCount/recSize` asserts (`0x548760`/`0x548530`/`0x54f6e0`).
+//! The loaders' own `cmp fieldCount/recSize` asserts (`0x548760`/`0x548530`/`0x54f6e0`) pin the
+//! same shapes.
 //!
 //! ## The skip rules are the client's, applied here at load
 //!

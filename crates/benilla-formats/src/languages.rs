@@ -1,7 +1,6 @@
 //! `Languages.dbc` × `ChrRaces.dbc` — the one join behind `GetDefaultLanguage()`.
 //!
-//! The binding `0x49fcd0` (94 bytes; wow-re `ui/scratch/bag-language-combat-action-bindings.md`
-//! §2, §5-cross-checked) is a two-hop table walk and nothing else:
+//! The binding `0x49fcd0` (94 bytes) is a two-hop table walk and nothing else:
 //!
 //! ```text
 //! player race byte  ->  [0xc0dee0][race] + 0x20   =  base language id
@@ -88,8 +87,7 @@ const CHR_RACES_BASE_LANGUAGE: usize = 8;
 
 /// `Languages.dbc` as the client walks it — **row order**, `(ID, Name_lang[8])`. Row order is the
 /// order `GetNumLaguages`/`GetLanguageByIndex` count in (`0x49fb30`/`0x49fbe0` walk the store's
-/// rows and filter, wow-re `chat-language-scramble.md` §8), so this keeps it rather than keying
-/// by id.
+/// rows and filter), so this keeps it rather than keying by id.
 #[derive(Debug, Default, Clone)]
 pub struct Languages(Vec<(u32, [Option<String>; LOCALES])>);
 
@@ -198,7 +196,7 @@ pub struct LanguageWords(HashMap<u32, LanguagePool>);
 /// The index is **shape, not policy**. Storing which words are one character long commits us to
 /// nothing about *how* the reference picks among them (exact-length match, a clamp at the longest
 /// authored word, buckets); every one of those rules reads this index. The rule itself is
-/// `0x49b560`'s and is filled in from the RE verdict, not guessed here.
+/// `0x49b560`'s and is filled in from the reference, not guessed here.
 #[derive(Debug, Default, Clone)]
 pub struct LanguagePool {
     words: Vec<String>,

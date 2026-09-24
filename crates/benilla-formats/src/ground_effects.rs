@@ -153,7 +153,7 @@ impl BlizzardRandomizer {
         // Per-lane index = byte − sub, and **when that goes negative add the lane's specific constant**
         // (`0xf4/0xec/0xd4/0xbc`) — NOT a mod-256 wrap. This is the client's exact `FUN_004531e0` math
         // (verified to the instruction); the result stays in `[0, 251]` so the 4-byte noise read is
-        // always in-bounds. (Using `wrapping_sub` diverges on ~11–16% of draws — see ground-effects.md.)
+        // always in-bounds. (Using `wrapping_sub` diverges on ~11–16% of draws.)
         let lane = |byte: u32, sub: i32, wrap: i32| -> u8 {
             let idx = (byte & 0xFF) as i32 - sub;
             (if idx < 0 { idx + wrap } else { idx }) as u8
@@ -191,7 +191,7 @@ impl BlizzardRandomizer {
 ///
 /// **Byte-read, not chosen**: `CVar::Register 0x63db90` at `0x68862e` passes name `0x8423d8`
 /// `"frillDensity"`, default string `0x864644` `"16"`, help "Terrain frill density", record
-/// `[0xc7f2f4]` (wow-re `re/cvar/cvar-register-sites.tsv` row 185). `SetWorldDetail 0x488dd0`
+/// `[0xc7f2f4]`. `SetWorldDetail 0x488dd0`
 /// writes 16/32/48 over it per slider stop, so a stop IS a multiple of this constant — which is
 /// why [`scatter_ground_doodads`] takes a multiplier and the CVar host converts at its edge
 /// ([`crate::ground_effects::FRILL_DENSITY_MAX`] is that conversion's other bound).

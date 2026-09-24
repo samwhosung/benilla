@@ -28,13 +28,11 @@
 //! camera-level). The three sign/axis alternatives miss by 700–1800 yards. See
 //! [`CinematicPath::sample`].
 //!
-//! It is now **byte-verified too** (wow-re `ui/scratch/cinematic-camera-law.md`, a §5 with a
-//! Unicorn run of the binary's own bytes as arbiter), and the earlier round's contradicting
-//! answer is explained rather than left hanging. The client applies affines as a **row vector on
-//! the left** (`out = in·M`), and the stored 3×3 is `[[cos,sin,0],[−sin,cos,0],[0,0,1]]`. Read as
-//! a diagram acting on a *column* vector that is `Rz(−facing)` — which is what a matrix picture
-//! invites, and what the earlier worker reported. The client never applies it that way. The bytes
-//! and the oracle never actually disagreed.
+//! The binary agrees, and an emulated run of its own bytes confirms it. The client applies affines
+//! as a **row vector on the left** (`out = in·M`, `0x7bca80`), and the stored 3×3 (`0x50c870`) is
+//! `[[cos,sin,0],[−sin,cos,0],[0,0,1]]`. Read as a diagram acting on a *column* vector that is
+//! `Rz(−facing)` — which is what a matrix picture invites. The client never applies it that way.
+//! The bytes and the oracle never actually disagreed.
 //!
 //! **The shipped corpus, read out of the ten `Cameras\*.m2` files** (`fov` radians, `d₀` = how far
 //! the shot's first eye position sits from its own origin, horizontally):
@@ -62,8 +60,8 @@
 //! while one runs (decision 0196), and why the client has to stream the world from the *camera*
 //! and not the avatar for the duration.
 //!
-//! **The optics in this table are data, not the shot's framing** (decision 1711, off wow-re
-//! `ui/scratch/cinematic-camera-law.md`, VERIFIED). A 24-site census settles it: the M2 camera
+//! **The optics in this table are data, not the shot's framing** (decision 1711). A 24-site census
+//! settles it: the M2 camera
 //! record's `fov`, `nearClip` and `farClip` are written at model load and read only by `0x7ac640`,
 //! which is reachable solely from the portrait and `<Model>` frame paths. **On the cinematic path
 //! nothing reads any of the three.** A fly-by is rendered through the *world camera's own* optics,
@@ -264,9 +262,9 @@ pub struct CinematicPath {
     /// The authored field of view, radians — `0.7854` (45°) on fifteen of the sixteen shipped
     /// shots and `1.5708` (90°) on the Undead intro.
     ///
-    /// **The reference reads this from nothing on the cinematic path** (wow-re
-    /// `ui/scratch/cinematic-camera-law.md`, VERIFIED by a 24-site census: the M2 camera's fov and
-    /// the two clips are written at model load and read only by `0x7ac640`, which is reachable
+    /// **The reference reads this from nothing on the cinematic path** (a 24-site census: the M2
+    /// camera's fov and the two clips are written at model load and read only by `0x7ac640`, which
+    /// is reachable
     /// solely from the portrait and `<Model>` frame paths). A fly-by is rendered through the
     /// **world camera's own** optics, re-stamped every frame. So this is a real field of the
     /// record, and it is not what a fly-by is framed with — see decision 1711 for what benilla did

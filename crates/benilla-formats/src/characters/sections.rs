@@ -9,8 +9,9 @@ use crate::{read_texture_mip_chain, BlpMipChain, Chain};
 
 const CHAR_SECTIONS: &str = "DBFilesClient\\CharSections.dbc";
 
-/// CharSections `sectionType` values (wow-re RF-0074): the layer a row supplies. `skin` is the full
-/// base atlas; the rest are region overlays the body composite blends on top (decision 0044).
+/// CharSections `sectionType` values (facial hair is 2 at `0x478660`, hair 3 at `0x4784c0`): the
+/// layer a row supplies. `skin` is the full base atlas; the rest are region overlays the body
+/// composite blends on top (decision 0044).
 const SECTION_SKIN: u8 = 0;
 const SECTION_FACE: u8 = 1;
 const SECTION_FACIAL_HAIR: u8 = 2;
@@ -19,18 +20,19 @@ const SECTION_UNDERWEAR: u8 = 4;
 
 /// The hair variation the client's type-6 binder substitutes when the selected style resolves no
 /// texture — a **literal 1** in the binary at two of its three call sites (`0x478445`, `0x4786f2`),
-/// not a search. See [`CharSections::hair_mesh_texture`]; wow-re `rf84`, decision 0536.
+/// not a search. See [`CharSections::hair_mesh_texture`]; decision 0536.
 const HAIR_SUBSTITUTE_VARIATION: u8 = 1;
 
 /// An atlas rect `(x, y, w, h)` in pixels — a composite destination tile.
 type Tile = (u32, u32, u32, u32);
 
-/// The body-atlas tiles the head + underwear overlays composite into — four of the RF-0062 static 256²
-/// partition's 10 rects. g8/g9 are the head strip (left column, Y 160–256: g8 the 32-tall upper band, g9
-/// the 64-tall lower band); g3 (torso upper) and g5 (pelvis) are the right column's Y 0–64 and Y 96–160 —
-/// the two tiles the underwear section dresses, one per texture column (RF-0062's group→cell map: the
-/// group-3 handler `0x4772f0` takes underwear cell `cc+0x20c`, the group-5 handler `0x4773a0` takes
-/// `cc+0x208`, and `0x478790` builds those two from the sectionType-4 row's `TextureName[1]`/`[0]`).
+/// The body-atlas tiles the head + underwear overlays composite into — four of the 10 rects of the
+/// static 256² partition `0x475c50` writes. g8/g9 are the head strip (left column, Y 160–256: g8
+/// the 32-tall upper band, g9 the 64-tall lower band); g3 (torso upper) and g5 (pelvis) are the
+/// right column's Y 0–64 and Y 96–160 — the two tiles the underwear section dresses, one per
+/// texture column (the group→cell map: the group-3 handler `0x4772f0` takes underwear cell
+/// `cc+0x20c`, the group-5 handler `0x4773a0` takes `cc+0x208`, and `0x478790` builds those two
+/// from the sectionType-4 row's `TextureName[1]`/`[0]`).
 const TILE_G8: Tile = (0, 160, 128, 32);
 const TILE_G9: Tile = (0, 192, 128, 64);
 // The underwear's two tiles ARE two of the equipment tiles — the composite reaches them through
@@ -43,8 +45,7 @@ const TILE_G5: Tile = EQUIP_TILES[5];
 
 /// The underwear section's two blits: `(textureColumn, equipLayer, columnsTested)` — which
 /// `TextureName` column dresses which equipment tile, and **how far into that tile's equipment
-/// columns the client looks before it draws at all** (wow-re RF-0086, byte-derived from the two
-/// handlers).
+/// columns the client looks before it draws at all** (read from the two handlers below).
 ///
 /// The underwear is not an under-layer — it is the tile's **fallback**. `0x4772f0` (TorsoUpper)
 /// tests `cc+0x2e8/0x2ec/0x2f0` = columns 0–2 and `0x4773a0` (LegUpper) tests `cc+0x368/0x36c` =
@@ -62,10 +63,10 @@ const UNDERWEAR_TILES: [(usize, usize, i8); 2] = [
     (1, 3, 3), // TextureName[1] → TorsoUpper: {Shirt, Chest/Robe, guild-tabard Background} tested
 ];
 
-/// The eight equipment tiles g0–g7 (RF-0062), in **layer order** — the load-bearing identity of
-/// decision 0074: ItemDisplayInfo texture column *i* = compositor layer *i* = tile g*i*. Note g3 ==
-/// [`TILE_G3`] and g5 == [`TILE_G5`] — equipment TorsoUpper/LegUpper share the underwear's two tiles;
-/// underwear blits first, so it sits under.
+/// The eight equipment tiles g0–g7 (written by `0x475c50`), in **layer order** — the load-bearing
+/// identity of decision 0074: ItemDisplayInfo texture column *i* = compositor layer *i* = tile
+/// g*i*. Note g3 == [`TILE_G3`] and g5 == [`TILE_G5`] — equipment TorsoUpper/LegUpper share the
+/// underwear's two tiles; underwear blits first, so it sits under.
 const EQUIP_TILES: [Tile; 8] = [
     (0, 0, 128, 64),     // g0 ArmUpper
     (0, 64, 128, 64),    // g1 ArmLower
@@ -90,7 +91,7 @@ const EQUIP_TEX_DIRS: [&str; 8] = [
     "FootTexture",
 ];
 
-/// The `[0x803bf8]` bodyslot×layer table (wow-re RF-0088), rows = bodyslots 2–9 (shirt, chest, belt,
+/// The `[0x803bf8]` bodyslot×layer table, rows = bodyslots 2–9 (shirt, chest, belt,
 /// pants, boots, wrist, gloves, tabard), columns = layers 0–7: the **cell** within the layer's row
 /// that this slot's contribution occupies, `-1` = this slot never touches the layer.
 ///
@@ -109,7 +110,7 @@ const EQUIP_LAYER_COLUMN: [[i8; 8]; 8] = [
     [-1, -1, -1, -1, -1, -1, 2, 0],  // boots
     [-1, 2, -1, -1, -1, -1, -1, -1], // wrist
     [-1, 3, 0, -1, -1, -1, -1, -1],  // gloves
-    [-1, -1, -1, 4, 4, -1, -1, -1], // tabard (RF-0088: TorsoUpper is cell 4, not 3 — 0074 mis-read it)
+    [-1, -1, -1, 4, 4, -1, -1, -1], // tabard (TorsoUpper is cell 4, not 3 — 0074 mis-read it)
 ];
 
 /// The worn-slot indices the two overruling choosers name, in `equipment` order (bodyslot − 2).
@@ -125,7 +126,7 @@ const SLOT_TABARD: usize = 7;
 const GUILD_EMBLEM_DIR: &str = "Textures\\GuildEmblems";
 
 /// The two compositor layers the guild tabard paints, and the filename half each names: TorsoUpper
-/// takes the `_TU_` files, TorsoLower the `_TL_` ones (wow-re RF-0086: `0x47a610` stores the `_TU_`
+/// takes the `_TU_` files, TorsoLower the `_TL_` ones (`0x47a610` stores the `_TU_`
 /// trio into group 3's cells and the `_TL_` twins into group 4's). No other layer is touched — the
 /// emblem is a torso garment, and the arms/legs keep whatever the rest of the outfit painted.
 const EMBLEM_LAYERS: [(usize, &str); 2] = [(3, "TU"), (4, "TL")];
@@ -176,11 +177,11 @@ impl CharSections {
     /// scalp hair. Prefer this over [`Self::hair_texture`] anywhere a mesh is being textured;
     /// `hair_texture` is the raw row accessor, and a bald row is genuinely blank.
     ///
-    /// **The mechanism** (byte-verified, wow-re `rf84-hair-texture-type6-resolution.md`; decision
-    /// 0536). The client has no fallback *lookup*. `0x478220(cc, variationIdx)` is the sole type-6
-    /// binder, it always reads `TextureName[0]` (never column-indexed), and an **empty name is a
-    /// no-op that leaves the slot untouched** (`0x47827d cmp BYTE PTR [ecx],0x0` → `je 0x4782d8`) —
-    /// not a null bind. Three sites call it, in build order skin → hairStyle → facialHair:
+    /// **The mechanism** (decision 0536). The client has no fallback *lookup*.
+    /// `0x478220(cc, variationIdx)` is the sole type-6 binder, it always reads `TextureName[0]`
+    /// (never column-indexed), and an **empty name is a no-op that leaves the slot untouched**
+    /// (`0x47827d cmp BYTE PTR [ecx],0x0` → `je 0x4782d8`) — not a null bind. Three sites call it,
+    /// in build order skin → hairStyle → facialHair:
     ///
     /// 1. `0x478445` — variation **literal 1**, gated `sex==0 && hairStyle==0 && ChrRaces.Flags & 8`
     /// 2. `0x478450` — variation `hairStyle`, unconditional
@@ -229,7 +230,7 @@ impl CharSections {
     /// undecodable overlay is skipped (best-effort, like the rest of the asset pipeline).
     ///
     /// Each overlay is read from its own origin and source-over blitted onto the base at the verified
-    /// tile (RF-0062 bbox table + RF-0067 per-layer src rect + RF-0074 head-section map). The overlay
+    /// tile (`0x475c50`'s bbox table + `0x4770f0`'s src rect + the head-section map). The overlay
     /// BLP's own alpha is the blend control, so an opaque overlay (`alphaDepth 0` → the real client's
     /// REPLACE: face, pelvis) overwrites the base and an alpha one (facial hair) blends — at full 8-bit
     /// precision, not the client's 16-bit RGB565 / 2-bit-coverage memory format (the modern-client
@@ -264,7 +265,7 @@ impl CharSections {
         let mut atlas = read_texture_mip_chain(chain, base_path)
             .with_context(|| format!("reading base skin '{base_path}'"))?;
         // The head overlays: (sectionType, variation, color, texColumn, destTile) — the verified fan-out
-        // (RF-0067 §"section → cell core" + RF-0074 head map). Within a tile, order matters (later
+        // (the section → cell core `0x4782e0` + the head map). Within a tile, order matters (later
         // overwrites/blends over earlier): base skin (already the canvas) → face → facial hair → hair.
         // Note the columns differ by section: face/facial-hair use TextureName[0]/[1] (lower/upper),
         // hair uses [1]/[2]. Hair is blank for e.g. Human male (its texid columns are empty), so those
@@ -401,7 +402,8 @@ pub enum BlitSource<'a> {
 impl EquipBlit<'_> {
     /// The chain paths this contribution is looked up under, **in the order the composite tries
     /// them**, first hit wins. Two for a worn garment (`_U`, then the wearer's gender letter — the
-    /// RF-0088 §7 order); one for a guild-tabard layer, which ships a single ungendered name.
+    /// order `0x476e20` builds them in); one for a guild-tabard layer, which ships a single
+    /// ungendered name.
     ///
     /// The composite runs this and the instrument reports it, so "which file did that cell take?"
     /// has one answer and cannot drift into two transcriptions.
@@ -434,7 +436,7 @@ pub struct GuildEmblem {
     pub emblem_color: i32,
     /// The border style — `Border_<style>_<color>_…`. **Only 00–05 are reachable**: the client's own
     /// count table `[0x808220] = {170, 17, 6, 17, 51}` caps the designer at six, and the 52
-    /// `Border_06..09_*` files it ships are dead art (wow-re `rf89`). A server that put 7 on the
+    /// `Border_06..09_*` files it ships are dead art. A server that put 7 on the
     /// wire would simply resolve nothing, which is the same outcome the reference reaches.
     pub border_style: i32,
     /// The border's colour — 17 for the six reachable styles; the shipped table is ragged (118
@@ -461,7 +463,6 @@ impl GuildEmblem {
     /// `Emblem_-1_-1_TU_U`, which names no file — but the plan has already taken cell 4 away from
     /// the garment, so an undesigned guild's tabard renders as bare skin. It is `-1` on **any** of
     /// the five, not all: the reference tests them one at a time and bails on the first.
-    /// (wow-re `rf89-guild-tabard-emblem-install.md` §Q6.)
     pub fn is_designed(&self) -> bool {
         [
             self.emblem_style,
@@ -492,7 +493,7 @@ pub enum EmblemLayer {
     /// the background is a **cutout**, not a full-tile paste — `Background_12_TU_U` measures 79.5%
     /// opaque, 16.8% fully transparent, the transparent part being outside the tabard's silhouette.
     /// So the suppressed bra leaves bare skin at the sides, which is the unconditional base-skin
-    /// blit showing through, exactly as RF-0086 describes.
+    /// blit `0x477070` showing through.
     Background,
     /// Cell 3 — the trim around the field, mostly transparent (`Border_01_07_TU_U`: 65% clear).
     Border,
@@ -510,7 +511,7 @@ impl EmblemLayer {
     ];
 
     /// The cell this layer occupies in its row — fixed, not chosen: no bodyslot chooser can write
-    /// cells 2/3/4 of layers 3/4, so these three are the guild tabard's alone (wow-re RF-0088).
+    /// cells 2/3/4 of layers 3/4, so these three are the guild tabard's alone (`0x47a610`).
     pub fn column(self) -> i8 {
         match self {
             EmblemLayer::Background => 2,
@@ -545,7 +546,7 @@ impl EmblemLayer {
 }
 
 /// The cell a worn slot's contribution to `layer` occupies — the `[0x803bf8]` default, unless the
-/// layer's chooser overrules it (wow-re RF-0088 §5, byte-true; `0x479210` and `0x4793f0`).
+/// layer's chooser overrules it (`0x479210` and `0x4793f0`).
 ///
 /// **This is the fix for B327 and half of B326.** Only two of the eight choosers look past the
 /// table, and both read an `ItemDisplayInfo.geosetGroup` — so what a garment *is* moves where it
@@ -598,13 +599,13 @@ pub fn equip_column(equipment: &[Option<&ItemDisplay>; 8], slot: usize, layer: u
 /// and a guild member wearing no tabard shows no emblem. When it does install it writes cells 2/3/4
 /// of layers 3 and 4 **last**, so the symbol replaces the tabard garment's own cell-4 contribution:
 /// that is the client's ordering, not a priority rule (`0x478a53` clears cells 4→2 of both layers
-/// when the tabard slot is set, then `0x47a610` refills all three — wow-re RF-0086/RF-0088).
+/// when the tabard slot is set, then `0x47a610` refills all three).
 pub fn equip_blits<'a>(
     equipment: &[Option<&'a ItemDisplay>; 8],
     emblem: Option<GuildEmblem>,
     tabard_preview: bool,
 ) -> Vec<EquipBlit<'a>> {
-    // The tabard designer's preview (decision 1977, wow-re RF-0089 §6/§7c): the reference's
+    // The tabard designer's preview (decision 1977): the reference's
     // `0x47a610` installs the five onto the character component with no ItemDisplayInfo test —
     // the previewed tabard is the geoset flap over an EMPTY slot — so the emblem paints whenever
     // the preview flag is up, and otherwise only over a worn tabard whose display asks for it.
@@ -676,7 +677,7 @@ pub fn forearm_dressed(equipment: &[Option<&ItemDisplay>; 8]) -> bool {
 }
 
 /// The atlas rect layer `layer`'s equipment contributions composite into — `(x, y, w, h)` in pixels
-/// of the 256² body atlas (the RF-0062 bbox table). Out of range past layer 7.
+/// of the 256² body atlas (the bbox table `0x475c50` writes). Out of range past layer 7.
 pub fn equip_tile(layer: usize) -> Option<(u32, u32, u32, u32)> {
     EQUIP_TILES.get(layer).copied()
 }
@@ -687,7 +688,7 @@ pub fn equip_tex_dir(layer: usize) -> Option<&'static str> {
 }
 
 /// The chain paths a region texture is looked up under, in the order the composite tries them:
-/// **`_U`, then the wearer's gender letter** (wow-re RF-0088 §7, byte-true).
+/// **`_U`, then the wearer's gender letter**.
 ///
 /// The order is load-bearing and it is the inverse of what benilla shipped, which was **B326**.
 /// `0x476e20` stages the literal `"U"` as the format's third `%s` before it computes anything else,
@@ -711,7 +712,8 @@ pub fn equip_region_candidates(layer: usize, name: &str, sex: u8) -> [String; 2]
 
 /// Source-over composite of one region overlay's authored mip pyramid onto the body atlas at a fixed
 /// tile. Per mip level `i` the destination tile is `(x>>i, y>>i, w>>i, h>>i)` and the overlay's level-`i`
-/// pixels are read from its **own origin** — the RF-0067 overlay src rect (`src = (0,0)`, `dst = tile.xy`,
+/// pixels are read from its **own origin** — the overlay src rect of `0x4770f0` (`src = (0,0)`,
+/// `dst = tile.xy`,
 /// extent `tile.wh`), so the overlay BLP is authored exactly tile-sized. Straight 8-bit source-over per
 /// channel (`out = src·a + dst·(1−a)`, `out_a = a + dst_a·(1−a)`): an opaque overlay (`a == 255`) is a
 /// plain copy (the client's REPLACE), an alpha one blends. Levels past either pyramid's end, and the
@@ -837,9 +839,10 @@ mod tests {
     /// [`equip_blits`] is the composite's whole equipment law, so the two things a reported outfit
     /// defect turns on are pinned here: **which** slots reach a tile, and in **what cell order**.
     ///
-    /// The `[0x803bf8]` value is a **default**, not a fixed priority (wow-re RF-0088 §5): the layer's
-    /// chooser may overrule it from the item's `geosetGroup`, and the row is walked by ascending cell
-    /// with later covering earlier. Reading it as a fixed priority is what shipped **B327**.
+    /// The `[0x803bf8]` value is a **default**, not a fixed priority: the layer's chooser
+    /// (`0x479210`, `0x4793f0`) may overrule it from the item's `geosetGroup`, and the row is
+    /// walked by ascending cell with later covering earlier. Reading it as a fixed priority is what
+    /// shipped **B327**.
     #[test]
     fn equip_blits_places_each_slot_in_its_chooser_cell() {
         let plain_chest = worn(
@@ -943,7 +946,7 @@ mod tests {
     /// the emblem installs **only** over a tabard whose display asks for it
     /// ([`ItemDisplay::takes_guild_emblem`]), and when it does it takes cells 2/3/4 of layers 3 and
     /// 4 — **including the cell the tabard garment itself had**, because the client clears 4→2 and
-    /// refills all three (wow-re RF-0086/RF-0088).
+    /// refills all three (`0x47a610`).
     #[test]
     fn the_guild_emblem_replaces_the_tabard_it_is_worn_on() {
         let torso = [
@@ -1140,7 +1143,7 @@ mod tests {
         );
     }
 
-    /// The `-1` guard (wow-re `rf89` §Q6). A guild that has never designed a tabard carries the
+    /// The `-1` guard (`0x6d6d20`). A guild that has never designed a tabard carries the
     /// sentinel, and the crest must not install **at all** — not "install and resolve to nothing",
     /// which is the failure this pins: the plan takes cell 4 away from the garment before the file
     /// lookup happens, so painting through the sentinel leaves a blank tabard rather than the
@@ -1197,7 +1200,7 @@ mod tests {
     /// The underwear consequence, which is the one thing about the emblem that is *not* confined to
     /// its own cells: TorsoUpper's bra is suppressed by a contribution in cells 0/1/**2**, and cell 2
     /// is the guild tabard's **background** ([`UNDERWEAR_TILES`]). So a guild tabard hides the bra
-    /// and a plain one — which only ever reaches cell 4 — does not, exactly as wow-re RF-0086 says.
+    /// and a plain one — which only ever reaches cell 4 — does not, exactly as `0x4772f0` tests it.
     #[test]
     fn only_a_guild_tabards_background_reaches_the_underwear_prefix() {
         let torso = [
@@ -1261,7 +1264,7 @@ mod tests {
         );
     }
 
-    /// **B327, the carve.** On LegLower the chooser `0x4793f0` lifts a *robe* (chest `geosetGroup[2]`)
+    /// **B327.** On LegLower the chooser `0x4793f0` lifts a *robe* (chest `geosetGroup[2]`)
     /// to cell 4 — above a boot's 3-or-2 — so footwear paints under a robe's skirt and can never
     /// repaint its hem. The control that must not move: a **plain** chest stays at 1 and boots still
     /// cover ordinary trousers, which is why the fixed-priority reading looked right for years.
@@ -1416,7 +1419,7 @@ mod tests {
     }
 
     /// **B326.** The region filename resolves `_U` FIRST and falls back to the wearer's gender letter
-    /// only when `_U` is absent (wow-re RF-0088 §7) — the inverse of what benilla shipped. On the 43
+    /// only when `_U` is absent (`0x476e20`) — the inverse of what benilla shipped. On the 43
     /// basenames that carry both, the gendered art is dead: `Leather_A_02_Pant_LL_F` is 18 rows
     /// shorter than its `_U`, and preferring it left a bare ring below a night elf female's knee.
     #[test]
@@ -1542,7 +1545,7 @@ mod tests {
             "bald style has no hair texture"
         );
 
-        // The type-6 MESH resolver's substitute (decision 0536, byte-verified wow-re `rf84`): when the
+        // The type-6 MESH resolver's substitute (decision 0536; the binder `0x478220`): when the
         // selected style resolves nothing, the client's binder has already bound variation **1** and an
         // empty name leaves that slot untouched. A bald orc/gnome male still wears a beard, and on those
         // races the beard is geometry on the hair unit — so the blank bald row must not leave it
@@ -1673,7 +1676,7 @@ mod tests {
     }
 
     /// The underwear is the tile's **fallback**, and only the group's TESTED columns suppress it
-    /// (wow-re RF-0086; the byte-derived prefix in [`UNDERWEAR_TILES`]). This is the discriminating
+    /// (`0x4772f0`/`0x4773a0`; the prefix in [`UNDERWEAR_TILES`]). This is the discriminating
     /// pin, because the shipped art cannot make it: a real chest or a real pair of pants repaints
     /// its whole tile opaquely, so "the underwear was suppressed" and "the underwear was painted
     /// over" produce the same pixels.
@@ -1823,8 +1826,8 @@ mod tests {
     ///
     /// 1. the shipped row really does set the flag (so the gate is not vacuous on real data);
     /// 2. all six `Textures\GuildEmblems\` names an emblem builds resolve, and each is authored
-    ///    **exactly tile-sized** — the RF-0067 overlay src convention (`src = (0,0)`, extent =
-    ///    the tile), which is what lets them blit from their own origin;
+    ///    **exactly tile-sized** — the overlay src convention of `0x4770f0` (`src = (0,0)`,
+    ///    extent = the tile), which is what lets them blit from their own origin;
     /// 3. the emblem repaints the two torso tiles and **nothing else** — no arm, leg, head or foot
     ///    texel moves — and a different index set paints a different tabard.
     #[test]
@@ -1915,7 +1918,7 @@ mod tests {
         );
 
         // **Background 29 ships UPPERCASE and has no lowercase sibling** — `BACKGROUND_29_TU_U.blp`
-        // is the one odd name in 6118 files (wow-re `rf89`). A case-SENSITIVE chain lookup would
+        // is the one odd name in 6118 files. A case-SENSITIVE chain lookup would
         // lose exactly one background colour on exactly one tile, which is the kind of defect that
         // reads as "that guild's tabard is subtly wrong" and nothing else. Ours is insensitive;
         // this is the tripwire that keeps it that way.
