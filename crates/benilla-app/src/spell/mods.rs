@@ -4,9 +4,8 @@
 //! Two `i32[64][29]` tables (`SPELLMOD_FLAT 0xcead60`, `SPELLMOD_PCT 0xcecb30`), one handler that
 //! fills them (`Spell_C::HandleSetSpellModifier 0x6e9950`, registered for both
 //! `SMSG_SET_FLAT_SPELL_MODIFIER` and `SMSG_SET_PCT_SPELL_MODIFIER` by `Spell_C::SystemInitialize
-//! 0x6e7150`), and one reader that answers them (`GetSpellModifiers 0x6e6b30`). Every law here is
-//! byte-VERIFIED in wow-re `system/spell/scratch/spellmod-table-law.md`; this module is that note
-//! turned into the one place benilla asks "does a talent change this number?".
+//! 0x6e7150`), and one reader that answers them (`GetSpellModifiers 0x6e6b30`). This module is
+//! that machinery turned into the one place benilla asks "does a talent change this number?".
 //!
 //! **The index is `mask_bit * 29 + op`, in both directions, and it is the thing to get right.**
 //! The writer multiplies its FIRST wire byte (`6e9993: imul eax,eax,0x1d`); the reader
@@ -14,9 +13,8 @@
 //! `cmp eax,0x40`, which forces the first factor to be the 0..63 `SpellFamilyFlags` **bit index**
 //! and the second the 0..28 SpellModOp. The transposed form addresses 47% of the array
 //! (`29*28 + 63 = 875` against 1856 cells) and makes writer and reader touch systematically
-//! disjoint cells — every modifier silently dropped, nothing to see in a log. wow-re's own
-//! `wave-handlers.md` carried the transposed form, `verified`, for months. [`index`] is the single
-//! expression both sides here go through, so they cannot drift apart.
+//! disjoint cells — every modifier silently dropped, nothing to see in a log. [`index`] is the
+//! single expression both sides here go through, so they cannot drift apart.
 //!
 //! The server agrees, independently and in source: vmangos `Player::SendSpellMod`
 //! (`Objects/Player.cpp:17815`) loops `for (int eff = 0; eff < 64; ++eff)` over the modifier's own
@@ -279,8 +277,8 @@ impl SpellModifiers {
 }
 
 /// Entering the world drops both tables and the class family — `Spell_C::SystemInitialize
-/// 0x6e7150`'s two `rep stosd`s and its `[0xcecaac] = 0`, which the §5 walked to
-/// `CGlueMgr::Update 0x46b930` and pinned to **once per world entry**, not once per process.
+/// 0x6e7150`'s two `rep stosd`s and its `[0xcecaac] = 0`, reached from
+/// `CGlueMgr::Update 0x46b930` **once per world entry**, not once per process.
 ///
 /// There is deliberately nothing else: no talent-change clear (the server re-sends absolute cells),
 /// and no world-LEAVE clear (the reference's own teardown `0x6e99e0` never touches them, and the

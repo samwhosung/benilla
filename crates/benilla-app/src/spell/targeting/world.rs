@@ -1,6 +1,6 @@
 //! The **world** click's two commits — the two legs of the reference's click dispatcher
 //! `0x492ce0`, which while targeting are chosen by the *pending spell's word*, not by the scene
-//! (wow-re `world-click-targeting.md` §2: the pick flags `0x481050` builds come only from
+//! (the pick flags `0x481050` builds come only from
 //! `0xcecac0` when `IsTargeting`).
 //!
 //! - **terrain leg** (`0x492c90` → `0x492580` → `BindLocation 0x6e60f0`) — [`commit_ground_cast_on_click`]
@@ -14,7 +14,7 @@
 //!
 //! Neither leg gates on range, validity or the lock. `0x492580`'s complete callee set contains no
 //! range call and no error emitter, and the object leg's `BindTarget` arm reads nothing but the
-//! clicked object's typemask and the word (wow-re C2 REFUTED). The server judges; its refusing
+//! clicked object's typemask and the word. The server judges; its refusing
 //! `SMSG_CAST_RESULT` is the red line.
 
 use bevy::prelude::*;
@@ -33,7 +33,7 @@ use super::TargetingWants;
 /// anything else the click could mean; [`crate::target::click::select_on_click`] holds its gate
 /// while this mode is active, so the click neither selects nor deselects). Binds the frame's
 /// pick-occlusion point and sends **unconditionally** — the leg's complete callee set has no
-/// range check and no error path (wow-re `world-click-targeting.md` Q1; C2 REFUTED: the click
+/// range check and no error path (the click
 /// never gates on range, the server judges it, and its refusing `SMSG_CAST_RESULT` is the red
 /// line) — `CMSG_CAST_SPELL` mask `0x40` + the point (WoW coords), arming the pending cast +
 /// the GCD (the `SendCast 0x6e54f0` tail's two live pieces for a ground cast); the mode ends

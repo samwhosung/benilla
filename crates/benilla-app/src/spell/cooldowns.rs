@@ -1,6 +1,6 @@
 //! The player's cooldown store — a mirror of the client's `SpellHistory` list (decision 0137
-//! phase 4). Every law here is the byte-verified mechanism from wow-re `wave-cooldown.md` /
-//! `wave-handlers.md` (the SPELLHISTORY node ops `0x6e12c0`/`0x6e13e0`/`0x6e1630`/`0x6e1790`,
+//! phase 4). Every law here is the client's own mechanism (the SPELLHISTORY node ops
+//! `0x6e12c0`/`0x6e13e0`/`0x6e1630`/`0x6e1790`,
 //! `StartCooldown 0x6e2c60`, `StartGlobalCooldown 0x6e2de0`, and the SMSG handlers
 //! `0x6e9460`/`0x6e95d0`/`0x6e9670`/`0x6e9730`), transcribed onto `Instant`/`Duration`:
 //!
@@ -12,8 +12,7 @@
 //!   queried spell against all three: nodes matching its id (+ cast item), nodes matching its
 //!   category, and nodes whose GCD category matches its `startRecoveryCategory` — the mechanism
 //!   that spreads one cast's GCD onto every other button. The longest remaining wins.
-//! - **Who starts what** (byte-VERIFIED, the 2026-07-10 wow-re §5 + follow-up,
-//!   `action-button-state-api.md` §7 / `wave-handlers.md` ADDENDUM): the GCD starts locally at
+//! - **Who starts what**: the GCD starts locally at
 //!   cast-send (`0x6e58fb`); the spell's own recovery is client-computed from `Spell.dbc` and
 //!   inserted when **our own `SMSG_SPELL_GO`** arrives (`HandleSpellGo`'s self-insert tail
 //!   `0x6e8498`/`0x6e8566`, anchored at the receive-time, onHold from Attributes bit 25);
@@ -53,7 +52,7 @@ impl Timer {
     }
 }
 
-/// One SPELLHISTORY record (wow-re `wave-cooldown.md` `0x6e12c0`'s node, byte-for-byte in
+/// One SPELLHISTORY record (`0x6e12c0`'s node, byte-for-byte in
 /// spirit: spellID/itemID/recovery pair/category+pair/onHold/GCD pair).
 #[derive(Clone, Debug)]
 struct Record {
@@ -168,7 +167,7 @@ impl Cooldowns {
     /// The insert primitive (`AddCooldown 0x6e12c0`): nothing to track → no-op; else **append a
     /// new record**. The client never matches-by-id here — its "reuse" scan is free-list node
     /// recycling, an allocator detail (no `[node+8]==spellId` compare anywhere in `0x6e12c0`'s
-    /// body, wow-re `wave-cooldown.md`), where every other op in the family explicitly walks
+    /// body), where every other op in the family explicitly walks
     /// "each node matching id". So one spell can hold SEVERAL records at once — and must: the
     /// cast-send GCD arm (`StartGlobalCooldown`, a gcd-only node) and the GO self-insert
     /// (`StartCooldown`, which passes `gcd=0,0`) are separate nodes. The find-and-replace this
@@ -232,8 +231,8 @@ impl Cooldowns {
     /// No GCD here — that's [`Self::start_gcd`]'s separate insert.
     ///
     /// `ranged_attack_time_ms` is the ranged-shot pad (the category scaler `0x6e2b60`'s
-    /// `add [categoryRecoveryTime], [player+0x110]+0x1e8`, byte-verified — wow-re
-    /// `ranged-cooldown-sweep.md`, decision 0378): the caster's live `UNIT_FIELD_RANGEDATTACKTIME`
+    /// `add [categoryRecoveryTime], [player+0x110]+0x1e8`, decision 0378): the caster's live
+    /// `UNIT_FIELD_RANGEDATTACKTIME`
     /// when [`SpellDisplay::ranged_speed_cooldown`], else 0. It folds into the CATEGORY timer —
     /// the Throw/wand-Shoot sweep with all-zero DBC recovery — and rides the insert even for
     /// category 0 (Auto Shot), where no read surfaces it (the client's SpellCategory[0]-is-NULL
@@ -562,14 +561,14 @@ impl Cooldowns {
     }
 
     /// The client's `IsSpellOnCooldown 0x6e1690` — an **"has an on-hold (not-yet-started)
-    /// record"** predicate, NOT a general on-cooldown test (the corrected decode, wow-re
-    /// `gcd-power-gate.md` §3: both legs return 1 only when the matched node's onHold byte is
+    /// record"** predicate, NOT a general on-cooldown test (both legs return 1 only when the
+    /// matched node's onHold byte is
     /// set; `+0x28`/`+0x2c` are never referenced and no time source is called). Its reference
     /// consumers are all bit25/cooldown-on-event gates: the usable walk's grey-while-parked leg
     /// (`0x6e3fb1`) — ours — and the cast-fail on-hold revert.
     ///
-    /// **It is item-keyed, and that is not cosmetic** (wow-re `action-button-state-api.md` §2c.4,
-    /// 2026-09-13). The node walk's spell-id leg is `node+0x08 == spellId && node+0x0c == itemId`
+    /// **It is item-keyed, and that is not cosmetic**. The node walk's spell-id leg is
+    /// `node+0x08 == spellId && node+0x0c == itemId`
     /// (`6e173f`/`6e1744`), and `0x6e2fc0` — the action bar's ITEM gate, and the **sole** consumer
     /// of the item-keyed form image-wide — passes the item ENTRY as that second argument
     /// (`6e3037 push esi`). Every other caller passes `0` (`0x6e2fa0`'s `push 0` at `6e2fa9`).
@@ -593,8 +592,8 @@ impl Cooldowns {
 
     /// The cast validator's FIRST rung (`0x6094f0` @ `0x609565` → `0x6e2ea0` → the getter): a
     /// press is refused "not ready" iff [`Self::info`] reads ANY remaining — the spell's own
-    /// pair, a category match, or the GCD leg, one query (wow-re `gcd-power-gate.md` §1.3/§2,
-    /// the §5 that closed 0379's INTERIM). The GCD refusal predicate is therefore the GETTER's:
+    /// pair, a category match, or the GCD leg, one query (decision 0948, which closed 0379's
+    /// INTERIM). The GCD refusal predicate is therefore the GETTER's:
     /// `pressed.startRecoveryCategory == node.startRecoveryCategory && node.time != 0` — the
     /// pressed spell's own `startRecoveryTime` is never consulted (a `{cat≠0, time=0}` press —
     /// the scroll spells — IS refused during the GCD), and Attack / profession presses can never
@@ -613,8 +612,8 @@ impl Cooldowns {
         self.info(spell_id, item_entry, spell, now).remaining_ms > 0
     }
 
-    /// The per-spell read (`GetCooldownInfo 0x6e13e0`, the complete §5 match law — wow-re
-    /// `gcd-power-gate.md` §2): resolve `spell_id` (as cast from `item_entry`, `0` for a plain
+    /// The per-spell read (`GetCooldownInfo 0x6e13e0`, the complete match law): resolve
+    /// `spell_id` (as cast from `item_entry`, `0` for a plain
     /// spell) against EVERY record, three legs each, **longest remaining wins**:
     ///
     /// - **head exclusion**: `Effect[0] ∈ {ATTACK, TRADE_SKILL}` reads cold unconditionally
@@ -736,7 +735,7 @@ mod tests {
         let ch = cds.info(100, 0, Some(&charge()), mid);
         assert_eq!(ch.remaining_ms, 0, "no startRecoveryCategory — no GCD read");
 
-        // …and the press gate reads it — the ONE getter is the refusal (0948's §5 closed
+        // …and the press gate reads it — the ONE getter is the refusal (0948 closed
         // 0379's INTERIM: there is no separate GCD site); the corrected `0x6e1690` on-hold
         // predicate stays false (no parked record).
         assert!(cds.not_ready(133, 0, Some(&fireball()), mid));
@@ -896,7 +895,7 @@ mod tests {
         );
     }
 
-    /// **`0x6e1690`'s item-keyed form** (wow-re `action-button-state-api.md` §2c.4). The node
+    /// **`0x6e1690`'s item-keyed form**. The node
     /// walk's spell-id leg is `node+0x08 == spellId && node+0x0c == itemId`, and the action bar's
     /// ITEM gate `0x6e2fc0` is the sole caller image-wide that passes a **non-zero** `itemId` —
     /// the item ENTRY, at `6e3037 push esi`. Our store keys an item's record `(use_spell, entry)`
@@ -1081,10 +1080,10 @@ mod tests {
         assert_eq!(read1, read2, "the projected start IS the settled start");
     }
 
-    /// The GCD refusal predicate, corrected by the 0948 §5 (`gcd-power-gate.md` §2.1): a press
+    /// The GCD refusal predicate, corrected by 0948 (the getter's GCD leg `6e15cc`): a press
     /// is refused iff its `startRecoveryCategory` EQUALS the armed node's (node time ≠ 0) — the
     /// pressed spell's own `startRecoveryTime` is never consulted. So a `{133, 0}` press (the
-    /// scroll spells) IS refused during the GCD (the pre-§5 predicate passed it), a `{0, 0}`
+    /// scroll spells) IS refused during the GCD (the old predicate passed it), a `{0, 0}`
     /// press (Attack shape, Charge) flows, and the lock lifts at expiry.
     #[test]
     fn a_running_gcd_locks_presses_by_category_equality_alone() {
@@ -1102,7 +1101,7 @@ mod tests {
             "the spam press 200 ms later is locked — refused, never sent, the GCD lives"
         );
         // A {133, 0} press — Scroll of Armor's shape — is REFUSED: the node's category matches
-        // and only the NODE's time matters (the §5's corrected divergence).
+        // and only the NODE's time matters (the corrected divergence).
         let scroll = spell(0, 0, 0, (133, 0), 0x10000);
         assert!(
             cds.not_ready(8091, 0, Some(&scroll), mid),
@@ -1173,7 +1172,7 @@ mod tests {
         assert_eq!(cds.info(133, 0, Some(&fireball()), t0).remaining_ms, 0);
     }
 
-    /// The ranged-shot pad (decision 0378, wow-re `ranged-cooldown-sweep.md`): a Throw-shaped
+    /// The ranged-shot pad (decision 0378, `0x6e2b60`): a Throw-shaped
     /// spell (category 76, all-zero DBC recovery) sweeps the weapon's attack time via its
     /// CATEGORY timer, and refuses a recast within it.
     #[test]

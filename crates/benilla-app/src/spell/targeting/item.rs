@@ -233,7 +233,7 @@ pub(crate) fn commit_item_cast_on_pick(
             subclass,
             inventory_type,
             // `0x5da2c0`: already soulbound, or already carrying an enchant that binds. The
-            // item tooltip's §6 Soulbound override reads the SAME predicate — see
+            // item tooltip's Soulbound override reads the SAME predicate — see
             // [`crate::items::already_bound`].
             already_bound: fields.is_some_and(|f| crate::items::already_bound(f, cat)),
             existing_enchant: [0u8, 1]

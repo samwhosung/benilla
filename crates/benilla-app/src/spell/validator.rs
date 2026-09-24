@@ -9,7 +9,7 @@
 //! Until decision 2330 these sat in `ui_action`'s dynamic-state feed, beside the `IsUsableAction`
 //! family they are not part of: the feed greys a button, the validator refuses a press, and the
 //! reference keeps them apart (`0x6094f0` is reached only from `TryCast`, never from the greying
-//! predicate `0x6e3d60` — wow-re `spell.md`). Now they are the spell's, with the ladder.
+//! predicate `0x6e3d60`). Now they are the spell's, with the ladder.
 
 use benilla_formats::{SpellDisplay, SpellRange};
 
@@ -20,7 +20,7 @@ pub(super) const ERR_OUT_OF_RANGE: u8 = 0x59;
 pub(super) const ERR_TOO_CLOSE: u8 = 0x76;
 
 /// The **pre-send** range refusal — the client's `TryCast` ladder runs `CanTargetUnit 0x6e4440`
-/// → `IsTargetInRange 0x6e47b0` BEFORE `ArmCast`/`SendCast` (`wave-cast.md`, byte-verified), so
+/// → `IsTargetInRange 0x6e47b0` BEFORE `ArmCast`/`SendCast`, so
 /// an out-of-range or too-close press fails locally and the commit tail — the ranged sheath
 /// snap `0x6e5930` included — never runs. This is why a too-close Throw/Auto Shot must NOT draw
 /// the ranged weapon. Squared 3D distance against [`benilla_formats::min_max_range`]'s {min, max}: beyond max² →
@@ -50,8 +50,8 @@ const PREVENTION_SILENCE: u32 = 1;
 const PREVENTION_PACIFY: u32 = 2;
 
 /// The **crowd-control leg** of the same requirement validator `0x6094f0`, sitting **above** its
-/// mounted block (`0x609c6c`) — so a stunned mounted caster is told about the stun (decision 1904;
-/// wow-re `equipped-item-and-cc-cast-gates.md` §2.1, byte-verified). It refuses before any packet,
+/// mounted block (`0x609c6c`) — so a stunned mounted caster is told about the stun (decision
+/// 1904). It refuses before any packet,
 /// which is why it must be local.
 ///
 /// **Six arms, in the reference's order, first match wins** — 1863's fold-back recorded four:
@@ -164,7 +164,7 @@ pub(crate) fn cast_cc_refusal(
 const REASON_PREVENTED_BY_MECHANIC: u8 = 0x8d;
 
 /// The **pre-send** mounted refusal (decision 0481) — the requirement validator `0x6094f0`'s
-/// mounted block (`0x609c6c`, wow-re `mounted-action-gate.md` §5): a live
+/// mounted block (`0x609c6c`): a live
 /// `UNIT_FIELD_MOUNTDISPLAYID` refuses the cast with reason `0x39` ("You are mounted") unless
 /// the spell carries Attributes bit 24 (`0x01000000`, castable-while-mounted — the exemption
 /// test at `0x609c6f`, the exact vmangos `SPELL_ATTR_ALLOW_WHILE_MOUNTED` mirror). A spell
@@ -174,8 +174,8 @@ const REASON_PREVENTED_BY_MECHANIC: u8 = 0x8d;
 /// exercises it. It is **two-armed** like the water pair below, not the single `+0x5c & 0x40`
 /// read this comment used to claim: arm A is `AuraInterruptFlags & 0x40` (the `cl` at
 /// `0x609c05` is the untouched low byte of `ecx = [esi+0x58]`, loaded 0x104 bytes earlier for
-/// the unsheathed leg), arm B is `ChannelInterruptFlags & 0x40` at `0x609c3a` — corrected by
-/// the 1063 §5 in wow-re `mounted-action-gate.md`. Note the plain mounted gate above is NOT in
+/// the unsheathed leg), arm B is `ChannelInterruptFlags & 0x40` at `0x609c3a` — corrected
+/// in 1063. Note the plain mounted gate above is NOT in
 /// that family: it is single-armed on `Attributes`.
 pub(crate) fn cast_mounted_refusal(mounted: bool, spell: Option<&SpellDisplay>) -> bool {
     mounted && spell.is_none_or(|d| d.attributes & 0x0100_0000 == 0)
@@ -202,8 +202,7 @@ pub(super) const ERR_ONLY_ABOVEWATER: u8 = 0x50;
 pub(super) const ERR_ONLY_UNDERWATER: u8 = 0x58;
 
 /// The **pre-send** water refusal (decisions 1056 + 1063) — the requirement validator
-/// `0x6094f0`'s environment block `0x609d33–0x609de2`, byte-carved by the wow-re §5 trio
-/// (`system/spell/scratch/water-cast-gate.md`). It sits after the mounted/posture/day/night
+/// `0x6094f0`'s environment block `0x609d33–0x609de2`. It sits after the mounted/posture/day/night
 /// legs and before the moving gate (`0x609de3`), which is where the ladder runs it — so a druid
 /// standing on land is refused **before** the form gate `0x612480` ever evaluates.
 ///
@@ -258,7 +257,7 @@ const AURA_INTERRUPT_MOVING_TURNING: u32 = 0x18;
 
 /// The **pre-send** moving refusal (decision 0862) — the requirement validator `0x6094f0`'s
 /// moving block (`0x609de3–0x609e48`; the sole client-local emitter of reason `0x2e` "Can't do
-/// that while moving". wow-re `moving-cast-gate.md`, §5 byte-verified): a press while the
+/// that while moving"): a press while the
 /// caster's live CMovement flags carry any of {forward, backward, strafe L/R, JUMPING} refuses
 /// locally — no packet, no cast bar, no GCD. Without it, vmangos *accepts* the cast (its
 /// CheckCast moving-reject covers only autorepeat/sit-still spells, `Spell.cpp:5432`) and then

@@ -1,7 +1,7 @@
 //! The cast-arm's **target resolution** — what actually goes in `CMSG_CAST_SPELL`'s target block.
 //!
-//! Transcribes `Spell_C::ArmCast 0x6e5250` + `BindTarget 0x6e5b40` (wow-re `wave-cast.md`, both
-//! byte-verified): the client seeds a targeting flag_word from `Spell.dbc Targets` (`SpellRec+0x34`),
+//! Transcribes `Spell_C::ArmCast 0x6e5250` + `BindTarget 0x6e5b40`: the client seeds a targeting
+//! flag_word from `Spell.dbc Targets` (`SpellRec+0x34`),
 //! adjusts it with the implicit-target switch (`SpellRec+0x148`, jump-table `0x6e5484`), and then
 //!
 //! - **flag_word == 0** ⇒ the cast needs no target at all — commit immediately, wire mask
@@ -50,8 +50,8 @@ use bevy::prelude::*;
 use crate::net::{ObjectStore, Reputations, SelfGuid, SelfPlayer};
 use crate::target::{can_attack, ring_reaction, Factions, Selection};
 
-/// `TARGET_FLAG_*` bits of the targeting flag_word (`0xcecac0`), per the byte-verified bit table
-/// (`wave-cast.md` "flag_word bits"). Only the bits the resolver consumes are named.
+/// `TARGET_FLAG_*` bits of the targeting flag_word (`0xcecac0`), as `ArmCast 0x6e5250` sets them
+/// and `BindTarget 0x6e5b40` consumes them. Only the bits the resolver consumes are named.
 const TF_UNIT: u16 = 0x0002;
 const TF_UNIT_RAID: u16 = 0x0004;
 const TF_UNIT_PARTY: u16 = 0x0008;
@@ -311,8 +311,8 @@ impl Default for AutoSelfCast {
 }
 
 /// The cast-arm's flag_word seed + implicit-target switch (`0x6e5250` @ `6e525a`–`6e52ef`):
-/// `flag_word = Targets`, then one arm keyed on `EffectImplicitTargetA[0]`. The full arm map,
-/// byte-verified (`wave-cast.md`): 1→clr bit10, 5→clr bit15, 6/53→set bit7, 16→ground-target,
+/// `flag_word = Targets`, then one arm keyed on `EffectImplicitTargetA[0]`. The full arm map:
+/// 1→clr bit10, 5→clr bit15, 6/53→set bit7, 16→ground-target,
 /// 21/45→set bit8, 23→set bit11, 25/63→set bit1, 26→set bit14, 35→set bit3, 57/61→set bit2;
 /// every other enum is the default no-op arm.
 pub(crate) fn cast_target_mask(def: &SpellDisplay) -> u16 {
@@ -340,8 +340,8 @@ pub(crate) fn cast_target_mask(def: &SpellDisplay) -> u16 {
 /// commits only on a fully-cleared word.
 ///
 /// Relation stand-ins, named: assist (`CanAssist 0x6066f0`) is approximated as reaction rank ≥ 4
-/// (friendly) — the same `UnitReaction` core the ring and `can_attack` share — pending the §5 pin
-/// in flight; party/raid (`0x606c20`/`0x606d20`) accept only the player himself until groups
+/// (friendly) — the same `UnitReaction` core the ring and `can_attack` share — until CanAssist
+/// is pinned; party/raid (`0x606c20`/`0x606d20`) accept only the player himself until groups
 /// exist; the corpse predicate (`0x6067d0`) is "assistable and health 0".
 fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 {
     let mut word = word;

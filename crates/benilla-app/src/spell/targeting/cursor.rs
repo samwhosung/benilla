@@ -1,6 +1,6 @@
 //! What the player *sees* while a cast waits for its click — the two classifier pre-empts and the
 //! numbers they compute: the ground point's range verdict (`CheckGroundPointInRange 0x6e6810`,
-//! inside `0x4820f0` — wow-re `cursor-system.md` §5), the hovered object's validity
+//! inside `0x4820f0`), the hovered object's validity
 //! (`0x6e6460`, inside `0x4828d0` — decision 0949), and the reticle's radius
 //! (`GetCurrentCastRadius 0x6e6350`).
 //!
@@ -21,7 +21,7 @@ use super::{SpellTargeting, TargetingWants};
 
 /// `CheckGroundPointInRange 0x6e6810` — min²/max² from the spell's `SpellRange` row against the
 /// squared caster↔point distance. Its ONE caller binary-wide is the hover-cursor classifier
-/// (`0x4820f0` — wow-re `world-click-targeting.md` Q1's caller census): the verdict colours
+/// (`0x4820f0`): the verdict colours
 /// Cast/UnableCast and nothing else. The click never consults it, so neither does ours. No row
 /// (a failed DBC, an unknown spell) is permissive — the server validates every send anyway.
 fn ground_point_in_range(row: Option<&SpellRange>, self_pos: Vec3, point: Vec3) -> bool {
@@ -41,7 +41,7 @@ fn range_row(spells: Option<&Spells>, spell_id: u32) -> Option<&SpellRange> {
     spells.ranges.get(spells.catalog.get(spell_id)?.range_index)
 }
 
-/// `GetCurrentCastRadius 0x6e6350` (wow-re `ground-target-reticle.md` B2) — the reticle's
+/// `GetCurrentCastRadius 0x6e6350` — the reticle's
 /// radius: per-effect `radius + casterLevel × perLevel` over **EffectRadiusIndex[0] and [1]
 /// only** (slot 2 is never read by the client), the max with candidate 1 winning ties/NaN,
 /// clamped to 20.0 (`0x4820f0`'s `[0x804478]` literal — `min`, NaN → 20). `0.0` = no radius
@@ -69,7 +69,7 @@ pub(crate) fn ground_cast_radius(spells: Option<&Spells>, spell_id: u32, level: 
     r.min(20.0)
 }
 
-/// While targeting, the world cursor is the classifier's pre-empt (cursor-system §5). Runs right
+/// While targeting, the world cursor is the classifier's pre-empt (`0x4820f0`). Runs right
 /// after [`crate::target`]'s classifier in the target chain and overwrites its verdict.
 ///
 /// **That pre-emption is the WORLD's, and only the world's** (decisions 1055, 1061). This computes

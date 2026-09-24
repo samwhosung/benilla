@@ -4,8 +4,8 @@
 //! the trade-skill window and the craft window all funnel here too. That is the point: the client's
 //! `TryCast 0x6e4b60` → commit `0x6e54f0` is *one* function with a long ladder of local gates and a
 //! post-send tail, and duplicating any part of it per caller is how the two paths drift. The ladder
-//! below is that function's order, gate for gate (re-pinned end to end by the 0948 §5,
-//! `gcd-power-gate.md`) — profession intercept, auto-repeat toggle, targeting abort, in-flight,
+//! below is that function's order, gate for gate (re-pinned end to end in 0948) — profession
+//! intercept, auto-repeat toggle, targeting abort, in-flight,
 //! reagents/totems, target binding + range, then the validator `0x6094f0`'s opening rungs
 //! (not-ready/GCD, power), mounted, moving, form, the deferred cast-arm refusal and
 //! targeting-cursor entry — followed
@@ -22,8 +22,8 @@
 //! computes a display flag and does *not* skip the IsCasting gate below it, and at `6e4f33`, where
 //! it is forwarded to the requirement validator `0x6094f0`. Every rung between entry and the
 //! commit is therefore the same code for a spell and for an item, which is why [`CastCommit`] is a
-//! *parameter* of this function and not a second path. Three rungs fork on it, and only three
-//! (`gcd-power-gate.md` §1): the validator's first rung (`60952b`: item → the item cooldown query
+//! *parameter* of this function and not a second path. Three rungs fork on it, and only three:
+//! the validator's first rung (`60952b`: item → the item cooldown query
 //! `0x6e2ed0` on the (use-spell, ENTRY) pair and error **0x28** "Item is not ready yet."; no item
 //! → `0x6e2ea0` and **0x3c** "Spell is not ready yet."), the power gate (`0x60962c` — an item
 //! press's clear-query jump lands PAST it: items are never power-gated), and the commit's opcode
@@ -44,8 +44,7 @@ use crate::ui_action::{reagent_totem_refusal, CastErrors, Spells};
 /// **What the commit writes** — `SendCast 0x6e54f0`'s one branch on item-present. The sender
 /// discriminates on whether the pending-cast block's guid (`0xceac48`, filled at `6e4f8d`–`6e4fa6`
 /// from the ITEM's guid when TryCast was handed one, else the caster's) is the caster's, and the
-/// item arm falls through to `0x6e57d8 push 0xab` = `CMSG_USE_ITEM` (wow-re `action-item-slot.md`
-/// §8, `cursor-system.md` §8.4a — both byte-read).
+/// item arm falls through to `0x6e57d8 push 0xab` = `CMSG_USE_ITEM`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CastCommit {
     /// `CMSG_CAST_SPELL 0x12e` — no item bound.
@@ -268,8 +267,8 @@ impl CastLadder<'_, '_> {
 /// the follow-through can't drift between the two spell sources (the root-cause rule: never
 /// duplicate a send path).
 ///
-/// The `pending` guard is the client's optimistic in-flight refusal (wow-re `wave-cast.md`
-/// `TryCast` IsCasting gate; see [`crate::spell::PendingCast`]): a normal cast is dropped at the
+/// The `pending` guard is the client's optimistic in-flight refusal (`TryCast`'s IsCasting gate,
+/// `6e4d97`; see [`crate::spell::PendingCast`]): a normal cast is dropped at the
 /// source while one is already in flight, so mashing a key can no longer fire a duplicate
 /// `CMSG_CAST_SPELL` the server bounces back as a spurious cast-bar cancel. Ranged/auto-repeat
 /// shots keep their own lifecycle — they never arm the guard and are never blocked by it.
@@ -300,7 +299,7 @@ fn send_spell_cast(
     let now = Instant::now();
     let def = spells.and_then(|s| s.catalog.get(spell_id));
     // The profession-window intercept (decision 0437): `Spell_C::TryCast 0x6e4b60`'s own first
-    // special branch (wow-re `wave-cast.md`, VERIFIED) — an `Effect[0] == SPELL_EFFECT_TRADE_SKILL`
+    // special branch — an `Effect[0] == SPELL_EFFECT_TRADE_SKILL`
     // cast NEVER reaches the wire; the crafting book opens client-side instead. Before the
     // cooldown ladder, exactly where the client dispatches it (`6e4bce`, ahead of every gate).
     if def.is_some_and(|d| d.effects[0] == benilla_formats::SPELL_EFFECT_TRADE_SKILL) {
@@ -308,7 +307,7 @@ fn send_spell_cast(
         trade_skill_opens.0.push(spell_id);
         return;
     }
-    // The button re-press toggle (`0x4e60da`, wow-re `nocked-ammo-cancel.md` §Q-B-2):
+    // The button re-press toggle (`0x4e60da`):
     // re-invoking the spell that IS the running auto-repeat cancels it instead of re-casting —
     // the classic press-again-to-stop. Checked before the cooldown ladder, like the client's
     // action-button handler (which never reaches TryCast for the toggle-off).
@@ -332,7 +331,7 @@ fn send_spell_cast(
     // holds. An on-next-swing spell (`Attributes & 0x404` — Heroic Strike, Cleave)
     // queues on the server's melee slot: it arms [`crate::spell::QueuedMeleeSpell`], never the
     // in-flight guard, so a queued strike cannot block the next cast (the ref's `6e4d97`
-    // exemption on the inflight rec's 0x404 bits — wow-re `wave-cast.md`).
+    // exemption on the inflight rec's 0x404 bits).
     let on_next_swing = def.is_some_and(|d| d.on_next_swing());
     let normal_cast = !def.is_some_and(|d| d.ranged_attack()) && !on_next_swing;
     // Re-pressing the queued strike is the ref's silent same-spell bail (`6e4d43`) — no cancel,
@@ -345,7 +344,7 @@ fn send_spell_cast(
         // The ref's already-casting refusal: the same spell bails silently (`6e4d43`); a
         // different one errors reason 0x61 "Another action is in progress" (`6e4d97` →
         // `HandleCastFailed`). The gate tests the **inflight** rec's `Attributes & 0x404`, never
-        // the pressed spell's (wow-re `combat-feel-law.md` §B1, VERIFIED byte-exact), and a
+        // the pressed spell's, and a
         // guarding record here is always an ordinary cast or an item use — so EVERY press class
         // is refused while it holds: an on-next-swing strike, and a ranged/auto-repeat shot too.
         // Exempting the shot let it commit and its non-guarding arm overwrite the running cast's
@@ -360,7 +359,7 @@ fn send_spell_cast(
     // `0x6e4ded` — decision 0552): a missing tool (Mining Pick) or a short reagent refuses HERE
     // with the client's own 0x78/0x5c red line and NEVER sends. The gate must be local: vmangos
     // answers a sent pickless cast with the wrong code (`ITEM_GONE` "Item is gone"), so without
-    // it the real message can't appear. Position pinned by the 0948 §5: TryCast runs it BEFORE
+    // it the real message can't appear. Position pinned by 0948: TryCast runs it BEFORE
     // the validator (`0x6e4ded` precedes the `0x6e4f3b` call), so an on-cooldown press with
     // missing reagents shows the reagent error, never "not ready".
     if reagent_totem_refusal(spell_id, def, ctx.rel.self_store, objects, cast_errors) {
@@ -483,9 +482,8 @@ fn send_spell_cast(
             }
         }
     }
-    // ── The validator `0x6094f0`'s opening rungs (wow-re `gcd-power-gate.md`, the §5 that
-    // closed 0379's INTERIM; decision 0948) — after IsCasting, reagents and the range test,
-    // exactly where the ref calls the validator. ──
+    // ── The validator `0x6094f0`'s opening rungs (decision 0948, which closed 0379's INTERIM) —
+    // after IsCasting, reagents and the range test, exactly where the ref calls the validator. ──
     //
     // Rung 1 — not-ready: ONE getter query ([`crate::spell::Cooldowns::not_ready`] =
     // `GetCooldownInfo != 0`), forked by the commit at `0x60952b`: an item press queries the
@@ -586,7 +584,7 @@ fn send_spell_cast(
         }
         return;
     }
-    // The client-side mounted gate (decision 0481; wow-re `mounted-action-gate.md` §5:
+    // The client-side mounted gate (decision 0481;
     // TryCast's requirement validator `0x6094f0`, mounted block `0x609c6c` — a live
     // `UNIT_FIELD_MOUNTDISPLAYID` refuses a non-exempt cast with reason 0x39 "You are
     // mounted" BEFORE the cast-arm's target binding, which is why a targetless mounted click
@@ -618,7 +616,7 @@ fn send_spell_cast(
         return;
     }
     // The moving leg of the SAME requirement validator (`0x609de3`, after the mounted/posture/
-    // environment blocks, before the form leg — wow-re `moving-cast-gate.md`, decision 0862): a
+    // environment blocks, before the form leg — decision 0862): a
     // cast-time (or movement-sensitive) press while already moving refuses locally with the
     // client's own reason 0x2e "Can't do that while moving" and NEVER sends. The gate must be
     // local: vmangos accepts the sent cast (its CheckCast moving-reject covers only
@@ -638,8 +636,7 @@ fn send_spell_cast(
         }
     }
     // The shapeshift-form leg of the SAME requirement validator (`0x6094f0` at `0x609e49` →
-    // the form gate `0x612480`; wow-re `shapeshift-plaincast-toggle.md` §Q3, which corrected
-    // `mounted-action-gate.md`'s `0x609ca2` gloss — that address is the POSTURE gate, reason
+    // the form gate `0x612480`, not `0x609ca2` — that address is the POSTURE gate, reason
     // 0x3e NOT_STANDING; vmangos corroborates the reason split,
     // `SpellEntry::GetErrorAtShapeshiftedCast`): a form-blocked press refuses locally with the
     // gate's own red line — 0x3d "Can't do that while shapeshifted" / 0x56 needs-a-form — and
@@ -678,7 +675,7 @@ fn send_spell_cast(
         return;
     }
     // The wand-only auto-repeat handoff (the client's `0x60959e` inside TryCast's `0x6094f0`
-    // step, wow-re `nocked-ammo-cancel.md` §Q-B-5): a NEW cast cancels the running auto-repeat
+    // step): a NEW cast cancels the running auto-repeat
     // iff the CACHED spell carries `AttributesEx3 & 0x400000` — wand Shoot 5019 alone in the
     // 1.12 data. Auto Shot survives by construction: hunter shot-weaving. The client first
     // sends `CMSG_CANCEL_CAST` naming the cached wand spell (`0x6095b8`), then runs the local
@@ -775,8 +772,7 @@ fn send_spell_cast(
     if on_next_swing {
         queued_melee.arm(spell_id);
     }
-    // TryCast's post-send tail (`6e51b5`) — byte-verified whole by the 2026-07-14 wow-re §5
-    // (`combat-feel-law.md` @ c445713b): a committed send whose rec passes
+    // TryCast's post-send tail (`6e51b5`): a committed send whose rec passes
     // [`SpellDisplay::initiates_auto_attack`] (on-next-swing `0x404` or `AttributesEx & 0x200`,
     // and not the GO-deferred Ex2-bit20; Charge carries none) starts the melee auto-attack at
     // the cast's bound unit target, unless one is already running (`0x60ecb0` over
@@ -794,9 +790,8 @@ fn send_spell_cast(
                 // the tail at `0x5ecd78` whose `0x5ecd8c` cancels the auto-repeat — but a cast
                 // press never reaches that jump. TryCast's tail gates the CALL: `6e51cb call
                 // 0x60ecb0; 6e51d2 jne` skips `0x6131a0` outright when an attack is already
-                // running (wow-re `combat-feel-law.md` §A1, and `melee-autorepeat-exclusion.md`
-                // §0a, which states the consequence outright: a strike pressed while already
-                // engaged does nothing to a running auto-repeat). So the whole block is gated,
+                // running: a strike pressed while already engaged does nothing to a running
+                // auto-repeat. So the whole block is gated,
                 // and the exclusion holds from the other end instead — the commit's StopAttack
                 // above means an auto-repeat can't be running while we swing in the first place.
                 if !engaged {
@@ -1078,7 +1073,7 @@ mod tests {
     }
 
     /// **A shot pressed mid-cast is refused, and the cast keeps its guard.** The reference's
-    /// already-casting gate (`6e4d97`, wow-re `combat-feel-law.md` §B1, VERIFIED byte-exact)
+    /// already-casting gate (`6e4d97`)
     /// tests the **inflight** rec's `Attributes & 0x404`, never the pressed spell's — so a wand
     /// Shoot / Auto Shot pressed during a Frostbolt meets the same `0x61` as any other press.
     /// Ours exempted the ranged class at the gate, so the shot went out, its non-guarding arm
@@ -1194,8 +1189,7 @@ mod tests {
         );
     }
 
-    /// **The other direction, and the correction decision 1028 needed** (wow-re §5,
-    /// `melee-autorepeat-exclusion.md` §0a + `combat-feel-law.md` §A1). `Attack 0x5ecb70`'s tail
+    /// **The other direction, and the correction decision 1028 needed**. `Attack 0x5ecb70`'s tail
     /// really does cancel the auto-repeat on a path that skipped the swing send — but a cast press
     /// never reaches it while engaged: TryCast's tail gates the CALL, `6e51cb call 0x60ecb0;
     /// 6e51d2 jne`, so `0x6131a0` is not invoked at all. A strike pressed mid-swing therefore does
@@ -1232,7 +1226,7 @@ mod tests {
 
     /// The same press from the state that *is* reachable: not yet swinging. Here the tail fires,
     /// `0x6131a0` → `0x5ecb70` runs, and its `0x5ecd8c` kills the repeat on the way to the swing —
-    /// the transitive route all three §5 workers missed by censusing StartAttack's direct callers.
+    /// a transitive route that a census of StartAttack's direct callers misses.
     #[test]
     fn a_strike_pressed_before_the_swing_starts_kills_the_auto_repeat() {
         let (mut world, rx) = combat_world(false);
@@ -1320,7 +1314,7 @@ mod tests {
             vec![CastFail::local(HEARTHSTONE, 0x28)]
         );
 
-        // The byte law's other half (0948, correcting this test's pre-§5 shape): the record is
+        // The byte law's other half (0948, correcting this test's earlier shape): the record is
         // keyed (use-spell, item ENTRY), and a bare SPELL press queries (spell, 0) — the item
         // record does NOT match it, so the press passes the rung and commits. (One store, two
         // KEYS — no longer "one store keyed by spell id for both".)
@@ -1388,7 +1382,7 @@ mod tests {
         ));
     }
 
-    /// The validator's power gate (0948, `gcd-power-gate.md` §1.4): a SPELL press the caster
+    /// The validator's power gate (0948, `0x60962c`): a SPELL press the caster
     /// cannot afford refuses locally with 0x4d and never wires — the gate vmangos cannot supply
     /// (it ACCEPTS the doomed cast, and its NO_POWER fail would clear a running GCD: the
     /// phantom pie-blink on rage-starved spam). An ITEM press skips the gate entirely (the item

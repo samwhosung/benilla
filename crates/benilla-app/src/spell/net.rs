@@ -657,13 +657,13 @@ fn cast_result(
     // is finished on either outcome, and only then is column 38 read.
     let in_flight = pending.committed(Instant::now()) == Some(spell_id);
     if !success {
-        // The cast-fail cooldown edges (the client's `HandleCastFailed 0x6e1a00`, wow-re
-        // `wave-cooldown.md` + the 2026-07-10 §5): a plain interactive-cast failure clears ONLY
+        // The cast-fail cooldown edges (the client's `HandleCastFailed 0x6e1a00`): a plain
+        // interactive-cast failure clears ONLY
         // the GCD armed at send (`0x6e1d83 → 0x6e1630`) — the spell's own recovery was never
         // started pre-launch (it lands at SPELL_GO / SMSG_SPELL_COOLDOWN, which a failed cast
         // never reaches), so there is nothing else to revert — and a failing auto-repeat spell
-        // runs the FULL local cancel (byte-verified `0x6e1cd9`–`0x6e1cea`, wow-re
-        // `nocked-ammo-cancel.md`): iff the failing spellId == the cached auto-repeat spell AND
+        // runs the FULL local cancel (`0x6e1cd9`–`0x6e1cea`): iff the failing spellId == the
+        // cached auto-repeat spell AND
         // reason ≠ 0x17, the handler jumps into `0x6ea080` — the SAME routine the
         // SMSG_CANCEL_AUTO_REPEAT handler runs — clearing the key, the shooting-idle bits, and
         // the nocked ammo. A deselect/interrupt surfaces as this CAST_RESULT failure
@@ -745,7 +745,7 @@ fn cast_result(
         }
     }
     // **The `modalNextSpell` chain — how a hunter starts shooting** (`HandleCastResult 0x6e7330`
-    // @ `0x6e7408`–`0x6e74aa`; wow-re `spell/scratch/modalnext-chain-cast.md`, decision 1597).
+    // @ `0x6e7408`–`0x6e74aa`; decision 1597).
     //
     // The reply to our in-flight cast finishes that cast's slot and then reads **column 38** of
     // the spell it names. Non-zero, and not already the running repeat ⇒ the client casts it,
@@ -813,7 +813,7 @@ fn spell_start(
     );
     // The nocked-ammo refresh (the client's `0x60ba30` @ `0x6e78b6`, gated `SpellRec+0x20&0x20 OR
     // +0x18&0x2` at `0x6e78a1`, on the packet-resolved caster BEFORE the self/other split — any
-    // unit; wow-re `nocked-ammo-cancel.md`): a ranged spell's START either affirms the wire's
+    // unit): a ranged spell's START either affirms the wire's
     // ammo display id or, with the flag clear / id 0, detaches. The model persists through
     // Load/Hold and the fire clip — `SPELL_GO` never touches it.
     if spells
@@ -923,7 +923,7 @@ fn spell_go(
     // gate the miss words below exactly as they gate a damage number (decision 2229).
     text_gates: crate::combat_text::DamageTextGates,
     go_lid: &mut MessageWriter<crate::go_anim::GoLidOpen>,
-    // The client-local loot-target latch — armed here for a chest (decision 1477, §6 above).
+    // The client-local loot-target latch — armed here for a chest (decision 1477, `0x6e831b`).
     loot_latch: &mut crate::ui_loot::LootLatch,
     // The cooldown store + what its start laws read (grouped: one arm-body concern). The last
     // member is the PET's store — the reference inserts into two banks from this one handler
@@ -980,7 +980,7 @@ fn spell_go(
     let (auto_repeat, sheath, engaged) = attack_ctx;
     let now = Instant::now();
     let display = spells.and_then(|s| s.catalog.get(spell_id));
-    // **A chest's loot-target arm** (wow-re `loot-anim-leg.md` §6, byte-verified §5 trio; decision
+    // **A chest's loot-target arm** (decision
     // 1477). `Spell_C::HandleSpellGo 0x6e7a70` reaches `0x6e831b call SetLootTarget 0x5ed5f0`,
     // which writes `[player+0x1d28]` and force-plays Loot 50 — so **this packet, not the loot
     // response, is when the reference starts kneeling at a chest**. Its gates, transcribed:
@@ -1036,8 +1036,8 @@ fn spell_go(
         // ring) opens exactly here, like the ref's inflight finish on the matching GO.
         queued_melee.clear_if(spell_id);
 
-        // **The GO-deferred melee auto-attack start** (`HandleSpellGo 0x6e7a70` @ `0x6e83c0`,
-        // wow-re `combat-feel-law.md` §A3; bytes re-read for decision 1593). This is the exact
+        // **The GO-deferred melee auto-attack start** (`HandleSpellGo 0x6e7a70` @ `0x6e83c0`;
+        // bytes re-read for decision 1593). This is the exact
         // complement of the send-time tail in [`crate::spell::cast_send`]: a spell carrying
         // `AttributesEx2 & 0x100000` has its optimistic start *suppressed* there and armed here
         // instead, so the swing begins only once the server confirms the strike landed. That is
@@ -1074,8 +1074,7 @@ fn spell_go(
             }
         }
 
-        // Our own launch starts the cast's cooldown locally, at the GO — byte-VERIFIED (the
-        // 2026-07-10 wow-re follow-up, `wave-handlers.md` ADDENDUM): `HandleSpellGo 0x6e7a70`'s
+        // Our own launch starts the cast's cooldown locally, at the GO: `HandleSpellGo 0x6e7a70`'s
         // self-insert tail forks on the packet guid pair — itemCaster == caster ⇒ the NO-ITEM
         // spell leg (`0x6e8498`: SpellRec RecoveryTime/Category/CategoryRecoveryTime, onHold from
         // Attributes bit 25, start = the GO receive-time); an item cast takes the item leg
@@ -1084,8 +1083,8 @@ fn spell_go(
         // normal source — this insert is how a Charge sweep appears on vmangos, which sends no
         // cooldown packet for a plain cast. A pre-launch failure never reaches here, so nothing
         // needs reverting.
-        // The ranged-shot pad (the category scaler `0x6e2b60`, byte-verified — wow-re
-        // `ranged-cooldown-sweep.md`, decision 0378): a ranged-slot cast folds our live
+        // The ranged-shot pad (the category scaler `0x6e2b60`, decision 0378): a ranged-slot cast
+        // folds our live
         // `UNIT_FIELD_RANGEDATTACKTIME` (haste-scaled, server-written) into the category
         // recovery — the Throw/wand-Shoot button sweep, no server packet involved.
         let ranged_ms = display
@@ -1158,7 +1157,7 @@ fn spell_go(
     // Gate A applies to whichever unit the word lands over. Source-classified first (the color
     // law's K, inside every emitter): another caster's misses draw nothing.
     //
-    // **Two laws phase 2 left open, both closed by the 2229 §5.**
+    // **Two laws phase 2 left open, both closed by 2229.**
     //
     // *Timing* — `0x6e7d4e fld [SpellRec+0x94]; fcomp 0.0; test ah,0x44; jp 0x6e7e71` skips this
     // inline emit whenever `Spell.dbc` Speed is nonzero. A TRAVELLING spell's word is floated by
@@ -1200,9 +1199,8 @@ fn spell_go(
             }
         }
     }
-    // Keyed by spell id, like the client's reap `0x614150(spellId, 0)` (wow-re
-    // `spell-visual-lifecycle.md`): a triggered proc's GO landing mid-cast must not
-    // clear a *different* spell's precast state.
+    // Keyed by spell id, like the client's reap `0x614150(spellId, 0)`: a triggered proc's GO
+    // landing mid-cast must not clear a *different* spell's precast state.
     if let Some(&e) = index.0.get(&caster) {
         if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
             commands.entity(e).remove::<Casting>();
@@ -1211,7 +1209,7 @@ fn spell_go(
         // producer of `unit+0xd44`, and the one that makes a non-channelled chain spell draw at
         // all. It must precede the CastEvent below: the router plays the cast kit off that event,
         // and the kit's chain proc consumes this array the same frame. Named approximation: the
-        // reference gates this leg on `0x6e4870`'s return, a predicate the §5 could not settle —
+        // reference gates this leg on `0x6e4870`'s return, a predicate still unsettled —
         // we fill unconditionally, which is harmless because consumption still needs a chain proc
         // and because every producer clears before it fills.
         fill_chain_hops(caster, e, &hits, commands, index);
@@ -1323,20 +1321,19 @@ fn spell_delayed(
     }
 }
 
-/// `SMSG_CANCEL_AUTO_REPEAT` — the client's handler (`0x6e99d0` → `0x6ea080`, wow-re
-/// `wave-handlers.md`) clears the autorepeat key `0xceac30`, which is exactly what the action
+/// `SMSG_CANCEL_AUTO_REPEAT` — the client's handler (`0x6e99d0` → `0x6ea080`) clears the
+/// autorepeat key `0xceac30`, which is exactly what the action
 /// bar's flash/checked state reads — so the button's auto-repeat highlight goes out
 /// (`STOP_AUTOREPEAT_SPELL` fires off this edge in the UI feed). The shots themselves were
 /// always wire-paced (decision 0099 phase 5: every shot is its own `SPELL_GO`), and nothing
 /// stows (sheath-policy's "nothing sheathes on combat-end").
 ///
-/// **INTERIM (decision 0400 §2's dispatch, Q5):** the cancel also disarms the standing
+/// **INTERIM (decision 0400 §2):** the cancel also disarms the standing
 /// Load/Hold idle ([`crate::creature_anim::AutoRepeatArmed`] off) — the director's report: on
 /// the reference the shooting visibly STOPS when the server cancels (target too close), while
 /// our sticky arm kept the nock idle looping forever. Whether the real handler clears the
 /// `[+0xd58] & 0x200` idle bit (0131 recorded "no clearing writer") or the hold-pose layer
-/// merely makes the ref look still is the dispatched question; the verdict corrects this
-/// if the mechanism differs.
+/// merely makes the ref look still is open; this is corrected if the mechanism differs.
 ///
 /// **Live against vmangos, not dormant (corrected 2026-08-05).** The prior note here — "vmangos
 /// never sends this" — was wrong: `SpellCaster::InterruptSpell` (`SpellCaster.cpp:1826`) sends it
@@ -1963,7 +1960,7 @@ mod tests {
     ///   display interrupted message even if they are interrupted";
     /// - the reference's own `SMSG_SPELL_FAILED_OTHER` handler (`0x6e8e40`, opcode `0x2a6`) fires
     ///   **no FrameScript event at all** — its whole body is `0x60d040` + `0x614150`, the *unit's*
-    ///   cast state, and wow-re's boundary line for it lists no `-> ui` edge;
+    ///   cast state, and it makes no call into the UI;
     /// - and stock `CastingBarFrame.lua` guards its red arm with `not this.channeling`.
     ///
     /// Ours lands on the same behaviour by a **fourth** route, which is the one worth pinning:
@@ -2063,7 +2060,7 @@ mod tests {
 
     /// **The GO's inline miss word: gold, gated, and only for an INSTANT spell** (decision 2229).
     ///
-    /// Phase 2 shipped this emit unconditional and hardcoded white. The §5 closed both halves:
+    /// Phase 2 shipped this emit unconditional and hardcoded white. The binary closes both halves:
     /// - `0x6e7d4e fld [SpellRec+0x94]; fcomp 0.0; test ah,0x44; jp 0x6e7e71` — a spell with a
     ///   **travel Speed** prints nothing here; its word rides the projectile's arrival instead
     ///   ([`crate::entities::MissileMiss`]). Sinister Strike (Speed 0) prints now; Fireball
@@ -2779,7 +2776,7 @@ mod tests {
         assert!(errors.0.is_empty(), "…but the unlearn block does");
     }
     /// **The GO-deferred auto-attack start** (`HandleSpellGo` @ `0x6e83c0`, decision 1593) — the
-    /// half of `combat-feel-law.md` §A3 benilla shipped without, because ten hand-picked warrior
+    /// half of the auto-attack-on-cast law benilla shipped without, because ten hand-picked warrior
     /// rows were read as a census of `AttributesEx2 & 0x100000`. The real file carries the bit on
     /// 36, so the class that never started an auto-attack here is every stealth opener and
     /// positional strike: Backstab, Garrote, Ambush, Cheap Shot, Shred, Ravage, Pounce, Judgement.

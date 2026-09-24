@@ -1,14 +1,13 @@
-//! The plain-spell **usable walk** — `Spell_C::IsSpellUsableNow 0x6e3d60` (wow-re
-//! `action-button-state-api.md` §2a, byte-verified 2026-07-10), the compute behind
-//! `IsUsableAction`'s grey tint beyond the power gate. The §2a ordered gate table, transcribed;
+//! The plain-spell **usable walk** — `Spell_C::IsSpellUsableNow 0x6e3d60`, the compute behind
+//! `IsUsableAction`'s grey tint beyond the power gate. Its ordered gate table, transcribed;
 //! any tripped gate answers `(usable=false, oom=false)`, and ONLY the power leg (the last) sets
-//! `notEnoughMana` — the §5's B2, re-confirmed.
+//! `notEnoughMana`.
 //!
 //! Modeled legs: the TRADE_SKILL early-out · dead (leg 1) · reagents/totems (leg 3) · required
 //! equipped item (leg 4) · the combo-point gate (leg 5) · the shapeshift-form gate (leg 6,
 //! [`SpellDisplay::usable_in_form`]) · only-stealthed (leg 7) · not-in-combat (leg 8) ·
 //! CasterAuraState (leg 9) · TargetAuraState + its CanAttack/CanAssist fork (legs 10/10b — the
-//! ONE target-dependent pair, §5-proven: the current-target GUID globals `0xb4e2d8/dc` appear
+//! ONE target-dependent pair: the current-target GUID globals `0xb4e2d8/dc` appear
 //! nowhere earlier in the whole function, 0879; our per-frame diff-push recomputes it on target
 //! change for free, where the ref re-runs its cache on events) · the bit-25 cooldown fold
 //! (leg 11) · power (leg 12).
@@ -284,15 +283,14 @@ fn equipped_slots_match(
 ///    ON_USE block — `rec+0x11c[i] > 0 && rec+0x130[i] == 0`, `6e3006`–`6e3023`, the same scan
 ///    behind [`benilla_protocol::messages::ItemInfo::use_spell`] — and asks
 ///    `0x6e1690(spellId, itemId = the item ENTRY)`. That predicate is the **on-hold-record** test,
-///    NOT a general on-cooldown one (wow-re `spell/scratch/gcd-power-gate.md` §3, which corrects
-///    `wave-cooldown.md`'s published gloss): it reads neither a running timed cooldown nor the
+///    NOT a general on-cooldown one: it reads neither a running timed cooldown nor the
 ///    GCD. So a potion mid-cooldown keeps its colour under its own sweep, and nothing on the bar
 ///    greys for the global cooldown. **The entry is the key**, not `0`: `0x6e2fc0` is the sole
 ///    consumer of `0x6e1690`'s item-keyed form image-wide (`6e3037 push esi`), every other caller
 ///    passing `0` — so querying leg 11's `(spell, 0)` form here would never find an item's own
 ///    parked record, which is how our cooldown store keys it (`(use_spell, entry)`).
 /// 3. **the plain-spell walk.** The resolver `0x4e5a50`'s ITEM arm hands that same first ON_USE
-///    spell back with `*outType = 0` **hard-written** (wow-re `action-button-state-api.md` §0), so
+///    spell back with `*outType = 0` **hard-written**, so
 ///    `4e51ab`/`4e51b0 je 0x4e521d` is taken and the button runs the entire
 ///    `Spell_C::IsSpellUsableNow 0x6e3d60` gate walk — [`spell_usable`] — exactly as a spell slot
 ///    does. **This is where food greys in combat**: every `Food`/`Drink` row in the shipped
@@ -300,8 +298,8 @@ fn equipped_slots_match(
 ///    `Attributes = 0x18000100`, bit 28 among them — [`ATTR_NOT_IN_COMBAT`], the walk's leg 8. It
 ///    is not a food rule: 453 of the shipped rows carry that bit (bandages, mounts, disguises).
 /// 4. an item with **no** on-use spell resolves 0 and falls into the resolver-0 leg, whose ITEM-tag
-///    test answers `usable = 1` outright (`4e5127`–`4e5135`; §2b.3's consequence iv, "once the
-///    item-count and item-cooldown checks of §2 pass"). An equipped sword on the bar is
+///    test answers `usable = 1` outright (`4e5127`–`4e5135`, once the item-count and item-cooldown
+///    checks pass). An equipped sword on the bar is
 ///    full-colour, not grey — and so is an item whose template is still in flight, which is what
 ///    keeps a freshly-seen slot from flickering grey for a frame.
 ///
@@ -328,7 +326,7 @@ pub(crate) fn item_usable(
     let spell_id = use_spell.spell_id;
     let d = spells.and_then(|s| s.catalog.get(spell_id));
     // Gate 2, keyed as `0x6e2fc0` keys it: the item ENTRY as `0x6e1690`'s `itemId`, and the
-    // item's own resolved category where it has one (the `spellcategory[5]` override, §2c.4).
+    // item's own resolved category where it has one (the `spellcategory[5]` override, `6e171b`).
     let category = match use_spell.category {
         0 => d.map_or(0, |d| d.category),
         c => c,
@@ -376,7 +374,7 @@ pub(crate) fn spell_usable(
     if !equipped_item_fits(d, ctx.store, objects, items, commands) {
         return (false, false);
     }
-    // Leg 5 (`0x6e3e7a`–`0x6e3eb2`): the combo-point gate, §5-VERIFIED end to end (0879). A
+    // Leg 5 (`0x6e3e7a`–`0x6e3eb2`): the combo-point gate (0879). A
     // `test [SpellRec+0x1c], 0x500000` selects finishing moves — ONE any-of test with one jcc, so
     // `AttributesEx` b20 and b22 never fork — and then `mov al,[ecx+0x1029]; test al,al` fails the
     // leg when the caster's combo-point byte is 0. That is `PLAYER_FIELD_BYTES` byte 1 off the
@@ -423,7 +421,7 @@ pub(crate) fn spell_usable(
     {
         return (false, false);
     }
-    // Legs 10/10b: the target's aura state — the walk's ONE target-dependent pair (§2a B1).
+    // Legs 10/10b: the target's aura state — the walk's ONE target-dependent pair (`0x6e3f58`).
     // No current target ⇒ unusable; then the aura-state bit; then the relation fork.
     if d.target_aura_state != 0 {
         let Some(target) = ctx.target_store else {
@@ -449,14 +447,14 @@ pub(crate) fn spell_usable(
             _ => {}
         }
     }
-    // Leg 11: ONLY a cooldown-on-event spell folds its cooldown into usable (B3) — and the
-    // predicate is the corrected `0x6e1690` (an on-hold-record test, wow-re `gcd-power-gate.md`
-    // §3): Stealth greys while its record is PARKED; once the event starts the clocks — and for
+    // Leg 11: ONLY a cooldown-on-event spell folds its cooldown into usable (`0x6e3fb8`) — and the
+    // predicate is the corrected `0x6e1690` (an on-hold-record test): Stealth greys while its
+    // record is PARKED; once the event starts the clocks — and for
     // every ordinary cooldown — the button never greys from here.
     if d.cooldown_on_event() && ctx.cooldowns.has_on_hold_record(spell_id, 0, d.category) {
         return (false, false);
     }
-    // Leg 12 (`0x6e3fba`–`0x6e3feb`): the power gate — the SOLE notEnoughMana writer (B2).
+    // Leg 12 (`0x6e3fba`–`0x6e3feb`): the power gate — the SOLE notEnoughMana writer.
     if !can_afford(d, ctx.store, ctx.spell_mods) {
         return (false, true);
     }
@@ -773,7 +771,7 @@ mod tests {
     }
 
     /// **The behavioural half of the spell-modifier system, and the reason op 14 is the first op
-    /// wired** (wow-re `spellmod-table-law.md` §9): the press-path gate compares the caster's
+    /// wired**: the press-path gate compares the caster's
     /// power against [`power_cost`] and, when short, refuses locally and sends **no**
     /// `CMSG_CAST_SPELL` at all (`0x609657`'s fall-through failure block). With the tables unread,
     /// a talent-discounted spell the server would happily accept is refused by the client.
@@ -819,7 +817,7 @@ mod tests {
         assert_eq!(power_cost(&other_class, &store, &mods), 100);
     }
 
-    /// Each modeled gate trips alone, and only the power leg raises notEnoughMana (B2).
+    /// Each modeled gate trips alone, and only the power leg raises notEnoughMana (`0x6e3feb`).
     #[test]
     fn gates_trip_independently_and_only_power_sets_oom() {
         let alive = player(&[]);

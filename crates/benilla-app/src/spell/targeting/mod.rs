@@ -11,8 +11,7 @@
 //! bag click and the world click at once.
 //!
 //! This file is the **state and the input plumbing**; the three seams and the cursor live beside
-//! it, each transcribing a byte-verified piece (wow-re `wave-cast.md` + `cursor-system.md` §5 +
-//! `world-click-targeting.md`, plus 0923's own read of the two pickup seams):
+//! it, each transcribing a piece of the reference (the two pickup seams from 0923's own read):
 //!
 //! - [`cursor`] — while targeting, the world classifier is pre-empted (the ref's dispatcher step 2
 //!   runs before any object resolve), and the verdict is **per-seam** (decision 0949): the pick
@@ -49,7 +48,7 @@
 //! 6e4d62`), and the action bar's re-press of the SAME spell toggles the mode off (`UseAction
 //! 0x4e5ee0`'s `GetTargetingSpellId`+`StopTargeting` — [`crate::ui_action::drain`]).
 //!
-//! The click path is byte-pinned by wow-re's `world-click-targeting.md`: the terrain-leg commit
+//! The reference's click path: the terrain-leg commit
 //! `0x492580` has **no range gate and no error path** — it binds and sends regardless, and the
 //! server judges range (`CheckGroundPointInRange 0x6e6810` has exactly ONE caller binary-wide, the
 //! hover classifier `0x4820f0`: its verdict colours the cursor and nothing else). The object leg
@@ -196,7 +195,7 @@ impl SpellTargeting {
 
     /// `BindLocation 0x6e60f0`'s own fork, as one read: which of the two location slots the
     /// terrain click binds this point to. Bit 5 (SOURCE) is tested **before** bit 6 (DEST) and
-    /// the arms are exclusive (wow-re `wave-cast.md` §0x6e60f0 + its caller census — a word
+    /// the arms are exclusive (`0x6e60f0` commits only once the word is 0 — a word
     /// carrying both takes two clicks and sends on the second; no 5875 spell carries both, so
     /// only the precedence is transcribed here, not the two-click walk). Decision 2218.
     fn location_bind(&self, point: [f32; 3]) -> Option<super::cast_send::TargetedBind> {
@@ -218,16 +217,16 @@ impl SpellTargeting {
 /// Right-click cancels targeting — on the **DOWN edge**, the reference's WorldFrame
 /// `OnMouseDown 0x483c40` → `0x492c20`: right button ∧ `IsTargeting` → `StopTargeting
 /// 0x6e4900`, no packet — and the handler returns 0, so the press keeps doing everything else
-/// it did (the turn-drag, the release's context click; we consume nothing either). Byte-pinned
-/// by wow-re `world-click-targeting.md` Q3, whose caller census is complete: this and the
+/// it did (the turn-drag, the release's context click; we consume nothing either). Of
+/// `StopTargeting`'s callers, this and the
 /// ESC/UseAction/TryCast paths are the ONLY input-band cancels — no keyboard caller exists.
 ///
 /// Two qualifications, transcribed: a held cursor payload pre-empts the cancel (`0x492b50`
 /// clears the payload and returns before the WorldFrame virtuals dispatch — our payload keeps
 /// its own clean-click clear in [`crate::target::click::world_right_click_payload`]); and a
 /// press over a UI frame never reaches the WorldFrame — [`WorldRightPress`]'s world gate
-/// transcribes the certain half of wow-re's one DEFERRED (whether a UI-frame right-click also
-/// cancels is unpinned there). The `0x51`-effect placement-rotate skip (`[0xceca90]`) is
+/// transcribes the certain half of the one open question (whether a UI-frame right-click also
+/// cancels is unsettled). The `0x51`-effect placement-rotate skip (`[0xceca90]`) is
 /// unmodelled along with the flag itself (named residual, 0792).
 pub(crate) fn cancel_targeting_on_right_press(
     mut presses: MessageReader<WorldRightPress>,

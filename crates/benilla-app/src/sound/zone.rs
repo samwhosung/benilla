@@ -4,7 +4,7 @@
 //! `ZoneMusic`/`SoundAmbience`/`ZoneIntroMusicTable` (parent-inherited, `benilla_formats::
 //! AreaSoundCatalog::resolve`) → SoundEntries kits → streamed MP3/WAV.
 //!
-//! **Music transport** (wow-re `0x460040`–`0x460ca0`, `benilla-pins.md` **B15/B16**). Within one
+//! **Music transport** (`0x460040`–`0x460ca0`). Within one
 //! zone, tracks are separated by a uniform random **silence interval** per day/night phase. On a
 //! zone-music-id CHANGE the outgoing track fades to silence over **4.0 s** then stops (byte-exact:
 //! `0x4602e0` → `0x7a5a10(0x40800000 = 4.0f)`) and the incoming track starts **immediately** — the
@@ -16,12 +16,13 @@
 //! `DAT_00836400 = -1` at `0x45ffdb`), so the session's FIRST track is immediate too. `0x4601f0`'s
 //! `== 0 → now + 6000 ms` branch is reachable only from the natural-end reap `0x4600b6` and only
 //! ever *replaces* the −1, so it cannot fire on an entry — the 6 s wait benilla used to serve there
-//! was that branch misapplied (wow-re §5 `glue-music-world-entry.md` §9, decision 1553). The incoming track starts at **full** volume, **no fade-in** — faithful (`0x460240` →
-//! `0x7a5dc0`; §5 B16 refuted every music-slot fade-in primitive, and the director confirmed by ear
-//! there is none). The reference's *perceived* slightly-soft onset is the delegated audio engine
-//! priming the stream to full amplitude over ~a moment (FMOD there, kira's own stream-buffering
-//! here), which leaves the 4.0 s fade audible — NOT owned gain math, flagged in wow-re for a live
-//! capture if benilla's onset reads too abrupt. (The transition is **not** `0x457960` — that is the
+//! was that branch misapplied (decision 1553). The incoming track starts at **full** volume,
+//! **no fade-in** — faithful (`0x460240` → `0x7a5dc0`; neither fade-in primitive, `0x7a57b0` or
+//! `0x7a5730`, is ever called on a music slot, and the director confirmed by ear there is none).
+//! The reference's *perceived* slightly-soft onset is the delegated audio engine priming the
+//! stream to full amplitude over ~a moment (FMOD there, kira's own stream-buffering here), which
+//! leaves the 4.0 s fade audible — NOT owned gain math, open for a live capture of the reference
+//! if benilla's onset reads too abrupt. (The transition is **not** `0x457960` — that is the
 //! SFX-bus auto-duck, decision 0100.) Intro music (`ZoneIntroMusicTable`) plays at full on zone
 //! entry, throttled by its per-entry minute delay;
 //! higher `Priority` wins when nested areas compete (we resolve one row).
@@ -40,18 +41,18 @@
 //! → return); when the track *does* end, the next push restarts it, which is what makes the loop.
 //! Any other push takes the slot the way a zone-music change does (outgoing 4.0 s fade, incoming at
 //! full) — inferred from the slot's one transition idiom, as the `SMSG_PLAY_MUSIC` handler itself
-//! is not pinned in wow-re.
+//! is not traced in the binary.
 //!
-//! **Ambience transport** (`0x460b00`, the separate ambience updater; §5 B16). An area / interior /
+//! **Ambience transport** (`0x460b00`, the separate ambience updater). An area / interior /
 //! day↔night / ghost ambience-id change is a **5.0 s crossfade**: the old bed fades out over 5.0 s
 //! then stops (`0x7a5a10(0x40a00000 = 5.0f)`) while the new bed starts at volume 0 and fades in over
 //! 5.0 s (`0x7a5dc0(0)` → `0x7a57b0(5.0f, kit vol)`). The **submerge/emerge** swap is the exception:
 //! it takes `0x460b00`'s **instant** no-fade branch (`0x458650` → `0x460af0(param = 1)`) — correcting
-//! both the old "250 ms area swap" INTERIM and B6's "5 s underwater fade".
+//! the old "250 ms area swap" INTERIM.
 //!
 //! The day/night boundary is the server-synced game clock's hard step — **day iff
 //! 05:30 ≤ t < 21:00** (minutes 330..1259), re-evaluated per tick, no fade (`0x4578c0` via the
-//! `0x642710` range check; wow-re `benilla-pins.md` B4, VERIFIED).
+//! `0x642710` range check).
 
 use bevy::prelude::*;
 
@@ -77,7 +78,7 @@ pub(crate) struct AreaSounds(pub(crate) AreaSoundCatalog);
 #[derive(Resource)]
 pub(crate) struct ExplorationSounds(pub(crate) benilla_formats::ExplorationSoundCatalog);
 
-/// Day iff 05:30 ≤ clock < 21:00 (module docs — the client's hard step, B4-verified).
+/// Day iff 05:30 ≤ clock < 21:00 (module docs — the client's hard step, `0x4578c0`).
 /// Index into the `[day, night]` DBC pairs.
 /// How long after a cinematic ends before the zone track comes back — the reference's
 /// `[0x836400] = tick + 0xbb8` at `0x4603b0(0)`, i.e. **3.000 s**. Its own number: not the `-1`
@@ -93,21 +94,22 @@ fn phase(clock: &GameClock) -> usize {
 }
 
 /// SoundEntries 4123 `UnderWaterLoop` — the submerged ambience bed the client swaps the
-/// ambience slot to (the swap is instant on submerge/emerge — §5 B16).
+/// ambience slot to (the swap is instant on submerge/emerge — `0x458650` → `0x460af0`).
 const UNDERWATER_LOOP_KIT: u32 = 4123;
 
 /// The zone-music transition fade: on a zone-music-id change the outgoing track fades linearly to
-/// silence over 4.0 s then stops, byte-exact (`0x4602e0` → `0x7a5a10(0x40800000 = 4.0f)`; wow-re §5
-/// **B16**, decision 0100). Both directions. The incoming track starts immediately at FULL volume —
-/// the client has no music fade-in (§5 B16, director-confirmed by ear), so this is the only fade on
-/// the music slot. It rides the backend fade-stop — drop the handle, the ramp finishes on kira's
-/// thread (verified device-free by `mixer::tests::stop_fade_ramps_after_handle_drop`).
+/// silence over 4.0 s then stops, byte-exact (`0x4602e0` → `0x7a5a10(0x40800000 = 4.0f)`;
+/// decision 0100). Both directions. The incoming track starts immediately at FULL volume — the
+/// client has no music fade-in (`0x460240` → `0x7a5dc0`, director-confirmed by ear), so this is
+/// the only fade on the music slot. It rides the backend fade-stop — drop the handle, the ramp
+/// finishes on kira's thread (verified device-free by
+/// `mixer::tests::stop_fade_ramps_after_handle_drop`).
 const MUSIC_FADE_OUT_MS: u64 = 4000;
 
 /// The Lua `PlayMusic` slot's own base volume: **1.0**, set instantly. `0x460450` puts it through
-/// `0x7a5dc0` with no fade and at 1.0f — where the glue theme uses 0.8f (wow-re §5c
-/// `glue-music-world-entry.md`) — as a plain scalar under the MusicVolume slider, exactly like a
-/// kit's volume, so the slider still rescales it live.
+/// `0x7a5dc0` with no fade and at 1.0f — where the glue theme uses 0.8f (`0x45aeb0`) — as a plain
+/// scalar under the MusicVolume slider, exactly like a kit's volume, so the slider still rescales
+/// it live.
 const LUA_MUSIC_VOLUME: f32 = 1.0;
 
 /// What **either** Lua music verb leaves on the zone pump's clock: **now + 6.000 s**
@@ -126,14 +128,14 @@ const LUA_MUSIC_SCHEDULE_SECS: f64 = 6.0;
 
 /// The zone-ambience crossfade: **5.0 s** for an area / interior / day↔night / ghost swap —
 /// `0x460b00` fades the old bed out over 5.0 s (`0x7a5a10(0x40a00000 = 5.0f)`) and fades the new
-/// bed in from silence over the same 5.0 s (`0x7a5dc0(0)` → `0x7a57b0(5.0f, kit vol)`). Byte-exact
-/// (wow-re §5 B16). The submerge/emerge swap is NOT this — it is instant (see the reconcile).
+/// bed in from silence over the same 5.0 s (`0x7a5dc0(0)` → `0x7a57b0(5.0f, kit vol)`). Byte-exact.
+/// The submerge/emerge swap is NOT this — it is instant (see the reconcile).
 const AMBIENCE_TRANSITION_FADE_MS: u64 = 5000;
 
 /// A linear fade-in envelope for a freshly-started ambience bed: gain ramps 0→1 over `dur_secs`
 /// from `start_secs` (`Time::elapsed_secs_f64`). benilla drives the incoming leg of the ambience
 /// crossfade itself, per frame — the per-frame volume sync would otherwise snap the new bed
-/// straight to full. (Music has no fade-in — §5 B16 — so only ambience uses this.)
+/// straight to full. (Music has no fade-in — `0x460240` → `0x7a5dc0` — so only ambience uses this.)
 #[derive(Clone, Copy)]
 struct FadeIn {
     start: f64,
@@ -220,7 +222,7 @@ pub(super) struct ZoneAudio {
     /// The last WMO interior acted on (change detection — the override layer, decision 0076).
     interior: Option<super::interior::InteriorAudio>,
     /// Last submersion state — a flip makes the ambience swap INSTANT (the underwater no-fade
-    /// branch, wow-re §5 B16), vs the 5.0 s crossfade every other swap gets.
+    /// branch, `0x458650` → `0x460af0`), vs the 5.0 s crossfade every other swap gets.
     was_underwater: bool,
     rng: u32,
 }
@@ -336,7 +338,7 @@ fn zone_audio(
     let phase = phase(&clock);
     let zone = &mut *zone;
 
-    // ---- the cinematic's music stop (wow-re `sound/scratch/cinematic-audio-law.md`, VERIFIED) ----
+    // ---- the cinematic's music stop ----
     // The flag itself is [`SoundConfig::music_suppressed`], whose doc carries the mechanism. Here
     // are its two edges, and both are byte-shaped rather than chosen:
     //
@@ -441,8 +443,8 @@ fn zone_audio(
     // ---- ambience reconciliation. The desired-bed priority is the client's own selector
     // (`FUN_00460bd0`, byte-verified): GHOST > submerged > weather-gated zone day/night. The
     // ghost bed is the named "Ghost" SoundEntries kit, resolved through the name registry like
-    // the client's literal; its enter/leave swap rides the standard 5.0 s crossfade (the ghost
-    // row of the trigger table — zone-music-ambience-transition.md). ----
+    // the client's literal; its enter/leave swap rides the standard 5.0 s crossfade (`0x458680` →
+    // `0x460c20`). ----
     let ghost = self_store
         .single()
         .is_ok_and(|store| store.0.player_is_ghost());
@@ -451,8 +453,8 @@ fn zone_audio(
     } else if world.submersion().is_water() {
         UNDERWATER_LOOP_KIT
     } else if weather.0 != 0 && world.area_interior().is_none() {
-        // The selector's weather branch (`0x460bd0`, 0x460bf7–0x460c17; wow-re
-        // `rf-weather-emission-timeline` ROUND 5 Q-C): while the **zonetext indoor bit** is clear
+        // The selector's weather branch (`0x460bd0`, 0x460bf7–0x460c17): while the
+        // **zonetext indoor bit** is clear
         // (the keep-flag `[0xb06d44]`, dl=0 from the outdoor area feeder) the raw weather
         // SoundEntries IS the ambience bed; the indoor feeder (dl=1) makes the selector ignore
         // the weather id entirely — the area/interior row below plays instead. Both directions
@@ -474,9 +476,8 @@ fn zone_audio(
     };
     if desired != zone.ambience_kit {
         // The submerge/emerge swap is INSTANT — the underwater caller takes `0x460b00`'s no-fade
-        // branch (`0x458650` → `0x460af0(param=1)`, wow-re §5 B16, correcting the old "5 s
-        // underwater" of B6). Every other ambience swap — interior, area, day↔night — is the one
-        // 5.0 s crossfade (`0x460b00`'s fade branch).
+        // branch (`0x458650` → `0x460af0(param=1)`). Every other ambience swap — interior, area,
+        // day↔night — is the one 5.0 s crossfade (`0x460b00`'s fade branch).
         let fade_ms = if world.submersion().is_water() != zone.was_underwater {
             0
         } else {
@@ -563,8 +564,7 @@ fn apply_music_suppression(zone: &mut ZoneAudio, suppressed: bool, now: f64) {
     // edge.** `0x4603b0` writes the disabled flag first (`0x4603ba`, so the pump dies here too),
     // then reads the Lua slot at `0x4603d6` and — finding it live — hands the stream `0x7a5ac0`
     // with that same flag and **returns** (`0x4603e0`): the zone stream is not stopped, the intro
-    // layer is not killed, and `[0x836400]` is never rearmed, on the way in or out (wow-re
-    // `sound/scratch/cinematic-audio-law.md` §1; `sound.md` §"the two handle slots"). A cinematic
+    // layer is not killed, and `[0x836400]` is never rearmed, on the way in or out. A cinematic
     // borrows the caller's track; it does not take it.
     if zone.lua_slot_live() {
         if let Some(h) = zone.lua_music.as_mut() {
@@ -609,8 +609,7 @@ fn zone_music_row(cat: &AreaSoundCatalog, _id: u32) -> Option<&benilla_formats::
 /// label (*Loop Music*) suggests: it deletes the randomised `ZoneMusic.dbc` SilenceIntervalMin/Max
 /// wait between successive plays of the SAME zone's track. A zone CHANGE is immediate either way —
 /// the incoming track starts on the next tick while the outgoing fades over 4 s, an overlap rather
-/// than a gap (wow-re `zone-music-ambience-transition.md` Q1/Q2, which corrects an earlier framing
-/// of exactly this).
+/// than a gap (`0x4602e0` arms the −1 "start now" at `0x460346`).
 ///
 /// **Not a cold start** — `0x4601f0`'s `== 0 → now + 6000 ms` arm needs a *cleared* currently-playing
 /// row, which end-of-track flow never presents, and an entry never reaches this function at all
@@ -649,8 +648,8 @@ fn slot_holds(music_kit: u32, kit_id: u32, slot: Option<kira::sound::PlaybackSta
 
 /// Open a music kit as a stream on the music slot (a zone track, an intro, or a server-pushed
 /// track), replacing whatever is on it. The stream starts at **full** kit × category volume for
-/// every start — the client has no music fade-in (§5 B16); the slot's only fade is the outgoing
-/// 4.0 s fade-stop. Returns whether a stream actually started.
+/// every start — the client has no music fade-in (`0x460240` → `0x7a5dc0`); the slot's only fade
+/// is the outgoing 4.0 s fade-stop. Returns whether a stream actually started.
 fn start_music_stream(
     zone: &mut ZoneAudio,
     out: &mut SoundOutput,
@@ -728,9 +727,8 @@ fn start_music_stream(
 ///
 /// `StopMusic 0x458770` is four instructions, three of which are `0x460450(NULL)` — the very
 /// function `PlayMusic 0x458720` calls. So *stopping is playing a NULL name*, and this is that
-/// function (wow-re `sound/scratch/lua-music-bindings.md`, the §5 round dispatched for B391;
-/// `0x460450` has two callers image-wide and no address-takes, so nothing else in the client can
-/// start or stop this slot). The order below is its order:
+/// function (B391; `0x460450` has two callers image-wide and no address-takes, so nothing else
+/// in the client can start or stop this slot). The order below is its order:
 ///
 /// 1. **[`take_lua_music_slot`]** — the shared head, which is also the whole of the NULL arm.
 /// 2. `0x4604a0` — the branch. A stop is done; everything after this is the name arm.
@@ -945,9 +943,8 @@ fn swap_ambience(
 /// handle in the reference too (`[0xb06ccc]`, not `[0xb06cc4]`), it is not what a zone change,
 /// an area's silence interval or the day/night phase acts on, and the one thing the reference is
 /// recorded doing to it — a cinematic pausing and resuming it (`0x4603b0`'s `0x7a5ac0` early
-/// return, wow-re `cinematic-audio-law.md` §1) — is precisely *not* what that edge does to the
-/// zone track, which it stops and reschedules. So it rides its own system, on no run condition
-/// but the VM existing.
+/// return) — is precisely *not* what that edge does to the zone track, which it stops and
+/// reschedules. So it rides its own system, on no run condition but the VM existing.
 fn lua_music(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     mut zone: NonSendMut<ZoneAudio>,
@@ -1211,7 +1208,7 @@ mod tests {
     };
     use kira::sound::PlaybackState;
 
-    /// **The cinematic's music stop, both edges** — wow-re `cinematic-audio-law.md`, VERIFIED.
+    /// **The cinematic's music stop, both edges**.
     /// Down is a CUT: `0x7a5700` is stop-and-destroy and takes no duration argument, so there is
     /// nothing to fade with — not the 4.0 s zone-change fade, not the 250 ms teardown declick.
     /// Up is `[0x836400] = tick + 0xbb8` = **3.000 s**, which is a third number, neither the `-1`
@@ -1245,8 +1242,8 @@ mod tests {
         assert_eq!(zone.zone_music, 42);
     }
 
-    /// **A cinematic BORROWS a Lua `PlayMusic` track** — wow-re `cinematic-audio-law.md` §1,
-    /// VERIFIED, and the one thing the reference is recorded doing to this slot. `0x4603b0` writes
+    /// **A cinematic BORROWS a Lua `PlayMusic` track** — the one thing the reference is recorded
+    /// doing to this slot. `0x4603b0` writes
     /// the disabled flag, sees the slot live at `0x4603d6`, pauses the stream and returns: the
     /// pump still dies (that flag is written *before* the early return) and nothing else moves —
     /// no stop, no clear, and `[0x836400]` never rearmed on the way back out. The zone track's own
@@ -1292,9 +1289,8 @@ mod tests {
         assert!((CINEMATIC_MUSIC_RESUME_SECS - 3.0).abs() < f64::EPSILON);
     }
 
-    /// **`StopMusic()` is `PlayMusic(NULL)`, and this is the whole of it** — wow-re
-    /// `sound/scratch/lua-music-bindings.md`, the round dispatched for B391. `0x458770` is four
-    /// instructions, three of which are `0x460450(NULL)`, and that shared head does exactly
+    /// **`StopMusic()` is `PlayMusic(NULL)`, and this is the whole of it** (B391). `0x458770` is
+    /// four instructions, three of which are `0x460450(NULL)`, and that shared head does exactly
     /// three things before the branch: fade this slot over 4.0 s (`0x460480`), clear it
     /// (`0x460485`), and write the zone pump's next start (`0x46049b`).
     ///

@@ -1,4 +1,4 @@
-//! **The spell** — `Spell_C`, the reference's cast unit (wow-re `system/spell/spell.md`): the
+//! **The spell** — `Spell_C`, the reference's cast unit: the
 //! cast ladder and its commit ([`cast_send`] — `TryCast 0x6e4b60` → `SendCast 0x6e54f0`), the
 //! target bind ([`cast_target`] — `ArmCast 0x6e5250` / `BindTarget 0x6e5b40`), the requirement
 //! validator's rungs ([`validator`] — `0x6094f0`), the usable walk ([`usable`] —

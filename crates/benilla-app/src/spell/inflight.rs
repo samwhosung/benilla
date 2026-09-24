@@ -45,15 +45,14 @@ const ITEM_SEND_PROVISIONAL: Duration = Duration::from_millis(1_500);
 const CAST_SLACK: Duration = Duration::from_secs(2);
 
 /// Our own outstanding cast — the client's optimistic in-flight guard, and the fix for the
-/// spam-cancel bug. wow-re `wave-cast.md`: `TryCast 0x6e4b60` refuses to send a second
+/// spam-cancel bug. `TryCast 0x6e4b60` refuses to send a second
 /// `CMSG_CAST_SPELL` while `IsCasting 0x6e3d30` (the inflight-spell-id `0xceca88`) is set — the
 /// same-spell press bails **silently** at `6e4d43`; a different spell hits the
 /// `[SpellRec+0x18] & 0x404` gate at `6e4d97`: when the *inflight* rec lacks those bits (an
 /// ordinary cast — Fireball is `0x10000`), it errors 0x61 without sending; when the inflight IS
-/// on-next-swing (a queued Heroic Strike), the new cast passes and nests around it (mask and
-/// operand §5-confirmed byte-exact, wow-re `combat-feel-law.md` @ c445713b — exactly `0x404`, on
-/// the inflight rec, no channel leg: Slam mid-cast blocks Battle Shout). In our model
-/// the on-next-swing class never occupies this guard at all — it arms [`QueuedMeleeSpell`]
+/// on-next-swing (a queued Heroic Strike), the new cast passes and nests around it (exactly
+/// `0x404`, on the inflight rec, no channel leg: Slam mid-cast blocks Battle Shout). In our
+/// model the on-next-swing class never occupies this guard at all — it arms [`QueuedMeleeSpell`]
 /// instead — so this guard only ever holds ordinary casts and the gate needs no attribute test.
 /// Ours was server-driven: every mashed key fired a *duplicate* cast, the
 /// server rejected the dupe with `SMSG_CAST_RESULT` failure, and that turned the running cast's bar
@@ -137,9 +136,8 @@ impl PendingCast {
 
     /// Arm the guard on an **item** use's send. The reference has no separate item-cast slot: the
     /// item-use dispatcher's cast tail (`CGItem::Use 0x5d8d00` @ `0x5d9258`) calls `0x6e5a90`,
-    /// whose entire 54-byte body is `call 0x6e4b60` — `TryCast` itself (VERIFIED at the bytes,
-    /// wow-re `disasm-full.txt`; corroborated by its `action-button-state-api.md` §"dispatcher
-    /// `0x6e5a90` (→ `CastSpell 0x6e4b60`)" and `cursor-system.md` §536). So an item use writes
+    /// whose entire 54-byte body is `call 0x6e4b60` — `TryCast` itself (the action bar's SPELL
+    /// route takes the same `0x6e5a90` → `CastSpell 0x6e4b60`). So an item use writes
     /// the SAME inflight id (`0xceca88`) and is refused by the same IsCasting gate — which is why
     /// [`crate::ui_items::send_item_use`] runs both. Differs from [`PendingCast::arm`] only in the
     /// deadline ([`ITEM_SEND_PROVISIONAL`], whose doc is the why).
@@ -181,22 +179,22 @@ impl PendingCast {
 /// the inflight id (`0xceca88`) until the swing fires it, and the already-casting refusal at
 /// `6e4d97` exempts new casts because the inflight rec has the `0x404` bits — so a queued Heroic
 /// Strike never blocks Rend, and the new cast nests around it (`PushPopNestedCast 0x6e4ad0`
-/// restores the queued id when the nested cast resolves; wow-re `wave-cast.md`). We model the
+/// restores the queued id when the nested cast resolves). We model the
 /// same observable with a second slot instead of the push/pop pair: [`PendingCast`] keeps
 /// ordinary casts, this keeps the melee queue, and the checked ring reads both (the ref's
-/// `IsCurrentAction` C2 leg — spell == inflight — holds through the nesting either way, minus
+/// `IsCurrentAction 0x4e53a0` leg — spell == inflight — holds through the nesting either way, minus
 /// the ref's one-RTT un-check blink while the nested cast displaces the slot).
 ///
 /// **Deadline-less, wire-cleared** — like the ref's inflight id, which no timer touches. The
-/// clear set is deliberately wider than the ref's: the §5 (`combat-feel-law.md` @ c445713b)
-/// pinned that the ref clears inflight/saved ONLY on a matching `SMSG_CAST_RESULT` (`0x6e7330`;
+/// clear set is deliberately wider than the ref's: the ref clears inflight/saved ONLY on a
+/// matching `SMSG_CAST_RESULT` (`0x6e7330`;
 /// the GO handler never touches `0xceca88`) — but vmangos never sends an OK `CAST_RESULT` at
 /// all, so on our wire the resolution is `SMSG_SPELL_GO` when the swing fires the strike, and a
 /// failing `CAST_RESULT` + `SPELL_FAILED_OTHER` when it dies (vmangos `Spell::cancel` on the
 /// PREPARING melee slot sends both — target death, manual cancel, replacement). We clear on any
 /// of the three, id-keyed: identical observable where `0x130` does arrive, correct where it
 /// never does. Re-arming replaces silently: the server holds a single `CURRENT_MELEE_SPELL`
-/// slot. Re-pressing the queued spell itself is the ref's silent same-spell bail — §5-CONFIRMED
+/// slot. Re-pressing the queued spell itself is the ref's silent same-spell bail
 /// (`6e4d43`: debug-log, `xor al,al`, no CMSG, no error): 1.12 has no re-press-to-unqueue. The
 /// real un-queue is the StopAttack chain (`0x5ecac0` → `CancelQueuedCast 0x6e6f30`, sending
 /// `CMSG_ATTACKSTOP` + `CMSG_CANCEL_CAST`), reached by /stopattack, the Attack-button toggle,
@@ -252,8 +250,8 @@ impl QueuedMeleeSpell {
 /// the first Esc and the strike on the second. Reading `PendingCast` first reproduces that
 /// without our needing the push/pop pair.
 ///
-/// One knowing divergence there, pinned by wow-re's `spell/scratch/esc-queued-strike.md` §Q(c)
-/// and weighed in decision 1058: the ref's pop *reads* `0xcecaa8` and never writes it, so a
+/// One knowing divergence there, weighed in decision 1058: the ref's pop (`0x6e4b2c`–`0x6e4b4e`)
+/// *reads* `0xcecaa8` and never writes it, so a
 /// second Esc re-asserts the same strike locally and only the server echo converges it. We have
 /// no separate save slot to go stale, so ours clears. The two agree everywhere it shows: in the
 /// un-nested case the ref's pop reads a zero save and clears too, and in the nested case vmangos
@@ -300,8 +298,8 @@ pub(crate) fn inflight(
 const CHANNEL_SLACK: Duration = Duration::from_secs(2);
 
 /// Our own running channel — the app-side mirror of the client's current-channel id (`0xceac58`,
-/// read live-gated by the channeling word: the §5's `IsCurrentAction` channel leg,
-/// `action-button-state-api.md` §3 — a channeled spell's button stays checked while its channel
+/// read live-gated by the channeling word: `IsCurrentAction 0x4e53a0`'s channel leg — a
+/// channeled spell's button stays checked while its channel
 /// runs). Set at `MSG_CHANNEL_START`, refreshed by nonzero `MSG_CHANNEL_UPDATE`s, cleared by the
 /// `UPDATE(0)` that ends both the natural finish and the interrupt.
 #[derive(Resource, Default)]
@@ -334,8 +332,8 @@ impl ActiveChannel {
     }
 }
 
-/// The live auto-repeat spell — the client's autorepeat key `0xceac30` (wow-re `wave-cast.md`:
-/// written at the local cast-send for `AttributesEx2 & 0x20` spells, cleared by
+/// The live auto-repeat spell — the client's autorepeat key `0xceac30` (written at the local
+/// cast-send `0x6e54f0` for `AttributesEx2 & 0x20` spells, cleared by
 /// `SMSG_CANCEL_AUTO_REPEAT`'s `0x6ea080` and by a matching cast-fail). Distinct from the sticky
 /// `creature_anim::AutoRepeatArmed` (the Load/Hold idle gate, never cleared): THIS one is what
 /// `IsAutoRepeatAction` and the button flash read, and it goes out when the shooting stops.
@@ -344,8 +342,8 @@ pub(crate) struct AutoRepeatActive(pub Option<u32>);
 
 /// ── The local self-cancel (decisions 0256 open item 2 / 0444 / 0445): move/jump/Esc mid-cast
 /// ends the cast **locally**, the same client tick — the app-side mirror of `AbortCast
-/// 0x6e4940`. The whole trigger chain is **VERIFIED** (wow-re `move-selfcancel.md`, the
-/// 2026-07-17 §5): the `Script::Move*` keybind handlers funnel into the shared dispatcher
+/// 0x6e4940`. The whole trigger chain: the `Script::Move*` keybind handlers funnel into the
+/// shared dispatcher
 /// `0x515090`, whose interrupt mask `0x10f0` = {forward, backward, strafe L/R, autorun-toggle}
 /// — turn (`0x100/0x200`) and pitch (`0x400/0x800`) are OUTSIDE the mask and never cancel —
 /// and `Script::Jump 0x513bd0` inlines the same gate. Both call `AbortCast(cl=0, dl=1,
@@ -373,9 +371,9 @@ pub(crate) struct LocalMoveStart(pub(crate) bool);
 /// resolution can't drift between them:
 ///
 /// - **the auto-repeat half (Esc only)** — the ref's branch order inside
-///   `Script::SpellStopCasting 0x6e6e80` (§5-verified whole, wow-re `esc-stopcasting.md`): a
+///   `Script::SpellStopCasting 0x6e6e80`: a
 ///   running auto-repeat dies FIRST — [`crate::creature_anim::cancel_auto_repeat_local`], the
-///   byte-verified `0x6ea080` (key + idle gates + nocked ammo + `CMSG_CANCEL_AUTO_REPEAT_SPELL`)
+///   client's `0x6ea080` (key + idle gates + nocked ammo + `CMSG_CANCEL_AUTO_REPEAT_SPELL`)
 ///   — and SPENDS the press: one press stops one thing, the cast survives to the next.
 ///   Movement never touches auto-repeat.
 /// - **the cast half** — clear [`PendingCast`], ship `CMSG_CANCEL_CAST`, reap the self
@@ -390,8 +388,8 @@ pub(crate) struct LocalMoveStart(pub(crate) bool);
 ///   the verified asymmetry (0445). Esc never reaches a channel — `0x6e6e80`'s whole callee
 ///   closure never calls the channel canceler `0x6e9b70`, and its inflight gate (`0xceca88`)
 ///   is already 0 mid-channel (the launch `CAST_RESULT(OKAY)` clears it at `0x6e7408`): the
-///   vanilla "/stopcasting can't stop a channel" quirk, kept faithfully (0454; wow-re
-///   `esc-stopcasting.md`). The ref's `0x6e9b70` fires no FrameScript event and clears no
+///   vanilla "/stopcasting can't stop a channel" quirk, kept faithfully (0454). The ref's
+///   `0x6e9b70` fires no FrameScript event and clears no
 ///   local state — the channel bar closes on the server's `SMSG_CHANNEL_UPDATE(0)`
 ///   (`0x6e75f0`), which also clears [`ActiveChannel`] through the normal wire path (its slack
 ///   deadline self-heals a lost packet).
@@ -885,9 +883,9 @@ mod tests {
             assert!(app.world().resource::<CastBarFeed>().0.is_empty());
         }
 
-        /// Esc CANNOT stop a channel — the §5-verified `0x6e6e80` never reaches the channel
-        /// canceler `0x6e9b70`, and its inflight gate is already 0 mid-channel (wow-re
-        /// `esc-stopcasting.md`, 0454): the mirror answers `SpellStopCasting()` nil (the
+        /// Esc CANNOT stop a channel — `0x6e6e80` never reaches the channel
+        /// canceler `0x6e9b70`, and its inflight gate is already 0 mid-channel (0454): the
+        /// mirror answers `SpellStopCasting()` nil (the
         /// ladder falls through to the next rung) and the drain ships nothing.
         #[test]
         fn esc_cannot_stop_a_channel() {
@@ -1071,7 +1069,7 @@ mod tests {
         /// One press, one thing — the ladder's law all the way down.
         ///
         /// This is the **local** law, which is all a harness with no server can show, and it is
-        /// the ref's local law too (wow-re `esc-queued-strike.md` §Q(c)) — with the one knowing
+        /// the ref's local law too — with the one knowing
         /// difference `Inflight`'s doc names: the ref's press 2 re-asserts the strike instead of
         /// clearing it. On a live wire neither client gets this far, because vmangos drops the
         /// melee slot on press **1** regardless of the id in the packet, and both converge off
