@@ -73,7 +73,7 @@ pub(crate) struct GoTemplate {
     /// with no page (vanilla ships a handful) opens nothing at all, exactly like the reference.
     pub(crate) text_page: Option<TextPage>,
     /// The `PageTextMaterial.dbc` id `GetQuestBackgroundMaterial` answers for a quest sourced from
-    /// this object — by `GAMEOBJECT_TYPE_ID`: QUESTGIVER (2) and GOOBER (9) read `data[2]`, CHEST
+    /// this object — by `GAMEOBJECT_TYPE_ID`: QUESTGIVER (2) and TEXT (9) read `data[2]`, GOOBER
     /// (10) reads `data[9]`, every other type answers none (`0x5f5950`).
     pub(crate) quest_material: Option<u32>,
 }
@@ -239,8 +239,8 @@ mod tests {
         assert_eq!(go_lock_slot(19), None); // MAILBOX — no lock (opens by USE)
     }
 
-    /// The quest-giver material arm — by type: QUESTGIVER (2) and GOOBER (9) read `data[2]`,
-    /// CHEST (10) reads `data[9]`, anything else none (`0x5f5950`).
+    /// The quest-giver material arm — by type: QUESTGIVER (2) and TEXT (9) read `data[2]`,
+    /// GOOBER (10) reads `data[9]`, anything else none (`0x5f5950`).
     #[test]
     fn insert_captures_the_quest_material_by_type() {
         let mut t = GameObjectTemplates::default();
@@ -249,14 +249,14 @@ mod tests {
         data[9] = 3;
         t.insert(100, 2, "Wanted Poster".into(), &data);
         t.insert(101, 9, "Book".into(), &data);
-        t.insert(102, 10, "Chest".into(), &data);
+        t.insert(102, 10, "Goober".into(), &data);
         t.insert(103, 15, "Boat".into(), &data);
         assert_eq!(t.templates.get(100).unwrap().quest_material, Some(2));
         assert_eq!(t.templates.get(101).unwrap().quest_material, Some(2));
         assert_eq!(
             t.templates.get(102).unwrap().quest_material,
             Some(3),
-            "a chest reads data[9]"
+            "a goober reads data[9]"
         );
         assert_eq!(t.templates.get(103).unwrap().quest_material, None);
     }
