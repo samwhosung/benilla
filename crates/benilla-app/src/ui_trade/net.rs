@@ -48,7 +48,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut trade: ResMut<TradeSession>) {
 /// `SessionEvent::TradeStatus` (`SMSG_TRADE_STATUS`) — benilla's face of the reference's own
 /// 23-case dispatcher `CGTradeInfo 0x4bf720` (`ecx` = the status code; jump table `0x4bfa08`;
 /// sole caller `0x5d4923`, inside the `SMSG_TRADE_STATUS` handler `0x5d47c0`). Every arm below is
-/// that function's, walked (wow-re `ui/scratch/incoming-trade-request-law.md` §11).
+/// that function's, walked.
 ///
 /// **Three different things a status can do, and they are not the same set.**
 ///
@@ -67,7 +67,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut trade: ResMut<TradeSession>) {
 /// is unobservable — every code in (3) that is not in (2) arrives as an *initiate* refusal, with
 /// no window open — but it made the code claim `TARGET_STUNNED` tears down a trade window, and it
 /// got `REJECTED` and `UNKNOWN_13` wrong in opposite directions (decision 1764 wrote both down as
-/// unsettled; §11 settles them).
+/// unsettled; their arms, `0x4bf821` and `0x4bfa02`, settle them).
 ///
 /// `BEGIN_TRADE` records the incoming request **without answering it** (decision 1764 — the reply
 /// is a ladder of eight gates, so [`super::answer_trade_request`] owns it, and it is the
@@ -121,9 +121,8 @@ fn trade_status(
         }
         // The three that really do tear the window down. `CANCELED` also signals
         // `TRADE_REQUEST_CANCEL` (`0x4bf832`) — the ONE Lua event this whole dispatcher fires
-        // (wow-re `re/events/event-firesites.tsv` finds no other `SignalEvent` in
-        // `[0x4bf720, 0x4bfa08)`) — and it signals it BEFORE the close, which is why the flag
-        // survives [`TradeSession::close_window`].
+        // (there is no other `SignalEvent` in `[0x4bf720, 0x4bfa08)`) — and it signals it BEFORE
+        // the close, which is why the flag survives [`TradeSession::close_window`].
         //
         // Each of the three also sends `CMSG_CANCEL_TRADE` from inside `0x4bf4e0`. benilla does
         // not send it here and does not need to: the window is the stock `TradeFrame.xml`, whose
@@ -178,8 +177,8 @@ enum Line {
 /// **Eleven of the ids are outside the trade block** `0xb9..=0xbf` — which is why the arc shipped
 /// four of them and read as done: that block's own emit-site census answers "which arms print a
 /// *trade-keyed* message", and that is a different question from "which arms print". The full walk
-/// is wow-re §11; the tell was in the reference's own interface, where `ERR_TARGET_STUNNED`'s
-/// `GlobalStrings.lua` comment reads `-- Trade failure`.
+/// covers every arm of `0x4bf720`; the tell was in the reference's own interface, where
+/// `ERR_TARGET_STUNNED`'s `GlobalStrings.lua` comment reads `-- Trade failure`.
 ///
 /// | # | status | id | key | catalog kind |
 /// |---|---|---|---|---|
@@ -212,9 +211,9 @@ enum Line {
 /// `0x4bfd70` maps the packet's `result` word (our [`TradeStatus::CloseWindow::result`]) over a
 /// **61-id** range, tail-jumping `0x622630` for everything it does not special-case, with `0x1d1`
 /// as a suppression sentinel. vmangos never sends status 12 (`SharedDefines.h` defines it;
-/// `TradeHandler.cpp` sends it nowhere), so there is no observable to build against — and wow-re
-/// flagged a self/other polarity inconsistency inside that mapper that wants a live capture to
-/// settle. Transcribing 61 rows nothing can reach, around a known-doubtful axis, is how a table
+/// `TradeHandler.cpp` sends it nowhere), so there is no observable to build against — and a
+/// self/other polarity inconsistency inside that mapper wants a live capture to settle.
+/// Transcribing 61 rows nothing can reach, around a known-doubtful axis, is how a table
 /// gets written wrong and believed; the window still closes on 12, it just says nothing.
 fn status_message(status: TradeStatus) -> Option<Line> {
     Some(match status {

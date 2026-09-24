@@ -254,10 +254,9 @@ pub(crate) fn present_mode(vsync: bool) -> PresentMode {
 pub(crate) struct VideoPlugin;
 
 /// **The Video Options block's change callbacks** (decision 2303) — the rows the reference
-/// registers from its one video-options registration block (`0x688470`, wow-re
-/// `cvar/scratch/graphics-cost-cvar-census.md` §2), landing on the resources they drive. Each
-/// arm writes only its own resource, so a `ViewDistance` change is `farclip` moving and nothing
-/// else; the clamps are each row's own, stated beside it.
+/// registers from its one video-options registration block (`0x688470`), landing on the resources
+/// they drive. Each arm writes only its own resource, so a `ViewDistance` change is `farclip`
+/// moving and nothing else; the clamps are each row's own, stated beside it.
 pub(crate) fn on_cvar(
     ev: On<crate::cvars::CvarChanged>,
     mut cfg: ResMut<VideoConfig>,
@@ -342,8 +341,8 @@ pub(crate) fn on_cvar(
         }
         // Weather Intensity, the panel's 0..3 step 1 (2181). The reference's callback is
         // `0x67b870`, a jump table (`0x67b8e8`) mapping 0/1/2/3 onto the quality cells
-        // {0.1, 0.33, 0.66, 1.0} in `[0x8680ec]` (wow-re `graphics-cost-cvar-census.md` §4).
-        // What that table does with an off-grid int is NOT carved, so the clamp here is the
+        // {0.1, 0.33, 0.66, 1.0} in `[0x8680ec]`.
+        // What that table does with an off-grid int is NOT decoded, so the clamp here is the
         // table's own standing posture rather than a fidelity claim — and it costs nothing
         // either way, because `WeatherState::density_gain` already `.min(3)`s its own index.
         "weatherdensity" => weather.weather_density = v.trunc().clamp(0.0, 3.0) as u8,
@@ -456,9 +455,8 @@ fn drain_restart_gx(
     info!("video: RestartGx — {committed} staged setting(s) committed; re-asserting the display mode and present mode");
 }
 
-/// **The reference's own three filters on the resolution list** (wow-re
-/// `ui/scratch/video-options-verbs.md` §1.1, all VERIFIED at `0x48bcfa`–`0x48bd18`), in its own
-/// order: keep iff `w/h >= 1.248`, `w >= 800`, `h >= 600`.
+/// **The reference's own three filters on the resolution list** (`0x48bcfa`–`0x48bd18`), in its
+/// own order: keep iff `w/h >= 1.248`, `w >= 800`, `h >= 600`.
 ///
 /// The aspect constant is `[0x804570]`, the f32 `1.2480000257492065` — chosen just under 5:4 so it
 /// admits 5:4, 4:3, 16:10 and 16:9 and rejects square and portrait modes. It is not a

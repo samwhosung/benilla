@@ -55,13 +55,13 @@ use crate::ui_script::{gate, UiInput};
 pub(crate) struct UnitFeed;
 
 /// One combat occurrence over a unit — the `UNIT_COMBAT` event feed (decision 0576: the portrait
-/// hit indicator's wire; the shipped `CombatFeedback.lua` is the consumer). **§5-verified**
-/// (wow-re `object-layer/scratch/unit-combat-event-law.md`): the one emitter `0x494600` fires
+/// hit indicator's wire; the shipped `CombatFeedback.lua` is the consumer). The one emitter
+/// `0x494600` fires
 /// `(token, action, descriptor, amount, type)` once per live token the unit maps to, with **no
 /// self-suppression and no cvar gate** — the worldtext Gate A's inverse. `type` (arg5) is the
 /// damage school on the melee/spell-damage paths; the miss and heal wrappers hard-code 0. The
 /// melee victim event is **deferred to the swing impact keyframe** (it rides inside `0x6243e0`,
-/// reached only from the `0x624530` victim dispatcher — C2 CONFIRMED). ENERGIZE never fires in
+/// reached only from the `0x624530` victim dispatcher). ENERGIZE never fires in
 /// 5875 (string absent binary-wide). Producers: melee at [`melee_unit_combat`], spells/heals at
 /// packet receive (`net/apply/combat_log.rs`). Consumed by [`fire_unit_combat`], which resolves
 /// the entity to its live unit tokens.
@@ -80,8 +80,7 @@ pub(crate) struct UnitCombatFeedback {
 }
 
 /// One center-combat-text message — the `COMBAT_TEXT_UPDATE` event feed (decision 0578; the
-/// Blizzard_CombatText transcription is the consumer). **§5-verified** (wow-re
-/// `playername/scratch/combat-text-update-emission-law.md`): event id 0x21E, fired via the
+/// Blizzard_CombatText transcription is the consumer). Event id 0x21E, fired via the
 /// formatted SignalEvent `0x703f50` from the UnitCombatLog_C.cpp emit helpers — every producer
 /// fires **at packet parse** (the melee one too: `0x6255b0 → 0x629d30`, one call stack — NOT the
 /// impact-keyframe deferral, which belongs to the worldtext/UNIT_COMBAT victim dispatch).
@@ -101,22 +100,22 @@ pub(crate) struct CombatTextEvent {
 ///
 /// **`PLAYER_LEAVING_WORLD` on a cross-map worldport** (decision 2235, corrected by 2238).
 ///
-/// The reference fires event `0x111` at `0x490b48`, inside `0x490a80`. wow-re's census of both
+/// The reference fires event `0x111` at `0x490b48`, inside `0x490a80`. A census of both
 /// signal helpers puts the id at exactly one site image-wide — 336/336 ids resolved through
 /// `0x703e50`, 149/149 through `0x703f50`, and the encoding `b9 11 01 00 00` occurs once in the
 /// binary — so that is the whole of the FIRE, and it is what this doc used to conflate with the
 /// whole of the event.
 ///
-/// **One fire site, three callers, and this system is one of them** (2238; wow-re `5ad31a12`).
+/// **One fire site, three callers, and this system is one of them** (2238).
 /// `0x490a80` is reached from the local player object's own destructor (`0x401bc0` → `0x467700`
 /// → `0x467800` → the per-object `[vtbl+0]` → `0x5dd500` → `0x5dd600` → `0x5dd72c` → `0x5dd543`)
 /// — **this system's occasion** — and also from `0x490c20` inside the shutdown tail `0x490bd0`,
 /// which is where an in-world `/reload`, a logout, a quit and a disconnect reach it, and from
 /// `0x5e9b5a`, vtable slot 1, on a DESTROY / OUT_OF_RANGE of the local player object.
-/// 2235 read `5ce96437`'s "three gates" as three gates on the event and its subject line as a
-/// census of the callers; neither is what they were. Two of those gates (`0x5dd71c`/`0x5dd721`/
-/// `0x5dd725` and `0x5dd539`/`0x5dd53e`/`0x5dd541`) sit in the destructor chain and gate only the
-/// caller below; `0x490a80`'s own only gate is the latch at `[0xb4b424]`.
+/// 2235 read the "three gates" as three gates on the event, which they are not. Two of those
+/// gates (`0x5dd71c`/`0x5dd721`/`0x5dd725` and `0x5dd539`/`0x5dd53e`/`0x5dd541`) sit in the
+/// destructor chain and gate only the caller below; `0x490a80`'s own only gate is the latch at
+/// `[0xb4b424]`.
 ///
 /// **The tail's occasions are already ours**, and were years before this system existed:
 /// [`crate::ui_script::shutdown_ui_state`] fires `PLAYER_LEAVING_WORLD` then `PLAYER_LOGOUT` as
@@ -141,8 +140,8 @@ pub(crate) struct CombatTextEvent {
 /// handler runs *during* teardown, after the three manager unlinks and ~35 of `0x490a80`'s 37
 /// teardown calls, so a real addon's handler already sees a substantially dismantled UI.
 ///
-/// **What "dismantled" costs there is the opposite of what 2235 guessed** (2238; wow-re
-/// `20210d32`). The GUID hash's link is `obj+0x1c` and the destructor splices the object out
+/// **What "dismantled" costs there is the opposite of what 2235 guessed** (2238). The GUID
+/// hash's link is `obj+0x1c` and the destructor splices the object out
 /// (`0x467887 call 0x468680`) *before* `call [vtbl+0]`, so on THIS occasion — and only this one —
 /// a hash lookup misses. But `UnitName("player")` never asks the hash: `0x517020` short-circuits
 /// at `0x51707d` and answers from the cached character record `[0xc27d88]`, which has one writer
@@ -242,7 +241,8 @@ struct UnitFeedMemo {
     /// would snap the value back to the stale descriptor in between.
     worn_hidden: Option<(bool, bool)>,
     /// The self player's last-pushed `PLAYER_FIELD_BYTES` byte 2 — the four extra bars' visibility
-    /// (wow-re `action-bar-toggles.md`). A player-global like the combo pair, pushed on the edge.
+    /// (read by `GetActionBarToggles 0x4e7660`). A player-global like the combo pair, pushed on the
+    /// edge.
     /// `None` until first seen; there is no event to fire on it, because the real client registers
     /// no field-change callback anywhere near this offset.
     action_bar_toggles: Option<u8>,
@@ -347,7 +347,7 @@ fn load_languages(mut commands: Commands, assets: Option<Res<benilla_assets::Wor
 }
 
 /// The languages this character **knows**, folded the reference's way and fed to the VM for
-/// `GetNumLaguages`/`GetLanguageByIndex` (wow-re `chat-language-scramble.md` §8, C6):
+/// `GetNumLaguages`/`GetLanguageByIndex`:
 ///
 /// 1. `0x4b25b0` runs on spell add and stores `[languageId] = spellId` for a spell whose
 ///    `Effect_1 == 39` — so the table holds only languages *this character's known spells*
@@ -558,8 +558,8 @@ fn load_exhaustion_rows(
     }
 }
 
-/// Melee swing → the `UNIT_COMBAT` vocabulary (§5-verified shape, wow-re
-/// `unit-combat-event-law.md`): the action comes from the melee wrapper's per-victim-state table
+/// Melee swing → the `UNIT_COMBAT` vocabulary: the action comes from the melee wrapper's
+/// per-victim-state table
 /// (`0x4946d0` → `actionTable@0x83de28`), the descriptor from HitInfo bits **keyed on the
 /// amount's sign** — `amount > 0` picks among CRITICAL `0x80` / GLANCING `0x4000` / CRUSHING
 /// `0x8000`, `amount ≤ 0` among ABSORB `0x20` / BLOCK `0x800` / RESIST `0x40`, else `""`.
@@ -601,7 +601,7 @@ fn melee_feedback(hit_info: u32, victim_state: u32, damage: u32) -> (&'static st
 /// channel for. Every victim qualifies (no Gate A, no source class on the portrait path); token
 /// resolution happens in [`fire_unit_combat`], so a swing on an un-tokened bystander simply
 /// fires nothing. The center combat text does NOT ride here — the client fires it synchronously
-/// at packet parse (§5-corrected, decision 0580; the producer lives in `net/apply/combat.rs`).
+/// at packet parse (decision 0580; the producer lives in `net/apply/combat.rs`).
 fn melee_unit_combat(
     mut impacts: MessageReader<crate::creature_anim::SwingImpact>,
     mut out: MessageWriter<UnitCombatFeedback>,
@@ -904,8 +904,8 @@ fn reach_tokens() -> impl Iterator<Item = &'static str> {
 }
 
 /// The squared distance between two world positions, in the binary's own accumulation shape: `f32`
-/// inputs widened to `f64`, summed `(dz² + dx²) + dy²` (wow-re's transcription of
-/// `0x48a26f..0x48a27d`, the kernel `caninspect_dist2` and `check_interact_dist2` share).
+/// inputs widened to `f64`, summed `(dz² + dx²) + dy²` (`0x48a26f..0x48a27d`, the kernel
+/// `CanInspect 0x48a1b0` and `CheckInteractDistance 0x48ba00` share).
 ///
 /// Our axes are Bevy's rather than the client's WoW triple. d² is invariant under that rotation, so
 /// the only conceivable divergence from the binary is a last-ulp one — which can only change the
@@ -922,9 +922,8 @@ fn dist_sq(q: Vec3, p: Vec3) -> f64 {
 /// `PLAYER_CONTROL_LOST` / `PLAYER_CONTROL_GAINED` — `SMSG_CLIENT_CONTROL_UPDATE` naming the
 /// local player reaches `0x4958e0`, which writes the player-control flag and, **on a change**,
 /// fires LOST when the byte is zero and GAINED when it is not; the boot init is "in control"
-/// (wow-re `farsight-and-client-control.md` §5, `incoming-trade-request-law.md`). The flag is
-/// [`crate::player::Player::control_lost`], which `player::wire_in` writes from that packet; this
-/// fires the edge, and a fresh VM's memo is the boot value.
+/// (`0x48f626`). The flag is [`crate::player::Player::control_lost`], which `player::wire_in`
+/// writes from that packet; this fires the edge, and a fresh VM's memo is the boot value.
 fn feed_player_control(
     script: Option<NonSendMut<UiScript>>,
     player: Option<Res<crate::player::Player>>,
@@ -948,9 +947,9 @@ fn feed_player_control(
 }
 
 /// `PLAYER_FARSIGHT_FOCUS_CHANGED` — the `PLAYER_FARSIGHT` field-change callback (`0x5de0d0`)
-/// fires it on both of its legs, whether or not the new guid resolves to a streamed object
-/// (wow-re `farsight-and-client-control.md` §2). The edge is the FIELD's, so this diffs the
-/// descriptor value the camera's `publish_view_subject` reads, never the resolved pose.
+/// fires it on both of its legs, whether or not the new guid resolves to a streamed object.
+/// The edge is the FIELD's, so this diffs the descriptor value the camera's `publish_view_subject`
+/// reads, never the resolved pose.
 fn feed_farsight_focus(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -986,8 +985,8 @@ fn feed_farsight_focus(
 ///   the published tag, "out of range" after 1564 flipped the absent default. Both are the same
 ///   defect: the map was never asked about mobs at all.
 ///
-/// That the *client* checks those two is INFERRED (the 348-byte `0x48a1b0`'s non-math part isn't in
-/// the RE record), but a wrong guess can only cost a request the server would drop.
+/// That the *client* checks those two is inferred (the 348-byte `0x48a1b0`'s non-math part is
+/// undecoded), but a wrong guess can only cost a request the server would drop.
 ///
 /// Ungated, unlike every other feed here (1439): the numbers change whenever anything moves, so a
 /// change gate would fire every frame anyway and cost a comparison for nothing. Nothing keys an
@@ -1080,10 +1079,9 @@ pub(crate) fn snapshot(
         exists: true,
         // **This function IS the reference's `0x468460` having succeeded.** It is only ever called
         // with a live `ObjectStore`, so every snapshot it builds is a unit the object manager holds
-        // — which is the whole of `UnitIsVisible` (wow-re
-        // `ui/scratch/unitisvisible-object-presence.md`). Set here rather than at the call sites so
-        // a future feed cannot forget it: the roster-only legs build a `UnitState` literally and
-        // get `false` from `Default`, which is the correct out-of-range answer.
+        // — which is the whole of `UnitIsVisible 0x516030`. Set here rather than at the call
+        // sites so a future feed cannot forget it: the roster-only legs build a `UnitState`
+        // literally and get `false` from `Default`, which is the correct out-of-range answer.
         has_object: true,
         name,
         // The UI-facing health/power getters, not the raw fields (decision 1022): a unit carrying
@@ -1148,7 +1146,7 @@ pub(crate) fn snapshot(
         pvp: store.0.unit_flags() & 0x1000 != 0,
         skinnable: store.0.unit_flags() & 0x0400_0000 != 0,
         // `UnitPlayerControlled` — the same word, bit 3 (`UNIT_FLAG_PVP_ATTACKABLE 0x8`, which is
-        // behaviourally "player-controlled"; `target::relations` already carved it for the duel
+        // behaviourally "player-controlled"; `target::relations` already reads it for the duel
         // leg of the selection ring). Wider than `is_player` above: a pet or a charmed creature
         // sets it without being a player.
         player_controlled: store.0.unit_flags() & 0x8 != 0,
@@ -1165,8 +1163,8 @@ pub(crate) fn snapshot(
             .or_else(|| store.0.unit_created_by())
             .unwrap_or(0),
         // `UnitAffectingCombat 0x517e10` — the SAME `UNIT_FIELD_FLAGS` word, bit 19
-        // (`shr ecx,0x13; test cl,1`). One flag for every token: wow-re's whole-image census of
-        // that idiom found the local-player readers reading this identical bit, so there is no
+        // (`shr ecx,0x13; test cl,1`). One flag for every token: a whole-image census of
+        // that idiom finds the local-player readers reading this identical bit, so there is no
         // player-specific combat latch to model beside it.
         in_combat: store.0.unit_flags() & crate::player::UNIT_FLAG_IN_COMBAT != 0,
         // Free-for-all PvP (decision 0646 §1): `PLAYER_FLAGS` bit 7, the same field the ghost
@@ -1295,9 +1293,8 @@ fn drain_worn_display_toggles(script: Option<NonSendMut<UiScript>>, commands: Re
     }
 }
 
-/// Drain the `SetActionBarToggles` posts into `CMSG_SET_ACTIONBAR_TOGGLES` (wow-re
-/// `system/ui/scratch/action-bar-toggles.md` §3) — the Options window's four extra-bar rows, and
-/// the only callers there are.
+/// Drain the `SetActionBarToggles` posts into `CMSG_SET_ACTIONBAR_TOGGLES` (sent at `0x4e771d`)
+/// — the Options window's four extra-bar rows, and the only callers there are.
 ///
 /// **Every queued call becomes a packet**, with no did-it-change gate and no coalescing: the real
 /// binding has neither (unlike `ShowHelm`/`ShowCloak`, which send only on a difference), so two
@@ -1321,12 +1318,12 @@ fn drain_action_bar_toggles(script: Option<NonSendMut<UiScript>>, commands: Res<
 const PLAYER_FLAGS_PVP_DESIRED: u32 = 0x200;
 
 /// `PLAYER_FLAGS_RESTING` — inside a rest area now (vmangos `Player.h:320`); the bit
-/// `IsResting 0x516ea0` tests (`shr 5; test 1` — wow-re rested-xp-bindings.md §3).
+/// `IsResting 0x516ea0` tests (`shr 5; test 1`).
 const PLAYER_FLAGS_RESTING: u32 = 0x20;
 
 /// `PLAYER_FLAGS` bit 12 / bit 13 — the two **play-time** regimes an anti-addiction realm puts an
 /// account into, read by `PartialPlayTime` (`0x48eb70`) and `NoPlayTime` (`0x48ebe0`). Decision
-/// 1746 carved both, and settled that `0x1000` is PARTIAL_PLAY_TIME on 5875 rather than the
+/// 1746 decoded both, and settled that `0x1000` is PARTIAL_PLAY_TIME on 5875 rather than the
 /// pre-1.6.1 `CAN_SELF_RESURRECT` it had been read as. Stock `PlayerFrame_UpdatePlaytime` tests
 /// them at LOAD, so their absence is a raise on the first frame, not a cosmetic gap.
 const PLAYER_FLAGS_PARTIAL_PLAY_TIME: u32 = 0x1000;
@@ -1356,8 +1353,8 @@ fn pvp_announcement(was: Option<bool>, now: bool) -> Option<(&'static str, &'sta
     })
 }
 
-/// The rest-state chat line (decision 1098; wow-re rested-xp-bindings.md §§6-10, byte-verified
-/// §5): the rest-state BYTE watcher `0x5de4e0` messages only on a real old≠new transition (the
+/// The rest-state chat line (decision 1098): the rest-state BYTE watcher `0x5de4e0` messages
+/// only on a real old≠new transition (the
 /// dispatcher's `rep cmpsb` mirror diff at `0x4655bb`), through the hard-coded 3×2 pair table
 /// `0x80af50` — state 1 → `ERR_EXHAUSTION_RESTED`, state 2 → `ERR_EXHAUSTION_NORMAL`, state 0 →
 /// the table's deliberate no-message sentinel (id 0x1d1), states ≥ 3 gated off before the table
@@ -1424,7 +1421,7 @@ fn creature_type_word(t: u32) -> Option<&'static str> {
         8 => "Critter",
         9 => "Mechanical",
         // The shipped `CreatureType.dbc` is **1..11 dense**, not 1..9 — this table stopped two
-        // rows early. 11 is reachable and wow-re's own nameplate filter tests for it
+        // rows early. 11 is reachable and the reference's own nameplate filter tests for it
         // (`0x605570 == 0xb`).
         11 => "Totem",
         // 10 is "Not specified" in the DBC. Deliberately still None: this word is the tooltip's
@@ -1462,8 +1459,8 @@ pub(crate) fn fire_transitions(
     if changed(|u| u64::from(u.power_type)) {
         script.fire_event("UNIT_DISPLAYPOWER", vec![tok()]);
     }
-    // `UNIT_FLAGS` (id 40) — the per-field watch bridge (wow-re `unit-field-event-bridge.md`,
-    // VERIFIED): `0x51bbb0` registers one watch per named unit field, the notifier `0x465570`
+    // `UNIT_FLAGS` (id 40) — the per-field watch bridge:
+    // `0x51bbb0` registers one watch per named unit field, the notifier `0x465570`
     // fires `0x51bd50` → `0x515e50` on any change of the dword's bytes, once per token mapping to
     // the unit, `arg1` the token. The create leg runs no notify pass, so a unit's FIRST snapshot
     // is not a transition here — unlike the fields above, whose first-appearance fire is this
@@ -1492,13 +1489,12 @@ pub(crate) fn fire_transitions(
     //    That is why the trigger is the raw dword (`UnitState::player_flags`) and not a bool.
     // 2. **Above the local-GUID gate** at `0x5eea93` (the ghost/resting/PvP/play-time arms below it
     //    are self-only; this one is not) — and the trampoline `0x5e2850` resolves the changed
-    //    object by GUID under TYPEMASK_PLAYER, "any player, not the local one" (wow-re
-    //    `object-layer/ledger.tsv`). So a *stranger's* flags fire it, which is the whole reason the
-    //    stock target frame can listen.
+    //    object by GUID under TYPEMASK_PLAYER, "any player, not the local one". So a *stranger's*
+    //    flags fire it, which is the whole reason the stock target frame can listen.
     // 3. **Once per unit token naming that GUID, `arg1` = the token, no `arg2`** — `0x515e50` walks
-    //    `0x515c50`'s token array and calls `0x703f50(id, "%s", token)` per entry (wow-re
-    //    `ui/scratch/unit-field-event-bridge.md` §2.2). That is exactly this function's own shape,
-    //    which is why the arm belongs here and not beside the self-only feeds below.
+    //    `0x515c50`'s token array and calls `0x703f50(id, "%s", token)` per entry. That is exactly
+    //    this function's own shape, which is why the arm belongs here and not beside the self-only
+    //    feeds below.
     //
     // **"Fires for any player" is not "reaches Lua", and the difference is free here.**
     // `0x515e63 test eax,eax / 0x515e6a jle 0x515e8a` skips the fan-out loop entirely on a zero
@@ -1506,7 +1502,7 @@ pub(crate) fn fire_transitions(
     // announces **nothing** to the VM — the handler still runs, and its helm/cloak arms above the
     // gate still repaint them, but no event is signalled. This feed gets that for nothing by
     // construction: it is only ever called *per token*, so a tokenless player is never reached
-    // (wow-re `object-layer/scratch/player-flags-delta-arms.md`, the 2078 correction round).
+    // (decision 2078).
     //
     // Off the field edge for the same reason `UNIT_FLAGS` is: this is a mirror-diff watcher,
     // and a unit's first snapshot is its CREATE, which runs no notify pass (1098 §4).
@@ -1514,10 +1510,10 @@ pub(crate) fn fire_transitions(
     // **The sole 1.12 consumer is the target frame's PARTY-LEADER icon, not an AFK/DND badge** —
     // `TargetFrame.lua:88-95` re-runs the `UnitIsPartyLeader("target")` show/hide, and bit `0x1` is
     // that predicate's descriptor leg. Nothing in 1.12 FrameXML draws an AFK or DND badge on a unit
-    // frame, and build 5875 has no `UnitIsAFK`/`UnitIsDND` binding at all (wow-re
-    // `ui/scratch/unit-predicate-return-shape.md` §5, a zero-hit whole-image byte census); the
-    // `<AFK>`/`<DND>` the era shows are the chat line's `arg6` flag. This comment is here because
-    // the gap list said "the AFK/DND badge" for months and sent the first look at the wrong window.
+    // frame, and build 5875 has no `UnitIsAFK`/`UnitIsDND` binding at all (a zero-hit whole-image
+    // byte census); the `<AFK>`/`<DND>` the era shows are the chat line's `arg6` flag. This comment
+    // is here because the gap list said "the AFK/DND badge" for months and sent the first look at
+    // the wrong window.
     if edges.moved(cur.guid, benilla_protocol::field::FIELD_PLAYER_FLAGS) {
         script.fire_event("PLAYER_FLAGS_CHANGED", vec![tok()]);
     }
@@ -1582,8 +1578,8 @@ pub(crate) fn fire_transitions(
     //
     // **And on the TAPPED bit, which is not a faction field and fires this event anyway.** The
     // reference's `UNIT_DYNAMIC_FLAGS` watcher tests bit `0x4` and dispatches event id **29** —
-    // `UNIT_FACTION` — at `0x6005a1 test al,4` -> `0x6005b0 mov edx,0x1d` -> `0x515e50` (wow-re
-    // `ui/scratch/tapped-bits-and-unit-faction.md`, controlled across all 37 fire sites).
+    // `UNIT_FACTION` — at `0x6005a1 test al,4` -> `0x6005b0 mov edx,0x1d` -> `0x515e50`
+    // (controlled across all 37 fire sites).
     //
     // This line is the whole reason `UnitIsTapped` is worth publishing. Without it both verbs
     // answer CORRECTLY and no frame ever repaints: pfUI's grey-bar branch runs inside
@@ -1903,10 +1899,10 @@ fn feed_units(
     }
 
     // `"npc"` — the unit the player is interacting with, resolved through the SAME interaction guid
-    // the real client's token reads (`CGGameUI`'s `[0xb4e2d0]`, what `CGGameUI::SetInteractNPC`
-    // writes; wow-re confirms the guild registrar's own opener is one of that function's fourteen
-    // callers). `crate::ui_session::InteractNpc` is benilla's model of exactly that cell, so the
-    // token and the portrait booth cannot disagree about who "npc" is.
+    // the real client's token reads (`CGGameUI`'s `[0xb4e2d0]`, what
+    // `CGGameUI::SetInteractNPC 0x4930d0` writes; the guild registrar's own opener is one of that
+    // function's fourteen callers). `crate::ui_session::InteractNpc` is benilla's model of exactly
+    // that cell, so the token and the portrait booth cannot disagree about who "npc" is.
     //
     // **It had no feed at all until decision 1678**, and the gap was invisible because nothing
     // called it: `TaxiFrame.xml` and `TradeFrame.xml` both take the NPC's name from an event
@@ -2018,14 +2014,13 @@ fn feed_units(
     // ```
     //
     // `0x5eeaf2` sits INSIDE the `0x20` arm (`0x5eeaf2 < 0x5eeafc`, the `je`'s target), so
-    // **PLAYER_UPDATE_RESTING fires only on the resting bit's own edge** — not, as wow-re's
-    // `rested-xp-bindings.md` §5 and its `0x5ee990` ledger row both say, "on every flags change,
-    // not only the resting bit". That claim is what this feed was built against, and it made every
-    // helm toggle, every leadership pass and every AFK flip announce a resting change to the UI.
-    // The note's "argless unconditionally" is true only of the *direction*: the inner
-    // `0x5eeae4 je` skips the tutorial popup, never the fire, so both edges of the bit fire it.
-    // A correction round is dispatched into wow-re; the bytes above are read straight out of
-    // `WoW.exe` (file offset 0x1eead0, PE imagebase 0x400000, .text RVA 0x1000 → raw 0x1000).
+    // **PLAYER_UPDATE_RESTING fires only on the resting bit's own edge** — not "on every flags
+    // change, not only the resting bit", the reading of `0x5ee990` this feed was built against,
+    // which made every helm toggle, every leadership pass and every AFK flip announce a resting
+    // change to the UI. The same reading's "argless unconditionally" is true only of the
+    // *direction*: the inner `0x5eeae4 je` skips the tutorial popup, never the fire, so both edges
+    // of the bit fire it. The bytes above are read straight out of `WoW.exe` (file offset
+    // 0x1eead0, PE imagebase 0x400000, .text RVA 0x1000 → raw 0x1000).
     //
     // `UPDATE_EXHAUSTION` is unchanged and was already right: two separate watchers, `0x5de4e0` on
     // the rest-state byte and `0x5de4b0` on the pool field, neither of them this handler.
@@ -2137,17 +2132,18 @@ fn feed_units(
     }
 
     // The action-bar toggle feed: `PLAYER_FIELD_BYTES` byte 2 — which of the four extra bars the
-    // player has switched on (wow-re `system/ui/scratch/action-bar-toggles.md`). PRIVATE, like the
-    // combo byte one address down (`+0x1029` vs `+0x102a`), and pushed on the EDGE.
+    // player has switched on. PRIVATE, like the combo byte one address down (`+0x1029` vs
+    // `+0x102a`), and pushed on the EDGE.
     //
     // **This push is the ONLY thing that moves the VM's copy**, and that is the mechanism rather
-    // than our simplification: no instruction in the real client writes this cell (§4.1 — the one
-    // `+0x102a` access image-wide is `GetActionBarToggles`' read), so `SetActionBarToggles` posts
-    // the byte and leaves the descriptor alone until the server's UPDATE_OBJECT echoes it. Nothing
-    // is notified when it lands either (§4.2: all 49 field-change registrations at `0x468070` were
-    // enumerated; none sits at an offset ≥ `0x1000`), so there is **no event to fire here** — the
-    // reference reads the binding exactly once, in `UIParent.lua`'s `PLAYER_ENTERING_WORLD`
-    // handler, and keeps `SHOW_MULTI_ACTIONBAR_1..4` as its optimistic copy in between.
+    // than our simplification: no instruction in the real client writes this cell (the one
+    // `+0x102a` access image-wide is `GetActionBarToggles`' read at `0x4e768c`), so
+    // `SetActionBarToggles` posts the byte and leaves the descriptor alone until the server's
+    // UPDATE_OBJECT echoes it. Nothing is notified when it lands either (all 49 field-change
+    // registrations at `0x468070` were enumerated; none sits at an offset ≥ `0x1000`), so there is
+    // **no event to fire here** — the reference reads the binding exactly once, in `UIParent.lua`'s
+    // `PLAYER_ENTERING_WORLD` handler, and keeps `SHOW_MULTI_ACTIONBAR_1..4` as its optimistic copy
+    // in between.
     //
     // Which is why this sits ABOVE the fire, on 1087's precedent for the XP/rest pushes: the
     // handler that reads `GetActionBarToggles()` runs synchronously inside `fire_event`, so a push
@@ -2155,7 +2151,7 @@ fn feed_units(
     //
     // `unwrap_or(0)` is faithful, not a shrug: with no local player the reference's chain fails
     // soft and the getter returns four `nil`s, which is exactly what a zero byte returns — "not in
-    // world" and "byte == 0" share the branch and are indistinguishable to Lua (§5).
+    // world" and "byte == 0" share the branch (`0x4e7684`) and are indistinguishable to Lua.
     if let Some((store, _)) = self_q.iter().next() {
         let toggles = store.0.player_action_bar_toggles().unwrap_or(0);
         if memo.action_bar_toggles != Some(toggles) {
@@ -2347,7 +2343,7 @@ fn feed_units(
 ///
 /// The two halves diverge because the client's watches do. Event 202 is registered at `0x5dd9d9`
 /// as a **one-byte field-change watch on `+0x1029`** — the count — and `PLAYER_FIELD_COMBO_TARGET`
-/// carries no watch of its own (§5-VERIFIED, decision 0879). So a re-bank onto a different unit at
+/// carries no watch of its own (decision 0879). So a re-bank onto a different unit at
 /// an unchanged count moves the *value* `GetComboPoints` reads without announcing itself, and the
 /// UI hears about it through `PLAYER_TARGET_CHANGED` instead. The watch has no value test, so the
 /// drop back to zero fires like any other change — the edge that takes the dots down.
@@ -2452,9 +2448,9 @@ mod tests {
     ///
     /// The reference dispatches event id **29** — `UNIT_FACTION`, not a tapped-specific event —
     /// from its `UNIT_DYNAMIC_FLAGS` watcher's bit-`0x4` arm (`0x6005a1 test al,4` ->
-    /// `0x6005b0 mov edx,0x1d` -> `0x515e50`; wow-re `ui/scratch/tapped-bits-and-unit-faction.md`,
-    /// controlled across all 37 fire sites image-wide). Reusing the faction event for a
-    /// non-faction field is not something anyone would invent, which is exactly why it is pinned.
+    /// `0x6005b0 mov edx,0x1d` -> `0x515e50`, controlled across all 37 fire sites image-wide).
+    /// Reusing the faction event for a non-faction field is not something anyone would invent,
+    /// which is exactly why it is pinned.
     ///
     /// Bit `0x8` has **no** arm, in the reference or here — proven there by enumerating all 122
     /// instructions and 12 branches of the watcher. The negative half is asserted too, because
@@ -2805,9 +2801,9 @@ mod tests {
     ///
     /// `0x5ee990`'s local-GUID gate at `0x5eea93` divides it: `PLAYER_FLAGS_CHANGED` above (any
     /// player), and below it three arms that each carry their own `test` against the XOR-diff.
-    /// benilla fired `PLAYER_UPDATE_RESTING` on *any* `PLAYER_FLAGS` delta, because wow-re's
-    /// `rested-xp-bindings.md` §5 says it does; `0x5eead0 f6 45 fc 20 / 74 26` says otherwise —
-    /// the `je`'s target is `0x5eeafc` and the fire is at `0x5eeaf2`, inside the arm.
+    /// benilla fired `PLAYER_UPDATE_RESTING` on *any* `PLAYER_FLAGS` delta;
+    /// `0x5eead0 f6 45 fc 20 / 74 26` says otherwise — the `je`'s target is `0x5eeafc` and the
+    /// fire is at `0x5eeaf2`, inside the arm.
     #[test]
     fn the_self_flag_events_each_fire_on_their_own_bits() {
         use bevy::ecs::system::RunSystemOnce;
@@ -3359,7 +3355,7 @@ mod tests {
         }
     }
 
-    /// The rest-state chat law (decision 1098, wow-re §§6-10): a message needs a real byte
+    /// The rest-state chat law (decision 1098; the watcher `0x5de4e0`): a message needs a real byte
     /// TRANSITION, and only states 1/2 speak — state 0 is the pair table's no-message sentinel,
     /// the beta tiers (≥3) are gated off before the table, and a re-send of the same byte is
     /// swallowed by the dispatcher's mirror diff.

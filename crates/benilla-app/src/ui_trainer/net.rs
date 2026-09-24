@@ -111,7 +111,7 @@ fn trainer_list(
 }
 
 /// A trainer taught a service — confirmation only, and the reference **registers no handler for
-/// this opcode** (wow-re `re/net/opcode-handlers.tsv`: 0x1B3 is absent from the 387 it handles).
+/// this opcode** (0x1B3 is absent from the 387 opcodes registered via `0x5ab650`/`0x537a60`).
 /// The spell itself lands via `SMSG_LEARNED_SPELL`, and that packet is one of the twelve triggers
 /// of the state re-evaluator ([`super::reeval`], decision 2333), which repaints the bought row
 /// green→gray and unlocks the next rank from the player's own book. Until 2333 benilla answered

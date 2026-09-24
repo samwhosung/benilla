@@ -5,7 +5,7 @@
 //! - [`seed_world_map_catalog`] (at the world-entry edge, before any interface file runs — 2240):
 //!   builds the static **catalog** from `WorldMapArea` × `AreaTable` × `WorldMapContinent` ×
 //!   `Map` × the `.zmp` bitmaps and pushes it into the engine. Every ordering/naming rule is the
-//!   wow-re-verified one (Q1/Q3 verdicts, 2026-07-07): continents in WorldMapArea **file
+//!   reference's own: continents in WorldMapArea **file
 //!   order** (Kalimdor, then EK — the `0x4a5d00` builder's walk), displayed under their
 //!   `Map.dbc` localized names ("Eastern Kingdoms", not the art folder's "Azeroth"); zones
 //!   sorted case-insensitively by AreaTable localized name (the `0x4a6390` comparator's
@@ -143,7 +143,7 @@ fn map_row_view(
                     o.hit_rect_right,
                 ),
                 // The zone-level hover's label inside that rect: the FIRST area slot's AreaTable
-                // name — `0x4a7fa0` reads `+0x8` only (wow-re 15b2a8ea §1d); a slot that resolves
+                // name — `0x4a7fa0` reads `+0x8` only; a slot that resolves
                 // to no row makes the overlay invisible to the hover, never to the draw.
                 area_name: areas.name(o.area_id[0]).map(str::to_string),
             })
@@ -177,7 +177,7 @@ pub(crate) fn build_catalog(
     };
 
     // Continents: the areaId==0 rows in WorldMapArea FILE order — the 0x4a5d00 builder's walk,
-    // which defines the Lua continent index (Kalimdor, then EK in 5875; wow-re Q1(d) verdict).
+    // which defines the Lua continent index (Kalimdor, then EK in 5875).
     let cont_rows: Vec<(u32, &WorldMapArea)> = wma.iter().filter(|(_, a)| a.area_id == 0).collect();
 
     let mut entries = Vec::with_capacity(cont_rows.len());
@@ -223,7 +223,7 @@ pub(crate) fn build_catalog(
 
         // The continent's area bitmap, remapped from raw AreaTable ids to 1-based zone indices —
         // the client's load-time remap (one-hop parent rollup, then the (mapId, areaId) match;
-        // wow-re Q1(b)), fused with its zone-index resolution since our engine consumes indices.
+        // `0x4a6070`), fused with its zone-index resolution since our engine consumes indices.
         let zone_grid: Vec<u16> = match load_zone_map(&mut *chain, &cont.name) {
             Ok(grid) => grid
                 .iter()
@@ -250,7 +250,7 @@ pub(crate) fn build_catalog(
 
         views.push(WorldMapContinentView {
             // Display name = Map.dbc's localized MapName ("Eastern Kingdoms"), never the art
-            // folder (wow-re Q3(a)); the folder stays the map_file.
+            // folder (`0x4a65a0`); the folder stays the map_file.
             name: maps
                 .0
                 .name(cont.map_id)
@@ -279,8 +279,7 @@ pub(crate) fn build_catalog(
         });
     }
 
-    // ── The THIRD list: the orphans — the instance maps (wow-re
-    // `system/ui/scratch/worldmap-direct-area-selection.md` §2). `0x4a5d00` fills a container
+    // ── The THIRD list: the orphans — the instance maps. `0x4a5d00` fills a container
     // beside the continents with every row that has `areaID != 0` and whose mapID matches **no**
     // continent record's mapID, in `WorldMapArea.dbc` **file order with no sort** — the passes at
     // `0x4a6130` (count) and `0x4a61c9` (fill), whose predicate is the exact complement of the
@@ -398,7 +397,7 @@ fn build_catalog_from_world(world: &World) -> Option<(Vec<WorldMapContinentView>
 /// branches on.
 ///
 /// **The direct-area state answers [`MapLevel::Zone`], and that is the reference's own law rather
-/// than an approximation** (wow-re `worldmap-direct-area-selection.md` §6). Both gates that read
+/// than an approximation**. Both gates that read
 /// this enum test "zone **or** orphan": the AreaPOI level flag falls into the zone-level
 /// `test [rec+0x20],0x4` at `-2` (`0x4a79de cmp eax,-2; jne`), and `GetMapLandmarkInfo`'s
 /// `textureIndex` substitution is reached when the zone cell is `-1` **and** the continent is `-2`
@@ -492,8 +491,7 @@ fn is_degenerate(uv: (f32, f32)) -> bool {
     uv.0.abs() < EPS && uv.1.abs() < EPS
 }
 
-/// The three gates `0x4a67a0`'s AreaPOI walk applies, in the reference's order (wow-re
-/// `system/ui/scratch/gossip-poi-marker.md` §7 + §8.2).
+/// The three gates `0x4a67a0`'s AreaPOI walk applies, in the reference's order.
 ///
 /// 1. **The level flag** (`0x4a79b0`'s fall-through chain, `0x4a79cb`–`0x4a7a05`): a row must
 ///    carry `0x04` to show at zone level, `0x08` at continent level, and **both `0x10` and
@@ -760,9 +758,8 @@ fn feed_world_map(
     // each continent record's `+0x00`, then walks that record's sorted child-zone array for the
     // zone whose WMA areaID equals the player's current-area global — and **"no zone match ⇒
     // `SetMap(continent, −1)`"**, i.e. the CONTINENT map, with only "no continent match" falling
-    // through to the orphan list and then `SetMap(−1, −1)` = the world view (wow-re
-    // `system/ui/scratch/geometry.md` §"Worldmap data model"; `GetCurrentMapZone 0x4a7f00` is
-    // `DAT_00845070 + 1`, so that −1 reads back to Lua as **0**).
+    // through to the orphan list and then `SetMap(−1, −1)` = the world view
+    // (`GetCurrentMapZone 0x4a7f00` is `DAT_00845070 + 1`, so that −1 reads back to Lua as **0**).
     //
     // We used to resolve both or neither, so a zone the catalog has no row for — and, before the
     // area feed answers, a zone we simply do not know yet — slammed the selection to the WORLD
@@ -870,7 +867,7 @@ fn feed_world_map(
         // Then the guard-directions marker (`crate::poi_marker`), appended last exactly as
         // `0x4a69c7` does and — like it — exempt from every gate above: no level flag, no
         // exploration bit, no world state, its `Icon` verbatim with no level-15 substitution
-        // (wow-re `gossip-poi-marker.md` §8, the `+0x10 == 1` element). Only the same
+        // (the `+0x10 == 1` element). Only the same
         // non-degenerate projection test applies.
         if let Some(poi) = poi_marker.on_map(map.0) {
             if let Some(uv) = project(poi.continent_id, poi.pos[0], poi.pos[1]) {
@@ -963,7 +960,7 @@ fn feed_world_map(
 ///
 /// **Zone and continent sheets only.** At the *world* level (both continents on one sheet) the
 /// client's own UV→world law `0x4a7100` is not the inverse of its world→UV law — a confirmed,
-/// reproduced anomaly (wow-re Q2 verdict; see [`map_proj::world_click_world`]) — so a click there
+/// reproduced anomaly (see [`map_proj::world_click_world`]) — so a click there
 /// would land somewhere real but wrong by ~1.33× the sheet offset. Rather than invent a corrected
 /// inverse the reference doesn't have, the jump declines and says to zoom in first.
 ///
@@ -1090,7 +1087,7 @@ mod tests {
         benilla_formats::AreaTableCatalog::from_rows(Vec::new())
     }
 
-    /// The level-flag chain, in the shape §7 says it has: `0x04` for zone, `0x08` for continent,
+    /// The level-flag chain, in the shape `0x4a79b0` has: `0x04` for zone, `0x08` for continent,
     /// and world demanding **both** `0x10` and `0x08` because the tests fall through rather than
     /// switch. A row with `0x10` alone is invisible everywhere — the case the shipped data can't
     /// exhibit (no 5875 row sets `0x10` without `0x08`) and the one a switch would get wrong.
@@ -1426,7 +1423,7 @@ mod player_zone_tests {
 
     /// **The two halves fail separately** — `SetMapToCurrentZone`'s resolver `0x4a6650`:
     /// "no zone match ⇒ `SetMap(continent, −1)`", and only "no continent match" reaches the world
-    /// view (wow-re `system/ui/scratch/geometry.md`). Resolving both-or-neither sent a player
+    /// view. Resolving both-or-neither sent a player
     /// whose zone the catalog cannot name — and, for the frames before the area feed answers,
     /// EVERY player — to the world level, where `GetPlayerMapPosition` answers a world-SHEET uv
     /// that every zone-uv consumer silently mis-scales.
@@ -1523,9 +1520,8 @@ mod player_zone_tests {
 
     /// **The engine selects the player's zone itself, on the first world-enter** — the side call
     /// `0x494780` makes to `0x4a6650` when the cached zone id was 0. We transcribed that
-    /// function's event election (`crate::area`) and dropped this half; wow-re carved it as
-    /// `system/ui/scratch/worldmap-selection-autosync.md` (`0x4947ac`, guarded by `sete al` on
-    /// `[0xb4e314] == 0`, with the new zone committed *before* the call).
+    /// function's event election (`crate::area`) and dropped this half (`0x4947ac`, guarded by
+    /// `sete al` on `[0xb4e314] == 0`, with the new zone committed *before* the call).
     ///
     /// Dropping it is why Questie's quest arrow pointed ~100 yards off the turn-in while the
     /// reference was exact: with no zone selected, `GetPlayerMapPosition` answers a world-SHEET

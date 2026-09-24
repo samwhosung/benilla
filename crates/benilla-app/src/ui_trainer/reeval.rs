@@ -5,8 +5,7 @@
 //! spell learned or removed, a talent, the pet's spellbook, and the two async spell-data callbacks
 //! — and each of them runs `0x4d7d40`, which **discards** every service's wire state and
 //! re-derives it from the player's own spellbook, skills, level and pet, then recounts the groups
-//! and fires `TRAINER_UPDATE` (wow-re `system/ui/scratch/trainer-service-suppression.md` §5,
-//! byte-verified; the twelve callers are listed there). It is *not* called by the builder or the
+//! and fires `TRAINER_UPDATE`. It is *not* called by the builder or the
 //! packet handler, so a freshly opened window shows the server's bytes verbatim until the first
 //! trigger.
 //!
@@ -19,17 +18,16 @@
 //! **What it deliberately reproduces:** the skill leg's not-found exit jumps *past* the state
 //! write (`0x4d8082` → `0x4d8123`), so a service whose required skill line the player does not
 //! hold at all comes out **green** — the opposite of the server's red. That is the 1.12 client's
-//! own behaviour (§5.1), pinned by `a_skill_line_the_player_lacks_entirely_reads_green`, and the
+//! own behaviour, pinned by `a_skill_line_the_player_lacks_entirely_reads_green`, and the
 //! reason a fresh Blacksmithing recipe list can flip from red to green under a level-up without
 //! the player touching anything.
 //!
-//! **The whole law, byte-verified three ways** (wow-re `system/ui/scratch/trainer-reeval-law.md`,
-//! a §5 round of five workers plus the orchestrator's own read; decision 2336 folds it in):
+//! **The whole law** (decision 2336):
 //! the admission gate, the two `trainerType == 1` writes of state 3, the pet-spell legs as early
 //! exits, the required-ability leg's pet variant, and the twelve triggers named to their
 //! handlers. What is not built is the one thing no vmangos server reaches: a type-1 (mount)
 //! trainer's layout, where a row re-derived to state 2 also has its group key severed
-//! (`0x4d82c1`) — noted, not transcribed, until that layout exists (§7.5).
+//! (`0x4d82c1`) — noted, not transcribed, until that layout exists.
 
 use std::collections::BTreeSet;
 
@@ -40,7 +38,7 @@ use benilla_protocol::messages::TrainerSpell;
 /// The `trainerType` the reference gates its state-3 writes on (`ds:0xb73a08 == 1`).
 const TRAINER_TYPE_STATE_THREE: u32 = 1;
 /// The state the type-1 required-ability leg writes instead of RED (`0x4d83a4`): a row no filter
-/// can ever show (`SetTrainerServiceTypeFilter` sets bits 0/1/2 only — §5.2).
+/// can ever show (`SetTrainerServiceTypeFilter` sets bits 0/1/2 only, `0x4da390`).
 const HIDDEN: u8 = 3;
 
 /// One `PLAYER_SKILL_INFO` slot as the re-evaluator reads it: the line id, the step word
@@ -80,8 +78,8 @@ impl PlayerView {
     }
 }
 
-/// `IsSpellKnown(unit, id) || KnownHigherRank(unit, id)` — `0x60c740` OR `0x60c8d0`
-/// (wow-re `trainer-requirement.md`), against whichever unit's book `known` is.
+/// `IsSpellKnown(unit, id) || KnownHigherRank(unit, id)` — `0x60c740` OR `0x60c8d0`, against
+/// whichever unit's book `known` is.
 fn known_or_higher(id: u32, known: &BTreeSet<u32>, skill_lines: &SkillLineCatalog) -> bool {
     known.contains(&id) || skill_lines.higher_rank_known(id, known)
 }
@@ -158,7 +156,7 @@ pub(super) fn re_derive(
     }
     // 4 · only while still 0: the skill leg. A slot for the line, below the requirement ⇒
     //     unavailable (`0x4d811f`); NO slot ⇒ no write at all (`0x4d8082` jumps past it) — the
-    //     reference's own green-for-a-skill-you-lack (§5.1).
+    //     reference's own green-for-a-skill-you-lack.
     if state == GREEN && wire.req_skill != 0 {
         if let Some(slot) = player.skill(wire.req_skill) {
             if slot.value_plus_perm < wire.req_skill_value as i32 {

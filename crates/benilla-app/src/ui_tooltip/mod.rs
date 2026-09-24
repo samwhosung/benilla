@@ -42,7 +42,7 @@ impl Plugin for UiTooltipPlugin {
 }
 
 /// Everything a view needs beyond the spell catalogs — the player-dependent halves of the line
-/// law: the worn set (law §3.6's equipped-item test), the bags (§3.8's reagent possession, and
+/// law: the worn set (the equipped-item test, `0x5f0c50`), the bags (the reagent possession, and
 /// the item-name cache the reagent names come from), the current form, and the bind point `$z`
 /// substitutes against.
 struct ViewCtx<'a, 'w, 's> {
@@ -82,16 +82,17 @@ fn keyed(get: &dyn Fn(&str) -> Option<String>, key: &str, args: &[Arg<'_>]) -> O
 
 /// Build one spell's tooltip view (decision 0274 P2) — the verified spell line law's inputs,
 /// every string resolved here where the catalogs live: the cost cell (the RESOLVED
-/// `power_cost` through the power-type key array, health fallback, `_PER_TIME` composite — law
-/// §3.3, 1074; rage prints wire-cost ÷ 10), the range cell ("N yd range", "N-M yd range" when
+/// `power_cost` through the power-type key array `0x85416c`, health fallback, `_PER_TIME`
+/// composite — 1074; rage prints wire-cost ÷ 10), the range cell ("N yd range", "N-M yd range" when
 /// the resolved min is nonzero — the law's `"%d-%d"` fork; the melee family resolves through the
 /// same key off the caster's combat reach, and the on-next-swing class shows no cell at all), the cast cell
 /// (the full `52eb45` ladder: sec/min, the negative-base sentinel, "Next melee"/"Attack
-/// speed"/"Channeled", and the mana-keyed Instant fork — law §3.4, 1074; None = the law's
+/// speed"/"Channeled", and the mana-keyed Instant fork — 1074; None = the law's
 /// passive gate, which omits the whole line), the cooldown cell
-/// (`max(RecoveryTime, CategoryRecoveryTime)` — law §3.4), the required-item and required-form
-/// lines (law §3.6), the reagents line (law §3.8), and the $-substituted
-/// description/aura-description (byte-exact formulas, `benilla_formats::substitute`).
+/// (`max(RecoveryTime, CategoryRecoveryTime)` at `0x52eada`), the required-item and
+/// required-form lines (`[0x52eea7, 0x52f2ae)`), the reagents line (`SPELL_REAGENTS 0x854e54`),
+/// and the $-substituted description/aura-description (byte-exact formulas,
+/// `benilla_formats::substitute`).
 ///
 /// Line TEXT is composed in English here, as every cell in this builder is; the reference reads
 /// its own GlobalStrings templates ("Reagents: ", "Requires %s"). That is this builder's standing
@@ -111,7 +112,7 @@ fn spell_tooltip_view(
         home_area,
         text: vctx.text,
     };
-    // The cost cell (law §3.3, the `0x52e8ad` caller): the RESOLVED cost — `GetPowerCost`'s
+    // The cost cell (the `0x52e8ad` caller): the RESOLVED cost — `GetPowerCost`'s
     // number, the same `power_cost` the usable walk compares (0948) — through the power-type key
     // array (`0x85416c`: Mana/Rage/Focus/Energy/Happiness) with HEALTH as the out-of-range
     // fallback (the `jl`/`cmp 5` fork at `0x52e8fc` — Life Tap's and Bloodrage's −2 → "N Health";
@@ -150,9 +151,8 @@ fn spell_tooltip_view(
             Some(format!("{} {unit}", resolved_cost / div))
         }
     };
-    // The range cell (law §3.3 / wow-re `tooltip-globalstring-key-resolves.md` §A3, VERIFIED):
-    // two attribute gates, then `GetMinMaxRange 0x6e3480` with **`target = NULL`** (`0x52e9c2`),
-    // then a third gate on the resolved `max <= 0`.
+    // The range cell: two attribute gates, then `GetMinMaxRange 0x6e3480` with **`target = NULL`**
+    // (`0x52e9c2`), then a third gate on the resolved `max <= 0`.
     //
     // **There is no melee wording anywhere in the client** — `SPELL_RANGE_AREA` is not in
     // `WoW.exe` at all, and the melee family is not a display name either: a melee spell is one
@@ -190,7 +190,7 @@ fn spell_tooltip_view(
             keyed(vctx.get, "SPELL_RANGE", &[Arg::S(&yards)])
         })
         .flatten();
-    // Law §3.4's own gate — wider than the spellbook's `passive`: a TRADE_SKILL or ATTACK
+    // The cast line gate `0x52eb15` — wider than the spellbook's `passive`: a TRADE_SKILL or ATTACK
     // Effect[0] omits the line too ([`SpellDisplay::tooltip_omits_cast_line`]). The arm order is
     // the byte ladder `0x52eb45-0x52ec90` (1074): a positive time prints sec/min at the 60 s
     // threshold; a NEGATIVE SpellCastTimes base is the "Instant cast" sentinel (`52ebce`); at
@@ -235,7 +235,7 @@ fn spell_tooltip_view(
             keyed(vctx.get, key, &[])
         }
     };
-    // The cooldown cell reads BOTH recovery columns (law §3.4: `max([+0x4c],[+0x50])>0` —
+    // The cooldown cell reads BOTH recovery columns (`max([+0x4c],[+0x50])>0` at `0x52eada` —
     // Charge's 15 s is CategoryRecoveryTime; its RecoveryTime is 0).
     let recovery_ms = d.recovery_ms.max(d.category_recovery_ms);
     let cooldown = (recovery_ms > 0)
@@ -249,7 +249,7 @@ fn spell_tooltip_view(
             keyed(vctx.get, key, &[Arg::F(v)])
         })
         .flatten();
-    // The required-form line (law §3.6): the Stances mask's form names off
+    // The required-form line: the Stances mask's form names off
     // SpellShapeshiftForm.dbc, joined; bit b = form id b+1. Met against the CURRENT form.
     //
     // `Stances != 0` is NOT the gate on its own — the column is overloaded. When `AttributesEx2`
@@ -258,10 +258,10 @@ fn spell_tooltip_view(
     // Moonkin-castable balance spells; reading those as requirements put a red "Requires
     // Shadowform" on Inner Fire and "Requires Spirit of Redemption" on Flash Heal (1483).
     //
-    // Now byte-carved as wow-re §3-REQFORM, `[0x52f10a, 0x52f2ae)`: `52f115` reads AttributesEx2,
+    // The block is `[0x52f10a, 0x52f2ae)`: `52f115` reads AttributesEx2,
     // ands `0x80000`, and jumps *over the whole name loop* — the loop is the only writer of the
     // "nothing appended" flag `[ebp-8]`, so the AddLine is skipped entirely. The line is
-    // **suppressed, not recoloured**. Three earned negatives came with it: StancesNot `+0x30` is
+    // **suppressed, not recoloured**. Three earned negatives: StancesNot `+0x30` is
     // never read here, `Attributes` bit 16 is never tested, and `0x612480` is never called — the
     // builder duplicates the gate inline rather than sharing the usable walk's helper, which is
     // why the two could drift apart in the first place.
@@ -288,12 +288,12 @@ fn spell_tooltip_view(
         })
         .flatten();
     let form_met = form != 0 && d.stances & (1u32 << (u32::from(form) - 1)) != 0;
-    // The equipped-item-class half of law §3.6 — "Requires Wands" on the wand Shoot, and "Requires
-    // Melee Weapon" on Parry. A mask with several bits set is NOT a reason to print nothing (what we
-    // used to do): the reference names the whole mask through ItemSubClassMask.dbc first, and only
-    // falls back to comma-joining the individual subclasses. Law §3-EQUIPITEM, in the catalog.
-    // §3-EQUIPITEM's three entry gates, all of which skip the line: Targets bit 0x10 set, class < 0,
-    // or an empty mask.
+    // The equipped-item-class half of the requirement lines, `[0x52eea7, 0x52f10a)` — "Requires
+    // Wands" on the wand Shoot, and "Requires Melee Weapon" on Parry. A mask with several bits set
+    // is NOT a reason to print nothing (what we used to do): the reference names the whole mask
+    // through ItemSubClassMask.dbc first, and only falls back to comma-joining the individual
+    // subclasses; that lookup lives in the catalog. Its three entry gates, all of which skip the
+    // line: Targets bit 0x10 set, class < 0, or an empty mask.
     let requires_item = (d.targets & TARGET_ITEM == 0 && d.equipped_item_class >= 0)
         .then(|| {
             vctx.sub_classes?
@@ -301,17 +301,17 @@ fn spell_tooltip_view(
         })
         .flatten()
         .and_then(|name| keyed(vctx.get, "SPELL_EQUIPPED_ITEM", &[Arg::S(&name)]));
-    // The chance-to-X line (law line 10, §3-CHANCE): `Effect[0]` picks which of the player's four
+    // The chance-to-X line (`[0x52f5b1, 0x52f697)`): `Effect[0]` picks which of the player's four
     // avoidance/crit percentages to print, and — except for ATTACK, which bypasses the gate — the
     // spell must be passive. The percentages are already percents on the wire.
     let chance = chance_line(d, vctx.store);
     let item_met = vctx.store.is_none_or(|s| {
         crate::spell::usable::equipped_item_fits(d, s, vctx.objects, vctx.items, vctx.commands)
     });
-    // Reagents (law §3.8): the named slots, `count > 1` suffixed, a slot the player is short of
-    // wrapped in the builder's inline red. A reagent whose item template hasn't streamed yet is
-    // simply absent from this snapshot — `feed_spell_tooltips` re-pushes when it lands, which is
-    // our shape of the ref's own query-then-redisplay callback.
+    // Reagents (`SPELL_REAGENTS 0x854e54`): the named slots, `count > 1` suffixed, a slot the
+    // player is short of wrapped in the builder's inline red. A reagent whose item template hasn't
+    // streamed yet is simply absent from this snapshot — `feed_spell_tooltips` re-pushes when it
+    // lands, which is our shape of the ref's own query-then-redisplay callback.
     let reagents = {
         let mut parts: Vec<String> = Vec::new();
         for (entry, count) in d.reagents.iter().copied().filter(|&(e, _)| e != 0) {
@@ -341,7 +341,7 @@ fn spell_tooltip_view(
     Some(benilla_ui::script::SpellTooltipView {
         name: d.name.clone(),
         rank: d.rank.clone(),
-        // The aura variant's right column (law §3-BUFF) — gated inside the catalog by
+        // The aura variant's right column (`[0x52f8e5, 0x52f911)`) — gated inside the catalog by
         // SpellDispelType.dbc's own `[+0x28]`, so Stealth-class auras hand back None.
         dispel_type: spells.catalog.dispel_name(d).map(str::to_string),
         cost,
@@ -368,18 +368,17 @@ fn spell_tooltip_view(
 }
 
 /// `Targets` bit `0x10` — set ⇒ the equipped-item requirement line is skipped whatever the class
-/// and mask say (§3-EQUIPITEM's first gate; the bit test is verified, the `TARGET_FLAG_ITEM` name
-/// wow-re flags as inferred).
+/// and mask say (the line's first gate, `0x52eeaa`; the `TARGET_FLAG_ITEM` name is inferred).
 const TARGET_ITEM: u32 = 0x10;
 
 /// `SPELL_EFFECT_DODGE` / `_PARRY` / `_BLOCK` / `_ATTACK` — the four `Effect[0]` values that select
-/// a chance-to-X line (law §3-CHANCE's jump table).
+/// a chance-to-X line (the jump table `0x52f7c4`).
 const EFFECT_DODGE: u32 = 20;
 const EFFECT_PARRY: u32 = 22;
 const EFFECT_BLOCK: u32 = 23;
 const EFFECT_ATTACK: u32 = 78;
 
-/// The chance-to-X line (law line 10 / §3-CHANCE) — `None` when the spell names none of the four
+/// The chance-to-X line (`[0x52f5b1, 0x52f697)`) — `None` when the spell names none of the four
 /// effects, when the gate rejects it, or before the player's descriptor has streamed.
 ///
 /// The predicate is the reference's, and its asymmetry is the point: **ATTACK bypasses the passive
@@ -406,19 +405,20 @@ struct SpellFeedMemory {
     pushed: std::collections::HashSet<u32>,
     /// The bind point `$z` substitutes against.
     home: Option<String>,
-    /// The current shapeshift form (law §3.6's stance line, white/red).
+    /// The current shapeshift form (the required-form line's white/red, `0x52f1e3`).
     form: Option<u8>,
-    /// The 19 worn-slot guids (law §3.6's item line, white/red).
+    /// The 19 worn-slot guids (the equipped-item line's white/red, `0x5f0c50`).
     worn: Option<[u64; 19]>,
     /// The player's block/dodge/parry/crit percentages, as raw bit patterns so the diff needs no
-    /// float comparison (law line 10's printed value — it moves with gear, buffs and talents).
+    /// float comparison (the chance-to-X line's printed value, `0x52f5b1` — it moves with gear,
+    /// buffs and talents).
     avoidance: Option<[u32; 4]>,
     /// The two reaches the melee range cell reads, as raw bit patterns — the caster's own
     /// (which moves with scale and shapeshift) and its auto-attack target's (which changes with
     /// the mob).
     combat_reach: Option<(Option<u32>, Option<u32>)>,
-    /// Per reagent entry currently on show: `(owned count, item name resolved)` — law §3.8's
-    /// inline red plus the ask-once template landing.
+    /// Per reagent entry currently on show: `(owned count, item name resolved)` — the reagent
+    /// line's inline red (`0x854120`) plus the ask-once template landing.
     reagents: std::collections::BTreeMap<u32, (u32, bool)>,
 }
 
@@ -528,7 +528,7 @@ fn feed_spell_tooltips(
         wanted.extend(memory.pushed.drain());
     }
     // A stance/form change re-pushes too: the required-form line's white/red tracks the CURRENT
-    // form (law §3.6), and the views are static snapshots until re-pushed.
+    // form (`0x52f1e3`), and the views are static snapshots until re-pushed.
     let form = self_q
         .single()
         .map(|s| s.0.unit_shapeshift_form())
@@ -539,8 +539,8 @@ fn feed_spell_tooltips(
     }
     let self_store = self_q.single().ok();
     // …and so do the two BAG-dependent halves, which the views likewise snapshot: the worn set
-    // (law §3.6's item line flips white/red on a weapon swap) and the owned counts of the
-    // reagents currently on show (law §3.8's inline red, plus the item names themselves landing
+    // (the item line, `0x5f0c50`, flips white/red on a weapon swap) and the owned counts of the
+    // reagents currently on show (the inline red `0x854120`, plus the item names themselves landing
     // from the ask-once template cache — the ref's query-then-redisplay callback in our shape).
     // Both signatures are tiny: 19 slot guids, and one count per DISTINCT reagent in play.
     let worn =
@@ -549,7 +549,7 @@ fn feed_spell_tooltips(
         memory.worn = worn;
         wanted.extend(memory.pushed.drain());
     }
-    // …and so does the chance-to-X line's percentage (law line 10), which the views snapshot the
+    // …and so does the chance-to-X line's percentage (`0x52f5b1`), which the views snapshot the
     // same way: a weapon swap, a buff or a talent moves it.
     let avoidance = self_store.map(|s| {
         [
@@ -781,8 +781,8 @@ fn drive_mouseover_tooltip(
         Some((guid, s))
     });
     // The hovered GAMEOBJECT, when it is the nearer pick (the click router's own arbitration).
-    // Deliberately NOT gated on the highlightable predicate — §5-VERIFIED (wow-re 2026-07-20,
-    // 0558/0559): the mouseover publisher `0x492890` dispatches the GO tooltip builder `0x52aa20`
+    // Deliberately NOT gated on the highlightable predicate (0558/0559): the mouseover publisher
+    // `0x492890` dispatches the GO tooltip builder `0x52aa20`
     // by object KIND on both branches; highlightable is never read on the tooltip path (it gates
     // the cursor and the click only). So a GENERIC(5) signpost, a pre-quest INTERACT_COND chest,
     // and an IN_USE object all show the gold name plate while showing NO interact cursor — 0466's
@@ -812,9 +812,8 @@ fn drive_mouseover_tooltip(
         }
         return;
     }
-    // The **corpse plate** — "Corpse of <owner>" (the reference's own builder `0x52aef0`, wow-re
-    // `corpse-click-and-reclaim.md` Q6, §5 cross-checked). Ahead of the GameObject arm because the
-    // corpse is the nearer pick whenever `go` came back empty.
+    // The **corpse plate** — "Corpse of <owner>" (the reference's own builder `0x52aef0`). Ahead
+    // of the GameObject arm because the corpse is the nearer pick whenever `go` came back empty.
     //
     // It is a *name plate and nothing else*: no health bar, no reaction recolour, no level or
     // creature-type line — a corpse is not a unit, and the publisher deliberately fires **no
@@ -1014,7 +1013,7 @@ fn drive_mouseover_tooltip(
                     if let Some(t) = go_inputs.items.template(slot0.index, 0, &commands) {
                         // `LOCKED_WITH_ITEM`, resolved at `0x52acb8` — one of eleven 1.12 keys
                         // whose enUS value is exactly "Requires %s", and the only one this arm
-                        // reaches (wow-re `tooltip-globalstring-key-resolves.md` §B).
+                        // reaches.
                         if let Some(text) = keyed(&go_get, "LOCKED_WITH_ITEM", &[Arg::S(&t.name)]) {
                             lines.push((text, TooltipTint::White));
                         }

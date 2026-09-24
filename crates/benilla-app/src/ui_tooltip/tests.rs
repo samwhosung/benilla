@@ -293,7 +293,7 @@ fn cost_and_cast_cells_on_real_data() {
 
     // Throw (2764) and Auto Shot (75): the ranged bit reads "Attack speed" — and for Throw
     // the bit is ALONE (`Attributes & 0x2`, not the auto-repeat or-pair). Melee Attack
-    // (6603) is the §3.4 skip: Effect[0] == ATTACK omits the whole line.
+    // (6603) is the cast line's skip at `0x52eb3c`: Effect[0] == ATTACK omits the whole line.
     let v = spell_tooltip_view(
         2764,
         &spells,
@@ -324,8 +324,8 @@ fn cost_and_cast_cells_on_real_data() {
     assert_eq!(v.cast_time.as_deref(), Some("Channeled"));
 }
 
-/// The RANGE cell's whole law on the REAL 5875 data (wow-re `tooltip-globalstring-key-resolves.md`
-/// §A3): the melee family renders through `SPELL_RANGE` off the caster's own combat reach — the
+/// The RANGE cell's whole law (`[0x52e9a2, 0x52ea8c)`) on the REAL 5875 data: the melee family
+/// renders through `SPELL_RANGE` off the caster's own combat reach — the
 /// invented "Melee Range" decision 2080 named is gone — the authored rows print their own numbers
 /// through the same key, and the on-next-swing class and the self-only rows print no cell at all.
 /// Skips without client data.
@@ -443,8 +443,8 @@ fn the_pinned_c6_lines_on_real_data() {
     .expect("Shoot view");
     assert_eq!(v.requires_item.as_deref(), Some("Requires Wands"));
     assert!(!v.item_met, "nothing worn satisfies class 2 / bit 19 → red");
-    // A multi-bit mask is named by ItemSubClassMask.dbc, not skipped (law §3-EQUIPITEM — we
-    // printed nothing here until `0x6e2380` was carved): Parry's 0x2a5f3 is exactly the eleven
+    // A multi-bit mask is named by ItemSubClassMask.dbc, not skipped (`0x52eef0` — we
+    // printed nothing here until `0x6e2380` was decoded): Parry's 0x2a5f3 is exactly the eleven
     // melee subclasses, which that table names in one word.
     let parry = spells.catalog.get(3127).expect("Parry 3127");
     assert!(parry.equipped_item_subclass_mask.count_ones() > 1);
@@ -457,13 +457,14 @@ fn the_pinned_c6_lines_on_real_data() {
     assert_eq!(v.requires_item.as_deref(), Some("Requires Melee Weapon"));
 
     // 2 · Attack (6603) — `Effect[0] == 78` omits the cast|cooldown line WHOLE, even though
-    // `Attributes & 0x40` is clear. Before the §3.4 gate widened, this read "Instant".
+    // `Attributes & 0x40` is clear. Before the cast-line gate `0x52eb15` widened, this read
+    // "Instant".
     let d = spells.catalog.get(6603).expect("Attack 6603");
     assert_eq!(d.effects[0], 78, "SPELL_EFFECT_ATTACK");
     assert!(!d.passive, "6603 carries Attributes 0x10, not 0x40");
     let v = spell_tooltip_view(6603, &spells, &mut t.ctx(&objects, 0, None)).expect("Attack view");
     assert_eq!(v.cast_time, None, "the law's Effect[0] gate");
-    // …and the chance line the same Effect[0] selects (law line 10 / §3-CHANCE). ATTACK
+    // …and the chance line the same Effect[0] selects (`[0x52f5b1, 0x52f697)`). ATTACK
     // BYPASSES the passive gate, which is the whole reason a non-passive Attack shows a crit
     // line at all. No descriptor = no line; the percentages are already percents on the wire.
     assert_eq!(v.chance, None, "no player streamed yet");

@@ -27,10 +27,9 @@
 //! its answer may **span frames**, which a packet handler cannot do.
 //!
 //! **There is no consent prompt, and that is faithful rather than missing.** 1.12.1 registers a
-//! `TRADE_REQUEST` event and signals it from nowhere, so the `TRADE` StaticPopup that would have
-//! asked is dead code in the real client (§5 cross-checked — wow-re
-//! `ui/scratch/incoming-trade-request-law.md` §3). benilla wired that dialog up and took it back
-//! out (decision 1764): the reference's answer to an unwanted trade is the ignore list and the
+//! `TRADE_REQUEST` event (slot `0xbe160c`) and signals it from nowhere, so the `TRADE` StaticPopup
+//! that would have asked is dead code in the real client. benilla wired that dialog up and took it
+//! back out (decision 1764): the reference's answer to an unwanted trade is the ignore list and the
 //! *Block Trades* checkbox, both of which are legs of the ladder below.
 //!
 //! **The partner's portrait** rides the shared `"npc"` booth token: [`TradeSession`] implements
@@ -135,11 +134,10 @@ pub(crate) struct TradeSession {
     ///
     /// The reference has no queue because it never waits: `ERR_INITIATE_TRADE_S` comes off the
     /// player-name cache inside the `CMSG_INITIATE_TRADE` sender (`0x5d4031`, printing at
-    /// `0x5d4042` on a hit and from the query callback `0x5d4080` at `0x5d40ca` on a miss — wow-re
-    /// `ui/scratch/incoming-trade-request-law.md` §10.2), and the status arms' `%s` lines read the
-    /// name straight off the live `CGUnit` (`0x609210`). benilla may need a `CMSG_NAME_QUERY`
-    /// round trip for either, which is a wait a wire decoder cannot do — the same seam
-    /// [`answer_trade_request`]'s leg 8 exists for.
+    /// `0x5d4042` on a hit and from the query callback `0x5d4080` at `0x5d40ca` on a miss), and the
+    /// status arms' `%s` lines read the name straight off the live `CGUnit` (`0x609210`). benilla
+    /// may need a `CMSG_NAME_QUERY` round trip for either, which is a wait a wire decoder cannot
+    /// do — the same seam [`answer_trade_request`]'s leg 8 exists for.
     ///
     /// A `Vec` rather than one slot because two can be owed at once: our own initiate parks a line
     /// and the server's refusal of that same initiate parks another, and the second must not eat
@@ -164,7 +162,7 @@ pub(crate) struct NamedLine {
     /// Cases 0/5/14 take the name off the named player's **live `CGUnit`** (`0x609210`) after
     /// asking `0x468460(guid, TYPEMASK_PLAYER)` whether the object is still there — so if it is
     /// not, the reference prints **nothing**, and never waits. `ERR_INITIATE_TRADE_S` is the
-    /// opposite shape (wow-re §10.2): it goes through the player-name **cache** `0x55f080`, has no
+    /// opposite shape: it goes through the player-name **cache** `0x55f080`, has no
     /// object test at all, and defers to the name query's callback when the cache misses.
     ///
     /// benilla has one name source for both, so the distinction has to be carried: `true` drops
@@ -320,8 +318,8 @@ impl TradeSession {
 
     /// **Signal `TRADE_REQUEST_CANCEL`** — the one Lua event the reference's 23-case status
     /// dispatcher fires, from the top of its `CANCELED` arm (`0x4bf832`, the sole `SignalEvent`
-    /// inside `[0x4bf720, 0x4bfa08)` — wow-re `re/events/event-firesites.tsv`). See
-    /// [`Self::request_cancel`] for why it survives [`Self::close`].
+    /// inside `[0x4bf720, 0x4bfa08)`). See [`Self::request_cancel`] for why it survives
+    /// [`Self::close`].
     pub(crate) fn signal_request_cancel(&mut self) {
         self.request_cancel = true;
     }
@@ -557,9 +555,8 @@ pub(crate) struct BlockTrades(pub(crate) bool);
 /// 16-`SystemParam` ceiling — exactly why decision 1725 left the cinematic leg unbuilt and said so.)
 ///
 /// **The ladder is the reference's, in its order** — eight legs, walked contiguously over
-/// `[0x4bf736, 0x4bf7f8)` and cross-checked by four independent derivations (wow-re
-/// `ui/scratch/incoming-trade-request-law.md` §2). Three answer with something other than "busy",
-/// which is why this is a ladder and not a boolean:
+/// `[0x4bf736, 0x4bf7f8)`. Three answer with something other than "busy", which is why this is a
+/// ladder and not a boolean:
 ///
 /// | # | condition | benilla reads | answer |
 /// |---|---|---|---|
@@ -585,10 +582,9 @@ pub(crate) struct BlockTrades(pub(crate) bool);
 /// player would feel, and the reference's own answer to an unwanted trade is leg 2 and leg 8 —
 /// ignore them, or tick *Block Trades*.
 ///
-/// Three legs were wrong in wow-re's earlier five-condition gloss and were corrected by the round
-/// that produced the note above — `[0xb4b3e4]` is player *control*, not "in world"; `[0xb725f8]` is
-/// the auction house, not a pending trade; and the ignore leg was missing entirely. This is why the
-/// gloss was not built from.
+/// Three legs are easy to get wrong: `[0xb4b3e4]` is player *control*, not "in world";
+/// `[0xb725f8]` is the auction house, not a pending trade; and the ignore leg is easy to miss
+/// entirely.
 /// **`0x468460(guid, TYPEMASK_PLAYER)`** — the guid's live object, or `None` when it is not a
 /// streamed player. The reference asks this in two places in this arc and benilla now asks it in
 /// the same two: the incoming ladder's leg 3 (`0x4bf779`, which drops a request from a guid that
@@ -874,7 +870,7 @@ fn feed_trade(
     }
     // The per-slot events the stock TradeFrame.lua repaints one slot on (`0x4bf414`/`0x4bf452`
     // TRADE_TARGET_ITEM_CHANGED, `0x4bf487`/`0x4bfaef` TRADE_PLAYER_ITEM_CHANGED, arg1 the 1-based
-    // slot — wow-re `event-firesites.tsv`; decision 1966). The full TRADE_UPDATE below is kept:
+    // slot; decision 1966). The full TRADE_UPDATE below is kept:
     // the reference fires it too, from `0x4c034f`.
     if changed && trade.is_open() && !opened {
         let empty = TradeState::default();
@@ -917,8 +913,8 @@ fn feed_trade(
         }
     }
     // `TRADE_REQUEST_CANCEL` — the `CANCELED` arm's own signal, and the ONLY Lua event the
-    // reference's 23-case status dispatcher fires (`0x4bf832`; wow-re `event-firesites.tsv` finds
-    // no other `SignalEvent` in `[0x4bf720, 0x4bfa08)`). It goes out **ahead of** the
+    // reference's 23-case status dispatcher fires (`0x4bf832`; there is no other `SignalEvent` in
+    // `[0x4bf720, 0x4bfa08)`). It goes out **ahead of** the
     // `TRADE_CLOSED` the same arm's window clear fires, which is the arm's own address order:
     // signal `0x4bf832`, then `0x4bf842 call 0x4bf4e0`, whose `0x4bf522` is `TRADE_CLOSED`.
     //
@@ -1407,9 +1403,8 @@ mod tests {
 
     /// **`TRADE_REQUEST_CANCEL` fires, and only on `CANCELED`.** It is the one Lua event the
     /// reference's 23-case status dispatcher signals (`0x4bf832`, the sole `SignalEvent` inside
-    /// `[0x4bf720, 0x4bfa08)` — wow-re `re/events/event-firesites.tsv`), and benilla fired it from
-    /// nowhere: 1764 noticed the gap and left it, and the stock `UIParent.lua` has listened for it
-    /// ever since without anything to hear.
+    /// `[0x4bf720, 0x4bfa08)`), and benilla fired it from nowhere: 1764 noticed the gap and left
+    /// it, and the stock `UIParent.lua` has listened for it ever since without anything to hear.
     ///
     /// Nothing stock *acts* on it (it hides the `TRADE` StaticPopup, which can never be up — that
     /// dialog is dead code in the reference too), so the observable is the event itself, which is
@@ -1462,7 +1457,7 @@ mod tests {
 
     /// **The outgoing line.** "You have requested to trade with %s." is printed by the reference
     /// from inside its own `CMSG_INITIATE_TRADE` sender (`0x5d4042` on a name-cache hit,
-    /// `0x5d40ca` from the name-query callback on a miss — wow-re §10.2), not from anything the
+    /// `0x5d40ca` from the name-query callback on a miss), not from anything the
     /// server says back. benilla sent the packet in silence, so a trade that the server then
     /// refused produced no text at all, in either direction.
     ///
@@ -1624,7 +1619,7 @@ mod tests {
     /// **Block Trades** refuses without asking, and it is the one refusal that speaks: the
     /// `ERR_TRADE_BLOCKED_S` line naming the initiator (`0x496720(0xbb, …)`). Catalog row `0xbb`
     /// is `kind = 0` — the **chat frame**, chat type `0xa` — so this is a system chat line and
-    /// **not** the red `UI_ERROR_MESSAGE`, which is `kind = 2`. That correction is the RE's.
+    /// **not** the red `UI_ERROR_MESSAGE`, which is `kind = 2`.
     #[test]
     fn block_trades_refuses_and_says_so() {
         let (mut app, rx) = request_app(true, false, true);
@@ -1672,8 +1667,8 @@ mod tests {
     }
 
     /// Leg 7 — an open auction house refuses the request. `[0xb725f8]`/`[0xb725fc]` is the open
-    /// auctioneer's guid, which the old five-condition gloss had mislabelled as "a trade is
-    /// already pending". benilla was one commit from building that wrong leg.
+    /// auctioneer's guid, which is easy to mislabel as "a trade is already pending". benilla was
+    /// one commit from building that wrong leg.
     #[test]
     fn an_open_auction_house_refuses_the_request() {
         let (mut app, rx) = request_app(false, false, true);
@@ -1740,8 +1735,8 @@ mod tests {
     /// Legs 1 and 3 — the two that answer with **nothing at all**: our own initiate in flight
     /// (`[0xc4bec8]`), and an initiator that resolves to no streamed player object. Both drop the
     /// request without a packet, which is the reference's behaviour and not an oversight — it has
-    /// nothing to say to a trade it cannot see. Leg 1 is also what replaced the "already trading"
-    /// leg the old gloss claimed: the latch is set by the initiate sender and never by
+    /// nothing to say to a trade it cannot see. Leg 1 is also what replaced an "already trading"
+    /// leg: the latch is set by the initiate sender and never by
     /// `OPEN_WINDOW`, so it is "we asked somebody", not "a window is up".
     #[test]
     fn two_legs_answer_with_no_packet_at_all() {

@@ -86,7 +86,7 @@ fn snap(open: &TrainerOpen, spells: &SpellCatalog) -> Option<TrainerState> {
     )
 }
 
-/// The icon law's fixture (wow-re `spell-icon-substitution-law.md` §1's shape, synthetic so
+/// The icon law's fixture (`GetTrainerServiceIcon 0x4d8f50`'s shape, synthetic so
 /// every gate is reachable): wrapper 100 teaches 200 via a slot-0 `LEARN_SPELL`; 200 creates
 /// item 777; item 777's display 5 carries the "real" art. Each spell has a DISTINCT icon so a
 /// wrong arm is named by the assertion, not merely unequal.
@@ -255,7 +255,7 @@ fn trainer_icon_is_nil_until_the_product_template_lands_and_asks_once() {
     );
 }
 
-/// The director's exact case on the real shipped `Spell.dbc` — the check wow-re's §7 pins:
+/// The director's exact case on the real shipped `Spell.dbc` (`GetTrainerServiceIcon 0x4d8f50`):
 /// spell 2756 is the wrapper a Blacksmithing trainer sends, 2739 the recipe it teaches, 2847 the
 /// sword. At a tradeskill trainer the law must reach for item 2847; at a class trainer it must
 /// serve 2756's own icon. Skips without client data.
@@ -455,7 +455,7 @@ fn resolve_reads_cost_state_and_gates_with_no_catalog() {
 }
 
 /// A prerequisite ability's met/unmet is per-gate — whether the player KNOWS that spell — and is
-/// decoupled from the service's overall category (wow-re `system/ui/scratch/trainer-requirement.md`).
+/// decoupled from the service's overall category (`GetTrainerServiceAbilityReq 0x4d96e0`).
 /// The director's exact case: an UNAVAILABLE spell (gated by level) whose already-learned prev-rank
 /// prerequisite must still read met (white), not red. Deterministic (no client data needed).
 #[test]
@@ -735,8 +735,8 @@ fn every_list_packet_begins_a_window_session() {
 }
 
 mod re_derive {
-    //! The state re-evaluator's clauses ([`super::super::reeval`]), one test per byte-verified
-    //! leg of `0x4d7d40` (wow-re `trainer-service-suppression.md` §5), on synthetic catalogs.
+    //! The state re-evaluator's clauses ([`super::super::reeval`]), one test per leg of
+    //! `0x4d7d40`, on synthetic catalogs.
     use super::super::reeval::{re_derive, PetView, PlayerView, SkillSlot};
     use super::*;
     use benilla_formats::{LearnEffect, SlaInfo, SpellDisplay};
@@ -874,8 +874,9 @@ mod re_derive {
         assert_eq!(state(&w, 0, &p), trainer_spell_state::GREEN);
     }
 
-    /// The reference's own wart (§5.1): the skill scan's not-found exit jumps past the compare,
-    /// so a line the player lacks entirely writes nothing — green, where the server sends red.
+    /// The reference's own wart (`0x4d8082`): the skill scan's not-found exit jumps past the
+    /// compare, so a line the player lacks entirely writes nothing — green, where the server sends
+    /// red.
     #[test]
     fn a_skill_line_the_player_lacks_entirely_reads_green() {
         let mut w = service(RANK1_WRAPPER);

@@ -12,8 +12,8 @@
 //! obviously tidy — decision 1124 is the second time a plausible unification (the display name,
 //! assumed to hop like the group key) turned out to be refuted at the bytes.
 //!
-//! Sources: wow-re `system/ui/scratch/spell-icon-substitution-law.md` §1 (the icon),
-//! `trainer-service-tooltip-law.md` (the tooltip) and `trainer-craft-list-order.md` (the group key).
+//! Sources: `GetTrainerServiceIcon 0x4d8f50` (the icon), `SetTrainerService 0x5338b0` (the tooltip)
+//! and the list builder `0x4d7560` (the group key).
 
 use benilla_formats::{
     SkillLineCatalog, SpellCatalog, SPELL_ATTR_IS_TRADESKILL, SPELL_EFFECT_CREATE_ITEM,
@@ -29,9 +29,8 @@ use crate::ui_items::item_icon;
 
 use super::{TRAINER_TYPE_MOUNT, TRAINER_TYPE_TRADESKILL};
 
-/// The trainer's **icon law** — `GetTrainerServiceIcon 0x4d8f50`, byte-verified whole in wow-re
-/// (`system/ui/scratch/spell-icon-substitution-law.md` §1; the binding is not a marshal, the entire
-/// resolution is inlined there). Three gates, then a fallback:
+/// The trainer's **icon law** — `GetTrainerServiceIcon 0x4d8f50` (the binding is not a marshal,
+/// the entire resolution is inlined there). Three gates, then a fallback:
 ///
 /// 1. **The trainer type is 2** (tradeskill/profession — `[0xb73a08]`, the trainer-list packet's
 ///    type dword stored verbatim). A class/mount/pet trainer never substitutes.
@@ -85,11 +84,10 @@ pub(super) fn service_icon(
     wire.icon.clone()
 }
 
-/// The trainer's **tooltip law** — `SetTrainerService 0x5338b0`, byte-verified whole in wow-re
-/// (`system/ui/scratch/trainer-service-tooltip-law.md`). It is a *selector*, not a renderer: the
-/// binding emits no tooltip line of its own (verified negative — none of the four AddLine helpers
-/// appears in its extent) and hands one of the two shared builders a subject. That is why this
-/// returns a [`TrainerTooltip`] rather than any text.
+/// The trainer's **tooltip law** — `SetTrainerService 0x5338b0`. It is a *selector*, not a
+/// renderer: the binding emits no tooltip line of its own (verified negative — none of the four
+/// AddLine helpers appears in its extent) and hands one of the two shared builders a subject. That
+/// is why this returns a [`TrainerTooltip`] rather than any text.
 ///
 /// ```text
 /// for i in 0..3:
@@ -153,9 +151,9 @@ pub(super) fn service_tooltip(wire_spell: u32, spells: &SpellCatalog) -> Trainer
 }
 
 /// The **group-key law** — the builder `0x4d7560`'s per-trainer-type branch at `0x4d7786`
-/// (byte-verified, decision 1124; wow-re `system/ui/scratch/trainer-craft-list-order.md`). It is the
-/// third law on this page that forks on the same dword the other two do, and the one that decides
-/// what the director actually sees at the top of a profession trainer's list.
+/// (decision 1124). It is the third law on this page that forks on the same dword the other two
+/// do, and the one that decides what the director actually sees at the top of a profession
+/// trainer's list.
 ///
 /// **Type 2 (tradeskill) does not resolve a skill line at all.** The key defaults to `2` and becomes
 /// `1` iff the **WIRE** spell's own `Spell.dbc Effect[0..2]` contains `44 SKILL_STEP` (`0x4d77b6`) —

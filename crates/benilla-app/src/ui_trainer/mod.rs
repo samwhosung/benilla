@@ -175,9 +175,9 @@ impl Plugin for UiTrainerPlugin {
 
 /// A trainer refusal (`SMSG_TRAINER_BUY_FAILED`'s
 /// [`benilla_protocol::messages::train_fail`] code) is **silent on every player-facing surface**,
-/// and goes to the log instead. That is the reference's own behaviour, byte-carved rather than
-/// assumed (wow-re dispatch, 2026-09-07; handler `0x5e5f10`, registered at `0x5e3291`, arms at
-/// `0x5e5f95` / `0x5e5fb8` / `0x5e5fdc`, a code ≥ 3 doing nothing at all):
+/// and goes to the log instead. That is the reference's own behaviour (handler `0x5e5f10`,
+/// registered at `0x5e3291`, arms at `0x5e5f95` / `0x5e5fb8` / `0x5e5fdc`, a code ≥ 3 doing
+/// nothing at all):
 ///
 /// - there is **no GlobalStrings key and no message-catalog id** — the handler passes neither;
 /// - there is **no `DisplayError 0x496720` and no `0x4945b0`** anywhere in its body, so the line
@@ -252,11 +252,11 @@ fn resolve_service(
         met: skill_met,
     });
     // Each prerequisite ability is coloured by whether the player already KNOWS that specific spell —
-    // the byte-verified real-client mechanism (wow-re `system/ui/scratch/trainer-requirement.md`):
+    // the real-client mechanism (`0x4d96e0`):
     // `GetTrainerServiceAbilityReq`'s hasReq is `IsSpellKnown(reqSpellId)`, evaluated per-requirement
     // and INDEPENDENT of the service's overall category — so a spell gated only by LEVEL still shows
     // its already-learned prev-rank prerequisite WHITE, not red. The req id is a real ability id (not
-    // a learn wrapper — verified there too), so there's no hop: look it up directly. The name carries
+    // a learn wrapper), so there's no hop: look it up directly. The name carries
     // its rank exactly as the client does — `SpellDisplay::ranked_name`, the shared composer for the
     // client's `"%s (%s)"` literal (decision 2243). The client also ORs `KnownHigherRank`; benilla
     // has no rank chain, and sequential trainer ranks never reach that clause, so the direct
