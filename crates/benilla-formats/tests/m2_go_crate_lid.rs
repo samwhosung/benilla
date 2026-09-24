@@ -4,14 +4,14 @@
 //!
 //! `G_Crate01.m2` is the door family, textbook: **bone 8** is the lid, and the four sequences are
 //! Open(148) 0° → 75°, Opened(149) holding 75°, Close(146) 75° → 0°, Closed(147) holding 0°. Every
-//! one of them carries `flags` bit 0 **clear**, i.e. the kernel wraps its band for ever (wow-re
-//! `gameobject-anim-arm.md` §3, `0x714585`) — so the loop bit says nothing about how long a
+//! one of them carries `flags` bit 0 **clear**, i.e. the kernel wraps its band for ever
+//! (`0x714585`) — so the loop bit says nothing about how long a
 //! transition lasts, and a consumer that reads it as "should this clip repeat?" arms the Close
 //! sweep on an endless loop the moment the loot window closes.
 //!
 //! What ends a swing in the real client is the **object layer**: the completion callback fires once
 //! at the arm's baked window (span × replay `R`, the loop bit ignored) and slot 14 `0x5f4120`
-//! advances substate 4 Close → 1 Closed (§2d). This file pins the asset facts that law rests on —
+//! advances substate 4 Close → 1 Closed. This file pins the asset facts that law rests on —
 //! the loop bits, `R = 1`, and that Close's last frame *is* the Closed pose — so the fix can't be
 //! undone by "the clip says it loops".
 //!
@@ -46,8 +46,8 @@ fn the_crate_lid_transition_is_bounded_by_the_window_not_the_loop_bit() {
             .unwrap_or_else(|| panic!("the crate authors animation id {id}"))
     };
 
-    // 1. The whole door family is authored, so no §2c remap leg is reachable: the arm plays the
-    //    LUT id directly and the test below is about the *transition*, nothing else.
+    // 1. The whole door family is authored, so no remap leg (`0x5f3972`) is reachable: the arm
+    //    plays the LUT id directly and the test below is about the *transition*, nothing else.
     let lookup = parse_m2_animation_lookup(&bytes).expect("animation lookup");
     for id in [CLOSE, CLOSED, OPEN, OPENED] {
         assert!(
@@ -63,12 +63,12 @@ fn the_crate_lid_transition_is_bounded_by_the_window_not_the_loop_bit() {
         assert!(
             seq(id).looping,
             "id {id} is a bit-0-clear band — the kernel wraps it, so only the object layer's \
-             §2d advance can end a transition"
+             completion advance can end a transition"
         );
     }
 
     // 3. …and the window that advance fires at is exactly ONE pass: `R = max(1, min + roll)` with
-    //    an empty replay range rolls to 1 (wow-re §3, `0x712692..0x7126cd`). One window is the
+    //    an empty replay range rolls to 1 (`0x712692..0x7126cd`). One window is the
     //    whole swing — there is no second pass to model.
     for id in [CLOSE, CLOSED, OPEN, OPENED] {
         let s = seq(id);
@@ -109,8 +109,8 @@ fn the_crate_lid_transition_is_bounded_by_the_window_not_the_loop_bit() {
         "Open must sweep from shut (|y| {lo}) to open (|y| {hi})"
     );
     // The rest poses genuinely rest, and each is the pose its motion lands on — which is why
-    // holding a finished motion's last frame reads correctly, and why the §2d advance onto the
-    // rest sequence is invisible rather than a pop.
+    // holding a finished motion's last frame reads correctly, and why the `0x5f4120` advance onto
+    // the rest sequence is invisible rather than a pop.
     for q in lid(CLOSED) {
         assert!(q[1].abs() < 1e-3, "Closed holds the SHUT lid, got {}", q[1]);
     }

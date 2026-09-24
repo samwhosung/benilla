@@ -16,10 +16,10 @@ use benilla_formats::Chain;
 
 use crate::model_key;
 
-/// The GameObject animation arm's LUT (wow-re `gameobject-anim-arm.md` §2c, `.data 0x8607e4`):
+/// The GameObject animation arm's LUT (`.data 0x8607e4`):
 /// internal **substate** → the `AnimationData.dbc` id the object layer arms.
 const SUBSTATE_ANIM: [u16; 13] = [
-    145, // 0  Spawn      — NO client path produces this substate (§2c census)
+    145, // 0  Spawn      — NO client path produces this substate
     147, // 1  Closed     (rest)
     148, // 2  Open       (motion)
     149, // 3  Opened     (rest)
@@ -32,12 +32,13 @@ const SUBSTATE_ANIM: [u16; 13] = [
 ];
 
 /// The **transient** (transition-motion) substates among the reachable ones — the rows slot 14
-/// `0x5f4120` advances off at the arm's window end (§2d: 2 Open → 3 Opened, 4 Close → 1 Closed,
+/// `0x5f4120` advances off at the arm's window end (2 Open → 3 Opened, 4 Close → 1 Closed,
 /// 5 Destroy → 6 Destroyed). Their duration is the object layer's, never the clip's loop bit.
 const MOTION_SUBSTATES: [usize; 3] = [2, 4, 5];
 
 /// The six substates a `GAMEOBJECT_STATE` × `GAMEOBJECT_ANIMPROGRESS` pair can actually produce
-/// (§2b). Substate 0 (Spawn) has no producer at all, and 8..12 come from other opcodes entirely.
+/// (`0x5f3c30`). Substate 0 (Spawn) has no producer at all, and 8..12 come from other opcodes
+/// entirely.
 const REACHABLE: [(usize, &str); 6] = [
     (1, "READY  settled"),
     (4, "READY  mid    "),
@@ -47,8 +48,8 @@ const REACHABLE: [(usize, &str); 6] = [
     (5, "ALT    mid    "),
 ];
 
-/// The §2c four-way remap: what the arm actually requests when the model doesn't author the
-/// substate's LUT id. Returns `(id, rate0)` — `rate0` marks the two legs that freeze a *motion*
+/// The four-way remap (`0x5f3972`): what the arm actually requests when the model doesn't author
+/// the substate's LUT id. Returns `(id, rate0)` — `rate0` marks the two legs that freeze a *motion*
 /// clip at frame 0 to stand in for a missing *rest* pose.
 fn go_remap(m: &benilla_m2::M2Model, id: u16) -> (u16, bool) {
     if m.owns_animation(id) {
@@ -93,7 +94,7 @@ fn go_resolve_slot(m: &benilla_m2::M2Model, id: u16) -> Option<(u16, u16)> {
     (slot != 0xffff).then_some((played, slot))
 }
 
-/// The generic loader seed (§1, `0x71019b`): resolve id 0, and arm **id 0** when the model owns what
+/// The generic loader seed (`0x71019b`): resolve id 0, and arm **id 0** when the model owns what
 /// that resolves to — only the degenerate leg (owning nothing reachable) falls back to the raw
 /// `animations[0]` dword.
 fn go_loader_seed(
@@ -132,16 +133,16 @@ pub fn goanimscan(chain: &mut Chain) -> Result<()> {
     let (mut parsed, mut no_seq, mut blind, mut sensitive, mut needs_remap, mut rate0) =
         (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
     // The transition half (decision 1151): a MOTION substate whose resolved sequence is bit-0-clear
-    // is one the kernel wraps for ever — so it is bounded only by the object layer's §2d completion
-    // advance, and a consumer that arms it by the loop bit instead flaps. And `replay` decides
-    // whether that window is one band or several.
+    // is one the kernel wraps for ever — so it is bounded only by the object layer's completion
+    // advance (`0x5f4120`), and a consumer that arms it by the loop bit instead flaps. And `replay`
+    // decides whether that window is one band or several.
     let (mut looping_motion, mut looping_motion_sensitive, mut multi_replay) = (0u32, 0u32, 0u32);
-    // The VARIATION half (wow-re `gameobject-anim-arm.md` §2c, `0x5f3aee: push -1`): the GameObject
-    // arm rolls a `_rand`-weighted variation, while the §1 loader seed underneath it takes an
-    // explicit variation 0. So a model that authors a CHAIN on a reachable substate's id plays
-    // something the seed never reaches — and a consumer resolving the id to its head variation
-    // renders the whole rest of the chain unreachable. Onyxia's lava traps are the case
-    // (`ONYZIASLAIRLAVATRAP`: Stand ×2, and only the 10 %-weighted second one spurts lava).
+    // The VARIATION half (`0x5f3aee: push -1`): the GameObject arm rolls a `_rand`-weighted
+    // variation, while the loader seed underneath it (`0x71019b`) takes an explicit variation 0. So
+    // a model that authors a CHAIN on a reachable substate's id plays something the seed never
+    // reaches — and a consumer resolving the id to its head variation renders the whole rest of the
+    // chain unreachable. Onyxia's lava traps are the case (`ONYZIASLAIRLAVATRAP`: Stand ×2, and
+    // only the 10 %-weighted second one spurts lava).
     let mut chained = 0u32;
     let mut chained_paths: Vec<String> = Vec::new();
     for (path, displays) in &models {
@@ -175,7 +176,7 @@ pub fn goanimscan(chain: &mut Chain) -> Result<()> {
             let played =
                 armed.and_then(|(_, slot)| seqs.iter().find(|s| s.seq_index == slot as usize));
             // A transient substate (a transition motion) armed on a band the kernel wraps: what
-            // ends it is §2d, never the clip.
+            // ends it is the completion advance (`0x5f4120`), never the clip.
             let motion = MOTION_SUBSTATES.contains(&sub);
             flaps |= motion && !r0 && played.is_some_and(|s| s.looping);
             replays |= played.is_some_and(|s| (s.min_replay, s.max_replay) != (0, 0));
@@ -257,7 +258,7 @@ pub fn goanimscan(chain: &mut Chain) -> Result<()> {
         "  STATE-SENSITIVE {sensitive}  — at least one substate plays something else: exactly the \
          models a GO type that skips the arm renders in the wrong pose"
     );
-    println!("  needing the §2c remap on some substate: {needs_remap}");
+    println!("  needing the four-way remap on some substate: {needs_remap}");
     println!(
         "  authoring a VARIATION CHAIN on a reachable substate: {chained}  — the models the arm's \
          `variationIdx = -1` roll can reach and the loader seed's explicit variation 0 cannot"
@@ -268,7 +269,7 @@ pub fn goanimscan(chain: &mut Chain) -> Result<()> {
     println!(
         "  arming a LOOPING band on a transition (motion) substate: {looping_motion} \
          ({looping_motion_sensitive} of them state-SENSITIVE, i.e. the transition is a clip the \
-         rest pose isn't)  — the §2d completion advance is the only thing that ends these; read \
+         rest pose isn't)  — the completion advance is the only thing that ends these; read \
          as \"should this clip repeat?\" they swing for ever (decision 1151)"
     );
     println!(
@@ -405,8 +406,8 @@ pub fn fxlifescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 /// per-sequence bake (`EmitTiming`/`EmitParams`/`AlphaAnim`) degrades to slot 0, a sequence the
 /// instance is not playing (decision 0936, found on the Stormwind battlefield banner).
 ///
-/// The reference arms the loader-idle sequence on **every** M2 instance at load (`0x70ebd0`'s tail,
-/// wow-re `gameobject-anim-arm.md` §1), so "which sequence is this playing" always has an answer.
+/// The reference arms the loader-idle sequence on **every** M2 instance at load (`0x70ebd0`'s
+/// tail), so "which sequence is this playing" always has an answer.
 /// benilla skips the arm when looping the idle would render identically to the static mesh — sound
 /// for the *mesh*, and silently wrong for anything keyed on the sequence *identity*. The two only
 /// disagree visibly when the idle is not slot 0, which is the `DuelingFlag` shape:
@@ -609,7 +610,7 @@ pub fn seqclockscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 ///
 /// `$DSE` is in the set because it is half of `$DSL`'s lifecycle and it is **lane-specific**: the
 /// placed-doodad handler `0x6951e0` has an arm for it, the GameObject dispatcher `0x5f3e20` has
-/// none at all (wow-re `doodad-sound-emitters.md` §13), so which models author it decides whether
+/// none at all, so which models author it decides whether
 /// a consumer may route the token uniformly.
 ///
 /// Why that column decides everything: `benilla_assets`' render content gate
@@ -752,14 +753,14 @@ pub fn soundeventscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 }
 
 /// The ten `GameObjectDisplayInfo.Sound[n]` slots, in column order — the names the reference's
-/// own substate family gives them (`gameobject-anim-arm.md` §2c's LUT order).
+/// own substate family gives them.
 const GO_SLOT_NAMES: [&str; 10] = [
     "Stand", "Open", "Loop", "Close", "Destroy", "Opened", "Custom0", "Custom1", "Custom2",
     "Custom3",
 ];
 
-/// The event tag that reaches each display slot (wow-re `go-display-sound-events.md` §3, the
-/// dispatcher `0x5f3e20`'s ten call sites): `$GO0..5` → slots 0..5, `$GC0..3` → slots 6..9.
+/// The event tag that reaches each display slot (the dispatcher `0x5f3e20`'s ten call sites):
+/// `$GO0..5` → slots 0..5, `$GC0..3` → slots 6..9.
 fn go_slot_tag(slot: usize) -> [u8; 4] {
     if slot < 6 {
         [b'$', b'G', b'O', b'0' + slot as u8]
@@ -769,9 +770,10 @@ fn go_slot_tag(slot: usize) -> [u8; 4] {
 }
 
 /// The model sequence **file slots** the GameObject arm can ever put on screen: the loader seed
-/// (§1) plus every substate any client path produces — the six `GAMEOBJECT_STATE` ×
+/// (`0x71019b`) plus every substate any client path produces — the six `GAMEOBJECT_STATE` ×
 /// `GAMEOBJECT_ANIMPROGRESS` ones ([`REACHABLE`]), the four Custom ones (opcode `0xb3`) and
-/// Despawn (`0x215`) — each through the §2c remap and op4's `playableAnimationLookup` resolve.
+/// Despawn (`0x215`) — each through the four-way remap (`0x5f3972`) and op4's
+/// `playableAnimationLookup` resolve.
 ///
 /// This is the reachability half of [`goslotscan`]: an authored `$GOn` on a sequence outside this
 /// set is a marker no arm can ever cross, so its display slot is dead however the DBC is filled.

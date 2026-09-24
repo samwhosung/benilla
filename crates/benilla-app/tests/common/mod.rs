@@ -106,7 +106,7 @@ const UIPARENT_STAND_INS: &str = r#"
     PETACTIONBAR_XPOS = PETACTIONBAR_XPOS or 36
 
     -- The frames these three read UNGUARDED, seated on the call rather than at load: a frame's
-    -- publish to _G is non-overwriting (RF-0023), so a stand-in seated before the real file loads
+    -- publish to _G is non-overwriting (0x701bd0), so a stand-in seated before the real file loads
     -- would shadow the real window for good.
     local function benilla_seat(names)
         for _, name in ipairs(names) do

@@ -108,7 +108,7 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
         CreateFrame("GameTooltip", "ShoppingTooltip1"):Hide()
         CreateFrame("GameTooltip", "ShoppingTooltip2"):Hide()
         -- A ref-shaped SHOW_COMPARE_TOOLTIP listener, kept as the NEGATIVE control: 5875 never
-        -- signals event 377 (zero fire sites, wow-re merchant-compare-item-law.md §8), so nothing
+        -- signals event 377 (zero fire sites in the whole image), so nothing
         -- benilla does may reach this handler.
         compare_calls = {}
         local watcher = CreateFrame("Frame", "CompareWatcher")
@@ -207,10 +207,10 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
 }
 
 /// **`nameOnly`** — `SetInventoryItem`'s optional third argument, p4 of the builder, and the ONLY
-/// door onto the compact render in 1.12.1 (wow-re `ui/scratch/tooltip-nameonly-p4-census.md`: 27
-/// of 31 call sites pass a provable zero, one forwards, and the three that carry a flag are all
-/// this binding's). No stock FrameXML caller passes it — all 8 stock call sites are
-/// two-argument — so this is addon surface, and it is live code, not a dead arm.
+/// door onto the compact render in 1.12.1 (27 of `0x52b650`'s 31 call sites pass a provable zero,
+/// one forwards, and the three that carry a flag are all this binding's). No stock FrameXML caller
+/// passes it — all 8 stock call sites are two-argument — so this is addon surface, and it is live
+/// code, not a dead arm.
 ///
 /// The mode is **trimmed, not bare**, and that is the half a plausible implementation gets wrong:
 /// two non-contiguous cuts plus an early return. Gone: the bind/lock region, the whole stat body,

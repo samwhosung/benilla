@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(
             s.defense_skill,
             (0, 0),
-            "INTERIM — pending the wow-re verdict"
+            "INTERIM — unconfirmed in the reference"
         );
     }
 

@@ -156,7 +156,7 @@ const ELSEWHERE: &[(&str, &str, &str)] = &[
 ];
 
 /// Pairs nothing fires on the verb's path, each with its reason. A row is a gap with a name,
-/// never a reason to stop; the reference's own site is in the table for the grep into wow-re.
+/// never a reason to stop; the reference's own site is in the table.
 const GAP: &[(&str, &str, &str)] = &[
     (
         "CancelSkillUps",
@@ -170,15 +170,15 @@ const GAP: &[(&str, &str, &str)] = &[
         "ClickTargetTradeButton",
         "TRADE_REPLACE_ENCHANT",
         "the reference runs the enchant clash check 0x496170 when a spell is on the cursor and \
-         fires this for the replace dialog (wow-re staticpopup-dialog-bindings.md §3.1); casting \
+         fires this for the replace dialog; casting \
          an enchant onto the partner's slot is not built here — `ui_trade.rs` only mirrors the \
          wire's enchant slot — so the verb is the money arm alone",
     ),
     (
         "CloseTrade",
         "PLAYER_TRADE_MONEY",
-        "fired only when the trade did not complete (`[0xb71748] == 0`, wow-re \
-         incoming-trade-request-law.md), zeroing the cancelled offer under a frame TRADE_CLOSED \
+        "fired only when the trade did not complete (`[0xb71748] == 0`), \
+         zeroing the cancelled offer under a frame TRADE_CLOSED \
          hides; here `TradeSession::begin` resets the whole session at the next trade, so the \
          next window opens at zero either way",
     ),
@@ -199,8 +199,8 @@ const GAP: &[(&str, &str, &str)] = &[
     (
         "PetDismiss",
         "PET_DISMISS_START",
-        "the worker 0x4bd6e0 sends the dismiss and fires this with a duration (`%d`, 10000 — \
-         wow-re pet-action-bar-api.md §10.8); no shipped file listens, the dismiss reaches the \
+        "the worker 0x4bd6e0 sends the dismiss and fires this with a duration (`%d`, 10000); \
+         no shipped file listens, the dismiss reaches the \
          wire through the app's drain, and the pet frame follows the unit's departure",
     ),
     (

@@ -72,7 +72,7 @@ fn creature_line_law() {
         -- A RECOGNISED token naming nothing answers nil...
         assert(tt:SetUnit("party4") == nil, "a recognised but absent unit answers nil")
         -- ...while an UNRECOGNISED one raises, because SetUnit resolves through the client's one
-        -- token resolver like every Unit* verb (wow-re raid-roster-bindings.md §1: a token matching
+        -- token resolver like every Unit* verb (`0x515970`: a token matching
         -- none of the nine prefixes reaches `luaL_error("Unknown unit name: %s")` and longjmps).
         -- This used to read `SetUnit("nosuch") == nil`, which was the refuted claim.
         assert(pcall(tt.SetUnit, tt, "nosuch") == false, "an unrecognised token raises")
@@ -210,8 +210,8 @@ fn a_pending_name_titles_unknownobject_and_the_answer_replaces_it() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The faction-name line sits between the level line and "PvP" (the builder-tail block the §2
-/// order omitted — the director's Marshal McBride reference: Level, Stormwind, PvP); the
+/// The faction-name line sits between the level line and "PvP" (the builder-tail block of
+/// `0x529fe0` — the director's Marshal McBride reference: Level, Stormwind, PvP); the
 /// CIVILIAN line is the dishonorable-kill warning, whole gate (`0x612550`): PvP bit + civilian
 /// flag + HOSTILE + GREY/trivial — a friendly (or non-grey) civilian never shows it; LEADER
 /// (white) needs only the PvP bit + the flag (`0x6125c0`).

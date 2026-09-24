@@ -121,7 +121,7 @@ fn red_lines_track_player_state() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The §5-verified families folded back 2026-07-10 (tooltip-content-law.md): SIGNABLE green,
+/// The families folded back 2026-07-10 (`0x52b650`): SIGNABLE green,
 /// UNIQUE before STARTS_QUEST, LOCKED red, six-equal resistances collapse to the ALL line (and
 /// Holy never prints singly), a known taught spell reds "Already known", the description gold —
 /// and NO openable line: `BenillaSetItemById` is a template source, and the whole openable/readable/
@@ -247,11 +247,12 @@ fn verified_families_signable_locked_resists_known() {
 }
 
 /// The slot|type line's independent cell reds (byte-read at the builder's coloring legs
-/// against the verified AddLine-CORE signature — NB law §10's prose swaps the cells): a hard
+/// against the AddLine-CORE signature): a hard
 /// proficiency miss (`0xc4d4a0[class]` bit `1 << subclass`) reds the TYPE cell; the SLOT cell
 /// reds when the weapon is usable only via its alternate subclass (ItemSubClass
 /// prereq/postreq) or is an off-hand weapon without Dual Wield (`0x5eab70`). Plus the
-/// reputation-requirement red (§1-RED's standing leg) and the hidden-type suppression.
+/// reputation-requirement red (`0xc0d390` while the player's standing is below the required
+/// rank) and the hidden-type suppression.
 #[test]
 fn proficiency_and_reputation_reds() {
     let mut s = script();
@@ -462,18 +463,18 @@ fn required_level_one_is_hidden() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The instance tail (byte-read 2026-07-20; wow-re §1-CREATOR/-OPENABLE cross-checked, their
-/// 0f4824e2): a REAL-instance hover (`SetBagItem`) appends the creator line — "Written by %s"
+/// The instance tail (byte-read 2026-07-20, `0x52e1b1`–`0x52e358`): a REAL-instance hover
+/// (`SetBagItem`) appends the creator line — "Written by %s"
 /// (white) when the instance carries letter text, the green-escaped "<Made by %s>" otherwise —
 /// then READABLE off the instance text id (its template's PageText is 0 — the
 /// director-reported gap). An unresolved creator (name query in flight) emits no line. LOCKED
 /// yields to the instance UNLOCKED bit — which is also what un-gates ITEM_OPENABLE: a bag hover
 /// on an openable instance shows the green `<Right Click to Open>` (director-observed on a clam;
-/// wow-re `right-click-open.md` §1 re-derived the `p6` leg selector that had it suppressed).
+/// the `p6` leg selector, `0x6e2ed0`, gates it).
 /// A **running cooldown** takes SetBagItem's other leg and suppresses the line — the two are
 /// structurally exclusive on this binding (decision 0896).
 /// **Line 3 — the charter's guild name and master**, between the NAME and the green
-/// `ITEM_SIGNABLE` (wow-re `tooltip-content-law.md`'s emission order: 2 NAME, 3 the petition
+/// `ITEM_SIGNABLE` (the builder `0x52b650`'s emission order: 2 NAME, 3 the petition
 /// triple, 4 SIGNABLE).
 ///
 /// The director's report was that our charter tooltip showed the name and the green line with
@@ -744,11 +745,11 @@ fn instance_tail_creator_and_readable() {
     assert!(s.take_errors().is_empty());
 }
 
-/// **§6's Soulbound override** — the bind line reads the INSTANCE, not only the template
+/// **The bind line's Soulbound override** — the bind line reads the INSTANCE, not only the template
 /// (B310, Frostshake: an equipped Maiden's Circle still said *Binds when equipped*, and B309's
 /// own shot showed *Binds when picked up* on the equipped pants).
 ///
-/// The law (wow-re `tooltip-content-law.md` §6, byte-verified): Bonding `[record+0x194]` ∈ {1..5}
+/// The reference's rule: Bonding `[record+0x194]` ∈ {1..5}
 /// decides whether a line prints at all; a **runtime-bound instance** (`0x5da2c0` — soulbound
 /// flag, or a live enchant slot that binds) overrides it to `ITEM_SOULBOUND`, and to
 /// `ITEM_BIND_QUEST` for the quest kinds; only then does the jump table `0x52e4fc` pick
@@ -826,9 +827,9 @@ fn a_runtime_bound_instance_overrides_the_bind_line_to_soulbound() {
     let (text, color) = bind_line(&mut s);
     assert_eq!(
         text, "[ITEM_SOULBOUND]",
-        "a runtime-bound instance overrides §6"
+        "a runtime-bound instance overrides the template's Bonding"
     );
-    assert_eq!(color, [1.0, 1.0, 1.0, 1.0], "§6 is white");
+    assert_eq!(color, [1.0, 1.0, 1.0, 1.0], "the bind line is white");
 
     // Control 1: the SAME item, instance not bound — the template's bonding stands.
     s.run(r#"TT:SetBagItem(0, 2)"#).unwrap();
@@ -844,12 +845,11 @@ fn a_runtime_bound_instance_overrides_the_bind_line_to_soulbound() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The damage block's five-arm template matrix** (wow-re
-/// `tooltip-damage-matrix-and-container-slots.md` §D1, VERIFIED; decision 2080 named this cell and
-/// 2158 converted it). Each arm here names the leg it takes: the school predicate is the slot's
-/// school NUMBER, the ammo predicate is `ItemClass == 6` alone, the single predicate compares the
-/// two ROUNDED bounds, and the first/`PLUS_` flag is per-item — a skipped slot does not consume it.
-/// The rounding is `floor(min)` / `ceil(max)`, not a round-half pair.
+/// **The damage block's five-arm template matrix** (the loop at `0x52c22b`; decision 2080 named
+/// this cell and 2158 converted it). Each arm here names the leg it takes: the school predicate is
+/// the slot's school NUMBER, the ammo predicate is `ItemClass == 6` alone, the single predicate
+/// compares the two ROUNDED bounds, and the first/`PLUS_` flag is per-item — a skipped slot does
+/// not consume it. The rounding is `floor(min)` / `ceil(max)`, not a round-half pair.
 #[test]
 fn damage_matrix_arms_and_the_first_flag() {
     let mut s = script();
@@ -984,7 +984,7 @@ fn damage_matrix_arms_and_the_first_flag() {
     );
 }
 
-/// **The bag line** (wow-re §D2, VERIFIED): its gate is `InventoryType == 0x12` alone — never the
+/// **The bag line** (`0x52b754`): its gate is `InventoryType == 0x12` alone — never the
 /// slot count — and its second hole is the same `ItemSubClass` DisplayName the type cell reads, so
 /// the noun is per-subclass. A container whose row names nothing prints no slot line at all.
 #[test]

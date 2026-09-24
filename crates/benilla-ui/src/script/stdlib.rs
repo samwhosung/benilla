@@ -119,7 +119,7 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
             // `luaL_checklstring` just returned — as `luaL_optlstring`'s `def`, so a nameless
             // chunk is named by its own text and `luaO_chunkid 0x6f5c40` renders it by its third
             // rule, `[string "…"]`, cut at the first newline and at the budget. There is no
-            // `.rdata` literal on that path at all (wow-5875-re `lua-dialect.md` §11, executed).
+            // `.rdata` literal on that path at all (measured too, by running `0x703280` itself).
             //
             // We used to prepend `=`, which is `luaO_chunkid`'s "print this verbatim, undecorated"
             // marker — so an explicit name lost its `[string "…"]` wrapper and a `@path` name kept
@@ -197,7 +197,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 const WOW_STDLIB: &str = r#"
 -- ── the bare string family ─────────────────────────────────────────────────────────────────────
 -- Every name here is present in the REAL 1.12 client's global table — the in-world `_G` captured
--- from the running reference client (wow-5875-re's item-13 fixture, 19,572 entries), which is the
+-- from the running reference client (19,572 entries), which is the
 -- authority this file now answers to (decision 1189).
 --
 -- 1187 also installed `strmatch`, `strrev`, `gmatch`, `strlenutf8` and `strcmputf8i` from
@@ -265,7 +265,7 @@ ldexp = math.ldexp
 
 -- ── the debug* family: six verified STUBS and two real ones ────────────────────────────────────
 --
--- wow-re carved all eight (`system/ui/scratch/lua-dialect.md` §3a, and the 2026-08-11 batch):
+-- All eight, read at the bytes (`0x7027e0`..`0x702860`):
 -- `debuginfo`, `debugload`, `debugprint`, `debugdump`, `debugbreak` and `debugtimestamp` are
 -- **byte-identical `xor eax,eax; ret` stubs** — three bytes, no `call`, no memory write. They
 -- cannot print, log, write or set a global, and they return ZERO Lua values. So these are not
@@ -308,7 +308,7 @@ do
     function geterrorhandler() return handler end
 end
 
--- ── _G accessors (RF-0023 getglobal/setglobal: _G[name] get/set) ───────────────────────────────
+-- ── _G accessors (getglobal/setglobal: _G[name] get/set) ───────────────────────────────
 function getglobal(name) return _G[name] end
 function setglobal(name, value) _G[name] = value end
 
@@ -322,8 +322,8 @@ function GetLocale() return "enUS" end
 __benilla_now = 0.0
 function GetTime() return __benilla_now end
 
--- ── The zone-text family (decisions 0203 phase 1 + 0287, byte-pinned by its fold-back; wow-re
--- ui zonetext-pvpinfo.md). The app pushes the host globals on an area change (the same shape as
+-- ── The zone-text family (decisions 0203 phase 1 + 0287).
+-- The app pushes the host globals on an area change (the same shape as
 -- GetTime) and fires MINIMAP_ZONE_CHANGED / the ZONE_CHANGED family; these getters just read the
 -- cached slots, like the real bindings (0x48a0a0/c0/e0/100 read BSS caches). GetZoneText = the
 -- zone name, replaced by the WMO interior's name indoors; GetRealZoneText = the WMO-immune zone
@@ -447,7 +447,7 @@ end
 "#;
 
 /// `time()` and `date([format [, when]])` — engine globals in the 1.12 client's own `_G`, slots 34
-/// and 33 of its base registry (`0x7035a0` / `0x7033a0`, wow-re `lua-dialect.md`).
+/// and 33 of its base registry (`0x7035a0` / `0x7033a0`).
 ///
 /// They are Lua 5.0's `os.time`/`os.date` hoisted to globals, and we lacked both because the
 /// sandbox strips `os` wholesale. `time` was the top name in the session-start
@@ -608,8 +608,7 @@ fn format_epoch(secs: i64, fmt: &str) -> String {
     out
 }
 /// `luaO_chunkid` (`0x6f5c40`), the reference's own — because `debugstack`'s frames carry
-/// `short_src`, and **it truncates from the FRONT** (decision 2121, wow-re
-/// `system/ui/scratch/debugstack-return-shape.md`).
+/// `short_src`, and **it truncates from the FRONT** (decision 2121).
 ///
 /// An `@`-named chunk longer than [`CHUNKID_KEEP`] characters after the `@` becomes `"..."` plus
 /// its LAST [`CHUNKID_KEEP`], so the head of the path is what is lost. That is not a detail: over a
@@ -645,7 +644,7 @@ fn chunk_id(source: &str) -> String {
 const LUA_IDSIZE: usize = 60;
 
 /// How many characters of an `@`-named chunk survive truncation, tail-first: the reference keeps
-/// the last 52 behind a `"..."` (wow-re's measurement off `0x6f5c40`).
+/// the last 52 behind a `"..."` (measured off `0x6f5c40`).
 const CHUNKID_KEEP: usize = 52;
 
 /// What `[string "…"]` costs the budget in the third `luaO_chunkid` arm.
@@ -709,7 +708,7 @@ fn traceback_frame(d: &mlua::Debug) -> String {
 /// frames on a two-deep stack and one frame plus `"...\n"` on a three-deep one. Clamping to
 /// `count1` instead would diverge from the reference at exactly `depth == count1 + 1` — which is
 /// `FuBarPlugin-2.0.lua:752`'s `debugstack(6, 1, 0)`, whose greedy `"\\AddOns\\(.*)\\"` reads the
-/// LAST path in the string. wow-re `debugstack-return-shape.md` maps the whole regime.
+/// LAST path in the string.
 fn traceback_frames(lua: &Lua, start: usize, count1: usize, count2: usize) -> String {
     let mut out = String::new();
     let mut level = start;

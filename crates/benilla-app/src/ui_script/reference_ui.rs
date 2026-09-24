@@ -259,7 +259,7 @@ mod tests {
     /// Strip what is not code, before any call census over a FrameXML file.
     ///
     /// Both `Name(` and `:Name(` counted calls inside comments until decision 1800: the round that
-    /// built `PickupMerchantItem` also asked wow-re for `ShowInventorySellCursor`, which
+    /// built `PickupMerchantItem` also asked about `ShowInventorySellCursor`, which
     /// [`chain_gap_report`] had named as `PaperDollFrame.xml`'s last engine gap — and the answer
     /// was that stock `PaperDollFrame.lua:754-756` has the call **commented out**, all three
     /// lines. A real binding, never called, blocking a window that was not blocked.
@@ -433,7 +433,7 @@ mod tests {
 
         // Order still decides, and it is still the whole rule — so it is asserted directly rather
         // than through whichever window happens to collide this month. Two chunks, the same name,
-        // and the later one stands; `publish_global`'s non-overwriting rule (RF-0023) applies to
+        // and the later one stands; `publish_global`'s non-overwriting rule (`0x701bd0`) applies to
         // FRAMES, never to a plain Lua global, and confusing the two has produced confident wrong
         // diagnoses before.
         s.run("function _order_probe() return 1 end").unwrap();
@@ -482,7 +482,7 @@ mod tests {
     ///
     /// A candidate whose frame NAMES our own shipped file already owns produces failures that are
     /// artefacts of the probe, not of the window. `publish_global` is deliberately non-overwriting
-    /// (RF-0023), so the second frame to claim a name gets a wrapper that `_G` never points at —
+    /// (`0x701bd0`), so the second frame to claim a name gets a wrapper that `_G` never points at —
     /// and any reference body using the `getglobal(this:GetName())` idiom then reads a DIFFERENT
     /// table than the `this` it just wrote to.
     ///
@@ -998,11 +998,11 @@ mod tests {
             // wrong (1801). So this one runs the load itself — the same fresh-VM-plus-manifest
             // pass the readiness probe does — and reports it in the same row.
             // **A `LOAD:` line for a window we ALSO ship is suspect**, and the reason is the same
-            // one `chain_readiness_report` carries: `publish_global` is non-overwriting (RF-0023),
-            // so loading the stock file on top of our identically-named one leaves every colliding
-            // frame's global pointing at OUR frame while the stock file's handlers run against
-            // THEIRS. A field set on `this` in an OnLoad is then invisible to `getglobal(name)`,
-            // and the failure looks like a bug in whatever read it back.
+            // one `chain_readiness_report` carries: `publish_global` is non-overwriting
+            // (`0x701bd0`), so loading the stock file on top of our identically-named one leaves
+            // every colliding frame's global pointing at OUR frame while the stock file's handlers
+            // run against THEIRS. A field set on `this` in an OnLoad is then invisible to
+            // `getglobal(name)`, and the failure looks like a bug in whatever read it back.
             //
             // Worked example, because it cost an hour: stock `TradeFrame.xml` reported
             // `MoneyFrame.xml:525: attempt to index local 'info'`. Nothing was wrong with our
@@ -1523,7 +1523,7 @@ mod tests {
             (
                 "SkillFrame.xml",
                 "BuySkillTier",
-                "a 5875 binding (wow-re `bindings.md`: marshals and delegates to a C++ \
+                "a 5875 binding (`0x4d3e50`: marshals and delegates to a C++ \
                  method/net-send) of the pre-1.12 skill-point purchase UI. the detail bar's LearnSkillButton calls it, and \
                  that button shows only while `UnitCharacterPoints`'s second value or a row's \
                  step/rank cost is non-zero — which no 1.12 server sends. Unreachable until the \
@@ -1532,7 +1532,7 @@ mod tests {
             (
                 "SkillFrame.xml",
                 "AddSkillUp",
-                "a 5875 binding (wow-re `bindings.md`: marshals and delegates to a C++ \
+                "a 5875 binding (`0x4d3c30`: marshals and delegates to a C++ \
                  method/net-send) of the pre-1.12 skill-point purchase UI. the detail bar's RightArrow calls it, and \
                  that button shows only while `UnitCharacterPoints`'s second value or a row's \
                  step/rank cost is non-zero — which no 1.12 server sends. Unreachable until the \
@@ -1541,7 +1541,7 @@ mod tests {
             (
                 "SkillFrame.xml",
                 "RemoveSkillUp",
-                "a 5875 binding (wow-re `bindings.md`: marshals and delegates to a C++ \
+                "a 5875 binding (`0x4d3c70`: marshals and delegates to a C++ \
                  method/net-send) of the pre-1.12 skill-point purchase UI. the detail bar's LeftArrow calls it, and \
                  that button shows only while `UnitCharacterPoints`'s second value or a row's \
                  step/rank cost is non-zero — which no 1.12 server sends. Unreachable until the \
@@ -1593,8 +1593,8 @@ mod tests {
             (
                 "StaticPopup.xml",
                 "ReplaceTradeEnchant",
-                "a registered 1.12 binding whose body is uncarved (wow-re `bindings.md`, structural row only); a \
-                 wow-re orchestrator is out on it and it is built when the carve lands (1960). Reached by TRADE_REPLACE_ENCHANT's Accept, an event this engine does not fire yet.",
+                "a registered 1.12 binding (`0x48d330`) whose body is not yet known; it is built \
+                 once it is (1960). Reached by TRADE_REPLACE_ENCHANT's Accept, an event this engine does not fire yet.",
             ),
         ];
 
@@ -2331,8 +2331,8 @@ mod tests {
                 "TRADE_REQUEST",
                 "UIParent.lua — the trade ASK dialog, and the one entry on this list that is \
                  UNPRODUCEABLE rather than unbuilt: the 5875 client registers the event and \
-                 signals it from NOWHERE (a whole-image census, wow-re \
-                 ui/scratch/incoming-trade-request-law.md §3), so StaticPopupDialogs[\"TRADE\"] is \
+                 signals it from NOWHERE (a whole-image census: no signal site passes its id, \
+                 `0x11d`), so StaticPopupDialogs[\"TRADE\"] is \
                  dead code THERE too. benilla wired the dialog up once and took it back out — \
                  decision 1764. Producing this would be a divergence, not a fix",
             ),
@@ -2362,8 +2362,8 @@ mod tests {
             (
                 "SHOW_COMPARE_TOOLTIP",
                 "PaperDollFrame.lua — the second `TRADE_REQUEST` (decision 1764): event 377 is \
-                 registered in 5875 and signalled from NOWHERE (zero fire sites in wow-re's own \
-                 census, `merchant-compare-item-law.md` §8), so this listener is dead code THERE \
+                 registered in 5875 and signalled from NOWHERE (zero fire sites in the whole \
+                 image), so this listener is dead code THERE \
                  too. benilla fired it from 0283 until 2202, then drove the plates itself on a \
                  shift-held hover until 2210; both were supersets. Nothing in this engine seats a \
                  shopping plate now — the reference's own callers do (`MerchantFrame.xml:63-80`, \

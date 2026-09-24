@@ -216,7 +216,7 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
 /// answers), then runs the reference's own body. First use rather than load time, and unnamed,
 /// because both registries keep the first writer: the arena's name map
 /// (`named_registry_is_non_overwriting`) and `_G` itself — a named frame is published
-/// non-overwriting (RF-0023: a `lua_gettable` nil check on GLOBALSINDEX, which is why a
+/// non-overwriting (`0x701bd0`: a `lua_gettable` nil check on GLOBALSINDEX, which is why a
 /// metatable fallback would block the real publish just the same). A stand-in seated before the
 /// real declaration shadows the real frame for good; the first cut did exactly that, 126
 /// failures, every tabbed panel's `numTabs` read off the stand-in. `fire_chat_login`'s
@@ -268,7 +268,7 @@ pub(super) const UIPARENT_STAND_INS: &str = r#"
     PETACTIONBAR_XPOS = PETACTIONBAR_XPOS or 36
 
     -- The frames these three read UNGUARDED, seated on the call rather than at load: a frame's
-    -- publish to _G is non-overwriting (RF-0023), so a stand-in seated before the real file loads
+    -- publish to _G is non-overwriting (0x701bd0), so a stand-in seated before the real file loads
     -- would shadow the real window for good.
     local function benilla_seat(names)
         for _, name in ipairs(names) do

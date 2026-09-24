@@ -16,8 +16,8 @@ fn armed(trail: TrailProc) -> WeaponTrail {
     t
 }
 
-/// wow-re §8's worked example: "with the shipped `CharParamThree = 100` and a 16.7 ms frame,
-/// `fadeStep = 5`, so `nSegments = 20` — twenty appended frames ≈ 0.33 s of trail history".
+/// `0x6c6560`'s arithmetic, worked: with the shipped `CharParamThree = 100` and a 16.7 ms frame,
+/// `fadeStep = 5`, so `nSegments = 20` — twenty appended frames ≈ 0.33 s of trail history.
 #[test]
 fn shipped_frame_gives_five_and_twenty() {
     for dt in [16, 17] {
@@ -113,21 +113,21 @@ fn kit_324_at_sixty_hz() {
         assert!(frame < 10_000, "the trail must terminate");
     };
     assert_eq!(appended, 35, "appends for the 600 ms duration at 60 Hz");
-    // §8's nominal is 20 pairs (alpha 100 / fadeStep 5), but `fadeStep` is a TRUNCATED product,
+    // The nominal is 20 pairs (alpha 100 / fadeStep 5), but `fadeStep` is a TRUNCATED product,
     // so as the alpha decays the integer quotient drifts *above* it — alpha 68 at a 16 ms frame
     // truncates to step 3 and asks for 22. The ring's 64 pairs is the real ceiling.
     assert_eq!(
         longest, 22,
         "the retained history peaks just over the nominal 20 pairs"
     );
-    // wow-re §8 estimates the visible life at "≈ duration/2 + (alpha/fadeStep)·dt ≈ duration",
-    // holding `fadeStep` constant. It is not constant — it is `trunc(dt·alpha/300)`, so it shrinks
+    // Holding `fadeStep` constant puts the visible life at ≈ duration/2 + (alpha/fadeStep)·dt ≈
+    // duration. It is not constant — it is `trunc(dt·alpha/300)`, so it shrinks
     // with the alpha it is decaying, and the truncation shaves it further (alpha 54 asks for 2.88
     // and gets 2). The decay is therefore sub-exponential and a 600 ms kit is on screen for
     // **twice** its duration.
     assert_eq!(
         end, 1_250,
-        "a 600 ms kit is visible for 1.25 s, not §8's ~0.6 s"
+        "a 600 ms kit is visible for 1.25 s, not the constant-step ~0.6 s"
     );
 }
 

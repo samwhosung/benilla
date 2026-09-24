@@ -4,18 +4,17 @@
 //! resolution, script compilation) and no Lua; those live in the layer above, which walks the tree
 //! this module produces.
 //!
-//! Ground truth is wow-5875-re's verified transcription of the real client's loader
-//! (`0x6edc00–0x6f3000`, closed VERIFIED ORCHESTRATION region):
-//! - `system/ui/ui.md` §"The FrameXML XML loader — schema → frame-op interpretation (RF-0024)"
-//! - `system/ui/scratch/rf24-framexml-loader.md` — the full top-level + per-element op map
-//! - `system/ui/scratch/rf26-nested-frames.md` — `<Frames>` / load-order (widget-layer concern; cited
+//! Ground truth is the real client's loader (`0x6edc00–0x6f3000`):
+//! - the file loader `0x6ede10` — the schema → frame-op interpretation, the full top-level +
+//!   per-element op map
+//! - `LoadChildFrames 0x76a060` — `<Frames>` / load-order (widget-layer concern; cited
 //!   here only for the "spliced before the instance's own nodes" ordering that also governs template
 //!   `<Frames>` children, which this module's generic child-concat already gets right)
-//! - `system/ui/scratch/rf27-parent-name-token.md` — the `$parent` substitution rule (RF-0027)
+//! - `0x76c5b0` — the `$parent` substitution rule
 //!
-//! XML *parsing* is DELEGATED plumbing per the RE spec ("XML parsing is DELEGATED; the schema→op map
-//! is owned") — we use `roxmltree` rather than reproduce a tokenizer; only the schema→op
-//! interpretation below is transcribed from the spec.
+//! XML *parsing* is delegated plumbing in the reference too (an embedded expat); the schema→op map
+//! is its own — we use `roxmltree` rather than reproduce a tokenizer; only the schema→op
+//! interpretation below is transcribed from the reference.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -23,19 +22,18 @@ use std::fmt;
 /// An owned XML element: tag, attributes (order preserved — Blizzard XML attribute order is
 /// sometimes meaningful for authoring tools, and always useful for round-tripping/debugging), and
 /// element children. Case-insensitive attribute lookup: "attrs via `GetAttribute 0x6f2cf0`" and
-/// element-name compares are case-insensitive in the real loader (`0x64a4c0`,
-/// rf24-framexml-loader.md, header), and Blizzard's own shipped XML is inconsistent about attribute
-/// casing (e.g. both `relativeTo` and stray all-lowercase variants appear in the wild), so lookups
-/// here fold case rather than assume a canonical spelling.
+/// element-name compares are case-insensitive in the real loader (`0x64a4c0`), and Blizzard's own
+/// shipped XML is inconsistent about attribute casing (e.g. both `relativeTo` and stray
+/// all-lowercase variants appear in the wild), so lookups here fold case rather than assume a
+/// canonical spelling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Element {
     pub tag: String,
     attrs: Vec<(String, String)>,
     pub children: Vec<Element>,
-    /// The node's own direct text content (the XML node struct's `body-text @ +0xc`, per
-    /// rf24-framexml-loader.md's node-struct note). Populated for text-bearing elements such as
-    /// `<Scripts>` handler bodies (`<OnLoad>lua…</OnLoad>`) and inline `<Script>` bodies. Empty for
-    /// purely structural elements.
+    /// The node's own direct text content (the XML node struct's `body-text @ +0xc`). Populated for
+    /// text-bearing elements such as `<Scripts>` handler bodies (`<OnLoad>lua…</OnLoad>`) and
+    /// inline `<Script>` bodies. Empty for purely structural elements.
     pub body: String,
 }
 
@@ -49,9 +47,9 @@ impl Element {
     }
 
     /// A boolean attribute (`hidden="true"`, `virtual="true"`, …): true iff present and equal to
-    /// the literal `"true"`, case-insensitively (`0x6f1b30`'s true-cmp, rf24-framexml-loader.md).
+    /// the literal `"true"`, case-insensitively (`0x6f1b30`'s true-cmp).
     /// Absent or any other value is false — matching the client (there is no explicit `"false"`
-    /// branch in the spec; only a `true` match flips the flag).
+    /// branch in the reference; only a `true` match flips the flag).
     pub fn attr_bool(&self, name: &str) -> bool {
         self.attr(name)
             .is_some_and(|v| v.eq_ignore_ascii_case("true"))
@@ -80,8 +78,8 @@ impl Element {
 
 /// A `<Script>` reference: an external file (`<Script file="…"/>`) or an inline body
 /// (`<Script>lua…</Script>`). Both run in document order relative to everything else at the top
-/// level ("`<Script file=>`/inline `<Script>` → run Lua … **in document order** — this is how
-/// XML-referenced FrameXML Lua loads", rf24-framexml-loader.md, top level).
+/// level (`0x704bc0` / `0x704cd0`, from `0x6ede10`'s walk — this is how XML-referenced FrameXML Lua
+/// loads).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptRef {
     File(String),
@@ -100,19 +98,19 @@ pub enum ScriptRef {
 /// One top-level item of a FrameXML document, in document order. Modeled as an order-preserving
 /// `Vec<TopLevel>` rather than a split `{ scripts, fonts, templates, instances }` struct because the
 /// real loader executes `<Include>`/`<Script>` interleaved with frame element definitions **in
-/// document order** (rf24-framexml-loader.md, top level) — a split-by-kind struct would lose that
+/// document order** (`0x6ede10`) — a split-by-kind struct would lose that
 /// order and misrepresent Lua load sequencing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TopLevel {
     /// `<Include file="…"/>` — recurse-load another file at this point in the sequence
-    /// (rf24-framexml-loader.md, top level: `0x8710c0`). File resolution/recursion is the loader
+    /// (`0x8710c0`). File resolution/recursion is the loader
     /// layer's job; this only preserves *where* the include happens relative to everything else.
     Include(String),
     Script(ScriptRef),
-    /// `<Font …>` — a named font definition (rf24-framexml-loader.md, top level: `0x87106c`).
+    /// `<Font …>` — a named font definition (`0x87106c`).
     Font(Element),
     /// A frame/region element with `virtual="true"`: registered as a template keyed by `name`, not
-    /// instantiated (rf24-framexml-loader.md, top level: `0x6ee500`).
+    /// instantiated (`0x6ee500`).
     Template(Element),
     /// A frame/region element without `virtual="true"`: instantiated in place.
     Instance(Element),
@@ -132,7 +130,7 @@ pub struct ParsedDocument {
 impl ParsedDocument {
     /// All registered templates, keyed by name, for use with [`expand`]. A [`TopLevel::Template`]
     /// with no `name` (already flagged in [`ParsedDocument::warnings`] at parse time — an
-    /// "Unnamed virtual node" load error in the real client, rf24-framexml-loader.md) is simply
+    /// "Unnamed virtual node" load error in the real client, `0x6ee500`) is simply
     /// absent here, matching the fact that nothing can `inherits=` it.
     pub fn templates(&self) -> HashMap<&str, &Element> {
         self.items
@@ -170,7 +168,7 @@ impl std::error::Error for Error {
 
 /// Parse FrameXML document text into an owned, order-preserving tree.
 ///
-/// Top-level semantics (rf24-framexml-loader.md, "top level"): the root's children are walked in
+/// Top-level semantics (`0x6ede10`): the root's children are walked in
 /// order; `<Include file=>` and `<Script file=>`/inline `<Script>` are preserved as-is (their
 /// execution is the loader layer's job — this only fixes their position); `<Font>` becomes a font
 /// definition; any other element with `virtual="true"` registers as a template (by `name`); anything
@@ -180,7 +178,7 @@ impl std::error::Error for Error {
 /// later, at instantiation, which is out of this module's scope).
 ///
 /// A root element that isn't (case-insensitively) `<Ui>` is tolerated with a warning, not a hard
-/// error: the RE spec never states the loader checks the root's own tag name, only that it walks
+/// error: nothing establishes that the loader checks the root's own tag name, only that it walks
 /// its children (`0x6ede10`).
 pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
     // **The reference has no XML Namespaces, and our stand-in parser does** (decision 2155).
@@ -191,8 +189,7 @@ pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
     // ordinary attribute, and an *undeclared* prefix cannot be an error because nothing is
     // resolving one. The node struct the FrameXML loader walks is that same tree (name `@+0x8`,
     // the `{char*, char*}` attribute array `@+0x14`, looked up by `GetAttribute 0x6f2cf0`'s linear
-    // case-insensitive scan — `scratch/rf24-framexml-loader.md`'s header and
-    // `scratch/simplehtml-markup-engine.md` §1.2).
+    // case-insensitive scan).
     //
     // `roxmltree` is namespace-aware and has no switch for it, so it refuses
     // `<Ui xsi:schemaLocation="…">` with `UnknownNamespace` when the file never declares
@@ -221,7 +218,7 @@ pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
     let mut warnings = Vec::new();
     if !root.tag_name().name().eq_ignore_ascii_case("Ui") {
         warnings.push(format!(
-            "root element is <{}>, not <Ui>; tolerated (rf24-framexml-loader.md's file loader walks \
+            "root element is <{}>, not <Ui>; tolerated (the reference's file loader walks \
              the root's children regardless of the root's own tag)",
             root.tag_name().name()
         ));
@@ -255,7 +252,7 @@ pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
                 if el.name().is_none() {
                     warnings.push(format!(
                         "virtual <{}> without a name — a load error in the real client \
-                         (\"Unnamed virtual node\", rf24-framexml-loader.md); kept but unregistered, \
+                         (\"Unnamed virtual node\"); kept but unregistered, \
                          so nothing can inherit it",
                         el.tag
                     ));
@@ -369,7 +366,7 @@ fn attr_ci(node: roxmltree::Node, name: &str) -> Option<String> {
 }
 
 /// Concatenates a node's own direct text/CDATA children (not descending into child elements) —
-/// the XML node struct's `body-text @ +0xc` (rf24-framexml-loader.md, header).
+/// the XML node struct's `body-text @ +0xc`.
 /// The 1-based line of the first text byte inside a `<Script>` element.
 ///
 /// Taken from the first text child's own range rather than the element's, because a CDATA section
@@ -420,10 +417,9 @@ fn element_from_node(node: roxmltree::Node) -> Element {
 /// Resolve `inherits="A, B"` template references into a fully materialized [`Element`]: a
 /// structural merge with inherited content first, the element's own content last.
 ///
-/// **Splice order** (rf24-framexml-loader.md, "virtual / template inheritance": "the matched
-/// entry is a template, its stored attribute/child nodes are spliced in first" [then the instance's
-/// own nodes are read on top]; rf26-nested-frames.md confirms the same "inherited-first" ordering
-/// for a template's own `<Frames>` children) — so:
+/// **Splice order** (in the reference, a matched template's stored attribute/child nodes are
+/// spliced in first, then the instance's own nodes are read on top; `LoadChildFrames 0x76a060`
+/// keeps the same "inherited-first" ordering for a template's own `<Frames>` children) — so:
 /// - **children**: the (fully expanded) template's children first, in order, then the element's own
 ///   children appended after.
 /// - **attributes**: the template's attributes, with the element's own attributes overriding any
@@ -434,15 +430,14 @@ fn element_from_node(node: roxmltree::Node) -> Element {
 ///   ordinary attributes that splice through too (harmlessly inert post-expansion: nothing reads
 ///   them again after the one-time top-level virtual/instance routing decision, which already
 ///   happened on the *outer* node before expansion ever runs). Real FrameXML avoids ever hitting the
-///   `name` case (instances either supply their own name or stay anonymous), and the RE notes don't
-///   call out a `name`/`virtual` exception, so this implementation does not special-case them —
-///   flagged as an unverified edge case, not a silent guess.
+///   `name` case (instances either supply their own name or stay anonymous), and no
+///   `name`/`virtual` exception is established for the reference, so this implementation does not
+///   special-case them — flagged as an unverified edge case, not a silent guess.
 ///
 /// **Multiple `inherits`** (`"A, B"`, comma-separated, left-to-right): each named template is
 /// resolved and merged in order, so `B`'s content lands on top of `A`'s where they overlap, and the
-/// element's own content lands on top of both. The RE spec documents the single-template splice
-/// precisely but not multi-template precedence beyond "the named template's[s'] … nodes"
-/// (rf24-framexml-loader.md); left-to-right precedence (later name wins ties) is the natural reading
+/// element's own content lands on top of both. Multi-template precedence is not established from
+/// the reference; left-to-right precedence (later name wins ties) is the natural reading
 /// and is what this function implements — flagged, not guessed silently, since it isn't
 /// byte-verified for the multi-name case specifically.
 ///
@@ -488,7 +483,7 @@ fn expand_inner(
         return element.clone();
     };
 
-    // ── ONE name, matched case-INSENSITIVELY (wow-re, template-name lookup) ────────────────────
+    // ── ONE name, matched case-INSENSITIVELY (template-name lookup `0x6ee6f0`) ─────────────────
     //
     // **No comma splitting.** 1.12's registry lookup `0x6ee6f0` has no splitter at all:
     // `inherits="A, B"` is ONE literal name, misses, and applies neither template. Supporting the
@@ -597,30 +592,30 @@ pub fn inherits_node(tag: &str, inherits: &str) -> Element {
     }
 }
 
-/// The literal fallback base name (rf27-parent-name-token.md, rule 5): when a `$parent`-prefixed
-/// name has no named ancestor to substitute (e.g. a top-level element), the real client seeds the
-/// result with the literal string `"Top"` (VA `0x8788ac`) rather than leaving the token literal,
-/// erroring, or producing an empty name.
+/// The literal fallback base name: when a `$parent`-prefixed name has no named ancestor to
+/// substitute (e.g. a top-level element), the real client seeds the result with the literal string
+/// `"Top"` (VA `0x8788ac`) rather than leaving the token literal, erroring, or producing an empty
+/// name.
 pub const DEFAULT_PARENT_NAME: &str = "Top";
 
-/// `$parent` name-token substitution (RF-0027, rf27-parent-name-token.md).
+/// `$parent` name-token substitution (`0x76c5b0`).
 ///
-/// A `name` attribute beginning, **case-insensitively**, with the literal `"$parent"` (rule 5: the
+/// A `name` attribute beginning, **case-insensitively**, with the literal `"$parent"` (the
 /// compare folds `A`–`Z`; `$Parent`/`$PARENT` all match — the *only* such token, there is no
-/// `$parentKey`/`$parentN` variant, rf27 point 1) has that 7-character prefix replaced with
+/// `$parentKey`/`$parentN` variant) has that 7-character prefix replaced with
 /// `parent_name`, and the remainder of `raw` appended verbatim (`SStrCat`). A `name` not starting
 /// with the token is copied through unchanged.
 ///
 /// `parent_name` must be the caller's **already-resolved** name for the nearest ancestor that has
-/// one — i.e. the caller walks the ancestor chain (`this+0x9c`, rf27 rule 3) for the first ancestor
+/// one — i.e. the caller walks the ancestor chain (`this+0x9c`) for the first ancestor
 /// whose own (already-substituted) name is non-empty, and passes [`DEFAULT_PARENT_NAME`] (`"Top"`)
 /// if there is none. Passing the already-resolved name (not the raw ancestor `name=` attribute
-/// text) is what makes nested `$parent` chains compose (rf27 rule 4): a child of a
+/// text) is what makes nested `$parent` chains compose: a child of a
 /// `$parent`-named parent inherits the parent's fully-resolved name, e.g. parent `PlayerFrame` +
 /// `"$parentHealthBar"` → `"PlayerFrameHealthBar"`, and a grandchild's `"$parentBar"` resolves
 /// against `"PlayerFrameHealthBar"`, not against the literal text `"$parentHealthBar"`.
 ///
-/// Applies only to the `name` attribute (rf27 point 2) — `parent=` (which *resolves* the enclosing
+/// Applies only to the `name` attribute — `parent=` (which *resolves* the enclosing
 /// frame) is never `$parent`-substituted, and no other attribute is either.
 pub fn resolve_name(raw: &str, parent_name: &str) -> String {
     const TOKEN: &str = "$parent";
@@ -840,7 +835,7 @@ print(x)</Script>
     /// `inherits="A, B"` is **one name**, not a list — and it misses.
     ///
     /// This test used to assert the opposite (that both templates merged, children concatenated in
-    /// order). That was a superset of 1.12 borrowed from later clients: the carve found no splitter
+    /// order). That was a superset of 1.12 borrowed from later clients: there is no splitter
     /// anywhere in the loader — all 8 call sites hand `0x6ee6f0` the pointer `GetAttribute`
     /// returned, one or two instructions later, and no comma is examined in `0x6ed000–0x6f6000` at
     /// all. So the lookup runs **once**, for the literal name `"A, B"`, misses, warns at
@@ -976,7 +971,7 @@ print(x)</Script>
     #[test]
     fn parent_name_substitution_composes_through_nested_children() {
         // A named parent, a child using $parent, and a grandchild using $parent against the
-        // child's *resolved* name — not the child's raw literal "$parent..." text (rf27 rule 4).
+        // child's *resolved* name — not the child's raw literal "$parent..." text.
         let parent_name = "PlayerFrame";
         let child_name = resolve_name("$parentHealthBar", parent_name);
         assert_eq!(child_name, "PlayerFrameHealthBar");

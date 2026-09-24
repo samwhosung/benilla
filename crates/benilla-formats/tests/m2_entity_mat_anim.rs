@@ -134,8 +134,8 @@ fn a_gameobjects_slots_bake_different_loops() {
 ///
 /// The pool's two takes are one `Stand` (`AnimationData.dbc` id 0) chain — and a GameObject whose
 /// model owns *none* of the door-family ids collapses its substate to Stand and re-arms it every
-/// window, with a fresh `variationIdx = -1` roll each time (wow-re `gameobject-anim-arm.md`
-/// §6c/§6d; `crate::go_anim`'s rest arm). So these two frequencies are the duty cycle of every
+/// window, with a fresh `variationIdx = -1` roll each time (`0x5f3a52`, `0x5f4167`;
+/// `crate::go_anim`'s rest arm). So these two frequencies are the duty cycle of every
 /// blood pool in the Plaguelands: `roll < 16384` takes the still sheet, `16384..=32766` takes the
 /// bubbling one, and the single leftover draw (`32767`) exhausts the chain back to the head — the
 /// authored convention, frequencies summing to 32767 against 32768 outcomes.
@@ -159,7 +159,7 @@ fn the_bubbling_take_is_half_the_pools_duty_cycle() {
     );
     assert!(
         seqs.iter().all(|s| s.anim_id == 0),
-        "both takes are Stand — which is what the §2c collapse-to-0 leg arms"
+        "both takes are Stand — which is what the collapse-to-0 leg arms"
     );
     let freqs: Vec<u16> = seqs.iter().map(|s| s.frequency).collect();
     assert_eq!(

@@ -1,6 +1,6 @@
-//! Slider (per-kind behavior; RF-28-grounded, decision 0250). The value/step/orientation contract,
-//! the VERTICAL ctor default, the no-swap divergence from StatusBar, and the change-gate that keeps
-//! the real scrollbar wiring from recursing.
+//! Slider (per-kind behavior; LoadXML `0x789580`, decision 0250). The value/step/orientation
+//! contract, the VERTICAL ctor default, the no-swap divergence from StatusBar, and the change-gate
+//! that keeps the real scrollbar wiring from recursing.
 
 use super::common::script;
 use crate::script::QuadContent;
@@ -211,7 +211,7 @@ fn slider_value_clamps_and_does_not_swap_minmax() {
         assert(sl:GetValue() == 100, "clamped to max")
         sl:SetValue(-5)
         assert(sl:GetValue() == 0, "clamped to min")
-        -- Unlike StatusBar, a reversed pair is NOT swapped (Slider LoadXML stores min + range, RF-28).
+        -- Unlike StatusBar, a reversed pair is NOT swapped (LoadXML `0x789580` stores min + range).
         sl:SetMinMaxValues(80, 20)
         local mn, mx = sl:GetMinMaxValues()
         assert(mn == 80 and mx == 20, "reversed pair kept as given, not swapped")
@@ -230,7 +230,7 @@ fn slider_setvalue_fires_onvaluechanged_only_on_change() {
         seen = {}
         sl:SetScript("OnValueChanged", function(self, value)
             table.insert(seen, value)
-            assert(self == sl and arg1 == value, "RF-0025 conventions carry the value")
+            assert(self == sl and arg1 == value, "handler-firing conventions carry the value")
         end)
         sl:SetValue(4)
         sl:SetValue(4)          -- no change, no fire
@@ -262,7 +262,7 @@ fn a_slider_does_not_answer_the_buttons_enable_trio() {
         end
         -- The Button's own predicate is the NUMBER 1 / the NUMBER 0, never a Lua boolean — its
         -- false leg is 0 rather than nil, settled per body at `0x7800b0`'s `setne`+`fild`
-        -- (wow-re `button-enabled-state.md`; decision 2118's `binding_abi::flag` doc).
+        -- (decision 2118's `binding_abi::flag` doc).
         assert(b:IsEnabled() == 1, "1, not true")
         b:Disable()
         assert(b:IsEnabled() == 0, "0, not false and not nil")
@@ -325,8 +325,8 @@ fn slider_scrollbar_wiring_does_not_recurse() {
 
 #[test]
 fn slider_value_bits_gate_the_first_fire_and_the_range_reclamp() {
-    // The client's `+0x314` bit1 (has a range) and bit2 (has a value), wow-re
-    // `slider-mouse-law.md` §3/§6, byte-read off `SetValue 0x789930` / `SetMinMaxValues 0x7898f0`:
+    // The client's `+0x314` bit1 (has a range) and bit2 (has a value), byte-read off
+    // `SetValue 0x789930` / `SetMinMaxValues 0x7898f0`:
     // rangeless SetValue is a no-op; the FIRST SetValue always fires, even at the zero-init value;
     // SetMinMaxValues re-clamps through SetValue only once a value exists. Decision 2095 — Atlas's
     // option sliders raised from their own <OnLoad> because our SetMinMaxValues clamped the

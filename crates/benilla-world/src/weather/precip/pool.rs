@@ -16,15 +16,15 @@ pub(super) struct Drop {
     /// column's ground is the WRONG answer by up to a house — a drop seeded outside the inn's
     /// porch drifted through the open front and splashed on the vestibule floor with the
     /// terrain's height (director-caught, 2026-07-13). Whether the reference stores the spawn
-    /// answer or re-reads its grid per cell is open (Q-J); under a roof either reading keeps
+    /// answer or re-reads its grid per cell is open; under a roof either reading keeps
     /// splashes out of the room.
     pub(super) land_y: f32,
     /// The grid cell `land_y` was sampled for (see [`HeightCache`]).
     pub(super) cell: (i32, i32),
     /// Seconds since this particle became VISIBLE — the reference's `t − f1`, where `f1` is the
-    /// flake's birth stamp on its packet's clock. Snow's fade-in reads it (`rf-snow-flake-render`
-    /// §2.4); rain's streaks have no age term and ignore it. A record that replays late starts
-    /// at its own lag, exactly as `c_currentTime − f1` would.
+    /// flake's birth stamp on its packet's clock. Snow's fade-in reads it (`snowpoint.bls`, the
+    /// point-sprite leg `0x678610`); rain's streaks have no age term and ignore it. A record that
+    /// replays late starts at its own lag, exactly as `c_currentTime − f1` would.
     pub(super) age: f32,
 }
 
@@ -35,15 +35,14 @@ struct Pending {
     drop: Drop,
 }
 
-/// One drop packet — the reference's `Packet<Drop>` (rf-weather-emission-timeline, rounds
-/// 2–3). Records accumulate while OPEN; `baseTime` (`packet+0x36010`) is stamped ONLY at open
-/// (`0x67598c`: `baseTime = now + 6144/rate`) and the batch REPLAYS from it — a delay line
-/// (visible density = true density delayed by `6144/rate`). On shader hardware a packet draws
-/// ONLY from its static buffer, baked once at close (`0x6752b0`, sole caller = the flush
-/// `0x675a97`) — so an OPEN packet renders NOTHING: visibility needs sealed AND past its
-/// replay instant. Sparse upswing cohorts stamp far-future baseTimes and are never seen at
-/// record time (the very first packet stamps ~100 s out and genuinely ghost-replays its faint
-/// drizzle later — it passes the 60 s duration guard `[0x80ff6c]`; byte-faithful, kept).
+/// One drop packet — the reference's `Packet<Drop>`. Records accumulate while OPEN; `baseTime`
+/// (`packet+0x36010`) is stamped ONLY at open (`0x67598c`: `baseTime = now + 6144/rate`) and the
+/// batch REPLAYS from it — a delay line (visible density = true density delayed by `6144/rate`). On
+/// shader hardware a packet draws ONLY from its static buffer, baked once at close (`0x6752b0`,
+/// sole caller = the flush `0x675a97`) — so an OPEN packet renders NOTHING: visibility needs sealed
+/// AND past its replay instant. Sparse upswing cohorts stamp far-future baseTimes and are never
+/// seen at record time (the very first packet stamps ~100 s out and genuinely ghost-replays its
+/// faint drizzle later — it passes the 60 s duration guard `[0x80ff6c]`; byte-faithful, kept).
 struct Packet {
     /// `pkt+0x3001c` — the camera eye at OPEN, and the only thing [`RETIRE_DIST`] is measured
     /// from. Written once (`0x678598`, from that update's `0xc7cf20` snapshot); never refreshed.
@@ -118,7 +117,7 @@ impl Pool {
         }
     }
 
-    /// The TYPE-CHANGE cut (Q-D, driver `0x67be40` cross-fade): emission has already stopped
+    /// The TYPE-CHANGE cut (driver `0x67be40` cross-fade): emission has already stopped
     /// (`0x67585d`); the OPEN packet is retired unbaked (`0x6756b2–da` — it never drew, so it
     /// is discarded), and every sealed packet whose replay hasn't started is unlinked
     /// (`0x67575a`: discard when `curTick ≤ baseTime`) — the straggler tail dies here. Packets
@@ -157,13 +156,12 @@ impl Pool {
 }
 
 /// Lazy ground-height cache over the reference's weather ground oracle — the fog grid's
-/// sampler `0x6b7070` is **WMO/doodad-AWARE** (Q-B round 3, refuting the round-2 "terrain
-/// only" read): after the MCVT terrain sample it probes the chunk's static object refs ±200 yd
-/// (`CMapObj::IntersectSegment 0x6a37b0`) and MAXes the hit with terrain (`0x6b7237–4a`). So
-/// drops LAND ON ROOFS — splashes on the inn roof, never inside, from any camera. Benilla's
-/// equivalent: one downward ray per ~1.04-yd cell from the spawn plane against terrain +
-/// walk-WMO + doodads/GameObjects. Cleared when the spawn plane moves a story (the ray start
-/// decides which roofs it sees) or when it outgrows its bound.
+/// sampler `0x6b7070` is **WMO/doodad-AWARE**, not terrain-only: after the MCVT terrain sample it
+/// probes the chunk's static object refs ±200 yd (`CMapObj::IntersectSegment 0x6a37b0`) and MAXes
+/// the hit with terrain (`0x6b7237–4a`). So drops LAND ON ROOFS — splashes on the inn roof, never
+/// inside, from any camera. Benilla's equivalent: one downward ray per ~1.04-yd cell from the spawn
+/// plane against terrain + walk-WMO + doodads/GameObjects. Cleared when the spawn plane moves a
+/// story (the ray start decides which roofs it sees) or when it outgrows its bound.
 #[derive(Resource, Default)]
 pub(super) struct HeightCache {
     cells: HashMap<(i32, i32), f32>,
@@ -217,7 +215,7 @@ impl HeightCache {
 /// under round-nearest-EVEN — the x87 default. The parity matters: at `space = 1` this is
 /// `RNE(0.5) = 0` FOREVER, so a packet that lands on 6143 records can never full-close and
 /// seals only at the `P/6144` build age (5.7 s shader rain) — one of the three mechanisms
-/// behind the reference's stochastic ~5 s / ~10 s upswing onset (round 3 Q-A).
+/// behind the reference's stochastic ~5 s / ~10 s upswing onset.
 fn frame_count(space: usize, quota: f32) -> usize {
     ((space as f32).min(quota) - 0.5).round_ties_even().max(0.0) as usize
 }
@@ -232,7 +230,7 @@ pub(super) const fn spawn_box(kind: WeatherKind) -> (f32, f32) {
 }
 
 /// One particle's **placement law**, as a pure function of its five RNG draws — the reference's
-/// composed spawn (wow-re `wx-snow-placement-law.md`, `0x677750` snow / `0x674c50` rain):
+/// composed spawn (`0x677750` snow / `0x674c50` rain):
 ///
 /// ```text
 /// pos = R(α, ĥ×ŷ)·(O − T·V)  +  1.75·W  +  C
@@ -403,13 +401,13 @@ pub(super) fn run_kind(
     }
     pool.sealed.retain(|pk| !pk.records.is_empty());
 
-    // Ground layer. Rain: a patter is created **1:1 with each landing drop** (rf-weather-render
-    // Q5). The `|v|² ≤ 2` gate (0x6755c2, manager+0x5c) tests the RIDDEN-TRANSPORT velocity
+    // Ground layer. Rain: a patter is created **1:1 with each landing drop** (emit `0x6754a0`).
+    // The `|v|² ≤ 2` gate (0x6755c2, manager+0x5c) tests the RIDDEN-TRANSPORT velocity
     // (object 0x903) — ≈0 whenever the player isn't on a moving transport — NOT the wind:
     // running never kills splashes. Benilla has no ridden transports yet, so the gate always
     // passes; when transports land, test the transport's planar speed² ≤ 2.0 here. Snow: every
     // landing flake settles and fades over the `+0.25 s` window. Patter pool cap = 0x1800
-    // (byte-cited; at full shader rain the landing rate saturates it — Q-A round 3).
+    // (byte-cited; at full shader rain the landing rate saturates it).
     let ground_life = match kind {
         WeatherKind::Rain => PATTER_LIFE,
         _ => SNOW_SETTLE_LIFE,
@@ -478,8 +476,8 @@ mod tests {
 
     /// The slab **leans into the direction of travel** (`α = 65°·sat(|W|/18)`, `0x677965`–
     /// `0x677a55`): at a 7 yd/s run the leading corner is born ~8 yd up and ~53 yd ahead instead
-    /// of a flat 30 up / 45 ahead, and the trailing corner rides up to ~46. Reproduces wow-re's
-    /// own worked numbers for `wx-snow-placement-law.md`.
+    /// of a flat 30 up / 45 ahead, and the trailing corner rides up to ~46. Reproduces the
+    /// placement law's own worked numbers.
     #[test]
     fn the_spawn_slab_leans_into_the_run() {
         let wind = wind_at(7.0);
@@ -488,11 +486,11 @@ mod tests {
         let trail = wind.slab * Vec3::new(-half_xy, z_off, 0.0);
         assert!(
             (lead.x - 53.5).abs() < 0.5 && (lead.y - 7.9).abs() < 0.5,
-            "leading corner {lead:?} — wow-re's worked value is (53.5, 7.9)"
+            "leading corner {lead:?} — the worked value is (53.5, 7.9)"
         );
         assert!(
             (trail.x + 27.9).abs() < 0.5 && (trail.y - 46.3).abs() < 0.5,
-            "trailing corner {trail:?} — wow-re's worked value is (−27.9, 46.3)"
+            "trailing corner {trail:?} — the worked value is (−27.9, 46.3)"
         );
         // Standing still there is no heading to lean into, and the slab is flat.
         assert_eq!(wind_at(0.0).slab, Quat::IDENTITY);
@@ -578,7 +576,7 @@ mod tests {
         assert!(
             tilted > 0.25,
             "with the slab tilt a runner should still meet a quarter or more of the arrivals \
-             head-on (wow-re's worked value is ~0.34); got {tilted:.3}"
+             head-on (the worked value is ~0.34); got {tilted:.3}"
         );
         assert!(
             tilted > flat * 3.0,
@@ -588,7 +586,7 @@ mod tests {
 
     /// Rain takes the same rotation and must not change character: its fall is 1.24 s, so it
     /// never had B233's problem, and the tilt shifts its arrival band forward without emptying
-    /// either side. (wow-re Q5: `[−61,+69]` → `[−45,+86]`.)
+    /// either side. (The worked arrival band: `[−61,+69]` → `[−45,+86]`.)
     #[test]
     fn the_tilt_leaves_rain_balanced() {
         let m = grade(0.6);
@@ -687,7 +685,7 @@ mod tests {
         assert!((at2 - (1.0 + PACKET_CAP as f32 / (RAIN_P * 2.0))).abs() < 1e-3);
     }
 
-    /// The Q-D type-change cut: the open packet is discarded unbaked, sealed-but-not-yet-
+    /// The type-change cut: the open packet is discarded unbaked, sealed-but-not-yet-
     /// replaying packets are unlinked (`0x67575a`), replaying ones keep their records.
     #[test]
     fn cut_discards_the_unreplayed_pipeline() {
@@ -734,7 +732,7 @@ mod tests {
         assert!((pool.sealed[0].visible_at - 1.0).abs() < 1e-6);
     }
 
-    /// GT#1 under the round-3 shader-leg model: on a full upswing the earliest possible
+    /// The upswing onset under the shader-leg model: on a full upswing the earliest possible
     /// replay is ~4.9 s (packet-1 is always the ~100 s forecast orphan) and the deterministic
     /// fixed-dt path lands in the reference's observed 4.5–15 s onset band — never the
     /// pre-pipeline 2.5 s.

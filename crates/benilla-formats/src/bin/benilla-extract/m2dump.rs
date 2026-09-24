@@ -112,7 +112,7 @@ pub fn m2seq(chain: &mut Chain, internal_path: &str) -> Result<()> {
             if s.looping { "loop " } else { "clamp" },
             s.duration,
             // `mspd` = the sequence's authored design movement speed (yd/s) — the DIVISOR of the
-            // locomotion playback rate (`speed / (mspd · |modelScale|)`, wow-re `0x5fe2f0`
+            // locomotion playback rate (`speed / (mspd · |modelScale|)`, `0x5fe2f0`
             // @0x5fe4be..0x5fe550). `0.00` ⇒ not a locomotion sequence, so it plays at rate 1×.
             s.move_speed,
             // `blend` = the sequence's authored blend-IN time (s) — how long the client cross-fades
@@ -224,7 +224,7 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
         let Some(d) = defs.get(i) else { continue };
         // The emission MODEL first: a BURST emitter fires one ftol(rate) puff at its rate edge
         // and never pours — reading its keys as a continuous rate is the exact misdiagnosis
-        // behind the Eviscerate 0.5s-vs-2s gap (wow-re part-emission-burst-flag.md).
+        // behind the Eviscerate 0.5s-vs-2s gap (`0x718ec8` → `0x7b5550`).
         let burst = if d.burst() { "BURST " } else { "" };
         // PER-SEQUENCE timing (the runtime's actual sampling unit — the old print showed the two
         // tracks rebased onto sequence 0's band, which read as authoritative and was exactly the
@@ -323,7 +323,7 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
                 }
             }
         }
-        // The kernel spread (wow-re part-shape-kernels): a sphere's ranges are latitude/longitude
+        // The kernel spread (`0x7b8d70`, `0x7b8890`): a sphere's ranges are latitude/longitude
         // about +X (area = min/max shell radius); a plane's are the ±θ/±φ cone about +Z (area =
         // the spawn rectangle). `(lat ±π, lon ±0)` reads directly as the edge-on ring family.
         let spread = match d.shape {
@@ -331,7 +331,7 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
                 "radius [{:.2}..{:.2}] lat ±{:.2} lon ±{:.2}",
                 now.area_length, now.area_width, now.vertical_range, now.horizontal_range
             ),
-            // Spline repurposing (wow-re part-spline-file-layout): area = tMin/tMax,
+            // Spline repurposing (loader `0x70fa5e`–`0x70fae5`): area = tMin/tMax,
             // vRange = tangent-spin ψ, hRange = scatter.
             benilla_formats::ParticleShape::Spline => match &d.spline {
                 Some(s) => format!(
@@ -365,7 +365,7 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
         if let Some(r) = &d.recursion_model {
             println!("             CHILD-EMITTERS: {r}");
         }
-        // The emitter-motion terms (wow-re part-emitter-motion): the follow-delta response
+        // The emitter-motion terms (`0x7b5230`): the follow-delta response
         // line's authored (speed → fraction) samples, and the velocity-inherit scale.
         let motion = match (d.follow_emitter(), d.inherits_emitter_motion()) {
             (false, false) => String::new(),
@@ -703,7 +703,7 @@ pub fn m2bones(chain: &mut Chain, internal_path: &str) -> Result<()> {
 }
 
 /// Dump an M2's render batches as the renderer sees them, preceded by the model-level material
-/// state the **static visibility cull** reads (wow-re `m2-alpha-combine-cull`: a batch is skipped
+/// state the **static visibility cull** reads (`0x707680`: a batch is skipped
 /// when `colorAlpha · transparencyWeight ≤ 0`). Batches this dump *lists* are ones that survived
 /// that cull — when one of them turns out to be a stray primitive in game, these tables are where
 /// the answer has to be, so they print together.
@@ -874,9 +874,9 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
             // One line per batch, because the batch → material/track mapping is the thing an alpha
             // question turns on and it is NOT inferable from the render flags: `mat` indexes the
             // materials list above, `color` the colour-alpha tracks (`ffff` = none), and `weight`
-            // indexes `transLookup` → the transparency track. The verified combine is
+            // indexes `transLookup` → the transparency track. The reference's combine is
             // `A = instanceAlpha × colors[color].alpha × transparency[transLookup[weight]].weight`
-            // (wow-re `m2-alpha-combine-cull.md`), so these three name every input to a batch's
+            // (`0x707680`), so these three name every input to a batch's
             // visibility.
             println!("skin batches ({}):", skin.batches().len());
             for (i, b) in skin.batches().iter().enumerate() {
@@ -1024,7 +1024,7 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
 }
 
 /// One track's value across sequence `seq_idx`'s band, under the reference's own key-search law
-/// (wow-re `eval.md` FN1 `0x713d50`): the search window is `ranges[seq_idx]`, and a window that
+/// (`0x713d50`): the search window is `ranges[seq_idx]`, and a window that
 /// collapses (`lo >= hi`) resolves to the single key `keys[lo]`. Returns `(lo, hi, held)` — the
 /// value range the batch takes across the band, and whether the band keys nothing (so the value is
 /// the bracket hold rather than authored motion).
@@ -1056,8 +1056,8 @@ fn band_span(
 }
 
 /// Dump an M2's **per-sequence material alpha**: every colour-alpha / transparency track's keys,
-/// then the combined per-batch factor (`colour.alpha × transparency.weight`, the verified combine
-/// of wow-re `m2-alpha-combine-cull.md`) for **every sequence band**, not just the first.
+/// then the combined per-batch factor (`colour.alpha × transparency.weight`, the reference's
+/// combine in `0x707680`) for **every sequence band**, not just the first.
 ///
 /// This is the "which batches does the reference hide, and when" instrument. A batch whose factor
 /// is `0` in a band is one the real client **skips entirely** in that animation (`A ≤ 0` culls
@@ -1200,7 +1200,7 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
     }
     println!(
         "\n* = the band keys nothing: the value is `keys[ranges[seq].lo]`, the bracket the \
-         reference's collapsed key window holds (wow-re `eval.md` FN1)"
+         reference's collapsed key window holds (`0x713d50`)"
     );
 
     // The same question asked of OUR bake, per RENDER batch — which is not the same index space:
@@ -1249,7 +1249,7 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
 fn part_flags(flags: u32) -> String {
     const NAMED: [(u32, &str); 14] = [
         // The reference has NO "lit" bit — 0x1 is the UNLIT flag, the inverse of the wiki lore
-        // (wow-re `part-scene-multipliers.md` §1). Naming it the way the binary reads it is the
+        // (`0x70bb00`). Naming it the way the binary reads it is the
         // point: an emitter WITHOUT this bit is the one that takes the scene's light, and that
         // silent majority-of-one is what a dump has to make visible.
         (0x0001, "unlit"),
@@ -1261,11 +1261,11 @@ fn part_flags(flags: u32) -> String {
         (0x0002, "depthSortParticles(TODO)"),
         // NOT unmapped, and printing it as a lead sent one session hunting it as the ride switch
         // (1578): file `0x8` feeds the SECOND runtime flag word, `rt+0x194` bit 1 = NOT(file 0x8)
-        // (loader `0x70fd01`), the vertex-format/blend word — wow-re `part-simspace-fields.md` §A2
-        // calls it "orthogonal to simulation space". Bit 1's own reader is unread there; bit 0's
-        // (from file `0x1`) picks a 4- vs 8-word vertex stride. Half the corpus authors it.
+        // (loader `0x70fd01`), the vertex-format/blend word, orthogonal to simulation space.
+        // Bit 1's own reader is not identified; bit 0's (from file `0x1`) picks a 4- vs 8-word
+        // vertex stride. Half the corpus authors it.
         (0x0008, "vertexFormat(rt+0x194 b1, reader unread)"),
-        // **The ride-vs-trail switch** (wow-re `part-emitter-motion.md` §2c, decision 1578): SET
+        // **The ride-vs-trail switch** (spawn `0x7b8a9a`, draw `0x7b3e6f`; decision 1578): SET
         // stores emitter-LOCAL and re-applies the live emitter matrix at draw (a rigid ride);
         // CLEAR bakes the birth into WORLD and never re-applies it, so a moving host lays a trail
         // `speed × lifetime` long. 30.4% of the corpus, 71% of `Item\ObjectComponents`.

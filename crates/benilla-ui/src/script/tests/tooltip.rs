@@ -126,7 +126,7 @@ fn empty_line_is_a_one_unit_row_and_the_chain_stays_inside_the_plate() {
     // The blank row is ONE unit, not zero: a FontString's span floors at one FrameXML unit on
     // both the plate's metric and the line's own rect, from one constant (decision 1664).
     // (That this row exists at all is a separate open question — on the reference `AddLine("")`
-    // returns without incrementing the line count, wow-re `tooltip-blank-line-height.md` §3.)
+    // returns without incrementing the line count, `0x530270`.)
     s.run(
         r#"
         assert(TTE:GetWidth() == 110, "auto width, got " .. tostring(TTE:GetWidth()))
@@ -375,7 +375,7 @@ fn fadeout_ramps_then_hides() {
 }
 
 /// SetOwner's anchor law at the screen edge CLAMPS — the client's geometry-flags-bit4 clamp
-/// (`assemble 0x767a20`, wow-re layout.md), carried by every GameTooltip frame **by
+/// (`assemble 0x767a20`), carried by every GameTooltip frame **by
 /// construction** (decision 0352: no tooltip ever leaves the window). The reproduction is the
 /// minimap zone-text hover (MinimapCluster.xml: `ANCHOR_LEFT` on a button at the very top of
 /// the screen — plate bottom-right at the owner's top-left seats it wholly ABOVE the window):
@@ -431,7 +431,7 @@ fn owner_anchored_tooltip_clamps_to_screen() {
     assert!(s.take_errors().is_empty());
 }
 
-/// `0x52fa50`'s ladder as pure logic (law §3-BUFF-TIME-FORMAT) — the arm thresholds, the
+/// `0x52fa50`'s ladder as pure logic — the arm thresholds, the
 /// ceil/truncate asymmetry, and the `_P1` pick — over SYNTHETIC templates, so this asserts the
 /// mechanism and carries none of the reference's own eight strings. The real ones are read off the
 /// player's install and exercised in `benilla::ui_script::buff_tests`.
@@ -469,13 +469,13 @@ fn the_duration_ladder_ceils_every_arm_but_seconds() {
     assert_eq!(
         d(3_599_999).as_deref(),
         Some("<60 mins>"),
-        "the carve's own example: no '1 hour' until the hour is whole"
+        "the worked example: no '1 hour' until the hour is whole"
     );
     assert_eq!(d(60_000).as_deref(), Some("<1 min>"), "the minute edge");
     assert_eq!(
         d(61_000).as_deref(),
         Some("<2 mins>"),
-        "the carve's own example: 61 s ceils to 2, it does not truncate to 1"
+        "the worked example: 61 s ceils to 2, it does not truncate to 1"
     );
 
     // The asymmetry that makes this one function rather than four format calls: roundUp reaches
@@ -562,7 +562,7 @@ fn an_emptied_pooled_line_drops_its_stale_box_and_the_plate_still_contains_the_c
         r#"
         TTR:ClearLines()
         TTR:AddLine("Marshal McBride")
-        -- WRAPPED, as the §22 spacer is (`render.rs`'s `addw`): the wrap pin writes a non-zero
+        -- WRAPPED, as the set spacer is (`render.rs`'s `addw`): the wrap pin writes a non-zero
         -- width into `size`, so only the HEIGHT falls through to the measure cache.
         TTR:AddLine("", 1, 0.82, 0, true)
         TTR:AddLine("PvP")
@@ -594,9 +594,8 @@ fn an_emptied_pooled_line_drops_its_stale_box_and_the_plate_still_contains_the_c
 /// between NONE and PRESERVE, not between "points" and "doesn't".
 ///
 /// 2142's open thread 1 predicted the opposite on both counts — a mode-7 default, and a NONE arm
-/// that must stop dropping anchors — and the wow-re §5 dispatched for the CURSOR mechanism refuted
-/// both at the bytes (`system/ui/scratch/tooltip-cursor-anchor-law.md` §0.2/§0.3/§2; decision
-/// 2176). What is actually there:
+/// that must stop dropping anchors — and the bytes refute both (decision 2176). What is actually
+/// there:
 ///
 /// * `0x53120d` zeroes the binding's local mode before any compare, and `0x531214`'s
 ///   `lua_isstring` gate jumps the whole `SStrCmpI` chain when arg 3 is absent, nil, a boolean or
@@ -671,10 +670,10 @@ fn set_owner_defaults_to_anchor_left_and_only_preserve_keeps_the_placement() {
 }
 
 /// **`SetAlpha(255)` on SetOwner is UNCONDITIONAL** — `0x52fff4`, the first thing the SetOwner
-/// core `0x52ffe0` does, before its five stores (wow-re `system/ui/ledger.tsv` row `0x52ffe0`,
-/// verified). Ours only ever restored the alpha one of OUR OWN fades had taken away, so a plate
-/// left dim by any other path — an addon's `SetAlpha`, an inherited parent alpha — stayed dim
-/// through every subsequent hover, where the reference stamps it back to full on each SetOwner.
+/// core `0x52ffe0` does, before its five stores (`0x52ffe0`). Ours only ever restored the alpha one
+/// of OUR OWN fades had taken away, so a plate left dim by any other path — an addon's `SetAlpha`,
+/// an inherited parent alpha — stayed dim through every subsequent hover, where the reference
+/// stamps it back to full on each SetOwner.
 #[test]
 fn set_owner_stamps_full_alpha_even_with_no_fade_running() {
     let s = script();
@@ -699,8 +698,7 @@ fn set_owner_stamps_full_alpha_even_with_no_fade_running() {
 /// `vtbl+0x88` (the slot a Lua `:Show()` lands in). It shows only when BOTH the owner `+0x314`
 /// and the line count `+0x31c` are non-zero, and otherwise calls its own `vtbl+0x84`
 /// effective-hide `0x530a60` — the SetOwner core with a NULL owner, so the plate is hidden AND
-/// un-owned (wow-re `system/ui/ledger.tsv` row `0x530a80`, verified;
-/// `scratch/hover-hide-and-tooltip-owner-law.md` §4).
+/// un-owned (`0x530a80`).
 ///
 /// The symptom that found it: `Questie`'s tracker draws an EMPTY plate on hover — correctly
 /// sized and bordered, with no text. `QuestieTracker.lua`'s quest-button OnEnter has a dead zone
@@ -759,9 +757,8 @@ fn show_with_no_lines_self_hides_and_un_owns() {
 /// `cmp eax,4 / cmp eax,3`: LUA_TSTRING or LUA_TNUMBER pass and are read by coercion, and every
 /// other tag takes `0x53121b je 0x53133a` over the whole compare chain to the join, leaving the
 /// zeroed local — mode 0, `ANCHOR_LEFT`, silently, with no `luaL_error` anywhere in
-/// `[0x531221, 0x53133a)` (wow-re `system/ui/scratch/tooltip-cursor-anchor-law.md` §0.2, the same
-/// section decision 2176 already quotes in this file's doc comments). So a boolean, a table, a
-/// function and absent are *indistinguishable* at this position.
+/// `[0x531221, 0x53133a)`. So a boolean, a table, a function and absent are *indistinguishable*
+/// at this position.
 ///
 /// The symptom that found it: `Questie` hovers a world-map note with
 /// `Tooltip:SetOwner(this, this)` (`QuestieNotes.lua` `Questie_Tooltip_OnEnter`) — a frame where

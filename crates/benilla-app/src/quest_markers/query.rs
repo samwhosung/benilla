@@ -9,13 +9,13 @@
 //! bit 3. One slot cannot have two lifetimes, so one system owns both asks; `ui_taxi` keeps the
 //! resulting fact ([`crate::ui_taxi::FlightMasterStatus`]) and nothing else.
 //!
-//! **A GameObject is queried and never rendered** (decision 1872, wow-re `questgiver-marker.md`
-//! §W14). The reference sends `CMSG_QUESTGIVER_STATUS_QUERY` for a quest-flagged GameObject from
-//! both object sweeps, but its answer handler `0x5dc9f0` resolves the GUID with typemask **8**
-//! (`0x468460` is a bitmask AND against `OBJECT_FIELD_TYPE`), so a GameObject's `0x21` returns NULL
-//! and the packet dies at `0x5dca2f` — and even if it did not, a GameObject has no `+0xcb8` status
-//! slot, no `+0xb2c` marker slot, and (11 models out of ~1600, none of them a poster) no
-//! attachment 18 to hang a marker from. So: **send the query, drop the answer, render nothing.**
+//! **A GameObject is queried and never rendered** (decision 1872). The reference sends
+//! `CMSG_QUESTGIVER_STATUS_QUERY` for a quest-flagged GameObject from both object sweeps, but its
+//! answer handler `0x5dc9f0` resolves the GUID with typemask **8** (`0x468460` is a bitmask AND
+//! against `OBJECT_FIELD_TYPE`), so a GameObject's `0x21` returns NULL and the packet dies at
+//! `0x5dca2f` — and even if it did not, a GameObject has no `+0xcb8` status slot, no `+0xb2c`
+//! marker slot, and (11 models out of ~1600, none of them a poster) no attachment 18 to hang a
+//! marker from. So: **send the query, drop the answer, render nothing.**
 //!
 //! The server only ever *answers* `CMSG_QUESTGIVER_STATUS_QUERY` (vmangos `QuestHandler.cpp`) — it
 //! never pushes — so every refresh point is the client's own to trigger, and a status that is never
@@ -42,8 +42,8 @@ const NPC_FLAG_FLIGHTMASTER: u32 = 0x8;
 /// `GAMEOBJECT_FLAGS` bit **2** (mask `0x4`) — the whole of the sweep's GameObject gate, and the
 /// one place a GameObject GUID can reach this opcode at all.
 ///
-/// Byte-pinned (wow-re `questgiver-marker.md` §W14.6): `0x5eb0ef mov eax,[edx+0xc];
-/// 0x5eb0f2 shr eax,0x2; 0x5eb0f5 test al,1` — shift **2**, so mask `0x4`, not the `0x2` the unit
+/// Byte-pinned: `0x5eb0ef mov eax,[edx+0xc]; 0x5eb0f2 shr eax,0x2;
+/// 0x5eb0f5 test al,1` — shift **2**, so mask `0x4`, not the `0x2` the unit
 /// leg tests 25 bytes later. `[<GO block>+0xc]` is absolute field index 9 = `GAMEOBJECT_FLAGS`,
 /// named from the binary's own UpdateField name table (`0x83b8a8` → the string at `0x83be84`).
 /// The *name* `GO_FLAG_INTERACT_COND` is vmangos's, not the image's — but the bit is settled from
@@ -60,9 +60,9 @@ const GO_FLAG_INTERACT_COND: u32 = 0x4;
 /// The reference's refresh law is a **descriptor field watch**, not a hand-picked event list: it
 /// registers handlers on specific self-player fields through `0x468070`, and the handler sweeps
 /// every visible object (`0x5eb070` → `0x468380`, one query per object passing the questgiver
-/// gate). Byte-pinned in wow-re `questgiver-marker.md` §W1–W12; the benilla side, and the
-/// still-open gaps, are decision 0650 (the byte-level trigger set, superseding 0647's wrong
-/// "level is a deviation") and decision 0654 (what benilla implements of it).
+/// gate). The benilla side, and the still-open gaps, are decision 0650 (the byte-level trigger
+/// set, superseding 0647's wrong "level is a deviation") and decision 0654 (what benilla
+/// implements of it).
 ///
 /// **The sweep** — every visible questgiver is re-asked when any *self* input to the server's
 /// answer moves. The reference gets this from six descriptor watches plus four packet handlers;
@@ -85,8 +85,8 @@ const GO_FLAG_INTERACT_COND: u32 = 0x4;
 /// The wire corpus shows it happening in 20 of 62 real sessions.
 ///
 /// But there is **no bring-up query for a GameObject** — the contrast with units is exact and it
-/// is the point (wow-re §W14.8, a closed caller census: a GameObject GUID can reach this opcode
-/// through exactly two instructions in the whole image and both are inside a sweep callback; the
+/// is the point (a GameObject GUID can reach this opcode through exactly two instructions in the
+/// whole image and both are inside a sweep callback; the
 /// `CGGameObject_C` ctor and its vtable slot 3 call no sender, where `CGUnit_C`'s slot 3 does). So
 /// a GameObject is asked about only when a sweep happens to run while it is in view, and a player
 /// who completes a quest elsewhere and then walks up to the turn-in object never asks about it at
@@ -96,7 +96,7 @@ const GO_FLAG_INTERACT_COND: u32 = 0x4;
 /// ([`crate::net::apply`]'s own typemask gate), which is decision 1872's whole point.
 ///
 /// **The teardown legs — and there are two of them, neither the one this file used to claim**
-/// (decision 1906, wow-re §W15). `0x5eb0a0` is a **2×2 on (questgiver bit × reaction)**, and its
+/// (decision 1906). `0x5eb0a0` is a **2×2 on (questgiver bit × reaction)**, and its
 /// `0x5eb134` is a *convergent* block — reached both when the bit is clear (`0x5eb125 je`) and when
 /// the bit is set but the reaction failed (`0x5eb132 jg` not taken). That convergence is why three
 /// incompatible readings of this callback were live at once. The table:
@@ -165,7 +165,7 @@ pub(super) fn query_statuses(
     let generation = state.fields ^ (u64::from(quest.reask_epoch()) << 32);
     // **The FULL re-query sweep's own two triggers** (`0x5eb3c0`, both self-gated on
     // `IsLocalPlayer`): your **revive** — the `≤0 → >0` crossing that `0x6046f0` sends down the
-    // sibling branch of §W13's death edge — and a change to **your own record's** reaction inputs
+    // sibling branch of its death edge — and a change to **your own record's** reaction inputs
     // (`0x606e20` → `0x606eef`). Everything else in the trigger set reaches the *light* sweep
     // `0x5eb070`, which does not tear anything down. Tracked as edges rather than folded into the
     // generation because the direction is the whole point: the death edge is a light sweep and the
@@ -184,8 +184,8 @@ pub(super) fn query_statuses(
     // **This frame IS a sweep.** A sweep walks every object in the manager once, synchronously,
     // when one of the reference's local-player state changes fires it; a changed generation is that
     // moment. The GameObject leg below fires only on it, because that is the only way a GameObject
-    // GUID ever reaches the wire (§W14.8) — and a full sweep is a sweep too, even when it arrives
-    // through an edge the generation does not carry.
+    // GUID ever reaches the wire (`0x5eb159`, `0x5eb456`) — and a full sweep is a sweep too, even
+    // when it arrives through an edge the generation does not carry.
     let swept = state.generation != generation || full;
     state.generation = generation;
     // Object lifetime is the other half of the cache key: a guid that left the world drops both
@@ -228,7 +228,7 @@ pub(super) fn query_statuses(
             EntityKind::Unit => {
                 // `0x6061e0(ecx = the swept unit, arg = the player)` — the unit's reaction toward
                 // **us**, which is the direction both `call` sites in the callback use
-                // (`0x5eb12a`/`0x5eb137`, both `ecx = esi`; §W15 Q1b) and the direction
+                // (`0x5eb12a`/`0x5eb137`, both `ecx = esi`) and the direction
                 // [`ring_reaction`] resolves. `<= 1` is Hated/Hostile and nothing else: Unfriendly
                 // and Neutral both pass. It reads Neutral when anything is missing, so a cold
                 // catalog can never blank a marker.
@@ -286,7 +286,7 @@ pub(super) fn query_statuses(
                 }
             }
             // `0x5eb0da shr ecx,5; test cl,1` — typemask bit 5, `TYPEMASK_GAMEOBJECT`. Sweep-only,
-            // no asked-set, no teardown: see this function's doc and §W14.8.
+            // no asked-set, no teardown: see this function's doc.
             EntityKind::GameObject if swept => {
                 if obj.0.gameobject_flags() & GO_FLAG_INTERACT_COND == 0 {
                     continue;
@@ -338,7 +338,7 @@ fn self_generation(fields: &benilla_protocol::ObjectFields) -> u64 {
     };
     fold(u64::from(fields.unit_level().unwrap_or(0)));
     // Health enters as the ALIVE/DEAD bit, not the raw value — and that is the PINNED reading now,
-    // not a conservative guess (wow-re `questgiver-marker.md` §W13). The `UNIT_FIELD_HEALTH` watch
+    // not a conservative guess. The `UNIT_FIELD_HEALTH` watch
     // gates on the zero CROSSING, in `0x6046f0`, one level above where the handler chain suggested:
     // `0x604774 jg` / `0x604778 jle` require `old > 0 && new <= 0` = **death** before the sweep is
     // reached, and `0x6047f0`/`0x6047f4` take `old <= 0 && new > 0` = **resurrect** down the sibling
@@ -349,7 +349,7 @@ fn self_generation(fields: &benilla_protocol::ObjectFields) -> u64 {
     //
     // Our bit flips on BOTH crossings, and that is now known to be exactly right — the note this
     // comment used to carry ("one named over-refresh... the reference sweeps GameObject questgivers
-    // there") was wrong on both halves and is CORRECTED by wow-re §W14.5/§W14.11. `0x5eb3c0` is not
+    // there") was wrong on both halves. `0x5eb3c0` is not
     // a GameObject sweep: `0x468380` applies no type filter at all, so it walks **every** object in
     // the manager — it is the FULL re-query sweep, and its creature arm is the heavier one
     // (`0x607380`: an unconditional marker teardown plus two queries, questgiver `0x182` and taxi
@@ -617,8 +617,8 @@ mod tests {
         );
     }
 
-    /// **The light sweep re-asks; only the FULL sweep tears down first** (decision 1906,
-    /// wow-re §W15 Q1d). The two sweeps are not interchangeable and this is the difference:
+    /// **The light sweep re-asks; only the FULL sweep tears down first** (decision 1906).
+    /// The two sweeps are not interchangeable and this is the difference:
     /// `0x5eb0a0` (11 callers — level, money, the quest log, a skill, `PLAYER_FLAGS`, an item, your
     /// **death**, reputation, the group roster, the quest packets) sends and never tears down,
     /// while `0x5eb3f0` (2 callers — your **revive**, and your own record's reaction inputs) goes
@@ -704,7 +704,7 @@ mod tests {
         assert_eq!(asked(&mut app), 1, "a light sweep re-asks");
         assert_eq!(held(&app), Some(5), "…and does NOT tear the marker down");
 
-        // Your DEATH — the `>0 → ≤0` edge, which §W13 pins to the light sweep. Same rule.
+        // Your DEATH — the `>0 → ≤0` edge, which `0x6046f0` routes to the light sweep. Same rule.
         set_self(
             &mut app,
             &[(FIELD_LEVEL, 5), (FIELD_HEALTH, 0), (FIELD_FACTION, 1)],
@@ -735,8 +735,8 @@ mod tests {
         assert_eq!(held(&app), None, "…fully");
     }
 
-    /// **The sweep tears down on HOSTILITY, never on the questgiver flag** (decision 1906, wow-re
-    /// §W15 Q1a). `0x5eb0a0`'s `0x5eb134` is a convergent block, so the reaction test runs for
+    /// **The sweep tears down on HOSTILITY, never on the questgiver flag** (decision 1906).
+    /// `0x5eb0a0`'s `0x5eb134` is a convergent block, so the reaction test runs for
     /// every creature and `0x5eb143` is the callback's only teardown; the flag decides the *send*
     /// alone. On the real `FactionTemplate.dbc`, because a reaction gate that never resolves a real
     /// faction is not a gate.
@@ -846,7 +846,7 @@ mod tests {
     }
 
     /// **The flight master's green `!` shares one slot with the gold one, so it shares its
-    /// lifetime** (decision 1918, wow-re §W16). Three things, and the middle one is the asymmetry
+    /// lifetime** (decision 1918). Three things, and the middle one is the asymmetry
     /// a re-implementer gets wrong:
     ///
     /// - `CMSG_TAXINODE_STATUS_QUERY` has **one** live sender site image-wide, `0x607380`
@@ -1003,9 +1003,9 @@ mod tests {
         );
     }
 
-    /// **A GameObject is asked about on a SWEEP, and only on a sweep** (decision 1872, wow-re
-    /// `questgiver-marker.md` §W14.6/§W14.8). Three things are being pinned here, and the third is
-    /// the one a client "improves" without noticing:
+    /// **A GameObject is asked about on a SWEEP, and only on a sweep** (decision 1872; its only
+    /// send sites, `0x5eb159` and `0x5eb456`, sit in sweep callbacks). Three things are being
+    /// pinned here, and the third is the one a client "improves" without noticing:
     ///
     /// - the gate is `GAMEOBJECT_FLAGS` bit 2 (mask `0x4`) — `0x5eb0ef shr eax,0x2; test al,1` —
     ///   and a quest-less GameObject beside it is never asked about at all;
@@ -1101,7 +1101,7 @@ mod tests {
             asked(&mut app),
             vec![NPC],
             "first sight: the creature is asked from its own create path, the poster is NOT — \
-             the GameObject class has no bring-up query (§W14.8)"
+             the GameObject class has no bring-up query"
         );
         assert!(
             asked(&mut app).is_empty(),

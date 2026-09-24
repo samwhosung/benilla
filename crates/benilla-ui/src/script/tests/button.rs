@@ -14,7 +14,7 @@ fn button_methods_exist_only_on_buttons() {
     "#,
     )
     .unwrap();
-    // Duck-typing honesty across the class chain (RF-28 method sets).
+    // Duck-typing honesty across the class chain (the reference's per-type method sets).
     assert!(s.eval::<bool>("return f.SetText == nil").unwrap());
     assert!(s.eval::<bool>("return f.SetChecked == nil").unwrap());
     assert!(s.eval::<bool>("return b.SetText ~= nil").unwrap());
@@ -91,7 +91,7 @@ fn button_state_textures_switch_with_interaction() {
 /// **The shown texture is STICKY: a state with no art of its own changes nothing.**
 ///
 /// `SetState 0x779790` gates the hide-old step *and* the show-new step on the NEW state's slot
-/// being non-null (wow-re `button-check-and-state-texture.md` §2), so the shown pointer `+0x4c4`
+/// being non-null, so the shown pointer `+0x4c4`
 /// only ever moves onto a real texture — it is never cleared, and there is no fallback path in the
 /// function at all. Three consequences, and they are one mechanism seen from three sides:
 ///
@@ -768,9 +768,9 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
 }
 
 /// **`Button:GetTextWidth` / `GetTextHeight`** — the reference's own Button text-extent readers
-/// (`0x782290` / `0x782390`; wow-re `widget-api-batch-benilla.md` Q8 carves them present on Button
-/// and `GetStringWidth` **absent**). Both forward to the label FontString's own extent slots, which
-/// is what this asserts: answer a host measure for the label, and the BUTTON must report it.
+/// (`0x782290` / `0x782390`; present on Button, and `GetStringWidth` **absent**). Both forward to
+/// the label FontString's own extent slots, which is what this asserts: answer a host measure for
+/// the label, and the BUTTON must report it.
 ///
 /// `Bagnon_Forever/database/ui.lua:61` sizes its character-switch dropdown from
 /// `button:GetTextWidth() + 40`, so a nil method took the whole dropdown down — the director could
@@ -826,15 +826,14 @@ fn a_button_reports_its_labels_extent() {
     assert!(
         s.eval::<bool>(r#"return CreateFrame("Frame").GetTextWidth == nil"#)
             .unwrap(),
-        "GetTextWidth is Button's, not Region's (wow-re Q8's own split)"
+        "GetTextWidth is Button's, not Region's (the reference's own split)"
     );
 }
 
-/// **`Button:SetFontString` adopts aggressively, and it RAISES** — wow-re
-/// `system/ui/scratch/resize-bounds-and-button-fontstring.md` §5, byte-carved.
+/// **`Button:SetFontString` adopts aggressively, and it RAISES** — `0x780a60`.
 ///
 /// The first cut of this binding was a lenient no-op on a bad argument and a bare pointer swap on
-/// a good one. Every line below is a clause of that carve that the plausible reading got wrong.
+/// a good one. Every line below is a clause of that binding that the plausible reading got wrong.
 #[test]
 fn set_font_string_adopts_the_label_and_raises_on_anything_else() {
     let mut s = crate::script::UiScript::new().unwrap();
@@ -963,7 +962,7 @@ fn set_font_string_anchors_only_an_unanchored_label() {
 /// own ctor-default word: both funnel through `CSimpleButton::SetFontString 0x778d20`, whose
 /// unanchored-label leg reads `[button+0x390]` — the NORMAL embedded `CSimpleFont`'s justify —
 /// LEFT→LEFT / RIGHT→RIGHT / else CENTER, then links the label to that font (`0x779810`).
-/// wow-re `resize-bounds-and-button-fontstring.md` §5.2, VERIFIED; decision 1996.
+/// Decision 1996.
 ///
 /// `<NormalFont justifyH=>` is what writes that word in FrameXML (`UIMenuButtonTemplate`,
 /// `MailFrame.xml`'s RIGHT money button), so this is the chat menu's "Macro/macro" in miniature.
@@ -1079,13 +1078,13 @@ fn a_lazily_made_label_is_anchored_by_the_normal_fonts_justify() {
 ///
 /// `font_explicit` is the client's explicitly-set mask (`FONTINSTANCE+0x38`): an axis a widget
 /// writes for *itself* severs inheritance from the font instance it reads, and is never restored
-/// (wow-re `font-object-lua-surface.md`; the `button_font` block in `script::extract` cites it by
-/// name). `font::repaint` honours it on all seven axes. The extract's per-state re-point honoured
-/// it on shadow, colour and both justifies — and not on **face, height or outline**: the face and
-/// height read `fo.x.or(data.x)`, which makes the object outrank an explicit `SetFont`, and the
-/// outline was written unconditionally. A `<ButtonText>` that called
-/// `SetFont(path, h, "OUTLINE")` for itself therefore had all three silently put back from the
-/// button's font object on the very next extract — every frame, so no Lua could win the race.
+/// (see the `button_font` block in `script::extract`). `font::repaint` honours it on all seven
+/// axes. The extract's per-state re-point honoured it on shadow, colour and both justifies — and
+/// not on **face, height or outline**: the face and height read `fo.x.or(data.x)`, which makes the
+/// object outrank an explicit `SetFont`, and the outline was written unconditionally. A
+/// `<ButtonText>` that called `SetFont(path, h, "OUTLINE")` for itself therefore had all three
+/// silently put back from the button's font object on the very next extract — every frame, so no
+/// Lua could win the race.
 #[test]
 fn a_button_labels_own_setfont_survives_the_state_font_repoint() {
     let mut s = script();
@@ -1169,7 +1168,7 @@ fn a_button_labels_own_setfont_survives_the_state_font_repoint() {
 
 /// **A state-texture setter takes an OBJECT and takes nil**, not only a path — the reference's
 /// `0x781970` forks on `lua_type(L, 2)` into four legs and benilla honoured one of them
-/// (wow-re `button-state-texture-path-setter.md` §1; decision 2124).
+/// (decision 2124).
 ///
 /// Both missing legs are silent no-ops rather than errors, which is why nothing caught them:
 ///
@@ -1288,7 +1287,7 @@ fn an_unlocked_scripted_push_is_released_by_the_next_mouse_release() {
 }
 
 /// **`lock` pins the state against the mouse — the micro buttons** (`0x780270`'s third index,
-/// `GetBoolOrDefault` with default 0; wow-re `binding-shape-arity-law.md` §3).
+/// `GetBoolOrDefault` with default 0).
 ///
 /// `MainMenuBarMicroButtons.lua` calls `SetButtonState("PUSHED", 1)` when its panel opens, and the
 /// button must stay depressed through every press and release until the panel closes. The same
@@ -1357,7 +1356,7 @@ fn a_locked_state_ignores_the_mouse_and_enable_disable_clears_the_lock() {
 /// The correction decision 2134 is built on. Our old model derived the press as
 /// `(held && hovered) || pushed_state` and re-evaluated it whenever the hover moved; the
 /// reference's enter and leave notifies (`0x779490`/`0x7794e0`) read `[+0x328]` only as a DISABLED
-/// guard and **never write it** — proved by a §5 census of every store to the field image-wide.
+/// guard and **never write it** — proved by a census of every store to the field image-wide.
 /// The only thing that un-presses a held button before its release is the drag-threshold crossing,
 /// and only for a frame that registered for drag.
 #[test]

@@ -12,8 +12,7 @@
 //! ## The grammar is the reference's
 //!
 //! 1.12 keeps these in `WTF/Account/<ACC>/<REALM>/<CHAR>/chat-cache.txt`, written whole by
-//! `0x499a80` and read by `0x498a60` (wow-re `system/ui/scratch/chat-cache-grammar.md`, §1 and
-//! §3 — every line below is that note's):
+//! `0x499a80` and read by `0x498a60` (every line below is the reference's):
 //!
 //! ```text
 //! VERSION 2
@@ -71,10 +70,10 @@
 //! ## The login events
 //!
 //! The loader fires `UPDATE_CHAT_WINDOWS` once and then `UPDATE_CHAT_COLOR` for **every** registry
-//! entry — file or no file (§8). The first is what `FloatingChatFrame_Update` docks, hides and
-//! colours the windows from; the second is how a saved colour reaches `ChatTypeInfo` and repaints
-//! the lines already in the window (`ChatFrame_OnEvent`'s arm). So does ours, once per character
-//! per VM.
+//! entry — file or no file (`0x4996b9`, `0x499934`). The first is what `FloatingChatFrame_Update`
+//! docks, hides and colours the windows from; the second is how a saved colour reaches
+//! `ChatTypeInfo` and repaints the lines already in the window (`ChatFrame_OnEvent`'s arm). So does
+//! ours, once per character per VM.
 //!
 //! ## Why per character, and not a CVar
 //!
@@ -110,8 +109,8 @@ const SAVE_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
 /// The file's header — where these values come from and where the law lives. Comment lines; the
 /// reference's reader has none, ours skips them.
 const HEADER: &str = "\
-# benilla chat cache (decisions 1589, 1948) — the reference's chat-cache.txt grammar (wow-re
-# chat-cache-grammar.md): the custom channels to re-join, the joined zone channels as bits, the
+# benilla chat cache (decisions 1589, 1948) — the reference's chat-cache.txt grammar (written by
+# 0x499a80, read by 0x498a60): the custom channels to re-join, the joined zone channels as bits, the
 # per-type COLORS table, then one WINDOW block per chat frame — NAME (when one was set), SIZE,
 # COLOR r g b a as bytes, LOCKED, DOCKED, SHOWN, the MESSAGES … END list of the groups the window
 # shows, its CHANNELS … END list of custom channels, and its zone channels as ZONECHANNELS bits.
@@ -168,7 +167,7 @@ pub(super) struct Parsed {
     pub(super) zone_mask: Option<u32>,
     /// `OPTION_GUILD_RECRUITMENT_CHANNEL` — the auto-join latch `GetGuildRecruitmentMode` returns
     /// (decision 2115). `STANDARD` is 0 and **anything else, a missing word included, is 1**: that
-    /// is the reference's own reading (wow-re `chat-cache-grammar.md` — `"STANDARD"` takes the
+    /// is the reference's own reading (`"STANDARD"` takes the
     /// `0x49ea70(ecx=0)` leg and every other word takes `ecx=1`), and it is why a file with no such
     /// line at all reads as AUTO here, exactly as it does there.
     pub(super) guild_recruitment_auto: bool,
@@ -189,11 +188,11 @@ impl Default for Parsed {
     }
 }
 
-/// Render the file exactly as the writer does (§1), window order.
+/// Render the file exactly as the writer does (`0x499a80`), window order.
 ///
 /// `custom` is [`super::edit::ChannelState::custom`] and supplies the header's `CHANNELS` names —
 /// **the custom channels only**: a zone channel is never written as a name, it travels as its bit
-/// (wow-re `chat-cache-grammar.md` §1.1, which is why all 34 stock files have an empty per-window
+/// (`0x499ba1`, which is why all 34 stock files have an empty per-window
 /// `CHANNELS` block beside a non-zero `ZONECHANNELS`). Durable, not the live roster, for the
 /// mask's own reason: the session end clears the roster before the flush reads it.
 ///
@@ -340,8 +339,8 @@ fn parse(text: &str, rows: &[(u32, String)]) -> Parsed {
                     // its id and this restores it (decision 2130).
                     //
                     // Not a heuristic: the reference's engine resolves every name through the
-                    // shortcut walk before it stores one (`AddChatWindowChannel 0x4a1000`,
-                    // chat-cache-grammar.md §5), so a *custom* entry can never be spelled exactly
+                    // shortcut walk before it stores one (`AddChatWindowChannel 0x4a1000`),
+                    // so a *custom* entry can never be spelled exactly
                     // like a built-in shortcut — all 34 stock files carry an empty per-window
                     // `CHANNELS` block beside a non-zero `ZONECHANNELS`. Ours could, because the
                     // VM's catalog was still empty when the window was written, and `General` came
@@ -414,9 +413,9 @@ fn parse(text: &str, rows: &[(u32, String)]) -> Parsed {
         }
     }
     flush(&mut current, &mut out);
-    // The loader's EOF back-fill (§3): a file older than the groups added since gets them, into
-    // window 1 for the first ten groups and window 2 otherwise — the two `addedVersion` rows are
-    // both window 2's.
+    // The loader's EOF back-fill (`0x49967c`): a file older than the groups added since gets them,
+    // into window 1 for the first ten groups and window 2 otherwise — the two `addedVersion` rows
+    // are both window 2's.
     if added_version < 2 {
         for (i, (name, on, ver)) in MESSAGE_GROUPS.iter().enumerate() {
             if *on && *ver > added_version {
@@ -575,7 +574,7 @@ pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
             .is_some_and(|t| !t.contains(WRITER_GENERATION));
         parsed = text.map(|t| parse(&t, &rows)).unwrap_or_default();
         if !had_file {
-            // The loader's no-file path (§3, `0x4997ad`): the mask is seeded from those rows, and
+            // The loader's no-file path (`0x4997ad`): the mask is seeded from those rows, and
             // window 1's channel slots get each of them as `(Shortcut, id)` — the rows
             // `ChatFrame_RegisterForChannels` will match zone speech against by id. The rest of the
             // record is the boot init the VM already holds.
@@ -629,8 +628,8 @@ pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
     script.set_guild_recruitment_mode(u8::from(parsed.guild_recruitment_auto));
     script.set_chat_colors(parsed.colors);
     script.set_chat_window_looks(parsed.looks);
-    // §8: UPDATE_CHAT_WINDOWS once, then UPDATE_CHAT_COLOR for every registry entry, on the file
-    // path and the no-file path alike.
+    // UPDATE_CHAT_WINDOWS once, then UPDATE_CHAT_COLOR for every registry entry, on the file
+    // path and the no-file path alike (`0x4996b9`, `0x499934`).
     script.fire_event("UPDATE_CHAT_WINDOWS", vec![]);
     let renorm = |b: u8| f64::from(b as f32 * (1.0f32 / 255.0f32));
     for entry in script.chat_colors() {
@@ -698,7 +697,7 @@ fn write(script: &UiScript, channels: &super::edit::ChannelState, path: &std::pa
 /// - **A flush** (`exiting`) — the session end or the window close — writes **unconditionally**,
 ///   provided this VM restored the character's file (`restored`): the reference rewrites the
 ///   whole file at chat teardown (`0x499a80` from `0x490c55`) with no dirty flag in the way
-///   (`[0xb6e5c4]` has three writers and no reader; wow-re `guild-recruitment-mode.md` §6). The
+///   (`[0xb6e5c4]` has three writers and no reader). The
 ///   `ZONECHANNELS` word and the guild-recruitment latch are host state that no Lua write ever
 ///   dirties — gating the flush on `dirty` is how a `/leave General` was persisted only when the
 ///   player also happened to drag a window, and 2120's "durable state" was durable on paper.
@@ -1044,7 +1043,7 @@ mod tests {
         state.note_zone_channel_joined("MyChan");
         assert_eq!(state.zone_mask, Some(0b11), "a custom channel has no bit");
         // The clear is keyed on the SLOT the wire name finds, and its own id (decision 2144,
-        // wow-re `leavechannelbyname-contract.md` §8) — a name we hold no slot for clears nothing.
+        // `0x49f0f4`–`0x49f11a`) — a name we hold no slot for clears nothing.
         state.note_zone_channel_left("Trade - City");
         assert_eq!(state.zone_mask, Some(0b11), "no slot carries it yet");
         state.claim_slot("Trade - City");

@@ -581,10 +581,9 @@ fn every_archive_path_a_shipped_lua_chunk_names_survives_its_own_escaping() {
 /// **Every `text=` in the shipped UI is answerable against the REAL `GlobalStrings.lua`** — the
 /// tripwire for the defect that put "CREATE_MACROS" across the macro window's title bar (0991).
 ///
-/// `text=` is a global-string LOOKUP, not a literal (wow-re rf28 l.36/l.115 → `FrameScript_GetText
-/// 0x703bf0`). The loader didn't do the lookup at all, so **23 key-shaped values across six
-/// windows** were rendering as their own key names — and nothing anywhere said so. Two halves, both
-/// needed:
+/// `text=` is a global-string LOOKUP, not a literal (`FrameScript_GetText 0x703bf0`). The loader
+/// didn't do the lookup at all, so **23 key-shaped values across six windows** were rendering as
+/// their own key names — and nothing anywhere said so. Two halves, both needed:
 ///
 /// - a **key-shaped** value (`SCREAMING_SNAKE`) must resolve to a non-empty string, or it reaches a
 ///   real screen as its own key;
@@ -1978,7 +1977,7 @@ fn the_stock_video_options_window_loads_hidden_and_owns_its_own_name() {
             .unwrap(),
         "…so the dropdown is left empty but ENABLED — the greying branch is the driver-quirk one, \
          and inventing a 0 to reach it would be inventing a value the binary never produces \
-         (`IsEnabled` answers a NUMBER — wow-re `binding-shapes.tsv` 0x7800b0)"
+         (`IsEnabled` answers a NUMBER — `0x7800b0`)"
     );
     // The optional index argument is tolerated, which is the shape `SetScreenResolution` shares.
     assert!(
@@ -2013,7 +2012,8 @@ fn the_stock_video_options_window_loads_hidden_and_owns_its_own_name() {
         "`not hasTripleBuffering` must stay FALSE (the dead clause) while `== 1` is also false"
     );
 
-    // `SetScreenResolution`'s three carved argument behaviours, and the one deliberate divergence.
+    // `SetScreenResolution`'s three argument behaviours in the reference, and the one deliberate
+    // divergence.
     assert!(
         s.eval::<bool>("SetScreenResolution() return GetCVar(\"gxResolution\") == \"1280x720\"")
             .unwrap(),
@@ -2086,7 +2086,7 @@ fn the_stock_video_options_window_loads_hidden_and_owns_its_own_name() {
 }
 
 /// **The display-brightness pair** (decision 2182) — `GetGamma`/`SetGamma` and the Graphics page
-/// row that drives them, held to the reference's own carve.
+/// row that drives them, held to the reference's own behaviour.
 ///
 /// The claim that needs an assertion rather than a comment is the **unit**: `0x4891d0` is FSUBR,
 /// so `GetGamma()` is `1.0 − gamma` and `SetGamma(v)` writes `gamma := 1.0 − v`. Read as
@@ -2099,9 +2099,6 @@ fn the_stock_video_options_window_loads_hidden_and_owns_its_own_name() {
 /// And the second claim: **there is no clamp**, anywhere, in the reference (the positive control
 /// is `baseMip`'s validating callback `0x689090`). `SetGamma(5)` writes `"-4.000000"` and the
 /// store keeps it — benilla's clamp is at the render consumer, where it cannot lie to `GetCVar`.
-///
-/// (wow-re `ui/scratch/video-options-verbs.md` §3 and
-/// `ffxeffects/scratch/whole-frame-grade-verdict.md` §(a), both VERIFIED.)
 #[test]
 fn the_display_brightness_pair_speaks_the_reference_slider_unit() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -2211,8 +2208,6 @@ fn the_display_brightness_pair_speaks_the_reference_slider_unit() {
 /// exist in the reference, with a capital F, while `value.func` is the lowercase `"farclip"`. The
 /// stock client takes the CVar path for far clip **only because `getglobal` is case-sensitive** — so
 /// this asserts that too, against a name we DO define.
-///
-/// (wow-re `ui/scratch/video-options-verbs.md` §5 and §7.7, both VERIFIED.)
 #[test]
 fn the_video_windows_ten_composed_names_stay_nil() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -2265,7 +2260,7 @@ fn the_video_windows_ten_composed_names_stay_nil() {
 /// gap rather than hiding it, and saying in as many words that "the day something registers it,
 /// THIS assertion goes red and gets deleted". That day is this change: `UIOptionsFrameSliders`
 /// row 3 is `cameraYawMoveSpeed`, `_Load` does `slider:SetValue(GetCVar(value.cvar))`, and
-/// `Slider:SetValue` is a shape-A binding (`0x790980`, wow-re `numeric-arg-coercion-law.md`) that
+/// `Slider:SetValue` is a shape-A binding (`0x790980`) that
 /// raises on a nil in the reference too. All four slider CVars are registered, so the walk reaches
 /// its end — and `_SetDefaults`, which does the same through `GetCVarDefault`, with it.
 #[test]

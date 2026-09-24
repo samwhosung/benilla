@@ -301,9 +301,10 @@ fn player_buff_hover_is_the_aura_variant() {
     assert!(s.take_errors().is_empty());
 }
 
-/// Law §3-BUFF's right column: the buff hover names the DISPEL CLASS where the spell hover would
-/// put a gray "Rank N" — "Magic" on Ice Armor, the half of B53 the gold name didn't cover — and it
-/// is gold, sharing the aura name's wrapper. A `rank` on the same view must NOT displace it.
+/// The buff builder `0x52f880`'s right column: the buff hover names the DISPEL CLASS where the
+/// spell hover would put a gray "Rank N" — "Magic" on Ice Armor, the half of B53 the gold name
+/// didn't cover — and it is gold, sharing the aura name's wrapper. A `rank` on the same view must
+/// NOT displace it.
 #[test]
 fn player_buff_hover_names_the_dispel_class_in_gold() {
     let mut s = script();
@@ -350,7 +351,7 @@ fn player_buff_hover_names_the_dispel_class_in_gold() {
     assert!(s.take_errors().is_empty());
 }
 
-/// Law §3.6's equipped-item line and §3.8's reagents line — the two lines the 2026-07-25 reports
+/// `0x52e610`'s equipped-item line and its reagents line — the two lines the 2026-07-25 reports
 /// found missing (B54, B56). Order: cast|cooldown → requires-item → requires-form → reagents →
 /// description, each requirement red while unmet.
 #[test]
@@ -388,8 +389,8 @@ fn requirement_and_reagent_lines_render_in_law_order() {
         assert(TTTextLeft1:GetText() == "Shoot")
         assert(TTTextLeft2:GetText() == "30 yd range", "cost absent: range moves left")
         assert(TTTextLeft3:GetText() == "Instant")
-        assert(TTTextLeft4:GetText() == "Requires Wands", "law §3.6 sits above the reagents")
-        assert(string.find(TTTextLeft5:GetText(), "Light Feather") ~= nil, "law §3.8")
+        assert(TTTextLeft4:GetText() == "Requires Wands", "the requirement sits above the reagents")
+        assert(string.find(TTTextLeft5:GetText(), "Light Feather") ~= nil, "the reagents line")
         assert(TTTextLeft6:GetText() == "Attack with an equipped wand.", "description last")
     "#,
     )
@@ -604,7 +605,7 @@ fn action_hover_delegates_by_kind() {
 }
 
 /// A MACRO slot's hover is the reference's `0x52b040`: ONE white line, the macro's name (the
-/// "normal" colour `0xc0cf60` = 0xffffffff, wow-re `tooltip-content-law.md`), and a slot whose
+/// "normal" colour `0xc0cf60` = 0xffffffff), and a slot whose
 /// macro no longer exists shows no plate at all. The director's report after 1636 landed: a macro
 /// on the bar had no tooltip — the arm was a pre-0983 `_ => Ok(())`.
 #[test]
@@ -893,7 +894,7 @@ fn set_craft_spell_selects_the_builder_like_the_trainer_hover_does() {
     assert!(s.take_errors().is_empty());
 }
 
-/// Law §3-BUFF-DURATION's **gate**: `0x532b00` skips the duration block on `untilCancelled`
+/// The duration line's **gate**: `0x532b00` skips the duration block on `untilCancelled`
 /// (`532bda: 8b 46 0c` / `532bdf: 75 2d`) — never on "has this aura a duration yet". The three
 /// cases below are the ones that separate the two questions, and the middle two are what the old
 /// `duration > 0 && left > 0` gate got wrong.

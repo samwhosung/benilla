@@ -41,7 +41,7 @@ pub(super) struct ColorRun {
 ///
 /// **Stated divergence:** the client gates `|n` off for a single-line box (`K & 0x200`, set by
 /// `SetMultiLine`'s single-line leg at `0x77a5e2`) while its *cursor* model parses it regardless —
-/// a disagreement wow-re records as an anomaly, not a design. We have no flags word here and draw
+/// a disagreement that reads as an anomaly, not a design. We have no flags word here and draw
 /// `|n` as a break everywhere; nothing in our FrameXML emits one, and a user cannot type one
 /// (`0x77c200` turns a typed `|` into `||`).
 pub(super) fn parse_markup(input: &str, base_color: [f32; 4]) -> Vec<Vec<ColorRun>> {
@@ -101,9 +101,7 @@ pub(super) fn parse_markup(input: &str, base_color: [f32; 4]) -> Vec<Vec<ColorRu
 }
 
 /// [`parse_markup`] under the FontString **line-count law** — what the client's height kernel
-/// `GxuFont_GetTextBlockHeight 0x5c2070` actually counts (wow-re `system/font/scratch/
-/// re-wave1-capi.md`; the two edge cases spelled out in `system/ui/scratch/
-/// simplehtml-markup-engine.md` §4.4).
+/// `GxuFont_GetTextBlockHeight 0x5c2070` actually counts.
 ///
 /// The kernel walks the string: a bare line break at the cursor is an empty line and costs one;
 /// otherwise it lays a line, and **that line's own terminating break is consumed with it**. So a
@@ -267,7 +265,7 @@ mod markup_tests {
     }
 
     /// There is no inline-texture escape in build 5875 — the remap table at `0x5c2b10` sends every
-    /// `|`-lead but C/H/N/R to the ordinary-character arm (wow-re RF-0087 §1.1). Our renderer used
+    /// `|`-lead but C/H/N/R to the ordinary-character arm. Our renderer used
     /// to strip `|T…|t`, a later-expansion feature we had invented; it now draws, like the client's.
     #[test]
     fn there_is_no_inline_texture_escape() {
@@ -420,7 +418,7 @@ mod markup_tests {
         // The item tooltip's SET spacer, the reference's own literal `0x854b2c`: ONE row
         // carrying one space. Two under a split, and then the blank gold lines above the set
         // bonuses would each be a row taller than 1.12's.
-        assert_eq!(n(" \n"), 1, "the §22 blank gold spacer is one row");
+        assert_eq!(n(" \n"), 1, "the set's blank gold spacer is one row");
         assert_eq!(n(""), 0, "an empty string is zero lines, height 0.0");
         // …and everything else is unchanged.
         assert_eq!(n("a"), 1);

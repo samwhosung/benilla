@@ -4,8 +4,8 @@
 //! the floating numbers, the portrait indicator and the center text, and produced **no chat at
 //! all**, which is why a damage meter or Quiver's TranqAnnouncer sees nothing to parse.
 //!
-//! This module is the reference's `UnitCombatLog_C` TU (`~0x625000-0x62e7xx`, wow-re
-//! `object-layer/scratch/w2f2.md`), the presentation half: it owns **no** arithmetic, only the
+//! This module is the reference's `UnitCombatLog_C` TU (`~0x625000-0x62e7xx`), the presentation
+//! half: it owns **no** arithmetic, only the
 //! composition — classify both endpoints, pick a chat type, pick a GlobalString *key*, fill it.
 //! The reference's own chain is four hops and we take the same four:
 //!
@@ -123,14 +123,14 @@ pub(crate) fn in_range(
 /// `0x8629e0` plus the one range CVar that sits outside it, `CombatDeathLogRange`.
 ///
 /// The reference registers all eight in one place (`0x626d00`, a loop over `0x8629e0` skipping the
-/// NULL/empty names, then one unrolled call — wow-re `combat-log-chat-law.md` §5.2), stores **no
+/// NULL/empty names, then one unrolled call), stores **no
 /// handle for any of them**, and looks each up by name at every use. We keep the resolved numbers
 /// instead: the lookup-by-name is the reference's way of not caching, not a behaviour, and
 /// `crate::cvars` already owns the string table.
 ///
 /// **Yards, and read as the CVar's FLOAT field.** The record carries both `+0x24` float and `+0x28`
-/// int, written from the same string at registration; the range gate reads the float and the
-/// periodic gates read the int (§5.1). `0` is a real value and means *silence this class* —
+/// int, written from the same string at registration; the range gate reads the float (`0x626810`)
+/// and the periodic gates read the int. `0` is a real value and means *silence this class* —
 /// `dist² < 0` is never true — which is why nothing here clamps to a floor.
 #[derive(Resource, Clone, Copy)]
 pub(crate) struct CombatLogRanges {
@@ -232,8 +232,8 @@ pub(crate) fn on_cvar(
 /// packet's periodic byte is set).
 ///
 /// Read as the CVar record's **int** `+0x28`, unlike [`CombatLogRanges`] which reads the float —
-/// both fields are written from the same string at registration (wow-re
-/// `object-layer/scratch/combat-log-chat-law.md` §5.1/§5.4).
+/// both fields are written from the same string at registration (`0x63e127` the int, `0x63e135`
+/// the float).
 ///
 /// A **missing record counts as OFF** in the reference, because the gate is
 /// `cvar == NULL || cvar->int == 0`. That cannot happen here — the row is registered at startup —
@@ -359,9 +359,8 @@ impl UnitClass {
 
 /// Classify one guid against the active player — the reference's `0x5efea0(ecx = GUID*)`.
 ///
-/// **The rule is now VERIFIED**, not inferred: the wow-re §5 this arc dispatched settled it
-/// (`system/object-layer/scratch/combat-log-chat-law.md` §2), and it corrected 1571's first cut on
-/// three points, each of which changed behaviour:
+/// **The rule is settled at the bytes**, not inferred, and settling it corrected 1571's first cut
+/// on three points, each of which changed behaviour:
 ///
 /// - **The owner field is `UNIT_FIELD_CHARMEDBY`, then `UNIT_FIELD_CREATEDBY`.** We read
 ///   `SUMMONEDBY` first, copying the floating text's source classifier — a different field, and a
@@ -399,8 +398,8 @@ pub(crate) fn classify(
     let Some(store) = stores.store(entity) else {
         return UnitClass::Unknown;
     };
-    // The owner: CHARMEDBY first, then CREATEDBY (§2). A pet/guardian/totem/charmed unit is
-    // classified by WHOSE it is, one rung above its own faction.
+    // The owner: CHARMEDBY first, then CREATEDBY (`0x5f000c`/`0x5f0019`). A
+    // pet/guardian/totem/charmed unit is classified by WHOSE it is, one rung above its own faction.
     let owner = store
         .0
         .unit_charmed_by()
@@ -429,8 +428,9 @@ pub(crate) fn classify(
         return UnitClass::PartyPet;
     }
 
-    // Friend or foe — `CanAttack`, judged on **this unit**, never on its owner (§2). The owner
-    // hop was ours and it was wrong: the reference asks the pet itself.
+    // Friend or foe — `CanAttack`, judged on **this unit**, never on its owner
+    // (`0x5f00e3`/`0x5f00f2`). The owner hop was ours and it was wrong: the reference asks the pet
+    // itself.
     let hostile = {
         let me_store = index.0.get(&me).copied().and_then(|e| stores.store(e));
         crate::target::ring::can_attack_from_player(
@@ -467,11 +467,11 @@ pub(crate) fn classify(
 /// reference returns `0x5e` (94, one past the end of the 94-entry type table = "no type", checked
 /// at the emit `0x626850`).
 ///
-/// Read off the decompiled selectors and cross-checked against wow-re's byte-verified 94-entry
-/// default colour table (`system/ui/scratch/chat-color-table.md`, whose index column is the 1-based
-/// `GetChatTypeIndex` value — so the `0x1b` the selector returns is that table's row 28,
-/// `COMBAT_SELF_HITS`). `miss` picks the odd twin: every HITS type is immediately followed by its
-/// MISSES type, which is why the reference's two selectors differ only by `+1`.
+/// Read off the decompiled selectors and cross-checked against the reference's 94-entry default
+/// colour table (`0x804710`, whose rows `GetChatTypeIndex` numbers from 1 — so the `0x1b` the
+/// selector returns is that table's row 28, `COMBAT_SELF_HITS`). `miss` picks the odd twin: every
+/// HITS type is immediately followed by its MISSES type, which is why the reference's two selectors
+/// differ only by `+1`.
 ///
 /// **The two reclassifying arms are real and they are the duel/PvP case.** A *party* player (2) or
 /// a *friendly* player (4) whose victim is you, your pet, or a party member is reported in the
@@ -570,8 +570,8 @@ pub(crate) fn periodic_kind(subject: UnitClass, buff: bool) -> Option<ChatEventK
 
 /// `0x628980` — the death pair's selector, and it takes the **victim's** class alone.
 ///
-/// The comparison is SIGNED (`jl` then `cmp ecx,5; jle`), which is why the note spells the negative
-/// arm out: `0 <= c <= 5` is FRIENDLY_DEATH, everything else — a hostile player, their pet, any
+/// The comparison is SIGNED (`jl` then `cmp ecx,5; jle`), which is why the negative arm is spelled
+/// out: `0 <= c <= 5` is FRIENDLY_DEATH, everything else — a hostile player, their pet, any
 /// creature, an unresolvable unit — is HOSTILE_DEATH. Our `UnitClass` cannot be negative, so the
 /// sign only matters as a statement of what the arm is.
 pub(crate) fn death_kind(victim: UnitClass) -> ChatEventKind {
@@ -586,8 +586,8 @@ pub(crate) fn death_kind(victim: UnitClass) -> ChatEventKind {
 /// ten: `{0,1}` SELF · `{2,3}` PARTY · everything else OTHER.
 ///
 /// The arrival is not this selector's — an aura landing rides the two PERIODIC selectors instead
-/// (harmful → [`periodic_kind`]'s damage row, helpful → its buff row), which is the asymmetry §4.4
-/// records and not a simplification of ours.
+/// (harmful → [`periodic_kind`]'s damage row, helpful → its buff row), which is the reference's own
+/// asymmetry (`0x62b480`) and not a simplification of ours.
 pub(crate) fn aura_gone_kind(bearer: UnitClass) -> ChatEventKind {
     use ChatEventKind as K;
     use UnitClass as C;
@@ -602,7 +602,7 @@ pub(crate) fn aura_gone_kind(bearer: UnitClass) -> ChatEventKind {
 ///
 /// It has **two** users, which is the surprising half: the shield formatter itself, and *every*
 /// `SMSG_SPELLLOGMISS` line (`0x5e7f31 push 1` routes `0x62bab0` here instead of the eight-row
-/// spell matrix — §4.4, a byte fact wow-re states without claiming to know whether it is deliberate).
+/// spell matrix — a byte fact; whether it is deliberate is not derivable from the binary).
 pub(crate) fn damage_shield_kind(subject: UnitClass) -> ChatEventKind {
     if matches!(subject, UnitClass::Me | UnitClass::MyPet) {
         ChatEventKind::SpellDamageShieldsOnSelf
@@ -652,9 +652,9 @@ fn buff_twin(damage: ChatEventKind) -> ChatEventKind {
 // ──────────────────────────── the format-string selectors ─────────────────────────────
 
 /// Which of a family's four templates applies — the reference's 45 `char*(self, other, *out)`
-/// selectors (wow-re `w2f2.md` §G7), whose two arguments are booleans ("the subject is not me",
-/// "the object is not me") and whose `*out` variant code `0..3` is what tells the caller how many
-/// names to push.
+/// selectors (`0x629f90`, `0x62a290`, …), whose two arguments are booleans ("the subject is not
+/// me", "the object is not me") and whose `*out` variant code `0..3` is what tells the caller how
+/// many names to push.
 ///
 /// `SelfSelf` is the code-`0` case for most families: the selector returns NULL and **no line is
 /// produced**. Some families do define the key (`SPELLLOGSELFSELF`, `HEALEDSELFSELF`,
@@ -824,7 +824,7 @@ impl Family {
 /// locale that ships one blank simply loses that clause.
 ///
 /// Only four call sites can grow one, and what each can show differs because it passes zeroes for
-/// the fields it has no wire source for (§4.2): melee `COMBATHIT*` is the only family that can ever
+/// the fields it has no wire source for: melee `COMBATHIT*` is the only family that can ever
 /// show GLANCING/CRUSHING/BLOCK; `SPELLLOG*` can show RESIST/VULNERABLE/BLOCK/ABSORB;
 /// `PERIODICAURADAMAGE*` and `VSENVIRONMENTALDAMAGE_*` RESIST/VULNERABLE/ABSORB.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1007,7 +1007,7 @@ pub(crate) fn global_string(script: &benilla_ui::script::UiScript, key: &str) ->
 ///
 /// The reference does not read a GlobalString here at all: `0x6264b0(schoolIndex)` indexes
 /// `Resistances.dbc` (row array `[0xc0d9a4]`, 7 rows of 0x30 bytes, localized name at
-/// `row + 0xc + locale*4`) — wow-re `combat-log-chat-law.md` §4.5 — and those seven rows are
+/// `row + 0xc + locale*4`) — and those seven rows are
 /// `Physical · Holy · Fire · Nature · Frost · Shadow · Arcane`. `SPELL_SCHOOL<n>_NAME` is a
 /// *different* table in GlobalStrings.lua and holds the same seven words **lowercased**
 /// (`GlobalStrings.lua:4102-4114`), which is what this used to return: "12 nature damage" where
@@ -1041,7 +1041,7 @@ pub(crate) fn school_word(script: &benilla_ui::script::UiScript, school: u8) -> 
 ///
 /// What happiness really lacks is a **`COMBAT_TEXT_UPDATE`** tag: `0x627520`/`0x627930`'s four
 /// `0x64a4c0` compares match only the other four nouns, so it produces the chat line and no
-/// floating text (§4.6). That is a different table, further down, after the emit.
+/// floating text. That is a different table, further down, after the emit.
 fn power_key(power: u32) -> Option<&'static str> {
     match power {
         0 => Some("MANA_POINTS"),
@@ -1434,8 +1434,8 @@ duo!(
     "OTHER",
     [Spell, Attacker],
     "`\"%s fades from you.\"` (:113) / `\"%s fades from %s.\"` (:112) — AURA first, which is the \
-     other way round from `AURAADDED*`. The flip is the reference's own (§4.4) and is exactly the \
-     kind of thing a single ordered slot list per family exists to pin."
+     other way round from `AURAADDED*`. The flip is the reference's own (`0x62b480`) and is \
+     exactly the kind of thing a single ordered slot list per family exists to pin."
 );
 duo!(
     AURADISPEL,
@@ -1814,7 +1814,7 @@ pub(crate) fn miss_family(miss_info: u8) -> Family {
 /// **The last arm can decline.** `0x62a710` is gated twice before it words anything: the 10-entry
 /// flag table `0x8628f8` = `[0,0,1,1,0,1,1,1,1,0]` indexed by VictimState (`0x62a720`), then
 /// `add eax,-2; cmp eax,6; ja` into the jump table `0x62a8ec` — so VictimState **0, 1, 4 and 9
-/// emit no line at all** (§4.1 row 6). This used to answer `MISSED` for them and call that "the
+/// emit no line at all**. This used to answer `MISSED` for them and call that "the
 /// reference's own fall-through", which it is not: the reference stays silent, and a `MISSED`
 /// there is a sentence the real client never prints.
 ///
@@ -1905,8 +1905,8 @@ pub(crate) struct PendingCombat {
 ///
 /// The reference has both hops and keeps them apart for the same reason: an item name comes from
 /// the **item cache** (`0x55ba30`), whose miss parks the whole formatter on the deferred queue and
-/// re-runs it when the server answers (§5.7); a unit name comes from `GetObjectName` (`0x6264e0`),
-/// the same resolve the two endpoint slots already use.
+/// re-runs it when the server answers (`0x6294b0`); a unit name comes from `GetObjectName`
+/// (`0x6264e0`), the same resolve the two endpoint slots already use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Named {
     /// Nothing to do — the arm already put the text in [`Fills::named`], or the family has no
@@ -1933,7 +1933,7 @@ pub(crate) fn queue(
 ) -> Option<PendingCombat> {
     // **A class-9 endpoint alone does NOT drop the line**, and 1571 had this wrong. Its range of
     // `0.0` means it can never satisfy *its own half* of the gate — but the gate is an OR over the
-    // two endpoints (§4/§5.2), so a resolvable one at the other end still carries the line. What
+    // two endpoints (`0x626630`), so a resolvable one at the other end still carries the line. What
     // drops here is only the case the reference's own resolve step fails on: neither endpoint
     // resolvable at all.
     if subject.1 == UnitClass::Unknown && object.1 == UnitClass::Unknown {

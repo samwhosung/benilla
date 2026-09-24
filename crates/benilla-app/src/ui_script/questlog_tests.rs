@@ -168,7 +168,8 @@ fn shipped_questlog_frame_drives_end_to_end() {
     );
 
     // Row 1 carries entry 1's title (indented), the count line reads "Quests: |cffffffff8/20|r", and nothing having been
-    // selected, the first non-header entry auto-selects (pin §2's SetFirstValidSelection).
+    // selected, the first non-header entry auto-selects (`QuestLog_SetFirstValidSelection`,
+    // `QuestLogFrame.lua:295`).
     assert!(s
         .eval::<String>("return QuestLogTitle1NormalText:GetText()")
         .unwrap()
@@ -474,7 +475,7 @@ fn shift_click_toggles_the_watch_checkbox_and_the_tracker_hud() {
 /// Shift-clicking a quest with zero objectives (ref `QUEST_WATCH_NO_OBJECTIVES`) and shift-clicking
 /// past `GetNumQuestWatches() >= 5` (ref `QUEST_WATCH_TOO_MANY`) both refuse the watch and put the
 /// ref's red line on the errors frame through its own `UIErrorsFrame:AddMessage`; the click still
-/// selects the row exactly like any other click (pin §5).
+/// selects the row exactly like any other click.
 #[test]
 fn watch_guards_no_op_without_erroring() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -587,7 +588,7 @@ fn watch_guards_no_op_without_erroring() {
 /// The auto quest watch (ref `AUTO_QUEST_WATCH` default-on, QuestLogFrame.lua:702-786 —
 /// "Quests are automatically watched for 5 minutes when you achieve a quest objective."): the
 /// engine's per-quest `BENILLA_QUEST_PROGRESS(logIndex)` arms a 300 s timed watch (the native
-/// QUEST_WATCH_UPDATE carries the WATCH-LIST index per the §5-verified byte law — repaint only,
+/// QUEST_WATCH_UPDATE carries the WATCH-LIST index from `0x4df880` — repaint only,
 /// the shipped 1.12 auto-watch chain being broken at that seam), fresh progress
 /// re-arms it, and expiry (the watch frame's OnUpdate) unwatches and hides the empty HUD.
 #[test]
@@ -1234,7 +1235,7 @@ fn wheel_over_the_detail_pane_changes_vertical_scroll() {
     );
 }
 
-/// Pin §3/§5's doNotScroll asymmetry (QUESTLOG-PIN.md, `QuestLogFrame.lua:348/455-457`): a manual
+/// The reference's doNotScroll asymmetry (`QuestLogFrame.lua:348/455-457`): a manual
 /// reselect always snaps the detail pane's scroll back to the top, but the `QUEST_LOG_UPDATE`
 /// data-refresh path must NOT — a quest updating while already being read shouldn't yank the
 /// reader's scroll position out from under them.
@@ -1295,7 +1296,7 @@ fn selection_change_resets_detail_scroll_but_a_quest_log_update_refresh_does_not
         s.eval::<f32>("return QuestLogDetailScrollFrame:GetVerticalScroll()")
             .unwrap(),
         10.0,
-        "QUEST_LOG_UPDATE's data-refresh path must not yank the scroll position (pin §5)"
+        "QUEST_LOG_UPDATE's data-refresh path must not yank the scroll position"
     );
 
     // A manual reselect (the row-click path — no doNotScroll) DOES reset it.
@@ -1858,7 +1859,7 @@ fn share_quest_click_queues_the_selected_quests_id() {
 /// It is correct, and the reading was wrong about our own engine: the title FontString carries a
 /// DECLARED height (`<ButtonText …><AbsDimension x="0" y="10"/>`), which arms both overflow
 /// regimes — the line stack and the height-gated ellipsis — so the paint is one truncated line,
-/// which is the reference's own result (wow-re `fontstring-overflow.md`: the ellipsis gate is
+/// which is the reference's own result (`0x771ec0`'s ellipsis gate is
 /// `boxW > 0 && boxH > 0`, and only an AUTO-height FontString escapes it). The render half is
 /// pinned on the real font in `ui_text::layout`'s
 /// `a_capped_quest_log_title_ellipsizes_on_one_line`; this is the geometry half — that the row

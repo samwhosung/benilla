@@ -294,8 +294,9 @@ fn vertical_scroll_range_is_local_units_on_a_scaled_frame() {
 }
 
 /// `OnVerticalScroll` carries the value AS STORED — past the range too (decision 2017: the
-/// reference's `0x786db0` fires with `[+0x328]`, which it never clamps) — under the RF-0025
-/// conventions, and `UpdateScrollChildRect` fires `OnScrollRangeChanged` with the live range.
+/// reference's `0x786db0` fires with `[+0x328]`, which it never clamps) — under the reference's
+/// handler-firing conventions (`0x704f10`), and `UpdateScrollChildRect` fires
+/// `OnScrollRangeChanged` with the live range.
 #[test]
 fn vertical_scroll_fires_as_given_and_update_rect_fires_range_changed() {
     let mut s = script();
@@ -312,7 +313,7 @@ fn vertical_scroll_fires_as_given_and_update_rect_fires_range_changed() {
         seen_v = nil
         frame:SetScript("OnVerticalScroll", function(self, offset)
             seen_v = offset
-            assert(self == frame and arg1 == offset, "RF-0025 conventions carry the value")
+            assert(self == frame and arg1 == offset, "handler-firing conventions carry the value")
         end)
         seen_lo, seen_hi = nil, nil
         frame:SetScript("OnScrollRangeChanged", function(self, lo, hi)
@@ -715,9 +716,8 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
 
 /// `UpdateScrollChildRect` notifies `OnScrollRangeChanged(self, xRange, yRange)` — **horizontal
 /// first**. Byte-derived, not guessed: the vertical result leaves `0x786e30` on top of the x87
-/// stack, is `fstp`'d first and so pushed deepest, landing as `arg2` (wow-re
-/// `scrollframe-offset-and-range-law.md` §3.6 — two of that round's own workers published it the
-/// other way round, which is why it is asserted here). `arg1` was a hardcoded `0.0` for as long as
+/// stack, is `fstp`'d first and so pushed deepest, landing as `arg2` (easy to read the other way
+/// round, which is why it is asserted here). `arg1` was a hardcoded `0.0` for as long as
 /// there was no horizontal range to put in it.
 #[test]
 fn update_scroll_child_rect_reports_both_ranges_horizontal_first() {

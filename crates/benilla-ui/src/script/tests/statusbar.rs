@@ -1,4 +1,4 @@
-//! StatusBar (per-kind behavior; RF-28-grounded).
+//! StatusBar (per-kind behavior; LoadXML `0x782ef0`).
 
 use super::common::script;
 use crate::script::*;
@@ -32,7 +32,7 @@ fn statusbar_value_clamps_and_minmax_swaps() {
         assert(b:GetValue() == 100, "clamped to max")
         b:SetValue(-5)
         assert(b:GetValue() == 0, "clamped to min")
-        -- A reversed pair is swapped (RF-28's LoadXML behavior, one rule for both paths).
+        -- A reversed pair is swapped (LoadXML `0x782ef0`'s behavior, one rule for both paths).
         b:SetMinMaxValues(80, 20)
         local mn, mx = b:GetMinMaxValues()
         assert(mn == 20 and mx == 80, "reversed pair swapped")
@@ -52,7 +52,7 @@ fn statusbar_setvalue_fires_onvaluechanged() {
         seen = {}
         b:SetScript("OnValueChanged", function(self, value)
             table.insert(seen, value)
-            assert(self == b and arg1 == value, "RF-0025 conventions carry the value")
+            assert(self == b and arg1 == value, "handler-firing conventions carry the value")
         end)
         b:SetValue(4)
         b:SetValue(4)          -- no change, no fire
@@ -126,7 +126,7 @@ fn statusbar_bar_region_scales_by_fraction_on_extract() {
     );
 }
 
-/// The fill CROPs its art, never squeezes it (wow-re `nameplate-vkey.md`, VERIFIED): `SetValue`
+/// The fill CROPs its art, never squeezes it (`0x770410`): `SetValue`
 /// rewrites the region's 4-corner UV block with `u1 = GetValue()` *and* shrinks the quad. Squeezing
 /// instead would run a bar texture's whole horizontal ramp inside every partial fill.
 #[test]
