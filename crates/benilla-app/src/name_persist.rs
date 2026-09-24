@@ -9,20 +9,19 @@
 //! **disabled** (`0x554cd0`'s three `push 0x0`, against `'WNPC'`/`'WIDB'`'s `push 0x1; push 0x1`)
 //! and are cleared at world-session start instead; a real 1.12 install's `WDB/` holds
 //! `creaturecache.wdb`, `npccache.wdb`, `itemcache.wdb` … and no `namecache.wdb`. 1689 read the
-//! carve as "all three" and wrote player and pet names to disk too, which is what answered a wiped
-//! server's brand-new character with a deleted one's name (B386); **decision 2223** took them back
-//! out and put the wipe in ([`NameCache::clear_world_session`]).
+//! reference as "all three" and wrote player and pet names to disk too, which is what answered a
+//! wiped server's brand-new character with a deleted one's name (B386); **decision 2223** took them
+//! back out and put the wipe in ([`NameCache::clear_world_session`]).
 //!
 //! What survives is the half that carried the value anyway: a city's worth of creature-template
 //! queries on zone-in, answered from disk instead of the wire. The **key** is the whole argument —
 //! a template entry means the same creature on every realm forever, while a player guid means one
 //! character and a pet number one live spawn.
 //!
-//! ## The law, from the carve
+//! ## The law, from the reference
 //!
-//! wow-re carved the whole `DBCache.cpp` machine (`system/dbcache/dbcache.md`, T3 — all 12 record
-//! decoders diffed bit-exact). Two of its contracts are the ones a re-implementation must honour,
-//! and both are about what the cache does *not* do:
+//! Two contracts of the reference's `DBCache.cpp` machine (`0x554b00`–`0x5738c0`) are the ones a
+//! re-implementation must honour, and both are about what the cache does *not* do:
 //!
 //! - **The header is compared by equality, and carries no checksum, no timestamp and no TTL.** Its
 //!   20 bytes are `[FourCC | build 0x16f3 | locale | recordSize | version 1]`. A mismatch discards

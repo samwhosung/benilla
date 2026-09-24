@@ -268,8 +268,8 @@ fn fail_text(
 
 /// **The world server's** `SMSG_AUTH_RESPONSE` refusal, in the client's own words.
 ///
-/// A straight transcription of the client's own dispatch over this enum, decompiled in wow-re
-/// `system/net/scratch/w2b-pack.c` — each case loads exactly the `GlueStrings` key named below,
+/// A straight transcription of the client's own dispatch over this enum (`0x5aa960`, through the
+/// key table `0x85cae8`) — each case loads exactly the `GlueStrings` key named below,
 /// and the numbering is `AuthResponseCodes` in cmangos `SharedDefines.h:1721+`. Nothing here is a
 /// judgement call; where the client picks a string, so do we.
 ///
@@ -371,13 +371,12 @@ fn without_dead_url(text: &str) -> std::borrow::Cow<'_, str> {
 /// password showed the terse `AUTH_UNKNOWN_ACCOUNT` ("Unknown account") — a real reference string,
 /// in the wrong slot.
 ///
-/// VERIFIED (wow-re `system/glue/scratch/login-failure-dialogs.md`, §5 cross-checked): the client
-/// keeps **two** login-status enums with **two** key tables, and they are conflated precisely
-/// because both raise the dialog through `OPEN_STATUS_DIALOG`. realmd's results resolve against
-/// table `0x836b78` — the long `LOGIN_*` family; the world server's resolve against `0x85cae8` —
-/// the short `AUTH_*` family ([`world_refusal_text`]). The chain is grunt opcode table `0x85e278`
-/// → `Logon::OnAuthResult 0x5b2c90` (byte-index table `0x5b2ea4` + jump table `0x5b2e78`) →
-/// `CGlueMgr::OnLoginState 0x46b0f0` → `CGlueMgr::UpdateGlueDialog 0x46b140`.
+/// The client keeps **two** login-status enums with **two** key tables, and they are conflated
+/// precisely because both raise the dialog through `OPEN_STATUS_DIALOG`. realmd's results resolve
+/// against table `0x836b78` — the long `LOGIN_*` family; the world server's resolve against
+/// `0x85cae8` — the short `AUTH_*` family ([`world_refusal_text`]). The chain is grunt opcode table
+/// `0x85e278` → `Logon::OnAuthResult 0x5b2c90` (byte-index table `0x5b2ea4` + jump table
+/// `0x5b2e78`) → `CGlueMgr::OnLoginState 0x46b0f0` → `CGlueMgr::UpdateGlueDialog 0x46b140`.
 ///
 /// Two consequences worth stating outright:
 ///
@@ -726,15 +725,14 @@ impl LoginForm {
     /// Give `field` the keyboard **and select everything already in it** — dropping the selection
     /// on the box being left.
     ///
-    /// **A knowing divergence** (director's call, 2026-08-28), and the reference half of it is now
-    /// byte-settled rather than inferred (wow-re `editbox-selection-focus-law.md` §4/§5, §5-VERIFIED,
-    /// dispatched from this work). The reference does the *opposite* on a click: `OnMouseDown`
-    /// (`0x77b800`) hit-tests the click to a byte index, **collapses** the selection onto it
-    /// (`0x77b86f call 0x77ccf0`) and only then calls `SetFocus` — so a fresh click-focus leaves an
-    /// EMPTY selection at the character you clicked. And `SetFocus` itself writes no selection field
-    /// at all; `0x77e3f6` being the only instruction image-wide that grants focus makes *every* focus
-    /// gain selection-neutral, TAB included. Losing focus likewise touches nothing (`0x77af50` raises
-    /// only the cursor dirty bit).
+    /// **A knowing divergence** (director's call, 2026-08-28), and the reference half of it is
+    /// byte-settled rather than inferred. The reference does the *opposite* on a click:
+    /// `OnMouseDown` (`0x77b800`) hit-tests the click to a byte index, **collapses** the selection
+    /// onto it (`0x77b86f call 0x77ccf0`) and only then calls `SetFocus` — so a fresh click-focus
+    /// leaves an EMPTY selection at the character you clicked. And `SetFocus` itself writes no
+    /// selection field at all; `0x77e3f6` being the only instruction image-wide that grants focus
+    /// makes *every* focus gain selection-neutral, TAB included. Losing focus likewise touches
+    /// nothing (`0x77af50` raises only the cursor dirty bit).
     ///
     /// So we diverge in both directions, deliberately: the reference collapses where we select, and
     /// leaves stale where we collapse. The reason is the same one for both — the thing a player does
@@ -832,18 +830,18 @@ fn login_input(
     let dialog_open = dialog.kind.is_some();
 
     // **The edit boxes focus on the PRESS**, and only they. The reference's `CEditBox` takes focus
-    // from its own OnMouseDown handler (`0x77b800`), unconditionally and autoFocus-independent
-    // (wow-re `ui.md`) — an edit box is not a Button and does not wait for the release. Every
-    // *button* on this screen fires from the release loop below (1533).
+    // from its own OnMouseDown handler (`0x77b800`), unconditionally and autoFocus-independent —
+    // an edit box is not a Button and does not wait for the release. Every *button* on this
+    // screen fires from the release loop below (1533).
     for (entity, action, interaction) in &presses {
         if dialog_open {
             continue;
         }
         // **The edit boxes focus on the PRESS**, and only they: the reference's `CEditBox` takes
         // focus from its own OnMouseDown handler (`0x77b800`), unconditionally and
-        // autoFocus-independent (wow-re `ui.md`) — an edit box is not a Button and does not wait
-        // for the release. `Ref` supplies the press *edge* the old `Changed<Interaction>` filter
-        // gave, without costing this system a second query.
+        // autoFocus-independent — an edit box is not a Button and does not wait for the release.
+        // `Ref` supplies the press *edge* the old `Changed<Interaction>` filter gave, without
+        // costing this system a second query.
         if interaction.is_changed() && *interaction == Interaction::Pressed {
             match action {
                 // A click takes the focus the same way TAB does — the solid caret, and the
@@ -1716,7 +1714,7 @@ mod tests {
     }
 
     /// The code→string map quotes the client's own strings for the vmangos-verified rows.
-    /// The realmd map, against the byte-verified table (wow-re `login-failure-dialogs.md`).
+    /// The realmd map, against the client's table (`0x5b2c90` → key table `0x836b78`).
     ///
     /// Every row of this changed in decision 1679: the codes were always right and the string
     /// FAMILY was always wrong, so each of these used to answer with the terse `AUTH_*` twin of
@@ -1768,7 +1766,7 @@ mod tests {
         assert_eq!(world(m::AUTH_BILLING_ERROR), "Billing system error");
         assert_ne!(logon(0x0C), world(0x0C));
 
-        // Every world row is the client's own dispatch (`w2b-pack.c`), transcribed.
+        // Every world row is the client's own dispatch (`0x5aa960`), transcribed.
         assert_eq!(world(m::AUTH_INCORRECT_PASSWORD), "Incorrect Password");
         assert_eq!(world(m::AUTH_SESSION_EXPIRED), "Session Expired");
         assert_eq!(world(m::AUTH_SERVER_SHUTTING_DOWN), "Server Shutting Down");

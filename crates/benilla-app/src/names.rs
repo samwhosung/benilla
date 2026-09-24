@@ -52,15 +52,15 @@ use crate::query_cache::QueryCache;
 /// | `0x40` | `0x60d840` | SPELL_ATTACKABLE / no harmful vertex colouring |
 /// | `0x80` | `0x613230` = `CanInteractWhileDead` | INTERACT_WHILE_DEAD |
 ///
-/// (wow-re `object-layer/scratch/melee-blood-spurt-suppression.md` §6, bit numbering VERIFIED at
-/// each reader; the names corroborated by vmangos `CreatureDefines.h:146-152`.)
+/// (bit numbering per the readers above; the names corroborated by vmangos
+/// `CreatureDefines.h:146-152`.)
 pub(crate) mod type_flags {
     /// `0x8` — **DO_NOT_PLAY_WOUND_ANIM**: this creature has nothing to flinch with. The
     /// reference refuses the victim wound-flinch overlay outright for it (`0x60ea9f` inside the
     /// flinch `0x60ea70`), whatever the trigger — a skeleton, a ghost, an elemental takes hits
     /// without recoiling. It gates **only** the animation: the blood spurt is unaffected
-    /// (wow-re §8 Q1: "no blood-, creature-type- or display-record-keyed mechanism exists" —
-    /// a skeleton bleeds), and so is the floating combat text. Decision 2068.
+    /// (the reference has no blood-, creature-type- or display-record-keyed mechanism that
+    /// suppresses it — a skeleton bleeds), and so is the floating combat text. Decision 2068.
     pub(crate) const DO_NOT_PLAY_WOUND_ANIM: u32 = 0x8;
 
     /// `0x10` — **NO_FACTION_TOOLTIP**: the unit tooltip drops its faction-name line
@@ -68,8 +68,7 @@ pub(crate) mod type_flags {
     pub(crate) const NO_FACTION_TOOLTIP: u32 = 0x10;
 
     /// `0x20` — **MORE_AUDIBLE**: the pass-2 election re-links an off-screen creature for
-    /// tick-only so its combat stays audible (`0x607da0`'s `0x623b70` arm — wow-re
-    /// `outdoor-object-pass-election.md` §4, decision 1482).
+    /// tick-only so its combat stays audible (`0x607da0`'s `0x623b70` arm, decision 1482).
     pub(crate) const MORE_AUDIBLE: u32 = 0x20;
 }
 
@@ -84,7 +83,7 @@ pub(crate) struct NameCache {
     /// wire has always sent these three and we used to drop them. Two consumers now: the
     /// `$`-macro expander's non-player-subject path: the reference resolves a macro subject from
     /// the object manager first and falls back to **this** cache record when the unit isn't
-    /// streamed (`questtext-macro-expander.md` §1), so without them `$R`/`$C`/`$G` against an
+    /// streamed (`0x506f70`), so without them `$R`/`$C`/`$G` against an
     /// off-screen player would silently read race 0.
     ///
     /// **An entry here is present only when the server answered for it.** A name learned any other
@@ -492,10 +491,10 @@ impl crate::query_cache::AskOnce for NameCache {
 /// The file's first line. Every field is compared by **equality** on load and any mismatch
 /// discards the whole file — the reference's own rule for its `.wdb` header, whose 20 bytes are
 /// `[FourCC | build 0x16f3 | locale | recordSize | version 1]` and carry **no checksum, no
-/// timestamp and no TTL** (wow-re `system/dbcache/dbcache.md`, Contracts). Reproducing the
-/// *absence* matters as much as the presence: a cache that expired entries on a clock would
-/// re-ask for names the server has no reason to have changed, and one that trusted a checksum
-/// over a build would deserialize last patch's record layout into this one's struct.
+/// timestamp and no TTL**. Reproducing the *absence* matters as much as the presence: a cache
+/// that expired entries on a clock would re-ask for names the server has no reason to have
+/// changed, and one that trusted a checksum over a build would deserialize last patch's record
+/// layout into this one's struct.
 const CACHE_MAGIC: &str = "benilla-namecache";
 /// Our own record-layout version — the analogue of the header's `recordSize`+`version` pair. Bump
 /// it whenever a column below is added, removed or reordered; the old file is then discarded
@@ -607,8 +606,7 @@ impl NameCache {
     }
 
     /// Drop a player's cached name (`SMSG_INVALIDATE_PLAYER`) so the next resolve re-asks — the
-    /// reference's remove-by-key (`0x556ff0`, wow-re `dbcache.md` Contracts: eviction is
-    /// **explicit only**, there is no TTL).
+    /// reference's remove-by-key (`0x556ff0`; eviction is **explicit only**, there is no TTL).
     ///
     /// This is the safety valve persistence needs. In memory a stale name lasts a session; on disk
     /// it lasts forever, so the one packet that says "forget this guid" has to be honoured. Note
@@ -722,7 +720,7 @@ pub(crate) mod net {
 
     /// `SMSG_INVALIDATE_PLAYER` — drop this guid so the next resolve re-asks (decision 1689).
     ///
-    /// The name cache has **no TTL** (wow-re `dbcache.md`: eviction is explicit only), so this is the
+    /// The name cache has **no TTL** (eviction is explicit only, `0x555600`), so this is the
     /// one thing that unsticks a player's name. It matters more to benilla than it did before the
     /// cache persisted: in memory a stale name lasted a session, on disk it lasts until something
     /// evicts it.

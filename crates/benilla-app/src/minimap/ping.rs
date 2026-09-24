@@ -26,13 +26,13 @@
 //!   session event and seats the same way. A ping is seated **locally at click time**, never
 //!   waited for off the wire: vanilla pings work solo.
 //! - **Out** — `MINIMAP_PING (unitToken, nx, ny)` fires for addons, with the same normalized
-//!   offsets the byte-verified relay `0x4ee330` hands Lua (`(−dy·k, dx·k)`, `k = 1/(2·radius)` —
-//!   wow-re `party-group-wire.md` §TU-D). `Minimap:GetPingPosition()` reads the live value back.
+//!   offsets the relay `0x4ee330` hands Lua (`(−dy·k, dx·k)`, `k = 1/(2·radius)`).
+//!   `Minimap:GetPingPosition()` reads the live value back.
 //!
 //! ## Lifetime and pixels — the stock `Minimap.lua`'s and its `<Model>`'s, not ours
 //!
 //! The reference splits the ping in two: the engine stores the world point in a pair of statics
-//! **nothing ever clears** (wow-re `minimap-ping-law.md` §3 — six instructions touch those cells
+//! **nothing ever clears** (`0xbc787c`/`0xbc7880` — six instructions touch those cells
 //! and the only zeroing is a CRT initializer), and FrameXML owns everything visible — the
 //! `MiniMapPing` `<Model>` it shows on `MINIMAP_PING`, re-seats every frame from
 //! `GetPingPosition()`, holds 5 s (`MINIMAPPING_TIMER`), "fades" 0.5 s through a `SetAlpha(255·t)`
@@ -47,8 +47,8 @@
 //!
 //! What is *not* a lifetime: proximity. The first version applied the client's 10-yd
 //! `d² < 100` auto-clear to the party ping, and that clear belongs to the **`SMSG_GOSSIP_POI`
-//! marker** — a different feature in a different slot (wow-re `party-group-wire.md` §TU-D
-//! corrects it explicitly). Walking to your own ping used to delete it mid-hold.
+//! marker** — a different feature in a different slot (`0x6d99aa`–`0x6d9a4c`). Walking to your
+//! own ping used to delete it mid-hold.
 
 use bevy::prelude::*;
 
@@ -323,10 +323,10 @@ mod tests {
     }
 
     /// **No proximity clear** (decision 1596 §2.2). The first version applied the client's 10-yd
-    /// `d² < 100` auto-clear to the party ping; wow-re `party-group-wire.md` §TU-D shows that
-    /// clear belongs to the `SMSG_GOSSIP_POI` marker, and that `MSG_MINIMAP_PING` has no C-side
-    /// storage to clear at all. Standing on your own ping must not delete it — and a frame with
-    /// no click seats nothing over it.
+    /// `d² < 100` auto-clear to the party ping; that clear belongs to the `SMSG_GOSSIP_POI` marker
+    /// (`0x6d99aa`–`0x6d9a4c`), and `MSG_MINIMAP_PING` has no C-side storage to clear at all.
+    /// Standing on your own ping must not delete it — and a frame with no click seats nothing
+    /// over it.
     #[test]
     fn reaching_the_ping_does_not_clear_it() {
         let mut c = ctx();

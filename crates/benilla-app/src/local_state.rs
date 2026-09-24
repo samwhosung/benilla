@@ -287,7 +287,7 @@ pub(crate) fn shots_path() -> Option<PathBuf> {
 ///
 /// **The reference writes `Screenshots\\` inside the install and we deliberately do not.** benilla
 /// reads a WoW install; it never writes to one (decision 1486, the director's rule) — the folder is
-/// somebody else's, it is shared with the sibling RE repo on this machine, and a client that
+/// somebody else's, it is shared with other tools on this machine, and a client that
 /// scatters its output through it makes "what here is benilla's?" unanswerable. So the reference's
 /// own folder NAME is kept, capital S and all, and only its parent moves: a player who knows where
 /// WoW put screenshots finds the same folder one level over.

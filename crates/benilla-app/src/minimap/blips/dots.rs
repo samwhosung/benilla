@@ -28,19 +28,18 @@ const PARTY_DOT_PX: f32 = 8.0 * 1.3;
 /// `ObjectIcons.blp` cell 4 — the blue party-member dot (col 0, row 1 of the 4×4 grid).
 const PARTY_DOT_CELL: [f32; 4] = [0.0, 0.25, 0.25, 0.5];
 /// `ObjectIcons.blp` cell 0 — the gold tracked-RESOURCE dot (col 0, row 0): a GameObject
-/// passing the resource-tracking predicate (Find Herbs/Minerals; wow-re §B2).
+/// passing the resource-tracking predicate (Find Herbs/Minerals; `0x5ed2b0`).
 const TRACKED_GO_CELL: [f32; 4] = [0.0, 0.25, 0.0, 0.25];
 /// `ObjectIcons.blp` cell 1 — the red tracked-UNIT dot (col 1, row 0): a unit passing the
-/// creature-tracking predicate (Track Beasts/Humanoids/…; wow-re §B2).
+/// creature-tracking predicate (Track Beasts/Humanoids/…; `0x5ed210`).
 const TRACKED_UNIT_CELL: [f32; 4] = [0.25, 0.5, 0.0, 0.25];
 /// `UNIT_DYNAMIC_FLAGS` bit 0x2 — the per-viewer "always show on minimap" flag (vmangos
 /// `UNIT_DYNFLAG_TRACK_UNIT`; the server sets it on a Hunter's Mark victim for the caster).
 /// Byte-verified as `0x5ed210`'s first clause (`+0x224 & 0x2`, the 0564 fold-back).
 const UNIT_DYNFLAG_TRACK_UNIT: u32 = 0x2;
 /// Creature type 7 — Humanoid: the resolver's player/race fallback. Byte-verified via the
-/// shipped `ChrRaces.dbc` (col 9 = 7 for all nine playable races; wow-re
-/// `track-predicates.md`, the 0564 fold-back) — also the `<= 0` fallback of the shapeshift
-/// override.
+/// shipped `ChrRaces.dbc` (col 9 = 7 for all nine playable races, read by `0x605570`; the 0564
+/// fold-back) — also the `<= 0` fallback of the shapeshift override.
 const CREATURE_TYPE_HUMANOID: u32 = 7;
 
 /// `ObjectIcons.blp` cell for a DIALOG_STATUS — **status 7 only** (`cmp [obj+0xcb8],7` at
@@ -50,11 +49,10 @@ fn quest_dot_cell(status: u32) -> Option<[f32; 4]> {
 }
 
 /// The three preconditions `0x4eaa90` applies to a **UNIT or PLAYER** before either dot category
-/// is even chosen — byte-pinned in wow-re `questgiver-marker.md` §W15 Q2, decision 1906. They sit
-/// upstream of the `cmp [edi+0xcb8],7` at `0x4eac31`, whose only predecessor is the fall-through,
-/// so they gate the gold **quest** dot (cell 3) and the red **tracking** dot (cell 1) alike. They
-/// do **not** touch the GameObject leg (cell 0) or the party dots (cell 4), which are reached by
-/// other paths entirely.
+/// is even chosen (decision 1906). They sit upstream of the `cmp [edi+0xcb8],7` at `0x4eac31`,
+/// whose only predecessor is the fall-through, so they gate the gold **quest** dot (cell 3) and the
+/// red **tracking** dot (cell 1) alike. They do **not** touch the GameObject leg (cell 0) or the
+/// party dots (cell 4), which are reached by other paths entirely.
 ///
 /// A candidate with no descriptor yet fails, which is the same answer the reference's own read of
 /// an un-streamed unit would give (a zeroed health field is `<= 0`) — and it lasts one drain, since
@@ -105,7 +103,7 @@ pub(in crate::minimap) fn emit_quest_dots(
     for (guid, net, tf, store) in candidates.iter() {
         let npc = guid.0;
         if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
-            continue; // the GameObject leg never reaches the `== 7` compare (§W14.9)
+            continue; // the GameObject leg (`0x4eab43`) never reaches the `== 7` compare
         }
         let Some(cell) = statuses.get(&npc).copied().and_then(quest_dot_cell) else {
             continue;
@@ -173,11 +171,10 @@ pub(in crate::minimap) struct SelfTracking {
     pub(in crate::minimap) stealthed: bool,
 }
 
-/// The creature-tracking predicate — byte-carved `0x5ed210` (wow-re `track-predicates.md`,
-/// the 0564 fold-back): two always-show clauses first — `UNIT_DYNFLAG_TRACK_UNIT` (Hunter's
-/// Mark) and *our* track-stealthed bit against the target's CREEP vis-flag (the
-/// TRACK_STEALTHED(151) consumer) — then the unit's creature type against
-/// `PLAYER_TRACK_CREATURES` (bit `creatureType − 1`). No alive/dead or faction gate
+/// The creature-tracking predicate — `0x5ed210` (the 0564 fold-back): two always-show clauses
+/// first — `UNIT_DYNFLAG_TRACK_UNIT` (Hunter's Mark) and *our* track-stealthed bit against the
+/// target's CREEP vis-flag (the TRACK_STEALTHED(151) consumer) — then the unit's creature type
+/// against `PLAYER_TRACK_CREATURES` (bit `creatureType − 1`). No alive/dead or faction gate
 /// (byte-verified: neither predicate tests either).
 fn tracked_creature(
     tracking: SelfTracking,
@@ -196,7 +193,7 @@ fn tracked_creature(
             .is_some_and(|t| (1..=32).contains(&t) && tracking.creatures & (1u32 << (t - 1)) != 0)
 }
 
-/// The client's creature-type resolver, transcribed — `0x605570` (byte-carved 3-way, the 0564
+/// The client's creature-type resolver, transcribed — `0x605570` (3-way, the 0564
 /// fold-back): a nonzero shapeshift form reads `SpellShapeshiftForm.dbc`'s creatureType FIRST
 /// (`<= 0` → Humanoid — a cat-form druid is a Beast); else an NPC reads its cached creature
 /// template, a player its race → Humanoid (`ChrRaces.dbc` col 9 = 7 for all nine playable
@@ -287,11 +284,11 @@ pub(in crate::minimap) fn emit_tracking_dots(
     // **No quest-status precedence on this leg** (decision 1872). This loop used to skip a
     // GameObject whose status was 7, mirroring the unit loop below — but the classifier's
     // `cmp dword ptr [edi+0xcb8],7` at `0x4eac31` is reachable **only** from the UNIT and PLAYER
-    // legs (machine-enumerated predecessors, wow-re `minimap-poi-questdot.md` via
-    // `questgiver-marker.md` §W14.9): the GameObject leg at `0x4eab43` falls straight into
-    // `0x5ed2b0`, GameObject *tracking*, and emits category 0. A GameObject never draws a quest
-    // dot in the reference, so nothing about a quest status may suppress its tracking dot — and
-    // a GameObject can no longer *hold* a status here anyway (`net/apply` drops it, §W14.1).
+    // legs (machine-enumerated predecessors): the GameObject leg at `0x4eab43` falls straight
+    // into `0x5ed2b0`, GameObject *tracking*, and emits category 0. A GameObject never draws a
+    // quest dot in the reference, so nothing about a quest status may suppress its tracking dot —
+    // and a GameObject can no longer *hold* a status here anyway (`net/apply` drops it, as
+    // `0x5dc9f0` does).
     if tracking.resources != 0 {
         if let Some(locks) = locks {
             for (guid, net, tf, _) in candidates.iter() {
@@ -313,7 +310,7 @@ pub(in crate::minimap) fn emit_tracking_dots(
             continue;
         }
         // The same three preconditions the quest dot passes — they are upstream of the branch
-        // that chooses between the two categories, so neither category outruns them (§W15 Q2b).
+        // that chooses between the two categories (`0x4eac31`), so neither category outruns them.
         if !unit_dot_eligible(store, self_guid) {
             continue;
         }
@@ -387,10 +384,10 @@ pub(in crate::minimap) fn emit_party_dots(
 mod tests {
     use super::*;
 
-    /// **The three preconditions upstream of BOTH dot categories** (decision 1906, wow-re
-    /// `questgiver-marker.md` §W15 Q2). They live in `0x4eaa90` between the type gate and the
-    /// `cmp [edi+0xcb8],7`, whose only predecessor is the fall-through — so a unit that fails any
-    /// of them draws neither the gold quest dot nor the red tracking dot. benilla had none of them.
+    /// **The three preconditions upstream of BOTH dot categories** (decision 1906). They live in
+    /// `0x4eaa90` between the type gate and the `cmp [edi+0xcb8],7`, whose only predecessor is
+    /// the fall-through — so a unit that fails any of them draws neither the gold quest dot nor
+    /// the red tracking dot. benilla had none of them.
     ///
     /// The control is the first row: an ordinary live creature still passes, which is what would
     /// catch a predicate written one bit too wide and blanked the minimap.
@@ -541,7 +538,7 @@ mod tests {
             !tracked_creature(beasts, None, 0, false),
             "type not cached yet — no dot"
         );
-        // The always-show pair (the `0x5ed210` carve): Hunter's Mark forces the dot with no
+        // The always-show pair (`0x5ed210`): Hunter's Mark forces the dot with no
         // tracking aura on us; track-stealthed lights only a CREEP-flagged unit — and only
         // the conjunction of the two bits does.
         assert!(tracked_creature(

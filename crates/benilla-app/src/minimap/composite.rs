@@ -1,5 +1,5 @@
 //! The WMO-interior minimap's **offscreen composite** — the client's own compositing pipeline
-//! (decision 1466, from wow-re `system/minimap/scratch/wmo-interior-minimap-composite.md`).
+//! (decision 1466).
 //!
 //! Indoors the reference does not draw the group tiles onto the screen. It draws them into a fixed
 //! **256 × 256** render target created once at `0x4eda42`/`0x4eda48`, under an ortho half-extent of

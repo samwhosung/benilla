@@ -6,7 +6,7 @@
 //! ## The reference does this too, and it does it at the source
 //!
 //! This file was written on the assumption that the reference simply blocks inside its world load,
-//! so the question never arises there. The wow-re round behind decision 1990 says otherwise, and
+//! so the question never arises there. The disassembly behind decision 1990 says otherwise, and
 //! the answer is better than the assumption: **the reference has an explicit input veto, registered
 //! by the screen's own raise.**
 //!

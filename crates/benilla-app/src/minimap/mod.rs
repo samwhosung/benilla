@@ -8,12 +8,12 @@
 //! the widget (border art, buttons, zone text — `MinimapCluster.xml`) draw above per the normal
 //! z order.
 //!
-//! Mechanism per wow-re's T3 minimap node (byte-verified there, transcribed here):
+//! Mechanism per the reference client (transcribed here):
 //! - **Tile grid**: one 256² minimap BLP per ADT tile (533.33 yd), named `map<X>_<Y>.blp` in the
 //!   map's directory and resolved through `md5translate.trs` to a hashed file under
 //!   `textures\Minimap\` ([`benilla_formats::MinimapTranslate`]). Index order = the ADT order
 //!   (chain-verified, see the formats re-export note).
-//! - **Zoom → world radius** (`zoom_to_scale` 0x6da9b0): the client keeps **two** zoom indices,
+//! - **Zoom → world radius** (0x6da9b0): the client keeps **two** zoom indices,
 //!   selected by whether the player is inside a WMO. **Outdoors** the chunk-count table
 //!   `{14,12,10,8,6,4} · 0.5 · 33.333` yd of half-extent; **indoors** the radius table
 //!   `{150,120,90,60,40,25}` yd outright ([`INTERIOR_ZOOM_RADIUS`]). Each index persists separately
@@ -64,8 +64,8 @@ use benilla_world::world_map::CurrentMap;
 const TILE_YARDS: f32 = 533.333_3;
 const CHUNK_YARDS: f32 = TILE_YARDS / 16.0;
 
-/// The north-up zoom table (wow-re minimap node, `0x8116d0`): view **diameter** in chunks per
-/// zoom index; half-extent = `chunks · 0.5 · 33.333` yd (`zoom_to_scale` 0x6da9b0's unlocked leg).
+/// The north-up zoom table (`0x8116d0`): view **diameter** in chunks per
+/// zoom index; half-extent = `chunks · 0.5 · 33.333` yd (0x6da9b0's unlocked leg).
 /// This is the **outdoor** zoom basis.
 const ZOOM_CHUNKS: [f32; 6] = [14.0, 12.0, 10.0, 8.0, 6.0, 4.0];
 
@@ -75,15 +75,15 @@ const ZOOM_CHUNKS: [f32; 6] = [14.0, 12.0, 10.0, 8.0, 6.0, 4.0];
 /// radius in raw yards rather than the outdoor chunk half-extent. That is the "different zoom states
 /// inside vs outside" the director reported (2026-07-09).
 ///
-/// On-screen radius is exactly this value (wow-re `wmo-interior-minimap.md` finding 2 **Q7
-/// CORRECTION**, VERIFIED: the client composites the interior to an offscreen target at `1.5·c` and
-/// blits its middle two-thirds, netting `1.0·c`). The **same `c`** sizes the tile-selection query box
-/// (Sub-Q4b), so selection and draw stay coherent.
+/// On-screen radius is exactly this value (the client composites the interior to an offscreen
+/// target at `1.5·c` in `0x4ec090` and blits its middle two-thirds in `0x4ec440`, netting `1.0·c`).
+/// The **same `c`** sizes the tile-selection query box (`0x6d96b6`), so selection and draw stay
+/// coherent.
 ///
-/// NB an earlier reading of this same node claimed the interior scale was a compile-time constant
-/// (`10.0f` ⇒ a fixed 15 yd, zoom-independent). That was WRONG — it measured the *static
-/// initializer*, missing the per-frame write `mov [esi+0xc], radiusTable[indoorZoom]` that reaches
-/// the field through a computed pointer. Superseded in wow-re; do not "restore" a constant here.
+/// NB the interior scale is not a compile-time constant (`10.0f` ⇒ a fixed 15 yd,
+/// zoom-independent): that `10.0f`, at `0x4ed9eb`, is only the *static initializer*, and the
+/// per-frame write `mov [esi+0xc], radiusTable[indoorZoom]` (`0x6d98f5`) reaches the field through
+/// a computed pointer. Do not "restore" a constant here.
 const INTERIOR_ZOOM_RADIUS: [f32; 6] = [150.0, 120.0, 90.0, 60.0, 40.0, 25.0];
 
 /// **How far the map reaches, in yards** — the one function that answers it. Indoors that is the
@@ -105,8 +105,7 @@ fn view_radius_yd(zoom: u8, inside_zoom: u8, inside: bool) -> f32 {
 /// larger on that side, so a group's art extends 1 yd past its bbox all the way round and two
 /// groups whose boxes touch overlap by 2 yd. Interior cell edges are shared exactly. Byte-verified
 /// (`0x6a549e`…`0x6a54db`, the constant `0xca8098` built in the emitter as `0.5 + 0.5`) and fitted
-/// to the reference's captured quads with zero error — wow-re
-/// `system/minimap/scratch/wmo-interior-no-adt-underlay.md` §8.
+/// to the reference's captured quads with zero error.
 const EDGE_BLEED_YD: f32 = 1.0;
 
 /// The client's half-texel UV inset, as the quad scale that reproduces it: a tile spanning
@@ -126,7 +125,7 @@ fn texel_stretch(extent_yd: f32) -> f32 {
 /// `glAlphaFunc(GL_GEQUAL, 0.87843144)`. It is never set explicitly: the tile draw sets EGxBlend
 /// **1** (whose applicator `glDisable`s blending), and `SetRenderState`'s id-7→id-8 cascade reads
 /// `.data 0x85ad20[1] = 224` and multiplies by the f32 reciprocal of 255 — `0x3F60E0E2`, one ULP
-/// above `224/255` (wow-re `system/minimap/scratch/wmo-interior-minimap-composite.md`, VERIFIED).
+/// above `224/255`.
 /// Written as the exact f32 the client computes rather than the ratio, because that ULP is the
 /// value fragments are compared against.
 pub(crate) const INTERIOR_TILE_ALPHA_REF: f32 = f32::from_bits(0x3F60_E0E2);
@@ -137,7 +136,7 @@ const CORPSE_BLIP_FRACTION: f32 = 0.11;
 
 /// The day-night tint the reference MODULATEs the **outdoor** (ADT) minimap tiles by before drawing
 /// — the tiles are NOT drawn at full white (that reads too bright). Verified in the CWorldFrame
-/// minimap draw (`wow-5875-re` minimap node, tile draw `0x4eccdd`–`0x4ecd69`): from the two global
+/// minimap draw (tile draw `0x4eccdd`–`0x4ecd69`): from the two global
 /// day-night light colours — `color_a` = the Direct/Diffuse band (`LightIntBand` 0 = the light
 /// table's `table[0]`), `color_b` = the Ambient band (band 1 = `table[1]`):
 ///
@@ -222,8 +221,8 @@ pub(crate) struct MinimapWidget(pub(crate) Option<MinimapSlot>);
 pub(crate) struct MinimapInside(pub(crate) bool);
 
 /// The **persisted** half of the minimap zoom (decision 1131) — the client's two CVar objects
-/// `minimapZoom` / `minimapInsideZoom`, whose registered default is `"3"` in both cases (wow-re,
-/// VERIFIED at the `RegisterCVar 0x63db90` argument slot). The *live* indices are the widget's
+/// `minimapZoom` / `minimapInsideZoom`, whose registered default is `"3"` in both cases (at the
+/// `RegisterCVar 0x63db90` argument slot). The *live* indices are the widget's
 /// ([`benilla_ui::widget::MinimapState`]); this is the durable knob [`crate::cvars`] loads out of
 /// `config.toml` and saves back into it. It is **read once** — when the in-game UI materializes and
 /// the fresh widget is seeded from it (`UiScript::set_minimap_zoom`) — and written whenever
@@ -374,8 +373,7 @@ fn setup_minimap(
 /// of the WMO the player is in, or `None` for the terrain family.
 ///
 /// **The gate is the client's one indoor byte** (`0xbc8300`), and that byte is the CGLight node's
-/// down-ray bit `[node+0x90] & 1` (`0x670547` — wow-re `wmo-interior-minimap-composite.md`, which
-/// CORRECTED the old note's "containment resolves to a group with `0x10` set": that `0x10` is a
+/// down-ray bit `[node+0x90] & 1` (`0x670547` — not a containment group's `0x10`, which is a
 /// ctor-set class tag, not a group flag). The predicate is a **position cast, faces only**: the
 /// nearest surface within 1000 yd straight down — terrain racing the WMO faces, closer wins and the
 /// WMO wins ties — is a WMO face whose group lacks MOGP `0x8`. Terrain below ⇒ outdoors, whatever
@@ -513,7 +511,7 @@ fn emit_minimap(
         // footprint — verified against the 97°-yaw Goldshire Inn: group 3's tile is 64×32 px = its
         // model bbox, not the world AABB). So place each tile at its model-space centre mapped
         // through the placement, and rotate the WHOLE set by ONE placement-yaw angle — not per-tile
-        // world AABBs (`wow-5875-re` minimap node Sub-Q6). Cached by `(group, col, row)`.
+        // world AABBs (one orientation basis, `0x6da180`). Cached by `(group, col, row)`.
         if cache.interior_stem.as_deref() != Some(stem.as_str()) {
             cache.interior.clear();
             cache.interior_stem = Some(stem.clone());
@@ -521,7 +519,7 @@ fn emit_minimap(
         // INTERIOR ZOOM: indoors has its OWN zoom index and its own table — the view radius is
         // `radiusTable[inside_zoom]` in raw yards (150 widest … 25 tightest), not the outdoor chunk
         // half-extent. The zoom buttons drive `inside_zoom` while you're inside, and it persists
-        // separately from the outdoor level (wow-re finding 2 Q7 CORRECTION).
+        // separately from the outdoor level (index `0x86f69c`, table `0x8116e8`).
         let radius = view_radius;
         let px_per_yd = (side * 0.5) / radius;
         blip_px_per_yd = px_per_yd;
@@ -548,17 +546,17 @@ fn emit_minimap(
         let rt_half = composite::RT_SIZE as f32 * 0.5;
         composite.active = true;
 
-        // GROUP SELECTION: the portal flood-fill from the player's current group (wow-re
-        // `wmo-interior-minimap.md` Sub-Q4b, byte-verified) — NOT draw-every-group. Only the groups
+        // GROUP SELECTION: the portal flood-fill from the player's current group (`0x6a5020`) —
+        // NOT draw-every-group. Only the groups
         // reached through portals within the query box, whose bbox overlaps the view in XY, are drawn.
         // This is what stops floors the player can't reach (or that are far outside the view) from
         // painting over the current one.
-        // The selection query box uses the SAME `c` as the draw radius (Sub-Q4b) — so we never load
-        // tiles we cannot show, and zooming in indoors tightens the box's Z extent too, which is what
-        // trims how many stacked floors bleed through.
+        // The selection query box uses the SAME `c` as the draw radius (`0x6d96b6`) — so we never
+        // load tiles we cannot show, and zooming in indoors tightens the box's Z extent too, which
+        // is what trims how many stacked floors bleed through.
         let drawable =
             interior_group_selection(model, &world_from_local, player.pos, radius, in_group);
-        // Draw ORDER (wow-re finding 2 Q2, VERIFIED): the composite is Z-sorted ascending by
+        // Draw ORDER (`0x4ebeb0`, keyed at `0x6d9e30`): the composite is Z-sorted ascending by
         // `Zmidpoint − playerZ`, with the player's OWN group forced to the top (the client keys it
         // FLT_MAX). So floors below draw at the bottom, floors above over them, and the player's
         // current floor LAST of all — a stacked storey shows only through its transparent stairwell
@@ -587,10 +585,9 @@ fn emit_minimap(
                     // cells themselves stride exactly `tw`, sharing their interior edges — but a
                     // cell on the grid's boundary is grown by 1.0 yd on that side alone
                     // (`0x6a549e`/`0x6a54ae`/`0x6a54be`/`0x6a54d1`, each an `fsub`/`fadd` of
-                    // `0xca8098 = 0.5 + 0.5`; wow-re `wmo-interior-no-adt-underlay.md` §8, fitted
-                    // to the reference's own captured quads with zero error on every bound). A
-                    // 1×1 grid is therefore `tw + 2` across, an end cell `tw + 1`, an interior
-                    // cell exactly `tw`.
+                    // `0xca8098 = 0.5 + 0.5`; fitted to the reference's own captured quads with
+                    // zero error on every bound). A 1×1 grid is therefore `tw + 2` across, an
+                    // end cell `tw + 1`, an interior cell exactly `tw`.
                     //
                     // THIS is what makes the joints work. The bleed grows every group's art 1 yd
                     // past its bbox on each outer side, so two groups whose boxes touch OVERLAP by
@@ -652,7 +649,7 @@ fn emit_minimap(
         // `WOW_MM_STATS=1` reports what the interior branch actually put in the target this frame —
         // how many groups the flood-fill kept out of how many, and how many tiles that came to. The
         // reference's own Stormwind capture emitted 57 tiles at indoor zoom 3, which is the number
-        // this is here to be compared against (wow-re `wmo-interior-no-adt-underlay.md`).
+        // this is here to be compared against.
         static MM_STATS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *MM_STATS.get_or_init(|| std::env::var_os("WOW_MM_STATS").is_some()) {
             eprintln!(
@@ -745,7 +742,7 @@ fn emit_minimap(
     // Our own descriptor's tracking state (PRIVATE fields — only ever on the self entity).
     let me = self_store.iter().next();
     // Our own guid — the classifier compares a candidate's charm/summon owner against it, so our
-    // own pet and minions never take a dot (§W15 Q2d).
+    // own pet and minions never take a dot (`0x4eac0d`).
     let self_guid = me.map(|(_, g)| g.0);
     let tracking = me
         .map(|(s, _)| blips::SelfTracking {

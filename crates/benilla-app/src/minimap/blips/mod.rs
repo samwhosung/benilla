@@ -1,9 +1,7 @@
-//! The minimap **blip layer** (decision 0203 phase 3; the byte law per the wow-re fold-back,
+//! The minimap **blip layer** (decision 0203 phase 3; the byte law per the fold-back,
 //! decision 0337): AreaPOI landmarks + quest dots + the hover tooltip.
 //!
-//! **Landmarks** — byte-verified end to end (`wow-5875-re` `system/ui/scratch/
-//! minimap-poi-questdot.md`, §5 four-pair cross-check; selection `0x6d9a90`, candidates
-//! `0x6d8e10`, draw `0x4ed148`/`0x4ee170`):
+//! **Landmarks** (selection `0x6d9a90`, candidates `0x6d8e10`, draw `0x4ed148`/`0x4ee170`):
 //! - **Candidates**: `ContinentID == current map` AND `Flags & 1` — nothing else (no faction,
 //!   no importance gate; both factions' rows are candidates).
 //! - **In-range** (`d/viewRadius ≤ 0.8`): draws the `POIIcons.blp` cell indexed by the DBC
@@ -25,9 +23,8 @@
 //! LAST — above every arrow.
 //!
 //! **Tracking dots** (decisions 0560/0564) — the classifier's fall-through for objects NOT
-//! at quest status 7, **byte-carved end to end** (wow-re `minimap-poi-questdot.md` §B2 +
-//! `track-predicates.md`, the §5 trio): a GameObject passing `0x5ed2b0` draws the gold
-//! **cell 0** (Find Herbs/Minerals), a unit passing `0x5ed210` the red **cell 1**. The
+//! at quest status 7: a GameObject passing `0x5ed2b0` draws the gold **cell 0**
+//! (Find Herbs/Minerals), a unit passing `0x5ed210` the red **cell 1**. The
 //! masks are the `PLAYER_TRACK_CREATURES`/`PLAYER_TRACK_RESOURCES` descriptor mirror
 //! (fields 1104/1105 — `values[UNIT_END] + 0x394/0x395`, byte-exact) with one bit per
 //! active tracking aura's MiscValue. A GO tests its lockId → `Lock.dbc` skill-slot
@@ -36,7 +33,7 @@
 //! `UNIT_DYNFLAG_TRACK_UNIT` (Hunter's Mark) and our track-stealthed bit vs the target's
 //! CREEP vis-flag (the TRACK_STEALTHED consumer). No alive/dead or faction gate.
 //!
-//! **Sizes are byte-pinned** (wow-re §SIZE, the 0342 fold-back): every blip constant is
+//! **Sizes are byte-pinned** (`0x4edbc0`, the 0342 fold-back): every blip constant is
 //! frozen once by the CGMinimapFrame ctor against the stock widget's 140.8-px screen basis —
 //! dot 8 px, POI icon 16 px, orbit 0.8 × the 70.4-px half-disc; the arrows render their M2
 //! models at 768 px/unit (rim, modelScale 0.6) and 1280 px/unit (player). Both arrow models
@@ -49,20 +46,20 @@
 //! static blip slot — everything above applies to it unchanged, except the one thing that is
 //! *about* being a different kind of thing: its rim arrow is the gold guide arrow ([`RimArrow`]).
 //!
-//! Remaining residue: one gate the landmark selection here does NOT implement, found by the 1516
-//! §5 and belonging to the DBC rows rather than the marker — a `WorldStateID` gate at `0x6d9b27`.
+//! Remaining residue: one gate the landmark selection here does NOT implement, recorded in 1516
+//! and belonging to the DBC rows rather than the marker — a `WorldStateID` gate at `0x6d9b27`.
 //!
-//! Three more from the 1525 §5, all recorded rather than built (each is a visible change to a
+//! Three more from 1525, all recorded rather than built (each is a visible change to a
 //! feature that is not the arrow art, and one is contested):
 //! - **The corpse is in the wrong array and the pet blip is missing** — see [`emit_party_arrows`].
 //! - **Rim arrows have a per-source z-order we flatten.** `+0x48` doubles as a frame-level offset
 //!   (`[minimap+0xc4]+3+kind`, POI frames re-levelled every draw at `0x4ed344`; party frames once
 //!   at creation), giving bottom→top: landmark, party/pet, quest, gossip, corpse. We paint every
 //!   arrow at one `z_key` in emission order, which happens to agree on landmark-under-party and
-//!   disagrees above that. **NOT built because wow-re's two findings conflict**: `0x4ed7b7` has the
+//!   disagrees above that. **NOT built because two findings conflict**: `0x4ed7b7` has the
 //!   object dots drawing LAST, above every arrow, while this table puts gossip and corpse above the
-//!   quest dot. Frame level vs. the parent's own draw order is a compositing question neither note
-//!   settles, and guessing would move a look on a coin flip. Needs its own scoped pin.
+//!   quest dot. Frame level vs. the parent's own draw order is a compositing question neither
+//!   finding settles, and guessing would move a look on a coin flip.
 //! - **Static blip slot 0 is `SelectQuestLogEntry()`'s marker** (`0x4def70`, cleared by
 //!   `0x4df0e0`): selecting a quest in the log drops a gold guide arrow at that quest's POI —
 //!   `flags = 0`, so it is **arrow-only**, showing nothing once you are inside the 0.8 rim. Live
@@ -72,8 +69,8 @@
 //! Also: dots re-project every frame where the reference draws ~1 Hz-stale
 //! snapshot coords verbatim (a throttle quirk, deliberately not aped — positions agree for
 //! standing NPCs); the subzone grey tint (`0xffb0b0b0`) on dots and their tooltip is drawn
-//! from the indoor-containment MISMATCH — the exact `0x670540` compare is INTERIM pending its
-//! scoped pin; the tooltip anchor beside the map is an eyeball (the engine handler `0x4eb0c0`
+//! from the indoor-containment MISMATCH — the exact `0x670540` compare is INTERIM and still
+//! open; the tooltip anchor beside the map is an eyeball (the engine handler `0x4eb0c0`
 //! law gives content, not the exact seat).
 
 mod dots;
@@ -107,7 +104,7 @@ const FLAG_CANDIDATE: u32 = 0x1;
 /// tower class in 5875 data.
 const FLAG_IN_RANGE_ICON: u32 = 0x2;
 /// The frozen basis the client bakes every blip-size constant against: the CGMinimapFrame
-/// ctor (`0x4edbc0`, wow-re §SIZE) computes them ONCE from the stock 140-XML-unit widget —
+/// ctor (`0x4edbc0`) computes them ONCE from the stock 140-XML-unit widget —
 /// which lands at 140.8 screen px on the 1024×768 reference — and never recomputes. Sizes
 /// below are that table's byte-derived pixel values over this basis, so at stock geometry we
 /// render them exactly and any resized widget scales proportionally.
@@ -141,10 +138,9 @@ const ARROW_QUAD_PX: f32 = 38.4;
 /// `minimapArrowModel` for both the party frames and the POI frames), so a reader naturally
 /// concludes there is one arrow art. There are four, and the model picks between them **by
 /// animation**: `0x4ed349`–`0x4ed37b` hands `0x76cf50` — the SetSequence arm, `0x76cf50(this, seq)`
-/// → `0x7121a0(model, -1, seq, -1, 0, 1.0, 0, 1)` (wow-re `modelframe-animation-clock.md`) — an
-/// `AnimationData.dbc` id chosen off the output record's `+0x48`, and `0x4ee170` arms the 5 party
-/// frames with `0xa5`. Both wow-re notes that carry those ids call the argument a "model id" and
-/// gloss it as four `.mdx` variants; it is a sequence id, and there is one model.
+/// → `0x7121a0(model, -1, seq, -1, 0, 1.0, 0, 1)` — an `AnimationData.dbc` id chosen off the
+/// output record's `+0x48`, and `0x4ee170` arms the 5 party frames with `0xa5`. That argument is
+/// a sequence id, not a "model id" for one of four `.mdx` variants, and there is one model.
 ///
 /// The model is what proves the mapping, and it is measured, not inferred: the install's own
 /// `Rotating-MinimapArrow.m2` authors **six** textured quads — the four arrow arts below, plus a
@@ -159,9 +155,8 @@ const ARROW_QUAD_PX: f32 = 38.4;
 /// the real file.
 ///
 /// `AnimationData.dbc` names the four rows outright — 165 `GroupArrow`, 166 `Arrow`, 167
-/// `CorpseArrow`, 168 `GuideArrow` (1525's §5, which derived the whole table independently and
-/// agreed). Four arbitrary-looking ids landing on four names that describe their callers exactly is
-/// why this is settled rather than merely likely.
+/// `CorpseArrow`, 168 `GuideArrow` (1525). Four arbitrary-looking ids landing on four names that
+/// describe their callers exactly is why this is settled rather than merely likely.
 ///
 /// **The selector is a default, not an enumeration** (1525): `0xa7` if `+0x48 == 2`, else
 /// `0xa6 + 2·(v != -2)`. Only a DBC landmark and the corpse are special-cased; **everything else
@@ -351,7 +346,7 @@ pub(super) struct LandmarkSelection<'a> {
 /// static blip slot to the candidate list *after* the DBC scan, so it bypasses the candidacy
 /// gate and then competes as an equal for the rim slots. Equal, and no more: it gets **no**
 /// exemption from the 694.444-yd rank cut (that belongs to the corpse slot `0xcea848`, the only
-/// candidate `0x6d9cc2` spares — wow-re `gossip-poi-marker.md`).
+/// candidate `0x6d9cc2` spares).
 pub(super) fn select_landmarks<'a>(
     pois: impl Iterator<Item = &'a AreaPoi>,
     marker: Option<&'a AreaPoi>,
@@ -514,7 +509,7 @@ pub(crate) fn party_member_pos(
 /// **The two sources draw different art** (1519), which this pass used to get wrong twice over: it
 /// drew both with `MinimapArrow` — the *player* arrow, not a rim arrow at all. A member is the
 /// party frames' `0xa5` ⇒ [`RimArrow::Group`]; your corpse is the corpse blip's `0xa7` ⇒
-/// [`RimArrow::Corpse`], the art named for it. Both confirmed at the bytes by 1525's §5.
+/// [`RimArrow::Corpse`], the art named for it. Both confirmed at the bytes (1525).
 ///
 /// **But the corpse does not belong in this array, and the slot it occupies belongs to your PET**
 /// (1525, VERIFIED — recorded here, not yet built, because it is a visible change to the corpse
@@ -522,8 +517,7 @@ pub(crate) fn party_member_pos(
 /// `0x6dad60 cmp edi,4`: slots 0–3 are the party GUIDs via `0x4e81a0`, and slot **4** reads
 /// `UNIT_FIELD_CHARM` else `UNIT_FIELD_SUMMON` off the descriptor base — the pet. Both legs fetch
 /// with typemask UNIT (`mov ecx,8`), and a `CGCorpse` is typemask `0x80`, so a corpse could never
-/// resolve there; the older wow-re note's "4 members + own corpse" is wrong the same way its "3
-/// static slots" account was. The corpse reaches the minimap **only** as static blip slot 2 on the
+/// resolve there. The corpse reaches the minimap **only** as static blip slot 2 on the
 /// POI path, which is a materially different producer: `Importance = -1` (so it outranks every
 /// landmark and *takes* one of the three rim slots rather than adding a fourth), and the sole
 /// exemption from the 694.444-yd cut at `0x6d9cc2`. Two consequences we currently get wrong — we

@@ -1,6 +1,5 @@
-//! **Overhead unit names** — the 1.12.1 overhead-name system, three §5 verdicts deep (wow-re
-//! `object-layer/scratch/overhead-name.md` + `playername/scratch/name-render-geometry-law.md`,
-//! incl. the `ee2ea7af` color/occlusion corrections the director's reference A/B forced):
+//! **Overhead unit names** — the 1.12.1 overhead-name system, incl. the color/occlusion corrections
+//! the director's reference A/B forced:
 //!
 //! - **World-pass geometry, depth-tested.** The name batch is created depth-test + depth-write ON
 //!   (`0x6c7470 → 0x5c1d60(1,1)`; flush `0x5c8b70` → `GxRsSet(GL_DEPTH_TEST, 1)`) and drawn inside
@@ -27,10 +26,10 @@
 //! - **Scale**: `d = anchor.z − feet.z`, `scale = d > 4 ? (d/4)·1.5·0.2 : 0.2` — unit-HEIGHT
 //!   scaling (taller model, bigger name; humanoids all at the 0.2 floor). Pitch : size is 1:1 at
 //!   the desc level (verified).
-//! - **Seat** (the world-mode vertical law, §5-verified after the director's "names too low"
+//! - **Seat** (the world-mode vertical law, settled after the director's "names too low"
 //!   falsified the first reading): `drawPos.z = anchor.z + lineCount·scale` is the **TOP line's
 //!   BASELINE** and the block **hangs DOWN** from it — line `i`'s baseline at
-//!   `anchor.z + (lineCount − i)·scale` (`string_layout_lines 0x5cdc20` rotated branch: line 0
+//!   `anchor.z + (lineCount − i)·scale` (the line layout `0x5cdc20`'s rotated branch: line 0
 //!   seeded at local-Y 0, one pitch subtracted per line; sign pinned by the raid-marker
 //!   cross-check). So the whole block sits ABOVE the attachment — never "bottom at the anchor",
 //!   which sat every name one line-height too low. Each line's baseline lands on that grid via
@@ -41,20 +40,20 @@
 //!   ours too since 1804 — checked before the rescue; plus a benilla-side fade gate: the own name
 //!   hides with the fully-faded first-person avatar, our reading of the gate's INFERRED
 //!   `vtable+0x58` can-show leg); the **current TARGET shows
-//!   regardless of cvars** — the rescue global `[0xb4e2d8]` is the *selection*, pinned by the
-//!   combat-flash RE; the earlier "mouseover" reading of the same global is CORRECTED here; a
-//!   **dead creature shows only via the target rescue** (director-verified on the reference; the
-//!   byte leg is a flagged pin); players → `UnitNamePlayer` (default ON); NPCs → `UnitNameNPC`
+//!   regardless of cvars** — the rescue global `[0xb4e2d8]` is the *selection*; the earlier
+//!   "mouseover" reading of the same global is CORRECTED here; a **dead creature shows only via
+//!   the target rescue** (director-verified on the reference; the byte leg is unconfirmed in the
+//!   binary); players → `UnitNamePlayer` (default ON); NPCs → `UnitNameNPC`
 //!   and own → `UnitNameOwn` (both default OFF, the binary's own — see [`NameConfig`]).
 //! - **Lines** (`0x608f50`): NPC = name + `<Subname>` (an empty wire subname is no line); player =
 //!   [flag prefixes +] name + `<Guild>`. The prefixes are the a1–a3 vtable-slot decorations of the
 //!   line stack (`+0x7c/+0x80/+0x84`), glued straight onto the name by the `%s%s…` assembly —
-//!   `<AFK>`/`<DND>`/`<GM>` in that slot order from `PLAYER_FLAGS` (see [`flag_prefix`];
-//!   byte-verified, wow-re Q4a). The trio is unique to the overhead name binary-wide
+//!   `<AFK>`/`<DND>`/`<GM>` in that slot order from `PLAYER_FLAGS` (see [`flag_prefix`]).
+//!   The trio is unique to the overhead name binary-wide
 //!   (`CHAT_FLAG_GM`'s only xref is the a3 slot).
 //!
 //!   **The guild line is a5 and the subname line is a6, and the two can never both appear** —
-//!   wow-re Q4's *branch exclusivity*, VERIFIED: the player branch emits a1–3 · a4 · a5 · a8 and
+//!   *branch exclusivity*: the player branch emits a1–3 · a4 · a5 · a8 and
 //!   never reaches a6/a7; the NPC branch emits a1–3 · a4 · a6 · a7 and never reaches a5/a8. Both
 //!   slots share the one format string `"\n<%s>"` (`0x860f9c`), so one `Option<&str>` carries
 //!   whichever the unit's branch supplies ([`lines_current`]'s `bracketed`). a5 alone is
@@ -93,8 +92,7 @@ const SCALE_RATE: f32 = 1.5; // [0x8112ac]
 /// these gates (the Options window's Nameplates page, through the 0954 store — the arms live in
 /// [`crate::cvars`]).
 ///
-/// **The defaults are the reference's, byte-verified** (wow-re
-/// `object-layer/scratch/overhead-name.md`, the `0x6c7470` registrar: `UnitNamePlayer` `"1"`,
+/// **The defaults are the reference's** (the `0x6c7470` registrar: `UnitNamePlayer` `"1"`,
 /// `UnitNameNPC` `"0"`, `UnitNameOwn` `"0"`). `npc` and `own` shipped ON from 2026-07-12 to
 /// 1804 — a pair of director directives ("figure out text name over NPCs"; "we should show our
 /// name") that were about making the feature *visible while it was being built*, and stayed as
@@ -123,7 +121,7 @@ impl Default for NameConfig {
 }
 
 /// The player name-line flag decorations — the a1–a3 prefix slots of the line-stack law
-/// (`0x608f50`), byte-VERIFIED (wow-re `overhead-name.md` Q4a, commit `4a75d9be`): the CGPlayer
+/// (`0x608f50`): the CGPlayer
 /// vtable overrides at `+0x7c/+0x80/+0x84` (`0x5ec9e0/0x5eca40/0x5eca80`) each test one
 /// `PLAYER_FLAGS` bit and resolve one GlobalStrings key — slot order **AFK (0x2) → DND (0x4) →
 /// GM (0x8)**, all set flags stack, bare `%s%s…` concatenation before the name (`<GM>One`, no
@@ -183,7 +181,7 @@ fn lines_current(
 }
 
 /// The name's world scale for a unit whose overhead anchor sits `d` world units above its feet.
-/// Shared with the raid-target marker ([`crate::raid_marks`]) — §6 of the same geometry law.
+/// Shared with the raid-target marker ([`crate::raid_marks`]), which it raises (`0x6c70d8`).
 pub(crate) fn height_scale(d: f32) -> f32 {
     if d > SCALE_KNEE {
         (d / SCALE_KNEE) * SCALE_RATE * SCALE_FLOOR
@@ -251,14 +249,14 @@ pub(crate) struct Nameplates {
 impl Nameplates {
     /// Whether `unit` currently shows an overhead name — benilla's equivalent of the client's
     /// per-unit name object (`unit+0xc7c`) being live. The questgiver marker keys its raised
-    /// (anim 190) bob off this (wow-re `questgiver-marker.md` Q4: `0x6076c0` checks `0x6c7950`).
+    /// (anim 190) bob off this (`0x6076c0` checks `0x6c7950`).
     pub(crate) fn shows(&self, unit: Entity) -> bool {
         self.live.contains_key(&unit)
     }
 
     /// The line count of `unit`'s live overhead name (`None` = no name this frame) — the raid
-    /// marker's seat law reads it (§6: the marker sits one pitch above the block when the name
-    /// shows, at the bare anchor otherwise).
+    /// marker's seat law reads it (`0x6c70d8`: the marker sits one pitch above the block when the
+    /// name shows, at the bare anchor otherwise).
     pub(crate) fn line_count(&self, unit: Entity) -> Option<usize> {
         self.live.get(&unit).map(|(_, lines, _)| lines.len())
     }
@@ -287,7 +285,7 @@ const ROCK_SNAP: f32 = 1.0;
 /// means crisper letters when a name is close.
 ///
 /// The real client's unit-name font is pinned at a 32-px raster and magnifies the cells for every
-/// plate (`UNIT_NAME_FONT`, size `0.99f` with string flag `0x80` — wow-re `system/font`, so its
+/// plate (`UNIT_NAME_FONT` at `0x6c749b`, size `0.99f` with string flag `0x80`, so its
 /// world text was always a stretched bitmap). Rendering the source larger is the same recorded
 /// crispness divergence world text already takes at the [`crate::ui_text::FONTSTRING_EM_CAP`].
 const BAKE_PX: f32 = 36.0;
@@ -296,7 +294,7 @@ const BAKE_PX: f32 = 36.0;
 /// any name length — by construction), y up, one line = 1.0 of pitch, line 0 (the name) on TOP,
 /// each line's **BASELINE at local y = lineCount − i** — so a transform at the anchor with
 /// scale = the world `scale` puts the top baseline exactly at the byte law's
-/// `anchor + lineCount × scale` and the block hangs below it (the §5 world-mode seat; the old
+/// `anchor + lineCount × scale` and the block hangs below it (the world-mode seat; the old
 /// bottom-at-anchor bake sat everything one line too low). Glyphs come from the real layout at
 /// [`BAKE_PX`], normalized by the pitch (= the font size, the verified 1:1); the baseline sits
 /// [`UiFontAtlas::ascent_ratio`] into the layout's cell, the same `[0x17c]` load_param seat the
@@ -505,8 +503,8 @@ pub(crate) fn drive_nameplates(
         // 20-yard cap (`0x60f600` vs `[0xc4d988] = 400`) that `vplates.rs` implements. This
         // lane's own update/cull/build (`0x6c6d40`/`0x6c6e00`/`0x6c6e90`) holds **zero** distance
         // compares — every early-out is identity/state-based, and the one FP compare is the
-        // height law above, not a depth term (wow-re `overhead-name.md` §Q5 + `playername.md`,
-        // both VERIFIED). A far name just gets small: it is a world billboard, apparent size ∝
+        // height law above, not a depth term.
+        // A far name just gets small: it is a world billboard, apparent size ∝
         // scale/depth. The effective range is the server's interest management — no CGUnit, no
         // desc. 1490 item 7 read the frame's law onto this lane and capped it at 20 yd; the
         // director's Elwynn shot (named wolves up the hill) is the reference's own behaviour, and
@@ -514,19 +512,18 @@ pub(crate) fn drive_nameplates(
         // The ShouldShowName gate, in the client's own order (own-unit answers its cvar BEFORE
         // the rescue; everyone else: the current-TARGET bypass — `[0xb4e2d8]` is the selection,
         // not the mouseover — then the kind cvar). A unit carrying a V-key nameplate never also
-        // draws its floating name (the plate/name mutual exclusion, wow-re `nameplate-vkey.md`),
-        // and neither does one carrying a live chat bubble (`+0xe64` — the same gate's other
-        // handle read, wow-re `chat-bubble.md` §0).
+        // draws its floating name (the plate/name mutual exclusion, `0x6070a0`), and neither does
+        // one carrying a live chat bubble (`+0xe64` — the same gate's other handle read).
         // A DEAD creature's name shows ONLY through the target rescue — director-verified on the
         // reference (a corpse field isn't a name field; targeting the corpse still names it);
-        // the exact ShouldShowName leg is on the pin list — flagged interim.
+        // the exact ShouldShowName leg is unconfirmed in the binary — flagged interim.
         let show = if vplates.0.contains(&entity) || bubbles.0.contains(&entity) {
             false
         } else if store.is_some_and(|s| s.0.unit_is_ghost_visual()) {
-            // The bytes_1 ghost vis-flag's ONE render effect (byte-VERIFIED, wow-re
-            // ghost-death-visuals.md): overhead-name/plate suppression — the create-gate and the
-            // per-tick gate both test `byte3 & 3` (ghost|creep; the creep leg is the stealth
-            // arc's). A released ghost carries no floating name, target rescue included.
+            // The bytes_1 ghost vis-flag's ONE render effect: overhead-name/plate suppression —
+            // the create-gate `0x607101` and the per-tick gate `0x60f62e` both test `byte3 & 3`
+            // (ghost|creep; the creep leg is the stealth arc's). A released ghost carries no
+            // floating name, target rescue included.
             false
         } else if is_self {
             // The own-unit cvar leg, before the rescue (faithful order: self-targeting still
@@ -568,8 +565,7 @@ pub(crate) fn drive_nameplates(
         } else {
             0
         };
-        // **The own-player AFK override** (2088; wow-re `afk-dnd-command-law.md` §8, which settled
-        // what `overhead-name.md` had only INFERRED). The AFK slot `0x5ec9e0` — and only that slot
+        // **The own-player AFK override** (2088). The AFK slot `0x5ec9e0` — and only that slot
         // — carries a pre-gate: if the subject's GUID is the active player's AND the optimistic
         // mirror `[0xb6e5cc]` is non-zero, the `<AFK>` tag emits **regardless of the flag bit**
         // (`0x5ec9fd`/`0x5eca04 jne 0x5eca12`, jumping past the `0x5eca0c test byte [ecx+8],0x2`).
@@ -586,7 +582,7 @@ pub(crate) fn drive_nameplates(
         };
         // The one `"\n<%s>"` slot: a6 (the creature subtitle) on the NPC branch, a5 (the guild)
         // on the player branch — never both, and never in the other's branch (the module doc's
-        // branch exclusivity, wow-re Q4, VERIFIED). a5 is the only one of the two that a CVar
+        // branch exclusivity). a5 is the only one of the two that a CVar
         // gates: mask bit `0x10` at `0x609085`.
         let bracketed = match net.kind {
             EntityKind::Unit => benilla_protocol::guid::entry(guid.0)
@@ -908,7 +904,7 @@ mod tests {
         assert!(height_scale(4.1) > 0.2, "past the knee: the jump is real");
     }
 
-    /// The flag decorations against the byte-verified slot law (wow-re Q4a): bare concatenation
+    /// The flag decorations against the slot law (`0x608f50`): bare concatenation
     /// (no space — the `%s%s…` line-stack law), stacking in slot order AFK → DND → GM, empty for
     /// the common unflagged case, unrelated bits (ghost 0x10, resting 0x20) ignored.
     #[test]

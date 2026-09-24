@@ -6,11 +6,11 @@
 //! a **wait, not an outcome** — which is what benilla got wrong until this module: the world
 //! handshake treated the code as a refusal, so a busy server was simply unreachable.
 //!
-//! Everything here is the reference's arithmetic, transcribed (VERIFIED, wow-re
-//! `system/glue/scratch/login-failure-dialogs.md` §Q3). It is worth transcribing rather than
-//! reinventing because the estimate is visibly wrong in a *specific* way — it divides before it
-//! multiplies, so it truncates per-person seconds before scaling them by the whole queue — and a
-//! "better" estimator would disagree with the reference by minutes on a long queue.
+//! Everything here is the reference's arithmetic, transcribed (`CGlueMgr::UpdateQueuePosition`
+//! `0x46ae50`). It is worth transcribing rather than reinventing because the estimate is visibly
+//! wrong in a *specific* way — it divides before it multiplies, so it truncates per-person seconds
+//! before scaling them by the whole queue — and a "better" estimator would disagree with the
+//! reference by minutes on a long queue.
 //!
 //! Three things about it are deliberately NOT reproduced, each named at its site: the unguarded
 //! 32-bit overflow, the stale-position redisplay on a truncated packet ([`benilla_protocol`]'s

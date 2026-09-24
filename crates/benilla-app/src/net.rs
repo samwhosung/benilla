@@ -236,7 +236,7 @@ pub(crate) struct NetEntity {
 
 /// A unit's movement speeds (yd/s), decoded from its `LIVING` movement block. The creature animation
 /// selector ([`crate::creature_anim`]) keys its walk-vs-run boundary on `walk` (run above 2× walk —
-/// RF-0057); [`extrapolate_remote_units`] integrates a remote mover between packets at `run` /
+/// `0x5fd224`); [`extrapolate_remote_units`] integrates a remote mover between packets at `run` /
 /// `run_back` / `swim` and turns it in place at `turn_rate`. Present only on units (GameObjects don't
 /// move under their own power).
 #[derive(Component, Clone, Copy)]
@@ -244,8 +244,7 @@ pub(crate) struct UnitSpeeds(pub(crate) MoveSpeeds);
 
 /// **`CMovement::GetCurrentSpeed 0x7c4c90`** — the one place a mover's move-flags become a
 /// yards/second, for our own body and for every remote one. It is a *cascade*, and its ORDER is
-/// the whole of it (VERIFIED bytes, wow-re `collision/scratch/airborne-steerability.md` §2.4 +
-/// `object-layer/scratch/swim-mechanism.md` TU-H):
+/// the whole of it:
 ///
 /// 1. `0x7c4c99 test dl,0xf` — **no direction bit at all → 0.0** (`[0x7ffd74]`), never a stale
 ///    speed. A standing mover is standing however its speed fields read.
@@ -265,13 +264,12 @@ pub(crate) struct UnitSpeeds(pub(crate) MoveSpeeds);
 /// **There is no zero-`walk` fallback here, and that is a settled question rather than an
 /// oversight** (decision 1759). The ctor does zero all six speed fields (`0x7c48e8`–`0x7c4906`),
 /// and 1752 guarded against a mover reaching this with `walk == 0` by falling back to the run arm.
-/// The wow-re §5 then reported that the local player's create skips the speed-block apply, so the
-/// zero was live after every world port — and then **retracted it**: the guard it found
-/// (`0x5ff070`) has two callers, and the post-create `0x5fad50` passes 0, so the block is applied
-/// for our own unit exactly as for a remote one (`0x5fad98 xor edi,edi`, unwritten to the push at
-/// `0x5fb131`). The self-skip belongs to the *redundant*-create path `0x466350`, reached only when
-/// the object-manager lookup HIT. The ctor's zero is a transient inside one call and is never
-/// observable, so this is the plain minimum the bytes are.
+/// The local player's create does **not** skip the speed-block apply, so the zero is not live
+/// after a world port: the guard `0x5ff070` has two callers, and the post-create `0x5fad50` passes
+/// 0, so the block is applied for our own unit exactly as for a remote one (`0x5fad98 xor edi,edi`,
+/// unwritten to the push at `0x5fb131`). The self-skip belongs to the *redundant*-create path
+/// `0x466350`, reached only when the object-manager lookup HIT. The ctor's zero is a transient
+/// inside one call and is never observable, so this is the plain minimum the bytes are.
 pub(crate) fn current_speed(s: &MoveSpeeds, flags: u32) -> f32 {
     use crate::creature_anim::move_flags as f;
     if flags & f::ANY_MOVE == 0 {
@@ -306,9 +304,9 @@ pub(crate) struct ObjectStore(pub(crate) ObjectFields);
 /// **One descriptor dword moved on a streamed object** — the reference's `CMirrorHandler` edge
 /// (decision 2297). The real client keeps a shadow copy of every object's field array, and the
 /// values-apply notifier (`0x465330`) memcmps live against shadow over each registered span and
-/// calls the watcher with the OLD value (`0x465570` hands the mirror pointer as `param3` —
-/// wow-re `object-layer.md`); a first CREATE passes a notify-suppress flag and fires nothing, an
-/// in-place re-create of a live guid goes down the values path and fires like any delta.
+/// calls the watcher with the OLD value (`0x465570` hands the mirror pointer as `param3`); a
+/// first CREATE passes a notify-suppress flag and fires nothing, an in-place re-create of a live
+/// guid goes down the values path and fires like any delta.
 ///
 /// benilla emits the same edge once, from the drain's merge, which is the one place that holds
 /// both sides: every consumer that used to poll `Changed<ObjectStore>` and re-derive "did THIS
@@ -431,8 +429,7 @@ pub(crate) struct SelfPlayer;
 /// **The body this client is attached to** — where the camera is, whose feet make the footsteps,
 /// whose height the water lines are measured against, whose server-authored spline is ours to ride.
 /// The reference's **camera anchor** (`camera+0x88`), which has exactly three writers — the
-/// constructor and `SetTarget 0x50d0f0`'s two legs — and is *not* touched by a control update
-/// (wow-re `control-loss-and-restore.md` §3).
+/// constructor and `SetTarget 0x50d0f0`'s two legs — and is *not* touched by a control update.
 ///
 /// Normally our own body, so it rides alongside [`SelfPlayer`]. While we hold somebody else's reins
 /// — mind-controlling a creature, an Eye of Kilrogg — it moves to *that* entity and our own body
@@ -460,8 +457,8 @@ pub(crate) struct Embodied;
 /// own: `0x5fa600` **zeroes the mover globals** when a control update forbids the unit they name,
 /// and with them zero the input applier (`0x514640` skips the whole tick when the mover does not
 /// resolve) and every plain movement report — `0x600860`'s mover check kills the lot, heartbeat
-/// included (wow-re `control-loss-and-restore.md` §2/§6). There is no separate "may not move" flag
-/// in the movement path; the zeroed global *is* the immobility.
+/// included. There is no separate "may not move" flag in the movement path; the zeroed global *is*
+/// the immobility.
 ///
 /// Here it also answers the ECS's version of that question — *may the ordinary server-replay path
 /// move this unit?* A body we are attached to but may not move must answer **yes**, which is how a
@@ -706,7 +703,7 @@ impl ServerWallClock {
 }
 
 /// How long a wall-clock sample stands before the client asks again — the reference's own hour
-/// (wow-re: the resync site `0x4de836` is gated on `now > [0xbb749c]`, armed `= now + 0xe10` at
+/// (the resync site `0x4de836` is gated on `now > [0xbb749c]`, armed `= now + 0xe10` at
 /// `0x4def11`; decision 1154).
 const RESYNC_AFTER: Duration = Duration::from_secs(3600);
 
@@ -884,8 +881,7 @@ impl MoveKind {
 }
 
 /// The wire `ChatMsg` type byte an addon broadcast rides (decision 1235) — the client's own
-/// four-lane whitelist at `0x49fa3f`-`0x49fa4e`, VERIFIED in `WoW.exe` (5875), wow-re
-/// `system/ui/scratch/addon-chat-law.md` §5.
+/// four-lane whitelist at `0x49fa3f`-`0x49fa4e`.
 ///
 /// A **total** map from a closed enum, and a named function rather than an inline `match` in
 /// [`io`]'s dispatch so that it is assertable: this is the one place a distribution becomes a wire
@@ -1130,7 +1126,7 @@ pub(crate) enum ClientCommand {
     },
     /// Load ammo into the ammo slot (`CMSG_SET_AMMO`) — the equip drains' fork when the clicked/
     /// dropped item is ammo-class (INVTYPE_AMMO), mirroring the real client's own auto-equip fork
-    /// (wow-re `cursor-dragdrop-slots.md`). Addressed by item `entry`, not a bag slot: the stack
+    /// (`0x5e1480`). Addressed by item `entry`, not a bag slot: the stack
     /// stays in the bag and `PLAYER_AMMO_ID` starts referencing it. A wrong/absent ranged weapon
     /// refuses via `InventoryFailure`. Decision 0526.
     SetAmmo {
@@ -1157,8 +1153,8 @@ pub(crate) enum ClientCommand {
         src_slot: u8,
     },
     /// Auto-store an item into a bag (`CMSG_AUTOSTORE_BAG_ITEM`): take `(src_bag, src_slot)` and
-    /// put it anywhere inside `dst_bag` — **the client names no destination slot** (wow-re
-    /// `bag-verbs-law.md`: AUTOSTORE carries none). Sent by `PutItemInBag`'s third leg (an
+    /// put it anywhere inside `dst_bag` — **the client names no destination slot** (`0x5e12e0`:
+    /// AUTOSTORE carries none). Sent by `PutItemInBag`'s third leg (an
     /// ordinary item dropped on an occupied bag button) and by all of `PutItemInBackpack`.
     /// Refusals surface as `InventoryFailure` events.
     AutoStoreBagItem {
@@ -1229,7 +1225,7 @@ pub(crate) enum ClientCommand {
         packed: u32,
     },
     /// Post the four extra bars' visibility byte (`CMSG_SET_ACTIONBAR_TOGGLES`, `PLAYER_FIELD_BYTES`
-    /// byte 2 — wow-re `system/ui/scratch/action-bar-toggles.md`). Sent by the toggle drain, one
+    /// byte 2 — read at `0x4e768c`, sent by `0x4e76e0`). Sent by the toggle drain, one
     /// per `SetActionBarToggles` call: the binding gates nothing, so two calls in a frame are two
     /// packets.
     ///
@@ -1248,7 +1244,7 @@ pub(crate) enum ClientCommand {
     /// Press one pet bar slot (`CMSG_PET_ACTION`, decisions 0982/0988). `packed` is the slot's OWN
     /// word as the server last sent it — command, reaction and spell all ride this one command,
     /// because the server dispatches on the type byte inside the word. `target_guid` is the
-    /// player's current selection, which is what the client always sends (wow-re §10.1).
+    /// player's current selection, which is what the client always sends (`0x4bd212`).
     ///
     /// **Nothing answers it.** Unlike [`Self::SetActionButton`], whose silence is because the
     /// state is ours, this one is silent because the *server* simply does not reply — so the
@@ -1302,8 +1298,8 @@ pub(crate) enum ClientCommand {
     /// **Abandon**, and only that row.
     ///
     /// **Its Dismiss is not this**, however alike they read: `PetDismiss 0x4be4d0` opens no packet
-    /// and goes down the pet bar's ordinary [`Self::PetAction`] path with the word `0x07000003`
-    /// (wow-re §11c). Both would have worked against vmangos, which is why it is written here.
+    /// and goes down the pet bar's ordinary [`Self::PetAction`] path with the word `0x07000003`.
+    /// Both would have worked against vmangos, which is why it is written here.
     ///
     /// No reply: the answer is `SMSG_PET_SPELLS` with a zero guid, and the pet object leaving.
     PetAbandon {
@@ -1328,13 +1324,13 @@ pub(crate) enum ClientCommand {
     AttackStop,
     /// Stop our ranged auto-repeat (`CMSG_CANCEL_AUTO_REPEAT_SPELL`, empty body) — the ack every
     /// local cancel sends (the client's sole send site `0x6ea0c6`, inside the cancel routine
-    /// `0x6ea080`; wow-re `nocked-ammo-cancel.md`). vmangos interrupts the held auto-repeat
-    /// spell; idempotent when the server already cancelled it first (the cast-result path).
+    /// `0x6ea080`). vmangos interrupts the held auto-repeat spell; idempotent when the server
+    /// already cancelled it first (the cast-result path).
     CancelAutoRepeat,
     /// Cancel a named in-flight cast (`CMSG_CANCEL_CAST`, one `u32` spell id). Sent by the
-    /// wand-only auto-repeat handoff before its local cancel (`0x6095b8`, wow-re
-    /// `nocked-ammo-cancel.md` §Q-B-5) and by the cast bar's local self-cancel (movement/Esc
-    /// mid-cast — `ui_cast`'s mirror of the client's `AbortCast 0x6e4940` send leg).
+    /// wand-only auto-repeat handoff before its local cancel (`0x6095b8`) and by the cast bar's
+    /// local self-cancel (movement/Esc mid-cast — `ui_cast`'s mirror of the client's
+    /// `AbortCast 0x6e4940` send leg).
     CancelCast {
         spell_id: u32,
     },
@@ -2223,11 +2219,11 @@ pub(crate) enum ClientCommand {
     /// Ask the server for one party/raid member's whole stat block
     /// (`CMSG_REQUEST_PARTY_MEMBER_STATS`; answered by `SMSG_PARTY_MEMBER_STATS_FULL`).
     ///
-    /// **Sent from exactly two edges, both the reference's** (decision 1640, wow-re
-    /// `ui/scratch/party-oor-stats-and-portrait-law.md` §2): the moment a member's object leaves
-    /// the object manager (`ui_party::net::member_deactivated`), and the GROUP_LIST seat of a
-    /// member new to the roster whose object we do not hold (`seat_new_records`). There is no
-    /// timer and no Lua binding — a periodic poll would be ours, not the client's.
+    /// **Sent from exactly two edges, both the reference's** (decision 1640, `0x4e8646` and
+    /// `0x4e83f1`): the moment a member's object leaves the object manager
+    /// (`ui_party::net::member_deactivated`), and the GROUP_LIST seat of a member new to the roster
+    /// whose object we do not hold (`seat_new_records`). There is no timer and no Lua binding — a
+    /// periodic poll would be ours, not the client's.
     RequestPartyMemberStats {
         guid: u64,
     },
@@ -2729,10 +2725,9 @@ pub(crate) struct TeleportMessage {
 ///
 /// **The real client applies these** — its inbound move path has no mover-guid gate at all, and the
 /// local player sits in the object manager under its own guid, so a self-addressed packet resolves
-/// and applies exactly like a remote's (wow-re `system/collision/scratch/self-addressed-move.md`;
-/// decision 0725, which corrects the drop this used to take). Our avatar's motion source is the
-/// controller rather than the `RemoteMotion` lane, so the pose crosses as this message and lands in
-/// `player::wire_in`.
+/// and applies exactly like a remote's (`0x603bb0`; decision 0725, which corrects the drop this
+/// used to take). Our avatar's motion source is the controller rather than the `RemoteMotion`
+/// lane, so the pose crosses as this message and lands in `player::wire_in`.
 #[derive(Message, Clone, Copy)]
 pub(crate) struct SelfMoveMessage {
     pub(crate) position: [f32; 3],
@@ -3114,10 +3109,10 @@ mod tests {
     ///
     /// The bottom of the cascade has **no** guard, and decision 1759 is why: 1752 shipped a
     /// zero-`walk` fallback to the run arm, on the reading that a mover could reach here before
-    /// its speed block landed. The wow-re §5 retracted the basis for it — the local player's
-    /// create applies the speed block like anyone else's — so the fallback is gone. The zero is
-    /// asserted rather than merely no longer asserted against, so that re-adding the guard is a
-    /// deliberate act with a record to argue against, not a plausible-looking tidy-up.
+    /// its speed block landed. It cannot — the local player's create applies the speed block like
+    /// anyone else's (`0x5fad50`) — so the fallback is gone. The zero is asserted rather than
+    /// merely no longer asserted against, so that re-adding the guard is a deliberate act with a
+    /// record to argue against, not a plausible-looking tidy-up.
     #[test]
     fn a_mode_is_not_a_motion_and_a_zero_walk_speed_is_a_zero() {
         use crate::creature_anim::move_flags as f;
