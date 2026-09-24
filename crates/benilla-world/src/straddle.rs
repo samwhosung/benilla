@@ -1,50 +1,18 @@
-//! **The straddle split** — a translucent model that crosses its water plane draws on BOTH sides
-//! of the water pass, each copy cut at the waterline.
+//! The straddle split: a translucent model crossing its water plane draws on both sides of the
+//! water pass, each copy clipped at the waterline.
 //!
-//! **The reference.** The collector (`0x707680`) dots each model's bound-box centre (instance
-//! matrix × `(min+max)/2`) against the plane `{0,0,1,−surfaceZ}` from the model's own liquid hit,
-//! once per instance. With `M2UseClipPlanes` granted — the cvar's default `"1"`, caps-gated at
-//! `0x7066a6` — it keeps TWO side booleans, `A = d ≥ −r` (the above list) and `B = d ≤ r` (the
-//! below list), `r` the world-scaled bound radius. A model inside the `±r` band lands on BOTH
-//! lists, its z-fill depth primes ride the same booleans (`0x707ffe`/`0x708048`), and the mesh
-//! draw arm brackets each list's copy with a hardware clip plane at the waterline (`0x70baf0`
-//! @`0x70c094`–`0x70c103`). The frame interleave draws the eye's far list before the water and the
-//! near list after it — so the half under the surface is painted over by the water, and the
-//! half above it paints over the water.
+//! The reference (`0x707680`, `M2UseClipPlanes` at its default 1, caps-gated at `0x7066a6`) dots
+//! each instance's bound-box centre with its liquid plane `{0, 0, 1, −surfaceZ}` and keeps two
+//! booleans, above `d ≥ −r` and below `d ≤ r`, `r` the world-scaled bound radius. Inside the band
+//! a model and its depth primes (`0x707ffe`/`0x708048`) go on both lists, each copy under a clip
+//! plane at the waterline (`0x70baf0`, `0x70c094`–`0x70c103`): the eye's far list draws before the
+//! water, the near list after.
 //!
-//! **What benilla had.** The mesh lane shipped the no-clip-planes fallback only — one list
-//! per model, a bare sign test at the placement origin — and named the band as a gap. Its worst
-//! case was a unit fading in while standing in water (the director's report, 2026-09-11): the
-//! appear ramp puts every part on its blend twin, which is exactly when the lane classifies it;
-//! feet under the surface sent the WHOLE body to the far list; and because the fade twin and the
-//! depth prime both write depth, the part above the water primed its depth before the water drew.
-//! A body-shaped hole in the surface, with the head blended over the unwatered lake bed behind it
-//! — strongest at the ramp's start, where the body is least opaque.
-//!
-//! **The shape here — three pieces, one verdict:**
-//! - [`band_instances`] — per model instance (a root carrying a [`RigSkin`] slot and a
-//!   [`WorldUnit`] bound), the reference's two booleans at the transformed bound centre. A
-//!   straddler's plane goes into the per-slot [`WaterClips`] table — a region of the shared light
-//!   buffer on the same slot index as the body tint — and [`ModelWaterBand`] on the root is
-//!   the edge the classifier fans down from.
-//! - `model_render::classify_water_side` reads the SAME table word by the batch's `MeshTag` slot:
-//!   a straddling batch stays on its NEAR identity and is marked [`StraddlesWater`], and
-//!   [`sync_straddle_twins`] hangs a child on it carrying the FAR twin — the second list.
-//! - `wow_model.wgsl`'s `WOW_WATER_CLIP` block (every transparent-pass pipeline) is the clip plane:
-//!   a fragment of a straddling instance survives only on its own copy's side — the near copy
-//!   keeps the eye's half, the far twin (`FAR_SIDE_MARKER`) the other. [`keeps`] is the law's Rust
-//!   twin.
-//!
-//! The CPU twin set and the GPU clip read one word, so they cannot disagree: a batch is doubled
-//! exactly when its fragments are being halved.
-//!
-//! **Scope: slot-bearing instances.** The clip is per INSTANCE, and the one per-instance channel
-//! the fragment stage has is the rig slot — so the split covers every skinned wire body (units,
-//! players, rigged GameObjects), the parts carrying its slot (boneless geosets, billboard cards),
-//! and every model CHAINED to it — worn gear and hung spell kits, which own slots of their own
-//! since 1609 and take the body's word through their `ParentModel` link. Slot-0
-//! content — map doodads, unskinned models — keeps 0919's one-sided fallback; its only
-//! translucent episodes are the distance-fade ring's small props.
+//! The plane goes into the instance's rig-slot [`WaterClips`] word, which both the twin set
+//! (`model_render::classify_water_side`, [`sync_straddle_twins`]) and the shader's
+//! `WOW_WATER_CLIP` read, so they cannot disagree. Chained models (worn gear, spell kits) take
+//! their body's word. Slot-0 content (map doodads, unskinned models) keeps one list per model by a
+//! sign test at its origin; its only translucent moments are the distance-fade ring's small props.
 
 use std::sync::Arc;
 
@@ -65,21 +33,19 @@ use crate::particles::WaterInterleave;
 use crate::rig_palette::RigSkin;
 use crate::world_unit::WorldUnit;
 
-/// One slot's clip word: `[plane height, near side]` — the waterline's world height (Bevy Y,
-/// which is WoW Z) and the side the instance's NEAR copy keeps: `+1` above (a dry eye's near list
-/// is the above one), `−1` below (a submerged eye's, `0x4836d6`). A side of `0` is "not
-/// straddling" — every slot-0 instance, every slot nothing wrote, and every zeroed studio buffer.
+/// One slot's clip word, `[plane height, near side]`: the waterline's Bevy Y and the side the near
+/// copy keeps, `+1` above for a dry eye, `−1` below for a submerged one (`0x4836d6`), 0 when not
+/// straddling.
 pub type ClipWord = [f32; 2];
 
-/// The "no clip" word. Zero is identity, so a zeroed region is inert by construction: the
-/// portrait booths' studio buffers never receive this region's writes and keep it that way.
+/// The no-clip word; zero, so a zeroed region (a studio buffer's) is inert.
 pub const NO_CLIP: ClipWord = [0.0, 0.0];
 
-/// Bytes per slot in the clip region: two `f32` — `wow_model.wgsl`'s `array<vec2<f32>, 2048>`.
+/// Bytes per slot: two `f32`, `wow_model.wgsl`'s `array<vec2<f32>, 2048>`.
 const SLOT_BYTES: u64 = 8;
 
-/// Byte offset of the clip region inside a `wow_light`-layout buffer: after the mat-anim table,
-/// before the palette rows (which stay last — the shader's one runtime-sized array).
+/// The clip region's offset in a `wow_light` buffer: after the mat-anim table, before the palette
+/// rows, which stay last as the shader's one runtime-sized array.
 pub(crate) fn region_offset() -> u64 {
     crate::mat_anim_table::region_offset() + crate::mat_anim_table::region_bytes()
 }
@@ -89,9 +55,7 @@ pub(crate) fn region_bytes() -> u64 {
     MAX_RIG_SLOTS as u64 * SLOT_BYTES
 }
 
-/// The live per-slot clip table, indexed by the instance's `MeshTag` rig slot. `Arc`-shared so
-/// the render-world extract is a pointer bump, and generation-stamped so a world where nothing
-/// straddles uploads nothing at all.
+/// The clip table by `MeshTag` rig slot; generation-stamped, so a dry world uploads nothing.
 #[derive(Resource, Clone, ExtractResource)]
 pub struct WaterClips {
     slots: Arc<Vec<ClipWord>>,
@@ -108,8 +72,7 @@ impl Default for WaterClips {
 }
 
 impl WaterClips {
-    /// Set slot `slot`'s word. Slot 0 is the world's no-rig sentinel and is never written:
-    /// everything unskinned shares it.
+    /// Set a slot's word; slot 0, shared by everything unskinned, is never written.
     pub(crate) fn set(&mut self, slot: u16, word: ClipWord) {
         let i = slot as usize;
         if i == 0 || i >= MAX_RIG_SLOTS || self.slots[i] == word {
@@ -119,37 +82,29 @@ impl WaterClips {
         self.generation += 1;
     }
 
-    /// Back to "not straddling" — called from `RigSkin`'s free hook as well, so a recycled slot
-    /// can never hand a dead unit's waterline to the next unit that allocates it.
+    /// Back to not straddling; `RigSkin`'s free hook calls it, so a recycled slot starts dry.
     pub(crate) fn clear(&mut self, slot: u16) {
         self.set(slot, NO_CLIP);
     }
 
-    /// This slot's word (`NO_CLIP` for an out-of-range slot) — what a chained model inherits
-    /// from its wearer.
+    /// A slot's word, [`NO_CLIP`] out of range.
     pub(crate) fn word(&self, slot: u16) -> ClipWord {
         self.slots.get(slot as usize).copied().unwrap_or(NO_CLIP)
     }
 
-    /// Whether `slot`'s instance straddles its water plane — the classifier's read of the very
-    /// word the fragment clips by.
+    /// Whether a slot's instance straddles, read from the word the fragment clips by.
     pub(crate) fn straddles(&self, slot: u16) -> bool {
         self.slots.get(slot as usize).is_some_and(|w| w[1] != 0.0)
     }
 }
 
-/// On a model-instance root: whether its model straddles its water plane this frame. Written by
-/// [`band_instances`] (change-gated) and read as a change EDGE — `classify_water_side`
-/// re-classifies the holder's subtree when it flips, the same fan-down the room claim takes.
-/// Absent reads "no": it is inserted the first time an instance straddles.
+/// On an instance root: whether it straddles, a change edge that re-classifies its subtree.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ModelWaterBand {
     pub straddles: bool,
 }
 
-/// On a transparent batch of a straddling instance: the classifier's verdict that this batch
-/// draws on both lists. Sparse; [`sync_straddle_twins`] keeps a far twin alive exactly while it
-/// is present.
+/// On a transparent batch of a straddling instance: it draws on both lists, with a far twin.
 #[derive(Component)]
 pub(crate) struct StraddlesWater;
 
@@ -157,42 +112,28 @@ pub(crate) struct StraddlesWater;
 #[derive(Component)]
 pub(crate) struct StraddleTwin(Entity);
 
-/// On a twin: the batch it doubles for — the mirror's key, and the marker that keeps a twin out
-/// of the classifier's walk (a twin is the classification's output, never its input).
+/// On a twin: the batch it doubles, which also keeps it out of the classifier's walk.
 #[derive(Component)]
 pub(crate) struct StraddleTwinOf(Entity);
 
-/// The reference's two side booleans for a model whose bound centre sits `d` yd over its water
-/// plane, with slack `r`: `(above, below) = (d ≥ −r, d ≤ r)` (`0x7079a2`–`0x707a17`). Both ties
-/// are inclusive — `d == −r` keeps A (the emitter lane's `is_above`), `d == r` keeps B (`jp`
-/// @`0x7079e2`) — and a NaN keeps neither, which reads as "not straddling".
+/// The reference's side booleans for a bound centre `d` yd over its plane with slack `r`,
+/// `(d ≥ −r, d ≤ r)` (`0x7079a2`–`0x707a17`), both ties inclusive (`0x7079e2`); NaN keeps neither.
 pub(crate) fn side_booleans(d: f32, r: f32) -> (bool, bool) {
     (d >= -r, d <= r)
 }
 
-/// How far past the reference's `±r` band a straddler must travel before it stops straddling.
-///
-/// **Not a fidelity deviation.** A split draw is pixel-identical to the one-list draw for a model
-/// wholly on one side of its plane — one copy's half is simply empty — so where the verdict flips
-/// only decides what the draw COSTS, never what it shows. The reference recomputes its booleans
-/// every frame with no hysteresis because its flip is free (list membership); ours spawns or
-/// despawns a twin and swaps the batch's handle. Without this, a murloc bobbing 0.3 yd at the
-/// band's edge flipped nearly every frame (the 2188 live leg: 17 transitions on one body, three
-/// inside 40 ms).
+/// Exit hysteresis (yd) past the reference's `±r` band. Not a deviation: a split draw looks the
+/// same as one list for a model wholly on one side, so where it flips changes cost, not pixels.
 const STICKY_YD: f32 = 1.0;
 
-/// The straddle verdict with the sticky exit: an instance enters on the reference's band and
-/// leaves only once its centre is [`STICKY_YD`] past it. `was` = it straddled last time it was
-/// banded.
+/// The verdict: enter on the reference's band, leave [`STICKY_YD`] past it; `was` is the last one.
 pub(crate) fn straddles(d: f32, r: f32, was: bool) -> bool {
     let slack = if was { r + STICKY_YD } else { r };
     side_booleans(d, slack) == (true, true)
 }
 
-/// The clip plane's law — the Rust twin of `wow_model.wgsl`'s `WOW_WATER_CLIP` block: does a
-/// fragment at world height `y` survive on this copy of a batch? `far_copy` = the copy's material
-/// carries `FAR_SIDE_MARKER` (it is the twin on the eye's far list). A `0` side keeps everything,
-/// and a fragment exactly on the plane survives on both copies.
+/// The Rust twin of `wow_model.wgsl`'s `WOW_WATER_CLIP`: whether a fragment at height `y` survives
+/// on this copy (`far_copy`: the `FAR_SIDE_MARKER` twin); the plane itself survives on both.
 pub fn keeps(word: ClipWord, y: f32, far_copy: bool) -> bool {
     if word[1] == 0.0 {
         return true;
@@ -201,11 +142,8 @@ pub fn keeps(word: ClipWord, y: f32, far_copy: bool) -> bool {
     side * (y - word[0]) >= 0.0
 }
 
-/// The waterline a CHAINED model clips at: its nearest body's word, walked up the
-/// [`ParentModel`] chain from `start` (the model's parent). `link(k)` answers, for one link, its
-/// own palette slot, its parent, and whether it is a body; a broken chain, a body with no slot
-/// and a chain past [`MAX_MODEL_CHAIN`] all read "not straddling". Generic over the key so the
-/// walk is testable without an ECS.
+/// A chained model's word, its nearest body's up the [`ParentModel`] chain; a broken chain, a
+/// slotless body or one past [`MAX_MODEL_CHAIN`] reads not straddling.
 fn wearer_word<K: Copy>(
     start: K,
     clips: &WaterClips,
@@ -227,9 +165,7 @@ fn wearer_word<K: Copy>(
     NO_CLIP
 }
 
-/// The roots [`band_instances`] re-bands on an ordinary frame: an instance whose matrix, bound,
-/// slot or room claim moved. The eye crossing the surface and the surface population changing
-/// re-band everything.
+/// The roots re-banded on an ordinary frame: those whose matrix, bound, slot or room claim moved.
 type BandDirty = (
     With<RigSkin>,
     With<WorldUnit>,
@@ -241,7 +177,7 @@ type BandDirty = (
     )>,
 );
 
-/// A model chained to a body — worn gear and the spell kits hung on it — with its own slot.
+/// A model chained to a body (worn gear, a hung spell kit), with its own slot.
 type ChainedRoot<'a> = (
     Entity,
     &'a RigSkin,
@@ -249,8 +185,7 @@ type ChainedRoot<'a> = (
     Option<Mut<'a, ModelWaterBand>>,
 );
 
-/// A chained model whose slot or link is new this frame — it has no word yet, whatever its
-/// wearer's did.
+/// A chained model whose slot or link is new this frame, so it has no word yet.
 type ChainedFresh = (
     With<ParentModel>,
     Without<WorldUnit>,
@@ -266,22 +201,9 @@ type BandRoot<'a> = (
     Option<Mut<'a, ModelWaterBand>>,
 );
 
-/// **Band every model instance against its water plane** — the reference's two side booleans
-/// per instance, written where both halves of the split read them: the per-slot [`WaterClips`]
-/// word (the fragment's clip plane, the classifier's doubling verdict) and [`ModelWaterBand`]
-/// on the root (the classifier's re-classify edge).
-///
-/// **Every model chained to a body inherits the body's word**. Worn gear does not
-/// share its wearer's slot: since 1609 every ordinary item rides a rider slot of its own (0841's
-/// welded items a joint rig), so a helm, a pair of shoulders or a weapon at the waterline was
-/// never banded and kept the one-list fallback — the hole in the water the director still saw
-/// when the surface crossed a unit's gear. The body's band is the instance's verdict and its
-/// plane is the one water plane under it, and the clip is exact on any copy whatever side it
-/// lands, so the gear takes the word verbatim rather than a band of its own.
-///
-/// Update, after the submersion verdict and before `classify_water_side` — the auto-inserted
-/// sync point between them lands a first-time `ModelWaterBand` before the classifier looks, so
-/// the clip and the twin set flip on the same frame.
+/// Band every instance against its water plane into its [`WaterClips`] word and
+/// [`ModelWaterBand`]; a chained model, on a slot of its own, takes its body's word verbatim. The
+/// sync point before `classify_water_side` lands a new band before it looks.
 pub(crate) fn band_instances(
     interleave: WaterInterleave,
     mut clips: ResMut<WaterClips>,
@@ -319,9 +241,7 @@ pub(crate) fn band_instances(
             }
         }
     }
-    // The chained pass: every chained model when any body's word moved this frame (the gate is
-    // the table's own generation — a dry world, and a wet one standing still, skip it whole),
-    // otherwise only the chains that are new.
+    // The chained pass: every chain when a body's word moved (the generation did), else new ones.
     let link = |e: Entity| {
         links
             .get(e)
@@ -341,7 +261,7 @@ pub(crate) fn band_instances(
     }
 }
 
-/// One chained model's word — its wearer's, onto its own slot — and its band edge.
+/// Copy the wearer's word onto a chained model's slot and publish its band edge.
 fn chain_one(
     clips: &mut WaterClips,
     commands: &mut Commands,
@@ -353,8 +273,7 @@ fn chain_one(
     band_edge(commands, entity, band, word[1] != 0.0);
 }
 
-/// Publish an instance's verdict as its [`ModelWaterBand`] edge: change-gated on a live
-/// component, inserted the first time it straddles.
+/// Publish the verdict as [`ModelWaterBand`], change-gated, inserted when it first straddles.
 fn band_edge(
     commands: &mut Commands,
     entity: Entity,
@@ -372,7 +291,7 @@ fn band_edge(
     }
 }
 
-/// One instance's band — the shared body of [`band_instances`]' full and reactive paths.
+/// One instance's band, for both of [`band_instances`]' paths.
 fn band_one(
     interleave: &WaterInterleave,
     clips: &mut WaterClips,
@@ -381,10 +300,8 @@ fn band_one(
     (entity, gt, unit, rig, band): BandRoot<'_>,
 ) {
     // The reference's point and slack: the bound centre through the instance matrix (`0x70848d`),
-    // the radius through its row-0 scale (`0x708478`). The game hands the armed idle's authored
-    // CAaBox rather than the header sphere, so the slack is that box's circumscribed sphere —
-    // never smaller than the model, and an over-wide band costs only a copy whose half the clip
-    // discards whole.
+    // the radius by its row-0 scale (`0x708478`). The bound here is the armed idle's CAaBox, so the
+    // slack is its circumscribed sphere; a wider band costs only a copy the clip empties.
     let was = band.as_ref().is_some_and(|b| b.straddles);
     let word = unit.bound.and_then(|b| {
         let centre = gt.transform_point(Vec3::from(b.center));
@@ -396,8 +313,7 @@ fn band_one(
     band_edge(commands, entity, band, word.is_some());
 }
 
-/// One straddle candidate as [`sync_straddle_twins`] sees it: the batch, what its twin copies
-/// (tag, mesh, handle, cull box and marker, layers), its verdict, and the twin it already has.
+/// A straddle candidate: the batch, what its twin copies, its verdict and its twin.
 type StraddleParts<'w, 's> = Query<
     'w,
     's,
@@ -418,13 +334,8 @@ type StraddleParts<'w, 's> = Query<
     ),
 >;
 
-/// Keep every straddling batch's far twin in sync with its verdict — spawn the twin child when
-/// the classifier marks the batch [`StraddlesWater`], despawn it when the mark goes — and mirror
-/// the batch's tag (the fade alpha moves every ramp frame; the slot rides it), mesh (a gear
-/// redress swaps it in place) and handle (composed down one water rung) onto a live twin.
-///
-/// PostUpdate, after the depth-prime sync: a zfill twin is a batch like any other here, so its
-/// own far twin mirrors the tag the zfill mirror has just written.
+/// Keep a far twin under each [`StraddlesWater`] batch, mirroring its tag, mesh and handle; after
+/// the depth-prime sync, so a zfill twin's own twin mirrors its fresh tag.
 pub(crate) fn sync_straddle_twins(
     mut commands: Commands,
     far: Res<FarSideTwins>,
@@ -439,8 +350,7 @@ pub(crate) fn sync_straddle_twins(
     for (part, tag, mesh, mat, straddling, twin, aabb, no_cull, layers) in &parts {
         match twin {
             None if straddling => {
-                // The classifier builds the far twin before it marks the batch; a miss means the
-                // batch's handle moved since, and next frame's classification rebuilds it.
+                // A miss: the handle moved since the twin was built; next frame rebuilds it.
                 let Some(far_h) = far.far_of(&mat.0) else {
                     continue;
                 };
@@ -452,8 +362,7 @@ pub(crate) fn sync_straddle_twins(
                     StraddleTwinOf(part),
                     ChildOf(part),
                 ));
-                // The twin culls exactly as its batch does: a skinned part's cull belongs to the
-                // body root's election, and its own box is the picker's (`attach::dress`).
+                // The twin culls exactly as its batch does.
                 if let Some(aabb) = aabb {
                     t.insert(*aabb);
                 }
@@ -477,7 +386,7 @@ pub(crate) fn sync_straddle_twins(
     }
     for (of, mut tag, mut mesh, mut mat) in &mut twins {
         let Ok((_, ptag, pmesh, pmat, ..)) = parts.get(of.0) else {
-            continue; // batch going away this frame — the child despawns with it
+            continue; // the batch is going away, and the child with it
         };
         if tag.0 != ptag.0 {
             tag.0 = ptag.0;
@@ -493,8 +402,7 @@ pub(crate) fn sync_straddle_twins(
     }
 }
 
-/// The split's instrument (`WOW_MOVE_TRACE=<path>`, tag `fx` — beside the classifier's
-/// `straddle`/`far-side` lines): one line per twin edge.
+/// `WOW_MOVE_TRACE=<path>`, tag `fx`: one line per twin armed or released.
 fn trace(what: &str, part: Entity) {
     if !benilla_assets::trace::enabled() {
         return;
@@ -502,9 +410,7 @@ fn trace(what: &str, part: Entity) {
     benilla_assets::trace::line("fx", &format!("straddle-twin {what} part={part}"));
 }
 
-/// Render world (`PrepareResources`): write the whole 16 KB region when anything changed — the
-/// shared buffer only. The portrait booths and the glue scene keep their zeroed region: nothing in
-/// a studio stands in world water.
+/// Render world: write the whole region to the shared buffer on a change; studio buffers stay zero.
 fn upload_water_clips(
     queue: Res<RenderQueue>,
     shared: Option<Res<crate::lighting::SharedLightBuffer>>,
@@ -551,13 +457,9 @@ pub fn plugin(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// The band is the reference's: a centre within `r` of the plane on EITHER side straddles,
-    /// both ties included; beyond it the model sits wholly on one list.
     #[test]
     fn the_band_is_plus_minus_r_inclusive() {
-        // A wading unit: centre 0.4 yd over the surface, 1.5 yd of slack — both lists.
         assert_eq!(side_booleans(0.4, 1.5), (true, true));
-        // Waist-deep the other way: centre under the surface, still inside the band.
         assert_eq!(side_booleans(-1.2, 1.5), (true, true));
         assert_eq!(side_booleans(-1.5, 1.5), (true, true), "d == −r keeps A");
         assert_eq!(side_booleans(1.5, 1.5), (true, true), "d == r keeps B");
@@ -573,8 +475,6 @@ mod tests {
         );
     }
 
-    /// Entry is the reference's band; exit is sticky by `STICKY_YD`, so a body bobbing at the
-    /// edge holds its verdict instead of re-spawning its twins every frame.
     #[test]
     fn the_exit_is_sticky_and_the_entry_is_not() {
         let r = 1.2;
@@ -593,9 +493,6 @@ mod tests {
         assert!(!straddles(f32::NAN, r, true), "NaN never splits");
     }
 
-    /// The clip plane: for a dry eye the near copy keeps the part above the water and the far
-    /// twin the part below; a submerged eye swaps them; the plane itself survives on both copies,
-    /// so the two halves meet without a seam.
     #[test]
     fn each_copy_keeps_its_own_half() {
         let dry = [10.0, 1.0];
@@ -623,8 +520,6 @@ mod tests {
         }
     }
 
-    /// Gear and kits take their BODY's word however deep the chain — a glow on a weapon on a unit
-    /// — and a chain that never reaches a body, or a body with no slot, clips nothing.
     #[test]
     fn a_chained_model_inherits_its_bodys_waterline() {
         let mut clips = WaterClips::default();
@@ -654,8 +549,6 @@ mod tests {
         assert_eq!(wearer_word(99, &clips, chain), NO_CLIP, "a broken chain");
     }
 
-    /// Every slot-0 draw in the world shares the word: writing it would clip terrain, WMOs and
-    /// doodads at one unit's waterline, so the setter refuses it — and a dry world never uploads.
     #[test]
     fn slot_zero_is_never_written_and_only_real_changes_upload() {
         let mut c = WaterClips::default();
@@ -674,8 +567,7 @@ mod tests {
         assert_eq!(c.generation, 2, "an out-of-range slot is dropped");
     }
 
-    /// The shader declares `array<vec2<f32>, 2048>` between two `vec4` arrays: the region must be
-    /// one 8-byte word per addressable slot and end on the 16-byte boundary the palette rows need.
+    /// The shader's `array<vec2<f32>, 2048>` sits between two `vec4` arrays: it ends on 16 bytes.
     #[test]
     fn the_region_is_one_vec2_per_slot_on_a_vec4_boundary() {
         assert_eq!(region_bytes(), (MAX_RIG_SLOTS * 8) as u64);

@@ -1,8 +1,6 @@
-//! The frozen cloud noise tables — dumped from the binary or rebuilt by its exact one-time
-//! builders.
+//! The cloud noise tables, dumped from the reference or rebuilt by its one-time builders.
 
-/// The static permutation table (`0x86f2d0`, `.rdata`) — 256 bytes, a permutation of 0..255,
-/// always indexed `& 0xff` (no doubled-512 layout). Dumped verbatim from the binary.
+/// The permutation table (`0x86f2d0`), dumped verbatim: 256 bytes, always indexed `& 0xff`.
 #[rustfmt::skip]
 pub(crate) const PERM: [u8; 256] = [
     225, 155, 210, 108, 175, 199, 221, 144, 203, 116,  70, 213,  69, 158,  33, 252,
@@ -23,10 +21,8 @@ pub(crate) const PERM: [u8; 256] = [
     137, 214, 145,  93,  92, 100, 245,   0, 216, 186,  60,  83, 105,  97, 204,  52,
 ];
 
-/// The tone curve (`0xce91d8`) — built once at init by `0x6d0900` (gamma 0.96,
-/// init threshold 101: `curve[i] = ftol(255 − 255·0.96^(i·0.6015625))`) and fixed thereafter.
-/// Frozen to the reference's exact bytes rather than recomputed through libm `pow`
-/// (cross-platform determinism).
+/// The tone curve (`0xce91d8`), built once by `0x6d0900` as `ftol(255 − 255·0.96^(i·0.6015625))`
+/// for the init threshold 101; frozen to the reference's bytes, as libm `pow` varies by platform.
 #[rustfmt::skip]
 pub(crate) const CURVE: [u8; 256] = [
       0,   6,  12,  18,  23,  29,  34,  40,  45,  50,  55,  60,  65,  69,  74,  78,
@@ -47,10 +43,9 @@ pub(crate) const CURVE: [u8; 256] = [
     254, 254, 254, 254, 254, 254, 254, 254, 254, 254, 254, 254, 254, 254, 254, 254,
 ];
 
-/// The gradient table build (`0x6d0c90` loop 1): `gradient[i] = 1 − 2·rand()/32767` with MSVC's
-/// LCG (`seed = seed·214013 + 2531011; (seed >> 16) & 0x7fff`). The reference's seed is whatever
-/// the process `srand` state was — not visually load-bearing (any uniform table is equivalent);
-/// we fix seed = 1 (the CRT default) for run-to-run determinism.
+/// The gradient table (`0xce92d8`, built by `0x6d0c90` loop 1): `1 − 2·rand()/32767` on MSVC's
+/// `rand`. Deviation: seed 1, the CRT default, for determinism; the reference's is the process
+/// `srand` state, and any uniform table looks the same.
 pub(crate) fn gradient_table() -> [f32; 256] {
     let mut seed: u32 = 1;
     std::array::from_fn(|_| {
@@ -60,7 +55,7 @@ pub(crate) fn gradient_table() -> [f32; 256] {
     })
 }
 
-/// The fade table build (`0x6d0c90` loop 2): the raised-cosine ease `0.5·(1 − cos(iπ/256))`.
+/// The fade table (`0xce8dd8`, built by `0x6d0c90` loop 2): a raised cosine.
 pub(crate) fn fade_table() -> [f32; 256] {
     std::array::from_fn(|i| 0.5 * (1.0 - ((i as f32) * std::f32::consts::PI / 256.0).cos()))
 }

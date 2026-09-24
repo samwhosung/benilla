@@ -1,10 +1,5 @@
-//! The asset foundation's **plugin shell** — the three systems that drive
-//! [`benilla_assets::WorldAssets`] from inside the client.
-//!
-//! The store itself went down to `benilla-assets`; what could not follow it is
-//! exactly this: opening the chain needs the shared light buffer (`lighting`), evicting the world
-//! art needs the cross-map message (`world_map`), and the residency sweep needs the art-scope
-//! instrument. Three upward reaches, all of them here, none of them in the data core.
+//! Drives [`benilla_assets::WorldAssets`] from the client: each system needs a client piece (the
+//! light buffer, `MapChange`, the art scope), so it lives here rather than in `benilla-assets`.
 
 use bevy::prelude::*;
 use bevy::render::renderer::RenderDevice;
@@ -13,8 +8,7 @@ use crate::art_scope::{ArtScope, ArtSlot};
 use benilla_assets::{AssetSet, RenderConfig, WorldAssets};
 use benilla_formats::open_chain;
 
-/// The asset foundation plugin: opens the **one** patch chain at startup and inserts the shared
-/// [`WorldAssets`] + [`RenderConfig`] that the other subsystems build on.
+/// Opens the patch chain at startup and inserts the shared [`WorldAssets`] and [`RenderConfig`].
 pub(crate) struct AssetPlugin;
 
 impl Plugin for AssetPlugin {
@@ -24,11 +18,8 @@ impl Plugin for AssetPlugin {
     }
 }
 
-/// Drop the world-art dedup on a cross-map transition (`world_map::MapChange` — see its doc for
-/// why a clear is always safe): `textures` + `model_materials` pin every map's world art forever
-/// otherwise (the teleport leak). The UI sprite caches (`sprites`/`tiled_sprites`/
-/// `portraits`/`masks`) stay — they are game-global UI scope, and their negative entries exist
-/// precisely to stop per-frame re-walks of the chain.
+/// Clears `textures` and `model_materials` on a map change, or they pin every map's art forever.
+/// The UI sprite caches stay: they are global, and their negative entries stop per-frame re-walks.
 fn evict_world_art(
     mut changes: MessageReader<crate::world_map::MapChange>,
     assets: Option<ResMut<WorldAssets>>,
@@ -43,11 +34,8 @@ fn evict_world_art(
     }
 }
 
-/// Expire the world-art dedup by **distance** — the within-map half of the eviction
-/// above. `textures` is the one that matters for VRAM: a decoded BLP is pinned by the material that
-/// samples it, and a material by this cache, so nothing here dropping is why `images` never fell on a
-/// same-map traverse. The UI sprite caches stay unswept for the same reason they survive a map change
-/// (game-global scope, and their negative entries exist to stop per-frame chain re-walks).
+/// Expires the world-art caches by distance within a map: a cached material pins the decoded BLP it
+/// samples, so `textures` is what frees VRAM. The UI sprite caches stay, as on a map change.
 fn scope_world_art(mut scope: ArtScope, assets: Option<ResMut<WorldAssets>>) {
     if let Some(mut a) = assets {
         scope.apply(&mut a.model_materials, ArtSlot::ClutterMats);
@@ -55,20 +43,11 @@ fn scope_world_art(mut scope: ArtScope, assets: Option<ResMut<WorldAssets>>) {
     }
 }
 
-/// Open the vanilla patch chain from wherever the install is ([`benilla_formats::wow_data`] —
-/// `$WOW_DATA`, the project folder on a dev build, else beside the binary) and
-/// insert the shared [`WorldAssets`] (chain + dedup caches) + [`RenderConfig`]. If the client data
-/// can't be found or opened, `WorldAssets` is simply absent and downstream startup falls back to
-/// an empty free-fly scene.
+/// Opens the patch chain found by [`benilla_formats::wow_data`] and inserts [`WorldAssets`] and
+/// [`RenderConfig`]; with no install, `WorldAssets` is absent and startup falls back to free-fly.
 fn open_world_assets(mut commands: Commands, device: Res<RenderDevice>) {
-    // The one shared global-light buffer, created here (RenderDevice is live by Startup) so it exists
-    // before any material is built. Inserted FIRST — ahead of the install lookup, so no early return
-    // below can skip it: it is cloned into `WorldAssets` (for model materials) and read as the
-    // `SharedLightBuffer` resource by the terrain streamer, the model/particle lanes and the
-    // render-world upload. Always present — even with no client data — so the render upload has a
-    // target; harmless if unused. It used to be created *after* the lookup, so a client that found no
-    // install had no buffer at all and `particles::model::update_model_particles` — a hard
-    // `Res<SharedLightBuffer>` — could not validate.
+    // Inserted before the install lookup so no early return skips it: even with no install,
+    // `particles::model::update_model_particles` takes it as a hard `Res<SharedLightBuffer>`.
     let shared_light = crate::lighting::new_shared_light_buffer(&device);
     let light_buf = shared_light.0.clone();
     commands.insert_resource(shared_light);
@@ -79,11 +58,7 @@ fn open_world_assets(mut commands: Commands, device: Res<RenderDevice>) {
         );
         return;
     };
-    // How much terrain is resident is NOT a knob here: the streamer derives its window from the
-    // live `farclip` (`view::ViewDistance`, the player's Terrain Distance setting) the way the
-    // reference does — `terrain_stream::window`. `$WOW_TILE_RADIUS` is retired.
-    // See the field doc: the tile-unload budget. Default 1 — even the fastest focus
-    // (boosted free-fly, ~1 stale row/s) produces stale tiles far slower than 60/s drains them.
+    // Stale tiles released per frame: 1 outpaces even boosted free-fly's stale row a second.
     let unload_budget = std::env::var("WOW_TILE_UNLOAD")
         .ok()
         .and_then(|s| s.parse().ok())

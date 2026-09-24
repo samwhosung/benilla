@@ -1,19 +1,7 @@
-//! **The last few hundred log lines, kept in memory** — so a crash report can carry what the
-//! client was doing when it died.
-//!
-//! The only log sink is stderr, and a player's terminal (or a packaged Windows build with no
-//! console at all) is gone with the process. Of bug B390's four reporters one attached anything,
-//! and only because he had set `RUST_BACKTRACE=1` himself. A panic hook can write a file, but a
-//! payload and a backtrace without the minute of log before them is a symptom without a story:
-//! which zone, which opcode, which asset was loading. This ring is that story.
-//!
-//! Installed as [`bevy::log::LogPlugin::custom_layer`] by [`crate::boot::tuned_default_plugins`],
-//! so it sits under the same `EnvFilter` as the stderr formatter — the ring holds exactly the lines
-//! stderr showed, no more (a `wgpu=trace` firehose the filter drops never reaches it either).
-//! Bounded at [`CAPACITY`] lines; the cost is one string clone per emitted line, on the thread that
-//! logged it, behind a mutex that is never held across anything else.
-//!
-//! Read with [`recent`]. Nothing else in the engine reads it: it is an artefact feed, not a log.
+//! The last [`CAPACITY`] log lines, kept in memory so a crash report carries what the client was
+//! doing when it died. Installed as [`bevy::log::LogPlugin::custom_layer`] by
+//! [`crate::boot::tuned_default_plugins`], under the same `EnvFilter` as stderr, so it holds
+//! exactly the lines stderr showed. Read with [`recent`].
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
@@ -25,15 +13,14 @@ use bevy::log::tracing::{Event, Subscriber};
 use bevy::log::tracing_subscriber::layer::Context;
 use bevy::log::tracing_subscriber::Layer;
 
-/// How many lines the ring keeps. Two hundred is about a minute of an ordinary session's `info`
-/// stream and a few seconds of a bad one, which is the window a crash needs.
+/// How many lines the ring keeps: about a minute of an ordinary session's `info` stream.
 pub const CAPACITY: usize = 200;
 
 static RING: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static START: OnceLock<Instant> = OnceLock::new();
 
-/// The layer. Zero-sized; the state is the module's static so the panic hook — which has no
-/// handle to the subscriber — can read it.
+/// The layer; its state is a static so the panic hook, which has no handle to the subscriber, can
+/// read it.
 pub struct LogRing;
 
 impl<S: Subscriber> Layer<S> for LogRing {
@@ -55,8 +42,8 @@ impl<S: Subscriber> Layer<S> for LogRing {
     }
 }
 
-/// Renders an event's fields the way the stderr formatter does: the `message` field bare, every
-/// other field as ` name=value` after it.
+/// Renders an event's fields as the stderr formatter does: `message` bare, the rest as
+/// ` name=value`.
 struct MessageVisitor<'a>(&'a mut String);
 
 impl Visit for MessageVisitor<'_> {
@@ -77,7 +64,7 @@ impl Visit for MessageVisitor<'_> {
     }
 }
 
-/// The ring's contents, oldest first. A snapshot: the ring keeps filling behind it.
+/// A snapshot of the ring, oldest first.
 pub fn recent() -> Vec<String> {
     RING.lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -91,9 +78,7 @@ mod tests {
     use super::*;
     use bevy::log::tracing_subscriber::layer::SubscriberExt;
 
-    /// The ring is a process-wide static, so this test owns the whole contract in one go: lines
-    /// land in emission order, the message field renders bare and the others as `k=v`, and the
-    /// ring drops its oldest line rather than growing past [`CAPACITY`].
+    /// One test for the whole contract, since the ring is a process-wide static.
     #[test]
     fn the_ring_keeps_the_last_lines_in_order() {
         let subscriber = bevy::log::tracing_subscriber::registry().with(LogRing);

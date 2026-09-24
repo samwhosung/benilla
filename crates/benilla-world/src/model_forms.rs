@@ -1,21 +1,8 @@
-//! Paced model render-form building — the model-lane twin of the tile furnisher (
-//! closing 0832's named residual).
-//!
-//! The M2/WMO loaders ship **geometry, no meshes** (`ModelSubmesh::geometry`): a loader-built
-//! labeled sub-asset lands the instant its decode completes, and the render world ingests the
-//! whole model — a city root's thousands of group batches, a fresh row's hundreds of doodads —
-//! in ONE frame. Measured at the Stormwind line (pre): 2000–3200 mesh assets per crossing,
-//! 44–119 ms wall on the worst frame, on every crossing including re-entries. No budget
-//! downstream of a load can spread work the loader has already packaged, so the build lives
-//! here: consumers `require()` the forms they need, and [`furnish_model_forms`] builds a bounded
-//! amount per frame while live — nearest requester first — uncapped behind the loading cover.
-//!
-//! One [`Entry`] per loaded model asset holds the built handles; every instance of the model
-//! shares them (the build runs once per asset, not per placement). The **static** form is
-//! `RENDER_WORLD`-only with its `Aabb` computed at build time (the exterior cull fails open on a
-//! missing bound — 0832's rule); the **skinned** twin keeps main-world data because the mouseover
-//! picker CPU-skins its vertices (`target::hover`), and it is built only for lanes that rig —
-//! which retires the loader's old always-built, mostly-unused twin (the 0019 deferral).
+//! Paced model render-form building. The M2 and WMO loaders ship geometry, not meshes: a loader's
+//! meshes would reach the render world a whole model in one frame. Consumers `require()` the
+//! forms they need, and [`furnish_model_forms`] builds a bounded amount per frame while live,
+//! nearest requester first, uncapped behind the loading cover. One [`Entry`] per model asset
+//! serves every instance.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -32,20 +19,14 @@ pub(crate) const WANT_STATIC: u8 = 1;
 /// Request bit: the skinned twin (rigged lanes only).
 pub(crate) const WANT_SKINNED: u8 = 2;
 
-/// Per-frame build budget while live, in submeshes. The companion vertex budget below is the
-/// real governor for big WMO group batches; this cap bounds the per-mesh fixed cost (asset add +
-/// extract + prepare) the Stormwind leg measured dominating at ~3000 small doodad meshes per
-/// crossing. At 96/frame a whole city crossing's ~3000 meshes land in ~0.5 s of frames — inside
-/// the two-tile fog margin the 5×5 window gives a first contact.
+/// Per-frame build budget while live, in submeshes: it bounds the per-mesh fixed cost, so a city
+/// crossing's ~3000 small meshes land in about 0.5 s, inside the 5×5 window's two-tile fog margin.
 const MESH_BUDGET: usize = 96;
-/// Per-frame build budget while live, in vertices — the governor for the handful of huge group
-/// batches (tens of thousands of vertices each). A single submesh may exceed it alone; it then
-/// lands alone in its frame (a submesh is the atomic unit — at least one always builds, so
-/// progress is guaranteed).
+/// Per-frame build budget while live, in vertices, for the huge WMO group batches; a submesh over
+/// it builds alone in its frame.
 const VERT_BUDGET: usize = 16_384;
 
-/// A loaded model asset the forms cache keys by — the two model kinds share one cache because
-/// every consumer lane (placements, entities, markers, booths) handles both.
+/// A loaded model asset, M2 or WMO, as the forms cache keys it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ModelKey {
     M2(AssetId<M2Model>),
@@ -63,37 +44,31 @@ impl From<&Handle<WmoModel>> for ModelKey {
     }
 }
 
-/// One model's built render forms + its build cursors (`stat.len()` / `skin.len()` — resumed
-/// across frames, like a tile's cell cursor).
+/// One model's built forms; `stat.len()` and `skin.len()` are the build cursors across frames.
 #[derive(Default)]
 struct Entry {
-    /// The static form per submesh, with the `Aabb` computed at build (`None` = degenerate
-    /// geometry): consumers insert it explicitly — `RENDER_WORLD` meshes race Bevy's
-    /// `calculate_bounds`, and the exterior cull fails open on a missing bound.
+    /// The static form per submesh with its build-time `Aabb` (`None`: degenerate), which
+    /// consumers insert themselves: `calculate_bounds` races a `RENDER_WORLD` mesh, and the
+    /// exterior cull fails open without a bound.
     stat: Vec<(Handle<Mesh>, Option<Aabb>)>,
-    /// The skinned twin per submesh (rigged lanes only; main-world data kept for the picker).
+    /// The skinned twin per submesh, for rigged lanes only; it keeps main-world data because the
+    /// mouseover picker skins it on the CPU (`target::hover`).
     skin: Vec<Handle<Mesh>>,
-    /// Kinds ever requested (`WANT_*` bits). Sticky: demand for a form doesn't vanish because
-    /// one requester despawned mid-build — the entry frees with the asset.
+    /// Kinds ever requested (`WANT_*` bits), sticky until the asset frees.
     want: u8,
     /// Kinds fully built.
     done: u8,
-    /// This frame's most urgent requester (lower = sooner), reset after each furnish pass so a
-    /// vanished requester stops hoisting its model.
+    /// This frame's most urgent requester (lower is sooner), reset after each furnish pass.
     priority: i32,
 }
 
-/// The per-asset render-form cache. Entries are created by [`Self::require`], built by
-/// [`furnish_model_forms`], and dropped when the model asset itself leaves the store (the mesh
-/// handles drop with them; instances that already spawned keep theirs via `Mesh3d`).
+/// The per-asset render-form cache; an entry drops when its model asset leaves the store.
 #[derive(Resource, Default)]
 pub struct ModelForms {
     entries: HashMap<ModelKey, Entry>,
 }
 
-/// A borrowed view of one model's built forms for the assembler, index-parallel with the model's
-/// submeshes: the static handle + build-time `Aabb` per batch, plus the skinned twins when the
-/// lane rigs.
+/// One model's built forms for the assembler, index-parallel with its submeshes.
 #[derive(Clone, Copy)]
 pub struct FormSlices<'a> {
     pub stat: &'a [(Handle<Mesh>, Option<Aabb>)],
@@ -101,10 +76,8 @@ pub struct FormSlices<'a> {
 }
 
 impl ModelForms {
-    /// Record that a consumer needs `kinds` of this model's forms, at `priority` (lower =
-    /// sooner; pass the requester's tile/chunk distance). Returns `true` when every requested
-    /// kind is already built — the consumer's gate, polled the same way it polls the model
-    /// asset itself.
+    /// Record that a consumer needs `kinds` at `priority` (the requester's tile distance, lower is
+    /// sooner); `true` once every requested kind is built.
     pub(crate) fn require(&mut self, key: ModelKey, kinds: u8, priority: i32) -> bool {
         let e = self.entries.entry(key).or_default();
         e.want |= kinds;
@@ -112,8 +85,7 @@ impl ModelForms {
         e.done & kinds == kinds
     }
 
-    /// The built static forms (handle + build-time `Aabb` per submesh), or `None` until
-    /// [`Self::require`]`(…, WANT_STATIC, …)` has returned `true`.
+    /// The built static forms, or `None` until built.
     pub(crate) fn static_meshes(&self, key: ModelKey) -> Option<&[(Handle<Mesh>, Option<Aabb>)]> {
         let e = self.entries.get(&key)?;
         (e.done & WANT_STATIC != 0).then_some(e.stat.as_slice())
@@ -125,23 +97,17 @@ impl ModelForms {
         (e.done & WANT_SKINNED != 0).then_some(e.skin.as_slice())
     }
 
-    /// Request **both** forms of a model and report whether they are built — the gate every lane
-    /// whose instances can rig polls each frame (creatures, players, held items, spell effects,
-    /// animated GameObjects, the booths). Takes the model handle rather than a key: the key is
-    /// the cache's business, not the caller's.
+    /// Request both forms, `true` once built: the gate every lane whose instances can rig polls.
     pub fn require_rigged(&mut self, model: impl Into<ModelKey>, priority: i32) -> bool {
         self.require(model.into(), WANT_STATIC | WANT_SKINNED, priority)
     }
 
-    /// Request the **static** form only — the lanes whose instances never skin: WMO displays,
-    /// billboard cards, the particle-model quad source.
+    /// Request the static form only, for lanes whose instances never skin.
     pub fn require_static(&mut self, model: impl Into<ModelKey>, priority: i32) -> bool {
         self.require(model.into(), WANT_STATIC, priority)
     }
 
-    /// One model's built forms, index-parallel with its submeshes. Empty slices until the
-    /// matching `require_*` has returned `true` — a caller that spawns anyway gets default (dead)
-    /// handles rather than a panic, which is the same contract the assembler already documents.
+    /// One model's built forms, empty until the matching `require_*` returns `true`.
     pub fn slices(&self, model: impl Into<ModelKey>) -> FormSlices<'_> {
         let key = model.into();
         FormSlices {
@@ -150,7 +116,7 @@ impl ModelForms {
         }
     }
 
-    /// [`Self::ensure_now`] for **both** forms — the booth/glue/marker lanes' rigged models.
+    /// [`Self::ensure_now`] for both forms.
     pub fn ensure_now_rigged(
         &mut self,
         model: impl Into<ModelKey>,
@@ -160,7 +126,7 @@ impl ModelForms {
         self.ensure_now(model.into(), WANT_STATIC | WANT_SKINNED, submeshes, meshes);
     }
 
-    /// [`Self::ensure_now`] for the **static** form only.
+    /// [`Self::ensure_now`] for the static form only.
     pub(crate) fn ensure_now_static(
         &mut self,
         model: impl Into<ModelKey>,
@@ -170,9 +136,8 @@ impl ModelForms {
         self.ensure_now(model.into(), WANT_STATIC, submeshes, meshes);
     }
 
-    /// Build every requested-and-missing form of one model NOW, uncapped — the booth/glue/marker
-    /// lanes: one small model at a time, usually behind a screen whose job is to absorb exactly
-    /// this. The streaming lanes must go through [`Self::require`] + the paced furnisher instead.
+    /// Build a model's missing forms now, uncapped, for one-off lanes (booths, glue, markers);
+    /// streaming lanes go through [`Self::require`] and the paced furnisher.
     pub(crate) fn ensure_now(
         &mut self,
         key: ModelKey,
@@ -190,16 +155,13 @@ impl ModelForms {
         self.entries.remove(&key);
     }
 
-    /// Drop everything — leaving the world (`release_world`), where the per-asset `Unused`
-    /// events can no longer reach the world-live-gated furnisher.
+    /// Drop everything on leaving the world, where the gated furnisher no longer reads `Unused`.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
     }
 }
 
-/// Advance one entry's requested builds, bounded by `budget` submeshes and [`VERT_BUDGET`]
-/// vertices (via `verts`, shared across entries within a frame). Returns how many submeshes were
-/// built. Marks a kind done when its cursor has walked every submesh.
+/// Advance one entry's builds within `budget` submeshes and [`VERT_BUDGET`]; returns the count.
 fn build_entry(
     e: &mut Entry,
     kinds: u8,
@@ -238,10 +200,8 @@ fn build_entry(
     built
 }
 
-/// Build requested model forms, [`MESH_BUDGET`]/[`VERT_BUDGET`] per frame while live — most
-/// urgent requester first — uncapped behind the loading cover (entry/teleport/world-stale), which
-/// exists to absorb exactly that burst. At least one submesh always builds, so progress is
-/// guaranteed. Frees an entry when its model asset leaves the store.
+/// Build requested forms most urgent first, [`MESH_BUDGET`] and [`VERT_BUDGET`] per frame while
+/// live, uncapped behind the loading cover; at least one submesh always builds.
 pub(crate) fn furnish_model_forms(
     mut forms: ResMut<ModelForms>,
     m2s: Res<Assets<M2Model>>,
@@ -253,10 +213,7 @@ pub(crate) fn furnish_model_forms(
     mut wmo_events: MessageReader<AssetEvent<WmoModel>>,
 ) {
     let t0 = Instant::now();
-    // The free path: a model asset leaving the store (or replaced by a reload) drops its forms —
-    // the mesh handles' last cache-side strong refs go with it, so the GPU copies free once the
-    // last spawned instance is gone too. `Unused` fires for untracked (`RENDER_WORLD`-extracted)
-    // and tracked assets alike, exactly once (0832's counter rule).
+    // An asset leaving the store or reloading drops its forms; `Unused` fires once for any asset.
     for ev in m2_events.read() {
         if let AssetEvent::Unused { id }
         | AssetEvent::Removed { id }
@@ -276,7 +233,6 @@ pub(crate) fn furnish_model_forms(
 
     let cap = if focus.paced { MESH_BUDGET } else { usize::MAX };
 
-    // The frame's work list: entries with a requested kind still unbuilt, most urgent first.
     let mut pending: Vec<(i32, ModelKey)> = forms
         .entries
         .iter()
@@ -294,8 +250,7 @@ pub(crate) fn furnish_model_forms(
         if built >= cap || verts >= VERT_BUDGET {
             break;
         }
-        // The asset can lag its request (still decoding) or predecease it (dropped mid-build);
-        // both just skip — the entry builds when the asset lands, or frees on its event above.
+        // An asset still decoding or already dropped skips: it builds on landing or frees above.
         let submeshes: &[ModelSubmesh] = match key {
             ModelKey::M2(id) => match m2s.get(id) {
                 Some(m) => &m.submeshes,
@@ -319,9 +274,7 @@ pub(crate) fn furnish_model_forms(
 
 #[cfg(test)]
 mod tests {
-    /// The cap's arithmetic, kept honest in one place (the furnish.rs test's model twin): the
-    /// Stormwind crossing's measured ~3200 mesh burst must land in well under a second of frames
-    /// at 60 Hz — inside the fog margin a 5×5-window first contact gives.
+    /// The measured Stormwind crossing burst, ~3200 meshes, lands inside the fog margin at 60 Hz.
     #[test]
     fn a_city_crossing_furnishes_in_under_a_second() {
         let crossing_meshes: usize = 3200;

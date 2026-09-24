@@ -1,7 +1,6 @@
-// The sky-dome gradient, unlit (`SkyExt`): the five Light.dbc SkyColor stops, one per dome ring at
-// the reference's geometric elevations (the struct below), then the fog colour at the horizon and
-// below (`0x6d0d10`, `0x6d0f50`), interpolated per fragment by view elevation. Depth is the
-// far-plane pin in `sky_vertex.wgsl`; this stage writes colour only, which keeps early-Z.
+// The sky-dome gradient (`SkyExt`): the five Light.dbc SkyColor stops at the reference's ring
+// elevations, then the fog colour at and below the horizon (`0x6d0d10`, `0x6d0f50`), interpolated
+// per fragment by elevation. Depth is the far pin in `sky_vertex.wgsl`; this writes colour only.
 #import bevy_pbr::{
     forward_io::VertexOutput,
     mesh_view_bindings::view,
@@ -46,10 +45,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let dir = normalize(in.world_position.xyz - view.world_position.xyz);
     let elev = degrees(asin(clamp(dir.y, -1.0, 1.0))); // −90..90, 0 = horizon
 
-    // Dawn/dusk warp (`0x6d0f50`), while S > 0: the reference warps only the four mid rings
-    // (offsets 4/8/12/16), never the apex or fog rim, and never brightens. `+ 0.125` puts the sun
-    // bearing at glow phase 0.125. The reference bakes the warp per vertex at 24 azimuth segments
-    // and Gouraud-interpolates (the `g = 0` step smears over 15°), hence the lerp of two segments.
+    // Dawn/dusk warp (`0x6d0f50`): only the four mid rings, never the apex or the fog rim, and
+    // never brighter. The reference bakes it per vertex at 24 azimuth segments and interpolates,
+    // hence the lerp of two segments; `+ 0.125` puts the sun bearing at glow phase 0.125.
     var s1 = sky.sky1.rgb;
     var s2c = sky.sky2.rgb;
     var s3 = sky.sky3.rgb;
@@ -84,8 +82,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         col = mix(s1, sky.sky0.rgb, (elev - 16.8) / (90.0 - 16.8)); // warped ring1 to the raw apex
     }
 
-    // Raw gamma out: the reference draws the sky with GL_FRAMEBUFFER_SRGB off, as raw DBC bytes
-    // (`CSky::Render`, `0x6d4940`).
+    // Raw gamma out: the reference draws the sky as raw DBC bytes, sRGB off (`0x6d4940`).
     let rgb = col;
     return vec4<f32>(rgb, 1.0);
 }

@@ -1,11 +1,6 @@
-//! The particle lane's debug-instrument system plumbing, bundled into one parameter.
-//!
-//! `simulate_particles` sits exactly at Bevy's 16-system-parameter ceiling, and the lane carries
-//! two optional instruments — [`super::depthdump`] (`$WOW_PARTICLE_DEPTHDUMP`, the depth numbers
-//! a pool brings to the compare) and [`super::emitdump`] (`$WOW_EMIT_DUMP`, what the emission
-//! front end decided) — each of which would otherwise spend a parameter or two of its own. That
-//! ceiling should never be the reason an instrument doesn't get built, so the
-//! pair shares one: both stay inert without their env, and the sim reads them through here.
+//! The particle lane's two debug instruments, [`super::depthdump`] and [`super::emitdump`], as one
+//! system parameter: `simulate_particles` sits at Bevy's 16-parameter ceiling. Both are inert
+//! without their env.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;

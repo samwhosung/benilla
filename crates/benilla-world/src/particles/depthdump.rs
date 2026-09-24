@@ -1,22 +1,8 @@
-//! `$WOW_PARTICLE_DEPTHDUMP` — the CPU half of the particle **depth-contest** measurement.
-//!
-//! Prints, for every live world-lane quad emitter, the numbers the depth compare is decided by:
-//! each particle's quad centre in the world, its rendered half-extent, its view-space z, the NDC
-//! depth its quad carries — with the four corners' own NDC depths, so "all corners share the
-//! centre's depth" (`0x7b2a50`, the mechanism that lets a flush
-//! emitter draw) is *measured* in our pipeline, not assumed — and where the quad lands in
-//! **physical pixels**.
-//!
-//! Pair it with `WOW_DEPTH` at pixels inside the printed rect (same physical-pixel space; MSAA
-//! off): that probe answers *what depth the opaque pass left in the buffer*; this one answers
-//! *what depth our quad brings to the compare*. Reverse-Z: the fragment survives iff
-//! `dquad ≥ d_buffer`. `buffer view-z − quad view-z` at the centre pixel is the emitter's burial
-//! as our pipeline actually experiences it — the number to put beside the reference's 0.0058-yd
-//! burial / 33–53 % quad survival, without a single screenshot.
-//!
-//! `WOW_PARTICLE_DEPTHDUMP=<at>[,<frames>]` — dump every frame from `at` seconds elapsed for
-//! `<frames>` frames (default 8). One line per particle, capped at 4 per emitter per frame (a
-//! flush glow's particles are near-coincident; the cap keeps a 50/s pool readable).
+//! `$WOW_PARTICLE_DEPTHDUMP=<at>[,<frames>]`: from `at` seconds, for `frames` frames (default 8),
+//! the depth each world-lane particle quad brings to the compare: centre, half-extent, view z,
+//! NDC depth and its corners' span (the reference gives all four the centre's, `0x7b2a50`), and
+//! its rect in physical pixels. Pair it with `WOW_DEPTH` inside that rect (MSAA off): reverse-Z,
+//! the fragment survives iff `dquad ≥ d_buffer`.
 
 use bevy::camera::Projection;
 use bevy::prelude::*;
@@ -36,11 +22,7 @@ static WINDOW: std::sync::LazyLock<Option<(f32, u32)>> = std::sync::LazyLock::ne
     Some((at.trim().parse().ok()?, n.trim().parse().unwrap_or(8)))
 });
 
-/// Parsed `$WOW_PARTICLE_DEPTHDUMP_BONES` — dump ONLY emitters mounted on these bones (empty = all).
-/// A live world scene has dozens of drawing emitters; unfiltered, the dump floods the log and costs
-/// the framerate of the very session it is measuring. Scoping to the subject's bones (the
-/// voidwalker's eyes are 60/61) makes the dump free when the subject is off screen, so the window
-/// can stay open for a whole director-driven session instead of a timed guess.
+/// Parsed `$WOW_PARTICLE_DEPTHDUMP_BONES`: dump only emitters on these bones (empty: all).
 static BONES: std::sync::LazyLock<Vec<u32>> = std::sync::LazyLock::new(|| {
     std::env::var("WOW_PARTICLE_DEPTHDUMP_BONES")
         .ok()
@@ -53,8 +35,7 @@ pub(super) fn bone_selected(bone: u32) -> bool {
     BONES.is_empty() || BONES.contains(&bone)
 }
 
-/// This frame's dump index if the window is open (advances the counter), else `None`. Called once
-/// per `simulate_particles` run.
+/// This frame's dump index while the window is open, advancing the counter; call once a frame.
 pub(super) fn frame(elapsed: f32, count: &mut u32) -> Option<u32> {
     let (at, frames) = (*WINDOW)?;
     (elapsed >= at && *count < frames).then(|| {
@@ -72,37 +53,25 @@ pub(super) fn dump_emitter(
     particles: &[Particle],
     dframe: &DrawFrame,
     placement: &Transform,
-    // The world point births are folded through THIS frame (the sim's own `emitter_world`, passed
-    // rather than recomputed so it cannot drift from the formula births actually use). Tracked
-    // across a dump window it measures our **eye-bone sway** — which the reference puts at 0.128
-    // units (11.7 cm) over the Stand cycle, and the discriminator for "do our births sample the
-    // current animated palette or a rest pose".
+    // The sim's own birth point this frame, passed so it cannot drift from what births use.
     birth_world: Vec3,
     basis: &CamBasis,
     cam_tf: &GlobalTransform,
     camera: &Camera,
     projection: &Projection,
-    // The sim's own draw gate: a non-resident texture means the expansion was SKIPPED and none
-    // of these quads rasterized — numbers that look drawable but weren't. Stated on the line so
-    // the reader can't pair a withheld pool with a framebuffer.
+    // False when the sim skipped expansion for a non-resident texture: none of these quads drew.
     texture_resident: bool,
-    // The quads THIS frame just wrote into the shared stream (world-space vertices — the exact
-    // data the draw consumes; the dump now runs right after expansion). Empty = the pool is
-    // live but nothing was pushed (non-resident texture / geometry emitter).
+    // The world-space quads this frame just wrote; empty when a live pool pushed nothing.
     written: &[EffectVertex],
 ) {
     let Some(vp) = camera.physical_viewport_size() else {
         return;
     };
-    // The stream's OWN quads, exactly as expansion wrote them — read back from the vertex data
-    // rather than recomputed, so vertex-data corruption is visible as itself. An EMPTY slice is
-    // a real state (the "drawable numbers, nothing in the vertex buffer" state this dump exists
-    // to make visible).
+    // The stream's own vertices, read back rather than recomputed so a bad write shows as itself.
     if written.is_empty() {
         info!("PARTICLE_DEPTHDUMP f={fidx} stream EMPTY (0 verts — pool live, nothing pushed)");
     } else {
-        // Per-quad diagonal |v2−v0| over the WHOLE range — the young (big) quads live at the
-        // tail, and only reading quad 0 (the oldest, smallest) once mis-called a mesh "sane".
+        // Every quad's diagonal: the oldest, smallest quads lead and the young, big ones trail.
         let diag = |q: &[EffectVertex; 4]| (Vec3::from(q[2].pos) - Vec3::from(q[0].pos)).length();
         let quads: Vec<f32> = written.as_chunks::<4>().0.iter().map(diag).collect();
         let (mut dmin, mut dmax) = (f32::MAX, f32::MIN);
@@ -125,8 +94,7 @@ pub(super) fn dump_emitter(
     }
     let view_from_world = cam_tf.to_matrix().inverse();
     let clip_from_view = projection.get_clip_from_view();
-    // (ndc, view-z) of a world point; `None` behind the near plane. The same matrices the frame
-    // renders with, so `ndc.z` IS the depth the rasterizer interpolates for this vertex.
+    // (ndc, view z) of a world point through the frame's own matrices; `None` behind the eye.
     let project = |world: Vec3| -> Option<(Vec3, f32)> {
         let v = view_from_world * world.extend(1.0);
         let clip = clip_from_view * v;
@@ -156,9 +124,7 @@ pub(super) fn dump_emitter(
         placement.translation.y,
         placement.translation.z,
     );
-    // Sample the pool EVENLY by index (retain order = age order), not the first four: the pool's
-    // head is its oldest, near-contemporary particles, and a cap there hides both the young end
-    // (the big, bright quads) and the pool's spatial spread across its age span.
+    // Sampled evenly by index (pool order is age order), so the young end and the spread show.
     let stride = (particles.len() / 4).max(1);
     for (i, p) in particles
         .iter()
@@ -169,18 +135,14 @@ pub(super) fn dump_emitter(
     {
         let center = particle_center(dframe, placement, p);
         let half = particle_half(def, placement, p, dframe.size_scale);
-        // The additive contribution's other factor: the over-life colour this particle's quad
-        // carries (raw authored values, as `expand_quads` pushes them).
+        // The over-life colour the quad carries, raw as `expand_quads` pushes it.
         let rgba = def.over_life.sample((p.age / p.life).clamp(0.0, 1.0)).color;
         let Some((ndc, viewz)) = project(center) else {
             info!("PARTICLE_DEPTHDUMP f={fidx} p{i} behind the camera");
             continue;
         };
         let c_px = px(ndc);
-        // The quad exactly as `expand_quads` builds it (spin ignored — a spun square covers the
-        // same disc). Each corner's own NDC depth goes into `corners=[min,max]`: if that span is
-        // not ≈ dquad on both ends, our billboard is NOT the constant-depth plane the reference's
-        // mechanism depends on — that would itself be the finding.
+        // The quad as `expand_quads` builds it, spin ignored; `corners` is its NDC depth span.
         let (r, u) = (basis.right * half, basis.up * half);
         let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
         let (mut dmin, mut dmax) = (f32::MAX, f32::MIN);

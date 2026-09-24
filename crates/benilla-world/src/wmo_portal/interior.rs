@@ -1,29 +1,13 @@
-//! The player's WMO-interior claims — the two down-ray identities published each frame:
-//!
-//! - [`CurrentWmoInterior`] — the RENDER/AUDIO seed's claim (faces + portal crossings,
-//!   [`super::seed::down_ray_seeds`]): what room the flood seeds from; consumed by the
-//!   interior-audio resolver (`sound::interior`) and the minimap inside-zoom.
-//! - [`CurrentAreaInterior`] — the ZONE-TEXT/AREA claim (faces only, [`super::seed::area_down_ray`];
-//!   the CGLight node's `+0x90` bit 0, set by `0x6a87f0`): drives the leaf-area
-//!   override (`terrain_stream`) and the `ZONE_CHANGED` family's indoor election + naming
-//!   (`area`). The legs differ exactly where the abbey-yard bug lived — a doorway portal under
-//!   the eye seeds the render flood without making you indoors.
-//!
-//! Split from `wmo_portal/mod.rs` (the portal-cull flood) when the second claim landed; the
-//! public faces re-export from there.
+//! The WMO-interior claims published each frame: [`CurrentWmoInterior`], the player's claim by the
+//! render seed's ray (faces and portal crossings), and [`CurrentAreaInterior`], the zone-text claim
+//! (faces only, the CGLight node's `+0x90` bit 0 set by `0x6a87f0`). A doorway portal under the
+//! eye seeds the render flood without making you indoors.
 
 use bevy::math::Affine3A;
 use bevy::prelude::*;
 
-/// The `WMOAreaTable` catalog — every WMO group's world-area row: its `AreaTable` id and its
-/// audio identity (sound provider, ambience, zone music, the entry fanfare). Absent when the
-/// client data didn't load.
-///
-/// It lived in `sound::interior` because sound loaded it first (1163's finding), which put a
-/// building's own data on the far side of the world boundary from the building. Two lanes resolve
-/// against it and only one of them is audio: the area authority (`terrain_stream::queries`) reads
-/// a WMO interior's `AreaTable` id from here before it falls back to the terrain chunk, which is
-/// the faithful order — a room's zone name comes from the room.
+/// The `WMOAreaTable` catalog: each WMO group's `AreaTable` id and audio identity; absent when the
+/// client data did not load. A room's zone name comes from here before the terrain chunk's.
 #[derive(Resource)]
 pub(crate) struct WmoAreas(pub(crate) benilla_formats::WmoAreaCatalog);
 
@@ -53,36 +37,18 @@ use super::seed::{area_down_ray, down_ray_claim, down_ray_seeds, up_ray_claim, D
 use super::{WmoPortalInstance, WmoRoom, WorldCamera, EXTERIOR, EXTERIOR_LIT};
 use crate::terrain_stream::{terrain_height_under, PropLobeLight, TerrainStreamer};
 
-/// The WMO interior the camera eye is currently in — the `WMOAreaTable` join keys of the group
-/// owning the nearest surface under the eye ([`down_ray_group`], the client's faithful down-ray), or
-/// `None` in the open world. Written per frame here; consumed by the interior-audio resolver
-/// (`sound::interior`) and any future interior consumer (light, fog, minimap names).
+/// The WMO interior the player is in: the `WMOAreaTable` keys of the group owning the nearest
+/// surface under the probe ([`down_ray_seeds`]), or `None` in the open world.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentWmoInterior(pub Option<WmoInteriorKeys>);
 
-/// The **room** the player stands in — the same down-ray claim [`CurrentWmoInterior`] names, but as
-/// the placement identity ([`WmoRoom`]) rather than the `WMOAreaTable` join keys. Written by
-/// [`track_current_interior`] in the same pass (no second ray).
-///
-/// Its consumer is the liquid query's scope key: a building's MLIQ pool belongs to
-/// that building, so only a subject standing in *that placement* can be in it. Before this, "indoors"
-/// was a bare `bool` and every WMO pool on the map answered — the Uldaman entrance read as submerged
-/// under a mushroom cave's water 186 yd overhead, in a building the player was 191 yd below.
+/// The room the player stands in: the claim [`CurrentWmoInterior`] names, as a placement identity.
+/// It scopes the liquid query: a building's MLIQ pool holds only a subject in that placement.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PlayerWmoRoom(pub Option<WmoRoom>);
 
-/// The WMO room **one remote unit** stands in — its own liquid claim, the per-unit twin of
-/// [`PlayerWmoRoom`].
-///
-/// It exists because the liquid query's `None` ("no interior claim for this subject") arm was a
-/// standing gap: every consumer that walks *units* rather than the local player — the creature swim
-/// marker, the wade splash, the footstep splash slot, the remote-motion depth — passed it, so both
-/// sources answered and an ADT lake claimed anything beneath it. In Undercity's Rogues' Quarter the
-/// NPCs stood 95 yd under Tirisfal's water at z 32.93 and swam on dry stone, in the same rooms the
-/// player (who *did* have a claim) walked normally.
-///
-/// Re-rayed only when the unit MOVES or a building streams in/out — a room changes at doorways, not
-/// per frame — so a town full of standing NPCs costs one position compare each.
+/// The WMO room a remote unit stands in, its own liquid claim, re-rayed only when the unit moves
+/// or a building streams in or out.
 #[derive(Component, Clone, Copy, Default, PartialEq)]
 pub struct UnitWmoRoom {
     room: Option<WmoRoom>,
@@ -97,9 +63,8 @@ impl UnitWmoRoom {
         self.room
     }
 
-    /// A synthetic claim for tests that exercise a room consumer (the anim-LOD gate's room leg)
-    /// without running the tracker. Not `#[cfg(test)]`: the consumer under test is
-    /// `benilla-app`'s, and a dependent crate does not compile this one's test cfg.
+    /// A synthetic claim for tests of a room consumer. Not `#[cfg(test)]`: the consumer under test
+    /// is `benilla-app`'s, and a dependent crate does not compile this one's test cfg.
     pub fn claimed(room: WmoRoom) -> Self {
         Self {
             room: Some(room),
@@ -117,34 +82,22 @@ pub struct WmoInteriorKeys {
     pub group_area_id: u32,
 }
 
-/// The probe height above the player's feet (yd) for the RENDER/AUDIO seed's down-ray
-/// ([`down_ray_seeds`] — chest/head-ish, the listener). The faces-only AREA/light legs do NOT use
-/// it: the client casts those from the position itself (`0x6a8a20`), and lifting
-/// the origin breaks the terrain race exactly where a hillside is buried ABOVE an interior floor —
-/// NSabbey's NW room sits cut into the hill (buried terrain local z ≈ 2.0 vs floor 0.3), so a
-/// feet+1.7 origin saw the buried terrain as the nearest surface and read the room as outdoors
-/// (director-caught flap, 2026-07-12). A ray from the feet can never hit terrain above its origin.
+/// Height (yd) above the feet of [`CurrentWmoInterior`]'s probe. The position-cast legs cast from
+/// the feet (`0x6a8a20`): a lifted origin can take terrain buried above a floor as nearest.
 pub const INTERIOR_PROBE_HEIGHT: f32 = 1.7;
 
-/// Float-safety lift (yd) for the position-cast legs: feet rest ON the floor plane (physics skin,
-/// server-snapped NPC z), and a coplanar `z <= eye.z` test must not lose the floor to a rounding
-/// hair. Far below any buried-terrain scale — semantically still "cast from the position".
+/// Float-safety lift (yd) for the position-cast legs: feet rest on the floor plane, and a coplanar
+/// `z <= eye.z` test must not lose the floor to rounding.
 pub(crate) const POSITION_PROBE_LIFT: f32 = 0.1;
 
-/// The **zone-text/area** indoor claim — the player's CGLight-node twin (`[node+0x90]` bit 0,
-/// `0x6a87f0`): the WMOAreaTable keys of the group owning the
-/// nearest **face** under the player, faces-only ([`area_down_ray`] — no portal leg, EXTERIOR
-/// groups excluded, terrain race, 1000 yd), or `None` = outdoors. This — not the render/audio
-/// seed [`CurrentWmoInterior`] — drives the leaf-area override (`terrain_stream`) and the
-/// `ZONE_CHANGED`/`ZONE_CHANGED_INDOORS` election + indoor naming (`area`). The two diverge
-/// exactly where the yard bug lived: a doorway portal under the eye seeds the RENDER flood
-/// without making you indoors.
+/// The zone-text indoor claim, the CGLight node's `[node+0x90]` bit 0 (`0x6a87f0`): the keys of
+/// the group owning the nearest face under the player (faces only, EXTERIOR excluded, terrain
+/// raced, 1000 yd), or `None` outdoors.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentAreaInterior(pub Option<WmoInteriorKeys>);
 
-/// Track the player's zone-text indoor claim ([`CurrentAreaInterior`]): per placed building, run
-/// the faces-only down-ray from the player's position; first interior claim wins. Camera fallback
-/// before login, like [`track_current_interior`].
+/// Track [`CurrentAreaInterior`]: per placed building, the faces-only down-ray from the player's
+/// position, first claim wins; the camera stands in before login.
 pub(super) fn track_area_interior(
     wmos: Res<Assets<WmoModel>>,
     viewer: Res<crate::view::Viewer>,
@@ -154,9 +107,7 @@ pub(super) fn track_area_interior(
     adt_tiles: Res<Assets<AdtTile>>,
     mut current: ResMut<CurrentAreaInterior>,
 ) {
-    // Cast from the POSITION (float-safety lift only) — the client's recipe (`0x6a8a20`); a lifted
-    // origin sees hillside buried ABOVE an interior floor and misreads outdoors
-    // (see [`POSITION_PROBE_LIFT`]).
+    // Cast from the position, lifted only for float safety, as the client does (`0x6a8a20`).
     let eye_world = if let Some(body) = viewer.at {
         body + Vec3::Y * POSITION_PROBE_LIFT
     } else if let Some(cam_t) = cam.iter().next() {
@@ -179,9 +130,8 @@ pub(super) fn track_area_interior(
             continue; // no face of this building can own the probe column
         }
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, eye_world, z));
-        // The zone-text law: `0x8` alone — a `0x40`-only street group IS "indoors" for area naming
-        // (`[node+0x90]` bit 0 is set before the `0x40` test; the light law differs, see
-        // [`indoor_verdict_at`]).
+        // The zone-text law is `0x8` alone: a `0x40`-only street group is indoors for naming
+        // (`[node+0x90]` bit 0 is set before the `0x40` test).
         if let Some(gi) = area_down_ray(
             &model.group_collision_tris,
             &model.group_collision_bounds,
@@ -204,14 +154,9 @@ pub(super) fn track_area_interior(
     }
 }
 
-/// Track which WMO interior the **player** is in: run every placed building's down-ray and
-/// publish the first interior claim. The probe is the player's position, not the camera — the
-/// client's audio listener sits at the character (`SoundListenerAtCharacter` default "1",
-/// `0x457890`) and the interior identity is character state (the minimap zone name),
-/// so a camera swinging through a wall must not flap the chapel's ambience (director-caught
-/// flicker, 2026-07-03). The camera is the fallback before login / detached free-fly.
-/// Independent of the PVS compute (which early-outs on portal-less models — a portal-less hut
-/// still has a floor to stand on; the *render* seed stays the camera, as the client's does).
+/// Track [`CurrentWmoInterior`] and [`PlayerWmoRoom`] from the character, where the client's audio
+/// listener sits (`SoundListenerAtCharacter` default 1, `0x457890`), not the camera, which stands
+/// in before login. Portal-less models count, unlike in the PVS.
 pub(super) fn track_current_interior(
     wmos: Res<Assets<WmoModel>>,
     viewer: Res<crate::view::Viewer>,
@@ -229,9 +174,8 @@ pub(super) fn track_current_interior(
     } else {
         return;
     };
-    // The terrain leg of the down-ray, sampled once for the eye's column (the client's `GetAreaID`
-    // races the same two probes at `0x670345`) — a mine tunnel under a hill must not claim the
-    // player standing on the grass above it.
+    // The terrain leg, sampled once for the column (`GetAreaID` races the same two probes,
+    // `0x670345`): a tunnel under a hill must not claim the player on the grass above it.
     let terrain = terrain_height_under(&streamer, &adt_tiles, eye_world);
     let mut found = None;
     let mut found_room = None;
@@ -251,7 +195,7 @@ pub(super) fn track_current_interior(
                 name_set: u32::from(inst.name_set),
                 group_area_id: model.group_nav.get(gi).map_or(0, |g| g.area_table_id),
             });
-            // The same claim as a placement identity — the liquid query's scope key.
+            // The same claim as a placement identity, the liquid query's scope key.
             found_room = Some(WmoRoom {
                 instance: entity,
                 group: gi as u16,
@@ -267,23 +211,14 @@ pub(super) fn track_current_interior(
     }
 }
 
-/// Squared distance (yd²) a unit must move before its room claim is re-rayed. A room changes at a
-/// doorway, not continuously, so this is a travel gate rather than a precision one: the claim can
-/// lag a transition by at most this distance, which for a swim/submersion verdict is well inside the
-/// wade band. Deliberately coarser than `interior::RESAMPLE_DIST_SQ` (the light classifier's ~0,
-/// which must not quantize a *continuous* MOCV field into steps — a room index has no such field).
+/// Squared distance (yd²) a unit must move before its room is re-rayed: a room changes at doorways,
+/// so the claim may lag a transition by this much, well inside the wade band.
 const UNIT_ROOM_RESAMPLE_DIST_SQ: f32 = 0.25 * 0.25;
 
-/// Maintain [`UnitWmoRoom`] on every net entity: the room its position stands in, from the same
-/// faces-only down-ray the zone-text claim uses ([`area_down_ray`], EXTERIOR `0x8` excluded, terrain
-/// raced) cast from the unit's own position.
-///
-/// The leg is the **position-cast faces** one, not the render seed's lifted eye + portal race: the
-/// client casts its position legs from the position itself (`0x6a8a20`), and a unit
-/// is a position, not a camera. Which leg the reference's *own* per-unit liquid depth uses — and
-/// whether it scopes to the containing GROUP rather than the placement — is the open half of
-/// decision 0696, re-asked; this is the claim that makes the query *scoped at all*, and it is
-/// re-pointable at one call site when that lands.
+/// Maintain [`UnitWmoRoom`] on every net entity with the faces-only down-ray of the zone-text
+/// claim, cast from the unit's own position as the client casts its position legs (`0x6a8a20`).
+/// Which leg the reference's per-unit liquid depth uses, and whether it scopes to the group rather
+/// than the placement, is untraced.
 pub(super) fn track_unit_interiors(
     mut commands: Commands,
     wmos: Res<Assets<WmoModel>>,
@@ -300,13 +235,10 @@ pub(super) fn track_unit_interiors(
 ) {
     let generation = residency.generation();
     for (entity, transform, body, claim) in &mut units {
-        // World position, not the local one: a mounted unit's `Transform` is seat-relative,
-        // and its room is decided where it actually stands.
+        // World position, not the local one: a mounted unit's `Transform` is seat-relative.
         let pos = transform.translation();
-        // The re-test gate: a settled unit in an unchanged world keeps its room for free. A
-        // building streaming in UNDER a standing NPC must still re-claim it — that is the whole
-        // point of the generation leg, and without it a creature spawned before its own dungeon
-        // would hold an "outdoors" claim and read the lake overhead forever.
+        // A settled unit keeps its room; the generation leg re-claims one a building streamed in
+        // under, or it would read the lake overhead forever.
         if let Some(claim) = claim.as_ref() {
             if claim.generation == generation
                 && pos.distance_squared(claim.at) < UNIT_ROOM_RESAMPLE_DIST_SQ
@@ -314,12 +246,8 @@ pub(super) fn track_unit_interiors(
                 continue;
             }
         }
-        // The under-floor fallback's reach for THIS body: the height of its own bound's centre
-        // above its origin, floored at [`ROOM_UNDER_FLOOR_TOLERANCE`]. A placed object's origin is
-        // wherever the artist put it *inside its own model*, so the middle of that model is a point
-        // the body genuinely occupies — self-scaling, and it cannot reach a floor the body does not
-        // already straddle. The flat tolerance alone left Orgrimmar's Onyxia trophy post (origin
-        // 3.25 yd under group 133's floor) still reading outdoors.
+        // The under-floor fallback reaches the body's bound centre, at least the tolerance: a
+        // point the body occupies, so it finds no floor the body does not straddle.
         let reach = body
             .bound
             .map(|b| transform.transform_point(Vec3::from(b.center)).y - pos.y)
@@ -337,8 +265,7 @@ pub(super) fn track_unit_interiors(
                     *claim = next;
                 }
             }
-            // `try_insert`: a unit despawning this frame (the net teardown) applies before this
-            // command, and the insert must not panic at apply time.
+            // `try_insert`: a unit despawned this frame by the net teardown must not panic here.
             None => {
                 commands.entity(entity).try_insert(next);
             }
@@ -346,31 +273,13 @@ pub(super) fn track_unit_interiors(
     }
 }
 
-/// The FLOOR on how far above its own origin a body's room claim looks for the surface it stands
-/// on, when the position cast found nothing at all below it ([`room_at`]'s second pass). The reach
-/// itself is per body — the height of its own bound's centre, see [`track_unit_interiors`] — and
-/// this is what a body with no bound yet, or a squat one, gets.
-///
-/// **A placed object's origin is wherever the artist put it, and for anything planted in the ground
-/// that is UNDER the surface** — a firepit's origin sits in the pit, a signpost's at the buried foot
-/// of its post. A ray down from such an origin passes beneath the floor the object stands on and
-/// finds nothing, so the body reads "outdoors" in the middle of a building. Orgrimmar: 32 of 133
-/// streamed bodies at once, measured 0.45–1.16 yd under their floor face.
-///
-/// Two yards covers that spread with margin and cannot reach the storey above — no room we draw is
-/// under two yards tall. A **fallback, not a lift**: it runs only where the position cast found no
-/// face at all, so it can turn "outdoors" into a room and can never move a body between two rooms it
-/// was already choosing from. The primary pass keeps [`POSITION_PROBE_LIFT`] and the buried-terrain
-/// race that constant was chosen for.
+/// The least reach (yd) of [`room_at`]'s second pass above a body's origin. A planted object's
+/// origin can sit under its floor (Orgrimmar's props, 0.45 to 1.16 yd); two yards covers that and
+/// reaches no storey above.
 pub(crate) const ROOM_UNDER_FLOOR_TOLERANCE: f32 = 2.0;
 
-/// The WMO room a world position stands in — the placement + group of the nearest **face** under it,
-/// faces-only ([`area_down_ray`], EXTERIOR `0x8` excluded, terrain raced), first claim wins; on a
-/// total miss, a second pass from `reach` higher catches a body whose origin is authored below the
-/// surface it stands on ([`ROOM_UNDER_FLOOR_TOLERANCE`]).
-///
-/// The shared body of the per-unit claim; the same shape as [`track_area_interior`]'s loop, returning
-/// the placement identity instead of the `WMOAreaTable` keys.
+/// The WMO room a world position stands in, by the faces-only ray; only on a miss, a second pass
+/// from `reach` higher finds a body whose origin sits below its floor.
 fn room_at(
     wmos: &Assets<WmoModel>,
     instances: &Query<(Entity, &WmoPortalInstance)>,
@@ -383,7 +292,7 @@ fn room_at(
         .or_else(|| room_cast(wmos, instances, streamer, adt_tiles, feet_world, reach))
 }
 
-/// One faces-only room cast from `feet_world + rise` — the shared body of [`room_at`]'s two passes.
+/// One faces-only room cast from `feet_world + rise`.
 fn room_cast(
     wmos: &Assets<WmoModel>,
     instances: &Query<(Entity, &WmoPortalInstance)>,
@@ -399,7 +308,7 @@ fn room_cast(
             continue;
         };
         if model.wmo_id == 0 {
-            continue; // the same placement set the player's own claim walks
+            continue; // as the player's own claim skips it
         }
         let local_from_world = inst.world_from_local.inverse();
         let probe_local = bevy_to_wow(local_from_world.transform_point3(probe_world));
@@ -425,21 +334,9 @@ fn room_cast(
     None
 }
 
-/// Whether a world position stands INDOORS **for the unit LIGHT law** — the nearest surface under
-/// it (cast from the position itself, [`POSITION_PROBE_LIFT`]) is a face of some placed WMO group
-/// whose flags carry neither EXTERIOR (`0x8`) nor EXTERIOR_LIT (`0x40`) ([`area_down_ray`], faces
-/// only, terrain-raced). This is the ENTITY light classifier's predicate (`crate::interior`): the
-/// client's classify `0x6a87f0` forks the node's LIGHTING class on `MOGI & 0x48` — both bits →
-/// the exterior leg (`or [node+0xc],0x4`: sun diffuse, MCSH 2.5/0.5 intensity, scene fog) — which
-/// DIVERGES from the zone-text indoor bit (`0x8` alone) exactly on the `0x40`-only city street
-/// groups: Stormwind's pavement and Orgrimmar's valleys are "indoors" for area naming yet sunlit
-/// (keying
-/// the light off the zone-text bit flat-lit every unit in those cities). The face geometry is
-/// robust exactly where group BOUNDING BOXES are not — a room's box bottom can float above its own
-/// walkable floor when the floor polys belong to a neighbouring group (NSabbey group 3: box min z
-/// 1.84 vs floor ≈0.3), which split a standing body's feet-level parts onto the exterior law
-/// (director-caught, 2026-07-12). Unlike the AREA claim ([`track_area_interior`]), a WMO without a
-/// `WMOAreaTable` identity still counts — lighting is about the room's geometry, not its name.
+/// Whether a world position is indoors for the unit light law: the nearest surface under it is a
+/// face of a WMO group with neither `0x8` nor `0x40`, the lighting-class fork on `MOGI & 0x48`
+/// (`0x6a87f0`). A WMO without a `WMOAreaTable` identity counts.
 pub fn indoors_at<'a>(
     wmos: &Assets<WmoModel>,
     instances: impl IntoIterator<Item = &'a WmoPortalInstance>,
@@ -461,77 +358,46 @@ pub fn indoors_at<'a>(
     )
 }
 
-/// Which ATTACH a light node uses to find its WMO group — the reference's `[node+0x90]` bit 13
-/// (`0x2000`), written once at node creation from the descriptor TYPEMASK (`0x613e10`/`0x670db0`)
-/// and read by the mode dispatch `0x6a86d0` (`6a8714 test ah,0x20`; `6a871c jmp 0x6a8c10` SET /
-/// `6a8721 jmp 0x6a8a20` CLEAR). **There is no subclass or vtable test anywhere in the dispatch** —
-/// the mode bit is the whole fork, so the two lanes are a property of the OBJECT KIND, not of the
-/// shading law (which stays one law for every entity M2; see [`crate::interior`]).
+/// Which attach a light node uses to find its WMO group: `[node+0x90]` bit `0x2000`, set at node
+/// creation from the typemask (`0x613e10`/`0x670db0`) and read by the dispatch `0x6a86d0`, which
+/// has no subclass test: the lane follows the object kind, not the shading law.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LightAttach {
-    /// Units, players, and ADT/WMO doodads — the down-ray attach `0x6a8a20`, cast from the node
-    /// POSITION (`[node+0xa8]`, the env-query position `0x6717d0` syncs at `671a48`).
+    /// Units, players and ADT/WMO doodads: the down-ray attach `0x6a8a20`, from the node position
+    /// (`[node+0xa8]`).
     DownRay,
-    /// GameObjects — the CONTAINMENT attach `0x6a8c10` → `0x6a8ed0`, whose segment starts at
-    /// `[node+0x5c]`: the node's world bounding-box **centre** (`0x6717d0` writes the world box to
-    /// `node+0x44` at `671973`, then `671978 call 0x621160` sums min+max and `× [0x7ffa24]=0.5`
-    /// lands the centre at `node+0x5c`). Its face query casts DOWN 1000 and, on a miss, **retries
-    /// UP 1000** (`6a908d..6a90c7`) — a GameObject may sit a hair under its own floor and still
-    /// belong to the room.
+    /// GameObjects: the containment attach `0x6a8c10` → `0x6a8ed0`, from the world bounding-box
+    /// centre (`[node+0x5c]`, `0x6717d0`); on a downward miss it retries 1000 yd up (`0x6a908d`).
     Containment,
 }
 
-/// A position's resolved interior LIGHT verdict — [`indoors_at`] plus, for the GameObject lane,
-/// the footprint bake ([`crate::interior`] folds it into the object's SH probe).
+/// A position's interior light verdict, with the footprint bake when indoors.
 pub enum IndoorVerdict {
-    /// No WMO face claim under the position — standing on/over open terrain: the exterior law
-    /// with the MCSH-driven 2.5/0.5 intensity.
+    /// No WMO face under the position: the exterior law, MCSH-driven 2.5/0.5 intensity.
     Outdoors,
-    /// The nearest claim is an outdoor-class WMO face (`MOGI & 0x48` — a street, deck, porch): the
-    /// exterior law at the FORCED-LIT 2.5 target — the terrain MCSH beneath the building is NOT
-    /// sampled. Byte-verified (0477 interim → 0480 confirmed): the shared down-ray attach
-    /// `0x6a8a20` sets skip-shadow `[node+0xd]|=0x2` on its WMO branch for EVERY node subclass
-    /// (`0x6a8bc7` — an earlier "doodad-only" reading was wrong) and clears it on the terrain
-    /// branch; the exterior intensity leg then commits constant 2.5 when set, samples MCSH only
-    /// when clear. The director's Booty Bay A/B (deck NPCs sunlit over shadowed buried terrain) was
-    /// this gate, not a decode error.
+    /// An outdoor-class WMO face (`MOGI & 0x48`) is nearest: the exterior law at the forced-lit
+    /// 2.5, not sampling the terrain MCSH beneath (`0x6a8a20` sets skip-shadow `[node+0xd] |= 0x2`
+    /// on its WMO branch for every node subclass, `0x6a8bc7`).
     OutdoorsOnWmo,
-    /// Indoors, but the footprint lane yields the day/night pair instead of a bake: the render-mesh
-    /// ray missed every MOCV face, or the hit face's MOPY bit 0x1 selects the exterior colours
-    /// (`0x6a8410`). The plain matte variant.
+    /// Indoors, but the footprint ray missed every MOCV face or the hit face's MOPY bit 0x1
+    /// selects the exterior colours (`0x6a8410`): the plain matte variant.
     DayNight,
-    /// Indoors over baked floor: the hit's barycentric MOCV bytes (the floor-168/cap-96 inputs)
-    /// plus the hit group's MOLR lobes in world (Bevy) space, colour × intensity.
+    /// Indoors over a baked floor: the hit's barycentric MOCV bytes and the hit group's MOLR lobes
+    /// in world (Bevy) space, colour × intensity.
     Baked {
         mocv: [u8; 3],
         lobes: Vec<PropLobeLight>,
     },
 }
 
-/// Resolve a position's interior light verdict: the [`down_ray_claim`] classify (collision faces,
-/// the `0x48` LIGHTING-class law — decision 0475, terrain race) runs per placement and the
-/// **nearest claim across placements wins** — the client's one global nearest-hit (a unit inside a
-/// Booty Bay hut sits in the same column as the city deck 30 yd below; the hut's floor must own
-/// the verdict regardless of instance iteration order). An outdoor-class winner is
-/// [`IndoorVerdict::OutdoorsOnWmo`]; an interior winner runs the FOOTPRINT ray on the same
-/// placement's render mesh + baked MOCV (the entity node's env-update attach `0x6717d0` →
-/// `0x69e4c0` — trace-decisive on the abbey INNBENCH draws). The MOLR gate is the FOOTPRINT
-/// hit's group — the group whose bake the sample took (the byte
-/// plumbing between the two rays is OPEN; the abbey benches satisfy both readings).
+/// A position's interior light verdict: the [`down_ray_claim`] classify runs per placement and the
+/// nearest claim across placements wins, the client's one global nearest hit. An interior winner
+/// runs the footprint ray on that placement's mesh (`0x6717d0` → `0x69e4c0`); the MOLR lobes come
+/// from the footprint hit's group, where the reference's link between the two rays is untraced.
 ///
-/// `anchor_world` is **the attach's own anchor**, not "the position": the node position for
-/// [`LightAttach::DownRay`], the model's world bounding-box CENTRE for
-/// [`LightAttach::Containment`] (see the enum for the bytes). A GameObject's origin routinely sits
-/// at or under its own floor — a Stratholme portcullis spawns 15 cm below the corridor slab — and
-/// a ray from there leaves the building entirely; the reference never casts from there.
-/// `Containment` also takes the reference's UPWARD retry on the footprint leg (`6a908d`), so an
-/// object resting a hair below its floor still bakes from it.
-///
-/// Returns the winning **room** alongside the verdict — the caller's own key for the placement that
-/// won, paired with the claim's group index — `None` on both outdoor arms. That pair is the
-/// reference's per-(instance, group) render record `P`: the light node's attach is what creates it
-/// (`0x685f85` → `[P+0x98]`), and it is the key the interior-FOG gate is asked at, separately from
-/// the light law. Callers that only want the bool pass `()` as the key.
+/// `anchor_world` is the attach's anchor ([`LightAttach`]). Also returns the winning room as
+/// `(key, group)`, or `None` outdoors: the per-(instance, group) render record the attach creates
+/// (`0x685f85`, `[P+0x98]`), where the interior-fog gate is asked. Pass `()` as the key to skip it.
 pub fn indoor_verdict_at<'a, K: Copy>(
     wmos: &Assets<WmoModel>,
     instances: impl IntoIterator<Item = (K, &'a WmoPortalInstance)>,
@@ -543,12 +409,8 @@ pub fn indoor_verdict_at<'a, K: Copy>(
     let probe_world = anchor_world + Vec3::Y * POSITION_PROBE_LIFT;
     let terrain = terrain_height_under(streamer, adt_tiles, probe_world);
     let mut best: Option<(DownRayClaim, &WmoModel, &WmoPortalInstance, [f32; 3], K)> = None;
-    // The containment lane's UPWARD retry (`0x6a8ed0`'s `6a9093 fadd ds:0x8022cc`): a GameObject's
-    // light node anchors at its authored-box centre, which for a particle-heavy model sits well
-    // BELOW the floor it stands on — 104 of Onyxia's lava traps anchor ~40 yd under the chamber
-    // (their authored box reaches 98 yd past their own geometry). The reference recovers by casting
-    // up; run it only when the whole downward pass came back empty, so a claim is never arbitrated
-    // against one made in the other direction. See [`up_ray_claim`].
+    // The containment lane's upward retry (`0x6a9093`, +1000 yd) runs only when the whole downward
+    // pass found nothing, so no claim is arbitrated against one cast the other way.
     let instances: Vec<(K, &WmoPortalInstance)> = instances.into_iter().collect();
     for retry_up in [false, true] {
         if retry_up && (best.is_some() || !matches!(attach, LightAttach::Containment)) {
@@ -598,16 +460,11 @@ pub fn indoor_verdict_at<'a, K: Copy>(
     if claim.outdoor {
         return (IndoorVerdict::OutdoorsOnWmo, None);
     }
-    // The ROOM the light node attached to, for every indoor verdict below. It is the ATTACH ray's
-    // group (`0x6a8a20`'s claim), not the footprint sample's: the reference's per-(instance,group)
-    // render record hangs off the node's attach, and the footprint leg is a later, separate ray
-    // that only picks the bake colours. The two agree on every floor where one face owns both.
+    // The room is the attach ray's group (`0x6a8a20`), not the footprint sample's: the render
+    // record hangs off the attach, and the footprint ray only picks the bake colours.
     let room = Some((key, claim.group));
-    // Indoors — run the footprint sample on the winning placement's render mesh. The containment
-    // lane retries UPWARD on a miss (`6a908d..6a90c7`); the down-ray lane has no such leg here (its
-    // own retry is a second DOWNWARD cast from 1000 above, `6a8ab0`, which cannot reach a face
-    // above the anchor either). Bounded to the placement the claim already won: an unbounded
-    // upward claim would let a bridge deck 40 yd overhead adopt a unit standing in the open.
+    // The footprint sample, on the winning placement only (an unbounded upward retry would let a
+    // deck overhead adopt a unit in the open); the down-ray lane never retries upward (`0x6a8ab0`).
     let sample = footprint_sample(model, probe_local).or_else(|| {
         matches!(attach, LightAttach::Containment)
             .then(|| footprint_sample_above(model, probe_local))
@@ -638,14 +495,10 @@ pub fn indoor_verdict_at<'a, K: Copy>(
     (IndoorVerdict::Baked { mocv, lobes }, room)
 }
 
-/// The footprint down-ray: the nearest render-mesh face below `probe_local` across the model's
-/// interior groups' [`FootprintTris`] — its group index, the hit's barycentric MOCV (rounded to
-/// bytes: the reference's `0x6a77e0` consumes a byte colour), and whether the face's MOPY bit 0x1
-/// selects the day/night lane. The candidate set is pre-filtered at parse (COLLISION/VISITED faces
-/// rejected, the client's BSP-walk mask 0x88 — `wmo_group_footprint_tris`); an exact-distance tie
-/// keeps the LATER face, the client's inclusive `test ah,0x41; jp` compare (`0x6bc780` — its BSP
-/// traversal order is not modelled here, so which face is "later" can differ; after the 0x88 filter
-/// no observed floor still carries coplanar ties).
+/// The footprint down-ray: the nearest render face below the probe in the interior groups (faces
+/// pre-filtered by the client's BSP mask 0x88), with its group, its barycentric MOCV in bytes
+/// (`0x6a77e0` takes a byte colour) and whether MOPY bit 0x1 selects day/night. An exact tie keeps
+/// the later face (`0x6bc780`), in face order rather than BSP order; no floor was seen with one.
 pub(super) fn footprint_sample(
     model: &WmoModel,
     probe_local: [f32; 3],
@@ -653,38 +506,24 @@ pub(super) fn footprint_sample(
     footprint_scan(model, probe_local, false, None).map(|(g, c, m, _)| (g, c, m))
 }
 
-/// The footstep surface's **material ray** — the second of the client's two rays.
-/// The first (the collision-face down-ray that races terrain) has already picked `group`; this
-/// re-casts the same column over that group's RENDER faces and reads the winning face's
-/// `TerrainType` id: `MOPY[face].material_id → MOMT[id].ground_type` (`0x6a26c0`).
-///
-/// It is the *same* candidate set the lighting sample walks, and not by coincidence: both are the
-/// client's `0x88`-reject face walk ([`FOOTPRINT_REJECT`](benilla_formats::FootprintTris) — a
-/// COLLISION or VISITED face is invisible to either). The two rays deliberately see different
-/// geometry, which is why a floor authored as a render sheet over a separate collision sheet
-/// resolves its *material* off the render layer while the arbitration used the collision one.
-///
-/// `None` = the client's `−1`: no accepted render face under the probe in that group, or a
-/// material id past the root's MOMT. The caller must read that as **silent**, never as a reason to
-/// fall back to the terrain leg — the building won the column either way.
+/// The footstep material ray, the second of the client's two: re-cast over `group`'s render faces,
+/// the winning face's `MOPY` material → `MOMT` ground type (`0x6a26c0`). `None` is the client's
+/// `-1`, silent: never a reason to fall back to terrain, since the building won the column.
 pub(crate) fn surface_terrain_sample(
     model: &WmoModel,
     group: usize,
     probe_local: [f32; 3],
 ) -> Option<u32> {
     let (_, _, _, material) = footprint_scan(model, probe_local, false, Some(group))?;
-    // The client indexes MOMT unchecked; the assets hold the invariant (every `0xFF` face carries
-    // MOPY `0x08` and was dropped at parse). We bounds-check rather than inherit a latent OOB.
+    // The client indexes MOMT unchecked, safe because every `0xFF` face was dropped at parse.
     model
         .material_ground_type
         .get(usize::from(material))
         .copied()
 }
 
-/// The containment attach's **upward retry** (`6a908d`: the down leg missed, so the segment is
-/// rebuilt from the anchor to `anchor.z + 1000` and re-cast): the nearest render-mesh face ABOVE
-/// the probe, same group/MOCV/MOPY answer as [`footprint_sample`]. A GameObject whose origin — or
-/// even whose box centre — settles below its own floor is still lit by that floor.
+/// The containment attach's upward retry (`0x6a908d`, re-cast to `anchor.z + 1000`): the nearest
+/// render face above the probe.
 pub(super) fn footprint_sample_above(
     model: &WmoModel,
     probe_local: [f32; 3],
@@ -692,10 +531,9 @@ pub(super) fn footprint_sample_above(
     footprint_scan(model, probe_local, true, None).map(|(g, c, m, _)| (g, c, m))
 }
 
-/// The shared body of the footprint/material legs: `up` flips which side of the probe a face must
-/// lie on and which of the candidates wins (nearest, in the cast's own direction); `only_group`
-/// restricts the scan to a single group, which is what the material ray needs — the arbitration
-/// has already chosen the group, and the nearest render face *overall* can belong to another one.
+/// The footprint and material rays: `up` flips which side of the probe a face must lie on (the
+/// nearest in the cast's direction wins); `only_group` holds the material ray to the group the
+/// arbitration chose, since the nearest render face overall can belong to another.
 fn footprint_scan(
     model: &WmoModel,
     probe_local: [f32; 3],
@@ -709,20 +547,16 @@ fn footprint_scan(
         if only_group.is_some_and(|g| g != gi) {
             continue;
         }
-        // Broad phase on the load-derived face bounds (the 0330 rule — from the faces, never an
-        // authored box, so the cull is exact): a down-ray at (px, py) can hit no face of a group
-        // whose XY face bounds exclude the column, and no face whose LOWEST vertex is already
-        // above the probe (interpolated z ≥ the face set's min z). Without this every re-rayed
-        // entity scanned every interior group of the whole model — the Stormwind live-frame cost.
+        // Broad phase on the face-derived bounds, never an authored box, so the cull is exact: skip
+        // a group whose XY bounds exclude the column or whose faces all lie past the probe.
         if let Some(Some((min, max))) = model.group_footprint_bounds.get(gi) {
             let past_probe = if up { max[2] < pz } else { min[2] > pz };
             if px < min[0] || px > max[0] || py < min[1] || py > max[1] || past_probe {
                 continue;
             }
         }
-        // The narrow phase: the group's column index when it has one, else every face. The index
-        // yields a superset in ascending face order (`column_grid`), so the exact-z tie below —
-        // "the LATER face wins" — resolves exactly as the linear scan resolved it.
+        // Narrow phase: the column index, else every face. The index yields faces in ascending
+        // order, so the later-face-wins tie resolves as the linear scan does.
         let mut consider = |ti: usize| {
             let Some(tri) = fp.indices.get(ti * 3..ti * 3 + 3) else {
                 return;
@@ -784,12 +618,8 @@ fn footprint_scan(
     })
 }
 
-/// Whether a probe column (model-local WoW coords) can hit any of a building's collision faces:
-/// inside the whole-model face AABB ([`WmoModel::collision_bounds`]) in XY, with faces reaching
-/// at/below the probe. Exact-conservative for the faces-only down-ray — `floor_z_at` accepts only
-/// inside a triangle's XY projection at z ≥ the set's min — so a skipped instance could never have
-/// answered. This is what keeps a camera in open country at one AABB test per resident building
-/// instead of a full face scan (the 2026-07-12 fps regression).
+/// Whether a probe column (model-local) can hit any of a building's collision faces: inside the
+/// face AABB in XY with faces on the cast's side. Exact, and one test per building in open country.
 fn column_in_collision_bounds(
     bounds: Option<([f32; 3], [f32; 3])>,
     probe: [f32; 3],
@@ -800,20 +630,14 @@ fn column_in_collision_bounds(
             && probe[0] <= max[0]
             && probe[1] >= min[1]
             && probe[1] <= max[1]
-            // The cast's own half-space: a DOWNWARD ray can hit nothing in a building that ends
-            // above the probe, an UPWARD one nothing in a building that ends below it. Keeping the
-            // downward spelling for the upward retry is what silently kept that retry inert — a
-            // probe 40 yd under Onyxia's floor sits below the lair's own collision floor, so the
-            // instance was culled here and the retry never ran on it at all.
+            // The cast's own half-space: a downward ray hits nothing in a building wholly above the
+            // probe, an upward one nothing in a building wholly below it.
             && if up { max[2] >= probe[2] } else { min[2] <= probe[2] }
     })
 }
 
-/// The terrain surface under `eye_world` (given as raw WoW `z`), expressed in a placement's model-space
-/// `z` — the frame [`down_ray_pick`](seed::down_ray_pick) races in. The surface point sits in the eye's
-/// own column, so it maps straight through the inverse placement: MODF placements carry yaw only, and
-/// under a yaw a world-vertical column is a model-vertical one. (A pitched/rolled placement would tilt
-/// the down-ray itself, an approximation the whole probe already makes.)
+/// The terrain surface under `eye_world` (raw WoW `z`) as a placement's model-space `z`, the frame
+/// the down-ray races in; exact for a yaw-only placement, where a vertical column stays vertical.
 pub fn terrain_z_local(local_from_world: &Affine3A, eye_world: Vec3, terrain_wow_z: f32) -> f32 {
     let eye_wow = bevy_to_wow(eye_world);
     let surface = wow_to_bevy([eye_wow[0], eye_wow[1], terrain_wow_z]);
@@ -826,7 +650,7 @@ mod tests {
     use benilla_assets::footprint_tri_bounds;
     use benilla_formats::FootprintTris;
 
-    /// A model with nothing but footprint groups — the sample under test reads only those.
+    /// A model with nothing but footprint groups, all the sample reads.
     fn bare_model() -> WmoModel {
         WmoModel {
             wmo_id: 0,
@@ -863,8 +687,7 @@ mod tests {
     }
 
     /// Two single-face footprint groups: group 0 owns the floor under the probe (z = 0), group 1
-    /// sits far away in XY with a HIGHER face (z = 5) that would shadow group 0's hit if a broken
-    /// cull ever let its column test slip.
+    /// sits far off in XY with a higher face (z = 5) that would shadow it through a broken cull.
     fn two_group_footprints() -> Vec<Option<FootprintTris>> {
         let face = |offset: [f32; 3], material: u8| FootprintTris {
             positions: vec![
@@ -883,9 +706,8 @@ mod tests {
         ]
     }
 
-    /// A dungeon-scale footprint group: a `n × n` grid of floor quads at a sawtooth height, so a
-    /// column's answer depends on WHICH face wins, not merely on hitting something. Big enough
-    /// (>= 64 faces) that [`ColumnGrid::build`] actually indexes it.
+    /// A dungeon-scale footprint group: an `n × n` grid of floor quads at a sawtooth height, so a
+    /// column's answer depends on which face wins; 64 faces or more, so `ColumnGrid` indexes it.
     fn slab_field(n: usize) -> FootprintTris {
         let (mut positions, mut indices, mut mocv, mut mopy_flags) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -893,7 +715,7 @@ mod tests {
         for iy in 0..n {
             for ix in 0..n {
                 let (x, y) = (ix as f32 * 4.0, iy as f32 * 4.0);
-                // Sawtooth z so neighbouring quads differ — a mis-picked face changes the verdict.
+                // Sawtooth z: a mis-picked face changes the verdict.
                 let z = ((ix + iy) % 3) as f32 * 0.5;
                 let base = positions.len() as u16;
                 positions.extend_from_slice(&[
@@ -918,11 +740,8 @@ mod tests {
         }
     }
 
-    /// **The material ray reads the hit FACE's material, inside the group the arbitration chose.**
-    /// The group restriction is the whole point: the first ray already picked the
-    /// group off the *collision* faces, so a nearer render face in a different group must not steal
-    /// the answer. And a group with no face under the column is the client's `−1` — silent — not an
-    /// invitation to go looking elsewhere.
+    /// The material ray reads the hit face's material inside the group the arbitration chose; a
+    /// group with no face under the column is silent, the client's `-1`.
     #[test]
     fn material_ray_resolves_per_group_and_bounds_checks() {
         let mut model = bare_model();
@@ -930,27 +749,19 @@ mod tests {
         model.group_footprint_bounds = footprint_tri_bounds(&model.group_footprints);
         // A root MOMT: material 0 unauthored ("None"), 1 = Wood (TerrainType 4), 2 = Snow (3).
         model.material_ground_type = vec![10, 4, 3];
-        // Over group 0's floor, asking about group 0: its own face's material.
         assert_eq!(surface_terrain_sample(&model, 0, [0.0, 0.0, 2.0]), Some(4));
-        // The same column asked about group 1 — whose only face is 100 yd away — is silent, and
-        // must NOT wander into group 0's face.
+        // Group 1's only face is 100 yd away: silent, never group 0's face.
         assert_eq!(surface_terrain_sample(&model, 1, [0.0, 0.0, 2.0]), None);
-        // Group 1's own column resolves group 1's material.
         assert_eq!(
             surface_terrain_sample(&model, 1, [103.0, 103.0, 7.0]),
             Some(3)
         );
-        // A material id past the root's MOMT is the bounds check the client doesn't do: silent,
-        // never an out-of-range index.
+        // A material id past the root's MOMT is silent.
         model.material_ground_type = vec![10];
         assert_eq!(surface_terrain_sample(&model, 0, [0.0, 0.0, 2.0]), None);
     }
 
-    /// **The column index never changes a verdict.** Same model, same columns, indexed vs not:
-    /// identical `(group, MOCV, MOPY)` every time — including the exact-z ties the sawtooth field
-    /// manufactures, where the answer depends on the "later face wins" rule the index's ascending
-    /// order preserves. This is what lets the index be a pure accelerator for the lighting lane
-    /// (the 0330/0364 exactness contract, one rung deeper: inside the group, not just at it).
+    /// The column index never changes a verdict, the sawtooth's exact-z ties included.
     #[test]
     fn footprint_column_index_is_exact() {
         let mut model = bare_model();
@@ -979,44 +790,38 @@ mod tests {
         );
     }
 
-    /// The broad phase is a pure skip, never a re-ranking: the verdict with load-derived face
-    /// bounds equals the verdict with NO bounds at all (the fixtures' `Vec::new()` — every group
-    /// scanned). Pins the 0364 footprint cull's exactness contract, the 0330 argument one lane
-    /// over: a column outside a group's face bounds could never have answered.
+    /// The broad phase is a pure skip: the verdict with face bounds equals the verdict with none.
     #[test]
     fn footprint_bounds_cull_is_exact() {
         let mut model = bare_model();
         model.group_footprints = two_group_footprints();
-        // Probe over group 0's face, above it. Unculled baseline first (no bounds).
+        // Over group 0's face; the unculled baseline first.
         let probe = [-1.0, -1.0, 2.0];
         let unculled = footprint_sample(&model, probe);
         assert_eq!(unculled, Some((0, [10, 20, 30], false)));
         model.group_footprint_bounds = footprint_tri_bounds(&model.group_footprints);
         assert_eq!(footprint_sample(&model, probe), unculled);
-        // Between the groups: neither owns the column — both agree on a miss.
+        // Between the groups: both agree on a miss.
         model.group_footprint_bounds = Vec::new();
         assert_eq!(footprint_sample(&model, [50.0, 50.0, 2.0]), None);
         model.group_footprint_bounds = footprint_tri_bounds(&model.group_footprints);
         assert_eq!(footprint_sample(&model, [50.0, 50.0, 2.0]), None);
-        // Below every face: the bounds' min-z leg and the scan agree on a miss.
+        // Below every face: the min-z leg and the scan agree on a miss.
         model.group_footprint_bounds = Vec::new();
         assert_eq!(footprint_sample(&model, [-1.0, -1.0, -1.0]), None);
         model.group_footprint_bounds = footprint_tri_bounds(&model.group_footprints);
         assert_eq!(footprint_sample(&model, [-1.0, -1.0, -1.0]), None);
     }
 
-    /// **The containment attach's upward retry** (`6a908d..6a90c7`): the down leg missed, so the
-    /// segment is re-cast toward `anchor.z + 1000` and the nearest face ABOVE answers — with the
-    /// same group / MOCV / MOPY it would have given from below. This is the leg a GameObject
-    /// resting a hair under its own floor needs; the down-ray lane never takes it.
+    /// The containment attach's upward retry (`0x6a908d`): after a downward miss the nearest face
+    /// above answers, with the group, MOCV and MOPY it gives from below.
     #[test]
     fn the_upward_retry_finds_the_floor_a_sunk_object_sits_under() {
         let mut model = bare_model();
         model.group_footprints = two_group_footprints();
         model.group_footprint_bounds = footprint_tri_bounds(&model.group_footprints);
 
-        // Group 0's face is at z = 0, over the column (-1,-1). Sit 2 cm UNDER it, as a portcullis
-        // spawned below its own slab does.
+        // 2 cm under group 0's face at z = 0, as a portcullis spawned below its own slab sits.
         let sunk = [-1.0, -1.0, -0.02];
         assert_eq!(
             footprint_sample(&model, sunk),
@@ -1028,7 +833,7 @@ mod tests {
             Some((0, [10, 20, 30], false)),
             "the retry finds the slab it is sunk into, and reads the same bake"
         );
-        // From above, the two legs swap roles — the retry must not become a second downward scan.
+        // From above the legs swap roles: the retry must not become a second downward scan.
         let over = [-1.0, -1.0, 2.0];
         assert_eq!(
             footprint_sample(&model, over),
@@ -1039,13 +844,11 @@ mod tests {
             None,
             "nothing above the probe, so the retry declines rather than re-finding the floor"
         );
-        // The upward leg honours the broad phase the same way: group 1's face (z = 5) sits far off
-        // in XY, so a column that misses it in XY misses it looking up too.
+        // The upward leg honours the broad phase: group 1's face (z = 5) is off this column in XY.
         assert_eq!(footprint_sample_above(&model, [-1.0, -1.0, 1.0]), None);
     }
 
-    /// The derived bounds cover only vertices a face actually references — an orphan vertex
-    /// (parsed but unindexed) must not inflate the cull box.
+    /// The derived bounds cover only vertices a face references: an orphan must not inflate them.
     #[test]
     fn footprint_bounds_ignore_unreferenced_vertices() {
         let mut fps = two_group_footprints();

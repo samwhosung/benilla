@@ -1,28 +1,9 @@
-//! The faithful **FFXGlow** post pass — the reference's full-screen glow
-//! (`FFXEffects.cpp` / `FFXGlow.bls`), replacing the Bevy-`Bloom` approximation and its two
-//! eye-tuned constants.
-//!
-//! Pipeline (all byte-grounded — the shipped ARB programs):
-//! scene → ½ → ¼ downsample (dims floored at 8, `0x6cdb40`) → separable Gauss4
-//! (weights ⅛ ⅜ ⅜ ⅛, shipped constants) → `out = screen + w·blur²` in gamma bytes, `w` = the
-//! per-zone `LightParams.glow` weight (authored data; the ONLY input, no knobs). The gamma-space
-//! byte math and the square-law are in `shaders/ffx_glow.wgsl`.
-//!
-//! This is the frame's sole glow pass — it won the A/B against Bevy's `Bloom`, and that fallback
-//! (plus its debug toggle) is gone. Applied to both the world camera and the portrait-booth bake
-//! cameras (`portrait::mod`): the booth rides the same final node so its bake reads at exact world
-//! parity, the FFXGlow combine owning the frame's ONE gamma decode.
-//!
-//! **What a bake does NOT inherit.** The node's two other lanes are keyed on the *viewer's own
-//! state*, not on the scene — the drunk/underwater haze and the ghost's FFXDeath combine — and the
-//! reference runs its FFX pass inside the WorldFrame's paint, with every UI frame compositing
-//! afterwards. [`FfxGlow::state_scale`] is that whole class in one field, `0` on every bake.
-//!
-//! **Two nodes since decision 2234.** The world view's node runs the three filter passes and,
-//! for a view nobody claims, the combine where [`crate::final_pass`] says. The player-UI camera
-//! claims the world view ([`FfxBackdrop`]) and draws the combine itself, first in its own main
-//! pass, straight into its byte target: the world enters the interface's buffer with no picture
-//! in between — no full-window float image written by one camera and read back by the next.
+//! The reference's full-screen glow (`FFXGlow.bls`): the scene is box-downsampled to ¼ in one
+//! pass (dims floored at 8, `0x6cdb40`), blurred by Gauss4 H then V (weights ⅛ ⅜ ⅜ ⅛), and
+//! combined as `lerp(screen, blur, z) + w·blur²` in gamma bytes (`shaders/ffx_glow.wgsl`), `w` the
+//! zone glow and `z` the haze. The combine also owns the frame's one gamma decode. A world view
+//! the player-UI camera claims ([`FfxBackdrop`]) runs only the filter passes, and the UI camera
+//! draws its combine.
 
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::core_pipeline::core_2d::Transparent2d;
@@ -49,104 +30,54 @@ use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use crate::final_pass::FinalPassTarget;
 use crate::view::WorldCamera;
 
-/// Marks a camera rendering with the faithful FFXGlow pass (extracted to the render world).
-///
-/// The pass is TWO things in one: the frame's single gamma→linear decode (mandatory on every view
-/// that draws our gamma-byte materials) and the glow add on top. `gain_scale`
-/// separates them: it multiplies the zone's [`FfxGlowGain`] for this view, so `0.0` keeps the
-/// decode and drops the glow.
+/// A camera running the FFXGlow pass: the frame's one gamma→linear decode, plus the glow add.
 #[derive(Component, Clone, Copy, ExtractComponent)]
 pub struct FfxGlow {
-    /// Per-view multiplier on the zone glow weight. See [`Self::WORLD`] / [`Self::UI_PANE`].
+    /// The per-view multiplier on the zone glow weight; `0.0` keeps the decode, drops the glow.
     pub(crate) gain_scale: f32,
-    /// **Which FFX pass pair this view runs**, and therefore what drives the combine's `y` (the
-    /// FFXDeath gate) and `z` (the haze mix) — see [`FfxState`].
-    ///
-    /// **The law, and why it is ONE field.** The reference runs its FFX pass inside the
-    /// WorldFrame's own paint — a BEGIN/END pair, `0x6cd890`/`0x6cda70`, bracketed at
-    /// `0x48350e`/`0x48379d` inside the one paint method `0x483460`. It **cannot reach a bake**,
-    /// for reasons that need no frame ordering: the pass's
-    /// render targets come from three module globals (`0xce8b5c` full, `0xce8ae8` quarter,
-    /// `0xce8b98` backbuffer) and it never observes the ambient binding — while the reference's
-    /// own portrait bake `0x524f60` binds no target at all and *copies* the framebuffer corner
-    /// out (`0x58acd0`/`0x449bf0`), so the pixels it keeps are pre-pass in every ordering.
-    ///
-    /// The binary does not separate the two lanes: the haze is `primary.z` of the glow combine
-    /// `0x6cb020`, which shares the single active-pass slot `0xce8bb4` with the death pass and
-    /// runs through the same bracket into the same three targets. So they are **one class**, and
-    /// this is one field. The zone glow is not in it (authored scene data, and a bake wants world
-    /// parity for it), which is why [`Self::gain_scale`] stays separate.
-    ///
-    /// The haze had its own `haze_scale` and the death gate had none, so a released ghost's
-    /// portraits baked through the FFXDeath combine and came back steel-blue luma (report B49,
-    /// decision 1481). Naming the *class* rather than the member was the fix; naming the **pass
-    /// pair** is the same fix one step further, and it is the reference's own
-    /// shape — see [`FfxState`].
+    /// Which FFX pass pair this view runs, and so what drives the combine's death gate `y` and
+    /// haze `z`. The zone glow is scene data, outside it, so a bake keeps it.
     pub(crate) state: FfxState,
 }
 
-/// **Which of the reference's FFX pass pairs a view runs.** The binary builds *two*, and the
-/// active-pass slot `[0xce8bb4]` holds whichever the screen that is painting installed:
-///
-/// - the **WorldFrame** pair — `0x6cc130` CFFXGlow → `[0xb4b350]`, `0x6cc690` CFFXDeath →
-///   `[0xb4b39c]`, built at `0x481c46`; selected by `0x5de9c0` off `PLAYER_FLAGS_GHOST`;
-/// - the **glue** pair — `[0xb414c4]` glow / `[0xb41468]` death, built at CGlueMgr init
-///   `0x46a723`/`0x46a752`; selected by the select build's tail `0x472fd9 test dh,0x20` off the
-///   selected roster record's `CHARSELECT+0xfc & 0x2000`.
-///
-/// benilla's views coexist where the reference's screens take turns, so what the reference
-/// expresses as one global slot written by whoever paints, we express as a property of the view.
-/// That is *why* this is an enum and not a scale: a bake's [`Self::None`] cannot inherit a
-/// player-state lane by arithmetic accident, which is the invariant decision 1481 legislated after
-/// report B49, now structural.
+/// Which of the reference's two FFX pass pairs a view runs. The reference keeps the painting
+/// screen's pair in one active-pass slot `[0xce8bb4]`; our views coexist, so it is per view.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FfxState {
-    /// The **WorldFrame** pair — the live player's own state: the ghost death combine
-    /// ([`FfxDeathFade`], off `PLAYER_FLAGS_GHOST`) and the drunk/underwater haze
-    /// ([`FfxHazeMix`]). The true world view only.
+    /// The WorldFrame pair (`0x6cc130` CFFXGlow → `[0xb4b350]`, `0x6cc690` CFFXDeath →
+    /// `[0xb4b39c]`, built at `0x481c46`): the ghost death combine ([`FfxDeathFade`]) and the
+    /// drunk/underwater haze ([`FfxHazeMix`]) of the live player. The world view only.
     Player,
-    /// The **glue** pair — the death combine iff the SELECTED ROSTER ROW is a ghost
-    /// ([`GlueFfx::death`]), and no haze: a glue screen has no drunk player and no camera in a
-    /// liquid, and the reference's glue pass pair carries no haze lane to read.
+    /// The glue pair (`[0xb414c4]` glow, `[0xb41468]` death, built at `0x46a723`/`0x46a752`): the
+    /// death combine when the selected roster row is a ghost ([`GlueFfx::death`]), and no haze.
     Glue,
-    /// Neither — a bake standing in for a 1.12 UI model widget, which the reference composites
-    /// *after* the WorldFrame's own FFX bracket and which therefore sees no pass state at all.
+    /// Neither: a bake standing in for a UI model widget. The reference's pass runs inside the
+    /// WorldFrame paint (`0x6cd890`/`0x6cda70`, at `0x48350e`/`0x48379d` in `0x483460`) on its own
+    /// targets (`0xce8b5c`, `0xce8ae8`, `0xce8b98`), and its portrait bake `0x524f60` copies its
+    /// pixels out of the framebuffer (`0x58acd0`/`0x449bf0`), so a bake never carries the pass.
     None,
 }
 
 impl FfxGlow {
-    /// The reference's own full-screen glow, at the zone's authored weight — the world camera:
-    /// zone glow AND the player-state passes (drunk / camera-eye-submerged blur, ghost death
-    /// combine). The only view that carries the latter.
+    /// The world camera: the zone glow and the live player's pass pair.
     pub const WORLD: Self = Self {
         gain_scale: 1.0,
         state: FfxState::Player,
     };
-    /// The **glue screens' own** fullscreen render (login / create / character select) — the
-    /// reference's glue pass pair, installed by CGlueMgr and applied around the glue scene's paint
-    /// (`0x46fad3 call 0x6cd890` … `0x46fae0 jmp 0x6cda70`). It is not a bake standing in for a UI
-    /// widget: it is the screen, so it runs the zone glow AND, for a ghost selection, the death
-    /// combine — while the GlueXML frames over it composite afterwards, untinted, exactly as the
-    /// reference's character list and buttons do.
+    /// The glue screens' scene: the zone glow and the glue pair, around the glue paint (`0x46fad3`
+    /// calls `0x6cd890`, `0x46fae0` jumps to `0x6cda70`); GlueXML composites after, untinted.
     pub const GLUE_SCENE: Self = Self {
         gain_scale: 1.0,
         state: FfxState::Glue,
     };
-    /// A portrait/booth bake at world parity for *lighting and glow* — but never
-    /// a player-state pass: a bake stands in for a UI model widget, which the reference
-    /// composites after the WorldFrame's FFX pass. So a drunk player's unit frame stays sharp
-    /// while the world swims, and a **ghost's portrait keeps its living face** while the world
-    /// goes steel-blue (report B49).
+    /// A portrait bake: the zone glow at world parity and no player-state pass, so a ghost's
+    /// portrait keeps its living face and a drunk player's unit frame stays sharp.
     pub const BOOTH: Self = Self {
         gain_scale: 1.0,
         state: FfxState::None,
     };
-    /// **Decode only, no glow** — for a bake that stands in for a 1.12 *UI model widget*. The
-    /// reference applies its FFX pass inside the WorldFrame's own paint (the `0x6cd890`/`0x6cda70`
-    /// BEGIN/END bracket at `0x48350e`/`0x48379d`); every UI frame
-    /// paints afterwards, at its own strata, so a `<PlayerModel>` pane is composited over an
-    /// already-glowed world and never glows itself. (The give-away in-game: the reference's chat
-    /// text and buttons don't bloom.)
+    /// Decode only, no glow: a bake standing in for a UI model widget (a `<PlayerModel>` pane),
+    /// which the reference paints after the WorldFrame's FFX pass, so it never glows.
     pub const UI_PANE: Self = Self {
         gain_scale: 0.0,
         state: FfxState::None,
@@ -159,96 +90,47 @@ impl Default for FfxGlow {
     }
 }
 
-/// **A 2D camera whose ground is the world's FFX combine** — the player-UI
-/// camera.
-///
-/// The world reaches the interface's byte buffer as the FIRST DRAW of this camera's main pass:
-/// the combine of the view `source` names, rendered straight into this view's main texture in
-/// the UI lane's terms — the gamma byte, no decode ([`FfxCombineKey::gamma_out`]) — before
-/// anything the camera draws itself, inside the same pass ([`FfxTransparent2dNode`]). What that replaces is a picture: the combine used to write a full-window float
-/// image that the UI pass then drew as its first quad, one write and one read of every pixel at
-/// eight bytes each, for a value the quad re-encoded straight back to the byte the combine had
-/// computed.
-///
-/// `source` is the world camera drawing this frame — its main-world entity — or `None` when
-/// none is (the glue screens, the loading screen, a gated camera): the pass then does nothing
-/// and the camera's own clear is the ground, exactly as the quad's absence was. The render world
-/// resolves it to the view that actually rendered this frame ([`prepare_backdrops`]): a camera
-/// that is active but was not extracted — its target's image not prepared yet, a spawn frame —
-/// is not a source, so the pass never samples a main texture older than the frame. The component
-/// itself stays on the camera so its pair of combine pipelines is specialised on the camera's
-/// first frame, before any world exists to hitch on their compile.
-///
-/// The world view it names keeps its three filter passes — the ¼-res blur this combine samples
-/// — and runs no combine of its own: nothing writes its camera's target, which is a size-carrier
-/// only (`benilla_app::world_backdrop`). Its main texture is read unflipped, so a claimed camera
-/// runs `CameraOutputMode::Skip`.
+/// The player-UI camera's ground: the combine of the world view `source` names, drawn first in
+/// its main pass as the gamma byte ([`FfxTransparent2dNode`]). That world view runs no combine of
+/// its own, and runs `CameraOutputMode::Skip`, since its main texture is read unflipped.
 #[derive(Component, Clone, Copy, Default, ExtractComponent)]
 pub struct FfxBackdrop {
-    /// The world camera whose combine this camera runs — a main-world entity — or `None` while
-    /// no world is drawing.
+    /// The world camera drawing this frame (main-world entity). While `None` the camera's own
+    /// clear is the ground; the component stays so its pipelines compile before any world exists.
     pub source: Option<Entity>,
 }
 
-/// The per-zone glow weight `w` (`LightParams.glow` — authored data, synced from
-/// [`crate::lighting::WowLighting`] every frame).
+/// The glow weight `w`: the live `LightParams.glow`, synced every frame by [`sync_gain`].
 #[derive(Resource, Clone, ExtractResource)]
 pub struct FfxGlowGain(pub f32);
 
-/// The FFXDeath gate: `1.0` while the
-/// player is a released ghost (`0x5de9c0`) — the combine swaps to the FFXDeath program whole —
-/// else `0.0`.
-/// INSTANT on both edges (the client has no time ramp; the ghost tint is a shader constant).
-/// Driven by `benilla-app`'s death arc off `PLAYER_FLAGS_GHOST`; uploaded as the combine
-/// uniform's `y`, scaled per view by [`FfxGlow::state_scale`] — it is a **player-state** pass and
-/// reaches the world view only.
+/// The FFXDeath gate, the combine's `y`: `1.0` while the player is a released ghost (`0x5de9c0`,
+/// off `PLAYER_FLAGS_GHOST`), else `0.0`, with no ramp on either edge.
 #[derive(Resource, Clone, Default, ExtractResource)]
 pub struct FfxDeathFade(pub f32);
 
-/// **The glue screens' FFX state** — the two things the select build's tail writes, and nothing
-/// else (`0x472fba`–`0x473007`; the fork is
-/// `472fd9 test dh,0x20` on the selected record's `CHARSELECT+0xfc`):
-///
-/// ```text
-/// 472fde  mov ecx,ds:0xb41468 ; call 0x6cde60   ; ghost  → install the glue DEATH pass
-/// 472fe9  mov edx,ds:0x838570 ; mov [esi+0x110],edx      ; …and pin LightParams.glow
-/// 472ff7  mov ecx,ds:0xb414c4 ; call 0x6cde60   ; living → install the glue GLOW pass
-/// 473002  mov eax,ds:0x838574 ; mov [esi+0x110],eax      ; …and pin LightParams.glow
-/// ```
-///
-/// `[esi+0x110]` is the DN/lighting singleton's `LightParams.glow` (`esi` = `0x6d48b0()` =
-/// `&0xce9b60`) — the same scalar `0x6cb930` reads for the death combine's **alpha byte**
-/// (`glow × 255`) and the glow combine reads for its blur² weight. So on a glue
-/// screen the glow weight is not a zone value at all: it is one of two constants, chosen by the
-/// same bit that chooses the pass.
-///
-/// Written by the game's char-select feed; read by [`sync_gain`]'s off-world arm and by
-/// [`FfxState::Glue`]'s combine.
+/// The glue screens' FFX state. The select build's tail (`0x472fba`–`0x473007`) forks on the
+/// selected record's `CHARSELECT+0xfc & 0x2000` (`0x472fd9`), installs (`0x6cde60`) the glue
+/// death or glow pass and pins `LightParams.glow` (`[0x6d48b0()+0x110]`) to a constant: both
+/// combines' blur² weight, which the death combine packs as its alpha byte (`0x6cb930`).
 #[derive(Resource, Clone, Copy, Default, PartialEq, Eq, Debug, ExtractResource)]
 pub enum GlueFfx {
-    /// **A glue ModelFFX widget is up and nothing has re-pinned it** — the login screen, the create
-    /// screen, and a character-select screen with an empty account (where no select build runs).
-    /// `CSimpleModelFFX`'s own **OnShow** override `0x46fa60` pins `[+0x110] = *0x8380b4 = 0.30f`
-    /// and installs the glue GLOW pass (`0x46fa74`). OnShow, not per-frame: it tail-jumps to
-    /// `0x76b260`, which runs the widget's `[frame+0x130]` handler (`0x76a0d0` maps `"OnShow"` to
-    /// that slot), which is why the select build's own pin below is not overwritten every frame.
+    /// A glue model widget is shown and nothing has re-pinned it: login, create, and a character
+    /// select with no characters. The widget's OnShow (`0x46fa60`) installs the glue glow pass and
+    /// pins `*0x8380b4` = 0.30, once on show, so the select build's pins hold.
     #[default]
     Shown,
-    /// **The character-select screen, LIVING selection.** The select build's tail installs the glue
-    /// GLOW pass and pins `*0x838574 = 0.40f` (`0x472ff7`/`0x473002`). Note what this is *not*: a
-    /// living selection is not "no post-process" — it is the glow pass at a pinned weight.
+    /// Character select, a living selection: the glue glow pass, pinned at `*0x838574` = 0.40
+    /// (`0x472ff7`/`0x473002`).
     SelectLiving,
-    /// **The character-select screen, GHOST selection.** The glue DEATH pass, and `*0x838570 = 0.15f`
+    /// Character select, a ghost selection: the glue death pass, pinned at `*0x838570` = 0.15
     /// (`0x472fde`/`0x472fe9`).
     SelectGhost,
 }
 
 impl GlueFfx {
-    /// The glue pair's death gate — `1.0` only for [`Self::SelectGhost`]. Instant on both edges,
-    /// like the world's: the reference's swap is a slot write with no time anchor in it, so
-    /// clicking from a ghost row to a living one un-washes the scene on the same frame. And it runs
-    /// on **every** selection, not only the first: `0x472a6d jne 0x472fba` sends an already-built
-    /// record straight into the swap block.
+    /// The glue pair's death gate, with no ramp. The swap re-runs on every selection, an
+    /// already-built record included (`0x472a6d`), so the scene changes on the click's frame.
     fn death(self) -> f32 {
         match self {
             Self::SelectGhost => 1.0,
@@ -256,22 +138,10 @@ impl GlueFfx {
         }
     }
 
-    /// `LightParams.glow` while a glue screen is up — the DN/lighting singleton's `0xce9c70`
-    /// (`0x6d48b0` is `mov eax,0xce9b60; ret`, so `[eax+0x110]` is that field).
-    ///
-    /// **All three values are byte-VERIFIED**, and an accessor-call-site census over all 41
-    /// `call 0x6d48b0` sites found exactly these three writers and three readers (the ffx packs
-    /// `0x6cb0e2`/`0x6cb557`/`0x6cb9e1`). Each constant has exactly one reference image-wide — the
-    /// read itself — so they are literals, not `.data` defaults that something else moves.
-    ///
-    /// This is the scalar the death combine turns into its **primary alpha byte** (`0x6cb9ec`:
-    /// `×255.0`, `+512.0`, `fstp`, `shr eax,0xe`) — 0.15 → 38, 0.40 → 102 — and which both combines
-    /// use as the blur² weight. So a ghost's select screen glows at **less than half** a living
-    /// one's, which is the opposite of what "the ghost look is the loud one" would suggest.
-    ///
-    /// (benilla keeps the float rather than the quantized byte: 38/255 = 0.14902 against 0.15 is
-    /// under a thousandth, and the same scalar feeds the in-world glow lane where the reference
-    /// carries a float too.)
+    /// `LightParams.glow` (`0xce9c70`) on a glue screen; the death combine packs it into its alpha
+    /// byte (`0x6cb9ec`: 0.15 → 38, 0.40 → 102). Deviation: kept a float where every reference
+    /// pack (`0x6cb0e2`/`0x6cb557`/`0x6cb9e1`) quantizes it to a byte, because the two differ by
+    /// under a thousandth (38/255 against 0.15).
     fn glow(self) -> f32 {
         match self {
             // `*0x8380b4`, the widget's OnShow pin.
@@ -284,24 +154,17 @@ impl GlueFfx {
     }
 }
 
-/// The haze mix `z` — the combine's screen-toward-blur cross-fade
-/// (`out = lerp(screen, blur, z) + w·blur²`, the shipped FFXGlow.bls). The reference's glow
-/// render packs it per frame from the **active player's** state (`0x6cb134`/`0x6cb599`,
-/// decision 1009 §A):
-/// `z = max(min(drunkByte,100)/100, submerged ? 84/255 : 0)` — fully blurred at 100 inebriation,
-/// and a fixed ≈0.329 floor whenever the **camera eye** is in any liquid (the vanilla underwater
-/// blur; `0x672470`'s eye-liquid probe, `0xf` = dry). Synced by [`sync_haze`]; uploaded as the
-/// combine uniform's `z`, scaled per view by [`FfxGlow::state_scale`].
+/// The haze mix `z`, the combine's cross-fade toward the blur, packed per frame from the player
+/// (`0x6cb134`/`0x6cb599`): `max(min(drunkByte, 100)/100, submerged ? 84/255 : 0)`, submerged
+/// being the camera eye in any liquid (`0x672470` not `0xf`).
 #[derive(Resource, Clone, Default, ExtractResource)]
 pub struct FfxHazeMix(pub f32);
 
-/// The underwater haze floor: 84/255 (the reference's byte 84 in the COLOR z lane whenever the
-/// eye-liquid probe reads non-dry — applied regardless of sobriety).
+/// The reference's byte 84 in the colour `z` lane while the eye is submerged, drunk or sober.
 const HAZE_SUBMERGED_FLOOR: f32 = 84.0 / 255.0;
 
-/// Sync [`FfxHazeMix`] from the two player-state inputs the reference's glow render reads each
-/// frame: our own drunk byte (`PLAYER_BYTES_3` byte 1 → `min(b,100)/100`) and the camera-eye
-/// submersion claim. Off-world both read empty → 0 (the glue screens never haze).
+/// [`FfxHazeMix`] from the drunk byte (`PLAYER_BYTES_3` byte 1) and the eye's submersion; both
+/// are empty off-world, so a glue screen never hazes.
 fn sync_haze(
     viewer: Res<crate::view::Viewer>,
     underwater: Option<Res<crate::liquid::Underwater>>,
@@ -319,51 +182,29 @@ fn sync_haze(
     }
 }
 
-/// **The GlowWave lane** — the underwater screen warp's two inputs.
-///
-/// Underwater the reference swaps its whole post-process pass list: `CFFXGlow::Render 0x6cc630`
-/// walks a second list whose third pass is **FFXGlowWave** (`0x6cb1f0`, render `0x6cb310`) rather
-/// than FFXGlow, and that pass displaces the combine's two samples through a sine bump map. The two
-/// arms are mutually exclusive and the plain-Glow arm is unreachable on both
-/// backends, so a submerged frame is ALWAYS the wave.
-///
-/// **No liquid-type discrimination.** `[0xc7f288] ∈ {0xf dry, 0 water, 1 ocean, 2 magma, 3 slime}`
-/// and `0x6cc644` compares against `0xf` alone — the warp runs in lava and slime exactly as in
-/// water. (That is not the drift cloud's rule, which *does* fork per kind and gives slime no motes
-/// at all; two neighbouring underwater systems reading the same byte with different questions.)
+/// The underwater screen warp's inputs. With the camera eye in liquid, `CFFXGlow::Render`
+/// (`0x6cc630`) walks a second pass list ending in FFXGlowWave (`0x6cb1f0`, render `0x6cb310`),
+/// which displaces the combine's two samples through a sine bump map. The guard compares the
+/// eye-liquid byte `[0xc7f288]` with `0xf` (dry) alone (`0x6cc644`): lava and slime warp too.
 #[derive(Resource, Clone, Copy, Default, ExtractResource)]
 pub struct FfxWave {
-    /// `(t mod 3174)/3174` — the u-axis phase, 3.174 s.
+    /// `(t mod 3174)/3174`, the u-axis phase.
     phase1: f32,
-    /// `(t mod 2805)/2805` — the v-axis phase, 2.805 s. Independent of [`Self::phase1`]: the two
-    /// rejoin only every ~49 minutes, which is what keeps the warp from reading as a loop.
+    /// `(t mod 2805)/2805`, the v-axis phase; the two rejoin only every ~49 minutes.
     phase2: f32,
-    /// Whether the pass-list swap itself is tripped: in-world (`0x467d00`) **and** the camera-eye
-    /// liquid probe non-dry (`0x672470 != 0xf`). Not a strength — the swap is a hard fork, and the
-    /// warp has no ramp in or out.
+    /// The swap: in-world (`0x467d00`) and the eye in liquid (`0x672470` not `0xf`), with no ramp.
     active: bool,
 }
 
-/// The two GlowWave phase periods in milliseconds — `[0xce89c4]` and `[0xce89c8]`, divided into an
-/// integer millisecond clock exactly as the reference's `fild`/`fidiv` pair does.
+/// The phase periods (`[0xce89c4]`, `[0xce89c8]`), moduli of an integer millisecond clock.
 const WAVE_PERIOD_MS: [u64; 2] = [3174, 2805];
 
-/// The wave LUT's edge — 128×128 texels (`[0xce89a0]`'s 7-field descriptor: 128/128/128/128 and
-/// the two 1/128 reciprocals).
+/// The wave LUT is 128×128 texels (`[0xce89a0]`'s descriptor).
 const WAVE_LUT_EDGE: u32 = 128;
 
-/// The reference's glow-wave LUT (`ffx_glow_wave_lut` `0x6cbea0`, a diffed PRIMITIVE), as the
-/// texels our combine samples.
-///
-/// Two channels, one sine each and each depending on ONE axis — `du = sin(2πx/128)` across,
-/// `dv = sin(2πy/128)` down — which is what makes the sampled value a *displacement* rather than an
-/// intensity: the shipped format is the signed two-channel bump format on both backends
-/// (`D3DFMT_V8U8` / `GL_DSDT8_NV`), and the pass is a dependent texture read.
-///
-/// We store the reference's **unsigned** pack (`(s·0.5 + 0.5)·255`, its path B) and bias it back in
-/// the shader, because that is the permutation the live client actually runs: `gxApi` defaults to
-/// direct3d, the shipped `WTF/` overrides nothing, and the caps tier that selects picks the biased
-/// `ps_2_0` blob against an unsigned texture. `as u8` truncates toward zero, which is `__ftol`.
+/// The reference's glow-wave LUT (`0x6cbea0`), a displacement map: `du = sin(2πx/128)`,
+/// `dv = sin(2πy/128)`, stored as the unsigned pack `(s·0.5 + 0.5)·255` that the default Direct3D
+/// path's `ps_2_0` permutation biases back; `as u8` truncates toward zero, as `__ftol` does.
 fn wave_lut_texels() -> Vec<u8> {
     let pack = |s: f32| ((s * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
     let sine = |i: u32| (std::f32::consts::TAU * i as f32 / WAVE_LUT_EDGE as f32).sin();
@@ -378,12 +219,9 @@ fn wave_lut_texels() -> Vec<u8> {
     texels
 }
 
-/// Sync [`FfxWave`] from the same two inputs the reference's swap guard reads, plus the clock its
-/// render method phases on (`OsGetAsyncTimeMs`, `0x6cb43a`).
-///
-/// The phases advance whether or not the wave is armed — they are a free-running wall clock in the
-/// reference too, not a timer the swap starts — so surfacing and diving again does not restart the
-/// pattern, and nothing has to be reset on the transition.
+/// [`FfxWave`] from the swap guard's inputs and the render's clock (`OsGetAsyncTimeMs`,
+/// `0x6cb43a`); the phases run free, armed or not, as the reference's do, so a dive never restarts
+/// them.
 fn sync_wave(
     time: Res<Time>,
     live: Res<crate::schedule::WorldLive>,
@@ -397,11 +235,7 @@ fn sync_wave(
     let verdict = underwater.map(|u| u.0);
     wave.active = live.0 && verdict.is_some_and(|v| v.any());
 
-    // `WOW_WAVE_DUMP` — 1 Hz, and it reports on EVERY frame including the ones that do not warp,
-    // naming why. An instrument that only speaks while the effect is running cannot tell "not
-    // armed" from "armed and broken", which is exactly the hour the drift cloud's first probe cost:
-    // the effect was off, the screen was silent, and the silence was
-    // indistinguishable from a compile failure.
+    // `WOW_WAVE_DUMP`: a 1 Hz line, warping or not, naming why not.
     if std::env::var_os("WOW_WAVE_DUMP").is_some() {
         let sec = time.elapsed_secs() as u32;
         if last_dump.replace(sec) != Some(sec) {
@@ -419,24 +253,15 @@ fn sync_wave(
     }
 }
 
-/// Whether a view draws the warped combine — the pass-list swap, as a pure function.
-///
-/// Three conditions, each a fact about the reference rather than a taste call:
-/// - the view runs the **WorldFrame** pass pair. The swap lives in `CFFXGlow::Render`, which the
-///   glue screens' own pair also reaches — but its guard's first half is `0x467d00`, the in-world
-///   objmgr gate, so a glue screen can never trip it. A bake runs no pair at all.
-/// - the camera eye is in liquid and we are in-world ([`FfxWave::active`]).
-/// - the player is **not a ghost**. `CFFXDeath` REPLACES `CFFXGlow` outright in the single active
-///   pass slot `[0xce8bb4]`, and `CFFXDeath::Render 0x6cdf20` owns one list and no guard — so a
-///   ghost underwater gets no warp, the same way it already gets no haze.
+/// Whether a view draws the warped combine: the WorldFrame pair (the glue pair reaches the same
+/// render, but the guard's in-world half `0x467d00` never trips there), [`FfxWave::active`], and
+/// no ghost, whose `CFFXDeath::Render` (`0x6cdf20`) has one list and no guard.
 fn wave_armed(state: FfxState, wave: FfxWave, death: f32) -> bool {
     matches!(state, FfxState::Player) && wave.active && death == 0.0
 }
 
-/// Sync the gain from the live zone lighting (the same source `sync_bloom` used). Off-world there
-/// is no `Light.dbc` zone — the reference runs its `LightParams` **default 0.5** (the
-/// zone/time-of-day ambient glow scalar's own default): the glue screens'
-/// soft glow. (Before this, the glue rendered with the derive-default 0.0 — no glow at all.)
+/// [`FfxGlowGain`]: the zone's `LightParams.glow` in world (its default 0.5 while no lighting
+/// exists), and the glue screen's pin off world ([`GlueFfx::glow`]).
 fn sync_gain(
     lighting: Option<Res<crate::lighting::WowLighting>>,
     live: Res<crate::schedule::WorldLive>,
@@ -446,10 +271,7 @@ fn sync_gain(
     let target = if live.0 {
         lighting.map_or(0.5, |l| l.glow)
     } else {
-        // Off-world the glue screen pins it outright — the widget's OnShow, or the select build's
-        // own fork ([`GlueFfx::glow`], all three byte-verified). It is never `LightParams`' default
-        // here: this arm used to read a flat 0.5 on the reasoning that an off-world client falls
-        // back to the table default, and the bytes say the glue screens pin it instead.
+        // A glue screen always pins the weight; it never falls back to the 0.5 default.
         glue.glow()
     };
     if gain.0 != target {
@@ -457,20 +279,15 @@ fn sync_gain(
     }
 }
 
-/// The FFXGlow pass is MANDATORY on the world camera in the gamma lane: its
-/// combine owns the frame's single gamma→linear decode — without it the whole frame presents
-/// over-bright. Insert on any world camera that lacks it (idempotent; spawn sites also add it).
+/// Adds [`FfxGlow`] to any world camera without it: its combine is the frame's one gamma decode,
+/// without which the frame presents over-bright.
 fn ensure_ffx_glow(
     mut commands: Commands,
     cam: Query<Entity, (With<WorldCamera>, Without<FfxGlow>)>,
     mut with: Query<&mut FfxGlow>,
 ) {
-    // Perf-bisect kill-switch: $WOW_NO_FFX strips the GLOW from every camera — the three filter
-    // passes and the blur term, [`FfxGlow::UI_PANE`]'s shape — and keeps the combine, because in
-    // the gamma lane the combine is not an effect: it is the frame's one decode on a `Write`
-    // view and the UI camera's ground pass on a claimed one, and a frame
-    // without it has no world in it. The frame shows the world un-glowed at its right
-    // brightness; what the lever prices is the blur chain and the glow add.
+    // `WOW_NO_FFX`, a perf lever: every camera drops to `UI_PANE`, no blur and no glow add, but
+    // keeps the combine, which is the frame's decode and the UI camera's ground.
     static NO_FFX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *NO_FFX.get_or_init(|| std::env::var_os("WOW_NO_FFX").is_some()) {
         for mut glow in &mut with {
@@ -493,20 +310,15 @@ fn ensure_ffx_glow(
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
 struct FfxGlowLabel;
 
-/// Layouts, sampler, and the four cached pipelines (downsample ×2 share one).
+/// The layouts, samplers, wave LUT and pipelines, built once at startup.
 #[derive(Resource)]
 struct FfxGlowPipelines {
     layout_filter: BindGroupLayoutDescriptor,
     layout_combine: BindGroupLayoutDescriptor,
     sampler: Sampler,
-    /// The 128×128 sine bump map and its own REPEAT sampler — built once here, not per view: the
-    /// LUT is 32 KB of resolution-independent constant, and the reference generates it once too
-    /// (the registration callback `0x6cbcf0`).
-    ///
-    /// REPEAT is load-bearing, not a default. The wave texcoord's scale runs to `W/128` — ten full
-    /// cycles across a 1280-wide screen — so under CLAMP every cycle but the first would pin to the
-    /// edge texel and the warp would vanish over ~90% of the frame. It is byte-closed to
-    /// `D3DTADDRESS_WRAP` (`0x5a2646`/`0x5a266a` through the table `0x80a254 = {CLAMP, WRAP}`).
+    /// The 128×128 sine bump map, built once as the reference builds it (`0x6cbcf0`), and its
+    /// sampler, which must repeat (`D3DTADDRESS_WRAP`, `0x5a2646`/`0x5a266a`): the texcoord spans
+    /// `W/128` cycles, and a clamp would pin all but the first.
     wave_view: TextureView,
     wave_sampler: Sampler,
     downsample: CachedRenderPipelineId,
@@ -515,12 +327,8 @@ struct FfxGlowPipelines {
     combine: FfxCombinePipeline,
 }
 
-/// The combine — specialised on the **format it renders in** ([`crate::final_pass`]):
-/// a view whose camera runs `CameraOutputMode::Skip` gets it rendered straight into the output
-/// texture (a bake's image), a `Write` view into the HDR main texture for bevy's blit to copy
-/// out, as before — and the world view's combine is the UI camera's own pass, keyed on the UI
-/// target ([`FfxBackdrop`]). The three filter passes never leave the ¼-res chain
-/// and stay unspecialised.
+/// The combine, specialised on the format it renders in: a `Skip` camera's output texture, a
+/// `Write` view's HDR main texture ([`crate::final_pass`]), or a backdrop camera's UI target.
 struct FfxCombinePipeline {
     layout: BindGroupLayoutDescriptor,
     shader: Handle<Shader>,
@@ -530,20 +338,13 @@ struct FfxCombinePipeline {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct FfxCombineKey {
     format: TextureFormat,
-    /// The combine as a **gamma-lane** pass: it stores the gamma byte it computed
-    /// and leaves the frame's one decode to the lane that owns it — the UI camera's, at its end,
-    /// for a view this combine grounds ([`FfxBackdrop`]). `false` is the world lane's own exit,
-    /// the decode here.
+    /// Store the gamma byte and leave the decode to the UI camera's lane ([`FfxBackdrop`]);
+    /// `false` decodes here.
     gamma_out: bool,
-    /// The combine drawn INSIDE a 2D main pass — the first draw of a backdrop camera's
-    /// transparent pass — which carries the `Core2d` depth attachment and the view's sample
-    /// count, and a pipeline in that pass must say so (wgpu validates the pair). `None` is the
-    /// combine's own pass: colour only, one sample.
+    /// The sample count of the 2D main pass the combine draws inside, whose depth attachment the
+    /// pipeline must declare (wgpu validates both); `None` is its own colour-only pass.
     inside_2d: Option<u32>,
-    /// The underwater combine (`fs_combine_wave`). A SEPARATE pipeline rather than a branch inside
-    /// `fs_combine`: a dry frame then binds byte-for-byte the pipeline it bound before the warp
-    /// existed and pays nothing at all for it — no extra pass, no extra target, not even a uniform
-    /// branch.
+    /// The underwater entry (`fs_combine_wave`), its own pipeline so a dry frame pays nothing.
     wave: bool,
 }
 
@@ -574,9 +375,7 @@ impl SpecializedRenderPipeline for FfxCombinePipeline {
                     write_mask: ColorWrites::ALL,
                 })],
             }),
-            // Inside a 2D main pass the depth attachment is bound but never consulted: the
-            // ground writes every pixel under everything, and the phase's own items decide
-            // their order among themselves as they always did.
+            // The 2D pass's depth attachment, never tested or written: the ground is under all.
             depth_stencil: key.inside_2d.map(|_| DepthStencilState {
                 format: bevy::core_pipeline::core_2d::CORE_2D_DEPTH_FORMAT,
                 depth_write_enabled: false,
@@ -603,7 +402,7 @@ fn init_pipelines(
 ) {
     let shader: Handle<Shader> =
         asset_server.load("embedded://benilla_world/shaders/ffx_glow.wgsl");
-    // Filter passes bind (tex, sampler); the combine additionally binds (blur tex, gain uniform).
+    // Filter passes bind (tex, sampler); the combine adds the blur, the uniform and the wave LUT.
     let layout_filter = BindGroupLayoutDescriptor::new(
         "ffx_glow_filter_layout",
         &BindGroupLayoutEntries::sequential(
@@ -623,9 +422,7 @@ fn init_pipelines(
                 sampler(SamplerBindingType::Filtering),
                 texture_2d(TextureSampleType::Float { filterable: true }),
                 uniform_buffer_sized(false, Some(std::num::NonZero::new(32).unwrap())),
-                // The wave LUT + its REPEAT sampler ride EVERY combine's layout, dry included, so
-                // the two entry points stay interchangeable behind one bind group. Binding a
-                // texture the dry shader never samples costs the frame nothing.
+                // In every combine's layout, dry included, so both entries share one bind group.
                 texture_2d(TextureSampleType::Float { filterable: true }),
                 sampler(SamplerBindingType::Filtering),
             ),
@@ -638,9 +435,7 @@ fn init_pipelines(
         address_mode_v: AddressMode::ClampToEdge,
         ..Default::default()
     });
-    // LINEAR + REPEAT, both byte-closed: the reference's 128-texel sine is *sampled*, so linear
-    // filtering is what makes it a smooth wave rather than 128 steps, and the wrap is what lets the
-    // texcoord run past 1.0 into its tenth cycle.
+    // Linear, so the reference's 128-texel sine samples as a smooth wave; repeat, past 1.0.
     let wave_sampler = render_device.create_sampler(&SamplerDescriptor {
         min_filter: FilterMode::Linear,
         mag_filter: FilterMode::Linear,
@@ -661,8 +456,7 @@ fn init_pipelines(
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: TextureDimension::D2,
-                // Two unsigned channels, biased back to signed in the shader — the shipped
-                // permutation's own encoding (see [`wave_lut_texels`]).
+                // Unsigned, biased back to signed in the shader, as the shipped permutation does.
                 format: TextureFormat::Rg8Unorm,
                 usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
                 view_formats: &[],
@@ -719,39 +513,31 @@ fn init_pipelines(
     });
 }
 
-/// The two ¼-res ping-pong targets (the reference downsamples full→¼ in ONE Box4 pass,
-/// `0x6ca9d0`; a ½ intermediate would be one downsample too many), plus the
-/// GPU objects derived from them, so the node does not recreate them per frame.
+/// One view's ¼-res ping-pong pair (the reference downsamples full to ¼ in one Box4 pass,
+/// `0x6ca9d0`) and the GPU objects built from it, kept across frames.
 #[derive(Component)]
 struct FfxGlowTextures {
     quarter_a: CachedTexture,
     quarter_b: CachedTexture,
-    /// The combine's 32-byte uniform — `(gain, death, haze, dither)` then the GlowWave phases.
-    /// Persistent, rewritten each frame with a queue write (queue writes land before the graph's
-    /// submit executes).
+    /// The combine's 32-byte uniform, `(gain, death, haze, dither)` then the wave phases,
+    /// rewritten each frame by a queue write, which lands before the graph's submit.
     gain_buf: Buffer,
-    /// The two Gauss bind groups bind only the ¼-res ping-pong views + sampler — all stable
-    /// while the textures hold. The downsample and combine bind groups bind the view's finished
-    /// main texture, which `ViewTarget::post_process_write` flips per call on a `Write` view, so
-    /// those two are not cached (they would sample last frame's texture) and stay per-frame in
-    /// `run`.
+    /// Cached: the Gauss passes bind only the ¼-res pair. The downsample and combine bind the main
+    /// texture, which `post_process_write` flips per call on a `Write` view, so bind per frame.
     gauss_h_bind: BindGroup,
     gauss_v_bind: BindGroup,
-    /// The combine pipelines for this view, specialised on the format the combine renders in
-    /// for THIS camera's output mode (`FinalPassTarget::format`) — or `None` for a view some
-    /// [`FfxBackdrop`] claims, whose combine is that camera's own pass and not this node's.
+    /// This view's combine pair, keyed on its camera's output (`FinalPassTarget::format`), or
+    /// `None` while an [`FfxBackdrop`] claims the view.
     combine: Option<FfxCombinePair>,
 }
 
-/// One view's combine pipelines — dry and underwater (`fs_combine_wave`) — and the format they
-/// were keyed on: the freshness gate beside the two textures'.
+/// One view's dry and underwater combine pipelines, and the key they were specialised on.
 #[derive(Clone, Copy)]
 struct FfxCombinePair {
     dry: CachedRenderPipelineId,
     wave: CachedRenderPipelineId,
     format: TextureFormat,
-    /// The sample count the pair was keyed on — 1 for a combine's own pass, the view's for a
-    /// backdrop draw inside a 2D main pass.
+    /// 1 for the combine's own pass, the view's count for a backdrop draw inside a 2D main pass.
     samples: u32,
 }
 
@@ -766,8 +552,7 @@ impl FfxCombinePair {
     }
 }
 
-/// What specialising a combine pair takes — the one hand the two prepare systems reach for it
-/// with, so neither carries the three resources separately.
+/// What specialising a combine pair takes, shared by the two prepare systems.
 #[derive(bevy::ecs::system::SystemParam)]
 struct CombineSpecializer<'w> {
     pipeline_cache: Res<'w, PipelineCache>,
@@ -781,8 +566,7 @@ impl CombineSpecializer<'_> {
         self.pair_for(format, false, None)
     }
 
-    /// The backdrop draw inside a 2D main pass of `samples` samples: the gamma-lane exit, the
-    /// pass's depth attachment declared.
+    /// The backdrop draw inside a 2D main pass: the gamma-lane exit, the depth attachment declared.
     fn backdrop_pair(&mut self, format: TextureFormat, samples: u32) -> FfxCombinePair {
         self.pair_for(format, true, Some(samples))
     }
@@ -834,23 +618,12 @@ fn prepare_textures(
         let Some(vp) = camera.physical_viewport_size else {
             continue;
         };
-        // The view's OWN combine pair, specialised **whether or not this view is claimed**.
-        // A claimed view (some [`FfxBackdrop`] names it) has no combine of its
-        // own — the UI camera's ground pass is it, keyed on THAT camera's target — so it carries
-        // none rather than a pair keyed on a target nothing writes. But the claim is not a
-        // property of the world, it is a property of *this frame*: it drops the moment the UI
-        // camera loses its `ViewTarget`, which is what `prepare_view_targets` does as soon as the
-        // window's surface goes away. At app exit that is harmless (bevy runs one to three more
-        // updates after the last presented frame — see `benilla_app::shutdown`) and it is exactly
-        // what the director's 2026-09-15 log caught: two `pipeline compiled LIVE` lines in the
-        // same millisecond as "No windows are open, exiting". A minimize to zero size or a surface
-        // reconfigure reaches the same branch **while the player is looking at the frame**, and
-        // there the pair would be two synchronous Metal compiles on the render thread. Specialising
-        // is a cached lookup on a four-field key, so holding the pair warm from the first covered
-        // frame costs that lookup and nothing else.
+        // Specialised even while claimed: a claim is per frame and drops whenever the UI camera
+        // loses its `ViewTarget` (a minimize, a surface reconfigure), when a cold pair would
+        // compile synchronously on the render thread. Keeping it warm is a cached lookup.
         let own = specializer.pair(FinalPassTarget::format(&camera.output_mode, target));
         let combine = (!claims.0.contains(&entity)).then_some(own);
-        // The reference's RT-dim chain: ½ and ¼, floored (clamp ≥8 — `0x6cdb40`).
+        // ¼ of the viewport, each side at least 8, as the reference sizes its targets (`0x6cdb40`).
         let mut tex = |label: &'static str, w: u32, h: u32| {
             texture_cache.get(
                 &render_device,
@@ -872,9 +645,7 @@ fn prepare_textures(
         };
         let quarter_a = tex("ffx_glow_quarter_a", vp.x / 4, vp.y / 4);
         let quarter_b = tex("ffx_glow_quarter_b", vp.x / 4, vp.y / 4);
-        // `TextureCache::get` hands the same textures back while the viewport holds, and the
-        // derived objects only depend on them — rebuilding the component anyway would be right
-        // back to per-frame bind-group creation.
+        // The cache returns the same textures while the viewport holds: rebuild only on a change.
         if existing.is_some_and(|t| {
             t.quarter_a.texture.id() == quarter_a.texture.id()
                 && t.quarter_b.texture.id() == quarter_b.texture.id()
@@ -913,20 +684,9 @@ fn prepare_textures(
     }
 }
 
-/// `WOW_DITHER=1` — arm the combine's deband dither (the shader's `glow.w`).
-///
-/// The frame's ONE quantization to 8 bits is the surface's sRGB present-encode of the combine's
-/// gamma-space output, so a smooth surface steps in 1/255. Measured on a lit bare arm the shading
-/// gradient is ~1.3 levels/px; a breathing idle drifts the body ~0.11 px/frame; so a pixel needs
-/// ~7 FRAMES to cross one step and the shading updates at ~8 Hz under a 60 Hz frame rate. Motion
-/// large enough to clear a level every frame hides it entirely — the reported
-/// small-moves-tick / big-moves-smooth split.
-///
-/// **Off by default because it is a divergence.** The reference's framebuffer was 8-bit and
-/// undithered; this lane is byte-exact against it and dithering trades that for a smoother
-/// gradient. Bevy would normally apply its own in the tonemapping pass, but `Tonemapping::None`
-/// makes that node return immediately, so the `DebandDither::Enabled` our camera inherits from
-/// `Camera3d` never runs — this is the only place it can live.
+/// `WOW_DITHER=1` arms the combine's deband dither (`ffx.lane.w`). Deviation, opt-in, off by
+/// default: the reference's 8-bit framebuffer is undithered, but a smooth gradient under slow
+/// motion steps visibly at 1/255. Bevy's own dither never runs under `Tonemapping::None`.
 fn dither_armed() -> f32 {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     match *ON.get_or_init(|| std::env::var_os("WOW_DITHER").is_some()) {
@@ -935,20 +695,8 @@ fn dither_armed() -> f32 {
     }
 }
 
-/// The combine's `(x, y, z, w)` uniform for one view — the whole per-view scaling law in one
-/// pure function, so it can be tested without a render world.
-///
-/// - **x** — the zone glow weight, scaled by [`FfxGlow::gain_scale`]: authored *scene* data, so a
-///   portrait bake carries it at world parity and only a UI model pane drops it,
-///   keeping the combine for its gamma decode alone.
-/// - **y/z** — the FFXDeath gate and the haze mix, both selected by [`FfxGlow::state`]: which pass
-///   pair this view runs decides what drives them, and a bake runs neither pair (
-///   report B49 — now structural rather than arithmetic).
-/// - **w** — the deband-dither arm ([`dither_armed`]), 0 or 1.
-///
-/// The second row is the GlowWave lane: the two phases, written on every frame and read only by
-/// the warped entry point. They are unconditional because they are a free-running clock — gating
-/// the *write* on the arm would make the pattern restart on every dive.
+/// One view's combine uniform: the zone glow × [`FfxGlow::gain_scale`], the death gate and haze of
+/// its pass pair, the dither arm, then the wave phases, written every frame so the clock runs free.
 fn combine_uniform(
     zone_gain: f32,
     world: FfxPassState,
@@ -973,9 +721,7 @@ fn combine_uniform(
     ]
 }
 
-/// One pass pair's live state, as [`combine_uniform`] consumes it: the death gate and the haze mix
-/// that pair carries. The glue pair has no haze lane at all, which is a fact about the reference
-/// and not a value we happen to leave at zero.
+/// One pass pair's live death gate and haze mix.
 #[derive(Clone, Copy)]
 struct FfxPassState {
     death: f32,
@@ -983,22 +729,17 @@ struct FfxPassState {
 }
 
 impl FfxPassState {
-    /// The **WorldFrame** pair's live state: the ghost gate off `PLAYER_FLAGS_GHOST` and the
-    /// drunk/underwater haze, both of the live player.
     fn world(death: f32, haze: f32) -> Self {
         Self { death, haze }
     }
 
-    /// The **glue** pair's live state. Death only, and the constructor is where that is enforced:
-    /// the reference's haze is `primary.z` of the *WorldFrame* glow combine `0x6cb020`, packed from
-    /// the active player's inebriation and the camera-eye liquid probe — a glue
-    /// screen has neither, and CGlueMgr's pair has no lane to read them into. Passing a haze here
-    /// should be impossible rather than merely wrong.
+    /// Death only: the reference packs the haze into `primary.z` of the glow combine (`0x6cb020`)
+    /// from the in-world player's state, which a glue screen does not have.
     fn glue(death: f32) -> Self {
         Self { death, haze: 0.0 }
     }
 
-    /// What a view running neither pair reads — a bake.
+    /// What a view running neither pair reads: a bake.
     const INERT: Self = Self {
         death: 0.0,
         haze: 0.0,
@@ -1031,20 +772,14 @@ impl ViewNode for FfxGlowNode {
             pipeline_cache.get_render_pipeline(pipelines.gauss_h),
             pipeline_cache.get_render_pipeline(pipelines.gauss_v),
         ) else {
-            return Ok(()); // pipelines still compiling — draw the frame un-glowed
+            return Ok(()); // pipelines still compiling: the frame draws un-glowed
         };
-        // Where this view's combine lands (2206, `final_pass`): a `Skip` camera's output texture
-        // itself, a `Write` camera's ping-pong for bevy's blit to copy out. A CLAIMED view
-        // ([`FfxBackdrop`]) has no combine here at all: the UI camera's ground
-        // pass is its combine, and samples this view's finished main texture — unflipped, which
-        // is why a claimed camera runs `Skip` — once the filter passes below have built the
-        // blur it reads beside it.
+        // A `Skip` camera's combine lands in its output texture, a `Write` camera's in the
+        // ping-pong bevy's blit copies out ([`crate::final_pass`]); a claimed view has none here.
         let out = match textures.combine.as_ref() {
             None => None,
             Some(pair) => {
-                // THE PASS-LIST SWAP (`0x6cc630`). The reference forks the whole list here; we
-                // fork one pipeline, which is the same fork — the first two passes are identical
-                // in both lists.
+                // The pass-list swap (`0x6cc630`): the two lists differ only in the combine.
                 let Some(combine) = pipeline_cache.get_render_pipeline(pair.armed(wave)) else {
                     return Ok(());
                 };
@@ -1057,31 +792,20 @@ impl ViewNode for FfxGlowNode {
         let render_device = render_context.render_device().clone();
         let diagnostics = render_context.diagnostic_recorder();
 
-        // The combine reads the blur through exactly two terms — `w·blur²` (`lane.x`) and the
-        // haze cross-fade (`lane.z`; the ghost combine has no haze and reads the blur through
-        // the same `x`). With both exactly zero the three filter passes would compute a texture
-        // the combine multiplies by nothing, so they are skipped and the combine samples what
-        // the ¼-res target holds — finite bytes from an earlier frame, or wgpu's zero-init — × 0.
-        // Every UI-pane view (`gain_scale` 0, no haze lane) skips on every frame; the world view
-        // skips in a zone whose `LightParams.glow` is 0 while the eye is dry and sober. The same
-        // shader then runs with the same uniform: look-neutral by construction, and the
-        // journal's `gpu_glow` column reads 0 for a view that skipped (2008).
+        // The combines read the blur only through `w` (`x`) and the haze (`z`); with both zero the
+        // filter passes are skipped, and the stale, finite ¼-res target is multiplied by zero.
         let blur_read = uniform[0] != 0.0 || uniform[2] != 0.0;
         if blur_read {
             let layout_filter = pipeline_cache.get_bind_group_layout(&pipelines.layout_filter);
-            // The downsample binds the finished main texture, which a `Write` view's
-            // `post_process_write` flips per call — this bind group is not cached (it would
-            // sample last frame's texture); the two Gauss ones bind only the stable ¼-res
-            // ping-pong and ride prepared on [`FfxGlowTextures`].
+            // Per frame: a `Write` view flips its main texture per call ([`FfxGlowTextures`]).
             let down_bind = render_device.create_bind_group(
                 "ffx_glow_down_quarter",
                 &layout_filter,
                 &BindGroupEntries::sequential((source, &pipelines.sampler)),
             );
 
-            // The filter passes (byte-pinned chain): source→¼ (one Box4), ¼a→¼b (H), ¼b→¼a (V).
-            // Each pass opens its own diagnostic span (`render/ffx_glow_*/elapsed_gpu` on a
-            // device that times passes): the journal's `gpu_glow` column is their sum (2008).
+            // source → ¼a (one Box4), ¼a → ¼b (Gauss H), ¼b → ¼a (Gauss V), each in its own
+            // diagnostic span; the journal's `gpu_glow` column is their sum.
             let filter_passes: [(&'static str, &RenderPipeline, &BindGroup, &TextureView); 3] = [
                 (
                     "ffx_glow_down_quarter",
@@ -1129,15 +853,13 @@ impl ViewNode for FfxGlowNode {
         let Some((combine, out)) = out else {
             return Ok(()); // claimed: the combine is the UI camera's pass
         };
-        // The uniform is the combine's alone (the filter shaders never bind it), written by
-        // whichever node runs the combine — this one here, the backdrop node for a claimed view.
+        // Written by whichever node runs the combine: this one, or the backdrop node when claimed.
         world.resource::<RenderQueue>().write_buffer(
             &textures.gain_buf,
             0,
             bytemuck::cast_slice(&uniform),
         );
-        // Combine: screen + w·blur² (gamma-space byte math in the shader) → the view's output.
-        // Also binds the flipping `out.source` — per-frame for the downsample's reason.
+        // The combine into the view's output, bound per frame as the downsample is.
         let layout_combine = pipeline_cache.get_bind_group_layout(&pipelines.layout_combine);
         let bind = render_device.create_bind_group(
             "ffx_glow_combine",
@@ -1173,8 +895,7 @@ impl ViewNode for FfxGlowNode {
     }
 }
 
-/// The live inputs of one view's combine, read off the render world: its uniform, and whether
-/// the underwater entry is armed. One reading for the two nodes that can run a combine.
+/// One view's combine uniform and whether its underwater entry is armed, for both combine nodes.
 fn live_combine(world: &World, glow: &FfxGlow) -> ([f32; 8], bool) {
     let death = world.resource::<FfxDeathFade>().0;
     let wave = *world.resource::<FfxWave>();
@@ -1188,41 +909,25 @@ fn live_combine(world: &World, glow: &FfxGlow) -> ([f32; 8], bool) {
     (uniform, wave_armed(glow.state, wave, death))
 }
 
-/// Every view an [`FfxBackdrop`] names this frame: the render-world entities whose combine is
-/// somebody else's pass. Rebuilt in prepare, read by [`prepare_textures`] (no combine pair for a
-/// claimed view) and by the world node (no combine pass).
+/// The render-world views an [`FfxBackdrop`] claims this frame; a claimed view has no combine.
 #[derive(Resource, Default)]
 struct FfxBackdropClaims(Vec<Entity>);
 
-/// A backdrop camera's view, as the render world resolved it this frame: its own combine pair —
-/// specialised on ITS main texture's format with the gamma-lane exit
-/// ([`FfxCombineKey::gamma_out`]), where a world view's pair is keyed on the world's target and
-/// decodes — and the world view it grounds on, a render-world entity whose `ViewTarget` was
-/// prepared THIS frame, or `None`.
+/// A backdrop camera's combine pair (its own target's format, the gamma-lane exit) and the world
+/// view it grounds on, if that view rendered this frame.
 #[derive(Component)]
 struct FfxBackdropView {
     pair: FfxCombinePair,
     source: Option<Entity>,
 }
 
-/// The world views bevy prepared a `ViewTarget` for this frame — the ones that rendered — by
-/// their main-world entity.
+/// The world views bevy prepared a `ViewTarget` for this frame, by main-world entity.
 type RenderedWorldViews<'w, 's> =
     Query<'w, 's, (Entity, &'static MainEntity), (With<FfxGlow>, Changed<ViewTarget>)>;
 
-/// Resolve every [`FfxBackdrop`]: the claims, and each claiming view's pair and source.
-///
-/// The source is looked up among the views whose `ViewTarget` bevy prepared this frame
-/// (`Changed<ViewTarget>`: `prepare_view_targets` re-inserts it for every view it extracted),
-/// by the main-world entity the camera named. A world camera that is active in the main world
-/// but was not rendered this frame — its target's image not yet prepared, the frame it spawned
-/// — resolves to nothing, so the backdrop pass never samples a main texture older than the
-/// frame; and a world view is claimed from its very first rendered frame, so it never builds a
-/// combine pair it would drop a frame later.
-///
-/// The pair is keyed on the view's main texture, which exists from the view's first frame — so
-/// a player-UI camera spawned before the world has its pipelines compiling before there is a
-/// world to hitch on them (`pipe_warm`'s pre-world cover), whether or not it has a source yet.
+/// Resolves every [`FfxBackdrop`]: the claims, and each claiming view's pair and source. A source
+/// must have rendered this frame (`Changed<ViewTarget>`, re-inserted by `prepare_view_targets` for
+/// every extracted view), so the ground never samples a main texture older than the frame.
 fn prepare_backdrops(
     mut commands: Commands,
     mut claims: ResMut<FfxBackdropClaims>,
@@ -1261,24 +966,9 @@ fn prepare_backdrops(
     }
 }
 
-/// **The 2D main pass with the world as its first draw** — bevy's
-/// `MainTransparentPass2dNode` with one addition, registered under bevy's own label
-/// (`RenderGraph::add_node` is a map insert; the graph's edges, keyed by label, carry over — the
-/// same replacement `benilla_app::opaque2d` makes of the opaque node).
-///
-/// On a view carrying an [`FfxBackdrop`] whose source rendered this frame
-/// ([`FfxBackdropView`]), the pass opens on the view's main texture — taking its first-call clear
-/// — and the world view's combine is drawn before any item of the transparent phase: the
-/// finished world main texture and the blur the world's own node just built, through the
-/// gamma-lane exit, into every pixel. Then the interface, over it, exactly as before.
-///
-/// **Inside the pass, not a pass of its own**, and that is the point on a tile GPU: a render
-/// pass boundary on a full-window target is a store of every tile to memory and a load of every
-/// tile back, so a separate ground pass before this one cost the Air 0.9 ms a frame it did not
-/// cost the RTX (2234's measurement). A draw inside the pass costs the tile nothing but the
-/// fragment work. On any other view — no source, a world that has not drawn yet, a camera that
-/// is not a backdrop camera at all — this is bevy's node to the letter, and the camera's own
-/// clear is the ground, as the backdrop quad's absence was.
+/// Bevy's `MainTransparentPass2dNode` plus one draw: with a backdrop source ([`FfxBackdropView`]),
+/// the world's combine is drawn first, under every transparent item, inside the pass, because on a
+/// tile GPU a pass boundary stores and reloads every tile.
 #[derive(Default)]
 struct FfxTransparent2dNode;
 
@@ -1308,8 +998,7 @@ impl ViewNode for FfxTransparent2dNode {
             return Ok(());
         };
 
-        // The ground: resolved and bound here, drawn inside the pass below. Everything it needs
-        // is read before the pass so the task closure owns only handles.
+        // The ground is resolved and bound before the pass, so the task closure owns only handles.
         let ground = backdrop
             .and_then(|view| view.source.map(|source| (view, source)))
             .and_then(|(view, source)| {
@@ -1323,7 +1012,7 @@ impl ViewNode for FfxTransparent2dNode {
                 let pipelines = world.resource::<FfxGlowPipelines>();
                 let pipeline_cache = world.resource::<PipelineCache>();
                 let (uniform, wave) = live_combine(world, glow);
-                // Still compiling: the frame has no world in it for a frame.
+                // Still compiling: this frame has no world in it.
                 let combine = pipeline_cache.get_render_pipeline(view.pair.armed(wave))?;
                 world.resource::<RenderQueue>().write_buffer(
                     &textures.gain_buf,
@@ -1331,9 +1020,7 @@ impl ViewNode for FfxTransparent2dNode {
                     bytemuck::cast_slice(&uniform),
                 );
                 let layout = pipeline_cache.get_bind_group_layout(&pipelines.layout_combine);
-                // The world view's finished main texture — the very texture its own node would
-                // have combined from — and the ¼-res blur its filter passes built this frame.
-                // Per-frame, as the world node's own combine bind group is.
+                // The world view's finished main texture and this frame's ¼-res blur, per frame.
                 let bind = render_context.render_device().create_bind_group(
                     "ffx_glow_combine",
                     &layout,
@@ -1372,13 +1059,8 @@ impl ViewNode for FfxTransparent2dNode {
                     render_pass.set_camera_viewport(viewport);
                 }
                 if let Some((combine, bind)) = ground.as_ref() {
-                    // No span of its own. A `pass_span` is a pipeline-statistics query as well
-                    // as a timestamp pair, and wgpu allows ONE such query active at a time: a
-                    // second one opened inside the pass's own was the validation error that
-                    // aborted every Vulkan build of the 09-15 sync on its first world frame
-                    // (2258) — and only Vulkan exposes the feature, so Metal and DX12
-                    // never nested anything and no gate saw it. The transparent pass's number
-                    // carries the combine; the journal never read a nested span.
+                    // No span of its own: a `pass_span` is also a pipeline-statistics query, wgpu
+                    // allows one active at a time, and Vulkan validation fails a nested one.
                     render_pass.set_render_pipeline(combine);
                     render_pass.set_bind_group(0, bind, &[]);
                     render_pass.draw(0..3, 0..1);
@@ -1420,11 +1102,8 @@ impl Plugin for FfxGlowPlugin {
             .add_systems(
                 Update,
                 (
-                    // The gain is the zone's `LightParams.glow`, so the sync is on the resolve's
-                    // read side; the haze floor and the wave's arm are the camera-eye submersion
-                    // verdict, so they are after the slot that writes it. Unordered, both flipped
-                    // a frame late — the underwater blur and warp outlived the surfacing frame
-                    // they belong to, exactly like the sky dome's stops.
+                    // The gain reads the resolved lighting; the haze and the wave read the
+                    // submersion verdict, and would flip a frame late unordered.
                     sync_gain.in_set(crate::lighting::LightingConsumeSet),
                     (sync_haze, sync_wave).after(crate::liquid::SubmersionVerdict),
                     ensure_ffx_glow,
@@ -1453,10 +1132,8 @@ impl Plugin for FfxGlowPlugin {
                     Node3d::Bloom,
                 ),
             )
-            // The 2D main pass with the world as its first draw, replacing bevy's transparent
-            // node under bevy's own label (the edges survive; `benilla_app::opaque2d` does the
-            // same to the opaque node, which is skipped when empty so this pass takes the
-            // target's first-call clear under the ground draw).
+            // Bevy's transparent 2D node, replaced under its own label so the edges survive; the
+            // opaque node (`benilla_app::opaque2d`) skips when empty, leaving this pass the clear.
             .add_render_graph_node::<ViewNodeRunner<FfxTransparent2dNode>>(
                 Core2d,
                 Node2d::MainTransparentPass,
@@ -1472,15 +1149,11 @@ mod tests {
     fn ghost_world() -> FfxPassState {
         FfxPassState::world(1.0, 0.0)
     }
-    /// The glue pair with a living selection — the common case.
     fn living_glue() -> FfxPassState {
         FfxPassState::glue(0.0)
     }
 
-    /// The zone glow is scene data — a portrait bake wants it at world parity —
-    /// while the death and haze lanes belong to a *pass pair*, and a bake runs neither
-    /// (now structural: 1731). One preset table, checked as a whole so a new preset
-    /// can't quietly join the wrong side.
+    /// Checked as one table, so a new preset cannot quietly join the wrong side.
     #[test]
     fn only_the_two_screen_views_run_a_pass_pair() {
         for (name, view) in [("BOOTH", FfxGlow::BOOTH), ("UI_PANE", FfxGlow::UI_PANE)] {
@@ -1492,14 +1165,13 @@ mod tests {
         }
         assert_eq!(FfxGlow::WORLD.state, FfxState::Player);
         assert_eq!(FfxGlow::GLUE_SCENE.state, FfxState::Glue);
-        // The glow half is unchanged by that law: a bake still glows like the world.
+        // A bake still glows like the world.
         assert_eq!(FfxGlow::BOOTH.gain_scale, 1.0);
         assert_eq!(FfxGlow::GLUE_SCENE.gain_scale, 1.0);
         assert_eq!(FfxGlow::UI_PANE.gain_scale, 0.0);
     }
 
-    /// B49: a released ghost's portrait baked through the FFXDeath combine and came back steel-blue
-    /// luma. The gate reaches the world view and nothing else — while the zone glow still does.
+    /// Death-combined, a ghost's portrait would bake steel-blue; the zone glow still reaches it.
     #[test]
     fn a_ghosts_bake_is_not_death_combined() {
         let zone = 0.5;
@@ -1536,8 +1208,6 @@ mod tests {
         );
     }
 
-    /// The control this refactor must not disturb: the drunk/underwater haze was already
-    /// world-only, and still is.
     #[test]
     fn a_drunk_players_bake_stays_sharp() {
         let (zone, drunk) = (0.5, FfxPassState::world(0.0, 1.0));
@@ -1563,10 +1233,6 @@ mod tests {
         );
     }
 
-    /// **The two pairs are independent, which is the whole point of naming them**.
-    /// The reference has one active-pass slot because its screens take turns; ours coexist, so the
-    /// invariant has to be stated: a ghost on the CHARACTER-SELECT list death-combines the glue
-    /// scene and nothing else, and a released ghost in the WORLD never reaches the glue view.
     #[test]
     fn each_pass_pair_reaches_only_its_own_view() {
         let zone = 0.5;
@@ -1607,11 +1273,7 @@ mod tests {
         );
     }
 
-    /// The glue pair carries **no haze lane** — a fact about the reference (its pair is built by
-    /// CGlueMgr; the haze is `primary.z` of the *WorldFrame* glow combine), enforced by
-    /// [`FfxPassState::glue`] having no way to say otherwise. Pinned so the day someone widens that
-    /// constructor, a test argues back — and pinned against a fully hazed WORLD, which is the state
-    /// that would leak if the two pairs were ever refolded into one.
+    /// Against a fully hazed world, the state that would leak if the two pairs were ever merged.
     #[test]
     fn the_glue_pair_never_hazes() {
         let drunk_world = FfxPassState::world(0.0, 1.0);
@@ -1628,11 +1290,8 @@ mod tests {
         );
     }
 
-    /// **The pass-list swap** (`0x6cc630`) — the three conditions, each independently load-bearing.
-    ///
-    /// The guard is `0x467d00() != 0 && 0x672470() != 0xf`, and the death pass REPLACES the glow
-    /// pass outright rather than composing with it, so a ghost has no wave for the same structural
-    /// reason it has no haze.
+    /// The swap's guard is `0x467d00() != 0 && 0x672470() != 0xf` (`0x6cc630`), and a ghost runs
+    /// the death pass in place of the glow pass.
     #[test]
     fn the_warp_arms_only_for_a_living_submerged_world_view() {
         let wet = FfxWave {
@@ -1663,14 +1322,7 @@ mod tests {
         );
     }
 
-    /// **A dry frame is untouched by this feature** — the perf claim, made structurally rather than
-    /// with a frame counter (the machine that would measure it is busy, and a stopwatch could not
-    /// prove this anyway).
-    ///
-    /// Dry, the uniform's first row is bit-identical to what it was before the warp existed and the
-    /// phase row is inert; the node then selects `combine` — the same pipeline object, compiled at
-    /// the same startup, bound through the same layout. The warp costs a dry frame nothing because
-    /// there is nothing of it in a dry frame, not because its cost is small.
+    /// Dry, the uniform's first row is the plain combine's and the node binds the dry pipeline.
     #[test]
     fn a_dry_frame_pays_nothing_for_the_warp() {
         let live = FfxWave {
@@ -1696,10 +1348,6 @@ mod tests {
         );
     }
 
-    /// The phases are a FREE-RUNNING clock, not a timer the dive starts: they advance whether or not
-    /// the wave is armed, so surfacing and diving again does not restart the pattern. Their periods
-    /// are the reference's own two integer millisecond moduli, and being coprime-ish is what stops
-    /// the warp reading as a loop — they rejoin only every ~49 minutes.
     #[test]
     fn the_two_phases_run_independently_off_one_clock() {
         let phase = |ms: u64, i: usize| (ms % WAVE_PERIOD_MS[i]) as f32 / WAVE_PERIOD_MS[i] as f32;
@@ -1707,7 +1355,7 @@ mod tests {
         // Each wraps on its own period and nowhere else.
         assert!(phase(3173, 0) > 0.999 && phase(3174, 0) == 0.0);
         assert!(phase(2804, 1) > 0.999 && phase(2805, 1) == 0.0);
-        // At its own wrap the OTHER phase is mid-stride — the whole point of two moduli.
+        // At one phase's wrap the other is mid-stride.
         assert!(phase(3174, 1) > 0.13 && phase(3174, 1) < 0.14);
         // The joint period: lcm(3174, 2805) ms ≈ 49 min 28 s.
         let gcd = |mut a: u64, mut b: u64| {
@@ -1721,10 +1369,6 @@ mod tests {
         assert_eq!(joint, 2_967_690);
     }
 
-    /// **The LUT is a displacement map, and each channel bends ONE axis.** That is the fact that
-    /// makes the effect a geometric warp rather than a brightness shimmer, and it is visible in the
-    /// texels: `du` depends only on x, `dv` only on y (the shipped format is the signed two-channel
-    /// bump format on both backends — `D3DFMT_V8U8` / `GL_DSDT8_NV`).
     #[test]
     fn the_wave_lut_is_one_sine_per_axis() {
         let lut = wave_lut_texels();
@@ -1740,8 +1384,8 @@ mod tests {
                 assert_eq!(at(x, y).1, at(0, y).1, "dv must not vary across it");
             }
         }
-        // Biased back the way the shipped ps_2_0 permutation does, every texel is its axis's sine
-        // to within one 8-bit step — the quantization the reference itself ships.
+        // Biased back as the shipped `ps_2_0` permutation does, each texel is its sine within one
+        // 8-bit step, the reference's own quantization.
         for i in 0..edge {
             let want = (std::f32::consts::TAU * i as f32 / edge as f32).sin();
             let got = (at(i, i).0 as f32 / 255.0 - 0.5) * 2.0;
@@ -1752,10 +1396,8 @@ mod tests {
         }
     }
 
-    /// GOLDEN — the reference's own pack, down to the truncation. `ffx_glow_wave_lut`'s path B is
-    /// `(s·0.5 + 0.5)·255` → clamp → `__ftol`, and `__ftol` truncates toward zero rather than
-    /// rounding: `sin = 0` packs to **127**, not 128, so the map carries a half-step DC bias the
-    /// reference carries too. Rounding here would be a "cleaner" number and the wrong one.
+    /// The reference packs `(s·0.5 + 0.5)·255`, clamps, and truncates by `__ftol`: `sin = 0` packs
+    /// to 127, not 128, a half-step bias the reference ships too.
     #[test]
     fn the_wave_pack_truncates_like_ftol() {
         let lut = wave_lut_texels();
@@ -1767,12 +1409,7 @@ mod tests {
         assert_eq!(lut[96 * 2], 0, "sin(3π/2) = −1 → 0");
     }
 
-    /// GOLDEN — the three writers of the glue screens' `LightParams.glow`, and the alpha byte the
-    /// death combine quantizes the ghost one into. Each constant has exactly one reference
-    /// image-wide.
-    ///
-    /// The default is a shown-but-unselected glue screen — login, create, and an empty account —
-    /// which is the state the login screen renders in and which is NOT either select arm.
+    /// The default is the shown, unselected glue screen (login, create, an empty account).
     #[test]
     fn the_glue_screens_pin_three_verified_glow_weights() {
         assert_eq!(GlueFfx::default(), GlueFfx::Shown);
@@ -1783,12 +1420,12 @@ mod tests {
         );
         assert_eq!(GlueFfx::SelectLiving.glow(), 0.40, "*0x838574");
         assert_eq!(GlueFfx::SelectGhost.glow(), 0.15, "*0x838570");
-        // Only the ghost arm installs the death pass, and it is the only arm that does.
+        // Only the ghost arm installs the death pass.
         assert_eq!(GlueFfx::SelectGhost.death(), 1.0);
         assert_eq!(GlueFfx::Shown.death(), 0.0);
         assert_eq!(GlueFfx::SelectLiving.death(), 0.0);
-        // The combine's primary alpha byte (`0x6cb9ec`: ×255, +512, fstp, shr 14) — 38 ghosted,
-        // 102 living. A ghost's screen glows at less than half a living one's.
+        // The packed byte (`0x6cb9ec`: ×255, +512, `fstp`, `shr 14`): 38, the ghost's death
+        // combine alpha, and 102, the living glow pass's `w`.
         let alpha_byte = |glow: f32| ((glow * 255.0 + 512.0).to_bits() >> 14) & 0xff;
         assert_eq!(alpha_byte(GlueFfx::SelectGhost.glow()), 38);
         assert_eq!(alpha_byte(GlueFfx::SelectLiving.glow()), 102);

@@ -1,18 +1,6 @@
-//! The shared texture-array pool of the retained pass (B3, decision 1432; split from
-//! `render.rs` at the line budget — one concern: texture residency for the whole lane).
-//!
-//! B2's legs caught the per-cell array design's two driver taxes red-handed in a `sample` of
-//! the armed process: every re-bake recreated a cell's whole array set (`AGX::TextureGen4`
-//! hot — +154 MB of arrays in a 20-s walk), and the per-cell `pending` copy list was never
-//! drained, so the node re-encoded every visible cell's full layer-copy set EVERY FRAME
-//! (`checkDependentBlits` hot). The pool fixes both structurally: a texture is assigned one
-//! (class, layer) slot for the pool's lifetime — deduped across every cell and region — its
-//! layer copy is encoded ONCE (`drain_pending`, the same frame it is queued), and a re-bake
-//! touches no texture at all. Classes grow by SIBLING (a full class opens a bigger one
-//! beside it, capacity ×4), so an existing array is never replaced and no bind group ever
-//! goes stale; the cost is that runs cannot fuse across siblings, which leaves draw counts
-//! trivial either way. The pool resets only with the map (`prepare_static_gx` sees both
-//! published maps empty).
+//! The retained pass's shared texture-array pool. A texture keeps one (class, layer) slot, deduped
+//! across cells and regions, and its layer copy is encoded once. A full class opens a sibling
+//! rather than growing, so no bind group goes stale. The pool resets only with the map.
 
 use bevy::asset::AssetId;
 use bevy::image::Image;
@@ -21,8 +9,7 @@ use bevy::render::render_resource::*;
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 
-/// One class of the pool: every pooled texture of one (size, format, mips) key, as one
-/// `texture_2d_array` with fixed capacity.
+/// Pooled textures of one (size, format, mips) key in one fixed-capacity `texture_2d_array`.
 struct GxPoolClass {
     size: Extent3d,
     format: TextureFormat,
@@ -32,17 +19,14 @@ struct GxPoolClass {
     capacity: u32,
     /// Layers assigned so far (≤ capacity).
     members: u32,
-    /// Layer copies queued but not yet encoded (source texture, destination layer) — drained
-    /// by [`GxTexturePool::drain_pending`] the SAME frame they are queued, exactly once.
+    /// Queued (source, layer) copies, encoded once by [`GxTexturePool::drain_pending`].
     pending: Vec<(Texture, u32)>,
 }
 
-/// A new class's starting capacity; siblings of a full key open at ×4 (8 → 32 → 128 → …,
-/// clamped to the device layer limit) — geometric growth without ever migrating a layer.
+/// A key's first capacity; each sibling opens at four times the largest, up to the layer limit.
 const POOL_BASE_CAPACITY: u32 = 8;
 
-/// The pool resource (render world). Assignment is stable for the pool's lifetime: a texture
-/// id maps to one (class, layer) until the map clears.
+/// The render-world pool: a texture id keeps its (class, layer) until the map clears.
 #[derive(bevy::prelude::Resource, Default)]
 pub(super) struct GxTexturePool {
     classes: Vec<GxPoolClass>,
@@ -80,8 +64,7 @@ impl GxTexturePool {
         slot
     }
 
-    /// The slot untextured items bind (the shader never samples them — the TEXTURED bit is
-    /// clear — but the bind group needs a D2-array view): a 1×1 white class, created once.
+    /// The 1×1 white class untextured items bind: never sampled, but the bind group needs a view.
     pub(super) fn white(
         &mut self,
         render_device: &RenderDevice,
@@ -128,8 +111,7 @@ impl GxTexturePool {
         self.classes.is_empty()
     }
 
-    /// Find a key's class with a free layer, or open one (a sibling at ×4 when the key's
-    /// classes are all full).
+    /// A key's class with a free layer, opening a new sibling when every one is full.
     fn class_with_room(
         &mut self,
         key: (Extent3d, TextureFormat, u32),
@@ -151,10 +133,7 @@ impl GxTexturePool {
             .max()
             .map_or(POOL_BASE_CAPACITY, |c| c.saturating_mul(4))
             .min(max_layers);
-        // The VRAM ledger (1431's regression hunt): bytes for the array about to be created —
-        // block-compressed at their block rate, else 4 B/texel — ×4/3 for mips, over the full
-        // CAPACITY (what the driver allocates). Pooled, this should go near-flat after the
-        // first minutes; a climbing ledger is the churn coming back.
+        // `GX_VRAM`: the array at capacity, BC at block rate else 4 B/texel, ×4/3 with mips.
         if super::gx_perf_enabled() {
             let per_layer = match key.1 {
                 TextureFormat::Bc1RgbaUnorm | TextureFormat::Bc1RgbaUnormSrgb => {
@@ -202,9 +181,8 @@ impl GxTexturePool {
         self.classes.len() - 1
     }
 
-    /// Encode + submit all queued layer copies (one encoder, one submit, then EMPTY — the
-    /// whole point; queue submissions are ordered, so the copies land before the frame's
-    /// render-graph submit).
+    /// Encode and submit every queued layer copy, emptying the queue; submissions are ordered, so
+    /// the copies land before the frame's render-graph submit.
     pub(super) fn drain_pending(
         &mut self,
         render_device: &RenderDevice,
@@ -228,14 +206,9 @@ impl GxTexturePool {
                     encoder.copy_texture_to_texture(
                         s,
                         dst,
-                        // The **physical** mip extent — rounded up to whole blocks. wgpu-core's
-                        // `validate_texture_copy_range` checks `copy_size % block_dimensions`
-                        // unconditionally (there is no "it's the whole mip" exemption), and a
-                        // BLP's authored chain bottoms out at 2x2 — below a BC block on EVERY
-                        // texture. Uncompressed formats have 1x1 blocks, so this is the identity
-                        // there and the line reads the same for both. Without the round-up, the
-                        // first BC texture pooled here is a validation error, and wgpu's default
-                        // handler makes that a process panic.
+                        // Rounded up to whole blocks: wgpu-core's `validate_texture_copy_range`
+                        // rejects a partial block even for a whole mip, and a BLP chain ends at
+                        // 2x2, under one BC block. Uncompressed blocks are 1x1.
                         Extent3d {
                             width: (class.size.width >> mip).max(1).div_ceil(block_w) * block_w,
                             height: (class.size.height >> mip).max(1).div_ceil(block_h) * block_h,

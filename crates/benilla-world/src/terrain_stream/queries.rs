@@ -1,6 +1,5 @@
-//! What the streamed world answers about a position: the spawn-time MCSH ground-shade lookup,
-//! the ground-effect/height queries the sound + clutter systems make against resident tiles, and
-//! the area authority (the `AreaTable.dbc` leaf under the player's feet).
+//! What the streamed world answers about a position: MCSH ground shade, ground effect, terrain
+//! height, and the area authority (the `AreaTable.dbc` leaf under the player's feet).
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_assets::AdtTile;
@@ -9,49 +8,28 @@ use bevy::prelude::*;
 
 use super::TerrainStreamer;
 
-/// The `AreaTable.dbc` id under the player's feet — the zone/subzone, from the containing
-/// resident chunk's MCNK `areaId` (drives zone music/ambience/reverb; later the
-/// minimap zone text). `None` until the ground tile is resident (or off-terrain). Written each
-/// frame by [`update_current_area`]; consumers change-detect on the inner value.
-///
-/// **It is scoped to the character session, not to the process**. It goes back to
-/// `None` the moment there is no avatar to measure from, so "we have not answered yet" is never
-/// spelled the same way as "here is the character before this one".
+/// The `AreaTable.dbc` id under the player's feet, written by [`update_current_area`]. `None` until
+/// the ground tile is resident, and again whenever there is no avatar: it lives with the character
+/// session, not the process.
 #[derive(Resource, Default, PartialEq, Eq)]
 pub struct CurrentArea(pub Option<u32>);
 
-/// Ordering handle on [`update_current_area`] — the leaf-authority write. The zone-text feed
-/// (`crate::area`) orders after it (which itself orders after the interior claim), so leaf +
-/// indoor bit + names always come from one coherent frame — the client's single-pass resolve.
-///
-/// **Every consumer that ACTS on the area belongs after it**, and the zone-channel walk is the
-/// case that proves it: unordered, it read whatever the previous frame had
-/// published and paid for the difference in `CMSG_JOIN_CHANNEL`/`CMSG_LEAVE_CHANNEL` traffic for
-/// zones the player was never in.
+/// The set of [`update_current_area`]. Every consumer that acts on the area orders after it, so
+/// leaf, indoor bit and names come from one frame (the reference resolves them in one pass).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AreaAuthoritySet;
 
 /// Outcome of the spawn-time MCSH ground-shade lookup.
 pub enum ShadeResolve {
-    /// The shade is known: `true` = the doodad's base sits on MCSH-shadowed terrain (sun ×0.5 in the
-    /// lobe), `false` = lit (×2.5, or a deliberate fallback when the ground tile isn't resident).
+    /// `true`: the base sits on MCSH-shadowed terrain; `false`: lit, or no loaded ground tile.
     Ready(bool),
-    /// The doodad's own ground tile is requested but hasn't decoded yet — defer the spawn one frame so a
-    /// straddling tree isn't baked lit before its true tile lands.
+    /// The ground tile is still decoding: defer the spawn a frame rather than bake it lit.
     Pending,
 }
 
-/// Resolve a doodad's terrain ground-shade the reference way: a GLOBAL world-position → tile → chunk
-/// MCSH lookup at the doodad's origin (the client's `0x69b350`), NOT a sample of whichever tile happened
-/// to register the placement — the latter is load-order/timing dependent and left straddling trees wrongly
-/// lit. `bevy_pos` is the doodad's origin (its `Transform.translation`).
-///
-/// - Ground tile resident + decoded → the true MCSH bit under the footprint.
-/// - Ground tile requested but still decoding → [`ShadeResolve::Pending`] (caller defers the spawn).
-/// - Ground tile not in the loaded set (a doodad straddling in from just beyond the ring) → `Ready(false)`:
-///   show it lit rather than hide it, matching the reference (a null tile reads lit until it streams in).
-///   (A doodad whose origin tile is *requested but never decodes* — a missing map-edge ADT — would defer
-///   indefinitely; that can't arise for a real placement, whose origin always lies in an existing tile.)
+/// A doodad's ground shade by a global position → tile → chunk MCSH lookup at its origin (the
+/// reference's `0x69b350`), not a sample of the tile that registered it. A tile outside the loaded
+/// set reads lit, as the reference's null tile does.
 pub fn doodad_ground_shade(
     streamer: &TerrainStreamer,
     adt_tiles: &Assets<AdtTile>,
@@ -68,13 +46,8 @@ pub fn doodad_ground_shade(
     }
 }
 
-/// The MCNK `areaId` under a **Bevy-space** position on the resident terrain — the OUTDOOR leg of
-/// the client's `GetAreaID 0x670250`, for any unit rather than the player.
-///
-/// [`CurrentArea`] is the player's authority and races a WMO interior claim ahead of this
-/// ([`update_current_area`]); there is no per-unit equivalent of that claim, so a caller asking
-/// about a *remote* unit gets the terrain answer alone. `None` off-terrain / mid-stream, and an
-/// `areaId` of 0 (unassigned in the data) reads as a miss, same as the player's resolver.
+/// The MCNK `areaId` under a Bevy-space position: the outdoor leg of the reference's `GetAreaID`
+/// (`0x670250`), for any unit, with no interior claim. An `areaId` of 0 (unassigned) is a miss.
 pub fn area_id_under(
     streamer: &TerrainStreamer,
     adt_tiles: &Assets<AdtTile>,
@@ -87,10 +60,7 @@ pub fn area_id_under(
     benilla_formats::area_id_at(&adt.chunks, wow).filter(|&id| id != 0)
 }
 
-/// The `GroundEffectTexture` id under a **Bevy-space** position on the resident terrain — the
-/// footstep terrain-type source (decision 0070 slice 3; the same global position→tile→chunk
-/// lookup shape as [`doodad_ground_shade`]). `None` off-terrain / mid-stream / no-effect cell —
-/// the footstep resolver falls back to its Dirt default.
+/// The `GroundEffectTexture` id under a Bevy-space position, the footstep terrain type.
 pub fn ground_effect_under(
     streamer: &TerrainStreamer,
     adt_tiles: &Assets<AdtTile>,
@@ -103,15 +73,10 @@ pub fn ground_effect_under(
     benilla_formats::ground_effect_at(&adt.chunks, wow)
 }
 
-/// The terrain surface height (raw WoW `z`) under a **Bevy-space** position on the resident terrain —
-/// the terrain leg of the client's down-ray arbitration (`FUN_006821f0`'s `0x69c320` probe, and the
-/// identical one in `GetAreaID 0x670250`), which races the WMO probe and wins the column whenever the
-/// ground is strictly nearer under the eye. Same global position→tile→chunk lookup shape as
-/// [`ground_effect_under`].
-///
-/// `None` means **no terrain surface in this column**, which the race must read as "no terrain hit",
-/// never as "ground at 0": off the streamed ring, mid-decode, or — the load-bearing case — the column
-/// falls in an MCNK hole, the cut-out through which a mine or cave entrance reaches its WMO interior.
+/// The terrain height (WoW `z`) under a Bevy-space position: the terrain leg of the reference's
+/// down-ray arbitration (`0x6821f0`'s `0x69c320` probe, also in `GetAreaID` `0x670250`), which
+/// wins the column when the ground is strictly nearer than the WMO. `None` is no terrain in the
+/// column (off the ring, decoding, or an MCNK hole over a cave mouth), never ground at 0.
 pub fn terrain_height_under(
     streamer: &TerrainStreamer,
     adt_tiles: &Assets<AdtTile>,
@@ -120,9 +85,7 @@ pub fn terrain_height_under(
     terrain_height_under_cached(streamer, adt_tiles, bevy_pos, &mut None)
 }
 
-/// [`terrain_height_under`] for a caller that asks many columns of the same tile in one go —
-/// the sun-flare march asks ~96 a frame along two rays: the tile resolution
-/// (a streamer map lookup and an asset lookup) is done once per tile change, not per column.
+/// [`terrain_height_under`] for many columns at once: the tile resolves once per tile change.
 pub fn terrain_height_under_cached<'a>(
     streamer: &TerrainStreamer,
     adt_tiles: &'a Assets<AdtTile>,
@@ -144,15 +107,10 @@ pub fn terrain_height_under_cached<'a>(
     benilla_formats::terrain_height_at(&adt.chunks, wow)
 }
 
-/// Track the `AreaTable` id under the player's feet. Faithful to the client's GetAreaID resolver
-/// (`GetAreaID 0x670250`): a WMO interior takes precedence over the terrain chunk when the
-/// down-ray keeps the WMO nearer — [`CurrentAreaInterior`] is exactly that player-position
-/// **faces-only** down-ray (`0x6a8a20`; the portal-legged render seed flipped in the abbey
-/// yard), so an indoor city (Ironforge, Undercity) reports its OWN area via
-/// `WMOAreaTable.AreaTableID` rather than the enclosing zone's terrain. Outdoors (no interior
-/// claim, or a group with no area row) it falls to the containing chunk's MCNK `areaId`. Holds
-/// the previous value while the tile is still decoding, so a tile-edge crossing never flickers
-/// through `None`.
+/// Tracks the `AreaTable` id under the player's feet as the reference's `GetAreaID` (`0x670250`)
+/// does: a WMO interior wins when the faces-only down-ray (`0x6a8a20`) finds it nearer, by its
+/// `WMOAreaTable.AreaTableID`; outdoors it is the chunk's MCNK `areaId`. Holds the last value
+/// while a tile decodes.
 pub(super) fn update_current_area(
     mut area: ResMut<CurrentArea>,
     focus: Res<crate::terrain_stream::ViewFocus>,
@@ -162,32 +120,17 @@ pub(super) fn update_current_area(
     wmo_areas: Option<Res<crate::wmo_portal::WmoAreas>>,
 ) {
     let Some(wow) = focus.body_pos() else {
-        // **No avatar — and the authority DIES with the character session**.
-        //
-        // The hold below is a within-session convenience (a tile-edge crossing must not flicker
-        // through `None`). Holding across the *session* boundary is a different thing entirely:
-        // this resource had exactly one writer, which only ever assigned `Some`, so once set it
-        // could never return to `None` for the life of the process — and the next character's
-        // login read the PREVIOUS character's zone until their own tiles decoded. The zone-channel
-        // walk believed it and joined `General - Stormwind City` for a character standing in the
-        // Eastern Plaguelands, then left it again a beat later; `sound/mod.rs`'s `world_audio_live`
-        // already carried a hand-written guard against the same staleness, which is the tell that
-        // the defect was the lifetime and not either consumer.
-        //
-        // `body_pos()` is `Some` only for a live avatar (`ViewFocus::body`/`detached`) and `None`
-        // for both glue-screen focuses, so this is the session edge without a state transition to
-        // subscribe to. A recoverable disconnect keeps the body as the local puppet, so the
-        // area correctly survives one.
+        // No avatar: the area dies with the character session, or the next login reads this
+        // character's zone. `body_pos()` is `None` at both glue screens; a recoverable disconnect
+        // keeps the body, and the area with it.
         if area.0.is_some() {
             *area = CurrentArea(None);
         }
         return;
     };
     if !focus.body_settled() {
-        // …and one whose own world is still arriving has no area worth publishing: the leaf under
-        // it is not yet the leaf it is standing in. Hold the last real answer instead — the
-        // reference is behind a loading screen for exactly this window
-        // ([`ViewFocus::body_settled`], 1287).
+        // A body whose world is still arriving holds the last answer: the reference is behind a
+        // loading screen for this window.
         return;
     }
     // WMO interior first: the player's down-ray group resolved to its WMOAreaTable world area.
@@ -217,8 +160,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// A world with every resource [`update_current_area`] reads, and no terrain at all — so the
-    /// only thing under test is what the system does about the *body*, not what it finds under one.
+    /// Every resource [`update_current_area`] reads, and no terrain.
     fn bare_world() -> World {
         let mut w = World::new();
         w.init_resource::<CurrentArea>();
@@ -229,14 +171,6 @@ mod tests {
         w
     }
 
-    /// **The area authority dies with the character session**.
-    ///
-    /// It had exactly one writer, which only ever assigned `Some`, and nothing reset it — so once
-    /// a character had published a zone it stayed published for the life of the *process*. The
-    /// next login read it before its own tiles decoded, and the zone-channel walk turned that into
-    /// `CMSG_JOIN_CHANNEL` for the previous character's capital: the director logged into a
-    /// character in the Eastern Plaguelands and watched Stormwind City's three channels join and
-    /// then leave again.
     #[test]
     fn no_avatar_means_no_area() {
         let mut w = bare_world();
@@ -254,7 +188,7 @@ mod tests {
              tile-edge/flicker guard, and it stays"
         );
 
-        // …and then logged out. `ViewFocus` carries no body at either glue screen.
+        // …then logged out: no body at either glue screen.
         w.insert_resource(crate::terrain_stream::ViewFocus::camera());
         w.run_system_once(update_current_area).unwrap();
         assert_eq!(
@@ -274,9 +208,7 @@ mod tests {
         assert_eq!(w.resource::<CurrentArea>().0, None);
     }
 
-    /// A **recoverable** disconnect keeps the avatar as the local puppet, so the area must
-    /// survive one: nothing about the world under the player's feet changed when the socket died.
-    /// This is why the clear hangs off "is there a body" rather than off the net session.
+    /// A recoverable disconnect keeps the avatar as the local puppet, and with it the area.
     #[test]
     fn a_body_that_survives_a_drop_keeps_its_area() {
         let mut w = bare_world();

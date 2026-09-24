@@ -1,57 +1,37 @@
-//! The WMO prop-light machinery — a placed prop's resolved lighting and the interior SH fold.
-//!
-//! Split out of `terrain_stream.rs` (0830 named the carve; 0832 executed it): this is spawn-side
-//! state and math — consumed by the placement assembler, the WMO-gameobject prop lane
-//! (`crate::entities`' `wmo_props`) and the GameObject footprint classifier (`crate::interior`) —
-//! and none of it touches the streamer's residency logic. Paths outside the streamer are stable:
-//! `terrain_stream` re-exports [`fold_interior_probe`] and [`PropLobeLight`].
+//! WMO prop lighting: a placed prop's resolved light and the interior SH and particle folds.
 
 use std::sync::Arc;
 
 use benilla_assets::M2Model;
 use bevy::prelude::*;
 
-/// One WMO doodad prop instance: its M2 handle and the **world** transform (the WMO instance
-/// transform composed with the doodad's WMO-local transform), spawned once the M2 asset loads.
+/// One WMO doodad prop at its world transform, spawned once its M2 loads.
 pub(crate) struct WmoDoodadInst {
     pub(crate) handle: Handle<M2Model>,
     pub(crate) transform: Transform,
-    /// Every WMO group whose MODR names this prop — the portal-cull key, so a prop is hidden with
-    /// the rooms it furnishes and drawn while any one of them is visible. Empty for a MODD no group
-    /// references (the reference never instantiates one at all; we still show it, uncullable,
-    /// rather than change what draws today).
+    /// The groups whose MODR names this prop, its portal-cull key: drawn while any is visible.
+    /// Empty for a MODD no group names: never instantiated by the reference, drawn here with no
+    /// room gate.
     pub(crate) groups: Arc<[u16]>,
-    /// The prop's lighting ([`PropLight`], from `WmoModel::doodad_base` composed with this
-    /// placement): exterior sky-lit, or the interior MODD-colour base + its owning group's MOLR
-    /// lights placed in world space — folded into the prop's SH probe once its M2 loads (the fold
-    /// reference point needs the M2 bounds).
     pub(crate) light: PropLight,
     pub(crate) spawned: bool,
 }
 
-/// A WMO prop's placement-resolved lighting: the asset-level [`DoodadBase`](benilla_assets::DoodadBase)
-/// with the owning group's MOLR lights already transformed to WORLD (Bevy) space — so the
-/// spawn-time SH fold needs only the loaded M2's bounds (its reference point) and nothing from the
-/// WMO asset.
+/// A WMO prop's lighting, its MOLR lights already in world space for the spawn-time fold.
 pub(crate) enum PropLight {
     Exterior,
     Interior {
-        /// `cap96(MODD.colour)` — the ambient word (0–1 RGB).
+        /// The ambient word, `cap96(MODD.colour)` (0–1 RGB).
         ambient: [f32; 3],
-        /// `floor112(MODD.colour)` — the diffuse word, committed on the fixed interior axis.
+        /// The diffuse word, `floor112(MODD.colour)`, committed on the fixed interior axis.
         diffuse: [f32; 3],
-        /// The owning group's MOLR omni lights: world (Bevy) position, colour × intensity, and the
-        /// disk `attenStart`/`attenEnd` window (the fold's range gate).
+        /// The owning group's MOLR omni lights.
         lights: Vec<PropLobeLight>,
     },
 }
 
 impl PropLight {
-    /// The prop's lighting lane, as the mouseover inspector says it. A WMO prop that looks wrong is
-    /// almost always on the wrong *lane* or carrying an unbaked base — and neither is visible from
-    /// the model path alone, which is why Booty Bay's black entrance arch read as a texture bug for
-    /// as long as it did. `sky-lit` is the exterior lane; the interior lane prints
-    /// the MODD-colour words it actually commits, so a base of `#000000` names itself on hover.
+    /// The lighting lane for the mouseover inspector: `sky-lit`, or the interior words it commits.
     pub(crate) fn inspector_label(&self) -> String {
         let hex = |c: &[f32; 3]| hex_word(*c);
         match self {
@@ -70,17 +50,13 @@ impl PropLight {
     }
 }
 
-/// A committed light word (0–1 RGB) as `#rrggbb` — the reading every prop inspector prints, here
-/// once so the terrain lane's label and the WMO-gameobject lane's (`entities::wmo_props`) cannot
-/// drift into two different renderings of the same number.
+/// A committed light word (0–1 RGB) as `#rrggbb`, the one form every prop inspector prints.
 pub fn hex_word(c: [f32; 3]) -> String {
     let b = c.map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8);
     format!("#{:02x}{:02x}{:02x}", b[0], b[1], b[2])
 }
 
-/// One MOLR-referenced light as the interior fold consumes it (world Bevy space, colour
-/// pre-multiplied by the authored intensity). Shared by the MODD prop spawn fold and the
-/// GameObject footprint lane ([`crate::interior`] via [`crate::wmo_portal`]'s verdict).
+/// One MOLR light as the interior folds read it: world position and colour × intensity.
 pub struct PropLobeLight {
     pub pos: Vec3,
     pub color_i: [f32; 3],
@@ -88,50 +64,25 @@ pub struct PropLobeLight {
     pub atten_end: f32,
 }
 
-/// The **fixed-function** lane's committed light, evaluated at the world up axis — the single
-/// constant every LIT particle of a model standing in a WMO room is multiplied by.
-///
-/// A particle draw does **not** take the SH vertex program a mesh batch takes, and that is not an
-/// approximation either way — it is a structural fork. The batch-record TYPE dispatch
-/// (`70b613`/`70b61e jmp [eax*4+0x70b728]`) sends TYPE 0 (mesh) and TYPE 2 (batched doodads) to
-/// `0x70baf0` with the frame's `M2UseShaders` mask bit cached at `[esi+0x32f0]`, but TYPE 4
-/// (**particles**, `0x70d8b0`) — with 1, 3 and 5 — through the shared helper `0x70ca50`, which
-/// writes no such field and NULL-binds **both** program slots (`70ca74 SetState(0x40, 0)`,
-/// `70ca80 SetState(0x3f, 0)`). `0x70b360` zeroes `[esi+0x32f0]` at the head of every batch
-/// (`70b607`), and only `0x70cb30` (TYPE 0) and `0x70d330` (TYPE 2) ever write it back — so
-/// `0x70baf0`'s `70bb9c test eax,eax` reads 0 for a particle and `70bba4 je 0x70bdf2` takes the
-/// **fixed-function device-light commit** `0x71c730` unconditionally.
-///
-/// So the curve here is the hardware's `max(N·L, 0)`, **not** [`fold_interior_probe`]'s SH lobe —
-/// a mesh and its own particles share the room's committed WORDS and legitimately differ in the
-/// function applied to them (0.900 vs 0.869 on the key axis; the SH lobe also wraps around the
-/// back, where this clamps to nothing). Decision 1709 supersedes 1705's reading.
-///
-/// - **Slot 0** is the key light. `0x71c2f0` reconstructs it from the context's linear moments as
-///   `1.25·P − 0.25·DC` with **no clamp** (`0x4549a0` is three dword moves and a `ret 0xc`); with
-///   the interior leg's single directional `P == DC` exactly, so it reduces to the committed
-///   diffuse itself, and the ambient's `0.25·(DC − P)` correction is zero. `N` is world up and the
-///   axis is the fixed `(−0.30822, −0.30822, −0.9)`, so `N·L` is **0.9 at every camera angle**.
-/// - **Slots 1..3** are the ≤3 nearest MOLT points, diffuse-only (ambient and specular forced to 0
-///   at `71c7e3`/`71c7e6`), under GL's own distance attenuation `1/(0.7d + 0.03d²)` — constant
-///   term zero. Because N is world up, a room light at or below the emitter contributes exactly
-///   nothing.
-///
-/// Unclamped by design: the reference clamps the **product**, not the term (GL clamps the lit
-/// vertex colour), which is where `sim`'s fold does it.
+/// The fixed-function light at world up that every lit particle of a model in a WMO room takes. A
+/// particle batch (TYPE 4, `0x70d8b0`) goes through `0x70ca50`, which binds no vertex program, so
+/// `0x70baf0` takes the device-light commit `0x71c730`: `max(N·L, 0)` over the room's committed
+/// words, not [`fold_interior_probe`]'s SH lobe. Slot 0 is the committed diffuse (`0x71c2f0`
+/// rebuilds `1.25·P − 0.25·DC`, and one directional has `P == DC`), with `N·L` 0.9 on the fixed
+/// axis; slots 1..3 are the ≤3 nearest MOLT points, diffuse only, under `1/(0.7d + 0.03d²)`.
+/// Unclamped: GL clamps the lit colour, the product, which the particle sim does.
 pub fn interior_light_up(
     ambient: [f32; 3],
     diffuse: [f32; 3],
     ref_point: Vec3,
     lights: &[PropLobeLight],
 ) -> [f32; 3] {
-    // Toward-light, Bevy space — the same axis the SH fold puts the diffuse word on.
+    // Toward-light, Bevy space: the axis the SH fold puts the diffuse word on.
     let axis = Vec3::new(-0.30822, 0.9, -0.30822).normalize();
     let mut lit = Vec3::from_array(ambient) + Vec3::from_array(diffuse) * axis.y.max(0.0);
-    // The ≤3 NEAREST in range, which is the reference's 4-entry max-heap by squared distance
-    // (`0x71bf90`, `71bfca cmp esi,0x4`) minus slot 0. Membership is our own disk window — the
-    // reference's is `0x6a7ac0`'s radius test against the proxy's WMO instances, which we model
-    // the same way for the SH lane; see the residual in.
+    // The ≤3 nearest: the reference's 4-entry max-heap by squared distance (`0x71bf90`) minus
+    // slot 0. Membership is the light's disk window, as in the SH fold; the reference's is
+    // `0x6a7ac0`'s radius test against the proxy's WMO instances.
     let mut near: Vec<(f32, &PropLobeLight)> = lights
         .iter()
         .map(|l| ((l.pos - ref_point).length(), l))
@@ -151,12 +102,8 @@ pub fn interior_light_up(
     lit.to_array()
 }
 
-/// Fold one interior committed light into its 7-row SH probe: the ambient word + the diffuse word
-/// as a directional on the FIXED interior axis + each MOLR lobe windowed by its disk
-/// attenStart/attenEnd from `ref_point` (the byte-verified `0x69e1c0` falloff: d ≤ start → 1;
-/// d ≥ end → excluded; else linear). One definition for both interior lanes — the MODD prop
-/// (spawn-time, MODD-colour words) and the GameObject footprint (classify-time, MOCV-derived
-/// words); the SH closed form itself is [`prop_probe_coeffs`](crate::lighting::prop_probe_coeffs).
+/// An interior light as its 7-row SH probe, each MOLR lobe windowed by its distance from
+/// `ref_point` (`0x69e1c0`: full inside `attenStart`, none past `attenEnd`, linear between).
 pub fn fold_interior_probe(
     ambient: [f32; 3],
     diffuse: [f32; 3],
@@ -186,14 +133,8 @@ pub fn fold_interior_probe(
 mod tests {
     use super::*;
 
-    /// GOLDEN — the exact worked case for the WENTITY interior leg (`0x6a7300`
-    /// → `0x71bce0`/`0x71bc70` → `0x71c2f0` → `0x71c730`), reproduced end to end. A floor MOCV
-    /// sample of `(70, 60, 50)`: the HSV boost fires (`70 < 168`, a uniform ×2.4 to `(168,144,120)`)
-    /// and the cap does not (`70 <= 96`, so the ambient word is the sample itself). With one
-    /// directional and no points, `0x71c2f0`'s `P == DC` exactly, so the committed diffuse IS the
-    /// boosted word and the ambient correction is zero — leaving `sample/255 · (2.4·0.9 + 1.0)`
-    /// = `sample/255 · 3.16` per channel. The tone-shaping is the classifier's (`floor168`/`cap96`);
-    /// this pins the arithmetic below it.
+    /// The reference's interior leg (`0x6a7300` → `0x71bce0`/`0x71bc70` → `0x71c2f0` →
+    /// `0x71c730`) on a (70, 60, 50) floor sample: `sample/255 · (2.4·0.9 + 1.0)` per channel.
     #[test]
     fn the_committed_interior_light_at_world_up_is_the_reference_worked_case() {
         let sample = [70.0f32, 60.0, 50.0].map(|c| c / 255.0);
@@ -210,10 +151,7 @@ mod tests {
         }
     }
 
-    /// A MOLT point light reaches a particle **only from above**. The normal is world up and the
-    /// term is the hardware's `max(N·L, 0)`, so a room light at or below the emitter contributes
-    /// exactly zero — the fixed-function lane has no wrap-around, which is precisely where it
-    /// parts company with the SH lobe a mesh batch takes.
+    /// With N world up, `max(N·L, 0)` has no wrap-around, unlike the SH lobe.
     #[test]
     fn a_room_light_below_the_emitter_contributes_nothing() {
         let lamp = |y: f32| PropLobeLight {

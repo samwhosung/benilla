@@ -1,83 +1,33 @@
-//! **The modifier keys** — the dev-overlay chord every instrument is bound on, and the
-//! stuck-modifier reconciliation that keeps the keyboard honest underneath it.
+//! The modifier keys: the dev-overlay chord every instrument is bound on, and the stuck-modifier
+//! reconciliation beneath it.
 //!
-//! The chord ([`dev_chord`]) lived in `debug_panel` because the panel was its first user; six
-//! modules then reached into a *debug overlay* to ask whether Ctrl+Shift was down — the player
-//! controller's free-fly toggle and land-here, the perf HUD, the sound mute, the inspector.
-//! Decision 1160 moves it here, where the leaf module that already owns modifier state is
-//! (92 lines, no dependants of its own). Nothing about "which two modifiers are the dev plane" is
-//! a debug-panel opinion.
-//!
-//! ## Stuck-modifier reconciliation against the OS's live flag state
-//!
-//! macOS system shortcuts that grab the keyboard *without* de-focusing the window — the ⇧⌘5
-//! screenshot overlay is the canonical one — swallow the modifiers' release events: the overlay is
-//! a non-activating panel, so the app never receives `Focused(false)` (Bevy's stuck-key reset,
-//! `KeyboardFocusLost` → `release_all`, never fires), and winit only synthesizes modifier key
-//! events from `flagsChanged`, which the grabbed keyboard never delivers (verified in
-//! winit 0.30.13 `platform_impl/macos/view.rs::update_modifiers`). `ButtonInput<KeyCode>` then
-//! reports Shift/Cmd held indefinitely, and every bare-key binding — the action bar's number row
-//! behind `ui_script::input`'s bare-binding gate — goes dead until the user happens to tap the
-//! stuck modifier again.
-//!
-//! The fix: poll the OS's live modifier state (`+[NSEvent modifierFlags]` — hardware-derived and
-//! documented as independent of the event stream) once per frame, right after Bevy's own input
-//! collection, and **release** any modifier Bevy believes is down but the OS says is up.
-//! Release-only by design: the hardware state leads the event stream, so a legitimately
-//! just-pressed modifier is never wrongly released — whereas synthesizing *presses* from the poll
-//! could race in-flight release events and manufacture the same bug in reverse. The poll can't
-//! tell left from right within a family, so an up family releases both variants (only ever a
-//! correction — a genuinely held key keeps its family bit set and is never touched).
+//! A macOS shortcut that grabs the keyboard without de-focusing the window (the ⇧⌘5 screenshot
+//! overlay) swallows the modifiers' release events: no focus loss arrives, and winit synthesizes
+//! modifier events only from `flagsChanged`, which the grab withholds. Shift or Cmd then stays
+//! held and every bare-key binding goes dead. Each frame after Bevy's input collection, any
+//! modifier the OS's live state (`+[NSEvent modifierFlags]`) reports up is released, both sides of
+//! its family. Release only: synthesized presses could race in-flight release events.
 
 use bevy::prelude::*;
 
-/// How the dev plane is written on screen. Every surface that names a chord reads this instead of
-/// spelling one out, so the panel footer, the inspector badge and the mute checkbox can't drift from
-/// what [`dev_chord`] actually listens for.
+/// How the dev plane is written on screen; every surface that names the chord reads this.
 pub const DEV_CHORD: &str = "Ctrl+Shift";
 
-/// Did the **dev-overlay chord** — [`DEV_CHORD`]+*key* — just fire? (
-/// 1043 — which moved the last two dev keys onto it, so the whole fleet is here now.)
+/// Whether the dev-overlay chord, [`DEV_CHORD`] + `key`, just fired. Exactly Ctrl and Shift, either
+/// side: Alt and Super block it, since AltGr is Ctrl+Alt and AltGr+Shift+key typed into chat must
+/// not fire. Of the reference's 152 default bindings only `CTRL-SHIFT-TAB` and
+/// `CTRL-SHIFT-PAGEDOWN` use this plane, and no letter does. Not gated on
+/// `ui_script::UiKeyboardCapture`: a chord is never typed text.
 ///
-/// The dev instruments used to sit on bare letters, which is a namespace we don't own: every letter is
-/// a *game* binding in the reference client, so `P` both opened the spellbook and toggled the perf HUD.
-/// They moved to `Ctrl`+`Cmd`, and then off it: on Windows that is `Ctrl`+`Win`, a plane the
-/// shell owns and keeps extending — `Win+Ctrl+M` is Magnifier settings, which had our mute.
-///
-/// **`Ctrl`+`Shift`, one plane on every OS** (director's call). The alternative was keeping
-/// `Ctrl`+`Cmd` on macOS for its one real advantage — Cmd is outside the reference's binding namespace
-/// (1.12 builds binding names from `ALT-`/`CTRL-`/`SHIFT-` only), so nothing in game could *ever* claim
-/// it. That buys protection against a binding no default declares and no player has yet written, and
-/// it costs a per-OS split in the docs, the hints and the reader's head. One plane wins. It also drops
-/// our dependence on winit's `sendEvent:` swizzle, without which AppKit's swallowed `keyUp` under Cmd
-/// would latch a chord after one use (0585's macOS risk, now simply not run).
-///
-/// `Ctrl`+`Shift` is the emptiest plane the reference *can* name: of its 152 defaults, exactly two
-/// carry two modifiers — `CTRL-SHIFT-TAB` and `CTRL-SHIFT-PAGEDOWN` — and no letter at all.
-/// `Ctrl`+`Alt` was never available: that is AltGr, which European layouts type real characters with.
-///
-/// **Exactly those two modifiers and no others**, both sides of each. The block is what makes this
-/// plane safe to leave ungated below: AltGr+Shift+*key* is `Ctrl`+`Alt`+`Shift`+*key*, and a German
-/// layout typing one of those into chat must not fire an overlay.
-///
-/// **"No letter at all" was half the story, and the missing half cost us a plane's worth of safety**.
-/// The reference does not match bindings by equality alone: an exact miss re-probes
-/// **once** with the leftmost modifier dropped, so `CTRL-SHIFT-`*key* falls through to
-/// `SHIFT-`*key* — never to the bare letter, which is why this plane survived the correction at all,
-/// but far enough that `Ctrl`+`Shift`+`P` would open the pet paper doll (`SHIFT-P`,
-/// `TOGGLECHARACTER3`) under the perf HUD. So the other half of the rule now lives where the law
-/// itself does, in `bindings::BindingDispatch::resolve`: this plane spends the keyboard's
-/// **fallback probe**, and only that — an exact `CTRL-SHIFT-` binding, the reference's two included,
-/// still dispatches normally.
-///
-/// Deliberately **not** gated on [`crate::ui_script::UiKeyboardCapture`] the way the bare-key toggles
-/// were: a chord can't be mistaken for typed text, so the dev overlays stay reachable with the chat bar
-/// open.
+/// Deviation: the reference (`0x4b7990`) retries a binding miss once without the leftmost
+/// modifier, so `CTRL-SHIFT-P` would reach `SHIFT-P` (`TOGGLECHARACTER3`, the pet paper doll); in
+/// a run with dev affordances `bindings::BindingDispatch::resolve` skips that retry on this plane,
+/// because a dev chord must open nothing in game. An exact `CTRL-SHIFT-` binding still dispatches.
 pub fn dev_chord(keys: &ButtonInput<KeyCode>, key: KeyCode) -> bool {
     dev_plane(keys) && keys.just_pressed(key)
 }
 
-/// The modifier half of [`dev_chord`]. See there for why the plane is what it is.
+/// The modifier half of [`dev_chord`].
 fn dev_plane(keys: &ButtonInput<KeyCode>) -> bool {
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -90,22 +40,13 @@ fn dev_plane(keys: &ButtonInput<KeyCode>) -> bool {
     ctrl && shift && !blocked
 }
 
-/// Keys a **synthetic** input source is holding this frame — the probe harness's `WOW_PROBE_KEY`
-/// taps are the only writer today.
-///
-/// The reconciliation above polls the *hardware* flag state, which by construction reads "up" for
-/// a key no hand is on. Without this list a synthesized `Shift`/`Ctrl` is released the frame after
-/// it is pressed — and logged as a stuck-key correction, so the instrument reads as working while
-/// **no probe can reach a chord binding on macOS at all** (`SHIFT-V`'s friendly nameplates, the
-/// `Ctrl`+`Shift`+`F` free-fly the `"Shift"` tap name was added for). The engine owns the type
-/// because the reconciler does; whoever synthesizes input writes it, on every platform.
+/// Keys a synthetic input source (the probe's `WOW_PROBE_KEY` taps) holds this frame, written by
+/// whatever synthesizes input on every platform: the reconciler's hardware poll reads them as up
+/// and would release them a frame after the press.
 #[derive(Resource, Default)]
 pub struct SyntheticHold(pub Vec<KeyCode>);
 
-/// Is `code` a modifier Bevy holds down that nothing is legitimately holding — i.e. stuck, and the
-/// reconciler's to release? Pure, so the rule is testable off-platform (the reconciler itself
-/// needs AppKit and the main thread) — which is also why it is compiled for the test build of
-/// every platform, and only there off macOS.
+/// Whether Bevy holds `code` down with no synthetic source holding it: stuck, if the OS says up.
 #[cfg(any(target_os = "macos", test))]
 fn is_stuck(code: KeyCode, pressed: &ButtonInput<KeyCode>, hold: &SyntheticHold) -> bool {
     pressed.pressed(code) && !hold.0.contains(&code)
@@ -166,9 +107,8 @@ mod mac {
             if flags.contains(flag) {
                 continue;
             }
-            // Guarded so an in-sync frame (the overwhelmingly common case) never marks the
-            // resources changed — and a key a synthetic source is holding
-            // ([`super::SyntheticHold`]) is never "stuck": the hardware poll cannot see it.
+            // Guarded so an in-sync frame never marks the resources changed; a synthetic hold is
+            // never stuck, since the hardware poll cannot see it.
             let mut synthetic = false;
             for code in keys {
                 if super::is_stuck(code, &codes, &hold) {
@@ -209,11 +149,7 @@ mod tests {
         }
     }
 
-    /// One modifier is not the chord, and a third one names something else. The case that matters:
-    /// AltGr *is* `Ctrl`+`Alt`, so AltGr+Shift+key is a character a European layout types, never a
-    /// dev chord — the overlays are ungated while the chat bar is open. `Ctrl`+`Cmd` is likewise
-    /// nothing of ours now: on Windows it is the shell's, `Win+Ctrl+M` being Magnifier
-    /// settings.
+    /// AltGr is Ctrl+Alt, so AltGr+Shift+key is typed text, never the chord.
     #[test]
     fn a_lone_or_extra_modifier_is_not_the_chord() {
         for held in [
@@ -227,11 +163,6 @@ mod tests {
         }
     }
 
-    /// A modifier a **synthetic** source is holding is never "stuck". The macOS reconciler polls
-    /// the hardware flags, which read up for a key no hand is on — so without the exemption a
-    /// synthesized chord dies the frame after it is pressed, and every `WOW_PROBE_KEY` chord
-    /// (`SHIFT-V`'s friendly nameplates, `Ctrl`+`Shift`+`F`'s free-fly) is unreachable on the
-    /// platform we develop on, while the log calls it a stuck-key fix.
     #[test]
     fn a_synthesized_modifier_is_not_stuck() {
         let held = keys(&[KeyCode::ShiftLeft]);
@@ -248,8 +179,6 @@ mod tests {
         );
     }
 
-    /// The label a hint prints is the plane actually listened for — one const, one predicate, so a
-    /// player is never told to press a key we stopped reading.
     #[test]
     fn the_label_matches_the_plane() {
         assert_eq!(DEV_CHORD, "Ctrl+Shift");

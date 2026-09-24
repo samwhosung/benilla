@@ -1,60 +1,39 @@
-//! Animated **materials** on placed models (decision 0130 phases 2/3): the per-batch baked
-//! colour-alpha/weight loops ([`MatAnim`] — composed into the render-alpha `MeshTag` by the
-//! visibility authority) and the shared-clock UV-scroll / tint registries
-//! ([`UvAnimMaterials`] / [`TintAnimMaterials`]) their samplers tick. Split from the host module
-//! ([`super`]) along the concern seam: this file is about *material* channels; the host file is
-//! about *bone* channels (the anim host, the variation windows, the draw gate).
+//! Animated materials: the per-batch colour-alpha and weight loops ([`MatAnim`]) and the
+//! texture-transform and tint registries ([`UvAnimMaterials`], [`TintAnimMaterials`]).
 
 use bevy::prelude::*;
 
 use benilla_assets::ModelAnimations;
 
-/// Per-submesh **animated material alpha** (decision 0130 phase 2): the batch's baked
-/// colour-alpha/weight loops + how this instance clocks them. [`sample_mat_anim`] keeps
-/// [`Self::current`] fresh; the model-`Visibility` authority multiplies it into the render-alpha
-/// `MeshTag` it already owns (a composed *input*, not an extra tag writer — the 0066 protocol) and
-/// hides the batch at combined 0 (the `A ≤ 0` cull, `0x707b3a`–`0x707b5c`).
-///
-/// The loops are baked **per sequence** (`benilla_formats::AlphaAnim`), so an instance also has to
-/// say *which* sequence it is playing — see [`Self::host`].
+/// Per-submesh animated material alpha: the batch's per-sequence colour-alpha and weight loops,
+/// sampled into [`Self::current`]. The visibility authority multiplies that into the render-alpha
+/// `MeshTag` and hides the batch at 0, the reference's `A ≤ 0` cull (`0x707b3a`–`0x707b5c`).
 #[derive(Component)]
 pub struct MatAnim {
     anim: std::sync::Arc<benilla_formats::AlphaAnim>,
-    /// The entity whose `AnimationPlayer` decides which sequence's loops to read, re-resolved every
-    /// frame — the **unit lane**, where the played sequence changes constantly and the batch's
-    /// authored visibility changes with it (a voidwalker's upper armour is weight 0 in Stand and 1
-    /// only in Death). `None` for an instance pinned to one sequence for its life: a placed doodad
-    /// (armed once at load with `animations[0]`, `0x70ebd0`/`0x7121a0`) or a spell effect —
-    /// both then read [`Self::seq`] on the spawn clock, which is the pre-per-sequence behaviour.
+    /// The entity whose `AnimationPlayer` names the sequence to read, re-resolved every frame (the
+    /// unit lane: a voidwalker's upper armour is weight 0 in Stand, 1 in Death). `None` pins the
+    /// instance to [`Self::seq`] on its spawn clock: a spell effect, or a placed doodad, which
+    /// reads slot 0 where the reference reads the sequence each arm picks (op4 `0x7121a0`, called
+    /// from the load build `0x70ebd0` and again on every re-roll).
     host: Option<Entity>,
-    /// The sequence **file slot** to read: fixed at spawn for the pinned lanes, and the last one
-    /// resolved from [`Self::host`] for the unit lane. `None` ⇒ slot 0 (the bake's own degrade).
+    /// The file sequence slot to read: fixed when pinned, the last one resolved from
+    /// [`Self::host`] otherwise; `None` reads slot 0.
     seq: Option<usize>,
-    /// `Time::elapsed_secs` at spawn — the clock origin (arm-time phase, like the bone host). Only
-    /// the pinned lanes use it; a hosted instance reads the player's own seek time instead, so its
-    /// alpha stays in phase with the pose that drives it.
+    /// `Time::elapsed_secs` at spawn, the pinned lanes' clock origin; a hosted instance reads its
+    /// player's seek time, so its alpha stays in phase with its pose.
     spawned_at: f32,
-    /// Captures freeze the clock at 0 for deterministic frames (dimming constants still show).
+    /// Captures freeze the clock at 0 for deterministic frames.
     frozen: bool,
-    /// This instance's sampled value drives the render-alpha `MeshTag` field **by itself** (no
-    /// `DoodadFade` on the entity): the spell-effect parts (`entities::spell_fx`), whose alpha
-    /// channel has no other writer. `false` on the doodad lane — there the visibility authority
-    /// owns the tag and composes [`Self::current`] in (for a fade holder multiplied with the
-    /// distance fade; for a lit interior prop written alone into the probe payload's alpha field,
-    /// bits 0..=15 since the 0355 re-lane) — and on the unit lane, whose own compose is
-    /// [`crate::entities::apply_unit_mat_alpha`].
+    /// The sample drives the render-alpha `MeshTag` field by itself: the spell-effect parts, whose
+    /// alpha has no other writer. `false` on the doodad lane, where the visibility authority
+    /// composes [`Self::current`] in, and on the unit lane (`entities::apply_unit_mat_alpha`).
     pub(crate) drives_tag: bool,
-    /// This instance belongs to the **unit lane's** tag compose
-    /// ([`crate::entities::apply_unit_mat_alpha`]) even though it has no [`Self::host`] to read a
-    /// sequence from: the ATTACH-MODEL case (a held weapon, a helm, a pauldron). Such a model
-    /// spawns no rig — it rests in its file's first sequence, so its loops are pinned like a
-    /// placed doodad's — but it hangs off a unit, so the compose has to be the one ordered against
-    /// the wearer's appear-fade and interior classifier rather than the world-model visibility
-    /// authority's. See [`Self::resting`].
+    /// Composed by the unit lane without a [`Self::host`]: an attach model (a held weapon, a helm),
+    /// pinned like a doodad but ordered against the wearer's appear-fade. See [`Self::resting`].
     unit_lane: bool,
-    /// The gseq factors' ATTACH anchor (secs on the shared clock): `None` until the first
-    /// [`sample_mat_anim`] pass stamps it — the reference snapshots the scene clock once per
-    /// model instance at attach (`CM2Model+0x68`).
+    /// The gseq attach anchor (secs, shared clock), stamped by the first [`sample_mat_anim`] pass:
+    /// the reference snapshots the scene clock once per instance at attach (`CM2Model+0x68`).
     gseq_attach: Option<f64>,
     /// The last sampled combined factor (colour-alpha × weight), read by the visibility authority.
     pub current: f32,
@@ -66,8 +45,7 @@ impl MatAnim {
         now: f32,
         frozen: bool,
     ) -> Self {
-        // The seed sample: both clocks at 0 — nothing armed, and the attach anchor (stamped on
-        // the first live pass) makes the gseq cursor open at 0 too.
+        // Seed at both clocks' 0: nothing is armed, and the gseq cursor opens at its anchor.
         let current = anim.sample(None, 0.0, 0.0);
         Self {
             anim,
@@ -82,10 +60,8 @@ impl MatAnim {
         }
     }
 
-    /// The spell-effect-lane constructor: never frozen (the `fxview` instrument ages effects
-    /// through captures; golden scenarios spawn no effects), the sampled alpha drives the part's
-    /// render-alpha tag directly (see [`Self::drives_tag`]), and the instance is pinned to the one
-    /// sequence its rig plays (`seq` — the missile's InFlight, else the file-order-first clip).
+    /// The spell-effect lane: never frozen, driving the part's tag itself, and pinned to the
+    /// sequence its rig plays (`seq`: the missile's InFlight, else the file-order-first clip).
     pub fn driving_tag(
         anim: std::sync::Arc<benilla_formats::AlphaAnim>,
         now: f32,
@@ -98,24 +74,16 @@ impl MatAnim {
         m
     }
 
-    /// Read the sequence (and its clock) from `host`'s live `AnimationPlayer` each frame instead of
-    /// staying pinned to the slot this instance opened on — for a spell-effect instance that
-    /// **advances** through its authored lifecycle (`Stand` → `Hold` → `Decay`, `0x5ff170` arms
-    /// Hold, `0x5ff270` the terminal Decay), because each leg has its own authored alpha loops: Ice
-    /// Barrier's pulse is as much the `Hold` band's oscillating transparency weights as its bone
-    /// scale. `None` leaves the instance pinned (a lane with no rig has no player to ask).
-    ///
-    /// It keeps [`Self::drives_tag`], so this stays an effect part writing its own tag — it borrows
-    /// the unit lane's *sequence source*, not its tag-compose ownership.
+    /// Read the sequence and clock from `host`'s live `AnimationPlayer` each frame, for an effect
+    /// that advances Stand, Hold, Decay (`0x5ff170` arms Hold, `0x5ff270` the terminal Decay), each
+    /// leg with its own alpha loops. It keeps [`Self::drives_tag`]; `None` leaves it pinned.
     pub fn following_host(mut self, host: Option<Entity>) -> Self {
         self.host = host;
         self
     }
 
-    /// The **unit-lane** constructor: the sequence (and its clock) come from `host`'s live
-    /// `AnimationPlayer`, so a creature's batches appear and disappear with the animation exactly
-    /// as authored. The tag is composed by [`crate::entities::apply_unit_mat_alpha`], not driven
-    /// here — the interior classifier and the appear-fade already own that channel.
+    /// The unit lane: sequence and clock come from `host`'s live `AnimationPlayer`, and the tag is
+    /// composed by `entities::apply_unit_mat_alpha`, not driven here.
     pub fn following(anim: std::sync::Arc<benilla_formats::AlphaAnim>, host: Entity) -> Self {
         Self {
             host: Some(host),
@@ -123,14 +91,8 @@ impl MatAnim {
         }
     }
 
-    /// The **attach-model** constructor (a held weapon, a helm, a pauldron): the loops are pinned
-    /// to the file's first sequence — an item model spawns no rig and rests there, the same reason
-    /// its emitters and ribbons read Stand — while the tag compose stays the unit lane's, ordered
-    /// against the wearer's appear-fade and interior classifier.
-    ///
-    /// Its clock is irrelevant in practice (a rest-pose model's tracks are the constants the file
-    /// authors) so it takes no `now`; sampling still runs every frame like every other lane, so a
-    /// keyed track on a rest sequence animates rather than latching at its first key.
+    /// The attach-model lane (a held weapon, a helm): pinned to the file's first sequence, where a
+    /// rig-less item model rests, and composed by the unit lane.
     pub fn resting(anim: std::sync::Arc<benilla_formats::AlphaAnim>) -> Self {
         Self {
             unit_lane: true,
@@ -138,29 +100,18 @@ impl MatAnim {
         }
     }
 
-    /// Whether this instance's tag alpha is the unit lane's to compose (see
-    /// [`crate::entities::apply_unit_mat_alpha`]) — a hosted creature/player batch, or an
-    /// attach model's batch ([`Self::resting`]), and never a self-driving effect part.
+    /// Whether the unit lane composes this instance's tag: a hosted or attach-model batch, never an
+    /// effect part that drives its own.
     pub fn composes_unit_tag(&self) -> bool {
         (self.host.is_some() || self.unit_lane) && !self.drives_tag
     }
 }
 
-/// The sequence slot + clip-local time a host is playing, for [`sample_mat_anim`]: the **base**
-/// animation with the greatest blend weight. Masked overlays (a torso-only swing, an arm's draw
-/// ceremony, the finger grip) run on their own graph nodes and are deliberately skipped — they
-/// pose bones, they don't reselect the sequence the material tracks read. During a cross-fade two
-/// base clips are live and the heavier one wins; the reference instead blends the two sampled
-/// scalars by λ (`0x71af20`'s blend leg), a sub-blend-time difference on tracks
-/// the corpus authors as 0/1 steps — recorded, not modelled.
-///
-/// A player with **nothing armed** is not "no sequence" — the reference arms the loader-idle clip on
-/// every M2 instance at load, so the answer is that sequence at its opening frame
-/// ([`ModelAnimations::idle_seq`]). benilla's rig tier skips the arm whenever looping
-/// the idle would render identically to the static mesh, and that skip used to leak out of the mesh
-/// question into this one: both callers read the returned `None` as "keep the pinned slot", which
-/// starts life at file slot 0. On a Spawn/Stand/Despawn GameObject slot 0 is the Spawn flourish, so
-/// the batch read a sequence the instance was never playing.
+/// The sequence slot and clip time a host plays: its base animation with the greatest weight, as
+/// masked overlays pose bones without reselecting the sequence. In a cross-fade the heavier clip
+/// wins, where the reference blends the two samples by λ (`0x71af20`). With nothing armed it is
+/// the loader-idle sequence at t = 0 ([`ModelAnimations::idle_seq`]): the reference arms that clip
+/// on every M2 at load, and slot 0 can be another sequence (a GameObject's Spawn).
 pub fn playing_seq(player: &AnimationPlayer, anims: &ModelAnimations) -> Option<(usize, f32)> {
     player
         .playing_animations()
@@ -173,33 +124,23 @@ pub fn playing_seq(player: &AnimationPlayer, anims: &ModelAnimations) -> Option<
         .or_else(|| anims.idle_seq().map(|seq| (seq, 0.0)))
 }
 
-/// Sample every instance's material-alpha loops: a hosted instance on its host's playing sequence
-/// and clip clock, a pinned one on its own spawn clock. Frozen (capture) instances keep their t=0
-/// sample. Hidden instances sample too — the visibility authority's alpha cull reads
-/// [`MatAnim::current`], so a batch BORN at weight 0 (`HolyLight_Low_Head`'s light column, keyed
-/// `0 → 1` at 300 ms) must keep its clock running or the alpha-hide latches forever (the old
-/// skip-while-Hidden held `current` at the 0 that caused the hide — the invisible pala-heal flash).
-/// Sampling is a pure function of the clock, so an instance hidden for any *other* reason (draw
-/// gate, far-clip) still lands right on re-appear, and the reference animation-evaluates the tracks
-/// every frame regardless of the cull (`0x707b3a`–`0x707b5c`). Runs before the visibility
-/// authority so the tag it composes is this frame's value.
+/// Sample every instance: a hosted one on its host's sequence and clip clock, a pinned one on its
+/// spawn clock; frozen ones keep their t = 0 sample. Hidden instances sample too, as the reference
+/// evaluates the tracks every frame regardless of the cull (`0x707b3a`–`0x707b5c`), or a batch
+/// born at weight 0 would stay hidden. Runs before the visibility authority.
 pub fn sample_mat_anim(
     time: Res<Time>,
     hosts: Query<(&AnimationPlayer, &ModelAnimations)>,
     mut q: Query<&mut MatAnim>,
 ) {
     let now = time.elapsed_secs();
-    // The scene clock, full-precision (a long-uptime f32 elapsed drifts whole milliseconds,
-    // which a 433 ms twinkle shows): the base the per-instance gseq attach anchor subtracts
-    // from.
+    // The scene clock in f64: a long-uptime f32 drifts whole milliseconds.
     let shared = time.elapsed_secs_f64();
     for mut m in &mut q {
         if m.frozen {
             continue;
         }
-        // A hosted instance whose host has no player yet (the frame before the rig arms, or a
-        // rest-pose GameObject) keeps its last resolved slot and reads it at t=0 — the sequence's
-        // opening pose, which is what a model sitting at bind pose shows.
+        // A host with no player yet keeps its last slot at t = 0, a bind-posed model's pose.
         let played = m
             .host
             .and_then(|h| hosts.get(h).ok())
@@ -212,135 +153,70 @@ pub fn sample_mat_anim(
             None if m.host.is_some() => (m.seq, 0.0),
             None => (m.seq, now - m.spawned_at),
         };
-        // The instance's gseq cursor: sceneNow − attach, the anchor stamped on this first pass
-        // (every lane, spell effects included: fresh instance per play).
+        // The gseq cursor is sceneNow − attach, the anchor stamped on the first pass.
         let attach = *m.gseq_attach.get_or_insert(shared);
         m.current = m.anim.sample(seq, elapsed, shared - attach);
     }
 }
 
-/// The **UV-animated materials** registry (decision 0130 phase 3, `0x716216`'s translation gate):
-/// each batch material carrying a texture-transform translation loop, keyed by material asset id.
-/// [`tick_anim_materials`] re-samples a *drawn* entry's offset into the material's `sun_scale.zw`
-/// each frame — one shared uniform per material, so every instance of a model batch scrolls in
-/// phase. A recorded, invisible divergence for BOTH clock laws: the reference phases a
-/// seq-band loop per play (arm cursor) and a gseq loop per instance (attach anchor,
-/// `CM2Model+0x68`), but one uniform per material cannot phase per instance — meaningless for a
-/// seamless scroll either way. Entries drop when the material asset does.
-/// The scan marker (1375): a part whose material can ever be a [`UvAnimMaterials`]/
-/// [`TintAnimMaterials`] key — inserted at spawn, beside the registration itself, and only for a
-/// loop with a real period (a period-0 constant is fully served by its material seed). Without
-/// it, [`tick_anim_materials`]'s draw scan visited every `WowModelMaterial` row in the world
-/// (~48k at Stormwind) to find the placed instances of ~113 animated models.
+/// The scan marker: a part whose material can be a [`UvAnimMaterials`] or [`TintAnimMaterials`]
+/// key, inserted at spawn beside the registration, so the draw scan visits only animated parts.
 #[derive(bevy::prelude::Component)]
 pub struct AnimMatPart;
 
-/// **Which loop a registered material animates on** — and the whole of.
-///
-/// A registry keyed by MATERIAL is shared by every instance of a batch, so it has no sequence to
-/// key on. That is exactly right while every sequence bakes the same loop, and structurally unable
-/// to be right when they don't: the BRM lava bubbles key their whole flipbook inside a 50 %-weighted
-/// variation, and their 15 placements re-roll independently every ~3.3 s, so at any
-/// instant some are on slot 0 and some on slot 1. One shared row cannot serve both.
-///
-/// So a batch whose slots disagree — 22 batch-channels across **6 models**, corpus-wide
-/// (`benilla-extract uvslotscan`) — takes a material of its own **per placement**, keyed by its
-/// anim host in [`crate::model_render::MatKey`], and this entry remembers that host so the sample
-/// rides the sequence the host is actually playing. Everything else keeps the shared material and
-/// the shared clock, untouched.
-///
-/// Per-placement materials rather than a per-instance row in the shared table: the row would have
-/// to be addressed from the shader, and every per-instance channel there is spoken for
-/// (`MeshTag`'s 32 bits are fully allocated; the instance slot is the lazily-allocated,
-/// pressure-reaped palette slot). Against a measured population of six models it buys a new GPU
-/// region and a shader branch to save a handful of draw calls on small atmospheric props, and the
-/// clones are bounded by the same distance evictor every other material has (`art_scope`,
-/// decision 0785). Revisit if the population ever grows.
+/// Which loop a registered UV material animates on. A material-keyed row serves every instance of
+/// the batch, so a batch whose sequence slots bake different loops takes a material per placement
+/// (keyed by its anim host in [`crate::model_render::MatKey`]) and follows that host's slot.
 pub enum UvLoop {
-    /// Every sequence bakes the same loop: the shared material, on the free-running shared clock.
+    /// Every slot bakes the same loop: the shared material on the free-running scene clock. `None`
+    /// for a rotate- or scale-only transform, whose translation row stays at zero.
     ///
-    /// `None` when the batch's transform carries **no translation at all** — a rotate-only or
-    /// scale-only transform, whose whole motion is the [`UvAnimEntry::affine`] row beside this
-    /// one. Two entity batches in the shipped corpus are exactly that
-    /// (`World\Goober\G_ScryingBowl`'s water and `G_ScourgeRuneCircleCrystal`'s rune ring, both
-    /// `chans —R—`), so a lane that made the translation mandatory would have to invent a
-    /// zero loop for them or drop them silently. The entry still holds its translation row; it
-    /// stays at zero, which is what that row means.
+    /// Deviation: every instance scrolls in one phase, where the reference phases a band loop per
+    /// arm and a gseq loop from each instance's attach (`CM2Model+0x68`), because one uniform
+    /// serves the material and a seamless scroll looks the same at any phase.
     Shared(Option<std::sync::Arc<benilla_formats::UvAnim>>),
-    /// The slots disagree: this material belongs to ONE placement, and the loop is whichever slot
-    /// `host` is playing right now.
+    /// The slots disagree: this material belongs to one placement, on whichever slot `host` plays.
     PerSeq {
         seqs: std::sync::Arc<benilla_formats::SeqLoops<[f32; 2]>>,
         host: Entity,
     },
-    /// The **spell-effect** lane: this material is one effect instance's own
-    /// clone, and the scroll rides that instance's clip — `host`'s live `AnimationPlayer`, the
-    /// same source [`MatAnim::following_host`] reads, so the two material channels of one cast
-    /// stay in step through `Stand` → `Hold` → `Decay`.
-    ///
-    /// **Per instance, not shared, because on an effect the scroll is not ambience — it IS the
-    /// animation.** A waterfall's loop is seamless, so one uniform for every placement on a
-    /// free-running clock is indistinguishable from the truth. The druid's claw trail is a
-    /// one-shot reveal: `Spells\SwipeCaster.m2` is two strips whose UVs are authored wholly
-    /// outside `0..1` against a CLAMP-addressed sheet, and the 1.5 s U-scroll is what drags the
-    /// claw along them. On a shared clock every bear in the raid would sweep in one phase none of
-    /// their casts chose; frozen at the track's first key — which is what the effect lane did
-    /// until 2282 — the strips sample only the sheet's transparent border and the trail does not
-    /// exist at all.
-    ///
-    /// `seqs` (1408's per-slot set) when the batch's slots disagree, `single` otherwise; a batch
-    /// whose slot 0 is dead beside a live later slot carries only the first, so both are optional
-    /// and at least one is always present.
+    /// The spell-effect lane: one effect instance's own clone, scrolling on that instance's clip
+    /// (`host`'s player, as [`MatAnim::following_host`] reads it), because an effect's scroll is
+    /// its animation: `SwipeCaster.m2`'s UVs lie outside a clamped sheet until the scroll drags
+    /// the claw in. `seqs` when the slots disagree, `single` otherwise; at least one is present.
     Instance {
         seqs: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 2]>>>,
         single: Option<std::sync::Arc<benilla_formats::UvAnim>>,
         host: Entity,
-        /// `Time::elapsed_secs` at attach — this instance's clock origin. It is the band clock
-        /// for an instance whose model arms no player, and the global-sequence anchor
-        /// (`sceneNow − attach`, decisions 0856/0858: one fresh instance per play) for every one.
+        /// `Time::elapsed_secs` at attach: the band clock when the model arms no player, and the
+        /// gseq anchor (`sceneNow − attach`, a fresh instance per play) always.
         attached_at: f32,
     },
 }
 
-/// One registered UV-scroll material: its sampler, its table slot, and the built seed the delta
-/// rows are measured from (the material's own `sun_scale.zw`, which is never mutated again —
-/// decision 1381).
+/// One registered UV material (the texture-transform translation `0x716216` gates): its loop, its
+/// table slot, and the built `sun_scale.zw` seed its delta rows are measured from, never mutated.
 pub struct UvAnimEntry {
     pub anim: UvLoop,
     pub slot: u16,
     pub seed: [f32; 2],
-    /// The effect lane's **affine half** ([`UvAffine`]) — `None` on every other
-    /// lane, and on an effect batch whose transform only translates (the common case).
+    /// The rotation and scaling half ([`UvAffine`]), `None` when the transform only translates.
     affine: Option<UvAffine>,
 }
 
-/// A texture transform's ROTATION and SCALING, on the effect lane: the two channels the
-/// translation row cannot carry, and the second table row that does ([`affine_row`]'s encoding,
-/// decision 2019).
-///
-/// They ride the same instance clock as the translation beside them, and they exist here for the
-/// same reason that one does — `Spells\ShieldWall_Impact_Base.mdx`'s halo turns AND scales, and
-/// `Spells\GroundingTotem_Impact.mdx` is a **scale-only** transform, so a lane that ran only the
-/// scroll would still render both wrong. `benilla-extract fxuvscan` is where that population is
-/// read; it is three models today, which is exactly why nobody would have found them by eye.
+/// A texture transform's rotation and scaling, which the translation row cannot carry: a second
+/// table row (`crate::mat_anim_table::affine_row`'s encoding) on the translation's clocks.
 struct UvAffine {
     rot: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 4]>>>,
     scale: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 2]>>>,
-    /// The affine row's slot (`anim_slots.z`). Its encoding is a delta from the IDENTITY, not
-    /// from a material seed — row 0 is the identity, so there is nothing to measure from.
+    /// The affine row's slot (`anim_slots.z`); the row is a delta from the identity, not a seed.
     slot: u16,
 }
 
 impl UvAnimEntry {
-    /// The slot's delta row for `now`: the quantized sample minus the built seed — the shader
-    /// adds it back onto `sun_scale.zw` (decision 1381's encoding). Quantized exactly as the
-    /// old asset-mutating lane quantized its absolute writes, so the first live frame shows the
-    /// same number the old path would have written.
-    ///
-    /// `playing` is the per-placement lane's live `(sequence slot, clip time)`, resolved by the
-    /// caller from [`Self::host`]; a host that has gone (despawned mid-frame) or a sequence with no
-    /// loop samples the identity, i.e. the batch sits at its built seed — the same degrade a full
-    /// table gives.
+    /// The slot's delta row for `now`: the quantized sample minus the built seed, which the shader
+    /// adds back onto `sun_scale.zw`. `playing` is the host's `(slot, clip time)`; a gone host or a
+    /// slot with no loop samples a zero offset.
     pub(crate) fn delta(&self, now: f32, gseq_now: f64, playing: Option<(usize, f32)>) -> [f32; 4] {
         let uv = match &self.anim {
             UvLoop::Shared(anim) => anim.as_ref().map_or([0.0, 0.0], |a| a.sample(now)),
@@ -350,10 +226,8 @@ impl UvAnimEntry {
                         .map(|l| l.sample(l.clock(band_t, gseq_now)))
                 })
                 .unwrap_or([0.0, 0.0]),
-            // The effect lane's clocks are the INSTANCE's, never the scene's (2282): the band
-            // clock is the clip this instance is playing — the spawn age while its rig has no
-            // player yet, which is `MatAnim`'s own degrade — and the gseq cursor is measured from
-            // its attach rather than from process start.
+            // The effect lane's clocks are the instance's: the band clock is its clip time (its
+            // age while the rig has no player), and the gseq cursor runs from its attach.
             UvLoop::Instance {
                 seqs,
                 single,
@@ -376,11 +250,8 @@ impl UvAnimEntry {
         ]
     }
 
-    /// This entry's **affine** row and the slot it goes in, or `None` when the transform only
-    /// translates. Sampled on **the same clocks [`Self::delta`] uses for this entry's own lane**,
-    /// so the three channels of one transform are always read at one instant — a rotation read on
-    /// the scene clock beside a translation read on an instance's play head would be two different
-    /// moments of the same matrix.
+    /// This entry's affine slot and row, sampled on the clocks [`Self::delta`] uses so all three
+    /// channels of one transform read one instant; `None` when the transform only translates.
     pub(crate) fn affine(
         &self,
         now: f32,
@@ -388,9 +259,6 @@ impl UvAnimEntry {
         playing: Option<(usize, f32)>,
     ) -> Option<(u16, [f32; 4])> {
         let a = self.affine.as_ref()?;
-        // Per lane, exactly as `delta` does it: the shared lane reads the free-running scene clock
-        // on both, the per-placement lane its host's playing clip, and the effect lane its own
-        // age-anchored pair.
         let (band_t, gseq) = match &self.anim {
             UvLoop::Shared(_) => (now, gseq_now),
             UvLoop::PerSeq { .. } => (playing.map_or(now, |(_, t)| t), gseq_now),
@@ -415,7 +283,6 @@ impl UvAnimEntry {
 }
 
 impl UvAnimEntry {
-    /// The placement whose sequence this entry rides, or `None` on the shared lane.
     fn host(&self) -> Option<Entity> {
         match &self.anim {
             UvLoop::Shared(_) => None,
@@ -423,18 +290,12 @@ impl UvAnimEntry {
         }
     }
 
-    /// Is this the **spell-effect** lane ([`UvLoop::Instance`])? The one entry kind
-    /// [`tick_anim_materials`] keeps sampling inside a deterministic capture, on exactly
-    /// [`MatAnim`]'s and `spell_fx::FxTintAnims`' own argument: an effect's clock is its
-    /// instance's frame-stepped `AnimationPlayer`, not wall time, so `fxview` can age one without
-    /// any golden scenario — which spawns no effects at all — moving a pixel.
+    /// The spell-effect lane, sampled even in a capture: its clock is its instance's player.
     fn instance_lane(&self) -> bool {
         matches!(self.anim, UvLoop::Instance { .. })
     }
 
-    /// The loop this entry samples right now — the instrument's read
-    /// ([`crate::doodad_anim::matanim_probe`]), so the probe's period and phase sweep come from
-    /// the same resolution [`Self::delta`] makes rather than a hand-rolled twin of it.
+    /// The loop this entry samples now, resolved as [`Self::delta`] does, for [`matanim_probe`].
     fn resolved(&self, playing: Option<(usize, f32)>) -> Option<&benilla_formats::UvAnim> {
         match &self.anim {
             UvLoop::Shared(a) => a.as_deref(),
@@ -446,9 +307,7 @@ impl UvAnimEntry {
         }
     }
 
-    /// The `now` a phase-sweep sample passes for this entry. The effect lane measures its clocks
-    /// from ATTACH, so handing it a raw phase `t` would read as a negative age; every other lane
-    /// is already on the scene clock. (The sweep moves the play head too — see the caller.)
+    /// A phase sweep's `now`: the effect lane counts from attach, the others on the scene clock.
     fn phase_now(&self, t: f32) -> f32 {
         match &self.anim {
             UvLoop::Instance { attached_at, .. } => attached_at + t,
@@ -458,7 +317,6 @@ impl UvAnimEntry {
 }
 
 impl TintAnimEntry {
-    /// [`UvAnimEntry::host`]'s twin.
     fn host(&self) -> Option<Entity> {
         match &self.anim {
             TintLoop::Shared(_) => None,
@@ -467,12 +325,9 @@ impl TintAnimEntry {
     }
 }
 
-/// The anim hosts a per-placement entry reads its sequence from — [`playing_seq`] behind a query,
-/// so [`tick_anim_materials`] can resolve one per entry without borrowing the world twice.
+/// The anim hosts a per-placement entry reads its sequence from, for [`playing_seq`].
 pub type SeqHosts<'w, 's> = Query<'w, 's, (&'static AnimationPlayer, &'static ModelAnimations)>;
 
-/// The playing sequence slot + clip time of one anim host, or `None` if the entry is on the shared
-/// lane, the host is gone, or it has no sequence at all.
 fn host_seq(hosts: &SeqHosts, host: Option<Entity>) -> Option<(usize, f32)> {
     let (player, anims) = hosts.get(host?).ok()?;
     playing_seq(player, anims)
@@ -486,11 +341,9 @@ pub struct UvAnimMaterials(
     >,
 );
 
-/// Register material `id` for the per-frame UV scroll: allocate its table slot, remember the
-/// built seed, and bake the slot index into the material's `anim_slots.x` — the ONE material
-/// write this lane ever makes (spawn-frame, where the asset is Modified anyway). A full table
-/// (never seen below ~500 resident animated materials) skips registration: the batch stays
-/// frozen at its built seed — a degraded look, never a wrong pixel.
+/// Register material `id` for the UV scroll: allocate its table slot, record the built seed and
+/// write the slot into `anim_slots.x`, the one material write this lane makes. A full table skips
+/// registration, leaving the batch at its seed.
 pub(crate) fn register_uv(
     reg: &mut UvAnimMaterials,
     table: &mut crate::mat_anim_table::MatAnimTable,
@@ -505,18 +358,14 @@ pub(crate) fn register_uv(
         bevy::log::warn_once!("mat-anim table full — a UV-scroll batch stays at its seed");
         return;
     };
-    // **Through the parked half, not `Assets::get_mut`**. A material this
-    // spawner just built is not in the store yet — `model_render::lazy` reserves its handle and
-    // parks the value until something view-visible binds it — so the store-only read returned
-    // `None` for *every* registration, freed the slot again and left the registry empty: no UV
-    // scroll and no animated tint anywhere in the world, silently, from the day deferral landed.
+    // Through the parked half, not `Assets::get_mut`: `model_render::lazy` parks a just-built
+    // material outside the store until something visible binds it.
     let Some(seed) = crate::model_render::lazy::with_material_mut(materials, id, |mat| {
         let seed = [mat.extension.sun_scale.z, mat.extension.sun_scale.w];
         mat.extension.anim_slots.x = f32::from(slot);
         seed
     }) else {
-        // Neither half holds it: a dead or foreign handle, and nothing to animate. Loud, because
-        // the silent version of this branch is what cost three days of frozen water.
+        // Neither half holds it: a dead or foreign handle, warned so a dead lane is never silent.
         bevy::log::warn_once!(
             "mat-anim: no material behind {id} — a UV-scroll batch stays at its seed"
         );
@@ -524,10 +373,6 @@ pub(crate) fn register_uv(
         return;
     };
     match &anim {
-        // The breadcrumb for the lanes that have no other tell: a per-placement or per-instance
-        // material is invisible in every count (it is one more material, one more row), so "did
-        // the bubbles / the claw trail take the new lane at all" would otherwise be a question
-        // only the eye could answer. One line per registration, at debug.
         UvLoop::PerSeq { host, .. } => {
             bevy::log::debug!("mat-anim: per-placement UV lane armed for host {host} (slot {slot})")
         }
@@ -549,14 +394,9 @@ pub(crate) fn register_uv(
     );
 }
 
-/// Attach the ROTATION/SCALING half to an entry [`register_uv`] has just made, if the batch has
-/// one — the second table row, `anim_slots.z`, and 2019's `[cos − 1, sin, sx − 1, sy − 1]`
-/// encoding whose zero row IS the identity.
-///
-/// The translation half decides whether there is an entry at all (a full table, a dead handle);
-/// the affine half attaches to it or not at all. A transform that ONLY rotates or scales still
-/// takes a translation row that stays at zero — one row, on a population of five models corpus-
-/// wide, for a registration path with one shape instead of two.
+/// Attach the rotation and scaling half, if any, to the entry [`register_uv`] just made: a second
+/// row, its slot in `anim_slots.z`, encoded `[cos − 1, sin, sx − 1, sy − 1]` so the zero row is
+/// the identity. A rotate- or scale-only transform still owns a translation row.
 fn attach_affine(
     reg: &mut UvAnimMaterials,
     table: &mut crate::mat_anim_table::MatAnimTable,
@@ -584,20 +424,9 @@ fn attach_affine(
     }
 }
 
-/// Put one **spell-effect material clone** on the per-instance UV lane: the
-/// engine's whole door for `entities::spell_fx`, which owns the clone and nothing else about how
-/// the scroll is delivered.
-///
-/// One door rather than the three pieces behind it ([`UvLoop`]'s effect variant, [`register_uv`],
-/// the table row), because they are one fact — *this clone scrolls, on that instance's clip* —
-/// and the class of bug this lane keeps producing is a caller that took some of the pieces and
-/// not the rest (decision 2038's registry of marked-but-unregistered parts is the same shape).
-///
-/// `seqs` / `single` are the batch's baked loops in 1408's two spellings, at least one present;
-/// `host` is the effect instance root whose `AnimationPlayer` names the playing clip, and
-/// `attached_at` its `Time::elapsed_secs` origin. The clone's `sun_scale.zw` is read as the seed
-/// the delta rows are measured from, exactly as on the shared lane, so a caller that seeds it at
-/// the loop's own `t = 0` gets a correct FIRST frame before this lane has written a row.
+/// Put one spell-effect material clone on the per-instance UV lane, whole: the [`UvLoop`] effect
+/// variant, [`register_uv`] and both table rows. `host` is the effect root whose player names the
+/// clip, `attached_at` its `Time::elapsed_secs` origin, and the clone's `sun_scale.zw` the seed.
 pub fn register_fx_uv(
     reg: &mut UvAnimMaterials,
     table: &mut crate::mat_anim_table::MatAnimTable,
@@ -631,11 +460,8 @@ pub fn register_fx_uv(
         return;
     };
     let _ = turns;
-    // **Both rows, written now.** `tick_anim_materials` runs once per frame in `Update` and this
-    // registration happens in the same schedule, so an instance that attaches after the tick would
-    // otherwise draw its first frame at row 0 — the identity, which on this population is the
-    // authored-UV frame the whole decision is about (a Swipe strip renders NOTHING there). One
-    // write at spawn costs nothing and removes the class.
+    // Both rows written now: an instance attached after this frame's tick would otherwise draw
+    // its first frame on zero rows, the identity.
     let (slot, row) = (entry.slot, entry.delta(attached_at, 0.0, None));
     let affine = entry.affine(attached_at, 0.0, None);
     table.set(slot, row);
@@ -644,28 +470,9 @@ pub fn register_fx_uv(
     }
 }
 
-/// Put one **unit / GameObject / held-item** batch material on the UV lane — the
-/// engine's whole door for the entity lane, and the twin of [`register_fx_uv`] for a population
-/// that is resident rather than pooled.
-///
-/// It picks the lane from the authored record rather than making the caller reason about it,
-/// which is the same argument [`UvLoops`] itself rests on:
-///
-/// - **`host` is `Some` and the slots disagree** ⇒ [`UvLoop::PerSeq`]. This material belongs to
-///   that one instance (the caller owns the clone), and the loop is whichever file-sequence slot
-///   the instance is playing — 1408's lane, reached from the entity side for the first time.
-///   `World\Lordaeron\Plagueland\PassiveDoodads\BloodOfHeroes` is the class: slot 0 holds its
-///   bubble sheets still while slot 1 sweeps them, at freq 16384/16383, so its placements bubble
-///   independently and one shared row cannot serve two of them.
-/// - **otherwise** ⇒ [`UvLoop::Shared`], the free-running scene clock on the batch's shared,
-///   deduped material — 0136 choice 1. Exactly faithful for a global-sequence loop (the
-///   reference clocks those on one per-scene ms cursor), and 0136's recorded, still-invisible
-///   divergence for a seamless band loop.
-///
-/// A period-0 translation is not a loop — its seed IS its forever value, so registering it would
-/// buy a per-frame re-write of the same number (1375) — but a batch that only rotates or scales
-/// still registers, because its motion is the affine row and its translation row is the zero it
-/// is meant to be.
+/// Put one unit, GameObject or held-item batch material on the UV lane: [`UvLoop::PerSeq`] on the
+/// caller's own clone when there is a `host` and the slots disagree, else [`UvLoop::Shared`] on
+/// the deduped material. A period-0 translation registers only if the batch rotates or scales.
 pub fn register_entity_uv(
     reg: &mut UvAnimMaterials,
     table: &mut crate::mat_anim_table::MatAnimTable,
@@ -692,10 +499,8 @@ pub fn register_entity_uv(
     );
 }
 
-/// The four baked channels of one batch's texture transform, as [`register_fx_uv`] takes them —
-/// 1408's two translation spellings plus 2019's per-slot rotation and scaling sets. A struct
-/// because they are one authored record, and a caller passing four `Option`s positionally is a
-/// caller that will eventually swap two of them.
+/// The four baked channels of one batch's texture transform: the translation as a per-slot set or
+/// one loop, and the per-slot rotation and scaling sets.
 #[derive(Default)]
 pub struct UvLoops {
     pub seqs: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 2]>>>,
@@ -705,10 +510,8 @@ pub struct UvLoops {
 }
 
 impl UvLoops {
-    /// The record as one authored batch carries it — **the one place the four channels are read
-    /// off a submesh**, so a lane that registers and a spawner that marks can never disagree about
-    /// which batches animate (decision 2038's law, whose violation froze every waterfall in the
-    /// game for three days).
+    /// The one place the four channels are read off a submesh, so the registration and the spawn
+    /// marker cannot disagree about which batches animate.
     pub fn of(sub: &benilla_assets::ModelSubmesh) -> Self {
         Self {
             seqs: sub.uv_seq.clone(),
@@ -718,19 +521,14 @@ impl UvLoops {
         }
     }
 
-    /// Does this batch animate its texture transform at all? The test the effect attach makes
-    /// before cloning a material: any of the four channels, because a scale-only transform
-    /// (`Spells\GroundingTotem_Impact.mdx`) and a dead-slot-0 translation (1408) each answer
-    /// `None` to the obvious one.
+    /// Whether any channel is present, the effect attach's test before cloning a material: a
+    /// scale-only transform or a dead slot 0 leaves `single` empty.
     pub fn any(&self) -> bool {
         self.seqs.is_some() || self.single.is_some() || self.rot.is_some() || self.scale.is_some()
     }
 
-    /// Does it need a per-frame SAMPLE — i.e. does it move? [`Self::any`] minus the constants: a
-    /// translation keyed to one value for the whole clip is its material's seed and nothing more
-    /// (1375), while a rotate-only or scale-only batch answers `None` on the translation channel
-    /// and still moves. The **one predicate** the entity lane's registration and its
-    /// [`AnimMatPart`] marker both ask.
+    /// Whether the batch moves: [`Self::any`] minus a period-0 translation, which is its seed. The
+    /// one predicate the entity lane's registration and its [`AnimMatPart`] marker share.
     pub fn animates(&self) -> bool {
         self.seqs.is_some()
             || self.rot.is_some()
@@ -738,8 +536,7 @@ impl UvLoops {
             || self.single.as_ref().is_some_and(|l| l.period > 0.0)
     }
 
-    /// The offset the batch opens on — what a caller seeds the clone's `sun_scale.zw` with so its
-    /// first frame is the loop's own `t = 0` and not the authored, unscrolled UV.
+    /// The offset the batch opens on, to seed a clone's `sun_scale.zw` at the loop's `t = 0`.
     pub fn open_offset(&self) -> [f32; 2] {
         self.seqs
             .as_ref()
@@ -749,38 +546,10 @@ impl UvLoops {
     }
 }
 
-/// Re-sample the **drawn** animated materials on the shared clock — the UV scroll
-/// ([`UvAnimMaterials`]) and the RGB tint ([`TintAnimMaterials`]) together, because they share the
-/// draw scan below. Skipped in captures (materials keep their t = 0 seed — constants still show,
-/// frames stay deterministic), **except the spell-effect lane**
-/// ([`UvAnimEntry::instance_lane`]), whose clock is an effect instance's own frame-stepped
-/// player: `fxview` exists to age an effect inside a capture, and no golden scenario spawns one,
-/// so a scene with no effect in it takes the identical early return it always did.
-///
-/// **The draw gate, and why it is the fix for B131.** Mutating a material asset marks it Modified,
-/// which on the Metal non-bindless path re-creates its uniform buffers *and its bind group* that
-/// frame. 0130 sized this as "a few uniform writes per frame" on the premise that the resident
-/// population is tiny (113 texanim models exist game-wide, a handful in view) — true per view,
-/// **false per map session**: the dedup caches hold every material they ever built until a
-/// `MapChange`, and a registry entry only evicts when its material dies, so on a
-/// single-map traverse both registries grow monotonically and every entry is re-uploaded every
-/// frame for ever. Measured on a parked same-map leg by square-waving this system:
-/// **+9.85 ms of CPU per frame at 174 resident entries (~57 µs each)** — and residency 4 → 248
-/// entries inside ten minutes, recoverable only by a restart or a map change. That is B131.
-///
-/// Gating on the draw is not a workaround for that growth, it is this lane finally obeying the
-/// module's own law: [`gate_doodad_anim`] already gates the *pose* on "any submesh actually drawn",
-/// on exactly the byte ground that makes it free — sampling is clock-indexed, so a material that
-/// re-appears is written from `now` and shows the value the shared clock dictates, with nothing to
-/// catch up (the module docs' "pausing costs nothing and drifts nothing"). A material nothing draws
-/// is a per-frame GPU rebuild with no pixel to show for it.
-///
-/// `Visibility != Hidden` is the same spelling [`gate_doodad_anim`] uses — the authority's verdict
-/// (far clip + size-bucketed fade + portal cull), written in `Update` by
-/// `debug_panel::ModelVisSet`, which this system is ordered after so the verdict is *this* frame's.
-/// It over-includes (a part left `Inherited` under a hidden ancestor counts as drawn), which is the
-/// safe direction: an extra write costs a frame's uniform upload, a missed one would freeze a
-/// visible scroll.
+/// Re-sample the drawn animated materials into the shared table, UV scroll and tint together:
+/// sampling is clock-indexed, so a re-appearing one has nothing to catch up. Drawn is
+/// `Visibility != Hidden` after `model_render::ModelVisSet`. Captures skip this, except the
+/// spell-effect lane ([`UvAnimEntry::instance_lane`]).
 pub(super) fn tick_anim_materials(
     time: Res<Time>,
     real: Res<Time<bevy::time::Real>>,
@@ -796,21 +565,13 @@ pub(super) fn tick_anim_materials(
         With<AnimMatPart>,
     >,
     twins: Res<crate::model_render::FarSideTwins>,
-    // The per-placement lane's sequence source: an entry registered `PerSeq` asks
-    // its own anim host which slot it is playing, instead of reading the shared clock.
     hosts: SeqHosts,
     mut drawn: Local<
         bevy::platform::collections::HashSet<AssetId<benilla_assets::materials::WowModelMaterial>>,
     >,
 ) {
     if uv_reg.0.is_empty() && tint_reg.0.is_empty() {
-        // **The tripwire for decision 2038's whole class.** [`AnimMatPart`] and the registration
-        // next to it share ONE predicate at the spawn site, so a world holding marked parts with
-        // an empty registry is never "a scene with no animated content" — it is this lane dead,
-        // which is exactly how every waterfall, canal and lava sheet in the game froze silently
-        // for three days. Free: the marker is archetype-filtered, so this is one iterator probe
-        // on a frame that was about to return anyway, and it says nothing in the ordinary empty
-        // case.
+        // Marked parts beside an empty registry mean this lane is dead, not that nothing animates.
         if parts.iter().next().is_some() {
             bevy::log::warn_once!(
                 "mat-anim: parts are marked animated but NOTHING is registered — the UV/tint lane is dead"
@@ -821,44 +582,28 @@ pub(super) fn tick_anim_materials(
     if matanim_off(&real) {
         return;
     }
-    // A deterministic run freezes the SHARED-clock lanes at their seed (the whole reason a golden
-    // frame is reproducible) but keeps the effect lane running, because that lane's clock is one
-    // instance's frame-stepped `AnimationPlayer` — the `fxview` carve-out `MatAnim` and
-    // `spell_fx::FxTintAnims` already take. A capture with no effect in it — every
-    // golden scenario — holds no such entry, so it returns here exactly as it always has.
+    // A capture freezes the shared-clock lanes at their seed but keeps the effect lane running.
     let frozen = crate::dev_state::deterministic_run() && !matanim_live();
     if frozen && !uv_reg.0.values().any(UvAnimEntry::instance_lane) {
         return;
     }
     drawn.clear();
-    // Skipped when frozen: the only entries still sampling there are the effect lane's, and they
-    // are exempt from the draw gate below — so a capture pays nothing for a scan it cannot read.
+    // Frozen, only the effect lane samples, and it skips the draw gate: no scan is needed.
     for (mat, vis) in parts.iter().filter(|_| !frozen) {
         if *vis != Visibility::Hidden {
             let id = mat.id();
-            // A far-classified instance carries the far TWIN's id — never a registry key. Count
-            // it as its near identity, or a batch whose every instance sits beyond the water
-            // plane marks its near entry not-drawn and freezes both variants' scroll (1375; the
-            // twin itself keeps getting written by `classify_water_side`'s Modified mirror).
+            // A far-classified part carries its far twin's id, never a registry key: count it as
+            // the near one, or a batch drawn only beyond the water plane would freeze.
             drawn.insert(twins.near_of(id).unwrap_or(id));
         }
     }
     let now = time.elapsed_secs();
-    // The samples land in the shared table as DELTAS from each entry's built seed (decision
-    // 1381) — the material asset is never touched, so there is no per-frame `Modified`, no
-    // bind-group rebuild, no `AssetChanged` walk, and no far-twin re-insert (the twin's clone
-    // carries the same slot and seed, so it scrolls in phase off the same row). Quantized
-    // because the input drifts continuously: 1/4096 of a texture repeat (1/255 for tint) is
-    // below what any face can show — and `MatAnimTable::set` skips same-value writes, so a slow
-    // loop uploads nothing most frames. Eviction is unchanged: an entry dies with its material,
-    // and its slot zeroes back to identity ([`crate::mat_anim_table`]'s free law).
+    // Rows are deltas from each entry's seed, so no material changes per frame and its far twin
+    // shares the row; quantized (1/4096, 1/255 for tint) so an unchanged row is not re-uploaded.
     let gseq_now = f64::from(now);
     uv_reg.0.retain(|id, entry| {
-        // **Alive means either half holds it**: a material still parked by
-        // `model_render::lazy` — built, handle reserved, nothing view-visible bound to it yet —
-        // is not in the store, and `Assets::contains` alone reads that as death. Evicting there
-        // would drop the entry a spawn just made and never rebuild it, because registration
-        // happens once, at spawn.
+        // Alive means either half holds it: a material parked by `model_render::lazy` is not in
+        // the store, and registration happens once, at spawn.
         if !crate::model_render::lazy::holds(&materials, *id) {
             table.free(entry.slot);
             if let Some(a) = &entry.affine {
@@ -866,19 +611,12 @@ pub(super) fn tick_anim_materials(
             }
             return false;
         }
-        // **The effect lane skips the draw gate.** That gate's argument is a material nothing
-        // draws costing a per-frame rebuild for ever, on a population that grows monotonically
-        // across a map session. An effect instance is one of a handful and lives about a
-        // second, so there is nothing to ratchet — while making it obey the gate would mean
-        // threading [`AnimMatPart`] onto every fx part, card and decal, and a part that missed the
-        // marker would silently freeze mid-scroll. It is also what keeps the lane running inside a
-        // deterministic capture (`fxview`).
+        // The effect lane skips the draw gate: its parts carry no `AnimMatPart`, and an effect
+        // lives about a second, so an undrawn one costs little.
         let fx = entry.instance_lane();
         if (fx || drawn.contains(id)) && (!frozen || fx) {
             let playing = host_seq(&hosts, entry.host());
             table.set(entry.slot, entry.delta(now, gseq_now, playing));
-            // …and the rotation/scale row beside it, for the effect models that turn or scale
-            // their UVs rather than only sliding them (2282).
             if let Some((slot, row)) = entry.affine(now, gseq_now, playing) {
                 table.set(slot, row);
             }
@@ -900,22 +638,9 @@ pub(super) fn tick_anim_materials(
     });
 }
 
-/// **The price-this-system knob** (`WOW_MATANIM_DUTY=<start_s>:<period_s>`): alternate
-/// [`tick_anim_materials`] off/on every `period` seconds from `start`. Park at one pin, square-wave
-/// it, and the difference between the ON and OFF buckets **is** this system's per-frame cost, with
-/// residency, scene, entity count and camera all held identical — a measurement, not an argument.
-/// It is how B131's ratchet was priced (+9.85 ms/frame over 174 resident entries) and how the draw
-/// gate above was then shown to remove it (+0.22 ms). Kept, not deleted: the ~10 ms-floor ledger
-/// (0729's residuals) has more per-frame systems queued for exactly this treatment.
-///
-/// A **square wave** rather than one flip, because this machine's frame cost drifts on its own —
-/// a single before/after pair cannot tell the drift from the signal, and both legs of the verifying
-/// run climbed ~10 ms while their ON/OFF difference stayed flat.
-///
-/// **`Time<Real>`, deliberately:** virtual time is clamped to `max_delta` (250 ms), so on a leg that
-/// hitches it lags real time badly. That is what smeared the first attempt at this measurement into
-/// nonsense — the probe-chat schedule reads virtual time, so once the leg hitched its hops drifted
-/// 40 s → 75 s apart and windows labelled "parked, ticks off" in fact held a teleport and live ticks.
+/// `WOW_MATANIM_DUTY=<start_s>:<period_s>` turns [`tick_anim_materials`] off and on every `period`
+/// seconds from `start`; the ON/OFF difference over the square wave is its per-frame cost. On
+/// `Time<Real>` because virtual time clamps to `max_delta` (250 ms) and lags on a hitching run.
 fn matanim_off(time: &Time<bevy::time::Real>) -> bool {
     static SPEC: std::sync::OnceLock<Option<(f32, f32)>> = std::sync::OnceLock::new();
     let spec = SPEC.get_or_init(|| {
@@ -929,34 +654,16 @@ fn matanim_off(time: &Time<bevy::time::Real>) -> bool {
     })
 }
 
-/// **`WOW_MATANIM_LIVE=1` — run the shared lanes inside a deterministic capture too.**
-///
-/// The freeze above is what makes a golden frame reproducible, and it is right for every scenario
-/// in the sweep. It also means `fxview` — the fixture whose whole job is to age a subject — cannot
-/// show a **unit's or GameObject's** texture transform at all, because those are shared-clock
-/// entries; the effect lane is exempt only because its clock is one instance's
-/// frame-stepped player. Without this knob the A/B for "does this creature's skin scroll" does not
-/// exist, and the answer would have to come from the director's screen, which is not what §7 means
-/// by leaving the look to them.
-///
-/// Off by default, read once, and no golden scenario sets it — so the sweep is untouched.
+/// `WOW_MATANIM_LIVE=1` runs the shared lanes inside a deterministic capture too, so `fxview` can
+/// show a unit's or GameObject's texture transform. Off by default; no golden scenario sets it.
 fn matanim_live() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("WOW_MATANIM_LIVE").is_ok_and(|v| v != "0"))
 }
 
-/// The **tint-animated materials** registry — the M2Color-RGB twin of [`UvAnimMaterials`]: each
-/// batch material whose colour track animates (the vertex bake is skipped for those —
-/// `benilla-formats` `m2_batches`), keyed by material asset id. [`tick_anim_materials`]
-/// re-samples the tint into the material's `tint` uniform on the same shared clock, for the drawn
-/// (the same recorded seq-band phase divergence as the UV scroll — invisible for a placed
-/// doodad's ambient loop). Spell-effect instances need real per-instance phase instead (one cast
-/// = one 0.9 s pulse), so the effect lane clones its materials and ticks them on the instance
-/// clock (`entities::spell_fx`), never through this registry.
-/// [`UvLoop`]'s RGB twin, on the same rule and for the same reason — `uvslotscan` finds the tint
-/// channel pinned to slot 0 by the same line, and `Spells\\Deterrence_State_Base.m2` tinting
-/// **red→blue in Stand and green→red in Hold**, where the pin renders a *wrong colour* rather than
-/// a frozen one.
+/// Which loop a registered tint material (an animated M2 colour track) animates on, [`UvLoop`]'s
+/// RGB twin: `Shared`, with the same phase deviation as [`UvLoop::Shared`], or `PerSeq` on one
+/// placement's slot. Spell-effect instances tick their own tint clones and never register here.
 pub enum TintLoop {
     Shared(std::sync::Arc<benilla_formats::RgbAnim>),
     PerSeq {
@@ -965,7 +672,7 @@ pub enum TintLoop {
     },
 }
 
-/// One registered tint material — [`UvAnimEntry`]'s RGB twin (seed = the built `tint.xyz`).
+/// One registered tint material, seeded from the built `tint.xyz`.
 pub struct TintAnimEntry {
     pub anim: TintLoop,
     pub slot: u16,
@@ -973,9 +680,8 @@ pub struct TintAnimEntry {
 }
 
 impl TintAnimEntry {
-    /// [`UvAnimEntry::delta`]'s RGB twin (1/255 quantization, the display's own step). The
-    /// per-placement lane's identity is WHITE — the tint is a multiplier, so an unresolvable host
-    /// must leave the batch at its built seed, not black it out.
+    /// The tint's delta row, quantized at the display's 1/255 step. An unresolved host reads white,
+    /// the multiplier's identity, so the batch is untinted rather than black.
     pub(crate) fn delta(&self, now: f32, gseq_now: f64, playing: Option<(usize, f32)>) -> [f32; 4] {
         let rgb = match &self.anim {
             TintLoop::Shared(anim) => anim.sample(now),
@@ -1004,7 +710,7 @@ pub struct TintAnimMaterials(
     >,
 );
 
-/// [`register_uv`]'s tint twin: slot into `anim_slots.y`, seed from the built `tint.xyz`.
+/// Register a tint material: its slot goes in `anim_slots.y`, its seed is the built `tint.xyz`.
 pub fn register_tint(
     reg: &mut TintAnimMaterials,
     table: &mut crate::mat_anim_table::MatAnimTable,
@@ -1019,7 +725,7 @@ pub fn register_tint(
         bevy::log::warn_once!("mat-anim table full — a tint batch stays at its seed");
         return;
     };
-    // The parked half, exactly as [`register_uv`] reaches it.
+    // Through the parked half, as in `register_uv`.
     let Some(seed) = crate::model_render::lazy::with_material_mut(materials, id, |mat| {
         let seed = [
             mat.extension.tint.x,
@@ -1036,35 +742,11 @@ pub fn register_tint(
     reg.0.insert(id, TintAnimEntry { anim, slot, seed });
 }
 
-/// **The animated-material probe** (`WOW_MATANIM_PROBE=<secs>`): once, `secs` after boot, print
-/// one line per live [`AnimMatPart`] — the parts whose material can be a [`UvAnimMaterials`] /
-/// [`TintAnimMaterials`] key — with everything that decides whether it actually moves on screen:
-///
-/// ```text
-/// matanim  <model>#<uid>  mat <asset id>[ FAR][ PARKED]  anim_slots (1, 0, 0)  vis Inherited drawn 1
-///   uv slot 1 seed (+0.0000,+0.0000) row (+0.0000,-0.2122) live (+0.0000,-0.2122)
-///   shared period 9.967s loop (+0.0000,+0.0000) (+0.0000,-0.2542) (+0.0000,-0.5083) (+0.0000,-0.7542)
-/// ```
-/// (one line per part; wrapped here)
-///
-/// Four questions, one line each, because a frozen scroll can fail at any of them and the pixels
-/// say the same thing every time: is the batch **registered** at all (a missing line is a batch
-/// whose loop never reached the registry — an exhausted table, a period-0 constant, a lane that
-/// forgot to register); does its **loop** actually move (the four quarter-phase samples — a
-/// flat row here is an asset that scrolls nowhere, not a renderer fault); is the **table row**
-/// live (the value the shader will read — flat while the loop moves means the tick's draw gate
-/// never picked this material up, which is 1375's failure mode); and is the part **drawn** (the
-/// gate's own input).
-///
-/// It samples the loop itself rather than watching the row over time, so it is a **one-shot that
-/// works in a deterministic capture** — where [`tick_anim_materials`]'s shared lanes are skipped
-/// and their rows stay zero by design (the effect lane keeps running there). In a
-/// live run the `row` column is the tick's real output and the two halves can be compared
-/// directly.
-///
-/// A trailing block of `(unmarked)` rows names every registry entry no [`AnimMatPart`] accounts
-/// for: the spell-effect lane, which is off the draw gate and therefore off the marker, plus any
-/// entry whose part has gone — the readout that says a registered clone exists at all.
+/// `WOW_MATANIM_PROBE=<secs>`: once, `secs` after boot, log one line per [`AnimMatPart`] with what
+/// decides whether it moves on screen: registered or not, its loop's four quarter-phase samples,
+/// its live table row, and its draw verdict. It samples the loop itself, so it works in a
+/// deterministic capture. A trailing `(unmarked)` block lists the registry entries no marked part
+/// accounts for: the spell-effect lane, and any leak.
 pub(super) fn matanim_probe(
     time: Res<Time>,
     uv_reg: Res<UvAnimMaterials>,
@@ -1077,9 +759,7 @@ pub(super) fn matanim_probe(
     mut fired: Local<bool>,
 ) {
     let Some(at) = probe_at() else { return };
-    // Not latched while the world is still empty: a capture holds the game clock at 0 while the
-    // scene builds, so "elapsed >= at" alone would fire the probe on frame one, before a single
-    // doodad had spawned, and report nothing.
+    // Not while the world is empty: a capture holds the clock at 0 while the scene builds.
     if *fired
         || time.elapsed_secs() < at
         || (parts.iter().next().is_none() && uv_reg.0.is_empty() && tint_reg.0.is_empty())
@@ -1090,23 +770,17 @@ pub(super) fn matanim_probe(
     let now = time.elapsed_secs();
     let gseq_now = f64::from(now);
     let mut rows: Vec<String> = Vec::new();
-    // One UV entry as a row — hoisted out of the part loop so the unvisited pass below prints
-    // exactly the same columns for an entry NO marked part accounts for.
     let uv_row = |e: &UvAnimEntry| {
         let playing = host_seq(&hosts, e.host());
-        // The per-placement lane has one loop per sequence, so its phase sweep is meaningless
-        // without a play head — it prints the head instead, and samples on the shared clock.
+        // A per-placement entry has a loop per slot, so it prints its play head, not a period.
         let (lane, period) = match &e.anim {
             UvLoop::Shared(a) => {
-                // `None` = a rotate-/scale-only transform: the translation row is real and stays
-                // at zero, and the period the sweep needs is the AFFINE channel's, not this one's.
+                // `None`: a rotate- or scale-only transform, whose translation row stays at zero.
                 let p = a.as_ref().map_or(0.0, |a| a.period);
                 (format!("shared period {p:.3}s"), p)
             }
             UvLoop::PerSeq { .. } => (format!("per-seq playing {playing:?}"), 0.0),
-            // The effect lane HAS a resolved loop (the clip it opened on), so unlike the
-            // per-placement lane its sweep is meaningful — read across the instance's own
-            // clip, from attach, beside the age that says where in it this frame sits.
+            // The effect lane has a resolved loop, so it sweeps its own clip from attach.
             UvLoop::Instance { attached_at, .. } => (
                 format!(
                     "per-instance age {:.3}s playing {playing:?}",
@@ -1115,11 +789,8 @@ pub(super) fn matanim_probe(
                 e.resolved(playing).map_or(0.0, |l| l.period),
             ),
         };
-        // Four quarter-phase samples of the loop itself: a flat set is an asset that scrolls
-        // nowhere, whatever the row says. The phase has to move the clock the entry actually
-        // reads — for the shared lane that is `now`, for a hosted one the PLAY HEAD, which is why
-        // the sweep substitutes the phase into `playing` rather than only into `now` (an entry
-        // whose host supplies a band clock ignores `now` entirely, and the sweep read flat).
+        // Four quarter-phase samples of the loop. The phase moves the clock the entry reads:
+        // `now` on the shared lane, the play head on a hosted one, which ignores `now`.
         let phases: Vec<String> = (0u8..4)
             .map(|i| {
                 let t = period * f32::from(i) / 4.0;
@@ -1129,8 +800,6 @@ pub(super) fn matanim_probe(
             })
             .collect();
         let live = e.delta(now, gseq_now, playing);
-        // The affine half, when the transform has one: `[cos − 1, sin, sx − 1, sy − 1]`, so all
-        // zeros IS the identity and a flat row there says the turn/scale never reached the shader.
         let affine = e.affine(now, gseq_now, playing).map_or(String::new(), |(slot, want)| {
             let row = table.row(slot);
             format!(
@@ -1154,14 +823,11 @@ pub(super) fn matanim_probe(
         AssetId<benilla_assets::materials::WowModelMaterial>,
     > = std::collections::HashSet::new();
     for (mat, vis, vv, obj) in &parts {
-        // A far-classified part carries the TWIN's id; the registry is always keyed by the near
-        // one — the same fold `tick_anim_materials`' draw scan makes (1375).
+        // A far part carries its twin's id; the registry is keyed by the near one.
         let far = twins.near_of(mat.id());
         let id = far.unwrap_or(mat.id());
         let label = obj.map_or_else(|| "-".to_string(), |o| format!("{}#{}", o.label, o.id));
-        // Through the parked half (`lazy::with_material`), or the readout would report every
-        // not-yet-drawn material's stamp as a zero it never had — the deferral confusion this
-        // probe exists to resolve. `parked` says which half answered.
+        // Through the parked half, or an undrawn material's slots read zero; `parked` says which.
         let parked = !materials.contains(id);
         let slots =
             crate::model_render::lazy::with_material(&materials, id, |m| m.extension.anim_slots)
@@ -1191,11 +857,7 @@ pub(super) fn matanim_probe(
             u8::from(vv.is_some_and(|v| v.get())),
         ));
     }
-    // **The entries no marked part accounts for.** The spell-effect lane is exactly this
-    // population by design — its parts carry no [`AnimMatPart`] because they skip the draw gate
-    // (`tick_anim_materials`) — and so is every genuine leak: a registered material whose part is
-    // gone, or whose marker was never inserted. Without this pass the probe could not see the
-    // claw trail at all, which is the one thing decision 2282 built it to read.
+    // Entries no marked part accounts for: the effect lane, which carries no marker, and any leak.
     for (id, e) in &uv_reg.0 {
         if visited.contains(id) {
             continue;
@@ -1214,10 +876,8 @@ pub(super) fn matanim_probe(
     }
 }
 
-/// One animated part as [`matanim_probe`] reads it: the material it is bound to (the far twin's
-/// id while it is far-classified), the two halves of the draw verdict the tick's gate turns on,
-/// and the placement that names it. A tuple alias because the inline form trips the workspace
-/// gate's `type_complexity`, the same shape `debug_panel::inspect`'s readouts take.
+/// One animated part as [`matanim_probe`] reads it: its material, both halves of its draw
+/// verdict, and the placement that names it.
 type ProbeReadout = (
     &'static MeshMaterial3d<benilla_assets::materials::WowModelMaterial>,
     &'static Visibility,
@@ -1225,8 +885,7 @@ type ProbeReadout = (
     Option<&'static crate::interact::WorldObject>,
 );
 
-/// `WOW_MATANIM_PROBE` — unset is off; bare (or unparseable) fires at 20 s. Read once
-/// ([`matanim_off`]'s pattern): the system runs every frame to check its own latch.
+/// `WOW_MATANIM_PROBE`, read once: unset is off, bare or unparseable fires at 20 s.
 fn probe_at() -> Option<f32> {
     static AT: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
     *AT.get_or_init(|| {
@@ -1239,7 +898,6 @@ fn probe_at() -> Option<f32> {
 mod delta_tests {
     use super::*;
 
-    /// An effect-lane entry over one shared translation loop, attached at `attached_at`.
     fn fx_entry(attached_at: f32) -> UvAnimEntry {
         UvAnimEntry {
             anim: UvLoop::Instance {
@@ -1254,8 +912,7 @@ mod delta_tests {
         }
     }
 
-    /// A rotation-only loop, as `G_ScryingBowl`'s water and `G_ScourgeRuneCircleCrystal`'s rune
-    /// ring author one: a quarter turn about Z over two seconds, keyed in file slot 0 only.
+    /// A rotation-only loop: a quarter turn about Z over two seconds, in file slot 0 only.
     fn quarter_turn() -> std::sync::Arc<benilla_formats::SeqLoops<[f32; 4]>> {
         const Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
         const QUARTER: [f32; 4] = [0.0, 0.0, Q, Q];
@@ -1272,10 +929,7 @@ mod delta_tests {
         )
     }
 
-    /// **`animates()` is the one predicate, and it is not `uv_anim.is_some()`**.
-    /// Two entity batches in the shipped corpus rotate and never translate, so the channel a
-    /// reader would check first answers `None` for them; and a translation keyed to one constant
-    /// value is the material's seed, not a loop to sample (1375).
+    /// `animates()` is not `uv_anim.is_some()`: a rotate-only batch moves, a constant does not.
     #[test]
     fn the_animates_predicate_sees_a_rotation_only_batch() {
         let rot_only = UvLoops {
@@ -1303,10 +957,6 @@ mod delta_tests {
         assert!(!UvLoops::default().animates());
     }
 
-    /// **The affine half runs on whichever clock its own lane runs on** (decision 2295 widening
-    /// 2282's). A shared entity entry has no host and no attach time, so its rotation reads the
-    /// free-running scene clock — which is what makes a rune ring on a shared, deduped material
-    /// turn at all.
     #[test]
     fn a_shared_entry_turns_on_the_scene_clock() {
         let e = UvAnimEntry {
@@ -1319,17 +969,12 @@ mod delta_tests {
                 slot: 5,
             }),
         };
-        // No translation channel at all: the row it still owns stays at the zero it means.
+        // No translation channel: its row stays at zero.
         assert_eq!(e.delta(1.0, 1.0, None), [0.0, 0.0, 0.0, 0.0]);
-        // Half-way through the turn, and the row is `[cos − 1, sin, sx − 1, sy − 1]` of the
-        // **raw, unnormalised** lerped quaternion — which is the reference's own arithmetic, not
-        // an oversight: `0x713ea0` lerps each component and `0x7bddb0` consumes the result as is,
-        // so between two keys `|q| < 1` and the 2×2 is a rotation with a slight shrink — a
-        // re-implementation that slerps, or normalises before building the matrix, diverges from
-        // the reference between keys.
-        // Here `q = (0, 0, 0.35355, 0.85355)`, so `c = 1 − 2z² = 0.75` and `s = 2zw = 0.60355` —
-        // NOT the 0.7071/0.7071 a normalised 45° would give. Asserted exactly so a future
-        // "obvious fix" to normalise fails here.
+        // Half-way through the turn the row comes from the raw, unnormalised lerp, as in the
+        // reference (`0x713ea0` lerps each component, `0x7bddb0` uses the result as is):
+        // `q = (0, 0, 0.35355, 0.85355)`, so `c = 1 − 2z² = 0.75` and `s = 2zw = 0.60355`, not the
+        // 0.7071 of a normalised 45°. Normalising fails here.
         let (slot, row) = e.affine(1.0, 1.0, None).expect("the affine row");
         assert_eq!(slot, 5);
         assert!(
@@ -1340,7 +985,6 @@ mod delta_tests {
             row[2].abs() < 1e-6 && row[3].abs() < 1e-6,
             "no scaling authored, so the scale half is the identity: {row:?}"
         );
-        // …and the clock really is `now`: a different scene time gives a different angle.
         let later = e.affine(1.5, 1.5, None).expect("the affine row").1;
         assert!(
             (later[1] - row[1]).abs() > 1e-2,
@@ -1348,10 +992,6 @@ mod delta_tests {
         );
     }
 
-    /// **The effect lane reads its INSTANCE's play head, not the scene clock**.
-    /// The band clock is the clip time the host's `AnimationPlayer` reports, so two casts a minute
-    /// apart are at the same point of their own scroll — the property a shared-material lane
-    /// structurally cannot have, and the one Swipe's one-shot reveal rests on.
     #[test]
     fn the_effect_lane_reads_its_own_play_head() {
         let anim = uv_loop();
@@ -1366,9 +1006,6 @@ mod delta_tests {
         }
     }
 
-    /// With no player to ask — the frame before an effect's rig arms, or a model that never arms
-    /// one — the band clock degrades to the instance's own AGE, which is `MatAnim`'s degrade next
-    /// door and not the free-running scene clock a shared entry would read.
     #[test]
     fn a_player_less_effect_falls_back_to_its_age() {
         let anim = uv_loop();
@@ -1380,9 +1017,6 @@ mod delta_tests {
         );
     }
 
-    /// The **affine** half (2019's encoding, zero = identity): sampled on the same clocks as the
-    /// translation beside it, and absent — never a zeroed row — when the transform only slides.
-    /// `Spells\GroundingTotem_Impact.m2` is the scale-only case this stands for.
     #[test]
     fn the_effect_lane_samples_rotation_and_scale_on_the_same_clock() {
         let mut e = fx_entry(100.0);
@@ -1408,8 +1042,7 @@ mod delta_tests {
             .affine(100.0, 0.0, Some((0, 1.0)))
             .expect("the affine row");
         assert_eq!(slot, 12);
-        // Half-way: scale 0.625, encoded as `sx − 1`; rotation untouched, so `cos − 1` and `sin`
-        // are the identity's zeros.
+        // Half-way: scale 0.625, encoded `sx − 1`; no rotation, so `cos − 1` and `sin` are zero.
         assert!(
             row[0].abs() < 1e-6 && row[1].abs() < 1e-6,
             "no rotation authored: {row:?}"
@@ -1430,9 +1063,6 @@ mod delta_tests {
         })
     }
 
-    /// The delta law: a row is the quantized live sample minus the BUILT seed,
-    /// so the shader's `seed + row` shows exactly the number the old asset-mutating lane wrote.
-    /// At t = 0 that is the quantized seed — the same value the old tick's first frame produced.
     #[test]
     fn the_delta_reproduces_the_old_absolute_write() {
         let anim = uv_loop();
@@ -1465,13 +1095,7 @@ mod delta_tests {
         }
     }
 
-    /// **B98**: the per-placement lane samples the slot the placement's own host is
-    /// playing — not slot 0, and not a shared clock.
-    ///
-    /// The BRM lava bubble's shape, exactly: slot 0 bakes to nothing (a dead hold) and slot 1
-    /// carries the flipbook. Reading slot 0, as the shared registry must, is the frozen sprite the
-    /// report named; reading the host's live slot is the fix. The unresolved case — a host
-    /// despawned mid-frame — must land on the UV identity, i.e. the built seed, never a jump.
+    /// A lava bubble's shape: slot 0 bakes nothing and slot 1 the flipbook.
     #[test]
     fn the_per_placement_lane_reads_its_hosts_sequence() {
         let seqs = std::sync::Arc::new(
@@ -1502,13 +1126,12 @@ mod delta_tests {
             (d[1] - 0.605).abs() < 1e-3,
             "the flipbook's V offset: {d:?}"
         );
-        // On slot 0 there is no loop at all — the identity, i.e. the built seed.
+        // Slot 0 has no loop: the zero offset, here the built seed.
         assert_eq!(entry.delta(0.0, 0.0, Some((0, 3.0))), [0.0; 4]);
-        // …and an unresolvable host degrades to the same identity, never to a shared-clock sample.
+        // An unresolvable host degrades to the same identity, never a shared-clock sample.
         assert_eq!(entry.delta(99.0, 99.0, None), [0.0; 4]);
     }
 
-    /// The tint twin, same law at the display's 1/255 step.
     #[test]
     fn the_tint_delta_reproduces_the_old_absolute_write() {
         let anim = std::sync::Arc::new(benilla_formats::RgbAnim {

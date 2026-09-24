@@ -1,9 +1,7 @@
-//! The per-instance **interior-prop light-probe table**: one 7-row SH probe per lit interior MODD
-//! prop, folded once at spawn ([`super::sh::prop_probe_coeffs`] over the MODD-colour base, the
-//! fixed-axis lobe, and the owning group's MOLR point lobes) and uploaded with the shared light
-//! blob. The prop's `MeshTag` payload carries its slot index; `wow_model.wgsl`'s interior-prop lane
-//! evaluates the probe per fragment. Slots free themselves when the prop despawns (streaming out)
-//! via the [`PropProbeSlot`] component hook — no per-frame bookkeeping.
+//! The interior-prop light-probe table: one 7-row SH probe per lit interior MODD prop, folded at
+//! spawn ([`super::sh::prop_probe_coeffs`] over the MODD colour, the fixed-axis lobe and the
+//! group's MOLR lights) and uploaded behind the shared light blob. The prop's `MeshTag` payload
+//! carries its slot, which the [`PropProbeSlot`] hook frees on despawn.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,16 +12,11 @@ use bevy::math::Vec4;
 use bevy::prelude::*;
 use bevy::render::extract_resource::ExtractResource;
 
-/// Capacity of the probe table (mirrored by `wow_model.wgsl`'s `prop_probes` array — keep in sync).
-/// Concurrently-resident lit interior props across every streamed placement: the abbey holds ~150
-/// interior MODDs, but a CITY-scale WMO streams thousands at once (the Northshire login radius
-/// reaches Stormwind's placement — >1024 interior props spawned in one frame, measured live).
-/// 8192 × 7 rows = 896 KB — a per-frame `write_buffer` of that size is noise on any target GPU.
+/// Capacity of the probe table, mirrored by `wow_model.wgsl`'s `prop_probes` array (keep in sync):
+/// a city WMO streams in thousands of lit interior props at once.
 pub const MAX_PROP_PROBES: usize = 8192;
 
-/// A probe's identity for content dedup: the 7 rows, compared/hashed BIT-EXACT (the fold is a pure
-/// function of its inputs, so identical props — the same MODD colour with the same lobe set — fold
-/// to identical bits; a fence WMO placed 200 times collapses to one slot).
+/// A probe's rows, bit for bit: identical props fold to identical bits and share a slot.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct ProbeKey([[u32; 4]; 7]);
 
@@ -33,33 +26,23 @@ impl ProbeKey {
     }
 }
 
-/// The main-world slot table. `rows` is allocated to capacity once; `free`/`high` implement a slab
-/// (freed slots recycle before the high-water mark advances), and identical probes SHARE a slot via
-/// [`ProbeKey`] refcounting — without it, a login scene's outdoor prop-WMO armies (every placement ×
-/// every MODD of a not-EXTERIOR-flagged group takes the MODD-colour law, faithfully) blew straight
-/// through an 8192 table (measured live at Northshire: peak 8192, still overflowing). The rows live
-/// behind an `Arc` so the render-world extract is a pointer bump, NOT a ~900 KB copy — probes change
-/// on spawn/despawn, not per frame, and [`upload_prop_probes`] writes the GPU region only when
-/// [`Self::generation`] moves (`Arc::make_mut` gives copy-on-write for the frame a change races the
-/// extract).
+/// The main-world slot table: a slab whose freed slots recycle first, with identical probes sharing
+/// a refcounted slot (without it a login scene's prop WMOs overflow the table). The rows sit behind
+/// an `Arc`: the render extract is a pointer bump, and `make_mut` copies when a change races it.
 #[derive(Resource)]
 pub struct PropProbes {
     rows: Arc<Vec<[[f32; 4]; 7]>>,
     free: Vec<u16>,
     high: usize,
-    /// Content dedup: probe bits → live slot. Entries live exactly as long as their refcount.
+    /// Probe bits to live slot, for as long as the slot's refcount lasts.
     by_key: HashMap<ProbeKey, u16>,
-    /// Per-slot (refcount, key) — the release path's reverse lookup. `None` = free slot; a live
-    /// slot with key `None` is OWNED (a dynamic entity's ramping probe — never deduped/shared).
+    /// Per slot `(refcount, key)`, `None` when free; a `None` key marks an owned, unshared slot.
     slots: Vec<Option<(u32, Option<ProbeKey>)>>,
-    /// Bumped on every write — the render-world upload's change detector.
+    /// Bumped on every write; the render-world upload watches it.
     generation: u64,
-    /// Peak concurrent DISTINCT occupancy (diagnostics: logged by the spawner on overflow; a peak
-    /// near capacity is the signal to grow the table).
+    /// Peak distinct occupancy, logged by the spawner on overflow.
     peak: usize,
-    /// Slots written since the last publish, as a `[lo, hi)` span — what the upload writes,
-    /// instead of every allocated row: a walk streams props in and out most frames and each
-    /// change re-sent the whole span (hundreds of KB) for one row.
+    /// Slots written since the last publish, `[lo, hi)`: the upload writes only this span.
     dirty: Option<(usize, usize)>,
 }
 
@@ -79,10 +62,8 @@ impl Default for PropProbes {
 }
 
 impl PropProbes {
-    /// Claim a slot for this probe — a live identical probe just gains a reference; a new one
-    /// takes a free slot and writes its rows. `None` when the table is full of DISTINCT probes
-    /// (the caller falls back to exterior lighting for that prop and warns — graceful, never
-    /// wrong-lit from a stale slot).
+    /// Claims a slot, sharing a live identical probe's; `None` when the table is full of distinct
+    /// probes, and the caller then lights the prop as exterior.
     pub fn alloc(&mut self, coeffs: [Vec4; 7]) -> Option<u16> {
         let key = ProbeKey::of(&coeffs);
         if let Some(&slot) = self.by_key.get(&key) {
@@ -100,10 +81,8 @@ impl PropProbes {
         Some(slot)
     }
 
-    /// Claim an OWNED slot for a dynamic entity's ramping probe: no content dedup —
-    /// two units walking the same room ramp independently, so sharing would couple their light —
-    /// and the holder updates it in place via [`Self::update_owned`] while its node ramps/moves.
-    /// Freed through the same [`PropProbeSlot`] hook as deduped slots.
+    /// Claims an owned slot for a moving entity's probe, never shared, since two units in one room
+    /// ramp independently; the holder rewrites it with [`Self::update_owned`].
     pub(crate) fn alloc_owned(&mut self, coeffs: [Vec4; 7]) -> Option<u16> {
         let slot = self.take_free_slot()?;
         Arc::make_mut(&mut self.rows)[slot as usize] = coeffs.map(|v| v.to_array());
@@ -113,10 +92,8 @@ impl PropProbes {
         Some(slot)
     }
 
-    /// Rewrite an OWNED slot's rows in place (the per-frame refold of a moving/ramping entity).
-    /// Refuses a deduped or free slot — an owned holder can never legitimately point at one, and
-    /// swallowing the write SILENTLY is how a stale holder stays black forever (the stuck
-    /// black-unit-indoors bug rode exactly this no-op), so the refusal warns.
+    /// Rewrites an owned slot in place. A shared or free slot is refused with a warning: a holder
+    /// pointing at one is stale, and a silent no-op would leave it black.
     pub(crate) fn update_owned(&mut self, slot: u16, coeffs: [Vec4; 7]) {
         if !matches!(self.slots.get(slot as usize), Some(Some((_, None)))) {
             warn_once!("update_owned({slot}) on a non-owned slot — the holder's slot is stale");
@@ -126,7 +103,6 @@ impl PropProbes {
         self.touch(slot);
     }
 
-    /// A row changed: widen the dirty span and bump the generation.
     fn touch(&mut self, slot: u16) {
         let s = slot as usize;
         self.dirty = Some(match self.dirty {
@@ -147,15 +123,13 @@ impl PropProbes {
         }
     }
 
-    /// Live and peak DISTINCT occupancy — the spawner's overflow diagnostic.
+    /// Live and peak distinct occupancy.
     pub fn occupancy(&self) -> (usize, usize) {
         (self.high - self.free.len(), self.peak)
     }
 
-    /// Drop one reference (frees at zero). Crate-visible for exactly one caller besides the
-    /// [`PropProbeSlot`] on-remove hook: the interior classifier's apply-time orphan path — a
-    /// slot allocated the same frame its anchor was despawned by the net teardown never gets
-    /// its component (whose hook would free it), so the queued command releases it directly.
+    /// Drops one reference, freeing at zero; besides the [`PropProbeSlot`] hook, the interior
+    /// classifier calls it for a slot whose anchor was despawned before its component landed.
     pub(crate) fn release(&mut self, slot: u16) {
         let Some(entry) = self.slots.get_mut(slot as usize) else {
             return;
@@ -173,24 +147,20 @@ impl PropProbes {
         if let Some(key) = key {
             self.by_key.remove(&key);
         }
-        // Zero the freed probe so a stale MeshTag (a frame of despawn skew) reads black, not the
-        // previous occupant's light.
+        // Zeroed, so a stale `MeshTag` in a frame of despawn skew reads black.
         Arc::make_mut(&mut self.rows)[slot as usize] = [[0.0; 4]; 7];
         self.touch(slot);
         self.free.push(slot);
     }
 }
 
-/// The render-world mirror of the probe table: an `Arc` bump per frame (never a data copy).
-/// [`upload_prop_probes`] writes the shared buffer's probe region — at [`prop_probe_region_offset`],
-/// past the per-frame light blob — only when the generation moves.
+/// The render-world mirror of the probe table, an `Arc` bump per frame.
 #[derive(Resource, Clone, ExtractResource)]
 pub(crate) struct PropProbeExtract {
     rows: Arc<Vec<[[f32; 4]; 7]>>,
     high: usize,
     generation: u64,
-    /// The rows this generation changed, `[lo, hi)`; `None` = everything up to `high` (the
-    /// first publish, and a render world that missed a generation).
+    /// The rows this generation changed, `[lo, hi)`; `None` means everything up to `high`.
     dirty: Option<(usize, usize)>,
 }
 
@@ -199,21 +169,20 @@ impl Default for PropProbeExtract {
         Self {
             rows: Arc::new(Vec::new()),
             high: 0,
-            // != PropProbes' initial 0, so the first refresh publishes even an empty table.
+            // Not `PropProbes`' initial 0, so the first publish sends even an empty table.
             generation: u64::MAX,
             dirty: None,
         }
     }
 }
 
-/// Main world, after the spawners: publish the table for extraction when it changed.
+/// Main world, after the spawners: publishes the table for extraction when it changed.
 pub(super) fn publish_prop_probes(
     mut probes: ResMut<PropProbes>,
     mut out: ResMut<PropProbeExtract>,
 ) {
     if out.generation != probes.generation {
-        // Consecutive generations carry their own span; a publish that skipped one (the
-        // change-gated system did not run in between) sends the whole allocated span once.
+        // After a skipped generation the whole allocated span goes, not just the last change.
         let consecutive = out.generation.wrapping_add(1) == probes.generation
             || out
                 .dirty
@@ -226,13 +195,13 @@ pub(super) fn publish_prop_probes(
     }
 }
 
-/// Byte offset of the probe region inside the shared light buffer (right after the per-frame blob).
+/// Byte offset of the probe region in the shared light buffer, right after the per-frame blob.
 pub fn prop_probe_region_offset() -> u64 {
     super::global_light::per_frame_blob_bytes()
 }
 
-/// Render world (`PrepareResources`): write the probe region in place when the table changed. The
-/// per-frame `upload_light` writes only the prefix, so the tail persists between changes.
+/// Render world, in `PrepareResources`: writes the probe region when the table changed; the
+/// per-frame upload writes only the prefix, so the region persists between changes.
 pub(super) fn upload_prop_probes(
     queue: Res<bevy::render::renderer::RenderQueue>,
     buffer: Option<Res<super::SharedLightBuffer>>,
@@ -245,9 +214,8 @@ pub(super) fn upload_prop_probes(
     if *last == Some(data.generation) {
         return;
     }
-    // The changed span when this render frame follows the last one it uploaded; the whole
-    // allocated span (freed slots inside it are zeroed rows) on the first upload and whenever a
-    // generation went by unseen, so the GPU never keeps a row the CPU has since rewritten.
+    // Only the changed span when this follows the last upload; the whole allocated span on the
+    // first upload and after an unseen generation, so the GPU never keeps a rewritten row.
     let high = data.high.min(data.rows.len());
     let (lo, hi) = match (data.dirty, *last) {
         (Some((lo, hi)), Some(seen)) if seen.wrapping_add(1) == data.generation => {
@@ -266,12 +234,9 @@ pub(super) fn upload_prop_probes(
     }
 }
 
-/// Attached to ONE entity of each lit interior prop instance (they despawn together with the
-/// placement); the hook returns the slot to the table whoever despawns it — and `on_replace`,
-/// not `on_remove` (the `RigSkin` shape): `on_remove` never fires on an
-/// insert-overwrite, so a re-seat that wrote a fresh slot over the old one leaked the old slot
-/// for the life of the session, and only a remove-then-insert discipline at the one re-seat
-/// site kept that from happening. `on_replace` fires once per transition on both edges.
+/// On one entity per lit interior prop; its hook returns the slot to the table. `on_replace`, not
+/// `on_remove`: an insert over a live slot must free the old one, and `on_remove` never fires on
+/// an overwrite.
 #[derive(Component)]
 #[component(on_replace = free_prop_probe_slot)]
 pub struct PropProbeSlot(pub u16);
@@ -294,22 +259,19 @@ mod tests {
         let c = [Vec4::splat(0.5); 7];
         let a = t.alloc(c).unwrap();
         let b = t.alloc(c).unwrap();
-        assert_eq!(a, b); // content dedup: a fence army costs ONE slot
+        assert_eq!(a, b); // identical content shares one slot
         let other = t.alloc([Vec4::splat(0.25); 7]).unwrap();
         assert_ne!(a, other);
-        // First release keeps the shared slot alive; the second frees it.
+        // The first release keeps the shared slot alive; the second frees it.
         t.release(a);
         assert_ne!(t.rows[a as usize], [[0.0; 4]; 7]);
         t.release(b);
-        assert_eq!(t.rows[a as usize], [[0.0; 4]; 7]); // freed ⇒ black, not stale light
-                                                       // The freed slot recycles, and the same content maps to it afresh.
-        let c2 = t.alloc(c).unwrap();
+        assert_eq!(t.rows[a as usize], [[0.0; 4]; 7]); // freed reads black, not stale light
+        let c2 = t.alloc(c).unwrap(); // the freed slot recycles
         assert_eq!(c2, a);
         assert_eq!(t.high, 2);
     }
 
-    /// The hook is `on_replace`, so an insert over a live slot frees the old one — the leak
-    /// `on_remove` would have let through (it never fires on an overwrite).
     #[test]
     fn overwriting_a_probe_slot_frees_the_old_one() {
         let mut w = World::new();
@@ -336,20 +298,19 @@ mod tests {
         let c = [Vec4::splat(0.5); 7];
         let a = t.alloc_owned(c).unwrap();
         let b = t.alloc_owned(c).unwrap();
-        assert_ne!(a, b); // identical content still gets its own slot — ramps stay independent
+        assert_ne!(a, b); // identical content still gets its own slot
         let g0 = t.generation;
         t.update_owned(a, [Vec4::splat(0.7); 7]);
         assert_eq!(t.rows[a as usize], [[0.7; 4]; 7]);
         assert!(t.generation > g0, "in-place update must republish");
-        // A deduped slot ignores update_owned (an owned holder can never point at one).
+        // A shared slot ignores `update_owned`.
         let d = t.alloc(c).unwrap();
         let before = t.rows[d as usize];
         t.update_owned(d, [Vec4::splat(0.9); 7]);
         assert_eq!(t.rows[d as usize], before);
-        // Owned slots free through the same release path (the component hook) and zero their rows.
+        // An owned slot frees through the same release, zeroes, and recycles.
         t.release(a);
         assert_eq!(t.rows[a as usize], [[0.0; 4]; 7]);
-        // …and the freed slot recycles for the next owned claim.
         assert_eq!(t.alloc_owned(c).unwrap(), a);
     }
 
@@ -361,11 +322,10 @@ mod tests {
             assert!(t.alloc(unique).is_some());
         }
         assert!(t.alloc([Vec4::splat(-1.0); 7]).is_none());
-        // …but a DUPLICATE of a live probe still succeeds at capacity (it costs no slot).
+        // A duplicate of a live probe still succeeds at capacity, costing no slot.
         assert!(t.alloc([Vec4::splat(1.0); 7]).is_some());
     }
 
-    /// A shared (extracted) Arc never sees an in-flight mutation: make_mut copies instead.
     #[test]
     fn extracted_rows_are_copy_on_write() {
         let mut t = PropProbes::default();

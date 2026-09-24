@@ -1,9 +1,6 @@
-//! The world-model visibility apply system. Each frame it shows/hides every doodad/WMO/creature
-//! submesh from the panel's layer/type toggles AND the faithful far-clip wall-cull (nearest-point of
-//! the mesh AABB along the camera-forward axis, same plane as the per-pixel wall) plus the small-prop
-//! distance fade. The model-`Visibility` authority, with one *ordered* override: the self-avatar
-//! first-person hide (`player::apply_self_model_fade`) runs after this set ([`super::ModelVisSet`])
-//! and wins on the self body submeshes. Split from the panel UI/state in `super`.
+//! The one model `Visibility` authority: dev toggles, the far-clip wall, the distance fade, the
+//! portal PVS and the exterior window gate compose in one system. The first-person self-avatar
+//! hide runs after [`super::ModelVisSet`] and wins on the self body.
 
 use bevy::camera::primitives::Aabb;
 use bevy::mesh::MeshTag;
@@ -17,15 +14,9 @@ use crate::view::WorldCamera;
 use crate::wmo_portal::{WmoGroupVis, WmoPortalInstance};
 use benilla_assets::materials::WowModelMaterial;
 
-/// Show/hide each model submesh from the layer/type toggles **and** the faithful draw-distance cull.
-/// The toggles are a dev inspector; the distance test is real fidelity — in 1.12 every doodad/WMO
-/// **hard-pops** out past the `farclip` radius from the camera (no fade, no distance-LOD; the cull tests
-/// each placement against the `cameraPos ± farclip` AABB). We approximate
-/// that AABB with a radial distance to the placement origin, which reads the same in-frame.
-///
-/// Runs every frame (the camera moves, so this can't be snapshot-gated like a pure toggle), but only
-/// **writes** `Visibility` when a submesh's decision actually flips — so the steady-state cost is one
-/// squared-distance compare per submesh and no change-detection churn.
+/// Shows or hides each model submesh. A doodad or WMO part is culled once its bound lies wholly
+/// past the far-clip wall ([`crate::view::within_farclip`]), so a straddler dissolves through the
+/// per-pixel wall. Writes only on a flip.
 #[allow(clippy::type_complexity)]
 pub(super) fn apply_model_visibility(
     debug: Res<DebugState>,
@@ -38,38 +29,21 @@ pub(super) fn apply_model_visibility(
         ),
         With<WorldCamera>,
     >,
-    // The two edges the per-part skip below cannot read off its own row: a building streaming
-    // in (its portal set is new), and any owner's inherited verdict flipping (a card follows it).
-    // `Changed`, not `Added`: the PVS writer sets the tick only on a real change of the
-    // visible set, and that set moves when a building's asset lands frames after its spawn.
+    // Scene edges the per-part skip cannot read off its own row: a portal set changing (a
+    // building's asset lands frames after its spawn) and any owner's inherited verdict flipping.
     new_portals: Query<(), Changed<WmoPortalInstance>>,
     owner_flips: Query<(), Changed<InheritedVisibility>>,
-    // A part whose far-side mark was REMOVED reads as never marked; the classifier's full walk
-    // can strip it under a still camera (review 2026-09-04), and the strip must un-skip it.
+    // A far-side mark the classifier strips under a still camera must un-skip its part.
     mut unmarked: RemovedComponents<super::FarSideOfWater>,
-    // The per-frame WMO portal PVS (computed by `crate::wmo_portal`), read here so the cull composes
-    // with the toggles + far-clip in this single Visibility authority rather than fighting it.
     instances: Query<&WmoPortalInstance>,
-    // …and, for exactly the same reason, the exterior-scene window gate. It used to
-    // write `Visibility` itself in `PostUpdate`, i.e. AFTER this system — so on every object it
-    // admitted it silently undid the toggles, the far-clip cull and the portal PVS, including
-    // outdoors, where it wrote `Inherited` over all of them every single frame.
     windows: Res<crate::wmo_portal::ExteriorWindows>,
-    // The camera's OWN building is not exterior scene to itself: the reference draws the containing
-    // map object through the interior portal walk, never through the per-window exterior populate
-    // (`[0xc7b748]` is the branch, not a participant). Without this exemption, standing inside
-    // Stratholme would window-cull Stratholme's own walls.
+    // The camera's own building is not exterior scene: the reference draws it through the
+    // interior portal walk, never the per-window exterior populate (`[0xc7b748]` is the branch).
     claim: Res<crate::wmo_portal::CameraInteriorClaim>,
-    // The water-plane classification (`model_render::classify_water_side`) — read-only here: this
-    // system owns the DoodadFade handle pick, so the far-side axis composes INTO that pick (the
-    // marker + the twin map) instead of a second writer re-swapping the handle it just wrote —
-    // the exact fight decision 0025's one-authority law exists to prevent.
+    // Read-only: this system owns the `DoodadFade` handle pick, and the far side composes into it.
     far_twins: Res<super::FarSideTwins>,
-    // Every entity that can OWN a billboard card — the model root a card belongs to, or a joint of
-    // its rig, both of which carry the root's propagated verdict. Read-only, and for the same
-    // one-authority reason as the two above: a card is a world root, so nothing carries its owner's
-    // hide to it, and the mirror that used to live in `billboard::face_billboards` was ordered too
-    // late to survive.
+    // Billboard card owners (a model root or a rig joint): a card is a world root, so nothing
+    // else carries its owner's hide to it.
     card_owners: Query<&InheritedVisibility>,
     mut q: Query<(
         Entity,
@@ -86,11 +60,8 @@ pub(super) fn apply_model_visibility(
         Option<Ref<super::FarSideOfWater>>,
         Option<&crate::billboard::BillboardCard>,
     )>,
-    // The building's own MLIQ surfaces (canals, dungeon pools, Ragefire's lava). They carry a
-    // `WmoGroupVis` like every other piece of their group but no `ModelPart` — they are not model
-    // submeshes and take none of the toggle/far-clip/fade rules above. A second QUERY, deliberately
-    // not a second SYSTEM: decision 0025 wants one `Visibility` authority, and this keeps it
-    // (a culled room's water must go with the room, same as its furniture).
+    // A building's MLIQ surfaces: a `WmoGroupVis` but no `ModelPart`, so none of the submesh
+    // rules. A query here rather than a second writer, so a culled room's water goes with it.
     mut group_only: Query<
         (
             &WmoGroupVis,
@@ -104,16 +75,11 @@ pub(super) fn apply_model_visibility(
     >,
 ) {
     let m = &debug.models;
-    // The (single) world Camera3d; the egui overlay is a Camera2d. None before it spawns → no distance
-    // cull that frame (toggles still apply).
     let cam_view = cam.iter().next();
     let cam_t = cam_view.as_ref().map(|(t, _, _)| t);
-    // Every whole-scene input of a part's verdict, still since last frame. With those still, a
-    // part whose own row is still too would come out of the walk below with the same
-    // `Visibility`, tag and material it already carries — so it skips the walk (decision 1979's
-    // floor: ~8.7 k resident parts re-verdicted on every still frame at the Stormwind pin).
-    // Both the propagated frame and the seat's own write: this system runs before propagation,
-    // so a teleport frame's move is only visible on the local `Transform` (see doodad_anim).
+    // Every whole-scene input still since last frame: a part whose own row is still too would
+    // come out unchanged, so it skips the walk. The camera's local `Transform` counts too: this
+    // runs before propagation, so a teleport's move shows only there.
     let scene_still = cam_view.as_ref().is_some_and(|(t, p, l)| {
         !t.is_changed() && !p.is_changed() && !l.as_ref().is_some_and(|l| l.is_changed())
     }) && !debug.is_changed()
@@ -125,17 +91,13 @@ pub(super) fn apply_model_visibility(
         && owner_flips.is_empty();
     let cam_pos = cam_t.map(|t| t.translation());
     let cam_fwd = cam_t.map(|t| Vec3::from(t.forward()));
-    // The exterior gate, built ONCE for the whole walk (it is a handful of 6-plane frusta) and then
-    // asked per submesh below — the same value `crate::exterior_cull` asks for the objects it owns.
     let gate = crate::exterior_cull::ExteriorGate::build(
         &windows,
         cam_view.as_ref().map(|(t, p, _)| (&**t, &**p)),
     );
-    // The placement the camera is standing in, exempt from its own window gate (see the param).
+    // The placement the camera stands in, exempt from its own window gate.
     let own_instance = claim.0.map(|c| c.room.instance);
-    // Parallel: this walks EVERY model submesh in residency — ~100k in a city — and at that N a
-    // serial walk alone blew half the 16.7 ms budget (the Stormwind fps hunt). Every write below
-    // is change-gated, so the steady state is a pure read fan-out.
+    // Parallel over every resident model submesh (~100k in a city); every write is change-gated.
     let unmarked: bevy::platform::collections::HashSet<Entity> = unmarked.read().collect();
     let unmarked = &unmarked;
     q.par_iter_mut().for_each(
@@ -167,17 +129,12 @@ pub(super) fn apply_model_visibility(
             let (group_vis, mat_anim) = (group_vis.as_deref(), mat_anim.as_deref());
             let toggled_on =
                 m.kind_visible[kind_index(part.kind)] && m.blend_visible[blend_index(part.blend)];
-            // `farclip` is the *world-doodad/WMO* draw distance only. Creatures/GameObjects come from the
-            // server's own visibility stream (already range-limited) and have separate unit-draw rules, so
-            // they're not culled here.
+            // `farclip` culls doodads and WMOs only: units and GameObjects come range-limited from
+            // the server's visibility stream.
             let distance_culled = matches!(part.kind, ModelKind::Doodad | ModelKind::Wmo);
             let pos = xf.translation();
-            // Cull by the NEAREST point of the submesh's bounding sphere, not its origin: an object
-            // straddling the hard far-clip wall stays drawn so the per-pixel wall (terrain/wow_model.wgsl)
-            // DISSOLVES it through the boundary, instead of the whole thing popping when its origin crosses
-            // the wall (the "snaps at the centre" artifact — worst for big trees/buildings). `Aabb` is the
-            // mesh bound (local); transform to world + uniform placement scale. Absent for a frame after
-            // spawn ⇒ fall back to origin distance.
+            // By the bounding sphere's nearest point, so a straddler stays drawn for the per-pixel
+            // wall to dissolve. No `Aabb` for a frame after spawn: the origin stands in.
             let in_range = match (distance_culled, cam_pos, cam_fwd) {
                 (false, _, _) | (_, None, _) | (_, _, None) => true,
                 (true, Some(c), Some(fwd)) => {
@@ -189,19 +146,14 @@ pub(super) fn apply_model_visibility(
                         ),
                         None => (pos, 0.0),
                     };
-                    // Planar depth along the camera-forward axis (the SAME coordinate the per-pixel wall
-                    // uses) of the bound's nearest point — so the cull and the wall agree and the object
-                    // dissolves through the boundary with no pop, even off-centre. The rule itself lives
-                    // in `view::within_farclip`; the particle draw-set gate reads the same one, because
-                    // an emitter outliving its own doodad past the wall is exactly what B39 reported.
+                    // The particle draw-set gate reads the same rule, so no emitter outlives its
+                    // doodad past the wall.
                     crate::view::within_farclip(view.farclip, c, fwd, center, radius)
                 }
             };
 
-            // Faithful size-bucketed per-object distance fade (`model_fade::doodad_fade_alpha`, the
-            // reference's `FUN_00683f80`). Only doodads/WMOs carry `DoodadFade`. Distance is measured to the
-            // model's bounding-sphere CENTRE (origin + the transformed bbox-centre offset), in the
-            // **horizontal** ground plane (Bevy XZ) — both verified against `FUN_006952a0`/`FUN_00683f80`.
+            // The size-bucketed distance fade (reference `0x683f80`), measured to the bounding
+            // sphere's centre in the horizontal plane (`0x6952a0`, `0x683f80`).
             let fade_alpha = match (fade, cam_pos) {
                 (Some(f), Some(c)) => {
                     let center = xf.transform_point(f.local_center);
@@ -211,12 +163,7 @@ pub(super) fn apply_model_visibility(
                 _ => 1.0,
             };
 
-            // WMO portal visibility: a group the camera can't reach through any portal is hidden — the
-            // faithful cull, computed per-frame by `crate::wmo_portal` and ANDed in here so
-            // it composes with the toggles + far-clip instead of a second Visibility writer. A submesh with
-            // no `WmoGroupVis` (every non-WMO entity, and a portal-less WMO) is never portal-culled; the
-            // panel's `portal_cull` switch disables it wholesale for an A/B against the old "draw every
-            // group" look.
+            // A WMO group no portal reaches is hidden; a part with no `WmoGroupVis` never is.
             let portal_visible = !m.portal_cull
                 || group_vis.is_none_or(|gv| {
                     instances
@@ -225,55 +172,33 @@ pub(super) fn apply_model_visibility(
                         .is_none_or(|inst| gv.drawn_by(inst))
                 });
 
-            // …and, off the SAME per-frame flood, which fog triple this piece's batch is pushed
-            // with: the client's per-group `[0xca7f00]` (the group drawer `0x6b5190` and the
-            // group-doodad drawer `0x6b62e0` push the interior triple only under
-            // it; everything else inherits `push_fog`'s scene triple). `None` for every non-WMO
-            // entity, which leaves `INTERIOR_FOG_BIT` to the entity classifier — a unit's fog is
-            // staged by the unit's OWN classification, not by the room's gate.
+            // The same flood picks the fog: the group drawer `0x6b5190` and the group-doodad drawer
+            // `0x6b62e0` push the interior triple only under the per-group `[0xca7f00]`. `None`
+            // off-WMO leaves the bit to the entity classifier.
             let room_fog = group_vis.map(|gv| {
                 instances
                     .get(gv.instance)
                     .is_ok_and(|inst| gv.interior_fogged_by(inst))
             });
 
-            // The batch's animated material-alpha factor (decision 0130 phase 2): the sampled
-            // colour-alpha × transparency-weight loop, `1.0` for the untracked majority. Multiplied
-            // into the tag below, and into the cull here — the real client skips a batch whose
-            // combined alpha is ≤ 0 before even reading its blend mode (`0x707b3a`),
-            // so a flicker track at 0 hides the batch outright.
+            // The animated colour-alpha × transparency-weight factor, into the tag below and the
+            // cull here: the reference skips a batch whose alpha is ≤ 0 (`0x707b3a`).
             let mat_factor = mat_anim.map_or(1.0, |m| m.current);
 
-            // The exterior-scene window gate (decision 0774's law, decision 0784's placement):
-            // standing in a WMO interior, exterior content draws only through a portal window. ANDed
-            // in here rather than written by a second system, so it composes with everything above
-            // instead of overwriting it. Untagged content (units, GameObjects) is exempt by the
-            // carved law; the camera's own building is exempt because it is not exterior to itself.
+            // Inside a WMO, exterior content draws only through a portal window; untagged content
+            // (units, GameObjects) and the camera's own building are exempt.
             let own_building = group_vis.is_some_and(|gv| Some(gv.instance) == own_instance);
             let exterior_ok = !exterior || own_building || gate.admits(&xf, aabb);
 
-            // **A billboard card draws only while the model it is a batch OF draws** (decision
-            // 1409). A card is split out to a world root because its transform belongs to the
-            // billboard system, so it inherits nothing — and every hide that reaches its model
-            // through the scene graph (the exterior-scene election on a net root, a transport's
-            // off-map leg) reaches the card not at all. That is how an Orgrimmar bonfire's glow
-            // card went on burning over its own culled wood.
-            //
-            // The owner's `InheritedVisibility` is last propagate's — one frame of lag, the same
-            // accepted class as the interior law's. **Only on entity-lane cards**: a world-placement
-            // card is tagged `ExteriorScene` and `exterior_ok` above already gates it with the rest
-            // of its placement, while its owner is a joint of its own placement rig, which is never
-            // hidden apart from the model this system is already hiding whole.
-            // Fails OPEN on an unreadable owner: an owner that has gone is `face_billboards`'
-            // despawn case, and deciding a card's draw on absent information is how the world
-            // flickers.
+            // A billboard card draws only while its model does, by the owner's last-frame verdict.
+            // Entity-lane cards only: a placement's card is `ExteriorScene` and gated above. An
+            // unreadable owner fails open, as that is `face_billboards`' despawn case.
             let owner_hidden = !exterior
                 && card
                     .and_then(crate::billboard::BillboardCard::follows)
                     .is_some_and(|o| matches!(card_owners.get(o), Ok(v) if !v.get()));
 
-            // `Inherited` (not `Visible`) so child submeshes still respect a hidden parent root. A fully
-            // faded doodad (`fade_alpha == 0`) is culled just like an out-of-range one.
+            // `Inherited`, not `Visible`, so a hidden parent root still hides its children.
             let desired = if toggled_on
                 && in_range
                 && fade_alpha > 0.0
@@ -290,34 +215,16 @@ pub(super) fn apply_model_visibility(
                 *vis = desired;
             }
 
-            // Push the fade alpha to the shader (per-instance `MeshTag` alpha field — `wow_model.wgsl`
-            // multiplies the cutout alpha by it) and swap to the blend material variant while feathering,
-            // back to the cutout once opaque. Write only on change so steady doodads (`fade == 1.0`,
-            // already on the cutout material) cost nothing and don't re-batch every frame.
-            //
-            // The alpha field is written for `DoodadFade` holders (the fade composes `mat_factor` in)
-            // AND for every other non-unit-lane `MatAnim`: the parts that own the channel outright
-            // (`drives_tag` — spell-effect parts, which have no fade) and the pinned no-fade lane —
-            // the lit interior props. The latter used to be skipped ("the tag is a packed colour"),
-            // which was true before the 0355 re-lane but stale after it: the probe-slot payload
-            // keeps bits 0..=15 as the alpha field precisely so `with_alpha` composes with the slot.
-            // Skipping them dropped a batch's authored dimming constant entirely — the Undercity
-            // throne room's LD_lightshaft01 (weights const 0.10/0.05, the reference's near-invisible
-            // haze) blasted at full brightness (bug B30). Only the unit lane stays out:
-            // `entities::apply_unit_mat_alpha` owns that compose, ordered against the interior
-            // classifier and the appear-fade.
-            // The two tag fields this system owns, written in ONE read-modify-write so they
-            // compose instead of racing: the fade alpha, and the room's interior-fog bit.
+            // The two tag fields this system owns, in one read-modify-write: the alpha (fade ×
+            // material factor) for `DoodadFade` holders and every non-unit `MatAnim`, lit interior
+            // props included (their probe payload keeps bits 0..=15 as alpha), and the room's
+            // interior-fog bit. The unit lane's alpha is `entities::apply_unit_mat_alpha`'s.
             if let Some(mut tag) = tag {
                 let mut bits = tag.0;
                 if fade.is_some() || mat_anim.is_some_and(|m| !m.composes_unit_tag()) {
-                    // Glow cards render at AUTHORED brightness (the dimmer knob died
-                    // with the faithful FFXGlow pass; the square-law is what keeps halos in check).
                     let alpha = fade_alpha * mat_factor;
-                    // `with_alpha` handles the `MeshTag == 0` opaque-sentinel (a *visible* glow card
-                    // dimmed to exactly 0 must not flip to full bright); a distance-faded doodad
-                    // (`fade_alpha == 0`) is Hidden anyway, so ≈0 bits there are equally fine.
-                    // Conventions: `crate::mesh_tag`.
+                    // `with_alpha` keeps a visible card dimmed to 0 off the `MeshTag == 0` opaque
+                    // sentinel.
                     bits = crate::mesh_tag::with_alpha(bits, alpha);
                 }
                 if let Some(on) = room_fog {
@@ -334,12 +241,9 @@ pub(super) fn apply_model_visibility(
                     } else {
                         &f.cutout
                     };
-                    // A feathering doodad on the eye's far side of the water plane takes the far
-                    // twin of the SAME pick (the water-plane interleave, `sky_order::FAR_SIDE_BIAS`)
-                    // — the classification is the marker's, the pick stays this system's. The
-                    // cutout never composes: an opaque draw settles against the water by depth. A
-                    // map miss = the twin isn't built yet (classify runs on transparent draws
-                    // only); keep the base and pick it up next frame.
+                    // A feathering doodad beyond the water plane takes its pick's far twin
+                    // (`sky_order::FAR_SIDE_BIAS`); an opaque draw settles by depth. A twin not
+                    // built yet keeps the base until next frame.
                     let want = if far_side && fade_alpha < 1.0 {
                         far_twins.far_of(base).unwrap_or(base)
                     } else {
@@ -353,14 +257,9 @@ pub(super) fn apply_model_visibility(
         },
     );
 
-    // The group-only audience — a building's MLIQ surfaces. Serial: a building has a handful of
-    // liquid surfaces, not the ~100k submeshes above — and change-gated like every write here.
-    //
-    // The gate is the **ever-visited latch**, not this frame's PVS: the client's render-record
-    // persistence (`0x684fe0` → `0x6b4060` → `0x6b62e0`) draws a visited MLIQ group's
-    // liquid every frame with no portal re-check for the rest of the world session — the Great
-    // Forge's walkway-level pool stays put when its group drops out of the flood. An index
-    // past the latch fails OPEN (portal-less props never latch and must always draw).
+    // A building's MLIQ surfaces, gated by the ever-visited latch, not this frame's PVS: a group's
+    // liquid draws from its first visit for the rest of the placement's residency. An index past
+    // the latch fails open.
     for (gv, mut vis, xf, aabb, exterior, tag) in &mut group_only {
         let portal_ok = !m.portal_cull
             || instances.get(gv.instance).ok().is_none_or(|inst| {
@@ -368,19 +267,11 @@ pub(super) fn apply_model_visibility(
                     .iter()
                     .any(|&g| inst.liquid_visited.get(g as usize).copied().unwrap_or(true))
             });
-        // …and the same exterior-window term as the submesh walk: another building's canal is
-        // exterior content, the canal of the building you are standing in is not.
+        // The same exterior-window term as the submesh walk.
         let exterior_ok = !exterior || Some(gv.instance) == own_instance || gate.admits(xf, aabb);
-        // **A building's water rides the building's own toggle** — the reference's WMO liquid drain
-        // `0x684cd0` gates on `[0xc7b2a4] & 0x100`, the "Map objects" bit, NOT on the `0x1000000`
-        // "Water" bit the three ADT drains test. Our `ModelKind::Wmo` toggle is
-        // that bit, and until now it hid a building
-        // and left its pool hanging in the air — which is also the shape a mis-placed pool takes, so
-        // the one instrument for telling those apart was itself producing the symptom.
-        //
-        // ADT liquid must NOT take this term and does not: it is `apply_exterior_cull`'s, which
-        // composes no toggles. The asymmetry is the reference's own, and it is per-*bit*, not an
-        // oversight to tidy up.
+        // A building's water rides the building's toggle: the reference's WMO liquid drain
+        // `0x684cd0` gates on the "Map objects" bit `[0xc7b2a4] & 0x100`, while the three ADT
+        // drains test the "Water" bit `0x1000000`. ADT liquid must not take this toggle.
         let toggled_on = m.kind_visible[kind_index(ModelKind::Wmo)];
         let want = if portal_ok && exterior_ok && toggled_on {
             Visibility::Inherited
@@ -390,13 +281,9 @@ pub(super) fn apply_model_visibility(
         if *vis != want {
             *vis = want;
         }
-        // …and the pool's fog lane, off the same per-frame flood as the room's walls (decision
-        // 1787). The reference's WMO liquid pass re-submits the interior fog block under the SAME
-        // `[0xca7f00]` as the geometry pass, so a room
-        // and its water can never disagree; `liquid.wgsl` ANDs this with the surface's own static
-        // interior class. Note the term is the FLOOD's bit, not the ever-visited latch above: a
-        // pool the latch keeps drawing after its room left the PVS wears the scene fog, which is
-        // what the client's per-group toggle does with a group it is not currently walking.
+        // The pool's fog follows this frame's flood, not the latch, as the reference's WMO liquid
+        // pass pushes interior fog under the same `[0xca7f00]` as the geometry; a pool drawn by
+        // the latch alone wears scene fog. `liquid.wgsl` ANDs it with the surface's own class.
         if let Some(mut tag) = tag {
             let on = instances
                 .get(gv.instance)
@@ -409,42 +296,24 @@ pub(super) fn apply_model_visibility(
     }
 }
 
-/// `WOW_VIS_TRACE=<label-substring>` — **watch one model's placements decide, frame by frame.**
+/// `WOW_VIS_TRACE=<label-substring>` prints the verdicts of every model part whose `WorldObject`
+/// label contains it (any case), [`VIS_TRACE_HZ`] times a second, with `bound=` in world space:
 ///
-/// The `VIS_CENSUS` line counts what is drawn; it cannot answer "that thing vanished when I turned
-/// — who dropped it?". Two different systems can hide a model submesh and they fail in opposite
-/// directions:
-///
-/// - **`vis=Hidden`** — [`apply_model_visibility`] above said no: a toggle, the far-clip wall, a
-///   fully-faded doodad, an `A ≤ 0` material track, the portal PVS or the exterior window gate.
-/// - **`vis=Inherited inh=false`** — *this* part said yes and an **ancestor** said no. For a body
-///   part that is the exterior-scene election, which is decided once on the net
-///   root and inherits down; it is also how a transport hides its deck. Without this field the
-///   line was indistinguishable from the frustum case below — the election arrived after the
-///   trace did, and a body vanishing for the right reason would have read as a bound bug.
-/// - **`vis=Inherited inh=true view=false`** — everything of ours admitted it and **Bevy's frustum
-///   cull** dropped it, which means the entity's `Aabb` does not describe what it draws.
-///
-/// That second line is the whole of decisions 1259 and 1261 — an animated placement whose bound was
-/// its bind pose, and then the same bound silently recomputed at the twin swap — and both were
-/// diagnosed by reading code because nothing could be asked. `bound=` is printed in **world space**
-/// beside the camera, so "the box is nowhere near the bird" is visible directly rather than inferred.
-///
-/// Off (the env var unset) this system is one `Option` check per frame and no query iteration.
-/// Throttled to [`VIS_TRACE_HZ`]; matching is a case-insensitive substring of the `WorldObject`
-/// label (a model path), so `WOW_VIS_TRACE=bird01` follows every bird in residency.
+/// - `vis=Hidden`: [`apply_model_visibility`] said no.
+/// - `vis=Inherited inh=false`: an ancestor said no (the exterior-scene election, a transport).
+/// - `vis=Inherited inh=true view=false`: Bevy's frustum cull dropped it, so its `Aabb` does not
+///   describe what it draws.
 #[derive(Resource)]
 pub struct VisTrace {
     needle: String,
     next_at: f32,
 }
 
-/// Trace lines per second — enough to watch a verdict flip under a camera swing, sparse enough that
-/// a dozen placements don't bury the log.
+/// Trace passes per second.
 const VIS_TRACE_HZ: f32 = 4.0;
 
 impl VisTrace {
-    /// `None` unless `WOW_VIS_TRACE` names a substring — the whole cost of the instrument when off.
+    /// `None` unless `WOW_VIS_TRACE` names a substring.
     pub(crate) fn from_env() -> Option<Self> {
         std::env::var("WOW_VIS_TRACE")
             .ok()
@@ -456,8 +325,7 @@ impl VisTrace {
     }
 }
 
-/// What the trace reads per submesh: its identity, where it is, both verdicts, and the bound the
-/// second of them tested.
+/// What the trace reads per submesh.
 type TracedModels<'w, 's> = Query<
     'w,
     's,
@@ -467,20 +335,15 @@ type TracedModels<'w, 's> = Query<
         &'static GlobalTransform,
         &'static Visibility,
         &'static InheritedVisibility,
-        // `Option`: a chain-only node (anim host root — `crate::vis_chain`) has no sweep row;
-        // it must still appear in the trace rather than silently vanish from the instrument.
+        // A chain-only node (an anim host root) has no `ViewVisibility` but still traces.
         Option<&'static ViewVisibility>,
         Option<&'static Aabb>,
-        // Which lane the row is: a world-root billboard CARD inherits nothing, so `inh=true` on it
-        // means only "no parent", never "my model is drawn" — the one row where the second field
-        // must not be read as the owner's verdict.
+        // A billboard card inherits nothing, so its `inh=true` means only "no parent".
         Has<crate::billboard::BillboardCard>,
     ),
 >;
 
-/// The trace's printer — see [`VisTrace`]. Runs after the authority so `vis` is this frame's
-/// verdict, and reads `ViewVisibility` (last frame's frustum result, which is the freshest a
-/// same-frame reader can have) to separate our gates from the cull.
+/// Prints [`VisTrace`]; runs after the authority, so `vis` is this frame's and `view` last frame's.
 pub(super) fn trace_model_visibility(
     time: Res<Time>,
     trace: Option<ResMut<VisTrace>>,
@@ -501,9 +364,7 @@ pub(super) fn trace_model_visibility(
         if !object.label.to_ascii_lowercase().contains(&trace.needle) {
             continue;
         }
-        // World-space bound: the entity transform applied to the local box, which is exactly what
-        // Bevy's cull tests — so a bound that has parted company with the geometry shows up here as
-        // a centre nowhere near what the eye sees.
+        // The world-space bound Bevy's cull tests.
         let (centre, radius) = match aabb {
             Some(a) => (
                 xf.transform_point(Vec3::from(a.center)),
@@ -519,7 +380,7 @@ pub(super) fn trace_model_visibility(
              cam=[{px:.1},{py:.1},{pz:.1}]",
             label = object.label,
             inh = inherited.get(),
-            // "-" = chain-only node, no sweep row (never drawn, so no per-view verdict exists).
+            // "-": a chain-only node, never drawn.
             view = view.map_or("-".into(), |v| v.get().to_string()),
             ox = xf.translation().x,
             oy = xf.translation().y,
@@ -541,15 +402,6 @@ mod tests {
     use benilla_assets::BillboardInfo;
     use benilla_formats::{BillboardKind, ModelBlend};
 
-    /// **A billboard card draws only while the model it is a batch of draws**.
-    ///
-    /// A card is split out to a world root — its transform belongs to the billboard system — so
-    /// nothing carries its owner's hide to it. `billboard::face_billboards` used to mirror that
-    /// hide, and its own unit test proved it wrote `Hidden`; the write was thrown away every frame
-    /// because `BillboardPlace` is ordered only `before(CheckVisibility)`, so it landed after the
-    /// propagation that would have consumed it and this system overwrote it with `Inherited` in
-    /// the next `Update`. In Orgrimmar that was a bonfire's glow card burning over its own culled
-    /// wood. The term lives here now, where nothing runs after it.
     #[test]
     fn a_card_follows_its_owners_verdict() {
         let mut app = App::new();
@@ -603,8 +455,7 @@ mod tests {
             Visibility::Inherited,
             "a re-shown owner restores its card"
         );
-        // …and the owner going away must NOT blank the card: that is `face_billboards`' despawn
-        // case, and deciding a draw on absent information is how the world flickers.
+        // An owner going away must not blank the card: that is the despawn case.
         app.world_mut().entity_mut(owner).despawn();
         app.update();
         assert_eq!(
@@ -614,15 +465,8 @@ mod tests {
         );
     }
 
-    /// **A building's pool rides the building's own toggle** — and ADT liquid must
-    /// not, which is the half that makes this a fidelity fact rather than a tidy-up.
-    ///
-    /// The reference gates its WMO liquid drain `0x684cd0` on `[0xc7b2a4] & 0x100`, the "Map
-    /// objects" bit, while the three ADT drains test the separate `0x1000000` "Water" bit.
-    /// `ModelKind::Wmo` is our "Map objects" bit, and
-    /// without this term switching buildings off left every canal, fountain and dungeon pool
-    /// hanging in mid-air — which happens to be exactly what a mis-placed pool looks like, so the
-    /// one instrument for telling a water bug from a wall bug was manufacturing the symptom.
+    /// The reference's WMO liquid drain `0x684cd0` gates on the "Map objects" bit
+    /// `[0xc7b2a4] & 0x100` (`ModelKind::Wmo`), not the ADT drains' "Water" bit `0x1000000`.
     #[test]
     fn a_wmo_pool_rides_the_map_objects_toggle() {
         let mut app = App::new();
@@ -632,9 +476,8 @@ mod tests {
             .init_resource::<crate::wmo_portal::CameraInteriorClaim>()
             .init_resource::<super::super::FarSideTwins>()
             .add_systems(Update, apply_model_visibility);
-        // A portal-less prop's pool: `WmoGroupVis` with no `ModelPart` (the `group_only` audience),
-        // and an instance that carries no latch, so `portal_ok` fails open and the toggle is the
-        // only term in play.
+        // A portal-less prop's pool: its instance has no latch, so `portal_ok` fails open and the
+        // toggle is the only term in play.
         let instance = app.world_mut().spawn(()).id();
         let pool = app
             .world_mut()
@@ -665,8 +508,7 @@ mod tests {
             "buildings off: the water goes with the building, not on without it"
         );
 
-        // The control: the toggle that is NOT the Map-objects bit must not reach a pool. Doodads
-        // off leaves the canal alone — a single `kind_visible` bool ANDed carelessly would take it.
+        // The control: the doodad toggle must not reach a pool.
         app.world_mut()
             .resource_mut::<DebugState>()
             .models

@@ -1,6 +1,5 @@
-// Night-sky stars (the `Stars.m2` patches): white `Stars.blp` dots, alpha-blended in gamma space
-// like the reference as premultiplied white, landing on the near-black sky as the reference's
-// byte. Depth is the far-plane pin in `sky_vertex.wgsl`; this stage writes colour only.
+// Night-sky stars (`Stars.m2`): white `Stars.blp` dots blended as premultiplied white in gamma
+// space, as the reference blends them. Depth is the far pin in `sky_vertex.wgsl`.
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,

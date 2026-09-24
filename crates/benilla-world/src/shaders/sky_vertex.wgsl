@@ -1,12 +1,10 @@
-// The shared vertex stage of every sky draw (`sky.wgsl`, `cloud.wgsl`, `star.wgsl`,
-// `celestial.wgsl`): bevy 0.18.1's `mesh.wgsl` vertex verbatim, without morph targets and skinning
-// (no sky mesh has them), plus one line pinning clip z to the far plane. A `MaterialExtension`
-// swaps the whole stage, so this mirror must track bevy's on upgrades.
+// The vertex stage of every sky draw: bevy 0.18.1's `mesh.wgsl` vertex verbatim, minus the morph
+// targets and skinning no sky mesh has, plus one line pinning clip z to the far plane. A
+// `MaterialExtension` replaces the whole stage, so this copy must track bevy's on upgrades.
 //
-// The reference draws its sky first, in a squashed back depth slice, and the world paints over it;
-// here the sky draws after the world and the depth test does that job. The pin sits in this stage
-// because a fragment depth write disables early-Z, so an immediate-mode GPU would shade every sky
-// fragment the world covers; the fragment stages write colour only.
+// The reference draws its sky first in a back depth slice and the world paints over it; here the
+// sky draws after the world, so the depth test does that job. The pin is per vertex because a
+// fragment depth write would disable early-Z.
 
 #import bevy_pbr::{
     mesh_functions,

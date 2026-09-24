@@ -1,31 +1,6 @@
-//! The lazy palette-rig lane: a placed doodad's slot in the 2048-entry skin
-//! palette is claimed at its **first draw-gate wake**, not at spawn — and given back under table
-//! pressure while the host is parked.
-//!
-//! Why: the slot table — not the 131 k-bone slab — is the palette's scarce axis, and the eager
-//! design spent it on the wrong population. The 0863 census across an Elwynn/Stormwind/Westfall
-//! hop leg: 1300–1750 of ~1900 live slots were **parked** doodad hosts (drawn by nobody, player
-//! stopped, slot held), the drawn-set peak was ~630, and the table hit its 2047 cap — at which
-//! point every creature streaming in at the visibility boundary was refused a rig and froze at
-//! bind pose *permanently* (the director's "statue mobs after flying around"). Slots that follow
-//! the drawn set leave the table sized 3× over the real demand.
-//!
-//! The lane's three laws:
-//! - **Promote at wake** ([`promote_lazy_rig`], called from the draw gate): allocate, write the
-//!   current pose's rows (so the swapped-in skinned mesh never renders zeroed — origin-collapsed
-//!   — rows), insert the [`RigSkin`], swap every [`SkinnedTwin`] part `static → skinned` and
-//!   write its tag's rig field. A denial (table momentarily full) is retried every frame the
-//!   host stays drawn — never permanent.
-//! - **Keep while parked** — parking alone frees nothing, so a camera pan is zero churn,
-//!   exactly the pre-0863 behaviour when the table has room.
-//! - **Reap under pressure** ([`reap_parked_rigs`]): when slot headroom drops under
-//!   [`REAP_LOW_WATER`], the longest-parked hosts demote (skinned → static, rig field cleared,
-//!   `RigSkin` removed — the component hook frees the slot). A parked host's meshes are all
-//!   `Visibility::Hidden`, so the demote is invisible by construction.
-//!
-//! An emitter-only host (a chimney's smoke plume: joints for the emitter to ride, no skinned
-//! parts) never gets a [`LazyRig`], so it never takes a slot at all — under the eager design it
-//! held one nobody could read.
+//! The lazy palette-rig lane: a placed doodad claims its skin-palette slot at its first draw-gate
+//! wake, not at spawn, keeps it while parked, and gives it back only under table pressure. An
+//! emitter-only host has no skinned parts, gets no [`LazyRig`] and never takes a slot.
 
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::MeshTag;
@@ -35,43 +10,33 @@ use crate::rig_palette::{RigPalettes, RigSkin};
 
 use super::DoodadAnimHost;
 
-/// Start reclaiming parked rigs when the palette's slot headroom drops below this. Sized to keep
-/// real room for the eager lanes (units at ~120 peak, held items, spell fx) plus a stream-in
-/// burst, while never engaging at all in ordinary scenes.
+/// Reaping starts below this slot headroom: room for the eager lanes and a stream-in burst.
 pub(crate) const REAP_LOW_WATER: usize = 256;
 
-/// Demotions per frame while under pressure — enough to outpace any stream-in burst (a full
-/// tile's placements land over several frames) without a single-frame command spike.
+/// Demotions per frame under pressure: enough to outpace a stream-in without a one-frame spike.
 const REAP_PER_FRAME: usize = 64;
 
-/// A host must have been parked this long (secs) before the reaper may take its slot — a camera
-/// swing across the pack must not demote what the swing-back re-promotes.
+/// Seconds a host must be parked before it is reaped, so a camera swing and back does not churn.
 const REAP_MIN_PARKED_SECS: f32 = 2.0;
 
-/// On the anim-host root: what the wake-edge allocation needs, held until the host is first
-/// drawn. Present ⇔ the placement has skinned parts worth a slot.
+/// On the anim-host root of a placement with skinned parts: what a wake's allocation needs.
 #[derive(Component)]
 pub(crate) struct LazyRig {
-    /// The skeleton's bone count — the allocation size. No joint list since decision 1365: the
-    /// pose lives in the host's [`crate::rig_anim::RigPose`] buffer and the world pass writes
-    /// the rows.
+    /// The skeleton's bone count, the allocation size.
     pub(crate) bones: u32,
     pub(crate) ibp: Handle<SkinnedMeshInverseBindposes>,
-    /// The [`SkinnedTwin`]-carrying part entities the promote/demote swaps.
+    /// The [`SkinnedTwin`] part entities the promote and demote swap.
     pub(crate) parts: Vec<Entity>,
 }
 
-/// On a part spawned on its static form with a skinned twin waiting: the promote swaps
-/// `Mesh3d` to `skinned`, the demote back to `stat`. Both forms are app-built
-/// and the handles held here keep them resident across the swaps.
+/// A part's static and skinned meshes, swapped by promote and demote and kept resident here.
 #[derive(Component)]
 pub(crate) struct SkinnedTwin {
     pub(crate) skinned: Handle<Mesh>,
     pub(crate) stat: Handle<Mesh>,
 }
 
-/// The part query both edges rewrite. A part that despawned mid-frame (tile streaming out under
-/// the gate) just skips — its host root is on the same placement list and follows it this frame.
+/// The part query both edges rewrite; a part despawned mid-frame is skipped, its host with it.
 pub(super) type TwinParts<'w, 's> = Query<
     'w,
     's,
@@ -82,12 +47,8 @@ pub(super) type TwinParts<'w, 's> = Query<
     ),
 >;
 
-/// The wake edge: allocate the slot, seed its rows from the pose buffer's CURRENT composed
-/// affines, and swap the parts. Returns whether the host now has a rig (so the gate can keep
-/// retrying a denial while the host stays drawn). Rows are seeded before the meshes swap: the
-/// first skinned frame shows the parked pose the static mesh was already showing, and the world
-/// pass takes over the same frame (the wake re-arms the player, whose evaluation re-raises
-/// `pose_dirty`).
+/// The wake edge: allocate the slot, seed its rows from the pose buffer, then swap the parts, so
+/// the first skinned frame shows the pose the static mesh did. Returns whether the host rigged.
 pub(super) fn promote_lazy_rig(
     commands: &mut Commands,
     palettes: &mut RigPalettes,
@@ -99,19 +60,16 @@ pub(super) fn promote_lazy_rig(
     parts: &mut TwinParts,
 ) -> bool {
     let Some(rig) = RigSkin::allocate_bones(palettes, lazy.bones, lazy.ibp.clone()) else {
-        return false; // table full — the warn fired; the gate retries while drawn
+        return false; // table full: the gate retries while drawn
     };
     let slot = rig.slot;
     if let (Some(ibp), Some(pose)) = (ibps.get(&lazy.ibp), pose) {
-        // Rig-relative like every other seed: the same compose the world pass
-        // runs, from the root's propagated world.
+        // Rig-relative, from the root's propagated world, as the world pass composes.
         let root_g = worlds.get(root).copied().unwrap_or_default();
         crate::rig_anim::seed_rig_rows(pose, root_g, &rig, ibp, palettes);
     }
-    // Queued, liveness-checked at APPLY time: the slot's only free path is the component's
-    // `on_replace` hook, so a plain `insert` racing this frame's tile-unload despawn would drop
-    // the `RigSkin` un-attached and leak the slot for the session. (`try_insert` has the same
-    // hole — a failed insert still never runs the hook.)
+    // Liveness-checked at apply: only `RigSkin`'s `on_replace` hook frees the slot, so an insert
+    // (or a failed `try_insert`) racing this frame's tile-unload despawn would leak it.
     commands.queue(
         move |world: &mut bevy::ecs::world::World| match world.get_entity_mut(root) {
             Ok(mut e) => {
@@ -133,8 +91,7 @@ pub(super) fn promote_lazy_rig(
     true
 }
 
-/// The demote — the promote's exact inverse. Removing the [`RigSkin`] is what frees the slot
-/// (its `on_replace` hook), so whoever demotes cannot leak.
+/// The promote's inverse; removing the [`RigSkin`] frees the slot through its hook.
 fn demote_lazy_rig(commands: &mut Commands, root: Entity, lazy: &LazyRig, parts: &mut TwinParts) {
     for &part in &lazy.parts {
         let Ok((mut mesh, mut tag, twin)) = parts.get_mut(part) else {
@@ -143,8 +100,7 @@ fn demote_lazy_rig(commands: &mut Commands, root: Entity, lazy: &LazyRig, parts:
         mesh.0 = twin.stat.clone();
         tag.0 = crate::mesh_tag::with_rig(tag.0, 0);
     }
-    // Liveness-checked like the promote's insert: a host despawned this frame already freed its
-    // slot through the hook, and a plain `entity(root)` would panic at apply.
+    // A host despawned this frame already freed its slot; `entity(root)` would panic.
     commands.queue(move |world: &mut bevy::ecs::world::World| {
         if let Ok(mut e) = world.get_entity_mut(root) {
             e.remove::<RigSkin>();
@@ -152,10 +108,8 @@ fn demote_lazy_rig(commands: &mut Commands, root: Entity, lazy: &LazyRig, parts:
     });
 }
 
-/// The pressure reaper: under [`REAP_LOW_WATER`] slot headroom, demote the longest-parked
-/// rigged hosts, oldest first, up to [`REAP_PER_FRAME`]. Zero work — one headroom read — when
-/// the table has room, which is the ordinary case; the eager lanes (units, quest markers, spell
-/// fx, booths) are never touched, only hosts this module promoted.
+/// Under [`REAP_LOW_WATER`] headroom, demote up to [`REAP_PER_FRAME`] parked hosts, oldest first;
+/// only hosts this lane promoted, never the eager lanes.
 pub(super) fn reap_parked_rigs(
     time: Res<Time>,
     palettes: Res<RigPalettes>,
@@ -178,8 +132,7 @@ pub(super) fn reap_parked_rigs(
             continue;
         };
         demote_lazy_rig(&mut commands, root, lazy, &mut parts);
-        // The RigSkin removal above is a command — the resource's headroom doesn't move until
-        // it applies, so the batch size is the cap here, not the headroom re-read.
+        // Headroom moves only when the queued removals apply, so the batch size is the cap.
     }
 }
 
@@ -190,13 +143,9 @@ mod tests {
     use bevy::animation::graph::AnimationNodeIndex;
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 
-    /// The gate + the reaper on the schedule shape they ship with (gate stamps `parked_at`, the
-    /// reaper reads it), plus every resource the gate's params need. The camera query is empty —
-    /// mesh-backed hosts take the `Visibility` branch.
     fn app() -> App {
         let mut app = App::new();
-        // TimePlugin disabled, `Time` manual — the reroll harness's rule: the real-clock driver
-        // would clobber the whole-window advances the reap-hysteresis assertions need.
+        // `Time` is manual: the real-clock driver would clobber the tests' own advances.
         app.add_plugins((
             bevy::MinimalPlugins
                 .build()
@@ -214,10 +163,7 @@ mod tests {
         app
     }
 
-    /// One host: a hidden-by-default part carrying a [`SkinnedTwin`] of two distinct weak mesh
-    /// handles, a one-bone [`LazyRig`] + [`crate::rig_anim::RigPose`] (the collapsed shape,
-    /// decision 1365), and the mesh-backed draw-gate shape. Returns `(host, part)` — the part IS
-    /// the visibility carrier, like assemble's.
+    /// A host with a one-bone [`LazyRig`] whose single [`SkinnedTwin`] part carries its visibility.
     fn lazy_host(app: &mut App, visible: bool) -> (Entity, Entity) {
         let stat = Handle::<Mesh>::default();
         let skinned = app
@@ -291,11 +237,6 @@ mod tests {
         )
     }
 
-    /// The lazy law end to end: born hidden, a host holds NO slot; a wake allocates on its
-    /// SECOND consecutive drawn frame (the first is the spawn-default-visibility lie — see the
-    /// gate's promote comment), swaps the part to the skinned twin, writes its tag's rig field,
-    /// and seeds the palette rows (the pose buffer's identity bind affine × identity bindpose =
-    /// a non-zero row — the swapped-in mesh never renders zeroed rows).
     #[test]
     fn a_host_rigs_at_first_wake_not_at_spawn() {
         let mut app = app();
@@ -337,13 +278,10 @@ mod tests {
         );
     }
 
-    /// The retry law: a wake into a FULL table is a delay, not a sentence — the host stays on
-    /// the static mesh, and the frame the table has room again (here: one slot freed) the
-    /// still-drawn host promotes. This is the exact failure that used to be permanent.
     #[test]
     fn a_denied_wake_retries_until_the_table_has_room() {
         let mut app = app();
-        // Fill every slot (2047 one-bone rigs), leaking them into a Vec so they stay live.
+        // Fill all 2047 slots with one-bone rigs, held so they stay live.
         let hoard: Vec<RigSkin> = {
             let mut palettes = app.world_mut().resource_mut::<RigPalettes>();
             std::iter::from_fn(|| RigSkin::allocate_bones(&mut palettes, 1, Handle::default()))
@@ -352,33 +290,29 @@ mod tests {
         assert_eq!(app.world().resource::<RigPalettes>().slot_headroom(), 0);
 
         let (host, _part) = lazy_host(&mut app, true);
-        app.update(); // frame 1: the spawn-race frame — never promotes
-        app.update(); // frame 2: a real drawn frame — denied against the full table
+        app.update(); // frame 1: the spawn-race frame never promotes
+        app.update(); // frame 2: drawn, denied by the full table
         assert_eq!(
             rig_slot(&app, host),
             None,
             "full table ⇒ denied, static mesh"
         );
 
-        // One slot frees; the host is still drawn — the very next frame promotes.
         let freed = hoard[0].slot;
         app.world_mut().resource_mut::<RigPalettes>().free(freed);
         app.update();
         assert!(rig_slot(&app, host).is_some(), "room ⇒ the retry lands");
     }
 
-    /// The reaper law: under low slot headroom, a host parked past the hysteresis window gives
-    /// its slot back — part demoted to the static form, tag cleared — and the next wake
-    /// re-promotes. With headroom, a parked host keeps its slot (a camera pan is zero churn).
     #[test]
     fn pressure_reaps_the_parked_and_the_next_wake_re_rigs() {
         let mut app = app();
         let (host, part) = lazy_host(&mut app, true);
         app.update();
-        app.update(); // second consecutive drawn frame — the promote's confirm
+        app.update(); // the second drawn frame promotes
         assert!(rig_slot(&app, host).is_some(), "drawn ⇒ rigged");
 
-        // Park, and age past the reap hysteresis: with plenty of headroom, the slot stays.
+        // Park and age past the hysteresis: with headroom, the slot stays.
         *app.world_mut()
             .entity_mut(part)
             .get_mut::<Visibility>()
@@ -395,7 +329,7 @@ mod tests {
             "parked with headroom ⇒ the slot is kept (zero churn)"
         );
 
-        // Choke the table below the low-water mark: the parked host is reaped.
+        // Choke the table below the low-water mark.
         let _hoard: Vec<RigSkin> = {
             let mut palettes = app.world_mut().resource_mut::<RigPalettes>();
             (0..(crate::mesh_tag::MAX_RIG_SLOTS - 1 - REAP_LOW_WATER))
@@ -403,7 +337,7 @@ mod tests {
                 .collect()
         };
         app.update();
-        app.update(); // command application frame — the RigSkin removal lands
+        app.update(); // the queued removal applies
         assert_eq!(
             rig_slot(&app, host),
             None,
@@ -422,8 +356,7 @@ mod tests {
         );
         assert_eq!(tag_rig, 0, "and its tag's rig field cleared");
 
-        // Re-wake: the still-pressured table has the reaped slot free again — re-promote (two
-        // drawn frames, the confirm).
+        // Re-wake: the reaped slot is free again, and two drawn frames re-promote.
         *app.world_mut()
             .entity_mut(part)
             .get_mut::<Visibility>()
@@ -433,9 +366,6 @@ mod tests {
         assert!(rig_slot(&app, host).is_some(), "the next wake re-rigs");
     }
 
-    /// The emitter-only shape: a host with no [`LazyRig`] (assemble inserts none when nothing
-    /// skins) wakes and parks without ever touching the table — under the eager design every
-    /// chimney's smoke host burned a slot nobody could read.
     #[test]
     fn a_host_without_skinned_parts_never_takes_a_slot() {
         let mut app = app();
@@ -447,24 +377,16 @@ mod tests {
     }
 }
 
-/// The Bevy contract this lane's `Aabb` depends on, pinned against the real
-/// `calculate_bounds` system rather than a reading of it.
-///
-/// `promote_lazy_rig`/`demote_lazy_rig` write `Mesh3d`. Bevy's `calculate_bounds` runs two
-/// queries — an inserting one filtered `Without<Aabb>`, and an **updating** one filtered
-/// `Or<(AssetChanged<Mesh3d>, Changed<Mesh3d>)>` that overwrites a bound the app authored. So the
-/// authored all-animation bound decision 1259 puts on an animated placement survives exactly as
-/// long as nothing swaps that placement's mesh — i.e. until its first draw-gate wake, at which
-/// point it was silently recomputed from the skinned twin's bind-pose geometry and the birds
-/// resumed blinking. `NoAutoAabb` (which both queries exclude) is the fix; this is the guard that
-/// a Bevy upgrade cannot quietly take it back.
+/// Bevy's `calculate_bounds` recomputes a bound whenever `Mesh3d` changes, so an animated
+/// placement's authored all-animation bound survives the lazy rig's twin swap only under
+/// `NoAutoAabb`; these tests pin that Bevy contract.
 #[cfg(test)]
 mod bound_survives_the_twin_swap {
     use super::*;
     use bevy::camera::primitives::Aabb;
     use bevy::camera::visibility::NoAutoAabb;
 
-    /// A 1 yd cube — what the skinned twin's bind-pose geometry computes to.
+    /// A 1 yd cube, the skinned twin's bind-pose bound.
     fn tiny_mesh() -> Mesh {
         Mesh::from(bevy::math::primitives::Cuboid::new(1.0, 1.0, 1.0))
     }
@@ -474,8 +396,7 @@ mod bound_survives_the_twin_swap {
         Aabb::from_min_max(Vec3::new(-4.2, 8.8, -30.5), Vec3::new(13.6, 16.0, 36.6))
     }
 
-    /// `(app, entity)` with Bevy's own bounds system on the schedule and the authored bound in
-    /// place, mid-swap: `Mesh3d` has just been rewritten the way `promote_lazy_rig` rewrites it.
+    /// Bevy's bounds system over the authored bound, right after a promote-style `Mesh3d` swap.
     fn swapped(guard: bool) -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins((bevy::MinimalPlugins, AssetPlugin::default()));
@@ -494,7 +415,6 @@ mod bound_survives_the_twin_swap {
             app.world_mut().entity_mut(e).insert(NoAutoAabb);
         }
         app.update();
-        // The swap the lazy rig performs at the placement's first wake.
         app.world_mut().entity_mut(e).get_mut::<Mesh3d>().unwrap().0 = skinned;
         app.update();
         (app, e)
@@ -504,7 +424,6 @@ mod bound_survives_the_twin_swap {
         *app.world().entity(e).get::<Aabb>().expect("a bound")
     }
 
-    /// The bug: unguarded, the twin swap hands the authored bound back to `compute_aabb`.
     #[test]
     fn an_unguarded_bound_is_clobbered_by_the_mesh_swap() {
         let (app, e) = swapped(false);
@@ -517,7 +436,6 @@ mod bound_survives_the_twin_swap {
         );
     }
 
-    /// The fix: guarded, the authored bound is still the authored bound after the swap.
     #[test]
     fn a_guarded_bound_survives_the_mesh_swap() {
         let (app, e) = swapped(true);

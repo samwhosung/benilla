@@ -1,31 +1,10 @@
-//! **Parking hidden world submeshes** — a streamed model part that has been hidden for a while
-//! puts its `Mesh3d` down, and picks it up the frame its placement is shown again.
-//!
-//! Why: the retained pass draws the world, and the entity path keeps the batches it declines
-//! resident — 5.8k ADT-doodad submeshes at the Stormwind auction house, 5.3k of them hidden by
-//! the outdoor election or the far clip at any instant (decision 1947's census: WMO props whose
-//! class cannot merge, shared-geometry batches, exterior fader props). Bevy's own sweeps walk
-//! every `Mesh3d` whether it draws or not: the asset-changed marks, the specialization check,
-//! `calculate_bounds`, the previous-transform update, the visibility reset — ~0.4 ms of an
-//! alone city frame on the sampled profile, for rows that draw nothing. Without `Mesh3d` an
-//! entity is in none of those queries, and everything else it carries stays: the transform,
-//! the material handle, the tag, the pick mesh, the fade state.
-//!
-//! **The hysteresis is the point.** The election flips as the camera turns; parking on the
-//! first hidden frame would move a component per flip per part. A part parks after
-//! [`PARK_AFTER_FRAMES`] consecutive hidden frames and unparks the moment its root is shown —
-//! so a glance across the square costs nothing, and only what stays hidden gets cheap.
-//!
-//! **Timing, and the one landmine.** The root election writes in `PostUpdate`; this runs in
-//! `Update` on the next frame's verdict, which puts the re-inserted `Mesh3d` in place before
-//! that frame's `check_entities_needing_specialization` and visibility check. Inserting it
-//! later — after the visibility check, on an entity already view-visible — is the
-//! `specialize_material_meshes` tick unwrap `static_gx::cull` documents (B2, 1431), and the
-//! price of the safe order is one frame between a placement's election and its first draw.
-//! Every world model part takes part — the streamer's placements and the units' bodies alike
-//! (a raid standing round the camera keeps half its bodies behind it) — except parts on a
-//! render layer of their own: a portrait booth's mirror parts show and hide with the booth's
-//! wake, and its bake window is four frames.
+//! Parking hidden world submeshes: a model part hidden for [`PARK_AFTER_FRAMES`] puts its `Mesh3d`
+//! down, leaving every Bevy per-`Mesh3d` sweep, and picks it up once its root is shown again.
+//! This runs in `Update` on last frame's verdict, so a re-shown part draws a frame after its
+//! election but its `Mesh3d` is back before specialization and the visibility check: inserted
+//! after the visibility check on a visible entity, it trips Bevy's `specialize_material_meshes`
+//! tick unwrap. Parts on a render layer of their own (a portrait booth's, whose bake window is
+//! four frames) never park.
 
 use std::any::TypeId;
 
@@ -35,7 +14,8 @@ use bevy::prelude::*;
 
 use super::ModelPart;
 
-/// Consecutive hidden frames before a part parks — half a second at 60 Hz.
+/// Consecutive hidden frames before a part parks, half a second at 60 Hz, so a glance costs
+/// nothing.
 const PARK_AFTER_FRAMES: u16 = 30;
 
 /// The mesh a parked part put down, restored verbatim on unpark.
@@ -46,9 +26,8 @@ pub struct ParkedMesh(pub Handle<Mesh>);
 #[derive(Component, Default)]
 pub struct HiddenFrames(pub u16);
 
-/// `Update`, after the visibility authority: count hidden frames, park the long-hidden,
-/// unpark the shown. Reads last `PostUpdate`'s `InheritedVisibility` — the propagated verdict
-/// of this part's whole ancestry.
+/// Counts hidden frames, parks the long-hidden and unparks the shown, by last `PostUpdate`'s
+/// propagated `InheritedVisibility`.
 #[allow(clippy::type_complexity)]
 pub(super) fn park_hidden_parts(
     mut commands: Commands,
@@ -73,13 +52,9 @@ pub(super) fn park_hidden_parts(
                     .entity(entity)
                     .insert(Mesh3d(parked.0.clone()))
                     .remove::<ParkedMesh>()
-                    // Bevy's `Mesh3d` add hook pushes the mesh's `VisibilityClass` entry every
-                    // time the component is (re)added, and nothing ever dedups that list;
-                    // `check_visibility` queues an entity once PER entry, so each park →
-                    // unpark cycle drew the part one more time. Opaque parts hide it; an
-                    // additive glow card stacks on itself — the director's lamppost halo,
-                    // doubling after every teleport that hid it and healed only by a relog.
-                    // One entry per class, applied after the hook has run.
+                    // Bevy's `Mesh3d` add hook pushes a `VisibilityClass` entry on every re-add
+                    // and `check_visibility` queues an entity once per entry, so each cycle would
+                    // draw the part once more; dedup after the hook has run.
                     .queue(dedup_visibility_class);
             }
             if let Some(mut f) = frames {
@@ -105,7 +80,7 @@ pub(super) fn park_hidden_parts(
     }
 }
 
-/// Leave one entry per class in an entity's [`VisibilityClass`] (see the unpark site).
+/// Leaves one entry per class in an entity's [`VisibilityClass`].
 fn dedup_visibility_class(mut e: EntityWorldMut) {
     if let Some(mut class) = e.get_mut::<VisibilityClass>() {
         let mut seen: Vec<TypeId> = Vec::with_capacity(class.len());
@@ -120,7 +95,7 @@ fn dedup_visibility_class(mut e: EntityWorldMut) {
     }
 }
 
-/// `WOW_NO_MESH_PARK=1` — the A/B lever.
+/// `WOW_NO_MESH_PARK=1` turns parking off.
 pub(super) fn enabled() -> bool {
     std::env::var_os("WOW_NO_MESH_PARK").is_none()
 }
@@ -171,10 +146,7 @@ mod tests {
         assert_eq!(w.entity(e).get::<HiddenFrames>().unwrap().0, 0);
     }
 
-    /// Bevy's `Mesh3d` add hook pushes a `VisibilityClass` entry on every (re)add and
-    /// `check_visibility` queues an entity once per entry: without the dedup an unparked part
-    /// is drawn twice, three times after the next cycle — the stacking lamppost halo. The
-    /// world here registers the hook and the requirement exactly as bevy's plugin does.
+    /// The world registers the `Mesh3d` hook and required component as Bevy's plugin does.
     #[test]
     fn an_unparked_part_keeps_one_visibility_class_entry() {
         let mut w = World::new();

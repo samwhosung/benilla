@@ -1,9 +1,6 @@
-//! Entity-LIGHT down-ray probes over the audit harness's placed subjects: which group's face wins
-//! under a standing point, and which light LANE the entity classifier would apply there
-//! (exterior / day-night matte / footprint bake). Born from the 2026-07-13 director report —
-//! corridor characters reading as outdoor-lit, and per-step light flashes on the forge floor —
-//! these print the g00/g11 ownership boundary and the forge's bake/day-night face patchwork as
-//! maps, so a "it looks wrong HERE" becomes a fixture. Shares `Site`/`Subject` with the PVS audits.
+//! Entity-light down-ray probes over the audit harness's placed subjects: which group's face wins
+//! under a standing point, and which light lane the entity classifier applies there (exterior,
+//! day/night matte or footprint bake), printed as maps.
 
 use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
 use benilla_formats::{load_tile_mesh, mcsh_shadowed_at, open_chain};
@@ -15,9 +12,8 @@ use super::{
     floor_z_at, load_subject, reachable_spots, WmoModel, BLACKSMITH, EXTERIOR, GOLDSHIRE, WALK_STEP,
 };
 
-/// Orientation instrument: dump a tile's WMO placements (model path, uid, position) so a new
-/// [`Site`] can be pinned without hunting. `WOW_DUMP_TILE=map,x,y` (default Azeroth,31,49 —
-/// Goldshire).
+/// Dump a tile's WMO placements (model, uid, position), for pinning a new [`Site`]:
+/// `WOW_DUMP_TILE=map,x,y`, default Goldshire's `Azeroth,31,49`.
 #[test]
 #[ignore = "instrument: run by hand — cargo test -p benilla-world --lib wmo_portal::audit::light_probe -- --ignored --nocapture"]
 fn dump_tile_placements() {
@@ -43,8 +39,7 @@ fn dump_tile_placements() {
     }
 }
 
-/// The raw down-ray winner, BEFORE the EXTERIOR classification hides it: which group's collision
-/// face is nearest below the probe (same candidate walk as `area_down_ray`), or `None` for no face.
+/// The nearest collision face below the probe as `(group, z)`, before the EXTERIOR classification.
 fn raw_downray_winner(model: &WmoModel, probe: [f32; 3]) -> Option<(usize, f32)> {
     let mut best: Option<(usize, f32)> = None;
     for (gi, tris) in model.group_collision_tris.iter().enumerate() {
@@ -59,12 +54,8 @@ fn raw_downray_winner(model: &WmoModel, probe: [f32; 3]) -> Option<(usize, f32)>
     best
 }
 
-/// **The forge-floor lane map** (director report 2026-07-13: crossing the blacksmith's fire-lit
-/// floor flashes the character's lighting per step). Grid the ground storey and print, per cell,
-/// the LANE the entity classifier would apply: a digit = footprint-BAKE (its group, mod 10),
-/// `D` = interior but MOPY&1 (day/night lane), `d` = interior but footprint MISS (day/night lane),
-/// `X` = an EXTERIOR group's face won (exterior lane), `·` = no floor. A patchwork of D/d/digit
-/// across the walkable floor is the per-step lane-flip mechanism made visible.
+/// The forge floor's lane map, per 0.5 yd cell: a digit is a footprint bake (group mod 10), `D`
+/// day/night by MOPY&1, `d` day/night by a footprint miss, `X` an exterior face, `·` no floor.
 #[test]
 #[ignore = "instrument: run by hand — cargo test -p benilla-world --lib wmo_portal::audit::light_probe -- --ignored --nocapture"]
 fn forge_floor_lane_map() {
@@ -145,10 +136,8 @@ fn forge_floor_lane_map() {
         y += 0.5;
     }
 
-    // The face STACK under a transect across the D/0 patchwork: two coincident-z faces with
-    // different flags = the floor is authored as coplanar LAYERS, and the per-step lane flip is our
-    // nearest-face tie-break landing on either layer — a selection question for the bytes, not a
-    // smoothing one.
+    // The face stack along a transect: coincident-z faces with different flags are coplanar
+    // layers, between which the nearest-face tie-break can land on either.
     println!("\n-- face stacks, y=+0.1, x -2..+4 --");
     let mut x = -2.0f32;
     while x <= 4.0 {
@@ -157,8 +146,7 @@ fn forge_floor_lane_map() {
     }
 }
 
-/// Print every footprint face whose XY projection contains `(x, y)` at `z <= max_z`: z / group /
-/// MOPY flags, nearest first — the coplanar-layer census under one standing point.
+/// Print every footprint face over `(x, y)` at `z <= max_z` (z, group, MOPY flags), highest first.
 fn face_stack(model: &WmoModel, x: f32, y: f32, max_z: f32) {
     let mut hits: Vec<(f32, usize, u8)> = Vec::new();
     for (gi, fp) in model.group_footprints.iter().enumerate() {
@@ -186,12 +174,9 @@ fn face_stack(model: &WmoModel, x: f32, y: f32, max_z: f32) {
     println!("  ({x:+5.1},{y:+5.1})  [{}]", stack.join(" | "));
 }
 
-/// **The entity-light down-ray probe** (director report 2026-07-13: a character in the inn's
-/// entrance corridor lights like OUTDOORS in benilla; the reference lights it as indoors and its
-/// minimap titles the corridor "Lion's Pride Inn"). Sweep every reachable standing point of the
-/// Goldshire inn and print, per point, the raw nearest-face winner (group + z) and the classified
-/// verdict (`area_down_ray` — the entity classifier's exact leg, probe at feet+0.1, terrain-raced).
-/// Prints an XY map around the doorway so the g00/g11 ownership boundary is visible at a glance.
+/// The Goldshire inn: per reachable standing point, the raw nearest-face winner and the verdict
+/// (`area_down_ray` at feet + 0.1). The reference lights the entrance corridor as indoors, and
+/// its minimap names it "Lion's Pride Inn".
 #[test]
 #[ignore = "instrument: run by hand — cargo test -p benilla-world --lib wmo_portal::audit::light_probe -- --ignored --nocapture"]
 fn inn_corridor_light_probe() {
@@ -213,11 +198,10 @@ fn inn_corridor_light_probe() {
         );
     }
 
-    // Feet-level standing points, from the porch doorway inward (the corridor + taproom + porch).
+    // Feet-level standing points, flooding from the porch doorway.
     let spots = reachable_spots(&subject, [17.0, -2.6, 1.5]);
     println!("reachable spots: {}", spots.len());
 
-    // Per-spot: raw winner vs classified verdict, on the classifier's exact probe (feet + 0.1).
     type SpotRow = ([f32; 3], Option<(usize, f32)>, Option<usize>);
     let mut rows: Vec<SpotRow> = Vec::new();
     for s in &spots {
@@ -236,8 +220,8 @@ fn inn_corridor_light_probe() {
         rows.push((*s, raw, verdict));
     }
 
-    // The doorway XY map: one cell per WALK_STEP, '·' = no spot, 'o' = classified outdoors,
-    // digit = interior verdict's group (mod 10), 'X' = raw winner EXTERIOR-flagged (the demotion).
+    // The doorway map, one cell per WALK_STEP: '·' no spot, 'o' outdoors, a digit the interior
+    // verdict's group (mod 10), 'X' an EXTERIOR-flagged raw winner.
     let (x_lo, x_hi, y_lo, y_hi) = (2.0f32, 26.0f32, -12.0f32, 12.0f32);
     let cols = ((x_hi - x_lo) / WALK_STEP) as usize + 1;
     let rows_n = ((y_hi - y_lo) / WALK_STEP) as usize + 1;
@@ -261,14 +245,14 @@ fn inn_corridor_light_probe() {
         println!("  y{y:+6.1} {}", row.iter().collect::<String>());
     }
 
-    // The corridor's coplanar-layer census: which MOPY layers stack under the walk line — decides
-    // whether the ref's (flag-filtered) sample would bake here rather than day/night.
+    // The MOPY layers under the corridor's walk line, which decide whether the reference's
+    // flag-filtered sample bakes here rather than taking day/night.
     println!("\n-- corridor face stacks, y=-2.6 --");
     for x in [19.0f32, 17.5, 16.0] {
         face_stack(model, x, -2.6, 4.0);
     }
 
-    // The corridor transect the director walks: y ≈ -2.6 (the doorway seed), x from the porch in.
+    // The corridor transect: y ≈ -2.6 (the doorway seed), x from the porch inward.
     println!("\n-- transect y=-2.6, x 22→6 --");
     let mut x = 22.0f32;
     while x >= 6.0 {
@@ -303,8 +287,7 @@ fn inn_corridor_light_probe() {
                     }
                 )
             });
-            // The Bake-vs-DayNight fork the entity classifier takes on an interior verdict: the
-            // footprint (render-mesh MOCV) sample at the same probe.
+            // The classifier's bake or day/night fork: the footprint (MOCV) sample at the probe.
             let lane = if verdict.is_some() {
                 match footprint_sample(model, probe) {
                     Some((fg, mocv, false)) => format!("BAKE g{fg:02} mocv {mocv:?}"),
@@ -314,10 +297,9 @@ fn inn_corridor_light_probe() {
             } else {
                 "exterior".to_string()
             };
-            // The exterior-leg intensity discriminator: the terrain MCSH bit BENEATH the point
-            // (the reference samples it WMO-obliviously even on a porch floor — a building's baked
-            // ground shadow dims a porch character to 0.5) — and
-            // the world WoW coords, so a live `.go` probe can stand exactly here.
+            // The terrain MCSH bit under the point, which sets the exterior intensity only over
+            // open terrain (on a WMO face the skip-shadow bit, `0x6a8bc7`, forces 2.5), and the
+            // world coords for a live `.go` to stand here.
             let (mcsh, world) = match subject.placed.as_ref() {
                 Some(p) => {
                     let w = bevy_to_wow(p.world_from_local.transform_point3(wow_to_bevy(probe)));
@@ -340,9 +322,8 @@ fn inn_corridor_light_probe() {
         x -= 0.5;
     }
 
-    // The OUTWARD extension (terrain-only, past the porch steps): where does the inn's baked
-    // ground shadow END along the walk-in line? The reference's exterior intensity ladder
-    // (2.5 path → 0.5 shadowed apron → 1.0 corridor → bake) hangs on this boundary.
+    // Terrain only, past the porch steps: where the inn's ground shadow ends along the walk-in
+    // line (open terrain lights at 2.5, or 0.5 in MCSH shadow).
     println!("\n-- outward y=-2.6, x 22→32 (terrain MCSH) --");
     if let Some(p) = subject.placed.as_ref() {
         let mut x = 22.0f32;
@@ -360,18 +341,11 @@ fn inn_corridor_light_probe() {
     }
 }
 
-/// **The world-point light probe**: classify ANY world position exactly as the entity light
-/// classifier would — per candidate placement in the point's 3×3 tile block, the raw down-ray
-/// winner (group + MOGP flags: EXTERIOR `0x8` / EXTERIOR_LIT `0x40`), the classified verdict,
-/// the footprint fork, plus the terrain race input and the MCSH bit under the point.
-/// `WOW_LIGHT_AT="map,x,y,z"` in raw WoW world coords (the tele table's numbers), so a
-/// director-reported "characters look wrong HERE" becomes one command. Born from the 2026-07-18
-/// report: chars/creatures mis-lit across the city WMOs (Booty Bay / Stormwind / Orgrimmar).
-///
-/// The point is the **down-ray lane's** anchor — a unit's position. A GameObject anchors at its
-/// world bounding-box CENTRE instead, so to read a GameObject's lane, probe at
-/// `z + centre` (`benilla-extract m2coll <model>` prints the box; the two Stratholme portcullises
-/// that found 0776 read `exterior` at their spawn z and `BAKE g02` at their centres).
+/// Classify any world point as the entity light classifier does, per placement in its 3×3 tile
+/// block (the raw winner and its MOGP flags, the verdict, the footprint fork, the MCSH bit), from
+/// `WOW_LIGHT_AT="map,x,y,z"` in raw WoW world coordinates. A GameObject anchors at its world
+/// bounding-box centre, not its position, so probe one at `z + centre`
+/// (`benilla-extract m2coll <model>` prints the box).
 #[test]
 #[ignore = "instrument: run by hand — cargo test -p benilla-world --lib wmo_portal::audit::light_probe -- --ignored --nocapture"]
 fn world_point_light_probe() {
@@ -408,9 +382,8 @@ fn world_point_light_probe() {
          {terrain_wow_z:?}, MCSH shadowed {mcsh:?} ==",
         placements.len()
     );
-    // `WOW_LIGHT_GRID=radius,step`: an MCSH shadow-field map around the point (X north ↑ printed
-    // top-down, Y west ← printed left) — structured building/cliff shadows say the texel decode is
-    // sane; noise says it's broken. `#` shadowed, `.` lit, ` ` no chunk.
+    // `WOW_LIGHT_GRID=radius,step`: the MCSH shadow field around the point, north up and west
+    // left; `#` shadowed, `.` lit, blank no chunk. Structured shadows mean the decode is sane.
     if let Ok(grid) = std::env::var("WOW_LIGHT_GRID") {
         let g: Vec<f32> = grid
             .split(',')
@@ -434,7 +407,7 @@ fn world_point_light_probe() {
             println!("  x{:+7.1} {row}", wx + i as f32 * step);
         }
     }
-    // The classifier's exact probe: the position + the float-safety lift.
+    // The classifier's own probe: the position plus the float-safety lift.
     let probe_world = wow_to_bevy([wx, wy, wz + super::super::interior::POSITION_PROBE_LIFT]);
     let mut subjects: std::collections::HashMap<String, super::Subject> =
         std::collections::HashMap::new();
@@ -450,8 +423,7 @@ fn world_point_light_probe() {
             .entry(w.model.clone())
             .or_insert_with(|| load_subject(&w.model, None));
         let model = &subject.model;
-        // The runtime's own column pre-filter (whole-model face AABB) — a placement that can't
-        // own the column stays silent, so a 9-tile city block prints only the claimants.
+        // The runtime's column pre-filter: only a placement that can own the column prints.
         let owns = model.collision_bounds.is_some_and(|(min, max)| {
             probe_local[0] >= min[0]
                 && probe_local[0] <= max[0]
@@ -498,8 +470,8 @@ fn world_point_light_probe() {
             }
             None => println!("   raw winner: none"),
         }
-        // This placement's own light-lane answer; the runtime arbitrates the NEAREST claim
-        // across all placements (`indoor_verdict_at`), so read the smallest-depth row's lane.
+        // This placement's own lane; the runtime takes the nearest claim across placements
+        // (`indoor_verdict_at`), so read the row with the smallest depth.
         let lane = match light {
             None => "exterior-on-terrain (sun + MCSH intensity)".to_string(),
             Some(c) if c.outdoor => format!(

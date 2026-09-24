@@ -1,7 +1,4 @@
-//! Per-model light/particle dressing for placed models: the shared [`point_light`] recipe and the
-//! world-baked spawners the terrain path rides (M2/WMO point lights, particle emitters, ribbon
-//! trails). A transport prop takes the entity-owned shapes instead (`crate::entities`' `wmo_props`,
-//! decision 0474) — riding owners and prop-local children, never a world bake.
+//! A placed model's point lights, particle emitters and ribbon trails, baked at its placement.
 
 use benilla_assets::coords::wow_to_bevy;
 use benilla_assets::{ModelEmitter, ModelLight};
@@ -11,30 +8,15 @@ use bevy::prelude::*;
 use crate::lighting::WorldPointLight;
 use crate::particles;
 
-/// Light intensity for an M2 light of unit `diffuse_intensity`, in the units Bevy's `PointLight`
-/// used when it carried this (`linear_color × intensity/(4π)`), so `4π` makes the packer read exactly
-/// `diffuse_color × diffuse_intensity` — a clean, predictable base. `wow_model.wgsl` then applies the
-/// faithful WoW falloff `1/(0.7d+0.03d²)`. There is no gain dial any
-/// more: the 0273 `sh_c16.w` gain is retired and the commit is the reference's raw product
-/// (`global_light::commit_raw`).
+/// Unit intensity in the `PointLight` convention, which the packer's `/(4π)` undoes to exactly
+/// `diffuse_color × diffuse_intensity`; `wow_model.wgsl` applies the falloff `1/(0.7d + 0.03d²)`.
 const POINT_LIGHT_INTENSITY: f32 = 4.0 * std::f32::consts::PI;
-/// The packed per-light `range` (yd) — since 0285 this is the ≤3-nearest **selection-candidacy**
-/// radius around the receiving unit's anchor, not an evaluation cutoff (a committed GL light has
-/// none; the shader evaluates the selected lights at any distance, and att(48 yd) ≈ 0.01 is already
-/// invisible). Generous so a hall-scale WMO group whose center sits ~20 yd from its wall fixtures
-/// still gathers them — erring wide only ever admits negligible candidates.
+/// The ≤3-nearest selection radius (yd) around the lit unit's anchor, not a cutoff (a GL light has
+/// none; att(48 yd) ≈ 0.01), wide enough to reach a hall's fixtures ~20 yd from its centre.
 const POINT_LIGHT_RANGE: f32 = 48.0;
 
-/// The one [`WorldPointLight`] recipe for an authored WoW light source (M2 or WMO MOLT). The light only
-/// carries position + colour into the shared packed table; every lit surface — terrain, M2
-/// doodads/NPCs, and WMO walls/floors (the reference lights them all) — then selects
-/// its unit's ≤3 NEAREST from that table and applies the faithful falloff in-shader (
-/// the committed light is diffuse-only). `color` is the authored WoW RGB (linear, hue preserved);
-/// `intensity_scale` folds in the per-light authored intensity.
-///
-/// `pub(crate)`: the terrain path spawns it at a world-baked point below; a transport prop's light
-/// ([`crate::entities`]'s `wmo_props`) spawns it as a CHILD of the moving gameobject instead, so
-/// propagation carries the source with the hull.
+/// The [`WorldPointLight`] for an authored M2 or WMO MOLT light, `color` its linear RGB. As in the
+/// reference it lights terrain, M2s and WMO walls, each taking its unit's ≤3 nearest, diffuse only.
 pub fn point_light(color: [f32; 3], intensity_scale: f32) -> WorldPointLight {
     WorldPointLight {
         color,
@@ -43,16 +25,13 @@ pub fn point_light(color: [f32; 3], intensity_scale: f32) -> WorldPointLight {
     }
 }
 
-/// Spawn one [`WorldPointLight`] at `world` (Bevy space), appended to `out` so it rides the placement's
-/// lifecycle. The light recipe is [`point_light`].
 fn spawn_point_light(
     commands: &mut Commands,
     world: Vec3,
     color: [f32; 3],
     intensity_scale: f32,
-    // The rooms this source belongs to, for a light inside a building — `None` outdoors. A torch in
-    // a culled room is one the reference never instantiated, so it lights nothing
-    // ([`crate::lighting::LightRooms`]).
+    // The light's rooms inside a building, `None` outdoors: a torch prop in a culled room is not
+    // in the reference's scene that frame, so it lights nothing.
     room: Option<crate::wmo_portal::WmoGroupVis>,
     out: &mut Vec<Entity>,
 ) {
@@ -66,14 +45,8 @@ fn spawn_point_light(
     out.push(e.id());
 }
 
-/// Spawn a [`WorldPointLight`] for each casting `type==1` (point) **M2** light of a prop at `transform` (the
-/// campfire/torch/brazier/lantern sources). Position is M2 model space at rest (bone matrix identity at
-/// rest), placed via the prop's transform like the emitters — a placed prop never animates its light
-/// bone, so the rest pose is exact here (the entity path, whose bones DO move, rides joints instead).
-///
-/// `room` is the prop's own rooms for a WMO prop (`None` for an ADT map doodad) — taken straight off
-/// the [`emitter_fade`] built for this placement, so the prop's mesh, its flames, its streamers and
-/// its glow are all admitted or refused by one value.
+/// Spawns a light for each casting M2 point light (`type == 1`) at its rest position, since a
+/// placed prop never animates its light bone; `room` comes off the placement's [`emitter_fade`].
 pub(super) fn spawn_lights_for(
     commands: &mut Commands,
     lights: &[ModelLight],
@@ -83,7 +56,7 @@ pub(super) fn spawn_lights_for(
 ) {
     for l in lights.iter().map(|l| &l.def) {
         if !l.casts() {
-            continue; // directional lights feed an ambient term; a static `0` visibility key is dark
+            continue; // directional lights feed the ambient; a static `0` visibility key is dark
         }
         let world = transform.transform_point(wow_to_bevy(l.position));
         spawn_point_light(
@@ -97,18 +70,9 @@ pub(super) fn spawn_lights_for(
     }
 }
 
-/// Spawn a [`WorldPointLight`] for each omni (`type==0`) **WMO MOLT** light at the building's `transform` (the
-/// interior fixture sources — forge fire, inn fireplaces, chapel candles/chandeliers). These radiate onto
-/// the NPCs/doodads near each fixture and onto the building's own walls/floor. Position
-/// is WMO model space. The MOLT curve is the same fixed WoW falloff as the M2 path — byte-verified
-/// (`0x695c00`: the disk attenStart/End do not shape the GL falloff) and confirmed live in
-/// the reference GL trace (committed c/l/q = 0/0.7/0.03, diffuse = colour × intensity, ambient 0).
-///
-/// A fixture belongs to the rooms whose **MOLR** names it (`group_light_refs`, per absolute group
-/// index — the same list an interior GameObject's committed light folds), so a dungeon's brazier
-/// stops lighting the hillside above it the moment the flood leaves its room. The refs are inverted
-/// here, once per placement: a MOLT light no group names keeps no rooms and stays ungated, the same
-/// fail-open arm the prop path's empty MODR list takes.
+/// Spawns a light for each omni MOLT light (`type == 0`) under the M2 falloff, which the disk
+/// `attenStart`/`attenEnd` do not shape (`0x695c00`). A light belongs to the rooms whose MOLR
+/// names it; one that no group names is ungated.
 pub(super) fn spawn_wmo_lights_for(
     commands: &mut Commands,
     lights: &[WmoLight],
@@ -142,19 +106,8 @@ pub(super) fn spawn_wmo_lights_for(
     }
 }
 
-/// The **one draw-set gate a placed model's emitters share** — the quad clouds and the ribbon
-/// trails alike, built once per placement so the two families can never be handed different
-/// answers about whether their model is in the frame's scene.
-///
-/// `fade` is the owner's bounding sphere as `(radius, MODEL-space centre)`; the world centre is the
-/// placement applied to it — the same point the doodad's own visibility gate measures to.
-/// `instance` is the WMO placement this model's doodad set belongs to (`None` for an ADT map
-/// doodad), carrying the exterior-window exemption for a prop of the building the camera is
-/// standing in. `groups` are the rooms of that placement which name this prop — `None` or
-/// empty ⇒ **no room gate**, which is the mesh path's own `d.groups.is_empty()` arm, spelled once
-/// here so the two cannot diverge (0689/1289). It is borrowed rather than owned because the shared
-/// `Arc` is exactly what wants cloning, and an ADT map doodad — the tens-of-thousands case — must
-/// not allocate an empty one per placement to say "I have no rooms".
+/// A placed model's one draw-set gate, shared by its mesh, emitters, ribbons, lights and anim host.
+/// `fade` is `(radius, model-space centre)`; `None` or empty `groups` means no room gate.
 pub(super) fn emitter_fade(
     transform: Transform,
     fade: (f32, Vec3),
@@ -172,40 +125,18 @@ pub(super) fn emitter_fade(
     }
 }
 
-/// Spawn a particle-emitter entity for each of a model's emitters at `transform`, appending them to
-/// `out` so they ride the placement's lifecycle (despawn when it streams out). Emitters with no
-/// resolved texture are skipped by [`particles::spawn_emitter`].
-///
-/// `host` is the placement's [`PlacementHost`] when it animates (0130 phase 4): each emitter then
-/// rides its host bone's ANCHOR (the collapsed rig's stand-in for the joint,
-/// pre-minted by the assembler for exactly these bones) — the torch flame follows the flame-bone
-/// jiggle, the inn chandelier's candle flames swing with it. Riding is unconditional given a
-/// host: for a bone whose chain never animates the anchor holds its telescoped rest pivot, so
-/// `anchor · (position − pivot)` is byte-for-byte the static `placement · position` — no
-/// per-emitter classification needed.
-///
-/// `armed_seq` is the FILE sequence slot this placement's own arm rolled, and the emitters sample
-/// their rate/gate tracks against **that** slot. This site used to pass `EmitClock::Pinned` — slot 0,
-/// unconditionally — on the reasoning that a placed doodad arms once, so slot 0 is all it can ever
-/// play. The arm has rolled a frequency-weighted *variation* since 0130, so that stopped being true
-/// and nothing noticed: an emitter whose rate is keyed only in a later variation sampled a flat zero
-/// for ever and emitted nothing, on every placement, while still building, pooling and ticking.
-/// `benilla-extract partslotscan` counts **947** such emitters across **184** models; the one that
-/// surfaced it is the Blasted Lands lightning strike, whose whole burst lives in slot 1
-/// (bug B63).
+/// Spawns a model's emitters into `out`. With an anim `host` each rides its bone's anchor, which
+/// holds a bone that never animates at its rest pivot, so riding is exact for every emitter.
 pub(super) fn spawn_emitters_for(
     commands: &mut Commands,
     emitters: &[ModelEmitter],
     transform: Transform,
     host: Option<&super::assemble::PlacementHost>,
-    // The shared draw-set gate ([`emitter_fade`]), cloned onto every emitter this model spawns.
     fade: &particles::EmitterFade,
     out: &mut Vec<Entity>,
 ) {
     let arm = host.and_then(|h| h.arm);
     for em in emitters {
-        // Static placements (no anim host — the ~90% tier, and every capture) have no owner to
-        // follow; they despawn via the placement's entity list.
         let owner = host
             .and_then(|h| h.anchor(em.def.bone))
             .map(|a| (a, em.bone_pivot));
@@ -216,18 +147,14 @@ pub(super) fn spawn_emitters_for(
             particles::EmitterFrames {
                 owner,
                 anchor: None, // anchor at the placement: an animated bone never drags the cloud
-                // An animated doodad's rig goes when its placement unloads, and that IS this
-                // model being destroyed — free the pool with it, the same rule the WMO-prop lane
-                // beside this one already states (missed here: a tile crossing left the
-                // brazier's flame draining at the old spot).
+                // An animated doodad's rig goes only when its placement unloads, the model's end,
+                // so the pool is freed rather than left draining at the old spot.
                 on_owner_loss: particles::OwnerLoss::Free,
                 ..default()
             },
-            // A placed doodad's arm is NOT one-time: it re-rolls its variation every play-window,
-            // so the emitters read the slot AND the clip time off the host's live
-            // player each frame — the same lane units and GameObjects use, and what the reference's
-            // animate kernel (`0x714260`) does for every model without distinction. A pinned slot
-            // was right only under the superseded "armed once at load" contract.
+            // A placed doodad re-rolls its variation every play window, so its emitters read the
+            // slot and clip time off the host's live player, as the reference's animate kernel
+            // (`0x714260`) does for every model.
             match arm {
                 Some(root) => particles::EmitClock::Host(root),
                 None => particles::EmitClock::Pinned,
@@ -239,21 +166,15 @@ pub(super) fn spawn_emitters_for(
     }
 }
 
-/// Spawn a ribbon trail for each of a model's ribbon emitters (wisp streamers, the Caverns-of-Time
-/// energy trails). A trail rides its host bone's anchor when the placement animates (same ride as
-/// [`spawn_emitters_for`]); a static placement's trail rides the first spawned submesh entity (its
-/// transform IS the placement). Trails self-despawn when their owner goes, so they don't join
-/// `out` — the placement's despawn cascades within a frame.
+/// Spawns a model's ribbon trails, each riding its host bone's anchor or, on a static placement,
+/// `fallback_owner`; a trail despawns with its owner, so none joins a despawn list.
 pub(super) fn spawn_ribbons_for(
     commands: &mut Commands,
     ribbons: &[benilla_assets::ModelRibbon],
     transform: Transform,
     host: Option<&super::assemble::PlacementHost>,
     fallback_owner: Option<Entity>,
-    // The SAME draw-set gate the quad clouds one function up are given ([`emitter_fade`]) — a trail
-    // is one of this model's emitters and is admitted by exactly the same five terms. It has to be
-    // carried explicitly because a trail rides a joint or a submesh, and neither of those states
-    // its owner model's fade sphere or its rooms ([`crate::ribbons::RibbonTrail::fade`]).
+    // The emitters' gate, carried because a joint or submesh owner states no fade sphere or rooms.
     fade: &particles::EmitterFade,
 ) {
     let arm = host.and_then(|h| h.arm);
@@ -265,9 +186,8 @@ pub(super) fn spawn_ribbons_for(
                 None => continue, // nothing to ride (an entity-less placement)
             },
         };
-        // The `+0xc0` enable gate reads the placement's live sequence, like its emitters one
-        // function up: an animated doodad re-rolls its variation every play window, so there is
-        // no arm-once answer. An unanimated placement has no clock and rests in `Stand`.
+        // The `+0xc0` enable gate reads the live sequence, as the emitters do; an unanimated
+        // placement has no clock and rests in `Stand`.
         crate::ribbons::spawn_ribbon(
             commands,
             rb,

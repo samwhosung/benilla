@@ -1,43 +1,13 @@
-//! The WMO portal-cull **audit harness** (test-only; data-gated, not ignored — see below): load a real
-//! building *at its real placement*, with the real ADT terrain under it, and sweep the two invariants
-//! the client upholds by construction. Every violation prints as a deterministic repro (exact
-//! model-space coordinates + a per-portal hop trace), so a director-found "it vanishes here" becomes a
-//! fixture instead of a guess.
+//! The WMO portal-cull audit harness (test-only): a real building at its real placement, over its
+//! ADT terrain, swept for the invariants the reference upholds; a violation prints as a repro with
+//! a per-portal hop trace. [`wmo_pvs_audit`]: from reachable standing points, an orbiting
+//! third-person camera that sees the player draws the player's group. [`wmo_outside_audit`]: a
+//! camera in the open air above the terrain is outside, and the exterior shell draws.
 //!
-//! - [`wmo_pvs_audit`] — the **inside** invariant: sweep reachable player standing points × orbiting
-//!   third-person camera positions (line-of-sight enforced against the camera-collision mesh, like the
-//!   real camera's pull-in) and assert **a camera that can see the player draws the player's group**.
-//!   Subject: the Goldshire inn (`WOW_AUDIT_WMO=<internal-path>` overrides it, without a placement).
-//! - [`wmo_outside_audit`] — the **outside** invariant: a camera in the open air above the terrain is
-//!   OUTSIDE, and the building's exterior shell draws. Subject: Fargodeep Mine, whose 21 tunnel groups
-//!   sprawl 150 yd under an Elwynn hillside while its one exterior group covers only the entrance
-//!   mound. Before the terrain race a camera on the grass above the tunnels seeded
-//!   *inside* one of them and the flood culled the mine out from under the director's cursor. The same
-//!   test asserts the race does not over-fire and seal the mine: a standing point on a tunnel floor,
-//!   under the hill, still reads INSIDE.
-//!
-//! **In the gate since 2331.** The seven audits that assert an invariant (this file's four, and
-//! `pin`'s three site regressions) are ordinary data-gated tests: `wow_data_or_skip!` skips them
-//! where there is no install and `BENILLA_REQUIRE_DATA` refuses that skip where the gate found
-//! one (2329). They were `#[ignore]`d for "needs the game data" from before 1175 put an install
-//! beside every slot, and nothing ever ran them — the `--ignored` line below was the only runner,
-//! and it named a crate this module had left. Cost, measured 2026-09-22: six under a second each,
-//! `wmo_pvs_audit` ~14 s (the standing-point × camera sweep). What stays `#[ignore]`d is the
-//! instruments — `pin`'s census and probe (aimed by `WOW_PIN_*`) and `light_probe`'s four — run by
-//! hand, `--nocapture`, from the command each attribute carries.
-//!
-//! Run the whole harness, instruments included:
+//! The reference itself reads "outside" over a floorless pocket (under an open staircase), so a
+//! violation whose camera seeds no group is faithful-cull residue; one that seeds a group fails.
+//! The asserting audits are data-gated and the instruments are `#[ignore]`d; all of them:
 //! `cargo test -p benilla-world --lib wmo_portal::audit -- --include-ignored --nocapture`
-//!
-//! [`light_probe`] (sibling module) reuses this harness's placed subjects for the entity-LIGHT
-//! down-ray probes — per-point verdict/lane maps of the inn corridor and the forge floor.
-//!
-//! The inside oracle, refined (round 3): the invariant is **not** upheld by the real client at every
-//! camera position — a camera over a floorless pocket (under an open staircase, beside the basement
-//! ramp) reads "outside" in the real mechanism too, and the interior culls there as a *client*
-//! artifact. So seed-`None` violations are reported as **faithful-cull residue**, not failures; any
-//! seed-`Some` violation — the camera standing in one room while the flood can't reach the player's —
-//! is a hard failure.
 
 use benilla_assets::coords::{bevy_to_wow, placement_rotation, wow_to_bevy};
 use benilla_assets::WmoGroupNav;
@@ -53,8 +23,8 @@ use super::{compute_pvs, down_ray_seeds, floor_z_at, terrain_z_local, WmoModel, 
 mod light_probe;
 mod pin;
 
-/// A building at its real spot on a real map: the model, plus the MODF placement to find (by its
-/// `uniqueId`) in `tile`, whose 3×3 tile block supplies the terrain the down-ray races.
+/// A building at its real spot: the model, and the MODF placement to find by `uniqueId` in `tile`,
+/// whose 3×3 tile block supplies the terrain the down-ray races.
 #[derive(Clone, Copy)]
 struct Site {
     wmo: &'static str,
@@ -63,7 +33,7 @@ struct Site {
     uid: u32,
 }
 
-/// The Goldshire inn — a building standing ON the terrain (0233's repro site).
+/// The Goldshire inn, a building standing on the terrain.
 const GOLDSHIRE: Site = Site {
     wmo: r"World\wmo\Azeroth\Buildings\GoldshireInn\GoldshireInn.wmo",
     map: "Azeroth",
@@ -71,8 +41,7 @@ const GOLDSHIRE: Site = Site {
     uid: 71414,
 };
 
-/// Fargodeep Mine — an interior buried UNDER the terrain (decision 0258's repro site: the director's
-/// "wrongly not visible from the outside at a specific angle", `md_goldmine_varianta`, id 210351).
+/// Fargodeep Mine, an interior buried under the terrain.
 const FARGODEEP: Site = Site {
     wmo: r"world\wmo\dungeon\md_goldmine\md_goldmine_varianta.wmo",
     map: "Azeroth",
@@ -80,9 +49,8 @@ const FARGODEEP: Site = Site {
     uid: 210351,
 };
 
-/// The Deadmines dungeon shell — decision 0692's repro site: the zone-in tunnel (g35) opens through
-/// the swirl-portal doorway into a sealed pocket (g39) floored entirely with DETAIL faces, where the
-/// faithful down-ray legs find nothing and the client blanks the building around its own camera.
+/// The Deadmines shell: the zone-in tunnel (g35) opens through the swirl-portal doorway into a
+/// sealed pocket (g39) floored only with DETAIL faces, where the faithful down-ray legs miss.
 const DEADMINES: Site = Site {
     wmo: r"world\wmo\dungeon\az_deadmines\az_deadmines_b.wmo",
     map: "DeadminesInstance",
@@ -90,7 +58,7 @@ const DEADMINES: Site = Site {
     uid: 170633,
 };
 
-/// The Goldshire blacksmith — the fire-lit forge floor (the 2026-07-13 per-step light-flash report).
+/// The Goldshire blacksmith and its fire-lit forge floor.
 const BLACKSMITH: Site = Site {
     wmo: r"world\wmo\azeroth\buildings\goldshireblacksmith\goldshireblacksmith.wmo",
     map: "Azeroth",
@@ -98,8 +66,8 @@ const BLACKSMITH: Site = Site {
     uid: 96048,
 };
 
-/// Undercity — B26's site: 200+ groups under Tirisfal, whose one reported doorway culls the room on
-/// the far side from *both* sides of the arch (`.go xyz 1558.66 415.39 -62.16 0`).
+/// Undercity: 200+ groups under Tirisfal, and the pin probe's default subject, a doorway at
+/// `.go xyz 1558.66 415.39 -62.16 0`.
 const UNDERCITY: Site = Site {
     wmo: r"world\wmo\lorderon\undercity\undercity.wmo",
     map: "Azeroth",
@@ -107,17 +75,13 @@ const UNDERCITY: Site = Site {
     uid: 239598,
 };
 
-/// Ironforge — B65's site: the lava chasm under the Great Forge walkways. The walkable metal
-/// grates at lava level (world z≈421, e.g. `.go xyz -4845 -995 421 0`) live in cavern group g89
-/// (one portal, p114→g91); a camera over a grate/bed column seeds that group and the scene draws,
-/// while a column with nothing walkable below (the shaft-mouth sliver, the moat's bed gaps) reads
-/// "outside" and blanks the interior — which decision 1096 pins as the CLIENT'S OWN behaviour
-/// (the down-ray's liquid raycast is a dead edge here, `0x6be345`, and a miss retries nothing,
-/// `0x682207`; the asset's patchy beds are the only thing keeping retail drawn over lava). The
-/// 2026-08-07 pins: `WOW_PIN_EYE=-4990,-960,470`
-/// reproduces a faithful blank column; `WOW_PIN_EYE=-4830,-1090,480` seeds g91 and draws; the
-/// still-open half of B65 (partial grate loss from seeded rim poses) is 1096's "NOT settled" leaf.
-#[allow(dead_code)] // pinned for `WOW_PIN_*` runs: the B65 repro coordinates live here
+/// Ironforge's lava chasm under the Great Forge. The grates at lava level (world z≈421,
+/// `.go xyz -4845 -995 421 0`) are cavern group g89 (one portal, p114 to g91); a camera over a
+/// column with nothing walkable below reads outside and blanks the interior, as the reference
+/// does: its down-ray's liquid cast is a dead edge here (`0x6be345`) and a miss retries nothing
+/// (`0x682207`). `WOW_PIN_EYE=-4990,-960,470` is such a column; `WOW_PIN_EYE=-4830,-1090,480`
+/// seeds g91 and draws.
+#[allow(dead_code)] // aimed at by `WOW_PIN_*` runs
 const IRONFORGE: Site = Site {
     wmo: r"world\wmo\khazmodan\cities\ironforge\ironforge.wmo",
     map: "Azeroth",
@@ -125,9 +89,8 @@ const IRONFORGE: Site = Site {
     uid: 7706,
 };
 
-/// Shadowfang Keep — B335's site: the courtyard whose far doorways read as a flat blue-cyan wash.
-/// Its two courtyard groups (g38, g72) are EXTERIOR_LIT (`0x40`) while the rooms behind their
-/// arches (g61, g60) are true interiors, which is the shape the interior-fog chain gate turns on.
+/// Shadowfang Keep: two EXTERIOR_LIT (`0x40`) courtyard groups (g38, g72) with true interiors
+/// behind their arches (g61, g60), the shape the interior-fog chain gate turns on.
 /// `.go xyz -214.30 2211.84 79.78 33` looks at the arches; `-213.90 2236.15 79.78` is inside g61.
 const SHADOWFANG: Site = Site {
     wmo: r"world\wmo\dungeon\ld_shadowfang\ld_shadowfanginterior.wmo",
@@ -136,11 +99,9 @@ const SHADOWFANG: Site = Site {
     uid: 218202,
 };
 
-/// Darnassus — the 2026-09-02 report's site: one placement, 104 groups, **50 of them exterior**, and
-/// the city's outdoor areas stitched to each other and to every shop by portals. That shape is what
-/// makes it the discriminating subject for Pass 2: standing in a shop, the doorway admits the one
-/// outdoor group beyond it, and everything else the director can see through that doorway is reached
-/// only by WALKING ON from there. `.go xyz 10188.36 2348.35 1328.96 1` is the pin.
+/// Darnassus: one placement, 104 groups, 50 of them exterior, its outdoor areas portal-linked to
+/// each other and to every shop, so from a shop most of the city is reached only by Pass 2 walking
+/// on past the doorway's outdoor group. `.go xyz 10188.36 2348.35 1328.96 1` is the pin.
 const DARNASSUS: Site = Site {
     wmo: r"world\wmo\kalimdor\darnassis\darnassis.wmo",
     map: "Kalimdor",
@@ -148,11 +109,10 @@ const DARNASSUS: Site = Site {
     uid: 352798,
 };
 
-/// Eye height above a floor point for both the standing player and the seated camera samples.
+/// Eye height above a floor point, for the player and the camera samples.
 const EYE_HEIGHT: f32 = 1.7;
 
-/// The subject model + the camera-collision mesh (for the LOS pull-in) + the flattened
-/// walking-collision mesh (for the reachability flood's headroom probes) + the real placement.
+/// The subject model, its camera and flattened walking collision meshes, and its placement.
 struct Subject {
     model: WmoModel,
     cam_pos: Vec<[f32; 3]>,
@@ -160,12 +120,11 @@ struct Subject {
     walk_pos: Vec<[f32; 3]>,
     walk_idx: Vec<u32>,
     names: Vec<String>,
-    /// `None` for a `WOW_AUDIT_WMO` override — then the down-ray runs with no terrain leg.
+    /// `None` for a `WOW_AUDIT_WMO` override, whose down-ray has no terrain leg.
     placed: Option<Placed>,
 }
 
-/// A subject's placement in the world, and the ADT terrain around it — everything the terrain leg of
-/// the down-ray needs, in exactly the frames the runtime uses.
+/// A subject's placement and the ADT terrain around it, in the frames the runtime uses.
 struct Placed {
     world_from_local: Affine3A,
     local_from_world: Affine3A,
@@ -173,8 +132,8 @@ struct Placed {
 }
 
 impl Subject {
-    /// The terrain surface under a model-space eye, in model-space `z` — what `compute_wmo_pvs` hands
-    /// [`down_ray_seeds`] each frame. `None` with no placement, off-tile, or over an MCNK hole.
+    /// The terrain under a model-space eye as model-space `z`, as the runtime hands it to
+    /// [`down_ray_seeds`]; `None` with no placement, off-tile or over an MCNK hole.
     fn terrain_z(&self, eye_local: [f32; 3]) -> Option<f32> {
         let p = self.placed.as_ref()?;
         let eye_world = p.world_from_local.transform_point3(wow_to_bevy(eye_local));
@@ -189,10 +148,8 @@ impl Subject {
     }
 }
 
-/// Load `internal` from the local game data, mirroring the asset loader's nav/collision construction
-/// (`benilla-assets::wmo`): MOGI bounds, MOGP flags/portal-ref spans, and the per-group
-/// walking-collision face set (every non-DETAIL face — the down-ray's Leg A). With a [`Site`], also
-/// resolve the MODF placement and load the terrain the down-ray races.
+/// Load `internal` from the install as the asset loader builds a WMO's nav and collision
+/// (`benilla-assets::wmo`); with a [`Site`], also its placement and the terrain the down-ray races.
 fn load_subject(internal: &str, site: Option<&Site>) -> Subject {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = open_chain(&data).expect("open MPQ chain");
@@ -236,8 +193,7 @@ fn load_subject(internal: &str, site: Option<&Site>) -> Subject {
         let Ok(gbytes) = chain.read(&format!("{stem}_{gi:03}.wmo")) else {
             continue;
         };
-        // The group's MLIQ surface, exactly as the asset loader stores it — the down-ray's liquid
-        // leg needs it, so the pin probe must carry it too or an over-lava eye can't replay.
+        // The MLIQ surface as the asset loader stores it, for the down-ray's liquid leg.
         group_liquids[gi] = benilla_formats::wmo_group_liquid_mesh(&gbytes);
         group_footprints[gi] = wmo_group_footprint_tris(&gbytes);
         if let (Some(h), Some(nav)) = (wmo_group_header(&gbytes), group_nav.get_mut(gi)) {
@@ -248,9 +204,8 @@ fn load_subject(internal: &str, site: Option<&Site>) -> Subject {
             nav.fog_indices = h.fog_indices;
         }
         accumulate_wmo_group_camera_collision(&gbytes, &mut cam_pos, &mut cam_idx);
-        // The down-ray's Leg A face set — the per-group walking-collision gather (every non-DETAIL
-        // face, no orientation filter), exactly what the asset loader now stores. The flat walk mesh
-        // (headroom probes) is fed from the same buffers.
+        // Leg A's face set, as the asset loader stores it: every non-DETAIL face, no orientation
+        // filter. The flat walk mesh is fed from the same buffers.
         let mut cp: Vec<[f32; 3]> = Vec::new();
         let mut ci: Vec<u32> = Vec::new();
         accumulate_wmo_group_collision(&gbytes, &mut cp, &mut ci);
@@ -266,8 +221,7 @@ fn load_subject(internal: &str, site: Option<&Site>) -> Subject {
         let base = walk_pos.len() as u32;
         walk_pos.extend_from_slice(&cp);
         walk_idx.extend(ci.iter().map(|i| i + base));
-        // Leg C's fallback set — the camera-only complement (DETAIL set, NOCAMCOLLIDE clear),
-        // exactly as the asset loader stores it.
+        // Leg C's fallback set: the camera-only faces (DETAIL set, NOCAMCOLLIDE clear).
         let (mut dp, mut di): (Vec<[f32; 3]>, Vec<u32>) = (Vec::new(), Vec::new());
         benilla_formats::accumulate_wmo_group_camera_only_collision(&gbytes, &mut dp, &mut di);
         for t in di.as_chunks::<3>().0 {
@@ -331,9 +285,8 @@ fn load_subject(internal: &str, site: Option<&Site>) -> Subject {
     }
 }
 
-/// Resolve a [`Site`]'s MODF placement (by `uniqueId`) and gather the terrain of its 3×3 tile block —
-/// a big building's footprint, and any camera orbiting it, can leave the centre tile. The transform is
-/// built exactly as the streamer builds it (`terrain_stream`: `wow_to_bevy` position × MODF Euler).
+/// Resolve a [`Site`]'s MODF placement and gather its 3×3 tile block's terrain, with the transform
+/// built as the streamer builds it (`wow_to_bevy` position, MODF Euler rotation).
 fn load_placement(chain: &mut benilla_formats::Chain, site: &Site) -> Placed {
     let (cx, cy) = site.tile;
     let mut chunks = Vec::new();
@@ -369,18 +322,16 @@ fn load_placement(chain: &mut benilla_formats::Chain, site: &Site) -> Placed {
 
 /// The cell size of the reachability flood's walk grid (yd).
 const WALK_STEP: f32 = 0.5;
-/// Max step-up per grid step — stairs are ~0.4-yd risers; a player mounts them, not walls.
+/// Max step-up per cell: stairs are ~0.4 yd risers.
 const MAX_CLIMB: f32 = 1.05;
-/// Max step-down per grid step (walking down stairs / small ledges; falls are not walking).
+/// Max step-down per cell; a fall is not walking.
 const MAX_DROP: f32 = 2.5;
-/// Required clearance above a standing point (yd) — the player capsule.
+/// Clearance above a standing point (yd), the player capsule.
 const HEADROOM: f32 = 1.8;
 
-/// **Reachable** standing points: a BFS over a [`WALK_STEP`] grid across the walking-collision faces,
-/// seeded at `start` — only spots a player can actually walk to, stepping at most [`MAX_CLIMB`] up /
-/// [`MAX_DROP`] down per cell with [`HEADROOM`] clear above. This kills the phantom "standing spots"
-/// (beam tops, doorway lintels, sealed roof-void ceilings) that the raw face-centroid sweep produced —
-/// every violation from these spots is a place the director could actually stand.
+/// The standing points a player can walk to from `start`: a flood over a [`WALK_STEP`] grid of
+/// walking-collision faces, at most [`MAX_CLIMB`] up or [`MAX_DROP`] down per cell with
+/// [`HEADROOM`] clear, so beam tops and lintels never count.
 fn reachable_spots(subject: &Subject, start: [f32; 3]) -> Vec<[f32; 3]> {
     let model = &subject.model;
     let key = |x: f32, y: f32, z: f32| {
@@ -390,7 +341,7 @@ fn reachable_spots(subject: &Subject, start: [f32; 3]) -> Vec<[f32; 3]> {
             (z / WALK_STEP).round() as i32,
         )
     };
-    // Ground the seed onto the nearest face below it.
+    // The highest face between `below` and `above`.
     let ground = |x: f32, y: f32, below: f32, above: f32| -> Option<f32> {
         model
             .group_collision_tris
@@ -412,10 +363,8 @@ fn reachable_spots(subject: &Subject, start: [f32; 3]) -> Vec<[f32; 3]> {
         )
         .is_none()
     };
-    // No walking through walls: the chest-height segment between the two cells must be clear of the
-    // walking mesh (risers sit below it, door lintels above; a wall or rail blocks it). Without this
-    // the flood leaks into sealed voids wherever floor levels align across a wall (the porch roof
-    // void off the stair landing — the phantom family the flood exists to kill).
+    // No walking through walls: the chest-height segment between two cells must miss the walking
+    // mesh (risers sit below it, lintels above), or the flood leaks into sealed voids.
     let clear_between = |x: f32, y: f32, z: f32, nx: f32, ny: f32, nz: f32| {
         let h = z.max(nz) + 0.6;
         let (dx, dy) = (nx - x, ny - y);
@@ -460,8 +409,7 @@ fn reachable_spots(subject: &Subject, start: [f32; 3]) -> Vec<[f32; 3]> {
     spots
 }
 
-/// Möller–Trumbore, WoW model space: nearest hit `t` along `dir` (unit) from `orig`, within `max_t`,
-/// against an indexed triangle mesh.
+/// Möller–Trumbore in WoW model space: the nearest hit `t` along unit `dir` within `max_t`.
 fn nearest_hit_mesh(
     positions: &[[f32; 3]],
     indices: &[u32],
@@ -517,8 +465,7 @@ fn nearest_hit(subject: &Subject, orig: [f32; 3], dir: [f32; 3], max_t: f32) -> 
     nearest_hit_mesh(&subject.cam_pos, &subject.cam_idx, orig, dir, max_t)
 }
 
-/// The audit's camera: perspective * look-at, both in Bevy axes (`world_from_local` = identity, so
-/// world space == `wow_to_bevy(model space)` — the same convention `compute_pvs` projects with).
+/// The audit's camera, in Bevy axes with an identity placement, as `compute_pvs` projects.
 fn clip_from_world(eye_local: [f32; 3], target_local: [f32; 3]) -> Mat4 {
     let eye = wow_to_bevy(eye_local);
     let target = wow_to_bevy(target_local);
@@ -527,7 +474,7 @@ fn clip_from_world(eye_local: [f32; 3], target_local: [f32; 3]) -> Mat4 {
     proj * view
 }
 
-/// One flood re-run with the shared [`TraceLog`] recorder — the diagnosis attached to a violation.
+/// A flood re-run with the [`TraceLog`] recorder, printed with a violation.
 fn trace_flood(subject: &Subject, eye_local: [f32; 3], clip: &Mat4) {
     let terrain = subject.terrain_z(eye_local);
     let mut log = super::probe::TraceLog::new(&subject.model, eye_local, terrain);
@@ -542,30 +489,17 @@ fn trace_flood(subject: &Subject, eye_local: [f32; 3], clip: &Mat4) {
     print!("{}", log.text);
 }
 
-/// Sampling step (yd) of the outside audit's world-column grid, and the camera heights above the
-/// terrain surface it probes — a third-person camera's whole vertical band over open ground.
+/// The outside audit's column step (yd), and its camera heights above the ground.
 const OUTSIDE_STEP: f32 = 3.0;
 const OUTSIDE_HEIGHTS: [f32; 4] = [0.5, 1.7, 4.0, 9.0];
 
-/// **The outside invariant.** Over a column where the whole building lies **below the ground surface**,
-/// a camera anywhere above that ground is outside it — and the building's exterior shell therefore
-/// draws. Fargodeep Mine is the extreme shape: a 150-yd tunnel network buried under an Elwynn hillside,
-/// with a single exterior group covering only the entrance mound. Without the terrain race, every camera
-/// column over the hill seeds *inside* a tunnel, the flood starts in a room the camera cannot see out
-/// of, and the mine's entrance — the only part of it above ground — is culled.
-///
-/// The oracle is deliberately restricted to **buried** columns, because "the eye is above the terrain"
-/// alone does not mean "the eye is outdoors": a WMO surface can sit above the ADT ground (the mine's own
-/// entrance mound stands ~9 yd proud of it; an inn's floor is a foot above it), and an eye over such a
-/// surface reads INSIDE in the real client too — its WMO hit is genuinely nearer than the terrain's. The
-/// mound columns are covered by the second class below, through the exterior-group rule.
-///
-/// The last section is the guard against the race *over*-firing and sealing the mine: a player standing
-/// on a tunnel floor is below the hill's surface, so the terrain is not on their down-segment at all,
-/// and the WMO must still win the column.
+/// Over a column where the whole building lies below the ground, a camera anywhere above the
+/// ground is outside, so the exterior shell draws; Fargodeep Mine's 150 yd of tunnels lie under a
+/// hillside, its one exterior group over the entrance mound. Where a WMO surface stands above the
+/// ground, an eye over it reads inside in the reference too, so there only an exterior group's
+/// column is asserted. A standing point on a tunnel floor, under the hill, still reads inside.
 #[test]
 fn wmo_outside_audit() {
-    // The data gate (2331): a skip where no install is, a failure where the gate says one is.
     let _data = benilla_formats::wow_data_or_skip!();
     let subject = load_subject(FARGODEEP.wmo, Some(&FARGODEEP));
     let model = &subject.model;
@@ -575,7 +509,6 @@ fn wmo_outside_audit() {
         .collect();
     assert!(!exteriors.is_empty(), "subject has no exterior group");
 
-    // The model's XY extent, walked as a world grid: the columns of hillside a camera can stand over.
     let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
     for g in &model.group_bounds {
         for a in 0..2 {
@@ -596,7 +529,7 @@ fn wmo_outside_audit() {
                 origin[0] + i as f32 * OUTSIDE_STEP,
                 origin[1] + j as f32 * OUTSIDE_STEP,
             );
-            // The ground here, if this column carries terrain at all (a hole hands it to the WMO).
+            // The ground here, if the column has terrain (a hole hands it to the WMO).
             let Some(tz) = terrain_height_at(&placed.chunks, [wx, wy, 0.0]) else {
                 continue;
             };
@@ -611,9 +544,8 @@ fn wmo_outside_audit() {
                 continue;
             };
             if top_z >= probe[2] {
-                // A WMO surface stands above the ground here (the entrance mound). Only the columns
-                // whose topmost surface is an EXTERIOR group are asserted — an eye over an *indoor*
-                // surface that pokes above ground reads inside in the client too, faithfully.
+                // A WMO surface above the ground (the entrance mound): asserted only when it is an
+                // exterior group's, since over an indoor one the reference reads inside too.
                 proud += 1;
                 if model.group_nav[top_g].flags & EXTERIOR == 0 {
                     continue;
@@ -657,8 +589,8 @@ fn wmo_outside_audit() {
     }
     let inside_violations = violations;
 
-    // The race must not seal the mine: ground a standing point on each interior group's own collision
-    // and assert the eye there still reads INSIDE (the hill's surface is above it, off the segment).
+    // The race must not seal the mine: an eye standing on each interior group's own floor, under
+    // the hill's surface, still reads inside.
     let mut sealed: Vec<usize> = Vec::new();
     let mut probed = 0u32;
     for gi in 0..model.group_nav.len() {
@@ -701,9 +633,7 @@ fn wmo_outside_audit() {
     );
 }
 
-/// The building's topmost collision face over model column `(x, y)`: `(group, z)` of the highest face
-/// any group carries there, or `None` if no group's mesh covers the column. Used to tell a *buried*
-/// column (whole building below ground) from one where a WMO surface stands proud of the terrain.
+/// The highest collision face over model column `(x, y)`, as `(group, z)`.
 fn column_top(model: &WmoModel, x: f32, y: f32) -> Option<(usize, f32)> {
     let mut best: Option<(usize, f32)> = None;
     for (gi, tris) in model.group_collision_tris.iter().enumerate() {
@@ -718,9 +648,8 @@ fn column_top(model: &WmoModel, x: f32, y: f32) -> Option<(usize, f32)> {
     best
 }
 
-/// A standing eye inside group `gi`: drop onto the highest of the group's own collision faces beneath
-/// its face-vertex centroid column, then stand [`EYE_HEIGHT`] above it. `None` when the centroid column
-/// has no face under it (a ring-shaped room) — the caller skips that group.
+/// A standing eye in group `gi`: [`EYE_HEIGHT`] above the highest of its own faces under its
+/// vertex centroid; `None` when no face is there (a ring-shaped room).
 fn interior_standing_eye(model: &WmoModel, gi: usize) -> Option<[f32; 3]> {
     let tris = model.group_collision_tris.get(gi)?;
     if tris.is_empty() {
@@ -746,9 +675,8 @@ fn interior_standing_eye(model: &WmoModel, gi: usize) -> Option<[f32; 3]> {
 
 #[test]
 fn wmo_pvs_audit() {
-    // The data gate (2331): a skip where no install is, a failure where the gate says one is.
     let _data = benilla_formats::wow_data_or_skip!();
-    // The env override names a subject with no known placement — then there is no terrain leg.
+    // An override subject has no known placement, so no terrain leg.
     let over = std::env::var("WOW_AUDIT_WMO").ok();
     let internal = over.clone().unwrap_or_else(|| GOLDSHIRE.wmo.to_string());
     let subject = load_subject(&internal, over.is_none().then_some(&GOLDSHIRE));
@@ -791,8 +719,7 @@ fn wmo_pvs_audit() {
     }
 
     // --- the sweep ---
-    // Standing spots come from the reachability flood, seeded at the porch doorway (override with
-    // `WOW_AUDIT_START=x,y,z` for another subject) — every spot is somewhere a player can walk.
+    // Standing spots flood from the porch doorway, or from `WOW_AUDIT_START=x,y,z`.
     let start: [f32; 3] = std::env::var("WOW_AUDIT_START")
         .ok()
         .and_then(|s| {
@@ -811,7 +738,7 @@ fn wmo_pvs_audit() {
         for c in spots.iter().step_by(5) {
             let player = [c[0], c[1], c[2] + EYE_HEIGHT];
             let Some(gp) = subject.seeds(player).in_group else {
-                continue; // outside / exterior standing spot — no interior invariant to hold
+                continue; // an outdoor standing spot: no interior invariant to hold
             };
             for az_i in 0..8 {
                 let az = az_i as f32 * std::f32::consts::TAU / 8.0;
@@ -819,7 +746,7 @@ fn wmo_pvs_audit() {
                     let el = elev_deg.to_radians();
                     let dir = [az.cos() * el.cos(), az.sin() * el.cos(), el.sin()];
                     for radius in [2.0f32, 4.5, 8.0] {
-                        // LOS pull-in: the camera never ends up behind a wall it can't see through.
+                        // LOS pull-in: the camera never ends up behind a wall.
                         let reach = nearest_hit(&subject, player, dir, radius)
                             .map_or(radius, |t| (t - 0.3).max(t * 0.5));
                         let eye = [
@@ -880,8 +807,7 @@ fn wmo_pvs_audit() {
         trace_flood(&subject, *eye, &clip_from_world(*eye, *player));
     }
     println!("\ngroup names: {:?}", subject.names);
-    // Seed-None residue is the real client's own cull at that camera spot (module doc); only a
-    // seed-Some violation is ours.
+    // A camera that seeds no group culls in the reference too; only a seeded one is ours.
     let hard: Vec<_> = violations
         .iter()
         .filter(|(_, _, _, gc)| gc.is_some())
@@ -898,15 +824,12 @@ fn wmo_pvs_audit() {
     );
 }
 
-/// Decision 0692's repro, on the shipped data: the camera pulled back from the Deadmines zone-in
-/// crosses the swirl-portal doorway into the sealed g35/g39 pocket, whose floor is entirely DETAIL
-/// faces — camera collision holds the eye there (every back-hemisphere ray hits a camera face within
-/// ~16 yd) while Legs A+B find nothing, and the client's own verdict blanks the building around its
-/// own camera. Leg C must name the pocket's room; the terrain race must still own the columns where
-/// its answer is right (the hilltop lid ~272 yd above the tunnel).
+/// A camera pulled back from the Deadmines zone-in crosses the swirl-portal doorway into the sealed
+/// g35/g39 pocket, floored only with DETAIL faces: camera collision holds the eye there while Legs
+/// A and B find nothing, and the reference blanks the building. Leg C, ours, must name the pocket's
+/// room, and the terrain race must still own the columns above the hilltop lid, ~272 yd up.
 #[test]
 fn wmo_camera_void_audit() {
-    // The data gate (2331): a skip where no install is, a failure where the gate says one is.
     let _data = benilla_formats::wow_data_or_skip!();
     let subject = load_subject(DEADMINES.wmo, Some(&DEADMINES));
     // The zone-in head: areatrigger 78's destination (-14.5732, -385.475, 62.4561) + head height,
@@ -917,8 +840,8 @@ fn wmo_camera_void_audit() {
         Some(35),
         "the entrance tunnel must stay Leg A's answer — Leg C never touches a faithful verdict"
     );
-    // Eyes along the swept camera path behind the head: level-back at 8/12/13.2 yd and the raised
-    // zoom arc. All sit past the last walking-gather floor; each must still name the pocket's room.
+    // Eyes on the camera path behind the head, level at 8/12/13.2 yd and on the raised zoom arc,
+    // all past the last walking-gather floor.
     for eye in [
         [260.6, -137.3, 34.6],
         [256.6, -137.4, 34.6],
@@ -935,8 +858,7 @@ fn wmo_camera_void_audit() {
         );
         assert!(s.across.is_none(), "Leg C seeds a single root");
     }
-    // Above the hilltop lid the terrain race owns the column: an eye over open ground must stay
-    // outside — the fallback's terrain gate keeps the divergence out of the client's right answers.
+    // Above the hilltop lid the terrain is below the eye, so the race owns the column, not Leg C.
     assert_eq!(
         subject.seeds([255.4, -137.4, 280.0]).in_group,
         None,
@@ -944,24 +866,16 @@ fn wmo_camera_void_audit() {
     );
 }
 
-/// **The Deeprun Tram's undersea tube — the map with no `Light.dbc` row.**
-///
-/// Map 369 carries no `Light.dbc` sphere at all (not even a falloff-0 global, unlike maps 0/1), so
-/// every scrap of its atmosphere has to come from the building: the root's MFOG. `Subway.wmo`
-/// authors four records, and the undersea stretch is record **2** — pos `(25, -1256, -117)`,
-/// radii 154/247, colour RGB(30,53,100), end 236.1 yd, start scalar 0.05. The camera's group
-/// there (`Subway_002`, flags `0x2805` ⇒ INTERIOR) names it: `fogIds = (2,0,0,0)`.
-///
-/// This pins the two links that have to hold for that fog to reach the frame — the down-ray seed
-/// claiming the tunnel group, and the selector resolving record 2 over the record-0 seed — on a
-/// **global (WDT `MODF`) WMO**, the placement shape the rest of this module's sites never exercise.
+/// The Deeprun Tram (map 369) has no `Light.dbc` sphere, not even a global one, so its undersea
+/// atmosphere is the root's MFOG record 2 (colour 30,53,100, end 236.1 yd), named by the tunnel
+/// group `Subway_002` (flags `0x2805`, `fogIds = (2,0,0,0)`). Pins the down-ray claiming that group
+/// and the selector resolving record 2, on a global (WDT `MODF`) WMO.
 #[test]
 fn deeprun_tram_undersea_claims_its_own_mfog() {
-    // The data gate (2331): a skip where no install is, a failure where the gate says one is.
     let _data = benilla_formats::wow_data_or_skip!();
     let subject = load_subject(r"World\wmo\Dungeon\AZ_Subway\Subway.wmo", None);
     let model = &subject.model;
-    // The undersea tunnel group, by its authored fog list rather than a hardcoded index.
+    // The undersea tunnel group; the asserts below check its fog list and flags.
     let gi = 2usize;
     let nav = &model.group_nav[gi];
     assert_eq!(

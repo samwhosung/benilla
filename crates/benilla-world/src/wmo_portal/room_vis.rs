@@ -1,12 +1,8 @@
-//! **Is a claimed WMO room visible this frame?** — the one answer two elections share.
-//!
-//! The reference elects an object standing in a WMO group with its building (`0x6834e0`, inside
-//! the WMO-group render path): if the group isn't rendered this frame, the object is pass 2 —
-//! neither drawn nor ticked. Two of our systems ask exactly that question of a body's
-//! [`UnitWmoRoom`] claim: the anim-LOD gate (`creature_anim::lod`, decision 0739 — parks the
-//! pose) and the body draw election (`crate::exterior_cull`, decision 1475 — hides the root).
-//! One function answers both, so the two can never drift apart (the drift is how 0448's park and
-//! 0648's draw ended up disagreeing for a month).
+//! Is a claimed WMO room visible this frame? The reference elects an object standing in a WMO
+//! group with its building (`0x6834e0`, in the WMO-group render path): when the group is not
+//! rendered, the object is neither drawn nor ticked. The anim-LOD gate (`creature_anim::lod`) and
+//! the body draw election (`crate::exterior_cull`) both ask it of a body's [`UnitWmoRoom`], and one
+//! function answers both so they cannot disagree.
 
 use bevy::prelude::*;
 
@@ -14,9 +10,8 @@ use benilla_assets::{WmoGroupNav, WmoModel, WmoPortalRef};
 
 use super::{UnitWmoRoom, WmoPortalInstance, WmoRoom};
 
-/// The room leg's resolve chain: unit claim → placement instance → model → PVS bits. Fail-open
-/// at every seam (no claim, despawned placement, still-loading model) — a lookup miss must never
-/// hide or park a drawable body.
+/// Whether a body's claimed room is visible this frame. Every seam (no claim, a despawned
+/// placement, a loading model) fails open: a lookup miss must never hide or park a body.
 pub fn room_pvs_visible(
     room: Option<&UnitWmoRoom>,
     instances: &Query<&WmoPortalInstance>,
@@ -34,12 +29,9 @@ pub fn room_pvs_visible(
     room_visible(&inst.visible, &model.group_nav, &model.portal_refs, group)
 }
 
-/// Is the claimed group — or any group one portal hop from it — in the PVS? The one-hop union is
-/// the doorway-straddle guard: a body can extend past its feet's room only through a portal
-/// opening, so the neighbour set bounds everything of the unit that could be on screen. Indices
-/// out of range read visible (fail-open, [`super::WmoGroupVis::drawn_by`]'s convention); a group
-/// with no portal refs at all can only be seen with the camera inside it (the flood cannot reach
-/// it), which the direct bit already answered.
+/// Is the claimed group, or any group one portal hop from it, in the PVS? The hop is the
+/// doorway-straddle guard: a body extends past its room only through a portal opening. An index
+/// out of range reads visible, as in [`super::WmoGroupVis::drawn_by`].
 fn room_visible(visible: &[bool], nav: &[WmoGroupNav], refs: &[WmoPortalRef], group: u16) -> bool {
     let vis = |g: usize| visible.get(g).copied().unwrap_or(true);
     if vis(group as usize) {
@@ -59,8 +51,7 @@ fn room_visible(visible: &[bool], nav: &[WmoGroupNav], refs: &[WmoPortalRef], gr
 mod tests {
     use super::*;
 
-    /// A [`WmoGroupNav`] whose only meaningful fields are its portal-ref slice — these tests
-    /// never touch flags/bounds.
+    /// A [`WmoGroupNav`] whose only meaningful fields are its portal-ref slice.
     fn nav(ref_start: u16, ref_count: u16) -> WmoGroupNav {
         WmoGroupNav {
             flags: 0,
@@ -82,9 +73,7 @@ mod tests {
         }
     }
 
-    /// The room predicate's whole truth table: direct bit, the one-hop straddle guard, the
-    /// all-dark verdict, the sealed room, and both fail-open seams (group past every table, a
-    /// ref slice past the refs vec).
+    /// Direct bit, the straddle guard, all dark, the sealed room, and both fail-open seams.
     #[test]
     fn room_visible_covers_the_hop_guard_and_fails_open() {
         // Groups 0 ↔ 1 share one portal; group 2 is sealed (no refs).

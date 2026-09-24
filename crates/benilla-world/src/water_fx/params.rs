@@ -1,30 +1,19 @@
-//! The CWater0Ripple **driver math** — pure functions (no ECS): the per-emission parameter
-//! formulas of `0x5fa760`, the record lifecycle (size growth + the 0.4/0.6 alpha ramp), and the
-//! render texgen. Every formula is byte-verified and validated against the two reference-trace
-//! reconstructions; the tests pin the envelopes.
-//!
-//! The 0264 INTERIM constants are gone: the wake-size factor was the reference
-//! *render* aging a record one frame before its first draw (an artifact of the capture's ~20 fps,
-//! not an emit multiplier — negligible at our frame rates), and the ring-lifetime factor was a
-//! circular fps estimate in the reconstruction (no such factor exists at the bytes). The cadences
-//! are now the byte laws: ring `400 ms + U[0,50)`, wake `~625/min(speed,20)` ms — one decal per
-//! ~0.6 yd of travel at any speed.
+//! The `CWater0Ripple` driver math as pure functions: `0x5fa760`'s per-emission parameters, the
+//! record lifecycle and the render texgen.
 
-/// Ring pulse interval (s): `400 + U[0,50)` cooldown ticks (VERIFIED `0x5fac41`–`0x5fac53` +
-/// FUN_00455c70's `(50·rng)>>32`; the tick rides the QPC-ms thunk `0x42b790`).
+/// Ring pulse interval in seconds: `400 + U[0, 50)` ms (`0x5fac41`..`0x5fac53`, the roll
+/// `(50·rng) >> 32` at `0x455c70`, millisecond ticks from `0x42b790`).
 pub(super) const RING_INTERVAL: (f32, f32) = (0.4, 0.45);
 
-/// Wake emission cooldown (s) at `speed` yd/s: `625/min(speed,20)` ms — a **distance law**, one
-/// decal per ~0.625 yd of travel (VERIFIED: the driver's `−1000.0` sign-flip makes a future
-/// deadline `now + k·625/min(speed,20)`; ≈ 89 ms at run speed). The jitter factor `k`'s spread is
-/// the one remaining INTERIM: the traces show ±~15%, the exact distribution wasn't pinned.
+/// Wake cooldown in seconds at `speed` yd/s: `k·625/min(speed, 20)` ms, one decal per 0.625 yd of
+/// travel. `k` is uniform in [0.9, 1.1); the reference's spread is about ±15%, its distribution
+/// untraced.
 pub(super) fn wake_cooldown(speed: f32, rng: &mut u32) -> f32 {
     let k = 0.9 + 0.2 * rand01(rng);
     k * 0.625 / speed.clamp(0.1, 20.0)
 }
 
-/// What a unit is doing in the water this frame — the reference's two selection bits
-/// (`MOVEMENTFLAGS & 0xf` / `& 0x30`), resolved.
+/// A unit's motion in the water, from the selection bits `MOVEMENTFLAGS & 0xf` and `& 0x30`.
 #[derive(Clone, Copy)]
 pub(super) enum WadeState {
     Translating { speed: f32, heading: f32 },
@@ -32,24 +21,21 @@ pub(super) enum WadeState {
     Standing,
 }
 
-/// Emission params for one record — the driver's computed values (`0x5fa760`), byte-verified.
+/// One record's emission parameters, as the driver computes them (`0x5fa760`).
 pub(super) struct FoamParams {
     pub(crate) size0: f32,
     /// yd/s.
     pub(crate) growth: f32,
     /// s.
     pub(crate) lifetime: f32,
-    /// Peak vertex alpha (`min(6 × driverAlpha, 1)` — the `0x68be62` transform, alpha-only).
+    /// Peak vertex alpha, `min(6 × driver alpha, 1)` (`0x68be62`).
     pub(crate) peak: f32,
     /// Render category: ring (`splash.blp`) vs wake (`wake.blp`).
     pub(crate) ring: bool,
 }
 
-/// The driver's parameter computation. `scale` = `OBJECT_FIELD_SCALE_X`; `gate` = the depth
-/// gate `max(2 × collisionHeight, 1.0)` (`[unit+0x297]` = CMovement+0xb4, ≈4.06 yd for a human
-/// ); `depth` = surface − feet (yd, > 0 in water). `None` when the depth gate
-/// rejects: not in water, or dived deeper than ~2 body heights — surface swimming (rest depth
-/// ~0.75·h) stays well inside and emits.
+/// The driver's parameters for one emission: `scale` is `OBJECT_FIELD_SCALE_X`, `gate` the
+/// emission depth gate and `depth` the surface minus the feet, in yd.
 pub(super) fn foam_params(
     state: WadeState,
     oneshot: bool,
@@ -76,12 +62,11 @@ pub(super) fn foam_params(
             growth *= 0.25;
             size0 *= 0.6;
         }
-        // Turning in place and the step-in one-shot take the unreduced ring params (the driver's
-        // standing-only branch skips them; `flagtable[1|3] = 0` keeps them ring-textured).
+        // Turning and the one-shot take the unreduced ring params: the driver's standing branch
+        // skips them, and `flagtable[1|3] = 0` keeps them ring-textured.
         _ => {}
     }
-    // Depth attenuation: past half the gate depth, everything ramps down linearly toward ×0.5
-    // (alpha, lifetime, size0 — never growth; VERIFIED).
+    // Past half the gate depth, alpha, lifetime and size0 (never growth) ramp down toward ×0.5.
     let half = gate * 0.5;
     if depth > half {
         let k = 0.5 + 0.5 * (gate - depth) / half;
@@ -98,15 +83,14 @@ pub(super) fn foam_params(
     })
 }
 
-/// A live record's size at `now`: `size0 + growth · age`. (The reference render integrates one
-/// `dt·growth` step *before* a record's first draw — visible at a capture's ~20 fps, negligible
-/// at ours; we draw `size0` on the first frame.)
+/// A record's size at `now`. Deviation: the first draw is `size0`, where the reference first ages
+/// the record one `dt·growth` step, a difference too small to see at our frame rates.
 pub(super) fn record_size(size0: f32, growth: f32, born: f32, now: f32) -> f32 {
     size0 + growth * (now - born)
 }
 
-/// A live record's alpha at `now`: the 0.4/0.6 rise/decay ramp to `peak` (rate table `0x810348 =
-/// [0.4, 0.4]`, both categories), 0 at (and past) the lifetime.
+/// A record's alpha at `now`: up to `peak` over the first 0.4 of its life and down to 0 over the
+/// rest (rate table `0x810348`, both categories).
 pub(super) fn record_alpha(peak: f32, lifetime: f32, born: f32, now: f32) -> f32 {
     let age = (now - born) / lifetime;
     if age <= 0.4 {
@@ -116,11 +100,9 @@ pub(super) fn record_alpha(peak: f32, lifetime: f32, born: f32, now: f32) -> f32
     }
 }
 
-/// The texgen (byte-verified: `uv = Rz(heading − π/2)·(v − center)/(2s) + 0.5`, world-axis
-/// aligned, geometry static, growth purely via this box; the fixed −π/2 is absorbed into our
-/// heading convention, which was fitted directly to the reference traces). `u` runs across the
-/// track, `v` runs *against* the heading — the wake chevron's apex (low `v` in `wake.blp`) lands
-/// ahead of the unit, arms trailing. Pinned by the golden test below.
+/// The texgen `uv = Rz(heading − π/2)·(p − center)/(2s) + 0.5`, with the −π/2 folded into the
+/// heading: `u` runs across the track and `v` against the heading, so the wake chevron's apex
+/// (low `v` in `wake.blp`) lands ahead of the unit.
 pub(super) fn foam_uv(center: [f32; 2], heading: f32, size: f32, p: [f32; 2]) -> [f32; 2] {
     let (dx, dy) = (p[0] - center[0], p[1] - center[1]);
     let (s, c) = heading.sin_cos();
@@ -131,8 +113,7 @@ pub(super) fn foam_uv(center: [f32; 2], heading: f32, size: f32, p: [f32; 2]) ->
     ]
 }
 
-/// xorshift32 + a 24-bit uniform — the same local-RNG idiom as `particles::rand01` (the reference
-/// rolls its own RNG per emission; we mirror the distribution, not the stream).
+/// xorshift32: the reference's RNG differs, so this matches its distribution, not its stream.
 fn next_u32(state: &mut u32) -> u32 {
     let mut x = *state;
     x ^= x << 13;
@@ -150,14 +131,12 @@ pub(super) fn rand01(state: &mut u32) -> f32 {
 mod tests {
     use super::*;
 
-    /// GOLDEN — the texgen signs against the reference trace fits (2026-07-08/10 captures): the
-    /// fitted affine `uv = A·p + t` measured `u` ACROSS the track and `v` AGAINST the heading —
-    /// the chevron apex (low `v`) lands ahead of the unit, arms trailing; the box `[c−s, c+s]`
-    /// spans one UV unit.
+    /// The signs of the affine texgen fitted to the reference's frames: `u` across the track, `v`
+    /// against the heading, and the box `[c−s, c+s]` one UV unit.
     #[test]
     fn texgen_matches_the_reference_fit() {
         let c = [-9016.0_f32, -226.0];
-        let h = 0.4637_f32; // ≈ 26.6° — the wade capture's early leg
+        let h = 0.4637_f32; // about 26.6°, a heading from the reference capture
         let s = 1.25_f32;
         let (sh, ch) = h.sin_cos();
         let uv_a = foam_uv(c, h, s, [c[0] + ch, c[1] + sh]); // 1 yd ahead
@@ -173,8 +152,6 @@ mod tests {
         assert!(edge[1].abs() < 1e-4, "box edge → v = 0: {edge:?}");
     }
 
-    /// The driver params at the byte formulas' operating points: a running wake (7 yd/s), a
-    /// standing ring, and the step-in one-shot.
     #[test]
     fn params_match_the_verified_formulas() {
         let mut rng = 1u32;
@@ -217,8 +194,6 @@ mod tests {
         }
     }
 
-    /// The cadence laws: ring 400–450 ms; wake = the ~0.625-yd distance law (~89 ms at run
-    /// speed, capped at speed 20).
     #[test]
     fn cadence_laws() {
         let mut rng = 3u32;
@@ -231,7 +206,6 @@ mod tests {
         assert!(RING_INTERVAL.0 >= 0.4 && RING_INTERVAL.1 <= 0.45);
     }
 
-    /// The depth gate and its attenuation: reject outside (0, radius2), attenuate past half.
     #[test]
     fn depth_gate_and_attenuation() {
         let mut rng = 7u32;
@@ -242,7 +216,6 @@ mod tests {
         assert!((deep.peak - 0.8 * 0.505).abs() < 0.02, "peak {}", deep.peak);
     }
 
-    /// The lifecycle: 0.4/0.6 rise/decay to the peak, zero at the lifetime; linear size growth.
     #[test]
     fn alpha_ramp_and_size_growth() {
         assert!((record_alpha(0.8, 1.0, 0.0, 0.2) - 0.4).abs() < 1e-6);

@@ -1,6 +1,4 @@
-//! Pure geometry + sprite-texture builders for the celestial layer — no ECS, no systems: a unit billboard
-//! quad, the procedural star-field fallback mesh, and the baked soft-round sprite texture. Consumed by
-//! [`super::setup`].
+//! The celestial layer's billboard quad, procedural star field and soft round sprite.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
@@ -30,8 +28,7 @@ pub(super) fn quad_mesh() -> Mesh {
     m
 }
 
-/// Deterministic per-star pseudo-random in `[0,1)` from an index — no `rand` dep, and stable across runs
-/// so the star field is the same every frame (no flicker). (A small integer bit-mix / hash.)
+/// A pseudo-random `[0, 1)` from an index, stable across frames so the stars never flicker.
 fn hash01(n: u32) -> f32 {
     let mut x = n.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     x = (x ^ (x >> 16)).wrapping_mul(2_246_822_519);
@@ -39,15 +36,10 @@ fn hash01(n: u32) -> f32 {
     (x & 0x00ff_ffff) as f32 / 0x0100_0000 as f32
 }
 
-/// A procedural **star field**: `count` small camera-facing quads scattered over the upper hemisphere at
-/// unit radius (the caller scales to the star distance), each a soft dot. This replaces a tiled-texture
-/// dome — tiling `Stars.blp` over the whole hemisphere stretched its 256² dots into big pixelated blobs;
-/// scattered *small* quads read as crisp star points with no repetition and no magnification. Positions are
-/// deterministic (hashed by index), distributed by uniform hemisphere area with a touch of size variation.
-/// (`Stars.m2`'s authored point layout would be the byte-faithful version; this is a clean visual stand-in.)
-/// Each quad faces the centred camera (normal = −dir).
+/// The assetless stand-in for `Stars.m2`: `count` small quads facing the centre, over the upper
+/// hemisphere at unit radius, hashed by index and uniform by area, with some size variation.
 pub(super) fn star_field_mesh(count: u32) -> Mesh {
-    const SIZE: f32 = 0.0022; // half-size on the unit sphere → ~0.13° on-screen at the star distance
+    const SIZE: f32 = 0.0022; // half-size on the unit sphere, ~0.13°
     let mut positions = Vec::with_capacity(count as usize * 4);
     let mut uvs = Vec::with_capacity(count as usize * 4);
     let mut normals = Vec::with_capacity(count as usize * 4);
@@ -89,10 +81,8 @@ pub(super) fn star_field_mesh(count: u32) -> Mesh {
     m
 }
 
-/// Bake a soft **round** sprite texture: white RGB everywhere, alpha = a smooth radial disc that is
-/// opaque inside `core` and fades to fully transparent by `edge` (both normalised: 0 = centre, 1 =
-/// edge midpoint of the square). The transparent corners are what make the square quad read as a
-/// circle. `edge ≥ 1` lets the falloff run all the way to the quad edge (used for the soft glow).
+/// A white sprite whose alpha is opaque inside `core` and 0 beyond `edge` (0 = centre, 1 = the
+/// square's edge midpoint), with a smoothstep between.
 pub(super) fn radial_sprite(size: u32, core: f32, edge: f32) -> Image {
     let mut data = vec![0u8; (size * size * 4) as usize];
     let c = (size as f32 - 1.0) * 0.5;
@@ -101,7 +91,6 @@ pub(super) fn radial_sprite(size: u32, core: f32, edge: f32) -> Image {
             let dx = (x as f32 - c) / c;
             let dy = (y as f32 - c) / c;
             let r = (dx * dx + dy * dy).sqrt(); // 0 centre → 1 edge-mid → ~1.41 corner
-                                                // Smooth 1→0 ramp across [core, edge] (1 − smoothstep), so the disc has a soft AA edge.
             let t = ((r - core) / (edge - core)).clamp(0.0, 1.0);
             let a = 1.0 - (t * t * (3.0 - 2.0 * t));
             let i = ((y * size + x) * 4) as usize;

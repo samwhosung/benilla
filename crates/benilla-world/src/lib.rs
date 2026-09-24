@@ -1,42 +1,21 @@
-//! **benilla-world** — the world renderer, with no game attached.
-//!
-//! Decision 1160's crate. The line it draws: *this crate can put something into a world and answer
-//! questions about that world; it knows nothing about a session, a wire, an avatar or a UI.* What
-//! enforces the line is not this doc — it is the dependency edge. `benilla-world` does not depend
-//! on `benilla-app`, so a name that crosses back is a compile error rather than a lint, and
-//! `benilla-worldview` links only this crate, so an engine that quietly needs the game stops
-//! booting rather than quietly working.
-//!
-//! Above it: `benilla-app` (the game — session, wire, units, UI) and the two binaries.
-//! Below it: `benilla-assets` (the asset foundation both sides share) and `benilla-formats`.
-//!
-//! **One instrument travels with the engine and three do not**, and the rule that sorts them is
-//! whether `WorldPlugins` registers it. `art_scope` does — within-map art residency is engine
-//! behaviour, not a readout — so it is here. The debug panel, the perf journal and the pipeline
-//! warmer are registered by the game, and every one of them reads the game (units, targets, names,
-//! the UI): they are instruments *above* the stack, and the compiler said so the moment the move
-//! was attempted with them inside. That is the whole value of the crate edge over a naming
-//! convention — the earlier module-name-based wall had them excluded by an assumption, and the
-//! assumption was wrong.
+//! benilla-world: the world renderer, with no game attached. It puts things into a world and
+//! answers questions about it, and knows nothing of a session, the wire, an avatar or a UI. The
+//! dependency edge holds that line: this crate does not depend on `benilla-app`, and
+//! `benilla-worldview` links only this crate. Above it are `benilla-app` and the two binaries;
+//! below it, `benilla-assets` and `benilla-formats`.
 
-/// Re-exported so a shim binary needs no `bevy` dependency of its own — the same courtesy
-/// `benilla-app` extends to the `benilla` launcher.
+/// Re-exported so a shim binary needs no `bevy` dependency of its own.
 pub use bevy::app::AppExit;
 
-/// **Fixtures for dependents' tests.**
-///
-/// `#[cfg(test)]` code is not compiled for a downstream crate, so a fixture the game's tests share
-/// with the engine's has to be ordinary public code. Three of `benilla-app`'s tests build a
-/// particle emitter def — thirty fields of authored defaults — and duplicating that literal three
-/// times is how two of the copies quietly drift from the type.
+/// Test fixtures shared with dependent crates: ordinary public code, since `#[cfg(test)]` code is
+/// not compiled for a downstream crate.
 pub mod testing {
     use benilla_formats::{
         CellRamp, EmitParams, EmitTiming, OverLife, ParamsNow, ParticleBlend, ParticleEmitterDef,
         ParticleShape,
     };
 
-    /// The sampled-parameter side of [`particle_def`], constant-baked so a sim test is
-    /// deterministic.
+    /// The sampled parameters of [`particle_def`], constant so a sim test is deterministic.
     pub fn particle_params_now() -> ParamsNow {
         ParamsNow {
             emission_speed: 1.0,
@@ -51,7 +30,7 @@ pub mod testing {
         }
     }
 
-    /// A minimal emitter def for kernel tests — only the fields the emit kernel reads matter.
+    /// A minimal emitter def for kernel tests; only the fields the emit kernel reads matter.
     pub fn particle_def(shape: ParticleShape) -> ParticleEmitterDef {
         ParticleEmitterDef {
             flags: 0,
@@ -99,10 +78,8 @@ pub mod testing {
         particle_def(ParticleShape::Plane)
     }
 
-    /// A bind-pose [`crate::rig_anim::RigPose`] for tests that resolve consumer anchors
-    /// (anchors spawn on first demand through `RigPose::anchor_for`, so a test
-    /// wearer/mount/caster needs a pose, not a hand-built joint map): one root-parented joint per
-    /// entry, seated at its local translation.
+    /// A bind-pose [`crate::rig_anim::RigPose`] with one root-parented joint per entry, for tests
+    /// that resolve anchors (they spawn on demand through `RigPose::anchor_for`).
     pub fn test_rig_pose(
         root: bevy::ecs::entity::Entity,
         joints: &[bevy::math::Vec3],
@@ -149,8 +126,7 @@ pub mod lighting;
 pub mod liquid;
 pub mod log_ring;
 
-/// macOS `Cmd+Q`, re-pointed at the window close so the gesture goes through an exit the client
-/// can actually observe.
+/// macOS `Cmd+Q`, re-pointed at the window close so the shutdown systems run.
 pub mod mac_quit;
 pub mod map_proj;
 pub mod mat_anim_table;

@@ -1,58 +1,18 @@
-//! **The production static-world consolidation, doodad lanes — ON by default** (1426;
-//! `WOW_STATIC_MERGE=0` opts out. Design 1417, lane order re-ranked by 1418's density
-//! verdict; the measured premise is 1413/1416's 44 ns/row tax).
+//! Static-world consolidation of doodad batches, on unless `WOW_STATIC_MERGE=0`. It runs behind
+//! the retained pass (`crate::static_gx`), which takes the static populations first: what reaches
+//! it is that pass's declined families, or everything under `WOW_STATIC_GX=0`.
 //!
-//! **Since 1434 this is the SECOND consolidator in line**: the retained pass
-//! (`crate::static_gx`, also default-on) takes the static populations first at the same
-//! assemble gate, and what reaches these accumulators under the defaults is its declined
-//! families (env-mapped, depth-flagged batches) plus everything under `WOW_STATIC_GX=0`,
-//! where this module is again the whole consolidation. The default flip deliberately
-//! removed no code here — this lane IS the A/B arm every gx comparison diffs against.
+//! The assembler diverts every fully static, order-free (`Opaque`/`AlphaTest`) batch that does not
+//! fade, and the flush bakes each ADT-doodad (owner tile, 133⅓-yd cell, material) or WMO-prop
+//! (placement, room set, material) group into one mesh with the placement transforms in its
+//! vertices. A blob closes at the vertex cap or after an idle tail; a doodad blob despawns with
+//! its tile (`TileState::merged`). Distance admission closes a cell in fragments during play, so a
+//! cell quiet for [`RECONSOLIDATE_IDLE_FRAMES`] re-bakes into one blob per vertex cap and the
+//! fragments retire after [`RETIRE_FRAMES`]. A straddler whose owner tile unloads is re-owned by
+//! a loaded referrer (`handoff_straddlers`) and re-diverts under it.
 //!
-//! The assembler diverts every ADT-doodad batch that is fully static (the bracket's anim
-//! exclusions), **order-free** (`Opaque`/`AlphaTest`, not additive: 0858's law that authored
-//! draw order exists only on transparent-pass batches) and not an interior-slot prop, into
-//! this buffer; the flush bakes each `(owner tile, 133⅓-yd cell, material)` group into ONE
-//! mesh entity with placement transforms baked into the vertices. **The fader lane (lane 2)
-//! is dev-opt-in only (`WOW_MERGE_FADERS=1`)**: each vertex carries its
-//! placement's fade sphere ([`benilla_assets::ATTRIBUTE_WOW_FADE_SPHERE`]) and
-//! `wow_model.wgsl`'s `WOW_MERGED_FADE` lane computes the faithful fade curve per vertex —
-//! alpha in-shader, `Hidden` as a clip-space collapse at zero — on the BLEND TWIN permanently
-//! (1420), the reference's own fading render state. The lane is correct per PIXEL but wrong
-//! per PHASE: one transparent draw with one sort key spanning a cell of depths, depth-write
-//! on, depth-kills per-entity faders behind its translucent pixels whenever the cell's sort
-//! centre lands beyond them (the director's popping lamppost — 1422 shrank the class,
-//! 1423 pulled the lane; the sort-near re-entry design is 1423's follow-up).
-//!
-//! The cell key preserves the frustum-cull locality the bracket's round 1 proved load-bearing
-//! (+1.38 without it, −0.93 with); the owner tile buys the weld's whole lifetime story — the
-//! blob lands in `TileState::merged` and despawns with its tile.
-//!
-//! **WMO group geometry never diverts (1418's verdict):** `batch_order` is a `MatKey` axis, so
-//! every WMO batch already owns a unique material handle — under the correct
-//! `(uid, group, material)` key the measured merge is EXACTLY 1:1, zero rows saved. The WMO
-//! share of the frame belongs to option B's cross-material retained draw, not to any
-//! entity-level lane. [`MergeSite::Wmo`] survives only to feed the census predictor.
-//!
-//! The close rule is the weld's (1369), not the bracket's wall clock: vertex cap + idle-frame
-//! tail — [`MERGE_IDLE_FRAMES`] (a quarter second) in settled play, ONE quiet frame under the
-//! arrival cover, where the settle release waits on the backlog (`merge_pending` is a
-//! `presentable()` term) and a fixed tail would push every world entry longer for nothing.
-//! Play-streaming then RE-CONSOLIDATES: distance admission trickles a cell's doodads in over
-//! the whole approach, gapped in seconds, so in-play closes shred a cell into fragments
-//! (Goldshire: 214/445 singleton blobs — 1421's census; its "1-frame tail" attribution was a
-//! misread, the in-play tail was already ¼ s and no sane tail bridges an approach). Fragments
-//! spawn fast — appearance latency is the tail's job — and once a cell's key has been quiet
-//! for [`RECONSOLIDATE_IDLE_FRAMES`] its fragments re-bake into one blob per vertex cap and
-//! the originals retire after an upload cushion ([`RETIRE_FRAMES`]).
-//! Dead-owner accumulators are discarded, and the whole buffer clears on map drop for the same
-//! tile-keys-repeat-across-maps reason the weld's does.
-//!
-//! The straddler gap (1417's lifecycle §) is CLOSED: when an owner tile unloads out from under
-//! a placement a loaded neighbour still references, `handoff_straddlers` (terrain_stream.rs)
-//! re-owns the placement to that referrer and queues a respawn, so its batches re-divert here
-//! under the new owner — and its hulls re-weld, closing 1369's matching collider gap whenever
-//! the merge is on.
+//! WMO group geometry never diverts: `batch_order` is a `MatKey` axis, so each WMO batch owns its
+//! material and a merge saves nothing ([`MergeSite::Wmo`] feeds only the census predictor).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -71,55 +31,36 @@ use crate::mesh_tag::alpha_bits;
 use crate::model_render::{ModelKind, ModelPart};
 use crate::wmo_portal::WmoGroupVis;
 
-/// Vertex cap per blob: bounds any one bake + upload, and keeps a blob's cull bound a
-/// neighbourhood rather than a zone (the weld's `WELD_MAX_TRIS` argument, in render units). A
-/// single oversized batch closes its blob immediately, same as an oversized hull.
+/// Vertex cap per blob: bounds one bake and upload and keeps the cull bound a neighbourhood.
 const MERGE_MAX_VERTS: usize = 65_536;
 
-/// Quiet frames that close a live accumulator in settled play — a quarter second, because a
-/// budget-paced burst's gaps are frames, not seconds. Under the arrival cover ONE quiet frame
-/// closes it instead: the settle release waits on the merge backlog, and a fixed tail would
-/// push every world entry longer for nothing (the weld's exact rule — its comment owns the
-/// reasoning).
+/// Quiet frames (a quarter second) that close an accumulator in settled play; under the arrival
+/// cover one quiet frame does, since the settle release waits on the backlog.
 const MERGE_IDLE_FRAMES: u32 = 15;
 
-/// Quiet frames before a settled cell's fragments re-bake into one blob (~3 s at 60 Hz): long
-/// enough that the approach's distance-admission trickle has moved past the cell, short enough
-/// that the fragment population stays transient. This is why the in-play tail can stay a
-/// quarter second: fast appearance first, consolidation once the cell goes quiet.
+/// Quiet frames (~3 s at 60 Hz) before a settled cell's fragments re-bake into one blob.
 const RECONSOLIDATE_IDLE_FRAMES: u32 = 180;
 
-/// Frames a replaced fragment keeps drawing after its consolidated successor spawns — the
-/// successor's mesh-upload cushion. The merged lanes are order-free (`Opaque`/`AlphaTest`), so
-/// the overlap double-draw is invisible; a gap instead (a despawn before the upload lands)
-/// would flicker the cell off, the exact defect class the 1421–1423 hunt closed.
+/// Frames a replaced fragment keeps drawing while its successor's mesh uploads: the overlap is
+/// invisible on order-free batches, where a gap would flicker the cell off.
 const RETIRE_FRAMES: u32 = 10;
 
-/// The doodad spatial cell, ¼ of an ADT tile — the retired `WOW_MEGA_STATIC` bracket's measured
-/// 133⅓-yd locality key. Its round 1 grouped by material alone and LOST (+1.38 cpu_ms at SW,
-/// drawn 400 → ~830): one blob per material spans the whole streamed scene, so its Aabb defeats
-/// the frustum cull and every blob's full vertex load encodes every frame. The cell restores
-/// locality; the distinct-material count (~5.6k at SW) remains the blob-count floor either way —
-/// the census finding that per-material merging alone cannot reach the few-hundred-row regime.
+/// The doodad spatial cell, ¼ of an ADT tile (133⅓ yd), so a blob's bound stays local enough for
+/// the frustum cull.
 const CELL: f32 = 533.333_3 / 4.0;
 
-/// One accumulating blob: shared geometry + placement transforms + per-placement fade
-/// spheres (index-parallel with `parts`), baked at flush.
+/// One accumulating blob; every list is index-parallel with `parts`.
 struct MergeAcc {
     parts: Vec<(Arc<RenderSubmesh>, Transform)>,
-    /// Each part's placement identity (index-parallel with `parts`) — what the pick names when
-    /// the cursor lands on this blob. Shared per placement, so a merged cell of
-    /// 300 trees holds 300 refcount bumps, not 300 strings.
+    /// Each part's placement identity, which the pick names.
     objects: Vec<Arc<crate::interact::WorldObject>>,
     spheres: Vec<Vec4>,
-    /// Interior-prop accs only (index-parallel with `parts`): each part's SH-probe slot, baked
-    /// per vertex at flush. Empty on every other lane — homogeneous per key by construction,
-    /// because the interior flag is a material axis and the material is in the key.
+    /// Each part's SH-probe slot, interior props only.
     slots: Vec<u32>,
     verts: usize,
     blend: ModelBlend,
     kind: ModelKind,
-    /// [`StaticMerge::frame`] at the last append — the idle clock.
+    /// [`StaticMerge::frame`] at the last append: the idle clock.
     last_add: u32,
 }
 
@@ -140,8 +81,7 @@ impl MergeAcc {
     }
 }
 
-/// One blob bake's input — an accumulator's view at close, or a re-consolidated cell's
-/// concatenation. Index-parallel slices; `slots` is empty on every non-interior lane.
+/// One blob bake's input as index-parallel slices: a closed accumulator or a re-consolidated cell.
 struct BlobSource<'a> {
     parts: &'a [(Arc<RenderSubmesh>, Transform)],
     objects: &'a [Arc<crate::interact::WorldObject>],
@@ -151,22 +91,18 @@ struct BlobSource<'a> {
     kind: ModelKind,
 }
 
-/// Where a diverted batch belongs — built once per placement by the spawn driver, consumed per
-/// batch by the assembler's divert.
+/// Where a diverted batch belongs, built once per placement by the spawn driver.
 pub enum MergeSite<'a> {
     /// An ADT map doodad: owned by its first-registering tile (the weld's ownership).
     Doodad { owner: (i32, i32) },
-    /// WMO group geometry: owned by its placement; `groups` is the asset's per-submesh group
-    /// index table (index-parallel with the submeshes the assembler iterates).
+    /// WMO group geometry: `groups` is the asset's per-submesh group index table.
     Wmo {
         uid: u32,
         groups: &'a [u16],
         portal_gated: bool,
     },
-    /// A WMO doodad prop (1418 lane 3): owned by its placement, keyed by the referrer-set of
-    /// rooms that name it (`groups` — the blob takes the same set-valued `WmoGroupVis` its
-    /// members carried) and, for an interior prop, carrying the per-prop SH-probe slot the
-    /// bake writes per vertex.
+    /// A WMO doodad prop: owned by its placement, keyed by the set of rooms that name it
+    /// (`groups`, the blob's `WmoGroupVis`) and, indoors, carrying its SH-probe slot.
     Prop {
         uid: u32,
         groups: &'a Arc<[u16]>,
@@ -175,9 +111,8 @@ pub enum MergeSite<'a> {
 }
 
 impl MergeSite<'_> {
-    /// The would-be merge key of one batch under this site, hashed — the census's blob-count
-    /// predictor (each lane's expected blob count = distinct keys in its class). Every site's
-    /// key here mirrors its real divert key exactly.
+    /// One batch's would-be merge key, hashed, for the census's blob-count predictor; it must
+    /// mirror the real divert key.
     pub fn census_key(
         &self,
         batch_idx: usize,
@@ -205,7 +140,7 @@ impl MergeSite<'_> {
     }
 }
 
-/// (owner tile, 133⅓-yd cell, material) — a doodad blob's identity.
+/// A doodad blob's identity: (owner tile, 133⅓-yd cell, material).
 type DoodadKey = ((i32, i32), (i32, i32), Handle<WowModelMaterial>);
 
 /// One spawned doodad blob retained with its bake input, so a shredded cell can re-bake.
@@ -217,46 +152,40 @@ struct SettledBlob {
     verts: usize,
 }
 
-/// A key's spawned blobs — the re-consolidation ledger's entry. `dirty` arms one evaluation
-/// after the next quiet window; a declined evaluation (nothing to win under the cap) does not
-/// re-run until a new fragment lands.
+/// A key's spawned blobs. `dirty` arms one re-consolidation check after the next quiet window; a
+/// declined one waits for a new fragment.
 struct SettledCell {
     blobs: Vec<SettledBlob>,
     blend: ModelBlend,
     kind: ModelKind,
-    /// [`StaticMerge::frame`] at the last fragment spawn — the quiet clock.
+    /// [`StaticMerge::frame`] at the last fragment spawn: the quiet clock.
     last_add: u32,
     dirty: bool,
 }
 
-/// A replaced fragment drawing out its successor's upload cushion (see [`RETIRE_FRAMES`]).
+/// A replaced fragment drawing out its successor's upload cushion ([`RETIRE_FRAMES`]).
 struct Retiring {
     entity: Entity,
     owner: (i32, i32),
     /// [`StaticMerge::frame`] when the successor spawned.
     since: u32,
 }
-/// (placement uid, referrer-set, material) — a prop blob's identity. The `Arc<[u16]>` hashes
-/// by CONTENT, so two props named by the same rooms share a blob and distinct sets never can.
+/// A prop blob's identity: (placement uid, room set, material); the `Arc<[u16]>` hashes by content.
 type PropKey = (u32, Arc<[u16]>, Handle<WowModelMaterial>);
 
-/// The in-flight merge accumulators. Same lifecycle discipline as [`super::weld::HullWelds`]:
-/// fed by the spawn chain, drained one chain-step later, cleared with the world it describes.
+/// The in-flight merge accumulators, fed by the spawn chain and cleared with the world.
 #[derive(Resource, Default)]
 pub struct StaticMerge {
-    /// Flush-system tick, the idle clock. Wrapping u32 — only ever read as a difference.
+    /// Flush-system tick, the idle clock; wrapping, read only as a difference.
     frame: u32,
     doodads: HashMap<DoodadKey, MergeAcc>,
     props: HashMap<PropKey, MergeAcc>,
-    /// Spawned doodad blobs retained per key with their bake inputs — the re-consolidation
-    /// ledger (see the module header: play-streaming's distance admission shreds a cell).
+    /// Spawned doodad blobs per key with their bake inputs, for re-consolidation.
     settled: HashMap<DoodadKey, SettledCell>,
     /// Replaced fragments still drawing out their successor's upload cushion.
     retiring: Vec<Retiring>,
-    /// Running totals since the last drain report (1417's VRAM honesty line): blobs spawned,
-    /// batches baked into them, vertices BAKED (every placement a copy) vs the vertices the
-    /// members' SHARED assets hold (each distinct geometry once — Arc identity), so the log
-    /// states the duplication factor the desk estimate guessed at ~3×.
+    /// Totals since the last drain report: blobs, batches, and baked vertices (a copy per
+    /// placement) against the shared assets' vertices (each geometry once).
     blobs: u64,
     batches: u64,
     baked_verts: u64,
@@ -265,21 +194,16 @@ pub struct StaticMerge {
     reported: bool,
 }
 
-/// Is the consolidation armed? Read once; the assembler divert and the flush both key on it.
-/// **ON by default** (1426: both recorded blockers closed — 1424 fragmentation, 1425 straddler
-/// handoff — and the director's eye passed lanes 1+3 at both pins). `WOW_STATIC_MERGE=0` is
-/// the opt-out lever; `=1` still reads as an explicit on for anything that predates the flip.
+/// Whether the consolidation is armed, read once: on unless `WOW_STATIC_MERGE=0`.
 pub fn merge_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("WOW_STATIC_MERGE").as_deref() != Ok("0"))
 }
 
 impl StaticMerge {
-    /// Take one mergeable batch into its accumulator. `fade_sphere` = the placement's world
-    /// fade center + radius, baked per vertex at flush (a never-fader carries its true radius
-    /// and the shader's `> 7` arm pins it opaque). `false` = this site never merges (WMO group
-    /// geometry and props — 1418's verdict / the referrer-set key) — the caller spawns the
-    /// batch individually, the fail-open arm.
+    /// Takes one mergeable batch into its accumulator. `fade_sphere` is the placement's world fade
+    /// centre and radius, baked per vertex (a never-fader's true radius hits the shader's `> 7`
+    /// opaque arm). `false` for WMO group geometry, which the caller spawns individually.
     pub(super) fn divert(
         &mut self,
         site: &MergeSite<'_>,
@@ -329,13 +253,11 @@ impl StaticMerge {
                 if let Some(slot) = slot {
                     acc.slots.push(u32::from(*slot));
                 }
-                // The material's interior axis makes a key all-interior or all-exterior; a
-                // ragged slot list would misindex the per-vertex bake, so it is a hard error.
+                // A key is all interior or all exterior; a ragged slot list misindexes the bake.
                 debug_assert!(acc.slots.is_empty() || acc.slots.len() == acc.parts.len() + 1);
                 acc
             }
-            // WMO group geometry never merges: measured 1:1 under its correct key (1418 —
-            // batch_order rides MatKey). The site exists for the census predictor.
+            // WMO group geometry never merges: each batch owns its material. Census only.
             MergeSite::Wmo { .. } => return false,
         };
         acc.spheres.push(fade_sphere);
@@ -355,9 +277,7 @@ impl StaticMerge {
         true
     }
 
-    /// Accumulators not yet baked — the reveal gate's term (`WorldLoadProgress::merge_pending`;
-    /// the weld's `unflushed` argument, on the render side). An overcount only delays a
-    /// release, never wrongs one.
+    /// Accumulators not yet baked, the reveal gate's `merge_pending`; an overcount only delays.
     pub(super) fn unflushed(&self) -> usize {
         self.doodads.len() + self.props.len()
     }
@@ -376,13 +296,9 @@ impl StaticMerge {
     }
 }
 
-/// Close ready accumulators into blob entities and hand each to its owner tile
-/// (`TileState::merged` — despawned with the tile, like the welds). A dead owner discards its
-/// accumulator: spawning a blob nothing owns is a leak (the weld's rule, and its reachability
-/// argument — the owner died past the unload line).
-///
-/// Runs in the Stream chain right after `flush_hull_welds`, for the weld's own reason: the
-/// frame's appends see the flush at a deterministic point and the owner lookups race nothing.
+/// Closes ready accumulators into blobs owned by their tile (`TileState::merged`) or placement,
+/// re-consolidates quiet cells and retires replaced fragments; a dead owner's accumulator is
+/// discarded. Runs in the Stream chain right after `flush_hull_welds`.
 pub(super) fn flush_static_merge(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -411,8 +327,7 @@ pub(super) fn flush_static_merge(
             blobs += 1;
             let entity = spawn_blob(&mut commands, &mut meshes, &key.2, acc.source(), None, true);
             tile.merged.push(entity);
-            // Retain the bake input: a later admission wave under this key makes the cell a
-            // re-consolidation candidate once it goes quiet.
+            // Keep the bake input for a later re-consolidation.
             let cell = settled.entry(key.clone()).or_insert_with(|| SettledCell {
                 blobs: Vec::new(),
                 blend: acc.blend,
@@ -440,9 +355,8 @@ pub(super) fn flush_static_merge(
             return true;
         }
         blobs += 1;
-        // The blob takes exactly the vis/tagging its members had (spawn/mod.rs's prop site):
-        // the set-valued `WmoGroupVis` + `ExteriorScene` when the building has an instance and
-        // rooms name the prop; untagged otherwise (no key ⇒ no exemption possible).
+        // The members' tagging: `WmoGroupVis` and `ExteriorScene` when the building has an
+        // instance and rooms name the prop, untagged otherwise.
         let vis = (!key.1.is_empty())
             .then_some(p.portal_instance)
             .flatten()
@@ -461,10 +375,8 @@ pub(super) fn flush_static_merge(
         ));
         false
     });
-    // Re-consolidate settled cells (the module header owns the why): once a key has been quiet
-    // for the window and holds two or more fragments, re-bake them into one blob per vertex cap
-    // and retire the originals after the upload cushion. First-fit over whole fragments; only a
-    // strictly smaller shape is worth the churn.
+    // Re-consolidate quiet cells: first-fit whole fragments under the vertex cap, only when that
+    // makes strictly fewer blobs.
     let mut recon = (0u64, 0usize, 0usize); // (cells, fragments before, blobs after)
     {
         let StaticMerge {
@@ -550,8 +462,7 @@ pub(super) fn flush_static_merge(
             recon.0, recon.1, recon.2
         );
     }
-    // Retire replaced fragments once the successor's upload cushion has passed. A dead owner
-    // already despawned the entity with its tile — drop the record without touching it.
+    // Retire fragments past the cushion; a dead owner already despawned them with its tile.
     merge.retiring.retain(|r| {
         if frame.wrapping_sub(r.since) < RETIRE_FRAMES {
             return true;
@@ -566,13 +477,10 @@ pub(super) fn flush_static_merge(
     if blobs > 0 {
         merge.reported = false;
     }
-    // Publish the backlog for the reveal gate (this system sits in the Stream chain, so the
-    // consumers read this frame's depth — the weld's publish discipline).
     if let Some(progress) = progress.as_mut() {
         progress.merge_pending = merge.unflushed();
     }
-    // The drain report (1417's VRAM honesty line), once per settled wave: what the merge took
-    // and what the transform-baking duplication actually costs against the shared assets.
+    // The drain report, once per settled wave: what baking duplicates against the shared assets.
     if !merge.reported && merge.doodads.is_empty() && merge.props.is_empty() {
         merge.reported = true;
         debug!(
@@ -586,28 +494,16 @@ pub(super) fn flush_static_merge(
     }
 }
 
-/// `WOW_MERGE_FADERS=1` — the fader lane (lane 2) is OPT-IN dev-only since decision 1423:
-/// a fader blob is one transparent draw with ONE sort key covering a 133⅓-yd cell of content
-/// at DIFFERENT depths, drawn with the twin's faithful depth-write — and whenever the cell's
-/// sort centre lands beyond a per-entity fader, the blob draws first and its translucent
-/// pixels depth-kill the entity behind them (the director's popping lamppost; 1422's
-/// centre-sort only shrank the class, it cannot eliminate it). Under the default merge
-/// faders spawn per-entity — the configuration the director's eye passed. 1423's recorded
-/// re-entry (sort-near on a blob twin) was REFUTED before build (1428): the blob's
-/// opaque-intent pixels ride the same near-sorted transparent draw and erase any
-/// non-depth-writing card in front of them, O(1) and permanent. Lane 2 stays parked; the
-/// question folds into option B's retained draw, which bins opaque-intent content properly
-/// by construction.
+/// `WOW_MERGE_FADERS=1` merges fading doodads too (dev only). A fader blob is one transparent draw
+/// with one sort key over a cell of depths, and its depth write hides any per-entity fader it
+/// sorts ahead of, so by default faders spawn per entity.
 pub(crate) fn merge_faders_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("WOW_MERGE_FADERS").is_some())
 }
 
-/// `WOW_BLOB_VIS=1` — dump every merged blob's live visibility verdict every 2 s, plus any
-/// entity whose `WorldObject::id` is listed in `WOW_BLOB_VIS_UID` (comma-separated). The
-/// instrument for a "this popped in/out" report: run parked at the report's two points and
-/// diff which row flips (`vis`/`inh`/`view`), which separates a positional cull flip from a
-/// temporal one (a live pipeline compile, a late bake).
+/// `WOW_BLOB_VIS=1` prints every merged blob's visibility verdicts every 2 s, plus any entity
+/// whose `WorldObject::id` is in `WOW_BLOB_VIS_UID` (comma-separated).
 pub(crate) fn blob_vis_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("WOW_BLOB_VIS").is_some())
@@ -664,17 +560,9 @@ pub(crate) fn log_blob_vis(
     }
 }
 
-/// One blob bake (a closed accumulator, or a re-consolidated cell's chunk) → one blob entity
-/// carrying exactly what its members carried minus
-/// the per-placement machinery the shader lane now owns (1418): no `DoodadFade` (the baked
-/// fade spheres drive `WOW_MERGED_FADE`; `MeshTag` stays at opaque), `ExteriorScene` (every
-/// member had it), the union `Aabb` (authored: `NoAutoAabb`).
-///
-/// Its pick declaration is a [`PickBlob`], not a `PickMesh`: the baked mesh is the union of
-/// every member, so casting against it would answer "static-merge", which is what this blob's
-/// `WorldObject` said and why 1418's "nameable, not pickable" was a real loss of the inspector
-/// over merged content. The members carry the placement identities, and the
-/// entity keeps the broad phase and the drawn test it always had.
+/// Spawns one blob entity: no `DoodadFade` (the baked fade spheres drive `WOW_MERGED_FADE` and
+/// `MeshTag` stays opaque), the union `Aabb` under `NoAutoAabb`, and a `PickBlob` so a pick names
+/// the member placement it hits rather than the blob.
 fn spawn_blob(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -692,14 +580,11 @@ fn spawn_blob(
         kind,
     } = src;
     let n = parts.len();
-    // `center` is the blob's world position and therefore its TRANSPARENT-PHASE SORT KEY (the
-    // mesh is baked blob-local around it). On `Transform::IDENTITY` a fader
-    // blob sorted at the world origin: drawn first among all transparent content, its
-    // depth-write killing every transparent entity behind its translucent pixels.
+    // `center` is the blob's transparent sort key (the mesh is baked around it); at the world
+    // origin a fader blob would sort first and hide what is behind it.
     let (mesh, mn, mx, center) =
         merged_static_mesh_faded(parts, spheres, (!slots.is_empty()).then_some(slots));
-    // An interior blob's tag keeps the members' INTERIOR_FOG staging bit (the slot half of the
-    // payload is dead under WOW_MERGED_SLOT — the vertices carry it).
+    // An interior blob's tag keeps the INTERIOR_FOG bit; the vertices carry the slot.
     let tag = if slots.is_empty() {
         alpha_bits(1.0)
     } else {
@@ -713,8 +598,7 @@ fn spawn_blob(
         MeshTag(tag),
         Aabb::from_min_max(mn, mx),
         NoAutoAabb,
-        // The blob's own identity is the DRAW's, not a placement's — the members answer the
-        // pick, and this is only what a query for the blob entity itself reads.
+        // The draw's own identity; the members answer the pick.
         WorldObject {
             kind,
             label: "static-merge".into(),
@@ -786,7 +670,7 @@ mod tests {
         }
     }
 
-    /// A test placement identity — every divert carries one.
+    /// A test placement identity; every divert carries one.
     fn object() -> Arc<crate::interact::WorldObject> {
         Arc::new(crate::interact::WorldObject {
             kind: ModelKind::Doodad,
@@ -811,8 +695,6 @@ mod tests {
         ));
     }
 
-    /// Two doodads in the same cell on the same material accumulate into ONE blob; a third in
-    /// a different cell opens a second accumulator (the locality key round 1 proved out).
     #[test]
     fn cell_key_partitions_doodad_accumulators() {
         let mut merge = StaticMerge::default();
@@ -829,8 +711,6 @@ mod tests {
         assert_eq!(joint.spheres.len(), 2);
     }
 
-    /// WMO group geometry never diverts (1418's 1:1 verdict) — the site exists for the census
-    /// predictor only.
     #[test]
     fn wmo_site_refuses_the_divert() {
         let mut merge = StaticMerge::default();
@@ -868,8 +748,6 @@ mod tests {
         }
     }
 
-    /// An interior-prop blob (1418 lane 3) lands in its placement's entity list carrying the
-    /// set-valued room key, the per-vertex probe slots, and the INTERIOR_FOG-staged tag.
     #[test]
     fn interior_prop_blob_carries_rooms_and_baked_slots() {
         let mut app = test_app();
@@ -910,7 +788,7 @@ mod tests {
         let vis = app.world().get::<WmoGroupVis>(blob).unwrap();
         assert_eq!(vis.instance, instance);
         assert_eq!(&*vis.groups, &[3, 5]);
-        // The tag keeps the interior-fog staging bit with the slot half dead (probe 0).
+        // The tag keeps the interior-fog bit; its slot half is dead (probe 0).
         let tag = app.world().get::<MeshTag>(blob).unwrap();
         assert_eq!(tag.0, crate::mesh_tag::probe_bits(0));
         let mesh3d = app.world().get::<Mesh3d>(blob).unwrap().0.clone();
@@ -925,8 +803,7 @@ mod tests {
         }
     }
 
-    /// An EXTERIOR prop blob (no slots) bakes no slot attribute, and a prop no room names
-    /// takes no vis key and no exterior tag (the untagged-not-gated-blind rule).
+    /// An exterior prop blob bakes no slot attribute; one no room names takes no vis key or tag.
     #[test]
     fn exterior_and_unnamed_prop_blobs_stay_plain() {
         let mut app = test_app();
@@ -973,8 +850,6 @@ mod tests {
         assert!(mesh.attribute(ATTRIBUTE_WOW_FADE_SPHERE).is_some());
     }
 
-    /// The idle tail closes a quiet doodad accumulator into a blob owned by its tile, with the
-    /// authored bound, the per-vertex fade spheres, and no per-entity fade enrollment.
     #[test]
     fn idle_tail_closes_a_doodad_blob_onto_its_tile() {
         let mut app = test_app();
@@ -1004,7 +879,7 @@ mod tests {
             .world()
             .get::<crate::model_fade::DoodadFade>(blob)
             .is_none());
-        // The baked mesh carries one fade sphere per vertex — the WOW_MERGED_FADE contract.
+        // One fade sphere per vertex: the `WOW_MERGED_FADE` contract.
         let mesh3d = app.world().get::<Mesh3d>(blob).unwrap().0.clone();
         let meshes = app.world().resource::<Assets<Mesh>>();
         let mesh = meshes.get(&mesh3d).unwrap();
@@ -1012,7 +887,6 @@ mod tests {
         assert_eq!(spheres.len(), 3);
     }
 
-    /// A dead owner discards the accumulator — no blob, no leak (the weld's rule).
     #[test]
     fn dead_owner_discards_the_accumulator() {
         let mut app = test_app();
@@ -1044,8 +918,6 @@ mod tests {
             .clone()
     }
 
-    /// Play-streaming's admission trickle closes a cell in fragments; once the key goes quiet
-    /// they re-bake into ONE blob, the originals drawing out the upload cushion before retiring.
     #[test]
     fn a_settled_cell_reconsolidates_its_fragments() {
         let mut app = test_app();
@@ -1089,7 +961,7 @@ mod tests {
                 "a retired fragment must despawn"
             );
         }
-        // The consolidated mesh carries both placements — per-vertex fade spheres for 3+3 verts.
+        // Both placements' fade spheres, 3 + 3 vertices.
         let mesh3d = app.world().get::<Mesh3d>(after[0]).unwrap().0.clone();
         let meshes = app.world().resource::<Assets<Mesh>>();
         let spheres = meshes
@@ -1100,8 +972,7 @@ mod tests {
         assert_eq!(spheres.len(), 6);
     }
 
-    /// Two fragments already at the vertex cap re-bake into the same count — no win, so the
-    /// evaluation declines, keeps the originals, and does not run again until a new fragment.
+    /// Two fragments at the vertex cap cannot shrink, so the originals stay.
     #[test]
     fn reconsolidation_declines_when_the_cap_leaves_no_win() {
         let mut app = test_app();
@@ -1117,7 +988,7 @@ mod tests {
                 Vec3::ZERO,
                 MERGE_MAX_VERTS,
             );
-            // The cap closes each immediately — two fragments under one key.
+            // The cap closes each at once: two fragments under one key.
             flush_n(&mut app, 1);
         }
         let fragments = tile_merged(&app, (0, 0));
@@ -1130,8 +1001,7 @@ mod tests {
         );
     }
 
-    /// A dead owner drops its settled ledger without touching entities — the tile's own unload
-    /// despawned them, and a second despawn would be a bug.
+    /// The tile's own unload despawned the entities, so the ledger drops without touching them.
     #[test]
     fn a_dead_owner_drops_the_settled_ledger() {
         let mut app = test_app();
@@ -1156,7 +1026,6 @@ mod tests {
         assert!(app.world().resource::<StaticMerge>().settled.is_empty());
     }
 
-    /// The vertex cap closes an accumulator without waiting for the idle tail.
     #[test]
     fn vert_cap_closes_immediately() {
         let mut app = test_app();

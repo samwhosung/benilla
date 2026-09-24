@@ -1,47 +1,20 @@
-//! The precip **instruments** — the read-only field censuses the build loop logs at 1 Hz.
-//! Split from [`super::pool`], which owns the sim: nothing here mutates a pool or is read by
-//! one, and the two answer different questions — [`census`] reads the field **horizontally**
-//! (is there weather in front of me?), [`column`]/[`profile`] read it **vertically** (where
-//! does it stop overhead, and how abruptly?).
+//! Read-only censuses of the live precip field, logged at 1 Hz: [`census`] reads it horizontally
+//! (is there weather ahead?), [`column`] and [`profile`] vertically (where does it stop overhead,
+//! and how abruptly?).
 
 use bevy::math::Vec3;
 
 use super::pool::Drop;
 
-/// The eye band a census splits on: ±3 yd of the camera's height — the slice a player actually
-/// looks *through*, as opposed to the column of sky above them.
+/// The eye band a census counts: ±3 yd of the camera's height.
 const CENSUS_BAND: f32 = 3.0;
-/// The near-field radius a census counts: the sphere whose flakes dominate the look (the point
-/// sprite is 14 px at the eye and under 5 px past 30 yd).
+/// The near-field radius a census counts: the flakes that dominate the look.
 const CENSUS_NEAR: f32 = 15.0;
 
-/// A one-line **spatial** census of a live drop field, relative to the camera — the instrument
-/// for *"can you outrun the weather?"*, which the pool COUNTS alone cannot answer.
-///
-/// `axis` is a horizontal unit vector: the player's motion heading while they move, their view
-/// heading while they stand.
-///
-/// **`fwd`/`bwd` is the metric — read it first.** It splits the eye band about the plane through
-/// the camera ⊥ `axis`, reads ~50/50 on a centred field whatever the heading, and is what actually
-/// answers "is there weather in front of me". Measured across the 1159 fix: 3200/3350 standing,
-/// collapsing to 0 while running before the spawn-slab tilt and holding ~2115 after it.
-///
-/// **`centroid` is a weak second, and is easy to misread — it was, once.** Two biases sit on it:
-/// the drift heading is a fixed WORLD azimuth, so even a standing field's centroid sits
-/// `drift · mean_age` off along it (−5.5 yd at wire grade 0.6, −14 at 1.0, depending on which way
-/// the player faces); and it is *count-weighted*, so long-lived particles born high and to the rear
-/// dominate it. Under the slab tilt those two effects nearly cancel the forward shift at low grade:
-/// a Monte-Carlo of [`super::pool::spawn_particle`] predicts the running centroid improving only 9% at grade 0.6
-/// against 49% at 1.0, and the live client measured 11% and 61% — agreeing with the law while
-/// looking, on the centroid alone, like the fix had barely worked. Never conclude from it alone.
-///
-/// `frames` is the count since the previous census, and it is **not decoration**: `run_kind`'s
-/// budget is `rate · min(dt, 1/60)` with the remainder dropped, so emission per second scales with
-/// frame rate and a sub-60 fps leg measures a genuinely thinner field than a 60 fps one on
-/// identical code. Two census lines are only comparable at equal `frames` — measured, the field
-/// tracks `fps/60` and nothing else: 1542/2115 = 72.9% and 1598/2134 = 74.9% against frame-rate
-/// ratios of 71.8% and 73.0%. (An earlier revision of this line claimed 48%, which was an
-/// arithmetic slip on my part.)
+/// A one-line spatial census of a live drop field relative to the camera; `axis` is the motion
+/// heading while moving, the view heading while standing. Read `fwd`/`bwd` first (~50/50 on a
+/// centred field): the centroid is biased by the world-fixed drift and long-lived particles.
+/// Below 60 fps emission scales with frame rate, so two lines compare only at equal `frames`.
 pub(super) fn census(
     drops: &[Drop],
     cam: Vec3,
@@ -75,44 +48,25 @@ pub(super) fn census(
     ))
 }
 
-/// The vertical profile's step, in yards — fine enough to resolve the alpha fade-in, which spans
-/// only the first `|v_z|` yards of fall (≈3.9 yd at wire grade 0.6).
+/// The profile's step in yards: fine enough to resolve the 1 s fade-in (~4 yd of fall).
 const CENSUS_TOP_STEP: f32 = 2.0;
-/// How far below the ceiling the profile reaches: 10 steps = 20 yd, which brackets the whole
-/// approach to the plateau at every grade (the fastest blizzard flake falls 6.5 yd in its fade).
+/// 10 steps reach 20 yd below the ceiling, past the fastest flake's 6.5 yd fade.
 const CENSUS_TOP_BANDS: usize = 10;
 
-/// The **vertical** profile of a live field, top-down from its own ceiling — the instrument for
-/// *"where does the snow stop, and how abruptly?"*, which neither the pool counts nor [`census`]'s
-/// horizontal split can answer.
-///
-/// This exists because the director reported the top edge of benilla's snowfall reading as a hard
-/// horizontal line where the reference's fades in. That is a claim about `flakes(height)`, so it
-/// is measured as `flakes(height)`: the ceiling, the alpha-weighted flakes per yard in 2 yd steps
-/// below it, and the plateau the profile is climbing toward.
-///
-/// **Alpha-weighted, deliberately.** The geometric ceiling is a razor plane by construction —
-/// every flake is born at local `z = +30` ([`super::pool::spawn_particle`]) — so a raw count *always* reports a
-/// hard edge and can never tell the two clients apart. What the eye sees is softened by the 1 s
-/// linear fade-in (`alpha = clamp01(t − f1)`, `snowpoint.bls`), and that fade is
-/// the only thing standing between a flat spawn plane and a visible cut. So the weight is the alpha
-/// the renderer actually emits, and the profile reads the way the look does: a soft edge climbs to
-/// the plateau over several steps, a hard one reaches it in the first.
-///
-/// `fade_in` is the kind's fade-in duration in seconds; pass `0.0` for a kind that has none (rain's
-/// streaks carry no vertex alpha), which weights every particle 1.
-///
-/// All densities are per **yard of height**, so the steps and the plateau are directly comparable.
+/// The vertical profile of a live field, top-down from its own ceiling, in alpha-weighted flakes
+/// per yard of height: it tells a faded top edge from a cut one. Alpha-weighted because every
+/// flake is born on the slab's plane, so a raw count always reads a cut; the eye sees the 1 s
+/// fade-in (`snowpoint.bls`). `fade_in` is 0 for a kind with no vertex alpha (rain).
 pub(super) struct Column {
-    /// The highest particle's height above the eye — the field's geometric ceiling.
+    /// The highest particle's height above the eye.
     pub(super) top: f32,
-    /// Alpha-weighted density per yard, in [`CENSUS_TOP_STEP`]-yd steps down from [`Column::top`].
+    /// Density per yard in [`CENSUS_TOP_STEP`]-yd steps down from [`Column::top`].
     pub(super) steps: [f32; CENSUS_TOP_BANDS],
-    /// Alpha-weighted density per yard through the eye band — what the steps climb toward.
+    /// Density per yard through the eye band, which the steps climb toward.
     pub(super) plateau: f32,
 }
 
-/// The measurement behind [`profile`], separated so tests read numbers instead of parsing prose.
+/// The measurement behind [`profile`].
 pub(super) fn column(drops: &[Drop], cam: Vec3, fade_in: f32) -> Option<Column> {
     let top = drops
         .iter()
@@ -168,9 +122,8 @@ mod tests {
     use super::*;
     use crate::weather::precip::{SNOW_FADE_IN, SNOW_VZ_BASE, SNOW_VZ_W};
 
-    /// A steady snow column: `n` flakes spread uniformly over the 40 yd from a ceiling at eye + 30
-    /// down to ground 10 below, each aged by how far it has already fallen at `vz`. This is the
-    /// shape a constant emission rate onto a flat spawn plane actually produces.
+    /// `n` flakes spread evenly from a ceiling at eye + 30 to ground 10 below, each aged by its
+    /// fall at `vz`: what a constant emission onto a flat spawn plane produces.
     fn steady_column(n: usize, vz: f32) -> Vec<Drop> {
         (0..n)
             .map(|i| {
@@ -186,21 +139,11 @@ mod tests {
             .collect()
     }
 
-    /// What the column profile has to be able to do is **tell a faded top edge from a cut one** —
-    /// it is the instrument for the director's "hard line" report, and an instrument that reads the
-    /// same either way would have closed that report on nothing.
-    ///
-    /// The geometric ceiling is a razor plane in both cases (every flake is born at local `z = +30`),
-    /// so the *only* thing that can soften it is the 1 s fade-in. Weighted by that fade, the top
-    /// step reads a quarter of the plateau and the profile climbs into it over the ≈3.9 yd a
-    /// grade-0.6 flake falls in its first second; with the fade switched off the identical field
-    /// reports its true cut — the first step already at the plateau.
+    /// The ceiling is a flat plane either way; only the 1 s fade-in can soften it.
     #[test]
     fn the_column_profile_separates_a_faded_edge_from_a_cut_one() {
-        // The director's wire grade 0.6 through the published knee (`0x67bcc8`,
-        // `max(0, (g − 0.25)·4/3)` = 0.4667). This is the BASE fall only, without
-        // `spawn_particle`'s `+w·rand()` spread — 3.63 yd/s against the live field's ~3.9 mean.
-        // One speed for every flake is what keeps the alpha profile analytic here.
+        // Wire grade 0.6 through the knee `max(0, (g − 0.25)·4/3)` (`0x67bcc8`), at the base
+        // fall speed only: one speed for every flake keeps the alpha profile analytic.
         let vz = SNOW_VZ_BASE + SNOW_VZ_W * ((0.6 - 0.25) * (4.0 / 3.0));
         let drops = steady_column(8000, vz);
 
@@ -214,7 +157,7 @@ mod tests {
         );
 
         let faded = column(&drops, Vec3::ZERO, SNOW_FADE_IN).expect("a populated field");
-        // Mean alpha over the top 2 yd is `1/vz` — a quarter of full at this grade.
+        // Mean alpha over the top 2 yd is `1/vz`, a quarter of full at this grade.
         let edge = faded.steps[0] / faded.plateau;
         assert!(
             (edge - 1.0 / vz).abs() < 0.05,

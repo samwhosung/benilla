@@ -1,60 +1,18 @@
-//! Water foam — the client's **`CWater0Ripple`** wade wake / standing ring / step-in splash,
-//! rebuilt as the reference's actual **record model** (supersedes the ribbon of 0240
-//! and the stamps of 0234).
+//! Water foam: the reference's `CWater0Ripple` wade wake, standing ring and step-in splash, as its
+//! pool records. A record holds a feet-anchored centre on the liquid surface, a heading, a start
+//! size, a growth rate, a lifetime and a peak alpha.
 //!
-//! Ground truth, twice over: byte-exact reverse engineering **and** two live GL traces
-//! of the reference reconstructed frame-by-frame (Northshire wade 2026-07-08 + standing-ring
-//! capture 2026-07-10; per-record texgen fits residual ≈ 0). The verified model:
+//! A record's geometry is built once, at emission, from the wet liquid cells under its final box,
+//! which clips foam at banks. Growth is texgen only: each frame the stencil maps `centre ± size(t)`
+//! to UV [0, 1] at the heading, clamped to its transparent border.
 //!
-//! - **A decal is a pool record, not a mesh idiom.** Per wading unit the client emits records into
-//!   a 128-slot pool (32 reserved for the active mover, 96 for everyone else — eviction only).
-//!   Each record: feet-anchored center (Z = the **liquid surface** height), heading, `size0`,
-//!   growth rate, lifetime, peak alpha, birth time.
-//! - **Geometry is built ONCE, at emission**, from the wet liquid-lattice cells overlapping the
-//!   record's *final* box (`size0 + growth·lifetime`) — which clips foam at banks. **Growth is
-//!   pure texgen**: each frame the texture maps the box `[center ± size(t)]` to UV `[0,1]`,
-//!   rotated to the heading; outside the box the stencil clamps to its transparent border (both
-//!   foam textures have alpha-0 edges; sampler CLAMP — measured; the 0240 "GL_REPEAT tiling" was
-//!   a misread). The shape *stretches* over a static patch as `size(t)` grows.
-//! - **Alpha** rises to the peak over `0.4·L`, decays to 0 over `0.6·L`; the record dies at `L`.
-//!   Vertex colour is flat white × that alpha; the **stencil's own near-black RGB is the
-//!   intensity** (the reference fragment is a full MODULATE — measured in its FFP GLSL:
-//!   `tex × diffuse` on RGB *and* A). Recolouring the stencil to white — 0234/0240's move — made
-//!   the foam ~20× too bright; that was the blown-out white wedge.
-//! - **Selection** (driver `0x5fa760`): translating (`MOVEMENTFLAGS & 0xf` — the avatar's real
-//!   flags; a velocity proxy for streamed units) → WAKE, V-apex **along** the movement vector;
-//!   turning in place (`& 0x30`) → full-size RING; standing → reduced RING (size ×0.6, growth
-//!   ×0.25, alpha ×0.8); plus a one-shot full RING on the wade-depth crossing (`0x6030c0`).
-//!   Emission gates on `depth < max(2·collisionHeight, 1.0)` — ≈4.06 yd for a human (decision
-//!   0489: surface SWIMMING sits well inside the gate at its ~1.52-yd rest depth, so a floating
-//!   or stroking swimmer keeps its ring/wake, matching the reference; only a real dive past
-//!   ~2 body heights silences it) — with a linear attenuation past half. One shared per-unit
-//!   cooldown cell paces both
-//!   kinds: rings every 400–450 ms, wakes one per ~0.625 yd of travel (the byte cadence laws —
-//!   the 0264 INTERIM constants are resolved).
+//! The driver (`0x5fa760`) emits a wake when translating, a ring when turning or standing, and a
+//! full ring on crossing the wade depth (`0x6030c0`).
 //!
-//! - **The patch sits ON the plane; its coplanar ties are settled in DEPTH, never by a lift**
-//!   (1807/1808). A decal's verts are the plane's own, so it ties with the water surface
-//!   everywhere and with the *terrain* along the shoreline, where the two cross. Lifting the patch
-//!   in world space wins that tie and also moves the geometry — and on a beach a vertical lift is a
-//!   horizontal overshoot: a decal `l` yards up keeps painting for `l / slope` yards past the
-//!   waterline, on dry sand (0.10 yd at the 29 % Stranglethorn beach the defect was reported on,
-//!   proportionally more on every flatter shore — measured with
-//!   `benilla-formats --example water_here`). **The reference agrees**: `0x68fd0f` arms a
-//!   depth-buffer bias and the foam vertices sit at the queried MCLQ height exactly, so there is no
-//!   geometric lift in the binary to be faithful to (the "−2048 GL units" this file cited for a
-//!   year is refuted; the real term is `footstepBias(0.125) × [0x810390]` = D3D `DEPTHBIAS −1/8192`).
-//!   Ours needs no settle at all, and that is worth stating rather than assuming (1811): the patch
-//!   is not a decal *over* the surface, it **is** the liquid mesh's own triangles — the same wet
-//!   cells, the same winding, through the same `clip_from_world` (`DECAL_WORLD_CLIP`) as a
-//!   mesh whose `Transform` is `IDENTITY` — so the depths agree exactly and `GreaterEqual` passes
-//!   the tie unaided. [`Rung::FOAM_RASTER`] stays as a few ULPs of insurance against a driver
-//!   rounding two pipelines differently; the **slope half is disarmed**, because its pull grows as
-//!   z² and the only thing it can reach is the skirt of wet-cell geometry lying over dry sand.
-//!
-//! The formulas + lifecycle math live in [`params`]; this half is the ECS: the emitter over the
-//! avatar + streamed units, the record pool, and one additive effect-stream draw per
-//! (chunk, category) with live records (fog OFF — the reference's verified foam render state).
+//! The patch is the liquid mesh's own triangles through the same `clip_from_world`, so the depth
+//! test settles its tie with the water; a lift would overshoot onto dry sand on a beach. The
+//! reference also lays foam at the MCLQ height, with only a depth bias (`0x68fd0f`):
+//! `0.125 × [0x810390]`, D3D `DEPTHBIAS` −1/8192.
 
 mod params;
 
@@ -79,41 +37,31 @@ use benilla_assets::{AssetSet, WorldAssets};
 use params::{foam_params, foam_uv, rand01, record_alpha, record_size, WadeState};
 use params::{wake_cooldown, RING_INTERVAL};
 
-/// The two foam stencils (render categories: 0 = ring, 1 = wake). Loaded RAW — the alpha carries
-/// the shape, the near-black RGB carries the intensity (never recolour; see module doc).
+/// The ring and wake stencils, loaded raw: the alpha is the shape and the near-black RGB the
+/// intensity, as the reference modulates both, so foam recoloured white is about 20× too bright.
 const RING_TEXTURE: &str = "xtextures/splash/splash.blp";
 const WAKE_TEXTURE: &str = "xtextures/splash/wake.blp";
 
-/// Pool geometry (VERIFIED `0x68f8b0`/`0x68f9f0`): 128 records; the active mover allocates from
-/// `[0, 32)`, everyone else from `[32, 128)` — an anti-eviction partition, nothing more.
+/// The record pool (`0x68f8b0`, `0x68f9f0`): the active mover allocates from `[0, 32)` and
+/// everyone else from `[32, 128)`, so others never evict its records.
 const POOL_SIZE: usize = 128;
 const SELF_SLOTS: usize = 32;
 
-/// Step-in/out one-shot depth threshold, as a fraction of the unit's collision height (VERIFIED
-/// `0x6030c0`: feet-Z vs `0.4 × collision height` from CMovement+0xb4, crossing latched either
-/// direction). A human's 2.031 yd fires it ~0.81 yd deep, a gnome's 1.15 at ~0.46 — the unit's own
-/// `h` since decision 0645, where it used to be a human's for everybody.
+/// The step-in and step-out one-shot depth as a fraction of the unit's own collision height
+/// (`0x6030c0`, CMovement+0xb4), latched either way: about 0.81 yd for a human.
 const ONESHOT_DEPTH_FRAC: f32 = 0.4;
 
-/// The emission depth gate: **2 × the unit's collision height** (≈4.06 yd for a human, ≈2.3 for a
-/// gnome), floored at 1.0 like the reference's `max(…, 1.0)`. The gate field
-/// `[unit+0x297]` is the dword-indexed `+0xa5c` = CMovement+0xb4 = **collision height**, not
-/// `UNIT_FIELD_BOUNDINGRADIUS`: reading it as the latter (`2 × UNIT_FIELD_BOUNDINGRADIUS` ≈ 0.78,
-/// clamped to a 1-yd gate) is what killed all foam the moment swim latched: the ~1.52-yd swim
-/// rest depth sat past the misread gate (
-/// the director's ref-check shows surface swimmers foaming, which the true 4-yd gate allows).
+/// The emission depth gate, `max(2 × collision height, 1.0)`: about 4.06 yd for a human, so a
+/// surface swimmer at its 1.52-yd rest depth still foams. The field, `[unit+0x297]`, is
+/// CMovement+0xb4, the collision height, not `UNIT_FIELD_BOUNDINGRADIUS`.
 const GATE_DEPTH_FRAC: f32 = 2.0;
 
-/// Horizontal speed (yd/s) above which a streamed unit counts as translating — the velocity proxy
-/// for the reference's `MOVEMENTFLAGS & 0xf` bit-test (the avatar uses its real flags). A small
-/// guard over extrapolation jitter.
+/// Speed (yd/s) past which a streamed unit counts as translating: its `MOVEMENTFLAGS & 0xf` proxy.
 const MOVE_EPSILON: f32 = 0.5;
-/// Yaw rate (rad/s) above which a non-translating streamed unit counts as turning in place
-/// (the `& 0x30` proxy).
+/// Yaw rate (rad/s) past which a still streamed unit counts as turning: its `& 0x30` proxy.
 const TURN_EPSILON: f32 = 0.35;
 
-/// One live foam decal — a `CWater0Ripple` pool record. Geometry is static (built at emission);
-/// per-frame size/alpha are derived from `born` + the params (`params.rs`).
+/// A `CWater0Ripple` pool record: static geometry, with size and alpha derived from `born`.
 struct FoamRecord {
     /// Feet position at emission, WoW XY.
     center: [f32; 2],
@@ -122,33 +70,29 @@ struct FoamRecord {
     size0: f32,
     /// yd/s.
     growth: f32,
-    /// s; death at `born + lifetime`.
+    /// Seconds; the record dies at `born + lifetime`.
     lifetime: f32,
-    /// Peak vertex alpha.
     peak: f32,
     born: f32,
     /// Render category: ring (`splash.blp`) vs wake (`wake.blp`).
     ring: bool,
-    /// Static patch triangles (Bevy space, surface-lifted), from the wet liquid cells overlapping
-    /// the final box. Empty patches never allocate a record.
+    /// Static triangles in Bevy space, on the surface, from the wet cells under the final box.
     verts: Vec<Vec3>,
-    /// The liquid chunk that hosted the emission — foam meshes group per chunk so the transparent
-    /// pass sorts them with their water (then `depth_bias` wins the coplanar tie).
+    /// The liquid chunk that hosted the emission; records draw grouped per chunk.
     chunk: Entity,
 }
 
-/// Per-unit emitter state: the shared cooldown cell (`unit+0xc78` — ONE cell for both kinds: a
-/// ring pulse delays a following wake and vice versa, faithful), the step-in latch, and motion
-/// history for the streamed-unit velocity/yaw proxies.
+/// Per-unit emitter state: the cooldown cell both kinds share (`unit+0xc78`), so a ring delays the
+/// next wake and vice versa; the step-in latch; the motion history for the proxies.
 struct UnitFoam {
     last_pos: Option<Vec3>,
     last_yaw: Option<f32>,
-    /// Absolute time the next emission is allowed (the shared tick cooldown).
+    /// Absolute time the next emission is allowed.
     ready: f32,
     /// Step-in latch: currently deeper than the one-shot threshold.
     wading: bool,
     rng: u32,
-    /// Fed this frame (drives retiring state for despawned units).
+    /// Fed this frame; an unfed unit's state retires.
     active: bool,
 }
 
@@ -165,8 +109,7 @@ impl UnitFoam {
     }
 }
 
-/// All foam state: the 128-slot record pool with its two allocation cursors, and the per-unit
-/// emitter states (the avatar keys [`Entity::PLACEHOLDER`] — it has no streamed entity of its own).
+/// The record pool, its cursors and the per-unit emitters; the avatar keys `Entity::PLACEHOLDER`.
 #[derive(Resource)]
 struct WaterFoam {
     pool: Vec<Option<FoamRecord>>,
@@ -186,36 +129,26 @@ impl Default for WaterFoam {
     }
 }
 
-/// Advance a partition cursor, returning the absolute pool slot to (over)write — the reference's
-/// oldest-in-partition eviction (VERIFIED: counters `0xc7f3b0` self / `0xc81d48` others).
+/// The next slot in a partition, its oldest record (counters `0xc7f3b0` self, `0xc81d48` others).
 fn alloc_slot(cursor: &mut usize, base: usize, len: usize) -> usize {
     let i = base + *cursor;
     *cursor = (*cursor + 1) % len;
     i
 }
 
-/// The two foam stencils (ring/wake), decoded raw at startup. The draws they feed carry the
-/// reference's **whole** foam render state (`0x68fae0`, folded back as 1808): additive; **fog
-/// off** (`0x68fcd0`/`0x68fcd2`/`0x68fcd7` — *not*
-/// `0x68fcc1`, which is the blend value's `mov edx,3` and was this file's citation until then);
-/// **depth-tested `LEQUAL`, depth-write off**; and a depth-buffer bias armed at `0x68fd0f`.
-/// Sorted on [`crate::sky_order::FOAM_BIAS`], a rung over the whole water band, because
-/// `0x68fae0` is `0x6816d0`'s tail-jump on both arms of the submersion branch — one call per
-/// frame, after **all** liquid has drained, with no sort key in it anywhere.
+/// The two foam stencils. Their draws carry the reference's foam render state (`0x68fae0`):
+/// additive, fog off, depth-tested `LEQUAL` without depth write, and a depth bias (`0x68fd0f`).
 #[derive(Resource)]
 struct FoamAssets {
     ring: Handle<Image>,
     wake: Handle<Image>,
 }
 
-/// The foam draw's sort rung — [`crate::sky_order::FOAM_BIAS`], whose doc carries the arithmetic.
-/// It is a **rung above the whole water band**, not an epsilon over one surface: the reference
-/// drains every liquid queue before it draws foam, so no water surface in the frame can come after
-/// it. (It rode `WATER_BIAS + 1.0` until B348, where the water chunk one lattice nearer the eye
-/// outsorted the foam patch by ~33 and painted over it.)
+/// A rung over the whole water band, not an epsilon over one surface: the reference draws foam
+/// once per frame, after all liquid (`0x6816d0` tail-jumps to `0x68fae0` on both branches).
 use crate::sky_order::FOAM_BIAS;
 
-/// Load the stencils raw (CLAMP, no mips — the reference's measured sampler state).
+/// Loads the stencils raw, clamped and without mips, the reference's sampler state.
 fn setup_water_fx(
     mut commands: Commands,
     world_assets: Option<ResMut<WorldAssets>>,
@@ -234,8 +167,7 @@ fn setup_water_fx(
     commands.insert_resource(FoamAssets { ring, wake });
 }
 
-/// Decode a foam stencil, keeping its authored RGBA verbatim (raw gamma bytes, the house
-/// invariant — the near-black RGB is the intensity). `None` (with a warning) if missing.
+/// Decodes a foam stencil with its authored RGBA verbatim, as raw gamma bytes.
 fn foam_image(
     world_assets: &mut WorldAssets,
     path: &str,
@@ -266,10 +198,8 @@ fn foam_image(
     Some(images.add(image))
 }
 
-/// Build a record's static patch: every wet liquid cell whose XY bounds overlap the final box, cut
-/// into the same two triangles the liquid surface draws, surface-lifted, in Bevy space; plus the
-/// hosting chunk (the one containing the center). `None` when the center has no hosting water or no
-/// wet cell overlaps (off the edge).
+/// A record's static patch: every wet cell overlapping the final box, cut into the liquid surface's
+/// own two triangles in Bevy space, and the chunk that contains the centre.
 fn build_patch(
     center: [f32; 2],
     final_size: f32,
@@ -314,15 +244,14 @@ fn build_patch(
     }
 }
 
-/// Classify + gate + emit for one unit this frame (the driver `0x5fa760`, once per unit per
-/// frame; emission paced by the unit's shared cooldown cell).
+/// The driver (`0x5fa760`) for one unit this frame: classify, gate and emit, paced by its cooldown.
 fn drive_unit(
     foam_state: &mut UnitFoam,
     alloc: &mut dyn FnMut(FoamRecord),
     pos: Vec3,
     state: WadeState,
     scale: f32,
-    // The unit's collision height (yd) — both depth lines below are fractions of it.
+    // The unit's collision height (yd), which both depth lines scale.
     h: f32,
     water: &Query<(Entity, &WaterChunkInfo, &FoamPatch)>,
     index: &WaterIndex,
@@ -331,13 +260,9 @@ fn drive_unit(
     let gate = (GATE_DEPTH_FRAC * h).max(1.0);
     foam_state.active = true;
     let wow = bevy_to_wow(pos);
-    // The surface height under the unit, from the wet cell it stands on — not the chunk's box and
-    // not the chunk's highest vertex, which on a sloped river put the wade depth ~2 yd out.
-    // Through [`WaterIndex`], not the full chunk walk: this line used to be a
-    // linear scan of every loaded surface (~2.2k at a city pin) PER UNIT PER FRAME — exactly the
-    // per-consumer shape `liquid/spatial.rs`'s module doc warns detonates; a dry-land unit now
-    // costs one hash miss. A dead index entry self-filters at `water.get` (the index contract),
-    // and overlapping surfaces were already first-match-in-arbitrary-order before this.
+    // The surface height from the wet cell underfoot: a chunk's box or top vertex puts a sloped
+    // river's wade depth 2 yd out. Through the index, so a dry unit costs one hash miss; a dead
+    // entry fails `water.get`, and overlapping surfaces take the first match.
     let Some(surface) = index.over(wow[0], wow[1]).iter().find_map(|&e| {
         let (_, info, _) = water.get(e).ok()?;
         info.surface_z_at(wow[0], wow[1])
@@ -347,9 +272,8 @@ fn drive_unit(
     };
     let depth = surface - wow[2];
 
-    // Step-in/out one-shot: fires once on crossing the wade depth in EITHER direction
-    // (`0x6030c0`, latched at `[+0x269]` — VERIFIED; the driver's mode-0xC9 call also clears the
-    // shared cooldown).
+    // The one-shot fires on crossing the wade depth either way (`0x6030c0`, latch `[+0x269]`);
+    // the driver's mode-0xC9 call also clears the cooldown.
     let wading_now = depth > ONESHOT_DEPTH_FRAC * h;
     let oneshot = wading_now != foam_state.wading;
     foam_state.wading = wading_now;
@@ -366,10 +290,7 @@ fn drive_unit(
     };
     let final_size = p.size0 + p.growth * p.lifetime;
     let center = [wow[0], wow[1]];
-    // Candidates for the patch box only — resolved here, on the EMISSION path (past the depth
-    // gate and the cooldown), never on the every-frame classify above. `over_box` unions the
-    // 1–4 cells a final-size box touches, so the set `build_patch` filters with `overlaps` is
-    // the same one the full walk offered it.
+    // Patch candidates resolve only here, past the gate and the cooldown, over the final box.
     let candidates: Vec<_> = index
         .over_box(
             [center[0] - final_size, center[1] - final_size],
@@ -392,8 +313,8 @@ fn drive_unit(
             chunk,
         });
     }
-    // The shared cooldown cell: the one-shot resets it; a ring pulses on the 400+U[0,50) ms law;
-    // a wake re-arms on the distance law (one decal per ~0.625 yd of travel).
+    // The shared cooldown: the one-shot resets it, a ring re-arms in 400 + U[0, 50) ms, and a
+    // wake after about 0.625 yd of travel.
     let mut uni = |a: f32, b: f32| a + (b - a) * rand01(&mut foam_state.rng);
     foam_state.ready = if oneshot {
         now
@@ -408,8 +329,7 @@ fn drive_unit(
     };
 }
 
-/// Per frame: run the driver for the avatar (its real movement flags — the reference's own
-/// selection bits) and for every streamed unit (the velocity/yaw proxy), emitting pool records.
+/// Runs the driver for the avatar on its movement flags, and for streamed units on the proxies.
 fn emit_water_foam(
     time: Res<Time>,
     materials: Option<Res<FoamAssets>>,
@@ -431,7 +351,6 @@ fn emit_water_foam(
     }
 
     if !water.is_empty() {
-        // The avatar: byte-faithful selection off our own streamed movement flags.
         if let Some(body) = viewer.at {
             let uf = foam
                 .units
@@ -441,8 +360,7 @@ fn emit_water_foam(
             let vel = prev.map_or(Vec3::ZERO, |p| (body - p) / dt);
             let w = bevy_to_wow(vel);
             let speed = (w[0] * w[0] + w[1] * w[1]).sqrt();
-            // Byte-faithful selection off our own streamed movement flags (the CWater0Ripple
-            // driver `0x5fa760`); the masks live on `Viewer`, next to the field they read.
+            // Selection off our own movement flags, as `0x5fa760` does; the masks live on `Viewer`.
             let state = if viewer.translating() {
                 WadeState::Translating {
                     speed,
@@ -468,7 +386,7 @@ fn emit_water_foam(
             drive_unit(uf, &mut alloc, body, state, scale, h, &water, &index, now);
         }
 
-        // Streamed units (the avatar's own wire ghost is excluded via `Without<SelfPlayer>`).
+        // Streamed units; `Without<ViewerUnit>` excludes the avatar's own wire ghost.
         for (entity, transform, unit) in &units {
             if !unit.wades {
                 continue;
@@ -526,11 +444,8 @@ fn emit_water_foam(
     foam.units.retain(|_, uf| uf.active);
 }
 
-/// Per frame (PostUpdate, after the stream clear): age the pool, drop dead records, and push
-/// one effect-stream draw per (chunk, category) with live records — positions static, UV = the
-/// texgen at `size(t)`, colour = white × the alpha ramp (the stencil's near-black RGB carries
-/// the intensity through the texture product). Sorted at the group's vert centroid + the water
-/// tie-break bias; a chunk that streamed out lets its records age out silently.
+/// Ages the pool and pushes one additive draw per (chunk, category) with live records: static
+/// positions, the texgen at `size(t)` and white times the alpha ramp.
 fn push_water_foam(
     time: Res<Time>,
     assets: Option<Res<FoamAssets>>,
@@ -549,7 +464,7 @@ fn push_water_foam(
         }
     }
 
-    // Group record indices per (chunk, category) — each group is one contiguous draw.
+    // One contiguous draw per (chunk, category).
     let mut groups: HashMap<(Entity, bool), Vec<usize>> = HashMap::default();
     for (i, rec) in foam.pool.iter().enumerate() {
         let Some(rec) = rec else { continue };
@@ -590,28 +505,19 @@ fn push_water_foam(
                     assets.wake.id()
                 },
                 blend: EffectBlend::Add,
-                // The reference's foam render sets FOG off (VERIFIED `0x68fcd0`/`0x68fcd2`/
-                // `0x68fcd7`; the long-standing `0x68fcc1` citation was the blend setup — 1808).
+                // The reference's foam render sets fog off (`0x68fcd0`, `0x68fcd2`, `0x68fcd7`).
                 fog: EffectFog::Off,
-                // The reference's foam render is its own additive path (`0x68fae0`), not the
-                // M2 batch state producer — no GL_LIGHTING on it.
+                // The foam's own additive path (`0x68fae0`) sets no GL_LIGHTING.
                 lighting: crate::particles::buffer::EffectLighting::None,
                 anchor: centroid / n as f32,
                 bias: FOAM_BIAS,
-                // A few ULPs of constant and **no slope term** (`Rung::FOAM_RASTER*`, whose docs
-                // carry the bytes and the reasoning, 1811): the patch is the liquid mesh's own
-                // triangles, so `GreaterEqual` already passes the coplanar tie and the only thing
-                // a pull toward the eye can reach is the wet-lattice skirt over dry sand. The
-                // nonzero constant also selects `DECAL_WORLD_CLIP`, so these absolute verts skip
-                // the cam-relative rebase and go through the world meshes' own matrix —
-                // which is what makes the two depths agree in the first place.
+                // A few ULPs and no slope, as the patch already ties the water. The nonzero
+                // constant selects `DECAL_WORLD_CLIP`, the world meshes' matrix, so depths agree.
                 raster_bias: crate::sky_order::Rung::FOAM_RASTER,
                 raster_slope: crate::sky_order::Rung::FOAM_RASTER_SLOPE,
                 cam_relative: false,
-                // NEVER the chunk entity: a draw's probe identity must not own a registered
-                // mesh, or bevy's sorted-phase batcher claims the item and rewrites its
-                // `batch_range` (gpu_preprocessing.rs keys purely on `item.main_entity()`) —
-                // the Goldshire-teleport crash. The chunk still keys the record grouping above.
+                // Never the chunk entity: an entity that owns a registered mesh lets bevy's
+                // sorted-phase batcher claim the item and rewrite its `batch_range`, a crash.
                 no_depth_test: false,
                 main_entity: Entity::PLACEHOLDER,
                 light: None,
@@ -621,11 +527,7 @@ fn push_water_foam(
     }
 }
 
-/// Ordering handle for the foam emitter — the `waterfx` capture fixture
-/// (`crate::capture::waterfx`) drives its synthetic wading dummy **before** this runs, so the
-/// emitter reads the motion through its normal velocity/yaw proxies on the same frame. The
-/// fixture registers itself against this set rather than being chained in here: an instrument
-/// that the engine has to name is not an instrument, it is a dependency.
+/// The foam emitter's set: the app's `waterfx` capture fixture moves its wading dummy before it.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WaterFoamSet;
 
@@ -641,7 +543,7 @@ impl Plugin for WaterFxPlugin {
                     .in_set(WaterFoamSet)
                     .in_set(WorldStage::Present),
             )
-            // The stream push: PostUpdate after the frame's clear (emission ran in Update).
+            // The push runs after the frame's clear; emission ran in Update.
             .add_systems(PostUpdate, push_water_foam.after(begin_effect_frame));
     }
 }
@@ -650,10 +552,7 @@ impl Plugin for WaterFxPlugin {
 mod tests {
     use super::*;
 
-    /// The emitter reaches its water through [`WaterIndex`], end to end: a wading unit standing
-    /// in an indexed pool emits a record on its first frame (the step-in one-shot), and a unit
-    /// on dry land emits nothing. This is the regression fence for the index rewire — an empty
-    /// or stale index is a world with NO foam, which no helper-level test would catch.
+    /// An empty or stale index means no foam anywhere, which no helper-level test catches.
     #[test]
     fn the_emitter_finds_its_water_through_the_index() {
         let mut app = App::new();
@@ -692,8 +591,7 @@ mod tests {
             height: 2.0,
             bound: None,
         };
-        // Feet 1.5 yd under the surface — past the 0.4·h step-in line, so the one-shot ring
-        // fires on the first classified frame.
+        // Feet 1.5 yd under, past the 0.4·h step-in line: the one-shot fires on the first frame.
         app.world_mut().spawn((
             Transform::from_translation(wow_to_bevy([2.0, 2.0, 3.5])),
             unit(),
@@ -719,8 +617,6 @@ mod tests {
         );
     }
 
-    /// Pool partitioning: the self cursor wraps within [0, 32), others within [32, 128) —
-    /// eviction replaces the oldest of the same partition, never crosses it.
     #[test]
     fn pool_partitions_and_evicts() {
         let mut foam = WaterFoam::default();
@@ -736,13 +632,9 @@ mod tests {
         assert_eq!(foam.other_cursor, 5);
     }
 
-    /// The patch builder: wet cells overlapping the final box make it in (surface-lifted), ones
-    /// outside stay out, and a dry position (no hosting chunk) yields no record.
     #[test]
     fn patch_clips_to_wet_cells() {
-        // A 3×3-vertex grid over `[0,10]²` — 4 cells of 5 yd. Only the near (0,0) cell is wet, so
-        // the far half of the box is dry ground the patch must not cover. The grid rides the info
-        // now (the swim query needs the same cells); `FoamPatch` is just the marker.
+        // Four 5-yd cells over `[0,10]²`; only (0,0) is wet, so the box's far half is dry ground.
         let mut positions = Vec::new();
         for j in 0..3 {
             for i in 0..3 {
@@ -761,8 +653,7 @@ mod tests {
         let (verts, _) = build_patch([2.0, 2.0], 1.5, &chunks).unwrap();
         assert_eq!(verts.len(), 6, "only the one wet cell overlaps");
         let wow = bevy_to_wow(verts[0]);
-        // ON the plane, to the bit — the coplanar tie is the rasterizer's, and a geometric lift
-        // here is a horizontal overshoot onto dry ground at every shoreline.
+        // On the plane: a lift would overshoot onto dry ground at every shoreline.
         assert!(
             (wow[2] - 5.0).abs() < 1e-4,
             "the patch sits exactly on the liquid surface, unlifted"

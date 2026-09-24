@@ -1,25 +1,7 @@
-//! **[`WorldCensus`] — what the engine drew this frame, published as a fact.**
-//!
-//! Every number an instrument wants about a rendered frame — how many submeshes exist, how many
-//! survived to `ViewVisibility`, which subsystem each belongs to, what the exterior-scene gate did,
-//! how many emitters are alive, what the asset caches are holding, what got rewritten since the
-//! last frame — is a fact the *renderer* owns. Before this module the probes read it by querying
-//! the renderer's own components and resources directly, and that one file
-//! (`capture/probes/live_fps.rs`) named nine engine internals nobody else outside the engine
-//! needed: four material aliases, the two exterior-cull types, the two portal types, and the
-//! camera's interior claim. Decision 1164 sorts all nine into CLOSE with the same remedy —
-//! *publish the census, not the components* — and this is that census.
-//!
-//! It is one read-only [`SystemParam`] and one snapshot type. An instrument adds the param, calls
-//! [`WorldCensus::take`] on the frame it cares about, and formats the snapshot however its own
-//! output contract wants. **No `println!` lives here**: the line shapes (`VIS_CENSUS`,
-//! `MAT_CHURN`, `ASSET_DUMP`) are the probes' greppable contract, not the engine's, and an engine
-//! that formats its callers' output has the boundary backwards.
-//!
-//! The one part that is opt-in is the churn window: counting `AssetEvent::Modified` per asset type
-//! costs a `MessageReader` per type per frame, so [`WorldCensus::churn_counters`] installs them
-//! and an ordinary run carries none. **Which** types are counted is engine knowledge (it is the
-//! engine's material set); **whether** to count is the instrument's call.
+//! [`WorldCensus`]: what the engine drew this frame, as plain data for instruments. An instrument
+//! calls [`WorldCensus::take`] on the frame it wants and formats the report itself; the line
+//! shapes (`VIS_CENSUS`, `MAT_CHURN`, `ASSET_DUMP`) belong to the probes. The churn window is
+//! opt-in, since [`WorldCensus::churn_counters`] costs a `MessageReader` per asset type per frame.
 
 use std::collections::HashMap;
 
@@ -35,31 +17,19 @@ use crate::particles::ParticleEmitter;
 use crate::wmo_portal::{CameraInteriorClaim, ExteriorWindows, WmoGroupVis};
 use benilla_assets::materials::WowModelMaterial;
 
-/// A read-only view of the engine's drawn state — the whole of it, as one system parameter.
-///
-/// Deliberately one param and not eight: `drive_live_fps` sits at Bevy's 16-param ceiling, and
-/// every instrument that wants any of this wants most of it, taken from the *same frame*. Two
-/// instruments each assembling their own half is how the two disagree.
+/// A read-only view of the engine's drawn state as one system parameter, so an instrument at
+/// Bevy's 16-parameter ceiling can take all of it from the same frame.
 #[derive(SystemParam)]
 pub struct WorldCensus<'w, 's> {
-    /// Every spawned model submesh, with the facts that make a visible one accountable.
     parts: Query<'w, 's, CensusData>,
     emitters: Query<'w, 's, &'static ParticleEmitter>,
-    /// The placement registry, for the duplicate census (`orphan_parts=`): a placed part alive
-    /// that no registered placement owns. Optional for a viewer with no streamer.
     placements: Option<Res<'w, crate::terrain_stream::Placements>>,
     streamer: Option<Res<'w, crate::terrain_stream::TerrainStreamer>>,
-    /// The exterior-scene gate's two terms and what the cull actually did with
-    /// them. Optional so the census works in a viewer that has not installed the portal system.
     claim: Option<Res<'w, CameraInteriorClaim>>,
     windows: Option<Res<'w, ExteriorWindows>>,
     verdict: Option<Res<'w, ExteriorCullVerdict>>,
-    /// The visibility authority's own pose (see [`CensusReport::pvs_eye`]).
     cull_probe: Option<Res<'w, crate::wmo_portal::WmoCullProbe>>,
-    /// Which backdrop is drawing — the gradient dome, or a building's own MOSB sky
-    /// ([`crate::skybox`]). Optional for the same reason as the portal terms above.
     skybox: Option<Res<'w, crate::skybox::CameraSkybox>>,
-    /// The ribbon lane's own verdict — the third effect population, counted nowhere else.
     ribbons: Option<Res<'w, crate::ribbons::RibbonVerdict>>,
     mats: Res<'w, Assets<WowModelMaterial>>,
     meshes: Res<'w, Assets<Mesh>>,
@@ -68,99 +38,73 @@ pub struct WorldCensus<'w, 's> {
     uv_reg: Res<'w, UvAnimMaterials>,
     tint_reg: Res<'w, TintAnimMaterials>,
     server: Res<'w, AssetServer>,
-    /// Present only once [`WorldCensus::churn_counters`] has been installed.
     churn: Option<ResMut<'w, ChurnCensus>>,
 }
 
-/// One frame's census, in the order an instrument prints it. Plain data on purpose: an instrument
-/// holding this holds no engine component, no engine resource and no engine type it has to name.
+/// One frame's census as plain data, in the order an instrument prints it.
 #[derive(Default)]
 pub struct CensusReport {
-    /// Every model submesh that exists.
     pub submeshes: usize,
-    /// Placed (doodad/WMO) parts alive that no registered placement owns — the duplicate
-    /// census. Zero in a healthy world; a doubled prop is exactly one of these per part.
+    /// Placed doodad and WMO parts that no registered placement owns: zero in a healthy world, one
+    /// per part of a doubled prop.
     pub orphan_parts: usize,
-    /// Parts whose `VisibilityClass` holds a duplicate entry — each is queued and drawn once
-    /// per entry (`model_render::park`'s dedup is the fix; this is the census that names a
-    /// regression).
+    /// Parts whose `VisibilityClass` lists a class twice; each is queued and drawn once per entry.
     pub stacked_parts: usize,
     /// The orphans by `(placement id, model label, parts)`, most parts first.
     pub orphans: Vec<(u32, String, usize)>,
     /// Resident tiles `(furnished, in window)`, off the streamer.
     pub tiles: Option<(usize, usize)>,
-    /// …and how many of them the render world will actually draw (`ViewVisibility`).
+    /// Submeshes the render world will draw (`ViewVisibility`).
     pub drawn: usize,
-    /// Visible submeshes per model subsystem — `(column name, visible, of-those-gated)` — in a
-    /// fixed column order, because a census whose columns move cannot be diffed across runs.
+    /// Visible submeshes per model subsystem, `(column, visible, of those gated)`, in fixed order.
     pub kinds: [(&'static str, usize, usize); 4],
-    /// Resident submeshes per model subsystem, same column order as `kinds` — hidden or not.
-    /// A city's hidden twins (the retained pass draws them) ride every per-`Mesh3d` sweep
-    /// whether they draw or not, and this is the count that prices them.
+    /// Resident submeshes per model subsystem, hidden or not, in `kinds`' column order.
     pub resident: [usize; 4],
     /// Resident submeshes per `EntityPathWhy` label (the streamer's reason a batch is an
     /// entity), most first; `"-"` for the untagged (units, GameObjects, the app lane).
     pub why: Vec<(&'static str, usize)>,
-    /// Of every [`ExteriorScene`]-tagged submesh: how many exist, how many the cull wrote `Hidden`
-    /// on, how many were exempt (the camera's own placement), and how many carry
-    /// **no `Aabb`**, which is the cull's fail-open arm admitting them unconditionally.
+    /// Of the [`ExteriorScene`]-tagged submeshes: how many exist, are `Hidden`, are exempt (the
+    /// camera's own placement), and have no `Aabb`, which the cull admits unconditionally.
     pub tagged: usize,
     pub hidden: usize,
     pub exempt: usize,
     pub no_aabb: usize,
-    /// Tagged, bounded, not exempt, and yet not `Hidden` — the escapees, `(label, is a billboard
-    /// card, count)`, most first. A tagged object the cull left un-hidden is a defect by
-    /// construction, which is why this is not behind a flag.
+    /// Tagged, bounded, not exempt and still not `Hidden`, as `(label, is a billboard card,
+    /// count)`, most first: each one is a cull defect.
     pub escaped: Vec<(String, bool, usize)>,
-    /// Visible submeshes per distinct label, `(label, gated, count)` — ungated first (the leak
-    /// candidates), then most-drawn first. The "so WHICH trees are they?" list.
+    /// Visible submeshes per label, `(label, gated, count)`, ungated first, then most drawn.
     pub labels: Vec<(String, bool, usize)>,
     pub emitters: usize,
     pub active_emitters: usize,
     pub particles: usize,
-    /// Ribbon trails alive, and how many wrote a strip — `None` if the lane is not installed.
-    /// The `emitters`/`particles` pair above covers only the QUAD half of the effect stream;
-    /// trails are the other half and had no counter at all.
+    /// Ribbon trails alive and how many wrote a strip; `None` without the ribbon lane.
     pub ribbons: Option<(usize, usize)>,
-    /// The WMO group the camera claims — `"g07"`, or `"none"` over open world. `None` when the
-    /// portal system is not installed at all, which is a different statement from "not indoors".
+    /// The WMO group the camera claims (`"g07"`, or `"none"` outdoors); `None` without portals.
     pub room: Option<String>,
     /// `"unrestricted"`, or the number of window sub-frusta. `None` with [`CensusReport::room`].
     pub windows: Option<String>,
-    /// **The eye the portal authority computed [`Self::room`], [`Self::windows`] and every group's
-    /// PVS from.** Not necessarily the eye this frame draws from: the authority runs in `Update`
-    /// off the camera's propagated transform, so it is answering about wherever the camera was
-    /// when that transform was last written. Walking makes the difference a centimetre; a
-    /// teleport makes it the whole jump, and this is the column that says so.
+    /// The eye the portal authority computed [`Self::room`], [`Self::windows`] and the PVS from,
+    /// the last propagated camera transform; after a teleport it lags the drawn eye.
     pub pvs_eye: Option<Vec3>,
-    /// The backdrop actually drawing: `"dome"` for the `Light.dbc` gradient, else the WMO skybox
-    /// model a building's PVS asked for. `None` when the WMO-sky lane is not installed.
-    ///
-    /// Here because a skybox is the one draw that can repaint the whole frame while being
-    /// invisible to every other line in this report: its batches carry no [`ModelPart`], so they
-    /// are not in `submeshes`, not in `drawn`, not in `kinds`, and not in `labels`. Standing
-    /// outdoors in Tanaris with a purple sky and no purple *object* on any list is exactly the
-    /// state that has to be readable, and before this it was not.
+    /// The backdrop: `"dome"` for the `Light.dbc` gradient, else the WMO skybox model (whose
+    /// batches carry no [`ModelPart`], so no other count sees them); `None` without that lane.
     pub sky: Option<String>,
     /// What the exterior cull did this frame, `None` if it did not run.
     pub cull: Option<CullTerms>,
-    /// Resident asset counts — the leak meter. A tour probe reading the same counts as a fresh
-    /// control is what "torn down" means, machine-checked.
+    /// Resident asset counts: the leak meter.
     pub mats: usize,
-    /// Built materials parked by `model_render::lazy`, not yet assets — the variants nothing
-    /// visible has bound. `mats` counts realized ones only.
+    /// Built materials `model_render::lazy` parks until something visible binds them.
     pub mats_parked: usize,
     pub meshes: usize,
     pub images: usize,
     pub uv_anims: usize,
     pub tint_anims: usize,
-    /// `AssetEvent::Modified` totals per asset type since the window opened, sorted by type name.
+    /// `AssetEvent::Modified` totals per asset type since the window opened, sorted by label.
     /// Empty unless [`WorldCensus::churn_counters`] is installed.
     pub churn: Vec<(&'static str, usize)>,
 }
 
-/// [`ExteriorCullVerdict`] relayed as plain numbers — see that type for what each term means and
-/// why `tested` is the one no other instrument can see.
+/// [`ExteriorCullVerdict`] as plain numbers; that type documents each term.
 pub struct CullTerms {
     /// The window count it was given, or `"unrestricted"`.
     pub windows: String,
@@ -168,19 +112,16 @@ pub struct CullTerms {
     pub tested: usize,
     pub hidden: usize,
     pub unbounded: usize,
-    /// The body leg, kept apart from `tested`/`hidden` — see the verdict's own note for why summing
-    /// a two-dozen audience into a tens-of-thousands one erases it.
+    /// The body leg, counted apart from `tested` and `hidden`.
     pub bodies: usize,
     pub bodies_hidden: usize,
-    /// The liquid subset of `tested`/`hidden` — see the verdict's own note for why a few dozen
-    /// surfaces summed into tens of thousands of terrain cells is an invisible leg (1652).
+    /// The liquid subset of `tested` and `hidden`.
     pub liquid: usize,
     pub liquid_hidden: usize,
 }
 
 impl WorldCensus<'_, '_> {
-    /// Install the per-asset-type churn counters (in `First`, before anything can modify an
-    /// asset this frame). Off by default — see the module header for the split of who decides.
+    /// Installs the per-asset-type churn counters in `First`, before anything modifies an asset.
     pub fn churn_counters(app: &mut App) {
         app.init_resource::<ChurnCensus>();
         Self::count_churn::<bevy::image::Image>(app, "image");
@@ -196,29 +137,25 @@ impl WorldCensus<'_, '_> {
         Self::count_churn::<crate::clouds::CloudMaterial>(app, "cloud");
     }
 
-    /// Add one more asset type to the churn window under `label`. The engine counts its own
-    /// materials in [`WorldCensus::churn_counters`]; a host with materials of its own (the UI
-    /// pass, a tool's overlay) folds them in here rather than keeping a second, disagreeing
-    /// census. Call after `churn_counters`, which is what creates the tally.
+    /// Adds an asset type to the churn window under `label`, for a host's own materials; call it
+    /// after `churn_counters`, which creates the tally.
     pub fn count_churn<A: bevy::asset::Asset>(app: &mut App, label: &'static str) {
         app.add_systems(First, churn_counter::<A>(label));
     }
 
-    /// Open a fresh churn window. Warmup noise — streaming, shader warms — otherwise reads as a
-    /// steady-state ratchet, so the instrument calls this on the first frame it actually samples.
+    /// Opens a fresh churn window; call it on the first sampled frame so warm-up is not counted.
     pub fn restart_churn(&mut self) {
         if let Some(churn) = self.churn.as_mut() {
             churn.0.clear();
         }
     }
 
-    /// Snapshot this frame.
-    /// Live particles this instant — the one census number cheap enough to sample per frame
-    /// (a fold over the emitters, no part walk): a spell burst's signature on a tail frame.
+    /// Live particles now: a fold over the emitters, cheap enough to sample every frame.
     pub fn live_particles(&self) -> usize {
         self.emitters.iter().map(|p| p.live()).sum()
     }
 
+    /// Snapshot this frame.
     pub fn take(&self) -> CensusReport {
         let own_instance = self
             .claim
@@ -241,14 +178,9 @@ impl WorldCensus<'_, '_> {
             self.parts.iter()
         {
             submeshes += 1;
-            // A part whose `VisibilityClass` lists its mesh class more than once is queued
-            // that many times a frame — drawn stacked on itself (`model_render::park`).
             stacked_parts += usize::from(class.is_some_and(|c| c.len() > 1));
-            // The duplicate census: a doodad/WMO part is spawned by exactly one placement and
-            // recorded on it; one alive outside every placement's list outlived a respawn. The
-            // one population that lives outside the registry by design is the retained pass's
-            // fader EXILES (`static_gx::cull`): the feather-band respawns are
-            // recorded on their fader seed, not on the placement, and they name themselves.
+            // A placed part outside every placement's list outlived a respawn, except the retained
+            // pass's fader exiles (`static_gx::cull`), recorded on their fader seed instead.
             let exile = path_why.is_some_and(|w| w.0 == "exile");
             if let (Some(owned), Some(o), false) = (owned.as_ref(), object, exile) {
                 if matches!(o.kind, ModelKind::Doodad | ModelKind::Wmo) && !owned.contains(&entity)
@@ -260,9 +192,7 @@ impl WorldCensus<'_, '_> {
             *why.entry(path_why.map_or("-", |w| w.0)).or_default() += 1;
             drawn += usize::from(vis.get());
             if gated {
-                // The camera's own placement is not exterior scene to itself and
-                // is *supposed* to draw; without that subtraction the escapee list is all
-                // room-you-are-in furniture and says nothing.
+                // The camera's own placement is supposed to draw, so it is not an escapee.
                 let exempt = group.is_some_and(|g| Some(g.instance) == own_instance);
                 tagged += 1;
                 hidden += usize::from(*want == Visibility::Hidden);
@@ -373,10 +303,8 @@ impl WorldCensus<'_, '_> {
         }
     }
 
-    /// Every resident image/mesh/model by asset-server path, sorted, plus the counts that have no
-    /// path (runtime-built) in that same order. Diffing a tour probe's inventory against a fresh
-    /// control's names exactly which files a teardown left behind — the leak meter's magnifying
-    /// glass, and the one census answer expensive enough to ask for separately.
+    /// Every resident image, mesh and model by asset path, sorted, plus the unpathed
+    /// (runtime-built) counts in that order; apart from [`Self::take`] because it is expensive.
     pub fn resident_assets(&self) -> (Vec<String>, [usize; 3]) {
         let mut lines: Vec<String> = Vec::new();
         let mut unpathed = [0usize; 3];
@@ -407,7 +335,6 @@ impl WorldCensus<'_, '_> {
     }
 }
 
-/// What the census reads off every model submesh — the query shape.
 type CensusData = (
     Entity,
     &'static ViewVisibility,
@@ -422,11 +349,11 @@ type CensusData = (
     Option<&'static bevy::camera::visibility::VisibilityClass>,
 );
 
-/// The census column order, pinned: entry `i` names [`kind_index`]'s slot `i`. Column positions
-/// in a line other tools diff, so they move for nobody.
+/// The census column order: entry `i` names [`kind_index`]'s slot `i`. Other tools diff these
+/// columns, so the order is fixed.
 const KIND_COLUMNS: [&str; 4] = ["doodad", "wmo", "creature", "gameobject"];
 
-/// [`ModelKind`] has a private index; the census pins its own — see [`KIND_COLUMNS`].
+/// The census's own index for a [`ModelKind`], pinned to [`KIND_COLUMNS`].
 fn kind_index(kind: ModelKind) -> usize {
     match kind {
         ModelKind::Doodad => 0,
@@ -436,15 +363,13 @@ fn kind_index(kind: ModelKind) -> usize {
     }
 }
 
-/// `AssetEvent::Modified` counts per asset type across a window. A modified material re-creates
-/// its uniform buffers + bind group that frame (the Metal non-bindless path), and a modified
-/// image/mesh re-uploads — the teleport leak's CPU engine was exactly a per-frame ratchet of this
-/// shape, so the floor hunt names the types instead of guessing suspects one at a time.
+/// `AssetEvent::Modified` counts per asset type across a window: a modified material rebuilds its
+/// uniform buffers and bind group that frame (non-bindless), a modified image or mesh re-uploads.
 #[derive(Resource, Default)]
 struct ChurnCensus(std::collections::BTreeMap<&'static str, usize>);
 
-/// One census counter for asset type `A`, folding this frame's `Modified` events in under `label`
-/// (a short stable name — the `type_name` of an `ExtendedMaterial` alias is unreadable).
+/// Counts asset type `A`'s `Modified` events under `label`, a short stable name (an
+/// `ExtendedMaterial` alias's `type_name` is unreadable).
 fn churn_counter<A: bevy::asset::Asset>(
     label: &'static str,
 ) -> impl FnMut(MessageReader<bevy::asset::AssetEvent<A>>, ResMut<ChurnCensus>) {

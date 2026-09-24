@@ -1,20 +1,10 @@
-//! **3-D MODEL particles**: an emitter whose
-//! record names a geometry model renders each live particle as a tiny 3-D instance of that
-//! model — quaternion-oriented, tumbling, over-life scaled and tinted — instead of a billboard
-//! quad (Whirlwind's blades, Cone of Cold's shards, the cyclones, Death Wish). The sim
-//! integrates position + spin ([`super::sim`]); this module owns the DRAW side: a per-emitter
-//! pool of instance entities grown on demand, positioned after the sim each frame.
-//!
-//! Draw law (`0x7b4840` → `0x7b4510`): per particle, the instance transform is the particle
-//! quaternion (× the emitter frame) at the particle position, scaled by the over-life SIZE
-//! ramp; over-life COLOR rides a per-instance tint clone (`WowModelExt::tint`, the fx-tint
-//! mechanism) and over-life ALPHA rides the per-instance `MeshTag` alpha field. The
-//! reference's optional per-emitter depth sort (rt+0x1ac & 0x10) is folded into the pool-order
-//! simplification named in. The reference draws each instance through its
-//! generic model-render pass; our instances are the geometry model's submeshes with their own
-//! materials — mini-model *animation* (a rigged geometry model) is not run: every spell-corpus
-//! geometry target probed is a static mesh, and a rigged one would surface as a visibly stiff
-//! instance, the recorded trigger to extend this.
+//! Model particles: an emitter whose record names a geometry model draws each particle as a small
+//! instance of it (Whirlwind's blades), placed after the sim each frame (`0x7b4840` →
+//! `0x7b4510`): its quaternion at its position, scaled by over-life size, colour in a per-instance
+//! tint, alpha in the `MeshTag`. Each blended instance sorts by its own depth in the transparent
+//! pass; the reference visits an emitter's particles back to front only under `rt+0x1ac & 0x10`,
+//! and the order its model pass draws them in is untraced. Rigged models are not animated: every
+//! spell geometry model probed is static.
 
 use benilla_assets::coords::wow_to_bevy;
 use benilla_assets::M2Model;
@@ -27,20 +17,17 @@ use benilla_assets::materials::WowModelMaterial;
 
 use super::{ChildDraw, ParticleEmitter};
 
-/// A hard cap on one emitter's instance pool — far above any authored steady state
-/// (rate ≤ ~25/s × life ≤ 3 s across the corpus); particles past it simply aren't drawn.
+/// Cap on one emitter's instances (the corpus stays under ~25/s × 3 s); the rest don't draw.
 const MAX_INSTANCES: usize = 128;
 
-/// One pooled instance slot: the geometry model's submeshes as world-root [`ChildDraw`]
-/// entities (flat — no hierarchy, so the sim-frame transform write is exact), each with its
-/// per-instance tint-clone material.
+/// One pooled instance: the model's submeshes as flat world-root [`ChildDraw`] entities, so the
+/// direct transform write is exact, each with its own tint material.
 pub(super) struct ModelInstance {
     pub(super) meshes: Vec<(Entity, Handle<WowModelMaterial>)>,
 }
 
-/// Grow + position each model-particle emitter's instance pool from its freshly-simulated
-/// pool. Runs after [`super::sim::simulate_particles`] in the same set, so instances land on
-/// this frame's positions (the anchored-exactness rule).
+/// Grow and place each model-particle emitter's instances; runs after
+/// [`super::sim::simulate_particles`], so they land on this frame's positions.
 pub(super) fn update_model_particles(
     mut commands: Commands,
     models: Res<Assets<M2Model>>,
@@ -63,23 +50,16 @@ pub(super) fn update_model_particles(
         let Some(geometry) = emitter.geometry.clone() else {
             continue;
         };
-        // A GATED emitter's pool is frozen and the sim already edge-hid its instances:
-        // running this body anyway re-showed them the same frame —
-        // `Visibility::Inherited` below undid the hide, so a frozen emitter's shards drew
-        // forever — and kept every instance's Transform/GlobalTransform/MeshTag/material a
-        // per-frame write. The sim clears `gated` before this system in the same chained set,
-        // so a thawed pool resumes the frame it wakes.
+        // Gated: the sim hid these instances, and `Visibility::Inherited` below would re-show
+        // them. The sim clears `gated` first, so a thawed pool resumes the frame it wakes.
         if emitter.gated {
             continue;
         }
         let Some(model) = models.get(&geometry) else {
-            continue; // still loading — particles simulate meanwhile, nothing draws yet
+            continue; // still loading: particles simulate meanwhile, nothing draws yet
         };
-        // The geometry model's render forms, built NOW rather than paced: a
-        // spell's visual must not lag its cast, and a particle-geometry model is a handful of
-        // tiny batches — the booth-lane exception, not the streaming rule.
+        // Built now, not paced: a spell's visual must not lag its cast, and these models are tiny.
         forms.ensure_now_static(&geometry, &model.submeshes, &mut mesh_assets);
-        // Grow the pool to the live count (bounded).
         let rung = emitter.owner_rung();
         let want = emitter.particles.len().min(MAX_INSTANCES);
         while emitter.model_instances.len() < want {
@@ -89,8 +69,7 @@ pub(super) fn update_model_particles(
                 .iter()
                 .enumerate()
                 .map(|(pi, sub)| {
-                    // A fresh (never-deduped) material per instance — its `tint` is mutated
-                    // every frame by the over-life ramp, so instances must not share.
+                    // A fresh material per instance: the over-life ramp writes its tint.
                     let mut throwaway = MaterialCache::default();
                     let material = model_material(
                         &mut throwaway,
@@ -107,42 +86,23 @@ pub(super) fn update_model_particles(
                         sub.no_depth_test,
                         sub.fog_policy,
                         sub.env_map, // texture_unit_lookup > 2 ⇒ the runtime generates this batch's UVs
-                        // The same LIT lane as every entity M2 (`0x69e280`).
+                        // Lit like every entity M2 (`0x69e280`).
                         ShadeSel::Lit,
                         0,
                         None,
-                        None, // over-life tint owns the channel — never the authored M2Color loop
+                        None, // the over-life tint owns the colour, never the M2Color loop
                         None,
                         None,
                         false,
                         false, // an effect model is never a skybox
                         &light.0,
-                        None, // a shard's material is shared by the whole emitter
+                        None, // no animated loop, so no placement key
                     );
-                    // Realized at once: the over-life ramp writes this material through
-                    // `get_mut` every frame, from the first (`model_render::lazy`).
+                    // Realized now: the over-life ramp writes it every frame.
                     crate::model_render::lazy::realize(&mut materials, material.id());
-                    // The owner-last draw-order rung, stamped on after the fact: a 3-D model
-                    // particle is one of its owner's emitters exactly like the quad cloud beside
-                    // it, and the reference draws them in one bracket after that model's batches
-                    // (`ParticleEmitter::owner_rung`). It goes here rather than through
-                    // `model_material`, which is the shared M2-batch recipe: every batch in the
-                    // world would have to carry a particle-only argument and a cache-key field to
-                    // move one number. These instance materials are per-instance throwaways
-                    // (their `tint` is already mutated every frame), so nothing else sees it.
-                    //
-                    // BUCKETED, and transparent-pass only. On a material the rung
-                    // is also a *pipeline-key axis* (bevy folds `depth_bias as i32` into the key
-                    // — 0837's law), and 32 integer rungs × every blend state is an open key
-                    // space no warm pass can pre-compile: each first-seen combination was a
-                    // synchronous render-thread pipeline compile mid-spell-cast.
-                    // `owner_last_rung_bucket` snaps UP (0721's blessed direction) to the closed
-                    // set `pipe_warm`'s menagerie compiles behind the loading cover; the bucket
-                    // is ≥ the exact rung, so a shard never sorts under its sibling quad cloud
-                    // (which keeps the exact value — its rung is queue-side, never a material).
-                    // Opaque/mask shard batches take no rung at all: sort bias is a
-                    // transparent-pass concept, and on an opaque material it would only mint an
-                    // unwarmable pipeline variant.
+                    // The owner-last rung (`ParticleEmitter::owner_rung`), bucketed up: bevy keys
+                    // pipelines on `depth_bias`, only buckets are pre-warmed, and a bucket never
+                    // sorts a shard under its quad cloud. Opaque batches take no sort bias.
                     if let Some(m) = materials.get_mut(&material) {
                         if m.base.alpha_mode == AlphaMode::Blend {
                             m.base.depth_bias = benilla_formats::owner_last_rung_bucket(rung);
@@ -169,7 +129,6 @@ pub(super) fn update_model_particles(
                 .collect();
             emitter.model_instances.push(ModelInstance { meshes });
         }
-        // Position live slots; hide the rest.
         let anchored = !emitter.def.model_space();
         let inst_scale = if emitter.def.scale_size_by_instance() {
             emitter.placement.scale.x.max(1e-4)
@@ -188,16 +147,14 @@ pub(super) fn update_model_particles(
                 continue;
             };
             let u = (p.age / p.life).clamp(0.0, 1.0);
-            // 3-D model particles carry no texture atlas — only colour and size reach them.
+            // No texture atlas here: only colour and size reach a model particle.
             let ol = emitter.def.over_life.sample(u);
             let (mut rgba, size) = (ol.color, ol.size);
-            // The owning model's render alpha, same fold as the quad lane — here
-            // into the instance's `MeshTag` alpha, which is where a 3-D particle carries it.
+            // The owning model's render alpha, into the instance's `MeshTag` alpha.
             rgba[3] *= emitter.render_alpha();
             let tf = if anchored {
                 Transform {
-                    // World mode: the instance transform IS the stored one —
-                    // through the ride frame, which is the identity off a transport (1591).
+                    // World mode: through the ride frame (identity off a transport).
                     translation: emitter.ride.to_world(p.pos),
                     rotation: emitter.ride.rotation() * p.quat,
                     scale: Vec3::splat(size * inst_scale),

@@ -1,36 +1,9 @@
-//! The collapsed rig's two composition passes — what transform propagation and
-//! the billboard joint pass used to do through ~59 k bone entities, done on the [`RigPose`]
-//! arrays instead.
-//!
-//! **Model pass** ([`compose_rig_models`], pre-propagation): a pose-dirty rig forward-folds its
-//! `locals` into model-space affines — **including the `flags & 0x7` parent-matrix arm**, which
-//! needs nothing but model space (`RigPose::compose`) — and re-seats its consumer **anchors**
-//! (children of the rig's `joints_root`) from them, so ordinary propagation carries every consumer
-//! subtree (held items, nested effect rigs, the mount seat) at this frame's pose, exactly as the
-//! joint hierarchy did. Runs after [`PosePost`] (body twist, global sequences — the writers that
-//! follow the evaluator).
-//!
-//! **World pass** ([`finalize_rig_worlds`], post-propagation, inside
-//! [`crate::billboard::BillboardPlace`]): per rig needing it — pose-dirty, `joints_root` moved,
-//! or camera-faced — compose the chain `world_from_model × local…` **with the root's translation
-//! zeroed** (the whole chain runs rig-relative, because composing it at the map's
-//! ~9.5 k-yard coordinates spent an f32 ULP — ~1 mm — per matmul, freshly every frame), apply the
-//! byte-law bone replacements (`billboard_joint_palette`'s math verbatim: the arm again, in its
-//! world-space form, then billboard kinds take the camera basis, and descendants chain onto the
-//! replaced frames), write the palette rows (`frame × inverse_bindpose`) beside the
-//! rig's world origin (which the vertex stage adds back camera-relative), and re-seat the
-//! anchors sitting on replaced subtrees — including the same rigid-child re-walk and the same
-//! nested-rig do-not-enter rule as the entity pass. A re-seated subtree that carries another
-//! rig's model frame (the mounted rider's seat anchor, [`RigFrame`]) cascades: that rig
-//! re-finalizes in the same pass, so its palette never lags its seat.
-//!
-//! The arm appearing in BOTH passes is not a double application — each pass builds its own chain
-//! once, in its own space, and the two agree (see `RigPose::compose`). What it is NOT allowed to
-//! be is world-pass-only: the anchors are seated from the model pass, so an arm that ran only
-//! afterwards left every attached subtree riding the un-armed frame.
-//!
-//! A parked, stationary rig runs neither pass and uploads zero bytes (decision 0448's park
-//! observables carry over unchanged).
+//! The collapsed rig's two passes over the [`RigPose`] arrays. The model pass
+//! ([`compose_rig_models`]) folds locals into model space, the `flags & 0x7` arm included, and
+//! re-seats the anchors before propagation; the world pass ([`finalize_rig_worlds`]) composes
+//! rig-relative with the billboard camera basis, writes the palette rows and re-seats replaced
+//! subtrees. The arm runs in both passes, each on its own chain, so it is not applied twice; it
+//! must run in the model pass, since the anchors are seated from it.
 
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
@@ -41,23 +14,12 @@ use crate::view::WorldCamera;
 
 use super::{AnimParked, RigFrame, RigPose};
 
-/// The pose post-pass window: every writer of [`RigPose`] locals that runs after the evaluator
-/// (the body twist, the global-sequence channels) is a member; the model compose runs after the
-/// whole set. Configured after [`bevy::app::AnimationSystems`], before transform propagation.
+/// The pose post-pass window: the locals writers after the evaluator, before the model compose.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PosePost;
 
-/// Pre-propagation: fold each pose-dirty rig's locals into model-space affines and re-seat its
-/// anchors' local `Transform`s, so this frame's propagation places every consumer subtree at
-/// this frame's pose. `pose_dirty` stays raised — the world pass consumes and clears it.
-///
-/// A PARKED rig skips even this: the doodad lane's hosts are born pose-dirty and
-/// spend most of their residency parked with the flag still raised (the world pass, which clears
-/// it, also skips parked rigs), so an unfiltered pass re-composed every parked host's bind pose
-/// every frame. Nothing observable is lost — a parked rig's anchors were seated by its last
-/// composed frame (or by `RigPose::new`/`anchor_for` at bind pose), its consumers are out of the
-/// draw set by the same gate that parked it, and the wake drops the marker before this pass runs,
-/// so the first unparked frame composes the current pose before anything reads it.
+/// Fold each pose-dirty rig into model space and re-seat its anchors, leaving `pose_dirty` for
+/// the world pass. A parked rig is skipped; its wake unparks it before this runs.
 fn compose_rig_models(
     mut rigs: Query<&mut RigPose, Without<AnimParked>>,
     mut anchors: Query<&mut Transform>,
@@ -92,14 +54,9 @@ fn shift(g: GlobalTransform, origin: Vec3) -> GlobalTransform {
     GlobalTransform::from(a)
 }
 
-/// One rig's chain + which bones sit in a replaced subtree, composed **in the root's frame**: the
-/// caller passes `root_g` with its translation zeroed, so every frame out is rig-relative
-/// and the whole chain runs at rig-sized magnitudes. `root_g` is otherwise the
-/// rig's `joints_root` propagated world — the model's own root frame `[model+0xfc]`, which is both
-/// what the `flags & 0x7` arm rebuilds a parent matrix out of and, for a mounted rider, its seat
-/// anchor (`0x714389`). `cam` is the camera basis (`None` = no camera, so only the arm applies).
-/// The math mirrors `billboard_joint_palette` operation for operation — rewrite the parent matrix,
-/// compose the local, then face — so the collapsed lane is bit-compatible with the entity lane.
+/// One rig's chain and its replaced bones from `root_g`, the root frame `[model+0xfc]` (for a
+/// rider, its seat anchor, `0x714389`), passed translation-zeroed; mirrors
+/// `billboard_joint_palette`.
 fn rig_worlds(
     rig: &RigPose,
     root_g: GlobalTransform,
@@ -114,8 +71,7 @@ fn rig_worlds(
             Some(p) => worlds[p],
             None => root_g,
         };
-        // `flags & 0x7` first (`0x714961`): it changes the INPUT the billboard law is applied
-        // to, and the billboard switch below still runs.
+        // The arm first (`0x714961`): it rewrites the billboard's input.
         let mut g = match rig.arms[i] {
             Some(arm) => {
                 touched[i] = true;
@@ -145,12 +101,8 @@ fn rig_worlds(
     (worlds, touched)
 }
 
-/// Seed one collapsed rig's palette rows from its CURRENT composed pose — the doodad lane's
-/// lazy-promote edge (the 0863 wake): the slot is claimed mid-frame and the
-/// skinned mesh swaps in the same frame, so the rows must be written NOW or the first skinned
-/// frame renders zeroed (origin-collapsed) rows. No camera basis — a billboard bone seeds at its
-/// composed pose and the world pass re-faces it this same frame (the promoted host is unparked
-/// and `has_billboard` puts it in the refresh set).
+/// Seed a rig's rows from its composed pose when the doodad lane claims its slot mid-frame, as
+/// the skinned mesh swaps in that same frame.
 pub(crate) fn seed_rig_rows(
     rig: &RigPose,
     root_g: GlobalTransform,
@@ -164,23 +116,12 @@ pub(crate) fn seed_rig_rows(
     palettes.write_rig_worlds(skin, &worlds, ibp, origin);
 }
 
-/// Post-propagation (inside `BillboardPlace`, chained after the entity lane's
-/// `billboard_joint_palette` and before `face_billboards`): finalize every rig that needs it —
-/// palette rows + replaced-subtree anchor re-seats, with the seat-frame cascade.
-#[allow(clippy::type_complexity)] // billboard_joint_palette's shape
+/// The world pass: palette rows, anchor re-seats and the seat-frame cascade.
+#[allow(clippy::type_complexity)]
 pub fn finalize_rig_worlds(
     cam: Query<&GlobalTransform, With<WorldCamera>>,
-    // `Option<&RigSkin>`, not `&RigSkin`: the doodad lane's rigs hold their
-    // palette slot lazily (allocated at first wake, reaped under pressure), and a slot-less rig
-    // still needs this pass for two things — clearing `pose_dirty` (or the model pass re-composes
-    // it every frame for ever) and, when it authors billboard/arm bones, the camera-dependent
-    // anchor re-seat its cards and emitters ride. The palette write alone is skipped.
-    // `Has<RigRider>`: a rider owns its slot's rows from the OTHER end (the
-    // placement is composed in the HOST's rig frame, never from this absolute one), and decision
-    // 2281 gave that lane a posed arm, so an animated ranged prop arrives here with both a pose
-    // and a skin and must still not have its rows written twice from two different frames.
-    // Everything else this pass does for it — clearing `pose_dirty`, re-seating the anchors its
-    // emitters ride — is exactly what it needs.
+    // A slot-less doodad rig still needs `pose_dirty` cleared and its anchors re-seated; a
+    // `RigRider`'s rows are the rider lane's.
     mut rigs: Query<(
         Entity,
         &mut RigPose,
@@ -188,8 +129,7 @@ pub fn finalize_rig_worlds(
         Has<AnimParked>,
         Has<crate::rig_rider::RigRider>,
     )>,
-    // B0001: the `Changed` filter reads `GlobalTransform` ticks, which conflicts with the
-    // mutable frame query — a `ParamSet` sequences them (the refresh set is collected first).
+    // The `Changed` filter conflicts with the mutable query; the refresh set is collected first.
     mut worlds_params: ParamSet<(
         Query<(), Changed<GlobalTransform>>,
         Query<(&Transform, &mut GlobalTransform), Without<WorldCamera>>,
@@ -204,13 +144,8 @@ pub fn finalize_rig_worlds(
         .single()
         .ok()
         .map(|t| (*t.forward(), *t.right(), *t.up()));
-    // Which rigs refresh this frame: pose-dirty, model frame moved, or camera-faced — and never
-    // a parked one. The LOD gate ruled a parked rig un-viewable, so neither an
-    // idle's pose_dirty, a patrol's root motion, nor a billboard face can matter until the wake
-    // — which drops the marker before the same frame's pose evaluation, re-raising `pose_dirty`
-    // before this pass runs, so a woken rig's rows are current before anything draws them. (The
-    // world-space rows of a moving parked rig go stale on purpose — nothing reads them; at the
-    // LBRS pin the parked-but-patrolling re-writes were ~260 of the ~620 per-frame refreshes.)
+    // Refresh a rig that is pose-dirty, whose model frame moved or that billboards, never a parked
+    // one: its rows go stale on purpose, and the wake re-raises `pose_dirty` before this runs.
     let refresh: Vec<Entity> = {
         let roots_changed = worlds_params.p0();
         rigs.iter()
@@ -226,15 +161,11 @@ pub fn finalize_rig_worlds(
     if refresh.is_empty() {
         return;
     }
-    // The `WOW_RIG_COST` compose meter: how many rigs refresh and what the
-    // whole finalize pass costs, beside the palette's copy/write and upload lines.
     let cost_t0 = crate::rig_palette::rig_cost_enabled().then(std::time::Instant::now);
     let mut globals = worlds_params.p1();
-    // The rigid-child re-walk's do-not-enter set, exactly the entity pass's: a nested rig with
-    // its own billboard output owns its interior (and its root keeps the propagated frame).
+    // As in the entity pass, the re-walk does not enter a nested rig with its own billboard output.
     let fx_roots: bevy::platform::collections::HashSet<Entity> =
         hosts.iter().map(|r| r.root()).collect();
-    // Model frames re-seated by a patch walk → the rigs riding them re-finalize below.
     let mut cascade: Vec<Entity> = Vec::new();
     let mut finalize =
         |rig: &mut RigPose,
@@ -242,24 +173,15 @@ pub fn finalize_rig_worlds(
          globals: &mut Query<(&Transform, &mut GlobalTransform), Without<WorldCamera>>,
          cascade: &mut Vec<Entity>,
          root_moved: bool| {
-            // A slot-less rig with no special bones has nothing left for this pass: no rows to
-            // write, and its anchors were placed by the model pass + ordinary propagation. The
-            // caller still clears `pose_dirty` — which is the point of arriving here at all.
+            // A slot-less rig without special bones is done; the caller clears `pose_dirty`.
             if skin.is_none() && !rig.has_special && !root_moved {
                 return;
             }
             let Ok(root_g) = globals.get(rig.joints_root).map(|(_, g)| *g) else {
                 return;
             };
-            // **The chain is composed RIG-RELATIVE**: same root basis, translation
-            // zeroed. Every operation below — the `flags & 0x7` arm, the local compose, the
-            // billboard replacement — is translation-equivariant (the arm is 3×3 work plus a
-            // pivot-preserving translation; the billboard rewrites rotation only), so this yields
-            // exactly the world chain shifted by `−origin`, at rig-sized magnitudes. That is the
-            // fix: composing at Elwynn's ~9.5 k yards spent an f32 ULP (~1 mm) per matmul, freshly
-            // every frame because the pose is recomposed every frame, and that is the shimmer.
-            // (`WOW_NO_RIG_REBASE=1` makes this the map origin — the A/B lever for what the
-            // rebase is worth; see `rig_palette::rebase_origin`.)
+            // Rig-relative, which translation-equivariant steps allow: at ~9.5 k yards an f32 ULP
+            // (~1 mm) per matmul, fresh each frame, shimmers. `WOW_NO_RIG_REBASE=1` turns it off.
             let origin = crate::rig_palette::rebase_origin(root_g.translation());
             let root_rel = crate::rig_palette::rebase_global(root_g, origin);
             let (worlds, touched) = rig_worlds(rig, root_rel, cam_basis);
@@ -271,26 +193,15 @@ pub fn finalize_rig_worlds(
             if !rig.has_special && !root_moved {
                 return;
             }
-            // Anchors in replaced subtrees: re-seat their globals and re-compose their rigid
-            // children from the replaced frames — the entity pass's child walk, anchor-rooted.
-            //
-            // `root_moved` widens that to EVERY anchor. The touched-only rule assumes propagation
-            // already placed an untouched anchor correctly, and that assumption dies the moment
-            // this rig's own model frame is re-seated after propagation ran: a mounted rider's
-            // seat is patched here, so every one of its anchors is standing on the pre-patch
-            // frame. Its palette rows are rebuilt from `root_g` either way, which is why the BODY
-            // looked right while its attached items rode the stale seat — the mounted pauldron
-            // swinging on the gallop while the shoulder under it did not.
+            // Re-seat the anchors in replaced subtrees, or every anchor when a rider's seat moved
+            // after propagation, and re-compose their rigid children.
             let mut stack: Vec<(Entity, GlobalTransform)> = Vec::new();
             for &(bone, anchor) in &rig.anchors {
                 let b = bone as usize;
                 if !root_moved && !touched.get(b).copied().unwrap_or(false) {
                     continue;
                 }
-                // Anchors are ordinary scene-graph entities: their `GlobalTransform` is world
-                // space and every consumer (propagation, colliders, the effect lane, item
-                // placement) reads it as such — so the rig-relative frame goes back to absolute
-                // here. Only the PALETTE stays relative; that is the whole seam.
+                // Anchors are world-space scene entities; only the palette stays rig-relative.
                 let Some(world) = worlds.get(b).map(|&w| shift(w, origin)) else {
                     continue;
                 };
@@ -324,15 +235,12 @@ pub fn finalize_rig_worlds(
             continue;
         };
         let rig = rig.into_inner();
-        // A rider's rows are the rider lane's (see the query's note): hand `finalize` no skin so
-        // it does the anchors and nothing else.
+        // A rider's rows are the rider lane's: no skin, so only the anchors.
         let skin = skin.filter(|_| !rider);
         finalize(rig, skin, &mut globals, &mut cascade, false);
         rig.pose_dirty = false;
     }
-    // The cascade: a patch walk above moved some rig's model frame after it (or before it) ran —
-    // re-finalize against the fresh seat. One level deep by construction (a seat anchor's
-    // subtree holds no further seat anchors).
+    // Re-finalize each rig whose seat a patch walk moved; one level deep by construction.
     if !cascade.is_empty() {
         for (holder, rig, skin, _, rider) in &mut rigs {
             if !cascade.contains(&holder) {
@@ -354,8 +262,7 @@ pub fn finalize_rig_worlds(
     }
 }
 
-/// Register the model pass; the world pass is chained by [`crate::billboard::BillboardPlugin`]
-/// between the entity lane's joint pass and the card facing, where its readers sit.
+/// Register the model pass; [`crate::billboard::BillboardPlugin`] chains the world pass.
 pub fn plugin(app: &mut App) {
     app.configure_sets(
         PostUpdate,
@@ -395,20 +302,8 @@ mod tests {
         }
     }
 
-    /// **The mount seat, in the pass that decides it** — `compose`, pre-propagation, which is what
-    /// consumer anchors (the rider's seat, and every item hanging off the rider) are re-seated
-    /// from. The shape is `RidingHorse`'s: a spine bone that swings with the gallop, and the seat
-    /// bone under it carrying `flags = 0x6`.
-    ///
-    /// The seat must come out with the MODEL's orientation whatever the spine does, while still
-    /// being carried to the position the spine put it at — that is the byte law's pivot-preserving
-    /// tail (`0x714caf`–`0x714d09`), and it is the whole reason a galloping horse bobs its rider
-    /// without rocking them. Asserted across a swept spine angle, because a single
-    /// sample cannot tell a discarded rotation from a lucky one.
-    ///
-    /// Pinning it HERE and not only in the world pass is the point of the regression: the arm was
-    /// applied post-propagation first, the anchors were seated from the un-armed matrix, and the
-    /// mounted pauldron swung 53° over the stride while the shoulder it hung off stood still.
+    /// `RidingHorse`'s seat, in the model pass: under a swinging spine, the `flags = 0x6` bone
+    /// keeps the model's orientation and rides the spine's position (`0x714caf`–`0x714d09`).
     #[test]
     fn a_flags_0x6_seat_bone_discards_the_gallop_before_the_anchors_are_seated() {
         let sk = skeleton(vec![
@@ -434,7 +329,7 @@ mod tests {
                 seat_rot.angle_between(Quat::IDENTITY) < 1e-4,
                 "the seat keeps the model's orientation at spine swing {swing}: got {seat_rot:?}"
             );
-            // …and it still RIDES the spine: the pivot is where the animated parent put it.
+            // It still rides the spine: the pivot is where the animated parent put it.
             let want = rig.model[1].transform_point3(Vec3::new(0.0, 0.5, 0.25));
             assert!(
                 (seat_pos - want).length() < 1e-4,
@@ -453,9 +348,6 @@ mod tests {
         );
     }
 
-    /// The model compose is the exact affine product entity propagation computed: a three-bone
-    /// chain with rotation + non-uniform scale folds to the same matrices as chained
-    /// `GlobalTransform::mul_transform`.
     #[test]
     fn compose_matches_entity_propagation() {
         let sk = skeleton(vec![
@@ -468,9 +360,7 @@ mod tests {
         rig.locals[1].scale = Vec3::new(2.0, 1.0, 0.5);
         rig.locals[1].rotation = Quat::from_rotation_x(-0.3);
         rig.compose();
-        // The oracle: GlobalTransform chaining from an identity root, exactly what propagation
-        // did through the joint entities. Compared as matrices — decomposing two identical
-        // affines can NaN an `angle_between` on a dot marginally past 1.
+        // Compared as matrices: decomposing two identical affines can NaN an `angle_between`.
         let mut g = GlobalTransform::IDENTITY;
         for i in 0..3 {
             g = g.mul_transform(rig.locals[i]);
@@ -483,10 +373,6 @@ mod tests {
         }
     }
 
-    /// The world pass reproduces `billboard_joint_palette`'s replacements: a lock-Z billboard
-    /// bone takes the camera basis (pivot/scale kept), its child chains onto the replaced frame,
-    /// and a `flags & 0x4` helper takes the model root's basis while its pivot still rides the
-    /// animated parent — the entity pass's three verified behaviours, computed from the arrays.
     #[test]
     fn world_pass_matches_the_entity_billboard_law() {
         let sk = skeleton(vec![
@@ -521,19 +407,17 @@ mod tests {
             Some(cam),
         );
         assert_eq!(touched, vec![true; 3], "the whole chain is replaced");
-        // Bone 0: pivot at the root-rotated authored spot, scale kept, lock-Z basis — upright
-        // kept axis, local −Z toward the viewer (the billboard.rs test's assertions).
+        // Bone 0: pivot at the root-rotated authored spot, scale kept, upright, facing the viewer.
         let (s0, r0, t0) = worlds[0].to_scale_rotation_translation();
         assert!((t0 - root_rot * Vec3::new(5.0, 1.0, 0.0)).length() < 1e-4);
         assert!((s0 - Vec3::splat(2.0)).length() < 1e-5, "scale preserved");
         assert!((r0 * Vec3::Y).dot(Vec3::Y) > 0.999, "kept axis upright");
         assert!((r0 * -Vec3::Z).dot(Vec3::Z) > 0.999, "faces the camera");
-        // Bone 1 chains onto the REPLACED parent: one parent-scaled unit up the new Y.
+        // Bone 1 chains onto the replaced parent: one parent-scaled unit up the new Y.
         let (s1, _, t1) = worlds[1].to_scale_rotation_translation();
         assert!((t1 - (t0 + r0 * (Vec3::Y * 2.0))).length() < 1e-4, "{t1}");
         assert!((s1 - Vec3::ONE).length() < 1e-5, "2 × 0.5 scale chain");
-        // Bone 2 (flags & 0x4): pivot carried by the animated parent's frame, basis taken from
-        // the model root — the parent here is unit-scaled, so the ratio leg reproduces it exactly.
+        // Bone 2 (`flags & 0x4`): pivot from the animated parent, basis from the model root.
         let (_, r2, t2) = worlds[2].to_scale_rotation_translation();
         let expect_t = worlds[1].transform_point(Vec3::Y);
         assert!((t2 - expect_t).length() < 1e-4, "pivot rides the parent");
@@ -543,8 +427,6 @@ mod tests {
         );
     }
 
-    /// An unreplaced chain has no touched bones and composes root × model verbatim — the common
-    /// rig costs the palette rows and nothing else.
     #[test]
     fn plain_rigs_touch_nothing() {
         let sk = skeleton(vec![joint(-1, Vec3::X), joint(0, Vec3::Y)]);
@@ -563,25 +445,14 @@ mod tests {
         }
     }
 
-    /// **The jitter pin** — the measurement the rebase exists for.
-    ///
-    /// Compose the same idling six-bone chain frame by frame two ways — rooted at Goldshire's real
-    /// world coordinates, and rooted at the rig's own origin with the position carried alongside —
-    /// and score each against an f64 oracle of the identical chain. What matters is not the error
-    /// but its **frame-to-frame variation**: a constant offset is invisible, a per-frame one is
-    /// shimmer. The absolute route re-rounds to the f32 grid at ~9.5 k yards (1 ULP ≈ 0.98 mm)
-    /// every frame *because the pose changes every frame* — that is the long-standing "characters
-    /// look jittery up close" the director reported, and terrain is exempt only because it doesn't
-    /// move. The rebased chain runs at rig-sized magnitudes where an ULP is ~0.1 µm.
-    ///
-    /// Pinned as a ratio and an absolute ceiling: someone re-rooting this chain in world space
-    /// again — the natural-looking simplification — puts the shimmer straight back.
+    /// One idling chain composed at Goldshire's coordinates and rig-relative, each scored by how
+    /// its error against an f64 oracle changes per frame: at ~9.5 k yards an f32 ULP is ~0.98 mm,
+    /// re-rounded every frame; rig-relative it is ~0.1 µm.
     #[test]
     fn the_rebased_chain_does_not_re_round_at_world_scale_every_frame() {
         use bevy::math::{DAffine3, DVec3};
 
-        // Goldshire. `.go xyz -9464 62 56 0` — near the worst |coord| the 1.12 maps reach, and
-        // exactly where the report came from. Deliberately not integers: 9464.0 is exact in f32.
+        // Goldshire (`.go xyz -9464 62 56 0`), not integers, as 9464.0 is exact in f32.
         const ROOT: Vec3 = Vec3::new(-9464.31, 62.17, 56.91);
         const AMP: [f32; 6] = [0.010, 0.012, 0.008, 0.015, 0.020, 0.014]; // a breathing idle
 
@@ -595,10 +466,7 @@ mod tests {
         ]);
         let mut rig = RigPose::new(Entity::PLACEHOLDER, &sk);
         let tip = sk.joints.len() - 1;
-        // A FACING, and bones that swing on two axes. Without both, a chain whose motion happens to
-        // miss the large world axis measures almost nothing — an all-about-X rig at this root left
-        // the ~9.5 k x-coordinate static and scored 40× better than it has any right to. A real
-        // skeleton's limbs move in all three world axes; the pin has to too.
+        // A facing and two-axis swings, or the motion can miss the large world axis.
         let root_yaw = Quat::from_rotation_y(0.9);
 
         // The same chain in f64, from an identity root: the truth both routes are scored against.
@@ -641,13 +509,10 @@ mod tests {
         }
         let jitter = |e: &[DVec3]| e.windows(2).map(|w| w[1].distance(w[0])).sum::<f64>() / 179.0;
         let (abs_j, rel_j) = (jitter(&abs_err), jitter(&rel_err));
-        // The real per-frame motion of the tip — what the noise above has to be read against.
+        // The tip's real per-frame motion, the yardstick for the noise.
         let signal = jitter(&truths);
 
-        // `--nocapture` prints the measurement this pin was written from (yards):
-        //   abs_err 5.2e-4  rel_err 9.6e-8 | abs_j 7.4e-4  rel_j 1.0e-7 | signal 1.6e-3
-        // i.e. 0.74 mm of FRESH noise per frame against 1.65 mm of real motion — 45 % of a slow
-        // idle's apparent movement was rounding — and 1 Å after the rebase.
+        // Measured with `--nocapture` (yards): abs_j 7.4e-4, rel_j 1.0e-7, signal 1.6e-3.
         eprintln!(
             "abs_err mean={:.3e} rel_err mean={:.3e} abs_j={abs_j:.3e} rel_j={rel_j:.3e} \
              signal={signal:.3e} noise/signal abs={:.2} rel={:.5}",
@@ -656,7 +521,7 @@ mod tests {
             abs_j / signal,
             rel_j / signal,
         );
-        // The sweep has to actually move the tip, or every number above is measuring nothing.
+        // The idle must move the tip, or every number above measures nothing.
         assert!(
             signal > 1e-4,
             "the idle really does move the tip: {signal:.3e}"

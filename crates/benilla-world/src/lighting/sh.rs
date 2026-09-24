@@ -1,21 +1,14 @@
-//! Model SH light-probe coefficient math — pure functions, no Bevy systems. Owns the order-2
-//! spherical-harmonic fold the reference runs in `Model2.bls` ([`prop_probe_coeffs`] — ONE closed
-//! form for the interior-prop probes AND the exterior scene-sun rows, read off the shipped ARB
-//! program), evaluated
-//! per-fragment in `wow_model.wgsl`. The old trace-fit builder (`model_sh_coeffs`, the 0.722
-//! amplitude factorization + `SUN_DC`) is retired: the disassembly showed its directional response
-//! was ~¼ of the real curve with a negative back lobe (the blue shadow-side characters), and that
-//! no separate amplitude scalar exists — intensity lives entirely in the committed colour.
+//! The order-2 SH light fold of the reference's `Model2.bls`: one closed form for the interior-prop
+//! probes and the exterior sun rows, evaluated per fragment in `wow_model.wgsl`. There is no
+//! separate amplitude scalar; intensity lives entirely in the committed colour.
 
 use bevy::math::{Vec3, Vec4};
 
-/// Fold one interior M2 prop's committed light into the 7-row order-2 SH probe — the EXACT closed
-/// form of the reference's CPU accumulators (ambient ×2√π into L00 (`0x71bc70`) and directional
-/// ×16π/17 on the 9-term basis (`0x71bce0`) reduce, with band factors (1, 2/3, 1/4), to
-/// `E += C·(4/17)·(0.375 + 2μ + 1.875μ²)` per directional lobe, μ = n·u — decoded off the live
-/// abbey stand draws to float precision, residuals ~1e-7). Expanding μ² over
-/// the shader basis `(n, 1, n.xy, n.yz, n.z², n.xz, n.x²−n.y²)` gives, per lobe (colour C,
-/// toward-light unit u):
+/// Folds committed lights into the 7-row order-2 SH probe, the closed form of the reference's
+/// accumulators: ambient ×2√π into L00 (`0x71bc70`) and each directional lobe ×16π/17 on the
+/// 9-term basis (`0x71bce0`), with band factors 1, 2/3 and 1/4, reduce to
+/// `E += C·(4/17)·(0.375 + 2μ + 1.875μ²)`, μ = n·u. On the shader basis
+/// `(n, 1, n.xy, n.yz, n.z², n.xz, n.x²−n.y²)`, per lobe of colour C and toward-light unit u:
 ///
 ///   DC     += C·(4/17)·(0.375 + 0.9375·(uₓ² + u_y²))
 ///   linear += C·(8/17)·u
@@ -23,18 +16,9 @@ use bevy::math::{Vec3, Vec4};
 ///   n.z²   += C·(7.5/17)·(u_z² − ½(uₓ² + u_y²))
 ///   x²−y²  += C·(7.5/34)·(uₓ² − u_y²)
 ///
-/// Ambient adds to DC ×1. The expansion identity is frame-generic (the curve depends only on
-/// μ = n·u), so folding and evaluating in Bevy world space is exact. `lobes` = `(toward-light unit
-/// dir, colour)` — for an interior prop the fixed interior axis + the group-MOLR point lobes, all
-/// pre-gained; for the exterior scene rows the sun (to-light, storm-blended diffuse), packed at
-/// intensity 1 by `global_light::pack_model_core_rows`. This is the SAME curve the shipped
-/// `Model2.bls` vertex program evaluates for BOTH lanes (all 450 lit permutations carry the
-/// identical lighting block; every constant is byte-anchored —
-/// `16π/17` accumulate scale on the standard real-SH basis, band ratios exactly 1 : 2/3 : 1/4,
-/// linear coefficient exactly 8/17; the SH peak at μ=1 equals the FFP `D·(N·L)` peak by
-/// construction). Evaluated per fragment in `wow_model.wgsl`; note the SH lobe is SOFTER than a
-/// hard `max(N·L, 0)` (E(μ=0) = 0.088·C, E(μ=−1) = 0.059·C — the reference's authored
-/// wrap-around, not a bug).
+/// Ambient adds to DC ×1. The curve depends only on μ, so folding in Bevy space is exact. `lobes`
+/// are `(toward-light unit, colour)`, pre-gained. E(μ=1) = C, the FFP peak, but the lobe is softer
+/// than `max(N·L, 0)`: E(μ=0) = 0.088·C and E(μ=−1) = 0.059·C, the reference's authored wrap.
 pub fn prop_probe_coeffs(ambient: [f32; 3], lobes: &[(Vec3, [f32; 3])]) -> [Vec4; 7] {
     const K: f32 = 4.0 / 17.0;
     let mut c = [Vec4::ZERO; 7];
@@ -77,13 +61,10 @@ mod tests {
         [0usize, 1, 2].map(|ch| c[ch].dot(n1) + c[3 + ch].dot(quad) + c[6][ch] * x2y2)
     }
 
-    /// GOLDEN — this lane's half of the two-curve split. An interior fold puts its
-    /// diffuse word on the fixed axis `(−0.30822, −0.30822, −0.9)` in WoW space, whose Bevy image
-    /// is unit and 0.9 up, so a world-up normal reads μ = 0.9 at every camera angle. A MESH batch
-    /// takes the SH lane and therefore `ambient + (4/17)·(0.375 + 2·0.9 + 1.875·0.81)·diffuse`
-    /// = `ambient + 0.869118·diffuse`; its own PARTICLES take the fixed-function lane and read
-    /// `ambient + 0.9·diffuse` off the same words
-    /// ([`crate::terrain_stream::interior_light_up`]). The two are meant to differ.
+    /// The fixed interior axis travels `(−0.30822, −0.30822, −0.9)` in WoW space, so a world-up
+    /// normal reads μ = 0.9 and a mesh gets `ambient + 0.869118·diffuse`, while the prop's
+    /// particles take the fixed-function `ambient + 0.9·diffuse`
+    /// ([`crate::terrain_stream::interior_light_up`]); the two lanes are meant to differ.
     #[test]
     fn a_world_up_normal_reads_the_fixed_interior_axis_at_a_constant() {
         let u = Vec3::new(-0.30822, 0.9, -0.30822);
@@ -100,10 +81,9 @@ mod tests {
         }
     }
 
-    /// GOLDEN — the reference's closed form at the three anchor normals: facing the lobe the full
-    /// colour arrives (`E(μ=1) = ambient + C` exactly — (4/17)·(0.375+2+1.875) = 1); side-on the
-    /// authored wrap leaves (4/17)·0.375 = 0.0882·C; opposite, (4/17)·0.25 = 0.0588·C. The director's
-    /// stand (MODD[24]): ambient (61,59,96)/255, diffuse (90,86,141)/255, fixed axis, NO point lobes.
+    /// The closed form at μ = 1, 0 and −1: `ambient + C`, `+ 0.0882·C` and `+ 0.0588·C`. The
+    /// inputs are an abbey stand's (MODD[24]): ambient (61,59,96)/255, diffuse (90,86,141)/255,
+    /// the fixed axis and no point lobes.
     #[test]
     fn prop_probe_matches_the_closed_form_at_the_anchor_normals() {
         let ambient = [61.0 / 255.0, 59.0 / 255.0, 96.0 / 255.0];
@@ -122,7 +102,7 @@ mod tests {
                 );
             }
         };
-        // μ = +1 (a cup-top facing the light): ambient + diffuse, exactly.
+        // μ = +1: ambient + diffuse, exactly.
         close(
             eval_probe(&c, u),
             [
@@ -143,7 +123,7 @@ mod tests {
             ],
             "away",
         );
-        // μ = 0 (a pole side-on): ambient + 0.0882·diffuse.
+        // μ = 0: ambient + 0.0882·diffuse.
         let side = u.cross(Vec3::Y).normalize_or_zero();
         let side = if side.length_squared() < 0.5 {
             Vec3::X
@@ -160,7 +140,7 @@ mod tests {
             ],
             "side-on",
         );
-        // No lobes at all → the flat ambient probe (a no-MOLR group's stand under ambient only).
+        // No lobes: the flat ambient probe.
         let flat = prop_probe_coeffs(ambient, &[]);
         close(eval_probe(&flat, Vec3::Y), ambient, "ambient-only");
         // Lobes are additive: a second lobe adds its own closed form independently.

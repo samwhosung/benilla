@@ -1,30 +1,11 @@
-//! The doodad animation host (phase 1) — world-placed M2 doodads (ADT MDDF + WMO MODD
-//! props) animate: flags wave, windmills turn, flame bones jiggle.
+//! The doodad animation host: placed M2 doodads (ADT MDDF and WMO MODD props) animate.
 //!
-//! Byte ground: a doodad's M2
-//! instance is armed at load — bone 0, animation id 0, `linkFlag=1` — and then **re-arms itself every
-//! play-window, for ever**, rolling a fresh frequency-weighted variation each time (decision
-//! 0768: the watchdog `0x719370` fires on `now ≥ windowHi`, enqueues the doodad-only completion
-//! callback `0x6951b0` that `0x695100` installed at `[model+0x70]`, and that callback re-runs op4
-//! with `variationIdx = -1`, which writes the next `windowHi` and clears the latch — self-sustaining).
-//! **Global sequences loop with zero arming**, clock-driven. The cycle is gated on **linkage** — the
-//! per-frame walk `0x7074b0` only advances models spliced into the scene list, which the doodad drain
-//! `0x683f80` does per **in-range** doodad — not on the draw, so a doodad behind the camera keeps
-//! cycling. Because sampling is clock-indexed (`cursor = clock − startOffset`), a re-appearing model
-//! shows the pose the shared clock dictates — pausing costs nothing and drifts nothing.
-//!
-//! benilla's translation: the spawn site ([`crate::terrain_stream`]) classifies each placed model by
-//! [`classify`] — the ~90% with no animated channel stay on today's static path (measured,
-//! `benilla-extract doodadscan`) — and an animated one spawns the skinned twin + a collapsed
-//! [`RigPose`] buffer (no joint entities; consumers ride on-demand anchors) on an
-//! anim-root entity carrying [`DoodadAnimHost`]: an `AnimationPlayer` on the armed clip,
-//! re-rolled every window by [`reroll_doodad_variation`], and/or a [`GlobalSeqDrive`] for the
-//! free-running channels. [`gate_doodad_anim`] here is the draw-time tick made explicit: animation
-//! runs iff any of the doodad's submeshes is actually drawn (the `Visibility` verdict the debug-panel
-//! authority composes from far-clip + the size-bucketed distance fade + the WMO portal cull), and a
-//! resume seeks to `(now − armed_at) mod duration` — the ref's shared-clock phase, measured from the
-//! current arm. Note the two gates are deliberately different: the *draw* gates the pose, the
-//! *linkage* (here: residency) gates the variation cycle.
+//! The reference arms a doodad at load (bone 0, animation id 0, `linkFlag=1`) and re-arms it every
+//! play-window with a fresh weighted variation: the watchdog `0x719370` fires on `now ≥ windowHi`
+//! and runs the callback `0x6951b0` that `0x695100` installed at `[model+0x70]`, which re-arms
+//! with `variationIdx = -1`. Global sequences loop with no arming. The walk `0x7074b0` advances
+//! only the models the doodad drain `0x683f80` links each frame from the drawn and faded set, and
+//! sampling is clock-indexed (`cursor = clock − startOffset`), so pausing drifts nothing.
 
 use bevy::animation::graph::AnimationNodeIndex;
 use bevy::app::AnimationSystems;
@@ -46,47 +27,27 @@ pub use mat_anim::{
 };
 pub(crate) use mat_anim::{register_uv, UvLoop};
 
-/// What a placed doodad model animates — decision 0130's content gate, decided per model at spawn.
+/// What a placed doodad model animates, decided per model at spawn.
 pub enum DoodadAnimTier<'a> {
-    /// No animated bone channel: today's static path, untouched (no joints, no player — the ~90%
-    /// measured case: trees, fences, barrels, rocks).
+    /// No animated bone channel: the static path (most doodads: trees, fences, rocks).
     Static,
-    /// Only free-running global-sequence channels (candelabra glow pulses): joints +
-    /// [`GlobalSeqDrive`], **no** `AnimationPlayer` — the cheapest animated tier.
+    /// Only global-sequence channels (a candelabra's glow): a [`GlobalSeqDrive`], no player.
     GlobalSeqOnly,
-    /// The **loader-idle seed** moves bones (flags, windmills, torch flames): joints + an
-    /// `AnimationPlayer` looping this clip — the client's one-time load arm. That seed is animation
-    /// id 0 (Stand) resolved through the model's own `playableAnimationLookup`, NOT the file-order
-    /// first sequence (the variant name predates the correction and is kept because
-    /// it is the tier's identity, not a claim about which sequence). Global-sequence channels ride
-    /// along if the model also has them.
+    /// The loader-idle seed moves bones (flags, windmills, torch flames): an `AnimationPlayer`
+    /// looping this clip. The seed is animation id 0 resolved through the model's
+    /// `playableAnimationLookup`, not the file-order first sequence the name suggests.
     FirstSeq(&'a AnimClip),
 }
 
-/// The animation-event tags that make a placed doodad SOUND: `$DSL` (the looping emitter), `$DSO`
-/// (a positioned one-shot), `$DSE` (the stop token that releases a `$DSL` — `data` is 0 on all 16
-/// shipped models) and the generic `$SND`. Routed by `benilla_app::sound::anim_events`; listed here
-/// because their presence is what earns a bind-posed model a clock it would otherwise be denied
-/// (see [`arms_for_sound`]). Byte law: the model's animation-event callback `0x6951e0` routes on
-/// these marker FourCCs.
+/// The animation-event tags that make a placed doodad sound: `$DSL` (a looping emitter), `$DSO` (a
+/// positioned one-shot), `$DSE` (the stop that releases a `$DSL`) and `$SND`, the markers the
+/// reference's doodad event callback `0x6951e0` routes on.
 pub(crate) const SOUND_EVENT_TAGS: [&[u8; 4]; 4] = [b"$DSL", b"$DSO", b"$DSE", b"$SND"];
 
-/// Does this model's **arm chain** — the loader-idle seed and its variations, the only sequences a
-/// placed doodad ever plays — carry a sound-event marker?
-///
-/// This is deliberately NOT part of [`classify`]: the tier answers "what does this model *render*",
-/// and 0130's whole point is that a bind-posed sequence renders as the static mesh. That stays true.
-/// What it never meant is that the sequence does not *run* — the reference arms every placed doodad
-/// it creates (`0x695100` → `0x7121a0`) and cycles it whenever the doodad is in
-/// the frame's animate set, and the event track rides that clock. A humming
-/// lamp is the proof: `KalidarStreetLamp01.m2` is one looping 3.333 s Stand that keys no bone at all
-/// and carries exactly one event, `$DSL` → `NightElfStreetLampLoop`. Gating its clock on the *rig*
-/// is what made every world doodad silent (bug B345), and the corpus says the class is not marginal
-/// — `benilla-extract soundeventscan`: 273 carrier models, 108 of which no rig gate would ever arm.
-///
-/// Same shape as [`ModelAnimations::idle_clip`]'s own note about emitters and material loops: arming
-/// the idle seed is what gives a consumer a running clock instead of a frozen slot-0 read. Sound is
-/// simply the third consumer.
+/// Whether the model's arm chain (the loader-idle seed and its variations, the only sequences a
+/// placed doodad plays) carries a sound-event marker. Kept out of [`classify`], which answers what
+/// the model renders: the reference arms every placed doodad (`0x695100` → `0x7121a0`), and its
+/// event track runs on that clock even when no bone moves (`KalidarStreetLamp01.m2`'s `$DSL`).
 pub(crate) fn arms_for_sound(anims: &ModelAnimations) -> bool {
     let Some(idle) = anims.idle_clip() else {
         return false;
@@ -102,8 +63,7 @@ pub(crate) fn arms_for_sound(anims: &ModelAnimations) -> bool {
         })
 }
 
-/// Classify a placed model for the spawn site. Boneless models are `Static` regardless of parsed
-/// tracks — their skinned twin carries joint attributes with no joints to index (the 0035 guard).
+/// Classify a placed model; a boneless one is `Static`, with no joints for a skin to index.
 pub fn classify<'a>(
     skeleton: &ModelSkeleton,
     animations: Option<&'a ModelAnimations>,
@@ -114,9 +74,8 @@ pub fn classify<'a>(
     if skeleton.joints.is_empty() {
         return DoodadAnimTier::Static;
     }
-    // `first_seq` — 0130's content gate, and only that (decision 0936's split; the loader arm's
-    // *identity* answer is `idle_seq`/`idle_clip`, which the entity lane arms from). It stays the
-    // rig question here: a seed that holds bind pose renders identically to the static mesh.
+    // `first_seq` is the content gate, not the arm's identity (`idle_seq`): a seed that holds bind
+    // pose renders identically to the static mesh.
     match anims.first_seq.and_then(|i| anims.clips.get(i)) {
         Some(clip) => DoodadAnimTier::FirstSeq(clip),
         None if !anims.global_bones.is_empty() => DoodadAnimTier::GlobalSeqOnly,
@@ -124,55 +83,36 @@ pub fn classify<'a>(
     }
 }
 
-/// What [`spawn_anim_host`] set up for one animated placement — the spawn site arms the
-/// [`DoodadAnimHost`] on `root` with the submesh list once it has spawned them.
-///
-/// Since decision 1365 there are NO joint entities: the pose lives in a [`RigPose`] buffer,
-/// carried here BY VALUE so the caller can mint consumer anchors ([`Self::anchor`]) for the bones
-/// something actually rides — billboard cards, emitters, ribbons — and then attach the buffer
-/// with [`Self::finish`]. Only consumed bones ever get an entity (the 1354 census: 96 % of the
-/// old eagerly-spawned population hosted nothing).
+/// What [`spawn_anim_host`] set up for one placement; the [`RigPose`] rides here by value until
+/// [`Self::finish`], so anchors ([`Self::anchor`]) are minted only for bones something rides.
 pub struct AnimHostSpawn {
     pub root: Entity,
-    /// The collapsed rig's pose buffer, not yet inserted — [`Self::finish`] attaches it to
-    /// `root` once every consumer anchor is minted.
+    /// The pose buffer, inserted on `root` by [`Self::finish`] once every anchor is minted.
     pose: RigPose,
     pub inverse_bindposes: Handle<SkinnedMeshInverseBindposes>,
-    /// The looping first-sequence node + duration, `None` on the gseq-only tier.
+    /// The armed clip's node and duration, `None` on the gseq-only tier.
     pub(crate) clip: Option<(AnimationNodeIndex, f32)>,
-    /// The **file sequence slot** the load arm seeded ([`AnimClip::seq_index`]) — the axis every
-    /// per-sequence bake is keyed on. `None` on the gseq-only tier (no arm).
-    ///
-    /// This is the *loader's* var-0 seed only. It is no longer what the placement ends up playing:
-    /// [`reroll_doodad_variation`] overrides it on the first frame with a real weighted roll and
-    /// keeps re-rolling every play-window, exactly as the reference's holder setup
-    /// `0x695100` lands its `variationIdx = -1` arm after the loader's var-0 one. Consumers that
-    /// must track the *current* slot therefore read the host's live player instead — the emitters
-    /// ride [`crate::particles::EmitClock::Host`].
+    /// The file sequence slot the load arm seeded ([`AnimClip::seq_index`]); the first re-roll
+    /// replaces it, as the holder's `0x695100` arm does, so the current slot is read off the host's
+    /// player ([`crate::particles::EmitClock::Host`]). `None` on the gseq-only tier.
     pub(crate) seq: Option<usize>,
-    /// The animation id the arm rolls its variation over (id 0 — the loader-idle seed's id, resolved
-    /// through the model's own `playableAnimationLookup`). `None` on the gseq-only tier: nothing was
-    /// armed, so there is no play-window and nothing to re-roll.
+    /// The animation id the arm rolls variations over; `None` on the gseq-only tier.
     pub(crate) anim_id: Option<u16>,
 }
 
 impl AnimHostSpawn {
-    /// The anchor entity standing in for `bone` — spawned on first demand, shared on repeat asks
-    /// ([`RigPose::anchor_for`]). `None` = the bone is outside this skeleton (the consumer
-    /// misses, exactly as `joints.get(bone)` used to).
+    /// The anchor entity for `bone`, spawned on first demand and shared after
+    /// ([`RigPose::anchor_for`]); `None` for a bone outside the skeleton.
     pub fn anchor(&mut self, commands: &mut Commands, bone: u16) -> Option<Entity> {
         self.pose.anchor_for(commands, self.root, bone)
     }
 
-    /// The skeleton's bone count — what a palette allocation sizes itself with now that there is
-    /// no joint list to measure.
+    /// The skeleton's bone count, the palette allocation size.
     pub fn bones(&self) -> u32 {
         self.pose.locals.len() as u32
     }
 
-    /// Attach the pose buffer to the host root. Called once, after the caller minted its
-    /// anchors; returns the `(bone, anchor)` registry for consumers that resolve after this
-    /// point (the placement's emitter/ribbon spawns).
+    /// Attach the pose buffer once the anchors are minted; returns the `(bone, anchor)` registry.
     pub fn finish(self, commands: &mut Commands) -> Vec<(u16, Entity)> {
         let anchors = self.pose.anchors.clone();
         commands.entity(self.root).insert(self.pose);
@@ -180,10 +120,8 @@ impl AnimHostSpawn {
     }
 }
 
-/// Whether [`spawn_anim_host`] would rig this model — the model-forms requester's twin of the
-/// spawn gate, so the skinned twins are built exactly for the placed models that
-/// will draw them. Mirrors both of the host's gates: the tier, and the capture freeze (captures
-/// keep every doodad static, so they need no twins either).
+/// Whether [`spawn_anim_host`] would rig this model, by the same tier and capture gates, so skinned
+/// twins are built only for placed models that draw them.
 pub fn wants_rig(m: &M2Model) -> bool {
     !crate::dev_state::deterministic_run()
         && !matches!(
@@ -192,33 +130,22 @@ pub fn wants_rig(m: &M2Model) -> bool {
         )
 }
 
-/// Spawn the animation host for one placed M2, if [`classify`] says it animates: an anim-root entity
-/// at the placement transform carrying the collapsed [`RigPose`] buffer (no joint
-/// entities; consumer anchors are minted on demand and cascade with the root),
-/// and — per tier — an `AnimationPlayer` looping the **loader-idle seed's** clip (the client's
-/// one-time load arm at `0x70ebd0`: `0x7121a0(bone 0, animation id 0 resolved through the model's
-/// own `playableAnimationLookup`, linkFlag=1)` once — decision 0637) and/or
-/// the free-running [`GlobalSeqDrive`] (bone-index targets, the collapsed lane). `None` ⇒ the
-/// model is static and the caller keeps today's path untouched.
+/// Spawn the animation host for one placed M2 that animates: a root at the placement transform
+/// with the collapsed [`RigPose`] and, per tier, an `AnimationPlayer` looping the loader-idle seed
+/// (the reference's load arm `0x70ebd0` → `0x7121a0(bone 0, animation id 0, linkFlag=1)`) and/or
+/// a [`GlobalSeqDrive`]. `None` keeps the static path.
 pub fn spawn_anim_host(
     commands: &mut Commands,
     m: &M2Model,
     transform: Transform,
 ) -> Option<AnimHostSpawn> {
-    // The visual A/B harness needs deterministic frames; a live animation clock
-    // isn't. Captures keep every doodad on the static path — bind pose renders identically to the
-    // static mesh, so world baselines stay comparable across runs and branches.
+    // Captures keep every doodad static, so their frames are deterministic.
     if crate::dev_state::deterministic_run() {
         return None;
     }
     let tier = classify(&m.skeleton, m.animations.as_ref());
-    // The SOUND arm (bug B345), orthogonal to the tier: a model whose pose is bind renders as the
-    // static mesh — 0130's gate is right about pixels — but its event track still has to run, and
-    // the reference runs it for every placed doodad. So a `Static`/`GlobalSeqOnly` model that
-    // authors `$DSL`/`$DSO`/`$SND` on its arm chain still gets a HOST here: `ModelAnimations` and
-    // the arm bookkeeping (`clip`/`anim_id`, which is what [`reroll_doodad_variation`] maintains and
-    // the event scanner reads), and deliberately **no `AnimationPlayer`** — there is no pose to
-    // evaluate, and paying for a rig to run a clock is exactly what 0130 exists to avoid.
+    // The sound arm, orthogonal to the tier: a bind-posed model still runs its event track, as in
+    // the reference, so it gets a host with the arm bookkeeping but no `AnimationPlayer`.
     let sound_arm = m.animations.as_ref().is_some_and(arms_for_sound);
     if matches!(tier, DoodadAnimTier::Static) && !sound_arm {
         return None;
@@ -227,63 +154,39 @@ pub fn spawn_anim_host(
         .animations
         .as_ref()
         .expect("animated tier or sound arm ⇒ animations");
-    // Chain-only visibility (`crate::vis_chain`): the host root renders nothing — its parts
-    // draw as world roots — and ~1.4k hosts sat in the per-camera sweep at the Goldshire pin.
     let root = commands
         .spawn((transform, Visibility::default()))
         .vis_chain_only()
         .id();
-    // The collapsed pose buffer (0724 replayed for this lane): no joint
-    // entities, no `AnimatedBy` targets, no `BillboardJointRig`. The 0712 evaluator poses
-    // `locals` off the player, the model pass folds + seats the anchors, and the world pass
-    // handles the billboard/arm bones and the palette rows.
-    //
-    // NO palette rig here either. The host's slot allocation is the CALLER's
-    // policy: the terrain-stream lane goes lazy — parts spawn on the static form and the draw
-    // gate allocates at the first wake ([`LazyRig`]) — because the resident population is
-    // thousands of parked hosts while the 2048-slot table is the scarce axis (the 0863 census:
-    // 1300–1750 parked of ~1900 live slots, active peak ~630). A gate-less caller (quest
-    // markers) allocates eagerly itself, or its host would never skin.
+    // The caller allocates the palette slot: lazily on the terrain-stream lane (`LazyRig`), eagerly
+    // for a gate-less caller such as quest markers, whose host would otherwise never skin.
     let pose = RigPose::new(root, &m.skeleton);
     let mut clip_info = None;
     let mut armed_seq = None;
     let mut arm_id = None;
     if let DoodadAnimTier::FirstSeq(head) = tier {
-        // (the rigged arm — player + graph + variation chain)
-        // The **loader's** seed only — `0x70ebd0`'s var-0 arm on the head of the chain. The real
-        // pick is the holder setup's second op4 call (`0x695100`, `variationIdx = -1`), which lands
-        // *after* it and is the effective arm; here that second arm is
-        // [`reroll_doodad_variation`]'s first pass, which fires the same frame because the host is
-        // born with an already-expired window. Splitting it that way is not a convenience: it is
-        // the one code path the reference has, since every later re-arm is byte-identical to the
-        // holder's first one.
+        // The loader's var-0 seed only (`0x70ebd0`). The effective arm is the holder's
+        // `variationIdx = -1` op4 (`0x695100`), here `reroll_doodad_variation`'s first pass, the
+        // same frame, since the host is born with an expired window.
         let mut player = AnimationPlayer::default();
         player.play(head.node).repeat();
         commands.entity(root).insert((
             player,
             AnimationGraphHandle(anims.graph.clone()),
-            // The re-roll needs the variation chain, and — now that a placed doodad's played
-            // sequence CHANGES — so does every per-sequence consumer that resolves off this host
-            // (`playing_seq`): the emitters' rate/enable tracks, the material-alpha sampler.
+            // For the re-roll and the per-sequence consumers resolving off this host.
             anims.clone(),
         ));
         clip_info = Some((head.node, head.duration));
         armed_seq = Some(head.seq_index);
         arm_id = Some(head.anim_id);
     } else if sound_arm {
-        // The clock-only arm: same loader seed, same self-sustaining re-roll — `ModelAnimations` is
-        // what [`reroll_doodad_variation`] needs, and without it the host would never be matched by
-        // that query and its window would never advance. No player, no graph handle: nothing here
-        // poses anything, and `gate_doodad_anim` already treats both as optional.
+        // The clock-only arm: the re-roll's query needs `ModelAnimations`; nothing here poses.
         let head = anims.idle_clip().expect("sound arm ⇒ an idle clip");
         clip_info = Some((head.node, head.duration));
         arm_id = Some(head.anim_id);
         commands.entity(root).insert(anims.clone());
-        // `armed_seq` stays `None` ON PURPOSE. It is the *only* input to `PlacementHost::arm`,
-        // which is what puts this placement's emitters on `EmitClock::Host` — a clock that reads
-        // the host's `AnimationPlayer`. This host has none, so claiming the arm would move a
-        // previously-`Pinned` emitter onto a player that does not exist. The sound clock is read
-        // from `clip`/`armed_at` instead, which needs no player and no slot number.
+        // `armed_seq` stays `None`: it alone moves the placement's emitters onto `EmitClock::Host`,
+        // which reads a player this host lacks. The sound clock reads `clip` and `armed_at`.
     }
     if let Some(drive) = GlobalSeqDrive::new_rig(&anims.global_bones, m.skeleton.joints.len()) {
         commands.entity(root).insert(drive);
@@ -298,68 +201,36 @@ pub fn spawn_anim_host(
     })
 }
 
-/// The anim-root component of one animated doodad placement: the draw gate's state + what to re-arm
-/// on resume. The root entity carries the placement transform, the joint hierarchy as children, and
-/// (per tier) the `AnimationPlayer`/[`GlobalSeqDrive`]; it lives in the placement's entity list, so
-/// it despawns (joints cascading) when the tile streams out.
+/// The anim root of one animated placement: the draw gate's state and what to re-arm on resume.
+/// It despawns with its tile, its bone anchors with it.
 #[derive(Component)]
 pub struct DoodadAnimHost {
-    /// The placement's skinned submesh entities — animation runs iff ANY of them is drawn (their
-    /// `Visibility` is the composed far-clip + distance-fade + portal-cull verdict).
+    /// The placement's skinned submeshes; animation runs while any of them is drawn.
     pub(crate) meshes: Vec<Entity>,
-    /// The placement's **draw-set gate** — the draw-set answer for a MESHLESS host (a
-    /// particles-only model like the InstancePortal swirl or Stratholme's burning-building fire:
-    /// 0 render batches, so no submesh carries a `Visibility` verdict). Not a fade sphere any
-    /// more but the whole [`crate::particles::EmitterFade`], **the same value the placement's
-    /// emitters, ribbons and glow lights were built with** (`terrain_stream::spawn::emitter_fade`,
-    /// one expression at one call site), so every rider of a placement freezes and resumes
-    /// together.
-    ///
-    /// It used to be `(radius, world_center)`, and [`gate_doodad_anim`] rebuilt the rest as
-    /// `instance: None, room: None` on the reasoning that a particles-only model is not a
-    /// building's prop. Stratholme's fire is 88 particles-only props of `stratholme_b.wmo`, and
-    /// with no instance the exterior-window term asks `ExteriorGate::admits_sphere` — which,
-    /// standing in a sealed room, is `Windows([])` and admits **nothing**. Every meshless prop of
-    /// the building the camera stood in was parked.
+    /// The draw-set gate of a meshless (particles-only) host: the [`crate::particles::EmitterFade`]
+    /// its emitters, ribbons and lights were built with, so they freeze together. It carries the
+    /// prop's building (instance and room), without which a sealed room would park its own props.
     pub(crate) fade: crate::particles::EmitterFade,
-    /// The looping first-sequence graph node + its duration (secs); `None` on the gseq-only tier.
+    /// The armed clip's graph node and duration (secs); `None` on the gseq-only tier.
     pub(crate) clip: Option<(AnimationNodeIndex, f32)>,
-    /// `Time::elapsed_secs` at the current **arm** — the player's clock origin: the variation
-    /// re-arms every play-window, and a resume must seek to `(now − armed_at) mod duration` or it
-    /// lands at the phase of a clip this host stopped playing several windows ago. (The
-    /// [`GlobalSeqDrive`] needs no origin at all — global sequences sample the shared world clock
-    /// directly, decision 0855.)
+    /// `Time::elapsed_secs` at the current arm, the player's clock origin: a resume seeks to
+    /// `(now − armed_at) mod duration`. The [`GlobalSeqDrive`] keeps its own attach anchor instead.
     pub(crate) armed_at: f32,
-    /// When the armed play-window ends, on the shared clock — the reference's `windowHi`
-    /// (`[model+0xac]`), rewritten by every arm. `now ≥ window_hi` ⇒ re-roll. A host is born with
-    /// this at `NEG_INFINITY` so the first frame performs the holder's `variationIdx = -1` arm.
+    /// The end of the armed play-window on the shared clock, the reference's `windowHi`
+    /// (`[model+0xac]`); `now ≥ window_hi` re-rolls. Born at `NEG_INFINITY`, so frame one arms.
     pub(crate) window_hi: f32,
-    /// The animation id to re-roll over ([`AnimHostSpawn::anim_id`]); `None` on the gseq-only tier,
-    /// which has no arm and therefore no window.
+    /// The animation id to re-roll over; `None` on the gseq-only tier, which has no window.
     pub(crate) anim_id: Option<u16>,
     /// Whether the host was ticking last frame (edge-triggered pause/resume).
     pub active: bool,
-    /// `Time::elapsed_secs` when `active` last flipped false — the reaper's age key (decision
-    /// 0863): under table pressure the longest-parked rigged hosts demote first. Never read
-    /// while `active`.
+    /// `Time::elapsed_secs` when `active` last went false: the reaper demotes the longest-parked.
     pub(crate) parked_at: f32,
 }
 
 impl DoodadAnimHost {
-    /// Where the **armed clip's own clock** stands right now: `(node, seek)`, the seek being
-    /// `(now − armed_at) mod duration`. `None` when nothing is armed (the gseq-only tier without a
-    /// sound arm — free-running channels have no window at all).
-    ///
-    /// The **shared clock, never the `AnimationPlayer`**, because it is the one answer both arms
-    /// can give: a clock-only host has no player to read at all, and a rigged one's resume seeks
-    /// the player to exactly this value, so the two never disagree while the host is drawn.
-    ///
-    /// It is **not** a claim that the cycle runs while the host is parked. *Linkage* means spliced
-    /// into the per-frame scene worklist `[CM2Scene+0x20]`, which **is** the drawn/faded set — "a
-    /// doodad culled out of
-    /// the drain stops advancing and resumes on re-link". Consumers that must honour that read
-    /// [`DoodadAnimHost::active`] beside this clock; the placed-doodad sound scanner
-    /// (`benilla_app::doodad_events`) does, and decision 2059 is what it cost not to.
+    /// The armed clip's `(node, seek)` on the shared clock, `(now − armed_at) mod duration`. It
+    /// answers while parked, but the reference fires no events for a doodad culled out of its
+    /// scene list (`[CM2Scene+0x20]`), so a consumer reads [`DoodadAnimHost::active`] beside it.
     pub fn arm_clock(&self, now: f32) -> Option<(AnimationNodeIndex, f32)> {
         let (node, duration) = self.clip?;
         // A zero-length clip has no phase to compute; it sits at its own t = 0.
@@ -372,31 +243,15 @@ impl DoodadAnimHost {
     }
 }
 
-/// The doodad's self-sustaining re-arm: when the
-/// armed play-window ends, roll a fresh frequency-weighted variation of the same animation id, snap
-/// to it, and write the next window. This is the whole of bug B63's residual — the Blasted Lands
-/// lightning keys its entire burst in a 5.0 %-weighted variation (`frequency` 1638 of 32767), so
-/// with a once-at-load pick ~1.5 of the Tainted Scar's 31 placements strobed from a *fixed* spot
-/// every 1.3 s for ever, while the reference re-rolls all 31 every window and the strike wanders.
+/// The doodad's self-sustaining re-arm: when the armed play-window ends, roll a fresh
+/// frequency-weighted variation of the same animation id, snap to it (`blendFlag = 0` at
+/// `0x6951c8`, no cross-fade) and write the next window. An undrawn host only updates
+/// [`DoodadAnimHost::clip`], for [`gate_doodad_anim`]'s resume to arm.
 ///
-/// Two details that are easy to get wrong, both byte-pinned:
-/// - **The re-arm is a snap, not a blend** (`blendFlag = 0` at `0x6951c8`) — hence `stop_all` before
-///   the play rather than a cross-fade.
-/// - **This system runs over ALL hosts and never consults [`DoodadAnimHost::active`] — a
-///   DELIBERATE divergence, not a reading of the bytes.** The reference's per-frame walk covers
-///   exactly the models spliced into `[CM2Scene+0x20]`, and the doodad drain splices only what
-///   survived frustum + occlusion + the radius-tiered fade cutoff — so in the real client a doodad
-///   behind you *stops* advancing and, on re-link, finds `now ≥ windowHi` and re-arms at once
-///   (`0x7074b0`/`0x683f80`). Gating this here would therefore be
-///   the faithful shape, and it is left ungated on purpose: it would freeze the whole field while
-///   you looked away and re-roll all 31 of the Tainted Scar's placements on the frame you turned
-///   back, and that burst is an approved *look* to weigh with the director rather than a silent
-///   change (decision 2059 names it as the open follow-up). The sound lane is gated; this one is
-///   not, and the difference is recorded rather than smoothed over.
-///
-/// A host that is not currently drawn still re-rolls; it just updates [`DoodadAnimHost::clip`] and
-/// leaves the (stopped) player alone, so [`gate_doodad_anim`]'s resume arms whatever the latest
-/// window rolled.
+/// Deviation: this runs for every resident host, where the reference stops a doodad culled out
+/// of its scene list (`[CM2Scene+0x20]`) and re-arms it at once on re-link (`0x7074b0`,
+/// `0x683f80`), because gating it so would re-roll the whole field on the frame the camera turns
+/// back.
 fn reroll_doodad_variation(
     time: Res<Time>,
     mut rng: ResMut<benilla_assets::AnimRng>,
@@ -409,21 +264,20 @@ fn reroll_doodad_variation(
     let now = time.elapsed_secs();
     for (mut host, anims, player) in &mut hosts {
         let Some(anim_id) = host.anim_id else {
-            continue; // gseq-only: free-clock loops, never armed
+            continue; // gseq-only: never armed
         };
         if now < host.window_hi {
             continue;
         }
         let Some(clip) = anims.pick_variation(anim_id, rng.draw()) else {
-            // No chain for this id (a model whose sequence set changed under us): stop asking.
+            // No chain for this id: stop asking.
             host.anim_id = None;
             continue;
         };
         let (node, duration) = (clip.node, clip.duration);
         let replay = rng.replay_count(clip.replay);
         host.armed_at = now;
-        // `span · R` — for `replay = (0, 0)` that is exactly one loop, so the roll repeats every
-        // pass. A zero-duration clip would make this a busy loop, so it costs one window minimum.
+        // `span · R`, one loop for `replay = (0, 0)`; a zero-duration clip gets a minimum window.
         host.window_hi = now + (duration * replay as f32).max(f32::EPSILON);
         host.clip = Some((node, duration));
         if host.active {
@@ -435,10 +289,9 @@ fn reroll_doodad_variation(
     }
 }
 
-/// The draw gate: pause a doodad's animation when none of its submeshes is drawn, resume — seeking
-/// both clocks to the shared-clock position — when one is again. Runs before [`AnimationSystems`] so
-/// a resume's seek lands the same frame. Steady state (nothing flipped) is one `Visibility` read per
-/// mesh, no writes.
+/// The draw gate: stop a doodad's animation while it is not drawn, and on resume seek the player
+/// to the arm's shared-clock phase. Runs before [`AnimationSystems`], so the seek lands the same
+/// frame.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn gate_doodad_anim(
     time: Res<Time>,
@@ -457,28 +310,18 @@ fn gate_doodad_anim(
             Ref<GlobalTransform>,
             &bevy::camera::primitives::Frustum,
             Ref<bevy::camera::Projection>,
-            // The seat's own write, visible THIS frame: `GlobalTransform` only changes after
-            // propagation, which runs after this system — so on a teleport frame the global
-            // reads still while the camera has already moved. Reading the local too is what
-            // keeps the verdict reuse below from carrying a pre-snap verdict across a snap
-            // (the over-bright lamppost glow after a .tele, 2026-09-04).
+            // The seat's own write: `GlobalTransform` propagates after this system, so on a
+            // teleport frame only the local shows the camera moved.
             Option<Ref<Transform>>,
         ),
         With<crate::view::WorldCamera>,
     >,
-    // A meshed host's verdict is its meshes' `Visibility`; when none moved this frame and the
-    // camera stood still, every host's verdict is last frame's (decision 1979's floor: ~1.5 k
-    // hosts × their submesh lookups on every still frame).
+    // With no part's `Visibility` changed and the camera still, every verdict is last frame's.
     changed_vis: Query<(), (Changed<Visibility>, With<crate::model_render::ModelPart>)>,
-    // The frame's draw-set inputs, as ONE bundle: the far-clip wall, the exterior-window gate
-    // (a meshless prop OUTSIDE, seen from a WMO interior, is not in the frame's worklist and must
-    // not tick its bones either), the room the camera stands in, and the portal instances
-    // a prop's own rooms resolve through (0689/1289). The same `SystemParam` the particle and
-    // ribbon sims read, so the three riders of one placement cannot answer the draw-set question
-    // differently (2059).
+    // The draw-set inputs (far clip, exterior-window gate, camera room, portal instances), the
+    // same `SystemParam` the particle and ribbon sims read, so a placement's riders agree.
     scene: crate::particles::sim::SceneGates,
-    // The lazy-rig lane's wake half ([`lazy`]): a drawn host without a slot
-    // promotes here — allocation, row seed, part swap.
+    // The lazy-rig lane's wake half: a drawn host without a slot promotes here.
     mut palettes: ResMut<crate::rig_palette::RigPalettes>,
     ibps: Res<Assets<SkinnedMeshInverseBindposes>>,
     worlds: Query<&GlobalTransform>,
@@ -486,8 +329,7 @@ fn gate_doodad_anim(
     mut commands: Commands,
     mut logged: Local<bool>,
 ) {
-    // One breadcrumb per session, the first frame any host exists — the machine-readable "doodads
-    // are animating" signal (the live count is in the debug panel).
+    // One log line per session, the first frame any host exists.
     if !*logged && !hosts.is_empty() {
         *logged = true;
         info!("doodad anim: first host armed (decision 0130 phase 1)");
@@ -501,21 +343,12 @@ fn gate_doodad_anim(
     }) && !scene.changed()
         && changed_vis.is_empty();
     for (entity, mut host, lazy, pose, has_rig, player, drive) in &mut hosts {
-        // A host born this frame has no verdict to reuse (`active` starts false): a meshless one
-        // spawned under a parked camera stayed parked until the camera moved (review
-        // 2026-09-04). Read off the host's own tick — a second query on the component would
-        // conflict with this one's `&mut`.
+        // A host born this frame has no verdict to reuse (`active` starts false).
         let drawn = if verdicts_still && !host.is_added() {
             host.active
         } else if host.meshes.is_empty() {
-            // Meshless (particles-only) host: the emitters' own draw-set law (see the `fade`
-            // field doc) — the reference ticks animation for any model in the draw set, and a
-            // 0-batch model is admitted on its fade sphere exactly like its emitters are.
-            // "Exactly like" is literal: this asks the placement's OWN `EmitterFade` — the very
-            // value its emitters and ribbons were handed — through `in_draw_set`, the single
-            // spelling of the rule. A second copy of it is how the far-clip term went missing
-            // here as well as in the emitters, and how a particles-only WMO prop lost
-            // its building identity and was culled from inside its own room (2059).
+            // Meshless: the reference ticks any model in the draw set, and a 0-batch model is
+            // admitted on its fade sphere like its emitters, through the same `in_draw_set`.
             let fade = &host.fade;
             world_cam.as_ref().is_some_and(|(cam_tf, frustum, _, _)| {
                 fade.in_draw_set(
@@ -538,20 +371,10 @@ fn gate_doodad_anim(
                 .iter()
                 .any(|&e| vis.get(e).is_ok_and(|v| *v != Visibility::Hidden))
         };
-        // The lazy-rig promote ([`lazy`]): a host DRAWN two frames running (`&&
-        // host.active` — last frame's verdict) holding a [`lazy::LazyRig`] and no slot yet — its
-        // first wake, or a denial being retried — claims its palette slot now. Checked every
-        // frame it stays drawn, not just on the flip edge, so a momentarily full table is a
-        // short delay at bind pose, never the permanent statue this lane was built to kill.
-        //
-        // Two frames, not one, because the first frame is a LIE: a spawned part's `Visibility`
-        // defaults to `Inherited` (a `Mesh3d` required component) and the fade/cull authorities
-        // ran before the spawner's commands applied — so on its first frame every far doodad in
-        // the streamed tile reads "drawn". Promoting on that frame re-created the eager design
-        // one frame late (measured on the 0863 verification leg: ~1500 parked hosts holding
-        // slots, the pre-fix census's own number). The second frame's verdict is the
-        // authorities' real one; a genuinely visible host promotes one frame late, at fade-in
-        // distance, invisibly.
+        // The lazy-rig promote, retried every frame the host stays drawn so a full table is only
+        // a delay. It needs a second drawn frame (`host.active`): on its first, a spawned part's
+        // `Visibility` is still the `Inherited` default the fade and cull authorities have not
+        // judged, so every far doodad of a new tile reads drawn.
         if drawn && host.active && !has_rig {
             if let Some(lazy) = lazy {
                 lazy::promote_lazy_rig(
@@ -570,15 +393,12 @@ fn gate_doodad_anim(
             continue;
         }
         host.active = drawn;
-        // The rig-machinery half of the park: the marker gates the 0712
-        // evaluator, the model compose, and the world finalize — so a hidden host's collapsed
-        // rig costs nothing at all, where the joint hierarchy kept paying propagation. The
-        // commands apply before `AnimationSystems` (the gate orders `.before` it), so a resume's
-        // re-arm below evaluates the same frame the marker drops — 0739's wake law.
+        // `AnimParked` holds the pose evaluation, compose and finalize; these commands apply
+        // before `AnimationSystems`, so a resume's re-arm evaluates the frame the marker drops.
         if drawn {
             commands.entity(entity).remove::<AnimParked>();
         } else {
-            host.parked_at = now; // the reaper's age key (decision 0863)
+            host.parked_at = now; // the reaper's age key
             commands.entity(entity).insert(AnimParked);
         }
         if let Some(mut p) = player {
@@ -587,22 +407,17 @@ fn gate_doodad_anim(
                     let anim = p.start(node);
                     anim.repeat();
                     if duration > 0.0 {
-                        // Phase from the current ARM, not from spawn: the variation re-arms every
-                        // play-window, so `spawned_at` names a clip this host may have stopped
-                        // playing many windows ago.
+                        // Phase from the current arm, not from spawn: the variation re-arms.
                         anim.seek_to((now - host.armed_at).rem_euclid(duration));
                     }
                 }
             } else {
-                // Stop (not pause): a paused active animation is still sampled and applied every
-                // frame by `animate_targets`; stopping empties the player so a hidden doodad costs
-                // nothing. The resume above re-arms + seeks, which is the faithful clock semantics.
+                // Stop, not pause: `animate_targets` still applies a paused animation each frame.
                 p.stop_all();
             }
         }
         if let Some(mut d) = drive {
-            // No re-seek on resume: the drive samples the shared world clock, so
-            // a re-appearing doodad lands on the phase the clock dictates by construction.
+            // No re-seek: the drive's cursor, sceneNow − attach, is a pure function of the clock.
             d.set_paused(!drawn);
         }
     }
@@ -614,39 +429,30 @@ impl Plugin for DoodadAnimPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UvAnimMaterials>();
         app.init_resource::<TintAnimMaterials>();
-        // The client's ONE `rand()` stream (`benilla_assets::AnimRng`), seeded here because this
-        // is where the engine boots and where `deterministic_run` is knowable — the reference's
-        // own `srand(GetTickCount())` runs once per process from CRT static init, pre-`WinMain`
-        // (`0x5d1c70`). A capture keeps the
-        // CRT's pre-`srand` value, so golden frames stay reproducible.
+        // The one `rand()` stream: the reference seeds it once per process before `WinMain`
+        // (`srand(GetTickCount())`, `0x5d1c70`); a capture leaves it unseeded.
         app.init_resource::<benilla_assets::AnimRng>();
         let deterministic = crate::dev_state::deterministic_run();
         app.world_mut()
             .resource_mut::<benilla_assets::AnimRng>()
             .seed_for_session(deterministic);
-        // The re-roll runs BEFORE the draw gate: a window that expires this frame must arm its new
-        // clip before the gate decides what to resume, or a host re-appearing on the same frame
-        // resumes the previous window's variation for one frame.
+        // The re-roll runs before the draw gate, or a host re-appearing as its window expires
+        // resumes the old variation for a frame.
         app.add_systems(
             PostUpdate,
             (reroll_doodad_variation, gate_doodad_anim)
                 .chain()
                 .before(AnimationSystems),
         );
-        // The lazy-rig pressure reaper: one headroom read per frame when the
-        // table has room; demotes longest-parked rigged hosts when it doesn't.
         app.add_systems(Update, lazy::reap_parked_rigs);
-        // `sample_mat_anim` runs before the visibility authority (`ModelVisSet`): it composes
-        // `MatAnim::current` into the render-alpha tag the same frame. The material tick runs
-        // *after* it, because its draw gate reads the verdict that authority writes — one frame
-        // later would freeze a scroll for a frame on every doodad that comes into view.
+        // `sample_mat_anim` runs before the visibility authority, which composes its value the
+        // same frame; the material tick runs after, since its draw gate reads that verdict.
         app.add_systems(
             Update,
             (
                 sample_mat_anim.before(crate::model_render::ModelVisSet),
                 tick_anim_materials.after(crate::model_render::ModelVisSet),
-                // The readout of everything that lane just decided (`WOW_MATANIM_PROBE`), after
-                // it, so the `row` column is this frame's write and not the previous one's.
+                // After the tick, so the probe's `row` column is this frame's write.
                 mat_anim::matanim_probe.after(tick_anim_materials),
             ),
         );
@@ -734,10 +540,6 @@ mod tests {
         }
     }
 
-    /// The unit lane's resolution: a part reads the sequence its HOST is playing, and follows it
-    /// when the host changes animation. This is the plumbing B16/B20 turn on — with the old
-    /// single-sequence bake there was nothing to follow, so a voidwalker's death-only armour drew
-    /// in every animation.
     #[test]
     fn hosted_mat_anim_follows_the_host_sequence() {
         let mut app = App::new();
@@ -761,7 +563,6 @@ mod tests {
             "playing sequence 0 ⇒ the batch is culled"
         );
 
-        // Switch the host to the other sequence: the same part must now draw.
         let world = app.world_mut();
         let mut entity = world.entity_mut(host);
         {
@@ -777,9 +578,7 @@ mod tests {
         );
     }
 
-    /// A hosted part whose host has no `AnimationPlayer` yet (the frame before the rig arms, a
-    /// rest-pose GameObject) still resolves — to slot 0 at t=0, the sequence's opening pose. It
-    /// must not read as fully visible by default, or the batch flashes for a frame at spawn.
+    /// With no player yet, slot 0 at t = 0, so the batch does not flash visible for a frame.
     #[test]
     fn hosted_mat_anim_without_a_player_reads_the_first_sequence() {
         let mut app = App::new();
@@ -797,8 +596,6 @@ mod tests {
         );
     }
 
-    /// The pinned lanes are unchanged: a doodad/effect instance reads the slot it was built with,
-    /// on its own spawn clock, and never consults a host.
     #[test]
     fn pinned_mat_anim_reads_its_own_slot() {
         let a = two_seq_alpha();
@@ -826,8 +623,6 @@ mod tests {
         }
     }
 
-    /// The content gate: no animations / no joints / a motionless first sequence ⇒ static (today's
-    /// path); gseq channels alone ⇒ the player-less tier; a moving first sequence ⇒ the looping arm.
     #[test]
     fn classify_picks_the_measured_tiers() {
         // No ModelAnimations at all (a barrel): static.
@@ -835,13 +630,13 @@ mod tests {
             classify(&skeleton(3), None),
             DoodadAnimTier::Static
         ));
-        // Boneless model: static even with parsed animations (the 0035 out-of-bounds guard).
+        // Boneless model: static even with parsed animations.
         let a = anims(vec![clip(0)], Some(0), true);
         assert!(matches!(
             classify(&skeleton(0), Some(&a)),
             DoodadAnimTier::Static
         ));
-        // A motionless first sequence, no gseq (a posed tree): static — no skin, no player.
+        // A motionless first sequence, no gseq (a posed tree): static.
         let a = anims(vec![clip(0)], None, false);
         assert!(matches!(
             classify(&skeleton(3), Some(&a)),
@@ -859,13 +654,8 @@ mod tests {
             classify(&skeleton(3), Some(&a)),
             DoodadAnimTier::FirstSeq(c) if c.anim_id == 0
         ));
-        // A CLOCK-ONLY model: every sequence now builds a clip, so a model whose
-        // bones never move — the Molten Core rune, the flame ring, 807 corpus models whose
-        // animation lives entirely in their emitter tracks — arrives here with clips and NO
-        // `first_seq` (the content gate declined it). It must still classify Static: its clock is
-        // armed by the entity lane off `idle_clip`, and rigging it could only reproduce the
-        // bind-pose mesh. This is the case that used to reach `first_seq: None` by never having
-        // built a clip at all.
+        // A clock-only model (clips but no `first_seq`: its animation lives in emitter tracks)
+        // stays Static; the entity lane arms its clock off `idle_clip`.
         let a = anims(vec![clip(0)], None, false);
         assert!(matches!(
             classify(&skeleton(3), Some(&a)),
@@ -879,10 +669,8 @@ mod tests {
         ));
     }
 
-    /// The lightning's own chain, read off the bytes (`benilla-extract m2seq` on
-    /// `World\Generic\PassiveDoodads\ParticleEmitters\BlastedLandsLightningbolt01.M2`): two
-    /// variations of animation id 0, weights 31129 / 1638 — so slot 1, which is where all four
-    /// emitters key their entire burst, carries exactly 5.0 %.
+    /// `BlastedLandsLightningbolt01.M2`'s chain: two variations of animation id 0, weights 31129
+    /// and 1638, so slot 1, where its emitters key the whole burst, carries 5.0 %.
     fn lightning_anims() -> ModelAnimations {
         let mut a = anims(vec![seq_clip(0, 0, 1), seq_clip(0, 1, 2)], Some(0), false);
         a.clips[0].frequency = 31129;
@@ -893,8 +681,7 @@ mod tests {
     }
 
     fn reroll_app() -> App {
-        // Deliberately NOT MinimalPlugins: `TimePlugin` drives `Time` off the real clock, which
-        // would clobber the manual advance these tests need to step whole play-windows.
+        // No `TimePlugin`: its real clock would clobber the manual advances that step windows.
         let mut app = App::new();
         app.init_resource::<Time>();
         app.init_resource::<benilla_assets::AnimRng>();
@@ -921,20 +708,12 @@ mod tests {
             .id()
     }
 
-    /// **Bug B63's residual, and the whole of decision 0768.** A placed doodad re-rolls its
-    /// frequency-weighted variation every play-window, for ever — it does NOT hold the one it
-    /// picked at load.
-    ///
-    /// Under the superseded contract the pick was once-at-load *and* seeded off the placement's
-    /// world position, so a Tainted Scar bolt that rolled slot 0 was silent for the life of the
-    /// session and one that rolled slot 1 strobed from that same fixed spot every 1.3 s for ever.
-    /// The reference re-rolls all 31 placements every window, which is why its strikes wander.
     #[test]
     fn a_placed_doodad_rerolls_its_variation_every_play_window() {
         let mut app = reroll_app();
         let host = lightning_host(&mut app);
 
-        // Frame 1: born with an expired window ⇒ the holder's `variationIdx = -1` arm lands at once.
+        // Frame 1: born with an expired window, the holder's `variationIdx = -1` arm lands at once.
         app.update();
         let armed = |app: &App| {
             app.world()
@@ -945,7 +724,6 @@ mod tests {
         };
         assert!(armed(&app).is_some(), "the first frame arms");
 
-        // Step whole windows and record which variation each one landed on.
         let mut seen = std::collections::HashMap::new();
         for _ in 0..400 {
             app.world_mut()
@@ -966,27 +744,20 @@ mod tests {
         let slot0 = seen.get(&AnimationNodeIndex::new(1)).copied().unwrap_or(0);
         let slot1 = seen.get(&AnimationNodeIndex::new(2)).copied().unwrap_or(0);
         assert_eq!(slot0 + slot1, 400, "every window arms one of the two");
-        // The bug was a placement stuck on ONE variation for ever. Both must occur.
         assert!(
             slot1 > 0,
             "the 5 % strike variation never came up in 400 windows — the bolt is stuck again"
         );
         assert!(slot0 > 0, "the 95 % silent variation never came up");
-        // A sanity band, not a distribution test — 400 windows off one fixed seed is far too few
-        // for that (it lands on 10, ~2.3σ under the mean, unremarkable). The weighting itself was
-        // measured separately over 200 000 draws: **4.9665 %** taken at the real
-        // two-draws-per-window stride, against the authored 1638/32768 = 4.9988 %. MSVC's LCG shows
-        // no stride bias here, which is worth having checked: the variation roll and the replay
-        // count come off the same stream, and a strided LCG is exactly where a rare variation could
-        // quietly under-fire and leave the field half as active as the reference's.
+        // A sanity band, not a distribution test: this seed lands on 10 (~2.3σ low). Over 200 000
+        // draws at two per window the rate is 4.9665 % against the authored 4.9988 %.
         assert!(
             (2..=60).contains(&slot1),
             "slot 1 came up {slot1}/400 — far enough off its authored 5 % to suspect the roll"
         );
     }
 
-    /// The gseq-only tier has no arm, so it has no play-window and nothing to re-roll: its channels
-    /// are free-clock loops the reference drives with zero arming.
+    /// Global sequences loop with no arming, so the gseq-only tier opens no window.
     #[test]
     fn a_gseq_only_host_never_rerolls() {
         let mut app = reroll_app();
@@ -1018,11 +789,7 @@ mod tests {
         assert_eq!(h.window_hi, f32::NEG_INFINITY, "no window was ever opened");
     }
 
-    /// A host that is not currently drawn still advances its window — the reference gates the cycle
-    /// on **linkage** (the in-range doodad drain), not on the draw. Gating on the draw would freeze
-    /// the field while the camera looks away and then re-roll every placement on the one frame it
-    /// turns back: a burst of simultaneous strikes the reference cannot produce. The undrawn host
-    /// keeps its stopped player and just updates what a resume will arm.
+    /// The deviation on [`reroll_doodad_variation`]: an undrawn host cycles, its player untouched.
     #[test]
     fn an_undrawn_host_keeps_cycling() {
         let mut app = reroll_app();
@@ -1067,23 +834,14 @@ mod tests {
         );
     }
 
-    /// The draw gate stops the player + pauses the gseq drive when every submesh is hidden, and on
-    /// re-appearing re-arms at the shared-clock position (`(now − armed_at) mod duration`) — the
-    /// ref's clock-indexed pose, so pause history never desyncs phase.
     #[test]
     fn gate_pauses_hidden_and_resumes_on_the_shared_clock() {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default())); // Time + asset stores
-                                                                   // The gate reads the far-clip wall — this host is mesh-BACKED, so it takes the
-                                                                   // `Visibility` branch and never consults it, but the system still needs the resource.
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        // The gate's params must resolve, though this meshed host never reads these.
         app.init_resource::<crate::view::ViewDistance>();
-        // …and the exterior-window gate's two terms, for the same reason: this host is
-        // mesh-BACKED so it never consults them, but the system's params must resolve. Their
-        // defaults are the outdoor case (`Unrestricted`, no room claimed).
         app.init_resource::<crate::wmo_portal::ExteriorWindows>();
         app.init_resource::<crate::wmo_portal::CameraInteriorClaim>();
-        // The lazy-rig promote's params — this host carries no `LazyRig`, so
-        // the wake edge never fires here, but the params must resolve.
         app.init_resource::<crate::rig_palette::RigPalettes>();
         app.init_asset::<SkinnedMeshInverseBindposes>();
         app.add_systems(Update, gate_doodad_anim);
@@ -1106,8 +864,7 @@ mod tests {
                     fade: crate::particles::EmitterFade::sphere(1.0, Vec3::ZERO),
                     clip: Some((node, 2.0)),
                     armed_at: 0.0,
-                    // Far future: this test exercises the DRAW gate, so no window may expire
-                    // under it and change the armed clip mid-assertion.
+                    // Far future: no window may expire and change the armed clip mid-test.
                     window_hi: f32::INFINITY,
                     anim_id: Some(0),
                     active: true,
@@ -1118,7 +875,6 @@ mod tests {
             ))
             .id();
 
-        // Visible: stays active, player untouched.
         app.update();
         let playing = |app: &mut App, e: Entity| {
             app.world_mut()
@@ -1130,7 +886,6 @@ mod tests {
         };
         assert_eq!(playing(&mut app, host), 1, "drawn ⇒ playing");
 
-        // Hide the one submesh: the player empties (stopped, zero per-frame cost).
         *app.world_mut()
             .entity_mut(mesh)
             .get_mut::<Visibility>()
@@ -1145,7 +900,6 @@ mod tests {
                 .active
         );
 
-        // Show it again: re-armed, looping, sought to the shared-clock position (< duration).
         *app.world_mut()
             .entity_mut(mesh)
             .get_mut::<Visibility>()
@@ -1162,23 +916,7 @@ mod tests {
         );
     }
 
-    /// [`DoodadAnimHost::arm_clock`] — the sound lane's phase, which must be the SHARED clock's,
-    /// never the (draw-gated) player's. Three claims: it wraps with the clip, it is unaffected by
-    /// the host being parked, and an unarmed host has no phase at all.
-    /// **A meshless prop of the building the camera stands in keeps animating** — decision 2059's
-    /// wiring, pinned where it broke.
-    ///
-    /// `EmitterFade`'s own tests already pin the LAW (`particles`:
-    /// `a_sealed_room_keeps_its_own_props_burning_and_stops_everything_else`). What was wrong here
-    /// was the wiring: this gate built its meshless host a fresh `EmitterFade` with
-    /// `instance: None, room: None`, so the exterior-window term fell through to
-    /// `ExteriorGate::admits_sphere` — and a sealed room is `Windows([])`, which "admits nothing".
-    /// Every particles-only WMO prop of the camera's OWN building was therefore parked, which is
-    /// Stratholme's 88 burning-building fires: 0 render batches each, so nothing but this branch
-    /// ever judged them, and their `$DSL` never fired.
-    ///
-    /// The control is the second host: same sphere, same place, no building — an ADT map doodad,
-    /// which a sealed room really must stop.
+    /// The control is a map doodad at the same spot with no building, which the sealed room stops.
     #[test]
     fn a_sealed_room_keeps_its_own_meshless_props_animating() {
         use crate::wmo_portal::{
@@ -1192,7 +930,7 @@ mod tests {
         app.init_asset::<SkinnedMeshInverseBindposes>();
         app.add_systems(Update, gate_doodad_anim);
 
-        // The camera stands inside a sealed room of `building` — no exterior window at all.
+        // The camera stands inside a sealed room of `building`, with no exterior window.
         let building = app
             .world_mut()
             .spawn(WmoPortalInstance {
@@ -1236,7 +974,7 @@ mod tests {
         let mut meshless = |fade: crate::particles::EmitterFade| {
             app.world_mut()
                 .spawn(DoodadAnimHost {
-                    meshes: Vec::new(), // 0 render batches — the whole point
+                    meshes: Vec::new(), // 0 render batches
                     fade,
                     clip: Some((node, 2.0)),
                     armed_at: 0.0,
@@ -1277,11 +1015,8 @@ mod tests {
         );
     }
 
-    /// The teleport frame (2026-09-04): this system runs before transform propagation, so the
-    /// camera's `GlobalTransform` still reads still on the frame its `Transform` was re-seated,
-    /// and the verdict reuse carried every host's pre-snap verdict across the snap — a lamppost
-    /// glow that should have parked kept its clock, a host that should have woken stayed parked.
-    /// The gate must read the seat's own write.
+    /// The gate runs before transform propagation, so on a teleport frame only the camera's local
+    /// has moved, and the verdict reuse must still re-judge every host.
     #[test]
     fn a_reseated_camera_is_not_a_still_scene() {
         let mut app = App::new();
@@ -1293,9 +1028,8 @@ mod tests {
         app.init_asset::<SkinnedMeshInverseBindposes>();
         app.add_systems(Update, gate_doodad_anim);
 
-        // A camera 1000 yd from the host, looking away: the host's frustum verdict is "not
-        // drawn". No propagation plugin, so `GlobalTransform` never follows `Transform` —
-        // exactly the ordering the gate sees on the real snap frame.
+        // A camera 1000 yd off, looking away: not drawn. With no propagation, `GlobalTransform`
+        // never follows `Transform`, as on the real snap frame.
         let far =
             Transform::from_xyz(1000.0, 0.0, 0.0).looking_at(Vec3::new(2000.0, 0.0, 0.0), Vec3::Y);
         let projection = bevy::camera::Projection::from(bevy::camera::PerspectiveProjection {
@@ -1354,9 +1088,7 @@ mod tests {
         app.update();
         assert!(!active(&app), "still ⇒ the verdict is reused, still parked");
 
-        // The snap: the seat writes the camera's local next to the host, facing it. The global
-        // (and the frustum built from it) stay stale this frame — and the host must still be
-        // re-judged rather than reused.
+        // The snap: the seat writes the local next to the host, facing it; the global stays stale.
         let near = Transform::from_xyz(0.0, 0.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y);
         let near_frustum = bevy::camera::primitives::Frustum::from_clip_from_world(
             &(bevy::camera::Projection::from(bevy::camera::PerspectiveProjection {
@@ -1370,9 +1102,7 @@ mod tests {
             let mut e = app.world_mut().entity_mut(cam);
             *e.get_mut::<Transform>().unwrap() = near;
             *e.get_mut::<bevy::camera::primitives::Frustum>().unwrap() = near_frustum;
-            // The propagated frame, written WITHOUT a change tick: on the real snap frame it is
-            // last frame's value (propagation has not run), and this is the closest a test can
-            // stand to that — the only "moved" signal on this frame is the local.
+            // Written without a change tick, so the local is this frame's only moved signal.
             *e.get_mut::<GlobalTransform>()
                 .unwrap()
                 .bypass_change_detection() = GlobalTransform::from(near);
@@ -1390,9 +1120,7 @@ mod tests {
             armed_at: 10.0,
             window_hi: f32::NEG_INFINITY,
             anim_id: Some(0),
-            // PARKED — and the clock still answers, which is the point: `arm_clock` is a pure
-            // function of the shared clock, so the phase is defined whether or not the host is in
-            // the animate set. Honouring that membership is the CALLER's job.
+            // Parked, and the clock still answers: honouring the animate set is the caller's job.
             active: false,
             parked_at: 0.0,
         };
@@ -1403,11 +1131,9 @@ mod tests {
         let (_, seek) = host.arm_clock(12.0).expect("armed");
         assert!((seek - 2.0).abs() < 1e-4, "2 s in, {seek}");
 
-        // Past one full cycle it wraps rather than running off the end.
         let (_, seek) = host.arm_clock(14.0).expect("armed");
         assert!((seek - (4.0 - 3.333)).abs() < 1e-4, "wrapped to {seek}");
 
-        // A zero-length clip has no phase to compute and must not divide by it.
         host.clip = Some((AnimationNodeIndex::new(1), 0.0));
         let (_, seek) = host.arm_clock(99.0).expect("armed");
         assert!(
@@ -1415,7 +1141,6 @@ mod tests {
             "a zero-length clip sits at its own t = 0"
         );
 
-        // Nothing armed (the gseq-only tier without a sound arm) ⇒ no phase, so nothing fires.
         host.clip = None;
         assert!(host.arm_clock(12.0).is_none());
     }

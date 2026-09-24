@@ -1,33 +1,17 @@
-//! `$WOW_EMIT_DUMP` — what the emission front end **decided**, per emitter, for one model.
-//!
-//! The particle lane already has an asset-side dump (`benilla-extract m2part` — every authored
-//! field of every record) and a draw-side one ([`super::depthdump`] — the depth numbers a pool
-//! brings to the compare). The gap between them is where "this effect looks wrong" reports
-//! actually live: *which* sequence slot the emitter resolved, what the ten per-frame tracks
-//! sampled at that slot, and how many particles that produced. A model whose rate track keys
-//! `0` in one sequence and `526/s` in another looks identical in the asset dump and in the draw
-//! dump — only the resolved slot says which of the two is on screen.
-//!
-//! `WOW_EMIT_DUMP=<label-substring>[,<period-seconds>]` — every `period` seconds (default 2),
-//! print one line per live emitter whose owning model's [`crate::interact::WorldObject`] label
-//! contains the substring, case-insensitively. That label is the model path for doodads, WMO
-//! props and GameObjects and the unit name for creatures — the same string the hover inspector
-//! shows, so the filter is copied straight off the panel that prompted the question.
-//!
-//! Scoping by label is what keeps it usable in a populated scene: a Molten Core frame ticks
-//! hundreds of emitters, and an unfiltered per-emitter dump both floods the log and costs the
-//! framerate of the run it is measuring.
+//! `$WOW_EMIT_DUMP=<label-substring>[,<period-seconds>]`: what the emission front end decided.
+//! Every period (default 2 s), one line per live emitter whose model's
+//! [`crate::interact::WorldObject`] label (a model path, or a creature's name) contains the
+//! substring, case-insensitively: the resolved sequence slot, the tracks sampled at it, the count.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_formats::{ParamsNow, ParticleEmitterDef};
 
-/// Parsed `$WOW_EMIT_DUMP`: `(lowercased label substring, period seconds)`. `None` = off, and
-/// every entry point below then does nothing at all.
+/// Parsed `$WOW_EMIT_DUMP`: (lowercased label substring, period seconds); `None` is off.
 static FILTER: std::sync::LazyLock<Option<(String, f32)>> = std::sync::LazyLock::new(|| {
     let v = std::env::var("WOW_EMIT_DUMP").ok()?;
-    // Only a trailing NUMBER is a period — a model path may itself contain a comma.
+    // Only a trailing number is a period: a model path may contain a comma.
     let (label, period) = match v
         .rsplit_once(',')
         .map(|(l, p)| (l, p.trim().parse::<f32>()))
@@ -38,23 +22,17 @@ static FILTER: std::sync::LazyLock<Option<(String, f32)>> = std::sync::LazyLock:
     Some((label.trim().to_ascii_lowercase(), period.max(0.1)))
 });
 
-/// The instrument's own system plumbing: the label lookup it filters by and its period clock.
-/// One [`SystemParam`] rather than two loose arguments — `simulate_particles` sits at Bevy's
-/// 16-parameter ceiling, and a debug affordance has no business spending two of them.
+/// The label lookup the instrument filters by and its period clock, as one [`SystemParam`].
 #[derive(SystemParam)]
 pub(super) struct EmitDump<'w, 's> {
-    /// The owning model's inspector identity. It rides the **drawn parts**, not the entity the
-    /// emitter hosts on (the picker hovers a mesh, so that is where `attach::dress` puts it) —
-    /// hence the child walk in [`EmitDump::label`]. Looking only at the owner is what made this
-    /// instrument's first outing print 10822 unlabelled lines.
+    /// The model's inspector label, which rides its drawn parts, not the emitter's host entity.
     labels: Query<'w, 's, &'static crate::interact::WorldObject>,
     parts: Query<'w, 's, &'static Children>,
     last: Local<'s, f32>,
 }
 
 impl EmitDump<'_, '_> {
-    /// Is this frame a dump tick? Advances the period clock when it is. Always `false` without
-    /// the env, so the per-emitter call site costs one atomic load per frame.
+    /// Is this frame a dump tick (advancing the period clock)? Always false without the env.
     pub(super) fn due(&mut self, now: f32) -> bool {
         let Some((_, period)) = FILTER.as_ref() else {
             return false;
@@ -66,9 +44,7 @@ impl EmitDump<'_, '_> {
         true
     }
 
-    /// This emitter's model identity: the owner's own [`crate::interact::WorldObject`] if it has
-    /// one, else the first drawn part under it that does — a GameObject/unit carries its label on
-    /// the submesh entities, and the emitter hosts on the root above them.
+    /// The owner's own label, else the first labelled drawn part under it.
     fn label(&self, owner: Option<Entity>) -> &str {
         let Some(e) = owner else { return "" };
         if let Ok(o) = self.labels.get(e) {
@@ -120,10 +96,10 @@ impl EmitDump<'_, '_> {
     }
 }
 
-/// One emitter's decision this frame — the sim's live values, not the authored ones.
+/// One emitter's decision this frame: the sim's live values, not the authored ones.
 pub(super) struct Decision<'a> {
     pub(super) def: &'a ParticleEmitterDef,
-    /// The sequence FILE slot the rate/gate/params tracks resolved to (`None` = degraded to 0).
+    /// The sequence file slot the rate, gate and params tracks resolved to; `None` degrades to 0.
     pub(super) seq: Option<usize>,
     /// Seconds into that slot's baked loop.
     pub(super) elapsed: f32,
@@ -131,7 +107,6 @@ pub(super) struct Decision<'a> {
     pub(super) emitting: bool,
     pub(super) live: usize,
     pub(super) now: &'a ParamsNow,
-    /// The emitter origin's live world position — the number that says whether a model's
-    /// emitters are spread across it or collapsed onto one point.
+    /// The emitter origin's live world position.
     pub(super) at: Vec3,
 }

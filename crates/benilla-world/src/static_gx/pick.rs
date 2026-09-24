@@ -1,23 +1,7 @@
-//! The retained pass answers the ray — **the lane names what it drew**.
-//!
-//! Slices 1–2 and B4 moved the static world's geometry off per-placement entities into retained
-//! cell/region bakes. The pick declaration ([`crate::interact::PickMesh`] + `WorldObject`) rode
-//! those entities, so the divert took it with them: over an absorbed doodad, building or prop the
-//! inspector, the GO hover and `WOW_PICK` all answered *nothing*, and 0929's "pick geometry is
-//! declared, never inferred" rule made that silence indistinguishable from a correctly transparent
-//! surface. `mod.rs`'s B1 note called it out as a known gap and predicted "one side table if
-//! missed"; this is that table, held where the geometry already is.
-//!
-//! The lane implements [`PickSource`] rather than publishing records to a shared index for one
-//! reason: **only the lane knows what it actually drew this frame.** Its visibility is a CPU scene
-//! walk — frustum + farclip + the exterior window gate at CELL grain, the portal PVS bit per GROUP,
-//! the referrer-set OR per prop SET, and the exile kill bit per fader PLACEMENT — none of which is
-//! a `ViewVisibility` an outside walker could read. So the admission below is the *published
-//! verdict itself* ([`super::render::GxWorld::visible`] / `visible_wmos`, the very lists the render
-//! node draws from), not a re-derivation that could disagree with the pixels.
-//!
-//! Cost is paid only when someone casts: no per-frame bookkeeping exists for this, and the
-//! instruments that cast (the armed inspector, `WOW_PICK`) run at most once a frame.
+//! Picking for the retained pass: a diverted batch has no entity to carry a
+//! [`crate::interact::PickMesh`], so the lane answers the ray as a [`PickSource`]. Admission reads
+//! the published lists the render node draws from ([`super::render::GxWorld::visible`],
+//! `visible_wmos`), so the answer cannot disagree with the pixels.
 
 use std::sync::Arc;
 
@@ -29,8 +13,8 @@ use crate::interact::{ray_member, ray_mesh_bounds, PickSource, RayHit, WorldObje
 impl PickSource for StaticGx {
     fn cast_objects(&self, ray: Ray3d, all_hits: bool, out: &mut Vec<(Arc<WorldObject>, RayHit)>) {
         let (origin, dir) = (ray.origin, *ray.direction);
-        // Broad phase over every admitted item, nearest box entry first — the entity cast's own
-        // shape, so the narrow walk stops as soon as a confirmed hit beats every remaining box.
+        // Broad phase, nearest box entry first as in the entity cast: the narrow walk stops once a
+        // hit beats every remaining box.
         let mut candidates: Vec<(f32, &GxCell, usize)> = Vec::new();
         for entry in &self.world.visible {
             match entry {
@@ -39,9 +23,7 @@ impl PickSource for StaticGx {
                         continue;
                     };
                     gather(cell, origin, dir, &mut candidates, |cell, i| {
-                        // A fader draws retained only while Steady: Exiled means the placement is
-                        // feathering as ordinary entities (which carry their own declaration, and
-                        // would otherwise be named twice), Gone means nothing is drawn at all.
+                        // A fader draws here only while Steady; exiled, its entities answer.
                         match cell.items[i].fader {
                             Some(uid) => matches!(
                                 cell.faders.get(&uid).map(|f| &f.state),
@@ -92,9 +74,8 @@ impl PickSource for StaticGx {
     }
 }
 
-/// Add one region's admitted items to the broad-phase list. An item with no build-time bound is
-/// admitted at entry 0 and narrow-tested unconditionally — the entity cast's rule for a bound-less
-/// part, kept: a missing bound must never un-pick real geometry.
+/// Add one region's admitted items to the broad phase; an item without a bound enters at 0 and is
+/// always narrow-tested, as in the entity cast.
 fn gather<'a>(
     cell: &'a GxCell,
     origin: Vec3,
@@ -129,8 +110,8 @@ mod tests {
     use crate::interact::PickSource;
     use benilla_formats::ModelBlend;
 
-    /// Cast straight down through `tri([0,0,0])`'s footprint — its baked triangle lies in the
-    /// Bevy XZ plane at y = 0 over x,z ∈ [-1, 0] (`wow_to_bevy`).
+    /// Cast straight down through `tri([0,0,0])`, which bakes into the Bevy XZ plane at y = 0 over
+    /// x, z in [-1, 0].
     fn cast(gx: &StaticGx) -> Vec<(String, u32, f32)> {
         let ray = Ray3d::new(Vec3::new(-0.3, 5.0, -0.3), Dir3::NEG_Y);
         let mut out = Vec::new();
@@ -140,8 +121,6 @@ mod tests {
             .collect()
     }
 
-    /// **Decision 1534.** An item the cull SELECTED is named, at its own placement identity and
-    /// its own geometry — the pick answer the divert used to take away with the entity.
     #[test]
     fn a_selected_cell_item_is_named() {
         let mut gx = StaticGx::default();
@@ -153,8 +132,6 @@ mod tests {
             None,
             ModelBlend::Opaque
         )));
-        // Nothing is drawn until the cull selects the cell — and an unselected cell must be as
-        // transparent to the ray as an unculled entity's `ViewVisibility` makes it.
         assert!(cast(&gx).is_empty(), "an unselected cell is not pickable");
         gx.world.visible.push(GxDoodadVis::Cell((0, 0)));
         assert_eq!(
@@ -163,9 +140,7 @@ mod tests {
         );
     }
 
-    /// A fader draws retained only while STEADY. Once it exiles, the placement is drawing as
-    /// ordinary entities that carry their own declaration — so the lane must go quiet, or the
-    /// same tree is named twice, once by each half of the protocol.
+    /// Exiled, the placement draws as entities that carry their own pick, so the lane goes quiet.
     #[test]
     fn an_exiled_fader_stops_answering() {
         let mut gx = StaticGx::default();

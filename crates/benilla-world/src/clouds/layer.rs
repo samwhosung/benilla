@@ -1,22 +1,7 @@
-//! The visible cloud layer — the reference's celestial-pass cloud dome (`0x6d0530` mesh,
-//! `0x6cfb00` coloring, `0x58ac70` per-regen texture upload).
-//!
-//! The reference draws a 12-ring hemisphere strip (pole → the 45° rim, ring co-latitudes bunched
-//! toward the rim, per-ring vertex alpha fading the rim out) textured by an image generated from
-//! the coverage byte tile every regen, as the **last draw of its sky pass** — one squashed depth
-//! slice `[0.975, 0.98]` shared by stars/discs/gradient/clouds, depth-write off, painter's order —
-//! so terrain occludes the clouds
-//! and the clouds blend over a setting sun. We reproduce the layering with real depth: every
-//! vertex is pushed to **uniform radius** along its recentred direction (the reference's squashed
-//! cap relies on the depth-range remap; at real depth its apex would sit at `0.29·r` — inside the
-//! scene, clouds drawing over cliffs) and the dome is camera-centred at `far·0.87` — inside the
-//! opaque sky dome (`far·0.9`), behind all terrain — with its slot in the reference's fixed order
-//! held by [`crate::sky_order::CLOUDS_BIAS`]: after the discs, before the rain, before the glare
-//! (the frame's last render, per the same pin).
-//!
-//! The strip topology is converted to a triangle list (11 bands × 32 triangles — the reference's
-//! 11 separate 34-index strips; same pixels, one mesh). The coverage image is R8; the color math
-//! runs per-fragment in `cloud.wgsl` from the same bytes the occlusion sampler reads.
+//! The visible cloud layer, the reference's cloud dome (`0x6d0530` mesh, `0x6cfb00` coloring,
+//! `0x58ac70` upload): a 12-ring cap from the pole to the 45° rim, faded at the rim, drawn last in
+//! the sky pass so clouds blend over a setting sun. [`crate::sky_order::CLOUDS_BIAS`] holds that
+//! place; the shared far-depth pin puts it behind all terrain.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::Projection;
@@ -38,25 +23,21 @@ use crate::view::WorldCamera;
 
 use super::kernel::COLS;
 
-/// The cloud dome material: unlit premultiplied-gamma blend over the sky, coverage from the R8
-/// tile texture, palette/glow uniforms packed like `SkyExt`.
+/// The cloud dome material: the kernel's colored texels, blended premultiplied in gamma.
 pub type CloudMaterial = ExtendedMaterial<StandardMaterial, CloudExt>;
 
-/// The colored cloud texture (see `cloud.wgsl`). All color math already happened CPU-side in the
-/// kernel's `0x6cfb00` port (gradient + glow + weather dim, in gamma bytes exactly like the
-/// reference) — the material only carries the resulting RGBA image, whose texels are **raw gamma
-/// values** (a non-sRGB texture, never linearised).
+/// The colored cloud texture. The color math is CPU-side as in the reference, so the texels are
+/// raw gamma bytes in a non-sRGB texture.
 #[derive(Asset, AsBindGroup, Clone, TypePath)]
 pub struct CloudExt {
-    /// The live colored tile (RGBA8, 128², alpha = coverage), re-uploaded on regen — the
-    /// reference's `0x58ac70` zero-copy bind of the `0x6cfb00` color buffer.
+    /// The colored tile, alpha the coverage, re-uploaded each regen (`0x58ac70`).
     #[texture(100)]
     #[sampler(101)]
     pub(crate) texels: Handle<Image>,
 }
 
 impl MaterialExtension for CloudExt {
-    /// The shared sky vertex stage — the far-depth pin ([`crate::sky_order`], "The depth law").
+    /// The shared sky vertex stage, which pins every sky vertex to the far depth.
     fn vertex_shader() -> ShaderRef {
         SKY_VERTEX_SHADER.into()
     }
@@ -76,22 +57,18 @@ impl MaterialExtension for CloudExt {
     }
 }
 
-/// Marker for the cloud dome entity.
 #[derive(Component)]
 pub(super) struct CloudDome;
 
-/// The tick system's upload target — the colored tile image the dome samples, plus the material
-/// to touch on every upload (a modified `Image` gets a fresh GPU texture, and the material's
-/// cached bind group must be rebuilt to see it — without the touch the dome keeps sampling the
-/// first upload forever).
+/// The tick's upload target: the image the dome samples, and the material to touch on each upload
+/// so its bind group picks up the new texture.
 #[derive(Resource)]
 pub(super) struct CloudLayer {
     pub(crate) image: Handle<Image>,
     pub(crate) material: Handle<CloudMaterial>,
 }
 
-/// Ring co-latitude fractions ×π (`0x811570` table, `0x6d0530`): pole → the 45° rim, bunched
-/// toward the rim.
+/// Ring co-latitudes in units of π (`0x811570`), from the pole to the 45° rim.
 const RING_COLAT: [f32; 12] = [
     0.0, 0.025, 0.05, 0.075, 0.10, 0.125, 0.15, 0.175, 0.205, 0.23, 0.245, 0.25,
 ];
@@ -100,13 +77,11 @@ const RING_COLAT: [f32; 12] = [
 const RING_ALPHA: [f32; 12] = [
     1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 128.0 / 255.0, 0.0, 0.0,
 ];
-/// Azimuth steps per ring (`0x6d0530`: 12 rings × 16 = 192 verts).
+/// Azimuth steps per ring (`0x6d0530`).
 const AZ_STEPS: usize = 16;
 
-/// The reference dome (`0x6d0530`, radius 1): positions recentred `−cos(π/4)` so the rim sits at
-/// eye level, the polar UV `(sin·V + 0.5, cos·V + 0.5)` with `V = ring/24` — the same square
-/// mapping the coverage sampler uses, so the drawn cloud and the glare occlusion co-locate.
-/// Normals = the unit sky direction (feeds the sun-glow alignment).
+/// The reference dome (`0x6d0530`): recentred by `−cos(π/4)` so the rim sits at eye level, with
+/// the coverage sampler's polar UV so the drawn cloud and the glare's occlusion line up.
 fn cloud_dome_mesh() -> Mesh {
     let shift = std::f32::consts::FRAC_PI_4.cos();
     let mut positions = Vec::with_capacity(12 * AZ_STEPS);
@@ -115,16 +90,15 @@ fn cloud_dome_mesh() -> Mesh {
     let mut colors = Vec::with_capacity(12 * AZ_STEPS);
     for (ring, (&colat, &alpha)) in RING_COLAT.iter().zip(RING_ALPHA.iter()).enumerate() {
         let phi = colat * std::f32::consts::PI;
-        let v_r = ring as f32 / 24.0; // ring·(1/12)·0.5 — the polar UV radius
+        let v_r = ring as f32 / 24.0; // the polar UV radius
         for j in 0..AZ_STEPS {
             let az = j as f32 / AZ_STEPS as f32 * std::f32::consts::TAU;
             let (sa, ca) = az.sin_cos();
-            // The recentred sky direction (`cos φ − cos45°` height: rim at eye level), pushed to
-            // unit radius so the whole cap sits at one distance (see the module docs).
+            // Recentred so the rim sits at eye level, then pushed to unit radius.
             let dir = Vec3::new(phi.sin() * sa, phi.cos() - shift, phi.sin() * ca).normalize();
             positions.push([dir.x, dir.y, dir.z]);
             normals.push([dir.x, dir.y, dir.z]);
-            // u tracks world x, v tracks world z — matching the sampler's (col ← x, row ← z).
+            // u follows world x and v world z, as the sampler's column and row do.
             uvs.push([sa * v_r + 0.5, ca * v_r + 0.5]);
             colors.push([1.0, 1.0, 1.0, alpha]);
         }
@@ -167,7 +141,7 @@ pub(super) fn setup_cloud_layer(
         },
         TextureDimension::D2,
         vec![0; COLS * COLS * 4], // fully transparent until the field primes
-        // NON-sRGB: the texels are the kernel's gamma bytes; sampling must return them raw.
+        // Not sRGB: the texels are gamma bytes and must sample raw.
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::default(),
     ));
@@ -176,8 +150,7 @@ pub(super) fn setup_cloud_layer(
             unlit: true,
             cull_mode: None, // viewed from inside
             alpha_mode: AlphaMode::Premultiplied,
-            // The sky pass's last draw — over the discs, under the rain and the glare (the
-            // reference's fixed order; see the ladder in `sky_order`).
+            // The sky pass's last draw: over the discs, under the rain and the glare.
             depth_bias: crate::sky_order::CLOUDS_BIAS,
             ..default()
         },
@@ -194,18 +167,9 @@ pub(super) fn setup_cloud_layer(
     commands.insert_resource(CloudLayer { image, material });
 }
 
-/// The sky-dome visibility toggle (the clouds hide with the rest of the sky). All color state
-/// lives in the texture — the kernel's `0x6cfb00` port owns it.
-///
-/// A WMO skybox ([`crate::skybox`]) hides the clouds too: `CSky::Render`'s one shared boolean skips
-/// **all six** sky elements together (`0x6d4a3b test edi,edi; je`), so the painted art is the whole
-/// sky rather than a backdrop the procedural clouds keep drawing over. The art carries its own cloud
-/// banks; layering ours on top lifted the painted zenith out of its near-black. The gate is the
-/// slot's **weight** past 0.99 ([`crate::skybox::SkyboxWeight`]): through the body of the 4-second
-/// crossfade the clouds keep drawing and the painted sky alpha-blends over them.
-///
-/// A **submerged eye** hides them the same way: the scene driver's `0x6812a4` submerged test skips
-/// the whole `CSky::Render` call — from under the surface there is no sky, only the murk.
+/// Hides the dome with the rest of the sky: under a WMO skybox past weight 0.99, as `CSky::Render`
+/// skips all six sky elements on one flag (`0x6d4a3b`), and while submerged, as the scene skips
+/// `CSky::Render` (`0x6812a4`).
 pub(super) fn apply_cloud_visibility(
     debug: Res<DebugState>,
     skybox: Res<crate::skybox::SkyboxWeight>,
@@ -223,11 +187,8 @@ pub(super) fn apply_cloud_visibility(
     }
 }
 
-/// Pin the dome to the camera at `far·0.87` — inside the opaque sky dome (`far·0.9`), sorted after
-/// the disc shells so the transparent pass draws the clouds over a setting sun, the reference's
-/// depth-band layering. The radius sets the dome's *screen* geometry only: occlusion against the
-/// world is the far depth `sky_vertex.wgsl` pins (`sky_order`, "The depth law"), not this shell —
-/// the WDL horizon reaches past it.
+/// Centres the dome on the camera at `far·0.87`, inside the sky dome. The radius only sizes it on
+/// screen; occlusion comes from the far-depth pin in `sky_vertex.wgsl`.
 #[allow(clippy::type_complexity)]
 pub(super) fn follow_cloud_dome(
     cam: Query<(&GlobalTransform, &Projection), With<WorldCamera>>,
@@ -256,9 +217,6 @@ pub(super) fn follow_cloud_dome(
 mod tests {
     use super::*;
 
-    /// The dome is the reference's `0x6d0530` build: 192 verts (12 rings × 16), the 11 band
-    /// strips as 352 triangles, rim at eye level (y = 0 after the −cos45° recentre), UV radius
-    /// growing ring-linear to 11/24.
     #[test]
     fn dome_matches_the_reference_build() {
         let mesh = cloud_dome_mesh();
@@ -272,8 +230,7 @@ mod tests {
             .unwrap()
             .as_float3()
             .unwrap();
-        // Every vertex sits at unit radius (the uniform-distance push); the pole points straight
-        // up and the rim (colat 0.25π, recentred to eye level) stays at y = 0.
+        // Unit radius everywhere; the pole points straight up and the rim sits at y = 0.
         for p in pos {
             let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
             assert!((r - 1.0).abs() < 1e-5, "radius {r}");

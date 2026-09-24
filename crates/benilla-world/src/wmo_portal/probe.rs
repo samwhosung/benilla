@@ -1,8 +1,6 @@
-//! The portal-cull probe + trace instrument (instruments as first-class): the live
-//! seed/visibility readout the debug panel shows, and the on-demand full-trace dump that turns a
-//! director-found "it vanishes here" into an exact fixture (eye coordinates, seed evidence, and every
-//! portal hop's verdict). The flood itself lives in the parent module; [`TraceLog`] records through
-//! the [`FloodTrace`](super::FloodTrace) tap, so there is no second flood to drift.
+//! The portal-cull probe: an on-demand trace dump that turns a spot where something vanishes into
+//! a fixture (the eye, the seed's evidence, every portal hop's verdict). [`TraceLog`] records
+//! through the [`FloodTrace`](super::FloodTrace) tap, so there is no second flood.
 
 use bevy::prelude::*;
 
@@ -11,27 +9,22 @@ use super::{
     MAX_FLOOR_DROP,
 };
 
-/// The portal-cull probe (instruments as first-class): an on-demand full trace dump —
-/// the "found a spot where it vanishes" loop: click dump at the broken spot, and the exact seed evidence
-/// + per-portal verdicts land in a file the audit harness can replay as a fixture.
+/// The portal-cull probe: dumped at a broken spot, the seed's evidence and every portal verdict
+/// land in a file the audit harness can replay as a fixture.
 #[derive(Resource, Default)]
 pub struct WmoCullProbe {
     /// Set by the panel's dump button: the file the next compute writes the trace to, then
-    /// clears. **A path handed in, never one this crate builds.** `benilla-world` has no
-    /// `local_state`, and the cwd-relative `target/wmo-cull-trace.txt` this used to write is the
-    /// install folder the moment a player launches the binary from inside it — the one write in
-    /// this crate, and the one 1486 forbids. The panel resolves the path under
+    /// clears. Always a path handed in, never one this crate builds: a cwd-relative one is the
+    /// read-only install folder when the binary runs from there. The panel resolves it under
     /// `benilla-config/Diagnostics/`; `WOW_CULLDUMP=<path>` is the headless spelling.
     pub dump_to: Option<std::path::PathBuf>,
-    /// **The eye the PVS, the interior claim and the exterior windows were computed from** —
-    /// the visibility authority's own pose, recorded so an instrument can compare it against the
-    /// pose the frame actually draws from. Ordinary movement makes the two identical to within a
-    /// centimetre; a snap is where they can disagree by the whole teleport.
+    /// The eye the PVS, the interior claim and the exterior windows were computed from, for
+    /// comparison with the pose the frame draws from; a snap is where the two differ.
     pub eye: Vec3,
 }
 
-/// The probe dump's recorder: the seed's evidence (floor faces + portal crossings under the eye's
-/// column) plus every hop verdict, as text.
+/// The dump's recorder: the seed's evidence (floor faces and portal crossings under the eye's
+/// column) and every hop verdict, as text.
 pub(crate) struct TraceLog {
     pub(crate) text: String,
 }
@@ -42,8 +35,8 @@ impl TraceLog {
             "wmo {}: eye local ({:.2}, {:.2}, {:.2})\n",
             model.wmo_id, eye[0], eye[1], eye[2]
         );
-        // The terrain leg the WMO hit races: a surface above the eye was never crossed by the down
-        // segment; one below it beats any WMO face deeper still, and the eye is over open ground.
+        // The terrain leg the WMO hit races: a surface above the eye is off the down segment; one
+        // below it beats any deeper WMO face, and the eye is over open ground.
         text.push_str(&match terrain_z {
             None => "  terrain under: none (off-tile, mid-decode, or an MCNK hole)\n".to_string(),
             Some(z) if z > eye[2] => format!("  terrain under: none (surface z={z:.2} is ABOVE the eye — not on the down segment)\n"),
@@ -60,8 +53,8 @@ impl TraceLog {
                 g.ref_count
             ));
         }
-        // The seed's evidence: the top collision face per group under the eye's column, and every
-        // portal crossing (incl. near-parallel snap candidates) the down-ray's Leg B would consider.
+        // The seed's evidence: the top collision face per group under the eye, and every portal
+        // crossing the down-ray's Leg B would consider, near-parallel snap candidates included.
         for (gi, tris) in model.group_collision_tris.iter().enumerate() {
             let mut best = f32::NEG_INFINITY;
             for tri in tris {
@@ -84,7 +77,7 @@ impl TraceLog {
                 };
                 let [nx, ny, nz, d] = info.plane;
                 if nz.abs() < super::PORTAL_NEAR_PARALLEL {
-                    // A vertical doorway: only the 0.1-yd embedded-in-plane snap can cross it.
+                    // A vertical doorway: only the 0.1 yd in-plane snap can cross it.
                     let dist = nx * eye[0] + ny * eye[1] + nz * eye[2] + d;
                     if dist.abs() <= super::PORTAL_PLANE_SNAP {
                         text.push_str(&format!(

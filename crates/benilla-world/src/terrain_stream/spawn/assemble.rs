@@ -1,8 +1,4 @@
-//! The placed-model assembler: [`spawn_model_entities`] builds a model's submesh entities with the
-//! full doodad/WMO component set (production materials, fade, mesh tags, the doodad anim host and
-//! its skinned twins). Two consumers — the terrain streamer's world-static placements
-//! ([`super::spawn_loaded_placements`]) and the WMO-display gameobject's doodad props
-//! (`crate::entities`' `wmo_props`).
+//! Builds a placed model's submesh entities: materials, fade, mesh tags and the doodad anim host.
 
 use std::sync::Arc;
 
@@ -22,34 +18,21 @@ use crate::model_render::{model_material, MaterialCache, ShadeSel};
 use crate::model_render::{ModelKind, ModelPart};
 use benilla_assets::materials::WowModelMaterial;
 
-/// What one placement's animation host armed, for the consumers that spawn alongside its submeshes.
-/// All fields are *per placement*, not per model: the anchors are this instance's, and `arm` is
-/// this instance's own anim root, whose live player names the sequence it is currently playing.
+/// What one placement's anim host armed, for the fx spawned beside its submeshes.
 pub struct PlacementHost {
-    /// `(bone, anchor)` — the consumer anchors this placement minted: one entity
-    /// per bone something actually rides, registered in the host's `RigPose` (its compose passes
-    /// re-seat them) and pre-minted here for every emitter and ribbon bone the model authors, so
-    /// the fx spawns that run after the pose buffer is attached only look entities up.
+    /// `(bone, anchor)` for each bone something rides, every emitter and ribbon bone minted before
+    /// the pose buffer attaches.
     anchors: Vec<(u16, Entity)>,
-    /// This placement's anim-root entity. It rides the returned entity list so it despawns with the
-    /// placement, but it is **not geometry** — a caller tagging "everything this placement draws"
-    /// has to be able to leave it out, or it lands in a cull that can only fail open on a boundless
-    /// entity. Distinct from `arm`, which is `None` unless a sequence was armed.
+    /// The anim root, despawned with the placement but not geometry: a caller tagging what the
+    /// placement draws leaves it out.
     pub(crate) root: Entity,
-    /// The anim-root entity IF this placement armed a sequence; `None` on the gseq-only tier, where
-    /// nothing was armed and slot 0 is the honest answer.
-    ///
-    /// This used to be the armed slot as a plain `usize`, captured once at spawn. That was right
-    /// only while a placed doodad kept one variation for life — it re-rolls every play-window,
-    /// so a captured slot goes stale within about a second and the consumer has to
-    /// resolve against the live player instead.
+    /// The anim root if a sequence was armed, whose live player names the playing slot; `None` on
+    /// the gseq-only tier, which reads slot 0.
     pub arm: Option<Entity>,
 }
 
 impl PlacementHost {
-    /// The anchor standing in for `bone` — what `joints.get(bone)` used to answer. `None` = the
-    /// bone hosts nothing this placement consumes (or is outside the skeleton): the consumer
-    /// falls back exactly as it did on a missing joint.
+    /// The anchor for `bone`; `None` when nothing this placement spawns rides it.
     pub fn anchor(&self, bone: u16) -> Option<Entity> {
         self.anchors
             .iter()
@@ -60,141 +43,65 @@ impl PlacementHost {
 
 /// What [`spawn_model_entities`] spawned.
 pub struct SpawnedModel {
-    /// The caller's despawn list — everything this placement owns as world roots (anim host,
-    /// parts, world-root cards; owner-following cards manage their own lifecycle and stay out).
+    /// The despawn list: anim host, parts and world-root cards (a following card despawns itself).
     pub entities: Vec<Entity>,
-    /// Index-parallel with the `submeshes` slice: the entity each batch spawned, `None` where
-    /// no entity exists (a missing render form; historically also the retired `WOW_MEGA_STATIC`
-    /// bracket's divert). This exists
-    /// because POSITION IS A CONTRACT: the WMO path zips per-batch group indices against what
-    /// was spawned, and a skipped batch must hold its slot rather than shift every later batch
-    /// onto the wrong group — which is exactly what the bracket's bare `continue` did to the
-    /// surviving entities of a diverted building (found by 1417's constraint map).
+    /// Index-parallel with `submeshes`: each batch's entity, `None` where it diverted or had no
+    /// render form. The WMO path zips group indices against it, so a skipped batch holds its slot.
     pub by_batch: Vec<Option<Entity>>,
-    /// The anim host, when the model animates (see [`PlacementHost`]).
+    /// The anim host, when the model animates.
     pub host: Option<PlacementHost>,
 }
 
-/// Spawn a model's submeshes at `transform` with the full doodad/WMO component set. Returns the spawned
-/// entities (for refcounted despawn).
-///
-/// `pub(crate)`: two consumers — the terrain streamer's world-static placements here, and the
-/// WMO-display GameObject's doodad props ([`crate::entities`]'s `wmo_props`, the ship's sails), which
-/// pass a doodad-LOCAL `transform` + `card_owner` and parent the returned entities under the moving
-/// gameobject (every downstream system reads propagated `GlobalTransform`s, so the composition holds).
+/// Spawns a model's submeshes at `transform`. A transport's props pass a doodad-local `transform`
+/// and parent the result under the moving gameobject, as every reader uses `GlobalTransform`.
 pub fn spawn_model_entities(
     commands: &mut Commands,
     mat_cache: &mut MaterialCache,
     materials: &mut Assets<WowModelMaterial>,
     light: &Buffer,
     submeshes: &[ModelSubmesh],
-    // The model's app-built render forms, index-parallel with `submeshes`: the
-    // static handle + its build-time `Aabb` per batch, and the skinned twins when this model's
-    // lane rigs (`None` otherwise). Callers gate on `ModelForms::require`, so by the time a
-    // placement spawns these are complete.
+    // Index-parallel with `submeshes`; complete, as callers gate on `ModelForms::require`.
     forms: crate::model_forms::FormSlices<'_>,
     transform: Transform,
-    // This placement's dev-instrument identity — model path, placement uniqueId, kind — shared
-    // by every batch it spawns. It is an INPUT rather than the blanket tag it used to be
-    // (`tag_world_object`, still applied to the returned entities) because a batch that DIVERTS
-    // spawns no entity to tag: the consolidating lanes carry this Arc into their own pick
-    // members instead, which is what keeps a merged or retained placement nameable (1534).
-    // `kind` also stands in for the old `is_wmo` flag — one source, so they cannot disagree.
+    // The placement's pick identity: a diverted batch spawns no entity, so its lane carries this.
     object: &Arc<crate::interact::WorldObject>,
-    // The static terrain-shade selector for every batch (the MCSH sample at this placement's base →
-    // `ShadeSel::Lit`/`Matte`/`Shaded`; see `model_render::ShadeSel`). Ignored by WMO group geometry
-    // and interior props (their lighting lanes don't read it).
+    // The MCSH terrain shade at the base; WMO group geometry and interior props ignore it.
     shade: ShadeSel,
-    // `Some(slot)` for an INTERIOR M2 prop: its folded SH probe's table slot, carried per-instance
-    // in `MeshTag` on EVERY batch of the model, billboard cards included (read by
-    // `wow_model.wgsl`'s interior-prop lane). Its ordinary batches are steady indoors; a card still
-    // distance-fades with its doodad, and the fade composes with the slot rather than clobbering it.
-    // `None` everywhere else (exterior props fade; WMO groups use their own
-    // per-submesh interior flag + batch class).
+    // An interior M2 prop's SH-probe slot, carried in `MeshTag` on every batch, cards included.
     interior_slot: Option<u16>,
-    // The placement's **draw-set gate** — its fade sphere plus, for a WMO prop, the building
-    // instance and the rooms that name it. `Some` on the world-static lanes, where the caller
-    // builds it ONCE ([`super::fx::emitter_fade`]) and hands the same value to every rider of the
-    // placement: the emitters, the ribbon trails, the glow lights — and, since 2059, the anim
-    // host, which used to fabricate its own with `instance: None, room: None` and so judged a
-    // particles-only WMO prop as exterior scene. Standing inside a sealed room that is
-    // `ExteriorGate::Windows([])`, which "admits nothing": every meshless prop of the building the
-    // camera was standing in was parked, its event track unscanned, and Stratholme's
-    // burning-building `$DSL` never fired.
-    //
-    // `None` on the entity-hosted lane (a transport's props), which carries no `EmitterFade` at
-    // all on purpose — a mover has no baked world point for one to measure from
-    // (`benilla_app::entities::wmo_props`). The bare sphere below is what its mesh lane needs, and
-    // `radius` is read for exactly that: in the `Some` arm the gate carries its own and this
-    // parameter is never consulted again.
+    // The placement's draw-set gate, shared with its emitters, ribbons, lights and anim host: a
+    // meshless prop's only verdict. `None` on the entity-hosted lane, as a mover has no baked
+    // world point to measure from; the mesh lane then builds a bare sphere from `radius`.
     fade: Option<&crate::particles::EmitterFade>,
     radius: f32,
     local_center: Vec3,
-    // The model's authored **all-animation** bound in Bevy model-local space
-    // ([`super::m2_anim_bound`]) — what an ANIMATED placement's submeshes are culled with instead of
-    // their bind-pose mesh bound, which the joint palette has left behind. `None` for
-    // WMO group geometry (no M2 header) and for a model with no authored box; a static placement
-    // ignores it and keeps the tighter per-batch bound.
+    // The all-animation box an animated placement is culled with; a static one ignores it.
     anim_bound: Option<Aabb>,
-    // `Some((model, now))` for an M2 placement: the doodad-animation gate — an
-    // animated model spawns joints + the skinned twins; `now` is the clock origin. `None` for WMO
-    // group geometry.
+    // An M2 placement's model and anim clock origin; `None` for WMO group geometry.
     m2: Option<(&M2Model, f32)>,
-    // UV-animated material registry (decision 0130 phase 3): a batch with a `uv_anim` loop registers
-    // its material here so `tick_anim_materials` scrolls the shared offset while it is drawn.
     uv_reg: &mut crate::doodad_anim::UvAnimMaterials,
-    // Animated-tint material registry (the M2Color RGB twin of `uv_reg`): a batch with an
-    // `rgb_anim` loop registers its material here so `tick_anim_materials` re-samples the
-    // shared tint each frame.
     tint_reg: &mut crate::doodad_anim::TintAnimMaterials,
-    // The shared delta table both registries slot into — registration allocates
-    // here and bakes the slot into the material.
     anim_table: &mut crate::mat_anim_table::MatAnimTable,
-    // **Is this placement a WMO doodad prop hanging off a streamed entity?** (The WMO-gameobject
-    // lane — a transport's deck cargo and cabin furniture.) It is the LANE, where `card_owner`
-    // below is only the anchor: that anchor is minted per placement and only when the model has
-    // billboard batches at all, so it answers "does this prop have cards to follow", never "which
-    // lane is this". Reading it as the lane is what left the marker below un-set on 133 of the
-    // ship's 134 props.
-    //
-    // What it decides here: [`crate::entity_shade::DoodadDefLit`] on every batch, which is the
-    // engine asserting its OWN invariant instead of trusting a caller to remember it (2047 — and
-    // 2041's lesson one level up). A prop's light is its `CMapDoodadDef`'s; it is under the net
-    // entity so it rides the deck, and the entity light node's descendant walk must pass it by.
+    // A WMO prop hosted on a streamed entity (a transport's cargo): every batch, cards included,
+    // then gets `DoodadDefLit`, as its light is its own `CMapDoodadDef`'s, not its host's. This
+    // is the lane; `card_owner` only says whether the prop has cards to follow.
     entity_hosted: bool,
-    // `Some(anchor)` for a prop spawned ON a streamed entity (the WMO-gameobject path): a boneless
-    // model's billboard cards FOLLOW this anchor (`BillboardCard::following` — the entity-path law,
-    // decision 0153) instead of baking a world pivot, so they track the moving owner and
-    // self-despawn with it; such cards are also excluded from the returned entity list (the caller
-    // parents that list, and a card is a world root the billboard pass writes absolutely).
-    // `None` for world-static placements (terrain), whose pivots never move.
+    // On a streamed entity, the anchor a boneless model's cards follow instead of a baked pivot;
+    // those cards stay world roots, out of the returned list.
     card_owner: Option<Entity>,
-    // `Some` on the world-static streamer paths lane 1 covers (ADT doodads + WMO group
-    // geometry): the production merge buffer and this placement's merge site (
-    // `WOW_STATIC_MERGE`). `None` on the WMO-prop and moving-gameobject paths.
+    // The merge buffer and this placement's site on the world-static lanes; `None` on a mover.
     mut merge: Option<(
         &mut super::super::merge::StaticMerge,
         super::super::merge::MergeSite<'_>,
     )>,
-    // `Some((collector, site))` on the world-static streamer paths the retained pass may
-    // take batches from (`WOW_STATIC_GX=1`, decisions 1429/1433; [`crate::static_gx`]):
-    // ADT doodads (slice 1, cell items by owner tile), WMO group geometry (slice 2, region
-    // items by portal-instance entity), and WMO props (B4, set-bucketed regions by the same
-    // instance). `None` on the moving-gameobject path, and on a prop path whose placement
-    // has no instance entity (no PVS identity — the site tallies those).
+    // The retained-pass collector and site on the world-static lanes; `None` on a mover and on a
+    // prop without an instance entity.
     mut staticgx: Option<(
         &mut crate::static_gx::StaticGx,
         crate::static_gx::GxSite<'_>,
     )>,
-    // Returns the spawned entities + the per-batch map + what the anim host armed for this
-    // placement, when the model animates: the joint set (bone-indexed) the emitter spawn rides
-    // its host bone off (0130 phase 4), and the FILE sequence slot its variation roll landed
-    // on, which the emitters' rate/gate tracks must be sampled against.
 ) -> SpawnedModel {
-    // One gate for this placement, from here down: the caller's when it has one, else the bare
-    // sphere (which is the same value `emitter_fade` would build from the same inputs — the
-    // constructor is shared, so the two arms cannot drift). Every `radius`/world-centre read below
-    // goes through it.
+    // The caller's gate, else the bare sphere; every radius or centre read below goes through it.
     let fade = match fade {
         Some(f) => f.clone(),
         None => {
@@ -204,16 +111,8 @@ pub fn spawn_model_entities(
     let kind = object.kind;
     let is_wmo = kind == ModelKind::Wmo;
     let mut out = Vec::with_capacity(submeshes.len());
-    // The doodad-animation host (decision 0130 phase 1): an animated model — most placed instances
-    // aren't, and stay on the static path below untouched — gets an anim-root + joint hierarchy +
-    // player/drive from [`crate::doodad_anim::spawn_anim_host`]; its ordinary submeshes then draw
-    // the skinned twin bound to those joints. Billboard batches keep today's camera-facing path
-    // (their transform is the billboard system's, and their glow-pulse already rides
-    // `BoneScaleAnim`). The host exists for every JOINT CONSUMER, not just skinned submeshes:
-    // emitters and ribbons ride their bone's joint too (0130 phase 4), so a particles-only model
-    // (0 render batches — the InstancePortal swirl, whose two emitters sit on the spinning rotor
-    // bones) still needs its joints driven. Only a model with nothing but billboard cards and no
-    // emitters/ribbons spawns no host.
+    // The anim host serves any joint consumer: a skinned part, an emitter or a ribbon. A model of
+    // billboard cards alone gets none, as the billboard system owns their transforms.
     let mut host = m2
         .filter(|(m, _)| {
             submeshes.iter().any(|s| s.billboard.is_none())
@@ -221,7 +120,7 @@ pub fn spawn_model_entities(
                 || !m.ribbons.is_empty()
         })
         .and_then(|(m, _)| crate::doodad_anim::spawn_anim_host(commands, m, transform));
-    // Captures freeze material-alpha clocks at 0 (deterministic frames) — read the env once.
+    // Captures freeze material-alpha clocks at 0, for deterministic frames.
     let mat_frozen = crate::dev_state::deterministic_run();
     let animated = host.is_some();
     let rig_root = host.as_ref().map(|h| h.root);
@@ -229,31 +128,14 @@ pub fn spawn_model_entities(
         out.push(h.root);
     }
     let mut skinned_meshes: Vec<Entity> = Vec::new();
-    // The parts the lazy-rig wake will promote static → skinned — the ones that
-    // got a [`crate::doodad_anim::SkinnedTwin`] below.
+    // The parts with a `SkinnedTwin`, which the lazy rig's wake promotes to skinned.
     let mut lazy_parts: Vec<Entity> = Vec::new();
-    // The per-batch slot map (see [`SpawnedModel::by_batch`]) — every `continue` in the loop
-    // below leaves a `None` in place instead of shifting later batches.
+    // Every `continue` below leaves its batch's `None` in place.
     let mut by_batch: Vec<Option<Entity>> = vec![None; submeshes.len()];
-    // **Coplanar siblings ride ONE lane** — a batch whose M2 skin section is drawn by another
-    // batch of this same model never diverts into a consolidator, and neither does that sibling.
-    //
-    // Two batches naming one section rasterize the SAME triangles ([`RenderSubmesh::section`]): a
-    // base layer and the shine/reflect layer authored over it. The reference draws both from one
-    // vertex array under depth-write + LEQUAL, so the later batch wins that coplanar tie EXACTLY
-    // (`0x70c190`). The consolidators exclude on per-batch facts — env-mapped
-    // UVs and the `0x10`/`0x08` depth flags (`static_gx::divert`), additive order (`merge`) — and a
-    // shine layer carries all of them, so the pair got split: base into the retained/merged lane,
-    // shine onto the entity path. Those two lanes reach the same world vertex by different
-    // arithmetic (the bake resolves it on the CPU in f64 and re-centres; the entity shader rotates
-    // it in f32 at local magnitude — `static_gx::bake`'s own note: "what remains against the entity
-    // path is the GPU's own rotate-at-local-magnitude rounding, which no bake can undercut"). A few
-    // ULPs is nothing between separate surfaces and everything between coplanar ones: the shine's
-    // reverse-Z GreaterEqual test against its own base becomes a per-pixel coin flip that re-rolls
-    // on every camera move — the ballista's bolt heads and shields dithering exactly the way B38's
-    // awning did. Keeping the section whole is the only place the two depths are
-    // equal by CONSTRUCTION; a depth bias would merely pick a winner for a tie we should never have
-    // created. It costs 264 sections across 221 world doodads (`m2_shared_section`).
+    // Coplanar siblings ride one lane: two batches naming one skin section draw the same
+    // triangles, which the reference draws from one vertex array under LEQUAL, so the later wins
+    // exactly (`0x70c190`). Split across lanes, the two reach each vertex by different float
+    // arithmetic and the depth test flickers, so neither diverts.
     let shared_geometry = shared_geometry(
         &submeshes
             .iter()
@@ -261,55 +143,26 @@ pub fn spawn_model_entities(
             .collect::<Vec<_>>(),
     );
     for (batch_idx, sub) in submeshes.iter().enumerate() {
-        // The batch's app-built render form. Callers gate spawning on the forms
-        // being complete, so a miss here is a broken contract — skip the batch rather than panic.
+        // A missing form is a broken caller contract: skip the batch rather than panic.
         let Some((stat_mesh, stat_aabb)) = forms.stat.get(batch_idx) else {
             continue;
         };
-        // Every batch (WMO and M2) carries its authored order (index + 1) into the material's
-        // transparent sort bias, so one model's coplanar layers draw in file order instead of
-        // re-flipping a sort tie every frame (`model_render::BATCH_ORDER_SORT_EPS`). WMO batches
-        // additionally ride it into the clip-z nudge that resolves coplanar layers in MOBA file
-        // order — the byte-verified client behaviour (`0x6b4f10`/`0x6b5190`); `model_material`
-        // gates that half on `is_wmo`.
+        // The authored order biases the transparent sort, so coplanar layers draw in file order;
+        // a WMO batch also takes it into the clip-z nudge, as the reference draws MOBA batches in
+        // strict file order (`0x6b4f10`/`0x6b5190`).
         let batch_order = u16::try_from(batch_idx + 1).unwrap_or(u16::MAX);
         let interior = sub.interior || interior_slot.is_some();
-        // A billboard card is culled by the SAME rule as any other batch — its material's `0x04`
-        // flag, nothing else. This site used to force `|| sub.billboard.is_some()`, on the reasoning
-        // that a card whose plane normal points away from the viewer would backface-cull to nothing;
-        // that is precisely the mechanism the reference USES, and forcing it off is what drew the
-        // stray solid triangles beside working particle effects (bugs B05/B34).
-        // A billboard bone puts the model's +X toward the viewer, the cull is GL_BACK/CCW
-        // (`0x70c2b3`), so a −X-facing card is never seen — and an author who wanted one seen
-        // set `0x04` themselves: Elwynn's LampPost
-        // carries a two-sided −X card AND a single-sided +X glow card, one model, both rules.
+        // A billboard card culls by its `0x04` flag like any batch: the bone turns +X to the
+        // viewer and the cull is GL_BACK/CCW (`0x70c2b3`), so a −X card is meant to go unseen.
         let two_sided = sub.two_sided;
-        // A lit interior M2 prop submesh (not a WMO group): it carries its SH-probe slot in
-        // `MeshTag`, so the shader evaluates the room's probe instead of the sky base. **Billboard
-        // batches are included** — a chain or glow card is a batch of the same model, and the
-        // reference shades every batch of an object through one light node. They
-        // were excluded here on a since-stale worry that the distance fade would overwrite the
-        // slot: true before the 0355 re-lane, when the slot lived in the alpha bits, and false
-        // after it — the fade writes through `mesh_tag::with_alpha`, which composes with the slot
-        // (`debug_panel::visibility`). Excluding them left an interior card on an interior-mode
-        // material with NO slot in its tag, which the shader decodes as slot **0** — whichever
-        // probe won the streaming race, the same wrong-probe read the 0355 note below describes.
+        // An interior M2 prop's batches carry its SH-probe slot, cards included: the reference
+        // shades every batch of an object through one light node.
         let interior_probe = !is_wmo && interior_slot.is_some();
-        // …and the narrower half: only a NON-card interior prop is steady indoors. A card still
-        // distance-fades with its doodad (below — the halo must cull when the lamp does), so it
-        // keeps its fade twin and its `DoodadFade`.
+        // Only a non-card interior batch is steady; a card still fades with its lamp.
         let steady_interior_prop = interior_probe && sub.billboard.is_none();
-        // **Does this batch need a material of its own?** (decision 1408.) A batch whose UV or tint
-        // loop differs between sequences cannot share one: the registries are keyed by material,
-        // so a shared one has no instance to ask which sequence is playing — and these placements
-        // re-roll their variation independently every window, so at any instant they are on
-        // different slots. Keying the material by this placement's anim host gives each its own
-        // registry entry, its own table row, and its own sequence. Everything else — every batch in
-        // the world but a measured 28 on this lane, 49 corpus-wide of 24103 (`uvslotscan`) — keeps
-        // the shared material it always had.
-        //
-        // No host ⇒ no sequence to read ⇒ share, and stay at the built seed: a per-sequence batch
-        // on a model the content gate declined is exactly today's frozen behaviour, not a new one.
+        // A batch whose UV or tint loop differs by sequence gets a material keyed by this
+        // placement's host, since placements re-roll their variations independently. Without a
+        // host it shares and stays at the built seed.
         let per_seq = sub.uv_seq.is_some() || sub.rgb_seq.is_some();
         let seq_owner = per_seq.then_some(rig_root).flatten();
         let cutout = model_material(
@@ -338,14 +191,9 @@ pub fn spawn_model_entities(
             light,
             seq_owner,
         );
-        // The blend twin for the distance-fade feather pass (reuse the cutout when already blend, or when
-        // this is a non-fading interior prop). A MULTIPLY batch (Mod/Mod2x — the weapon-rack
-        // ARMORREFLECT sheen) also reuses its steady self: its blend equation reads no alpha, so
-        // no material swap can feather it — the fade rides the SOURCE COLOUR instead:
-        // `wow_model.wgsl` lerps a multiply batch's colour toward the blend identity by the tag
-        // alpha it already carries, which is the reference's own preset-5 mechanism (0865 built
-        // it as a deviation; 1489 re-lawed it byte-faithful), so the rack sheen rides the
-        // distance fade like everything else.
+        // The fade's blend twin, the cutout itself when already blended or never fading. A multiply
+        // batch (Mod, Mod2x) keeps its cutout too: it reads no alpha, so the shader fades its
+        // colour toward the blend identity, the reference's preset-5 mechanism.
         let blend = if steady_interior_prop
             || matches!(
                 sub.blend,
@@ -353,9 +201,7 @@ pub fn spawn_model_entities(
             ) {
             cutout.clone()
         } else {
-            // The SOURCE blend (Opaque or AlphaKey here) rides into the twin: fade_variant builds
-            // AlphaMode::Blend either way, and the source decides the twin's 224/255 cutout marker
-            // (only an AlphaKey source alpha-tests while fading).
+            // The source blend decides the twin's cutout: only AlphaKey alpha-tests while fading.
             model_material(
                 mat_cache,
                 materials,
@@ -383,9 +229,7 @@ pub fn spawn_model_entities(
                 seq_owner,
             )
         };
-        // The 1417 batch classification — ONE source for both the census tally and the
-        // production divert below, so the population the census prints and the population the
-        // merge takes can never drift apart.
+        // One classification for the census tally and the diverts, so the two cannot drift.
         let class = crate::static_merge::BatchClass {
             excluded: animated
                 || sub.billboard.is_some()
@@ -398,15 +242,9 @@ pub fn spawn_model_entities(
                 && !sub.additive,
             never_fade: fade.radius > crate::model_fade::NEVER_FADE_RADIUS,
         };
-        // A merged FADER blob lives permanently in the reference's own fading render state —
-        // the blend twin (blend on, cutout ref on unfaded alpha, depth-write forced on) — with
-        // per-vertex alpha; at fade 1.0 that state is pixel-identical to the steady cutout, so
-        // nothing changes while it is steady and the feather is the reference's smooth
-        // translucent ramp (1420, superseding 1419's ordered-dither erode, which quantized the
-        // ramp to 16 visible steps — the director's report). Never-faders keep the cutout and
-        // the opaque bins; a steady interior prop never fades at all, so it keeps the cutout
-        // AND bakes an infinite sphere (its members carry no `DoodadFade` — the merged path
-        // must not invent one).
+        // A merged fader stays in the reference's fading state, the blend twin with per-vertex
+        // alpha, which at fade 1.0 matches the cutout pixel for pixel. A steady interior prop
+        // keeps the cutout and an infinite sphere, as it carries no `DoodadFade`.
         let merge_mat = if class.never_fade || steady_interior_prop {
             &cutout
         } else {
@@ -423,23 +261,10 @@ pub fn spawn_model_entities(
                 .and_then(|(_, site)| site.census_key(batch_idx, merge_mat, &transform));
             crate::static_merge::tally(&class, is_wmo, sub.geometry.positions.len(), key);
         }
-        // The retained-pass divert (`WOW_STATIC_GX=1`): an
-        // eligible order-free static batch leaves bevy_pbr entirely — no entity, no blob;
-        // `static_gx` draws it from retained buffers (per-cell for ADT doodads,
-        // per-instance group-bucketed for WMO group geometry — slice 2, per-instance
-        // set-bucketed for WMO props — B4). B2 admits DOODAD FADERS too: the batch rides
-        // in with its exile seed (the placement identity + handle clones of this exact
-        // bundle), and the scan respawns it through the entity path for the feather band.
-        // Checked BEFORE the merge divert (armed, this lane owns the populations lanes 1+3
-        // would have taken); a refused batch — the collector's own exclusions or a
-        // site/kind mismatch — falls through to the ordinary paths below, slot held like
-        // every other divert. Each site gates its own class: the doodad lane requires the
-        // seed for faders, the WMO lane is never-fade by construction (∞ radius), and the
-        // prop lane admits steady interior props + never-fade exterior props while an
-        // exterior FADER prop stays on the entity path (the exile protocol has no prop
-        // shape — that keep is today's default look) and is TALLIED, never silent.
-        // The census label for a batch that stays on the entity path (`EntityPathWhy`):
-        // refined below as each divert declines it.
+        // The retained-pass divert, tried before the merge: an eligible order-free batch leaves
+        // bevy_pbr for `static_gx`, a doodad fader with its fade seed so it can return as an entity
+        // inside its fade band. A refused batch falls through with its slot held; `why` is the
+        // census label for one left on the entity path.
         let mut why: &'static str = "gx-off";
         if let Some((gx, site)) = staticgx.as_mut() {
             let facts = if !crate::static_gx::enabled() {
@@ -475,9 +300,6 @@ pub fn spawn_model_entities(
                     crate::static_gx::GxSite::Doodad { owner }
                         if !is_wmo && class.merges() && !class.interior_prop =>
                     {
-                        // `fade_seed`, not `fade`: the placement's draw-set gate is in scope
-                        // here under that name, and shadowing it with the retained pass's
-                        // per-batch seed reads as the same thing twice.
                         let fade_seed = (!class.never_fade
                             && !crate::static_gx::fade_lane_disabled())
                         .then(|| crate::static_gx::GxFadeSeed {
@@ -488,9 +310,7 @@ pub fn spawn_model_entities(
                             cutout: cutout.clone(),
                             blend: blend.clone(),
                         });
-                        // Never-fade admits bare; a fader admits only WITH its seed (the
-                        // fade lane lever empties the seed, sending faders back to the
-                        // entity path).
+                        // A never-fader enters bare, a fader only with its seed.
                         (class.never_fade || fade_seed.is_some())
                             .then_some((*owner, None, None, fade_seed))
                     }
@@ -563,19 +383,14 @@ pub fn spawn_model_entities(
                 }
             }
         }
-        // The production consolidation divert (`WOW_STATIC_MERGE=1`, 1417/1418): an order-free
-        // static doodad batch — faders included, their fade rides the baked sphere through the
-        // shader's WOW_MERGED_FADE lane — merges into its site's blob instead of spawning. Its
-        // `by_batch` slot stays `None`; a refused divert (a WMO/prop site — 1418's verdict)
-        // falls through and spawns individually.
+        // The merge divert: an order-free static batch joins its site's blob, its slot left
+        // `None` and a fader's fade riding the baked sphere. WMO group geometry is refused.
         if let Some((merge, site)) = merge.as_mut() {
             if crate::terrain_stream::merge::merge_enabled()
                 && !shared_geometry[batch_idx]
                 && class.merges()
-                // The fader lane is OPT-IN (`WOW_MERGE_FADERS=1`): a fader —
-                // neither never-fade nor a steady interior prop — spawns per-entity by
-                // default; a cell-granular transparent draw with depth-write depth-kills
-                // per-entity faders behind its translucent pixels (the popping lamppost).
+                // Faders merge only under `WOW_MERGE_FADERS=1`: a fader blob's depth write hides
+                // the per-entity faders behind its translucent pixels.
                 && (class.never_fade
                     || steady_interior_prop
                     || crate::terrain_stream::merge::merge_faders_enabled())
@@ -594,13 +409,9 @@ pub fn spawn_model_entities(
                 continue;
             }
         }
-        // Register both variants' materials for the per-frame UV scroll (idempotent per material —
-        // every instance of the batch lands on the same deduped handle).
-        // A period-0 loop is a constant the material seed already wrote (`sample(0.0)` IS its
-        // forever value) — registering it would buy a per-frame re-write of the same number
-        // (1375), so only a real loop enters the registry.
-        // The per-placement lane first: its set replaces the shared loop outright, and it only
-        // arms when this placement actually has a host to read a sequence from.
+        // Register both materials for the UV scroll (idempotent per material). A per-sequence set
+        // replaces the shared loop when there is a host to read; a period-0 loop is a constant the
+        // seed already wrote, so it stays out.
         if let (Some(seqs), Some(host)) = (sub.uv_seq.as_ref(), seq_owner) {
             for id in [cutout.id(), blend.id()] {
                 crate::doodad_anim::register_uv(
@@ -625,8 +436,7 @@ pub fn spawn_model_entities(
                 );
             }
         }
-        // …and for the per-frame tint re-sample (the animated M2Color RGB, same shared clock —
-        // the same invisible seq-band phase divergence as the UV scroll, recorded there).
+        // Likewise for the animated M2Color RGB tint.
         if let (Some(seqs), Some(host)) = (sub.rgb_seq.as_ref(), seq_owner) {
             for id in [cutout.id(), blend.id()] {
                 crate::doodad_anim::register_tint(
@@ -651,33 +461,19 @@ pub fn spawn_model_entities(
                 );
             }
         }
-        // `MeshTag` is the per-instance lighting/fade scalar: an interior prop carries its SH-probe
-        // slot index here (the shader evaluates the folded probe instead of the sky base);
-        // everything else carries the distance-fade alpha (`1.0` = opaque, the no-fade default the
-        // fade system overwrites). The slot goes through the ONE typed constructor
-        // (`mesh_tag::probe_bits` — bits 16-29 since the 0355 re-lane): this site kept the old
-        // bits-0..=15 write through that re-lane, so every static interior prop read probe slot 0,
-        // taking whichever probe won the streaming race — the director's inn-doodad regression.
-        // ONE decision for "does this batch's payload carry a probe slot", read twice below —
-        // once for the tag's bits and once for the component that SAYS so
-        // ([`crate::mesh_tag::InteriorProbePayload`]). Two independent predicates could drift,
-        // and a reader that disagrees with the writer about which payload a part is on is
-        // exactly B373.
+        // `MeshTag`: an interior prop's probe slot through `mesh_tag::probe_bits`, else the fade
+        // alpha at 1.0. One predicate feeds both the tag and `InteriorProbePayload` below, so the
+        // payload's writer and readers cannot disagree.
         let probe_slot = interior_slot.filter(|_| interior_probe);
         let mesh_tag = match probe_slot {
             Some(slot) => MeshTag(crate::mesh_tag::probe_bits(slot)),
             None => MeshTag(alpha_bits(1.0)),
         };
-        // A billboard batch (glow card / chain) faces the camera each frame, so its transform is owned
-        // by the billboard system. It still distance-fades with its doodad (same `radius` band) — the
-        // fade only touches the material/`MeshTag`, not the transform — so the bright halo culls when the
-        // lamp does instead of hanging in the air far past it. The mesh is centred at the pivot, so the
-        // fade centre is `ZERO` (→ the entity's world translation = the pivot).
+        // A billboard card's transform is the billboard system's; it still fades with its doodad,
+        // from its pivot, where the mesh is centred (`ZERO`).
         let (entity, fade_center) = if let Some(info) = &sub.billboard {
-            // An animated doodad's card rides its billboard bone's live anchor (the swinging
-            // lamp's glow follows the swing — 0153 follow-up; the anchor frame bakes the pivot,
-            // the 0130 rig identity carried into the collapsed lane by 1365). A static doodad
-            // keeps the fixed placement-baked pivot.
+            // An animated doodad's card follows its billboard bone's anchor; a static one keeps
+            // the baked pivot.
             let card = match host.as_mut().and_then(|h| h.anchor(commands, info.bone)) {
                 Some(anchor) => BillboardCard::following_joint(info, anchor),
                 None => match card_owner {
@@ -694,29 +490,20 @@ pub fn spawn_model_entities(
                     blend: sub.blend,
                 },
                 crate::model_render::EntityPathWhy(why),
-                // The picker's triangles: the render forms are `RENDER_WORLD`-only,
-                // so the inspector/probe rays read the model's resident geometry. The caster
-                // centres a card at its pivot, the same bake the render form draws with.
+                // The picker's triangles, as the render forms are `RENDER_WORLD`-only.
                 crate::interact::PickMesh(sub.geometry.clone()),
                 mesh_tag,
                 card,
             ));
-            // The build-time Aabb, inserted explicitly: the static form is `RENDER_WORLD`-only,
-            // so Bevy's `calculate_bounds` can race extraction — and the exterior cull fails
-            // OPEN on a missing bound (0832's rule, extended to the model lane). `NoAutoAabb`
-            // says the bound is OURS: see the ordinary-part insert below for what derives it
-            // otherwise, and what that cost.
+            // The build-time Aabb, inserted here: `calculate_bounds` can race extraction of a
+            // `RENDER_WORLD` form, and the exterior cull fails open without a bound.
             if let Some(aabb) = stat_aabb {
                 card_entity.insert((*aabb, NoAutoAabb));
             }
             (card_entity.id(), Vec3::ZERO)
         } else {
-            // An animated doodad's ordinary submesh spawns on the STATIC form with its skinned
-            // twin waiting beside it (`SkinnedTwin`): the palette slot no longer exists at spawn
-            // — the draw gate allocates it at the placement's first wake and swaps the mesh in
-            // (`doodad_anim::lazy`). The twin comes from the app-built forms;
-            // a lane that didn't request it (or a contract break) simply never promotes,
-            // rather than arm the picker with a joint-less "skinned" mesh.
+            // A part spawns static with its skinned twin beside it; the draw gate swaps the twin in
+            // at the placement's first wake. A part without a twin never promotes.
             let skinned_mesh = animated
                 .then(|| forms.skin.and_then(|s| s.get(batch_idx)).cloned())
                 .flatten();
@@ -729,28 +516,13 @@ pub fn spawn_model_entities(
                     blend: sub.blend,
                 },
                 crate::model_render::EntityPathWhy(why),
-                // The picker's triangles — same rule as the card above.
                 crate::interact::PickMesh(sub.geometry.clone()),
                 mesh_tag,
             ));
-            // Every part now spawns static, so every part carries the build-time Aabb (the
-            // RENDER_WORLD rule above).
-            //
-            // For an ANIMATED placement that bind-pose bound is a lie, because the joints move the
-            // vertices while this entity's transform stays at the placement origin. Widen to the
-            // model's authored all-animation box — the union, never the replacement,
-            // so the 152 corpus models whose authored box does not fully contain their own bind pose
-            // still bound their geometry. A billboard card is exempt: its entity transform FOLLOWS
-            // its joint every frame, so its own small bound travels with what it draws.
-            //
-            // **`NoAutoAabb` is what makes that bound survive**. Bevy's
-            // `calculate_bounds` runs TWO queries: one that inserts a bound where there is none,
-            // and one that **overwrites an existing bound** on `Changed<Mesh3d>`. The lazy rig
-            // swaps `Mesh3d` static → skinned at this placement's first draw-gate wake
-            // (`doodad_anim::lazy`), and the skinned twin shares the BIND-POSE geometry — so the
-            // second query recomputed the very box 1259 had just widened, and the birds went back
-            // to blinking a second after they streamed in. The bound here is authored, not derived;
-            // this component is how that is said.
+            // An animated placement's joints move the vertices away from the bind-pose bound, so
+            // it widens to the authored all-animation box; a card, which follows its joint, needs
+            // none. `NoAutoAabb` keeps the bound: `calculate_bounds` recomputes it on
+            // `Changed<Mesh3d>`, and the lazy rig swaps in a twin of bind-pose geometry.
             if let Some(aabb) =
                 cull_bound(stat_aabb.as_ref(), animated.then_some(anim_bound).flatten())
             {
@@ -768,43 +540,29 @@ pub fn spawn_model_entities(
                 commands
                     .entity(entity)
                     .insert(crate::rig_palette::RigPart(root));
-                // The draw-gate list is about visibility, not skinning — the bind-pose fallback
-                // part still represents the placement.
+                // The draw gate's list is about visibility, so a not-yet-skinned part counts.
                 skinned_meshes.push(entity);
             }
             (entity, local_center)
         };
         by_batch[batch_idx] = Some(entity);
-        // This batch's payload is a PROBE SLOT, said as a component so the exterior-payload
-        // writer can see it (`mesh_tag::InteriorProbePayload`). Cards included, for the same
-        // reason they carry the slot at all: they are batches of the same model, shaded through
-        // the same light node — and `entity_shade`'s card pass reaches a card by walking
-        // UP from its owner, a route its descendant-walk guard never covers.
+        // Says the payload is a probe slot, so the exterior-payload writer passes it by; cards too,
+        // as `entity_shade` reaches a card by walking up from its owner.
         if probe_slot.is_some() {
             commands
                 .entity(entity)
                 .insert(crate::mesh_tag::InteriorProbePayload);
         }
-        // …and, on the entity-hosted lane, that this batch's light is its own doodad def's rather
-        // than its host's. Asserted here rather than by the caller so the rule cannot be half
-        // applied: this is the site that knows about EVERY batch, cards included, and a card is
-        // exactly what the caller cannot reach (it is a world root kept out of the returned list,
-        // and the shade writer's card pass finds it by walking UP to the host).
+        // On the entity-hosted lane the batch is lit by its own doodad def, not its host; set
+        // here as only this site reaches every batch, cards included.
         if entity_hosted {
             commands
                 .entity(entity)
                 .insert(crate::entity_shade::DoodadDefLit);
         }
-        // Animated material alpha (decision 0130 phase 2): the rare batch whose colour-alpha/weight
-        // tracks animate (fire flicker) or constantly dim gets its per-instance sampler; the
-        // visibility authority composes the value into the render-alpha tag + the A ≤ 0 cull.
-        // Captures freeze the clock at 0 (deterministic frames). A lit interior prop composes the
-        // same way since the 0355 re-lane gave the probe-slot payload its own alpha field (bits
-        // 0..=15) — the 0130-era "partial alpha can't show on the colour payload" deferral is
-        // collected (bug B30: the Undercity lightshaft's authored 0.10/0.05 dimming).
-        // The scan marker (1375), same predicate as the registration above — so a marked row
-        // always has a registry key to match, and `tick_anim_materials` never has to visit an
-        // unmarked one.
+        // The scan marker, by the registration's own predicate, so `tick_anim_materials` visits
+        // only marked parts. A batch whose colour alpha animates or dims gets its own sampler,
+        // which the visibility authority composes into the tag and the A ≤ 0 cull.
         if sub.uv_anim.as_ref().is_some_and(|a| a.period > 0.0)
             || sub.rgb_anim.as_ref().is_some_and(|a| a.period > 0.0)
             || seq_owner.is_some()
@@ -822,8 +580,7 @@ pub fn spawn_model_entities(
                     mat_frozen,
                 ));
         }
-        // Distance fade for everything except a lit interior prop (whose `MeshTag` carries colour, and
-        // which is steady indoors). Adding `DoodadFade` is what makes the fade system drive the tag.
+        // `DoodadFade` lets the fade system drive the tag; a steady interior prop never fades.
         if !steady_interior_prop {
             commands.entity(entity).insert(DoodadFade {
                 radius: fade.radius,
@@ -832,21 +589,16 @@ pub fn spawn_model_entities(
                 blend,
             });
         }
-        // An entity-following card manages its own lifecycle (`face_billboards` despawns it with
-        // its owner) and must stay a world root — keep it out of the caller's parent/despawn list.
+        // A following card despawns with its owner and must stay a world root: keep it out.
         if sub.billboard.is_none() || card_owner.is_none() {
             out.push(entity);
         }
     }
-    // Arm the draw gate: animation runs iff any of these submeshes is drawn (`doodad_anim`) —
-    // or, for a meshless (particles-only) host, iff the placement's fade sphere is in the draw
-    // set (the same 0171 law its emitters gate on).
+    // Animation runs while a submesh is drawn or, for a meshless host, while its gate admits it.
     let arm = host.as_ref().and_then(|h| h.seq.map(|_| h.root));
     let placement_host = host.map(|mut h| {
         let now = m2.map(|(_, now)| now).unwrap_or_default();
-        // Pre-mint the fx consumers' anchors while the pose buffer is still in
-        // hand: exactly the bones the model authors emitters/ribbons on, nothing speculative —
-        // the fx spawns that run after this only look the entities up ([`PlacementHost::anchor`]).
+        // Mint the emitter and ribbon bones' anchors while the pose buffer is in hand.
         if let Some((m, _)) = m2 {
             for bone in m
                 .emitters
@@ -859,25 +611,20 @@ pub fn spawn_model_entities(
         }
         commands.entity(h.root).insert(DoodadAnimHost {
             meshes: skinned_meshes,
-            // The caller's one gate, not a second construction of it (2059).
+            // The caller's gate itself, not a second construction of it.
             fade: fade.clone(),
             clip: h.clip,
             armed_at: now,
-            // Born already expired, so the first frame runs the holder setup's `variationIdx = -1`
-            // arm over the loader's var-0 seed — the reference's own two-stage load.
+            // Born expired, so frame one runs the holder's `variationIdx = -1` arm over the
+            // loader's var-0 seed, the reference's two-stage load.
             window_hi: f32::NEG_INFINITY,
             anim_id: h.anim_id,
-            // Born PARKED: the spawn frame's `Visibility` is the default-visible
-            // lie (the fade/cull authorities haven't classified the fresh parts yet), and the
-            // gate's promote requires a drawn frame ON TOP of `active` — so the first real
-            // verdict, not the spawn race, decides the slot. The gate flips this true the same
-            // first pass either way, so pose/resume semantics are unchanged.
+            // Born parked: the spawn frame's default `Visibility` is not yet a verdict, so the
+            // first real one decides the slot.
             active: false,
             parked_at: now,
         });
-        // The lazy palette rig: what the draw gate's first wake allocates and
-        // promotes. Only when the placement has skinnable parts at all — an emitter-only host
-        // (chimney smoke) never takes a slot, which under the eager design it wasted one on.
+        // The lazy rig, only with skinnable parts: an emitter-only host never takes a slot.
         if !lazy_parts.is_empty() {
             commands.entity(h.root).insert(crate::doodad_anim::LazyRig {
                 bones: h.bones(),
@@ -896,14 +643,9 @@ pub fn spawn_model_entities(
     }
 }
 
-/// The `Aabb` a placed submesh is culled with: its build-time bind-pose bound, widened by the
-/// model's authored all-animation box when this placement animates.
-///
-/// It is a **union**, not a swap, for one measured reason: 152 of the 9315 M2s that carry geometry
-/// author a header box that does not fully contain their own bind-pose vertices (worst case
-/// `Spells\Teleport.m2`, 19.9 yd short). The reference never notices — it tests the box's
-/// *circumsphere*, which swallows the shortfall — so a bare swap would be the one way this change
-/// could cull geometry the reference draws.
+/// A placed submesh's cull bound: the bind-pose bound, unioned with the authored all-animation box
+/// when animated. A union, as 152 of 9315 M2s author a box short of their own bind pose, which
+/// the reference's circumsphere test swallows.
 fn cull_bound(stat: Option<&Aabb>, anim: Option<Aabb>) -> Option<Aabb> {
     match (stat, anim) {
         (Some(s), Some(a)) => Some(Aabb::from_min_max(
@@ -915,13 +657,8 @@ fn cull_bound(stat: Option<&Aabb>, anim: Option<Aabb>) -> Option<Aabb> {
     }
 }
 
-/// Which batches share their triangles with another batch of the same model — the consolidator
-/// gate's predicate, over the batches' [`benilla_formats::RenderSubmesh::section`] indices in batch
-/// order. `true` at `i` means batch `i` names a section some other batch also names.
-///
-/// `None` (every WMO batch — no section concept) never shares: the WMO lanes keep their own
-/// MOBA-order law and are not what this closes. The list is a model's batch count long — tens at
-/// the very most — so the quadratic scan is cheaper than any map.
+/// Per batch, whether another batch of the model names the same skin section; a WMO batch (`None`)
+/// never shares. Quadratic, as a model has tens of batches at most.
 fn shared_geometry(sections: &[Option<u16>]) -> Vec<bool> {
     sections
         .iter()
@@ -933,10 +670,8 @@ fn shared_geometry(sections: &[Option<u16>]) -> Vec<bool> {
 mod tests {
     use super::*;
 
-    /// The bug's own numbers (`benilla-extract animboundscan`, `World\critter\birds\Bird01.m2`):
-    /// a 1.2 × 1.8 × 0.23 yd bind-pose box, and an authored all-animation box 67 × 18 × 7 yd that
-    /// reaches ~37 yd past it. Culled by the bind pose, the bird is dropped while its drawn
-    /// geometry is still on screen.
+    /// `World\critter\birds\Bird01.m2` (`benilla-extract animboundscan`): a 1.2 × 1.8 × 0.23 yd
+    /// bind-pose box and a 67 × 18 × 7 yd authored all-animation box.
     #[test]
     fn an_animated_placements_bound_covers_the_whole_flight_path() {
         // Bevy-space conversions of Bird01's two boxes (WoW (x,y,z) -> Bevy (-y, z, -x)).
@@ -949,18 +684,14 @@ mod tests {
             Vec3::new(13.571, 16.019, 36.605),
         );
         let widened = cull_bound(Some(&bind), Some(authored)).expect("a bound");
-        // Every corner of the authored box is inside the widened bound. `Aabb` stores
-        // centre/half-extents, so the reconstructed corners carry a float epsilon — hence the
-        // tolerance, which is ~7 orders of magnitude below anything a cull can see.
+        // `Aabb` stores centre and half-extents, so the rebuilt corners need a float tolerance.
         const EPS: f32 = 1e-4;
         assert!((widened.min() - EPS).cmple(authored.min()).all());
         assert!((widened.max() + EPS).cmpge(authored.max()).all());
-        // …and the bind-pose bound alone was ~37 yd short of it along the flight axis.
+        // The bind-pose bound alone is ~37 yd short along the flight axis.
         assert!(authored.max().z - bind.max().z > 36.0);
     }
 
-    /// The union arm, not a swap: an authored box that fails to contain the bind pose (152 corpus
-    /// models do) must not shrink the bound.
     #[test]
     fn a_short_authored_box_never_shrinks_the_bound() {
         let bind = Aabb::from_min_max(Vec3::splat(-5.0), Vec3::splat(5.0));
@@ -970,7 +701,6 @@ mod tests {
         assert!(Vec3::from(b.max()).abs_diff_eq(Vec3::new(40.0, 5.0, 5.0), 1e-4));
     }
 
-    /// A static placement is untouched — it keeps the tighter per-batch bind-pose bound.
     #[test]
     fn a_static_placement_keeps_its_per_batch_bound() {
         let bind = Aabb::from_min_max(Vec3::splat(-1.0), Vec3::splat(1.0));
@@ -979,18 +709,14 @@ mod tests {
         assert!(Vec3::from(b.max()).abs_diff_eq(Vec3::splat(1.0), 1e-4));
     }
 
-    /// The ballista's own shape: section 10 drawn twice (base + shine) and section 4 drawn once.
-    /// Both members of the pair are flagged, not just the refusable one — the whole point is that
-    /// they travel together, so gating only the shine would leave the base in the retained lane
-    /// and the split exactly where it was.
+    /// The ballista's shape: section 10 drawn twice (base and shine), section 4 once.
     #[test]
     fn both_batches_of_a_shared_section_are_flagged() {
         let flags = shared_geometry(&[Some(4), Some(10), Some(10), Some(7)]);
         assert_eq!(flags, vec![false, true, true, false]);
     }
 
-    /// WMO batches carry no section, and `None == None` would otherwise make every WMO batch in a
-    /// group "shared" with every other — pulling the whole WMO population out of the retained lane.
+    /// WMO batches carry no section, and `None == None` must not count as sharing one.
     #[test]
     fn section_less_batches_never_share() {
         assert_eq!(shared_geometry(&[None, None, None]), vec![false; 3]);

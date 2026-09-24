@@ -1,34 +1,9 @@
-//! The **effect lane** — the render-world half of the shared effect stream (decisions 0732
-//! P1/P2): one vertex buffer + one per-frame index stream for every dynamic-effect
-//! family, drawn as directly-constructed [`Transparent3d`] items.
-//!
-//! The shape is bevy_ui_render's (`draw_indexed(range, 0, 0..1)` over a shared `RawBufferVec`,
-//! and its sorted-items batching walk), moved to the 3-D transparent phase:
-//!
-//! - **extract** copies the frame's CPU stream;
-//! - **queue** adds one item per draw record with **sort distance = view-space z of the draw
-//!   anchor + the ladder rung** — exactly the metric the material path produced
-//!   (`rangefinder.distance(center) + depth_bias`, bevy_pbr `material.rs:1307`), so ordering
-//!   against M2 blend batches, model-particle instances and the sky ladder is unchanged by
-//!   construction;
-//! - **prepare** (after `PhaseSort`) rebases each draw's vertices against its target view's
-//!   camera position (the `ViewUniform.world_position` source value, so the shader's
-//!   reconstruction is exact; decal draws are exempt and stay absolute for the
-//!   `DECAL_WORLD_CLIP` mesh-matrix transform), uploads them, then walks the sorted
-//!   items building the frame's
-//!   index stream in draw order and **merging sort-adjacent items that share (pipeline,
-//!   texture, light, fog)** into one draw call. The merge rides bevy's own sorted-phase
-//!   contract: the phase renderer advances by `batch_range.len()` (`render_phase/mod.rs:1487`),
-//!   so a batch-opening item whose range spans its followers absorbs them — bevy_ui_render's
-//!   exact mechanism. Bevy's mesh batcher leaves items whose main entity owns no registered
-//!   mesh untouched (0732 audit III), so nothing else rewrites the ranges.
-//!
-//! Pipeline variants: Add = premultiplied-alpha + the shader's gamma `rgb·a` fold,
-//! Alpha = standard, Opaque = no blend with depth-write ON (in the transparent bracket at the
-//! owner rung — the 0719 reference law), Multiply = bevy's `AlphaMode::Multiply` state (the
-//! blob shadow's modulate; `ModelBlend::Mod` at α=1), Mod2x = 0528's `(Dst, Src)`. The decal
-//! family's rasterizer depth bias rides [`EffectPipelineKey::raster_bias`] — the half of the
-//! old material `depth_bias` that settles the coplanar depth tie against the drawn ground.
+//! The effect lane: the render-world half of the shared effect stream, drawn as [`Transparent3d`]
+//! items in bevy_ui_render's shape. Queue sorts each draw at its anchor's view z plus its rung,
+//! the material path's metric; prepare, after `PhaseSort`, rebases and uploads the vertices and
+//! merges sort-adjacent items sharing a `RunKey`: the phase renderer advances by
+//! `batch_range.len()`, so an opener spanning its followers absorbs them. Bevy's mesh batcher
+//! leaves the items alone while their main entities own no mesh.
 
 use std::ops::Range;
 
@@ -78,42 +53,29 @@ struct ExtractedDraw {
     blend: EffectBlend,
     topology: EffectTopology,
     fog: EffectFog,
-    /// The scene-light gate — a pipeline-key axis, so the merge walk's `RunKey` separates lit
-    /// from unlit runs through the pipeline id alone.
     lit: bool,
     anchor: Vec3,
     bias: f32,
     raster_bias: i32,
-    /// The slope-scale half of the settle — see [`super::buffer::EffectDrawSpec::raster_slope`].
     raster_slope: f32,
-    /// Vertices are already camera-relative — the prepare rebase skips this draw. See
-    /// [`super::buffer::EffectDrawSpec::cam_relative`].
     cam_relative: bool,
-    /// This draw ignores the depth buffer. See [`super::buffer::EffectDrawSpec::no_depth_test`].
     no_depth_test: bool,
-    /// Vertex range in the shared stream.
     range: Range<u32>,
-    /// A booth's scene-light override; `None` = the world's shared light buffer.
+    /// A booth's light buffer; `None` is the world's.
     light: Option<Buffer>,
-    /// The target-pixel clip rect — see [`super::buffer::EffectDrawSpec::clip`].
     clip: Option<Vec4>,
 }
 
-/// One GPU draw call after the merge walk: a contiguous index range plus the bind-group
-/// identity every item folded into it shares.
+/// One GPU draw after the merge walk: an index range and the bind-group identity its items share.
 struct MergedDraw {
     index_range: Range<u32>,
     texture: AssetId<Image>,
     light: Option<Buffer>,
-    /// The dynamic offset of this draw's row in [`EffectMeta::params`] — its fog policy and its
-    /// clip rect together, resolved by [`EffectMeta::build_params`].
+    /// This draw's fog and clip row in [`EffectMeta::params`].
     params_offset: u32,
 }
 
-/// The lane's per-frame GPU state: the shared vertex stream (rebased camera-relative in
-/// prepare), the frame's index stream (built in sorted-item order by the merge walk), the
-/// draw and merged-draw records, and the canonical fog-params uniform (one `vec4` per
-/// [`EffectFog`] policy, written once).
+/// The lane's per-frame GPU state: vertices, indices, draws, merged draws and params rows.
 #[derive(Resource)]
 pub struct EffectMeta {
     vertices: RawBufferVec<EffectVertex>,
@@ -124,14 +86,11 @@ pub struct EffectMeta {
     params: DynamicUniformBuffer<EffectParams>,
     /// The six canonical fog rows' dynamic offsets, in [`EffectFog::slot`] order.
     params_offsets: [u32; 6],
-    /// The params buffer as it was last written — the bind-group cache holds a binding into it,
-    /// so a re-created buffer has to invalidate that cache ([`prepare_effect_bind_groups`]).
+    /// The params buffer last written; a new one invalidates the bind-group cache.
     params_buffer: Option<BufferId>,
 }
 
-/// One row of the lane's per-draw uniform: the fog policy the shader reads, and the target-pixel
-/// rectangle it clips to. `clip.z <= clip.x` means **no clip**, which is every world draw and
-/// every canonical fog row.
+/// One per-draw uniform row: the fog policy and the target-pixel clip (`clip.z <= clip.x`: none).
 #[derive(Clone, Copy, bevy::render::render_resource::ShaderType)]
 struct EffectParams {
     fog: Vec4,
@@ -153,19 +112,13 @@ impl Default for EffectMeta {
     }
 }
 
-/// How many CLIPPED params rows one frame may carry. A clip is a UI model tile's cell, and a
-/// pane whose row does not fit degrades to the unclipped row — so this only has to cover the
-/// panes that can actually spill, which is the ones with emitters (the autocast shines, the two
-/// pings, the bag's item animation): a whole pet bar plus both pings is ten.
+/// Clipped params rows per frame; a pane past it draws unclipped (a pet bar and two pings is ten).
 const MAX_CLIP_ROWS: usize = 64;
 
 impl EffectMeta {
-    /// Write this frame's per-draw uniform rows and return the clipped ones' offsets, keyed by
-    /// `(fog slot, the clip rect's bits)`. The six canonical fog rows are always rows 0..6, in
-    /// [`EffectFog::slot`] order — `params.fog.x` carries the shader's fog COLOUR policy (the
-    /// `0x70baf0` table), `params.fog.y` the forced-fog enable with `zw` its start/end (rain's
-    /// verified 70..75 window — the constants live with their law in `weather::precip`), and
-    /// `params.clip` the target-pixel rectangle (`z <= x` = no clip).
+    /// Write this frame's uniform rows and return the clipped rows' offsets by (fog slot, clip
+    /// bits). Rows 0..6 are the fog policies in [`EffectFog::slot`] order: `fog.x` the colour
+    /// policy (`0x70baf0`), `fog.y` rain's forced fog with `zw` its start and end.
     fn build_params(
         &mut self,
         device: &RenderDevice,
@@ -215,19 +168,16 @@ impl EffectMeta {
     }
 }
 
-/// Per-(texture, light-buffer) bind groups (texture + sampler + light blob + params uniform),
-/// cached across frames — invalidated by that image's asset events, mirroring bevy_ui_render's
-/// cache. The light key is `None` for the world's shared buffer (startup-created, never
-/// re-created, so it cannot stale a cached group) or a booth scene blob's id.
+/// Bind groups per (texture, light buffer), cached until the image changes; the light key is
+/// `None` for the world's buffer, which is never re-created.
 #[derive(Resource, Default)]
 pub struct EffectBindGroups {
     images: HashMap<(AssetId<Image>, Option<BufferId>), BindGroup>,
-    /// The params buffer the cached groups were built against — see
-    /// [`prepare_effect_bind_groups`].
+    /// The params buffer the cached groups bind.
     params_buffer: Option<BufferId>,
 }
 
-/// The lane's pipeline: layouts + shader, specialized per (blend, raster bias, msaa, hdr).
+/// The lane's pipeline: layouts and shader, specialized per (blend, raster bias, msaa, hdr).
 #[derive(Resource)]
 pub struct EffectPipeline {
     view_layout: BindGroupLayoutDescriptor,
@@ -250,10 +200,9 @@ pub fn init_effect_pipeline(mut commands: Commands, asset_server: Res<AssetServe
             (
                 texture_2d(TextureSampleType::Float { filterable: true }),
                 sampler(SamplerBindingType::Filtering),
-                // The shared global light/fog blob (`lighting::global_light`) — sized at bind
-                // time; the WGSL struct pins the layout.
+                // The shared light and fog blob, sized at bind time; the WGSL struct pins it.
                 storage_buffer_read_only_sized(false, None),
-                // The per-draw fog-params `vec4`, dynamic-offset into the canonical rows.
+                // The per-draw params row, by dynamic offset.
                 uniform_buffer::<EffectParams>(true),
             ),
         ),
@@ -269,24 +218,15 @@ pub fn init_effect_pipeline(mut commands: Commands, asset_server: Res<AssetServe
 pub struct EffectPipelineKey {
     samples: u32,
     hdr: bool,
-    /// The draw's blend — the whole state-variant axis.
     blend: EffectBlend,
-    /// The rasterizer depth-bias constant (the decal family's coplanarity settle; 0 for
-    /// free-floating geometry). Three values exist ({0, 8192, 32768}), so the key space stays
-    /// small. Nonzero ALSO selects the `DECAL_WORLD_CLIP` transform: a coplanar decal
-    /// keeps absolute verts and runs the mesh path's `clip_from_world`, so its depth ties
-    /// against the drawn ground within the bias.
+    /// The rasterizer depth-bias constant, 0 for free-floating geometry; nonzero also selects
+    /// `DECAL_WORLD_CLIP`, absolute verts through the mesh path's `clip_from_world`.
     raster_bias: i32,
-    /// The **slope-scale** half of the settle, keyed by bits because `f32` is not `Hash`/`Eq`.
-    /// Two values exist ({0.0, the foam's}), so the key space stays as small as `raster_bias`'s.
+    /// The depth-bias slope scale as bits: `f32` is not `Hash`.
     raster_slope_bits: u32,
-    /// Does the fragment multiply by the scene's matte light? The reference decides this per
-    /// emitter through a synthesized `M2Material` (`EffectDrawSpec::lit`), and it is a shader
-    /// def rather than a uniform bit so the 95% unlit majority keeps the identical instruction
-    /// stream it has today.
+    /// The fragment multiplies by the scene's light (`EFFECT_LIT`).
     lit: bool,
-    /// Does this draw ignore the depth buffer entirely (`depth_compare = Always`)? Two values
-    /// exist and only one family sets it — see [`super::buffer::EffectDrawSpec::no_depth_test`].
+    /// Depth compare `Always`; see [`super::buffer::EffectDrawSpec::no_depth_test`].
     no_depth_test: bool,
 }
 
@@ -297,19 +237,14 @@ impl SpecializedRenderPipeline for EffectPipeline {
         let vertex_layout = VertexBufferLayout::from_vertex_formats(
             VertexStepMode::Vertex,
             vec![
-                // position (camera-relative — prepare rebased it; 0733 §2. Decal draws are
-                // the exception: absolute world-space, transformed by `clip_from_world`)
+                // position: camera-relative, absolute for decals
                 VertexFormat::Float32x3,
                 // uv
                 VertexFormat::Float32x2,
-                // color (raw authored gamma RGBA)
+                // color: raw authored gamma RGBA
                 VertexFormat::Float32x4,
             ],
         );
-        // The blend states each family's material carried: Add/Alpha/Opaque are the
-        // P1 trio; Multiply is bevy's own `AlphaMode::Multiply` state (mesh.rs:2486 — the blob
-        // shadow's `dst·lerp(1, src, α)` with the shader-side premultiply); Mod2x is 0528's
-        // `(Dst, Src)` = `2·src·dst` (rain's verified state, ARMORREFLECT's law).
         let (blend, depth_write, blend_def) = match key.blend {
             EffectBlend::Add => (
                 Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
@@ -318,8 +253,7 @@ impl SpecializedRenderPipeline for EffectPipeline {
             ),
             EffectBlend::Alpha => (Some(BlendState::ALPHA_BLENDING), false, "BLEND_ALPHA"),
             EffectBlend::Opaque => (None, true, "BLEND_OPAQUE"),
-            // EGxBlend 1: the same pipeline state as Opaque — the alpha TEST is the whole
-            // difference, and it lives in the fragment shader (wgpu has no `glAlphaFunc`).
+            // EGxBlend 1: Opaque's state, its alpha test in the shader (wgpu has no `glAlphaFunc`).
             EffectBlend::AlphaKey => (None, true, "BLEND_ALPHAKEY"),
             EffectBlend::Multiply => (
                 Some(BlendState {
@@ -351,24 +285,19 @@ impl SpecializedRenderPipeline for EffectPipeline {
             ),
         };
         let mut shader_defs = vec![blend_def.into()];
-        // The decal family (nonzero raster bias ⇔ ground-coplanar): absolute verts through
-        // `clip_from_world` — the same matrix, hence the same rounding, as the world-mesh
-        // shaders whose depth the bias must settle against. `prepare_effects` skips these
-        // draws' cam-relative rebase on the same predicate.
+        // Coplanar draws: absolute verts through the world meshes' own `clip_from_world`, so the
+        // bias settles against the same rounding; `prepare_effects` skips their rebase to match.
         if key.raster_bias != 0 {
             shader_defs.push("DECAL_WORLD_CLIP".into());
         }
-        // The scene's matte light on this draw's RGB (the emitter's synthesized-material
-        // `GL_LIGHTING`; `EffectDrawSpec::lit` carries the byte law).
         if key.lit {
             shader_defs.push("EFFECT_LIT".into());
         }
-        // `$WOW_PARTICLE_FLAT` — the fragment-input A/B: solid magenta, no inputs.
+        // `$WOW_PARTICLE_FLAT`: solid magenta, no fragment inputs.
         if std::env::var_os("WOW_PARTICLE_FLAT").is_some() {
             shader_defs.push("WOW_PARTICLE_FLAT".into());
         }
-        // `$WOW_PARTICLE_NODEPTH` — the occlusion A/B: force the depth COMPARE to
-        // `Always`, splitting "nothing is emitted" from "emitted and the depth buffer eats it".
+        // `$WOW_PARTICLE_NODEPTH`: depth compare `Always`, to tell occluded from never drawn.
         let depth_compare =
             if key.no_depth_test || std::env::var_os("WOW_PARTICLE_NODEPTH").is_some() {
                 CompareFunction::Always
@@ -422,8 +351,7 @@ impl SpecializedRenderPipeline for EffectPipeline {
     }
 }
 
-/// Copy the main world's frame stream into the lane, and drop bind-group cache entries for
-/// images that changed (the UI cache-invalidation shape).
+/// Copy the frame's stream in, and drop the cached bind groups of images that changed.
 fn extract_effects(
     mut meta: ResMut<EffectMeta>,
     mut bind_groups: ResMut<EffectBindGroups>,
@@ -464,9 +392,8 @@ fn extract_effects(
     }));
 }
 
-/// `$WOW_EFFECT_TRACE`'s lane names: which rung of the pre-water surface-decal band a draw's sort
-/// bias is, or `None` for everything else on the stream (particles, ribbons, foam, precipitation).
-/// Keyed on the sort rung — the only field that is unique per decal lane (`sky_order::Rung`).
+/// `$WOW_EFFECT_TRACE`'s name for a surface-decal draw, keyed on its sort rung, the one field
+/// unique per decal lane; `None` for everything else.
 fn decal_lane(bias: f32) -> Option<&'static str> {
     use crate::sky_order::Rung;
     match bias {
@@ -495,9 +422,7 @@ fn queue_effects(
     }
     let draw_function = draw_functions.read().id::<DrawEffects>();
     for (view, msaa) in &views {
-        // A draw targets ONE main-world camera (the world camera or a booth's — resolved by
-        // the sim); the phase map is keyed by the retained view, whose main entity IS that
-        // camera. Views without a transparent phase (shadow/prepass) fall out here.
+        // Views without a transparent phase (shadow, prepass) fall out here.
         let Some(phase) = phases.get_mut(&view.retained_view_entity) else {
             continue;
         };
@@ -520,15 +445,12 @@ fn queue_effects(
                 },
             );
             phase.add(Transparent3d {
-                // The material path's exact metric: view-space z of the sort point + the
-                // ladder rung (see the module doc).
+                // The material path's metric: the sort point's view z plus the rung.
                 distance: rangefinder.distance(&draw.anchor) + draw.bias,
                 pipeline,
                 entity: (Entity::PLACEHOLDER, MainEntity::from(draw.main_entity)),
                 draw_function,
-                // The draw-record index rides here until the prepare walk rewrites it to a
-                // merged-draw index (whose length spans the items it absorbed — the sorted
-                // phase renderer's own batching contract).
+                // The draw index, until the prepare walk rewrites it to a merged draw and span.
                 batch_range: (i as u32)..(i as u32 + 1),
                 extra_index: PhaseItemExtraIndex::None,
                 indexed: true,
@@ -537,9 +459,7 @@ fn queue_effects(
     }
 }
 
-/// The run identity the merge walk groups by: everything two adjacent items must share to be
-/// one GPU draw — pipeline (blend/bias/msaa/hdr), bind group (texture + light), and the params
-/// row (the fog policy AND the clip rect, which is why two panes' clouds never fold together).
+/// What adjacent items must share to merge: pipeline, texture, light buffer and params row.
 type RunKey = (
     bevy::render::render_resource::CachedRenderPipelineId,
     AssetId<Image>,
@@ -547,19 +467,14 @@ type RunKey = (
     u32,
 );
 
-/// The last frame's effect-draw census, `[items, merged draws]` — what `FPS_PROBE` prints as
-/// `fx=`: how many effect items the transparent phase carried and how many draws the
-/// adjacency merge left. Decision 1955 read it to refute the additive-window regroup: the
-/// merge already folds about half, and a commutative regroup added two folds in ninety.
+/// The last frame's `[effect items, merged draws]`, which `FPS_PROBE` prints as `fx=`.
 pub static EFFECT_DRAW_STATS: [std::sync::atomic::AtomicU32; 2] = [
     std::sync::atomic::AtomicU32::new(0),
     std::sync::atomic::AtomicU32::new(0),
 ];
 
-/// After `PhaseSort`: rebase each draw's vertices against its target view's camera position
-/// (decal draws are exempt), upload them, build the frame's index stream in
-/// sorted-item order while merging sort-adjacent compatible items into single draws, and write
-/// the canonical fog-params rows once.
+/// After `PhaseSort`: rebase and upload the vertices, then build the index stream in sorted
+/// order, merging adjacent compatible items.
 fn prepare_effects(
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
@@ -569,12 +484,8 @@ fn prepare_effects(
     views: Query<&ExtractedView>,
 ) {
     let meta = &mut *meta;
-    // The rebase: subtract the draw's target camera position — the exact value the
-    // view's `ViewUniform.world_position` is built from (`view/mod.rs:985`), so the shader's
-    // `view_from_world`-rotation reconstruction is bitwise-consistent. The stream stays
-    // world-space main-world-side (instruments read it); only the upload copy moves.
-    // (A handful of extracted views; prepass/shadow views of the same camera collapse to the
-    // same translation.)
+    // Subtract the exact value `ViewUniform.world_position` is built from, so the shader's
+    // reconstruction matches bitwise; only the upload copy moves.
     let mut cams: HashMap<MainEntity, Vec3> = HashMap::default();
     for view in &views {
         cams.insert(
@@ -583,15 +494,11 @@ fn prepare_effects(
         );
     }
     for draw in &meta.draws {
-        // Decal draws stay ABSOLUTE: their pipeline transforms through `clip_from_world`
-        // (`DECAL_WORLD_CLIP`, the same `raster_bias != 0` predicate), so a
-        // rebase here would shift them a full camera-position off.
+        // Coplanar draws stay absolute: `DECAL_WORLD_CLIP` keys on the same `raster_bias != 0`.
         if draw.raster_bias != 0 {
             continue;
         }
-        // …and so does a draw whose producer already wrote camera-relative vertices: subtracting
-        // again would shift it a whole camera position off. That flag exists for f32 precision on
-        // sub-centimetre geometry — see [`super::buffer::EffectDrawSpec::cam_relative`].
+        // So does a draw its producer already wrote camera-relative.
         if draw.cam_relative {
             continue;
         }
@@ -608,31 +515,15 @@ fn prepare_effects(
     }
     meta.vertices.write_buffer(&device, &queue);
 
-    // The merge walk (the bevy_ui_render shape): one pass over each LIVE view's sorted
-    // items — the same views queue targeted, never the raw phase map (a map entry bevy hasn't
-    // swept yet would carry a dead frame's indices). Every effect item's indices are appended
-    // (quad pattern or identity tri-list); adjacent items sharing a [`RunKey`] fold into the
-    // run-opening item, whose `batch_range` is rewritten to
-    // `merged_index .. merged_index + run_len` — the phase renderer draws the opener once and
-    // advances past the absorbed items (`render_phase/mod.rs:1487`).
+    // The merge walk, over each live view's sorted items, never the raw phase map (an unswept
+    // entry carries a dead frame's indices): a run of items sharing a [`RunKey`] becomes one
+    // merged draw, and its opener's `batch_range` is rewritten to `merged .. merged + run_len`.
     let effect_fn = draw_functions.read().id::<DrawEffects>();
-    // `$WOW_EFFECT_TRACE` — the lane's own phase probe (the WOW_PHASE shape, decision 0665,
-    // asked of effect items): during the merge walk, record each **surface-decal** item — every
-    // rung of the pre-water band, named by [`decal_lane`] — with its **index in the sorted
-    // transparent phase**, its sort distance, and its appended index range, then log the phase
-    // totals. Splits "never pushed / never queued / merged away / submitted but the GPU state ate
-    // it" — the gap no pixel reading can see into — and, since 1789, reads the draw-order ladder
-    // straight off a live frame: `item 4` vs `item 81` is what B347 was, measured.
-    //
-    // The lane is keyed on the SORT rung because that is the one field unique per lane: the raster
-    // bias is shared (every ground decal rides `DECAL_RASTER`, and prints were being labelled
-    // shadows here for exactly that reason).
+    // `$WOW_EFFECT_TRACE`: each surface-decal item's phase index, sort distance and index
+    // range, then the frame's totals.
     let trace = effect_trace();
     let mut trace_lines: Vec<String> = Vec::new();
-    // The per-draw uniform rows, THIS frame: the six canonical fog policies plus one row per
-    // distinct (fog, clip) a clipped draw asks for. It is rebuilt every frame rather than once
-    // because the clip set is per-frame — the rows are a handful of `vec4` pairs, and the walk
-    // below needs the offsets to key its runs on.
+    // Rebuilt every frame: the clip set is per-frame, and the runs key on the row offsets.
     let clip_rows = meta.build_params(&device, &queue);
     meta.indices.clear();
     meta.merged.clear();
@@ -663,12 +554,8 @@ fn prepare_effects(
                 continue;
             }
             let (pipeline, draw_idx) = (item.pipeline, item.batch_range.start as usize);
-            // Defense in depth: `batch_range` is only a draw index if nothing else rewrote it.
-            // Every draw's probe identity is mesh-less, which keeps bevy's sorted-phase batcher
-            // off our items (it claims any item whose MAIN entity has a registered mesh and
-            // rewrites the range to an instance index — the Goldshire-teleport crash, where
-            // foam draws carried their water chunk). If a future violation sneaks in, degrade
-            // to one skipped item — never a render-thread panic.
+            // `batch_range` is a draw index only while bevy's batcher leaves the item alone, which
+            // it does while the main entity owns no mesh; otherwise skip the item, never panic.
             let Some(draw) = meta.draws.get(draw_idx) else {
                 close(&mut phase.items, &mut open, meta.merged.len());
                 phase.items[i].batch_range = 0..0;
@@ -705,8 +592,7 @@ fn prepare_effects(
             }
             let params_offset = match draw.clip {
                 None => meta.params_offsets[draw.fog.slot() as usize],
-                // A clipped draw whose row did not fit the frame's budget degrades to the
-                // unclipped one — the pre-2093 picture, never a wrong pixel elsewhere.
+                // A clipped draw past the row budget degrades to its unclipped row.
                 Some(clip) => *clip_rows
                     .get(&(draw.fog.slot(), clip.to_array().map(f32::to_bits)))
                     .unwrap_or(&meta.params_offsets[draw.fog.slot() as usize]),
@@ -782,9 +668,7 @@ fn prepare_effect_bind_groups(
     let Some(params_binding) = meta.params.binding() else {
         return;
     };
-    // The cached groups hold a binding INTO the params buffer, and that buffer is rebuilt every
-    // frame now (the clip rows are per-frame) — so a re-created buffer, which is what a growing
-    // row count produces, has to invalidate the cache or the groups bind freed memory.
+    // The cached groups bind into the params buffer: a re-created one invalidates them all.
     if bind_groups.params_buffer != meta.params_buffer {
         bind_groups.images.clear();
         bind_groups.params_buffer = meta.params_buffer;
@@ -794,8 +678,7 @@ fn prepare_effect_bind_groups(
         if bind_groups.images.contains_key(&key) {
             continue;
         }
-        // Not yet prepared GPU-side: the draw is skipped this frame (the same "withhold until
-        // resident" the main-world gate applies one asset-layer earlier).
+        // Not on the GPU yet: the draw is skipped this frame.
         let Some(image) = gpu_images.get(draw.texture) else {
             continue;
         };
@@ -860,12 +743,11 @@ impl<P: PhaseItem> RenderCommand<P> for DrawEffectBatch {
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
         let meta = meta.into_inner();
-        // `batch_range.start` is the merged-draw index (the prepare walk's rewrite); its length
-        // is the item span the phase renderer advances by — not read here.
+        // `batch_range.start` is the merged-draw index; its length is the renderer's advance.
         let Some(draw) = meta.merged.get(item.batch_range().start as usize) else {
             return RenderCommandResult::Skip;
         };
-        // GPU image not prepared yet: withheld, exactly like the main-world residency gate.
+        // Image not on the GPU yet: withheld.
         let key = (draw.texture, draw.light.as_ref().map(|b| b.id()));
         let Some(image_bind_group) = bind_groups.into_inner().images.get(&key) else {
             return RenderCommandResult::Skip;
@@ -877,8 +759,7 @@ impl<P: PhaseItem> RenderCommand<P> for DrawEffectBatch {
         pass.set_bind_group(1, image_bind_group, &[draw.params_offset]);
         pass.set_vertex_buffer(0, vertices.slice(..));
         pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-        // The `$WOW_EFFECT_TRACE` tail: what draw_indexed ACTUALLY ran — read against the
-        // prepare-side item lines to see which appended ranges never reached the GPU.
+        // `$WOW_EFFECT_TRACE`: what `draw_indexed` actually ran.
         if effect_trace() {
             info!(
                 "effect draw: merged {} indices {:?}",
@@ -891,9 +772,7 @@ impl<P: PhaseItem> RenderCommand<P> for DrawEffectBatch {
     }
 }
 
-/// Registers the render-world half. The main-world [`EffectQuads`] resource and the family
-/// writers are their plugins' ([`super::ParticlePlugin`], [`crate::ribbons::RibbonPlugin`],
-/// the decal/foam/precip modules).
+/// Registers the render-world half; [`EffectQuads`] and its writers belong to the family plugins.
 pub struct EffectLanePlugin;
 
 impl Plugin for EffectLanePlugin {
@@ -912,8 +791,7 @@ impl Plugin for EffectLanePlugin {
                 Render,
                 (
                     queue_effects.in_set(RenderSystems::Queue),
-                    // After `PhaseSort` (the set ordering) — the merge walk needs the final
-                    // item order.
+                    // After `PhaseSort`: the merge walk needs the final item order.
                     prepare_effects.in_set(RenderSystems::PrepareResources),
                     prepare_effect_bind_groups.in_set(RenderSystems::PrepareBindGroups),
                 ),
@@ -921,9 +799,7 @@ impl Plugin for EffectLanePlugin {
     }
 }
 
-/// `$WOW_EFFECT_TRACE` — the effect lane's per-item / per-bind / per-draw trace, one read for
-/// the process: the three sites that asked the environment per frame (and per new bind group)
-/// now ask this.
+/// `$WOW_EFFECT_TRACE`: the lane's per-item, per-bind and per-draw trace, read once.
 fn effect_trace() -> bool {
     static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *TRACE.get_or_init(|| std::env::var_os("WOW_EFFECT_TRACE").is_some())
@@ -933,15 +809,12 @@ fn effect_trace() -> bool {
 mod tests {
     use bevy::math::{Mat3, Mat4, Vec3};
 
-    /// One rasterizer constant-bias unit for a `Depth32Float` value: `2^(e−23)`, the
-    /// next-representable step at that depth's exponent (the Vulkan/Metal float-depth scale
-    /// the pipeline's `DepthBiasState::constant` is multiplied by).
+    /// One constant-bias unit at a `Depth32Float` depth: `2^(e−23)`, the step at its exponent.
     fn bias_unit(depth: f32) -> f32 {
         f32::from_bits(depth.to_bits() + 1) - depth
     }
 
-    /// The world-mesh route: `clip_from_world × p` — `position_world_to_clip`
-    /// (terrain.wgsl / wow_model.wgsl), and `DECAL_WORLD_CLIP`'s transform.
+    /// The world meshes' and `DECAL_WORLD_CLIP`'s route: `clip_from_world × p`.
     fn depth_world(clip_from_world: &Mat4, p: Vec3) -> f32 {
         let c = *clip_from_world * p.extend(1.0);
         c.z / c.w
@@ -959,18 +832,12 @@ mod tests {
         c.z / c.w
     }
 
-    /// 0781's premise, demonstrated in the two routes' exact arithmetic shapes: give both the
-    /// SAME ground vertex at WoW-scale coordinates, and the cam-relative route
-    /// disagrees with the world-mesh route by the ORDER OF THE WHOLE 0781-era 4096-unit bias
-    /// at close camera distances — pure arithmetic divergence spending the margin that exists
-    /// to settle real geometry deltas (the CPU-baked decal verts vs the GPU-transformed render
-    /// verts; GPU per-pipeline FMA differences push the route term higher still). The
-    /// same-matrix route spends zero on it by construction. Coplanarity is a relationship with
-    /// the receiver's own transform: a decal must ride the receiver's matrix.
+    /// At WoW-scale coordinates the cam-relative route misses the world-mesh depth by the order of
+    /// a 4096-unit bias up close, while the same matrix matches bitwise: a decal rides its
+    /// receiver's matrix.
     #[test]
     fn decal_depth_ties_only_through_the_mesh_matrix() {
-        // A WMO floor vertex at eastern-Kalimdor-scale coordinates (bevy = (−wow.y, wow.z,
-        // −wow.x); magnitudes of several thousand yards are ordinary).
+        // A floor vertex at Kalimdor-scale coordinates (bevy = (−wow.y, wow.z, −wow.x)).
         let ground = Vec3::new(3807.13, 7.42, 7093.87);
         let clip_from_view =
             Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_4, 16.0 / 9.0, 0.1);
@@ -980,21 +847,19 @@ mod tests {
             // The zoom sweep: camera 1.5..41 yd out along a fixed off-axis orbit offset.
             let d = 1.5 + step as f32 * 0.5;
             let cam = ground + dir * d;
-            // Bevy's own construction: camera world matrix, general inverse, premultiplied
-            // product (`ExtractedView`) — the rounding path the mesh shaders actually see.
+            // Bevy's own construction (`ExtractedView`), the rounding the mesh shaders see.
             let world_from_view = Mat4::look_at_rh(cam, ground, Vec3::Y).inverse();
             let view_from_world = world_from_view.inverse();
             let clip_from_world = clip_from_view * view_from_world;
             let mesh = depth_world(&clip_from_world, ground);
             let bias = 4096.0 * bias_unit(mesh);
-            // The fix: same matrix, same input — bitwise the same depth, zero divergence.
+            // Same matrix, same input: bitwise the same depth.
             assert_eq!(depth_world(&clip_from_world, ground), mesh);
             let route =
                 (depth_cam_relative(&view_from_world, &clip_from_view, ground, cam) - mesh).abs();
             worst_route_over_bias = worst_route_over_bias.max(route / bias);
         }
-        // Measured 0.93× at d=1.5 on this sweep; the assertion keeps headroom for
-        // platform-to-platform rounding differences while still pinning the order.
+        // 0.93× at d = 1.5 on this sweep; the bound leaves headroom for platform rounding.
         assert!(
             worst_route_over_bias > 0.5,
             "cam-relative route divergence stayed far inside the bias \
@@ -1003,33 +868,19 @@ mod tests {
         );
     }
 
-    /// 0781's named residual, sized (the director-confirmed flicker): the decal's verts
-    /// are CPU-baked world positions, the receiver's are GPU-transformed per frame, and the two
-    /// roundings displace the baked point from the drawn plane by a few ulps of the WORLD
-    /// COORDINATE — millimetres at city magnitudes. The depth conflict is that displacement's
-    /// component along the receiver's normal: a level street barely samples it (the y ulp at
-    /// street height is micro-scale), a *sloped* receiver takes the full horizontal ulps onto
-    /// its tilted normal — and the confirmed flicker walk was the Stormwind gate ramp. Model
-    /// the 3-ulp worst case ("~1–3 ulps") at the walk's own coordinates across zoom and
-    /// slope, and pin both ends of the sizing.
-    ///
-    /// **Since 1817 it pins the raise as well as the floor.** The residual is 2.59× the 0781-era
-    /// +4096 margin, so it is also **1.30× the +8192** the selection ring and the ground-target
-    /// reticle rode until the reference showed they share the blob shadow's lane and therefore its
-    /// conflict — those two were under their own residual and had simply not been walked on a
-    /// slope. The measurement is per-lane-independent by construction: the residual is the
-    /// *bake's*, and the bake is one path, so one number serves every ground decal.
+    /// CPU-baked decal verts and GPU-transformed receiver verts differ by a few ulps of the world
+    /// coordinate, which a sloped receiver takes onto its normal as depth. Sized at 3 ulps on the
+    /// Stormwind gate ramp across zoom and slope: above an 8192-unit bias, under half of
+    /// `Rung::DECAL_RASTER`. One bake path, so one number serves every ground decal.
     #[test]
     fn raised_bias_dominates_the_bake_residual() {
         use crate::sky_order::Rung;
-        // The ramp mid-spot of the flicker walk: bevy (−wow.y, wow.z, −wow.x) of
-        // wow (−8843.41, 642.68, 95.92).
+        // The Stormwind gate ramp, wow (−8843.41, 642.68, 95.92) in bevy axes.
         let ground = Vec3::new(-642.68, 95.92, 8843.41);
         let clip_from_view =
             Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_4, 16.0 / 9.0, 0.1);
         let ulp = |v: f32| f32::from_bits(v.to_bits() + 1) - v;
-        // 3 ulps per world axis, signs free — the worst displacement onto a unit normal n is
-        // the absolute sum.
+        // 3 ulps per world axis, signs free: the worst normal offset is the absolute sum.
         let worst_normal_offset = |n: Vec3| {
             3.0 * (n.x.abs() * ulp(ground.x)
                 + n.y.abs() * ulp(ground.y)
@@ -1053,8 +904,7 @@ mod tests {
                     let view_from_world = world_from_view.inverse();
                     let clip_from_world = clip_from_view * view_from_world;
                     let depth = depth_world(&clip_from_world, ground);
-                    // Window-depth cost of the offset along the normal, differenced in f64 so
-                    // the measurement isn't polluted by the very f32 noise it measures.
+                    // The offset's window-depth cost, differenced in f64 to keep f32 noise out.
                     let m = clip_from_world.as_dmat4();
                     let z_at = |p: bevy::math::DVec3| {
                         let c = m * p.extend(1.0);

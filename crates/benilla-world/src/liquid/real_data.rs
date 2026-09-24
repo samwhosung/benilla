@@ -1,9 +1,5 @@
-//! The liquid subsystem against the **real 1.12.1 client files** — the tests that need actual ADT
-//! and WMO bytes rather than a synthetic quad, so they live apart from either half's unit tests and
-//! reach across both: they build surfaces the way `super::surface`'s spawn paths do and then ask
-//! `super::query` the same questions the running client asks.
-//!
-//! Every one skips when the client isn't present (the repo never carries Blizzard data).
+//! The liquid queries against the real client files: surfaces built as the spawn paths build them,
+//! asked what the running client asks. Each test skips without an install.
 
 use bevy::prelude::*;
 
@@ -14,18 +10,11 @@ use crate::wmo_portal::WmoRoom;
 use benilla_assets::coords::{bevy_to_wow, placement_rotation, wow_to_bevy};
 use benilla_formats::{parse_wmo_root, wmo_group_liquid_mesh, LiquidMesh, Submersion};
 
-/// Every loaded liquid surface covering a position's tile neighbourhood, world-placed and
-/// **owner-tagged** — the ADT's own MCLQ chunks and every WMO placement's MLIQ groups, i.e. the same
-/// candidate set the running client's `WaterChunkInfo` query sees, scoped the same way.
-///
-/// Each WMO placement gets a synthetic instance id (its index here) standing in for the
-/// `WmoPortalInstance` entity the app spawns; `containing_room` then answers the question the app's
-/// interior down-ray answers at runtime — *which* placement the subject is standing in — so a test
-/// can pose the real query with the real claim.
+/// The world-placed, owner-tagged liquid around a position: its tiles' MCLQ and every WMO
+/// placement's MLIQ, each placement under a synthetic instance id for the app's entity.
 struct LiquidScene {
     surfaces: Vec<WaterChunkInfo>,
-    /// Per placement: its synthetic instance id, model path, placement transform, and group
-    /// bounding boxes (WMO model space) — the containment test.
+    /// Each placement with its group boxes in model space, for the containment test.
     placements: Vec<Placement>,
 }
 
@@ -37,13 +26,8 @@ struct Placement {
 }
 
 impl LiquidScene {
-    /// The room a world position stands in: the first placement one of whose group bounding boxes
-    /// contains it, and that group.
-    ///
-    /// A coarser test than the app's down-ray (which races collision FACES and the terrain), and
-    /// deliberately so — a test that re-implemented the down-ray would be pinning the test's copy of
-    /// it. Group-box containment is enough to answer "which building is this position in", which is
-    /// the only thing these two sites turn on.
+    /// The room a world position stands in: the first placement and group whose box contains it,
+    /// coarser than the app's down-ray but enough to name the building.
     fn containing_room(&self, wow: [f32; 3]) -> Option<WmoRoom> {
         self.placements.iter().find_map(|p| {
             let local = bevy_to_wow(
@@ -63,8 +47,7 @@ impl LiquidScene {
         })
     }
 
-    /// Which model path a room's placement came from — so a test can state *which building* it
-    /// believes the player is in rather than trusting an index.
+    /// The model path of a room's placement.
     fn model_of(&self, room: WmoRoom) -> &str {
         self.placements
             .iter()
@@ -73,7 +56,7 @@ impl LiquidScene {
     }
 }
 
-/// Build the [`LiquidScene`] around a position. Empty (`None`) when the client isn't present.
+/// The [`LiquidScene`] around a position; `None` without an install.
 fn liquid_scene(map: &str, wow: [f32; 3]) -> Option<LiquidScene> {
     let data = benilla_formats::wow_data()?;
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
@@ -83,8 +66,7 @@ fn liquid_scene(map: &str, wow: [f32; 3]) -> Option<LiquidScene> {
         placements: Vec::new(),
     };
     let mut seen_placements: Vec<u32> = Vec::new();
-    // A building as big as Blackrock is placed in every tile it straddles, so its MODF may sit
-    // in a neighbour of the tile the position falls in.
+    // A building is placed in every tile it straddles, so its MODF may sit in a neighbour tile.
     for dx in -1i32..=1 {
         for dy in -1i32..=1 {
             let (tx, ty) = ((cx as i32 + dx) as u32, (cy as i32 + dy) as u32);
@@ -99,8 +81,7 @@ fn liquid_scene(map: &str, wow: [f32; 3]) -> Option<LiquidScene> {
                 ));
             }
             for w in &tile.wmos {
-                // A straddling building appears in each tile's MODF — spawn it once, as the
-                // streamer does (it dedups on the same `unique_id`).
+                // Once per `unique_id`, as the streamer dedups a straddling building.
                 if seen_placements.contains(&w.unique_id) {
                     continue;
                 }
@@ -138,8 +119,7 @@ fn liquid_scene(map: &str, wow: [f32; 3]) -> Option<LiquidScene> {
                         scene.surfaces.push(wet_footprint(
                             lq_ref(&lq),
                             &transform,
-                            // Built through the APP's own constructor, not a copy of the rule —
-                            // a test that re-derived the floor would pin its own version of 0701.
+                            // The app's own constructor, so the test pins the app's floor rule.
                             LiquidSource::WmoGroup(WmoPool::new(
                                 Some(WmoRoom {
                                     instance,
@@ -161,8 +141,7 @@ fn lq_ref(lq: &LiquidMesh) -> &LiquidMesh {
     lq
 }
 
-/// The verdict at a position, and the highest wet vertex among the surfaces that claim it —
-/// i.e. what the query answers now, beside what the chunk-maximum rule used to answer.
+/// The surface the query answers at a position, and the highest wet vertex of those over its XY.
 fn verdict(map: &str, wow: [f32; 3], claim: LiquidClaim) -> Option<(f32, f32)> {
     let all = liquid_scene(map, wow)?.surfaces;
     let hit = liquid_at(all.iter(), wow, claim)?;
@@ -174,14 +153,11 @@ fn verdict(map: &str, wow: [f32; 3], claim: LiquidClaim) -> Option<(f32, f32)> {
     Some((hit.surface_z, old))
 }
 
-/// **Blackrock Mountain's lava** at the director's `.go xyz -7531.21 -1123.64 172.58` (indoors,
-/// `blackrock.wmo` group 038 — a 55×82 magma grid running 167.29 → 175.00 under a ~7° yaw
-/// placement). The old chunk-maximum answered 175.00, i.e. 2.42 yd OVER the feet and well past
-/// the 1.52 yd swim line, on a staircase whose lava is metres below.
+/// Blackrock's lava stairs at `-7531.21 -1123.64 172.58`, in `blackrock.wmo` group 038: a 55×82
+/// grid running 167.29 to 175.00 under a ~7° yaw, whose maximum sits 2.42 yd over the feet.
 #[test]
 fn blackrock_lava_is_below_the_feet_not_above_it() {
     let feet = [-7531.21_f32, -1123.64, 172.58];
-    // Blackrock's own placement owns the magma, and the player is in it.
     let scene = liquid_scene("Azeroth", feet);
     let claim = scene
         .as_ref()
@@ -206,10 +182,8 @@ fn blackrock_lava_is_below_the_feet_not_above_it() {
     );
 }
 
-/// **Felfire Hill's river** at the director's `.go xyz 1983.97 -2875.84 98.00` (outdoors, one
-/// MCNK's 9×9 MCLQ falling 95.78 → 99.56 across the chunk). The old chunk-maximum answered
-/// 99.56 — 1.56 yd over the feet, just past the 1.52 yd swim line — while the player stands on
-/// the bank with the water at their soles.
+/// Felfire Hill's river bank at `1983.97 -2875.84 98.00`: one MCNK's MCLQ falls 95.78 to 99.56,
+/// and the water is at the player's soles.
 #[test]
 fn felfire_hill_river_does_not_swim_on_the_bank() {
     let feet = [1983.97_f32, -2875.84, 98.00];
@@ -232,17 +206,8 @@ fn felfire_hill_river_does_not_swim_on_the_bank() {
     );
 }
 
-/// **B85 — Uldaman reads as UNDERWATER** (director repro, `.go xyz -6152.73 -2969.59 213.73`; the
-/// `/liquid` line read `VERDICT Still surface z 399.64 (+185.91 over feet)`, `WmoGroup … WET-CELL`).
-///
-/// The claiming pool is **another building's**. At these feet the player stands in
-/// `kz_uldaman_a.wmo` (WMOAreaTable id 1218) group 22 — which carries no MLIQ over this XY at all —
-/// while the surface answering `+185.91` is group 1 of a nearby `md_mushroomcave.wmo` placement,
-/// whose every group box excludes the player: their feet sit at local z −191.15 under a pool that
-/// runs local z −5.65…0.00, i.e. 186 yd overhead in a cave they have never entered.
-///
-/// A footprint has no floor, so before 0696 "indoors" (a bare bool) admitted every MLIQ surface on
-/// the map and the lowest one won. The two arms below are the bug and the fix on the same bytes.
+/// Uldaman at `-6152.73 -2969.59 213.73`: the player is in `kz_uldaman_a.wmo` group 22, which has
+/// no MLIQ here, 186 yd under group 1 of a `md_mushroomcave.wmo` placement's pool.
 #[test]
 fn uldaman_is_not_submerged_in_a_mushroom_caves_pool() {
     let feet = [-6152.73_f32, -2969.59, 213.73];
@@ -250,9 +215,7 @@ fn uldaman_is_not_submerged_in_a_mushroom_caves_pool() {
         eprintln!("skipping: no WoW client data");
         return;
     };
-    // The bug, on the shipped files: the pool B85 reported really is over this XY and really is
-    // 185.91 yd up. Read off the surfaces with NO delegation at all — the reported number is a
-    // property of the files, so the control must not run through any rule this test also judges.
+    // The control, off the surfaces with no delegation: the cave's pool is over this XY.
     let reported = scene
         .surfaces
         .iter()
@@ -266,15 +229,12 @@ fn uldaman_is_not_submerged_in_a_mushroom_caves_pool() {
     );
     assert!(reported - feet[2] > 185.0, "…and 186 yd overhead");
 
-    // Since 0701 that pool is rejected TWICE over, and the second bound is independent of the
-    // first: even a subject with no interior claim at all is out of the cave's room, 186 yd under
-    // its floor. B85 would not have needed the owner half.
+    // The floor alone rejects it, even for an unclassified subject 186 yd under the cave's room.
     assert!(
         liquid_at(scene.surfaces.iter(), feet, LiquidClaim::Unknown).is_none(),
         "the cave's pool is below-the-floor rejected even for an unclassified subject"
     );
 
-    // The fix: the player's room is Uldaman's own placement, and Uldaman has no pool here.
     let room = scene
         .containing_room(feet)
         .expect("the player stands inside a placement");
@@ -289,21 +249,9 @@ fn uldaman_is_not_submerged_in_a_mushroom_caves_pool() {
     );
 }
 
-/// **The Undercity STOREY bug** — the same wrong-underwater-filter as B60, one
-/// storey further in, and the half owner scoping could not reach. Live repro at
-/// `.go xyz 1732.68 187.01 -65.70`, where `WOW_FOG_DUMP` read:
-///
-/// ```text
-/// [submerged] Slime claim Inside(WmoRoom { instance: …, group: 182 }) eye [1731.9 187.0 -63.59]
-///             over-xy  Slime z -64.48 g182,  Slime z 51.98 g10,  Slime z 51.98 g7
-/// ```
-///
-/// The eye's own room (group 182) holds slime at −64.48, *below* the eye and so not submerging it.
-/// What turned the screen green were groups 7 and 10 — Undercity's upper channels at z 51.98,
-/// **115 yd overhead** — which owner scoping admits because they are the same placement.
-///
-/// The server agrees the eye is dry there: `.gps` reports `Liquid level: -64.478561`, i.e. 0.9 yd
-/// *under* the eye.
+/// Undercity at `1732.68 187.01 -63.59`: the eye's room (group 182) holds slime at −64.48, under
+/// the eye, while groups 7 and 10 of the same placement run 115 yd overhead. The server's `.gps`
+/// agrees the eye is dry: liquid level −64.478561.
 #[test]
 fn undercitys_upper_channels_do_not_submerge_the_rooms_below() {
     let eye = [1732.68_f32, 187.01, -63.59];
@@ -311,8 +259,7 @@ fn undercitys_upper_channels_do_not_submerge_the_rooms_below() {
         eprintln!("skipping: no WoW client data");
         return;
     };
-    // The control, straight off the files with no delegation: the pools that were claiming the eye
-    // really are up at 51.98, and really are over this XY.
+    // The control, with no delegation: the pools over this XY are up at 51.98.
     let overhead: Vec<f32> = scene
         .surfaces
         .iter()
@@ -324,8 +271,7 @@ fn undercitys_upper_channels_do_not_submerge_the_rooms_below() {
         "the surfaces over the eye are Undercity's upper channels at 51.98 (got {overhead:?})"
     );
 
-    // …and they belong to the eye's OWN placement, which is why 0696's owner scoping let them
-    // through: this is a storey bug, not a building bug.
+    // They belong to the eye's own placement, so only the floor can reject them.
     let room = scene
         .containing_room(eye)
         .expect("the eye stands inside a placement");
@@ -335,14 +281,11 @@ fn undercitys_upper_channels_do_not_submerge_the_rooms_below() {
         scene.model_of(room)
     );
 
-    // The fix, asked of the rule the SCREEN runs: a pool never claims below its own room's floor,
-    // so nothing over the eye submerges it and the filter stays off.
     assert_eq!(
         submersion_at(scene.surfaces.iter(), eye, LiquidClaim::inside(room)),
         Submersion::Dry,
         "a pool 115 yd overhead, in another storey of the same building, must not submerge the eye"
     );
-    // And the room's OWN slime is untouched — step down into it and the screen goes green properly.
     let inside_the_slime = [eye[0], eye[1], -66.0];
     assert_eq!(
         submersion_at(
@@ -366,15 +309,8 @@ fn undercitys_upper_channels_do_not_submerge_the_rooms_below() {
     );
 }
 
-/// **B60 — Undercity's Rogues' Quarter under Tirisfal's water** (director repro,
-/// `.go xyz 1414.08 53.00 -62.26`; the `/liquid` line read `AdtChunk Still WET-CELL surface z 32.93
-/// (+95.19 over feet)` while the player's own VERDICT was already `none`).
-///
-/// The ADT chunk's lake covers the XY 95 yd overhead and the rooms are cut into the rock beneath it.
-/// The player's query had delegated since 0634 and read dry; the **camera-eye** probe and the
-/// **per-unit** swim marker had not, so the screen took the underwater filter and the NPCs swam on
-/// dry stone. All three subjects run this one predicate now, so the assertion below is what each of
-/// them asks.
+/// Undercity's Rogues' Quarter at `1414.08 53.00 -62.26`, 95 yd under Tirisfal's lake: the player,
+/// the camera eye and a unit all ask this one predicate.
 #[test]
 fn the_rogues_quarter_is_not_under_tirisfals_lake() {
     let feet = [1414.08_f32, 53.00, -62.26];
@@ -382,8 +318,7 @@ fn the_rogues_quarter_is_not_under_tirisfals_lake() {
         eprintln!("skipping: no WoW client data");
         return;
     };
-    // The control: the ADT surface really is there, really covers this XY, and really is 95 yd up —
-    // an un-delegated subject (the pre-0696 camera and creature marker) is submerged in it.
+    // The control: an unscoped subject is submerged in the ADT lake 95 yd up.
     let unscoped = liquid_at(scene.surfaces.iter(), feet, LiquidClaim::Unknown)
         .expect("Tirisfal's water covers this XY");
     assert!(
@@ -392,8 +327,7 @@ fn the_rogues_quarter_is_not_under_tirisfals_lake() {
         "the surface B60 reported (got {})",
         unscoped.surface_z
     );
-    // The fix: a subject standing in Undercity reads Undercity's own liquid — and there is none
-    // over this XY, in any of its 38 liquid groups.
+    // Inside Undercity, none of its 38 liquid groups covers this XY.
     let room = scene
         .containing_room(feet)
         .expect("the player stands inside a placement");
@@ -408,11 +342,8 @@ fn the_rogues_quarter_is_not_under_tirisfals_lake() {
     );
 }
 
-/// **The gradient the swim law is sized against**: Felwood's Felfire Hill
-/// channel, along the run the live probe swam. A liquid surface is a heightfield, and *how far
-/// from flat* is exactly what decides whether the swim latch's 1/36-yd hysteresis band can
-/// absorb travelling along it — so the slope `player::swim`'s regression test drives is pinned
-/// here against the shipped ADT instead of living as a constant someone can only take on faith.
+/// The Felfire Hill channel's slope, the one `player::swim`'s regression test drives against the
+/// swim latch's 1/36 yd band.
 #[test]
 fn the_felfire_channel_falls_about_a_tenth_of_a_yard_per_yard() {
     let (downstream, upstream) = ([1953.97_f32, -2866.84, 0.0], [2013.97_f32, -2866.84, 0.0]);

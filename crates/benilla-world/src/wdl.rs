@@ -1,12 +1,7 @@
-//! Distant low-detail terrain (WDL): streams the map's coarse horizon heightmap around the view —
-//! beyond the detailed ADT ring — drawn unlit-white under a fog pair of its own that saturates it
-//! into the flat scene-fog colour (a "fog hull"), the hills the reference shows on the
-//! horizon where ours used to fade to void. The parse + coarse mesh live in `benilla_formats::wdl`; this
-//! is just the Bevy streaming + render glue (one shared [`WdlMaterial`], one mesh per ring tile).
-//!
-//! Mechanism + RE (geometry/shading/fog/depth all VERIFIED from apitrace WoW.8 + the real `.wdl`).
-//! How it partitions against the detailed world — the reference's far-band **backdrop** law, and why a
-//! shared clip plane could not work — is `wdl.wgsl`'s header.
+//! Distant low-detail terrain (WDL): the map's coarse horizon heightmap streamed around the view
+//! beyond the ADT ring, drawn unlit under a fog pair of its own that saturates it to the flat
+//! scene-fog colour. The parse and mesh are `benilla_formats::wdl`; the reference's backdrop law
+//! that partitions it from the detailed world is `wdl.wgsl`'s header.
 
 use std::collections::HashMap;
 
@@ -24,29 +19,23 @@ use benilla_assets::MapCatalogRes;
 use benilla_assets::{AssetSet, RenderConfig, WorldAssets};
 use benilla_formats::WdlFile;
 
-/// Chebyshev tile radius the WDL ring covers around the view. WDL is flat haze at every distance (its
-/// own saturated fog pair) — what it contributes is silhouette, and hills 2–4 tiles out
-/// still rise above the horizon as fog-coloured silhouettes, so we extend toward the reference's
-/// `horizonfarclip` (~2112 yd ≈ 4 tiles). Drawn as a full ring; the
-/// shader makes it a **backdrop** — near plane at `farclip − 33`, depth clamped behind everything the
-/// detailed world can draw (`wdl.wgsl`'s header) — so it fills whatever the detailed
-/// world leaves empty and can never overlap it. (The reference's own far walk is a ±3-tile window.)
+/// Chebyshev tile radius of the WDL ring. The shader keeps it a backdrop (near plane at
+/// `farclip − 33`, depth behind the detailed world), so it only fills what that leaves empty.
+/// Deviation: 5, not the reference's ±3-tile far walk, because hills out to its `horizonfarclip`
+/// (2112 yd, about 4 tiles) still rise above the horizon as silhouettes.
 const WDL_RADIUS: u32 = 5;
 
-/// New WDL tiles built per frame — coarse meshes are cheap (545 verts), but a whole ring at once
-/// would hitch on zone load, so spread it.
+/// New WDL tiles built per frame (545 vertices each), so a whole ring does not hitch a zone load.
 const WDL_LOADS_PER_FRAME: usize = 8;
 
-/// The WDL subsystem: load the map's `.wdl` + a shared fog material at startup, then stream the
-/// coarse horizon ring in/out around the view each frame.
+/// Loads the map's `.wdl` and a shared material at startup, then streams the ring around the view.
 pub(crate) struct WdlPlugin;
 
 impl Plugin for WdlPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<WdlMaterial>::default())
             .add_systems(Startup, setup_wdl.after(AssetSet::Open))
-            // The distant ring is world, and follows the world's lifecycle: it
-            // spawns only while a character is in one, and its meshes go when they leave.
+            // The ring follows the world's lifecycle: it spawns only while a world is live.
             .add_systems(Update, stream_wdl.run_if(crate::schedule::world_is_live))
             .add_systems(
                 Update,
@@ -58,31 +47,28 @@ impl Plugin for WdlPlugin {
     }
 }
 
-/// Streams the coarse WDL ring: the parsed file, the shared material every ring tile uses, and which
-/// ring tiles are currently spawned. (The material holds no fog of its own — it reads the shared
-/// global-light buffer, same as terrain and the models.)
+/// The parsed WDL, the shared ring material (it reads the global light buffer) and the spawned
+/// ring tiles.
 #[derive(Resource)]
 pub(crate) struct WdlStreamer {
     wdl: WdlFile,
-    /// `mapId` the loaded `wdl` is for; a cross-map teleport (≠ [`CurrentMap`]) reloads it.
+    /// The `mapId` of the loaded `wdl`; a cross-map teleport reloads it.
     map_id: u32,
     material: Handle<WdlMaterial>,
     loaded: HashMap<(u32, u32), Entity>,
 }
 
 impl WdlStreamer {
-    /// The drawn WDL surface height (raw WoW `z`) under a **Bevy-space** position — whole-map
-    /// coverage from the coarse horizon heightmap, exact to the rendered mesh
-    /// (`WdlFile::height_at`). The far leg of the lens-flare occlusion march
-    /// (`sun::follow::FlareGate`), beyond the resident detailed-terrain ring. `None` off the map
-    /// or where no WDL tile is authored (open ocean) — never an occluder there.
+    /// The drawn WDL height (raw WoW `z`) under a Bevy-space position, exact to the mesh: the far
+    /// leg of the flare occlusion march (`sun::follow::FlareGate`). `None` off the map or over
+    /// unauthored ocean.
     pub(crate) fn height_under(&self, bevy_pos: Vec3) -> Option<f32> {
         let wow = bevy_to_wow(bevy_pos);
         self.wdl.height_at(wow[0], wow[1])
     }
 }
 
-/// Marks a spawned WDL tile (so a future system could query/cull them as a group if needed).
+/// Marks a spawned WDL tile.
 #[derive(Component)]
 struct WdlTile;
 
@@ -95,7 +81,7 @@ fn setup_wdl(
     let (Some(_config), Some(world_assets)) = (config, world_assets) else {
         return; // no client data → no terrain at all, so no WDL
     };
-    // Default map = Azeroth (Eastern Kingdoms), matching world_map's DEFAULT_MAP_ID.
+    // Azeroth (Eastern Kingdoms), matching `world_map`'s `DEFAULT_MAP_ID`.
     let wdl = match WdlFile::load(&mut world_assets.chain.lock_recover(), "Azeroth") {
         Ok(w) => {
             info!(
@@ -109,9 +95,8 @@ fn setup_wdl(
             return;
         }
     };
-    // One shared material, reading the shared global light like terrain does — no seed and no
-    // per-frame push: `build_light_data` has already packed the fog by the first draw. Opaque ⇒
-    // depth-LEQUAL + depth-write, no blend (the verified WoW.8 state).
+    // Reads the shared global light, whose fog `build_light_data` packs before the first draw.
+    // Opaque: depth-LEQUAL with depth write and no blend, as the reference draws it.
     let material = materials.add(ExtendedMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
@@ -141,18 +126,15 @@ fn stream_wdl(
     map_catalog: Option<Res<MapCatalogRes>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    // All four are absent together — there is no client data, so `setup_wdl` and `load_world_map`
-    // both bailed. `Option` rather than a hard `Res` because a missing resource is a *validation*
-    // failure, not a `None`: the system would never run, and Bevy's default handler panics the
-    // client. This one is gated on `world_is_live`, so it takes a world with no
-    // install to reach — which a player build in the wrong folder can still do.
+    // All four are absent without client data. `Option`, not `Res`: a missing `Res` fails
+    // validation, which panics the client, and a build run from the wrong folder gets here.
     let (Some(mut streamer), Some(assets), Some(current_map), Some(map_catalog)) =
         (streamer, assets, current_map, map_catalog)
     else {
         return;
     };
-    // The map the *focus* is on — `CurrentMap` once the snap has landed, the picked character's
-    // own map during world entry, so the ring is never built for the map we are leaving.
+    // The focus's map: the picked character's during world entry, so the ring is never built for
+    // the map being left.
     let map_id = focus.map(Some(current_map.0));
 
     // Cross-map teleport: reload the new map's `.wdl` and drop the old ring.
@@ -166,7 +148,7 @@ fn stream_wdl(
                     streamer.wdl = wdl;
                     streamer.map_id = map_id;
                 }
-                // No `.wdl` for this map (instances often lack one) → just clear the ring.
+                // No `.wdl` for this map (instances often lack one): clear the ring.
                 Err(_) => {
                     for (_, e) in streamer.loaded.drain() {
                         commands.entity(e).despawn();
@@ -177,16 +159,12 @@ fn stream_wdl(
         }
     }
 
-    // The same view focus the detailed streamer uses — literally the same resource now, rather
-    // than a copy under a comment claiming they agree.
+    // The detailed streamer's own view focus.
     let center = focus.resolve(camera.single().ok().map(|c| c.translation));
-    // The FULL window, the camera's own tile INCLUDED (`tiles_in_ring`'s doc is the why — at a
-    // lowered view distance the own tile *is* the near horizon, and dropping it leaves a gap the sky
-    // pours through). What bounds the band on the near side is the shader's near plane, never the
-    // streamed set, so this cannot toggle against the detailed streaming radius — a constant backdrop.
+    // The full window, the camera's own tile included (at a low view distance it is the near
+    // horizon); the shader's near plane bounds the band, never the streamed set.
     let desired = streamer.wdl.tiles_in_ring(center[0], center[1], WDL_RADIUS);
 
-    // Unload ring tiles no longer wanted.
     let stale: Vec<(u32, u32)> = streamer
         .loaded
         .keys()
@@ -199,7 +177,6 @@ fn stream_wdl(
         }
     }
 
-    // Load a few missing tiles this frame.
     let missing: Vec<(u32, u32)> = desired
         .into_iter()
         .filter(|c| !streamer.loaded.contains_key(c))
@@ -214,8 +191,8 @@ fn stream_wdl(
             .iter()
             .map(|p| wow_to_bevy(*p).to_array())
             .collect();
-        // Unlit + untextured: a constant up-normal and zero UV satisfy the StandardMaterial pipeline;
-        // the custom WDL shader reads neither (it outputs the flat fog colour).
+        // A constant normal and zero UV satisfy the `StandardMaterial` pipeline; the shader reads
+        // neither.
         let n = positions.len();
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
@@ -231,11 +208,9 @@ fn stream_wdl(
                 MeshMaterial3d(streamer.material.clone()),
                 Transform::IDENTITY,
                 WdlTile,
-                // The far band is exterior scene like the detailed tiles are: the reference's far
-                // walk `0x683040` is fed by the SAME per-window populate `0x682fa0`, so from a sealed
-                // room the horizon is not drawn either (`crate::exterior_cull`). One ring tile is one
-                // drawn object here, which is already the reference's far-tier granularity — this
-                // band never needed the chunk split the near tiles did.
+                // Exterior scene: the reference's far walk `0x683040` shares the per-window
+                // populate `0x682fa0`, so a sealed room hides the horizon (`crate::exterior_cull`).
+                // One ring tile is one object, the reference's far-tier granularity.
                 crate::exterior_cull::ExteriorScene,
             ))
             .id();
@@ -243,9 +218,7 @@ fn stream_wdl(
     }
 }
 
-/// Leaving the world drops the distant ring. The parsed `.wdl` itself stays — it is
-/// one small file, the resource `stream_wdl` needs to exist at all, and `height_under` is read by
-/// the sun's flare-occlusion march; what costs per frame is the spawned mesh set, and that goes.
+/// Leaving the world drops the ring; the parsed `.wdl` stays for `height_under`.
 fn release_wdl_ring(mut commands: Commands, streamer: Option<ResMut<WdlStreamer>>) {
     let Some(mut streamer) = streamer else { return };
     for (_, e) in streamer.loaded.drain() {
@@ -253,10 +226,8 @@ fn release_wdl_ring(mut commands: Commands, streamer: Option<ResMut<WdlStreamer>
     }
 }
 
-/// The backdrop law (`wdl.wgsl`'s header) is a property of the **shader**, so it is
-/// checked there — the same shape as `sky_order.rs`'s depth-law test, and for the same reason: the
-/// failure it guards is invisible except at a ridge crest on a fogged horizon, and the obvious "tidy-up"
-/// (go back to one shared clip plane, drop the frag-depth write) silently reintroduces it.
+/// The backdrop law lives in the shader, so it is checked there: a shared clip plane or a dropped
+/// frag-depth write reopens a seam visible only at a ridge crest on a fogged horizon.
 #[test]
 fn the_far_band_stays_a_depth_pushed_backdrop() {
     let src = benilla_assets::materials::WDL_WGSL;
@@ -272,12 +243,9 @@ fn the_far_band_stays_a_depth_pushed_backdrop() {
     );
 }
 
-/// The hull is a **fog hull**, not a fogged surface: the reference's far-band emitter
-/// submits its own fog pair — start `0`, end `1.0` (`0x6bd7ae`–`0x6bd7c8` inside `0x6bd780`) — so the
-/// hull is the flat fog colour at every distance. Reading the SCENE fog distances here is the bug this
-/// pins: the 33 yd overlap then sits inside the fog ramp, up to `33 / (end − start)` white (25% at
-/// farclip 177), a pale band above the fine terrain's fogged-out silhouette that grows as the view
-/// distance drops — and it is invisible at 777, so it can sit in the open for months.
+/// The reference's far-band emitter submits its own fog pair, start 0 and end 1.0 (`0x6bd7ae` to
+/// `0x6bd7c8` in `0x6bd780`), so the hull is the flat fog colour at every distance. Under the scene
+/// fog the 33 yd overlap shows as a pale band at low view distances.
 #[test]
 fn the_far_band_is_a_fog_hull_not_a_fogged_surface() {
     let src = benilla_assets::materials::WDL_WGSL;

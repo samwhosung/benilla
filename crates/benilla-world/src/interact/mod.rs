@@ -1,38 +1,10 @@
-//! World interaction foundation — *what is the player pointing at?*
+//! What the player is pointing at: the identity of every pickable world thing ([`WorldObject`]),
+//! the world click gestures, and the ray caster ([`pick`]), which casts against resident geometry
+//! so colliderless props that a physics ray misses still pick.
 //!
-//! This is the shared base for every "point at the world" feature: the debug **object inspector**,
-//! hover tooltips, the contextual cursor (gear over objects, sword over attackable units),
-//! mouseover-targeting, and right-click-to-interact. Built once so we don't build picking +
-//! identity twice.
-//!
-//! The pieces:
-//! - [`WorldObject`] — an **identity** component on every pickable world entity (a doodad/WMO model, a
-//!   creature, a GameObject): its kind, a human label (model path or unit name), an id, and an optional
-//!   detail line. Attached at the spawn sites.
-//! - the **ray caster** ([`pick`]) — the pick-geometry declarations ([`PickMesh`] / [`PickBox`]) and
-//!   the shared triangle-accurate cast against the **actual resident mesh geometry** (so it works on
-//!   colliderless props — most doodads, including the campfire — which a physics raycast misses),
-//!   plus the generous inflated pass the mouse pick retries with.
-//! - [`MouseoverTarget`] — the resource [`update_mouseover`] fills each frame with the nearest
-//!   `WorldObject` under the cursor, for the inspector.
-//!
-//! The **instruments** built on this base — the dev-chord `I` inspector surface, the cast journal,
-//! and the mouseover pick that only ever ran while the inspector was armed — live in
-//! `debug_panel::{inspect, journal}` (decision 1160's stage zero). They were here first, and they
-//! were what made this module read as the most entangled thing on the engine/game line: between
-//! them they named the whole `target::cursor_mode` GO-reaction vocabulary, the spell catalog, the
-//! GameObject templates, the name cache and the net writer. What remains here — identity, the
-//! ray-caster and the three click gestures — reaches for none of it.
-//!
-//! The player-facing consumers (`crate::target`) run their picks through [`pick`] unconditionally.
-//!
-//! **Not every drawn thing has an entity**. The consolidating render lanes — the
-//! static merge's blobs and the retained static pass — draw many placements as one thing, and the
-//! per-placement entity that used to carry the declaration is gone. So the declaration has two more
-//! shapes: [`PickBlob`] (members on the blob entity, for a lane that still draws from one) and
-//! [`PickSource`] (the lane answers the ray itself, for one that draws from retained buffers).
-//! [`WorldPick`] is the bundle that hands a consumer all three at once — reach for it, not for
-//! [`PickParts`] alone, or the answer goes quiet over most of the static world.
+//! The consolidated render lanes draw many placements with no entity per placement, so a pick
+//! declaration takes three shapes: [`PickMesh`] or [`PickBox`] on an entity, [`PickBlob`] members
+//! on a blob entity, and a [`PickSource`] lane that answers the ray itself.
 
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
@@ -48,86 +20,56 @@ pub use pick::{
 
 pub use pick::{ray_member, ray_mesh_bounds, ray_posed_mesh, RayHit};
 
-/// The identity of a pickable world thing, read by the inspector now and by tooltips/cursor/targeting
-/// later. Attached to a thing's renderable mesh entities at spawn.
+/// The identity of a pickable world thing, attached to its renderable mesh entities at spawn.
 #[derive(Component, Clone, Debug)]
 pub struct WorldObject {
     pub kind: ModelKind,
-    /// Primary label — a model path (doodads/WMOs/GameObjects) or a unit name. Shown to the player/dev.
+    /// A model path (doodads, WMOs, GameObjects) or a unit name.
     pub label: String,
-    /// Identifier — placement uniqueId, server guid, or display id (`0` if none).
+    /// Placement `uniqueId`, server guid or display id; `0` if none.
     pub id: u32,
-    /// Optional second line of kind-specific detail (e.g. `"emitters: 2"`); shown when non-empty.
+    /// An optional kind-specific second line, shown when non-empty.
     pub detail: String,
 }
 
-/// Marker on every pickable **GameObject** part — the GO mouseover pick's population
-/// (`target/hover.rs`). Inserted beside the part's `WorldObject { kind: GameObject }` at the
-/// attach spawn sites, so building the pick set is an archetype-filtered query over the handful
-/// of GO parts on screen instead of a kind-compare over every streamed `WorldObject` row (the
-/// doodad/WMO population dwarfs it).
+/// Marks every pickable GameObject part, so the GameObject hover's pick set is an archetype query
+/// rather than a scan of every `WorldObject`.
 #[derive(Component, Clone, Copy)]
 pub struct GoPickPart;
 
-/// The creature twin of [`GoPickPart`]: every pickable unit/player part — the model-less fallback
-/// cube included — the unit pick's skinless-fallback population. Doodad/WMO parts carry neither
-/// marker.
+/// Marks every pickable unit or player part, the model-less fallback cube included: the unit
+/// pick's skinless-fallback set. Doodad and WMO parts carry neither marker.
 #[derive(Component, Clone, Copy)]
 pub struct CreaturePickPart;
 
-/// A left *select* gesture in the world. Emitted by [`crate::player::control`] on the button's
-/// **release**, when the press satisfied the reference's click predicate — under 200 ms whatever the
-/// mouse did, or under 800 ms having turned the camera less than 2.25° of yaw / 2.0° of pitch
-/// ([`crate::player::camera::PressGesture`]).
-///
-/// **A drag emits this too.** Orbit and select are independent in the reference: the press engages
-/// the camera look immediately and arms this test alongside it, so a fast flick-and-click orbits the
-/// camera *and* selects. This doc comment used to assert the opposite as design — *"a left drag
-/// engages the orbit and emits nothing"* — and a reporter quoted it back at us with an A/B against
-/// the real client proving it wrong (ledger B226).
-///
-/// It carries no position because the *pick* is latched separately, at the press
-/// ([`crate::target::PressPick`]) — never the live hover, which is blank by the time a dragged
-/// click lands.
+/// A left select gesture, sent on release when the press met the reference's click predicate:
+/// under 200 ms, or under 800 ms having turned the camera less than 2.25° of yaw and 2.0° of
+/// pitch. A drag that meets it selects too, as the reference arms the click beside the camera look.
+/// It carries no position: the pick is latched at the press (`target::PressPick`).
 #[derive(Message, Clone, Copy)]
 pub struct WorldClick;
 
-/// The right button's context gesture — same arbiter and same predicate as [`WorldClick`], for the
-/// button whose drag is the character turn. Vanilla's context action: attack a hostile under the
-/// cursor (later: interact/gossip on a friendly).
+/// The right button's context gesture, on the same predicate as [`WorldClick`].
 #[derive(Message, Clone, Copy)]
 pub struct WorldRightClick;
 
-/// The right button's **DOWN edge** in the world — emitted at the press, before the click-vs-drag
-/// test even starts, whenever the press belongs to the world (in the viewport off the UI, or any
-/// press while a look session already owns the hidden cursor). The reference's
-/// `CGWorldFrame::OnMouseDown 0x483c40` analogue: ground-targeting's right-click cancel hangs off
-/// this edge (`0x492c20`), which fires whether the press
-/// becomes a click OR a turn-drag, and consumes nothing (the ref handler returns 0, so the
-/// BUTTON2 turn and the release's context click still run).
+/// The right button's press in the world (off the UI, or any press while a look holds the hidden
+/// cursor), sent before the click test starts, as the reference's `CGWorldFrame::OnMouseDown`
+/// (`0x483c40`), where ground targeting's right-click cancel hangs (`0x492c20`). It consumes
+/// nothing, so the turn and the release's context click still run.
 #[derive(Message, Clone, Copy)]
 pub struct WorldRightPress;
 
-/// **The world's pick sources, as one `SystemParam`** — the ECS pick geometry ([`PickParts`]) plus
-/// every lane that draws without entities ([`PickSource`]).
-///
-/// Bundled deliberately. A consumer that reaches for the entity half alone still compiles, still
-/// casts, and still returns hits — it just stops seeing most of the static world, silently. That is
-/// precisely how the inspector, the hover and `WOW_PICK` went quiet when the consolidating lanes
-/// shipped: nothing failed, the answers just went blank over trees and buildings.
-/// So the roster of lanes lives HERE, once, and a new consumer gets it by construction.
-///
-/// The caster itself stays lane-agnostic — it only knows the trait. This is the one place that
-/// knows which lanes exist.
+/// The world's pick sources as one `SystemParam`: the entity pick geometry ([`PickParts`]) and
+/// every lane that draws without entities ([`PickSource`]). Use this, not [`PickParts`] alone,
+/// which still returns hits but misses most of the static world.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct WorldPick<'w, 's> {
     parts: PickParts<'w, 's>,
-    /// The identity every hit resolves through — including the doodad/WMO parts the entity path
-    /// still spawns.
+    /// The identity every entity hit resolves through.
     objects: Query<'w, 's, &'static WorldObject>,
-    /// The retained static pass — `None` when `WOW_STATIC_GX=0` leaves every placement on the
-    /// entity path. (The static merge needs no entry: its blobs ARE entities, and answer through
-    /// [`PickBlob`].)
+    /// The retained static pass; `None` when `WOW_STATIC_GX=0` keeps every placement on the entity
+    /// path. The static merge's blobs are entities and answer through [`PickBlob`].
     gx: Option<Res<'w, crate::static_gx::StaticGx>>,
 }
 
@@ -141,7 +83,7 @@ impl WorldPick<'_, '_> {
             .collect()
     }
 
-    /// The identified cast against everything drawn — see [`cast_object_ray`].
+    /// The identified cast against everything drawn ([`cast_object_ray`]).
     pub fn cast(&self, ray: Ray3d, pickable: &HashSet<Entity>, all_hits: bool) -> Vec<ObjectHit> {
         cast_object_ray(
             ray,
@@ -153,7 +95,7 @@ impl WorldPick<'_, '_> {
         )
     }
 
-    /// The identified cast through a screen pixel — the mouseover's whole job.
+    /// The identified cast through a screen pixel.
     pub fn at_cursor(
         &self,
         cursor: Vec2,
@@ -173,10 +115,7 @@ impl WorldPick<'_, '_> {
     }
 }
 
-/// Registers the world-interaction **foundation**: the identity component's three click messages
-/// and the shared ray-caster's parameters. The inspector surface and the cast journal that used to
-/// be registered here are instruments, and moved to `debug_panel` in decision 1160's stage zero —
-/// along with the mouseover pick, which only ever ran while the inspector was armed.
+/// Registers the three world click messages.
 pub struct InteractPlugin;
 
 impl Plugin for InteractPlugin {

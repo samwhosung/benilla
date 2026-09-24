@@ -1,14 +1,8 @@
-//! The precip **stream pushers** — streak/patter/flake geometry emitted each frame from the
-//! live pools straight into the shared effect stream (world-space, and the lane rebases
-//! camera-relative render-side — except the FLAKE draw, which writes camera-relative itself for
-//! f32 precision, see [`push_flakes`]). Split from `precip`'s root; geometry only, no sim state.
-//! Empty pools push nothing, so an idle sky costs zero here — the structural replacement for
-//! the old fixed-capacity meshes' `WriteGate` (the 0353 fps hunt).
+//! Streak, patter and flake geometry pushed each frame from the live pools onto the shared
+//! effect stream, in world space except the flakes, which are camera-relative.
 
-// Explicit, not `bevy::prelude::*`: the parent module's own prelude glob reaches this file
-// through `use super::*` below, and two globs supplying the same names had rustc crediting the
-// use to one or the other by platform — the "unused import" every non-macOS build warned on
-// (2205's next move 4).
+// Explicit, not `bevy::prelude::*`: the parent's prelude glob arrives through `use super::*`, and
+// two globs of the same names draw an unused-import warning on non-macOS builds.
 use bevy::math::{Quat, Vec3};
 
 use crate::particles::buffer::EffectVertex;
@@ -16,10 +10,7 @@ use crate::particles::buffer::EffectVertex;
 use super::pool::{Drop, Patter};
 use super::*;
 
-/// Falling-drop streaks — the verified triangle law (`0x80ff78`, `0x80ff74`): per drop, base
-/// verts `head ∓ 0.05·RIGHT` (RIGHT = normalize(cross(toCam, antiVel)), camera-facing width
-/// axis), apex `head + M·(2.0·antiVel̂)` with M the wind-tilt applied to the APEX ONLY. UVs
-/// (0,1)/(1,1)/(0.5,0). No vertex colour/alpha (white; the look is the texture under Mod2x).
+/// Falling-drop streaks: one fixed-size triangle per drop, tilted at the apex only.
 pub(super) fn push_streaks(out: &mut Vec<EffectVertex>, drops: &[Drop], tilt: Quat, cam: Vec3) {
     let white = [1.0, 1.0, 1.0, 1.0];
     for d in drops.iter().take(POOL) {
@@ -41,9 +32,7 @@ pub(super) fn push_streaks(out: &mut Vec<EffectVertex>, drops: &[Drop], tilt: Qu
     }
 }
 
-/// Ground patters: one camera-facing **triangle** per splash (the byte geometry: corners
-/// `center − right`, `center + up`, `center + right` with `right = view_right/12`,
-/// `up = view_up/6`), animated left→right across its atlas row over the 0.25 s life.
+/// Ground patters: one camera-facing triangle per splash, stepping across its atlas row.
 pub(super) fn push_patters(
     out: &mut Vec<EffectVertex>,
     patters: &[Patter],
@@ -56,9 +45,8 @@ pub(super) fn push_patters(
         let t = (p.age / PATTER_LIFE).clamp(0.0, 1.0);
         let frame = ((t * 4.0) as u32).min(3) as f32;
         let (u0, v0) = (frame * 0.25, f32::from(p.variant) * 0.25);
-        // No vertex alpha (Mod2x has none): the atlas's 4 growth frames are the animation, and
-        // the texture's grey-128 background is neutral.
-        // The byte texcoord law (`0x675ac0`): base-left, apex, base-right.
+        // No vertex alpha: the atlas's 4 frames are the animation, its grey-128 ground neutral.
+        // The texcoord law (`0x675ac0`): base-left, apex, base-right.
         for (pos, uv) in [
             (p.pos - right, [u0, v0 + 0.25]),
             (p.pos + up, [u0 + 0.125, v0 + 0.043]),
@@ -73,43 +61,23 @@ pub(super) fn push_patters(
     }
 }
 
-/// The camera terms [`push_flakes`] needs to turn the reference's **pixel** point size into a
-/// world-space quad. `snowpoint.bls` sizes a flake in window coordinates, so the size a flake
-/// gets is a property of the projection, not of the world.
+/// The camera terms [`push_flakes`] needs to turn a pixel point size into a world-space quad.
 pub(super) struct FlakeView {
     pub(super) eye: Vec3,
-    /// The camera's forward axis — a flake's *view depth* (`z`, the perspective divisor), which
-    /// is what the pixel↔world conversion keys on. Distinct from `|flake − eye|`, which is what
-    /// the size LAW keys on; off-axis flakes differ in the two.
+    /// For a flake's view depth, which the pixel-to-world conversion keys on; the size law keys
+    /// on the radial `|flake − eye|`, which differs off-axis.
     pub(super) forward: Vec3,
     pub(super) right: Vec3,
     pub(super) up: Vec3,
-    /// `tan(fovY/2) / SNOW_PX_REF_HEIGHT` — world units per **era pixel**, per unit of view depth.
-    /// A world length `L` at view depth `z` covers `L / (z · this)` era pixels, so a `px`-era-pixel
-    /// sprite wants half-extent `px · z · this`.
-    ///
-    /// The denominator is deliberately **not** the live viewport height — see
-    /// [`super::SNOW_PX_REF_HEIGHT`]. Dividing by the live height reproduces the reference's pixel
-    /// *count* and destroys its apparent size on any screen taller than the era's.
+    /// `tan(fovY/2) / SNOW_PX_REF_HEIGHT`, world units per era pixel per unit of view depth: a
+    /// `px` sprite at depth `z` wants half-extent `px·z·this`. Never the live viewport height.
     pub(super) world_per_px: f32,
 }
 
-/// Snow flakes — the ARB point-sprite leg `0x678610`, reproduced as screen-aligned quads because
-/// wgpu has no point size (WebGPU pins `PointList` at 1 px).
-///
-/// Per flake (the shipped `snowpoint.bls` read verbatim):
-/// - size `max(1, 14·clamp01(1 − 0.02·d))` **era pixels**, `d = |flake − eye|` in yards — inverted
-///   through the projection into a world half-extent, so the on-screen footprint matches the
-///   reference's *angular* size at any resolution or fov (see [`super::SNOW_PX_REF_HEIGHT`] for
-///   why the era's screen height, and not the live one, is the denominator);
-/// - RGB white, alpha `clamp01(t − f1)` while falling (a 1 s linear fade-IN from spawn) and
-///   `clamp01(1 − 4·(t − f2))` once settled (the 0.25 s fade-out);
-/// - the whole texture per flake (`GL_COORD_REPLACE`), which the 0..1 UVs below reproduce.
-///
-/// There is **no per-flake size**: the 32-byte flake record has no spare field, the spawn draws
-/// exactly 5 RNG values (none a size), and both legs' size terms are per-draw constants.
-///
-/// `drops` = falling flakes; `settled` = landed ones fading out over the `+0.25 s` window.
+/// Snow flakes: the point-sprite leg `0x678610` as screen-aligned quads, since wgpu has no point
+/// size. Per `snowpoint.bls`: white, alpha `clamp01(t − f1)` while falling and
+/// `clamp01(1 − 4·(t − f2))` settled, the whole texture per flake (`GL_COORD_REPLACE`). There is
+/// no per-flake size: the 32-byte record has no spare field and none of the 5 spawn draws is one.
 pub(super) fn push_flakes(
     out: &mut Vec<EffectVertex>,
     drops: &[Drop],
@@ -117,24 +85,20 @@ pub(super) fn push_flakes(
     view: &FlakeView,
 ) {
     let mut sprite = |center: Vec3, alpha: f32| {
-        // CAMERA-RELATIVE from here down (the draw sets `EffectDrawSpec::cam_relative`, so the
-        // lane's rebase skips it). This is not a convenience: a near flake's half-extent is
-        // ~1.6 mm, which is 3 f32 ULPs at Kharanos's ~5600-yd coordinates and under 1 at a map
-        // corner — written absolutely, a 14 px sprite loses 2–7 px of width and flickers. Every
-        // term below is small, so the arithmetic is exact wherever in the world we are.
+        // Camera-relative (the draw sets `EffectDrawSpec::cam_relative`): a near flake's ~1.6 mm
+        // half-extent is 3 f32 ULPs at 5600 yd, so absolute coordinates lose it and flicker.
         let to_flake = center - view.eye;
         let z = to_flake.dot(view.forward);
         if z <= 0.0 {
-            return; // behind the eye — clipped anyway, and the pixel↔world map is undefined
+            return; // behind the eye, where the pixel-to-world map is undefined
         }
-        // The size law, in pixels, off the RADIAL distance; then pixels → world at this flake's
-        // view depth.
+        // The size law off the radial distance, then pixels to world at this view depth.
         let px = (SNOW_PX_AT_EYE * (1.0 - SNOW_PX_FALLOFF * to_flake.length()).clamp(0.0, 1.0))
             .max(SNOW_PX_MIN);
         let half = px * z * view.world_per_px;
         let r = view.right * half;
         let u = view.up * half;
-        // Perimeter order (bl, br, tr, tl) — the stream's quad-index pattern closes it.
+        // Perimeter order (bl, br, tr, tl) for the stream's quad-index pattern.
         for (pos, uv) in [
             (to_flake - r - u, [0.0, 1.0]),
             (to_flake + r - u, [1.0, 1.0]),
@@ -162,8 +126,7 @@ mod tests {
 
     const FOVY: f32 = std::f32::consts::FRAC_PI_4;
 
-    /// A camera at `eye` looking down −Z (Bevy's convention), 45° vertical fov — carrying the
-    /// production `world_per_px`, which denominates in the ERA height and not the render height.
+    /// A camera at `eye` looking down −Z, 45° vertical fov, with the production `world_per_px`.
     fn view_at(eye: Vec3) -> FlakeView {
         FlakeView {
             eye,
@@ -193,9 +156,7 @@ mod tests {
         }
     }
 
-    /// A flake's footprint, in real pixels, at a given render height — measured by pushing the
-    /// quad and projecting its corners through a real perspective matrix, never by re-deriving
-    /// the half-extent formula.
+    /// A flake's footprint in pixels at a render height, measured by projecting the pushed quad.
     fn footprint_px(d: f32, render_h: f32) -> f32 {
         // The RH projection Bevy builds: clip.w = −z_view, so a flake at z_view = −d has w = d.
         let proj = Mat4::perspective_rh(FOVY, 16.0 / 9.0, 0.1, 1000.0);
@@ -215,9 +176,7 @@ mod tests {
         window_y(Vec3::from(out[3].pos)) - window_y(Vec3::from(out[0].pos))
     }
 
-    /// **At the era's own screen height benilla draws the reference's pixels exactly** —
-    /// `max(1, 14·clamp01(1 − 0.02·d))`. This is the fidelity anchor; the test below is what
-    /// keeps it from being read as "14 px, always".
+    /// At the era's screen height the footprint is the reference's pixel count exactly.
     #[test]
     fn flake_covers_the_reference_pixel_footprint() {
         for d in [1.0f32, 5.0, 7.14, 20.0, 46.43, 60.0, 100.0] {
@@ -230,16 +189,7 @@ mod tests {
         }
     }
 
-    /// …and on a taller screen it grows to hold the same **angle**, rather than staying at 14 px
-    /// and shrinking away.
-    ///
-    /// `snowpoint.bls` sizes in framebuffer pixels because that is what
-    /// `GL_VERTEX_PROGRAM_POINT_SIZE_ARB` does, not as a statement about apparent size; on 2004
-    /// hardware the framebuffer *was* the screen. Obeyed literally, the flake's angular size falls
-    /// as `1/height` — the director's A/B put benilla's flakes 2.7× under the reference's purely
-    /// because a 4K scale-2 framebuffer is 2.7× taller than the reference install's 800.
-    /// Pin the invariant that fixed it: the fraction of the screen a flake covers
-    /// does not depend on the resolution.
+    /// On a taller screen a flake keeps the same share of the screen, not the same pixels.
     #[test]
     fn the_flake_holds_its_angle_across_resolutions() {
         for d in [1.0f32, 12.0, 30.0, 60.0] {
@@ -254,7 +204,7 @@ mod tests {
                     era * 100.0,
                 );
             }
-            // And the absolute pixel count really does scale, which is the whole change.
+            // The absolute pixel count scales with the height.
             let tall = footprint_px(d, 2144.0);
             let want = reference_px(d) * 2144.0 / SNOW_PX_REF_HEIGHT;
             assert!(
@@ -264,9 +214,7 @@ mod tests {
         }
     }
 
-    /// The two ends of the law, stated as absolutes so a regression is unmistakable: 14 px at the
-    /// eye, and the 1 px floor from 46.43 yd out — **not** a `1/d` world-space size, which would
-    /// blow up at the eye and vanish in the distance.
+    /// 14 px at the eye, the 1 px floor from 46.43 yd, linear between: not a `1/d` size.
     #[test]
     fn point_size_is_linear_in_distance_not_inverse() {
         assert!((reference_px(0.0) - 14.0).abs() < 1e-6);
@@ -276,9 +224,7 @@ mod tests {
             (reference_px(200.0) - 1.0).abs() < 1e-6,
             "flat past the floor"
         );
-        // A fixed world-size quad's pixel span is ∝ 1/d; this one FALLS OFF LINEARLY, so the
-        // ratio between 10 yd and 40 yd is 11.2/2.8 = 4, not 4 by coincidence of 1/d (which would
-        // also be 4) — pin the shape at a third point where the two laws disagree.
+        // 10 and 40 yd give a ratio of 4 under either law; 25 yd is where the two disagree.
         let (near, far) = (reference_px(10.0), reference_px(40.0));
         assert!((near - 11.2).abs() < 1e-4 && (far - 2.8).abs() < 1e-4);
         assert!(
@@ -288,8 +234,7 @@ mod tests {
         );
     }
 
-    /// Alpha: `clamp01(t − f1)` falling — a 1 s linear fade-IN from spawn — then
-    /// `clamp01(1 − 4·(t − f2))` settled. benilla drew every falling flake at 1.0.
+    /// Alpha `clamp01(t − f1)` while falling, then `clamp01(1 − 4·(t − f2))` settled.
     #[test]
     fn flake_alpha_fades_in_then_out() {
         let view = view();
@@ -321,13 +266,7 @@ mod tests {
         assert!((alpha_of(&[], &settled(0.25)) - 0.0).abs() < 1e-6);
     }
 
-    /// **The precision pin.** The same footprint, with the camera where the game actually puts it:
-    /// Kharanos (~5600 yd out) and the far corner of a 17066-yd map. `EffectVertex::pos` is f32,
-    /// and a near flake's half-extent is ~1.6 mm — 3 ULPs at 5600, under 1 at 17066. Written in
-    /// ABSOLUTE world coordinates (the lane's default, which subtracts the camera only later, on
-    /// the upload copy) a 14 px sprite loses 2–7 px of width and flickers; written camera-relative
-    /// it is exact anywhere. This test fails on the absolute form and passes on the relative one,
-    /// which is the only reason to have it.
+    /// Camera-relative verts keep a near flake's ~1.6 mm half-extent exact far from the origin.
     #[test]
     fn the_footprint_survives_being_far_from_the_world_origin() {
         let proj = Mat4::perspective_rh(FOVY, 16.0 / 9.0, 0.1, 1000.0);
@@ -344,10 +283,8 @@ mod tests {
                     &[],
                     &view,
                 );
-                // The emitted verts are camera-relative, so they project through the same matrix
-                // a camera at the origin would use — that IS the rebase the lane would have done.
-                // Rendered at the era height, so the expected footprint is the reference's own
-                // pixel count (this test is about precision, not about resolution).
+                // Camera-relative verts project as from a camera at the origin; at the era height
+                // the footprint is the reference's own pixel count.
                 let window_y = |p: Vec3| {
                     let clip = proj * p.extend(1.0);
                     (clip.y / clip.w + 1.0) * 0.5 * SNOW_PX_REF_HEIGHT
@@ -362,8 +299,7 @@ mod tests {
         }
     }
 
-    /// A flake behind the eye emits nothing — the pixel↔world map has no meaning at or behind the
-    /// projection plane, and the quad would be mirrored through the camera.
+    /// A flake behind the eye would be mirrored through the camera.
     #[test]
     fn flakes_behind_the_eye_are_dropped() {
         let mut out = Vec::new();

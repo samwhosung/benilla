@@ -1,11 +1,7 @@
-// The visible cloud layer, the reference's sky-dome cloud strip. Its colour math is CPU-side as in
-// the reference: the `0x6cfb00` port builds the RGBA image per regen (gradient and sun-aligned glow
-// in gamma bytes, alpha the curve-mapped coverage byte), the buffer the reference binds directly as
-// its gx texture (`0x58ac70`). This stage samples it and applies the dome's vertex-colour rim fade
-// (ring alphas: nine 0xff, then 0x80, 0, 0; `0x6d0530`). The texture is not sRGB, so texels come
-// back as raw gamma bytes, blended premultiplied over the gamma sky.
-
-// Depth is the far-plane pin in `sky_vertex.wgsl`; this stage writes colour only, keeping early-Z.
+// The cloud dome. Its colour is CPU-side as in the reference: the kernel's `0x6cfb00` port builds
+// the image the reference binds as its texture (`0x58ac70`). This stage applies the dome's rim
+// fade (`0x6d0530`) and blends the raw gamma texels premultiplied. Depth is the far pin in
+// `sky_vertex.wgsl`.
 
 #import bevy_pbr::forward_io::VertexOutput
 

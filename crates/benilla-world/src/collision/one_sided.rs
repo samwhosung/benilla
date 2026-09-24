@@ -1,47 +1,22 @@
-//! **One-sided movement collision** — the reference's facing law, applied at the only seam where it
-//! can live: per candidate triangle, inside the sweep.
+//! One-sided movement collision. The reference gathers faces at their file winding (`0x671cc0`)
+//! and its resolver skips any with `n·dir > −1e-5` (`0x632700`) for every caller of `0x632ba0`:
+//! falling, walking, step-up, ground settle, transports and the water surface, so a floor is
+//! filtered exactly like a wall.
 //!
-//! The real client's movement collision is an orientation-blind gather followed by a strictly
-//! one-sided resolver: `0x671cc0` emits every candidate face's plane at the **unflipped file
-//! winding**, and `0x632700` opens each record with `dot = n·dir` against `[0x80c5c4]`
-//! (`0xb727c5ac` = −9.99999975e-6) — **a face is processed iff `n·dir ≤ −1e-5`**. A face approached
-//! from its back is discarded before any distance is computed, and this is not a wall-slide special
-//! case: the 16 callers of `0x632ba0 earliest_contact` span falling, walking, step-up, ground-settle,
-//! transports and the water-surface arm — "the surface you stand on is filtered exactly like the wall
-//! you slide along" (confirmed
-//! at B86's exact pin in decision 0968). parry's trimesh is two-sided by construction, which is why
-//! benilla stood on CoT's inward-wound shell where 1.12.1 falls through it.
+//! parry's trimesh is two-sided, and a first-hit cast cannot yield the front face behind a
+//! backface, so this re-runs avian's `move_and_slide` over its public pieces and gates each
+//! triangle in its own BVH walk. The winding seen is the authored one: `Collider::trimesh` keeps
+//! it, and every transform is a rotation. Convex colliders stay whole-shape, and camera and
+//! line-of-sight casts stay two-sided, as the reference's segment kernel is (`0x7c29f0`).
 //!
-//! Why this is a mirrored loop and not a post-filter: a shape cast reports only the *first* hit. If
-//! that hit is a backface, the correct result is the next front-face hit *behind* it — information a
-//! finished cast no longer has. So the gate must run where candidates are enumerated, and avian's
-//! enumeration (`cast_shape_predicate`, `contact_manifolds`) carries no triangle identity out. This
-//! module therefore re-runs avian's own `move_and_slide` algorithm — same iteration structure, same
-//! skin-width pull-back, same depenetration solver (`depenetrate_intersections`), same velocity
-//! projection — over its public building blocks, walking each trimesh's BVH itself so every triangle
-//! is gated on its **authored winding** before it may block. `Collider::trimesh` stores vertices and
-//! indices exactly as passed (parry `TriMeshFlags::empty()`), and every transform between the file
-//! and the collider is a proper rotation, so `TriMesh::triangle(i)`'s winding *is*
-//! the authored winding.
+//! Deviation: the slide, step and snap are avian's kinematic controller, with parry's edge-hit
+//! normals, not the reference's resolver, because pieces of that resolver grafted onto the
+//! controller left the mover in states the reference never reaches; only its face filters, the
+//! facing law and the backface band, are ported.
 //!
-//! What is ported is the **law**, not the reference's resolver: the slide/step/snap machinery stays
-//! the standard kinematic controller (that direction was closed in 0207), contact normals for edge
-//! hits stay parry's, and convex (non-trimesh) colliders stay whole-shape — a convex volume has no
-//! reachable backface. The camera/LOS path is untouched *on purpose*: the reference's segment
-//! kernel `0x7c29f0` is two-sided, so avian's ordinary cast is already faithful there.
-//!
-//! **There is no depenetration pass, and that is the law too**. avian's
-//! `move_and_slide` opens and closes with a Gauss–Seidel push-out of every face the shape overlaps;
-//! the reference's resolver has no such stage anywhere in `0x634040`'s closure. Its world query is a
-//! time-of-impact sweep and nothing else: a face the prism starts *behind* by more than 1/36 yd
-//! (`[0x7ff9c8]`, the backface band in `0x632830`'s clip) is not a hit at all, one it straddles is a
-//! hit at `t = 0` that the slide projects against, and neither ever *moves* a body that asked to go
-//! nowhere. The push-out was benilla's, and it is what shoved a seated body sideways off its stool:
-//! the server seats a player at a chair's origin, inside the chair's own collision box, and the
-//! minimum-translation vector for a tall capsule inside a small box is horizontal — out through the
-//! nearest side (measured at 0.555 yd on the first frame, with no input). A body that starts
-//! inside geometry leaves it the way the reference does: by walking out through the faces wound
-//! away from it, which the sweep never counts.
+//! There is no depenetration: the reference's resolver (`0x634040`) is a sweep with no push-out, so
+//! a body inside geometry, such as a player the server seats inside a chair's box, walks out
+//! through the faces wound away from it instead of being shoved sideways.
 
 use avian3d::character_controller::move_and_slide::{
     MoveAndSlide, MoveAndSlideConfig, MoveAndSlideHitData, MoveAndSlideHitResponse,
@@ -57,34 +32,21 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use core::time::Duration;
 
-/// The reference's facing gate: `[0x80c5c4] = 0xb727c5ac`. A face may block iff `n·dir ≤ EPS`,
-/// with `n` the authored winding normal and `dir` the unit direction of the motion being resolved.
+/// The facing gate (`[0x80c5c4]`, −1e-5): a face blocks only when `n·dir` is at most this, `n` its
+/// authored normal and `dir` the unit motion.
 const FACING_EPS: f32 = f32::from_bits(0xb727_c5ac);
 
-/// avian's own stabilizer for `pull_back` when `n·dir` is nearly zero (`move_and_slide.rs`).
+/// avian's `pull_back` floor for a near-zero `n·dir` (its `move_and_slide.rs`).
 const DOT_EPSILON: f32 = 0.005;
 
-/// The reference's **backface band**: `[0x7ff9c8]` = `1/36` yd. A candidate face the mover has
-/// already passed by more than this is not a hit — `0x632830`'s clip
-/// rejects a face **every vertex of which** sits further than the
-/// band behind the prism's leading plane along the motion, and keeps one with any vertex nearer
-/// than that as a hit at `t = 0`. It is what makes the resolver a *sweep* and not a solver: a body
-/// the server placed inside a hull (a seated player at a chair's origin, a caged creature) meets
-/// faces it already straddles, and the band says which of those still count — a seat top half a
-/// yard into the body, every vertex of it behind the body's leading edge, does not exist; a sloped
-/// terrain triangle a few centimetres into the feet, one vertex of which still lies below them,
-/// does. **Measured against the vertices, not the penetration depth**: the first
-/// port used parry's contact depth, and on a 19° slope under a stool that read the terrain as
-/// behind the feet — the body fell 26 yd through the world. Ported at this seam, like the facing
-/// law, because it can only be applied where the *overlapping* triangle is known: avian's own
-/// sweep skips every origin-penetrating hit (`ignore_origin_penetration`) and leaves the overlap to
-/// the depenetration pass this module no longer runs.
+/// The backface band (`[0x7ff9c8]`, 1/36 yd): `0x632830`'s clip drops a face whose every vertex
+/// lies more than this behind the mover's leading plane along the motion, and keeps one with any
+/// vertex nearer as a hit at `t = 0`. Measured on the vertices: a penetration depth would drop a
+/// sloped floor just above the feet, and the body would fall through the world.
 const BACKFACE_BAND: f32 = 1.0 / 36.0;
 
-/// One-sided drop-in for [`MoveAndSlide::cast_move`]: sweep `shape` (world-axis-aligned, as every
-/// mover capsule is) along `movement`, stopping `skin_width` short of the first face whose
-/// **authored winding opposes the motion**. Backfaces are not candidates at all — the sweep passes
-/// through them to whatever front-face lies beyond, which no post-filter on a first-hit cast can do.
+/// One-sided [`MoveAndSlide::cast_move`]: sweeps the axis-aligned `shape` along `movement` to
+/// `skin_width` short of the first face whose authored winding opposes the motion.
 pub(crate) fn cast_move(
     ms: &MoveAndSlide<'_, '_>,
     shape: &Collider,
@@ -96,7 +58,6 @@ pub(crate) fn cast_move(
     let (dir, len) = Dir3::new_and_length(movement).unwrap_or((Dir3::X, 0.0));
     let max_toi = len + skin_width;
 
-    // The swept broad-phase box: the shape's AABB at both ends of the motion, grown by the skin.
     let a0 = shape.aabb(from, Quat::IDENTITY);
     let a1 = shape.aabb(from + movement, Quat::IDENTITY);
     let swept = ColliderAabb {
@@ -115,8 +76,7 @@ pub(crate) fn cast_move(
         }
 
         if let Some(trimesh) = collider.shape_scaled().as_trimesh() {
-            // Work in the trimesh's local frame: the cast pose and direction come in, world hit
-            // data goes out. A proper rotation preserves the sign of every `n·dir`.
+            // In the trimesh's local frame; a rotation keeps the sign of every `n·dir`.
             let inv_rot = rot.0.inverse();
             let local_from = inv_rot * (from - pos.0);
             let local_dir = inv_rot * *dir;
@@ -127,10 +87,10 @@ pub(crate) fn cast_move(
             {
                 let tri = trimesh.triangle(tri_id);
                 let Some(n) = tri.normal() else {
-                    continue; // degenerate face: no winding, no plane, nothing to block with
+                    continue; // a degenerate face has no winding
                 };
                 if n.dot(local_dir) > FACING_EPS {
-                    continue; // the law: a face approached from its back is not a candidate
+                    continue; // approached from its back
                 }
                 let Ok(Some(hit)) = cast_shapes(
                     &Pose3::IDENTITY,
@@ -148,8 +108,7 @@ pub(crate) fn cast_move(
                 ) else {
                     continue;
                 };
-                // An overlap at `t = 0` is a hit only inside the band: a face the body has passed
-                // deeper than that is behind it, whatever its winding says about the motion.
+                // An overlap at `t = 0` is a hit only inside the band.
                 if hit.status == ShapeCastStatus::PenetratingOrWithinTargetDist
                     && behind_the_band(&tri, &local_pose, shape, local_dir)
                 {
@@ -169,7 +128,7 @@ pub(crate) fn cast_move(
                 }
             }
         } else {
-            // A convex collider has no reachable backface: whole-shape sweep, exactly avian's.
+            // A convex collider has no reachable backface: avian's whole-shape sweep.
             let Ok(Some(hit)) = cast_shapes(
                 &Pose3::from_parts(pos.0, rot.0),
                 Vec3::ZERO,
@@ -202,7 +161,7 @@ pub(crate) fn cast_move(
     }
 
     best.map(|mut hit| {
-        // avian's skin-width pull-back: stop short of the surface by `skin / |n·dir|`, never negative.
+        // avian's skin-width pull-back: `skin / |n·dir|` short of the surface, never negative.
         hit.distance = if max_toi == 0.0 {
             0.0
         } else {
@@ -213,10 +172,8 @@ pub(crate) fn cast_move(
     })
 }
 
-/// One-sided drop-in for [`SpatialQuery::cast_ray`], for the movement-law probes that are rays
-/// rather than shape sweeps (the creature ground clamp mirrors the WALK resolver's Z re-derivation,
-/// and that resolver filters its down-probe like every other arm — 0967's caller census). `dir`
-/// must be a unit direction; the gate and the semantics are [`cast_move`]'s, minus the skin.
+/// One-sided [`SpatialQuery::cast_ray`] for movement probes that are rays, such as the creature
+/// ground clamp: the reference's walk resolver gates its down-probe like every other caller.
 pub(crate) fn cast_ray(
     ms: &MoveAndSlide<'_, '_>,
     origin: Vec3,
@@ -285,13 +242,8 @@ pub(crate) fn cast_ray(
     best
 }
 
-/// One-sided drop-in for [`MoveAndSlide::move_and_slide`]: avian's algorithm — sweep, collect
-/// contact planes, project velocity, repeat — with every stage running over the gated candidate set
-/// instead of the two-sided trimesh, and **without** avian's opening and closing depenetration
-/// (see the module note: the reference's resolver has no push-out stage, and the one this carried
-/// is what displaced a seated body out of its chair). The `on_hit` callback contract is avian's
-/// ([`MoveAndSlideHitData`] / [`MoveAndSlideHitResponse`]), so the mover's ride/steep-wall handlers
-/// move over unchanged.
+/// One-sided [`MoveAndSlide::move_and_slide`]: avian's sweep, plane collection and velocity
+/// projection over the gated faces, without its depenetration; `on_hit` keeps avian's contract.
 pub(crate) fn move_and_slide(
     ms: &MoveAndSlide<'_, '_>,
     shape: &Collider,
@@ -341,10 +293,7 @@ pub(crate) fn move_and_slide(
             break;
         }
 
-        // Collect nearby contact planes for velocity clipping — avian's `intersections` pass, per
-        // gated triangle. The gate here is the same law with the *velocity* as the motion: a face
-        // may clip the slide iff its authored winding opposes where we are going AND we sit on its
-        // front side (behind a face, its plane does not exist for us — that is the fall-through).
+        // avian's contact-plane pass, gated with the velocity as the motion.
         let mut aborted = false;
         for_each_contact(
             ms,
@@ -403,15 +352,10 @@ pub(crate) fn move_and_slide(
     }
 }
 
-/// Visit every contact of `shape` (world-axis-aligned) against the filtered world within
-/// `prediction`, gated by the one-sided law with `motion` as the direction being resolved — the
-/// slide's plane collection: a triangle participates iff its authored normal opposes the velocity
-/// (`n·v̂ ≤ EPS`) *and* the mover sits on its front side (behind a face, its plane does not exist
-/// for movement).
-///
-/// The callback receives `(entity, world contact point, world contact normal toward the mover,
-/// contact distance — negative when penetrating)` and returns `false` to stop the visit. Convex
-/// colliders are visited ungated.
+/// Visits each contact of `shape` within `prediction` for the slide's planes: a triangle counts
+/// when its authored normal opposes `motion` and the mover is on its front side. The callback gets
+/// `(entity, point, normal toward the mover, distance, negative when penetrating)` and returns
+/// `false` to stop; convex colliders are ungated.
 fn for_each_contact(
     ms: &MoveAndSlide<'_, '_>,
     shape: &Collider,
@@ -461,15 +405,11 @@ fn for_each_contact(
                 ) else {
                     continue;
                 };
-                // Front-side gate: the contact must push the mover along the authored normal.
-                // Behind the face (`c.normal1 ≈ −n`) the plane does not exist for movement.
+                // Front side only: behind a face, its plane does not exist for movement.
                 if c.normal1.dot(n) <= 0.0 {
                     continue;
                 }
-                // The backface band (see [`BACKFACE_BAND`]): a face the body has already passed
-                // is not a plane to slide along — the sweep does not count it, and a slide plane
-                // the sweep never reported would clip the body against geometry it is meant to
-                // walk straight out of.
+                // A face passed beyond the band is no slide plane, as the sweep never reports it.
                 if c.dist < 0.0 && behind_the_band(&tri, &local_pose, shape, local_dir) {
                     continue;
                 }
@@ -494,11 +434,8 @@ fn for_each_contact(
     }
 }
 
-/// Has the mover already passed this triangle by more than the [`BACKFACE_BAND`]? The reference's
-/// own measure: every vertex of the face against the mover's **leading extent along the motion**
-/// (`0x632830`'s per-vertex plane test against the prism's leading plane). The leading extent is
-/// the shape's support point along `dir` — for the capsule, the far segment end plus the radius.
-/// A shape with no support map (none on the movement audience) is never behind: the hit stands.
+/// Whether every vertex lies more than [`BACKFACE_BAND`] behind the shape's support point along
+/// `dir`, `0x632830`'s per-vertex test.
 fn behind_the_band(tri: &Triangle, shape_pose: &Pose3, shape: &Collider, dir: Vec3) -> bool {
     let Some(support) = shape.shape_scaled().as_support_map() else {
         return false;
@@ -511,8 +448,7 @@ fn behind_the_band(tri: &Triangle, shape_pose: &Pose3, shape: &Collider, dir: Ve
     ahead < -BACKFACE_BAND
 }
 
-/// The conservative local-frame box of a world AABB under `world→local` = `inv_rot · (x − pos)`:
-/// transform the eight corners and take their extent.
+/// The local-frame box bounding a world AABB's eight corners.
 fn aabb_to_local(aabb: ColliderAabb, pos: Vec3, inv_rot: Quat) -> ParryAabb {
     let (mut mins, mut maxs) = (Vec3::INFINITY, Vec3::NEG_INFINITY);
     for i in 0..8 {
@@ -528,37 +464,29 @@ fn aabb_to_local(aabb: ColliderAabb, pos: Vec3, inv_rot: Quat) -> ParryAabb {
     ParryAabb::new(mins, maxs)
 }
 
-/// One collision triangle near a point, as the **movement law** sees it — the geometry readout
-/// behind the step-up probe ([`crate::player::step_probe`]).
+/// One collision triangle near a point, as the movement law sees it, for the step-up probe.
 pub struct FaceProbe {
-    /// The collider it belongs to (a WMO walk bake, a terrain tile, a doodad hull…).
     pub entity: Entity,
-    /// World-space normal at the **authored winding** — the vector [`cast_move`]'s gate tests.
+    /// World-space normal at the authored winding, the vector the gate tests.
     pub normal: Vec3,
     /// World-space vertices.
     pub(crate) verts: [Vec3; 3],
 }
 
 impl FaceProbe {
-    /// Whether this face may block a sweep heading `dir` — [`cast_move`]'s gate, exactly.
+    /// Whether this face may block a sweep heading `dir`: [`cast_move`]'s gate.
     pub fn blocks(&self, dir: Vec3) -> bool {
         self.normal.dot(dir) <= FACING_EPS
     }
 
-    /// World centroid — what "how far ahead is this face" is measured from.
+    /// World centroid, where a face's distance ahead is measured from.
     pub fn centroid(&self) -> Vec3 {
         (self.verts[0] + self.verts[1] + self.verts[2]) / 3.0
     }
 }
 
-/// Every trimesh face inside the box `at ± half` that `filter` can reach, nearest centroid first.
-///
-/// **Diagnostic only, and deliberately UNGATED**: it reports the faces the one-sided law *rejects*
-/// alongside the ones it keeps, which is the entire point of having it. "The kerb top is authored
-/// downward-facing, so our settle probe passes straight through it" and "the advance was too short
-/// to reach the tread" produce the same silent non-step from the outside, and opposite readings
-/// here. Convex (non-trimesh) colliders have no per-face winding to report and are skipped — the
-/// law leaves them whole-shape too.
+/// Every trimesh face in the box `at ± half` that `filter` reaches, nearest centroid first. A
+/// diagnostic, ungated on purpose: it shows the faces the law rejects beside those it keeps.
 pub(crate) fn faces_near(
     ms: &MoveAndSlide<'_, '_>,
     at: Vec3,
@@ -611,12 +539,10 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// A physics world holding one 10×10 quad at y = 0 with the given winding — `up: true` is a
-    /// floor (authored normal +Y), `up: false` is 0968's shell face (authored normal −Y).
+    /// One 10×10 quad at y = 0, wound as a floor (+Y) when `up`, else as a shell face (−Y).
     fn world_with_quad(up: bool) -> App {
         let mut app = App::new();
-        // avian's collider backend reads `Assets<Mesh>` and `SceneSpawner` even in a meshless
-        // world, so the headless asset/scene plugins ride along.
+        // avian's collider backend reads `Assets<Mesh>` and `SceneSpawner` even with no meshes.
         app.add_plugins((
             MinimalPlugins,
             bevy::transform::TransformPlugin,
@@ -650,7 +576,6 @@ mod tests {
         Collider::capsule(0.4, 1.0)
     }
 
-    /// A headless world holding one up-wound trimesh built from `(verts, tris)`.
     fn world_with_mesh(verts: Vec<Vec3>, tris: Vec<[u32; 3]>) -> App {
         let mut app = App::new();
         app.add_plugins((
@@ -672,7 +597,6 @@ mod tests {
         app
     }
 
-    /// Sweep the test capsule from `from` by `movement` and report the hit distance, `None` on a miss.
     fn sweep(app: &mut App, from: Vec3, movement: Vec3) -> Option<f32> {
         app.world_mut()
             .run_system_once(move |ms: MoveAndSlide| {
@@ -689,16 +613,7 @@ mod tests {
             .unwrap()
     }
 
-    /// **The backface band, both faces of it**. The capsule here is 1.8 tall
-    /// (radius 0.4, segment 1.0), its centre 0.9 above its feet.
-    ///
-    /// A small horizontal face the body straddles — a seat top 0.5 yd into it, every vertex behind
-    /// the body's leading edge along a horizontal walk — is not a hit: the body walks out of the
-    /// chair. A large **sloped** face the feet sit 5 cm under — the terrain under a stool — is
-    /// still a hit for a downward probe, because a vertex of it lies below the feet; the first port
-    /// measured parry's penetration depth instead and dropped the floor, and the body fell through
-    /// the world. And a **flat** face every vertex of which is more than the band above the feet
-    /// is gone, which is the reference's own answer for a body placed under flat ground.
+    /// The capsule is 1.8 tall (radius 0.4, segment 1.0), its centre 0.9 above its feet.
     #[test]
     fn the_band_keeps_a_straddled_slope_and_drops_a_passed_face() {
         // A 0.6 × 0.6 seat top at y = 0.5, up-wound; the body's feet at y = 0 on its centre.
@@ -719,8 +634,7 @@ mod tests {
             "a seat top the body straddles is behind its leading edge: the walk out is free"
         );
 
-        // A 10-yd terrain triangle rising 1 yd across its span (a ~6° slope), the feet 5 cm
-        // under its plane at the body's own x — but one vertex of it lies well below the feet.
+        // A 10-yd slope rising 1 yd (about 6°), the feet 5 cm under it, one vertex well below.
         let mut slope = world_with_mesh(
             vec![
                 Vec3::new(-5.0, -0.5, -5.0),
@@ -737,7 +651,6 @@ mod tests {
             "a sloped floor the feet sit 5 cm under still supports: a vertex of it is below them"
         );
 
-        // The same feet 5 cm under a FLAT floor: every vertex more than the band behind — gone.
         let mut flat = world_with_mesh(
             vec![
                 Vec3::new(-5.0, 0.0, -5.0),
@@ -752,7 +665,6 @@ mod tests {
             None,
             "a flat floor more than 1/36 yd above the feet has been passed"
         );
-        // …and 2 cm under it — inside the band — is still standing on it.
         let feet_just_under = Vec3::new(0.0, 0.9 - 0.02, 0.0);
         assert_eq!(
             sweep(&mut flat, feet_just_under, Vec3::NEG_Y * 0.2),
@@ -763,7 +675,6 @@ mod tests {
 
     #[test]
     fn a_floor_blocks_a_fall_and_a_backface_does_not() {
-        // The whole bug in one assertion pair: the same quad, same cast, opposite winding.
         for (up, expect_block) in [(true, true), (false, false)] {
             let hit = world_with_quad(up)
                 .world_mut()
@@ -789,8 +700,7 @@ mod tests {
                 }
             );
             if let Some(h) = hit {
-                // Capsule bottom = center − (0.5 + 0.4); surface at 0 ⇒ contact after ~2.1 yd,
-                // pulled back by the skin.
+                // The capsule's bottom is 0.9 below its centre: contact after 2.1 yd.
                 assert!((h.collision_distance - 2.1).abs() < 1e-3);
                 assert!(h.normal1.y > 0.99);
             }
@@ -799,8 +709,7 @@ mod tests {
 
     #[test]
     fn a_floor_is_no_ceiling_from_below() {
-        // Rising through an up-wound floor from beneath: its backface must not bump the head —
-        // and the down-wound quad, approached from below, is the face that must.
+        // From below, an up-wound floor is a backface and a down-wound quad blocks.
         for (up, expect_block) in [(true, false), (false, true)] {
             let hit = world_with_quad(up)
                 .world_mut()
@@ -821,8 +730,6 @@ mod tests {
 
     #[test]
     fn the_slide_falls_through_a_backface_and_rests_on_a_floor() {
-        // The full resolve, not just the cast: one second of straight fall through/onto the quad.
-        // Backface: every stage — sweep and contact planes — must let the body pass.
         for (up, expect_above) in [(true, true), (false, false)] {
             let end = world_with_quad(up)
                 .world_mut()

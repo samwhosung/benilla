@@ -1,14 +1,12 @@
-// The effect-lane pass (particles, ribbons, decals, water foam, precipitation): texture bytes
-// (Rgba8Unorm, never decoded on sample) × the authored track colour, multiplied in gamma space as
-// the reference does. The output stays gamma; the FFXGlow combine decodes the frame once.
+// The effect-lane pass (particles, ribbons, decals, water foam, precipitation): texture bytes,
+// never decoded on sample, times the authored track colour in gamma space, as the reference
+// multiplies them. The output stays gamma; the FFXGlow combine decodes the frame once.
 //
 // Blend variants, one shader def per EffectBlend:
-// - BLEND_ADD:      (rgb·α, 0) under (One, 1−srcα): the reference adds `src·α` bytes, and
-//   premultiplying in linear space instead would fatten every soft edge by α^(1/2.2).
+// - BLEND_ADD:      (rgb·α, 0) under (One, 1−srcα), the reference's `src·α` byte add.
 // - BLEND_ALPHA:    straight (rgb, α) under standard alpha blending.
 // - BLEND_OPAQUE:   (rgb, 1) with blending off.
-// - BLEND_ALPHAKEY: BLEND_OPAQUE behind the fixed-function alpha test (EGxRs id 0x08); wgpu has
-//   no `glAlphaFunc`, so the fragment discards below 224/255.
+// - BLEND_ALPHAKEY: BLEND_OPAQUE behind the alpha test (EGxRs id 0x08), a discard below 224/255.
 // - BLEND_MULTIPLY: (rgb·α, α) under (Dst, 1−srcα) = `dst·lerp(1, rgb, α)`, the blob shadow's
 //   modulate-with-fade and ModelBlend::Mod at α = 1.
 // - BLEND_MOD2X:    (rgb, 1) under (Dst, Src) = `2·src·dst`, rain's state; reads no alpha.
@@ -38,11 +36,10 @@ struct WowLight {
 @group(1) @binding(0) var effect_texture: texture_2d<f32>;
 @group(1) @binding(1) var effect_sampler: sampler;
 @group(1) @binding(2) var<storage, read> wow_light: WowLight;
-// Per-draw params. `fog`: x = fog colour policy, the per-blend table of `0x70baf0` (0 off for
-// file flag 0x8, 1 scene, 2 black for Add, 3 white for Mod, 4 grey for Mod2x); y = rain's forced
-// fog, zw = its start/end. `clip`: the render-target rect in target pixels (min.xy, max.xy), the
-// whole target when z <= x. The reference clips a UI model to its widget's viewport; model panes
-// share one atlas, so the rect rides the draw and the fragment discards outside it.
+// Per-draw params. `fog`: x the fog colour policy, `0x70baf0`'s per-blend table (0 off for file
+// flag 0x8, 1 scene, 2 black for Add, 3 white for Mod, 4 grey for Mod2x); y rain's forced fog, zw
+// its start and end. `clip`: the target rect in pixels (min.xy, max.xy), the whole target when
+// z <= x; the reference clips a UI model to its widget's viewport, and model panes share an atlas.
 struct EffectParams {
     fog: vec4<f32>,
     clip: vec4<f32>,
@@ -72,9 +69,9 @@ struct VertexOutput {
 fn vertex(v: Vertex) -> VertexOutput {
     var out: VertexOutput;
 #ifdef DECAL_WORLD_CLIP
-    // Decals (raster_bias ≠ 0) take absolute verts through `clip_from_world`, the world meshes'
-    // own matrix: their depth must tie with the ground within the small raster bias, and the
-    // cam-relative route rounds differently by more than that at world-scale coordinates.
+    // Decals (raster_bias ≠ 0) take absolute verts through the world meshes' `clip_from_world`:
+    // their depth must tie the ground within the raster bias, and the cam-relative route rounds
+    // differently by more than that at world-scale coordinates.
     out.clip_position = view.clip_from_world * vec4<f32>(v.position, 1.0);
     // Eye-Z via the full affine transform; its rounding is yard-scale and harmless.
     out.view_z = -(view.view_from_world * vec4<f32>(v.position, 1.0)).z;
@@ -108,9 +105,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #ifdef WOW_PARTICLE_FLAT
     return vec4<f32>(1.0, 0.0, 1.0, 1.0);
 #else
-    // The hard farclip wall (`farclip`, about 777 yd): the reference's far plane clips effects
-    // too, ours is farther, so every world shader discards per pixel. The scene fog ends by the
-    // farclip, so a quad at the wall has already faded to the fog colour.
+    // The hard farclip wall (the live `farclip`, 177 to 777 yd): the reference's far plane clips
+    // effects and ours is farther, so every world shader discards. The fog ends by the farclip, so
+    // this cuts only fog.
     if (wow_light.fog_params.w > 0.0 && in.view_z > wow_light.fog_params.w) {
         discard;
     }
@@ -127,12 +124,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
     var rgb = c.rgb;
 #ifdef EFFECT_LIT
-    // Scene lighting (EGxRs id 0x0e): the reference builds an `M2Material` from the emitter record
-    // each draw (`0x70d8b0`) and lights it iff the emitter clears file flag 0x1 (the unlit flag)
-    // and its blend is not Mod/Mod2x (`0x70bb00`; gated by `EffectDrawSpec::lit`). The term is the
-    // fixed-function matte with N = world up for the whole draw: `0x7b3fd0` sets the quad normal
-    // from row 2 of the view matrix and `0x71bce0` moves the light into the same frame, so N·L does
-    // not change as the camera orbits. Bevy +Y is WoW +Z.
+    // Scene lighting (EGxRs id 0x0e, `0x70d8b0`) when the emitter clears the unlit flag 0x1 and
+    // its blend is not Mod or Mod2x (`0x70bb00`): the fixed-function matte with N = world up for
+    // the whole draw, as `0x7b3fd0` takes the normal from view row 2 and `0x71bce0` moves the
+    // light into that frame, so N·L holds as the camera orbits. Bevy +Y is WoW +Z.
     let L = -normalize(wow_light.light_sun.xyz);
     let N = vec3<f32>(0.0, 1.0, 0.0);
     let lit = clamp(
