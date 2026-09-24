@@ -1,5 +1,4 @@
-//! The context-sensitive **world cursor** — the classifier half (wow-re cursor RE, note
-//! `ui/scratch/cursor-system.md`, §3 per-bit service table + §5 gates, all byte-verified).
+//! The context-sensitive **world cursor** — the classifier half.
 //!
 //! Each frame, the hovered unit resolves to a [`CursorKind`] the way the real client's
 //! `CGWorldFrame` classifier does (`0x4828d0` → unit branch `0x482200`):
@@ -59,31 +58,31 @@ pub(crate) enum CursorKind {
     /// innkeeper service.
     Interact,
     Buy,
-    /// Inspect(7) — the magnifier. The UI's Ctrl-hover cursor (`ShowInspectCursor`, wow-re
-    /// cursor-system.md §7, overlaid by [`crate::cursor`]) **and** the world cursor over a
-    /// readable TEXT(9) GameObject plaque (§4).
+    /// Inspect(7) — the magnifier. The UI's Ctrl-hover cursor (`ShowInspectCursor 0x48ac60`,
+    /// overlaid by [`crate::cursor`]) **and** the world cursor over a
+    /// readable TEXT(9) GameObject plaque (`0x5f5890`).
     Inspect,
     Trainer,
     Taxi,
     Skin,
     /// Repair(17) — never set by the world classifier (the ladder skips the REPAIR bit); it is
-    /// the UI's repair-mode base cursor (`ShowRepairCursor`'s locked mode, wow-re
-    /// repair-machinery.md), overlaid by [`crate::cursor`].
+    /// the UI's repair-mode base cursor (`ShowRepairCursor 0x4fbcc0`'s locked mode), overlaid by
+    /// [`crate::cursor`].
     Repair,
-    /// Mail(15) — a MAILBOX(19) / RITUAL(18) / type-28 GameObject (wow-re cursor-system.md §4:
-    /// the shared `0x5f6840`/`0x5f6e30` behavior). The mailbox's own cursor, not the gear.
+    /// Mail(15) — a MAILBOX(19) / RITUAL(18) / type-28 GameObject (the shared
+    /// `0x5f6840`/`0x5f6e30` behavior). The mailbox's own cursor, not the gear.
     Mail,
     /// Mine(11) — a GameObject whose lock's first `LockType` is Mining (3). A LockType.dbc
-    /// data-named cursor (§4), resolved off the GO's lock, not a fixed type.
+    /// data-named cursor (`0x5f3070`), resolved off the GO's lock, not a fixed type.
     Mine,
     /// GatherHerbs(13) — a GameObject whose lock's first `LockType` is Herbalism (2). Also a
     /// LockType.dbc data-named cursor.
     GatherHerbs,
     /// PickLock(14) — a GameObject whose lock's first `LockType` is Pick Lock (`LockType.Id == 1`).
-    /// The one data-named GO cursor that is **never grayed** (§4: `LockType.Id == 1` skips the
-    /// usable gate), since any rogue can attempt the lock.
+    /// The one data-named GO cursor that is **never grayed** (`0x5f3070`: `LockType.Id == 1` skips
+    /// the usable gate), since any rogue can attempt the lock.
     PickLock,
-    /// Cast(2) — the spell-targeting cursor (wow-re cursor-system.md §5, VERIFIED law): while a
+    /// Cast(2) — the spell-targeting cursor (`0x4820f0`): while a
     /// spell awaits a target, dispatcher step 2 pre-empts the WHOLE object classifier with
     /// Cast/UnableCast. Never set by the classifier here — it is [`crate::cursor`]'s
     /// armed-enchant-pick overlay (the one spell-targeting state benilla ships).
@@ -191,14 +190,14 @@ const MELEE_FLOOR: f32 = 5.0;
 /// The same `max(rA + rB + 1.333, 5.0)` shape as [`MELEE_FLOOR`] above, evaluated for a corpse:
 /// a corpse descriptor carries no `UNIT_FIELD_COMBATREACH` at all, so the sum can never clear the
 /// floor and the gate is the floor. Two independent byte facts agree on the number — the cursor
-/// leg's `CanLootNow 0x5ec110`, and the `CMSG_LOOT` sender `0x5df130`, whose owned bit-exact
-/// difftest (`loot_range_5df130_difftest`) compares `dist²` against a literal `25.0`. Written as
-/// the constant rather than the formula because the formula's other term does not exist here.
+/// leg's `CanLootNow 0x5ec110`, and the `CMSG_LOOT` sender `0x5df130`, which compares `dist²`
+/// against a literal `25.0`. Written as the constant rather than the formula because the formula's
+/// other term does not exist here.
 /// Boundary-inclusive, center-to-center, like every other reach gate in this file.
 const CORPSE_INTERACT_RANGE_SQ: f32 = 25.0;
 
 /// `GAMEOBJECT_TYPE_GENERIC` (vmangos `SharedDefines.h`) — world decoration whose highlightable
-/// predicate is constant-false, so it never shows an interact cursor (wow-re cursor-system §4a).
+/// predicate is constant-false, so it never shows an interact cursor (`0x5f47f0`).
 pub(crate) const GO_TYPE_GENERIC: i32 = 5;
 /// The transport family — TRANSPORT(11), MAP_OBJECT(14), MO_TRANSPORT(15): their strategy vtables'
 /// highlightable slot (+0x14) is constant-false too (`32 c0 c3` — vtable dump from the 5875 binary:
@@ -210,9 +209,8 @@ const GO_TYPE_MO_TRANSPORT: i32 = 15;
 /// The **marker set** — SPELL_FOCUS(8), DUEL_ARBITER(16), FISHINGHOLE(25), AURA_GENERATOR(30).
 /// Their strategy vtables are the mirror image of the transports': `+0xc` (mouseover eligibility) is
 /// a constant `b0 01 c3` = `mov al,1; ret` and `+0x14` (**highlightable**) a constant
-/// `32 c0 c3` = `xor al,al; ret` (wow-re `object-layer/scratch/go-render-gate.md`, "the per-type
-/// handler vtables": vtables `0x80b8a8`/`0x80bb68`/`0x80bbf8`/`0x80c2a0`, `+0xc` targets
-/// `0x5f57e0`/`0x5f65f0`/`0x5f6660`/`0x5f6ea0`, `+0x14` targets
+/// `32 c0 c3` = `xor al,al; ret` (vtables `0x80b8a8`/`0x80bb68`/`0x80bbf8`/`0x80c2a0`, `+0xc`
+/// targets `0x5f57e0`/`0x5f65f0`/`0x5f6660`/`0x5f6ea0`, `+0x14` targets
 /// `0x5f57f0`/`0x5f6600`/`0x5f6670`/`0x5f6eb0` — const bytes read for all four).
 ///
 /// So they hover but never *interact*: the anvil, the forge, the campfire, the duel flag, the fishing
@@ -228,7 +226,7 @@ const GO_TYPE_AURA_GENERATOR: i32 = 30;
 /// The highest GAMEOBJECT_TYPE_ID the type factory has a `case` for. The jump table `0x5f76cc`
 /// covers 0..=30; **21 GUARDPOST has no case of its own** and falls to `default:` with everything
 /// out of range — the arms' `__LINE__` pushes step three apart across the 30 real types with none
-/// for 21 (wow-re `animation/scratch/gameobject-anim-arm.md`, the per-type arm table).
+/// for 21.
 const GO_TYPE_MAX: i32 = 30;
 /// `GAMEOBJECT_TYPE_GUARDPOST` (21) — see [`strategy_is_default`].
 const GO_TYPE_GUARDPOST: i32 = 21;
@@ -240,21 +238,19 @@ const GO_TYPE_GUARDPOST: i32 = 21;
 /// That vtable's `+0x14` is `0x5f36f0` = `xor al,al`, and its `+0xc` forwards to it — so a
 /// default-strategy object is neither highlightable nor mouseover-eligible: it shows nothing at all.
 ///
-/// Byte-cited in wow-re `animation/scratch/gameobject-anim-arm.md` (the arm bytes, the initializer,
-/// and the `BADBASEGAMEOBJECT` string) and corroborated independently by
-/// `object-layer/scratch/w2c1.md` ("case 0x15 falls to `default`"). Unobservable on this server —
-/// vanilla ships no type-21 template and a 1.12 server sends nothing out of range — but modelled
-/// rather than left to the flag predicate, which would answer `true` for an all-zero descriptor.
+/// Unobservable on this server — vanilla ships no type-21 template and a 1.12 server sends nothing
+/// out of range — but modelled rather than left to the flag predicate, which would answer `true`
+/// for an all-zero descriptor.
 fn strategy_is_default(type_id: i32) -> bool {
     type_id == GO_TYPE_GUARDPOST || !(0..=GO_TYPE_MAX).contains(&type_id)
 }
 /// `GAMEOBJECT_TYPE_TEXT` (9) — a readable book/plaque/sign; its per-type behavior shows the
-/// **Inspect** magnifier (wow-re cursor-system §4, `0x5f5890`), not the gear. `pub(super)` so the
+/// **Inspect** magnifier (`0x5f5890`), not the gear. `pub(super)` so the
 /// right-click dispatch ([`super::act_on_right_click`]) routes it to the client-side reader off the
 /// one type constant (decision 1105), the same shape as the mailbox — and `pub(crate)` beyond that
 /// so the inspector's GO card can report the readable head against the same constant.
 pub(crate) const GO_TYPE_TEXT: i32 = 9;
-/// The three GameObject types that show the **Mail** cursor (wow-re cursor-system §4): RITUAL(18)
+/// The three GameObject types that show the **Mail** cursor: RITUAL(18)
 /// and MAILBOX(19) share one behavior (`0x5f6840`), and type 28 (`0x5f6e30`) resolves to Mail too.
 /// Type 28 has no live 1.12 data but is included for byte-fidelity with the factory switch.
 const GO_TYPE_RITUAL: i32 = 18;
@@ -265,18 +261,17 @@ const GO_TYPE_28: i32 = 28;
 /// Interim GameObject interact-range gray (decision 0236): reuse the ~5.56 yd service reach until the
 /// size-dependent GO interact distance is byte-pinned. Squared, boundary-inclusive like the unit gates.
 const GO_INTERACT_RANGE_SQ: f32 = SERVICE_RANGE_SQ;
-/// `GAMEOBJECT_TYPE_FISHINGNODE` (17) — the fishing bobber. Its strategy (vtable `0x80bc80`, wow-re
-/// `fishing-bobber-interaction.md`) overrides exactly one consumed slot: highlightable is the
-/// channel-ownership gate ([`highlightable_flags`]'s type-17 arm); everything else is the shared base.
+/// `GAMEOBJECT_TYPE_FISHINGNODE` (17) — the fishing bobber. Its strategy (vtable `0x80bc80`)
+/// overrides exactly one consumed slot: highlightable is the channel-ownership gate
+/// ([`highlightable_flags`]'s type-17 arm); everything else is the shared base.
 pub(crate) const GO_TYPE_FISHINGNODE: i32 = 17;
 /// The per-type interact range the shared `usable 0x5f3130` compares — the strategy ctor's
-/// `[strat+0xc]` constant, **squared at the compare**, boundary-inclusive (wow-re
-/// `fishing-bobber-interaction.md` §3). FISHINGNODE's ctor sets **100.0 yd** (`0x5f66b0`,
-/// `[0x80b0b0]`) — the bobber is effectively un-range-gated for any real cast, never the ~5.56 yd
-/// reach. Other types stay on the 0236 interim (the base default is 5.0 and several per-type ctors
-/// override it — 5.5556/10.0/…; their population is a later byte-pin).
-/// `GAMEOBJECT_TYPE_CHAIR` (7) — the byte-pinned second member of the per-type table (decision
-/// 1464, wow-re's chair §5). Its `+0x18` predicate is its own `0x5f5670`, which reports **3.0 yd**
+/// `[strat+0xc]` constant, **squared at the compare**, boundary-inclusive. FISHINGNODE's ctor sets
+/// **100.0 yd** (`0x5f66b0`, `[0x80b0b0]`) — the bobber is effectively un-range-gated for any real
+/// cast, never the ~5.56 yd reach. Other types stay on the 0236 interim (the base default is 5.0
+/// and several per-type ctors override it — 5.5556/10.0/…; their population is a later byte-pin).
+/// `GAMEOBJECT_TYPE_CHAIR` (7) — the second member of the per-type table (decision 1464). Its
+/// `+0x18` predicate is its own `0x5f5670`, which reports **3.0 yd**
 /// and accepts on `dist² < 9.0` against `[0xc4d808]` — whose only writer image-wide is the static
 /// initializer `0x5f98b0` squaring that same 3.0. Chair-exclusive, and it independently reproduces
 /// vmangos's `MAX_SITCHAIRUSE_DISTANCE`, which is why it is safe to hold as *client* law rather
@@ -302,7 +297,7 @@ fn go_interact_range_sq(type_id: i32) -> f32 {
         _ => GO_INTERACT_RANGE_SQ,
     }
 }
-/// `GameObjectFlags` bits consulted by the highlightable gate (decision 0243, wow-re cursor-system §4a):
+/// `GameObjectFlags` bits consulted by the highlightable gate `0x5f2f80` (decision 0243):
 /// `0x1` IN_USE (busy) and `0x10` NO_INTERACT both suppress interaction; their union is the fast reject.
 const GO_FLAG_IN_USE_OR_NO_INTERACT: u32 = 0x11;
 /// `GO_FLAG_INTERACT_COND` (`0x4`) — the object is usable **only** when its per-player activate dyn-flag
@@ -315,10 +310,9 @@ const GO_DYNFLAG_ACTIVATE: u32 = 0x1;
 /// The GameObject types whose strategy vtable **overrides** the highlightable slot (`+0x14`) with a
 /// constant `xor al,al` — so `0x5f2f80` is never reached for them and they are never highlightable,
 /// whatever their flags, faction or activate bit say. **Eleven of the thirty-one types**, byte-read
-/// off the 5875 vtables (wow-re `object-layer/scratch/go-strategy-vtable-table.md`, the complete
-/// 31-row table): GENERIC(5) `0x5f47f0` · the transports 11/14/15 · the marker set 8/16/25/30 ·
-/// AUCTIONHOUSE(20) `0x5f68a0` · CAPTURE_POINT(29) `0x5f6d40` · and the default strategy
-/// ([`strategy_is_default`]) `0x5f36f0`.
+/// off the 5875 vtables: GENERIC(5) `0x5f47f0` · the transports 11/14/15 · the marker set
+/// 8/16/25/30 · AUCTIONHOUSE(20) `0x5f68a0` · CAPTURE_POINT(29) `0x5f6d40` · and the default
+/// strategy ([`strategy_is_default`]) `0x5f36f0`.
 ///
 /// This is the whole per-type half of the predicate, kept as one named list because the reference
 /// keeps it as one vtable slot: adding a type here removes its cursor, its brighten, its right-click
@@ -376,7 +370,7 @@ pub(crate) struct GoOverrides {
 /// `template.data[2] (areaID) != [0xb72038]` — see [`highlightable_flags`]'s `meeting_stone_queued`.
 pub(super) const GO_TYPE_MEETINGSTONE: i32 = 23;
 
-/// The client's GameObject **highlightable** predicate (decision 0243, wow-re cursor-system §4a,
+/// The client's GameObject **highlightable** predicate (decision 0243,
 /// `0x5f2f80`) over its wire flags: whether the object shows an interact cursor / is clickable at all.
 /// The types whose vtable constant-falses the slot never get here at all
 /// ([`strategy_never_highlightable`]); of the rest, a busy (IN_USE) or NO_INTERACT object isn't
@@ -386,15 +380,15 @@ pub(super) const GO_TYPE_MEETINGSTONE: i32 = 23;
 /// its (zero) activate bit. `usable` (lock / range / player-state → the grayed twin) rides on top and
 /// is a later refinement.
 ///
-/// `channel_owned` is the FISHINGNODE override's one input (`0x5f6710`, wow-re
-/// `fishing-bobber-interaction.md` §2): whether the active player's `UNIT_FIELD_CHANNEL_OBJECT`
+/// `channel_owned` is the FISHINGNODE override's one input (`0x5f6710`): whether the active
+/// player's `UNIT_FIELD_CHANNEL_OBJECT`
 /// equals **this** GO's guid. The bobber is highlightable only to the player currently channeling
 /// at exactly it — NOT a `CREATED_BY` compare — then tail-jumps into this shared gate. Someone
 /// else's bobber (or yours after the channel drops) produces nothing at all: no cursor, no
 /// tooltip/brighten (the `+0xc` thunk), and a silent dead right-click. Ignored for every other type.
 ///
-/// `meeting_stone_queued` is MEETINGSTONE(23)'s override (`0x5f6990`, wow-re
-/// `go-strategy-vtable-table.md`): the slot is `template.data[2] (areaID) != [0xb72038]`, and
+/// `meeting_stone_queued` is MEETINGSTONE(23)'s override (`0x5f6990`): the slot is
+/// `template.data[2] (areaID) != [0xb72038]`, and
 /// `0xb72038` is the area the player is currently queued at — zero-initialized at `0x4c9eec`,
 /// written only by the meeting-stone server-message handler `0x4ca230`, and read back by the Lua
 /// binding `IsInMeetingStoneQueue`. So a stone is highlightable **unless it is the stone you are
@@ -475,10 +469,9 @@ pub(crate) fn go_reaction(
 }
 
 /// The **mouseover-eligibility** virtual `[obj->vtbl+0x54]` — the gate that decides whether a picked
-/// object becomes the mouseover **at all** (wow-re `tooltip-content-law.md` §2-GAMEOBJECT, rewritten
-/// 2026-07-29; decision 0762).
+/// object becomes the mouseover **at all** (decision 0762).
 ///
-/// This sits one level above everything the tooltip law used to be reasoned from. The per-frame
+/// This sits one level above everything the GO tooltip used to be reasoned from. The per-frame
 /// classifier `CGWorldFrame::UpdateMouseoverCursor 0x4828d0` calls it on the picked object and, when
 /// it answers false, publishes the **null** mouseover GUID (`0x482985 test eax,eax; je 0x4829ed` →
 /// `0x482090(0,0)` + `ResetCursor 0x523d30`). The publisher `0x492890`, the tooltip builder
@@ -501,8 +494,8 @@ pub(crate) fn go_reaction(
 /// brighten, no USE). Eligibility is never a stand-in for [`highlightable_flags`], and neither is
 /// its negation.
 ///
-/// **This refutes the old "the tooltip is not gated by highlightable" reading** — that note verified
-/// the publisher correctly and then generalised **GENERIC's** behaviour to all 31 types. The
+/// **This refutes the old "the tooltip is not gated by highlightable" reading**, which generalised
+/// **GENERIC's** behaviour to all 31 types. The
 /// signpost half survives (GENERIC really does answer from `data[1]`, and 1387 of 1870 shipped
 /// type-5 templates carry `data1 = 1`); the chest / IN_USE / INTERACT_COND half is wrong, and this
 /// is why a pre-quest Stone of Binding or a Stratholme portcullis shows nothing in the reference.
@@ -587,7 +580,7 @@ pub(crate) fn fishing_channel_owned(
 }
 
 /// A `LockType.dbc` **CursorName** stem → the [`CursorKind`] it names — the client's
-/// `CursorModeFromName` step (wow-re cursor-system.md §4, `0x523d40`) over the only three cursor-
+/// `CursorModeFromName` step (`0x523d40`) over the only three cursor-
 /// bearing lock kinds in 5875. An unknown/empty name resolves to `None`, which the base GO path
 /// reads as "the generic Interact gear."
 fn cursor_kind_from_lock_name(name: &str) -> Option<CursorKind> {
@@ -599,7 +592,7 @@ fn cursor_kind_from_lock_name(name: &str) -> Option<CursorKind> {
     }
 }
 
-/// The **data-named** cursor for a base-type GameObject's lock (wow-re cursor-system.md §4): the GO
+/// The **data-named** cursor for a base-type GameObject's lock (the base `0x5f3070`): the GO
 /// template's `lockId` → the `Lock.dbc` row → its **first** requirement slot's index (the client
 /// reads `[lockRow+0x24]` = `Index[0]` unconditionally, no scan) → the `LockType.dbc` **CursorName**.
 /// `None` when there's no lock, no client data, or the LockType has no distinct cursor — the caller
@@ -620,7 +613,7 @@ fn go_lock_cursor(
     cursor_kind_from_lock_name(name)
 }
 
-/// The GameObject cursor kind (wow-re cursor-system.md §4), given a **highlightable** GO's type and
+/// The GameObject cursor kind (`GetCursorMode 0x5f8760`), given a **highlightable** GO's type and
 /// its resolved lock cursor. The per-type behaviors that override the base gear: TEXT(9) → the
 /// Inspect magnifier; RITUAL(18)/MAILBOX(19)/type-28 → Mail. Every other type is the base behavior:
 /// its data-named lock cursor (Mine/GatherHerbs/PickLock) if it has one, else the generic Interact.
@@ -633,10 +626,9 @@ fn go_cursor_kind(type_id: i32, lock_cursor: Option<CursorKind>) -> CursorKind {
 }
 
 /// The QUESTGIVER leg's own gate — the bit alone is not enough. The ladder calls `0x5df490(unit)`,
-/// which is `NPC_FLAGS bit 1` **AND** the cached quest status `[unit+0xcb8] ∉ {0, 1}` (wow-re
-/// `ui/scratch/cursor-system.md` §3, byte-verified row; `object-layer/scratch/questgiver-marker.md`
-/// independently pins `+0xcb8` as the `SMSG_QUESTGIVER_STATUS` cache, written by `0x607440` and with
-/// only three writers repo-wide). So NONE(0) and UNAVAILABLE(1) do **not** make a unit talkable;
+/// which is `NPC_FLAGS bit 1` **AND** the cached quest status `[unit+0xcb8] ∉ {0, 1}` (`+0xcb8`
+/// is the `SMSG_QUESTGIVER_STATUS` cache, written by `0x607440` and with
+/// only three writers image-wide). So NONE(0) and UNAVAILABLE(1) do **not** make a unit talkable;
 /// every other status does.
 ///
 /// This is what keeps a questgiver-flagged NPC with nothing to offer from being clickable at all —
@@ -655,8 +647,8 @@ pub(crate) fn questgiver_has_quest(quest_status: Option<u32>) -> bool {
     !matches!(quest_status, None | Some(NONE) | Some(UNAVAILABLE))
 }
 
-/// The per-bit service ladder (`0x482336..0x4824e3`, statically unrolled — every row byte-verified
-/// in the RE note's §3 table): lowest set bit wins. `None` = no *consulted* bit set — the unit
+/// The per-bit service ladder (`0x482336..0x4824e3`, statically unrolled): lowest set bit wins.
+/// `None` = no *consulted* bit set — the unit
 /// falls through to the attack/clear leg (this is where repair-only units land: bit 14 is never
 /// tested in the binary).
 ///
@@ -705,8 +697,7 @@ fn loot_cursor(auto_loot: bool, shift_held: bool) -> CursorKind {
 }
 
 /// Is this corpse **moused over at all** — the reference's `[CGCorpse_C vtbl+0x54]` = `0x5d76d0`,
-/// asked at `0x482982` by the mouseover publisher (wow-re `corpse-click-and-reclaim.md` Q6, §5
-/// cross-checked).
+/// asked at `0x482982` by the mouseover publisher.
 ///
 /// A **real body** (BONES clear) qualifies **unconditionally — owner irrelevant**, so your own
 /// corpse is moused over like anyone else's. Only a **bone pile with nothing to take** is dropped;
@@ -720,8 +711,8 @@ pub(crate) fn corpse_mouseover_eligible(store: &ObjectStore) -> bool {
     !store.0.corpse_is_bones() || store.0.corpse_lootable()
 }
 
-/// What a hovered **corpse object** classifies to — the reference's corpse classifier `0x482740`
-/// (wow-re `cursor-system.md` §3, VERIFIED), as a pure decision so it can be tested the way the
+/// What a hovered **corpse object** classifies to — the reference's corpse classifier `0x482740`,
+/// as a pure decision so it can be tested the way the
 /// service ladder is. `esi` = player, `edi` = corpse, `d2` = centre-to-centre distance².
 ///
 /// Two legs, and there is **no third** — in particular no own-corpse leg. Your own body carries
@@ -788,7 +779,7 @@ pub(super) fn classify_cursor(
         Option<&crate::go_anim::GoAnim>,
     )>,
     self_q: Query<(&Transform, &ObjectStore), With<SelfPlayer>>,
-    // The GameObject cursor is data-driven (decision 0236, wow-re cursor-system §4): the ask-once
+    // The GameObject cursor is data-driven (decision 0236, `0x5f8760`): the ask-once
     // template (its `lockId`) + Lock.dbc + LockType.dbc name the cursor. All absent without client
     // data or before a hovered GO's template answers — a lock-bearing GO then reads as the gear.
     // The same param carries the lock chain `usable` consults (decision 0752) — one
@@ -812,7 +803,7 @@ pub(super) fn classify_cursor(
     // as the reference's zero-initialized global, i.e. not queued.
     stone: Option<Res<crate::ui_dialog_verbs::MeetingStone>>,
 ) {
-    // A **highlightable** GameObject shows its **data-driven** cursor (wow-re cursor-system §4): a
+    // A **highlightable** GameObject shows its **data-driven** cursor (`0x5f8760`): a
     // mailbox's Mail, a plaque's Inspect, a vein's Mine / herb's GatherHerbs / picked lock's PickLock
     // (off its LockType), else the generic Interact gear — each grayed out of interact range (except
     // PickLock, never grayed). A non-highlightable GO yields no cursor, like the reference handler's
@@ -854,10 +845,10 @@ pub(super) fn classify_cursor(
         let dist_sq = go_tf.translation.distance_squared(self_tf.translation);
         // `usable 0x5f3130`, the two arms we model — the LOCK arm first, as the binary orders
         // them (`0x5f32a6` before the range check at `0x5f330c`), then the interim range gray.
-        // The lock arm runs **only when `GO_FLAG_LOCKED` is set** (§8.8): that is why an
+        // The lock arm runs **only when `GO_FLAG_LOCKED` is set**: that is why an
         // ungatherable herb node keeps its lit GatherHerbs cursor and only refuses on the click,
-        // while a padlocked door grays. `PickLock` never grays (§4: `LockType.Id == 1` skips the
-        // usable gate), so the rogue's affordance still reads as available.
+        // while a padlocked door grays. `PickLock` never grays (`0x5f3070`: `LockType.Id == 1`
+        // skips the usable gate), so the rogue's affordance still reads as available.
         let facts = super::lock::go_facts(Some((store, crate::go_anim::go_state(anim, store))));
         let lock_unmet = go_inputs
             .locks
@@ -903,9 +894,9 @@ pub(super) fn classify_cursor(
                 let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
                 return Some((loot_cursor(loot_cfg.auto_loot, shift), !in_melee));
             }
-            // The skin leg's SECOND precondition, byte-verified: the flag alone is not enough —
+            // The skin leg's SECOND precondition: the flag alone is not enough —
             // the reference also requires the learn-time latch `[0xb700e4 + 4×isPlayerTarget]` to
-            // be non-null (wow-re cursor-system.md §3, `0x482589`), i.e. **the player must have
+            // be non-null (`0x482589`), i.e. **the player must have
             // learned a Skinning spell**. A non-skinner gets no knife on a skinnable corpse; the
             // corpse falls through to Point like any other unlootable one (decision 0752).
             if store.0.unit_flags() & UNIT_FLAG_SKINNABLE != 0 && learned.skinning.is_some() {
@@ -1486,7 +1477,7 @@ mod tests {
 
     #[test]
     fn the_bobber_is_channel_gated_and_reaches_a_hundred_yards() {
-        // The FISHINGNODE highlightable override (`0x5f6710`, wow-re fishing-bobber-interaction.md):
+        // The FISHINGNODE highlightable override (`0x5f6710`):
         // only the player whose UNIT_FIELD_CHANNEL_OBJECT names exactly this GO passes — someone
         // else's bobber (or yours after the channel drops) shows nothing at all.
         assert!(highlightable_flags(
@@ -1570,7 +1561,7 @@ mod tests {
         // A quest to offer, so the QUESTGIVER row behaves like the rest of the ladder here; the
         // gate itself is `questgiver_flag_alone_is_not_talkable`.
         let has = Some(dialog_status::AVAILABLE);
-        // The rows the RE table pins per byte address.
+        // The rows the reference pins per byte address.
         assert_eq!(service_cursor(GOSSIP, None), Some(CursorKind::Speak));
         assert_eq!(service_cursor(QUESTGIVER, has), Some(CursorKind::Speak));
         assert_eq!(service_cursor(VENDOR, None), Some(CursorKind::Pickup));

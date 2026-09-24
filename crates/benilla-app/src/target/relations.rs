@@ -42,8 +42,7 @@ fn is_player_object(store: Option<&ObjectStore>) -> bool {
 /// (`0x48269a`), the combat flash's gate, the TAB scan's filter 3, `UnitCanAttack`, and hostile
 /// spell targeting all ask this one question.
 ///
-/// **This forwards to the byte-verified complete function** ([`super::ring::can_attack_from_player`],
-/// wow-re `object-layer/scratch/nameplate-category-gate.md` §3, §5 cross-checked 2026-08-22) — a
+/// **This forwards to the complete function** ([`super::ring::can_attack_from_player`]) — a
 /// ghost gate, five `UNIT_FIELD_FLAGS` refusal bits on the target, four cross-flag immunity legs,
 /// then three terminal arms selected by `UNIT_FLAG_PVP_ATTACKABLE` on both parties.
 ///
@@ -111,10 +110,8 @@ const UNIT_FLAG_NOT_SELECTABLE: u32 = 1 << 25;
 /// a store whose `OBJECT_FIELD_TYPE` has not streamed is read the same permissive way rather than
 /// refusing a selection over an absent field.
 ///
-/// Byte-verified in wow-re: `ui/scratch/unitisvisible-object-presence.md` §5 (the function body and
-/// the three corroborating consumers of the same bit) and
-/// `object-layer/scratch/selection-attack-seam.md` §3.1 (the `SetSelection 0x493540` early-out at
-/// `0x4935ee`/`0x4935f3`, §5 trio + orchestrator byte-arbitration).
+/// `SetSelection 0x493540` makes this call at `0x4935ee` and returns on a false answer at
+/// `0x4935f3`; three further consumers test the same bit (`0x6066f0`, `0x606829`, `0x60f600`).
 pub(crate) fn is_selectable(store: Option<&ObjectStore>, self_guid: Option<u64>) -> bool {
     let Some(store) = store else {
         return true; // no resolved object — the reference never makes the call (`0x4935c8`)
@@ -138,8 +135,7 @@ const UNIT_FLAG_PVP: u32 = 0x1000;
 const UNIT_FLAG_PLAYER_CONTROLLED: u32 = 0x8;
 
 /// `CanAssist 0x6066f0` — "may I help this unit?", the predicate `UnitBuff`'s unit-level gate runs
-/// (see [`crate::ui_aura::buffs_visible_on`]). Byte-derived in wow-re's
-/// `ui/scratch/aura-display-pipeline.md` §9b; named by its own Lua registrar pair
+/// (see [`crate::ui_aura::buffs_visible_on`]). Named by its own Lua registrar pair
 /// (`.data 0x8504c8 = {"UnitCanAssist", 0x516bb0}`), not by resemblance.
 ///
 /// Three clauses: `UNIT_FLAG_NOT_SELECTABLE` clear, `UnitReaction ≥ 4`, and — for a unit that is
@@ -149,7 +145,7 @@ const UNIT_FLAG_PLAYER_CONTROLLED: u32 = 0x8;
 /// rank, so the comparison is against 4 directly — **neutral fails**.
 ///
 /// The player-controlled arm (`0x60673e`–`0x60679f`) keys on an `[obj+0xe68]` record whose fields
-/// wow-re did **not** name, so it is deliberately NOT modelled: a player-controlled unit takes the
+/// are **not** named, so it is deliberately NOT modelled: a player-controlled unit takes the
 /// permissive answer here. That is conservative in the only direction that matters (it shows what
 /// we already showed) and it keeps the un-derived arm out of the one place it could silently blank
 /// a player's or a pet's buffs.

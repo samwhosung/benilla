@@ -1,6 +1,6 @@
 //! The mouseover pick — which unit is under the cursor, recomputed each frame into
-//! [`super::Hovered`] the way the real client finds it (wow-re pick-volume RE `bd630be` +
-//! `31562f1d`): a **broad phase** ray-vs-sphere on the current animation's bounds, then a
+//! [`super::Hovered`] the way the real client finds it (`CGWorldFrame` pick `0x481190` →
+//! `0x7089c0`): a **broad phase** ray-vs-sphere on the current animation's bounds, then a
 //! **narrow phase** ray-vs-triangle against the unit's **posed render mesh**, with the
 //! reference's generous +1-model-unit halo retry when nothing hits exactly. The selection /
 //! interaction story that consumes the verdict lives in the [`super`] module doc.
@@ -28,7 +28,7 @@ use benilla_world::view::WorldCamera;
 use super::{Hovered, HoveredObject, PickOcclusion};
 
 /// Trace this frame's **world-occlusion distance** (the reference's `CWorld::Intersect` leg of the
-/// scene trace `0x480df0` — wow-re selection-circle PART 3, §5-cross-checked 2026-07-20): one
+/// scene trace `0x480df0`): one
 /// physics ray from the cursor through the [`PickOccluder`] set (terrain, the WMO walk-bake faces
 /// ≈ the byte-decoded `0x84` reject-mask, static doodad hulls). Both object picks below run
 /// **unbounded** and post-compare against it — the reference discards the object hit iff the world
@@ -76,8 +76,7 @@ pub(super) fn update_pick_occlusion(
 /// object's CM2 **attachment tree** — `[model+0x1dc]` list head → `[+0x1e4]` sibling, the same two
 /// fields the dress and paperdoll lanes walk — and calling the registrar `0x713cb0` on *each* model
 /// it finds, all under one candidate node. So the ray tests the held axe's own triangles and the
-/// hit comes back as the unit holding it (wow-re `object-layer/scratch/selection-circle.md` §3 +
-/// `ui/scratch/paperdoll-liveness-law.md`).
+/// hit comes back as the unit holding it.
 ///
 /// Takes the worn roots as a plain slice rather than the `HeldAttached` that supplies them, so the
 /// rule is testable without building one. `pub(crate)` for the **census**
@@ -109,8 +108,8 @@ pub(super) struct PickPose<'w, 's> {
     rigs: Query<'w, 's, &'static benilla_world::rig_palette::RigSkin>,
 }
 
-/// Recompute the unit under the cursor each frame — the real client's two-phase pick (wow-re
-/// pick-volume RE `bd630be` + `31562f1d`): **broad** = the cursor ray vs the *current animation's*
+/// Recompute the unit under the cursor each frame — the real client's two-phase pick (the
+/// resolve `0x7089c0`): **broad** = the cursor ray vs the *current animation's*
 /// bounds sphere (world-placed + world-scaled, no pad); **pass 1** = the ray vs the unit's **posed
 /// render mesh** (each drawn vertex skinned through the live joint pose, per-triangle), nearest
 /// world-distance hit wins; **pass 2, only when pass 1 hit nothing anywhere** (the mouse pick's
@@ -264,8 +263,7 @@ pub(super) fn update_hover(
         // attachment tree (`[model+0x1dc]` list head → `[+0x1e4]` sibling — the same two fields
         // the dress and paperdoll lanes walk) and registers each child model into the pick scene
         // under the SAME candidate node, so a ray that strikes the axe resolves to the unit
-        // holding it (wow-re `object-layer/scratch/selection-circle.md` §3 +
-        // `ui/scratch/paperdoll-liveness-law.md`; decision 1658). Ours tested the body alone,
+        // holding it (decision 1658). Ours tested the body alone,
         // which is why a Naxxramas weapon mob — an `InvisibleStalker` body that draws nothing,
         // whose entire visible self is the weapon in its hand — could only be targeted through
         // its name plate.
@@ -311,8 +309,7 @@ pub(super) fn update_hover(
                     pose.palettes.world_palette(rig.slot, rig.bones() as usize)
                 })
             };
-        // The halo ladder (alive 3 / dead 2), with the corpse rung now **byte-verified** rather
-        // than guessed (wow-re `corpse-click-and-reclaim.md` Q6, folding back into 1723's open
+        // The halo ladder (alive 3 / dead 2), with the corpse rung no longer guessed (1723's open
         // question): `0x480c90`'s arm at `0x480cec` scores a corpse **2 when
         // `CORPSE_DYNFLAG_LOOTABLE`, else 0** — the same rung as a dead unit when there is
         // something to take, and the floor otherwise. 1723 guessed a flat 1; this replaces it.
@@ -496,7 +493,7 @@ pub(super) fn update_hover(
 /// ungraded state by anything that forgot to order after `TargetUpdate` — a one-frame tooltip pop
 /// for a unit that must never have one. Written once, already graded, that state does not exist.
 ///
-/// wow-re `object-layer/scratch/not-selectable-mouse-refusal.md`; decision 2060.
+/// Decision 2060.
 #[allow(clippy::type_complexity)] // the picker's own root query, borrowed as-is
 fn selectable_pick(
     entity: Entity,
@@ -531,7 +528,7 @@ fn selectable_pick(
 /// handful of GO parts on screen are in the pick set.
 ///
 /// **Two passes, like the unit pick** (decision 1071 — GameObjects are the same type-1 candidates
-/// as units in the reference's resolve `0x7089c0`, wow-re object-layer mouse-pick): **pass 1** =
+/// as units in the reference's resolve `0x7089c0`): **pass 1** =
 /// the exact resident mesh, pure nearest-wins; **pass 2, only when pass 1 hit nothing anywhere**
 /// (the mouse pick's generous retry): the same geometry with every vertex displaced +1 model-unit
 /// along its authored normal — a ~1-yd halo, which is what makes a wispy herb clickable *around*
@@ -590,8 +587,8 @@ const NET_WALK_HOPS: usize = 64;
 /// card swallowed nearly every ray and only the sliver of bowl around it ever answered.
 ///
 /// The reference has no such split to reconcile: the resolve `0x7089c0`'s narrow phase walks the
-/// ONE model's render batches — *"the actual visible RENDER MESH, posed to the current animation"*,
-/// billboard batch included, skinned through the live bone matrices (wow-re `object-layer.md`) — so
+/// ONE model's render batches — the actual visible RENDER MESH, posed to the current animation,
+/// billboard batch included, skinned through the live bone matrices — so
 /// a hit on the shaft **is** a hit on the GameObject, which is what this restores.
 fn net_entity_of(
     e: Entity,

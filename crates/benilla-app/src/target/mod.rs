@@ -9,7 +9,7 @@
 //!   server round-trip). Sending [`ClientCommand::SetSelection`] just informs the server, which records
 //!   it in our `UNIT_FIELD_TARGET` and relays it to observers.
 //! - **Hover** ([`hover::update_hover`]) — each frame, the unit under the cursor, found the way the real
-//!   client finds it (wow-re pick-volume RE `bd630be`, §5-verified: `CGWorldFrame` pick `0x481190` →
+//!   client finds it (`CGWorldFrame` pick `0x481190` →
 //!   `0x7089c0`): a **broad phase** ray-vs-sphere on the *current animation sequence's* bounds
 //!   (world-placed + scaled, no pad), then a **narrow phase** ray-vs-triangle against the unit's
 //!   **posed render mesh** — the drawn vertices skinned through the live joint pose. Clickable =
@@ -29,8 +29,7 @@
 //! dispatch that would have chosen a cursor never runs. It is the **same predicate** the selection
 //! commit runs (`0x60be60`, reached there through the `+0x58` thunk), not a second rule: no
 //! tooltip, no cursor, no brighten, no click. The pick itself reads no unit field — the flagged
-//! unit is a candidate and wins — which is why this is a grader and not a filter (wow-re
-//! `object-layer/scratch/not-selectable-mouse-refusal.md`; decision 2060).
+//! unit is a candidate and wins — which is why this is a grader and not a filter (decision 2060).
 //!
 //! The mouseover/target "light-up" has two consumers: the per-model **emissive lift**
 //! ([`highlight`], the byte-verified additive term) and the V-plate's reaction-tinted **glow**
@@ -213,7 +212,7 @@ pub(crate) struct HoveredObject {
 /// This frame's **world-occlusion distance** for the mouse pick: the distance along the cursor ray
 /// to the nearest [`benilla_world::collision::PickOccluder`] hit (terrain, the WMO walk-bake ≈ `0x84`
 /// reject-mask faces, static doodad hulls), or `f32::INFINITY` with no hit. The reference's scene
-/// trace (`0x480df0`, wow-re selection-circle PART 3, §5-cross-checked) traces objects unbounded
+/// trace (`0x480df0`) traces objects unbounded
 /// and discards the object hit iff the world hit is *strictly* nearer — a unit or GameObject
 /// behind a wall is not hoverable. Written by [`hover::update_pick_occlusion`] at the head of the
 /// target chain; both picks post-compare their final hit against it.
@@ -238,7 +237,7 @@ impl Default for PickOcclusion {
 /// **The pick latched on the button DOWN edge** — what a world click acts on, frozen at the press.
 ///
 /// The reference picks **exactly once per press** and never again for that gesture: `0x481f00` has
-/// one caller image-wide, on the down edge (wow-re `world-click-drag-arbitration.md` §2), and it
+/// one caller image-wide, on the down edge, and it
 /// writes the whole result into the WorldFrame — pick state `+0x350`, guid `+0x358`, hit point
 /// `+0x360`, distance `+0x36c`. Nothing re-picks on move or on release, so the release acts on what
 /// the **press** was over. That single fact is what lets one gesture orbit the camera *and* select:
@@ -338,8 +337,8 @@ pub(crate) fn go_is_nearest(character: &Hovered, go: &HoveredObject) -> bool {
 
 /// A unit's model-local selection radius — the **Stand-animation footprint** `sqrt(0.5 · sqrt(dx² + dy²))`
 /// (dx/dy = the Stand sequence box's horizontal extents), the exact model-local input the real client's
-/// living-unit ring uses, scaled by `OBJECT_FIELD_SCALE_X` (wow-re selection-ring RE, `0x608e00`/`0x60aee0`,
-/// byte-verified + emulated to the reference pixels). Stamped at attach ([`crate::entities`]); the ring's
+/// living-unit ring uses, scaled by `OBJECT_FIELD_SCALE_X` (`0x608e00`/`0x60aee0`, emulated to the
+/// reference pixels). Stamped at attach ([`crate::entities`]); the ring's
 /// world radius is this × the unit's transform scale (which is SCALE_X). Absent on model-less (cube) units,
 /// which fall back to the ring's fallback radius.
 #[derive(Component, Clone, Copy)]
@@ -383,9 +382,9 @@ impl Default for ClickConfig {
 /// the two shared assist tails. `CanAssist 0x6066f0` is *not* on this path (verified negative over
 /// all 25 of its call sites).
 ///
-/// **Registered default `"0"`, so nothing changes until a player asks for it.** That number cost
-/// wow-re a correction it records against itself: its first pass read `"3"` off the *next*
-/// registration's default (`minimapZoom`), the `mov ds:` adjacency trap.
+/// **Registered default `"0"`, so nothing changes until a player asks for it** (`0x48fc50`).
+/// Reading `"3"` for it is the `mov ds:` adjacency trap: that is the *next* registration's
+/// default (`minimapZoom`).
 #[derive(Resource, Default)]
 pub(crate) struct AssistAttack(pub(crate) bool);
 

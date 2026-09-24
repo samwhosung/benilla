@@ -1,5 +1,4 @@
-//! The mouseover / target **model brighten** — the real client's per-model highlight emissive
-//! (wow-re `object-layer/scratch/selection-circle.md` PART 2, §5 cross-checked).
+//! The mouseover / target **model brighten** — the real client's per-model highlight emissive.
 //!
 //! The reference pushes it on hover/target *change*, never a per-frame compare: the mouseover
 //! publisher and the target setter call `SetHighlight 0x614550` / `ClearHighlight 0x6144f0` with a

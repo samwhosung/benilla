@@ -1,6 +1,5 @@
 //! The melee combat flash — the pulsing **red ↔ orange** tint on the current target's selection
-//! ring and overhead name while the local player is auto-attacking it (wow-re object-layer
-//! `combat-flash.md`, §5-verified 2026-07-06).
+//! ring and overhead name while the local player is auto-attacking it.
 //!
 //! The flag law: `[unit+0xc58]` bit 0x10 is **recomputed every frame** in CGUnit's OnUpdate
 //! (`0x607f60` set / `0x607fe2` clear; whole-binary census — no packet touches it). Set iff the

@@ -1,8 +1,7 @@
 //! Selection **by name** — the shared resolver behind `/target` and `/assist` (decision 0886).
 //!
 //! The reference has ONE resolver, `0x493aa0`, parameterised per caller; `/target`, `/assist` and
-//! `/follow` are the same search with different arguments (wow-re
-//! `object-layer/scratch/targeting-by-name.md`, §5-cross-checked):
+//! `/follow` are the same search with different arguments:
 //!
 //! | binding | typemask | filter mode | exact-only |
 //! |---|---|---|---|
@@ -48,8 +47,8 @@
 //!
 //! [`Rank::beats`] is instead a **total order** — exact beats any prefix, then longer prefix, then
 //! strictly nearest — which is deterministic and picks the nearest of several same-named kobolds.
-//! wow-re's note calls the reference behaviour here "the single behaviour most likely to look like a
-//! bug in a reimplementation". Reproducing it is now *possible* (stamp each net entity with a
+//! The reference behaviour here is the single behaviour most likely to look like a bug in a
+//! reimplementation. Reproducing it is now *possible* (stamp each net entity with a
 //! monotonic link sequence, re-stamped on stream-in, and order the walk by it); it is not done
 //! because nearest is the better answer, not because the order is unknown. This is the one place to
 //! change if that judgement is ever reversed.
@@ -283,7 +282,7 @@ impl ByNameScan<'_, '_> {
     }
 
     /// The reference's mode-2 arm (`0x493eca`): `CanAssist` — the reaction ladder at **≥ 4**
-    /// (friendly; wow-re `w2d1` `CanAssist_Unit 0x6066f0`), the mirror of [`scan::can_attack`]'s
+    /// (friendly; `CanAssist_Unit 0x6066f0`), the mirror of [`scan::can_attack`]'s
     /// `≤ 3` — **and** alive.
     fn assistable_alive(&self, store: Option<&ObjectStore>) -> bool {
         if store.is_some_and(|s| s.0.unit_is_dead()) {
@@ -400,7 +399,7 @@ impl ByNameScan<'_, '_> {
 /// A miss leaves the current target **untouched** — verified: neither failure edge in `0x489db4`
 /// calls `SetSelection`, so `/target nosuchname` never clears what you had. The reference does emit
 /// a game message there (ids `0x127` name-not-found / `0xb8` empty name), but the id→string table is
-/// runtime-populated BSS and wow-re could not statically recover the text, so we say nothing rather
+/// runtime-populated BSS and its text is not statically recoverable, so we say nothing rather
 /// than invent a line. That silence is the known deviation on this path.
 pub(super) fn target_by_name_requests(
     mut requests: MessageReader<TargetByNameRequest>,
@@ -463,8 +462,8 @@ pub(super) fn script_target_by_name_requests(
 }
 
 /// Drain `/assist [name]`: find the **basis** unit, read its `UNIT_FIELD_TARGET` (+0x28 off the unit
-/// block — wow-re proved the offset arithmetic against HEALTH and DYNAMIC_FLAGS on the same line),
-/// and select whatever it is pointing at.
+/// block, read by the shared tail `0x489bb2`; the offset arithmetic holds against HEALTH and
+/// DYNAMIC_FLAGS on the same line), and select whatever it is pointing at.
 ///
 /// The bare form is `AssistUnit("target")` in the reference — assist whoever you have selected,
 /// creature or player. The named form resolves **players only**. A basis with no target is a

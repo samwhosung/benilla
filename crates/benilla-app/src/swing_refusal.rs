@@ -64,8 +64,7 @@
 //! [`benilla_protocol::messages::opcode`]: the reference never registers it, and vmangos never
 //! sends it (`Player::SendAttackSwingNotStanding` has zero callers).
 //!
-//! Whole seam §5-verified in wow-re `object-layer/scratch/attackswing-refusal-law.md` (decision
-//! 2037), which corrected three prior glosses of these same addresses.
+//! Decision 2037.
 
 use std::time::Duration;
 
@@ -95,11 +94,8 @@ pub(crate) enum SwingRefusalEdge {
     /// whose first act is the latch clear. **Both** of the reference's gates are applied at the
     /// write site, which is the only place holding the guids: GATE A, the attacker is the local
     /// player (`0x6259a8 test al,al; je`, `0x5fa6d0`), and GATE B, the victim resolves
-    /// (`0x6259b1 test eax,eax; je`). The §5's first pass glossed B away ("any
-    /// ATTACKERSTATEUPDATE with the local player as attacker"); the disassembly it quoted did not,
-    /// and a re-derivation confirmed the reading and corrected the note (wow-re `fc385895`, which
-    /// also proved the leg is entered by fall-through alone — 0 branches into `[0x6259ac,
-    /// 0x6259b7]`, 1 rel32 caller of `0x5ea800`, 0 address-takes).
+    /// (`0x6259b1 test eax,eax; je`). The leg is entered by fall-through alone — 0 branches into
+    /// `[0x6259ac, 0x6259b7]`, 1 rel32 caller of `0x5ea800`, 0 address-takes.
     ///
     /// GATE B is exactly `0x468460(ecx = 8)`, i.e. **"resolves, as a UNIT"** — its two zero
     /// returns are "guid absent from the object index" and "resolved but the type mask misses the
@@ -120,7 +116,7 @@ pub(crate) enum SwingRefusalEdge {
 /// clear sites push, and the value the tick falls through on. The `Duration` is an absolute time,
 /// not a countdown, exactly as the reference stores it.
 ///
-/// The §5 warns a re-implementation modelling this as `(Option<Code>, Instant)` not to assume the
+/// A re-implementation modelling this as `(Option<Code>, Instant)` must not assume the
 /// timestamp is zero when the code is — the reference's clear writes `now`, not `0`. Pairing them
 /// inside the `Option` is how that warning is answered rather than obeyed: there is no timestamp
 /// to be wrong about while the code is absent, and every transition into `Some` writes a fresh
@@ -233,7 +229,7 @@ fn show_swing_refusal(
 }
 
 /// **Entering** the world drops the latch — the reference's `0x5e2510`, reached from
-/// `ClientInitializeGame 0x401570` (`0x401648` → `0x5e253a`), which the §5 pinned to **once per
+/// `ClientInitializeGame 0x401570` (`0x401648` → `0x5e253a`), which runs **once per
 /// world entry, not once per process**. So a fresh world cannot inherit the last one's refusal.
 ///
 /// Nothing else clears it, and never the passage of time: what actually silences a repeating

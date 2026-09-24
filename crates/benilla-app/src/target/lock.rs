@@ -1,11 +1,11 @@
 //! The GameObject **lock chain** — the client's resolver `0x5f83d0`, its per-slot **Action** gate
-//! (`0x5f81d0`), and the §8.8 refusal-toast routing (decisions 0239 / 0545 / **0752**).
+//! (`0x5f81d0`), and the refusal-toast routing (`0x5f3427..`; decisions 0239 / 0545 / **0752**).
 //!
 //! **One chain, two consumers — exactly as the reference.** `CGGameObject`'s per-type strategy
 //! calls the same resolver twice: from **`usable` `0x5f3130`** (which decides the cursor's grayed
-//! twin *and* whether the right-click is sent at all — §4a/§8.7), and from the **USE sender
+//! twin *and* whether the right-click is sent at all), and from the **USE sender
 //! `0x5f33e0`** (which picks between `CMSG_GAMEOBJ_USE`, an `OPEN_LOCK` cast, and a client-local
-//! toast — §8.4). That is why it lives here rather than inside either caller: the icon and the
+//! toast). That is why it lives here rather than inside either caller: the icon and the
 //! click agree by construction only if they ask the same question.
 //!
 //! ## The Action gate — the piece that was missing (0752)
@@ -24,9 +24,8 @@
 //! `0x5f850f` compares the matched spell's own OPEN_LOCK **effect value**
 //! ([`benilla_formats::SpellDisplay::open_lock_skill`]) against the slot's requirement — which is
 //! `Skill[i]`, or **`GAMEOBJECT_LEVEL × 5`** when `Skill[i]` is zero (`0x5f84be`). The sentence
-//! that used to stand here — "it never reads the skill block" — was `cursor-system.md` §8.8's
-//! absolute, and wow-re REFUTED it at the bytes (`openlock-spell-store-order.md` §4a,
-//! 2026-08-14): the value's level term routes through the CGPlayer vtable (`0x6e384d → 0x6e3130
+//! that used to stand here — "it never reads the skill block" — is wrong at the bytes: the
+//! value's level term routes through the CGPlayer vtable (`0x6e384d → 0x6e3130
 //! → [vtbl+0xa8] = 0x5ea690`) into `PLAYER_SKILL_INFO` for the spell's own SkillLineAbility
 //! line ([`spell_skill_value`]). At skill cap the two readings coincide (`skill/5 == level`),
 //! which is how the old one survived every at-cap cross-check while a level-60 with 1 Mining
@@ -118,7 +117,7 @@ pub(crate) fn go_facts(go: Option<(&ObjectStore, u32)>) -> GoFacts {
 }
 
 /// `GO_FLAG_LOCKED` (vmangos `GameObjectFlags`) — the wire bit that both selects the Action-1
-/// ("unlock") slots and arms `usable`'s lock check (§8.8, `0x5f32a6`).
+/// ("unlock") slots and arms `usable`'s lock check (`0x5f32a6`).
 pub(crate) const GO_FLAG_LOCKED: u32 = 0x2;
 
 /// The client's lock resolver **`0x5f83d0`**, transcribed (decision 0752).
@@ -127,8 +126,8 @@ pub(crate) const GO_FLAG_LOCKED: u32 = 0x2;
 /// - **SKILL (2)** — gate on [`LockSlot::available`], then linear-scan the player's known spells
 ///   for one whose `SPELL_EFFECT_OPEN_LOCK` `EffectMiscValue` equals the slot's `Index`; the first
 ///   such match sets `matched_spell` unconditionally (`0x5f84f8`, *before* the rank test — that
-///   nonzero-ness is §8.8's `0xdf`-vs-`0xe0` discriminator), then the spell's effect value is
-///   compared against the requirement (`0x5f850f`). Sufficient → satisfied.
+///   nonzero-ness is the toast routing's `0xdf`-vs-`0xe0` discriminator), then the spell's effect
+///   value is compared against the requirement (`0x5f850f`). Sufficient → satisfied.
 /// - **KEY (1)** — gate the same way, then look for the key item in our bags/keyring.
 /// - **NONE (0)** — skipped without marking the lock real.
 ///
@@ -205,8 +204,8 @@ pub(crate) fn resolve_lock(
     }
 }
 
-/// The player's skill value for `spell_id`'s own line — the opener-value level term's source
-/// (wow-re `openlock-spell-store-order.md` §4a): `0x5ea690` hops spell → SkillLineAbility line
+/// The player's skill value for `spell_id`'s own line — the opener-value level term's source:
+/// `0x5ea690` hops spell → SkillLineAbility line
 /// (`0x6de040`, `[+4]`), then `0x5ea520` scans `PLAYER_SKILL_INFO` (`PLAYER_SKILL_INFO_1_1 +
 /// 3·slot`) and returns value **plus both bonus halves** (`0x5ea56d`/`0x5ea578`/`0x5ea580`).
 /// Every absent leg is fail-closed like the reference's null paths: no catalog, no store, no
@@ -424,7 +423,7 @@ mod tests {
         assert_eq!(required_skill(&skill_slot(1, 280, 1), 60), 280);
     }
 
-    /// **The 1320 bug, fixed** (wow-re `openlock-spell-store-order.md` §4a): the opener's level
+    /// **The 1320 bug, fixed**: the opener's level
     /// term is the player's SKILL in the spell's own line, never their character level — so a
     /// level-60 with 1 Mining is refused by a 250-skill vein the old caster-level reading handed
     /// them. Also pins the two fail-closed legs (`0x623b70`-style: absent data reads skill 0)
@@ -652,8 +651,8 @@ mod tests {
 
         // Pick Lock sits on an Action 1 slot, so the flag *selects* it — but with no store and no
         // skill-line catalog the skill reads 0 (the fail-closed leg), Pick Lock provides its flat
-        // 5, and 5 < 280 refuses. The out-param is still written, which is §8.8's
-        // `0xdf`-vs-`0xe0` discriminator. (The satisfied-by-skill path is
+        // 5, and 5 < 280 refuses. The out-param is still written (`0x5f84f8`), which is the toast
+        // routing's `0xdf`-vs-`0xe0` discriminator. (The satisfied-by-skill path is
         // `the_lock_value_tracks_the_players_skill_not_their_level` below.)
         let mut matched = None;
         assert_eq!(

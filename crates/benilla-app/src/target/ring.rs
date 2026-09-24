@@ -1,7 +1,7 @@
 //! The ground selection ring — a projected decal under the current target, reaction-coloured.
 //!
-//! **Geometry: the reference's own mechanism** ([`project_ring`], wow-re selection-circle RE — the
-//! collector is byte-verified terrain + WMO, flags `0x200122`, no walkability test): the actual
+//! **Geometry: the reference's own mechanism** ([`project_ring`] — the collector `0x6723b0` is
+//! terrain + WMO, flags `0x200122`, no walkability test): the actual
 //! surface triangles inside the ring's box — terrain tiles + WMO faces
 //! ([`GroundDecalSurface`]), **never** doodads/GameObjects — clipped to the box and textured
 //! top-down, so the ring is pixel-coplanar with the visible ground, drapes down steps/ledges like
@@ -23,13 +23,13 @@
 //! standing with them), else the faction-template comparator
 //! ([`benilla_formats::FactionTemplate::reaction_toward`], the byte-exact `0x606640`), evaluated as
 //! the **unit's** reaction toward the local player (byte-verified direction). Death **clears the
-//! target** on the alive→dead transition — the reference's own mechanism, byte-verified (wow-re
-//! selection-death-clear RE): the health mirror's death edge fires the CGUnit death handler
+//! target** on the alive→dead transition — the reference's own mechanism: the health mirror's
+//! death edge fires the CGUnit death handler
 //! (`0x605860`), which clears a matching selection and sends `CMSG_SET_SELECTION 0`.
 //!
 //! Still *interim*: the vertical fade profile on stretched (wall/ledge) pieces is capture-matched —
-//! the reference's edge-fade grid (`0x6147f0`) is byte-located but its ramp is underived (open RE
-//! item). The ring appears at full brightness the instant of selection — director-verified and
+//! the reference's edge-fade grid (`0x6147f0`) is byte-located but its ramp is underived (an open
+//! question). The ring appears at full brightness the instant of selection — director-verified and
 //! byte-confirmed (the retracted "2 s selection fade-in" note was a misread of the *scale-change*
 //! easing, see [`crate::net::NetEntity`]; no fade arms on any selection path). The selector's
 //! **first-priority branch** — the melee combat flash (`[unit+0xc58]` bit 0x10, the red↔orange
@@ -80,15 +80,15 @@ pub(super) struct RingAssets {
     texture: Handle<Image>,
 }
 
-/// The reference's ground selection-circle texture (`Textures\UnitSelectTexture.blp`, wow-re
-/// selection-circle RE) — a white ring, sampled top-down, tinted + additively blended below.
+/// The reference's ground selection-circle texture (`Textures\UnitSelectTexture.blp`, loaded at
+/// `0x6146d0`) — a white ring, sampled top-down, tinted + additively blended below.
 const RING_TEXTURE: &str = "mpq://textures/unitselecttexture.blp";
 /// Model-local ring radius for a unit with **no model at all** (a cube fallback), since it has no M2
 /// footprint to measure. The reference's own degenerate-box constant (decision 1658) rather than a
 /// number of ours: a body whose box measures zero and a body with no box are the same question, and
 /// `0x60aee0` answers it with 1.2.
 const RING_FALLBACK_RADIUS: f32 = benilla_formats::DEGENERATE_RING_FOOTPRINT;
-/// The ring's own palette — **trace + byte verified end-to-end** (wow-re selection-circle §5, the
+/// The ring's own palette (the
 /// `CGUnit::GetSelectionCircleColor` selector `0x605960`, per-object vtable `+0x2c`; the dword is
 /// written verbatim as every decal vertex's diffuse, alpha 255 — no tint global, no tex-env
 /// constant). The ring does **not** use the nameplate palette: player-blue is the pale
@@ -283,9 +283,9 @@ pub(super) fn update_ring(
     // (net motion ran in `WorldStage::Net`), avoiding the 1-frame lag a `GlobalTransform` read
     // would add. Tupled into one param (the 16-param ceiling): `.0` the target's own components;
     // `.1` the mounted footprint source — while a mount model is attached, the ring reads the
-    // MOUNT's Stand-box footprint at the mount's rendered scale (VERIFIED wow-re
-    // `mount-composition.md`: the `+0xcf0` ring cache recomputes from the mount model's Stand
-    // box, `0x60ce70` tail → `0x60aee0`; the scale law is B3 —
+    // MOUNT's Stand-box footprint at the mount's rendered scale (the `+0xcf0` ring cache
+    // recomputes from the mount model's Stand
+    // box, `0x60ce70` tail → `0x60aee0`; the rendered scale is
     // `SCALE_X × CreatureDisplayInfo.creatureModelScale`, and the child's `NetEntity.scale`
     // carries exactly the CDI column).
     //
@@ -375,7 +375,7 @@ pub(super) fn update_ring(
                 // already-dead corpse reads dead on stream-in.
                 let is_dead = store.is_some_and(|s| s.0.unit_is_dead());
                 // Death clears the target on the alive→dead *transition* — the reference's own
-                // mechanism, byte-verified (wow-re selection-death-clear RE): the health mirror-
+                // mechanism: the health mirror-
                 // handler's death edge (`0x6046f0`, new ≤ 0 while old > 0) fires the CGUnit death
                 // handler `0x605860`, which clears a matching selection via SetSelection(0) and
                 // sends `CMSG_SET_SELECTION 0` — exactly what `clear` does. Edge-only, like the
@@ -426,8 +426,8 @@ pub(super) fn update_ring(
             // The target is no longer an object (destroyed or streamed out — torn down, its model
             // perhaps still fading; or despawned outright): clear, informing the server — the
             // reference's teardown does exactly this for both removal paths (object deactivate →
-            // the selection clear + `CMSG_SET_SELECTION 0`, byte-verified — wow-re
-            // selection-death-clear RE; this is also what drops a selected corpse at respawn, when
+            // the selection clear + `CMSG_SET_SELECTION 0`, `0x5fbb60` → `0x493910`; this is also
+            // what drops a selected corpse at respawn, when
             // the server destroys it ahead of the fresh create).
             Err(_) => {
                 clear(&mut selection, &mut seam, !engaged.is_empty());
@@ -462,20 +462,20 @@ fn ring_fade_angle(camera: &Query<&GlobalTransform, With<WorldCamera>>) -> Optio
     Some(-std::f32::consts::FRAC_PI_2 - flat.z.atan2(flat.x))
 }
 
-/// Rebuild the ring mesh as a **projected decal** — the reference's actual mechanism (wow-re
-/// selection-circle RE §2: clip world geometry to the projection box, texture it top-down), via
+/// Rebuild the ring mesh as a **projected decal** — the reference's actual mechanism (clip world
+/// geometry to the projection box, texture it top-down), via
 /// the shared projector ([`benilla_world::decal::WorldDecal::project`] — the blob shadow rides the same emit
 /// chain, `0x6d7330 → 0x6d6fa0 → 0x6d7480`). The ring's box: the *rotated* texture square
 /// (half-extent `s` = radius, yawed by the camera fade angle — the clip frame is exactly the
-/// texture frame, so UVs stay in `[0,1]`) × the byte-verified vertical half-range **2s** (the
-/// unit ring's box corners are `center±s` horizontal, `center±2s` vertical — wow-re `0x608e00`).
+/// texture frame, so UVs stay in `[0,1]`) × the vertical half-range **2s** (the
+/// unit ring's box corners are `center±s` horizontal, `center±2s` vertical — `0x608e00`).
 /// Vertex alpha is the vertical trapezoid fade: full within ±0.5s of the feet, ramping to 0 at
 /// the box's ±2s — so a smear up a wall / down a ledge dims with height the way the director's
 /// reference capture shows, instead of ending in a hard clip line. *Interim profile*: the
 /// reference's edge-fade alpha grid is byte-located (`0x6147f0`) but its exact ramp is unrecorded
-/// (open RE item). Runs every shown frame (target moves, camera yaws); the per-surface BVH makes
-/// the gather O(log n + k). Returns `false` when nothing was gathered (no ground in the box) —
-/// the caller hides the ring, the reference's no-ground gate.
+/// (an open question). Runs every shown frame (target moves, camera yaws); the per-surface BVH
+/// makes the gather O(log n + k). Returns `false` when nothing was gathered (no ground in the box)
+/// — the caller hides the ring, the reference's no-ground gate.
 fn project_ring(
     out: &mut Vec<EffectVertex>,
     decals: &WorldDecal<'_, '_>,
@@ -653,9 +653,8 @@ fn ffa_reaction(
 }
 
 /// `UNIT_FIELD_FLAGS` bits `CanAttack` (`0x606980`) tests on its TARGET, any one of which refuses
-/// the attack outright — byte-verified at `0x6069b7`–`0x6069ff` (wow-re
-/// `object-layer/scratch/nameplate-category-gate.md` §3b). **The bit NUMBERS are VERIFIED; the
-/// vanilla names are not** (three wow-re workers hunted for a labelled consumer of bit 9 and found
+/// the attack outright — at `0x6069b7`–`0x6069ff`. **The bit NUMBERS are the binary's; the
+/// vanilla names are inferred, not confirmed** (a hunt for a labelled consumer of bit 9 found
 /// none), so nothing here is written in terms of a name — 1 `0x2`, 7 `0x80`, 16 `0x10000`,
 /// 20 `0x100000`, 25 `0x2000000`.
 const CANNOT_BE_ATTACKED: u32 = 0x2 | 0x80 | 0x1_0000 | 0x10_0000 | 0x200_0000;
@@ -667,8 +666,7 @@ const IMMUNE_TO_UNCONTROLLED: u32 = 0x200;
 /// on its target (`0x606b5c`).
 const UNIT_FLAG_PVP: u32 = 0x1000;
 
-/// The **local player's** reaction toward a unit — `0x6061e0(this = localPlayer, arg = unit)`,
-/// byte-verified (wow-re `nameplate-category-gate.md` §5 leg 3 + §8a, §5 cross-checked 2026-08-22).
+/// The **local player's** reaction toward a unit — `0x6061e0(this = localPlayer, arg = unit)`.
 ///
 /// **This is NOT [`ring_reaction`] with the arguments swapped, and that is the whole point.** The
 /// two directions take genuinely different code inside `0x6061e0`, and the client uses both:
@@ -746,9 +744,9 @@ pub(crate) fn at_war_with(
     )
 }
 
-/// `CGUnit::CanInteract(this = the local player → arg = unit)` — `0x6067f0`, byte-verified
-/// complete (disassembly read at `0x6067f0`–`0x606871`; wow-re `ui/scratch/cursor-system.md` §3 +
-/// `cursor-decomp`, and the register set-up confirmed at every call: `0x4822f2 push esi(unit); mov
+/// `CGUnit::CanInteract(this = the local player → arg = unit)` — `0x6067f0`, complete
+/// (disassembly read at `0x6067f0`–`0x606871`, and the register set-up confirmed at every
+/// call: `0x4822f2 push esi(unit); mov
 /// ecx,edi(player); call 0x606880`, then `0x60691d push esi(unit); mov ecx,edi(player); call
 /// 0x6067f0`).
 ///
@@ -793,13 +791,12 @@ pub(crate) fn can_interact_from_player(
         && reaction_from_player(factions, reputations, target_store, self_store) >= NEUTRAL
 }
 
-/// `CGUnit::CanAttack(this = the local player → arg = unit)` — `0x606980`, byte-verified complete
-/// (wow-re `nameplate-category-gate.md` §3, §5 cross-checked 2026-08-22). Every leg, in the
-/// binary's order.
+/// `CGUnit::CanAttack(this = the local player → arg = unit)` — `0x606980`, complete. Every leg, in
+/// the binary's order.
 ///
 /// This is the predicate the V-plate category actually turns on (see [`plate_is_friendly`]), and
-/// it is deliberately **not** a reaction threshold: §3b lists six shipped ways it disagrees with
-/// one, including an unflagged opposite-faction player on a PvE realm (hostile reaction, cannot be
+/// it is deliberately **not** a reaction threshold: it disagrees with one in six shipped ways,
+/// including an unflagged opposite-faction player on a PvE realm (hostile reaction, cannot be
 /// attacked → friendly plate) and a same-faction duel opponent (friendly reaction, can be attacked
 /// → enemy plate).
 pub(crate) fn can_attack_from_player(
@@ -880,11 +877,10 @@ pub(crate) fn faction_group_mask(
     )
 }
 
-/// `CanCooperate(this = the local player → arg = unit)` — `0x606ba0`, byte-verified (wow-re
-/// `nameplate-category-gate.md` §2a): the two `FactionTemplate` rows' **faction-group masks**
+/// `CanCooperate(this = the local player → arg = unit)` — `0x606ba0`: the two `FactionTemplate`
+/// rows' **faction-group masks**
 /// (`row + 0xc`) being equal, with neither side mind-controlled and the two not being the same
-/// unit. It reads no party or raid state — a committed wow-re note called it a party/raid predicate
-/// and was corrected by the same round.
+/// unit. It reads no party or raid state.
 pub(crate) fn can_cooperate_with_player(
     factions: Option<&Factions>,
     target_store: Option<&ObjectStore>,
@@ -914,8 +910,8 @@ pub(crate) fn can_cooperate_with_player(
     resolved.unwrap_or(false)
 }
 
-/// **The V-plate category** — `0x60f6b7`–`0x60f6f1`, byte-verified (wow-re
-/// `nameplate-category-gate.md` §2). `true` = the FRIENDLY bucket (Shift-V's bit `0x8`), `false` =
+/// **The V-plate category** — `0x60f6b7`–`0x60f6f1`. `true` = the FRIENDLY bucket (Shift-V's bit
+/// `0x8`), `false` =
 /// the ENEMY bucket (V's bit `0x1`). There is no reaction rank anywhere in this expression.
 ///
 /// > A unit lands in the FRIENDLY category iff — for a non-player subject —
@@ -1113,7 +1109,7 @@ mod tests {
              directions, and this disagreement is the reference's own"
         );
 
-        // **The discriminating population** (wow-re §7: 36 shipped templates where the at-war leg
+        // **The discriminating population** (36 shipped templates where the at-war leg
         // and the mask comparison disagree). Booty Bay's mask answer is 3 — so if this read as
         // enemy-category we would be back on the comparator, and the at-war leg would be fiction.
         let goblin = unit(120);
@@ -1138,8 +1134,8 @@ mod tests {
     /// **Cenarion Circle** NPC with no gossip drew the ATTACK sword at neutral standing, with the
     /// faction not set to war.
     ///
-    /// Cenarion Circle is faction 609, reputation slot 36 — one of the 36 templates wow-re's §7
-    /// measured as decided entirely by the at-war bit, and one 1530 named while correcting the
+    /// Cenarion Circle is faction 609, reputation slot 36 — one of the 36 shipped templates
+    /// decided entirely by the at-war bit, and one 1530 named while correcting the
     /// plate category alone. The cursor and `relations::can_attack` kept the reaction *threshold*,
     /// which reads the OTHER direction (the standing, 0 → neutral → "≤ 3 is attackable"), so the
     /// sword came back for every one of those factions.
@@ -1233,9 +1229,9 @@ mod tests {
     /// **The PLAYER subject** — the arm 1530 landed and left unpinned, on the real DBC.
     ///
     /// A player is friendly-category only if `CanCooperate` ALSO says yes, and that predicate is
-    /// pure `FactionTemplate` faction-group-mask equality (§2a). So the arm turns entirely on one
-    /// number — `group_mask` 3 for every Alliance race template, 5 for every Horde one — and the
-    /// interesting population is the templates that carry NEITHER.
+    /// pure `FactionTemplate` faction-group-mask equality (`0x606ba0`). So the arm turns entirely
+    /// on one number — `group_mask` 3 for every Alliance race template, 5 for every Horde one — and
+    /// the interesting population is the templates that carry NEITHER.
     ///
     /// **`35` is that template, and it is what a vmangos test realm hands you**: `.gm on` calls
     /// `Player::SetGameMaster(true)` → `SetFactionTemplateId(35)` (vmangos `Player.cpp:2656`), whose
@@ -1303,7 +1299,7 @@ mod tests {
         assert!(npc_category(&npc(12), &gm), "the guard keeps his bucket");
         assert!(!npc_category(&npc(14), &gm), "and the mob keeps his");
 
-        // The predicate's first leg (§2a `606ba6`): nobody cooperates with themselves.
+        // The predicate's first leg (`606ba6`): nobody cooperates with themselves.
         assert!(!can_cooperate_with_player(
             Some(&factions),
             Some(&me),
@@ -1312,7 +1308,8 @@ mod tests {
     }
 
     /// `CanAttack`'s flag disqualifiers put a unit in the FRIENDLY bucket **at any reaction** — the
-    /// class of case a rank threshold gets wrong in the other direction (wow-re §3b). Asserted on
+    /// class of case a rank threshold gets wrong in the other direction (`0x6069b7`–`0x6069ff`).
+    /// Asserted on
     /// the mask path (a Monster-faction template, hostile by reaction) so the reaction is
     /// unambiguously hostile and only the flag can be doing the work.
     #[test]
@@ -1360,8 +1357,8 @@ mod tests {
     /// fading.** The reference's two teardown routes (`SMSG_DESTROY_OBJECT`, the OUT_OF_RANGE
     /// block) both reach `0x464920` → OnDeactivate `0x5fbb60` → `0x493910`, which clears a
     /// matching selection and sends `CMSG_SET_SELECTION 0` on the spot; only the detached model
-    /// survives into the `SWModelFadeout` scheduler (wow-re `selection-death-clear.md` Q2,
-    /// decision 2198). Driven through the real handler table on the built client, then the real
+    /// survives into the `SWModelFadeout` scheduler (decision 2198). Driven through the real
+    /// handler table on the built client, then the real
     /// ring and the real nearest-enemy scan, one pass each — no fade time elapses.
     mod teardown {
         use benilla_protocol::field::{

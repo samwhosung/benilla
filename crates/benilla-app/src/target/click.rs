@@ -12,10 +12,9 @@ use super::lock::GoLockInputs;
 use super::*;
 
 /// The **right-click cursor-payload leg** — the reference's WorldFrame click router (`0x481f60`
-/// → object leg `0x492ce0` / terrain leg `0x492c90` / nothing leg `0x492d30`; decision 0571,
-/// §5-cross-checked as wow-re cursor-dragdrop-payload.md §11 / decision 0574), transcribed onto
-/// the camera arbiter's clean-click message (a drag/turn never routes here, exactly the ref's
-/// click-not-drag gate `0x514ae0`):
+/// → object leg `0x492ce0` / terrain leg `0x492c90` / nothing leg `0x492d30`; decision 0571 /
+/// decision 0574), transcribed onto the camera arbiter's clean-click message (a drag/turn never
+/// routes here, exactly the ref's click-not-drag gate `0x514ae0`):
 ///
 /// - a **right-click over empty world** (terrain OR nothing): ANY payload clears silently — no
 ///   popup, no packet (both legs' action-4 arm: `ClearCursor(1,1)` unconditionally). This is
@@ -166,8 +165,8 @@ pub(super) fn select_on_click(
         .unwrap_or((None, false));
     match (hovered.target, hovered.guid) {
         (Some(entity), Some(guid)) => {
-            // The NPC greets us on the SELECT gesture — the byte-verified trigger (wow-re
-            // `npc-greeting.md`: the variation-cycling greeter `0x60c270` fires "before SetTarget",
+            // The NPC greets us on the SELECT gesture — the reference's trigger (the
+            // variation-cycling greeter `0x60c270` fires before SetTarget,
             // i.e. on the left-click select, NOT the right-click interact — director-confirmed:
             // left-click greets and repeat left-clicks cycle, right-click does nothing). Fired on
             // EVERY select click on a unit (not gated on a selection change) so re-clicking the
@@ -223,8 +222,7 @@ pub(super) fn select_on_click(
 ///
 /// Three of the reference's fourteen arms need something other than "send this opcode": bit 1
 /// reads the target's cached questgiver status as its second conjunct, and bits 5 and 7 raise a
-/// client-side CONFIRM dialog and send nothing at all (wow-re
-/// `object-layer/scratch/interact-dead-fork-and-npc-service-ladder.md` §C).
+/// client-side CONFIRM dialog and send nothing at all (`0x5f0130`'s ladder).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ServiceArms<'w> {
     /// `[unit+0xcb8]`'s mirror — the last `SMSG_QUESTGIVER_STATUS` per guid, which the bit-1 arm's
@@ -264,10 +262,10 @@ pub(crate) struct ServiceArms<'w> {
 /// So **right-clicking the NPC whose window is already open does nothing at all**: no packet, no
 /// error, and no talk gesture — the gesture lives at the tail of each arm, and no arm runs.
 ///
-/// `[0xb4e2d0]` is the `"npc"` UnitID token (wow-re `ui/scratch/unit-token-grammar.md` §4.1 row 9),
-/// and the timing is what makes this safe to transcribe: an image-wide census of the two write
-/// sites — the arm at `0x493114` inside `SetInteractionNPC 0x4930d0`, and `0x49334b`'s clear inside
-/// `0x493310` — finds **fourteen callers of the setter, none of them on the click path**. Every one
+/// `[0xb4e2d0]` is the `"npc"` UnitID token, and the timing is what makes this safe to transcribe:
+/// an image-wide census of the two write sites — the arm at `0x493114` inside
+/// `SetInteractionNPC 0x4930d0`, and `0x49334b`'s clear inside `0x493310` — finds
+/// **fourteen callers of the setter, none of them on the click path**. Every one
 /// is a window *opener*, armed when the server's reply lands. The first click therefore always gets
 /// through (nothing is open yet); only a re-click while the window stands is eaten. That is exactly
 /// the set [`crate::ui_session::feed_interact_npc`] collapses, which is why this reads that
@@ -278,8 +276,8 @@ fn interaction_already_open_on(target: u64, interact: &crate::ui_session::Intera
 }
 
 /// On a clean right-*click* (vanilla's context action — [`WorldRightClick`], never a turn-drag):
-/// select the hovered unit, then act by the same classification the cursor used (wow-re
-/// cursor-system.md §6). Three branches (decision 0081):
+/// select the hovered unit, then act by the same classification the cursor used (the INTERACT
+/// leg `0x492820`). Three branches (decision 0081):
 /// - **Attack** (alive + reaction ≤ neutral): auto-draw and start melee auto-attack, exactly the
 ///   action-bar attack's path (decision 0073's verified attack-start: SETSHEATHED then ATTACKSWING).
 /// - **Loot** (dead + `UNIT_DYNFLAG_LOOTABLE` — the state, not the Pickup cursor kind, which a
@@ -366,7 +364,7 @@ pub(super) fn act_on_right_click(
     let (hovered, hovered_object, cursor) = (&press.hovered, &press.object, &press.cursor);
     // ── The interact family's ACTOR gate: am I in the saddle? ────────────────────────────────
     // One predicate, the reference's own — the PLAYER's `UNIT_FIELD_MOUNTDISPLAYID` (decision
-    // 0481's "one mounted predicate"; wow-re `mounted-action-gate.md`: no aura, no taxi
+    // 0481's "one mounted predicate": no aura, no taxi
     // distinction, this field and nothing else). 0481 built the gate for the two action families
     // the director reported then — casts (`0x6094f0`'s reason `0x39` "You are mounted") and
     // attack-start (`0x612df0`'s `ERR_ATTACK_MOUNTED`) — and wrote interaction explicitly out of
@@ -381,15 +379,15 @@ pub(super) fn act_on_right_click(
     // A GameObject is the nearest thing under the cursor → use it (decision 0236), and never fall
     // through to unit handling: a GO is not selectable, and a right-click on it acts on the GO or
     // does nothing. The reference's `OnUse 0x5f8660` gates on the same two predicates the cursor
-    // computes (§4a/§8.7): **highlightable** first — false is a silent no-op, which for us is
+    // computes: **highlightable** first — false is a silent no-op, which for us is
     // `cursor.kind == Point` — then **usable**, whose failure toasts an error and sends nothing.
     //
     // `usable`'s two arms we model land in different places, so the routing is split accordingly
     // (decision 0752): the **lock** arm comes back out of [`resolve_go_action`] as
-    // `GoAction::Refuse`, which carries §8.8's toast; the **range** arm is `cursor.unable`, which
-    // suppresses the send with no toast (the reference auto-walks there instead — `0x610300`, also
-    // no packet). The lock arm runs first in `0x5f3130`, and it does here too: a `Refuse` toasts
-    // even when we are also out of range.
+    // `GoAction::Refuse`, which carries the lock-fail toast routing (`0x5f3427..`); the **range**
+    // arm is `cursor.unable`, which suppresses the send with no toast (the reference auto-walks
+    // there instead — `0x610300`, also no packet). The lock arm runs first in `0x5f3130`, and it
+    // does here too: a `Refuse` toasts even when we are also out of range.
     if go_is_nearest(hovered, hovered_object) {
         // **The interact chain's first link** (tag `use`). "I clicked it and nothing happened" spans
         // three systems — this decision, the `CMSG_GAMEOBJ_USE` it sends, and the `SMSG_SPELL_GO`
@@ -424,8 +422,7 @@ pub(super) fn act_on_right_click(
                 // `0x5f31a8`: errorId `0x19f` `ERR_NOT_WHILE_MOUNTED`, then `0x5f31d6 xor al,al`,
                 // so `0x5f86b0` never reaches the opener it would invoke at `0x5f86eb`. No
                 // `CMSG_GAMEOBJ_USE`, no cast, no state write — the gate returns before the
-                // opener, not merely before the message (wow-re `mounted-interaction-gate.md`
-                // §5.1, the §5 this session dispatched).
+                // opener, not merely before the message.
                 //
                 // **It applies only to LOCK-LESS objects.** The gate sits behind
                 // `0x5f3195 call 0x5f8180` / `0x5f319c jne 0x5f3231`, which resolves the object's
@@ -433,15 +430,14 @@ pub(super) fn act_on_right_click(
                 // herb or a locked chest bypasses this and is refused further down by its opener
                 // CAST's own mounted block — loudly, "You are mounted" — while a spellcaster, a
                 // chair, a `lockId 0` quest goober and a readable sign are refused HERE, in
-                // silence. What buys the bypass is a **lock**, not a spell; the round's first
-                // draft had that backwards and its own cross-check caught it.
+                // silence. What buys the bypass is a **lock**, not a spell.
                 //
                 // The test is pure **row existence**: `0x5f819c` tests the row *pointer*, and
                 // nothing reads `Type[]`/`Index[]`/`Skill[]` until `0x5f83d0`. So it is
                 // deliberately NOT [`benilla_formats::LockCatalog::is_locked`], which also demands
                 // a non-empty slot — an all-empty Lock row is "no lock" to our opener resolver and
                 // "a lock" to this gate, and the reference lets that object be used from the
-                // saddle. Collapsing the two is the one divergence the RE explicitly warned about.
+                // saddle. Collapsing the two diverges from the reference on exactly that object.
                 //
                 // **MAILBOX (type 19) is the only exemption**, and it lives inside the gate on the
                 // mounted arm alone (`0x5f31bb` → `0x47cff0`: a sixteen-byte `type == 0x13`
@@ -454,7 +450,7 @@ pub(super) fn act_on_right_click(
                 // side-effect branches skip for this row (`[row+0xc] == 0x44` takes the no-sound
                 // jump; `[row+0x8]` is the literal `"NONE"`), so nothing is shown, sounded or
                 // fired. Whether that leaves any visible artifact at all is the one thing the
-                // round could not settle from the binary — it wants one mounted click on a sign.
+                // binary could not settle — it wants one mounted click on a sign.
                 let lock_id = go_inputs.templates.get(guid).map_or(0, |t| t.lock_id);
                 let has_lock_row = lock_id != 0
                     && go_inputs
@@ -469,8 +465,8 @@ pub(super) fn act_on_right_click(
                     return;
                 }
                 // Mailbox (GO type 19): open the mail window client-side (decision 0544), BEFORE the
-                // lock fork (a mailbox is never locked). The wow-re §5 confirms the MAILBOX use
-                // handler overrides the shared use-sender to a LOCAL open — it sends NO packet (no
+                // lock fork (a mailbox is never locked). The MAILBOX use handler `0x5f6820`
+                // overrides the shared use-sender to a LOCAL open — it sends NO packet (no
                 // CMSG_GAMEOBJ_USE); the window's own MAIL_SHOW → CheckInbox drives the first
                 // CMSG_GET_MAIL_LIST. Re-clicking just re-shows (the session is already set).
                 if go.is_some_and(|(s, _)| s.0.gameobject_type_id() == cursor_mode::GO_TYPE_MAILBOX)
@@ -485,7 +481,7 @@ pub(super) fn act_on_right_click(
                 // fork (a readable is never locked). Its strategy overrides the use-slot the same
                 // way the mailbox does — `0x5f58c0` calls the local page-text opener
                 // `0x4e32e0(goGuid, 0)` and never the shared `CMSG_GAMEOBJ_USE` sender (decision
-                // 1105; wow-re cursor-system §4's "TEXT type 9 — its own handler"). Sending USE
+                // 1105). Sending USE
                 // instead is what left every world book dead: vmangos' `GameObject::Use` has no
                 // type-9 case at all, so the packet is answered with silence.
                 //
@@ -506,8 +502,8 @@ pub(super) fn act_on_right_click(
                 }
                 // MEETINGSTONE (GO type 23): **not** the shared use-sender. `[0x80bf40+0x1c]`
                 // is `0x5f69d0`, this type's own validator — four client-side refusals and then
-                // `CMSG 0x292 {u64 goGuid}` from `0x4c9ff0` (decision 2283; wow-re's §5 round on
-                // that function). The shared sender `0x5f33e0` is **unreachable** from here: it
+                // `CMSG 0x292 {u64 goGuid}` from `0x4c9ff0` (decision 2283). The shared sender
+                // `0x5f33e0` is **unreachable** from here: it
                 // has zero direct callers and 29 `.rdata` refs, every one at some vtable's
                 // `+0x1c`, and `0x80bf5c` is not among them — so a meeting stone cannot emit
                 // `CMSG_GAMEOBJ_USE` in the reference at all. Sending `0xB1` anyway is what left
@@ -515,9 +511,8 @@ pub(super) fn act_on_right_click(
                 // type-23 arm that does nothing ("Should never be called for this type of
                 // object", `GameObject.cpp:1836`), so the packet was answered with silence.
                 //
-                // Four types override `+0x1c`, not one — 9 TEXT, 19 MAILBOX, 23 and 28 — which
-                // corrects the wow-re sentence this file used to rest on (`+0x1c` is `0x5f33e0`
-                // "for every type but MAILBOX"); the round landed that correction too.
+                // Four types override `+0x1c`, not one — 9 TEXT, 19 MAILBOX, 23 and 28; every
+                // other strategy's `+0x1c` is `0x5f33e0`.
                 //
                 // Unlike those two it is NOT a local open — it is a real send, and it therefore
                 // sits *below* the mounted gate above (a stone is lock-less, and only MAILBOX is
@@ -539,7 +534,7 @@ pub(super) fn act_on_right_click(
                 // ON_USE) at it; an unopenable lock shows the client-local red toast — "The door is
                 // locked.", "Requires Herbalism", "Requires Mining 100", "Requires <key item>" —
                 // and sends nothing (the ref's validate/error block `0x5f3427..` fires
-                // `DisplayError` with no packet; wow-re cursor-system.md §8.4/§8.8).
+                // `DisplayError` with no packet).
                 match resolve_go_action(
                     guid,
                     &mut go_inputs,
@@ -562,7 +557,7 @@ pub(super) fn act_on_right_click(
                     }
                     // **Both opener arms queue for the one cast path** (decision 2199) — they
                     // do not send. The reference reaches `TryCast 0x6e4b60` from the GameObject
-                    // strategy's use-sender (`0x5f35c0 → 0x6e5a90 → 0x6e4b60`, §8.4) exactly as it
+                    // strategy's use-sender (`0x5f35c0 → 0x6e5a90 → 0x6e4b60`) exactly as it
                     // does from a button press, so an opener owes the whole ladder — the in-flight
                     // refusal above all, which is what keeps a mashed right-click from shipping a
                     // duplicate the server answers "Another action is in progress" while red-fading
@@ -703,8 +698,8 @@ pub(super) fn act_on_right_click(
     let target = stores.get(entity).ok().map(|(s, _)| s);
     // ── The dead-target fork of the reference's unit interact dispatcher `0x60bea0` ──────────
     // Loot routes by the same CLASSIFICATION the cursor used — dead + `UNIT_DYNFLAG_LOOTABLE` —
-    // not by the cursor kind (wow-re cursor-system.md §6: the right-click "routes the same hovered
-    // object by the same classification"; its dead-unit row sends CMSG_LOOT). The loot cursor's
+    // not by the cursor kind (the right-click routes the same hovered object by the same
+    // classification; its dead-unit row sends CMSG_LOOT). The loot cursor's
     // base mode is Pickup(8), which a live vendor also shows, so the kind alone can't name loot.
     //
     // **The fork's first test is the rider**, and we never carried it (decision 1851): `0x60bf98`
@@ -771,8 +766,8 @@ pub(super) fn act_on_right_click(
             // and the melee auto-draw and swing still never happen; what changed is that no red
             // `ERR_ATTACK_*` line shows any more.
             //
-            // 0481 attached `0x612df0`'s Phase A ladder to this path. The §5 this session dispatched
-            // found that validator has exactly three callers image-wide — pet-attack `0x4bd40d`, the
+            // 0481 attached `0x612df0`'s Phase A ladder to this path. That validator has exactly
+            // three callers image-wide — pet-attack `0x4bd40d`, the
             // Attack action/keybind `0x6131aa`, and TryCast `0x6e4efb` — and the world right-click is
             // none of them: it runs `0x60c247 call 0x5ecb70`, an extent containing no `DisplayError`
             // at all. So all eight of those red lines belong to the bar and the pet command, never to
@@ -998,16 +993,18 @@ pub(crate) enum GoAction {
     OpenLock(u32),
     /// A lock whose **KEY** slot we satisfy: *use the key at the object* — `CMSG_USE_ITEM` with the
     /// key's wire position and `TARGET_FLAG_GAMEOBJECT`, NOT a bare cast of the key's spell
-    /// (decision 0769; wow-re `cursor-system.md` §8.4 — "the client never sends a bare
-    /// CMSG_CAST_SPELL for a key lock"). The distinction is the whole ballgame: `Spell::CanOpenLock`
-    /// honours a `Lock.dbc` KEY slot only when `m_CastItem` is set, which only USE_ITEM supplies.
+    /// (decision 0769; the client never sends a bare CMSG_CAST_SPELL for a key lock: the cast
+    /// sender `0x6e54f0` takes its item arm). The distinction is the whole ballgame:
+    /// `Spell::CanOpenLock` honours a `Lock.dbc` KEY slot only when `m_CastItem` is set, which only
+    /// USE_ITEM supplies.
     ///
     /// Carried as a whole [`crate::ui_items::ItemUse`] (decision 2199) because the reference's
     /// lock chain calls `CGItem::Use` with the lock's guid — the one item-use fork every surface
     /// takes — rather than building a packet of its own. `on_object` is that guid.
     OpenByKey(crate::ui_items::ItemUse),
-    /// A lock present that we cannot open — the client-local refusal (§8.4: `DisplayError`, **no
-    /// packet**). `Some` = the red toast to queue; `None` = the ref is silent for this case too.
+    /// A lock present that we cannot open — the client-local refusal (`0x5f3427..`:
+    /// `DisplayError`, **no packet**). `Some` = the red toast to queue; `None` = the ref is silent
+    /// for this case too.
     Refuse(Option<crate::ui_action::UiError>),
 }
 
@@ -1015,8 +1012,8 @@ pub(crate) enum GoAction {
 enum KeyFact {
     /// Not held; the item template names it ("Requires Shadowforge Key").
     Named(String),
-    /// Not held and the template isn't cached yet — the ref's `GetRecord` miss is silent (§8.8
-    /// `0xde`); our ask-once query is away, so a later click names it.
+    /// Not held and the template isn't cached yet — the ref's `GetRecord` miss is silent (the
+    /// `0xde` arm's `0x5f3562 je`); our ask-once query is away, so a later click names it.
     Unknown,
 }
 
@@ -1028,18 +1025,18 @@ enum KeyFact {
 /// chest whose template is still in flight.
 ///
 /// The satisfaction decision itself lives in [`super::lock::resolve_lock`] so the cursor's `usable`
-/// asks exactly the same question (§4a/§8.7 — the icon and the click agree by construction). Here
-/// we only turn its answer into a packet, and the lock split has **three** arms, not two (wow-re
-/// `cursor-system.md` §8.4, VERIFIED): lockless → `CMSG_GAMEOBJ_USE`; a satisfied **skill** slot →
+/// asks exactly the same question (the resolver `0x5f83d0` — the icon and the click agree by
+/// construction). Here we only turn its answer into a packet, and the lock split has **three**
+/// arms, not two: lockless → `CMSG_GAMEOBJ_USE`; a satisfied **skill** slot →
 /// `CMSG_CAST_SPELL` of the matched opener; a satisfied **key** slot → `CMSG_USE_ITEM` carrying the
 /// key's position and the GO as its cast target ([`GoAction::OpenByKey`]). An unmet lock takes
-/// §8.8's toast routing and sends nothing.
+/// the toast routing of `0x5f3427..` and sends nothing.
 ///
 /// The key arm sent a bare cast until decision 0769, which is why keys never opened anything: the
 /// server honours a KEY slot only when the cast carries `m_CastItem` (`Spell::CanOpenLock`,
 /// `Spell.cpp:7892`), and only `CMSG_USE_ITEM` supplies it. That was recorded here as the server's
-/// gap; it was ours, and wow-re's note says so in the same breath — "the client never sends a bare
-/// CMSG_CAST_SPELL for a key lock".
+/// gap; it was ours: the client never sends a bare CMSG_CAST_SPELL for a key lock (the cast sender
+/// `0x6e54f0` takes its item arm).
 pub(crate) fn resolve_go_action(
     guid: u64,
     inputs: &mut GoLockInputs,
@@ -1055,7 +1052,7 @@ pub(crate) fn resolve_go_action(
         return GoAction::Use;
     };
     // A lockId whose row is missing is "no lock" — the ref resolver's `0x5f8180` null → FALSE with
-    // spell 0 → `CMSG_GAMEOBJ_USE` (§8.4 C6).
+    // spell 0 → `CMSG_GAMEOBJ_USE`.
     let Some(slots) = locks.0.slots(tmpl.lock_id).filter(|_| tmpl.lock_id != 0) else {
         return GoAction::Use;
     };
@@ -1083,8 +1080,8 @@ pub(crate) fn resolve_go_action(
         }
         super::lock::LockOutcome::OpenByKey(entry) => entry,
         super::lock::LockOutcome::Unmet => {
-            // Unopenable — §8.8's routing, which keys off Lock.dbc **slot 0** regardless of which
-            // slot the resolver walked.
+            // Unopenable — the toast routing of `0x5f3427..`, which keys off Lock.dbc **slot 0**
+            // regardless of which slot the resolver walked.
             let slot0 = slots[0];
             let key = if slot0.key_type == benilla_formats::LOCK_KEY_ITEM {
                 match inputs.items.template(slot0.index, 0, net) {
@@ -1147,8 +1144,8 @@ pub(crate) fn resolve_go_action(
     })
 }
 
-/// The client-local toast for an unopenable lock — the ref's routing, transcribed (wow-re
-/// cursor-system.md §8.8; decision 0545). Two layers, exactly as the binary orders them:
+/// The client-local toast for an unopenable lock — the ref's routing (`0x5f3427..`), transcribed
+/// (decision 0545). Two layers, exactly as the binary orders them:
 ///
 /// 1. **`GO_FLAG_LOCKED` set** (a padlocked chest/door — gather nodes never set it): the `usable`
 ///    gate refuses with the strategy default `[strat+8]` before the rich routing ever runs —
@@ -1187,7 +1184,7 @@ fn route_lock_refusal(
             let name = lock_type_name.unwrap_or("UNKNOWN").to_string();
             if opener_known {
                 let required = super::lock::required_skill(slot0, go_level).max(0) as u32;
-                // String-then-Integer, the template's own order (cursor-system.md §8.8).
+                // String-then-Integer, the template's own order.
                 Some(UiError::args(
                     "ERR_USE_LOCKED_WITH_SPELL_KNOWN_SI",
                     vec![FillArg::S(name), FillArg::D(i64::from(required))],
@@ -1301,9 +1298,7 @@ fn unit_branch(attack: bool, dead_fork: bool, leg: DeadUnitLeg) -> UnitBranch {
 }
 
 /// **The reference's own NPC-service ladder** — `0x5f0130`'s first-match-wins walk over
-/// `UNIT_NPC_FLAGS`, low bit to high (wow-re
-/// `object-layer/scratch/interact-dead-fork-and-npc-service-ladder.md` §C, every arm byte-verified
-/// from its `shr`/`test` to its `push <opcode>`). The winning bit, **not** a cursor kind.
+/// `UNIT_NPC_FLAGS`, low bit to high. The winning bit, **not** a cursor kind.
 ///
 /// The cursor classifier `0x482200` runs a second, structurally identical ladder over the same
 /// field in the same order, which is why keying the send on the classified kind looked right for
@@ -1528,8 +1523,7 @@ pub(crate) struct DeselectGuid(pub(crate) u64);
 ///
 /// One drain for the three because the reference has one function for them: `TargetUnit
 /// 0x4899d0`, `AssistUnit 0x489b80`, `TargetLastEnemy` and `TargetLastTarget` all reach selection
-/// through the "select if it resolves" helper `0x489a40` (wow-re
-/// `object-layer/scratch/selection-attack-seam.md` §1), whose three arms — resolves → commit;
+/// through the "select if it resolves" helper `0x489a40`, whose three arms — resolves → commit;
 /// doesn't resolve but is on the roster → commit anyway; **neither, including guid 0 → a bare
 /// `ret`** — are the same for every caller. That third arm is the one worth naming: a token,
 /// basis or remembered guid that does not resolve is a **no-op, not a deselect**. Draining them
@@ -1581,7 +1575,7 @@ pub(super) fn selection_requests(
             }
             // `0x489ba9 call 0x515940(token)` — the same token grammar, then the shared tail. An
             // unresolvable token is silent here: the reference emits game-message `0xb8`, whose
-            // id→string table is runtime-populated BSS wow-re could not statically recover — the
+            // id→string table is runtime-populated BSS with no statically recoverable text — the
             // known deviation `TargetByName` already carries on this path.
             SelectionRequest::Assist(token) => match tokens.resolve(&token, &commit.selection) {
                 Some((basis, _)) => commit.assist(basis, "AssistUnit"),
@@ -1593,10 +1587,9 @@ pub(super) fn selection_requests(
                 assist_by_name.write(super::by_name::AssistRequest { name: Some(name) });
             }
             // `0x489b45` reads the last-attackable pair and hands it to the same `0x489a40`.
-            // **Empty memory is a no-op, and that is derived now**: the shim `0x489b40` is
-            // thirteen bytes with no emptiness test at all, where `TargetLastTarget 0x489b00`
-            // really does reach `0x493540(0,0)` and deselect. The two shims differ exactly here
-            // (wow-re `targeting-friend-and-lastenemy.md`, §5 trio — dispatched from this work).
+            // **Empty memory is a no-op**: the shim `0x489b40` is thirteen bytes with no
+            // emptiness test at all, where `TargetLastTarget 0x489b00` really does reach
+            // `0x493540(0,0)` and deselect. The two shims differ exactly here.
             SelectionRequest::LastEnemy => {
                 let Some(guid) = last_enemy.0 else {
                     info!("TargetLastEnemy: nothing hostile has been targeted yet; no-op");
@@ -1640,9 +1633,9 @@ pub(super) fn clear(
 mod tests {
     use super::*;
 
-    /// The §8.8 toast routing, case by case (decision 0545). The slot/flag/type combinations
-    /// mirror real data: Peacebloom (lock 29: skill slot, LockType 2, Skill 0), a rank-155 vein
-    /// (lock 42: LockType 3, Skill 155), a keyed door, a padlocked chest.
+    /// The `0x5f3427..` toast routing, case by case (decision 0545). The slot/flag/type
+    /// combinations mirror real data: Peacebloom (lock 29: skill slot, LockType 2, Skill 0), a
+    /// rank-155 vein (lock 42: LockType 3, Skill 155), a keyed door, a padlocked chest.
     #[test]
     fn lock_refusals_route_like_the_reference() {
         use benilla_formats::{LockSlot, LOCK_KEY_ITEM, LOCK_KEY_SKILL};
@@ -1736,8 +1729,8 @@ mod tests {
         assert!(
             route_lock_refusal(&key_slot, false, false, 0, 0, None, KeyFact::Unknown).is_none()
         );
-        // GO_FLAG_LOCKED set → the strategy default REPLACES the rich routing (§8.8's usable
-        // gate): door 0xdc, button 0xdd, chest/else 0xdb — even on a skill lock.
+        // GO_FLAG_LOCKED set → the strategy default REPLACES the rich routing (`usable`'s lock
+        // check, `0x5f32a6`): door 0xdc, button 0xdd, chest/else 0xdb — even on a skill lock.
         for (go_type, key) in [
             (0, "ERR_DOOR_LOCKED"),
             (1, "ERR_BUTTON_LOCKED"),

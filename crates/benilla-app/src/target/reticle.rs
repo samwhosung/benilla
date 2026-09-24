@@ -1,8 +1,7 @@
 //! The **ground-targeting AoE reticle** — the terrain-projected decal a **location** cast's
-//! cursor drags across the world (decisions 0797 / 0943; byte-pinned in wow-re
-//! `ground-target-reticle.md`). Only a word that passes `TargetingWantsLocation`'s `& 0x60` has
-//! one: the other two seams (a bag click, a world GameObject click) arm the same cursor and draw
-//! no decal at all — see [`update_reticle`]'s guard.
+//! cursor drags across the world (decisions 0797 / 0943). Only a word that passes
+//! `TargetingWantsLocation`'s `& 0x60` has one: the other two seams (a bag click, a world
+//! GameObject click) arm the same cursor and draw no decal at all — see [`update_reticle`]'s guard.
 //!
 //! For every ordinary area spell (Blizzard, Flamestrike — no object-placement effect), the
 //! reference draws a **projected decal**, not a model: box = the picked ground point ± r in the
@@ -26,11 +25,11 @@
 //! cursor over sky / no world hit → **nothing is drawn** (the ref resets its draw state every
 //! hover pass before the pick — the "frozen at the last point" reading was refuted at the
 //! bytes). Over a unit the decal draws on the ground behind it (the pick can't see units while
-//! a dest-only word is up — `world-click-targeting.md` Q2).
+//! a dest-only word is up — its flags skip the object trace at `0x480e7b`).
 //!
-//! Named gap (shared with the blob shadow): the ref's second projection pass takes **liquid**
-//! surfaces (flags `0x0f0000`) — our [`GroundDecalSurface`] set has no liquid yet, so the
-//! reticle vanishes over water instead of floating on it (wow-re trap #8, half-carried).
+//! Named gap (shared with the blob shadow): the ref's second projection pass (`0x483727`) takes
+//! **liquid** surfaces (flags `0x0f0000`) — our [`GroundDecalSurface`] set has no liquid yet, so
+//! the reticle vanishes over water instead of floating on it.
 
 use bevy::prelude::*;
 
