@@ -2,14 +2,14 @@
 //! mixer's reverb send.
 //!
 //! The data chain: [`CurrentArea`] → `AreaTable` cols 5/6 (`SoundProviderPref` /
-//! `...Underwater`, parent-inherited — the client's caller `0x67e7f0` walks the same fallback,
-//! wow-re `reverb-pipeline.md` A2, VERIFIED) → `SoundProviderPreferences.dbc` (the EAX listener
-//! properties, consumed RAW — no clamps on this path, A1) → [`Mixer::set_reverb`]'s Freeverb
-//! projection, applied **instantly** on change (A2). Submerged, the underwater
+//! `...Underwater`, parent-inherited — the client's caller `0x67e7f0` walks the same fallback)
+//! → `SoundProviderPreferences.dbc` (the EAX listener properties, consumed RAW — no clamps on
+//! this path, `0x45a790`) → [`Mixer::set_reverb`]'s Freeverb projection, applied **instantly**
+//! on change (`0x45a720`). Submerged, the underwater
 //! column wins — pref 11 on 568 areas; dry land uses the dry column (8 dungeon floors in 1.12).
 //!
 //! Which sounds the wet signal reaches is **not** this module's business and is not "every 3D
-//! sound": 3D-open (channel flag bit 27, A3) is necessary but not sufficient — the kit's
+//! sound": 3D-open (channel flag bit 27, `0x7a5bf0`) is necessary but not sufficient — the kit's
 //! `SoundEntries.EAXDef` decides, and `0` means a NULL `SoundSamplePreferences` slot and a
 //! permanently dry channel (decision 1155; the gate lives at [`Mixer::play_3d`]). 2D/UI/music/
 //! ambience are structurally dry on top of that. `WMOAreaTable` carries the big interior payload

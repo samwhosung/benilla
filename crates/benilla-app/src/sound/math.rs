@@ -1,5 +1,5 @@
-//! WoW's owned audio math — behavioral ports of the bit-exact wow-re transcriptions
-//! (`wow-5875-re/crates/sound`, T3; decision 0070 "the audible fingerprint").
+//! WoW's owned audio math — behavioral ports of the reference's own functions (decision 0070
+//! "the audible fingerprint").
 //!
 //! Ports are **behavioral**, not bit-exact: the originals reproduce x87 PC_53 double-rounding
 //! spill-for-spill; here the formulas run in plain f32/f64 (differences are below audibility and
@@ -19,7 +19,7 @@ pub(crate) fn variation_volume(draw: Option<i32>, base: f32, mult: f32) -> f32 {
     };
     let v = v * mult as f64;
     // `!(v > 0.0)` is deliberate, NOT `v <= 0.0`: NaN must land in the zero arm (the binary's
-    // unordered `fcom` branch) — the same suppressed-lint idiom as the wow-re transcription.
+    // unordered `fcom` branch).
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     if !(v > 0.0) {
         0.0
@@ -30,7 +30,7 @@ pub(crate) fn variation_volume(draw: Option<i32>, base: f32, mult: f32) -> f32 {
     }
 }
 
-/// Per-shot pitch variation — `0x458da0` `variation_pitch`: the playback frequency in Hz handed
+/// Per-shot pitch variation — `0x458da0`: the playback frequency in Hz handed
 /// to `FSOUND_SetFrequency` when the kit varies pitch: `freq = (22050 · (draw + 0x55)) / 100`
 /// (32-bit wrapping mul, truncating division — exactly the binary's integer path). The backend
 /// consumes a *rate*, so callers divide by the file's sample rate: a 22050 Hz WAV at draw 15
@@ -42,7 +42,7 @@ pub(crate) fn variation_pitch_freq(draw: i32) -> i32 {
 
 /// The variation draw: raw PRNG word → `{0..30}` via **multiply-high scale-to-range**
 /// (`mulhi(31, raw)` — `mov ecx,0x1f` @ `0x458d35`/`0x458e85` through the `0x455c70` mul-high
-/// helper; wow-re `benilla-pins.md` B1, VERIFIED). NOT a modulo: `floor(31·raw / 2³²)`, uniform
+/// helper). NOT a modulo: `floor(31·raw / 2³²)`, uniform
 /// over 31 values given a uniform word. Volume spans ±0.15 about base, pitch ×0.85..×1.15.
 pub(crate) fn variation_draw(raw: u32) -> i32 {
     ((u64::from(raw) * 31) >> 32) as i32
@@ -53,15 +53,15 @@ pub(crate) fn dist_sq(a: bevy::math::Vec3, b: bevy::math::Vec3) -> f32 {
     a.distance_squared(b)
 }
 
-/// Selection-time audibility — `0x45cdf0` `sound_audible_distance`: play iff `maxdist² > d²`
+/// Selection-time audibility — `0x45cdf0`: play iff `maxdist² > d²`
 /// (strict; equal/NaN inaudible). `maxdist` is the kit's `DistanceCutoff`; `0` means
 /// non-positional (callers skip the gate — the `0x7a5ca0` sentinel).
 pub(crate) fn audible(d_sq: f32, maxdist: f32) -> bool {
     maxdist * maxdist > d_sq
 }
 
-/// The near-field attenuation WoW layers ON TOP of the backend's rolloff — `0x7a5000`
-/// `channel_dist_update`, the per-frame value at channel `+0x78`:
+/// The near-field attenuation WoW layers ON TOP of the backend's rolloff — `0x7a5000`, the
+/// per-frame value at channel `+0x78`:
 /// `atten = 1 − clamp(√d² − maxdist·0.9, 0, maxdist·0.1) / (maxdist·0.1)` — full volume inside
 /// 90% of `maxdist`, a linear 1→0 ramp across the last 10%. Callers virtualize the channel
 /// beyond `maxdist` instead of calling this.
@@ -76,14 +76,13 @@ pub(crate) fn near_field_atten(d_sq: f32, maxdist: f32) -> f32 {
 }
 
 // NOTE: `0x457960` is deliberately NOT ported here. benilla once modelled it as a music
-// "transition crossfade" (`music_volume_fade`); the wow-re §5 (`benilla-pins.md` B15) corrected
-// that: it is the SFX-bus auto-duck (the SoundVolume category dips to 50 % while SFX one-shots
-// play, restoring over 3 s), unrelated to music transitions, which benilla does not model.
+// "transition crossfade"; it is the SFX-bus auto-duck (the SoundVolume category dips to 50 %
+// while SFX one-shots play, restoring over 3 s), unrelated to music transitions, which benilla
+// does not model.
 // The real music transition is a 4.0 s backend fade-stop (see `sound::zone`). Decision 0100.
 
 /// The global 3D rolloff factor — `FSOUND_3D_SetRolloffFactor(4.0)` at device init
-/// (`0x7a47b1`, prefill `0x7a495a` = 4.0f; `SoundRolloffFactor` CVar default "4" round-trips it
-/// — wow-re `benilla-pins.md` B12, VERIFIED).
+/// (`0x7a47b1`, prefill `0x7a495a` = 4.0f; `SoundRolloffFactor` CVar default "4" round-trips it).
 pub(crate) const ROLLOFF_FACTOR: f32 = 4.0;
 
 /// The distance rolloff FMOD computed between the kit's `MinDistance` and the far plane —

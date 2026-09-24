@@ -2,7 +2,7 @@
 //!
 //! The real 1.12 client has **no dedicated money kit**: every coinage change plays
 //! `LOOTWINDOWCOINSOUND` (SoundEntries kit 895) from a `CMirrorHandler` callback registered on
-//! `PLAYER_FIELD_COINAGE` (`0x5ddf30`, wow-re `system/sound/scratch/acquire-spend-sounds.md`) — the
+//! `PLAYER_FIELD_COINAGE` (`0x5ddf30`) — the
 //! same watcher that also fires the `PLAYER_MONEY` UI event. So one rule reproduces the coin for
 //! **buy** (spend), **sell** (gain), and **loot money** — all three move `PLAYER_FIELD_COINAGE` on
 //! the wire — plus any other purse change (quest reward, mail, trade), exactly as the client does.
@@ -10,11 +10,12 @@
 //! [`super::ui`].)
 //!
 //! benilla plays it 2D on the SFX bucket when the mirrored coinage moves. The **first** observation
-//! after login/reconnect is a seed, not a change — it never plays for the initial populate (the one
-//! INFERRED point in the wow-re note; suppressing it is the correct-feeling choice and avoids a coin
-//! on every zone-in). The real client double-plays loot money (an optimistic play at the click plus
-//! this watcher); benilla keeps the single watcher-driven play — one clean coin on the confirmed
-//! change, imperceptibly latent on localhost.
+//! after login/reconnect is a seed, not a change — it never plays for the initial populate (whether
+//! the reference's watcher fires on the first coinage set at login is inferred, unconfirmed in the
+//! binary; suppressing it is the correct-feeling choice and avoids a coin on every zone-in). The
+//! real client double-plays loot money (an optimistic play at the click plus this watcher); benilla
+//! keeps the single watcher-driven play — one clean coin on the confirmed change, imperceptibly
+//! latent on localhost.
 
 use bevy::prelude::*;
 
@@ -24,8 +25,8 @@ use benilla_assets::WorldAssets;
 use super::kit::{self, KitRef, SoundKits};
 use super::{SoundConfig, SoundOutput};
 
-/// The SoundEntries name the client plays on any coinage change (kit 895; wow-re
-/// `acquire-spend-sounds.md`). Played by name through the same registry as every interface sound.
+/// The SoundEntries name the client plays on any coinage change (kit 895; `0x5ddf30`). Played by
+/// name through the same registry as every interface sound.
 const COIN_SOUND: &str = "LOOTWINDOWCOINSOUND";
 
 /// Play the coin whenever the self-player's `PLAYER_FIELD_COINAGE` changes. The previous value is a

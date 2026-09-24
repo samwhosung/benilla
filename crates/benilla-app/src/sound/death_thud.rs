@@ -6,7 +6,7 @@
 //! a `$DTH` (`benilla-extract thudcensus`; 430 rows collapse to 410 distinct paths, 407 of which
 //! ship), and only the *sample* scales with the body. **Players included** — every character model keys one,
 //! and `[unit+0xb34]` is filled from `UNIT_FIELD_DISPLAYID` for a player exactly as for a creature
-//! (wow-re `base-render-alpha.md` §3), so your own body lands audibly too.
+//! (`0x60afb0`), so your own body lands audibly too.
 //!
 //! ```text
 //! $DTH → sizeClass = CreatureDisplayInfo.SizeClass ?? CreatureModelData.SizeClass
@@ -57,7 +57,7 @@
 //! with no depth test of its own, so a body lying on a beach beside a lake would splash. benilla
 //! asks the question the footstep splash already asks: is the surface **above the feet**
 //! (`depth > 0`). Same answer wherever the reference is right, and the shore case is the one
-//! place they differ. (`0x670630`'s own semantics are out at the RE; if the node flag turns out
+//! place they differ. (`0x670630`'s own semantics are still open; if the node flag turns out
 //! to already mean "submerged", the two collapse into one.)
 //!
 //! The play is `0x458870` — **bus 0, uncapped** (`0x458880 xor ecx,ecx`; cap `0x7FFFFFFF`), 3D at
@@ -85,9 +85,8 @@ use super::kit::{play_kit_ext, KitRef, PlayExtras, SoundCategory, SoundKits};
 use super::{AudioListener, SoundConfig, SoundOutput};
 
 /// **The depth that silences the thud** — `0x62372a fcomp [0x801628]`, the float `2.0`. Read as
-/// `surfaceZ − feetZ`, the same depth the swim decision measures (wow-re
-/// `collision/scratch/swim-transition.md`), so this is "two yards of water over the body's feet",
-/// not two yards of body under the surface.
+/// `surfaceZ − feetZ`, the same depth the swim decision (`0x6030c0`) measures, so this is "two
+/// yards of water over the body's feet", not two yards of body under the surface.
 const DROWNED_DEPTH: f32 = 2.0;
 
 /// **The whole decision**, given what the world has already answered: the drowned gate, the

@@ -4,10 +4,9 @@
 //! runs ONE ambience channel: its selector (`0x460bd0`) returns the raw weather SoundEntries while
 //! the **zonetext indoor bit is clear**, and the area's own `AmbienceID` row while it is set — the
 //! keep-flag `[0xb06d44]`, written `dl=1` by the indoor area feeder (`0x67e7d4`) and `dl=0` by the
-//! outdoor one (`0x67e919`); every swap rides the standard **5.0 s crossfade** (wow-re
-//! `rf-weather-emission-timeline` ROUND 5, Q-C). That content REPLACE — never a volume duck — is
-//! why rain goes quiet inside the Goldshire inn. The packet's `grade` drives **rendering only**
-//! (wow-re `benilla-pins.md` B9: grade never reaches a volume call).
+//! outdoor one (`0x67e919`); every swap rides the standard **5.0 s crossfade** (`0x460b00`). That
+//! content REPLACE — never a volume duck — is why rain goes quiet inside the Goldshire inn. The
+//! packet's `grade` drives **rendering only** (`0x67baf0`: grade never reaches a volume call).
 //!
 //! This module only publishes the current wire kit ([`WeatherAmbience`]); the channel — selection,
 //! crossfades, volumes — is `super::zone`'s ambience machine, the benilla twin of `0x460b00`.

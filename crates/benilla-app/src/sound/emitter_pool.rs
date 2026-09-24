@@ -1,5 +1,5 @@
 //! The **ambient emitter pool** — the reference's registration table at `0xb06dd8` and its
-//! per-frame pump `0x461990` (wow-re `sound/scratch/doodad-sound-emitters.md`, §7/§8/§17).
+//! per-frame pump `0x461990`.
 //!
 //! **Two tenants share it, because the reference's one pool has two registrars** (decision 1867).
 //! A *placed doodad* registers through its `$DSL` marker (`0x6951e0`, handle in
@@ -39,7 +39,7 @@
 //! crossing, and with **nothing whatever** bounding the number of *distinct* ambiences, so a
 //! torch-and-campfire cluster could take a third of the 12-voice ceiling away from the sounds a
 //! player is actually listening for. Applying 0x20 here was itself wrong: it is the **one-shot**
-//! lane's suppressor (§15), and this lane is now exempt from it
+//! lane's suppressor (`0x458f40` → `0x7a66a0`), and this lane is now exempt from it
 //! ([`super::kit::PlayExtras::dedupe_exempt`]).
 //!
 //! **What the pool is not.** It is not a cache and not an optimisation — it is the mechanism that
@@ -67,7 +67,7 @@ use super::{math, AudioListener, SoundConfig, SoundOutput};
 
 /// `0x461eac cmp ecx,0x1c200` over the entry stride `0xe10` — **32** entries, one per distinct
 /// SoundEntries id. A 33rd distinct id finds no match and no free entry, `0x461d80` returns handle
-/// 0, and that doodad is simply untracked until an entry frees (§17).
+/// 0, and that doodad is simply untracked until an entry frees.
 const POOL_ENTRIES: usize = 32;
 
 /// `[entry+0xC00..+0xCFF]` — **256** emitter records per entry.
@@ -213,16 +213,16 @@ impl AmbientEmitterPool {
             .position(|x| x.id == id)
             .or_else(|| self.entries.iter().position(|x| x.id == 0))
         else {
-            return; // all 32 entries hold other ids — untracked until one frees (§17)
+            return; // all 32 entries hold other ids — untracked until one frees
         };
         if self.entries[e].id == 0 {
             self.entries[e].id = id;
             self.entries[e].failed = false;
         }
         if self.entries[e].records.len() >= RECORDS_PER_ENTRY {
-            // `0x461a60` — the sound ledger's `first_slot_farther_than_query`: evict the FIRST
-            // record farther from the listener than the newcomer, and reject the newcomer when
-            // none is. Not an LRU and not an argmax: first-farther, in claim order.
+            // `0x461a60` — evict the FIRST record farther from the listener than the newcomer,
+            // and reject the newcomer when none is. Not an LRU and not an argmax: first-farther,
+            // in claim order.
             let d = math::dist_sq(listener, pos);
             let Some(victim) = self.entries[e]
                 .records
@@ -240,8 +240,7 @@ impl AmbientEmitterPool {
 
     /// The **GameObject** lane's `$DSL` arm (`0x5f3fe5`): register when the object holds no
     /// registration at all, else only *reposition* the one it holds. **It never compares the id,
-    /// so it never swaps** — the one place the two registrars actually differ (wow-re
-    /// `doodad-sound-emitters.md` §13, which corrects the GO note's own table).
+    /// so it never swaps** — the one place the two registrars actually differ.
     ///
     /// It is not a curiosity: Onyxia's lava trap (`ONYZIASLAIRLAVATRAP.M2`, 208 spawns in the
     /// lair) and Stratholme's spore trap author **two** ids — `$DSL(8681)` on the chained Stand
@@ -277,9 +276,9 @@ impl AmbientEmitterPool {
     /// Reached from a placed doodad's `$DSE` (the authored stop token — the elevator and machinery
     /// family, where the loop runs for one leg of the animation), from a GameObject's state-machine
     /// dispatch (`0x5f3cc8 call 0x5f40c0`, [`super::gameobject`]) and from the host's despawn (the
-    /// owner's own teardown, §9). There is deliberately **no** map-change reset: the reference has
-    /// none either (`0x461a20`'s only caller is the process-shutdown chain), and a streamed-out
-    /// tile releases its doodads one by one, which is the same thing done honestly.
+    /// owner's own teardown, `0x6a0840`). There is deliberately **no** map-change reset: the
+    /// reference has none either (`0x461a20`'s only caller is the process-shutdown chain), and a
+    /// streamed-out tile releases its doodads one by one, which is the same thing done honestly.
     fn release(&mut self, owner: Entity) {
         let Some(e) = self.handles.remove(&owner) else {
             return;
@@ -351,7 +350,6 @@ enum CapStep {
 /// failed. The one exception is byte-derived too: a kit whose `DistanceCutoff` is **0** is never
 /// registered into the cull list (`0x7a5cca jnp`), so it holds a slot at any distance — which our
 /// `play_kit_ext` reproduces, since its own cutoff gate is `cutoff > 0.0 && !audible`.
-/// (wow-re `sound/scratch/doodad-sound-emitters.md` §8, §5 round + byte arbitration.)
 ///
 /// This is not a detail. At the director's Stratholme pin all four channels were held by
 /// `UndeadCampfireSmall` / `CauldronLoop` / `TorchLoop` / `SlimeWaterfall`, **every one past its
@@ -518,7 +516,7 @@ fn pump_emitters(
                 // Looping is an entry-point constant on this lane, not a flag: `0x7a54d0` builds
                 // mode `0x1002` (`HW3D|LOOP_NORMAL`) and calls `SetLoopCount(-1)`, against
                 // `0x7a5490`'s `0x1000` for the one-shot path. Every `$DSL` loops; no `$DSO` does;
-                // `SoundEntries.Flags` is consulted for neither (§16).
+                // `SoundEntries.Flags` is consulted for neither.
                 force_loop: true,
                 // The per-id suppressors are the one-shot lane's; this lane dedupes structurally
                 // (one entry per id) and must not be blocked by its own fading predecessor.
@@ -618,7 +616,7 @@ pub(super) fn release(pool: &mut AmbientEmitterPool, owner: Entity) {
 }
 
 /// Release the emitters of owners that have gone — a placed doodad's host (`0x7133a0`'s teardown
-/// leg, §9) or a GameObject (whose registration lives on the type handler that goes with it).
+/// leg) or a GameObject (whose registration lives on the type handler that goes with it).
 ///
 /// This replaces B345's channel-scoped reaper. An owner no longer *owns* a channel, so stopping
 /// "its" channel is the wrong verb: what a despawn retires is one **record**, and the sound only
@@ -783,8 +781,9 @@ mod tests {
         assert!(pool.handles.is_empty());
     }
 
-    /// §17: a 33rd distinct id is UNTRACKED — the registration fails outright rather than evicting
-    /// an incumbent. `$DSL` re-fires every cycle, so it takes an entry the moment one frees.
+    /// `0x461e60`: a 33rd distinct id is UNTRACKED — the registration fails outright rather than
+    /// evicting an incumbent. `$DSL` re-fires every cycle, so it takes an entry the moment one
+    /// frees.
     #[test]
     fn a_thirty_third_distinct_id_is_untracked_until_an_entry_frees() {
         let mut pool = AmbientEmitterPool::default();
@@ -905,9 +904,8 @@ mod tests {
     /// The falsifiable half: distance does NOT arbitrate **among entries that are all audible**.
     /// A fifth id right on top of the listener stays silent behind four claimed earlier — but
     /// only while those four are inside their own cutoffs, which is the qualifier 2065 added
-    /// (wow-re rewrote its own live A/B for the same reason: with far incumbents the prediction
-    /// is the opposite, and reading it without the qualifier would have torn up a correct
-    /// mechanism).
+    /// (with far incumbents the prediction is the opposite, and reading it without the qualifier
+    /// would tear up a correct mechanism).
     #[test]
     fn distance_never_promotes_a_fifth_entry_over_an_earlier_audible_one() {
         let mut pool = AmbientEmitterPool::default();

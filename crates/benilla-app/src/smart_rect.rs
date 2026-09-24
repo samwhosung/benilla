@@ -1,6 +1,5 @@
 //! **SmartScreenRect** — the client's shared draw-time anti-overlap placement solver
-//! (`UIUtil\SmartScreenRect`, wow-re `ui/scratch/smartscreenrect-solver-law.md`, §5-verified
-//! 2026-07-13, a7825131). Every frame each participant submits its desired screen rect; the
+//! (`UIUtil\SmartScreenRect`). Every frame each participant submits its desired screen rect; the
 //! solver relocates it off the rects already claimed **this frame in its own bucket** and then
 //! claims the result, so later rects dodge earlier ones. Exactly two buckets exist in 5875 and
 //! they never interact: **nameplates (bucket 0)** and **combat worldtext (bucket 1)** — a plate
@@ -220,8 +219,8 @@ fn clamp_to_bands(r: Rect, viewport: Vec2) -> (Rect, u8) {
 }
 
 /// The 3×3 region index — the exact `0x509d80` decision tree, byte-read for all 16 flag words
-/// (this refines the law note's "row 8 catch-all" phrasing, which is imprecise for the
-/// degenerate multi-flag combos): **bit0 (off left) dominates and ignores bit1 beneath it;
+/// (the degenerate multi-flag combos included; region 8 is not a catch-all): **bit0
+/// (off left) dominates and ignores bit1 beneath it;
 /// bit2 (near top) is next and ignores bit3 beneath it; then bit1; then bit3.** So off-both-X
 /// (flags 3) is region 4, spanning-both-bands (flags 12) is region 2 — never reachable by a
 /// plate or a number, but exact.
@@ -424,8 +423,8 @@ mod tests {
         assert_eq!(seat(&mut b, r), r, "back at the anchor next frame");
     }
 
-    /// The full 16-word `0x509d80` tree — every combination, byte-derived (not just the law
-    /// note's 9 listed rows).
+    /// The full 16-word `0x509d80` tree — every combination, byte-derived (not just 9 rows, one
+    /// per region).
     #[test]
     fn region_index_table() {
         let expected = [0, 4, 3, 4, 2, 8, 7, 8, 1, 6, 5, 6, 2, 8, 7, 8];

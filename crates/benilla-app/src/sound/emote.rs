@@ -6,7 +6,7 @@
 //! The catalog also serves the **send** side: `/wave`-style chat lines resolve their EmotesText
 //! id through [`EmoteSounds::text_id`] (`crate::ui_chat`), go out as `CMSG_TEXT_EMOTE` — gated first
 //! by [`EmoteSounds::text_emote`] + [`EmoteSounds::emote_flags`] (the posture-eligibility gate,
-//! wow-re `object-layer/scratch/emote-posture-gate.md`) — and the server echo plays our own emote
+//! `0x47db40`) — and the server echo plays our own emote
 //! through this same receive path — vanilla's actual loop.
 //!
 //! [`EmoteSounds::anim`] promotes the catalog's `Emotes.dbc` → `AnimID` column for
@@ -53,23 +53,22 @@ impl EmoteSounds {
     }
 
     /// An `Emotes.dbc` id's raw `EmoteFlags` bits — promoted for `crate::ui_chat`'s send-side
-    /// posture-eligibility gate (wow-re `object-layer/scratch/emote-posture-gate.md`, `0x47db40`).
+    /// posture-eligibility gate (`0x47db40`).
     pub(crate) fn emote_flags(&self, emote_id: u32) -> Option<u32> {
         self.0.emote_flags(emote_id)
     }
 
     /// The **stand state** this emote sets, if it is a posture emote (`EmoteSpecProc == 1`) —
-    /// `DoEmote`'s state branch (wow-re `object-layer/scratch/emote-posture-gate.md` §1). Promoted
-    /// for `crate::ui_chat`: it is what makes `/sit` actually sit.
+    /// `DoEmote`'s state branch (`0x5ef560` → `0x5ed430`). Promoted for `crate::ui_chat`: it is
+    /// what makes `/sit` actually sit.
     pub(crate) fn posture_state(&self, emote_id: u32) -> Option<u32> {
         self.0.posture_state(emote_id)
     }
 
     /// The `$ESD` anim event's kit for a unit in this looping state emote: the row's
     /// `EventSoundID`, gated on `EmoteSpecProc == 2` — the client's `row[+0x10] == 2` test in the
-    /// `$ESD` handler `0x6239f0` before it reads `row[+0x18]` (wow-re
-    /// `sound/scratch/gather-sound-anim-events.md`, decision 0562). A one-shot emote id parked in
-    /// the state field stays silent, exactly like the reference.
+    /// `$ESD` handler `0x6239f0` before it reads `row[+0x18]` (decision 0562). A one-shot emote id
+    /// parked in the state field stays silent, exactly like the reference.
     pub(crate) fn state_event_sound(&self, emote_id: u32) -> Option<u32> {
         (self.0.spec_proc(emote_id) == Some(2))
             .then(|| self.0.event_sound(emote_id))

@@ -1,8 +1,7 @@
 //! The **above-water liquid ambient loops** — the continuous ocean / river / lava / slime beds
-//! the client plays near liquid (wow-re `liquid-ambience-loop.md`, §5-verified; decision 0506).
-//! The Booty Bay ocean wash is this system. A distinct layer from the submerged UnderWaterLoop
-//! swap ([`super::zone`], B6): these are **3D-positioned loops LAYERED over the zone-ambience
-//! bed**, not a replacement of it.
+//! the client plays near liquid (decision 0506). The Booty Bay ocean wash is this system. A
+//! distinct layer from the submerged UnderWaterLoop swap ([`super::zone`], `0x460af0`): these are
+//! **3D-positioned loops LAYERED over the zone-ambience bed**, not a replacement of it.
 //!
 //! The verified law (driver `0x462b50`, groups `0xb230b8`):
 //! - **Trigger:** liquid of a class within **9.0 yd of the PLAYER** (not the camera) arms that
@@ -136,9 +135,9 @@ fn drive_liquid_loops(
     let player_pos = player_tf.translation;
     let player_wow = bevy_to_wow(player_pos);
 
-    // Scan: the nearest wet point per class within the radius (the ref's `nearest_liquid` walk;
-    // AABB-clamp approximation, module docs). The walk is the world's; the priority order, the
-    // voice cap and the slew below are ours.
+    // Scan: the nearest wet point per class within the radius (the ref's nearest-liquid walk
+    // `0x6723f0`; AABB-clamp approximation, module docs). The walk is the world's; the priority
+    // order, the voice cap and the slew below are ours.
     let best = world.nearest_liquid_per_class(player_wow, TRIGGER_RADIUS);
 
     // Priority River > Ocean > Magma > Slime, cap 2: the class indices ARE the priority order.

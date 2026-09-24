@@ -31,8 +31,7 @@ use super::mixer::{self, StreamingSoundHandle};
 use super::{kit::SoundKits, SoundOutput};
 use crate::cinematic::Cinematic;
 
-/// A cut-off narration is **cut**, with no fade at all — wow-re
-/// `sound/scratch/cinematic-audio-law.md` (VERIFIED): every release on this path
+/// A cut-off narration is **cut**, with no fade at all: every release on this path
 /// (`0x48efef` shot-advance, `0x48f055` stop/ESC, `0x490b8d` local abort) is a plain release of
 /// `[0xb4e274]`, and there is **no audio fade anywhere in the cinematic** — the 0.25 s fade the
 /// reference schedules at both edges (`0x4c0d10`, `[0x804550]`) is a *screen* fade, which is what
@@ -149,8 +148,8 @@ fn narrate(
             return;
         }
     };
-    // **No category slider applies to this channel at all** (wow-re `cinematic-audio-law.md`,
-    // VERIFIED). The narration is opened at `0x48ef29` → `0x458a40` → `0x45ce60` with behaviour
+    // **No category slider applies to this channel at all**. The narration is opened at
+    // `0x48ef29` → `0x458a40` → `0x45ce60` with behaviour
     // flags `0x15`: `or eax,4` (`0x45ce9e`) and `or eax,0x10` (`0x45cea8`), while the music bit
     // `or eax,2` at `0x45ceb2` is **skipped**. Bit `0x10` is read at `0x7a5dc0`
     // (`test al,0x10; jne 0x7a5e1a`) and takes the channel around the category multiply entirely —

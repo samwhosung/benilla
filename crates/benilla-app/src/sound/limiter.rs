@@ -45,8 +45,8 @@
 //! untouched, and the thing being replaced is not a reference behaviour but *kira's* hard clamp.
 //!
 //! **The reference has no headroom mechanism at all — on either side of its API boundary.** That
-//! is now read, not assumed: wow-re's §6 proved no constant factor exists anywhere in `WoW.exe`
-//! (a close-up 1.0 kit reaches `FSOUND_SetVolume(255)` with the SFX master also 255), and
+//! is now read, not assumed: no constant factor exists anywhere in `WoW.exe` (a close-up 1.0 kit
+//! reaches `FSOUND_SetVolume(255)` through `0x7a5dc0` with the SFX master also 255), and
 //! decision 1563 opened `fmod.dll` itself and found the other half — a complete multiply census
 //! over all three software mixers turns up per-channel volume, `1/255`, `1/256`, `2⁻³¹` and a
 //! mix-rate-derived ramp constant, and **nothing that depends on how many voices are live**. The
@@ -56,7 +56,7 @@
 //!
 //! Two things it does have are often mistaken for headroom and are neither: the 12-voice device
 //! ceiling with the 13 per-bus caps (ported — 1555, 1557), which bounds the *count*; and the SFX
-//! auto-duck (`0x457960`), which wow-re §10 corrected — it is a **sidechain for server-pushed
+//! auto-duck (`0x457960`) — it is a **sidechain for server-pushed
 //! unit voice lines** (`SMSG_PLAY_OBJECT_SOUND`), armed only by that one packet's pool, with the
 //! arming sound itself exempt. Footsteps, spell impacts, weapon hits, UI sounds, creature barks,
 //! music and ambience never arm it. It is not a bus limiter and would not have saved the mass

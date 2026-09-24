@@ -11,8 +11,8 @@
 //! **Trigger: `$FSD` and nothing else** (decision 1080). A footfall is two disjoint channels in
 //! the client's event dispatcher `0x5ffbd0` — `$FSD → 0x623390` is the *sound*, the per-foot side
 //! tags (`$FL/$FR/$RL/$RR/$SL/$SR/$BL/$BR/$WL/$WR`) `→ 0x5fbf70` are the *visual* footfall (the
-//! decal + spray, [`crate::footprints`]) and play nothing (wow-re `footprint-decals.md` §1, §5
-//! byte-arbitrated). Reading both as steps rang **every gait at double rate** — HumanMale's Walk
+//! decal + spray, [`crate::footprints`]) and play nothing. Reading both as steps rang **every gait
+//! at double rate** — HumanMale's Walk
 //! keys `$FR0 · $FSD · $FL0 · $FSD`, a horse's gallop four of each per 0.8 s cycle — and made the
 //! turn-in-place shuffle, whose *only* keys are `$SL0 $SR0` at `t = 0.000`, clatter where the
 //! reference is silent ([`crate::creature_anim::is_footstep_sound`]).
@@ -42,8 +42,8 @@
 //! The unit's class comes from its voice row (`CreatureSoundData.FootstepID`) through the
 //! generic display→sound chain incl. the model fallback (`benilla_formats::creature_sound` —
 //! characters reach class 7 as *data*). **Class 0, or no row at all, = no footstep sounds**:
-//! the client's `$FSD` handler bails on a zero class before any lookup (`0x6233ec`, wow-re
-//! `benilla-pins.md` B11, byte-confirmed); the lookup's class-0 rows are the Ancient
+//! the client's `$FSD` handler bails on a zero class before any lookup (`0x6233ec`); the lookup's
+//! class-0 rows are the Ancient
 //! Protector's stomps (kit 661), reached only by that model's own nonzero class.
 //!
 //! Ahead of the class, `0x623390` opens on the same three state gates the visual handler does,
@@ -110,8 +110,8 @@ fn footstep_sounds(
     units: Query<(&NetEntity, &GlobalTransform, Option<&CollisionHeight>)>,
     // The handler's state gates read the ROOT unit — a mount child's `$FSD` is the rider's
     // footfall, and it is the RIDER's stealth/hover/ghost the client tests (`0x623390`'s `this`
-    // is the unit the mount model's event stream is registered against, wow-re
-    // `footprint-decals.md` §1 "Mounted"). Same walk-to-root the footprint spawner does.
+    // is the unit the mount model's event stream is registered against, `0x607a00`). Same
+    // walk-to-root the footprint spawner does.
     parents: Query<&ChildOf>,
     root_state: Query<(Option<&ObjectStore>, Option<&MovementState>)>,
     footsteps: Option<Res<Footsteps>>,
@@ -198,7 +198,7 @@ fn footstep_sounds(
             }
         }
         // The unit's footstep class (module docs): the voice row's class verbatim; zero or no
-        // row = silent (the client's class-0 gate — no code default exists, B11).
+        // row = silent (the client's class-0 gate `0x6233ec` — no code default exists).
         let class = match net.display_id.and_then(|d| voices.0.for_display(d)) {
             Some(v) if v.footstep_class != 0 => v.footstep_class,
             _ => continue,
@@ -249,7 +249,7 @@ fn footstep_sounds(
             listener,
             KitRef::Id(kit),
             // **The terrain footstep is at the EVENT's point, the foley above is not** — one arm,
-            // two sounds, two positions (wow-re `anim-event-position-law.md` §3, §5-verified).
+            // two sounds, two positions.
             // `0x623390` hands its `pos` argument to `0x458380`, where it is *both* the
             // audibility-radius reference and the 3D play position (`0x458434`); the foley leg
             // `0x6233d9 call [vt+0x8c]` is argument-less and re-derives `GetPosition + 2.0 z`

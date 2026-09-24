@@ -8,10 +8,10 @@
 //! distance-cull, recompute `category · v · rolloff · near_field` and feed the channel volume —
 //! the `0x7a4ad0`/`0x7a5000`/`0x7a5dc0` loop).
 //!
-//! Pinned by the 2026-07-03 wow-re dispatch (`benilla-pins.md`, decision 0079): variation gates
-//! are separate DBC bits (0x400 pitch / 0x800 volume — raw-copied flag word, B2), the draw is
-//! the mulhi scale [`math::variation_draw`] (B1), and **no Type→category table exists** (B3) —
-//! the client's volume category is set by which play driver was invoked, so [`play_kit`] takes
+//! Pinned 2026-07-03 (decision 0079): variation gates are separate DBC bits (0x400 pitch / 0x800
+//! volume — raw-copied flag word, `0x45c080`), the draw is the mulhi scale [`math::variation_draw`]
+//! (`0x455c70`), and **no Type→category table exists** — the client's volume category is set by
+//! which play driver was invoked (`0x45ce60`/`0x45cf00`), so [`play_kit`] takes
 //! the category from its caller (SFX for world/UI triggers, ambience/music for the scheduler
 //! drivers). Remaining INTERIM: out-of-range looping channels stop (audible again = restart by
 //! the trigger) rather than pause/resume-virtualize.
@@ -33,8 +33,8 @@ use super::{AudioListener, SoundConfig, SoundOutput};
 
 /// Which config slider scales a channel — the WoW volume categories (master is global, on the
 /// main track). A property of the **call site** (which play driver fired — channel flag bits
-/// 0x2 SFX / 0x8 ambience / fallback music, set by caller booleans; wow-re `benilla-pins.md`
-/// B3), never derived from the kit's `SoundType`.
+/// 0x2 SFX / 0x8 ambience / fallback music, set by caller booleans, `0x45ce60`/`0x45cf00`), never
+/// derived from the kit's `SoundType`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SoundCategory {
     Sfx,
@@ -94,8 +94,8 @@ impl SoundKits {
 pub(crate) struct ActiveChannel {
     pub(crate) kit: u32,
     /// The world entity this channel voices, when the trigger is entity-latched (the NPC
-    /// greeting's per-unit live-handle latch `[unit+0xb1c]` — wow-re `sound/scratch/
-    /// npc-greeting.md`). `None` for every other play. A tagged channel's liveness IS the
+    /// greeting's per-unit live-handle latch `[unit+0xb1c]`, `0x60c28c`/`0x60c40a`). `None` for
+    /// every other play. A tagged channel's liveness IS the
     /// latch: the pump reaps it when the sound stops, which is exactly the handle release.
     source: Option<Entity>,
     /// A source-tagged **looping** channel rides its unit (the client's tracked play `0x61fec0`):
@@ -159,8 +159,7 @@ pub(super) enum Latch {
     /// line still sounding refuses a new one.
     Greeting,
     /// The one-shot creature bark's `[unit+0xb20]` — the per-unit slot of the reference's bark
-    /// dispatch `0x623a40` (5-way jump table `0x623afc`; wow-re
-    /// `object-layer/scratch/smsg-ai-reaction.md`, `feign-death-dyndead.md` §11).
+    /// dispatch `0x623a40` (5-way jump table `0x623afc`).
     ///
     /// **The payload is the reference's `[unit+0xb24]` — the latched bark STATE**, which is the
     /// interrupt rule's whole input: `0x623a82`/`0x623a88` abort a new bark whose state is `<=`
@@ -197,13 +196,13 @@ pub(super) enum Latch {
     ObjectSound,
 }
 
-/// The **class-bark chance roll** (wow-re `sound/scratch/creature-vocal-gates.md`, §5): the
+/// The **class-bark chance roll** (`0x623520`): the
 /// reference draws `r = MulHi32(101, rand32) ∈ [0, 100]` and admits the bark iff
 /// `threshold >= r` — inclusive, so `P = (threshold + 1) / 101`.
 ///
 /// The client's generator is its own shared lagged generator (`0x882664`/`0x882668` over the
 /// `.rdata` table `0x802700`), **not** the MSVCRT LCG the animation variation walk uses, and it is
-/// reseeded from the millisecond tick at `0x402802`. The note's own guidance follows from that:
+/// reseeded from the millisecond tick at `0x402802`. The rule follows from that:
 /// **reproduce the probability, never the sequence.** So this takes any 32-bit draw — ours is the
 /// kit player's own xorshift ([`SoundKits::roll`]) — and only the arithmetic is faithful.
 pub(super) fn bark_chance_pass(threshold: u32, roll: u32) -> bool {
@@ -252,8 +251,7 @@ pub(super) const EXERTION_CHANCE_PLAYER: u32 = 35;
 ///
 /// The route that reaches these was the "still unpinned" clause above: `0x624530`'s tail →
 /// `[vtable+0x88]` → the roll `0x623520` / `0x62f940` → the 13-way column selector `0x623020`
-/// (`+0x0c/+0x10/+0x14` = DBC columns 3/4/5). wow-re
-/// `object-layer/scratch/wound-parry-gate-and-injury-vocal.md`.
+/// (`+0x0c/+0x10/+0x14` = DBC columns 3/4/5).
 pub(super) const INJURY_CHANCE_CREATURE: u32 = 60;
 /// The player twin of [`INJURY_CHANCE_CREATURE`] — `0x86424c[2] = 30`.
 pub(super) const INJURY_CHANCE_PLAYER: u32 = 30;
@@ -266,8 +264,7 @@ pub(super) const INJURY_CHANCE_PLAYER: u32 = 30;
 pub(super) const STAND_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A **voice bus** — the reference's per-bus concurrency domain, and the index into its
-/// compile-time cap table (wow-re `sound/scratch/voice-cap-and-headroom.md`, and
-/// `creature-vocal-gates.md` §3.1/§5.3).
+/// compile-time cap table (`0x87ce60`).
 ///
 /// This is **not** the volume category ([`SoundCategory`]) — VERIFIED orthogonal: the bus lives at
 /// `[chan+0x84]` and takes 0..12, while the category is flag bits `0x2`/`0x8`/`0x10` in
@@ -370,15 +367,14 @@ fn same_kit_cap_blocks(dedupe_exempt: bool, live_same_kit: usize) -> bool {
 
 /// The reference's **global voice ceiling** — the number this whole hunt came down to.
 ///
-/// `FSOUND_Init(44100, 12, 0x82)` (wow-re `sound/scratch/voice-cap-and-headroom.md` §5, VERIFIED
-/// on the binary at `0x7a492b`; the `SoundSoftwareChannels` CVar's own default is `"12"`).
-/// Hardware voices are a second bank of up to 12, but `FSOUND_SetMaxHardwareChannels` is **forced
-/// to 0** whenever `FSOUND_GetDriverCaps` reports no hardware mixing — which is every host this
-/// decade — so the note's conclusion is "exactly 12 on any host".
+/// `FSOUND_Init(44100, 12, 0x82)` (`0x7a492b`; the `SoundSoftwareChannels` CVar's own default is
+/// `"12"`). Hardware voices are a second bank of up to 12, but `FSOUND_SetMaxHardwareChannels` is
+/// **forced to 0** whenever `FSOUND_GetDriverCaps` reports no hardware mixing — which is every
+/// host this decade — so the ceiling is exactly 12 on any host.
 ///
-/// **This ceiling is what actually bounds the reference's mix, and we never had it.** The same
-/// note says of the mass-buff case that it plays "with no cap and no dedupe — what bounds it is
-/// the device ceiling, and nothing else". A probe capture measured benilla at **42 simultaneous
+/// **This ceiling is what actually bounds the reference's mix, and we never had it.** The
+/// mass-buff case plays through `0x458870` with no cap and no dedupe — what bounds it is the
+/// device ceiling, and nothing else. A probe capture measured benilla at **42 simultaneous
 /// voices**, over 12 for 23 % of the run, which is what made the summed mix ask for +13.4 dBFS
 /// and the limiter (1551) pull the whole mix down by up to 13.5 dB a quarter of the time. The
 /// clipping became pumping; the director heard no improvement, correctly. Decision 1557.
@@ -532,7 +528,7 @@ pub(super) struct PlayExtras {
     /// bit 0x20 into the FMOD flags word, consumed by `0x7a66a0`), and a caller that already
     /// guarantees one channel per kit by construction must not be held to it a second time. The
     /// ambient emitter pool ([`super::emitter_pool`]) is that caller: it dedupes **structurally**,
-    /// one entry per SoundEntries id (wow-re `doodad-sound-emitters.md` §15), and its opens go
+    /// one entry per SoundEntries id (`0x461e60`), and its opens go
     /// through `0x7a5680` → `0x7a54d0`, which never reaches that gate at all.
     ///
     /// It is not a nicety. `NightElfStreetLampLoop` is Flags **0x220**, so with the gate applied a
@@ -683,11 +679,11 @@ pub(super) fn play_kit_ext(
         return Ok(false);
     }
 
-    // Duplicate suppression — byte-verified (wow-re uisound-tables.md, corrected §5): the FMOD
-    // pre-play gate 0x7a66a0 drops a play when kit flag 0x20 is set AND a same-kit instance is
-    // still audible (0x458f40 lifts SoundEntries +0x7c bit 0x20 into the FMOD flags word). The
-    // gate's OTHER arm — an always-on per-category concurrent cap (count[0xcf553c] >=
-    // limit[0x87ce60], 13 categories) — stays a deferral until that limit table is read out.
+    // Duplicate suppression: the FMOD pre-play gate 0x7a66a0 drops a play when kit flag 0x20 is
+    // set AND a same-kit instance is still audible (0x458f40 lifts SoundEntries +0x7c bit 0x20
+    // into the FMOD flags word). The gate's OTHER arm — an always-on per-category concurrent cap
+    // (count[0xcf553c] >= limit[0x87ce60], 13 categories) — stays a deferral until that limit
+    // table is read out.
     let live_same_kit = out.channels.iter().filter(|c| c.kit == id).count();
     if no_duplicates_blocks(dedupe_exempt, flags, live_same_kit) {
         return Ok(false);
@@ -729,8 +725,9 @@ pub(super) fn play_kit_ext(
     // Decode (cached).
     let data = kits.sfx(assets, &path)?;
 
-    // Per-shot variation — separate DBC gates (B2): 0x800 volume, 0x400 pitch (no 5875 kit
-    // sets 0x800, so volume variation is dormant in this build's data — the gate is faithful).
+    // Per-shot variation — separate DBC gates: 0x800 volume (`0x458c60`), 0x400 pitch (`0x458da0`)
+    // (no 5875 kit sets 0x800, so volume variation is dormant in this build's data — the gate is
+    // faithful).
     let v = if flags & sound_kit_flags::VARY_VOLUME != 0 {
         let draw = math::variation_draw(kits.rng.next());
         math::variation_volume(Some(draw), volume, mult)
@@ -826,7 +823,7 @@ pub(super) fn play_kit_ext(
 }
 
 /// Does `unit` hold a **live one-shot voice channel** — the reference's `[unit+0xb20]` handle,
-/// nonzero-gated (wow-re `object-layer/scratch/smsg-ai-reaction.md`) — and if so, at which
+/// nonzero-gated — and if so, at which
 /// **state**? `Some(state)` is the pair `[0xb20]` live + `[0xb24]`; `None` is a free slot, which
 /// is `0x623a74`/`0x623a7d`'s "allowed, no comparison" path.
 ///
@@ -1033,7 +1030,7 @@ fn near_field(d_sq: f32, cutoff: f32) -> f32 {
 impl SoundKits {
     /// Resolve a SoundEntries kit id by its `PlaySoundByName` key — the client's name-hash
     /// registry lookup (`0x458030` family). The ghost ambience/music tracks are named entries
-    /// ("Ghost"/"GhostMusic" — wow-re zone-music-ambience + the 0308 death dispatch).
+    /// ("Ghost"/"GhostMusic" — the reference's zone music/ambience + the 0308 death dispatch).
     pub(crate) fn id_by_name(&self, name: &str) -> Option<u32> {
         self.catalog.by_name(name).map(|k| k.id)
     }
@@ -1511,7 +1508,7 @@ mod tests {
     }
 
     /// The ceiling is the reference's, not a number we liked: `FSOUND_Init(44100, 12, 0x82)`,
-    /// verified on the binary at `0x7a492b` (wow-re `voice-cap-and-headroom.md` §5), with the
+    /// verified on the binary at `0x7a492b`, with the
     /// hardware bank forced to 0 on any host without hardware mixing. Pinned so a later "let's
     /// raise it a bit" has to argue with the byte-fact rather than drift past it.
     #[test]
@@ -1640,9 +1637,8 @@ mod tests {
     }
 
     /// **The lane split.** Both suppressors are the ONE-SHOT lane's (`0x458f40` → `0x7a66a0`);
-    /// the ambient emitter pool's opens go through `0x7a5680` → `0x7a54d0` and never reach them
-    /// (wow-re `doodad-sound-emitters.md` §15), because that lane already guarantees one channel
-    /// per SoundEntries id structurally.
+    /// the ambient emitter pool's opens go through `0x7a5680` → `0x7a54d0` and never reach them,
+    /// because that lane already guarantees one channel per SoundEntries id structurally.
     ///
     /// `NightElfStreetLampLoop` is the case that proves it matters rather than tidies: Flags
     /// **0x220**, so an un-exempt pool entry could not replace its own 3.0 s fade-out — the lamp's

@@ -1,6 +1,6 @@
 //! Projectile **flight sound** (`SpellVisual` field 10): the loop a missile carries while it
 //! travels — the thrown weapon's `WeaponLoop`, the fireball's `FireMissileLoop`. The client keeps
-//! a per-missile loop handle (`CMissile+0x44`, wow-re `w2f1.md`) started at launch and killed at
+//! a per-missile loop handle (`CMissile+0x44`) started at launch and killed at
 //! arrival; ours is a channel **tracked to the missile entity** (the tracked-loop follow in
 //! [`super::kit::pump_channels`] rides it along the flight) begun on [`MissileSound::Start`] and
 //! reaped on [`MissileSound::Stop`], which `crate::entities::missile` writes at launch/arrival.

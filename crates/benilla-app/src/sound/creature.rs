@@ -203,8 +203,8 @@ fn death_vocals(
 /// the aggro bark (CreatureSoundData col 10), ALERT → the alert bark (col 13) — pure audio, like
 /// the client (`0x6056e0` plays no animation/UI on either leg).
 ///
-/// **HOSTILE rides the unit's one-shot voice channel, and that is not a nicety** (decision 1399,
-/// wow-re `object-layer/scratch/smsg-ai-reaction.md`): the bark goes out through `0x623a40(0)`,
+/// **HOSTILE rides the unit's one-shot voice channel, and that is not a nicety** (decision 1399):
+/// the bark goes out through `0x623a40(0)`,
 /// which stores its channel in `[unit+0xb20]` with category 0 latched in `[unit+0xb24]` —
 /// **the lowest category in the table, so it never interrupts a playing bark and a repeat is
 /// dropped while one is live** ([`unit_voice_playing`]). The wire does not send this packet
@@ -219,8 +219,7 @@ fn death_vocals(
 ///
 /// **ALERT is a different route, and is faithfully unconditional** — pinned since, decision 1401.
 /// It reaches `vtable+0x88(8,0)` → `0x623490` → col 13, and it *is* rolled, but the class-8
-/// threshold is **100** and the compare is inclusive, so `P = 1`. (wow-re's `smsg-ai-reaction.md`
-/// calling ALERT "probabilistic" was too strong, and has been corrected at the table.) Its one
+/// threshold is **100** and the compare is inclusive, so `P = 1`. Its one
 /// real gate is a mute while a **server-pushed** object sound is live on the unit — the
 /// `SMSG_PLAY_OBJECT_SOUND` (opcode `0x278`) registry. ALERT stores no latch and stays off the
 /// slot.
@@ -262,8 +261,8 @@ fn ai_reaction_vocals(
         let Ok((net, transform, mount_child)) = units.get(r.unit) else {
             continue;
         };
-        // The mounted redirect (byte-verified `0x60c480` — `+0xb44 ?: +0xb40`, wow-re
-        // `mount-composition.md` Q4; 0441 fold-back): ALERT reads through the mount-preferred
+        // The mounted redirect (`0x60c480` — `+0xb44 ?: +0xb40`; 0441 fold-back): ALERT reads
+        // through the mount-preferred
         // getter — a mounted unit alerts with its MOUNT's voice — while HOSTILE (like DEATH)
         // reads the base row directly and stays the rider's own bark.
         let display = if r.hostile {
@@ -367,7 +366,7 @@ fn pet_talk_vocals(
         }
         // The pet's OWN voice row, not a mount-preferred one: `0x6040c0` resolves the packet's
         // guid and hands that object straight to `0x623a40`, which reads `[unit+0xb40]` — the
-        // base row (`mount-composition.md` Q4's `+0xb44` redirect belongs to `0x60c480`, which is
+        // base row (the `+0xb44` redirect belongs to `0x60c480`, which is
         // not on this path).
         let Some(voice) = net.display_id.and_then(|d| voices.0.for_display(d)) else {
             continue;
@@ -396,8 +395,7 @@ fn pet_talk_vocals(
 /// It cannot be otherwise: there is no unit left to hang any of those on.
 ///
 /// That fresh, inlined resolve is also why column 29 was believed dead — a census over the
-/// consumers of the *cached* `[unit+0xb40]` row can never reach it (wow-re
-/// `object-layer/scratch/pet-feedback-opcodes.md`).
+/// consumers of the *cached* `[unit+0xb40]` row can never reach it.
 ///
 /// **vmangos never sends this packet**, so nothing here fires against our server today. It is
 /// built because the reference is the spec, and because it is what makes loading column 29 a
@@ -444,8 +442,8 @@ fn pet_dismiss_sounds(
 
 /// The ambient body loop (`loop_sound`, CreatureSoundData col 23): a creature whose body
 /// inherently sounds — an elemental's rumble, a slime's gurgle, a shredder's engine — hums
-/// continuously while alive. The client's `0x623800` gate, byte-verified (wow-re
-/// `smsg-ai-reaction.md` §5): health > 0, `UNIT_DYNAMIC_FLAGS` DEAD (`0x20`, the feign-death
+/// continuously while alive. The client's `0x623800` gate: health > 0, `UNIT_DYNAMIC_FLAGS` DEAD
+/// (`0x20`, the feign-death
 /// visual) clear, the column nonzero, and a "not already playing" latch — here the tracked
 /// channel's own liveness, reconciled every frame. That reconcile shape covers the client's
 /// field-delta watchers (death stops it, resurrection restarts it) *and* doubles as the restart
@@ -481,8 +479,8 @@ fn creature_body_loops(
         if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
             continue;
         }
-        // The mounted redirect (byte-verified `0x60c480` — `+0xb44 ?: +0xb40`, wow-re
-        // `mount-composition.md` Q4; 0441 fold-back): the loop column reads the mount-preferred
+        // The mounted redirect (`0x60c480` — `+0xb44 ?: +0xb40`; 0441 fold-back): the loop
+        // column reads the mount-preferred
         // row — a mounted mechanostrider's engine hums; dismounting swaps back to the rider's.
         let display = mount_child
             .and_then(|mc| mounts.get(mc.0).ok())
@@ -540,11 +538,10 @@ fn creature_body_loops(
 /// 0525.)
 /// A mounted unit's fidgets are the MOUNT model's own tags, fired by the mount CHILD entity
 /// carrying the mount's display — so they already resolve the mount's voice row, the split-
-/// entity shape of the client's mounted redirect (`0x60c480`: `+0xb44 ?: +0xb40` — wow-re
-/// `mount-composition.md` Q4, 0441 fold-back).
+/// entity shape of the client's mounted redirect (`0x60c480`: `+0xb44 ?: +0xb40` — 0441
+/// fold-back).
 ///
-/// **The three tag families gate differently, and the difference is byte-exact** (wow-re
-/// `sound/scratch/creature-vocal-gates.md`, decision 1401):
+/// **The three tag families gate differently, and the difference is byte-exact** (decision 1401):
 ///
 /// - **`$FD1..$FD4` → fidget 1..4, ungated.** `0x6232c0` → `0x623440` → `0x6230a0` reads
 ///   `row[+0x38 + 4*(n-1)]` literally and touches no gate at all. A zero slot bails silently, with
@@ -641,8 +638,7 @@ fn creature_anim_vocals(
 
 /// Registration hook for [`super::SoundPlugin`].
 /// The **fall-landing wound vocal** — the client-side hard-landing predictor's sound leg
-/// (`0x602d00 → call [vtable+0x88] class 2` at `0x602d84`, byte-verified wow-re
-/// `object-layer/scratch/smsg-environmentaldamage.md`; decision 0412): a landing past the HARD
+/// (`0x602d00 → call [vtable+0x88] class 2` at `0x602d84`; decision 0412): a landing past the HARD
 /// threshold plays the unit's ordinary CreatureSoundData **wound vocal, normal row** (class 2 →
 /// column `+0xc` = `injury[0]` — the same row a landed melee hit voices; the crit/crushing rows
 /// are unused here). NOT wire-driven: the server's `SMSG_ENVIRONMENTALDAMAGELOG` set plays no

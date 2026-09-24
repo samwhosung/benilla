@@ -68,14 +68,14 @@ pub(crate) use zone::ExplorationSounds;
 /// Player-facing audio config — always-on, player-faithful defaults (decision 0026: no
 /// gameplay→dev coupling; the debug panel edits this, it doesn't own it).
 ///
-/// Defaults are the client's CVar registration defaults (wow-re `benilla-pins.md` B10,
-/// VERIFIED): `MasterVolume` 1.0, `SoundVolume` 1.0, **`MusicVolume` 0.4**,
+/// Defaults are the client's CVar registration defaults (`0x456fe0`, `0x460a60`):
+/// `MasterVolume` 1.0, `SoundVolume` 1.0, **`MusicVolume` 0.4**,
 /// **`AmbienceVolume` 0.6** — a fresh 1.12 install is NOT uniform full volume.
 #[derive(Resource)]
 pub(crate) struct SoundConfig {
     /// Master enable — 1.12's `MasterSoundEffects` CVar, the Sound options "Enable All Sound"
-    /// checkbox (SoundOptionsFrame.lua index 1; registrar default "1", B10). In the binary its
-    /// callback sets the engine-wide pause flag (`0x457500` → `0x7a6570` → `DAT_0087cf00`);
+    /// checkbox (SoundOptionsFrame.lua index 1; registrar default "1", `0x45737a`). In the binary
+    /// its callback sets the engine-wide pause flag (`0x457500` → `0x7a6570` → `DAT_0087cf00`);
     /// benilla zeroes every category through [`Self::category_amp`] instead — channels keep
     /// running silently (the `muted` posture), same audible truth.
     pub enabled: bool,
@@ -97,11 +97,12 @@ pub(crate) struct SoundConfig {
     pub music: f32,
     pub ambience: f32,
     /// The per-category enable checkboxes — 1.12's own `EnableMusic` / `EnableAmbience` CVars
-    /// (registrar defaults "1", wow-re B10; 1.12 has NO SFX-only toggle — `MasterSoundEffects`
-    /// above is the master). Gated in [`Self::category_amp`], so a disable silences the category
-    /// everywhere at once. Divergence, disclosed: the reference's `EnableMusic` callback
-    /// stops/re-selects the music stream (`0x457490` → `0x45b050`/`0x45aeb0`) — benilla keeps
-    /// the stream alive at zero, so re-enabling resumes mid-track where the reference re-picks.
+    /// (registrar defaults "1", `0x45739b`/`0x460a9d`; 1.12 has NO SFX-only toggle —
+    /// `MasterSoundEffects` above is the master). Gated in [`Self::category_amp`], so a disable
+    /// silences the category everywhere at once. Divergence, disclosed: the reference's
+    /// `EnableMusic` callback stops/re-selects the music stream (`0x457490` →
+    /// `0x45b050`/`0x45aeb0`) — benilla keeps the stream alive at zero, so re-enabling resumes
+    /// mid-track where the reference re-picks.
     pub music_enabled: bool,
     pub ambience_enabled: bool,
     /// **Error speech** — 1.12's `EnableErrorSpeech` CVar (`CVar::Register` at `0x457877`,
@@ -115,8 +116,7 @@ pub(crate) struct SoundConfig {
     /// (decision 1847). `false` = the reference's own behaviour: alt-tab away and the client goes
     /// quiet; come back and it returns.
     ///
-    /// The reference's mechanism, VERIFIED end to end in wow-re
-    /// `sound/scratch/focus-mute-law.md` (§5 round, 2026-09-02, dispatched from here): **`WM_ACTIVATE`
+    /// The reference's mechanism: **`WM_ACTIVATE`
     /// and nothing else** — `WM_ACTIVATEAPP`, `WM_SETFOCUS` and `WM_KILLFOCUS` all fall through the
     /// WndProc's remap table to `DefWindowProcA` — normalised to a 0/1 flag at `0x42d080`, enqueued
     /// as OS-event tag 6 (`0x42d0cb`, the only tag-6 producer image-wide), raised as event-bus
@@ -148,8 +148,8 @@ pub(crate) struct SoundConfig {
     ///
     /// There is **no 1.12 CVar and no 1.12 checkbox** for this — `SoundOptionsFrame.lua` declares
     /// seven checkboxes (indices 1, 2, 4–8) and four sliders, none of them this, and none of the
-    /// reference's 214 `CVar::Register` sites names it (wow-re `re/cvar/cvar-register-sites.tsv`;
-    /// `Register` is the only creation path, so `Config.wtf` can hold no such key either). So the
+    /// reference's 214 `CVar::Register` (`0x63db90`) sites names it (`Register` is the only
+    /// creation path, so `Config.wtf` can hold no such key either). So the
     /// row is the `autoLootDefault` posture: benilla's persistence is the CVar store (0954), and a
     /// setting with no 1.12 CVar takes the later-era engine's spelling rather than an invented one.
     pub background_sound: bool,
@@ -188,8 +188,7 @@ pub(crate) struct SoundConfig {
     pub world_hold: bool,
     /// **The cinematic's music stop** — NOT a CVar, a per-frame live bit fed from
     /// [`crate::cinematic::Cinematic`] by [`feed_music_suppression`], and the exact runtime
-    /// counterpart of the reference's `[0xb06cc8]` (wow-re `sound/scratch/cinematic-audio-law.md`,
-    /// §5, VERIFIED).
+    /// counterpart of the reference's `[0xb06cc8]`.
     ///
     /// A cinematic asserts precisely what `/console EnableMusic 0` asserts: both reach the same
     /// setter `0x4603b0` — the CVar handler at `0x4574a4`, the cinematic's own start at `0x48ed83`
@@ -218,7 +217,7 @@ pub(crate) struct SoundConfig {
     /// The **output limiter** — benilla's own `SoundOutputLimiter` CVar (decision 1551), default
     /// **on**. Not a 1.12 CVar: the reference has no such DSP and does not need one, because it
     /// hands its whole audible mix to FMOD 3 and carries its headroom elsewhere (the SFX-bus
-    /// auto-duck, wow-re `benilla-pins.md` B15). benilla sums into f32 and kira answers an
+    /// auto-duck, `0x457960`). benilla sums into f32 and kira answers an
     /// over-scale sum with a hard clamp, which is audible distortion the moment two full-scale
     /// kits overlap — see [`limiter`] for the measured arithmetic. This exists so the fix can be
     /// A/B'd against what it fixed: `/run SetCVar("SoundOutputLimiter", 0)` applies live.
@@ -232,8 +231,8 @@ pub(crate) struct SoundConfig {
     /// per-frame driver `0x482ea0`. The sink `FSOUND_3D_Listener_SetAttributes` has exactly one
     /// call site image-wide (`0x483218`), so this one branch decides the whole listener.
     ///
-    /// **It selects position AND orientation together, never one alone** (wow-re
-    /// `sound/scratch/benilla-pins.md` §B14, VERIFIED): `1` puts the listener on the active
+    /// **It selects position AND orientation together, never one alone**: `1` puts the listener on
+    /// the active
     /// mover with the character's *facing* about world-up — so volume and pan never change with
     /// zoom or camera orbit — and `0` puts it at the camera eye with the camera's own basis.
     /// Velocity is NULL either way, so the listener contributes no doppler in either mode.
@@ -251,21 +250,20 @@ pub(crate) struct SoundConfig {
     /// **It does NOT gate:** creature reaction barks, NPC greetings, `$ESD` emote-state sounds, or
     /// FrameXML `PlaySound()` — those are the other per-unit channels.
     ///
-    /// **One thing wow-re does not settle**, and it is recorded rather than guessed: two of its
-    /// notes place the lookup in `0x623c80` (received text-emote only), a third places it on the
+    /// **One thing is not settled**, and it is recorded rather than guessed: one reading places the
+    /// lookup in `0x623c80` (received text-emote only), another places it on the
     /// shared leg `0x623c10`, which the `$CSD` M2 anim-event also enters — and if it is really
-    /// `0x623c10`, this CVar silences those too. Nothing records whether the *outgoing* local
-    /// `DoEmote` vocal is gated at all. We take the narrower, twice-recorded reading: the received
-    /// path. Widening it later is one more call site, not a redesign.
+    /// `0x623c10`, this CVar silences those too. Whether the *outgoing* local `DoEmote` vocal is
+    /// gated at all is open. We take the narrower, better-attested reading: the received path.
+    /// Widening it later is one more call site, not a redesign.
     pub emote_sounds: bool,
     /// **Zone music with no silence gap** — 1.12's `SoundZoneMusicNoDelay` (`0x4578b3`, registrar
     /// default `"0"`; the stock Sound panel's check button 6, labelled *Loop Music*). Read by
     /// [`zone::next_track_time`], which is the reference's `0x4601f0` — and its sole caller there
     /// is the natural end-of-track reap, which is exactly ours.
     ///
-    /// **It removes the intra-zone loop-restart gap, not the zone-change transition** (wow-re
-    /// `sound/scratch/zone-music-ambience-transition.md` Q1/Q2, which corrects that note's own
-    /// earlier framing): the thing it deletes is the randomised `ZoneMusic.dbc`
+    /// **It removes the intra-zone loop-restart gap, not the zone-change transition**: the thing it
+    /// deletes is the randomised `ZoneMusic.dbc`
     /// SilenceIntervalMin/Max wait between successive plays of the *same* zone's track, whose
     /// length is data rather than a constant. A zone CHANGE is already immediate and always was —
     /// the incoming track starts on the next tick while the outgoing fades over 4 s, an overlap
@@ -432,7 +430,7 @@ impl SoundOutput {
 /// Bevy space. Computed once by [`update_audio_listener`]; consumed by the mixer feed, the channel
 /// pump's distance/rolloff math, and each trigger's selection-time audibility gate.
 ///
-/// The client's `SoundListenerAtCharacter` default is `"1"` (wow-re benilla-pins B14): the listener
+/// The client's `SoundListenerAtCharacter` default is `"1"` (`0x457890`): the listener
 /// sits at the **character**, not the camera — so 3D volume and pan are independent of zoom and
 /// camera orbit. `pos` = the self-avatar's head (feet + [`head_height`]); `rot` = the character's
 /// *facing* about world-up (`Quat::from_rotation_y(face_yaw)`), so panning tracks where the body
@@ -678,9 +676,8 @@ fn update_audio_listener(
     self_av: Query<(&Transform, Option<&CameraPivot>), With<Embodied>>,
     cam: Query<&Transform, (With<WorldCamera>, Without<Embodied>)>,
 ) {
-    // **A cinematic takes the listener to the camera, and it OVERRIDES the CVar** — wow-re
-    // `sound/scratch/cinematic-audio-law.md` (VERIFIED; it also promoted `benilla-pins.md` B14's
-    // `camera+0x50` label from INFERRED to VERIFIED). `0x483112 jne 0x4831f0` takes the camera
+    // **A cinematic takes the listener to the camera, and it OVERRIDES the CVar**:
+    // `0x483112 jne 0x4831f0` takes the camera
     // branch whenever `camera+0x50 != 0`, ahead of and regardless of `SoundListenerAtCharacter`;
     // the flag is armed from the cinematic's own start path (`0x48ee55` → `0x50c870` → `0x50c9f2`
     // → `0x50c740`) and cleared only by `0x50ca50` at the stop.

@@ -1,5 +1,5 @@
 //! The dismount sound — the ONE genuine mount-transition sound the client plays (decision 0441
-//! fold-back; byte-verified wow-re `mount-composition.md` Q4): the dismount handler `0x607ce0`
+//! fold-back): the dismount handler `0x607ce0`
 //! unconditionally tail-plays a FIXED global SoundEntries kit, resolved once at startup by
 //! name-match — `"SpiritWolf_DONOTRENAME"` (`0x623110` → `0x8627bc`) — positioned at the
 //! dismounting unit. It is NOT CreatureSoundData: no mount/dismount column exists, and the
@@ -21,8 +21,8 @@ use super::{AudioListener, SoundConfig, SoundOutput};
 /// startup by name-match — the kit predates mounts as a spirit-wolf sound, hence the odd name;
 /// the mechanism is byte-verified, its in-game character is the director's to judge on a live
 /// dismount). This literal is the 5875 DBC's exact `Name` column value (one row, extracted
-/// through the patch chain this session); the wow-re report transcribed the client's constant
-/// as `SpiritWolf_DONOTRENAME` — a transcription-level difference, the row is unambiguous.
+/// through the patch chain this session), and the client's constant at `0x8627bc` reads the same;
+/// `SpiritWolf_DONOTRENAME` is a transcription-level difference, the row is unambiguous.
 const DISMOUNT_KIT: &str = "SpiritWolf (DONOTRENAME)";
 
 /// Play the fixed dismount kit on a live mounted→unmounted transition of any streamed unit —

@@ -14,9 +14,9 @@
 //! reads `Low`, above it reads `High`, and only an exact 1.0 reads `Medium`. Our own vmangos realm
 //! advertises 0.06 and therefore reads **Low**, which is what the real client would show too.
 //!
-//! [`realm_load_stats`] and [`realm_load_classify`] are ports of wow-re's byte-exact
-//! `crates/glue/src/realm.rs` (`CGlue::RealmLoadStats` `0x46e510` and `CGlue::RealmLoadClassify`
-//! `0x46ec60`), including their x87 rounding behaviour — the accumulators round to `f32` every
+//! [`realm_load_stats`] and [`realm_load_classify`] are ports of `CGlue::RealmLoadStats`
+//! `0x46e510` and `CGlue::RealmLoadClassify` `0x46ec60`, including their x87 rounding
+//! behaviour — the accumulators round to `f32` every
 //! iteration because the binary stores them to `f32` slots inside the loop, while the mean, the
 //! sqrt and the band comparisons stay 53-bit. Kept faithful rather than tidied because the band
 //! edges are exactly where a rounding difference would flip a visible word.
@@ -161,8 +161,7 @@ pub(super) fn type_column(realm_type: u32) -> (&'static str, Color) {
 /// **This is a `Cfg_Configs.dbc` join, not an enumeration** — `0x46efda` takes the realm's type
 /// dword and linearly scans the DBC for the row whose `RealmType` column matches, reading
 /// `PlayerKillingAllowed` → `pvp` and `RoleplayingRealm` → `rp`. (Note the key is the type at
-/// `[realm+0x04]`, the *first* dword on the wire; wow-re's earlier band sweep had attributed the
-/// type to `[+0x130]`, which is really `numCharacters`.)
+/// `[realm+0x04]`, the *first* dword on the wire; `[+0x130]` is `numCharacters`, not the type.)
 ///
 /// The table below is the shipped `DBFilesClient\Cfg_Configs.dbc` transcribed — a frozen table in
 /// the same spirit as the `*_ICON_TCOORDS` in `crate::glue::art`, and the honest way to read it is
@@ -173,8 +172,6 @@ pub(super) fn type_column(realm_type: u32) -> (&'static str, Color) {
 /// A type with no row falls to `(false, false)` — the scan finds nothing and neither column is
 /// read. That is also what the two rows this table does not carry (the shipped DBC has 11; nine
 /// map a distinct `RealmType`) degrade to, and it is the safe answer for a server inventing one.
-///
-/// VERIFIED, wow-re `system/glue/scratch/realm-list-bindings.md` §3.
 pub(crate) fn pvp_rp(realm_type: u32) -> (bool, bool) {
     match realm_type {
         // RealmType → (PlayerKillingAllowed, RoleplayingRealm)

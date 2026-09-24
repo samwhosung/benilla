@@ -5,9 +5,9 @@
 //! text *"Address of realm list server"*, default `us.logon.worldofwarcraft.com:3724` — and loads
 //! it from a plain-text `realmlist.wtf` beside the executable, which every private server's setup
 //! page tells you to open in Notepad. (All four strings are byte-verified in `WoW.exe`, adjacent
-//! in the string table at the CVar's registration site; wow-re `mpq/scratch/startup-order-A.md`
-//! row 62 records the same registration.) benilla keeps the **name, the `host[:port]` shape and
-//! the help string**, and replaces the text editor with a control on the login screen.
+//! in the string table at the CVar's registration site, `0x5ab6a6`.) benilla keeps the
+//! **name, the `host[:port]` shape and the help string**, and replaces the text editor with a
+//! control on the login screen.
 //!
 //! **It is a CVar, in `config.toml` with every other setting — not a `realmlist.wtf` of our own.**
 //! The reference splits the file for reasons that are entirely its own (the installer and the

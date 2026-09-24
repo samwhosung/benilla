@@ -8,9 +8,8 @@
 //! `$CSD 6923` = the SoundEntries kit literally named `HumanMaleEmoteLaugh`; Cry 77 → 6921,
 //! Chicken 78 → 6919, Applaud 80 → 4× `ClapSounds` 6576 — probe-verified on the real 5875 M2 +
 //! SoundEntries; the client's `$CSD` handler `0x623c10` → `0x459230` plays the event payload as
-//! a literal SoundEntries id, byte-confirming the routing — wow-re
-//! `sound/scratch/gather-sound-anim-events.md`) — and the **gathering/work pair** (decision
-//! 0562, same wow-re note):
+//! a literal SoundEntries id, byte-confirming the routing) — and the **gathering/work pair**
+//! (decision 0562):
 //!
 //! - **`$TRD`** (`0x62faa0`): the in-flight spell's `SpellVisual` **field-14 strike sound**,
 //!   positioned — **the mining pick clang** (visual 93 → 1143 "Mining Impact") and the crafting
@@ -24,7 +23,7 @@
 //!   which no vmangos path ever sets for a player — verified at its source).
 //!
 //! `$CST`/`$CSL`/`$CSR` are still NOT routed, but **the reason we gave was wrong** and is
-//! corrected here (wow-re `anim-event-position-law.md` §5). The handler `0x60c940` does only
+//! corrected here. The handler `0x60c940` does only
 //! 3D-**reposition** the already-playing cast handle — that part held — but it repositions it to
 //! the **event's own point** (`0x600143 mov edx,[ebx+0x10]` → `0x60c960`/`0x60c990` → `0x61ceb0`),
 //! i.e. to the casting hand, not to the caster. benilla's kit player tracks a looping cast sound
@@ -126,12 +125,11 @@ pub(super) fn route_anim_events(
     };
     for ev in events.read() {
         match &ev.ident {
-            // `$DSL` — the DOODAD SOUND **LOOP** (`0x69521d`), VERIFIED (wow-re
-            // `sound/scratch/doodad-sound-emitters.md`, §5). A persistent handle with a lifecycle,
-            // one per doodad (`[CMapDoodadDef+0x168]`): crossing the marker again **repositions**
-            // the existing registration (`0x462000`) and never restarts it; a DIFFERENT id
-            // releases the old one (`0x461f80`) and registers the new (`0x461d80`). So there is no
-            // wrap retrigger at all — which the shipped audio already implied, since
+            // `$DSL` — the DOODAD SOUND **LOOP** (`0x69521d`). A persistent handle with a
+            // lifecycle, one per doodad (`[CMapDoodadDef+0x168]`): crossing the marker again
+            // **repositions** the existing registration (`0x462000`) and never restarts it; a
+            // DIFFERENT id releases the old one (`0x461f80`) and registers the new (`0x461d80`). So
+            // there is no wrap retrigger at all — which the shipped audio already implied, since
             // `NightElfStreetLampLoop` is 4.000 s on a 3.333 s sequence and `CampFireSmallLoop` is
             // 2.967 s on the same, mismatched in both directions.
             //
@@ -146,8 +144,7 @@ pub(super) fn route_anim_events(
             // correlation was authoring practice — you do not detune a sustained hum.) `force_loop`
             // here is therefore the faithful shape, not a workaround: 25 of the 60 kits a `$DSL`
             // names omit 0x200 and every one of them loops in the real client.
-            // `$DSL` — the DOODAD SOUND **LOOP** (`0x69521d`), VERIFIED (wow-re
-            // `sound/scratch/doodad-sound-emitters.md`). It does not start a sound. It
+            // `$DSL` — the DOODAD SOUND **LOOP** (`0x69521d`). It does not start a sound. It
             // **registers this doodad's position** as one emitter of its SoundEntries id in the
             // pool at `0xb06dd8` (`0x461d80`), and re-crossing the marker only *repositions* that
             // registration (`0x462000`) — which is why there is no wrap retrigger, and why
@@ -167,14 +164,14 @@ pub(super) fn route_anim_events(
                     .pos
                     .or_else(|| transforms.get(ev.entity).ok().map(|t| t.translation()))
                 {
-                    // **The two lanes' `$DSL` arms differ, and only here** (wow-re
-                    // `doodad-sound-emitters.md` §13). The placed-M2 handler `0x6951e0` compares
-                    // the id and swaps; the GameObject dispatcher's arm `0x5f3fe5` does **not
-                    // compare it at all** — a live handle is only repositioned, whatever id the
-                    // marker names. Onyxia's lava trap is the case that makes it observable:
-                    // `ONYZIASLAIRLAVATRAP.M2` (208 spawns in the lair) authors `$DSL(8681)` on
-                    // its chained Stand variation and `$DSL(8682)` on Custom0, so on the
-                    // GameObject lane the Custom0 hum never displaces the Stand one.
+                    // **The two lanes' `$DSL` arms differ, and only here**. The placed-M2 handler
+                    // `0x6951e0` compares the id and swaps; the GameObject dispatcher's arm
+                    // `0x5f3fe5` does **not compare it at all** — a live handle is only
+                    // repositioned, whatever id the marker names. Onyxia's lava trap is the case
+                    // that makes it observable: `ONYZIASLAIRLAVATRAP.M2` (208 spawns in the lair)
+                    // authors `$DSL(8681)` on its chained Stand variation and `$DSL(8682)` on
+                    // Custom0, so on the GameObject lane the Custom0 hum never displaces the
+                    // Stand one.
                     if go_lane.contains(ev.entity) {
                         super::emitter_pool::register_keeping_first(
                             &mut pool, ev.entity, ev.data, at, listener,
@@ -184,8 +181,8 @@ pub(super) fn route_anim_events(
                     }
                 }
             }
-            // `$DSE` — the doodad sound **STOP** token (`0x45534424`), VERIFIED in the same note:
-            // it releases the doodad's registration (`0x461f80`), and its `data` is 0 on all 16
+            // `$DSE` — the doodad sound **STOP** token (`0x45534424`): it releases the doodad's
+            // registration (`0x461f80`), and its `data` is 0 on all 16
             // shipped models. Without it a `$DSL` started at a keyframe never ends — which is
             // exactly the elevator and machinery family (`GnomereganElevatorLoop`, `SubwayLoop`,
             // the Undercity and Thunder Bluff lifts, the zeppelin), where the loop is authored to
@@ -208,7 +205,7 @@ pub(super) fn route_anim_events(
             // **`$CSD` is deliberately still at the model root.** It has no arm on either of those
             // dispatchers: it is the CGUnit lane's (`0x623c10` → `0x459230`), and whether *that*
             // dispatcher's arms take the event point or the unit's own is the one piece of this
-            // mechanism wow-re has not recorded — dispatched, not assumed. It matters: every player
+            // mechanism not yet read from the binary — open, not assumed. It matters: every player
             // model authors six `$CSD` records, all on the head.
             b"$SND" | b"$DSO" if ev.data != 0 => {
                 ring(&mut kits, &mut out, ev.data, ev, &mut complained);
@@ -246,8 +243,7 @@ pub(super) fn route_anim_events(
                     .flatten()
                 {
                     // **EVENT POINT** — `0x5fff5a` pushes the dispatcher's point and `0x623a1e`
-                    // hands it straight to `0x458870`. (This also corrected wow-re's own
-                    // `gather-sound-anim-events.md`, which had glossed that `edx` as the payload.)
+                    // hands it straight to `0x458870` (that `edx` is the point, not the payload).
                     ring(&mut kits, &mut out, kit, ev, &mut complained);
                 }
             }

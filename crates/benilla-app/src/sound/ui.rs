@@ -11,19 +11,19 @@
 //!   from `SetCursorItem 0x494c4a`/`ClearCursor 0x49520a`, engine-side — never FrameXML):
 //!   [`play_item_gesture_sounds`] watches [`UiScript::cursor_payload`] (decision 0216's typed
 //!   `CursorPayload`, any arm) each frame. An **Item** arm resolves its kit through the
-//!   byte-verified chain `ItemGroupSounds[ItemDisplayInfo[displayId].group_sounds].kit[gesture]`
-//!   ([`play_item_gesture`]; wow-re `system/sound/scratch/item-pickup-place-sound.md`). A
+//!   chain `ItemGroupSounds[ItemDisplayInfo[displayId].group_sounds].kit[gesture]`
+//!   ([`play_item_gesture`]; `0x457ff0`). A
 //!   **Spell**/**Action** arm (no producer yet — the spellbook/action-bar slices) plays the
 //!   generic `INTERFACESOUND_CURSORGRABOBJECT`/`DROPOBJECT` pair (kits 902/903) instead — 0091's
 //!   crux: the two are mutually exclusive per transition, never both. A bag swap plays ONE sound
 //!   (the held item's put-down): the place branch never calls `SetCursorItem` — the Item→Item hop
-//!   0216 §2 shipped is byte-refuted (decision 0218; wow-re cursor-dragdrop-slots.md), so that
+//!   0216 §2 shipped is byte-refuted (decision 0218; `0x5e0c40`), so that
 //!   transition no longer occurs. The Some→Some loss-then-gain pair below stays live for the
 //!   ACTION hop (the bar is client-authoritative and its displaced action DOES land on the
 //!   cursor, verified at `PlaceAction 0x4e62e0`) when the action-bar slice arrives.
 //! - Taking a loot-window row plays that item's **pickup** kit (gesture 0) — the same per-item
 //!   resolution, fired at the loot-slot click before the CMSG send (the real client's loot-list
-//!   pickup site, wow-re `system/sound/scratch/acquire-spend-sounds.md`). [`crate::ui_loot`] emits
+//!   pickup site, `0x4c2790`). [`crate::ui_loot`] emits
 //!   a [`LootPickupSound`] with the row's display id; [`play_loot_pickup_sounds`] plays it. (The
 //!   loot *money* coin and the buy/sell coin are the coinage-change watcher instead — [`super::money`]
 //!   — because acquiring an item on loot is the only one of the four that plays a per-item sound.)
@@ -123,10 +123,9 @@ fn load_item_sounds(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
 }
 
 /// `INTERFACESOUND_CURSORGRABOBJECT`/`DROPOBJECT` — the generic non-item cursor-payload gesture
-/// pair (sound-kit ids, not `SOUNDKIT.xml` names; VERIFIED wow-re
-/// `system/sound/scratch/item-pickup-place-sound.md`, 0091's crux). Plays for a Spell/Action
-/// payload transition (decision 0216) — an Item transition always plays its own per-item kit
-/// instead, never this pair.
+/// pair (sound-kit ids, not `SOUNDKIT.xml` names; `0x495190`, 0091's crux). Plays for a
+/// Spell/Action payload transition (decision 0216) — an Item transition always plays its own
+/// per-item kit instead, never this pair.
 const INTERFACESOUND_CURSORGRABOBJECT: u32 = 902;
 /// `LOOTWINDOWCOINSOUND` — SoundEntries kit 895, the coin clink the money pickup names (1962).
 const LOOTWINDOWCOINSOUND: u32 = 895;
@@ -218,7 +217,7 @@ fn play_item_gesture_sounds(
         // Everything that is not a live item shares the generic grab/drop kit — the reference's
         // own `0x494f60`/`0x494f80` grab path for a macro (mode 8) reaches the same
         // `INTERFACESOUND_CURSOR*` pair the spell and bar-action modes do, and the pet-action
-        // builder `0x494e20` names `INTERFACESOUND_CURSORGRABOBJECT` outright (wow-re §10.3).
+        // builder `0x494e20` names `INTERFACESOUND_CURSORGRABOBJECT` outright.
         CursorPayload::Spell(_)
         | CursorPayload::Action(_)
         | CursorPayload::Macro(_)
@@ -228,7 +227,7 @@ fn play_item_gesture_sounds(
         | CursorPayload::StablePet(_)
         // Mode 2 (1962, 1965): the money pickup AND drop both play `LOOTWINDOWCOINSOUND` — the
         // same kit 895 the purse plays on a change (`sound/money.rs`) — and never the generic drop
-        // kit (wow-re `money-cursor-law.md` §2).
+        // kit (`0x494cfe`/`0x49523a`).
         | CursorPayload::Money(_) => {
             let kit_id = match (&payload, gesture) {
                 (CursorPayload::Money(_), _) => LOOTWINDOWCOINSOUND,
@@ -300,7 +299,7 @@ fn play_item_gesture(
 /// Request to play an item's **loot pickup** sound — written by [`crate::ui_loot::drain_loot`] when
 /// the player takes a loot-window row (carrying that row's display id). The real client plays the
 /// per-item `ItemGroupSounds` **pickup** kit (gesture 0) client-side at the loot-slot click, before
-/// the CMSG send (wow-re `system/sound/scratch/acquire-spend-sounds.md`): looting an item plays its
+/// the CMSG send (`0x4c2790`): looting an item plays its
 /// pickup sound, while the `SMSG_ITEM_PUSH` acquire itself is silent — so buying, which also pushes
 /// an item, plays no pickup sound (only the coin, via [`super::money`]).
 #[derive(Message, Clone, Copy)]
@@ -345,8 +344,8 @@ fn play_loot_pickup_sounds(
 /// Request to play the **auto-equip** gesture pair for an item — written by [`crate::ui_items`]
 /// when a right-click auto-equips a bag item (the `CMSG_AUTOEQUIP_ITEM` fork of `UseContainerItem`).
 /// The real client implements the right-click shortcut as a *synthetic* `SetCursorItem` →
-/// `ClearCursor` (wow-re `system/sound/scratch/auto-equip-sound.md`, byte-traced through
-/// `Script::UseContainerItem 0x4fa0e0` → the pickup play at `0x494c4a` then the place play at
+/// `ClearCursor` (`Script::UseContainerItem 0x4fa0e0` → the pickup play at `0x494c4a` then the
+/// place play at
 /// `0x49520a`), so it plays the item's `ItemGroupSounds` **pickup** kit[0] THEN its **place**
 /// kit[1] — the same two sounds a drag-equip makes. A drag *already* plays them via the
 /// cursor-payload transitions ([`play_item_gesture_sounds`]); the right-click path never touches

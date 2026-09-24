@@ -12,9 +12,7 @@
 //! A cinematic boundary is not "wait 0.25 s, then advance" — it is "go black, and *when you are
 //! black*, advance". The two coincide only while the frame rate holds; under a hitch (and the shot
 //! boundary is exactly where the reference does a blocking terrain load) a delay-driven sequence
-//! shows the cut, and a completion-driven one cannot. See `wow-5875-re`
-//! `system/ui/scratch/cinematic-camera-law.md` §3.7, which verified this as a correction to an
-//! earlier reading that had it as a delay.
+//! shows the cut, and a completion-driven one cannot.
 //!
 //! **The completion callback does not cross into this module.** The reference stores a function
 //! pointer; an ECS system cannot, and faking it with a boxed closure in a `Resource` would buy
@@ -162,7 +160,7 @@ fn spawn_cover(mut commands: Commands) {
         BackgroundColor(Color::NONE),
         // **Above the loading cover (1000).** The reference hands the world-enter loading screen
         // over to the cinematic *under* the black: `0x48edd0`'s first instruction dismisses the
-        // loading screen, and it runs at full black (law §8.4). A fade below the cover could not
+        // loading screen, and it runs at full black. A fade below the cover could not
         // do that — the cover would be the thing on screen, and its dismissal would be a visible
         // cut. Below the glue screens (1100) so a state change out of the world can never be
         // trapped behind a fade that has no one left to clear it.

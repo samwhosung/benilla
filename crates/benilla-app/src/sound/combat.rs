@@ -7,7 +7,7 @@
 //!
 //! - **`$CSS`** — the swing whoosh, in **both** of its forms. Nothing contacted (miss/dodge/
 //!   evade) gets kits 7080/7081 `Combat Miss 1H/2H` by weapon handedness — exactly the two ids
-//!   the client caches by name at startup (wow-re `0x4575b0`, `_DONOTRENAME_` kits). Anything
+//!   the client caches by name at startup (`0x4575b0`, `_DONOTRENAME_` kits). Anything
 //!   else gets the *connecting* swing's `WeaponSwingSounds2` whoosh by weapon weight; see "The
 //!   connecting swing" below.
 //! - **`$CAH`** — **not** the attacker's exertion, which is what this module used to think.
@@ -40,7 +40,7 @@
 //!
 //! 1. `0x6247d0`'s own weapon-sound block, at the attacker — a **natural-weapon** swing
 //!    (`$AHn` fired the dispatch) plays the attacker's `CreatureSoundData.CustomAttack[n]`
-//!    column INSTEAD of the generic weapon impact (the `SWINGNOHITSOUND` latch, `0x6247d0` §f);
+//!    column INSTEAD of the generic weapon impact (the `SWINGNOHITSOUND` latch, `0x6247d0`);
 //!    otherwise a landed hit plays the `WeaponImpactSounds` impact/crit slot for the victim's
 //!    material (`CreatureImpactType`).
 //! 2. `0x624530`'s **victimState-keyed clang**, at the victim — parry (`0x6245bb` →
@@ -117,7 +117,7 @@
 //! One more byte detail: the clang alone is emitted two yards up (`0x457e29`); the generic weapon
 //! impact beside it passes its position straight through.
 //!
-//! INTERIM readings (flagged for a wow-re pass): a defended outcome suppresses block 1's generic weapon impact
+//! INTERIM readings: a defended outcome suppresses block 1's generic weapon impact
 //! (the tail's latch test `0x624936` carries no victimState gate in the trace, so whether it
 //! also plays under a clang is unpinned);
 //! the natural-weapon column is gated on
@@ -161,7 +161,7 @@ const VICTIM_DEFLECT: u32 = 8;
 /// asks that hand for its item.
 const HITINFO_LEFTSWING: u32 = 0x4;
 
-/// The two `_DONOTRENAME_` whoosh kits the client caches by name at startup (wow-re `0x4575b0`);
+/// The two `_DONOTRENAME_` whoosh kits the client caches by name at startup (`0x4575b0`);
 /// byte-verified ids in the 5875 SoundEntries dump.
 const COMBAT_MISS_1H: u32 = 7080;
 const COMBAT_MISS_2H: u32 = 7081;
@@ -667,8 +667,8 @@ fn combat_sounds(
         let attacker = units.get(swing.attacker).ok();
         let victim = swing.victim.and_then(|v| units.get(v).ok());
         // **The fired tag's own point** (`edi = [ebx+0x10]`, pushed at `0x6248ef` for the
-        // CustomAttack column and `0x624950` for the generic weapon impact — wow-re
-        // `anim-event-position-law.md` §3). A big creature's `$AH1` sits 4.7 yd out on the jaw
+        // CustomAttack column and `0x624950` for the generic weapon impact). A big creature's
+        // `$AH1` sits 4.7 yd out on the jaw
         // (`trex.m2`) and Thunderaan's `$CAH` 26.4 yd out; the attacker's origin was standing in
         // for both. The receive-time fallback carries no point — no tag fired — so it keeps the
         // attacker, then the victim, which is the only anchor that packet leaves us.
@@ -754,9 +754,9 @@ fn combat_sounds(
             // `0x624530`'s victimState-keyed clang (`0x6245bb` parry → `0x623640(sel=0)`,
             // `0x6245d8` block → `sel=1`), emitted at the VICTIM (`vtable+0x14` on `this`).
             // Reached on EVERY impact tag — the `$AHn` digit block "has zero effect on the
-            // victim dispatch" (wow-re `melee-impact-timing.md` §f): a wolf's bite and the
-            // parry clang both sound. Decision 0899 — 0525 wrongly let the natural column
-            // swallow this, so every beast you parried was silent.
+            // victim dispatch" (every digit reaches it through the shared tail, `0x6249bb`): a
+            // wolf's bite and the parry clang both sound. Decision 0899 — 0525 wrongly let the
+            // natural column swallow this, so every beast you parried was silent.
             // `0x625400(sel)` on the victim, then `0x457dc0`'s class+material slot pick. No
             // defending item means no clang — the reference bails before the play — and that is
             // a `None` here rather than a `continue`, because the wound vocal below still has to
@@ -868,8 +868,7 @@ fn combat_sounds(
                 // the row pointer dies at `0x6234e4`, so neither the bus pick `0x623b10` (which
                 // takes the category) nor the play `0x458890` (bus, kit, &pos) ever sees the row
                 // to re-read a column from. The CGPlayer twin `0x62f880` is identical
-                // (`0x62f8be`/`0x62f8c3`). wow-re
-                // `object-layer/scratch/wound-parry-gate-and-injury-vocal.md` §13.
+                // (`0x62f8be`/`0x62f8c3`).
                 let vocal = net
                     .display_id
                     .and_then(|d| voices.0.for_display(d))

@@ -60,7 +60,7 @@
 //! the list **in place** — refreshing it on the realmd connection the cycle still holds — and only
 //! leaves when a realm is chosen. Cancel there does nothing at all, which is what makes it Cancel.
 //!
-//! That is the reference's shape, byte for byte (VERIFIED, wow-re):
+//! That is the reference's shape, byte for byte:
 //! `CharacterSelect_ChangeRealm()` is `PlaySound + RequestRealmList(1)` and **names no screen**;
 //! `RequestRealmList` (`0x46ecf0` → `0x46b8d0`) sets `screenState = 4` and begins a
 //! `COP_GET_REALMS` on the realmd socket that is still open (it is closed at *world entry*,
@@ -82,9 +82,8 @@ use crate::net::{RealmChoice, RealmListMessage, RealmRequest};
 use benilla_protocol::RealmInfo;
 
 /// The CVar naming the realm we are on — a **real 1.12 CVar** (`0x83f2d0`, persisted; the client
-/// builds its SavedVariables path from it, wow-re `savedvariables-protocol.md`), already registered
-/// by [`crate::cvars`] and pushed into the VM at world entry by
-/// `benilla_ui::script::UiScript::set_realm_name`.
+/// builds its SavedVariables path `0x8539a8` from it), already registered by [`crate::cvars`] and
+/// pushed into the VM at world entry by `benilla_ui::script::UiScript::set_realm_name`.
 ///
 /// Read here for the remembered-realm auto-pick. Its persisted value is the *previous* session's
 /// realm, which is precisely the question this policy asks.
@@ -120,9 +119,9 @@ pub(crate) struct Realms {
     /// The realm this client considers **current** — the reference's `GetRealmInfo` `currentRealm`
     /// return, which is the row `RealmListUpdate` highlights when nothing else is selected.
     ///
-    /// **It is a string compare against the `realmName` CVar, and nothing else** (VERIFIED, wow-re:
-    /// `0x46ef9e` reads that CVar's current value through `0x5ab7d0` — the handle registered at
-    /// `0x63db90`, help `"Last realm connected to"` — and case-folds it against the realm record's
+    /// **It is a string compare against the `realmName` CVar, and nothing else** (`0x46ef9e` reads
+    /// that CVar's current value through `0x5ab7d0` — the handle registered at `0x63db90`, help
+    /// `"Last realm connected to"` — and case-folds it against the realm record's
     /// inline name at `realm+9`, pushing `1.0` on a match and `nil` otherwise; a 15-site census of
     /// that getter found no competing mechanism anywhere in the image). It marks the realm you are
     /// *connected to* on the character screen only because `ConnectToRealm` (`0x46b217`) writes the
@@ -262,9 +261,7 @@ impl Realms {
     /// the whole realm-list rebuild, and its accumulator loop walks the flat all-categories array
     /// unconditionally — the per-category bucketing in the same loop is a side effect, never a
     /// bound. So a realm's word is measured against every other realm on the account's list, and
-    /// switching tabs does not move any row's band. (VERIFIED, wow-re
-    /// `system/glue/scratch/realm-list-bindings.md` §5 — which corrected wow-re's own doc comment
-    /// in the same pass.)
+    /// switching tabs does not move any row's band.
     pub(super) fn stats(&self) -> (f32, f32) {
         let pops: Vec<f32> = self.realms.iter().map(|r| r.population).collect();
         load::realm_load_stats(&pops)

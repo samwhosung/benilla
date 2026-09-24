@@ -9,13 +9,12 @@
 //! exactly benilla's [`crate::go_anim::GoAnim`] population. `$GO0..5` address slots 0..5
 //! (Stand/Open/Loop/Close/Destroy/Opened), `$GC0..3` the four Custom slots 6..9. So a display slot
 //! is audible only when the object's own model authors the matching event keyframe *and* the clip
-//! carrying it is playing: **there is no state-transition sound path** (wow-re
-//! `object-layer/scratch/go-display-sound-events.md`, §5-cross-checked; benilla decisions
+//! carrying it is playing: **there is no state-transition sound path** (benilla decisions
 //! 1090/1867).
 //!
 //! **The kit's `SoundEntries` flag `0x200` picks the lane** — `0x5f4051 call 0x458830`, whose only
-//! other consumer image-wide is a spell-visual path (wow-re `sound/scratch/doodad-sound-emitters.md`
-//! §11's flag table). Clear ⇒ a positioned **one-shot** (`0x458870`). Set ⇒ the **ambient emitter
+//! other consumer image-wide is a spell-visual path (`0x60edf0`). Clear ⇒ a positioned
+//! **one-shot** (`0x458870`). Set ⇒ the **ambient emitter
 //! pool** (`0x461d80`), the same 32-entry table placed doodads' `$DSL` registers into, with the
 //! handle cached in `[handler+0x18]` — one per object, shared with that object's own `$DSL` arm.
 //! The loop is dropped again by `0x5f40c0`, called from the state-machine dispatch `0x5f3cb0`
@@ -64,7 +63,7 @@ fn load_go_sounds(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
 }
 
 /// The GO display-slot an M2 animation-event tag addresses — the reference's GO event dispatcher
-/// `0x5f3e20` (wow-re `go-display-sound-events.md`, byte-verified; the 1086 fold-back): `$GO0..5`
+/// `0x5f3e20` (the 1086 fold-back): `$GO0..5`
 /// → `Sound[0..5]`, `$GC0..3` → the Custom slots `Sound[6..9]`. Every other tag is not this
 /// channel's (`$SND`/`$DSO`/`$DSL` carry a literal kit id and ride the generic
 /// [`crate::sound::anim_events`] arms; `$SHK` is camera shake, no audio).
@@ -194,7 +193,7 @@ pub(super) fn plugin(app: &mut App) {
 mod tests {
     use super::go_event_slot;
 
-    /// The dispatcher's slot table (wow-re `go-display-sound-events.md`): `$GO0..5` are the
+    /// The dispatcher's slot table (`0x5f3e20`): `$GO0..5` are the
     /// first six display slots, `$GC0..3` the four Custom slots 6..9 — the bobber's splash is
     /// `$GC0` → slot 6. Out-of-range digits and other families are not this channel.
     #[test]

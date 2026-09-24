@@ -1,9 +1,8 @@
 //! Water audio (decision 0070 slice 4): the water splash. (The wading **footstep** splash
 //! lives in [`super::footsteps`]; the submerged ambience swap lives in [`super::zone`] — the
-//! client swaps the one background-ambience slot to the underwater loop, B6.)
+//! client swaps the one background-ambience slot to the underwater loop, `0x460af0`.)
 //!
-//! **The splash trigger is a symmetric depth edge** — VERIFIED (the swim §5's TU-D, wow-re
-//! `swim-mechanism.md`, resolving benilla-pins B7/B8's trigger half): a dedicated detector inside
+//! **The splash trigger is a symmetric depth edge**: a dedicated detector inside
 //! the per-frame water decision `0x6030c0` (`0x60314a`) compares `depth = surface − feet` against
 //! **`0.4·collisionHeight`** and fires a positioned unit sound on crossing in **either direction**
 //! — entering fires it, and so does surfacing back past the line (exit is NOT silent). It is
@@ -11,7 +10,7 @@
 //! mode starts. Walking the shallows below the line makes only per-step wading splashes
 //! (director-verified against the ref, 2026-07-03).
 //!
-//! What stays INTERIM (same dispatch, still open): the **size class** — the client routes the
+//! What stays INTERIM (still open): the **size class** — the client routes the
 //! play through the unit's own sound emitter (`[CGUnit+0xb18]`) where Small/Medium/Large
 //! resolves; that selector is not pinned, so kit 1096 Medium plays for everyone. The per-unit
 //! **collision height** the line scales by is no longer interim: 0464's named

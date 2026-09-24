@@ -7,9 +7,9 @@
 //! - **Music**: the glue title theme (`GlueParent.lua`'s `CurrentGlueMusic`,
 //!   `Sound\Music\GlueScreenMusic\wow_main_theme.mp3`), streamed from the login screen on
 //!   (decision 0539) and kept across the glue screens (the ref keeps it through select ⇄ create).
-//!   **The click into the world does not end it** (1550/1553, wow-re §5): it plays unbroken through
-//!   the whole map load, and the stop is armed by the *load draining* — a 3.0 s fade, still behind
-//!   the loading screen. Re-entering the glue after a logout starts it again.
+//!   **The click into the world does not end it** (1550/1553, `0x46c258`): it plays unbroken
+//!   through the whole map load, and the stop is armed by the *load draining* — a 3.0 s fade, still
+//!   behind the loading screen. Re-entering the glue after a logout starts it again.
 
 use bevy::prelude::*;
 
@@ -24,14 +24,14 @@ const GLUE_MUSIC: &str = "Sound\\Music\\GlueScreenMusic\\wow_main_theme.mp3";
 
 /// The theme's own volume, under the Music slider: **0.8** — `0x45aeb0` starts the glue stream at
 /// `0x3f4ccccd` on both its arms, where the city-intro playlist and the in-world Lua `PlayMusic`
-/// use 1.0f (wow-re §5 `glue-music-world-entry.md` §5c). It is a plain scalar on the MusicVolume
+/// use 1.0f. It is a plain scalar on the MusicVolume
 /// category (the stream's flag word is 2, bit `0x2` = `[0x87cef8]`), exactly like a zone track's
 /// kit volume, so it multiplies rather than replaces the slider.
 const GLUE_MUSIC_VOLUME: f32 = 0.8;
 
 /// The stop-fade armed when the world's load drains: **3.0 s**, `[0x803248]` in `.rdata`
 /// (`0x40400000`) — the constant `0x45aeb0`'s NULL arm hands `0x45b050`, and the fade is **linear
-/// in amplitude**, not in dB (`0x7a5a50` ramps FMOD's 0–255 level; §5 §2). Not 1.0 s: that is
+/// in amplitude**, not in dB (`0x7a5a50` ramps FMOD's 0–255 level). Not 1.0 s: that is
 /// `StopGlueMusic`'s literal, and `StopGlueMusic` is a `"movie"`-screen call the world entry never
 /// makes.
 const GLUE_MUSIC_FADE_OUT_MS: u64 = 3000;
@@ -189,7 +189,7 @@ fn watch_glue_music(
     config: Res<SoundConfig>,
 ) {
     let music = &mut *music;
-    // The Music slider is live on this stream, as it is on the world's (wow-re §5 §5c: the
+    // The Music slider is live on this stream, as it is on the world's (the
     // `MusicVolume` handler's re-apply walker `0x7a6660(ecx=2)` matches the glue wrapper, so moving
     // the slider rescales the playing theme in place — mid-loading-screen included). Stand off
     // while the stop-fade runs; see [`GlueMusic::fading`].

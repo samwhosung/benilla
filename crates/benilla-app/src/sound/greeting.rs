@@ -1,6 +1,5 @@
-//! NPC vocal lines — the two byte-verified systems an NPC greets/farewells with, corrected against
-//! the director's observations and the wow-re §5 re-derivation (`wow-5875-re/system/sound/scratch/
-//! npc-greeting.md`, commit `95e360f0`; every address below carries a proof there).
+//! NPC vocal lines — the two systems an NPC greets/farewells with, corrected against the
+//! director's observations and the reference.
 //!
 //! Both systems share only the **data chain** (`NetEntity.display_id` →
 //! `CreatureDisplayInfo.field[11]` NPCSoundID → `NPCSounds {hello +0x4, goodbye +0x8, pissed +0xc}`
