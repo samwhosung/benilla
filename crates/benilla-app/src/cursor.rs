@@ -1,10 +1,11 @@
 //! The mouse cursor — the real client's `Interface\Cursor\*.blp` set, shown as a crisp **hardware
 //! (OS-composited) cursor** so it has zero lag, matching the reference 1.12 client (whose cursor is
 //! lag-free on this same machine). Which cursor shows is the targeting classifier's call
-//! ([`crate::target::WorldCursor`], the wow-re cursor RE's decision tree): Point by default, the sword over an
-//! attackable unit, the speech bubble / pouch / trainer / taxi over service NPCs, loot/skin over
-//! corpses — each with its grayed `Unable*` twin out of range. The whole set preloads at startup
-//! (18 tiny BLPs); a stem missing from the archives falls back toward the base cursor, then Point.
+//! ([`crate::target::WorldCursor`], the reference's decision tree at `0x4828d0`): Point by
+//! default, the sword over an attackable unit, the speech bubble / pouch / trainer / taxi over
+//! service NPCs, loot/skin over corpses — each with its grayed `Unable*` twin out of range. The
+//! whole set preloads at startup (18 tiny BLPs); a stem missing from the archives falls back toward
+//! the base cursor, then Point.
 //!
 //! macOS needs native AppKit. winit drives the cursor through the legacy cursor-rect API
 //! (`addCursorRect`/`resetCursorRects`), which a continuously-redrawing Metal view doesn't honor on
@@ -16,11 +17,11 @@
 //! platforms use winit's `CursorIcon::Custom` (which works there), swapped on mode change; their
 //! hide-on-look goes through `CursorOptions.visible`, handled in `player::control`.
 //!
-//! **The held cursor payload** (decision 0216 §5, wow-re cursor-system.md §1 VERIFIED): while
-//! `UiScript::cursor_payload()` holds a payload with a resolved icon, the HARDWARE cursor becomes
-//! that icon instead of the classified mode — the real client composites the item's `Interface\
-//! Icons\…` art into its drag bitmap and uploads it via the same `SetHardwareCursor` path the mode
-//! art uses. Both platform `drive` fns below check the held payload FIRST, each frame, and fall
+//! **The held cursor payload** (decision 0216 §5): while `UiScript::cursor_payload()` holds a
+//! payload with a resolved icon, the HARDWARE cursor becomes that icon instead of the classified
+//! mode — the real client composites the item's `Interface\Icons\…` art into its drag bitmap
+//! (`0x523840`) and uploads it via the same `SetHardwareCursor` path the mode art uses
+//! (`0x523790`). Both platform `drive` fns below check the held payload FIRST, each frame, and fall
 //! back to the mode cursor when nothing is held or its icon fails to decode; each caches its built
 //! cursor per icon path ([`other::PayloadCursorImages`]/[`macos::PayloadCursors`]) — repeated
 //! pickups of the same icon never re-decode. The icons are 64×64 (unlike the mode BLPs, already
@@ -105,8 +106,8 @@ fn box_downsample_32(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
 
 /// Decode a payload icon and box-downsample it to a 32×32 hardware-cursor-ready RGBA8 buffer
 /// ([`box_downsample_32`]), alpha forced fully opaque — the client's own drag-bitmap composite
-/// (byte-verified, wow-re cursor-dragdrop-payload.md: 64×64 → 2×2 box filter → 32×32, alpha
-/// written 0xFF; folded back by 0218). `None` on a missing/undecodable icon.
+/// (`0x523840`: 64×64 → 2×2 box filter → 32×32, alpha written 0xFF; folded back by 0218). `None`
+/// on a missing/undecodable icon.
 fn decode_payload_cursor_rgba(
     assets: &mut benilla_assets::WorldAssets,
     path: &str,
@@ -145,8 +146,8 @@ const CURSOR_STEMS: &[&str] = &[
     "Skin",
     "UnableSkin",
     "Repair", // the repair-mode base cursor (never grayed — the shipped UnableRepair is unreachable)
-    // The data-driven GameObject cursors (decision 0236, wow-re cursor-system §4): a mailbox's Mail,
-    // a lock's Mine / GatherHerbs (grayed out of reach), a picked lock's PickLock (never grayed).
+    // The data-driven GameObject cursors (decision 0236, `0x5f8760`): a mailbox's Mail, a lock's
+    // Mine / GatherHerbs (grayed out of reach), a picked lock's PickLock (never grayed).
     "Mail",
     "UnableMail",
     "Mine",
@@ -154,7 +155,7 @@ const CURSOR_STEMS: &[&str] = &[
     "GatherHerbs",
     "UnableGatherHerbs",
     "PickLock",
-    // The spell-targeting pair (wow-re cursor-system.md §5): Cast(2) / UnableCast(22). Cast is
+    // The spell-targeting pair (`0x4820f0`): Cast(2) / UnableCast(22). Cast is
     // the armed-enchant-pick overlay's mode; the grayed twin preloads with it (the overlay's
     // valid/invalid split is its named refinement).
     "Cast",
@@ -166,9 +167,9 @@ fn cursor_path(stem: &str) -> String {
     format!("Interface\\Cursor\\{stem}.blp")
 }
 
-/// The **displayed** cursor — the client's single sticky mode global `0xbe2c2c` (wow-re
-/// cursor-system.md §1/§7). Read by the platform drivers instead of [`crate::target::WorldCursor`],
-/// which is only ever *one* of its two writers.
+/// The **displayed** cursor — the client's single sticky mode global `0xbe2c2c`. Read by the
+/// platform drivers instead of [`crate::target::WorldCursor`], which is only ever *one* of its two
+/// writers.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) struct DisplayedCursor(pub(crate) crate::target::WorldCursor);
 
@@ -229,10 +230,10 @@ fn drive_displayed_cursor(
         return;
     }
 
-    // **The BASE mode is not a constant** (`0xbe2c4c`, wow-re cursor-system.md §7: *"it is
-    // independently mutable — e.g. a spell-cancel flow parks it at Cast(2)"*), and that is the
-    // piece B208 kept missing. `ResetCursor` restores *the value of this cell*, not a hardcoded
-    // Point — so what a bag slot's `ResetCursor()` shows depends entirely on what is parked here.
+    // **The BASE mode is not a constant** (`0xbe2c4c`: it is independently mutable — e.g. a
+    // spell-cancel flow parks it at Cast(2)), and that is the piece B208 kept missing.
+    // `ResetCursor` restores *the value of this cell*, not a hardcoded Point — so what a bag slot's
+    // `ResetCursor()` shows depends entirely on what is parked here.
     //
     // While a spell awaits its click, the base is **Cast(2)**. The director watched the reference
     // do exactly this: with Feed Pet armed the cursor is blue over *"pretty much anything UI
@@ -250,8 +251,8 @@ fn drive_displayed_cursor(
     // reference.
     let repair = script.as_ref().is_some_and(|s| s.repair_mode());
     let base = if repair {
-        // `ShowRepairCursor` parks the base at Repair for as long as it holds (wow-re
-        // repair-machinery.md); it is the explicit modal, so it wins the cell.
+        // `ShowRepairCursor 0x4fbcc0` parks the base at Repair for as long as it holds; it is the
+        // explicit modal, so it wins the cell.
         WorldCursor {
             kind: CursorKind::Repair,
             unable: false,
@@ -614,8 +615,7 @@ mod macos {
             }
         }
         // **A cinematic hides the pointer too**, and on this platform it can only be done here:
-        // the reference's `0x58b590(0)` at StartCinematic / `(1)` at End (wow-re
-        // `ui/scratch/cinematic-camera-law.md` §3.4). `crate::cinematic` writes
+        // the reference's `0x58b590(0)` at StartCinematic / `(1)` at End. `crate::cinematic` writes
         // `CursorOptions.visible`, which is the right lever everywhere else and is *inert on
         // macOS* for the reason this module exists — winit's cursor-rect route does not survive a
         // continuously-redrawing Metal view. So the fly-by's pointer is hidden by joining the
@@ -814,9 +814,9 @@ mod tests {
         );
     }
 
-    /// **The base mode is Cast while a spell awaits its click** (wow-re cursor-system.md §7: the
-    /// base cell `0xbe2c4c` "is independently mutable — e.g. a spell-cancel flow parks it at
-    /// Cast(2)"), and `ResetCursor` restores *that value*, never a hardcoded Point.
+    /// **The base mode is Cast while a spell awaits its click** (the base cell `0xbe2c4c` is
+    /// independently mutable — e.g. a spell-cancel flow parks it at Cast(2)), and `ResetCursor`
+    /// restores *that value*, never a hardcoded Point.
     ///
     /// This is what the director watched the reference do with Feed Pet armed: **blue over the
     /// interface at large, grey only out in the world**. Both fall out of the one cell — the world

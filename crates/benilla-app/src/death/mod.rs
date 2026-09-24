@@ -65,8 +65,8 @@ pub(crate) struct DeathNet {
     pub(crate) corpse: Option<CorpsePoint>,
     /// A pending resurrection offer; cleared when answered or when the popup times out.
     pub(crate) resurrect: Option<ResurrectOffer>,
-    /// Bumped on every `SMSG_RESURRECT_REQUEST` — the offer announces per MESSAGE (wow-re
-    /// death-ui.md §8: handler `0x5e7bc0` signals per arrival through `0x5ded50`), not per
+    /// Bumped on every `SMSG_RESURRECT_REQUEST` — the offer announces per MESSAGE (handler
+    /// `0x5e7bc0` signals per arrival through `0x5ded50`), not per
     /// `Some`-edge. `resurrect` is only cleared by an Accept/Decline, and the stock UI can hide
     /// the popup without either (PLAYER_UNGHOST's `StaticPopup_Hide` runs no `OnCancel`), so an
     /// edge latch there swallowed every later offer for the session.
@@ -97,9 +97,9 @@ impl DeathNet {
     /// The reference raises this dialog **client-side, on the click**: `0x5f0130`'s bit-5 arm
     /// (`0x5df730`) sends no packet at all — it caches the healer's guid and fires
     /// `CONFIRM_XP_LOSS`, and `CMSG_SPIRIT_HEALER_ACTIVATE` belongs to the Lua Accept
-    /// (`AcceptXPLoss`), which calls the same function with a ZERO guid (wow-re
-    /// `interact-dead-fork-and-npc-service-ladder.md` §C). vmangos also *pushes* the question as
-    /// `SMSG_SPIRIT_HEALER_CONFIRM` off its gossip route, and benilla honours both roads in.
+    /// (`AcceptXPLoss`), which calls the same function with a ZERO guid. vmangos also *pushes* the
+    /// question as `SMSG_SPIRIT_HEALER_CONFIRM` off its gossip route, and benilla honours both
+    /// roads in.
     ///
     /// The generation bump is what makes a re-ask re-show a cancelled dialog: the confirm
     /// announces per MESSAGE, not per `Some`-edge (decision 1068).
@@ -112,8 +112,8 @@ impl DeathNet {
 /// The feed's memory, in **two scopes** (decisions 1290/1291): the body's own state machine is
 /// world memory and survives a `/reload`; what this VM has been *told* dies with the VM.
 ///
-/// The reference draws the same line by construction — its death mirror is engine-side (wow-re
-/// death-ui.md §1), so a `ReloadUI` neither re-arms the release window nor loses it, while the
+/// The reference draws the same line by construction — its death mirror is engine-side
+/// (`[0xb4e340]`), so a `ReloadUI` neither re-arms the release window nor loses it, while the
 /// rebuilt UI repaints from the surviving state. Ours mirrors that: `mirror`/`died_at` stay put
 /// across a VM replacement, and the announce latches reset with the VM so the fresh frame tree
 /// hears the events the old one consumed.
@@ -123,8 +123,8 @@ struct DeathFeedState {
     /// arms and clears the release window. `None` before a world session's first snapshot.
     mirror: Option<(u64, bool, bool)>,
     /// **World-scoped.** `Time::elapsed_secs_f64` at the death edge — the anchor of the
-    /// client-side release window (byte-VERIFIED, wow-re death-ui.md §1: the wire carries only
-    /// the PLAYER_FIELD_BYTES timer BIT; the client arms `now + 360000 ms` at its own
+    /// client-side release window (the wire carries only the PLAYER_FIELD_BYTES timer BIT; the
+    /// client arms `now + 360000 ms` (`0x5e9a30`) at its own
     /// alive→dead mirror-edge — so a login-while-dead re-arms at login exactly like ours, and
     /// expiry reads 0, never negative). Deliberately NOT per-VM: a `/reload` must not restart
     /// the six minutes — the reference's engine-side window keeps running through one.
@@ -144,7 +144,7 @@ struct DeathAnnounced {
     /// CORPSE_IN_RANGE / CORPSE_OUT_OF_RANGE / CORPSE_IN_INSTANCE edge memory (decision 0308 §5).
     corpse_range: Option<CorpseRange>,
     /// The [`DeathNet::reclaim_generation`] this latch last saw — a fresh `0x269` re-fires the
-    /// range events through the latch (the client's own re-announce, death-ui.md §4), so the
+    /// range events through the latch (the client's own re-announce, `0x4962d0`), so the
     /// RECOVER_CORPSE popup re-shows with the new delay.
     reclaim_generation: u32,
     /// The [`DeathNet::resurrect_generation`] this VM was last told about (`RESURRECT_REQUEST`
@@ -171,14 +171,14 @@ enum CorpseRange {
 /// mirror both sides know; never on the wire.
 const RELEASE_WINDOW_SECS: f64 = 360.0;
 
-/// The corpse-range dialog radius — byte-VERIFIED **40.0 yd, inclusive** (wow-re death-ui.md §3:
-/// the client compares d² ≤ `[0xb4e2ac]` = 1600.0 per frame against the corpse-QUERY cache, never
+/// The corpse-range dialog radius — **40.0 yd, inclusive** (the client compares
+/// d² ≤ `[0xb4e2ac]` = 1600.0 per frame against the corpse-QUERY cache, never
 /// the streamed corpse object; edge-latched, no hysteresis). vmangos's `CORPSE_RECLAIM_RADIUS 39`
 /// comment "equal client dialog show radius" is off by one against the client's own constant —
 /// the server reclaim gate simply sits 1 yd inside the dialog radius. Squared yards.
 const CORPSE_RANGE_SQ: f32 = 40.0 * 40.0;
 
-/// The spirit-healer dialog range — byte-VERIFIED (wow-re death-ui.md §7: CheckSpiritHealerDist
+/// The spirit-healer dialog range (CheckSpiritHealerDist
 /// compares d² ≤ `[0xc4c28c]` = 30.864 = 5.5556², the service interaction range). Squared yards.
 const SPIRIT_HEALER_RANGE_SQ: f32 = 5.5556 * 5.5556;
 
@@ -297,7 +297,7 @@ fn feed_death(
             // the map markers. The server's own "corpse gone" push is LOOTER-gated (vmangos
             // Map.cpp:3617-3629: the unprompted u8(0) goes out only when a PvP looter exists), so
             // a PvE res never gets one; the real client re-runs its corpse query off the same
-            // ghost-bit edge (wow-re death-ui.md §5's watcher), and post-res the player→corpse
+            // ghost-bit edge (the watcher `0x5ee990`), and post-res the player→corpse
             // binding is gone (SpawnCorpseBones unbinds), so the answer clears the cache.
             // Director-reported: the map tombstone survived a spirit-healer res without this.
             let _ = net.0.send(ClientCommand::CorpseQuery);
@@ -378,7 +378,7 @@ fn feed_death(
     // coord transform, so the Bevy-space compare is the yard compare.
     let range = if ghost {
         death_net.corpse.map(|cp| {
-            // The client's own law (death-ui.md §3-4): within 40 yd (inclusive) of the QUERY
+            // The client's own law (`0x492130`, `0x4920f0`): within 40 yd (inclusive) of the QUERY
             // cache position, on the display map → IN_RANGE when displayMapId == corpseMapId,
             // else IN_INSTANCE (standing at a dungeon's ghost entrance, corpse inside).
             let on_display_map = map
@@ -420,7 +420,7 @@ fn feed_death(
 const SPELL_EFFECT_SELF_RESURRECT: u32 = 94;
 
 /// What a `UseSoulstone()` would spend right now — the client's own two-legged fork
-/// (`Script::UseSoulstone 0x48ad70`, wow-re death-ui.md §10.4), resolved app-side because neither
+/// (`Script::UseSoulstone 0x48ad70`), resolved app-side because neither
 /// leg's inputs (the spell catalog, the item cache) are bound in the script VM.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SelfRes {
@@ -451,7 +451,7 @@ impl SelfRes {
 }
 
 /// **`HasSoulstone()`'s whole answer**, and `UseSoulstone()`'s routing — one resolver, because the
-/// binary is one predicate the two bindings share (wow-re death-ui.md §10.1/§10.4).
+/// binary is one predicate the two bindings share (`0x48ac80`, `0x48ad70`).
 ///
 /// Three gates in the client's own order, and the order is the performance story as much as the
 /// fidelity one:
@@ -523,9 +523,9 @@ fn resolve_self_res(
 /// `GlobalStrings.lua`** (decision 2045). That is the reference's own key: `GetResSicknessDuration`
 /// (`0x51a3a0`) computes a millisecond duration off `Spell.dbc` 15007 × `SpellDuration.dbc` and
 /// hands it to the shared formatter `0x52fa50(ms, "GENERIC", 0, 1)`, whose minute arm is
-/// `GENERIC_MIN[_P1]` with `ms / 60000` (wow-re `ui/scratch/death-ui.md` §9). Every value this
-/// table can produce — 1 to 10 minutes — lands in that arm, so the day/hour/second arms have no
-/// case here and the ladder is not reproduced.
+/// `GENERIC_MIN[_P1]` with `ms / 60000`. Every value this table can produce — 1 to 10 minutes —
+/// lands in that arm, so the day/hour/second arms have no case here and the ladder is not
+/// reproduced.
 ///
 /// **What benilla still models differently, deliberately:** the *number* comes from vmangos's
 /// server-side table rather than from `Spell.dbc`'s `Base + PerLevel·level`, because the aura the
@@ -545,9 +545,9 @@ fn sickness_duration(level: u32, get: &dyn Fn(&str) -> Option<String>) -> Option
     ))
 }
 
-/// Drive the ghost-world look (decision 0308 §7, all byte-VERIFIED): the FFXDeath screen pass
-/// gates on `PLAYER_FLAGS_GHOST` — instant on release, instant off at resurrect (wow-re
-/// death-pass.md: the flag's CMirrorHandler watcher is the single driver of the FFX pass swap,
+/// Drive the ghost-world look (decision 0308 §7): the FFXDeath screen pass gates on
+/// `PLAYER_FLAGS_GHOST` — instant on release, instant off at resurrect (the flag's CMirrorHandler
+/// watcher `0x5ee990` is the single driver of the FFX pass swap,
 /// the death light profile, and the ghost ambience — one watcher, several consumers; ours splits
 /// the consumers across their owning systems off the same derived flag).
 fn drive_death_look(
@@ -590,8 +590,8 @@ fn drain_death(
     targeting: crate::spell::cast_target::CastTargeting,
     mut ladder: crate::spell::CastLadder,
     mut ui_errors: ResMut<crate::ui_action::UiErrorKeys>,
-    // The soulstone leg is a real arm-290 caller in the reference's own census (wow-re
-    // `bind-confirm-law.md`: 290 ← UseSoulstone · UseInventoryItem · UseAction · UseContainerItem),
+    // The soulstone leg is a real arm-290 caller in the reference (290 = `0x5d8d00` ←
+    // UseSoulstone · UseInventoryItem · UseAction · UseContainerItem),
     // so it goes through the shared send carrying the same bind gate every other item use does.
     mut gate: crate::ui_bind_confirm::BindGate,
 ) {
@@ -913,7 +913,7 @@ mod self_res_tests {
         }
     }
 
-    /// **The dead gate comes first** (wow-re death-ui.md §10.1): `HasSoulstone` reads
+    /// **The dead gate comes first** (`0x48acba`): `HasSoulstone` reads
     /// `UNIT_FIELD_HEALTH` and answers nil while it is positive. A living player holding a
     /// standing self-res spell gets nothing — and neither does a released **ghost**, whose health
     /// the server sets to exactly 1 (`BuildPlayerRepop`). That is what confines the answer to the
@@ -965,7 +965,7 @@ mod self_res_tests {
         );
     }
 
-    /// An id the catalog cannot resolve is **"UNKNOWN"**, not nil (§10.1's fourth exit). Hiding
+    /// An id the catalog cannot resolve is **"UNKNOWN"**, not nil (`0x48ad1d`). Hiding
     /// the button instead would silently strip a self-res the server is holding for us.
     #[test]
     fn an_unresolvable_spell_id_reads_unknown_not_nil() {
@@ -987,7 +987,7 @@ mod self_res_tests {
         }
     }
 
-    /// **A zero field is not the nil path** (§10.3): the client falls through to the carried
+    /// **A zero field is not the nil path** (`0x5ed630`): the client falls through to the carried
     /// inventory and looks for an item whose ON-USE (`trigger == 0`) spell carries
     /// `SPELL_EFFECT_SELF_RESURRECT`, labelling the button with the ITEM's name. Three items
     /// stand in the backpack — one whose self-res spell is on an EQUIP trigger (must not count),

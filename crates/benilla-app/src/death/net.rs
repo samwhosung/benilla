@@ -108,7 +108,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut death_net: ResMut<DeathNet>) {
 /// it was `Other` while nothing rendered a corpse), and the owner field is corpse-only, so nothing
 /// else can match. Rides the `ObjectCreate` arm.
 ///
-/// **Two gates, not one** (wow-re `corpse-click-and-reclaim.md`, §5 cross-checked): the reference's
+/// **Two gates, not one**: the reference's
 /// reclaim guid `[0xb4e328/32c]` has exactly one writer, `0x4920d0`, called from three sites in the
 /// CGCorpse translation unit — and every one of them is gated on `CORPSE_FIELD_OWNER == me`
 /// **and `CORPSE_FIELD_FLAGS` bit 0 clear**, i.e. a real body and not a bone pile. So the latch is
@@ -191,7 +191,7 @@ fn corpse_query(
 
 /// `SMSG_CORPSE_RECLAIM_DELAY` — the delay, anchored to arrival time (`now_secs` is the same
 /// `Time::elapsed_secs_f64` the feed reads back). The client's `0x269` handler re-fires the
-/// corpse-range events through its latch (wow-re death-ui.md §4), so the feed re-announces on the
+/// corpse-range events through its latch (`0x4962d0`), so the feed re-announces on the
 /// generation bump.
 fn corpse_reclaim_delay(delay_ms: u32, now_secs: f64, death_net: &mut DeathNet) {
     death_net.reclaim_at = Some(now_secs + f64::from(delay_ms) / 1000.0);
