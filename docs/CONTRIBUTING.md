@@ -56,6 +56,22 @@ fork, and forks are welcome.
   the environment or in a `.probe-identity` file at the repo root (one per line, never
   committed), and `scripts/smoke.sh` (the live login gate) refuses without them. The probes
   drive the body with GM commands, so give that account the top GM level.
+- **Running it unattended.** The rules are `docs/METHOD.md`, "The local server"; these are the
+  switches.
+  - `WOW_UNATTENDED=1` reconnects instead of waiting at a dialog, and exits non-zero on a login
+    it cannot pass. `WOW_NOSOUND=1` runs silent. A capture (`WOW_CAPTURE`) is both, and a rig
+    (`WOW_RIG`) is unattended. `WOW_ALLOW_ACCOUNT=1` overrides the account guard.
+  - On vmangos, `WOW_RIG="tauren druid 60 gear:heal-preraid-bis spec:heal-preraid-bis
+    at:ThunderBluff"` finds or creates that character on the account and applies the server's
+    premade sets (`WOW_RIG="gear:?"` lists them). `WOW_PROBE_CHAT="<command>"` sends one GM
+    command and logs the reply as `net: server says`. An account named `probe` and digits is
+    shielded: every world entry sends `.cheat god on`, `.die` clears it for a death test, and
+    `WOW_GOD=off` leaves it off.
+  - A trace is `WOW_MOVE_TRACE=<file>`, filtered with `WOW_MOVE_TRACE_TAGS` (`"move,snd,in"`) and
+    ended by `WOW_PROBE_EXIT_AT=<seconds>`; grep it for the `rly` and `snd` lines.
+  - A capture runs through `scripts/visual.sh`, whose recipe is the header of
+    `crates/benilla-app/src/capture/mod.rs`. Pixel questions go through `benilla-visual crop`,
+    `series` and `hotspot`.
 - **The loop.** `cargo play` builds and runs the play profile. `scripts/check.sh` verifies a
   round of work; `scripts/gates.sh` is the full chain, and it opens a window for the engine boot
   checks, so it needs a display. Work on a branch.

@@ -32,10 +32,8 @@ trace-*.json
 .DS_Store
 *.swp
 /.idea/
-# Claude Code: the skills are shared procedures (AGENTS.md names them); every other file under
-# .claude/ is its owner's own settings.
-/.claude/*
-!/.claude/skills/
+# Claude Code: settings and skills under .claude/ are each person's own.
+/.claude/
 
 # Python bytecode from the `scripts/` tooling.
 __pycache__/

@@ -63,8 +63,6 @@ comment naming the reference fact and why we differ. Anything else is a fork.
 - git: the history. No changelogs, no status docs, no "what we did" narratives.
 - The code: a comment says what the code does and the 1.12 fact behind it, in a line. No
   history, no stories.
-- `.claude/skills/`: procedures with steps. `probe` runs the client unattended against the local
-  server.
 
 ## Gates
 
@@ -101,4 +99,4 @@ account. These bind every session and every agent:
   `WOW_GM=off`.
 - Read the preflight banner before debugging anything else.
 
-The mechanics are the `probe` skill.
+The switches for such a run are `docs/CONTRIBUTING.md`, "Running it unattended".
