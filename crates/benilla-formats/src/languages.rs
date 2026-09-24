@@ -176,7 +176,7 @@ pub fn load_default_languages(chain: &mut Chain) -> Result<DefaultLanguages> {
 /// **The wire carries plaintext.** `SMSG_MESSAGECHAT` ships the real sentence plus a language id
 /// and the server never rewrites it (vmangos `ChatHandler.cpp`); turning it into gibberish is
 /// entirely the client's job, which is why an unmodelled garble step renders opposite-faction
-/// speech perfectly readable (B262). The reference's garble routine is `0x49b560`, called from the
+/// speech perfectly readable. The reference's garble routine is `0x49b560`, called from the
 /// chat display chokepoint `0x49a870` at `0x49aa7c` — the same function whose `cmp edi,-0x1` at
 /// `0x49a89b` is the `LANG_ADDON` test.
 ///

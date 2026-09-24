@@ -1,7 +1,7 @@
 //! `CameraShakes.dbc` — the shipped camera-shake presets.
 //!
 //! A shake is **not** authored per model or per animation: the model names a preset id, and this
-//! 24-row table holds the shape. Two id spaces reach it (decisions 1540, 1849):
+//! 24-row table holds the shape. Two id spaces reach it:
 //!
 //! - **The big-creature footstep/death thud** names a preset **directly** —
 //!   `CreatureModelData.FootstepShakeSize` (field 11) and `.DeathThudShakeSize` (field 12), read

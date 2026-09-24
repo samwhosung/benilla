@@ -2,7 +2,7 @@
 //! `WOW_PARTICLE_CENSUS` line against: `cargo run -p benilla-formats --example dump_emitters --
 //! 'World\...\RubyCrystalLarge01.m2'`.
 //!
-//! The pair is the check that matters (decision 0653): the census says how many particles are
+//! The pair is the check that matters: the census says how many particles are
 //! *live*, this says how many the file asks for (`rate × lifespan`), and the over-life ramp says
 //! how big they get. A mismatch is our sim's bug; a match moves the question to the look.
 //!

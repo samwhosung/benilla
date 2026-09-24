@@ -1,5 +1,5 @@
 //! `PetPersonality.dbc` + `PetLoyalty.dbc` — the two tables behind a hunter pet's happiness and
-//! loyalty readouts (decision 1005).
+//! loyalty readouts.
 //!
 //! **`GetPetHappiness` does its own thresholding.** The client does not hand Lua a raw happiness
 //! number for the UI to bucket — it returns a **pre-bucketed 1/2/3** plus the two numbers that

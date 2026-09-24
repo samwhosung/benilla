@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// A spell's `SPELL_EFFECT_OPEN_LOCK` effect (decision 0752) — which `LockType` it opens, and
+/// A spell's `SPELL_EFFECT_OPEN_LOCK` effect — which `LockType` it opens, and
 /// which of the three effect slots carries it (so the value walk reads the right column of the
 /// per-effect arrays).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +41,7 @@ pub struct SpellDisplay {
     pub attributes: u32,
     /// **`School`** (column 1, `SpellRec+0x4`) — the spell's magic school as an INDEX, not a mask.
     /// The crowd-control exemption's school arm shifts it (`1 << School`) before testing it against
-    /// an immunity effect's `EffectMiscValue`, which is a mask (decision 1946).
+    /// an immunity effect's `EffectMiscValue`, which is a mask.
     pub school: u32,
     /// **`Mechanic`** (column 5, `SpellRec+0x14`) — the `SpellMechanic.dbc` id for the spell as a
     /// whole. Read by the crowd-control ladder twice over: the mechanic-immunity arm compares it,
@@ -59,7 +59,7 @@ pub struct SpellDisplay {
     /// `AttributesEx3` (column 9, `SpellRec+0x24`) — bit `0x8000` is consumed
     /// ([`Self::melee_white_damage`]), and bits `0x400` / `0x1000000` are the equipped-item
     /// search's **hand restriction** (main-hand-only / off-hand-only), which is where
-    /// `0x5f0c50`'s slot mask comes from (decision 1903).
+    /// `0x5f0c50`'s slot mask comes from.
     pub attributes_ex3: u32,
     /// **`SpellFamilyName`** (column 160, `SpellRec+0x280`) — which class's talent tree may modify
     /// this spell. `0` on 18243 of the 22357 shipped rows (creature and world spells); the rest
@@ -87,7 +87,7 @@ pub struct SpellDisplay {
     /// reads it per spell — so `UNIT_FLAG_SILENCED` does **not** stop everything, only the rows
     /// that declare `1`. The STUNNED arm above it carries no such gate and refuses every spell.
     ///
-    /// **Column pinned twice** (decision 1903): the byte offset `0x294 / 4 = 165` on a 173-field,
+    /// **Column pinned twice**: the byte offset `0x294 / 4 = 165` on a 173-field,
     /// 692-byte record, and the shipped data itself — its neighbour 164 is `DmgClass` and takes
     /// four values where this takes three, which **Auto Shot (75)** separates decisively at
     /// `DmgClass = 3` (RANGED) with `PreventionType = 2`. Fireball 133 → 1, Heroic Strike 78 → 2,
@@ -117,12 +117,12 @@ pub struct SpellDisplay {
     /// file are three "(TEST) bow shot" rows → 59 and two `Minigun` rows → 23675 (self-referential,
     /// absorbed by the equal-branch).
     ///
-    /// benilla decision 1597. It **corrects** the reading in 0994 §4 — the client
+    /// benilla. It **corrects** the reading in 0994 §4 — the client
     /// really does not start the repeat from the sting's *own* send, and then starts it from a
     /// *second cast it issues itself*.
     pub modal_next_spell: u32,
     /// `Attributes & 0x40` (`SPELL_ATTR_PASSIVE`, module docs) — the spellbook's gray-and-refuse
-    /// gate (consumed by `benilla-ui/src/script/spellbook.rs`, decision 0216 §8).
+    /// gate (consumed by `benilla-ui/src/script/spellbook.rs`).
     pub passive: bool,
     /// `castUI` (column 3, `SpellRec+0xc`, module docs) — the third of the spellbook add-gate's
     /// three exclusions ([`Self::in_spellbook`]). Nonzero keeps the spell out of the book; reads
@@ -137,7 +137,7 @@ pub struct SpellDisplay {
     /// until that scan needed the siblings.
     pub effects: [u32; 3],
     /// This spell's `SPELL_EFFECT_OPEN_LOCK` effect, or `None` if it opens no lock. The GameObject
-    /// interact-cast (decisions 0239/0752) matches it against a lock slot across the player's known
+    /// interact-cast matches it against a lock slot across the player's known
     /// spells: "Opening" for keyless chests, "Mining"/"Herb Gathering"/"Pick Lock" for skill locks.
     /// The skill it *provides* is [`Self::open_lock_skill`].
     pub open_lock: Option<OpenLock>,
@@ -155,7 +155,7 @@ pub struct SpellDisplay {
     pub spell_level: u32,
     /// `Dispel` (column 4, `SpellRec+0x10`) — the `SpellDispelType.dbc` id. The reference client
     /// reads exactly this field for `GetPlayerBuffDispelType` / `UnitDebuff`'s third return
-    /// (byte-verified, decision 0257). Name it through [`crate::SpellCatalog::dispel_name`] — the
+    /// (byte-verified). Name it through [`crate::SpellCatalog::dispel_name`] — the
     /// id alone does not say whether the class is named (`SpellDispelType.dbc`'s `[+0x28]` gate).
     pub dispel: u32,
     /// `Category` (column 2, [`COL_CATEGORY`]) — the shared-cooldown category; `0` = none.
@@ -174,7 +174,7 @@ pub struct SpellDisplay {
     pub interrupt_flags: u32,
     /// `AuraInterruptFlags` ([`COL_AURA_INTERRUPT_FLAGS`]) — what breaks this spell's applied
     /// aura (the food/drink "sit still" bits live here). The cast-initiation moving gate
-    /// (`0x609de3`; decision 0862) reads its `0x18`
+    /// (`0x609de3`) reads its `0x18`
     /// (MOVING|TURNING) bits as one of the three "would movement matter" arms. `0` for most
     /// direct casts.
     pub aura_interrupt_flags: u32,
@@ -253,7 +253,7 @@ pub struct SpellDisplay {
     pub equipped_item_inventory_type_mask: u32,
     /// `RequiresSpellFocus` ([`COL_REQUIRES_SPELL_FOCUS`]) — the `SpellFocusObject.dbc` object
     /// that must be nearby (1 Anvil, 3 Forge, 4 Cooking Fire — [`crate::spell_focus`]); 0 = none.
-    /// The crafting book's "Requires: …" line (0437).
+    /// The crafting book's "Requires: …" line.
     pub requires_spell_focus: u32,
     /// The `SpellShapeshiftForm.dbc` form id this spell shifts into — the `EffectMiscValue` of
     /// its first `SPELL_AURA_MOD_SHAPESHIFT` apply-aura effect — or `None` for a non-form spell.
@@ -320,7 +320,7 @@ pub struct SpellDisplay {
     /// no trigger.
     pub effect_trigger_spell: [u32; 3],
     /// `EffectItemType[3]` ([`COL_EFFECT_ITEM_TYPE_1`]) — the item entry a
-    /// `SPELL_EFFECT_CREATE_ITEM` effect creates (the crafting book's product, 0437); `0` = none.
+    /// `SPELL_EFFECT_CREATE_ITEM` effect creates (the crafting book's product); `0` = none.
     pub effect_item_type: [u32; 3],
     /// `EffectMiscValue[3]` (column 106 == [`COL_EFFECT_MISC_1`], **signed**) — each effect's
     /// misc payload. For an effect-47 opener, slot 0 is the **window routing key** (`0x6e4bd7`:
@@ -488,7 +488,7 @@ impl SpellDisplay {
     /// The client's spell-hostility classifier `Spell_C::GetSpellVisualState` (`0x6ea280`),
     /// reduced to its `== 2` answer — **"this spell targets enemies"** — which is the gate on the
     /// victim's **wound flinch after a spell impact** (the instant-hit loop `0x6e8bf0` @
-    /// `0x6e8c7b`, and the reflect impact `0x6e8cb0` @ `0x6e8cf1`; decision 2058). Byte-read
+    /// `0x6e8c7b`, and the reflect impact `0x6e8cb0` @ `0x6e8cf1`). Byte-read
     /// 2026-09-07 off `WoW.exe`: `Targets & 0x100` (the ally flag) ⇒ 1, never harmful; else
     /// `Targets & 0x80` (the enemy flag) ⇒ 2; else, for each of the three effects, A then B, an
     /// implicit target in the byte tables `0x6ea338` / `0x6ea378` (identical) marked `0` ⇒ 2 —
@@ -531,7 +531,7 @@ impl SpellDisplay {
     /// carry the bit, four distinct names — **Rockbiter / Flametongue / Frostbrand / Windfury
     /// Weapon**, every rank of the shaman's weapon imbues and nothing else — and every one is
     /// `Targets == 0x10` with an `ENCHANT_ITEM_TEMPORARY` effect (censused against the real file
-    /// in `catalog_tests.rs`, which also records why vmangos answers 28). Decision 1552.
+    /// in `catalog_tests.rs`, which also records why vmangos answers 28).
     pub fn targets_main_hand_item(&self) -> bool {
         self.attributes & ATTR_TARGET_MAIN_HAND_ITEM != 0
     }
@@ -568,7 +568,7 @@ impl SpellDisplay {
     /// real 5875 DBC the bit is set on exactly the ranged basic shots — Auto Shot 75, Shoot Bow
     /// 2480, Throw 2764, wand Shoot 5019 — whose damage ships as spell packets yet floats white
     /// (vmangos delivers them via `SMSG_SPELLNONMELEEDAMAGELOG`; the modern name is
-    /// `SPELL_ATTR3_NORMAL_RANGED_ATTACK`). Decision 0376.
+    /// `SPELL_ATTR3_NORMAL_RANGED_ATTACK`).
     pub fn melee_white_damage(&self) -> bool {
         self.attributes_ex3 & ATTR_EX3_NORMAL_RANGED_ATTACK != 0
     }
@@ -581,7 +581,7 @@ impl SpellDisplay {
     /// Only the *name* is suppressed, and only on the bar: the spell still casts, still animates,
     /// and its failures still name it. Three shipped rows carry the bit; the one that reached a
     /// player is 22810 **"Opening - No Text"**, the internal opener for `LockType 13` ground
-    /// containers, whose own name spells out what the attribute is for (decision 1312, B247).
+    /// containers, whose own name spells out what the attribute is for.
     pub fn no_casting_bar_text(&self) -> bool {
         self.attributes_ex3 & ATTR_EX3_NO_CASTING_BAR_TEXT != 0
     }
@@ -629,7 +629,7 @@ impl SpellDisplay {
     }
 
     /// Whether this spell appears in the spellbook — the client's book **add-gate**
-    /// (decision 0227; `CGPlayer_C::AddSpell
+    /// (`CGPlayer_C::AddSpell
     /// 0x5e9c20` → the classify+append `0x4b25b0`). A known spell is kept OUT of the book when any
     /// of three gates trips: `Attributes & 0x80` (`SPELL_ATTR_DO_NOT_DISPLAY` — every language,
     /// armor/weapon proficiency, and hidden racial passive), `Attributes & 0x20`
@@ -643,7 +643,7 @@ impl SpellDisplay {
     }
 
     /// Whether this spell appears in the **pet's** book — a *different* add-gate from
-    /// [`Self::in_spellbook`]'s, and deliberately narrower (decision 1032). `0x4b2f90`, the pet
+    /// [`Self::in_spellbook`]'s, and deliberately narrower. `0x4b2f90`, the pet
     /// book's whole append routine, tests the record's existence and then exactly one bit:
     ///
     /// ```text
@@ -661,7 +661,7 @@ impl SpellDisplay {
     }
 
     /// The **melee auto-attack** — `Effect[0] == SPELL_EFFECT_ATTACK (78)`, the client's own
-    /// effect-type trigger for the equipped-weapon icon substitution (decision 0231; resolvers
+    /// effect-type trigger for the equipped-weapon icon substitution (resolvers
     /// `0x4b3f8a`/`0x4e59de`). In 1.12 the only spell
     /// carrying it is 6603 "Attack" (its `SpellIconID` → the `Temp` placeholder the client never
     /// shows, substituting the main-hand weapon icon instead).
@@ -734,7 +734,7 @@ impl SpellDisplay {
 
     /// A **combo-point consumer** (`AttributesEx` bits 20/22, [`ATTR_EX_FINISHING_MOVE`]) — the
     /// usable walk's combo-point gate (`0x6e3e7a`) greys it while the caster's combo-point byte
-    /// is 0 (decision 0869). The
+    /// is 0. The
     /// rogue/druid finishers, and Overpower.
     pub fn needs_combo_points(&self) -> bool {
         self.attributes_ex & ATTR_EX_FINISHING_MOVE != 0
@@ -921,7 +921,7 @@ impl SpellDisplay {
     }
 
     /// **Which line the client prints in chat when this spell is learned**, or `None` for one it
-    /// learns silently (decision 2243).
+    /// learns silently.
     ///
     /// The announcement is the tail of the spell-added registrar `0x4b25b0` — the same function
     /// whose head sets the known-spell bit and whose gates [`Self::in_spellbook`] models — and it
@@ -958,8 +958,7 @@ impl SpellDisplay {
     /// its `SPELL_ATTR_PASSIVE` bit are all irrelevant — a passive is announced like anything
     /// else unless it also carries `DO_NOT_DISPLAY`, which in the shipped data it usually does.
     /// Whether the client announces **unlearning** this spell — *"You have unlearned %s."*
-    /// (`ERR_SPELL_UNLEARNED_S`, message id `0x14a`), with the bare localized name and no rank
-    /// (decision 2246).
+    /// (`ERR_SPELL_UNLEARNED_S`, message id `0x14a`), with the bare localized name and no rank.
     ///
     /// A **different** gate set from [`Self::learn_announcement`]'s, in a different function, and
     /// not guessable from it — which is how decision 2243 came to claim, with a byte citation,

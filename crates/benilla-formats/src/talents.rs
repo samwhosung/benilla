@@ -1,4 +1,4 @@
-//! `Talent.dbc` + `TalentTab.dbc` loader — the vanilla talent trees' data plane (decision 0304):
+//! `Talent.dbc` + `TalentTab.dbc` loader — the vanilla talent trees' data plane:
 //! each class's three tabs, and each tab's talents with grid position, rank spells, and
 //! prerequisites. The window ([`benilla`]'s ui_talent) renders these; the learn click sends
 //! `CMSG_LEARN_TALENT` with a row id from here.

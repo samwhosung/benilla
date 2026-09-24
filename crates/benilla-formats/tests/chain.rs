@@ -78,7 +78,7 @@ fn culls_constant_zero_alpha_m2_batches() {
     .expect("mesh lamppost");
     // Five batches: body + glass + two billboard cards (the spherical additive glow and the cylindrical
     // top-flame) split out from their mixed batch onto their own bones, so each faces the camera about
-    // its own pivot (decision 0028). The point here is the alpha-cull leaves every visible batch intact.
+    // its own pivot. The point here is the alpha-cull leaves every visible batch intact.
     assert_eq!(lamppost.len(), 5, "a normal prop keeps all its batches");
 }
 
@@ -87,7 +87,7 @@ fn trigger_creature_models_carry_no_render_geometry() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = open_chain(&data).expect("open vanilla patch chain");
 
-    // How an invisible **trigger creature** hides in the real client (decision 1403, bug B13): its
+    // How an invisible **trigger creature** hides in the real client (bug B13): its
     // model draws nothing. No unit flag, no DBC column — a swept census of all 411 shipped
     // `CreatureModelData` paths found exactly these three, by two different routes:
     //
@@ -178,7 +178,7 @@ fn suppresses_white1_invisible_trap_placeholder() {
     // The `SpellObject_InvisibleTrap` placeholder (GameObject displayId 1287 — Fire-Festival fury zones,
     // rallying-cry triggers, …): a flat opaque quad textured with the engine utility-white WHITE1.BLP.
     // The real client draws it at per-instance alpha ≈0 (invisible); benilla recognises the placeholder
-    // and drops its geometry (decision 0030). It must reduce to zero render batches.
+    // and drops its geometry. It must reduce to zero render batches.
     let trap = benilla_formats::load_m2_mesh(
         &mut chain,
         "world/generic/passivedoodads/traps/spellobject_invisibletrap.m2",
@@ -216,7 +216,7 @@ fn decodes_a_blp_icon_to_png() {
     // Keyed by pid, like every other temp path in the workspace: several worktrees run
     // `cargo test --workspace` concurrently, and a FIXED shared name means one run's
     // cleanup deletes the file another is about to read. That is not hypothetical — the
-    // taxi twin below reddened a land gate exactly that way (decision 1918).
+    // taxi twin below reddened a land gate exactly that way.
     let out = std::env::temp_dir().join(format!("benilla-fmt-icon-{}.png", std::process::id()));
     let (w, h) = benilla_formats::blp_to_png(&bytes, &out).expect("decode BLP -> PNG");
 
@@ -412,7 +412,7 @@ fn terrain_chunks_carry_unit_upward_mcnr_normals() {
 /// Every terrain triangle must wind **CCW seen from above** in WoW space — the invariant that lets
 /// the renderer draw terrain single-sided (backface-culled), which is what the real 1.12.1 client
 /// does: its terrain-chunk pass never touches `EGxRs 0x14`, so it inherits the device baseline
-/// `CULL_FACE = 1`, and the ground is see-through from underneath (decision 0960). Flip a fan's
+/// `CULL_FACE = 1`, and the ground is see-through from underneath. Flip a fan's
 /// winding and the world would vanish when viewed from *above* instead — a catastrophic, silent
 /// regression no other test here would catch, since winding changes nothing about positions,
 /// seams, or heights.
@@ -1178,7 +1178,7 @@ fn magma_and_slime_submersion_read_the_fixed_global_light_params() {
     );
 }
 
-/// The far band's tile window **contains the camera's own tile** (decision 0684). Dropping it was
+/// The far band's tile window **contains the camera's own tile**. Dropping it was
 /// invisible at the default view distance — a 533 yd tile sits inside a 777 yd wall, so it would
 /// have been discarded anyway — and a hole above the horizon at any lower one, where the own tile is
 /// the only thing that draws the near horizon. The director found it at view distance 320 in
@@ -1213,7 +1213,7 @@ fn the_wdl_window_contains_the_cameras_own_tile() {
 /// A **tombstoned path must never fall through to the live copy a base archive still holds.**
 ///
 /// `patch.MPQ` deletes 26 paths that `model.MPQ` and friends still carry in full — cut content the
-/// 1.12.1 client does not load (decision 0246). The failure this pins is silent and points the
+/// 1.12.1 client does not load. The failure this pins is silent and points the
 /// wrong way: a chain that resolved *past* the delete-marker would serve `OgreMage.m2`'s 386 KB as
 /// if it were current, looking entirely healthy while rendering a model the reference never draws.
 /// Until now the property was held by a comment in `Chain::read` and nothing else.
@@ -1321,7 +1321,7 @@ fn reads_the_skybox_and_its_per_group_gate() {
     );
 }
 
-/// **The footstep chain's WMO leg, on the shipped bytes** (decision 1161, bug B236's sequel).
+/// **The footstep chain's WMO leg, on the shipped bytes** (bug B236's sequel).
 ///
 /// `MOMT+0x20` is a `TerrainType.dbc` id, and this is the evidence for that claim rather than a
 /// format doc: across every root WMO in the archive the dword only ever takes ids the table

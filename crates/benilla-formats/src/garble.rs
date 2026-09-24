@@ -2,7 +2,7 @@
 //!
 //! When someone speaks a language your character does not know, the *server* sends the sentence in
 //! plaintext with a language id beside it and never rewrites it; turning it into gibberish is
-//! entirely the client's job (B262 — opposite-faction speech rendered perfectly readable because
+//! entirely the client's job (opposite-faction speech rendered perfectly readable because
 //! this step did not exist). This module is that step.
 //!
 //! **The oracle is an emulated run of the binary's own bytes** (`0x49b560` over the player's own

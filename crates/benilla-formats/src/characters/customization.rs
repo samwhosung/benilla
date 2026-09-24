@@ -1,4 +1,4 @@
-//! Character-creation source data (decision 0423): the per-race body displayIds (ChrRaces), the
+//! Character-creation source data: the per-race body displayIds (ChrRaces), the
 //! race/class combos (CharBaseInfo), and the five appearance-dial *ranges* per (race, sex) derived
 //! from CharSections + CharHairGeosets + CharacterFacialHairStyles.
 //!
@@ -84,12 +84,12 @@ const KNOWN_COMBOS: [(u8, &[u8]); 8] = [
 /// data, not creatable content. Dwarf-Mage (3, 8) sits fully populated in both CharBaseInfo *and*
 /// CharStartOutfit, yet the real client hardcodes the skip: its class-list builder (`0x4706b0`)
 /// iterates CharBaseInfo and drops rows matching the literal `race == 3 && class == 8` — two x86
-/// immediates, the only such pair binary-wide (decisions 0549/0550). Stripped here right after the
+/// immediates, the only such pair binary-wide. Stripped here right after the
 /// raw-parse guard — the same mechanism, one layer down — so `allows`/`classes_for_race` answer
 /// what the real client offers.
 const UNUSED_COMBOS: [(u8, u8); 1] = [(3, 8)];
 
-/// One renderable item of a class's level-1 starting outfit (CharStartOutfit.dbc, decision 0527):
+/// One renderable item of a class's level-1 starting outfit (CharStartOutfit.dbc):
 /// the item's **ItemDisplayInfo** id — the same kind of id the char-enum equipment carries, so it
 /// feeds the equipment pipeline directly with no Item.dbc/template hop — and its InventoryType (the
 /// worn slot). Non-worn entries (bags, food, hearthstone — InventoryType 0) are dropped at load.
@@ -126,13 +126,13 @@ pub struct CharCreateCatalog {
     /// (race, sex) → the five dial counts.
     ranges: HashMap<(u8, u8), DialRanges>,
     /// (race, class, sex) → the level-1 starting-outfit items the create preview dresses in
-    /// (CharStartOutfit, decision 0527) — worn slots only, DisplayId + InventoryType.
+    /// (CharStartOutfit) — worn slots only, DisplayId + InventoryType.
     start_outfits: HashMap<(u8, u8, u8), Vec<StartOutfitItem>>,
 }
 
 impl CharCreateCatalog {
     /// The body model displayId for a (race, sex) — resolved through the ordinary CreatureDisplayInfo
-    /// chain, the same as any streamed unit (decision 0041). `None` for a non-playable race.
+    /// chain, the same as any streamed unit. `None` for a non-playable race.
     pub fn body_display(&self, race: u8, sex: u8) -> Option<u32> {
         self.displays
             .get(&race)
@@ -166,7 +166,7 @@ impl CharCreateCatalog {
     }
 
     /// The classes a race may be created as, ascending by class id. The real client's grid order is
-    /// CharBaseInfo *row* order (its builder `0x4706b0` walks the table, decision 0550) — which in
+    /// CharBaseInfo *row* order (its builder `0x4706b0` walks the table) — which in
     /// the 5875 file is ascending class id for all 8 races (verified byte fact), so the sort here is
     /// order-equivalent on the real data.
     pub fn classes_for_race(&self, race: u8) -> Vec<u8> {
@@ -186,7 +186,7 @@ impl CharCreateCatalog {
     }
 
     /// The renderable starting-outfit items for a (race, class, sex) — the level-1 gear the create
-    /// screen dresses the preview in (decision 0527). Empty for a combo with no CharStartOutfit row.
+    /// screen dresses the preview in. Empty for a combo with no CharStartOutfit row.
     pub fn start_outfit(&self, race: u8, class: u8, sex: u8) -> &[StartOutfitItem] {
         self.start_outfits
             .get(&(race, class, sex))
@@ -674,7 +674,7 @@ mod tests {
             "Troll male facial tok"
         );
 
-        // 2c · CharStartOutfit (decision 0527): every creatable (race, class, sex) combo dresses
+        // 2c · CharStartOutfit: every creatable (race, class, sex) combo dresses
         // in ≥1 worn item, and the InventoryType semantics land — the Human Warrior recruit set
         // (guarded at load too) and the Human Mage's robe (InventoryType 20, chest column).
         // (Creatable = the playable sets; the dead Dwarf-Mage pair also has a populated outfit

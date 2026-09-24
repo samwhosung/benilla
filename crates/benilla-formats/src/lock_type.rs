@@ -1,6 +1,6 @@
 //! LockType.dbc — the small table that names a lock's *interaction kind* (Herbalism, Mining, Pick
 //! Lock, Fishing, …), and — for the three that carry one — the **cursor** the client shows when you
-//! hover a GameObject wearing that lock (decision 0236; `0x5f3070`). The world
+//! hover a GameObject wearing that lock (`0x5f3070`). The world
 //! cursor's GameObject branch resolves a base-type GO's cursor by data: the GO template's `lockId` →
 //! [`crate::LockCatalog`] row → its **first** requirement slot's `LockType` index → *this* table's
 //! **CursorName** column. A non-empty CursorName (only `PickLock`/`GatherHerbs`/`Mine` in 5875) names
@@ -11,7 +11,7 @@
 //! The localized **Name** block (`Name@1..8` + flags, enUS at field 1 — `[lockTypeRow + locale*4 +
 //! 4]`, the exact read the lock-refusal toast performs at `0x5f34f9`) is the word the client fills
 //! into the client-local "Requires %s" error for an unopenable skill lock — "Requires Herbalism" /
-//! "Requires Mining" (decision 0545).
+//! "Requires Mining".
 //!
 //! Layout verified against build 5875 (byte-checked live: 19 records × 29 fields, record size 116):
 //! `ID@0`, then the localized `Name` block, and **`CursorName@28`** (`[lockTypeRow+0x70]`, the exact
@@ -133,7 +133,7 @@ mod tests {
             "only three LockType rows carry a CursorName in 5875"
         );
 
-        // The localized Name column — the lock-refusal toast's "Requires %s" fill (decision 0545).
+        // The localized Name column — the lock-refusal toast's "Requires %s" fill.
         // A column slip here would print e.g. "Requires Herbs" (ResourceName@10) on screen.
         assert_eq!(cat.name(1), Some("Pick Lock"));
         assert_eq!(cat.name(2), Some("Herbalism"));

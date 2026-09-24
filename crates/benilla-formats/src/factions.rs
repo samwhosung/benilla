@@ -20,7 +20,7 @@
 //! (`SMSG_INITIALIZE_FACTIONS`) and live with the net layer.
 //!
 //! Two consumers share that identity now — the reaction decode above, and the **reputation pane**
-//! (decision 1258, whose display law is `benilla-ui`'s `script::reputation`). Where both need the
+//! (whose display law is `benilla-ui`'s `script::reputation`). Where both need the
 //! same number they take it from the same function here, so a rank the pane draws and a colour the
 //! nameplate paints can never disagree.
 //!
@@ -744,7 +744,7 @@ mod tests {
         assert_eq!(Reaction::from_rank(7), Reaction::Friendly);
     }
 
-    /// The GameObject faction term (decision 0764), pinned on the real `FactionTemplate.dbc`: the
+    /// The GameObject faction term, pinned on the real `FactionTemplate.dbc`: the
     /// factions that shipped GameObjects actually carry, resolved **GO → player** (the direction
     /// `0x606640` uses). A column slip here would silently blank ~7,563 shipped GO spawns, or fail
     /// to blank them — so the two decisive rows are asserted by value. Skips without client data.

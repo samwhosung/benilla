@@ -1,4 +1,4 @@
-//! UBRS's Rookery Eggs "don't play their animation when you walk close" (bug B140, decision 1404).
+//! UBRS's Rookery Eggs "don't play their animation when you walk close" (bug B140).
 //!
 //! The egg is `gameobject_template` 175124, a **TRAP** with radius 3 and one charge: walk inside it
 //! and vmangos spends the charge, casts the whelp-spawner, and — because the spawn rows carry

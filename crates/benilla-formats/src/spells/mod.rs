@@ -34,15 +34,15 @@
 //! `+0x20`: `0x18/4 == 6`, `0x20/4 == 8`; the record layout is raw this early, before the
 //! translated tail that broke the `+0x1e0` lead above). Only two bits are consumed — the client's
 //! ranged gate, [`SpellDisplay::ranged_attack`]; `Attributes` bit `0x40` — `SPELL_ATTR_PASSIVE`
-//! (vmangos `SpellDefines.h`) — for [`SpellDisplay::passive`] (decision 0216 §8); and the
-//! spellbook **add-gate** [`SpellDisplay::in_spellbook`] (decision 0227) — `Attributes` bit `0x80`
+//! (vmangos `SpellDefines.h`) — for [`SpellDisplay::passive`]; and the
+//! spellbook **add-gate** [`SpellDisplay::in_spellbook`] — `Attributes` bit `0x80`
 //! (`SPELL_ATTR_DO_NOT_DISPLAY`), bit `0x20` (`SPELL_ATTR_IS_TRADESKILL`), and **castUI = column
 //! 3** (`SpellRec+0xc`, `0xc/4 == 3` — raw this early like columns 6/8). castUI was pinned by the
 //! same byte read that pinned the gate (`0x4b29bf`, in the classify+append `0x4b25b0`), not an
 //! empirical column derivation; it reads 0 for every ordinary player spell
 //! (Fireball 133), so it is exercised only as a gate that never trips on the shown set.
 //!
-//! **SpellNameSubtext enUS = column 129** (decision 0216 §8) — pinned empirically the same way as
+//! **SpellNameSubtext enUS = column 129** — pinned empirically the same way as
 //! the name column: NameEnUs's own locale block runs `120..127` (8 locales) `+128` (the name's
 //! flags word), so the very next `LocalizedString` head at `129` was the candidate; confirmed
 //! against six real spells spanning the whole rank range (Fireball 133/143/145 → "Rank 1"/"Rank
@@ -166,7 +166,7 @@ const COL_CATEGORY_RECOVERY_TIME: usize = 20;
 /// neighbors `+0x50`/col 20 and col 25). Spot checks: Fireball 133 interrupt `0xf`, channel 0;
 /// Arcane Missiles 5143 channel `0x7c0c`; First Aid 746 interrupt 0, channel `0x3c0e`. Consumed
 /// by the cast bar's local self-cancel (`benilla::ui_cast`) and the cast-initiation moving gate
-/// (`benilla::ui_action`, decision 0862), where the bit semantics are documented.
+/// (`benilla::ui_action`), where the bit semantics are documented.
 const COL_INTERRUPT_FLAGS: usize = 21;
 const COL_AURA_INTERRUPT_FLAGS: usize = 22;
 const COL_CHANNEL_INTERRUPT_FLAGS: usize = 23;
@@ -251,7 +251,7 @@ const COL_EQUIPPED_ITEM_CLASS: usize = 58;
 const COL_EQUIPPED_ITEM_SUBCLASS_MASK: usize = 59;
 /// `EquippedItemInventoryTypeMask` — chain-locked between `COL_EQUIPPED_ITEM_SUBCLASS_MASK`
 /// (`SpellRec+0xec`) and `COL_EFFECT_1` (`+0xf4`), i.e. exactly the `+0xf0` the reference's
-/// item-target gate reads at `0x495d60` @ `495e4d`. Decision 0923.
+/// item-target gate reads at `0x495d60` @ `495e4d`.
 const COL_EQUIPPED_ITEM_INVENTORY_TYPE_MASK: usize = 60;
 /// `RequiresSpellFocus` (`SpellRec+0x3c`, `0x3c/4 == 15` — the run the pinned neighbors chain-lock:
 /// `Stances` 11-12, `Targets` 13, `CasterAuraState` 16). A `SpellFocusObject.dbc` id that must be
@@ -259,7 +259,7 @@ const COL_EQUIPPED_ITEM_INVENTORY_TYPE_MASK: usize = 60;
 /// against live vmangos `spell_template` rows on the real 5875 file (catalog_tests).
 const COL_REQUIRES_SPELL_FOCUS: usize = 15;
 /// `Dispel` — the `SpellDispelType.dbc` id (`SpellRec+0x10`; the byte offset chain-locks it to
-/// `COL_CAST_UI` at `+0xc` and `COL_ATTRIBUTES` at `+0x18`). Decision 0257.
+/// `COL_CAST_UI` at `+0xc` and `COL_ATTRIBUTES` at `+0x18`).
 const COL_DISPEL: usize = 4;
 /// `School` (`SpellRec+0x4`, `0x4/4 == 1`) — see [`SpellDisplay::school`].
 const COL_SCHOOL: usize = 1;
@@ -277,8 +277,8 @@ const COL_ATTRIBUTES_EX2: usize = 8;
 const COL_ATTRIBUTES_EX3: usize = 9;
 const COL_SPEED: usize = 37;
 /// `Effect[0]` (`SpellRec+0xf4`, `0xf4/4 == 61` — raw this early, like columns 6/8/37): the
-/// spell's first effect type. The action bar / spellbook auto-attack icon substitution keys on it
-/// (decision 0231): `Effect[0] == SPELL_EFFECT_ATTACK (78)` is the melee auto-attack (resolvers
+/// spell's first effect type. The action bar / spellbook auto-attack icon substitution keys on it:
+/// `Effect[0] == SPELL_EFFECT_ATTACK (78)` is the melee auto-attack (resolvers
 /// `0x4b3f8a` / `0x4e59de` both `cmp [SpellRec+0xf4], 0x4e`).
 const COL_EFFECT_1: usize = 61;
 /// `EffectMiscValue[0]` (column 106). The Spell.dbc effect block is 15 parallel `[3]` arrays from
@@ -296,7 +296,7 @@ const COL_EFFECT_TRIGGER_1: usize = 109;
 pub const SPELL_EFFECT_LEARN_SPELL: u32 = 36;
 
 /// One of a spell's three effect slots, as the trainer's state re-evaluator reads them
-/// (`0x4d7d40`; decision 2333): the three effect
+/// (`0x4d7d40`): the three effect
 /// types that decide whether a service is already "known". Any other effect type is not a learn
 /// effect and is skipped. Slot order is kept — the reference walks `+0xf4/+0xf8/+0xfc` in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,7 +326,7 @@ pub const SPELL_EFFECT_LEARN_PET_SPELL: u32 = 57;
 pub const SPELL_EFFECT_SKILL_STEP: u32 = 44;
 
 /// `SpellEffects` value `SPELL_EFFECT_OPEN_LOCK` — the lock-opening effect the GameObject
-/// interact-cast matches (decision 0239; `0x5f84a1`, the client's
+/// interact-cast matches (`0x5f84a1`, the client's
 /// `cmp [SpellRec+0xf4], 0x21`). A spell carrying it opens the `LockType` its `EffectMiscValue` names.
 const SPELL_EFFECT_OPEN_LOCK: u32 = 0x21;
 /// `baseLevel` — column 28 (`SpellRec+0x70`), the level term the effect-value walk subtracts at
@@ -391,7 +391,7 @@ const COL_PROC_CHANCE: usize = 25;
 const COL_EFFECT_DIE_SIDES_1: usize = 64;
 const COL_EFFECT_BASE_DICE_1: usize = 67;
 /// `EffectDicePerLevel[0]` — column 70 (`SpellRec+0x118`), the integer per-level term of the
-/// effect-value walk (decision 0752).
+/// effect-value walk.
 const COL_EFFECT_DICE_PER_LEVEL_1: usize = 70;
 /// `EffectRealPointsPerLevel[0]` — column 73 (`SpellRec+0x124`), the **float** per-level term:
 /// 5.0 on every profession opener, 0.6 on Fireball rank 1 — the two anchors that pin the column.
@@ -403,7 +403,7 @@ const COL_EFFECT_MULTIPLE_VALUE_1: usize = 97;
 const COL_EFFECT_CHAIN_TARGETS_1: usize = 100;
 /// `EffectItemType[0]` — column 103, the `[3]` block between `EffectChainTarget` (100-102) and
 /// `EffectMiscValue` (106-108) in the module docs' parallel-array walk. The item entry a
-/// `SPELL_EFFECT_CREATE_ITEM` effect creates — the crafting book's product (0437). Verified
+/// `SPELL_EFFECT_CREATE_ITEM` effect creates — the crafting book's product. Verified
 /// against live vmangos rows on the real 5875 file (catalog_tests: 2963 → 2996 Bolt of Linen
 /// Cloth, 2738 → 2845 Copper Axe).
 const COL_EFFECT_ITEM_TYPE_1: usize = 103;
@@ -415,7 +415,7 @@ const COL_EFFECT_ITEM_TYPE_1: usize = 103;
 /// the combat-text emitter `0x6128b0`'s `B`-bit flip).
 const ATTR_EX3_NORMAL_RANGED_ATTACK: u32 = 0x8000;
 /// `AttributesEx3` bit `0x4` — **the cast bar shows no name for this spell**
-/// (`SPELL_ATTR_EX3_NO_CASTING_BAR_TEXT`, vmangos `Spells/SpellDefines.h:907`). Decision 1312.
+/// (`SPELL_ATTR_EX3_NO_CASTING_BAR_TEXT`, vmangos `Spells/SpellDefines.h:907`).
 ///
 /// Exactly three rows in the shipped 5875 file carry it, and one of them is *named after the bit*:
 /// 6477 "Opening", **22810 "Opening - No Text"**, 26380 "zzOLDSummon Mouth Tentacle Visual". That
@@ -444,7 +444,7 @@ const ATTR_RANGED: u32 = 0x2;
 /// (`SPELL_ATTR0_TARGET_MAINHAND_ITEM`). vmangos leaves the bit unnamed (`SPELL_ATTR_UNK9`)
 /// because it is a purely *client-side* targeting instruction: the server only ever sees the
 /// resolved item guid. The law is `ArmCast 0x6e5250`'s candidate leg (`6e536e`–`6e5391`), read by
-/// [`SpellDisplay::targets_main_hand_item`]; decision 1552.
+/// [`SpellDisplay::targets_main_hand_item`].
 const ATTR_TARGET_MAIN_HAND_ITEM: u32 = 0x200;
 /// `AttributesEx2` bit `0x20` — the auto-repeat attribute (mangos `SPELL_ATTR_EX2_AUTO_REPEAT`);
 /// the other half of the gate. Auto Shot and wand Shoot carry it.
@@ -458,7 +458,7 @@ const ATTR_EX2_DO_NOT_RESET_COMBAT_TIMERS: u32 = 0x20000;
 /// ref's `SpellButton_UpdateButton` reads `IsSpellPassive` to gray the name/highlight art
 /// (`SpellBookFrame.lua:379-390`) — a passive is real player state (a permanent weapon-skill/
 /// stance-derived buff), never something the player casts, so the engine's `CastSpell` binding
-/// (decision 0216 §8, `benilla-ui/src/script/spellbook.rs`) refuses it outright rather than
+/// (`benilla-ui/src/script/spellbook.rs`) refuses it outright rather than
 /// sending a doomed cast the server would just reject.
 const ATTR_PASSIVE: u32 = 0x40;
 /// `Attributes` bit `0x10` — `SPELL_ATTR_ABILITY` (cmangos `SpellDefines.h`). The **only** thing
@@ -467,13 +467,13 @@ const ATTR_PASSIVE: u32 = 0x40;
 /// `0x38` `ERR_LEARN_ABILITY_S` when it is set. See [`SpellDisplay::learn_announcement`].
 const ATTR_ABILITY: u32 = 0x10;
 /// `Attributes` bit `0x80` — `SPELL_ATTR_DO_NOT_DISPLAY` (cmangos `SpellDefines.h`: "Hidden in
-/// Spellbook, Aura Icon, Combat Log"): THE spellbook add-gate (decision 0227) AND the `Attributes`
+/// Spellbook, Aura Icon, Combat Log"): THE spellbook add-gate AND the `Attributes`
 /// half of the aura-bar display filter ([`SpellDisplay::hidden_from_aura_bar`] — the cache
 /// builder's byte-width read at `0x4e42b6` tests exactly this bit). Every language, armor/weapon
 /// proficiency, hidden racial passive, and internal proc aura (Defensive State 5302) carries it.
 const ATTR_DO_NOT_DISPLAY: u32 = 0x80;
 /// `Attributes` bit `0x20` — `SPELL_ATTR_IS_TRADESKILL` (cmangos `SpellDefines.h`): profession /
-/// recipe spells the client diverts to a name-only path, never a book slot (decision 0227). See
+/// recipe spells the client diverts to a name-only path, never a book slot. See
 /// [`SpellDisplay::in_spellbook`].
 ///
 /// Public because four separate surfaces test this one bit and each had grown its own copy of the
@@ -490,7 +490,7 @@ const ATTR_EX_NO_AURA_ICON: u32 = 0x1000_0000;
 /// `SpellEffects` value `78` — `SPELL_EFFECT_ATTACK` (cmangos `SpellEffectDefines.h`): the melee
 /// auto-attack effect. The only spell carrying it in 1.12 is 6603 "Attack", so the client's
 /// effect-type trigger and a hardcoded-6603 trigger are behaviourally identical — but the client
-/// checks the effect (decision 0231), so [`SpellDisplay::is_melee_auto_attack`] does too.
+/// checks the effect, so [`SpellDisplay::is_melee_auto_attack`] does too.
 const SPELL_EFFECT_ATTACK: u32 = 78;
 
 /// The three **tracking** aura types (`EffectApplyAuraName` values, vmangos `SpellAuraDefines.h`):
@@ -533,7 +533,7 @@ const ATTR_EX_CHANNELED: u32 = 0x44;
 /// list. The real 5875 `Spell.dbc` carries the bit on **36 rows** — every rank of Backstab,
 /// Garrote, Ambush, Cheap Shot, Shred, Ravage and Pounce, plus Judgement 20271 — i.e. every
 /// stealth opener and positional strike in the game, whose attack must wait for the server to
-/// resolve it. The census is the test beside this now (decision 1593, bug B280's sweep).
+/// resolve it. The census is the test beside this now (bug B280's sweep).
 const ATTR_EX2_INITIATE_COMBAT_POST_CAST: u32 = 0x0010_0000;
 
 /// `Attributes` bit 25 (`0x0200_0000`) — `SPELL_ATTR_COOLDOWN_ON_EVENT` (vmangos; "disabled while
@@ -561,25 +561,24 @@ const ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x0008_0000;
 /// `SPELL_ATTR_EX_FINISHING_MOVE_DAMAGE` / `_DURATION`, both commented "Uses combo points"; the
 /// pair `SpellEntry::NeedsComboPoints` tests). The usable walk's combo-point gate reads exactly
 /// this pair (`0x6e3e7a`) before consulting the caster's combo-point byte —
-/// [`SpellDisplay::needs_combo_points`], decision 0869. In 5875 the set is the six rogue/druid
+/// [`SpellDisplay::needs_combo_points`]. In 5875 the set is the six rogue/druid
 /// finishers (Eviscerate, Expose Armor, Ferocious Bite, Kidney Shot, Rip, Rupture, Slice and
 /// Dice) **plus Overpower**, whose own `AttributesEx` bit 30 vmangos names `COMBO_ON_BLOCK` and
 /// annotates, in one word, "Overpower".
 const ATTR_EX_FINISHING_MOVE: u32 = 0x0050_0000;
 /// `SpellEffects` value `47` — `SPELL_EFFECT_TRADE_SKILL`: the usable walk's early-out
 /// (`0x6e3d99`, `Effect[0]==0x2f` ⇒ usable, skipping every gate). Also the crafting book's open
-/// key (0437): `Spell_C::TryCast 0x6e4b60` branches on `Effect[0]==0x2f` and opens the window
+/// key: `Spell_C::TryCast 0x6e4b60` branches on `Effect[0]==0x2f` and opens the window
 /// client-side, never sending the cast.
 pub const SPELL_EFFECT_TRADE_SKILL: u32 = 47;
 /// `SpellEffects` value `24` — `SPELL_EFFECT_CREATE_ITEM` (vmangos `SharedDefines.h`): a recipe's
-/// product effect; its `EffectItemType` slot is the created item entry (0437).
+/// product effect; its `EffectItemType` slot is the created item entry.
 pub const SPELL_EFFECT_CREATE_ITEM: u32 = 24;
 /// `SpellEffects` value `95` — `SPELL_EFFECT_SKINNING` (vmangos `SharedDefines.h`,
 /// `Spell::EffectSkinning`): the corpse-gathering cast the Skin cursor's right-click resolves
 /// through (0437's gathering finish). Byte-confirmed as the client's own discriminator: the
 /// spell-learn path latches a spell with this `Effect[0]` into `[0xb700e4]`
-/// (`0x4b2623: cmp [esi+0xf4], 0x5f` — `0x5f == 95`), and the cursor's skin leg requires that latch
-/// (decision 0752).
+/// (`0x4b2623: cmp [esi+0xf4], 0x5f` — `0x5f == 95`), and the cursor's skin leg requires that latch.
 pub const SPELL_EFFECT_SKINNING: u32 = 95;
 /// `SpellEffects` value `39` — `SPELL_EFFECT_LANGUAGE`: the effect that makes a spell *be* a
 /// language. Its `EffectMiscValue_1` is the `Languages.dbc` id, which is how a language reaches a
@@ -599,7 +598,7 @@ pub const SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY: u32 = 54;
 /// and that leg holds the only raise sites image-wide for the cast-failure reasons `0x84`
 /// PROSPECT_NEED_MORE (`0x49614e`) and `0x90` MIN_SKILL (`0x496128`). The server sends neither
 /// reason either, so on this build both messages are unreachable — which is why
-/// `ui_action::cast_fail` models neither arm (decision 2292).
+/// `ui_action::cast_fail` models neither arm.
 ///
 /// **The number is the binary's own, not a later build's enum ported backwards.** `TryCast
 /// 0x6e4b60` carries a matched pair of `Effect[0]` gates two instructions apart:
@@ -664,7 +663,7 @@ impl SpellCatalog {
     }
 
     /// A spell's learn effects in slot order — empty for a plain ability. What the trainer's
-    /// state re-evaluator walks (decision 2333).
+    /// state re-evaluator walks.
     pub fn learn_effects(&self, id: u32) -> &[LearnEffect] {
         self.learn_effects.get(&id).map_or(&[], Vec::as_slice)
     }
@@ -815,7 +814,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
     let mut declared_language: HashMap<u32, u32> = HashMap::new();
     for r in spells_set.records() {
         let Some(id) = u32_at(r, 0) else { continue };
-        // The learn-spell hop (decision 0247): a SPELL_EFFECT_LEARN_SPELL effect's EffectTriggerSpell
+        // The learn-spell hop: a SPELL_EFFECT_LEARN_SPELL effect's EffectTriggerSpell
         // is the ability this spell teaches — the trainer offers the learn wrapper, the taught spell
         // carries the skill line + the real display. First LEARN effect wins.
         for i in 0..3 {
@@ -904,7 +903,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
                 spell_level: u32_at(r, COL_SPELL_LEVEL).unwrap_or(0),
                 // Scan the three effects for OPEN_LOCK and take that effect's LockType (its
                 // EffectMiscValue) together with the value inputs the lock resolver compares
-                // against the slot's requirement (decision 0752). Most openers carry it on
+                // against the slot's requirement. Most openers carry it on
                 // Effect[0], but the scan is cheap.
                 open_lock: (0..3).find_map(|i| {
                     (u32_at(r, COL_EFFECT_1 + i)? == SPELL_EFFECT_OPEN_LOCK).then(|| OpenLock {

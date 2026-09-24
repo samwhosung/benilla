@@ -1,5 +1,5 @@
 //! **A MOCV one record short is still a bake.** The companion to `wmo_chunk_overrun`: clamping the
-//! last chunk to EOF (decision 0972) is only half the tolerance, because the chunk that clamps in
+//! last chunk to EOF is only half the tolerance, because the chunk that clamps in
 //! `Undercity_144.wmo` *is* MOCV — 1159 of its declared 1160 bytes, so the colour buffer parses to
 //! 289 entries for 290 vertices.
 //!
@@ -7,7 +7,7 @@
 //! which threw away 289 good colours over one missing byte. An interior batch draws `tex × MOCV`, and
 //! absent colour renders as white, so that corridor lit at full brightness and untinted inside a city
 //! whose every other interior surface is multiplied by a dark bake — the pale, cold arch in the
-//! director's shot, against a reference that shows it warm and lantern-lit (decision 0977).
+//! director's shot, against a reference that shows it warm and lantern-lit.
 //!
 //! Skips when the client isn't present.
 

@@ -14,7 +14,7 @@
 //! (not crit — crit `0x80` belongs to the wound flinch).
 //!
 //! **Fields 5–9 are the row's ground-splat decal textures, and they are DEAD in 1.12.1**
-//! (`textures\BloodSplats\…`, [`BloodCatalog::splats`]; decision 1850).
+//! (`textures\BloodSplats\…`, [`BloodCatalog::splats`]).
 //! Not "unimplemented" — *absent*: no instruction in the image reads
 //! `UnitBloodRecord + 0x14 … +0x24`, and the string `"BloodSplat"` occurs nowhere in `WoW.exe`,
 //! though all twelve `.blp` ship in `texture.MPQ` and the DBC resolves them. Data shipped, art

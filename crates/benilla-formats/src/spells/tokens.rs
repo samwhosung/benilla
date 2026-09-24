@@ -37,8 +37,8 @@ pub struct TokenContext<'a> {
     pub home_area: Option<&'a str>,
     /// **Resolve a `GlobalStrings` key and fill its `%d` holes** — the caller's job, because both
     /// halves of it live on the other side of this crate's boundary: the string table is the
-    /// script VM's and the one shared printf-family filler is `benilla_ui::strings::fill`
-    /// (decision 2045). This crate has no business depending on either, so the split is that the
+    /// script VM's and the one shared printf-family filler is `benilla_ui::strings::fill`.
+    /// This crate has no business depending on either, so the split is that the
     /// token engine picks the KEY and the NUMBERS and the caller renders them.
     ///
     /// Integer holes only, and the signature says so on purpose: every key reached through here
@@ -337,7 +337,7 @@ mod tests {
     /// The string table these tests resolve against — **deliberately not the shipped wording**.
     ///
     /// What is under test here is which KEY the engine reaches for and which numbers fill it,
-    /// never what the sentence says (decision 2045). A fixture that echoed the real strings would
+    /// never what the sentence says. A fixture that echoed the real strings would
     /// pass on a *wrong* key wherever two of them agree in English, which is exactly how
     /// `LASTONLINE_HOURS_P1`'s wording came to be spelled into the duration ladder in the first
     /// place. It is also the idiom `benilla_ui::script::tests::tooltip` uses for the same reason.

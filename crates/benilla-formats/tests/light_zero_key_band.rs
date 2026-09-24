@@ -6,7 +6,7 @@
 //! (count load `0x6d62ec`, guard `0x6d62ef`/`0x6d62f4`, store `0x6d62f6 mov [edi], 0xff000000`) and
 //! the scalar one does the same at `0x6d6489`/`0x6d648e` with `fld [0x7ffd74]` = `+0.0f`; both
 //! stores are immediates, and the copy into the colour table is unconditional — so the answer is
-//! not stale, not skipped, and not a static initialiser (decision 1465).
+//! not stale, not skipped, and not a static initialiser.
 //!
 //! benilla used to answer every one of those rows out of `Atmosphere::DEFAULT`, a hand-written
 //! "neutral daytime" palette meant for *no lighting data at all*. Report **B90** is what that cost:

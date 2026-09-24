@@ -83,7 +83,7 @@ pub struct ItemDisplay {
     pub flags: u32,
     /// The `ItemVisuals.dbc` id (col 22) — the display's **intrinsic glow**: the permanent weapon
     /// glows, resolved to up to five `Spells\Enchantments\*.mdx` models by
-    /// [`crate::ItemVisualCatalog`] (decision 0805). **Signed**, because the client reads it that
+    /// [`crate::ItemVisualCatalog`]. **Signed**, because the client reads it that
     /// way (`0x4798c0`'s `jle` gate): `0` = none on 29 239 of the 29 604 rows, and **five shipped
     /// rows carry `-1`**, which is also none.
     pub item_visual: i32,
@@ -100,7 +100,7 @@ impl ItemDisplay {
     /// `CreatureDisplayInfoExtra`'s head column points **126 character-model NPC displays** at
     /// exactly those rows, and honouring the mask there strips the NPC's hairstyle to the bare
     /// scalp (geoset 1), its ears to the tucked variant (701) and its earrings/beard to their
-    /// group bases — while 1.12.1 renders them in full (B93: Jubie Gadgetspring, display 7969 →
+    /// group bases — while 1.12.1 renders them in full (Jubie Gadgetspring, display 7969 →
     /// extra 5503 → head display **15676** → vis row **306** = `[446,478,510,222,238]`, every
     /// column with the gnome bit `1<<7` set).
     ///
@@ -137,7 +137,7 @@ impl ItemDisplay {
 const FLAG_GUILD_EMBLEM_TABARD: u32 = 0x1;
 
 /// `ItemDisplayInfo.dbc`, keyed by `displayId` (the id `ItemDisplayInfoID`/`UNIT_VIRTUAL_ITEM_SLOT_DISPLAY`
-/// resolve into — decision 0072).
+/// resolve into).
 pub struct ItemDisplayCatalog {
     displays: HashMap<u32, ItemDisplay>,
 }

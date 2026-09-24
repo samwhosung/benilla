@@ -209,7 +209,7 @@ fn kit_effect_slots_pair_with_their_attach_tags() {
     assert_eq!(VisualKit::default().effects().count(), 0);
 }
 
-/// The tenth slot (field 12, decision 0848) rides `effects()` after the nine, at the interim
+/// The tenth slot (field 12) rides `effects()` after the nine, at the interim
 /// Base anchor — one iterator, so every kit consumer (the aura-state watcher, kit pushes,
 /// cast/impact plays) picks it up without knowing it exists.
 #[test]
@@ -253,15 +253,15 @@ fn real_spell_visual_chain_resolves_fireball() {
             // Field 10: the fireball's in-flight loop (SoundEntries 3011 → FireMissileLoop.wav).
             missile_sound: Some(3011),
             strike_sound: None,
-            // Field 6 set = a missile owns the arrival: the GO dest one-shot gate is closed
-            // (0797); the dest-anchored columns are empty on a projectile nuke.
+            // Field 6 set = a missile owns the arrival: the GO dest one-shot gate is closed;
+            // the dest-anchored columns are empty on a projectile nuke.
             missile_gate: 1,
             area_gate: 0,
             area_effect: 0,
             area_kit: 0,
         }
     );
-    // The gathering/work strike sounds (decision 0562): Mining's visual 93 carries the pick
+    // The gathering/work strike sounds: Mining's visual 93 carries the pick
     // clang in field 14 (SoundEntries 1143 "Mining Impact" = MiningHitA-E), Herb's 91 the
     // search rustle (1142) - the $TRD anim event's operands.
     assert_eq!(
@@ -345,7 +345,7 @@ fn real_spell_visual_chain_resolves_fireball() {
         "SpellVisualEffectName field 2 = the effect model path"
     );
 
-    // The tenth slot (field 12, decision 0848) on the real table — the root/snare state
+    // The tenth slot (field 12) on the real table — the root/snare state
     // family the nine slots miss. Frost Nova (spell 122 → visual 17): state kit 285's feet
     // ice; Net (spell 6533 → visual 683): state kit 744's net wrap, a kit with NO ordinary
     // slots at all.
@@ -463,7 +463,7 @@ fn ground_aoe_chain_reads_the_dest_anchored_block() {
     // fires for each; Fireball (missile_gate 1, pinned in the loader test above) does not.
 }
 
-// ── The chain/beam table (decision 0955) ──────────────────────────────────────────────────────
+// ── The chain/beam table ──────────────────────────────────────────────────────
 
 /// The small-int decode, on the exact values the shipped table ships. This is the load-bearing
 /// arithmetic — get it wrong and every beam resolves to the wrong texture (or to none) — so it is
@@ -621,7 +621,7 @@ fn real_chain_procs_resolve_to_their_beams() {
     );
 }
 
-/// **Every live beam's texture actually exists on the patch chain.** The renderer (decision 0964)
+/// **Every live beam's texture actually exists on the patch chain.** The renderer
 /// loads these by path, and a path that resolves to nothing draws an invisible beam — a failure no
 /// geometry test can see and no gate can catch. Cheapest possible guard against "the whole lane is
 /// right and the screen is empty".

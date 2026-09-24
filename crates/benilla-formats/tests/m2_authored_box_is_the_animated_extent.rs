@@ -1,4 +1,4 @@
-//! The birds that blink out when you turn the camera (decision 1259).
+//! The birds that blink out when you turn the camera.
 //!
 //! `World\critter\birds\Bird01.m2` is the model that separates a **bind-pose** bound from an
 //! **all-animation** one. Its geometry is a single 1.2 × 1.8 × 0.23 yd bird, modelled once at the

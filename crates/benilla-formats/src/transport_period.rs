@@ -2,7 +2,7 @@
 //! arc-time solver `0x5f9120`), transcribed step-for-step: this recipe reproduces **all nine**
 //! live transport paths' server-sniff periods bit-exact. The wire anchor is a raw
 //! server-uptime-scale clock, so the `% period` amplifies any Δms by the whole cycle count — the
-//! period must be *exact*, not close (decision 0438 §3). vmangos pins its DB periods to sniffs of
+//! period must be *exact*, not close. vmangos pins its DB periods to sniffs of
 //! THIS computation, so matching the client is matching the server.
 //!
 //! Layout facts this transcription rests on:

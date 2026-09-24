@@ -74,7 +74,7 @@ pub fn load_gameobject_catalog(chain: &mut Chain) -> Result<GameObjectCatalog> {
 /// The per-display **sound-kit slots** (`Sound0..9` — the other 10 columns of the same table):
 /// `{0 Stand, 1 Open, 2 Loop, 3 Close, 4 Destroy, 5 Opened, 6..9 Custom}` → SoundEntries.
 /// Loaded separately from the model catalog so the audio consumer doesn't reach into the
-/// renderer's cache (decision 0070); only displays with at least one non-zero slot are kept
+/// renderer's cache; only displays with at least one non-zero slot are kept
 /// (most of the 1638 rows are silent props).
 pub struct GameObjectSounds {
     sounds: HashMap<u32, [u32; 10]>,

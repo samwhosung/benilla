@@ -11,7 +11,7 @@ const CHAR_SECTIONS: &str = "DBFilesClient\\CharSections.dbc";
 
 /// CharSections `sectionType` values (facial hair is 2 at `0x478660`, hair 3 at `0x4784c0`): the
 /// layer a row supplies. `skin` is the full base atlas; the rest are region overlays the body
-/// composite blends on top (decision 0044).
+/// composite blends on top.
 const SECTION_SKIN: u8 = 0;
 const SECTION_FACE: u8 = 1;
 const SECTION_FACIAL_HAIR: u8 = 2;
@@ -20,7 +20,7 @@ const SECTION_UNDERWEAR: u8 = 4;
 
 /// The hair variation the client's type-6 binder substitutes when the selected style resolves no
 /// texture — a **literal 1** in the binary at two of its three call sites (`0x478445`, `0x4786f2`),
-/// not a search. See [`CharSections::hair_mesh_texture`]; decision 0536.
+/// not a search. See [`CharSections::hair_mesh_texture`].
 const HAIR_SUBSTITUTE_VARIATION: u8 = 1;
 
 /// An atlas rect `(x, y, w, h)` in pixels — a composite destination tile.
@@ -78,7 +78,7 @@ const EQUIP_TILES: [Tile; 8] = [
     (128, 224, 128, 32), // g7 Foot
 ];
 
-/// The `Item\TextureComponents\` region directory per layer/column (decision 0074; empirically
+/// The `Item\TextureComponents\` region directory per layer/column (empirically
 /// suffix-matched — the on-disk dirs are exactly these eight).
 const EQUIP_TEX_DIRS: [&str; 8] = [
     "ArmUpperTexture",
@@ -141,7 +141,7 @@ fn emblem_half(layer: usize) -> Option<&'static str> {
 
 /// CharSections texture lookup: (race, sex, sectionType, variation, colorIndex) → that row's up-to-3
 /// `TextureName` columns (empty strings for absent columns). Feeds both the base body skin
-/// (`sectionType 0`) and the head/pelvis region overlays the body composite blends on top (decision 0044).
+/// (`sectionType 0`) and the head/pelvis region overlays the body composite blends on top.
 pub struct CharSections {
     sections: HashMap<(u8, u8, u8, u8, u8), [String; 3]>,
 }
@@ -164,7 +164,7 @@ impl CharSections {
 
     /// The hair-**mesh** texture for an appearance — CharSections `sectionType 3`, `TextureName[0]`,
     /// keyed by hairStyle (variation) + hairColor. The single BLP the client binds to the hair geometry's
-    /// M2 texture type 6 (decision 0045); the colour is baked into the chosen file, not a runtime tint.
+    /// M2 texture type 6; the colour is baked into the chosen file, not a runtime tint.
     /// `None` when the row/column is empty (e.g. a bald style, variation 0 — its columns are blank).
     /// (`TextureName[1]/[2]` of the same row are the scalp-on-skin overlays the body composite blends into
     /// the head atlas — those go through [`Self::composite_body`], not here.)
@@ -177,7 +177,7 @@ impl CharSections {
     /// scalp hair. Prefer this over [`Self::hair_texture`] anywhere a mesh is being textured;
     /// `hair_texture` is the raw row accessor, and a bald row is genuinely blank.
     ///
-    /// **The mechanism** (decision 0536). The client has no fallback *lookup*.
+    /// **The mechanism**. The client has no fallback *lookup*.
     /// `0x478220(cc, variationIdx)` is the sole type-6 binder, it always reads `TextureName[0]`
     /// (never column-indexed), and an **empty name is a no-op that leaves the slot untouched**
     /// (`0x47827d cmp BYTE PTR [ecx],0x0` → `je 0x4782d8`) — not a null bind. Three sites call it,
@@ -226,7 +226,7 @@ impl CharSections {
 
     /// Composite a character's full body-skin atlas: the base 256² skin with the face / facial-hair /
     /// hair / underwear region overlays blended in at their fixed atlas tiles, returned as one mip
-    /// pyramid ready to upload (decision 0044). `Ok(None)` if the base skin row is absent; a missing or
+    /// pyramid ready to upload. `Ok(None)` if the base skin row is absent; a missing or
     /// undecodable overlay is skipped (best-effort, like the rest of the asset pipeline).
     ///
     /// Each overlay is read from its own origin and source-over blitted onto the base at the verified
@@ -237,13 +237,13 @@ impl CharSections {
     /// choice; the decision has the why). Composited per **authored** mip level — no gamma-byte CPU
     /// downsample, the same C2 rule [`read_texture_mip_chain`]/the world-art upload follow.
     ///
-    /// `equipment` is the dressed extension (decision 0074): the worn ItemDisplayInfo rows by
+    /// `equipment` is the dressed extension: the worn ItemDisplayInfo rows by
     /// **bodyslot − 2** (shirt, chest, belt, pants, boots, wrist, gloves, tabard; `None` = the slot
     /// is empty). Their region textures blit into the eight equipment tiles after the skin sections,
     /// stacked per layer by the client's priority table — and they also **gate** the underwear, which
     /// is the tile's fallback rather than an under-layer ([`UNDERWEAR_TILES`]).
     ///
-    /// `emblem` is the wearer's guild tabard (decision 1704), which paints the torso layers' cells
+    /// `emblem` is the wearer's guild tabard, which paints the torso layers' cells
     /// 2/3/4 over the garment's own — see [`equip_blits`] for when it installs and when it does not.
     pub fn composite_body(
         &self,
@@ -305,7 +305,7 @@ impl CharSections {
                 blit_over(&mut atlas, &overlay, EQUIP_TILES[layer]);
             }
         }
-        // The equipment layers (decision 0074) and the guild tabard's three (decision 1704), in the
+        // The equipment layers and the guild tabard's three, in the
         // one order [`equip_blits`] decides, each taking the first of its own
         // [`EquipBlit::candidates`] that decodes. A name that resolves to nothing is skipped —
         // best-effort, like the skin overlays; on the model it reads as a garment that stops early,
@@ -487,7 +487,7 @@ const NO_TABARD: i32 = -1;
 pub enum EmblemLayer {
     /// Cell 2 — the tabard's field colour, and the **only emblem layer inside TorsoUpper's
     /// underwear-suppression prefix**: cell 2 < the 3 tested columns, so a guild tabard hides the
-    /// bra where a plain one (cell 4) does not ([`UNDERWEAR_TILES`], decision 1614).
+    /// bra where a plain one (cell 4) does not ([`UNDERWEAR_TILES`]).
     ///
     /// That gate is on the *cell being filled*, not on coverage, and the distinction is real here:
     /// the background is a **cutout**, not a full-tile paste — `Background_12_TU_U` measures 79.5%
@@ -605,7 +605,7 @@ pub fn equip_blits<'a>(
     emblem: Option<GuildEmblem>,
     tabard_preview: bool,
 ) -> Vec<EquipBlit<'a>> {
-    // The tabard designer's preview (decision 1977): the reference's
+    // The tabard designer's preview: the reference's
     // `0x47a610` installs the five onto the character component with no ItemDisplayInfo test —
     // the previewed tabard is the geoset flap over an EMPTY slot — so the emblem paints whenever
     // the preview flag is up, and otherwise only over a worn tabard whose display asks for it.
@@ -722,7 +722,7 @@ fn blit_over(dst: &mut BlpMipChain, src: &BlpMipChain, tile: Tile) {
     // The composite is a per-texel source-over blend, so both sides must be decoded pixels. Every
     // reader here goes through `read_texture_mip_chain` (never the block-passthrough twin) — this
     // says so out loud, because a chain that arrived as DXT blocks would blend garbage silently
-    // rather than fail (decision 1626).
+    // rather than fail.
     debug_assert!(
         dst.is_rgba8() && src.is_rgba8(),
         "character-skin compositing needs decoded chains on both sides"
@@ -942,7 +942,7 @@ mod tests {
         );
     }
 
-    /// The guild tabard's three layers (decision 1704). Two facts, and they are the whole law:
+    /// The guild tabard's three layers. Two facts, and they are the whole law:
     /// the emblem installs **only** over a tabard whose display asks for it
     /// ([`ItemDisplay::takes_guild_emblem`]), and when it does it takes cells 2/3/4 of layers 3 and
     /// 4 — **including the cell the tabard garment itself had**, because the client clears 4→2 and
@@ -1530,7 +1530,7 @@ mod tests {
             "no male underwear row authors the naked-torso column"
         );
 
-        // Hair-mesh texture (decision 0045): a real hairstyle resolves a `Hair…` BLP; the bald style
+        // Hair-mesh texture: a real hairstyle resolves a `Hair…` BLP; the bald style
         // (variation 0) has none. Guards the `SECTION_HAIR` constant + the type-3 row keying.
         let hair = cs
             .hair_texture(1, 0, 1, 0)
@@ -1545,7 +1545,7 @@ mod tests {
             "bald style has no hair texture"
         );
 
-        // The type-6 MESH resolver's substitute (decision 0536; the binder `0x478220`): when the
+        // The type-6 MESH resolver's substitute (the binder `0x478220`): when the
         // selected style resolves nothing, the client's binder has already bound variation **1** and an
         // empty name leaves that slot untouched. A bald orc/gnome male still wears a beard, and on those
         // races the beard is geometry on the hair unit — so the blank bald row must not leave it
@@ -1820,7 +1820,7 @@ mod tests {
         assert_ne!(pelvis_sheet, base_g5, "the panties differ from bare skin");
     }
 
-    /// The guild emblem on the **real** files (decision 1704). Display **20621** is the row item
+    /// The guild emblem on the **real** files. Display **20621** is the row item
     /// 5976 *Guild Tabard* wears, and the only guild-emblem display any 1.12.1 item template points
     /// at. Three things this pins that the synthetic plan tests cannot:
     ///
@@ -1935,7 +1935,7 @@ mod tests {
         }
     }
 
-    /// Equipment layers on the **real** files (decision 0074): dressing the Human male in One's
+    /// Equipment layers on the **real** files: dressing the Human male in One's
     /// starter kit (shirt 9891 / pants 9892 / boots 10141) must repaint exactly the tiles those
     /// displays' region columns name — torso from the shirt, LegUpper from the pants, Foot from the
     /// boots — and leave a tile no item touches (g2 Hand) byte-identical to the naked composite.

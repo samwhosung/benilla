@@ -1,4 +1,4 @@
-//! `SpellChainEffects.dbc` — the **beam/arc** half of the spell-visual family (decision 0955):
+//! `SpellChainEffects.dbc` — the **beam/arc** half of the spell-visual family:
 //! Chain Lightning's lightning, Drain Life's rope of soul, Mind Flay's mana beam, C'Thun's eye
 //! beam, Chain Heal's arc. A whole rendering system that hangs off one `SpellVisualKit` column
 //! group we were already reading and one CharProc key we were throwing away.
@@ -62,7 +62,7 @@
 //! `records 0xc0d848 / idIndex 0xc0d850 / maxId 0xc0d854`, loader `0x54e980`). Ids are
 //! `1..=13, 15, 17..=20` — note `14` and `16` are absent, so an id is a lookup, never an index.
 //!
-//! **The columns** (decision 0955). Two of the community names this module first carried were
+//! **The columns**. Two of the community names this module first carried were
 //! **wrong**, and both mattered:
 //!
 //! | field | name | meaning |

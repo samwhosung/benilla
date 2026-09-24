@@ -7,7 +7,7 @@
 //! FootstepTerrainLookup **class**, NOT a kit), AggroID, WingFlapID, WingGlideID, AlertID,
 //! Fidget[4], CustomAttack[4], NPCSoundID, LoopSoundID, CreatureImpactType (0 flesh · 1 stone ·
 //! 2 wood · 3 ethereal), JumpStartID, JumpEndID, PetAttackID, PetOrderID, PetDismissID`.
-//! Columns **27/28/29** are the pet's own voice (decision 2039): 27 and 28 are what the bark
+//! Columns **27/28/29** are the pet's own voice: 27 and 28 are what the bark
 //! dispatcher `0x623a40` reaches at states 2 and 1 — `SMSG_PET_ACTION_SOUND`'s two selectors —
 //! and 29 is `SMSG_PET_DISMISS_SOUND`'s, resolved fresh by model id at `0x604140` rather than off
 //! the cached row, which is why a census over the cache's consumers missed it. The **names** here
@@ -248,7 +248,7 @@ mod tests {
     /// which: the reference sends `PET_TALK_ATTACK` to bark state 2 = column 27,
     /// `PET_TALK_SPECIAL_SPELL` to state 1 = column 28, and `SMSG_PET_DISMISS_SOUND` to column 29
     /// — and the data calls those three `_KILL`, `_ORDER` and `_DISMISS`, in that order, three
-    /// times over (decision 2039; `0x623a40` maps the states to the columns).
+    /// times over (`0x623a40` maps the states to the columns).
     ///
     /// **A hunter pet is therefore silent on all three, faithfully** — its row's columns are 0,
     /// so the reference reads a zero kit and plays nothing. The Felhunter has no kit in the file

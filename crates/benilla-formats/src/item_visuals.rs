@@ -1,5 +1,5 @@
 //! `ItemVisuals.dbc` + `ItemVisualEffects.dbc` + `SpellItemEnchantment`'s visual column — the
-//! **item / enchant glow chain** (decision 0805): the permanent weapon glows and the shaman/oil
+//! **item / enchant glow chain**: the permanent weapon glows and the shaman/oil
 //! enchant visuals, as up to five `Spells\Enchantments\*.mdx` effect models per item.
 //!
 //! ## The chain
@@ -94,8 +94,8 @@ impl ItemVisualCatalog {
 /// (field 22) an enchant glows with, the **name** (field 13, the enUS slot of the 1.12
 /// localized-string block) the item tooltip prints for it, and its **`Flags`** (field 23 —
 /// [`EnchantCatalog::binds_the_item`] and [`EnchantCatalog::tooltip_hides_name`]). Three lanes
-/// read this table — the weapon-glow chain (decision 0805), the tooltip's enchant line (decision
-/// 0915) and the item-bind confirms (decision 0928) — and one adapter serves all three: two
+/// read this table — the weapon-glow chain, the tooltip's enchant line (decision
+/// 0915) and the item-bind confirms — and one adapter serves all three: two
 /// loaders over one DBC is how a schema drifts.
 ///
 /// Sparse on every axis: 102 of the 1460 rows carry a visual, and a row without a name simply has
@@ -142,7 +142,7 @@ impl EnchantCatalog {
     }
 
     /// [`FLAG_BINDS_THE_ITEM`] — whether applying this enchant binds the item to you, the whole
-    /// predicate behind the reference's bind confirm (decision 0928). `false` for an unknown id,
+    /// predicate behind the reference's bind confirm. `false` for an unknown id,
     /// which is also the reference's answer: it looks the row up first and skips on a miss.
     ///
     /// `+0x5c` is field 23, and the field-13 name column chain-locks it: the replace confirm reads
@@ -454,7 +454,7 @@ mod tests {
     }
 
     /// The **name** column (field 13), on real data — the string the tooltip's enchant line
-    /// prints (decision 0915). Pinned on the case that opened the lane plus one of each other
+    /// prints. Pinned on the case that opened the lane plus one of each other
     /// shape, and on the two properties the consumer rests on: the name is stored in the table's
     /// own word order (`"Agility +15"`, NOT a reformat), and it is independent of the visual
     /// column — a glowing enchant and a plain +stat one both have one.

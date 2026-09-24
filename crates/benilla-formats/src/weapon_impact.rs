@@ -1,4 +1,4 @@
-//! `WeaponImpactSounds.dbc` — the melee impact kit table (decision 0075).
+//! `WeaponImpactSounds.dbc` — the melee impact kit table.
 //!
 //! Layout — VERIFIED against build 5875 (header + full row dump with SoundEntries name joins,
 //! 2026-07-03): **30 × 23 × 92 B**: `ID(0), WeaponSubClassID(1), Metal(2),

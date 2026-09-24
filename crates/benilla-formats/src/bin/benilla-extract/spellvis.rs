@@ -38,7 +38,7 @@ pub fn run(chain: &mut Chain, spell_id: u32) -> Result<()> {
                         kit.anim_id.map_or("—".into(), |a| a.to_string()),
                         kit.sound.map_or("—".into(), |s| s.to_string()),
                     );
-                    // The kit's CAMERA SHAKE (field 14, decision 1849): a
+                    // The kit's CAMERA SHAKE (field 14): a
                     // `SpellEffectCameraShakes` GROUP id, expanded to the presets it fires.
                     // `benilla-extract … shakecensus` is the whole-table view.
                     if let Some(group) = kit.shake {
@@ -57,7 +57,7 @@ pub fn run(chain: &mut Chain, spell_id: u32) -> Result<()> {
                     }
                     // The kit's CharProcs (fields 15-34): what it does to the BODY.
                     crate::charprocs::print_kit_procs(&visuals, kit_id, "           ");
-                    // The kit's BEAM, if it draws one (decision 0955): the chain CharProc's
+                    // The kit's BEAM, if it draws one: the chain CharProc's
                     // decoded `SpellChainEffects` row. `benilla-extract … chaincensus` is the
                     // whole-table view.
                     if let Some(c) = kit.chain_proc() {

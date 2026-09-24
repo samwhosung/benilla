@@ -6,7 +6,7 @@
 //! now resolves its install through that one read, and cargo gives each integration-test file its
 //! own process — so one mutating test per file can only reach itself.
 //!
-//! What it protects (decision 1451): a dev build on a machine with an install cannot otherwise
+//! What it protects: a dev build on a machine with an install cannot otherwise
 //! reach the no-install boot path, so nothing exercised it and it rotted into a frame-one panic.
 //! This spelling is what `scripts/gates.sh` runs the engine enforcer under.
 

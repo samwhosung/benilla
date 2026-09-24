@@ -1,6 +1,6 @@
 //! SpellFocusObject.dbc — the table naming the world object a spell must be cast NEAR (an Anvil, a
 //! Forge, a Cooking Fire): the crafting book's "Requires: …" line resolves a recipe's
-//! `Spell.dbc RequiresSpellFocus` id here (decision 0437). The proximity *check* is the server's
+//! `Spell.dbc RequiresSpellFocus` id here. The proximity *check* is the server's
 //! (`Spell::CheckCast`'s focus search) — the client only names the requirement.
 //!
 //! Layout byte-checked on the raw 5875 file this session (a struct-unpack dump: 138 records × 10

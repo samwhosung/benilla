@@ -1,5 +1,5 @@
 //! M2 light-block parse — byte-level check against a real Elwynn campfire, the dynamic point-light
-//! "hot-spot" caster (decision 0016). Pins the vanilla `0xd4` record stride and the diffuse-colour track
+//! "hot-spot" caster. Pins the vanilla `0xd4` record stride and the diffuse-colour track
 //! offset. Skips when the client isn't present.
 
 use benilla_formats::{parse_m2_lights, Chain};

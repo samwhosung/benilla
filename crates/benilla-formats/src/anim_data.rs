@@ -1,4 +1,4 @@
-//! `AnimationData.dbc` — the per-animation policy row behind the sheath reconcile (decision 0080)
+//! `AnimationData.dbc` — the per-animation policy row behind the sheath reconcile
 //! and, later, missing-clip fallback resolution.
 //!
 //! Layout — VERIFIED against build 5875 (header + full 208-row decode with name joins,
@@ -18,7 +18,7 @@
 //! - **Fallback (col 6)** — identified from the data (the chains are unambiguous:
 //!   Attack2H→Attack1H→AttackUnarmed, Sprint→Run, JumpLandRun→Run, Sleep→SleepDown, Drowned→Drown,
 //!   WalkBackwards→Walk, StealthWalk→Walk; col 5 read as a fallback yields nonsense — Attack2H→Stop,
-//!   Sleep→SpellCast). **Not the primary runtime missing-clip mechanism** (decision 0082, amending
+//!   Sleep→SpellCast). **Not the primary runtime missing-clip mechanism** (amending
 //!   this file's earlier reading): the real client's per-id fallback for ids `< 203` is a single
 //!   indexed read of the M2's own baked `PlayableAnimationLookup` (a per-model precomputed cache of
 //!   *this* column's walk against that model's actual sequence set — see
@@ -55,7 +55,7 @@ pub struct AnimDataCatalog {
 
 impl AnimDataCatalog {
     /// Build a catalog directly from rows — the synthetic-table entry point for tests exercising
-    /// missing-clip resolution's PATH 2 walk (decision 0082, `benilla_assets::ModelAnimations::resolve`)
+    /// missing-clip resolution's PATH 2 walk (`benilla_assets::ModelAnimations::resolve`)
     /// without a real `AnimationData.dbc`.
     pub fn from_rows(rows: impl IntoIterator<Item = (u16, AnimEntry)>) -> Self {
         Self {

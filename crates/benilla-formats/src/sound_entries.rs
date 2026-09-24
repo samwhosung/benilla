@@ -1,5 +1,5 @@
-//! SoundEntries.dbc loader — the central **sound-kit** table every audio trigger resolves through
-//! (decision 0070): a kit = up to 10 weighted variation files + volume/flags/distance parameters.
+//! SoundEntries.dbc loader — the central **sound-kit** table every audio trigger resolves through:
+//! a kit = up to 10 weighted variation files + volume/flags/distance parameters.
 //! Kits are playable by id and **by name** (the client's `PlaySoundByName` (`0x458030`) is a
 //! name-hash into this table — the Lua `PlaySound("igMainMenuOpen")` path).
 //!
@@ -10,7 +10,7 @@
 //! DistanceCutoff(27, f32), EAXDef(28)`. Spot-checked on row 3: `type 1 "Invisibility Impact",
 //! "Dispel_Low_Base.wav" ×1, dir "Sound\Spells", vol 1.0, flags 0, min 8, cutoff 45, EAX 2`.
 //! NOTE the wowdev-wiki 5875 struct claims a 30-column layout (separate `maxDistance` +
-//! `soundEntriesAdvancedID`) — it is **wrong**; trust this byte-verified one (decision 0070).
+//! `soundEntriesAdvancedID`) — it is **wrong**; trust this byte-verified one.
 
 use std::collections::HashMap;
 
@@ -60,7 +60,7 @@ pub struct SoundKit {
     /// and `FSOUND_Reverb_SetChannelProperties` (`0x7a5bf0`) skips before it even tests the
     /// 3D-open flag. Authored dryness — and it is how NPC voice lines stay out of an interior's
     /// reverb: **all 275 `SoundType 17` rows are `EAXDef 0`** (creature barks split 706 wet /
-    /// 285 dry). benilla decision 1155.
+    /// 285 dry). benilla.
     pub eax_def: u32,
 }
 
@@ -240,7 +240,7 @@ mod tests {
         );
     }
 
-    /// The `EAXDef` census the reverb send is gated on (decision 1155, bug B236). `EAXDef 0` is a
+    /// The `EAXDef` census the reverb send is gated on (bug B236). `EAXDef 0` is a
     /// NULL `SoundSamplePreferences` slot in the client, i.e. a channel that never receives reverb
     /// properties — so this is the authored line between wet and dry, and it must not drift.
     /// Skips without client data.

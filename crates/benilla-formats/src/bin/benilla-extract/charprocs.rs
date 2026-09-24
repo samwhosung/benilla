@@ -1,7 +1,7 @@
 //! `charprocs`: census the `SpellVisualKit` **CharProc** columns (fields 15–34) — the character-half
 //! of a kit: what a kit does to the *body* (its alpha, its tint) rather than at an attach point.
 //!
-//! The scope instrument for the aura-state CharProc system (B114 — "Stealth shows nothing on the
+//! The scope instrument for the aura-state CharProc system ("Stealth shows nothing on the
 //! character"). It answers, from the shipped table rather than from expectation: which proc **types**
 //! exist, how many kits carry each, which **lifecycle stage** reaches them from a live spell, and —
 //! for the state stage, whose kits live for an aura's whole life — exactly which spells reach which

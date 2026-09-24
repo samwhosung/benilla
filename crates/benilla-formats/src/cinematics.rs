@@ -57,10 +57,10 @@
 //! and a "roll is zero, skip it" shortcut happens to be right only by the identity `2π ≡ 0`; five
 //! of the ten genuinely animate it. And the shots **start far from their own origin** — a Tauren
 //! 1741 yards out — which is why the server re-anchors object visibility to the flying camera
-//! while one runs (decision 0196), and why the client has to stream the world from the *camera*
+//! while one runs, and why the client has to stream the world from the *camera*
 //! and not the avatar for the duration.
 //!
-//! **The optics in this table are data, not the shot's framing** (decision 1711). A 24-site census
+//! **The optics in this table are data, not the shot's framing**. A 24-site census
 //! settles it: the M2 camera
 //! record's `fov`, `nearClip` and `farClip` are written at model load and read only by `0x7ac640`,
 //! which is reachable solely from the portrait and `<Model>` frame paths. **On the cinematic path
@@ -589,7 +589,7 @@ mod tests {
     }
 
     /// The shots range far from their own origin — the reason the server re-anchors object
-    /// visibility to the flying camera while a cinematic runs (decision 0196), and the reason
+    /// visibility to the flying camera while a cinematic runs, and the reason
     /// benilla has to stream the world from the camera rather than the avatar for the duration.
     #[test]
     fn real_flyby_shots_range_far_from_their_origin() {

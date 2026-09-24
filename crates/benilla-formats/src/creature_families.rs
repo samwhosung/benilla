@@ -1,5 +1,5 @@
-//! `CreatureFamily.dbc` + `ItemPetFood.dbc` — the pet's **family word** and the **diet** it implies
-//! (decision 1062): `UnitCreatureFamily`'s "Imp"/"Wolf"/"Cat", and `GetPetFoodTypes`'s
+//! `CreatureFamily.dbc` + `ItemPetFood.dbc` — the pet's **family word** and the **diet** it implies:
+//! `UnitCreatureFamily`'s "Imp"/"Wolf"/"Cat", and `GetPetFoodTypes`'s
 //! "Meat, Fish".
 //!
 //! Both layouts below were **dumped from this install's own shipped files** rather than taken from
@@ -112,12 +112,12 @@ pub struct CreatureFamily {
     /// The family's icon path — `Interface\\Icons\\Ability_Hunter_Pet_<Family>` for every one of
     /// the 22 real families (verified by dumping the shipped table this session; the column is
     /// field 17, `0x44`). This is a pet's icon everywhere one is shown without an item behind it:
-    /// the stable window's slot buttons and `GetPetIcon` (decision 1676). The schema already
+    /// the stable window's slot buttons and `GetPetIcon`. The schema already
     /// declared the column so the parser aligned past it; only the read into this struct is new.
     ///
     /// Empty for a row that ships no icon — the same "render the empty-slot art" case as a pet
     /// whose creature query has not landed, which is why consumers treat it as absent rather than
-    /// passing an empty path to a texture setter (decision 1046: a path resolving to nothing draws
+    /// passing an empty path to a texture setter (a path resolving to nothing draws
     /// WHITE).
     pub icon: String,
     /// The pet-food bitfield (field 7). **`0` for every warlock minion** — Imp, Voidwalker,
@@ -182,7 +182,7 @@ impl CreatureFamilies {
 
     /// The localized family word for an id — [`Self::get`]'s name half.
     /// The family's icon path, or `None` for an unknown family or a row that ships none —
-    /// the stable window's slot art and `GetPetIcon`'s answer (decision 1676).
+    /// the stable window's slot art and `GetPetIcon`'s answer.
     pub fn icon(&self, id: u32) -> Option<&str> {
         self.0
             .get(&id)
@@ -226,7 +226,7 @@ impl PetFoodNames {
     /// An empty result is a real answer, not a failure: a warlock minion's family ships mask `0`.
     /// `GetPetFoodTypes` then returns nothing at all, which is exactly what the reference's own
     /// `BuildListString()` turns into nil — and the diet icon that would show it is hidden for a
-    /// minion anyway (`HasPetUI`'s second return, decision 1005).
+    /// minion anyway (`HasPetUI`'s second return).
     ///
     /// **This is the table half only.** The binding's live gate — owner-is-me and the local player
     /// is a Hunter (`0x6116e0`) — is the feed's to apply; a charmed boar has a mask of 63 and still
@@ -330,17 +330,17 @@ mod tests {
         Some(crate::open_chain(&data).expect("open chain"))
     }
 
-    /// **The level → size ramp, off the shipped file** (decision 1538) — the character-select pet's
+    /// **The level → size ramp, off the shipped file** — the character-select pet's
     /// whole size law, and four columns that fail silently if they slide: misread one and every pet
     /// is simply the wrong size, which no other assertion here would catch.
     ///
     /// The load-bearing shape is that **all 22 real families ramp 1 → 60**, warlock minions
     /// included — they are flat only because `min == max`, not because their level columns are
     /// zero. Row 28 ("Remote Control") is the sole 0/0/0/0 row, and the sole `None`.
-    /// The icon column, off the shipped file (decision 1676). It is the stable window's slot art
+    /// The icon column, off the shipped file. It is the stable window's slot art
     /// and `GetPetIcon`'s answer, and it sits at field 17 behind a locale block the schema types as
-    /// dwords — so a misread there returns an empty string, and an empty texture path draws WHITE
-    /// (decision 1046). Asserting real paths is what catches that.
+    /// dwords — so a misread there returns an empty string, and an empty texture path draws WHITE.
+    /// Asserting real paths is what catches that.
     #[test]
     fn every_shipped_family_carries_a_pet_icon() {
         let Some(mut chain) = chain() else { return };

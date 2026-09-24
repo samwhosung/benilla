@@ -1,4 +1,4 @@
-//! The **entity** corpus's material animation (decision 2295) — the four shapes the unit /
+//! The **entity** corpus's material animation — the four shapes the unit /
 //! GameObject / held-item lane has to serve, each pinned on the asset that makes it unavoidable.
 //!
 //! Decision 0130 phase 3 built the texture transform for placed doodads and left every other lane

@@ -1,4 +1,4 @@
-//! Model loading — the shared `models` module face (decision 0021).
+//! Model loading — the shared `models` module face.
 //!
 //! Parsing is delegated to `benilla-m2` (M2) / `benilla-wmo` (WMO). Both produce a list of
 //! [`RenderSubmesh`] — one per render batch, each with its own (remapped) vertices, texture, and blend

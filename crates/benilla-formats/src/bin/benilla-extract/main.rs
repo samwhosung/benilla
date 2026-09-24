@@ -61,7 +61,7 @@ enum Command {
         /// Also write every authored mip level (`<stem>.mip<N>.png`) and print a per-level
         /// texel census: how many texels the author left transparent vs not, the luma range of
         /// each class, and how many sit below 128 — the set that DARKENS under a Mod2x lane,
-        /// which reads no alpha. The "what does the far sampler see" instrument (B358).
+        /// which reads no alpha. The "what does the far sampler see" instrument.
         #[arg(long)]
         mips: bool,
     },
@@ -101,7 +101,7 @@ enum Command {
         slots: Vec<u32>,
         /// The wearer's guild tabard, comma-separated in
         /// `emblemStyle,emblemColor,borderStyle,borderColor,backgroundColor` order — the five
-        /// indices `SMSG_GUILD_QUERY_RESPONSE` carries (decision 1704). Omit for "no guild". Only
+        /// indices `SMSG_GUILD_QUERY_RESPONSE` carries. Omit for "no guild". Only
         /// paints when the tabard slot holds a guild-emblem display (20621 is the shipped one).
         #[arg(long, value_delimiter = ',')]
         emblem: Option<Vec<i32>>,
@@ -109,7 +109,7 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Measure every shipped glue scene's **art extent** (decision 1619): how far the opaque art
+    /// Measure every shipped glue scene's **art extent**: how far the opaque art
     /// of each `UI_*` diorama covers around its authored camera 0, and the window aspects past
     /// which the glue framing law stops widening and zooms instead. The instrument behind B330
     /// (the login backdrop's edges showing at 16:9) — the same measurement the client makes at
@@ -133,13 +133,13 @@ enum Command {
         /// The `Spell.dbc` id (e.g. 133 = Fireball).
         spell_id: u32,
     },
-    /// Census the **beam/chain** system (decision 0955): the 18-row `SpellChainEffects` table,
+    /// Census the **beam/chain** system: the 18-row `SpellChainEffects` table,
     /// then every `SpellVisualKit` that draws a beam — the row it names, its beam count and
     /// flag, and the spells that reach it through which lifecycle stage. The scope instrument
     /// for B161 ("Chain Lightning has no chain effect"), and the check that the `CharParamZero`
     /// small-int decode is the real mechanism: every live slot must land on a real row.
     Chaincensus,
-    /// Census the **camera-shake** system (decision 1540): the 24 shipped `CameraShakes.dbc`
+    /// Census the **camera-shake** system: the 24 shipped `CameraShakes.dbc`
     /// presets and every `CreatureModelData` row that names one, through the footstep column or
     /// the death-thud column. The scope instrument for B298 ("walking past an Ancient Protector
     /// shakes no screen"), and the check that fields 11/12 really are `CameraShakes` keys — every
@@ -177,14 +177,14 @@ enum Command {
     },
     /// Dump an M2's animation sequences in file order: `AnimationData.dbc` id, loop/clamp flag,
     /// duration, authored design speed (the rate divisor), variation frequency, replay range —
-    /// the variation/replay instrument (decisions 0114/0117; sequences sharing an id are its
+    /// the variation/replay instrument (sequences sharing an id are its
     /// variation chain).
     M2seq {
         /// Internal path to the `.m2` (forward or back slashes accepted).
         internal_path: String,
     },
     /// Dump an M2's **camera table** by raw file index — the index space a `<Model>` widget's
-    /// `Model:SetCamera(n)` walks (decision 2027): type, rest eye/target, diagonal fov, near/far,
+    /// `Model:SetCamera(n)` walks: type, rest eye/target, diagonal fov, near/far,
     /// roll, and each track's key count (which says still rig vs authored path). The
     /// `cameraLookup` table is printed beside it — the portrait bake selects through that, the
     /// pane does not.
@@ -193,14 +193,14 @@ enum Command {
         internal_path: String,
     },
     /// Dump an M2's animation EVENT keyframes per sequence (`$CSS`/`$CAH`/`$AH0-3`/`$CPP`/`$HIT`…,
-    /// time + payload) — the event-order instrument (decision 0279: whether `$CPP` precedes the
+    /// time + payload) — the event-order instrument (whether `$CPP` precedes the
     /// impact tag decides defense-anim vs flinch on the shared swing record).
     M2events {
         /// Internal path to the `.m2` (forward or back slashes accepted).
         internal_path: String,
     },
     /// Dump an M2's attachment points (id + bone) — which sheath/held/effect anchors a model
-    /// actually has (decisions 0072/0122; a placement whose id is absent hangs nothing).
+    /// actually has (a placement whose id is absent hangs nothing).
     M2attach {
         /// Internal path to the `.m2` (forward or back slashes accepted).
         internal_path: String,
@@ -210,7 +210,7 @@ enum Command {
     /// emitter — its full def: shape, blend mode, head/tail, emission-rate keys (burst emitters
     /// key `0 → peak → 0`), lifespan/speed/scale, position/area, resolved texture, and the
     /// over-life color/alpha/size ramps. The one-command diagnosis for "this effect looks wrong /
-    /// doesn't show" (decisions 0130/0141); paired with `doodadscan`.
+    /// doesn't show"; paired with `doodadscan`.
     M2anim {
         /// Internal path to the `.m2` (forward or back slashes accepted).
         internal_path: String,
@@ -218,7 +218,7 @@ enum Command {
     /// Dump an M2's bone table: KeyBoneID, flags (billboard bits tagged), the `flags & 0x7`
     /// parent-ignore bits spelled out (`ign` — which of the parent's Translate/Scale/Rotate the
     /// bone refuses), parent, pivot, and which sequences key each bone (T/R/S key counts) — the
-    /// bone-attach / billboard-geometry instrument (decisions 0028/0122: which bone a rider
+    /// bone-attach / billboard-geometry instrument (which bone a rider
     /// actually rides and whether it faces the camera; 0945: what it actually inherits from its
     /// parent, which is how a saddle travels with the gallop without rotating with it).
     M2bones {
@@ -270,11 +270,11 @@ enum Command {
     /// ramps that play BACKWARDS (`begin > end` — legal, shipped, and fatal to a reader that
     /// clamps into the pair), tail streaks whose ramp differs from the head's, indices past the
     /// atlas (the reference wraps the column and lets the row run off), per-segment repeat counts,
-    /// and the two degenerate shapes the reference itself falls back on. Decision 0685.
+    /// and the two degenerate shapes the reference itself falls back on.
     Cellscan,
     /// Sweep every `.m2` (optionally under a path prefix) and list the models whose MATERIAL
     /// table authors the MULTIPLY blend modes 5 (Mod) / 6 (Mod2x) — the ARMORREFLECT sheen
-    /// family (decision 0528): the population instrument for the multiply-blend mechanism.
+    /// family: the population instrument for the multiply-blend mechanism.
     Blendscan {
         /// Internal-path prefix filter (e.g. `item\objectcomponents\weapon`), case-insensitive;
         /// all models if omitted.
@@ -283,7 +283,7 @@ enum Command {
     /// Sweep every `.m2` (optionally under a path prefix) and classify its BILLBOARD usage:
     /// which arms it authors (spherical / lock-X / lock-Y / lock-Z), and whether geometry rides
     /// them DIRECTLY (verts skinned to the billboard bone — the per-batch card path) or
-    /// INHERITED (verts on a descendant — the joint-palette path, decision 0205). The
+    /// INHERITED (verts on a descendant — the joint-palette path). The
     /// population instrument for the billboard mechanism: which arms real content exercises, so
     /// a class of spell visuals is closed by mechanism instead of tested spell-by-spell.
     Bbscan {
@@ -316,7 +316,7 @@ enum Command {
     /// consumes such a normal as the zero vector and its order-2 SH collapses to the flat DC term,
     /// so the surface draws lit; a renderer that `normalize()`s it gets NaN, `clamp(NaN)` floors
     /// the whole lighting factor to 0, and the batch renders PURE BLACK over its correct texture.
-    /// The population instrument for that class (decision 1268, bug B134) — `ALL` marks a batch
+    /// The population instrument for that class (bug B134) — `ALL` marks a batch
     /// where every vertex is degenerate, and the tail names the worst-hit models.
     Normalscan {
         /// Internal-path prefix filter (e.g. `creature`), case-insensitive; all models if omitted.
@@ -423,7 +423,7 @@ enum Command {
     /// samples the PLAYING sequence's rate window every frame, so an emitter whose burst is keyed
     /// in a later variation is ordinary content — but a consumer that PINS slot 0 renders it as
     /// nothing at all, for ever, on every placement, while the emitter still builds, pools and
-    /// ticks. The population instrument for that silent class (decision 0760; found on
+    /// ticks. The population instrument for that silent class (found on
     /// `BlastedLandsLightningbolt01.m2`, the Blasted Lands strike that never fires).
     Partslotscan {
         /// Internal-path prefix filter (e.g. `world`), case-insensitive; all models if omitted.
@@ -432,7 +432,7 @@ enum Command {
     /// Sweep every `.m2` (optionally under a path prefix) and census the batches the bake routes
     /// to a **per-placement material** — the ones whose UV loop or M2Color RGB tint loop is not the
     /// same in every FILE sequence slot, so no material shared by every instance can be right for
-    /// them (decision 1408). The texture-transform twin of `partslotscan`.
+    /// them. The texture-transform twin of `partslotscan`.
     ///
     /// It asks the **bake**, not a copy of it: `RenderSubmesh::uv_seq` / `rgb_seq` are `Some`
     /// exactly when `SeqLoops::uniform()` refused the shared lane, so the census and the runtime
@@ -470,7 +470,7 @@ enum Command {
     /// keys a bone. A sequence clock that rides a bone-animation clip has nothing to ride on such a
     /// model — no clip, no player, no "which sequence, how far in" — so every per-sequence consumer
     /// degrades to file slot 0 at t = 0, for ever. The population instrument for that silent class
-    /// (decision 0941; found on the Molten Core rune + flame ring). `[GO]` marks a
+    /// (found on the Molten Core rune + flame ring). `[GO]` marks a
     /// `GameObjectDisplayInfo` model — the hosted-clock lane, where the freeze is total.
     Seqclockscan {
         /// Internal-path prefix filter (e.g. `world`), case-insensitive; all models if omitted.
@@ -480,7 +480,7 @@ enum Command {
     /// **CLAMP** (`M2Texture.flags` bit 0/1 clear) while the batch's UVs run **outside `0..1`** — the
     /// population a repeat-sampling renderer draws wrong. That margin is deliberate: clamped it
     /// samples the sheet's transparent border and the card fades to nothing; wrapped it folds into
-    /// the opposite edge and draws as solid geometry with a seam at the crossing (decision 0763,
+    /// the opposite edge and draws as solid geometry with a seam at the crossing (
     /// bugs B52/B96 — the Dun Morogh snow-firs and the Plaguelands bush).
     Uvwrapscan {
         /// Internal-path prefix filter (e.g. `world`), case-insensitive; all models if omitted.
@@ -525,7 +525,7 @@ enum Command {
     },
     /// Sweep every model the **ENTITY lane** can render — every `CreatureDisplayInfo` →
     /// `CreatureModelData` body (NPCs, critters, mounts, and every PLAYER, which resolves through
-    /// the same chain, decision 0041), every `GameObjectDisplayInfo` model, every
+    /// the same chain), every `GameObjectDisplayInfo` model, every
     /// `ItemDisplayInfo` left/right model joined to the `Item\ObjectComponents\` folder the
     /// archives actually hold it in, and the corpse lane's `<Race><Sex>DeathSkeleton` bone piles —
     /// and census the batches whose **texture transform animates**, then classify each by what a
@@ -622,7 +622,7 @@ enum Command {
     /// Sweep every `.m2` (optionally under a path prefix) and count the two halves of the
     /// **owner-last draw-order** law per model: the EFFECTS it authors (particle emitters +
     /// ribbon trails) and the TRANSPARENT-pass batches of its own body those effects must draw
-    /// after (decisions 0719/0721), plus the model's reach and the draw-order rung that reach
+    /// after, plus the model's reach and the draw-order rung that reach
     /// produces. The population instrument for "how much does this fix, besides the one creature
     /// it was found on": a model with effects AND transparent batches of its own is one whose
     /// effects our distance sort could interleave with its own body; one without never had the
@@ -658,9 +658,9 @@ enum Command {
     /// sequences carry a `$DSL` (doodad sound loop) / `$DSE` (its release token) / `$DSO` (doodad
     /// sound one-shot) / `$SND` (generic one-shot) marker, the `SoundEntries` kit each names with its 3D parameters, and —
     /// the column this exists for — whether the carrying sequence is REST-posed, i.e. one the
-    /// render content gate (decision 0130) never builds a rig for. A placed lamp's hum is a single
+    /// render content gate never builds a rig for. A placed lamp's hum is a single
     /// `$DSL` on a sequence that keys no bone at all, so the whole class is unreachable through an
-    /// `AnimationPlayer`: the population instrument for "every world doodad is silent" (B345).
+    /// `AnimationPlayer`: the population instrument for "every world doodad is silent".
     Soundeventscan {
         /// Internal-path prefix to limit the sweep (e.g. `world`); all models if omitted.
         prefix: Option<String>,
@@ -677,7 +677,7 @@ enum Command {
         prefix: Option<String>,
     },
     /// Sweep every `.m2` (optionally under a path prefix) and report which models author M2
-    /// dynamic LIGHT blocks — the population instrument for the mechanism (decision 0016,
+    /// dynamic LIGHT blocks — the population instrument for the mechanism (
     /// `0x718960`). Per model: its point (`type==1`, the GL
     /// hot-spot caster) vs directional (ambient-feed) light counts, then per point light its
     /// bone/position/diffuse colour×intensity/attenuation/visibility-gate. The closing summary —
@@ -701,9 +701,9 @@ enum Command {
     Skyboxscan,
     /// Dump all 18 `LightIntBand` rows of the `Light.dbc` entry covering a world position at a
     /// time of day — the band-semantics instrument (which row holds which colour at which hour;
-    /// the celestial-diffuse band question, decision 0485). ⚠ This is ONE params record RAW —
+    /// the celestial-diffuse band question). ⚠ This is ONE params record RAW —
     /// near a sphere's falloff edge the LIVE light is mostly the continent global and looks
-    /// nothing like these rows; `lightblend` shows what actually wins at the position (0706).
+    /// nothing like these rows; `lightblend` shows what actually wins at the position.
     Lightbands {
         /// Map id (0 = Eastern Kingdoms, 1 = Kalimdor).
         map: u32,
@@ -830,7 +830,7 @@ enum Command {
     },
     /// Print the terrain MCSH baked-shadow bit at a world position — the per-instance
     /// terrain-shade selector an exterior M2 doodad samples once at its base (sun intensity
-    /// 2.5 lit / 0.5 shadowed, `0x69e4ad`; decisions 0063/0747) — plus an ASCII texel
+    /// 2.5 lit / 0.5 shadowed, `0x69e4ad`) — plus an ASCII texel
     /// neighborhood. A doodad base near a shadow edge sits one ~0.52 yd texel from the OTHER
     /// intensity family, so two adjacent fence pieces can land on opposite sides — the
     /// "why is ONE of these blown out" instrument.

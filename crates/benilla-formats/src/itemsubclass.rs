@@ -51,7 +51,7 @@ pub struct ItemSubClassInfo {
 /// ItemSubClass.dbc keyed by `(class, subclass)`.
 pub struct ItemSubClassCatalog {
     rows: HashMap<(u32, u32), ItemSubClassInfo>,
-    /// The crafting book's header vocabulary (decision 0437): the resolved display name, by the
+    /// The crafting book's header vocabulary: the resolved display name, by the
     /// client's own byte law in the recipe-list build `0x4fca20` — **VerboseName**
     /// (`row + locale·4 + 0x4c`, enUS column 19) when non-empty, else **DisplayName** (`+0x28`,
     /// column 10). "One-Handed Swords" over "Sword"; plain "Cloth" where no verbose form exists.
@@ -330,7 +330,7 @@ pub fn load_item_sub_classes(chain: &mut Chain) -> Result<ItemSubClassCatalog> {
 mod tests {
     use super::*;
 
-    /// The header-name law of `0x4fca20` on the real 5875 file (decision 0446): verbose-first,
+    /// The header-name law of `0x4fca20` on the real 5875 file: verbose-first,
     /// display fallback. Skips without client data.
     #[test]
     fn real_subclass_names_resolve_verbose_first() {

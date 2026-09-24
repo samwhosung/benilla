@@ -1,4 +1,4 @@
-//! `BankBagSlotPrices.dbc` — the bank's purchase-ladder price table (decision 0604).
+//! `BankBagSlotPrices.dbc` — the bank's purchase-ladder price table.
 //!
 //! 12 rows × 2 `u32` columns (`ID`, price in copper). Verified from the real 5875 `dbc.MPQ`
 //! (dumped this session): rows 1–6 = 1000, 10000, 100000, 250000, 500000, 1000000; rows 7–12 a

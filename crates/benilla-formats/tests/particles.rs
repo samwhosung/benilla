@@ -80,8 +80,7 @@ fn campfire_emitters_match_real_bytes() {
     // Drag (file +0x194): the velocity-decay term the verified integrator applies as
     // `vel −= min(dt·drag, 1)·vel`. The campfire's smoke/glow plume carries a gentle 0.5 (contained
     // column); its short-lived flame carries 0.0 (a free upward jet). Read straight off the real
-    // bytes — the candelabra props instead author a strong 10.0 and rely on it to stay a flicker
-    // (decision 0027).
+    // bytes — the candelabra props instead author a strong 10.0 and rely on it to stay a flicker.
     assert!(
         (glow.drag - 0.5).abs() < 1e-3,
         "campfire glow drag ~0.5, got {}",
@@ -163,8 +162,7 @@ fn campfire_emitters_match_real_bytes() {
 }
 
 /// The flipbook **cell ramp**, against the reference's own emulated output (`0x7b9da0` builds the
-/// record, `0x7b9b10` samples it). Two properties, and the second is the one that crashed us
-/// (decision 0685):
+/// record, `0x7b9b10` samples it). Two properties, and the second is the one that crashed us:
 ///
 /// 1. **The endpoint law** — `cell(0) == begin` and `cell(1) == end`, EXACTLY, in both directions.
 ///    That is what the `±1` in the build arms and the evaluator's `0.99·t + 0.005` inset exist to
@@ -260,7 +258,7 @@ fn colour_and_size_ride_the_same_inset() {
     );
 }
 
-/// The crash reported from Winterspring (B88): `DwarvenBrazier01`'s settling flame authors the
+/// The crash reported from Winterspring: `DwarvenBrazier01`'s settling flame authors the
 /// inverted segment-B pair `(6,5)`, which the old `idx.clamp(begin, end)` met with a panic —
 /// `clamp` requires `min <= max`. Sampling the real record across life must simply work.
 #[test]

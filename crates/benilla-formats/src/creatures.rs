@@ -150,7 +150,7 @@ struct ModelRow {
     /// row ids**, 0 on a model that shakes nothing. Only 25 of the 430 shipped rows carry a
     /// footstep shake, and the set is exactly the thumping-giant list (Ancients, kodos, sea and
     /// mountain giants, titans, dragons, Anubisath, stone keeper, fel beast, Nian, Lord Kezzak,
-    /// bear) — see [`crate::CameraShakeCatalog`] and decision 1540.
+    /// bear) — see [`crate::CameraShakeCatalog`] and.
     footstep_shake: u32,
     death_thud_shake: u32,
 }
@@ -911,13 +911,13 @@ mod tests {
         assert_eq!(n, 10_534, "the whole shipped display table");
     }
 
-    /// **The shake columns, pinned against the shipped client** (B298, decision 1540). Fields 11
+    /// **The shake columns, pinned against the shipped client**. Fields 11
     /// and 12 are `CameraShakes.dbc` row ids, and the evidence that the map is right is not that
     /// the names look plausible — it is that the census is *semantic*: 25 of 430 rows carry a
     /// footstep shake and every one of them is a creature heavy enough to shake a camera, the
     /// amplitude ranks by mass, and nothing dangles.
     ///
-    /// The Ancient Protector is the reported row (Dolanaar's tree guardians, B298); the human male
+    /// The Ancient Protector is the reported row (Dolanaar's tree guardians); the human male
     /// is the control that must stay zero, since a schema shift would smear a neighbouring column
     /// into these and give *everything* a shake.
     #[test]
@@ -995,7 +995,7 @@ mod tests {
     /// were authored post-`modelScale` the box would read 2.111/1.25 = 1.689, so this row alone
     /// refutes the "divide the model scale out" reading (which is what vmangos's server-side
     /// `Unit::UpdateModelData` does).
-    /// `CreatureModelData.Flags & 0x2` — the `$BTH` suppression (B233, decision 1149). The census
+    /// `CreatureModelData.Flags & 0x2` — the `$BTH` suppression. The census
     /// on the shipped table is 99 of 430 rows, and the split is semantic, not arbitrary: the
     /// things with no breath to see. **Every player row passes** (they carry `0x4`), which is what
     /// makes the flag safe to gate the reported case on.
@@ -1133,7 +1133,7 @@ mod tests {
     }
 
     /// **Why the collision-prism FLOOR is invisible on shipped data** — and therefore why its
-    /// absence hid until a server override went looking for it (B311's triage, decision 1568).
+    /// absence hid until a server override went looking for it (B311's triage).
     ///
     /// The real client's prism height is `CollisionHeight × max(SCALE_X, CreatureDisplayInfo.scale)`
     /// (`0x60b312` → `0x617501`). vmangos folds `modelScale × displayScale` into `SCALE_X`, so the
@@ -1164,7 +1164,7 @@ mod tests {
         );
     }
 
-    /// **The shapeshift divergence, pinned in numbers** (decision 1574). The reference derives the
+    /// **The shapeshift divergence, pinned in numbers**. The reference derives the
     /// collision prism from `UNIT_FIELD_NATIVEDISPLAYID`, so a druid in a form keeps the druid's
     /// depth lines. This asserts the two readings really differ on shipped data, and by how much —
     /// a doc claiming "up to 0.72 yd" is worth nothing if the DBC rows drift under it.
@@ -1224,7 +1224,7 @@ mod tests {
         );
     }
 
-    /// **The Shore Strider, pinned** (B311, decision 1568). The reported giant's own chain and
+    /// **The Shore Strider, pinned**. The reported giant's own chain and
     /// numbers, recorded so nobody re-suspects the height: display 4945 → `CreatureModelData` 35,
     /// `Creature\SeaGiant\SeaGiant.mdx`, column 2.083 over a display scale of 1.75 and a
     /// `modelScale` of 1.0. Its prism is `2.083 × 1.75 = 3.645` yd under **both** the old

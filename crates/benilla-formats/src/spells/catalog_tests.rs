@@ -6,7 +6,7 @@
 
 use super::*;
 
-/// The learn-spell hop (decision 0247): a class trainer offers a LEARN *wrapper* spell, not the
+/// The learn-spell hop: a class trainer offers a LEARN *wrapper* spell, not the
 /// ability — the wire id is never in `SkillLineAbility`, so the tree must hop through the taught
 /// spell to group it. Probed on real 5875 data: the warrior wrappers resolve to their abilities
 /// (Heroic Strike 78 via 1605, Charge 100 via 1738, Rend 772 via 1423, Battle Shout 6673 via
@@ -79,7 +79,7 @@ fn real_spell_catalog_reads_ranged_attributes() {
     assert!(!fireball.ranged_attack());
 
     // Effect[0] (column 61): the auto-attack 6603 "Attack" carries SPELL_EFFECT_ATTACK (78) —
-    // the client's own melee-substitution trigger (decision 0231); an ordinary spell doesn't.
+    // the client's own melee-substitution trigger; an ordinary spell doesn't.
     // A column slip on Effect[0] fails here.
     let attack = cat.get(6603).expect("Attack");
     assert_eq!(
@@ -94,7 +94,7 @@ fn real_spell_catalog_reads_ranged_attributes() {
     );
 }
 
-/// The aura-bar display filter on the real build-5875 `Spell.dbc` (decisions 0268 + 0385): the
+/// The aura-bar display filter on the real build-5875 `Spell.dbc`: the
 /// warrior stances carry `SPELL_ATTR_EX_NO_AURA_ICON` and the internal proc auras (Defensive
 /// State 5301/5302) carry `SPELL_ATTR_DO_NOT_DISPLAY` (`0x80`) — the two bits the reference's
 /// cache builder (`PlayerAuras_Update 0x4e4170`) refuses a slot for (its `Attributes` read is
@@ -137,7 +137,7 @@ fn real_spell_catalog_hides_stances_from_the_aura_bar() {
     assert!(!fortitude.hidden_from_aura_bar());
 
     // The dword sign bit (`SPELL_ATTR_NO_AURA_CANCEL`) is NOT a display filter — the cache
-    // builder's `Attributes` read is byte-width (decision 0385). Echoes of Lordaeron is
+    // builder's `Attributes` read is byte-width. Echoes of Lordaeron is
     // uncancelable yet displays on the reference; the sign-bit transcription would hide it.
     let echoes = cat.get(1386).expect("Echoes of Lordaeron");
     assert_eq!(echoes.attributes, 0x8800_0100);
@@ -172,7 +172,7 @@ fn real_spell_catalog_reads_rank_and_passive() {
     );
 }
 
-/// The spellbook add-gate on the real build-5875 `Spell.dbc` (decision 0227; the reference's
+/// The spellbook add-gate on the real build-5875 `Spell.dbc` (the reference's
 /// own concrete probe spells): displayable player spells pass, and the three hidden classes —
 /// a language, an armor proficiency, a weapon proficiency (all `Attributes 0xC0`) — fail. A
 /// column slip on castUI (3) or the gate bits fails loudly. Skips without client data.
@@ -247,7 +247,7 @@ fn real_spell_catalog_reads_open_lock_types() {
         "Fireball opens no lock"
     );
 
-    // **B247's data fact** (decision 1312): `LockType 13` "Open Kneeling" — what lock 43 carries,
+    // **B247's data fact**: `LockType 13` "Open Kneeling" — what lock 43 carries,
     // and with it every ground container from the Hyacinth Mushroom up — has TWO shipped openers
     // that `playercreateinfo_spell` grants to every race/class, and one of them wears Blizzard's
     // own placeholder name. The lock resolver returns the FIRST sufficient match in the
@@ -284,7 +284,7 @@ fn real_spell_catalog_reads_open_lock_types() {
         "6477 Opening / 22810 Opening - No Text / 26380 zzOLDSummon Mouth Tentacle Visual"
     );
 
-    // The totem (tool) and reagent columns the pre-send possession check reads (decision 0552;
+    // The totem (tool) and reagent columns the pre-send possession check reads (
     // the ref's `0x6e4000` at SpellRec+0xA0/+0xA8 = cols 40-41 / 42-49+50-57). A column slip
     // here silently breaks "Requires Mining Pick" / "Missing reagent: …".
     assert_eq!(
@@ -307,7 +307,7 @@ fn real_spell_catalog_reads_open_lock_types() {
 }
 
 /// The two `Effect[0]` values the client latches at spell-learn time (`0x4b25e0` → `[0xb700e4]` /
-/// `[0xb700e8]`, decision 0752), pinned against the shipped file: the cursor's skin leg refuses to
+/// `[0xb700e8]`), pinned against the shipped file: the cursor's skin leg refuses to
 /// show the knife unless one of them is present in the book, so a wrong constant would silently
 /// re-open the "everyone sees the skinning cursor" report — or, worse, hide it from skinners.
 /// Skips without client data.
@@ -362,7 +362,7 @@ fn real_spell_catalog_computes_the_lock_skill_an_opener_provides() {
     assert_eq!(cat.get(1804).unwrap().open_lock_skill(150), Some(150));
     // Mining (2575) / Herb Gathering (2366): `−1 + 1 + 5.0×(skill/5)` — the skill, quoted at
     // baseLevel 0, so they do not lose the first rung the way Pick Lock does. 1 Mining provides
-    // 0 — the level-60-with-1-Mining bug (decision 1320) is the 300 the old reading put here.
+    // 0 — the level-60-with-1-Mining bug is the 300 the old reading put here.
     assert_eq!(cat.get(2575).unwrap().open_lock_skill(300), Some(300));
     assert_eq!(cat.get(2575).unwrap().open_lock_skill(100), Some(100));
     assert_eq!(cat.get(2575).unwrap().open_lock_skill(1), Some(0));
@@ -375,7 +375,7 @@ fn real_spell_catalog_computes_the_lock_skill_an_opener_provides() {
     assert_eq!(cat.get(4056).unwrap().open_lock_skill(300), Some(150));
     assert_eq!(cat.get(4075).unwrap().open_lock_skill(0), Some(250));
     // The universally-known "Opening"/"Closing" family is flat 100 at every skill — which is why
-    // the Action gate, not the value test, is what keeps them off a padlocked door (decision 0752).
+    // the Action gate, not the value test, is what keeps them off a padlocked door.
     for id in [3365, 6233, 6246, 6247, 6477, 6478, 21651, 21652] {
         assert_eq!(
             cat.get(id).unwrap().open_lock_skill(0),
@@ -514,7 +514,7 @@ fn real_spell_catalog_reads_usable_walk_columns() {
     assert_eq!((execute.stances, execute.target_aura_state), (0x50000, 2));
     assert_eq!(cat.get(6572).unwrap().caster_aura_state, 1, "Revenge");
 
-    // The combo-point gate (`0x6e3e7a`, decision 0869): Overpower carries NO aura state — its
+    // The combo-point gate (`0x6e3e7a`): Overpower carries NO aura state — its
     // window rides `AttributesEx` b20 (`FINISHING_MOVE_DAMAGE`) exactly like the rogue/druid
     // finishers, which is why the aura-state legs alone left it permanently lit. Every rank, the
     // finishers with it, and the neighbouring warrior abilities as the control.
@@ -718,7 +718,7 @@ fn real_spell_catalog_reads_tooltip_columns() {
 /// pinned against the vmangos `spell_template` rows read at decision time (2026-07-14). A column
 /// slip or a mask slip fails loudly. Skips without client data.
 ///
-/// **The bit20 column is why this test was rewritten** (decision 1593). It used to assert
+/// **The bit20 column is why this test was rewritten**. It used to assert
 /// `attributes_ex2 & 0x100000 == 0` *for each of the ten spells listed here* and read that as
 /// "no spell carries the bit, so the deferred GO-time start is unbuilt". Ten warrior/mage rows
 /// are not a census: the real file carries it on 36. The census below is the check that claim
@@ -827,7 +827,7 @@ fn real_spell_catalog_classifies_combat_initiation() {
     );
 }
 
-/// **`modalNextSpell` — `Spell.dbc` column 38** on the real build-5875 file (decision 1597, bug
+/// **`modalNextSpell` — `Spell.dbc` column 38** on the real build-5875 file (bug
 /// B280). This is the column that makes casting a hunter shot start Auto Shot, so a column slip
 /// here is a silently-broken hunter; and the shape of the census is itself the evidence that the
 /// column is the one `0x6e7447` reads — non-zero on 57 of 22357 rows, 52 of those naming spell 75.
@@ -893,7 +893,7 @@ fn real_spell_catalog_reads_modal_next_spell() {
     }
 }
 
-/// The crafting columns (decision 0437) on the real build-5875 `Spell.dbc`: `EffectItemType`
+/// The crafting columns on the real build-5875 `Spell.dbc`: `EffectItemType`
 /// (103-105) and `RequiresSpellFocus` (15), cross-checked against the live vmangos
 /// `spell_template` rows queried at pin time (2963 → creates 2996, 2738 → 2845, 3920 → 8067 with
 /// BasePoints[0]=199; 2538 Charred Wolf Meat → focus 4 Cooking Fire; 2738 Copper Axe → focus 1 Anvil).
@@ -938,7 +938,7 @@ fn real_crafting_columns_read_created_item_and_focus() {
     }
 }
 
-/// The two tooltip-law reads added for the 2026-07-25 spellbook reports (decision 0620), on pure
+/// The two tooltip-law reads added for the 2026-07-25 spellbook reports, on pure
 /// data — no client install needed.
 #[test]
 fn the_tooltip_gates_read_effect_and_mask() {
@@ -969,7 +969,7 @@ fn the_tooltip_gates_read_effect_and_mask() {
     // vocabulary it reads lives — see `itemsubclass::tests` for its coverage against the real DBCs.
 }
 
-/// The **main-hand auto-pick** family (`Attributes & 0x200`, decision 1552), against the real
+/// The **main-hand auto-pick** family (`Attributes & 0x200`), against the real
 /// 5875 file. `ArmCast 0x6e5250` reads this bit to skip the item-targeting cursor and bind the
 /// equipped main hand instead, so the client's behaviour rests on the family being exactly what
 /// the app assumes: a set of temporary weapon imbues, each already an item-target spell.
@@ -1040,7 +1040,7 @@ fn real_main_hand_autopick_family() {
 }
 
 /// **The prospecting leg of `0x495d60` is dead on 5875 data** — the fact two cast-failure
-/// argument arms rest on not being written (decision 2292). That validator's effect loop has a
+/// argument arms rest on not being written. That validator's effect loop has a
 /// third leg past the two enchant ones: `0x495df1 jne 0x495f36` falls into
 /// `0x495f39 cmp DWORD PTR [eax],0x7f`, and inside it sit the only image-wide raises of
 /// `SPELL_FAILED_PROSPECT_NEED_MORE` (`0x49614e`) and `SPELL_FAILED_MIN_SKILL` (`0x496128`).
@@ -1080,7 +1080,7 @@ fn real_prospecting_effect_is_absent_from_5875() {
     );
 }
 
-/// The item-target family and its gate columns (decision 0923), against the real 5875 file. The
+/// The item-target family and its gate columns, against the real 5875 file. The
 /// reference's `TargetingWantsItem 0x6e6330` is `flag_word & 0x4010`, and on shipped data those
 /// two bits are **never** mixed with a unit bit — the whole family is `Targets` exactly `0x10`
 /// (the enchant/poison/stone/scope arm, this slice) or exactly `0x4000` (the OPEN_LOCK arm, whose
@@ -1122,7 +1122,7 @@ fn real_item_target_family_and_its_gate_columns() {
     assert_eq!(locked_only, 103, "Targets == 0x4000 — the OPEN_LOCK family");
 
     // The OPEN_LOCK family's **implicit arm**, which is what turns its bare `0x4000` into the word
-    // both click seams read (decision 0939). The app's `cast_target_mask` ORs `0x800` for arm 23
+    // both click seams read. The app's `cast_target_mask` ORs `0x800` for arm 23
     // and `TF_UNIT` for arm 25, so this census is the data behind "a lock word is `0x4000` or
     // `0x4800`, and either way `& 0x4010` and `& 0x4800` are *both* nonzero" — the overlap that
     // lets one armed cursor answer the bag click and the world click. Pick Lock 1804 is one of the
@@ -1242,7 +1242,7 @@ fn gcd_wildcard_and_shape_corners_hold_on_the_real_data() {
     );
 }
 
-/// The cost columns on the REAL 5875 data (decision 1074, B192): the health power type
+/// The cost columns on the REAL 5875 data: the health power type
 /// (−2 as `0xFFFFFFFE`), Bloodrage's pct-only shape, Health Funnel's `manaPerSecond`, the cast
 /// cell's attr rows, and the verified NEGATIVE that keeps columns 33/35 unparsed. Skips without
 /// client data.
@@ -1268,7 +1268,7 @@ fn real_spell_catalog_cost_columns() {
             "Life Tap {id}"
         );
     }
-    // Bloodrage: pct-ONLY health cost — the resolved-cost law's health-pool lane (B192).
+    // Bloodrage: pct-ONLY health cost — the resolved-cost law's health-pool lane.
     let bloodrage = cat.get(2687).unwrap();
     assert_eq!(
         (
@@ -1480,7 +1480,7 @@ fn real_is_harmful_pins() {
     }
 }
 
-/// **The channel bar's naming law on the real build-5875 `Spell.dbc`** (decision 2284) — the two
+/// **The channel bar's naming law on the real build-5875 `Spell.dbc`** — the two
 /// bits `SpellChannelStart 0x6e7550` tests, and the population that makes the default the
 /// interesting half.
 ///

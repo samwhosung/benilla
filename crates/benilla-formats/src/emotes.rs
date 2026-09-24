@@ -305,7 +305,7 @@ mod tests {
             Some(0x0800),
             "ONESHOT_SALUTE EmoteFlags"
         );
-        // The $ESD gathering chain (decision 0562): STATE_WORK_NOSHEATHE_MINING (233) is a
+        // The $ESD gathering chain: STATE_WORK_NOSHEATHE_MINING (233) is a
         // spec-proc-2 state emote carrying the MiningHit kit; its one-shot cousins carry proc 0.
         assert_eq!(cat.spec_proc(233), Some(2), "mining state EmoteSpecProc");
         assert_eq!(

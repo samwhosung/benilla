@@ -1,4 +1,4 @@
-//! TEMP (B141): rasterise the WMO-interior minimap **offline**, from the shipped tiles and the
+//! TEMP: rasterise the WMO-interior minimap **offline**, from the shipped tiles and the
 //! client's own placement + alpha test, so "where do the black lines come from" is a measurement on
 //! the data rather than a reading of a screenshot.
 //!

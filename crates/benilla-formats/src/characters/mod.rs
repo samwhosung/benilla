@@ -1,4 +1,4 @@
-//! Character customization render data (decision 0041, Milestone B) — what a player's appearance
+//! Character customization render data (Milestone B) — what a player's appearance
 //! selects: which **geosets** the body shows ([`CharacterGeosets`]) and which **skin textures** the
 //! body wears ([`CharSections`]).
 //!

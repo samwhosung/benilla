@@ -6,7 +6,7 @@
 //! `A = instanceAlpha × colors[colorIndex].alpha × transparency[transLookup[idx]].weight`, both
 //! tracks animation-evaluated each frame; `A ≤ 0` skips the batch before the blend mode is read, and
 //! an Opaque batch with `0 < A < 1` is **promoted to a blended draw** (`0x70c20f`; benilla
-//! implements the promotion, decisions 0831/0842). Clocks (`0x713d50`): a `gseq`-tagged track wraps
+//! implements the promotion). Clocks (`0x713d50`): a `gseq`-tagged track wraps
 //! `global_sequences[gseq]`; an ordinary track keys inside the **playing** sequence's absolute time
 //! band — for a placed doodad that is the file-order-first sequence looping forever, but a creature
 //! changes sequence constantly and its batches' visibility changes with it (a voidwalker's upper
@@ -172,7 +172,7 @@ pub(super) fn bake_rgb_anim(
 /// [`super::tex_anim::bake_uv_seqs`]. The tint channel is pinned to slot 0 by the same line and
 /// breaks the same way: `uvslotscan` finds `Spells\\Deterrence_State_Base.m2` tinting
 /// **red→blue in Stand and green→red in Hold**, so the slot-0 pin renders a *wrong colour* there,
-/// not merely a frozen one (decision 1408).
+/// not merely a frozen one.
 pub(super) fn bake_rgb_seqs(
     track: &M2Vec3Track,
     gseq_durations: &[u32],
@@ -228,7 +228,7 @@ mod tests {
         );
     }
 
-    /// **B138 — Zul'Farrak's troll gate drew its own ruin on top of itself** (decision 1460).
+    /// **B138 — Zul'Farrak's troll gate drew its own ruin on top of itself**.
     /// `TanarisTrollGate.m2` is ONE file holding TWO gates: the intact one
     /// (`TANARISTROLLGATE.BLP`) and its burnt twin (`TANARISTROLLGATEBURNT.BLP`), plus a tiki-mask
     /// batch for each. Which pair draws is authored entirely in the M2Color alpha keys — `+1.0`
@@ -590,7 +590,7 @@ mod tests {
         assert!((a.sample(1.5 + 0.375) - 0.6).abs() < 1e-4); // wraps
     }
 
-    /// The clock router (decision 0855): a gseq loop reads the SHARED world clock — the
+    /// The clock router: a gseq loop reads the SHARED world clock — the
     /// reference's free-running Phase B cursor, no per-instance arming — pre-wrapped in f64 so a
     /// long-uptime `shared_now` keeps precision; a band loop keeps the host's clip time. Sampling
     /// a gseq loop on a spawn-anchored clock is the Arcane Intellect sparkle bug: every cast's

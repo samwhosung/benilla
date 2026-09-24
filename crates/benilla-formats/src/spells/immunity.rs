@@ -1,5 +1,4 @@
-//! The crowd-control **exemption** — `0x6e9ca0`'s aura scan and `0x6e9d70`'s immunity matcher
-//! (decision 1946).
+//! The crowd-control **exemption** — `0x6e9ca0`'s aura scan and `0x6e9d70`'s immunity matcher.
 //!
 //! Each of the six crowd-control arms in the cast validator asks this before it refuses: *does one
 //! of the caster's own auras grant immunity to the thing blocking me?* The answer is not a flag

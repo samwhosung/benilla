@@ -1,4 +1,4 @@
-//! M2 skeleton + animation parsing (decision 0019): the rest skeleton (bones, parent + pivot) and
+//! M2 skeleton + animation parsing: the rest skeleton (bones, parent + pivot) and
 //! every sequence's per-bone keyframe tracks, which the skinned-entity path turns into Bevy clips.
 //! Split out of the model parser as its own concern.
 
@@ -12,7 +12,7 @@ use benilla_m2::parse_m2;
 use super::{le_f32, le_u16, le_u32};
 use crate::BoneSpin;
 
-/// One bone of a model's rest skeleton (decision 0019): its parent bone index (`-1` = root) and pivot
+/// One bone of a model's rest skeleton: its parent bone index (`-1` = root) and pivot
 /// point in **raw WoW model space** (the render boundary maps it to Bevy space). Vanilla M2 has no
 /// inverse-bind-matrix array — the rest pose is identity TRS and the **pivot encodes bind position**
 /// (the animate kernel `0x714260`), so the skinned-entity path builds bone matrices pivot-relative
@@ -99,7 +99,7 @@ pub fn parse_m2_skeleton(bytes: &[u8]) -> Result<Skeleton> {
     Ok(Skeleton { bones })
 }
 
-/// One M2 attachment-point record (decision 0072 — held items): the attach id (`0` shield, `1`
+/// One M2 attachment-point record (held items): the attach id (`0` shield, `1`
 /// right hand, `2` left hand, sheath/hip/back pairs at `26..33`), the bone it rides, and its
 /// **raw WoW model-space** position (see `benilla_m2::M2Attachment` — the same shape, re-exposed
 /// here as the bytes-in entry point alongside [`parse_m2_skeleton`], so callers that only take
@@ -118,7 +118,7 @@ pub struct M2Attachment {
 ///
 /// This is deliberately **not** the raw file table: ~5% of weapon models author several records
 /// under one id (both ends of a staff), and the lookup names exactly one of them — the other is
-/// unreachable in the reference and must be unreachable here (decision 0805). Records the lookup
+/// unreachable in the reference and must be unreachable here. Records the lookup
 /// never names are therefore absent. Empty for a model with no attachment points.
 pub fn parse_m2_attachments(bytes: &[u8]) -> Result<Vec<M2Attachment>> {
     let format =
@@ -243,7 +243,7 @@ pub fn parse_m2_cch_marker(b: &[u8]) -> Option<(u16, [f32; 3])> {
     None
 }
 
-/// One row of the M2's baked **PlayableAnimationLookup** table (decision 0082 — missing-animation-clip
+/// One row of the M2's baked **PlayableAnimationLookup** table (missing-animation-clip
 /// resolution): re-exposed from `benilla-m2`'s [`benilla_m2::M2PlayableAnim`] (identical shape) as the
 /// bytes-in entry point alongside [`parse_m2_skeleton`]/[`parse_m2_attachments`], so callers that only
 /// take `benilla-formats` don't need a direct `benilla-m2` dependency.
@@ -256,7 +256,7 @@ pub struct PlayableAnim {
     pub dir_flags: u16,
 }
 
-/// Parse the M2's [`PlayableAnim`] table (decision 0082,
+/// Parse the M2's [`PlayableAnim`] table (
 /// `0x711bf0`): the model's own precomputed answer to "if the game requests
 /// `AnimationData.dbc` id X, which id do I actually play, and in which direction/variant" — the
 /// source `benilla-assets`' `ModelAnimations::resolve` PATH 1 reads. Straight off `benilla-m2`'s
@@ -340,7 +340,7 @@ pub fn m2_bone_spins(bytes: &[u8]) -> HashMap<u16, BoneSpin> {
     out
 }
 
-/// One bone's keyframe tracks for an animation sequence (decision 0019), in **raw WoW model space**:
+/// One bone's keyframe tracks for an animation sequence, in **raw WoW model space**:
 /// translation/scale are `[f32;3]`, rotation is an uncompressed quaternion `[x,y,z,w]` (vanilla v256).
 /// Times are **seconds**, rebased to the sequence start so each clip runs `0..duration`. Only the
 /// channels the bone actually animates are non-empty; a bone absent from [`ModelAnimation::bones`]
@@ -404,7 +404,7 @@ pub struct AnimEvent {
     pub position: [f32; 3],
 }
 
-/// One animation sequence's per-bone keyframes (decision 0019): its `AnimationData.dbc` id, duration,
+/// One animation sequence's per-bone keyframes: its `AnimationData.dbc` id, duration,
 /// loop flag, and the bones that move. **Stand is `anim_id` 0** — the idle the real client arms by default
 /// (the load arm in `0x70ebd0`) — but its *record index* is not fixed: Stand is
 /// `animationLookup[0]`, which is record 0 only for some models (a chicken's Stand is record 2, a
@@ -480,7 +480,7 @@ impl ModelAnimation {
     /// Does this sequence leave **every** bone at bind pose for its whole band — one key per
     /// channel, and that key the identity (zero translation, unit-w rotation, unit scale)?
     ///
-    /// The **render** content gate (decision 0130, consumed by `benilla_assets`' loader as
+    /// The **render** content gate (consumed by `benilla_assets`' loader as
     /// `ModelAnimations::first_seq`): looping such a sequence draws exactly the static mesh, so the
     /// placed-doodad tier skips building a skin + `AnimationPlayer` for it — the ~90 % of placed
     /// doodads `doodadscan` measured. It lives here, beside the parse, so the `benilla-extract`
@@ -490,7 +490,7 @@ impl ModelAnimation {
     /// It answers a question about **pixels only**, and is never a reason to treat the sequence as
     /// absent: a consumer keyed on the sequence *identity* — the per-sequence emission, parameter
     /// and material-alpha bakes — still needs the slot the instance is playing, and the reference
-    /// always has one armed (decision 0936, `ModelAnimations::idle_seq`).
+    /// always has one armed (`ModelAnimations::idle_seq`).
     pub fn is_rest_pose(&self) -> bool {
         const EPS: f32 = 1e-4;
         !self.bones.iter().any(|b| {
@@ -613,7 +613,7 @@ impl<T: super::key_anim::Lerp + PartialEq> ChannelTrack<T> {
     ///
     /// A head/tail sample is emitted only when it differs from the edge key it would otherwise
     /// hold, so the clips are unchanged wherever the reference and a plain hold agree — which,
-    /// measured, is everywhere but `Creature\Zombie`'s root translation (decision 0643).
+    /// measured, is everywhere but `Creature\Zombie`'s root translation.
     ///
     /// A **global-sequence** channel (`gseq != 0xffff`) runs on its own clock, not this band: a
     /// lone key is a pure CONSTANT folded into every clip (how vanilla authors the stowed-weapon
@@ -734,7 +734,7 @@ pub fn hand_grip_finger_poses(bytes: &[u8], bones: &[u16]) -> Vec<(u16, [f32; 4]
     out
 }
 
-/// Parse **all** of a model's animation sequences into per-bone keyframes (decision 0019). Offsets
+/// Parse **all** of a model's animation sequences into per-bone keyframes. Offsets
 /// as the reference reads them (the animate kernel `0x714260`): sequences @MD20 `0x1c`/`0x20`
 /// (stride 0x44; id@+0x00, start@+0x04, end@+0x08, flags@+0x10 with **bit0 SET ⇒ clamp/one-shot,
 /// CLEAR ⇒ loop**); bones @`0x34`/`0x38` (stride 0x6c; the three `M2Track`s at +0x0c/+0x28/+0x44).
@@ -1311,7 +1311,7 @@ mod tests {
     /// curled quaternion, so the pose the overlay wears is that curl and not the rest pose. The
     /// substitution is a measured no-op: across the eight playable-race models with a HandsClosed
     /// sequence, all 460 finger-capable rotation tracks give the same quaternion under the old
-    /// at-or-before clamp and under the window (decision 0643).
+    /// at-or-before clamp and under the window.
     #[test]
     fn hand_grip_reads_the_curled_pose_through_the_window() {
         let data = crate::wow_data_or_skip!();
@@ -1370,7 +1370,7 @@ mod tests {
         }
     }
 
-    /// **The billboard host of a particle emitter's bone chain** (decision 0813), on the two real
+    /// **The billboard host of a particle emitter's bone chain**, on the two real
     /// assets that opened it. `Field Marshal's Chain Spaulders` (display 32092)
     /// authors a 4-bone chain whose only billboard bone is bone **1** (flags `0x08`,
     /// spherical), with the two sparkle emitters hanging off its children 2 and 3. Neither emitter

@@ -108,7 +108,7 @@ fn ratchet_booty_bay_speed_profile() {
     // in one 16 ms step — hundreds to thousands of yd/s (the pre-fix table measured 15,009).
     // Healthy motion peaks ~51 yd/s (the Catmull-Rom parameter-vs-arc-length artifact through one
     // sharp bend, ~1.5 s per cycle — a known, bounded residual pending the per-point-table
-    // verdict, decision 0439).
+    // verdict).
     assert!(
         max_speed < 100.0,
         "position discontinuity: {max_speed:.1} yd/s at cycle {max_speed_at} ms"

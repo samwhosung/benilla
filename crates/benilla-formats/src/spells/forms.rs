@@ -19,7 +19,7 @@ pub struct ShapeshiftForm {
     /// **BonusActionBar** (field 1) — the stance page the bar flips to (0 = none).
     pub bonus_bar: u32,
     /// **Name** (the locstring at fields 2..10; enUS slot) — "Battle Stance", "Cat Form" —
-    /// the `SPELL_REQUIRED_FORM` "Requires %s" cell of the spell tooltip (decision 0276;
+    /// the `SPELL_REQUIRED_FORM` "Requires %s" cell of the spell tooltip (
     /// `0x52f10a`–`0x52f2ae`).
     pub name: String,
     /// `flags1` (field 11, vmangos `SpellShapeshiftFormEntry`). Bit 0 = the form is a *stance*
@@ -32,7 +32,7 @@ pub struct ShapeshiftForm {
     /// resolver (`0x605570`) reads a shapeshifted unit's type from HERE before the creature
     /// template or race table — a cat-form druid is a Beast (1) to the minimap tracking
     /// predicates. `<= 0` reads Humanoid (the resolver's fallback; vmangos's own row comment).
-    /// Consumed by the tracking dots (decision 0564).
+    /// Consumed by the tracking dots.
     pub creature_type: i32,
     /// **AttackIconID** (field 13, the `+0x34` read): the form's own attack icon, resolved through
     /// `SpellIcon.dbc` at load. The Attack action's icon resolver (`0x4e6870`) serves the

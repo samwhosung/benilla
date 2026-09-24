@@ -6,7 +6,7 @@
 //! locally — `GetAuctionHouseDepositRate()` is a straight read of [`AuctionHouseCatalog::deposit_percent`]
 //! at the house the session is talking to. Which house that is arrives on the wire:
 //! `MSG_AUCTION_HELLO`'s reply carries a `houseId` alongside the auctioneer guid, and it keys this
-//! table (decision 1511). Send the window the wrong id and the pane quietly shows Blackwater's 25%
+//! table. Send the window the wrong id and the pane quietly shows Blackwater's 25%
 //! where a city auctioneer charges 5%.
 //!
 //! Record layout (7 rows in the shipped 5875 file, verified by reading it): `ID@0`, `FactionID@1`,

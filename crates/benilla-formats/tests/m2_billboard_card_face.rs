@@ -1,4 +1,4 @@
-//! Difftest the **billboard-card lit-face** shape (decision 0788) against real content: which
+//! Difftest the **billboard-card lit-face** shape against real content: which
 //! billboard batches are authored back-to-front against the law's `+X`-at-the-viewer, and — the
 //! load-bearing half — which must NOT be touched.
 //!

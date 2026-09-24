@@ -1,5 +1,5 @@
 //! `VocalUISounds.dbc` — the **error speech** lines: the "I can't do that" family your character
-//! says aloud in their own race and gender voice when the client refuses something (decision 1815).
+//! says aloud in their own race and gender voice when the client refuses something.
 //!
 //! One row per `(race, line)`; the *line* is the message catalog's own `type_tag`
 //! ([`benilla_ui::messages::MessageRecord::type_tag`], the record's `+0x0c`), so a refusal that

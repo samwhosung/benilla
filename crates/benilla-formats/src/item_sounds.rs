@@ -1,5 +1,5 @@
 //! `ItemGroupSounds.dbc` adapter — the per-item **pickup / put-down / use** sound groups
-//! (decision 0091: the bag-drag item sounds).
+//! (the bag-drag item sounds).
 //!
 //! Layout — build 5875: **5 fields × 4 = 20 B**
 //! per record (loader `0x5477d0` asserts fieldCount 5 @`0x547879`, recordSize 0x14 @`0x5478ae`):

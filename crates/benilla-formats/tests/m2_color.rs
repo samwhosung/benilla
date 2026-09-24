@@ -2,7 +2,7 @@
 //! colour's RGB as a per-vertex tint, so the model shader multiplies it into the texture. Load-bearing
 //! for additive glow cards drawn with a neutral glow texture — the Orgrimmar bonfire's base glow
 //! (`GenericGlow_Alpha_128`, a white-cored radial) gets its warmth *only* from this M2Color; without it
-//! the additive draw washes the bright core to white. See decision 0029. Skips when the client is absent.
+//! the additive draw washes the bright core to white. See. Skips when the client is absent.
 
 use benilla_formats::{load_m2_mesh, open_chain};
 

@@ -1,13 +1,12 @@
 //! The zone→audio data plane: **AreaTable** (the zone/subzone row the MCNK `areaId` points at)
-//! joined to **ZoneMusic** / **SoundAmbience** / **ZoneIntroMusicTable** (decision 0070, slice 1).
+//! joined to **ZoneMusic** / **SoundAmbience** / **ZoneIntroMusicTable** (slice 1).
 //!
 //! Layouts — VERIFIED against build 5875 (header + row decodes, 2026-07-02):
 //! - `AreaTable.dbc` **1081 × 25 × 100 B**: `ID(0), ContinentID(1), ParentAreaID(2), AreaBit(3),
 //!   Flags(4), SoundProviderPref(5), SoundProviderPrefUnderwater(6), AmbienceID(7), ZoneMusic(8),
 //!   IntroSound(9), ExplorationLevel(10), AreaName_lang(11..19), FactionGroupMask(20),
 //!   LiquidTypeID[4](21..24)`. Spot-check row 12: "Elwynn Forest", Ambience 35, ZoneMusic 1.
-//!   NOTE the wowdev-wiki 5875 struct appends TBC+ fields (28 cols) — **wrong**; 25 verified
-//!   (decision 0070).
+//!   NOTE the wowdev-wiki 5875 struct appends TBC+ fields (28 cols) — **wrong**; 25 verified.
 //! - `ZoneMusic.dbc` **99 × 8 × 32 B**: `ID, SetName(str), SilenceMin[2], SilenceMax[2],
 //!   Sounds[2]` — the `[2]` arrays are `[day, night]`, intervals in **ms**, `Sounds` →
 //!   SoundEntries kits (type 28). Row 1: "Zone-Forest", 180 000–300 000 ms, kit 2523/2523.

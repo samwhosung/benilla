@@ -31,14 +31,14 @@ pub struct CharacterGeosets {
     helmet_vis: HashMap<u32, [u32; 5]>,
 }
 
-/// The worn geoset selectors the equipment branches of `0x477520` read (decisions 0074, 1864): per
+/// The worn geoset selectors the equipment branches of `0x477520` read: per
 /// bodyslot 2–9 (shirt, chest, belt, pants, boots, wrist, gloves, tabard) the item's
 /// `geosetGroup[0..2]` (`None` = the slot is empty), plus the cloak's `geosetGroup[0]`, plus the
 /// worn helm's `HelmetGeosetVisData` row pair (`[male, female]` — ItemDisplayInfo cols 12/13).
 /// Default = naked.
 ///
 /// **Two of the eight branches are not fed by an ItemDisplayInfo column at all** and take their own
-/// field here (decision 1864): B3 reads the ArmLower *composite grid*, and B6 reads a client flag.
+/// field here: B3 reads the ArmLower *composite grid*, and B6 reads a client flag.
 #[derive(Default, Clone, Copy)]
 pub struct EquipGeosets {
     pub bodyslots: [Option<[u32; 3]>; 8],
@@ -56,7 +56,7 @@ pub struct EquipGeosets {
 
 impl CharacterGeosets {
     /// The geoset IDs a character of this appearance renders — the opening block (the naked set)
-    /// plus **all eight** equipment branches B1–B8 of `0x477520` (decisions 0074, 1864 —
+    /// plus **all eight** equipment branches B1–B8 of `0x477520` (
     /// implemented from its *arithmetic*; the branch comments below name each one at its address).
     /// A body submesh whose `skinSectionId` is in this set is drawn; all others hidden. Most
     /// branches gate on an ItemDisplayInfo `geosetGroup` field being non-zero ("section present");
@@ -127,7 +127,7 @@ impl CharacterGeosets {
         // B3 (`0x4775bd`): the shirt's sleeve cuff — only when nothing ELSE dresses the forearm.
         // The reference's gate is the ArmLower equip row's cells 1..6, not "is a chest equipped":
         // most chest pieces leave that tile empty and the cuff survives them, while a bracer or a
-        // glove takes it and the cuff goes (decision 1864; [`EquipGeosets::forearm_dressed`]).
+        // glove takes it and the cuff goes ([`EquipGeosets::forearm_dressed`]).
         if !equip.forearm_dressed {
             if let Some(v) = g(0, 0) {
                 set.push(801 + v as u16);
@@ -170,7 +170,7 @@ impl CharacterGeosets {
         // with an EMPTY tabard slot: 1201, plus 1202 when neither the chest nor the legs carries the
         // robe bit. On shipped character models 1201 has no submesh (it is the group's "no tabard"
         // base) and 1202 is the flap — so the observable effect is exactly "wear the tabard so the
-        // design can be previewed" (decision 1864).
+        // design can be previewed".
         if equip.tabard_preview {
             set.push(1201); // already on from the opening loop; the reference enables it anyway
             if robe.is_none() {
@@ -180,7 +180,7 @@ impl CharacterGeosets {
         // B7 (`0x477799`): the shirt's doublet + the pants' leg geoset (the recorded 1102 base — not
         // 1101). Skipped ENTIRELY when the CHEST is a robe (`0x4777a4` — the legs' own robe bit does
         // NOT gate here, unlike B4/B5/B6) or when a TABARD is worn (`0x4777b8`, bodyslot 9 sub 0;
-        // the guard is the tabard, not the glove). Decision 1864.
+        // the guard is the tabard, not the glove).
         if g(1, 2).is_none() && g(7, 0).is_none() {
             if let Some(v) = g(0, 1) {
                 set.push(1001 + v as u16);
@@ -204,7 +204,7 @@ impl CharacterGeosets {
 
     /// Load both customization DBCs from the patch chain.
     ///
-    /// **A duplicated `(race, sex, variation)` key resolves to the FIRST row** (decision 0682). Both
+    /// **A duplicated `(race, sex, variation)` key resolves to the FIRST row**. Both
     /// consumers are *linear scans* of the loaded table — `0x478540` for the hair geoset, `0x478740`
     /// for the facial-hair record (`0x478540` is a loaded-DBC linear scan, not a pool) — so the
     /// earliest matching record is the one the reference returns, where a last-write
@@ -215,7 +215,7 @@ impl CharacterGeosets {
     /// duplicated key in the file (243/244 read as the goblin-*female* pair with a zeroed sex column,
     /// which is why goblin females, having no row at all, were always right). Geoset 1 is the bare
     /// scalp; geoset 2 is that scalp **plus** a 38-vertex topknot whose texture slot is `Monster1` —
-    /// a slot no character-model goblin display fills, so it drew flat white (decision 0157). All 314
+    /// a slot no character-model goblin display fills, so it drew flat white. All 314
     /// character-model goblin displays select variation 0, so last-write put a white tuft on every one
     /// of them. `CharacterFacialHairStyles` has no duplicate keys today; it takes the same rule
     /// because the same scan law governs it.
@@ -345,7 +345,7 @@ pub(crate) fn char_facial_hair_schema() -> Schema {
 mod tests {
     use super::*;
 
-    /// The equipment geoset branches (decisions 0074/1864, from the arithmetic of `0x477520`):
+    /// The equipment geoset branches (from the arithmetic of `0x477520`):
     /// gloves/boots/robe/cloak **replace** their groups, and a robe suppresses the tabard branch.
     #[test]
     fn equipment_geoset_branches() {
@@ -364,7 +364,7 @@ mod tests {
         assert!(set.contains(&402) && !set.contains(&401));
 
         // Boots v=2: the boot group is replaced — 503 in, the naked foot 501 OUT (`0x477639`
-        // disables [501,599] first). benilla stacked them until decision 1864.
+        // disables [501,599] first). benilla stacked them until.
         let mut eq = EquipGeosets::default();
         eq.bodyslots[4] = Some([2, 0, 0]);
         let set = cg.visible_geosets(1, 0, 0, 0, &eq);
@@ -396,7 +396,7 @@ mod tests {
         assert!(set.contains(&1505) && !set.contains(&1501));
     }
 
-    /// **B3's real gate** (`0x4775bd`, decision 1864): the shirt's sleeve cuff survives or dies by
+    /// **B3's real gate** (`0x4775bd`): the shirt's sleeve cuff survives or dies by
     /// what dresses the *forearm tile*, not by whether a chest is equipped. Both directions matter —
     /// 533 of the 637 shipped chest displays leave `ArmLowerTexture` empty, and 566 of 570 wrist
     /// displays fill it — and benilla had both backwards until this record.
@@ -431,7 +431,7 @@ mod tests {
         );
     }
 
-    /// **B6 — the tabard-designer preview** (`0x477752`; decision 1864). The one
+    /// **B6 — the tabard-designer preview** (`0x477752`). The one
     /// branch of the eight with no ItemDisplayInfo column behind it: its gate is `[cc+0xc]`, "the
     /// guild registrar's tabard designer is open", and it wears the tabard flap (1202) with an
     /// **empty** tabard slot — unless a robe is on, which suppresses it exactly as it suppresses B5.
@@ -464,7 +464,7 @@ mod tests {
         }
     }
 
-    /// **B7's two guards** (`0x4777a4` / `0x4777b8`, decision 1864): the shirt-doublet + pant-leg arm
+    /// **B7's two guards** (`0x4777a4` / `0x4777b8`): the shirt-doublet + pant-leg arm
     /// is skipped whole when the CHEST is a robe or when a TABARD is worn — and, unlike B4/B5/B6,
     /// the *legs'* own robe bit does not gate it.
     #[test]
@@ -624,7 +624,7 @@ mod tests {
         assert!(set.contains(&1), "max(1, 0) = scalp geoset 1");
     }
 
-    /// **B11, against the shipped DBC** (decision 0682): `CharHairGeosets` carries four rows for the
+    /// **B11, against the shipped DBC**: `CharHairGeosets` carries four rows for the
     /// goblin male's only hairstyle, and the reference's linear scan takes the first — geoset **1**,
     /// the bare scalp. Last-write took id 244's geoset **2**, which adds an untextured topknot.
     ///

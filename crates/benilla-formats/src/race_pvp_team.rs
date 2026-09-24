@@ -18,7 +18,7 @@
 //!
 //! **This is not `UnitFactionGroup`**, which reads the live `UNIT_FIELD_FACTIONTEMPLATE`
 //! (`0x5166b8`/`0x5166be`) and so genuinely loses its side under GM mode. Confusing the two is
-//! report B378 / decision 2227.
+//! report B378 /.
 //!
 //! Loaded only by [`crate::race_pvp_team::load_race_pvp_teams`]'s one consumer — the test that
 //! pins `ui_unit::race_pvp_team`'s frozen table to the shipped tables. The runtime answer is that

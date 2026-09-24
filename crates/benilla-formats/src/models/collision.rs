@@ -160,7 +160,7 @@ pub fn accumulate_wmo_group_camera_collision(
 /// Accumulate one WMO **group** file's *camera-only* triangles — the faces the camera collides with
 /// but the walking gather drops: DETAIL (`flags & 0x04`) set, NOCAMCOLLIDE (`flags & 0x02`) clear.
 /// Exactly the camera gather minus the walking gather, kept as its own set so the down-ray's
-/// camera-void fallback (decision 0692) can race it *after* the faithful walking leg has missed,
+/// camera-void fallback can race it *after* the faithful walking leg has missed,
 /// without double-counting the faces the walking leg already saw.
 pub fn accumulate_wmo_group_camera_only_collision(
     group_bytes: &[u8],

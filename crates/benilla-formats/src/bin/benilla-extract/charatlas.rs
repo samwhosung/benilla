@@ -61,7 +61,7 @@ pub struct Look {
     /// The eight worn display ids in `equipment` order; `0` = the slot is empty.
     pub slots: [u32; 8],
     /// The wearer's guild tabard, or `None` for "no guild" — the same input the world composite
-    /// takes (decision 1704). It only paints over a tabard whose display asks for it, so passing
+    /// takes. It only paints over a tabard whose display asks for it, so passing
     /// one without a guild-emblem tabard in the tabard slot is a no-op, on purpose.
     pub emblem: Option<GuildEmblem>,
 }

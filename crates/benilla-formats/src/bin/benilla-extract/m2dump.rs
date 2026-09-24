@@ -41,7 +41,7 @@ pub fn m2coll(chain: &mut Chain, internal_path: &str) -> Result<()> {
 }
 
 /// Dump every sequence's EVENT keyframes: time (s from sequence start), 4CC ident, payload.
-/// The event-order instrument (decision 0279): on attack clips, whether `$CPP` (the victim
+/// The event-order instrument: on attack clips, whether `$CPP` (the victim
 /// defense dispatch) precedes `$AH0-3`/`$CAH` (the impact dispatch) decides which of the two
 /// mutually-exclusive victim reactions the shared swing record feeds.
 pub fn m2events(chain: &mut Chain, internal_path: &str) -> Result<()> {
@@ -140,7 +140,7 @@ pub fn m2attach(chain: &mut Chain, internal_path: &str) -> Result<()> {
     let attachments = benilla_formats::parse_m2_attachments(&data)?;
     // The position is raw WoW model space (X forward, Y left, Z up), as the M2 stores it — "where
     // on the model does this rider actually sit?" needs it as much as the bone does: an item glow
-    // hangs on ids 0..4, spread along a weapon's length (decision 0805).
+    // hangs on ids 0..4, spread along a weapon's length.
     println!("id  bone  position (WoW model space)");
     for a in &attachments {
         let [x, y, z] = a.position;
@@ -291,7 +291,7 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
         // The parameter channels sample per frame ([`benilla_formats::EmitParams`]); the compact
         // line shows their opening values, and any channel that actually MOVES prints its full
         // keyed ramp below — the view whose absence hid Frost Nova's 0.19 → 13.2 yd emission-
-        // radius ride behind a flat "radius [0.19..0.19]" (decision 0844).
+        // radius ride behind a flat "radius [0.19..0.19]".
         let now = d.params.sample(None, 0.0, 0.0);
         println!(
             "             {:?} {:?} {}  {rate}  life {:.2}s  speed {:.2}  grav {:.2}  drag {:.1}{tail}  twinkle [{:.2}..{:.2}] spd {:.1} pct {:.2}  spin {:.2}",
@@ -561,7 +561,7 @@ pub fn m2bones(chain: &mut Chain, internal_path: &str) -> Result<()> {
     let m = fmt.model();
     let seqs = benilla_formats::parse_m2_animations(&data);
     // `ign` is `flags & 0x7` spelled out — which of the parent's Translate/Scale/Rotate this bone
-    // REFUSES, taking the model root's instead (decision 0945). The raw flags hex could always be
+    // REFUSES, taking the model root's instead. The raw flags hex could always be
     // read for it and never was: three billboard rounds and a mount round each looked at
     // `RidingHorse` bone 30's `0x00000006` and none read it as "the saddle discards the gallop",
     // which decision 0932 then measured as a 21° rider swing and called faithful. A bone-table
@@ -742,7 +742,7 @@ fn winding(s: &benilla_formats::RenderSubmesh) -> Option<String> {
         _ => "-".to_string(),
     };
     // A billboard card authored back-to-front against the law's `+X`-at-the-viewer: the renderer
-    // turns its normals round so the card is lit off the face it presents (decision 0788). `vnorm`
+    // turns its normals round so the card is lit off the face it presents. `vnorm`
     // alone cannot answer this — it is the MEAN, so a batch whose normals cancel reads the same as
     // one flat plane — hence the shape's own verdict here rather than an eyeball off the numbers.
     let lit_face = if s.billboard_card_faces_away() {
@@ -976,7 +976,7 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
         // the sampled mip to the coarsest level), and is the authored density so far above the
         // screen's that even mip 0 is a minification? A cutout batch is where either shows up
         // first, because a coarser mip does not merely soften it — it dissolves the silhouette
-        // the alpha key cuts (the Dun Morogh snow-fir report, B52).
+        // the alpha key cuts (the Dun Morogh snow-fir report).
         if !s.uvs.is_empty() && !s.positions.is_empty() {
             let uext = |axis: usize| {
                 s.uvs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), t| {
@@ -1265,7 +1265,7 @@ fn part_flags(flags: u32) -> String {
         // Bit 1's own reader is not identified; bit 0's (from file `0x1`) picks a 4- vs 8-word
         // vertex stride. Half the corpus authors it.
         (0x0008, "vertexFormat(rt+0x194 b1, reader unread)"),
-        // **The ride-vs-trail switch** (spawn `0x7b8a9a`, draw `0x7b3e6f`; decision 1578): SET
+        // **The ride-vs-trail switch** (spawn `0x7b8a9a`, draw `0x7b3e6f`): SET
         // stores emitter-LOCAL and re-applies the live emitter matrix at draw (a rigid ride);
         // CLEAR bakes the birth into WORLD and never re-applies it, so a moving host lays a trail
         // `speed × lifetime` long. 30.4% of the corpus, 71% of `Item\ObjectComponents`.
@@ -1421,7 +1421,7 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
         );
 
         // The nine emission parameter tracks: the flat ones on one line, the moving ones spelled
-        // out per slot (decision 0844 — a flattened track is exactly how a spread-out effect
+        // out per slot (a flattened track is exactly how a spread-out effect
         // collapses to a point).
         let views = e.params.channel_views();
         let mut flat: Vec<String> = Vec::new();
@@ -1483,7 +1483,7 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
         }
         // 4 decimals, not 3: UI models author their sizes in thousandths, where `{:.3}` turns the
         // autocast shine's 0.0015 mid-key into a printed "0.002" — a 33% error that a transcriber
-        // reads as authored truth (B228). The colour ramp above stays at 3 because 0..1 channels
+        // reads as authored truth. The colour ramp above stays at 3 because 0..1 channels
         // do not have that problem.
         println!(
             "       size    {:.4} -> {:.4} -> {:.4} yd (half-extent)",
@@ -1549,7 +1549,7 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
 }
 
 /// Dump an M2's **camera table**, in raw file-index order — the index space a `<Model>` widget's
-/// `Model:SetCamera(n)` walks (decision 2027; the selection is raw, `cameraLookup` is not
+/// `Model:SetCamera(n)` walks (the selection is raw, `cameraLookup` is not
 /// consulted there, so the table position IS the answer and the record's `type` is not).
 ///
 /// Prints, per record: its `type` word, the eye and look-at target at rest (`base + key 0`, raw

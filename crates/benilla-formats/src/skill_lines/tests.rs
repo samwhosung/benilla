@@ -51,7 +51,7 @@ fn real_skill_line_catalog_resolves_known_spells() {
     );
 }
 
-/// The General collapse on real build-5875 `SkillRaceClassInfo.dbc` (decision 0228), traced on
+/// The General collapse on real build-5875 `SkillRaceClassInfo.dbc`, traced on
 /// concrete spells for a human warrior (race 1, class 1) vs. a human mage (race 1, class 8):
 /// class-native combat lines keep their own tab, racials collapse to General, and a cross-class
 /// spell (a warrior's cheated Fireball) collapses to General while the SAME spell keeps its Fire
@@ -103,7 +103,7 @@ fn real_spell_tab_collapses_general_by_race_and_class() {
     assert_eq!(cat.spell_tab(133, 0, 0), 8);
 }
 
-/// The skill-up message gate on the real build-5875 `SkillRaceClassInfo.dbc` (decision 1309,
+/// The skill-up message gate on the real build-5875 `SkillRaceClassInfo.dbc` (
 /// bugs B19/B245): `flags & 0x402` silences exactly the lines the 1.11/1.12 archives show
 /// silent. Expected flags read straight off the raw file this session (a struct-unpack
 /// dump): the B245 shot's announced-but-shouldn't-be lines for a night-elf hunter, the
@@ -160,14 +160,14 @@ fn real_skill_up_announce_gate_matches_the_archives() {
         "Fist Weapons must be silent"
     );
     // No admitting row (a mage-only line for a warrior): the real watcher's empty resolve takes
-    // the same skip branch as the flag test (`0x5de352` — decision 1314).
+    // the same skip branch as the flag test (`0x5de352`).
     assert!(
         !cat.announces_skill_ups(6, HUMAN, WARRIOR),
         "a row-less line is silent"
     );
 }
 
-/// The `SlaInfo` columns on the real build-5875 `SkillLineAbility.dbc` (0437) — expected
+/// The `SlaInfo` columns on the real build-5875 `SkillLineAbility.dbc` — expected
 /// values read straight off the raw file's rows this session (a struct-unpack dump, module
 /// doc): recipes carry the trivial ranks, the profession openers carry zeros. A column slip
 /// fails loudly. Skips without client data.
@@ -226,7 +226,7 @@ fn real_skill_categories_name_and_order_the_pane_groups() {
     assert_eq!(cat.category(6), Some(("Weapon Skills", 5)));
     assert_eq!(cat.category(10), Some(("Languages", 7)));
     // Category 12 is a real row like any other — NOT a hide bucket: the client's list build
-    // drops `GENERIC (DND)` by its `flags & 0x2`, never by its category (decision 1091).
+    // drops `GENERIC (DND)` by its `flags & 0x2`, never by its category.
     assert_eq!(cat.category(12), Some(("Not Displayed", 8)));
     assert_eq!(cat.category(0), None);
 
@@ -293,7 +293,7 @@ fn real_mono_value_split_class_lines_yes_weapons_no() {
 }
 
 /// `SkillRaceClassInfo.flags & 0x2` on the real build-5875 file — the bit that keeps a line
-/// off the Skills tab entirely (decision 1091; `0x4d2cb0`'s `4d2d9f test dl,0x2`), plus
+/// off the Skills tab entirely (`0x4d2cb0`'s `4d2d9f test dl,0x2`), plus
 /// the `reqLevel` column the untrained gate reads. A night-elf hunter, race 4 / class 3.
 /// Skips without client data.
 #[test]
@@ -333,7 +333,7 @@ fn real_hidden_lines_are_the_ones_the_reference_client_never_lists() {
 }
 
 /// The `forward_spellid` rank graph on the real build-5875 file — the action bar's
-/// rank-normalization source (decision 0883). Skips without client data.
+/// rank-normalization source. Skips without client data.
 #[test]
 fn real_rank_chains_resolve_the_highest_known_rank() {
     let data = crate::wow_data_or_skip!();

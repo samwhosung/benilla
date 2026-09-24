@@ -7,7 +7,7 @@
 //! cargo run -p benilla-formats --example dump_model_anim -- maraudon      # every match
 //! ```
 //!
-//! This is the **falsifier for a flicker report** (decision 0653): if the summary says a model is
+//! This is the **falsifier for a flicker report**: if the summary says a model is
 //! fully static and the screen shows it changing every frame, the change is not coming from the
 //! model, and the hunt moves to what is drawn *over* it (particles, a second doodad) or to the
 //! renderer. Answering that for the Maraudon crystal took one run of this and one of

@@ -30,8 +30,8 @@ pub const SHADOW_MAP_SIZE: u32 = 64;
 
 /// Yards per ADT tile (1/64 of a map edge).
 pub const TILE_SIZE: f32 = 533.333_3;
-/// Yards per MCNK chunk (16×16 chunks per tile) — also the grid the impassable-chunk wall runs on
-/// (decision 1266), which is why it is public.
+/// Yards per MCNK chunk (16×16 chunks per tile) — also the grid the impassable-chunk wall runs on,
+/// which is why it is public.
 pub const CHUNK_SIZE: f32 = TILE_SIZE / 16.0;
 /// Yards between adjacent outer-grid vertices (9×9 grid spans one chunk).
 /// `pub(crate)` so the liquid mesher shares the exact same lattice spacing.
@@ -105,7 +105,7 @@ pub struct ChunkMesh {
     pub index_x: u32,
     pub index_y: u32,
     /// `AreaTable.dbc` id of this chunk (MCNK +0x34) — the zone/subzone under the player's feet;
-    /// drives zone music/ambience/reverb selection (decision 0070).
+    /// drives zone music/ambience/reverb selection.
     pub area_id: u32,
     /// MCNK header flag bit 1 ([`benilla_adt::MCNK_IMPASSABLE`]): this chunk is authored
     /// **impassable** — the ADT-level invisible wall the reference stops a mover at (report B129,
@@ -203,7 +203,7 @@ impl ChunkMesh {
         // The covering cell, then only its four fan triangles — the same corners, centre,
         // order and hole rule the index buffer was built from (`adt_to_tile_mesh`), so the
         // answer is the walk's answer without the walk: a column used to test up to 256
-        // triangles, and the sun-flare march asks ~96 columns a frame (decision 1979).
+        // triangles, and the sun-flare march asks ~96 columns a frame.
         if self.positions.len() == 145 {
             let row = ((south * 8.0) as u32).min(7);
             let col = ((east * 8.0) as u32).min(7);
@@ -257,7 +257,7 @@ pub fn triangle_z_at(tri: &[[f32; 3]; 3], x: f32, y: f32) -> Option<f32> {
 
 /// The `AreaTable` id under a raw WoW-space position, given **one tile's** chunks; `None` when the
 /// position lies outside every chunk (a different tile — same containment contract as
-/// [`mcsh_shadowed_at`]). The zone/subzone driving music/ambience/reverb (decision 0070).
+/// [`mcsh_shadowed_at`]). The zone/subzone driving music/ambience/reverb.
 pub fn area_id_at(chunks: &[ChunkMesh], wow: [f32; 3]) -> Option<u32> {
     chunks.iter().find_map(|c| c.area_at(wow))
 }
@@ -851,8 +851,8 @@ mod tests {
         assert_eq!(c.height_at([quarter_x, far_y - 5.0, 0.0]), None);
     }
 
-    /// The real 5875 map set: which maps have terrain and which are a single global WMO
-    /// (decision 0688). 20 of the 43 shipped WDTs author **zero** ADT tiles — on those maps the
+    /// The real 5875 map set: which maps have terrain and which are a single global WMO.
+    /// 20 of the 43 shipped WDTs author **zero** ADT tiles — on those maps the
     /// global WMO is the entire world, and a client that ignores it renders a void you fall
     /// through. Skips without client data.
     #[test]

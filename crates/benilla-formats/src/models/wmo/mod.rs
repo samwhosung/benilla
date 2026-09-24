@@ -42,7 +42,7 @@ pub fn load_wmo(chain: &mut Chain, raw_path: &str) -> Result<Vec<super::RenderSu
 /// chunk to EOF (never requires exact tiling)", and its worked example is the file this rule exists
 /// for: `Undercity_144.wmo`'s MOGP declares one byte more than the file holds.
 /// Abandoning the walk there cost that group its MOGP entirely — flags, portal-ref span, area, fog,
-/// doodad and light refs — which dead-ended the portal flood at B26's doorway (decision 0972).
+/// doodad and light refs — which dead-ended the portal flood at B26's doorway.
 pub(crate) fn find_wmo_chunk<'a>(bytes: &'a [u8], magic: &[u8; 4]) -> Option<&'a [u8]> {
     let mut off = 0usize;
     while off + 8 <= bytes.len() {

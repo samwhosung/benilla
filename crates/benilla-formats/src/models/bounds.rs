@@ -37,7 +37,7 @@ pub struct M2Bounds {
     ///
     /// A **degenerate** box — `max.x == min.x` *and* `max.y == min.y` — takes
     /// [`DEGENERATE_RING_FOOTPRINT`] instead of the formula, which is the writer's own first branch
-    /// and not a floor of ours (decision 1658).
+    /// and not a floor of ours.
     pub ring_footprint: f32,
     /// Model-space **Z** of attachment id 17 — the reference's follow-camera pivot height
     /// (`0x50ca90`: `feet + (attach17.z + 0.0972)·scale`). `None` for a model with no slot-17
@@ -104,8 +104,7 @@ pub fn load_m2_bounds(chain: &mut Chain, raw_path: &str) -> Result<M2Bounds> {
 /// formula. It never fires for the four life-size units measured, but it does for the whole
 /// trigger-creature family: an `InvisibleStalker` body authors all 135 sequence boxes at zero, so
 /// this **is** its ring — and the Naxxramas weapon mobs, whose visible self is the axe in that
-/// body's hand, are exactly where a player sees it. Ours read 0 and drew a ring the width of a coin
-/// (decision 1658).
+/// body's hand, are exactly where a player sees it. Ours read 0 and drew a ring the width of a coin.
 ///
 /// It is the model-less fallback too: "no box to measure" and "a box that measures zero" are the
 /// same question, and this is the reference's answer to it.

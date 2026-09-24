@@ -132,7 +132,7 @@ pub fn goanimscan(chain: &mut Chain) -> Result<()> {
     }
     let (mut parsed, mut no_seq, mut blind, mut sensitive, mut needs_remap, mut rate0) =
         (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
-    // The transition half (decision 1151): a MOTION substate whose resolved sequence is bit-0-clear
+    // The transition half: a MOTION substate whose resolved sequence is bit-0-clear
     // is one the kernel wraps for ever — so it is bounded only by the object layer's completion
     // advance (`0x5f4120`), and a consumer that arms it by the loop bit instead flaps. And `replay`
     // decides whether that window is one band or several.
@@ -302,7 +302,7 @@ const ANIM_DECAY: u16 = 159;
 ///
 /// It also counts the **file-order divergence**: the reference arms `animationLookup[0]`, so a
 /// consumer that arms the file's *first slot* instead is additionally wrong on any model whose slot
-/// 0 is not its `Stand` (the `DuelingFlag.m2` Spawn/Stand/Despawn shape, decision 0637). The two
+/// 0 is not its `Stand` (the `DuelingFlag.m2` Spawn/Stand/Despawn shape). The two
 /// bugs are independent and the closing line separates them.
 ///
 /// The population instrument for the mechanism, so it is closed corpus-wide rather than spell by
@@ -404,7 +404,7 @@ pub fn fxlifescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 /// Sweep every `.m2` (optionally under a path prefix) and list the models where the **loader-idle
 /// sequence is not file slot 0** while benilla's render content gate declines to arm it — so every
 /// per-sequence bake (`EmitTiming`/`EmitParams`/`AlphaAnim`) degrades to slot 0, a sequence the
-/// instance is not playing (decision 0936, found on the Stormwind battlefield banner).
+/// instance is not playing (found on the Stormwind battlefield banner).
 ///
 /// The reference arms the loader-idle sequence on **every** M2 instance at load (`0x70ebd0`'s
 /// tail), so "which sequence is this playing" always has an answer.
@@ -614,7 +614,7 @@ pub fn seqclockscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 /// a consumer may route the token uniformly.
 ///
 /// Why that column decides everything: `benilla_assets`' render content gate
-/// (`idle_pose_differs` → [`benilla_formats::ModelAnimation::is_rest_pose`], decision 0130) skips
+/// (`idle_pose_differs` → [`benilla_formats::ModelAnimation::is_rest_pose`]) skips
 /// building a rig for a sequence that would render as the static mesh, and the whole point of
 /// that gate is that it is a question **about pixels only**. A placed lamp's Stand band keys no
 /// bone at all — it is pure rest pose — yet it carries the one `$DSL` marker that is its hum. So

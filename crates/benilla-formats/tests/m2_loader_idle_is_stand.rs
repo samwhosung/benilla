@@ -1,5 +1,5 @@
 //! The loader-idle seed is **Stand**, not the file-order-first sequence (the floating duel-flag
-//! bug, 2026-07-25 — decision 0637).
+//! bug, 2026-07-25).
 //!
 //! `DuelingFlag.m2` is the model that separates the two readings. Its sequence table is authored
 //! **Spawn(145) / Stand(0) / Despawn(157)** — file order 0 is the *Spawn*, not the idle — and its
@@ -74,7 +74,7 @@ fn the_duel_flag_idle_resolves_to_stand_and_sits_planted() {
     //    the bind pose (z +8.9..+14.7). This is the mouseover picker's volume for the armed idle
     //    (entity M2 parts carry `NoFrustumCulling` — the view cull is the body ROOT's per-object
     //    election, never a per-part box; the "≈1e7 entity render bounds" reading behind 0648
-    //    misread the node's position cache (`0x670db0`) as bounds — decision 1473).
+    //    misread the node's position cache (`0x670db0`) as bounds).
     //    The bind-pose `Aabb` Bevy would derive sits a whole model-height ABOVE the geometry that
     //    draws — as a cull box it hid the planted flag from every ground-level camera, and as a
     //    pick box it would put the hover target in the sky.

@@ -5,7 +5,7 @@
 //! candidate files and one of them is a TGA. Inside the MPQs that arm is a near-no-op — 1.12 ships
 //! its UI art as BLP — but **addon folders are where TGAs actually live**: BLP tooling was rare in
 //! 2006 and the ecosystem shipped loose `.tga` art constantly, so the loose-file resolve
-//! (decision 1322) is what finally makes this decoder load-bearing.
+//! is what finally makes this decoder load-bearing.
 //!
 //! **The reference's own dispatch is the spec, and ours used to be its mirror image.** `0x5a3a30`
 //! forks on `imageType` as `{1/9 → 0x5a39d0 (colour-mapped, raw or RLE, expanded through the
@@ -20,7 +20,7 @@
 //! `FonzSummon/img/icon_disable.tga` (type 1, shipped but unreferenced). Each drew **nothing**,
 //! with a `warn!` on a terminal, and `SetTexture` still answered `1` because the resolvability
 //! probe tests existence rather than decode — so the failure was invisible from Lua as well as on
-//! screen (decision 2128).
+//! screen.
 //!
 //! Types 3/11 (grayscale, raw/RLE) stay supported although the reference refuses them: no corpus
 //! or client file is one, so this is a superset a decoder cannot be feature-detected on, and
@@ -232,7 +232,7 @@ mod tests {
     }
 
     /// **Colour-mapped TGAs decode** — types 1 and 9, the two the reference's dispatch sends to
-    /// `0x5a39d0` and this decoder used to refuse outright (decision 2128).
+    /// `0x5a39d0` and this decoder used to refuse outright.
     ///
     /// The shape is the corpus's own: 8-bit indices into a 24-bit palette, which is what all three
     /// of `FonzAppraiser/img/icon_disable.tga`, `FuBar_WeaponRebuffFu/icon.tga` and

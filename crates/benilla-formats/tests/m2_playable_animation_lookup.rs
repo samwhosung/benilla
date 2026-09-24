@@ -1,4 +1,4 @@
-//! Pins the M2 **PlayableAnimationLookup** table parse (decision 0082 — missing-animation-clip
+//! Pins the M2 **PlayableAnimationLookup** table parse (missing-animation-clip
 //! resolution) against a real build-5875 model. `nPlayableAnimationLookup` is a fixed 203 across
 //! the entire retail 1.12.1 M2 corpus, measured; row 6 is HumanMale's decisive example
 //! (`playableAnimationLookup[6] = 0x00030001`). Skips when the gitignored

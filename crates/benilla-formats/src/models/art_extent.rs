@@ -1,13 +1,13 @@
 //! The **art extent** of a glue scene — how far its art actually paints around its authored
-//! camera, measured off the geometry and the textures (decision 1619).
+//! camera, measured off the geometry and the textures.
 //!
 //! Every `UI_<Race>` / `UI_MainMenu` diorama was composed for a 4:3 screen (1587: the Lua design
 //! space is `1024×768`), and its backdrop is *finite*: a sky card of some authored width, a ground
 //! plane that stops. A camera law that widens the view on a wide window (1587's hor+) keeps showing
 //! more of the diorama until the art runs out — and past that edge the frame is the render target's
-//! clear colour, which no taste calls a composition (B330: `UI_MainMenu`'s backdrop edges show at
+//! clear colour, which no taste calls a composition (`UI_MainMenu`'s backdrop edges show at
 //! 16:9, `UI_Tauren`'s at ~2.24:1). The reference never shows that void only because it never
-//! widens; it zooms instead (0116/1543's diagonal-FOV law) and crops the character at 21:9 (B242).
+//! widens; it zooms instead (0116/1543's diagonal-FOV law) and crops the character at 21:9.
 //!
 //! So the framing law needs one more authored fact per scene: **how wide is the art**. This module
 //! measures it. In camera 0's own tan-space — `x' = x/z`, `y' = y/z` in a right-handed eye frame,

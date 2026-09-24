@@ -522,7 +522,7 @@ mod tests {
     }
 
     /// **The dead-slot-0 shape** — `BlastedLandsLightningbolt01.m2`'s emitter 2, synthesized
-    /// (decision 0760, bug B63). Two sequences, both anim id 0: a variation chain. Slot 0 keys a
+    /// (bug B63). Two sequences, both anim id 0: a variation chain. Slot 0 keys a
     /// single 0 — a flat silence for its whole band — while the strike itself, `0 → 30 → 0`, is
     /// keyed only in slot 1, which the arm's frequency-weighted roll reaches ~5 % of the time.
     ///

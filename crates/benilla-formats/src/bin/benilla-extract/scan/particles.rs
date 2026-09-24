@@ -18,7 +18,7 @@ use crate::model_key;
 ///
 /// A `GATED` line names the sequences a trail is dark in; `MID-SEQ` marks the models whose gate
 /// flips *inside* a band rather than only at its start, which a band-start-only reader cannot
-/// express (decision 1011 — `G_FrostTrap`'s streamers light 200 ms into the trigger and nowhere
+/// express (`G_FrostTrap`'s streamers light 200 ms into the trigger and nowhere
 /// else, so a band-start read says "never" and an ungated consumer says "always").
 pub fn ribbonscan(chain: &mut Chain) -> Result<()> {
     let names = super::m2_names(chain, None)?;
@@ -289,7 +289,7 @@ pub fn partcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                     }
                 }
             }
-            // ANIMATED parameter channels (decision 0844): the population the value[0] flatten
+            // ANIMATED parameter channels: the population the value[0] flatten
             // silently mis-rendered — Frost Nova's emission radius riding its ring out, Arcane
             // Explosion's riding its dome. Tallied per channel so the census names WHICH knob
             // actually moves in the corpus.
@@ -578,7 +578,7 @@ pub fn cellscan(chain: &mut Chain) -> Result<()> {
 
 /// Sweep every `.m2` (optionally under a path prefix) and list the emitters whose **file slot 0 is
 /// dead while another slot is alive** — the shape that makes a pinned-slot-0 consumer silently
-/// render nothing (decision 0760, found on `BlastedLandsLightningbolt01.m2`, B63).
+/// render nothing (found on `BlastedLandsLightningbolt01.m2`).
 ///
 /// The reference samples the **playing** sequence's rate window every frame (`0x71850d`); a
 /// consumer that pins slot 0 instead is only correct while

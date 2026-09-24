@@ -20,7 +20,7 @@
 //! them apart on a human (2.01 vs 2.21) — which is exactly how the wrong one shipped. On a chicken
 //! they are not close at all (0.44 vs 0.81): Blizzard floats the *name* anchor well clear of a small
 //! model's head, while the bubble hugs the model. That spread is why the pair is pinned per model
-//! rather than as a single fudge factor. Decision 1406.
+//! rather than as a single fudge factor.
 //!
 //! Skips when the gitignored client data isn't present.
 

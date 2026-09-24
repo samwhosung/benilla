@@ -8,7 +8,7 @@
 //! portal-ref span, area id, fog, doodad and light refs — and since the portal flood reaches a
 //! neighbour only through a group's ref span, the group became a **dead end**: g144 is the short
 //! corridor joining g95 and g152, so the rooms past it culled from either side and you saw sky
-//! through the doorway (B26, decision 0972).
+//! through the doorway.
 //!
 //! Two oracles, because the bug had two halves. The corpus sweep is the one that generalises: it is
 //! the same shape as the reference's own "0 rejected" oracle, and it fails for a *new* file as well

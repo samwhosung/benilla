@@ -18,10 +18,10 @@
 //!   ([`SoundEntries`] id — Fireball's `FireMissileLoop`, the thrown dagger's `WeaponLoop`; the
 //!   client's per-missile loop handle `CMissile+0x44`). Field 6 (`hasMissile`)
 //!   is never read by the missile spawn (its gate is `Spell.dbc` Speed alone) — its ONE reader
-//!   is the GO dest one-shot's suppressor ([`VisualStages::missile_gate`], 0797); field 8
+//!   is the GO dest one-shot's suppressor ([`VisualStages::missile_gate`]); field 8
 //!   (`missilePathType`) is dead-by-absence; **fields 11/12/13 are the dest-anchored block**
 //!   ([`VisualStages::area_gate`]/[`VisualStages::area_effect`]/[`VisualStages::area_kit`] —
-//!   `0x5d57c0`/`0x5d55c0`, 0797). Stage
+//!   `0x5d57c0`/`0x5d55c0`). Stage
 //!   semantics (decision 0107 verdict 2): the stage sets *lifetime policy* only —
 //!   every populated slot on a reached row fires, precast persisting (reaped spell-id-keyed)
 //!   while cast/impact self-terminate.
@@ -33,7 +33,7 @@
 //!   immediate in the client's slot loop (`0x60edf0`, its push sites) and a **direct M2
 //!   `AttachmentID`**: in kit-field order,
 //!   [`KIT_SLOT_TAGS`]. **Field 12 (`kit+0x30`) is a TENTH effect slot** — read here as
-//!   [`VisualKit::world_effect`] (decision 0848): its consumer reads as "the missile
+//!   [`VisualKit::world_effect`]: its consumer reads as "the missile
 //!   slot" (`0x60edf0` plays it inline via `0x61fcf0`, a `CEffect`-family node stamped with a
 //!   missile marker), but the shipped table's population is
 //!   **body/ground state models**, never projectiles: the aura-state family the nine slots miss
@@ -64,7 +64,7 @@
 //!   *scale* comes from kit CharProc params × the quality tier, never from this table).
 //! - **SpellChainEffects**: 18 records × 8 fields × 32 B — the **beam/arc** geometry a kit's chain
 //!   `CharProc` draws (Chain Lightning's lightning, Drain Life's rope, C'Thun's eye beam). Its own
-//!   module: [`chain_effects`], decision 0955.
+//!   module: [`chain_effects`].
 //!
 //! **The none-sentinel, found empirically here (not pinned by the reference):** on the real
 //! table, "no value" for both field 2 (anim) and field 13 (sound) is written as **either `0` or
@@ -113,7 +113,7 @@ pub const KIT_SLOT_TAGS: [u16; 9] = [0x14, 0x22, 0x13, 0x15, 0x16, 0x11, 0x17, 0
 /// `node+0x24` stays the ctor's −1), which in the placement walk `0x620be0` skips the entire
 /// bone pipeline and instead triggers a **one-time world plant** (`0x620c86`): transform =
 /// `translate(owner position) × yaw(owner facing) × scale(owner scale)`, baked at spawn — the
-/// model does NOT ride a bone and does not turn with the unit afterwards (decision 0848).
+/// model does NOT ride a bone and does not turn with the unit afterwards.
 /// Consumers key on this tag to plant in world space rather than attach.
 pub const WORLD_EFFECT_TAG: u16 = u16::MAX;
 
@@ -209,7 +209,7 @@ impl CharProc {
 /// `bits(param + 512.0f) >> 14 & 0xff`. Adding 512 forces the exponent, parking the integer part
 /// in known mantissa bits; the shift and mask lift it back out. Used at `0x5d55c0` (the
 /// dynobject shard index) and identically by the chain proc for all three of its integer params
-/// (`0x60db19`–`0x60db6d`, decision 0955).
+/// (`0x60db19`–`0x60db6d`).
 ///
 /// The client applies **no bounds check** of its own — `mov cl,al` takes the byte and indexes with
 /// it — so callers clamp or bounds-test as the consumer requires.
@@ -301,7 +301,7 @@ pub mod char_proc_type {
     /// Life's rope, Mind Flay's mana beam, Health Funnel, C'Thun's eye beam. Both this and
     /// [`CHAIN_CAST`] land on the same dispatcher case (`0x60da79`); the name records the data's
     /// convention, and behaviour keys off [`ChainProc::flag`](crate::ChainProc::flag). See the
-    /// `chain_effects` module docs for the whole mechanism (decision 0955).
+    /// `chain_effects` module docs for the whole mechanism.
     pub const CHAIN_CHANNEL: i32 = 0;
     /// **Chain / beam visual**, the key the shipped table uses on **cast**-stage kits — Chain
     /// Lightning, Chain Heal, Chain Burn, Shrink Ray, the elemental Weakness debuffs. See
@@ -341,7 +341,7 @@ pub struct VisualStages {
     pub missile_sound: Option<u32>,
     /// Field 14: the `SoundEntries.dbc` id the `$TRD` anim event rings at the work/craft strike
     /// keyframe — the client's `$TRD` handler `0x62faa0` resolves the in-flight spell's visual to
-    /// this 16-dword row and plays its dword 14 (`[row+0x38]`; decision 0562). Mining's visual 93
+    /// this 16-dword row and plays its dword 14 (`[row+0x38]`). Mining's visual 93
     /// carries 1143 "Mining Impact" (the pick clang), Herb's 91 carries 1142, the smithing
     /// crafts' 395 carries 1143 (the hammer). `None` = no strike sound.
     pub strike_sound: Option<u32>,
@@ -427,7 +427,7 @@ pub struct VisualKit {
     /// order — slot `i` attaches at [`KIT_SLOT_TAGS`]`[i]`. Both none-sentinels fold to `None`
     /// like [`Self::anim_id`]. Iterate populated slots via [`Self::effects`].
     pub effect_slots: [Option<u32>; 9],
-    /// Kit field 12 (`kit+0x30`) — the **tenth effect slot** (module docs; decision 0848). The
+    /// Kit field 12 (`kit+0x30`) — the **tenth effect slot** (module docs). The
     /// client plays it inline in `PlaySpellVisualKit` via `0x61fcf0`, same `CEffect` lifecycle as
     /// the nine bone-attach slots. On the shipped table it carries the kit's body/ground **state
     /// model** — the frozen ice, the net, the roots, the Thunderclap ring — never a projectile
@@ -443,10 +443,10 @@ pub struct VisualKit {
     /// An unfilled slot is `None` — see [`char_proc_slot`] for the sentinel law; iterate the filled
     /// ones via [`Self::char_procs`]. **Two consumers, two halves of the same table:** the *body*
     /// procs an aura's state kit installs (type 14 translucency / type 1 tint — `benilla`'s
-    /// `aura_visual`, decision 0806), and the **dynobj emitter chain**, which scans for the FIRST
+    /// `aura_visual`), and the **dynobj emitter chain**, which scans for the FIRST
     /// type **9** slot — there `params[0]` encodes the shard-model table index (the exact small-int
     /// decode `bits(params[0] + 512.0) >> 14 & 0xff`, `0x5d55c0`) and `params[1]` is the emit rate
-    /// the graphics-quality factor multiplies (`0x6eb930`, decision 0797).
+    /// the graphics-quality factor multiplies (`0x6eb930`).
     pub char_proc_slots: [Option<CharProc>; KIT_CHAR_PROCS],
 }
 
@@ -473,7 +473,7 @@ impl VisualKit {
 
     /// This kit's chain/beam proc — the **first** slot that decodes to one, matching the client's
     /// dispatcher walk (it runs every slot in order; no shipped kit carries two). `None` when the
-    /// kit draws no beam. See [`chain_effects`] for the mechanism (decision 0955).
+    /// kit draws no beam. See [`chain_effects`] for the mechanism.
     pub fn chain_proc(&self) -> Option<ChainProc> {
         self.char_procs().find_map(|p| p.as_chain())
     }
@@ -481,7 +481,7 @@ impl VisualKit {
     /// The populated emitter slots as `(M2 attachment id, SpellVisualEffectName id)` pairs, in
     /// kit-field order — the client fires **all** populated slots at **every** stage (stage sets
     /// lifetime policy only, `0x60edf0`) — then [`Self::world_effect`]
-    /// last, under the [`WORLD_EFFECT_TAG`] world-plant sentinel (decisions 0848/0850).
+    /// last, under the [`WORLD_EFFECT_TAG`] world-plant sentinel.
     pub fn effects(&self) -> impl Iterator<Item = (u16, u32)> + '_ {
         self.effect_slots
             .iter()
@@ -506,9 +506,9 @@ pub struct SpellVisualCatalog {
     /// today: "HARDCODED Loot Art"
     /// (id 14 → `Particles\LootFX.mdl`, the corpse sparkle), "HARDCODED Unit Level Up"
     /// (id 21 → `Spells\LevelUp\LevelUp.mdl`, the ding) and "HARDCODED Mount Poof"
-    /// (id 1185 → `Spells\DruidMorph_Impact_Base.mdx`, the mount-up cloud — decision 0927).
+    /// (id 1185 → `Spells\DruidMorph_Impact_Base.mdx`, the mount-up cloud).
     hardcoded: HashMap<String, (u32, String)>,
-    /// `SpellChainEffects` id → the beam's geometry/animation row ([`chain_effects`], decision 0955).
+    /// `SpellChainEffects` id → the beam's geometry/animation row ([`chain_effects`]).
     /// Reached only through a kit's [`VisualKit::chain_proc`].
     chain_effects: HashMap<u32, ChainEffect>,
 }
@@ -549,7 +549,7 @@ impl SpellVisualCatalog {
     /// engine-spawned effects (the loot sparkle, the level-up ding, the mount poof). The live
     /// path is the boot name-resolve inside [`load_spell_visual_catalog`], which is what
     /// `0x61f5b0` does. The **id** is carried because it is half the reference's same-slot
-    /// replace key (`0x6208e0`; decision 2057) — an engine-spawned effect dedups exactly like a
+    /// replace key (`0x6208e0`) — an engine-spawned effect dedups exactly like a
     /// kit slot's.
     #[must_use]
     pub fn with_hardcoded(mut self, name: &str, id: u32, path: &str) -> Self {
@@ -610,7 +610,7 @@ impl SpellVisualCatalog {
     /// name string ([`SpellVisualCatalog::hardcoded`]). Mirrors the client's boot name-resolve
     /// (`0x61f5b0`, stricmp-family — hence the case-insensitive compare over the tiny set);
     /// `None` when the shipped table names no such row. The id rides along because every consumer
-    /// hands it to the same-slot replace (`0x6208e0`, decision 2057).
+    /// hands it to the same-slot replace (`0x6208e0`).
     pub fn hardcoded_effect(&self, name: &str) -> Option<(u32, &str)> {
         self.hardcoded
             .iter()

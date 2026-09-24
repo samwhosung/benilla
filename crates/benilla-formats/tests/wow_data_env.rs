@@ -1,6 +1,6 @@
 //! `$WOW_DATA` still wins — the one env read in [`benilla_formats::wow_data`], covered.
 //!
-//! **Why this is an integration test and not a unit test** (decision 1175): setting `$WOW_DATA` is
+//! **Why this is an integration test and not a unit test**: setting `$WOW_DATA` is
 //! process-global, and since the sweep every test in the workspace resolves its install through
 //! that one read. A unit test that mutates it poisons whatever else is running in the same test
 //! binary, and the victim moves around with the thread scheduling — which is exactly what happened

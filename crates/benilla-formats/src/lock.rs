@@ -1,4 +1,4 @@
-//! Lock.dbc — the requirements a lockable GameObject (or item) carries (decision 0239). A
+//! Lock.dbc — the requirements a lockable GameObject (or item) carries. A
 //! GameObject's template `lockId` (a type-specific slot of its query `data[]`) indexes this table;
 //! each lock has up to 8 requirement **slots**. Interacting with a locked object casts a *known*
 //! spell whose `SPELL_EFFECT_OPEN_LOCK` `EffectMiscValue` matches a **skill** slot's `LockType`
@@ -10,7 +10,7 @@
 //! `[lockRec+0x24]` = `Index[0]` = column 9 at `0x5f84af`): **33 fields** — `ID@0`,
 //! `Type[8]@1..8`, `Index[8]@9..16`, `Skill[8]@17..24`, `Action[8]@25..32`.
 //!
-//! **`Action` is a gate, not a label** (decision 0752). Before the client's lock resolver
+//! **`Action` is a gate, not a label**. Before the client's lock resolver
 //! (`0x5f83d0`) will even *consider* a slot, it asks `0x5f81d0(gameObject, Action[i])` — a
 //! predicate over the GameObject's own **state** and its `GO_FLAG_LOCKED` wire bit. See
 //! [`LockSlot::available`]. Skipping it is why "any locked door opens on right-click": nearly every
@@ -63,7 +63,7 @@ pub const GO_STATE_ACTIVE_ALTERNATIVE: u32 = 2;
 
 impl LockSlot {
     /// Whether this slot applies to a GameObject right now — the client's per-slot gate
-    /// **`0x5f81d0(this = GO, Action[i])`**, byte-transcribed (decision 0752). Both legs of the
+    /// **`0x5f81d0(this = GO, Action[i])`**, byte-transcribed. Both legs of the
     /// lock resolver `0x5f83d0` call it (`0x5f8450` for a SKILL slot, `0x5f8547` for a KEY slot)
     /// and **skip the slot** when it answers false, so a gated-out slot can neither satisfy the
     /// lock nor be opened.
@@ -261,7 +261,7 @@ mod tests {
     }
 
     /// The `Action` column on the real 5875 `Lock.dbc`, on the two rows the "any locked door opens"
-    /// report turns on (decision 0752). A column slip here re-opens the bug silently, so both rows
+    /// report turns on. A column slip here re-opens the bug silently, so both rows
     /// are pinned by value. Skips without client data.
     #[test]
     fn real_lock_catalog_reads_the_action_column() {

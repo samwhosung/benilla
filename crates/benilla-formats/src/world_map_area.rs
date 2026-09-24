@@ -59,7 +59,7 @@ impl WorldMapAreaCatalog {
     }
 
     /// The continent-wide row (`area_id == 0`) for `map_id` — the "world" projection basis
-    /// (decision 0203, `map_proj`'s continent mode). Exactly one such row per continent in 5875
+    /// (`map_proj`'s continent mode). Exactly one such row per continent in 5875
     /// (Azeroth id 14, Kalimdor id 13).
     pub fn continent(&self, map_id: u32) -> Option<(u32, &WorldMapArea)> {
         self.by_id

@@ -62,8 +62,8 @@ const MLIQ_UV_PERIOD: f32 = MLIQ_CELL_STEP;
 ///
 /// This replaces a hard `1.0` — the deep, fully-opaque endpoint, pinned for every WMO pool in the
 /// game because we believed those bytes were flow data. That pin is why Blackfathom's Pool of
-/// Ask'ar rendered as a sheet you cannot see through where the real client shows 9–15 yd of bottom
-/// (B136), and it was documented as "tunable; the exact shore LUT is deferred".
+/// Ask'ar rendered as a sheet you cannot see through where the real client shows 9–15 yd of bottom,
+/// and it was documented as "tunable; the exact shore LUT is deferred".
 fn wmo_water_alpha_v(opacity_byte: u8) -> f32 {
     f32::from(opacity_byte) / 255.0
 }
@@ -612,12 +612,12 @@ pub fn wmo_group_raw_colors(group_bytes: &[u8]) -> Option<Vec<[u8; 4]>> {
 
 /// The group's MOCV as a buffer **parallel to its positions**, or `None` if it has no usable bake.
 ///
-/// The length test cannot be plain equality. A WMO's last chunk is allowed to run past EOF and clamp
-/// (decision 0972), and when the clamped chunk is MOCV the buffer comes back a whole *record* short:
+/// The length test cannot be plain equality. A WMO's last chunk is allowed to run past EOF and clamp,
+/// and when the clamped chunk is MOCV the buffer comes back a whole *record* short:
 /// `Undercity_144.wmo` holds 1159 of its declared 1160 colour bytes, so `chunks_exact(4)` yields 289
 /// colours for 290 vertices. Demanding equality threw away **289 good colours over one missing byte**
 /// and fell the whole group back to untinted white — a corridor lit `tex × 1.0` inside a city whose
-/// every other interior surface is multiplied by a dark bake (decision 0977).
+/// every other interior surface is multiplied by a dark bake.
 ///
 /// So a shortfall inside one record's worth is padded from the last complete colour; anything larger
 /// is a genuinely broken bake and still reads `None`, because padding hundreds of vertices from one
@@ -733,7 +733,7 @@ pub fn wmo_group_submeshes(group_bytes: &[u8], root: &WmoRoot) -> Result<Vec<Ren
                 Some(1) => ModelBlend::AlphaTest,
                 // MOMT.blendMode is a DIRECT EGxBlend index (no M2-style remap —
                 // `0x6b500f`): 4 = Mod (DST_COLOR/ZERO), 5 = Mod2x
-                // (DST_COLOR/SRC_COLOR). Decision 0528.
+                // (DST_COLOR/SRC_COLOR).
                 Some(4) => ModelBlend::Mod,
                 Some(5) => ModelBlend::Mod2x,
                 Some(_) => ModelBlend::Blend,
@@ -759,7 +759,7 @@ pub fn wmo_group_submeshes(group_bytes: &[u8], root: &WmoRoot) -> Result<Vec<Ren
             // cloth as the SAME faces twice with reversed winding (one copy per side — B38's tent
             // awning, `wmo_doubled`), each meant to be culled from its wrong side. Drawing them
             // two-sided rasterises both copies into an ulp-level depth tie, and the per-pixel
-            // winner is floating-point noise — the B38 flicker/latch (decision 0680).
+            // winner is floating-point noise — the B38 flicker/latch.
             // WMO has no skeleton, so the per-vertex skin (`_globals`) is unused.
             let (mut submesh, _globals) = remap_submesh(
                 global_indices.into_iter(),

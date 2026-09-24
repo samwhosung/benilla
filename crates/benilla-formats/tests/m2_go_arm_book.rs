@@ -61,7 +61,7 @@ fn the_book_idle_resolves_to_closed_not_the_close_motion() {
     //    pure x-axis quaternion: x ≈ 0 is the shut book, x ≈ 0.69 (≈ 87°) the open one.
     //
     //    Closed's band (533..633 ms) has NO keys of its own — the authored keys sit at 500 and 667,
-    //    both identity — so the window rule (decision 0643) resolves it to a single constant key.
+    //    both identity — so the window rule resolves it to a single constant key.
     //    One key here is the *correct* answer, not a missing one: the band genuinely doesn't move.
     let root_rot = |id: u16| -> Vec<[f32; 4]> {
         anims

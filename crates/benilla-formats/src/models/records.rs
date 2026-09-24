@@ -1,6 +1,6 @@
 //! Raw **authored-record reads** straight off the model bytes — the cosmetic MD20 arrays
 //! `benilla-m2` deliberately skips (it parses only the render path) plus the WMO root's MOLT
-//! lights: M2 dynamic lights (decision 0016), the WMO fixture lights, and the model's authored
+//! lights: M2 dynamic lights, the WMO fixture lights, and the model's authored
 //! **portrait camera** (the unit-frame bake's framing source). Each is a small header-offset walk
 //! over the vanilla record shape the reference reads; all positions stay raw WoW model
 //! space (the render boundary bakes to Bevy space).
@@ -11,8 +11,8 @@ use benilla_bytes::ByteExt;
 /// on a placed prop
 /// (campfire/torch/brazier/candle/forge) is committed by the real client as a hardware `GL_LIGHT` with
 /// the fixed attenuation `1 / (0.7·d + 0.03·d²)` — constant term 0, so intensity peaks hard at the
-/// source: the tight interior "hot-spot" (decision 0016). It lights every lit surface — terrain, M2
-/// doodads/NPCs, and WMO walls/floors (decision 0273; the committed light is diffuse-only, its ambient
+/// source: the tight interior "hot-spot". It lights every lit surface — terrain, M2
+/// doodads/NPCs, and WMO walls/floors (the committed light is diffuse-only, its ambient
 /// and specular are zero *on world props* — the glue background scenes DO author their ambient
 /// through one dedicated ambient-only light, so both track pairs are parsed). `position` is model
 /// space (WoW axes), relative to `bone` (`-1` = model origin); the spawn site applies the prop
@@ -65,7 +65,7 @@ impl M2Light {
 /// doodad gets a companion MOLT at its flames (NSabbey: one per candelabra, ~3.4 yd above the MODD
 /// origin). At runtime 1.12 commits them into the scene dynamic-light DB every frame for every visible
 /// WMO (`0x695c00` → `0x71b650`), lighting terrain, doodads/NPCs, and the building's own surfaces
-/// over their baked MOCV (decision 0273 — confirmed live in the reference GL trace: an NSabbey batch
+/// over their baked MOCV (confirmed live in the reference GL trace: an NSabbey batch
 /// drew under `colour × intensity` point lights at the fixed 0/0.7/0.03 falloff). `position` is WMO
 /// model space (WoW axes). SMOLight stride 0x30.
 #[derive(Debug, Clone, Copy)]
@@ -223,8 +223,7 @@ fn read_m2_light(bytes: &[u8], rec: usize) -> Option<M2Light> {
 
 /// Parse the M2 **lights** array straight from the raw bytes (MD20 `count@0x11c`, `ofs@0x120`, record
 /// stride `0xd4`, see [`read_m2_light`]). `benilla-m2` deliberately parses only the render path and
-/// skips the cosmetic chunks (lights/particles/tex-anims), so we read the vanilla light record here
-/// (decision 0016).
+/// skips the cosmetic chunks (lights/particles/tex-anims), so we read the vanilla light record here.
 pub fn parse_m2_lights(bytes: &[u8]) -> Vec<M2Light> {
     let (Some(count), Some(ofs)) = (bytes.u32_at(0x11c), bytes.u32_at(0x120)) else {
         return Vec::new();
@@ -337,7 +336,7 @@ fn read_wmo_light(b: &[u8], r: usize) -> Option<WmoLight> {
 /// chunk — `MOVV(0)`/`MOVB(0)` sit right before MOLT in vanilla roots (a bug there once hid MOLT
 /// entirely). `root_bytes` is the raw WMO **root** file.
 ///
-/// Hand-rolled rather than `benilla_bytes::chunks()` (decision 0064): the two disagree on what a
+/// Hand-rolled rather than `benilla_bytes::chunks()`: the two disagree on what a
 /// record's bound is once a chunk's declared `size` is trusted past this walk. `chunks()` clamps a
 /// chunk's *payload slice* to the buffer end and the record loop would then be bounds-checked against
 /// that clamped slice; this scan instead advances `o` by the *unclamped* `data + size` (so a corrupt

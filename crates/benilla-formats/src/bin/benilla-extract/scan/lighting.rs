@@ -25,7 +25,7 @@ use crate::model_key;
 ///
 /// The colour field is zero on ~3% of shipped MODDs — the baker leaves it unbaked for props it
 /// treats as exterior — so what decides the symptom is the **class of the groups that reference the
-/// prop**, and EXTERIOR WINS (decision 0969: the reference's def is per (MODD, placement) and
+/// prop**, and EXTERIOR WINS (the reference's def is per (MODD, placement) and
 /// `0x695aa0` makes the exterior bit absorbing). A prop any exterior group's MODR names is therefore
 /// sky-lit and never listed here; the `RESCUED` tally counts them, because taking the *first*
 /// referrer instead is exactly what drew Booty Bay's entrance arch as a black silhouette.
@@ -81,7 +81,7 @@ pub fn darkpropscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 continue; // ORPHAN: no group names it — the exterior default
             };
             let owner = referrers[0];
-            // EXTERIOR WINS over every interior referrer (decision 0969) — the MODD-colour lane is
+            // EXTERIOR WINS over every interior referrer — the MODD-colour lane is
             // for props referenced by interior groups ONLY.
             if !referrers
                 .iter()
@@ -183,7 +183,7 @@ struct FamilyStats {
 }
 
 /// Sweep every `.m2` (optionally under a path prefix) and report which models author M2 dynamic
-/// LIGHT blocks — the population instrument for the mechanism (decision 0016, `0x718960`). Per
+/// LIGHT blocks — the population instrument for the mechanism (`0x718960`). Per
 /// model (only models with ≥1 light, printed
 /// sorted by path): its `type==1` point-light count vs directional (`type==0`, ambient-feed, not
 /// a discrete GL light) count, then per POINT light: bone, model-space position, `diffuse_color ×

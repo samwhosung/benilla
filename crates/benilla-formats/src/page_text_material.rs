@@ -1,4 +1,4 @@
-//! `PageTextMaterial.dbc` — the book-frame material lookup (decision 1105).
+//! `PageTextMaterial.dbc` — the book-frame material lookup.
 //!
 //! A readable carries a material *id* (a book item template's `PageMaterial`, a
 //! `GAMEOBJECT_TYPE_TEXT` object's template `data[2]`); the reference resolves it to a **basename**

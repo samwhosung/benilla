@@ -228,7 +228,7 @@ mod tests {
         assert!(turned.contains([0.0, 4.0, 0.0]));
     }
 
-    /// The real 5875 table: the Darnassus portal pair the reports name (B70), a box row and a
+    /// The real 5875 table: the Darnassus portal pair the reports name, a box row and a
     /// sphere row both present, and the per-map bucketing. Skips without client data.
     #[test]
     fn real_area_triggers_load_and_contain_their_own_centres() {
@@ -237,7 +237,7 @@ mod tests {
         let cat = load_area_trigger_catalog(&mut chain).expect("load AreaTrigger");
         assert_eq!(cat.len(), 432, "5875 ships 432 area triggers");
 
-        // The two the Darnassus report rides on (B70), both on Kalimdor, both 10-yd spheres. They
+        // The two the Darnassus report rides on, both on Kalimdor, both 10-yd spheres. They
         // pin the coordinate columns from *outside* the client: vmangos's `areatrigger_teleport`
         // sends 527 ("Darnassus - Exit") to (8785.79, 966.98, 30.20) — which is trigger **542**'s
         // own position here, and vice versa. Two independent sources, agreeing to a couple of yards,

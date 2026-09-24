@@ -1,4 +1,4 @@
-//! TEMP (B141): what fraction of a captured minimap disc is the composite's black clear.
+//! TEMP: what fraction of a captured minimap disc is the composite's black clear.
 //! `cargo run -p benilla-formats --example png_disc -- <png> [cx cy r]` — defaults to the whole
 //! image's inscribed circle, which is what the `WOW_MM_PROBE` crop is.
 fn main() -> anyhow::Result<()> {

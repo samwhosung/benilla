@@ -143,7 +143,7 @@ impl Submersion {
     }
 
     /// The **ocean depth ramp** — the one thing ocean does that water does not (the ramp at
-    /// `0x6d2823`, behind the ocean gate `0x6d2821`; decision 1829).
+    /// `0x6d2823`, behind the ocean gate `0x6d2821`).
     ///
     /// Returns `(fac1, fac2)`, the multipliers on the committed light record's first and second
     /// colour triples — `DNState+0x178 × fac1` and `DNState+0x174 × fac2`. `fac1` runs `1.0 → 0.5`
@@ -674,7 +674,7 @@ impl LightCatalog {
     /// Rows print **nearest first** but the blend applies them **farthest first** (see
     /// [`Self::sample_blended`]) — the last row listed is the first one merged, and the top row wins.
     /// The closing `water` lines are the river/lake and ocean swatch endpoints: a discontinuity there
-    /// across two nearby positions is the Tirisfal→Silverpine class of bug (decision 1104), and it is
+    /// across two nearby positions is the Tirisfal→Silverpine class of bug, and it is
     /// invisible in the ambient/sun columns because the water rows are their own bands.
     pub fn debug_blend(&self, map: u32, pos: [f32; 3], time: u32) {
         let mut rows: Vec<(f32, f32, &Light)> = self
@@ -889,13 +889,13 @@ impl LightCatalog {
         // this record takes the reference's zero-key constant instead.
         let d = Atmosphere::DEFAULT;
         // Fog distances carry the ×36 storage scale (yards = raw/36): Elwynn clear 18000→500 yd,
-        // storm 10000→278 yd (decision 0327): the client scales ONCE at DBC load —
+        // storm 10000→278 yd: the client scales ONCE at DBC load —
         // `0x53f504 → 0x6d6160 → 0x6d6100` runs the band scaler `0x6d6090` (×1/36 @0x7ff9d0) over
         // each float-band record with `rowIndex % 6 == 0`, i.e.
         // ONLY the sub-0 fog-END band; the sub-1 start FRACTION is never scaled. We apply the same
         // /36 at sample time (a time-interp of scaled values ≡ the scale of the interp).
         // A row with no keyframes commits the reference's own constant, never an invented one
-        // (`ZERO_KEY_SCALAR`/`ZERO_KEY_COLOR`, decision 1465). The `.filter(|v| v > 1.0)` that used
+        // (`ZERO_KEY_SCALAR`/`ZERO_KEY_COLOR`). The `.filter(|v| v > 1.0)` that used
         // to sit here substituted `d.fog_end` for an authored ZERO as well as for a keyless row —
         // it is gone, and no shipped row lands in the (0, 1] yd window it also covered (checked
         // across all 426 params: the only sub-1 values are the exact 0.0 that params 9 and 93
@@ -932,7 +932,7 @@ impl LightCatalog {
             // `(0,0,0)`, not one is pale — black is that lane's modal authored value), only 3-10 of
             // ~300 keyed water rows are black: a keyless water row answering black is out of family
             // for the authored data. Both halves are byte-verified — the slot is black (1465) and
-            // the swatch builder reads the slot (0686) — so this is what the reference computes;
+            // the swatch builder reads the slot — so this is what the reference computes;
             // what it LOOKS like in one of those 53 zones is the director's to judge, and this note
             // is the pointer back if it reads wrong.
             water_river: [col(IB_RIVER_SHALLOW), col(IB_RIVER_DEEP)],

@@ -1,4 +1,4 @@
-//! `GameTips.dbc` — the loading-screen "tip of the day" (decision 2077).
+//! `GameTips.dbc` — the loading-screen "tip of the day".
 //!
 //! The 74 one-line hints the reference draws over a loading screen, each already carrying its own
 //! `|cffffd100Tip:|r` prefix and a trailing `\r\n` or two in the data. Nothing in FrameXML reads

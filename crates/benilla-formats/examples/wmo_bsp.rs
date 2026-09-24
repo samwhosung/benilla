@@ -12,7 +12,7 @@
 //!
 //! This tool measures that gap per group — how many faces we collide that the reference's BSP cannot
 //! reach, and where they are — which would be the difference between "solid wall" and "walk straight
-//! through" at a WMO the file never asked to be solid. **Measured on CavernsOfTime (decision 0963):
+//! through" at a WMO the file never asked to be solid. **Measured on CavernsOfTime:
 //! the gap is ZERO across all 35 groups** — MOBR's leaves reach every non-DETAIL face, so our
 //! brute-force set is exactly the reference's reachable set and the shortcut costs nothing but time.
 //! Re-run it on any WMO whose collision is under suspicion before assuming the same.

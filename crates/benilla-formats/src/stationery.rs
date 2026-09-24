@@ -1,4 +1,4 @@
-//! `Stationery.dbc` — the mail-window's letter-backdrop lookup (decision 0544).
+//! `Stationery.dbc` — the mail-window's letter-backdrop lookup.
 //!
 //! A mail carries a `stationery` id on the wire (`SMSG_MAIL_LIST_RESULT`); the reference client
 //! resolves that id to a texture *basename* through this table and paints the open-letter backdrop
@@ -8,7 +8,7 @@
 //! The 5875 schema was read byte-level from the real `patch.MPQ` file (VERIFIED at decision time):
 //! WDBC header `record_count = 5`, `field_count = 4`, `record_size = 16`, string block 62 bytes —
 //! four 4-byte fields, the third a string ref: `{ID, ItemID, Texture, Flags}`. Fields 1 and 3
-//! are not filler (decision 1970): `ItemID` (`0x4aca1c`) is the stationery ITEM the player buys
+//! are not filler: `ItemID` (`0x4aca1c`) is the stationery ITEM the player buys
 //! or carries to use the paper, and `Flags & 1` (`0x4aca2a`) marks the one always available
 //! (`41 Default Stationery`, BuyPrice 0). The client's usable list
 //! is `(Flags & 1 || the player carries ItemID) && the item's template is cached`, sorted by
@@ -28,7 +28,7 @@ use crate::dbc::{parse, str_at, u32_at};
 const STATIONERY: &str = "DBFilesClient\\Stationery.dbc";
 
 /// `MAIL_STATIONERY_DEFAULT` — vmangos stores every player mail with this id (the client's
-/// stationery choice is discarded server-side, decision 0544). Its verified texture basename is the
+/// stationery choice is discarded server-side). Its verified texture basename is the
 /// [`StationeryCatalog::DEFAULT_TEXTURE`] fallback.
 pub const STATIONERY_DEFAULT: u32 = 41;
 

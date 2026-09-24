@@ -61,7 +61,7 @@ fn ring_footprint_matches_reference_pixels() {
 /// authors **all 135** of its sequence boxes at zero, so 1.2 is its ring, and the Naxxramas weapon
 /// mobs (an `InvisibleStalker` body holding a visible axe, display 15294 at scale 2.25 ⇒ a 2.7 yd
 /// ring) are exactly where a player meets it. We computed `sqrt(0.5·sqrt(0))` = 0 and drew a ring
-/// the width of a coin — the director's A/B against the reference is what caught it. Decision 1658.
+/// the width of a coin — the director's A/B against the reference is what caught it.
 #[test]
 fn a_degenerate_stand_box_rings_at_the_reference_constant() {
     let data = benilla_formats::wow_data_or_skip!();

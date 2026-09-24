@@ -1,6 +1,6 @@
 //! `cargo run -p benilla-formats --example where` — **where does benilla think the install is?**
 //!
-//! The resolver's own answer, printed (decision 1175). Two callers, and both are the reason this
+//! The resolver's own answer, printed. Two callers, and both are the reason this
 //! is a program rather than a comment:
 //!
 //! - `scripts/gates.sh`, to decide whether the enforcer gate can run. It used to hand-roll half

@@ -77,7 +77,7 @@ pub(super) const LP_OCEAN_DEEP_ALPHA: usize = 8;
 /// `LightFloatBand` rows are in, and the one this crate used to answer with an invented
 /// "neutral daytime" constant.
 ///
-/// In the reference (decision 1465):
+/// In the reference:
 /// the colour evaluator `0x6d62e0` early-outs *before* touching the key/value arrays — key-count
 /// load `0x6d62ec`, guard `0x6d62ef`/`0x6d62f4`, store `0x6d62f6 mov [edi], 0xff000000` — an
 /// immediate, so the slot is opaque **black**: not zero-alpha, not stale, not skipped, and the
@@ -102,7 +102,7 @@ pub const ZERO_KEY_SCALAR: f32 = 0.0;
 #[derive(Clone, Copy, Debug)]
 pub struct Atmosphere {
     /// Fog-end band value (FloatBand sub0) in **yards** (`raw/36` — Elwynn clear 18000→500, storm
-    /// 10000→278). Byte-VERIFIED (0327): the client applies the ×1/36 ONCE at DBC load
+    /// 10000→278). Byte-VERIFIED: the client applies the ×1/36 ONCE at DBC load
     /// (`0x6d6090`, selector `rowIndex % 6 == 0` — the sub-0 distance band only).
     /// The consumer pushes `min(fog_end, farclip)` (`dn_scene_fog 0x6cee30`), so the wall tracks
     /// the view-distance slider only below the zone's value. Lerped verbatim across weather/area
@@ -164,7 +164,7 @@ pub struct Atmosphere {
 impl Atmosphere {
     /// Neutral daytime fallback for **no lighting data at all** — a chain with no `Light.dbc`, or a
     /// catalog that failed to load. It is not reachable from a shipped install: every map resolves a
-    /// record (0987) and every record's 24 band rows exist, so a *row* with no keys takes
+    /// record and every record's 24 band rows exist, so a *row* with no keys takes
     /// [`ZERO_KEY_COLOR`]/[`ZERO_KEY_SCALAR`] instead — this constant is never spliced into one.
     pub const DEFAULT: Atmosphere = Atmosphere {
         fog_end: 1000.0,

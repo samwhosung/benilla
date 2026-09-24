@@ -29,7 +29,7 @@ pub fn bbfacescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     // sampling its first triangle answers a question it doesn't have (see `plane_normal`).
     let mut solid = 0u32;
     // …and the other side of the same gate: batches the split REFUSED because their geometry is
-    // welded to a billboard bone (`RenderSubmesh::welded_billboard`, decisions 0839/0841). These
+    // welded to a billboard bone (`RenderSubmesh::welded_billboard`). These
     // carry no `billboard` at all, so the card loop below never sees them — they are counted from
     // the flag the render lanes read, which is what makes this a cross-check of `bbscan`'s SEAM
     // column (same models, counted from the two ends of the rule) rather than a re-derivation.
@@ -138,7 +138,7 @@ fn scale_spread<T>(keys: &[(T, [f32; 3])]) -> f32 {
 /// Sweep every `.m2` (under `prefix`, if given) and classify its billboard usage — see the
 /// `Bbscan` command doc. Output per model: the authored arms and how many vertices ride each
 /// DIRECTLY (primary bone is the billboard bone — the card path) vs INHERITED (primary bone
-/// descends from one — the joint-palette path, decision 0205), then the same question for the
+/// descends from one — the joint-palette path), then the same question for the
 /// model's **particle emitters and ribbons** (`fx[…]`) — the population behind decision 0813: an
 /// emitter on (or under) a billboard bone has a camera-dependent origin, because the reference
 /// folds the record position through the *replaced* palette matrix (`0x7190a9`–`0x71910c`).
@@ -221,7 +221,7 @@ pub fn bbscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         // partial vertex weight, or by a triangle it shares with a static neighbour. The reference
         // skins per vertex, so such geometry BENDS (a flap's root stays on the body while its tip
         // swings to the camera); a rigid card cannot express that at all, and moving the group
-        // rigidly tears the flap in two. These are the bones the split declines (decision 0839),
+        // rigidly tears the flap in two. These are the bones the split declines,
         // read through the renderer's own predicate so this census cannot drift from it.
         let seam = benilla_formats::non_separable_billboard_bones(&bytes);
         let fmt_counts = |m: &HashMap<&str, u32>| {
@@ -593,7 +593,7 @@ pub fn groundscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 /// box — the model's **all-animation** vertex extent, and the box the reference derives its doodad
 /// cull sphere from — reaches past its **bind-pose** vertex extent.
 ///
-/// The population instrument for decision 1259. A placed model's submesh entity keeps its transform
+/// The population instrument for. A placed model's submesh entity keeps its transform
 /// at the placement origin while the joint palette moves its vertices, so a bind-pose mesh bound
 /// stops describing what is drawn the moment the model animates: cull with it and the object blinks
 /// out while its geometry is still on screen. `SLACK` is how many yards the authored box reaches
@@ -703,7 +703,7 @@ pub fn animboundscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 /// collapses to its DC term. A renderer that
 /// `normalize()`s the same datum gets NaN, `clamp(NaN, 0, 1)` floors the lighting factor to 0, and
 /// the batch renders **pure black over its correct texture** — bug B134's Qiraji Brainwasher
-/// sleeves and Ironaya skirt, and the reason the shader's normalize is guarded (decision 1268).
+/// sleeves and Ironaya skirt, and the reason the shader's normalize is guarded.
 ///
 /// This is the population instrument for that class: how many models are on it, how much of each
 /// batch is degenerate, and which models are worst hit. `ALL` marks a batch with no usable normal

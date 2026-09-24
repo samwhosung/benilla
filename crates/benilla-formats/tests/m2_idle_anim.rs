@@ -1,4 +1,4 @@
-//! Animation-keyframe regression test against real vanilla creatures (decision 0019).
+//! Animation-keyframe regression test against real vanilla creatures.
 //!
 //! Guards the bug that froze most creatures in Milestone B: a per-sequence keyframe window pulled in a
 //! keyframe from a *later* sequence (14–64 s away), which inflated the Bevy clip's duration and made

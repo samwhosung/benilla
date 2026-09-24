@@ -1,5 +1,5 @@
 //! `EmotesText.dbc` × `EmotesTextData.dbc` — the **sentence** an `SMSG_TEXT_EMOTE` becomes
-//! ("Bob waves at you." / "You wave." / "Bob waves at Jane."), decision 1274.
+//! ("Bob waves at you." / "You wave." / "Bob waves at Jane.").
 //!
 //! The sibling module [`crate::emotes`] owns the same `EmotesText.dbc`'s *other* half — the
 //! `/command` name, the anim id, the voice kits. This one owns its 16 **`EmoteText[]`** columns and
@@ -316,7 +316,7 @@ mod tests {
 
     /// **The composer has no self-target case, because it can never be handed one** — and this
     /// test exists to record that, since the shape of the code invites the opposite conclusion
-    /// (decision 1282, correcting 1274).
+    /// (correcting 1274).
     ///
     /// The branch order is real: `0x49b2c8` matching the performer jumps past the target compare,
     /// so if a self-emote *did* arrive with your own name in the target slot, this is what it

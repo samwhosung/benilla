@@ -1,5 +1,5 @@
 //! The ammo crate the director looted was **stuck open/closing** — the lid springing to 75° and
-//! swinging shut, ~1.5 times a second, for ever (decision 1151). The model is why the symptom is
+//! swinging shut, ~1.5 times a second, for ever. The model is why the symptom is
 //! that loud, and why "hold the motion's last frame" was never enough on its own.
 //!
 //! `G_Crate01.m2` is the door family, textbook: **bone 8** is the lid, and the four sequences are

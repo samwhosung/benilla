@@ -1,4 +1,4 @@
-//! `StableSlotPrices.dbc` — the hunter stable's purchase-ladder price table (decision 1676).
+//! `StableSlotPrices.dbc` — the hunter stable's purchase-ladder price table.
 //!
 //! **2 rows × 2 `u32` columns** (`ID`, price in copper), read out of the real 5875 `dbc.MPQ` this
 //! session: row 1 = `500` (5 silver), row 2 = `50000` (5 gold). That is the whole table — there is

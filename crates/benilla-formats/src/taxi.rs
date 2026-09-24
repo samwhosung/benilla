@@ -1,6 +1,6 @@
 //! `TaxiPathNode.dbc` — a taxi/transport path's ordered waypoints (map + world position, a
 //! station-stop flag, and a stop delay). Every flight path AND every `MO_TRANSPORT`
-//! (boat/zeppelin, decision 0438) is one `TaxiPath.dbc` id whose nodes live here, keyed by
+//! (boat/zeppelin) is one `TaxiPath.dbc` id whose nodes live here, keyed by
 //! `TaxiPath.dbc`'s id (this table's `PathID` column) — `TaxiPath.dbc` itself only carries the
 //! `(fromNode, toNode, cost)` triple for the flight-master UI and is not adapted separately yet.
 //!

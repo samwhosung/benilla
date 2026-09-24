@@ -1,6 +1,6 @@
 //! The vanilla patch chain — a priority-ordered set of MPQ archives, read through `benilla-mpq`.
 //!
-//! Replaces `wow-mpq`'s `PatchChain` *and* the old `ChainReader` (decision 0021). Those were two types
+//! Replaces `wow-mpq`'s `PatchChain` *and* the old `ChainReader`. Those were two types
 //! because `wow-mpq`'s `Archive::open` re-parsed the hash/block (and the useless `(attributes)`) tables
 //! on every open, so `ChainReader` bolted a `Mutex<HashMap<…, Archive>>` handle-cache on top to avoid
 //! re-paying that per read. `benilla_mpq::Archive` now caches its parsed tables in an `Arc` and reads
@@ -10,7 +10,7 @@
 //! Later archives override earlier ones for files sharing an internal path (so a patch archive
 //! wins); a read resolves a name to the highest-priority archive that holds it. Base content
 //! archives carry no `(listfile)`, so resolution is by name **hash**, which works without one.
-//! Which archives mount, and in what order, is [`mount_order`]'s law (decision 1300).
+//! Which archives mount, and in what order, is [`mount_order`]'s law.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -46,7 +46,7 @@ fn is_patch_glob_match(name: &str) -> bool {
     mid.chars().count() == 1
 }
 
-/// The vanilla mount law over a `Data` directory listing, **ascending priority** (decision 1300;
+/// The vanilla mount law over a `Data` directory listing, **ascending priority** (
 /// the mounter `0x403740`): the ten
 /// [`VANILLA_BASE_ORDER`] archives at their fixed priorities, then `patch.MPQ`, then every
 /// `patch-?.MPQ` sorted ascending by case-folded name — the binary sorts its glob matches
@@ -115,14 +115,14 @@ impl Chain {
 
     /// The highest-priority archive with an *entry* for `name` (readable file **or** delete-marker),
     /// if any. Stops at the winning archive — including a tombstone, which correctly shadows any
-    /// lower-priority copy (decision 0246). Callers that want "readable" must check
+    /// lower-priority copy. Callers that want "readable" must check
     /// [`Archive::is_delete_marker`].
     fn resolve(&self, name: &str) -> Option<&Archive> {
         self.archives.iter().rev().find(|a| a.contains(name))
     }
 
     /// Whether the chain holds `name` as a **readable** file (accepts `/` or `\`; case-insensitive).
-    /// A path whose winning entry is a delete-marker is *not* present — the client deleted it (0246).
+    /// A path whose winning entry is a delete-marker is *not* present — the client deleted it.
     pub fn contains(&self, name: &str) -> bool {
         self.resolve(name)
             .is_some_and(|a| !a.is_delete_marker(name))
@@ -140,7 +140,7 @@ impl Chain {
             .resolve(name)
             .ok_or_else(|| anyhow!("file not in patch chain: {name}"))?;
         // A tombstone shadows every lower copy: the path is deleted from the composite, so this is a
-        // clean "not found", not a fall-through to a stale base version (decision 0246).
+        // clean "not found", not a fall-through to a stale base version.
         if archive.is_delete_marker(name) {
             bail!(
                 "file deleted from patch chain: {name} (tombstoned by {})",
@@ -179,7 +179,7 @@ impl Chain {
                     continue;
                 }
                 if let Some(a) = self.resolve(name) {
-                    // A tombstoned path isn't a file in the composite — don't list it (0246).
+                    // A tombstoned path isn't a file in the composite — don't list it.
                     if a.is_delete_marker(name) {
                         continue;
                     }

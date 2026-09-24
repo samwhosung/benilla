@@ -40,7 +40,7 @@ fn resolve_texture(
     dir: &str,
     skins: &[Option<String>],
 ) -> (Option<String>, Option<u8>, Option<CharSkinSlot>, bool) {
-    // Texture type 14 is the ICON slot — `ReplaceIconTexture`'s target (decision 2008).
+    // Texture type 14 is the ICON slot — `ReplaceIconTexture`'s target.
     let icon_slot = matches!(tex.texture_type, M2TextureType::Other(14));
     let embedded = {
         let f = tex.filename.string.to_string_lossy();
@@ -53,8 +53,8 @@ fn resolve_texture(
             .map(|name| format!("{dir}\\{name}.blp"))
     };
     // Character runtime texture slots — no embedded path; the client fills them per-player from the
-    // appearance (decisions 0041 / 0044 / 0045) or, for `Object`, from the runtime-bound item/cape
-    // skin (decision 0072). M2 texture type 1 = the composited body atlas; type 2 = the object skin;
+    // appearance or, for `Object`, from the runtime-bound item/cape
+    // skin. M2 texture type 1 = the composited body atlas; type 2 = the object skin;
     // type 6 = the hair-mesh texture; type 8 = the extra skin (the tauren fur BLP). Flagged so the
     // spawn site can swap in the right material.
     let char_slot = match tex.texture_type {
@@ -389,7 +389,7 @@ pub fn parse_m2_render_submeshes(
     // on one side, so a flap authored welded to its model is **torn in two** — the free half
     // sweeping with the camera, the welded half frozen, a detached triangle between them and a
     // z-fight where the swung half grazes the body. That is the Field Marshal pauldron the director
-    // reported (decision 0839): its two spikes each ride a spherical bone through a 50/50 seam ring.
+    // reported: its two spikes each ride a spherical bone through a 50/50 seam ring.
     //
     // So the split takes only the separable bones, and everything else stays ordinary geometry —
     // whole, in one submesh. On a **rigged** spawn that submesh is the skinned form, so the joint
@@ -464,7 +464,7 @@ pub fn parse_m2_render_submeshes(
             // Modes 5/6 are the MULTIPLY blends (the DAT_00811fe0 remap): 5 Mod → DST_COLOR/ZERO,
             // 6 Mod2x → DST_COLOR/SRC_COLOR — the ARMORREFLECT weapon/armor sheen layers.
             // Collapsing them into alpha-Blend painted the reflect texture OVER the blade instead
-            // of modulating it (decision 0528).
+            // of modulating it.
             Some(5) => ModelBlend::Mod,
             Some(6) => ModelBlend::Mod2x,
             Some(_) => ModelBlend::Blend,
@@ -574,12 +574,12 @@ pub fn parse_m2_render_submeshes(
         let uv_anim = tex_anim::bake_uv_anim(model, batch.texture_transform_combo_index, seq0_slot);
         // …and the per-sequence set, carried ONLY when the slots disagree — the shared-material
         // registry cannot key on a sequence, so a batch whose loop depends on which one is playing
-        // needs a per-instance consumer instead (decision 1408). `uniform()` asks that once here
+        // needs a per-instance consumer instead. `uniform()` asks that once here
         // rather than leaving it assumed; every batch whose slots agree keeps `uv_anim` alone and
         // the lane it has always taken.
         let uv_seq = tex_anim::bake_uv_seqs(model, batch.texture_transform_combo_index, &seq_slots)
             .filter(|set| set.uniform().is_none());
-        // The rotation and scaling channels, per slot (decision 2019): consumed only by a lane
+        // The rotation and scaling channels, per slot: consumed only by a lane
         // that owns its materials per instance (the UI model tiles), so they are carried whole.
         let uv_rot_seq =
             tex_anim::bake_uv_rot_seqs(model, batch.texture_transform_combo_index, &seq_slots);
@@ -679,7 +679,7 @@ pub fn parse_m2_render_submeshes(
             sub.billboard = bone.and_then(make_billboard);
             // …and the other side of the same gate: this batch holds geometry on a billboard bone
             // the split REFUSED, so no rigid placement of it is right and the lane must skin it to
-            // bend it (decision 0841). Read off the same `separable` table the key above is gated
+            // bend it. Read off the same `separable` table the key above is gated
             // on, so the renderer's "is this a card" and "is this welded" can never disagree.
             sub.welded_billboard = globals.iter().any(|&g| {
                 let v = &model.vertices[g as usize];
@@ -705,7 +705,7 @@ pub fn parse_m2_render_submeshes(
             sub.wrap_y = wrap_y;
             sub.char_slot = char_slot; // character runtime slot (body/hair) — filled per-player at spawn
             sub.icon_slot = icon_slot; // texture type 14 — `ReplaceIconTexture`'s slot (decision 2008)
-                                       // Skeletal skin binding (decision 0019), per local vertex in `globals` order: the M2
+                                       // Skeletal skin binding, per local vertex in `globals` order: the M2
                                        // vertex's 4 bone indices (global bone-array indices → joint indices directly) + their
                                        // normalised weights. The skinned-mesh builder uploads these; the static mesh ignores them.
             sub.joints = globals
@@ -751,8 +751,7 @@ pub fn parse_m2_render_submeshes(
     // so benilla reproduces the observed invisibility by recognising the placeholder asset and dropping
     // its geometry. Scoped tight on purpose: verified against all 1602 GameObject display models, ONLY
     // this placeholder matches — visible flat decals (orc sleep mats, pentagram circles, AQ door runes)
-    // carry real textures + Blend/AlphaTest and are kept. Empirical stop-gap, not the client mechanism
-    // (decision 0030).
+    // carry real textures + Blend/AlphaTest and are kept. Empirical stop-gap, not the client mechanism.
     if is_white1_placeholder(
         model.header.bounding_box_min,
         model.header.bounding_box_max,
@@ -768,7 +767,7 @@ pub fn parse_m2_render_submeshes(
 /// with the engine utility-white `WHITE1.BLP` (`SpellObject_InvisibleTrap` & kin). Such a model is the
 /// real client's invisible-by-near-zero-alpha placeholder, drawn but unseen; benilla drops its geometry
 /// to match. Returns `false` for an empty batch set, a 3D box, or any non-opaque / non-`WHITE1` batch
-/// (so visible flat decals are kept). See the call site + decision 0030.
+/// (so visible flat decals are kept). See the call site +.
 fn is_white1_placeholder(bbox_min: [f32; 3], bbox_max: [f32; 3], subs: &[RenderSubmesh]) -> bool {
     if subs.is_empty() {
         return false;
@@ -785,7 +784,7 @@ fn is_white1_placeholder(bbox_min: [f32; 3], bbox_max: [f32; 3], subs: &[RenderS
 }
 
 /// How far a model's own **transparent-pass batches** sort from its origin, model-local yards —
-/// the bound the renderer's owner-last draw-order rung is sized from (decisions 0719/0721).
+/// the bound the renderer's owner-last draw-order rung is sized from.
 ///
 /// The reference draws a model's emitters in their own bracket *after* that model's batches; we put
 /// both in one distance-sorted transparent list, so an effect has to be biased past every batch of
@@ -850,7 +849,7 @@ pub fn owner_last_rung(reach_world: f32) -> f32 {
     // — Maraudon's waterfalls, the Dire Maul vortex, the glue screens, whose transparent batches
     // spread 30–780 yd from their origin. Those keep the interleave: biasing an effect past a
     // 200-yard owner would put it in front of every transparent surface in the zone, which is the
-    // worse of the two errors (decision 0721).
+    // worse of the two errors.
     const MAX_RUNG: f32 = 32.0;
     (reach_world.max(0.0).floor() + 1.0).min(MAX_RUNG)
 }
@@ -864,7 +863,7 @@ pub fn owner_last_rung(reach_world: f32) -> f32 {
 /// synchronous render-thread pipeline compile mid-spell-cast. A closed bucket set is compilable
 /// behind the loading cover by construction (`benilla::pipe_warm` iterates exactly this array).
 ///
-/// Bucket choice: rounding UP is the blessed error direction (decision 0721 — over-biasing only
+/// Bucket choice: rounding UP is the blessed error direction (over-biasing only
 /// costs ordering against other models' transparents inside the delta), and the buckets are
 /// spaced so the common case stays tight: spell-kit owners are small (rung ≤ 4 — the corpus
 /// census `benilla-extract shardcensus` is the ground truth), so most shards take the first
@@ -889,7 +888,7 @@ pub fn owner_last_rung_bucket(rung: f32) -> f32 {
 /// A model can carry several alternative arts as separate batches and let the *played sequence*
 /// choose between them — one M2Color alpha track per batch, each stepping its own layer to 1.0 in
 /// its own sequence's band and holding 0.0 everywhere else. `Interface\Minimap\Rotating-MinimapArrow`
-/// is built exactly that way: six layers, four of them the four rim-arrow arts (decision 1519). That
+/// is built exactly that way: six layers, four of them the four rim-arrow arts. That
 /// is invisible from the batch list alone, which just shows six textures, so this answers the
 /// question the batch list can't: play sequence `N`, see what.
 ///
@@ -1066,7 +1065,7 @@ mod tests {
     ///
     /// The seam ring is the point. Bone 1's five fully-weighted vertices sat in their own batch
     /// while its eight 50/50 vertices sat in the *body's*, so the split saw a clean card, tore the
-    /// spike off the shoulder and swung it with the camera (decision 0839). A batch-local
+    /// spike off the shoulder and swung it with the camera. A batch-local
     /// separability test would still see a clean card here; only the model-wide one catches it.
     #[test]
     fn a_welded_billboard_spike_is_never_split_into_a_card() {
@@ -1092,7 +1091,7 @@ mod tests {
             "the two 8-vertex 50/50 seam rings are in the mesh"
         );
         // …and the batch SAYS it is welded — the other half of the same gate, and the flag a lane
-        // reads to decide it must skin this model (decision 0841). A build where the split key and
+        // reads to decide it must skin this model. A build where the split key and
         // this flag disagreed would draw the spikes rigid and call it fine.
         assert!(
             subs[0].welded_billboard,

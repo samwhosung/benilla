@@ -1,5 +1,5 @@
 //! GMTicketCategory.dbc — the ten trouble-ticket categories the Help window's "page a GM" list is
-//! built from, and the id each one submits as (decision 1673).
+//! built from, and the id each one submits as.
 //!
 //! This table is the answer to a question the shipped FrameXML makes look unanswerable. Its
 //! `HelpFrameGM_UpdateCategories(GetGMTicketCategories())` consumes the binding's varargs as
@@ -22,7 +22,7 @@
 //! | 9 | Account/Billing |
 //! | 10 | Character |
 //!
-//! **benilla's own Help window no longer shows this list** (decision 1687): it goes straight from
+//! **benilla's own Help window no longer shows this list**: it goes straight from
 //! Home to the ticket box and files under 0, "uncategorised". The catalog still ships, because
 //! `GetGMTicketCategories()` is a real Era binding a third-party addon may call and because these
 //! ids are still what the *server* names a ticket by — an existing ticket's category arrives on

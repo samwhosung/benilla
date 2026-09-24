@@ -1,4 +1,4 @@
-//! **Where the WoW install is** — THE ONE ANSWER (decision 1175).
+//! **Where the WoW install is** — THE ONE ANSWER.
 //!
 //! 0954 made every path benilla *writes* resolve through one module, on the grounds that a
 //! hand-built path is a place the rule can be got wrong. Its *input* path never got the same
@@ -22,7 +22,7 @@
 //!    because the director's rule is about what the client *assumes*, not about removing the
 //!    escape hatch; the sprawl was 11 reads of it, not the variable itself. **Set and empty**
 //!    (`WOW_DATA=`) means *there is no install*: the ladder stops there and returns nothing, which
-//!    is how a machine that has an install can still run the no-install path (decision 1451).
+//!    is how a machine that has an install can still run the no-install path.
 //! 2. **`<project folder>/WoW/Data`** — `#[cfg(feature = "dev")]` only. Computed from **this
 //!    crate's** `CARGO_MANIFEST_DIR`, which lands on the same workspace root whichever crate is
 //!    asking, and is what the repo-root `WoW` symlink points at. Gated because a shipped binary
@@ -85,7 +85,7 @@ fn candidates_from(override_dir: Option<PathBuf>, exe_dir: Option<PathBuf>) -> V
     // even in a dev build with the project folder sitting right there. It exists because the
     // no-install boot path — which every player who unzips benilla into the wrong folder takes —
     // was unreachable in any build we run on this machine, and rotted until it panicked on frame
-    // one (decision 1451). `scripts/gates.sh` runs the enforcer under it on every commit; a
+    // one. `scripts/gates.sh` runs the enforcer under it on every commit; a
     // session can see what a player without data sees with `WOW_DATA= cargo play`.
     if let Some(over) = override_dir {
         if over.as_os_str().is_empty() {

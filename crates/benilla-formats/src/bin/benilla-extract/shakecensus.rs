@@ -1,4 +1,4 @@
-//! `shakecensus`: the whole-table view of the **camera-shake** system (decisions 1540/1849) — the
+//! `shakecensus`: the whole-table view of the **camera-shake** system — the
 //! 24 shipped `CameraShakes.dbc` presets, and everything that names one: the creature models
 //! (footstep + death thud), and the `SpellEffectCameraShakes.dbc` groups the spell side reaches
 //! them through.
@@ -15,7 +15,7 @@
 //! rows and the spell rows are visibly different shapes (phase, duration, the direction triples),
 //! and that split is itself the check.
 //!
-//! The **group** half (decision 1849) is the same instrument one indirection out: 58 of the 1772
+//! The **group** half is the same instrument one indirection out: 58 of the 1772
 //! shipped `SpellVisualKit` rows name a group in field 14, every value must land on the 9-row
 //! table, and the census names the kits so a spell-side shake can be traced from a preset back to
 //! the kit that fires it. Then the `$SHK` sweep, whose **host** column is the one that matters —
@@ -217,8 +217,8 @@ pub fn shakecensus(chain: &mut Chain) -> Result<()> {
     println!("\n$SHK animation events — the third producer (GameObject / DynamicObject only)\n");
     // The HOST column is what decides whether a marker is live at all: only the GameObject
     // (typemask 0x20, `0x5f3e20`) and DynamicObject (0x40, `0x5d58c0`) dispatchers decode `$SHK`.
-    // A marker on a creature M2 reaches `CGUnit_C::HandleAnimEvent`, which does not decode the tag
-    // (decision 1540); one on a model that is only ever a bone-attached `CEffect` reaches the fixed
+    // A marker on a creature M2 reaches `CGUnit_C::HandleAnimEvent`, which does not decode the tag;
+    // one on a model that is only ever a bone-attached `CEffect` reaches the fixed
     // `$SND`/`$HIT` router `0x61f6f0`. Both are authored-but-inert.
     //
     // The DynamicObject side is easy to get wrong and this census got it wrong once: the anchor's

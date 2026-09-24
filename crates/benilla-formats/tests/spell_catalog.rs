@@ -37,8 +37,8 @@ fn spell_catalog_resolves_known_spells() {
 
     // The visual/speed column pins (decision 0107 data plane), cross-checked against the local
     // vmangos `spell_template` (`spellVisual1`/`speed`) — see `src/spells.rs` docs for the method.
-    // **`PreventionType` (column 165)** — which crowd-control flag refuses the spell LOCALLY
-    // (decision 1903): 1 silence, 2 pacify, 0 neither. Pinned here because the column has an
+    // **`PreventionType` (column 165)** — which crowd-control flag refuses the spell LOCALLY:
+    // 1 silence, 2 pacify, 0 neither. Pinned here because the column has an
     // adjacent look-alike: 164 is `DmgClass`, which takes the same 0/1/2 on every one of these
     // rows. **Auto Shot separates them decisively** — it is `DmgClass = 3` (RANGED), a value
     // `PreventionType` never takes, so a one-column slip fails this test rather than passing
@@ -65,7 +65,7 @@ fn spell_catalog_resolves_known_spells() {
          distinguishable from 165 at all"
     );
 
-    // **The crowd-control exemption's three columns** (decision 1946): `School` 1, `Mechanic` 5,
+    // **The crowd-control exemption's three columns**: `School` 1, `Mechanic` 5,
     // `EffectMechanic[0..2]` 79–81. Pinned against spells whose values are common knowledge, and
     // the per-effect pair is the convincing half — Frostbolt carries its SNARE on effect 0 and
     // Frost Nova its ROOT on effect 1, which no neighbouring column would reproduce.
@@ -160,7 +160,7 @@ fn shapeshift_bonus_bars_match_the_verified_table() {
 }
 
 /// The stance-bar Spell.dbc columns (`0x4b2bb0` orders by StanceBarOrder, `0x4b45c0` reads
-/// ActiveIconID; column pins probed on the extracted 5875 file, decision 0270): the
+/// ActiveIconID; column pins probed on the extracted 5875 file): the
 /// MOD_SHAPESHIFT form id, the signed StanceBarOrder (Stealth's −1 sorts last), and the druid
 /// forms' ActiveIconID. Skips without client data.
 #[test]
@@ -191,7 +191,7 @@ fn stance_bar_spell_columns_match_the_probed_values() {
 }
 
 /// AttributesEx3 (column 9) bit 15 — `SPELL_ATTR3_NORMAL_RANGED_ATTACK`, the combat-text
-/// melee-white flip (decision 0376): set on exactly the ranged basic shots, clear on melee
+/// melee-white flip: set on exactly the ranged basic shots, clear on melee
 /// abilities and true spells.
 #[test]
 fn melee_white_damage_marks_the_ranged_basic_shots() {

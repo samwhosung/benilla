@@ -36,7 +36,7 @@ impl SheatheSoundCatalog {
     /// The kit pair for an item. **`material` is the load-bearing argument** — the weapon rows
     /// agree within a material and differ across one, so the class/subclass only choose the
     /// *family* (weapon vs shield). Callers pass the item's real `Material` off the wire; it is
-    /// never inferred from the subclass, which carries no material information (decision 0882).
+    /// never inferred from the subclass, which carries no material information.
     ///
     /// Falls back to any material carried for that `(class, subclass)` — this is what lands a
     /// shield, whose own rows hold material 0 as a don't-care, on the shield pair — and then to
@@ -121,7 +121,7 @@ mod tests {
         assert!(cat.get(2, 15, 7).is_some(), "weird material still resolves");
     }
 
-    /// **The material is the whole key; the subclass is inert** (decision 0882). Every weapon row
+    /// **The material is the whole key; the subclass is inert**. Every weapon row
     /// of a material carries the same kit pair, so a bow (subclass 2, sitting in the middle of the
     /// weapon range) rings by what it is *made of* — and the reference client's own `itemcache.wdb`
     /// puts every bow, crossbow and wand at material 2 (wood) while guns and thrown are metal.

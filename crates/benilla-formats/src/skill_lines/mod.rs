@@ -1,5 +1,5 @@
 //! `SkillLine.dbc` + `SkillLineAbility.dbc` loader — spell id → skill line → {name, icon}, the
-//! spellbook's tab source (decision 0216 §8: "tabs = the class skill lines of known spells").
+//! spellbook's tab source ("tabs = the class skill lines of known spells").
 //!
 //! Layout — VERIFIED against the **vmangos server source**
 //! (`vmangos-src/src/game/Database/DBCStructure.h`'s `SkillLineEntry`/`SkillLineAbilityEntry`
@@ -32,13 +32,13 @@
 //! the raw 5875 file this session — Bolt of Linen Cloth 2963 → (line 197, req 1, low 25,
 //! high 50), Minor Healing Potion 2330 → (171, 1, 55, 95), which reproduces its known classic
 //! orange 1 / yellow 55 / green 75 / gray 95 progression under the client's color law
-//! (`0x4fca20`, decision 0446).
+//! (`0x4fca20`).
 //!
 //! `SkillRaceClassInfo.dbc` — `SkillRaceClassInfofmt = "diiiiiix"` (8 fields, 32 B/record):
 //! `id`(0) · **`skillId` = column 1** · **`raceMask` = column 2** · **`classMask` = column 3** ·
 //! **`flags` = column 4** · **`reqLevel` = column 5** · `skillTierId`(6) ·
 //! **`skillCostID` = column 7**. This is
-//! the table the client's spellbook tab classifier routes through (decision 0228): a spell's skill
+//! the table the client's spellbook tab classifier routes through: a spell's skill
 //! line is looked up here for the player's race+class, and if the matching row's `flags` bit `0x80`
 //! (`SKILL_FLAG_DISPLAY_SORTED`, cmangos `DBCEnums.h`) is set — or no row matches — the spell's tab
 //! is **General** (key 0) instead of the line's own tab
@@ -56,7 +56,7 @@
 //! Armor(8, 6) · Languages(10, 7); `Attributes`(5, 1) never carries player rows, and
 //! `Not Displayed`(12, 8) is a header like any other — **not** a hide bucket, whatever its name
 //! suggests: the client drops `GENERIC (DND)` by its `SkillRaceClassInfo.flags & 0x2`, never by its
-//! category (decision 1091). A skill line's own `categoryId` is `SkillLine.dbc` column 1 (the
+//! category. A skill line's own `categoryId` is `SkillLine.dbc` column 1 (the
 //! `SkillLinefmt` layout above).
 //!
 //! Skill line ids are stable, well-known constants across the whole classic tool ecosystem
@@ -109,7 +109,7 @@ const COL_SRCI_COST_INDEX: usize = 7;
 
 /// `SkillRaceClassInfo.flags` bit `0x80` — cmangos `DBCEnums.h`'s `SKILL_FLAG_DISPLAY_SORTED`. The
 /// spellbook tab classifier reads it as the low byte's sign (`(int8) < 0`): set ⇒ the skill line's
-/// spells sort into the **General** tab rather than the line's own (decision 0228). Real
+/// spells sort into the **General** tab rather than the line's own. Real
 /// build-5875 data for a human warrior: set on `Racial - Human`, `GENERIC (DND)`, the proficiency/
 /// language/riding lines; clear on the class combat lines (`Arms`/`Fury`/`Protection`).
 const SKILL_FLAG_DISPLAY_SORTED: u32 = 0x80;
@@ -320,7 +320,7 @@ impl SkillLineCatalog {
     }
 
     /// A spell's full `SkillLineAbility` row ([`SlaInfo`]) — the crafting book's difficulty and
-    /// requirement source (0437).
+    /// requirement source.
     pub fn ability(&self, spell_id: u32) -> Option<&SlaInfo> {
         self.abilities.get(&spell_id)
     }
@@ -419,7 +419,7 @@ impl SkillLineCatalog {
     }
 
     /// The spellbook **tab** a spell lands in for a character of `race`/`class` (1-based unit
-    /// bytes): the spell's skill line, unless that line routes to General (decision 0228). Returns
+    /// bytes): the spell's skill line, unless that line routes to General. Returns
     /// `0` (the General tab) when the spell has no skill line, no `SkillRaceClassInfo` row admits
     /// this race/class, or the matching row carries [`SKILL_FLAG_DISPLAY_SORTED`]; the line's own
     /// id otherwise. With `race`/`class` `0` or out of range (unknown character), or when no
@@ -490,7 +490,7 @@ impl SkillLineCatalog {
     /// character of `race`/`class` (1-based unit bytes) — [`SkillRaceClass::skill_up_silent`],
     /// inverted. `false` with no admitting row: the real watcher skips the message when its
     /// `SkillRaceClassInfo` resolve comes back empty too (`0x5de352 je`, the same taken branch as
-    /// the flag test — 1309, decision 1314), so a line this character can't legally
+    /// the flag test), so a line this character can't legally
     /// hold stays silent however it got into the block.
     pub fn announces_skill_ups(&self, line_id: u32, race: u8, class: u8) -> bool {
         self.race_class(line_id, race, class)

@@ -16,7 +16,7 @@
 //! Whether any shipped root actually falls in that cell is the question — an unreachable branch and
 //! a widespread defect are the same code, and only the corpus tells them apart.
 //!
-//! **The answer is zero** (run 2026-08-27, decision 1652): of 815 roots, 448 carry no portal graph
+//! **The answer is zero** (run 2026-08-27): of 815 roots, 448 carry no portal graph
 //! and exactly **one** carries `wmoID == 0` — `pvp_alterac_ent01.wmo` — and that one *does* have
 //! portals. The two conditions never coincide in shipped data, so the instance-less branch is dead
 //! and 1652's unconditional tag on pools closes a hole no building reaches. That is worth a census
@@ -33,14 +33,14 @@
 //!   exactly a root that spawns pool entities at placement. (`resolve_shared_liquid_cells` can drop
 //!   one group's mesh afterwards, but only in favour of a sibling group of the same root, so it
 //!   cannot change a root's wet/dry verdict.) A group whose MOGP `groupLiquid` @`0x34` declares
-//!   whole-group submersion but carries no `MLIQ` grid (13 in the archive, decision 1000) is **not**
+//!   whole-group submersion but carries no `MLIQ` grid (13 in the archive) is **not**
 //!   counted: it spawns no pool entity, so there is nothing for an instance to own. The liquid-group
 //!   total cross-checks against `wmo_liquid_arms`, which reaches the same groups from the other side
 //!   — the listfile's `_NNN` group files rather than `MOHD.nGroups` per root.
 //!
 //! Roots are also split by whether the world actually **places** them — an unplaced WMO can never be
 //! stood next to, so it cannot show the defect. Placements come from every ADT's `MODF` plus the
-//! WDT global-WMO of the 20 WMO-only maps (decision 0688 — scanning only ADTs would call the Deeprun
+//! WDT global-WMO of the 20 WMO-only maps (scanning only ADTs would call the Deeprun
 //! Tram and every instance-shaped dungeon unplaced).
 //!
 //! Output is Blizzard data — pipe it to the scratchpad, never into the repo.
@@ -82,7 +82,7 @@ fn key(name: &str) -> String {
 }
 
 /// Every WMO root the world actually places, mapped to the maps it appears on: ADT `MODF` first,
-/// then the WDT global-WMO that IS the world on a WMO-only map (decision 0688).
+/// then the WDT global-WMO that IS the world on a WMO-only map.
 fn placed_roots(chain: &Chain) -> anyhow::Result<BTreeMap<String, BTreeSet<String>>> {
     let mut placed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     // `World\Maps\<map>\<map>_XX_YY.adt` — the map name is the third path component.

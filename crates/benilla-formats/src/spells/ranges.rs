@@ -51,7 +51,7 @@ pub const ON_NEXT_SWING_RANGE: f32 = 100.0;
 /// - **ranged**: the authored row pair, padded by `caster_reach + reach` when a target resolves —
 ///   the max unconditionally, the min ONLY when the row's min is already nonzero (the
 ///   `fcomp`-vs-0.0 guard: a min-0 spell must never grow a min range, or point-blank casts refuse
-///   TOO_CLOSE — decision 0426).
+///   TOO_CLOSE).
 ///
 /// `reach` is the TARGET's when one resolves and the **caster's own** otherwise — the binary
 /// doubles the caster's reach rather than assuming a default body (`target_reach.unwrap_or(
@@ -63,7 +63,7 @@ pub const ON_NEXT_SWING_RANGE: f32 = 100.0;
 /// Passing it as `target_reach` is how a
 /// caller models that; only with neither does the caster's own reach stand in twice.
 ///
-/// Two decomp legs are deliberately UNMODELED (0426), and **neither is target-gated the way an
+/// Two decomp legs are deliberately UNMODELED, and **neither is target-gated the way an
 /// earlier reading here claimed**: the PvP `max += 2.6667` bonus (`0x6e3648`, gated on both
 /// units' `[unit+0x118]+0x40 & 0x200d` through the unidentified `0x5fc350`) is reachable from the
 /// melee arm even with no target argument, because that arm sets the target register itself; and
@@ -71,7 +71,7 @@ pub const ON_NEXT_SWING_RANGE: f32 = 100.0;
 /// it is `max *= RangedModRange(item template +0x118) · 0.01` for whatever sits in
 /// EQUIPMENT_SLOT_RANGED, for a player caster.
 ///
-/// **That second one is NOT the data no-op it was twice recorded as** (decision 2161). Scoped by
+/// **That second one is NOT the data no-op it was twice recorded as**. Scoped by
 /// the client's own slot-17 mask (`0x809200` gives bit 17 to InventoryTypes 15/25/26/28 and no
 /// others), `item_template.range_mod` is 100 on all 515 bows/guns/crossbows/wands/thrown — but
 /// **0 on all 19 shipped RELICS**: every Druid idol, Paladin libram and Shaman totem
@@ -274,7 +274,7 @@ mod tests {
 
         // A min-0 nuke row reads a true 0.0 min (row 4: Shadow Bolt, Frostbolt, wand Shoot) —
         // the fcomp-vs-0.0 guard's input, so the min/max field mapping can't silently shift
-        // (0426: a manufactured min range refused point-blank casts).
+        // (a manufactured min range refused point-blank casts).
         let nuke = ranges.get(4).expect("row 4");
         assert_eq!((nuke.min, nuke.max), (0.0, 30.0));
         assert!(!nuke.is_melee());

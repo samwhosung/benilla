@@ -1,4 +1,4 @@
-//! `glueextent` — how wide each shipped glue scene's art is, off the chain (decision 1619).
+//! `glueextent` — how wide each shipped glue scene's art is, off the chain.
 //!
 //! The instrument behind the glue framing ceiling: for every `UI_*` diorama it prints the measured
 //! [`benilla_formats::ArtExtent`] (the same call the client makes at scene spawn), the authored

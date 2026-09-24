@@ -3,7 +3,7 @@
 //! mount law) — it used to hand-roll a partial archive list in `benilla-mpq` and silently
 //! miss whole archives (`wmo.MPQ`: "not found" for every building/ship). A path the top archive
 //! **delete-marks** is reported as DELETED (exit 2) — the client doesn't load it; look for a
-//! `Blizzard_*` addon replacement (decision 0246).
+//! `Blizzard_*` addon replacement.
 
 use std::path::Path;
 

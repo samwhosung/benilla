@@ -456,7 +456,7 @@ mod tests {
     }
 
     /// The placed **Frost Trap** — the model that proved the gate is keyed *inside* a sequence,
-    /// not constant across it (decisions 1011/1017). Its sixteen ribbons split in two: four low
+    /// not constant across it. Its sixteen ribbons split in two: four low
     /// ones on bones 45–48 at model z 0.129 that light 534 ms into Spawn and stay lit through
     /// Closed — the tuft a placed trap shows, riding up off the crown on the verified `+g·t²` —
     /// and twelve upper ones on bones 33–44 at z ≈ 1.55 that are dark in **every** rest state and

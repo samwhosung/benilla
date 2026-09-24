@@ -11,7 +11,7 @@
 //! binary's `+0x28`), AreaName(11)` + loc block, `FactionGroupMask(20)`. Sibling readers of the
 //! same file: `quest_headers.rs` (id → name only), `area_sound.rs` (the audio columns).
 //!
-//! The PvP columns (zone-splash arc, decision 0287) — census of the real 5875 table:
+//! The PvP columns (zone-splash arc) — census of the real 5875 table:
 //! `FactionGroupMask` is 2/4/0 (Alliance/Horde/neither) on zone rows and ~always 0 on subzone
 //! rows; `Flags` bit `0x80` marks exactly the three FFA duel pits (Battle Ring 2177, The Rumble
 //! Cage 2857, The Maul 3217 + its UNUSED twin) — *not* the enclosing "Gurubashi Arena" row.
@@ -36,7 +36,7 @@ pub struct AreaTableRow {
     /// The exploration bit index (`PLAYER_EXPLORED_ZONES` bitset / `WorldMapOverlay` join,
     /// phase 3).
     pub explore_flag: u32,
-    /// Area flags (col 4). Bit `0x80` = FFA duel pit ("PvP Area" / `isArena`, decision 0287);
+    /// Area flags (col 4). Bit `0x80` = FFA duel pit ("PvP Area" / `isArena`);
     /// bit `0x1` = snow; capitals carry `0x138`.
     pub flags: u32,
     /// `FactionGroup.dbc` mask of the owning side (col 20): 2 = Alliance, 4 = Horde, 0 = neither
@@ -124,7 +124,7 @@ impl AreaTableCatalog {
 
     /// The id of the zone **named** `name`, case-insensitively — the reverse of [`Self::name`],
     /// for the one caller that has a name and needs the id: `/who`'s `z-"Elwynn Forest"` term,
-    /// which goes on the wire as a zone id (decision 0668).
+    /// which goes on the wire as a zone id.
     ///
     /// Names are not unique across the table (a subzone can share its zone's name, instance rows
     /// repeat), so a **top-level** row (`zone_id == 0`) wins over any other match — that is what
@@ -244,7 +244,7 @@ mod tests {
         // The phase-3 explore bit is populated (Elwynn's is 126 in 5875).
         assert_eq!(cat.get(12).expect("Elwynn").explore_flag, 126);
 
-        // The PvP columns (decision 0287): ownership masks on zone rows…
+        // The PvP columns: ownership masks on zone rows…
         assert_eq!(cat.get(12).expect("Elwynn").faction_group_mask, 2);
         assert_eq!(cat.get(14).expect("Durotar").faction_group_mask, 4);
         assert_eq!(cat.get(33).expect("Stranglethorn").faction_group_mask, 0);

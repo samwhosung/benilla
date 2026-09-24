@@ -35,7 +35,7 @@ const ICON_DIR: &str = "Interface\\Icons\\";
 /// [`ICON_DIR`] back on anyway, so what Lua sees is identical, and every consumer here (the popup's
 /// `SetTexture`, `CreateMacro`'s saved texture) wants the whole path.
 ///
-/// **Why this replaces a `SpellIcon.dbc` scan** (bug B221, decision 1053): the DBC names art that
+/// **Why this replaces a `SpellIcon.dbc` scan** (bug B221): the DBC names art that
 /// does not ship. Five of its chooser-eligible rows have no file under any name (`Ability_Temp`,
 /// `Spell_Holy_Invulnerable`, `Spell_Misc_Food_08`, `Spell_Orc_Omniscience`,
 /// `Ability_Hunter_BeastSooth`), and two more are malformed for a texture lookup

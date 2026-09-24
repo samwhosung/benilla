@@ -230,7 +230,7 @@ pub(super) fn sample_window<V: Lerp>(
 /// wrong when they don't. `uniform()` is the question "may this batch keep the shared lane?", asked
 /// once at bake time instead of assumed: `Some` ⇒ yes, and the consumer carries one loop as before;
 /// `None` ⇒ the batch's animation depends on which sequence its instance is playing, so it needs a
-/// per-instance consumer (decision 1408).
+/// per-instance consumer.
 ///
 /// The corpus population is small and real (`benilla-extract uvslotscan`): 22 of the 32 multi-slot
 /// UV batch-channels ship a **dead slot 0** beside a live later slot — the BRM lava bubbles keying

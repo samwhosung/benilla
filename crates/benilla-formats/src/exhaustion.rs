@@ -1,6 +1,6 @@
 //! Exhaustion.dbc — the rest-state table behind the client's rested-XP surface.
 //!
-//! The whole client contract (decision 1087): `GetRestState 0x48d350` indexes this table
+//! The whole client contract: `GetRestState 0x48d350` indexes this table
 //! **directly by the `PLAYER_BYTES_2` rest-state byte** (an ID→row-ptr array, `[0xc0dd78]`) and
 //! returns `(row.ID, row.name[locale], row.factor)`; `GetXPExhaustion 0x48d3f0` multiplies the
 //! rested pool by **row ID 1's factor, hard-coded** (2.0 in the shipped data — the "rested XP is

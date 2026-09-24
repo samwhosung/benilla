@@ -1,5 +1,5 @@
 //! `ChatProfanity.dbc` + `SpamMessages.dbc` — the two shipped pattern lists behind 1.12's
-//! `profanityFilter` and `spamFilter` (decision 2077).
+//! `profanityFilter` and `spamFilter`.
 //!
 //! **They are regular expressions, not word lists.** The reference compiles every row with PCRE
 //! (`0x71fba0` → `pcre_compile 0x720250`, options `0x2801` = CASELESS | UTF8 | NO_UTF8_CHECK) at

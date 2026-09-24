@@ -26,7 +26,7 @@
 //!
 //! The two keyed tracks here (emission rate, enabled) bake **one loop per sequence** into
 //! [`EmitTiming`] through the same key-search kernel (`0x713d50`) as the material alpha
-//! (`models::key_anim`, decision 0641): the reference samples both per frame through the
+//! (`models::key_anim`): the reference samples both per frame through the
 //! *playing* sequence's own key window (`0x713d50`), so what an emitter does is a function of
 //! which sequence its model instance is playing. A quest GameObject authors its
 //! explosion inside one-shot clips and an OFF window in every idle sequence; baking only
@@ -102,8 +102,7 @@ pub enum ParticleBlend {
 /// **A decreasing pair is legal, shipped, and means "run the flipbook in reverse"** — four models
 /// author one (`DwarvenBrazier01`'s settling flame, `ShadowWordSilence_Breath`'s 32-frame reverse
 /// sweep). There is no swap and no clamp anywhere on the reference's path; an earlier reading here
-/// clamped into `[begin, end]`, which both mangled the reverse ramps and panicked outright on them
-/// (decision 0685).
+/// clamped into `[begin, end]`, which both mangled the reverse ramps and panicked outright on them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellRamp {
     /// The authored pair, verbatim (the reference archives it at `rec+0x3c/+0x40` and never reads
@@ -363,7 +362,7 @@ pub struct ParticleEmitterDef {
     /// powers of two**: the reference's setter (`0x7b4ed0`) demands it — it derives `log2(cols)`
     /// and the two reciprocals — and on a bad pair writes *none* of its five fields, leaving the
     /// ctor's `1×1`. [`parse_m2_particle_emitters`] mirrors that fallback, so the atlas walk can
-    /// mask instead of divide. No shipped emitter trips it (corpus-swept, decision 0685).
+    /// mask instead of divide. No shipped emitter trips it (corpus-swept).
     pub tile_rows: u16,
     pub tile_cols: u16,
     /// 0 = head (camera quad), 1 = tail (speed-stretched), 2 = both. We render head first.
@@ -376,7 +375,7 @@ pub struct ParticleEmitterDef {
     /// the sim **each frame on the emitter's clock** ([`EmitParams`]). These animate for real:
     /// Frost Nova rides its emission radius 0.19 → 13.2 yd out with the expanding ring, Arcane
     /// Explosion 0 → 7.2 yd with the growing dome — the retired `value[0]` flatten birthed both
-    /// entirely at the caster's feet (decision 0844).
+    /// entirely at the caster's feet.
     pub params: EmitParams,
     /// Velocity **drag** (file +0x194; a plain scalar, not a track — the builder copies it straight to
     /// the runtime emitter's `+0x1e0` at `0x70ffdd`, *outside* the ten track setters). Each

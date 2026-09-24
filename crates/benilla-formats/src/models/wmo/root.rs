@@ -109,7 +109,7 @@ impl WmoRoot {
     /// Per-material **`TerrainType.dbc` id** (MOMT+0x20), indexed by the MOPY per-face material id
     /// — what walking on each material sounds like, shared root-wide across every group.
     ///
-    /// The footstep chain's WMO leg (decision 1161): the client's down-ray arbitrates terrain
+    /// The footstep chain's WMO leg: the client's down-ray arbitrates terrain
     /// against a building's collision faces, and when the building wins it re-rays that group's
     /// RENDER faces and resolves `MOPY[face].material_id → MOMT[id]+0x20` (`0x6a26c0`).
     pub fn material_ground_types(&self) -> Vec<u32> {

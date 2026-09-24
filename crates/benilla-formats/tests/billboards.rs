@@ -1,7 +1,7 @@
 //! Regression: an M2 batch that packs several billboard glow cards on different bones must be split
 //! into one submesh per billboard bone, each centred on its own bone pivot — so the renderer rotates
 //! each card about its own candle (faces the camera in place) instead of swinging the whole cluster
-//! about a single pivot. See decision 0028. Skips (passes) when the client isn't present.
+//! about a single pivot. See. Skips (passes) when the client isn't present.
 
 use benilla_formats::{load_m2_mesh, open_chain, RenderSubmesh};
 

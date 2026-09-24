@@ -1,4 +1,4 @@
-//! The druid's Swipe leaves no claw trail (decision 2282) — and, like the lava bubbles next door,
+//! The druid's Swipe leaves no claw trail — and, like the lava bubbles next door,
 //! the asset says why in one number: **this model's whole visible existence is its texture
 //! transform.**
 //!

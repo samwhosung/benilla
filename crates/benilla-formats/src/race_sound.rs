@@ -1,4 +1,4 @@
-//! `ChrRaces.dbc` — the race-keyed **exploration sound** (decision 0829): the jingle the real
+//! `ChrRaces.dbc` — the race-keyed **exploration sound**: the jingle the real
 //! client plays on every `SMSG_EXPLORATION_EXPERIENCE`, resolved race → `ChrRaces` row →
 //! column 3 (`+0xc`) → SoundEntries kit (handler case tail `0x5e41d2`, race byte
 //! → row `[0xc0dee0][race]` → `+0xc` → play tail `0x458850`); the column's canonical *name*

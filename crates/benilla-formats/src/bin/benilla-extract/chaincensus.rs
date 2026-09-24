@@ -1,4 +1,4 @@
-//! `chaincensus`: the whole-table view of the **beam/chain** system (decision 0955) — every
+//! `chaincensus`: the whole-table view of the **beam/chain** system — every
 //! `SpellVisualKit` that draws a `SpellChainEffects` beam, the row it names, and the spells that
 //! reach it through which lifecycle stage.
 //!

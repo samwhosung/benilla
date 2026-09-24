@@ -49,7 +49,7 @@ pub struct MapCatalog {
 }
 
 /// The Map.dbc columns the client's battleground family reads by row offset (`GetBattlefieldInfo`
-/// `0x4ab0b0`, the list handler `0x4aa6c0`; decision 1974). Offsets are into the
+/// `0x4ab0b0`, the list handler `0x4aa6c0`). Offsets are into the
 /// 168-byte record with the id at `+0x00`, so `+0x4·k` is field `k`. VERIFIED by dumping the
 /// shipped patch-2 `Map.dbc` (2026-09-04): Warsong Gulch `10, 60, 10, −1, (0, 0), span 10, group 1`;
 /// Arathi Basin `20, 60, 15, …, span 10, group 1`; Alterac Valley `51, 60, 40, −1, (0.74, 0.34),
@@ -129,7 +129,7 @@ impl MapCatalog {
     /// Whether `map_id` is a **party dungeon** (`InstanceType == 1`). This exact predicate — not
     /// "is an instance" — is the one the reference's lockout bookkeeping runs on: `cmp [rec+8],1`
     /// gates both what `SMSG_UPDATE_LAST_INSTANCE` records and both halves of
-    /// `CanShowResetInstances` (decision 1748).
+    /// `CanShowResetInstances`.
     pub fn is_party_dungeon(&self, map_id: u32) -> bool {
         self.instance_type(map_id) == Some(1)
     }

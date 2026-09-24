@@ -49,8 +49,8 @@ fn creature_anim_events_parse_within_sequences() {
     }
 }
 
-/// **A fired key carries its OWN record's `(bone, position)`, not the tag's first match**
-/// (decision 1904). The reference's M2 event kernel `0x719370` snapshots
+/// **A fired key carries its OWN record's `(bone, position)`, not the tag's first match**.
+/// The reference's M2 event kernel `0x719370` snapshots
 /// `placementMatrix · (boneMatrix[event.bone] · event.position)` by value into the callback record
 /// every dispatcher reads, so *where* a key fires is a property of the record, and a consumer that
 /// re-finds the tag in the marker table by 4CC answers the wrong point wherever a model authors

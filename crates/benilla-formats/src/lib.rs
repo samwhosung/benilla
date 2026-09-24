@@ -1,6 +1,6 @@
 //! `benilla-formats` — adapters and CLI tooling over WoW 1.12.1 (build 5875) asset formats.
 //!
-//! Every asset format is **in-repo** (decision 0021): MPQ archives (`benilla-mpq`), BLP2 textures
+//! Every asset format is **in-repo**: MPQ archives (`benilla-mpq`), BLP2 textures
 //! (`benilla-blp`), DBC tables (`benilla-dbc`), WDT tile tables (`benilla-wdt`), ADT terrain
 //! (`benilla-adt`), WMO buildings (`benilla-wmo`), and M2 models (`benilla-m2`). This crate adds our
 //! schema layer, the patch-chain helper ([`Chain`]), and the `benilla-extract` CLI, and keeps data in
@@ -20,10 +20,10 @@ pub use benilla_blp::BlpTexels;
 
 mod chain;
 pub use chain::{Chain, ChainEntry};
-/// The UI texture table's other half — loose `.tga` art (addon folders; decision 1322).
+/// The UI texture table's other half — loose `.tga` art (addon folders).
 mod tga;
 pub use tga::tga_to_rgba;
-/// Where the WoW install is — the one resolver (decision 1175). Paired with [`Chain`]: this says
+/// Where the WoW install is — the one resolver. Paired with [`Chain`]: this says
 /// *where*, that opens it.
 mod install;
 pub use install::{addon_corpus, addon_corpus_candidates, candidates, skipped, wow_data};
@@ -70,7 +70,7 @@ pub use factions::{
 };
 mod creature_types;
 pub use creature_types::{load_creature_type_flags, CreatureTypeFlags};
-/// The chat language scramble — the reference's `0x49b560` (B262). Reads [`LanguageWords`].
+/// The chat language scramble — the reference's `0x49b560`. Reads [`LanguageWords`].
 mod garble;
 pub use garble::{garble, garble_chat, Garble, FLUENT_SKILL};
 mod languages;
@@ -277,7 +277,7 @@ pub use benilla_wdt::{
 };
 pub use wdl::{WdlFile, WdlTileMesh};
 
-// The map arc (decision 0203), phase 0: the minimap tile hash catalog + the world-map DBCs.
+// The map arc, phase 0: the minimap tile hash catalog + the world-map DBCs.
 mod minimap_translate;
 pub use minimap_translate::{load_minimap_translate, MinimapTranslate};
 mod world_map_area;
@@ -314,7 +314,7 @@ pub use race_pvp_team::load_race_pvp_teams;
 mod zone_map;
 pub use zone_map::{load_zone_map, ZONE_MAP_EDGE};
 
-// The transport arc (decision 0438), phase 0: the taxi/transport path DBC adapter + timetable.
+// The transport arc, phase 0: the taxi/transport path DBC adapter + timetable.
 mod taxi;
 pub use taxi::{load_taxi_path_nodes, TaxiPathNode, TaxiPathNodes};
 mod transport_period;
@@ -326,7 +326,7 @@ pub use elevators::{
     elevator_period_ms, elevator_sample, load_elevator_paths, ElevatorKeyframe, ElevatorPaths,
 };
 
-// The taxi arc (decision 0484), phase 1: the flight-master catalogs — node identity/position/
+// The taxi arc, phase 1: the flight-master catalogs — node identity/position/
 // per-team mount (`TaxiNodes.dbc`) and the direct-hop fare table (`TaxiPath.dbc`). Distinct from
 // `taxi`/`TaxiPathNode.dbc` above, which carries a path's waypoints, not its node list or price.
 mod taxi_nodes;
@@ -336,7 +336,7 @@ pub use taxi_path::{load_taxi_paths, TaxiPath, TaxiPaths};
 
 /// The ten vanilla base content archives, **lowest priority first** — the reference mounter's
 /// table (`0x82e12c`) at its fixed priorities (`dbc.MPQ` = 0x36 … `model.MPQ` = 0x3f),
-/// reversed so [`Chain`]'s later-wins order reproduces them (decision 1300).
+/// reversed so [`Chain`]'s later-wins order reproduces them.
 ///
 /// This is only the *base* set: `patch.MPQ`, the `patch-?.MPQ` archives, and the optional
 /// `speech2.MPQ` are **discovered**, not listed — the whole mount law lives in [`Chain::open`].
@@ -369,8 +369,8 @@ pub fn open_chain(path: &Path) -> Result<Chain> {
 /// Decode a BLP texture from raw archive bytes and write it as a PNG at `out`.
 ///
 /// Returns the source `(width, height)`. Used by the `benilla-extract` CLI. **1.12 textures are BLP2**
-/// (DXT-compressed or paletted Raw1 — NOT BLP1; verified). Decoded in-repo by [`benilla_blp`]
-/// (decision 0021); mip level 0 (full resolution) is written.
+/// (DXT-compressed or paletted Raw1 — NOT BLP1; verified). Decoded in-repo by [`benilla_blp`];
+/// mip level 0 (full resolution) is written.
 pub fn blp_to_png(blp_bytes: &[u8], out: &Path) -> Result<(u32, u32)> {
     let (w, h, rgba) = blp_to_rgba(blp_bytes)?;
     image::RgbaImage::from_raw(w, h, rgba)

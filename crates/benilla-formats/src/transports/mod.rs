@@ -467,7 +467,7 @@ fn accumulate_client_forms(
 #[derive(Debug, Clone)]
 pub struct TransportTimetable {
     /// The full cycle length, ms — `progress % period_ms` is the transport's position in its
-    /// loop (decision 0438 §3).
+    /// loop.
     pub period_ms: u32,
     frames: Vec<Frame>,
     legs: Vec<Leg>,
@@ -543,7 +543,7 @@ impl TransportTimetable {
     }
 
     /// Whether any of the cycle's keyframes lies on `map_id` — i.e. this transport exists on
-    /// that map for part of its loop. The cross-map worldport (decision 0455) keeps such a
+    /// that map for part of its loop. The cross-map worldport keeps such a
     /// transport alive through the map switch (its clock is one continuous domain over the
     /// whole loop; the per-frame tick already resolves which legs render on which map).
     pub fn touches_map(&self, map_id: u32) -> bool {

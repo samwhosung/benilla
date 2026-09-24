@@ -11,7 +11,7 @@
 //!   Placement scoping alone claims the lower room (submerged on dry stone, the B60 shape). This is
 //!   what found decision 0701's Undercity site, and it now also reports whether 0701's floor rule
 //!   closes each hit. Tested against the pool's real **wet cells**, not its bounding box: a liquid
-//!   grid is sparse, so a bbox routinely spans dry ground it never touches (decision 0635).
+//!   grid is sparse, so a bbox routinely spans dry ground it never touches.
 //! * **OVERHANG** — how far a pool's wet cells reach *outside* their own group's box. This is why
 //!   0701 bounds a pool by its group's Z **floor** and not by the reference's whole per-group AABB:
 //!   on shipped content a pool overhangs its own room by up to 25 yd in XY, so an XY box test would
@@ -215,7 +215,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
     // A WMO-only map has no ADT at all — the whole world is the WDT's single `MODF` (20 of the 43
-    // shipped maps, decision 0688). Scanning only ADTs therefore declared the Deeprun Tram, the
+    // shipped maps). Scanning only ADTs therefore declared the Deeprun Tram, the
     // jails and every instance-shaped dungeon *unplaced*, which is the one thing this census uses
     // to decide a group is unreachable. The tram's own flooded sections are among the sites this
     // check was written for, so the blind spot was hiding exactly the sites asked about.
@@ -240,7 +240,7 @@ fn main() -> anyhow::Result<()> {
         let lower = name.to_lowercase();
         let map = lower.split(['\\', '/']).nth(2).unwrap_or("?").to_string();
         // No `MAP_CENTER − v` remap here: a global WMO's MODF is authored in world coords already
-        // (0688, falsified against all 26 of the server's entry points). Every shipped one is
+        // (falsified against all 26 of the server's entry points). Every shipped one is
         // (0,0,0), so a `.go` printed for one of these is the model-space offset itself.
         placed
             .entry(g.model.to_lowercase().replace('/', "\\"))

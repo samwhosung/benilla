@@ -12,7 +12,7 @@
 //! band) has no driving model yet and stays a named seam.
 //!
 //! History: the particle emission params were once `value[0]`-baked, which silenced every keyed
-//! burst (`BloodSpurt.m2` rates its starflash `0 → 20 → 0`; decisions 0137/0140/0141). The ribbon
+//! burst (`BloodSpurt.m2` rates its starflash `0 → 20 → 0`). The ribbon
 //! look tracks repeated the exact trap — `HolySmite_Low_Chest.m2` keys its slash ribbons' height
 //! `0 → 0.167 → 0`, so the value[0] bake read a permanent zero and Smite's impact slash never
 //! drew. One kernel, both lanes, so the next keyed track can't be silently constant-folded.

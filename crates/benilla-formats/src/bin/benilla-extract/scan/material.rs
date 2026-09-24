@@ -12,7 +12,7 @@
 //! consumer that runs none of it loses the batch's motion or its whole existence. It sized
 //! decision 2282, which built the consumer; it stays the way that question is asked at all — and
 //! `entityuvscan` is that same question asked of the unit / GameObject / held-item corpus, which
-//! sized decision 2295. Both lanes run their transform today; what the two scans are for is
+//! sized. Both lanes run their transform today; what the two scans are for is
 //! keeping "this lane needs no channel" a countable claim rather than an assumed one. They share
 //! their whole per-batch reader.
 
@@ -22,7 +22,7 @@ use anyhow::{Context, Result};
 use benilla_formats::{Chain, KeyAnim, SeqLoops};
 
 /// Sweep every `.m2` (under `prefix`, if given) and list the models whose MATERIAL table authors
-/// blend mode 5 (Mod) / 6 (Mod2x) — the multiply-blend census (decision 0528). One line per
+/// blend mode 5 (Mod) / 6 (Mod2x) — the multiply-blend census. One line per
 /// matching model: its per-material `(flags, blend)` pairs and path. The raw header read (materials
 /// count/ofs at `0x84`, 4-byte `{u16 flags, u16 blend}` records) matches `benilla-m2`'s parse.
 pub fn blendscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
@@ -143,7 +143,7 @@ pub fn alphascan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 
 /// Sweep every `.m2` (optionally under a path prefix) and list the batches whose texture is
 /// authored **CLAMP** (`M2Texture.flags` bit 0/1 clear) while the batch's own UVs run **outside
-/// `0..1`** — the exact population a repeat-sampling renderer draws wrong (decision 0763, B52/B96).
+/// `0..1`** — the exact population a repeat-sampling renderer draws wrong.
 ///
 /// The margin outside `0..1` is deliberate authoring: clamped, it samples the texture's transparent
 /// border and the card fades out to nothing. Sampled with repeat it wraps into the opposite edge —
@@ -235,7 +235,7 @@ pub fn uvwrapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
 }
 
 /// Sweep every `.m2` and report, per texture path, which sampler ADDRESS MODES the corpus asks of
-/// it — and how many paths are asked for **more than one** (decision 0763).
+/// it — and how many paths are asked for **more than one**.
 ///
 /// The design question behind it: the address mode lives on the GPU sampler, which in our asset
 /// layer is a property of the loaded `Image`, which is keyed by path. If a `.blp` is only ever
@@ -919,7 +919,7 @@ const FX_ANIM_SAMPLES: usize = 64;
 ///
 /// Alpha decides it for the modes that read alpha — `Blend`/`AlphaTest`, and M2 mode 4 `Add`
 /// (`SRC_ALPHA/ONE`), which is most of the effect corpus. An `Opaque` batch paints whatever it
-/// covers and a `Mod`/`Mod2x` batch's equation reads no alpha at all (decision 0528), so neither
+/// covers and a `Mod`/`Mod2x` batch's equation reads no alpha at all, so neither
 /// is called from the sheet. The one mode that needs [`Self::rgb`] is **3, `NoAlphaAdd`**
 /// (`ONE/ONE`): it adds the texel's colour with the alpha channel untouched, so an alpha-0 border
 /// with non-zero RGB still puts light on the screen. `BloodSpurtSmall01`'s border column is
@@ -1348,7 +1348,7 @@ fn uv_batch(
     //
     // Rotation and scale are at the identity in both: the translation seed is the only
     // transform channel a shared material carries at all (the affine pair is the UI
-    // lane's per-pane table row, decision 2019).
+    // lane's per-pane table row).
     let seed = sub.uv_anim.as_ref().map_or([0.0, 0.0], |a| a.sample(0.0));
     let (fu, fv) = fx_box(au, av, [0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0, 1.0]);
     let (ku, kv) = fx_box(au, av, seed, [0.0, 0.0, 0.0, 1.0], [1.0, 1.0]);
@@ -1825,7 +1825,7 @@ struct EntityReach {
     /// 300 display rows is a different fix from one reached by 1.
     creature_displays: Vec<u32>,
     /// The playable `(race, sex)` bodies among those displays (`ChrRaces` cols 4/5 → the same
-    /// CreatureDisplayInfo chain a streamed unit takes, decision 0041), spelled as the glue does.
+    /// CreatureDisplayInfo chain a streamed unit takes), spelled as the glue does.
     player_bodies: Vec<String>,
     /// `GameObjectDisplayInfo` rows naming it.
     go_displays: Vec<u32>,
@@ -1947,7 +1947,7 @@ fn entity_record<'a>(
 ///
 /// Four sources, one per `build_parts` caller that is not the spell-effect lane:
 /// `CreatureDisplayInfo` → `CreatureModelData` (every NPC, critter, mount — and every PLAYER body,
-/// which resolves through the same chain, decision 0041), `GameObjectDisplayInfo`,
+/// which resolves through the same chain), `GameObjectDisplayInfo`,
 /// `ItemDisplayInfo`'s two model columns joined to the `Item\ObjectComponents\` folder the archives
 /// actually hold them in, and the corpse lane's `<Race><Sex>DeathSkeleton` bone piles.
 fn entity_corpus(chain: &mut Chain) -> Result<EntityCorpus> {

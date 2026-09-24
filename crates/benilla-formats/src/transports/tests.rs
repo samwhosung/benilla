@@ -227,7 +227,7 @@ fn client_period_bit_exact() {
 }
 
 /// [`TransportTimetable::touches_map`] answers exactly the raw path's map set — the cross-map
-/// worldport's spare predicate (decision 0455) rests on it — and the premise itself holds: at
+/// worldport's spare predicate rests on it — and the premise itself holds: at
 /// least one of the nine live transports really does cross continents mid-cycle.
 #[test]
 fn touches_map_matches_the_paths_map_set() {
@@ -259,7 +259,7 @@ fn touches_map_matches_the_paths_map_set() {
     );
 }
 
-/// [`TransportTimetable::first_cycle_on_map`] — the seam's re-anchor target (decision 2026).
+/// [`TransportTimetable::first_cycle_on_map`] — the seam's re-anchor target.
 ///
 /// Two properties, on every cross-continent path in the fleet, because the fleet's seams are not
 /// alike: one path changes map mid-cycle, another only at the cycle wrap (path 241's map-1 legs are

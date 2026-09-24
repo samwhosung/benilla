@@ -132,7 +132,7 @@ pub struct LiquidMesh {
     /// Per-**cell** liquid coverage, row-major over `(cols−1) × (rows−1)`: `true` where the tile
     /// nibble says liquid (and, for MCLQ, its four corner heights are real). This is the source of
     /// truth for containment — a liquid grid is sparse (nibble `0xf` = hole), so its bounding box
-    /// routinely spans dry ground it never touches (decision 0635).
+    /// routinely spans dry ground it never touches.
     pub wet: Vec<bool>,
     /// Per-**cell**, parallel to [`Self::wet`]: the MLIQ tile flag's **`0x80`** bit — "a neighbouring
     /// group also claims this cell". Authored on **both** claimants, never on a cell only one group
@@ -177,7 +177,7 @@ pub struct LiquidMesh {
     /// The surface's **sound-class nibble** — the majority wet cell's low nibble (terrain), or
     /// the `0x6ba970`-resolved nibble (WMO): `class = nibble & 3`, `FluidSpeed = nibble & 0xc`,
     /// the key the above-water liquid ambient-loop system resolves through `SoundWaterType.dbc`
-    /// ([`crate::WaterSoundCatalog`]; `0x462a40`, decision 0506). Carried
+    /// ([`crate::WaterSoundCatalog`]; `0x462a40`). Carried
     /// beside `kind` because the render kind collapses the river speeds (nibbles 0 and 4 both
     /// draw `lake_a`) that the sound table splits (RiverStill 1111 vs RiverSlow 1112).
     pub sound_nibble: u8,
@@ -624,7 +624,7 @@ mod tests {
             );
             // **The invariant that makes spawning both safe at a river mouth.**
             // `liquid::liquid_at` resolves overlapping footprints by taking the LOWEST surface
-            // (decision 0634/0701 — the volume you are actually in when two are stacked). If a
+            // (the volume you are actually in when two are stacked). If a
             // river cell and an ocean cell covered the same XY, the sea at z≈0 would win under a
             // stream 5 yd above it and the player would read as dry while standing in the water.
             // At every real river mouth the two blocks are authored **disjoint** — each cell

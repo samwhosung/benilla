@@ -1,7 +1,7 @@
 //! SpellMechanic.dbc — the vocabulary that fills `SPELL_FAILED_PREVENTED_BY_MECHANIC`'s `%s`,
-//! turning "Can't do that while %s" into "Can't do that while stunned" (decision 1948).
+//! turning "Can't do that while %s" into "Can't do that while stunned".
 //!
-//! It is the crowd-control ladder's other half: the exemption scan (decision 1941) reports the
+//! It is the crowd-control ladder's other half: the exemption scan reports the
 //! blocking aura's mechanic as an **id**, and this names it. Without the table the arm's refusal
 //! displayed its template with the specifier unfilled, which is the loose end 1941 recorded.
 //!

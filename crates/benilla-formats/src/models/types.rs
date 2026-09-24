@@ -19,12 +19,11 @@ pub enum ModelBlend {
     Blend,
     /// Multiplicative — `out = src·dst` (GL `DST_COLOR/ZERO`; `0x811fe0`: M2 mode 5 → EGxBlend 4;
     /// WMO MOMT mode 4, direct index). Darkens/tints
-    /// what's already drawn; the blend equation reads NO alpha, so these batches cannot alpha-fade
-    /// (decision 0528).
+    /// what's already drawn; the blend equation reads NO alpha, so these batches cannot alpha-fade.
     Mod,
     /// 2× multiplicative — `out = 2·src·dst` (GL `DST_COLOR/SRC_COLOR`; M2 mode 6 → EGxBlend 5; WMO
     /// mode 5, direct index). Neutral at mid-grey, brightens above it: the weapon/armor ARMORREFLECT
-    /// sheen layer. Same no-alpha law as [`Self::Mod`] (decision 0528).
+    /// sheen layer. Same no-alpha law as [`Self::Mod`].
     Mod2x,
 }
 
@@ -32,11 +31,11 @@ pub enum ModelBlend {
 /// texture record carries the *type* but no embedded filename, so the spawn site swaps a per-player
 /// material onto the batches that carry the slot.
 /// - `Body` (M2 texture type 1) — the composited body atlas: base skin + face/facial-hair/pelvis
-///   overlays (decisions 0041 / 0044).
+///   overlays.
 /// - `Hair` (M2 texture type 6) — the hair-mesh texture, a single CharSections `sectionType 3`
-///   `TextureName[0]` BLP keyed by hairStyle + hairColor (decision 0045).
+///   `TextureName[0]` BLP keyed by hairStyle + hairColor.
 /// - `Object` (M2 texture type 2) — the runtime-bound **object skin**: on a weapon/shield M2 this is
-///   the item's own texture (`ItemDisplayInfo`'s model-texture column, decision 0072); on a
+///   the item's own texture (`ItemDisplayInfo`'s model-texture column); on a
 ///   character body model this same type is the cape slot. Which meaning applies depends on the
 ///   model wearing the batch, not on the type alone — the spawn site resolves it per-consumer.
 /// - `SkinExtra` (M2 texture type 8) — the standalone **extra skin** BLP: CharSections `sectionType 0`
@@ -392,7 +391,7 @@ pub struct RenderSubmesh {
     /// clear = **clamp to edge**). Not a tiling detail — a *silhouette* one. Content authors a cutout
     /// card's UVs deliberately outside `0..1` so the margin clamps to the texture's transparent border
     /// and the card fades to nothing; sampled with repeat instead, that margin wraps into the opaque
-    /// middle of the sheet and draws as solid geometry with a hard seam at the wrap (decision 0763,
+    /// middle of the sheet and draws as solid geometry with a hard seam at the wrap (
     /// bugs B52/B96). `true`/`true` for WMO, which carries its own material flags and keeps today's
     /// behaviour.
     pub wrap_x: bool,
@@ -400,7 +399,7 @@ pub struct RenderSubmesh {
     /// Render both faces (no backface culling)? From the M2 material's `0x04` flag (WMO: kept `true`
     /// for now). When `false` the batch is single-sided like the real client — visible from one side.
     pub two_sided: bool,
-    /// Per-vertex **skeletal skin binding** (decision 0019), parallel to `positions`: the 4 bone
+    /// Per-vertex **skeletal skin binding**, parallel to `positions`: the 4 bone
     /// indices each vertex is weighted to. They are **global M2 bone-array indices**, used directly as
     /// joint indices (the skinned-entity path builds one joint entity per bone, in order). **Empty**
     /// for WMO and for the static doodad/GameObject mesh (which never skins); populated by the M2 path.
@@ -433,7 +432,7 @@ pub struct RenderSubmesh {
     /// This batch's texture record is **type 14 — the icon slot**: no file of its own, filled at
     /// runtime by `Model:ReplaceIconTexture` (`0x710ec0` swaps every type-14 handle on the
     /// instance). The shipped user is `Interface\ItemAnimations\ForcedBackpackItem.m2`, the
-    /// bag buttons' item-push card, whose one batch is the pushed item's icon (decision 2008).
+    /// bag buttons' item-push card, whose one batch is the pushed item's icon.
     /// `false` for every other batch and all of WMO.
     pub icon_slot: bool,
     /// The MOMT **SIDN** (`0x10` — self-illum day/night) authored colour, RGB gamma bytes: the
@@ -471,9 +470,9 @@ pub struct RenderSubmesh {
     /// frame (around the bone pivot). `None` for ordinary geometry and all WMO batches.
     pub billboard: Option<Billboard>,
     /// This batch holds geometry bound to a billboard bone the card split **refused** — one whose mesh
-    /// is welded to the rest of the model (`separable_billboard_bones`, decision 0839). No rigid
+    /// is welded to the rest of the model (`separable_billboard_bones`). No rigid
     /// placement of such a batch exists: the reference blends it per vertex, so a lane that wants the
-    /// flap to bend must draw the **skinned** form through a joint palette (decision 0841). A lane
+    /// flap to bend must draw the **skinned** form through a joint palette. A lane
     /// that draws it static gets it whole and still. `false` for every ordinary batch — including
     /// every separable card, which is split out and faced rigidly — and for all WMO batches.
     pub welded_billboard: bool,
@@ -489,7 +488,7 @@ pub struct RenderSubmesh {
     pub uv_anim: Option<UvAnim>,
     /// The batch's UV loop **per file sequence slot**, carried ONLY when the slots disagree — i.e.
     /// when [`Self::uv_anim`]'s single loop cannot be right for every instance, because which loop
-    /// applies depends on which sequence that instance is playing (decision 1408, bug B98: the BRM
+    /// applies depends on which sequence that instance is playing (bug B98: the BRM
     /// lava bubbles key their whole flipbook inside the 50 %-weighted variation 1, so slot 0 — the
     /// only slot the shared-material registry can read — is a dead hold). `None` for every batch
     /// whose slots agree, which is the shared lane unchanged.
@@ -508,7 +507,7 @@ pub struct RenderSubmesh {
     /// `Some`, the static vertex-colour tint is **skipped** for this batch (the two would
     /// double-apply); the renderer carries the tint on the material instead, seeded at the first
     /// key and animated where the lane runs material animation. `None` for constant/keyless tints
-    /// (the static vertex bake, decision 0029) — the overwhelming majority.
+    /// (the static vertex bake) — the overwhelming majority.
     pub rgb_anim: Option<RgbAnim>,
     /// The tint twin of [`Self::uv_seq`], on the same rule and for the same reason.
     pub rgb_seq: Option<SeqLoops<[f32; 3]>>,
@@ -648,7 +647,7 @@ impl RenderSubmesh {
     /// as the position (`0x71a460`) and never flips one per face, so on those cards
     /// its `max(N·L, 0)` runs off a normal pointing away from the viewer and the card's shading
     /// swings with the CAMERA: bare ambient when the sun is behind you, full sun when you look into
-    /// it. Consumers light such a card off the side it presents instead (decision 0788).
+    /// it. Consumers light such a card off the side it presents instead.
     ///
     /// The planarity half is load-bearing: 3-D billboard geometry (the questgiver `?`'s 353 verts)
     /// carries normals pointing every way, and flipping just its −X ones would gut its shading.
@@ -667,8 +666,8 @@ impl RenderSubmesh {
     ///
     /// This is the gate that separates the two things a "billboard batch" can be, and getting it
     /// wrong is expensive in both directions. A flat card has one facing, so which way it points
-    /// decides whether the reference ever shows it (decision 0629) and which side to light
-    /// (decision 0788). A closed solid — the questgiver `?`'s 353 verts, a pauldron's little
+    /// decides whether the reference ever shows it and which side to light.
+    /// A closed solid — the questgiver `?`'s 353 verts, a pauldron's little
     /// spike — has normals pointing every way: no single facing exists, backface culling can never
     /// hide it, and a per-batch normal flip would gut its shading. Sampling *one* triangle of such
     /// a batch and reporting the answer as the batch's facing is how decision 0836 concluded the

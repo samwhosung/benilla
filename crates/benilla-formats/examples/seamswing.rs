@@ -20,7 +20,7 @@ use benilla_formats::open_chain;
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    // An explicit dir still wins; with none, ask the one resolver (decision 1175).
+    // An explicit dir still wins; with none, ask the one resolver.
     let data = args
         .next()
         .map(std::path::PathBuf::from)

@@ -1,5 +1,5 @@
 //! `WMOAreaTable.dbc` — the per-building (and per-group) audio identity: what a WMO interior
-//! sounds like (decision 0075). This is where 1.12's interior soundscape actually lives: the
+//! sounds like. This is where 1.12's interior soundscape actually lives: the
 //! Northshire Abbey monk chant is this table's whole-WMO row → `ZoneIntroMusicTable` 221, and
 //! ~4 000 group rows carry interior reverb/ambience (the terrain `AreaTable` path covers only
 //! open ground).

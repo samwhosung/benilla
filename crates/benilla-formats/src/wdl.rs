@@ -98,7 +98,7 @@ impl WdlFile {
     /// distance below a tile — the vanilla range reaches down to 177 — and most of the camera's own
     /// tile lies BEYOND the wall, where it is the only thing that can draw the near horizon.** Its
     /// absence is then a gap between the detailed terrain and the distant hills, right above the
-    /// horizon line, through which the sky pours (decision 0684 — the director's Weazel's Crater
+    /// horizon line, through which the sky pours (the director's Weazel's Crater
     /// report at view distance 320). The parameter is gone rather than defaulted so the hole cannot
     /// come back: what bounds the band on the near side is the far band's near plane in `wdl.wgsl`,
     /// and nothing else.

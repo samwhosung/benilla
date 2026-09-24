@@ -2,7 +2,7 @@
 //! `cargo run -p benilla-formats --example impass_here -- <map> <x> <y> [radius_chunks]`
 //! e.g. `impass_here Azeroth -6601.98 -531.87 10`.
 //!
-//! An "invisible wall" report (B129) names a *place* — a `.go xyz` pin — and the first question is
+//! An "invisible wall" report names a *place* — a `.go xyz` pin — and the first question is
 //! whether the wall is authored terrain at all: an MCNK with header flag bit 1 (`MCNK_IMPASSABLE`)
 //! set, or a WMO/M2 hull the reporter walked into. This prints
 //! the flag as a top-down chunk map — north up, west left, the in-game map's orientation, one
