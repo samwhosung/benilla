@@ -1,4 +1,4 @@
-//! **3-D MODEL particles** (wow-re `part-model-particles.md`, VERIFIED): an emitter whose
+//! **3-D MODEL particles**: an emitter whose
 //! record names a geometry model renders each live particle as a tiny 3-D instance of that
 //! model — quaternion-oriented, tumbling, over-life scaled and tinted — instead of a billboard
 //! quad (Whirlwind's blades, Cone of Cold's shards, the cyclones, Death Wish). The sim
@@ -107,7 +107,7 @@ pub(super) fn update_model_particles(
                         sub.no_depth_test,
                         sub.fog_policy,
                         sub.env_map, // texture_unit_lookup > 2 ⇒ the runtime generates this batch's UVs
-                        // The same LIT lane as every entity M2 (the §9 chain).
+                        // The same LIT lane as every entity M2 (`0x69e280`).
                         ShadeSel::Lit,
                         0,
                         None,

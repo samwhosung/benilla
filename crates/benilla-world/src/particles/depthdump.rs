@@ -3,7 +3,7 @@
 //! Prints, for every live world-lane quad emitter, the numbers the depth compare is decided by:
 //! each particle's quad centre in the world, its rendered half-extent, its view-space z, the NDC
 //! depth its quad carries — with the four corners' own NDC depths, so "all corners share the
-//! centre's depth" (wow-re `part-flush-emitter-depth.md` §4, the mechanism that lets a flush
+//! centre's depth" (`0x7b2a50`, the mechanism that lets a flush
 //! emitter draw) is *measured* in our pipeline, not assumed — and where the quad lands in
 //! **physical pixels**.
 //!
@@ -74,9 +74,9 @@ pub(super) fn dump_emitter(
     placement: &Transform,
     // The world point births are folded through THIS frame (the sim's own `emitter_world`, passed
     // rather than recomputed so it cannot drift from the formula births actually use). Tracked
-    // across a dump window it measures our **eye-bone sway** — the number wow-re's rig puts at
-    // 0.128 units (11.7 cm) over the Stand cycle, and the discriminator for "do our births sample
-    // the current animated palette or a rest pose" (`part-anchoring-live-bone.md` §5.2).
+    // across a dump window it measures our **eye-bone sway** — which the reference puts at 0.128
+    // units (11.7 cm) over the Stand cycle, and the discriminator for "do our births sample the
+    // current animated palette or a rest pose".
     birth_world: Vec3,
     basis: &CamBasis,
     cam_tf: &GlobalTransform,

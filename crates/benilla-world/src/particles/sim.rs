@@ -27,7 +27,7 @@ struct StepEnv {
     follow: Vec3,
 }
 
-/// One step of the verified vanilla integrator (`particle_integrate` @ `0x7b2680`): age/kill,
+/// One step of the verified vanilla integrator (`0x7b2680`): age/kill,
 /// the follow-delta add (before the velocity step, skipped once on a fresh particle — the
 /// `0x7b2744` branch), `pos += dt·v` with the gravity term on the frame's up axis
 /// (`pos.up −= ½·g·dt²`, `v.up −= g·dt`), then drag (`v −= min(dt·drag, 1)·v`) — and, for a
@@ -46,7 +46,7 @@ fn integrate_particle(p: &mut Particle, env: &StepEnv) -> bool {
     if p.age >= p.life {
         return false;
     }
-    // FOLLOW-DELTA (file 0x4000, wow-re `part-emitter-motion.md` §2): the shared per-frame
+    // FOLLOW-DELTA (file 0x4000, `0x7b2744`): the shared per-frame
     // fraction of the emitter's motion, applied to every particle EXCEPT on its first
     // integrate (the reference's particle+0xd bit — set at spawn, cleared here unconsumed).
     if p.fresh {
@@ -54,7 +54,7 @@ fn integrate_particle(p: &mut Particle, env: &StepEnv) -> bool {
     } else {
         p.pos += env.follow;
     }
-    // MODEL-particle tumble (`0x7b28e0`, wow-re `part-model-particles.md`): the Rodrigues
+    // MODEL-particle tumble (`0x7b28e0`): the Rodrigues
     // half-angle Δquat, body-frame right-multiply, skipped below the reference's 1e-4
     // threshold — then the shared linear integrator below. Quad particles carry zero.
     let theta = p.angvel.length();
@@ -88,8 +88,8 @@ fn integrate_particle(p: &mut Particle, env: &StepEnv) -> bool {
 /// keyed on). Zero when unauthored, and zero for a degenerate response (equal authored speeds,
 /// which the reference answers by zeroing both).
 ///
-/// **The ride-vs-trail baseline is NOT here** — it is the storage space itself (decision 1585).
-/// wow-re `part-emitter-motion.md` §2c-B: file `0x10` SET stores the raw emitter-LOCAL pos/vel
+/// **The ride-vs-trail baseline is NOT here** — it is the storage space itself (decision 1585):
+/// file `0x10` SET stores the raw emitter-LOCAL pos/vel
 /// (`0x7b8aa5`) and the draw folds the live emitter matrix `rt+0x1fc` back in every frame
 /// (`0x7b3efb`) ⇒ a rigid ride, keep `1.0`, for free. CLEAR bakes pos/vel through that matrix
 /// into WORLD at birth (`0x7b8acf`/`0x7b8b0f`) and the draw does *not* fold `rt+0x1fc`
@@ -111,7 +111,7 @@ fn follow_fraction(def: &benilla_formats::ParticleEmitterDef, speed: f32) -> f32
     })
 }
 
-/// The velocity-inherit trigger (wow-re `part-emitter-motion.md` §1, `0x7b5230` bytes
+/// The velocity-inherit trigger (`0x7b5230` bytes
 /// 0x7b53ce–0x7b54ca): accumulate dt; once past 1/30 s (`_DAT_0081d82c`), hold
 /// `oneFrameΔ · ((1/30)/accum) · scale` — zeroed while nothing is live — and reset. Between
 /// triggers the held value stands (births keep reading it). The exact factor carries the ×1/30
@@ -129,7 +129,7 @@ fn inherit_trigger(accum: &mut f32, held: &mut Vec3, dt: f32, delta: Vec3, live:
     }
 }
 
-/// The per-frame CHILD drive (wow-re `part-child-recursion.md`, VERIFIED): each child's spawn
+/// The per-frame CHILD drive: each child's spawn
 /// accumulation runs **once per live parent particle** — the reference's `0x7b5b9f` call with
 /// the CHILD receiver and the parent context's translation swapped to the particle's
 /// post-integration position — so births land at whichever particle's call tips the child's
@@ -195,8 +195,7 @@ fn drive_child(
 }
 
 /// A particle's **birth age** — the reference's third spawn-kernel argument, `U01 · w`
-/// (`0x7b88c4`/`0x7b88c7` in the plane kernel, byte-identical in sphere and spline; wow-re
-/// `part-birth-age-and-quad-edge.md` §1.3/§1.4).
+/// (`0x7b88c4`/`0x7b88c7` in the plane kernel, byte-identical in sphere and spline).
 ///
 /// `w` is **not** the lifespan, which is the reading that would halve every pool's steady-state
 /// population: the burst loop pushes a literal `0` (`0x7b5600`) and both continuous loops push the
@@ -339,7 +338,7 @@ impl WaterInterleave<'_, '_> {
 /// submerged: above is — `0x4836d6`). Membership is `above ⇔ d ≥ −r` against the nearest
 /// **admitted** surface over the point's XY (claim from the nearest ancestor with a room
 /// verdict; `Unknown` admits both sources, still floor-bounded per pool). **No admitted surface
-/// ⇒ the above list** (`+0x19c == 0 → A = 1`, wow-re `water-frame-straddle.md` §2) — the NEAR
+/// ⇒ the above list** (`+0x19c == 0 → A = 1`, `0x707a10`) — the NEAR
 /// side for a dry eye and the FAR side for a submerged one: shore content seen from under the
 /// water draws before the surface, so the surface tints it (0921's correction of 0911's
 /// "no surface → near").
@@ -411,8 +410,8 @@ pub(crate) fn far_side_of_water(
     far_side_of_water_at(w, claim_seed, anchor_world, 0.0)
 }
 
-/// The emitter/ribbon lane: **the water side is the MODEL's** (byte-VERIFIED, wow-re
-/// `water-frame-straddle.md` §6 — the 0921 correction of 0911's per-emitter gloss). The type-4
+/// The emitter/ribbon lane: **the water side is the MODEL's** (the 0921 correction of 0911's
+/// per-emitter gloss). The type-4
 /// walk dots the plane ONCE per model in its prologue — `world_matrix × bound-box centre`,
 /// slack `r = |matrix row 0| × header sphere radius` — and every emitter of the model reads
 /// that one cached boolean (`[ebp-8]` at `0x7085fa`); the ribbon leg reads the model's side-A
@@ -834,8 +833,8 @@ pub(super) fn simulate_particles(
             None => (*seq, *age),
         };
         // This frame's emitter PARAMETERS — the nine per-frame-sampled channels, on the same
-        // clock as the rate track (the reference's `m2_animate` emitter phase samples all ten;
-        // wow-re `part-emission-rate-animated.md` §1). Frost Nova rides its emission radius
+        // clock as the rate track (the reference's animate kernel, `0x714260`, samples all ten
+        // scalar tracks per frame). Frost Nova rides its emission radius
         // 0.19 → 13.2 yd out with the ring; Arcane Explosion 0 → 7.2 yd with the dome — births
         // MUST read the frame's values, not `value[0]` (decision 0844).
         // The instance's gseq cursor (0856/0858): the spawn age IS `sceneNow − attach` — the
@@ -998,7 +997,7 @@ pub(super) fn simulate_particles(
             None => *placement,
         };
 
-        // 0b. The EMITTER-MOTION terms (wow-re `part-emitter-motion.md`, byte-verified): both
+        // 0b. The EMITTER-MOTION terms: both
         //     feed off the emitter origin's one-frame live world Δ. prevPos refreshes EVERY
         //     frame (the reference's rt+0x248 @`0x7b5265`), so even a multi-frame inherit
         //     window measures a single frame's motion. Consumption folds the world vector into
@@ -1053,15 +1052,15 @@ pub(super) fn simulate_particles(
 
         // The sequence clock (`EmitTiming`, decision 0641's structure one channel over): a HOSTED
         // emitter reads its host's live playing sequence + clip time each frame — the reference's
-        // `m2_animate` emitter phase samples the CURRENT sequence record, which is why a quest
+        // animate kernel (`0x714260`) samples the CURRENT sequence record, which is why a quest
         // GameObject's explosion fires in its one-shot clips and reads OFF in every idle window
         // (bug B27). A host with no live player yet keeps its last slot at that slot's opening
         // pose. Pinned lanes (doodads, effect rigs, booths) run their slot on the spawn-age
         // clock; the baked loops wrap a looping band and end-hold a clamped one.
         let now = def.params.sample(clock_seq, elapsed_s, gseq_now);
 
-        // 1. Age + integrate the live pool. The verified vanilla integrator (`particle_integrate`
-        //    @ 0x7b2680): pos += dt·v with the gravity term on the UP axis (up += dt·v_up − ½·g·dt²;
+        // 1. Age + integrate the live pool. The verified vanilla integrator (`0x7b2680`):
+        //    pos += dt·v with the gravity term on the UP axis (up += dt·v_up − ½·g·dt²;
         //    v_up −= g·dt), then **drag**: v −= min(dt·drag, 1)·v (exponential velocity decay,
         //    applied after gravity). Drag is load-bearing — a fast, long-lived, zero-gravity jet
         //    (e.g. the CandelabraTallWall flame: speed 0.56, life 6, g 0, drag 10) relies on it to
@@ -1097,16 +1096,16 @@ pub(super) fn simulate_particles(
 
         // 2. Emit new particles — the owed-birth count comes from [`accumulate_emission`]
         //    (continuous `rate·dt` pour, or a BURST emitter's one rising-edge puff — the emission
-        //    model split of wow-re `part-emission-burst-flag.md`). The rate is the keyed track
+        //    model split, `0x718ec8`). The rate is the keyed track
         //    STEP-sampled at the emitter's clip clock — how a one-shot effect's emitters (rate
         //    `0 → 200 → 0` over the first 133 ms, the blood spurt's starflash) fire at their
         //    authored moment; constant ambient tracks are unaffected. Floored at 0 (a track tail
         //    may legitimately go negative). Birth position/velocity come from the shape kernel
-        //    ([`emit_local`], wow-re `part-shape-kernels.md`).
-        //    Within the draw set the reference has NO particle-side distance cull or fade (wow-re
-        //    `part-distance-density.md`; population is bounded by the OWNER draw-set gate above —
-        //    decision 0171). Its one distance mechanism is this emission LOD (`0x7b5550`,
-        //    byte-verified): spawn count × clamp(1 − (camDist − 50)·0.02, 0.25, 1.0) — full rate
+        //    ([`emit_local`], `0x7b8890`/`0x7b8d70`/`0x7b9500`).
+        //    Within the draw set the reference has NO particle-side distance cull or fade
+        //    (population is bounded by the OWNER draw-set gate above — decision 0171). Its one
+        //    distance mechanism is this emission LOD (`0x7b5550`): spawn count ×
+        //    clamp(1 − (camDist − 50)·0.02, 0.25, 1.0) — full rate
         //    inside 50 yd, linear falloff, a 25% floor from 87.5 yd out, never zero — and × the
         //    `particleDensity` CVar.
         //    The enabled M2Track (file +0x1dc) gates NEW emission on the same clock — the
@@ -1175,7 +1174,7 @@ pub(super) fn simulate_particles(
             } else {
                 vel
             };
-            // MODEL PARTICLES (wow-re `part-model-particles.md` §b): seed the instance
+            // MODEL PARTICLES (`0x7b2420`): seed the instance
             // orientation from the birth fold (the reference's transposed spawn-basis
             // mat3→quat — the transpose is the row/column-major convention fold; net, the
             // basis rotation) and roll the tumble with the VERIFIED asymmetry: only X honors
@@ -1223,7 +1222,7 @@ pub(super) fn simulate_particles(
             });
         }
 
-        // 2b. CHILD emitters (wow-re `part-child-recursion.md`): each drives off the live pool
+        // 2b. CHILD emitters (`0x7b5550`): each drives off the live pool
         //     — post-integration, post-birth, exactly the window the reference's per-particle
         //     child loop sees — with the child's OWN rate/enabled tracks on its own model's
         //     slot-0 clock (a recursion model has no host of its own; the parent's age drives).
@@ -1467,8 +1466,8 @@ pub(crate) struct OwnerMultipliers<'w, 's> {
     /// The per-model render alpha (decision 0827), composed along the attached-model chain (0833).
     alphas: crate::model_fade::ModelAlphas<'w, 's>,
     /// The light node a LIT emitter shades under when its model stands in a WMO room: the
-    /// reference lights the object from its OWN node, never from the day/night sun (wow-re
-    /// `part-lit-normal-space.md` §6.7). Absent = the exterior lane, which the shader applies
+    /// reference lights the object from its OWN node, never from the day/night sun (the WENTITY
+    /// provider `0x6a7300`'s interior leg). Absent = the exterior lane, which the shader applies
     /// per view by itself.
     lights: Query<'w, 's, &'static crate::interior::ParticleLight>,
 }
@@ -1489,7 +1488,7 @@ impl OwnerMultipliers<'_, '_> {
 /// draw's colour has met — the producer's half of [`EffectLighting::Committed`].
 ///
 /// An emitter that clears the file's unlit bit is lit by its model's light NODE, and indoors that
-/// node is the room's, not the sky's (wow-re `part-lit-normal-space.md` §6.7). A particle quad
+/// node is the room's, not the sky's (`0x6a7300`). A particle quad
 /// carries exactly one normal, so the node collapses to one RGB per draw
 /// ([`crate::interior::ParticleLight`]) — and a per-draw constant on a lane whose whole design is
 /// one shared vertex buffer belongs in the vertices. The multiply is per-channel, constant over
@@ -1537,7 +1536,7 @@ mod tests {
     /// as the kernels' `w` (`0x7b5600`), so the whole puff shares one clock and ages as one body.
     /// Reading `w` as the LIFESPAN instead — the shape an audit proposed here — would scatter the
     /// puff over `[0, lifespan)`, halve its integrated brightness and halve every steady pool's
-    /// population, which is the arithmetic wow-re's own measured C1 (300 = rate x lifespan)
+    /// population, which is the arithmetic a reference measurement (300 = rate x lifespan)
     /// already ruled out. Pinned so that reading cannot come back.
     #[test]
     fn a_burst_births_every_particle_at_age_zero() {
@@ -1736,8 +1735,8 @@ mod tests {
         assert!(!integrate_particle(&mut out, &kill));
     }
 
-    /// [`world_motion_kept`] — the ride-vs-trail law (wow-re `part-emitter-motion.md` §2c,
-    /// decision 1578). The emitter's own file flag `0x10` sets the baseline; the follow flag
+    /// [`world_motion_kept`] — the ride-vs-trail law (`0x7b8a9a`, decision 1578). The emitter's
+    /// own file flag `0x10` sets the baseline; the follow flag
     /// `0x4000` adds the authored response on top; a degenerate response adds nothing. The host
     /// class is not an input — the same unflagged def trails whoever carries it.
     #[test]
@@ -1789,8 +1788,8 @@ mod tests {
     /// its host subsequently does — translate, turn, or swing the emitter's bone through an
     /// animation — may move it. Decision 1578 cancelled the host's *translation* with a per-frame
     /// correction and left its *rotation* reaching every live particle, which is what welded
-    /// Sprint's sparkle trail to the runner's chest bone (wow-re §2c-B: the CLEAR draw at
-    /// `0x7b3f48` folds `rt+0x1fc` back in NOT AT ALL).
+    /// Sprint's sparkle trail to the runner's chest bone (the CLEAR draw at `0x7b3f48` folds
+    /// `rt+0x1fc` back in NOT AT ALL).
     #[test]
     fn a_world_mode_particle_ignores_everything_its_host_does_after_birth() {
         use crate::particles::quads::{particle_center, DrawFrame};

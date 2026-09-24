@@ -6,10 +6,9 @@
 //! and backdated inside the frame, old edges age out at `edgeLifetime`, **gravity carries the
 //! stored verts along world +Z by `g·t²`** — up for the positive majority of the corpus — and the
 //! edge list renders as a triangle strip whose `u` texcoord slides with edge age (the texture's
-//! transparent tail fades the trail). Byte-exact spec: wow-5875-re
-//! `system/models/scratch/ribbon-emitter-spec.md`; the sim below transcribes it with the same
-//! simplifications as `particles` (distributions and frames mirrored, not the reference's exact
-//! float slots).
+//! transparent tail fades the trail). The sim below transcribes the reference's byte-exact
+//! behaviour, with the same simplifications as `particles` (distributions and frames mirrored, not
+//! the reference's exact float slots).
 //!
 //! Like particles, each trail writes its strip into the **shared effect-quad stream**
 //! ([`crate::particles::buffer::EffectQuads`], decision 0732 slice P1) — per segment, one quad
@@ -65,7 +64,7 @@ struct Edge {
 }
 
 /// This frame's gravity displacement for one live edge, in world **+Z (up)** yards — the
-/// reference's exact per-frame term (`ribbonage 0x7b7e60`, `0x7b8007`..`0x7b800f`):
+/// reference's exact per-frame term (`0x7b7e60`, `0x7b8007`..`0x7b800f`):
 /// `gravity · ((age + age) + dt) · dt`, applied identically to both of the edge's vertices, with
 /// `age` advanced by `dt` straight after.
 ///
@@ -88,7 +87,7 @@ pub struct RibbonTrail {
     /// The node source — `None` once the owner is gone (missile impacted, effect reaped, item
     /// unequipped): the trail then **drains** — commits nothing, ages its edges out, and
     /// despawns itself with the last edge. The reference frees a model's emitters SYNCHRONOUSLY
-    /// at the model dtor (`0x70e313` — no orphan list; wow-re `ribbon-basis-emitter-lifecycle`);
+    /// at the model dtor (`0x70e313` — no orphan list);
     /// its visible fade comes from keeping the MODEL alive while emitters drain (the
     /// `HasLiveParticles 0x7b5f60` latch + the model's is-any-emitter-active flag). Our owners
     /// despawn at their own moment (impact, reap), so this drain reproduces the
@@ -100,8 +99,8 @@ pub struct RibbonTrail {
     seq: RibbonSeq,
     /// The MODEL INSTANCE whose [`crate::model_fade::ModelAlpha`] decides whether this trail is
     /// drawn at all (decision 0827). The reference's ribbon render leg reads the owning model's
-    /// render alpha (`block+0x3c × Model+0x19c`) and **drops the draw** below a threshold (wow-re
-    /// `ribbon-emitter-spec.md` §5) — so an invisible model has no streamer, which is what a
+    /// render alpha (`block+0x3c × Model+0x19c`) and **drops the draw** below a threshold
+    /// (`0x707680`) — so an invisible model has no streamer, which is what a
     /// first-person avatar's enchant trail needs (ledger F05). Only the drop is implemented: the
     /// note does not say the model alpha scales the strip's vertex colour the way it does a
     /// particle's, and inventing a ramp on top of a gate would be building past the evidence.
@@ -197,7 +196,7 @@ impl RibbonTrail {
 }
 
 /// What decides a trail's `+0xc0` **enable** gate — the reference's per-ribbon `block+0xbc` byte,
-/// which it re-reads every frame (wow-re `ribbon-emitter-spec.md` §6).
+/// which it re-reads every frame (`0x717660`).
 #[derive(Clone, Copy)]
 pub enum RibbonSeq {
     /// Re-read each frame from this entity's [`AnimationPlayer`] + [`ModelAnimations`] — the unit,
@@ -360,13 +359,11 @@ pub(crate) fn simulate_ribbons(
         }
         let head = owner.and_then(|o| transforms.get(o).ok()).map(|owner_gt| {
             let node = owner_gt.transform_point(*local_offset);
-            // Cross-section axis: the bone frame's local +Y — byte-VERIFIED (wow-re
-            // `ribbon-basis-emitter-lifecycle.md`, the 0202 dispatch's fold-back): `node_place
-            // 0x7b76c0` captures the basis fresh each frame from the live bone matrix, row 1
-            // (= bone-local +Y) being the ±heightAbove/Below span (`ribbon_frame_build
-            // 0x7b6990` fmuls only that pair). Sampling the live owner rotation here IS that
-            // per-frame capture. (First pinned by elimination on the fireball missile's
-            // authored bone pair; the bytes then confirmed it.)
+            // Cross-section axis: the bone frame's local +Y (`0x7b76c0` captures the basis fresh
+            // each frame from the live bone matrix, row 1 (= bone-local +Y) being the
+            // ±heightAbove/Below span (`0x7b6990` fmuls only that pair). Sampling the live owner
+            // rotation here IS that per-frame capture. (First pinned by elimination on the fireball
+            // missile's authored bone pair; the bytes then confirmed it.)
             let axis = (owner_gt.rotation() * wow_to_bevy([0.0, 1.0, 0.0])).normalize_or(Vec3::Y);
             (node, axis)
         });
@@ -469,16 +466,15 @@ pub(crate) fn simulate_ribbons(
         let h_above = def.height_above.sample_ms(ms).max(0.0);
         let h_below = def.height_below.sample_ms(ms).max(0.0);
 
-        // The `+0xc0` **enable** gate, sampled LIVE against the sequence the host is playing.
-        // SETTLED at the bytes (wow-re `ribbon-emitter-spec.md` §7, closed — the dispatch this
-        // session): the per-ribbon runtime byte `block+0xbc` IS the sampled `visibilityTrack`
+        // The `+0xc0` **enable** gate, sampled LIVE against the sequence the host is playing. The
+        // per-ribbon runtime byte `block+0xbc` IS the sampled `visibilityTrack`
         // value. Complete writer census — ctor `0x71b34c` = 0, loader default `0x70f80e` = 1,
         // then per frame `values[k0]` at `0x7176ee` (step arm) and `0x717714` (non-step arm; a u8
         // track is never blended, so both copy the same raw byte) inside `0x714260`. No
         // equipment/attach/sheathe writer exists anywhere. `0x718960` only READS it.
         //
-        // Decision 1011 wired this and was right about the mechanism; decision 1013 unwound it on
-        // the strength of §7's then-open INFERENCE and was wrong. What actually made the trap look
+        // Decision 1011 wired this and was right about the mechanism; decision 1013 unwound it and
+        // was wrong. What actually made the trap look
         // wrong was gravity (see below) — the low rig sank instead of rising, so the tuft the
         // reference shows above the crown vanished and only the gated-off high rig had ever been
         // producing anything visible, as a downward column. Two faults, one screenshot.
@@ -516,8 +512,8 @@ pub(crate) fn simulate_ribbons(
         {
             edges.pop_front();
         }
-        // GRAVITY — byte-verified (`ribbonage 0x7b7e60`, the loop at `0x7b7fe7..0x7b807a`; wow-re
-        // `ribbon-emitter-spec.md` §4). Per frame, per live edge, into BOTH vertices' world z:
+        // GRAVITY (`0x7b7e60`, the loop at `0x7b7fe7..0x7b807a`). Per frame, per live edge, into
+        // BOTH vertices' world z:
         //
         //     term = gravity · ((age + age) + dt) · dt   ;   age += dt
         //
@@ -549,7 +545,7 @@ pub(crate) fn simulate_ribbons(
         }
         // EMISSION — `edgesPerSecond` is a true rate, not a per-frame cadence: the reference
         // commits `n = floor(dt·eps + phase)` edges this frame, carries the fraction as the phase,
-        // and **backdates** each one inside the frame (wow-re §4.2). A one-edge-per-frame cap
+        // and **backdates** each one inside the frame (`0x7b7f60`). A one-edge-per-frame cap
         // silently thins every trail below `eps` frames per second — the whole trail, at 30 fps
         // with the Frost Trap's `eps` 30, is half the edges it should hold.
         if let Some((node, axis)) = head {
@@ -588,7 +584,7 @@ pub(crate) fn simulate_ribbons(
         }
         // The gate again, on the DRAW: `0x7080c2` skips the whole record when the byte is 0, so a
         // gated-off ribbon shows nothing — not a fading remainder. The sim above still ran (edges
-        // age and expire exactly as `ribbonage` ages them), which is what makes the trail resume
+        // age and expire exactly as `0x7b7e60` ages them), which is what makes the trail resume
         // mid-strip rather than from empty when the byte comes back.
         if !lit {
             continue;
@@ -671,7 +667,7 @@ pub(crate) fn simulate_ribbons(
                 texture: texture.id(),
                 blend: def.blend.into(),
                 // params.x = the per-blend fog-colour policy (the M2 batch state setter's
-                // table, `0x70baf0` / wow-re ROUND 4 — ribbons ride the same trio): additive
+                // table, `0x70baf0` — ribbons ride the same trio): additive
                 // trails fog toward BLACK, fading under the storm veil instead of adding grey;
                 // alpha/opaque trails fog toward the scene colour. (No ribbon authors the
                 // particle "unfogged" file flag — pass 0.)

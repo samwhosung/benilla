@@ -14,8 +14,8 @@
 //! is baked per particle (an emitter orbiting on an animated bone — the food sparkle's global-
 //! sequence spin — births a moving ring of straight risers, never a swirling cloud; the client's
 //! only live-follow plumbing is file flag `0x4000`, unauthored by our content). File flag `0x10`
-//! additionally folds the live bone ROTATION at render instead of baking it at birth —
-//! byte-verified, wow-re `part-simspace-fields.md` + its `1f40db0b` corrections. The lane's
+//! additionally folds the live bone ROTATION at render instead of baking it at birth
+//! (`0x7b3efb`). The lane's
 //! fragment does the vanilla gamma-space combine (`shaders/wow_effect.wgsl`, decisions
 //! 0152/0161). The whole effect family — particles, ribbons, the decal family, water foam,
 //! precipitation — draws through the lane; `WowParticleMaterial` retired with slice P2 (0733).
@@ -87,8 +87,7 @@ impl Default for ParticleTuning {
 }
 
 /// One live particle. Its frame is the emitter's storage space, which the file flag `0x10` picks
-/// — and the two spaces are the whole of the ride-vs-trail law (wow-re `part-emitter-motion.md`
-/// §2c-B, byte-settled; decision 1585):
+/// — and the two spaces are the whole of the ride-vs-trail law (decision 1585):
 /// - **World mode** (flag `0x10` CLEAR — ~70 % of the corpus): `pos`/`vel` are **absolute world
 ///   coordinates, Bevy axes**. The birth bakes everything — bone pose, model rotation, scale,
 ///   position — through the live emitter matrix (`0x7b8acf`/`0x7b8b0f`), and the draw folds
@@ -109,8 +108,8 @@ struct Particle {
     vel: Vec3,
     age: f32,
     /// This particle's lifetime, captured at birth from the emitter's **current sampled**
-    /// lifespan channel (the reference passes it into each spawn as the kernels' `life_param` —
-    /// wow-re `part-shape-kernels.md`; the channel ANIMATES, e.g. Frost Nova 0.47 → 0.80 s, so a
+    /// lifespan channel (the reference passes it into each spawn as the kernels' `life_param`;
+    /// the channel ANIMATES, e.g. Frost Nova 0.47 → 0.80 s, so a
     /// shared `def.lifespan` is wrong twice over). Kill at `age >= life`; over-life ramps
     /// normalize by it.
     life: f32,
@@ -118,9 +117,9 @@ struct Particle {
     /// pointer; same role — de-sync the flicker across particles).
     phase: u32,
     /// The reference's particle+0xd bit 1 (set at spawn, cleared on the first integrate): a
-    /// particle's first frame skips the follow-delta add (wow-re `part-emitter-motion.md` §2).
+    /// particle's first frame skips the follow-delta add (`0x7b2680`).
     fresh: bool,
-    /// MODEL particles only (wow-re `part-model-particles.md`): the instance orientation
+    /// MODEL particles only (`0x7b2420`, integrator `0x7b28e0`): the instance orientation
     /// (stored frame; seeded from the birth fold) and its body-frame angular velocity — the
     /// integrator applies the Rodrigues half-angle spin whenever `angvel` is non-zero. Quad
     /// particles carry identity/zero.
@@ -166,18 +165,16 @@ pub struct ParticleEmitter {
     on_owner_loss: OwnerLoss,
     /// The owner died and this emitter is [`OwnerLoss::Drain`]: emission stops, the pool lives out
     /// its lifespans at the frozen placement, and the emitter despawns itself when empty — live
-    /// particles finish instead of popping. Byte ground (wow-re
-    /// `ribbon-basis-emitter-lifecycle`, the 0202 dispatch's fold-back): the reference frees
-    /// emitters synchronously at the model dtor, its fade coming from the model staying alive
-    /// while emitters drain (the `HasLiveParticles` latch keeps a disabled emitter ticking) —
+    /// particles finish instead of popping. The reference frees emitters synchronously at the
+    /// model dtor (`0x70e313`), its fade coming from the model staying alive while emitters
+    /// drain (the `HasLiveParticles` latch, `0x7b5f60`, keeps a disabled emitter ticking) —
     /// this drain reproduces that defer-until-drained shape from the owner side; see
     /// `ribbons::RibbonTrail::owner` for the one OPEN half.
     draining: bool,
     /// The model instance whose [`crate::model_fade::ModelAlpha`] this cloud is multiplied by —
     /// the reference's `emitter+0x1a8`, a per-frame copy of that model's `+0x19c` (`0x718960`
     /// @`0x719073`), folded into each particle's ALPHA by the over-life sampler (`0x7b9b10`
-    /// @`0x7b9b42`; wow-re `part-scene-multipliers.md` §4's REFUTED negative + `part-additive-
-    /// combine.md` §6.1). For an ATTACHED model — a held item, a helm, a pauldron — it is the
+    /// @`0x7b9b42`). For an ATTACHED model — a held item, a helm, a pauldron — it is the
     /// WEARER's, because an attached model inherits its parent's computed alpha (decision 0827).
     /// `None` ⇒ 1.0: a placed doodad instead multiplies its own distance fade ([`EmitterFade`]).
     alpha_src: Option<Entity>,
@@ -205,15 +202,15 @@ pub struct ParticleEmitter {
     /// refreshed EVERY frame — `0x7b5230` @0x7b5265): the one-frame Δ source for both
     /// emitter-motion terms (follow-delta, velocity inherit). `None` until the first frame.
     emitter_prev: Option<Vec3>,
-    /// Velocity-inherit state (file flag 0x40, wow-re `part-emitter-motion.md` §1): the ~30 Hz
+    /// Velocity-inherit state (file flag 0x40, `0x7b5230`): the ~30 Hz
     /// trigger accumulator (rt+0x254) and the held inherit velocity (rt+0x258.., world frame) —
     /// recomputed only at a trigger, births read the held value between.
     inherit_accum: f32,
     inherit_vel: Vec3,
     /// Last frame's emission gate `(enabled && rate > 0)` — the rising-edge memory a BURST
     /// emitter (file flag 0x8000) latches on: it births its one `ftol(rate)` puff the frame this
-    /// goes false→true and re-arms when it falls (the reference's `block+0x168`, wow-re
-    /// `part-emission-burst-flag.md` §1). Unused by continuous emitters.
+    /// goes false→true and re-arms when it falls (the reference's `block+0x168`, `0x718f06`).
+    /// Unused by continuous emitters.
     gate_prev: bool,
     /// Seconds since this emitter spawned — the clip clock the keyed emission-rate track samples
     /// against (an effect model's emitters spawn at its clip start, so age == clip time). Ambient
@@ -259,14 +256,14 @@ pub struct ParticleEmitter {
     /// the booth's, it never applies to a [`Self::draining`] emitter, which has to run its pool
     /// out or leak for the session.
     frozen: bool,
-    /// The pending recursion model (wow-re `part-child-recursion.md`): once the asset resolves,
+    /// The pending recursion model (`0x7b5dd0`): once the asset resolves,
     /// [`wire_child_emitters`] turns its own emitters (cap 4, the reference's `0x7b5dfe`) into
     /// [`Self::children`] and clears this.
     recursion: Option<Handle<benilla_assets::M2Model>>,
     /// CHILD emitters — driven once per live parent particle per frame at the particle's
     /// position (never ambiently); each owns its pool and a [`ChildDraw`] mesh entity.
     children: Vec<ChildEmitter>,
-    /// The GEOMETRY model (wow-re `part-model-particles.md`): when authored, this emitter's
+    /// The GEOMETRY model (`0x7b1c80`, spawn driver `0x7b5550`): when authored, this emitter's
     /// particles render as 3-D instances of it instead of quads — [`model::update_model_particles`]
     /// grows/positions the instance pool below.
     geometry: Option<Handle<benilla_assets::M2Model>>,
@@ -322,7 +319,7 @@ impl ChildEmitter {
 pub enum OwnerLoss {
     /// The owner MODEL was destroyed: **free the emitter with it**, live particles and all. This
     /// is the reference's own rule — a model's emitters are released synchronously at its dtor
-    /// (wow-re `ribbon-basis-emitter-lifecycle`) — and it is what an equipped item that is
+    /// (`0x70e313`) — and it is what an equipped item that is
     /// replaced/unequipped, or a unit that streams out, must do. Draining instead left the cloud
     /// hanging in world space for a whole lifespan while the character walked away from it.
     Free,
@@ -470,7 +467,7 @@ impl ParticleEmitter {
     }
 
     /// Switch this emitter to [`OwnerLoss::Drain`] — **the effect is ending, so its already-emitted
-    /// particles must finish rather than pop** (wow-re `ceffect-particle-drain.md` §4a).
+    /// particles must finish rather than pop**.
     ///
     /// The reference makes this distinction the same way, at the same moment. `0x6203e0` — the
     /// teardown every ending `CEffect` reaches, whether by its completion callback or by the
@@ -850,7 +847,7 @@ pub(crate) fn owner_last_bias(reach: f32) -> f32 {
     benilla_formats::owner_last_rung(reach)
 }
 
-/// Wire pending CHILD emitters (wow-re `part-child-recursion.md`, VERIFIED): once a parent's
+/// Wire pending CHILD emitters: once a parent's
 /// recursion model resolves, its own particle emitters — **capped at 4** (`0x7b5dfe`) — become
 /// the parent's children, each with its private pool (drawn from the shared stream at the
 /// parent's anchor and rung). The reference wires at the child model's async-load completion
@@ -933,15 +930,14 @@ pub enum EmitClock {
     /// byte-verified fresh per play (decision 0858), so its gseq loops open at phase 0 with it.
     Effect(Option<usize>),
     /// A live host's `AnimationPlayer` decides the slot **and the clip time** each frame — units
-    /// and GameObjects, whose playing sequence changes; the reference's `m2_animate` emitter
-    /// phase samples the CURRENT sequence record (wow-re `part-emission-rate-animated.md` §2).
+    /// and GameObjects, whose playing sequence changes; the reference's animate kernel
+    /// (`0x714260`) samples the CURRENT sequence record for its emitter phase.
     Host(Entity),
 }
 
 /// One frame of the emission front end: how many births the pool is owed, loaded into
 /// `accumulator` (fractional; the caller's birth loop drains whole particles). The reference's
-/// per-frame emitter pass + spawn driver (`0x718960` / `0x7b5550`, wow-re
-/// `part-emission-burst-flag.md` + `part-emission-rate-animated.md`):
+/// per-frame emitter pass + spawn driver (`0x718960` / `0x7b5550`):
 ///
 /// - `rate`/`emitting` arrive already sampled from the playing sequence's key window
 ///   ([`benilla_formats::EmitTiming`]) and the gate is `(enabled && rate > 0)`.
@@ -1095,8 +1091,9 @@ pub(crate) mod tests {
         assert_eq!(seeded_slot(model_emitter(0), EmitClock::Pinned), Some(0));
     }
 
-    /// **The ending side asks for the drain; the spawn-time policy does not give it** (wow-re
-    /// `ceffect-particle-drain.md` §4a). An attached instance is spawned `Free` so that a model
+    /// **The ending side asks for the drain; the spawn-time policy does not give it**
+    /// (`0x6203e0` hides the node; `0x61f680` frees it once drained). An attached instance is
+    /// spawned `Free` so that a model
     /// dtor — a gear change, a display swap, a unit streaming out — takes its pool with the body
     /// (0826/0833: draining that case stranded ghost clouds in the air). The *other* way an
     /// effect's owner vanishes is the effect simply ending, and there the reference hides the node

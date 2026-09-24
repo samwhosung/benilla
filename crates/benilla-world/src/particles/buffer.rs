@@ -144,7 +144,7 @@ pub enum EffectFog {
     Grey,
     /// Rain's FORCED grey fog (scene fog off; params.y = 1 with zw = 70..75) — under Mod2x the
     /// grey-0.5 fog colour is neutral, so this IS the streak/patter distance fade
-    /// (rf-weather-render Q3; the row values live with their law in `weather::precip`).
+    /// (`0x59d350`; the row values live with their law in `weather::precip`).
     Rain,
 }
 
@@ -193,7 +193,7 @@ impl EffectFog {
 /// The reference has no particle material: it synthesizes an `M2Material` from the emitter's file
 /// record every draw and runs the ordinary per-batch state producer over it, so `GL_LIGHTING`
 /// lands on a particle quad exactly as it does on a mesh submesh — and the light it lands with is
-/// the **model's own light node**, not the scene's (wow-re `part-lit-normal-space.md` §5/§6). Which
+/// the **model's own light node**, not the scene's (`0x672a20`). Which
 /// node the model is on is what these three variants name.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum EffectLighting {
@@ -212,8 +212,8 @@ pub enum EffectLighting {
     Scene,
     /// The emitter's model carries its **own committed light**: it stands inside a WMO room, where
     /// the reference lights the object from its light node's footprint-MOCV words on a fixed axis
-    /// plus the room's MOLT points, and never from the day/night sun (`part-lit-normal-space.md`
-    /// §6.7, the WENTITY provider `0x6a7300`'s interior leg).
+    /// plus the room's MOLT points, and never from the day/night sun (the WENTITY provider
+    /// `0x6a7300`'s interior leg).
     ///
     /// A particle quad carries exactly one normal, so that whole node collapses to three floats
     /// ([`crate::interior::ParticleLight`]) and the producer has **already folded them into this
@@ -325,8 +325,8 @@ pub struct EffectDrawSpec {
     /// `clamp(ambient + diffuse·max(N·L,0))` against the **world up axis**, the same shape
     /// `wow_model.wgsl` applies to a mesh: the reference's quad writer uploads one constant normal
     /// for the whole draw — world +Z carried into eye space, against a light carried into the same
-    /// frame, so the product is the view-invariant `worldUp · worldLightDir` (wow-re
-    /// `part-lit-normal-space.md`; decision 1696 supersedes 0975's camera-facing reading). The
+    /// frame, so the product is the view-invariant `worldUp · worldLightDir` (`0x7b3fd0`; decision
+    /// 1696 supersedes 0975's camera-facing reading). The
     /// gate on whether an emitter takes any of it is the file's unlit bit
     /// ([`benilla_formats::ParticleEmitterDef::lit`], byte law there).
     pub lighting: EffectLighting,
@@ -368,7 +368,7 @@ pub struct EffectDrawSpec {
     /// every particle, ribbon, decal and streak wants. One family sets it — the weapon swing trail,
     /// whose callback writes EGxRs id `0x10` to `0` (`0x6c686e`; GL `glDisable(GL_DEPTH_TEST)`,
     /// D3D `ZFUNC = D3DCMP_ALWAYS`) so the arc is never eaten by the swinging character's own
-    /// shoulder (wow-re `charproc8-trail-draw-state.md` §1; decision 2076).
+    /// shoulder (decision 2076).
     pub no_depth_test: bool,
     pub main_entity: Entity,
     pub light: Option<Buffer>,
@@ -380,7 +380,7 @@ pub struct EffectDrawSpec {
     /// space — so a cloud that reaches past its cell lands in the cell **next to** it, which the
     /// composite hands to a different widget. The reference cannot have this: it draws each
     /// `<Model>` straight into the back buffer with the widget's own rect as the VIEWPORT
-    /// (wow-re `modelframe-render-law.md` §6), and the scissor eats the overflow. One shared
+    /// (`0x59c730`), and the scissor eats the overflow. One shared
     /// camera cannot carry a viewport per pane, so the clip rides the draw instead and the
     /// fragment discards outside it — the same picture, at the same rank.
     ///

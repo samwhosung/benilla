@@ -5,9 +5,8 @@
 //! trail: run past a torch and the smoke hangs where it was born. On a **transport** the same
 //! rule would stream a rider's effects off the stern, so the reference stores them in the
 //! transport's frame instead and re-projects them live at draw. The mechanism is one matrix
-//! entering at exactly two sites, and they are inverses (wow-re
-//! `system/models/scratch/attach-matrix-is-the-transport-matrix.md`, §5 trio + orchestrator
-//! arbitration; benilla decision 1591, which named this gap and left it unbuilt):
+//! entering at exactly two sites, and they are inverses (decision 1591, which named this gap and
+//! left it unbuilt):
 //!
 //! ```text
 //! A = translate(transport.pos) · Rz(transport.facing)    // 0x630ac0 — position and Z-facing only
@@ -25,7 +24,8 @@
 //! motion since birth, never the host unit's own.
 //!
 //! **Where `A` lives.** On the MODEL, not the bone and not the emitter — and the reference copies
-//! the parent's pointer down to every child model each frame (`0x7142c1`, inside `m2_animate`), so
+//! the parent's pointer down to every child model each frame (`0x7142c1`, inside the animate
+//! kernel `0x714260`), so
 //! a held weapon's enchant streamer inherits its wearer's transport without knowing anything about
 //! it. Our model child list is [`crate::model_fade::ParentModel`], so [`RideFrames`] walks that
 //! same chain — one component on the rider, inherited by everything hung off it.

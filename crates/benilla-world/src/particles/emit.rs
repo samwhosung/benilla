@@ -1,6 +1,6 @@
 //! The **emission shape kernel** and its RNG — where one birth's position + velocity direction
-//! come from, byte-verified against the reference's three vtable type-spawn generators (wow-re
-//! `part-shape-kernels.md`). Split from the emitter module face (`particles.rs`) purely along
+//! come from: the reference's three vtable type-spawn generators (`0x7b8890`/`0x7b8d70`/
+//! `0x7b9500`). Split from the emitter module face (`particles.rs`) purely along
 //! this concern; the laws and cites live on [`emit_local`] itself.
 
 use benilla_formats::ParticleEmitterDef;
@@ -22,20 +22,20 @@ pub(crate) fn rand01(state: &mut u32) -> f32 {
 }
 
 /// A symmetric random `f32` in `(−1, 1)` — the reference's `S11` draw (its RNG builds ±spans with
-/// a ×2.0 constant; every emission distribution below is plain uniform, wow-re
-/// `part-shape-kernels.md` §4 — we mirror the distributions, not the bit stream).
+/// a ×2.0 constant, `0x7b88dd`; every emission distribution below is plain uniform — we mirror
+/// the distributions, not the bit stream).
 pub(super) fn rand_s11(state: &mut u32) -> f32 {
     rand01(state) * 2.0 - 1.0
 }
 
-/// The **emission shape kernel** (wow-re `part-shape-kernels.md`, byte-verified off the three
-/// vtable type-spawn generators): one birth's position + unit velocity direction, in the emitter's
+/// The **emission shape kernel** (the three vtable type-spawn generators below): one birth's
+/// position + unit velocity direction, in the emitter's
 /// local WoW frame (Z up, origin at the emitter record's `position`). The caller applies the speed
 /// roll and the space-mode transform.
 ///
 /// - **Plane** (`0x7b8890`): position uniform in the ±½·area rectangle — **local x takes
-///   `areaLength`, local y takes `areaWidth`** (wow-re `part-shape-kernels.md` §4, VERIFIED:
-///   `p = (r2·A_x·0.5, r1·A_y·0.5, 0)` with `A_x = rt+0x290 = EmissionAreaLength`,
+///   `areaLength`, local y takes `areaWidth`** (`p = (r2·A_x·0.5, r1·A_y·0.5, 0)` with
+///   `A_x = rt+0x290 = EmissionAreaLength`,
 ///   `A_y = rt+0x294 = EmissionAreaWidth`). The pairing is only observable on an **anisotropic**
 ///   rectangle, which is why it stayed wrong through 0563/0566 — every emitter checked until
 ///   Gressil's blade smoke authored a square area. Direction: a cone around +Z with **symmetric**
@@ -57,12 +57,12 @@ pub(super) fn emit_local(
 ) -> (Vec3, Vec3) {
     let origin = Vec3::from(def.position);
     // The emitter-frame R(+Z, 90°) applied at every branch's return — see the law note at the
-    // tail. Per the wow-re bytes the prepend is per-EMITTER and subclass-independent ("gated
-    // only by has-emitters"), so the spline kernel takes it exactly like sphere/plane (the
+    // tail. The prepend is per-EMITTER and subclass-independent (gated only by has-emitters,
+    // `0x71907f`), so the spline kernel takes it exactly like sphere/plane (the
     // 0563 landing missed this branch — caught by the compensation audit).
     let rot90 = |v: Vec3| Vec3::new(-v.y, v.x, v.z);
-    // SPLINE (`0x7b9500`, wow-re `part-shape-kernels.md` §3 — VERIFIED, incl. the scatter
-    // bytes): born ON the authored Bézier chain at arc fraction `t ∈ [tMin, tMax]` (the
+    // SPLINE (`0x7b9500`, incl. the scatter bytes): born ON the authored Bézier chain at arc
+    // fraction `t ∈ [tMin, tMax]` (the
     // repurposed area fields). Velocity: radial from the zSource pivot when authored; else +Z
     // rotated about the local spline tangent by ψ = S11·spin (the reference extracts the
     // transposed row — a −ψ rotation — indistinguishable under the symmetric draw), with an
@@ -133,8 +133,8 @@ pub(super) fn emit_local(
         let (sp, cp) = phi.sin_cos();
         Vec3::new(st * cp, st * sp, ct)
     };
-    // The emitter-frame R(+Z, 90°) — wow-re `part-modelspace-animbone.md`, §5 byte-verified
-    // (`0x719114–0x719142`: axis literal (0,0,1), angle π·0.5, Rodrigues + mat4_mul into the
+    // The emitter-frame R(+Z, 90°) (`0x719114–0x719142`: axis literal (0,0,1), angle π·0.5,
+    // Rodrigues + mat4_mul into the
     // per-frame emitter matrix rt+0x1fc): the reference prepends a fixed +90°-about-local-+Z
     // to EVERY M2 particle emitter's bone matrix, applied to the kernel-relative vectors only
     // (the record-position translation stays outside it). It is what turns the sphere kernel's
@@ -162,7 +162,7 @@ pub(crate) mod tests {
     }
 
     /// Plane births stay in the ±½·area rectangle around the record position, and the cone is
-    /// SYMMETRIC (θ = S11·range — wow-re `part-shape-kernels.md`'s correction of our old
+    /// SYMMETRIC (θ = S11·range, `0x7b8890`'s correction of our old
     /// [0, range) draw): with a wide sample, x-velocities must land on both signs. The
     /// rectangle rides the R(+Z,90°) emitter frame (`emit_local`'s tail): the kernel's
     /// length-along-x/width-along-y rectangle lands **width-along-x, length-along-y**. Asserted on

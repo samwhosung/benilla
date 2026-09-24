@@ -53,7 +53,7 @@ pub struct BatchVariants {
     /// The `AlphaMode::Blend` twin every feather pass rides (spawn appear-fade, distance fade,
     /// aura fades). Equal to [`Self::steady`] when the steady material already blends.
     pub fade_blend: Handle<WowModelMaterial>,
-    /// The depth-prime twin (`m2-blend-promotion-zfill.md` §4). `None` for a batch that writes no
+    /// The depth-prime twin (`0x707f7d`). `None` for a batch that writes no
     /// depth to prime — one that disables depth write/test, or a multiply batch.
     pub zfill: Option<Handle<WowModelMaterial>>,
 }
@@ -81,7 +81,7 @@ pub struct EntityUvLane<'a> {
 pub struct SkyboxBatch {
     /// The batch at slot weight 1.0 — its authored blend mode, the material it has always had.
     pub steady: Handle<WowModelMaterial>,
-    /// The blend-promotion twin for `0 < weight < 1` (wow-re `m2-blend-promotion-zfill.md`).
+    /// The blend-promotion twin for `0 < weight < 1` (`0x70c190`).
     pub fade_blend: Handle<WowModelMaterial>,
 }
 
@@ -163,8 +163,8 @@ impl M2BatchMaterials<'_> {
     /// **The skybox DOES feather** — that is what the second handle is. The slot weight
     /// (`[CM2Model+0x180]`, written per frame from the interior crossfade `[0xce9bdc]`) multiplies
     /// into every batch's combined alpha, and a batch at `0 < A < 1` is *promoted* to
-    /// SRC_ALPHA/INV_SRC_ALPHA blending whatever its authored mode (wow-re
-    /// `m2-blend-promotion-zfill.md` — the same promotion every entity fade rides). So the 4-second
+    /// SRC_ALPHA/INV_SRC_ALPHA blending whatever its authored mode (`0x70c190` — the same promotion
+    /// every entity fade rides). So the 4-second
     /// crossfade draws the sky alpha-blended over the still-standing celestial pass. `fade_blend`
     /// is that promoted twin; a batch whose steady material already blends (authored Blend, or a
     /// multiply batch riding the source-colour lerp) is its own twin, exactly
@@ -255,7 +255,7 @@ impl M2BatchMaterials<'_> {
 
     /// The full variant set an **entity** part needs: every M2 entity — unit, player, GameObject,
     /// held item, spell effect — is built LIT and carries the same indoor pair, because the
-    /// reference hands every entity M2 the same entity-node fill (wow-re `unit-m2-shader-light`).
+    /// reference hands every entity M2 the same entity-node fill (`0x672a20`).
     ///
     /// **It also puts the batch on the UV lane** (decision 2295), and takes `uv` for exactly that
     /// reason rather than leaving it to the caller: seeding a material's `sun_scale.zw` and
@@ -540,9 +540,9 @@ impl M2BatchMaterials<'_> {
 }
 
 /// A WMO group batch shades through the FFP N·L path, not the M2 lobe, so its `sun_scale` lane is
-/// unread — a property of the batch, not of the lane that spawns it. Every other batch is LIT: the
-/// verified §9 chain gives entity M2s the same 2.5/0.5 lane as ADT doodads, and the dynamic half
-/// (the MCSH sample at their feet) rides the per-instance `MeshTag` shade byte, not the material.
+/// unread — a property of the batch, not of the lane that spawns it. Every other batch is LIT:
+/// entity M2s get the same 2.5/0.5 lane (`0x69e280`) as ADT doodads, and the dynamic half (the
+/// MCSH sample at their feet) rides the per-instance `MeshTag` shade byte, not the material.
 fn shade_for(sub: &ModelSubmesh) -> ShadeSel {
     if sub.wmo_batch.is_some() {
         ShadeSel::Matte

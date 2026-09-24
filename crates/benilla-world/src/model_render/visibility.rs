@@ -226,8 +226,8 @@ pub(super) fn apply_model_visibility(
                 });
 
             // …and, off the SAME per-frame flood, which fog triple this piece's batch is pushed
-            // with: the client's per-group `[0xca7f00]` (wow-re round-6 Q-I — the group drawer
-            // `0x6b5190` and the group-doodad drawer `0x6b62e0` push the interior triple only under
+            // with: the client's per-group `[0xca7f00]` (the group drawer `0x6b5190` and the
+            // group-doodad drawer `0x6b62e0` push the interior triple only under
             // it; everything else inherits `push_fog`'s scene triple). `None` for every non-WMO
             // entity, which leaves `INTERIOR_FOG_BIT` to the entity classifier — a unit's fog is
             // staged by the unit's OWN classification, not by the room's gate.
@@ -240,7 +240,7 @@ pub(super) fn apply_model_visibility(
             // The batch's animated material-alpha factor (decision 0130 phase 2): the sampled
             // colour-alpha × transparency-weight loop, `1.0` for the untracked majority. Multiplied
             // into the tag below, and into the cull here — the real client skips a batch whose
-            // combined alpha is ≤ 0 before even reading its blend mode (wow-re `m2-alpha-combine-cull`),
+            // combined alpha is ≤ 0 before even reading its blend mode (`0x707b3a`),
             // so a flicker track at 0 hides the batch outright.
             let mat_factor = mat_anim.map_or(1.0, |m| m.current);
 
@@ -357,7 +357,7 @@ pub(super) fn apply_model_visibility(
     // liquid surfaces, not the ~100k submeshes above — and change-gated like every write here.
     //
     // The gate is the **ever-visited latch**, not this frame's PVS: the client's render-record
-    // persistence (wow-re `wmo-record-persistence.md` @`00a766f6`) draws a visited MLIQ group's
+    // persistence (`0x684fe0` → `0x6b4060` → `0x6b62e0`) draws a visited MLIQ group's
     // liquid every frame with no portal re-check for the rest of the world session — the Great
     // Forge's walkway-level pool stays put when its group drops out of the flood (B65). An index
     // past the latch fails OPEN (portal-less props never latch and must always draw).
@@ -373,8 +373,8 @@ pub(super) fn apply_model_visibility(
         let exterior_ok = !exterior || Some(gv.instance) == own_instance || gate.admits(xf, aabb);
         // **A building's water rides the building's own toggle** — the reference's WMO liquid drain
         // `0x684cd0` gates on `[0xc7b2a4] & 0x100`, the "Map objects" bit, NOT on the `0x1000000`
-        // "Water" bit the three ADT drains test (wow-re `terrain/scratch/liquid-window-gate.md` §5,
-        // decision 1657). Our `ModelKind::Wmo` toggle is that bit, and until now it hid a building
+        // "Water" bit the three ADT drains test (decision 1657). Our `ModelKind::Wmo` toggle is
+        // that bit, and until now it hid a building
         // and left its pool hanging in the air — which is also the shape a mis-placed pool takes, so
         // the one instrument for telling those apart was itself producing the symptom.
         //
@@ -392,7 +392,7 @@ pub(super) fn apply_model_visibility(
         }
         // …and the pool's fog lane, off the same per-frame flood as the room's walls (decision
         // 1787). The reference's WMO liquid pass re-submits the interior fog block under the SAME
-        // `[0xca7f00]` as the geometry pass (wow-re `fog-env-state` §5's 6-site census), so a room
+        // `[0xca7f00]` as the geometry pass, so a room
         // and its water can never disagree; `liquid.wgsl` ANDs this with the surface's own static
         // interior class. Note the term is the FLOOD's bit, not the ever-visited latch above: a
         // pool the latch keeps drawing after its room left the PVS wears the scene fog, which is
@@ -618,8 +618,8 @@ mod tests {
     /// not, which is the half that makes this a fidelity fact rather than a tidy-up.
     ///
     /// The reference gates its WMO liquid drain `0x684cd0` on `[0xc7b2a4] & 0x100`, the "Map
-    /// objects" bit, while the three ADT drains test the separate `0x1000000` "Water" bit (wow-re
-    /// `terrain/scratch/liquid-window-gate.md` §5). `ModelKind::Wmo` is our "Map objects" bit, and
+    /// objects" bit, while the three ADT drains test the separate `0x1000000` "Water" bit.
+    /// `ModelKind::Wmo` is our "Map objects" bit, and
     /// without this term switching buildings off left every canal, fountain and dungeon pool
     /// hanging in mid-air — which happens to be exactly what a mis-placed pool looks like, so the
     /// one instrument for telling a water bug from a wall bug was manufacturing the symptom.
