@@ -7,7 +7,7 @@
 //!
 //! In the client the widget clones the unit's live model on `SetUnit`/`Dress` (`0x5059a0`, the
 //! attachment tree deep-copied) and `TryOn` overwrites one bodyslot or one of two hand lanes of
-//! that clone (wow-re `ui/scratch/dressup-model-equipment.md`). benilla renders no FrameXML model:
+//! that clone (`0x504350`). benilla renders no FrameXML model:
 //! every model pane is a booth bake the app composes from a look — the player's own visible items
 //! with the tried-on ones substituted in — and the VM holds neither item templates nor the
 //! player's equipment. So the verbs record *intents*, in order, and the app applies them
@@ -18,10 +18,10 @@
 //! ## What each verb means, off the bytes
 //!
 //! - `SetUnit(unit)` / `RefreshUnit()` / `Dress()` all funnel into the same rebuild-from-the-unit
-//!   worker (§1 of the note): every substitution is gone and the model is what the player shows in
+//!   worker (`0x505b50`): every substitution is gone and the model is what the player shows in
 //!   the world. One intent, [`DressUpIntent::Dress`].
 //! - `Undress()` → `0x504490`: clears components bodyslots `0..0xb` — every worn piece, base and
-//!   tried-on alike — and touches no hand lane, so a held weapon stays (§5). [`DressUpIntent::Undress`].
+//!   tried-on alike — and touches no hand lane, so a held weapon stays. [`DressUpIntent::Undress`].
 //! - `TryOn(item)`: the argument is `trunc(tonumber(arg))` (`__ftol 0x40a2b0`) handed to the item
 //!   cache, so a numeric string is an id and anything else is item 0, which previews nothing. The
 //!   stock `DressUpItemLink` hands it the digits it `gsub`bed out of the `|Hitem:` link. It gates

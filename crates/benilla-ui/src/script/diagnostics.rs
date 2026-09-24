@@ -247,8 +247,7 @@ impl super::UiScript {
 /// and the demand-load copy classified a missing manifest entry as a script error, so an addon the
 /// reference loads (logging `Couldn't open %s` and continuing) came back as a session failure here.
 ///
-/// The reference's own shape, VERIFIED (wow-re `system/ui/scratch/xml-toc-path-resolution.md` §4
-/// and `include-lua-dispatch.md` §7): a failed open is **non-fatal** — `0x6edaa0` logs
+/// The reference's own shape: a failed open is **non-fatal** — `0x6edaa0` logs
 /// `"Couldn't open %s"` (`0x846ff4`) to the log sink at severity 2 and returns null; every failure
 /// leg "reports through the sink and returns normally, with no throw, no `longjmp` and no abort",
 /// and the enclosing `.toc`/document keeps loading. Nothing on that path reaches the Lua error

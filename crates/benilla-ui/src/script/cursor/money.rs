@@ -1,6 +1,5 @@
 //! The money cursor — payload mode 2 (decisions 1962, 1965): coins picked up off a money frame,
-//! and everything the reference does with them. VERIFIED at the bytes throughout — wow-re
-//! `money-cursor-law.md` (commit `a4dc2ff4`), which 1965 folded in:
+//! and everything the reference does with them. VERIFIED at the bytes throughout:
 //!
 //! * **The purse is never debited.** Nothing on this path writes `PLAYER_FIELD_COINAGE`; the
 //!   backpack's figure is `GetMoney() − GetCursorMoney() − GetPlayerTradeMoney()`, FrameXML
@@ -140,7 +139,7 @@ pub(crate) fn pickup_trade_money(model: &mut Model, amount: i32) -> bool {
 }
 
 impl crate::script::UiScript {
-    /// The trade window's open leg (`SetTradePartner 0x4bf4e0`, §4b): coins held on the cursor
+    /// The trade window's open leg (`SetTradePartner 0x4bf4e0`): coins held on the cursor
     /// fold into the offer before anything else. Answers the new offer when they did.
     pub fn fold_cursor_money_into_trade(&mut self) -> Option<u32> {
         let mut model = self.model_mut();

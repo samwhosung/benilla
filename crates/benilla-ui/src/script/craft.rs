@@ -51,8 +51,8 @@
 //! module's, not the app's (decision 1124: [`recipe_order`], the craft type's own byte-verified
 //! comparator, applied in [`UiScript::set_craft`]). `GetCraftInfo` therefore never
 //! returns the `"header"` `craftType` the ref Lua also checks for (ref l.38/77/199/252/292). The
-//! header/grouping law itself is no longer pending — decision 0446 confirmed it byte-exact (wow-re
-//! `tradeskill` TU-B) and TradeSkill grew the real tree engine ([`super::tradeskill`]'s `build_groups`)
+//! header/grouping law itself is no longer pending — decision 0446 confirmed it byte-exact
+//! (`0x4f60c0`) and TradeSkill grew the real tree engine ([`super::tradeskill`]'s `build_groups`)
 //! on it. Craft never got the same port and stays on this v1 flat render; `Expand/CollapseCraftSkillLine`
 //! are still literal no-ops, wired only so the ported XML's header-click handlers don't error
 //! (TradeSkill's `Expand/CollapseTradeSkillSubClass` precedent). 0446 also confirmed the one live case
@@ -67,8 +67,7 @@
 //! [`super::tooltip_spell`] beside `SetTrainerService`, its structural twin: both are SELECTORS
 //! into the shared spell/item builders rather than renderers of their own. The v1 two-line
 //! "name white, description gold" render is gone — `SetCraftSpell 0x533e90` funnels into the same
-//! `0x52e610`/`0x52b650` pair every other content binding does, so two lines were eight-plus short
-//! (wow-re `ui/scratch/trainer-service-tooltip-law.md` §4.1).
+//! `0x52e610`/`0x52b650` pair every other content binding does, so two lines were eight-plus short.
 
 use mlua::{Lua, MultiValue, Value, Variadic};
 
@@ -188,8 +187,7 @@ pub struct CraftState {
 const CRAFT_TYPE_BEAST_TRAINING: u32 = 1;
 
 /// The Craft window's **row order** — `0x4f6920` (craft type 1, Beast Training) / `0x4f67a0` (every
-/// other type, i.e. Enchanting), byte-verified in wow-re
-/// (`system/ui/scratch/trainer-craft-list-order.md`, decision 1124). Both are the same cascade and
+/// other type, i.e. Enchanting; decision 1124). Both are the same cascade and
 /// the Beast Training one has one extra key:
 ///
 /// 1. the **difficulty tier** `[+0xc]` ascending ([`super::TradeSkillDifficulty::tier`]);
@@ -357,7 +355,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // trainingPointCost, requiredLevel (ref l.37/168/289's own 7-tuple — module doc). `craftType` is
     // the difficulty color key, never "header"; `isExpanded` is always nil; the trailing two are
     // Beast Training's own fields, hardcoded 0 (out of scope, module doc). OOB → a single nil.
-    // The two link verbs (wow-re `tradeskill/scratch/tradeskill-craft-item-links.md`, 1973).
+    // The two link verbs (1973).
     //
     // GetCraftItemLink(index) — `0x4f72a0`: the number gate raises its Usage; then the spell's
     // Spell.dbc `castUI` decides. An Enchanting recipe (`castUI == 3` — this window's craft type,
@@ -832,7 +830,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 0);
     }
 
-    /// **Beast Training's rank order** (decision 1124), pinned against wow-re's emulated run of the
+    /// **Beast Training's rank order** (decision 1124), pinned against an emulated run of the
     /// real `0x4f6920` over real `Spell.dbc` values — and the regression for the director's report
     /// that "Beast Training lists a skill's ranks out of ascending order" (ledger B229).
     ///
@@ -897,7 +895,7 @@ mod tests {
             ]
         );
 
-        // The falsifiable control wow-re ran: the SAME rows at the Enchanting craft type select
+        // The falsifiable control: the SAME rows at the Enchanting craft type select
         // `0x4f67a0`, which has no `spellLevel` key — so the ranks fall to the trailing spell-id
         // tie-break instead. That they still come out ascending here is benilla's determinism, not
         // the reference's order; what matters is that the two types differ at all.
@@ -922,7 +920,7 @@ mod tests {
         );
     }
 
-    /// The craft link pair (wow-re `tradeskill-craft-item-links.md`, 1973): an Enchanting recipe
+    /// The craft link pair (`0x4f72a0`; 1973): an Enchanting recipe
     /// answers the ENCHANT link — fixed white, the spell's id and name — and cannot miss; another
     /// craft type answers zero values (no shipped CREATE_ITEM input); the reagent link is nil
     /// until its template is in the store, then the item link in its quality colour; the raises.

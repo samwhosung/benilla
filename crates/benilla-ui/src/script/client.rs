@@ -42,9 +42,9 @@ const BUILD_DATE: &str = "Sep 19 2006";
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // `GetLocale()` -> one string, and `IsMacClient()` -> nil, both ARITY-EXACT in the reference's
-    // own shape table (`re/audit/binding-shapes.tsv`: `GetLocale 0x46ce40`/`0x48d8b0` is
-    // `0 -> 1 (string?)`, `IsMacClient 0x48c980` is `0 -> 1 (nil)`, both `exact`/`agree`).
+    // `GetLocale()` -> one string, and `IsMacClient()` -> nil, both ARITY-EXACT: `GetLocale
+    // 0x46ce40`/`0x48d8b0` is `0 -> 1 (string?)`, `IsMacClient 0x48c980` is `0 -> 1 (nil)`, both
+    // `exact`/`agree`.
     //
     // **`IsMacClient` answering nil is the whole verb, not a placeholder.** The table records the
     // return KIND as `(nil)` — this binding pushes nil on the PC build the reference was carved
@@ -61,8 +61,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set("IsMacClient", lua.create_function(|_, ()| Ok(Value::Nil))?)?;
 
-    // **`FrameXML_Debug([v])` — the XML loader's own trace switch, get-or-set** (decision 2160,
-    // wow-re `ui/scratch/framexml-debug-trace-flag.md`). `0x488440` reads the global `[0xceea30]`
+    // **`FrameXML_Debug([v])` — the XML loader's own trace switch, get-or-set** (decision 2160).
+    // `0x488440` reads the global `[0xceea30]`
     // through `0x6edb40`, and:
     //
     // - a **Lua-truthy** argument takes the SET arm (`0x48845d je` after `lua_toboolean 0x6f34d0`)
@@ -71,8 +71,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // - the stored value is `lua_tonumber` truncated **toward zero** (`0x40a2b0`), so `1.9` is 1
     //   and a non-numeric string is 0, which is 5.0's `tonumber` coercion;
     // - an absent, nil or false argument is a pure GET and leaves the flag alone;
-    // - it always returns ONE number — the flag's value *after* the call
-    //   (`re/audit/binding-shapes.tsv`: `argc 1 exact, returns 1, (number), agree`).
+    // - it always returns ONE number — the flag's value *after* the call.
     //
     // The reference ships a call to it commented out in its own `BasicControls.xml:20`; the
     // corpus's consumer is `ImprovedErrorFrame`, which drives it off a saved `XMLDebug` CVar at
@@ -300,7 +299,7 @@ impl super::UiScript {
             }
             // The `realmName` CVar is the SAME fact, and it is set here so it cannot drift from
             // `GetRealmName()`. It is a real 1.12 CVar (`0x83f2d0`, persisted — the client builds
-            // its SavedVariables path from it, wow-re `savedvariables-protocol.md`), and it had no
+            // its SavedVariables path from it), and it had no
             // value at all here: `Ace/AceState.lua:27` is
             // `ace.trim(GetCVar("realmName"))` inside `SetGameState`, which EVERY Ace addon runs at
             // PLAYER_ENTERING_WORLD, so the nil became `gsub(nil, ...)` and took the family down.
@@ -422,7 +421,8 @@ mod tests {
     }
 
     /// `GetLocale` answers one string and `IsMacClient` answers nil — the reference's own shapes
-    /// (`binding-shapes.tsv`, both `exact`/`agree`), and the arity is the half a caller branches on.
+    /// (`GetLocale 0x46ce40`/`0x48d8b0`, `IsMacClient 0x48c980`, both `exact`/`agree`), and the
+    /// arity is the half a caller branches on.
     #[test]
     fn the_client_identity_pair_answers_its_reference_arity() {
         let s = UiScript::new().unwrap();

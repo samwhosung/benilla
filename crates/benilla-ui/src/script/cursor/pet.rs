@@ -1,6 +1,6 @@
-//! The pet bar's drag (decision 1010; wow-re `ui/scratch/pet-action-bar-api.md` §10.3/§10.4/§10.7)
-//! — **one** Lua verb, `PickupPetAction`, which forks on whether the cursor is already carrying a
-//! pet payload. The reference's own bar calls it from all three gestures (`PetActionButton_OnClick`
+//! The pet bar's drag (decision 1010) — **one** Lua verb, `PickupPetAction`, which forks on
+//! whether the cursor is already carrying a pet payload. The reference's own bar calls it from all
+//! three gestures (`PetActionButton_OnClick`
 //! under shift, `OnDragStart`, and `OnReceiveDrag` — `PetActionBarFrame.lua:252-283`), so "pick up"
 //! and "drop" are the same binding seen from either side of an empty cursor.
 //!
@@ -43,7 +43,7 @@ use super::{queue_cursor_update, CursorPayload, CursorPetAction};
 /// **The clamp lives here**, and it is a deliberate divergence from the reference's own arithmetic:
 /// its callers gate `cmp esi,0xa; jbe`, which admits index 10 (Lua argument 11), and neither
 /// `0x4bce00` nor `0x4bc9a0` bounds-checks again — so a real client writes one dword *past* the
-/// ten-slot array. Not reproduced (wow-re §10.7 says so in as many words).
+/// ten-slot array. Not reproduced.
 const PET_SLOTS: u32 = 10;
 
 /// The client's slot type, masked as it masks it (`(packed >> 24) & 0x3F`).
@@ -66,8 +66,8 @@ fn payload_word(packed: u32) -> Option<u32> {
 }
 
 /// The duplicate scan's comparison key (`0x4bca44`/`0x4bca57`, mask `0x3FFFFFFF`) — everything but
-/// the two autocast bits. **Not** type-1-only: the note's earlier prose said the duplicate clear
-/// was, and the bytes say the mask covers the whole type+action field for any source type.
+/// the two autocast bits. **Not** type-1-only: the mask covers the whole type+action field for
+/// any source type.
 fn same_action(a: u32, b: u32) -> bool {
     a & 0x3FFF_FFFF == b & 0x3FFF_FFFF
 }
@@ -80,8 +80,8 @@ fn is_blanked_spell(packed: u32) -> bool {
 }
 
 /// A relocation **candidate** (`0x4bca8b`–`0x4bcab0`): not a token, and its low 16 bits zero. So an
-/// all-zero slot qualifies and so does a blanked type-1 slot — the note's earlier "token-or-empty"
-/// reading was wrong in both directions.
+/// all-zero slot qualifies and so does a blanked type-1 slot — not simply "token-or-empty" in
+/// either direction.
 fn is_relocation_candidate(packed: u32) -> bool {
     !is_token(packed) && packed & 0xFFFF == 0
 }
@@ -277,9 +277,9 @@ fn write_slot(model: &mut Model, target: usize, source: u32, passive: bool) -> O
     Some(assigned)
 }
 
-/// A **token** word's `texture` is the NAME of a global, not a path — `GetPetActionInfo`'s own
-/// convention (§2.4: the two `char[32]` tables hand back `PET_ATTACK_TEXTURE`, and the bar paints
-/// with `getglobal(texture)`). The cursor takes a PATH, so a command or reaction word that reaches
+/// A **token** word's `texture` is the NAME of a global, not a path — `GetPetActionInfo 0x4bdc50`'s
+/// own convention: the two `char[32]` tables hand back `PET_ATTACK_TEXTURE`, and the bar paints
+/// with `getglobal(texture)`. The cursor takes a PATH, so a command or reaction word that reaches
 /// the cursor has to carry one, or the drag is invisible — you pick Attack up and nothing sticks
 /// to the pointer. Resolved here, the one place a slot's view becomes a cursor payload, exactly as
 /// `PetActionBar.xml` resolves it in the one place a slot's view becomes a button.

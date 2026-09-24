@@ -84,7 +84,7 @@ pub(super) fn pickup_action(model: &mut Model, id: u32) -> bool {
 ///
 /// Returns whether the caller should repaint.
 pub(crate) fn place_action(model: &mut Model, id: u32) -> bool {
-    // The two accept filters, byte-read (wow-re `action-item-slot.md` §5 — decision 0666). Both
+    // The two accept filters, byte-read (`PlaceAction 0x4e62e0` — decision 0666). Both
     // reject with a **bare return**: no store, no clear, no packet — mechanically identical to
     // clicking with an empty cursor, and the refused payload STAYS on the cursor.
     //
@@ -115,7 +115,7 @@ pub(crate) fn place_action(model: &mut Model, id: u32) -> bool {
         CursorPayload::Item(i) => Some((ACTION_KIND_ITEM, i.item_id, i.texture.clone())),
         CursorPayload::Spell(s) => Some((ACTION_KIND_SPELL, s.spell_id, s.texture.clone())),
         // Mode 8 — the one non-item/non-spell payload the reference's `PlaceAction` accepts
-        // (`action-item-slot.md` §5's payload table: pet actions and class abilities are refused,
+        // (`0x4e62e0`'s accept table: pet actions and class abilities are refused,
         // macros are not). It packs the bare macro id under the MACRO tag, exactly as the SPELL
         // and ITEM arms pack theirs.
         CursorPayload::Macro(m) => Some((ACTION_KIND_MACRO, m.index, m.texture.clone())),

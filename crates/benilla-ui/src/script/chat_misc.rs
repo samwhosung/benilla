@@ -5,7 +5,7 @@
 //! itself (`ui_chat/input/parse.rs`) and now drains what the reference's own Lua decided.
 //!
 //! Every verb is a queue or a flag — the engine-free seam (0068 §3): the VM never sees the wire,
-//! the app drains and sends. Registrar addresses from wow-re `ui/scratch/bindings.md`:
+//! the app drains and sends. Registrar addresses:
 //! `0x49fd30 DoEmote`, `0x48c7b0 RandomRoll`, `0x489c40 AssistByName`, `0x48a610 UninviteByName`.
 
 use mlua::{Lua, MultiValue, Value};

@@ -76,8 +76,7 @@ pub(crate) fn maybe_start_drag(model: &mut Model, pos: (f32, f32)) -> Option<(u3
     // un-presses (`0x779410`, guarded on `locked == 0 && state != DISABLED`) and then forwards to
     // the base notify that fires `<OnDragStart>`. So a button you drag off releases its pushed art
     // at the THRESHOLD crossing, which is here — not when the cursor leaves its rect, and not for
-    // a frame that never registered for drag (wow-re `scratch/button-state-edge-set.md`;
-    // decision 2134).
+    // a frame that never registered for drag (decision 2134).
     super::super::button::edge(model, source, crate::widget::ButtonState::on_drag_start);
     let id = model
         .arena

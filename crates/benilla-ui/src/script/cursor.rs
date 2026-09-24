@@ -45,7 +45,7 @@ pub const EQUIPMENT_BAG: i64 = -100;
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// What the cursor carries — the client's payload-mode global [0xb4d900] as a typed enum
-/// (wow-re cursor-dragdrop-payload.md §1: 1 = live item, 3 = spell, **4 = pet action**, **8 =
+/// (1 = live item, 3 = spell, **4 = pet action**, **8 =
 /// macro**, **10 = stabled pet**; our Action arm is the client's bar-slot pickup; the money arm
 /// is mode 2 ([`CursorMoney`], 1962/1965) and the preview arm stays unbuilt). One transition seam
 /// for every surface, so sounds, CURSOR_UPDATE, and lock display can't drift apart per window (decision 0216).
@@ -65,20 +65,20 @@ pub enum CursorPayload {
     Merchant(CursorMerchantItem),
     /// A pet picked up from the stable window — **mode 10** (see [`CursorStablePet`]).
     ///
-    /// Mode 10 was recorded as "class/talent ability (DBC)" until wow-re's stable-master carve
-    /// corrected it (`system/ui/scratch/stable-master-window.md` §9; decision 1677): `0x495020` is
-    /// the stabled-pet grab, `[0xb4d900] = 10` is written at exactly one site image-wide, and it is
-    /// inside it. benilla built the stable's drag frame-locally on the strength of the old note —
-    /// this variant is what puts it back on the shared cursor, so a stable pet dropped on the world
-    /// or another window clears through the same path as every other payload.
+    /// Mode 10 was recorded as "class/talent ability (DBC)" until the bytes corrected it (decision
+    /// 1677): `0x495020` is the stabled-pet grab, `[0xb4d900] = 10` is written at exactly one site
+    /// image-wide, and it is inside it. benilla built the stable's drag frame-locally on the
+    /// strength of that earlier reading — this variant is what puts it back on the shared cursor,
+    /// so a stable pet dropped on the world or another window clears through the same path as
+    /// every other payload.
     StablePet(CursorStablePet),
     /// Coins picked up off a money frame — **mode 2** (see [`CursorMoney`]).
     Money(CursorMoney),
 }
 
 /// Copper held on the cursor — payload **mode 2**, the client's `[0xb4e2f0]` amount written by
-/// `0x494cc0` from `PickupPlayerMoney 0x48abc0` with `LOOTWINDOWCOINSOUND` (wow-re
-/// `cursor-dragdrop-payload.md` §1's payload table). The purse is never debited by the pickup:
+/// `0x494cc0` from `PickupPlayerMoney 0x48abc0` with `LOOTWINDOWCOINSOUND`. The purse is never
+/// debited by the pickup:
 /// the stock `MoneyTypeInfo["PLAYER"]` shows `GetMoney() - GetCursorMoney() - …`, the subtraction
 /// being how the held coins leave the display while the money stays yours (1962).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,11 +114,11 @@ pub struct CursorMerchantItem {
 /// A pet held on the cursor from the stable window — payload **mode 10** (`0x495020`, the grab
 /// `0x495010`).
 ///
-/// Mode 10 was recorded as "class/talent ability (DBC)" until wow-re's stable-master carve
-/// corrected it (`system/ui/scratch/stable-master-window.md` §9; decision 1677): `[0xb4d900] = 10`
-/// is written at exactly one site image-wide and it is inside the stabled-pet grab, whose id global
-/// `[0xb4e300]` holds a **stable index**, not a spell. benilla first built the stable's drag
-/// frame-locally on the strength of the old note; this puts it on the shared cursor.
+/// Mode 10 was recorded as "class/talent ability (DBC)" until the bytes corrected it (decision
+/// 1677): `[0xb4d900] = 10` is written at exactly one site image-wide and it is inside the
+/// stabled-pet grab, whose id global `[0xb4e300]` holds a **stable index**, not a spell. benilla
+/// first built the stable's drag
+/// frame-locally on the strength of that earlier reading; this puts it on the shared cursor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorStablePet {
     /// The slot the grab came from, in the Lua index space `PickupStablePet` takes (`0` = the
@@ -221,8 +221,8 @@ pub struct CursorAction {
 /// accepted drop is a word that already existed elsewhere in client state. Nothing is encoded at
 /// drop time and nothing here needs decoding.
 ///
-/// This payload is **pet-bar-only**. `PlaceAction` refuses it (wow-re `action-item-slot.md`'s
-/// payload table: pet actions and class abilities are the refused modes, macros are not), and
+/// This payload is **pet-bar-only**. `PlaceAction` refuses it (`PlaceAction 0x4e62e0`'s
+/// accept table: pet actions and class abilities are the refused modes, macros are not), and
 /// nothing else produces it — which is also why a pet bar can only ever be *rearranged*, never
 /// populated from the spellbook: its contents are the server's.
 #[derive(Clone, Debug, PartialEq)]
@@ -238,8 +238,8 @@ pub struct CursorPetAction {
 }
 
 /// A macro payload ([`super::macros`]'s `PickupMacro` produces it) — the client's cursor mode
-/// **8**, whose payload global is the bare macro id (`[0xb4e2fc]`, wow-re `action-item-slot.md`'s
-/// payload table, where mode 8 is the ONE non-item/non-spell payload `PlaceAction` accepts).
+/// **8**, whose payload global is the bare macro id (`[0xb4e2fc]`, the ONE non-item/non-spell
+/// payload `PlaceAction 0x4e62e0` accepts).
 /// Unlike every other arm this one carries no source slot to swap back to: a macro lives in the
 /// macro table, not in the surface it was dragged from, so a refused place just leaves it held.
 #[derive(Clone, Debug, PartialEq)]
@@ -273,7 +273,7 @@ pub(crate) fn queue_cursor_update(model: &mut Model) {
     // - the ACTION bar's grid follows "is anything held that could land there" — every arm except
     //   the pet one, which `PlaceAction` refuses outright, and the vendor row (mode 5): its grab
     //   goes through the shared setter `0x4950f0`, whose `ACTIONBAR_SHOWGRID` branch is taken for
-    //   mode 7 alone (`0x495106`/`0x49513a`, wow-re `merchant-cursor-law.md` §5);
+    //   mode 7 alone (`0x495106`/`0x49513a`);
     // - the PET bar's grid follows the pet payload alone. The reference fires `PET_BAR_SHOWGRID`
     //   from inside the pet-action pickup builder itself (`0x494f28`), not from a shared cursor
     //   transition — so a spell on the cursor lights the action bar's empty slots and leaves the
@@ -377,9 +377,8 @@ pub(crate) fn clear_cursor(model: &mut Model) {
 ///
 /// Both drop the payload and fire `CURSOR_UPDATE`. `ClearCursor` also un-locks the source slot;
 /// this does **not**: `0x494b60`'s mode-1 arm is entered with `param1 = 0`, which skips `0x495420`,
-/// so the sold item's slot stays **greyed** until the server's own inventory update removes it
-/// (wow-re `object-layer/scratch/vendor-sell-on-right-click.md` §3, the §5 trio dispatched from
-/// benilla 1905). Leaving the lock set is the point: the item is gone from the cursor but not yet
+/// so the sold item's slot stays **greyed** until the server's own inventory update removes it.
+/// Leaving the lock set is the point: the item is gone from the cursor but not yet
 /// gone from the bag, and the grey is what says so.
 ///
 /// Shared by the two verbs that sell off the cursor — `PickupMerchantItem`'s sell fork
@@ -427,8 +426,8 @@ pub enum WorldPick {
 /// release both on the world (the world frame, or no frame at all where none is loaded — the
 /// caller's `over_world`, decision 2089), no drag (the byte-verified trigger, decision 0218: the
 /// client's `0x495300` runs on the WorldFrame click release only; a drag released over the world
-/// routes as a drag and keeps carrying) — routed by [`Model::world_pick`] (decisions 0571 + 0574,
-/// byte-verified wow-re cursor-dragdrop-payload.md §11):
+/// routes as a drag and keeps carrying) — routed by [`Model::world_pick`] (`0x481f60`; decisions
+/// 0571 + 0574):
 ///
 /// - `Object`: NOTHING drops — the object leg (`0x492ce0`) keeps every real payload and
 ///   dispatches SELECT instead.
@@ -700,7 +699,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
                 // Mode 2 — coins (1962). Reported as nothing for the same reason: the money arm
                 // of `GetCursorInfo` is not carved, and `GetCursorMoney` is the reference's own
-                // way of asking. Joins the carve when it lands.
+                // way of asking. The same gap closes once that arm is carved.
                 Some(CursorPayload::Money(_)) => {
                     Ok((Value::Nil, Value::Nil, Value::Nil, Value::Nil))
                 }
@@ -951,7 +950,7 @@ mod tests {
         assert!(s.cursor_payload().is_none());
     }
 
-    /// The world-drop pick routing (decisions 0571 + 0574 — wow-re §11, amended by 0843): a
+    /// The world-drop pick routing (decisions 0571 + 0574 — `0x481f60`, amended by 0843): a
     /// spell/action payload clears silently on BOTH empty-world legs — terrain included, the
     /// 0843 divergence (the reference keeps it on terrain; the director wants the left click to
     /// dismiss) — while an item keeps its byte-faithful popup flow.

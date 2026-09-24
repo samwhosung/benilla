@@ -18,8 +18,8 @@ use mlua::{Lua, Table, Value};
 use super::cursor::{self, CursorItem, CursorPayload};
 use super::Model;
 
-/// The charter/petition lines an item tooltip prints under its name — wow-re
-/// `system/ui/scratch/tooltip-content-law.md`'s **line 3**: *"(petition/guild-charter items) Title /
+/// The charter/petition lines an item tooltip prints under its name — the item tooltip's own
+/// emission order, line 3 (`0x854d7c..0x854dd0`): *"(petition/guild-charter items) Title /
 /// Creator / Num-signatures (white; title wraps) — a resolved petition object; keys
 /// `PETITION_*`/`GUILD_CHARTER_*`"*.
 ///
@@ -28,11 +28,11 @@ use super::Model;
 /// plain petition reads *"Petition:"* / *"Created by"*.
 ///
 /// **The third line, the signature count, is deliberately NOT here.** The law names it, but neither
-/// the carve nor the packet says where the number comes from: the petition record carries no count,
-/// and the only candidate — the item's `ITEM_FIELD_ENCHANTMENT` slot-0 *charges* dword, which
-/// vmangos's own source documents as "the on-item signature count" — has its write **commented
-/// out** server-side, so it is always zero and the guess could never be falsified here. Omitted
-/// rather than invented; the line is one field away the day someone pins the source.
+/// the reference nor the packet says where the number comes from: the petition record carries no
+/// count, and the only candidate — the item's `ITEM_FIELD_ENCHANTMENT` slot-0 *charges* dword,
+/// which vmangos's own source documents as "the on-item signature count" — has its write
+/// **commented out** server-side, so it is always zero and the guess could never be falsified here.
+/// Omitted rather than invented; the line is one field away the day someone pins the source.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PetitionSlotView {
     /// The record's charter bit: `true` picks the `GUILD_CHARTER_*` keys, `false` the `PETITION_*`
@@ -68,7 +68,7 @@ pub struct ContainerSlot {
     /// Whether this item may be placed on an ACTION-BAR slot — app-resolved from the template
     /// exactly like [`Self::equip_slots`] (the engine holds no item knowledge of its own).
     /// `PlaceAction`'s only item filter, byte-read: an on-use spell OR equippable
-    /// (`ItemInfo::placeable_on_action_bar`, wow-re `action-item-slot.md` §5 — decision 0666).
+    /// (`ItemInfo::placeable_on_action_bar`, `PlaceAction 0x4e62e0` — decision 0666).
     pub bar_placeable: bool,
     /// The instance's live durability `(current, max)` — `ITEM_FIELD_DURABILITY`/`MAXDURABILITY`
     /// off the streamed item object; `None` for indestructible items (max 0) or while the create
@@ -97,7 +97,7 @@ pub struct ContainerSlot {
     /// live enchant slot naming a `SpellItemEnchantment` row that binds. App-resolved off the raw
     /// descriptor ([`crate::items::already_bound`] in benilla-app — the same predicate the enchant
     /// cursor's bind question asks), because the binding half needs a DBC join and the engine
-    /// holds no item knowledge of its own. The tooltip's §6 bind line overrides to **Soulbound**
+    /// holds no item knowledge of its own. The tooltip's bind line overrides to **Soulbound**
     /// on it (B310); `false` on any source with no streamed item object.
     pub already_bound: bool,
     /// The instance's enchant slots, resolved by the app ([`super::EnchantView`]) and in
@@ -122,8 +122,8 @@ pub struct ContainerSlot {
     pub petition: Option<PetitionSlotView>,
 }
 
-/// One enchant slot as the tooltip renders it (wow-re `ui/scratch/tooltip-content-law.md` §E3,
-/// byte-verified; decision 0920). The app resolves the DBC row; every rule below is the engine's.
+/// One enchant slot as the tooltip renders it (`0x52c9f9`–`0x52ca23`; decision 0920). The app
+/// resolves the DBC row; every rule below is the engine's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EnchantView {
     /// `ITEM_FIELD_ENCHANTMENT` slot: **0** permanent · **1** temporary · **2..6** the
@@ -273,11 +273,10 @@ impl super::UiScript {
     /// **Arm the gift-wrap cursor** on the paper at `(bag, slot)` — the app's call when a
     /// right-click takes the reference's begin-wrap arm (`ItemInfo::begins_gift_wrap`).
     ///
-    /// Three acts, exactly the three `0x5edea0` performs (wow-re
-    /// `object-layer/scratch/gift-wrap-law.md`): the paper's slot reads **locked**, the displayed
-    /// cursor becomes **mode 2** (`Interface\Cursor\Cast.blp` — the same art the cast cursor
-    /// uses, table `0x853b88` slot 2), and **nothing goes on the wire**. What completes it is the
-    /// next left-click on a container slot. Decision 1934.
+    /// Three acts, exactly the three `0x5edea0` performs: the paper's slot reads **locked**, the
+    /// displayed cursor becomes **mode 2** (`Interface\Cursor\Cast.blp` — the same art the cast
+    /// cursor uses, table `0x853b88` slot 2), and **nothing goes on the wire**. What completes it
+    /// is the next left-click on a container slot. Decision 1934.
     pub fn arm_gift_wrap(&mut self, bag: i64, slot: u32) {
         let mut model = self.model_mut();
         model.pending_wrap = Some(PendingWrap { bag, slot });
@@ -288,8 +287,8 @@ impl super::UiScript {
 
     /// **Cancel an armed gift wrap and nothing else** — disarm, unlock the paper, reset the
     /// cursor. Deliberately narrower than `ClearCursor`, which also drops any held payload:
-    /// what wow-re records is that a right-click "uses the item and cancels the wrap", not by
-    /// which of the two routes, so this touches only the half the finding actually names.
+    /// the reference records that a right-click "uses the item and cancels the wrap," not by
+    /// which of the two routes, so this touches only the half it names.
     pub fn cancel_gift_wrap(&mut self) -> Option<PendingWrap> {
         let mut model = self.model_mut();
         let wrap = model.pending_wrap.take()?;
@@ -346,7 +345,7 @@ pub struct PendingWrap {
     pub slot: u32,
 }
 
-/// A **displayed-cursor override** the FrameXML cursor family arms (wow-re cursor-system.md §7): the
+/// A **displayed-cursor override** the FrameXML cursor family arms: the
 /// single "displayed mode" (`0xbe2c2c`) the real client swaps to while a UI element wants a non-base
 /// cursor, restored to the base mode by `ResetCursor`. The app maps each to the matching
 /// `Interface\Cursor\*` art over the world classifier's Point.
@@ -380,9 +379,9 @@ pub enum UiCursorMode {
 ///   empty, same-item (the wire merges), and different-item (the wire swaps: the displaced item
 ///   lands where the held one came from) all alike. The displaced item never hops onto the
 ///   cursor: 0216 §2 shipped that exchange off 0091's gloss; the director's eye caught it and
-///   the same-day §5 verdict refuted it at the bytes — no `SetCursorItem` on the place branch
-///   (`0x5e0c40`/`0x4f9b30`), `ClearCursor(0)`, one put-down sound (decision 0218; wow-re
-///   cursor-dragdrop-slots.md). Bag placements are server-authoritative; only the ACTION bar
+///   the bytes refuted it — no `SetCursorItem` on the place branch
+///   (`0x5e0c40`/`0x4f9b30`), `ClearCursor(0)`, one put-down sound (decision 0218). Bag
+///   placements are server-authoritative; only the ACTION bar
 ///   hops its displaced payload (client-authoritative — the slice-4 note in 0218).
 /// - holding a SPLIT carry (`count: Some(n)`), a click onto an empty/unresolved/same-item
 ///   destination queues the split move and clears; onto a DIFFERENT item it's a no-op (kept —
@@ -563,8 +562,8 @@ fn queue_move(
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ContainerIDToInventoryID(containerID) → the equipment slot the bag is worn in.
     //
-    // **Two linear arms, one signed compare, and nothing else** (`0x4f94e0`, 124 bytes; wow-re
-    // `bag-language-combat-action-bindings.md` §1, §5-cross-checked). Written as the reference's
+    // **Two linear arms, one signed compare, and nothing else** (`0x4f94e0`, 124 bytes). Written
+    // as the reference's
     // own three instructions — `t = id - 1`, `if t < 4` (SIGNED), then `+20` or `+60` — rather
     // than as the two closed forms `id+19` / `id+59`, because the wrap at the `i32` edge is then
     // reproduced rather than approximated.
@@ -604,11 +603,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SetBagPortaitTexture(texture, containerID) — `0x4fa4f0` (374 B), the reference's own
-    // spelling, typo included, and CARVED (wow-re `system/ui/scratch/bag-portrait-and-appendtext.md`,
-    // §5 four-worker round). The bag window's portrait: `ContainerFrame_GenerateFrame` sets it for
-    // every container except the keyring, which takes `SetPortraitToTexture` with a fixed path one
-    // line above (ContainerFrame.lua l.418-423). benilla runs that file off the player's chain
-    // (1751), so this is a live call site.
+    // spelling, typo included, and CARVED. The bag window's portrait:
+    // `ContainerFrame_GenerateFrame` sets it for every container except the keyring, which takes
+    // `SetPortraitToTexture` with a fixed path one line above (ContainerFrame.lua l.418-423).
+    // benilla runs that file off the player's chain (1751), so this is a live call site.
     //
     // Three arms, and the FIRST is the one nobody would have guessed:
     //
@@ -855,7 +853,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 model.item_picks.push((bag, slot));
                 return Ok(false);
             }
-            // Repair mode (`0x4f9c7b`, wow-re repair-machinery.md): while the repair cursor is
+            // Repair mode (`0x4f9c7b`): while the repair cursor is
             // armed, the click means "repair this item" — queued for the app to send — and
             // nothing is picked up. The mode STICKS across clicks (only HideRepairCursor /
             // merchant-close clears it).
@@ -872,7 +870,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // every surface routes through — top-level there for exactly the same reason.
 
     // ShowContainerSellCursor(bag, slot) — arm the pouch cursor for a sellable hover (5875
-    // `0x4fa460`, wow-re cursor-system.md §7: Buy(3) only when the slot actually holds an item —
+    // `0x4fa460`: Buy(3) only when the slot actually holds an item —
     // an empty slot leaves the cursor unchanged; no Unable twin, no SellPrice check — selling
     // never grays), and the reference's own `IsTargeting` bail at its first instruction.
     lua.globals().set(
@@ -884,8 +882,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .get(&bag)
                 .and_then(|c| c.slots.get(&slot))
                 .is_some();
-            // `IsTargeting` bails at the function's FIRST instruction — an armed spell suppresses
-            // the sell cursor outright (wow-re `item-target-cursor-and-dropitemonunit.md`). Now
+            // `IsTargeting` bails at the function's FIRST instruction (`0x4fa469`) — an armed spell
+            // suppresses the sell cursor outright. Now
             // that the mode is sticky, this gate has to be here rather than app-side: a write of
             // Buy would otherwise stamp over the cast cursor and there would be no per-frame world
             // write to put it back.
@@ -933,7 +931,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //
     // Its one shipped caller is the unit-frame hover pair (`UnitFrame_OnEnter`/`OnLeave`), which is
     // the ONLY lit/grey cursor split over a UI element in 1.12 — and it is authored in Lua, not in
-    // C++ (wow-re `item-target-cursor-and-dropitemonunit.md` §4.3).
+    // C++.
     lua.globals().set(
         "SetCursor",
         lua.create_function(|lua, name: Option<String>| {
@@ -1484,7 +1482,7 @@ mod tests {
             .unwrap());
     }
 
-    // ── `ContainerIDToInventoryID` (wow-re `bag-language-combat-action-bindings.md` §1) ─────────
+    // ── `ContainerIDToInventoryID` (`0x4f94e0`) ─────────────────────────────────────
 
     /// Two linear arms and no range check. **−2 → 17 and 0 → 19 are not special cases** — they are
     /// ordinary points on the `id <= 4` line that the caller-side "keyring is −2 / backpack is 0"

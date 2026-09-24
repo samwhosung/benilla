@@ -3,7 +3,7 @@
 //! The reference keeps one runtime table of chat types (`0xb4e518`, stride 0x43: a 0x40-byte
 //! name and three RGB bytes), seeded at boot from the 94-entry static table at `0x804710` and
 //! then extended with ten extras `CHANNEL1`…`CHANNEL10`, each coloured from the live `CHANNEL`
-//! entry (wow-re `system/ui/scratch/chat-color-table.md`, "Seeding"). The `chat-cache.txt`
+//! entry (`0x4982c0`). The `chat-cache.txt`
 //! `COLORS` block overwrites matched entries in place at load — absent names keep the compiled
 //! defaults — and the app owns that file; here the table is state the app feeds and drains
 //! ([`super::UiScript::set_chat_colors`], [`super::UiScript::take_chat_color_changes`]).
@@ -35,8 +35,8 @@ pub const FIXED_CHAT_TYPES: usize = 94;
 /// The extras seeded at boot: `CHANNEL1`…`CHANNEL10`, indices 95–104.
 pub const EXTRA_CHAT_TYPES: usize = 10;
 
-/// `0x804710` — name and default RGB, verbatim (chat-color-table.md, "The complete default
-/// table"). The order is load-bearing: it *is* the index `GetChatTypeIndex` answers.
+/// `0x804710` — name and default RGB, verbatim. The order is load-bearing: it *is* the index
+/// `GetChatTypeIndex` answers.
 const DEFAULTS: [(&str, [u8; 3]); FIXED_CHAT_TYPES] = [
     ("SAY", [255, 255, 255]),
     ("PARTY", [170, 170, 255]),

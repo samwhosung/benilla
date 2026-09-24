@@ -9,7 +9,7 @@
 //! SendChatMessage(text [, chatType [, language [, channel/target]]])
 //! ```
 //!
-//! `chatType` defaults to `"SAY"`; `language` is accepted and **ignored** (§2); the fourth
+//! `chatType` defaults to `"SAY"`; `language` is accepted and **ignored** (`0x49f1e0`); the fourth
 //! argument is the whisper target for `"WHISPER"` and the channel name or number for
 //! `"CHANNEL"`, and is unused otherwise.
 //!
@@ -70,7 +70,7 @@ impl super::UiScript {
     /// `GetNumLaguages`/`GetLanguageByIndex` walk. The app folds it the reference's way:
     /// `0x4b25b0` stores `[languageId] = spellId` for every known spell whose `Effect_1 == 39`,
     /// and `0x5ec720` answers non-zero only when that spell's skill line is in the player's
-    /// skill block (wow-re `chat-language-scramble.md` §8, C6). Fires `LANGUAGE_LIST_CHANGED`
+    /// skill block. Fires `LANGUAGE_LIST_CHANGED`
     /// (`0x49b970`, event 0x102) when the list moves.
     pub fn set_known_languages(&mut self, names: Vec<String>) {
         let changed = {
@@ -89,9 +89,8 @@ impl super::UiScript {
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
-    // GetNumLaguages() — `0x49fb30`, the binary's own spelling (wow-re
-    // `bag-language-combat-action-bindings.md` §2). Walks `Languages.dbc` and counts the rows
-    // `0x5ec720` answers non-zero for; **one number**.
+    // GetNumLaguages() — `0x49fb30`, the binary's own spelling. Walks `Languages.dbc` and counts
+    // the rows `0x5ec720` answers non-zero for; **one number**.
     lua.globals().set(
         "GetNumLaguages",
         lua.create_function(|lua, _ignored: MultiValue| {
@@ -117,7 +116,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // GetDefaultLanguage() → **exactly ONE value, a string** — or **zero values**, which is not
-    // the same thing (`0x49fcd0`, wow-re `bag-language-combat-action-bindings.md` §2).
+    // the same thing (`0x49fcd0`).
     //
     // The binding takes **no arguments** (no arg-presence check and no arg-fetch call anywhere in
     // its 94 bytes — contrast its sibling `GetLanguageByIndex 0x49fbe0`, which opens with

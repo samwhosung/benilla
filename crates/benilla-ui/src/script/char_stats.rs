@@ -20,18 +20,18 @@
 //! the same bindings, and the gate was simply never exercised.)
 //!
 //! **The absent shape for a third unit is the right ANSWER for `UnitStat` and a known GAP for the
-//! resistance pair — and the reason it used to be filed as blanket-faithful was wrong.** The
-//! binary does not gate slots 1/2 on SELF at all: `UnitStat`'s are NULL + typemask bit 3 only, and
-//! it returns whatever the client's copy of `UNIT_FIELD_STAT0+i` holds (VERIFIED wow-re
-//! `ui/scratch/pet-paperdoll-stat-api.md` §4). What makes our zeros agree there is the *server's*
-//! visibility, not a client gate: `UNIT_FIELD_STAT*` is PRIVATE + OWNER_ONLY, and the only
-//! owner-visible units a 1.12 unit token can name are the two we already serve — so a stranger's
-//! copy is zero on the reference too. `UNIT_FIELD_RESISTANCES` carries a third flag,
-//! **`SPECIAL_INFO`**, which vmangos grants to the caster of `SPELL_AURA_EMPATHY` — its own comment
-//! reads `// Beast Lore` (`Player.cpp:2603-2610`, `Object.cpp:1065-1067`). So with Beast Lore up on
-//! a beast, the reference's `UnitResistance("target", i)` / `UnitArmor("target")` return that
-//! creature's real numbers through their non-SELF leg, and ours return zeros. That is a real,
-//! reachable divergence, unfed rather than decided: the app pushes snapshots for two tokens only.
+//! resistance pair — and the reason it used to be filed as blanket-faithful was wrong.** The binary
+//! does not gate slots 1/2 on SELF at all: `UnitStat`'s are NULL + typemask bit 3 only, and it
+//! returns whatever the client's copy of `UNIT_FIELD_STAT0+i` holds (`UnitStat 0x518600`). What
+//! makes our zeros agree there is the *server's* visibility, not a client gate: `UNIT_FIELD_STAT*`
+//! is PRIVATE + OWNER_ONLY, and the only owner-visible units a 1.12 unit token can name are the two
+//! we already serve — so a stranger's copy is zero on the reference too. `UNIT_FIELD_RESISTANCES`
+//! carries a third flag, **`SPECIAL_INFO`**, which vmangos grants to the caster of
+//! `SPELL_AURA_EMPATHY` — its own comment reads `// Beast Lore` (`Player.cpp:2603-2610`,
+//! `Object.cpp:1065-1067`). So with Beast Lore up on a beast, the reference's
+//! `UnitResistance("target", i)` / `UnitArmor("target")` return that creature's real numbers
+//! through their non-SELF leg, and ours return zeros. That is a real, reachable divergence, unfed
+//! rather than decided: the app pushes snapshots for two tokens only.
 //! `unit_combat_stats` already works over any store, so the missing piece is a third push.
 //!
 //! **Return shapes differ BY FAMILY, and the reference Lua's own asymmetry is the tell**
@@ -155,19 +155,19 @@ pub struct UnitCombatStats {
     /// app resolves WHICH skill via [`weapon_subclass_skill`] (unarmed = [`SKILL_UNARMED`]) and
     /// reads the pair from `PLAYER_SKILL_INFO`; `UnitAttackBothHands` serves it verbatim.
     ///
-    /// **The permanent half belongs to the BASE, not to the modifier** (`0x5ea460`, VERIFIED —
-    /// wow-re `ui/scratch/unitrangedattack-skill-pair.md` §3; corrected here by decision 1812).
-    /// Every one of these four pairs comes out of that one reader, so all four carry the split.
+    /// **The permanent half belongs to the BASE, not to the modifier** (`0x5ea460`; corrected here
+    /// by decision 1812). Every one of these four pairs comes out of that one reader, so all four
+    /// carry the split.
     pub main_weapon_skill: (i32, i32),
-    /// The OFF hand's, read the same way. `UnitAttackBothHands` pushes both hands (§4 of wow-re's
-    /// `pet-paperdoll-stat-api.md`: `0x518810` calls `[vtbl+0xb0]` twice, hand 0 then hand 1), and
-    /// an empty or non-weapon off hand is Unarmed exactly as the main hand is.
+    /// The OFF hand's, read the same way. `UnitAttackBothHands` pushes both hands (`0x518810`
+    /// calls `[vtbl+0xb0]` twice, hand 0 then hand 1), and an empty or non-weapon off hand is
+    /// Unarmed exactly as the main hand is.
     pub offhand_weapon_skill: (i32, i32),
     /// The ranged weapon's skill pair (`UnitRangedAttack`), same split.
     ///
     /// **Player-only, and by a different gate than its two neighbours.** `UnitRangedAttack`
     /// `0x518b90` is a DIRECT call gated on the PLAYER typemask alone — no vtable slot and **no
-    /// `CGUnit_C` fallback body** (wow-re `unitrangedattack-skill-pair.md` §4). So where
+    /// `CGUnit_C` fallback body**. So where
     /// `UnitDefense` and `UnitAttackBothHands` pass a pet through SELF-OR-MINE and answer
     /// `level * 5`, this one answers `(0, 0)` for a pet and for every other player too. Mirroring
     /// [`cgunit_skill`] here would be wrong.
@@ -277,14 +277,14 @@ pub struct InvSlotView {
     /// The instance's live durability `(current, max)` — the equipped-item tooltip's
     /// "Durability X / Y" line (see [`super::container::ContainerSlot::durability`]).
     pub durability: Option<(u32, u32)>,
-    /// `ITEM_FIELD_FLAGS` (wire field 21) — the alert/broken laws read two bits (VERIFIED wow-re
-    /// inventory-alert-law `0x4c7ee0`): `0x08` wrapped (a gift — never alerts, never broken),
+    /// `ITEM_FIELD_FLAGS` (wire field 21) — the alert/broken laws read two bits (`0x4c7ee0`):
+    /// `0x08` wrapped (a gift — never alerts, never broken),
     /// `0x10` force-red (alert status 4 regardless of durability).
     pub flags: u32,
     /// `0x5da2c0` — **the instance is runtime-bound**: `ITEM_FIELD_FLAGS & 1` (soulbound), or a
     /// live enchant slot naming a `SpellItemEnchantment` row that binds. App-resolved off the raw
     /// descriptor (the doll twin of [`super::container::ContainerSlot::already_bound`]); the
-    /// tooltip's §6 bind line overrides to **Soulbound** on it (B310).
+    /// tooltip's bind line overrides to **Soulbound** on it (B310).
     pub already_bound: bool,
     /// An `|Hitem:…|h[Name]|h` link once the name is known — the doll twin of
     /// `ContainerSlot::link`; carried onto the cursor payload so a world-drop `DELETE_ITEM_CONFIRM`
@@ -395,8 +395,8 @@ const SLOT_INFO: [(&str, i64, &str); 36] = [
     ("Bag12", 75, "Bag"),
 ];
 
-/// The durability-alert regions in the client's own slot table (`0x806eb8`, VERIFIED wow-re
-/// inventory-alert-law — 12 entries): alert index 1..=11 → the live-id equipment slot (Head,
+/// The durability-alert regions in the client's own slot table (`0x806eb8` — 12 entries): alert
+/// index 1..=11 → the live-id equipment slot (Head,
 /// Shoulders, Chest, Waist, Legs, Feet, Wrists, Hands, Weapon, Shield, Ranged — the ref
 /// FrameXML's `INVENTORY_ALERT_STATUS_SLOTS` order), index 12 → the client's low-ammo region
 /// (slot -1 in its table; FrameXML never reads it, the binding answers it). Our live-id 0 IS
@@ -415,8 +415,8 @@ fn slot_is_broken(v: &InvSlotView) -> bool {
 }
 
 /// One region's `GetInventoryAlertStatus` value — the recompute `0x4c7ee0`'s per-item
-/// classification (VERIFIED wow-re inventory-alert-law, §5-cross-checked; the enum's own name
-/// is `INV_ALERT_STATUS`): `4` (red) = broken per [`slot_is_broken`]; `3` (yellow) = tracks
+/// classification (the enum's own name is `INV_ALERT_STATUS`): `4` (red) = broken per
+/// [`slot_is_broken`]; `3` (yellow) = tracks
 /// durability and **`1..=5` points left — an ABSOLUTE count, no percentage, maxDurability is
 /// only the tracks-durability gate** (`cmp [D+0xa0],5`); `0` otherwise. Statuses 1/2 are the
 /// temp-weapon-enchant alerts (present/expiring-in-30s) — no enchant feed yet, and the 1.12
@@ -531,7 +531,7 @@ fn with_unit_stats<T>(
 
 /// The post-processing both skill-shaped bindings share: **`if (mod + base) < 0 then mod = -base`**
 /// — so the pair can never sum below zero (`0x519298` for `UnitDefense`, `0x5188a7` per hand for
-/// `UnitAttackBothHands`; wow-re `ui/scratch/pet-paperdoll-stat-api.md` §4). A debuff deeper than
+/// `UnitAttackBothHands`). A debuff deeper than
 /// the skill itself reads as "reduced to 0", never as a negative total.
 fn skill_clamped((base, modifier): (i32, i32)) -> (i64, i64) {
     let base = i64::from(base);
@@ -544,8 +544,8 @@ fn skill_clamped((base, modifier): (i32, i32)) -> (i64, i64) {
 ///
 /// It is one helper because it is one function in the client: both bindings dispatch through the
 /// resolved unit's vtable, and a `CGUnit_C` lands on a three-line body that multiplies the level by
-/// five and writes 0 to the modifier (`0x613680` / `0x6136b0`, wow-re
-/// `ui/scratch/pet-paperdoll-stat-api.md`). Nothing here is skill data — a creature has no skill
+/// five and writes 0 to the modifier (`0x613680` / `0x6136b0`). Nothing here is skill data — a
+/// creature has no skill
 /// block at all, which is exactly why the client substitutes a formula.
 fn cgunit_skill(model: &Model, token: &str) -> i64 {
     model.unit(token).map_or(0, |u| i64::from(u.level)) * 5
@@ -725,8 +725,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // **The first two returns are the same field, UNDECOMPOSED** — `UNIT_FIELD_STAT0+i` raw
     // (`fild`, `0x518689`), then that same value clamped at zero (`0x5186a3`–`0x5186b7`:
     // `setl cl; dec ecx; and ecx,eax`). Slots 3/4 are `PLAYER_FIELD_POSSTAT0+i` (`0x518712`) and
-    // `NEGSTAT0+i` (`0x518772`), each behind a SELF gate. VERIFIED, wow-re
-    // `ui/scratch/pet-paperdoll-stat-api.md` §4.
+    // `NEGSTAT0+i` (`0x518772`), each behind a SELF gate.
     //
     // This served `effective − pos − neg` as the first return until decision 1397. Subtracting is
     // the ref Lua's *own* job — `PaperDollFrame_SetStats` writes the tooltip's base as
@@ -882,8 +881,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // hand).
     //
     // **It answered two until decision 1810**, which is 1793's shape at its quietest: `0x518810`
-    // calls `[vtbl+0xb0]` TWICE, hand 0 then hand 1, and pushes `(base0, mod0, base1, mod1)`
-    // (VERIFIED, wow-re `ui/scratch/pet-paperdoll-stat-api.md` §4). The reference's own
+    // calls `[vtbl+0xb0]` TWICE, hand 0 then hand 1, and pushes `(base0, mod0, base1, mod1)`.
+    // The reference's own
     // `PaperDollFrame_SetAttackBothHands` destructures only the first two — its next line is
     // `-- FIXME: The offhand stats aren't displayed yet.` — so putting the stock character sheet on
     // the chain could never have exposed this. An addon reading four gets two nils.
@@ -930,12 +929,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // modifier's sign itself (PaperDollFrame.lua:259-271: modifier > 0 → a green posBuff, < 0 → a
     // red negBuff).
     //
-    // **The fork is a VIRTUAL CALL on the resolved unit, not a token test** (wow-re
-    // `ui/scratch/pet-paperdoll-stat-api.md`, the §5 that corrected decision 1057's INTERIM):
+    // **The fork is a VIRTUAL CALL on the resolved unit, not a token test** (correcting decision
+    // 1057's INTERIM):
     // `[vtbl+0xac]` is either `CGPlayer_C 0x5eda20` — resolve the Defense SkillLine (`0x6de040`)
     // and read `PLAYER_SKILL_INFO` — or `CGUnit_C 0x613680`, which is three lines:
-    // `*out1 = UNIT_FIELD_LEVEL * 5; *out2 = 0`. **A level-60 pet shows 300**, not the 0 that
-    // 1057 shipped while the dispatch was out. The outer gate is SELF **or**
+    // `*out1 = UNIT_FIELD_LEVEL * 5; *out2 = 0`. **A level-60 pet shows 300**,
+    // not the 0 that 1057 shipped. The outer gate is SELF **or**
     // `UNIT_FIELD_SUMMONEDBY == my guid`, which our pet passes and no other token we serve does —
     // so `"player"` takes the skill leg, `"pet"` the level leg (a warlock's minion included: it is
     // summoned by us too), and everything else the gate-failure zeros.
@@ -1066,9 +1065,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     const USAGE_GET_INVENTORY_ITEM_COUNT: &str = "Usage: GetInventoryItemCount(unit, slot)";
     const INVALID_SLOT_GET_INVENTORY_ITEM_COUNT: &str =
         "Invalid inventory slot in GetInventoryItemCount";
-    // GetInventoryItemCount("player", slot) — CARVED (`0x4c8680`, wow-re
-    // `system/ui/scratch/inventory-item-count-law.md`), and it is nothing like the shape every
-    // secondary source describes. Four answers, in the reference's own order:
+    // GetInventoryItemCount("player", slot) — CARVED (`0x4c8680`), and it is nothing like the
+    // shape every secondary source describes. Four answers, in the reference's own order:
     //
     //  · an EMPTY slot pushes **1**, not 0 (`0x4c8797`). Both FrameXML callers gate on
     //    `GetInventoryItemTexture` first, which is why nobody ever noticed.
@@ -1612,10 +1610,9 @@ mod tests {
     /// `UnitDefense` `0x519200` and `UnitAttackBothHands` `0x518810` gate on SELF-OR-MINE and then
     /// dispatch through the resolved unit's vtable, so a pet passes and lands on `CGUnit_C`'s
     /// `level * 5`. `UnitRangedAttack` `0x518b90` is a **direct call** gated on the PLAYER typemask
-    /// alone, with no vtable slot and **no `CGUnit_C` fallback body at all** (VERIFIED, wow-re
-    /// `ui/scratch/unitrangedattack-skill-pair.md` §4 — `0x612b40`/`0x5edae0`/`0x5ea460` appear as
-    /// a dword zero times image-wide, against a positive control of one hit each for the four
-    /// addresses that ARE in a vtable).
+    /// alone, with no vtable slot and **no `CGUnit_C` fallback body at all** — `0x612b40`,
+    /// `0x5edae0` and `0x5ea460` appear as a dword zero times image-wide, against a positive
+    /// control of one hit each for the four addresses that ARE in a vtable.
     ///
     /// So a pet's ranged attack is `(0, 0)`, not `level * 5`. The whole reason this is a test and
     /// not a comment is that the three verbs look interchangeable from the FrameXML side, and
@@ -1657,8 +1654,7 @@ mod tests {
     /// decision 1810.**
     ///
     /// The quietest shape decision 1793 describes: `0x518810` calls `[vtbl+0xb0]` twice, hand 0
-    /// then hand 1, and pushes `(base0, mod0, base1, mod1)` (VERIFIED, wow-re
-    /// `ui/scratch/pet-paperdoll-stat-api.md` §4). The reference's own
+    /// then hand 1, and pushes `(base0, mod0, base1, mod1)`. The reference's own
     /// `PaperDollFrame_SetAttackBothHands` destructures only the first two — its very next line is
     /// `-- FIXME: The offhand stats aren't displayed yet.` — so no amount of running the stock
     /// character sheet could have exposed it. An addon reading four got two nils.
@@ -1891,9 +1887,8 @@ mod tests {
         assert!(s.eval::<bool>("return HasWandEquipped()").unwrap());
     }
 
-    /// **`GetInventoryItemCount`'s container fork** (`0x4c8680`, wow-re
-    /// `system/ui/scratch/inventory-item-count-law.md`). Four answers, and three of them are not
-    /// the stack count:
+    /// **`GetInventoryItemCount`'s container fork** (`0x4c8680`). Four answers, and three of them
+    /// are not the stack count:
     ///
     /// · an equipped QUIVER (its `ItemSubClass.dbc` row has `DisplayFlags & 0x4`) answers the sum
     ///   of its arrows — the number that shows on the bag bar;

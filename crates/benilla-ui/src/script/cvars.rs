@@ -132,7 +132,7 @@ pub struct VideoCaps {
     /// **A BACKEND constant, not a device capability** — `caps+0x20` is written by the two device
     /// constructors only (1 under Direct3D, 0 under OpenGL) and read by `GetVideoCaps` alone, so
     /// `hasTripleBuffering == 1` means "the backend is Direct3D". Its name is the one INFERRED
-    /// label in the seven (wow-re `ui/scratch/video-options-verbs.md` §2.2).
+    /// label in the seven (`GetVideoCaps 0x48db40`).
     ///
     /// `false` here, and it is pushed as the **number 0**, never nil: benilla is not Direct3D and
     /// exposes no buffering knob, so check button 13 is hidden and button 6 re-seated
@@ -522,8 +522,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // the selection with `GetCurrentMultisampleFormat()`, `_Initialize` walks
     // `GetMultisampleFormats()` three varargs at a time building the menu, and the Okay handler
     // (l.240) calls `SetMultisampleFormat(UIDropDownMenu_GetSelectedID(...))`. Identities and
-    // behaviour from wow-re `system/console/scratch/gxmultisample-default.md` §7 — registration
-    // table `0x83de68`, records `0x83e2c0`/`0x83e2c8`/`0x83e2d0`.
+    // behaviour from the registration table `0x83de68`, records `0x83e2c0`/`0x83e2c8`/`0x83e2d0`.
     lua.globals().set(
         "GetMultisampleFormats",
         lua.create_function(|lua, ()| {
@@ -632,8 +631,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 /// reference's own verb writes, each named by the row it is.
 ///
 /// **The reference does NOT restore registered defaults, and this list is not a guess at which it
-/// does** (wow-re `ui/scratch/video-options-verbs.md` §4.3, the round that corrected benilla's
-/// first reading). `0x48dad0` → `0x639a20` maps the already-matched `VideoHardware.dbc` row through
+/// does.** `0x48dad0` → `0x639a20` maps the already-matched `VideoHardware.dbc` row through
 /// nine lookup tables into a hardware-recommended settings struct, copies the `CGxFormat` **preset**
 /// that row names for this adapter (`[0xc4e6ac]` → `0xc518e0 + 0x38·n`) into the working device
 /// record, writes that record into twelve `gx*` CVars, performs a full synchronous `RestartGx`, and
@@ -942,7 +940,7 @@ fn install_video_verbs(lua: &Lua) -> mlua::Result<()> {
     )?;
     // ── GetGamma / SetGamma ──────────────────────────────────────────────────────────────────
     // **The display-brightness pair** (2182) — `GetGamma 0x4891c0` and `SetGamma 0x4891f0`, carved
-    // end to end in wow-re `ui/scratch/video-options-verbs.md` §3.
+    // end to end.
     //
     // The one thing about them that is not obvious from the name: **the unit is the SLIDER's
     // offset, not the CVar's.** `0x4891d0` is `dc 2d`, ModRM reg field 5 = **FSUBR** (`mem − ST(0)`,
@@ -1036,8 +1034,7 @@ pub const WORLD_DETAIL_STOPS: [u32; 3] = [16, 32, 48];
 /// row 3 is `func = "WorldDetail"`, and `OptionsFrame_Save`/`_Load` prefer `getglobal("Set"..func)`
 /// / `getglobal("Get"..func)` over `SetCVar`/`GetCVar`). Decision 2163.
 ///
-/// **The setter, carved end to end** (own decode, agreeing with wow-re
-/// `cvar/scratch/registered-defaults-census.md` §8):
+/// **The setter, carved end to end** (own decode):
 ///
 /// ```text
 /// 488ddf  call 0x6f34d0             ; lua_isnumber(L,1)? else error 0x8423e8
@@ -1068,8 +1065,8 @@ pub const WORLD_DETAIL_STOPS: [u32; 3] = [16, 32, 48];
 ///   descending table with ascending `elseif`s, so Restore Defaults always parks the slider at 0.
 ///
 /// **Where benilla diverges, and why it is not the smallCull ladder.** `SmallCull` is a dead knob
-/// in the reference — `[0x868620]` has one writer and no reader image-wide (wow-re
-/// `cvar/scratch/graphics-cost-cvar-census.md` §8) — so its *only* consumer there is this getter,
+/// in the reference — `[0x868620]` has one writer and no reader image-wide — so its *only*
+/// consumer there is this getter,
 /// which makes it storage for a stop the client keeps nowhere else. benilla keeps the stop:
 /// [`CVAR_WORLD_DETAIL`] is it, and `frillDensity` is the same knob in the reference's unit. So the
 /// getter reads the stop directly and `SmallCull` is not registered, because registering a CVar
@@ -1157,8 +1154,7 @@ const USAGE_SET_WORLD_DETAIL: &str = "Usage: SetWorldDetail(value)";
 const RANGE_SET_WORLD_DETAIL: &str = "value must be in the range 0, 2";
 
 /// **The four nameplate verbs** — `ShowNameplates 0x489450`, `HideNameplates 0x489460`,
-/// `ShowFriendNameplates 0x489470`, `HideFriendNameplates 0x489480` (wow-re
-/// `ui/scratch/party-leader-and-nameplate-verbs.md`, §5 four-worker round).
+/// `ShowFriendNameplates 0x489470`, `HideFriendNameplates 0x489480`.
 ///
 /// Each is a **10-byte body** over one of two setters, and the reference's shape is worth stating
 /// because two obvious readings are wrong:

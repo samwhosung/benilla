@@ -38,7 +38,7 @@ pub struct DeathUiState {
     /// XP_LOSS_NO_SICKNESS, ref UIParent.lua's CONFIRM_XP_LOSS arm).
     pub sickness_duration: Option<String>,
     /// What `HasSoulstone()` answers: the **label** of the self-resurrect available right now, or
-    /// `None` for nil (decision 1746, whose Context carries the wow-re decode this shape comes from).
+    /// `None` for nil (`HasSoulstone 0x48ac80`; decision 1746).
     ///
     /// A string, not an id, because that is the whole of what the API returns: the DEATH dialog
     /// stamps it straight onto its second button (`Button2:SetText(HasSoulstone())`) and uses the

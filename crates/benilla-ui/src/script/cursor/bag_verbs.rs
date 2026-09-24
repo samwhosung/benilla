@@ -1,8 +1,6 @@
 //! The three BAG-SLOT verbs — `PutItemInBag`, `PutItemInBackpack`, `PickupBagFromSlot`.
 //!
-//! CARVED, not inferred (wow-re `system/ui/ui.md`, "The three bag verbs — one worker, a three-way
-//! fork, and a return value that is not 'did it place'"; `scratch/bag-verbs-law.md`, §5 trio +
-//! orchestrator byte arbitration 2026-08-11). The three findings that shape everything below:
+//! CARVED, not inferred. The three findings that shape everything below:
 //!
 //! 1 · **`PutItemInBackpack()` IS `PutItemInBag(0xFF)`.** `0x4c7ed0` is a ten-byte thunk —
 //!   `mov ecx,0xff` / `jmp 0x4c7c00` — so there is one worker here too, and only the destination

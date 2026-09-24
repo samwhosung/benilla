@@ -1,6 +1,6 @@
 //! The `ColorSelect` method surface — the `CSimpleColorSelect` widget behavior over the kind tag
-//! (factory `0x6eef90`; LoadXML `0x78b3f0`, script-map `0x78b4f0`, RF-28
-//! `rf28-typed-widget-loadxml.md`). The widget holds one colour and fires `OnColorSelect` (its own
+//! (factory `0x6eef90`; LoadXML `0x78b3f0`, script-map `0x78b4f0`). The widget holds one colour and
+//! fires `OnColorSelect` (its own
 //! script slot, `+0x338`) when that colour is set.
 //!
 //! **Why this is engine-side and not four lines of Lua on `ColorPickerFrame`.** The corpus creates
@@ -11,10 +11,8 @@
 //! header names. So it lives with `Slider`/`StatusBar`, in the per-kind dispatcher.
 //!
 //! **The colour law is byte-verified, and it is not what it looks like.** This module was first
-//! written against the obvious model — store three RGB bytes, hand them back — and a §5 cross-check
-//! dispatched into wow-re for exactly this question corrected it
-//! (`system/ui/scratch/colorselect-color-law.md`, 2026-08-11: three independent derivations plus an
-//! emulated Unicorn oracle over the four helpers' own bytes). Two corrections, both load-bearing:
+//! written against the obvious model — store three RGB bytes, hand them back — which is wrong.
+//! Two corrections, both load-bearing:
 //!
 //! 1. **The state is HSV `f32`, not RGB** — see [`ColorSelectState`] for the members and why.
 //! 2. **The round trip is not the identity.** Inbound and outbound use *different* quantizers
@@ -42,8 +40,8 @@
 //! callers in the 218-addon corpus and waited for one under decision 1195; the customer that
 //! arrived is our own `ColorPickerFrame.xml`, whose four elements the XML loader installs through
 //! exactly these — two of them with **no file at all**, because the disc and the strip are pixels
-//! the client computes and the app renderer now computes too (decision 1592, and wow-re
-//! `system/ui/scratch/colorselect-drawn-appearance.md` for what it draws).
+//! the client computes and the app renderer now computes too (decision 1592 — the wheel `0x78b580`
+//! and the value strip `0x78b8a0` generate them).
 //!
 //! **NOT carried, still waiting for a customer (decision 1195):** `SetColorHSV`/`GetColorHSV`
 //! (`0x78e920`/`0x78ea00`) — zero corpus callers, though the state they would read and write is
@@ -86,7 +84,7 @@ fn with_colorselect<T>(
 }
 
 /// One of the widget's four texture sub-objects. The wheel and the strip are the two the press
-/// handler hit-tests (`[+0x318]+0x24` and `[+0x320]+0x24`, wow-re `colorselect-color-law.md` §5);
+/// handler (`0x78bf10`) hit-tests (`[+0x318]+0x24` and `[+0x320]+0x24`);
 /// the two thumbs are pure output, positioned from the HSV at extract.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Slot {
@@ -116,8 +114,7 @@ impl Slot {
         *slot = Some(rh);
     }
 
-    /// The layer a slot's region is born on — VERIFIED, not guessed: wow-re
-    /// `colorselect-drawn-appearance.md` reads the wheel bound at layer 2 (ARTWORK) through
+    /// The layer a slot's region is born on: the wheel is bound at layer 2 (ARTWORK) through
     /// `0x77fd10`, with the two markers on OVERLAY above the art they ride.
     fn layer(self) -> DrawLayer {
         match self {
@@ -249,8 +246,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     m.set(
         "SetColorRGB",
-        // Shape C on r, g, b (`ColorSelect:SetColorRGB 0x78eae0`, `2=C 3=C 4=C 5=B`, wow-re
-        // `numeric-arg-coercion-law.md`): bare `lua_tonumber`, nil → 0.0, no raise.
+        // Shape C on r, g, b (`ColorSelect:SetColorRGB 0x78eae0`, `2=C 3=C 4=C 5=B`): bare
+        // `lua_tonumber`, nil → 0.0, no raise.
         lua.create_function(|lua, (this, r, g, b): (Table, Value, Value, Value)| {
             let (r, g, b) = (
                 crate::script::object::as_f64(&r),
@@ -308,7 +305,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Fire `OnColorSelect(self, r, g, b)` — the widget's own script slot (`+0x338`, RF-28). Fired
+/// Fire `OnColorSelect(self, r, g, b)` — the widget's own script slot (`+0x338`). Fired
 /// outside the model borrow; a handler error goes to [`Model::errors`] rather than back to the
 /// setter's caller, the same posture as the Slider's `OnValueChanged`.
 fn fire_color_select(lua: &Lua, this: &Table, r: f64, g: f64, b: f64) -> mlua::Result<()> {
@@ -332,8 +329,8 @@ fn fire_color_select(lua: &Lua, this: &Table, r: f64, g: f64, b: f64) -> mlua::R
 
 /// The wheel's normalised coordinates for a cursor at `(x, y)`: the offset from the wheel rect's
 /// centre, scaled by its **half-extents** — so a non-square wheel normalises to a disc, not an
-/// ellipse (`0x78bdd0`..: `nx=(x−cx)/((right−left)·0.5)`, `ny=(y−cy)/((top−bottom)·0.5)`, wow-re
-/// `colorselect-color-law.md` §5). y is up, this arena's convention and the client's.
+/// ellipse (`0x78bdd0`..: `nx=(x−cx)/((right−left)·0.5)`, `ny=(y−cy)/((top−bottom)·0.5)`). y is up,
+/// this arena's convention and the client's.
 fn wheel_norm(r: Rect, x: f32, y: f32) -> (f32, f32) {
     let hw = (r.right - r.left) * 0.5;
     let hh = (r.top - r.bottom) * 0.5;
@@ -373,7 +370,7 @@ fn strip_value(r: Rect, y: f32) -> f32 {
 /// the inverse of [`wheel_hs`], which is the whole invariant — click a pixel, the marker lands on
 /// that pixel.
 ///
-/// Byte-exact to `0x78bc20` (wow-re `colorselect-drawn-appearance.md` §4), which does
+/// Byte-exact to `0x78bc20`, which does
 /// `SetPoint(CENTER, wheel, CENTER, −m·cos θ, −m·sin θ)` with `θ = H·π/180` and
 /// `m = GetWidth(wheel)·0.5·S`. Its two `fchs` are the pick law's `+π` seen from the other side:
 /// drop either sign and the marker sits diametrically opposite the colour it marks.
@@ -544,8 +541,8 @@ mod tests {
     }
 
     /// **The round trip is not the identity, and the deviation is the client's.** `(0, 1, 1)` — cyan,
-    /// a two-channel tie at the maximum — comes back with green one step low, the exact witness
-    /// wow-re's exhaustive sweep names. Greys are its control class and never lose.
+    /// a two-channel tie at the maximum — comes back with green one step low, exactly as the
+    /// reference does. Greys are its control class and never lose.
     #[test]
     fn the_round_trip_loses_exactly_one_step_on_the_witness_colour() {
         let s = UiScript::new().unwrap();
@@ -567,7 +564,7 @@ mod tests {
     }
 
     /// **And it ratchets.** The FrameXML idiom — read the colour back, hand it straight to
-    /// `SetColorRGB` — re-applies the same lossy map instead of settling. wow-re's pin: `(0, 8, 132)`
+    /// `SetColorRGB` — re-applies the same lossy map instead of settling. `(0, 8, 132)`
     /// walks to `(0, 0, 132)` in eight cycles. Every Ace2/Dewdrop colour option is that idiom, once
     /// per open-and-accept, so this is the shape of a real player-visible drift and it is deliberate.
     #[test]
@@ -738,7 +735,7 @@ mod tests {
     }
 
     /// **A click on the wheel picks the colour that pixel shows.** The disc's law and the pick law
-    /// are inverses (wow-re `colorselect-color-law.md` §5 / `colorselect-drawn-appearance.md`), so
+    /// are inverses (`0x78b580` draws it, `0x78bdd0` picks it), so
     /// this is stated at the four cardinal points, where the hue is nameable: LEFT is red, RIGHT
     /// cyan, TOP violet, BOTTOM chartreuse. A sign error anywhere in the chain mirrors one axis and
     /// two of these four flip.

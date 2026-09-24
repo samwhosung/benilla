@@ -12,8 +12,7 @@
 //! lookup directions are live in the corpus: by index (`GetChannelName(i)`) and by name
 //! (`GetChannelName("world")`, `GetChannelName("Trade - City")`).
 //!
-//! Signature verified against wow-5875-re `system/ui/scratch/zone-chat-channel-autojoin.md`
-//! l.374-380 — `GetChannelName = 0x4a05e0`, **three** returns:
+//! Signature verified against the reference — `GetChannelName = 0x4a05e0`, **three** returns:
 //!
 //! | # | the client's | ours |
 //! |---|---|---|
@@ -32,11 +31,12 @@ use super::Model;
 
 /// The 1-based slot of `name`, case-insensitively — `GetChannelName`'s first return.
 /// One `ChatChannels.dbc` row as the VM needs it for `JoinChannelByName` (decision 1908),
-/// `Add/RemoveChatWindowChannel` and `EnumerateServerChannels` (wow-re chat-cache-grammar.md
-/// §5-6): the id, the **Shortcut** (`General`, `Trade`, … — what every one of those verbs compares
-/// a typed name against, whole and case-folded), the name composed for the zone the player is in
-/// (`General - Elwynn Forest`; `None` while the zone text is empty, which is the verbs' nil leg),
-/// and whether the row is listed here at all (a `flags & 0x10` city row is, only in a city).
+/// `Add/RemoveChatWindowChannel` (`0x4a1000`/`0x4a1260`) and `EnumerateServerChannels`
+/// (`0x4a1790`): the id, the **Shortcut** (`General`, `Trade`, … — what every one of those verbs
+/// compares a typed name against, whole and case-folded), the name composed for the zone the
+/// player is in (`General - Elwynn Forest`; `None` while the zone text is empty, which is the
+/// verbs' nil leg), and whether the row is listed here at all (a `flags & 0x10` city row is, only
+/// in a city).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZoneChannelRow {
     pub id: u32,
@@ -213,9 +213,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // and `_SetDefaults` (l.649) keep for that key. Exactly the `SHOW_TUTORIALS` shape decision
     // 2077 corrected, and this tree's own `OptionsFrame.xml` carried the wrong reading until 2115.
     //
-    // Every byte fact below is wow-re `system/ui/scratch/guild-recruitment-mode.md`, a §5 round
-    // dispatched for this work.
-    //
     // **The state is one int** — the reference's `[0x843608]`, written only by `0x49ea70`
     // (`mov ds:0x843608,ecx`; five call sites, no address-takes) and read by the Lua getter and by
     // the chat-cache writer. Ours is `Model::guild_recruitment_mode`, seated at login and rendered
@@ -260,8 +257,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "SetGuildRecruitmentMode",
         // `[0x4a0060, 0x4a00c4)`. One argument at stack index 1, and **two ways to raise** — this
-        // is a shape-A binding (wow-re `numeric-arg-coercion-law.md`), not one of the many that
-        // swallow a nil:
+        // raises on a bad argument rather than swallowing a nil, unlike many bindings:
         //
         //   * `lua_isnumber 0x6f34d0` — so a NUMERIC STRING passes (`"1"` works) — else
         //     `luaL_error("Usage: SetGuildRecruitmentMode(mode)")`, which longjmps.
@@ -373,8 +369,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetChannelList() → slot1, name1, slot2, name2, … over every joined channel, in join order.
     //
-    // **The shape is settled by two independent consumers, not by a recorded signature** — wow-re
-    // has the address (`0x4a02d0`, `scratch/bindings.md` l.152) and no contract:
+    // **The shape is settled by two independent consumers, not by a recorded signature** — the
+    // reference gives the address (`0x4a02d0`) and no contract:
     //
     //  · the reference's own `FCFDropDown_LoadChannels(...)` walks `for i=1, arg.n, 2` and reads
     //    `arg[i+1]` as the NAME (FloatingChatFrame.lua l.445-455) — so the pair is (slot, name),
@@ -422,7 +418,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //     whose zone substitution is empty
     //
     // `CMSG_JOIN_CHANNEL` goes out on both non-nil legs. **The third argument registers the
-    // channel in that window's own list** (contract §5, `0x49ec24`–`0x49ede7`, VERIFIED):
+    // channel in that window's own list** (`0x49ec24`–`0x49ede7`):
     // `frameId` is `lua_tonumber`d, truncated and decremented, and anything outside `0..10`
     // after that — a missing or non-numeric argument yields `-1` — silently skips the
     // registration; otherwise `(Shortcut, ChannelID)` for a matched row and `(name, 0)` for a
@@ -493,7 +489,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?,
     )?;
 
-    // EnumerateServerChannels() — `0x4a1790` (chat-cache-grammar.md §6): the `ChatChannels.dbc`
+    // EnumerateServerChannels() — `0x4a1790`: the `ChatChannels.dbc`
     // **shortcuts** in row order, a `flags & 0x10` row only when the zone is a city
     // (`AreaTable.Flags & 0x8`); 0 values while the zone is unresolvable (an empty catalog here).
     // Never the composed `<name> - <zone>`: `FCFDropDown_LoadServerChannels` shows these bare.
@@ -509,8 +505,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // LeaveChannelByName(name) — `0x4a0000` → `0x49ee70`, the contract wow-re
-    // `leavechannelbyname-contract.md` §11 carved (decision 2144). The only stock caller is
+    // LeaveChannelByName(name) — `0x4a0000` → `0x49ee70`, the contract decision 2144 carved. The
+    // only stock caller is
     // `SlashCmdList["LEAVE"]`, which passes the first whitespace token of the slash text.
     //
     //   1. a string or number, else it RAISES `Usage: LeaveChannelByName("name")`; 0 returns.
@@ -528,7 +524,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `resolved`), so `/leave Trade` leaves `Trade - City`. The mechanism, done right, not the
     // reference's broken form of it.
     //
-    // Nothing local is freed here and no event fires (§6, §10): the slot goes when the server's
+    // Nothing local is freed here and no event fires: the slot goes when the server's
     // `YOU_LEFT` matches its stored name, and the mask bit with it — both the app's.
     g.set(
         "LeaveChannelByName",
@@ -794,11 +790,11 @@ mod command_tests {
         );
     }
 
-    /// **`JoinChannelByName`'s third argument registers the channel in that window** (contract §5,
-    /// decision 2144): `frameId - 1` indexes the ten window records, `(Shortcut, ChannelID)` for a
-    /// DBC row and `(name, 0)` for a custom channel, deduplicated by name; a missing, non-numeric or
-    /// out-of-range frame skips the registration and nothing else. It is what puts a `/join`ed
-    /// channel back into a window a `/leave` had stripped it from.
+    /// **`JoinChannelByName`'s third argument registers the channel in that window**
+    /// (`0x49ec24`–`0x49ede7`; decision 2144): `frameId - 1` indexes the ten window records,
+    /// `(Shortcut, ChannelID)` for a DBC row and `(name, 0)` for a custom channel, deduplicated by
+    /// name; a missing, non-numeric or out-of-range frame skips the registration and nothing else.
+    /// It is what puts a `/join`ed channel back into a window a `/leave` had stripped it from.
     #[test]
     fn join_channel_by_name_registers_the_channel_in_the_named_window() {
         let mut s = UiScript::new().unwrap();
@@ -838,10 +834,11 @@ mod command_tests {
         assert_eq!(s.take_channel_commands().len(), 5);
     }
 
-    /// `LeaveChannelByName`'s legs (contract §11; decision 2144): a number passes through for the
-    /// app's slot lookup and strips nothing; a shortcut composes for the zone and strips the
-    /// window entry it was registered under, in every window; an unresolvable shortcut is a
-    /// complete no-op; a custom name goes verbatim and strips verbatim. Nil raises. Zero returns.
+    /// `LeaveChannelByName`'s legs (`0x4a0000` → `0x49ee70`; decision 2144): a number passes
+    /// through for the app's slot lookup and strips nothing; a shortcut composes for the zone and
+    /// strips the window entry it was registered under, in every window; an unresolvable shortcut
+    /// is a complete no-op; a custom name goes verbatim and strips verbatim. Nil raises. Zero
+    /// returns.
     #[test]
     fn leave_channel_by_name_composes_strips_and_raises_the_way_the_reference_does() {
         let mut s = UiScript::new().unwrap();

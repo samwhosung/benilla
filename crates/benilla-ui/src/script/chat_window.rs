@@ -8,12 +8,11 @@
 //!
 //! ## `GetChatWindowInfo(id)` → `name, fontSize, r, g, b, a, shown, locked, docked`
 //!
-//! A registered Lua binding in the real client (`0x4a0ba0`, wow-re `system/ui/ledger.tsv`), reading
-//! the per-window struct array at `0xb4fe50` — stride 0x98, **10 windows**, colour bytes at
-//! +0xd8..+0xdb renormalised by the f32 1/255 (`system/ui/scratch/chat-color-table.md`). Those
-//! structs are loaded from the character's `chat-cache.txt`, and a real stock one is on disk
-//! (`wow-5875-re/WoW/WTF/Account/ONE/VMaNGOS/Onepaladin/chat-cache.txt`) — every value below is
-//! quoted from it:
+//! A registered Lua binding in the real client (`0x4a0ba0`), reading the per-window struct array at
+//! `0xb4fe50` — stride 0x98, **10 windows**, colour bytes at +0xd8..+0xdb renormalised by the f32
+//! 1/255 (`0x8026c8`). Those structs are loaded from the character's `chat-cache.txt`, and a real
+//! stock one, written by the reference client itself, is on disk — every value below is quoted from
+//! it:
 //!
 //! ```text
 //! WINDOW 1   SIZE 0  COLOR 0 0 0 0  LOCKED 1  DOCKED 1  SHOWN 1
@@ -62,15 +61,13 @@
 //! | `SetChatWindowSize(id, size)` | `0x4a1470` | the cache's `SIZE` |
 //! | `SetChatWindowLocked(id, isLocked)` | `0x4a1650` | the cache's `LOCKED` |
 //!
-//! (wow-re `system/ui/ledger.tsv:9449-9451` + `scratch/item17-frameapi-fullcarve.md` l.17-18,
-//! VERIFIED; `[0x806498]` is the 255.0 the first two multiply by.) **Bytes, not floats** — that is
+//! (`[0x806498]` is the 255.0 the first two multiply by.) **Bytes, not floats** — that is
 //! why the getter renormalises by 1/255, and why [`ChatWindowLook`] stores the colour as `u8`: a
 //! set→get round trip through the real client quantises, and a store of `f32` here would
 //! round-trip values the reference cannot hold. `SetChatWindowAlpha(1, 0.4)` answers
 //! `102/255 = 0.4`, not `0.4`.
 //!
-//! **The record's own layout**, from the §5 dispatched for this work
-//! (`system/ui/scratch/chat-window-record.md`): the colour is ONE packed `CImVector` at
+//! **The record's own layout**: the colour is ONE packed `CImVector` at
 //! **`+0x88` B, `+0x89` G, `+0x8a` R, `+0x8b` A** — note the **BGRA** order — and the font size is
 //! an `i32` at **`+0x84`**, not a byte and with no `× 255` anywhere near it. (Both correct this
 //! module's earlier `+0xd8..+0xdb`, which was the low half of the *absolute* operand
@@ -139,14 +136,14 @@ pub(super) const NUM_CHAT_WINDOWS: usize = 7;
 /// [`Self::default`] is the stock `chat-cache.txt` row — `COLOR 0 0 0 0`, `SIZE 0`, `LOCKED 1` —
 /// i.e. a black box at alpha 0 that cannot be dragged, which is the classic "chat is text over the
 /// world until you mouse over it".
-/// `CHATMSGGROUP` — the client's 68-entry message-group table at `0x805fb0` (wow-re
-/// `system/ui/scratch/chat-cache-grammar.md` §2): `(name, defaultOn, addedVersion)`, stride 0xc,
+/// `CHATMSGGROUP` — the client's 68-entry message-group table at `0x805fb0`:
+/// `(name, defaultOn, addedVersion)`, stride 0xc,
 /// in the order that IS the record's `+0x20` flag index. **Not** the 94-entry colour table: 67
 /// names are shared, `CREATURE` exists only here, and 27 colour names (RAID, OFFICER,
 /// WHISPER_INFORM, EMOTE, TEXT_EMOTE, MONSTER_*, CHANNEL_JOIN/LEAVE/LIST/NOTICE[_USER], AFK, DND,
 /// IGNORED, BG_SYSTEM_*, RAID_LEADER/WARNING/BOSS_EMOTE, FOREIGN_TELL, FILTERED, BATTLEGROUND[_LEADER])
-/// have no group. `defaultOn` is what the boot init copies into window 2's flags (§4);
-/// `addedVersion` is the loader's back-fill for a file older than `ADDEDVERSION 2` (§3).
+/// have no group. `defaultOn` is what the boot init (`0x4982c0`) copies into window 2's flags;
+/// `addedVersion` is the loader's (`0x498a60`) back-fill for a file older than `ADDEDVERSION 2`.
 pub const MESSAGE_GROUPS: [(&str, bool, u8); 68] = [
     ("SYSTEM", true, 0),
     ("SAY", true, 0),
@@ -299,13 +296,13 @@ impl ChatWindowLook {
     /// `DOCKED` position from [`WINDOW_STATE`]. The seed for the model's array and for the
     /// settings parser's per-line default, so a file that never mentions `DOCKED` keeps the
     /// shipped dock rather than silently undocking both windows.
-    /// The boot init `0x4982c0` (wow-re chat-cache-grammar.md §4) — the record a client with no
+    /// The boot init `0x4982c0` — the record a client with no
     /// `chat-cache.txt` runs from, and what FrameXML's own `FloatingChatFrame_Update` then docks,
     /// hides and saves: window 1 shown and undocked (it IS the dock — `FCF_DockFrame(ChatFrame1, 1)`
     /// at FloatingChatFrame.xml's file scope), groups 1–10 by a literal fill; window 2 shown and
     /// `docked 1`, every `defaultOn` group of 11–68 (the 34 the stock file lists); windows 3–10
     /// hidden with nothing enabled. Every window locked, size 0, colour 0, name empty, ten empty
-    /// channel slots. The init fires no event; the loader does (§8).
+    /// channel slots. The init fires no event; the loader (`0x498a60`) does.
     pub fn stock(index: usize) -> Self {
         let groups = |range: std::ops::Range<usize>, all: bool| -> Vec<String> {
             MESSAGE_GROUPS[range]
@@ -331,8 +328,8 @@ impl ChatWindowLook {
     }
 
     /// The loader's discipline over the message set — unknown names dropped, duplicates folded,
-    /// **table order** — so `GetChatWindowMessages` answers the way a flag walk does (§5: "table
-    /// order 0..67") whatever order a file or a caller listed them in.
+    /// **table order** — so `GetChatWindowMessages` (`0x4a0d20`) answers the way a flag walk does —
+    /// table order 0..67 — whatever order a file or a caller listed them in.
     pub fn normalize_messages(&mut self) {
         let mut flags = [false; MESSAGE_GROUPS.len()];
         for m in &self.messages {
@@ -420,8 +417,8 @@ impl super::Model {
         true
     }
 
-    /// **Strip `key` from every window's list** — leave-by-name `0x49ee70`'s `0x49f001`–`0x49f085`
-    /// (wow-re `leavechannelbyname-contract.md` §6): all ten windows, the first entry whose name
+    /// **Strip `key` from every window's list** — leave-by-name `0x49ee70`'s `0x49f001`–`0x49f085`:
+    /// all ten windows, the first entry whose name
     /// equals `key` case-insensitively, the cell blanked. `key` is the DBC Shortcut when the
     /// argument matched a row, else the argument verbatim; the numeric form strips nothing,
     /// because a slot name never equals a window entry. Answers whether anything was stripped.
@@ -588,8 +585,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SetChatWindowLocked(id, isLocked) — `0x4a1650`, writing the record's `+0x8c` locked field
-    // (wow-re `system/ui/ledger.tsv:9325` + `scratch/chat-window-record.md` §2, VERIFIED:
-    // `0x4a16a2 mov [esi+0xb4fedc],eax`, initialised to **1** at `0x4984e4`, read back as
+    // (`0x4a16a2 mov [esi+0xb4fedc],eax`, initialised to **1** at `0x4984e4`, read back as
     // `GetChatWindowInfo`'s 8th return at `0x4a0cbf`).
     //
     // **A `bool` is the faithful store even though the field is an `i32`**: the cache writer
@@ -713,10 +709,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ── The rest of the 0x98 record: name, shown, message types, channels ──────────────────
     //
     // `SetChatWindowName 0x4a13f0` / `SetChatWindowShown 0x4a1730` are registrar entries beside
-    // the look setters (chat-window-record.md §8); `Add/Remove/GetChatWindowMessages`
+    // the look setters; `Add/Remove/GetChatWindowMessages`
     // (`0x4a0e80`/`0x4a0f40`/`0x4a0d20`) and `Add/Remove/GetChatWindowChannel(s)`
     // (`0x4a1000`/`0x4a1260`/`0x4a0dc0`) read and write the `+0x20` flags and the `+0x64`/`+0x74`
-    // arrays the same census bounded (§7). Every write that moves the record queues the window
+    // arrays the same census bounded. Every write that moves the record queues the window
     // for the app's persist pass, like the look setters.
 
     fn with_look<T>(
@@ -834,7 +830,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // AddChatWindowChannel(id, "channel") — `0x4a1000` (chat-cache-grammar.md §5): (i) the
+    // AddChatWindowChannel(id, "channel") — `0x4a1000`: (i) the
     // `ChatChannels.dbc` walk compares the argument with each row's **Shortcut**, whole, case-
     // folded; no match → id 0 and the Lua string; a match with no zone text yet → **nil** (0
     // values) and nothing stored; a match → the row's id and **the DBC's own Shortcut string**,
@@ -961,7 +957,7 @@ mod tests {
     }
 
     /// Trap 2: `shown`/`docked` are `nil` where the record stores 0, because FrameXML branches
-    /// on them bare and `0` is true in Lua. At the boot init (chat-cache-grammar.md §4) window 1
+    /// on them bare and `0` is true in Lua. At the boot init (`0x4982c0`) window 1
     /// is shown and undocked — it is the dock, `FCF_DockFrame(ChatFrame1, 1)` at file scope —
     /// window 2 is shown with `docked 1`, and 3..7 are neither; the `DOCKED 1`/`DOCKED 2`,
     /// `SHOWN 1`/`SHOWN 0` a stock file carries are what FrameXML's own dock pass then saved.
@@ -996,8 +992,8 @@ mod tests {
     }
 
     /// Trap 3: `docked` is the dock POSITION `FCF_DockFrame(frame, index)` inserts at — the
-    /// init's window 2 answers 1 (§4, `mov ds:0xb4ff78, 1`), and once FrameXML has saved its
-    /// dock (`FCF_SaveDock`) the stored positions are whatever it wrote.
+    /// init's window 2 answers 1 (`0x4982c0`: `mov ds:0xb4ff78, 1`), and once FrameXML has saved
+    /// its dock (`FCF_SaveDock`) the stored positions are whatever it wrote.
     #[test]
     fn docked_is_a_dock_position_not_a_flag() {
         let mut s = UiScript::new().unwrap();
@@ -1065,7 +1061,7 @@ mod tests {
     /// The three setters round-trip through the getter — and they round-trip through the
     /// reference's BYTE quantisation, not through the float they were handed. `0.4 × 255 = 102`,
     /// and `102/255` is what comes back — and `0.5` comes back `127/255`, not `128/255`, because
-    /// `__ftol` truncates (§5-verified: a real client stores 127 there).
+    /// `__ftol` truncates (a real client stores 127 there).
     #[test]
     fn the_setters_round_trip_through_the_engine_byte() {
         let s = UiScript::new().unwrap();
@@ -1214,7 +1210,7 @@ mod record_tests {
     use super::{ChatWindowLook, MESSAGE_GROUPS};
     use crate::script::{UiScript, ZoneChannelRow};
 
-    /// The boot init (chat-cache-grammar.md §4): window 1 shown with groups 1–10, window 2 shown
+    /// The boot init (`0x4982c0`): window 1 shown with groups 1–10, window 2 shown
     /// at dock index 1 with the 34 `defaultOn` groups of 11–68, the rest empty and hidden.
     #[test]
     fn the_stock_records_are_the_boot_init() {
@@ -1308,7 +1304,7 @@ mod record_tests {
         );
     }
 
-    /// `AddChatWindowChannel`'s legs (chat-cache-grammar.md §5): a shortcut match stores the
+    /// `AddChatWindowChannel`'s legs (`0x4a1000`): a shortcut match stores the
     /// DBC's own spelling with its id, a custom name stores as typed with 0, a shortcut with no
     /// zone text yet is nil and nothing; a duplicate answers the id and stores nothing.
     #[test]
