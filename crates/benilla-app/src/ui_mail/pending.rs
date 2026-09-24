@@ -7,19 +7,19 @@
 //! purpose — the two only meet at the mailbox close edge, where a read letter turns into the
 //! re-query that clears the icon.
 //!
-//! Every rule here is byte-VERIFIED in wow-re (`ui/scratch/mail-pending-countdown.md`), which is
-//! also where the load-bearing *negative* lives: **nothing on the inbox path writes the countdown**.
+//! Every rule here is the reference's, and so is the load-bearing *negative*: **nothing on the
+//! inbox path writes the countdown** (`0x845eac`).
 
 use bevy::prelude::*;
 
 /// The `HasNewMail()` / countdown-step epsilon — the real client's `[0x8029d4]` = `2^-22`, the
 /// `fabs(x)`-vs-this threshold both `0x4afea0` (`HasNewMail`) and `0x4ade60` (the per-frame step)
-/// compare against (VERIFIED byte-exact in wow-re, `crates/ui/src/glue_geom_4a8.rs::EPS_BITS`).
-const MAIL_TIME_EPSILON: f32 = f32::from_bits(0x3480_0000); // 2^-22, wow-re's `EPS_BITS`
+/// compare against.
+const MAIL_TIME_EPSILON: f32 = f32::from_bits(0x3480_0000); // 2^-22, the reference's `[0x8029d4]`
 
 /// The "no mail waiting" stamp: the literal **`-1.0f`** the mail module's init (`0x4acb87`) and the
 /// `MSG_QUERY_NEXT_MAIL_TIME` **sender** (`0x4ade25`) both write into the countdown,
-/// unconditionally (VERIFIED wow-re, decision 0913). Any value outside ε of zero reads "no mail";
+/// unconditionally (decision 0913). Any value outside ε of zero reads "no mail";
 /// `-1.0` is simply the one the reference picks, and it is what the countdown holds between asking
 /// the server and hearing back.
 const MAIL_TIME_NO_MAIL: f32 = -1.0;
@@ -32,9 +32,7 @@ const MAIL_TIME_NO_MAIL: f32 = -1.0;
 /// and stamped back to [`MAIL_TIME_NO_MAIL`] whenever the client (re-)asks the server. Independent
 /// of [`MailOpen`] (that is session-scoped to one open window; this survives it closing).
 ///
-/// **The five writers**, all VERIFIED at the bytes (wow-re `mail-pending-countdown.md`; the
-/// earlier §4 note listed only three, which is what made the clear-on-inbox-read guess look
-/// plausible — decision 0913): the module init and the query sender stamp `-1.0`
+/// **The five writers** (decision 0913): the module init and the query sender stamp `-1.0`
 /// ([`Self::on_query_sent`]), the query reply stores the server's float
 /// ([`Self::apply_query_reply`]), `SMSG_RECEIVED_MAIL` runs the set-value ladder
 /// ([`Self::apply_received_mail`]), and the per-frame step counts down ([`Self::step`]).
@@ -67,7 +65,7 @@ impl Default for MailPending {
 }
 
 impl MailPending {
-    /// `HasNewMail()` (wow-re `0x4afea0` byte-exact: `fld [0x845eac]; fabs; fcomp [0x8029d4]`,
+    /// `HasNewMail()` (`0x4afea0`: `fld [0x845eac]; fabs; fcomp [0x8029d4]`,
     /// emitted `jp`) — true iff the countdown is **within ε of zero**. Strict `<`, symmetric, and
     /// false at exact equality and for NaN.
     ///
@@ -79,12 +77,11 @@ impl MailPending {
         self.countdown.abs() < MAIL_TIME_EPSILON
     }
 
-    /// The per-frame countdown step (wow-re `0x4ade60` byte-exact — carved as
-    /// `glue_geom_4a8::step_value`): a **non-positive countdown is left alone** (the "no mail"
-    /// stamp must never drift toward zero, and a reached-zero countdown must not sail past it into
-    /// negative — either would flip [`Self::has_new_mail`] the wrong way), and a positive one steps
-    /// down floor-clamped at `0.0`. The subtraction runs the client's x87 chain (f64 under PC_53,
-    /// narrowed at the store). Signals once, on the step that lands inside ε.
+    /// The per-frame countdown step (`0x4ade60`): a **non-positive countdown is left alone**
+    /// (the "no mail" stamp must never drift toward zero, and a reached-zero countdown must not
+    /// sail past it into negative — either would flip [`Self::has_new_mail`] the wrong way), and a
+    /// positive one steps down floor-clamped at `0.0`. The subtraction runs the client's x87 chain
+    /// (f64 under PC_53, narrowed at the store). Signals once, on the step that lands inside ε.
     pub(super) fn step(&mut self, delta_secs: f32) {
         if self.countdown > 0.0 {
             let diff = f64::from(self.countdown) - f64::from(delta_secs); // fsub, then fcom vs 0.0
@@ -95,14 +92,14 @@ impl MailPending {
         }
     }
 
-    /// The `MSG_QUERY_NEXT_MAIL_TIME` **reply** (wow-re `0x4ad5f0`): store the server's float
+    /// The `MSG_QUERY_NEXT_MAIL_TIME` **reply** (`0x4ad5f0`): store the server's float
     /// verbatim and signal — **unconditionally**, whether or not `HasNewMail()` changed.
     pub(crate) fn apply_query_reply(&mut self, seconds: f32) {
         self.countdown = seconds;
         self.notify = true; // 0x4ad605 — unconditional
     }
 
-    /// Sending `MSG_QUERY_NEXT_MAIL_TIME` (wow-re: the sender `0x4ade25` and the module init
+    /// Sending `MSG_QUERY_NEXT_MAIL_TIME` (the sender `0x4ade25` and the module init
     /// `0x4acb87` both stamp `-1.0f`): the countdown reads "no mail" from the moment we ask until
     /// the reply lands. **No signal** — the sender does not fire `UPDATE_PENDING_MAIL`, so the icon
     /// keeps its old face for the round trip and updates when the reply arrives.
@@ -110,7 +107,7 @@ impl MailPending {
         self.countdown = MAIL_TIME_NO_MAIL;
     }
 
-    /// `SMSG_RECEIVED_MAIL` (wow-re `0x4ad620` byte-exact — carved as `glue_geom_4a8::set_value`).
+    /// `SMSG_RECEIVED_MAIL` (`0x4ad620`).
     /// `mailbox_open` is the busy-flag pair `[0xb6ef88]|[0xb6ef8c]`, the open mailbox's guid:
     ///
     /// * **busy** → arm the deferred refresh and leave the countdown alone (the icon does not move
@@ -172,7 +169,7 @@ mod tests {
         assert!(pending_at(0.0).has_new_mail());
         assert!(!pending_at(-86400.0).has_new_mail());
         // The threshold itself: inside ε counts, ε and beyond does not — either sign. Strict `<`,
-        // so exact equality is false (wow-re: the emitted `jp` over the x87 C-bits).
+        // so exact equality is false (the emitted `jp` at `0x4afeb3` over the x87 C-bits).
         assert!(pending_at(MAIL_TIME_EPSILON / 2.0).has_new_mail());
         assert!(pending_at(-MAIL_TIME_EPSILON / 2.0).has_new_mail());
         assert!(!pending_at(MAIL_TIME_EPSILON).has_new_mail());
@@ -225,7 +222,7 @@ mod tests {
     }
 
     /// The query reply stores verbatim and signals **unconditionally** — even when `HasNewMail()`
-    /// did not change (wow-re `0x4ad605`). A transition-only fire would be a silent divergence.
+    /// did not change (`0x4ad605`). A transition-only fire would be a silent divergence.
     #[test]
     fn query_reply_stores_and_always_signals() {
         let mut p = MailPending::default();
@@ -240,7 +237,7 @@ mod tests {
     }
 
     /// Sending the query stamps "no mail" but does **not** signal — so the icon keeps its face for
-    /// the round trip and moves when the reply lands (wow-re: `0x4ade25` stamps, `0x4ad605` fires).
+    /// the round trip and moves when the reply lands (`0x4ade25` stamps, `0x4ad605` fires).
     #[test]
     fn sending_the_query_stamps_without_signalling() {
         let mut p = pending_at(0.0);

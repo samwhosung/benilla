@@ -39,7 +39,7 @@
 //!
 //! The 1.12 FrameXML fixes the rest: the CAMP/QUIT dialogs, their 20 s timeouts, and their
 //! `PLAYER_CAMPING` / `PLAYER_QUITING` / `LOGOUT_CANCEL` drivers (UIParent.lua l.304-315, event
-//! ids 276/277/278 in wow-re's `re/events/event-catalog.tsv`).
+//! ids 276/277/278 in the client's event-name table `0xbe1198`).
 
 use benilla_ui::script::{SessionRequest, UiScript};
 use bevy::prelude::*;
@@ -215,9 +215,9 @@ fn drain_logout(
             }
             // `CMSG_PLAYER_LOGOUT`, the forced flavour: the dispatcher's own gate is a live
             // in-world session, and nothing happens without one (decision 1963).
-            // `0x5aaff0` calls the dispatcher with `force = 1`, which BYPASSES the pending bail
-            // and does NOT set the latch (wow-re `staticpopup-dialog-bindings.md` §4) — so a
-            // forced logout is exactly the escape hatch from a stuck pending one.
+            // `0x5aaff0` calls the dispatcher `0x5ab000` with `force = 1`, which BYPASSES the
+            // pending bail and does NOT set the latch — so a forced logout is exactly the escape
+            // hatch from a stuck pending one.
             SessionRequest::ForceLogout => {
                 if self_guid.0.is_some() {
                     info!("logout: forced");

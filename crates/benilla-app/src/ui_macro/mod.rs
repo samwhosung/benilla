@@ -41,8 +41,8 @@ pub(crate) struct MacroFiles {
     identity: crate::ui_script::VmMemo<Option<(String, String)>>,
 }
 
-/// Macro index → its bound spell — benilla's `[rec+0x564]` (wow-re `action-spell-icon-apis.md`
-/// §2), the field an action-bar MACRO slot's whole dynamic state reads through, in the
+/// Macro index → its bound spell — benilla's `[rec+0x564]` (read by the MACRO arm `0x4e5ba0`),
+/// the field an action-bar MACRO slot's whole dynamic state reads through, in the
 /// reference's own three values ([`BoundSpell`]). Stored, not derived at read time, for the
 /// reference's own reason: it is a **field on the macro record**, recomputed when the macro (or
 /// the book) changes, so the three per-frame action-bar systems pay a hash lookup instead of a
@@ -251,8 +251,7 @@ fn rebind_macro_spells(
 
 /// The engine event a macro line is delivered as — `0x188` in the reference's runtime event
 /// registry, resolved to its name inside the binary (`0xbe1198 + 4*0x188` is written exactly once,
-/// at `0x51b4ff`, with `0x852470` = these bytes). wow-re `system/ui/scratch/macro-execution-law.md`
-/// §4, VERIFIED.
+/// at `0x51b4ff`, with `0x852470` = these bytes).
 const EXECUTE_CHAT_LINE: &str = "EXECUTE_CHAT_LINE";
 
 /// Run a macro by its 1-based index — the action bar's MACRO arm (`crate::ui_action::drain`) and

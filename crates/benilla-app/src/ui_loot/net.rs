@@ -161,8 +161,8 @@ const SERVER_STARTED_LOOT: [u8; 3] = [2, 3, 4];
 /// reach the window through an `OPEN_LOCK` cast, never through `CMSG_LOOT` (vmangos
 /// `Spell::SendLoot` → `Player::SendLoot`).
 ///
-/// **This handler is an admission gate, not an unconditional open** (wow-re `loot-anim-leg.md` §7,
-/// byte-verified; decision 1477 correcting 1471). `0x5eb924`:
+/// **This handler is an admission gate, not an unconditional open** (decision 1477 correcting
+/// 1471). `0x5eb924`:
 ///
 /// ```text
 /// ACCEPT ⇔ (latch != 0 && latch == pkt.guid) || (latch == 0 && loot_type ∈ {2,3,4})
@@ -176,7 +176,8 @@ const SERVER_STARTED_LOOT: [u8; 3] = [2, 3, 4];
 ///
 /// The accepted arm writes the latch verbatim (`0x5ebb60`) and — verified over the whole success
 /// path — calls **neither** the base-anim recompute nor the Loot-50 force-play. A chest is already
-/// kneeling by now: its arm was `SMSG_SPELL_GO` (§6, [`super::spells`]), one packet earlier.
+/// kneeling by now: its arm was `SMSG_SPELL_GO` (`0x6e831b`, [`super::spells`]), one packet
+/// earlier.
 fn loot_response(
     guid: u64,
     loot_type: u8,
@@ -225,8 +226,8 @@ fn loot_response(
 /// ("Your fish got away!") when the skill roll failed on the click, `ERR_FISH_NOT_HOOKED`
 /// ("No fish are hooked.") when the bobber expired or was clicked before the splash. Yellow, not
 /// red: the reference handlers (`0x5e3fc5`/`0x5e3fe2` → `DisplayError` ids `0x13e`/`0x13f`) are
-/// **type-1** registry entries, which fire `UI_INFO_MESSAGE` — byte-verified in wow-re
-/// `fish-msg-handlers.md`, correcting 1086's shipped guess (the fold-back record).
+/// **type-1** registry entries, which fire `UI_INFO_MESSAGE` (`DisplayError`'s type-1 arm
+/// `0x49684b`), correcting 1086's shipped guess.
 fn fish_verdict(escaped: bool, errors: &mut UiErrorKeys) {
     let key = if escaped {
         "ERR_FISH_ESCAPED"
@@ -237,8 +238,7 @@ fn fish_verdict(escaped: bool, errors: &mut UiErrorKeys) {
     errors.0.push(UiError::key(key));
 }
 
-/// The **default** arm releases — VERIFIED at the bytes (wow-re §5,
-/// `system/object-layer/scratch/loot-anim-leg.md` §7.1).
+/// The **default** arm releases.
 ///
 /// The out-of-range branch is not merely *adjacent* to code 7's arm, it **is** code 7's arm:
 ///
@@ -271,7 +271,7 @@ struct LootRefusal {
 }
 
 /// The refusal a `SMSG_LOOT_RESPONSE` error code produces — **the reference's own jump table**,
-/// transcribed (wow-re `system/ui/scratch/loot-slot-record.md` §1, byte-verified).
+/// transcribed.
 ///
 /// The error leg is entered on `lootType == 0` (`0x5eb9f4`), reads the code (`0x5eba02`) and
 /// dispatches `0x5eba0b add eax,-4; cmp eax,0xa; ja <default>; jmp [4*eax + 0x5ebc64]`. The
@@ -335,12 +335,11 @@ fn loot_refusal(reason: u8) -> LootRefusal {
 /// something the client never says.
 ///
 /// The arms that release run the reference's release tail `0x5ebac2`, which also calls
-/// `UnlockItem 0x495420` on the packet's guid (wow-re `loot-anim-leg.md` §7.1): a refused lockbox
-/// open drops the item's pending lock. For a corpse or chest guid there is no item, and nothing
-/// unlocks.
+/// `UnlockItem 0x495420` on the packet's guid: a refused lockbox open drops the item's pending
+/// lock. For a corpse or chest guid there is no item, and nothing unlocks.
 ///
-/// **A gap this deliberately does not close** (surfaced by the wow-re §5, named here rather
-/// than left to a later bug report):
+/// **A gap this deliberately does not close** (named here rather than left to a later bug
+/// report):
 ///
 /// 1. **A guid-MISMATCHED error takes a different arm in the reference.** The error leg is
 ///    reachable only past the admission gate, so the reference only ever *displays* a refusal for
@@ -393,8 +392,8 @@ fn loot_clear_money(loot: &mut LootState) {
 /// must not drop the latch the new request just armed (decision 0515).
 ///
 /// **An item loot unlocks here.** The handler (`0x5ec090`) ends in `0x48f200(cl=0, dl=0)`, whose
-/// `48f299` leg calls `UnlockItem 0x495420` when the loot object is an ITEM (wow-re
-/// `ui/ledger.tsv` `0x48f200`). It is the only clear an opened lockbox closed with loot left
+/// `48f299` leg calls `UnlockItem 0x495420` when the loot object is an ITEM (`0x48f200` gates
+/// the unlock on `dl == 0`). It is the only clear an opened lockbox closed with loot left
 /// ever gets: vmangos' `DoLootRelease` destroys the item only once it is fully looted, so its
 /// slot never changes and [`PendingItemOps::resolve`] has nothing to see.
 fn loot_release_response(
@@ -479,7 +478,7 @@ mod tests {
     }
 
     /// Both fish-verdict keys queue as **yellow** (type-1 / `UI_INFO_MESSAGE`) entries — the
-    /// byte-verified arm, wow-re `fish-msg-handlers.md` — and both resolve to the exact 1.12
+    /// `DisplayError` arm `0x49684b` — and both resolve to the exact 1.12
     /// strings in the shipped `GlobalStrings.lua` (the equip-error test's runtime pattern —
     /// a typo'd key would silently swallow the toast). Skips without client data.
     #[test]
@@ -508,9 +507,9 @@ mod tests {
     }
 
     /// **The refusal table is the reference's, by message id.** Each key must be the catalog row
-    /// whose id the binary's own jump table pushes to `DisplayError` (wow-re
-    /// `loot-slot-record.md` §1: `4→0x82 · 5→0x84 · 6→0x81 · 7→0x83 · 8→0x85 · 9→0x86 ·
-    /// 10→0x19b · 11→0x1bf · 12→0x1cd · 13→0x1ce · 14→0x1cf`, default `0x83`).
+    /// whose id the binary's own jump table pushes to `DisplayError` (`0x5ebc64`: `4→0x82 ·
+    /// 5→0x84 · 6→0x81 · 7→0x83 · 8→0x85 · 9→0x86 · 10→0x19b · 11→0x1bf · 12→0x1cd · 13→0x1ce ·
+    /// 14→0x1cf`, default `0x83`).
     ///
     /// Asserting the **id** rather than the spelling is the point: the key text is only a name for
     /// a number the client pushes, and the catalog is generated from that same table (decision
@@ -641,8 +640,8 @@ mod tests {
         }
     }
 
-    /// The **error leg's** clear stays guid-matched, and the wow-re §5 showed this is not the
-    /// deviation 0515 took it for: it is behaviourally *identical* to the reference.
+    /// The **error leg's** clear stays guid-matched, and this is not the deviation 0515 took it
+    /// for: it is behaviourally *identical* to the reference.
     ///
     /// The tail's own store is unconditional, but the tail cannot be reached on a mismatch.
     /// `0x5eb9f1` has exactly one predecessor image-wide — `0x5eb93e je`, which already required
@@ -772,8 +771,8 @@ mod tests {
 
     /// **The release unlocks an opened lockbox.** `SMSG_LOOT_RELEASE_RESPONSE` → `0x5ec090` →
     /// `0x48f200(cl=0, dl=0)`, whose `48f299` leg calls `UnlockItem 0x495420` when the loot
-    /// object is an ITEM (wow-re `ui/ledger.tsv` `0x48f200`). Closing a lockbox's window with
-    /// loot left destroys nothing server-side (vmangos `DoLootRelease` destroys only a fully
+    /// object is an ITEM (`0x48f200` gates the unlock on `dl == 0`). Closing a lockbox's window
+    /// with loot left destroys nothing server-side (vmangos `DoLootRelease` destroys only a fully
     /// looted item), so no field update ever resolves the lock — the release is the clear.
     #[test]
     fn a_release_for_the_opened_item_unlocks_its_slot() {
@@ -811,7 +810,7 @@ mod tests {
     }
 
     /// The error leg's release tail `0x5ebac2` calls the same `UnlockItem 0x495420` on the
-    /// packet's guid (wow-re `loot-anim-leg.md` §7.1) — on the arms that release, and only those.
+    /// packet's guid — on the arms that release, and only those.
     #[test]
     fn a_releasing_loot_error_on_the_opened_item_unlocks_it() {
         let mut world = opened_lockbox_world();

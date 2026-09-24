@@ -41,8 +41,7 @@
 //! > A **hit** (non-zero return) calls `0x61b430`, which fires `START_LOOT_ROLL (0x1f9, "%d%d")`.
 //! > A **miss** issues the query and leaves the callback `0x61b460` armed — a trampoline whose
 //! > worker is that same `0x61b430` — so on a cold cache the event fires from the cache *arrival*,
-//! > not from the packet. (wow-re `system/object-layer/scratch/lootroll-chat-and-lifecycle.md` §5
-//! > and `scratch/w2e-decomp.c`'s `FUN_0061b310`/`FUN_0061b430`.)
+//! > not from the packet. (The reference's `FUN_0061b310`/`FUN_0061b430`, decompiled.)
 //!
 //! So `GetLootRollItemInfo`'s cache-miss tail is nearly unreachable in the real client, and was our
 //! common case. There is no repaint to fall back on — the same finding 1805 landed for
@@ -404,8 +403,8 @@ impl Plugin for UiLootRollPlugin {
 ///
 /// **The `NO_SPAM` variants are the `showLootSpam == 0` branch**, and since decision 1589 (B246's
 /// Chat options page) that CVar has a row, so `detailed` is a real argument rather than a constant
-/// `true`. 0594 §3 recorded the whole gated flow waiting for exactly this; wow-re's
-/// `lootroll-chat-and-lifecycle.md` §4 is the byte census behind it:
+/// `true`. 0594 §3 recorded the whole gated flow waiting for exactly this; a byte census of the
+/// CVar `0xb4e2bc` is behind it:
 ///
 /// | `showLootSpam` | the per-vote / per-dice line (`0x61c0b0`) | the WON line (`0x61b9e0`) |
 /// |---|---|---|
@@ -970,8 +969,8 @@ mod tests {
         );
     }
 
-    /// `showLootSpam == 0` — the whole gated flow 0594 §3 recorded and 1589 finally wired, all
-    /// three of its claims in one place (wow-re `lootroll-chat-and-lifecycle.md` §4).
+    /// `showLootSpam == 0` (the CVar `0xb4e2bc`) — the whole gated flow 0594 §3 recorded and
+    /// 1589 finally wired, all three of its claims in one place.
     #[test]
     fn detail_off_suppresses_the_roll_lines_and_reshapes_the_winner() {
         // 1 · every vote and every dice line is dropped outright.

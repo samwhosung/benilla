@@ -95,13 +95,13 @@ fn on_session_end(
 
 /// `SessionEvent::MailList` (`SMSG_MAIL_LIST_RESULT`) — replace the session's rows + fire the inbox
 /// repaint (via the feed's diff). The inbox handler auto-purges expired mail: any row whose timer ran
-/// out (`expire_days <= 0`) is deleted server-side (`CMSG_MAIL_DELETE`) and dropped here (wow-re §5,
-/// `ui/scratch/mail-interaction.md`).
+/// out (`expire_days <= 0`) is deleted server-side (`CMSG_MAIL_DELETE`) and dropped here
+/// (`0x4ad1b0`).
 ///
 /// **It does not touch [`MailPending`]** — and that is a positive fact, not an
 /// omission (decision 0913). This arm used to clear the countdown when the surviving list had
 /// nothing unread, on the inferred grounds that "checking your mail clears the icon" had to be the
-/// list's doing. A full write-xref of the countdown float in wow-re says otherwise: nothing on the
+/// list's doing. A full write-xref of the countdown float `0x845eac` says otherwise: nothing on the
 /// inbox path writes it. The icon clears because **opening a letter arms the deferred-refresh flag
 /// and the mailbox *close* re-asks the server** — modelled in [`super`], where the close
 /// edge lives.
@@ -126,11 +126,11 @@ fn mail_list(mails: Vec<MailListEntry>, mail: &mut MailOpen, commands: &NetComma
 }
 
 /// `MAIL_CHECK_MASK_COD_PAYMENT` — the `checked` bit (`byte[rec+0x148] & 8`) that marks a mail as
-/// the money a COD taker paid; taking that money empties the mail (wow-re, 1970).
+/// the money a COD taker paid; taking that money empties the mail (`0x4ad6b0`, 1970).
 const CHECKED_COD_PAYMENT: u32 = 8;
 
-/// The two take legs' "this mail is now empty" decision, off the client's own bytes (wow-re
-/// `stationery-bindings.md` §8, 1970): a take that empties the mail sends `CMSG_MAIL_DELETE`
+/// The two take legs' "this mail is now empty" decision, off the client's own bytes
+/// (1970): a take that empties the mail sends `CMSG_MAIL_DELETE`
 /// itself, then `CLOSE_INBOX_ITEM(index)`, then `MAIL_INBOX_UPDATE`. The money leg (`0x4ad6b0`)
 /// purges iff the mail is a COD payment, or an auction notice with no item; the item leg
 /// (`0x4ad7b0`) purges iff the money is gone and the mail is an auction notice or carries no
@@ -138,7 +138,7 @@ const CHECKED_COD_PAYMENT: u32 = 8;
 /// reference too (the stock `OpenMailFrame_OnHide` deletes a copied, emptied letter on close).
 ///
 /// The item leg's second conjunct reads `[rec+0x114] == 0 && [rec+0x25c] == 0`; `+0x114` is the
-/// letter's text id and `+0x25c` a second no-text field the carve did not name (INFERRED to be the
+/// letter's text id and `+0x25c` a second no-text field (inferred to be the
 /// fetched body). This takes the text id alone, which can only purge a mail the client also would
 /// when that second field is zero whenever the first is.
 fn take_empties(entry: &MailListEntry, action: u32) -> bool {
@@ -235,7 +235,7 @@ fn mail_item_text(text_id: u32, text: String, mail: &mut MailOpen) {
 /// `SessionEvent::ReceivedMail` (`SMSG_RECEIVED_MAIL`) — mail just arrived. `seconds` is the wire's
 /// delay float (vmangos always sends `0.0` = "now"); it runs the countdown's set-value ladder,
 /// which takes the **busy** branch when a mailbox window is open — arming the deferred refresh
-/// instead of moving the icon under the player's nose (wow-re `0x4ad620`, decision 0913).
+/// instead of moving the icon under the player's nose (`0x4ad620`, decision 0913).
 ///
 /// The list re-sync is ours, not the reference's, and stays: a server push bypasses `CheckInbox`'s
 /// 60 s client-side throttle (decision 0544 P3), so a mail arriving while you stand at the mailbox
@@ -249,7 +249,7 @@ fn received_mail(seconds: f32, pending: &mut MailPending, mail: &MailOpen, comma
 }
 
 /// `SessionEvent::NextMailTime` (`MSG_QUERY_NEXT_MAIL_TIME`'s reply, one `f32`) — store the
-/// server's float verbatim and signal `UPDATE_PENDING_MAIL` **unconditionally** (wow-re `0x4ad5f0`,
+/// server's float verbatim and signal `UPDATE_PENDING_MAIL` **unconditionally** (`0x4ad5f0`,
 /// signal site `0x4ad605`; decision 0913). `0.0` = mail waiting now, negative (vmangos always sends
 /// `-86400.0`) = none, a positive value counts down per frame in `crate::ui_mail`'s `feed_mail` and
 /// flips `HasNewMail()` true as it lands inside ε.

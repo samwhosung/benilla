@@ -47,8 +47,7 @@
 //! **`layout-cache.txt` (`0x490c79`)** → the flat saved file (`0x490c7e`) → the per-addon files →
 //! `AddOns.txt` → the frame teardown. It rides the same five lifecycle roots as SavedVariables —
 //! logout to the character screen, quit, disconnect, application exit and **`/reload`** — and
-//! there is no autosave, no dirty bit and no per-frame write (wow-5875-re `system/ui/ui.md`;
-//! `scratch/camera-settings-persistence.md` §4).
+//! there is no autosave, no dirty bit and no per-frame write.
 //!
 //! Ours takes that slot: [`save_now`], called from [`crate::ui_script::shutdown_ui_state`]
 //! between `PLAYER_LOGOUT` and the flat file. **That is the load-bearing part, and it is what

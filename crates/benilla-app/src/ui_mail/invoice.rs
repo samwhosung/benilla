@@ -3,9 +3,8 @@
 //!
 //! **The invoice is TEXT.** Nothing structured rides the wire: the auction house writes its numbers
 //! into the mail's *subject* and *body* as colon-separated fields, and the client parses them back
-//! out. That is not an emulator shortcut — it is what the real 1.12 client does, byte-verified
-//! (wow-re `system/ui/scratch/auction-house.md` §11.1a: `0x4ace70` for the subject,
-//! `GetInboxInvoiceInfo 0x4af360` for the body).
+//! out. That is not an emulator shortcut — it is what the real 1.12 client does (`0x4ace70` for
+//! the subject, `GetInboxInvoiceInfo 0x4af360` for the body).
 //!
 //! Two halves, and they answer different questions from different places:
 //!

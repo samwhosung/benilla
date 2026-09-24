@@ -42,12 +42,9 @@ mod net;
 /// **six of them, one per decade of copper**, all VERIFIED to extract from `interface.MPQ`.
 ///
 /// This used to be three, chosen by the highest nonzero denomination, and said so in a "stated
-/// approximation" note whose stated reason was that the real selection was not RE-recorded. It is:
-/// `0x4c2460` sends the money row to `0x4c248a call 0x6c62d0`, whose ladder at
-/// `0x6c6307`–`0x6c6386` is exactly the six thresholds below (wow-re
-/// `system/ui/scratch/loot-slot-record.md` §4). The gap closed when that note landed and nothing
-/// here noticed — which is why a "documented approximation" is a thing to re-check against the
-/// sibling repo, not a thing to leave standing.
+/// approximation" note whose stated reason was that the real selection was not read from the
+/// reference. It is: `0x4c2460` sends the money row to `0x4c248a call 0x6c62d0`, whose ladder at
+/// `0x6c6307`–`0x6c6386` is exactly the six thresholds below.
 ///
 /// The icon *order* is the client's own and it is not the numeric one — `_05, _06, _03, _04, _01,
 /// _02` as the amount climbs. What each of the six pieces of art depicts is not claimed here; the
@@ -70,8 +67,7 @@ const BIND_CONFIRM_MIN_QUALITY: u32 = 2;
 /// plain"). `0x4c23a0`'s second guard IS its coin leg: `0x4c23da test ecx,ecx` / `0x4c23dc jne`, so
 /// the money row (0-based slot 0 with `[0xb71ba0] != 0`) falls through to
 /// `0x4c23de xor eax,eax; ret` and never reaches the item-cache block the item rows read
-/// `[rec+0x1c]` from. The same guard is why its `quantity` is 0 (`0x4c22fd`). wow-re
-/// `system/ui/scratch/loot-slot-record.md` §10, a §5 round of five workers.
+/// `[rec+0x1c]` from. The same guard is why its `quantity` is 0 (`0x4c22fd`).
 ///
 /// Nothing downstream re-colours it: stock `LootFrame_Update` has no coin special case
 /// (`LootFrame.lua:81-85`) and `ITEM_QUALITY_COLORS[0]` is `0xff9d9d9d`.
@@ -472,11 +468,9 @@ impl LootState {
 /// `show_loot_spam` is 1.12's own `showLootSpam` — the *Detailed Loot Information* checkbox, whose
 /// subject is **group loot rolls**, not loot messages generally (decision 1589, the Chat page).
 /// It rides here rather than on [`crate::ui_loot_roll`] because it is one loot knob among the
-/// loot knobs and [`on_cvar`] writes both. VERIFIED at the bytes (wow-re
-/// `system/object-layer/scratch/lootroll-chat-and-lifecycle.md` §4): the CVar is `0xb4e2bc`,
-/// registered at `0x48fd1c` with default `"1"` and flags 5, and a byte census over the whole
-/// binary finds exactly four references — one writer and three readers, all three inside the
-/// loot-roll line composers.
+/// loot knobs and [`on_cvar`] writes both. The CVar is `0xb4e2bc`, registered at `0x48fd1c` with
+/// default `"1"` and flags 5, and a byte census over the whole binary finds exactly four
+/// references — one writer and three readers, all three inside the loot-roll line composers.
 #[derive(Resource)]
 pub(crate) struct LootConfig {
     pub(crate) auto_loot: bool,
@@ -495,7 +489,7 @@ impl Default for LootConfig {
 }
 
 /// The client-local **loot-target latch** — the mirror of the real client's `[player+0x1d28]`
-/// guid (wow-re `loot-anim-leg.md` §5, the 2026-08-21 §5 trio; decisions 0515 / 1471 / **1477**).
+/// guid (decisions 0515 / 1471 / **1477**).
 /// It says *a loot session is open on this object*, and it is read by far more than the kneel: the
 /// loot cursor, the re-loot lock-out (`0x5ec110`), `CMSG_LOOT_MONEY`'s gate, auto-loot.
 ///
@@ -527,10 +521,9 @@ impl Default for LootConfig {
 pub(crate) struct LootLatch(pub(crate) Option<u64>);
 
 /// **Predicate B `0x612710`, the local-player branch** — whether the object the [`LootLatch`]
-/// currently names is one the character *kneels at* (wow-re `loot-anim-leg.md` §8, byte-verified
-/// §5 trio 2026-08-21; decision 1477). The loot leg `0x5fd260` needs predicate A (a session is
-/// open) **and** this one, and the split is the whole reason a fishing bobber does not kneel while
-/// a chest does — the latch is armed identically for both.
+/// currently names is one the character *kneels at* (decision 1477). The loot leg `0x5fd260` needs
+/// predicate A (a session is open) **and** this one, and the split is the whole reason a fishing
+/// bobber does not kneel while a chest does — the latch is armed identically for both.
 ///
 /// The byte table, transcribed:
 ///
@@ -611,10 +604,11 @@ impl LootLatch {
 /// kneel latch clears, `CMSG_LOOT_RELEASE` goes out, the frame closes, and a dead corpse that is
 /// also the selection is deselected — at distance zero, on the first step. Decision 2097.
 ///
-/// **The loot window has no distance leash at all** (wow-re `loot-window-leash.md`, a §5 that
-/// refuted 2094 and the 1741 census row it rested on: that row is a dead lottery kiosk). vmangos
-/// happens to release on every movement opcode too (`MovementHandler.cpp:1108`), which is why the
-/// missing client-side close was invisible on the local server and plain on cmangos (B381).
+/// **The loot window has no distance leash at all** (no loot target reaches the per-frame range
+/// gate `0x493230`, which refutes 2094 and the 1741 census row it rested on: that row is a dead
+/// lottery kiosk, `0x4c3eb0`). vmangos happens to release on every movement opcode too
+/// (`MovementHandler.cpp:1108`), which is why the missing client-side close was invisible on the
+/// local server and plain on cmangos (B381).
 #[derive(Resource, Default)]
 pub(crate) struct LootMoveStart(pub(crate) bool);
 
@@ -662,7 +656,7 @@ impl Plugin for UiLootPlugin {
 ///
 /// **Stated approximation (documented gap).** 1.12.1's GlobalStrings has **no** `GOLD_AMOUNT` /
 /// `SILVER_AMOUNT` / `COPPER_AMOUNT` "%d <Word>" patterns — those arrive in a later client. The real
-/// 1.12 coin text is produced inside `GetLootSlotInfo` (a C function, not FrameXML, not RE-recorded),
+/// 1.12 coin text is produced inside `GetLootSlotInfo` (a C function, not FrameXML, not yet read),
 /// so we compose "<n> <Word>" from the bare `GOLD`/`SILVER`/`COPPER` words and join them the way
 /// [`format_money`] always has (a single space); the exact client wording/separator is the stand-in.
 fn format_money(copper: u32) -> String {
@@ -737,7 +731,7 @@ fn resolve_item(
         item_id: item.item_id,
         link,
         // The roll rides as the raw id, exactly as the client's own loot record keeps it: the
-        // tooltip resolves it against the pushed roll table (§E5). Decision 1547.
+        // tooltip resolves it against the pushed roll table (`0x52b7bf`). Decision 1547.
         random_property_id: item.random_property_id,
     }
 }
@@ -1013,7 +1007,7 @@ fn feed_loot(
             // edge to zero (`0x4c2af6 dec` / `jne`). There is no repaint path to fall back on:
             // `LootFrame_Update` is reachable only through the XML `<OnShow>`, and `ShowUIPanel`
             // early-returns on an already-visible frame, so a second `LOOT_OPENED` would do
-            // nothing. Deferring IS the mechanism (wow-re `loot-slot-record.md` §11).
+            // nothing. Deferring IS the mechanism.
             //
             // Returning without advancing `last` re-evaluates next frame; the queries are already
             // in flight from `snapshot` above, and the auto-loot sweep below waits with the window,
@@ -1038,8 +1032,7 @@ fn feed_loot(
                         }
                         // Only an ALLOW_LOOT row: the reference's auto-loot sweep processes a
                         // record exactly when the wire's slot-type getter answers 0
-                        // (`0x4c2180`/`0x4c2196 test eax,eax; jne` — wow-re
-                        // `ui/scratch/loot-slot-record.md` §2). So a master-loot row is not
+                        // (`0x4c2180`/`0x4c2196 test eax,eax; jne`). So a master-loot row is not
                         // swept into a dropdown, and a roll-in-progress row is not sent as a
                         // take the server would refuse.
                         Some(LootAction::Item {
@@ -1126,7 +1119,7 @@ fn bind_confirm_required(items: &Items, commands: &NetCommands, item_id: u32) ->
 }
 
 /// `CloseInteraction 0x48f200(cl=1, dl=1, 0)` off the movement-START guard (decision 2097),
-/// transcribed per loot-target type from wow-re `loot-window-leash.md` §5:
+/// transcribed per loot-target type:
 ///
 /// | open loot | on the first movement start |
 /// |---|---|
@@ -1212,10 +1205,10 @@ fn drain_loot(
             // candidate dropdown instead of sending a take, and the decision is made here, on the
             // wire's slot-type byte, rather than in Lua: the real client branches on the same byte
             // inside its take dispatcher before any Lua runs (`0x4c2790`, which already reads the
-            // getter at `0x4c28a9` — wow-re `ui/scratch/loot-slot-record.md` §2), and the
-            // reference `LootFrame.lua` never consults `GetLootMethod` at all. The row's
-            // `LootFrame.selected*` bookkeeping is already stashed by the Lua `OnClick` that ran
-            // before this drain, so the event's `ToggleDropDownMenu` has its anchor button.
+            // getter at `0x4c28a9`), and the reference `LootFrame.lua` never consults
+            // `GetLootMethod` at all. The row's `LootFrame.selected*` bookkeeping is already
+            // stashed by the Lua `OnClick` that ran before this drain, so the event's
+            // `ToggleDropDownMenu` has its anchor button.
             Some(LootAction::Item { slot_type, .. }) if slot_type == slot_type::MASTER => {
                 debug!("ui_loot: row {index} is master-loot — opening the candidate list");
                 script.fire_event("OPEN_MASTER_LOOT_LIST", vec![]);
@@ -1245,8 +1238,8 @@ fn drain_loot(
                 let _ = commands
                     .0
                     .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
-                // The pickup sound plays optimistically at the click, before the send (wow-re
-                // `acquire-spend-sounds.md`): looting an item plays its ItemGroupSounds kit[0].
+                // The pickup sound plays optimistically at the click, before the send (`0x4c2926`):
+                // looting an item plays its ItemGroupSounds kit[0].
                 pickup.write(crate::sound::LootPickupSound { display_id });
             }
             None => debug!("ui_loot: BenillaTakeLootSlot({index}) out of range — ignored"),
@@ -1396,7 +1389,7 @@ mod tests {
         app.world().resource::<LootKneel>().0
     }
 
-    /// **Predicate B `0x612710`, the local branch** (wow-re `loot-anim-leg.md` §8; decision 1477).
+    /// **Predicate B `0x612710`, the local branch** (decision 1477).
     /// The whole row set, because the *point* of this predicate is that arming the latch is not
     /// the same question as kneeling: a fishing bobber and a chest arm it identically, and only
     /// one of them is knelt at. Without this filter, 1471's response-arm gave benilla a kneel at
@@ -2275,10 +2268,9 @@ mod tests {
 
     /// The **rolled name** — the reference composes every display of an item's name through
     /// `0x5d8b00(entry, randomPropertyId)`, which joins `ItemRandomProperties`' suffix with
-    /// `ITEM_SUFFIX_TEMPLATE` ("%s %s"). Byte-verified for the loot row itself (`GetLootSlotInfo`'s
-    /// `item` producer `0x4c2550` ends in that call, wow-re `loot-slot-record.md` §3), and the
-    /// tooltip's own title line makes the same call — so row text, tooltip plate and link agree by
-    /// construction. Decision 1547.
+    /// `ITEM_SUFFIX_TEMPLATE` ("%s %s"). That holds for the loot row itself (`GetLootSlotInfo`'s
+    /// `item` producer `0x4c2550` ends in that call), and the tooltip's own title line makes the
+    /// same call — so row text, tooltip plate and link agree by construction. Decision 1547.
     #[test]
     fn a_rolled_drop_reads_its_suffix_in_the_row_the_link_and_the_lines() {
         use benilla_formats::{RandomProperty, RandomPropertyCatalog};
@@ -2519,8 +2511,8 @@ mod tests {
     /// **Movement closes the loot** (2097): the controller's move-start report makes the drain
     /// run `CloseInteraction` — latch cleared, the release on the wire once, the window gone, a
     /// dead-corpse selection torn down — with no server help and no VM. The exemptions the bytes
-    /// carve stay open: an item-guid loot (a lockbox) and a disenchant window with rows left; an
-    /// emptied disenchant closes like the rest. A GameObject (a fishing bobber) closes too — it
+    /// carve out stay open: an item-guid loot (a lockbox) and a disenchant window with rows left;
+    /// an emptied disenchant closes like the rest. A GameObject (a fishing bobber) closes too — it
     /// takes the same path as a corpse.
     #[test]
     fn a_movement_start_closes_and_releases_the_open_loot() {

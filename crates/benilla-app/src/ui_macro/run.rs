@@ -4,7 +4,7 @@
 //! ## Running: each line is fired as `EXECUTE_CHAT_LINE` (VERIFIED, 0996)
 //!
 //! 0983 shipped this as "push the line onto the chat-input queue", with the engine's route to Lua
-//! recorded as an open question. The wow-re §5 settled it, and the answer is better than the guess:
+//! recorded as an open question. The reference settles it, and the answer is better than the guess:
 //! the runner `0x4f14e0` fires **`FrameScript_SignalEvent(EXECUTE_CHAT_LINE, "%s", line)`** per
 //! non-empty line and does nothing else. It names no Lua function and holds no command table — which
 //! is precisely why a scan of `WoW.exe` finds no FrameXML function name but `GetText`, no
@@ -18,7 +18,7 @@
 //! reference's real one — ChatFrame1's registration is the *only* one in the default UI, so a macro
 //! line runs through that frame's box whichever chat frame has focus.
 //!
-//! The chat type of a plain line is decided nowhere in the engine (§6): the runner has no
+//! The chat type of a plain line is decided nowhere in the engine: the runner has no
 //! `SendChatMessage` call and no type constant. It is `ChatEdit_SendText`'s
 //! `editBox.chatType`, which the reference's trailing `ChatEdit_OnEscapePressed` resets to
 //! `stickyType` — benilla's drain sends as the box's current type, the same observable.
@@ -26,15 +26,15 @@
 //! ## The bound spell (`[rec+0x564]`, VERIFIED)
 //!
 //! A macro action-bar slot shows **the macro's own icon** but reports the **cooldown, usability,
-//! range and checked state of the spell it casts** — byte-verified: `0x4e5a50`'s macro arm
-//! resolves the macro record through `0x4f0f40` and returns `[rec+0x564]` as the slot's spell id
-//! (wow-re `action-spell-icon-apis.md` §2), and every `Is*Action`/`GetActionCooldown` binding reads
-//! through that resolver. [`bound_spell`] is how that field is filled: the body's first `/cast`
-//! line, or a `CastSpellByName("…")` call in a `/script` line.
+//! range and checked state of the spell it casts** — `0x4e5a50`'s macro arm resolves the macro
+//! record through `0x4f0f40` and returns `[rec+0x564]` as the slot's spell id, and every
+//! `Is*Action`/`GetActionCooldown` binding reads through that resolver. [`bound_spell`] is how
+//! that field is filled: the body's first `/cast` line, or a `CastSpellByName("…")` call in a
+//! `/script` line.
 //!
 //! 0983 called this derivation INFERRED (it was reasoned from the two string literals in the
-//! reference's `UIMacros.cpp` block). The wow-re §5 **read `0x4efe00` at the bytes and promoted it
-//! to VERIFIED**, with three refinements now implemented here:
+//! reference's `UIMacros.cpp` block). **`0x4efe00` confirms it at the bytes**, with three
+//! refinements now implemented here:
 //!
 //! - **Arm A** builds `"SLASH_CAST%d"` for n = 1, 2, … and reads each as a **Lua global's value**
 //!   (`FrameScript_GetText 0x703bf0`), stopping at the first nil/empty — never a hardcoded
@@ -79,8 +79,8 @@ use crate::ui_chat::commands::{Command, SlashCommands, SlashIndex};
 const CAST_BY_NAME_CALL: &str = "CastSpellByName(";
 
 /// Which of `0x4efe00`'s two arms matched the cast line — load-bearing because the two store
-/// different values for a name that does not resolve (wow-re `macro-execution-law.md` §7: arm A
-/// writes `-1` at `0x4eff48`, arm B stores the resolver's `0` verbatim at `0x4eff81`).
+/// different values for a name that does not resolve (arm A writes `-1` at `0x4eff48`, arm B
+/// stores the resolver's `0` verbatim at `0x4eff81`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CastArm {
     /// A `/cast`-alias line (`SLASH_CAST%d`, read as Lua globals).
@@ -90,8 +90,8 @@ pub(crate) enum CastArm {
 }
 
 /// The reference's `[rec+0x564]` — a macro record's cached bound spell — as the three values it
-/// actually takes (wow-re `macro-execution-law.md` §7, VERIFIED; the usable consequence is
-/// decision 1636). The action bar reads this through `ui_action::state`'s slot resolve.
+/// actually takes (written by `0x4efe00`; the usable consequence is decision 1636). The action
+/// bar reads this through `ui_action::state`'s slot resolve.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum BoundSpell {
     /// `0` — no line matched either arm, or a `CastSpellByName(` name that did not resolve. The
@@ -107,8 +107,8 @@ pub(crate) enum BoundSpell {
 
 /// A macro body's runnable lines. The reference's tokenizer (`0x64ae50`) takes `"\r\n"` as a
 /// **delimiter SET** — either character splits — and skips empty tokens, which is why an interior
-/// blank line never even produces one (wow-re `macro-execution-law.md` §3/§6). So do we; a
-/// `macros-cache.txt` hand-copied off a Windows install is a real input, and so is a lone `\r`.
+/// blank line never even produces one. So do we; a `macros-cache.txt` hand-copied off a Windows
+/// install is a real input, and so is a lone `\r`.
 ///
 /// One friendly divergence: we **trim** each line. The reference hands the line over verbatim, so
 /// its `" /say hi"` is not a slash command and its `"/cast  Fireball"` (two spaces) binds a name
@@ -242,9 +242,8 @@ mod tests {
     }
 
     /// The separator after the alias is a **literal space** — the reference compares that one byte
-    /// against `0x20` (`0x4efe96`), so a tab is not a match and the line is simply not a cast line
-    /// (wow-re `macro-execution-law.md` §7). The alias itself folds case, which is the same
-    /// `_strnicmp` the ref uses.
+    /// against `0x20` (`0x4efe96`), so a tab is not a match and the line is simply not a cast line.
+    /// The alias itself folds case, which is the same `_strnicmp` the ref uses.
     #[test]
     fn the_alias_separator_is_a_literal_space_and_the_alias_folds_case() {
         let t = table();
@@ -321,7 +320,7 @@ mod tests {
         );
     }
 
-    /// The miss is arm-dependent, as the reference stores it (`macro-execution-law.md` §7 +
+    /// The miss is arm-dependent, as the reference stores it (`0x4eff48`/`0x4eff81` +
     /// decision 1636): a `/cast` of a spell this character does not know is the `-1` the bar
     /// greys; a body with no cast line, or a `CastSpellByName(` of an unknown name, is the `0`
     /// the bar draws full-colour with no spell state.
