@@ -135,17 +135,16 @@ pub(crate) use equipment::ItemModelKind;
 pub(crate) const ATTACH_OVERHEAD: u16 = 18;
 
 /// Its mounted twin (`PlayerNameMounted`, id 29) — preferred while a mount model is attached
-/// (VERIFIED wow-re `questgiver-marker.md`/`nameplate-vkey.md`; decision 0441 P2), authored on
-/// the RIDER's own model (character models seat it higher so overhead content clears the
-/// mount's bulk). A rider model without it falls back to 18 like the client.
+/// (`0x6074c0`, `0x608640`; decision 0441 P2), authored on the RIDER's own model (character
+/// models seat it higher so overhead content clears the mount's bulk). A rider model without it
+/// falls back to 18 like the client.
 pub(crate) const ATTACH_OVERHEAD_MOUNTED: u16 = 29;
 
 /// The overhead attachment slot to use for a unit **right now** — the reference's own pick inside
-/// the marker attach `0x6074c0` (VERIFIED, wow-re object-layer `questgiver-marker.md` Q2), always
-/// queried on the unit's *body* model: slot **29** when a mount MODEL exists (`unit+0xdc != 0` —
-/// our [`mount::MountChild`]) *and* the body authors 29, else slot **18**; `None` when the body
-/// authors neither, which is the reference's "marker created but never parented" (invisible) and
-/// this file's bbox fallback for the overhead readers.
+/// the marker attach `0x6074c0`, always queried on the unit's *body* model: slot **29** when a
+/// mount MODEL exists (`unit+0xdc != 0` — our [`mount::MountChild`]) *and* the body authors 29,
+/// else slot **18**; `None` when the body authors neither, which is the reference's "marker
+/// created but never parented" (invisible) and this file's bbox fallback for the overhead readers.
 ///
 /// **The pick is LIVE, not a bake.** `0x6074c0`'s five call sites include `0x5ffae7` inside
 /// `0x5ffa50` — the `UNIT_FIELD_MOUNTDISPLAYID` field-watch handler (`0x604330 mov edx,0x1fc; mov
@@ -173,12 +172,11 @@ const OVERHEAD_FALLBACK_FACTOR: f32 = 1.25;
 /// The reference's two overhead heights are two different mechanisms, and benilla had recorded them
 /// as one. The overhead NAME (and the floating combat text, and the V-plate) takes `0x608640`: the
 /// live posed PlayerName attachment, which tracks the pose. The chat bubble takes `0x711a20`, which
-/// wow-re's cross-check followed into the model layer and found reading the **MD20 header image** —
-/// file bytes, no bone matrix in the call tree — returning the Stand sequence CAaBox's Z extent,
-/// and the client caches it in the bubble at `+0x354` on a parity guard so it is queried **once per
-/// chat line**. The recorded claim that the two calls were equivalent ("both are the head-region
-/// attachment height, model-scaled", INFERRED) is refuted: they differ precisely on
-/// animated-vs-static.
+/// reads the **MD20 header image** — file bytes, no bone matrix in the call tree — returning the
+/// Stand sequence CAaBox's Z extent, and the client caches it in the bubble at `+0x354` on a parity
+/// guard so it is queried **once per chat line**. The recorded claim that the two calls were
+/// equivalent ("both are the head-region attachment height, model-scaled", INFERRED) is refuted:
+/// they differ precisely on animated-vs-static.
 ///
 /// So this is a constant per display, stamped at attach and never re-read — which is also why the
 /// bubble's height cannot acquire a pose-clock bug of the kind 1398 had to remove from the anchor.
@@ -220,8 +218,7 @@ pub(crate) struct OverheadFallback(pub(crate) f32);
 /// the UI glue), so its global IS its local. A `PostUpdate` caller ([`crate::nameplates`], which
 /// moved there for this very lag) is unaffected: after propagation the two are the same value.
 /// The client's **per-attachment z-bias** fallback table, `[0x862708]` — 37 floats, attachment
-/// ids `0..=0x24`, read as `[0x862708 + 4·id]` under a `0 ≤ id < 0x25` guard (wow-re
-/// `object-layer/scratch/anim-event-position-law.md` §4, §5-cross-checked). It is consulted only
+/// ids `0..=0x24`, read as `[0x862708 + 4·id]` under a `0 ≤ id < 0x25` guard. It is consulted only
 /// when the model does **not** carry the attachment the caller asked for: the sound then plays at
 /// the unit's own position raised by this much, which is how a headless or attachment-less model
 /// still puts a mouth sound somewhere plausible instead of at its feet.
@@ -243,9 +240,8 @@ const ATTACH_Z_BIAS: [f32; 37] = [
 /// Two anim-event arms reach it and they are the reason this exists as a named function rather
 /// than inline at either: the emote voice `$CSD` asks for **17** (`0x623c3a push 0x11`), and a
 /// **whiffed** melee swing's `$CSS` asks for **1** (`0x624bdd`). Both are emphatically *not* the
-/// fired event's own point, which is what makes them the exceptions in
-/// `anim-event-position-law.md` §3's table — a player model's six head-mounted `$CSD` records do
-/// not decide where that sound plays.
+/// fired event's own point, which is what makes them the exceptions among the unit's anim-event
+/// arms — a player model's six head-mounted `$CSD` records do not decide where that sound plays.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AttachPoints<'w, 's> {
     anchors: Query<'w, 's, &'static BoneAttach>,
@@ -417,13 +413,13 @@ impl Creatures {
     }
 
     /// A built display's booth framing — the model's own **authored cameras**, which is what both
-    /// booth families frame through: `camera` for the round portrait (`cameraLookup[0]`, wow-re
-    /// portrait-render §4) and `pane_camera` for a `<PlayerModel>` body pane (raw index 1, wow-re
-    /// `modelframe-camera-law.md`). Each carries the fallback data its own path needs when the model
-    /// has no such camera: the heuristic anchors (head bone / neck height / footprint) for the
-    /// portrait, the bbox centre for the pane's fixed camera. All model-local pre-scale. `None`
-    /// while the display's model is still loading (the booth's part source — the attach-spawned
-    /// children — won't exist yet either).
+    /// booth families frame through: `camera` for the round portrait (`cameraLookup[0]`,
+    /// `0x713540`) and `pane_camera` for a `<PlayerModel>` body pane (raw index 1, `0x505890`).
+    /// Each carries the fallback data its own path needs when the model has no such camera: the
+    /// heuristic anchors (head bone / neck height / footprint) for the portrait, the bbox centre
+    /// for the pane's fixed camera. All model-local pre-scale. `None` while the display's model is
+    /// still loading (the booth's part source — the attach-spawned children — won't exist yet
+    /// either).
     pub(crate) fn display_anchors(
         &self,
         display_id: u32,
@@ -486,10 +482,10 @@ impl Creatures {
     }
 
     /// A built display's **booth rig** — what the portrait booth needs to pose a fresh instance at
-    /// Stand like the ref bake (wow-re portrait-render §4 D2: a throwaway instance armed to
-    /// Stand/seq-0, not the unit's live world pose): the rest skeleton, the shared inverse bind
-    /// poses, and the animation surface. `None` while the model is still loading; a boneless /
-    /// WMO-display model yields an empty skeleton (the booth then bakes the static bind pose).
+    /// Stand like the ref bake (`0x524f60`: a throwaway instance armed to Stand/seq-0, not the
+    /// unit's live world pose): the rest skeleton, the shared inverse bind poses, and the animation
+    /// surface. `None` while the model is still loading; a boneless / WMO-display model yields an
+    /// empty skeleton (the booth then bakes the static bind pose).
     pub(crate) fn display_rig(&self, display_id: u32) -> Option<DisplayRig<'_>> {
         let dm = self.models.get(&display_id)?;
         dm.parts.as_ref()?; // not yet built
@@ -946,7 +942,7 @@ impl Plugin for EntitiesPlugin {
                 .after(benilla_world::rig_anim::finalize_rig_worlds)
                 .after(benilla_world::particles::buffer::begin_effect_frame),
         )
-        // Terrain conform (decisions 0482/0486, the byte law of wow-re `terrain-tilt.md`):
+        // Terrain conform (decisions 0482/0486, the byte law of `0x614cd0` → `0x7106c0`):
         // reads each flagged unit's Update-final transform, writes its conform node's
         // local rotation — before propagation so the composite's globals carry this
         // frame's stance.
@@ -973,7 +969,7 @@ impl Plugin for EntitiesPlugin {
             Update,
             (
                 // The display's own base alpha first (the reference's DISPLAYID-watcher leg
-                // of the same recompute, `base-render-alpha.md` §5 — no aura needed), so a
+                // `0x604990` of the same recompute `0x60d180` — no aura needed), so a
                 // same-frame aura edge retargets from the already-updated base.
                 crate::aura_visual::refresh_base_alpha,
                 crate::aura_visual::drain_aura_procs,
@@ -1213,7 +1209,7 @@ fn update_display_models(
     // its model builds with no wire entity (the screens run pre-world, where no NetEntity carries it).
     glue_preview: Option<Res<crate::portrait::GluePreview>>,
     char_create: Option<Res<CharCreate>>,
-    // The stable pane's want (wow-re `stable-master-window.md` §7.1): a stabled pet is a row in the
+    // The stable pane's want (`SetPetStablePaperdoll` `0x4cb870`): a stabled pet is a row in the
     // server's character-pet cache and a `CreatureDisplayInfo` id — there is no wire entity to
     // carry it, so the booth's own selection is the want.
     stable_booth: Option<Res<crate::portrait::StableBooth>>,
@@ -1459,10 +1455,10 @@ fn update_display_models(
 }
 
 /// Compose a unit part's **animated material alpha** into the render-alpha `MeshTag` field — the
-/// unit-lane half of the verified per-batch combine `A = instanceAlpha × colourAlpha × weight`
-/// (wow-re `m2-alpha-combine-cull.md`). The `A ≤ 0` *cull* is already the single `Visibility`
-/// authority's (`debug_panel::apply_model_visibility` ANDs `mat_factor > 0`); this is the partial
-/// factor, the dimming half, which only a `MeshTag` write can express.
+/// unit-lane half of the per-batch combine `A = instanceAlpha × colourAlpha × weight`
+/// (`0x707680`). The `A ≤ 0` *cull* is already the single `Visibility` authority's
+/// (`debug_panel::apply_model_visibility` ANDs `mat_factor > 0`); this is the partial factor, the
+/// dimming half, which only a `MeshTag` write can express.
 ///
 /// A fourth alpha writer is exactly what decision 0066's protocol forbids, so this is not one: it
 /// writes **only** the alpha field, through [`benilla_world::mesh_tag::with_alpha`] (the probe slot,
@@ -1728,7 +1724,7 @@ mod overhead_slot_tests {
     }
 
     /// `0x6074c0`'s pick and only it: 29 is *preferred*, never required, and never taken by an
-    /// unmounted unit. So a character body — which authors both (wow-re's table: HumanMale 18 at
+    /// unmounted unit. So a character body — which authors both (the shipped HumanMale: 18 at
     /// z 2.2123, 29 at z 1.4029) — moves 18 ↔ 29 across a mount, a creature that authors only 18
     /// (AncientOfLore, Kobold) stays at 18 whether or not it is mounted, and a body authoring
     /// neither anchors nothing: the reference creates the marker and never parents it.
@@ -1765,8 +1761,7 @@ mod overhead_slot_tests {
 mod attach_bias_tests {
     use super::*;
 
-    /// The z-bias fallback table `[0x862708]`, verbatim (wow-re
-    /// `object-layer/scratch/anim-event-position-law.md` §4). It is 37 f32 for attachment ids
+    /// The z-bias fallback table `[0x862708]`, verbatim. It is 37 f32 for attachment ids
     /// `0..=0x24`, and the two ids that actually reach it through an animation event are the
     /// emote voice's **17** and a whiffed swing's **1** — so those two are what a drift here
     /// would move, on exactly the models that lack the attachment.

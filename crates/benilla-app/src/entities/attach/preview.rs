@@ -21,8 +21,8 @@
 //! The assembly is the world's own way — displayId → the shared [`Creatures`] display cache →
 //! geoset filter → the composited body over a hand-built [`CharLook`] — plus the armor-region
 //! composite + real equipment geosets, the cloak, and the attach riders: helm (per-race/sex model,
-//! hide-helm honored), shoulders, and the weapons **held in the hands** (the byte-verified select
-//! build — wow-re `glue-select-model.md`, folded back over 0465's sheathed INTERIM). The portrait
+//! hide-helm honored), shoulders, and the weapons **held in the hands** (the select build
+//! `0x472950` → `0x47a0c0`, folded back over 0465's sheathed INTERIM). The portrait
 //! module's `sync_glue_booth` / `sync_dressup_booth` then re-light and bake them (they own the
 //! *booth*; this owns the *assembly*). A glue body's displayId is added to
 //! `update_display_models`'s want-list (in [`super::super`]) so its model builds with no wire
@@ -64,7 +64,7 @@ const ENUM_HELD: [usize; 3] = [15, 16, 17];
 /// Map an item's `InventoryType` to its equipment-slot index in the enum-shaped `[_; 19]` array
 /// (`EQUIPMENT_SLOT_*`), so a CharStartOutfit item (decision 0527) lands where the Select pipeline
 /// reads it — the render slots the compositor paints (helm 0 · shoulder 2 · shirt 3 · chest 4 ·
-/// waist 5 · legs 6 · feet 7 · wrist 8 · hands 9 · back 14 · tabard 18, wow-re `glue-select-model.md`)
+/// waist 5 · legs 6 · feet 7 · wrist 8 · hands 9 · back 14 · tabard 18, `0x478cb0`)
 /// plus the held triple (main 15 · off 16 · ranged 17). `None` for a non-worn / non-rendered type
 /// (bags, ammo, quiver, relic, and NON_EQUIP consumables — the outfit's food + hearthstone).
 pub(crate) fn equip_slot(inv_type: u8) -> Option<usize> {
@@ -175,10 +175,10 @@ pub(in crate::entities) fn build_glue_preview(
     mut skin_composites: ResMut<SkinComposites>,
     asset_server: Res<AssetServer>,
     mut mats: benilla_world::model_render::M2BatchMaterials,
-    // The ghost kit (wow-re `glue-select-model.md` §A2): the `SpellVisualKit` catalog the row is
-    // read from, and the path-keyed spell-effect model cache its attached models load through —
-    // the same one the world's kit plays use, so `Spells\Ghost_state.mdx` is loaded once per
-    // session whichever screen wants it first.
+    // The ghost kit (`0x47280f`): the `SpellVisualKit` catalog the row is read from, and the
+    // path-keyed spell-effect model cache its attached models load through — the same one the
+    // world's kit plays use, so `Spells\Ghost_state.mdx` is loaded once per session whichever
+    // screen wants it first.
     visuals: Option<Res<crate::creature_anim::SpellVisuals>>,
     mut fx: Option<ResMut<super::super::spell_fx::SpellFx>>,
     // Change tracking: the look we last emitted a bake for, and whether that bake succeeded (so a
@@ -462,11 +462,11 @@ pub(in crate::entities) fn build_dressup_preview(
 /// A caller must treat that as "retry next frame" and leave its bake untouched, never as an empty
 /// look — a geared character popping in piecewise would flicker on every change.
 /// The `SpellVisualKit` row the character-select ghost is, **hard-coded exactly as the reference
-/// hard-codes it**: `0x47280f` loads `idmap[989]` behind the guard `0x4727f6 cmp ds:0xc0d750,0x3dd`
-/// (wow-re `glue-select-model.md` §A2). The id is the constant; every value behind it is DBC data,
+/// hard-codes it**: `0x47280f` loads `idmap[989]` behind the guard
+/// `0x4727f6 cmp ds:0xc0d750,0x3dd`. The id is the constant; every value behind it is DBC data,
 /// read below. 989 is `SpellVisual` 886's state kit — the visual of spell 8326 "Ghost", which is
-/// also what a released ghost in the WORLD rides, so the two paths share one row by construction
-/// (wow-re `ghost-death-visuals.md` §5a).
+/// also what a released ghost in the WORLD rides (`0x5ff350`), so the two paths share one row by
+/// construction.
 const GLUE_GHOST_KIT: u32 = 989;
 
 /// What the ghost kit contributes to a select bake: the body's own render properties, plus the
@@ -623,9 +623,9 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
     };
     let mut held = held_wants(&equipment, helm, race, sex, spec.ranged_in_hand);
     // Per-hand grip `[right, left]`: a hand whose attach point holds a weapon curls into `HandsClosed`
-    // (wow-re `hand-grip-mechanism.md` — the ref's paperdoll rule `0x5059a0`: attach-point occupancy, per
-    // hand). Resolved here because the flat rider list drops each held item's attach id. A shield sits on
-    // the forearm (Shield attach, id 0), never a hand point, so its hand stays open.
+    // (the ref's paperdoll rule `0x5059a0`: attach-point occupancy, per hand). Resolved here
+    // because the flat rider list drops each held item's attach id. A shield sits on the forearm
+    // (Shield attach, id 0), never a hand point, so its hand stays open.
     let grip = [
         held.iter().any(|w| w.attach == attach_id::HAND_RIGHT),
         held.iter().any(|w| w.attach == attach_id::HAND_LEFT),
@@ -674,7 +674,7 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
     }
 
     // The dressed geoset set: the worn armor's geoset groups + the cloak + the helm's hide-masks
-    // (RF-0083), exactly the world path's selection (the shared helper).
+    // (`0x4799a0`), exactly the world path's selection (the shared helper).
     let eg = equip_geosets(ctx.displays.as_deref(), &bodyslots, cloak, helm, false);
     let visible = ctx.characters.map(|c| {
         c.0.visible_geosets(race, sex, char_look.hair_style, char_look.facial_hair, &eg)
@@ -897,15 +897,14 @@ struct HeldWant {
 }
 
 /// The select character's attach-model wants from its enum record: helm + the shoulder pair, and
-/// the weapons **held in the hands** — the byte-verified select build (wow-re
-/// `glue-select-model.md` TU-A, folding back decision 0465's sheathed INTERIM): the builder
-/// forces SheatheType 0 (`0x472c8c`), so the sheath resolver never yields a stow point and the
-/// hand code runs — mainhand to HandRight (attach 1), an off-hand weapon to HandLeft (2), a
-/// shield to the Shield point (0) — and the RANGED slot is skipped outright (`0x472bfe`).
-/// [`placement`]'s melee-drawn arm (`unit_sheath = 1`) is exactly that law, ranged-skip included
-/// (its ranged arm only yields while ranged-drawn). A held off-hand frill (INVTYPE_HOLDABLE)
-/// rides the same hand law — the verdict enumerates weapons/shields only, and the world's held
-/// placement is the natural reading for the rest.
+/// the weapons **held in the hands** — the select build (folding back decision 0465's sheathed
+/// INTERIM): the builder forces SheatheType 0 (`0x472c8c`), so the sheath resolver never yields a
+/// stow point and the hand code runs — mainhand to HandRight (attach 1), an off-hand weapon to
+/// HandLeft (2), a shield to the Shield point (0) — and the RANGED slot is skipped outright
+/// (`0x472bfe`). [`placement`]'s melee-drawn arm (`unit_sheath = 1`) is exactly that law,
+/// ranged-skip included (its ranged arm only yields while ranged-drawn). A held off-hand frill
+/// (INVTYPE_HOLDABLE) rides the same hand law — the reference confirms it at `0x47a0c0` for
+/// weapons/shields only, and the world's held placement is the natural reading for the rest.
 ///
 /// **`ranged_in_hand` is the dressing room's departure from that** (decision 1076): the dress-up
 /// widget does *not* skip the ranged slot, and installs it at a hand. That is the same mapping
@@ -1133,9 +1132,9 @@ fn assemble_pet(
                 material: p.material.clone(),
                 alpha_anim: p.alpha_anim.clone(),
                 // The pet is its own CM2 instance, chained to the SCENE (attachment 1), never to
-                // the character (wow-re `glue-select-model.md` §B1) — so it composes onto nothing
-                // and is never ghosted with its owner. The twins ride anyway, for the same reason
-                // the body's do: they are a property of the batch.
+                // the character (`0x47306e`) — so it composes onto nothing and is never ghosted
+                // with its owner. The twins ride anyway, for the same reason the body's do: they
+                // are a property of the batch.
                 twins: BoothTwins {
                     blend: p.fade_blend.clone(),
                     zfill: p.zfill.clone(),
@@ -1206,17 +1205,15 @@ mod tests {
     /// hard-codes for the character-select ghost, decoded through the same dispatch point the world
     /// aura uses.
     ///
-    /// Every number here is byte-VERIFIED in wow-re at the record itself
-    /// (`ghost-death-visuals.md` §5a: row 989's `+0x3c` reads
-    /// `01 00 00 00  0e 00 00 00  ff ff ff ff  ff ff ff ff  fd b9 0c 4b  00 00 00 3f`), and the
-    /// note records a §5 derivation that got `0x4B0CB53D → (140,181,61)` and was refuted at those
-    /// bytes. That is exactly the failure this test exists to catch: a tint transcribed one nibble
-    /// wrong is still a plausible pale blue, and nothing but the shipped row can tell them apart.
+    /// Every number here is read at the record itself (row 989's `+0x3c` reads
+    /// `01 00 00 00  0e 00 00 00  ff ff ff ff  ff ff ff ff  fd b9 0c 4b  00 00 00 3f`), and
+    /// `0x4B0CB53D → (140,181,61)` is a misreading of those bytes. That is exactly the failure
+    /// this test exists to catch: a tint transcribed one nibble wrong is still a plausible pale
+    /// blue, and nothing but the shipped row can tell them apart.
     ///
     /// It also pins the *shape* the select path depends on — one populated effect slot, at
-    /// attachment `0x13` (Base) — because "nine ghost sub-models" was this note's own earlier
-    /// reading (benilla decision 0469 §6 carried it), corrected 2026-08-21 when `0x472780`'s
-    /// `test esi,esi; jl` was seen rejecting the eight `-1`s.
+    /// attachment `0x13` (Base) — because "nine ghost sub-models" was an earlier reading (benilla
+    /// decision 0469 §6 carried it), and `0x472780`'s `test esi,esi; jl` rejects the eight `-1`s.
     #[test]
     fn the_shipped_ghost_kit_decodes_to_the_verified_row() {
         let data = benilla_formats::wow_data_or_skip!();

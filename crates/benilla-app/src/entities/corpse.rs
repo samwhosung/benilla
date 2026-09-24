@@ -28,7 +28,7 @@
 //! Three slots are carved out of the dress loop, and none of them is a "skip if empty":
 //! `0x5d6465`/`0x5d6470` skip slot 0 (head) and slot 0xe (back) when this corpse's own
 //! `CORPSE_FLAG_HIDE_HELM 0x08` / `HIDE_CLOAK 0x10` are set — its own bits on its own field, and the
-//! opposite instruction polarity to the player lane (wow-re `helm-cloak-hide.md` §2b) — and
+//! opposite instruction polarity to the player lane (`0x5ed700`) — and
 //! `0x5d644e` skips slot 0x11 (ranged) unconditionally.
 //!
 //! ## What a corpse deliberately does NOT wear
@@ -55,7 +55,7 @@
 //! call.) Mouseover is a different slot — `+0x54` = `0x5d76d0`, which a corpse *does* pass — and
 //! that is the highlight/cursor/tooltip route we ship, not a ring.
 //!
-//! **The divergence to know about** (flagged open by wow-re's §5, not settled at the bytes): the
+//! **The divergence to know about** (still open, not settled at the bytes): the
 //! reference computes the drowned verdict *inside* the create, from the scene node's cached liquid
 //! probe — and its own `[node+0x90] & 0x20` gate means an un-probed node falls through to `Dead`.
 //! Whether the node is already probed that early is a byte question nobody has closed. Ours asks
@@ -66,11 +66,10 @@
 //! ## The pose
 //!
 //! `0x5d63de`/`0x5d6402` arm bone 0 through the shared M2 arm `0x7121a0` with **AnimationData id 6
-//! (`Dead`)**, or **132 (`Drowned`)** when `0x5d6540` says so — all of it byte-VERIFIED by wow-re's
-//! §5 round (`object-layer/scratch/corpse-drowned-pose.md`, 2026-08-29, commissioned by this work).
-//! That predicate is a **liquid** query: `0x670630` reads the corpse scene node's cached probe,
-//! whose `[node+0x98]` is named at its *writer* (`0x69e280` → terrain's own bit-exact
-//! `liquid_status`) as the **liquid surface height**. The comparison is
+//! (`Dead`)**, or **132 (`Drowned`)** when `0x5d6540` says so. That predicate is a **liquid**
+//! query: `0x670630` reads the corpse scene node's cached probe, whose `[node+0x98]` is named at
+//! its *writer* (`0x69e280` → the terrain liquid query `0x69b6d0`) as the **liquid surface
+//! height**. The comparison is
 //!
 //! ```text
 //! liquidSurfaceZ − CORPSE_FIELD_POS_Z > [0x80abfc]        // 0x3f2aaaab = 0.66666669

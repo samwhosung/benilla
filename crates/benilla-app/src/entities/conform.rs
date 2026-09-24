@@ -1,4 +1,4 @@
-//! Terrain conform — **fidelity** (decisions 0482/0486; wow-re `terrain-tilt.md` §5): the
+//! Terrain conform — **fidelity** (decisions 0482/0486; `0x7106c0`): the
 //! reference tilts every model whose M2 authors `GlobalModelFlags & 3 ∈ {1,3}` — all 152 mounts
 //! + quadrupeds pitch (flag 1), the 74 low-wide models (kodo/basilisk/crab/crocodile/spider)
 //! pitch AND roll (flag 3) — wild or mounted alike: the gate is the model flag, not mountedness.
@@ -52,7 +52,7 @@ fn tilt_target(sampled: Option<Vec3>) -> Option<Vec3> {
 }
 
 /// The conform rotation for a smoothed up-vector in the unit's LOCAL frame (yaw already applied
-/// by the parent) — the `0x7106c0` flag dispatch, byte-exact (wow-re `terrain-tilt.md`):
+/// by the parent) — the `0x7106c0` flag dispatch, byte-exact:
 ///
 /// - **flag 1 (pitch only, `0x710769`)**: left is forced horizontal (`row1.z` a hard literal 0),
 ///   forward = left × up — which reduces in the local frame to a pure rotation about local X by
@@ -127,7 +127,7 @@ pub(super) fn conform_units(
         // a flagged NPC body over a mount field — and double-stepping would square the decay).
         if seen.insert(node.unit) {
             // A unit riding a FLYING spline settles to level here: the flying attitude (pitch,
-            // bank pending its §5) is the spline-follow's, applied to the UNIT transform by
+            // bank still open) is the spline-follow's, applied to the UNIT transform by
             // `sample_splines` — the client's `0x7c5490` mover-matrix law, model-flags-
             // independent (decision 0501 corrects 0496's conform-side placement, which never
             // rendered: the taxi gryphon authors `GlobalModelFlags = 0`, so it built no

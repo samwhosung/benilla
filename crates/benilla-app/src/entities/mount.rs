@@ -8,14 +8,14 @@
 //!
 //! ## The transition is a RE-SEAT, not a rebuild (B199)
 //!
-//! **VERIFIED** — wow-re `mount-composition.md` Q3/Q4, byte-cited: the change handler `0x5ffa50`
-//! runs *teardown old, then build new*, and neither half touches the rider's own model.
+//! The change handler `0x5ffa50` runs *teardown old, then build new*, and neither half touches the
+//! rider's own model.
 //!
 //! - **Mount up, `0x607a00`:** load the mount M2 → `0x613d80 SetMountModel` into `CGUnit+0xdc` →
 //!   `0x712f70 CM2Model::attachChild(this = BODY [+0xd8], parent = MOUNT, slot 0)`, which sets
 //!   `body+0x1cc = mount` and links the body into the mount's child list. The **body model is
 //!   re-parented, not re-created**; its world matrix is recomposed each frame from the mount's live
-//!   posed attachment-0 bone (`m2_animate`'s child recursion `0x718657`–`0x71876f`).
+//!   posed attachment-0 bone (the animate kernel's child recursion `0x718657`–`0x71876f`).
 //! - **Dismount, `0x607ce0`:** `0x713020` **detaches** the body, `0x613d80(0)` destroys the mount
 //!   model, the body goes to op4 seq 0 (Stand). Instant, no transition anim — and again the body
 //!   model itself is untouched.
@@ -65,8 +65,7 @@ pub(super) struct AppliedMount(pub(super) u32);
 /// Spawn a unit's mount child — the client's `0x607a00` model creation. Its `NetEntity` registers
 /// the display want (`update_display_models` scans every `NetEntity`) and `attach_entity_visuals`
 /// builds it as an ordinary creature; `scale` is the **CDI `creatureModelScale` column alone**
-/// (byte law, wow-re `mount-composition.md` Q3/Q4 — the unit root's `SCALE_X` composes through the
-/// hierarchy).
+/// (byte law, `0x607a75` — the unit root's `SCALE_X` composes through the hierarchy).
 ///
 /// `fade_skip` suppresses the appear-fade: a mount blinking into existence under its rider is what
 /// the teardown-era transition rendered (every rebuilt child carried `Reattached`), and it is what
@@ -100,9 +99,9 @@ pub(super) fn spawn_mount_child(
 }
 
 /// The seat anchor — the rider's model frame while mounted: a child of the mount's attachment-0
-/// joint at the authored offset, counter-scaled so the rider keeps its own size (byte-verified:
-/// the client's body carries a compensating own/mount base ratio, `0x607b49 fld [esi+0x98]; fdiv
-/// [esi+0x9c]` → `0x710620` — wow-re `mount-composition.md` Q3).
+/// joint at the authored offset, counter-scaled so the rider keeps its own size (the client's body
+/// carries a compensating own/mount base ratio, `0x607b49 fld [esi+0x98]; fdiv [esi+0x9c]` →
+/// `0x710620`).
 ///
 /// [`benilla_world::rig_anim::RigFrame`] marks it as `rider`'s model frame so the world pass cascades
 /// a re-seat into the rider's palette (decision 0724).
@@ -166,7 +165,7 @@ pub(super) fn seat_or_spawn_mount(
     mount_display: u32,
     fade_skip: bool,
 ) -> Seat {
-    // The mount scale law (byte-verified, wow-re `mount-composition.md` Q3/Q4): rendered =
+    // The mount scale law (`0x607a75`): rendered =
     // `SCALE_X × CreatureDisplayInfo.creatureModelScale` — the CDI column ALONE (no
     // CreatureModelData.modelScale).
     let mount_scale = creatures

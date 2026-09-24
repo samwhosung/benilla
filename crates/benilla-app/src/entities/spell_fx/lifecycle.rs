@@ -1,8 +1,7 @@
 //! The effect-model **animation lifecycle**: `Stand` → `Hold` → `Decay`, the state machine a
-//! spell-visual `CEffect`'s attached model runs for as long as it lives (VERIFIED — wow-re
-//! `ceffect-anim-lifecycle.md`, §5 trio + corpus census 2026-08-02). Split from [`super`] along the
-//! concern seam: that file owns the *instances* (the model cache, the attach cascade, the reap, the
-//! world plants); this one owns *what they play*.
+//! spell-visual `CEffect`'s attached model runs for as long as it lives. Split from [`super`] along
+//! the concern seam: that file owns the *instances* (the model cache, the attach cascade, the reap,
+//! the world plants); this one owns *what they play*.
 //!
 //! ## The mechanism
 //!
@@ -30,8 +29,7 @@
 //! Reap ([`FxDecay`]) is the same shape from the other end (`0x614150` → `0x6141c0`): if the model
 //! authors **`Decay` (159)**, arm it and the instance **keeps rendering for that sequence's
 //! authored span** before it despawns; otherwise it goes immediately. `0x6203e0` — the destructor —
-//! plays nothing itself (its `0x4` bit is owner-attachment teardown, not a decay-out; wow-re §8
-//! corrects `ceffect-selfterm.md` on exactly this).
+//! plays nothing itself (its `0x4` bit is owner-attachment teardown, not a decay-out).
 //!
 //! ## What this replaces, and how wrong it was
 //!
@@ -211,8 +209,8 @@ fn arm_decay(player: &mut AnimationPlayer, armed: AnimationNodeIndex, anims: &Mo
 }
 
 /// The authored span of a model's `Decay` sequence — how long a reaped instance keeps rendering
-/// before it despawns (wow-re §8: the node is *not* torn down synchronously). `None` when the model
-/// authors no `Decay`, which is the reference's immediate-destroy gate.
+/// before it despawns (`0x6141f0`: the node is *not* torn down synchronously). `None` when the
+/// model authors no `Decay`, which is the reference's immediate-destroy gate.
 pub(crate) fn decay_span(anims: Option<&ModelAnimations>) -> Option<f32> {
     anims?.find(ANIM_DECAY).map(|c| c.duration)
 }

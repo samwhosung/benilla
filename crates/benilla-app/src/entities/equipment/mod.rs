@@ -14,7 +14,7 @@
 //! - **Attach** ([`attach_held_items`]) — spawn each resolved item's model as a child of the body's
 //!   **attach-point joint entity** (via [`BoneAttach`], inserted by the visual attach), so it rides the
 //!   hand/hip/back bone through every animation — the modern analogue of the client's attach-transform
-//!   install (`0x47a380`, wow-re charactermodel). The item model itself is a static mesh: its origin
+//!   install (`0x47a380`). The item model itself is a static mesh: its origin
 //!   *is* the grip, aligned by the attach bone's animated frame.
 //!
 //! Item models cache per **item display id** in [`ItemDisplays`] (a [`DisplayModel`] like creatures/
@@ -79,13 +79,13 @@ pub(crate) mod attach_id {
     pub(crate) const HIP_MAIN: u16 = 32;
     pub(crate) const HIP_OFF: u16 = 33;
     /// HandArrow (35, bone 126 — flag-0x04 ignore-parent-rotation) — the in-hand nocked arrow's
-    /// ONE body-bone attach (wow-re `nocked-ammo-cancel.md` §E2: `0x712f70(body, 0x23)` from
-    /// `0x60ba30`/the `$BWP` BowPull handler; bow/wand only). The old Special2/Special3 (0x18/
-    /// 0x19) reading is REFUTED — those are the `0x479f40` model-DIRECTORY selectors
-    /// (`Item\ObjectComponents\Ammo\` vs `…\Weapon\`), never attach ids (§E1).
+    /// ONE body-bone attach (`0x712f70(body, 0x23)` from `0x60ba30`/the `$BWP` BowPull handler;
+    /// bow/wand only). The old Special2/Special3 (0x18/0x19) reading is REFUTED — those are the
+    /// `0x479f40` model-DIRECTORY selectors (`Item\ObjectComponents\Ammo\` vs `…\Weapon\`), never
+    /// attach ids.
     pub(crate) const HAND_ARROW: u16 = 0x23;
-    /// The quiver-on-back attach (wow-re §H2, byte-verified 3×): the worn ammo container's
-    /// model parents at M2 attachment id 26 — the same point the stowed two-hander family uses.
+    /// The quiver-on-back attach (`0x479c50`): the worn ammo container's model parents at M2
+    /// attachment id 26 — the same point the stowed two-hander family uses.
     pub(crate) const QUIVER: u16 = 26;
 }
 
@@ -126,7 +126,7 @@ pub(crate) struct Equipment {
     /// The back slot's display id (0 = no cloak) — a geoset + runtime cape texture, no body region.
     pub(crate) cloak: u32,
     /// The head slot's display id (0 = no helm) — an attach sub-model, plus the HelmetGeosetVisData
-    /// hide-masks that tuck hair/facial/ears under it (wow-re RF-0083).
+    /// hide-masks that tuck hair/facial/ears under it (`0x4799a0`).
     pub(crate) helm: u32,
     /// The wearer's guild tabard (decision 1704) — the emblem five, joined off their own PUBLIC
     /// `PLAYER_GUILDID` against the guild identity cache. `None` for a guildless player **and**
@@ -137,7 +137,7 @@ pub(crate) struct Equipment {
     /// wears*: the composite key includes it, so the re-dress diff below is the one place a change
     /// of guild, of tabard, and a late-arriving identity all converge — no second latch.
     pub(crate) emblem: Option<benilla_formats::GuildEmblem>,
-    /// The tabard designer's preview (decision 1977, wow-re RF-0089 §7c `[cc+0xc]`): set on the
+    /// The tabard designer's preview (decision 1977, `[cc+0xc]` via `0x5e07d0`): set on the
     /// LOCAL player's body while the designer is open, so the body wears the tabard geoset over an
     /// empty slot and the composite paints `emblem` (the design under preview) onto it.
     pub(crate) tabard_preview: bool,
@@ -183,13 +183,13 @@ pub(super) struct HeldItems {
 }
 
 /// Total attach sub-model slots: the 3 held + helm + shoulder L/R + the nocked ammo + the
-/// worn quiver (self-only, ranged-drawn — wow-re `nocked-ammo-cancel.md` §H).
+/// worn quiver (self-only, ranged-drawn — `0x611e10`).
 pub(super) const ATTACH_SLOTS: usize = 8;
 
-/// **What the disarm reflex left attached** (decision 1863; wow-re `disarm-weapon-gate-law.md`
-/// §6, byte-verified). The reference's attachment state is built by *events*, not recomputed from
-/// the descriptor, and disarm is where that difference becomes visible — so this is the one piece
-/// of latched attachment state the equipment layer keeps.
+/// **What the disarm reflex left attached** (decision 1863). The reference's attachment state is
+/// built by *events*, not recomputed from the descriptor, and disarm is where that difference
+/// becomes visible — so this is the one piece of latched attachment state the equipment layer
+/// keeps.
 ///
 /// `UNIT_FIELD_FLAGS`' change reflex `0x5ff580` runs when the DISARM bit **changes**
 /// (`0x5ff619 test edi,eax`), for observed remote units as well as our own body, and when the bit
@@ -279,7 +279,7 @@ pub(crate) enum ItemModelKind {
     /// rule (its module docs): a display with `model[0]` is a thrown weapon in `Weapon\`; one
     /// with only `model[1]` is an arrow/bullet in `Ammo\`.
     Ammo,
-    /// The worn ammo container on the back (wow-re §H2): `Quiver\model[0]` + its own
+    /// The worn ammo container on the back (`0x479c50`): `Quiver\model[0]` + its own
     /// `model_texture[0]` skin, parented at attachment 26 while the ranged weapon is drawn.
     Quiver,
 }

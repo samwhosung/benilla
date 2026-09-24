@@ -96,7 +96,7 @@ mod tests {
     }
 
     /// GOLDEN — the carried-light spawn law. Only a **casting** light spawns (`type==1`, not held
-    /// dark by a static `0` visibility key — wow-re `m2-dynamic-lights.md` §9.4, the shape 11 of
+    /// dark by a static `0` visibility key — the gather gates in `0x718960`, the shape 11 of
     /// the corpus's 85 point lights actually ship), it lands as a CHILD of its host bone's joint
     /// so the animation carries it, and its offset is the def position rebased into that bone's
     /// frame (`position − bone_pivot`, wow→bevy). Colour × intensity survives the `PointLight`

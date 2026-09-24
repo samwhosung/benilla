@@ -17,7 +17,7 @@
 //! one `$DSL` → `NightElfStreetLampLoop` — are bind-posed, and decision 0130's content gate
 //! deliberately builds them no rig. That gate is right about pixels and was never a claim about the
 //! clock: the reference arms **every** placed doodad it creates and cycles it whenever the doodad is
-//! in the frame's animate set (wow-re `doodad-anim-host.md` §1/§4a/§5b — see the gate below). So
+//! in the frame's animate set (`0x695100` — see the gate below). So
 //! `doodad_anim::spawn_anim_host` gives a sound-carrying model a clock-only host —
 //! the arm bookkeeping, no player — and this scanner reads that arm.
 //!
@@ -29,9 +29,7 @@
 //! cull `0x683700` appended to, i.e. a doodad that passed frustum + horizon-occlusion **and** came
 //! out of the radius-tiered horizontal distance fade with `alpha > 0`. A doodad that fails any of
 //! those is not in the worklist, so its event track is never scanned, so **its `$DSL` never
-//! fires and it never takes one of the emitter pool's 32 entries** (wow-re
-//! `terrain/scratch/doodad-emitter-drawset-gate.md` §1b/§1c/§2b, `animation/scratch/
-//! doodad-anim-host.md` §5b, `object-layer/scratch/unit-anim-visibility-gate.md` §4).
+//! fires and it never takes one of the emitter pool's 32 entries**.
 //!
 //! Ungated, this scanner registered **every resident doodad in the streaming radius**, and with the
 //! pool's four channels arbitrated by claim order (`super::sound::emitter_pool`) that is not a
@@ -45,12 +43,11 @@
 //!
 //! **"A campfire behind you keeps crackling" is still true, and this gate does not break it** — but
 //! by the other mechanism. A registration is released by `$DSE`, by a `$DSL` naming a different id,
-//! or by the doodad's own teardown, and by nothing else (`sound/scratch/doodad-sound-emitters.md`
-//! §9): turning away stops the *marker firing*, never the entry. The prose this module and
+//! or by the doodad's own teardown, and by nothing else (the handler `0x6951e0`, the teardown
+//! `0x6a0840`): turning away stops the *marker firing*, never the entry. The prose this module and
 //! [`DoodadAnimHost::arm_clock`] used to carry — "the reference gates the cycle on residency, not
-//! the draw" — read `doodad-anim-host.md` §5b's *linkage* as "loaded" when the note means spliced
-//! into `[scene+0x20]`, which **is** the drawn/faded set ("a doodad culled out of the drain stops
-//! advancing and resumes on re-link").
+//! the draw" — read *linkage* as "loaded" when it means spliced into `[scene+0x20]`, which **is**
+//! the drawn/faded set: a doodad culled out of the drain stops advancing and resumes on re-link.
 //!
 //! The clock stays [`DoodadAnimHost::arm_clock`]'s shared one rather than the `AnimationPlayer`'s:
 //! while a host is in the animate set the two agree by construction (the gate's resume seeks the
@@ -62,12 +59,12 @@
 //! `0x7074c2` advances every frame whether or not the model is linked; a write census over the
 //! whole function finds no persisted cursor. So the markers a culled doodad crossed are **lost**,
 //! and what actually fires on re-link is the completion watchdog re-arming at `startOffset = 0`
-//! (wow-re `doodad-sound-emitters.md` §3, corrected 2026-09-07 by the §5 round decision 2065
-//! records). Keeping [`advance_track`]'s entry across the park would hand the resume frame a
-//! `prev` from seconds ago and fire the whole span at once — harmless for a `$DSL` (its re-reach
-//! only repositions) and a burst of one-shots for `$DSO`/`$SND`. Dropping it makes the resume an
-//! **arm frame**, which fires nothing, and the frame after opens the head window `[0, cur]` — the
-//! re-arm, in the shape this scanner already has.
+//! (`0x6951b0`, as decision 2065 records). Keeping [`advance_track`]'s entry across the park
+//! would hand the resume frame a `prev` from seconds ago and fire the whole span at once —
+//! harmless for a `$DSL` (its re-reach only repositions) and a burst of one-shots for
+//! `$DSO`/`$SND`. Dropping it makes the resume an **arm frame**, which fires nothing, and the
+//! frame after opens the head window `[0, cur]` — the re-arm, in the shape this scanner already
+//! has.
 
 use bevy::prelude::*;
 

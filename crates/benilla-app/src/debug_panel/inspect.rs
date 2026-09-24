@@ -166,10 +166,11 @@ pub(super) struct InspectStores<'w, 's> {
     /// through the publish, so without this the card can show an object the game is not hovering
     /// at all and give no sign of the difference (2246).
     hovered_go: Res<'w, crate::target::HoveredObject>,
-    /// The GameObject **animation** readout (decision 1151) — what the §243 arm is playing right
-    /// now, for the card's `anim` line. Its own query rather than a `collision` member because it
-    /// needs the model components: they sit on the same entity as [`crate::go_anim::GoAnim`], but
-    /// a GO whose model authors no skeleton renders as a static mesh and has none of them.
+    /// The GameObject **animation** readout (decision 1151) — what the state machine's arm
+    /// (`0x5f3930`) is playing right now, for the card's `anim` line. Its own query rather than a
+    /// `collision` member because it needs the model components: they sit on the same entity as
+    /// [`crate::go_anim::GoAnim`], but a GO whose model authors no skeleton renders as a static
+    /// mesh and has none of them.
     go_anims: Query<
         'w,
         's,
@@ -405,7 +406,7 @@ pub(super) fn inspect_ui(
             } else {
                 format!(" [{}]", named.join("|"))
             };
-            // The **interact gate**, stated rather than inferred (wow-re cursor-system §4a): the
+            // The **interact gate**, stated rather than inferred (`0x5f2f80`): the
             // strategy vtable's `+0x14` **highlightable** slot is the single predicate behind the
             // cursor, the +64 brighten, the right-click USE and the pick priority — so a GO reading
             // `interact ✗` is saying all four are off *by design*, and one reading `interact ✓` while
@@ -702,10 +703,11 @@ pub(super) fn inspect_ui(
         }
     });
     // The same line for a **GameObject** (decision 1151), which is driven by `GoAnim` rather than
-    // `AnimDriver` and so never reached the branch above: the sequence the §243 arm is playing,
-    // whether it is a transient one (a transition motion / a Custom block — something the §2d
-    // completion advance must end) or the state's held rest pose, and the repeat it is running
-    // under. A `transition · loops` reading is the "stuck open/closing" bug, stated.
+    // `AnimDriver` and so never reached the branch above: the sequence the state machine's arm
+    // (`0x5f3930`) is playing, whether it is a transient one (a transition motion / a Custom block
+    // — something the completion advance `0x5f4120` must end) or the state's held rest pose, and
+    // the repeat it is running under. A `transition · loops` reading is the "stuck open/closing"
+    // bug, stated.
     let anim_line = anim_line.or_else(|| {
         let (id, transient, repeat) = net_entity
             .and_then(|p| go_anims.get(p).ok())

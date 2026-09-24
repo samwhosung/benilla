@@ -13,11 +13,9 @@
 //! The reference re-dresses on the SAME `CM2Model`. Its character compositor re-blits the dirty
 //! region groups into the component's own 256² target and re-runs the geoset selection `0x477520`,
 //! whose only reach into the model is the per-instance visibility array `+0x98` — a range filter
-//! writing ordinals, nothing more (wow-re `charactermodel.md` "Assembly orchestration";
-//! `models.md` §"geoset-visibility-default", where the writer census proves the character compositor
-//! is the *only* thing in the binary that can hide a submesh). Attachments are installed through a
-//! different mechanism entirely (`0x712f70 CM2Model::attachChild`) and the compositor never touches
-//! them.
+//! writing ordinals (`0x7110d0`), nothing more; the character compositor is the *only* thing in
+//! the binary that can hide a submesh. Attachments are installed through a different mechanism
+//! entirely (`0x712f70 CM2Model::attachChild`) and the compositor never touches them.
 //!
 //! So this system is that law, and only that law:
 //!

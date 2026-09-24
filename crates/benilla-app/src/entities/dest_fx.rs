@@ -3,8 +3,8 @@
 //!
 //! - **The DynamicObject machine** ([`arm_ground_effects`]): a TYPEID-6 create is the anchor a
 //!   persistent area effect hangs on (Blizzard's storm, Flamestrike's burn). The reference
-//!   builds **two disjoint visuals** (wow-re `dynobject-visual-machine.md` — never through the
-//!   unit-kit pipeline; all 15 `PlaySpellVisualKit` call sites censused, none on this class):
+//!   builds **two disjoint visuals**, never through the unit-kit pipeline (none of the 15
+//!   `PlaySpellVisualKit` `0x60edf0` call sites is on this class):
 //!   - **Visual A** — the object's own `.mdx`: SPELLID → `Spell.dbc` SpellVisual →
 //!     `SpellVisual` field 11 ≠ 0 gate → field 12 → `SpellVisualEffectName` field 2 path
 //!     (`0x5d57c0`), instanced at the object's position **verbatim** (no terrain projection),
@@ -21,9 +21,9 @@
 //!   `SMSG_SPELL_GO` itself plays the field-12 model ONCE at the packet's dest point when
 //!   `SpellVisual` field 6 == 0 (no missile owns the arrival) — `0x6e8088`–`0x6e8143`, a
 //!   self-terminating CEffect. Flamestrike's initial burst; it fires **before** the dynobj
-//!   create arrives and must not wait for it (wow-re trap #6).
+//!   create arrives and must not wait for it (a trap).
 //!
-//! **Teardown is a tail, not a snap** (trap #3): `SMSG_DESTROY_OBJECT` despawns the anchor —
+//! **Teardown is a tail, not a snap** (a trap): `SMSG_DESTROY_OBJECT` despawns the anchor —
 //! visual A and the emitter die with it (the ref zeroes the emit rate at `0x6ecf20`) — but the
 //! already-emitted shards are FREE entities that run out their own one-pass lifetimes, exactly
 //! the ref's "spawned particles finish". The looping sound dies via the sound module's
@@ -44,8 +44,8 @@ use benilla_protocol::EntityKind;
 
 use super::spell_fx::{attach_effect_visuals, ensure_model, FxMaterials, SpellFx};
 
-/// The client's hardcoded shard-model table (`0x870e24`, 7 entries — wow-re
-/// `dynobject-visual-machine.md` Q-A1). `CharParamZero`'s decoded small int indexes it.
+/// The client's hardcoded shard-model table (`0x870e24`, 7 entries). `CharParamZero`'s decoded
+/// small int indexes it.
 const SHARD_MODELS: [&str; 7] = [
     "Spells\\Blizzard_Impact_Base.mdx",
     "Spells\\RainOfFire_Impact_Base.mdx",
@@ -64,8 +64,8 @@ const PROC_TYPE_SHARD_EMITTER: i32 = 9;
 /// The exact small-int decode the client applies to `CharParamZero`
 /// ([`benilla_formats::char_proc_small_int`] — the one idiom every integer-in-a-float-column proc
 /// uses, the chain proc included; decision 0955 lifted it into the format crate) — clamped into
-/// [`SHARD_MODELS`] because the client itself has **no bounds check** (`mov cl,al` — data ≥ 7
-/// reads past the table; wow-re trap #2).
+/// [`SHARD_MODELS`] because the client itself has **no bounds check** (`mov cl,al` in `0x5d55c0`
+/// — data ≥ 7 reads past the table; a trap).
 fn shard_model_index(param0: f32) -> usize {
     let idx = benilla_formats::char_proc_small_int(param0) as usize;
     idx.min(SHARD_MODELS.len() - 1)
@@ -213,7 +213,7 @@ pub(super) fn arm_ground_effects(
 }
 
 /// Spawn the router's GO dest one-shots — free entities at the packet's point, one sequence
-/// pass, then gone. Fired at the GO, never waiting on the dynobj create (trap #6).
+/// pass, then gone. Fired at the GO, never waiting on the dynobj create (a trap).
 pub(super) fn spawn_ground_bursts(
     mut commands: Commands,
     mut bursts: MessageReader<GroundBurst>,
@@ -345,8 +345,8 @@ mod tests {
 
     /// The `0x5d55c0` decode: `bits(f32(param0 + 512.0)) >> 14 & 0xff` recovers the small int
     /// exactly (the real rows carry 0.0 → Blizzard, 1.0 → Rain of Fire), and out-of-table data
-    /// clamps instead of reading past the 7 entries (the client's own missing bounds check —
-    /// wow-re trap #2).
+    /// clamps instead of reading past the 7 entries (the client's own missing bounds check — a
+    /// trap).
     #[test]
     fn shard_model_index_decodes_and_clamps() {
         assert_eq!(shard_model_index(0.0), 0);

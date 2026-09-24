@@ -21,7 +21,7 @@
 //! arrives on the spot — at melee range there is no visible flight or trail at all, just the
 //! impact on the target, exactly the reference's close-range look.
 //!
-//! In flight, the client's **arrive-on-time** mover (`0x61ceb0`/`0x61e2a0`, wow-re `w2f1.md`):
+//! In flight, the client's **arrive-on-time** mover (`0x61ceb0`/`0x61e2a0`):
 //! one entity per target, model parts + particle emitters from the shared [`SpellFx`] path-keyed
 //! cache (the same held-items pattern as the attach-point effects); each frame the missile covers
 //! `remaining distance / remaining time · dt` toward the target's **destination attach point** —
@@ -30,10 +30,9 @@
 //! hand-off `0x61dc50`); arrival on a missed target plays the victim's dodge/block defense clip
 //! instead ([`miss_defense_state`]) and floats the outcome WORD ([`MissileMiss`], decision 2229).
 //!
-//! **`0x61e1d0` picks between THREE arms, and the selector is not the one an earlier reading
-//! recorded** (wow-re `missile-arrival-dispatch.md`; it is not ground-vs-unit): first whether the
-//! missile's target guid still resolves to a live object, then a **HIT bit** — `[missile+0x38] &
-//! 1`, written once image-wide at the spawn `0x60a4e8` from an explicit argument.
+//! **`0x61e1d0` picks between THREE arms, and the selector is not ground-vs-unit**: first whether
+//! the missile's target guid still resolves to a live object, then a **HIT bit** —
+//! `[missile+0x38] & 1`, written once image-wide at the spawn `0x60a4e8` from an explicit argument.
 //!
 //! | arm | reached when | what it does | ours |
 //! |---|---|---|---|
@@ -72,14 +71,14 @@
 //! despawn in every case.//!
 //! A GO with **no unit targets at all** but a point on the wire flies **one** projectile at the
 //! point — the client's location fallback (`0x6e8a50`'s empty-hit-array arm → `0x60a3d0` once,
-//! owning unit slot −1; wow-re `spell-go-dest-effect.md` §3). That is the whole visible flight of
+//! owning unit slot −1). That is the whole visible flight of
 //! a pure ground cast: the hunter's Flare arcing out to where it was placed, a bomb thrown at
 //! empty dirt. Such a missile homes to nothing — its aim is a fixed world point ([`Aim::Ground`])
 //! — and it arrives as [`CastEventKind::GroundImpact`] on the CASTER (`0x61d870`, the
 //! no-live-target arm — see the dispatch table above), never through the unit hand-off. Named approximation: it flies the same straight
 //! arrive-on-time line a unit missile does; the reference's trajectory *class* comes from
-//! `CMissile+0x48` through `0x61d720`'s remap table, whose wire origin wow-re traced to
-//! consumption only — so a lobbed shot reads as a straight glide here.
+//! `CMissile+0x48` through `0x61d720`'s remap table, whose wire origin is still open — so a lobbed
+//! shot reads as a straight glide here.
 
 use bevy::animation::transition::AnimationTransitions;
 use bevy::ecs::entity::EntityHashMap;
@@ -124,7 +123,7 @@ const DEST_FALLBACKS: [u16; 2] = [0xf, 0x13];
 const INFLIGHT_ANIM: u16 = 144;
 
 /// The missile's orientation for flight direction `f` (Bevy space) — the client's exact frame
-/// build (`0x61e2a0`, wow-re `w2f1.md`): model **+X = the flight direction**, side = up × dir,
+/// build (`0x61e2a0`): model **+X = the flight direction**, side = up × dir,
 /// up re-orthogonalized as dir × side — i.e. NO roll, model-up stays world-up-ish however the
 /// flight pitches. (A shortest-arc rotation rolls on pitched flight, which would tilt the trail
 /// ribbons' authored + cross.) In Bevy terms: local −Z (the wow_to_bevy image of wow +X) → `f`,
@@ -141,7 +140,7 @@ fn missile_facing(f: Vec3) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(f.cross(up), up, -f))
 }
 
-/// The projectile's in-flight LOOP sound (`SpellVisual` field 10, wow-re `w2f1.md`'s
+/// The projectile's in-flight LOOP sound (`SpellVisual` field 10, the reference's
 /// `CMissile+0x44` loop handle): a channel tracked to the missile entity — it follows the
 /// projectile as it flies and is reaped when the projectile arrives or streams out. Written by
 /// [`spawn_missiles`]/[`move_missiles`]; consumed by `crate::sound::missile`.
@@ -173,7 +172,7 @@ enum Aim {
         /// `None` — the spell landed: arrival plays the impact hand-off. `Some(code)` — the wire's
         /// `SpellMissInfo` miss: arrival instead plays the victim's defense clip for DODGE(3)/
         /// BLOCK(5) (the client's `Missile_C::Update 0x61ceb0` dispatch — Dodge 30 / ShieldBlock
-        /// 24, never Parry; wow-re `smsg-attackerstate-consequences.md` §Q4) and no impact kit.
+        /// 24, never Parry) and no impact kit.
         miss: Option<u8>,
     },
     /// A fixed world point — the GO's dest, with no unit to home to and nothing that can make the
@@ -294,12 +293,11 @@ struct QueuedGo {
 /// Every caster's pending queue (the client's per-unit `+0xac` list heads). A caster that
 /// streams out drops its queue with it.
 ///
-/// **It is also a GATE, not only a queue** (decision 2288, wow-re
-/// `missile-queue-gates-the-release-event.md`). `[CGUnit+0xac]` holds `CMissile` nodes — the
-/// binary names them itself (`Missile_C.cpp`) — inserted by the missile spawner `0x60a3d0` and
-/// drained by the release event, and the `$BWR` handler reads it *before* draining it
-/// (`0x600182 mov eax,[esi+0xac]; test eax,eax; je 0x600299`). Everything between those two points
-/// — the ranged prop's own re-anim and the cast-sound reposition — happens **only when a
+/// **It is also a GATE, not only a queue** (decision 2288). `[CGUnit+0xac]` holds `CMissile`
+/// nodes — the binary names them itself (`Missile_C.cpp`) — inserted by the missile spawner
+/// `0x60a3d0` and drained by the release event, and the `$BWR` handler reads it *before* draining
+/// it (`0x600182 mov eax,[esi+0xac]; test eax,eax; je 0x600299`). Everything between those two
+/// points — the ranged prop's own re-anim and the cast-sound reposition — happens **only when a
 /// projectile is actually waiting to be released**. So a shot's flex and its launch are two
 /// effects of one act, and a consumer that arms the prop without asking this has half a mechanism.
 #[derive(Resource, Default)]
@@ -422,8 +420,8 @@ fn launch_outcome_code(code: u8) -> u8 {
 /// `select::defense_anim`): DODGE(3) → the dodge state (Dodge 30), BLOCK(5) → the block state
 /// (ShieldBlock 24). Every other code — miss/resist/evade/immune/deflect — plays nothing, and
 /// PARRY(4) can never reach here at all: [`launch_outcome_code`] has already rewritten it to
-/// DEFLECT(9), which is the mechanism behind the recorded negative that a ranged arrival never
-/// parries (wow-re `smsg-attackerstate-consequences.md` §Q4).
+/// DEFLECT(9), which is the mechanism behind the negative that a ranged arrival never parries
+/// (`0x61ceb0`).
 fn miss_defense_state(code: u8) -> Option<u32> {
     match code {
         3 => Some(2), // SPELL_MISS_DODGE → the dispatch's DODGES state

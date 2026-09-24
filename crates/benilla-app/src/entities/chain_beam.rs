@@ -4,9 +4,7 @@
 //! A kit whose `CharProc` decodes to a chain ([`benilla_formats::ChainProc`]) draws a **polyline of
 //! hops** — `caster → t1 → t2 → t3` — with one ribbon per hop, each subdivided, jittered per frame
 //! and scrolled. The data half (the DBC row, the sentinel fix, the wire) is slice 1; this module is
-//! the client's `LightningObject` (`0x6ec460`) + `CLightning` (`0x7af9b0`/`0x7afcb0`) pair, whose
-//! every load-bearing number is byte-VERIFIED in wow-re `system/spell/scratch/chain-beam-law.md`
-//! (their `31715619`).
+//! the client's `LightningObject` (`0x6ec460`) + `CLightning` (`0x7af9b0`/`0x7afcb0`) pair.
 //!
 //! ## What the reference does, and what this transcribes
 //!
@@ -58,7 +56,7 @@
 //!   `phase = fmod(phase + dt, period)`; a **negative** period reverses the scroll, which is what
 //!   flows the four drain textures back toward the caster.
 //!
-//! **Render state** (`0x7afcb0`, decoded against wow-re's own verified `EGxRs` map): additive
+//! **Render state** (`0x7afcb0`, decoded against the `EGxRs` applicator `0x59d350`): additive
 //! `SRC_ALPHA/ONE`, emissive white — a beam is **never tinted** — two-sided, depth-write off, fog
 //! **off**. It rides the shared effect-quad stream ([`benilla_world::particles::buffer::EffectQuads`]) like
 //! every other dynamic effect; `benilla_world::ribbons` is the structural model (same strip-as-quads
@@ -69,7 +67,7 @@
 //! byte-identical arguments and they diverge *only* through their interleaved draws on the shared
 //! PRNG, which is a shared-generator detail we do not reproduce, so ours diverge by construction
 //! instead. (b) The `SMSG_SPELL_GO` producer leg is gated in the reference on `0x6e4870`'s return, a
-//! predicate the §5 could not settle; we fill unconditionally — the superset, harmless because
+//! predicate that is not settled; we fill unconditionally — the superset, harmless because
 //! consumption still requires a chain proc, and because every producer clears before it fills.
 //! (c) A channel re-enters the dispatcher every tick (`0x612b18`) where we hold one beam for the
 //! channel's life; the observable — a steady beam that ends with the channel — is the same.
@@ -569,10 +567,10 @@ pub(crate) fn simulate_chain_beams(
     }
 }
 
-/// The beam's arithmetic, against the numbers wow-re read out of the binary — the subdivision floor,
+/// The beam's arithmetic, against the numbers read out of the binary — the subdivision floor,
 /// the spindle taper, the view-plane cross-section and its degenerate regime, and the signed
 /// scroll. Each of these is a value that would go straight into pixels, and two of the four columns
-/// they read were mis-named in the community schemas until the §5 (decision 0955).
+/// they read are mis-named in the community schemas (decision 0955).
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -679,8 +677,8 @@ mod tests {
     }
 
     /// `n = trunc(len / avgSegLen + 2.0)`, `n+1` points — a **floor of two**, so even a hop shorter
-    /// than one segment still bends (`0x7af713`, the `2.0f` at `0x801628`). The 30-yard case is the
-    /// §5's own worked example: 30 / 2.78 + 2 → 12 segments, 13 points.
+    /// than one segment still bends (`0x7af713`, the `2.0f` at `0x801628`). The 30-yard case:
+    /// 30 / 2.78 + 2 → 12 segments, 13 points.
     #[test]
     fn subdivision_carries_the_plus_two_floor() {
         let (e, mut rng, mut out) = (lightning(), 1u32, Vec::new());

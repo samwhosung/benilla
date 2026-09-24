@@ -10,8 +10,7 @@
 //! from the new display (`0x60afb0 ResolveDisplayInfo`), and re-selects the stand/ride animation
 //! (`0x60ce70`) — an **instant** swap, no morph transition (the ghost→alive revive swap rides the
 //! same path; a shapeshift's green flash is the spell visual kit, a separate system). The SCALE_X
-//! handler instead **eases the render scale over 2 s with a cosine smoothstep** (byte-verified,
-//! `0x614bbf`). All wow-re: `questgiver-marker.md` §W6, `w2d2.md` §2.x, `object-layer.md`.
+//! handler instead **eases the render scale over 2 s with a cosine smoothstep** (`0x614bbf`).
 //!
 //! Our shape is a diff-and-rebuild: the visual was BUILT with [`AppliedDisplay`], the live truth
 //! is the descriptor store, and a difference tears the visual down for `attach_entity_visuals` to
@@ -47,7 +46,7 @@ pub(super) struct AppliedDisplay(pub(super) Option<u32>);
 
 /// A live display-id swap happened on this entity — the visual was torn down and will rebuild.
 /// The reference's rebuild `0x60abe0` ends by REPLAYING the pending-morph latch's impact kit
-/// (wow-re `shapeshift-morph-cloud.md`); this edge is what carries "the rebuild ran" to that
+/// (`0x60ad67`); this edge is what carries "the rebuild ran" to that
 /// replay (`crate::creature_anim`'s morph-latch watcher), which owns the latch and the kit
 /// resolve. Written only when the rebuild actually fires (the diff branch — our `0x60ae10`).
 #[derive(Message, Clone, Copy)]

@@ -212,13 +212,12 @@ fn arm_sequence_clock(
 ) {
     // **Every** GameObject instance gets the loader-idle seed, state machine or not — the
     // reference's `0x70ebd0` tail arms bone 0 the moment the M2 goes LIVE and has exactly two
-    // callers, so no M2 instance in the client ever exists with nothing armed (wow-re
-    // `gameobject-anim-arm.md` §1/§2e). For a door/chest the object-layer arm lands *after* it
-    // and overrides it (§2, "because it lands after the loader seed, it is the effective arm");
-    // seeding first is what stops the one-frame BIND POSE our state GOs used to render on their
-    // first displayed frame, before `go_anim` had a chance to run — the "explodes for a split
-    // second" report. The seed is played THROUGH the transitions object so that first arm
-    // cleanly fades out of it; playing it bare on the player would leave two clips live at once.
+    // callers, so no M2 instance in the client ever exists with nothing armed. For a door/chest
+    // the object-layer arm (`0x5f3930`) lands *after* it and overrides it; seeding first is what
+    // stops the one-frame BIND POSE our state GOs used to render on their first displayed frame,
+    // before `go_anim` had a chance to run — the "explodes for a split second" report. The seed
+    // is played THROUGH the transitions object so that first arm cleanly fades out of it;
+    // playing it bare on the player would leave two clips live at once.
     let mut player = AnimationPlayer::default();
     let mut transitions = AnimationTransitions::new();
     if kind == EntityKind::GameObject {
@@ -228,9 +227,9 @@ fn arm_sequence_clock(
         // emitters ended up reading file slot 0 at t = 0 for ever (0941).
         if let Some(clip) = anims.idle_clip() {
             // Loop iff the sequence says so (`M2Sequence.flags & 1 == 0`) — the kernel's own
-            // end-of-band law (wow-re `gameobject-anim-arm.md` §2, byte-verified at
-            // `0x714585`): bit0 clear loops on the modulo wrap, bit0 set plays the window and
-            // then FREEZES at `end_ms`. An unconditional repeat replayed one-shot idles.
+            // end-of-band law (`0x714585`): bit0 clear loops on the modulo wrap, bit0 set plays
+            // the window and then FREEZES at `end_ms`. An unconditional repeat replayed one-shot
+            // idles.
             let active = transitions.play(&mut player, clip.node, std::time::Duration::ZERO);
             if clip.looping {
                 active.repeat();
@@ -451,7 +450,7 @@ pub(super) fn attach_entity_visuals(
         // carry a *transparent* placeholder M2, and invisible **trigger creatures** an empty or
         // constant-zero-alpha one: the real client's mesh gate is **type-independent** — it draws
         // any loaded model and the per-batch zero-alpha cull skips the transparent geometry
-        // (decision 0024, superseding 0023's wrong marker-type gate; verified wow-re go-render-gate).
+        // (decision 0024, superseding 0023's wrong marker-type gate; zero-alpha cull `0x707b3a`).
         // Our M2 alpha cull already reduces those models to zero submeshes, so `parts` below is
         // EMPTY for them: the spawn loop draws nothing, and `named_a_model` is what keeps the unit
         // arm's debug cube off them (1403).
@@ -523,9 +522,9 @@ pub(super) fn attach_entity_visuals(
                 .insert_if_new(benilla_world::entity_shade::GroundShade::default());
             // The root's canonical fold reference: held items share the root's interior verdict
             // (one light node per unit — the reference aliases the wearer's collector into each
-            // equipped item, wow-re `unit-light-combine-storm.md`), and their classifier fold must
-            // reference the BODY's centre, not the carried position. Plain `insert`: a display-id
-            // change re-derives it with the new body model.
+            // equipped item, `0x718960`), and their classifier fold must reference the BODY's
+            // centre, not the carried position. Plain `insert`: a display-id change re-derives it
+            // with the new body model.
             commands
                 .entity(entity)
                 .insert(benilla_world::interior::BodyBakeCenter(bake_center));
@@ -632,10 +631,10 @@ pub(super) fn attach_entity_visuals(
                 // skinned twin like a creature. Two flavours share the rig: a door/button/chest
                 // (`go_animates`) runs the open/close state machine off GAMEOBJECT_STATE (decision
                 // 0242); ANY other animated GO — a mailbox's wind-swung flags, a banner, a windmill —
-                // loops its first sequence as the reference's universal loader-idle seed (wow-re
-                // `doodad-anim-host.md`: a non-transport CGGameObject animates identically to a placed
-                // doodad). The content gate for the non-state flavour is the doodad classifier's: a GO
-                // whose first sequence is a constant pose and which has no global sequences
+                // loops its first sequence as the reference's universal loader-idle seed
+                // (`0x70ebd0`: a non-transport CGGameObject animates identically to a placed
+                // doodad). The content gate for the non-state flavour is the doodad classifier's:
+                // a GO whose first sequence is a constant pose and which has no global sequences
                 // (`DoodadAnimTier::Static`) has nothing to loop, so it keeps the static mesh.
                 (EntityKind::GameObject, Some(d))
                     if !d.skeleton.joints.is_empty() && d.animations.is_some() =>
@@ -730,7 +729,7 @@ pub(super) fn attach_entity_visuals(
             let look = resolve_char_look(net, dm, entity, &stores);
             // The worn geoset selectors (decisions 0074/1864, the B1–B8 branches): a player's from the
             // resolved equipment display rows; an NPC / naked default otherwise.
-            // (The helm's hide-mask row pair, RF-0083: hair/facial/ears tuck under it. For a
+            // (The helm's hide-mask row pair, `0x4799a0`: hair/facial/ears tuck under it. For a
             // character-model NPC the helm id is its CreatureDisplayInfoExtra head column.)
             let equip_geosets = equip_geosets(
                 displays.as_deref(),
@@ -913,8 +912,8 @@ pub(super) fn attach_entity_visuals(
             // Final size = the server's per-object scale (`OBJECT_FIELD_SCALE_X`) alone. The server
             // already folds the unit's DBC scale (`CreatureModelData.modelScale ×
             // CreatureDisplayInfo.scale`, or an explicit per-spawn override) into this field, and the
-            // real client renders units at the field alone (verified: wow-re `world_model_scale`
-            // `0x613ef0`, vmangos `Unit::GetScaleForDisplayId`). Multiplying our own DBC scale on top
+            // real client renders units at the field alone (`0x613ef0`, vmangos
+            // `Unit::GetScaleForDisplayId`). Multiplying our own DBC scale on top
             // double-applies it — `native²`, worst for the sub-1.0 starting-zone scales. A GameObject's
             // display scale was always 1.0, so this is unchanged for it.
             let placement = if let Ok(mut t) = transforms.get_mut(entity) {
@@ -1087,7 +1086,7 @@ pub(super) fn attach_entity_visuals(
             // A display that DID name a model renders exactly what that model built — including
             // nothing (decision 1403, bug B13). The reference's mesh gate is type-independent: it
             // draws any loaded model and the per-batch zero-alpha cull skips what is transparent
-            // (decision 0024, verified wow-re `go-render-gate`), so a model with no surviving batch
+            // (decision 0024, zero-alpha cull `0x707b3a`), so a model with no surviving batch
             // submits no geometry and the unit is invisible. Byte-exact, folded back at 1407: the
             // batch loop's TRIP COUNT is the selected ModelView's texUnit count (`0x707a72`), so a
             // view with none skips the whole loop — and the unit lane reaches that same loop, on

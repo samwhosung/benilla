@@ -5,10 +5,10 @@
 //! The reference never rebuilds a character to change what it is wearing: the composite atlas is
 //! re-blitted into the component's own 256² target and the geosets are re-selected on the SAME
 //! `CM2Model` (its per-instance visibility array `+0x98`, whose only writer is the character
-//! compositor — wow-re `charactermodel.md` "Assembly orchestration" + `models.md`
-//! §"geoset-visibility-default"). Its attachments — held items, the helm, the shoulders and
-//! everything hanging off them — are never touched by that path at all. This module is the half of
-//! that law that concerns one part: which materials it draws through, and how it is born.
+//! compositor `0x477520`, through `0x7110d0`). Its attachments — held items, the helm, the
+//! shoulders and everything hanging off them — are never touched by that path at all. This module
+//! is the half of that law that concerns one part: which materials it draws through, and how it is
+//! born.
 
 use benilla_formats::CharSkinSlot;
 use bevy::camera::primitives::Aabb;
@@ -391,9 +391,9 @@ pub(super) fn spawn_part(
             blend: part.blend,
         },
         // The portrait booth mirrors this part ([`crate::portrait`]): both mesh twins — the booth
-        // poses the skinned twin at Stand on its own throwaway skeleton (the ref bake, wow-re §4
-        // D2), falling back to the static bind-pose twin for a boneless model — + the steady
-        // exterior material (not the appear-fade/interior variant the child may wear now).
+        // poses the skinned twin at Stand on its own throwaway skeleton (the ref bake `0x524f60`),
+        // falling back to the static bind-pose twin for a boneless model — + the steady exterior
+        // material (not the appear-fade/interior variant the child may wear now).
         crate::portrait::PortraitPart {
             static_mesh: part.mesh.clone(),
             skinned_mesh: part.skinned_mesh.clone(),
@@ -432,11 +432,11 @@ pub(super) fn spawn_part(
         // object, never per batch, so the view cull belongs to the body ROOT's election
         // (`exterior_cull`, 1270) and `NoFrustumCulling` keeps Bevy's per-part test out of its
         // way. (0648 originally justified the marker as "the reference never view-culls entities
-        // at all", off a ≈1e7 render-bounds reading; wow-re's `outdoor-object-pass-election.md`
-        // refuted that 2026-08-13 — those fields are a position cache, and units ARE
-        // frustum/horizon/room-elected per frame. Decision 1473 records the correction and owns
-        // the outdoor half of the election.) Bevy's bind-pose `Aabb` is the wrong stand-in for
-        // picking (the duel flag plants itself 9 yd below it) and is stomped anyway by
+        // at all", off a ≈1e7 render-bounds reading, but those fields are a position cache
+        // (`0x6717d0`), and units ARE frustum/horizon/room-elected per frame (`0x683340`).
+        // Decision 1473 records the correction and owns the outdoor half of the election.)
+        // Bevy's bind-pose `Aabb` is the wrong stand-in for picking (the duel flag plants itself
+        // 9 yd below it) and is stomped anyway by
         // `calculate_bounds` on any `Mesh3d` change. So the `Aabb` beside the marker serves ONE
         // master: the mouseover picker (`target/hover.rs`) — the armed idle's authored CAaBox
         // when it has one, else the bind box, read from the part's build-time bound (decision
@@ -456,8 +456,8 @@ pub(super) fn spawn_part(
     }
     // M2 parts can light off a WMO room they stand in: a `MeshTag` + the classifier pick the law by
     // location (0354). Anchored at the unit root so every part shares the root's verdict, and the
-    // indoor LAW is one for every entity M2 — the footprint-MOCV bake (wow-re
-    // `unit-m2-shader-light.md`), with the matte ×1.0 as the bake's miss fallback.
+    // indoor LAW is one for every entity M2 — the footprint-MOCV bake (`0x69e4c0`, `0x6a7300`),
+    // with the matte ×1.0 as the bake's miss fallback.
     if let Some(lit) = part_interior_lit(
         mats.steady,
         mats.interior,
@@ -467,10 +467,10 @@ pub(super) fn spawn_part(
     ) {
         child.insert(lit);
     }
-    // The batch's **animated material alpha** (the verified combine's runtime half, wow-re
-    // `m2-alpha-combine-cull.md`): a creature's colour-alpha/transparency tracks are authored PER
-    // SEQUENCE, so which of its batches draw is a function of what it is playing. Sampling follows
-    // the unit's own `AnimationPlayer`, so the alpha stays in phase with the pose.
+    // The batch's **animated material alpha** (the combine's runtime half, `0x707680`): a
+    // creature's colour-alpha/transparency tracks are authored PER SEQUENCE, so which of its
+    // batches draw is a function of what it is playing. Sampling follows the unit's own
+    // `AnimationPlayer`, so the alpha stays in phase with the pose.
     if let Some(anim) = &part.alpha_anim {
         child.insert(benilla_world::doodad_anim::MatAnim::following(
             anim.clone(),

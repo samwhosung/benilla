@@ -7,8 +7,7 @@
 //! `ItemDisplayInfo` col 22 → `ItemVisuals` → 5 × `ItemVisualEffects` → a glow `.mdx` per slot
 //! ([`benilla_formats::ItemVisualCatalog`], whose module doc owns the table shapes and the
 //! reference's per-slot skip rules). Two sources feed the id, and the reference resolves exactly
-//! one of them per item (wow-re `object-layer/scratch/item-visual-enchant.md`, byte-verified;
-//! the call sites below were read at the bytes for decision 0805):
+//! one of them per item (the call sites below were read at the bytes for decision 0805):
 //!
 //! - **Intrinsic** — the display's own id, passed by the character's held-item attach:
 //!   `0x47a200: mov edx,[esi+0x58]` → `0x4798c0(…, itemVisualsId)`, which calls the attach

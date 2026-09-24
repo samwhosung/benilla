@@ -57,8 +57,8 @@ pub(super) struct EntityPart {
     /// The interior BAKE variant (every M2 part): the material in interior-PROP mode, whose
     /// `MeshTag` payload the shader reads as an SH-probe slot — the footprint-MOCV law. Units and
     /// GameObjects alike consume it: the reference registers EVERY entity M2 with the same
-    /// entity-node fill (`Node::SetModel`), so one law lights them all indoors (wow-re
-    /// `unit-m2-shader-light.md`, superseding the 0315 unit/GO split). `None` for WMO parts.
+    /// entity-node fill (`Node::SetModel` `0x6716f0`), so one law lights them all indoors
+    /// (`0x6a7300`, superseding the 0315 unit/GO split). `None` for WMO parts.
     pub(super) material_interior_bake: Option<Handle<WowModelMaterial>>,
     /// The bake variant's own `AlphaMode::Blend` twin — a fade (the self-avatar zoom feather, a
     /// despawn ramp) on a bake-classified part rides THIS, keeping the probe light through the
@@ -69,7 +69,7 @@ pub(super) struct EntityPart {
     /// (creatures + M2 GameObjects, the CGObjects that appear-fade); `None` for WMO-display parts.
     pub(super) fade_blend: Option<Handle<WowModelMaterial>>,
     /// The **depth-prime twin** material ([`benilla_world::model_render::zfill_material`] — the reference's
-    /// `M2UseZFill` clone, wow-re `m2-blend-promotion-zfill.md` §4). While the part draws
+    /// `M2UseZFill` clone, `0x707f7d`–`0x708072`). While the part draws
     /// translucent, `model_fade::sync_zfill_twins` spawns a child mesh on this: colour-masked,
     /// blend-off, z-writing, sorted before the colour parts — one blended layer everywhere, no
     /// self-overlap darkening on a stealthed or fading body. `None` when the batch's material
@@ -96,10 +96,10 @@ pub(super) struct EntityPart {
     /// Plenty of them do not: 101 creature models author several (`Creature\Banshee` carries `0`
     /// and `402`). They still draw whole, because the reference's per-model visibility array is
     /// allocated **filled with `1`** — all visible — and the only writer is the character
-    /// compositor, which a creature never reaches (VERIFIED, wow-re `models.md` §"M2 geoset
-    /// visibility": the `CCharacterComponent` is created on exactly two guarded paths and a
-    /// creature fails both). That array is indexed by **submesh ordinal**, not by this id — the
-    /// client never decomposes a `group*100 + variant` id anywhere in its render band.
+    /// compositor, which a creature never reaches (`0x5fb200`: the `CCharacterComponent` is
+    /// created on exactly two guarded paths and a creature fails both). That array is indexed by
+    /// **submesh ordinal**, not by this id — the client never decomposes a `group*100 + variant` id
+    /// anywhere in its render band.
     pub(super) geoset_id: u16,
     /// The character runtime texture slot this part carries (M2 type 1 = body, type 6 = hair). For a
     /// player the per-entity attach swaps its material to one carrying that per-appearance texture
@@ -134,7 +134,7 @@ pub(super) struct EntityPart {
     /// only ever seed white: the hunter's Freezing Trap glow card is the class (decision 2295).
     pub(super) rgb_seq: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 3]>>>,
     /// The part's **texture-transform (UV) loop** — the translation track that scrolls this
-    /// batch's stage UVs (decision 0130 phase 3, wow-re `m2-texanim-uv`). The **effect lane**
+    /// batch's stage UVs (decision 0130 phase 3, `0x70b740`). The **effect lane**
     /// ([`super::spell_fx`]) samples it per instance on its own clip clock, through a material
     /// clone (decision 2282); the unit/GameObject lane runs it on the shared, deduped material
     /// (decision 2295). `None` for the ~98.6% of batches with no texture transform, and for all
@@ -238,7 +238,7 @@ pub(crate) struct DisplayModel {
     pub(crate) first_seq_span: Option<f32>,
     /// Camera framing-pivot height in **model-local yards, pre-scale** — `0.9 × bbox_z_extent` from the
     /// M2 authored bounds, captured in [`build_parts`]. Stamped onto each instance as [`CameraPivot`] so
-    /// the third-person camera targets ~neck height rather than a fixed offset (wow-re `follow-camera`).
+    /// the third-person camera targets ~neck height rather than a fixed offset (`0x50cbc0`).
     /// `0.0` for a bounds-less / WMO / model-less display (→ the camera floors it).
     pub(super) pivot_height_local: f32,
     /// How far that framing pivot drops while this body **swims**, model-local yards, pre-scale —
@@ -251,25 +251,25 @@ pub(crate) struct DisplayModel {
     pub(super) swim_pivot_drop_local: f32,
     /// The target selection-ring radius in **model-local yards, pre-scale**: the Stand-animation footprint
     /// `sqrt(0.5 · sqrt(dx² + dy²))` ([`M2Bounds::ring_footprint`]). The ring's world radius is this × the
-    /// unit's `OBJECT_FIELD_SCALE_X` (wow-re selection-ring RE, `0x608e00`/`0x60aee0`, emulated to the
+    /// unit's `OBJECT_FIELD_SCALE_X` (`0x608e00`/`0x60aee0`, emulated to the
     /// reference pixels). `0.0` for a bounds-less / WMO / model-less display (the ring then uses a fallback).
     pub(super) ground_radius_local: f32,
-    /// The model's authored **portrait camera** (wow-re portrait-render §4), captured with `parts` on
+    /// The model's authored **portrait camera** (`0x713540`), captured with `parts` on
     /// load — the exact rig the portrait booth frames through. `None` for WMO / model-less / the few
     /// camera-less M2s (the booth then falls back to heuristic framing).
     pub(super) portrait_camera: Option<benilla_assets::PortraitCamera>,
     /// The model's **model-frame pane camera** — raw camera-table index 1, the rig a 1.12
-    /// `<PlayerModel>` widget renders through (wow-re `ui/scratch/modelframe-camera-law.md`;
+    /// `<PlayerModel>` widget renders through (`0x505890`;
     /// [`benilla_assets::M2Model::pane_camera`]). Captured with `parts` on load. `None` for WMO /
     /// model-less / a model with fewer than two cameras — the body booth then uses the client's own
     /// FIXED fallback camera instead.
     pub(super) pane_camera: Option<benilla_assets::PortraitCamera>,
-    /// A bow display's `$WTT`/`$WTB` bowstring anchors (wow-re `nocked-ammo-cancel.md` §G2),
+    /// A bow display's `$WTT`/`$WTB` bowstring anchors (`0x611ff0`),
     /// captured with `parts`: `[top, bottom]` as `(bone, model-local Bevy position)`. The held-item
     /// attach marks the prop root with them so the string drawer can span the tips. `None` for
     /// every non-bow model.
     pub(super) string_anchors: Option<[(u16, Vec3); 2]>,
-    /// The fishing pole's `$CCH` line anchor (wow-re `fishing-line.md`), mesh-frame Bevy space,
+    /// The fishing pole's `$CCH` line anchor (`0x61f780`), mesh-frame Bevy space,
     /// captured with `parts`. The held-item attach marks the mainhand prop with it so the line
     /// drawer can span rod tip → bobber. `None` for every model that doesn't author it.
     pub(super) cch_marker: Option<Vec3>,
@@ -278,7 +278,7 @@ pub(crate) struct DisplayModel {
     /// text at `feet + scale × this × 1.25`). `0.0` for a bounds-less display.
     pub(super) bbox_z_local: f32,
     /// The **Stand animation** box's z-extent (model-local yards, pre-scale) — the CHAT BUBBLE's
-    /// anchor height (`0x711a20`, wow-re 2026-08-17; 1406). Distinct from `bbox_z_local` above,
+    /// anchor height (`0x711a20`; 1406). Distinct from `bbox_z_local` above,
     /// which is the all-animation vertex box, and from the posed PlayerName attachment the overhead
     /// NAME uses: this one is a file constant, queried once and cached, so the bubble's height
     /// cannot move with the pose. `0.0` for a bounds-less display.
@@ -287,16 +287,15 @@ pub(crate) struct DisplayModel {
     /// reference point for a GameObject's footprint bake (the byte-cited `[def+0x5c]` anchor
     /// family; `benilla_world::interior`). `Vec3::ZERO` for a bounds-less / WMO / model-less display.
     pub(super) bake_center_local: Vec3,
-    /// The model's terrain-conform gate — MD20 `GlobalModelFlags & 3` (wow-re `terrain-tilt.md`,
-    /// §5): `1` = pitch to slope, `3` = pitch+roll, else level. Captured with `parts` on load;
+    /// The model's terrain-conform gate — MD20 `GlobalModelFlags & 3` (`0x7106c0`): `1` = pitch to
+    /// slope, `3` = pitch+roll, else level. Captured with `parts` on load;
     /// `0` for WMO / model-less / still-loading displays.
     pub(super) terrain_tilt: u8,
     /// Whether this display resolves to a **character body** (a `Character\…` model path) — the
     /// gate for the char-customization pipeline (geoset filter + skin composite). The look follows
     /// the DISPLAY, not the entity kind (decision 0695): a druid in bear form is a Player-kind
     /// entity wearing a plain creature model, and the reference's own race/gender getters answer
-    /// from the display's cached row, not the unit's descriptor (wow-re `w2d2.md`'s `0x60c690`
-    /// getter family).
+    /// from the display's cached row, not the unit's descriptor (the `0x60c690` getter family).
     pub(super) is_character_body: bool,
 }
 
@@ -476,13 +475,13 @@ pub(super) fn build_parts(
             // Target selection-ring radius (model-local, pre-scale): the **Stand-animation footprint**
             // `sqrt(0.5 × sqrt(dx² + dy²))` ([`M2Bounds::ring_footprint`], dx/dy = the Stand sequence
             // box's horizontal extents). This is the exact model-local input the real client's living-unit
-            // ring uses (wow-re selection-ring RE, `0x608e00`/`0x60aee0` — byte-verified + emulated to the
+            // ring uses (`0x608e00`/`0x60aee0`, emulated to the
             // reference pixels); the ring's world radius = this × OBJECT_FIELD_SCALE_X. NOT the render
             // sphere (`0xCC`) — that is the *corpse* decal's source (`0x5d6fe0`); the nested-sqrt footprint
             // is why the sphere never fit (it over-sized tall humans, under-sized the squat chicken).
             ground_radius_local = model.bounds.map_or(0.0, |b| b.ring_footprint);
             // Camera framing-pivot height (model-local, pre-scale), the reference's follow-camera target
-            // (`0x50cbc0`, wow-re `follow-camera`): **attachment id 17's Z + 0.0972** when present (every
+            // (`0x50cbc0`): **attachment id 17's Z + 0.0972** when present (every
             // character model has it → ~neck height, e.g. 1.90 human / 0.88 gnome), else the fallback
             // `0.9 × vertex-box Z-extent` for a non-character model. The vertex box alone is the WRONG
             // source for characters — it's the all-animation extent (a human's is ~3.8, way over the

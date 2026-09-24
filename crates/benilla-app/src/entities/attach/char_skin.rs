@@ -60,8 +60,8 @@ pub(super) fn resolve_char_look(
     // swaps a Player-kind entity can wear any display — a druid's bear form is a plain creature
     // model (no look; Monster skins instead), and a GM-morphed player wearing a humanoid NPC
     // display wears ITS CreatureDisplayInfoExtra appearance. The reference's own race/gender
-    // getters answer from the display's cached row with the descriptor as fallback (wow-re
-    // `w2d2.md`, the `0x60c690` getter family) — exactly this order: display appearance first,
+    // getters answer from the display's cached row with the descriptor as fallback (the
+    // `0x60c690` getter family) — exactly this order: display appearance first,
     // wire appearance only for a character body that carries none.
     let d = dm?;
     if let Some(npc) = d.npc_appearance.as_ref() {
@@ -194,7 +194,7 @@ pub(super) fn resolve_worn_equip(
 }
 
 /// The worn geoset selectors for a set of equipment display ids (decisions 0074/1864's B1–B8
-/// branches + the cloak group + the helm's RF-0083 hide-mask row pair): each non-zero display
+/// branches + the cloak group + the helm's `0x4799a0` hide-mask row pair): each non-zero display
 /// resolves its ItemDisplayInfo row's geoset columns, and B3's forearm gate comes off the same
 /// composite plan the atlas blits. One helper for the world attach path and the glue-preview
 /// builder — the selection law can't fork (decision 0465).

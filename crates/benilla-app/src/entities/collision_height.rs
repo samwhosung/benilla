@@ -14,29 +14,29 @@ use super::Creatures;
 /// A unit's **collision height** in world yards — the reference's `CMovement+0xb4`, and the `h`
 /// that every depth line in the client is a fraction of: swim enters and rests at `0.75·h`, the
 /// splash fires at `0.4·h`, wading ends where swimming begins (`0.75·h`), and the foam gate is
-/// `max(2·h, 1.0)`. Each of those *fractions* is byte-verified against the real client (wow-re
-/// `swim-transition.md`, `swim-mechanism.md`, `water-ripple-decal.md`); until decision 0645 the
-/// `h` they multiplied was a **constant** — [`crate::player::DEFAULT_COLLISION_HEIGHT`], the
-/// client's own empty-world ctor default — so all five lines were right for a human male (2.031,
-/// within 2 mm of it) and wrong for every other race. A gnome female stands 1.15 yd and was held
-/// 1.52 yd under: she could not reach the surface, which is how the defect finally showed (B76).
+/// `max(2·h, 1.0)`. Each of those *fractions* is the real client's (`0x6030c0`, `0x5fa760`);
+/// until decision 0645 the `h` they multiplied was a **constant** —
+/// [`crate::player::DEFAULT_COLLISION_HEIGHT`], the client's own empty-world ctor default — so all
+/// five lines were right for a human male (2.031, within 2 mm of it) and wrong for every other
+/// race. A gnome female stands 1.15 yd and was held 1.52 yd under: she could not reach the
+/// surface, which is how the defect finally showed (B76).
 ///
 /// `CreatureModelData.collisionHeight × k`. The column is the model's own MD20 collision-box Z
 /// extent in raw model units — machine-pinned against the shipped client (`benilla_formats`
 /// `collision_height_is_the_m2_collision_box`), which is what settles that it scales with the
 /// geometry it bounds.
 ///
-/// **`k = max(OBJECT_FIELD_SCALE_X, CreatureDisplayInfo.creatureModelScale)`** — VERIFIED byte law
-/// (wow-re `collision/scratch/mover-collision-scalars.md`): `0x60b270` fetches `SCALE_X` through
-/// vtable slot `+0x1c` (`0x469f10`), compares it against the display row's own column at
-/// `0x60b312` (`CreatureDisplayInfo+0x10`), and hands the **larger** to `0x6174b0`, which stores
-/// `CollisionHeight · k` into `CMovement+0xb4` at `0x617501`. Its two callers include the unit
-/// model (re)build `0x5fb9dd` with `force = 1`, so every unit gets it, not just the mover.
+/// **`k = max(OBJECT_FIELD_SCALE_X, CreatureDisplayInfo.creatureModelScale)`** — the byte law:
+/// `0x60b270` fetches `SCALE_X` through vtable slot `+0x1c` (`0x469f10`), compares it against the
+/// display row's own column at `0x60b312` (`CreatureDisplayInfo+0x10`), and hands the **larger** to
+/// `0x6174b0`, which stores `CollisionHeight · k` into `CMovement+0xb4` at `0x617501`. Its two
+/// callers include the unit model (re)build `0x5fb9dd` with `force = 1`, so every unit gets it,
+/// not just the mover.
 ///
 /// The `max` is a **floor, never a second multiplier**. The *render* scale is [`NetEntity::scale`]
 /// = `OBJECT_FIELD_SCALE_X` alone, which the server has already folded the DBC scales into
 /// (`CreatureModelData.modelScale × CreatureDisplayInfo.scale`, vmangos `Unit::GetScaleForDisplayId`
-/// — and wow-re `object-layer.md`'s render-scale CORRECTION says in as many words that a client
+/// — and the reference's render scale (`0x613fc9`) has no display-column term, so a client
 /// multiplying the display column in again would *square* it). So the collision box and the drawn
 /// body still cannot disagree; the floor only stops the box shrinking below the display's own size.
 ///
@@ -52,8 +52,7 @@ use super::Creatures;
 /// `[unit+0x110]+0x1f8` (index 132), while its sibling `0x60ae10` reads `+0x1f4` (index 131 =
 /// `UNIT_FIELD_DISPLAYID`) off the same array; the cached-row arm is taken only when the two
 /// fields are equal (`[unit+0xc58] & 0x100` = "not transformed", set from their equality at
-/// `0x60b166`), so **every arm yields the native model's row**. VERIFIED — wow-re
-/// `mover-collision-scalars.md` and `remote-swim-decision.md` §4.
+/// `0x60b166`), so **every arm yields the native model's row**.
 ///
 /// So **a transform does not resize the collision prism**: a druid in bear form keeps the druid's
 /// swim, splash, foam and wade lines; a GM `.modify morph` into a gnome keeps the human's. That is

@@ -482,8 +482,8 @@ fn debug_panel_ui(
                             // UVs (phase 3 — waterfalls).
                             let ticking = anim_hosts.iter().filter(|h| h.active).count();
                             // Of the material samplers, how many resolve to **0 right now** — the
-                            // batches the reference culls this frame (`A <= 0`, wow-re
-                            // `m2-alpha-combine-cull`). Non-zero as soon as a voidwalker/banshee/
+                            // batches the reference culls this frame (`A <= 0`,
+                            // `0x707b3a`–`0x707b5c`). Non-zero as soon as a voidwalker/banshee/
                             // slime/infernal is in view: those models author geometry that only
                             // appears on death, and this counter is what says we are hiding it
                             // rather than drawing it. `dim` counts the partial factors — a batch

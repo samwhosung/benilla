@@ -117,13 +117,13 @@ impl SeatWriters<'_, '_> {
 /// popping in opaque (decision 0032 read as a per-unit property).
 ///
 /// **The diff is per SLOT, and an attach-point change is a MOVE** (decision 0826). The reference's
-/// sheath paths touch only the weapon/quiver attach ids (`0x611770`, wow-re `sheath-policy.md` /
-/// `ranged-sheath-display.md`) and stow a melee weapon by detaching the sub-model and **re-parenting
-/// it** at the sheath point (`0x60b590` → `0x712f70`) — the model instance, and everything riding
-/// it, survives the swap. Rebuilding a unit's whole kit on any change did neither: drawing a sword
-/// respawned the shoulders' and helm's emitters too, and every orphaned pool then lived out its
-/// lifespan FROZEN in world space (`particles::sim`'s drain) — the sparkle cloud that hung behind
-/// the character on every weapon draw and every step of the login gear cascade.
+/// sheath paths touch only the weapon/quiver attach ids (`0x611770`) and stow a melee weapon by
+/// detaching the sub-model and **re-parenting it** at the sheath point (`0x60b590` → `0x712f70`) —
+/// the model instance, and everything riding it, survives the swap. Rebuilding a unit's whole kit
+/// on any change did neither: drawing a sword respawned the shoulders' and helm's emitters too, and
+/// every orphaned pool then lived out its lifespan FROZEN in world space (`particles::sim`'s drain)
+/// — the sparkle cloud that hung behind the character on every weapon draw and every step of the
+/// login gear cascade.
 #[allow(clippy::type_complexity)]
 pub(in crate::entities) fn attach_held_items(
     mut commands: Commands,
@@ -345,7 +345,7 @@ fn spawn_slot(
     // left-hand fork (a bow is the one ranged weapon placed in HAND_LEFT; the client
     // registers the string callback bow-only, from the ranged-draw path). The `$WTT`/
     // `$WTB` anchors alone are NOT the gate — they are generic weapon-TRAIL begin/end
-    // markers (wow-re w2d2: `WTBT`/`WTTT`, the swing-trail vertex build) that melee
+    // markers (`WTBT`/`WTTT`, the swing-trail vertex build `0x6c67f0`) that melee
     // weapons author too; keying on their presence drew a phantom "bowstring" chord
     // across the Whirlwind Axe's blade tips (decision 0531).
     if slot_idx == 2 && hs.attach == attach_id::HAND_LEFT {
@@ -358,7 +358,7 @@ fn spawn_slot(
             });
         }
     }
-    // The **weapon swing trail's** object (wow-re `charproc8-weapon-trail.md` §9, decision 2076)
+    // The **weapon swing trail's** object (decision 2076)
     // — the reference's `WTOBJECT`, built per weapon HAND by `0x608d60` on the model it finds at
     // that hand's attachment and freed with it. This is the first-class consumer decision 0531
     // named and deferred: the `$WTB`/`$WTT` pair is a *trail* marker, and the bowstring above is
@@ -371,7 +371,7 @@ fn spawn_slot(
                 .insert(crate::weapon_trail::WeaponTrail::new(top.1, bottom.1));
         }
     }
-    // The fishing line's near anchor (wow-re `fishing-line.md`, decision 1099): a MAINHAND prop
+    // The fishing line's near anchor (`0x61f780`, decision 1099): a MAINHAND prop
     // whose model authors `$CCH` is the pole (the reference gates on ItemCache {class 2, subclass
     // 20} + the marker's presence; exactly one weapon model in the chain authors the marker, so
     // presence alone is data-equivalent — unlike the bow's trail-marker trap above, which is why
@@ -404,13 +404,13 @@ fn spawn_slot(
     // attach model runs a joint palette. 0847 pulled it believing a spherical billboard swept the
     // spikes through the plate; that was wrong (0853: the spikes run ALONG their bone, worst vertex
     // 12° off axis, so the arc never existed), and the byte answer is that the reference billboards
-    // an attached model exactly as it does a standalone one (wow-re `billboard-bone-law.md` §6).
+    // an attached model exactly as it does a standalone one (`0x718657`–`0x71876f`).
     // A
     // display whose geometry is WELDED to a billboard bone (`welds_billboard`: the R14 pauldron's
     // two spikes, whose root rings are 50/50 with the plate) has no correct rigid placement at all;
     // 0839 stopped tearing it into a card, which left it whole and *still*. The reference bends it
-    // by blending the billboard bone's camera-replaced palette row per vertex (`m2_vertex_skin`,
-    // `0x71a460`) — so we build exactly that: the joint hierarchy, a palette slot, and the
+    // by blending the billboard bone's camera-replaced palette row per vertex (`0x71a460`) — so
+    // we build exactly that: the joint hierarchy, a palette slot, and the
     // [`benilla_world::billboard::BillboardJointRig`] that rewrites the billboard joints' world rotations.
     //
     // Nothing else about the item lane's "rests at bind pose" law moves: no `AnimationPlayer`, no
@@ -595,10 +595,9 @@ fn spawn_slot(
             // yields via its own `Without<RenderFade>`/`Without<PendingAppearFade>` filter, same
             // as a body part.
             // Anchored at the WEARER's root: an equipped item M2 aliases its wearer's
-            // light collector by pointer (`[item+0x3b8]=[wearer+0x3b8]`, `0x718960` —
-            // wow-re `unit-light-combine-storm.md`), so it never runs its own
-            // classify/footprint at the carried position. The animating hand joint
-            // once anchored these, and a swing alone could trip the resample gate and
+            // light collector by pointer (`[item+0x3b8]=[wearer+0x3b8]`, `0x718960`), so it
+            // never runs its own classify/footprint at the carried position. The animating hand
+            // joint once anchored these, and a swing alone could trip the resample gate and
             // split the shield's light from the body's (director-caught, 2026-07-13).
             // The fold reference is the wearer's BODY centre for the same reason.
             //
@@ -627,11 +626,11 @@ fn spawn_slot(
             ) {
                 child.insert(lit);
             }
-            // The batch's authored **material alpha** — the verified combine's `colourAlpha ×
-            // weight` (wow-re `m2-alpha-combine-cull.md`). An attach model spawns no rig of its
-            // own and rests in its file's first sequence, so its loops are PINNED there (the
-            // doodad lane's clock) while the tag compose stays the unit lane's, ordered against
-            // the appear-fade and the interior classifier exactly like the wearer's own batches.
+            // The batch's authored **material alpha** — the combine's `colourAlpha × weight`
+            // (`0x707680`). An attach model spawns no rig of its own and rests in its file's first
+            // sequence, so its loops are PINNED there (the doodad lane's clock) while the tag
+            // compose stays the unit lane's, ordered against the appear-fade and the interior
+            // classifier exactly like the wearer's own batches.
             // Skipping this drew every one of the 321 item models that dim a batch at full
             // strength — the Hungering Cold's five glow cards blaze at 1.0 where the file says
             // 0.30 (decision 0836).
@@ -1175,8 +1174,7 @@ mod tests {
     ///
     /// 0847 withdrew this and pinned the withdrawal with the mirror of this test; both are gone
     /// again. The withdrawal's premise — a spherical billboard sweeping the spikes through the
-    /// plate — was refuted at the geometry (0853) and at the bytes (wow-re
-    /// `billboard-bone-law.md` §6), and
+    /// plate — was refuted at the geometry (0853) and at the bytes (`0x718657`–`0x71876f`), and
     /// [`benilla_world::billboard::tests::a_spike_along_its_bone_axis_points_screen_down_from_every_angle`]
     /// is the standing guard that the arc stays absent in our own basis.
     #[test]

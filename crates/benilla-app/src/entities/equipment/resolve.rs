@@ -27,12 +27,11 @@ use super::{
 /// Drawn: the unit's sheath state (`UNIT_FIELD_BYTES_2` byte 0: 0 stowed · 1 melee · 2 ranged) draws
 /// the matching slots into the hands (shield → forearm). Stowed: the **item's** sheath type picks the
 /// body point — 1 two-hander → back · 2 staff → lower back · 3 one-hander → hip · 4 shield → centre
-/// back (mainhand takes the `K−1` side of each pair — byte-verified: `0x47a070`'s `dl != 0` is the
-/// mainhand bodyslot `0xf`, wow-re `ranged-sheath-display.md`, decision 0370). A sheathed ranged
-/// weapon renders **nothing** — the client detaches it rather than re-pointing it to a body bone
-/// (byte-verified `0x7130a0`: a pure unlink/release, uniform across bow/gun/crossbow/thrown/wand;
-/// wow-re `ranged-sheath-display.md`). Drawn ranged splits by inventory type: a **bow** rides the
-/// left hand, gun/crossbow/wand/thrown the right (`0x611e10`'s invType test, same note).
+/// back (mainhand takes the `K−1` side of each pair — `0x47a070`'s `dl != 0` is the mainhand
+/// bodyslot `0xf`, decision 0370). A sheathed ranged weapon renders **nothing** — the client
+/// detaches it rather than re-pointing it to a body bone (`0x7130a0`: a pure unlink/release,
+/// uniform across bow/gun/crossbow/thrown/wand). Drawn ranged splits by inventory type: a **bow**
+/// rides the left hand, gun/crossbow/wand/thrown the right (`0x611e10`'s invType test).
 pub(in crate::entities) fn placement(
     slot: usize,
     inv_type: u32,
@@ -88,10 +87,10 @@ fn enchant_fold(
         .fold(0i32, |acc, e| acc.wrapping_mul(31).wrapping_add(e as i32))
 }
 
-/// The nocked ammo's attach point (wow-re `nocked-ammo-cancel.md` §E2/E5, byte-verified): the
-/// ONE body-bone attach in the whole mechanism is HandArrow (35), fired for a **bow** once its
-/// BowPull event latches `[+0xd58]&0x4000` — `nock_latched` is [`NockLatch`], driven by the real
-/// `$BWP`/`$BWR` listener (`drive_nock_latch`, decision 0408). Everything else shows NO nocked
+/// The nocked ammo's attach point (`0x60ba30`): the ONE body-bone attach in the whole mechanism is
+/// HandArrow (35), fired for a **bow** once its BowPull event latches `[+0xd58]&0x4000` —
+/// `nock_latched` is [`NockLatch`], driven by the real `$BWP`/`$BWR` listener
+/// (`drive_nock_latch`, decision 0408). Everything else shows NO nocked
 /// model: gun/crossbow hit the client's `gunXbow` early return, thrown resolves the `0x19`
 /// *directory* (its own weapon-model copy) but fails the `==0x18` attach gate, and a wand's
 /// Shoot has no ammo item.
@@ -139,7 +138,7 @@ pub(in crate::entities) struct ResolveKey {
 
 /// The **dress** half of the same resolve — [`ResolveKey`]'s complement, and the reason it is a
 /// separate component: a model widget's duplicate is re-taken on a *dress* change and not on a
-/// *placement* one (wow-re `ui/scratch/paperdoll-liveness-law.md`; `crate::portrait::SnapKey`).
+/// *placement* one (`0x5dee30`; `crate::portrait::SnapKey`).
 ///
 /// Everything here is read **before** [`placement`], which is the whole point. The three weapon
 /// slots are the only ones whose very *presence* a sheath state can decide — a stowed ranged
@@ -288,12 +287,12 @@ pub(in crate::entities) fn resolve_equipment(
         // The suppression is a **display id of zero**, applied below to every place the piece is
         // resolved — which is the same thing "no helm equipped" means everywhere else in this
         // module, so the whole downstream chain follows for free: the helm's attach sub-model is not
-        // requested, its RF-0083 HelmetGeosetVisData hide-masks are not applied (hair, facial hair
-        // and ears come back), the cloak's geoset group is not selected and its cape texture is not
-        // resolved. It is also the shape the glue lane has honoured since 0465 (`attach::preview`
-        // zeroes the same two slots off the char-enum record's `CHARACTER_FLAG_HIDE_*`, which
-        // vmangos round-trips into these very bits at login) — the world was the half that never
-        // consumed it.
+        // requested, its `0x4799a0` HelmetGeosetVisData hide-masks are not applied (hair, facial
+        // hair and ears come back), the cloak's geoset group is not selected and its cape texture
+        // is not resolved. It is also the shape the glue lane has honoured since 0465
+        // (`attach::preview` zeroes the same two slots off the char-enum record's
+        // `CHARACTER_FLAG_HIDE_*`, which vmangos round-trips into these very bits at login) — the
+        // world was the half that never consumed it.
         let (hide_helm, hide_cloak) = (s.player_hides_helm(), s.player_hides_cloak());
         // Worn armor (players; decision 0074): resolve the composite slots' entries → display ids.
         // `settled` only once every non-empty entry has an answer, so the first attach composites the
@@ -323,8 +322,9 @@ pub(in crate::entities) fn resolve_equipment(
                     None => eq.settled = false,
                 }
             }
-            // The helm (equipment slot 0): attach model + the RF-0083 hide-masks (its geoset effect
-            // — a hair/facial/ears change — rides the Equipment diff, so donning one re-attaches).
+            // The helm (equipment slot 0): attach model + the `0x4799a0` hide-masks (its geoset
+            // effect — a hair/facial/ears change — rides the Equipment diff, so donning one
+            // re-attaches).
             if let Some(entry) = s.player_visible_item_entry(0).filter(|e| *e != 0) {
                 match templates.held(entry, &net) {
                     Some(t) => eq.helm = t.display_info_id,
@@ -369,7 +369,7 @@ pub(in crate::entities) fn resolve_equipment(
         };
         // A player wearing a NON-character display (druid form, GM morph — decision 0695)
         // attaches no equipment sub-models at all: the reference's held/helm/shoulder attach
-        // lives on the CCharacterComponent (`0x47a0c0`, wow-re charactermodel node), which only
+        // lives on the CCharacterComponent (`0x47a0c0`), which only
         // a character body builds — a bear-form druid shows no weapon by construction, not by a
         // hide flag. [`Wielded`] (the anim-class pair) still resolves below: what's IN the hand
         // is independent of whether its model is displayed. The creature virtual-item path (a
@@ -558,8 +558,7 @@ pub(in crate::entities) fn resolve_equipment(
         if current_dress != Some(&dress) {
             commands.entity(entity).insert(dress);
         }
-        // The nocked ammo (byte-verified `0x60ba30` + the Q-E round, wow-re
-        // `nocked-ammo-cancel.md` §E2/E5): the ONE body-bone attach in the whole mechanism is
+        // The nocked ammo (`0x60ba30`): the ONE body-bone attach in the whole mechanism is
         // HandArrow (35), **bow-only** — gun/crossbow (`gunXbow` early return) and thrown
         // (directory selector `0x19`, never an attach id) show NO nocked model. The [`NockedAmmo`]
         // display is written per shot from `SMSG_SPELL_START`, any caster; the attach follows the
@@ -594,13 +593,13 @@ pub(in crate::entities) fn resolve_equipment(
                 visual,
             });
         }
-        // The quiver on the back (wow-re `nocked-ammo-cancel.md` §H, byte-verified): while the
-        // RANGED weapon is drawn — the same `0x611e10` ranged-draw transition, cleared on every
-        // other ranged state — the client scans the player's OWN inventory for an ItemClass-11
-        // container (Quiver/Ammo Pouch) and parents its display model at attachment 26 (no
-        // transform override; no cloak conflict). Self-only by construction, exactly like the
-        // client: bag slots are never replicated in 1.12, so a remote player's scan finds
-        // nothing (§H1 — a two-client capture would be the clean confirmation).
+        // The quiver on the back: while the RANGED weapon is drawn — the same `0x611e10`
+        // ranged-draw transition, cleared on every other ranged state — the client scans the
+        // player's OWN inventory for an ItemClass-11 container (Quiver/Ammo Pouch) and parents its
+        // display model at attachment 26 (no transform override; no cloak conflict). Self-only by
+        // construction, exactly like the client: bag slots are never replicated in 1.12, so a
+        // remote player's scan finds nothing (a two-client capture would be the clean
+        // confirmation).
         // Timed off the RANGED slot's own visual state, so the quiver arrives with the bow it
         // feeds. (Named deviation: the ref attaches it at the *start* of the ranged draw — the
         // `0x611e10(1)` call inside each drawer — where ours waits for that clip's $SHL. Same
@@ -692,9 +691,9 @@ pub(in crate::entities) fn resolve_equipment(
             }
         }
         let next = HeldItems { slots };
-        // Per-hand grip: a weapon in a hand's attach point curls that hand's fingers (wow-re
-        // `hand-grip-mechanism.md`) — mainhand → right (id 1), non-shield offhand → left (id 2); a
-        // forearm shield (id 0) or an empty hand stays open. Drives [`HandGrip`]'s finger overlay.
+        // Per-hand grip: a weapon in a hand's attach point curls that hand's fingers (`0x60b590`)
+        // — mainhand → right (id 1), non-shield offhand → left (id 2); a forearm shield (id 0) or
+        // an empty hand stays open. Drives [`HandGrip`]'s finger overlay.
         let grip = HandGrip {
             right: next
                 .slots
@@ -740,10 +739,9 @@ pub(in crate::entities) fn resolve_equipment(
 /// **Three slots never dress**, and the two shapes are different:
 /// - slot 0 (head) when this corpse's own `CORPSE_FLAG_HIDE_HELM 0x08` is set, and slot 14 (back)
 ///   when `HIDE_CLOAK 0x10` is (`0x5d6465`/`0x5d6470` — its own bits on its own field, snapshotted
-///   from `PLAYER_FLAGS` at death; wow-re `helm-cloak-hide.md` §2b). Suppression is a display id of
-///   **zero**, the same shape the player lane uses (decision 1472), so the whole downstream chain —
-///   the helm's attach model, its RF-0083 hide-masks, the cloak's geoset and cape texture — follows
-///   for free.
+///   from `PLAYER_FLAGS` at death). Suppression is a display id of **zero**, the same shape the
+///   player lane uses (decision 1472), so the whole downstream chain — the helm's attach model, its
+///   `0x4799a0` hide-masks, the cloak's geoset and cape texture — follows for free.
 /// - slots 15/16/17 (mainhand, offhand, ranged) — **always**. Ranged is skipped outright
 ///   (`0x5d644e`); the two weapon slots take a branch that looks up the packed item word as an
 ///   *object guid* (`0x5d649b` → `0x468460`, typemask 2) and can therefore never resolve. A corpse
@@ -802,7 +800,7 @@ pub(in crate::entities) fn resolve_corpse_equipment(
             // The guild tabard crest, from the corpse's OWN `CORPSE_FIELD_GUILD` snapshot — the
             // reference's `0x5d6ec0`, reached from the dress loop at the tabard slot (`ebx == 0x12`
             // with that display's `ItemDisplayInfo` flag bit 0) and resolved through the same
-            // name cache a living body's is (wow-re `corpse-decal-and-loot-sparkle.md` §6b). A
+            // name cache a living body's is (`0x6d6d20`). A
             // bone pile builds no character component, so it never reaches this leg — which is
             // exactly where this sits.
             eq.emblem = guilds
@@ -996,8 +994,8 @@ mod tests {
         assert_eq!(placement(0, 21, 3, 1), Some(attach_id::HAND_RIGHT));
     }
 
-    /// The nocked-ammo attach law (`0x60ba30`, wow-re `nocked-ammo-cancel.md` §E2, decision
-    /// 0408): HandArrow (35) is the ONE attach, bow-only, gated on the `$BWP` nock latch.
+    /// The nocked-ammo attach law (`0x60ba30`, decision 0408): HandArrow (35) is the ONE attach,
+    /// bow-only, gated on the `$BWP` nock latch.
     /// Gun/crossbow/thrown never attach a nocked model.
     #[test]
     fn ammo_attach_hands_the_volleying_bow_arrow_and_nothing_else() {
@@ -1076,7 +1074,7 @@ mod tests {
     /// **B123** (decision 1472): the two equipment-display preferences are consumed on the WORLD
     /// body, not only on the character-select one. `PLAYER_FLAGS_HIDE_HELM 0x400` /
     /// `HIDE_CLOAK 0x800` zero the resolved display id, which is what makes every downstream
-    /// consumer follow — no cape geoset, no cape texture, no helm attach model, and no RF-0083
+    /// consumer follow — no cape geoset, no cape texture, no helm attach model, and no `0x4799a0`
     /// hide-mask stripping the hair.
     #[test]
     fn the_hide_preferences_undress_the_helm_and_cloak_on_a_world_body() {
@@ -1177,13 +1175,12 @@ mod tests {
         drop(rx);
     }
 
-    /// **What a disarm does to the weapon MODEL** (decision 1863; wow-re
-    /// `disarm-weapon-gate-law.md` §6). The reference's attachment state is built by events, and
-    /// `UNIT_FIELD_FLAGS`' change reflex `0x5ff580` is one of them: when the DISARM bit goes up it
-    /// calls `0x47a310(model, 0xf, 0, 0)` — an unlink of the main-hand attachment — **but only
-    /// while the weapon is drawn**, and afterwards every attach site declines because its
-    /// `GetWeapon(slot, 0)` reads NULL. So the weapon does NOT stay in the fist (the older note
-    /// said it did, from a partial read of `0x60b590`), and it does NOT vanish off the back
+    /// **What a disarm does to the weapon MODEL** (decision 1863). The reference's attachment
+    /// state is built by events, and `UNIT_FIELD_FLAGS`' change reflex `0x5ff580` is one of them:
+    /// when the DISARM bit goes up it calls `0x47a310(model, 0xf, 0, 0)` — an unlink of the
+    /// main-hand attachment — **but only while the weapon is drawn**, and afterwards every attach
+    /// site declines because its `GetWeapon(slot, 0)` reads NULL. So the weapon does NOT stay in
+    /// the fist (as `0x60b590` read alone would suggest), and it does NOT vanish off the back
     /// either. Three cases, one body each.
     #[test]
     fn a_disarm_takes_a_drawn_weapon_off_the_hand_and_leaves_a_stowed_one() {
