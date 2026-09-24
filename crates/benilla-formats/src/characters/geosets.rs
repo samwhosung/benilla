@@ -265,8 +265,8 @@ impl CharacterGeosets {
             m
         };
         // HelmetGeosetVisData — the helm hide-masks (read by `0x4799a0`). Soft-optional: a
-        // missing/undecodable table just means helms never hide hair (the pre-helm-vis behavior), like
-        // the other soft-fails.
+        // missing/undecodable table just means helms never hide hair (the pre-helm-vis behavior),
+        // like the other soft-fails.
         let helmet_vis = match chain.read_file(HELMET_GEOSET_VIS) {
             Ok(bytes) => {
                 let rs = parse(&bytes, helmet_vis_schema(), "HelmetGeosetVisData")?;
