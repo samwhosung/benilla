@@ -266,7 +266,7 @@ pub(crate) fn toggle_attack_local(
 }
 
 /// The attack seams' write set as one param, for the selection writers that run the reference's
-/// stop, select, re-swing (`SetSelection` `0x493540`).
+/// stop, select, re-swing (`SetSelection` `0x493540`), and the loot its teardown closes.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) net: Res<'w, crate::net::NetCommands>,
@@ -276,9 +276,29 @@ pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) ecs: Commands<'w, 's>,
     /// Our own entity.
     pub(crate) me: Query<'w, 's, Entity, With<crate::net::SelfPlayer>>,
+    /// The open loot, which the selection teardown closes when it loots the outgoing target.
+    pub(crate) loot: ResMut<'w, crate::ui_loot::LootState>,
+    /// The loot latch: the teardown's close drops it, and the right-click loot legs arm it.
+    pub(crate) loot_latch: ResMut<'w, crate::ui_loot::LootLatch>,
 }
 
 impl AttackSeam<'_, '_> {
+    /// The selection teardown's loot close (`0x493910`, `0x493959`–`0x493974`): a window looting
+    /// the outgoing selection closes as `CloseLoot` does, its release ahead of anything the new
+    /// selection sends. The close's dead-unit deselect (`0x48f369`) targets the selection already
+    /// being torn down, so none is asked; the reference's nested teardown there also sends a
+    /// `CMSG_SET_SELECTION` 0 (`0x493a2a`), which this does not.
+    pub(crate) fn close_loot_on(&mut self, outgoing: u64) {
+        if self.loot.source() == Some(outgoing) {
+            debug!("target: the selection teardown closes the loot on {outgoing:#x}");
+            crate::ui_loot::close_interaction(
+                &mut self.loot,
+                &mut self.loot_latch,
+                Some(&self.net),
+            );
+        }
+    }
+
     /// StopAttack (`0x5ecac0`).
     pub(crate) fn stop(&mut self, engaged: bool) {
         stop_attack_local(engaged, &mut self.queued_melee, &self.net);

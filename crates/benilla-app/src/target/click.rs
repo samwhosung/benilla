@@ -189,7 +189,6 @@ pub(super) fn act_on_right_click(
     ui_feedback: (
         ResMut<crate::ui_action::UiErrorKeys>,
         ResMut<crate::ui_action::CastErrors>,
-        ResMut<crate::ui_loot::LootLatch>,
         ResMut<crate::ui_mail::MailOpen>,
         ResMut<crate::ui_item_text::ItemTextOpen>,
         // The opener queue: this system cannot also hold `CastLadder` (a second `Items` and
@@ -199,15 +198,8 @@ pub(super) fn act_on_right_click(
         MessageWriter<crate::ui_dialog_verbs::MeetingStoneUse>,
     ),
 ) {
-    let (
-        mut ui_error_keys,
-        mut cast_errors,
-        mut loot_latch,
-        mut mail,
-        mut item_text,
-        mut openers,
-        mut stone_uses,
-    ) = ui_feedback;
+    let (mut ui_error_keys, mut cast_errors, mut mail, mut item_text, mut openers, mut stone_uses) =
+        ui_feedback;
     if clicks.read().last().is_none() {
         return;
     }
@@ -386,7 +378,7 @@ pub(super) fn act_on_right_click(
                 debug!("right-click corpse loot: {guid:#x}");
                 let _ = seam.net.0.send(ClientCommand::Loot { guid });
                 // Predicted, as for a unit corpse (`[player+0x1d28]` armed at the send).
-                loot_latch.0 = Some(guid);
+                seam.loot_latch.0 = Some(guid);
             }
         } else if store.is_some_and(|s| s.0.corpse_pvp_insignia()) {
             // Leg 2. `skin_player_corpse` mirrors `[0xb700e8]`, `None` for every 1.12.1 player,
@@ -494,7 +486,7 @@ pub(super) fn act_on_right_click(
                 let _ = seam.net.0.send(ClientCommand::Loot { guid });
                 // Predicted at the send, as the reference's sender (`0x5df253`) arms
                 // `[player+0x1d28]` and kneels before any reply; the anim driver reads the latch.
-                loot_latch.0 = Some(guid);
+                seam.loot_latch.0 = Some(guid);
             }
         }
         UnitBranch::Dead(DeadUnitLeg::Skin) => {
@@ -1021,7 +1013,7 @@ pub(super) fn clear_target_requests(
 }
 
 /// A deselect that applies only if the selection is this guid (`0x493910(guid, 1)`), raised by
-/// the loot window's move-start close (`0x48f369`) and drained by [`clear_target_requests`].
+/// every loot close for a dead unit (`0x48f369`) and drained by [`clear_target_requests`].
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
 pub(crate) struct DeselectGuid(pub(crate) u64);
 
@@ -1092,7 +1084,10 @@ pub(super) fn clear(
     engaged: bool,
 ) {
     if selection.target.take().is_some() {
-        selection.guid = None;
+        if let Some(old) = selection.guid.take() {
+            // The teardown `0x493910` closes the old target's loot before its own send.
+            seam.close_loot_on(old);
+        }
         let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
         // `SetSelection 0x493540`'s own `0x493a08 call 0x5ecac0`, the real StopAttack, which
         // also un-queues a pending on-next-swing strike.
@@ -1573,6 +1568,8 @@ mod tests {
             world.init_resource::<InspectMode>();
             world.init_resource::<crate::spell::QueuedMeleeSpell>();
             world.init_resource::<crate::spell::AutoRepeatActive>();
+            world.init_resource::<crate::ui_loot::LootState>();
+            world.init_resource::<crate::ui_loot::LootLatch>();
             world.init_resource::<crate::ui_script::CursorPayloadHeld>();
             world.init_resource::<crate::spell::SpellTargeting>();
             world.init_resource::<ClickConfig>();
@@ -1646,6 +1643,8 @@ mod tests {
         world.insert_resource(NetCommands(tx));
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
+        world.init_resource::<crate::ui_loot::LootState>();
+        world.init_resource::<crate::ui_loot::LootLatch>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<crate::ui_party::GroupState>();
         world.init_resource::<crate::net::GuidIndex>();
@@ -1749,6 +1748,7 @@ mod tests {
         world.init_resource::<crate::ui_session::InteractNpc>();
         world.init_resource::<crate::ui_action::UiErrorKeys>();
         world.init_resource::<crate::ui_action::CastErrors>();
+        world.init_resource::<crate::ui_loot::LootState>();
         world.init_resource::<crate::ui_loot::LootLatch>();
         world.init_resource::<crate::ui_mail::MailOpen>();
         world.init_resource::<crate::ui_item_text::ItemTextOpen>();

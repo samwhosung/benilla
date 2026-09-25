@@ -685,7 +685,8 @@ pub(crate) fn plugin(app: &mut App) {
                 (
                     sync_wire_go_state,
                     open_go_lid,
-                    close_go_lid,
+                    // After the selection writers, whose teardown can close the loot.
+                    close_go_lid.after(crate::target::TargetUpdate),
                     queue_custom_anim,
                     arm_despawn_anim,
                     // Clears `shown` from last frame's finished flags before the drive, so the

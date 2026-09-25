@@ -84,13 +84,14 @@ fn on_release_response(
     mut latch: ResMut<LootLatch>,
     mut pending: ResMut<PendingItemOps>,
     mut lock_cleared: ResMut<LockTransitions>,
+    mut dead: super::DeadUnitDeselect,
 ) {
     if let SessionEvent::LootReleaseResponse { guid } = ev {
         let unlock = ItemUnlock {
             pending: &mut pending,
             lock_cleared: &mut lock_cleared,
         };
-        loot_release_response(guid, &mut loot, &mut latch, unlock);
+        dead.after_close(loot_release_response(guid, &mut loot, &mut latch, unlock));
     }
 }
 
@@ -283,17 +284,18 @@ fn loot_clear_money(loot: &mut LootState) {
 /// as the reference's (`0x5ec0d4`), so an old window's release keeps a newer request's latch.
 /// It unlocks an opened item (`0x5ec090` → `0x48f200(cl=0, dl=0)` → `UnlockItem 0x495420`): the
 /// only clear a lockbox closed with loot left gets, as vmangos destroys only a fully looted item
-/// (`LootHandler.cpp:558`).
+/// (`LootHandler.cpp:558`). The open window takes the shared close without a send (`0x5ec0f3`);
+/// the closed source is returned.
 fn loot_release_response(
     guid: u64,
     loot: &mut LootState,
     latch: &mut LootLatch,
     unlock: ItemUnlock,
-) {
+) -> Option<u64> {
     debug!("net: loot released {guid:#x}");
-    loot.clear();
     latch.clear_for(guid);
     unlock.unlock(guid);
+    super::close_interaction(loot, latch, None)
 }
 
 /// `SMSG_LOOT_MASTER_LIST`, staged: it lands just ahead of the response it belongs to.
@@ -584,6 +586,8 @@ mod tests {
         world.insert_resource(LootLatch(Some(LOCKBOX)));
         world.init_resource::<UiErrorKeys>();
         world.init_resource::<LockTransitions>();
+        world.init_resource::<crate::net::GuidIndex>();
+        world.init_resource::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>();
         let mut pending = PendingItemOps::default();
         pending.add([(0, 3, LOCKBOX, 1)]);
         world.insert_resource(pending);
@@ -622,6 +626,65 @@ mod tests {
             .expect("the handler runs as a one-shot system");
         assert!(world.resource::<PendingItemOps>().contains(0, 3));
         assert!(world.resource::<LockTransitions>().0.is_empty());
+    }
+
+    /// The server's release (`0x5ec090` → `0x5ec0f3`) closes the window through the shared close,
+    /// sending nothing back, and its last step deselects the dead unit it closed on.
+    #[test]
+    fn a_release_response_closes_the_window_and_deselects_a_dead_unit() {
+        let (net, rx) = net();
+        let mut world = opened_lockbox_world();
+        world.insert_resource(net);
+        let corpse = world
+            .spawn((
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                // `UNIT_FIELD_HEALTH` (22) at 0.
+                crate::net::ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[(
+                    22, 0,
+                )])),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(CORPSE, corpse);
+        world
+            .resource_mut::<LootState>()
+            .open(CORPSE, 1, 0, Vec::new());
+        world.resource_mut::<LootLatch>().0 = Some(CORPSE);
+
+        world
+            .run_system_once_with(
+                on_release_response,
+                SessionEvent::LootReleaseResponse { guid: CORPSE },
+            )
+            .expect("the handler runs as a one-shot system");
+        assert_eq!(world.resource::<LootState>().source(), None);
+        assert_eq!(world.resource::<LootLatch>().0, None);
+        assert!(rx.try_recv().is_err(), "the server's release is not echoed");
+        let asked: Vec<u64> = world
+            .resource_mut::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>()
+            .drain()
+            .map(|d| d.0)
+            .collect();
+        assert_eq!(asked, [CORPSE]);
+
+        // A second release finds nothing open and asks nothing.
+        world
+            .run_system_once_with(
+                on_release_response,
+                SessionEvent::LootReleaseResponse { guid: CORPSE },
+            )
+            .expect("the handler runs as a one-shot system");
+        assert!(world
+            .resource_mut::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>()
+            .drain()
+            .next()
+            .is_none());
     }
 
     /// Only a releasing arm reaches `UnlockItem 0x495420`, through the tail `0x5ebac2`.

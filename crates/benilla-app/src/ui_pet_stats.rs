@@ -582,6 +582,8 @@ mod tests {
             .init_resource::<crate::net::Reputations>()
             .init_resource::<crate::spell::QueuedMeleeSpell>()
             .init_resource::<crate::spell::AutoRepeatActive>()
+            .init_resource::<crate::ui_loot::LootState>()
+            .init_resource::<crate::ui_loot::LootLatch>()
             .add_message::<crate::creature_anim::SheathRequest>()
             .add_message::<crate::net::FieldChanged>()
             .insert_resource(NetCommands(tx))

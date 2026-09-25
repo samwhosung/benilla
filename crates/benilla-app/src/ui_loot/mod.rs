@@ -391,11 +391,17 @@ impl Plugin for UiLootPlugin {
                 Update,
                 (
                     // Feed before the input pass and drain after it: an open shows, and a click
-                    // sends, the same frame.
+                    // sends, the same frame. The drain's deselect lands before the selection
+                    // writers read it, and their teardown's close finds this frame's window.
                     feed_loot.in_set(UiFeed),
-                    drain_loot.after(UiInput),
-                    // After the net drain that arms the latch; the anim driver orders after this.
-                    resolve_loot_kneel.after(benilla_world::schedule::WorldStage::Net),
+                    drain_loot
+                        .after(UiInput)
+                        .before(crate::target::TargetUpdate),
+                    // After the net drain and the selection writers, which arm and drop the
+                    // latch; the anim driver orders after this.
+                    resolve_loot_kneel
+                        .after(benilla_world::schedule::WorldStage::Net)
+                        .after(crate::target::TargetUpdate),
                 ),
             );
     }
@@ -754,35 +760,82 @@ fn bind_confirm_required(items: &Items, commands: &NetCommands, item_id: u32) ->
         .is_some_and(|t| t.bonding == BIND_WHEN_PICKED_UP && t.quality >= BIND_CONFIRM_MIN_QUALITY)
 }
 
+/// `CloseInteraction 0x48f200` past its early returns, the one close every loot close shares: the
+/// latch drops (`0x48f2c9`), the release goes out when `release` is given (the `cl` argument,
+/// `0x48f2da`) and the frame closes (`0x48f33d`). Returns the closed source for
+/// [`DeadUnitDeselect`], the close's last step.
+pub(crate) fn close_interaction(
+    loot: &mut LootState,
+    latch: &mut LootLatch,
+    release: Option<&NetCommands>,
+) -> Option<u64> {
+    let source = loot.source?;
+    latch.clear_for(source);
+    if let Some(commands) = release {
+        let _ = commands.0.send(ClientCommand::LootRelease { guid: source });
+    }
+    loot.clear();
+    Some(source)
+}
+
+/// `CloseInteraction`'s last step (`0x48f34f`–`0x48f369`): a closed source that is a unit, a
+/// player included, with `UNIT_FIELD_HEALTH` at or below 0 is deselected if it is still the
+/// selection (`0x493910(guid, 1)`). It reads the health, never the loot type, so a skinned corpse
+/// loses the selection and a live pickpocket target keeps it; an unstreamed source is left alone.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct DeadUnitDeselect<'w, 's> {
+    index: Res<'w, crate::net::GuidIndex>,
+    objects: Query<
+        'w,
+        's,
+        (
+            &'static crate::net::NetEntity,
+            &'static crate::net::ObjectStore,
+        ),
+    >,
+    asks: MessageWriter<'w, crate::target::DeselectGuid>,
+}
+
+impl DeadUnitDeselect<'_, '_> {
+    pub(crate) fn after_close(&mut self, closed: Option<u64>) {
+        let Some(source) = closed else {
+            return;
+        };
+        let dead_unit = self
+            .index
+            .0
+            .get(&source)
+            .and_then(|&e| self.objects.get(e).ok())
+            .is_some_and(|(net_entity, store)| {
+                matches!(
+                    net_entity.kind,
+                    benilla_protocol::EntityKind::Unit | benilla_protocol::EntityKind::Player
+                ) && (store.0.unit_health().unwrap_or(0) as i32) <= 0 // signed, `jg` at `0x48f360`
+            });
+        if dead_unit {
+            self.asks.write(crate::target::DeselectGuid(source));
+        }
+    }
+}
+
 /// `CloseInteraction 0x48f200(cl=1, dl=1, 0)` on a movement start. A disenchant window with rows
-/// left (`0x48f24a`) and an item's loot (`0x48f2ab`) survive; anything else clears the latch
-/// (`0x48f2c9`), sends the release (`0x48f2da`) and closes (`0x48f33d`). The reference then
-/// deselects a unit at health 0 that is the selection (`0x48f35d`, `0x48f369`); this tests the
-/// loot type instead, so a skinned corpse, wire type 2 like a pickpocket, keeps its selection.
+/// left (`0x48f24a`) and an item's loot (`0x48f2ab`) survive; anything else takes the shared close.
 fn close_on_move_start(
     loot: &mut LootState,
     latch: &mut LootLatch,
     commands: &NetCommands,
-    deselect: &mut MessageWriter<crate::target::DeselectGuid>,
-) {
+) -> Option<u64> {
     use benilla_protocol::guid;
     use benilla_protocol::messages::loot_type;
-    let Some(source) = loot.source() else {
-        return;
-    };
+    let source = loot.source()?;
     if loot.loot_type == loot_type::DISENCHANTING && !loot.is_empty() {
-        return;
+        return None;
     }
     if guid::is_item(source) {
-        return;
+        return None;
     }
     debug!("ui_loot: movement started with {source:#x} open — release");
-    latch.clear_for(source);
-    let _ = commands.0.send(ClientCommand::LootRelease { guid: source });
-    if guid::is_creature_or_pet(source) && loot.loot_type != loot_type::PICKPOCKETING {
-        deselect.write(crate::target::DeselectGuid(source));
-    }
-    loot.clear();
+    close_interaction(loot, latch, Some(commands))
 }
 
 /// Sends what the Lua asked for, as the take dispatcher `0x4c2790(slot, flag)`: a row click
@@ -798,10 +851,10 @@ fn drain_loot(
     items: Res<Items>,
     // The move-start close runs before the VM check: it needs no Lua.
     mut move_start: ResMut<LootMoveStart>,
-    mut deselect: MessageWriter<crate::target::DeselectGuid>,
+    mut dead: DeadUnitDeselect,
 ) {
     if std::mem::take(&mut move_start.0) {
-        close_on_move_start(&mut loot, &mut latch, &commands, &mut deselect);
+        dead.after_close(close_on_move_start(&mut loot, &mut latch, &commands));
     }
     let Some(mut script) = script else {
         return;
@@ -903,23 +956,22 @@ fn drain_loot(
             target,
         });
     }
+    // `CloseLoot` (`0x4c2ec0` → `0x48f200(cl=1, dl=0)`), which stock `LootFrame_OnHide` calls.
     if script.take_loot_close() {
-        if let Some(guid) = loot.source {
+        let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
+        if let Some(guid) = closed {
             debug!("ui_loot: release loot {guid:#x}");
-            let _ = commands.0.send(ClientCommand::LootRelease { guid });
-            loot.clear(); // client-authoritative close
-            latch.clear_for(guid); // the kneel ends at the release send
         }
+        dead.after_close(closed);
     }
-    // The last-row auto-close (`0x4c2a70` → `0x48f200`). The feed then fires `LOOT_CLOSED`, and
-    // the `CloseLoot()` from `OnHide` finds no source.
+    // The last-row auto-close (`0x4c1f8d`, `0x4c2785` → `0x48f200(cl=1, dl=0)`). The feed then
+    // fires `LOOT_CLOSED`, and the `CloseLoot()` from `OnHide` finds no source.
     if loot.take_auto_release() {
-        if let Some(guid) = loot.source {
+        let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
+        if let Some(guid) = closed {
             debug!("ui_loot: loot emptied — auto-release {guid:#x}");
-            let _ = commands.0.send(ClientCommand::LootRelease { guid });
-            loot.clear();
-            latch.clear_for(guid);
         }
+        dead.after_close(closed);
     }
 }
 
@@ -1031,6 +1083,7 @@ mod tests {
             .init_resource::<LootMoveStart>()
             .init_resource::<GroupState>()
             .init_resource::<Items>()
+            .init_resource::<crate::net::GuidIndex>()
             .insert_resource(NetCommands(tx));
 
         let mut items = app.world_mut().resource_mut::<Items>();
@@ -1980,14 +2033,12 @@ mod tests {
         assert_eq!(if 4u32 > 4 { 3 } else { 4 }, 4);
     }
 
-    /// `CloseInteraction` on a move start, with no server help and no VM.
-    #[test]
-    fn a_movement_start_closes_and_releases_the_open_loot() {
-        use bevy::ecs::message::Messages;
-        const CORPSE: u64 = 0xF130_0000_0000_0042;
-        const BOBBER: u64 = 0xF110_0000_0000_0011;
-        const LOCKBOX: u64 = 0x4000_0000_0000_0007;
+    /// A creature corpse and a live creature, both streamed.
+    const CORPSE: u64 = 0xF130_0000_0000_0042;
+    const LIVE: u64 = 0xF130_0000_0000_0043;
 
+    /// `drain_loot` scheduled, with [`CORPSE`] streamed at health 0 and [`LIVE`] at 100.
+    fn close_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.add_message::<crate::sound::LootPickupSound>()
@@ -1997,21 +2048,141 @@ mod tests {
             .init_resource::<LootMoveStart>()
             .init_resource::<GroupState>()
             .init_resource::<Items>()
+            .init_resource::<crate::net::GuidIndex>()
             .insert_resource(NetCommands(tx))
             .add_systems(Update, drain_loot);
-        // No UiScript mounted: the move-start leg must not depend on the VM.
-        let deselects = |app: &mut App| -> Vec<u64> {
+        for (guid, health) in [(CORPSE, 0), (LIVE, 100)] {
+            let e = app
+                .world_mut()
+                .spawn((
+                    crate::net::NetEntity {
+                        kind: EntityKind::Unit,
+                        display_id: None,
+                        scale: 1.0,
+                    },
+                    crate::net::ObjectStore(ObjectFields::from_pairs(&[(F_UNIT_HEALTH, health)])),
+                ))
+                .id();
             app.world_mut()
-                .resource_mut::<Messages<crate::target::DeselectGuid>>()
-                .drain()
-                .map(|d| d.0)
+                .resource_mut::<crate::net::GuidIndex>()
+                .0
+                .insert(guid, e);
+        }
+        (app, rx)
+    }
+
+    /// The deselects asked for since the last call.
+    fn deselects(app: &mut App) -> Vec<u64> {
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>()
+            .drain()
+            .map(|d| d.0)
+            .collect()
+    }
+
+    /// Opens a window as an admitted response does: the rows and the latch.
+    fn open_loot(app: &mut App, guid: u64, kind: u8, gold: u32, rows: Vec<LootItem>) {
+        app.world_mut()
+            .resource_mut::<LootState>()
+            .open(guid, kind, gold, rows);
+        app.world_mut().resource_mut::<LootLatch>().0 = Some(guid);
+    }
+
+    /// Every close reaches `CloseInteraction`'s last step (`0x48f34f`–`0x48f369`): `CloseLoot`
+    /// (`0x4c2ed6`), the empty-window close after the last row (`0x4c1f8d`) or the coin
+    /// (`0x4c2785`), each deselecting a dead unit and only a dead unit.
+    #[test]
+    fn every_loot_close_deselects_a_dead_unit() {
+        let (mut app, rx) = close_app();
+        let released = |rx: &crossbeam_channel::Receiver<ClientCommand>| -> Vec<u64> {
+            rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::LootRelease { guid } => Some(guid),
+                    _ => None,
+                })
                 .collect()
         };
-        let open = |app: &mut App, guid: u64, kind: u8, rows: Vec<LootItem>| {
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let close_loot = |app: &mut App| {
             app.world_mut()
-                .resource_mut::<LootState>()
-                .open(guid, kind, 0, rows);
-            app.world_mut().resource_mut::<LootLatch>().0 = Some(guid);
+                .non_send_resource_mut::<UiScript>()
+                .run("CloseLoot()")
+                .unwrap();
+            app.update();
+        };
+
+        // `CloseLoot`, as the close button, Escape or any other hide reaches it.
+        open_loot(
+            &mut app,
+            CORPSE,
+            loot_type::CORPSE,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        close_loot(&mut app);
+        assert_eq!(released(&rx), [CORPSE]);
+        assert_eq!(app.world().resource::<LootLatch>().0, None);
+        assert_eq!(
+            deselects(&mut app),
+            [CORPSE],
+            "CloseLoot deselects the corpse"
+        );
+
+        // The last row taken.
+        open_loot(
+            &mut app,
+            CORPSE,
+            loot_type::CORPSE,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        app.world_mut().resource_mut::<LootState>().remove_slot(0);
+        app.update();
+        assert_eq!(released(&rx), [CORPSE]);
+        assert_eq!(
+            deselects(&mut app),
+            [CORPSE],
+            "the last row's close deselects"
+        );
+
+        // The coin taken from a coin-only window.
+        open_loot(&mut app, CORPSE, loot_type::CORPSE, 250, vec![]);
+        app.world_mut().resource_mut::<LootState>().clear_money();
+        app.update();
+        assert_eq!(released(&rx), [CORPSE]);
+        assert_eq!(deselects(&mut app), [CORPSE], "the coin's close deselects");
+
+        // A live pickpocket target keeps the selection.
+        open_loot(
+            &mut app,
+            LIVE,
+            loot_type::PICKPOCKETING,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        close_loot(&mut app);
+        assert_eq!(released(&rx), [LIVE]);
+        assert!(
+            deselects(&mut app).is_empty(),
+            "a live unit is not deselected"
+        );
+
+        // With nothing open, a second `CloseLoot` sends and asks nothing.
+        close_loot(&mut app);
+        assert!(released(&rx).is_empty());
+        assert!(deselects(&mut app).is_empty());
+    }
+
+    /// `CloseInteraction` on a move start, with no server help and no VM.
+    #[test]
+    fn a_movement_start_closes_and_releases_the_open_loot() {
+        const BOBBER: u64 = 0xF110_0000_0000_0011;
+        const LOCKBOX: u64 = 0x4000_0000_0000_0007;
+
+        // No UiScript mounted: the move-start leg must not depend on the VM.
+        let (mut app, rx) = close_app();
+        let open = |app: &mut App, guid: u64, kind: u8, rows: Vec<LootItem>| {
+            open_loot(app, guid, kind, 0, rows);
         };
         let step = |app: &mut App| {
             app.world_mut().resource_mut::<LootMoveStart>().0 = true;
@@ -2035,6 +2206,32 @@ mod tests {
         );
         assert!(rx.try_recv().is_err(), "and sends it once");
         assert_eq!(deselects(&mut app), vec![CORPSE]);
+
+        // Skinning comes as wire type 2, as pick-pocketing does (`Player.cpp:8122`); the
+        // deselect reads the health (`0x48f35d`), so the skinned corpse is deselected ...
+        open(
+            &mut app,
+            CORPSE,
+            loot_type::PICKPOCKETING,
+            vec![item(0, 117, 1)],
+        );
+        step(&mut app);
+        assert!(matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == CORPSE));
+        assert_eq!(
+            deselects(&mut app),
+            vec![CORPSE],
+            "a skinned corpse loses it"
+        );
+        // ... and a live pickpocket target is not.
+        open(
+            &mut app,
+            LIVE,
+            loot_type::PICKPOCKETING,
+            vec![item(0, 117, 1)],
+        );
+        step(&mut app);
+        assert!(matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == LIVE));
+        assert!(deselects(&mut app).is_empty(), "a live target keeps it");
 
         // A fishing bobber is a GameObject: the same path, minus the unit deselect.
         open(&mut app, BOBBER, loot_type::FISHING, vec![]);

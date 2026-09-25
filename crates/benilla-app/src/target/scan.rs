@@ -457,6 +457,10 @@ pub(super) fn commit(
         return CommitOutcome::default(); // the setter's dedup
     }
     let had_old = selection.guid.is_some();
+    if let Some(old) = selection.guid {
+        // The old target's teardown (`0x4936cc` → `0x493910`) closes its loot first.
+        seam.close_loot_on(old);
+    }
     selection.target = Some(entity);
     selection.guid = Some(guid);
     let stop_and_repoint = engaged && had_old;
@@ -898,8 +902,68 @@ mod tests {
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<Messages<crate::player::StandStateRequest>>();
         world.init_resource::<Selection>();
+        world.init_resource::<crate::ui_loot::LootState>();
+        world.init_resource::<crate::ui_loot::LootLatch>();
         world.spawn(SelfPlayer);
         (world, rx)
+    }
+
+    /// The teardown of the outgoing target (`0x493910`) closes a loot window on it
+    /// (`0x493959`–`0x493974`), its release ahead of the new selection; a window on anything else
+    /// stays open. The clear (`0x4938f8`) runs the same teardown.
+    #[test]
+    fn a_selection_change_closes_the_loot_on_the_outgoing_target() {
+        use bevy::ecs::system::RunSystemOnce;
+        const CORPSE: u64 = 0xF130_0000_0000_0042;
+        const NEXT: u64 = 0xF130_0000_0000_0043;
+        const CHEST: u64 = 0xF110_0000_0000_1234;
+        let (mut world, rx) = commit_world();
+        let wire = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
+            rx.try_iter()
+                .map(|c| match c {
+                    ClientCommand::LootRelease { guid } => format!("release {guid:#x}"),
+                    ClientCommand::SetSelection { guid } => format!("select {guid:#x}"),
+                    _ => "other".to_owned(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let open = |world: &mut World, guid: u64| {
+            world
+                .resource_mut::<crate::ui_loot::LootState>()
+                .open(guid, 1, 0, Vec::new());
+            world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(guid);
+        };
+        let source = |world: &World| world.resource::<crate::ui_loot::LootState>().source();
+
+        // Tab from the looted corpse to the next mob: release, then select.
+        assert!(go(&mut world, CORPSE, false, Some(1), false).changed);
+        open(&mut world, CORPSE);
+        let _ = wire(&rx);
+        assert!(go(&mut world, NEXT, false, Some(1), true).changed);
+        assert_eq!(
+            wire(&rx),
+            ["release 0xf130000000000042", "select 0xf130000000000043"]
+        );
+        assert_eq!(source(&world), None);
+        assert_eq!(world.resource::<crate::ui_loot::LootLatch>().0, None);
+
+        // A chest's window is not the selection's: a change leaves it open.
+        open(&mut world, CHEST);
+        assert!(go(&mut world, CORPSE, false, Some(1), false).changed);
+        assert_eq!(wire(&rx), ["select 0xf130000000000042"]);
+        assert_eq!(source(&world), Some(CHEST));
+
+        // Clearing the target tears it down the same way.
+        open(&mut world, CORPSE);
+        world
+            .run_system_once(
+                |mut selection: ResMut<Selection>, mut seam: crate::creature_anim::AttackSeam| {
+                    super::super::click::clear(&mut selection, &mut seam, false);
+                },
+            )
+            .expect("clear runs as a one-shot system");
+        assert_eq!(wire(&rx), ["release 0xf130000000000042", "select 0x0"]);
+        assert_eq!(source(&world), None);
     }
 
     /// `0x493540`: an engaged switch is stop, select, re-swing; the stop un-queues an on-next-swing
